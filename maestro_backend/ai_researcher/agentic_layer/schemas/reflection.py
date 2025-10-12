@@ -12,7 +12,17 @@ OutlineModificationType = Literal[
 ]
 
 class ModificationDetails(BaseModel):
-    """Structured details for outline modifications."""
+    """Structured details for outline modifications.
+
+    All fields are optional - different modification types require different fields.
+    For example:
+    - ADD_SECTION needs: new_title, new_topic, after_section_id
+    - REMOVE_SECTION needs: section_id_to_remove
+    - MERGE_SECTIONS needs: section_id, merge_into_section_id
+    - REORDER_SECTIONS needs: target_order
+    - REFRAME_SECTION_TOPIC needs: section_id, new_topic, new_title
+    - SPLIT_SECTION needs: section_id, split_into_titles
+    """
     section_id: Optional[str] = Field(None, description="ID of the section to modify")
     new_title: Optional[str] = Field(None, description="New title for the section")
     new_topic: Optional[str] = Field(None, description="New topic description")
@@ -21,19 +31,10 @@ class ModificationDetails(BaseModel):
     target_order: Optional[List[str]] = Field(None, description="Target order for sections")
     merge_into_section_id: Optional[str] = Field(None, description="ID of section to merge into")
     split_into_titles: Optional[List[str]] = Field(None, description="Titles for split sections")
-    
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid', json_schema_extra={
-        "required": [
-            "section_id",
-            "new_title", 
-            "new_topic",
-            "after_section_id",
-            "section_id_to_remove",
-            "target_order",
-            "merge_into_section_id",
-            "split_into_titles"
-        ]
-    })
+
+    # Fixed: Remove required array since all fields are Optional
+    # OpenAI strict schema validation requires that Optional fields are NOT in required array
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid')
 
 class OutlineModification(BaseModel):
     """

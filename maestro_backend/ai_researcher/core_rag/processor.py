@@ -7,6 +7,8 @@ from typing import List, Dict, Tuple, Optional
 import shutil # Import shutil at the top
 import logging
 import sys
+import signal
+from contextlib import contextmanager
 
 import torch
 import pymupdf # PyMuPDF
@@ -33,6 +35,32 @@ from .document_converter import DocumentConverter # Import the document converte
 
 # Set up logging for table processing
 logger = logging.getLogger(__name__)
+
+@contextmanager
+def timeout_context(seconds):
+    """
+    Context manager for timeouts using signal.alarm().
+
+    Usage:
+        with timeout_context(32400):  # 9 hours
+            result = some_long_running_operation()
+
+    Raises:
+        TimeoutError: If the operation exceeds the specified timeout
+    """
+    def timeout_handler(signum, frame):
+        raise TimeoutError(f"Operation timed out after {seconds} seconds ({seconds/3600:.1f} hours)")
+
+    # Save the old handler
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(seconds)
+
+    try:
+        yield
+    finally:
+        # Cancel the alarm and restore the old handler
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 class DocumentProcessor:
     """
@@ -231,24 +259,32 @@ class DocumentProcessor:
     def _convert_pdf_with_table_handling(self, pdf_path: Path) -> str:
         """
         Convert PDF to markdown with intelligent table handling and fallback.
+        Includes 9-hour timeout protection to prevent infinite hangs.
         Returns the markdown content or raises an exception if all attempts fail.
         """
         pdf_str = str(pdf_path)
-        
+        timeout_seconds = 32400  # 9 hours (was 6 hours = 21600, now increased to 9 hours)
+
         # Step 1: Detect if tables are present
         has_tables = self._detect_tables(pdf_path)
-        
+
         if has_tables:
-            logger.info(f"Tables detected in {pdf_path.name}, attempting conversion with table recognition...")
+            logger.info(f"Tables detected in {pdf_path.name}, attempting conversion with table recognition (timeout: {timeout_seconds/3600:.1f}h)...")
             try:
-                # Attempt conversion with table recognition
-                result = self.table_converter(pdf_str)
+                # Attempt conversion with table recognition + TIMEOUT
+                with timeout_context(timeout_seconds):
+                    result = self.table_converter(pdf_str)
+
                 if result and result.markdown:
                     logger.info(f"Successfully converted {pdf_path.name} with table recognition")
                     return result.markdown
                 else:
                     logger.warning(f"Table conversion returned empty result for {pdf_path.name}")
                     raise ValueError("Empty markdown result from table conversion")
+
+            except TimeoutError as e:
+                logger.error(f"Table conversion TIMED OUT after {timeout_seconds}s ({timeout_seconds/3600:.1f}h) for {pdf_path.name}")
+                raise e
                     
             except Exception as e:
                 # Check if this is a table-related error
@@ -263,17 +299,24 @@ class DocumentProcessor:
                 
                 if is_table_error:
                     logger.warning(f"Table recognition failed for {pdf_path.name}: {e}")
-                    logger.info(f"Retrying {pdf_path.name} without table recognition...")
-                    
-                    # Fallback: try without table recognition
+                    logger.info(f"Retrying {pdf_path.name} without table recognition (timeout: {timeout_seconds/3600:.1f}h)...")
+
+                    # Fallback: try without table recognition + TIMEOUT
                     try:
-                        result = self.no_table_converter(pdf_str)
+                        with timeout_context(timeout_seconds):
+                            result = self.no_table_converter(pdf_str)
+
                         if result and result.markdown:
                             logger.info(f"Successfully converted {pdf_path.name} without table recognition (fallback)")
                             return result.markdown
                         else:
                             logger.error(f"Fallback conversion also returned empty result for {pdf_path.name}")
                             raise ValueError("Empty markdown result from fallback conversion")
+
+                    except TimeoutError as fallback_timeout:
+                        logger.error(f"Fallback conversion TIMED OUT after {timeout_seconds}s ({timeout_seconds/3600:.1f}h) for {pdf_path.name}")
+                        raise fallback_timeout
+
                     except Exception as fallback_error:
                         logger.error(f"Fallback conversion also failed for {pdf_path.name}: {fallback_error}")
                         raise fallback_error
@@ -282,16 +325,23 @@ class DocumentProcessor:
                     logger.error(f"Non-table error during conversion of {pdf_path.name}: {e}")
                     raise e
         else:
-            # No tables detected, use the faster no-table converter
-            logger.info(f"No tables detected in {pdf_path.name}, using standard conversion...")
+            # No tables detected, use the faster no-table converter + TIMEOUT
+            logger.info(f"No tables detected in {pdf_path.name}, using standard conversion (timeout: {timeout_seconds/3600:.1f}h)...")
             try:
-                result = self.no_table_converter(pdf_str)
+                with timeout_context(timeout_seconds):
+                    result = self.no_table_converter(pdf_str)
+
                 if result and result.markdown:
                     logger.info(f"Successfully converted {pdf_path.name} without table recognition")
                     return result.markdown
                 else:
                     logger.error(f"Standard conversion returned empty result for {pdf_path.name}")
                     raise ValueError("Empty markdown result from standard conversion")
+
+            except TimeoutError as e:
+                logger.error(f"Conversion TIMED OUT after {timeout_seconds}s ({timeout_seconds/3600:.1f}h) for {pdf_path.name}")
+                raise e
+
             except Exception as e:
                 logger.error(f"Standard conversion failed for {pdf_path.name}: {e}")
                 raise e
