@@ -224,15 +224,15 @@ class PGVectorStore:
             
             query = text(f"""
                 WITH dense_scores AS (
-                    SELECT 
+                    SELECT
                         chunk_id,
                         doc_id,
                         chunk_text,
                         chunk_metadata,
-                        1 - (dense_embedding <=> CAST(:query_embedding AS vector)) as dense_similarity
+                        1 - (CAST(dense_embedding AS vector) <=> CAST(:query_embedding AS vector)) as dense_similarity
                     FROM document_chunks
                     WHERE dense_embedding IS NOT NULL {where_clause}
-                    ORDER BY dense_embedding <=> CAST(:query_embedding AS vector)
+                    ORDER BY CAST(dense_embedding AS vector) <=> CAST(:query_embedding AS vector)
                     LIMIT :limit
                 )
                 SELECT 
