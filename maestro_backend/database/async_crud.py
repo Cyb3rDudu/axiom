@@ -27,7 +27,8 @@ async def create_mission(
     mission_id: str,
     chat_id: str,
     user_request: str,
-    mission_context: Optional[Dict[str, Any]] = None
+    mission_context: Optional[Dict[str, Any]] = None,
+    language_code: Optional[str] = 'en'  # Language for this mission
 ) -> models.Mission:
     """Create a new mission asynchronously."""
     db_mission = models.Mission(
@@ -36,13 +37,14 @@ async def create_mission(
         user_request=user_request,
         status="pending",
         mission_context=mission_context,
+        language_code=language_code,  # Store language for mission
         created_at=get_current_time(),
         updated_at=get_current_time()
     )
     db.add(db_mission)
     await db.commit()
     await db.refresh(db_mission)
-    logger.info(f"Created mission {mission_id} in database")
+    logger.info(f"Created mission {mission_id} in database with language: {language_code}")
     return db_mission
 
 async def get_mission(

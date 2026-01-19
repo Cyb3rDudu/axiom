@@ -382,13 +382,14 @@ class AsyncContextManager:
             logger.info(f"Created semaphore for mission {mission_id} with max_concurrent={max_concurrent}")
         return self._mission_semaphores[mission_id]
 
-    async def start_mission(self, user_request: str, chat_id: str, 
+    async def start_mission(self, user_request: str, chat_id: str,
                       document_group_id: Optional[str] = None,
                       document_group_name: Optional[str] = None,
                       use_web_search: bool = True,
                       mission_settings: Optional[Dict[str, Any]] = None,
                       llm_config: Optional[Dict[str, Any]] = None,
-                      research_params: Optional[Dict[str, Any]] = None) -> MissionContext:
+                      research_params: Optional[Dict[str, Any]] = None,
+                      language_code: Optional[str] = 'en') -> MissionContext:
         """Creates and stores context for a new mission with comprehensive settings."""
         """Creates a new mission, stores it in the database, and adds it to the in-memory cache."""
         mission = MissionContext(
@@ -401,9 +402,10 @@ class AsyncContextManager:
             research_params=research_params
         )
         mission.metadata["chat_id"] = chat_id
+        mission.metadata["language_code"] = language_code  # Store language in mission metadata
 
         self._missions[mission.mission_id] = mission
-        
+
         async with get_async_db() as db:
             try:
                 sanitized_context = sanitize_for_jsonb(mission.model_dump(mode='json'))
@@ -412,9 +414,10 @@ class AsyncContextManager:
                     mission_id=mission.mission_id,
                     chat_id=chat_id,
                     user_request=user_request,
-                    mission_context=sanitized_context
+                    mission_context=sanitized_context,
+                    language_code=language_code  # Pass language to database
                 )
-                logger.info(f"Started and saved new mission: {mission.mission_id} for chat: {chat_id}")
+                logger.info(f"Started and saved new mission: {mission.mission_id} for chat: {chat_id} (language: {language_code})")
             except Exception as e:
                 logger.error(f"Database error creating mission {mission.mission_id}: {e}", exc_info=True)
                 # If DB write fails, remove from in-memory cache to avoid inconsistent state

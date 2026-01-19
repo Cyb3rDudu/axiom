@@ -211,8 +211,31 @@ class PaginatedChatsResponse(BaseModel):
         }
 
 # Mission-related schemas
+# Language Management Schemas
+class SupportedLanguage(BaseModel):
+    code: str
+    name: str
+    native_name: str
+    is_active: bool
+    completion_percentage: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+class LanguagePreference(BaseModel):
+    language_code: str
+
+class LanguagePreferenceUpdate(BaseModel):
+    language_code: str
+
+# Mission Schemas
 class MissionBase(BaseModel):
     user_request: str
+    language_code: Optional[str] = None  # Language for this mission (defaults to user's preference)
 
 class MissionUpdate(BaseModel):
     status: Optional[str] = None
@@ -225,6 +248,7 @@ class Mission(MissionBase):
     status: str
     mission_context: Optional[Dict[str, Any]] = None
     error_info: Optional[str] = None
+    language_code: Optional[str] = None  # Language used for this mission
     created_at: datetime
     updated_at: datetime
 

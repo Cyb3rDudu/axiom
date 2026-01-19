@@ -210,11 +210,44 @@ class AgentController:
         self.user_interaction_manager = UserInteractionManager(self)
         self.report_generator = ReportGenerator(self)
 
-        logger.info("AgentController initialized with agents, context manager, tool registry.")
+        logger.info(f"AgentController initialized with agents, context manager, tool registry. Language: {self.language_code}")
         # Settings now loaded from user configuration dynamically
         logger.debug(f"  Research Loop Settings: max_research_cycles_per_section={self.max_research_cycles_per_section}")
         logger.debug(f"  Writing Settings: writing_passes={config.WRITING_PASSES}")
         self._register_core_tools()
+
+    def set_language(self, language_code: str):
+        """
+        Update controller language and reinitialize all agents with new language.
+
+        This allows the same controller to handle missions in different languages
+        by recreating agents with the appropriate language prompts.
+
+        Args:
+            language_code: New language code (e.g., 'en', 'de', 'fr')
+        """
+        if language_code == self.language_code:
+            return  # No change needed
+
+        logger.info(f"Updating controller language from '{self.language_code}' to '{language_code}'")
+        self.language_code = language_code
+
+        # Reinitialize all agents with new language
+        self.planning_agent = PlanningAgent(self.model_dispatcher, self.tool_registry, controller=self, language_code=language_code)
+        self.research_agent = ResearchAgent(
+            self.model_dispatcher,
+            self.tool_registry,
+            self.query_preparer,
+            controller=self,
+            language_code=language_code
+        )
+        self.writing_agent = WritingAgent(self.model_dispatcher, controller=self, language_code=language_code)
+        self.reflection_agent = ReflectionAgent(self.model_dispatcher, controller=self, language_code=language_code)
+        self.writing_reflection_agent = WritingReflectionAgent(self.model_dispatcher, controller=self, language_code=language_code)
+        self.note_assignment_agent = NoteAssignmentAgent(self.model_dispatcher, controller=self, language_code=language_code)
+        self.messenger_agent = MessengerAgent(self.model_dispatcher, controller=self, language_code=language_code)
+
+        logger.info(f"All agents reinitialized with language: {language_code}")
 
     def _initialize_query_components(self, mission_id: str):
         """Initialize query components with mission-specific user settings."""

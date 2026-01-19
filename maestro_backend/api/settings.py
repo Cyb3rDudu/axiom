@@ -8,7 +8,7 @@ from database import crud
 from database.database import get_db
 from auth.dependencies import get_current_user_from_cookie
 from api import schemas
-from database.models import User
+from database.models import User, SupportedLanguage
 
 router = APIRouter()
 
@@ -390,3 +390,62 @@ async def get_available_models(
             status_code=500,
             detail=f"Failed to fetch models: {str(e)}"
         )
+
+
+# Language Preference Endpoints
+@router.get("/me/language", response_model=schemas.LanguagePreference)
+def get_user_language_preference(
+    current_user: User = Depends(get_current_user_from_cookie)
+):
+    """
+    Get user's language preference for prompts and UI.
+
+    Returns:
+        Current language preference (defaults to 'en' if not set)
+    """
+    language_code = current_user.language_code or 'en'
+    return schemas.LanguagePreference(language_code=language_code)
+
+
+@router.put("/me/language", response_model=schemas.LanguagePreference)
+def update_user_language_preference(
+    language_update: schemas.LanguagePreferenceUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_from_cookie)
+):
+    """
+    Update user's default language preference.
+
+    This language will be used for:
+    - AI agent prompts
+    - Research output language
+    - Default language for new missions
+
+    Args:
+        language_update: New language code to set
+
+    Returns:
+        Updated language preference
+
+    Raises:
+        400: Invalid or unsupported language code
+    """
+    # Validate that the language exists and is active
+    supported_language = db.query(SupportedLanguage).filter(
+        SupportedLanguage.code == language_update.language_code,
+        SupportedLanguage.is_active == True
+    ).first()
+
+    if not supported_language:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Language '{language_update.language_code}' is not supported or not active. "
+                   f"Use GET /api/languages to see available languages."
+        )
+
+    # Update user's language preference
+    current_user.language_code = language_update.language_code
+    db.commit()
+    db.refresh(current_user)
+
+    return schemas.LanguagePreference(language_code=current_user.language_code)

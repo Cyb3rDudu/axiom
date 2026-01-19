@@ -445,7 +445,10 @@ async def create_mission(
         auto_create_document_group = mission_data.get("auto_create_document_group", False)
         mission_settings_data = mission_data.get("mission_settings")
 
-        logger.info(f"Creating mission with settings - Web Search: {use_web_search}, Doc Group: {document_group_id}, Auto-save: {auto_create_document_group}")
+        # Get language_code from request or user's default preference
+        language_code = mission_data.get("language_code") or current_user.language_code or 'en'
+
+        logger.info(f"Creating mission with settings - Web Search: {use_web_search}, Doc Group: {document_group_id}, Auto-save: {auto_create_document_group}, Language: {language_code}")
 
         if not user_request or not chat_id:
             raise HTTPException(status_code=422, detail="Request and chat_id are required.")
@@ -488,7 +491,7 @@ async def create_mission(
             finally:
                 await async_db.close()
         
-        # Create mission with all settings
+        # Create mission with all settings including language
         mission_context = await context_mgr.start_mission(
             user_request=user_request,
             chat_id=chat_id,
@@ -496,7 +499,8 @@ async def create_mission(
             document_group_name=document_group_name,
             use_web_search=use_web_search,
             llm_config=model_config,
-            research_params=research_params
+            research_params=research_params,
+            language_code=language_code  # Pass language to mission context
         )
         mission_id = mission_context.mission_id
         
@@ -508,20 +512,23 @@ async def create_mission(
             "auto_create_document_group": research_params.get("auto_create_document_group", False) if research_params else False,
             "document_group_id": document_group_id,
             "document_group_name": document_group_name,
-            
+
+            # Language preference
+            "language_code": language_code,
+
             # Model configuration at mission creation
             "model_config": model_config,
-            
+
             # Research parameters at mission creation
             "research_params": research_params,
-            
+
             # Search and web fetch settings
             "search_provider": search_settings.get("provider"),
             "web_fetch_settings": web_fetch_settings,
-            
+
             # Store the complete user settings for reference
             "all_user_settings": user_settings,
-            
+
             # Timestamp for when settings were captured
             "settings_captured_at": datetime.utcnow().isoformat()
         }
@@ -1349,6 +1356,12 @@ async def resume_mission_execution(
         async def run_mission_async():
             """Resume the mission from where it left off."""
             try:
+                # Set controller language based on mission's language_code
+                mission_language = mission_context.metadata.get("language_code", "en")
+                if mission_language != controller.language_code:
+                    logger.info(f"Setting controller language to '{mission_language}' for mission {mission_id}")
+                    controller.set_language(mission_language)
+
                 await controller.resume_mission(
                     mission_id,
                     log_queue=log_queue,
