@@ -27,19 +27,36 @@ class BaseAgent(ABC):
         model_dispatcher: ModelDispatcher,
         tool_registry: Optional[ToolRegistry] = None, # Tools might be optional for some agents
         system_prompt: Optional[str] = None,
-        model_name: Optional[str] = None # Optional: Specific model override for this agent
+        model_name: Optional[str] = None, # Optional: Specific model override for this agent
+        language_code: str = 'en' # Language for prompts (default: English)
     ):
         self.agent_name = agent_name
         self.model_dispatcher = model_dispatcher
         self.tool_registry = tool_registry
-        # --- MODIFIED LINE ---
-        today_date = datetime.date.today().strftime('%Y-%m-%d')
-        default_prompt = f"You are the {agent_name}. Your goal is to fulfill your specific role in the research process. Current date: {today_date}"
-        self.system_prompt = system_prompt or default_prompt
-        # --- END MODIFICATION ---
+        self.language_code = language_code
+
+        # Load prompt from database if not provided
+        if system_prompt is None:
+            try:
+                from ai_researcher.agentic_layer.services.prompt_loader import get_prompt_loader
+                loader = get_prompt_loader()
+                system_prompt = loader.load_prompt(
+                    agent_name=self.__class__.__name__,
+                    prompt_key='system_prompt',
+                    language_code=language_code
+                )
+            except (RuntimeError, ValueError) as e:
+                # PromptLoader not initialized or prompt not found - fallback to default
+                today_date = datetime.date.today().strftime('%Y-%m-%d')
+                system_prompt = f"You are the {agent_name}. Your goal is to fulfill your specific role in the research process. Current date: {today_date}"
+                # Only log warning if PromptLoader was expected but failed
+                if not isinstance(e, RuntimeError):
+                    print(f"Warning: Could not load prompt for {agent_name} in {language_code}, using default: {e}")
+
+        self.system_prompt = system_prompt
         self.model_name = model_name # If None, ModelDispatcher will use default for the mode
 
-        print(f"Initialized {self.agent_name} (Model: {self.model_name or 'Default'})")
+        print(f"Initialized {self.agent_name} (Model: {self.model_name or 'Default'}, Lang: {self.language_code})")
 
     def _create_messages(self, user_prompt: str, history: Optional[List[Dict[str, str]]] = None) -> List[Dict[str, str]]:
         """Helper method to construct the message list for the LLM."""

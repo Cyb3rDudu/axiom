@@ -43,16 +43,19 @@ class User(Base):
     # Appearance Settings
     theme = Column(String, nullable=True)
     color_scheme = Column(String, nullable=True)
-    
+
+    # Language preference for prompts and UI
+    language_code = Column(String(10), ForeignKey("supported_languages.code"), default='en', nullable=True)
+
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False)
     settings = Column(JSONB, nullable=True)  # Store user settings as JSONB for PostgreSQL
-    
+
     is_admin = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     role = Column(String, default="user", nullable=False)
     user_type = Column(String, default="individual", nullable=False)
-    
+
     # Relationships
     chats = relationship("Chat", back_populates="user", cascade="all, delete-orphan")
 
@@ -98,9 +101,13 @@ class Mission(Base):
     error_info = Column(Text, nullable=True)
     generated_document_group_id = Column(StringUUID, ForeignKey("document_groups.id"), nullable=True, index=True)  # Document group created from this mission
     current_report_version = Column(Integer, default=1)  # Track current version of the research report
+
+    # Language used for this mission (can override user default)
+    language_code = Column(String(10), ForeignKey("supported_languages.code"), default='en', nullable=True)
+
     created_at = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True))
-    
+
     # Relationships
     chat = relationship("Chat", back_populates="missions")
     execution_logs = relationship("MissionExecutionLog", back_populates="mission", cascade="all, delete-orphan", order_by="MissionExecutionLog.created_at")
@@ -349,3 +356,54 @@ class SystemSetting(Base):
     value = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+class SupportedLanguage(Base):
+    """
+    Supported languages for the application.
+    Stores available languages for prompts and UI.
+    """
+    __tablename__ = "supported_languages"
+
+    code = Column(String(10), primary_key=True)
+    name = Column(String(100), nullable=False)  # English name
+    native_name = Column(String(100), nullable=False)  # Native name (e.g., 'Deutsch')
+    is_active = Column(Boolean, default=True)
+    completion_percentage = Column(Integer, default=0)  # Translation completion (0-100)
+    created_at = Column(DateTime(timezone=True), default=func.now)
+
+class PromptTemplate(Base):
+    """
+    Multilingual prompt templates for AI agents.
+
+    Stores versioned prompts that can be dynamically loaded based on:
+    - Agent name (e.g., 'PlanningAgent', 'ResearchAgent')
+    - Prompt key (e.g., 'system_prompt', 'phase1', 'phase2')
+    - Language code (e.g., 'en', 'de', 'fr')
+
+    Features:
+    - Version tracking for prompt evolution
+    - Active/inactive flag for A/B testing
+    - Automatic fallback to English if translation unavailable
+    - LRU caching for sub-millisecond lookups
+    """
+    __tablename__ = "prompt_templates"
+
+    id = Column(StringUUID, primary_key=True, default=uuid.uuid4)
+    agent_name = Column(String(100), nullable=False, index=True)
+    prompt_key = Column(String(100), nullable=False, index=True)
+    language_code = Column(String(10), ForeignKey("supported_languages.code"), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    version = Column(Integer, default=1)
+    is_active = Column(Boolean, default=True, index=True)
+    created_at = Column(DateTime(timezone=True), default=func.now)
+    updated_at = Column(DateTime(timezone=True), default=func.now, onupdate=func.now)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    __table_args__ = (
+        sqlalchemy.UniqueConstraint('agent_name', 'prompt_key', 'language_code', 'version',
+                                    name='uq_prompt_template_version'),
+    )
+
+    # Relationships
+    language = relationship("SupportedLanguage")
+    created_by = relationship("User")

@@ -121,12 +121,24 @@ async def startup_event():
         # Initialize database tables
         init_db()
         logger.info("Database initialized successfully")
-        
+
         # For PostgreSQL, ensure required extensions are available
         if os.getenv("DATABASE_URL", "").startswith("postgresql"):
             from database.init_postgres import ensure_extensions
             ensure_extensions()
-            
+
+        # Initialize PromptLoader for multilingual support
+        try:
+            from ai_researcher.agentic_layer.services.prompt_loader import init_prompt_loader
+            db = SessionLocal()
+            try:
+                init_prompt_loader(db)
+                logger.info("PromptLoader initialized successfully")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"PromptLoader initialization failed: {e}. Will use hardcoded prompts as fallback.", exc_info=True)
+
     except Exception as e:
         logger.error(f"Database initialization failed: {e}", exc_info=True)
         # Continue anyway, as tables might already exist

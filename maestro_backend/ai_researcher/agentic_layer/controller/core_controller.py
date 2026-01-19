@@ -153,7 +153,8 @@ class AgentController:
         context_manager: AsyncContextManager,
         tool_registry: ToolRegistry,
         retriever: Optional[Retriever],
-        reranker: Optional[TextReranker]
+        reranker: Optional[TextReranker],
+        language_code: str = 'en' # Language for prompts (default: English)
     ):
         # Concurrency Limiter
         if config.MAX_CONCURRENT_REQUESTS > 0:
@@ -163,7 +164,7 @@ class AgentController:
             self.semaphore = None
             logger.info("LLM request concurrency is unlimited.")
         self.maybe_semaphore = MaybeSemaphore(self.semaphore)
-        
+
         # Task registry for tracking running asyncio tasks
         self.mission_tasks: Dict[str, asyncio.Task] = {}  # Main task per mission
         self.mission_subtasks: Dict[str, Set[asyncio.Task]] = {}  # Subtasks per mission
@@ -174,31 +175,33 @@ class AgentController:
         self.tool_registry = tool_registry
         self.retriever = retriever
         self.reranker = reranker
+        self.language_code = language_code # Store language code
         # Query components will be initialized per-mission to use user-specific models
         self.query_preparer = None
         self.query_strategist = None
-        
+
         # State for inter-round suggestions
         self.mission_subsection_suggestions: Dict[str, Dict[str, List[SuggestedSubsectionTopic]]] = {}
-        
+
         # Configuration parameters
         self.max_total_depth = config.MAX_TOTAL_DEPTH
         self.max_total_iterations = config.MAX_TOTAL_ITERATIONS
         self.max_research_cycles_per_section = config.MAX_RESEARCH_CYCLES_PER_SECTION
 
-        # Initialize agents
-        self.planning_agent = PlanningAgent(self.model_dispatcher, self.tool_registry, controller=self)
+        # Initialize agents with language_code
+        self.planning_agent = PlanningAgent(self.model_dispatcher, self.tool_registry, controller=self, language_code=language_code)
         self.research_agent = ResearchAgent(
             self.model_dispatcher,
             self.tool_registry,
             self.query_preparer,
-            controller=self
+            controller=self,
+            language_code=language_code
         )
-        self.writing_agent = WritingAgent(self.model_dispatcher, controller=self)
-        self.reflection_agent = ReflectionAgent(self.model_dispatcher, controller=self)
-        self.writing_reflection_agent = WritingReflectionAgent(self.model_dispatcher, controller=self)
-        self.note_assignment_agent = NoteAssignmentAgent(self.model_dispatcher, controller=self)
-        self.messenger_agent = MessengerAgent(self.model_dispatcher, controller=self)
+        self.writing_agent = WritingAgent(self.model_dispatcher, controller=self, language_code=language_code)
+        self.reflection_agent = ReflectionAgent(self.model_dispatcher, controller=self, language_code=language_code)
+        self.writing_reflection_agent = WritingReflectionAgent(self.model_dispatcher, controller=self, language_code=language_code)
+        self.note_assignment_agent = NoteAssignmentAgent(self.model_dispatcher, controller=self, language_code=language_code)
+        self.messenger_agent = MessengerAgent(self.model_dispatcher, controller=self, language_code=language_code)
 
         # Initialize component managers
         self.research_manager = ResearchManager(self)

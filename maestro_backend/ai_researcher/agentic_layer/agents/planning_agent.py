@@ -43,7 +43,8 @@ class PlanningAgent(BaseAgent):
         tool_registry: ToolRegistry, # Planning agent needs tool descriptions
         model_name: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        controller: Optional[Any] = None # Add controller parameter
+        controller: Optional[Any] = None, # Add controller parameter
+        language_code: str = 'en' # Language for prompts (default: English)
     ):
         agent_name = "PlanningAgent"
         # Determine the correct model name based on the 'planning' role from config
@@ -72,19 +73,52 @@ class PlanningAgent(BaseAgent):
             model_dispatcher=model_dispatcher,
             tool_registry=tool_registry, # Pass it to BaseAgent
             system_prompt="Placeholder", # Use a placeholder first
-            model_name=effective_model_name
+            model_name=effective_model_name,
+            language_code=language_code # Pass language_code to BaseAgent
         )
         self.controller = controller # Store controller
         self.mission_id = None # Initialize mission_id as None
+
+        # Load all phase prompts from database
+        self._load_phase_prompts()
+
         # Now that self.tool_registry exists, set the actual system prompt
         self.system_prompt = system_prompt or self._default_system_prompt()
         # Update the print statement if needed, though BaseAgent already prints
         # print(f"Initialized {self.agent_name} (Model: {self.model_name or 'Default'}) with system prompt.")
-        logger.info(f"{self.agent_name} initialized (Model: {self.model_name or 'Default'})")
-        
+        logger.info(f"{self.agent_name} initialized (Model: {self.model_name or 'Default'}, Lang: {self.language_code})")
+
         if DEBUG_PLANNING:
             logger.info("🔍 PLANNING AGENT DEBUG MODE ENABLED - Verbose logging active")
             logger.info("   To disable, set environment variable: DEBUG_PLANNING=false")
+
+    def _load_phase_prompts(self):
+        """Load all 6 phase prompts from database."""
+        try:
+            from ai_researcher.agentic_layer.services.prompt_loader import get_prompt_loader
+            loader = get_prompt_loader()
+
+            phase_keys = [
+                'phase1', 'phase2', 'phase3',
+                'phase3a_structural', 'phase3b_subsection', 'phase3c_redistribution'
+            ]
+
+            self._phase_prompts = {}
+            for key in phase_keys:
+                try:
+                    self._phase_prompts[key] = loader.load_prompt(
+                        agent_name='PlanningAgent',
+                        prompt_key=key,
+                        language_code=self.language_code
+                    )
+                except (RuntimeError, ValueError) as e:
+                    # PromptLoader not initialized or prompt not found - keep using hardcoded methods
+                    logger.warning(f"Could not load {key} prompt for PlanningAgent in {self.language_code}: {e}")
+                    # Set to None to indicate we should use the hardcoded method
+                    self._phase_prompts[key] = None
+        except Exception as e:
+            logger.warning(f"Failed to load phase prompts for PlanningAgent: {e}. Using hardcoded prompts.")
+            self._phase_prompts = {}
 
     def _phase1_system_prompt(self) -> str:
         """Phase 1: Initial Outline Generation - Simple, focused prompt."""
@@ -96,10 +130,17 @@ class PlanningAgent(BaseAgent):
             from ai_researcher.dynamic_config import get_max_total_depth
             mission_id = getattr(self, 'mission_id', None)
             max_depth = get_max_total_depth(mission_id)
-        
+
         # Convert depth to human-readable format
         depth_description = "sections only (flat structure)" if max_depth == 1 else f"sections and subsections only (max {max_depth} levels)"
-        
+
+        # Try to use loaded prompt from database
+        if hasattr(self, '_phase_prompts') and self._phase_prompts.get('phase1'):
+            base_prompt = self._phase_prompts['phase1']
+            # Inject dynamic variables
+            return base_prompt.replace('{max_depth}', str(max_depth)).replace('{depth_description}', depth_description)
+
+        # Fallback to hardcoded prompt
         prompt = f"""You are an expert research planner. Your task is to create a clear, logical outline for a research report.
 
 **Your Task:**
@@ -153,6 +194,11 @@ Remember: Keep it focused, logical, and actionable. Do NOT include section IDs -
 
     def _phase2_system_prompt(self) -> str:
         """Phase 2: Outline with Note Assignment - Assigns collected notes to sections."""
+        # Try to use loaded prompt from database
+        if hasattr(self, '_phase_prompts') and self._phase_prompts.get('phase2'):
+            return self._phase_prompts['phase2']
+
+        # Fallback to hardcoded prompt
         prompt = """You are an expert research planner. Your task is to assign research notes to the appropriate sections of an outline AND ensure correct research strategies.
 
 **Your Task:**
@@ -234,6 +280,11 @@ Generate a JSON object with:
 
     def _phase3_system_prompt(self) -> str:
         """Phase 3: Outline Revision - Refines existing outline based on feedback."""
+        # Try to use loaded prompt from database
+        if hasattr(self, '_phase_prompts') and self._phase_prompts.get('phase3'):
+            return self._phase_prompts['phase3']
+
+        # Fallback to hardcoded prompt
         prompt = """You are an expert research planner. Your task is to revise an existing outline based on suggestions and feedback.
 
 **Your Task:**
@@ -282,6 +333,11 @@ Example format:
     
     def _phase3a_structural_prompt(self) -> str:
         """Phase 3a: Structural Modifications Only - Apply structural changes to outline."""
+        # Try to use loaded prompt from database
+        if hasattr(self, '_phase_prompts') and self._phase_prompts.get('phase3a_structural'):
+            return self._phase_prompts['phase3a_structural']
+
+        # Fallback to hardcoded prompt
         prompt = """You are an expert research planner. Your task is to apply structural modifications to an existing outline.
 
 **Your Task:**
@@ -308,6 +364,11 @@ Generate a JSON object with:
     
     def _phase3b_subsection_prompt(self) -> str:
         """Phase 3b: Add Subsections with Notes - Add subsections and assign their relevant notes."""
+        # Try to use loaded prompt from database
+        if hasattr(self, '_phase_prompts') and self._phase_prompts.get('phase3b_subsection'):
+            return self._phase_prompts['phase3b_subsection']
+
+        # Fallback to hardcoded prompt
         prompt = """You are an expert research planner. Your task is to add suggested subsections to an outline and assign relevant notes.
 
 **Your Task:**
@@ -331,6 +392,11 @@ Generate a JSON object with:
     
     def _phase3c_note_redistribution_prompt(self) -> str:
         """Phase 3c: Final Note Redistribution - Ensure all notes are properly assigned."""
+        # Try to use loaded prompt from database
+        if hasattr(self, '_phase_prompts') and self._phase_prompts.get('phase3c_redistribution'):
+            return self._phase_prompts['phase3c_redistribution']
+
+        # Fallback to hardcoded prompt
         prompt = """You are an expert research planner. Your task is to ensure all research notes are properly assigned to sections.
 
 **Your Task:**
