@@ -60,6 +60,8 @@ services:
       # Force CPU mode
       - FORCE_CPU_MODE=true
       - PREFERRED_DEVICE_TYPE=cpu
+      # Embedding optimization for multi-core CPU
+      - EMBEDDING_BATCH_SIZE=256
       # CORS configuration for reverse proxy support
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
       # Allow all origins in development mode when using nginx proxy
@@ -117,6 +119,8 @@ services:
       # Force CPU mode
       - FORCE_CPU_MODE=true
       - PREFERRED_DEVICE_TYPE=cpu
+      # Embedding optimization for multi-core CPU
+      - EMBEDDING_BATCH_SIZE=256
     # No GPU configuration for CPU-only mode
 
   cli:
