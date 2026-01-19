@@ -17,8 +17,13 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { draftSettings, setDraftSettings, loadSettings } = useSettingsStore();
 
-  const theme = draftSettings?.appearance?.theme || 'light';
-  const colorScheme = draftSettings?.appearance?.color_scheme || 'default';
+  // Get theme from settings or localStorage fallback
+  const theme = draftSettings?.appearance?.theme ||
+    (typeof window !== 'undefined' ? (localStorage.getItem('theme') as Theme) : null) ||
+    'light';
+  const colorScheme = draftSettings?.appearance?.color_scheme ||
+    (typeof window !== 'undefined' ? (localStorage.getItem('colorScheme') as ColorScheme) : null) ||
+    'default';
 
   const getThemeClasses = useCallback(() => {
     let classes = theme;
@@ -46,26 +51,32 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     loadSettingsIfNeeded();
   }, []); // Empty dependency array - only run on mount
 
-  // Apply theme classes to document root
+  // Apply theme classes to document root and persist to localStorage
   useEffect(() => {
     const root = document.documentElement;
     const themeClasses = getThemeClasses();
-    
+
     // Remove all existing theme classes
     root.classList.remove('light', 'dark');
     root.classList.remove(
-      'theme-light-blue', 'theme-light-emerald', 'theme-light-purple', 'theme-light-rose', 
+      'theme-light-blue', 'theme-light-emerald', 'theme-light-purple', 'theme-light-rose',
       'theme-light-amber', 'theme-light-teal',
-      'theme-dark-blue', 'theme-dark-emerald', 'theme-dark-purple', 'theme-dark-rose', 
+      'theme-dark-blue', 'theme-dark-emerald', 'theme-dark-purple', 'theme-dark-rose',
       'theme-dark-amber', 'theme-dark-teal'
     );
-    
+
     // Add current theme classes
     themeClasses.split(' ').forEach(cls => {
       if (cls.trim()) {
         root.classList.add(cls.trim());
       }
     });
+
+    // Persist to localStorage for quick access on next load
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('theme', theme);
+      localStorage.setItem('colorScheme', colorScheme);
+    }
   }, [theme, colorScheme, getThemeClasses]);
 
   const setTheme = (newTheme: Theme) => {
