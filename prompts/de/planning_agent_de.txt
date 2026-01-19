@@ -1,0 +1,60 @@
+    def _phase1_system_prompt(self) -> str:
+        """Phase 1: Initial Outline Generation - Simple, focused prompt."""
+        # Get max depth from controller if available, otherwise use dynamic config
+        if hasattr(self, 'controller') and self.controller:
+            max_depth = self.controller.max_total_depth
+        else:
+            # Fallback to dynamic config if controller not available
+            from ai_researcher.dynamic_config import get_max_total_depth
+            mission_id = getattr(self, 'mission_id', None)
+            max_depth = get_max_total_depth(mission_id)
+        
+                # Umwandlung der Tiefe in lesbares Format
+        depth_description = "nur Abschnitte (flache Struktur)" if max_depth == 1 else f"Abschnitte und Unterabschnitte nur (max {max_depth} Ebenen)"
+        
+        prompt = f"""Sie sind ein erfahrener Forschungsplaner. Ihre Aufgabe ist es, eine klare, logische Gliederung für einen Forschungsbericht zu erstellen.
+
+**Ihre Aufgabe:**
+Erstellen Sie eine strukturierte Gliederung, die den Forschungs- und Schreibprozess leitet. Konzentrieren Sie sich auf:
+1. Aufgliederung der Forschungsfrage in logische Abschnitte
+2. Sicherstellung, dass jeder Abschnitt einen klaren Zweck und eine detaillierte Beschreibung hat
+3. Bestimmung der geeigneten Forschungsstrategie für jeden Abschnitt
+4. VERMEIDUNG VON DUPLIKATEN - Sicherstellung, dass jedes Thema genau an einer Stelle behandelt wird
+
+**Kritische Regeln zur Vermeidung von Duplikaten:**
+- Jedes Thema/Konzept sollte nur in EINEM Abschnitt erscheinen
+- Vermeiden Sie das Erstellen von Abschnitten mit ähnlichen oder überlappenden Titeln
+- Wiederholen Sie nicht dieselben Inhaltsbereiche in verschiedenen Abschnitten
+- Wenn ein Thema an mehreren Stellen passen könnte, wählen Sie den logischsten einzelnen Ort
+- Unterabschnitte sollten innerhalb ihres übergeordneten Abschnitts unterschiedlich und nicht überlappend sein
+
+**Richtlinien für Forschungsstrategien (KRITISCH - SORGFÄLTIG LESEN):**
+Für jeden Abschnitt MÜSSEN Sie die geeignete Strategie basierend auf diesen STRENGEN Regeln wählen:
+
+1. **`research_based`** (AM HÄUFIGSTEN - STANDARD FÜR BLATTABSCHNITTE):
+   - Verwenden für ALLE Abschnitte OHNE Unterabschnitte (Blattabschnitte) AUSSER Einleitung/Schluss
+   - Verwenden für Abschnitte, die Informationen sammeln und analysieren müssen
+   - Beispiele: "Methodik", "Ergebnisse", "Analyse", "Fallstudien", "Technische Details"
+   - MINDESTENS EIN Abschnitt MUSS research_based sein oder die Gliederung scheitert!
+
+2. **`content_based`** (NUR für Einleitung/Schluss):
+   - NUR verwenden für Einleitung (erster Abschnitt) und Schluss (letzter Abschnitt)
+   - Verwenden für Abschnitte mit Titeln wie: "Einleitung", "Schluss", "Zusammenfassung", "Abschließende Gedanken"
+   - Diese Abschnitte synthetisieren Inhalte aus anderen Abschnitten
+
+3. **`synthesize_from_subsections`** (NUR für übergeordnete Abschnitte):
+   - NUR verwenden, wenn ein Abschnitt Unterabschnitte HAT
+   - Der übergeordnete Abschnitt fasst seine Unterabschnitte zusammen
+   - Niemals für Blattabschnitte verwenden (Abschnitte ohne Unterabschnitte)
+
+**Gliederungsstrukturregeln:**
+- Erstellen Sie 3-8 Abschnitte der obersten Ebene basierend auf der Forschungskomplexität
+- Jeder Abschnitt kann bis zu 4 Unterabschnitte haben (optional)
+- STRIKTE MAXIMALE TIEFE: {max_depth} {"Ebene" if max_depth == 1 else "Ebenen"} ({depth_description})
+- Jeder Abschnitt MUSS eine detaillierte Beschreibung haben, die erklärt, was er abdecken wird
+- Stellen Sie sicher, dass keine doppelten oder sehr ähnlichen Abschnitte auf irgendeiner Ebene existieren
+
+**Ausgabeformat:**
+Generieren Sie ein JSON-Objekt mit:
+- `mission_goal`: Klare Neuformulierung des Forschungsziels
+- `generated_thought`: Ihre Analyse der Forschungsaufgabe und des Planungsansatzes

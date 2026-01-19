@@ -1,0 +1,80 @@
+            system_prompt=system_prompt or self._default_system_prompt(),
+            model_name=effective_model_name
+        )
+        self.controller = controller # Store controller
+        self.mission_id = None # Initialize mission_id as None
+
+    def _estimate_tokens(self, text: str) -> int:
+        """Rough estimate of token count - approximately 4 chars per token"""
+        return len(text) // 4
+    
+    def _truncate_context_intelligently(
+        self, 
+        notes_context: str, 
+        previous_context: str, 
+        outline_context: str,
+        other_context: str,
+        max_chars: int
+    ) -> Tuple[str, str, str]:
+        """
+        Intelligently truncate context to fit within max_chars limit.
+        Prioritizes: notes > outline > previous sections
+        Returns truncated (notes_context, previous_context, outline_context)
+        """
+        # Calculate current total
+        total_chars = len(notes_context) + len(previous_context) + len(outline_context) + len(other_context)
+        
+        if total_chars <= max_chars:
+            return notes_context, previous_context, outline_context
+        
+        logger.warning(f"WritingAgent context size ({total_chars} chars) exceeds limit ({max_chars} chars). Truncating...")
+        
+        # Reserve space for other context (system prompt, section details, etc.)
+        available_chars = max_chars - len(other_context)
+        
+        # Allocation strategy: 
+        # - Notes: 60% (most important for content)
+        # - Previous sections: 25% (context)
+        # - Outline: 15% (structure reference)
+        notes_budget = int(available_chars * 0.6)
+        previous_budget = int(available_chars * 0.25)
+        outline_budget = int(available_chars * 0.15)
+        
+        # Truncate each section if needed
+        if len(notes_context) > notes_budget:
+            # Keep first part of notes (most relevant are usually first)
+            notes_context = notes_context[:notes_budget - 50] + "\n\n[... additional notes truncated due to context limits ...]"
+        
+        if len(previous_context) > previous_budget:
+            # Keep most recent sections (end of content)
+            previous_context = "## Content from Previous Sections (truncated):\n\n" + previous_context[-(previous_budget - 100):] 
+        
+        if len(outline_context) > outline_budget:
+            # Keep beginning of outline (shows structure)
+            outline_context = outline_context[:outline_budget - 50] + "\n\n[... additional outline sections truncated ...]"
+        
+        final_total = len(notes_context) + len(previous_context) + len(outline_context) + len(other_context)
+        logger.info(f"Context truncated from {total_chars} to {final_total} chars")
+        
+        return notes_context, previous_context, outline_context
+    
+    def _sort_consecutive_citations(self, text: str) -> str:
+        """Finds consecutive citation brackets like [10][2] or [abc][10] and sorts them numerically/lexicographically -> [2][10] or [10][abc]."""
+        if not text:
+            return ""
+
+        # Regex to find sequences of two or more citation brackets: \[([^\]]+)\]
+        # (\[[^\]]+\])     - Captures a single citation bracket like [abc] or [123]
+        # (?:...)         - Non-capturing group for repetition
+        # \s*             - Optional whitespace between brackets
+        # (?:\s*\[[^\]]+\])+ - Matches one or more subsequent brackets with optional whitespace
+        citation_pattern = re.compile(r"(\[[^\]]+\])((?:\s*\[[^\]]+\])+)")
+
+        def replace_match(match):
+            # Extract all citation brackets from the full match
+            all_brackets = re.findall(r"\[([^\]]+)\]", match.group(0))
+
+            # Define a sort key: try converting to int, fallback to string
+            def sort_key(item):
+                try:
+                    # Return a tuple with 0 first to ensure numbers sort before strings
