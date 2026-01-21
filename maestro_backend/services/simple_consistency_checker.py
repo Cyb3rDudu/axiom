@@ -24,7 +24,7 @@ class SimpleConsistencyChecker:
     """
     
     def __init__(self):
-        self.pdf_dir = Path("/app/data/raw_files")
+        self.pdf_dir = Path("/app/data/raw_pdfs")
         self.vector_store_dir = Path("/app/data/vector_store")
         self.processed_dir = Path("/app/data/processed")
         

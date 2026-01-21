@@ -12,7 +12,7 @@ DATA_BASE_PATH = Path("/app/data")
 VECTOR_STORE_PATH = DATA_BASE_PATH / "vector_store"
 
 # Document storage paths
-RAW_FILES_PATH = DATA_BASE_PATH / "raw_files"
+RAW_FILES_PATH = DATA_BASE_PATH / "raw_pdfs"
 MARKDOWN_PATH = DATA_BASE_PATH / "processed" / "markdown"
 METADATA_PATH = DATA_BASE_PATH / "processed" / "metadata"
 METADATA_DB_PATH = DATA_BASE_PATH / "processed" / "metadata.db"

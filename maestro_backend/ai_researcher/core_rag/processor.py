@@ -74,7 +74,7 @@ class DocumentProcessor:
     """
     def __init__(
         self,
-        pdf_dir: str | Path = "data/raw_files",
+        pdf_dir: str | Path = "data/raw_pdfs",
         markdown_dir: str | Path = "data/processed/markdown",
         metadata_dir: str | Path = "data/processed/metadata",
         db_path: Optional[str | Path] = None,

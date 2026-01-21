@@ -132,10 +132,10 @@ class PGVectorStore:
                     else:
                         # Insert using raw SQL for pgvector support
                         insert_query = text("""
-                            INSERT INTO document_chunks 
-                            (doc_id, chunk_id, chunk_index, chunk_text, dense_embedding, sparse_embedding, chunk_metadata)
-                            VALUES 
-                            (:doc_id, :chunk_id, :chunk_index, :chunk_text, CAST(:dense_embedding AS vector), CAST(:sparse_embedding AS jsonb), CAST(:chunk_metadata AS jsonb))
+                            INSERT INTO document_chunks
+                            (id, doc_id, chunk_id, chunk_index, chunk_text, dense_embedding, sparse_embedding, chunk_metadata)
+                            VALUES
+                            (gen_random_uuid()::text, :doc_id, :chunk_id, :chunk_index, :chunk_text, CAST(:dense_embedding AS vector), CAST(:sparse_embedding AS jsonb), CAST(:chunk_metadata AS jsonb))
                         """)
                         
                         db.execute(insert_query, {

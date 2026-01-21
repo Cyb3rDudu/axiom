@@ -63,9 +63,9 @@ class DocumentTransaction:
 class DocumentConsistencyManager:
     """Manages consistent document operations across all storage systems."""
     
-    def __init__(self, base_path: str = "/app/data"):
+    def __init__(self, base_path: str = "/app/ai_researcher/data"):
         self.base_path = Path(base_path)
-        self.pdf_dir = self.base_path / "raw_files"
+        self.pdf_dir = self.base_path / "raw_pdfs"
         self.markdown_dir = self.base_path / "processed" / "markdown"  
         self.metadata_dir = self.base_path / "processed" / "metadata"
         self.db_path = "data/maestro.db"  # Use unified database

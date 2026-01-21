@@ -37,7 +37,7 @@ def get_web_fetch_semaphore():
 
 # Define cache directory relative to this file or project root
 # Assuming the script runs from the project root where ai_researcher dir exists
-CACHE_DIR = pathlib.Path("data/web_cache/")
+CACHE_DIR = pathlib.Path("ai_researcher/data/web_cache/")
 
 # Define the input schema
 class WebPageFetcherInput(BaseModel):

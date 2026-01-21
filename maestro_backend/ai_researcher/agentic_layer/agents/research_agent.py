@@ -1990,11 +1990,11 @@ Important considerations:
                     
                     if is_docker:
                         # Use absolute Docker paths
-                        allowed_base_path = "/app/data/processed/markdown"
+                        allowed_base_path = "/app/ai_researcher/data/processed/markdown"
                         logger.info("Detected Docker environment, using absolute paths")
                     else:
                         # Use relative paths for local development
-                        allowed_base_path = "data/processed/markdown"
+                        allowed_base_path = "ai_researcher/data/processed/markdown"
                         logger.info("Detected local environment, using relative paths")
                     
                     # Get doc_id from metadata

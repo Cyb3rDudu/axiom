@@ -197,7 +197,7 @@ async def upload_document(
             )
         
         # Save the file to disk
-        upload_dir = "/app/data/raw_files"
+        upload_dir = "/app/data/raw_pdfs"
         os.makedirs(upload_dir, exist_ok=True)
         
         file_path = os.path.join(upload_dir, f"{doc_id}_{file.filename}")
@@ -374,7 +374,7 @@ async def upload_document_to_group(
                 )
         
         # Save the file to disk
-        upload_dir = "/app/data/raw_files"
+        upload_dir = "/app/data/raw_pdfs"
         os.makedirs(upload_dir, exist_ok=True)
         
         file_path = os.path.join(upload_dir, f"{doc_id}_{file.filename}")
@@ -1050,7 +1050,7 @@ async def view_document_content(
         
         # Try to read the markdown content from file
         markdown_content = None
-        markdown_path = f"/app/data/processed/markdown/{doc_id}.md"
+        markdown_path = f"/app/ai_researcher/data/processed/markdown/{doc_id}.md"
         
         try:
             import os

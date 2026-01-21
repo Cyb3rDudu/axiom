@@ -355,7 +355,7 @@ WEB_CACHE_EXPIRATION_DAYS = int(os.getenv("WEB_CACHE_EXPIRATION_DAYS", 2)) # Day
 # print(f"Web Cache Expiration: {WEB_CACHE_EXPIRATION_DAYS} days")
 
 # Example: Database Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/vector_store/chroma.db") # Example path
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ai_researcher/data/vector_store/chroma.db") # Example path
 
 # --- Research Loop Configuration ---
 MAX_TOTAL_ITERATIONS = get_max_total_iterations() if DYNAMIC_CONFIG_AVAILABLE else int(os.getenv("MAX_TOTAL_ITERATIONS", 40)) # Overall limit for research/reflection iterations

@@ -46,14 +46,14 @@ load_dotenv(dotenv_path=dotenv_path)
 app = typer.Typer(help="AI Researcher Framework CLI - Ingest documents and query the RAG system.")
 
 # --- Configuration Defaults (Relative to project root) ---
-DEFAULT_PDF_DIR = "data/raw_files"
-DEFAULT_MARKDOWN_DIR = "data/processed/markdown"
-DEFAULT_METADATA_DIR = "data/processed/metadata"
-DEFAULT_DB_PATH = "data/processed/metadata.db"
-DEFAULT_VECTOR_STORE_PATH = "data/vector_store"
+DEFAULT_PDF_DIR = "ai_researcher/data/raw_pdfs"
+DEFAULT_MARKDOWN_DIR = "ai_researcher/data/processed/markdown"
+DEFAULT_METADATA_DIR = "ai_researcher/data/processed/metadata"
+DEFAULT_DB_PATH = "ai_researcher/data/processed/metadata.db"
+DEFAULT_VECTOR_STORE_PATH = "ai_researcher/data/vector_store"
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-m3"
 DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
-DEFAULT_MISSION_RESULTS_DIR = "data/mission_results" # Default for saving mission JSON logs
+DEFAULT_MISSION_RESULTS_DIR = "ai_researcher/data/mission_results" # Default for saving mission JSON logs
 DEFAULT_CLI_OUTPUT_DIR = "cli_research_output" # Default for saving markdown reports
 # --- End Configuration ---
 

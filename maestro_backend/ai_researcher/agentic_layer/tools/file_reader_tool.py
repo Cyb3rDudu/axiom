@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class FileReaderInput(BaseModel):
     filepath: str = Field(..., description="The absolute path to the file to read.")
     # Optional: Add allowed base paths for security
-    allowed_base_path: str = Field("data/processed/markdown", description="The base directory within which file reading is permitted.")
+    allowed_base_path: str = Field("ai_researcher/data/processed/markdown", description="The base directory within which file reading is permitted.")
 
 class FileReaderTool:
     """
@@ -74,13 +74,13 @@ class FileReaderTool:
                 
                 # In Docker, try the container path
                 if is_running_in_docker():
-                    alternative_paths.append(Path("/app/data/processed/markdown") / f"{doc_id}.md")
+                    alternative_paths.append(Path("/app/ai_researcher/data/processed/markdown") / f"{doc_id}.md")
                 
                 # Try relative to current working directory
-                alternative_paths.append(Path.cwd() / "data/processed/markdown" / f"{doc_id}.md")
+                alternative_paths.append(Path.cwd() / "ai_researcher/data/processed/markdown" / f"{doc_id}.md")
                 
                 # Try one level up (for cases where cwd is inside ai_researcher)
-                alternative_paths.append(Path.cwd().parent / "data/processed/markdown" / f"{doc_id}.md")
+                alternative_paths.append(Path.cwd().parent / "ai_researcher/data/processed/markdown" / f"{doc_id}.md")
                 
                 for alt_path in alternative_paths:
                     if alt_path.exists():

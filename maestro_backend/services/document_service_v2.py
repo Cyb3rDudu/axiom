@@ -33,7 +33,7 @@ class UnifiedDocumentService:
     def __init__(self, db: Session):
         self.db = db
         self.vector_store = None  # Lazy load
-        self.base_path = Path("/app/data")
+        self.base_path = Path("/app/ai_researcher/data")
         
     def _get_vector_store(self) -> VectorStoreManager:
         """Lazy load vector store."""
@@ -342,7 +342,7 @@ class UnifiedDocumentService:
             try:
                 # Delete PDF
                 pdf_pattern = f"{doc_id}_*"
-                for pdf_file in (self.base_path / "raw_files").glob(pdf_pattern):
+                for pdf_file in (self.base_path / "raw_pdfs").glob(pdf_pattern):
                     pdf_file.unlink()
                     logger.info(f"Deleted PDF file: {pdf_file}")
                 

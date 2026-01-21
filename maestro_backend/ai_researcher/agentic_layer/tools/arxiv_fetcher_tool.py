@@ -30,7 +30,7 @@ import html2text
 logger = logging.getLogger(__name__)
 
 # Cache directory for arXiv papers
-CACHE_DIR = pathlib.Path("data/arxiv_cache/")
+CACHE_DIR = pathlib.Path("ai_researcher/data/arxiv_cache/")
 
 class ArXivFetcherTool:
     """

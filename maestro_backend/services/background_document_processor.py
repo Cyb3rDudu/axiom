@@ -45,7 +45,7 @@ class BackgroundDocumentProcessor:
         # Paths to existing document infrastructure
         base_path = Path("/app/data")
         self.vector_store_path = base_path / "vector_store"
-        self.pdf_dir = base_path / "raw_files"
+        self.pdf_dir = base_path / "raw_pdfs"
         self.markdown_dir = base_path / "processed" / "markdown"
         self.metadata_dir = base_path / "processed" / "metadata"
         self.db_path = base_path / "processed" / "metadata.db"

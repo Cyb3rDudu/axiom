@@ -33,7 +33,7 @@ def get_web_fetch_semaphore():
         return _WEB_FETCH_SEMAPHORE
 
 # Define cache directory for Jina fetcher (shared with native fetcher for consistency)
-CACHE_DIR = pathlib.Path("data/web_cache/")
+CACHE_DIR = pathlib.Path("ai_researcher/data/web_cache/")
 
 # Define the input schema
 class JinaWebFetcherInput(BaseModel):

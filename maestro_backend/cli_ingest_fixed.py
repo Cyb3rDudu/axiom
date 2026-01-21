@@ -218,7 +218,7 @@ def process_document_in_subprocess(args):
     saved_file_path = Path(saved_file_path_str)
     
     # Initialize components for this process
-    base_path = Path("/app/data")
+    base_path = Path("/app/ai_researcher/data")
     
     try:
         # Initialize components
@@ -239,7 +239,7 @@ def process_document_in_subprocess(args):
         
         # Initialize processor
         processor = DocumentProcessor(
-            pdf_dir=base_path / "raw_files",
+            pdf_dir=base_path / "raw_pdfs",
             markdown_dir=base_path / "processed" / "markdown",
             metadata_dir=base_path / "processed" / "metadata",
             db_path=None,
@@ -694,9 +694,9 @@ def ingest(
             else:
                 metadata_extractor = MetadataExtractor()
             
-            base_path = Path("/app/data")
+            base_path = Path("/app/ai_researcher/data")
             processor = DocumentProcessor(
-                pdf_dir=base_path / "raw_files",
+                pdf_dir=base_path / "raw_pdfs",
                 markdown_dir=base_path / "processed" / "markdown",
                 metadata_dir=base_path / "processed" / "metadata",
                 db_path=None,

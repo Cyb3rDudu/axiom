@@ -30,7 +30,7 @@ class VectorStoreMonitor:
     
     def __init__(
         self,
-        vector_store_path: str = "/app/data/vector_store",
+        vector_store_path: str = "/app/ai_researcher/data/vector_store",
         check_interval_minutes: int = 30,
         max_size_gb: float = 50.0,
         auto_cleanup: bool = False
