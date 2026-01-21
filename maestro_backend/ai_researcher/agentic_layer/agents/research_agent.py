@@ -53,7 +53,8 @@ class ResearchAgent(BaseAgent):
         model_name: Optional[str] = None,
         system_prompt: Optional[str] = None,
         feedback_callback: Optional[Callable[[Dict[str, Any]], None]] = None, # Type hint already correct, ensuring it stays
-        controller: Optional[Any] = None # Add controller parameter
+        controller: Optional[Any] = None, # Add controller parameter
+        language_code: str = 'en'  # Add language_code parameter
     ):
         agent_name = "ResearchAgent"
         # Determine the correct model name based on the 'research' role from config
