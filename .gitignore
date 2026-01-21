@@ -459,3 +459,4 @@ setup.sh
 
 # Verification test files and artifacts
 tests/verification/
+.mcp.json
