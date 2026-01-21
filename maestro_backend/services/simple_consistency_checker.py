@@ -24,9 +24,9 @@ class SimpleConsistencyChecker:
     """
     
     def __init__(self):
-        self.pdf_dir = Path("/app/ai_researcher/data/raw_pdfs")
-        self.vector_store_dir = Path("/app/ai_researcher/data/vector_store")
-        self.processed_dir = Path("/app/ai_researcher/data/processed")
+        self.pdf_dir = Path("/app/data/raw_pdfs")
+        self.vector_store_dir = Path("/app/data/vector_store")
+        self.processed_dir = Path("/app/data/processed")
         
     def check_document_files(self, doc_id: str) -> Dict[str, bool]:
         """

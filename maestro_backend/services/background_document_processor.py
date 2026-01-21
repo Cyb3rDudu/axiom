@@ -43,7 +43,7 @@ class BackgroundDocumentProcessor:
     
     def __init__(self):
         # Paths to existing document infrastructure
-        base_path = Path("/app/ai_researcher/data")
+        base_path = Path("/app/data")
         self.vector_store_path = base_path / "vector_store"
         self.pdf_dir = base_path / "raw_pdfs"
         self.markdown_dir = base_path / "processed" / "markdown"

@@ -6,7 +6,7 @@ This ensures consistency across all components.
 from pathlib import Path
 
 # Base paths
-DATA_BASE_PATH = Path("/app/ai_researcher/data")
+DATA_BASE_PATH = Path("/app/data")
 
 # Vector store - single source of truth
 VECTOR_STORE_PATH = DATA_BASE_PATH / "vector_store"

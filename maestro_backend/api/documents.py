@@ -197,7 +197,7 @@ async def upload_document(
             )
         
         # Save the file to disk
-        upload_dir = "/app/data/raw_files"
+        upload_dir = "/app/data/raw_pdfs"
         os.makedirs(upload_dir, exist_ok=True)
         
         file_path = os.path.join(upload_dir, f"{doc_id}_{file.filename}")
@@ -374,7 +374,7 @@ async def upload_document_to_group(
                 )
         
         # Save the file to disk
-        upload_dir = "/app/data/raw_files"
+        upload_dir = "/app/data/raw_pdfs"
         os.makedirs(upload_dir, exist_ok=True)
         
         file_path = os.path.join(upload_dir, f"{doc_id}_{file.filename}")
