@@ -1,0 +1,177 @@
+import { apiClient } from '../../config/api';
+import type { DocumentGroup, DocumentGroupWithCount, Document } from './types';
+
+// Filter Options API
+export const getFilterOptions = async (groupId?: string): Promise<{
+  authors: string[];
+  years: number[];
+  journals: string[];
+}> => {
+  const params = groupId ? { group_id: groupId } : {};
+  const response = await apiClient.get('/api/documents/filter-options', { params });
+  return response.data;
+};
+
+export const getDocumentGroups = async (skip: number = 0, limit: number = 100): Promise<DocumentGroupWithCount[]> => {
+  // Now returns lightweight summaries without document data
+  const response = await apiClient.get('/api/document-groups/', {
+    params: {
+      skip,
+      limit
+    }
+  });
+  return response.data;
+};
+
+export const createDocumentGroup = async (name: string): Promise<DocumentGroup> => {
+  const response = await apiClient.post('/api/document-groups/', { name });
+  return response.data;
+};
+
+export const renameDocumentGroup = async (id: string, name: string): Promise<DocumentGroup> => {
+  const response = await apiClient.put(`/api/document-groups/${id}`, { name });
+  return response.data;
+};
+
+export const deleteDocumentGroup = async (id: string): Promise<void> => {
+  await apiClient.delete(`/api/document-groups/${id}`);
+};
+
+export const getDocuments = async (groupId: string): Promise<Document[]> => {
+  const response = await apiClient.get(`/api/document-groups/${groupId}/documents/`);
+  return response.data;
+};
+
+export const uploadDocument = async (groupId: string, file: File): Promise<Document> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await apiClient.post(`/api/document-groups/${groupId}/upload/`, formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+  return response.data;
+};
+
+// Pagination and filtering types
+export interface PaginationParams {
+  page?: number;
+  limit?: number;
+  search?: string;
+  author?: string;
+  year?: number;
+  journal?: string;
+  status?: string;
+  sort_by?: string;
+  sort_order?: 'asc' | 'desc';
+}
+
+export interface PaginationInfo {
+  total_count: number;
+  page: number;
+  limit: number;
+  total_pages: number;
+  has_next: boolean;
+  has_previous: boolean;
+}
+
+export interface PaginatedDocumentResponse {
+  documents: Document[];
+  pagination: PaginationInfo;
+  filters_applied: Record<string, any>;
+}
+
+// New API calls for the existing document store
+export const getAllDocuments = async (params?: PaginationParams): Promise<PaginatedDocumentResponse> => {
+  const response = await apiClient.get('/api/documents/all', { params });
+  return response.data;
+};
+
+export const getGroupDocuments = async (groupId: string, params?: PaginationParams): Promise<PaginatedDocumentResponse> => {
+  const response = await apiClient.get(`/api/document-groups/${groupId}/documents/`, { params });
+  return response.data;
+};
+
+export const searchDocuments = async (query: string, nResults: number = 10): Promise<any> => {
+  const response = await apiClient.get('/api/search/', {
+    params: { query, n_results: nResults }
+  });
+  return response.data;
+};
+
+export const addExistingDocumentToGroup = async (groupId: string, docId: string): Promise<void> => {
+  await apiClient.post(`/api/document-groups/${groupId}/add-document/${docId}`);
+};
+
+export const deleteDocument = async (documentId: string): Promise<void> => {
+  await apiClient.delete(`/api/documents/${documentId}`);
+};
+
+// Bulk operations
+export const bulkDeleteDocuments = async (documentIds: string[]): Promise<void> => {
+  await apiClient.post('/api/documents/bulk-delete', documentIds);
+};
+
+export const bulkAddDocumentsToGroup = async (groupId: string, documentIds: string[]): Promise<any> => {
+  const response = await apiClient.post(`/api/document-groups/${groupId}/bulk-add-documents`, documentIds);
+  return response.data;
+};
+
+export const bulkRemoveDocumentsFromGroup = async (groupId: string, documentIds: string[]): Promise<any> => {
+  const response = await apiClient.post(`/api/document-groups/${groupId}/bulk-remove-documents`, documentIds);
+  return response.data;
+};
+
+export const cancelDocumentProcessing = async (docId: string): Promise<any> => {
+  const response = await apiClient.post(`/api/documents/${docId}/cancel`);
+  return response.data;
+};
+
+export const bulkReprocessDocuments = async (documentIds: string[]): Promise<any> => {
+  const response = await apiClient.post('/api/documents/bulk-reprocess', {
+    document_ids: documentIds
+  });
+  return response.data;
+};
+
+export const bulkReembedDocuments = async (documentIds: string[]): Promise<any> => {
+  const response = await apiClient.post('/api/documents/bulk-reembed', {
+    document_ids: documentIds
+  });
+  return response.data;
+};
+
+// Metadata editing and document viewing API calls
+export interface DocumentMetadataUpdate {
+  title?: string;
+  authors?: string[];
+  journal_or_source?: string;
+  publication_year?: number;
+  abstract?: string;
+  keywords?: string[];
+}
+
+export interface DocumentViewResponse {
+  id: string;
+  original_filename: string;
+  title?: string;
+  content: string; // Markdown content
+  metadata_?: Record<string, any>;
+  created_at?: string;
+  file_size?: number;
+}
+
+export const updateDocumentMetadata = async (docId: string, metadata: DocumentMetadataUpdate): Promise<Document> => {
+  const response = await apiClient.put(`/api/documents/${docId}/metadata`, metadata);
+  return response.data;
+};
+
+export const getDocument = async (docId: string): Promise<Document> => {
+  const response = await apiClient.get(`/api/documents/${docId}`);
+  return response.data;
+};
+
+export const getDocumentContent = async (docId: string): Promise<DocumentViewResponse> => {
+  const response = await apiClient.get(`/api/documents/${docId}/view`);
+  return response.data;
+};

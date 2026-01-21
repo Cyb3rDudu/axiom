@@ -1,0 +1,101 @@
+# Docker Compose configuration for Maestro with External PostgreSQL and GPU support
+# Using explicitly built local images
+services:
+  backend:
+    image: maestro-backend:local
+    container_name: maestro-backend
+    volumes:
+      - ~/AI-Models/huggingface:/root/.cache/huggingface
+      - ./maestro_datalab_cache:/root/.cache/datalab
+      - ./reports:/app/reports
+      - ./maestro_backend/data:/app/data
+    working_dir: /app
+    environment:
+      - MAX_WORKER_THREADS=${MAX_WORKER_THREADS:-20}
+      - TZ=${TZ:-UTC}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - FORCE_CPU_MODE=${FORCE_CPU_MODE:-false}
+      - PREFERRED_DEVICE_TYPE=${PREFERRED_DEVICE_TYPE:-cuda}
+      - EMBEDDING_BATCH_SIZE=${EMBEDDING_BATCH_SIZE:-512}
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
+      - ALLOW_CORS_WILDCARD=${ALLOW_CORS_WILDCARD:-true}
+      - HF_HUB_OFFLINE=1
+    networks:
+      - maestro-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${BACKEND_GPU_DEVICE:-0}"]
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  doc-processor:
+    image: maestro-backend:local
+    container_name: maestro-doc-processor
+    command: ["python", "-u", "services/background_document_processor.py"]
+    working_dir: /app
+    volumes:
+      - ~/AI-Models/huggingface:/root/.cache/huggingface
+      - ./maestro_datalab_cache:/root/.cache/datalab
+      - ./reports:/app/reports
+      - ./maestro_backend/data:/app/data
+    depends_on:
+      - backend
+    networks:
+      - maestro-network
+    environment:
+      - TZ=${TZ:-UTC}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - FORCE_CPU_MODE=${FORCE_CPU_MODE:-false}
+      - PREFERRED_DEVICE_TYPE=${PREFERRED_DEVICE_TYPE:-cuda}
+      - EMBEDDING_BATCH_SIZE=${EMBEDDING_BATCH_SIZE:-512}
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - HF_HUB_OFFLINE=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${DOC_PROCESSOR_GPU_DEVICE:-0}"]
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./maestro_frontend
+      dockerfile: Dockerfile
+    image: maestro-frontend:local
+    container_name: maestro-frontend
+    networks:
+      - maestro-network
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:latest
+    container_name: maestro-nginx
+    volumes:
+      - ./nginx/nginx.conf.complete:/etc/nginx/nginx.conf:ro
+    ports:
+      - "${MAESTRO_PORT:-8080}:80"
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - maestro-network
+    restart: unless-stopped
+
+networks:
+  maestro-network:
+    name: maestro_maestro-network
+
+volumes:
+  maestro-data:
+    name: maestro_maestro-data

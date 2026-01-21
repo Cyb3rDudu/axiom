@@ -1,0 +1,931 @@
+import os
+import json
+import time
+import uuid
+from pathlib import Path
+from typing import List, Dict, Tuple, Optional
+import shutil # Import shutil at the top
+import logging
+import sys
+import signal
+from contextlib import contextmanager
+
+import torch
+import pymupdf # PyMuPDF
+import pymupdf4llm # For fallback or specific markdown conversion if needed later
+from marker.converters.pdf import PdfConverter
+from marker.models import create_model_dict
+from marker.config.parser import ConfigParser
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from hardware_detection import hardware_detector
+
+import sqlite3 # Needed for Database integration (error handling)
+# json is imported above
+
+# Import the new components
+from .metadata_extractor import MetadataExtractor
+from .chunker import Chunker
+# Database operations now handled by main application database
+# No need to import the old Database class
+from .embedder import TextEmbedder # Import Embedder
+from .vector_store_singleton import get_vector_store # Import the singleton vector store
+from .pgvector_store import PGVectorStore as VectorStore  # Import for type hints
+from .document_converter import DocumentConverter # Import the document converter
+
+# Set up logging for table processing
+logger = logging.getLogger(__name__)
+
+@contextmanager
+def timeout_context(seconds):
+    """
+    Context manager for timeouts using signal.alarm().
+
+    Usage:
+        with timeout_context(32400):  # 9 hours
+            result = some_long_running_operation()
+
+    Raises:
+        TimeoutError: If the operation exceeds the specified timeout
+    """
+    def timeout_handler(signum, frame):
+        raise TimeoutError(f"Operation timed out after {seconds} seconds ({seconds/3600:.1f} hours)")
+
+    # Save the old handler
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(seconds)
+
+    try:
+        yield
+    finally:
+        # Cancel the alarm and restore the old handler
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+class DocumentProcessor:
+    """
+    Handles processing of documents (PDF, Word, Markdown):
+    1. Extracts initial text for metadata extraction.
+    2. Converts documents to Markdown format (PDF->Markdown via marker, Word->Markdown via python-docx, Markdown direct).
+    3. Assigns a unique document ID.
+    4. Extracts structured metadata using an LLM.
+    5. Chunks the Markdown content.
+    6. Embeds and stores in vector store.
+    """
+    def __init__(
+        self,
+        pdf_dir: str | Path = "data/raw_files",
+        markdown_dir: str | Path = "data/processed/markdown",
+        metadata_dir: str | Path = "data/processed/metadata",
+        db_path: Optional[str | Path] = None,
+        embedder: Optional[TextEmbedder] = None,
+        vector_store: Optional[VectorStore] = None,
+        force_reembed: bool = False, # Add force_reembed flag
+        # marker_model_dir is handled by env var MARKER_MODEL_DIR
+        device: Optional[str] = None
+    ):
+        self.pdf_dir = Path(pdf_dir)
+        self.markdown_dir = Path(markdown_dir)
+        self.metadata_dir = Path(metadata_dir)
+        db_path = Path(db_path) if db_path else Path("data/processed/metadata.db") # Default path
+
+        # Ensure directories exist
+        self.markdown_dir.mkdir(parents=True, exist_ok=True)
+        self.metadata_dir.mkdir(parents=True, exist_ok=True)
+        db_path.parent.mkdir(parents=True, exist_ok=True) # Ensure DB directory exists too
+
+        # Use hardware detector for device selection
+        if device:
+            self.device = device
+        else:
+            # Get device from hardware detector, prefer GPU 4 if available for backward compatibility
+            device_info = hardware_detector.detect_hardware()
+            if device_info["device_type"] == "cuda" and device_info["device_count"] > 4:
+                self.device = "cuda:4"
+            else:
+                torch_device = hardware_detector.get_torch_device()
+                self.device = str(torch_device)
+        
+        # Log hardware detection results
+        hardware_detector.log_device_info()
+        print(f"DocumentProcessor using device: {self.device}")
+        
+        # Set CPU optimizations if needed
+        device_info = hardware_detector.detect_hardware()
+        if device_info["device_type"] == "cpu":
+            torch.set_num_threads(hardware_detector.get_num_workers())
+            print(f"Set PyTorch threads to {hardware_detector.get_num_workers()} for CPU processing")
+
+        # Initialize Marker components
+        self.marker_models = create_model_dict(device=self.device)
+        
+        # Store different configurations for table handling
+        self._init_marker_configs()
+
+        # Initialize other components
+        self.metadata_extractor = MetadataExtractor()
+        self.chunker = Chunker()
+        self.document_converter = DocumentConverter()  # Initialize document converter
+        self.embedder = embedder
+        self.vector_store = vector_store
+        self.force_reembed = force_reembed # Store the flag
+
+        if self.embedder is None or self.vector_store is None:
+            print("Warning: DocumentProcessor initialized without embedder or vector_store. Embedding/storing will be skipped.")
+        if self.force_reembed:
+            print("Warning: --force-reembed flag is active. All PDFs will be re-processed and re-embedded.")
+
+    # --- Methods correctly indented within the class ---
+
+    def _init_marker_configs(self):
+        """Initialize different marker configurations for table handling."""
+        # Base configuration options
+        device_info = hardware_detector.detect_hardware()
+        # Adjust batch multiplier based on hardware
+        batch_multiplier = 1 if device_info["device_type"] == "cpu" else 2
+        
+        base_options = {
+            "output_format": "markdown",
+            "device": self.device,
+            "batch_multiplier": batch_multiplier,
+        }
+        
+        # Configuration with table recognition enabled
+        # Note: marker may use different option names, so we try multiple approaches
+        table_options = base_options.copy()
+        table_options.update({
+            "extract_tables": True,
+            "table_rec": True,
+            "table_recognition": True,  # Alternative option name
+            "enable_tables": True,      # Alternative option name
+        })
+        
+        # Configuration with table recognition disabled (safe fallback)
+        no_table_options = base_options.copy()
+        no_table_options.update({
+            "extract_tables": False,
+            "table_rec": False,
+            "table_recognition": False,
+            "enable_tables": False,
+        })
+        
+        # Create configurations
+        self.table_config = ConfigParser(cli_options=table_options)
+        self.no_table_config = ConfigParser(cli_options=no_table_options)
+        
+        # Log the actual configurations being used
+        table_config_dict = self.table_config.generate_config_dict()
+        no_table_config_dict = self.no_table_config.generate_config_dict()
+        
+        logger.info(f"Table config keys: {list(table_config_dict.keys())}")
+        logger.info(f"No-table config keys: {list(no_table_config_dict.keys())}")
+        
+        # Create converters
+        self.table_converter = PdfConverter(
+            config=table_config_dict,
+            artifact_dict=self.marker_models,
+            processor_list=self.table_config.get_processors(),
+            renderer=self.table_config.get_renderer()
+        )
+        
+        self.no_table_converter = PdfConverter(
+            config=no_table_config_dict,
+            artifact_dict=self.marker_models,
+            processor_list=self.no_table_config.get_processors(),
+            renderer=self.no_table_config.get_renderer()
+        )
+        
+        # Default to the safer no-table converter
+        self.marker_converter = self.no_table_converter
+        
+        logger.info("Marker configurations initialized with table handling support")
+
+    def _detect_tables(self, pdf_path: Path) -> bool:
+        """
+        Detect if the PDF contains tables using a lightweight approach.
+        Returns True if tables are likely present, False otherwise.
+        """
+        try:
+            logger.info(f"Detecting tables in {pdf_path.name}...")
+            
+            # Use PyMuPDF to do a quick scan for table-like structures
+            doc = pymupdf.open(pdf_path)
+            if not doc or len(doc) == 0:
+                logger.warning(f"Could not open PDF for table detection: {pdf_path}")
+                return False
+            
+            table_indicators = 0
+            pages_to_check = min(3, len(doc))  # Check first 3 pages only
+            
+            for page_num in range(pages_to_check):
+                page = doc[page_num]
+                text = page.get_text()
+                
+                # Look for table indicators in the text
+                # Count tab characters (common in table exports)
+                tab_count = text.count('\t')
+                if tab_count > 5:  # Threshold for tab-separated content
+                    table_indicators += 1
+                
+                # Look for repeated patterns that suggest tabular data
+                lines = text.split('\n')
+                aligned_lines = 0
+                for line in lines:
+                    # Count lines with multiple spaces (column alignment)
+                    if '  ' in line and len(line.split()) > 2:
+                        aligned_lines += 1
+                
+                if aligned_lines > 5:  # Threshold for aligned content
+                    table_indicators += 1
+                
+                # Look for table-related keywords
+                table_keywords = ['table', 'column', 'row', 'data', 'figure']
+                text_lower = text.lower()
+                keyword_count = sum(1 for keyword in table_keywords if keyword in text_lower)
+                if keyword_count > 2:
+                    table_indicators += 1
+            
+            doc.close()
+            
+            has_tables = table_indicators >= 2  # Need at least 2 indicators
+            logger.info(f"Table detection for {pdf_path.name}: {'FOUND' if has_tables else 'NOT FOUND'} (indicators: {table_indicators})")
+            return has_tables
+            
+        except Exception as e:
+            logger.warning(f"Error during table detection for {pdf_path}: {e}")
+            # Default to assuming no tables to avoid crashes
+            return False
+
+    def _convert_pdf_with_table_handling(self, pdf_path: Path) -> str:
+        """
+        Convert PDF to markdown with intelligent table handling and fallback.
+        Includes 9-hour timeout protection to prevent infinite hangs.
+        Returns the markdown content or raises an exception if all attempts fail.
+        """
+        pdf_str = str(pdf_path)
+        timeout_seconds = 32400  # 9 hours (was 6 hours = 21600, now increased to 9 hours)
+
+        # Step 1: Detect if tables are present
+        has_tables = self._detect_tables(pdf_path)
+
+        if has_tables:
+            logger.info(f"Tables detected in {pdf_path.name}, attempting conversion with table recognition (timeout: {timeout_seconds/3600:.1f}h)...")
+            try:
+                # Attempt conversion with table recognition + TIMEOUT
+                with timeout_context(timeout_seconds):
+                    result = self.table_converter(pdf_str)
+
+                if result and result.markdown:
+                    logger.info(f"Successfully converted {pdf_path.name} with table recognition")
+                    return result.markdown
+                else:
+                    logger.warning(f"Table conversion returned empty result for {pdf_path.name}")
+                    raise ValueError("Empty markdown result from table conversion")
+
+            except TimeoutError as e:
+                logger.error(f"Table conversion TIMED OUT after {timeout_seconds}s ({timeout_seconds/3600:.1f}h) for {pdf_path.name}")
+                raise e
+                    
+            except Exception as e:
+                # Check if this is a table-related error
+                error_str = str(e).lower()
+                table_error_indicators = [
+                    'table_rec', 'surya', 'torch.stack', 'table_idx', 
+                    'tables[', 'row_encoder_hidden_states', 'empty tensor',
+                    'size of tensor', 'must match the size', 'non-singleton dimension'
+                ]
+                
+                is_table_error = any(indicator in error_str for indicator in table_error_indicators)
+                
+                if is_table_error:
+                    logger.warning(f"Table recognition failed for {pdf_path.name}: {e}")
+                    logger.info(f"Retrying {pdf_path.name} without table recognition (timeout: {timeout_seconds/3600:.1f}h)...")
+
+                    # Fallback: try without table recognition + TIMEOUT
+                    try:
+                        with timeout_context(timeout_seconds):
+                            result = self.no_table_converter(pdf_str)
+
+                        if result and result.markdown:
+                            logger.info(f"Successfully converted {pdf_path.name} without table recognition (fallback)")
+                            return result.markdown
+                        else:
+                            logger.error(f"Fallback conversion also returned empty result for {pdf_path.name}")
+                            raise ValueError("Empty markdown result from fallback conversion")
+
+                    except TimeoutError as fallback_timeout:
+                        logger.error(f"Fallback conversion TIMED OUT after {timeout_seconds}s ({timeout_seconds/3600:.1f}h) for {pdf_path.name}")
+                        raise fallback_timeout
+
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback conversion also failed for {pdf_path.name}: {fallback_error}")
+                        raise fallback_error
+                else:
+                    # Non-table related error, re-raise
+                    logger.error(f"Non-table error during conversion of {pdf_path.name}: {e}")
+                    raise e
+        else:
+            # No tables detected, use the faster no-table converter + TIMEOUT
+            logger.info(f"No tables detected in {pdf_path.name}, using standard conversion (timeout: {timeout_seconds/3600:.1f}h)...")
+            try:
+                with timeout_context(timeout_seconds):
+                    result = self.no_table_converter(pdf_str)
+
+                if result and result.markdown:
+                    logger.info(f"Successfully converted {pdf_path.name} without table recognition")
+                    return result.markdown
+                else:
+                    logger.error(f"Standard conversion returned empty result for {pdf_path.name}")
+                    raise ValueError("Empty markdown result from standard conversion")
+
+            except TimeoutError as e:
+                logger.error(f"Conversion TIMED OUT after {timeout_seconds}s ({timeout_seconds/3600:.1f}h) for {pdf_path.name}")
+                raise e
+
+            except Exception as e:
+                logger.error(f"Standard conversion failed for {pdf_path.name}: {e}")
+                raise e
+
+    def _extract_header_footer_text(self, pdf_path: Path) -> str:
+        """
+        Extracts text from the first page, including header and footer,
+        using the pymupdf logic from the example. Used for metadata extraction hint.
+        """
+        try:
+            doc = pymupdf.open(pdf_path)
+            if not doc or len(doc) == 0:
+                print(f"Warning: Could not open or empty PDF: {pdf_path}")
+                return ""
+
+            first_page = doc[0]
+            page_height = first_page.rect.height
+            blocks = first_page.get_text("dict", flags=11)["blocks"]
+
+            header_threshold = 0.1 * page_height
+            header_blocks = [b for b in blocks if b["bbox"][3] <= header_threshold]
+            header_blocks.sort(key=lambda b: b["bbox"][1])
+            header_text_parts = [span["text"].strip() for block in header_blocks for line in block["lines"] for span in line["spans"] if span["text"].strip()]
+            header_text = " ".join(header_text_parts)
+
+            footer_threshold = 0.9 * page_height
+            footer_blocks = [b for b in blocks if b["bbox"][1] >= footer_threshold]
+            footer_blocks.sort(key=lambda b: b["bbox"][1])
+            footer_text_parts = [span["text"].strip() for block in footer_blocks for line in block["lines"] for span in line["spans"] if span["text"].strip()]
+            footer_text = " ".join(footer_text_parts)
+
+            main_text = first_page.get_text("text")
+            doc.close()
+
+            combined_text = f"## Extracted Header:\n{header_text}\n\n## Extracted Footer:\n{footer_text}\n\n## First Page Content:\n{main_text}"
+            return combined_text
+
+        except Exception as e:
+            print(f"Error extracting header/footer text from {pdf_path}: {e}")
+            return ""
+
+    def process_pdf(self, pdf_path: Path, doc_id: Optional[str] = None) -> Optional[Dict]:
+        """
+        Processes a single PDF file.
+        Returns a dictionary containing doc_id, markdown content, metadata, and chunks.
+        Returns None if processing fails or file is already processed.
+        """
+        if not pdf_path.exists() or pdf_path.suffix.lower() != ".pdf":
+            print(f"Error: Invalid PDF path: {pdf_path}")
+            return None
+
+        start_time = time.time()
+        print(f"Processing PDF: {pdf_path.name}...")
+
+        # Always process documents - no database checks needed
+        # Use provided doc_id or generate a new one
+        if doc_id is None:
+            doc_id = str(uuid.uuid4())
+        final_metadata = {"doc_id": doc_id, "original_filename": pdf_path.name}
+        print(f"Processing '{pdf_path.name}' with doc_id: {doc_id}")
+
+        # --- Metadata Extraction (only if not loaded from DB or if forced and failed to load) ---
+        # We might want to avoid re-running LLM metadata extraction if force_reembed is just for syncing vector store.
+        # Let's refine: only extract if metadata wasn't successfully loaded above.
+        if final_metadata is None or not final_metadata.get('title'): # Check if metadata is basic or missing key fields
+            print("  Extracting metadata using LLM...")
+            initial_text_for_metadata = self._extract_header_footer_text(pdf_path)
+            extracted_metadata = self.metadata_extractor.extract(initial_text_for_metadata)
+            if extracted_metadata:
+                # Ensure doc_id and filename are preserved if they existed
+                base_meta = {"doc_id": doc_id, "original_filename": pdf_path.name}
+                extracted_metadata.update(base_meta) # Overwrite doc_id/filename from extraction if needed
+                final_metadata = extracted_metadata
+                print(f"  Successfully extracted metadata for {pdf_path.name}.")
+                # Save metadata JSON (overwrite if exists)
+                metadata_filename = f"{doc_id}.json"
+                metadata_save_path = self.metadata_dir / metadata_filename
+                try:
+                    with open(metadata_save_path, "w", encoding="utf-8") as f:
+                        json.dump(final_metadata, f, indent=2, ensure_ascii=False)
+                    print(f"  Saved metadata to: {metadata_save_path}")
+                except IOError as e:
+                    print(f"  Error saving metadata file {metadata_save_path}: {e}")
+            else:
+                print(f"  Warning: Metadata extraction failed for {pdf_path.name}. Using basic metadata.")
+                # Ensure final_metadata is at least the base if extraction fails
+                if final_metadata is None:
+                     final_metadata = {"doc_id": doc_id, "original_filename": pdf_path.name}
+
+        # --- Add or Update record in DB ---
+        # Database operations now handled by main application database
+        # No need to add to separate AI database anymore
+        print(f"Added record for '{pdf_path.name}' (ID: {doc_id}) to database.")
+        # The metadata extraction logic was already handled correctly in the previous block.
+        # --- Get Markdown Content (Convert or Load Existing) ---
+        md_filename = f"{doc_id}.md"
+        md_save_path = self.markdown_dir / md_filename
+        markdown_content = None
+
+        if md_save_path.exists() and self.force_reembed:
+            # If forcing re-embed and markdown exists, try loading it
+            print(f"  Found existing Markdown file: {md_save_path}. Loading content.")
+            try:
+                with open(md_save_path, "r", encoding="utf-8") as f:
+                    markdown_content = f.read()
+                if not markdown_content:
+                     print(f"  Warning: Existing Markdown file {md_save_path} is empty. Will attempt Marker conversion.")
+                     # Fall through to Marker conversion
+            except IOError as e:
+                print(f"  Error reading existing Markdown file {md_save_path}: {e}. Will attempt Marker conversion.")
+                # Fall through to Marker conversion
+            except Exception as e:
+                 print(f"  Unexpected error reading existing Markdown file {md_save_path}: {e}. Will attempt Marker conversion.")
+                 # Fall through to Marker conversion
+
+        if markdown_content is None:
+            # If not loaded (doesn't exist, force_reembed is false, or loading failed), run Marker
+            print(f"  Converting PDF to Markdown using Marker with intelligent table handling...")
+            try:
+                markdown_content = self._convert_pdf_with_table_handling(pdf_path)
+                if not markdown_content:
+                    print(f"Warning: Marker produced empty markdown for {pdf_path.name}. Skipping document.")
+                    # Update status? Maybe not, as it might be a valid empty doc. Let chunking handle it.
+                    # Let's return None here to be safe, as empty content can't be embedded.
+                    print(f"  Warning: Marker returned empty output for {pdf_path.name}")
+                    return None
+            except Exception as e:
+                print(f"  Error converting PDF with Marker for {pdf_path.name}: {e}")
+                # Status update removed - handled by caller(doc_id, "error_marker_conversion")
+                return None # Fail if marker fails
+
+            # Save the newly generated Markdown
+            try:
+                with open(md_save_path, "w", encoding="utf-8") as f:
+                    f.write(markdown_content)
+                print(f"  Saved Markdown to: {md_save_path}")
+            except IOError as e:
+                print(f"  Error saving Markdown file {md_save_path}: {e}")
+                # Status update removed - handled by caller(doc_id, "error_saving_markdown")
+                return None # Fail if cannot save markdown
+
+        # --- Chunk the Markdown ---
+        print(f"  Chunking Markdown content...")
+        # Ensure the metadata passed to the chunker *definitely* has the correct filename
+        if final_metadata:
+             final_metadata['original_filename'] = pdf_path.name
+        else:
+             # Should not happen at this stage, but handle defensively
+             print(f"  Warning: final_metadata is None before chunking for {pdf_path.name}. Using basic.")
+             final_metadata = {"doc_id": doc_id, "original_filename": pdf_path.name}
+
+        chunks = self.chunker.chunk(markdown_content, doc_metadata=final_metadata)
+        print(f"  Generated {len(chunks)} chunks for {pdf_path.name}.")
+
+        # --- Embed and Store Chunks ---
+        chunks_added_count = 0
+        if self.embedder and self.vector_store and chunks:
+            try:
+                print(f"  Embedding {len(chunks)} chunks for {pdf_path.name}...")
+                chunks_with_embeddings = self.embedder.embed_chunks(chunks)
+                print(f"  Embedding complete. Adding to vector store...")
+                # Extract embeddings for vector store
+                dense_embeddings = [chunk["embeddings"]["dense"] for chunk in chunks_with_embeddings]
+                sparse_embeddings = [chunk["embeddings"]["sparse"] for chunk in chunks_with_embeddings]
+                self.vector_store.add_chunks(
+                    doc_id=doc_id,
+                    chunks=chunks_with_embeddings,
+                    dense_embeddings=dense_embeddings,
+                    sparse_embeddings=sparse_embeddings,
+                    batch_size=50  # Process in batches for better performance
+                )
+                chunks_added_count = len(chunks)
+                print(f"  Successfully added {chunks_added_count} chunks to vector store for {pdf_path.name}.")
+            except Exception as e_embed_store:
+                print(f"Error embedding/storing chunks for {pdf_path.name}: {e_embed_store}")
+                # Decide if this should be a fatal error for the document or just a warning
+                # For now, log the error and continue, but don't return the document data
+                # as it wasn't fully processed into the vector store.
+                # Alternatively, could return partial data or raise exception.
+                # Let's return None to indicate failure at this stage.
+                # Status update removed - handled by caller(doc_id, "error_embedding_storing")
+                return None
+        elif not chunks:
+             print(f"  Skipping embedding/storing for {pdf_path.name}: No chunks generated.")
+        else:
+             print(f"  Skipping embedding/storing for {pdf_path.name}: Embedder or VectorStore not provided.")
+        # --- End Embed and Store ---
+
+
+        end_time = time.time()
+        print(f"Finished processing {pdf_path.name} in {end_time - start_time:.2f} seconds (Added {chunks_added_count} chunks to vector store).")
+
+        # Return minimal data now, as chunks are handled internally
+        return {
+            "doc_id": doc_id,
+            "original_filename": pdf_path.name,
+            "chunks_generated": len(chunks), # Keep track of generated chunks
+            "chunks_added_to_vector_store": chunks_added_count, # Keep track of added chunks
+            "extracted_metadata": final_metadata # Return metadata for potential logging/summary
+            # Removed markdown_path and markdown_content as they are less relevant for the summary return
+        }
+
+    def process_word_document(self, word_path: Path, doc_id: Optional[str] = None) -> Optional[Dict]:
+        """
+        Processes a single Word document.
+        Returns a dictionary containing doc_id, markdown content, metadata, and chunks.
+        Returns None if processing fails or file is already processed.
+        """
+        if not word_path.exists() or not self.document_converter.is_word_document(word_path.name):
+            print(f"Error: Invalid Word document path: {word_path}")
+            return None
+
+        start_time = time.time()
+        print(f"Processing Word document: {word_path.name}...")
+
+        # Always process documents - no database checks needed
+        # Use provided doc_id or generate a new one
+        if doc_id is None:
+            doc_id = str(uuid.uuid4())
+        final_metadata = {"doc_id": doc_id, "original_filename": word_path.name}
+        print(f"Processing '{word_path.name}' with doc_id: {doc_id}")
+        
+        # Skip the old database check logic
+        if False:
+            print(f"Skipping '{word_path.name}': Already processed and found in database (use --force-reembed to override).")
+            return None
+        elif existing_doc_info and self.force_reembed:
+            print(f"Force re-embedding '{word_path.name}': Found existing record in database.")
+            doc_id = existing_doc_info['doc_id']
+            try:
+                final_metadata = json.loads(existing_doc_info['metadata_json']) if existing_doc_info['metadata_json'] else {}
+                final_metadata['doc_id'] = doc_id
+                final_metadata['original_filename'] = word_path.name
+                print(f"  Using existing doc_id: {doc_id} and loaded metadata.")
+            except json.JSONDecodeError:
+                print(f"  Warning: Could not parse existing metadata for {doc_id}. Using basic metadata.")
+                final_metadata = {"doc_id": doc_id, "original_filename": word_path.name}
+        else:
+            print(f"Processing '{word_path.name}' as a new document.")
+            doc_id = str(uuid.uuid4())
+            final_metadata = {"doc_id": doc_id, "original_filename": word_path.name}
+
+        # --- Metadata Extraction ---
+        if final_metadata is None or not final_metadata.get('title'):
+            print("  Extracting metadata using LLM...")
+            initial_text_for_metadata = self.document_converter.extract_initial_text_for_metadata(word_path)
+            extracted_metadata = self.metadata_extractor.extract(initial_text_for_metadata)
+            if extracted_metadata:
+                base_meta = {"doc_id": doc_id, "original_filename": word_path.name}
+                extracted_metadata.update(base_meta)
+                final_metadata = extracted_metadata
+                print(f"  Successfully extracted metadata for {word_path.name}.")
+                # Save metadata JSON
+                metadata_filename = f"{doc_id}.json"
+                metadata_save_path = self.metadata_dir / metadata_filename
+                try:
+                    with open(metadata_save_path, "w", encoding="utf-8") as f:
+                        json.dump(final_metadata, f, indent=2, ensure_ascii=False)
+                    print(f"  Saved metadata to: {metadata_save_path}")
+                except IOError as e:
+                    print(f"  Error saving metadata file {metadata_save_path}: {e}")
+            else:
+                print(f"  Warning: Metadata extraction failed for {word_path.name}. Using basic metadata.")
+                if final_metadata is None:
+                    final_metadata = {"doc_id": doc_id, "original_filename": word_path.name}
+
+        # --- Add or Update record in DB ---
+        # Database operations now handled by main application database
+        # No need to add to separate AI database anymore
+        print(f"Added record for '{word_path.name}' (ID: {doc_id}) to database.")
+
+        # --- Convert Word to Markdown ---
+        md_filename = f"{doc_id}.md"
+        md_save_path = self.markdown_dir / md_filename
+        markdown_content = None
+
+        if md_save_path.exists() and self.force_reembed:
+            print(f"  Found existing Markdown file: {md_save_path}. Loading content.")
+            try:
+                with open(md_save_path, "r", encoding="utf-8") as f:
+                    markdown_content = f.read()
+                if not markdown_content:
+                    print(f"  Warning: Existing Markdown file {md_save_path} is empty. Will convert from Word.")
+            except IOError as e:
+                print(f"  Error reading existing Markdown file {md_save_path}: {e}. Will convert from Word.")
+
+        if markdown_content is None:
+            print(f"  Converting Word document to Markdown...")
+            try:
+                markdown_content = self.document_converter.convert_word_to_markdown(word_path)
+                if not markdown_content:
+                    print(f"Warning: Word conversion produced empty markdown for {word_path.name}. Skipping document.")
+                    # Status update removed - handled by caller(doc_id, "error_word_empty_output")
+                    return None
+            except Exception as e:
+                print(f"  Error converting Word document for {word_path.name}: {e}")
+                # Status update removed - handled by caller(doc_id, "error_word_conversion")
+                return None
+
+            # Save the newly generated Markdown
+            try:
+                with open(md_save_path, "w", encoding="utf-8") as f:
+                    f.write(markdown_content)
+                print(f"  Saved Markdown to: {md_save_path}")
+            except IOError as e:
+                print(f"  Error saving Markdown file {md_save_path}: {e}")
+                # Status update removed - handled by caller(doc_id, "error_saving_markdown")
+                return None
+
+        # --- Chunk the Markdown ---
+        print(f"  Chunking Markdown content...")
+        if final_metadata:
+            final_metadata['original_filename'] = word_path.name
+        else:
+            final_metadata = {"doc_id": doc_id, "original_filename": word_path.name}
+
+        chunks = self.chunker.chunk(markdown_content, doc_metadata=final_metadata)
+        print(f"  Generated {len(chunks)} chunks for {word_path.name}.")
+
+        # --- Embed and Store Chunks ---
+        chunks_added_count = 0
+        if self.embedder and self.vector_store and chunks:
+            try:
+                print(f"  Embedding {len(chunks)} chunks for {word_path.name}...")
+                chunks_with_embeddings = self.embedder.embed_chunks(chunks)
+                print(f"  Embedding complete. Adding to vector store...")
+                # Extract embeddings for vector store
+                dense_embeddings = [chunk["embeddings"]["dense"] for chunk in chunks_with_embeddings]
+                sparse_embeddings = [chunk["embeddings"]["sparse"] for chunk in chunks_with_embeddings]
+                self.vector_store.add_chunks(
+                    doc_id=doc_id,
+                    chunks=chunks_with_embeddings,
+                    dense_embeddings=dense_embeddings,
+                    sparse_embeddings=sparse_embeddings,
+                    batch_size=50  # Process in batches for better performance
+                )
+                chunks_added_count = len(chunks)
+                print(f"  Successfully added {chunks_added_count} chunks to vector store for {word_path.name}.")
+            except Exception as e_embed_store:
+                print(f"Error embedding/storing chunks for {word_path.name}: {e_embed_store}")
+                # Status update removed - handled by caller(doc_id, "error_embedding_storing")
+                return None
+        elif not chunks:
+            print(f"  Skipping embedding/storing for {word_path.name}: No chunks generated.")
+        else:
+            print(f"  Skipping embedding/storing for {word_path.name}: Embedder or VectorStore not provided.")
+
+        end_time = time.time()
+        print(f"Finished processing {word_path.name} in {end_time - start_time:.2f} seconds (Added {chunks_added_count} chunks to vector store).")
+
+        return {
+            "doc_id": doc_id,
+            "original_filename": word_path.name,
+            "chunks_generated": len(chunks),
+            "chunks_added_to_vector_store": chunks_added_count,
+            "extracted_metadata": final_metadata
+        }
+
+    def process_markdown_file(self, markdown_path: Path, doc_id: Optional[str] = None) -> Optional[Dict]:
+        """
+        Processes a single Markdown file.
+        Returns a dictionary containing doc_id, markdown content, metadata, and chunks.
+        Returns None if processing fails or file is already processed.
+        """
+        if not markdown_path.exists() or not self.document_converter.is_markdown_file(markdown_path.name):
+            print(f"Error: Invalid Markdown file path: {markdown_path}")
+            return None
+
+        start_time = time.time()
+        print(f"Processing Markdown file: {markdown_path.name}...")
+
+        # Always process documents - no database checks needed
+        # Use provided doc_id or generate a new one
+        if doc_id is None:
+            doc_id = str(uuid.uuid4())
+        final_metadata = {"doc_id": doc_id, "original_filename": markdown_path.name}
+        print(f"Processing '{markdown_path.name}' with doc_id: {doc_id}")
+        
+        # Skip the old database check logic
+        if False:
+            print(f"Skipping '{markdown_path.name}': Already processed and found in database (use --force-reembed to override).")
+            return None
+        elif existing_doc_info and self.force_reembed:
+            print(f"Force re-embedding '{markdown_path.name}': Found existing record in database.")
+            doc_id = existing_doc_info['doc_id']
+            try:
+                final_metadata = json.loads(existing_doc_info['metadata_json']) if existing_doc_info['metadata_json'] else {}
+                final_metadata['doc_id'] = doc_id
+                final_metadata['original_filename'] = markdown_path.name
+                print(f"  Using existing doc_id: {doc_id} and loaded metadata.")
+            except json.JSONDecodeError:
+                print(f"  Warning: Could not parse existing metadata for {doc_id}. Using basic metadata.")
+                final_metadata = {"doc_id": doc_id, "original_filename": markdown_path.name}
+        else:
+            print(f"Processing '{markdown_path.name}' as a new document.")
+            doc_id = str(uuid.uuid4())
+            final_metadata = {"doc_id": doc_id, "original_filename": markdown_path.name}
+
+        # --- Metadata Extraction ---
+        if final_metadata is None or not final_metadata.get('title'):
+            print("  Extracting metadata using LLM...")
+            initial_text_for_metadata = self.document_converter.extract_initial_text_for_metadata(markdown_path)
+            extracted_metadata = self.metadata_extractor.extract(initial_text_for_metadata)
+            if extracted_metadata:
+                base_meta = {"doc_id": doc_id, "original_filename": markdown_path.name}
+                extracted_metadata.update(base_meta)
+                final_metadata = extracted_metadata
+                print(f"  Successfully extracted metadata for {markdown_path.name}.")
+                # Save metadata JSON
+                metadata_filename = f"{doc_id}.json"
+                metadata_save_path = self.metadata_dir / metadata_filename
+                try:
+                    with open(metadata_save_path, "w", encoding="utf-8") as f:
+                        json.dump(final_metadata, f, indent=2, ensure_ascii=False)
+                    print(f"  Saved metadata to: {metadata_save_path}")
+                except IOError as e:
+                    print(f"  Error saving metadata file {metadata_save_path}: {e}")
+            else:
+                print(f"  Warning: Metadata extraction failed for {markdown_path.name}. Using basic metadata.")
+                if final_metadata is None:
+                    final_metadata = {"doc_id": doc_id, "original_filename": markdown_path.name}
+
+        # --- Add or Update record in DB ---
+        # Database operations now handled by main application database
+        # No need to add to separate AI database anymore
+        print(f"Added record for '{markdown_path.name}' (ID: {doc_id}) to database.")
+
+        # --- Read Markdown Content ---
+        md_filename = f"{doc_id}.md"
+        md_save_path = self.markdown_dir / md_filename
+        markdown_content = None
+
+        if md_save_path.exists() and self.force_reembed:
+            print(f"  Found existing processed Markdown file: {md_save_path}. Loading content.")
+            try:
+                with open(md_save_path, "r", encoding="utf-8") as f:
+                    markdown_content = f.read()
+                if not markdown_content:
+                    print(f"  Warning: Existing processed Markdown file {md_save_path} is empty. Will read from original.")
+            except IOError as e:
+                print(f"  Error reading existing processed Markdown file {md_save_path}: {e}. Will read from original.")
+
+        if markdown_content is None:
+            print(f"  Reading Markdown file content...")
+            try:
+                markdown_content = self.document_converter.read_markdown_file(markdown_path)
+                if not markdown_content:
+                    print(f"Warning: Markdown file is empty for {markdown_path.name}. Skipping document.")
+                    # Status update removed - handled by caller(doc_id, "error_markdown_empty")
+                    return None
+            except Exception as e:
+                print(f"  Error reading Markdown file {markdown_path.name}: {e}")
+                # Status update removed - handled by caller(doc_id, "error_markdown_reading")
+                return None
+
+            # Save a copy of the processed Markdown (for consistency with other formats)
+            try:
+                with open(md_save_path, "w", encoding="utf-8") as f:
+                    f.write(markdown_content)
+                print(f"  Saved processed Markdown to: {md_save_path}")
+            except IOError as e:
+                print(f"  Error saving processed Markdown file {md_save_path}: {e}")
+                # Status update removed - handled by caller(doc_id, "error_saving_markdown")
+                return None
+
+        # --- Chunk the Markdown ---
+        print(f"  Chunking Markdown content...")
+        if final_metadata:
+            final_metadata['original_filename'] = markdown_path.name
+        else:
+            final_metadata = {"doc_id": doc_id, "original_filename": markdown_path.name}
+
+        chunks = self.chunker.chunk(markdown_content, doc_metadata=final_metadata)
+        print(f"  Generated {len(chunks)} chunks for {markdown_path.name}.")
+
+        # --- Embed and Store Chunks ---
+        chunks_added_count = 0
+        if self.embedder and self.vector_store and chunks:
+            try:
+                print(f"  Embedding {len(chunks)} chunks for {markdown_path.name}...")
+                chunks_with_embeddings = self.embedder.embed_chunks(chunks)
+                print(f"  Embedding complete. Adding to vector store...")
+                # Extract embeddings for vector store
+                dense_embeddings = [chunk["embeddings"]["dense"] for chunk in chunks_with_embeddings]
+                sparse_embeddings = [chunk["embeddings"]["sparse"] for chunk in chunks_with_embeddings]
+                self.vector_store.add_chunks(
+                    doc_id=doc_id,
+                    chunks=chunks_with_embeddings,
+                    dense_embeddings=dense_embeddings,
+                    sparse_embeddings=sparse_embeddings,
+                    batch_size=50  # Process in batches for better performance
+                )
+                chunks_added_count = len(chunks)
+                print(f"  Successfully added {chunks_added_count} chunks to vector store for {markdown_path.name}.")
+            except Exception as e_embed_store:
+                print(f"Error embedding/storing chunks for {markdown_path.name}: {e_embed_store}")
+                # Status update removed - handled by caller(doc_id, "error_embedding_storing")
+                return None
+        elif not chunks:
+            print(f"  Skipping embedding/storing for {markdown_path.name}: No chunks generated.")
+        else:
+            print(f"  Skipping embedding/storing for {markdown_path.name}: Embedder or VectorStore not provided.")
+
+        end_time = time.time()
+        print(f"Finished processing {markdown_path.name} in {end_time - start_time:.2f} seconds (Added {chunks_added_count} chunks to vector store).")
+
+        return {
+            "doc_id": doc_id,
+            "original_filename": markdown_path.name,
+            "chunks_generated": len(chunks),
+            "chunks_added_to_vector_store": chunks_added_count,
+            "extracted_metadata": final_metadata
+        }
+
+    def process_document(self, file_path: Path, doc_id: Optional[str] = None) -> Optional[Dict]:
+        """
+        Generic method to process any supported document format.
+        Automatically detects file type and routes to appropriate processing method.
+        """
+        if not file_path.exists():
+            print(f"Error: File does not exist: {file_path}")
+            return None
+            
+        filename = file_path.name
+        
+        if filename.lower().endswith('.pdf'):
+            return self.process_pdf(file_path, doc_id=doc_id)
+        elif self.document_converter.is_word_document(filename):
+            return self.process_word_document(file_path, doc_id=doc_id)
+        elif self.document_converter.is_markdown_file(filename):
+            return self.process_markdown_file(file_path, doc_id=doc_id)
+        else:
+            print(f"Error: Unsupported file format: {filename}")
+            return None
+
+    def process_directory(self, process_path: Optional[Path] = None) -> Tuple[int, int]:
+        """
+        Processes all supported document files in the configured directory or specified path.
+        Supports PDF, Word (docx, doc), and Markdown (md, markdown) files.
+        Embeds and stores chunks for each document immediately after processing.
+        Returns a tuple: (total_documents_processed, total_chunks_added).
+        """
+        if process_path is None:
+            process_path = self.pdf_dir
+            
+        total_docs_attempted = 0
+        total_docs_successfully_processed = 0
+        total_chunks_added = 0
+        
+        # Find all supported file types
+        supported_extensions = ['*.pdf', '*.docx', '*.doc', '*.md', '*.markdown']
+        all_files = []
+        
+        for extension in supported_extensions:
+            files = list(process_path.glob(extension))
+            all_files.extend(files)
+        
+        total_docs_attempted = len(all_files)
+        print(f"Found {total_docs_attempted} supported document(s) in {process_path}")
+        
+        # Group files by type for reporting
+        pdf_files = [f for f in all_files if f.suffix.lower() == '.pdf']
+        word_files = [f for f in all_files if f.suffix.lower() in ['.docx', '.doc']]
+        markdown_files = [f for f in all_files if f.suffix.lower() in ['.md', '.markdown']]
+        
+        print(f"  - {len(pdf_files)} PDF file(s)")
+        print(f"  - {len(word_files)} Word document(s)")  
+        print(f"  - {len(markdown_files)} Markdown file(s)")
+
+        if not all_files:
+            print("No supported document files found to process.")
+            return 0, 0
+
+        for file_path in all_files:
+            result = self.process_document(file_path)  # Generic method handles all file types
+            if result:
+                # result is not None, meaning processing was successful for this doc
+                total_docs_successfully_processed += 1
+                total_chunks_added += result.get("chunks_added_to_vector_store", 0)
+            # If result is None, an error occurred or it was skipped (and not forced)
+
+        print(f"\nFinished processing directory.")
+        print(f"Attempted to process: {total_docs_attempted} document(s).")
+        print(f"Successfully processed/re-processed: {total_docs_successfully_processed} document(s).")
+        print(f"Total chunks added/updated in vector store during this run: {total_chunks_added}.")
+        # Return the count of successfully processed docs and chunks added in this run
+        return total_docs_successfully_processed, total_chunks_added
