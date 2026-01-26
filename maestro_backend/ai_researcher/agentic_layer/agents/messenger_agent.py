@@ -524,96 +524,116 @@ Output:
                         update_callback=update_callback # Pass update_callback for UI updates
                     )
 
-                if response and response.choices and response.choices[0].message.content:
-                    llm_response_content = response.choices[0].message.content.strip()
+                    if response and response.choices and response.choices[0].message.content:
+                        llm_response_content = response.choices[0].message.content.strip()
                     
-                    # Handle thinking models that might have special tokens or markers
-                    # Look for common patterns that indicate the end of thinking
-                    thinking_end_markers = [
-                        "```json",  # JSON code block start
-                        "Output:",  # Explicit output marker
-                        "Response:",  # Response marker
-                        "Result:",  # Result marker
-                        "{\n",  # Direct JSON start
-                        '{"',  # JSON object start
-                    ]
+                        # Handle thinking models that might have special tokens or markers
+                        # Look for common patterns that indicate the end of thinking
+                        thinking_end_markers = [
+                            "```json",  # JSON code block start
+                            "Output:",  # Explicit output marker
+                            "Response:",  # Response marker
+                            "Result:",  # Result marker
+                            "{\n",  # Direct JSON start
+                            '{"',  # JSON object start
+                        ]
                 
-                    # Check if response might contain thinking tokens
-                    for marker in thinking_end_markers:
-                        if marker in llm_response_content:
-                            # Extract content after the marker
-                            marker_pos = llm_response_content.rfind(marker)  # Use rfind to get last occurrence
-                            if marker_pos != -1:
-                                potential_json = llm_response_content[marker_pos:]
-                                if DEBUG_MESSENGER:
-                                    logger.info(f"Found potential marker '{marker}' at position {marker_pos}")
-                                    logger.info(f"Extracting content from that point...")
-                                llm_response_content = potential_json
-                                break
+                        # Check if response might contain thinking tokens
+                        for marker in thinking_end_markers:
+                            if marker in llm_response_content:
+                                # Extract content after the marker
+                                marker_pos = llm_response_content.rfind(marker)  # Use rfind to get last occurrence
+                                if marker_pos != -1:
+                                    potential_json = llm_response_content[marker_pos:]
+                                    if DEBUG_MESSENGER:
+                                        logger.info(f"Found potential marker '{marker}' at position {marker_pos}")
+                                        logger.info(f"Extracting content from that point...")
+                                    llm_response_content = potential_json
+                                    break
                 
-                    # DEBUG: Log the full raw response
-                    if DEBUG_MESSENGER:
-                        logger.info("=" * 80)
-                        logger.info("MESSENGER AGENT DEBUG - RAW LLM RESPONSE (after marker extraction):")
-                        logger.info("-" * 80)
-                        logger.info(f"Response length: {len(llm_response_content)} characters")
-                        logger.info(f"First 500 chars: {llm_response_content[:500]}")
-                        if len(llm_response_content) <= 2000:
-                            logger.info(f"Full response:\n{llm_response_content}")
-                        else:
-                            logger.info(f"Response too long, showing first 2000 chars:\n{llm_response_content[:2000]}")
-                        logger.info("=" * 80)
-                
-                    # Extract JSON block
-                    json_match = llm_response_content.find('{')
-                    if json_match != -1:
-                        json_str = llm_response_content[json_match:]
-                        # Clean up potential markdown fences using our centralized utility
-                        json_str = sanitize_json_string(json_str)
-                    
-                        # DEBUG: Log the extracted JSON string
+                        # DEBUG: Log the full raw response
                         if DEBUG_MESSENGER:
-                            logger.info("MESSENGER AGENT DEBUG - EXTRACTED JSON:")
+                            logger.info("=" * 80)
+                            logger.info("MESSENGER AGENT DEBUG - RAW LLM RESPONSE (after marker extraction):")
                             logger.info("-" * 80)
-                            logger.info(f"JSON string (after sanitization):\n{json_str[:1000]}")
-                            logger.info("-" * 80)
-
-                        try:
-                            # Parse and validate using Pydantic model
-                            json_data = json.loads(json_str)
-                            parsed_response = MessengerIntentResponse(**json_data)
-                        
-                            # DEBUG: Log successfully parsed JSON
+                            logger.info(f"Response length: {len(llm_response_content)} characters")
+                            logger.info(f"First 500 chars: {llm_response_content[:500]}")
+                            if len(llm_response_content) <= 2000:
+                                logger.info(f"Full response:\n{llm_response_content}")
+                            else:
+                                logger.info(f"Response too long, showing first 2000 chars:\n{llm_response_content[:2000]}")
+                            logger.info("=" * 80)
+                
+                        # Extract JSON block
+                        json_match = llm_response_content.find('{')
+                        if json_match != -1:
+                            json_str = llm_response_content[json_match:]
+                            # Clean up potential markdown fences using our centralized utility
+                            json_str = sanitize_json_string(json_str)
+                    
+                            # DEBUG: Log the extracted JSON string
                             if DEBUG_MESSENGER:
-                                logger.info("MESSENGER AGENT DEBUG - PARSED JSON DATA:")
+                                logger.info("MESSENGER AGENT DEBUG - EXTRACTED JSON:")
                                 logger.info("-" * 80)
-                                logger.info(f"Validated Pydantic model: {parsed_response.model_dump_json(indent=2)}")
+                                logger.info(f"JSON string (after sanitization):\n{json_str[:1000]}")
                                 logger.info("-" * 80)
+
+                            try:
+                                # Parse and validate using Pydantic model
+                                json_data = json.loads(json_str)
+                                parsed_response = MessengerIntentResponse(**json_data)
                         
-                            # Extract data from validated Pydantic model
-                            intent = parsed_response.intent
-                            extracted_content = parsed_response.extracted_content
-                            formatting_preferences = parsed_response.formatting_preferences
-                            response_to_user = parsed_response.response_to_user
-                            thoughts = parsed_response.thoughts
+                                # DEBUG: Log successfully parsed JSON
+                                if DEBUG_MESSENGER:
+                                    logger.info("MESSENGER AGENT DEBUG - PARSED JSON DATA:")
+                                    logger.info("-" * 80)
+                                    logger.info(f"Validated Pydantic model: {parsed_response.model_dump_json(indent=2)}")
+                                    logger.info("-" * 80)
+                        
+                                # Extract data from validated Pydantic model
+                                intent = parsed_response.intent
+                                extracted_content = parsed_response.extracted_content
+                                formatting_preferences = parsed_response.formatting_preferences
+                                response_to_user = parsed_response.response_to_user
+                                thoughts = parsed_response.thoughts
                             
-                            # Set the response to show to the user
-                            final_response = response_to_user
+                                # Set the response to show to the user
+                                final_response = response_to_user
                         
-                            # Successfully parsed - break out of retry loop
-                            break
+                                # Successfully parsed - break out of retry loop
+                                break
                         
-                        except (json.JSONDecodeError, ValueError, ValidationError) as parse_error:
-                            # Store the error for retry
-                            last_error = parse_error
-                            retry_count += 1
-                            logger.warning(f"JSON parsing or Pydantic validation failed (attempt {retry_count}/{max_retries}): {parse_error}")
+                            except (json.JSONDecodeError, ValueError, ValidationError) as parse_error:
+                                # Store the error for retry
+                                last_error = parse_error
+                                retry_count += 1
+                                logger.warning(f"JSON parsing or Pydantic validation failed (attempt {retry_count}/{max_retries}): {parse_error}")
                             
-                            # Try to fix common JSON issues
-                            if isinstance(parse_error, json.JSONDecodeError):
-                                    logger.info(f"Detected formatting preferences with start_research: '{formatting_preferences}'")
-                                    # Store formatting preferences to be added as a goal later
-                                    if self.controller and self.mission_id:
+                                # Try to fix common JSON issues
+                                if isinstance(parse_error, json.JSONDecodeError):
+                                        logger.info(f"Detected formatting preferences with start_research: '{formatting_preferences}'")
+                                        # Store formatting preferences to be added as a goal later
+                                        if self.controller and self.mission_id:
+                                            try:
+                                                # Add formatting preferences as a separate goal
+                                                goal_id = await self.controller.context_manager.add_goal(
+                                                    mission_id=self.mission_id,
+                                                    text=formatting_preferences,
+                                                    source_agent=self.agent_name
+                                                )
+                                                if goal_id:
+                                                    logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
+                                            except Exception as e:
+                                                logger.error(f"Failed to add formatting preferences as goal: {e}")
+                                
+                                elif intent == "refine_questions" and extracted_content:
+                                    final_action = "refine_questions"
+                                    final_request = extracted_content
+                                    logger.info(f"Detected refine_questions intent. Feedback: '{final_request}'")
+                            
+                                    # Handle formatting preferences if present with refine_questions
+                                    if formatting_preferences and self.controller and self.mission_id:
+                                        logger.info(f"Detected formatting preferences with refine_questions: '{formatting_preferences}'")
                                         try:
                                             # Add formatting preferences as a separate goal
                                             goal_id = await self.controller.context_manager.add_goal(
@@ -626,277 +646,257 @@ Output:
                                         except Exception as e:
                                             logger.error(f"Failed to add formatting preferences as goal: {e}")
                                 
-                            elif intent == "refine_questions" and extracted_content:
-                                final_action = "refine_questions"
-                                final_request = extracted_content
-                                logger.info(f"Detected refine_questions intent. Feedback: '{final_request}'")
+                                elif intent == "refine_goal" and extracted_content:
+                                    final_action = "refine_goal"
+                                    final_request = extracted_content
+                                    logger.info(f"Detected refine_goal intent. Goal: '{final_request}'")
                             
-                                # Handle formatting preferences if present with refine_questions
-                                if formatting_preferences and self.controller and self.mission_id:
-                                    logger.info(f"Detected formatting preferences with refine_questions: '{formatting_preferences}'")
-                                    try:
-                                        # Add formatting preferences as a separate goal
-                                        goal_id = await self.controller.context_manager.add_goal(
-                                            mission_id=self.mission_id,
-                                            text=formatting_preferences,
-                                            source_agent=self.agent_name
-                                        )
-                                        if goal_id:
-                                            logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
-                                    except Exception as e:
-                                        logger.error(f"Failed to add formatting preferences as goal: {e}")
-                                
-                            elif intent == "refine_goal" and extracted_content:
-                                final_action = "refine_goal"
-                                final_request = extracted_content
-                                logger.info(f"Detected refine_goal intent. Goal: '{final_request}'")
-                            
-                                # For refine_goal, the extracted_content already contains the formatting preferences
-                                # But if there are additional formatting preferences, handle them too
-                                if formatting_preferences and formatting_preferences != extracted_content and self.controller and self.mission_id:
-                                    logger.info(f"Detected additional formatting preferences with refine_goal: '{formatting_preferences}'")
-                                    try:
-                                        # Add additional formatting preferences as a separate goal
-                                        goal_id = await self.controller.context_manager.add_goal(
-                                            mission_id=self.mission_id,
-                                            text=formatting_preferences,
-                                            source_agent=self.agent_name
-                                        )
-                                        if goal_id:
-                                            logger.info(f"Added additional formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
-                                    except Exception as e:
-                                        logger.error(f"Failed to add additional formatting preferences as goal: {e}")
-                                
-                            elif intent == "approve_questions":
-                                final_action = "approve_questions"
-                                final_request = None
-                                logger.info("Detected approve_questions intent.")
-                            
-                                # Handle formatting preferences if present with approve_questions
-                                if formatting_preferences and self.controller and self.mission_id:
-                                    logger.info(f"Detected formatting preferences with approve_questions: '{formatting_preferences}'")
-                                    try:
-                                        # Add formatting preferences as a separate goal
-                                        goal_id = await self.controller.context_manager.add_goal(
-                                            mission_id=self.mission_id,
-                                            text=formatting_preferences,
-                                            source_agent=self.agent_name
-                                        )
-                                        if goal_id:
-                                            logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
-                                    except Exception as e:
-                                        logger.error(f"Failed to add formatting preferences as goal: {e}")
-                                
-                            else:
-                                logger.info(f"Detected {intent} intent or failed to extract content.")
-                                if DEBUG_MESSENGER:
-                                    logger.info("MESSENGER AGENT DEBUG - UNRECOGNIZED/NONE INTENT:")
-                                    logger.info("-" * 80)
-                                    logger.info(f"Intent value: {intent!r}")
-                                    logger.info(f"Extracted content: {extracted_content!r}")
-                                    logger.info(f"This means either intent is None or not a recognized action")
-                                    logger.info("-" * 80)
-                            
-                                # Handle formatting preferences for chat intent too
-                                if formatting_preferences and self.controller and self.mission_id:
-                                    logger.info(f"Detected formatting preferences with {intent} intent: '{formatting_preferences}'")
-                                    try:
-                                        # Add formatting preferences as a separate goal
-                                        goal_id = await self.controller.context_manager.add_goal(
-                                            mission_id=self.mission_id,
-                                            text=formatting_preferences,
-                                            source_agent=self.agent_name
-                                        )
-                                        if goal_id:
-                                            logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
-                                    except Exception as e:
-                                        logger.error(f"Failed to add formatting preferences as goal: {e}")
-                            
-                            # Store thoughts in scratchpad if available
-                            if thoughts:
-                                # Format the scratchpad entry with timestamp
-                                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            
-                                # Combine with existing scratchpad if available
-                                if agent_scratchpad:
-                                    scratchpad_update = f"{agent_scratchpad}\n\n[{timestamp}] {thoughts}"
-                                else:
-                                    scratchpad_update = f"[{timestamp}] {thoughts}"
-
-                        except (json.JSONDecodeError, ValueError, ValidationError) as parse_error:
-                            # Store the error for retry
-                            last_error = parse_error
-                            retry_count += 1
-                            logger.warning(f"JSON parsing or Pydantic validation failed (attempt {retry_count}/{max_retries}): {parse_error}")
-                        
-                            # Try to fix common JSON issues
-                            if isinstance(parse_error, json.JSONDecodeError):
-                                # Attempt simple fix: Insert comma before last '}' if likely missing
-                                fixed_json_str = json_str.strip()
-                                if "Expecting ',' delimiter" in str(parse_error) and fixed_json_str.endswith('}'):
-                                    insertion_point = len(fixed_json_str) - 1
-                                    char_before_brace = fixed_json_str[insertion_point - 1].strip() if insertion_point > 0 else ''
-                                    if char_before_brace in ('"', ']', '}') or char_before_brace.isdigit():
-                                        fixed_json_str = fixed_json_str[:insertion_point] + ',' + fixed_json_str[insertion_point:]
-                                        logger.info("Attempting re-parse with added comma before final '}'.")
+                                    # For refine_goal, the extracted_content already contains the formatting preferences
+                                    # But if there are additional formatting preferences, handle them too
+                                    if formatting_preferences and formatting_preferences != extracted_content and self.controller and self.mission_id:
+                                        logger.info(f"Detected additional formatting preferences with refine_goal: '{formatting_preferences}'")
                                         try:
-                                            # Re-attempt parsing with the fix
-                                            json_data = json.loads(fixed_json_str)
-                                            parsed_response = MessengerIntentResponse(**json_data)
-                                        
-                                            # Extract data from validated Pydantic model
-                                            intent = parsed_response.intent
-                                            extracted_content = parsed_response.extracted_content
-                                            formatting_preferences = parsed_response.formatting_preferences
-                                            response_to_user = parsed_response.response_to_user
-                                            thoughts = parsed_response.thoughts
-                                        
-                                            # Ensure final_response is never None
-                                            final_response = response_to_user if response_to_user is not None else "Sorry, I couldn't generate a proper response."
+                                            # Add additional formatting preferences as a separate goal
+                                            goal_id = await self.controller.context_manager.add_goal(
+                                                mission_id=self.mission_id,
+                                                text=formatting_preferences,
+                                                source_agent=self.agent_name
+                                            )
+                                            if goal_id:
+                                                logger.info(f"Added additional formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
+                                        except Exception as e:
+                                            logger.error(f"Failed to add additional formatting preferences as goal: {e}")
+                                
+                                elif intent == "approve_questions":
+                                    final_action = "approve_questions"
+                                    final_request = None
+                                    logger.info("Detected approve_questions intent.")
+                            
+                                    # Handle formatting preferences if present with approve_questions
+                                    if formatting_preferences and self.controller and self.mission_id:
+                                        logger.info(f"Detected formatting preferences with approve_questions: '{formatting_preferences}'")
+                                        try:
+                                            # Add formatting preferences as a separate goal
+                                            goal_id = await self.controller.context_manager.add_goal(
+                                                mission_id=self.mission_id,
+                                                text=formatting_preferences,
+                                                source_agent=self.agent_name
+                                            )
+                                            if goal_id:
+                                                logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
+                                        except Exception as e:
+                                            logger.error(f"Failed to add formatting preferences as goal: {e}")
+                                
+                                else:
+                                    logger.info(f"Detected {intent} intent or failed to extract content.")
+                                    if DEBUG_MESSENGER:
+                                        logger.info("MESSENGER AGENT DEBUG - UNRECOGNIZED/NONE INTENT:")
+                                        logger.info("-" * 80)
+                                        logger.info(f"Intent value: {intent!r}")
+                                        logger.info(f"Extracted content: {extracted_content!r}")
+                                        logger.info(f"This means either intent is None or not a recognized action")
+                                        logger.info("-" * 80)
+                            
+                                    # Handle formatting preferences for chat intent too
+                                    if formatting_preferences and self.controller and self.mission_id:
+                                        logger.info(f"Detected formatting preferences with {intent} intent: '{formatting_preferences}'")
+                                        try:
+                                            # Add formatting preferences as a separate goal
+                                            goal_id = await self.controller.context_manager.add_goal(
+                                                mission_id=self.mission_id,
+                                                text=formatting_preferences,
+                                                source_agent=self.agent_name
+                                            )
+                                            if goal_id:
+                                                logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
+                                        except Exception as e:
+                                            logger.error(f"Failed to add formatting preferences as goal: {e}")
+                            
+                                # Store thoughts in scratchpad if available
+                                if thoughts:
+                                    # Format the scratchpad entry with timestamp
+                                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            
+                                    # Combine with existing scratchpad if available
+                                    if agent_scratchpad:
+                                        scratchpad_update = f"{agent_scratchpad}\n\n[{timestamp}] {thoughts}"
+                                    else:
+                                        scratchpad_update = f"[{timestamp}] {thoughts}"
 
-                                            if intent == "start_research" and extracted_content:
-                                                final_action = "start_research"
-                                                final_request = extracted_content
-                                                logger.info(f"Detected start_research intent. Request: '{final_request}'")
+                            except (json.JSONDecodeError, ValueError, ValidationError) as parse_error:
+                                # Store the error for retry
+                                last_error = parse_error
+                                retry_count += 1
+                                logger.warning(f"JSON parsing or Pydantic validation failed (attempt {retry_count}/{max_retries}): {parse_error}")
+                        
+                                # Try to fix common JSON issues
+                                if isinstance(parse_error, json.JSONDecodeError):
+                                    # Attempt simple fix: Insert comma before last '}' if likely missing
+                                    fixed_json_str = json_str.strip()
+                                    if "Expecting ',' delimiter" in str(parse_error) and fixed_json_str.endswith('}'):
+                                        insertion_point = len(fixed_json_str) - 1
+                                        char_before_brace = fixed_json_str[insertion_point - 1].strip() if insertion_point > 0 else ''
+                                        if char_before_brace in ('"', ']', '}') or char_before_brace.isdigit():
+                                            fixed_json_str = fixed_json_str[:insertion_point] + ',' + fixed_json_str[insertion_point:]
+                                            logger.info("Attempting re-parse with added comma before final '}'.")
+                                            try:
+                                                # Re-attempt parsing with the fix
+                                                json_data = json.loads(fixed_json_str)
+                                                parsed_response = MessengerIntentResponse(**json_data)
+                                        
+                                                # Extract data from validated Pydantic model
+                                                intent = parsed_response.intent
+                                                extracted_content = parsed_response.extracted_content
+                                                formatting_preferences = parsed_response.formatting_preferences
+                                                response_to_user = parsed_response.response_to_user
+                                                thoughts = parsed_response.thoughts
+                                        
+                                                # Ensure final_response is never None
+                                                final_response = response_to_user if response_to_user is not None else "Sorry, I couldn't generate a proper response."
+
+                                                if intent == "start_research" and extracted_content:
+                                                    final_action = "start_research"
+                                                    final_request = extracted_content
+                                                    logger.info(f"Detected start_research intent. Request: '{final_request}'")
                                             
-                                                # Handle formatting preferences if present
-                                                if formatting_preferences:
-                                                    logger.info(f"Detected formatting preferences with start_research: '{formatting_preferences}'")
-                                                    # Store formatting preferences to be added as a goal later
-                                                    if self.controller and self.mission_id:
-                                                      try:
-                                                          # Add formatting preferences as a separate goal
-                                                          goal_id = await self.controller.context_manager.add_goal(
-                                                              mission_id=self.mission_id,
-                                                              text=formatting_preferences,
-                                                              source_agent=self.agent_name
-                                                          )
-                                                          if goal_id:
-                                                              logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
-                                                      except Exception as e:
-                                                          logger.error(f"Failed to add formatting preferences as goal: {e}")
+                                                    # Handle formatting preferences if present
+                                                    if formatting_preferences:
+                                                        logger.info(f"Detected formatting preferences with start_research: '{formatting_preferences}'")
+                                                        # Store formatting preferences to be added as a goal later
+                                                        if self.controller and self.mission_id:
+                                                          try:
+                                                              # Add formatting preferences as a separate goal
+                                                              goal_id = await self.controller.context_manager.add_goal(
+                                                                  mission_id=self.mission_id,
+                                                                  text=formatting_preferences,
+                                                                  source_agent=self.agent_name
+                                                              )
+                                                              if goal_id:
+                                                                  logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
+                                                          except Exception as e:
+                                                              logger.error(f"Failed to add formatting preferences as goal: {e}")
                                               
-                                            elif intent == "refine_questions" and extracted_content:
-                                                final_action = "refine_questions"
-                                                final_request = extracted_content
-                                                logger.info(f"Detected refine_questions intent. Feedback: '{final_request}'")
+                                                elif intent == "refine_questions" and extracted_content:
+                                                    final_action = "refine_questions"
+                                                    final_request = extracted_content
+                                                    logger.info(f"Detected refine_questions intent. Feedback: '{final_request}'")
                                             
-                                                # Handle formatting preferences if present with refine_questions
-                                                if formatting_preferences and self.controller and self.mission_id:
-                                                    logger.info(f"Detected formatting preferences with refine_questions: '{formatting_preferences}'")
-                                                    try:
-                                                        # Add formatting preferences as a separate goal
-                                                        goal_id = await self.controller.context_manager.add_goal(
-                                                            mission_id=self.mission_id,
-                                                            text=formatting_preferences,
-                                                            source_agent=self.agent_name
-                                                        )
-                                                        if goal_id:
-                                                            logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
-                                                    except Exception as e:
-                                                        logger.error(f"Failed to add formatting preferences as goal: {e}")
+                                                    # Handle formatting preferences if present with refine_questions
+                                                    if formatting_preferences and self.controller and self.mission_id:
+                                                        logger.info(f"Detected formatting preferences with refine_questions: '{formatting_preferences}'")
+                                                        try:
+                                                            # Add formatting preferences as a separate goal
+                                                            goal_id = await self.controller.context_manager.add_goal(
+                                                                mission_id=self.mission_id,
+                                                                text=formatting_preferences,
+                                                                source_agent=self.agent_name
+                                                            )
+                                                            if goal_id:
+                                                                logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
+                                                        except Exception as e:
+                                                            logger.error(f"Failed to add formatting preferences as goal: {e}")
                                                 
-                                            elif intent == "refine_goal" and extracted_content:
-                                                final_action = "refine_goal"
-                                                final_request = extracted_content
-                                                logger.info(f"Detected refine_goal intent. Goal: '{final_request}'")
+                                                elif intent == "refine_goal" and extracted_content:
+                                                    final_action = "refine_goal"
+                                                    final_request = extracted_content
+                                                    logger.info(f"Detected refine_goal intent. Goal: '{final_request}'")
                                             
-                                                # For refine_goal, the extracted_content already contains the formatting preferences
-                                                # But if there are additional formatting preferences, handle them too
-                                                if formatting_preferences and formatting_preferences != extracted_content and self.controller and self.mission_id:
-                                                    logger.info(f"Detected additional formatting preferences with refine_goal: '{formatting_preferences}'")
-                                                    try:
-                                                        # Add additional formatting preferences as a separate goal
-                                                        goal_id = await self.controller.context_manager.add_goal(
-                                                            mission_id=self.mission_id,
-                                                            text=formatting_preferences,
-                                                            source_agent=self.agent_name
-                                                        )
-                                                        if goal_id:
-                                                            logger.info(f"Added additional formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
-                                                    except Exception as e:
-                                                        logger.error(f"Failed to add additional formatting preferences as goal: {e}")
+                                                    # For refine_goal, the extracted_content already contains the formatting preferences
+                                                    # But if there are additional formatting preferences, handle them too
+                                                    if formatting_preferences and formatting_preferences != extracted_content and self.controller and self.mission_id:
+                                                        logger.info(f"Detected additional formatting preferences with refine_goal: '{formatting_preferences}'")
+                                                        try:
+                                                            # Add additional formatting preferences as a separate goal
+                                                            goal_id = await self.controller.context_manager.add_goal(
+                                                                mission_id=self.mission_id,
+                                                                text=formatting_preferences,
+                                                                source_agent=self.agent_name
+                                                            )
+                                                            if goal_id:
+                                                                logger.info(f"Added additional formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
+                                                        except Exception as e:
+                                                            logger.error(f"Failed to add additional formatting preferences as goal: {e}")
                                                 
-                                            elif intent == "approve_questions":
-                                                final_action = "approve_questions"
-                                                final_request = None
-                                                logger.info("Detected approve_questions intent.")
+                                                elif intent == "approve_questions":
+                                                    final_action = "approve_questions"
+                                                    final_request = None
+                                                    logger.info("Detected approve_questions intent.")
                                             
-                                                # Handle formatting preferences if present with approve_questions
-                                                if formatting_preferences and self.controller and self.mission_id:
-                                                    logger.info(f"Detected formatting preferences with approve_questions: '{formatting_preferences}'")
-                                                    try:
-                                                        # Add formatting preferences as a separate goal
-                                                        goal_id = await self.controller.context_manager.add_goal(
-                                                            mission_id=self.mission_id,
-                                                            text=formatting_preferences,
-                                                            source_agent=self.agent_name
-                                                        )
-                                                        if goal_id:
-                                                            logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
-                                                    except Exception as e:
-                                                        logger.error(f"Failed to add formatting preferences as goal: {e}")
+                                                    # Handle formatting preferences if present with approve_questions
+                                                    if formatting_preferences and self.controller and self.mission_id:
+                                                        logger.info(f"Detected formatting preferences with approve_questions: '{formatting_preferences}'")
+                                                        try:
+                                                            # Add formatting preferences as a separate goal
+                                                            goal_id = await self.controller.context_manager.add_goal(
+                                                                mission_id=self.mission_id,
+                                                                text=formatting_preferences,
+                                                                source_agent=self.agent_name
+                                                            )
+                                                            if goal_id:
+                                                                logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
+                                                        except Exception as e:
+                                                            logger.error(f"Failed to add formatting preferences as goal: {e}")
                                                 
-                                            else:
-                                                logger.info(f"Detected {intent} intent or failed to extract content.")
-                                            
-                                                # Handle formatting preferences for chat intent too
-                                                if formatting_preferences and self.controller and self.mission_id:
-                                                    logger.info(f"Detected formatting preferences with {intent} intent: '{formatting_preferences}'")
-                                                    try:
-                                                        # Add formatting preferences as a separate goal
-                                                        goal_id = await self.controller.context_manager.add_goal(
-                                                            mission_id=self.mission_id,
-                                                            text=formatting_preferences,
-                                                            source_agent=self.agent_name
-                                                        )
-                                                        if goal_id:
-                                                            logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
-                                                    except Exception as e:
-                                                        logger.error(f"Failed to add formatting preferences as goal: {e}")
-                                        
-                                            if thoughts:
-                                                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                                if agent_scratchpad:
-                                                    scratchpad_update = f"{agent_scratchpad}\n\n[{timestamp}] {thoughts}"
                                                 else:
-                                                    scratchpad_update = f"[{timestamp}] {thoughts}"
+                                                    logger.info(f"Detected {intent} intent or failed to extract content.")
+                                            
+                                                    # Handle formatting preferences for chat intent too
+                                                    if formatting_preferences and self.controller and self.mission_id:
+                                                        logger.info(f"Detected formatting preferences with {intent} intent: '{formatting_preferences}'")
+                                                        try:
+                                                            # Add formatting preferences as a separate goal
+                                                            goal_id = await self.controller.context_manager.add_goal(
+                                                                mission_id=self.mission_id,
+                                                                text=formatting_preferences,
+                                                                source_agent=self.agent_name
+                                                            )
+                                                            if goal_id:
+                                                                logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
+                                                        except Exception as e:
+                                                            logger.error(f"Failed to add formatting preferences as goal: {e}")
                                         
-                                            # If we reached here, the fix worked, skip the original error handling
-                                            logger.info("JSON parsing successful after simple fix.")
-                                        except Exception as retry_e:
-                                            logger.error(f"Failed to parse JSON even after fix: {retry_e}")
+                                                if thoughts:
+                                                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                                    if agent_scratchpad:
+                                                        scratchpad_update = f"{agent_scratchpad}\n\n[{timestamp}] {thoughts}"
+                                                    else:
+                                                        scratchpad_update = f"[{timestamp}] {thoughts}"
+                                        
+                                                # If we reached here, the fix worked, skip the original error handling
+                                                logger.info("JSON parsing successful after simple fix.")
+                                            except Exception as retry_e:
+                                                logger.error(f"Failed to parse JSON even after fix: {retry_e}")
+                                                final_response = "Sorry, I had trouble understanding the format of my own thoughts."
+                                        else:
+                                            logger.error(f"JSON parsing failed and simple fix not applicable: {parse_error}")
                                             final_response = "Sorry, I had trouble understanding the format of my own thoughts."
                                     else:
-                                        logger.error(f"JSON parsing failed and simple fix not applicable: {parse_error}")
+                                        logger.error(f"JSON parsing failed: {parse_error}")
                                         final_response = "Sorry, I had trouble understanding the format of my own thoughts."
-                                else:
-                                    logger.error(f"JSON parsing failed: {parse_error}")
-                                    final_response = "Sorry, I had trouble understanding the format of my own thoughts."
+                        else:
+                            logger.error(f"Could not find JSON block in LLM response (attempt {retry_count + 1}/{max_retries})")
+                            if DEBUG_MESSENGER:
+                                logger.info("MESSENGER AGENT DEBUG - NO JSON FOUND:")
+                                logger.info("-" * 80)
+                                logger.info(f"Full response that failed to contain JSON:\n{llm_response_content}")
+                                logger.info("-" * 80)
+                            last_error = "No JSON found in response"
+                            retry_count += 1
                     else:
-                        logger.error(f"Could not find JSON block in LLM response (attempt {retry_count + 1}/{max_retries})")
+                        logger.error(f"LLM response was empty or invalid (attempt {retry_count + 1}/{max_retries}).")
                         if DEBUG_MESSENGER:
-                            logger.info("MESSENGER AGENT DEBUG - NO JSON FOUND:")
+                            logger.info("MESSENGER AGENT DEBUG - EMPTY/INVALID RESPONSE:")
                             logger.info("-" * 80)
-                            logger.info(f"Full response that failed to contain JSON:\n{llm_response_content}")
+                            logger.info(f"Response object: {response}")
+                            if response:
+                                logger.info(f"Response choices: {response.choices}")
+                                if response.choices:
+                                    logger.info(f"First choice: {response.choices[0]}")
+                                    if response.choices[0]:
+                                        logger.info(f"Message: {response.choices[0].message}")
                             logger.info("-" * 80)
-                        last_error = "No JSON found in response"
+                        last_error = "Empty or invalid response from LLM"
                         retry_count += 1
-                else:
-                    logger.error(f"LLM response was empty or invalid (attempt {retry_count + 1}/{max_retries}).")
-                    if DEBUG_MESSENGER:
-                        logger.info("MESSENGER AGENT DEBUG - EMPTY/INVALID RESPONSE:")
-                        logger.info("-" * 80)
-                        logger.info(f"Response object: {response}")
-                        if response:
-                            logger.info(f"Response choices: {response.choices}")
-                            if response.choices:
-                                logger.info(f"First choice: {response.choices[0]}")
-                                if response.choices[0]:
-                                    logger.info(f"Message: {response.choices[0].message}")
-                        logger.info("-" * 80)
-                    last_error = "Empty or invalid response from LLM"
-                    retry_count += 1
                 except Exception as e:
                     # Handle authentication and other API errors
                     from ai_researcher.agentic_layer.utils.error_messages import handle_api_error
