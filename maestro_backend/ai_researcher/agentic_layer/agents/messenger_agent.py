@@ -10,6 +10,12 @@ from ai_researcher.agentic_layer.utils.json_utils import (
     parse_llm_json_response,
     sanitize_json_string
 )
+from ai_researcher.agentic_layer.utils.json_format_helper import (
+    get_json_schema_format,
+    get_json_object_format,
+    enhance_messages_for_json_object,
+    should_retry_with_json_object
+)
 
 from ai_researcher.agentic_layer.agents.base_agent import BaseAgent, AgentOutput
 from ai_researcher.agentic_layer.model_dispatcher import ModelDispatcher
@@ -473,36 +479,50 @@ Output:
                     logger.info(f"Content preview: {msg['content'][:100]}...")
             logger.info("=" * 80)
         
-        # Retry logic for schema validation failures
+        # Retry logic for schema validation failures with json_object fallback
         max_retries = 3
         retry_count = 0
         last_error = None
-        
-        while retry_count < max_retries:
-            try:
-                # Using a simple model suitable for intent detection/chat
-                # Send the properly structured messages with Pydantic schema
-                # Get the schema and ensure it has the required fields properly set
-                schema = MessengerIntentResponse.model_json_schema()
-                # Ensure the required fields are properly set for OpenAI
-                # Only intent, response_to_user, and thoughts are truly required
-                schema["required"] = ["intent", "response_to_user", "thoughts", "extracted_content", "formatting_preferences"]
-                
-                response, model_details = await self.model_dispatcher.dispatch(
-                    messages=messages,
-                    agent_mode="messenger", # Use the configured messenger role
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "messenger_intent_response",
-                            "schema": schema,
-                            "strict": True
+        use_json_object = False  # Start with json_schema, fallback to json_object if needed
+        max_format_attempts = 2  # Try json_schema, then json_object
+
+        for format_attempt in range(max_format_attempts):
+            while retry_count < max_retries:
+                try:
+                    # Using a simple model suitable for intent detection/chat
+                    # Send the properly structured messages with Pydantic schema
+
+                    # Prepare response format based on fallback state
+                    if use_json_object:
+                        # Use json_object format with enhanced prompts
+                        response_format_config = get_json_object_format()
+                        # Enhance messages with schema instructions
+                        enhanced_messages = enhance_messages_for_json_object(messages, MessengerIntentResponse)
+                        logger.info(f"MessengerAgent: Using json_object format due to schema compatibility issue")
+                    else:
+                        # Use json_schema format (OpenAI structured outputs)
+                        schema = MessengerIntentResponse.model_json_schema()
+                        # Ensure the required fields are properly set for OpenAI
+                        # Only intent, response_to_user, and thoughts are truly required
+                        schema["required"] = ["intent", "response_to_user", "thoughts", "extracted_content", "formatting_preferences"]
+                        response_format_config = {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "messenger_intent_response",
+                                "schema": schema,
+                                "strict": True
+                            }
                         }
-                    },  # Use Pydantic schema for structured output
-                    mission_id=mission_id, # Pass mission_id for cost tracking
-                    log_queue=log_queue, # Pass log_queue for UI updates
-                    update_callback=update_callback # Pass update_callback for UI updates
-                )
+                        enhanced_messages = messages
+
+                    response, model_details = await self.model_dispatcher.dispatch(
+                        messages=enhanced_messages,
+                        agent_mode="messenger", # Use the configured messenger role
+                        response_format=response_format_config,
+                        mission_id=mission_id, # Pass mission_id for cost tracking
+                        log_queue=log_queue, # Pass log_queue for UI updates
+                        update_callback=update_callback # Pass update_callback for UI updates
+                    )
 
                 if response and response.choices and response.choices[0].message.content:
                     llm_response_content = response.choices[0].message.content.strip()
@@ -877,19 +897,32 @@ Output:
                         logger.info("-" * 80)
                     last_error = "Empty or invalid response from LLM"
                     retry_count += 1
-            except Exception as e:
-                # Handle authentication and other API errors
-                from ai_researcher.agentic_layer.utils.error_messages import handle_api_error
-                
-                logger.error(f"Error during MessengerAgent LLM call (attempt {retry_count + 1}/{max_retries}): {e}", exc_info=True)
-                last_error = e
-                retry_count += 1
-                
-                # If it's an API configuration error (400), don't retry
-                if hasattr(e, 'status_code') and e.status_code == 400:
-                    final_response = handle_api_error(e)
-                    break
-        
+                except Exception as e:
+                    # Handle authentication and other API errors
+                    from ai_researcher.agentic_layer.utils.error_messages import handle_api_error
+
+                    logger.error(f"Error during MessengerAgent LLM call (attempt {retry_count + 1}/{max_retries}): {e}", exc_info=True)
+                    last_error = e
+
+                    # Check if this is a json_schema compatibility issue before breaking
+                    if hasattr(e, 'status_code') and e.status_code == 400:
+                        if not use_json_object and should_retry_with_json_object(e):
+                            logger.info(f"MessengerAgent: Detected json_schema compatibility issue: {str(e)[:200]}")
+                            use_json_object = True
+                            retry_count = 0  # Reset retry count for json_object attempt
+                            break  # Break inner loop to retry with json_object
+                        else:
+                            # Other 400 error, not schema-related, or already tried json_object
+                            final_response = handle_api_error(e)
+                            return final_action, final_request, formatting_preferences, None, model_details
+
+                    # Increment retry count for non-schema errors
+                    retry_count += 1
+
+            # If we got a successful response, break out of format attempt loop
+            if final_response:
+                break
+
         # If we exhausted all retries without success, provide error message
         if retry_count >= max_retries and not final_response:
             logger.error(f"Failed to get valid response after {max_retries} attempts. Last error: {last_error}")
