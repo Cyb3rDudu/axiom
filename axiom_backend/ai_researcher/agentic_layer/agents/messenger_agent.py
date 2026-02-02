@@ -488,6 +488,10 @@ Output:
         max_format_attempts = 3  # Try json_schema, then json_object, then none
 
         for format_attempt in range(max_format_attempts):
+            # Reset final_response for each format attempt to allow retry
+            if format_attempt > 0:
+                final_response = None
+
             while retry_count < max_retries:
                 try:
                     # Using a simple model suitable for intent detection/chat
