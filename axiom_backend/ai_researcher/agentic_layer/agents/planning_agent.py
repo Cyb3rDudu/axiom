@@ -679,14 +679,14 @@ Available Research Tools:
         # Update system prompt for the agent
         self.system_prompt = system_prompt
 
-        # Try with json_schema first, with fallback to json_object if needed
-        use_json_object = False
-        max_format_attempts = 2  # Try json_schema, then json_object
-        
+        # Try with json_schema first, with fallback to json_object, then no response_format
+        format_mode = "json_schema"  # Start with json_schema, fallback to json_object, then none
+        max_format_attempts = 3  # Try json_schema, then json_object, then no response_format
+
         for format_attempt in range(max_format_attempts):
             try:
-                # Use json_object format if this is a retry
-                if use_json_object:
+                # Determine response format based on current mode
+                if format_mode == "json_object":
                     from ai_researcher.agentic_layer.utils.json_format_helper import (
                         get_json_object_format,
                         enhance_messages_for_json_object
@@ -704,7 +704,25 @@ Available Research Tools:
                     # CRITICAL: Update the instance variable so _call_llm uses the enhanced system prompt
                     self.system_prompt = system_prompt
                     logger.info(f"{self.agent_name}: Retrying with json_object format due to schema compatibility issue")
-                
+                elif format_mode == "none":
+                    # No response_format - rely on prompt instructions only
+                    from ai_researcher.agentic_layer.utils.json_format_helper import (
+                        enhance_messages_for_json_object
+                    )
+                    response_format_pydantic = None  # No response format
+                    # Enhance the prompts with schema instructions
+                    messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ]
+                    messages = enhance_messages_for_json_object(messages, response_schema)
+                    # Extract the enhanced prompts and update BOTH local and instance variables
+                    system_prompt = messages[0]["content"]
+                    user_prompt = messages[1]["content"]
+                    # CRITICAL: Update the instance variable so _call_llm uses the enhanced system prompt
+                    self.system_prompt = system_prompt
+                    logger.info(f"{self.agent_name}: Retrying without response_format (prompt-only JSON mode)")
+
                 # Call the LLM - it now returns a tuple
                 llm_response, model_call_details = await self._call_llm( # Add await here
                     user_prompt=user_prompt,
@@ -722,15 +740,22 @@ Available Research Tools:
                     break
                     
             except Exception as e:
-                # Check if we should retry with json_object format
-                from ai_researcher.agentic_layer.utils.json_format_helper import should_retry_with_json_object
-                
-                if not use_json_object and should_retry_with_json_object(e):
+                # Check if we should retry with different format
+                from ai_researcher.agentic_layer.utils.json_format_helper import (
+                    should_retry_with_json_object,
+                    should_retry_without_response_format
+                )
+
+                if format_mode == "json_schema" and should_retry_with_json_object(e):
                     logger.info(f"{self.agent_name}: Detected json_schema compatibility issue: {str(e)[:200]}")
-                    use_json_object = True
+                    format_mode = "json_object"
                     continue  # Retry with json_object format
+                elif format_mode == "json_object" and should_retry_without_response_format(e):
+                    logger.info(f"{self.agent_name}: Detected json_object also not supported: {str(e)[:200]}")
+                    format_mode = "none"
+                    continue  # Retry without response_format
                 else:
-                    # Not a schema issue or already tried json_object, propagate the error
+                    # Not a schema issue or already tried all formats, propagate the error
                     logger.error(f"{self.agent_name} Error during LLM call: {e}", exc_info=True)
                     return None, None, scratchpad_update
 

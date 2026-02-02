@@ -158,46 +158,81 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
             {"role": "system", "content": "Consider these active goals when analyzing the request: " + json.dumps({"active_goals": goal_texts})},
             {"role": "user", "content": analysis_prompt}
         ]
-        # Start with json_schema format, with fallback to json_object
-        response_format = get_json_schema_format(
-            pydantic_model=RequestAnalysisOutput,
-            schema_name="request_analysis_output"
+        # Start with json_schema format, with fallback to json_object, then no response_format
+        from ai_researcher.agentic_layer.utils.json_format_helper import (
+            should_retry_with_json_object,
+            should_retry_without_response_format
         )
         analysis_result: Optional[RequestAnalysisOutput] = None
         model_details = None
+        format_mode = "json_schema"  # Start with json_schema, fallback to json_object, then none
+        max_format_attempts = 3  # Try json_schema, then json_object, then no response_format
+        log_status = "failure"
+        error_msg = None
 
-        try:
-            # Use a model suitable for analysis and instruction following (planning model is good)
-            async with self.controller.maybe_semaphore:
-                response, model_details = await self.controller.model_dispatcher.dispatch(
-                    messages=messages,
-                    response_format=response_format,
-                    agent_mode="planning",  # Use planning model for structured output and instruction following
-                    mission_id=mission_id,  # Pass mission_id for cost tracking
-                    log_queue=log_queue,  # Pass log_queue for UI updates
-                    update_callback=update_callback  # Pass update_callback for cost tracking
-                )
+        for format_attempt in range(max_format_attempts):
+            try:
+                # Prepare response format based on current mode
+                if format_mode == "json_object":
+                    response_format = get_json_object_format()
+                    current_messages = enhance_messages_for_json_object(messages, RequestAnalysisOutput)
+                    logger.info(f"Request analysis: Using json_object format due to schema compatibility issue")
+                elif format_mode == "none":
+                    response_format = None  # No response format
+                    current_messages = enhance_messages_for_json_object(messages, RequestAnalysisOutput)
+                    logger.info(f"Request analysis: Using no response_format (prompt-only JSON mode)")
+                else:
+                    response_format = get_json_schema_format(
+                        pydantic_model=RequestAnalysisOutput,
+                        schema_name="request_analysis_output"
+                    )
+                    current_messages = messages
+                # Use a model suitable for analysis and instruction following (planning model is good)
+                async with self.controller.maybe_semaphore:
+                    response, model_details = await self.controller.model_dispatcher.dispatch(
+                        messages=current_messages,
+                        response_format=response_format,
+                        agent_mode="planning",  # Use planning model for structured output and instruction following
+                        mission_id=mission_id,  # Pass mission_id for cost tracking
+                        log_queue=log_queue,  # Pass log_queue for UI updates
+                        update_callback=update_callback  # Pass update_callback for cost tracking
+                    )
 
-            if response and response.choices and response.choices[0].message.content:
-                raw_json = response.choices[0].message.content
-                try:
-                    analysis_result = RequestAnalysisOutput.model_validate_json(raw_json)
-                    logger.info(f"Request analysis successful for mission {mission_id}: Type={analysis_result.request_type}, Tone={analysis_result.target_tone}, Audience={analysis_result.target_audience}")
-                    log_status = "success"
-                    error_msg = None
-                except (json.JSONDecodeError, ValueError) as e:
-                    logger.error(f"Failed to parse/validate request analysis JSON for mission {mission_id}: {e}\nRaw: {raw_json}")
+                if response and response.choices and response.choices[0].message.content:
+                    raw_json = response.choices[0].message.content
+                    try:
+                        analysis_result = RequestAnalysisOutput.model_validate_json(raw_json)
+                        logger.info(f"Request analysis successful for mission {mission_id}: Type={analysis_result.request_type}, Tone={analysis_result.target_tone}, Audience={analysis_result.target_audience}")
+                        log_status = "success"
+                        error_msg = None
+                        break  # Success, exit retry loop
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.error(f"Failed to parse/validate request analysis JSON for mission {mission_id}: {e}\nRaw: {raw_json}")
+                        log_status = "failure"
+                        error_msg = f"JSON Parse/Validation Error: {e}"
+                        break  # JSON parsing error, don't retry
+                else:
+                    logger.error(f"Request analysis LLM call failed or returned empty content for mission {mission_id}.")
                     log_status = "failure"
-                    error_msg = f"JSON Parse/Validation Error: {e}"
-            else:
-                logger.error(f"Request analysis LLM call failed or returned empty content for mission {mission_id}.")
-                log_status = "failure"
-                error_msg = "LLM call failed or returned empty content."
+                    error_msg = "LLM call failed or returned empty content."
+                    break  # Empty response, don't retry
 
-        except Exception as e:
-            logger.error(f"Error during request analysis LLM call for mission {mission_id}: {e}", exc_info=True)
-            log_status = "failure"
-            error_msg = f"Exception during analysis: {e}"
+            except Exception as e:
+                logger.error(f"Error during request analysis LLM call for mission {mission_id}: {e}", exc_info=True)
+
+                # Check if we should retry with different format
+                if format_mode == "json_schema" and should_retry_with_json_object(e):
+                    logger.info(f"Request analysis: Detected json_schema compatibility issue, retrying with json_object format")
+                    format_mode = "json_object"
+                    continue  # Retry with json_object format
+                elif format_mode == "json_object" and should_retry_without_response_format(e):
+                    logger.info(f"Request analysis: Detected json_object also not supported, retrying without response_format")
+                    format_mode = "none"
+                    continue  # Retry without response_format
+
+                log_status = "failure"
+                error_msg = f"Exception during analysis: {e}"
+                break  # Non-recoverable error, exit loop
 
         # Log the analysis step
         await self.controller.context_manager.log_execution_step(
