@@ -1,14 +1,14 @@
-# Docker Compose configuration for Maestro with External PostgreSQL and GPU support
+# Docker Compose configuration for Axiom with External PostgreSQL and GPU support
 # Using explicitly built local images
 services:
   backend:
-    image: maestro-backend:local
-    container_name: maestro-backend
+    image: axiom-backend:local
+    container_name: axiom-backend
     volumes:
       - ~/AI-Models/huggingface:/root/.cache/huggingface
-      - ./maestro_datalab_cache:/root/.cache/datalab
+      - ./axiom_datalab_cache:/root/.cache/datalab
       - ./reports:/app/reports
-      - ./maestro_backend/data:/app/data
+      - ./axiom_backend/data:/app/data
     working_dir: /app
     environment:
       - MAX_WORKER_THREADS=${MAX_WORKER_THREADS:-20}
@@ -26,7 +26,7 @@ services:
       - ALLOW_CORS_WILDCARD=${ALLOW_CORS_WILDCARD:-true}
       - HF_HUB_OFFLINE=1
     networks:
-      - maestro-network
+      - axiom-network
     deploy:
       resources:
         reservations:
@@ -37,19 +37,19 @@ services:
     restart: unless-stopped
 
   doc-processor:
-    image: maestro-backend:local
-    container_name: maestro-doc-processor
+    image: axiom-backend:local
+    container_name: axiom-doc-processor
     command: ["python", "-u", "services/background_document_processor.py"]
     working_dir: /app
     volumes:
       - ~/AI-Models/huggingface:/root/.cache/huggingface
-      - ./maestro_datalab_cache:/root/.cache/datalab
+      - ./axiom_datalab_cache:/root/.cache/datalab
       - ./reports:/app/reports
-      - ./maestro_backend/data:/app/data
+      - ./axiom_backend/data:/app/data
     depends_on:
       - backend
     networks:
-      - maestro-network
+      - axiom-network
     environment:
       - TZ=${TZ:-UTC}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -70,32 +70,32 @@ services:
 
   frontend:
     build:
-      context: ./maestro_frontend
+      context: ./axiom_frontend
       dockerfile: Dockerfile
-    image: maestro-frontend:local
-    container_name: maestro-frontend
+    image: axiom-frontend:local
+    container_name: axiom-frontend
     networks:
-      - maestro-network
+      - axiom-network
     restart: unless-stopped
 
   nginx:
     image: nginx:latest
-    container_name: maestro-nginx
+    container_name: axiom-nginx
     volumes:
       - ./nginx/nginx.conf.complete:/etc/nginx/nginx.conf:ro
     ports:
-      - "${MAESTRO_PORT:-8080}:80"
+      - "${AXIOM_PORT:-8080}:80"
     depends_on:
       - backend
       - frontend
     networks:
-      - maestro-network
+      - axiom-network
     restart: unless-stopped
 
 networks:
-  maestro-network:
-    name: maestro_maestro-network
+  axiom-network:
+    name: axiom_axiom-network
 
 volumes:
-  maestro-data:
-    name: maestro_maestro-data
+  axiom-data:
+    name: axiom_axiom-data

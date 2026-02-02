@@ -5,7 +5,7 @@ This script reads prompt text files and inserts them into the prompt_templates t
 enabling dynamic multilingual prompt loading for AI agents.
 
 Usage:
-    python maestro_backend/scripts/import_prompts_to_db.py [--language en] [--dry-run]
+    python axiom_backend/scripts/import_prompts_to_db.py [--language en] [--dry-run]
 
 Arguments:
     --language: Language code to import (default: all languages in /prompts/)
@@ -22,8 +22,8 @@ import logging
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from maestro_backend.database.database import SessionLocal
-from maestro_backend.database.models import PromptTemplate, SupportedLanguage
+from axiom_backend.database.database import SessionLocal
+from axiom_backend.database.models import PromptTemplate, SupportedLanguage
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)

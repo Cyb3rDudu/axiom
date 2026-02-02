@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 
 # Base path for the project
 BASE_PATH = Path(__file__).parent.parent.parent
-AGENTS_PATH = BASE_PATH / "maestro_backend" / "ai_researcher" / "agentic_layer" / "agents"
+AGENTS_PATH = BASE_PATH / "axiom_backend" / "ai_researcher" / "agentic_layer" / "agents"
 OUTPUT_PATH = BASE_PATH / "prompts" / "en"
 
 # Agent files and their prompt methods to extract
