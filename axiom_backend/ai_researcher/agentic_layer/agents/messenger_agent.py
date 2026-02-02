@@ -450,7 +450,7 @@ Output:
         llm_response_content = None
         model_details = None
         parsed_output = None
-        final_response = "Sorry, I couldn't process that request."
+        final_response = None  # Initialize to None to allow retry loop to work correctly
         final_action = None
         final_request = None
         formatting_preferences = None  # Initialize formatting_preferences
@@ -488,10 +488,6 @@ Output:
         max_format_attempts = 3  # Try json_schema, then json_object, then none
 
         for format_attempt in range(max_format_attempts):
-            # Reset final_response for each format attempt to allow retry
-            if format_attempt > 0:
-                final_response = None
-
             while retry_count < max_retries:
                 try:
                     # Using a simple model suitable for intent detection/chat
@@ -1070,6 +1066,10 @@ Output:
                     scratchpad_update = f"{agent_scratchpad}\n\n[{timestamp}] {thoughts}"
                 else:
                     scratchpad_update = f"[{timestamp}] {thoughts}"
+
+        # Ensure final_response is never None
+        if not final_response:
+            final_response = "Sorry, I couldn't process that request."
 
         # Construct the final output dictionary expected by AgentController
         agent_result = {
