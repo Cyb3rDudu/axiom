@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Combobox } from '../../../components/ui/combobox'
 import { AlertCircle, CheckCircle, Loader2, AlertTriangle, Settings, Target, Zap, Scale, Brain, CheckSquare, ToggleLeft, ToggleRight, RefreshCw } from 'lucide-react'
 
-type ProviderKey = 'openrouter' | 'openai' | 'custom'
+type ProviderKey = 'openrouter' | 'openai' | 'deepseek' | 'custom'
 type ModelType = 'fast' | 'mid' | 'intelligent' | 'verifier'
 
 export const AISettingsTab: React.FC = () => {
@@ -115,6 +115,7 @@ export const AISettingsTab: React.FC = () => {
         // Disable all providers first
         openrouter: { ...draftSettings.ai_endpoints.providers.openrouter, enabled: false },
         openai: { ...draftSettings.ai_endpoints.providers.openai, enabled: false },
+        deepseek: { ...draftSettings.ai_endpoints.providers.deepseek, enabled: false },
         custom: { ...draftSettings.ai_endpoints.providers.custom, enabled: false },
         // Enable the selected provider
         [provider]: {
@@ -128,7 +129,8 @@ export const AISettingsTab: React.FC = () => {
     if (!draftSettings.ai_endpoints.advanced_mode) {
       const providerConfig = newAiEndpoints.providers[provider] as any
       const baseUrl = providerConfig.base_url || (provider === 'openrouter' ? 'https://openrouter.ai/api/v1/' :
-                                                   provider === 'openai' ? 'https://api.openai.com/v1/' : '')
+                                                   provider === 'openai' ? 'https://api.openai.com/v1/' :
+                                                   provider === 'deepseek' ? 'https://api.deepseek.com/v1/' : '')
 
       newAiEndpoints.advanced_models = {
         fast: {
@@ -238,8 +240,9 @@ export const AISettingsTab: React.FC = () => {
     // If switching TO simple mode, sync all models to use the primary provider
     if (!newAdvancedMode && enabledProvider) {
       const providerConfig = draftSettings.ai_endpoints.providers[enabledProvider] as any
-      const baseUrl = providerConfig.base_url || (enabledProvider === 'openrouter' ? 'https://openrouter.ai/api/v1/' : 
-                                                   enabledProvider === 'openai' ? 'https://api.openai.com/v1/' : '')
+      const baseUrl = providerConfig.base_url || (enabledProvider === 'openrouter' ? 'https://openrouter.ai/api/v1/' :
+                                                   enabledProvider === 'openai' ? 'https://api.openai.com/v1/' :
+                                                   enabledProvider === 'deepseek' ? 'https://api.deepseek.com/v1/' : '')
       
       newAiEndpoints.advanced_models = {
         fast: {
@@ -289,6 +292,7 @@ export const AISettingsTab: React.FC = () => {
       const defaultBaseUrls = {
         openrouter: 'https://openrouter.ai/api/v1/',
         openai: 'https://api.openai.com/v1/',
+        deepseek: 'https://api.deepseek.com/v1/',
         custom: ''
       }
       
@@ -441,6 +445,7 @@ export const AISettingsTab: React.FC = () => {
                     <SelectContent>
                       <SelectItem value="openrouter">OpenRouter</SelectItem>
                       <SelectItem value="openai">OpenAI API</SelectItem>
+                      <SelectItem value="deepseek">DeepSeek</SelectItem>
                       <SelectItem value="custom">Custom Provider</SelectItem>
                     </SelectContent>
                   </Select>
@@ -557,6 +562,64 @@ export const AISettingsTab: React.FC = () => {
                         className="text-blue-600 hover:underline"
                       >
                         OpenAI Platform
+                      </a>
+                    </p>
+                  </div>
+                )}
+
+                {enabledProvider === 'deepseek' && (
+                  <div className="space-y-3 pl-3 border-l-2 border-cyan-200 bg-cyan-50/30 rounded-r-lg p-3">
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Access to DeepSeek models including deepseek-chat and deepseek-reasoner.
+                    </p>
+                    <div className="grid grid-cols-1 gap-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="api-key" className="text-sm">API Key</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            id="api-key"
+                            type="password"
+                            value={currentProviderConfig?.api_key || ''}
+                            onChange={(e) => handleApiKeyChange('api_key', e.target.value)}
+                            placeholder="sk-..."
+                            className="h-8 text-sm"
+                            autoComplete="off"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleTestConnection}
+                            disabled={isTestingConnection && testProvider === enabledProvider}
+                            className="h-8 px-3"
+                          >
+                            {isTestingConnection && testProvider === enabledProvider ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              'Test'
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="base-url" className="text-sm">Base URL</Label>
+                        <Input
+                          id="base-url"
+                          value={currentProviderConfig?.base_url || ''}
+                          onChange={(e) => handleApiKeyChange('base_url', e.target.value)}
+                          placeholder="https://api.deepseek.com/v1/"
+                          className="h-8 text-sm"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Get your API key from{' '}
+                      <a
+                        href="https://platform.deepseek.com/api_keys"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline"
+                      >
+                        DeepSeek Platform
                       </a>
                     </p>
                   </div>
@@ -843,6 +906,7 @@ export const AISettingsTab: React.FC = () => {
                     <SelectContent>
                       <SelectItem value="openrouter">OpenRouter</SelectItem>
                       <SelectItem value="openai">OpenAI</SelectItem>
+                      <SelectItem value="deepseek">DeepSeek</SelectItem>
                       <SelectItem value="custom">Custom</SelectItem>
                     </SelectContent>
                   </Select>
@@ -952,6 +1016,7 @@ export const AISettingsTab: React.FC = () => {
                     <SelectContent>
                       <SelectItem value="openrouter">OpenRouter</SelectItem>
                       <SelectItem value="openai">OpenAI</SelectItem>
+                      <SelectItem value="deepseek">DeepSeek</SelectItem>
                       <SelectItem value="custom">Custom</SelectItem>
                     </SelectContent>
                   </Select>
@@ -1061,6 +1126,7 @@ export const AISettingsTab: React.FC = () => {
                     <SelectContent>
                       <SelectItem value="openrouter">OpenRouter</SelectItem>
                       <SelectItem value="openai">OpenAI</SelectItem>
+                      <SelectItem value="deepseek">DeepSeek</SelectItem>
                       <SelectItem value="custom">Custom</SelectItem>
                     </SelectContent>
                   </Select>
@@ -1169,7 +1235,8 @@ export const AISettingsTab: React.FC = () => {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="openrouter">OpenRouter</SelectItem>
-                      <SelectItem value="openai">OpenAI</SelectItem>
+<parameter name="openai">OpenAI</SelectItem>
+                      <SelectItem value="deepseek">DeepSeek</SelectItem>
                       <SelectItem value="custom">Custom</SelectItem>
                     </SelectContent>
                   </Select>
