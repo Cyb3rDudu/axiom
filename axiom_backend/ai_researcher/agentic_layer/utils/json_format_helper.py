@@ -151,5 +151,33 @@ def should_retry_with_json_object(error: Exception) -> bool:
         if pattern in error_str:
             logger.info(f"Detected json_schema compatibility issue: {error_str[:200]}...")
             return True
-    
+
+    return False
+
+def should_retry_without_response_format(error: Exception) -> bool:
+    """
+    Determine if an error indicates we should retry without any response_format.
+    This is for providers like DeepSeek that don't support any structured output format.
+
+    Args:
+        error: The exception that occurred
+
+    Returns:
+        True if we should retry without response_format
+    """
+    error_str = str(error).lower()
+
+    # Patterns that indicate even json_object is not supported
+    no_format_error_patterns = [
+        "this response_format type is unavailable",  # DeepSeek specific
+        "response_format type is unavailable",  # DeepSeek variant
+        "response_format is not supported",  # Generic unsupported
+        "invalid_request_error",  # When both json_schema and json_object fail
+    ]
+
+    for pattern in no_format_error_patterns:
+        if pattern in error_str:
+            logger.info(f"Detected response_format not supported: {error_str[:200]}...")
+            return True
+
     return False
