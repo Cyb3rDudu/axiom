@@ -346,27 +346,30 @@ class MissionContextResponse(BaseModel):
 # Mission Settings Schema
 class MissionSettings(BaseModel):
     """Research parameters that can be customized per mission."""
+    # Language Configuration
+    language_code: Optional[str] = Field(None, description="Language code for AI prompts and content generation")
+
     # Initial Research Parameters
     initial_research_max_depth: Optional[int] = Field(None, description="Max depth for initial question tree")
     initial_research_max_questions: Optional[int] = Field(None, description="Max total questions in initial phase")
-    
+
     # Structured Research Parameters
     structured_research_rounds: Optional[int] = Field(None, description="Number of structured research rounds")
     writing_passes: Optional[int] = Field(None, description="Number of writing passes (initial + revisions)")
-    
+
     # Search Results Configuration
     initial_exploration_doc_results: Optional[int] = Field(None, description="Number of docs for initial exploration")
     initial_exploration_web_results: Optional[int] = Field(None, description="Number of web results for initial exploration")
     main_research_doc_results: Optional[int] = Field(None, description="Number of docs for main research cycles")
     main_research_web_results: Optional[int] = Field(None, description="Number of web results for main research cycles")
-    
+
     # Thought Management
     thought_pad_context_limit: Optional[int] = Field(None, description="Number of recent thoughts to provide as context")
-    
+
     # Performance Settings
     max_notes_for_assignment_reranking: Optional[int] = Field(None, description="Max notes to pass to NoteAssignmentAgent after reranking")
     max_concurrent_requests: Optional[int] = Field(None, description="Max concurrent requests for agent operations")
-    
+
     # Options
     skip_final_replanning: Optional[bool] = Field(None, description="Toggle to skip final outline refinement")
     auto_optimize_params: Optional[bool] = Field(None, description="Enable AI to dynamically optimize research params")
