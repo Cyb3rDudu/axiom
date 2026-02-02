@@ -218,7 +218,7 @@ class SupportedLanguage(BaseModel):
     native_name: str
     is_active: bool
     completion_percentage: int
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
