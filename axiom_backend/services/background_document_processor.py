@@ -235,9 +235,9 @@ class BackgroundDocumentProcessor:
     def _send_progress_update_sync(self, user_id: str, update: Dict[str, Any]):
         """Sends a progress update to the main backend via an internal API call."""
         import requests
-        
+
         # The main backend service is available at this hostname in the Docker network
-        backend_url = "http://maestro-backend:8000/api/internal/document-progress"
+        backend_url = "http://axiom-backend:8000/api/internal/document-progress"
         
         try:
             # Add user_id to the update payload if it's not already there
