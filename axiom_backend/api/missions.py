@@ -405,6 +405,10 @@ def get_user_specific_agent_controller(
         context_manager=agent_controller.context_manager
     )
     
+    # Get user's default language for chat interactions
+    user_language = current_user.language_code or 'en'
+    logger.info(f"Creating agent controller for user '{current_user.username}' with language: {user_language}")
+
     # Create a new agent controller with the user-specific model dispatcher
     # We'll reuse the other components from the global instance
     user_agent_controller = AgentController(
@@ -412,7 +416,8 @@ def get_user_specific_agent_controller(
         context_manager=agent_controller.context_manager,
         tool_registry=agent_controller.tool_registry,
         retriever=agent_controller.retriever,
-        reranker=agent_controller.reranker
+        reranker=agent_controller.reranker,
+        language_code=user_language  # Use user's language preference for chat
     )
     
     # IMPORTANT: Disable the controller-level semaphore to allow true per-mission concurrency

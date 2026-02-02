@@ -1007,8 +1007,25 @@ Make sure to address the user's specific concerns and suggestions."""
                     update_callback(log_queue, error_log)
                 await self.context_manager.update_mission_status(mission_id, "failed", "Mission context not found at start.")
                 return
-            
+
             user_request = mission_context.user_request
+
+            # Reload agent prompts with mission-specific language if different from controller default
+            mission_metadata = mission_context.metadata or {}
+            mission_settings = mission_metadata.get("mission_settings", {})
+            mission_language = mission_settings.get("language_code") or mission_metadata.get("language_code") or self.language_code
+
+            if mission_language != self.language_code:
+                logger.info(f"Mission {mission_id} uses language '{mission_language}' (controller default: '{self.language_code}'). Reloading prompts.")
+                # Reload prompts for all agents
+                self.planning_agent.reload_prompts(mission_language)
+                self.research_agent.reload_prompts(mission_language)
+                self.writing_agent.reload_prompts(mission_language)
+                self.writing_reflection_agent.reload_prompts(mission_language)
+                self.reflection_agent.reload_prompts(mission_language)
+                self.note_assignment_agent.reload_prompts(mission_language)
+                if hasattr(self, 'messenger_agent'):
+                    self.messenger_agent.reload_prompts(mission_language)
             
             # Step 1: Initial Request Analysis
             if "initial_analysis" not in mission_context.completed_phases:

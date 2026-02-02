@@ -58,6 +58,32 @@ class BaseAgent(ABC):
 
         print(f"Initialized {self.agent_name} (Model: {self.model_name or 'Default'}, Lang: {self.language_code})")
 
+    def reload_prompts(self, language_code: str):
+        """
+        Reload prompts for a different language.
+        Call this when a mission requires a different language than the controller default.
+        """
+        if language_code == self.language_code:
+            return  # No change needed
+
+        print(f"Reloading prompts for {self.agent_name}: {self.language_code} → {language_code}")
+        self.language_code = language_code
+
+        # Reload system prompt from database
+        try:
+            from ai_researcher.agentic_layer.services.prompt_loader import get_prompt_loader
+            loader = get_prompt_loader()
+            self.system_prompt = loader.load_prompt(
+                agent_name=self.__class__.__name__,
+                prompt_key='system_prompt',
+                language_code=language_code
+            )
+        except (RuntimeError, ValueError) as e:
+            # Fallback if prompt not found
+            today_date = datetime.date.today().strftime('%Y-%m-%d')
+            self.system_prompt = f"You are the {self.agent_name}. Your goal is to fulfill your specific role in the research process. Current date: {today_date}"
+            print(f"Warning: Could not reload prompt for {self.agent_name} in {language_code}, using default: {e}")
+
     def _create_messages(self, user_prompt: str, history: Optional[List[Dict[str, str]]] = None) -> List[Dict[str, str]]:
         """Helper method to construct the message list for the LLM."""
         messages = [{"role": "system", "content": self.system_prompt}]
