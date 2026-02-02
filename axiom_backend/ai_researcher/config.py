@@ -200,6 +200,17 @@ LOCAL_LLM_FAST_MODEL = os.getenv("LOCAL_LLM_FAST_MODEL")
 LOCAL_LLM_MID_MODEL = os.getenv("LOCAL_LLM_MID_MODEL")
 LOCAL_LLM_INTELLIGENT_MODEL = os.getenv("LOCAL_LLM_INTELLIGENT_MODEL")
 
+# --- DeepSeek Configuration ---
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1/")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+# DeepSeek model names
+DEEPSEEK_FAST_MODEL = os.getenv("DEEPSEEK_FAST_MODEL", "deepseek-chat")
+DEEPSEEK_MID_MODEL = os.getenv("DEEPSEEK_MID_MODEL", "deepseek-chat")
+DEEPSEEK_INTELLIGENT_MODEL = os.getenv("DEEPSEEK_INTELLIGENT_MODEL", "deepseek-reasoner")
+DEEPSEEK_VERIFIER_MODEL = os.getenv("DEEPSEEK_VERIFIER_MODEL", "deepseek-chat")
+# DeepSeek has a max_tokens limit of 8192
+DEEPSEEK_MAX_TOKENS_LIMIT = 8192
+
 # --- LLM Provider Configuration (Intelligent) ---
 # Set the desired LLM provider for the intelligent model: "openrouter" or "local"
 INTELLIGENT_LLM_PROVIDER = get_intelligent_llm_provider() # Default intelligent to openrouter
@@ -430,13 +441,27 @@ PROVIDER_CONFIG = {
         "heavy_model": LOCAL_LLM_MID_MODEL,
         "beast_model": LOCAL_LLM_INTELLIGENT_MODEL
     },
+    "deepseek": {
+        "base_url": DEEPSEEK_BASE_URL,
+        "api_key": DEEPSEEK_API_KEY,
+        "fast_model": DEEPSEEK_FAST_MODEL,
+        "mid_model": DEEPSEEK_MID_MODEL,
+        "intelligent_model": DEEPSEEK_INTELLIGENT_MODEL,
+        "verifier_model": DEEPSEEK_VERIFIER_MODEL,
+        # Add aliases for backward compatibility
+        "light_model": DEEPSEEK_FAST_MODEL,
+        "heavy_model": DEEPSEEK_MID_MODEL,
+        "beast_model": DEEPSEEK_INTELLIGENT_MODEL,
+        # DeepSeek-specific limits
+        "max_tokens_limit": DEEPSEEK_MAX_TOKENS_LIMIT  # 8192
+    },
     "custom": {
         # Custom provider configuration comes from user settings
         # Base config will be overridden by user-specific settings
         "base_url": None,
         "api_key": None,
         "fast_model": "custom-fast-model",
-        "mid_model": "custom-mid-model", 
+        "mid_model": "custom-mid-model",
         "intelligent_model": "custom-intelligent-model",
         "verifier_model": "custom-verifier-model",
         # Add aliases for backward compatibility
