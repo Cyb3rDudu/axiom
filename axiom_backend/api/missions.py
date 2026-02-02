@@ -2918,8 +2918,18 @@ async def get_mission_settings(
             get_max_concurrent_requests, get_skip_final_replanning
         )
         
+        # Get language_code with fallback chain
+        language_code = None
+        if mission_settings_data and 'language_code' in mission_settings_data:
+            language_code = mission_settings_data['language_code']
+        elif current_user.language_code:
+            language_code = current_user.language_code
+        else:
+            language_code = 'en'
+
         # Get effective settings (after fallback)
         effective_settings = MissionSettings(
+            language_code=language_code,
             initial_research_max_depth=get_initial_research_max_depth(mission_id),
             initial_research_max_questions=get_initial_research_max_questions(mission_id),
             structured_research_rounds=get_structured_research_rounds(mission_id),
