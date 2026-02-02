@@ -43,7 +43,7 @@ class ReflectionAgent(BaseAgent):
     identifies gaps, contradictions, and areas for improvement, and generates
     questions or suggests structural changes (like subsections) to guide further research.
     """
-    def __init__(self, model_dispatcher: ModelDispatcher, controller: Optional[Any] = None):
+    def __init__(self, model_dispatcher: ModelDispatcher, controller: Optional[Any] = None, language_code: str = "en"):
         super().__init__(agent_name="ReflectionAgent", model_dispatcher=model_dispatcher)
         self.controller = controller # Store controller
         self.mission_id = None # Initialize mission_id as None
