@@ -219,6 +219,11 @@ const defaultSettings: UserSettings = {
         api_key: null,
         base_url: 'https://api.openai.com/v1/'
       },
+      deepseek: {
+        enabled: false,
+        api_key: null,
+        base_url: 'https://api.deepseek.com/v1/'
+      },
       custom: {
         enabled: false,
         api_key: null,
