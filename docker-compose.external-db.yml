@@ -1,17 +1,14 @@
 # Docker Compose configuration for Maestro with External PostgreSQL
 services:
   backend:
-    build:
-      context: ./maestro_backend
-      dockerfile: Dockerfile
-    image: maestro-backend
-    container_name: maestro-backend
+    image: axiom-backend
+    container_name: axiom-backend
     volumes:
-      - maestro-data:/app/ai_researcher/data
-      - ./maestro_model_cache:/root/.cache/huggingface
-      - ./maestro_datalab_cache:/root/.cache/datalab
+      - axiom-data:/app/ai_researcher/data
+      - ./axiom_model_cache:/root/.cache/huggingface
+      - ./axiom_datalab_cache:/root/.cache/datalab
       - ./reports:/app/reports
-      - ./maestro_backend/data:/app/data
+      - ./axiom_backend/data:/app/data
     working_dir: /app
     environment:
       - MAX_WORKER_THREADS=${MAX_WORKER_THREADS:-10}
@@ -27,27 +24,24 @@ services:
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
     networks:
-      - maestro-network
+      - axiom-network
     restart: unless-stopped
 
   doc-processor:
-    build:
-      context: ./maestro_backend
-      dockerfile: Dockerfile
-    image: maestro-doc-processor
-    container_name: maestro-doc-processor
+    image: axiom-doc-processor
+    container_name: axiom-doc-processor
     command: ["python", "-u", "services/background_document_processor.py"]
     working_dir: /app
     volumes:
-      - maestro-data:/app/ai_researcher/data
-      - ./maestro_model_cache:/root/.cache/huggingface
-      - ./maestro_datalab_cache:/root/.cache/datalab
+      - axiom-data:/app/ai_researcher/data
+      - ./axiom_model_cache:/root/.cache/huggingface
+      - ./axiom_datalab_cache:/root/.cache/datalab
       - ./reports:/app/reports
-      - ./maestro_backend/data:/app/data
+      - ./axiom_backend/data:/app/data
     depends_on:
       - backend
     networks:
-      - maestro-network
+      - axiom-network
     environment:
       - TZ=${TZ:-UTC}
       - LOG_LEVEL=${LOG_LEVEL:-ERROR}
@@ -60,18 +54,15 @@ services:
     restart: unless-stopped
 
   frontend:
-    build:
-      context: ./maestro_frontend
-      dockerfile: Dockerfile
-    image: maestro-frontend
-    container_name: maestro-frontend
+    image: axiom-frontend
+    container_name: axiom-frontend
     networks:
-      - maestro-network
+      - axiom-network
     restart: unless-stopped
 
   nginx:
     image: nginx:latest
-    container_name: maestro-nginx
+    container_name: axiom-nginx
     volumes:
       - ./nginx/nginx.conf.complete:/etc/nginx/nginx.conf:ro
     ports:
@@ -80,13 +71,13 @@ services:
       - backend
       - frontend
     networks:
-      - maestro-network
+      - axiom-network
     restart: unless-stopped
 
 networks:
-  maestro-network:
-    name: maestro_maestro-network
+  axiom-network:
+    name: axiom_axiom-network
 
 volumes:
-  maestro-data:
-    name: maestro_maestro-data
+  axiom-data:
+    name: axiom_axiom-data

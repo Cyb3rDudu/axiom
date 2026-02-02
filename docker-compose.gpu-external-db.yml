@@ -69,9 +69,6 @@ services:
     restart: unless-stopped
 
   frontend:
-    build:
-      context: ./axiom_frontend
-      dockerfile: Dockerfile
     image: axiom-frontend:local
     container_name: axiom-frontend
     networks:

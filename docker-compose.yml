@@ -2,56 +2,50 @@ services:
   # PostgreSQL database for document management
   postgres:
     image: pgvector/pgvector:pg15
-    container_name: maestro-postgres
+    container_name: axiom-postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-maestro_db}
-      POSTGRES_USER: ${POSTGRES_USER:-maestro_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-maestro_password}
+      POSTGRES_DB: ${POSTGRES_DB:-axiom_db}
+      POSTGRES_USER: ${POSTGRES_USER:-axiom_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-axiom_password}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d
     ports:
       - "5432:5432"
     networks:
-      - maestro-network
+      - axiom-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-maestro_user} -d ${POSTGRES_DB:-maestro_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-axiom_user} -d ${POSTGRES_DB:-axiom_db}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   # Nginx reverse proxy - single entry point for the application
   nginx:
-    build:
-      context: ./nginx
-      dockerfile: Dockerfile
-    image: maestro-nginx
-    container_name: maestro-nginx
+    image: axiom-nginx
+    container_name: axiom-nginx
     ports:
       - "${MAESTRO_PORT:-80}:80"
     depends_on:
       - backend
       - frontend
     networks:
-      - maestro-network
+      - axiom-network
     restart: unless-stopped
 
   backend:
-    build:
-      context: ./maestro_backend
-      dockerfile: Dockerfile
-    image: maestro-backend
-    container_name: maestro-backend
+    image: axiom-backend
+    container_name: axiom-backend
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
-      - maestro-data:/app/ai_researcher/data
-      - ./maestro_model_cache:/root/.cache/huggingface
-      - ./maestro_datalab_cache:/root/.cache/datalab
+      - axiom-data:/app/ai_researcher/data
+      - ./axiom_model_cache:/root/.cache/huggingface
+      - ./axiom_datalab_cache:/root/.cache/datalab
       - ./reports:/app/reports
-      - ./maestro_backend/data:/app/data
+      - ./axiom_backend/data:/app/data
     working_dir: /app
     environment:
       - DEBUG_MESSENGER=true
@@ -68,14 +62,14 @@ services:
       # Allow all origins in development mode when using nginx proxy
       - ALLOW_CORS_WILDCARD=${ALLOW_CORS_WILDCARD:-true}
       # PostgreSQL connection - uses environment variables
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-maestro_user}:${POSTGRES_PASSWORD:-maestro_password}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-maestro_db}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-axiom_user}:${POSTGRES_PASSWORD:-axiom_password}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-axiom_db}
       # Admin credentials for initial setup
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
       # JWT Secret for authentication
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-this}
     networks:
-      - maestro-network
+      - axiom-network
     # GPU support - uncomment the following lines if you have a GPU and nvidia-container-toolkit installed
     deploy:
       resources:
@@ -86,19 +80,15 @@ services:
               capabilities: [gpu]
 
   frontend:
-    build:
-      context: ./maestro_frontend
-      dockerfile: Dockerfile
-      # No build args needed - using relative URLs through nginx proxy
-    image: maestro-frontend
-    container_name: maestro-frontend
+    image: axiom-frontend
+    container_name: axiom-frontend
     # Frontend is now only accessible through nginx, not directly exposed
     # ports:
     #   - "${FRONTEND_HOST}:${FRONTEND_PORT}:${FRONTEND_INTERNAL_PORT}"
     depends_on:
       - backend
     networks:
-      - maestro-network
+      - axiom-network
     environment:
       # API URLs (optional - using relative URLs through nginx proxy by default)
       - VITE_SERVER_TIMEZONE=${VITE_SERVER_TIMEZONE:-UTC}
@@ -106,30 +96,27 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-ERROR}
 
   doc-processor:
-    build:
-      context: ./maestro_backend
-      dockerfile: Dockerfile
-    image: maestro-doc-processor  # Unique image name
-    container_name: maestro-doc-processor
+    image: axiom-doc-processor  # Unique image name
+    container_name: axiom-doc-processor
     command: ["python", "-u", "services/background_document_processor.py"]
     working_dir: /app
     volumes:
-      - maestro-data:/app/ai_researcher/data
-      - ./maestro_model_cache:/root/.cache/huggingface
-      - ./maestro_datalab_cache:/root/.cache/datalab
+      - axiom-data:/app/ai_researcher/data
+      - ./axiom_model_cache:/root/.cache/huggingface
+      - ./axiom_datalab_cache:/root/.cache/datalab
       - ./reports:/app/reports
-      - ./maestro_backend/data:/app/data
+      - ./axiom_backend/data:/app/data
     depends_on:
       - backend
     networks:
-      - maestro-network
+      - axiom-network
     environment:
       - TZ=${TZ:-UTC}
       - LOG_LEVEL=${LOG_LEVEL:-ERROR}
       # Embedding optimization (set to 256 for multi-core CPU, higher for GPU)
       - EMBEDDING_BATCH_SIZE=${EMBEDDING_BATCH_SIZE:-32}
       # PostgreSQL connection - same as backend
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-maestro_user}:${POSTGRES_PASSWORD:-maestro_password}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-maestro_db}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-axiom_user}:${POSTGRES_PASSWORD:-axiom_password}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-axiom_db}
     deploy:
       resources:
         reservations:
@@ -140,29 +127,26 @@ services:
 
   # CLI service for document ingestion and management
   cli:
-    build:
-      context: ./maestro_backend
-      dockerfile: Dockerfile
-    image: maestro-cli  # Unique image name
-    container_name: maestro-cli
+    image: axiom-cli  # Unique image name
+    container_name: axiom-cli
     working_dir: /app
     volumes:
-      - maestro-data:/app/ai_researcher/data
-      - ./maestro_model_cache:/root/.cache/huggingface
-      - ./maestro_datalab_cache:/root/.cache/datalab
+      - axiom-data:/app/ai_researcher/data
+      - ./axiom_model_cache:/root/.cache/huggingface
+      - ./axiom_datalab_cache:/root/.cache/datalab
       - ./reports:/app/reports
-      - ./maestro_backend/data:/app/data
+      - ./axiom_backend/data:/app/data
       # Mount a directory for bulk PDF ingestion
       - ./pdfs:/app/pdfs  # Read-write mount for PDF files (allows deletion after processing)
     depends_on:
       - backend
     networks:
-      - maestro-network
+      - axiom-network
     environment:
       - TZ=${TZ:-UTC}
       - LOG_LEVEL=${LOG_LEVEL:-ERROR}
       # PostgreSQL connection - same as backend
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-maestro_user}:${POSTGRES_PASSWORD:-maestro_password}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-maestro_db}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-axiom_user}:${POSTGRES_PASSWORD:-axiom_password}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-axiom_db}
       # Performance settings from .env (optional, with defaults)
       - TRANSFORMERS_VERBOSITY=${TRANSFORMERS_VERBOSITY:-error}
       - TOKENIZERS_PARALLELISM=${TOKENIZERS_PARALLELISM:-false}
@@ -199,8 +183,8 @@ services:
 
 volumes:
   postgres-data:
-  maestro-data:
+  axiom-data:
 
 networks:
-  maestro-network:
+  axiom-network:
     driver: bridge
