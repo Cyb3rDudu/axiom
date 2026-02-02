@@ -5,12 +5,13 @@ import { Label } from '../../../components/ui/label'
 import { Input } from '../../../components/ui/input'
 import { Switch } from '../../../components/ui/switch'
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card'
-import { Settings, Save, RotateCcw, Loader2, X } from 'lucide-react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../components/ui/select'
+import { Settings, Save, RotateCcw, Loader2, X, Languages } from 'lucide-react'
 import { useToast } from '../../../components/ui/toast'
 import { apiClient } from '../../../config/api'
 
 type MissionSettings = {
-  [key: string]: number | boolean | undefined
+  [key: string]: number | boolean | string | undefined
   initial_research_max_depth?: number
   initial_research_max_questions?: number
   structured_research_rounds?: number
@@ -24,6 +25,13 @@ type MissionSettings = {
   max_concurrent_requests?: number
   skip_final_replanning?: boolean
   auto_create_document_group?: boolean
+  language_code?: string
+}
+
+interface Language {
+  code: string
+  name: string
+  native_name: string
 }
 
 interface MissionSettingsResponse {
@@ -113,7 +121,21 @@ export const MissionSettingsDialog: React.FC<MissionSettingsDialogProps> = ({
   const [missionSettings, setMissionSettings] = useState<MissionSettings>({})
   const [defaultSettings, setDefaultSettings] = useState<MissionSettings>({})
   const [originalSettings, setOriginalSettings] = useState<MissionSettings>({})
+  const [languages, setLanguages] = useState<Language[]>([])
   const { addToast } = useToast()
+
+  // Load available languages on mount
+  useEffect(() => {
+    const loadLanguages = async () => {
+      try {
+        const response = await apiClient.get('/api/languages/')
+        setLanguages(response.data)
+      } catch (error) {
+        console.error('Failed to load languages:', error)
+      }
+    }
+    loadLanguages()
+  }, [])
 
   const loadMissionSettings = useCallback(async () => {
     if (!missionId) return
@@ -166,7 +188,7 @@ export const MissionSettingsDialog: React.FC<MissionSettingsDialogProps> = ({
     setMissionSettings(originalSettings)
   }
 
-  const updateSetting = (key: keyof MissionSettings, value: number | boolean | undefined) => {
+  const updateSetting = (key: keyof MissionSettings, value: number | boolean | string | undefined) => {
     setMissionSettings(prev => {
       const newSettings = { ...prev }
       if (value === undefined) {
@@ -282,11 +304,48 @@ export const MissionSettingsDialog: React.FC<MissionSettingsDialogProps> = ({
             <div className="text-sm text-gray-600 bg-blue-50 p-3 rounded-md">
               <p className="font-medium mb-1">Mission-Specific Settings</p>
               <p>
-                These settings will override your user defaults for this mission only. 
-                Leave fields empty to use your default settings. 
+                These settings will override your user defaults for this mission only.
+                Leave fields empty to use your default settings.
                 Blue-highlighted fields have mission-specific overrides.
               </p>
             </div>
+
+            {/* Language & Prompts */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Languages className="h-4 w-4" />
+                  Language & Prompts
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="language_code" className="text-xs font-medium text-gray-700">
+                      Mission Language
+                    </Label>
+                  </div>
+                  <Select
+                    value={missionSettings.language_code || defaultSettings.language_code as string || 'en'}
+                    onValueChange={(value) => updateSetting('language_code', value)}
+                  >
+                    <SelectTrigger className="h-8 text-sm w-full max-w-xs">
+                      <SelectValue placeholder="Select language" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {languages.map((lang) => (
+                        <SelectItem key={lang.code} value={lang.code}>
+                          {lang.native_name} ({lang.name})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-gray-500 leading-tight">
+                    AI prompts and content generation language
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
 
             {/* Compact Grid Layout */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
