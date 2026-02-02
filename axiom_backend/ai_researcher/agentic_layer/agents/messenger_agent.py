@@ -14,7 +14,8 @@ from ai_researcher.agentic_layer.utils.json_format_helper import (
     get_json_schema_format,
     get_json_object_format,
     enhance_messages_for_json_object,
-    should_retry_with_json_object
+    should_retry_with_json_object,
+    should_retry_without_response_format
 )
 
 from ai_researcher.agentic_layer.agents.base_agent import BaseAgent, AgentOutput
@@ -479,12 +480,12 @@ Output:
                     logger.info(f"Content preview: {msg['content'][:100]}...")
             logger.info("=" * 80)
         
-        # Retry logic for schema validation failures with json_object fallback
+        # Retry logic with 3-level fallback: json_schema -> json_object -> none
         max_retries = 3
         retry_count = 0
         last_error = None
-        use_json_object = False  # Start with json_schema, fallback to json_object if needed
-        max_format_attempts = 2  # Try json_schema, then json_object
+        format_mode = "json_schema"  # Start with json_schema, fallback through json_object to none
+        max_format_attempts = 3  # Try json_schema, then json_object, then none
 
         for format_attempt in range(max_format_attempts):
             while retry_count < max_retries:
@@ -493,12 +494,18 @@ Output:
                     # Send the properly structured messages with Pydantic schema
 
                     # Prepare response format based on fallback state
-                    if use_json_object:
+                    if format_mode == "json_object":
                         # Use json_object format with enhanced prompts
                         response_format_config = get_json_object_format()
                         # Enhance messages with schema instructions
                         enhanced_messages = enhance_messages_for_json_object(messages, MessengerIntentResponse)
-                        logger.info(f"MessengerAgent: Using json_object format due to schema compatibility issue")
+                        logger.info(f"MessengerAgent: Using json_object format (fallback level 2)")
+                    elif format_mode == "none":
+                        # No response_format parameter - prompt-only JSON mode
+                        response_format_config = None
+                        # Enhance messages with schema instructions in the prompt
+                        enhanced_messages = enhance_messages_for_json_object(messages, MessengerIntentResponse)
+                        logger.info(f"MessengerAgent: Using prompt-only JSON mode (fallback level 3)")
                     else:
                         # Use json_schema format (OpenAI structured outputs)
                         schema = MessengerIntentResponse.model_json_schema()
@@ -904,15 +911,20 @@ Output:
                     logger.error(f"Error during MessengerAgent LLM call (attempt {retry_count + 1}/{max_retries}): {e}", exc_info=True)
                     last_error = e
 
-                    # Check if this is a json_schema compatibility issue before breaking
+                    # Check if this is a response_format compatibility issue before breaking
                     if hasattr(e, 'status_code') and e.status_code == 400:
-                        if not use_json_object and should_retry_with_json_object(e):
-                            logger.info(f"MessengerAgent: Detected json_schema compatibility issue: {str(e)[:200]}")
-                            use_json_object = True
+                        if format_mode == "json_schema" and should_retry_with_json_object(e):
+                            logger.info(f"MessengerAgent: Detected json_schema compatibility issue, falling back to json_object: {str(e)[:200]}")
+                            format_mode = "json_object"
                             retry_count = 0  # Reset retry count for json_object attempt
                             break  # Break inner loop to retry with json_object
+                        elif format_mode == "json_object" and should_retry_without_response_format(e):
+                            logger.info(f"MessengerAgent: Detected json_object compatibility issue, falling back to prompt-only mode: {str(e)[:200]}")
+                            format_mode = "none"
+                            retry_count = 0  # Reset retry count for prompt-only attempt
+                            break  # Break inner loop to retry without response_format
                         else:
-                            # Other 400 error, not schema-related, or already tried json_object
+                            # Other 400 error, not format-related, or already tried all fallbacks
                             final_response = handle_api_error(e)
                             return final_action, final_request, formatting_preferences, None, model_details
 
