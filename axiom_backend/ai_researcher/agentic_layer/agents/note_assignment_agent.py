@@ -33,7 +33,7 @@ class NoteAssignmentAgent(BaseAgent):
     agent_name = "NoteAssignmentAgent"
     agent_description = "Assigns relevant notes to specific sections of a report outline."
 
-    def __init__(self, model_dispatcher: ModelDispatcher, controller: Optional[Any] = None):
+    def __init__(self, model_dispatcher: ModelDispatcher, controller: Optional[Any] = None, language_code: str = "en"):
         """
         Initializes the NoteAssignmentAgent.
 
