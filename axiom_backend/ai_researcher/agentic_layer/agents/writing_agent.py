@@ -42,7 +42,8 @@ class WritingAgent(BaseAgent):
         model_dispatcher: ModelDispatcher,
         model_name: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        controller: Optional[Any] = None # Add controller parameter
+        controller: Optional[Any] = None, # Add controller parameter
+        language_code: str = "en" # Add language_code parameter with default
     ):
         agent_name = "WritingAgent"
         # Determine the correct model name based on the 'writing' role from config

@@ -16,7 +16,7 @@ setup_logging()  # Will use LOG_LEVEL environment variable
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="MAESTRO API",
+    title="Axiom API",
     description="AI Research Assistant API",
     version="2.0.0-alpha"
 )
@@ -222,19 +222,19 @@ async def startup_event():
     
     # Print startup completion message directly to stdout (visible at any log level)
     # Get the external accessible port from environment (what nginx exposes)
-    maestro_port = os.getenv("MAESTRO_PORT", "80")
+    axiom_port = os.getenv("Axiom_PORT", "80")
     
     # Determine the access URL based on configuration
     # This matches what the setup script configures
-    if maestro_port == "80":
+    if axiom_port == "80":
         access_url = "http://localhost"
     else:
-        access_url = f"http://localhost:{maestro_port}"
+        access_url = f"http://localhost:{axiom_port}"
     
     print("\n" + "="*60)
-    print("MAESTRO Backend Started Successfully!")
+    print("Axiom Backend Started Successfully!")
     print("="*60)
-    print(f"Access MAESTRO at: {access_url}")
+    print(f"Access Axiom at: {access_url}")
     print(f"API documentation: {access_url}/docs")
     print("Ready to handle requests")
     print("="*60 + "\n", flush=True)
@@ -252,7 +252,7 @@ async def shutdown_event():
 @app.get("/")
 def read_root():
     return {
-        "message": "MAESTRO API v2.0",
+        "message": "Axiom API v2.0",
         "status": "running",
         "docs": "/docs"
     }
