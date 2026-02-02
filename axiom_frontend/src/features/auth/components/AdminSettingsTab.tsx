@@ -54,7 +54,7 @@ export const AdminSettingsTab: React.FC = () => {
   const [systemSettings, setSystemSettings] = useState<SystemSettings>({
     registration_enabled: true,
     max_users_allowed: 100,
-    instance_name: 'MAESTRO Instance'
+    instance_name: 'Axiom Instance'
   });
   
   const [newUser, setNewUser] = useState({

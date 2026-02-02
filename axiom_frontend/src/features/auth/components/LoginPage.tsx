@@ -59,7 +59,7 @@ export const LoginPage: React.FC = () => {
             <div className="relative group">
               <img 
                 src={theme === 'dark' ? '/icon_dark.png' : '/icon_original.png'} 
-                alt="MAESTRO Logo" 
+                alt="Axiom Logo" 
                 className="h-16 w-16 transition-transform hover:scale-105 drop-shadow-sm"
               />
               <div className="absolute inset-0 bg-gradient-to-r from-purple-500/10 to-blue-500/10 rounded-full blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 -z-10"></div>
@@ -68,7 +68,7 @@ export const LoginPage: React.FC = () => {
           
           <div className="space-y-2">
             <h1 className="text-3xl font-bold text-foreground tracking-tight">
-              MAESTRO
+              Axiom
             </h1>
             <p className="text-muted-foreground">
               AI Research Assistant

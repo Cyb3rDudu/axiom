@@ -264,12 +264,12 @@ export const WritingChatPanel: React.FC = () => {
           <div className="flex justify-center mb-6">
             <img 
               src={theme === 'dark' ? '/icon_dark.png' : '/icon_original.png'} 
-              alt="MAESTRO Logo" 
+              alt="Axiom Logo" 
               className="h-16 w-16 transition-transform hover:scale-105"
             />
           </div>
           <h2 className="text-2xl font-bold text-foreground mb-4">
-            Welcome to MAESTRO Writing
+            Welcome to Axiom Writing
           </h2>
           <p className="text-muted-foreground mb-6">
             AI writing assistant ready to help with content generation and editing.

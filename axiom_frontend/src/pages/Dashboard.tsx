@@ -117,7 +117,7 @@ export const Dashboard: React.FC = () => {
             <div className="relative">
               <img 
                 src={theme === 'dark' ? '/icon_dark.png' : '/icon_original.png'} 
-                alt="MAESTRO Logo" 
+                alt="Axiom Logo" 
                 className="h-16 w-16 transition-transform hover:scale-105"
               />
               <div className="absolute inset-0 bg-gradient-to-r from-blue-500/20 to-purple-500/20 rounded-full blur-xl -z-10"></div>
@@ -125,7 +125,7 @@ export const Dashboard: React.FC = () => {
           </div>
           
           <h1 className="text-4xl font-bold text-foreground mb-4 tracking-tight">
-            MAESTRO
+            Axiom
           </h1>
           
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">

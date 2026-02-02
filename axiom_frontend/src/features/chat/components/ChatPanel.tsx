@@ -714,12 +714,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
           <div className="flex justify-center mb-6">
             <img 
               src={theme === 'dark' ? '/icon_dark.png' : '/icon_original.png'} 
-              alt="MAESTRO Logo" 
+              alt="Axiom Logo" 
               className="h-16 w-16 transition-transform hover:scale-105"
             />
           </div>
           <h2 className="text-2xl font-bold text-foreground mb-4">
-            Welcome to MAESTRO
+            Welcome to Axiom
           </h2>
           <p className="text-muted-foreground mb-6">
             AI research assistant ready to help with analysis and insights.
@@ -879,7 +879,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
                 <div className="bg-card border border-border text-text-primary max-w-xs lg:max-w-2xl px-3 py-2 rounded-xl rounded-bl-md shadow-sm">
                   <div className="flex items-center space-x-2">
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                    <span className="text-xs text-text-tertiary">MAESTRO is thinking...</span>
+                    <span className="text-xs text-text-tertiary">Axiom is thinking...</span>
                   </div>
                 </div>
               </div>

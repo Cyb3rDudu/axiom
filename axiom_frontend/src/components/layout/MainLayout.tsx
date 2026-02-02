@@ -138,12 +138,12 @@ export const MainLayout: React.FC = () => {
               <div className="relative">
                 <img 
                   src={theme === 'dark' ? '/icon_dark.png' : '/icon_original.png'} 
-                  alt="MAESTRO Logo" 
+                  alt="Axiom Logo" 
                   className="h-7 w-7 transition-transform group-hover:scale-105"
                 />
               </div>
               <div className="flex items-baseline space-x-2">
-                <h1 className="text-xl font-semibold text-foreground tracking-tight">MAESTRO</h1>
+                <h1 className="text-xl font-semibold text-foreground tracking-tight">Axiom</h1>
                 <span className="text-xs text-muted-foreground/80 hidden md:inline font-medium">
                   AI Research Assistant
                 </span>
