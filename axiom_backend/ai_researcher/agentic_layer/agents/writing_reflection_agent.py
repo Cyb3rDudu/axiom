@@ -31,7 +31,8 @@ class WritingReflectionAgent(BaseAgent):
         model_dispatcher: ModelDispatcher,
         model_name: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        controller: Optional[Any] = None # Add controller parameter
+        controller: Optional[Any] = None, # Add controller parameter
+        language_code: str = "en" # Add language_code parameter
     ):
         agent_name = "WritingReflectionAgent"
         # Determine model based on 'reflection' role in config (or a new 'writing_reflection' role if defined)
