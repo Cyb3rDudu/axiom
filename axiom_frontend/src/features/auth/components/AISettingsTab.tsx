@@ -1235,7 +1235,7 @@ export const AISettingsTab: React.FC = () => {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="openrouter">OpenRouter</SelectItem>
-<parameter name="openai">OpenAI</SelectItem>
+                      <SelectItem value="openai">OpenAI</SelectItem>
                       <SelectItem value="deepseek">DeepSeek</SelectItem>
                       <SelectItem value="custom">Custom</SelectItem>
                     </SelectContent>
