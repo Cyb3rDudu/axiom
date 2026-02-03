@@ -7,37 +7,87 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Define the metadata schema based on the example
-# (Could also be loaded from a separate JSON/YAML file)
+# Enhanced metadata schema supporting papers, books, and web sources
 METADATA_SCHEMA = {
     "type": "object",
     "properties": {
-        "title": {"type": "string", "description": "The full title of the paper/document"},
+        "document_type": {
+            "type": "string",
+            "enum": ["paper", "book", "web", "other"],
+            "description": "Type of document: 'paper' (academic paper/article), 'book', 'web' (web article/blog), or 'other'"
+        },
+        "title": {"type": "string", "description": "The full title of the document"},
         "authors": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "List of author names"
+            "description": "List of author names. Use empty array if no authors found."
         },
-        "journal_or_source": {"type": ["string", "null"], "description": "Full name of the journal, conference, or source website/organization"},
         "publication_year": {"type": ["integer", "null"], "description": "Publication year"},
-        "abstract": {"type": ["string", "null"], "description": "The abstract or a brief summary of the document"},
         "keywords": {
             "type": "array",
             "items": {"type": "string"},
             "description": "List of relevant keywords or topics"
-        }
+        },
+        "description": {"type": ["string", "null"], "description": "Abstract, summary, or description of the content"},
+
+        # Paper-specific fields
+        "journal_or_source": {"type": ["string", "null"], "description": "For papers: journal, conference, or preprint server (e.g., 'Nature', 'arXiv')"},
+        "doi": {"type": ["string", "null"], "description": "For papers: Digital Object Identifier"},
+
+        # Book-specific fields
+        "publisher": {"type": ["string", "null"], "description": "For books: publisher name"},
+        "edition": {"type": ["string", "null"], "description": "For books: edition information (e.g., '2nd Edition', 'Revised')"},
+        "isbn": {"type": ["string", "null"], "description": "For books: ISBN number"},
+        "page_count": {"type": ["integer", "null"], "description": "For books: total number of pages"},
+        "chapters": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "For books: list of main chapter titles from table of contents (limit to first 10-15)"
+        },
+
+        # Web source-specific fields
+        "url": {"type": ["string", "null"], "description": "For web sources: original URL if mentioned in the text"},
+        "website_name": {"type": ["string", "null"], "description": "For web sources: name of the website or blog"},
+        "organization": {"type": ["string", "null"], "description": "For web sources or reports: organization/company name"}
     },
-    "required": ["title", "authors"] # Make title and authors minimally required
+    "required": ["document_type", "title"] # Minimal requirements
 }
 
-# Example metadata for the schema prompt
-METADATA_EXAMPLE = {
-    "title": "Attention Is All You Need",
-    "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Lukasz Kaiser", "Illia Polosukhin"],
-    "journal_or_source": "arXiv",
-    "publication_year": 2017,
-    "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks...",
-    "keywords": ["attention mechanism", "transformer", "sequence transduction", "natural language processing"]
+# Example metadata for different document types
+METADATA_EXAMPLES = {
+    "paper": {
+        "document_type": "paper",
+        "title": "Attention Is All You Need",
+        "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar"],
+        "journal_or_source": "arXiv",
+        "publication_year": 2017,
+        "doi": "10.48550/arXiv.1706.03762",
+        "description": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks...",
+        "keywords": ["attention mechanism", "transformer", "NLP"]
+    },
+    "book": {
+        "document_type": "book",
+        "title": "Deep Learning",
+        "authors": ["Ian Goodfellow", "Yoshua Bengio", "Aaron Courville"],
+        "publisher": "MIT Press",
+        "publication_year": 2016,
+        "isbn": "978-0262035613",
+        "edition": "1st Edition",
+        "page_count": 800,
+        "description": "An introduction to a broad range of topics in deep learning...",
+        "chapters": ["Introduction", "Linear Algebra", "Probability", "Neural Networks"],
+        "keywords": ["deep learning", "machine learning", "neural networks"]
+    },
+    "web": {
+        "document_type": "web",
+        "title": "The State of AI in 2024",
+        "authors": ["Jane Smith"],
+        "website_name": "TechCrunch",
+        "organization": "TechCrunch",
+        "publication_year": 2024,
+        "description": "An analysis of current trends in artificial intelligence...",
+        "keywords": ["AI", "technology", "trends"]
+    }
 }
 
 class MetadataExtractor:
@@ -144,16 +194,35 @@ class MetadataExtractor:
 
         # Construct the prompt
         system_prompt = "You are a meticulous metadata extraction assistant. You always return valid JSON conforming exactly to the provided schema. Extract information based *only* on the provided text."
-        user_prompt = f"""Extract metadata from the following document text snippet. Follow the JSON schema precisely. Use `null` for fields you cannot confidently determine from the text.
+        user_prompt = f"""Extract metadata from the following document text snippet. Follow the JSON schema precisely.
+
+IMPORTANT INSTRUCTIONS:
+1. First determine the document_type: 'paper' (academic paper), 'book', 'web' (web article/blog), or 'other'
+2. Extract ALL relevant fields based on the document type
+3. Use `null` for fields you cannot confidently determine
+4. For arrays (authors, keywords, chapters), use empty array [] if none found
+5. Extract chapter titles from table of contents for books (limit to first 10-15 chapters)
 
 JSON Schema:
 ```json
 {json.dumps(METADATA_SCHEMA, indent=2)}
 ```
 
-Example Output Format:
+Example Outputs by Document Type:
+
+For Academic Papers:
 ```json
-{json.dumps(METADATA_EXAMPLE, indent=2)}
+{json.dumps(METADATA_EXAMPLES["paper"], indent=2)}
+```
+
+For Books:
+```json
+{json.dumps(METADATA_EXAMPLES["book"], indent=2)}
+```
+
+For Web Sources:
+```json
+{json.dumps(METADATA_EXAMPLES["web"], indent=2)}
 ```
 
 Document Text Snippet:
@@ -161,7 +230,7 @@ Document Text Snippet:
 {text_sample_truncated}
 ---
 
-Extract the metadata based *only* on the text provided above and return it as JSON matching the schema.
+Extract the metadata based *only* on the text provided above and return it as JSON matching the schema. Include only fields relevant to the document type you detected.
 """
 
         messages = [
@@ -223,34 +292,53 @@ Extract the metadata based *only* on the text provided above and return it as JS
             # Parse the JSON response
             metadata = json.loads(response_content)
             print("MetadataExtractor: Successfully parsed JSON response.")
-            
-            # Debug: Print the extracted metadata
-            print(f"MetadataExtractor: Extracted metadata:")
-            print(f"  - Title: {metadata.get('title', 'N/A')}")
-            print(f"  - Authors: {metadata.get('authors', [])}")
-            print(f"  - Journal/Source: {metadata.get('journal_or_source', 'N/A')}")
-            print(f"  - Year: {metadata.get('publication_year', 'N/A')}")
-            print(f"  - Keywords: {metadata.get('keywords', [])}")
-            if metadata.get('abstract'):
-                print(f"  - Abstract: {metadata.get('abstract', '')[:100]}...")
 
-            # Basic validation (more robust validation using Pydantic could be added)
+            # Basic validation
             if not isinstance(metadata, dict):
                  print(f"MetadataExtractor: LLM response is not a JSON object: {type(metadata)}")
                  return None
             if "title" not in metadata or not metadata["title"]:
                  print("MetadataExtractor: Error - Extracted metadata missing required 'title'.")
-                 return None # Fail if required 'title' is missing
+                 return None
 
-            # --- ADDED VALIDATION ---
-            # Check for the 'authors' field as it's also required by the schema
+            # Ensure document_type is set
+            if "document_type" not in metadata:
+                print("MetadataExtractor: Warning - 'document_type' missing, defaulting to 'other'.")
+                metadata["document_type"] = "other"
+
+            # Ensure authors field exists
             if "authors" not in metadata or not isinstance(metadata["authors"], list):
                 print("MetadataExtractor: Warning - 'authors' field is missing or invalid, using empty list.")
                 metadata["authors"] = []
-            
-            # For web documents, empty authors list is acceptable
-            if len(metadata.get("authors", [])) == 0:
-                print("MetadataExtractor: Note - Empty authors list (common for web documents).")
+
+            # Debug: Print the extracted metadata based on document type
+            doc_type = metadata.get('document_type', 'other')
+            print(f"MetadataExtractor: Extracted metadata for {doc_type.upper()}:")
+            print(f"  - Title: {metadata.get('title', 'N/A')}")
+            print(f"  - Authors: {metadata.get('authors', [])}")
+            print(f"  - Year: {metadata.get('publication_year', 'N/A')}")
+            print(f"  - Keywords: {metadata.get('keywords', [])}")
+
+            if doc_type == "paper":
+                print(f"  - Journal: {metadata.get('journal_or_source', 'N/A')}")
+                print(f"  - DOI: {metadata.get('doi', 'N/A')}")
+                if metadata.get('description'):
+                    print(f"  - Abstract: {metadata.get('description', '')[:100]}...")
+            elif doc_type == "book":
+                print(f"  - Publisher: {metadata.get('publisher', 'N/A')}")
+                print(f"  - Edition: {metadata.get('edition', 'N/A')}")
+                print(f"  - ISBN: {metadata.get('isbn', 'N/A')}")
+                print(f"  - Pages: {metadata.get('page_count', 'N/A')}")
+                chapters = metadata.get('chapters', [])
+                if chapters:
+                    print(f"  - Chapters: {len(chapters)} chapters extracted")
+            elif doc_type == "web":
+                print(f"  - Website: {metadata.get('website_name', 'N/A')}")
+                print(f"  - Organization: {metadata.get('organization', 'N/A')}")
+                print(f"  - URL: {metadata.get('url', 'N/A')}")
+
+            if metadata.get('description'):
+                print(f"  - Description: {metadata.get('description', '')[:100]}...")
 
             # Optional: Check for publication_year if you want to be even stricter,
             # but it's not required by the current schema definition.
@@ -294,7 +382,7 @@ Extract the metadata based *only* on the text provided above and return it as JS
                     
                     metadata = json.loads(response_content)
                     print("MetadataExtractor: Successfully parsed JSON response from GPT-5 retry.")
-                    
+
                     # Validate the metadata
                     if not isinstance(metadata, dict):
                         print(f"MetadataExtractor: LLM response is not a JSON object: {type(metadata)}")
@@ -302,12 +390,17 @@ Extract the metadata based *only* on the text provided above and return it as JS
                     if "title" not in metadata or not metadata["title"]:
                         print("MetadataExtractor: Error - Extracted metadata missing required 'title'.")
                         return None
-                    
-                    # Allow empty authors for web documents
+
+                    # Ensure document_type is set
+                    if "document_type" not in metadata:
+                        print("MetadataExtractor: Warning - 'document_type' missing in retry, defaulting to 'other'.")
+                        metadata["document_type"] = "other"
+
+                    # Ensure authors field exists
                     if "authors" not in metadata or not isinstance(metadata["authors"], list):
                         print("MetadataExtractor: Warning - 'authors' field is missing or invalid in retry, using empty list.")
                         metadata["authors"] = []
-                    
+
                     return metadata
                     
                 except Exception as retry_e:
