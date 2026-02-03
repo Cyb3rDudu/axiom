@@ -704,7 +704,10 @@ class DocumentProcessor:
                     image_dir.mkdir(parents=True, exist_ok=True)
 
                     # Save images from marker output to organized structure
-                    extracted_images, image_map = self._save_marker_images(doc_id, marker_images, image_dir)
+                    result = self._save_marker_images(doc_id, marker_images, image_dir)
+                    logger.info(f"_save_marker_images returned type: {type(result)}, value: {result}")
+                    extracted_images, image_map = result
+                    logger.info(f"extracted_images type: {type(extracted_images)}, image_map type: {type(image_map)}, image_map value: {image_map}")
 
                     if extracted_images:
                         # Update markdown references with proper image mapping
