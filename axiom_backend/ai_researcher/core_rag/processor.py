@@ -279,11 +279,11 @@ class DocumentProcessor:
             # Default to assuming no tables to avoid crashes
             return False
 
-    def _convert_pdf_with_table_handling(self, pdf_path: Path) -> str:
+    def _convert_pdf_with_table_handling(self, pdf_path: Path) -> Tuple[str, Dict[str, bytes]]:
         """
         Convert PDF to markdown with intelligent table handling and fallback.
         Includes 9-hour timeout protection to prevent infinite hangs.
-        Returns the markdown content or raises an exception if all attempts fail.
+        Returns a tuple of (markdown_content, images_dict) or raises an exception if all attempts fail.
         """
         pdf_str = str(pdf_path)
         timeout_seconds = 32400  # 9 hours (was 6 hours = 21600, now increased to 9 hours)
@@ -300,7 +300,8 @@ class DocumentProcessor:
 
                 if result and result.markdown:
                     logger.info(f"Successfully converted {pdf_path.name} with table recognition")
-                    return result.markdown
+                    images = getattr(result, 'images', {})
+                    return result.markdown, images
                 else:
                     logger.warning(f"Table conversion returned empty result for {pdf_path.name}")
                     raise ValueError("Empty markdown result from table conversion")
@@ -331,7 +332,8 @@ class DocumentProcessor:
 
                         if result and result.markdown:
                             logger.info(f"Successfully converted {pdf_path.name} without table recognition (fallback)")
-                            return result.markdown
+                            images = getattr(result, 'images', {})
+                            return result.markdown, images
                         else:
                             logger.error(f"Fallback conversion also returned empty result for {pdf_path.name}")
                             raise ValueError("Empty markdown result from fallback conversion")
@@ -356,7 +358,8 @@ class DocumentProcessor:
 
                 if result and result.markdown:
                     logger.info(f"Successfully converted {pdf_path.name} without table recognition")
-                    return result.markdown
+                    images = getattr(result, 'images', {})
+                    return result.markdown, images
                 else:
                     logger.error(f"Standard conversion returned empty result for {pdf_path.name}")
                     raise ValueError("Empty markdown result from standard conversion")
@@ -406,40 +409,35 @@ class DocumentProcessor:
             print(f"Error extracting header/footer text from {pdf_path}: {e}")
             return ""
 
-    def _move_images_to_organized_structure(self, doc_id: str, image_dir: Path) -> List[Path]:
-        """Move marker-extracted images to organized directory."""
-        import re
-        moved_images = []
+    def _save_marker_images(self, doc_id: str, marker_images: Dict[str, bytes], image_dir: Path) -> List[Path]:
+        """Save images from Marker's result to organized directory."""
+        saved_images = []
 
         try:
-            # Marker typically saves images in the markdown directory with doc_id prefix
-            # Look for images with pattern like: {doc_id}_image_*.png or similar
-            markdown_dir_images = list(self.markdown_dir.glob(f"{doc_id}*"))
+            if not marker_images:
+                logger.debug(f"No images to save for doc_id {doc_id}")
+                return saved_images
 
-            # Filter for actual image files
-            image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'}
-            image_files = [f for f in markdown_dir_images if f.suffix.lower() in image_extensions]
-
-            if not image_files:
-                logger.debug(f"No images found for doc_id {doc_id}")
-                return moved_images
-
-            # Move each image to organized structure
-            for idx, image_file in enumerate(sorted(image_files)):
-                new_filename = f"image_{idx}{image_file.suffix}"
+            # Save each image from the marker images dict
+            for idx, (original_filename, image_data) in enumerate(marker_images.items()):
+                # Extract extension from original filename
+                ext = Path(original_filename).suffix or '.png'
+                new_filename = f"image_{idx}{ext}"
                 new_path = image_dir / new_filename
 
-                # Move the file
-                shutil.move(str(image_file), str(new_path))
-                moved_images.append(new_path)
-                logger.debug(f"Moved image: {image_file.name} -> {new_path}")
+                # Write image data to file
+                with open(new_path, 'wb') as f:
+                    f.write(image_data)
 
-            logger.info(f"Moved {len(moved_images)} images for doc_id {doc_id}")
-            return moved_images
+                saved_images.append(new_path)
+                logger.debug(f"Saved image: {original_filename} -> {new_path}")
+
+            logger.info(f"Saved {len(saved_images)} images for doc_id {doc_id}")
+            return saved_images
 
         except Exception as e:
-            logger.warning(f"Error moving images for doc_id {doc_id}: {e}")
-            return moved_images
+            logger.warning(f"Error saving images for doc_id {doc_id}: {e}")
+            return saved_images
 
     def _update_markdown_image_paths(self, markdown: str, doc_id: str, images: List[Path]) -> str:
         """Update image references in markdown to new paths."""
@@ -644,7 +642,7 @@ class DocumentProcessor:
             # If not loaded (doesn't exist, force_reembed is false, or loading failed), run Marker
             print(f"  Converting PDF to Markdown using Marker with intelligent table handling...")
             try:
-                markdown_content = self._convert_pdf_with_table_handling(pdf_path)
+                markdown_content, marker_images = self._convert_pdf_with_table_handling(pdf_path)
                 if not markdown_content:
                     print(f"Warning: Marker produced empty markdown for {pdf_path.name}. Skipping document.")
                     # Update status? Maybe not, as it might be a valid empty doc. Let chunking handle it.
@@ -658,14 +656,14 @@ class DocumentProcessor:
 
             # --- Handle extracted images ---
             from ai_researcher import config
-            if config.ENABLE_IMAGE_EXTRACTION:
+            if config.ENABLE_IMAGE_EXTRACTION and marker_images:
                 try:
                     print(f"  Processing extracted images...")
                     image_dir = self.image_dir / doc_id
                     image_dir.mkdir(parents=True, exist_ok=True)
 
-                    # Move images from marker output to organized structure
-                    extracted_images = self._move_images_to_organized_structure(doc_id, image_dir)
+                    # Save images from marker output to organized structure
+                    extracted_images = self._save_marker_images(doc_id, marker_images, image_dir)
 
                     if extracted_images:
                         # Update markdown references
