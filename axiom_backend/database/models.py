@@ -335,7 +335,7 @@ class DocumentImage(Base):
     image_path = Column(Text, nullable=False)
     alt_text = Column(Text, nullable=True)
     image_embedding = Column(Text, nullable=True)  # vector(512) by pgvector
-    metadata = Column(JSONB, nullable=False, default={})
+    image_metadata = Column(JSONB, nullable=False, default={})  # Renamed from metadata to avoid SQLAlchemy reserved word
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

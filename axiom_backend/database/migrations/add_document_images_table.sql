@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS document_images (
     image_path TEXT NOT NULL,
     alt_text TEXT,
     image_embedding VECTOR(512),  -- CLIP ViT-B/32 produces 512-dimensional embeddings
-    metadata JSONB DEFAULT '{}'::jsonb,
+    image_metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -29,4 +29,4 @@ WITH (m = 16, ef_construction = 64);
 -- Add comment to table
 COMMENT ON TABLE document_images IS 'Stores image embeddings and metadata for images extracted from documents using CLIP model';
 COMMENT ON COLUMN document_images.image_embedding IS '512-dimensional CLIP ViT-B/32 embedding vector';
-COMMENT ON COLUMN document_images.metadata IS 'Additional metadata about the image (e.g., dimensions, file size, position in document)';
+COMMENT ON COLUMN document_images.image_metadata IS 'Additional metadata about the image (e.g., dimensions, file size, position in document)';

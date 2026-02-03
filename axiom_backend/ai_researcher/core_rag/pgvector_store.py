@@ -551,9 +551,9 @@ class PGVectorStore:
                         # Insert using raw SQL for pgvector support
                         insert_query = text("""
                             INSERT INTO document_images
-                            (id, doc_id, chunk_id, image_id, image_path, alt_text, image_embedding, metadata)
+                            (id, doc_id, chunk_id, image_id, image_path, alt_text, image_embedding, image_metadata)
                             VALUES
-                            (gen_random_uuid(), :doc_id, :chunk_id, :image_id, :image_path, :alt_text, CAST(:image_embedding AS vector(512)), CAST(:metadata AS jsonb))
+                            (gen_random_uuid(), :doc_id, :chunk_id, :image_id, :image_path, :alt_text, CAST(:image_embedding AS vector(512)), CAST(:image_metadata AS jsonb))
                         """)
 
                         db.execute(insert_query, {
@@ -563,7 +563,7 @@ class PGVectorStore:
                             'image_path': image_path,
                             'alt_text': alt_text,
                             'image_embedding': str(embedding),
-                            'metadata': json.dumps(metadata)
+                            'image_metadata': json.dumps(metadata)
                         })
 
                     images_added += 1
