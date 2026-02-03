@@ -705,11 +705,19 @@ class DocumentProcessor:
 
                     # Save images from marker output to organized structure
                     result = self._save_marker_images(doc_id, marker_images, image_dir)
-                    print(f"[DEBUG] _save_marker_images returned type: {type(result)}")
-                    print(f"[DEBUG] _save_marker_images returned value: {result}")
+
+                    # Debug: write to file
+                    with open(f"/tmp/debug_{doc_id}.txt", "w") as f:
+                        f.write(f"Result type: {type(result)}\n")
+                        f.write(f"Result value: {result}\n")
+
                     extracted_images, image_map = result
-                    print(f"[DEBUG] After unpacking - extracted_images type: {type(extracted_images)}, len: {len(extracted_images) if isinstance(extracted_images, list) else 'N/A'}")
-                    print(f"[DEBUG] After unpacking - image_map type: {type(image_map)}, value: {image_map}")
+
+                    # Debug: write unpacked values
+                    with open(f"/tmp/debug_{doc_id}.txt", "a") as f:
+                        f.write(f"Extracted images type: {type(extracted_images)}\n")
+                        f.write(f"Image map type: {type(image_map)}\n")
+                        f.write(f"Image map value: {image_map}\n")
 
                     if extracted_images:
                         # Update markdown references with proper image mapping
