@@ -475,6 +475,15 @@ class DocumentProcessor:
 
             logger.info(f"Saved {len(saved_images)} images for doc_id {doc_id}")
             logger.info(f"Image mapping created: {image_map}")
+
+            # Debug: write what we're returning
+            with open(f"/tmp/save_images_return_{doc_id}.txt", "w") as f:
+                f.write(f"Returning tuple:\n")
+                f.write(f"  saved_images type: {type(saved_images)}, len: {len(saved_images)}\n")
+                f.write(f"  saved_images value: {saved_images}\n")
+                f.write(f"  image_map type: {type(image_map)}\n")
+                f.write(f"  image_map value: {image_map}\n")
+
             return saved_images, image_map
 
         except Exception as e:
