@@ -474,6 +474,7 @@ class DocumentProcessor:
                 logger.debug(f"Saved image: {original_filename} -> {new_path}")
 
             logger.info(f"Saved {len(saved_images)} images for doc_id {doc_id}")
+            logger.info(f"Image mapping created: {image_map}")
             return saved_images, image_map
 
         except Exception as e:
@@ -505,11 +506,11 @@ class DocumentProcessor:
                 if old_filename in image_map:
                     new_filename = image_map[old_filename]
                     new_ref = f"/api/images/{doc_id}/{new_filename}"
-                    logger.debug(f"Updated image reference: {old_path} -> {new_ref}")
+                    logger.info(f"Updated image reference: {old_path} -> {new_ref}")
                     return f"![{alt_text}]({new_ref})"
 
                 # If not found in exact mapping, keep original
-                logger.debug(f"No mapping found for image: {old_filename}")
+                logger.warning(f"No mapping found for image: {old_filename}, available mappings: {list(image_map.keys())}")
                 return match.group(0)
 
             updated_markdown = re.sub(r'!\[([^\]]*)\]\(([^\)]+)\)', replace_image_path, markdown)
