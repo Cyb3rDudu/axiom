@@ -435,9 +435,10 @@ class BackgroundDocumentProcessor:
 
             if not markdown_content:
                 raise Exception(f"Document processing produced empty markdown content for {original_filename}")
-            
+
             # Handle extracted images from Marker
             from ai_researcher import config
+            extracted_images = []  # Track extracted images for later embedding
             if config.ENABLE_IMAGE_EXTRACTION and marker_images:
                 try:
                     print(f"[{doc_id}] Processing extracted images...")
@@ -525,6 +526,23 @@ class BackgroundDocumentProcessor:
                     )
                     chunks_added_count = len(chunks)
                     print(f"[{doc_id}] Successfully added {chunks_added_count} chunks to vector store")
+
+                    # NEW: Embed and store images if they were extracted
+                    if config.ENABLE_IMAGE_EMBEDDINGS and extracted_images:
+                        try:
+                            print(f"[{doc_id}] Processing images for embedding...")
+                            image_dir = processor.image_dir / doc_id
+                            image_data = processor._process_images_for_doc(doc_id, chunks, image_dir)
+
+                            if image_data:
+                                print(f"[{doc_id}] Embedding and storing {len(image_data)} images...")
+                                processor._embed_and_store_images(doc_id, image_data)
+                                print(f"[{doc_id}] Successfully embedded and stored {len(image_data)} images")
+                            else:
+                                print(f"[{doc_id}] No image data to embed (images may not be referenced in chunks)")
+                        except Exception as e:
+                            print(f"[{doc_id}] Warning: Image embedding failed: {e}")
+                            # Non-fatal error, continue with document processing
                 else:
                     chunks_added_count = 0
                     print(f"[{doc_id}] Skipping embedding/storing: No embedder or vector store")
