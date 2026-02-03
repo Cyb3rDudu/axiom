@@ -25,9 +25,10 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - MARKER_USE_LLM=${MARKER_USE_LLM:-True}
-      - MARKER_LLM_SERVICE=${MARKER_LLM_SERVICE:-marker.services.ollama.OllamaService}
+      - MARKER_LLM_SERVICE=${MARKER_LLM_SERVICE:-marker.services.openai.OpenAIService}
       - MARKER_LLM_MODEL=${MARKER_LLM_MODEL:-llava:7b}
-      - MARKER_OLLAMA_BASE_URL=${MARKER_OLLAMA_BASE_URL:-http://172.17.0.1:11434}
+      - MARKER_LLM_API_KEY=${MARKER_LLM_API_KEY:-ollama}
+      - MARKER_LLM_BASE_URL=${MARKER_LLM_BASE_URL:-http://172.17.0.1:11434/v1}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
       - ALLOW_CORS_WILDCARD=${ALLOW_CORS_WILDCARD:-true}
       - HF_HUB_OFFLINE=1
@@ -67,9 +68,10 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - MARKER_USE_LLM=${MARKER_USE_LLM:-True}
-      - MARKER_LLM_SERVICE=${MARKER_LLM_SERVICE:-marker.services.ollama.OllamaService}
+      - MARKER_LLM_SERVICE=${MARKER_LLM_SERVICE:-marker.services.openai.OpenAIService}
       - MARKER_LLM_MODEL=${MARKER_LLM_MODEL:-llava:7b}
-      - MARKER_OLLAMA_BASE_URL=${MARKER_OLLAMA_BASE_URL:-http://172.17.0.1:11434}
+      - MARKER_LLM_API_KEY=${MARKER_LLM_API_KEY:-ollama}
+      - MARKER_LLM_BASE_URL=${MARKER_LLM_BASE_URL:-http://172.17.0.1:11434/v1}
       - HF_HUB_OFFLINE=1
     deploy:
       resources:
