@@ -429,16 +429,21 @@ class DocumentProcessor:
             print(f"Error extracting header/footer text from {pdf_path}: {e}")
             return ""
 
-    def _save_marker_images(self, doc_id: str, marker_images: Dict[str, Any], image_dir: Path) -> List[Path]:
-        """Save images from Marker's result to organized directory."""
+    def _save_marker_images(self, doc_id: str, marker_images: Dict[str, Any], image_dir: Path) -> tuple[List[Path], Dict[str, str]]:
+        """Save images from Marker's result to organized directory.
+
+        Returns:
+            tuple: (saved_images, image_map) where image_map is {original_filename: new_filename}
+        """
         from PIL import Image
         import io
         saved_images = []
+        image_map = {}  # Maps original filename to new filename
 
         try:
             if not marker_images:
                 logger.debug(f"No images to save for doc_id {doc_id}")
-                return saved_images
+                return saved_images, image_map
 
             # Save each image from the marker images dict
             for idx, (original_filename, image_data) in enumerate(marker_images.items()):
@@ -446,6 +451,9 @@ class DocumentProcessor:
                 ext = Path(original_filename).suffix or '.png'
                 new_filename = f"image_{idx}{ext}"
                 new_path = image_dir / new_filename
+
+                # Store mapping of original to new filename
+                image_map[original_filename] = new_filename
 
                 # Handle both PIL Image objects and bytes
                 if isinstance(image_data, Image.Image):
@@ -466,28 +474,26 @@ class DocumentProcessor:
                 logger.debug(f"Saved image: {original_filename} -> {new_path}")
 
             logger.info(f"Saved {len(saved_images)} images for doc_id {doc_id}")
-            return saved_images
+            return saved_images, image_map
 
         except Exception as e:
             logger.warning(f"Error saving images for doc_id {doc_id}: {e}")
-            return saved_images
+            return saved_images, image_map
 
-    def _update_markdown_image_paths(self, markdown: str, doc_id: str, images: List[Path]) -> str:
-        """Update image references in markdown to new paths."""
+    def _update_markdown_image_paths(self, markdown: str, doc_id: str, image_map: Dict[str, str]) -> str:
+        """Update image references in markdown to new paths.
+
+        Args:
+            markdown: Markdown content with image references
+            doc_id: Document ID
+            image_map: Dict mapping original filenames to new filenames
+        """
         import re
 
-        if not images:
+        if not image_map:
             return markdown
 
         try:
-            # Create mapping of old filenames to new paths
-            image_map = {}
-            for new_path in images:
-                # Extract original filename pattern from the moved file
-                # The original files were in markdown_dir with doc_id prefix
-                original_pattern = new_path.stem.replace("image_", "")
-                image_map[str(new_path.name)] = f"/api/images/{doc_id}/{new_path.name}"
-
             # Update markdown image references
             # Pattern: ![alt](path)
             def replace_image_path(match):
@@ -495,14 +501,15 @@ class DocumentProcessor:
                 old_path = match.group(2)
                 old_filename = Path(old_path).name
 
-                # Check if this image is in our moved images
-                for new_path in images:
-                    if old_filename in str(old_path) or new_path.name in old_path:
-                        new_ref = f"/api/images/{doc_id}/{new_path.name}"
-                        logger.debug(f"Updated image reference: {old_path} -> {new_ref}")
-                        return f"![{alt_text}]({new_ref})"
+                # Check if this original filename is in our mapping
+                if old_filename in image_map:
+                    new_filename = image_map[old_filename]
+                    new_ref = f"/api/images/{doc_id}/{new_filename}"
+                    logger.debug(f"Updated image reference: {old_path} -> {new_ref}")
+                    return f"![{alt_text}]({new_ref})"
 
-                # If not found, keep original
+                # If not found in exact mapping, keep original
+                logger.debug(f"No mapping found for image: {old_filename}")
                 return match.group(0)
 
             updated_markdown = re.sub(r'!\[([^\]]*)\]\(([^\)]+)\)', replace_image_path, markdown)
@@ -696,11 +703,11 @@ class DocumentProcessor:
                     image_dir.mkdir(parents=True, exist_ok=True)
 
                     # Save images from marker output to organized structure
-                    extracted_images = self._save_marker_images(doc_id, marker_images, image_dir)
+                    extracted_images, image_map = self._save_marker_images(doc_id, marker_images, image_dir)
 
                     if extracted_images:
-                        # Update markdown references
-                        markdown_content = self._update_markdown_image_paths(markdown_content, doc_id, extracted_images)
+                        # Update markdown references with proper image mapping
+                        markdown_content = self._update_markdown_image_paths(markdown_content, doc_id, image_map)
                         print(f"  Organized {len(extracted_images)} images for {pdf_path.name}")
                 except Exception as e:
                     print(f"  Warning: Image processing failed for {pdf_path.name}: {e}")
