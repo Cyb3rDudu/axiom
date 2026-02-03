@@ -99,15 +99,17 @@ class PGVectorStore:
                 
                 for i, chunk in enumerate(batch_chunks):
                     chunk_index = batch_start + i
-                    chunk_id = f"{doc_id}_{chunk_index}"
-                    
+
                     # Extract text and metadata
                     if isinstance(chunk, dict):
                         chunk_text = chunk.get('text', '')
                         chunk_metadata = chunk.get('metadata', {})
+                        # Use chunk_id from metadata if available, otherwise generate
+                        chunk_id = chunk_metadata.get('chunk_id', f"{doc_id}_{chunk_index}")
                     else:
                         chunk_text = str(chunk)
                         chunk_metadata = {}
+                        chunk_id = f"{doc_id}_{chunk_index}"
                     
                     # Prepare dense embedding
                     dense_embedding = batch_dense[i]
