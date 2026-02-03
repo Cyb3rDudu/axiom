@@ -26,7 +26,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - MARKER_LLM_MODEL=${MARKER_LLM_MODEL:-gemma3:12b}
       - MARKER_LLM_API_KEY=${MARKER_LLM_API_KEY:-ollama}
-      - MARKER_LLM_BASE_URL=${MARKER_LLM_BASE_URL:-http://nimbus.local:11434/v1}
+      - MARKER_LLM_BASE_URL=${MARKER_LLM_BASE_URL:-http://172.17.0.1:11434/v1}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
       - ALLOW_CORS_WILDCARD=${ALLOW_CORS_WILDCARD:-true}
       - HF_HUB_OFFLINE=1
@@ -67,7 +67,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - MARKER_LLM_MODEL=${MARKER_LLM_MODEL:-gemma3:12b}
       - MARKER_LLM_API_KEY=${MARKER_LLM_API_KEY:-ollama}
-      - MARKER_LLM_BASE_URL=${MARKER_LLM_BASE_URL:-http://nimbus.local:11434/v1}
+      - MARKER_LLM_BASE_URL=${MARKER_LLM_BASE_URL:-http://172.17.0.1:11434/v1}
       - HF_HUB_OFFLINE=1
     deploy:
       resources:
