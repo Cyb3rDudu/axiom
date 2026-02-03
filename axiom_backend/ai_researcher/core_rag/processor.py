@@ -466,7 +466,7 @@ class DocumentProcessor:
                 # Extract original filename pattern from the moved file
                 # The original files were in markdown_dir with doc_id prefix
                 original_pattern = new_path.stem.replace("image_", "")
-                image_map[str(new_path.name)] = f"images/{doc_id}/{new_path.name}"
+                image_map[str(new_path.name)] = f"/api/images/{doc_id}/{new_path.name}"
 
             # Update markdown image references
             # Pattern: ![alt](path)
@@ -478,7 +478,7 @@ class DocumentProcessor:
                 # Check if this image is in our moved images
                 for new_path in images:
                     if old_filename in str(old_path) or new_path.name in old_path:
-                        new_ref = f"images/{doc_id}/{new_path.name}"
+                        new_ref = f"/api/images/{doc_id}/{new_path.name}"
                         logger.debug(f"Updated image reference: {old_path} -> {new_ref}")
                         return f"![{alt_text}]({new_ref})"
 

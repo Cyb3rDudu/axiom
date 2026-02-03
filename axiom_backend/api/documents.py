@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
@@ -1280,3 +1280,45 @@ async def post_document_progress(update: schemas.DocumentProgressUpdate):
         import traceback
         traceback.print_exc()
         return {"status": "update failed"}
+
+@router.get("/images/{doc_id}/{image_filename}")
+async def serve_document_image(
+    doc_id: str,
+    image_filename: str,
+    current_user: models.User = Depends(get_current_user_from_cookie)
+):
+    """
+    Serve image files from processed documents.
+    Images are located at /app/data/processed/images/{doc_id}/{image_filename}
+    """
+    import os
+    from pathlib import Path
+
+    # Construct the image path
+    image_path = Path(f"/app/data/processed/images/{doc_id}/{image_filename}")
+
+    # Security: Ensure the path doesn't escape the images directory
+    if not str(image_path.resolve()).startswith("/app/data/processed/images/"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Check if file exists
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Determine media type based on extension
+    ext = image_path.suffix.lower()
+    media_types = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.svg': 'image/svg+xml'
+    }
+    media_type = media_types.get(ext, 'application/octet-stream')
+
+    return FileResponse(
+        path=str(image_path),
+        media_type=media_type,
+        filename=image_filename
+    )
