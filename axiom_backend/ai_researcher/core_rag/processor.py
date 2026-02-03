@@ -182,6 +182,7 @@ class DocumentProcessor:
 
             base_options.update({
                 "use_llm": True,
+                "llm_service": config.MARKER_LLM_SERVICE,
                 "openai_api_key": config.MARKER_LLM_API_KEY,
                 "openai_base_url": config.MARKER_LLM_BASE_URL,
                 "openai_model": config.MARKER_LLM_MODEL,
