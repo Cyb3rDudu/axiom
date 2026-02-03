@@ -182,7 +182,6 @@ class DocumentProcessor:
 
             base_options.update({
                 "use_llm": True,
-                "llm_service": config.MARKER_LLM_SERVICE,
                 "openai_api_key": config.MARKER_LLM_API_KEY,
                 "openai_base_url": config.MARKER_LLM_BASE_URL,
                 "openai_model": config.MARKER_LLM_MODEL,
@@ -226,14 +225,16 @@ class DocumentProcessor:
             config=table_config_dict,
             artifact_dict=self.marker_models,
             processor_list=self.table_config.get_processors(),
-            renderer=self.table_config.get_renderer()
+            renderer=self.table_config.get_renderer(),
+            llm_service=self.table_config.get_llm_service()
         )
-        
+
         self.no_table_converter = PdfConverter(
             config=no_table_config_dict,
             artifact_dict=self.marker_models,
             processor_list=self.no_table_config.get_processors(),
-            renderer=self.no_table_config.get_renderer()
+            renderer=self.no_table_config.get_renderer(),
+            llm_service=self.no_table_config.get_llm_service()
         )
         
         # Default to the safer no-table converter
