@@ -279,7 +279,7 @@ class DocumentProcessor:
             # Default to assuming no tables to avoid crashes
             return False
 
-    def _convert_pdf_with_table_handling(self, pdf_path: Path) -> Tuple[str, Dict[str, bytes]]:
+    def _convert_pdf_with_table_handling(self, pdf_path: Path) -> Tuple[str, Dict[str, Any]]:
         """
         Convert PDF to markdown with intelligent table handling and fallback.
         Includes 9-hour timeout protection to prevent infinite hangs.
@@ -409,8 +409,10 @@ class DocumentProcessor:
             print(f"Error extracting header/footer text from {pdf_path}: {e}")
             return ""
 
-    def _save_marker_images(self, doc_id: str, marker_images: Dict[str, bytes], image_dir: Path) -> List[Path]:
+    def _save_marker_images(self, doc_id: str, marker_images: Dict[str, Any], image_dir: Path) -> List[Path]:
         """Save images from Marker's result to organized directory."""
+        from PIL import Image
+        import io
         saved_images = []
 
         try:
@@ -424,6 +426,17 @@ class DocumentProcessor:
                 ext = Path(original_filename).suffix or '.png'
                 new_filename = f"image_{idx}{ext}"
                 new_path = image_dir / new_filename
+
+                # Handle both PIL Image objects and bytes
+                if isinstance(image_data, Image.Image):
+                    # Convert PIL Image to bytes
+                    img_byte_arr = io.BytesIO()
+                    # Determine format from extension, default to PNG
+                    save_format = ext.lstrip('.').upper()
+                    if save_format == 'JPG':
+                        save_format = 'JPEG'
+                    image_data.save(img_byte_arr, format=save_format or 'PNG')
+                    image_data = img_byte_arr.getvalue()
 
                 # Write image data to file
                 with open(new_path, 'wb') as f:
