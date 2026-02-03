@@ -504,8 +504,21 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
             const isSelected = selectedDocuments.has(doc.id);
             const title = doc.title || doc.metadata_?.title || doc.original_filename;
             const authors = formatAuthors(doc.metadata_?.authors || doc.authors);
-            const journal = doc.metadata_?.journal_or_source;
             const year = doc.metadata_?.publication_year;
+
+            // Type-specific metadata display
+            const documentType = doc.metadata_?.document_type || 'paper';
+            const journal = doc.metadata_?.journal_or_source;
+            const publisher = doc.metadata_?.publisher;
+            const websiteName = doc.metadata_?.website_name;
+            const organization = doc.metadata_?.organization;
+
+            // Determine what to show based on document type
+            const sourceInfo = documentType === 'book'
+              ? publisher
+              : documentType === 'web'
+              ? websiteName || organization
+              : journal;
             
             return (
               <div 
@@ -552,14 +565,21 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
 
                     {/* Metadata */}
                     <div className="space-y-0.5 mb-1">
-                      {(journal || year) && (
+                      {(sourceInfo || year) && (
                         <div className="flex items-center gap-1 text-xs text-muted-foreground">
                           <BookOpen className="h-3 w-3 flex-shrink-0" />
                           <span className="truncate">
-                            {journal && <span>{journal}</span>}
-                            {journal && year && <span> • </span>}
+                            {sourceInfo && <span>{sourceInfo}</span>}
+                            {sourceInfo && year && <span> • </span>}
                             {year && <span>{year}</span>}
                           </span>
+                        </div>
+                      )}
+
+                      {/* Book-specific: ISBN */}
+                      {documentType === 'book' && doc.metadata_?.isbn && (
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                          <span className="font-mono truncate">ISBN: {doc.metadata_.isbn}</span>
                         </div>
                       )}
 
