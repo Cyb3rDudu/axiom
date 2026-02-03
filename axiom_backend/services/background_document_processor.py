@@ -420,9 +420,10 @@ class BackgroundDocumentProcessor:
                 final_metadata = {"doc_id": doc_id, "original_filename": original_filename}
             
             # Convert document to Markdown based on file type
+            marker_images = {}  # Initialize empty dict for non-PDF files
             if original_filename.lower().endswith('.pdf'):
                 print(f"[{doc_id}] Converting PDF to Markdown using Marker with intelligent table handling...")
-                markdown_content = processor._convert_pdf_with_table_handling(target_path)
+                markdown_content, marker_images = processor._convert_pdf_with_table_handling(target_path)
             elif original_filename.lower().endswith(('.docx', '.doc')):
                 print(f"[{doc_id}] Converting Word document to Markdown...")
                 markdown_content = processor.document_converter.convert_word_to_markdown(target_path)
@@ -431,17 +432,36 @@ class BackgroundDocumentProcessor:
                 markdown_content = processor.document_converter.read_markdown_file(target_path)
             else:
                 raise Exception(f"Unsupported file format for processing: {original_filename}")
-            
+
             if not markdown_content:
                 raise Exception(f"Document processing produced empty markdown content for {original_filename}")
             
-            # Save markdown with our doc_id
+            # Handle extracted images from Marker
+            from ai_researcher import config
+            if config.ENABLE_IMAGE_EXTRACTION and marker_images:
+                try:
+                    print(f"[{doc_id}] Processing extracted images...")
+                    image_dir = processor.image_dir / doc_id
+                    image_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Save images from marker output
+                    extracted_images = processor._save_marker_images(doc_id, marker_images, image_dir)
+
+                    if extracted_images:
+                        # Update markdown references
+                        markdown_content = processor._update_markdown_image_paths(markdown_content, doc_id, extracted_images)
+                        print(f"[{doc_id}] Organized {len(extracted_images)} images")
+                except Exception as e:
+                    print(f"[{doc_id}] Warning: Image processing failed: {e}")
+                    # Non-fatal error, continue with document processing
+
+            # Save markdown with our doc_id (with updated image paths if applicable)
             md_filename = f"{doc_id}.md"
             md_save_path = processor.markdown_dir / md_filename
             with open(md_save_path, "w", encoding="utf-8") as f:
                 f.write(markdown_content)
             print(f"[{doc_id}] Saved Markdown to: {md_save_path}")
-            
+
             # Save metadata with our doc_id
             metadata_filename = f"{doc_id}.json"
             metadata_save_path = processor.metadata_dir / metadata_filename
