@@ -408,7 +408,7 @@ IMAGE_EMBEDDING_BATCH_SIZE = int(os.getenv("IMAGE_EMBEDDING_BATCH_SIZE", 4))
 # Enable LLM-enhanced OCR for better formula and table extraction
 MARKER_USE_LLM = os.getenv("MARKER_USE_LLM", "True").lower() == "true"
 MARKER_LLM_SERVICE = os.getenv("MARKER_LLM_SERVICE", "marker.services.openai.OpenAIService")
-MARKER_LLM_MODEL = os.getenv("MARKER_LLM_MODEL", "gpt-4o-mini")
+MARKER_LLM_MODEL = os.getenv("MARKER_LLM_MODEL", "gpt-5.2")
 # Using OpenAI's official API for vision-enhanced OCR
 MARKER_LLM_API_KEY = os.getenv("MARKER_LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
 MARKER_LLM_BASE_URL = os.getenv("MARKER_LLM_BASE_URL", "")
