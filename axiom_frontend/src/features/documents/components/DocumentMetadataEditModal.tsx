@@ -34,7 +34,15 @@ export const DocumentMetadataEditModal: React.FC<DocumentMetadataEditModalProps>
     publication_year: undefined,
     abstract: '',
     keywords: [],
+    doi: '',
+    publisher: '',
+    edition: '',
+    isbn: '',
+    website_name: '',
+    organization: '',
+    url: '',
   });
+  const [documentType, setDocumentType] = useState<'paper' | 'book' | 'web' | 'other'>('paper');
   const [newAuthor, setNewAuthor] = useState('');
   const [newKeyword, setNewKeyword] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -44,7 +52,11 @@ export const DocumentMetadataEditModal: React.FC<DocumentMetadataEditModalProps>
   useEffect(() => {
     if (document) {
       const metadata = document.metadata_ || {};
-      
+
+      // Detect document type
+      const detectedType = metadata.document_type || 'paper';
+      setDocumentType(detectedType);
+
       // Handle authors - could be string or array
       let authorsArray: string[] = [];
       if (metadata.authors) {
@@ -67,6 +79,13 @@ export const DocumentMetadataEditModal: React.FC<DocumentMetadataEditModalProps>
         publication_year: metadata.publication_year || undefined,
         abstract: metadata.abstract || '',
         keywords: metadata.keywords || [],
+        doi: metadata.doi || '',
+        publisher: metadata.publisher || '',
+        edition: metadata.edition || '',
+        isbn: metadata.isbn || '',
+        website_name: metadata.website_name || '',
+        organization: metadata.organization || '',
+        url: metadata.url || '',
       });
     }
   }, [document]);
@@ -121,13 +140,24 @@ export const DocumentMetadataEditModal: React.FC<DocumentMetadataEditModalProps>
     try {
       // Clean up the form data - remove undefined/empty values
       const cleanedData: DocumentMetadataUpdate = {};
-      
+
       if (formData.title?.trim()) cleanedData.title = formData.title.trim();
       if (formData.authors && formData.authors.length > 0) cleanedData.authors = formData.authors;
       if (formData.journal_or_source?.trim()) cleanedData.journal_or_source = formData.journal_or_source.trim();
       if (formData.publication_year) cleanedData.publication_year = formData.publication_year;
       if (formData.abstract?.trim()) cleanedData.abstract = formData.abstract.trim();
       if (formData.keywords && formData.keywords.length > 0) cleanedData.keywords = formData.keywords;
+      if (formData.doi?.trim()) cleanedData.doi = formData.doi.trim();
+
+      // Book-specific fields
+      if (formData.publisher?.trim()) cleanedData.publisher = formData.publisher.trim();
+      if (formData.edition?.trim()) cleanedData.edition = formData.edition.trim();
+      if (formData.isbn?.trim()) cleanedData.isbn = formData.isbn.trim();
+
+      // Web-specific fields
+      if (formData.website_name?.trim()) cleanedData.website_name = formData.website_name.trim();
+      if (formData.organization?.trim()) cleanedData.organization = formData.organization.trim();
+      if (formData.url?.trim()) cleanedData.url = formData.url.trim();
 
       const updatedDocument = await updateDocumentMetadata(document.id, cleanedData);
       onSave(updatedDocument);
@@ -229,22 +259,15 @@ export const DocumentMetadataEditModal: React.FC<DocumentMetadataEditModalProps>
               </div>
             </div>
 
-            {/* Publication Details Section */}
+            {/* Publication Details Section - Shared */}
             <div className="bg-muted/20 rounded-lg p-4 border border-border">
               <div className="space-y-3">
-                <h3 className="text-sm font-semibold text-foreground mb-2">Publication Details</h3>
-                
+                <h3 className="text-sm font-semibold text-foreground mb-2">
+                  {documentType === 'book' ? 'Book Details' : documentType === 'web' ? 'Web Source Details' : 'Publication Details'}
+                </h3>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="journal" className="text-sm font-medium text-foreground">Journal/Source</Label>
-                    <Input
-                      id="journal"
-                      value={formData.journal_or_source || ''}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange('journal_or_source', e.target.value)}
-                      placeholder="Enter journal or publication source"
-                    />
-                  </div>
-                  
+                  {/* Common: Publication Year */}
                   <div className="space-y-2">
                     <Label htmlFor="year" className="text-sm font-medium text-foreground">Publication Year</Label>
                     <Input
@@ -257,6 +280,106 @@ export const DocumentMetadataEditModal: React.FC<DocumentMetadataEditModalProps>
                       max={new Date().getFullYear() + 1}
                     />
                   </div>
+
+                  {/* Paper-specific: Journal/Source */}
+                  {documentType === 'paper' && (
+                    <div className="space-y-2">
+                      <Label htmlFor="journal" className="text-sm font-medium text-foreground">Journal/Source</Label>
+                      <Input
+                        id="journal"
+                        value={formData.journal_or_source || ''}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange('journal_or_source', e.target.value)}
+                        placeholder="Enter journal or publication source"
+                      />
+                    </div>
+                  )}
+
+                  {/* Book-specific: Publisher */}
+                  {documentType === 'book' && (
+                    <div className="space-y-2">
+                      <Label htmlFor="publisher" className="text-sm font-medium text-foreground">Publisher</Label>
+                      <Input
+                        id="publisher"
+                        value={formData.publisher || ''}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange('publisher', e.target.value)}
+                        placeholder="Enter publisher name"
+                      />
+                    </div>
+                  )}
+
+                  {/* Web-specific: Website Name */}
+                  {documentType === 'web' && (
+                    <div className="space-y-2">
+                      <Label htmlFor="website" className="text-sm font-medium text-foreground">Website Name</Label>
+                      <Input
+                        id="website"
+                        value={formData.website_name || ''}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange('website_name', e.target.value)}
+                        placeholder="Enter website name"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Additional book-specific fields */}
+                {documentType === 'book' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="isbn" className="text-sm font-medium text-foreground">ISBN</Label>
+                      <Input
+                        id="isbn"
+                        value={formData.isbn || ''}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange('isbn', e.target.value)}
+                        placeholder="Enter ISBN"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="edition" className="text-sm font-medium text-foreground">Edition</Label>
+                      <Input
+                        id="edition"
+                        value={formData.edition || ''}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange('edition', e.target.value)}
+                        placeholder="e.g., 2nd Edition"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Additional web-specific fields */}
+                {documentType === 'web' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="organization" className="text-sm font-medium text-foreground">Organization</Label>
+                      <Input
+                        id="organization"
+                        value={formData.organization || ''}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange('organization', e.target.value)}
+                        placeholder="Enter organization name"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="url" className="text-sm font-medium text-foreground">URL</Label>
+                      <Input
+                        id="url"
+                        value={formData.url || ''}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange('url', e.target.value)}
+                        placeholder="Enter URL"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Common: DOI */}
+                <div className="space-y-2 mt-3">
+                  <Label htmlFor="doi" className="text-sm font-medium text-foreground">DOI</Label>
+                  <Input
+                    id="doi"
+                    value={formData.doi || ''}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange('doi', e.target.value)}
+                    placeholder="Enter DOI"
+                  />
                 </div>
               </div>
             </div>

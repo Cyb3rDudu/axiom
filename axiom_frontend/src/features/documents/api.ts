@@ -149,6 +149,15 @@ export interface DocumentMetadataUpdate {
   publication_year?: number;
   abstract?: string;
   keywords?: string[];
+  doi?: string;
+  // Book-specific fields
+  publisher?: string;
+  edition?: string;
+  isbn?: string;
+  // Web-specific fields
+  website_name?: string;
+  organization?: string;
+  url?: string;
 }
 
 export interface DocumentViewResponse {
