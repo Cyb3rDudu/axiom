@@ -441,6 +441,7 @@ pdfs*/
 # CLAUDE CODE
 # =============================================================================
 .claude/
+.mcp.json
 CLAUDE.md
 own_docs/*
 notes.md
