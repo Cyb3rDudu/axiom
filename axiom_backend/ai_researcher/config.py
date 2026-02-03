@@ -407,12 +407,11 @@ IMAGE_EMBEDDING_BATCH_SIZE = int(os.getenv("IMAGE_EMBEDDING_BATCH_SIZE", 4))
 # --- Marker LLM Configuration ---
 # Enable LLM-enhanced OCR for better formula and table extraction
 MARKER_USE_LLM = os.getenv("MARKER_USE_LLM", "True").lower() == "true"
-MARKER_LLM_SERVICE = os.getenv("MARKER_LLM_SERVICE", "marker.services.openai.OpenAIService")
+MARKER_LLM_SERVICE = os.getenv("MARKER_LLM_SERVICE", "marker.services.ollama.OllamaService")
 MARKER_LLM_MODEL = os.getenv("MARKER_LLM_MODEL", "llava:7b")
-# Marker will use Ollama (OpenAI-compatible API) for vision-enhanced OCR
+# Marker will use native Ollama service for vision-enhanced OCR
 # Use Docker gateway IP to reach host from container
-MARKER_LLM_API_KEY = os.getenv("MARKER_LLM_API_KEY", "ollama")
-MARKER_LLM_BASE_URL = os.getenv("MARKER_LLM_BASE_URL", "http://172.17.0.1:11434/v1")
+MARKER_OLLAMA_BASE_URL = os.getenv("MARKER_OLLAMA_BASE_URL", "http://172.17.0.1:11434")
 
 # --- Initial Exploration Phase ---
 CONSULT_RAG_FOR_INITIAL_QUESTIONS = os.getenv("CONSULT_RAG_FOR_INITIAL_QUESTIONS", "True").lower() == "false" # Whether to consult RAG DB for initial question generation
