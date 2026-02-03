@@ -162,7 +162,8 @@ class DocumentProcessor:
         # Base configuration options
         device_info = hardware_detector.detect_hardware()
         # Adjust batch multiplier based on hardware
-        batch_multiplier = 1 if device_info["device_type"] == "cpu" else 2
+        # Reduce batch multiplier to avoid overwhelming Ollama with concurrent vision requests
+        batch_multiplier = 1
 
         from ai_researcher import config
         base_options = {
