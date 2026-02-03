@@ -408,7 +408,7 @@ IMAGE_EMBEDDING_BATCH_SIZE = int(os.getenv("IMAGE_EMBEDDING_BATCH_SIZE", 4))
 # Enable LLM-enhanced OCR for better formula and table extraction
 MARKER_USE_LLM = os.getenv("MARKER_USE_LLM", "True").lower() == "true"
 MARKER_LLM_SERVICE = os.getenv("MARKER_LLM_SERVICE", "marker.services.openai.OpenAIService")
-MARKER_LLM_MODEL = os.getenv("MARKER_LLM_MODEL", "gemma3:12b")
+MARKER_LLM_MODEL = os.getenv("MARKER_LLM_MODEL", "llava:7b")
 # Marker will use Ollama (OpenAI-compatible API) for vision-enhanced OCR
 # Use Docker gateway IP to reach host from container
 MARKER_LLM_API_KEY = os.getenv("MARKER_LLM_API_KEY", "ollama")
