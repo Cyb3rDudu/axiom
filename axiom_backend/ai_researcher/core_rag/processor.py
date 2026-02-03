@@ -172,6 +172,24 @@ class DocumentProcessor:
             "disable_image_extraction": not config.ENABLE_IMAGE_EXTRACTION,
             "disable_image_captions": True,  # Skip LLM captions (using CLIP embeddings instead)
         }
+
+        # Add LLM support for enhanced OCR (formulas, tables, etc.)
+        if config.MARKER_USE_LLM and config.MARKER_LLM_API_KEY:
+            import os
+            # Set environment variables for Marker's LLM service
+            os.environ["OPENAI_API_KEY"] = config.MARKER_LLM_API_KEY
+            os.environ["OPENAI_BASE_URL"] = config.MARKER_LLM_BASE_URL
+
+            base_options.update({
+                "use_llm": True,
+                "llm_service": config.MARKER_LLM_SERVICE,
+                "openai_api_key": config.MARKER_LLM_API_KEY,
+                "openai_base_url": config.MARKER_LLM_BASE_URL,
+                "openai_model": config.MARKER_LLM_MODEL,
+            })
+            logger.info(f"Marker LLM enabled: {config.MARKER_LLM_MODEL} via {config.MARKER_LLM_BASE_URL}")
+        else:
+            logger.info("Marker LLM disabled (set MARKER_USE_LLM=true and DEEPSEEK_API_KEY to enable)")
         
         # Configuration with table recognition enabled
         # Note: marker may use different option names, so we try multiple approaches

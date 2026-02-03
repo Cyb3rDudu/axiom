@@ -404,6 +404,15 @@ ENABLE_IMAGE_EMBEDDINGS = os.getenv("ENABLE_IMAGE_EMBEDDINGS", "True").lower() =
 IMAGE_EMBEDDING_MODEL = os.getenv("IMAGE_EMBEDDING_MODEL", "clip-ViT-B-32")
 IMAGE_EMBEDDING_BATCH_SIZE = int(os.getenv("IMAGE_EMBEDDING_BATCH_SIZE", 4))
 
+# --- Marker LLM Configuration ---
+# Enable LLM-enhanced OCR for better formula and table extraction
+MARKER_USE_LLM = os.getenv("MARKER_USE_LLM", "True").lower() == "true"
+MARKER_LLM_SERVICE = os.getenv("MARKER_LLM_SERVICE", "marker.services.openai.OpenAIService")
+MARKER_LLM_MODEL = os.getenv("MARKER_LLM_MODEL", "deepseek-chat")
+# Marker will use deepseek endpoint via OpenAI-compatible API
+MARKER_LLM_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+MARKER_LLM_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1/")
+
 # --- Initial Exploration Phase ---
 CONSULT_RAG_FOR_INITIAL_QUESTIONS = os.getenv("CONSULT_RAG_FOR_INITIAL_QUESTIONS", "True").lower() == "false" # Whether to consult RAG DB for initial question generation
 INITIAL_EXPLORATION_DOC_RESULTS = get_initial_exploration_doc_results() # default 10: Number of docs for initial exploration
