@@ -36,7 +36,7 @@ class VisionEmbedder:
     """
     def __init__(
         self,
-        model_name: str = "sentence-transformers/clip-ViT-B-32",
+        model_name: str = "clip-ViT-B-32",
         device: Optional[str] = None,
         batch_size: Optional[int] = None,
         enable_memory_management: Optional[bool] = None

@@ -401,7 +401,7 @@ EMBEDDING_MEMORY_MANAGEMENT = os.getenv("EMBEDDING_MEMORY_MANAGEMENT", "True").l
 # --- Image Processing Configuration ---
 ENABLE_IMAGE_EXTRACTION = os.getenv("ENABLE_IMAGE_EXTRACTION", "True").lower() == "true"
 ENABLE_IMAGE_EMBEDDINGS = os.getenv("ENABLE_IMAGE_EMBEDDINGS", "True").lower() == "true"
-IMAGE_EMBEDDING_MODEL = os.getenv("IMAGE_EMBEDDING_MODEL", "sentence-transformers/clip-ViT-B-32")
+IMAGE_EMBEDDING_MODEL = os.getenv("IMAGE_EMBEDDING_MODEL", "clip-ViT-B-32")
 IMAGE_EMBEDDING_BATCH_SIZE = int(os.getenv("IMAGE_EMBEDDING_BATCH_SIZE", 4))
 
 # --- Initial Exploration Phase ---
