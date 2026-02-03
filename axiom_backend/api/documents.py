@@ -1050,7 +1050,7 @@ async def view_document_content(
         
         # Try to read the markdown content from file
         markdown_content = None
-        markdown_path = f"/app/ai_researcher/data/processed/markdown/{doc_id}.md"
+        markdown_path = f"/app/data/processed/markdown/{doc_id}.md"
         
         try:
             import os
