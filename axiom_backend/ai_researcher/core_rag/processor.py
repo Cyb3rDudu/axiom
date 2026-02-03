@@ -130,10 +130,30 @@ class DocumentProcessor:
         self.vector_store = vector_store
         self.force_reembed = force_reembed # Store the flag
 
+        # Lazy loading for vision embedder
+        self._vision_embedder = None
+        from ai_researcher import config
+        self.image_dir = Path("data/processed/images")
+        self.image_dir.mkdir(parents=True, exist_ok=True)
+
         if self.embedder is None or self.vector_store is None:
             print("Warning: DocumentProcessor initialized without embedder or vector_store. Embedding/storing will be skipped.")
         if self.force_reembed:
             print("Warning: --force-reembed flag is active. All PDFs will be re-processed and re-embedded.")
+
+    @property
+    def vision_embedder(self):
+        """Lazy load vision embedder only when needed."""
+        if self._vision_embedder is None:
+            from ai_researcher import config
+            if config.ENABLE_IMAGE_EMBEDDINGS:
+                from .vision_embedder import VisionEmbedder
+                self._vision_embedder = VisionEmbedder(
+                    model_name=config.IMAGE_EMBEDDING_MODEL,
+                    device=self.device,
+                    batch_size=config.IMAGE_EMBEDDING_BATCH_SIZE
+                )
+        return self._vision_embedder
 
     # --- Methods correctly indented within the class ---
 
@@ -143,11 +163,14 @@ class DocumentProcessor:
         device_info = hardware_detector.detect_hardware()
         # Adjust batch multiplier based on hardware
         batch_multiplier = 1 if device_info["device_type"] == "cpu" else 2
-        
+
+        from ai_researcher import config
         base_options = {
             "output_format": "markdown",
             "device": self.device,
             "batch_multiplier": batch_multiplier,
+            "disable_image_extraction": not config.ENABLE_IMAGE_EXTRACTION,
+            "disable_image_captions": True,  # Skip LLM captions (using CLIP embeddings instead)
         }
         
         # Configuration with table recognition enabled
@@ -383,6 +406,166 @@ class DocumentProcessor:
             print(f"Error extracting header/footer text from {pdf_path}: {e}")
             return ""
 
+    def _move_images_to_organized_structure(self, doc_id: str, image_dir: Path) -> List[Path]:
+        """Move marker-extracted images to organized directory."""
+        import re
+        moved_images = []
+
+        try:
+            # Marker typically saves images in the markdown directory with doc_id prefix
+            # Look for images with pattern like: {doc_id}_image_*.png or similar
+            markdown_dir_images = list(self.markdown_dir.glob(f"{doc_id}*"))
+
+            # Filter for actual image files
+            image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'}
+            image_files = [f for f in markdown_dir_images if f.suffix.lower() in image_extensions]
+
+            if not image_files:
+                logger.debug(f"No images found for doc_id {doc_id}")
+                return moved_images
+
+            # Move each image to organized structure
+            for idx, image_file in enumerate(sorted(image_files)):
+                new_filename = f"image_{idx}{image_file.suffix}"
+                new_path = image_dir / new_filename
+
+                # Move the file
+                shutil.move(str(image_file), str(new_path))
+                moved_images.append(new_path)
+                logger.debug(f"Moved image: {image_file.name} -> {new_path}")
+
+            logger.info(f"Moved {len(moved_images)} images for doc_id {doc_id}")
+            return moved_images
+
+        except Exception as e:
+            logger.warning(f"Error moving images for doc_id {doc_id}: {e}")
+            return moved_images
+
+    def _update_markdown_image_paths(self, markdown: str, doc_id: str, images: List[Path]) -> str:
+        """Update image references in markdown to new paths."""
+        import re
+
+        if not images:
+            return markdown
+
+        try:
+            # Create mapping of old filenames to new paths
+            image_map = {}
+            for new_path in images:
+                # Extract original filename pattern from the moved file
+                # The original files were in markdown_dir with doc_id prefix
+                original_pattern = new_path.stem.replace("image_", "")
+                image_map[str(new_path.name)] = f"images/{doc_id}/{new_path.name}"
+
+            # Update markdown image references
+            # Pattern: ![alt](path)
+            def replace_image_path(match):
+                alt_text = match.group(1)
+                old_path = match.group(2)
+                old_filename = Path(old_path).name
+
+                # Check if this image is in our moved images
+                for new_path in images:
+                    if old_filename in str(old_path) or new_path.name in old_path:
+                        new_ref = f"images/{doc_id}/{new_path.name}"
+                        logger.debug(f"Updated image reference: {old_path} -> {new_ref}")
+                        return f"![{alt_text}]({new_ref})"
+
+                # If not found, keep original
+                return match.group(0)
+
+            updated_markdown = re.sub(r'!\[([^\]]*)\]\(([^\)]+)\)', replace_image_path, markdown)
+            return updated_markdown
+
+        except Exception as e:
+            logger.warning(f"Error updating markdown image paths: {e}")
+            return markdown
+
+    def _process_images_for_doc(self, doc_id: str, chunks: List[Dict], image_dir: Path) -> List[Dict]:
+        """Extract image metadata from chunks and prepare for embedding."""
+        image_data = []
+
+        try:
+            # Get all image files in the doc's image directory
+            if not image_dir.exists():
+                return image_data
+
+            image_files = list(image_dir.glob("*"))
+            if not image_files:
+                return image_data
+
+            # Create mapping of image paths to chunks that reference them
+            for chunk in chunks:
+                chunk_id = chunk["metadata"].get("chunk_id")
+                image_refs = chunk["metadata"].get("image_refs", [])
+
+                for img_ref in image_refs:
+                    img_path = img_ref.get("path", "")
+                    alt_text = img_ref.get("alt_text", "")
+
+                    # Find the actual file
+                    filename = Path(img_path).name
+                    actual_path = image_dir / filename
+
+                    if actual_path.exists():
+                        image_id = f"{doc_id}_{filename}"
+
+                        image_data.append({
+                            "image_id": image_id,
+                            "path": str(actual_path),
+                            "chunk_id": chunk_id,
+                            "alt_text": alt_text,
+                            "metadata": {
+                                "doc_id": doc_id,
+                                "chunk_id": chunk_id,
+                                "position": img_ref.get("position", 0)
+                            }
+                        })
+
+            logger.info(f"Prepared {len(image_data)} images for embedding from doc {doc_id}")
+            return image_data
+
+        except Exception as e:
+            logger.warning(f"Error processing images for doc {doc_id}: {e}")
+            return image_data
+
+    def _embed_and_store_images(self, doc_id: str, image_data: List[Dict]) -> None:
+        """Generate embeddings for images and store in vector store."""
+        if not image_data:
+            return
+
+        try:
+            from ai_researcher import config
+
+            if not config.ENABLE_IMAGE_EMBEDDINGS or not self.vision_embedder:
+                logger.debug("Image embeddings disabled, skipping image embedding")
+                return
+
+            # Extract image paths
+            image_paths = [img["path"] for img in image_data]
+
+            # Generate embeddings
+            logger.info(f"Generating embeddings for {len(image_paths)} images...")
+            image_embeddings = self.vision_embedder.embed_images(image_paths)
+
+            if not image_embeddings:
+                logger.warning(f"Failed to generate image embeddings for doc {doc_id}")
+                return
+
+            # Store in vector store
+            if self.vector_store and hasattr(self.vector_store, 'add_images'):
+                logger.info(f"Storing {len(image_data)} image embeddings in vector store...")
+                count = self.vector_store.add_images(doc_id, image_data, image_embeddings)
+                logger.info(f"Successfully stored {count} image embeddings for doc {doc_id}")
+            else:
+                logger.warning("Vector store does not support image storage")
+
+        except Exception as e:
+            # Non-fatal error - log and continue
+            logger.error(f"Error embedding/storing images for doc {doc_id}: {e}")
+            import traceback
+            traceback.print_exc()
+
     def process_pdf(self, pdf_path: Path, doc_id: Optional[str] = None) -> Optional[Dict]:
         """
         Processes a single PDF file.
@@ -473,7 +656,26 @@ class DocumentProcessor:
                 # Status update removed - handled by caller(doc_id, "error_marker_conversion")
                 return None # Fail if marker fails
 
-            # Save the newly generated Markdown
+            # --- Handle extracted images ---
+            from ai_researcher import config
+            if config.ENABLE_IMAGE_EXTRACTION:
+                try:
+                    print(f"  Processing extracted images...")
+                    image_dir = self.image_dir / doc_id
+                    image_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Move images from marker output to organized structure
+                    extracted_images = self._move_images_to_organized_structure(doc_id, image_dir)
+
+                    if extracted_images:
+                        # Update markdown references
+                        markdown_content = self._update_markdown_image_paths(markdown_content, doc_id, extracted_images)
+                        print(f"  Organized {len(extracted_images)} images for {pdf_path.name}")
+                except Exception as e:
+                    print(f"  Warning: Image processing failed for {pdf_path.name}: {e}")
+                    # Non-fatal error, continue with document processing
+
+            # Save the newly generated Markdown (with updated image paths if applicable)
             try:
                 with open(md_save_path, "w", encoding="utf-8") as f:
                     f.write(markdown_content)
@@ -515,6 +717,22 @@ class DocumentProcessor:
                 )
                 chunks_added_count = len(chunks)
                 print(f"  Successfully added {chunks_added_count} chunks to vector store for {pdf_path.name}.")
+
+                # --- Embed and Store Images ---
+                from ai_researcher import config
+                if config.ENABLE_IMAGE_EMBEDDINGS:
+                    try:
+                        print(f"  Processing image embeddings...")
+                        image_dir = self.image_dir / doc_id
+                        if image_dir.exists():
+                            image_data = self._process_images_for_doc(doc_id, chunks_with_embeddings, image_dir)
+                            if image_data:
+                                self._embed_and_store_images(doc_id, image_data)
+                                print(f"  Successfully processed {len(image_data)} image embeddings for {pdf_path.name}")
+                    except Exception as e_image:
+                        # Non-fatal error - log and continue
+                        print(f"  Warning: Image embedding failed for {pdf_path.name}: {e_image}")
+
             except Exception as e_embed_store:
                 print(f"Error embedding/storing chunks for {pdf_path.name}: {e_embed_store}")
                 # Decide if this should be a fatal error for the document or just a warning

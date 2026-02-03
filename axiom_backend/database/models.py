@@ -307,7 +307,7 @@ class DocumentChunk(Base):
     Uses pgvector for dense embeddings and JSONB for sparse embeddings.
     """
     __tablename__ = "document_chunks"
-    
+
     id = Column(StringUUID, primary_key=True, default=lambda: str(uuid.uuid4()))
     doc_id = Column(StringUUID, ForeignKey('documents.id', ondelete='CASCADE'), nullable=False, index=True)
     chunk_id = Column(String(255), unique=True, nullable=False, index=True)  # Format: {doc_id}_{chunk_index}
@@ -317,9 +317,30 @@ class DocumentChunk(Base):
     sparse_embedding = Column(JSONB, nullable=False, default={})  # Stores {token_id: weight} pairs
     chunk_metadata = Column(JSONB, nullable=False, default={})  # Renamed from metadata to avoid SQLAlchemy reserved word
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
+
     # Relationship to Document
     document = relationship("Document", back_populates="chunks")
+
+class DocumentImage(Base):
+    """
+    Stores image embeddings and metadata for images extracted from documents.
+    Uses pgvector for vision embeddings (CLIP).
+    """
+    __tablename__ = "document_images"
+
+    id = Column(StringUUID, primary_key=True, default=lambda: str(uuid.uuid4()))
+    doc_id = Column(StringUUID, ForeignKey('documents.id', ondelete='CASCADE'), nullable=False, index=True)
+    chunk_id = Column(String(255), ForeignKey('document_chunks.chunk_id', ondelete='CASCADE'), nullable=True, index=True)
+    image_id = Column(String(255), unique=True, nullable=False, index=True)
+    image_path = Column(Text, nullable=False)
+    alt_text = Column(Text, nullable=True)
+    image_embedding = Column(Text, nullable=True)  # vector(512) by pgvector
+    metadata = Column(JSONB, nullable=False, default={})
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    document = relationship("Document")
+    chunk = relationship("DocumentChunk")
 
 class ResearchReport(Base):
     """

@@ -19,12 +19,13 @@ import json
 
 # Import database components
 from database.database import get_db
-from database.models import DocumentChunk
+from database.models import DocumentChunk, DocumentImage
 
 logger = logging.getLogger(__name__)
 
 # Constants for embedding dimensions
 DENSE_DIMENSION = 1024  # BGE-M3 dense embeddings
+IMAGE_DIMENSION = 512   # CLIP ViT-B/32 image embeddings
 
 
 class PGVectorStore:
@@ -485,6 +486,220 @@ class PGVectorStore:
         finally:
             db.close()
     
+    def add_images(
+        self,
+        doc_id: str,
+        images: List[Dict[str, Any]],
+        image_embeddings: List[np.ndarray],
+        batch_size: int = 50
+    ) -> int:
+        """
+        Add image embeddings to the database.
+
+        Args:
+            doc_id: Document ID
+            images: List of dicts with {image_id, path, chunk_id, alt_text, metadata}
+            image_embeddings: List of 512-dim vectors
+            batch_size: Number of images to insert in each batch
+
+        Returns:
+            Number of images added
+        """
+        if not images or not image_embeddings:
+            logger.warning(f"No images to add for document {doc_id}")
+            return 0
+
+        if len(images) != len(image_embeddings):
+            logger.error(f"Mismatch between images ({len(images)}) and embeddings ({len(image_embeddings)})")
+            return 0
+
+        images_added = 0
+        total_images = len(images)
+
+        db = next(get_db())
+
+        try:
+            # Process images in batches
+            for batch_start in range(0, total_images, batch_size):
+                batch_end = min(batch_start + batch_size, total_images)
+                batch_images = images[batch_start:batch_end]
+                batch_embeddings = image_embeddings[batch_start:batch_end]
+
+                for i, image_data in enumerate(batch_images):
+                    image_id = image_data.get('image_id')
+                    image_path = image_data.get('path')
+                    chunk_id = image_data.get('chunk_id')
+                    alt_text = image_data.get('alt_text', '')
+                    metadata = image_data.get('metadata', {})
+
+                    # Prepare embedding
+                    embedding = batch_embeddings[i]
+                    if isinstance(embedding, np.ndarray):
+                        embedding = embedding.tolist()
+
+                    # Check if image already exists
+                    existing = db.query(DocumentImage).filter_by(image_id=image_id).first()
+
+                    if existing:
+                        # Update existing image
+                        existing.image_path = image_path
+                        existing.alt_text = alt_text
+                        existing.image_embedding = embedding
+                        existing.metadata = metadata
+                        logger.debug(f"Updated existing image {image_id}")
+                    else:
+                        # Insert using raw SQL for pgvector support
+                        insert_query = text("""
+                            INSERT INTO document_images
+                            (id, doc_id, chunk_id, image_id, image_path, alt_text, image_embedding, metadata)
+                            VALUES
+                            (gen_random_uuid(), :doc_id, :chunk_id, :image_id, :image_path, :alt_text, CAST(:image_embedding AS vector(512)), CAST(:metadata AS jsonb))
+                        """)
+
+                        db.execute(insert_query, {
+                            'doc_id': doc_id,
+                            'chunk_id': chunk_id,
+                            'image_id': image_id,
+                            'image_path': image_path,
+                            'alt_text': alt_text,
+                            'image_embedding': str(embedding),
+                            'metadata': json.dumps(metadata)
+                        })
+
+                    images_added += 1
+
+                # Commit after each batch
+                db.commit()
+                logger.debug(f"Added batch of {batch_end - batch_start} images to PostgreSQL")
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to add images: {e}")
+            raise
+        finally:
+            db.close()
+
+        logger.info(f"Added {images_added} images to PostgreSQL for document {doc_id}")
+        return images_added
+
+    def query_multimodal(
+        self,
+        query_text_embedding: Optional[np.ndarray] = None,
+        query_image_embedding: Optional[np.ndarray] = None,
+        n_results: int = 10,
+        text_weight: float = 0.5,
+        image_weight: float = 0.5
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform multimodal search combining text and image embeddings.
+        Returns unified result set with both text chunks and images.
+
+        Args:
+            query_text_embedding: Optional text query embedding (1024-dim)
+            query_image_embedding: Optional image query embedding (512-dim)
+            n_results: Number of results to return
+            text_weight: Weight for text similarity (0-1)
+            image_weight: Weight for image similarity (0-1)
+
+        Returns:
+            List of search results with metadata, type, and combined scores
+        """
+        if query_text_embedding is None and query_image_embedding is None:
+            logger.warning("No query embeddings provided for multimodal search")
+            return []
+
+        # Normalize weights
+        total_weight = text_weight + image_weight
+        if total_weight > 0:
+            text_weight = text_weight / total_weight
+            image_weight = image_weight / total_weight
+        else:
+            text_weight = image_weight = 0.5
+
+        db = next(get_db())
+
+        try:
+            results = []
+
+            # Search text chunks if text embedding provided
+            if query_text_embedding is not None:
+                query_embedding_list = query_text_embedding.tolist() if isinstance(query_text_embedding, np.ndarray) else query_text_embedding
+
+                # Use cosine similarity for text chunks
+                text_query = text("""
+                    SELECT
+                        chunk_id,
+                        chunk_text,
+                        chunk_metadata,
+                        1 - (dense_embedding <=> CAST(:query_embedding AS vector)) AS similarity
+                    FROM document_chunks
+                    ORDER BY dense_embedding <=> CAST(:query_embedding AS vector)
+                    LIMIT :limit
+                """)
+
+                text_results = db.execute(text_query, {
+                    'query_embedding': str(query_embedding_list),
+                    'limit': n_results
+                }).fetchall()
+
+                for row in text_results:
+                    results.append({
+                        'type': 'text',
+                        'chunk_id': row[0],
+                        'text': row[1],
+                        'metadata': row[2],
+                        'similarity': float(row[3]),
+                        'weighted_score': float(row[3]) * text_weight
+                    })
+
+            # Search images if image embedding provided
+            if query_image_embedding is not None:
+                query_image_list = query_image_embedding.tolist() if isinstance(query_image_embedding, np.ndarray) else query_image_embedding
+
+                # Use cosine similarity for images
+                image_query = text("""
+                    SELECT
+                        image_id,
+                        image_path,
+                        alt_text,
+                        chunk_id,
+                        metadata,
+                        1 - (image_embedding <=> CAST(:query_embedding AS vector(512))) AS similarity
+                    FROM document_images
+                    ORDER BY image_embedding <=> CAST(:query_embedding AS vector(512))
+                    LIMIT :limit
+                """)
+
+                image_results = db.execute(image_query, {
+                    'query_embedding': str(query_image_list),
+                    'limit': n_results
+                }).fetchall()
+
+                for row in image_results:
+                    results.append({
+                        'type': 'image',
+                        'image_id': row[0],
+                        'image_path': row[1],
+                        'alt_text': row[2],
+                        'chunk_id': row[3],
+                        'metadata': row[4],
+                        'similarity': float(row[5]),
+                        'weighted_score': float(row[5]) * image_weight
+                    })
+
+            # Sort by weighted score and limit results
+            results.sort(key=lambda x: x['weighted_score'], reverse=True)
+            results = results[:n_results]
+
+            logger.info(f"Multimodal search returned {len(results)} results")
+            return results
+
+        except Exception as e:
+            logger.error(f"Multimodal query failed: {e}")
+            return []
+        finally:
+            db.close()
+
     # Compatibility methods for backward compatibility
     def _get_client(self):
         """For backward compatibility - returns None."""

@@ -398,6 +398,12 @@ EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", 8)) # Default 8: Ba
 EMBEDDING_MAX_CONCURRENT_QUERIES = int(os.getenv("EMBEDDING_MAX_CONCURRENT_QUERIES", 3)) # Default 3: Max concurrent embedding queries
 EMBEDDING_MEMORY_MANAGEMENT = os.getenv("EMBEDDING_MEMORY_MANAGEMENT", "True").lower() == "true" # Enable GPU memory management
 
+# --- Image Processing Configuration ---
+ENABLE_IMAGE_EXTRACTION = os.getenv("ENABLE_IMAGE_EXTRACTION", "True").lower() == "true"
+ENABLE_IMAGE_EMBEDDINGS = os.getenv("ENABLE_IMAGE_EMBEDDINGS", "True").lower() == "true"
+IMAGE_EMBEDDING_MODEL = os.getenv("IMAGE_EMBEDDING_MODEL", "sentence-transformers/clip-ViT-B-32")
+IMAGE_EMBEDDING_BATCH_SIZE = int(os.getenv("IMAGE_EMBEDDING_BATCH_SIZE", 4))
+
 # --- Initial Exploration Phase ---
 CONSULT_RAG_FOR_INITIAL_QUESTIONS = os.getenv("CONSULT_RAG_FOR_INITIAL_QUESTIONS", "True").lower() == "false" # Whether to consult RAG DB for initial question generation
 INITIAL_EXPLORATION_DOC_RESULTS = get_initial_exploration_doc_results() # default 10: Number of docs for initial exploration

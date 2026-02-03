@@ -17,6 +17,19 @@ class Chunker:
         # Use regex to split by one or more newlines, keeping separators
         # This helps handle various spacing styles in markdown
         self._paragraph_split_pattern = re.compile(r'(\n\s*\n+)')
+        # Pattern to detect markdown images
+        self._image_pattern = re.compile(r'!\[([^\]]*)\]\(([^\)]+)\)')
+
+    def _extract_images_from_text(self, text: str) -> List[Dict[str, Any]]:
+        """Extract image references from markdown text."""
+        images = []
+        for match in self._image_pattern.finditer(text):
+            images.append({
+                "alt_text": match.group(1),
+                "path": match.group(2),
+                "position": match.start()
+            })
+        return images
 
     def chunk(self, markdown_content: str, doc_metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
@@ -75,6 +88,9 @@ class Chunker:
             # Join the paragraphs back together with double newlines
             chunk_text = "\n\n".join(current_paragraphs)
 
+            # Extract image references from chunk text
+            image_refs = self._extract_images_from_text(chunk_text)
+
             # Create chunk metadata
             chunk_meta = {
                 "doc_id": doc_id,  # CRITICAL: Must include doc_id for deletion to work!
@@ -82,7 +98,8 @@ class Chunker:
                 "chunk_index": chunk_id_counter,
                 # Add other relevant metadata if needed, e.g., start/end paragraph index
                 "start_paragraph_index": i,
-                "end_paragraph_index": min(end_index, len(paragraphs)) -1 # Inclusive index
+                "end_paragraph_index": min(end_index, len(paragraphs)) -1, # Inclusive index
+                "image_refs": image_refs  # Store image references
             }
             # Merge document metadata (excluding doc_id again)
             if doc_metadata:
