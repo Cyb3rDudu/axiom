@@ -174,22 +174,32 @@ class DocumentProcessor:
         }
 
         # Add LLM support for enhanced OCR (formulas, tables, etc.)
-        if config.MARKER_USE_LLM and config.MARKER_LLM_API_KEY:
-            import os
-            # Set environment variables for Marker's LLM service
-            os.environ["OPENAI_API_KEY"] = config.MARKER_LLM_API_KEY
-            os.environ["OPENAI_BASE_URL"] = config.MARKER_LLM_BASE_URL
-
+        if config.MARKER_USE_LLM:
             base_options.update({
                 "use_llm": True,
                 "llm_service": config.MARKER_LLM_SERVICE,
-                "openai_api_key": config.MARKER_LLM_API_KEY,
-                "openai_base_url": config.MARKER_LLM_BASE_URL,
-                "openai_model": config.MARKER_LLM_MODEL,
             })
-            logger.info(f"Marker LLM enabled: {config.MARKER_LLM_MODEL} via {config.MARKER_LLM_BASE_URL}")
+
+            # Configure based on service type
+            if "ollama" in config.MARKER_LLM_SERVICE.lower():
+                base_options.update({
+                    "ollama_base_url": config.MARKER_OLLAMA_BASE_URL,
+                    "ollama_model": config.MARKER_LLM_MODEL,
+                })
+                logger.info(f"Marker LLM enabled: {config.MARKER_LLM_MODEL} via Ollama at {config.MARKER_OLLAMA_BASE_URL}")
+            else:
+                # OpenAI-compatible service (fallback for other services)
+                import os
+                os.environ["OPENAI_API_KEY"] = getattr(config, "MARKER_LLM_API_KEY", "")
+                os.environ["OPENAI_BASE_URL"] = getattr(config, "MARKER_LLM_BASE_URL", "")
+                base_options.update({
+                    "openai_api_key": getattr(config, "MARKER_LLM_API_KEY", ""),
+                    "openai_base_url": getattr(config, "MARKER_LLM_BASE_URL", ""),
+                    "openai_model": config.MARKER_LLM_MODEL,
+                })
+                logger.info(f"Marker LLM enabled: {config.MARKER_LLM_MODEL} via {getattr(config, 'MARKER_LLM_BASE_URL', 'OpenAI')}")
         else:
-            logger.info("Marker LLM disabled (set MARKER_USE_LLM=true and DEEPSEEK_API_KEY to enable)")
+            logger.info("Marker LLM disabled (set MARKER_USE_LLM=True to enable)")
         
         # Configuration with table recognition enabled
         # Note: marker may use different option names, so we try multiple approaches
