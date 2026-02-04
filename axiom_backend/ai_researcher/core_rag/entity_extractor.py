@@ -46,16 +46,19 @@ class EntityExtractor:
                 # Try loading from mounted models directory first
                 import os
                 spacy_data = os.getenv("SPACY_DATA", "/root/.local/share/spacy")
-                # The actual model is nested: en_core_web_sm-3.7.1/en_core_web_sm/en_core_web_sm-3.7.1/
-                model_path = os.path.join(spacy_data, "en_core_web_sm-3.7.1", "en_core_web_sm", "en_core_web_sm-3.7.1")
 
-                if os.path.exists(model_path):
-                    self.nlp = spacy.load(model_path)
-                    logger.info(f"Loaded spaCy model from: {model_path}")
+                # Try large model first (better accuracy), fallback to small
+                for model_name in ["en_core_web_lg-3.7.1", "en_core_web_sm-3.7.1"]:
+                    model_path = os.path.join(spacy_data, model_name, "en_core_web_lg" if "lg" in model_name else "en_core_web_sm", model_name)
+
+                    if os.path.exists(model_path):
+                        self.nlp = spacy.load(model_path)
+                        logger.info(f"Loaded spaCy model from: {model_path}")
+                        break
                 else:
                     # Fallback to default loading
-                    self.nlp = spacy.load("en_core_web_sm")
-                    logger.info("Loaded spaCy model: en_core_web_sm")
+                    self.nlp = spacy.load("en_core_web_lg")
+                    logger.info("Loaded spaCy model: en_core_web_lg")
             except OSError as e:
                 logger.warning(f"spaCy model not found: {e}. Entity extraction will use 0 entities.")
 
@@ -113,7 +116,14 @@ class EntityExtractor:
             "GPE": "LOCATION",
             "LOC": "LOCATION",
             "PRODUCT": "TECHNOLOGY",
-            "EVENT": "CONCEPT"
+            "EVENT": "CONCEPT",
+            "WORK_OF_ART": "WORK",
+            "LAW": "CONCEPT",
+            "NORP": "CONCEPT",
+            "MONEY": "METRIC",
+            "PERCENT": "METRIC",
+            "QUANTITY": "METRIC",
+            "FAC": "LOCATION"
         }
         return mapping.get(label)
 
@@ -170,6 +180,59 @@ Return JSON:
 }}
 """
 
+    def _extract_with_llm(self, chunk_text: str) -> List[Dict]:
+        """Extract entities using LLM for domain-specific terminology."""
+        if not self.llm_client or not self.enable_llm_refinement:
+            return []
+
+        prompt = f"""Extract key entities from this academic text. Focus on domain-specific concepts, methods, and terminology.
+
+Text:
+{chunk_text[:2000]}
+
+Extract entities in these categories:
+- PERSON: Authors, researchers
+- ORGANIZATION: Institutions, companies, agencies
+- LOCATION: Countries, regions, cities
+- CONCEPT: Key concepts, theories, terminology (e.g., "tax elasticity", "inflation", "neural networks")
+- METHOD: Research methods, algorithms, techniques
+- TECHNOLOGY: Software, tools, frameworks
+- METRIC: Performance measures, statistical measures
+- DATASET: Named datasets
+- WORK: Papers, books, publications
+
+Return JSON:
+{{
+  "entities": [
+    {{"text": "tax elasticity", "type": "CONCEPT", "confidence": 0.9}},
+    {{"text": "OECD", "type": "ORGANIZATION", "confidence": 0.95}}
+  ]
+}}
+"""
+
+        try:
+            response = self.llm_client.chat(
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+
+            data = json.loads(response.choices[0].message.content)
+            entities = []
+
+            for ent in data.get("entities", []):
+                entities.append({
+                    "text": ent["text"],
+                    "type": ent["type"],
+                    "canonical_form": self._normalize_entity(ent["text"]),
+                    "confidence": ent.get("confidence", 0.8)
+                })
+
+            return entities
+
+        except Exception as e:
+            logger.error(f"LLM entity extraction failed: {e}")
+            return []
+
     def extract_from_chunk_sync(
         self,
         chunk_text: str,
@@ -181,9 +244,19 @@ Return JSON:
         Returns (entities, relationships).
         """
         # Fast spaCy extraction (synchronous)
-        entities = self._extract_with_spacy(chunk_text) if self.nlp else []
+        spacy_entities = self._extract_with_spacy(chunk_text) if self.nlp else []
 
-        # Note: LLM refinement requires async, so we skip it in sync mode
+        # LLM-based entity extraction for domain concepts
+        llm_entities = self._extract_with_llm(chunk_text)
+
+        # Merge entities (deduplicate by canonical form)
+        entities_dict = {}
+        for ent in spacy_entities + llm_entities:
+            key = (ent["canonical_form"], ent["type"])
+            if key not in entities_dict:
+                entities_dict[key] = ent
+
+        entities = list(entities_dict.values())
         relationships = []
 
         return entities, relationships
