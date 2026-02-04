@@ -113,10 +113,11 @@ class GraphStore:
         """Add relationship between chunks."""
         db = next(get_db())
         try:
+            import json
             query = text("""
                 INSERT INTO chunk_relationships
                     (source_chunk_id, target_chunk_id, relationship_type, strength, metadata)
-                VALUES (:source, :target, :type, :strength, :metadata::jsonb)
+                VALUES (:source, :target, :type, :strength, CAST(:metadata AS jsonb))
                 ON CONFLICT (source_chunk_id, target_chunk_id, relationship_type)
                 DO UPDATE SET strength = EXCLUDED.strength
             """)
@@ -126,7 +127,7 @@ class GraphStore:
                 'target': target_chunk_id,
                 'type': relationship_type,
                 'strength': strength,
-                'metadata': metadata or {}
+                'metadata': json.dumps(metadata or {})
             })
             db.commit()
         except Exception as e:
