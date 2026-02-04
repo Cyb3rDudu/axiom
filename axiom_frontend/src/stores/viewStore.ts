@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type ViewMode = 'research' | 'writing' | 'documents'
+export type ViewMode = 'research' | 'writing' | 'documents' | 'rag'
 
 interface ViewState {
   currentView: ViewMode

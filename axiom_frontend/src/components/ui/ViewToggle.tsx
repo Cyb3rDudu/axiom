@@ -1,8 +1,8 @@
 import React from 'react'
 import { Button } from './button'
-import { MessageSquare, PenTool, FileText } from 'lucide-react'
+import { MessageSquare, PenTool, FileText, Network } from 'lucide-react'
 
-export type ViewMode = 'research' | 'writing' | 'documents'
+export type ViewMode = 'research' | 'writing' | 'documents' | 'rag'
 
 interface ViewToggleProps {
   currentView: ViewMode
@@ -18,7 +18,8 @@ export const ViewToggle: React.FC<ViewToggleProps> = ({
   const views = [
     { key: 'research', icon: MessageSquare, label: 'Research' },
     { key: 'writing', icon: PenTool, label: 'Writing' },
-    { key: 'documents', icon: FileText, label: 'Documents' }
+    { key: 'documents', icon: FileText, label: 'Documents' },
+    { key: 'rag', icon: Network, label: 'RAG' }
   ] as const
 
   return (
