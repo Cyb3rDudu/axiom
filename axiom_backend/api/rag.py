@@ -364,6 +364,7 @@ async def get_knowledge_graph(
         return {"nodes": [], "edges": [], "stats": {"total_nodes": 0, "total_edges": 0, "entity_types": []}}
 
     # Get relationship edges between these entities
+    # Cast entity_ids to UUID array to match database column type
     edges_query = text("""
         SELECT
             er.source_entity_id,
@@ -372,8 +373,8 @@ async def get_knowledge_graph(
             er.relationship_strength,
             er.evidence_count
         FROM entity_relationships er
-        WHERE er.source_entity_id = ANY(:entity_ids)
-          AND er.target_entity_id = ANY(:entity_ids)
+        WHERE er.source_entity_id = ANY(CAST(:entity_ids AS uuid[]))
+          AND er.target_entity_id = ANY(CAST(:entity_ids AS uuid[]))
           AND er.relationship_strength >= :min_strength
         ORDER BY er.relationship_strength DESC
         LIMIT :limit
