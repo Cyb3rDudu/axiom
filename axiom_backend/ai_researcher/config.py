@@ -413,6 +413,26 @@ MARKER_LLM_MODEL = os.getenv("MARKER_LLM_MODEL", "gpt-5.2")
 MARKER_LLM_API_KEY = os.getenv("MARKER_LLM_API_KEY", os.getenv("OPENAI_API_KEY", ""))
 MARKER_LLM_BASE_URL = os.getenv("MARKER_LLM_BASE_URL", "")
 
+# --- Knowledge Graph Configuration ---
+ENABLE_KNOWLEDGE_GRAPH = os.getenv("ENABLE_KNOWLEDGE_GRAPH", "False").lower() == "true"
+ENABLE_GRAPH_RETRIEVAL = os.getenv("ENABLE_GRAPH_RETRIEVAL", "False").lower() == "true"
+
+GRAPH_RETRIEVAL_CONFIG = {
+    'max_depth': int(os.getenv("GRAPH_MAX_DEPTH", "2")),
+    'min_relationship_strength': float(os.getenv("GRAPH_MIN_STRENGTH", "0.3")),
+    'decay_factor': float(os.getenv("GRAPH_DECAY_FACTOR", "0.6")),
+    'vector_weight': float(os.getenv("GRAPH_VECTOR_WEIGHT", "0.6")),
+    'graph_weight': float(os.getenv("GRAPH_GRAPH_WEIGHT", "0.3")),
+    'diversity_weight': float(os.getenv("GRAPH_DIVERSITY_WEIGHT", "0.1")),
+    'cache_size': int(os.getenv("GRAPH_CACHE_SIZE", "1000"))
+}
+
+ENTITY_EXTRACTION_CONFIG = {
+    'enable_llm_refinement': os.getenv("ENTITY_ENABLE_LLM", "False").lower() == "true",
+    'batch_size': int(os.getenv("ENTITY_BATCH_SIZE", "50")),
+    'confidence_threshold': float(os.getenv("ENTITY_CONFIDENCE_THRESHOLD", "0.7"))
+}
+
 # --- Initial Exploration Phase ---
 CONSULT_RAG_FOR_INITIAL_QUESTIONS = os.getenv("CONSULT_RAG_FOR_INITIAL_QUESTIONS", "True").lower() == "false" # Whether to consult RAG DB for initial question generation
 INITIAL_EXPLORATION_DOC_RESULTS = get_initial_exploration_doc_results() # default 10: Number of docs for initial exploration

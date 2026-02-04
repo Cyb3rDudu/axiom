@@ -19,7 +19,27 @@ class Retriever:
         self.embedder = embedder
         self.vector_store = vector_store
         self.reranker = reranker
-        print("Retriever initialized.")
+        self.graph_retriever = None
+
+        # Initialize graph-enhanced retrieval if enabled
+        from ai_researcher import config
+        if config.ENABLE_GRAPH_RETRIEVAL:
+            try:
+                from .graph_store import GraphStore
+                from .graph_enhanced_retriever import GraphEnhancedRetriever
+                graph_store = GraphStore()
+                self.graph_retriever = GraphEnhancedRetriever(
+                    base_retriever=self,
+                    graph_store=graph_store,
+                    **config.GRAPH_RETRIEVAL_CONFIG
+                )
+                print("Retriever initialized with graph enhancement.")
+            except Exception as e:
+                print(f"Warning: Failed to initialize graph retriever: {e}")
+                print("Falling back to standard vector retrieval.")
+        else:
+            print("Retriever initialized.")
+
         if self.reranker:
              print("Retriever: Reranker is enabled.")
         else:
@@ -33,7 +53,8 @@ class Retriever:
         filter_metadata: Optional[Dict[str, Any]] = None,
         use_reranker: bool = True, # Flag to control reranking per query
         dense_weight: float = 0.5, # Weight for initial vector store query
-        sparse_weight: float = 0.5  # Weight for initial vector store query
+        sparse_weight: float = 0.5,  # Weight for initial vector store query
+        use_graph: bool = True  # NEW: Enable graph-enhanced retrieval
     ) -> List[Dict[str, Any]]:
         """
         Retrieves relevant chunks for a given query.
@@ -45,10 +66,23 @@ class Retriever:
             use_reranker: Whether to use the reranker if available and enabled.
             dense_weight: Weight for dense embeddings in the initial hybrid search.
             sparse_weight: Weight for sparse embeddings in the initial hybrid search.
+            use_graph: Whether to use graph-enhanced retrieval if available.
 
         Returns:
             A list of retrieved chunk dictionaries, sorted by relevance.
         """
+        # Use graph retriever if enabled and requested
+        if use_graph and self.graph_retriever:
+            return await self.graph_retriever.retrieve(
+                query_text=query_text,
+                n_results=n_results,
+                filter_metadata=filter_metadata,
+                use_graph=True,
+                dense_weight=dense_weight,
+                sparse_weight=sparse_weight
+            )
+
+        # Otherwise use standard retrieval
         print(f"\n--- Retrieving documents for query: '{query_text}' ---")
 
         # 1. Embed the query (using async method with semaphore)

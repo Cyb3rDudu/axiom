@@ -762,8 +762,60 @@ class DocumentProcessor:
                 chunks_added_count = len(chunks)
                 print(f"  Successfully added {chunks_added_count} chunks to vector store for {pdf_path.name}.")
 
-                # --- Embed and Store Images ---
+                # --- Build Knowledge Graph ---
                 from ai_researcher import config
+                if config.ENABLE_KNOWLEDGE_GRAPH:
+                    try:
+                        print(f"  Building knowledge graph...")
+                        from .graph_store import GraphStore
+                        graph_store = GraphStore()
+
+                        # Build sequential relationships (always enabled for graph)
+                        graph_store.build_sequential_relationships(doc_id, len(chunks))
+                        print(f"  Built sequential relationships for {len(chunks)} chunks.")
+
+                        # Extract entities if LLM refinement enabled
+                        if config.ENTITY_EXTRACTION_CONFIG['enable_llm_refinement']:
+                            try:
+                                from database.user_settings import get_user_settings
+                                from .entity_extractor import EntityExtractor
+
+                                user_settings = get_user_settings()
+                                metadata_extractor = MetadataExtractor.from_user_settings(user_settings)
+
+                                entity_extractor = EntityExtractor(
+                                    embedder=self.embedder,
+                                    llm_client=metadata_extractor.client,
+                                    enable_llm_refinement=True
+                                )
+
+                                entities_count = 0
+                                for chunk in chunks:
+                                    entities, relationships = await entity_extractor.extract_from_chunk(
+                                        chunk['text'],
+                                        chunk['metadata']
+                                    )
+
+                                    for entity in entities:
+                                        entity_id = graph_store.add_entity(
+                                            entity['text'],
+                                            entity['type'],
+                                            entity['canonical_form']
+                                        )
+                                        graph_store.link_entity_to_chunk(
+                                            entity_id,
+                                            chunk['metadata']['chunk_id'],
+                                            doc_id
+                                        )
+                                        entities_count += 1
+
+                                print(f"  Extracted {entities_count} entities from chunks.")
+                            except Exception as e_entity:
+                                print(f"  Warning: Entity extraction failed: {e_entity}")
+                    except Exception as e_graph:
+                        print(f"  Warning: Knowledge graph building failed: {e_graph}")
+
+                # --- Embed and Store Images ---
                 if config.ENABLE_IMAGE_EMBEDDINGS:
                     try:
                         print(f"  Processing image embeddings...")
