@@ -164,13 +164,6 @@ Return JSON:
         chunk_text: str,
         chunk_metadata: Dict
     ) -> Tuple[List[Dict], List[Dict]]:
-        
-
-    def extract_from_chunk_sync(
-        self,
-        chunk_text: str,
-        chunk_metadata: Dict
-    ) -> Tuple[List[Dict], List[Dict]]:
         """
         Synchronous wrapper for extract_from_chunk.
         Extract entities and relationships from a chunk.
