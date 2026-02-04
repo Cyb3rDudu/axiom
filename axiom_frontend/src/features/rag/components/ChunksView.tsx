@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Search, Loader2, X, ExternalLink } from 'lucide-react'
 import { apiClient } from '../../../config/api'
+import type { RagFilters } from './RagView'
 
 interface Chunk {
   chunk_id: string
@@ -26,11 +27,14 @@ interface ChunkDetail extends Chunk {
   }>
 }
 
-export const ChunksView: React.FC = () => {
+interface ChunksViewProps {
+  filters: RagFilters
+}
+
+export const ChunksView: React.FC<ChunksViewProps> = ({ filters }) => {
   const [chunks, setChunks] = useState<Chunk[]>([])
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
-  const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [selectedChunk, setSelectedChunk] = useState<ChunkDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -38,9 +42,11 @@ export const ChunksView: React.FC = () => {
   const fetchChunks = async () => {
     setLoading(true)
     try {
-      const response = await apiClient.get('/api/rag/chunks', {
-        params: { page, limit: 50, search: search || undefined }
-      })
+      const params: any = { page, limit: 50 }
+      if (filters.search) params.search = filters.search
+      if (filters.selectedDocuments.length > 0) params.doc_ids = filters.selectedDocuments.join(',')
+
+      const response = await apiClient.get('/api/rag/chunks', { params })
       setChunks(response.data.chunks)
       setTotalPages(response.data.pagination.total_pages)
     } catch (error) {
@@ -64,7 +70,7 @@ export const ChunksView: React.FC = () => {
 
   useEffect(() => {
     fetchChunks()
-  }, [page, search])
+  }, [page, filters])
 
   const handleChunkClick = (chunk: Chunk) => {
     fetchChunkDetail(chunk.chunk_id)
@@ -72,18 +78,6 @@ export const ChunksView: React.FC = () => {
 
   return (
     <div>
-      {/* Search */}
-      <div className="relative mb-4">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <input
-          type="text"
-          placeholder="Search chunks..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-10 pr-4 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-        />
-      </div>
-
       {loading ? (
         <div className="flex justify-center items-center py-12">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Loader2, Filter } from 'lucide-react'
 import { apiClient } from '../../../config/api'
+import type { RagFilters } from './RagView'
 
 interface GraphData {
   nodes: Array<{
@@ -24,7 +25,11 @@ interface GraphData {
   }
 }
 
-export const KnowledgeGraphView: React.FC = () => {
+interface KnowledgeGraphViewProps {
+  filters: RagFilters
+}
+
+export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({ filters }) => {
   const [graphData, setGraphData] = useState<GraphData | null>(null)
   const [selectedEntityTypes, setSelectedEntityTypes] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
@@ -33,13 +38,14 @@ export const KnowledgeGraphView: React.FC = () => {
   const fetchGraph = async () => {
     setLoading(true)
     try {
-      const response = await apiClient.get('/api/rag/graph', {
-        params: {
-          entity_types: selectedEntityTypes.length > 0 ? selectedEntityTypes : undefined,
-          min_strength: 0.3,
-          limit: 500
-        }
-      })
+      const params: any = {
+        min_strength: 0.3,
+        limit: 500
+      }
+      if (selectedEntityTypes.length > 0) params.entity_types = selectedEntityTypes
+      if (filters.selectedDocuments.length > 0) params.doc_ids = filters.selectedDocuments.join(',')
+
+      const response = await apiClient.get('/api/rag/graph', { params })
       setGraphData(response.data)
     } catch (error) {
       console.error('Failed to fetch graph:', error)
@@ -50,7 +56,7 @@ export const KnowledgeGraphView: React.FC = () => {
 
   useEffect(() => {
     fetchGraph()
-  }, [selectedEntityTypes])
+  }, [selectedEntityTypes, filters])
 
   if (loading || !graphData) {
     return (
