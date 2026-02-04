@@ -43,10 +43,20 @@ class EntityExtractor:
         # Load spaCy model if available
         if SPACY_AVAILABLE:
             try:
-                self.nlp = spacy.load("en_core_web_sm")
-                logger.info("Loaded spaCy model: en_core_web_sm")
-            except OSError:
-                logger.warning("spaCy model not found. Run: python -m spacy download en_core_web_sm")
+                # Try loading from mounted models directory first
+                import os
+                spacy_data = os.getenv("SPACY_DATA", "/root/.local/share/spacy")
+                model_path = os.path.join(spacy_data, "en_core_web_sm-3.7.1")
+
+                if os.path.exists(model_path):
+                    self.nlp = spacy.load(model_path)
+                    logger.info(f"Loaded spaCy model from: {model_path}")
+                else:
+                    # Fallback to default loading
+                    self.nlp = spacy.load("en_core_web_sm")
+                    logger.info("Loaded spaCy model: en_core_web_sm")
+            except OSError as e:
+                logger.warning(f"spaCy model not found: {e}. Entity extraction will use 0 entities.")
 
     async def extract_from_chunk(
         self,
