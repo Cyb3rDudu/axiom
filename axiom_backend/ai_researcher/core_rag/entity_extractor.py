@@ -211,8 +211,11 @@ Return JSON:
 """
 
         try:
-            response = self.llm_client.chat(
+            response = self.llm_client.chat.completions.create(
+                model="deepseek-chat",  # Use configured fast model
                 messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=500,
                 response_format={"type": "json_object"}
             )
 
