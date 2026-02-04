@@ -1,0 +1,35 @@
+{
+  "do_align_long_axis": false,
+  "do_normalize": false,
+  "do_pad": false,
+  "do_rescale": false,
+  "do_resize": false,
+  "do_thumbnail": false,
+  "image_mean": [
+    0.5,
+    0.5,
+    0.5
+  ],
+  "image_processor_type": "SuryaEncoderImageProcessor",
+  "image_std": [
+    0.5,
+    0.5,
+    0.5
+  ],
+  "max_size": {
+    "height": 768,
+    "width": 768
+  },
+  "patch_size": [
+    4,
+    4
+  ],
+  "processor_class": "SuryaProcessor",
+  "resample": 2,
+  "rescale_factor": 0.00392156862745098,
+  "size": {
+    "height": 2560,
+    "width": 1920
+  },
+  "train": false
+}

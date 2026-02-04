@@ -199,7 +199,7 @@ async def get_all_chunks(
             dc.chunk_metadata,
             dc.doc_id,
             d.original_filename,
-            d.title
+            d.metadata_->>'title'
         FROM document_chunks dc
         LEFT JOIN documents d ON dc.doc_id = d.id
         {where_sql}
@@ -216,7 +216,7 @@ async def get_all_chunks(
             "metadata": row[2],
             "doc_id": row[3],
             "document_filename": row[4],
-            "document_title": row[5]
+            "document_metadata_title": row[5]
         }
         for row in results
     ]
@@ -248,7 +248,7 @@ async def get_chunk_detail(
             dc.chunk_metadata,
             dc.doc_id,
             d.original_filename,
-            d.title
+            d.metadata_->>'title'
         FROM document_chunks dc
         LEFT JOIN documents d ON dc.doc_id = d.id
         WHERE dc.chunk_id = :chunk_id
@@ -292,7 +292,7 @@ async def get_chunk_detail(
         "metadata": chunk_result[2],
         "doc_id": chunk_result[3],
         "document_filename": chunk_result[4],
-        "document_title": chunk_result[5],
+        "document_metadata_title": chunk_result[5],
         "relationships": [
             {
                 "target_chunk_id": r[0],

@@ -1,0 +1,680 @@
+import asyncio
+import inspect # <-- Import inspect
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional, List, Tuple
+from pathlib import Path
+import datetime # <--- ADDED IMPORT
+
+# Use absolute imports starting from the top-level package 'ai_researcher'
+from ai_researcher.agentic_layer.model_dispatcher import ModelDispatcher
+from ai_researcher.agentic_layer.tool_registry import ToolRegistry
+
+# Define the standard output structure for agent run methods
+# result_dict: The primary output data (e.g., plan, notes, text content, messenger response dict)
+# model_details: Information about the LLM call(s) made
+# scratchpad_update: Optional string containing updates for the agent's scratchpad
+AgentOutput = Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[str]]
+
+
+class BaseAgent(ABC):
+    """
+    Abstract base class for all agents in the framework.
+    Provides common functionalities like interacting with the ModelDispatcher and ToolRegistry.
+    """
+    def __init__(
+        self,
+        agent_name: str,
+        model_dispatcher: ModelDispatcher,
+        tool_registry: Optional[ToolRegistry] = None, # Tools might be optional for some agents
+        system_prompt: Optional[str] = None,
+        model_name: Optional[str] = None, # Optional: Specific model override for this agent
+        language_code: str = 'en' # Language for prompts (default: English)
+    ):
+        self.agent_name = agent_name
+        self.model_dispatcher = model_dispatcher
+        self.tool_registry = tool_registry
+        self.language_code = language_code
+
+        # Load prompt from database if not provided
+        if system_prompt is None:
+            try:
+                from ai_researcher.agentic_layer.services.prompt_loader import get_prompt_loader
+                loader = get_prompt_loader()
+                system_prompt = loader.load_prompt(
+                    agent_name=self.__class__.__name__,
+                    prompt_key='system_prompt',
+                    language_code=language_code
+                )
+            except (RuntimeError, ValueError) as e:
+                # PromptLoader not initialized or prompt not found - fallback to default
+                today_date = datetime.date.today().strftime('%Y-%m-%d')
+                system_prompt = f"You are the {agent_name}. Your goal is to fulfill your specific role in the research process. Current date: {today_date}"
+                # Only log warning if PromptLoader was expected but failed
+                if not isinstance(e, RuntimeError):
+                    print(f"Warning: Could not load prompt for {agent_name} in {language_code}, using default: {e}")
+
+        self.system_prompt = system_prompt
+        self.model_name = model_name # If None, ModelDispatcher will use default for the mode
+
+        print(f"Initialized {self.agent_name} (Model: {self.model_name or 'Default'}, Lang: {self.language_code})")
+
+    def reload_prompts(self, language_code: str):
+        """
+        Reload prompts for a different language.
+        Call this when a mission requires a different language than the controller default.
+        """
+        if language_code == self.language_code:
+            return  # No change needed
+
+        print(f"Reloading prompts for {self.agent_name}: {self.language_code} → {language_code}")
+        self.language_code = language_code
+
+        # Reload system prompt from database
+        try:
+            from ai_researcher.agentic_layer.services.prompt_loader import get_prompt_loader
+            loader = get_prompt_loader()
+            self.system_prompt = loader.load_prompt(
+                agent_name=self.__class__.__name__,
+                prompt_key='system_prompt',
+                language_code=language_code
+            )
+        except (RuntimeError, ValueError) as e:
+            # Fallback if prompt not found
+            today_date = datetime.date.today().strftime('%Y-%m-%d')
+            self.system_prompt = f"You are the {self.agent_name}. Your goal is to fulfill your specific role in the research process. Current date: {today_date}"
+            print(f"Warning: Could not reload prompt for {self.agent_name} in {language_code}, using default: {e}")
+
+    def _create_messages(self, user_prompt: str, history: Optional[List[Dict[str, str]]] = None) -> List[Dict[str, str]]:
+        """Helper method to construct the message list for the LLM."""
+        messages = [{"role": "system", "content": self.system_prompt}]
+        if history:
+            # Ensure history items are valid dictionaries
+            valid_history = [msg for msg in history if isinstance(msg, dict) and "role" in msg and "content" in msg]
+            messages.extend(valid_history)
+        messages.append({"role": "user", "content": user_prompt})
+        return messages
+
+    async def _call_llm( # <-- Make async
+        self,
+        user_prompt: str,
+        history: Optional[List[Dict[str, str]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None, # For function/tool calling
+        tool_choice: Optional[Any] = None, # e.g., "auto", "required", {"type": "function", "function": {"name": "my_function"}}
+        response_format: Optional[Dict[str, str]] = None, # e.g., {"type": "json_schema"}
+        agent_mode: Optional[str] = None, # <-- Add agent_mode parameter
+        log_queue: Optional[Any] = None, # <-- Add log_queue parameter for UI updates
+        update_callback: Optional[Any] = None, # <-- Add update_callback parameter for UI updates
+        log_llm_call: bool = True, # <-- Add parameter to control LLM call logging
+        **kwargs: Any # Accept arbitrary keyword arguments
+    ) -> Tuple[Optional[Any], Optional[Dict[str, Any]]]: # Return type: (ChatCompletion, model_details_dict) or (None, None)
+        """
+        Sends a request to the LLM via the ModelDispatcher, passing along any extra arguments.
+
+        Returns:
+             A tuple containing:
+             - The raw response object from the LLM client (e.g., ChatCompletion) or None on failure.
+             - A dictionary with model call details or None on failure.
+        """
+        if not self.model_dispatcher:
+             print(f"{self.agent_name} Error: ModelDispatcher is not initialized.")
+             return None, None
+
+        messages = self._create_messages(user_prompt, history)
+        try:
+            # Determine the model to use: prioritize kwargs, then agent's default
+            model_to_use = kwargs.pop('model', self.model_name) # Get 'model' from kwargs, default to self.model_name, and remove it from kwargs
+
+            # Get mission_id from agent context if available
+            mission_id = getattr(self, 'mission_id', None)
+            
+            # Determine if we will log this call
+            # We log if log_llm_call is True OR if there's a cost (but we don't know cost yet)
+            # For now, mark agent_logged if log_llm_call is True and we have the required parameters
+            will_log = log_llm_call and mission_id and log_queue and update_callback
+            
+            # Await the async dispatch method
+            # When base_agent is handling logging, mark it so model_dispatcher doesn't duplicate
+            if will_log:
+                kwargs['agent_logged'] = True  # Mark that agent is handling the logging
+            
+            response, model_call_details = await self.model_dispatcher.dispatch( # <-- Use await
+                messages=messages,
+                model=model_to_use, # Pass the determined model
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                agent_mode=agent_mode, # <-- Pass agent_mode to dispatch
+                log_queue=log_queue, # <-- Pass log_queue down to dispatch
+                update_callback=update_callback, # <-- Pass update_callback down to dispatch
+                mission_id=mission_id, # <-- Pass mission_id for status checking
+                **kwargs # Pass any extra arguments (like max_tokens, temperature)
+            )
+
+            # --- LOG LLM CALLS AND COSTS ---
+            # Only log if log_llm_call is True
+            # When False, the higher-level code (research_manager, writing_manager) handles logging
+            # This prevents duplicate logs
+            should_log = log_llm_call
+            
+            if should_log:
+                log_status = "success" if response and response.choices else "failure"
+                output_summary = "No response"
+                
+                # Only include detailed output if log_llm_call is True
+                if log_llm_call and log_status == "success":
+                    try:
+                        response_content = response.choices[0].message.content
+                        if response_content:
+                            # Check for common patterns in short responses
+                            response_lower = response_content.lower().strip()
+                            if "content reviewed, but not relevant" in response_lower:
+                                output_summary = "Content deemed not relevant"
+                            elif len(response_content) <= 50:
+                                # Short response - show the whole thing
+                                output_summary = f"Response: {response_content.strip()}"
+                            else:
+                                # Longer response - show preview
+                                output_summary = f"Response received ({len(response_content)} chars)"
+                        else:
+                            output_summary = "Empty response"
+                    except Exception:
+                        output_summary = "Response received, but summary failed."
+                elif log_status == "success":
+                    # For cost-only logging, just indicate success
+                    output_summary = "Response received"
+
+                context_manager = None
+                if hasattr(self, 'controller') and self.controller and hasattr(self.controller, 'context_manager'):
+                    context_manager = self.controller.context_manager
+
+                if context_manager and mission_id and log_queue and update_callback:
+                    # Determine action text based on context
+                    completion_tokens = model_call_details.get('completion_tokens', 0) if model_call_details else 0
+                    prompt_tokens = model_call_details.get('prompt_tokens', 0) if model_call_details else 0
+                    
+                    # Try to extract more context from the prompt
+                    # Look at more of the prompt for better context extraction
+                    prompt_lower = user_prompt[:2000].lower() if user_prompt else ""
+                    
+                    # Special handling based on agent mode and context
+                    if agent_mode == "research" and completion_tokens <= 20:
+                        # These are likely relevance checks or yes/no responses
+                        # Extract context from the prompt to understand what's being evaluated
+                        
+                        # Check for various research operations
+                        if "content reviewed, but not relevant" in prompt_lower:
+                            # This is a note generation with relevance check
+                            action_text = "Note Generation & Relevance Check"
+                            
+                            # Try to extract the question being researched
+                            # IMPORTANT: Search in original case to maintain correct indices
+                            question_match = None
+                            if 'research question: "' in prompt_lower:
+                                # Find in original text with case-insensitive search
+                                import re
+                                match = re.search(r'research question:\s*"([^"]+)"', user_prompt[:2000], re.IGNORECASE)
+                                if match:
+                                    question_match = match.group(1)[:100]
+                            elif 'answering the specific research question: "' in prompt_lower:
+                                # Find in original text with case-insensitive search
+                                import re
+                                match = re.search(r'answering the specific research question:\s*"([^"]+)"', user_prompt[:2000], re.IGNORECASE)
+                                if match:
+                                    question_match = match.group(1)[:100]
+                            
+                            # Try to extract source being analyzed
+                            source_match = None
+                            if "source id:" in prompt_lower or "- id:" in prompt_lower:
+                                # Extract source ID using regex on original text
+                                import re
+                                match = re.search(r'(?:source id:|- id:)\s*([^\n\r,\-]+)', user_prompt[:2000], re.IGNORECASE)
+                                if match:
+                                    source_match = match.group(1).strip()[:50]
+                            
+                            if question_match:
+                                input_text = f"Q: {question_match}{'...' if len(question_match) >= 100 else ''}"
+                            elif source_match:
+                                input_text = f"Analyzing source: {source_match}"
+                            else:
+                                input_text = "Evaluating content relevance"
+                                
+                        elif "relevant" in prompt_lower or "irrelevant" in prompt_lower:
+                            action_text = "Content Relevance Check"
+                            input_text = "Evaluating if content is relevant to question"
+                        else:
+                            # Generic quick decision - try to extract more context
+                            action_text = "Quick Analysis"
+                            
+                            # Try to extract research question with better patterns
+                            import re
+                            question_match = None
+                            
+                            # Try various patterns to find the research question
+                            patterns = [
+                                r'research question:\s*"([^"]+)"',
+                                r'answering the (?:specific )?research question:\s*"([^"]+)"',
+                                r'question being (?:researched|explored):\s*"([^"]+)"',
+                                r'Task: Extract all information directly relevant to answering the specific research question:\s*"([^"]+)"',
+                            ]
+                            
+                            for pattern in patterns:
+                                match = re.search(pattern, user_prompt[:2000], re.IGNORECASE)
+                                if match:
+                                    question_match = match.group(1)[:150]
+                                    break
+                            
+                            if question_match:
+                                input_text = f"Q: {question_match}{'...' if len(question_match) >= 150 else ''}"
+                            elif "?" in user_prompt[:500]:
+                                # Fall back to finding first question mark
+                                question_end = user_prompt[:500].find("?")
+                                # Look for the start of the sentence containing the question mark
+                                sentence_starts = ['. ', '\n', ':', '"']
+                                question_start = 0
+                                for delimiter in sentence_starts:
+                                    pos = user_prompt[:question_end].rfind(delimiter)
+                                    if pos > 0:
+                                        question_start = pos + len(delimiter)
+                                        break
+                                
+                                question_text = user_prompt[question_start:question_end+1].strip()
+                                if len(question_text) > 20:
+                                    input_text = f"{question_text[:100]}{'...' if len(question_text) > 100 else ''}"
+                                else:
+                                    input_text = f"Analysis ({prompt_tokens} tokens → {completion_tokens} tokens)"
+                            else:
+                                input_text = f"Analysis ({prompt_tokens} tokens → {completion_tokens} tokens)"
+                    elif log_llm_call:
+                        # For regular LLM calls with full logging
+                        # Extract first line or question from prompt for better context
+                        prompt_lines = user_prompt.split('\n') if user_prompt else []
+                        first_question = next((line.strip() for line in prompt_lines if line.strip() and '?' in line), None)
+                        if first_question and len(first_question) > 20:
+                            input_text = f"{first_question[:100]}{'...' if len(first_question) > 100 else ''}"
+                        else:
+                            input_text = f"Prompt: {user_prompt[:150]}..."
+                        action_text = f"LLM Call ({agent_mode or 'general'})"
+                    
+                    # Only create log entry if log_llm_call is True
+                    # When False, higher-level code handles logging to prevent duplicates
+                    await context_manager.log_execution_step(
+                        mission_id=mission_id,
+                        agent_name=self.agent_name,
+                        action=action_text,
+                        input_summary=input_text,
+                        output_summary=output_summary,
+                        status=log_status,
+                        model_details=model_call_details,
+                        log_queue=log_queue,
+                        update_callback=update_callback
+                    )
+            # --- END LLM CALL AND COST LOGGING ---
+
+            # Update mission stats if model_call_details is available
+            # This ensures all agents update stats after LLM calls
+            if hasattr(self, 'mission_id') and self.mission_id and model_call_details:
+                # Import here to avoid circular imports
+                from ai_researcher.agentic_layer.agent_controller import AgentController
+                # Get the controller instance if available
+                controller = getattr(self, 'controller', None)
+                # If controller is available and has a context_manager, update stats via context_manager
+                if controller and hasattr(controller, 'context_manager'):
+                    # Call the update_mission_stats method on the context_manager
+                    # The context_manager.update_mission_stats method uses the queue and callback
+                    # passed *to it*, not the ones from the agent's context.
+                    # Since update_mission_stats is now async, schedule it
+                    import asyncio
+                    try:
+                        loop = asyncio.get_running_loop()
+                        asyncio.create_task(controller.context_manager.update_mission_stats(
+                            self.mission_id,
+                            model_call_details,
+                            log_queue,  # Pass these now that we have them
+                            update_callback
+                        ))
+                    except RuntimeError:
+                        # We're in a sync context, run in a thread
+                        import threading
+                        def run_async_stats():
+                            asyncio.run(controller.context_manager.update_mission_stats(
+                                self.mission_id,
+                                model_call_details,
+                                log_queue,
+                                update_callback
+                            ))
+                        thread = threading.Thread(target=run_async_stats, daemon=True)
+                        thread.start()
+
+            return response, model_call_details # Return the tuple
+        except Exception as e:
+            print(f"{self.agent_name} Error: Failed to get response from LLM via ModelDispatcher: {e}")
+            # Consider logging the full traceback here
+            # import traceback
+            # traceback.print_exc()
+            # --- ADD CONDITIONAL ERROR LOGGING ---
+            if log_llm_call:
+                context_manager = None
+                if hasattr(self, 'controller') and self.controller and hasattr(self.controller, 'context_manager'):
+                    context_manager = self.controller.context_manager
+                mission_id = getattr(self, 'mission_id', None)
+
+                if context_manager and mission_id and log_queue and update_callback:
+                    await context_manager.log_execution_step(
+                        mission_id=mission_id,
+                        agent_name=self.agent_name,
+                        action=f"LLM Call ({agent_mode or 'general'})",
+                        input_summary=f"Prompt: {user_prompt[:150]}...",
+                        output_summary=f"Error: {e}",
+                        status="failure",
+                        error_message=str(e),
+                        log_queue=log_queue,
+                        update_callback=update_callback
+                    )
+            # --- END CONDITIONAL ERROR LOGGING ---
+            return None, None # Return None for both parts of the tuple on error
+
+    async def _execute_tool(
+        self,
+        tool_name: str,
+        tool_arguments: Dict[str, Any],
+        tool_registry_override: Optional[ToolRegistry] = None,
+        log_queue: Optional[Any] = None, # <-- Add log_queue parameter
+        update_callback: Optional[Any] = None # <-- Add update_callback parameter
+    ) -> Any:
+        """
+        Executes a tool using the ToolRegistry asynchronously, passing relevant agent context if the tool accepts it.
+        Uses tool_registry_override if provided, otherwise defaults to self.tool_registry.
+        Logs the execution step and updates stats via the context manager using the provided callbacks.
+        """
+        registry_to_use = self.tool_registry or tool_registry_override
+
+        if not registry_to_use:
+            print(f"{self.agent_name} Error: ToolRegistry not available (neither self.tool_registry nor override provided).")
+            return {"error": "Tool execution capability not available."}
+
+        # --- REVISED DEBUG LOGGING ---
+        log_message = f"DEBUG ({self.agent_name}): _execute_tool received args for '{tool_name}'."
+        if "filepath" in tool_arguments:
+            log_message += f" Filepath value: '{tool_arguments['filepath']}'"
+        else:
+            # Optionally log that filepath is not applicable for this tool
+            # log_message += " (Filepath not applicable for this tool)."
+            pass # Or just don't add anything if filepath is missing
+        print(log_message)
+        # --- END REVISED DEBUG LOGGING ---
+
+        # --- Add Check for Path Mismatch on Entry ---
+        # Adjust check to use 'in' operator instead of comparing against the default string
+        if "filepath" in tool_arguments and "allowed_base_path" in tool_arguments and tool_name == "read_full_document":
+            received_filepath_str = tool_arguments["filepath"] # Get actual value
+            allowed_base_path_str = tool_arguments["allowed_base_path"] # Get actual value
+            try:
+                # Skip path check if allowed_base_path_str is None or 'None'
+                if allowed_base_path_str is None or allowed_base_path_str == 'None':
+                    print(f"DEBUG ({self.agent_name}): Skipping path check because allowed_base_path is None or 'None'")
+                else:
+                    # Resolve allowed base relative to CWD if needed
+                    allowed_base = Path(allowed_base_path_str)
+                    if not allowed_base.is_absolute():
+                        allowed_base = Path.cwd().joinpath(allowed_base).resolve()
+                    else:
+                        allowed_base = allowed_base.resolve()
+
+                    # Check if the received filepath string *starts with* the allowed base path string
+                    # This is a simpler check that avoids resolve() issues on the potentially bad path
+                    if not received_filepath_str.startswith(str(allowed_base)):
+                        print(f"CRITICAL WARNING ({self.agent_name}): _execute_tool received MISMATCHED filepath '{received_filepath_str}' which does not start with allowed base '{allowed_base}'!")
+            except Exception as path_ex:
+                print(f"DEBUG ({self.agent_name}): Path check exception in _execute_tool: {path_ex}")
+        # --- End Path Mismatch Check ---
+
+
+        try:
+            # --- ADD PRE-REGISTRY CALL DEBUG ---
+            final_filepath = tool_arguments.get("filepath", "FILEPATH_KEY_MISSING_PRE_REGISTRY")
+            print(f"DEBUG ({self.agent_name}): PRE-REGISTRY CALL for '{tool_name}'. Filepath value: '{final_filepath}'")
+            # --- END PRE-REGISTRY CALL DEBUG ---
+
+            # --- CHECK FOR ARXIV URLs WHEN FETCHING WEB PAGES ---
+            if tool_name == "fetch_web_page_content" and "url" in tool_arguments:
+                url = tool_arguments["url"]
+                # Check if this is an arXiv URL
+                from ai_researcher.agentic_layer.tools.arxiv_fetcher_tool import ArXivFetcherTool
+                is_arxiv, arxiv_id = ArXivFetcherTool.is_arxiv_url(url)
+                print(f"DEBUG: Checking URL '{url}' - is_arxiv={is_arxiv}, arxiv_id={arxiv_id}")
+                if is_arxiv:
+                    print(f"{self.agent_name}: Detected arXiv URL, using specialized arXiv fetcher for: {url} (ID: {arxiv_id})")
+                    # Create and execute the arXiv fetcher
+                    arxiv_fetcher = ArXivFetcherTool()
+                    result = await arxiv_fetcher.execute(
+                        url=url,
+                        update_callback=update_callback,
+                        log_queue=log_queue,
+                        mission_id=getattr(self, 'mission_id', None)
+                    )
+                    # Log the arXiv fetch as a successful tool execution
+                    if log_queue and update_callback and hasattr(self, 'mission_id') and self.mission_id:
+                        context_manager = None
+                        if hasattr(self, 'controller') and self.controller and hasattr(self.controller, 'context_manager'):
+                            context_manager = self.controller.context_manager
+                        if context_manager:
+                            await context_manager.log_execution_step(
+                                mission_id=self.mission_id,
+                                agent_name=self.agent_name,
+                                action=f"Fetch arXiv Paper: {arxiv_id}",
+                                input_summary=url,
+                                output_summary="arXiv paper fetched successfully" if "error" not in result else result.get("error", "Failed"),
+                                status="success" if "error" not in result else "failure",
+                                log_queue=log_queue,
+                                update_callback=update_callback
+                            )
+                    return result
+            # --- END ARXIV CHECK ---
+
+            # Get the tool definition
+            tool_def = registry_to_use.get_tool(tool_name)
+            if not tool_def:
+                print(f"{self.agent_name} Error: Tool '{tool_name}' not found in the registry.")
+                return {"error": f"Tool '{tool_name}' not found."}
+
+            # Inspect the tool's implementation signature
+            tool_func = tool_def.implementation
+            sig = inspect.signature(tool_func)
+            tool_params = sig.parameters
+
+            # Prepare arguments to pass, starting with the ones provided by the LLM
+            # Filter out any arguments that the tool doesn't accept
+            final_args = {k: v for k, v in tool_arguments.items() if k in tool_params or k == 'kwargs'}
+
+            # Check for and add extra context arguments if the tool accepts them and the agent has them
+            context_args_map = {
+                "mission_id": getattr(self, 'mission_id', None),
+                "agent_controller": getattr(self, 'controller', None), # Assuming controller is stored as self.controller
+                "log_queue": log_queue,  # Use the parameter passed to _execute_tool
+                "update_callback": update_callback,  # Use the parameter passed to _execute_tool
+                "agent_name": getattr(self, 'agent_name', None) # Pass agent name too?
+            }
+
+            for param_name, agent_attr_value in context_args_map.items():
+                if param_name in tool_params and agent_attr_value is not None:
+                    # Only add if the tool expects it and the agent has a non-None value
+                    if param_name not in final_args: # Avoid overwriting args from LLM
+                        final_args[param_name] = agent_attr_value
+                        print(f"DEBUG ({self.agent_name}): Adding context arg '{param_name}' to tool '{tool_name}' call.")
+                    else:
+                        print(f"DEBUG ({self.agent_name}): Context arg '{param_name}' already present in LLM args for tool '{tool_name}'. Skipping.")
+
+
+            # Await the registry's async execute method using the determined registry and final arguments
+            result = await registry_to_use.execute_tool(tool_name, final_args) # Pass the augmented args
+
+            # --- ADD Logging and Stats Update ---
+            log_status = "success"
+            error_message = None
+            result_summary = None # Initialize result_summary
+
+            # Process result for logging and determine status
+            if isinstance(result, dict) and "error" in result:
+                log_status = "failure"
+                error_message = result["error"]
+                result_summary = f"Error: {error_message}"
+            elif result is None: # Handle case where execute_tool itself might fail before tool impl
+                 log_status = "failure"
+                 error_message = "Tool execution failed (result was None)."
+                 result_summary = error_message
+            else:
+                # Attempt to create a concise summary for logging
+                try:
+                    if isinstance(result, list):
+                        result_summary = f"Returned list with {len(result)} items."
+                    elif isinstance(result, dict) and "results" in result and isinstance(result["results"], list):
+                        result_summary = f"Returned dict with {len(result['results'])} results."
+                    elif isinstance(result, str):
+                        result_summary = f"Returned string (length: {len(result)})."
+                    else:
+                        result_summary = f"Returned result of type {type(result).__name__}."
+                except Exception:
+                    result_summary = "Could not summarize result."
+
+            # Log the execution step using context manager
+            context_manager = None
+            if hasattr(self, 'controller') and self.controller and hasattr(self.controller, 'context_manager'):
+                context_manager = self.controller.context_manager
+
+            # If update_callback not provided as parameter, check if it's in the tool arguments
+            # This handles cases where tools are called directly by LLM function calling
+            effective_update_callback = update_callback
+            if not effective_update_callback and 'update_callback' in final_args:
+                effective_update_callback = final_args['update_callback']
+
+            if context_manager and hasattr(self, 'mission_id') and self.mission_id and log_queue and effective_update_callback:
+                # Create more meaningful action text based on tool name and arguments
+                action_text = f"Execute Tool: {tool_name}"
+                input_text = f"Args: {str(tool_arguments)[:100]}..."
+                
+                # Customize action text for specific tools to be more user-friendly
+                if tool_name == "read_full_document":
+                    if 'original_filename' in tool_arguments:
+                        action_text = f"Read Document: {tool_arguments['original_filename']}"
+                        input_text = tool_arguments.get('original_filename', 'Document')
+                    elif 'filepath' in tool_arguments:
+                        # Extract filename from filepath
+                        filepath = tool_arguments['filepath']
+                        filename = filepath.split('/')[-1] if '/' in filepath else filepath
+                        action_text = f"Read Document: {filename}"
+                        input_text = filename
+                elif tool_name == "fetch_web_page_content":
+                    if 'url' in tool_arguments:
+                        url = tool_arguments['url']
+                        # Extract domain from URL for display
+                        from urllib.parse import urlparse
+                        parsed_url = urlparse(url)
+                        domain = parsed_url.netloc or url[:50]
+                        action_text = f"Fetch Web Page: {domain}"
+                        input_text = url[:100] + ("..." if len(url) > 100 else "")
+                elif tool_name == "document_search":
+                    if 'query' in tool_arguments:
+                        query = tool_arguments['query']
+                        action_text = f"Search Documents: {query[:50]}{'...' if len(query) > 50 else ''}"
+                        input_text = query[:100] + ("..." if len(query) > 100 else "")
+                elif tool_name == "web_search":
+                    if 'query' in tool_arguments:
+                        query = tool_arguments['query']
+                        action_text = f"Web Search: {query[:50]}{'...' if len(query) > 50 else ''}"
+                        input_text = query[:100] + ("..." if len(query) > 100 else "")
+                
+                await context_manager.log_execution_step(
+                    mission_id=self.mission_id,
+                    agent_name=self.agent_name, # Logged by the agent calling the tool
+                    action=action_text,
+                    input_summary=input_text,
+                    output_summary=result_summary,
+                    status=log_status,
+                    error_message=error_message,
+                    # Include full args/result in the detailed log if needed, be mindful of size
+                    # full_input=final_args,
+                    # full_output=result,
+                    tool_calls=[{"tool_name": tool_name, "arguments": tool_arguments, "result_summary": result_summary, "error": error_message}], # Log as a tool call structure
+                    log_queue=log_queue,
+                    update_callback=effective_update_callback
+                )
+            else:
+                # --- MODIFIED: More detailed warning ---
+                missing = []
+                if not context_manager: missing.append("context_manager")
+                # Check for mission_id attribute existence AND if it has a truthy value
+                if not hasattr(self, 'mission_id') or not self.mission_id: missing.append("mission_id")
+                if not log_queue: missing.append("log_queue")
+                if not effective_update_callback: missing.append("update_callback")
+                print(f"WARNING ({self.agent_name}): Could not log tool execution for '{tool_name}'. Missing: {', '.join(missing)}")
+                # --- END MODIFICATION ---
+
+            # --- Moved Web Search Count Update (Independent of UI Callbacks) ---
+            if context_manager and hasattr(self, 'mission_id') and self.mission_id:
+                if tool_name == "web_search" and log_status == "success":
+                    # Call increment directly, passing None for queue/callback if they are missing
+                    context_manager.increment_web_search_count(
+                        self.mission_id,
+                        log_queue if log_queue else None,
+                        update_callback if update_callback else None
+                    )
+            # --- END Moved Web Search Count Update ---
+
+            # --- END Logging and Stats Update ---
+
+            # Return the actual result
+            return result
+        except Exception as e:
+            print(f"{self.agent_name} Error: Failed to execute tool '{tool_name}': {e}")
+            # Log the failure if possible
+            context_manager = None
+            if hasattr(self, 'controller') and self.controller and hasattr(self.controller, 'context_manager'):
+                context_manager = self.controller.context_manager
+            
+            # If update_callback not provided as parameter, check if it's in the tool arguments
+            effective_update_callback = update_callback
+            if not effective_update_callback and 'update_callback' in tool_arguments:
+                effective_update_callback = tool_arguments['update_callback']
+            
+            if context_manager and hasattr(self, 'mission_id') and self.mission_id and log_queue and effective_update_callback:
+                # Create more meaningful action text (same logic as success case)
+                action_text = f"Execute Tool: {tool_name}"
+                
+                if tool_name == "read_full_document":
+                    if 'original_filename' in tool_arguments:
+                        action_text = f"Read Document: {tool_arguments['original_filename']}"
+                    elif 'filepath' in tool_arguments:
+                        filepath = tool_arguments['filepath']
+                        filename = filepath.split('/')[-1] if '/' in filepath else filepath
+                        action_text = f"Read Document: {filename}"
+                elif tool_name == "fetch_web_page_content":
+                    if 'url' in tool_arguments:
+                        from urllib.parse import urlparse
+                        parsed_url = urlparse(tool_arguments['url'])
+                        domain = parsed_url.netloc or tool_arguments['url'][:50]
+                        action_text = f"Fetch Web Page: {domain}"
+                elif tool_name == "document_search":
+                    if 'query' in tool_arguments:
+                        query = tool_arguments['query']
+                        action_text = f"Search Documents: {query[:50]}{'...' if len(query) > 50 else ''}"
+                elif tool_name == "web_search":
+                    if 'query' in tool_arguments:
+                        query = tool_arguments['query']
+                        action_text = f"Web Search: {query[:50]}{'...' if len(query) > 50 else ''}"
+                
+                await context_manager.log_execution_step(
+                     mission_id=self.mission_id, agent_name=self.agent_name,
+                     action=action_text, status="failure", error_message=str(e),
+                     tool_calls=[{"tool_name": tool_name, "arguments": tool_arguments, "error": str(e)}],
+                     log_queue=log_queue, update_callback=effective_update_callback
+                 )
+            # Return a structured error
+            return {"error": f"Error executing tool '{tool_name}': {e}"}
+
+    @abstractmethod
+    def run(self, *args, **kwargs) -> Any:
+        """
+        The main execution method for the agent.
+        Subclasses must implement this method to define the agent's specific behavior.
+        """
+        pass

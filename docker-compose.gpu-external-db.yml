@@ -6,6 +6,7 @@ services:
     container_name: axiom-backend
     volumes:
       - ~/AI-Models/huggingface:/root/.cache/huggingface
+      - ~/AI-Models/spacy:/root/.local/share/spacy
       - ./axiom_datalab_cache:/root/.cache/datalab
       - ./reports:/app/reports
       - ./axiom_backend/data:/app/data
@@ -32,6 +33,7 @@ services:
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
       - ALLOW_CORS_WILDCARD=${ALLOW_CORS_WILDCARD:-true}
       - HF_HUB_OFFLINE=1
+      - SPACY_DATA=/root/.local/share/spacy
     networks:
       - axiom-network
     deploy:
@@ -50,6 +52,7 @@ services:
     working_dir: /app
     volumes:
       - ~/AI-Models/huggingface:/root/.cache/huggingface
+      - ~/AI-Models/spacy:/root/.local/share/spacy
       - ./axiom_datalab_cache:/root/.cache/datalab
       - ./reports:/app/reports
       - ./axiom_backend/data:/app/data
@@ -73,6 +76,7 @@ services:
       - MARKER_LLM_API_KEY=${MARKER_LLM_API_KEY:-${OPENAI_API_KEY}}
       - MARKER_LLM_BASE_URL=${MARKER_LLM_BASE_URL:-}
       - HF_HUB_OFFLINE=1
+      - SPACY_DATA=/root/.local/share/spacy
     deploy:
       resources:
         reservations:

@@ -1,0 +1,29 @@
+{
+  "added_tokens_decoder": {
+    "66553": {
+      "content": "</S>",
+      "lstrip": false,
+      "normalized": false,
+      "rstrip": false,
+      "single_word": false,
+      "special": true
+    },
+    "66556": {
+      "content": "<PAD>",
+      "lstrip": false,
+      "normalized": false,
+      "rstrip": false,
+      "single_word": false,
+      "special": true
+    }
+  },
+  "bos_token": null,
+  "clean_up_tokenization_spaces": false,
+  "eos_token": "</S>",
+  "extra_special_tokens": {},
+  "model_max_length": 1000000000000000019884624838656,
+  "pad_token": "<PAD>",
+  "processor_class": "MultimodalFoundationProcessor",
+  "tokenizer_class": "GreedyMathUTF16Tokenizer",
+  "unk_token": null
+}

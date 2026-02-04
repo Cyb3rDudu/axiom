@@ -1,0 +1,20 @@
+{
+  "add_reasoning_tokens": false,
+  "apply_augments": true,
+  "bbox_size": 1024,
+  "beacon_token_interval": 64,
+  "blank_bbox_token_id": 1025,
+  "merge_size": 2,
+  "num_beacon_tokens": 1,
+  "num_register_tokens": 4,
+  "patch_size": 14,
+  "processor_class": "MultimodalFoundationProcessor",
+  "styles": [
+    "Plain",
+    "Handwriting",
+    "Math",
+    "Chemical",
+    "Code"
+  ],
+  "use_script_tokens": true
+}

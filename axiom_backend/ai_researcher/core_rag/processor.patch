@@ -1,0 +1,14 @@
+--- processor.py.orig
++++ processor.py
+@@ -791,7 +791,9 @@
+ 
+                                 entities_count = 0
+                                 for chunk in chunks:
+-                                    entities, relationships = await entity_extractor.extract_from_chunk(
++                                    import asyncio
++                                    loop = asyncio.new_event_loop()
++                                    entities, relationships = loop.run_until_complete(entity_extractor.extract_from_chunk(
+                                         chunk['text'],
+                                         chunk['metadata']
+-                                    )
++                                    ))

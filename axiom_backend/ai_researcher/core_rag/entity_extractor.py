@@ -158,3 +158,28 @@ Return JSON:
   ]
 }}
 """
+
+    def extract_from_chunk_sync(
+        self,
+        chunk_text: str,
+        chunk_metadata: Dict
+    ) -> Tuple[List[Dict], List[Dict]]:
+        
+
+    def extract_from_chunk_sync(
+        self,
+        chunk_text: str,
+        chunk_metadata: Dict
+    ) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Synchronous wrapper for extract_from_chunk.
+        Extract entities and relationships from a chunk.
+        Returns (entities, relationships).
+        """
+        # Fast spaCy extraction (synchronous)
+        entities = self._extract_with_spacy(chunk_text) if self.nlp else []
+
+        # Note: LLM refinement requires async, so we skip it in sync mode
+        relationships = []
+
+        return entities, relationships
