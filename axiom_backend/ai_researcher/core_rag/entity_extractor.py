@@ -46,7 +46,8 @@ class EntityExtractor:
                 # Try loading from mounted models directory first
                 import os
                 spacy_data = os.getenv("SPACY_DATA", "/root/.local/share/spacy")
-                model_path = os.path.join(spacy_data, "en_core_web_sm-3.7.1")
+                # The actual model is nested: en_core_web_sm-3.7.1/en_core_web_sm/en_core_web_sm-3.7.1/
+                model_path = os.path.join(spacy_data, "en_core_web_sm-3.7.1", "en_core_web_sm", "en_core_web_sm-3.7.1")
 
                 if os.path.exists(model_path):
                     self.nlp = spacy.load(model_path)
