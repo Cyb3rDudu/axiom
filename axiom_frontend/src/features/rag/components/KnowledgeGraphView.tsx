@@ -1,8 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import {
-  Box, FormControl, InputLabel, Select, MenuItem, Chip, CircularProgress,
-  Typography, Paper, Grid, Card, CardContent
-} from '@mui/material'
+import { Loader2, Filter } from 'lucide-react'
 import { apiClient } from '../../../config/api'
 
 interface GraphData {
@@ -31,6 +28,7 @@ export const KnowledgeGraphView: React.FC = () => {
   const [graphData, setGraphData] = useState<GraphData | null>(null)
   const [selectedEntityTypes, setSelectedEntityTypes] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
+  const [showFilters, setShowFilters] = useState(false)
 
   const fetchGraph = async () => {
     setLoading(true)
@@ -56,114 +54,141 @@ export const KnowledgeGraphView: React.FC = () => {
 
   if (loading || !graphData) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-        <CircularProgress />
-      </Box>
+      <div className="flex justify-center items-center h-full">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
     )
   }
 
-  // Group nodes by type for display
   const nodesByType = graphData.nodes.reduce((acc, node) => {
     if (!acc[node.type]) acc[node.type] = []
     acc[node.type].push(node)
     return acc
   }, {} as Record<string, typeof graphData.nodes>)
 
+  const toggleEntityType = (type: string) => {
+    setSelectedEntityTypes(prev =>
+      prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
+    )
+  }
+
   return (
-    <Box sx={{ width: '100%', height: '100%' }}>
-      <Box sx={{ mb: 3 }}>
-        <FormControl size="small" sx={{ minWidth: 300 }}>
-          <InputLabel>Filter Entity Types</InputLabel>
-          <Select
-            multiple
-            value={selectedEntityTypes}
-            onChange={(e) => setSelectedEntityTypes(e.target.value as string[])}
-            renderValue={(selected) => (
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                {selected.map((value) => (
-                  <Chip key={value} label={value} size="small" />
-                ))}
-              </Box>
-            )}
-          >
+    <div className="space-y-6">
+      {/* Header with Filters */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <span className="inline-flex items-center px-3 py-1 rounded bg-primary/10 text-primary text-sm">
+            Nodes: {graphData.stats.total_nodes}
+          </span>
+          <span className="inline-flex items-center px-3 py-1 rounded bg-primary/10 text-primary text-sm">
+            Edges: {graphData.stats.total_edges}
+          </span>
+        </div>
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className="inline-flex items-center gap-2 px-3 py-2 border border-border rounded hover:bg-muted"
+        >
+          <Filter className="h-4 w-4" />
+          Filters
+        </button>
+      </div>
+
+      {/* Filter Panel */}
+      {showFilters && (
+        <div className="border border-border rounded-lg p-4">
+          <div className="text-sm font-medium mb-2">Entity Types:</div>
+          <div className="flex flex-wrap gap-2">
             {graphData.stats.entity_types.map((type) => (
-              <MenuItem key={type} value={type}>{type}</MenuItem>
+              <button
+                key={type}
+                onClick={() => toggleEntityType(type)}
+                className={`px-3 py-1 text-sm rounded border ${
+                  selectedEntityTypes.includes(type)
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'bg-background border-border hover:bg-muted'
+                }`}
+              >
+                {type}
+              </button>
             ))}
-          </Select>
-        </FormControl>
+          </div>
+        </div>
+      )}
 
-        <Box sx={{ mt: 2, display: 'flex', gap: 2 }}>
-          <Chip label={`Nodes: ${graphData.stats.total_nodes}`} />
-          <Chip label={`Edges: ${graphData.stats.total_edges}`} />
-        </Box>
-      </Box>
+      {/* Statistics Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Entity Distribution */}
+        <div className="border border-border rounded-lg p-4">
+          <h3 className="text-lg font-semibold mb-4">Entity Distribution</h3>
+          <div className="space-y-2">
+            {Object.entries(nodesByType).map(([type, nodes]) => (
+              <div key={type} className="flex items-center justify-between">
+                <span className="text-sm">{type}</span>
+                <span className="inline-flex items-center px-2 py-1 text-xs rounded bg-muted">
+                  {nodes.length}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
 
-      {/* Statistics Cards */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={6}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>Entity Distribution</Typography>
-              {Object.entries(nodesByType).map(([type, nodes]) => (
-                <Box key={type} sx={{ mb: 1, display: 'flex', justifyContent: 'space-between' }}>
-                  <Typography variant="body2">{type}</Typography>
-                  <Chip label={nodes.length} size="small" />
-                </Box>
+        {/* Top Entities */}
+        <div className="border border-border rounded-lg p-4">
+          <h3 className="text-lg font-semibold mb-4">Top Entities</h3>
+          <div className="space-y-2">
+            {graphData.nodes
+              .sort((a, b) => b.chunk_count - a.chunk_count)
+              .slice(0, 10)
+              .map((node) => (
+                <div key={node.id} className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm">{node.label}</div>
+                    <div className="text-xs text-muted-foreground">{node.type}</div>
+                  </div>
+                  <span className="inline-flex items-center px-2 py-1 text-xs rounded border border-border">
+                    {node.chunk_count} chunks
+                  </span>
+                </div>
               ))}
-            </CardContent>
-          </Card>
-        </Grid>
+          </div>
+        </div>
+      </div>
 
-        <Grid item xs={12} md={6}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>Top Entities</Typography>
-              {graphData.nodes
-                .sort((a, b) => b.chunk_count - a.chunk_count)
-                .slice(0, 10)
-                .map((node) => (
-                  <Box key={node.id} sx={{ mb: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Box>
-                      <Typography variant="body2">{node.label}</Typography>
-                      <Typography variant="caption" color="text.secondary">{node.type}</Typography>
-                    </Box>
-                    <Chip label={`${node.chunk_count} chunks`} size="small" variant="outlined" />
-                  </Box>
-                ))}
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-
-      {/* Entity List by Type */}
-      <Typography variant="h6" gutterBottom sx={{ mt: 3 }}>Entities by Type</Typography>
-      {Object.entries(nodesByType).map(([type, nodes]) => (
-        <Paper key={type} sx={{ p: 2, mb: 2 }}>
-          <Typography variant="subtitle1" gutterBottom>{type} ({nodes.length})</Typography>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-            {nodes.slice(0, 20).map((node) => (
-              <Chip
-                key={node.id}
-                label={`${node.label} (${node.chunk_count})`}
-                size="small"
-                variant="outlined"
-              />
-            ))}
-            {nodes.length > 20 && (
-              <Chip label={`+${nodes.length - 20} more`} size="small" variant="outlined" color="primary" />
-            )}
-          </Box>
-        </Paper>
-      ))}
+      {/* Entities by Type */}
+      <div className="space-y-4">
+        <h3 className="text-lg font-semibold">Entities by Type</h3>
+        {Object.entries(nodesByType).map(([type, nodes]) => (
+          <div key={type} className="border border-border rounded-lg p-4">
+            <div className="text-sm font-medium mb-3">
+              {type} ({nodes.length})
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {nodes.slice(0, 20).map((node) => (
+                <span
+                  key={node.id}
+                  className="inline-flex items-center px-2 py-1 text-xs rounded border border-border hover:bg-muted"
+                >
+                  {node.label} ({node.chunk_count})
+                </span>
+              ))}
+              {nodes.length > 20 && (
+                <span className="inline-flex items-center px-2 py-1 text-xs rounded bg-primary/10 text-primary">
+                  +{nodes.length - 20} more
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
 
       {/* Visualization Note */}
-      <Paper sx={{ p: 3, mt: 3, bgcolor: 'info.light', color: 'info.contrastText' }}>
-        <Typography variant="body2">
+      <div className="border border-blue-200 bg-blue-50 dark:bg-blue-950 dark:border-blue-800 rounded-lg p-4">
+        <div className="text-sm">
           <strong>Note:</strong> Interactive graph visualization with force-directed layout
           can be added using libraries like react-force-graph or cytoscape.
           For now, entity statistics and lists are displayed above.
-        </Typography>
-      </Paper>
-    </Box>
+        </div>
+      </div>
+    </div>
   )
 }

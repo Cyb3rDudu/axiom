@@ -1,10 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import {
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Paper, TextField, Pagination, Chip, Box, Typography, CircularProgress,
-  Dialog, DialogTitle, DialogContent, IconButton
-} from '@mui/material'
-import { Close as CloseIcon } from '@mui/icons-material'
+import { Search, Loader2, X, ExternalLink } from 'lucide-react'
 import { apiClient } from '../../../config/api'
 
 interface Chunk {
@@ -76,161 +71,174 @@ export const ChunksView: React.FC = () => {
   }
 
   return (
-    <Box>
-      <TextField
-        fullWidth
-        placeholder="Search chunks..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        sx={{ mb: 2 }}
-      />
+    <div>
+      {/* Search */}
+      <div className="relative mb-4">
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <input
+          type="text"
+          placeholder="Search chunks..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="w-full pl-10 pr-4 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+      </div>
 
       {loading ? (
-        <Box display="flex" justifyContent="center" p={4}>
-          <CircularProgress />
-        </Box>
+        <div className="flex justify-center items-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
       ) : (
         <>
-          <TableContainer component={Paper}>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableCell>Chunk ID</TableCell>
-                  <TableCell>Document</TableCell>
-                  <TableCell>Preview</TableCell>
-                  <TableCell>Metadata</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
+          {/* Table */}
+          <div className="border border-border rounded-lg overflow-hidden">
+            <table className="w-full">
+              <thead className="bg-muted">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Chunk ID</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Document</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Preview</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Metadata</th>
+                </tr>
+              </thead>
+              <tbody className="bg-card divide-y divide-border">
                 {chunks.map((chunk) => (
-                  <TableRow
+                  <tr
                     key={chunk.chunk_id}
-                    hover
                     onClick={() => handleChunkClick(chunk)}
-                    sx={{ cursor: 'pointer' }}
+                    className="hover:bg-muted/50 cursor-pointer transition-colors"
                   >
-                    <TableCell>
-                      <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                        {chunk.chunk_id.slice(-12)}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2">{chunk.document_title || chunk.document_filename}</Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography
-                        variant="body2"
-                        sx={{
-                          maxWidth: 400,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap'
-                        }}
-                      >
+                    <td className="px-4 py-3">
+                      <code className="text-xs text-muted-foreground">{chunk.chunk_id.slice(-12)}</code>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="text-sm">{chunk.document_title || chunk.document_filename}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="text-sm text-muted-foreground truncate max-w-md">
                         {chunk.text}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
                       {chunk.metadata?.chunk_index !== undefined && (
-                        <Chip label={`Index: ${chunk.metadata.chunk_index}`} size="small" />
+                        <span className="inline-flex items-center px-2 py-1 text-xs rounded bg-primary/10 text-primary">
+                          Index: {chunk.metadata.chunk_index}
+                        </span>
                       )}
-                    </TableCell>
-                  </TableRow>
+                    </td>
+                  </tr>
                 ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+              </tbody>
+            </table>
+          </div>
 
-          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
-            <Pagination
-              count={totalPages}
-              page={page}
-              onChange={(_, value) => setPage(value)}
-            />
-          </Box>
+          {/* Pagination */}
+          <div className="flex justify-center items-center gap-2 mt-4">
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="px-3 py-1 border border-border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-muted"
+            >
+              Previous
+            </button>
+            <span className="text-sm text-muted-foreground">
+              Page {page} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+              className="px-3 py-1 border border-border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-muted"
+            >
+              Next
+            </button>
+          </div>
         </>
       )}
 
-      {/* Chunk Detail Dialog */}
-      <Dialog
-        open={!!selectedChunk}
-        onClose={() => setSelectedChunk(null)}
-        maxWidth="md"
-        fullWidth
-      >
-        {selectedChunk && (
-          <>
-            <DialogTitle>
-              Chunk Details
-              <IconButton
+      {/* Chunk Detail Modal */}
+      {selectedChunk && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-card border border-border rounded-lg max-w-3xl w-full max-h-[90vh] overflow-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-border sticky top-0 bg-card">
+              <h2 className="text-lg font-semibold">Chunk Details</h2>
+              <button
                 onClick={() => setSelectedChunk(null)}
-                sx={{ position: 'absolute', right: 8, top: 8 }}
+                className="p-1 hover:bg-muted rounded"
               >
-                <CloseIcon />
-              </IconButton>
-            </DialogTitle>
-            <DialogContent dividers>
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-4 space-y-4">
               {detailLoading ? (
-                <Box display="flex" justifyContent="center" p={4}>
-                  <CircularProgress />
-                </Box>
+                <div className="flex justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                </div>
               ) : (
                 <>
-                  <Typography variant="subtitle2" gutterBottom>Chunk ID:</Typography>
-                  <Typography variant="body2" sx={{ fontFamily: 'monospace', mb: 2 }}>
-                    {selectedChunk.chunk_id}
-                  </Typography>
+                  <div>
+                    <div className="text-sm font-medium text-muted-foreground mb-1">Chunk ID:</div>
+                    <code className="text-xs bg-muted px-2 py-1 rounded">{selectedChunk.chunk_id}</code>
+                  </div>
 
-                  <Typography variant="subtitle2" gutterBottom>Text:</Typography>
-                  <Paper sx={{ p: 2, mb: 2, bgcolor: 'grey.50', maxHeight: 300, overflow: 'auto' }}>
-                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-                      {selectedChunk.text}
-                    </Typography>
-                  </Paper>
+                  <div>
+                    <div className="text-sm font-medium text-muted-foreground mb-1">Text:</div>
+                    <div className="bg-muted/50 p-3 rounded max-h-60 overflow-auto">
+                      <pre className="text-sm whitespace-pre-wrap">{selectedChunk.text}</pre>
+                    </div>
+                  </div>
 
-                  <Typography variant="subtitle2" gutterBottom>Entities ({selectedChunk.entities.length}):</Typography>
-                  <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                    {selectedChunk.entities.map((entity, idx) => (
-                      <Chip
-                        key={idx}
-                        label={`${entity.text} (${entity.type})`}
-                        size="small"
-                        variant="outlined"
-                      />
-                    ))}
-                  </Box>
+                  <div>
+                    <div className="text-sm font-medium text-muted-foreground mb-2">
+                      Entities ({selectedChunk.entities.length}):
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedChunk.entities.map((entity, idx) => (
+                        <span
+                          key={idx}
+                          className="inline-flex items-center px-2 py-1 text-xs rounded border border-border"
+                        >
+                          {entity.text} <span className="ml-1 text-muted-foreground">({entity.type})</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
 
-                  <Typography variant="subtitle2" gutterBottom>
-                    Relationships ({selectedChunk.relationships.length}):
-                  </Typography>
-                  <TableContainer component={Paper} variant="outlined">
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell>Type</TableCell>
-                          <TableCell>Strength</TableCell>
-                          <TableCell>Target Chunk</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {selectedChunk.relationships.map((rel, idx) => (
-                          <TableRow key={idx}>
-                            <TableCell>{rel.type}</TableCell>
-                            <TableCell>{rel.strength.toFixed(2)}</TableCell>
-                            <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                              {rel.target_chunk_id.slice(-12)}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </TableContainer>
+                  <div>
+                    <div className="text-sm font-medium text-muted-foreground mb-2">
+                      Relationships ({selectedChunk.relationships.length}):
+                    </div>
+                    <div className="border border-border rounded overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted">
+                          <tr>
+                            <th className="px-3 py-2 text-left">Type</th>
+                            <th className="px-3 py-2 text-left">Strength</th>
+                            <th className="px-3 py-2 text-left">Target Chunk</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {selectedChunk.relationships.map((rel, idx) => (
+                            <tr key={idx}>
+                              <td className="px-3 py-2">{rel.type}</td>
+                              <td className="px-3 py-2">{rel.strength.toFixed(2)}</td>
+                              <td className="px-3 py-2">
+                                <code className="text-xs">{rel.target_chunk_id.slice(-12)}</code>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </>
               )}
-            </DialogContent>
-          </>
-        )}
-      </Dialog>
-    </Box>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
