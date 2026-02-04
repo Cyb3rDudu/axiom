@@ -25,7 +25,9 @@ class GraphEnhancedRetriever:
         vector_weight: float = 0.6,
         graph_weight: float = 0.3,
         diversity_weight: float = 0.1,
-        decay_factor: float = 0.6
+        decay_factor: float = 0.6,
+        min_relationship_strength: float = 0.3,
+        cache_size: int = 1000
     ):
         self.base_retriever = base_retriever
         self.graph_store = graph_store
@@ -34,6 +36,8 @@ class GraphEnhancedRetriever:
         self.graph_weight = graph_weight
         self.diversity_weight = diversity_weight
         self.decay_factor = decay_factor
+        self.min_relationship_strength = min_relationship_strength
+        self.cache_size = cache_size
 
     async def retrieve(
         self,
@@ -113,7 +117,7 @@ class GraphEnhancedRetriever:
                 # Get neighbors
                 neighbors = self.graph_store.get_chunk_neighbors(
                     current_id,
-                    min_strength=0.3
+                    min_strength=self.min_relationship_strength
                 )
 
                 for neighbor_id, relationship in neighbors:
