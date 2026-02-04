@@ -67,7 +67,7 @@ export const RagSidebar: React.FC<RagSidebarProps> = ({ filters, onFiltersChange
   const hasFilters = filters.selectedDocuments.length > 0 || filters.selectedGroups.length > 0 || filters.search
 
   return (
-    <div className="w-64 border-r border-border bg-card flex flex-col h-full">
+    <div className="flex flex-col h-full">
       {/* Header */}
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-3">

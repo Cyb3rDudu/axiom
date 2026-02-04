@@ -20,11 +20,13 @@ export const RagView: React.FC = () => {
 
   return (
     <div className="h-full flex bg-background">
-      {/* Left Sidebar */}
-      <RagSidebar filters={filters} onFiltersChange={setFilters} />
+      {/* Left Sidebar - matches document library layout */}
+      <div className="w-60 border-r border-border bg-card flex-shrink-0">
+        <RagSidebar filters={filters} onFiltersChange={setFilters} />
+      </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Tabs */}
         <div className="border-b border-border bg-card">
           <div className="flex">

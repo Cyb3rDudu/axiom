@@ -138,24 +138,54 @@ class EntityExtractor:
         chunk_text: str,
         entities: List[Dict]
     ) -> List[Dict]:
-        """Use LLM to detect relationships between entities."""
+        """Use LLM to detect relationships between entities with 3-level JSON fallback."""
         if not self.llm_client:
             return []
 
         entity_list = [e["text"] for e in entities]
-        prompt = self._build_relationship_prompt(chunk_text, entity_list)
+        base_prompt = self._build_relationship_prompt(chunk_text, entity_list)
+        messages = [{"role": "user", "content": base_prompt}]
 
-        try:
-            response = await self.llm_client.chat(
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"}
-            )
+        # 3-level fallback: json_object -> enhanced prompt -> no format
+        attempts = [
+            ("json_object", {"type": "json_object"}, messages),
+            ("json_object_enhanced", {"type": "json_object"},
+             [{"role": "user", "content": base_prompt + "\n\nCRITICAL: Return ONLY valid JSON. Ensure all strings are properly quoted and escaped."}]),
+            ("no_format", None,
+             [{"role": "user", "content": base_prompt + "\n\nReturn ONLY a valid JSON object, nothing else."}])
+        ]
 
-            data = json.loads(response.choices[0].message.content)
-            return data.get("relationships", [])
-        except Exception as e:
-            logger.error(f"LLM relationship extraction failed: {e}")
-            return []
+        for attempt_name, response_format, attempt_messages in attempts:
+            try:
+                kwargs = {"messages": attempt_messages}
+                if response_format:
+                    kwargs["response_format"] = response_format
+
+                response = await self.llm_client.chat(**kwargs)
+                content = response.choices[0].message.content
+
+                # Try to parse JSON
+                data = json.loads(content)
+                logger.debug(f"Successfully extracted relationships using {attempt_name}")
+                return data.get("relationships", [])
+
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON parse error with {attempt_name}: {str(e)[:100]}")
+                if attempt_name == "no_format":
+                    # Last attempt failed, give up
+                    logger.error(f"All JSON extraction attempts failed for entity relationships")
+                    return []
+                # Try next attempt
+                continue
+
+            except Exception as e:
+                logger.error(f"LLM relationship extraction failed with {attempt_name}: {str(e)[:100]}")
+                if attempt_name == "no_format":
+                    return []
+                # Try next attempt
+                continue
+
+        return []
 
     def _build_relationship_prompt(
         self,
@@ -181,11 +211,11 @@ Return JSON:
 """
 
     def _extract_with_llm(self, chunk_text: str) -> List[Dict]:
-        """Extract entities using LLM for domain-specific terminology."""
+        """Extract entities using LLM for domain-specific terminology with JSON fallback."""
         if not self.llm_client or not self.enable_llm_refinement:
             return []
 
-        prompt = f"""Extract key entities from this academic text. Focus on domain-specific concepts, methods, and terminology.
+        base_prompt = f"""Extract key entities from this academic text. Focus on domain-specific concepts, methods, and terminology.
 
 Text:
 {chunk_text[:2000]}
@@ -210,31 +240,58 @@ Return JSON:
 }}
 """
 
-        try:
-            response = self.llm_client.chat.completions.create(
-                model="deepseek-chat",  # Use configured fast model
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=500,
-                response_format={"type": "json_object"}
-            )
+        # 3-level fallback: json_object -> enhanced prompt -> no format
+        attempts = [
+            ("json_object", {"type": "json_object"}, base_prompt),
+            ("json_object_enhanced", {"type": "json_object"},
+             base_prompt + "\n\nCRITICAL: Return ONLY valid JSON with properly escaped strings."),
+            ("no_format", None,
+             base_prompt + "\n\nReturn ONLY a valid JSON object, nothing else.")
+        ]
 
-            data = json.loads(response.choices[0].message.content)
-            entities = []
+        for attempt_name, response_format, prompt in attempts:
+            try:
+                kwargs = {
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": 500
+                }
+                if response_format:
+                    kwargs["response_format"] = response_format
 
-            for ent in data.get("entities", []):
-                entities.append({
-                    "text": ent["text"],
-                    "type": ent["type"],
-                    "canonical_form": self._normalize_entity(ent["text"]),
-                    "confidence": ent.get("confidence", 0.8)
-                })
+                response = self.llm_client.chat.completions.create(**kwargs)
+                content = response.choices[0].message.content
 
-            return entities
+                # Try to parse JSON
+                data = json.loads(content)
+                entities = []
 
-        except Exception as e:
-            logger.error(f"LLM entity extraction failed: {e}")
-            return []
+                for ent in data.get("entities", []):
+                    entities.append({
+                        "text": ent["text"],
+                        "type": ent["type"],
+                        "canonical_form": self._normalize_entity(ent["text"]),
+                        "confidence": ent.get("confidence", 0.8)
+                    })
+
+                logger.debug(f"Successfully extracted entities using {attempt_name}")
+                return entities
+
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON parse error with {attempt_name}: {str(e)[:100]}")
+                if attempt_name == "no_format":
+                    logger.error(f"All JSON extraction attempts failed for entities")
+                    return []
+                continue
+
+            except Exception as e:
+                logger.error(f"LLM entity extraction failed with {attempt_name}: {str(e)[:100]}")
+                if attempt_name == "no_format":
+                    return []
+                continue
+
+        return []
 
     def extract_from_chunk_sync(
         self,
