@@ -92,10 +92,13 @@ export const MainLayout: React.FC = () => {
     // Save current scroll position before changing view
     saveScrollPosition()
     setSelectedGroup(group);
-    setView('documents');
+    // Only switch to documents view if not already in documents or rag view
+    if (currentView !== 'documents' && currentView !== 'rag') {
+      setView('documents');
+    }
     navigate('/app');
     // Keep sidebar open when selecting groups
-  }, [setSelectedGroup, setView, navigate, saveScrollPosition]);
+  }, [setSelectedGroup, setView, navigate, saveScrollPosition, currentView]);
   
   const handleViewChange = useCallback((view: any) => {
     // Save current scroll position before changing view
