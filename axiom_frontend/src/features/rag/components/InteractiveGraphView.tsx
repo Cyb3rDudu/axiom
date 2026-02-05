@@ -52,13 +52,17 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
         min_strength: 0.3,
         limit: 200
       }
-      if (filters.selectedDocuments.length > 0) params.doc_ids = filters.selectedDocuments.join(',')
+
+      // Apply filters if any are selected
+      if (filters.selectedDocuments.length > 0) {
+        params.doc_ids = filters.selectedDocuments.join(',')
+      }
 
       const response = await apiClient.get('/api/rag/graph', { params })
       const data = response.data
 
       // Initialize node positions randomly
-      const nodes = data.nodes.map((node: Node) => ({
+      const nodes = (data.nodes || []).map((node: Node) => ({
         ...node,
         x: Math.random() * 800,
         y: Math.random() * 600,
@@ -68,7 +72,8 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
 
       setGraphData({ ...data, nodes })
     } catch (error) {
-      console.error('Failed to fetch graph:', error)
+      console.error('[InteractiveGraphView] Failed to fetch graph:', error)
+      setGraphData({ nodes: [], edges: [], stats: { total_nodes: 0, total_edges: 0, entity_types: [] } })
     } finally {
       setLoading(false)
     }

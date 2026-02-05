@@ -44,13 +44,23 @@ export const ChunksView: React.FC<ChunksViewProps> = ({ filters }) => {
     try {
       const params: any = { page, limit: 50 }
       if (filters.search) params.search = filters.search
-      if (filters.selectedDocuments.length > 0) params.doc_ids = filters.selectedDocuments.join(',')
+
+      // Apply filters if any groups/documents are selected
+      if (filters.selectedGroups.length > 0) {
+        // TODO: Add group filtering support to backend
+        console.log('[ChunksView] Group filtering not yet implemented')
+      }
+      if (filters.selectedDocuments.length > 0) {
+        params.doc_ids = filters.selectedDocuments.join(',')
+      }
 
       const response = await apiClient.get('/api/rag/chunks', { params })
-      setChunks(response.data.chunks)
-      setTotalPages(response.data.pagination.total_pages)
+      setChunks(response.data.chunks || [])
+      setTotalPages(response.data.pagination?.total_pages || 1)
     } catch (error) {
-      console.error('Failed to fetch chunks:', error)
+      console.error('[ChunksView] Failed to fetch chunks:', error)
+      setChunks([])
+      setTotalPages(1)
     } finally {
       setLoading(false)
     }

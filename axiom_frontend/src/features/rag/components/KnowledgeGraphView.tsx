@@ -42,13 +42,20 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({ filters 
         min_strength: 0.3,
         limit: 500
       }
-      if (selectedEntityTypes.length > 0) params.entity_types = selectedEntityTypes
-      if (filters.selectedDocuments.length > 0) params.doc_ids = filters.selectedDocuments.join(',')
+
+      // Apply filters if any are selected
+      if (selectedEntityTypes.length > 0) {
+        params.entity_types = selectedEntityTypes
+      }
+      if (filters.selectedDocuments.length > 0) {
+        params.doc_ids = filters.selectedDocuments.join(',')
+      }
 
       const response = await apiClient.get('/api/rag/graph', { params })
       setGraphData(response.data)
     } catch (error) {
-      console.error('Failed to fetch graph:', error)
+      console.error('[KnowledgeGraphView] Failed to fetch graph:', error)
+      setGraphData({ nodes: [], edges: [], stats: { total_nodes: 0, total_edges: 0, entity_types: [] } })
     } finally {
       setLoading(false)
     }

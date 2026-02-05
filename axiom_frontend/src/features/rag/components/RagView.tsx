@@ -40,10 +40,7 @@ export const RagView: React.FC = () => {
         <div className="border-b border-border bg-card px-6 py-4 flex items-center gap-2">
           <Library className="h-5 w-5 text-muted-foreground" />
           <h1 className="text-lg font-semibold">
-            Knowledge Graph
-            {selectedGroup && (
-              <span className="text-muted-foreground font-normal"> / {selectedGroup.name}</span>
-            )}
+            Knowledge Graph / {selectedGroup ? selectedGroup.name : 'All Documents'}
           </h1>
         </div>
 
