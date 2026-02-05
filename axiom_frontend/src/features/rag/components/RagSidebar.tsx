@@ -27,20 +27,26 @@ export const RagSidebar: React.FC<RagSidebarProps> = ({ filters, onFiltersChange
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
+    // Fetch documents and groups when component mounts
     fetchDocumentsAndGroups()
   }, [])
 
   const fetchDocumentsAndGroups = async () => {
     setLoading(true)
     try {
+      console.log('[RagSidebar] Fetching documents and groups...')
       const [docsResponse, groupsResponse] = await Promise.all([
         apiClient.get('/api/documents', { params: { limit: 1000 } }),
         apiClient.get('/api/document-groups')
       ])
+      console.log('[RagSidebar] Fetched', docsResponse.data.documents?.length || 0, 'documents and', groupsResponse.data.groups?.length || 0, 'groups')
       setDocuments(docsResponse.data.documents || [])
       setGroups(groupsResponse.data.groups || [])
     } catch (error) {
-      console.error('Failed to fetch documents/groups:', error)
+      console.error('[RagSidebar] Failed to fetch documents/groups:', error)
+      // Set empty arrays on error to prevent undefined state
+      setDocuments([])
+      setGroups([])
     } finally {
       setLoading(false)
     }
