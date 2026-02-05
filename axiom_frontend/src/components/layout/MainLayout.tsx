@@ -109,6 +109,8 @@ export const MainLayout: React.FC = () => {
         return <ChatHistorySidebar />;
       case 'documents':
         return <DocumentGroupSidebar onSelectGroup={handleSelectGroup} />;
+      case 'rag':
+        return <DocumentGroupSidebar onSelectGroup={handleSelectGroup} />;
       case 'writing':
         return <WritingChatSidebar />;
       default:
