@@ -36,12 +36,16 @@ export const RagView: React.FC = () => {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Header matching Documents view */}
-        <div className="border-b border-border bg-card px-6 py-4 flex items-center gap-2">
-          <Library className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-lg font-semibold">
-            Knowledge Graph / {selectedGroup ? selectedGroup.name : 'All Documents'}
-          </h1>
+        {/* Header - EXACTLY matching Documents view */}
+        <div className="px-6 py-4 border-b border-border min-h-[88px] flex items-center bg-header-background">
+          <div className="flex items-center space-x-2">
+            <Library className="h-5 w-5 text-primary" />
+            <span className="text-lg font-semibold text-foreground">Knowledge Graph</span>
+            <span className="text-muted-foreground">/</span>
+            <span className="text-lg font-medium text-foreground">
+              {selectedGroup ? selectedGroup.name : 'All Documents'}
+            </span>
+          </div>
         </div>
 
         {/* Tabs */}
