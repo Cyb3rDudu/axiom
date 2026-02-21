@@ -791,10 +791,10 @@ class DocumentProcessor:
 
                                 entities_count = 0
                                 for chunk in chunks:
-                                    import asyncio; loop = asyncio.new_event_loop(); entities, relationships = loop.run_until_complete(entity_extractor.extract_from_chunk(
+                                    entities, relationships = entity_extractor.extract_from_chunk_sync(
                                         chunk['text'],
                                         chunk['metadata']
-                                    ))
+                                    )
 
                                     for entity in entities:
                                         entity_id = graph_store.add_entity(

@@ -11,6 +11,8 @@ from .graph_store import GraphStore, Relationship
 
 logger = logging.getLogger(__name__)
 
+GRAPH_DISCOVERED_DEFAULT_SCORE = 0.5
+
 
 class GraphEnhancedRetriever:
     """
@@ -174,7 +176,7 @@ class GraphEnhancedRetriever:
                     'id': result[0],
                     'text': result[1],
                     'metadata': result[2],
-                    'score': 0.5  # Default score for graph-discovered chunks
+                    'score': GRAPH_DISCOVERED_DEFAULT_SCORE
                 }
             return None
         except Exception as e:

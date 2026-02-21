@@ -210,89 +210,6 @@ Return JSON:
 }}
 """
 
-    def _extract_with_llm(self, chunk_text: str) -> List[Dict]:
-        """Extract entities using LLM for domain-specific terminology with JSON fallback."""
-        if not self.llm_client or not self.enable_llm_refinement:
-            return []
-
-        base_prompt = f"""Extract key entities from this academic text. Focus on domain-specific concepts, methods, and terminology.
-
-Text:
-{chunk_text[:2000]}
-
-Extract entities in these categories:
-- PERSON: Authors, researchers
-- ORGANIZATION: Institutions, companies, agencies
-- LOCATION: Countries, regions, cities
-- CONCEPT: Key concepts, theories, terminology (e.g., "tax elasticity", "inflation", "neural networks")
-- METHOD: Research methods, algorithms, techniques
-- TECHNOLOGY: Software, tools, frameworks
-- METRIC: Performance measures, statistical measures
-- DATASET: Named datasets
-- WORK: Papers, books, publications
-
-Return JSON:
-{{
-  "entities": [
-    {{"text": "tax elasticity", "type": "CONCEPT", "confidence": 0.9}},
-    {{"text": "OECD", "type": "ORGANIZATION", "confidence": 0.95}}
-  ]
-}}
-"""
-
-        # 3-level fallback: json_object -> enhanced prompt -> no format
-        attempts = [
-            ("json_object", {"type": "json_object"}, base_prompt),
-            ("json_object_enhanced", {"type": "json_object"},
-             base_prompt + "\n\nCRITICAL: Return ONLY valid JSON with properly escaped strings."),
-            ("no_format", None,
-             base_prompt + "\n\nReturn ONLY a valid JSON object, nothing else.")
-        ]
-
-        for attempt_name, response_format, prompt in attempts:
-            try:
-                kwargs = {
-                    "model": "deepseek-chat",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                    "max_tokens": 500
-                }
-                if response_format:
-                    kwargs["response_format"] = response_format
-
-                response = self.llm_client.chat.completions.create(**kwargs)
-                content = response.choices[0].message.content
-
-                # Try to parse JSON
-                data = json.loads(content)
-                entities = []
-
-                for ent in data.get("entities", []):
-                    entities.append({
-                        "text": ent["text"],
-                        "type": ent["type"],
-                        "canonical_form": self._normalize_entity(ent["text"]),
-                        "confidence": ent.get("confidence", 0.8)
-                    })
-
-                logger.debug(f"Successfully extracted entities using {attempt_name}")
-                return entities
-
-            except json.JSONDecodeError as e:
-                logger.warning(f"JSON parse error with {attempt_name}: {str(e)[:100]}")
-                if attempt_name == "no_format":
-                    logger.error(f"All JSON extraction attempts failed for entities")
-                    return []
-                continue
-
-            except Exception as e:
-                logger.error(f"LLM entity extraction failed with {attempt_name}: {str(e)[:100]}")
-                if attempt_name == "no_format":
-                    return []
-                continue
-
-        return []
-
     def extract_from_chunk_sync(
         self,
         chunk_text: str,
@@ -304,19 +221,7 @@ Return JSON:
         Returns (entities, relationships).
         """
         # Fast spaCy extraction (synchronous)
-        spacy_entities = self._extract_with_spacy(chunk_text) if self.nlp else []
-
-        # LLM-based entity extraction for domain concepts
-        llm_entities = self._extract_with_llm(chunk_text)
-
-        # Merge entities (deduplicate by canonical form)
-        entities_dict = {}
-        for ent in spacy_entities + llm_entities:
-            key = (ent["canonical_form"], ent["type"])
-            if key not in entities_dict:
-                entities_dict[key] = ent
-
-        entities = list(entities_dict.values())
+        entities = self._extract_with_spacy(chunk_text) if self.nlp else []
         relationships = []
 
         return entities, relationships

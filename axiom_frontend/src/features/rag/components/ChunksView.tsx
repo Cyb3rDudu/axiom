@@ -48,7 +48,6 @@ export const ChunksView: React.FC<ChunksViewProps> = ({ filters }) => {
       // Apply filters if any groups/documents are selected
       if (filters.selectedGroups.length > 0) {
         // TODO: Add group filtering support to backend
-        console.log('[ChunksView] Group filtering not yet implemented')
       }
       if (filters.selectedDocuments.length > 0) {
         params.doc_ids = filters.selectedDocuments.join(',')
