@@ -5,7 +5,7 @@ Endpoints for knowledge graph visualization, chunk exploration, and graph manage
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from sqlalchemy import text
 from database.database import get_db
 import logging
@@ -363,7 +363,7 @@ async def get_chunk_detail(
 async def get_knowledge_graph(
     doc_id: Optional[str] = None,
     entity_types: Optional[List[str]] = Query(None),
-    min_strength: float = Query(0.3, ge=0.0, le=1.0),
+    min_strength: float = Query(0.1, ge=0.0, le=1.0),
     limit: int = Query(500, ge=1, le=2000),
     db=Depends(get_db)
 ):

@@ -39,6 +39,7 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
   const [graphData, setGraphData] = useState<GraphData | null>(null)
   const [loading, setLoading] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const animFrameRef = useRef<number>(0)
   const [selectedNode, setSelectedNode] = useState<Node | null>(null)
 
   useEffect(() => {
@@ -49,7 +50,7 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
     setLoading(true)
     try {
       const params: any = {
-        min_strength: 0.3,
+        min_strength: 0.1,
         limit: 200
       }
 
@@ -101,10 +102,17 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
       'WORK': '#FD79A8'
     }
 
+    let frameCount = 0
+
     // Simple force simulation
     const simulate = () => {
       const nodes = graphData.nodes
       const edges = graphData.edges
+      frameCount++
+
+      // Increase damping after 300 frames to converge
+      const damping = frameCount > 300 ? 0.6 : 0.85
+      const forceScale = frameCount > 300 ? 0.005 : 0.02
 
       // Apply forces
       for (let i = 0; i < nodes.length; i++) {
@@ -116,7 +124,7 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
           const dx = nodes[i].x! - nodes[j].x!
           const dy = nodes[i].y! - nodes[j].y!
           const dist = Math.sqrt(dx * dx + dy * dy) || 1
-          const force = 1000 / (dist * dist)
+          const force = 500 / (dist * dist)
           fx += (dx / dist) * force
           fy += (dy / dist) * force
         }
@@ -125,12 +133,13 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
         edges.forEach(edge => {
           const sourceIdx = nodes.findIndex(n => n.id === edge.source)
           const targetIdx = nodes.findIndex(n => n.id === edge.target)
+          if (sourceIdx < 0 || targetIdx < 0) return
           if (sourceIdx === i || targetIdx === i) {
             const other = sourceIdx === i ? nodes[targetIdx] : nodes[sourceIdx]
             const dx = other.x! - nodes[i].x!
             const dy = other.y! - nodes[i].y!
             const dist = Math.sqrt(dx * dx + dy * dy) || 1
-            const force = dist * 0.01 * edge.strength
+            const force = dist * 0.03 * edge.strength
             fx += (dx / dist) * force
             fy += (dy / dist) * force
           }
@@ -139,11 +148,11 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
         // Center gravity
         const centerX = canvas.width / 2
         const centerY = canvas.height / 2
-        fx += (centerX - nodes[i].x!) * 0.001
-        fy += (centerY - nodes[i].y!) * 0.001
+        fx += (centerX - nodes[i].x!) * 0.01
+        fy += (centerY - nodes[i].y!) * 0.01
 
-        nodes[i].vx = (nodes[i].vx || 0) * 0.85 + fx * 0.01
-        nodes[i].vy = (nodes[i].vy || 0) * 0.85 + fy * 0.01
+        nodes[i].vx = (nodes[i].vx || 0) * damping + fx * forceScale
+        nodes[i].vy = (nodes[i].vy || 0) * damping + fy * forceScale
         nodes[i].x! += nodes[i].vx || 0
         nodes[i].y! += nodes[i].vy || 0
 
@@ -156,12 +165,13 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
       // Draw edges
-      ctx.strokeStyle = '#666'
-      ctx.lineWidth = 0.5
       edges.forEach(edge => {
         const source = nodes.find(n => n.id === edge.source)
         const target = nodes.find(n => n.id === edge.target)
         if (source && target) {
+          const alpha = Math.min(1, 0.4 + edge.strength * 0.4)
+          ctx.strokeStyle = `rgba(100, 100, 100, ${alpha})`
+          ctx.lineWidth = Math.max(1, edge.strength * 3)
           ctx.beginPath()
           ctx.moveTo(source.x!, source.y!)
           ctx.lineTo(target.x!, target.y!)
@@ -186,10 +196,14 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
         }
       })
 
-      requestAnimationFrame(simulate)
+      animFrameRef.current = requestAnimationFrame(simulate)
     }
 
     simulate()
+
+    return () => {
+      cancelAnimationFrame(animFrameRef.current)
+    }
   }, [graphData])
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -235,6 +249,9 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
           className="w-full h-full border border-border rounded bg-card cursor-pointer"
           style={{ minHeight: '600px' }}
         />
+        <div className="absolute top-4 left-4 bg-card border border-border rounded p-2 text-xs text-muted-foreground">
+          {graphData.stats.total_nodes} nodes, {graphData.stats.total_edges} edges
+        </div>
         <div className="absolute top-4 right-4 bg-card border border-border rounded p-3 text-xs">
           <div className="font-medium mb-2">Legend</div>
           <div className="space-y-1">
