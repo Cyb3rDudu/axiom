@@ -90,22 +90,22 @@ class Retriever:
         print(f"\n--- Retrieving documents for query: '{query_text}' ---")
 
         # 1. Embed the query (using async method with semaphore)
-        print("Embedding query...")
+        _ret_logger.info("Retriever: Embedding query...")
         try:
             # Use the new async embedding method that includes semaphore control
             query_embeddings = await self.embedder.embed_query_async(query_text)
             if not query_embeddings:
-                print("Error: Failed to embed query (returned None).")
+                _ret_logger.error(f"Retriever: Failed to embed query (returned None) for '{query_text[:50]}'")
                 return []
         except Exception as e:
-            print(f"Error during query embedding: {e}")
+            _ret_logger.error(f"Retriever: Error during query embedding: {e}", exc_info=True)
             return []
 
         query_dense = query_embeddings.get("dense")
         query_sparse = query_embeddings.get("sparse") # This is the dict
 
         if not query_dense or query_sparse is None:
-             print("Error: Query embedding generation failed or returned unexpected format.")
+             _ret_logger.error(f"Retriever: Query embedding returned unexpected format. dense={query_dense is not None}, sparse={query_sparse is not None}")
              return []
 
         # 2. Query the Vector Store
