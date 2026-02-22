@@ -174,8 +174,14 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
       ctx.font = `${fontSize}px sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'top'
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'
-      ctx.fillText(label.slice(0, 20), x, y + radius + 2 / globalScale)
+      // Dark text with white outline for readability on any background
+      const text = label.slice(0, 20)
+      const ty = y + radius + 2 / globalScale
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'
+      ctx.lineWidth = 3 / globalScale
+      ctx.strokeText(text, x, ty)
+      ctx.fillStyle = '#1a1a2e'
+      ctx.fillText(text, x, ty)
     }
   }, [selectedNode])
 
@@ -240,9 +246,9 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
   }
 
   return (
-    <div className="h-full flex">
+    <div className="flex" style={{ height: 'calc(100vh - 200px)', minHeight: '500px' }}>
       {/* Graph */}
-      <div className="flex-1 relative" ref={containerRef}>
+      <div className="flex-1 relative min-w-0" ref={containerRef}>
         <div className="absolute inset-0 border border-border rounded bg-card overflow-hidden">
           <ForceGraph2D
             ref={fgRef}
