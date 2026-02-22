@@ -39,23 +39,26 @@ class AgentController(CoreAgentController):
         context_manager: AsyncContextManager,
         tool_registry: ToolRegistry,
         retriever: Optional[Retriever],
-        reranker: Optional[TextReranker]
+        reranker: Optional[TextReranker],
+        language_code: str = 'en'
     ):
         """
         Initialize the AgentController with the necessary components.
-        
+
         Args:
             model_dispatcher: The ModelDispatcher for LLM interactions
             context_manager: The ContextManager for mission state
             tool_registry: The ToolRegistry for available tools
             retriever: The Retriever for document search
             reranker: The TextReranker for result reranking
+            language_code: Language for prompts (default: English)
         """
         super().__init__(
             model_dispatcher=model_dispatcher,
             context_manager=context_manager,
             tool_registry=tool_registry,
             retriever=retriever,
-            reranker=reranker
+            reranker=reranker,
+            language_code=language_code
         )
         logger.info("AgentController initialized with modular architecture.")
