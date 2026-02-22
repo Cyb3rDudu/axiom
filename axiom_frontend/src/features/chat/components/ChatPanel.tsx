@@ -43,6 +43,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
   const [showMissionSettings, setShowMissionSettings] = useState(false)
   const [isLoadingSettings, setIsLoadingSettings] = useState(false)
   const [hasInitializedSettings, setHasInitializedSettings] = useState(false)
+  const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null)
   const [missionDocumentGroup, setMissionDocumentGroup] = useState<{
     id: string
     name: string
@@ -839,6 +840,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
                               }`} 
                             />
                           ),
+                          // Document images from RAG responses
+                          img: ({node, src, alt, ...props}) => (
+                            <img
+                              src={src}
+                              alt={alt || 'Document image'}
+                              className="max-w-full h-auto rounded-lg my-2 cursor-pointer hover:opacity-90 transition-opacity border border-border"
+                              loading="lazy"
+                              onClick={() => setExpandedImage({ src: src || '', alt: alt || '' })}
+                            />
+                          ),
                           // Horizontal rules
                           hr: ({node, ...props}) => (
                             <hr {...props} className="my-1.5 border-border" />
@@ -1079,6 +1090,20 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
           onOpenChange={setShowMissionSettings}
           missionId={currentMission.id}
         />
+      )}
+
+      {/* Image Lightbox */}
+      {expandedImage && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 cursor-pointer"
+          onClick={() => setExpandedImage(null)}
+        >
+          <img
+            src={expandedImage.src}
+            alt={expandedImage.alt}
+            className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg"
+          />
+        </div>
       )}
     </div>
   )

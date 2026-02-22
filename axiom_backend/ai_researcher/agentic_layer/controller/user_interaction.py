@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Dict, Any, Optional, List, Callable, Tuple
 import queue
 import json
@@ -879,7 +880,22 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                                 source = metadata.get("original_filename") or metadata.get("filename") or "Unknown source"
                                 title = metadata.get("title")
                                 source_label = f"{title} ({source})" if title else source
-                                context_parts.append(f"[Source {i}: {source_label}]\n{text}")
+                                # Build chunk context with images
+                                chunk_context = f"[Source {i}: {source_label}]\n{text}"
+
+                                # Add image references from this chunk
+                                image_refs = metadata.get("image_refs", [])
+                                if image_refs:
+                                    image_lines = []
+                                    for img_ref in image_refs:
+                                        alt = img_ref.get("alt_text", "Figure")
+                                        path = img_ref.get("path", "")
+                                        if path:
+                                            image_lines.append(f"[Available image: {alt}](url:{path})")
+                                    if image_lines:
+                                        chunk_context += "\n\nImages in this source:\n" + "\n".join(image_lines)
+
+                                context_parts.append(chunk_context)
 
                             document_context = "\n\n---\n\n".join(context_parts)
 
@@ -887,7 +903,10 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                             rag_system_prompt = """You are a helpful assistant that answers questions based on the user's documents.
 Use the provided document context to answer the user's question. Be specific and cite which source(s) your information comes from.
 If the document context doesn't contain relevant information to answer the question, say "I couldn't find information about that in your documents" and offer to help with a different question.
-Do NOT make up information that isn't in the provided context. Keep your response concise and helpful."""
+Do NOT make up information that isn't in the provided context. Keep your response concise and helpful.
+
+When the context includes images (marked as [Available image: description](url:path)), embed them in your response using markdown: ![description](path)
+Place images where they are most relevant to your explanation. Only include images that are directly relevant to the answer."""
 
                             rag_messages = [
                                 {"role": "system", "content": rag_system_prompt},
@@ -913,7 +932,10 @@ Do NOT make up information that isn't in the provided context. Keep your respons
                             )
 
                             if rag_response and rag_response.choices and rag_response.choices[0].message.content:
-                                agent_output["response"] = rag_response.choices[0].message.content
+                                response_text = rag_response.choices[0].message.content
+                                # Clean up image URLs: remove url: prefix the LLM might keep
+                                response_text = re.sub(r'!\[([^\]]*)\]\(url:(/api/images/[^)]+)\)', r'![\1](\2)', response_text)
+                                agent_output["response"] = response_text
                                 logger.info(f"RAG chat: Generated grounded response from {len(search_results)} document chunks")
 
                                 # Update stats
