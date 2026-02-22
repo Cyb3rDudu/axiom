@@ -572,6 +572,13 @@ class BackgroundDocumentProcessor:
                                     print(f"[{doc_id}] Extracted {entities_count} entities from chunks")
                                 except Exception as e_entity:
                                     print(f"[{doc_id}] Warning: Entity extraction failed: {e_entity}")
+
+                            # Build co-occurrence relationships (always, regardless of LLM setting)
+                            cooccurrence_count = graph_store.build_cooccurrence_relationships(
+                                doc_id=doc_id,
+                                min_cooccurrence=2
+                            )
+                            print(f"[{doc_id}] Built {cooccurrence_count} co-occurrence relationships")
                         except Exception as e_graph:
                             print(f"[{doc_id}] Warning: Knowledge graph building failed: {e_graph}")
 
