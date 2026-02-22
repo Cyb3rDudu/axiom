@@ -149,20 +149,24 @@ Recent Thoughts (Consider these for context):
 
 Analyze the user's message and determine their intent:
 
-1. "start_research" - User wants you to research, analyze, design, create, or investigate ANYTHING
-   - ANY request for information, analysis, help, or creation = start_research
+1. "start_research" - User EXPLICITLY wants a deep research mission, report, or investigation
+   - Use ONLY when the user uses explicit research keywords like: "write a report", "research this", "investigate", "deep dive", "comprehensive analysis", "create a paper", "write a paper", "do a study"
    - Extract the core topic/request as extracted_content
-   
+   - Do NOT use for simple questions, quick lookups, casual conversation, or general "tell me about X" queries
+   - When in doubt, ALWAYS choose "chat" over "start_research"
+
 2. "refine_questions" - User is giving feedback about previously shown research questions
    - Only use if they're commenting on questions you already showed them
-   
+
 3. "refine_goal" - User is providing preferences about output format/style without a new topic
    - Examples: tone, length, audience, format preferences
-   
+
 4. "approve_questions" - User approves previously shown questions (yes, ok, proceed, looks good)
    - Only for approving questions already shown, not for new requests
-   
-5. "chat" - General conversation not about research
+
+5. "chat" - General conversation, simple questions, quick lookups, greetings, or anything not requiring a full research mission
+   - Use for: "what do we have about X?", "tell me about Y", "hello", "how does this work?"
+   - Default to "chat" when unsure — it is better to chat than to start an unwanted research mission
 
 Important:
 - ALWAYS extract formatting preferences if mentioned (tone, length, audience, format)
@@ -327,15 +331,15 @@ Output:
   "thoughts": "User is providing formatting preferences for the output - needs technical depth and comprehensive coverage for PhD level work."
 }}
 
-Example 3 (Start Research without Preferences):
+Example 3 (Chat - Simple question, no explicit research keywords):
 User: What are the ethical implications of AI in healthcare?
 Output:
 {{
-  "intent": "start_research",
-  "extracted_content": "ethical implications of AI in healthcare",
+  "intent": "chat",
+  "extracted_content": null,
   "formatting_preferences": null,
-  "response_to_user": "I'll help you research the ethical implications of AI in healthcare. Let me generate some initial research questions for us to review.",
-  "thoughts": "Clear research request without specific formatting preferences. Will use default formal academic style."
+  "response_to_user": "That's a great question! Let me look through the documents for information about AI ethics in healthcare.",
+  "thoughts": "User is asking a question about a topic but did NOT explicitly request a report, research mission, or investigation. This is a chat/question intent, not start_research."
 }}
 
 Example 2 (Start Research with Formatting Preferences):

@@ -857,8 +857,80 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                 # Return the original agent_output, which contains the user-facing response
                 return agent_output
             else:
-                # For other actions or if conditions aren't met, return the original output.
-                # The UI layer will handle actions like 'start_research', 'refine_questions', 'approve_questions'.
+                # Chat intent (or no specific action) — attempt RAG-grounded response
+                # Search documents and ground the LLM response in retrieved chunks
+                try:
+                    doc_search_tool = getattr(self.controller, 'document_search_tool', None)
+                    if doc_search_tool and self.controller.retriever:
+                        logger.info(f"RAG chat: Searching documents for query '{user_message[:60]}...' with group_id={document_group_id}")
+                        search_results = await doc_search_tool.execute(
+                            query=user_message,
+                            document_group_id=document_group_id,
+                            n_results=8,
+                            use_reranker=True
+                        )
+
+                        if search_results:
+                            # Build context from retrieved chunks
+                            context_parts = []
+                            for i, chunk in enumerate(search_results, 1):
+                                text = chunk.get("text", "")
+                                metadata = chunk.get("metadata", {})
+                                source = metadata.get("original_filename") or metadata.get("filename") or "Unknown source"
+                                title = metadata.get("title")
+                                source_label = f"{title} ({source})" if title else source
+                                context_parts.append(f"[Source {i}: {source_label}]\n{text}")
+
+                            document_context = "\n\n---\n\n".join(context_parts)
+
+                            # Build RAG-grounded prompt
+                            rag_system_prompt = """You are a helpful assistant that answers questions based on the user's documents.
+Use the provided document context to answer the user's question. Be specific and cite which source(s) your information comes from.
+If the document context doesn't contain relevant information to answer the question, say "I couldn't find information about that in your documents" and offer to help with a different question.
+Do NOT make up information that isn't in the provided context. Keep your response concise and helpful."""
+
+                            rag_messages = [
+                                {"role": "system", "content": rag_system_prompt},
+                                {"role": "user", "content": f"Document Context:\n\n{document_context}\n\n---\n\nUser Question: {user_message}"}
+                            ]
+
+                            # Add chat history for conversational context
+                            if chat_history:
+                                history_messages = []
+                                for hist_user, hist_assistant in chat_history[-3:]:  # Last 3 turns
+                                    history_messages.append({"role": "user", "content": hist_user})
+                                    history_messages.append({"role": "assistant", "content": hist_assistant})
+                                # Insert history between system and current user message
+                                rag_messages = [rag_messages[0]] + history_messages + [rag_messages[1]]
+
+                            # Call LLM with RAG context
+                            rag_response, rag_model_details = await self.controller.model_dispatcher.dispatch(
+                                messages=rag_messages,
+                                agent_mode="messenger",
+                                mission_id=mission_id,
+                                log_queue=log_queue,
+                                update_callback=update_callback
+                            )
+
+                            if rag_response and rag_response.choices and rag_response.choices[0].message.content:
+                                agent_output["response"] = rag_response.choices[0].message.content
+                                logger.info(f"RAG chat: Generated grounded response from {len(search_results)} document chunks")
+
+                                # Update stats
+                                if rag_model_details and mission_id:
+                                    await self.controller.context_manager.update_mission_stats(
+                                        mission_id, rag_model_details, log_queue, update_callback
+                                    )
+                            else:
+                                logger.warning("RAG chat: LLM returned empty response, falling back to original")
+                        else:
+                            logger.info("RAG chat: No document results found, using original MessengerAgent response")
+                    else:
+                        logger.debug("RAG chat: No document search tool or retriever available, using original response")
+                except Exception as rag_error:
+                    logger.error(f"RAG chat: Error during document-grounded response: {rag_error}", exc_info=True)
+                    # Fall back to original agent_output on any error
+
                 return agent_output
 
         except Exception as e:

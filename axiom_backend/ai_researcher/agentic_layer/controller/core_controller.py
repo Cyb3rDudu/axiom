@@ -326,6 +326,7 @@ class AgentController:
             implementation=document_search_instance.execute
         )
         self.tool_registry.register_tool(document_search_def)
+        self.document_search_tool = document_search_instance
         logger.info("Document Search tool registered.")
 
     def _validate_outline_minimum_requirements(self, outline: List[ReportSection]) -> Dict[str, Any]:

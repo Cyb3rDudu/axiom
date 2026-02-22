@@ -387,17 +387,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
   const handleSendMessage = async () => {
     if (!message.trim() || isLoading) return
 
-    // Validate that at least one information source is enabled
-    if (!useWebSearch && !selectedGroupId) {
-      addToast({
-        type: 'error',
-        title: 'No Information Source',
-        message: 'Please enable web search or select a document group before sending your message.',
-        duration: 5000
-      })
-      return
-    }
-
     let targetChatId = activeChat?.id;
 
     // If no active chat, this is the first message of a new chat.
@@ -1072,12 +1061,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
                     )}
                   </div>
                   
-                  {!useWebSearch && !selectedGroupId && (
-                    <div className="text-xs text-amber-600 bg-amber-500/10 px-2 py-1.5 rounded-md border border-amber-500/20 flex items-center space-x-1.5">
-                      <span>⚠️</span>
-                      <span>At least one information source must be enabled</span>
-                    </div>
-                  )}
                 </div>
               </div>
             </CardContent>
