@@ -318,6 +318,15 @@ class DocumentSearchTool:
             ]
             results_list = await asyncio.gather(*retrieval_tasks, return_exceptions=True)
 
+            # Debug: log what the retriever returned
+            for i, result_item in enumerate(results_list):
+                if isinstance(result_item, Exception):
+                    logger.error(f"Retriever returned exception for query {i}: {type(result_item).__name__}: {result_item}")
+                elif isinstance(result_item, list):
+                    logger.info(f"Retriever returned {len(result_item)} results for query {i}")
+                else:
+                    logger.warning(f"Retriever returned unexpected type for query {i}: {type(result_item)}")
+
             # 5. Aggregate & De-duplicate
             aggregated_results: Dict[str, Dict[str, Any]] = {} # Use dict for easy deduplication by chunk_id
             for i, result_item in enumerate(results_list):
