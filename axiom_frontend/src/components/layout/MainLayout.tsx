@@ -204,7 +204,7 @@ export const MainLayout: React.FC = () => {
         </div>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto bg-background">
+        <main className="flex-1 min-h-0 overflow-hidden bg-background">
           <Outlet />
         </main>
       </div>

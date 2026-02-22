@@ -40,7 +40,7 @@ function App() {
     <ThemeProvider>
       <ToastProvider>
         <Router>
-          <div className="App">
+          <div className="App h-full">
           <Routes>
           {/* Public routes */}
           <Route 
