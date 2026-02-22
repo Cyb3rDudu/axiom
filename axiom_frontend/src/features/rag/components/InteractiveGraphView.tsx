@@ -52,7 +52,7 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
   const [graphData, setGraphData] = useState<GraphData | null>(null)
   const [loading, setLoading] = useState(false)
   const [selectedNode, setSelectedNode] = useState<GNode | null>(null)
-  const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
+  const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const fgRef = useRef<ForceGraphMethods<FGNode>>(undefined)
 
@@ -60,23 +60,31 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
     fetchGraph()
   }, [filters])
 
-  // Track container size
+  // Measure available space from viewport position
   useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
-
-    const observer = new ResizeObserver(entries => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect
-        if (width > 0 && height > 0) {
-          setDimensions({ width: Math.floor(width), height: Math.floor(height) })
-        }
+    const measure = () => {
+      const el = containerRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const w = Math.floor(rect.width)
+      const h = Math.floor(window.innerHeight - rect.top - 8)
+      if (w > 0 && h > 0) {
+        setDimensions(prev => {
+          if (prev && prev.width === w && prev.height === h) return prev
+          return { width: w, height: h }
+        })
       }
-    })
+    }
 
-    observer.observe(container)
-    return () => observer.disconnect()
-  }, [])
+    measure()
+    // Re-measure after a frame (layout may not be final yet)
+    const raf = requestAnimationFrame(measure)
+    window.addEventListener('resize', measure)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('resize', measure)
+    }
+  }, [graphData])
 
   const fetchGraph = async () => {
     setLoading(true)
@@ -246,11 +254,11 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
   }
 
   return (
-    <div className="h-full flex min-h-0">
+    <div className="flex" style={{ height: dimensions ? `${dimensions.height}px` : '100%' }}>
       {/* Graph */}
-      <div className="flex-1 relative min-w-0 min-h-0" ref={containerRef}>
+      <div className="flex-1 relative min-w-0" ref={containerRef}>
         <div className="absolute inset-0 rounded bg-card overflow-hidden">
-          <ForceGraph2D
+          {dimensions && <ForceGraph2D
             ref={fgRef}
             graphData={forceGraphData}
             width={dimensions.width}
@@ -275,7 +283,7 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
             enablePanInteraction={true}
             enableNodeDrag={true}
             backgroundColor="transparent"
-          />
+          />}
         </div>
 
         {/* Stats overlay */}
