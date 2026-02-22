@@ -73,7 +73,7 @@ export const RagView: React.FC = () => {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto p-6">
+      <div className={`flex-1 min-h-0 ${activeTab === 'graph' ? 'overflow-hidden p-2' : 'overflow-auto p-6'}`}>
         {activeTab === 'chunks' && <ChunksView filters={filters} />}
         {activeTab === 'stats' && <KnowledgeGraphView filters={filters} />}
         {activeTab === 'graph' && <InteractiveGraphView filters={filters} />}

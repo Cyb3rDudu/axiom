@@ -246,10 +246,10 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
   }
 
   return (
-    <div className="flex" style={{ height: 'calc(100vh - 200px)', minHeight: '500px' }}>
+    <div className="h-full flex min-h-0">
       {/* Graph */}
-      <div className="flex-1 relative min-w-0" ref={containerRef}>
-        <div className="absolute inset-0 border border-border rounded bg-card overflow-hidden">
+      <div className="flex-1 relative min-w-0 min-h-0" ref={containerRef}>
+        <div className="absolute inset-0 rounded bg-card overflow-hidden">
           <ForceGraph2D
             ref={fgRef}
             graphData={forceGraphData}
