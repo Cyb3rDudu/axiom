@@ -1,17 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { Loader2 } from 'lucide-react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { Loader2, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
+import ForceGraph2D from 'react-force-graph-2d'
+import type { ForceGraphMethods, NodeObject } from 'react-force-graph-2d'
 import { apiClient } from '../../../config/api'
 import type { RagFilters } from './RagView'
 
-interface Node {
+interface GNode {
   id: string
   label: string
   type: string
   chunk_count: number
-  x?: number
-  y?: number
-  vx?: number
-  vy?: number
 }
 
 interface Edge {
@@ -22,7 +20,7 @@ interface Edge {
 }
 
 interface GraphData {
-  nodes: Node[]
+  nodes: GNode[]
   edges: Edge[]
   stats: {
     total_nodes: number
@@ -31,47 +29,69 @@ interface GraphData {
   }
 }
 
+type FGNode = NodeObject<GNode>
+
 interface InteractiveGraphViewProps {
   filters: RagFilters
 }
 
+const TYPE_COLORS: Record<string, string> = {
+  'PERSON': '#FF6B6B',
+  'ORGANIZATION': '#4ECDC4',
+  'CONCEPT': '#45B7D1',
+  'METHOD': '#96CEB4',
+  'TECHNOLOGY': '#FFEAA7',
+  'LOCATION': '#DFE6E9',
+  'METRIC': '#A29BFE',
+  'WORK': '#FD79A8'
+}
+
+const DEFAULT_COLOR = '#95A5A6'
+
 export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filters }) => {
   const [graphData, setGraphData] = useState<GraphData | null>(null)
   const [loading, setLoading] = useState(false)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const animFrameRef = useRef<number>(0)
-  const [selectedNode, setSelectedNode] = useState<Node | null>(null)
+  const [selectedNode, setSelectedNode] = useState<GNode | null>(null)
+  const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
+  const containerRef = useRef<HTMLDivElement>(null)
+  const fgRef = useRef<ForceGraphMethods<FGNode>>(undefined)
 
   useEffect(() => {
     fetchGraph()
   }, [filters])
 
+  // Track container size
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const observer = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect
+        if (width > 0 && height > 0) {
+          setDimensions({ width: Math.floor(width), height: Math.floor(height) })
+        }
+      }
+    })
+
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [])
+
   const fetchGraph = async () => {
     setLoading(true)
     try {
-      const params: any = {
+      const params: Record<string, string | number> = {
         min_strength: 0.1,
-        limit: 200
+        limit: 500
       }
 
-      // Apply filters if any are selected
       if (filters.selectedDocuments.length > 0) {
         params.doc_ids = filters.selectedDocuments.join(',')
       }
 
       const response = await apiClient.get('/api/rag/graph', { params })
-      const data = response.data
-
-      // Initialize node positions randomly
-      const nodes = (data.nodes || []).map((node: Node) => ({
-        ...node,
-        x: Math.random() * 800,
-        y: Math.random() * 600,
-        vx: 0,
-        vy: 0
-      }))
-
-      setGraphData({ ...data, nodes })
+      setGraphData(response.data)
     } catch (error) {
       console.error('[InteractiveGraphView] Failed to fetch graph:', error)
       setGraphData({ nodes: [], edges: [], stats: { total_nodes: 0, total_edges: 0, entity_types: [] } })
@@ -80,148 +100,128 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
     }
   }
 
+  // Configure d3 forces after graph data loads
   useEffect(() => {
-    if (!graphData || !canvasRef.current) return
+    if (!fgRef.current || !graphData || graphData.nodes.length === 0) return
 
-    const canvas = canvasRef.current
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    // Set canvas size
-    canvas.width = canvas.offsetWidth
-    canvas.height = canvas.offsetHeight
-
-    const typeColors: Record<string, string> = {
-      'PERSON': '#FF6B6B',
-      'ORGANIZATION': '#4ECDC4',
-      'CONCEPT': '#45B7D1',
-      'METHOD': '#96CEB4',
-      'TECHNOLOGY': '#FFEAA7',
-      'LOCATION': '#DFE6E9',
-      'METRIC': '#A29BFE',
-      'WORK': '#FD79A8'
+    const fg = fgRef.current
+    const charge = fg.d3Force('charge')
+    if (charge && typeof charge.strength === 'function') {
+      charge.strength(-100)
     }
-
-    let frameCount = 0
-
-    // Simple force simulation
-    const simulate = () => {
-      const nodes = graphData.nodes
-      const edges = graphData.edges
-      frameCount++
-
-      // Increase damping after 300 frames to converge
-      const damping = frameCount > 300 ? 0.6 : 0.85
-      const forceScale = frameCount > 300 ? 0.005 : 0.02
-
-      // Apply forces
-      for (let i = 0; i < nodes.length; i++) {
-        let fx = 0, fy = 0
-
-        // Repulsion between nodes
-        for (let j = 0; j < nodes.length; j++) {
-          if (i === j) continue
-          const dx = nodes[i].x! - nodes[j].x!
-          const dy = nodes[i].y! - nodes[j].y!
-          const dist = Math.sqrt(dx * dx + dy * dy) || 1
-          const force = 500 / (dist * dist)
-          fx += (dx / dist) * force
-          fy += (dy / dist) * force
-        }
-
-        // Attraction along edges
-        edges.forEach(edge => {
-          const sourceIdx = nodes.findIndex(n => n.id === edge.source)
-          const targetIdx = nodes.findIndex(n => n.id === edge.target)
-          if (sourceIdx < 0 || targetIdx < 0) return
-          if (sourceIdx === i || targetIdx === i) {
-            const other = sourceIdx === i ? nodes[targetIdx] : nodes[sourceIdx]
-            const dx = other.x! - nodes[i].x!
-            const dy = other.y! - nodes[i].y!
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1
-            const force = dist * 0.03 * edge.strength
-            fx += (dx / dist) * force
-            fy += (dy / dist) * force
-          }
-        })
-
-        // Center gravity
-        const centerX = canvas.width / 2
-        const centerY = canvas.height / 2
-        fx += (centerX - nodes[i].x!) * 0.01
-        fy += (centerY - nodes[i].y!) * 0.01
-
-        nodes[i].vx = (nodes[i].vx || 0) * damping + fx * forceScale
-        nodes[i].vy = (nodes[i].vy || 0) * damping + fy * forceScale
-        nodes[i].x! += nodes[i].vx || 0
-        nodes[i].y! += nodes[i].vy || 0
-
-        // Keep in bounds
-        nodes[i].x = Math.max(20, Math.min(canvas.width - 20, nodes[i].x!))
-        nodes[i].y = Math.max(20, Math.min(canvas.height - 20, nodes[i].y!))
-      }
-
-      // Render
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
-
-      // Draw edges
-      edges.forEach(edge => {
-        const source = nodes.find(n => n.id === edge.source)
-        const target = nodes.find(n => n.id === edge.target)
-        if (source && target) {
-          const alpha = Math.min(1, 0.4 + edge.strength * 0.4)
-          ctx.strokeStyle = `rgba(100, 100, 100, ${alpha})`
-          ctx.lineWidth = Math.max(1, edge.strength * 3)
-          ctx.beginPath()
-          ctx.moveTo(source.x!, source.y!)
-          ctx.lineTo(target.x!, target.y!)
-          ctx.stroke()
-        }
-      })
-
-      // Draw nodes
-      nodes.forEach(node => {
-        const radius = Math.log(node.chunk_count + 1) * 3 + 4
-        ctx.fillStyle = typeColors[node.type] || '#95A5A6'
-        ctx.beginPath()
-        ctx.arc(node.x!, node.y!, radius, 0, 2 * Math.PI)
-        ctx.fill()
-
-        // Draw label for larger nodes
-        if (node.chunk_count > 3) {
-          ctx.fillStyle = '#fff'
-          ctx.font = '10px sans-serif'
-          ctx.textAlign = 'center'
-          ctx.fillText(node.label.slice(0, 15), node.x!, node.y! + radius + 12)
-        }
-      })
-
-      animFrameRef.current = requestAnimationFrame(simulate)
+    const link = fg.d3Force('link')
+    if (link && typeof link.distance === 'function') {
+      link.distance((l: any) => 30 + (1 - (l.strength || 0.5)) * 60)
     }
+    fg.d3ReheatSimulation()
+  }, [graphData])
 
-    simulate()
-
-    return () => {
-      cancelAnimationFrame(animFrameRef.current)
+  // Convert API data to ForceGraph2D format
+  const forceGraphData = useMemo(() => {
+    if (!graphData) return { nodes: [], links: [] }
+    return {
+      nodes: graphData.nodes.map(n => ({ ...n })),
+      links: graphData.edges.map(e => ({
+        source: e.source,
+        target: e.target,
+        type: e.type,
+        strength: e.strength
+      }))
     }
   }, [graphData])
 
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!graphData || !canvasRef.current) return
+  // Configure forces after mount
+  const handleEngineStop = useCallback(() => {
+    // Fit graph into view after simulation settles
+    if (fgRef.current && graphData && graphData.nodes.length > 0) {
+      fgRef.current.zoomToFit(400, 40)
+    }
+  }, [graphData])
 
-    const rect = canvasRef.current.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
+  // Custom node rendering
+  const paintNode = useCallback((node: FGNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    const label = node.label || ''
+    const type = node.type || ''
+    const chunkCount = node.chunk_count || 0
+    const radius = Math.log(chunkCount + 1) * 2 + 3
+    const x = node.x ?? 0
+    const y = node.y ?? 0
+    const color = TYPE_COLORS[type] || DEFAULT_COLOR
+    const isSelected = selectedNode?.id === node.id
 
-    const clicked = graphData.nodes.find(node => {
-      const dx = node.x! - x
-      const dy = node.y! - y
-      const radius = Math.log(node.chunk_count + 1) * 3 + 4
-      return Math.sqrt(dx * dx + dy * dy) < radius
-    })
+    // Draw node circle
+    ctx.beginPath()
+    ctx.arc(x, y, radius, 0, 2 * Math.PI)
+    ctx.fillStyle = color
+    ctx.fill()
 
-    setSelectedNode(clicked || null)
-  }
+    // Highlight selected node
+    if (isSelected) {
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 2 / globalScale
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.arc(x, y, radius + 2 / globalScale, 0, 2 * Math.PI)
+      ctx.strokeStyle = color
+      ctx.lineWidth = 1.5 / globalScale
+      ctx.stroke()
+    }
+
+    // Draw labels when zoomed in enough or for large nodes
+    const showLabel = globalScale > 1.5 || chunkCount > 5
+    if (showLabel) {
+      const fontSize = Math.max(10 / globalScale, 2)
+      ctx.font = `${fontSize}px sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'top'
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'
+      ctx.fillText(label.slice(0, 20), x, y + radius + 2 / globalScale)
+    }
+  }, [selectedNode])
+
+  // Hit area for nodes
+  const paintNodeArea = useCallback((node: FGNode, color: string, ctx: CanvasRenderingContext2D) => {
+    const chunkCount = node.chunk_count || 0
+    const radius = Math.log(chunkCount + 1) * 2 + 3
+    ctx.beginPath()
+    ctx.arc(node.x ?? 0, node.y ?? 0, radius + 2, 0, 2 * Math.PI)
+    ctx.fillStyle = color
+    ctx.fill()
+  }, [])
+
+  const handleNodeClick = useCallback((node: FGNode) => {
+    setSelectedNode({ id: node.id as string, label: node.label, type: node.type, chunk_count: node.chunk_count })
+  }, [])
+
+  const handleNodeDragEnd = useCallback((node: FGNode) => {
+    // Pin node after drag
+    node.fx = node.x
+    node.fy = node.y
+  }, [])
+
+  const handleBackgroundClick = useCallback(() => {
+    setSelectedNode(null)
+  }, [])
+
+  const handleZoomIn = useCallback(() => {
+    if (fgRef.current) {
+      const currentZoom = fgRef.current.zoom()
+      fgRef.current.zoom(currentZoom * 1.5, 300)
+    }
+  }, [])
+
+  const handleZoomOut = useCallback(() => {
+    if (fgRef.current) {
+      const currentZoom = fgRef.current.zoom()
+      fgRef.current.zoom(currentZoom / 1.5, 300)
+    }
+  }, [])
+
+  const handleZoomFit = useCallback(() => {
+    if (fgRef.current) {
+      fgRef.current.zoomToFit(400, 40)
+    }
+  }, [])
 
   if (loading) {
     return (
@@ -241,38 +241,78 @@ export const InteractiveGraphView: React.FC<InteractiveGraphViewProps> = ({ filt
 
   return (
     <div className="h-full flex">
-      {/* Canvas */}
-      <div className="flex-1 relative">
-        <canvas
-          ref={canvasRef}
-          onClick={handleCanvasClick}
-          className="w-full h-full border border-border rounded bg-card cursor-pointer"
-          style={{ minHeight: '600px' }}
-        />
-        <div className="absolute top-4 left-4 bg-card border border-border rounded p-2 text-xs text-muted-foreground">
+      {/* Graph */}
+      <div className="flex-1 relative" ref={containerRef}>
+        <div className="absolute inset-0 border border-border rounded bg-card overflow-hidden">
+          <ForceGraph2D
+            ref={fgRef}
+            graphData={forceGraphData}
+            width={dimensions.width}
+            height={dimensions.height}
+            nodeCanvasObject={paintNode}
+            nodeCanvasObjectMode={() => 'replace'}
+            nodePointerAreaPaint={paintNodeArea}
+            nodeLabel={(node: FGNode) => `${node.label} (${node.type}, ${node.chunk_count} chunks)`}
+            linkWidth={(link: any) => Math.max(0.5, link.strength * 3)}
+            linkColor={(link: any) => {
+              const alpha = Math.min(1, 0.3 + link.strength * 0.5)
+              return `rgba(150, 150, 150, ${alpha})`
+            }}
+            onNodeClick={handleNodeClick}
+            onNodeDragEnd={handleNodeDragEnd}
+            onBackgroundClick={handleBackgroundClick}
+            onEngineStop={handleEngineStop}
+            cooldownTicks={200}
+            d3AlphaDecay={0.02}
+            d3VelocityDecay={0.3}
+            enableZoomInteraction={true}
+            enablePanInteraction={true}
+            enableNodeDrag={true}
+            backgroundColor="transparent"
+          />
+        </div>
+
+        {/* Stats overlay */}
+        <div className="absolute top-4 left-4 bg-card border border-border rounded p-2 text-xs text-muted-foreground pointer-events-none">
           {graphData.stats.total_nodes} nodes, {graphData.stats.total_edges} edges
         </div>
+
+        {/* Legend overlay */}
         <div className="absolute top-4 right-4 bg-card border border-border rounded p-3 text-xs">
           <div className="font-medium mb-2">Legend</div>
           <div className="space-y-1">
             {graphData.stats.entity_types.map(type => (
               <div key={type} className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full" style={{
-                  backgroundColor: {
-                    'PERSON': '#FF6B6B',
-                    'ORGANIZATION': '#4ECDC4',
-                    'CONCEPT': '#45B7D1',
-                    'METHOD': '#96CEB4',
-                    'TECHNOLOGY': '#FFEAA7',
-                    'LOCATION': '#DFE6E9',
-                    'METRIC': '#A29BFE',
-                    'WORK': '#FD79A8'
-                  }[type] || '#95A5A6'
-                }} />
+                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: TYPE_COLORS[type] || DEFAULT_COLOR }} />
                 <span>{type}</span>
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Zoom controls */}
+        <div className="absolute bottom-4 right-4 flex flex-col gap-1">
+          <button
+            onClick={handleZoomIn}
+            className="bg-card border border-border rounded p-1.5 hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+            title="Zoom in"
+          >
+            <ZoomIn className="h-4 w-4" />
+          </button>
+          <button
+            onClick={handleZoomOut}
+            className="bg-card border border-border rounded p-1.5 hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+            title="Zoom out"
+          >
+            <ZoomOut className="h-4 w-4" />
+          </button>
+          <button
+            onClick={handleZoomFit}
+            className="bg-card border border-border rounded p-1.5 hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+            title="Fit to view"
+          >
+            <Maximize2 className="h-4 w-4" />
+          </button>
         </div>
       </div>
 

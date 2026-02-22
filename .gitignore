@@ -36,6 +36,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!axiom_frontend/src/lib/
 lib64/
 parts/
 sdist/
