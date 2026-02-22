@@ -295,6 +295,7 @@ class TextEmbedder:
                         self._cleanup_gpu_memory(force=True)
 
                 # --- Wrap the encode call itself ---
+                logger.info(f"embed_query: Calling model.encode for '{query_text[:50]}', model type={type(self.model).__name__}, max_length={self.max_length}")
                 outputs = self.model.encode(
                     [query_text], # Encode as a list with one item
                     max_length=self.max_length,
@@ -302,6 +303,7 @@ class TextEmbedder:
                     return_sparse=True,
                     return_colbert_vecs=False
                 )
+                logger.info(f"embed_query: model.encode returned, outputs keys={list(outputs.keys()) if outputs else None}")
                 # --- End wrap ---
 
                 # --- Enhanced checks and logging ---
@@ -309,7 +311,7 @@ class TextEmbedder:
                 # logger.debug(f"DEBUG: Raw outputs from model.encode for query '{query_text}': {outputs}")
 
                 if outputs is None: # Check if encode failed and returned None implicitly (though unlikely)
-                     logger.debug(f"Error: model.encode returned None for query '{query_text}'")
+                     logger.error(f"embed_query: model.encode returned None for query '{query_text}'")
                      return None
 
                 dense_vecs = outputs.get("dense_vecs")
@@ -317,11 +319,11 @@ class TextEmbedder:
 
                 # Explicitly check if the lists are None or empty
                 if dense_vecs is None or len(dense_vecs) == 0:
-                    logger.debug(f"Error: Embedding model returned empty or None dense vectors for query: '{query_text}'. Dense vecs: {dense_vecs}")
+                    logger.error(f"embed_query: Embedding model returned empty or None dense vectors for query: '{query_text}'. Dense vecs type: {type(dense_vecs)}")
                     return None
 
                 if lexical_weights is None or len(lexical_weights) == 0:
-                    logger.debug(f"Error: Embedding model returned empty or None lexical weights for query: '{query_text}'. Lexical weights: {lexical_weights}")
+                    logger.error(f"embed_query: Embedding model returned empty or None lexical weights for query: '{query_text}'. Lexical weights type: {type(lexical_weights)}")
                     return None
                 # --- End enhanced checks ---
 
@@ -339,7 +341,7 @@ class TextEmbedder:
                 }
             # --- Catch specific IndexError from encode() ---
             except IndexError as ie:
-                logger.debug(f"CRITICAL: Caught IndexError directly from model.encode() for query '{query_text}'. Outputs variable state: {outputs}. Error: {ie}")
+                logger.error(f"embed_query: IndexError from model.encode() for query '{query_text}'. Outputs: {outputs}. Error: {ie}", exc_info=True)
                 # Also log the full traceback if possible, though print might be enough here
                 import traceback
                 traceback.print_exc()
@@ -347,8 +349,8 @@ class TextEmbedder:
             # --- Catch CUDA OOM specifically ---
             except RuntimeError as re:
                 if "CUDA out of memory" in str(re):
-                    logger.debug(f"CUDA OOM error during query embedding: {re}")
-                    logger.debug(f"Attempting emergency GPU cleanup and retry for query: '{query_text}'")
+                    logger.error(f"embed_query: CUDA OOM error during query embedding: {re}")
+                    logger.error(f"embed_query: Attempting emergency GPU cleanup and retry for query: '{query_text}'")
                     
                     # Emergency cleanup
                     if self.enable_memory_management:
@@ -380,9 +382,7 @@ class TextEmbedder:
                     raise re
             # --- Catch other potential exceptions ---
             except Exception as e:
-                logger.debug(f"Error embedding query '{query_text}' during or after encode call: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"embed_query: Error embedding query '{query_text}': {e}", exc_info=True)
                 return None
 
     async def embed_query_async(self, query_text: str) -> Optional[Dict[str, Any]]:
