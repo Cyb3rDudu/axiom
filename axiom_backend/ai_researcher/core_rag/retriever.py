@@ -71,8 +71,11 @@ class Retriever:
         Returns:
             A list of retrieved chunk dictionaries, sorted by relevance.
         """
+        import logging as _logging
+        _ret_logger = _logging.getLogger(__name__)
         # Use graph retriever if enabled and requested
         if use_graph and self.graph_retriever:
+            _ret_logger.info(f"Retriever: Delegating to graph retriever for query '{query_text[:50]}'")
             return await self.graph_retriever.retrieve(
                 query_text=query_text,
                 n_results=n_results,
@@ -83,6 +86,7 @@ class Retriever:
             )
 
         # Otherwise use standard retrieval
+        _ret_logger.info(f"Retriever: Standard path for query '{query_text[:50]}', use_graph={use_graph}")
         print(f"\n--- Retrieving documents for query: '{query_text}' ---")
 
         # 1. Embed the query (using async method with semaphore)

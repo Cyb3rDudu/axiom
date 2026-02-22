@@ -306,6 +306,7 @@ class DocumentSearchTool:
                 logger.info(f"Filtering by single document ID: {filter_doc_id}")
 
             # 5. Concurrent Retrieval (without reranking at this stage)
+            logger.info(f"Document search: calling retriever.retrieve for {len(prepared_queries)} queries, retriever={self.retriever}, graph={getattr(self.retriever, 'graph_retriever', 'N/A')}, filter={filter_metadata}")
             retrieval_tasks = [
                 self.retriever.retrieve(
                     query_text=q,
