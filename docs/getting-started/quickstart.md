@@ -1,6 +1,6 @@
 # Quick Start
 
-Get MAESTRO up and running in minutes with this streamlined installation guide.
+Get AXIOM up and running in minutes with this streamlined installation guide.
 
 ## Prerequisites
 
@@ -16,8 +16,8 @@ Before you begin, ensure you have:
 ### The Simplest Way to Get Started
 
 ```bash
-git clone https://github.com/murtaza-nasir/maestro.git
-cd maestro
+git clone https://github.com/murtaza-nasir/axiom.git
+cd axiom
 ./setup-env.sh    # Linux/macOS (interactive configuration wizard)
 # or setup-env.ps1 # Windows PowerShell
 docker compose up -d --build  # Build ensures latest changes
@@ -54,8 +54,8 @@ The `setup-env.sh` (or `setup-env.ps1` on Windows) is an interactive configurati
 !!! warning "Initial Model Download"
     First startup may take 5-10 minutes to download AI models. Monitor progress with:
     ```bash
-    docker compose logs -f maestro-backend
-    # Wait for: "MAESTRO Backend Started Successfully!"
+    docker compose logs -f axiom-backend
+    # Wait for: "AXIOM Backend Started Successfully!"
     ```
 
 ## Platform-Specific Quick Start
@@ -64,8 +64,8 @@ The `setup-env.sh` (or `setup-env.ps1` on Windows) is an interactive configurati
 
 1. **Clone and run the setup wizard:**
     ```bash
-    git clone https://github.com/murtaza-nasir/maestro.git
-    cd maestro
+    git clone https://github.com/murtaza-nasir/axiom.git
+    cd axiom
     ./setup-env.sh  # Interactive configuration
     ```
 
@@ -78,7 +78,7 @@ The `setup-env.sh` (or `setup-env.ps1` on Windows) is an interactive configurati
     - **Security setup** - Press 1 for automatic secure password generation
     - **Timezone** - Default America/Chicago, or enter your timezone
 
-3. **Start MAESTRO:**
+3. **Start AXIOM:**
     ```bash
     ./start.sh  # Automatic GPU detection and startup
     # Or manually: docker compose up -d
@@ -91,8 +91,8 @@ The `setup-env.sh` (or `setup-env.ps1` on Windows) is an interactive configurati
 
 1. **Clone and prepare:**
     ```powershell
-    git clone https://github.com/murtaza-nasir/maestro.git
-    cd maestro
+    git clone https://github.com/murtaza-nasir/axiom.git
+    cd axiom
     .\fix-line-endings.ps1  # Important: Fixes Unix/Windows line ending issues
     ```
 
@@ -109,7 +109,7 @@ The `setup-env.sh` (or `setup-env.ps1` on Windows) is an interactive configurati
     - Automatic secure password generation
     - Timezone configuration
 
-3. **Start MAESTRO:**
+3. **Start AXIOM:**
     ```powershell
     # Without GPU (most Windows users):
     docker compose -f docker-compose.cpu.yml up -d
@@ -121,7 +121,7 @@ The `setup-env.sh` (or `setup-env.ps1` on Windows) is an interactive configurati
     !!! warning "Windows Line Endings"
         If you get a `/bin/bash^M: bad interpreter: No such file or directory` error, try running `.\fix-line-endings.ps1`.
 
-## Access MAESTRO
+## Access AXIOM
 
 Once startup is complete, access the web interface:
 
@@ -166,11 +166,11 @@ docker compose ps
 
 You should see:
 
-- `maestro-nginx` - Running (port 80)
-- `maestro-frontend` - Running
-- `maestro-backend` - Running
-- `maestro-postgres` - Running (healthy)
-- `maestro-doc-processor` - Running
+- `axiom-nginx` - Running (port 80)
+- `axiom-frontend` - Running
+- `axiom-backend` - Running
+- `axiom-postgres` - Running (healthy)
+- `axiom-doc-processor` - Running
 
 ## Quick Configuration
 
@@ -192,7 +192,7 @@ After logging in, configure these essential settings:
    - Change default password
    - Update profile information
 
-## Start Using MAESTRO
+## Start Using AXIOM
 
 ### Your First Research
 
@@ -215,7 +215,7 @@ After logging in, configure these essential settings:
     - Suggest changes to the questions
     - Suggest your tone/style/length requirements, source preferences, or other similar research parameters
     - Once ready, tell the agent to start the research job, or press the start button on the top right
-    - Let MAESTRO conduct autonomous research
+    - Let AXIOM conduct autonomous research
     - Monitor progress in the research tab
 
 ## Common Issues
@@ -224,8 +224,8 @@ After logging in, configure these essential settings:
 
 The backend is still downloading models and starting up. Wait 5-10 minutes and monitor:
 ```bash
-docker compose logs -f maestro-backend
-# Wait for: "MAESTRO Backend Started Successfully!"
+docker compose logs -f axiom-backend
+# Wait for: "AXIOM Backend Started Successfully!"
 ```
 
 ### Port Already in Use
@@ -252,7 +252,7 @@ docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi
 
 ## Stop and Restart
 
-To stop MAESTRO:
+To stop AXIOM:
 ```bash
 docker compose down
 ```
@@ -270,5 +270,5 @@ docker compose down -v
 ## Getting Help
 
 - Check the [FAQ](../troubleshooting/faq.md)
-- Report issues on [GitHub](https://github.com/murtaza-nasir/maestro/issues)
+- Report issues on [GitHub](https://github.com/murtaza-nasir/axiom/issues)
 - Review the [Troubleshooting Guide](../troubleshooting/index.md)

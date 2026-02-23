@@ -7,11 +7,11 @@ export default defineConfig({
   server: {
     proxy: {
       '/api/ws': {
-        target: 'ws://maestro_backend:8001',
+        target: 'ws://axiom_backend:8001',
         ws: true,
       },
       '/api': {
-        target: 'http://maestro_backend:8001',
+        target: 'http://axiom_backend:8001',
         changeOrigin: true,
       },
     },

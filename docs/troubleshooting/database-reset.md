@@ -1,6 +1,6 @@
 # Database Reset Guide
 
-This guide covers essential database reset procedures for MAESTRO's PostgreSQL database.
+This guide covers essential database reset procedures for AXIOM's PostgreSQL database.
 
 ⚠️ **WARNING**: Database reset will DELETE ALL DATA including users, documents, chats, and missions.
 
@@ -20,7 +20,7 @@ docker compose up -d --build
 # - All configuration
 ```
 
-## Using maestro-cli.sh
+## Using axiom-cli.sh
 
 The CLI tool provides comprehensive database management capabilities.
 
@@ -28,17 +28,17 @@ The CLI tool provides comprehensive database management capabilities.
 
 ```bash
 # Check database health and consistency
-./maestro-cli.sh reset-db --check
+./axiom-cli.sh reset-db --check
 
 # View detailed statistics
-./maestro-cli.sh reset-db --stats
+./axiom-cli.sh reset-db --stats
 ```
 
 ### Reset with Backup
 
 ```bash
 # Create backup before reset
-./maestro-cli.sh reset-db --backup
+./axiom-cli.sh reset-db --backup
 
 # This will:
 # 1. Create timestamped backup
@@ -51,13 +51,13 @@ The CLI tool provides comprehensive database management capabilities.
 
 ```bash
 # Reset without confirmation prompts (DANGEROUS!)
-./maestro-cli.sh reset-db --force
+./axiom-cli.sh reset-db --force
 ```
 
 ### CLI Reset Command Options
 
 ```bash
-./maestro-cli.sh reset-db [OPTIONS]
+./axiom-cli.sh reset-db [OPTIONS]
 
 Options:
   --backup  Create timestamped backups before reset
@@ -73,16 +73,16 @@ Options:
 
 ```bash
 # Interactive password reset (will prompt for new password)
-docker exec -it maestro-backend python reset_admin_password.py
+docker exec -it axiom-backend python reset_admin_password.py
 
 # Reset with specific username
-docker exec -it maestro-backend python reset_admin_password.py --username admin
+docker exec -it axiom-backend python reset_admin_password.py --username admin
 
 # Non-interactive reset with password
-docker exec -it maestro-backend python reset_admin_password.py --password "newpassword123" --non-interactive
+docker exec -it axiom-backend python reset_admin_password.py --password "newpassword123" --non-interactive
 
 # List all admin users
-docker exec -it maestro-backend python reset_admin_password.py --list
+docker exec -it axiom-backend python reset_admin_password.py --list
 ```
 
 ### Script Options
@@ -101,7 +101,7 @@ Options:
 
 ```bash
 # Reset admin password to 'admin123' (for development only)
-docker exec maestro-backend python reset_admin_password.py --username admin --password admin123 --non-interactive
+docker exec axiom-backend python reset_admin_password.py --username admin --password admin123 --non-interactive
 ```
 
 ## Document Consistency Cleanup
@@ -110,16 +110,16 @@ docker exec maestro-backend python reset_admin_password.py --username admin --pa
 
 ```bash
 # Check system-wide consistency status
-docker exec maestro-backend python cli_document_consistency.py system-status
+docker exec axiom-backend python cli_document_consistency.py system-status
 
 # Check consistency for a specific user
-docker exec maestro-backend python cli_document_consistency.py check-user <user_id>
+docker exec axiom-backend python cli_document_consistency.py check-user <user_id>
 
 # Clean up orphaned documents for a user
-docker exec maestro-backend python cli_document_consistency.py cleanup-user <user_id>
+docker exec axiom-backend python cli_document_consistency.py cleanup-user <user_id>
 
 # Clean up all users' orphaned documents
-docker exec maestro-backend python cli_document_consistency.py cleanup-all
+docker exec axiom-backend python cli_document_consistency.py cleanup-all
 ```
 
 ## Emergency Recovery
@@ -128,8 +128,8 @@ docker exec maestro-backend python cli_document_consistency.py cleanup-all
 
 ```bash
 # Force remove volumes
-docker volume ls | grep maestro
-docker volume rm maestro_postgres_data -f
+docker volume ls | grep axiom
+docker volume rm axiom_postgres_data -f
 
 # Nuclear option - removes everything
 docker system prune -a --volumes

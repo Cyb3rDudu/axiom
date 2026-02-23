@@ -1,13 +1,13 @@
-/* MAESTRO Documentation Custom Styles */
+/* AXIOM Documentation Custom Styles */
 
 /* Root variables for consistent theming */
 :root {
-  --maestro-primary: #4A6FA5;
-  --maestro-primary-dark: #3B5A7C;
-  --maestro-accent: #6B8FB5;
-  --maestro-success: #2dce89;
-  --maestro-warning: #fb6340;
-  --maestro-info: #11cdef;
+  --axiom-primary: #4A6FA5;
+  --axiom-primary-dark: #3B5A7C;
+  --axiom-accent: #6B8FB5;
+  --axiom-success: #2dce89;
+  --axiom-warning: #fb6340;
+  --axiom-info: #11cdef;
 }
 
 /* Enhanced cards for the grid layout */
@@ -20,7 +20,7 @@
 .md-typeset .grid.cards > ul > li:hover {
   box-shadow: 0 4px 20px rgba(0,0,0,0.1);
   transform: translateY(-2px);
-  border-color: var(--maestro-primary);
+  border-color: var(--axiom-primary);
 }
 
 /* Better code block styling */
@@ -50,7 +50,7 @@
 
 /* Navigation enhancements */
 .md-nav__item--active > .md-nav__link {
-  color: var(--maestro-primary);
+  color: var(--axiom-primary);
   font-weight: 600;
 }
 
@@ -151,12 +151,12 @@
 
 .feature-card h3 {
   margin-top: 0;
-  color: var(--maestro-primary);
+  color: var(--axiom-primary);
 }
 
 /* Version selector styling */
 .md-version__current {
-  color: var(--maestro-primary);
+  color: var(--axiom-primary);
   font-weight: 600;
 }
 
@@ -175,19 +175,19 @@
 }
 
 .badge-primary {
-  background-color: var(--maestro-primary);
+  background-color: var(--axiom-primary);
 }
 
 .badge-success {
-  background-color: var(--maestro-success);
+  background-color: var(--axiom-success);
 }
 
 .badge-warning {
-  background-color: var(--maestro-warning);
+  background-color: var(--axiom-warning);
 }
 
 .badge-info {
-  background-color: var(--maestro-info);
+  background-color: var(--axiom-info);
 }
 
 /* Responsive improvements */
@@ -206,7 +206,7 @@ html {
 .highlight-box {
   padding: 1rem;
   margin: 1rem 0;
-  background: linear-gradient(135deg, var(--maestro-primary) 0%, var(--maestro-primary-dark) 100%);
+  background: linear-gradient(135deg, var(--axiom-primary) 0%, var(--axiom-primary-dark) 100%);
   color: white;
   border-radius: 8px;
   box-shadow: 0 4px 15px rgba(74, 111, 165, 0.3);

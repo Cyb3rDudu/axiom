@@ -1,5 +1,5 @@
 """
-Migration management script for MAESTRO database.
+Migration management script for AXIOM database.
 """
 
 import logging
@@ -45,7 +45,7 @@ def setup_migrations():
     """Set up and run database migrations."""
     try:
         # Database URL (same as in database.py)
-        database_url = "sqlite:///./data/maestro.db"
+        database_url = "sqlite:///./data/axiom.db"
         
         # Create migration runner
         runner = MigrationRunner(database_url)

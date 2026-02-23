@@ -1,12 +1,12 @@
 # Web Fetch Configuration
 
-Configure how MAESTRO fetches and processes content from web pages discovered during research.
+Configure how AXIOM fetches and processes content from web pages discovered during research.
 
 ![Web Fetch Settings](../../assets/images/settings/web-fetch.png)
 
 ## Overview
 
-Web fetching extracts full content from web pages found during searches, enabling MAESTRO to read entire articles beyond search snippets.
+Web fetching extracts full content from web pages found during searches, enabling AXIOM to read entire articles beyond search snippets.
 
 ## Quick Setup
 

@@ -1,16 +1,16 @@
 # User Guide
 
-Welcome to the MAESTRO User Guide. This comprehensive guide will help you master all aspects of MAESTRO's powerful research and writing capabilities.
+Welcome to the AXIOM User Guide. This comprehensive guide will help you master all aspects of AXIOM's powerful research and writing capabilities.
 
 ## What You'll Learn
 
-This guide is organized into three main sections corresponding to MAESTRO's core functionalities:
+This guide is organized into three main sections corresponding to AXIOM's core functionalities:
 
 <div class="grid cards" markdown>
 
 -   **[Research](research/overview.md)**
     
-    Learn how to use MAESTRO's AI-powered research capabilities to conduct thorough investigations, create missions, and generate comprehensive reports.
+    Learn how to use AXIOM's AI-powered research capabilities to conduct thorough investigations, create missions, and generate comprehensive reports.
 
 -   **[Documents](documents/overview.md)**
     
@@ -24,7 +24,7 @@ This guide is organized into three main sections corresponding to MAESTRO's core
 
 ## Quick Start Guide
 
-If you're new to MAESTRO, follow this recommended path:
+If you're new to AXIOM, follow this recommended path:
 
 <div class="grid cards" markdown>
 
@@ -89,14 +89,14 @@ If you're new to MAESTRO, follow this recommended path:
 
 Coming soon! We're working on video tutorials for:
 
-- Getting started with MAESTRO
+- Getting started with AXIOM
 - Advanced research techniques
 - Document management best practices
 - Writing assistant workflows
 
 ## Use Cases
 
-MAESTRO uses an agentic framework to gather information from web sources and your documents to create comprehensive research reports:
+AXIOM uses an agentic framework to gather information from web sources and your documents to create comprehensive research reports:
 
 <div class="grid cards" markdown>
 
@@ -152,9 +152,9 @@ If you need assistance:
 
 - Check the **[FAQ](../troubleshooting/faq.md)** for common questions
 - Browse **[Troubleshooting](../troubleshooting/index.md)** for solutions
-- Visit our **[Community Forum](https://github.com/murtaza-nasir/maestro/discussions)**
-- Report issues on **[GitHub](https://github.com/murtaza-nasir/maestro/issues)**
+- Visit our **[Community Forum](https://github.com/murtaza-nasir/axiom/discussions)**
+- Report issues on **[GitHub](https://github.com/murtaza-nasir/axiom/issues)**
 
 ---
 
-Ready to dive in? Start with **[Research Overview](research/overview.md)** to learn about MAESTRO's powerful research capabilities.
+Ready to dive in? Start with **[Research Overview](research/overview.md)** to learn about AXIOM's powerful research capabilities.

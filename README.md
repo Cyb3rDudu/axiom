@@ -1,13 +1,13 @@
 <p align="center">
-  <img src="images/logo.png" alt="MAESTRO Logo" width="200"/>
+  <img src="images/logo.png" alt="AXIOM Logo" width="200"/>
 </p>
 
-# MAESTRO: Your Self-Hosted AI Research Assistant
+# AXIOM: Your Self-Hosted AI Research Assistant
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Version](https://img.shields.io/badge/Version-0.1.10--alpha-green.svg)](https://github.com/murtaza-nasir/maestro.git)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://hub.docker.com/r/murtaza-nasir/maestro)
-[![Documentation](https://img.shields.io/badge/Docs-Available-brightgreen.svg)](https://murtaza-nasir.github.io/maestro/)
+[![Version](https://img.shields.io/badge/Version-0.1.10--alpha-green.svg)](https://github.com/murtaza-nasir/axiom.git)
+[![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://hub.docker.com/r/murtaza-nasir/axiom)
+[![Documentation](https://img.shields.io/badge/Docs-Available-brightgreen.svg)](https://murtaza-nasir.github.io/axiom/)
 
 > **Version 0.1.10-alpha (Oct 12, 2025) - Azure OpenAI & Configuration Improvements**
 >
@@ -17,18 +17,18 @@
 > - **Settings Fixes**: Mission settings now persist correctly across server restarts with proper priority handling
 > - **UX Improvements**: Disabled autocomplete on API key fields to prevent browser autofill issues 
 
-MAESTRO is an AI-powered research platform you can host on your own hardware. It's designed to manage complex research tasks from start to finish in a collaborative research environment. Plan your research, let AI agents carry it out, and watch as they generate detailed reports based on your documents and sources from the web.
+AXIOM is an AI-powered research platform you can host on your own hardware. It's designed to manage complex research tasks from start to finish in a collaborative research environment. Plan your research, let AI agents carry it out, and watch as they generate detailed reports based on your documents and sources from the web.
 
 ## Documentation
 
-**[View Full Documentation](https://murtaza-nasir.github.io/maestro/)**
+**[View Full Documentation](https://murtaza-nasir.github.io/axiom/)**
 
-- **[Quick Start](https://murtaza-nasir.github.io/maestro/getting-started/quickstart/)** - Get up and running in minutes
-- **[Installation](https://murtaza-nasir.github.io/maestro/getting-started/installation/)** - Platform-specific setup
-- **[Configuration](https://murtaza-nasir.github.io/maestro/getting-started/configuration/overview/)** - AI providers and settings
-- **[User Guide](https://murtaza-nasir.github.io/maestro/user-guide/)** - Complete feature guide
-- **[Example Reports](https://murtaza-nasir.github.io/maestro/example-reports/)** - Sample outputs from various models
-- **[Troubleshooting](https://murtaza-nasir.github.io/maestro/troubleshooting/)** - Common issues and solutions
+- **[Quick Start](https://murtaza-nasir.github.io/axiom/getting-started/quickstart/)** - Get up and running in minutes
+- **[Installation](https://murtaza-nasir.github.io/axiom/getting-started/installation/)** - Platform-specific setup
+- **[Configuration](https://murtaza-nasir.github.io/axiom/getting-started/configuration/overview/)** - AI providers and settings
+- **[User Guide](https://murtaza-nasir.github.io/axiom/user-guide/)** - Complete feature guide
+- **[Example Reports](https://murtaza-nasir.github.io/axiom/example-reports/)** - Sample outputs from various models
+- **[Troubleshooting](https://murtaza-nasir.github.io/axiom/troubleshooting/)** - Common issues and solutions
 
 ## Screenshots
 
@@ -120,8 +120,8 @@ MAESTRO is an AI-powered research platform you can host on your own hardware. It
 
 ```bash
 # Clone and setup
-git clone https://github.com/murtaza-nasir/maestro.git
-cd maestro
+git clone https://github.com/murtaza-nasir/axiom.git
+cd axiom
 ./setup-env.sh    # Linux/macOS
 # or
 .\setup-env.ps1   # Windows PowerShell
@@ -130,12 +130,12 @@ cd maestro
 docker compose up -d
 
 # Monitor startup (takes 5-10 minutes first time)
-docker compose logs -f maestro-backend
+docker compose logs -f axiom-backend
 ```
 
 Access at **http://localhost** • Default: `admin` / `pass found in .env`
 
-For detailed installation instructions, see the [Installation Guide](https://murtaza-nasir.github.io/maestro/getting-started/installation/).
+For detailed installation instructions, see the [Installation Guide](https://murtaza-nasir.github.io/axiom/getting-started/installation/).
 
 ## Configuration
 
@@ -143,7 +143,7 @@ For detailed installation instructions, see the [Installation Guide](https://mur
 - **GPU Support**: Automatic detection on Linux/Windows with NVIDIA GPUs
 - **Network Access**: Configure via setup script options
 
-For troubleshooting and advanced configuration, see the [documentation](https://murtaza-nasir.github.io/maestro/).
+For troubleshooting and advanced configuration, see the [documentation](https://murtaza-nasir.github.io/axiom/).
 
 ## Recent Releases
 
@@ -183,7 +183,7 @@ For troubleshooting and advanced configuration, see the [documentation](https://
 
 This project is **dual-licensed**:
 
-1.  **GNU Affero General Public License v3.0 (AGPLv3)**: MAESTRO is offered under the AGPLv3 as its open-source license.
+1.  **GNU Affero General Public License v3.0 (AGPLv3)**: AXIOM is offered under the AGPLv3 as its open-source license.
 2.  **Commercial License**: For users or organizations who cannot comply with the AGPLv3, a separate commercial license is available. Please contact the maintainers for more details.
 
 ## Contributing

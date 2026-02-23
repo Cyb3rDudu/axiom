@@ -1,10 +1,10 @@
 # Docker Installation
 
-This guide provides comprehensive instructions for installing and running MAESTRO using Docker, the recommended deployment method.
+This guide provides comprehensive instructions for installing and running AXIOM using Docker, the recommended deployment method.
 
 ## Prerequisites
 
-Before installing MAESTRO, ensure you have the following:
+Before installing AXIOM, ensure you have the following:
 
 ### Required Software
 
@@ -29,20 +29,20 @@ For faster document processing (especially PDF conversion):
 - **NVIDIA GPU** with CUDA support
 - **NVIDIA Container Toolkit** ([installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html))
 
-Without GPU support, MAESTRO will use CPU for processing (slower but fully functional).
+Without GPU support, AXIOM will use CPU for processing (slower but fully functional).
 
 ## Quick Installation
 
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/murtaza-nasir/maestro.git
-cd maestro
+git clone https://github.com/murtaza-nasir/axiom.git
+cd axiom
 ```
 
 ### Step 2: Configure Environment
 
-MAESTRO provides two configuration methods:
+AXIOM provides two configuration methods:
 
 #### Option A: Interactive Setup (Recommended)
 
@@ -86,7 +86,7 @@ GROQ_API_KEY=your-groq-key
 TAVILY_API_KEY=your-tavily-key
 ```
 
-### Step 3: Start MAESTRO
+### Step 3: Start AXIOM
 
 ```bash
 docker compose up
@@ -94,13 +94,13 @@ docker compose up
 
 This command will:
 1. Download necessary Docker images
-2. Build the MAESTRO containers
+2. Build the AXIOM containers
 3. Initialize the PostgreSQL database
 4. Start all services
 
 ### Step 4: Access the Application
 
-Once running, access MAESTRO at:
+Once running, access AXIOM at:
 - **Web Interface**: http://localhost:3030
 - **API Documentation**: http://localhost:8001/docs
 
@@ -114,7 +114,7 @@ Default login credentials:
 
 ### Environment Variables
 
-MAESTRO uses environment variables for configuration. Here are the key settings:
+AXIOM uses environment variables for configuration. Here are the key settings:
 
 #### Network Configuration
 
@@ -134,10 +134,10 @@ FRONTEND_PORT=3030              # Frontend port
 
 ```bash
 # PostgreSQL settings (usually no changes needed)
-POSTGRES_USER=maestro_user
-POSTGRES_PASSWORD=maestro_password
-POSTGRES_DB=maestro_db
-DATABASE_URL=postgresql://maestro_user:maestro_password@postgres:5432/maestro_db
+POSTGRES_USER=axiom_user
+POSTGRES_PASSWORD=axiom_password
+POSTGRES_DB=axiom_db
+DATABASE_URL=postgresql://axiom_user:axiom_password@postgres:5432/axiom_db
 ```
 
 #### AI Provider Configuration
@@ -177,7 +177,7 @@ JINA_API_KEY=jina_...
 
 ### Docker Compose Profiles
 
-MAESTRO supports different deployment profiles:
+AXIOM supports different deployment profiles:
 
 #### Default Profile (CPU Only)
 
@@ -197,16 +197,16 @@ docker compose --profile gpu up
 docker compose --profile dev up
 ```
 
-## Managing MAESTRO
+## Managing AXIOM
 
 ### Starting and Stopping
 
-Start MAESTRO:
+Start AXIOM:
 ```bash
 docker compose up -d  # -d runs in background
 ```
 
-Stop MAESTRO:
+Stop AXIOM:
 ```bash
 docker compose down
 ```
@@ -235,7 +235,7 @@ Follow logs in real-time:
 docker compose logs -f
 ```
 
-### Updating MAESTRO
+### Updating AXIOM
 
 To update to the latest version:
 
@@ -254,17 +254,17 @@ docker compose up --build
 
 Access PostgreSQL:
 ```bash
-docker exec -it maestro-postgres psql -U maestro_user -d maestro_db
+docker exec -it axiom-postgres psql -U axiom_user -d axiom_db
 ```
 
 Backup database:
 ```bash
-docker exec maestro-postgres pg_dump -U maestro_user maestro_db > backup.sql
+docker exec axiom-postgres pg_dump -U axiom_user axiom_db > backup.sql
 ```
 
 Restore database:
 ```bash
-docker exec -i maestro-postgres psql -U maestro_user maestro_db < backup.sql
+docker exec -i axiom-postgres psql -U axiom_user axiom_db < backup.sql
 ```
 
 ## Deployment Scenarios
@@ -314,7 +314,7 @@ VITE_API_WS_URL=wss://api.yourdomain.com
 For Docker Swarm deployment:
 
 ```bash
-docker stack deploy -c docker-compose.yml maestro
+docker stack deploy -c docker-compose.yml axiom
 ```
 
 ### Kubernetes
@@ -358,7 +358,7 @@ curl http://localhost:8001/health
 curl http://localhost:3030
 
 # Inside container
-docker exec maestro-backend curl http://localhost:8000/health
+docker exec axiom-backend curl http://localhost:8000/health
 ```
 
 ### Permission Errors
@@ -414,6 +414,6 @@ After successful installation:
 1. **[First Login](../first-login.md)** - Set up your account
 2. **[Configure AI Providers](../configuration/ai-providers.md)** - Set up language models
 3. **[Upload Documents](../../user-guide/documents/uploading.md)** - Build your library
-4. **[Quick Start Guide](../quickstart.md)** - Start using MAESTRO
+4. **[Quick Start Guide](../quickstart.md)** - Start using AXIOM
 
-For additional help, see our [Troubleshooting Guide](../../troubleshooting/index.md) or visit the [Community Forum](https://github.com/murtaza-nasir/maestro/discussions).
+For additional help, see our [Troubleshooting Guide](../../troubleshooting/index.md) or visit the [Community Forum](https://github.com/murtaza-nasir/axiom/discussions).

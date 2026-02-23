@@ -17,7 +17,7 @@ export const useViewStore = create<ViewState>()(
       setView: (view: ViewMode) => set({ currentView: view }),
     }),
     {
-      name: 'maestro-view-storage',
+      name: 'axiom-view-storage',
     }
   )
 )

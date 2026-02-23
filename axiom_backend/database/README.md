@@ -1,12 +1,12 @@
 # Database Module
 
-This module manages the main application database for the Maestro system.
+This module manages the main application database for the Axiom system.
 
 ## Overview
 
 The application uses a **dual-database architecture**:
 
-1. **Main Database** (this module) - `data/maestro.db`
+1. **Main Database** (this module) - `data/axiom.db`
    - User management and authentication
    - Document records and processing status
    - Chat sessions and messages
@@ -52,7 +52,7 @@ User ─1:N→ Documents ←N:M→ DocumentGroups
 Migrations are automatically run on application startup, but you can run them manually:
 
 ```bash
-cd maestro_backend
+cd axiom_backend
 python database/migrations/run_migrations.py
 ```
 
@@ -60,13 +60,13 @@ python database/migrations/run_migrations.py
 
 ```bash
 # View all tables
-sqlite3 data/maestro.db ".tables"
+sqlite3 data/axiom.db ".tables"
 
 # Check document status
-sqlite3 data/maestro.db "SELECT id, processing_status FROM documents;"
+sqlite3 data/axiom.db "SELECT id, processing_status FROM documents;"
 
 # View user count
-sqlite3 data/maestro.db "SELECT COUNT(*) FROM users;"
+sqlite3 data/axiom.db "SELECT COUNT(*) FROM users;"
 ```
 
 ### Common Operations
@@ -164,27 +164,27 @@ Key indexes for performance:
 #### 1. Database Locked
 ```bash
 # Find and kill processes holding locks
-fuser data/maestro.db
+fuser data/axiom.db
 ```
 
 #### 2. Migration Failed
 ```bash
 # Check migration status
-sqlite3 data/maestro.db "SELECT * FROM migration_history;"
+sqlite3 data/axiom.db "SELECT * FROM migration_history;"
 
 # Manually mark as applied if needed
-sqlite3 data/maestro.db "INSERT INTO migration_history (version, applied_at) VALUES ('XXX', datetime('now'));"
+sqlite3 data/axiom.db "INSERT INTO migration_history (version, applied_at) VALUES ('XXX', datetime('now'));"
 ```
 
 #### 3. Corrupt Database
 ```bash
 # Check integrity
-sqlite3 data/maestro.db "PRAGMA integrity_check;"
+sqlite3 data/axiom.db "PRAGMA integrity_check;"
 
 # Backup and restore
-cp data/maestro.db data/maestro.db.backup
-sqlite3 data/maestro.db ".dump" | sqlite3 data/maestro_new.db
-mv data/maestro_new.db data/maestro.db
+cp data/axiom.db data/axiom.db.backup
+sqlite3 data/axiom.db ".dump" | sqlite3 data/axiom_new.db
+mv data/axiom_new.db data/axiom.db
 ```
 
 ### Debug Queries
@@ -210,7 +210,7 @@ GROUP BY u.id;
 
 ## Environment Variables
 
-- `DATABASE_URL` - Database connection string (default: `sqlite:///./data/maestro.db`)
+- `DATABASE_URL` - Database connection string (default: `sqlite:///./data/axiom.db`)
 
 ## Testing
 
@@ -224,15 +224,15 @@ pytest tests/test_database.py
 ### Backup
 ```bash
 # SQLite backup
-sqlite3 data/maestro.db ".backup data/backup.db"
+sqlite3 data/axiom.db ".backup data/backup.db"
 
 # Or simple file copy
-cp data/maestro.db data/maestro_$(date +%Y%m%d).db
+cp data/axiom.db data/axiom_$(date +%Y%m%d).db
 ```
 
 ### Restore
 ```bash
-cp data/backup.db data/maestro.db
+cp data/backup.db data/axiom.db
 ```
 
 ## Related Documentation

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Database Reset Script for Maestro Application
+Database Reset Script for Axiom Application
 
 This script safely resets ALL databases and storage systems to maintain data consistency.
 
@@ -11,7 +11,7 @@ IMPORTANT: All databases MUST be reset together because they are tightly coupled
 - Files on disk correspond to database records
 
 Database Locations:
-- Main DB: maestro_backend/data/maestro.db
+- Main DB: axiom_backend/data/axiom.db
 - AI DB: When created, will be at ai_researcher/data/processed/metadata.db or /app/ai_researcher/data/processed/metadata.db (Docker)
 - Vector Store: When created, will be at ai_researcher/data/vector_store or /app/ai_researcher/data/vector_store (Docker)
 - Documents: ai_researcher/data/raw_pdfs and ai_researcher/data/processed/
@@ -103,32 +103,32 @@ def get_database_locations():
     """Get all possible database locations based on environment."""
     locations = {
         'main_db': [
-            Path("maestro_backend/data/maestro.db"),  # Local development
-            Path("data/maestro.db"),  # Alternative local
+            Path("axiom_backend/data/axiom.db"),  # Local development
+            Path("data/axiom.db"),  # Alternative local
         ],
         'ai_db': [
             Path("ai_researcher/data/processed/metadata.db"),  # Local (when created)
-            Path("maestro_backend/ai_researcher/data/processed/metadata.db"),  # Alternative local
+            Path("axiom_backend/ai_researcher/data/processed/metadata.db"),  # Alternative local
             Path("/app/ai_researcher/data/processed/metadata.db"),  # Docker container
         ],
         'vector_store': [
             Path("ai_researcher/data/vector_store"),  # Local (when created)
-            Path("maestro_backend/ai_researcher/data/vector_store"),  # Alternative local
+            Path("axiom_backend/ai_researcher/data/vector_store"),  # Alternative local
             Path("/app/ai_researcher/data/vector_store"),  # Docker container
         ],
         'pdf_dir': [
             Path("ai_researcher/data/raw_pdfs"),  # Local (when created)
-            Path("maestro_backend/ai_researcher/data/raw_pdfs"),  # Alternative local
+            Path("axiom_backend/ai_researcher/data/raw_pdfs"),  # Alternative local
             Path("/app/ai_researcher/data/raw_pdfs"),  # Docker container
         ],
         'markdown_dir': [
             Path("ai_researcher/data/processed/markdown"),  # Local (when created)
-            Path("maestro_backend/ai_researcher/data/processed/markdown"),  # Alternative local
+            Path("axiom_backend/ai_researcher/data/processed/markdown"),  # Alternative local
             Path("/app/ai_researcher/data/processed/markdown"),  # Docker container
         ],
         'metadata_dir': [
             Path("ai_researcher/data/processed/metadata"),  # Local (when created)
-            Path("maestro_backend/ai_researcher/data/processed/metadata"),  # Alternative local
+            Path("axiom_backend/ai_researcher/data/processed/metadata"),  # Alternative local
             Path("/app/ai_researcher/data/processed/metadata"),  # Docker container
         ]
     }
@@ -164,7 +164,7 @@ def reset_main_database(backup=False):
     print_colored("Running migrations to recreate database...", Colors.BLUE)
     try:
         # Change to backend directory to run migrations
-        os.chdir("maestro_backend")
+        os.chdir("axiom_backend")
         from database.migrations.run_migrations import run_all_migrations
         from database.database import engine
         
@@ -174,7 +174,7 @@ def reset_main_database(backup=False):
     except Exception as e:
         os.chdir("..")
         print_colored(f"✗ Failed to run migrations: {e}", Colors.RED)
-        print_colored("You may need to run migrations manually from maestro_backend directory", Colors.YELLOW)
+        print_colored("You may need to run migrations manually from axiom_backend directory", Colors.YELLOW)
 
 def reset_ai_database(backup=False):
     """Reset the AI researcher database."""
@@ -441,7 +441,7 @@ def reset_all_databases(backup=False):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Reset ALL Maestro databases to maintain data consistency',
+        description='Reset ALL Axiom databases to maintain data consistency',
         epilog='Note: Selective reset is not available to prevent data inconsistencies.'
     )
     parser.add_argument('--backup', action='store_true', 
@@ -456,7 +456,7 @@ def main():
     args = parser.parse_args()
     
     # Show header
-    print_header("Maestro Database Reset Tool")
+    print_header("Axiom Database Reset Tool")
     
     # If only stats requested, show and exit
     if args.stats:

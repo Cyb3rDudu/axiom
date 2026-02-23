@@ -1,6 +1,6 @@
 # Windows Installation
 
-Complete guide for installing MAESTRO on Windows systems using Docker Desktop.
+Complete guide for installing AXIOM on Windows systems using Docker Desktop.
 
 !!! tip "Docker Desktop Simplifies Everything"
     Docker Desktop for Windows handles all the complex Linux compatibility automatically through its WSL2 backend. You don't need to manually set up WSL, Linux distributions, or any complex configurations - Docker Desktop does it all for you!
@@ -9,7 +9,7 @@ Complete guide for installing MAESTRO on Windows systems using Docker Desktop.
 
 1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) (chooses WSL2 backend automatically)
 2. Install [Git for Windows](https://git-scm.com/download/win)
-3. Clone repo: `git clone https://github.com/murtaza-nasir/maestro.git`
+3. Clone repo: `git clone https://github.com/murtaza-nasir/axiom.git`
 4. Fix line endings: `.\fix-line-endings.ps1` (only needed if you get error on startup, see below)
 5. Configure: `.\setup-env.ps1`
 6. Start: `docker compose up -d --build`
@@ -49,8 +49,8 @@ That's it! Docker Desktop handles all the WSL2 complexity for you.
 Open PowerShell or Command Prompt:
 
 ```powershell
-git clone https://github.com/murtaza-nasir/maestro.git
-cd maestro
+git clone https://github.com/murtaza-nasir/axiom.git
+cd axiom
 ```
 
 ### Step 2: Fix Line Endings (Important!)
@@ -75,8 +75,8 @@ The script will guide you through:
 
 1. **Network Configuration**
     - Simple (localhost only) - if installing on the machine you are using
-    - Network (LAN access) - if accessing maestro over network
-    - Custom domain - if running maestro with a domain
+    - Network (LAN access) - if accessing axiom over network
+    - Custom domain - if running axiom with a domain
 
 2. **Security Configuration**
     - Generates secure passwords automatically
@@ -86,19 +86,19 @@ The script will guide you through:
 3. **Port Configuration**
     - Sets the main application port
 
-### Step 4: Build and Start MAESTRO
+### Step 4: Build and Start AXIOM
 
 ```powershell
 # Build and start all services
 docker compose up -d --build
 
 # Monitor startup progress
-docker compose logs -f maestro-backend
+docker compose logs -f axiom-backend
 ```
 
-**First-time startup:** Takes 5-10 minutes to download AI models. Wait for "MAESTRO Backend Started Successfully!" message.
+**First-time startup:** Takes 5-10 minutes to download AI models. Wait for "AXIOM Backend Started Successfully!" message.
 
-### Step 5: Access MAESTRO
+### Step 5: Access AXIOM
 
 - Open browser to `http://localhost`
 - Login with credentials from setup
@@ -112,7 +112,7 @@ If port 80 is blocked (common on Windows):
 
 Edit `.env` file:
 ```env
-MAESTRO_PORT=8080  # Or any available port
+AXIOM_PORT=8080  # Or any available port
 ```
 
 Then access at `http://localhost:8080`
@@ -123,7 +123,7 @@ Windows Defender may block Docker. Allow access when prompted, or manually:
 
 ```powershell
 # Allow Docker through firewall
-New-NetFirewallRule -DisplayName "MAESTRO" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "AXIOM" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
 ```
 
 ## Docker Desktop Settings
@@ -203,15 +203,15 @@ Run PowerShell as Administrator if you encounter permission errors.
 netstat -ano | findstr :80
 
 # Change port in .env file
-MAESTRO_PORT=8080
+AXIOM_PORT=8080
 ```
 
 ### Container Issues
 
 ```powershell
 # Check logs
-docker compose logs maestro-backend
-docker compose logs maestro-postgres
+docker compose logs axiom-backend
+docker compose logs axiom-postgres
 
 # Restart containers
 docker compose down
@@ -253,7 +253,7 @@ docker compose up -d
 
 ### CPU Mode
 
-Windows typically runs MAESTRO in CPU mode:
+Windows typically runs AXIOM in CPU mode:
 
 ```powershell
 # Ensure CPU mode configuration
@@ -262,7 +262,7 @@ docker compose -f docker-compose.cpu.yml up -d
 
 ## Maintenance
 
-### Update MAESTRO
+### Update AXIOM
 
 ```powershell
 # Pull latest changes
@@ -280,10 +280,10 @@ docker compose up -d --build
 
 ```powershell
 # Backup database
-docker exec maestro-postgres pg_dump -U maestro_user maestro_db > backup.sql
+docker exec axiom-postgres pg_dump -U axiom_user axiom_db > backup.sql
 
 # Backup documents and models
-tar -czf maestro_backup.tar.gz maestro_model_cache maestro_datalab_cache
+tar -czf axiom_backup.tar.gz axiom_model_cache axiom_datalab_cache
 ```
 
 ### Clean Up

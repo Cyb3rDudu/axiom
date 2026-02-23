@@ -1,9 +1,9 @@
 #!/usr/bin/env pwsh
 
-# MAESTRO - Environment Setup Script for Windows PowerShell
+# AXIOM - Environment Setup Script for Windows PowerShell
 # This script helps you set up your .env file for the first time
 
-Write-Host "# MAESTRO - Environment Setup"
+Write-Host "# AXIOM - Environment Setup"
 Write-Host "=================================="
 
 # Check if .env already exists
@@ -28,7 +28,7 @@ Write-Host "SUCCESS: Created .env from .env.example" -ForegroundColor Green
 
 # Simplified configuration
 Write-Host ""
-Write-Host "MAESTRO Configuration" -ForegroundColor Cyan
+Write-Host "AXIOM Configuration" -ForegroundColor Cyan
 Write-Host ""
 
 # Setup mode selection
@@ -79,9 +79,9 @@ switch ($setupMode) {
 
 # Port configuration
 Write-Host ""
-$maestroPort = Read-Host "Port for MAESTRO (default: 80)"
-if (-not $maestroPort) { $maestroPort = "80" }
-(Get-Content .env) -replace 'MAESTRO_PORT=80', "MAESTRO_PORT=$maestroPort" | Set-Content .env
+$axiomPort = Read-Host "Port for AXIOM (default: 80)"
+if (-not $axiomPort) { $axiomPort = "80" }
+(Get-Content .env) -replace 'AXIOM_PORT=80', "AXIOM_PORT=$axiomPort" | Set-Content .env
 
 # Database Security Configuration
 Write-Host ""
@@ -222,8 +222,8 @@ Write-Host "   docker compose build --no-cache" -ForegroundColor Cyan
 Write-Host "   docker compose up -d" -ForegroundColor Cyan
 Write-Host ""
 
-Write-Host "Access MAESTRO at:"
-if ($maestroPort -eq "80") {
+Write-Host "Access AXIOM at:"
+if ($axiomPort -eq "80") {
     switch ($setupMode) {
         "2" { Write-Host "  http://$ip" }
         "3" { Write-Host "  $protocol`://$domain" }
@@ -231,9 +231,9 @@ if ($maestroPort -eq "80") {
     }
 } else {
     switch ($setupMode) {
-        "2" { Write-Host "  http://$ip`:$maestroPort" }
-        "3" { Write-Host "  $protocol`://$domain`:$maestroPort" }
-        default { Write-Host "  http://localhost:$maestroPort" }
+        "2" { Write-Host "  http://$ip`:$axiomPort" }
+        "3" { Write-Host "  $protocol`://$domain`:$axiomPort" }
+        default { Write-Host "  http://localhost:$axiomPort" }
     }
 }
 Write-Host ""
@@ -245,13 +245,13 @@ if ($passMode -eq "3") {
     Write-Host "Login credentials were displayed above" -ForegroundColor Cyan
 }
 Write-Host ""
-Write-Host "Start MAESTRO with:"
+Write-Host "Start AXIOM with:"
 Write-Host "  docker compose up -d" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "IMPORTANT - First Run:" -ForegroundColor Yellow
 Write-Host "  Initial startup takes 5-10 minutes to download AI models" -ForegroundColor Yellow
-Write-Host "  Monitor progress with: docker compose logs -f maestro-backend" -ForegroundColor Yellow
-Write-Host "  Wait for message: MAESTRO Backend Started Successfully!" -ForegroundColor Yellow
+Write-Host "  Monitor progress with: docker compose logs -f axiom-backend" -ForegroundColor Yellow
+Write-Host "  Wait for message: AXIOM Backend Started Successfully!" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "To modify settings later:"
 Write-Host "  notepad .env" 

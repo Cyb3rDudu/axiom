@@ -27,9 +27,9 @@ class UnifiedDocumentDatabase:
     
     def __init__(self, db_path: str = None, session: Session = None):
         # Ignore db_path - we always use the main database
-        self.db_path = "data/maestro.db"
+        self.db_path = "data/axiom.db"
         self.session = session  # Accept optional session
-        logger.debug("Using unified database at data/maestro.db")
+        logger.debug("Using unified database at data/axiom.db")
     
     def _get_session(self) -> Session:
         """Get a database session."""

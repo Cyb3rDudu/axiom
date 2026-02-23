@@ -1,5 +1,5 @@
 """
-Database Models for Maestro Application
+Database Models for Axiom Application
 
 This module defines the SQLAlchemy ORM models for the PostgreSQL database.
 The application uses a unified architecture:

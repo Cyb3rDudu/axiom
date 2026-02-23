@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Reset admin password for MAESTRO
+Reset admin password for AXIOM
 Run this inside the backend container to reset the admin password to 'admin123'
 
 Usage:
-    docker exec -it maestro-backend python scripts/reset_admin_password.py
+    docker exec -it axiom-backend python scripts/reset_admin_password.py
     
 Or with a custom password:
-    docker exec -it maestro-backend python scripts/reset_admin_password.py newpassword
+    docker exec -it axiom-backend python scripts/reset_admin_password.py newpassword
 """
 
 import sys
@@ -24,7 +24,7 @@ from sqlalchemy.orm import sessionmaker
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Database connection - use environment variable or default
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://maestro_user:maestro_password@postgres:5432/maestro_db")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://axiom_user:axiom_password@postgres:5432/axiom_db")
 
 def reset_admin_password(new_password="admin123"):
     """Reset the admin user password"""
@@ -69,7 +69,7 @@ def reset_admin_password(new_password="admin123"):
                 session.execute(
                     text("""
                         INSERT INTO users (username, email, hashed_password, full_name, is_admin, is_active, role, user_type)
-                        VALUES ('admin', 'admin@maestro.local', :password, 'System Administrator', true, true, 'admin', 'admin')
+                        VALUES ('admin', 'admin@axiom.local', :password, 'System Administrator', true, true, 'admin', 'admin')
                     """),
                     {"password": hashed_password}
                 )

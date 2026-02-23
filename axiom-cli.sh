@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# MAESTRO Direct CLI Helper Script
+# AXIOM Direct CLI Helper Script
 # This script provides direct document processing with live feedback
 
 set -e
@@ -62,7 +62,7 @@ run_direct_cli() {
 # Help function
 show_help() {
     cat << EOF
-MAESTRO Direct CLI Helper Script
+AXIOM Direct CLI Helper Script
 
 This tool provides DIRECT document processing with live feedback, bypassing the background queue.
 Documents are processed synchronously with real-time progress updates.
@@ -358,8 +358,8 @@ case "$1" in
         
         # Copy the reset script to the container
         print_info "Copying reset script to Docker container..."
-        docker cp reset_databases.py maestro-backend:/app/reset_databases.py 2>/dev/null || {
-            print_error "Failed to copy reset script to container. Is maestro-backend running?"
+        docker cp reset_databases.py axiom-backend:/app/reset_databases.py 2>/dev/null || {
+            print_error "Failed to copy reset script to container. Is axiom-backend running?"
             print_info "Try starting the backend first: docker compose up -d backend"
             exit 1
         }
@@ -383,28 +383,28 @@ case "$1" in
         print_info "Executing database operations inside Docker container..."
         
         # Check if container is running
-        if docker ps --format '{{.Names}}' | grep -q '^maestro-backend$'; then
+        if docker ps --format '{{.Names}}' | grep -q '^axiom-backend$'; then
             # Container is running, use exec
             # Use -i for interactive input but handle TTY dynamically
             if [ -t 0 ]; then
-                docker exec -it maestro-backend $CMD
+                docker exec -it axiom-backend $CMD
             else
-                docker exec -i maestro-backend $CMD
+                docker exec -i axiom-backend $CMD
             fi
         else
             # Container exists but not running, use run
             print_warning "Backend container is not running. Starting temporary container..."
             docker run --rm -it \
-                -v maestro-data:/app/ai_researcher/data \
-                -v ./maestro_backend/data:/app/data \
+                -v axiom-data:/app/ai_researcher/data \
+                -v ./axiom_backend/data:/app/data \
                 -w /app \
-                maestro-backend \
+                axiom-backend \
                 $CMD
         fi
         
         # Clean up - remove the script from container if it's running
-        if docker ps --format '{{.Names}}' | grep -q '^maestro-backend$'; then
-            docker exec maestro-backend rm -f /app/reset_databases.py 2>/dev/null || true
+        if docker ps --format '{{.Names}}' | grep -q '^axiom-backend$'; then
+            docker exec axiom-backend rm -f /app/reset_databases.py 2>/dev/null || true
         fi
         
         if [ "$STATS" = false ] && [ "$CHECK" = false ]; then

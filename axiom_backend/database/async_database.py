@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 # Get the base PostgreSQL URL from environment
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql://maestro_user:maestro_password@postgres:5432/maestro_db"
+    "postgresql://axiom_user:axiom_password@postgres:5432/axiom_db"
 )
 
 # Convert to async PostgreSQL URL for asyncpg driver

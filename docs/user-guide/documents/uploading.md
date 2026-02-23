@@ -1,6 +1,6 @@
 # Uploading Documents
 
-MAESTRO provides multiple ways to upload documents to your library, supporting various file formats and batch uploads. The system automatically processes documents for semantic search and research capabilities.
+AXIOM provides multiple ways to upload documents to your library, supporting various file formats and batch uploads. The system automatically processes documents for semantic search and research capabilities.
 
 ![Drag and Drop Upload](../../assets/images/doc view drag and drop upload.png)
 
@@ -25,7 +25,7 @@ For traditional file selection:
 ### CLI Upload
 For bulk uploads via command line:
 ```bash
-./maestro-cli.sh ingest [username] [directory]
+./axiom-cli.sh ingest [username] [directory]
 ```
 This method is ideal for:
 - Large document collections
@@ -290,7 +290,7 @@ If uploaded documents don't appear:
 
 ## Supported Formats
 
-MAESTRO supports the following document formats:
+AXIOM supports the following document formats:
 
 - **PDF** (.pdf) - Portable Document Format
 - **Microsoft Word** (.docx, .doc) - Word documents

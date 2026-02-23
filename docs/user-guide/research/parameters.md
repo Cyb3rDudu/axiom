@@ -1,12 +1,12 @@
 # Research Parameters Reference
 
-This page provides a comprehensive guide to all configurable research parameters in MAESTRO. These settings control how research missions operate, from initial exploration to final report generation.
+This page provides a comprehensive guide to all configurable research parameters in AXIOM. These settings control how research missions operate, from initial exploration to final report generation.
 
 ## Parameter Categories
 
 ### 1. Initial Research Phase
 
-Parameters controlling the exploratory phase where MAESTRO investigates your topic broadly.
+Parameters controlling the exploratory phase where AXIOM investigates your topic broadly.
 
 #### initial_research_max_depth
 - **Type**: Integer
@@ -38,7 +38,7 @@ Parameters controlling the exploratory phase where MAESTRO investigates your top
 
 ### 2. Structured Research Phase
 
-Parameters controlling the main research phase where MAESTRO systematically investigates each section.
+Parameters controlling the main research phase where AXIOM systematically investigates each section.
 
 #### structured_research_rounds
 - **Type**: Integer

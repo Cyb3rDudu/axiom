@@ -1,12 +1,12 @@
 # Database Reset and Management
 
-Guide for managing MAESTRO's PostgreSQL database, including reset, backup, and recovery procedures.
+Guide for managing AXIOM's PostgreSQL database, including reset, backup, and recovery procedures.
 
-## Understanding MAESTRO's Data Architecture
+## Understanding AXIOM's Data Architecture
 
-MAESTRO uses PostgreSQL with pgvector extension for all data storage:
+AXIOM uses PostgreSQL with pgvector extension for all data storage:
 
-1. **PostgreSQL Database** (`maestro_db`)
+1. **PostgreSQL Database** (`axiom_db`)
     - User accounts and authentication
     - Documents metadata and records  
     - Document chunks with embeddings (pgvector)
@@ -43,32 +43,32 @@ This will:
 - Clear model caches
 - Start with a fresh, empty system
 
-### Using maestro-cli.sh
+### Using axiom-cli.sh
 
 The recommended way to reset the database:
 
 ```bash
 # Check current database status
-./maestro-cli.sh reset-db --stats
+./axiom-cli.sh reset-db --stats
 
 # Reset with backup
-./maestro-cli.sh reset-db --backup
+./axiom-cli.sh reset-db --backup
 
 # Force reset without confirmation
-./maestro-cli.sh reset-db --force
+./axiom-cli.sh reset-db --force
 ```
 
 ### Using Database Reset Script
 
 ```bash
 # Copy reset script to container
-docker cp reset_databases.py maestro-backend:/app/
+docker cp reset_databases.py axiom-backend:/app/
 
 # Run reset with options
-docker exec -it maestro-backend python reset_databases.py --backup
+docker exec -it axiom-backend python reset_databases.py --backup
 
 # Remove script after use
-docker exec maestro-backend rm /app/reset_databases.py
+docker exec axiom-backend rm /app/reset_databases.py
 ```
 
 ## Database Backup and Restore
@@ -82,13 +82,13 @@ Create complete backup of PostgreSQL data:
 mkdir -p backups/$(date +%Y%m%d)
 
 # Backup PostgreSQL database
-docker exec maestro-postgres pg_dump -U maestro_user maestro_db > backups/$(date +%Y%m%d)/maestro.sql
+docker exec axiom-postgres pg_dump -U axiom_user axiom_db > backups/$(date +%Y%m%d)/axiom.sql
 
 # Backup document files
-tar czf backups/$(date +%Y%m%d)/documents.tar.gz maestro_backend/data/
+tar czf backups/$(date +%Y%m%d)/documents.tar.gz axiom_backend/data/
 
 # Backup model cache (optional, large)
-tar czf backups/$(date +%Y%m%d)/models.tar.gz maestro_model_cache/
+tar czf backups/$(date +%Y%m%d)/models.tar.gz axiom_model_cache/
 ```
 
 ### Restore from Backup
@@ -101,7 +101,7 @@ docker compose down
 docker compose up -d postgres
 
 # Restore database
-docker exec -i maestro-postgres psql -U maestro_user maestro_db < backups/20240101/maestro.sql
+docker exec -i axiom-postgres psql -U axiom_user axiom_db < backups/20240101/axiom.sql
 
 # Restore document files
 tar xzf backups/20240101/documents.tar.gz
@@ -116,10 +116,10 @@ docker compose up -d
 
 ```bash
 # Check PostgreSQL status
-docker exec maestro-postgres pg_isready -U maestro_user
+docker exec axiom-postgres pg_isready -U axiom_user
 
 # Connect to database
-docker exec -it maestro-postgres psql -U maestro_user -d maestro_db
+docker exec -it axiom-postgres psql -U axiom_user -d axiom_db
 
 # List all tables
 \dt
@@ -142,12 +142,12 @@ UNION ALL
 
 ```bash
 # Check database size
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "
-  SELECT pg_database_size('maestro_db')/1024/1024 as size_mb;
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "
+  SELECT pg_database_size('axiom_db')/1024/1024 as size_mb;
 "
 
 # Check table sizes
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "
   SELECT 
     schemaname,
     tablename,
@@ -164,14 +164,14 @@ docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "
 
 ```bash
 # Check logs
-docker compose logs maestro-postgres
+docker compose logs axiom-postgres
 
 # Try rebuilding
 docker compose down
 docker compose up -d postgres
 
 # If still failing, reset PostgreSQL volume
-docker volume rm maestro_postgres-data
+docker volume rm axiom_postgres-data
 docker compose up -d postgres
 ```
 
@@ -183,10 +183,10 @@ Reclaim storage and update statistics:
 
 ```bash
 # Full vacuum (locks tables)
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "VACUUM FULL;"
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "VACUUM FULL;"
 
 # Analyze for query optimization
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "ANALYZE;"
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "ANALYZE;"
 ```
 
 ### Reindex Tables
@@ -194,7 +194,7 @@ docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "ANALYZE;"
 Improve query performance:
 
 ```bash
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "REINDEX DATABASE maestro_db;"
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "REINDEX DATABASE axiom_db;"
 ```
 
 ### Clean Up Old Data
@@ -202,7 +202,7 @@ docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "REINDEX DATA
 Remove old processing jobs:
 
 ```bash
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "
   DELETE FROM document_processing_jobs 
   WHERE created_at < NOW() - INTERVAL '30 days'
   AND status IN ('completed', 'failed');
@@ -215,22 +215,22 @@ docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "
 
 ```bash
 # Test connection
-docker exec maestro-backend python -c "
+docker exec axiom-backend python -c "
 from database.database import engine
 print('Connected!' if engine else 'Failed')
 "
 
 # Check connection string
-docker exec maestro-backend env | grep DATABASE_URL
+docker exec axiom-backend env | grep DATABASE_URL
 ```
 
 ### Permission Issues
 
 ```bash
-# Grant all permissions to maestro_user
-docker exec maestro-postgres psql -U postgres -d maestro_db -c "
-  GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO maestro_user;
-  GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO maestro_user;
+# Grant all permissions to axiom_user
+docker exec axiom-postgres psql -U postgres -d axiom_db -c "
+  GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO axiom_user;
+  GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO axiom_user;
 "
 ```
 

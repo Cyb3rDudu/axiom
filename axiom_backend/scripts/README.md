@@ -16,12 +16,12 @@ Extracts hardcoded prompt strings from agent files and saves them as individual 
 
 **Usage:**
 ```bash
-cd /path/to/maestro-private
-python maestro_backend/scripts/extract_prompts_to_files.py
+cd /path/to/axiom-private
+python axiom_backend/scripts/extract_prompts_to_files.py
 ```
 
 **What it does:**
-- Scans agent files in `maestro_backend/ai_researcher/agentic_layer/agents/`
+- Scans agent files in `axiom_backend/ai_researcher/agentic_layer/agents/`
 - Extracts prompts from `_default_system_prompt()` methods
 - Special handling for PlanningAgent's 6 phase prompts
 - Saves to `/prompts/en/` directory
@@ -49,19 +49,19 @@ Imports prompt text files into the database for dynamic loading.
 
 **Usage:**
 ```bash
-cd /path/to/maestro-private
+cd /path/to/axiom-private
 
 # Import all languages (dry run)
-python maestro_backend/scripts/import_prompts_to_db.py --dry-run
+python axiom_backend/scripts/import_prompts_to_db.py --dry-run
 
 # Import all languages (actual import)
-python maestro_backend/scripts/import_prompts_to_db.py
+python axiom_backend/scripts/import_prompts_to_db.py
 
 # Import specific language
-python maestro_backend/scripts/import_prompts_to_db.py --language en
+python axiom_backend/scripts/import_prompts_to_db.py --language en
 
 # Force overwrite existing prompts
-python maestro_backend/scripts/import_prompts_to_db.py --force
+python axiom_backend/scripts/import_prompts_to_db.py --force
 ```
 
 **Options:**
@@ -81,17 +81,17 @@ python maestro_backend/scripts/import_prompts_to_db.py --force
 
 1. **Run database migration** (creates tables):
    ```bash
-   psql -U maestro_user -d maestro_db -f maestro_backend/database/migrations/add_multilingual_support.sql
+   psql -U axiom_user -d axiom_db -f axiom_backend/database/migrations/add_multilingual_support.sql
    ```
 
 2. **Extract English prompts from code**:
    ```bash
-   python maestro_backend/scripts/extract_prompts_to_files.py
+   python axiom_backend/scripts/extract_prompts_to_files.py
    ```
 
 3. **Import English prompts to database**:
    ```bash
-   python maestro_backend/scripts/import_prompts_to_db.py --language en
+   python axiom_backend/scripts/import_prompts_to_db.py --language en
    ```
 
 ### Adding a New Language
@@ -108,12 +108,12 @@ python maestro_backend/scripts/import_prompts_to_db.py --force
 
 3. **Import translated prompts**:
    ```bash
-   python maestro_backend/scripts/import_prompts_to_db.py --language de
+   python axiom_backend/scripts/import_prompts_to_db.py --language de
    ```
 
 4. **Verify import**:
    ```bash
-   psql -U maestro_user -d maestro_db -c "
+   psql -U axiom_user -d axiom_db -c "
        SELECT agent_name, prompt_key, language_code, LENGTH(content)
        FROM prompt_templates
        WHERE language_code = 'de'
@@ -126,7 +126,7 @@ To update prompts after code changes:
 
 1. **Re-extract from code**:
    ```bash
-   python maestro_backend/scripts/extract_prompts_to_files.py
+   python axiom_backend/scripts/extract_prompts_to_files.py
    ```
 
 2. **Review changes**:
@@ -136,7 +136,7 @@ To update prompts after code changes:
 
 3. **Re-import to database**:
    ```bash
-   python maestro_backend/scripts/import_prompts_to_db.py --language en --force
+   python axiom_backend/scripts/import_prompts_to_db.py --language en --force
    ```
 
 4. **Clear PromptLoader cache** (optional, happens automatically on app restart):
@@ -242,10 +242,10 @@ def _default_system_prompt(self) -> str:
 
 ## Related Files
 
-- Database migration: `/maestro_backend/database/migrations/add_multilingual_support.sql`
-- PromptLoader service: `/maestro_backend/ai_researcher/agentic_layer/services/prompt_loader.py`
-- Database models: `/maestro_backend/database/models.py`
-- Agent files: `/maestro_backend/ai_researcher/agentic_layer/agents/`
+- Database migration: `/axiom_backend/database/migrations/add_multilingual_support.sql`
+- PromptLoader service: `/axiom_backend/ai_researcher/agentic_layer/services/prompt_loader.py`
+- Database models: `/axiom_backend/database/models.py`
+- Agent files: `/axiom_backend/ai_researcher/agentic_layer/agents/`
 
 ## Reference
 

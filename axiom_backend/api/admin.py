@@ -64,7 +64,7 @@ def get_system_settings(db: Session = Depends(get_db)):
     return schemas.SystemSettingsResponse(
         registration_enabled=registration_enabled_setting.value if registration_enabled_setting else True,
         max_users_allowed=max_users_allowed_setting.value if max_users_allowed_setting else 100,
-        instance_name=instance_name_setting.value if instance_name_setting else "MAESTRO Instance"
+        instance_name=instance_name_setting.value if instance_name_setting else "AXIOM Instance"
     )
 
 @router.put("/settings", response_model=schemas.SystemSettingsResponse)

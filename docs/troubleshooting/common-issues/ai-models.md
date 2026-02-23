@@ -19,10 +19,10 @@ Quick fixes for AI model configuration and API issues.
 **If still empty:**
 ```bash
 # Check logs for errors
-docker compose logs maestro-backend | grep -i "api\|model"
+docker compose logs axiom-backend | grep -i "api\|model"
 
 # Restart backend
-docker compose restart maestro-backend
+docker compose restart axiom-backend
 ```
 
 ### Wrong Model Being Used
@@ -65,7 +65,7 @@ RETRY_DELAY=5
 MAX_CONCURRENT_REQUESTS=2
 
 # Restart
-docker compose restart maestro-backend
+docker compose restart axiom-backend
 ```
 
 ### Context Too Large
@@ -146,7 +146,7 @@ curl YOUR_CUSTOM_BASE_URL/v1/models
 
 ### Why Don't My Tracked Costs Match My API Provider Dashboard?
 
-This is a known issue with some API providers' pricing and billing. MAESTRO correctly tracks costs based on providers' advertised pricing, but actual charges often differ significantly.
+This is a known issue with some API providers' pricing and billing. AXIOM correctly tracks costs based on providers' advertised pricing, but actual charges often differ significantly.
 
 #### The Problem
 
@@ -172,7 +172,7 @@ Here's actual data from testing with a popular model:
 **Key Findings:**
 
 - Token counts are usually accurate across API and dashboard 
-- MAESTRO's pricing calculation is correct based on advertised rates 
+- AXIOM's pricing calculation is correct based on advertised rates 
 - Dashboard charges can be inconsistent with advertised rates 
 
 #### Testing Your Own Costs
@@ -193,7 +193,7 @@ python scripts/test_openrouter_pricing.py --api-key YOUR_API_KEY
 #### What This Means for You
 
 1. **Your tracked costs may differ from actual charges** - typically 40-60% of dashboard values
-2. **This is NOT a bug in MAESTRO** - we calculate correctly based on advertised prices
+2. **This is NOT a bug in AXIOM** - we calculate correctly based on advertised prices
 3. **Some providers' billing is inconsistent** - they may charge differently than advertised
 
 #### Workarounds
@@ -223,7 +223,7 @@ The discrepancy may be caused by:
 
 **Note**: Direct providers (like OpenAI, Anthropic) typically have more consistent pricing than aggregators/routers, as they don't route between multiple backends.
 
-For more technical details and provider-specific test scripts, see our [scripts directory](https://github.com/murtaza-nasir/maestro/tree/main/scripts).
+For more technical details and provider-specific test scripts, see our [scripts directory](https://github.com/murtaza-nasir/axiom/tree/main/scripts).
 
 ## Debugging
 
@@ -234,17 +234,17 @@ For more technical details and provider-specific test scripts, see our [scripts 
 LOG_LEVEL=DEBUG
 
 # Restart
-docker compose restart maestro-backend
+docker compose restart axiom-backend
 
 # Watch logs
-docker compose logs -f maestro-backend | grep -i "model\|api"
+docker compose logs -f axiom-backend | grep -i "model\|api"
 ```
 
 ### Test Models Directly
 
 ```bash
 # Check configured models
-docker exec maestro-backend python -c "
+docker exec axiom-backend python -c "
 from ai_researcher.dynamic_config import get_fast_model_name, get_mid_model_name, get_intelligent_model_name
 print('Fast:', get_fast_model_name())
 print('Mid:', get_mid_model_name())
@@ -256,7 +256,7 @@ print('Intelligent:', get_intelligent_model_name())
 
 ### What are Structured Outputs?
 
-Maestro uses OpenAI's structured outputs feature (`json_schema` response format) to ensure LLM responses match exact Pydantic model schemas. However, not all providers support this advanced feature.
+Axiom uses OpenAI's structured outputs feature (`json_schema` response format) to ensure LLM responses match exact Pydantic model schemas. However, not all providers support this advanced feature.
 
 ### Provider Support Status
 
@@ -275,7 +275,7 @@ Maestro uses OpenAI's structured outputs feature (`json_schema` response format)
 
 ### Automatic Fallback Mechanism
 
-Maestro automatically handles incompatible providers:
+Axiom automatically handles incompatible providers:
 
 1. **First attempts** structured outputs for maximum reliability
 2. **Detects errors** and falls back to `json_object` mode
@@ -301,7 +301,7 @@ python -m vllm.entrypoints.openai.api_server \
   --guided-decoding-backend outlines \
   --port 5000
 
-# In Maestro Settings → AI Config:
+# In Axiom Settings → AI Config:
 # Provider: Custom Provider
 # Base URL: http://localhost:5000/v1
 # Model: your-model
@@ -314,7 +314,7 @@ python -m sglang.launch_server \
   --model-path your-model \
   --port 30000
 
-# In Maestro Settings → AI Config:
+# In Axiom Settings → AI Config:
 # Provider: Custom Provider  
 # Base URL: http://localhost:30000/v1
 # Model: your-model
@@ -340,7 +340,7 @@ For detailed local LLM deployment, see [Local LLM Deployment Guide](../../deploy
 
 ```bash
 # Clear settings and reconfigure
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "
 UPDATE users SET settings = settings - 'ai_endpoints' WHERE username = 'admin';
 "
 
@@ -358,7 +358,7 @@ UPDATE users SET settings = settings - 'ai_endpoints' WHERE username = 'admin';
 
 ## Still Having Issues?
 
-1. Check logs: `docker compose logs maestro-backend`
+1. Check logs: `docker compose logs axiom-backend`
 2. Verify API keys are valid
 3. Check provider status pages
 4. Try different models

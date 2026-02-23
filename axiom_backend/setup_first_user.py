@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Setup script to create a test user for MAESTRO backend.
+Setup script to create a test user for AXIOM backend.
 This script should be run after the database is initialized.
 """
 
@@ -26,7 +26,7 @@ def create_first_user():
         # Get admin credentials from environment or use defaults
         admin_username = os.environ.get('ADMIN_USERNAME', 'admin')
         admin_password = os.environ.get('ADMIN_PASSWORD', 'admin123')
-        admin_email = os.environ.get('ADMIN_EMAIL', 'admin@maestro.local')
+        admin_email = os.environ.get('ADMIN_EMAIL', 'admin@axiom.local')
         
         # Check if admin user already exists
         existing_user = db.query(User).filter(User.username == admin_username).first()

@@ -1,12 +1,12 @@
-# MAESTRO Architecture
+# AXIOM Architecture
 
 ## System Overview
 
-MAESTRO is a sophisticated multi-agent AI system designed for automated research synthesis and report generation. Built on a modern microservices architecture, it employs specialized AI agents that collaborate to plan, execute, critique, and write comprehensive research reports.
+AXIOM is a sophisticated multi-agent AI system designed for automated research synthesis and report generation. Built on a modern microservices architecture, it employs specialized AI agents that collaborate to plan, execute, critique, and write comprehensive research reports.
 
-## The MAESTRO Research Framework
+## The AXIOM Research Framework
 
-MAESTRO operates through three distinct phases with built-in reflection and iteration loops:
+AXIOM operates through three distinct phases with built-in reflection and iteration loops:
 
 ```mermaid
 graph TD
@@ -51,7 +51,7 @@ graph TD
 
 ### The Agent Team
 
-MAESTRO's capabilities are driven by specialized agents, each with distinct responsibilities:
+AXIOM's capabilities are driven by specialized agents, each with distinct responsibilities:
 
 <div class="grid cards" markdown>
 
@@ -399,18 +399,18 @@ MAESTRO's capabilities are driven by specialized agents, each with distinct resp
     
     ---
     
-    - **maestro-backend** - Main API and agent orchestration
-    - **maestro-frontend** - React web interface
-    - **maestro-postgres** - PostgreSQL with pgvector
-    - **maestro-nginx** - Reverse proxy and static files
+    - **axiom-backend** - Main API and agent orchestration
+    - **axiom-frontend** - React web interface
+    - **axiom-postgres** - PostgreSQL with pgvector
+    - **axiom-nginx** - Reverse proxy and static files
     - **doc-processor** - Document processing service
 
 -   :material-harddisk: **Volume Management**
     
     ---
     
-    - `./maestro_backend/data` - Document storage
-    - `./maestro_model_cache` - Model caches
+    - `./axiom_backend/data` - Document storage
+    - `./axiom_model_cache` - Model caches
     - `./reports` - Generated reports
     - PostgreSQL data persisted in Docker volumes
 
@@ -475,6 +475,6 @@ MAESTRO's capabilities are driven by specialized agents, each with distinct resp
 
 </div>
 
-MAESTRO's architecture combines the power of specialized AI agents with robust infrastructure to deliver a sophisticated research automation platform. The multi-agent design ensures high-quality outputs through iterative refinement, while the modern technical stack provides scalability, security, and flexibility for diverse research needs.
+AXIOM's architecture combines the power of specialized AI agents with robust infrastructure to deliver a sophisticated research automation platform. The multi-agent design ensures high-quality outputs through iterative refinement, while the modern technical stack provides scalability, security, and flexibility for diverse research needs.
 
 The system's modular architecture allows for continuous improvement and adaptation, making it suitable for everything from individual researchers to enterprise deployments.

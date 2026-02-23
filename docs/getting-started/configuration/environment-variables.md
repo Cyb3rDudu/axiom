@@ -1,6 +1,6 @@
 # Environment Variables Reference
 
-Complete reference for all environment variables used in MAESTRO configuration.
+Complete reference for all environment variables used in AXIOM configuration.
 
 ## Configuration File
 
@@ -21,15 +21,15 @@ These variables must be configured for basic operation:
 ```bash
 # Main application port (nginx proxy)
 # This is the ONLY port users need to access
-MAESTRO_PORT=80
+AXIOM_PORT=80
 ```
 
 ### Database Configuration
 
 ```bash
 # PostgreSQL Database Settings
-POSTGRES_DB=maestro_db
-POSTGRES_USER=maestro_user
+POSTGRES_DB=axiom_db
+POSTGRES_USER=axiom_user
 POSTGRES_PASSWORD=CHANGE_THIS_PASSWORD_IMMEDIATELY  # ⚠️ CHANGE THIS!
 POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
@@ -131,15 +131,15 @@ WS_PROTOCOL=ws                 # ws or wss
 ```yaml
 # These paths are set in docker-compose.yml:
 volumes:
-  - ./maestro_backend/data:/app/data           # Document storage
-  - ./maestro_model_cache:/root/.cache/huggingface  # Model cache
+  - ./axiom_backend/data:/app/data           # Document storage
+  - ./axiom_model_cache:/root/.cache/huggingface  # Model cache
 ```
 
 Actual paths:
 
-- Raw files: `./maestro_backend/data/raw_files/`
-- Markdown: `./maestro_backend/data/markdown_files/`
-- Vector store: `./maestro_backend/data/vector_store/`
+- Raw files: `./axiom_backend/data/raw_files/`
+- Markdown: `./axiom_backend/data/markdown_files/`
+- Vector store: `./axiom_backend/data/vector_store/`
 
 ## Security Variables
 
@@ -149,7 +149,7 @@ Actual paths:
 JWT_SECRET_KEY=GENERATE_A_RANDOM_KEY_DO_NOT_USE_DEFAULT
 
 # Note: SSL/TLS should be configured via reverse proxy (nginx, Caddy, etc.)
-# MAESTRO does not handle SSL certificates directly
+# AXIOM does not handle SSL certificates directly
 ```
 
 
@@ -204,7 +204,7 @@ LLM_REQUEST_TIMEOUT=600                 # Seconds, Default: 600 (10 minutes)
 
 ```bash
 # .env for local development
-MAESTRO_PORT=3000
+AXIOM_PORT=3000
 POSTGRES_PASSWORD=dev_password
 ADMIN_PASSWORD=admin123
 JWT_SECRET_KEY=dev_secret_key_not_for_production
@@ -217,7 +217,7 @@ MAX_WORKER_THREADS=10
 
 ```bash
 # .env for production
-MAESTRO_PORT=80                 # Use reverse proxy for HTTPS
+AXIOM_PORT=80                 # Use reverse proxy for HTTPS
 POSTGRES_PASSWORD=strong_random_password_here
 ADMIN_PASSWORD=another_strong_password
 JWT_SECRET_KEY=cryptographically_secure_random_key
@@ -253,7 +253,7 @@ MAX_WORKER_THREADS=8
 docker compose config
 
 # Test specific variable
-echo $MAESTRO_PORT
+echo $AXIOM_PORT
 
 # View all Docker environment
 docker compose run --rm backend env
@@ -294,7 +294,7 @@ chmod 600 .env  # Restrict access to sensitive file
 DATABASE_URL=postgresql://user:password@host:port/database
 
 # Verify connection
-docker exec maestro-backend python -c "
+docker exec axiom-backend python -c "
 from database.database import engine
 print('Connected' if engine else 'Failed')
 "
@@ -321,11 +321,11 @@ ALLOW_CORS_WILDCARD=false
 
 ## Backup
 
-To backup your MAESTRO installation:
+To backup your AXIOM installation:
 
 1. **Database Backup**:
    ```bash
-   docker exec maestro-postgres pg_dump -U maestro_user maestro_db > backup.sql
+   docker exec axiom-postgres pg_dump -U axiom_user axiom_db > backup.sql
    ```
 
 2. **Document Files Backup**:

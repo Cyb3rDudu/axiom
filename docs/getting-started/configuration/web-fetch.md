@@ -1,12 +1,12 @@
 # Web Fetch Configuration
 
-Configure how MAESTRO fetches and processes full content from web pages discovered during research.
+Configure how AXIOM fetches and processes full content from web pages discovered during research.
 
 ![Web Fetch Configuration Interface](../../assets/images/settings/web-fetch.png)
 
 ## Overview
 
-Web fetching is crucial for MAESTRO's ability to:
+Web fetching is crucial for AXIOM's ability to:
 
 - Extract complete articles beyond search snippets
 - Read JavaScript-rendered content
@@ -15,7 +15,7 @@ Web fetching is crucial for MAESTRO's ability to:
 
 ## Fetch Providers
 
-MAESTRO offers three web fetching strategies to handle different types of web content.
+AXIOM offers three web fetching strategies to handle different types of web content.
 
 ### Original + Jina Fallback (Recommended)
 
@@ -35,7 +35,7 @@ The default configuration that provides the best balance of speed, reliability, 
 
 ### Original (Built-in Fetcher)
 
-MAESTRO's native web fetching using open-source libraries.
+AXIOM's native web fetching using open-source libraries.
 
 **Features:**
 
@@ -133,7 +133,7 @@ Additional extraction features:
    # Generate API key
    ```
 
-2. **Configure in MAESTRO**
+2. **Configure in AXIOM**
    - Navigate to Settings → Web Fetch
    - Select "Jina Reader API" or "Original + Jina Fallback"
    - Enter API key (uses same key as Jina search if configured)

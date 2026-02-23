@@ -1,6 +1,6 @@
 # Troubleshooting Guide
 
-Quick solutions for common MAESTRO issues.
+Quick solutions for common AXIOM issues.
 
 ## Quick Diagnostics
 
@@ -14,7 +14,7 @@ docker compose ps
 docker compose logs --tail=50
 
 # Check specific service
-docker compose logs maestro-backend
+docker compose logs axiom-backend
 ```
 
 ## Common Issues
@@ -45,7 +45,7 @@ FRONTEND_PORT=8080  # Use available port
 
 **Solution:**
 ```bash
-chmod +x setup-env.sh maestro-cli.sh start.sh
+chmod +x setup-env.sh axiom-cli.sh start.sh
 ```
 
 ### Startup Issues
@@ -54,8 +54,8 @@ chmod +x setup-env.sh maestro-cli.sh start.sh
 
 1. **Models downloading** (first run - wait 5-10 minutes):
    ```bash
-   docker compose logs -f maestro-backend
-   # Wait for "MAESTRO Backend Started Successfully!"
+   docker compose logs -f axiom-backend
+   # Wait for "AXIOM Backend Started Successfully!"
    ```
 
 2. **Database not ready**:
@@ -83,7 +83,7 @@ chmod +x setup-env.sh maestro-cli.sh start.sh
 
 **Solution:** Reset admin password:
 ```bash
-docker exec maestro-backend python reset_admin_password.py \
+docker exec axiom-backend python reset_admin_password.py \
   --username admin --password admin123 --non-interactive
 ```
 
@@ -107,10 +107,10 @@ docker exec maestro-backend python reset_admin_password.py \
 **Solution:**
 ```bash
 # Check backend logs
-docker compose logs maestro-backend | tail -50
+docker compose logs axiom-backend | tail -50
 
 # For large files, use CLI
-./maestro-cli.sh ingest username /path/to/documents
+./axiom-cli.sh ingest username /path/to/documents
 ```
 
 #### Documents Stuck Processing
@@ -118,10 +118,10 @@ docker compose logs maestro-backend | tail -50
 **Solution:**
 ```bash
 # Check processor logs
-docker compose logs maestro-doc-processor
+docker compose logs axiom-doc-processor
 
 # Check document status
-docker exec maestro-backend python cli_document_consistency.py system-status
+docker exec axiom-backend python cli_document_consistency.py system-status
 ```
 
 ### AI Model Issues
@@ -141,10 +141,10 @@ docker exec maestro-backend python cli_document_consistency.py system-status
 ```bash
 # Enable debug logging
 echo "LOG_LEVEL=DEBUG" >> .env
-docker compose restart maestro-backend
+docker compose restart axiom-backend
 
 # Check logs
-docker compose logs maestro-backend | grep -i api
+docker compose logs axiom-backend | grep -i api
 ```
 
 ### Database Issues
@@ -202,7 +202,7 @@ docker compose up -d --build
 docker compose logs
 
 # Specific service
-docker compose logs maestro-backend
+docker compose logs axiom-backend
 
 # Follow logs
 docker compose logs -f
@@ -218,7 +218,7 @@ docker compose logs -t
 docker compose restart
 
 # Restart specific service
-docker compose restart maestro-backend
+docker compose restart axiom-backend
 ```
 
 ## Get Help
@@ -243,7 +243,7 @@ docker compose restart
 ### Support
 
 - Check [FAQ](faq.md) first
-- Search existing [GitHub Issues](https://github.com/yourusername/maestro/issues)
+- Search existing [GitHub Issues](https://github.com/yourusername/axiom/issues)
 - Create new issue with:
       - Error messages
       - Docker logs

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Direct CLI tool for synchronous document ingestion into MAESTRO.
+Direct CLI tool for synchronous document ingestion into AXIOM.
 This script processes documents immediately with live feedback, bypassing the background queue system.
 
 FIXED VERSION: Creates document records in PostgreSQL BEFORE processing to avoid foreign key violations.
@@ -86,7 +86,7 @@ with redirect_stdout(captured_output), redirect_stderr(captured_output):
     except ImportError:
         from ai_researcher.core_rag.pgvector_store import PGVectorStore as VectorStore
 
-app = typer.Typer(help="MAESTRO Direct Document Processing CLI")
+app = typer.Typer(help="AXIOM Direct Document Processing CLI")
 
 def get_db_session():
     """Get a database session."""
@@ -585,7 +585,7 @@ def ingest(
             typer.echo("Supported formats: PDF, DOCX, DOC, MD, MARKDOWN")
             raise typer.Exit()
         
-        typer.echo(f"\n=== MAESTRO Direct Document Processing ===")
+        typer.echo(f"\n=== AXIOM Direct Document Processing ===")
         typer.echo(f"Target user: {username} (ID: {user.id})")
         if group:
             typer.echo(f"Target group: {group.name} (ID: {group.id})")

@@ -1,6 +1,6 @@
 # AI Configuration
 
-Configure language model providers to power MAESTRO's research and writing capabilities.
+Configure language model providers to power AXIOM's research and writing capabilities.
 
 ![AI Configuration Interface](../../assets/images/settings/ai-config.png)
 
@@ -8,15 +8,15 @@ For complete details on AI provider configuration, see the comprehensive [AI Pro
 
 ## Quick Overview
 
-MAESTRO supports multiple AI providers through a unified interface:
+AXIOM supports multiple AI providers through a unified interface:
 
 - **OpenRouter** - Access to 100+ models via unified API
 - **OpenAI** - Direct access to GPT models  
 - **Custom Provider** - Any OpenAI-compatible endpoint (local LLMs, enterprise endpoints)
 
-## Model Types Used by MAESTRO
+## Model Types Used by AXIOM
 
-MAESTRO automatically assigns different model types to various agents:
+AXIOM automatically assigns different model types to various agents:
 
 ### Fast Model
 Used by: Planning Agent, Note Assignment, Query Strategy, Router
@@ -59,7 +59,7 @@ Used by: Fact-checking and validation tasks
 
 ## Cost Tracking Note
 
-**Important**: Tracked costs in MAESTRO may differ from your API provider dashboard, especially with aggregator services like OpenRouter. This is because aggregators route to different backend providers with varying actual costs. For details, see [Cost Tracking Discrepancies](../../troubleshooting/common-issues/ai-models.md#cost-tracking-discrepancies).
+**Important**: Tracked costs in AXIOM may differ from your API provider dashboard, especially with aggregator services like OpenRouter. This is because aggregators route to different backend providers with varying actual costs. For details, see [Cost Tracking Discrepancies](../../troubleshooting/common-issues/ai-models.md#cost-tracking-discrepancies).
 
 ## Related Documentation
 

@@ -1,6 +1,6 @@
 # Agent Activity Log Visualization System
 
-This directory contains a comprehensive visualization system for displaying agent activity logs in the MAESTRO research application. The system provides rich, user-friendly representations of different agent types and their outputs.
+This directory contains a comprehensive visualization system for displaying agent activity logs in the AXIOM research application. The system provides rich, user-friendly representations of different agent types and their outputs.
 
 ## Architecture Overview
 

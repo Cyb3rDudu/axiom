@@ -25,10 +25,10 @@ Document Groups are:
 ### Via CLI
 ```bash
 # Create a new group
-./maestro-cli.sh create-group [username] "Group Name"
+./axiom-cli.sh create-group [username] "Group Name"
 
 # With description
-./maestro-cli.sh create-group [username] "Group Name" --description "Description"
+./axiom-cli.sh create-group [username] "Group Name" --description "Description"
 ```
 
 ### Group Properties
@@ -280,13 +280,13 @@ View group metrics:
 
 ### List Groups
 ```bash
-./maestro-cli.sh list-groups [username]
+./axiom-cli.sh list-groups [username]
 ```
 
 ### Add Documents to Group
 ```bash
 # Documents are added to groups during ingestion
-./maestro-cli.sh ingest [username] /path/to/documents --group [group_id]
+./axiom-cli.sh ingest [username] /path/to/documents --group [group_id]
 ```
 
 ### Group Management

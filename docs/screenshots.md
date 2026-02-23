@@ -1,6 +1,6 @@
 # Screenshots
 
-Visual overview of MAESTRO's key features and interfaces.
+Visual overview of AXIOM's key features and interfaces.
 
 ## Research Workspace
 

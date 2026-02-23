@@ -37,7 +37,7 @@ class ChatTitleService:
         is_writing_context = writing_score > research_score
         
         if is_writing_context:
-            return f"""You are a title generator for MAESTRO, an AI-powered writing assistant that helps users create and improve documents.
+            return f"""You are a title generator for AXIOM, an AI-powered writing assistant that helps users create and improve documents.
 
 Your task is to create a concise, descriptive title (3-6 words) that captures the essence of this writing conversation. The title should reflect the writing topic, document type, or content being worked on.
 
@@ -68,7 +68,7 @@ IMPORTANT: Return ONLY the title text itself. Do NOT include formatting like "**
 
 Title:"""
         else:
-            return f"""You are a title generator for MAESTRO, an AI-powered research assistant that uses multiple specialized agents to conduct comprehensive research.
+            return f"""You are a title generator for AXIOM, an AI-powered research assistant that uses multiple specialized agents to conduct comprehensive research.
 
 Your task is to create a concise, descriptive title (3-6 words) that captures the essence of this research conversation. The title should reflect the research topic, question type, or domain being explored.
 

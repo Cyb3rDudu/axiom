@@ -12,7 +12,7 @@ from sqlalchemy.pool import NullPool
 # Database URL from environment or default
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://maestro_user:maestro_password@postgres:5432/maestro_db"
+    "postgresql://axiom_user:axiom_password@postgres:5432/axiom_db"
 )
 
 # Create engine with proper pooling for PostgreSQL

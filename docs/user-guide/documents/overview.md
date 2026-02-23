@@ -1,12 +1,12 @@
 # Documents Overview
 
-The document management system is the foundation of MAESTRO's research capabilities, allowing you to upload, organize, and search through your document library.
+The document management system is the foundation of AXIOM's research capabilities, allowing you to upload, organize, and search through your document library.
 
 ![Document Library](../../assets/images/doc view all docs.png)
 
 ## How Document Processing Works
 
-When you upload a document, MAESTRO:
+When you upload a document, AXIOM:
 
 1. **Validates** the file and checks for duplicates (SHA256)
 2. **Stores** the original file and creates a database record
@@ -60,17 +60,17 @@ Documents go through these stages:
 
 ### CLI Upload
 
-Use the maestro-cli.sh script for bulk uploads:
+Use the axiom-cli.sh script for bulk uploads:
 
 ```bash
 # Upload documents for a user
-./maestro-cli.sh ingest <username> <directory>
+./axiom-cli.sh ingest <username> <directory>
 
 # Force re-embedding
-./maestro-cli.sh ingest <username> <directory> --force-reembed
+./axiom-cli.sh ingest <username> <directory> --force-reembed
 
 # Add to specific group
-./maestro-cli.sh ingest <username> <directory> --group <group_id>
+./axiom-cli.sh ingest <username> <directory> --group <group_id>
 ```
 
 ### Creating Document Groups
@@ -79,10 +79,10 @@ Groups help organize documents:
 
 ```bash
 # Create a group via CLI
-./maestro-cli.sh create-group <username> "Group Name"
+./axiom-cli.sh create-group <username> "Group Name"
 
 # List groups
-./maestro-cli.sh list-groups
+./axiom-cli.sh list-groups
 ```
 
 ## Search and Retrieval
@@ -123,7 +123,7 @@ Documents are stored in three locations:
 
 Check the `processing_error` field in the database:
 ```bash
-docker exec maestro-postgres psql -U maestro_user -d maestro_db \
+docker exec axiom-postgres psql -U axiom_user -d axiom_db \
   -c "SELECT id, title, processing_error FROM documents WHERE status = 'failed';"
 ```
 
@@ -131,7 +131,7 @@ docker exec maestro-postgres psql -U maestro_user -d maestro_db \
 
 ```bash
 # Force re-embedding via CLI
-./maestro-cli.sh ingest <username> <directory> --force-reembed
+./axiom-cli.sh ingest <username> <directory> --force-reembed
 ```
 
 ### Storage Issues
@@ -142,7 +142,7 @@ Monitor disk usage:
 docker system df
 
 # Check specific paths
-du -sh maestro_backend/data/*
+du -sh axiom_backend/data/*
 ```
 
 ## Best Practices

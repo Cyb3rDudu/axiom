@@ -1,6 +1,6 @@
 # Installation Overview
 
-This section provides comprehensive installation instructions for MAESTRO across different platforms and configurations.
+This section provides comprehensive installation instructions for AXIOM across different platforms and configurations.
 
 !!! tip "Quick Installation"
     All platforms follow the same basic steps:
@@ -38,7 +38,7 @@ This section provides comprehensive installation instructions for MAESTRO across
 
 -   **[CPU Mode Setup](cpu-mode.md)**
     
-    Running MAESTRO without GPU acceleration
+    Running AXIOM without GPU acceleration
 
 -   **[Database Reset](database-reset.md)**
     
@@ -103,7 +103,7 @@ Before proceeding with installation:
 
 4. **Check Available Ports**
     
-    MAESTRO uses these default ports:
+    AXIOM uses these default ports:
 
     - Port 80: Web interface (nginx)
     - Port 5432: PostgreSQL database
@@ -122,7 +122,7 @@ Before proceeding with installation:
 
 ## Docker Compose Profiles
 
-MAESTRO supports different deployment profiles:
+AXIOM supports different deployment profiles:
 
 ### Default Profile
 ```bash
@@ -152,7 +152,7 @@ The setup script offers three network configurations:
 
 ### 3. Custom Domain
 - Use with reverse proxies
-- Custom URLs like `http://maestro.local`
+- Custom URLs like `http://axiom.local`
 - Best for set-and-forget deployments
 
 ## Post-Installation Steps
@@ -205,8 +205,8 @@ If you encounter issues:
 
 1. Check the specific platform guide for your OS
 2. Review [Troubleshooting Guide](../../troubleshooting/index.md)
-3. Search [GitHub Issues](https://github.com/murtaza-nasir/maestro/issues)
-4. Ask in [Community Forum](https://github.com/murtaza-nasir/maestro/discussions)
+3. Search [GitHub Issues](https://github.com/murtaza-nasir/axiom/issues)
+4. Ask in [Community Forum](https://github.com/murtaza-nasir/axiom/discussions)
 
 ## Next Steps
 

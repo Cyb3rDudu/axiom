@@ -14,10 +14,10 @@ Quick fixes for document upload and processing issues.
 **Solution:**
 ```bash
 # Check if backend is ready
-docker compose logs maestro-backend | grep "Started Successfully"
+docker compose logs axiom-backend | grep "Started Successfully"
 
 # For large files, use CLI
-./maestro-cli.sh ingest username /path/to/documents
+./axiom-cli.sh ingest username /path/to/documents
 ```
 
 ### Duplicate Document Error
@@ -25,7 +25,7 @@ docker compose logs maestro-backend | grep "Started Successfully"
 **Solution:**
 ```bash
 # Force upload despite duplicate
-./maestro-cli.sh ingest username /path/to/document --force
+./axiom-cli.sh ingest username /path/to/document --force
 ```
 
 ## Processing Issues
@@ -35,19 +35,19 @@ docker compose logs maestro-backend | grep "Started Successfully"
 **Check status:**
 ```bash
 # View processor logs
-docker compose logs maestro-doc-processor --tail=50
+docker compose logs axiom-doc-processor --tail=50
 
 # Check document consistency
-docker exec maestro-backend python cli_document_consistency.py system-status
+docker exec axiom-backend python cli_document_consistency.py system-status
 ```
 
 **Fix stuck documents:**
 ```bash
 # Restart processor
-docker compose restart maestro-doc-processor
+docker compose restart axiom-doc-processor
 
 # Clean up orphaned documents
-docker exec maestro-backend python cli_document_consistency.py cleanup-all
+docker exec axiom-backend python cli_document_consistency.py cleanup-all
 ```
 
 ### PDF Processing Failed
@@ -74,16 +74,16 @@ docker compose restart
 **Check if documents are indexed:**
 ```bash
 # Count documents
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "SELECT COUNT(*) FROM documents;"
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "SELECT COUNT(*) FROM documents;"
 
 # Count chunks (should be more than documents)
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "SELECT COUNT(*) FROM document_chunks;"
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "SELECT COUNT(*) FROM document_chunks;"
 ```
 
 **Solution:**
 ```bash
 # Re-ingest documents
-./maestro-cli.sh ingest username /path/to/documents --force-reembed
+./axiom-cli.sh ingest username /path/to/documents --force-reembed
 ```
 
 ### Poor Search Results
@@ -109,7 +109,7 @@ docker compose up -d
 
 **Add documents to groups during ingestion:**
 ```bash
-./maestro-cli.sh ingest username /path/to/documents --group group_id
+./axiom-cli.sh ingest username /path/to/documents --group group_id
 ```
 
 ## Metadata Issues
@@ -127,17 +127,17 @@ docker compose up -d
 
 ```bash
 # Overall status
-docker exec maestro-backend python cli_document_consistency.py system-status
+docker exec axiom-backend python cli_document_consistency.py system-status
 
 # Specific user
-docker exec maestro-backend python cli_document_consistency.py check-user <user_id>
+docker exec axiom-backend python cli_document_consistency.py check-user <user_id>
 ```
 
 ### Force Reprocess All Documents
 
 ```bash
 # Re-ingest with new embeddings
-./maestro-cli.sh ingest username /path/to/documents --force-reembed --batch-size 10
+./axiom-cli.sh ingest username /path/to/documents --force-reembed --batch-size 10
 ```
 
 ### Clear All Documents
@@ -145,7 +145,7 @@ docker exec maestro-backend python cli_document_consistency.py check-user <user_
 ⚠️ **WARNING: Deletes all documents!**
 
 ```bash
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "TRUNCATE documents CASCADE;"
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "TRUNCATE documents CASCADE;"
 ```
 
 ## Common Error Messages
@@ -160,7 +160,7 @@ docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "TRUNCATE doc
 
 ## Still Having Issues?
 
-1. Check logs: `docker compose logs maestro-doc-processor`
+1. Check logs: `docker compose logs axiom-doc-processor`
 2. Enable debug: `LOG_LEVEL=DEBUG` in .env
 3. Try complete reset (WARNING: data loss)
 4. Use CLI for batch processing

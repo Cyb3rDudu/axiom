@@ -1,6 +1,6 @@
 # License
 
-MAESTRO is licensed under the **GNU Affero General Public License v3.0 (AGPLv3)**.
+AXIOM is licensed under the **GNU Affero General Public License v3.0 (AGPLv3)**.
 
 ## What This Means
 
@@ -11,7 +11,7 @@ MAESTRO is licensed under the **GNU Affero General Public License v3.0 (AGPLv3)*
 
 ## Full License Text
 
-The complete license text can be found in the [LICENSE](https://github.com/murtaza-nasir/maestro/blob/main/LICENSE) file in the repository.
+The complete license text can be found in the [LICENSE](https://github.com/murtaza-nasir/axiom/blob/main/LICENSE) file in the repository.
 
 ## Commercial Licensing
 
@@ -19,7 +19,7 @@ For organizations that cannot comply with the AGPLv3 terms, commercial licensing
 
 ## Third-Party Components
 
-MAESTRO includes several third-party open source components, each with their own licenses:
+AXIOM includes several third-party open source components, each with their own licenses:
 
 - FastAPI (MIT License)
 - React (MIT License)

@@ -2,7 +2,7 @@
 """
 Test script for verifying OpenRouter pricing and token counting discrepancies.
 
-This script helps diagnose why tracked costs in MAESTRO may differ from 
+This script helps diagnose why tracked costs in AXIOM may differ from 
 OpenRouter dashboard charges.
 
 Usage:
@@ -87,7 +87,7 @@ async def test_pricing_discrepancy(api_key: str, model: str = DEFAULT_MODEL):
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "http://localhost",
-            "X-Title": "MAESTRO Pricing Test"
+            "X-Title": "AXIOM Pricing Test"
         }
         
         results = []

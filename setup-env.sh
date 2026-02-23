@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# MAESTRO - Environment Setup Script
+# AXIOM - Environment Setup Script
 # This script helps you set up your .env file for the first time
 
 set -e
 
-echo "# MAESTRO - Environment Setup"
+echo "# AXIOM - Environment Setup"
 echo "=================================="
 
 # Check if .env already exists
@@ -102,9 +102,9 @@ esac
 
 # Port configuration
 echo ""
-read -p "Port for MAESTRO (default: 80): " maestro_port
-maestro_port=${maestro_port:-80}
-sed "${SED_INPLACE[@]}" "s/MAESTRO_PORT=80/MAESTRO_PORT=$maestro_port/" .env
+read -p "Port for AXIOM (default: 80): " axiom_port
+axiom_port=${axiom_port:-80}
+sed "${SED_INPLACE[@]}" "s/AXIOM_PORT=80/AXIOM_PORT=$axiom_port/" .env
 
 # Database Security Configuration
 echo ""
@@ -192,8 +192,8 @@ echo "🎉 Setup complete!"
 echo ""
 echo "Your .env file has been created."
 echo ""
-echo "Access MAESTRO at:"
-if [ "$maestro_port" = "80" ]; then
+echo "Access AXIOM at:"
+if [ "$axiom_port" = "80" ]; then
     case $setup_mode in
         2) echo "  http://$ip" ;;
         3) echo "  $protocol://$domain" ;;
@@ -201,9 +201,9 @@ if [ "$maestro_port" = "80" ]; then
     esac
 else
     case $setup_mode in
-        2) echo "  http://$ip:$maestro_port" ;;
-        3) echo "  $protocol://$domain:$maestro_port" ;;
-        *) echo "  http://localhost:$maestro_port" ;;
+        2) echo "  http://$ip:$axiom_port" ;;
+        3) echo "  $protocol://$domain:$axiom_port" ;;
+        *) echo "  http://localhost:$axiom_port" ;;
     esac
 fi
 echo ""
@@ -219,13 +219,13 @@ else
     echo "  Password: admin123"
 fi
 echo ""
-echo "Start MAESTRO with:"
+echo "Start AXIOM with:"
 echo "  docker compose up -d"
 echo ""
 echo "⚠️  IMPORTANT - First Run:"
 echo "  Initial startup takes 5-10 minutes to download AI models"
-echo "  Monitor progress with: docker compose logs -f maestro-backend"
-echo "  Wait for message: MAESTRO Backend Started Successfully!"
+echo "  Monitor progress with: docker compose logs -f axiom-backend"
+echo "  Wait for message: AXIOM Backend Started Successfully!"
 echo ""
 echo "To modify settings later:"
 echo "  nano .env"

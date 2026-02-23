@@ -1718,7 +1718,7 @@ class SimplifiedWritingAgent:
         
         # Default system prompt (always used as base)
         system_prompt = (
-            "You are Maestro, a collaborative writing assistant helping users write documents. "
+            "You are Axiom, a collaborative writing assistant helping users write documents. "
             "Your responses should be helpful, informative, and directly address the user's request. "
             "You have access to information about which tools are currently enabled or disabled. "
             "\n\nCRITICAL - MATHEMATICAL NOTATION: Always use standard Markdown/LaTeX notation:\n"

@@ -26,7 +26,7 @@ The current release focuses on stability, performance, and documentation improve
 
 ## Contributing
 
-We welcome contributions! Please see our [GitHub repository](https://github.com/murtaza-nasir/maestro) for:
+We welcome contributions! Please see our [GitHub repository](https://github.com/murtaza-nasir/axiom) for:
 - Issue tracking
 - Feature requests
 - Pull requests
@@ -35,5 +35,5 @@ We welcome contributions! Please see our [GitHub repository](https://github.com/
 ## Community Feedback
 
 Your feedback shapes our roadmap. Join the discussion:
-- [GitHub Discussions](https://github.com/murtaza-nasir/maestro/discussions)
-- [Issues](https://github.com/murtaza-nasir/maestro/issues)
+- [GitHub Discussions](https://github.com/murtaza-nasir/axiom/discussions)
+- [Issues](https://github.com/murtaza-nasir/axiom/issues)

@@ -1,4 +1,4 @@
-# Maestro RAG Enhancement Research - Memory File
+# Axiom RAG Enhancement Research - Memory File
 
 **Date:** 2026-01-26
 **Status:** Plan erstellt, Implementation ausstehend
@@ -7,7 +7,7 @@
 
 ## Context
 
-User will Maestro's RAG verbessern. Hat bereits ApeRAG mit OpenSearch/Qdrant/PostgreSQL laufen, will aber Maestro's lokales Chunking/Embedding behalten und erweitern.
+User will Axiom's RAG verbessern. Hat bereits ApeRAG mit OpenSearch/Qdrant/PostgreSQL laufen, will aber Axiom's lokales Chunking/Embedding behalten und erweitern.
 
 ## User Pain Points
 
@@ -24,15 +24,15 @@ User will **Document Chat Mode** zuerst implementieren.
 
 ## Research Summary
 
-### Maestro's Current RAG Architecture
+### Axiom's Current RAG Architecture
 - **Embeddings:** BGE-M3, 1024-dim dense + sparse vectors
 - **Storage:** PostgreSQL + pgvector
 - **Retrieval:** Hybrid search (dense + sparse) + optional reranking
 - **Chunks:** 86,256 total in DB
 - **Key Files:**
-  - `maestro_backend/ai_researcher/core_rag/retriever.py`
-  - `maestro_backend/ai_researcher/core_rag/pgvector_store.py`
-  - `maestro_backend/ai_researcher/agentic_layer/tools/document_search.py`
+  - `axiom_backend/ai_researcher/core_rag/retriever.py`
+  - `axiom_backend/ai_researcher/core_rag/pgvector_store.py`
+  - `axiom_backend/ai_researcher/agentic_layer/tools/document_search.py`
 
 ### Vorhandene Infrastruktur (bereits nutzbar!)
 - `document_group_id` Parameter in Chat API ✅
@@ -75,12 +75,12 @@ User will **Document Chat Mode** zuerst implementieren.
 ## Key Files to Modify
 
 **Phase 1:**
-- `maestro_backend/ai_researcher/agentic_layer/agents/messenger_agent.py`
-- `maestro_backend/ai_researcher/agentic_layer/controller/user_interaction.py`
-- `maestro_backend/api/chat.py`
+- `axiom_backend/ai_researcher/agentic_layer/agents/messenger_agent.py`
+- `axiom_backend/ai_researcher/agentic_layer/controller/user_interaction.py`
+- `axiom_backend/api/chat.py`
 
 **Phase 3:**
-- Neue Files in `maestro_backend/ai_researcher/core_rag/`:
+- Neue Files in `axiom_backend/ai_researcher/core_rag/`:
   - `entity_extractor.py`
   - `knowledge_graph.py`
   - `graph_retriever.py`

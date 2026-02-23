@@ -2,7 +2,7 @@
 Document Consistency Manager
 
 This module ensures atomic operations across all document storage systems:
-1. Main Database (maestro.db) - Document records and processing status
+1. Main Database (axiom.db) - Document records and processing status
 2. AI Database (metadata.db) - Extracted document metadata  
 3. ChromaDB Vector Store - Document embeddings and chunks
 4. File System - Original PDFs and processed files
@@ -68,7 +68,7 @@ class DocumentConsistencyManager:
         self.pdf_dir = self.base_path / "raw_pdfs"
         self.markdown_dir = self.base_path / "processed" / "markdown"  
         self.metadata_dir = self.base_path / "processed" / "metadata"
-        self.db_path = "data/maestro.db"  # Use unified database
+        self.db_path = "data/axiom.db"  # Use unified database
         
         # Ensure directories exist
         for dir_path in [self.pdf_dir, self.markdown_dir, self.metadata_dir]:

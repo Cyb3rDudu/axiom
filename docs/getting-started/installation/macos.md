@@ -1,6 +1,6 @@
 # macOS Installation
 
-Complete installation guide for running MAESTRO on macOS (Intel and Apple Silicon).
+Complete installation guide for running AXIOM on macOS (Intel and Apple Silicon).
 
 ## Prerequisites
 
@@ -29,8 +29,8 @@ Complete installation guide for running MAESTRO on macOS (Intel and Apple Silico
 ### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/murtaza-nasir/maestro.git
-cd maestro
+git clone https://github.com/murtaza-nasir/axiom.git
+cd axiom
 ```
 
 ### Step 2: Configure Environment
@@ -45,8 +45,8 @@ The script will guide you through:
 
 1. **Network Configuration**
     - Simple (localhost only) - if installing on the machine you are using
-    - Network (LAN access) - if accessing maestro over network
-    - Custom domain - if running maestro with a domain
+    - Network (LAN access) - if accessing axiom over network
+    - Custom domain - if running axiom with a domain
 
 2. **Security Configuration**
     - Generates secure passwords automatically
@@ -56,7 +56,7 @@ The script will guide you through:
 3. **Port Configuration**
     - Sets the main application port
 
-### Step 3: Build and Start MAESTRO
+### Step 3: Build and Start AXIOM
 
 ```
 ./start.sh
@@ -69,12 +69,12 @@ OR
 docker compose -f docker-compose.cpu.yml up -d --build
 
 # Monitor startup progress
-docker compose logs -f maestro-backend
+docker compose logs -f axiom-backend
 ```
 
-**First-time startup:** Takes 5-10 minutes to download AI models. Wait for "MAESTRO Backend Started Successfully!" message.
+**First-time startup:** Takes 5-10 minutes to download AI models. Wait for "AXIOM Backend Started Successfully!" message.
 
-### Step 4: Access MAESTRO
+### Step 4: Access AXIOM
 
 - Open Safari/Chrome to `http://localhost`
 - Login with credentials from setup
@@ -111,7 +111,7 @@ docker volume prune
 
 ```bash
 # Fix permissions on project directory
-sudo chown -R $(whoami) ./maestro
+sudo chown -R $(whoami) ./axiom
 ```
 
 ### Port Conflicts
@@ -121,15 +121,15 @@ sudo chown -R $(whoami) ./maestro
 lsof -i :80
 
 # Change port in .env if needed
-MAESTRO_PORT=8080
+AXIOM_PORT=8080
 ```
 
 ### Container Issues
 
 ```bash
 # Check logs
-docker compose logs maestro-backend
-docker compose logs maestro-postgres
+docker compose logs axiom-backend
+docker compose logs axiom-postgres
 
 # Rebuild containers
 docker compose down
@@ -139,7 +139,7 @@ docker compose up -d
 
 ## Performance Tips
 
-Since Macs don't have CUDA GPUs, MAESTRO runs in CPU mode:
+Since Macs don't have CUDA GPUs, AXIOM runs in CPU mode:
 
 1. **Use CPU-optimized configuration:**
    ```bash
@@ -183,7 +183,7 @@ Since Macs don't have CUDA GPUs, MAESTRO runs in CPU mode:
 
 ## Maintenance
 
-### Update MAESTRO
+### Update AXIOM
 
 ```bash
 # Pull latest changes
@@ -198,10 +198,10 @@ docker compose -f docker-compose.cpu.yml up -d --build
 
 ```bash
 # Backup PostgreSQL database
-docker exec maestro-postgres pg_dump -U maestro_user maestro_db > backup.sql
+docker exec axiom-postgres pg_dump -U axiom_user axiom_db > backup.sql
 
 # Backup documents and models
-tar czf maestro_backup.tar.gz maestro_model_cache maestro_datalab_cache
+tar czf axiom_backup.tar.gz axiom_model_cache axiom_datalab_cache
 ```
 
 ## Next Steps

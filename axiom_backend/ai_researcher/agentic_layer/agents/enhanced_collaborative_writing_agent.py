@@ -1,5 +1,5 @@
 """
-Enhanced Collaborative Writing Agent for MAESTRO - Agentic Workflow
+Enhanced Collaborative Writing Agent for AXIOM - Agentic Workflow
 """
 
 import json

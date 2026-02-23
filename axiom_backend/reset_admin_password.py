@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Reset admin password script for MAESTRO backend.
+Reset admin password script for AXIOM backend.
 This script allows resetting the admin password to a new value.
 Uses environment variables for database connection.
 """
@@ -118,7 +118,7 @@ def create_admin_user(username='admin', password=None, interactive=True):
             email = input(f"Enter email for {username} (optional, press Enter to skip): ").strip()
         
         if not email:
-            email = f"{username}@maestro.local"
+            email = f"{username}@axiom.local"
         
         # Create admin user
         admin_user = User(
@@ -183,7 +183,7 @@ def list_admin_users():
         db.close()
 
 def main():
-    parser = argparse.ArgumentParser(description='Reset MAESTRO admin password')
+    parser = argparse.ArgumentParser(description='Reset AXIOM admin password')
     parser.add_argument('--username', '-u', default='admin', 
                        help='Username to reset (default: admin)')
     parser.add_argument('--password', '-p', 

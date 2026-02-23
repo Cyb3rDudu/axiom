@@ -11,7 +11,7 @@ Quick fixes for PostgreSQL database issues.
 **Solution:**
 ```bash
 # Check if postgres is running
-docker compose ps maestro-postgres
+docker compose ps axiom-postgres
 
 # Start postgres first
 docker compose up -d postgres
@@ -21,7 +21,7 @@ sleep 10
 docker compose up -d
 
 # Check logs if still failing
-docker compose logs maestro-postgres
+docker compose logs axiom-postgres
 ```
 
 ### Authentication Failed
@@ -34,9 +34,9 @@ docker compose logs maestro-postgres
 grep POSTGRES .env
 
 # Should show:
-# POSTGRES_DB=maestro_db
-# POSTGRES_USER=maestro_user
-# POSTGRES_PASSWORD=maestro_password
+# POSTGRES_DB=axiom_db
+# POSTGRES_USER=axiom_user
+# POSTGRES_PASSWORD=axiom_password
 
 # If wrong, fix and restart
 docker compose down
@@ -45,7 +45,7 @@ docker compose up -d
 
 ### Database Not Initialized
 
-**Error:** Database "maestro_db" does not exist
+**Error:** Database "axiom_db" does not exist
 
 **Solution:**
 ```bash
@@ -55,7 +55,7 @@ docker compose up -d postgres
 sleep 30  # Wait for init scripts
 
 # Check initialization logs
-docker compose logs maestro-postgres | grep "database system is ready"
+docker compose logs axiom-postgres | grep "database system is ready"
 
 # Start other services
 docker compose up -d
@@ -88,7 +88,7 @@ docker system df
 docker system prune -a --volumes
 
 # Check database size
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "\l+"
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "\l+"
 ```
 
 ## Migration Issues
@@ -100,10 +100,10 @@ docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "\l+"
 **Solution:**
 ```bash
 # Check migration status
-docker compose logs maestro-backend | grep -i migration
+docker compose logs axiom-backend | grep -i migration
 
 # Re-run migrations
-docker exec maestro-backend python -m database.init_postgres
+docker exec axiom-backend python -m database.init_postgres
 
 # If that fails, reset database
 docker compose down -v
@@ -122,12 +122,12 @@ docker compose up -d
 docker compose restart postgres
 
 # Check active connections
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "
 SELECT count(*) FROM pg_stat_activity;
 "
 
 # Kill long-running queries
-docker exec maestro-postgres psql -U maestro_user -d maestro_db -c "
+docker exec axiom-postgres psql -U axiom_user -d axiom_db -c "
 SELECT pg_terminate_backend(pid) 
 FROM pg_stat_activity 
 WHERE state = 'active' 
@@ -141,10 +141,10 @@ AND query_start < NOW() - INTERVAL '5 minutes';
 
 ```bash
 # Backup database
-docker exec maestro-postgres pg_dump -U maestro_user maestro_db > backup.sql
+docker exec axiom-postgres pg_dump -U axiom_user axiom_db > backup.sql
 
 # Backup with timestamp
-docker exec maestro-postgres pg_dump -U maestro_user maestro_db > backup_$(date +%Y%m%d_%H%M%S).sql
+docker exec axiom-postgres pg_dump -U axiom_user axiom_db > backup_$(date +%Y%m%d_%H%M%S).sql
 ```
 
 ### Restore from Backup
@@ -158,7 +158,7 @@ docker compose up -d postgres
 sleep 10
 
 # Restore
-docker exec -i maestro-postgres psql -U maestro_user maestro_db < backup.sql
+docker exec -i axiom-postgres psql -U axiom_user axiom_db < backup.sql
 
 # Start all services
 docker compose up -d
@@ -175,17 +175,17 @@ docker compose restart postgres
 ### Check Database Logs
 
 ```bash
-docker compose logs maestro-postgres --tail=100
+docker compose logs axiom-postgres --tail=100
 ```
 
 ### Test Connection
 
 ```bash
 # From host
-docker exec maestro-postgres pg_isready
+docker exec axiom-postgres pg_isready
 
 # From backend
-docker exec maestro-backend python -c "
+docker exec axiom-backend python -c "
 from database.database import get_db
 db = next(get_db())
 print('Connected!' if db else 'Failed')
@@ -207,15 +207,15 @@ docker compose up -d
 
 ```bash
 # Run consistency check
-docker exec maestro-backend python cli_document_consistency.py system-status
+docker exec axiom-backend python cli_document_consistency.py system-status
 
 # Clean up orphans
-docker exec maestro-backend python cli_document_consistency.py cleanup-all
+docker exec axiom-backend python cli_document_consistency.py cleanup-all
 ```
 
 ## Still Having Issues?
 
-1. Check logs: `docker compose logs maestro-postgres`
+1. Check logs: `docker compose logs axiom-postgres`
 2. Verify .env settings
 3. Try complete reset (WARNING: data loss)
 4. See [Database Reset Guide](../database-reset.md)

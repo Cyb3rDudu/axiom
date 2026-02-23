@@ -34,5 +34,5 @@ if ($gitBashPath) {
 Write-Host ""
 Write-Host "Now rebuild and restart Docker:" -ForegroundColor Cyan
 Write-Host "  docker compose down" -ForegroundColor White
-Write-Host "  docker compose build --no-cache maestro-backend" -ForegroundColor White
+Write-Host "  docker compose build --no-cache axiom-backend" -ForegroundColor White
 Write-Host "  docker compose up -d" -ForegroundColor White

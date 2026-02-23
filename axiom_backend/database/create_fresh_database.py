@@ -209,7 +209,7 @@ class Migration(Base):
     applied_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String(50), default='applied')
 
-def create_database(db_path: str = "./data/maestro_fresh.db"):
+def create_database(db_path: str = "./data/axiom_fresh.db"):
     """Create a fresh database with the unified schema."""
     
     # Ensure data directory exists
@@ -247,7 +247,7 @@ def create_database(db_path: str = "./data/maestro_fresh.db"):
         
         admin = User(
             username="admin",
-            email="admin@maestro.ai",
+            email="admin@axiom.ai",
             password_hash=generate_password_hash("admin"),
             role="super_admin",
             is_admin=True,
@@ -310,7 +310,7 @@ def create_database(db_path: str = "./data/maestro_fresh.db"):
         print("Username: admin")
         print("Password: admin")
         print("\nNext Steps:")
-        print("1. Move the database to ./data/maestro.db to use it")
+        print("1. Move the database to ./data/axiom.db to use it")
         print("2. Or update DATABASE_URL to point to the new database")
         print("="*60)
         
@@ -328,7 +328,7 @@ def main():
     if len(sys.argv) > 1:
         db_path = sys.argv[1]
     else:
-        db_path = "./data/maestro_fresh.db"
+        db_path = "./data/axiom_fresh.db"
     
     success = create_database(db_path)
     sys.exit(0 if success else 1)

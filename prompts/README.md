@@ -4,7 +4,7 @@ This directory contains prompt templates in various languages for future impleme
 
 ## Status
 
-These prompts are currently **reference only** and not yet integrated into the application. See [Issue #2](https://github.com/Cyb3rDudu/maestro-private/issues/2) for the implementation plan.
+These prompts are currently **reference only** and not yet integrated into the application. See [Issue #2](https://github.com/Cyb3rDudu/axiom-private/issues/2) for the implementation plan.
 
 ## Current Prompts
 

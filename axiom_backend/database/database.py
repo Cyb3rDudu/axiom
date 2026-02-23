@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 # Format: postgresql://user:password@host:port/database
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql://maestro_user:maestro_password@postgres:5432/maestro_db"
+    "postgresql://axiom_user:axiom_password@postgres:5432/axiom_db"
 )
 
 # Check if we're using SQLite (for backward compatibility in development)

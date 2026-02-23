@@ -1,10 +1,10 @@
 # Configuration Overview
 
-MAESTRO configuration guide covering environment variables, Docker settings, and in-app configuration options.
+AXIOM configuration guide covering environment variables, Docker settings, and in-app configuration options.
 
 ## Configuration Hierarchy
 
-MAESTRO uses a layered configuration approach:
+AXIOM uses a layered configuration approach:
 
 1. **Environment Variables** (`.env` file) - System-wide settings
 2. **Docker Compose** - Infrastructure and volume configuration
@@ -21,7 +21,7 @@ MAESTRO uses a layered configuration approach:
 
 ## Quick Setup
 
-The easiest way to configure MAESTRO is using the interactive setup script:
+The easiest way to configure AXIOM is using the interactive setup script:
 
 ```bash
 ./setup-env.sh
@@ -48,7 +48,7 @@ All environment-based settings are configured in the `.env` file.
 
 ```env
 # Main application port (nginx proxy)
-MAESTRO_PORT=80  # Default: 80
+AXIOM_PORT=80  # Default: 80
 
 # CORS configuration
 CORS_ALLOWED_ORIGINS=*  # Production: Set to your domain
@@ -59,8 +59,8 @@ ALLOW_CORS_WILDCARD=true  # Set false in production
 
 ```env
 # PostgreSQL settings (CHANGE THESE!)
-POSTGRES_DB=maestro_db
-POSTGRES_USER=maestro_user
+POSTGRES_DB=axiom_db
+POSTGRES_USER=axiom_user
 POSTGRES_PASSWORD=CHANGE_THIS_PASSWORD
 POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
@@ -134,10 +134,10 @@ services:
   backend:
     volumes:
       # Document storage (NOT configurable via env vars)
-      - ./maestro_backend/data:/app/data
+      - ./axiom_backend/data:/app/data
       # Model caches
-      - ./maestro_model_cache:/root/.cache/huggingface
-      - ./maestro_datalab_cache:/root/.cache/datalab
+      - ./axiom_model_cache:/root/.cache/huggingface
+      - ./axiom_datalab_cache:/root/.cache/datalab
       # Reports
       - ./reports:/app/reports
 ```
@@ -145,8 +145,8 @@ services:
 !!! warning "Storage Path Configuration"
     Document storage paths are set in docker-compose.yml:
 
-    - Raw files: `./maestro_backend/data/raw_files/`
-    - Markdown: `./maestro_backend/data/markdown_files/`
+    - Raw files: `./axiom_backend/data/raw_files/`
+    - Markdown: `./axiom_backend/data/markdown_files/`
 
 ### GPU Configuration
 
@@ -225,7 +225,7 @@ See [Search Providers Guide](search-providers.md) for comparison.
 
 **Location**: Settings → Web Fetch
 
-Configure how MAESTRO fetches full content from web pages:
+Configure how AXIOM fetches full content from web pages:
 
 - **Original + Jina Fallback** - Best balance (recommended)
 - **Original** - Fast, free, but limited
@@ -308,7 +308,7 @@ Check loaded configuration:
 docker compose config
 
 # Check specific service
-docker exec maestro-backend env | grep MAX_WORKER
+docker exec axiom-backend env | grep MAX_WORKER
 ```
 
 ### Common Issues
@@ -323,7 +323,7 @@ docker exec maestro-backend env | grep MAX_WORKER
    ```bash
    # Check port usage
    netstat -tlnp | grep 80
-   # Change MAESTRO_PORT in .env if needed
+   # Change AXIOM_PORT in .env if needed
    ```
 
 3. **GPU Not Detected**:

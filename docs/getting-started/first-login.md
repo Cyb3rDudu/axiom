@@ -1,10 +1,10 @@
 # First Login Guide
 
-Welcome to MAESTRO! This guide walks you through your first login and initial setup to get you started quickly.
+Welcome to AXIOM! This guide walks you through your first login and initial setup to get you started quickly.
 
-## Accessing MAESTRO
+## Accessing AXIOM
 
-After installation, access MAESTRO through your web browser:
+After installation, access AXIOM through your web browser:
 
 1. **Open your browser** (Chrome, Firefox, Safari, Edge)
 2. **Navigate to** `http://localhost` (or the URL shown during setup)
@@ -151,7 +151,7 @@ grep ADMIN_PASSWORD .env
 **Solutions**:
 
 - Wait for backend to fully start (5-10 min first time)
-- Check logs: `docker compose logs maestro-backend`. Wait for "MAESTRO Backend Started Successfully!" message.
+- Check logs: `docker compose logs axiom-backend`. Wait for "AXIOM Backend Started Successfully!" message.
 - Verify services running: `docker compose ps`
 
 ### No Models Available
@@ -197,7 +197,7 @@ grep ADMIN_PASSWORD .env
 
 ### Community Support
 
-- [GitHub Issues](https://github.com/murtaza-nasir/maestro/issues) - Report bugs
+- [GitHub Issues](https://github.com/murtaza-nasir/axiom/issues) - Report bugs
 - Check existing issues for solutions
 - Provide detailed information when reporting
 
@@ -234,4 +234,4 @@ Now that you're set up:
 - Monitor resource usage
 - Clear old sessions periodically
 
-Welcome to MAESTRO - your AI research assistant is ready to help!
+Welcome to AXIOM - your AI research assistant is ready to help!

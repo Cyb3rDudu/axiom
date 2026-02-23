@@ -18,8 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def migrate_sqlite_to_postgres(sqlite_path="data/maestro.db", 
-                              postgres_url="postgresql://maestro_user:maestro_password@localhost:5432/maestro_db"):
+def migrate_sqlite_to_postgres(sqlite_path="data/axiom.db", 
+                              postgres_url="postgresql://axiom_user:axiom_password@localhost:5432/axiom_db"):
     """
     Migrate all data from SQLite to PostgreSQL
     
@@ -153,11 +153,11 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Migrate SQLite database to PostgreSQL")
-    parser.add_argument("--sqlite-path", default="data/maestro.db",
+    parser.add_argument("--sqlite-path", default="data/axiom.db",
                        help="Path to SQLite database file")
     parser.add_argument("--postgres-url", 
                        default=os.getenv("DATABASE_URL", 
-                                       "postgresql://maestro_user:maestro_password@localhost:5432/maestro_db"),
+                                       "postgresql://axiom_user:axiom_password@localhost:5432/axiom_db"),
                        help="PostgreSQL connection URL")
     parser.add_argument("--force", action="store_true",
                        help="Force migration even if PostgreSQL tables have data")

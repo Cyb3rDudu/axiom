@@ -177,13 +177,13 @@ PromptLoader loads prompts in correct language
 **Usage**:
 ```bash
 # Extract English prompts from code
-python maestro_backend/scripts/extract_prompts_to_files.py
+python axiom_backend/scripts/extract_prompts_to_files.py
 
 # Import to database (dry run first)
-python maestro_backend/scripts/import_prompts_to_db.py --dry-run
+python axiom_backend/scripts/import_prompts_to_db.py --dry-run
 
 # Actual import
-python maestro_backend/scripts/import_prompts_to_db.py --language en
+python axiom_backend/scripts/import_prompts_to_db.py --language en
 ```
 
 **Output Files** (12 prompts total):
@@ -212,7 +212,7 @@ prompts/en/
 
 Run when ready:
 ```bash
-psql -U maestro_user -d maestro_db -f maestro_backend/database/migrations/add_multilingual_support.sql
+psql -U axiom_user -d axiom_db -f axiom_backend/database/migrations/add_multilingual_support.sql
 ```
 
 Verify:
@@ -226,12 +226,12 @@ SELECT table_name FROM information_schema.tables WHERE table_name IN ('prompt_te
 
 1. Extract prompts:
 ```bash
-python maestro_backend/scripts/extract_prompts_to_files.py
+python axiom_backend/scripts/extract_prompts_to_files.py
 ```
 
 2. Import prompts:
 ```bash
-python maestro_backend/scripts/import_prompts_to_db.py --language en
+python axiom_backend/scripts/import_prompts_to_db.py --language en
 ```
 
 3. Verify:
@@ -251,9 +251,9 @@ Recommended tests:
 - End-to-end test: Create German mission
 
 Test files would go in:
-- `/maestro_backend/tests/test_prompt_loader.py`
-- `/maestro_backend/tests/test_agents_multilingual.py`
-- `/maestro_backend/tests/test_prompt_performance.py`
+- `/axiom_backend/tests/test_prompt_loader.py`
+- `/axiom_backend/tests/test_agents_multilingual.py`
+- `/axiom_backend/tests/test_prompt_performance.py`
 
 ---
 
@@ -298,24 +298,24 @@ Test files would go in:
    # Translate each file...
 
    # Import to database
-   python maestro_backend/scripts/import_prompts_to_db.py --language fr
+   python axiom_backend/scripts/import_prompts_to_db.py --language fr
    ```
 
 2. **Update Prompts**:
    ```bash
    # Re-extract from code
-   python maestro_backend/scripts/extract_prompts_to_files.py
+   python axiom_backend/scripts/extract_prompts_to_files.py
 
    # Review changes
    git diff prompts/en/
 
    # Re-import with force flag
-   python maestro_backend/scripts/import_prompts_to_db.py --language en --force
+   python axiom_backend/scripts/import_prompts_to_db.py --language en --force
    ```
 
 3. **Monitor Performance**:
    ```python
-   from maestro_backend.ai_researcher.agentic_layer.services.prompt_loader import get_prompt_loader
+   from axiom_backend.ai_researcher.agentic_layer.services.prompt_loader import get_prompt_loader
 
    loader = get_prompt_loader()
    stats = loader.get_cache_stats()
@@ -477,7 +477,7 @@ supported_languages              users                    missions
 - **GitHub Issue**: #2 - Multilingual Prompt Management System
 - **Proof of Concept**: Mission ef1cab00 (German prompts)
 - **Implementation Progress**: `/IMPLEMENTATION_PROGRESS.md`
-- **Scripts Documentation**: `/maestro_backend/scripts/README.md`
+- **Scripts Documentation**: `/axiom_backend/scripts/README.md`
 - **Commits**:
   - `767caf1` - Phase 1-3: Core infrastructure
   - `b88ff7c` - Phase 4: API & mission integration

@@ -1,9 +1,9 @@
-site_name: MAESTRO Documentation
+site_name: AXIOM Documentation
 site_description: Your Self-Hosted AI Research Assistant - Complete Documentation
-site_author: MAESTRO Team
-site_url: https://murtaza-nasir.github.io/maestro/
-repo_name: maestro
-repo_url: https://github.com/murtaza-nasir/maestro
+site_author: AXIOM Team
+site_url: https://murtaza-nasir.github.io/axiom/
+repo_name: axiom
+repo_url: https://github.com/murtaza-nasir/axiom
 edit_uri: edit/main/docs/
 
 # Theme configuration
@@ -138,9 +138,9 @@ extra:
     default: stable
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/murtaza-nasir/maestro
+      link: https://github.com/murtaza-nasir/axiom
     - icon: fontawesome/brands/docker
-      link: https://hub.docker.com/r/murtaza-nasir/maestro
+      link: https://hub.docker.com/r/murtaza-nasir/axiom
   analytics:
     provider: google
     property: G-9JT06W6P05  # Replace with your Google Analytics ID

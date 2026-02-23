@@ -93,7 +93,7 @@ netstat -ano | findstr :80
 
 1. **First run - models downloading:**
 ```bash
-docker compose logs -f maestro-backend
+docker compose logs -f axiom-backend
 # Wait 5-10 minutes for models to download
 ```
 
@@ -123,7 +123,7 @@ docker compose restart
 **Solution:**
 ```bash
 # Wait for backend to start
-docker compose logs maestro-backend | grep "Started Successfully"
+docker compose logs axiom-backend | grep "Started Successfully"
 
 # Check all services running
 docker compose ps
@@ -251,7 +251,7 @@ wsl --install -d Ubuntu
 
 # Run from WSL2
 wsl
-cd /mnt/c/path/to/maestro
+cd /mnt/c/path/to/axiom
 ./setup-env.sh
 ```
 
@@ -286,4 +286,4 @@ sudo setsebool -P httpd_can_network_connect 1
 1. Check logs: `docker compose logs`
 2. Enable debug: `LOG_LEVEL=DEBUG` in .env
 3. See [FAQ](../faq.md)
-4. Create [GitHub issue](https://github.com/yourusername/maestro/issues)
+4. Create [GitHub issue](https://github.com/yourusername/axiom/issues)

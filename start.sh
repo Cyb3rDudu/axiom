@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Maestro startup script with automatic GPU detection
+# Axiom startup script with automatic GPU detection
 
 set -e
 
-echo "[START] Starting Maestro..."
+echo "[START] Starting Axiom..."
 
 # Source GPU detection
 source ./detect_gpu.sh
@@ -40,18 +40,18 @@ fi
 export $(grep -v '^#' .env | xargs)
 
 # Ensure cache directories exist (Docker will create them but this ensures proper permissions)
-mkdir -p maestro_model_cache maestro_datalab_cache maestro_backend/data reports pdfs
+mkdir -p axiom_model_cache axiom_datalab_cache axiom_backend/data reports pdfs
 
 # Check if images exist, build if needed
 echo "[CHECK] Checking Docker images..."
-if ! docker images | grep -q "maestro-backend"; then
+if ! docker images | grep -q "axiom-backend"; then
     echo "[BUILD] Building Docker images for first time setup..."
     docker compose $COMPOSE_FILES build
     echo "[BUILD] Building CLI image..."
     docker compose build cli
 else
     # Check if CLI image exists
-    if ! docker images | grep -q "maestro-cli"; then
+    if ! docker images | grep -q "axiom-cli"; then
         echo "[BUILD] Building CLI image..."
         docker compose build cli
     fi
@@ -64,15 +64,15 @@ docker compose $COMPOSE_FILES up -d
 # Check if services are running
 sleep 5
 if docker compose ps | grep -q "Up"; then
-    echo "[OK] Maestro is running!"
+    echo "[OK] Axiom is running!"
     echo ""
-    echo "[ACCESS] Access MAESTRO at:"
+    echo "[ACCESS] Access AXIOM at:"
     # Use the new nginx proxy port if available, fallback to old config for backward compatibility
-    if [ -n "${MAESTRO_PORT}" ]; then
-        if [ "${MAESTRO_PORT}" = "80" ]; then
+    if [ -n "${AXIOM_PORT}" ]; then
+        if [ "${AXIOM_PORT}" = "80" ]; then
             echo "         http://localhost"
         else
-            echo "         http://localhost:${MAESTRO_PORT}"
+            echo "         http://localhost:${AXIOM_PORT}"
         fi
     else
         # Backward compatibility
@@ -84,8 +84,8 @@ if docker compose ps | grep -q "Up"; then
     echo ""
     echo "[NOTE] IMPORTANT - First Run:"
     echo "       Initial startup takes 5-10 minutes to download AI models"
-    echo "       Monitor progress with: docker compose logs -f maestro-backend"
-    echo "       Wait for message: MAESTRO Backend Started Successfully!"
+    echo "       Monitor progress with: docker compose logs -f axiom-backend"
+    echo "       Wait for message: AXIOM Backend Started Successfully!"
 else
     echo "[ERROR] Failed to start services. Check logs with: docker compose logs"
     exit 1

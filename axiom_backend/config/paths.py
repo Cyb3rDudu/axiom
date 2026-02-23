@@ -1,5 +1,5 @@
 """
-Central configuration for all file paths used in the Maestro application.
+Central configuration for all file paths used in the Axiom application.
 This ensures consistency across all components.
 """
 

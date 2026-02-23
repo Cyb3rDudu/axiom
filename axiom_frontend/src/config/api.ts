@@ -169,7 +169,7 @@ apiClient.interceptors.response.use(
     if (error.response?.status === 401) {
       // Only redirect to login for actual authentication failures (our own API)
       // Don't redirect for 401s from settings endpoints (model fetching, connection tests)
-      // as these are external provider API errors, not Maestro auth errors
+      // as these are external provider API errors, not Axiom auth errors
       const url = error.config?.url || ''
       const isSettingsEndpoint = url.includes('/me/settings/models') ||
                                   url.includes('/me/settings/test-connection')

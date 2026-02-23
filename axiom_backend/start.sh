@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Startup script for MAESTRO backend
+# Startup script for AXIOM backend
 # This script initializes the database and runs migrations before starting the FastAPI server
 
-echo "🚀 Starting MAESTRO Backend..."
+echo "🚀 Starting AXIOM Backend..."
 
 # Wait for PostgreSQL to be ready
 echo "⏳ Waiting for PostgreSQL to be ready..."

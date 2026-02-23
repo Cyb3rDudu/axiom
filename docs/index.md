@@ -1,24 +1,24 @@
-# MAESTRO Documentation
+# AXIOM Documentation
 
 <div align="center" style="margin: 2rem 0;">
-  <img src="assets/logo.png" alt="MAESTRO Logo" style="width: 150px; height: 150px; object-fit: contain;"/>
+  <img src="assets/logo.png" alt="AXIOM Logo" style="width: 150px; height: 150px; object-fit: contain;"/>
   
   <h3 style="margin-top: 1rem;">Your Self-Hosted AI Research Assistant</h3>
   
   <div style="margin-top: 1rem;">
     <a href="https://www.gnu.org/licenses/agpl-3.0"><img src="https://img.shields.io/badge/License-AGPL_v3-blue.svg" alt="License: AGPL v3"/></a>
-    <a href="https://github.com/murtaza-nasir/maestro.git"><img src="https://img.shields.io/badge/Version-0.1.10--alpha-green.svg" alt="Version"/></a>
-    <a href="https://hub.docker.com/r/murtaza-nasir/maestro"><img src="https://img.shields.io/badge/Docker-Ready-blue.svg" alt="Docker"/></a>
+    <a href="https://github.com/murtaza-nasir/axiom.git"><img src="https://img.shields.io/badge/Version-0.1.10--alpha-green.svg" alt="Version"/></a>
+    <a href="https://hub.docker.com/r/murtaza-nasir/axiom"><img src="https://img.shields.io/badge/Docker-Ready-blue.svg" alt="Docker"/></a>
   </div>
 </div>
 
 ---
 
-## Welcome to MAESTRO
+## Welcome to AXIOM
 
 <div class="admonition tip">
-<p class="admonition-title">What is MAESTRO?</p>
-<p>MAESTRO is an <strong>AI-powered research platform</strong> you can host on your own hardware. It's designed to manage complex research tasks from start to finish in a collaborative research environment.</p>
+<p class="admonition-title">What is AXIOM?</p>
+<p>AXIOM is an <strong>AI-powered research platform</strong> you can host on your own hardware. It's designed to manage complex research tasks from start to finish in a collaborative research environment.</p>
 </div>
 
 **Transform your research workflow:** Plan your research questions → Let AI agents investigate → Receive comprehensive reports with citations
@@ -27,7 +27,7 @@
   <img src="assets/images/research-report-main.png" alt="Research Report Example" style="max-width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"/>
 </div>
 
-### Why Choose MAESTRO?
+### Why Choose AXIOM?
 
 <div class="grid" markdown>
 
@@ -51,7 +51,7 @@ Self-hosted solution ensures your sensitive research never leaves your infrastru
 
 -   **[Quick Start](getting-started/quickstart.md)**
     
-    Get MAESTRO up and running in minutes with Docker
+    Get AXIOM up and running in minutes with Docker
 
 -   **[Installation](getting-started/installation/index.md)**
     
@@ -59,7 +59,7 @@ Self-hosted solution ensures your sensitive research never leaves your infrastru
 
 -   **[User Guide](user-guide/index.md)**
     
-    Learn how to use all of MAESTRO's features
+    Learn how to use all of AXIOM's features
 
 -   **[Example Reports](example-reports/index.md)**
     
@@ -167,7 +167,7 @@ Self-hosted solution ensures your sensitive research never leaves your infrastru
 
 ## Architecture Overview
 
-MAESTRO is built with a modern, scalable architecture:
+AXIOM is built with a modern, scalable architecture:
 
 ```mermaid
 graph TB
@@ -219,7 +219,7 @@ graph TB
 - **[Configuration](getting-started/configuration/overview.md)** - Configure AI providers and settings
 - **[First Login](getting-started/first-login.md)** - Initial setup and user creation
 
-### Using MAESTRO
+### Using AXIOM
 
 - **[User Guide](user-guide/index.md)** - Complete guide to all features
 - **[Research](user-guide/research/overview.md)** - Creating and managing research missions
@@ -315,19 +315,19 @@ graph TB
 
 -   :material-github: **GitHub**
     
-    [View Repository](https://github.com/murtaza-nasir/maestro){ .md-button }
+    [View Repository](https://github.com/murtaza-nasir/axiom){ .md-button }
     
     Source code, issues, and contributions
 
 -   :material-forum: **Discussions**
     
-    [Join Community](https://github.com/murtaza-nasir/maestro/discussions){ .md-button }
+    [Join Community](https://github.com/murtaza-nasir/axiom/discussions){ .md-button }
     
     Ask questions and share experiences
 
 -   :material-bug: **Issues**
     
-    [Report Issues](https://github.com/murtaza-nasir/maestro/issues){ .md-button }
+    [Report Issues](https://github.com/murtaza-nasir/axiom/issues){ .md-button }
     
     Report bugs and request features
 
@@ -335,7 +335,7 @@ graph TB
 
 ## License
 
-MAESTRO is open source software licensed under the [GNU Affero General Public License v3.0](license.md), ensuring it remains free and open for everyone.
+AXIOM is open source software licensed under the [GNU Affero General Public License v3.0](license.md), ensuring it remains free and open for everyone.
 
 ---
 
@@ -352,5 +352,5 @@ MAESTRO is open source software licensed under the [GNU Affero General Public Li
     <span class="twemoji">📚</span> Read Documentation
   </a>
 </div>
-<p><strong>Join hundreds of researchers using MAESTRO to accelerate their work</strong></p>
+<p><strong>Join hundreds of researchers using AXIOM to accelerate their work</strong></p>
 </div>

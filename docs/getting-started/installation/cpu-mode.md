@@ -1,6 +1,6 @@
 # CPU Mode Setup
 
-Guide for running MAESTRO without GPU acceleration, suitable for systems without NVIDIA GPUs, AMD systems, or resource-constrained environments.
+Guide for running AXIOM without GPU acceleration, suitable for systems without NVIDIA GPUs, AMD systems, or resource-constrained environments.
 
 ## When to Use CPU Mode
 
@@ -107,7 +107,7 @@ docker compose -f docker-compose.cpu.yml up -d --build
 
 ## Embedding Model Discussion
 
-MAESTRO uses BGE-M3 embeddings for document processing. In CPU mode:
+AXIOM uses BGE-M3 embeddings for document processing. In CPU mode:
 
 ### Embedding Performance
 
@@ -123,7 +123,7 @@ The BGE-M3 model runs on CPU but is significantly slower than GPU:
 2. **Use persistent model cache** to avoid re-downloads:
    ```yaml
    volumes:
-     - ./maestro_model_cache:/root/.cache/huggingface
+     - ./axiom_model_cache:/root/.cache/huggingface
    ```
 3. **Pre-process documents** before peak usage
 
@@ -223,7 +223,7 @@ Check resource usage:
 docker stats
 
 # Check specific service
-docker stats maestro-backend
+docker stats axiom-backend
 ```
 
 ## Next Steps

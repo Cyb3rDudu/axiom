@@ -11,7 +11,7 @@
 ### Phase 1: Database Schema & Models (COMPLETE)
 
 #### 1.1 ✅ Database Migration SQL
-**File**: `/maestro_backend/database/migrations/add_multilingual_support.sql`
+**File**: `/axiom_backend/database/migrations/add_multilingual_support.sql`
 
 - Creates `prompt_templates` table for storing versioned prompts
 - Creates `supported_languages` table with 5 languages (en, de, fr, es, pt)
@@ -21,7 +21,7 @@
 - **Note**: Migration ready but deferred until container build (as requested)
 
 #### 1.2 ✅ SQLAlchemy Models
-**File**: `/maestro_backend/database/models.py`
+**File**: `/axiom_backend/database/models.py`
 
 Added two new models:
 - `SupportedLanguage` (lines 353-365): Available languages with completion tracking
@@ -37,8 +37,8 @@ Modified existing models:
 
 #### 2.1 ✅ PromptLoader Service
 **Files**:
-- `/maestro_backend/ai_researcher/agentic_layer/services/__init__.py` (NEW)
-- `/maestro_backend/ai_researcher/agentic_layer/services/prompt_loader.py` (NEW)
+- `/axiom_backend/ai_researcher/agentic_layer/services/__init__.py` (NEW)
+- `/axiom_backend/ai_researcher/agentic_layer/services/prompt_loader.py` (NEW)
 
 **Features Implemented**:
 - LRU cache with 1000 entry capacity for sub-millisecond lookups
@@ -53,7 +53,7 @@ Modified existing models:
 - `clear_cache()`: Cache invalidation for admin updates
 
 #### 2.2 ✅ Application Startup Integration
-**File**: `/maestro_backend/main.py` (lines 130-140)
+**File**: `/axiom_backend/main.py` (lines 130-140)
 
 - PromptLoader initialized during FastAPI startup
 - Wrapped in try/except for graceful fallback if database unavailable
@@ -64,7 +64,7 @@ Modified existing models:
 ### Phase 3: Agent Code Modifications (COMPLETE)
 
 #### 3.1 ✅ BaseAgent Language Support
-**File**: `/maestro_backend/ai_researcher/agentic_layer/agents/base_agent.py` (lines 24-59)
+**File**: `/axiom_backend/ai_researcher/agentic_layer/agents/base_agent.py` (lines 24-59)
 
 **Changes**:
 - Added `language_code` parameter to `__init__` (default: 'en')
@@ -77,7 +77,7 @@ Modified existing models:
 - Existing code without language_code continues to work
 
 #### 3.2 ✅ PlanningAgent Multi-Phase Support
-**File**: `/maestro_backend/ai_researcher/agentic_layer/agents/planning_agent.py`
+**File**: `/axiom_backend/ai_researcher/agentic_layer/agents/planning_agent.py`
 
 **Changes**:
 - Added `language_code` parameter to `__init__` (line 47)
@@ -95,7 +95,7 @@ Modified existing models:
 - Variables injected at runtime based on mission configuration
 
 #### 3.3 ✅ CoreController Integration
-**File**: `/maestro_backend/ai_researcher/agentic_layer/controller/core_controller.py` (lines 150-204)
+**File**: `/axiom_backend/ai_researcher/agentic_layer/controller/core_controller.py` (lines 150-204)
 
 **Changes**:
 - Added `language_code` parameter to `__init__` (line 157)
@@ -136,11 +136,11 @@ Need to create:
 
 Need to create scripts for:
 1. **Prompt Extraction**: Extract hardcoded prompts from agent files
-   - Script: `/maestro_backend/scripts/extract_prompts_to_files.py`
+   - Script: `/axiom_backend/scripts/extract_prompts_to_files.py`
    - Extract prompts from all agents to `/prompts/en/*.txt`
 
 2. **Prompt Import**: Load prompts from files into database
-   - Script: `/maestro_backend/scripts/import_prompts_to_db.py`
+   - Script: `/axiom_backend/scripts/import_prompts_to_db.py`
    - Import English prompts from code
    - Import German prompts (already validated in Mission ef1cab00)
 
@@ -155,18 +155,18 @@ Need to create scripts for:
 ### Phase 6: Testing & Validation (TODO)
 
 Need to create:
-1. **Unit Tests**: `/maestro_backend/tests/test_prompt_loader.py`
+1. **Unit Tests**: `/axiom_backend/tests/test_prompt_loader.py`
    - Test successful prompt loading
    - Test fallback to English
    - Test cache performance
    - Test error handling
 
-2. **Integration Tests**: `/maestro_backend/tests/test_agents_multilingual.py`
+2. **Integration Tests**: `/axiom_backend/tests/test_agents_multilingual.py`
    - Test agent initialization with different languages
    - Test PlanningAgent phase loading
    - Test prompt content in different languages
 
-3. **Performance Tests**: `/maestro_backend/tests/test_prompt_performance.py`
+3. **Performance Tests**: `/axiom_backend/tests/test_prompt_performance.py`
    - Verify cache hit rate >99%
    - Verify cached load time <1ms
    - Verify cold load time <50ms
@@ -283,17 +283,17 @@ missions
 ### Run Database Migration (When Ready)
 ```bash
 # SSH into your carrier/cloud PostgreSQL instance
-psql -U maestro_user -d maestro_db -f maestro_backend/database/migrations/add_multilingual_support.sql
+psql -U axiom_user -d axiom_db -f axiom_backend/database/migrations/add_multilingual_support.sql
 
 # Verify migration
-psql -U maestro_user -d maestro_db -c "SELECT * FROM supported_languages;"
+psql -U axiom_user -d axiom_db -c "SELECT * FROM supported_languages;"
 ```
 
 ### Test PromptLoader
 ```python
 # After migration, test in Python console
-from maestro_backend.database.database import SessionLocal
-from maestro_backend.ai_researcher.agentic_layer.services.prompt_loader import init_prompt_loader, get_prompt_loader
+from axiom_backend.database.database import SessionLocal
+from axiom_backend.ai_researcher.agentic_layer.services.prompt_loader import init_prompt_loader, get_prompt_loader
 
 db = SessionLocal()
 init_prompt_loader(db)

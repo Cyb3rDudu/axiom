@@ -1,12 +1,12 @@
 # AI Provider Configuration
 
-Configure language model providers to power MAESTRO's research and writing capabilities.
+Configure language model providers to power AXIOM's research and writing capabilities.
 
 ![AI Configuration Interface](../../assets/images/settings/ai-config.png)
 
 ## Overview
 
-MAESTRO supports multiple AI providers and allows flexible configuration:
+AXIOM supports multiple AI providers and allows flexible configuration:
 
 - **Advanced Mode**: Configure separate providers and credentials for each model type
 - **Custom Provider**: Connect to any OpenAI-compatible API endpoint
@@ -100,7 +100,7 @@ Azure OpenAI doesn't support the `/models` endpoint, so you must use manual mode
 
 ### Advanced Configuration
 
-MAESTRO uses Advanced Mode to configure separate providers and credentials for each model type:
+AXIOM uses Advanced Mode to configure separate providers and credentials for each model type:
 
 1. Check "Advanced Configuration" checkbox
 2. For each model type (Fast, Mid, Intelligent, Verifier):
@@ -139,7 +139,7 @@ MAESTRO uses Advanced Mode to configure separate providers and credentials for e
 
 ## Model Types and Agent Usage
 
-MAESTRO uses four model categories, automatically assigned to different agents and tasks:
+AXIOM uses four model categories, automatically assigned to different agents and tasks:
 
 ### Fast Model
 
@@ -207,7 +207,7 @@ MAESTRO uses four model categories, automatically assigned to different agents a
    ollama serve
    ```
 
-2. Configure in MAESTRO:
+2. Configure in AXIOM:
       - Provider: Custom Provider
       - API Key: (use dummy unless you configured authentication)
       - Base URL: `http://host.docker.internal:11434/v1/`
@@ -217,7 +217,7 @@ MAESTRO uses four model categories, automatically assigned to different agents a
 ### Using LM Studio
 
 1. Start LM Studio server on port 1234
-2. Configure in MAESTRO:
+2. Configure in AXIOM:
       - Provider: Custom Provider
       - API Key: (use dummy unless you configured authentication)
       - Base URL: `http://host.docker.internal:1234/v1/`
@@ -241,7 +241,7 @@ MAESTRO uses four model categories, automatically assigned to different agents a
          --chat-template /home/user/vllm/qwen3_nonthinking.jinja
    ```
 
-2. Configure in MAESTRO:
+2. Configure in AXIOM:
       - Provider: Custom Provider
       - API Key: (use dummy unless you configured authentication)
       - Base URL: `http://192.168.xxx.xxx:5000/v1/`
@@ -320,17 +320,17 @@ After successful connection test:
 - Track usage through provider dashboards
 - Monitor job costs in UI
 - Set up billing alerts
-- Monitor token consumption in MAESTRO logs
+- Monitor token consumption in AXIOM logs
 
 ### Important Note on Cost Tracking
 
-**Cost Discrepancies**: Tracked costs in MAESTRO may differ from your provider dashboard, especially with API aggregators like OpenRouter. This happens because:
+**Cost Discrepancies**: Tracked costs in AXIOM may differ from your provider dashboard, especially with API aggregators like OpenRouter. This happens because:
 
 - Aggregators route to different backend providers with varying actual costs
 - Dynamic routing optimizes for speed/availability, not just price
 - Some providers count tokens differently for billing
 
-Tracked costs are typically 40-60% of dashboard charges, especially with providers like openrouter. This is not a bug - MAESTRO calculates correctly based on advertised rates. For details and testing tools, see [Cost Tracking Discrepancies](../../troubleshooting/common-issues/ai-models.md#cost-tracking-discrepancies).
+Tracked costs are typically 40-60% of dashboard charges, especially with providers like openrouter. This is not a bug - AXIOM calculates correctly based on advertised rates. For details and testing tools, see [Cost Tracking Discrepancies](../../troubleshooting/common-issues/ai-models.md#cost-tracking-discrepancies).
 
 ## Common Configurations
 

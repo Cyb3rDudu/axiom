@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Maestro Database Reset Script for Docker
+# Axiom Database Reset Script for Docker
 # This script runs the reset inside the Docker container where the databases actually exist
 
 set -e
@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 echo -e "${CYAN}============================================================${NC}"
-echo -e "${CYAN}       Maestro Database Reset Tool (Docker)${NC}"
+echo -e "${CYAN}       Axiom Database Reset Tool (Docker)${NC}"
 echo -e "${CYAN}============================================================${NC}"
 echo
 
@@ -69,16 +69,16 @@ if ! docker info > /dev/null 2>&1; then
 fi
 
 # Check if the backend container exists
-if ! docker ps -a --format '{{.Names}}' | grep -q '^maestro-backend$'; then
-    echo -e "${RED}Error: maestro-backend container not found${NC}"
-    echo "Please ensure the Maestro application is deployed with:"
+if ! docker ps -a --format '{{.Names}}' | grep -q '^axiom-backend$'; then
+    echo -e "${RED}Error: axiom-backend container not found${NC}"
+    echo "Please ensure the Axiom application is deployed with:"
     echo "  docker compose up -d"
     exit 1
 fi
 
 # Copy the reset script to the container
 echo -e "${BLUE}Copying reset script to Docker container...${NC}"
-docker cp reset_databases.py maestro-backend:/app/reset_databases.py
+docker cp reset_databases.py axiom-backend:/app/reset_databases.py
 
 # Build the command based on arguments
 CMD="python /app/reset_databases.py"
@@ -100,23 +100,23 @@ echo -e "${BLUE}Running reset script inside Docker container...${NC}"
 echo
 
 # Check if container is running
-if docker ps --format '{{.Names}}' | grep -q '^maestro-backend$'; then
+if docker ps --format '{{.Names}}' | grep -q '^axiom-backend$'; then
     # Container is running, use exec
-    docker exec -it maestro-backend $CMD
+    docker exec -it axiom-backend $CMD
 else
     # Container exists but not running, use run
     echo -e "${YELLOW}Backend container is not running. Starting temporary container...${NC}"
     docker run --rm -it \
-        -v maestro-data:/app/ai_researcher/data \
-        -v ./maestro_backend/data:/app/data \
+        -v axiom-data:/app/ai_researcher/data \
+        -v ./axiom_backend/data:/app/data \
         -w /app \
-        maestro-backend \
+        axiom-backend \
         $CMD
 fi
 
 # Clean up - remove the script from container if it's running
-if docker ps --format '{{.Names}}' | grep -q '^maestro-backend$'; then
-    docker exec maestro-backend rm -f /app/reset_databases.py 2>/dev/null || true
+if docker ps --format '{{.Names}}' | grep -q '^axiom-backend$'; then
+    docker exec axiom-backend rm -f /app/reset_databases.py 2>/dev/null || true
 fi
 
 echo

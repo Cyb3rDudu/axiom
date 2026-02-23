@@ -6,7 +6,7 @@ Manage your personal information and account security.
 
 ## User Profile
 
-Update your personal information that appears throughout MAESTRO.
+Update your personal information that appears throughout AXIOM.
 
 ### Available Fields
 

@@ -1,12 +1,12 @@
 # Search Provider Configuration
 
-Enable web search capabilities for MAESTRO's research agents to access current information from the internet.
+Enable web search capabilities for AXIOM's research agents to access current information from the internet.
 
 ![Search Configuration Interface](../../assets/images/settings/search.png)
 
 ## Overview
 
-Web search providers allow MAESTRO to:
+Web search providers allow AXIOM to:
 
 - Find current information beyond training data
 - Discover recent research and developments
@@ -151,7 +151,7 @@ Consider these factors:
 3. Ask a question requiring web search
 4. Verify results are returned
 
-## Usage in MAESTRO
+## Usage in AXIOM
 
 ### In Research Missions
 
@@ -172,7 +172,7 @@ Configure search parameters:
 
 ### Search Integration
 
-MAESTRO intelligently combines:
+AXIOM intelligently combines:
 
 - Document search (your library)
 - Web search (configured provider)

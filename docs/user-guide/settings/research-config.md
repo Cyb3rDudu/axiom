@@ -1,6 +1,6 @@
 # Research Configuration
 
-Configure default parameters for research missions to control how MAESTRO's agents plan, execute, and synthesize research tasks.
+Configure default parameters for research missions to control how AXIOM's agents plan, execute, and synthesize research tasks.
 
 ![Research Configuration Interface](../../assets/images/settings/research.png)
 

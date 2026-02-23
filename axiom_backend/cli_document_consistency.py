@@ -3,7 +3,7 @@
 CLI Tool for Document Consistency Management
 
 This tool provides commands to check and fix document consistency issues
-across all storage systems in the Maestro application.
+across all storage systems in the Axiom application.
 """
 
 import argparse

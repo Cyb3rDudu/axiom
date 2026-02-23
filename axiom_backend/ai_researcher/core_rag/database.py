@@ -4,7 +4,7 @@ AI Researcher Database Module
 This module manages the metadata database for processed documents.
 It's part of the dual-database architecture where:
 - This database (metadata.db) stores extracted document metadata for fast queries
-- Main database (maestro.db) stores document records and application data
+- Main database (axiom.db) stores document records and application data
 - Vector store (ChromaDB) stores embeddings and chunks
 
 The metadata stored here includes:

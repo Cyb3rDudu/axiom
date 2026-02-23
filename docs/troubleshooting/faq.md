@@ -4,13 +4,13 @@
 
 ### Q: Why don't my tracked costs match my API provider dashboard?
 
-**A:** This is a known issue, particularly with API aggregators like OpenRouter. MAESTRO calculates costs based on advertised pricing, but actual charges can vary because:
+**A:** This is a known issue, particularly with API aggregators like OpenRouter. AXIOM calculates costs based on advertised pricing, but actual charges can vary because:
 
 - Aggregators route to different backend providers with varying costs
 - Dynamic routing optimizes for speed/availability, not just price  
 - Some providers count hidden tokens not reported in their API
 
-Your tracked costs may typically be 40-60% of actual dashboard charges, especially with providers like Openrouter, that may route your calls to further providers with differing rates. This is not a bug in MAESTRO - we calculate correctly based on advertised rates. See [Cost Tracking Discrepancies](common-issues/ai-models.md#cost-tracking-discrepancies) for details and workarounds.
+Your tracked costs may typically be 40-60% of actual dashboard charges, especially with providers like Openrouter, that may route your calls to further providers with differing rates. This is not a bug in AXIOM - we calculate correctly based on advertised rates. See [Cost Tracking Discrepancies](common-issues/ai-models.md#cost-tracking-discrepancies) for details and workarounds.
 
 ### Q: How can I reduce my API costs?
 
@@ -33,7 +33,7 @@ Your tracked costs may typically be 40-60% of actual dashboard charges, especial
 
 ### Q: Can I use local LLMs?
 
-**A:** Yes! MAESTRO supports any OpenAI-compatible endpoint. See our [Local LLM Deployment Guide](../deployment/local-llms.md) for setup instructions.
+**A:** Yes! AXIOM supports any OpenAI-compatible endpoint. See our [Local LLM Deployment Guide](../deployment/local-llms.md) for setup instructions.
 
 ### Q: How do I configure Azure OpenAI?
 

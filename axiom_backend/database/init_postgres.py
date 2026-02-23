@@ -102,7 +102,7 @@ def create_default_admin():
                 # Create default admin
                 admin = models.User(
                     username=admin_username,
-                    email="admin@maestro.local",  # Added email field
+                    email="admin@axiom.local",  # Added email field
                     hashed_password=pwd_context.hash(admin_password),
                     full_name="System Administrator",
                     is_admin=True,

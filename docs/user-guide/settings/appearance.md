@@ -1,6 +1,6 @@
 # Appearance Settings
 
-Customize MAESTRO's visual appearance to suit your preferences.
+Customize AXIOM's visual appearance to suit your preferences.
 
 ![Appearance Settings](../../assets/images/settings/appearance.png)
 

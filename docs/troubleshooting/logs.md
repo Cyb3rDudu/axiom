@@ -1,6 +1,6 @@
 # Logs Troubleshooting
 
-This guide helps you access and understand MAESTRO logs for debugging issues.
+This guide helps you access and understand AXIOM logs for debugging issues.
 
 ## Quick Commands
 
@@ -8,48 +8,48 @@ This guide helps you access and understand MAESTRO logs for debugging issues.
 
 ```bash
 # Backend logs (most important for debugging)
-docker compose logs maestro-backend --tail=100
+docker compose logs axiom-backend --tail=100
 
 # Document processor logs
-docker compose logs maestro-doc-processor --tail=100
+docker compose logs axiom-doc-processor --tail=100
 
 # Frontend logs
-docker compose logs maestro-frontend --tail=100
+docker compose logs axiom-frontend --tail=100
 
 # PostgreSQL logs
-docker compose logs maestro-postgres --tail=100
+docker compose logs axiom-postgres --tail=100
 
 # Nginx logs
-docker compose logs maestro-nginx --tail=100
+docker compose logs axiom-nginx --tail=100
 ```
 
 ### Follow Logs in Real-Time
 
 ```bash
 # Watch backend logs live
-docker compose logs -f maestro-backend
+docker compose logs -f axiom-backend
 
 # Watch all containers
 docker compose logs -f
 
 # Watch specific containers
-docker compose logs -f maestro-backend maestro-doc-processor
+docker compose logs -f axiom-backend axiom-doc-processor
 ```
 
 ### Search Logs
 
 ```bash
 # Find errors
-docker compose logs maestro-backend | grep -i error
+docker compose logs axiom-backend | grep -i error
 
 # Find specific user activity
-docker compose logs maestro-backend | grep "username"
+docker compose logs axiom-backend | grep "username"
 
 # Find API calls
-docker compose logs maestro-backend | grep -E "POST|GET|PUT|DELETE"
+docker compose logs axiom-backend | grep -E "POST|GET|PUT|DELETE"
 
 # Find document processing issues
-docker compose logs maestro-doc-processor | grep -i "failed\|error"
+docker compose logs axiom-doc-processor | grep -i "failed\|error"
 ```
 
 ## Container Log Locations
@@ -82,46 +82,46 @@ docker compose down && docker compose up -d
 
 ```bash
 # Authentication issues
-docker compose logs maestro-backend | grep -i "auth\|login\|token"
+docker compose logs axiom-backend | grep -i "auth\|login\|token"
 
 # Database connection issues
-docker compose logs maestro-backend | grep -i "database\|postgres\|connection"
+docker compose logs axiom-backend | grep -i "database\|postgres\|connection"
 
 # AI/LLM API issues
-docker compose logs maestro-backend | grep -i "openai\|anthropic\|api\|rate"
+docker compose logs axiom-backend | grep -i "openai\|anthropic\|api\|rate"
 
 # Mission/Research errors
-docker compose logs maestro-backend | grep -i "mission\|research\|agent"
+docker compose logs axiom-backend | grep -i "mission\|research\|agent"
 ```
 
 ### Document Processing
 
 ```bash
 # Processing status
-docker compose logs maestro-doc-processor | grep "Processing document"
+docker compose logs axiom-doc-processor | grep "Processing document"
 
 # Embedding generation
-docker compose logs maestro-doc-processor | grep -i "embed\|vector"
+docker compose logs axiom-doc-processor | grep -i "embed\|vector"
 
 # Conversion errors
-docker compose logs maestro-doc-processor | grep -i "marker\|pdf\|convert"
+docker compose logs axiom-doc-processor | grep -i "marker\|pdf\|convert"
 ```
 
 ### Database Issues
 
 ```bash
 # Connection problems
-docker compose logs maestro-postgres | grep -i "connection\|refused"
+docker compose logs axiom-postgres | grep -i "connection\|refused"
 
 # Schema/migration issues
-docker compose logs maestro-backend | grep -i "migration\|schema"
+docker compose logs axiom-backend | grep -i "migration\|schema"
 ```
 
 ## Filtering by Time
 
 ```bash
 # Last hour of logs
-docker compose logs --since 1h maestro-backend
+docker compose logs --since 1h axiom-backend
 
 # Last 24 hours
 docker compose logs --since 24h
@@ -134,10 +134,10 @@ docker compose logs --since 2024-01-01T10:00:00 --until 2024-01-01T11:00:00
 
 ```bash
 # Save to file
-docker compose logs maestro-backend > backend.log
+docker compose logs axiom-backend > backend.log
 
 # Save with timestamps
-docker compose logs -t maestro-backend > backend-with-time.log
+docker compose logs -t axiom-backend > backend-with-time.log
 
 # Save all containers
 docker compose logs > all-logs.txt
@@ -152,7 +152,7 @@ Docker logs can grow large. To manage size:
 docker ps -q | xargs docker inspect --format='{{.Name}}: {{.LogPath}}' | xargs -I {} sh -c 'echo {} | cut -d: -f1; du -sh $(echo {} | cut -d: -f2)'
 
 # Truncate logs (requires root)
-truncate -s 0 $(docker inspect --format='{{.LogPath}}' maestro-backend)
+truncate -s 0 $(docker inspect --format='{{.LogPath}}' axiom-backend)
 
 # Or restart containers to reset logs
 docker compose restart

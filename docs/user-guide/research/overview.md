@@ -1,6 +1,6 @@
-# Research with MAESTRO
+# Research with AXIOM
 
-MAESTRO's research system uses an agentic framework to gather information from web sources and your documents, creating comprehensive research reports through intelligent analysis and synthesis.
+AXIOM's research system uses an agentic framework to gather information from web sources and your documents, creating comprehensive research reports through intelligent analysis and synthesis.
 
 ## How Research Works
 
@@ -32,7 +32,7 @@ MAESTRO's research system uses an agentic framework to gather information from w
 
 ### Step 1: Initial Conversation
 
-Begin by chatting with MAESTRO about your research needs. The Messenger Agent will:
+Begin by chatting with AXIOM about your research needs. The Messenger Agent will:
 
 - Help clarify your research objectives
 - Generate initial exploration questions
@@ -213,13 +213,13 @@ Final report generation:
 
 ## Auto-Creating Document Groups
 
-When conducting research that discovers valuable web sources, MAESTRO can automatically create and populate document groups with these materials. This feature preserves your research sources for future reference and enables deeper analysis through the RAG pipeline.
+When conducting research that discovers valuable web sources, AXIOM can automatically create and populate document groups with these materials. This feature preserves your research sources for future reference and enables deeper analysis through the RAG pipeline.
 
 ![Auto-Create Document Groups](../../assets/images/document-group-auto-create.png)
 
 ### How It Works
 
-When auto-create is enabled, MAESTRO will:
+When auto-create is enabled, AXIOM will:
 
 1. Track all web sources discovered during research
 2. Convert relevant web pages into markdown documents
@@ -365,4 +365,4 @@ Visual breakdown showing:
 3. **Start Researching** - Begin with a simple topic to learn the interface
 4. **Optimize Settings** - Adjust parameters based on your needs
 
-For additional help, see the [FAQ](../../troubleshooting/faq.md) or visit our [Community Forum](https://github.com/murtaza-nasir/maestro/discussions).
+For additional help, see the [FAQ](../../troubleshooting/faq.md) or visit our [Community Forum](https://github.com/murtaza-nasir/axiom/discussions).

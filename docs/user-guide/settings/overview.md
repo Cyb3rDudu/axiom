@@ -1,6 +1,6 @@
 # Settings Overview
 
-The Settings panel is your central hub for configuring and customizing MAESTRO. This comprehensive guide walks you through each settings tab and explains how to configure them for optimal performance.
+The Settings panel is your central hub for configuring and customizing AXIOM. This comprehensive guide walks you through each settings tab and explains how to configure them for optimal performance.
 
 ## Accessing Settings
 
@@ -8,7 +8,7 @@ To access the Settings panel:
 1. Click the **Settings** button in the top-right corner of any page
 2. Or navigate directly via the gear icon in the interface
 
-The Settings panel is organized into multiple tabs, each controlling different aspects of MAESTRO:
+The Settings panel is organized into multiple tabs, each controlling different aspects of AXIOM:
 
 - **Profile** - Personal information and password management
 - **Appearance** - Visual customization and theme settings
@@ -39,7 +39,7 @@ Manage your personal account information, including:
 [Learn more about Profile Settings →](profile.md)
 
 ### Appearance Settings
-Customize the visual appearance of MAESTRO:
+Customize the visual appearance of AXIOM:
 - Dark/Light mode toggle
 - Color scheme selection
 - Interface preferences
@@ -64,7 +64,7 @@ Set up web search capabilities:
 [Learn more about Search Configuration →](search-config.md)
 
 ### Web Fetch Configuration
-Configure how MAESTRO fetches web content:
+Configure how AXIOM fetches web content:
 - Fetch provider selection
 - Jina Reader API settings
 - Content processing options
@@ -114,7 +114,7 @@ Most settings are saved automatically when changed. Look for:
 
 ## Next Steps
 
-Ready to configure MAESTRO? Start with:
+Ready to configure AXIOM? Start with:
 1. [Profile Settings](profile.md) - Set up your account
 2. [AI Configuration](ai-config.md) - Configure language models
 3. [Search Settings](search-config.md) - Enable web search

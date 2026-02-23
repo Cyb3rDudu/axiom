@@ -48,7 +48,7 @@ const getAvailableStorageStrategies = (): StorageStrategy[] => {
 
 // IndexedDB wrapper for mission data
 class MissionDataDB {
-  private dbName = 'maestro-mission-data';
+  private dbName = 'axiom-mission-data';
   private version = 1;
   private db: IDBDatabase | null = null;
 

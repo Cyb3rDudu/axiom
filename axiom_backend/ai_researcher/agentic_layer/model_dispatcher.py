@@ -556,8 +556,8 @@ class ModelDispatcher:
         # Only add OpenAI headers if the provider is OpenRouter
         if provider_name == "openrouter":
             request_params["extra_headers"] = {
-                "HTTP-Referer": "https://github.com/murtaza-nasir/maestro.git", 
-                "X-Title": "MAESTRO", 
+                "HTTP-Referer": "https://github.com/murtaza-nasir/axiom.git", 
+                "X-Title": "AXIOM", 
             }
         if tools:
             request_params["tools"] = tools
@@ -1096,8 +1096,8 @@ class ModelDispatcher:
         # Only add OpenAI headers if the provider is OpenRouter
         if provider_name == "openrouter":
             request_params["extra_headers"] = {
-                "HTTP-Referer": "https://github.com/murtaza-nasir/maestro.git", 
-                "X-Title": "MAESTRO", 
+                "HTTP-Referer": "https://github.com/murtaza-nasir/axiom.git", 
+                "X-Title": "AXIOM", 
             }
         if tools:
             request_params["tools"] = tools

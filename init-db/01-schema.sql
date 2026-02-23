@@ -1,4 +1,4 @@
--- Complete PostgreSQL Schema for MAESTRO Application
+-- Complete PostgreSQL Schema for AXIOM Application
 -- This schema EXACTLY matches the SQLAlchemy models in database/models.py
 -- Generated from comprehensive analysis of all model definitions
 
@@ -324,6 +324,6 @@ ON CONFLICT (key) DO NOTHING;
 -- Default admin user will be created by Python init script
 -- using credentials from environment variables (ADMIN_USERNAME and ADMIN_PASSWORD)
 
--- Grant permissions to maestro_user (if needed)
--- GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO maestro_user;
--- GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO maestro_user;
+-- Grant permissions to axiom_user (if needed)
+-- GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO axiom_user;
+-- GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO axiom_user;

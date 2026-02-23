@@ -1,8 +1,8 @@
 @echo off
-REM Startup script for MAESTRO backend on Windows
+REM Startup script for AXIOM backend on Windows
 REM This script runs database migrations before starting the FastAPI server
 
-echo 🚀 Starting MAESTRO Backend...
+echo 🚀 Starting AXIOM Backend...
 
 REM Run database migrations
 echo 📊 Running database migrations...

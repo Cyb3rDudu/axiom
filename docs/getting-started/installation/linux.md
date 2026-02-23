@@ -1,9 +1,9 @@
 # Linux Installation
 
-Complete installation guide for running MAESTRO on Linux distributions with full GPU support.
+Complete installation guide for running AXIOM on Linux distributions with full GPU support.
 
 !!! important "NVIDIA Driver Requirement for GPU Users"
-    MAESTRO uses CUDA 12.9, which requires **NVIDIA driver version 575 or newer**. If you plan to use GPU acceleration, ensure you have the correct driver version installed. Older drivers (like 535) will cause container startup failures.
+    AXIOM uses CUDA 12.9, which requires **NVIDIA driver version 575 or newer**. If you plan to use GPU acceleration, ensure you have the correct driver version installed. Older drivers (like 535) will cause container startup failures.
 
 ## Prerequisites
 
@@ -52,7 +52,7 @@ For GPU acceleration (highly recommended):
 1. **NVIDIA Drivers**
    
    !!! warning "Driver Version Requirement"
-       MAESTRO uses CUDA 12.9, which requires NVIDIA driver version 575 or newer. Older drivers will cause container startup failures.
+       AXIOM uses CUDA 12.9, which requires NVIDIA driver version 575 or newer. Older drivers will cause container startup failures.
    
    ```bash
    # Ubuntu/Debian - Install latest driver (575+)
@@ -116,8 +116,8 @@ docker run --rm --gpus all nvidia/cuda:12.9.1-base-ubuntu24.04 nvidia-smi
 ### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/murtaza-nasir/maestro.git
-cd maestro
+git clone https://github.com/murtaza-nasir/axiom.git
+cd axiom
 ```
 
 ### Step 2: Configure Environment
@@ -132,8 +132,8 @@ The script will guide you through:
 
 1. **Network Configuration**
     - Simple (localhost only) - if installing on the machine you are using
-    - Network (LAN access) - if accessing maestro over network
-    - Custom domain - if running maestro with a domain
+    - Network (LAN access) - if accessing axiom over network
+    - Custom domain - if running axiom with a domain
 
 2. **Security Configuration**
     - Generates secure passwords automatically
@@ -143,7 +143,7 @@ The script will guide you through:
 3. **Port Configuration**
     - Sets the main application port
 
-### Step 3: Build and Start MAESTRO
+### Step 3: Build and Start AXIOM
 
 Always build on first run to ensure latest changes:
 
@@ -152,12 +152,12 @@ Always build on first run to ensure latest changes:
 docker compose up -d --build
 
 # Monitor startup progress
-docker compose logs -f maestro-backend
+docker compose logs -f axiom-backend
 ```
 
-**First-time startup:** The backend downloads AI models on first run (5-10 minutes). Wait for "MAESTRO Backend Started Successfully!" message.
+**First-time startup:** The backend downloads AI models on first run (5-10 minutes). Wait for "AXIOM Backend Started Successfully!" message.
 
-### Step 4: Access MAESTRO
+### Step 4: Access AXIOM
 
 Once startup is complete:
 
@@ -169,13 +169,13 @@ Once startup is complete:
 
 ### Persistent Model Storage
 
-To avoid re-downloading models after container restarts, MAESTRO uses persistent volumes:
+To avoid re-downloading models after container restarts, AXIOM uses persistent volumes:
 
 ```yaml
 # In docker-compose.yml
 volumes:
-  - ./maestro_model_cache:/root/.cache/huggingface
-  - ./maestro_datalab_cache:/root/.cache/datalab
+  - ./axiom_model_cache:/root/.cache/huggingface
+  - ./axiom_datalab_cache:/root/.cache/datalab
 ```
 
 These volumes persist:
@@ -187,7 +187,7 @@ These volumes persist:
 - **Processed documents and embeddings**: Varies by document volume
 
 !!! important "Multiple Model Instances"
-    MAESTRO loads separate instances of embedding models for:
+    AXIOM loads separate instances of embedding models for:
     
     - **Document processing**: When uploading/ingesting documents
     - **Research queries**: When searching and retrieving information
@@ -243,7 +243,7 @@ services:
 
 ### Performance Tuning
 
-MAESTRO uses multiple layers of concurrency control for different purposes:
+AXIOM uses multiple layers of concurrency control for different purposes:
 
 !!! info "Concurrency Layers Explained"
     Think of these settings as different traffic control systems:
@@ -357,18 +357,18 @@ export TF_GPU_MEMORY_LIMIT=4096  # Limit to 4GB
 docker compose down
 
 # Backup PostgreSQL data
-docker run --rm -v maestro_postgres-data:/data -v $(pwd):/backup \
+docker run --rm -v axiom_postgres-data:/data -v $(pwd):/backup \
   ubuntu tar czf /backup/postgres_backup.tar.gz /data
 
 # Backup model cache
-tar czf models_backup.tar.gz maestro_model_cache maestro_datalab_cache
+tar czf models_backup.tar.gz axiom_model_cache axiom_datalab_cache
 ```
 
 ### Restore from Backup
 
 ```bash
 # Restore PostgreSQL
-docker run --rm -v maestro_postgres-data:/data -v $(pwd):/backup \
+docker run --rm -v axiom_postgres-data:/data -v $(pwd):/backup \
   ubuntu tar xzf /backup/postgres_backup.tar.gz -C /
 
 # Restore models
@@ -418,15 +418,15 @@ sudo usermod -aG docker $USER
 newgrp docker
 
 # Fix volume permissions
-sudo chown -R $USER:$USER ./maestro_model_cache ./maestro_datalab_cache
+sudo chown -R $USER:$USER ./axiom_model_cache ./axiom_datalab_cache
 ```
 
 ### Container Startup Issues
 
 ```bash
 # Check logs
-docker compose logs maestro-backend
-docker compose logs maestro-postgres
+docker compose logs axiom-backend
+docker compose logs axiom-postgres
 
 # Rebuild if needed
 docker compose down
@@ -441,12 +441,12 @@ docker compose up -d
 sudo netstat -tlnp | grep 80
 
 # Change port in .env
-MAESTRO_PORT=8080
+AXIOM_PORT=8080
 ```
 
 ## Maintenance
 
-### Update MAESTRO
+### Update AXIOM
 
 ```bash
 # Pull latest changes

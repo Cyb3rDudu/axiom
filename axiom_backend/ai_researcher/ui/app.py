@@ -128,8 +128,8 @@ def generate_ui_report_filename(mission_id: str) -> str:
     return f"{date_time_str}_ui_report_{safe_mission_id}.md"
 
 # --- Streamlit App Layout ---
-st.set_page_config(layout="wide", page_title="MAESTRO: Multi-Agent Execution System & Tool-driven Research Orchestrator")
-st.title("MAESTRO")
+st.set_page_config(layout="wide", page_title="AXIOM: Multi-Agent Execution System & Tool-driven Research Orchestrator")
+st.title("AXIOM")
 st.subheader("Multi-Agent Execution System & Tool-driven Research Orchestrator")
 # Initialize components using caching
 try:

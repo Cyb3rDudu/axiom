@@ -1,6 +1,6 @@
 # Writing Mode Overview
 
-MAESTRO's Writing Mode is a powerful AI-assisted writing environment that combines intelligent research capabilities with a full-featured markdown editor. It enables you to create well-researched documents with proper citations from both your document library and web sources.
+AXIOM's Writing Mode is a powerful AI-assisted writing environment that combines intelligent research capabilities with a full-featured markdown editor. It enables you to create well-researched documents with proper citations from both your document library and web sources.
 
 ![Writing Mode Interface](../../assets/images/writing view chat.png)
 
@@ -26,10 +26,10 @@ The Writing Mode interface is divided into two synchronized panels:
 
 ### Starting a Writing Session
 
-There are two ways to begin writing in MAESTRO:
+There are two ways to begin writing in AXIOM:
 
 **Option 1: New Writing Session**
-1. Navigate to the **Writing** tab in MAESTRO
+1. Navigate to the **Writing** tab in AXIOM
 2. Click **"+ New"** to create a new writing session
 3. Your session will appear in the left sidebar with an auto-generated title
 
@@ -282,7 +282,7 @@ Export your completed documents as:
 
 ## Summary
 
-MAESTRO's Writing Mode streamlines the research and writing process by:
+AXIOM's Writing Mode streamlines the research and writing process by:
 - Providing intelligent research assistance with automatic citations
 - Offering a powerful markdown editor with LaTeX support
 - Maintaining context awareness throughout your writing session

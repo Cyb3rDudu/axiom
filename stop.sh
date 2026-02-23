@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Maestro shutdown script
+# Axiom shutdown script
 
-echo "🛑 Stopping Maestro..."
+echo "🛑 Stopping Axiom..."
 
 # Source GPU detection to determine which compose files were used
 source ./detect_gpu.sh
@@ -24,4 +24,4 @@ esac
 # Stop services
 docker compose $COMPOSE_FILES down
 
-echo "✅ Maestro stopped."
+echo "✅ Axiom stopped."
