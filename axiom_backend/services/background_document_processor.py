@@ -527,6 +527,17 @@ class BackgroundDocumentProcessor:
                     chunks_added_count = len(chunks)
                     print(f"[{doc_id}] Successfully added {chunks_added_count} chunks to vector store")
 
+                    # --- Index in OpenSearch for fulltext search ---
+                    if config.ENABLE_OPENSEARCH:
+                        try:
+                            from ai_researcher.core_rag.opensearch_store import get_opensearch_store
+                            os_store = get_opensearch_store()
+                            if os_store:
+                                os_indexed = os_store.add_chunks(doc_id, chunks_with_embeddings)
+                                print(f"[{doc_id}] Indexed {os_indexed} chunks in OpenSearch for fulltext search")
+                        except Exception as e_opensearch:
+                            print(f"[{doc_id}] Warning: OpenSearch indexing failed: {e_opensearch}")
+
                     # --- Build Knowledge Graph ---
                     if config.ENABLE_KNOWLEDGE_GRAPH:
                         try:
@@ -557,10 +568,12 @@ class BackgroundDocumentProcessor:
                                         )
 
                                         for entity in entities:
+                                            # Pass context_snippet as description for entity merging
                                             entity_id = graph_store.add_entity(
                                                 entity['text'],
                                                 entity['type'],
-                                                entity['canonical_form']
+                                                entity['canonical_form'],
+                                                description=entity.get('context_snippet')
                                             )
                                             graph_store.link_entity_to_chunk(
                                                 entity_id,
