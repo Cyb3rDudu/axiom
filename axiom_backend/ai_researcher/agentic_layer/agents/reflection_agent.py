@@ -7,14 +7,21 @@ from pydantic import ValidationError
 # Use absolute imports
 from ai_researcher.agentic_layer.agents.base_agent import BaseAgent
 from ai_researcher.agentic_layer.model_dispatcher import ModelDispatcher
+
 # Import the updated schema and Note
 from ai_researcher.agentic_layer.schemas.planning import ReportSection
+
 # Import the updated schema components
-from ai_researcher.agentic_layer.schemas.reflection import ReflectionOutput, SuggestedSubsectionTopic, OutlineModification
+from ai_researcher.agentic_layer.schemas.reflection import (
+    ReflectionOutput,
+    SuggestedSubsectionTopic,
+    OutlineModification,
+)
 from ai_researcher.agentic_layer.context_manager import MissionContext
 from ai_researcher.agentic_layer.schemas.notes import Note
 from ai_researcher.agentic_layer.schemas.goal import GoalEntry
 from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry
+
 # Import the JSON utilities
 from ai_researcher.agentic_layer.utils.json_utils import (
     parse_json_string_recursively,
@@ -22,19 +29,20 @@ from ai_researcher.agentic_layer.utils.json_utils import (
     parse_llm_json_response,
     prepare_for_pydantic_validation,
     extract_non_schema_fields,
-    filter_null_values_from_list
+    filter_null_values_from_list,
 )
 from ai_researcher.agentic_layer.utils.json_format_helper import (
     get_json_schema_format,
     get_json_object_format,
     enhance_messages_for_json_object,
-    should_retry_with_json_object
+    should_retry_with_json_object,
 )
 
 logger = logging.getLogger(__name__)
 
 # Check for debug mode from environment variable
-DEBUG_REFLECTION = os.getenv('DEBUG_REFLECTION', 'false').lower() == 'true'
+DEBUG_REFLECTION = os.getenv("DEBUG_REFLECTION", "false").lower() == "true"
+
 
 class ReflectionAgent(BaseAgent):
     """
@@ -43,15 +51,29 @@ class ReflectionAgent(BaseAgent):
     identifies gaps, contradictions, and areas for improvement, and generates
     questions or suggests structural changes (like subsections) to guide further research.
     """
-    def __init__(self, model_dispatcher: ModelDispatcher, controller: Optional[Any] = None, language_code: str = "en"):
-        super().__init__(agent_name="ReflectionAgent", model_dispatcher=model_dispatcher)
-        self.controller = controller # Store controller
-        self.mission_id = None # Initialize mission_id as None
+
+    def __init__(
+        self,
+        model_dispatcher: ModelDispatcher,
+        controller: Optional[Any] = None,
+        language_code: str = "en",
+    ):
+        super().__init__(
+            agent_name="ReflectionAgent",
+            model_dispatcher=model_dispatcher,
+            language_code=language_code,
+        )
+        self.controller = controller
+        self.mission_id = None  # Initialize mission_id as None
         logger.info("ReflectionAgent initialized.")
-        
+
         if DEBUG_REFLECTION:
-            logger.info("🔍 REFLECTION AGENT DEBUG MODE ENABLED - Verbose logging active")
-            logger.info("   To disable, set environment variable: DEBUG_REFLECTION=false")
+            logger.info(
+                "🔍 REFLECTION AGENT DEBUG MODE ENABLED - Verbose logging active"
+            )
+            logger.info(
+                "   To disable, set environment variable: DEBUG_REFLECTION=false"
+            )
 
     def _format_notes_for_prompt(self, notes: List[Note]) -> str:
         """Formats the list of Note objects into a string for the prompt."""
@@ -60,32 +82,42 @@ class ReflectionAgent(BaseAgent):
         note_lines = []
         for i, note in enumerate(notes):
             # Basic escaping of braces within the content
-            escaped_content = note.content.replace('{', '{{').replace('}', '}}')
+            escaped_content = note.content.replace("{", "{{").replace("}", "}}")
             source_info = f"(Source: {note.source_type} - {note.source_id})"
             note_lines.append(f"Note {note.note_id}: {escaped_content} {source_info}")
         return "\n".join(note_lines)
 
-    def _format_outline_for_prompt(self, outline: List[ReportSection], level: int = 0) -> List[str]:
+    def _format_outline_for_prompt(
+        self, outline: List[ReportSection], level: int = 0
+    ) -> List[str]:
         """Recursively formats the report outline into a list of strings with indentation."""
         outline_lines = []
         indent = "  " * level
         for i, section in enumerate(outline):
-            prefix = f"{indent}{i+1}." if level == 0 else f"{indent}-" # Use numbers only for top level
-            outline_lines.append(f"{prefix} ID: {section.section_id}, Title: {section.title}")
+            prefix = (
+                f"{indent}{i + 1}." if level == 0 else f"{indent}-"
+            )  # Use numbers only for top level
+            outline_lines.append(
+                f"{prefix} ID: {section.section_id}, Title: {section.title}"
+            )
             # Recursively add subsections
-            outline_lines.extend(self._format_outline_for_prompt(section.subsections, level + 1))
+            outline_lines.extend(
+                self._format_outline_for_prompt(section.subsections, level + 1)
+            )
         return outline_lines
 
     def _prepare_reflection_prompt(
         self,
-        mission_context: MissionContext, # Still needed for overall goal and outline structure
+        mission_context: MissionContext,  # Still needed for overall goal and outline structure
         section_id: str,
-        section_title: str, # Added
+        section_title: str,  # Added
         section_goal: str,  # Added (was description)
         notes_for_section: List[Note],
-        active_goals: Optional[List[GoalEntry]] = None, # <-- NEW: Add active goals
-        active_thoughts: Optional[List[ThoughtEntry]] = None, # <-- NEW: Add active thoughts
-        agent_scratchpad: Optional[str] = None # NEW: Added scratchpad
+        active_goals: Optional[List[GoalEntry]] = None,  # <-- NEW: Add active goals
+        active_thoughts: Optional[
+            List[ThoughtEntry]
+        ] = None,  # <-- NEW: Add active thoughts
+        agent_scratchpad: Optional[str] = None,  # NEW: Added scratchpad
     ) -> str:
         """
         Prepares the prompt for the LLM based on the current context, notes, active goals, active thoughts, and scratchpad for a specific section.
@@ -106,23 +138,45 @@ class ReflectionAgent(BaseAgent):
         # Section details are now passed directly as arguments
         current_outline_str = "Outline not available."
         if mission_context.plan and mission_context.plan.report_outline:
-            outline_lines = self._format_outline_for_prompt(mission_context.plan.report_outline)
-            current_outline_str = "Current Report Outline Structure:\n---\n" + "\n".join(outline_lines) + "\n---"
+            outline_lines = self._format_outline_for_prompt(
+                mission_context.plan.report_outline
+            )
+            current_outline_str = (
+                "Current Report Outline Structure:\n---\n"
+                + "\n".join(outline_lines)
+                + "\n---"
+            )
 
         formatted_notes = self._format_notes_for_prompt(notes_for_section)
 
         # Include scratchpad content if available
         scratchpad_context = ""
         if agent_scratchpad:
-            scratchpad_context = f"\nCurrent Agent Scratchpad:\n---\n{agent_scratchpad}\n---\n"
+            scratchpad_context = (
+                f"\nCurrent Agent Scratchpad:\n---\n{agent_scratchpad}\n---\n"
+            )
 
         # Format active goals
-        goals_str = "\n".join([f"- Goal ID: {g.goal_id}, Status: {g.status}, Text: {g.text}" for g in active_goals]) if active_goals else "None"
-        
+        goals_str = (
+            "\n".join(
+                [
+                    f"- Goal ID: {g.goal_id}, Status: {g.status}, Text: {g.text}"
+                    for g in active_goals
+                ]
+            )
+            if active_goals
+            else "None"
+        )
+
         # Format active thoughts
         thoughts_context = ""
         if active_thoughts:
-            thoughts_str = "\n".join([f"- [{t.timestamp.strftime('%Y-%m-%d %H:%M')}] {t.agent_name}: {t.content}" for t in active_thoughts])
+            thoughts_str = "\n".join(
+                [
+                    f"- [{t.timestamp.strftime('%Y-%m-%d %H:%M')}] {t.agent_name}: {t.content}"
+                    for t in active_thoughts
+                ]
+            )
             thoughts_context = f"\nRecent Thoughts:\n---\n{thoughts_str}\n---\n"
             thoughts_context += "Consider these recent thoughts when analyzing the notes and generating your own thought.\n"
 
@@ -202,26 +256,33 @@ Provide ONLY a single JSON object conforming EXACTLY to the ReflectionOutput sch
 **IMPORTANT:** Focus your analysis and generated questions/subsections *only* on the provided notes and the goal of the current section (`{section_id}`), BUT use the provided **Current Report Outline Structure** and **Agent Scratchpad** for context and to avoid proposing redundant sections or subsections. Ensure your entire output is a single, valid JSON object.
 """
         if DEBUG_REFLECTION:
-            logger.info(f"Generated ReflectionAgent prompt for section {section_id}:\n{prompt[:500]}...")
+            logger.info(
+                f"Generated ReflectionAgent prompt for section {section_id}:\n{prompt[:500]}..."
+            )
         return prompt.strip()
 
     # Removed _format_summaries_for_prompt as it's not used
 
-
-    async def run( # <-- Make method async
+    async def run(  # <-- Make method async
         self,
         mission_context: MissionContext,
         section_id: str,
-        section_title: str, # Added
+        section_title: str,  # Added
         section_goal: str,  # Added
         notes_for_section: List[Note],
-        agent_scratchpad: Optional[str] = None, # NEW: Added scratchpad input
-        active_goals: Optional[List[GoalEntry]] = None, # <-- NEW: Add active goals
-        active_thoughts: Optional[List[ThoughtEntry]] = None, # <-- NEW: Add active thoughts
-        mission_id: Optional[str] = None, # Add mission_id parameter
-        log_queue: Optional[Any] = None, # Add log_queue parameter for UI updates
-        update_callback: Optional[Any] = None # Add update_callback parameter for UI updates
-    ) -> Tuple[Optional[ReflectionOutput], Optional[Dict[str, Any]], Optional[str]]: # Modified return type
+        agent_scratchpad: Optional[str] = None,  # NEW: Added scratchpad input
+        active_goals: Optional[List[GoalEntry]] = None,  # <-- NEW: Add active goals
+        active_thoughts: Optional[
+            List[ThoughtEntry]
+        ] = None,  # <-- NEW: Add active thoughts
+        mission_id: Optional[str] = None,  # Add mission_id parameter
+        log_queue: Optional[Any] = None,  # Add log_queue parameter for UI updates
+        update_callback: Optional[
+            Any
+        ] = None,  # Add update_callback parameter for UI updates
+    ) -> Tuple[
+        Optional[ReflectionOutput], Optional[Dict[str, Any]], Optional[str]
+    ]:  # Modified return type
         """
         Executes the reflection process for a specific section based on its notes, active goals, and active thoughts.
 
@@ -247,11 +308,13 @@ Provide ONLY a single JSON object conforming EXACTLY to the ReflectionOutput sch
         # Store mission_id as instance attribute for the duration of this call
         # This allows _call_llm to access it for updating mission stats
         self.mission_id = mission_id
-        
-        logger.info(f"Running ReflectionAgent for section {section_id} in mission {mission_context.mission_id}...")
+
+        logger.info(
+            f"Running ReflectionAgent for section {section_id} in mission {mission_context.mission_id}..."
+        )
 
         # Removed redundant plan check here, as necessary info is passed in
-        scratchpad_update = None # Initialize
+        scratchpad_update = None  # Initialize
 
         prompt = self._prepare_reflection_prompt(
             mission_context=mission_context,
@@ -259,9 +322,9 @@ Provide ONLY a single JSON object conforming EXACTLY to the ReflectionOutput sch
             section_title=section_title,
             section_goal=section_goal,
             notes_for_section=notes_for_section,
-            active_goals=active_goals, # <-- Pass active_goals
-            active_thoughts=active_thoughts, # <-- Pass active_thoughts
-            agent_scratchpad=agent_scratchpad
+            active_goals=active_goals,  # <-- Pass active_goals
+            active_thoughts=active_thoughts,  # <-- Pass active_thoughts
+            agent_scratchpad=agent_scratchpad,
         )
 
         # Use system prompt if defined, otherwise just user prompt
@@ -271,186 +334,268 @@ Provide ONLY a single JSON object conforming EXACTLY to the ReflectionOutput sch
 
         # Try json_schema format first, with fallback to json_object
         response_format_pydantic = get_json_schema_format(
-            pydantic_model=ReflectionOutput,
-            schema_name="reflection_output"
+            pydantic_model=ReflectionOutput, schema_name="reflection_output"
         )
         use_json_object = False
 
         # Add retry logic similar to other agents
         max_retries = 3
         model_call_details = None
-        response_model = None # Initialize response_model
-        
+        response_model = None  # Initialize response_model
+
         for attempt in range(max_retries):
             try:
-                logger.info(f"ReflectionAgent attempt {attempt + 1}/{max_retries} for section {section_id}")
-                
+                logger.info(
+                    f"ReflectionAgent attempt {attempt + 1}/{max_retries} for section {section_id}"
+                )
+
                 # Prepare messages based on format type
                 current_messages = messages
                 if use_json_object:
                     current_messages = enhance_messages_for_json_object(
-                        messages=messages,
-                        pydantic_model=ReflectionOutput
+                        messages=messages, pydantic_model=ReflectionOutput
                     )
-                
+
                 # Use _call_llm for consistent logging
                 # Need to extract user prompt from messages for _call_llm
                 # Store mission_id as instance attribute so _call_llm can access it
                 self.mission_id = mission_id
-                user_prompt = current_messages[-1]["content"] if current_messages else ""
+                user_prompt = (
+                    current_messages[-1]["content"] if current_messages else ""
+                )
                 response, model_call_details = await self._call_llm(
                     user_prompt=user_prompt,
-                    history=current_messages[:-1] if len(current_messages) > 1 else None,
+                    history=current_messages[:-1]
+                    if len(current_messages) > 1
+                    else None,
                     response_format=response_format_pydantic,
                     model=self.model_name,
-                    agent_mode="reflection", # <-- Pass agent_mode
+                    agent_mode="reflection",  # <-- Pass agent_mode
                     # Don't pass mission_id - _call_llm gets it from self.mission_id
-                    log_queue=log_queue, # Pass log_queue for UI updates
-                    update_callback=update_callback, # Pass update_callback for UI updates
-                    log_llm_call=False # Disable logging here to prevent duplicate logs (handled by reflection_manager)
+                    log_queue=log_queue,  # Pass log_queue for UI updates
+                    update_callback=update_callback,  # Pass update_callback for UI updates
+                    log_llm_call=False,  # Disable logging here to prevent duplicate logs (handled by reflection_manager)
                 )
 
-                if response and response.choices and response.choices[0].message.content:
+                if (
+                    response
+                    and response.choices
+                    and response.choices[0].message.content
+                ):
                     raw_json_output = response.choices[0].message.content
                     try:
                         # Use the centralized JSON utilities to parse and prepare the response
                         raw_json_output = response.choices[0].message.content
-                        
+
                         # Log the raw response for debugging
                         if DEBUG_REFLECTION:
-                            logger.info(f"Raw LLM response (first 1000 chars): {raw_json_output[:1000]}")
-                        
+                            logger.info(
+                                f"Raw LLM response (first 1000 chars): {raw_json_output[:1000]}"
+                            )
+
                         # Parse the JSON response
                         parsed_data = parse_llm_json_response(raw_json_output)
-                        
+
                         # Log the parsed data type and content for debugging
                         if DEBUG_REFLECTION:
                             logger.info(f"Parsed data type: {type(parsed_data)}")
-                        
+
                         # Handle case where parsed_data might be a list
                         if isinstance(parsed_data, list):
-                            logger.warning(f"Parsed data is a list, not a dict. Content: {parsed_data[:2] if len(parsed_data) > 2 else parsed_data}")
+                            logger.warning(
+                                f"Parsed data is a list, not a dict. Content: {parsed_data[:2] if len(parsed_data) > 2 else parsed_data}"
+                            )
                             # If it's a list, try to find the dict inside or convert appropriately
-                            if len(parsed_data) > 0 and isinstance(parsed_data[0], dict):
+                            if len(parsed_data) > 0 and isinstance(
+                                parsed_data[0], dict
+                            ):
                                 parsed_data = parsed_data[0]
                                 logger.info("Extracted first dict from list response")
                             else:
                                 # The LLM returned just a list of questions, convert to proper format
-                                logger.warning("LLM returned only a list of questions, converting to proper ReflectionOutput format")
+                                logger.warning(
+                                    "LLM returned only a list of questions, converting to proper ReflectionOutput format"
+                                )
                                 parsed_data = {
                                     "overall_assessment": "The model returned a list of questions without proper formatting. These questions have been captured for further research.",
-                                    "new_questions": parsed_data if isinstance(parsed_data, list) else [],
+                                    "new_questions": parsed_data
+                                    if isinstance(parsed_data, list)
+                                    else [],
                                     "suggested_subsection_topics": [],
                                     "proposed_modifications": [],
                                     "sections_needing_review": [],
                                     "critical_issues_summary": None,
                                     "discard_note_ids": [],
-                                    "generated_thought": "Model output was not properly formatted - questions extracted for continued research."
+                                    "generated_thought": "Model output was not properly formatted - questions extracted for continued research.",
                                 }
-                                logger.info(f"Converted list to proper format with {len(parsed_data.get('new_questions', []))} questions")
-                        
+                                logger.info(
+                                    f"Converted list to proper format with {len(parsed_data.get('new_questions', []))} questions"
+                                )
+
                         # Extract non-schema fields like scratchpad_update
-                        extra_fields = extract_non_schema_fields(parsed_data, ReflectionOutput)
+                        extra_fields = extract_non_schema_fields(
+                            parsed_data, ReflectionOutput
+                        )
                         scratchpad_update = extra_fields.get("scratchpad_update")
-                        
+
                         # Prepare the data for Pydantic validation
-                        prepared_data = prepare_for_pydantic_validation(parsed_data, ReflectionOutput)
-                        
+                        prepared_data = prepare_for_pydantic_validation(
+                            parsed_data, ReflectionOutput
+                        )
+
                         # Special handling for suggested_subsection_topics
-                        if 'suggested_subsection_topics' in prepared_data:
+                        if "suggested_subsection_topics" in prepared_data:
                             # Filter out null values
-                            if prepared_data['suggested_subsection_topics'] is not None:
-                                prepared_data['suggested_subsection_topics'] = filter_null_values_from_list(prepared_data['suggested_subsection_topics'])
-                                logger.info(f"Filtered null values from suggested_subsection_topics, resulting in {len(prepared_data['suggested_subsection_topics'])} items")
-                                
+                            if prepared_data["suggested_subsection_topics"] is not None:
+                                prepared_data["suggested_subsection_topics"] = (
+                                    filter_null_values_from_list(
+                                        prepared_data["suggested_subsection_topics"]
+                                    )
+                                )
+                                logger.info(
+                                    f"Filtered null values from suggested_subsection_topics, resulting in {len(prepared_data['suggested_subsection_topics'])} items"
+                                )
+
                                 # Check if the first item is a tuple (only if the list is not empty)
-                                if len(prepared_data['suggested_subsection_topics']) > 0 and isinstance(prepared_data['suggested_subsection_topics'][0], tuple):
+                                if len(
+                                    prepared_data["suggested_subsection_topics"]
+                                ) > 0 and isinstance(
+                                    prepared_data["suggested_subsection_topics"][0],
+                                    tuple,
+                                ):
                                     # Flatten the tuple into individual items
-                                    prepared_data['suggested_subsection_topics'] = list(prepared_data['suggested_subsection_topics'][0])
-                                    logger.info("Flattened tuple in suggested_subsection_topics")
-                        
+                                    prepared_data["suggested_subsection_topics"] = list(
+                                        prepared_data["suggested_subsection_topics"][0]
+                                    )
+                                    logger.info(
+                                        "Flattened tuple in suggested_subsection_topics"
+                                    )
+
                         # Log the parsed data structure for debugging
                         if DEBUG_REFLECTION:
-                            logger.info(f"Parsed data after processing: {json.dumps(prepared_data, indent=2)}")
-                        
+                            logger.info(
+                                f"Parsed data after processing: {json.dumps(prepared_data, indent=2)}"
+                            )
+
                         # Validate the rest of the data against the schema
                         response_model = ReflectionOutput(**prepared_data)
                         # If we successfully created response_model, break out of retry loop
                         if response_model:
                             break
-                            
+
                     except (json.JSONDecodeError, ValidationError) as e:
-                        logger.error(f"Attempt {attempt + 1}/{max_retries}: Failed to parse/validate ReflectionOutput JSON for section {section_id}: {e}\nRaw output: {raw_json_output}", exc_info=True)
-                        
+                        logger.error(
+                            f"Attempt {attempt + 1}/{max_retries}: Failed to parse/validate ReflectionOutput JSON for section {section_id}: {e}\nRaw output: {raw_json_output}",
+                            exc_info=True,
+                        )
+
                         # Enhanced debugging for validation errors
                         if isinstance(e, ValidationError):
                             logger.error("Validation error details:")
                             for error in e.errors():
-                                logger.error(f"  Field: {error['loc']}, Error: {error['msg']}, Input: {error.get('input', 'N/A')}")
-                                
+                                logger.error(
+                                    f"  Field: {error['loc']}, Error: {error['msg']}, Input: {error.get('input', 'N/A')}"
+                                )
+
                                 # If the error is in suggested_subsection_topics, log more details
-                                if error['loc'] and error['loc'][0] == 'suggested_subsection_topics':
-                                    if 'suggested_subsection_topics' in parsed_data:
-                                        logger.error(f"  suggested_subsection_topics content: {parsed_data['suggested_subsection_topics']}")
-                                        
+                                if (
+                                    error["loc"]
+                                    and error["loc"][0] == "suggested_subsection_topics"
+                                ):
+                                    if "suggested_subsection_topics" in parsed_data:
+                                        logger.error(
+                                            f"  suggested_subsection_topics content: {parsed_data['suggested_subsection_topics']}"
+                                        )
+
                                         # Log the type of each item
-                                        for i, topic in enumerate(parsed_data['suggested_subsection_topics']):
-                                            logger.error(f"  Item {i} type: {type(topic)}, Value: {topic}")
-                        
+                                        for i, topic in enumerate(
+                                            parsed_data["suggested_subsection_topics"]
+                                        ):
+                                            logger.error(
+                                                f"  Item {i} type: {type(topic)}, Value: {topic}"
+                                            )
+
                         # If this was the last attempt, return None
                         if attempt == max_retries - 1:
-                            logger.error(f"All {max_retries} attempts failed for section {section_id}")
+                            logger.error(
+                                f"All {max_retries} attempts failed for section {section_id}"
+                            )
                             return None, model_call_details, scratchpad_update
                         else:
                             logger.warning(f"Attempt {attempt + 1} failed, retrying...")
                             continue
-                            
+
                 else:
-                    logger.error(f"Attempt {attempt + 1}/{max_retries}: ReflectionAgent failed for section {section_id}: No valid response content received from model.")
+                    logger.error(
+                        f"Attempt {attempt + 1}/{max_retries}: ReflectionAgent failed for section {section_id}: No valid response content received from model."
+                    )
                     # If this was the last attempt, return None
                     if attempt == max_retries - 1:
-                        logger.error(f"All {max_retries} attempts failed for section {section_id}")
+                        logger.error(
+                            f"All {max_retries} attempts failed for section {section_id}"
+                        )
                         return None, model_call_details, scratchpad_update
                     else:
                         logger.warning(f"Attempt {attempt + 1} failed, retrying...")
                         continue
-                    
+
             except Exception as e:
                 # Check if we should retry with json_object format
                 if not use_json_object and should_retry_with_json_object(e):
-                    logger.info(f"Retrying with json_object format due to: {str(e)[:200]}")
+                    logger.info(
+                        f"Retrying with json_object format due to: {str(e)[:200]}"
+                    )
                     response_format_pydantic = get_json_object_format()
                     use_json_object = True
                     # Don't increment attempt counter, retry with new format
                     continue
-                
-                logger.error(f"Attempt {attempt + 1}/{max_retries}: Error during ReflectionAgent execution for section {section_id}: {e}", exc_info=True)
+
+                logger.error(
+                    f"Attempt {attempt + 1}/{max_retries}: Error during ReflectionAgent execution for section {section_id}: {e}",
+                    exc_info=True,
+                )
                 # If this was the last attempt, return None
                 if attempt == max_retries - 1:
-                    logger.error(f"All {max_retries} attempts failed for section {section_id}")
+                    logger.error(
+                        f"All {max_retries} attempts failed for section {section_id}"
+                    )
                     return None, model_call_details, scratchpad_update
                 else:
                     logger.warning(f"Attempt {attempt + 1} failed, retrying...")
                     continue
-        
+
         # Handle successful response outside the retry loop
         if response_model:
             # --- Force sections_needing_review to be empty ---
             if response_model.sections_needing_review:
-                logger.warning(f"LLM suggested sections for review: {response_model.sections_needing_review}. Overriding to empty list.")
+                logger.warning(
+                    f"LLM suggested sections for review: {response_model.sections_needing_review}. Overriding to empty list."
+                )
                 response_model.sections_needing_review = []
             # --- End override ---
 
-            logger.info(f"ReflectionAgent completed successfully for section {section_id}.")
+            logger.info(
+                f"ReflectionAgent completed successfully for section {section_id}."
+            )
             # Log key decisions from the updated schema
             logger.info(f"  Assessment: {response_model.overall_assessment[:100]}...")
             logger.info(f"  New Questions: {len(response_model.new_questions)}")
-            logger.info(f"  Suggested Subsection Topics: {len(response_model.suggested_subsection_topics)}") # Updated field name
-            logger.info(f"  Proposed Modifications: {len(response_model.proposed_modifications)}")
-            logger.info(f"  Sections Needing Review: {response_model.sections_needing_review}")
-            logger.info(f"  Critical Issues: {bool(response_model.critical_issues_summary)}")
+            logger.info(
+                f"  Suggested Subsection Topics: {len(response_model.suggested_subsection_topics)}"
+            )  # Updated field name
+            logger.info(
+                f"  Proposed Modifications: {len(response_model.proposed_modifications)}"
+            )
+            logger.info(
+                f"  Sections Needing Review: {response_model.sections_needing_review}"
+            )
+            logger.info(
+                f"  Critical Issues: {bool(response_model.critical_issues_summary)}"
+            )
             # --- Log discarded notes ---
-            logger.info(f"  Notes Suggested for Discard: {len(response_model.discard_note_ids)}")
+            logger.info(
+                f"  Notes Suggested for Discard: {len(response_model.discard_note_ids)}"
+            )
             if response_model.discard_note_ids:
                 logger.info(f"    Discard IDs: {response_model.discard_note_ids}")
             # --- End log discarded notes ---
@@ -458,5 +603,7 @@ Provide ONLY a single JSON object conforming EXACTLY to the ReflectionOutput sch
             return response_model, model_call_details, scratchpad_update
         else:
             # This case means all retries failed
-            logger.error(f"ReflectionAgent failed: Could not create response model for section {section_id} after {max_retries} attempts.")
+            logger.error(
+                f"ReflectionAgent failed: Could not create response model for section {section_id} after {max_retries} attempts."
+            )
             return None, model_call_details, scratchpad_update

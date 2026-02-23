@@ -1,12 +1,12 @@
 # ai_researcher/agentic_layer/agents/note_assignment_agent.py
 import logging
-from typing import List, Dict, Any, Optional, Tuple, Set # <-- Import Set
-from pydantic import BaseModel, Field, ValidationError # <-- Import ValidationError
+from typing import List, Dict, Any, Optional, Tuple, Set  # <-- Import Set
+from pydantic import BaseModel, Field, ValidationError  # <-- Import ValidationError
 
 # Import the JSON utilities
 from ai_researcher.agentic_layer.utils.json_utils import (
     parse_llm_json_response,
-    prepare_for_pydantic_validation
+    prepare_for_pydantic_validation,
 )
 
 # Use absolute imports
@@ -14,26 +14,45 @@ from ai_researcher.agentic_layer.agents.base_agent import BaseAgent
 from ai_researcher.agentic_layer.model_dispatcher import ModelDispatcher
 from ai_researcher.agentic_layer.schemas.notes import Note
 from ai_researcher.agentic_layer.schemas.planning import ReportSection
-from ai_researcher.agentic_layer.schemas.goal import GoalEntry # <-- Import GoalEntry
-from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry # Added import
+from ai_researcher.agentic_layer.schemas.goal import GoalEntry  # <-- Import GoalEntry
+from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry  # Added import
 
 logger = logging.getLogger(__name__)
 
+
 class AssignedNotes(BaseModel):
     """Defines the structure for notes assigned to a specific section."""
-    section_id: str = Field(..., description="The ID of the section these notes are assigned to.")
-    relevant_note_ids: List[str] = Field(..., description="List of IDs of the notes deemed most relevant for this section.")
-    reasoning: str = Field(..., description="Brief justification for selecting these notes for this specific section.")
+
+    section_id: str = Field(
+        ..., description="The ID of the section these notes are assigned to."
+    )
+    relevant_note_ids: List[str] = Field(
+        ...,
+        description="List of IDs of the notes deemed most relevant for this section.",
+    )
+    reasoning: str = Field(
+        ...,
+        description="Brief justification for selecting these notes for this specific section.",
+    )
+
 
 class NoteAssignmentAgent(BaseAgent):
     """
     An agent responsible for selecting the most relevant notes for a given report section
     based on the section's goal and the content of the notes.
     """
-    agent_name = "NoteAssignmentAgent"
-    agent_description = "Assigns relevant notes to specific sections of a report outline."
 
-    def __init__(self, model_dispatcher: ModelDispatcher, controller: Optional[Any] = None, language_code: str = "en"):
+    agent_name = "NoteAssignmentAgent"
+    agent_description = (
+        "Assigns relevant notes to specific sections of a report outline."
+    )
+
+    def __init__(
+        self,
+        model_dispatcher: ModelDispatcher,
+        controller: Optional[Any] = None,
+        language_code: str = "en",
+    ):
         """
         Initializes the NoteAssignmentAgent.
 
@@ -41,10 +60,13 @@ class NoteAssignmentAgent(BaseAgent):
             model_dispatcher: An instance of ModelDispatcher to interact with LLMs.
             controller: Optional controller instance for tracking LLM usage costs.
         """
-        # Pass agent_name explicitly to the BaseAgent constructor
-        super().__init__(agent_name="NoteAssignmentAgent", model_dispatcher=model_dispatcher)
-        self.controller = controller # Store controller
-        self.mission_id = None # Initialize mission_id as None
+        super().__init__(
+            agent_name="NoteAssignmentAgent",
+            model_dispatcher=model_dispatcher,
+            language_code=language_code,
+        )
+        self.controller = controller
+        self.mission_id = None  # Initialize mission_id as None
         logger.info(f"{self.agent_name} initialized.")
 
     async def run(
@@ -52,15 +74,19 @@ class NoteAssignmentAgent(BaseAgent):
         mission_goal: str,
         section: ReportSection,
         all_notes: List[Note],
-        min_notes: int, # <-- Changed from max_notes_per_section
-        max_notes: int, # <-- Added max_notes
-        previously_assigned_note_ids: Set[str], # <-- Added previously assigned IDs
-        active_goals: Optional[List[GoalEntry]] = None, # <-- NEW: Add active goals
-        active_thoughts: Optional[List[ThoughtEntry]] = None, # <-- NEW: Add active thoughts
+        min_notes: int,  # <-- Changed from max_notes_per_section
+        max_notes: int,  # <-- Added max_notes
+        previously_assigned_note_ids: Set[str],  # <-- Added previously assigned IDs
+        active_goals: Optional[List[GoalEntry]] = None,  # <-- NEW: Add active goals
+        active_thoughts: Optional[
+            List[ThoughtEntry]
+        ] = None,  # <-- NEW: Add active thoughts
         agent_scratchpad: Optional[str] = None,
-        mission_id: Optional[str] = None, # Add mission_id parameter
-        log_queue: Optional[Any] = None, # Add log_queue parameter for UI updates
-        update_callback: Optional[Any] = None # Add update_callback parameter for UI updates
+        mission_id: Optional[str] = None,  # Add mission_id parameter
+        log_queue: Optional[Any] = None,  # Add log_queue parameter for UI updates
+        update_callback: Optional[
+            Any
+        ] = None,  # Add update_callback parameter for UI updates
         # full_outline: Optional[List[ReportSection]] = None # Optional full outline context
     ) -> Tuple[Optional[AssignedNotes], Optional[Dict[str, Any]], Optional[str]]:
         """
@@ -89,23 +115,34 @@ class NoteAssignmentAgent(BaseAgent):
         # Store mission_id as instance attribute for the duration of this call
         # This allows _call_llm to access it for updating mission stats
         self.mission_id = mission_id
-        
-        logger.info(f"Running {self.agent_name} for section '{section.section_id}' ('{section.title}')...")
+
+        logger.info(
+            f"Running {self.agent_name} for section '{section.section_id}' ('{section.title}')..."
+        )
 
         if not all_notes:
-            logger.warning(f"No notes provided to {self.agent_name} for section {section.section_id}. Returning empty assignment.")
+            logger.warning(
+                f"No notes provided to {self.agent_name} for section {section.section_id}. Returning empty assignment."
+            )
             # Return an empty assignment object, model details None, and original scratchpad
-            return AssignedNotes(section_id=section.section_id, relevant_note_ids=[], reasoning="No notes available to assign."), None, agent_scratchpad
-
+            return (
+                AssignedNotes(
+                    section_id=section.section_id,
+                    relevant_note_ids=[],
+                    reasoning="No notes available to assign.",
+                ),
+                None,
+                agent_scratchpad,
+            )
 
         prompt = self._create_prompt(
             mission_goal,
             section,
             all_notes,
-            min_notes=min_notes, # <-- Pass min_notes
-            max_notes=max_notes, # <-- Pass max_notes
-            previously_assigned_note_ids=previously_assigned_note_ids, # <-- Pass previously assigned IDs
-            active_goals=active_goals # <-- Pass active goals
+            min_notes=min_notes,  # <-- Pass min_notes
+            max_notes=max_notes,  # <-- Pass max_notes
+            previously_assigned_note_ids=previously_assigned_note_ids,  # <-- Pass previously assigned IDs
+            active_goals=active_goals,  # <-- Pass active goals
         )
         # Use a model suitable for reasoning and JSON output
         # Removed call to get_default_params
@@ -115,48 +152,66 @@ class NoteAssignmentAgent(BaseAgent):
         # Call the LLM using the base agent's method
         raw_response, model_details = await self._call_llm(
             user_prompt=prompt,
-            agent_mode="note_assignment", # Use dedicated mode for note assignment
-            response_format={"type": "json_object"}, # Pass response_format directly
-            log_queue=log_queue, # Pass log_queue for UI updates
-            update_callback=update_callback, # Pass update_callback for UI updates
-            log_llm_call=False # Disable duplicate LLM call logging since the overall operation is logged by the research manager
+            agent_mode="note_assignment",  # Use dedicated mode for note assignment
+            response_format={"type": "json_object"},  # Pass response_format directly
+            log_queue=log_queue,  # Pass log_queue for UI updates
+            update_callback=update_callback,  # Pass update_callback for UI updates
+            log_llm_call=False,  # Disable duplicate LLM call logging since the overall operation is logged by the research manager
             # history=... if needed,
             # agent_scratchpad is not directly handled by _call_llm, manage separately if needed
         )
 
         parsed_output = None
-        updated_scratchpad = agent_scratchpad # Assume scratchpad isn't modified by this specific call for now
+        updated_scratchpad = agent_scratchpad  # Assume scratchpad isn't modified by this specific call for now
 
         # Parse the response
-        if raw_response and raw_response.choices and raw_response.choices[0].message and raw_response.choices[0].message.content:
+        if (
+            raw_response
+            and raw_response.choices
+            and raw_response.choices[0].message
+            and raw_response.choices[0].message.content
+        ):
             json_content = raw_response.choices[0].message.content
             try:
                 # Parse the JSON content using our centralized utilities
                 parsed_json = parse_llm_json_response(json_content)
                 # Prepare the data for Pydantic validation
-                prepared_data = prepare_for_pydantic_validation(parsed_json, AssignedNotes)
+                prepared_data = prepare_for_pydantic_validation(
+                    parsed_json, AssignedNotes
+                )
                 # Validate using the Pydantic model
                 parsed_output = AssignedNotes(**prepared_data)
-                logger.info(f"Successfully parsed LLM response for section {section.section_id}.")
+                logger.info(
+                    f"Successfully parsed LLM response for section {section.section_id}."
+                )
             except Exception as e:
-                logger.error(f"Failed to parse/validate response for section {section.section_id}: {e}\nRaw Content Snippet: {json_content[:500]}...", exc_info=True)
+                logger.error(
+                    f"Failed to parse/validate response for section {section.section_id}: {e}\nRaw Content Snippet: {json_content[:500]}...",
+                    exc_info=True,
+                )
         else:
-            logger.error(f"LLM call failed or returned empty/invalid response structure for section {section.section_id}.")
-
+            logger.error(
+                f"LLM call failed or returned empty/invalid response structure for section {section.section_id}."
+            )
 
         if parsed_output:
             # Validate that the returned section_id matches the input section_id (already done if parsing succeeded)
             if parsed_output.section_id != section.section_id:
-                logger.warning(f"{self.agent_name} returned assignment for wrong section ID "
-                               f"(expected '{section.section_id}', got '{parsed_output.section_id}'). Correcting.")
-                parsed_output.section_id = section.section_id # Correct the ID
+                logger.warning(
+                    f"{self.agent_name} returned assignment for wrong section ID "
+                    f"(expected '{section.section_id}', got '{parsed_output.section_id}'). Correcting."
+                )
+                parsed_output.section_id = section.section_id  # Correct the ID
 
-            logger.info(f"Assigned {len(parsed_output.relevant_note_ids)} notes to section {section.section_id}.")
+            logger.info(
+                f"Assigned {len(parsed_output.relevant_note_ids)} notes to section {section.section_id}."
+            )
         else:
-            logger.error(f"{self.agent_name} failed to generate valid assignment for section {section.section_id}.")
+            logger.error(
+                f"{self.agent_name} failed to generate valid assignment for section {section.section_id}."
+            )
             # Optionally return a default empty assignment on failure?
             # parsed_output = AssignedNotes(section_id=section.section_id, relevant_note_ids=[], reasoning="Agent failed to generate assignment.")
-
 
         return parsed_output, model_details, updated_scratchpad
 
@@ -165,23 +220,27 @@ class NoteAssignmentAgent(BaseAgent):
         mission_goal: str,
         section: ReportSection,
         all_notes: List[Note],
-        min_notes: int, # <-- Changed from max_notes
-        max_notes: int, # <-- Added max_notes
-        previously_assigned_note_ids: Set[str], # <-- Added previously assigned IDs
-        active_goals: Optional[List[GoalEntry]] = None, # <-- NEW: Add active goals
-        active_thoughts: Optional[List[ThoughtEntry]] = None # <-- NEW: Add active thoughts
+        min_notes: int,  # <-- Changed from max_notes
+        max_notes: int,  # <-- Added max_notes
+        previously_assigned_note_ids: Set[str],  # <-- Added previously assigned IDs
+        active_goals: Optional[List[GoalEntry]] = None,  # <-- NEW: Add active goals
+        active_thoughts: Optional[
+            List[ThoughtEntry]
+        ] = None,  # <-- NEW: Add active thoughts
     ) -> str:
         """Creates the prompt for the LLM call, including active goals and thoughts."""
         # Truncate note content to manage prompt size
-        notes_string = "\n".join([
-            f"Note ID: {note.note_id}\n"
-            f"Content Snippet: {note.content[:350]}...\n" # Increased snippet size slightly
-            f"Source Type: {note.source_type}\n"
-            f"Source ID: {note.source_id}\n"
-            f"Metadata: {str(note.source_metadata)[:150]}...\n" # Add some metadata context
-            "---"
-            for note in all_notes
-        ])
+        notes_string = "\n".join(
+            [
+                f"Note ID: {note.note_id}\n"
+                f"Content Snippet: {note.content[:350]}...\n"  # Increased snippet size slightly
+                f"Source Type: {note.source_type}\n"
+                f"Source ID: {note.source_id}\n"
+                f"Metadata: {str(note.source_metadata)[:150]}...\n"  # Add some metadata context
+                "---"
+                for note in all_notes
+            ]
+        )
 
         # Format previously assigned notes for context
         prev_assigned_str = "None"
@@ -189,9 +248,27 @@ class NoteAssignmentAgent(BaseAgent):
             prev_assigned_str = ", ".join(sorted(list(previously_assigned_note_ids)))
 
         # Format active goals
-        goals_str = "\n".join([f"- Goal ID: {g.goal_id}, Status: {g.status}, Text: {g.text}" for g in active_goals]) if active_goals else "None" # <-- Removed .value
+        goals_str = (
+            "\n".join(
+                [
+                    f"- Goal ID: {g.goal_id}, Status: {g.status}, Text: {g.text}"
+                    for g in active_goals
+                ]
+            )
+            if active_goals
+            else "None"
+        )  # <-- Removed .value
         # Format active thoughts
-        thoughts_str = "\n".join([f"- [{t.timestamp.strftime('%Y-%m-%d %H:%M')}] {t.agent_name}: {t.content}" for t in active_thoughts]) if active_thoughts else "None"
+        thoughts_str = (
+            "\n".join(
+                [
+                    f"- [{t.timestamp.strftime('%Y-%m-%d %H:%M')}] {t.agent_name}: {t.content}"
+                    for t in active_thoughts
+                ]
+            )
+            if active_thoughts
+            else "None"
+        )
 
         prompt = f"""
 You are an expert editor responsible for assigning relevant research notes to specific sections of a final report outline. Your goal is to ensure the writing agent receives the most pertinent information for each section, avoiding redundancy where possible, while staying aligned with the overall mission goals and recent thoughts.

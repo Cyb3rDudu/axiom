@@ -7,47 +7,58 @@ from pydantic import ValidationError
 # Import the JSON utilities
 from ai_researcher.agentic_layer.utils.json_utils import (
     parse_llm_json_response,
-    prepare_for_pydantic_validation
+    prepare_for_pydantic_validation,
 )
 
 # Use absolute imports starting from the top-level package 'ai_researcher'
 from ai_researcher.agentic_layer.agents.base_agent import BaseAgent
 from ai_researcher.agentic_layer.model_dispatcher import ModelDispatcher
 from ai_researcher import config
-from ai_researcher.agentic_layer.schemas.planning import ReportSection # May need outline context
-from ai_researcher.agentic_layer.schemas.writing import WritingReflectionOutput, WritingChangeSuggestion
-from ai_researcher.agentic_layer.schemas.goal import GoalEntry # <-- Import GoalEntry
-from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry # Added import
+from ai_researcher.agentic_layer.schemas.planning import (
+    ReportSection,
+)  # May need outline context
+from ai_researcher.agentic_layer.schemas.writing import (
+    WritingReflectionOutput,
+    WritingChangeSuggestion,
+)
+from ai_researcher.agentic_layer.schemas.goal import GoalEntry  # <-- Import GoalEntry
+from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry  # Added import
 
 logger = logging.getLogger(__name__)
+
 
 class WritingReflectionAgent(BaseAgent):
     """
     Agent responsible for reflecting on a written draft, identifying issues like
     repetition, lack of clarity, or poor flow, and suggesting specific revisions.
     """
+
     def __init__(
         self,
         model_dispatcher: ModelDispatcher,
         model_name: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        controller: Optional[Any] = None, # Add controller parameter
-        language_code: str = "en" # Add language_code parameter
+        controller: Optional[Any] = None,  # Add controller parameter
+        language_code: str = "en",  # Add language_code parameter
     ):
         agent_name = "WritingReflectionAgent"
         # Determine model based on 'reflection' role in config (or a new 'writing_reflection' role if defined)
-        reflection_model_type = config.AGENT_ROLE_MODEL_TYPE.get("reflection", "fast") # Default to fast
+        reflection_model_type = config.AGENT_ROLE_MODEL_TYPE.get(
+            "reflection", "fast"
+        )  # Default to fast
         if reflection_model_type == "fast":
             provider = config.FAST_LLM_PROVIDER
             effective_model_name = config.PROVIDER_CONFIG[provider]["fast_model"]
-        elif reflection_model_type == "mid": # Explicitly check for mid
+        elif reflection_model_type == "mid":  # Explicitly check for mid
             provider = config.MID_LLM_PROVIDER
             effective_model_name = config.PROVIDER_CONFIG[provider]["mid_model"]
-        elif reflection_model_type == "intelligent": # Add check for intelligent
+        elif reflection_model_type == "intelligent":  # Add check for intelligent
             provider = config.INTELLIGENT_LLM_PROVIDER
             effective_model_name = config.PROVIDER_CONFIG[provider]["intelligent_model"]
-        else: # Fallback if type is unknown
-            logger.warning(f"Unknown reflection model type '{reflection_model_type}', falling back to fast.") # Fallback to fast for reflection? Or mid? Let's use fast.
+        else:  # Fallback if type is unknown
+            logger.warning(
+                f"Unknown reflection model type '{reflection_model_type}', falling back to fast."
+            )  # Fallback to fast for reflection? Or mid? Let's use fast.
             provider = config.FAST_LLM_PROVIDER
             effective_model_name = config.PROVIDER_CONFIG[provider]["fast_model"]
 
@@ -57,12 +68,13 @@ class WritingReflectionAgent(BaseAgent):
         super().__init__(
             agent_name=agent_name,
             model_dispatcher=model_dispatcher,
-            tool_registry=None, # No tools needed for reflection
+            tool_registry=None,
             system_prompt=system_prompt or self._default_system_prompt(),
-            model_name=effective_model_name
+            model_name=effective_model_name,
+            language_code=language_code,
         )
-        self.controller = controller # Store controller
-        self.mission_id = None # Initialize mission_id as None
+        self.controller = controller  # Store controller
+        self.mission_id = None  # Initialize mission_id as None
 
     def _default_system_prompt(self) -> str:
         """Generates the default system prompt for the Writing Reflection Agent."""
@@ -95,14 +107,20 @@ If no significant issues are found, provide a positive overall assessment, an em
     async def run(
         self,
         draft_content: str,
-        outline: Optional[List[ReportSection]] = None, # Optional outline for context
-        active_goals: Optional[List[GoalEntry]] = None, # <-- NEW: Add active goals
-        active_thoughts: Optional[List[ThoughtEntry]] = None, # <-- NEW: Add active thoughts
-        agent_scratchpad: Optional[str] = None, # NEW: Added scratchpad input
-        mission_id: Optional[str] = None, # Add mission_id parameter
-        log_queue: Optional[Any] = None, # Add log_queue parameter for UI updates
-        update_callback: Optional[Any] = None # Add update_callback parameter for UI updates
-        ) -> Tuple[Optional[WritingReflectionOutput], Optional[Dict[str, Any]], Optional[str]]: # Modified return type
+        outline: Optional[List[ReportSection]] = None,  # Optional outline for context
+        active_goals: Optional[List[GoalEntry]] = None,  # <-- NEW: Add active goals
+        active_thoughts: Optional[
+            List[ThoughtEntry]
+        ] = None,  # <-- NEW: Add active thoughts
+        agent_scratchpad: Optional[str] = None,  # NEW: Added scratchpad input
+        mission_id: Optional[str] = None,  # Add mission_id parameter
+        log_queue: Optional[Any] = None,  # Add log_queue parameter for UI updates
+        update_callback: Optional[
+            Any
+        ] = None,  # Add update_callback parameter for UI updates
+    ) -> Tuple[
+        Optional[WritingReflectionOutput], Optional[Dict[str, Any]], Optional[str]
+    ]:  # Modified return type
         """
         Analyzes the draft content, considering active goals, and returns suggestions for revision.
 
@@ -125,32 +143,55 @@ If no significant issues are found, provide a positive overall assessment, an em
         # Store mission_id as instance attribute for the duration of this call
         # This allows _call_llm to access it for updating mission stats
         self.mission_id = mission_id
-        
-        logger.info(f"{self.agent_name}: Reflecting on draft content (length: {len(draft_content)} chars)...")
-        scratchpad_update = None # Initialize
+
+        logger.info(
+            f"{self.agent_name}: Reflecting on draft content (length: {len(draft_content)} chars)..."
+        )
+        scratchpad_update = None  # Initialize
 
         outline_context = ""
         if outline:
-             # Format outline for context (reuse controller helper if possible, or simple format here)
-             outline_lines = []
-             def format_outline_recursive(section_list: List[ReportSection], level: int = 0):
-                 indent = "  " * level
-                 for i, section in enumerate(section_list):
-                     prefix = f"{indent}{i+1}." if level == 0 else f"{indent}-"
-                     outline_lines.append(f"{prefix} ID: {section.section_id}, Title: {section.title}")
-                     if section.subsections:
-                         format_outline_recursive(section.subsections, level + 1)
-             format_outline_recursive(outline)
-             outline_context = "\n\nReport Outline Structure (for context):\n---\n" + "\n".join(outline_lines) + "\n---"
+            # Format outline for context (reuse controller helper if possible, or simple format here)
+            outline_lines = []
+
+            def format_outline_recursive(
+                section_list: List[ReportSection], level: int = 0
+            ):
+                indent = "  " * level
+                for i, section in enumerate(section_list):
+                    prefix = f"{indent}{i + 1}." if level == 0 else f"{indent}-"
+                    outline_lines.append(
+                        f"{prefix} ID: {section.section_id}, Title: {section.title}"
+                    )
+                    if section.subsections:
+                        format_outline_recursive(section.subsections, level + 1)
+
+            format_outline_recursive(outline)
+            outline_context = (
+                "\n\nReport Outline Structure (for context):\n---\n"
+                + "\n".join(outline_lines)
+                + "\n---"
+            )
 
         # Include scratchpad content if available
         scratchpad_context = ""
         if agent_scratchpad:
-            scratchpad_context = f"\nCurrent Agent Scratchpad:\n---\n{agent_scratchpad}\n---\n"
+            scratchpad_context = (
+                f"\nCurrent Agent Scratchpad:\n---\n{agent_scratchpad}\n---\n"
+            )
 
         # Format active goals
         # Consistent with other agents, access g.status directly (assuming it's string-like)
-        goals_str = "\n".join([f"- Goal ID: {g.goal_id}, Status: {g.status}, Text: {g.text}" for g in active_goals]) if active_goals else "None"
+        goals_str = (
+            "\n".join(
+                [
+                    f"- Goal ID: {g.goal_id}, Status: {g.status}, Text: {g.text}"
+                    for g in active_goals
+                ]
+            )
+            if active_goals
+            else "None"
+        )
         active_goals_context = f"""
 Active Mission Goals (Consider these for tone, audience, and overall direction):
 ---
@@ -160,7 +201,12 @@ Active Mission Goals (Consider these for tone, audience, and overall direction):
         # Format active thoughts
         thoughts_context = ""
         if active_thoughts:
-            thoughts_str = "\n".join([f"- [{t.timestamp.strftime('%Y-%m-%d %H:%M')}] {t.agent_name}: {t.content}" for t in active_thoughts])
+            thoughts_str = "\n".join(
+                [
+                    f"- [{t.timestamp.strftime('%Y-%m-%d %H:%M')}] {t.agent_name}: {t.content}"
+                    for t in active_thoughts
+                ]
+            )
             thoughts_context = f"\nRecent Thoughts (Consider these for context and focus):\n---\n{thoughts_str}\n---\n"
 
         prompt = f"""Please review the following draft report content. **CRITICAL: Evaluate the draft primarily against the 'Active Mission Goals' (especially request_type, target_tone, target_audience) and 'Recent Thoughts'.** Also identify issues related to clarity, coherence, flow, repetition, and academic style. Provide an overall assessment, specific actionable suggestions for revision (referencing section_id if possible), and a concise scratchpad update summarizing your reflection.{scratchpad_context}{active_goals_context}{thoughts_context}{outline_context}
@@ -175,21 +221,23 @@ Task: Output ONLY a JSON object conforming to the WritingReflectionOutput schema
 
         messages = [{"role": "user", "content": prompt}]
         model_call_details = None
-        response_model = None # Initialize
+        response_model = None  # Initialize
         try:
             response, model_call_details = await self._call_llm(
                 user_prompt=prompt,
-                agent_mode="reflection", # Use reflection model type
-                response_format={"type": "json_object"}, # Expect JSON output
-                log_queue=log_queue, # Pass log_queue for UI updates
-                update_callback=update_callback, # Pass update_callback for UI updates
-                log_llm_call=False # Disable duplicate logging since WritingManager logs this operation
+                agent_mode="reflection",  # Use reflection model type
+                response_format={"type": "json_object"},  # Expect JSON output
+                log_queue=log_queue,  # Pass log_queue for UI updates
+                update_callback=update_callback,  # Pass update_callback for UI updates
+                log_llm_call=False,  # Disable duplicate logging since WritingManager logs this operation
             )
 
             if response and response.choices and response.choices[0].message.content:
                 json_str = response.choices[0].message.content
                 # Attempt to find JSON within potential markdown fences
-                match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', json_str, re.DOTALL)
+                match = re.search(
+                    r"```(?:json)?\s*(\{.*?\})\s*```", json_str, re.DOTALL
+                )
                 if match:
                     json_str = match.group(1)
 
@@ -197,20 +245,45 @@ Task: Output ONLY a JSON object conforming to the WritingReflectionOutput schema
                     # Parse the JSON content using our centralized utilities
                     parsed_json = parse_llm_json_response(json_str)
                     # Prepare the data for Pydantic validation
-                    prepared_data = prepare_for_pydantic_validation(parsed_json, WritingReflectionOutput)
+                    prepared_data = prepare_for_pydantic_validation(
+                        parsed_json, WritingReflectionOutput
+                    )
                     # Validate using the Pydantic model
                     response_model = WritingReflectionOutput(**prepared_data)
-                    scratchpad_update = response_model.scratchpad_update # Extract scratchpad update
-                    logger.info(f"{self.agent_name}: Reflection complete. Assessment: {response_model.overall_assessment}. Suggestions: {len(response_model.change_suggestions)}")
+                    scratchpad_update = (
+                        response_model.scratchpad_update
+                    )  # Extract scratchpad update
+                    logger.info(
+                        f"{self.agent_name}: Reflection complete. Assessment: {response_model.overall_assessment}. Suggestions: {len(response_model.change_suggestions)}"
+                    )
                     logger.info(f"  Scratchpad Update: {scratchpad_update}")
                     return response_model, model_call_details, scratchpad_update
                 except Exception as e:
-                    logger.error(f"{self.agent_name}: Failed to parse or validate JSON response: {e}. Response: {json_str}", exc_info=True)
-                    return None, model_call_details, scratchpad_update # Return scratchpad_update (which might be None)
+                    logger.error(
+                        f"{self.agent_name}: Failed to parse or validate JSON response: {e}. Response: {json_str}",
+                        exc_info=True,
+                    )
+                    return (
+                        None,
+                        model_call_details,
+                        scratchpad_update,
+                    )  # Return scratchpad_update (which might be None)
             else:
-                logger.error(f"{self.agent_name}: LLM call failed or returned empty content.")
-                return None, model_call_details, scratchpad_update # Return scratchpad_update (which might be None)
+                logger.error(
+                    f"{self.agent_name}: LLM call failed or returned empty content."
+                )
+                return (
+                    None,
+                    model_call_details,
+                    scratchpad_update,
+                )  # Return scratchpad_update (which might be None)
 
         except Exception as e:
-            logger.error(f"{self.agent_name}: Error during reflection: {e}", exc_info=True)
-            return None, model_call_details, scratchpad_update # Return scratchpad_update (which might be None)
+            logger.error(
+                f"{self.agent_name}: Error during reflection: {e}", exc_info=True
+            )
+            return (
+                None,
+                model_call_details,
+                scratchpad_update,
+            )  # Return scratchpad_update (which might be None)
