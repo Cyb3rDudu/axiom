@@ -1212,15 +1212,14 @@ Output:
                             retry_count = 0  # Reset retry count for prompt-only attempt
                             break  # Break inner loop to retry without response_format
                         else:
-                            # Other 400 error, not format-related, or already tried all fallbacks
                             final_response = handle_api_error(e)
-                            return (
-                                final_action,
-                                final_request,
-                                formatting_preferences,
-                                None,
-                                model_details,
-                            )
+                            agent_result = {
+                                "response": final_response,
+                                "action": "error",
+                                "request": None,
+                                "formatting_preferences": None,
+                            }
+                            return agent_result, model_details, None
 
                     # Increment retry count for non-schema errors
                     retry_count += 1
