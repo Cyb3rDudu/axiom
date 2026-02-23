@@ -34,6 +34,11 @@ class GraphStore:
         embedding: Optional[list] = None
     ) -> str:
         """Add or update entity with description accumulation, return entity_id."""
+        # Truncate text fields to fit database column constraints
+        entity_text = entity_text[:255] if entity_text else entity_text
+        canonical_form = canonical_form[:255] if canonical_form else canonical_form
+        description = description[:2000] if description else description
+
         db = next(get_db())
         try:
             # Updated SQL to accumulate descriptions on conflict (capped at 2000 chars)
