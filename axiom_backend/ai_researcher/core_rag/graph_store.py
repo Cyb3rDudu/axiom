@@ -33,9 +33,10 @@ class GraphStore:
         description: Optional[str] = None,
         embedding: Optional[list] = None
     ) -> str:
-        """Add or update entity, return entity_id."""
+        """Add or update entity with description accumulation, return entity_id."""
         db = next(get_db())
         try:
+            # Updated SQL to accumulate descriptions on conflict (capped at 2000 chars)
             query = text("""
                 INSERT INTO document_entities
                     (entity_text, entity_type, canonical_form, description, embedding)
@@ -43,6 +44,11 @@ class GraphStore:
                 ON CONFLICT (canonical_form, entity_type)
                 DO UPDATE SET
                     entity_text = EXCLUDED.entity_text,
+                    description = CASE
+                        WHEN document_entities.description IS NULL THEN EXCLUDED.description
+                        WHEN EXCLUDED.description IS NULL THEN document_entities.description
+                        ELSE SUBSTR(document_entities.description || ' | ' || EXCLUDED.description, 1, 2000)
+                    END,
                     updated_at = CURRENT_TIMESTAMP
                 RETURNING id
             """)
@@ -63,6 +69,117 @@ class GraphStore:
             raise
         finally:
             db.close()
+
+    def summarize_entity_descriptions(self, llm_client=None) -> int:
+        """
+        Consolidate accumulated entity descriptions using LLM.
+        Query entities with 3+ description fragments and summarize into single description.
+
+        Args:
+            llm_client: Optional LLM client for summarization. If None, uses heuristic.
+
+        Returns:
+            Number of entities updated
+        """
+        db = next(get_db())
+        try:
+            # Find entities with multiple description fragments (split by ' | ')
+            query = text("""
+                SELECT id, entity_text, entity_type, canonical_form, description
+                FROM document_entities
+                WHERE description IS NOT NULL
+                  AND description LIKE '% | %'
+                  AND (LENGTH(description) - LENGTH(REPLACE(description, ' | ', ''))) >= 4
+            """)
+
+            results = db.execute(query).fetchall()
+            updated_count = 0
+
+            for row in results:
+                entity_id = row[0]
+                entity_text = row[1]
+                entity_type = row[2]
+                description = row[4]
+
+                # Split fragments
+                fragments = description.split(' | ')
+
+                if len(fragments) < 3:
+                    continue
+
+                if llm_client:
+                    # Use LLM to consolidate
+                    try:
+                        consolidated = self._llm_consolidate(
+                            llm_client, entity_text, entity_type, fragments
+                        )
+                    except Exception as e:
+                        logger.warning(f"LLM consolidation failed for entity {entity_id}: {e}")
+                        # Fallback to heuristic
+                        consolidated = self._heuristic_consolidate(fragments)
+                else:
+                    # Use heuristic: keep first 3 unique fragments
+                    consolidated = self._heuristic_consolidate(fragments)
+
+                # Update entity
+                update_query = text("""
+                    UPDATE document_entities
+                    SET description = :description, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = :id
+                """)
+                db.execute(update_query, {'id': entity_id, 'description': consolidated})
+                updated_count += 1
+
+            db.commit()
+            logger.info(f"Summarized descriptions for {updated_count} entities")
+            return updated_count
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to summarize entity descriptions: {e}")
+            return 0
+        finally:
+            db.close()
+
+    def _heuristic_consolidate(self, fragments: List[str], max_length: int = 500) -> str:
+        """Consolidate fragments using heuristic: keep unique, truncate."""
+        seen = set()
+        unique = []
+        for frag in fragments:
+            frag_lower = frag.lower().strip()
+            if frag_lower not in seen and len(frag.strip()) > 10:
+                seen.add(frag_lower)
+                unique.append(frag.strip())
+
+        result = ' | '.join(unique[:5])  # Keep max 5 unique fragments
+        return result[:max_length] if len(result) > max_length else result
+
+    def _llm_consolidate(
+        self,
+        llm_client,
+        entity_text: str,
+        entity_type: str,
+        fragments: List[str]
+    ) -> str:
+        """Use LLM to consolidate description fragments."""
+        prompt = f"""Consolidate the following description fragments about the entity "{entity_text}" (type: {entity_type}) into a single, coherent description. Remove redundancy and keep key information.
+
+Fragments:
+{chr(10).join(f'- {f}' for f in fragments[:10])}
+
+Return only the consolidated description (max 500 chars):"""
+
+        # This is a placeholder - actual implementation depends on LLM client interface
+        # Adjust based on your LLM client's API
+        try:
+            if hasattr(llm_client, 'chat'):
+                response = llm_client.chat([{"role": "user", "content": prompt}])
+                return response.choices[0].message.content[:500]
+            else:
+                # Fallback to heuristic
+                return self._heuristic_consolidate(fragments)
+        except Exception:
+            return self._heuristic_consolidate(fragments)
 
     def link_entity_to_chunk(
         self,

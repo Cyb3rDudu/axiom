@@ -98,12 +98,18 @@ class EntityExtractor:
             # Map spaCy labels to our types
             entity_type = self._map_spacy_label(ent.label_)
             if entity_type:
+                # Extract ~200 char context window around entity
+                context_start = max(0, ent.start_char - 100)
+                context_end = min(len(text), ent.end_char + 100)
+                context_snippet = text[context_start:context_end]
+
                 entities.append({
                     "text": ent.text,
                     "type": entity_type,
                     "canonical_form": self._normalize_entity(ent.text),
                     "position": ent.start_char,
-                    "confidence": 0.8  # Default for spaCy
+                    "confidence": 0.8,  # Default for spaCy
+                    "context_snippet": context_snippet
                 })
 
         return entities

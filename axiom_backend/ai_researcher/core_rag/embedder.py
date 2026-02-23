@@ -164,6 +164,7 @@ class TextEmbedder:
         """
         Generates dense and sparse embeddings for a list of text chunks.
         Includes memory management to prevent CUDA OOM errors.
+        Prepends section titles to chunk text for better embedding context.
 
         Args:
             chunks: A list of chunk dictionaries, each expected to have a 'text' key.
@@ -176,7 +177,16 @@ class TextEmbedder:
             return []
 
         with self._model_lock:  # Ensure thread-safe access to the model
-            all_texts = [chunk["text"] for chunk in chunks]
+            # Prepend section titles to text for better embedding context
+            all_texts = []
+            for chunk in chunks:
+                text = chunk["text"]
+                titles = chunk.get("metadata", {}).get("section_titles", [])
+                if titles:
+                    prefix = "> Section: " + " > ".join(titles)
+                    text = f"{prefix}\n\n{text}"
+                all_texts.append(text)
+
             num_chunks = len(all_texts)
             logger.debug(f"Generating embeddings for {num_chunks} chunks in batches of {self.batch_size}...")
 

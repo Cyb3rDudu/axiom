@@ -380,23 +380,36 @@ class PGVectorStore:
     def delete_document(self, doc_id: str) -> Tuple[int, int]:
         """
         Delete all chunks for a document.
-        
+
         Args:
             doc_id: Document ID to delete
-            
+
         Returns:
             Tuple of (chunks_deleted, chunks_deleted) for compatibility
         """
         db = next(get_db())
-        
+
         try:
             # Delete all chunks for the document
             deleted = db.query(DocumentChunk).filter_by(doc_id=doc_id).delete()
             db.commit()
-            
+
             logger.info(f"Deleted {deleted} chunks for document {doc_id}")
+
+            # OpenSearch cleanup
+            try:
+                from ai_researcher import config
+                if config.ENABLE_OPENSEARCH:
+                    from .opensearch_store import get_opensearch_store
+                    os_store = get_opensearch_store()
+                    if os_store:
+                        os_deleted = os_store.delete_document(doc_id)
+                        logger.info(f"Deleted {os_deleted} chunks from OpenSearch for document {doc_id}")
+            except Exception as e:
+                logger.warning(f"OpenSearch cleanup failed for document {doc_id}: {e}")
+
             return deleted, deleted
-            
+
         except Exception as e:
             db.rollback()
             logger.error(f"Error deleting document {doc_id}: {e}")

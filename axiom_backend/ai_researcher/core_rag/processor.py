@@ -762,6 +762,17 @@ class DocumentProcessor:
                 chunks_added_count = len(chunks)
                 print(f"  Successfully added {chunks_added_count} chunks to vector store for {pdf_path.name}.")
 
+                # --- Index in OpenSearch for fulltext search ---
+                if config.ENABLE_OPENSEARCH:
+                    try:
+                        from .opensearch_store import get_opensearch_store
+                        os_store = get_opensearch_store()
+                        if os_store:
+                            os_indexed = os_store.add_chunks(doc_id, chunks_with_embeddings)
+                            print(f"  Indexed {os_indexed} chunks in OpenSearch for fulltext search.")
+                    except Exception as e_opensearch:
+                        print(f"  Warning: OpenSearch indexing failed: {e_opensearch}")
+
                 # --- Build Knowledge Graph ---
                 from ai_researcher import config
                 if config.ENABLE_KNOWLEDGE_GRAPH:
@@ -797,10 +808,12 @@ class DocumentProcessor:
                                     )
 
                                     for entity in entities:
+                                        # Pass context_snippet as description for entity merging
                                         entity_id = graph_store.add_entity(
                                             entity['text'],
                                             entity['type'],
-                                            entity['canonical_form']
+                                            entity['canonical_form'],
+                                            description=entity.get('context_snippet')
                                         )
                                         graph_store.link_entity_to_chunk(
                                             entity_id,
