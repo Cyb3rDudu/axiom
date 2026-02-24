@@ -13,6 +13,51 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _make_strict_compatible(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Post-process a Pydantic-generated JSON schema to be compatible with
+    OpenAI's strict structured outputs mode.
+
+    Strict mode requires:
+    - All properties listed in 'required'
+    - No 'default' values
+    - 'additionalProperties': false on all objects
+
+    This recursively processes the schema and all $defs.
+    """
+
+    def _fix_object(obj: Dict[str, Any]) -> None:
+        if not isinstance(obj, dict):
+            return
+
+        # Fix object types: ensure all properties are in required, remove defaults
+        if obj.get("type") == "object" and "properties" in obj:
+            obj["required"] = list(obj["properties"].keys())
+            obj["additionalProperties"] = False
+            for prop in obj["properties"].values():
+                prop.pop("default", None)
+                _fix_object(prop)
+
+        # Recurse into anyOf / oneOf / allOf
+        for key in ("anyOf", "oneOf", "allOf"):
+            if key in obj:
+                for item in obj[key]:
+                    _fix_object(item)
+
+        # Recurse into items (arrays)
+        if "items" in obj and isinstance(obj["items"], dict):
+            _fix_object(obj["items"])
+
+    schema = json.loads(json.dumps(schema))  # deep copy
+    _fix_object(schema)
+
+    # Process $defs (nested model definitions)
+    for def_schema in schema.get("$defs", {}).values():
+        _fix_object(def_schema)
+
+    return schema
+
+
 def get_json_schema_format(
     pydantic_model: type[BaseModel], schema_name: str = "response"
 ) -> Dict[str, Any]:
@@ -26,11 +71,14 @@ def get_json_schema_format(
     Returns:
         Dictionary with json_schema format configuration
     """
+    raw_schema = pydantic_model.model_json_schema()
+    strict_schema = _make_strict_compatible(raw_schema)
+
     return {
         "type": "json_schema",
         "json_schema": {
             "name": schema_name,
-            "schema": pydantic_model.model_json_schema(),
+            "schema": strict_schema,
             "strict": True,  # Enable strict validation
         },
     }
