@@ -2920,7 +2920,12 @@ async def get_mission_settings(
             get_initial_exploration_doc_results, get_initial_exploration_web_results,
             get_main_research_doc_results, get_main_research_web_results,
             get_thought_pad_context_limit, get_max_notes_for_assignment_reranking,
-            get_max_concurrent_requests, get_skip_final_replanning
+            get_max_concurrent_requests, get_skip_final_replanning,
+            get_max_research_cycles_per_section, get_max_total_iterations,
+            get_max_total_depth, get_max_suggestions_per_batch,
+            get_min_notes_per_section_assignment, get_max_notes_per_section_assignment,
+            get_max_planning_context_chars, get_writing_previous_content_preview_chars,
+            get_research_note_content_limit, get_writing_agent_max_context_chars
         )
         
         # Get language_code with fallback chain
@@ -2932,7 +2937,8 @@ async def get_mission_settings(
         else:
             language_code = 'en'
 
-        # Get effective settings (after fallback)
+        # Get effective settings (after fallback) — must populate ALL fields
+        # so the frontend can display defaults instead of "undefined"
         effective_settings = MissionSettings(
             language_code=language_code,
             initial_research_max_depth=get_initial_research_max_depth(mission_id),
@@ -2946,7 +2952,17 @@ async def get_mission_settings(
             thought_pad_context_limit=get_thought_pad_context_limit(mission_id),
             max_notes_for_assignment_reranking=get_max_notes_for_assignment_reranking(mission_id),
             max_concurrent_requests=get_max_concurrent_requests(mission_id),
-            skip_final_replanning=get_skip_final_replanning(mission_id)
+            skip_final_replanning=get_skip_final_replanning(mission_id),
+            max_research_cycles_per_section=get_max_research_cycles_per_section(mission_id),
+            max_total_iterations=get_max_total_iterations(mission_id),
+            max_total_depth=get_max_total_depth(mission_id),
+            max_suggestions_per_batch=get_max_suggestions_per_batch(mission_id),
+            min_notes_per_section_assignment=get_min_notes_per_section_assignment(mission_id),
+            max_notes_per_section_assignment=get_max_notes_per_section_assignment(mission_id),
+            max_planning_context_chars=get_max_planning_context_chars(mission_id),
+            writing_previous_content_preview_chars=get_writing_previous_content_preview_chars(mission_id),
+            research_note_content_limit=get_research_note_content_limit(mission_id),
+            writing_agent_max_context_chars=get_writing_agent_max_context_chars(mission_id),
         )
         
         return MissionSettingsResponse(
