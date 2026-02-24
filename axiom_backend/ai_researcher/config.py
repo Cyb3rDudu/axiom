@@ -258,6 +258,20 @@ DEEPSEEK_VERIFIER_MODEL = os.getenv("DEEPSEEK_VERIFIER_MODEL", "deepseek-chat")
 DEEPSEEK_MAX_TOKENS_LIMIT = 8192
 DEEPSEEK_CONTEXT_WINDOW = 128000
 
+AGENT_ROLE_MODEL_TYPE = {
+    "planning": "fast",
+    "research": "mid",
+    "writing": "mid",
+    "simplified_writing": "mid",
+    "reflection": "intelligent",
+    "messenger": "mid",
+    "note_assignment": "fast",
+    "query_preparation": "intelligent",
+    "query_strategy": "fast",
+    "verifier": "verifier",
+    "default": "mid",
+}
+
 # --- OpenRouter Configuration ---
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
