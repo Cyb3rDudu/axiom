@@ -32,7 +32,7 @@ export interface Log {
 interface Mission {
   id: string
   request: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'paused' | 'stopped' | 'planning'
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'paused' | 'stopped' | 'planning' | 'revising'
   plan?: string
   notes?: Note[]
   logs?: Log[]

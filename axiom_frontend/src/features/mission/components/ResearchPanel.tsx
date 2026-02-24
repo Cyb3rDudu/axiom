@@ -345,6 +345,8 @@ export const ResearchPanel: React.FC = () => {
         return 'bg-orange-500'
       case 'planning':
         return 'bg-blue-500'
+      case 'revising':
+        return 'bg-blue-500 animate-pulse'
       case 'failed':
         return 'bg-destructive'
       default:
@@ -366,6 +368,8 @@ export const ResearchPanel: React.FC = () => {
         return 'Pending'
       case 'planning':
         return 'Planning'
+      case 'revising':
+        return 'Revising Outline'
       case 'failed':
         return 'Failed'
       default:
