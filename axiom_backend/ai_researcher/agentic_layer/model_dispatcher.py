@@ -729,6 +729,9 @@ class ModelDispatcher:
         # Check if this is a GPT-5 model that requires special handling
         is_gpt5_model = any(x in selected_model_name.lower() for x in ["gpt-5", "gpt5"])
 
+        # Check if this is a DeepSeek-reasoner model (direct API or OpenRouter)
+        is_deepseek_reasoner = "deepseek-reasoner" in selected_model_name.lower()
+
         # Check if this is Azure OpenAI by looking at the base URL
         base_url_str = str(getattr(client, "base_url", ""))
         is_azure = "azure" in base_url_str.lower()
@@ -775,6 +778,19 @@ class ModelDispatcher:
                 logger.info(
                     f"Using GPT-5 model {selected_model_name} with thinking_level: {thinking_level}"
                 )
+        elif is_deepseek_reasoner:
+            # DeepSeek-reasoner: max_tokens includes reasoning tokens, so force a higher limit.
+            # Temperature is not supported by this model.
+            deepseek_max = config.DEEPSEEK_MAX_TOKENS_LIMIT
+            logger.info(
+                f"Detected DeepSeek-reasoner model: {selected_model_name}, "
+                f"forcing max_tokens={deepseek_max} (was {max_tokens_for_call}), omitting temperature"
+            )
+            request_params = {
+                "model": selected_model_name,
+                "messages": messages,
+                "max_tokens": deepseek_max,
+            }
         else:
             # Standard parameters for non-GPT-5 models or GPT-5 via OpenRouter
             request_params = {
@@ -1327,6 +1343,21 @@ class ModelDispatcher:
                             request_params["temperature"] = 1
                         # Continue with retry logic below
 
+                # DeepSeek-reasoner error recovery
+                if is_deepseek_reasoner and e.status_code == 400:
+                    if "temperature" in error_msg:
+                        logger.info(
+                            f"DeepSeek-reasoner temperature error, removing temperature and retrying..."
+                        )
+                        request_params.pop("temperature", None)
+                        # Continue with retry logic below
+                    elif "max_tokens" in error_msg:
+                        logger.info(
+                            f"DeepSeek-reasoner max_tokens error, forcing max_tokens={config.DEEPSEEK_MAX_TOKENS_LIMIT} and retrying..."
+                        )
+                        request_params["max_tokens"] = config.DEEPSEEK_MAX_TOKENS_LIMIT
+                        # Continue with retry logic below
+
                 # Check if this is a schema-related error that might be fixed by fallback
                 from ai_researcher.agentic_layer.utils.json_format_helper import (
                     should_retry_with_json_object,
@@ -1521,17 +1552,35 @@ class ModelDispatcher:
                 f"Messages truncated to fit context window of {context_window} tokens for provider {provider_name}"
             )
 
+        # Check if this is a DeepSeek-reasoner model (direct API or OpenRouter)
+        is_deepseek_reasoner = "deepseek-reasoner" in selected_model_name.lower()
+
         logger.info(
             f"Dispatching streaming request via client for '{client.base_url}' to model: {selected_model_name} (Agent Mode: {effective_agent_mode}, Max Tokens: {max_tokens_for_call}, Temp: {temperature_for_call})"
         )
 
-        request_params = {
-            "model": selected_model_name,
-            "messages": messages,
-            "max_tokens": max_tokens_for_call,
-            "temperature": temperature_for_call,
-            "stream": True,  # Enable streaming
-        }
+        if is_deepseek_reasoner:
+            # DeepSeek-reasoner: max_tokens includes reasoning tokens, so force a higher limit.
+            # Temperature is not supported by this model.
+            deepseek_max = config.DEEPSEEK_MAX_TOKENS_LIMIT
+            logger.info(
+                f"Detected DeepSeek-reasoner model (stream): {selected_model_name}, "
+                f"forcing max_tokens={deepseek_max} (was {max_tokens_for_call}), omitting temperature"
+            )
+            request_params = {
+                "model": selected_model_name,
+                "messages": messages,
+                "max_tokens": deepseek_max,
+                "stream": True,
+            }
+        else:
+            request_params = {
+                "model": selected_model_name,
+                "messages": messages,
+                "max_tokens": max_tokens_for_call,
+                "temperature": temperature_for_call,
+                "stream": True,  # Enable streaming
+            }
 
         # Only add OpenAI headers if the provider is OpenRouter
         if provider_name == "openrouter":
@@ -1595,9 +1644,33 @@ class ModelDispatcher:
             logger.error(f"API connection error during streaming LLM call: {e}")
             raise e
         except openai.APIStatusError as e:
+            error_msg = str(e)
             logger.error(
                 f"API status error during streaming LLM call: Status={e.status_code}, Response={e.response}"
             )
+            # DeepSeek-reasoner streaming error recovery
+            if is_deepseek_reasoner and e.status_code == 400:
+                if "temperature" in error_msg:
+                    logger.info(
+                        f"DeepSeek-reasoner stream temperature error, removing temperature and retrying..."
+                    )
+                    request_params.pop("temperature", None)
+                elif "max_tokens" in error_msg:
+                    logger.info(
+                        f"DeepSeek-reasoner stream max_tokens error, forcing max_tokens={config.DEEPSEEK_MAX_TOKENS_LIMIT} and retrying..."
+                    )
+                    request_params["max_tokens"] = config.DEEPSEEK_MAX_TOKENS_LIMIT
+                else:
+                    raise e
+                # Retry the streaming call with corrected params
+                try:
+                    stream = await client.chat.completions.create(**request_params)
+                    async for chunk in stream:
+                        yield chunk
+                    return
+                except Exception as retry_error:
+                    logger.error(f"DeepSeek-reasoner stream fallback failed: {retry_error}")
+                    raise retry_error
             raise e
         except Exception as e:
             logger.error(
