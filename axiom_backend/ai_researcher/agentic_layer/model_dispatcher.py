@@ -620,7 +620,7 @@ class ModelDispatcher:
         # --- END NEW ---
 
         # --- Cap max_tokens based on provider limits ---
-        provider_config = config.PROVIDER_CONFIGS.get(provider_name, {})
+        provider_config = config.PROVIDER_CONFIG.get(provider_name, {})
         provider_max_tokens = provider_config.get("max_tokens_limit")
         if provider_max_tokens and max_tokens_for_call > provider_max_tokens:
             logger.info(
@@ -1416,7 +1416,7 @@ class ModelDispatcher:
         )
 
         # --- Cap max_tokens based on provider limits ---
-        provider_config = config.PROVIDER_CONFIGS.get(provider_name, {})
+        provider_config = config.PROVIDER_CONFIG.get(provider_name, {})
         provider_max_tokens = provider_config.get("max_tokens_limit")
         if provider_max_tokens and max_tokens_for_call > provider_max_tokens:
             logger.info(
