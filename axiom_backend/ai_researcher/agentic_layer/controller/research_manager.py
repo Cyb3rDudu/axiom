@@ -1322,11 +1322,12 @@ Instructions:
         current_scratchpad = self.controller.context_manager.get_scratchpad(mission_id)
         mission_goal = final_plan.mission_goal
 
-        # Get sections in processing order - only research_based sections need note assignment
+        # Get sections in processing order - only leaf research_based sections need note assignment
+        # (parent sections with subsections synthesize from their children, not from notes directly)
         all_sections = outline_utils.get_sections_in_order(final_plan.report_outline)
         sections_to_process = [
-            s for s in all_sections 
-            if s.research_strategy == "research_based"
+            s for s in all_sections
+            if s.research_strategy == "research_based" and not s.subsections
         ]
         total_sections = len(all_sections)
         research_sections = len(sections_to_process)
