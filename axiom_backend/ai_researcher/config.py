@@ -226,6 +226,8 @@ else:
 # Set the desired LLM provider for fast and mid models: "openrouter" or "local"
 FAST_LLM_PROVIDER = get_fast_llm_provider()  # Default fast to openrouter
 MID_LLM_PROVIDER = get_mid_llm_provider()  # Default mid to openrouter
+INTELLIGENT_LLM_PROVIDER = get_intelligent_llm_provider()  # Default intelligent to openrouter
+VERIFIER_LLM_PROVIDER = get_verifier_llm_provider()  # Default verifier to openrouter
 
 # --- Local LLM Configuration ---
 # Example: Using a local server like LM Studio, Ollama, etc.
