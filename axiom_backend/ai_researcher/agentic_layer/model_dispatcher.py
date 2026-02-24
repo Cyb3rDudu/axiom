@@ -18,8 +18,85 @@ from ai_researcher.dynamic_config import get_model_name
 from ai_researcher.user_context import get_user_settings
 from ai_researcher.global_semaphore import get_global_llm_semaphore
 
-# Configure logging - respect LOG_LEVEL environment variable
 logger = logging.getLogger(__name__)
+
+
+def estimate_token_count(text: str) -> int:
+    return len(text) // 4 + 1
+
+
+def estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
+    total = 0
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            total += estimate_token_count(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    total += estimate_token_count(part.get("text", ""))
+        total += 4
+    return total
+
+
+def truncate_messages_to_context(
+    messages: List[Dict[str, Any]],
+    max_context_tokens: int,
+    max_tokens_for_completion: int = 4000,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    available_for_messages = max_context_tokens - max_tokens_for_completion - 500
+
+    if available_for_messages < 1000:
+        available_for_messages = max_context_tokens - 500
+
+    current_tokens = estimate_messages_tokens(messages)
+
+    if current_tokens <= available_for_messages:
+        return messages, False
+
+    logger.warning(
+        f"Context truncation needed: {current_tokens} tokens > {available_for_messages} available "
+        f"(context_window: {max_context_tokens}, completion: {max_tokens_for_completion})"
+    )
+
+    if len(messages) <= 1:
+        return messages, False
+
+    truncated = []
+    if messages and messages[0].get("role") == "system":
+        truncated.append(messages[0])
+        remaining_messages = messages[1:]
+    else:
+        remaining_messages = messages
+
+    truncated_content = []
+    for msg in reversed(remaining_messages):
+        msg_tokens = estimate_messages_tokens([msg])
+        current_total = estimate_messages_tokens(truncated) + estimate_messages_tokens(
+            truncated_content
+        )
+
+        if current_total + msg_tokens < available_for_messages:
+            truncated_content.insert(0, msg)
+        else:
+            content = msg.get("content", "")
+            if isinstance(content, str) and len(content) > 1000:
+                available = available_for_messages - current_total - 200
+                if available > 500:
+                    chars_to_keep = available * 4
+                    truncated_content_msg = {
+                        **msg,
+                        "content": content[:chars_to_keep]
+                        + "\n... [content truncated due to length]",
+                    }
+                    truncated_content.insert(0, truncated_content_msg)
+
+    truncated.extend(truncated_content)
+
+    final_tokens = estimate_messages_tokens(truncated)
+    logger.info(f"Truncated messages from {current_tokens} to {final_tokens} tokens")
+
+    return truncated, True
 
 
 class ModelDispatcher:
@@ -627,6 +704,16 @@ class ModelDispatcher:
                 f"Capping max_tokens from {max_tokens_for_call} to {provider_max_tokens} for provider {provider_name}"
             )
             max_tokens_for_call = provider_max_tokens
+
+        # --- Truncate messages if context window exceeded ---
+        context_window = provider_config.get("context_window", 128000)
+        messages, was_truncated = truncate_messages_to_context(
+            messages, context_window, max_tokens_for_call
+        )
+        if was_truncated:
+            logger.warning(
+                f"Messages truncated to fit context window of {context_window} tokens for provider {provider_name}"
+            )
 
         # --- CRITICAL DEBUG LOGGING ---
         # print(f"🚀🚀🚀 DISPATCHING LLM REQUEST 🚀🚀🚀")
@@ -1423,6 +1510,16 @@ class ModelDispatcher:
                 f"Capping max_tokens from {max_tokens_for_call} to {provider_max_tokens} for provider {provider_name}"
             )
             max_tokens_for_call = provider_max_tokens
+
+        # --- Truncate messages if context window exceeded ---
+        context_window = provider_config.get("context_window", 128000)
+        messages, was_truncated = truncate_messages_to_context(
+            messages, context_window, max_tokens_for_call
+        )
+        if was_truncated:
+            logger.warning(
+                f"Messages truncated to fit context window of {context_window} tokens for provider {provider_name}"
+            )
 
         logger.info(
             f"Dispatching streaming request via client for '{client.base_url}' to model: {selected_model_name} (Agent Mode: {effective_agent_mode}, Max Tokens: {max_tokens_for_call}, Temp: {temperature_for_call})"
