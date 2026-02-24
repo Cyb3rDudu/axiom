@@ -645,6 +645,20 @@ PROVIDER_CONFIG = {
         "max_tokens_limit": DEEPSEEK_MAX_TOKENS_LIMIT,  # 8192
         "context_window": DEEPSEEK_CONTEXT_WINDOW,
     },
+    "openai": {
+        # OpenAI provider configuration comes from user settings
+        "base_url": "https://api.openai.com/v1/",
+        "api_key": None,
+        "fast_model": None,
+        "mid_model": None,
+        "intelligent_model": None,
+        "verifier_model": None,
+        "light_model": None,
+        "heavy_model": None,
+        "beast_model": None,
+        "max_tokens_limit": 16384,  # gpt-4o max completion tokens
+        "context_window": 128000,
+    },
     "custom": {
         # Custom provider configuration comes from user settings
         # Base config will be overridden by user-specific settings
