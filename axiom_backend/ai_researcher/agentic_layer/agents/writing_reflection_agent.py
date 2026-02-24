@@ -237,22 +237,8 @@ Task: Output ONLY a JSON object conforming to the WritingReflectionOutput schema
 
                 if format_mode == "json_object":
                     current_response_format = {"type": "json_object"}
-                    schema_hints = """
-{
-  "overall_assessment": "string - your evaluation of the draft",
-  "change_suggestions": [
-    {
-      "section_id": "string or null",
-      "issue_type": "clarity|coherence|repetition|style|goal_alignment|other",
-      "description": "string - description of the issue",
-      "suggested_fix": "string - how to fix it"
-    }
-  ],
-  "scratchpad_update": "string - summary of reflection",
-  "generated_thought": "string - key insight from reflection"
-}"""
                     current_messages = enhance_messages_for_json_object(
-                        messages, schema_hints
+                        messages, WritingReflectionOutput
                     )
 
                 response, model_call_details = await self._call_llm(
