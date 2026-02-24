@@ -256,63 +256,6 @@ DEEPSEEK_VERIFIER_MODEL = os.getenv("DEEPSEEK_VERIFIER_MODEL", "deepseek-chat")
 DEEPSEEK_MAX_TOKENS_LIMIT = 8192
 DEEPSEEK_CONTEXT_WINDOW = 128000
 
-PROVIDER_CONFIG = {
-    "openrouter": {
-        "base_url": OPENROUTER_BASE_URL,
-        "api_key": OPENROUTER_API_KEY,
-        "fast_model": OPENROUTER_FAST_MODEL,
-        "mid_model": OPENROUTER_MID_MODEL,
-        "intelligent_model": OPENROUTER_INTELLIGENT_MODEL,
-        "verifier_model": OPENROUTER_VERIFIER_MODEL,
-        "light_model": OPENROUTER_FAST_MODEL,
-        "heavy_model": OPENROUTER_MID_MODEL,
-        "beast_model": OPENROUTER_INTELLIGENT_MODEL,
-        "context_window": 128000,
-    },
-    "local": {
-        "base_url": LOCAL_LLM_BASE_URL,
-        "api_key": LOCAL_LLM_API_KEY,
-        "fast_model": LOCAL_LLM_FAST_MODEL,
-        "mid_model": LOCAL_LLM_MID_MODEL,
-        "intelligent_model": LOCAL_LLM_INTELLIGENT_MODEL,
-        "verifier_model": LOCAL_LLM_VERIFIER_MODEL,
-        "light_model": LOCAL_LLM_FAST_MODEL,
-        "heavy_model": LOCAL_LLM_MID_MODEL,
-        "beast_model": LOCAL_LLM_INTELLIGENT_MODEL,
-        "context_window": 32768,
-    },
-    "deepseek": {
-        "base_url": DEEPSEEK_BASE_URL,
-        "api_key": DEEPSEEK_API_KEY,
-        "fast_model": DEEPSEEK_FAST_MODEL,
-        "mid_model": DEEPSEEK_MID_MODEL,
-        "intelligent_model": DEEPSEEK_INTELLIGENT_MODEL,
-        "verifier_model": DEEPSEEK_VERIFIER_MODEL,
-        "light_model": DEEPSEEK_FAST_MODEL,
-        "heavy_model": DEEPSEEK_MID_MODEL,
-        "beast_model": DEEPSEEK_INTELLIGENT_MODEL,
-        "max_tokens_limit": DEEPSEEK_MAX_TOKENS_LIMIT,
-        "context_window": DEEPSEEK_CONTEXT_WINDOW,
-    },
-    "openai": {
-        "base_url": "https://api.openai.com/v1/",
-        "api_key": None,
-        "context_window": 128000,
-    },
-    "custom": {
-        "base_url": None,
-        "api_key": None,
-        "fast_model": "custom-fast-model",
-        "mid_model": "custom-mid-model",
-        "intelligent_model": "custom-intelligent-model",
-        "verifier_model": "custom-verifier-model",
-        "light_model": "custom-fast-model",
-        "heavy_model": "custom-mid-model",
-        "beast_model": "custom-intelligent-model",
-        "context_window": 128000,
-    },
-}
-
 # --- OpenRouter Configuration ---
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -656,6 +599,7 @@ PROVIDER_CONFIG = {
         "light_model": OPENROUTER_FAST_MODEL,
         "heavy_model": OPENROUTER_MID_MODEL,
         "beast_model": OPENROUTER_INTELLIGENT_MODEL,
+        "context_window": 128000,
     },
     "local": {
         "base_url": LOCAL_LLM_BASE_URL,
@@ -668,6 +612,7 @@ PROVIDER_CONFIG = {
         "light_model": LOCAL_LLM_FAST_MODEL,
         "heavy_model": LOCAL_LLM_MID_MODEL,
         "beast_model": LOCAL_LLM_INTELLIGENT_MODEL,
+        "context_window": 32768,
     },
     "deepseek": {
         "base_url": DEEPSEEK_BASE_URL,
@@ -682,6 +627,7 @@ PROVIDER_CONFIG = {
         "beast_model": DEEPSEEK_INTELLIGENT_MODEL,
         # DeepSeek-specific limits
         "max_tokens_limit": DEEPSEEK_MAX_TOKENS_LIMIT,  # 8192
+        "context_window": DEEPSEEK_CONTEXT_WINDOW,
     },
     "custom": {
         # Custom provider configuration comes from user settings
@@ -696,6 +642,7 @@ PROVIDER_CONFIG = {
         "light_model": "custom-fast-model",
         "heavy_model": "custom-mid-model",
         "beast_model": "custom-intelligent-model",
+        "context_window": 128000,
     },
 }
 
