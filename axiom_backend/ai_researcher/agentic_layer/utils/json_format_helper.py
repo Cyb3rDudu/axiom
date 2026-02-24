@@ -167,6 +167,8 @@ def should_retry_with_json_object(error: Exception) -> bool:
         "recursionerror",
         "maximum recursion depth exceeded",
         "provider returned error",
+        "invalid schema for response_format",
+        "'required' is required to be supplied",
     ]
 
     for pattern in json_schema_error_patterns:
