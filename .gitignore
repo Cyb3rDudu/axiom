@@ -250,6 +250,7 @@ dist
 # Gatsby files
 .cache/
 public
+!axiom_frontend/public
 
 # vue-js/vite build output
 dist/
