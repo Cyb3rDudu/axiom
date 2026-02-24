@@ -36,6 +36,7 @@ from ai_researcher.agentic_layer.utils.json_format_helper import (
     get_json_object_format,
     enhance_messages_for_json_object,
     should_retry_with_json_object,
+    should_retry_without_response_format,
 )
 
 logger = logging.getLogger(__name__)
@@ -337,6 +338,7 @@ Provide ONLY a single JSON object conforming EXACTLY to the ReflectionOutput sch
             pydantic_model=ReflectionOutput, schema_name="reflection_output"
         )
         use_json_object = False
+        use_no_format = False
 
         # Add retry logic similar to other agents
         max_retries = 3
@@ -540,21 +542,30 @@ Provide ONLY a single JSON object conforming EXACTLY to the ReflectionOutput sch
                         continue
 
             except Exception as e:
-                # Check if we should retry with json_object format
                 if not use_json_object and should_retry_with_json_object(e):
                     logger.info(
                         f"Retrying with json_object format due to: {str(e)[:200]}"
                     )
                     response_format_pydantic = get_json_object_format()
                     use_json_object = True
-                    # Don't increment attempt counter, retry with new format
+                    continue
+
+                if use_json_object and should_retry_without_response_format(e):
+                    logger.info(
+                        f"Falling back to prompt-only mode (no response_format): {str(e)[:200]}"
+                    )
+                    response_format_pydantic = None
+                    current_messages = enhance_messages_for_json_object(
+                        messages, ReflectionOutput
+                    )
+                    use_json_object = False
+                    use_no_format = True
                     continue
 
                 logger.error(
                     f"Attempt {attempt + 1}/{max_retries}: Error during ReflectionAgent execution for section {section_id}: {e}",
                     exc_info=True,
                 )
-                # If this was the last attempt, return None
                 if attempt == max_retries - 1:
                     logger.error(
                         f"All {max_retries} attempts failed for section {section_id}"
