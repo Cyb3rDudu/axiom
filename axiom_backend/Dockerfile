@@ -1,5 +1,5 @@
-# Use NVIDIA CUDA base image for GPU support (compatible with driver 575.x)
-FROM nvidia/cuda:12.9.1-base-ubuntu24.04
+# Stage 1: Dependencies (cached unless requirements.txt or system deps change)
+FROM nvidia/cuda:12.9.1-base-ubuntu24.04 AS deps
 
 WORKDIR /app
 
@@ -41,6 +41,12 @@ COPY requirements.txt /app/requirements.txt
 
 # Install Python dependencies in virtual environment
 RUN pip install --no-cache-dir -r requirements.txt
+
+
+# Stage 2: Application (rebuilt on every code change)
+FROM deps AS app
+
+WORKDIR /app
 
 # Copy the application code
 COPY . /app/
