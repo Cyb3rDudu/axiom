@@ -1714,7 +1714,7 @@ If no relevant sub-questions are identified, return an empty list for "sub_quest
             logger.warning(
                 f"Could not read full content for {filename}. Cannot extract windows."
             )
-            return [], False, False
+            return [], False
 
         logger.debug(
             f"Processing full content for {filename} (length: {len(full_content_original)} chars)"
