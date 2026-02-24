@@ -987,8 +987,10 @@ Available Research Tools:
                 if is_top_level and i == 0 and any(kw in title_lower for kw in ["introduction", "intro", "overview", "background"]):
                     new_strategy = "content_based"
                 
-                # Rule 2: Conclusion/Summary/Discussion sections (by title)
-                elif any(kw in title_lower for kw in ["conclusion", "summary", "discussion", "future", "implications", "final", "recommendations"]):
+                # Rule 2: Conclusion/Summary sections — only the LAST top-level section
+                # (upstream trusts LLM; only override the final wrap-up section, not
+                #  middle sections whose titles happen to contain "discussion" etc.)
+                elif is_top_level and i == len(sections) - 1 and any(kw in title_lower for kw in ["conclusion", "summary", "final"]):
                     new_strategy = "content_based"
                 
                 # Rule 3: Sections with subsections should synthesize from them
