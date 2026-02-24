@@ -4,25 +4,27 @@ from typing import Optional, List, Dict, Any, Tuple
 
 from pydantic import ValidationError
 
-# Import the JSON utilities
 from ai_researcher.agentic_layer.utils.json_utils import (
     parse_llm_json_response,
     prepare_for_pydantic_validation,
 )
+from ai_researcher.agentic_layer.utils.json_format_helper import (
+    get_json_object_format,
+    enhance_messages_for_json_object,
+    should_retry_with_json_object,
+    should_retry_without_response_format,
+)
 
-# Use absolute imports starting from the top-level package 'ai_researcher'
 from ai_researcher.agentic_layer.agents.base_agent import BaseAgent
 from ai_researcher.agentic_layer.model_dispatcher import ModelDispatcher
 from ai_researcher import config
-from ai_researcher.agentic_layer.schemas.planning import (
-    ReportSection,
-)  # May need outline context
+from ai_researcher.agentic_layer.schemas.planning import ReportSection
 from ai_researcher.agentic_layer.schemas.writing import (
     WritingReflectionOutput,
     WritingChangeSuggestion,
 )
-from ai_researcher.agentic_layer.schemas.goal import GoalEntry  # <-- Import GoalEntry
-from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry  # Added import
+from ai_researcher.agentic_layer.schemas.goal import GoalEntry
+from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry
 
 logger = logging.getLogger(__name__)
 
@@ -221,69 +223,105 @@ Task: Output ONLY a JSON object conforming to the WritingReflectionOutput schema
 
         messages = [{"role": "user", "content": prompt}]
         model_call_details = None
-        response_model = None  # Initialize
-        try:
-            response, model_call_details = await self._call_llm(
-                user_prompt=prompt,
-                agent_mode="reflection",  # Use reflection model type
-                response_format={"type": "json_object"},  # Expect JSON output
-                log_queue=log_queue,  # Pass log_queue for UI updates
-                update_callback=update_callback,  # Pass update_callback for UI updates
-                log_llm_call=False,  # Disable duplicate logging since WritingManager logs this operation
-            )
+        response_model = None
 
-            if response and response.choices and response.choices[0].message.content:
-                json_str = response.choices[0].message.content
-                # Attempt to find JSON within potential markdown fences
-                match = re.search(
-                    r"```(?:json)?\s*(\{.*?\})\s*```", json_str, re.DOTALL
+        format_mode = "json_object"
+        max_retries = 3
+        retry_count = 0
+        last_error = None
+
+        while retry_count < max_retries:
+            try:
+                current_response_format = None
+                current_messages = messages
+
+                if format_mode == "json_object":
+                    current_response_format = {"type": "json_object"}
+                    schema_hints = """
+{
+  "overall_assessment": "string - your evaluation of the draft",
+  "change_suggestions": [
+    {
+      "section_id": "string or null",
+      "issue_type": "clarity|coherence|repetition|style|goal_alignment|other",
+      "description": "string - description of the issue",
+      "suggested_fix": "string - how to fix it"
+    }
+  ],
+  "scratchpad_update": "string - summary of reflection",
+  "generated_thought": "string - key insight from reflection"
+}"""
+                    current_messages = enhance_messages_for_json_object(
+                        messages, schema_hints
+                    )
+
+                response, model_call_details = await self._call_llm(
+                    user_prompt=prompt,
+                    agent_mode="reflection",
+                    response_format=current_response_format,
+                    log_queue=log_queue,
+                    update_callback=update_callback,
+                    log_llm_call=False,
                 )
-                if match:
-                    json_str = match.group(1)
 
-                try:
-                    # Parse the JSON content using our centralized utilities
-                    parsed_json = parse_llm_json_response(json_str)
-                    # Prepare the data for Pydantic validation
-                    prepared_data = prepare_for_pydantic_validation(
-                        parsed_json, WritingReflectionOutput
+                if (
+                    response
+                    and response.choices
+                    and response.choices[0].message.content
+                ):
+                    json_str = response.choices[0].message.content
+                    match = re.search(
+                        r"```(?:json)?\s*(\{.*?\})\s*```", json_str, re.DOTALL
                     )
-                    # Validate using the Pydantic model
-                    response_model = WritingReflectionOutput(**prepared_data)
-                    scratchpad_update = (
-                        response_model.scratchpad_update
-                    )  # Extract scratchpad update
-                    logger.info(
-                        f"{self.agent_name}: Reflection complete. Assessment: {response_model.overall_assessment}. Suggestions: {len(response_model.change_suggestions)}"
-                    )
-                    logger.info(f"  Scratchpad Update: {scratchpad_update}")
-                    return response_model, model_call_details, scratchpad_update
-                except Exception as e:
+                    if match:
+                        json_str = match.group(1)
+
+                    try:
+                        parsed_json = parse_llm_json_response(json_str)
+                        prepared_data = prepare_for_pydantic_validation(
+                            parsed_json, WritingReflectionOutput
+                        )
+                        response_model = WritingReflectionOutput(**prepared_data)
+                        scratchpad_update = response_model.scratchpad_update
+                        logger.info(
+                            f"{self.agent_name}: Reflection complete. Assessment: {response_model.overall_assessment}. Suggestions: {len(response_model.change_suggestions)}"
+                        )
+                        logger.info(f"  Scratchpad Update: {scratchpad_update}")
+                        return response_model, model_call_details, scratchpad_update
+                    except Exception as parse_error:
+                        logger.warning(
+                            f"{self.agent_name}: Attempt {retry_count + 1}/{max_retries}: Failed to parse JSON: {parse_error}"
+                        )
+                        last_error = parse_error
+                        retry_count += 1
+                        continue
+                else:
                     logger.error(
-                        f"{self.agent_name}: Failed to parse or validate JSON response: {e}. Response: {json_str}",
-                        exc_info=True,
+                        f"{self.agent_name}: LLM call failed or returned empty content."
                     )
-                    return (
-                        None,
-                        model_call_details,
-                        scratchpad_update,
-                    )  # Return scratchpad_update (which might be None)
-            else:
-                logger.error(
-                    f"{self.agent_name}: LLM call failed or returned empty content."
-                )
-                return (
-                    None,
-                    model_call_details,
-                    scratchpad_update,
-                )  # Return scratchpad_update (which might be None)
+                    retry_count += 1
+                    continue
 
-        except Exception as e:
-            logger.error(
-                f"{self.agent_name}: Error during reflection: {e}", exc_info=True
-            )
-            return (
-                None,
-                model_call_details,
-                scratchpad_update,
-            )  # Return scratchpad_update (which might be None)
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    f"{self.agent_name}: Attempt {retry_count + 1}/{max_retries} failed: {e}"
+                )
+
+                if (
+                    format_mode == "json_object"
+                    and should_retry_without_response_format(e)
+                ):
+                    logger.info(
+                        f"{self.agent_name}: Falling back to prompt-only mode (no response_format)"
+                    )
+                    format_mode = "none"
+                    retry_count = 0
+                    continue
+
+                retry_count += 1
+
+        logger.error(
+            f"{self.agent_name}: All retries exhausted. Last error: {last_error}"
+        )
+        return None, model_call_details, scratchpad_update

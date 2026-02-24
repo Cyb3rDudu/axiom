@@ -1,21 +1,25 @@
 # ai_researcher/agentic_layer/agents/note_assignment_agent.py
 import logging
-from typing import List, Dict, Any, Optional, Tuple, Set  # <-- Import Set
-from pydantic import BaseModel, Field, ValidationError  # <-- Import ValidationError
+from typing import List, Dict, Any, Optional, Tuple, Set
+from pydantic import BaseModel, Field, ValidationError
 
-# Import the JSON utilities
 from ai_researcher.agentic_layer.utils.json_utils import (
     parse_llm_json_response,
     prepare_for_pydantic_validation,
 )
+from ai_researcher.agentic_layer.utils.json_format_helper import (
+    get_json_object_format,
+    enhance_messages_for_json_object,
+    should_retry_with_json_object,
+    should_retry_without_response_format,
+)
 
-# Use absolute imports
 from ai_researcher.agentic_layer.agents.base_agent import BaseAgent
 from ai_researcher.agentic_layer.model_dispatcher import ModelDispatcher
 from ai_researcher.agentic_layer.schemas.notes import Note
 from ai_researcher.agentic_layer.schemas.planning import ReportSection
-from ai_researcher.agentic_layer.schemas.goal import GoalEntry  # <-- Import GoalEntry
-from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry  # Added import
+from ai_researcher.agentic_layer.schemas.goal import GoalEntry
+from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry
 
 logger = logging.getLogger(__name__)
 
@@ -149,45 +153,107 @@ class NoteAssignmentAgent(BaseAgent):
 
         output_model = AssignedNotes
 
-        # Call the LLM using the base agent's method
-        raw_response, model_details = await self._call_llm(
-            user_prompt=prompt,
-            agent_mode="note_assignment",  # Use dedicated mode for note assignment
-            response_format={"type": "json_object"},  # Pass response_format directly
-            log_queue=log_queue,  # Pass log_queue for UI updates
-            update_callback=update_callback,  # Pass update_callback for UI updates
-            log_llm_call=False,  # Disable duplicate LLM call logging since the overall operation is logged by the research manager
-            # history=... if needed,
-            # agent_scratchpad is not directly handled by _call_llm, manage separately if needed
-        )
+        format_mode = "json_object"
+        max_retries = 3
+        retry_count = 0
+        raw_response = None
+        model_details = None
+        last_error = None
+
+        while retry_count < max_retries:
+            try:
+                current_response_format = None
+
+                if format_mode == "json_object":
+                    current_response_format = {"type": "json_object"}
+                    schema_hints = """
+{
+  "section_id": "string - the section ID",
+  "relevant_note_ids": ["list of note IDs"],
+  "reasoning": "string - why these notes are relevant"
+}"""
+                    enhanced_prompt = enhance_messages_for_json_object(
+                        [{"role": "user", "content": prompt}], schema_hints
+                    )
+                    user_prompt = enhanced_prompt[0]["content"]
+                else:
+                    user_prompt = prompt
+
+                raw_response, model_details = await self._call_llm(
+                    user_prompt=prompt,
+                    agent_mode="note_assignment",
+                    response_format=current_response_format,
+                    log_queue=log_queue,
+                    update_callback=update_callback,
+                    log_llm_call=False,
+                )
+
+                if (
+                    raw_response
+                    and raw_response.choices
+                    and raw_response.choices[0].message.content
+                ):
+                    json_content = raw_response.choices[0].message.content
+                    try:
+                        parsed_json = parse_llm_json_response(json_content)
+                        prepared_data = prepare_for_pydantic_validation(
+                            parsed_json, AssignedNotes
+                        )
+                        parsed_output = AssignedNotes(**prepared_data)
+                        logger.info(
+                            f"Successfully parsed LLM response for section {section.section_id}."
+                        )
+                        break
+                    except Exception as parse_error:
+                        logger.warning(
+                            f"Attempt {retry_count + 1}/{max_retries}: Failed to parse JSON: {parse_error}"
+                        )
+                        last_error = parse_error
+                        retry_count += 1
+                        continue
+                else:
+                    logger.error(
+                        f"LLM call failed or returned empty response for section {section.section_id}."
+                    )
+                    retry_count += 1
+                    continue
+
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Attempt {retry_count + 1}/{max_retries} failed: {e}")
+
+                if (
+                    format_mode == "json_object"
+                    and should_retry_without_response_format(e)
+                ):
+                    logger.info(f"{self.agent_name}: Falling back to prompt-only mode")
+                    format_mode = "none"
+                    retry_count = 0
+                    continue
+
+                retry_count += 1
 
         parsed_output = None
-        updated_scratchpad = agent_scratchpad  # Assume scratchpad isn't modified by this specific call for now
+        updated_scratchpad = agent_scratchpad
 
-        # Parse the response
         if (
             raw_response
             and raw_response.choices
-            and raw_response.choices[0].message
             and raw_response.choices[0].message.content
         ):
             json_content = raw_response.choices[0].message.content
             try:
-                # Parse the JSON content using our centralized utilities
                 parsed_json = parse_llm_json_response(json_content)
-                # Prepare the data for Pydantic validation
                 prepared_data = prepare_for_pydantic_validation(
                     parsed_json, AssignedNotes
                 )
-                # Validate using the Pydantic model
                 parsed_output = AssignedNotes(**prepared_data)
                 logger.info(
                     f"Successfully parsed LLM response for section {section.section_id}."
                 )
             except Exception as e:
                 logger.error(
-                    f"Failed to parse/validate response for section {section.section_id}: {e}\nRaw Content Snippet: {json_content[:500]}...",
-                    exc_info=True,
+                    f"Failed to parse/validate response for section {section.section_id}: {e}"
                 )
         else:
             logger.error(
