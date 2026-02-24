@@ -1960,8 +1960,8 @@ class AsyncContextManager:
             
             # Send WebSocket update for phase change
             try:
-                from services.websocket_manager import get_websocket_manager
-                ws_manager = get_websocket_manager()
+                from services.websocket_manager import websocket_manager
+                ws_manager = websocket_manager
                 
                 phase_update = {
                     "type": "phase_update",
