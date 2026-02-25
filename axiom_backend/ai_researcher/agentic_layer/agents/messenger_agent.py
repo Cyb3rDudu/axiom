@@ -16,6 +16,8 @@ from ai_researcher.agentic_layer.utils.json_format_helper import (
     enhance_messages_for_json_object,
     should_retry_with_json_object,
     should_retry_without_response_format,
+    get_initial_format_mode,
+    mark_format_unsupported,
 )
 
 from ai_researcher.agentic_layer.agents.base_agent import BaseAgent, AgentOutput
@@ -525,7 +527,8 @@ Output:
         max_retries = 3
         retry_count = 0
         last_error = None
-        format_mode = "json_schema"  # Start with json_schema, fallback through json_object to none
+        _provider, _model = self.model_dispatcher.get_provider_and_model_for_mode("messenger")
+        format_mode = get_initial_format_mode(_provider, _model)
         max_format_attempts = 3  # Try json_schema, then json_object, then none
 
         for format_attempt in range(max_format_attempts):
@@ -1198,6 +1201,8 @@ Output:
                             logger.info(
                                 f"MessengerAgent: Detected json_schema compatibility issue, falling back to json_object: {str(e)[:200]}"
                             )
+                            if _provider and _model:
+                                mark_format_unsupported(_provider, _model, "json_schema")
                             format_mode = "json_object"
                             retry_count = 0  # Reset retry count for json_object attempt
                             break  # Break inner loop to retry with json_object
@@ -1208,6 +1213,8 @@ Output:
                             logger.info(
                                 f"MessengerAgent: Detected json_object compatibility issue, falling back to prompt-only mode: {str(e)[:200]}"
                             )
+                            if _provider and _model:
+                                mark_format_unsupported(_provider, _model, "json_object")
                             format_mode = "none"
                             retry_count = 0  # Reset retry count for prompt-only attempt
                             break  # Break inner loop to retry without response_format

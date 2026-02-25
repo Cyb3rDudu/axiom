@@ -448,6 +448,20 @@ class ModelDispatcher:
         # Ensure the return type matches the async client
         return client, model_name, provider_name
 
+    def get_provider_and_model_for_mode(self, agent_mode: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+        """Return (provider_name, model_name) that would be used for a given agent_mode, without creating a client."""
+        effective_agent_mode = agent_mode or "default"
+        model_type = config.AGENT_ROLE_MODEL_TYPE.get(
+            effective_agent_mode, config.AGENT_ROLE_MODEL_TYPE["default"]
+        )
+        current_user_settings = get_user_settings()
+        if current_user_settings and "ai_endpoints" in current_user_settings:
+            advanced_models = current_user_settings["ai_endpoints"].get("advanced_models", {})
+            if model_type in advanced_models:
+                model_config = advanced_models[model_type]
+                return model_config.get("provider"), model_config.get("model_name")
+        return None, None
+
     def _load_openai_pricing(self):
         """
         Load OpenAI pricing from the JSON configuration file.

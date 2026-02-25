@@ -12,7 +12,9 @@ from ai_researcher.agentic_layer.utils.json_format_helper import (
     get_json_schema_format,
     get_json_object_format,
     enhance_messages_for_json_object,
-    should_retry_with_json_object
+    should_retry_with_json_object,
+    get_initial_format_mode,
+    mark_format_unsupported,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,7 +168,8 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
         )
         analysis_result: Optional[RequestAnalysisOutput] = None
         model_details = None
-        format_mode = "json_schema"  # Start with json_schema, fallback to json_object, then none
+        _provider, _model = self.controller.model_dispatcher.get_provider_and_model_for_mode("planning")
+        format_mode = get_initial_format_mode(_provider, _model)
         max_format_attempts = 3  # Try json_schema, then json_object, then no response_format
         log_status = "failure"
         error_msg = None
@@ -224,10 +227,14 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                 # Check if we should retry with different format
                 if format_mode == "json_schema" and should_retry_with_json_object(e):
                     logger.info(f"Request analysis: Detected json_schema compatibility issue, retrying with json_object format")
+                    if _provider and _model:
+                        mark_format_unsupported(_provider, _model, "json_schema")
                     format_mode = "json_object"
                     continue  # Retry with json_object format
                 elif format_mode == "json_object" and should_retry_without_response_format(e):
                     logger.info(f"Request analysis: Detected json_object also not supported, retrying without response_format")
+                    if _provider and _model:
+                        mark_format_unsupported(_provider, _model, "json_object")
                     format_mode = "none"
                     continue  # Retry without response_format
 

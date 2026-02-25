@@ -13,7 +13,9 @@ from ai_researcher.agentic_layer.utils.json_format_helper import (
     get_json_schema_format,
     get_json_object_format,
     enhance_messages_for_json_object,
-    should_retry_with_json_object
+    should_retry_with_json_object,
+    get_initial_format_mode,
+    mark_format_unsupported,
 )
 from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry # Import ThoughtEntry
 
@@ -680,7 +682,8 @@ Available Research Tools:
         self.system_prompt = system_prompt
 
         # Try with json_schema first, with fallback to json_object, then no response_format
-        format_mode = "json_schema"  # Start with json_schema, fallback to json_object, then none
+        _provider, _model = self.model_dispatcher.get_provider_and_model_for_mode("planning")
+        format_mode = get_initial_format_mode(_provider, _model)
         max_format_attempts = 3  # Try json_schema, then json_object, then no response_format
 
         for format_attempt in range(max_format_attempts):
@@ -748,10 +751,14 @@ Available Research Tools:
 
                 if format_mode == "json_schema" and should_retry_with_json_object(e):
                     logger.info(f"{self.agent_name}: Detected json_schema compatibility issue: {str(e)[:200]}")
+                    if _provider and _model:
+                        mark_format_unsupported(_provider, _model, "json_schema")
                     format_mode = "json_object"
                     continue  # Retry with json_object format
                 elif format_mode == "json_object" and should_retry_without_response_format(e):
                     logger.info(f"{self.agent_name}: Detected json_object also not supported: {str(e)[:200]}")
+                    if _provider and _model:
+                        mark_format_unsupported(_provider, _model, "json_object")
                     format_mode = "none"
                     continue  # Retry without response_format
                 else:

@@ -12,6 +12,49 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Runtime cache: tracks the best format mode per (provider, model) pair.
+# Populated dynamically when json_schema or json_object calls fail.
+# Key: (provider, model) tuple — Value: "json_object" or "none"
+_format_fallback_cache: Dict[Tuple[str, str], str] = {}
+
+
+def mark_format_unsupported(provider: str, model: str, failed_mode: str) -> None:
+    """
+    Record that a (provider, model) pair does not support a given format mode.
+    Called after a json_schema or json_object call fails, so subsequent calls
+    skip directly to the working mode.
+    """
+    key = (provider.lower(), model.lower())
+    if failed_mode == "json_schema":
+        fallback = "json_object"
+    elif failed_mode == "json_object":
+        fallback = "none"
+    else:
+        return
+    _format_fallback_cache[key] = fallback
+    logger.info(
+        f"Cached format fallback: ({provider}, {model}) -> skip to '{fallback}'"
+    )
+
+
+def get_initial_format_mode(provider: Optional[str] = None, model: Optional[str] = None) -> str:
+    """
+    Return the best initial response format mode for a (provider, model) pair.
+
+    Uses a runtime cache: the first call for a new pair tries json_schema.
+    If it fails, mark_format_unsupported() caches the result so all subsequent
+    calls skip directly to the working mode.
+    """
+    if provider and model:
+        key = (provider.lower(), model.lower())
+        cached = _format_fallback_cache.get(key)
+        if cached:
+            logger.info(
+                f"Using cached format mode '{cached}' for ({provider}, {model})"
+            )
+            return cached
+    return "json_schema"
+
 
 def _make_strict_compatible(schema: Dict[str, Any]) -> Dict[str, Any]:
     """

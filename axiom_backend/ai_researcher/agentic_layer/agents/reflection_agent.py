@@ -37,6 +37,8 @@ from ai_researcher.agentic_layer.utils.json_format_helper import (
     enhance_messages_for_json_object,
     should_retry_with_json_object,
     should_retry_without_response_format,
+    get_initial_format_mode,
+    mark_format_unsupported,
 )
 
 logger = logging.getLogger(__name__)
@@ -334,11 +336,21 @@ Provide ONLY a single JSON object conforming EXACTLY to the ReflectionOutput sch
             messages.insert(0, {"role": "system", "content": self.system_prompt})
 
         # Try json_schema format first, with fallback to json_object
-        response_format_pydantic = get_json_schema_format(
-            pydantic_model=ReflectionOutput, schema_name="reflection_output"
-        )
-        use_json_object = False
-        use_no_format = False
+        _provider, _model = self.model_dispatcher.get_provider_and_model_for_mode("reflection")
+        _initial_mode = get_initial_format_mode(_provider, _model)
+        if _initial_mode == "json_object":
+            response_format_pydantic = get_json_object_format()
+            use_json_object = True
+        elif _initial_mode == "none":
+            response_format_pydantic = None
+            use_json_object = False
+            use_no_format = True
+        else:
+            response_format_pydantic = get_json_schema_format(
+                pydantic_model=ReflectionOutput, schema_name="reflection_output"
+            )
+            use_json_object = False
+            use_no_format = False
 
         # Add retry logic similar to other agents
         max_retries = 3
@@ -542,10 +554,12 @@ Provide ONLY a single JSON object conforming EXACTLY to the ReflectionOutput sch
                         continue
 
             except Exception as e:
-                if not use_json_object and should_retry_with_json_object(e):
+                if not use_json_object and not use_no_format and should_retry_with_json_object(e):
                     logger.info(
                         f"Retrying with json_object format due to: {str(e)[:200]}"
                     )
+                    if _provider and _model:
+                        mark_format_unsupported(_provider, _model, "json_schema")
                     response_format_pydantic = get_json_object_format()
                     use_json_object = True
                     continue
@@ -554,6 +568,8 @@ Provide ONLY a single JSON object conforming EXACTLY to the ReflectionOutput sch
                     logger.info(
                         f"Falling back to prompt-only mode (no response_format): {str(e)[:200]}"
                     )
+                    if _provider and _model:
+                        mark_format_unsupported(_provider, _model, "json_object")
                     response_format_pydantic = None
                     current_messages = enhance_messages_for_json_object(
                         messages, ReflectionOutput
