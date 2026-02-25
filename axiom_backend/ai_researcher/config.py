@@ -536,7 +536,7 @@ MARKER_LLM_BASE_URL = os.getenv("MARKER_LLM_BASE_URL", "")
 
 # --- Knowledge Graph Configuration ---
 ENABLE_KNOWLEDGE_GRAPH = os.getenv("ENABLE_KNOWLEDGE_GRAPH", "True").lower() == "true"
-ENABLE_GRAPH_RETRIEVAL = os.getenv("ENABLE_GRAPH_RETRIEVAL", "False").lower() == "true"
+ENABLE_GRAPH_RETRIEVAL = os.getenv("ENABLE_GRAPH_RETRIEVAL", "True").lower() == "true"
 
 GRAPH_RETRIEVAL_CONFIG = {
     "max_depth": int(os.getenv("GRAPH_MAX_DEPTH", "2")),
@@ -555,7 +555,7 @@ ENTITY_EXTRACTION_CONFIG = {
 }
 
 # --- OpenSearch Configuration ---
-ENABLE_OPENSEARCH = os.getenv("ENABLE_OPENSEARCH", "False").lower() == "true"
+ENABLE_OPENSEARCH = os.getenv("ENABLE_OPENSEARCH", "True").lower() == "true"
 OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "10.36.0.110")
 OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
 OPENSEARCH_INDEX = os.getenv("OPENSEARCH_INDEX", "axiom_chunks")
@@ -565,7 +565,7 @@ OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "")
 
 # --- Initial Exploration Phase ---
 CONSULT_RAG_FOR_INITIAL_QUESTIONS = (
-    os.getenv("CONSULT_RAG_FOR_INITIAL_QUESTIONS", "True").lower() == "false"
+    os.getenv("CONSULT_RAG_FOR_INITIAL_QUESTIONS", "True").lower() == "true"
 )  # Whether to consult RAG DB for initial question generation
 INITIAL_EXPLORATION_DOC_RESULTS = (
     get_initial_exploration_doc_results()
