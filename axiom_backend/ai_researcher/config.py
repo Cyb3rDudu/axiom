@@ -261,10 +261,10 @@ DEEPSEEK_CONTEXT_WINDOW = 128000
 # --- Z.AI (Zhipu GLM) Configuration ---
 ZAI_API_KEY = os.getenv("ZAI_API_KEY", "")
 ZAI_BASE_URL = os.getenv("ZAI_BASE_URL_OPENAI", "https://api.z.ai/api/coding/paas/v4/")
-ZAI_FAST_MODEL = os.getenv("ZAI_FAST_MODEL", "glm-4.7-flashx")
+ZAI_FAST_MODEL = os.getenv("ZAI_FAST_MODEL", "glm-4.5-air")
 ZAI_MID_MODEL = os.getenv("ZAI_MID_MODEL", "glm-4.7")
 ZAI_INTELLIGENT_MODEL = os.getenv("ZAI_INTELLIGENT_MODEL", "glm-5")
-ZAI_VERIFIER_MODEL = os.getenv("ZAI_VERIFIER_MODEL", "glm-4.7-flash")
+ZAI_VERIFIER_MODEL = os.getenv("ZAI_VERIFIER_MODEL", "glm-4.5")
 
 AGENT_ROLE_MODEL_TYPE = {
     "planning": "fast",
