@@ -21,6 +21,7 @@ interface AISettings {
     openrouter: ProviderConfig
     openai: ProviderConfig
     deepseek: ProviderConfig
+    zai: ProviderConfig
     custom: ProviderConfig
   }
   // Remove the simple models dict - we'll always use advanced_models internally
@@ -155,8 +156,9 @@ const validateAISettings = (settings: UserSettings): string | null => {
     const [providerName, providerConfig] = enabledProvider
     
     // Check if API key is provided for providers that require it
-    if ((providerName === 'openrouter' || providerName === 'openai') && !providerConfig.api_key) {
-      return `Please provide an API key for ${providerName === 'openrouter' ? 'OpenRouter' : 'OpenAI'}`
+    if ((providerName === 'openrouter' || providerName === 'openai' || providerName === 'zai') && !providerConfig.api_key) {
+      const displayNames: Record<string, string> = { openrouter: 'OpenRouter', openai: 'OpenAI', zai: 'Z.AI' }
+      return `Please provide an API key for ${displayNames[providerName] || providerName}`
     }
     
     // Check if base URL is provided for custom provider
@@ -187,7 +189,7 @@ const validateAISettings = (settings: UserSettings): string | null => {
       }
       
       // Check API key for providers that require it
-      if ((model.provider === 'openrouter' || model.provider === 'openai') && !model.api_key) {
+      if ((model.provider === 'openrouter' || model.provider === 'openai' || model.provider === 'zai') && !model.api_key) {
         return `Please provide an API key for ${modelType} model (${model.provider})`
       }
       
@@ -223,6 +225,11 @@ const defaultSettings: UserSettings = {
         enabled: false,
         api_key: null,
         base_url: 'https://api.deepseek.com/v1/'
+      },
+      zai: {
+        enabled: false,
+        api_key: null,
+        base_url: 'https://api.z.ai/api/coding/paas/v4/'
       },
       custom: {
         enabled: false,

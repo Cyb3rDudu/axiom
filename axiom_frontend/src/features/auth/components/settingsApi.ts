@@ -20,6 +20,7 @@ export interface AISettings {
     openrouter: ProviderConfig
     openai: ProviderConfig
     deepseek: ProviderConfig
+    zai: ProviderConfig
     custom: ProviderConfig
   }
   // Remove the simple models dict - we'll always use advanced_models internally

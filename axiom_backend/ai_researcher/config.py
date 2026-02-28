@@ -258,6 +258,14 @@ DEEPSEEK_VERIFIER_MODEL = os.getenv("DEEPSEEK_VERIFIER_MODEL", "deepseek-chat")
 DEEPSEEK_MAX_TOKENS_LIMIT = 8192
 DEEPSEEK_CONTEXT_WINDOW = 128000
 
+# --- Z.AI (Zhipu GLM) Configuration ---
+ZAI_API_KEY = os.getenv("ZAI_API_KEY", "")
+ZAI_BASE_URL = os.getenv("ZAI_BASE_URL_OPENAI", "https://api.z.ai/api/coding/paas/v4/")
+ZAI_FAST_MODEL = os.getenv("ZAI_FAST_MODEL", "glm-4.7-flashx")
+ZAI_MID_MODEL = os.getenv("ZAI_MID_MODEL", "glm-4.7")
+ZAI_INTELLIGENT_MODEL = os.getenv("ZAI_INTELLIGENT_MODEL", "glm-5")
+ZAI_VERIFIER_MODEL = os.getenv("ZAI_VERIFIER_MODEL", "glm-4.7-flash")
+
 AGENT_ROLE_MODEL_TYPE = {
     "planning": "fast",
     "research": "mid",
@@ -644,6 +652,18 @@ PROVIDER_CONFIG = {
         # DeepSeek-specific limits
         "max_tokens_limit": DEEPSEEK_MAX_TOKENS_LIMIT,  # 8192
         "context_window": DEEPSEEK_CONTEXT_WINDOW,
+    },
+    "zai": {
+        "base_url": ZAI_BASE_URL,
+        "api_key": ZAI_API_KEY,
+        "fast_model": ZAI_FAST_MODEL,
+        "mid_model": ZAI_MID_MODEL,
+        "intelligent_model": ZAI_INTELLIGENT_MODEL,
+        "verifier_model": ZAI_VERIFIER_MODEL,
+        "light_model": ZAI_FAST_MODEL,
+        "heavy_model": ZAI_MID_MODEL,
+        "beast_model": ZAI_INTELLIGENT_MODEL,
+        "context_window": 205000,
     },
     "openai": {
         # OpenAI provider configuration comes from user settings

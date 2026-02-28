@@ -241,8 +241,8 @@ async def test_ai_connection(
         if not (base_url.startswith("http://") or base_url.startswith("https://")):
             raise HTTPException(status_code=400, detail="Base URL must start with 'http://' or 'https://'")
         
-        # For OpenRouter and OpenAI, API key is required (but not for custom)
-        if provider in ["openrouter", "openai"] and not api_key:
+        # For OpenRouter, OpenAI, and Z.AI, API key is required (but not for custom/local)
+        if provider in ["openrouter", "openai", "zai"] and not api_key:
             raise HTTPException(status_code=400, detail="API key is required for this provider")
         
         # Prepare headers - only add Authorization if we have an API key
