@@ -16,6 +16,7 @@ from ai_researcher.agentic_layer.utils.json_format_helper import (
     get_initial_format_mode,
     mark_format_unsupported,
 )
+from ai_researcher.agentic_layer.utils.json_utils import sanitize_json_string
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +206,8 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                 if response and response.choices and response.choices[0].message.content:
                     raw_json = response.choices[0].message.content
                     try:
-                        analysis_result = RequestAnalysisOutput.model_validate_json(raw_json)
+                        sanitized_json = sanitize_json_string(raw_json)
+                        analysis_result = RequestAnalysisOutput.model_validate_json(sanitized_json)
                         logger.info(f"Request analysis successful for mission {mission_id}: Type={analysis_result.request_type}, Tone={analysis_result.target_tone}, Audience={analysis_result.target_audience}")
                         log_status = "success"
                         error_msg = None
