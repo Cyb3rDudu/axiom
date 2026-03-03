@@ -16,6 +16,7 @@ The Settings panel is organized into multiple tabs, each controlling different a
 - **Search** - Web search provider settings
 - **Web Fetch** - Web page fetching configuration
 - **Research** - Research mission parameters
+- **Citations** - Citation profile management
 - **Admin** - User management (admin users only)
 
 ## Quick Setup Guide
@@ -26,6 +27,7 @@ For first-time users, configure settings in this order:
 2. **[AI Config](ai-config.md)** - Set up your AI provider and API keys
 3. **[Search](search-config.md)** - Configure web search capabilities
 4. **[Research](research-config.md)** - Customize research parameters
+5. **[Citations](citations.md)** - Set up citation profiles
 
 ## Settings Tabs
 
@@ -80,6 +82,15 @@ Customize research mission behavior:
 
 [Learn more about Research Configuration →](research-config.md)
 
+### Citation Settings
+Manage citation profiles that control how reports format references:
+- Built-in profiles (Numbered, KMU APA 6, APA 7th)
+- Custom profile creation
+- Default profile selection
+- Per-mission profile overrides
+
+[Learn more about Citation Settings →](citations.md)
+
 ### Admin Settings
 Administrator-only features for managing users:
 - User account management
@@ -119,3 +130,4 @@ Ready to configure AXIOM? Start with:
 2. [AI Configuration](ai-config.md) - Configure language models
 3. [Search Settings](search-config.md) - Enable web search
 4. [Research Settings](research-config.md) - Optimize research missions
+5. [Citation Settings](citations.md) - Configure citation profiles

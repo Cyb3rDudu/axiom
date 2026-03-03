@@ -76,6 +76,63 @@ Direct access to OpenAI's GPT models.
 
 **Pricing**: Check [OpenAI Pricing](https://openai.com/api/pricing)
 
+### Z.AI (Zhipu GLM)
+
+Chinese AI provider offering GLM-series models with large context windows.
+
+**Setup:**
+
+1. Select "Z.AI" as the AI Provider
+2. API Key: Enter your Z.AI API key
+3. Base URL: `https://api.z.ai/api/coding/paas/v4/`
+4. Click "Test" to verify and load models
+
+**Available Models:**
+
+- GLM-5 (up to 205K context window)
+- GLM-4.7
+- GLM-4.5-air
+- GLM-4.5
+
+**Default Model Mapping:**
+
+- **Fast**: `glm-4.5-air`
+- **Mid**: `glm-4.7`
+- **Intelligent**: `glm-5`
+- **Verifier**: `glm-4.5`
+
+### DeepSeek
+
+Direct access to DeepSeek models.
+
+**Setup:**
+
+1. Select "DeepSeek" as the AI Provider
+2. API Key: Enter your DeepSeek API key
+3. Base URL: `https://api.deepseek.com/v1`
+4. Click "Test" to verify and load models
+
+**Available Models:**
+
+- deepseek-chat (128K context window)
+- deepseek-reasoner (128K context window)
+
+**Default Model Mapping:**
+
+- **Fast**: `deepseek-chat`
+- **Mid**: `deepseek-chat`
+- **Intelligent**: `deepseek-reasoner`
+- **Verifier**: `deepseek-chat`
+
+!!! warning
+    DeepSeek enforces an **8192 max_tokens limit** on all completions. AXIOM automatically applies this cap, so you do not need to configure it manually.
+
+!!! note
+    DeepSeek does not support `json_schema` structured outputs. AXIOM handles this transparently through a 3-level fallback system: it first tries `json_schema`, then falls back to `json_object`, and finally retries without any response format constraint. Results are cached per model so the fallback only triggers once.
+
+!!! info
+    The `deepseek-reasoner` model does not support a `temperature` parameter and requires special `max_tokens` handling. AXIOM detects this model automatically and adjusts request parameters accordingly.
+
 ### Azure OpenAI
 
 Use Azure-hosted OpenAI models through your Azure subscription.
@@ -359,6 +416,8 @@ Tracked costs are typically 40-60% of dashboard charges, especially with provide
 |----------|------|------|----------|
 | OpenRouter | 100+ models, unified billing | Adds small overhead | Flexibility |
 | OpenAI | Direct access, latest models | Single vendor | GPT users |
+| Z.AI (Zhipu GLM) | Large context (205K), competitive pricing | Fewer model choices | GLM users, Chinese-language tasks |
+| DeepSeek | Strong reasoning, low cost | 8192 max_tokens, no json_schema | Budget reasoning tasks |
 | Local LLMs | Privacy, no costs | Requires hardware | Sensitive data |
 
 ## Troubleshooting

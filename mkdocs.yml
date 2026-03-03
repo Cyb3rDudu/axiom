@@ -187,6 +187,7 @@ nav:
       - user-guide/documents/uploading.md
       - user-guide/documents/document-library.md
       - user-guide/documents/document-groups.md
+      - user-guide/documents/rag-knowledge-graph.md
     - Settings:
       - user-guide/settings/overview.md
       - user-guide/settings/profile.md
@@ -195,6 +196,7 @@ nav:
       - user-guide/settings/search-config.md
       - user-guide/settings/web-fetch-config.md
       - user-guide/settings/research-config.md
+      - user-guide/settings/citations.md
       - user-guide/settings/admin.md
   
   - Architecture: architecture/index.md

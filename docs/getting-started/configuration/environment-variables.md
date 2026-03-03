@@ -153,6 +153,41 @@ JWT_SECRET_KEY=GENERATE_A_RANDOM_KEY_DO_NOT_USE_DEFAULT
 ```
 
 
+## AI Provider Keys
+
+Environment variables for configuring AI provider credentials and model defaults. These are used as fallbacks when no per-user settings are configured in the UI.
+
+### Z.AI (Zhipu GLM)
+
+```bash
+# Z.AI API credentials
+ZAI_API_KEY=your_zai_api_key_here
+ZAI_BASE_URL_OPENAI=https://api.z.ai/api/coding/paas/v4/  # Default endpoint
+
+# Z.AI model defaults
+ZAI_FAST_MODEL=glm-4.5-air          # Default fast model
+ZAI_MID_MODEL=glm-4.7               # Default mid model
+ZAI_INTELLIGENT_MODEL=glm-5         # Default intelligent model
+ZAI_VERIFIER_MODEL=glm-4.5          # Default verifier model
+```
+
+### DeepSeek
+
+```bash
+# DeepSeek API credentials
+DEEPSEEK_API_KEY=your_deepseek_api_key_here
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1/  # Default endpoint
+
+# DeepSeek model defaults
+DEEPSEEK_FAST_MODEL=deepseek-chat         # Default fast model
+DEEPSEEK_MID_MODEL=deepseek-chat          # Default mid model
+DEEPSEEK_INTELLIGENT_MODEL=deepseek-reasoner  # Default intelligent model
+DEEPSEEK_VERIFIER_MODEL=deepseek-chat     # Default verifier model
+```
+
+!!! note
+    DeepSeek enforces an 8192 max_tokens limit on completions. AXIOM applies this cap automatically. The `deepseek-reasoner` model also requires special parameter handling (no temperature, adjusted max_tokens), which AXIOM manages internally.
+
 ## Performance Tuning
 
 ### Python Library Settings

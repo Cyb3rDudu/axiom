@@ -168,6 +168,35 @@ Toggle between:
 - **Preview View**: See rendered markdown with formatted text, tables, and formulas
 - **Split View**: Edit and preview side-by-side
 
+## Citation Profiles in Writing
+
+Citation profiles control how the writing agent formats in-text citations and bibliographies when generating content. The active profile is injected into the agent's system prompt, replacing hardcoded citation rules with your preferred style.
+
+### How Citation Modes Work
+
+**Numbered Mode**
+
+In numbered mode, the writing agent inserts raw `[doc_id]` placeholders (e.g., `[f28769c8]`) as it writes. After the report is complete, AXIOM post-processes these placeholders into sequential numbered references (`[1]`, `[2]`, etc.) and generates a matching bibliography. This is the default behavior.
+
+**Author-Year Mode**
+
+In author-year mode, the writing agent inserts `(Author, Year, p. XX)` citations directly into the text. These citations are not post-processed and appear in the final output exactly as written. This mode is used by the APA-style profiles.
+
+### Selecting a Citation Profile
+
+The writing agent resolves which citation profile to use in the following order:
+
+1. **Mission-level override** -- set in Mission Settings > Citation Profile
+2. **User default** -- starred in Settings > Citations
+3. **System fallback** -- Numbered Citations
+
+You can also switch profiles during a writing session using the **Quote** dropdown in the chat toolbar. This affects only content generated after the change.
+
+!!! tip
+    For academic writing, select an author-year profile (APA 7 or KMU APA 6) before starting your session. For technical reports, the default Numbered Citations profile works well.
+
+For full details on managing and creating citation profiles, see [Citation Settings](../settings/citations.md).
+
 ## Advanced Features
 
 ### Document Context Awareness

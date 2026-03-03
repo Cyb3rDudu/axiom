@@ -40,6 +40,15 @@ When you upload a document, AXIOM:
 - **Hybrid Search** - Combines dense and sparse embeddings
 - **API Endpoint** - `/api/documents/search` for programmatic access
 
+### RAG and Knowledge Graph
+
+- **Document-Aware Chat** - LLM responses grounded in your uploaded documents
+- **Knowledge Graph** - Entity extraction and relationship mapping across your library
+- **Image Search** - Multimodal CLIP-based search over extracted document images
+- **Interactive Graph View** - Force-directed visualization of entities and connections
+
+For full details, see [RAG and Knowledge Graph](rag-knowledge-graph.md).
+
 ## Processing Status
 
 Documents go through these stages:
@@ -166,5 +175,6 @@ du -sh axiom_backend/data/*
 
 - [Uploading Documents](uploading.md) - Detailed upload guide
 - [Document Groups](document-groups.md) - Organizing collections
+- [RAG and Knowledge Graph](rag-knowledge-graph.md) - Document-aware chat, knowledge graph, and image search
 - [Search Guide](overview.md#search) - Advanced search techniques
 - [CLI Commands](../../getting-started/installation/cli-commands.md) - Bulk operations

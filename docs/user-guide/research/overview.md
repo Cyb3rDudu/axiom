@@ -240,6 +240,46 @@ The auto-create toggle appears in the chat interface when starting a research mi
 
 This feature eliminates manual document collection while building a knowledge base from your research activities. Each research mission can contribute to your growing document library, making subsequent research more comprehensive and efficient.
 
+## Multilingual Research
+
+AXIOM supports conducting research and generating reports in multiple languages. The system uses localized prompt templates so that agents communicate and write in your preferred language.
+
+### Setting Your Preferred Language
+
+Configure your default language in **Settings > Profile**. This preference applies to all new missions and controls the language used for:
+
+- Agent system prompts and instructions
+- Research question generation
+- Report writing and synthesis
+- User-facing status messages
+
+### Per-Mission Language Override
+
+You can override your default language for a specific mission in **Mission Settings**. This is useful when you need a single report in a different language without changing your global preference.
+
+### Language Fallback Chain
+
+AXIOM resolves prompt templates using the following fallback chain:
+
+1. **Requested language** -- the language set for the current mission (or your default)
+2. **English** -- if no template exists for the requested language
+3. **Hardcoded defaults** -- built-in English prompts as a last resort
+
+This ensures that research always proceeds even if localized templates are incomplete for a given language.
+
+!!! info
+    German prompt templates are included as a reference implementation. Community contributions for additional languages are welcome.
+
+### Language API Endpoints
+
+For developers integrating with AXIOM programmatically, the following endpoints are available:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/languages` | GET | List all supported languages |
+| `/api/settings/me/language` | GET | Retrieve your current language preference |
+| `/api/settings/me/language` | PUT | Update your language preference |
+
 ## Research Configuration
 
 ![Mission Settings](../../assets/images/research view settings.png)
