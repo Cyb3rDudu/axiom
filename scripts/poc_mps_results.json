@@ -1,0 +1,81 @@
+{
+  "bge_m3": {
+    "model": "BAAI/bge-m3",
+    "tests": {
+      "cpu_encode": {
+        "pass": 1,
+        "time_s": 0.863,
+        "dense_shape": [
+          5,
+          1024
+        ]
+      },
+      "mps_load": {
+        "pass": 1,
+        "time_s": 2.3
+      },
+      "mps_encode": {
+        "pass": 1,
+        "time_s": 0.584,
+        "speedup": 1.48
+      },
+      "quality": {
+        "pass": 1,
+        "avg_cosine": 1.0,
+        "min_cosine": 1.0
+      },
+      "sparse": {
+        "pass": 1
+      },
+      "benchmark": {
+        "pass": 1,
+        "cpu_avg_s": 0.699,
+        "mps_avg_s": 0.151,
+        "speedup": 4.61
+      }
+    }
+  },
+  "bge_reranker": {
+    "model": "BAAI/bge-reranker-v2-m3",
+    "tests": {
+      "cpu_score": {
+        "pass": 1,
+        "time_s": 1.446
+      },
+      "mps_load": {
+        "pass": 1,
+        "time_s": 1.9
+      },
+      "mps_score": {
+        "pass": 1,
+        "time_s": 0.392,
+        "speedup": 3.69
+      },
+      "ranking": {
+        "pass": 1,
+        "cpu_ranking": [
+          0,
+          2,
+          4,
+          3,
+          1
+        ],
+        "mps_ranking": [
+          0,
+          2,
+          4,
+          3,
+          1
+        ],
+        "relevance_ok": 1,
+        "max_score_diff": 0.0
+      },
+      "benchmark": {
+        "pass": 1,
+        "cpu_avg_s": 0.398,
+        "mps_avg_s": 0.144,
+        "speedup": 2.77
+      }
+    }
+  }
+}
