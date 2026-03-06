@@ -21,6 +21,7 @@ from ai_researcher.agentic_layer.controller.writing_controller import WritingCon
 from ai_researcher.agentic_layer.agents.simplified_writing_agent import SimplifiedWritingAgent
 from ai_researcher.user_context import set_current_user
 from ai_researcher.dynamic_config import get_writing_mode_doc_results, get_writing_mode_web_results
+from config.paths import REFERENCE_DOC_PATH
 
 router = APIRouter(prefix="/api/writing", tags=["writing"])
 
@@ -984,6 +985,11 @@ async def process_writing_chat_in_background(
             if document_group:
                 document_group_name = document_group.name
         
+        # Resolve citation profile for this writing session
+        from services.citation_profiles import resolve_citation_profile
+        user_settings = current_user.settings if current_user.settings else {}
+        citation_profile = resolve_citation_profile(None, user_settings)
+
         context_info = {
             "document_group_id": document_group_id,
             "document_group_name": document_group_name,
@@ -996,6 +1002,7 @@ async def process_writing_chat_in_background(
             },
             "session_id": session_id,
             "custom_system_prompt": custom_system_prompt,
+            "citation_mode": citation_profile.citation_mode,
             "search_config": {
                 "deep_search": request.deep_search or False,
                 "max_iterations": request.max_search_iterations or default_iterations,
@@ -1170,7 +1177,7 @@ async def export_draft_as_docx(
                 'docx',
                 format='md',
                 outputfile=temp_path,
-                extra_args=['--reference-doc=/app/reference.docx'] if os.path.exists('/app/reference.docx') else []
+                extra_args=[f'--reference-doc={REFERENCE_DOC_PATH}'] if REFERENCE_DOC_PATH.exists() else []
             )
             
             # Read the generated file

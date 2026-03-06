@@ -74,7 +74,8 @@ class FileReaderTool:
                 
                 # In Docker, try the container path
                 if is_running_in_docker():
-                    alternative_paths.append(Path("/app/ai_researcher/data/processed/markdown") / f"{doc_id}.md")
+                    from config.paths import MARKDOWN_PATH
+                    alternative_paths.append(MARKDOWN_PATH / f"{doc_id}.md")
                 
                 # Try relative to current working directory
                 alternative_paths.append(Path.cwd() / "ai_researcher/data/processed/markdown" / f"{doc_id}.md")

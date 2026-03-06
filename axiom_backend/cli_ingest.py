@@ -126,7 +126,8 @@ def create_document_record(
             return False
         
         # Save the file to disk (matching UI upload path)
-        upload_dir = "/app/data/raw_files"
+        from config.paths import LEGACY_RAW_FILES_PATH
+        upload_dir = str(LEGACY_RAW_FILES_PATH)
         os.makedirs(upload_dir, exist_ok=True)
         
         saved_file_path = os.path.join(upload_dir, f"{doc_id}_{file_path.name}")
@@ -218,7 +219,8 @@ def process_document_in_subprocess(args):
     saved_file_path = Path(saved_file_path_str)
     
     # Initialize components for this process
-    base_path = Path("/app/ai_researcher/data")
+    from config.paths import AI_DATA_BASE_PATH
+    base_path = AI_DATA_BASE_PATH
     
     try:
         # Initialize components
@@ -297,7 +299,8 @@ def process_document_in_subprocess(args):
             document.chunk_count = result.get('chunks_generated', 0)
             
             # Also save markdown path if available
-            markdown_path = f"/app/data/markdown_files/{doc_id}.md"
+            from config.paths import LEGACY_MARKDOWN_PATH
+            markdown_path = str(LEGACY_MARKDOWN_PATH / f"{doc_id}.md")
             if os.path.exists(markdown_path):
                 document.markdown_path = markdown_path
             
@@ -424,7 +427,8 @@ def process_single_document(
             document.chunk_count = result.get('chunks_generated', 0)
             
             # Also save markdown path if available
-            markdown_path = f"/app/data/markdown_files/{doc_id}.md"
+            from config.paths import LEGACY_MARKDOWN_PATH
+            markdown_path = str(LEGACY_MARKDOWN_PATH / f"{doc_id}.md")
             if os.path.exists(markdown_path):
                 document.markdown_path = markdown_path
             
@@ -712,7 +716,8 @@ def ingest(
             else:
                 metadata_extractor = MetadataExtractor()
             
-            base_path = Path("/app/ai_researcher/data")
+            from config.paths import AI_DATA_BASE_PATH
+    base_path = AI_DATA_BASE_PATH
             processor = DocumentProcessor(
                 pdf_dir=base_path / "raw_pdfs",
                 markdown_dir=base_path / "processed" / "markdown",
@@ -971,7 +976,8 @@ def cleanup_cli(
                     files_deleted.append("raw file")
                 
                 # Markdown file (if exists)
-                markdown_path = f"/app/data/markdown_files/{doc.id}.md"
+                from config.paths import LEGACY_MARKDOWN_PATH
+                markdown_path = str(LEGACY_MARKDOWN_PATH / f"{doc.id}.md")
                 if os.path.exists(markdown_path):
                     os.remove(markdown_path)
                     files_deleted.append("markdown")

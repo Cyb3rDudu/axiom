@@ -1,0 +1,62 @@
+# macOS / Apple Silicon hybrid stack
+# Runs infrastructure in containers, ML services run natively for Metal/MPS GPU access.
+# Usage: docker compose -f docker-compose.macos.yml up -d
+#        (or: podman compose / orbstack compose)
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: axiom-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-axiom_db}
+      POSTGRES_USER: ${POSTGRES_USER:-axiom_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-axiom_password}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - axiom-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-axiom_user} -d ${POSTGRES_DB:-axiom_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nginx:
+    image: axiom-nginx
+    container_name: axiom-nginx
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    ports:
+      - "${AXIOM_PORT:-80}:80"
+    volumes:
+      - ./nginx/nginx.macos.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - axiom-network
+    restart: unless-stopped
+
+  frontend:
+    image: axiom-frontend
+    container_name: axiom-frontend
+    networks:
+      - axiom-network
+    environment:
+      - VITE_SERVER_TIMEZONE=${VITE_SERVER_TIMEZONE:-UTC}
+      - TZ=${TZ:-UTC}
+      - LOG_LEVEL=${LOG_LEVEL:-ERROR}
+
+volumes:
+  postgres-data:
+
+networks:
+  axiom-network:
+    driver: bridge

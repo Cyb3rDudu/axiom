@@ -1824,7 +1824,8 @@ class AsyncContextManager:
                                 
                                 # Create markdown file with the content
                                 import pathlib
-                                markdown_dir = pathlib.Path("/app/data/markdown_files")
+                                from config.paths import LEGACY_MARKDOWN_PATH
+                                markdown_dir = LEGACY_MARKDOWN_PATH
                                 markdown_dir.mkdir(parents=True, exist_ok=True)
                                 markdown_path = markdown_dir / f"{doc_id}.md"
                                 

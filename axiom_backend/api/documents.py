@@ -10,6 +10,7 @@ from api import schemas
 from auth.dependencies import get_current_user_from_cookie
 from database.database import get_db
 from services.document_service_v2 import UnifiedDocumentService
+from config.paths import RAW_FILES_PATH, MARKDOWN_PATH, LEGACY_MARKDOWN_PATH, IMAGES_PATH
 import json
 from api.websockets import send_document_update
 import logging
@@ -197,7 +198,7 @@ async def upload_document(
             )
         
         # Save the file to disk
-        upload_dir = "/app/data/raw_pdfs"
+        upload_dir = str(RAW_FILES_PATH)
         os.makedirs(upload_dir, exist_ok=True)
         
         file_path = os.path.join(upload_dir, f"{doc_id}_{file.filename}")
@@ -374,7 +375,7 @@ async def upload_document_to_group(
                 )
         
         # Save the file to disk
-        upload_dir = "/app/data/raw_pdfs"
+        upload_dir = str(RAW_FILES_PATH)
         os.makedirs(upload_dir, exist_ok=True)
         
         file_path = os.path.join(upload_dir, f"{doc_id}_{file.filename}")
@@ -1050,7 +1051,7 @@ async def view_document_content(
         
         # Try to read the markdown content from file
         markdown_content = None
-        markdown_path = f"/app/data/processed/markdown/{doc_id}.md"
+        markdown_path = str(MARKDOWN_PATH / f"{doc_id}.md")
         
         try:
             import os
@@ -1060,7 +1061,7 @@ async def view_document_content(
                 logger.info(f"Successfully loaded markdown content for document {doc_id}")
             else:
                 # Try alternative path
-                alt_markdown_path = f"/app/data/markdown_files/{doc_id}.md"
+                alt_markdown_path = str(LEGACY_MARKDOWN_PATH / f"{doc_id}.md")
                 if os.path.exists(alt_markdown_path):
                     with open(alt_markdown_path, 'r', encoding='utf-8') as f:
                         markdown_content = f.read()
@@ -1295,10 +1296,10 @@ async def serve_document_image(
     from pathlib import Path
 
     # Construct the image path
-    image_path = Path(f"/app/data/processed/images/{doc_id}/{image_filename}")
+    image_path = IMAGES_PATH / doc_id / image_filename
 
     # Security: Ensure the path doesn't escape the images directory
-    if not str(image_path.resolve()).startswith("/app/data/processed/images/"):
+    if not str(image_path.resolve()).startswith(str(IMAGES_PATH.resolve())):
         raise HTTPException(status_code=403, detail="Access denied")
 
     # Check if file exists

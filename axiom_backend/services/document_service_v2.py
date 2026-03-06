@@ -33,7 +33,8 @@ class UnifiedDocumentService:
     def __init__(self, db: Session):
         self.db = db
         self.vector_store = None  # Lazy load
-        self.base_path = Path("/app/ai_researcher/data")
+        from config.paths import AI_DATA_BASE_PATH
+        self.base_path = AI_DATA_BASE_PATH
         
     def _get_vector_store(self) -> VectorStoreManager:
         """Lazy load vector store."""

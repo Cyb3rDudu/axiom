@@ -2661,22 +2661,8 @@ Important considerations:
                     # Detect if we're running in Docker by checking for common Docker indicators
                     import os
 
-                    is_docker = (
-                        os.path.exists("/.dockerenv")
-                        or os.environ.get("DOCKER_CONTAINER") == "true"
-                        or os.path.exists(
-                            "/app/ai_researcher"
-                        )  # Check if the Docker app structure exists
-                    )
-
-                    if is_docker:
-                        # Use absolute Docker paths
-                        allowed_base_path = "/app/data/processed/markdown"
-                        logger.info("Detected Docker environment, using absolute paths")
-                    else:
-                        # Use relative paths for local development
-                        allowed_base_path = "data/processed/markdown"
-                        logger.info("Detected local environment, using relative paths")
+                    from config.paths import MARKDOWN_PATH
+                    allowed_base_path = str(MARKDOWN_PATH)
 
                     # Get doc_id from metadata
                     doc_id = metadata.get("doc_id")

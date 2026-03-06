@@ -30,12 +30,16 @@ class VectorStoreMonitor:
     
     def __init__(
         self,
-        vector_store_path: str = "/app/ai_researcher/data/vector_store",
+        vector_store_path: str = None,
         check_interval_minutes: int = 30,
         max_size_gb: float = 50.0,
         auto_cleanup: bool = False
     ):
-        self.vector_store_path = Path(vector_store_path)
+        if vector_store_path is None:
+            from config.paths import VECTOR_STORE_PATH
+            self.vector_store_path = VECTOR_STORE_PATH
+        else:
+            self.vector_store_path = Path(vector_store_path)
         self.check_interval = check_interval_minutes * 60
         self.max_size_gb = max_size_gb
         self.auto_cleanup = auto_cleanup

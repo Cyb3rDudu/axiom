@@ -63,8 +63,12 @@ class DocumentTransaction:
 class DocumentConsistencyManager:
     """Manages consistent document operations across all storage systems."""
     
-    def __init__(self, base_path: str = "/app/ai_researcher/data"):
-        self.base_path = Path(base_path)
+    def __init__(self, base_path: str = None):
+        if base_path is None:
+            from config.paths import AI_DATA_BASE_PATH
+            self.base_path = AI_DATA_BASE_PATH
+        else:
+            self.base_path = Path(base_path)
         self.pdf_dir = self.base_path / "raw_pdfs"
         self.markdown_dir = self.base_path / "processed" / "markdown"  
         self.metadata_dir = self.base_path / "processed" / "metadata"

@@ -7,11 +7,11 @@ export default defineConfig({
   server: {
     proxy: {
       '/api/ws': {
-        target: 'ws://axiom_backend:8001',
+        target: process.env.VITE_WS_TARGET || 'ws://axiom_backend:8001',
         ws: true,
       },
       '/api': {
-        target: 'http://axiom_backend:8001',
+        target: process.env.VITE_API_TARGET || 'http://axiom_backend:8001',
         changeOrigin: true,
       },
     },

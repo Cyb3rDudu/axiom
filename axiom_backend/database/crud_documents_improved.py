@@ -177,7 +177,8 @@ def delete_document_atomically_sync(
         import shutil
         from pathlib import Path
         
-        base_path = Path("/app/ai_researcher/data")
+        from config.paths import AI_DATA_BASE_PATH
+        base_path = AI_DATA_BASE_PATH
         pdf_dir = base_path / "raw_pdfs"
         markdown_dir = base_path / "processed" / "markdown"
         metadata_dir = base_path / "processed" / "metadata"

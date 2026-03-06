@@ -9,6 +9,7 @@ from database.database import SessionLocal, test_connection, init_db
 from database import crud
 from api import auth, missions, system, chat, chats, documents, websockets, settings, writing, dashboard, admin, research_reports, languages, rag
 from middleware import user_context_middleware
+from config.paths import LEGACY_MARKDOWN_PATH
 
 # Configure reduced logging to minimize console noise
 from logging_config import setup_logging
@@ -184,7 +185,7 @@ async def startup_event():
                     if doc.file_path and os.path.exists(doc.file_path):
                         os.remove(doc.file_path)
                     
-                    markdown_path = f"/app/data/markdown_files/{doc.id}.md"
+                    markdown_path = str(LEGACY_MARKDOWN_PATH / f"{doc.id}.md")
                     if os.path.exists(markdown_path):
                         os.remove(markdown_path)
                     

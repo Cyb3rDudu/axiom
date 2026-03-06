@@ -23,6 +23,7 @@ from database.database import SessionLocal, get_db
 from database.async_database import get_async_db_session
 from database import crud, async_crud, models
 from database.models import User
+from config.paths import REFERENCE_DOC_PATH
 from ai_researcher.agentic_layer.async_context_manager import AsyncContextManager, set_main_event_loop
 from ai_researcher.agentic_layer.schemas.notes import Note
 from ai_researcher.agentic_layer.agent_controller import AgentController
@@ -452,6 +453,7 @@ async def create_mission(
 
         # Get language_code from request or user's default preference
         language_code = mission_data.get("language_code") or current_user.language_code or 'en'
+        citation_profile_id = mission_data.get("citation_profile_id")
 
         logger.info(f"Creating mission with settings - Web Search: {use_web_search}, Doc Group: {document_group_id}, Auto-save: {auto_create_document_group}, Language: {language_code}")
 
@@ -546,7 +548,8 @@ async def create_mission(
             "document_group_name": document_group_name,
             "use_web_search": use_web_search,
             "use_local_rag": use_local_rag,
-            "auto_create_document_group": auto_create_document_group  # CRITICAL: Store at top level for frontend to find
+            "auto_create_document_group": auto_create_document_group,  # CRITICAL: Store at top level for frontend to find
+            "citation_profile_id": citation_profile_id,  # Citation style for this mission
         }
         
         # Update mission metadata with all settings at once
@@ -3103,6 +3106,120 @@ async def update_mission_settings(
             detail="Failed to update mission settings"
         )
 
+# =============================================================================
+# Citation Profile Endpoints
+# =============================================================================
+
+@router.get("/citation-profiles")
+async def list_citation_profiles(
+    current_user: User = Depends(get_current_user_from_cookie),
+):
+    """List all available citation profiles (built-in + user's custom)."""
+    from services.citation_profiles import get_all_profiles
+    user_settings = current_user.settings or {}
+    profiles = get_all_profiles(user_settings)
+    return [p.model_dump() for p in profiles]
+
+
+@router.post("/citation-profiles")
+async def create_citation_profile(
+    profile_data: dict = Body(...),
+    current_user: User = Depends(get_current_user_from_cookie),
+    db: Session = Depends(get_db),
+):
+    """Create a custom citation profile (stored in user's writing_settings)."""
+    from services.citation_profiles import get_profile_by_id, CitationProfile
+
+    required_fields = ["id", "name", "citation_mode", "in_text_rules", "bibliography_rules"]
+    for field in required_fields:
+        if field not in profile_data:
+            raise HTTPException(status_code=422, detail=f"Missing required field: {field}")
+
+    if profile_data["citation_mode"] not in ("numbered", "author_year"):
+        raise HTTPException(status_code=422, detail="citation_mode must be 'numbered' or 'author_year'")
+
+    # Validate ID format (alphanumeric + underscores, max 50 chars)
+    import re
+    if not re.match(r'^[a-z0-9_]{1,50}$', profile_data["id"]):
+        raise HTTPException(status_code=422, detail="Profile ID must be 1-50 characters, lowercase alphanumeric and underscores only")
+
+    # Validate field lengths
+    if len(profile_data["name"]) > 100:
+        raise HTTPException(status_code=422, detail="Profile name must be 100 characters or fewer")
+    if len(profile_data["in_text_rules"]) > 10000:
+        raise HTTPException(status_code=422, detail="in_text_rules must be 10,000 characters or fewer")
+    if len(profile_data["bibliography_rules"]) > 10000:
+        raise HTTPException(status_code=422, detail="bibliography_rules must be 10,000 characters or fewer")
+
+    user_settings = current_user.settings or {}
+
+    # Check for ID collision with built-in profiles
+    existing = get_profile_by_id(profile_data["id"], user_settings)
+    if existing and existing.is_builtin:
+        raise HTTPException(status_code=409, detail="Cannot overwrite a built-in profile")
+
+    # Store in writing_settings.citation_profiles
+    writing_settings = user_settings.get("writing_settings") or {}
+    custom_profiles = list(writing_settings.get("citation_profiles") or [])
+
+    # Remove existing custom profile with same ID (update case)
+    custom_profiles = [p for p in custom_profiles if p.get("id") != profile_data["id"]]
+
+    # Add new profile
+    new_profile = {
+        "id": profile_data["id"],
+        "name": profile_data["name"],
+        "citation_mode": profile_data["citation_mode"],
+        "in_text_rules": profile_data["in_text_rules"],
+        "bibliography_rules": profile_data["bibliography_rules"],
+        "is_builtin": False,
+    }
+    custom_profiles.append(new_profile)
+
+    writing_settings["citation_profiles"] = custom_profiles
+    user_settings["writing_settings"] = writing_settings
+
+    # Save to database
+    from database import crud as sync_crud
+    sync_crud.update_user_settings(db, current_user.id, user_settings)
+
+    return new_profile
+
+
+@router.delete("/citation-profiles/{profile_id}")
+async def delete_citation_profile(
+    profile_id: str,
+    current_user: User = Depends(get_current_user_from_cookie),
+    db: Session = Depends(get_db),
+):
+    """Delete a custom citation profile."""
+    from services.citation_profiles import get_profile_by_id
+
+    user_settings = current_user.settings or {}
+    existing = get_profile_by_id(profile_id, user_settings)
+
+    if not existing:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if existing.is_builtin:
+        raise HTTPException(status_code=400, detail="Cannot delete a built-in profile")
+
+    writing_settings = user_settings.get("writing_settings") or {}
+    custom_profiles = list(writing_settings.get("citation_profiles") or [])
+    custom_profiles = [p for p in custom_profiles if p.get("id") != profile_id]
+
+    # If deleted profile was the default, clear the default
+    if writing_settings.get("default_citation_profile") == profile_id:
+        writing_settings["default_citation_profile"] = None
+
+    writing_settings["citation_profiles"] = custom_profiles
+    user_settings["writing_settings"] = writing_settings
+
+    from database import crud as sync_crud
+    sync_crud.update_user_settings(db, current_user.id, user_settings)
+
+    return {"message": f"Profile '{profile_id}' deleted"}
+
+
 class MarkdownContent(BaseModel):
     markdown_content: str
     filename: Optional[str] = None
@@ -3129,7 +3246,7 @@ async def download_report_as_docx(
                 'docx',
                 format='md',
                 outputfile=temp_path,
-                extra_args=['--reference-doc=/app/reference.docx'] if os.path.exists('/app/reference.docx') else []
+                extra_args=[f'--reference-doc={REFERENCE_DOC_PATH}'] if REFERENCE_DOC_PATH.exists() else []
             )
             
             # Read the generated file
