@@ -292,6 +292,72 @@ class HardwareDetector:
             # GPU processing, use fewer workers
             return min(4, cpu_count // 2)
             
+    def empty_cache(self):
+        """Device-agnostic GPU cache clearing."""
+        info = self.detect_hardware()
+        device_type = info["device_type"]
+        try:
+            if device_type in ("cuda", "rocm"):
+                torch.cuda.empty_cache()
+            elif device_type == "mps":
+                if hasattr(torch, 'mps') and hasattr(torch.mps, 'empty_cache'):
+                    torch.mps.empty_cache()
+        except Exception as e:
+            logger.debug(f"Cache clearing failed for {device_type}: {e}")
+
+    def memory_allocated(self) -> int:
+        """Device-agnostic allocated GPU memory in bytes."""
+        info = self.detect_hardware()
+        device_type = info["device_type"]
+        try:
+            if device_type in ("cuda", "rocm"):
+                return torch.cuda.memory_allocated()
+            elif device_type == "mps":
+                if hasattr(torch, 'mps') and hasattr(torch.mps, 'current_allocated_memory'):
+                    return torch.mps.current_allocated_memory()
+        except Exception:
+            pass
+        return 0
+
+    def memory_reserved(self) -> int:
+        """Device-agnostic reserved GPU memory in bytes."""
+        info = self.detect_hardware()
+        device_type = info["device_type"]
+        try:
+            if device_type in ("cuda", "rocm"):
+                return torch.cuda.memory_reserved()
+            elif device_type == "mps":
+                if hasattr(torch, 'mps') and hasattr(torch.mps, 'driver_allocated_memory'):
+                    return torch.mps.driver_allocated_memory()
+        except Exception:
+            pass
+        return 0
+
+    def get_total_memory(self) -> int:
+        """Device-agnostic total device memory in bytes."""
+        info = self.detect_hardware()
+        device_type = info["device_type"]
+        try:
+            if device_type in ("cuda", "rocm"):
+                return torch.cuda.get_device_properties(0).total_memory
+            elif device_type == "mps":
+                import psutil
+                return psutil.virtual_memory().total
+        except Exception:
+            pass
+        return 8 * (1024**3)  # 8 GB fallback
+
+    @staticmethod
+    def is_oom_error(error: Exception) -> bool:
+        """Check if a RuntimeError is an out-of-memory error on any device."""
+        error_str = str(error)
+        return any(msg in error_str for msg in [
+            "CUDA out of memory",
+            "MPS backend out of memory",
+            "out of memory",
+            "Insufficient Memory",
+        ])
+
     def log_device_info(self):
         """Log detected hardware information."""
         info = self.detect_hardware()
@@ -302,8 +368,8 @@ class HardwareDetector:
         logger.info(f"  Memory: {info['memory_gb']} GB")
         if info.get('forced'):
             logger.info(f"  Mode: Forced CPU")
-            
-            
+
+
 # Global instance for easy access
 hardware_detector = HardwareDetector()
 
@@ -311,8 +377,13 @@ hardware_detector = HardwareDetector()
 def get_device() -> torch.device:
     """Convenience function to get PyTorch device."""
     return hardware_detector.get_torch_device()
-    
-    
+
+
 def get_device_info() -> Dict[str, Any]:
     """Convenience function to get device information."""
     return hardware_detector.detect_hardware()
+
+
+def empty_cache():
+    """Convenience function to clear device cache."""
+    hardware_detector.empty_cache()
