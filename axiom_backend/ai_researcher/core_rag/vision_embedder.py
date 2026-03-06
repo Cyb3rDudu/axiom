@@ -111,17 +111,13 @@ class VisionEmbedder:
 
     def _get_gpu_memory_usage(self) -> float:
         """Get current GPU memory usage as a percentage."""
-        device_info = hardware_detector.detect_hardware()
-        if device_info["device_type"] not in ["cuda", "rocm"]:
-            return 0.0
         try:
-            if device_info["device_type"] == "cuda" or (device_info["device_type"] == "rocm" and torch.cuda.is_available()):
-                device_idx = int(self.device.split(':')[-1]) if ':' in self.device else 0
-                memory_allocated = torch.cuda.memory_allocated(device_idx)
-                memory_reserved = torch.cuda.memory_reserved(device_idx)
-                total_memory = torch.cuda.get_device_properties(device_idx).total_memory
-                usage_percentage = (memory_allocated + memory_reserved) / total_memory
-                return usage_percentage
+            total = hardware_detector.get_total_memory()
+            if total == 0:
+                return 0.0
+            allocated = hardware_detector.memory_allocated()
+            reserved = hardware_detector.memory_reserved()
+            return (allocated + reserved) / total
         except Exception as e:
             logger.debug(f"Warning: Could not get GPU memory usage: {e}")
             return 0.0
@@ -129,7 +125,7 @@ class VisionEmbedder:
     def _cleanup_gpu_memory(self, force: bool = False):
         """Clean up GPU memory to prevent OOM errors."""
         device_info = hardware_detector.detect_hardware()
-        if not self.enable_memory_management or device_info["device_type"] not in ["cuda", "rocm"]:
+        if not self.enable_memory_management or device_info["device_type"] == "cpu":
             return
 
         try:
@@ -138,13 +134,8 @@ class VisionEmbedder:
             if force or current_usage > self._memory_cleanup_threshold:
                 logger.debug(f"GPU memory usage: {current_usage:.1%}. Performing cleanup...")
 
-                # Clear PyTorch cache
-                torch.cuda.empty_cache()
-
-                # Force garbage collection
+                hardware_detector.empty_cache()
                 gc.collect()
-
-                # Small delay to allow cleanup to complete
                 time.sleep(0.1)
 
                 new_usage = self._get_gpu_memory_usage()
@@ -240,7 +231,7 @@ class VisionEmbedder:
 
                     # Periodic cleanup during large batch processing
                     if self.enable_memory_management and (i // self.batch_size) % 5 == 0:
-                        torch.cuda.empty_cache()
+                        hardware_detector.empty_cache()
 
                 except Exception as e:
                     logger.debug(f"Error embedding image batch starting at index {i}: {e}")
@@ -304,18 +295,18 @@ class VisionEmbedder:
 
                 # Post-query cleanup for single images (lighter cleanup)
                 if self.enable_memory_management:
-                    torch.cuda.empty_cache()
+                    hardware_detector.empty_cache()
 
                 return embedding
 
             except RuntimeError as re:
-                if "CUDA out of memory" in str(re):
-                    logger.debug(f"CUDA OOM error during image embedding: {re}")
+                if hardware_detector.is_oom_error(re):
+                    logger.debug(f"GPU OOM error during image embedding: {re}")
                     logger.debug(f"Attempting emergency GPU cleanup and retry for image: '{image_path}'")
 
                     # Emergency cleanup
                     if self.enable_memory_management:
-                        torch.cuda.empty_cache()
+                        hardware_detector.empty_cache()
                         gc.collect()
                         time.sleep(0.5)  # Give more time for cleanup
 
@@ -329,10 +320,10 @@ class VisionEmbedder:
                                     show_progress_bar=False
                                 )
                                 embedding = np.array(embedding, dtype=np.float32)
-                                logger.debug(f"Successfully recovered from CUDA OOM for image: '{image_path}'")
+                                logger.debug(f"Successfully recovered from GPU OOM for image: '{image_path}'")
                                 return embedding
                         except Exception as retry_error:
-                            logger.debug(f"Retry after CUDA OOM also failed: {retry_error}")
+                            logger.debug(f"Retry after GPU OOM also failed: {retry_error}")
 
                     return np.zeros(self.embedding_dim, dtype=np.float32)
                 else:
