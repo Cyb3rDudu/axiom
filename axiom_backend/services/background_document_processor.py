@@ -236,8 +236,11 @@ class BackgroundDocumentProcessor:
         """Sends a progress update to the main backend via an internal API call."""
         import requests
 
-        # The main backend service is available at this hostname in the Docker network
-        backend_url = "http://axiom-backend:8000/api/internal/document-progress"
+        # Use environment-aware hostname (Docker network or native localhost)
+        import os
+        backend_host = os.getenv("BACKEND_HOST", "axiom-backend")
+        backend_port = os.getenv("BACKEND_PORT", "8000")
+        backend_url = f"http://{backend_host}:{backend_port}/api/internal/document-progress"
         
         try:
             # Add user_id to the update payload if it's not already there

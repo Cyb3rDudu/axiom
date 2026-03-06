@@ -106,9 +106,9 @@ cmd_start() {
     info "Initializing database..."
     (cd axiom_backend && python -m database.init_postgres 2>/dev/null || true)
 
-    # Start doc-processor in background
+    # Start doc-processor in background (needs PYTHONPATH for module imports)
     info "Starting background document processor..."
-    (cd axiom_backend && python -u services/background_document_processor.py &)
+    (cd axiom_backend && PYTHONPATH="$PWD:$PYTHONPATH" python -u services/background_document_processor.py &)
 
     # Start backend (foreground)
     info "Starting backend on :8000  (MPS device)..."

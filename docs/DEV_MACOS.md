@@ -159,6 +159,24 @@ VITE_API_TARGET=http://localhost:8000 VITE_WS_TARGET=ws://localhost:8000 npx vit
 
 Open http://localhost:3000 and login with `admin` / `admin123`.
 
+### 7. Start the background document processor
+
+In a separate terminal:
+
+```bash
+source .venv/bin/activate
+set -a; source .env.macos; set +a
+export AXIOM_DATA_PATH="$(cd $AXIOM_DATA_PATH && pwd)"
+export AXIOM_AI_DATA_PATH="$(cd $AXIOM_AI_DATA_PATH && pwd)"
+export AXIOM_APP_PATH="$(cd $AXIOM_APP_PATH && pwd)"
+export PYTHONPATH="$(pwd)/axiom_backend:$PYTHONPATH"
+
+cd axiom_backend
+python -u services/background_document_processor.py
+```
+
+This processes uploaded PDFs asynchronously (parsing, chunking, embedding on MPS GPU). First run downloads a ~1.35GB layout model.
+
 ## Environment Configuration
 
 All config is in `.env.macos` at the repo root. Key variables:
@@ -174,6 +192,7 @@ All config is in `.env.macos` at the repo root. Key variables:
 | `EMBEDDING_BATCH_SIZE` | `16` | Batch size tuned for Apple Silicon |
 | `OPENSEARCH_HOST` | `localhost` | OpenSearch host |
 | `OPENSEARCH_PORT` | `9200` | OpenSearch port |
+| `BACKEND_HOST` | `localhost` | Backend host for doc processor progress updates |
 
 ## Stopping Everything
 
