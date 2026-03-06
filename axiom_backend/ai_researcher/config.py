@@ -200,10 +200,12 @@ def is_running_in_docker():
 
 # Hardware configuration for non-Docker environments
 if not is_running_in_docker():
-    # Only set CUDA_VISIBLE_DEVICES if not forcing CPU mode
-    if not FORCE_CPU_MODE and PREFERRED_DEVICE_TYPE != "cpu":
+    # Only set CUDA_VISIBLE_DEVICES if not forcing CPU mode and not on MPS
+    if not FORCE_CPU_MODE and PREFERRED_DEVICE_TYPE not in ("cpu", "mps"):
         os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_DEVICE
         print(f"Setting CUDA_VISIBLE_DEVICES to {CUDA_DEVICE}")
+    elif PREFERRED_DEVICE_TYPE == "mps":
+        print("Apple Metal (MPS) mode - CUDA_VISIBLE_DEVICES not applicable")
     elif FORCE_CPU_MODE:
         # Disable GPU visibility when forcing CPU mode
         os.environ["CUDA_VISIBLE_DEVICES"] = ""

@@ -26,9 +26,10 @@ if TYPE_CHECKING:
     from ai_researcher.agentic_layer.tool_registry import ToolRegistry
     from ai_researcher.agentic_layer.schemas.research import ResearchResultResponse
 
-# --- Set CUDA device ---
-# Force the application to use only the GPU with index 4
-os.environ['CUDA_VISIBLE_DEVICES'] = '4'
+# --- Set CUDA device (only for NVIDIA systems) ---
+import platform
+if platform.system() != "Darwin":
+    os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 # --- End CUDA device setting ---
 
 # --- Define Project Root Early ---

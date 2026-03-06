@@ -224,7 +224,11 @@ def process_document_in_subprocess(args):
         # Initialize components
         print(f"[Process {os.getpid()}] Initializing components for doc_id: {doc_id}...")
         
-        actual_device = device or 'cuda'
+        if device:
+            actual_device = device
+        else:
+            from ai_researcher.hardware_detection import hardware_detector
+            actual_device = str(hardware_detector.get_torch_device())
         print(f"[Process {os.getpid()}] Using device: {actual_device}")
         
         # Initialize embedder with proper device
