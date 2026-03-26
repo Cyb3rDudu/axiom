@@ -219,10 +219,190 @@ pct start 120
 pct exec 120 -- bash -c 'cd /opt/axiom && git pull && docker compose -f docker-compose.external-db.yml up -d --build'
 ```
 
+## Alternative: Podman Quadlet on a privileged LXC
+
+Podman Quadlet replaces Docker Compose with native systemd unit files — no Docker daemon, proper
+process management, and automatic restart/logging via journald.
+
+### Setup
+
+```bash
+# Create a privileged Debian LXC with nesting
+pct create 120 local:vztmpl/debian-13-standard_13.0-1_amd64.tar.zst \
+  --hostname axiom \
+  --cores 8 \
+  --memory 16384 \
+  --net0 name=eth0,bridge=vmbr0,ip=10.36.0.120/22,gw=10.36.0.1 \
+  --storage local-lvm \
+  --rootfs local-lvm:32 \
+  --unprivileged 0 \
+  --features nesting=1,keyctl=1
+
+pct start 120
+pct exec 120 -- bash -c 'apt update && apt install -y podman'
+```
+
+### Convert Compose to Quadlet
+
+Create unit files in `/etc/containers/systemd/` inside the LXC:
+
+**axiom-network.network**
+```ini
+[Network]
+NetworkName=axiom
+```
+
+**axiom-data.volume**
+```ini
+[Volume]
+VolumeName=axiom-data
+```
+
+**axiom-backend.container**
+```ini
+[Unit]
+Description=Axiom Backend
+After=network-online.target
+
+[Container]
+Image=localhost/axiom-backend
+ContainerName=axiom-backend
+Network=axiom.network
+PublishPort=8000:8000
+Volume=axiom-data.volume:/app/ai_researcher/data
+Environment=DATABASE_URL=postgresql://axiom:dsHXpLsy7qDyVIeI80FlZ7Yn/Gzht1N6pNRoiAvKPZ4=@10.36.0.107:5432/axiom
+Environment=ADMIN_USERNAME=admin
+Environment=ADMIN_PASSWORD=qExzeg-xowqo9-gycwyr
+Environment=JWT_SECRET_KEY=change-me
+Environment=LOG_LEVEL=ERROR
+Environment=MAX_WORKER_THREADS=10
+Environment=EMBEDDING_BATCH_SIZE=32
+Environment=CORS_ALLOWED_ORIGINS=*
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
+```
+
+**axiom-frontend.container**
+```ini
+[Unit]
+Description=Axiom Frontend
+After=axiom-backend.service
+
+[Container]
+Image=localhost/axiom-frontend
+ContainerName=axiom-frontend
+Network=axiom.network
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
+```
+
+**axiom-doc-processor.container**
+```ini
+[Unit]
+Description=Axiom Document Processor
+After=axiom-backend.service
+
+[Container]
+Image=localhost/axiom-doc-processor
+ContainerName=axiom-doc-processor
+Network=axiom.network
+Volume=axiom-data.volume:/app/ai_researcher/data
+Exec=python -u services/background_document_processor.py
+Environment=DATABASE_URL=postgresql://axiom:dsHXpLsy7qDyVIeI80FlZ7Yn/Gzht1N6pNRoiAvKPZ4=@10.36.0.107:5432/axiom
+Environment=EMBEDDING_BATCH_SIZE=32
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
+```
+
+**axiom-nginx.container**
+```ini
+[Unit]
+Description=Axiom Nginx Proxy
+After=axiom-backend.service axiom-frontend.service
+
+[Container]
+Image=localhost/axiom-nginx
+ContainerName=axiom-nginx
+Network=axiom.network
+PublishPort=80:80
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
+```
+
+### Build and start
+
+```bash
+# Build images with podman inside the LXC
+pct exec 120 -- bash -c '
+  cd /opt/axiom
+  podman build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
+  podman build -t axiom-frontend -f axiom_frontend/Dockerfile axiom_frontend/
+  podman build -t axiom-nginx -f nginx/Dockerfile nginx/
+  podman build -t axiom-doc-processor -f axiom_backend/Dockerfile axiom_backend/
+'
+
+# Reload systemd to pick up quadlet files, then start
+pct exec 120 -- bash -c '
+  systemctl daemon-reload
+  systemctl start axiom-backend axiom-frontend axiom-doc-processor axiom-nginx
+  systemctl enable axiom-backend axiom-frontend axiom-doc-processor axiom-nginx
+'
+```
+
+### Management
+
+```bash
+# Status
+systemctl status axiom-backend
+systemctl status axiom-frontend
+
+# Logs
+journalctl -u axiom-backend -f
+
+# Restart a service
+systemctl restart axiom-backend
+
+# Update: rebuild image, then restart
+podman build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
+systemctl restart axiom-backend
+```
+
+### Advantages over Docker Compose
+
+- No Docker daemon (Podman is daemonless)
+- Native systemd integration (ordering, restart, logging)
+- Each container is a proper systemd service
+- Works in unprivileged LXC with nesting
+- `journalctl` for logs instead of `docker logs`
+
+## Deployment method comparison
+
+| Method | Maturity | Compose support | GPU | Best for |
+|--------|----------|-----------------|-----|----------|
+| Native OCI LXC | Tech preview | No (1 image = 1 LXC) | Via device passthrough | Single-image services |
+| Docker Compose in LXC | Production | Full | Via nvidia-container-toolkit | Complex stacks, quick setup |
+| Podman Quadlet in LXC | Production | Via unit files | Via CDI/device mount | Systemd-native, no daemon |
+
 ## Notes
 
-- Native OCI containers are a Proxmox 9.1 tech preview — use Docker Compose in LXC for production
-- Always use static IPs (minimal OCI images lack dhclient)
+- Native OCI containers are a Proxmox 9.1 tech preview — use Docker Compose or Podman Quadlet in LXC for production
+- Always use static IPs for native OCI containers (minimal images lack dhclient)
 - Use `pct exec <id> -- <command>` to access containers
 - PostgreSQL runs on CT 107 (shared), not inside axiom containers
-- The `docker-compose.external-db.yml` variant is designed for this setup (no embedded postgres)
+- The `docker-compose.external-db.yml` variant is designed for external DB setups
