@@ -2057,14 +2057,18 @@ class SimplifiedWritingAgent:
                     surname = author_part.strip().split()[-1] if author_part.strip() else ""
                     if surname and len(surname) > 2:
                         # Check if surname and year appear together in a parenthetical or within a short window
-                        # Pattern: (Surname ... Year) or (Year ... Surname) within ~80 chars
                         surname_escaped = re.escape(surname)
-                        pattern = rf'\({[^)]*{surname_escaped}[^)]*{year_str}[^)]*\)|\({[^)]*{year_str}[^)]*{surname_escaped}[^)]*\)'
-                        if re.search(pattern, content, re.IGNORECASE):
+                        # Pattern: (Surname ... Year) or (Year ... Surname) inside parentheses
+                        paren_pattern = (
+                            r'\([^)]*' + surname_escaped + r'[^)]*' + year_str + r'[^)]*\)'
+                            + r'|'
+                            + r'\([^)]*' + year_str + r'[^)]*' + surname_escaped + r'[^)]*\)'
+                        )
+                        if re.search(paren_pattern, content, re.IGNORECASE):
                             is_cited = True
                             break
                         # Fallback: check proximity without parentheses (e.g., "According to Surname (Year)")
-                        proximity_pattern = rf'{surname_escaped}.{{0,40}}{year_str}|{year_str}.{{0,40}}{surname_escaped}'
+                        proximity_pattern = surname_escaped + r'.{0,40}' + year_str + r'|' + year_str + r'.{0,40}' + surname_escaped
                         if re.search(proximity_pattern, content, re.IGNORECASE):
                             is_cited = True
                             break
