@@ -851,6 +851,7 @@ class ModelDispatcher:
             )
         # --- DEBUGGING ADDITION END ---
 
+        context_overflow_retried = False
         for attempt in range(self.max_retries):
             # Generate unique attempt ID for tracking
             import uuid
@@ -1375,6 +1376,27 @@ class ModelDispatcher:
                         )
                         request_params["max_tokens"] = config.DEEPSEEK_MAX_TOKENS_LIMIT
                         # Continue with retry logic below
+
+                # Check for context length overflow and retry with aggressive truncation (once)
+                if e.status_code == 400 and "maximum context length" in error_msg and not context_overflow_retried:
+                    import re as _re
+                    limit_match = _re.search(r"maximum context length is (\d+) tokens", error_msg)
+                    requested_match = _re.search(r"you requested (\d+) tokens", error_msg)
+                    if limit_match:
+                        actual_limit = int(limit_match.group(1))
+                        requested = int(requested_match.group(1)) if requested_match else 0
+                        logger.warning(
+                            f"Context overflow: requested {requested} tokens, limit {actual_limit}. "
+                            f"Force-truncating to 80% of limit and retrying..."
+                        )
+                        safe_limit = int(actual_limit * 0.8)
+                        current_msgs = request_params.get("messages", messages)
+                        truncated_msgs, _ = truncate_messages_to_context(
+                            current_msgs, safe_limit, max_tokens_for_call
+                        )
+                        request_params["messages"] = truncated_msgs
+                        context_overflow_retried = True
+                        continue
 
                 # Check if this is a schema-related error that might be fixed by fallback
                 from ai_researcher.agentic_layer.utils.json_format_helper import (
