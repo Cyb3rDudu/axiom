@@ -327,7 +327,7 @@ async def initialize_ai_components():
         reranker = model_cache.get_reranker()
         # PGVectorStore uses PostgreSQL database connection, no directory needed
         vector_store = VectorStore()
-        retriever = Retriever(embedder=embedder, vector_store=vector_store)
+        retriever = Retriever(embedder=embedder, vector_store=vector_store, reranker=reranker)
         
         # Initialize agent controller
         agent_controller = AgentController(
