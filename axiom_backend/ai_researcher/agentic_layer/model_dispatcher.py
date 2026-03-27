@@ -22,7 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 def estimate_token_count(text: str) -> int:
-    return len(text) // 4 + 1
+    # Use ~3.2 chars/token (conservative) instead of 4 chars/token.
+    # Non-English text (especially German compound words) and technical
+    # content tokenize at closer to 2.5-3 chars/token, so the old //4
+    # estimate undershot by ~30-50%, causing context overflow 400 errors.
+    return int(len(text) / 3.2) + 1
 
 
 def estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
