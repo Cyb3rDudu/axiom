@@ -468,6 +468,10 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     }
                     if citation_profile_id:
                         metadata_update["citation_profile_id"] = citation_profile_id
+                        # Also store in mission_settings for the settings dialog
+                        if "mission_settings" not in existing_metadata:
+                            existing_metadata["mission_settings"] = {}
+                        existing_metadata["mission_settings"]["citation_profile_id"] = citation_profile_id
                     existing_metadata.update(metadata_update)
                     await self.controller.context_manager.update_mission_metadata(mission_id, existing_metadata)
                 else:
@@ -530,6 +534,9 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     }
                     if citation_profile_id:
                         new_mission_metadata["citation_profile_id"] = citation_profile_id
+                        if "mission_settings" not in new_mission_metadata:
+                            new_mission_metadata["mission_settings"] = {}
+                        new_mission_metadata["mission_settings"]["citation_profile_id"] = citation_profile_id
                     await self.controller.context_manager.update_mission_metadata(mission_id, new_mission_metadata)
                 
                 # Now check if there were formatting preferences in the agent output

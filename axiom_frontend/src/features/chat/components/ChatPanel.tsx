@@ -320,6 +320,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
             return prevAutoSave
           })
 
+          // Sync citation profile from mission metadata
+          const newCitationProfile = missionMetadata.citation_profile_id || null
+          setSelectedCitationProfile(prev => {
+            if (prev !== newCitationProfile) {
+              return newCitationProfile
+            }
+            return prev
+          })
+
           // Re-enable settings after a short delay
           setTimeout(() => {
             setIsLoadingSettings(false)

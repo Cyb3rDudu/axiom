@@ -2931,19 +2931,29 @@ async def get_mission_settings(
             get_research_note_content_limit, get_writing_agent_max_context_chars
         )
         
-        # Get language_code with fallback chain
+        # Get language_code with fallback chain: mission_settings -> top-level metadata -> user pref -> 'en'
         language_code = None
         if mission_settings_data and 'language_code' in mission_settings_data:
             language_code = mission_settings_data['language_code']
+        elif mission_context.metadata and 'language_code' in mission_context.metadata:
+            language_code = mission_context.metadata['language_code']
         elif current_user.language_code:
             language_code = current_user.language_code
         else:
             language_code = 'en'
 
+        # Get citation_profile_id with fallback chain: mission_settings -> top-level metadata
+        citation_profile_id = None
+        if mission_settings_data and 'citation_profile_id' in mission_settings_data:
+            citation_profile_id = mission_settings_data['citation_profile_id']
+        elif mission_context.metadata and 'citation_profile_id' in mission_context.metadata:
+            citation_profile_id = mission_context.metadata['citation_profile_id']
+
         # Get effective settings (after fallback) — must populate ALL fields
         # so the frontend can display defaults instead of "undefined"
         effective_settings = MissionSettings(
             language_code=language_code,
+            citation_profile_id=citation_profile_id,
             initial_research_max_depth=get_initial_research_max_depth(mission_id),
             initial_research_max_questions=get_initial_research_max_questions(mission_id),
             structured_research_rounds=get_structured_research_rounds(mission_id),

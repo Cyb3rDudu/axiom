@@ -358,6 +358,9 @@ class MissionSettings(BaseModel):
     # Language Configuration
     language_code: Optional[str] = Field(None, description="Language code for AI prompts and content generation")
 
+    # Citation Configuration
+    citation_profile_id: Optional[str] = Field(None, description="Citation profile to use for this mission")
+
     # Initial Research Parameters
     initial_research_max_depth: Optional[int] = Field(None, description="Max depth for initial question tree")
     initial_research_max_questions: Optional[int] = Field(None, description="Max total questions in initial phase")
