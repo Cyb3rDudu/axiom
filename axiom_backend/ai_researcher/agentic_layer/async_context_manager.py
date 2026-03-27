@@ -363,13 +363,29 @@ class AsyncContextManager:
     
     def get_mission_semaphore(self, mission_id: str, max_concurrent: Optional[int] = None) -> asyncio.Semaphore:
         """Get or create a semaphore for a specific mission.
-        
+
         Args:
             mission_id: The mission ID
             max_concurrent: Maximum concurrent operations for this mission.
                           If None, uses user's max_concurrent_requests setting divided by 2
                           to allow multiple missions to run concurrently.
         """
+        current_loop = None
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+
+        # Check if existing semaphore is still valid for the current event loop.
+        # uvicorn --reload + uvloop can create a new loop, making old semaphores stale
+        # and causing "bound to a different event loop" errors.
+        if mission_id in self._mission_semaphores and current_loop is not None:
+            sem = self._mission_semaphores[mission_id]
+            sem_loop = getattr(sem, '_loop', None)
+            if sem_loop is not None and sem_loop is not current_loop:
+                logger.warning(f"Mission {mission_id} semaphore bound to stale event loop, recreating")
+                del self._mission_semaphores[mission_id]
+
         if mission_id not in self._mission_semaphores:
             if max_concurrent is None:
                 # Get user's setting for this mission
@@ -377,7 +393,7 @@ class AsyncContextManager:
                 user_max = get_max_concurrent_requests(mission_id)
                 # Use half for per-mission to allow multiple missions, minimum 3
                 max_concurrent = max(3, user_max // 2) if user_max > 0 else 10
-            
+
             self._mission_semaphores[mission_id] = asyncio.Semaphore(max_concurrent)
             logger.info(f"Created semaphore for mission {mission_id} with max_concurrent={max_concurrent}")
         return self._mission_semaphores[mission_id]

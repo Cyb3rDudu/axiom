@@ -230,26 +230,38 @@ class ResearchManager:
                         # Apply both mission-specific and controller semaphores
                         # Mission semaphore limits per-mission concurrency based on user settings
                         # Controller semaphore limits total LLM API calls
-                        mission_semaphore = self.controller.context_manager.get_mission_semaphore(mission_id)
-                        async with mission_semaphore:
+                        try:
+                            mission_semaphore = self.controller.context_manager.get_mission_semaphore(mission_id)
+                            await mission_semaphore.acquire()
+                        except RuntimeError as sem_err:
+                            if "different event loop" in str(sem_err):
+                                logger.warning(f"Semaphore event loop mismatch for mission {mission_id}, recreating")
+                                self.controller.context_manager._mission_semaphores.pop(mission_id, None)
+                                mission_semaphore = self.controller.context_manager.get_mission_semaphore(mission_id)
+                                await mission_semaphore.acquire()
+                            else:
+                                raise
+                        try:
                             async with self.controller.maybe_semaphore:
                                 # Call the agent's explore_question method
                                 result_tuple = await self.controller.research_agent.explore_question(
-                                question=q,
-                                mission_id=mission_id,
-                                mission_goal=user_request,
-                                active_goals=active_goals,
-                                active_thoughts=active_thoughts,
-                                current_depth=d,
-                                max_depth=max_depth,
-                                max_questions=max_questions,
-                                questions_explored_count=q_count,
-                                agent_scratchpad=scratch,
-                                feedback_callback=feedback_callback,
-                                log_queue=log_queue,
-                                update_callback=update_callback,
-                                tool_registry=filtered_tool_registry
-                            )
+                                    question=q,
+                                    mission_id=mission_id,
+                                    mission_goal=user_request,
+                                    active_goals=active_goals,
+                                    active_thoughts=active_thoughts,
+                                    current_depth=d,
+                                    max_depth=max_depth,
+                                    max_questions=max_questions,
+                                    questions_explored_count=q_count,
+                                    agent_scratchpad=scratch,
+                                    feedback_callback=feedback_callback,
+                                    log_queue=log_queue,
+                                    update_callback=update_callback,
+                                    tool_registry=filtered_tool_registry
+                                )
+                        finally:
+                            mission_semaphore.release()
                         return (q, d, result_tuple)
                     except Exception as task_e:
                         logger.error(f"Error in exploration task for question '{q}': {task_e}", exc_info=True)
