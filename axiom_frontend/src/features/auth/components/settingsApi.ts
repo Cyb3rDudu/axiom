@@ -101,6 +101,10 @@ export interface UserSettings {
   web_fetch?: WebFetchSettings
   research_parameters: ResearchParameters
   appearance: AppearanceSettings
+  writing_settings?: {
+    default_citation_profile?: string | null
+    custom_system_prompt?: string | null
+  }
 }
 
 export interface UserProfile {
