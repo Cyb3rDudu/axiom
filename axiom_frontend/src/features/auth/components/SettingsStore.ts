@@ -98,12 +98,18 @@ interface AppearanceSettings {
   color_scheme: 'default' | 'blue' | 'emerald' | 'purple' | 'rose' | 'amber' | 'teal'
 }
 
+interface WritingSettings {
+  default_citation_profile?: string | null
+  custom_system_prompt?: string | null
+}
+
 interface UserSettings {
   ai_endpoints: AISettings
   search: SearchSettings
   web_fetch?: WebFetchSettings
   research_parameters: ResearchParameters
   appearance: AppearanceSettings
+  writing_settings?: WritingSettings
 }
 
 export interface UserProfile {
@@ -296,7 +302,8 @@ const defaultSettings: UserSettings = {
     max_concurrent_requests: 5,
     skip_final_replanning: true,
     auto_optimize_params: false
-  }
+  },
+  writing_settings: {}
 }
 
 export const useSettingsStore = create<SettingsState>()((set, get) => ({
@@ -347,6 +354,9 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         appearance: {
           ...defaultSettings.appearance,
           ...userSettings?.appearance
+        },
+        writing_settings: {
+          ...(userSettings?.writing_settings || {})
         }
       }
       
@@ -415,7 +425,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
           appearance: newDraftSettings.appearance ? {
             ...state.draftSettings.appearance,
             ...newDraftSettings.appearance
-          } : state.draftSettings.appearance
+          } : state.draftSettings.appearance,
+          writing_settings: newDraftSettings.writing_settings ? {
+            ...(state.draftSettings.writing_settings || {}),
+            ...newDraftSettings.writing_settings
+          } : state.draftSettings.writing_settings
         }
       };
     })

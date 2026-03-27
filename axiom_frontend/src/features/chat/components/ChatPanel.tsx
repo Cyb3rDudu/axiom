@@ -20,8 +20,8 @@ import {
   SelectValue,
 } from '../../../components/ui/select'
 import { useToast } from '../../../components/ui/toast'
-import { Send, Loader2, Bot, User, Sparkles, Settings, FolderPlus } from 'lucide-react'
-import { buildApiUrl, API_CONFIG } from '../../../config/api'
+import { Send, Loader2, Bot, User, Sparkles, Settings, FolderPlus, Quote } from 'lucide-react'
+import { buildApiUrl, API_CONFIG, apiClient } from '../../../config/api'
 import { MissionSettingsDialog } from '../../mission/components/MissionSettingsDialog'
 import { formatChatMessageTime } from '../../../utils/timezone'
 import { useTheme } from '../../../contexts/ThemeContext'
@@ -44,6 +44,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
   const [isLoadingSettings, setIsLoadingSettings] = useState(false)
   const [hasInitializedSettings, setHasInitializedSettings] = useState(false)
   const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null)
+  const [selectedCitationProfile, setSelectedCitationProfile] = useState<string | null>(null)
+  const [citationProfiles, setCitationProfiles] = useState<Array<{ id: string; name: string }>>([])
   const [missionDocumentGroup, setMissionDocumentGroup] = useState<{
     id: string
     name: string
@@ -162,6 +164,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
     fetchGroups();
   }, []);
 
+  // Fetch citation profiles on mount
+  useEffect(() => {
+    const fetchCitationProfiles = async () => {
+      try {
+        const response = await apiClient.get('/api/citation-profiles')
+        setCitationProfiles(response.data)
+      } catch (error) {
+        console.error('Failed to fetch citation profiles:', error)
+      }
+    }
+    fetchCitationProfiles()
+  }, [])
+
   // Ensure mission is loaded when chat with mission is selected
   useEffect(() => {
     if (currentChat?.missionId) {
@@ -226,12 +241,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
       setSelectedGroupId(groupId)
       setUseWebSearch(webSearch)
       setAutoCreateDocumentGroup(autoSaveDocs)
+
+      // Restore citation profile from mission metadata or chat settings
+      const citationProfileId = activeMission?.metadata?.citation_profile_id
+        || currentChat.settings?.citation_profile_id
+        || null
+      setSelectedCitationProfile(citationProfileId)
     } else {
       // Reset to defaults when no chat is selected
       console.log('No chat selected, resetting to defaults')
       setSelectedGroupId(null)
       setUseWebSearch(true)
       setAutoCreateDocumentGroup(false)
+      setSelectedCitationProfile(null)
     }
     
     // Mark that we've initialized settings for this chat after a delay
@@ -468,7 +490,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
           mission_id: updatedCurrentChat?.missionId || null, // Pass existing mission ID if available
           document_group_id: selectedGroupId,
           use_web_search: useWebSearch,
-          auto_create_document_group: autoCreateDocumentGroup
+          auto_create_document_group: autoCreateDocumentGroup,
+          citation_profile_id: selectedCitationProfile || null
         })
       })
 
@@ -1054,6 +1077,33 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
                         {autoCreateDocumentGroup ? 'On' : 'Off'}
                       </span>
                     </div>
+
+                    {citationProfiles.length > 0 && (
+                      <div className="flex items-center space-x-1.5 min-w-0">
+                        <Quote className="h-3 w-3 text-muted-foreground shrink-0" />
+                        <Select
+                          value={selectedCitationProfile || 'default'}
+                          onValueChange={(value) => setSelectedCitationProfile(value === 'default' ? null : value)}
+                          disabled={isChatDisabled}
+                        >
+                          <SelectTrigger className="text-xs h-6 w-[100px]">
+                            <span className="truncate block w-full text-left">
+                              {selectedCitationProfile
+                                ? citationProfiles.find(p => p.id === selectedCitationProfile)?.name || 'Default'
+                                : 'Default'}
+                            </span>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="default">Default</SelectItem>
+                            {citationProfiles.map((profile) => (
+                              <SelectItem key={profile.id} value={profile.id}>
+                                {profile.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
 
                     {/* Mission Settings Button - Only show when there's a mission */}
                     {currentMission && (

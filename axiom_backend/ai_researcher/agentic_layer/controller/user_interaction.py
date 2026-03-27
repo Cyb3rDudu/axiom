@@ -276,7 +276,8 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
         update_callback: Optional[Callable[[queue.Queue, Any], None]] = None,
         use_web_search: Optional[bool] = True,
         document_group_id: Optional[str] = None,
-        auto_create_document_group: Optional[bool] = False
+        auto_create_document_group: Optional[bool] = False,
+        citation_profile_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Handles a user message using the MessengerAgent.
@@ -454,7 +455,7 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     
                     # Update mission metadata with comprehensive settings
                     existing_metadata = mission_context.metadata or {}
-                    existing_metadata.update({
+                    metadata_update = {
                         "tool_selection": tool_selection,
                         "document_group_id": document_group_id,
                         "use_web_search": use_web_search,
@@ -464,7 +465,10 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                             "auto_create_document_group": auto_create_document_group
                         },
                         "comprehensive_settings": comprehensive_settings
-                    })
+                    }
+                    if citation_profile_id:
+                        metadata_update["citation_profile_id"] = citation_profile_id
+                    existing_metadata.update(metadata_update)
                     await self.controller.context_manager.update_mission_metadata(mission_id, existing_metadata)
                 else:
                     # Create mission if no existing mission_id
@@ -513,7 +517,7 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     }
                     
                     # Set initial metadata with comprehensive settings
-                    await self.controller.context_manager.update_mission_metadata(mission_id, {
+                    new_mission_metadata = {
                         "tool_selection": tool_selection,
                         "document_group_id": document_group_id,
                         "use_web_search": use_web_search,
@@ -523,7 +527,10 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                             "auto_create_document_group": auto_create_document_group
                         },
                         "comprehensive_settings": comprehensive_settings
-                    })
+                    }
+                    if citation_profile_id:
+                        new_mission_metadata["citation_profile_id"] = citation_profile_id
+                    await self.controller.context_manager.update_mission_metadata(mission_id, new_mission_metadata)
                 
                 # Now check if there were formatting preferences in the agent output
                 if formatting_preferences:

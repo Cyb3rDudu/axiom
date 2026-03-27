@@ -6,7 +6,7 @@ import { Input } from '../../../components/ui/input'
 import { Switch } from '../../../components/ui/switch'
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../components/ui/select'
-import { Settings, Save, RotateCcw, Loader2, X, Languages } from 'lucide-react'
+import { Settings, Save, RotateCcw, Loader2, X, Languages, Quote } from 'lucide-react'
 import { useToast } from '../../../components/ui/toast'
 import { apiClient } from '../../../config/api'
 
@@ -26,6 +26,7 @@ type MissionSettings = {
   skip_final_replanning?: boolean
   auto_create_document_group?: boolean
   language_code?: string
+  citation_profile_id?: string
 }
 
 interface Language {
@@ -122,9 +123,10 @@ export const MissionSettingsDialog: React.FC<MissionSettingsDialogProps> = ({
   const [defaultSettings, setDefaultSettings] = useState<MissionSettings>({})
   const [originalSettings, setOriginalSettings] = useState<MissionSettings>({})
   const [languages, setLanguages] = useState<Language[]>([])
+  const [citationProfiles, setCitationProfiles] = useState<Array<{ id: string; name: string; citation_mode: string }>>([])
   const { addToast } = useToast()
 
-  // Load available languages on mount
+  // Load available languages and citation profiles on mount
   useEffect(() => {
     const loadLanguages = async () => {
       try {
@@ -134,7 +136,16 @@ export const MissionSettingsDialog: React.FC<MissionSettingsDialogProps> = ({
         console.error('Failed to load languages:', error)
       }
     }
+    const loadCitationProfiles = async () => {
+      try {
+        const response = await apiClient.get('/api/citation-profiles')
+        setCitationProfiles(response.data)
+      } catch (error) {
+        console.error('Failed to load citation profiles:', error)
+      }
+    }
     loadLanguages()
+    loadCitationProfiles()
   }, [])
 
   const loadMissionSettings = useCallback(async () => {
@@ -309,6 +320,44 @@ export const MissionSettingsDialog: React.FC<MissionSettingsDialogProps> = ({
                 Blue-highlighted fields have mission-specific overrides.
               </p>
             </div>
+
+            {/* Citation Profile */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Quote className="h-4 w-4" />
+                  Citation Profile
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="citation_profile" className="text-xs font-medium text-gray-700">
+                      Citation Style
+                    </Label>
+                  </div>
+                  <Select
+                    value={missionSettings.citation_profile_id as string || 'default'}
+                    onValueChange={(value) => updateSetting('citation_profile_id', value === 'default' ? undefined : value)}
+                  >
+                    <SelectTrigger className="h-8 text-sm w-full max-w-xs">
+                      <SelectValue placeholder="Default (from settings)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Default (from settings)</SelectItem>
+                      {citationProfiles.map((profile) => (
+                        <SelectItem key={profile.id} value={profile.id}>
+                          {profile.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-gray-500 leading-tight">
+                    Override the default citation style for this mission
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
 
             {/* Language & Prompts */}
             <Card>

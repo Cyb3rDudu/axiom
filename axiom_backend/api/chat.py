@@ -33,6 +33,7 @@ class ChatRequest(BaseModel):
     document_group_id: Optional[str] = None  # Selected document group for local RAG
     use_web_search: Optional[bool] = True  # Enable/disable web search
     auto_create_document_group: Optional[bool] = False  # Auto-save documents during research
+    citation_profile_id: Optional[str] = None  # Citation profile for mission creation
 
 class ChatResponse(BaseModel):
     response: str
@@ -81,7 +82,7 @@ async def chat_with_ai(
         logger.info(f"Processing chat request from user {current_user.username} with {len(chat_history)} history pairs")
         
         # Save chat settings if provided
-        if request.chat_id and (request.document_group_id is not None or request.use_web_search is not None or request.auto_create_document_group is not None):
+        if request.chat_id and (request.document_group_id is not None or request.use_web_search is not None or request.auto_create_document_group is not None or request.citation_profile_id is not None):
             from database import crud
             try:
                 settings = {}
@@ -91,6 +92,8 @@ async def chat_with_ai(
                     settings['use_web_search'] = request.use_web_search
                 if request.auto_create_document_group is not None:
                     settings['auto_create_document_group'] = request.auto_create_document_group
+                if request.citation_profile_id is not None:
+                    settings['citation_profile_id'] = request.citation_profile_id
 
                 crud.update_chat_settings(
                     db=db,
@@ -145,7 +148,8 @@ async def chat_with_ai(
                 update_callback=websocket_update_callback if request.mission_id else None,
                 use_web_search=request.use_web_search,
                 document_group_id=request.document_group_id,
-                auto_create_document_group=request.auto_create_document_group
+                auto_create_document_group=request.auto_create_document_group,
+                citation_profile_id=request.citation_profile_id,
             )
         except Exception as agent_error:
             logger.error(f"AgentController error: {agent_error}", exc_info=True)

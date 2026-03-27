@@ -64,7 +64,7 @@ interface MissionState {
   missionContexts: { [missionId: string]: MissionContext };
   activeTab: 'plan' | 'notes' | 'draft' | 'agents' | 'settings'
   isLoaded: boolean
-  createMission: (request: string, options?: { useWebSearch?: boolean; documentGroupId?: string; chatId?: string }) => Promise<Mission>
+  createMission: (request: string, options?: { useWebSearch?: boolean; documentGroupId?: string; chatId?: string; citationProfileId?: string }) => Promise<Mission>
   startMission: (missionId: string) => Promise<void>
   stopMission: (missionId: string) => Promise<void>
   resumeMission: (missionId: string) => Promise<void>
@@ -218,13 +218,14 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     await persistMissionData(mission)
   },
 
-  createMission: async (request: string, options?: { useWebSearch?: boolean; documentGroupId?: string; chatId?: string }) => {
+  createMission: async (request: string, options?: { useWebSearch?: boolean; documentGroupId?: string; chatId?: string; citationProfileId?: string }) => {
     try {
       const requestBody = {
         request,
         chat_id: options?.chatId || 'default',
         use_web_search: options?.useWebSearch ?? true,
-        document_group_id: options?.documentGroupId || null
+        document_group_id: options?.documentGroupId || null,
+        citation_profile_id: options?.citationProfileId || null
       }
 
       const response = await apiClient.post('/api/missions', requestBody)

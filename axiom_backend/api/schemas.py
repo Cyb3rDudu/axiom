@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 from datetime import datetime
 from ai_researcher.agentic_layer.schemas.goal import GoalEntry
 from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry
@@ -129,6 +129,14 @@ class ResearchParameters(BaseModel):
     writing_mode_doc_results: Optional[int] = None
     writing_mode_web_results: Optional[int] = None
 
+class CitationProfile(BaseModel):
+    id: str                          # e.g. "kmu_apa6", "apa7_en", "numbered"
+    name: str                        # Display name: "KMU Akademie APA 6"
+    citation_mode: Literal["numbered", "author_year"]
+    in_text_rules: str               # LLM prompt fragment for in-text citation rules
+    bibliography_rules: str          # LLM prompt fragment for bibliography formatting
+    is_builtin: bool = False         # True for shipped defaults
+
 class GlobalUserSettings(BaseModel):
     ai_endpoints: Optional[AISettings] = None
     search: Optional[SearchSettings] = None
@@ -236,6 +244,7 @@ class LanguagePreferenceUpdate(BaseModel):
 class MissionBase(BaseModel):
     user_request: str
     language_code: Optional[str] = None  # Language for this mission (defaults to user's preference)
+    citation_profile_id: Optional[str] = None  # Citation profile to use for this mission
 
 class MissionUpdate(BaseModel):
     status: Optional[str] = None
