@@ -1,5 +1,6 @@
 from typing import Optional, List, Dict, Any, Tuple
 from pydantic import ValidationError
+import asyncio
 import logging
 import re  # <-- Add import for regex
 
@@ -89,6 +90,7 @@ class WritingAgent(BaseAgent):
         )
         self.controller = controller  # Store controller
         self.mission_id = None  # Initialize mission_id as None
+        self._system_prompt_lock = asyncio.Lock()  # Protect system_prompt during concurrent writes
 
     def _estimate_tokens(self, text: str) -> int:
         """Rough estimate of token count - approximately 4 chars per token"""
@@ -249,21 +251,14 @@ class WritingAgent(BaseAgent):
 - **Evaluate Necessity:** Only create a table if it provides a clear, compelling advantage for clarity and conciseness. Avoid tables for simple lists or information easily conveyed in a sentence or two. The table must be directly supported by the provided `Research Notes` or synthesized from the `Content from Previous Sections` (depending on the `Research Strategy`).
 - **Format:** If you create a table, use standard **Markdown table format**. Ensure columns are clearly labeled and data is accurately represented.
 - **Integration:** Introduce the table briefly in the preceding text (e.g., "Table 1 summarizes the key differences...") and ensure it flows logically within the section. Do not number tables sequentially across the *entire* report; numbering is local to the section if needed, but often just introducing it is sufficient.
-- **Citations in Tables:** If data within a table cell is directly derived from a specific source, place the `[doc_id]` citation *within that cell*, following the standard citation rules.
+- **Citations in Tables:** If data within a table cell is directly derived from a specific source, place the citation *within that cell*, following the standard citation rules defined below.
 
 **Specific Structural Requirements:**
 - **Introductory Paragraphs (for Parent Sections):** If the section being written has subsections (indicated in the 'Section to Write' details and visible in the 'Overall Report Outline'), ensure it starts with a brief introductory paragraph that previews the topics covered in its subsections. (This intro might be provided or need writing/refining based on the strategy, often `synthesize_from_subsections`).
 - **Transition Paragraphs:** At the end of the *last paragraph* of the current section's content, write a brief transition sentence or short paragraph (1-2 sentences) that smoothly links to the *next* logical section or subsection according to the 'Overall Report Outline'. Identify the next section from the outline and briefly mention its topic. This should only be done if there is an upcoming section. Example: "Having examined X, the following section will delve into Y." or "Next, we will explore the implications of Z."
 
 **CRITICAL CITATION RULES (Apply mainly for `research_based` sections and within tables):**
-1.  Whenever you incorporate information *directly derived* from notes belonging to a specific source document (`Research Notes`), you MUST insert a citation placeholder immediately following that piece of information (or within the table cell).
-2.  The placeholder format MUST be **exactly** `[doc_id]`, using the specific Document ID (e.g., `f28769c8`) provided in the 'Research Notes' section header for that source.
-3.  **Frequency:** If multiple consecutive sentences or a distinct passage of thought draws *only* from notes belonging to the *same source document*, place a SINGLE `[doc_id]` placeholder at the **end** of that passage or the last sentence drawing from that source. Do NOT add a placeholder after every sentence if the source remains the same for the immediate context.
-4.  **Synthesized Sentences:** If a single sentence combines information or claims originating from *different* source documents (based on their `doc_id` in the `Research Notes`), you MUST place the corresponding `[doc_id]` placeholder *immediately after each specific piece of information or claim* it supports within that sentence. Do not group citations at the end if they support distinct parts of the sentence derived from different sources. Example: "In the literature we see increased risk [f28769c8] but improved outcomes with intervention [7525d6d3]."
-5.  **DO NOT** combine multiple doc IDs inside a single bracket (e.g., `[f28769c8, 7525d6d3]`). Each citation must be separate: `[f28769c8] [7525d6d3]`.
-6.  **DO NOT** invent citations or use any other format (like [1], [Source A], Author Year, etc.). Use ONLY the `[doc_id]` format provided in the 'Research Notes' headers (e.g., `[f28769c8]`, `[a3b1c9d0]`).
-7.  **ABSOLUTELY DO NOT use the `Note ID` (e.g., `note_xyz123`) as a citation.** The `Note ID` is for internal reference only. Citations MUST use the `Document ID` (`doc_id`) specified in the source header (like `[f28769c8]`). Using `note_id` in brackets is incorrect and will break the referencing system.
-8.  **Grounding:** Ensure every claim or piece of information you write is directly supported by the provided 'Research Notes' (for `research_based` sections) or the 'Content from Previous Sections' (for `content_based` or synthesis sections). If you cannot find support in the provided context, DO NOT include the information.
+{{CITATION_RULES}}
 
 **Handling Empty Notes:**
 - If the 'Research Notes' list is empty or contains no relevant information for the section's goal AND you are writing the section for the first time (no 'Current Draft Content' provided), output only the phrase: "No information found to write this section."
@@ -273,7 +268,7 @@ class WritingAgent(BaseAgent):
 - Your primary goal is to revise the 'Current Draft Content' based *specifically* on the 'Revision Suggestions', while still adhering to the section's detailed `Description/Goal`, `Research Strategy`, **and the Active Mission Goals (tone, audience, etc.)**.
 - Carefully analyze each suggestion (problem description, suggested change, location).
 - Apply the suggested changes directly to the relevant parts of the 'Current Draft Content'.
-- If a suggestion requires incorporating new information (for `research_based` sections), use the 'Research Notes' provided for this revision pass. Ensure new information is properly cited using `[doc_id]`.
+- If a suggestion requires incorporating new information (for `research_based` sections), use the 'Research Notes' provided for this revision pass. Ensure new information is properly cited following the citation rules above.
 - Maintain the overall structure and flow unless a suggestion explicitly requires restructuring.
 - Ensure the revised section still adheres to all guidelines (context awareness, style aligned with goals, structure, citations).
 - Output the *complete, revised* text for the section.
@@ -323,6 +318,21 @@ class WritingAgent(BaseAgent):
                     f"Could not get mission context for reference mapping: {e}"
                 )
 
+        # Determine citation mode from active citation profile
+        citation_mode = "numbered"
+        if hasattr(self, '_active_citation_profile') and self._active_citation_profile:
+            citation_mode = self._active_citation_profile.citation_mode
+        use_author_year = citation_mode == "author_year"
+
+        # Determine page abbreviation based on profile language
+        page_abbr = "p. XX"
+        no_page_abbr = "n.p."
+        if use_author_year and hasattr(self, '_active_citation_profile') and self._active_citation_profile:
+            rules = self._active_citation_profile.in_text_rules
+            if "S. XX" in rules or ", S." in rules:
+                page_abbr = "S. XX"
+                no_page_abbr = "o. S."
+
         formatted_text = "## Research Notes (Grouped by Source Document/Synthesis):\n\n"
         processed_internal_notes = (
             set()
@@ -360,7 +370,7 @@ class WritingAgent(BaseAgent):
                     doc_id_for_citation
                 )
 
-            # --- Determine Header based on source_type ---
+            # --- Determine Header based on source_type and citation_mode ---
             if source_type == "document":
                 title = (
                     getattr(first_note.source_metadata, "title", None)
@@ -374,10 +384,15 @@ class WritingAgent(BaseAgent):
                     getattr(first_note.source_metadata, "authors", None)
                     or "Unknown Authors"
                 )
-                source_header = f"### Source Document: {simple_ref_id} (Title: {title}, Year: {year}, Authors: {authors})\n"
-                source_header += (
-                    f"**Use `[{simple_ref_id}]` for citations from this document.**\n\n"
-                )
+                if use_author_year:
+                    source_header = f"### Source Document: {title}\n"
+                    source_header += f"**Metadata for citation:** Author(s): {authors}, Year: {year}, Title: {title}\n"
+                    source_header += f"**Cite as:** (Author, Year, {page_abbr}) \u2014 use the author names and year above.\n\n"
+                else:
+                    source_header = f"### Source Document: {simple_ref_id} (Title: {title}, Year: {year}, Authors: {authors})\n"
+                    source_header += (
+                        f"**Use `[{simple_ref_id}]` for citations from this document.**\n\n"
+                    )
             elif source_type == "web":
                 title = (
                     getattr(first_note.source_metadata, "title", None)
@@ -386,30 +401,26 @@ class WritingAgent(BaseAgent):
                 url = (
                     getattr(first_note.source_metadata, "url", None) or source_id
                 )  # Use metadata URL if available
-                # For web sources, the doc_id for citation IS the URL
-                source_header = f"### Web Source: {url} (Title: {title})\n"
-                # Instruct LLM to use URL as citation ID for web sources? Or stick to doc_id format?
-                # Let's stick to doc_id format for consistency, using a hash of the URL?
-                # For now, let's use the URL directly but warn the LLM.
-                # Alternative: Generate a stable ID for web sources earlier.
-                # Let's assume doc_id format is required. We need a stable ID.
-                # Hashing URL might be an option, but let's use the note's source_id for now if it's web.
-                # This needs refinement based on how citation processing handles web URLs.
-                # For now, let's use the URL itself as the placeholder content, but this will break _process_citations.
-                # --> REVISED APPROACH: Use the first 8 chars of URL hash as doc_id for web?
-                import hashlib
+                if use_author_year:
+                    source_header = f"### Web Source: {title}\n"
+                    source_header += f"**Metadata for citation:** URL: {url}, Title: {title}\n"
+                    source_header += f"**Cite as:** (Author/Organization, Year, {no_page_abbr}) \u2014 use available metadata above.\n\n"
+                else:
+                    # For web sources, the doc_id for citation IS the URL
+                    source_header = f"### Web Source: {url} (Title: {title})\n"
+                    import hashlib
 
-                web_doc_id = hashlib.sha1(url.encode()).hexdigest()[:8]
+                    web_doc_id = hashlib.sha1(url.encode()).hexdigest()[:8]
 
-                # Get simple reference ID if mission context is available
-                simple_web_ref_id = web_doc_id  # Default to hash ID
-                if mission_context:
-                    simple_web_ref_id = mission_context.get_simple_reference_id(
-                        web_doc_id
-                    )
+                    # Get simple reference ID if mission context is available
+                    simple_web_ref_id = web_doc_id  # Default to hash ID
+                    if mission_context:
+                        simple_web_ref_id = mission_context.get_simple_reference_id(
+                            web_doc_id
+                        )
 
-                source_header += f"**Use `[{simple_web_ref_id}]` for citations from this web page.**\n\n"
-                doc_id_for_citation = web_doc_id  # Use the generated hash for citation
+                    source_header += f"**Use `[{simple_web_ref_id}]` for citations from this web page.**\n\n"
+                    doc_id_for_citation = web_doc_id  # Use the generated hash for citation
             else:  # Should not happen based on filtering
                 source_header = f"### Unknown Source Type: {source_id}\n"
             # --- End Header Determination ---
@@ -453,13 +464,21 @@ class WritingAgent(BaseAgent):
                         title = agg_metadata.get("title", "Unknown Title")
                         year = agg_metadata.get("publication_year", "N/A")
                         authors = agg_metadata.get("authors", "Unknown Authors")
-                        formatted_text += f"  - Document: {citation_id_for_agg} (Title: {title}, Year: {year}, Authors: {authors})\n"
-                        formatted_text += f"    **Use `[{citation_id_for_agg}]` when citing information derived from this document via the synthesis note.**\n"
+                        if use_author_year:
+                            formatted_text += f"  - Document: {title} (Author(s): {authors}, Year: {year})\n"
+                            formatted_text += f"    **Cite as:** (Author, Year, {page_abbr}) \u2014 use the author names and year above.\n"
+                        else:
+                            formatted_text += f"  - Document: {citation_id_for_agg} (Title: {title}, Year: {year}, Authors: {authors})\n"
+                            formatted_text += f"    **Use `[{citation_id_for_agg}]` when citing information derived from this document via the synthesis note.**\n"
                     elif agg_source_type == "web":
                         title = agg_metadata.get("title", "Unknown Title")
                         url = agg_metadata.get("url", agg_source_id)
-                        formatted_text += f"  - Web Page: {url} (Title: {title})\n"
-                        formatted_text += f"    **Use `[{citation_id_for_agg}]` when citing information derived from this web page via the synthesis note.**\n"
+                        if use_author_year:
+                            formatted_text += f"  - Web Page: {title} (URL: {url})\n"
+                            formatted_text += f"    **Cite as:** (Author/Organization, Year, {no_page_abbr}) \u2014 use available metadata above.\n"
+                        else:
+                            formatted_text += f"  - Web Page: {url} (Title: {title})\n"
+                            formatted_text += f"    **Use `[{citation_id_for_agg}]` when citing information derived from this web page via the synthesis note.**\n"
                     else:
                         formatted_text += (
                             f"  - Unknown Original Source Type: {agg_source_id}\n"
@@ -535,6 +554,69 @@ class WritingAgent(BaseAgent):
         # This allows _call_llm to access it for updating mission stats
         self.mission_id = mission_id
 
+        # Resolve citation profile for this call
+        from services.citation_profiles import resolve_citation_profile
+        mission_metadata = None
+        user_settings = None
+        if self.controller and hasattr(self.controller, 'context_manager'):
+            try:
+                mc = self.controller.context_manager.get_mission_context(mission_id)
+                if mc:
+                    mission_metadata = mc.metadata
+                    user_settings = getattr(mc, 'user_settings', None) or (mission_metadata or {}).get("comprehensive_settings", {}).get("all_user_settings")
+            except Exception as e:
+                logger.warning(f"Failed to resolve citation context for mission {mission_id}: {e}")
+
+        citation_profile = resolve_citation_profile(mission_metadata, user_settings)
+        self._active_citation_profile = citation_profile
+
+        # Inject citation rules into system prompt for this call (restore in finally)
+        # Use lock to prevent concurrent write_section calls from corrupting system_prompt
+        citation_rules = citation_profile.in_text_rules
+        if citation_profile.bibliography_rules:
+            citation_rules += f"\n\n**Bibliography Formatting Rules:**\n{citation_profile.bibliography_rules}"
+
+        async with self._system_prompt_lock:
+            original_system_prompt = self.system_prompt
+            self.system_prompt = self.system_prompt.replace("{{CITATION_RULES}}", citation_rules)
+            try:
+                return await self._write_section_inner(
+                    section_to_write=section_to_write,
+                    notes_for_section=notes_for_section,
+                    full_outline=full_outline,
+                    previous_sections_content=previous_sections_content,
+                    current_draft_content=current_draft_content,
+                    revision_suggestions=revision_suggestions,
+                    active_goals=active_goals,
+                    active_thoughts=active_thoughts,
+                    agent_scratchpad=agent_scratchpad,
+                    parent_section_title=parent_section_title,
+                    mission_id=mission_id,
+                    log_queue=log_queue,
+                    update_callback=update_callback,
+                    model=model,
+                )
+            finally:
+                self.system_prompt = original_system_prompt
+
+    async def _write_section_inner(
+        self,
+        section_to_write,
+        notes_for_section,
+        full_outline,
+        previous_sections_content,
+        current_draft_content,
+        revision_suggestions,
+        active_goals,
+        active_thoughts,
+        agent_scratchpad,
+        parent_section_title,
+        mission_id,
+        log_queue,
+        update_callback,
+        model,
+    ):
+        """Inner implementation of write_section, called with citation-injected system prompt."""
         is_revision_pass = current_draft_content is not None  # Revision if draft exists
         action = "Revising" if is_revision_pass else "Writing"
         logger.info(

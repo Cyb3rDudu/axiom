@@ -222,7 +222,9 @@ class SimplifiedWritingAgent:
             # Process citations to replace ref IDs with numbers and filter sources
             used_sources = []
             if sources:
-                main_response, used_sources = self._process_citations_and_filter_sources(main_response, sources)
+                # Determine citation mode from context (resolved by caller in writing.py)
+                citation_mode = context_info.get("citation_mode", "numbered")
+                main_response, used_sources = self._process_citations_and_filter_sources(main_response, sources, citation_mode)
             
             if status_callback:
                 await status_callback("complete", "Response generated successfully")
@@ -1715,7 +1717,45 @@ class SimplifiedWritingAgent:
         
         # Get custom system prompt addition from context_info
         custom_system_prompt_addition = context_info.get("custom_system_prompt", "")
-        
+        citation_mode = context_info.get("citation_mode", "numbered")
+
+        # Build citation instructions based on citation mode
+        if citation_mode == "author_year":
+            # Resolve the full citation profile to get its rules
+            from services.citation_profiles import resolve_citation_profile
+            citation_profile_id = context_info.get("citation_profile_id")
+            user_settings = context_info.get("user_settings")
+            mission_metadata = {"citation_profile_id": citation_profile_id} if citation_profile_id else None
+            citation_profile = resolve_citation_profile(mission_metadata, user_settings)
+            citation_instructions = (
+                "CITATION INSTRUCTIONS:\n"
+                "When you have access to external information (web search or document search results), you MUST:\n"
+                "1. Integrate that information naturally into your response\n"
+                "2. Use author-year citation format as described below\n"
+                "3. Place citations IMMEDIATELY after the relevant statement or claim\n\n"
+                f"{citation_profile.in_text_rules}\n\n"
+                "Always be specific about where information comes from when using external sources.\n\n"
+            )
+        else:
+            citation_instructions = (
+                "CITATION INSTRUCTIONS:\n"
+                "When you have access to external information (web search or document search results), you MUST:\n"
+                "1. Integrate that information naturally into your response\n"
+                "2. Add citations using the EXACT Citation IDs provided in square brackets\n"
+                "3. Place citations IMMEDIATELY after the relevant statement or claim\n"
+                "4. Use ONLY the 8-character Citation IDs shown in the search results\n\n"
+                "CORRECT citation examples:\n"
+                "- 'Recent studies show that climate change is accelerating [a3b4c5d6].'\n"
+                "- 'The document states that revenue increased by 25% [f2e8d9c1] in Q3.'\n"
+                "- 'According to the research [b7a4e3f2], this method improves accuracy.'\n\n"
+                "INCORRECT citations (NEVER do this):\n"
+                "- 'Recent studies show this [1].' ← Wrong! Don't use numbers\n"
+                "- 'The data shows [Source 1]...' ← Wrong! Use the exact Citation ID\n"
+                "- 'According to research...' ← Wrong! Missing citation\n\n"
+                "Each search result will show '**Citation ID: [xxxxxxxx]**' - use these EXACT IDs.\n"
+                "Always be specific about where information comes from when using external sources.\n\n"
+            )
+
         # Default system prompt (always used as base)
         system_prompt = (
             "You are Axiom, a collaborative writing assistant helping users write documents. "
@@ -1726,23 +1766,8 @@ class SimplifiedWritingAgent:
             "• For display math: $$formula$$ (double dollar signs on separate lines)\n"
             "• NEVER use square brackets [ ], parentheses \\( \\), or \\begin{equation} for math delimiters\n"
             "If a user's request would benefit from a tool that is currently disabled, suggest they enable it.\n\n"
-            "CITATION INSTRUCTIONS:\n"
-            "When you have access to external information (web search or document search results), you MUST:\n"
-            "1. Integrate that information naturally into your response\n"
-            "2. Add citations using the EXACT Citation IDs provided in square brackets\n"
-            "3. Place citations IMMEDIATELY after the relevant statement or claim\n"
-            "4. Use ONLY the 8-character Citation IDs shown in the search results\n\n"
-            "CORRECT citation examples:\n"
-            "- 'Recent studies show that climate change is accelerating [a3b4c5d6].'\n"
-            "- 'The document states that revenue increased by 25% [f2e8d9c1] in Q3.'\n"
-            "- 'According to the research [b7a4e3f2], this method improves accuracy.'\n\n"
-            "INCORRECT citations (NEVER do this):\n"
-            "- 'Recent studies show this [1].' ← Wrong! Don't use numbers\n"
-            "- 'The data shows [Source 1]...' ← Wrong! Use the exact Citation ID\n"
-            "- 'According to research...' ← Wrong! Missing citation\n\n"
-            "Each search result will show '**Citation ID: [xxxxxxxx]**' - use these EXACT IDs.\n"
-            "If the user's request implies changes to the document, describe what changes you would make. "
-            "Always be specific about where information comes from when using external sources.\n\n"
+            + citation_instructions +
+            "If the user's request implies changes to the document, describe what changes you would make. \n\n"
             "WRITING STYLE GUIDELINES:\n"
             "Use bullet points only sparingly and only if absolutely necessary. Otherwise, write in reasonably length paragraphs that flow naturally and provide comprehensive coverage of topics.\n\n"
             "IMPORTANT FORMATTING INSTRUCTIONS:\n"
@@ -1877,21 +1902,29 @@ class SimplifiedWritingAgent:
             logger.error(f"Error in main LLM: {e}", exc_info=True)
             return handle_api_error(e)
 
-    def _process_citations_and_filter_sources(self, content: str, sources: List[Dict[str, Any]]) -> tuple[str, List[Dict[str, Any]]]:
+    def _process_citations_and_filter_sources(self, content: str, sources: List[Dict[str, Any]], citation_mode: str = "numbered") -> tuple[str, List[Dict[str, Any]]]:
         """
         Process citation placeholders in the content, replace them with numbered references,
         and filter sources to only include those actually cited.
         Maps the reference IDs (e.g., [a3b4c5d6]) to sequential numbers [1], [2], etc.
-        
+
         Args:
             content: The generated content with citation placeholders
             sources: List of source dictionaries with ref_id fields
-            
+            citation_mode: Citation style - "numbered" (default) or "author_year"
+
         Returns:
             Tuple of (processed content with numbered citations, filtered and numbered sources)
         """
         if not sources:
             return content, []
+
+        if citation_mode == "author_year":
+            # In author_year mode, the LLM generates inline (Author, Year) citations directly.
+            # No post-processing conversion needed. Filter to sources actually cited in text.
+            logger.info("Author-year citation mode: skipping numbered citation conversion, filtering to cited sources")
+            used_sources = self._filter_sources_author_year(content, sources)
+            return content, used_sources
         
         import re
         
@@ -1943,19 +1976,26 @@ class SimplifiedWritingAgent:
         
         return processed_content, used_sources
     
-    def _process_citations(self, content: str, sources: List[Dict[str, Any]]) -> str:
+    def _process_citations(self, content: str, sources: List[Dict[str, Any]], citation_mode: str = "numbered") -> str:
         """
         Process citation placeholders in the content and replace them with numbered references.
         Maps the reference IDs (e.g., [a3b4c5d6]) to sequential numbers [1], [2], etc.
-        
+
         Args:
             content: The generated content with citation placeholders
             sources: List of source dictionaries with ref_id fields
-            
+            citation_mode: Citation style - "numbered" (default) or "author_year"
+
         Returns:
             Content with processed citations
         """
         if not sources:
+            return content
+
+        if citation_mode == "author_year":
+            # In author_year mode, the LLM generates inline (Author, Year) citations directly.
+            # No post-processing conversion needed.
+            logger.info("Author-year citation mode: skipping numbered citation conversion in _process_citations")
             return content
         
         import re
@@ -1985,6 +2025,69 @@ class SimplifiedWritingAgent:
         
         return processed_content
     
+    def _filter_sources_author_year(self, content: str, sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filter sources to only those actually cited in author-year style text.
+        Matches (Author, Year) patterns against source metadata.
+        """
+        import re
+        if not sources or not content:
+            return sources
+
+        content_lower = content.lower()
+        used_sources = []
+
+        for source in sources:
+            # Extract author/title info from source metadata
+            authors = source.get("authors", "") or source.get("author", "") or ""
+            title = source.get("title", "") or ""
+            year = str(source.get("year", "") or source.get("date", "") or "")
+
+            # Extract year (4-digit number)
+            year_match = re.search(r'(\d{4})', year)
+            year_str = year_match.group(1) if year_match else ""
+
+            # Check if author surname + year appear in the content
+            is_cited = False
+
+            if authors and year_str:
+                # Try each author's surname
+                author_parts = re.split(r'[,;&]', authors)
+                for author_part in author_parts:
+                    surname = author_part.strip().split()[-1] if author_part.strip() else ""
+                    if surname and len(surname) > 2:
+                        # Check if surname and year appear together in a parenthetical or within a short window
+                        # Pattern: (Surname ... Year) or (Year ... Surname) within ~80 chars
+                        surname_escaped = re.escape(surname)
+                        pattern = rf'\({[^)]*{surname_escaped}[^)]*{year_str}[^)]*\)|\({[^)]*{year_str}[^)]*{surname_escaped}[^)]*\)'
+                        if re.search(pattern, content, re.IGNORECASE):
+                            is_cited = True
+                            break
+                        # Fallback: check proximity without parentheses (e.g., "According to Surname (Year)")
+                        proximity_pattern = rf'{surname_escaped}.{{0,40}}{year_str}|{year_str}.{{0,40}}{surname_escaped}'
+                        if re.search(proximity_pattern, content, re.IGNORECASE):
+                            is_cited = True
+                            break
+
+            # Fallback: check if title keywords appear (for web sources without clear author)
+            if not is_cited and title and year_str:
+                title_words = [w for w in title.split() if len(w) > 4]
+                if title_words and year_str in content:
+                    matches = sum(1 for w in title_words[:3] if w.lower() in content_lower)
+                    if matches >= 2:
+                        is_cited = True
+
+            if is_cited:
+                used_sources.append(source)
+
+        # If no sources matched (possibly due to LLM not citing properly), return all
+        if not used_sources and sources:
+            logger.warning("Author-year source filtering matched no sources; returning all sources as fallback")
+            return sources
+
+        logger.info(f"Author-year source filtering: {len(used_sources)}/{len(sources)} sources cited")
+        return used_sources
+
     def _format_sources(self, sources: List[Dict[str, Any]]) -> str:
         """
         Formats sources into a numbered reference section for inline citations.
