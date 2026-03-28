@@ -228,6 +228,101 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
             
         return doc_id
     
+    def _get_citation_mode(self, mission_id: str) -> str:
+        """Get the citation mode for a mission (numbered or author_year)."""
+        try:
+            from services.citation_profiles import resolve_citation_profile
+            mc = self.controller.context_manager.get_mission_context(mission_id)
+            mission_metadata = mc.metadata if mc else None
+            user_settings = None
+            if mission_metadata:
+                user_settings = mission_metadata.get("comprehensive_settings", {}).get("all_user_settings")
+            profile = resolve_citation_profile(mission_metadata, user_settings)
+            return profile.citation_mode
+        except Exception as e:
+            logger.warning(f"Failed to resolve citation profile for {mission_id}: {e}")
+            return "numbered"
+
+    def _build_author_year_bibliography(self, all_notes: list, doc_metadata_source: dict, mission_id: str) -> str:
+        """Build an APA-style bibliography from all research sources used in the mission."""
+        # Deduplicate sources by source_id
+        seen_sources = {}
+        for note in all_notes:
+            if note.source_type == "internal":
+                continue
+            source_key = note.source_id
+            if source_key in seen_sources:
+                continue
+            meta = note.source_metadata if hasattr(note, 'source_metadata') and note.source_metadata else {}
+            if isinstance(meta, dict):
+                metadata = meta
+            elif hasattr(meta, 'dict'):
+                metadata = meta.dict()
+            else:
+                metadata = {}
+
+            authors = metadata.get('authors', '') or metadata.get('author', '') or ''
+            title = metadata.get('title', '') or ''
+            year = metadata.get('publication_year', '') or metadata.get('year', '') or ''
+            url = metadata.get('url', '') or ''
+            journal = metadata.get('journal_or_source', '') or ''
+
+            if note.source_type == "web" and not url:
+                url = str(note.source_id)
+
+            # Parse authors from JSON string if needed
+            if isinstance(authors, str):
+                try:
+                    parsed = json.loads(authors)
+                    if isinstance(parsed, list):
+                        authors = ', '.join(str(a) for a in parsed)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # Extract 4-digit year
+            import re as _re
+            year_match = _re.search(r'(\d{4})', str(year))
+            year_str = year_match.group(1) if year_match else ''
+
+            if not title or title.strip() == '':
+                title = metadata.get('original_filename', 'Unknown Source')
+
+            # Skip entries with no useful info
+            if not authors and not title:
+                continue
+
+            seen_sources[source_key] = {
+                'authors': authors or 'o. V.',
+                'year': year_str or 'o. J.',
+                'title': title,
+                'url': url,
+                'journal': journal,
+                'source_type': note.source_type,
+            }
+
+        if not seen_sources:
+            logger.info(f"No sources found for author-year bibliography in mission {mission_id}")
+            return ""
+
+        # Sort alphabetically by author, then by year
+        sorted_sources = sorted(seen_sources.values(), key=lambda s: (s['authors'].lower(), s['year']))
+
+        # Build bibliography entries
+        entries = []
+        for src in sorted_sources:
+            entry = f"{src['authors']} ({src['year']}). *{src['title']}*."
+            if src['journal']:
+                entry += f" {src['journal']}."
+            if src['url']:
+                entry += f" Verfügbar unter: {src['url']}"
+            entries.append(entry)
+
+        bibliography = "## Literaturverzeichnis\n\n"
+        bibliography += "\n\n".join(entries)
+
+        logger.info(f"Built author-year bibliography with {len(entries)} entries for mission {mission_id}")
+        return bibliography
+
     async def process_citations(
         self,
         mission_id: str,
@@ -373,6 +468,24 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
                     logger.warning(f"Found potential but invalid/unknown doc ID '{potential_id}' inside brackets: {match.group(0)}")
 
         if not used_doc_ids:
+            # Check if this mission uses author-year citation mode
+            # If so, build a bibliography from all research sources instead of [doc_id] placeholders
+            citation_mode = self._get_citation_mode(mission_id)
+            if citation_mode == "author_year":
+                logger.info(f"Author-year mode: building bibliography from all research sources for mission {mission_id}")
+                bibliography = self._build_author_year_bibliography(all_notes, doc_metadata_source, mission_id)
+                if bibliography:
+                    full_draft = full_draft.strip() + "\n\n" + bibliography
+                await self.controller.context_manager.store_final_report(mission_id, full_draft.strip())
+                await self.controller.context_manager.update_mission_status(mission_id, "completed")
+                await self.controller.context_manager.log_execution_step(
+                    mission_id, "AgentController", "Process Citations",
+                    output_summary=f"Completed (Author-year bibliography with sources from research notes).", status="success",
+                    full_input={'draft_length': len(full_draft)}, full_output=full_draft.strip(),
+                    log_queue=log_queue, update_callback=update_callback
+                )
+                return True
+
             logger.info(f"No valid citation placeholders containing known document IDs found in the draft for mission {mission_id}.")
             await self.controller.context_manager.store_final_report(mission_id, full_draft.strip())
             await self.controller.context_manager.update_mission_status(mission_id, "completed")
