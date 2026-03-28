@@ -243,10 +243,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
       setAutoCreateDocumentGroup(autoSaveDocs)
 
       // Restore citation profile from mission metadata or chat settings
+      // Only override if we actually have a stored value -- don't reset a user selection to null
       const citationProfileId = activeMission?.metadata?.citation_profile_id
         || currentChat.settings?.citation_profile_id
-        || null
-      setSelectedCitationProfile(citationProfileId)
+      if (citationProfileId) {
+        setSelectedCitationProfile(citationProfileId)
+      }
     } else {
       // Reset to defaults when no chat is selected
       console.log('No chat selected, resetting to defaults')
@@ -320,14 +322,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
             return prevAutoSave
           })
 
-          // Sync citation profile from mission metadata
-          const newCitationProfile = missionMetadata.citation_profile_id || null
-          setSelectedCitationProfile(prev => {
-            if (prev !== newCitationProfile) {
-              return newCitationProfile
-            }
-            return prev
-          })
+          // Sync citation profile from mission metadata (only if metadata has a value)
+          const newCitationProfile = missionMetadata.citation_profile_id
+          if (newCitationProfile) {
+            setSelectedCitationProfile(prev => {
+              if (prev !== newCitationProfile) {
+                return newCitationProfile
+              }
+              return prev
+            })
+          }
 
           // Re-enable settings after a short delay
           setTimeout(() => {
