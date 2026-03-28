@@ -2686,7 +2686,7 @@ Important considerations:
                     agent_mode="research",  # Use research mode for this evaluation
                     max_tokens=20,
                     temperature=0.1,
-                    model=self.model,  # Use the same model as the research agent
+                    model=self.model_name,  # Use the same model as the research agent
                     log_queue=log_queue,  # Pass log_queue for UI updates
                     update_callback=update_callback,  # Pass update_callback for cost tracking
                     log_llm_call=True,  # Enable logging to track these evaluation costs
