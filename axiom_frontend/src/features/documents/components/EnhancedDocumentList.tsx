@@ -59,7 +59,8 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [addToGroupModalOpen, setAddToGroupModalOpen] = useState(false);
-  
+  const [singleDocAddToGroup, setSingleDocAddToGroup] = useState<string | null>(null);
+
   // Modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
@@ -361,6 +362,10 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
     onDocumentAdded?.(); // This will trigger a refresh
   }, [onDocumentAdded]);
 
+  const handleAddSingleDocToGroup = useCallback((docId: string) => {
+    setSingleDocAddToGroup(docId);
+  }, []);
+
   const handleCloseModals = useCallback(() => {
     setEditModalOpen(false);
     setViewModalOpen(false);
@@ -646,6 +651,16 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
                           >
                             <Edit className="h-4 w-4" />
                           </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleAddSingleDocToGroup(doc.id);
+                            }}
+                            className="p-1 text-muted-foreground hover:text-primary rounded transition-colors"
+                            title="Add to group"
+                          >
+                            <FolderPlus className="h-4 w-4" />
+                          </button>
                         </div>
                       )}
                     </div>
@@ -730,7 +745,7 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
         onClose={handleCloseModals}
       />
 
-      {/* Add to Group Modal */}
+      {/* Add to Group Modal (bulk) */}
       <AddToGroupModal
         isOpen={addToGroupModalOpen}
         onClose={() => setAddToGroupModalOpen(false)}
@@ -738,6 +753,18 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
         onSuccess={() => {
           setSelectedDocuments(new Set());
           setAddToGroupModalOpen(false);
+          onDocumentAdded?.();
+          refreshGroups();
+        }}
+      />
+
+      {/* Add to Group Modal (single document) */}
+      <AddToGroupModal
+        isOpen={!!singleDocAddToGroup}
+        onClose={() => setSingleDocAddToGroup(null)}
+        selectedDocumentIds={singleDocAddToGroup ? [singleDocAddToGroup] : []}
+        onSuccess={() => {
+          setSingleDocAddToGroup(null);
           onDocumentAdded?.();
           refreshGroups();
         }}

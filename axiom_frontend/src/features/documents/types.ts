@@ -70,6 +70,7 @@ export interface PaginationParams {
   author?: string;
   year?: number;
   journal?: string;
+  document_type?: string;
   status?: string;
   sort_by?: string;
   sort_order?: 'asc' | 'desc';

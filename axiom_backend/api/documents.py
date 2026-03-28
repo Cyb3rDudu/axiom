@@ -31,6 +31,7 @@ async def get_all_documents(
     author: Optional[str] = Query(None, description="Filter by author"),
     year: Optional[int] = Query(None, description="Filter by publication year"),
     journal: Optional[str] = Query(None, description="Filter by journal/source"),
+    document_type: Optional[str] = Query(None, description="Filter by document type"),
     status: Optional[str] = Query(None, description="Filter by processing status"),
     sort_by: Optional[str] = Query("created_at", description="Field to sort by"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc")
@@ -40,7 +41,7 @@ async def get_all_documents(
     """
     # Initialize document service with current db session
     document_service = UnifiedDocumentService(db)
-    
+
     # Get documents with metadata from the unified database
     documents, total_count = document_service.get_documents_with_metadata(
         user_id=current_user.id,
@@ -48,6 +49,7 @@ async def get_all_documents(
         author=author,
         year=year,
         journal=journal,
+        document_type=document_type,
         status_filter=status,
         limit=limit,
         offset=(page - 1) * limit
@@ -101,9 +103,95 @@ async def get_all_documents(
             'author': author,
             'year': year,
             'journal': journal,
+            'document_type': document_type,
             'status': status
         }
     )
+
+# Fulltext search endpoint using OpenSearch
+@router.get("/documents/search/fulltext")
+async def fulltext_search_documents(
+    query: str = Query(..., min_length=2, description="Fulltext search query"),
+    limit: int = Query(20, ge=1, le=100, description="Maximum results"),
+    group_id: Optional[str] = Query(None, description="Optional group ID to restrict search"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """
+    Perform fulltext search across document content using OpenSearch BM25.
+    Returns documents ranked by relevance with matching snippets.
+    """
+    try:
+        from ai_researcher.config import ENABLE_OPENSEARCH
+        from ai_researcher.core_rag.opensearch_store import OpenSearchStore
+    except ImportError:
+        raise HTTPException(status_code=503, detail="OpenSearch module not available")
+
+    if not ENABLE_OPENSEARCH:
+        raise HTTPException(status_code=503, detail="OpenSearch is not enabled")
+
+    try:
+        os_store = OpenSearchStore()
+    except Exception as e:
+        logger.error(f"Failed to initialize OpenSearch: {e}")
+        raise HTTPException(status_code=503, detail="OpenSearch not available")
+
+    # Get user's document IDs for access control
+    user_doc_ids = [str(d.id) for d in db.query(models.Document.id).filter(
+        models.Document.user_id == current_user.id
+    ).all()]
+
+    if not user_doc_ids:
+        return []
+
+    # If group_id, further restrict to documents in that group
+    if group_id:
+        from sqlalchemy import text as sa_text
+        group_doc_ids = [str(r[0]) for r in db.execute(
+            sa_text("SELECT document_id FROM document_group_association WHERE document_group_id = :gid"),
+            {"gid": group_id}
+        ).fetchall()]
+        user_doc_ids = list(set(user_doc_ids) & set(group_doc_ids))
+        if not user_doc_ids:
+            return []
+
+    results = os_store.search(query, n_results=limit * 3, filter_doc_ids=user_doc_ids)
+
+    # Deduplicate by doc_id, keep highest score
+    seen = {}
+    for r in results:
+        did = r.get('doc_id')
+        if did and (did not in seen or r.get('score', 0) > seen[did].get('score', 0)):
+            seen[did] = r
+
+    if not seen:
+        return []
+
+    # Fetch document metadata for the matched doc_ids
+    matched_docs = db.query(models.Document).filter(
+        models.Document.id.in_(list(seen.keys())),
+        models.Document.user_id == current_user.id
+    ).all()
+
+    # Build response with doc metadata + search score + snippet
+    response = []
+    for doc in matched_docs:
+        match = seen.get(str(doc.id), {})
+        metadata = doc.metadata_ or {}
+        response.append({
+            "id": str(doc.id),
+            "title": metadata.get('title', doc.original_filename),
+            "original_filename": doc.original_filename,
+            "authors": metadata.get('authors'),
+            "publication_year": metadata.get('publication_year'),
+            "document_type": metadata.get('document_type'),
+            "score": match.get('score', 0),
+            "snippet": (match.get('text', '') or '')[:200],
+            "metadata_": metadata,
+        })
+
+    return sorted(response, key=lambda x: x['score'], reverse=True)[:limit]
+
 
 # New endpoint to search documents
 @router.get("/search/")
@@ -449,6 +537,7 @@ async def get_documents_in_group(
     author: Optional[str] = Query(None, description="Filter by author"),
     year: Optional[int] = Query(None, description="Filter by publication year"),
     journal: Optional[str] = Query(None, description="Filter by journal/source"),
+    document_type: Optional[str] = Query(None, description="Filter by document type"),
     status: Optional[str] = Query(None, description="Filter by processing status"),
     sort_by: Optional[str] = Query("created_at", description="Field to sort by"),
     sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc")
@@ -464,6 +553,7 @@ async def get_documents_in_group(
         author=author,
         year=year,
         journal=journal,
+        document_type=document_type,
         status_filter=status,
         group_id=group_id,
         limit=limit,
@@ -519,6 +609,7 @@ async def get_documents_in_group(
             'author': author,
             'year': year,
             'journal': journal,
+            'document_type': document_type,
             'status': status,
             'group_id': group_id
         }
@@ -555,7 +646,8 @@ async def get_filter_options(
         authors = set()
         years = set()
         journals = set()
-        
+        document_types = set()
+
         for doc in documents:
             logger.debug(f"Processing doc {doc.id}: metadata={doc.metadata_}")
             if doc.metadata_:
@@ -588,12 +680,18 @@ async def get_filter_options(
                 journal = doc.metadata_.get('journal_or_source')
                 if journal and journal is not None:
                     journals.add(journal)
-        
+
+                # Extract document type
+                doc_type = doc.metadata_.get('document_type')
+                if doc_type and doc_type is not None:
+                    document_types.add(doc_type)
+
         # Filter out None values before sorting
         return {
             "authors": sorted([a for a in authors if a is not None]),
             "years": sorted(list(years), reverse=True),
-            "journals": sorted([j for j in journals if j is not None])
+            "journals": sorted([j for j in journals if j is not None]),
+            "document_types": sorted([dt for dt in document_types if dt is not None])
         }
         
     except Exception as e:

@@ -11,6 +11,7 @@ interface FilterOptions {
   author: string;
   year: string;
   journal: string;
+  documentType: string;
 }
 
 interface DocumentBrowserProps {
@@ -29,7 +30,8 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
     search: '',
     author: '',
     year: '',
-    journal: ''
+    journal: '',
+    documentType: ''
   });
 
   const pagination = usePagination();
@@ -47,7 +49,8 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
         search: filters.search || undefined,
         author: filters.author || undefined,
         year: filters.year ? parseInt(filters.year) : undefined,
-        journal: filters.journal || undefined
+        journal: filters.journal || undefined,
+        document_type: filters.documentType || undefined
       });
       
       setPaginatedResponse(response);

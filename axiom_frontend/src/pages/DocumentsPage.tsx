@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Library, FolderOpen, Upload, ArrowLeft, Search } from 'lucide-react';
+import { Library, FolderOpen, Upload, ArrowLeft, Search, Zap } from 'lucide-react';
 import type { Document, DocumentGroup, DocumentGroupWithCount, PaginationInfo } from '../features/documents/types';
-import { getAllDocuments, getGroupDocuments } from '../features/documents/api';
+import { getAllDocuments, getGroupDocuments, type FulltextSearchResult } from '../features/documents/api';
 import { useDocumentContext } from '../features/documents/context/DocumentContext';
 import { DocumentBrowser } from '../features/documents/components/DocumentBrowser';
 import { EnhancedDocumentList } from '../features/documents/components/EnhancedDocumentList';
@@ -15,6 +15,7 @@ interface FilterOptions {
   author: string;
   year: string;
   journal: string;
+  documentType: string;
 }
 
 const DocumentsPage: React.FC = () => {
@@ -39,9 +40,11 @@ const DocumentsPage: React.FC = () => {
     search: '',
     author: '',
     year: '',
-    journal: ''
+    journal: '',
+    documentType: ''
   });
   const [isDragOver, setIsDragOver] = useState(false);
+  const [fulltextResults, setFulltextResults] = useState<FulltextSearchResult[] | null>(null);
 
   const { startUploads } = useDocumentUploadManager();
 
@@ -55,7 +58,8 @@ const DocumentsPage: React.FC = () => {
         search: '',
         author: '',
         year: '',
-        journal: ''
+        journal: '',
+        documentType: ''
       }); // Clear filters
     }
   }, [selectedGroup]);
@@ -68,7 +72,8 @@ const DocumentsPage: React.FC = () => {
         search: '',
         author: '',
         year: '',
-        journal: ''
+        journal: '',
+        documentType: ''
       }); // Clear filters
     }
   }, [selectedGroup]);
@@ -96,7 +101,8 @@ const DocumentsPage: React.FC = () => {
       if (filters.author) params.author = filters.author;
       if (filters.year) params.year = parseInt(filters.year);
       if (filters.journal) params.journal = filters.journal;
-      
+      if (filters.documentType) params.document_type = filters.documentType;
+
       const response = await getGroupDocuments(groupId, params);
       
       // Extract documents and pagination from response
@@ -124,7 +130,8 @@ const DocumentsPage: React.FC = () => {
       if (filters.author) params.author = filters.author;
       if (filters.year) params.year = parseInt(filters.year);
       if (filters.journal) params.journal = filters.journal;
-      
+      if (filters.documentType) params.document_type = filters.documentType;
+
       const response = await getAllDocuments(params);
       
       // Extract documents and pagination from response
@@ -230,6 +237,10 @@ const DocumentsPage: React.FC = () => {
     setPagination(prev => ({ ...prev, page: 1 }));
   }, []);
 
+  const handleFulltextResults = useCallback((results: FulltextSearchResult[] | null) => {
+    setFulltextResults(results);
+  }, []);
+
   // Pagination handlers
   const handlePageChange = (newPage: number) => {
     setPagination(prev => ({ ...prev, page: newPage }));
@@ -276,7 +287,36 @@ const DocumentsPage: React.FC = () => {
               filters={filters}
               onFiltersChange={handleFiltersChange}
               documentCount={pagination.total_count}
+              onFulltextResults={handleFulltextResults}
             />
+
+            {/* Fulltext Search Results */}
+            {fulltextResults && fulltextResults.length > 0 && (
+              <div className="mx-4 mt-2 mb-2 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">
+                <div className="flex items-center gap-2 mb-2">
+                  <Zap className="h-4 w-4 text-amber-500" />
+                  <span className="text-sm font-medium text-foreground">
+                    Deep search results ({fulltextResults.length})
+                  </span>
+                </div>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {fulltextResults.slice(0, 10).map((result) => (
+                    <div key={result.id} className="p-2 bg-background rounded border border-border/50 text-sm">
+                      <div className="font-medium text-foreground truncate">{result.title}</div>
+                      {result.snippet && (
+                        <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{result.snippet}</p>
+                      )}
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        Score: {result.score.toFixed(2)}
+                        {result.authors && Array.isArray(result.authors) && result.authors.length > 0 && (
+                          <span> | {result.authors.join(', ')}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Document List using EnhancedDocumentList component */}
             <div className="flex-1 overflow-hidden">
@@ -285,7 +325,7 @@ const DocumentsPage: React.FC = () => {
                   <div className="text-gray-500">Loading documents...</div>
                 </div>
               ) : (
-                <EnhancedDocumentList 
+                <EnhancedDocumentList
                   documents={documents}
                   selectedGroupId={undefined}
                   onDocumentAdded={handleDocumentAdded}
@@ -370,6 +410,7 @@ const DocumentsPage: React.FC = () => {
               onFiltersChange={handleFiltersChange}
               groupId={selectedGroup.id}
               documentCount={pagination.total_count}
+              onFulltextResults={handleFulltextResults}
             />
             
             {/* Document List */}

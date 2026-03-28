@@ -51,6 +51,7 @@ class UnifiedDocumentService:
         author: Optional[str] = None,
         year: Optional[int] = None,
         journal: Optional[str] = None,
+        document_type: Optional[str] = None,
         status_filter: Optional[str] = None,
         group_id: Optional[str] = None,
         limit: int = 20,
@@ -121,7 +122,13 @@ class UnifiedDocumentService:
             query += journal_condition
             count_query += journal_condition
             params['journal'] = f"%{journal.lower()}%"
-        
+
+        if document_type:
+            doc_type_condition = " AND d.metadata_->>'document_type' = :document_type"
+            query += doc_type_condition
+            count_query += doc_type_condition
+            params['document_type'] = document_type
+
         if status_filter:
             status_condition = " AND d.processing_status = :status"
             query += status_condition
@@ -177,6 +184,7 @@ class UnifiedDocumentService:
                 'abstract': metadata.get('abstract'),
                 'doi': metadata.get('doi'),
                 'keywords': keywords_str,  # Keywords as JSON string
+                'document_type': metadata.get('document_type'),
                 'processing_status': row.processing_status,
                 'processing_error': row.processing_error,
                 'upload_progress': row.upload_progress,

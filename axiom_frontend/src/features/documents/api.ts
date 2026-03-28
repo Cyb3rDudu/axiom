@@ -6,6 +6,7 @@ export const getFilterOptions = async (groupId?: string): Promise<{
   authors: string[];
   years: number[];
   journals: string[];
+  document_types: string[];
 }> => {
   const params = groupId ? { group_id: groupId } : {};
   const response = await apiClient.get('/api/documents/filter-options', { params });
@@ -61,6 +62,7 @@ export interface PaginationParams {
   author?: string;
   year?: number;
   journal?: string;
+  document_type?: string;
   status?: string;
   sort_by?: string;
   sort_order?: 'asc' | 'desc';
@@ -96,6 +98,29 @@ export const searchDocuments = async (query: string, nResults: number = 10): Pro
   const response = await apiClient.get('/api/search/', {
     params: { query, n_results: nResults }
   });
+  return response.data;
+};
+
+export interface FulltextSearchResult {
+  id: string;
+  title: string;
+  original_filename: string;
+  authors?: string[];
+  publication_year?: number;
+  document_type?: string;
+  score: number;
+  snippet: string;
+  metadata_?: Record<string, any>;
+}
+
+export const fulltextSearchDocuments = async (
+  query: string,
+  limit: number = 20,
+  groupId?: string
+): Promise<FulltextSearchResult[]> => {
+  const params: Record<string, any> = { query, limit };
+  if (groupId) params.group_id = groupId;
+  const response = await apiClient.get('/api/documents/search/fulltext', { params });
   return response.data;
 };
 
