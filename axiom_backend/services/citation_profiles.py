@@ -38,29 +38,39 @@ Sort entries by the order they first appear in the text (matching their citation
 
 KMU_APA6_PROFILE = CitationProfile(
     id="kmu_apa6",
-    name="KMU Akademie APA 6 (Deutsch)",
+    name="KMU Akademie APA 7 (Deutsch)",
     citation_mode="author_year",
     is_builtin=True,
-    in_text_rules="""1.  **In-Text-Zitierformat:** Verwende IMMER das Format `(Autor, Jahr, S. XX)` für direkte und indirekte Zitate. Die Seitenangabe ist PFLICHT. Wenn keine Seitenzahl verfügbar ist, verwende `o. S.` (ohne Seite).
-2.  **Einzelner Autor:** `(Müller, 2020, S. 45)` oder `(Müller, 2020, o. S.)`.
-3.  **Zwei Autoren:** Verwende `&` zwischen den Namen: `(Müller & Schmidt, 2020, S. 45)`.
-4.  **Drei oder mehr Autoren:** Verwende beim ERSTEN Zitat alle Autoren, danach `et al.`: Erstes Mal: `(Müller, Schmidt & Weber, 2020, S. 45)`, danach: `(Müller et al., 2020, S. 45)`.
-5.  **Mehrere Quellen:** Trenne verschiedene Quellen innerhalb einer Klammer mit Semikolon: `(Müller, 2020, S. 45; Schmidt, 2019, S. 12)`.
-6.  **Sekundärzitate:** Wenn eine Quelle eine andere zitiert: `(Meier, 1991, S. 30 zit. in Müller, 1993, S. 45)`.
-7.  **Seitenbereiche:** Verwende IMMER exakte Seitenbereiche (z.B. `S. 45-47`). Die Verwendung von `f.` oder `ff.` ist NICHT erlaubt.
-8.  **Webquellen ohne Seitenzahlen:** Verwende `o. S.`: `(Müller, 2020, o. S.)`.
-9.  **Wörtliche Zitate:** Setze wörtliche Zitate in Anführungszeichen und gib die exakte Seitenangabe an: `„Zitat" (Müller, 2020, S. 45)`.
-10. **Organisationen als Autor:** Beim ersten Zitat den vollen Namen, danach die Abkürzung: Erstes Mal: `(Weltgesundheitsorganisation [WHO], 2020, S. 10)`, danach: `(WHO, 2020, S. 10)`.
-11. **Quellenverankerung:** Verwende die Metadaten (Autor, Jahr) aus den 'Research Notes'-Überschriften. Erfinde KEINE Zitate. Jede Behauptung MUSS durch die bereitgestellten Forschungsnotizen belegt sein.
-12. **WICHTIG:** Verwende NICHT das `[doc_id]`-Klammer-Format. Verwende NUR das `(Autor, Jahr, S. XX)`-Format.""",
-    bibliography_rules="""Formatiere das Literaturverzeichnis nach APA 6 (Deutsch):
-- **Bücher:** Autor, V. (Jahr). *Titel* (Auflage). Erscheinungsort: Verlag.
-- **Zeitschriftenartikel:** Autor, V. (Jahr). Titel des Artikels. *Zeitschriftenname, Band*(Heft), Seiten.
-- **Sammelwerke:** Autor, V. (Jahr). Titel des Beitrags. In V. Herausgeber (Hrsg.), *Titel des Sammelwerks* (Auflage, S. XX-XX). Erscheinungsort: Verlag.
-- **Internetquellen:** Autor, V. (Jahr). *Titel*. Verfügbar unter: URL [Zugriff am TT.MM.JJJJ].
+    in_text_rules="""**Zitierrichtlinien der KMU Akademie (basierend auf deutschen APA 7 Richtlinien)**
+
+1.  **Kurzbeleg im Fließtext – PFLICHTANGABEN:** Bei JEDER Art des Kurzbelegs (direkt und indirekt) sind IMMER Verfasser:in, Veröffentlichungsjahr und Seitenzahl(en) anzugeben: `(Autor, Jahr, S. XX)`.
+2.  **Keine Seitenzahl vorhanden:** Verwende `o. S.` (ohne Seite): `(Müller, 2020, o. S.)`.
+3.  **Einzelner Autor:** `(Müller, 2025, S. 20)`.
+4.  **Zwei Autoren:** Verwende `&` zwischen den Namen: `(Müller & Schmidt, 2020, S. 45)`.
+5.  **Drei oder mehr Autoren:** Ab dem ERSTEN Zitat `et al.` verwenden: `(Müller et al., 2020, S. 45)`.
+6.  **Mehrere Quellen:** Trenne mit Semikolon: `(Müller, 2020, S. 45; Schmidt, 2019, S. 12)`.
+7.  **Sekundärzitate:** Nur in Ausnahmefällen. Format: `(Meier, 2024, S. XX zit. in Müller, 2025, S. XX)`.
+8.  **Seitenbereiche:** IMMER exakte Seitenzahlen angeben (z.B. `S. 45-47`). Die Angabe `f.` bzw. `ff.` ist NICHT zulässig.
+9.  **Wörtliche Zitate:** In Anführungszeichen mit exakter Seitenangabe: `„Zitat" (Müller, 2020, S. 45)`. Wörtliche Zitate sparsam einsetzen (max. 2-3 Sätze).
+10. **Organisationen als Autor:** Beim ersten Zitat den vollen Namen, danach die Abkürzung: `(Weltgesundheitsorganisation [WHO], 2020, S. 10)`, danach: `(WHO, 2020, S. 10)`.
+11. **Online-Quellen MIT Autor und Jahr:** Behandle sie wie Buchquellen: `(Dresing & Pehl, 2018, o. S.)`.
+12. **Online-Quellen OHNE Autor, aber mit Organisation:** Verwende die herausgebende Institution/Organisation als Autor: `(Scribbr, 2024, o. S.)`.
+13. **Online-Quellen OHNE Autor UND ohne Organisation:** Verwende den Online-Link als Kurzbeleg: `(https://www.example.com/page)`.
+14. **Keine Kumulativzitate:** Setze den Kurzbeleg NICHT pauschal ans Ende eines Absatzes. Der Kurzbeleg muss dem Zitat möglichst genau zugeordnet sein (wo das Zitat beginnt und endet muss klar sein).
+15. **Quellenverankerung:** Verwende die Metadaten (Autor, Jahr) aus den 'Research Notes'-Überschriften. Erfinde KEINE Zitate. Jede Behauptung MUSS durch die bereitgestellten Forschungsnotizen belegt sein.
+16. **WICHTIG:** Verwende NICHT das `[doc_id]`-Klammer-Format. Verwende NUR das `(Autor, Jahr, S. XX)`-Format.""",
+    bibliography_rules="""Formatiere das Literaturverzeichnis nach den deutschen APA 7 Richtlinien der KMU Akademie.
+Jede Quellenangabe besteht aus vier Elementen: Verfasser:in, Veröffentlichungsdatum, Titel, Quelle.
+
+- **Bücher:** Autor, V. (Jahr). *Titel* (Auflage). Verlag.
+- **Zeitschriftenartikel:** Autor, V. (Jahr). Titel des Artikels. *Zeitschriftenname, Band*(Heft), Seiten. DOI/URL
+- **Sammelwerke:** Autor, V. (Jahr). Titel des Beitrags. In V. Herausgeber (Hrsg.), *Titel des Sammelwerks* (Auflage, S. XX-XX). Verlag. DOI/URL
+- **Internetquellen:** Autor, V. (Jahr). *Titel*. Abgerufen am TT.MM.JJJJ, von URL
+  - PFLICHT: Bei JEDER Online-Quelle MUSS der Zusatz „Abgerufen am TT.MM.JJJJ, von [Link]" angegeben werden.
+  - Ohne Autor: Herausgebende Institution als Autor verwenden. Ohne Institution: Titel an Autorenstelle.
 - Sortiere alphabetisch nach Nachnamen des Erstautors.
 - Bei mehreren Werken desselben Autors: chronologisch sortieren (ältestes zuerst).
-- Hängende Einrückung für jeden Eintrag.""",
+- Es dürfen KEINE Quellen aufgenommen werden, die nicht im Text mit einem Kurzbeleg (Autor, Jahreszahl, Seite) belegt wurden.""",
 )
 
 APA7_EN_PROFILE = CitationProfile(

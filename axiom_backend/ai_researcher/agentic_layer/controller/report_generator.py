@@ -244,7 +244,16 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
             return "numbered"
 
     def _build_author_year_bibliography(self, all_notes: list, doc_metadata_source: dict, mission_id: str) -> str:
-        """Build an APA-style bibliography from all research sources used in the mission."""
+        """Build a KMU APA 7 (German) bibliography from all research sources used in the mission.
+
+        Format per KMU Akademie Zitierrichtlinien (Stand 25.03.2026):
+        - Books: Autor, V. (Jahr). *Titel* (Auflage). Verlag.
+        - Journals: Autor, V. (Jahr). Titel. *Zeitschrift, Band*(Heft), Seiten. DOI/URL
+        - Web: Autor, V. (Jahr). *Titel*. Abgerufen am TT.MM.JJJJ, von URL
+        - Without author: Institution as author, or title at author position.
+        """
+        today_str = datetime.datetime.now().strftime("%d.%m.%Y")
+
         # Deduplicate sources by source_id
         seen_sources = {}
         for note in all_notes:
@@ -280,20 +289,19 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
                     pass
 
             # Extract 4-digit year
-            import re as _re
-            year_match = _re.search(r'(\d{4})', str(year))
+            year_match = re.search(r'(\d{4})', str(year))
             year_str = year_match.group(1) if year_match else ''
 
             if not title or title.strip() == '':
                 title = metadata.get('original_filename', 'Unknown Source')
 
-            # Skip entries with no useful info
+            # Skip entries with no useful info at all
             if not authors and not title:
                 continue
 
             seen_sources[source_key] = {
-                'authors': authors or 'o. V.',
-                'year': year_str or 'o. J.',
+                'authors': authors,
+                'year': year_str,
                 'title': title,
                 'url': url,
                 'journal': journal,
@@ -304,17 +312,38 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
             logger.info(f"No sources found for author-year bibliography in mission {mission_id}")
             return ""
 
-        # Sort alphabetically by author, then by year
-        sorted_sources = sorted(seen_sources.values(), key=lambda s: (s['authors'].lower(), s['year']))
+        # Sort alphabetically by author (or title if no author), then by year
+        def sort_key(s):
+            primary = s['authors'].lower() if s['authors'] else s['title'].lower()
+            return (primary, s['year'])
 
-        # Build bibliography entries
+        sorted_sources = sorted(seen_sources.values(), key=sort_key)
+
+        # Build bibliography entries per KMU APA 7 format
         entries = []
         for src in sorted_sources:
-            entry = f"{src['authors']} ({src['year']}). *{src['title']}*."
-            if src['journal']:
-                entry += f" {src['journal']}."
-            if src['url']:
-                entry += f" Verfügbar unter: {src['url']}"
+            author_part = src['authors'] if src['authors'] else src['title']
+            year_part = src['year'] if src['year'] else 'o. J.'
+            is_web = src['source_type'] == 'web' or (src['url'] and not src['journal'])
+
+            if is_web:
+                # KMU format for online sources:
+                # Autor (Jahr). *Titel*. Abgerufen am TT.MM.JJJJ, von URL
+                if src['authors']:
+                    entry = f"{author_part} ({year_part}). *{src['title']}*."
+                else:
+                    # No author: title at author position (not italicized per APA when at author pos)
+                    entry = f"{src['title']} ({year_part})."
+                if src['url']:
+                    entry += f" Abgerufen am {today_str}, von {src['url']}"
+            else:
+                # Books / journal articles / other document sources
+                entry = f"{author_part} ({year_part}). *{src['title']}*."
+                if src['journal']:
+                    entry += f" {src['journal']}."
+                if src['url']:
+                    entry += f" Abgerufen am {today_str}, von {src['url']}"
+
             entries.append(entry)
 
         bibliography = "## Literaturverzeichnis\n\n"
