@@ -800,7 +800,7 @@ class ModelDispatcher:
         elif is_deepseek_reasoner:
             # DeepSeek-reasoner: max_tokens includes reasoning tokens, so force a higher limit.
             # Temperature is not supported by this model.
-            deepseek_max = config.DEEPSEEK_MAX_TOKENS_LIMIT
+            deepseek_max = getattr(config, 'DEEPSEEK_REASONER_MAX_TOKENS_LIMIT', 16384)
             logger.info(
                 f"Detected DeepSeek-reasoner model: {selected_model_name}, "
                 f"forcing max_tokens={deepseek_max} (was {max_tokens_for_call}), omitting temperature"
@@ -1631,7 +1631,7 @@ class ModelDispatcher:
         if is_deepseek_reasoner:
             # DeepSeek-reasoner: max_tokens includes reasoning tokens, so force a higher limit.
             # Temperature is not supported by this model.
-            deepseek_max = config.DEEPSEEK_MAX_TOKENS_LIMIT
+            deepseek_max = getattr(config, 'DEEPSEEK_REASONER_MAX_TOKENS_LIMIT', 16384)
             logger.info(
                 f"Detected DeepSeek-reasoner model (stream): {selected_model_name}, "
                 f"forcing max_tokens={deepseek_max} (was {max_tokens_for_call}), omitting temperature"
