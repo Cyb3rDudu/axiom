@@ -421,7 +421,7 @@ Extract the metadata based *only* on the text provided above and return it as JS
             print(f"MetadataExtractor: An unexpected error occurred: {e}")
             return None
 
-    def extract_and_enrich_sync(self, text_sample: str) -> Optional[Dict[str, Any]]:
+    def extract_and_enrich_sync(self, text_sample: str, filename: str = "") -> Optional[Dict[str, Any]]:
         """Extract metadata via LLM, then enrich with external databases (synchronous wrapper).
 
         This is meant to be called from synchronous code (e.g. the background
@@ -440,6 +440,7 @@ Extract the metadata based *only* on the text provided above and return it as JS
                 return await enrich_metadata(
                     existing_metadata=metadata or {},
                     document_text=text_sample,
+                    filename=filename,
                 )
 
             # Try to use a running loop, otherwise create one

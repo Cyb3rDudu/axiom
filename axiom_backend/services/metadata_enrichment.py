@@ -76,11 +76,14 @@ def detect_identifiers(text: str) -> dict:
         doi = doi_match.group(1).rstrip(".,;:)")
         result["doi"] = normalize_doi(doi)
 
-    isbn_match = ISBN_PATTERN.search(text)
-    if isbn_match:
-        # Normalise ISBN – remove hyphens/spaces
-        isbn = re.sub(r'[-\s]', '', isbn_match.group(1))
-        result["isbn"] = isbn
+    isbn_matches = ISBN_PATTERN.findall(text)
+    if isbn_matches:
+        # Prefer ISBN-13 (978-...) over ISBN-10, and prefer last occurrence (current edition)
+        isbn13s = [re.sub(r'[-\s]', '', m) for m in isbn_matches if m.replace('-', '').replace(' ', '').startswith('978')]
+        if isbn13s:
+            result["isbn"] = isbn13s[-1]  # Last ISBN-13 = most likely current edition
+        else:
+            result["isbn"] = re.sub(r'[-\s]', '', isbn_matches[-1])
 
     arxiv_match = ARXIV_PATTERN.search(text)
     if arxiv_match:

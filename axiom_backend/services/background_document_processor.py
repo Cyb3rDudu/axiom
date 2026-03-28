@@ -466,6 +466,20 @@ class BackgroundDocumentProcessor:
                 f.write(markdown_content)
             print(f"[{doc_id}] Saved Markdown to: {md_save_path}")
 
+            # Retry metadata extraction with markdown content if initial extraction failed
+            # (covers PDFs with image-only cover pages where header extraction returned empty)
+            if not extracted_metadata or not (extracted_metadata.get('title') or extracted_metadata.get('authors')):
+                md_sample = markdown_content[:4000] + (markdown_content[-2000:] if len(markdown_content) > 6000 else "")
+                if md_sample.strip():
+                    print(f"[{doc_id}] Retrying metadata extraction with markdown content ({len(md_sample)} chars)...")
+                    retry_metadata = processor.metadata_extractor.extract_and_enrich_sync(md_sample, filename=original_filename)
+                    if retry_metadata and (retry_metadata.get('title') or retry_metadata.get('authors')):
+                        print(f"[{doc_id}] Markdown retry succeeded: title={retry_metadata.get('title', '?')[:50]}")
+                        final_metadata = {"doc_id": doc_id, "original_filename": original_filename}
+                        final_metadata.update(retry_metadata)
+                    else:
+                        print(f"[{doc_id}] Markdown retry also failed to extract metadata")
+
             # Save metadata with our doc_id
             metadata_filename = f"{doc_id}.json"
             metadata_save_path = processor.metadata_dir / metadata_filename
