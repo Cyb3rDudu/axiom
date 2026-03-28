@@ -24,6 +24,21 @@ DOI_PATTERN = re.compile(r'\b(10\.\d{4,9}/[^\s]+)\b')
 ISBN_PATTERN = re.compile(r'ISBN[-:]?\s*((?:97[89][-\s]?)?(?:\d[-\s]?){9}[\dXx])')
 ARXIV_PATTERN = re.compile(r'(?:arXiv:)?(\d{4}\.\d{4,5}(?:v\d+)?)')
 
+def normalize_doi(doi: str) -> str:
+    """Normalize a DOI to its canonical bare form (e.g., '10.xxxx/yyyy').
+
+    Strips URL prefixes like https://doi.org/, http://dx.doi.org/, etc.
+    """
+    if not doi:
+        return doi
+    doi = doi.strip()
+    for prefix in ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "http://dx.doi.org/"):
+        if doi.lower().startswith(prefix):
+            doi = doi[len(prefix):]
+            break
+    return doi
+
+
 # Common user-agent for polite pool access
 _USER_AGENT = "Axiom/1.0 (mailto:admin@axiom.local)"
 
@@ -57,9 +72,9 @@ def detect_identifiers(text: str) -> dict:
 
     doi_match = DOI_PATTERN.search(text)
     if doi_match:
-        # Strip trailing punctuation that may have been captured
+        # Strip trailing punctuation and normalize URL prefix
         doi = doi_match.group(1).rstrip(".,;:)")
-        result["doi"] = doi
+        result["doi"] = normalize_doi(doi)
 
     isbn_match = ISBN_PATTERN.search(text)
     if isbn_match:
@@ -124,7 +139,7 @@ async def lookup_crossref(doi: str) -> Optional[dict]:
             "authors": authors if authors else None,
             "publication_year": year,
             "journal_or_source": journal,
-            "doi": item.get("DOI") or doi,
+            "doi": normalize_doi(item.get("DOI") or doi or ""),
             "document_type": "paper",
         }
         logger.info(f"CrossRef lookup for DOI {doi}: found")
@@ -280,7 +295,7 @@ async def lookup_openalex(title: str, authors: Optional[List[str]] = None) -> Op
             "authors": found_authors if found_authors else None,
             "publication_year": best.get("publication_year"),
             "journal_or_source": journal,
-            "doi": best.get("doi"),
+            "doi": normalize_doi(best.get("doi") or ""),
             "document_type": "paper",
         }
         logger.info(
@@ -743,6 +758,10 @@ async def enrich_metadata(
     # --- Step 1: Detect identifiers ---
     ids = detect_identifiers(document_text)
     logger.info(f"Detected identifiers: {ids}")
+
+    # Normalize any existing DOI from LLM extraction
+    if enriched.get("doi"):
+        enriched["doi"] = normalize_doi(enriched["doi"])
 
     # If existing metadata already has a DOI/ISBN, prefer it
     if enriched.get("doi") and not ids["doi"]:
