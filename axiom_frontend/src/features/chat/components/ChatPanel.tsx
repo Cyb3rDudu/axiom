@@ -353,7 +353,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
     const settingsToSave = {
       document_group_id: selectedGroupId,
       use_web_search: useWebSearch,
-      auto_create_document_group: autoCreateDocumentGroup
+      auto_create_document_group: autoCreateDocumentGroup,
+      citation_profile_id: selectedCitationProfile || undefined
     }
     
     console.log('Saving settings for chat', currentChatId, ':', settingsToSave)
