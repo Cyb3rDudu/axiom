@@ -472,42 +472,125 @@ def extract_web_metadata(html: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Document type classification
+# ---------------------------------------------------------------------------
+
+def classify_document_type(metadata: dict, filename: str = "") -> str:
+    """Classify document into: academic, book, legal, institutional, web, wikipedia.
+
+    Uses metadata fields, filename patterns, and URL patterns.
+    """
+    title = (metadata.get('title') or '').lower()
+    url = (metadata.get('url') or '').lower()
+    fn = filename.lower()
+    authors = metadata.get('authors') or []
+    doi = metadata.get('doi')
+    isbn = metadata.get('isbn')
+
+    # Wikipedia detection
+    if 'wikipedia.org' in url or 'wikipedia' in title:
+        return 'wikipedia'
+
+    # Legal/regulatory detection (German law references)
+    legal_patterns = ['§', 'sgb', 'ksvg', 'aktg', 'bgb', 'hgb', 'gesetz', 'verordnung',
+                      'richtlinie', 'rechtsverordnung', 'satzung']
+    if any(p in title for p in legal_patterns) or any(p in fn for p in legal_patterns):
+        return 'legal'
+
+    # Book detection
+    if isbn or metadata.get('publisher') or metadata.get('edition') or metadata.get('chapters'):
+        return 'book'
+
+    # Academic detection (has DOI, or journal, or is a PDF with authors)
+    if doi or metadata.get('journal_or_source'):
+        return 'academic'
+    if fn.endswith('.pdf') and isinstance(authors, list) and len(authors) > 0:
+        return 'academic'
+
+    # Institutional reports (ECB, Bundesbank, government orgs)
+    inst_patterns = ['ezb', 'ecb', 'bundesbank', 'euroraum', 'projektion', 'prognose',
+                     'gemeinschaftsdiagnose', 'sachverständigenrat', 'bundesregierung',
+                     'bundesministerium', 'european commission', 'imf', 'world bank', 'oecd']
+    if any(p in title for p in inst_patterns) or metadata.get('organization'):
+        return 'institutional'
+
+    # Web documents (fetched by research agent)
+    if '_web_document' in fn or url:
+        return 'web'
+
+    # Default to academic for uploaded PDFs, web for everything else
+    if fn.endswith('.pdf') or fn.endswith('.docx'):
+        return 'academic'
+    return 'web'
+
+
+# ---------------------------------------------------------------------------
 # Completeness scoring
 # ---------------------------------------------------------------------------
 
-def calculate_completeness(metadata: dict) -> int:
-    """Score metadata completeness on a 0–100 scale.
+def calculate_completeness(metadata: dict, filename: str = "") -> int:
+    """Score metadata completeness 0-100, adapted to document type."""
+    doc_type = metadata.get('document_type') or classify_document_type(metadata, filename)
 
-    Weighted fields:
-      - title:             25
-      - authors:           25
-      - publication_year:  20
-      - doi or isbn:       10
-      - journal_or_source: 10
-      - description:       10
-    """
-    score = 0
+    if doc_type == 'academic':
+        # Traditional: author + year + title + doi/journal
+        score = 0
+        if metadata.get('title'): score += 25
+        authors = metadata.get('authors')
+        if authors and authors not in ('', '[]', []): score += 25
+        if metadata.get('publication_year'): score += 20
+        if metadata.get('doi') or metadata.get('isbn'): score += 10
+        if metadata.get('journal_or_source'): score += 10
+        if metadata.get('description') or metadata.get('abstract'): score += 10
+        return score
 
-    if metadata.get("title"):
-        score += 25
-    if metadata.get("authors") and len(metadata["authors"]) > 0:
-        # Only count non-empty, non-placeholder authors
-        real_authors = [
-            a for a in metadata["authors"]
-            if a and a not in ("Unknown Authors", "Unknown", "N/A")
-        ]
-        if real_authors:
-            score += 25
-    if metadata.get("publication_year"):
-        score += 20
-    if metadata.get("doi") or metadata.get("isbn"):
-        score += 10
-    if metadata.get("journal_or_source") or metadata.get("publisher"):
-        score += 10
-    if metadata.get("description"):
-        score += 10
+    elif doc_type == 'book':
+        score = 0
+        if metadata.get('title'): score += 25
+        authors = metadata.get('authors')
+        if authors and authors not in ('', '[]', []): score += 25
+        if metadata.get('publication_year'): score += 20
+        if metadata.get('isbn'): score += 15
+        if metadata.get('publisher'): score += 15
+        return score
 
-    return min(score, 100)
+    elif doc_type == 'legal':
+        # Legal sources: statute name + section is enough
+        score = 0
+        title = metadata.get('title', '')
+        if title: score += 40  # Title IS the citation (e.g., "§ 7 SGB IV")
+        if '§' in title: score += 30  # Has section reference
+        if metadata.get('url'): score += 15  # Has URL for reference
+        if metadata.get('publication_year'): score += 15  # Effective date
+        return min(score, 100)
+
+    elif doc_type == 'institutional':
+        # Org + year + title + URL
+        score = 0
+        if metadata.get('title'): score += 25
+        org = metadata.get('organization') or metadata.get('website_name')
+        if org: score += 25
+        elif metadata.get('authors'): score += 25  # Some use org as author
+        if metadata.get('publication_year'): score += 20
+        if metadata.get('url'): score += 20
+        if metadata.get('description') or metadata.get('abstract'): score += 10
+        return min(score, 100)
+
+    elif doc_type == 'wikipedia':
+        # Wikipedia: always 0 for academic use — not a valid source
+        return 0
+
+    else:  # 'web' and other
+        # Web: site/author + date + title + URL
+        score = 0
+        if metadata.get('title'): score += 25
+        authors = metadata.get('authors')
+        site = metadata.get('website_name') or metadata.get('organization')
+        if (authors and authors not in ('', '[]', [])) or site: score += 25
+        if metadata.get('publication_year'): score += 20
+        if metadata.get('url'): score += 20
+        if metadata.get('description'): score += 10
+        return min(score, 100)
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +632,7 @@ async def enrich_metadata(
     existing_metadata: dict,
     document_text: str,
     html_content: Optional[str] = None,
+    filename: str = "",
 ) -> dict:
     """Enrich metadata by looking up external databases.
 
@@ -616,8 +700,9 @@ async def enrich_metadata(
         if web_meta:
             _merge_metadata(enriched, web_meta, "web_html", sources)
 
-    # --- Step 4 & 5: Completeness scoring and source tracking ---
-    enriched["metadata_completeness"] = calculate_completeness(enriched)
+    # --- Step 4 & 5: Document type, completeness scoring, and source tracking ---
+    enriched["document_type"] = classify_document_type(enriched, filename)
+    enriched["metadata_completeness"] = calculate_completeness(enriched, filename)
     enriched["metadata_sources"] = list(set(sources.values()))
 
     logger.info(

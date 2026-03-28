@@ -515,6 +515,9 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
             # --- Process Web Results (Remains Similar) ---
             for web_result in search_results.get("web", []):
                 web_source_id = web_result.get("url", "unknown_url")
+                # Skip Wikipedia — not a valid academic source
+                if 'wikipedia.org' in (web_source_id or '').lower():
+                    continue
                 if web_source_id in processed_source_ids:
                     continue
                 processed_source_ids.add(web_source_id)
@@ -804,6 +807,9 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                     # --- Process Web Results (Cycle 1 - Remains Similar) ---
                     for web_result in proactive_search_results.get("web", []):
                         web_source_id = web_result.get("url", "unknown_url")
+                        # Skip Wikipedia — not a valid academic source
+                        if 'wikipedia.org' in (web_source_id or '').lower():
+                            continue
                         if web_source_id in processed_proactive_ids:
                             continue
                         processed_proactive_ids.add(web_source_id)
@@ -1097,6 +1103,9 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
 
         for web_result in search_results.get("web", []):
             web_source_id = web_result.get("url", "unknown_url")
+            # Skip Wikipedia — not a valid academic source
+            if 'wikipedia.org' in (web_source_id or '').lower():
+                continue
             if web_source_id in processed_source_ids:
                 continue
             processed_source_ids.add(web_source_id)
@@ -1549,6 +1558,9 @@ Now, generate the questions for the provided research request.
         # --- Process Web Results (Initial Exploration - Remains Similar) ---
         for web_result in search_results.get("web", []):
             web_source_id = web_result.get("url", "unknown_url")
+            # Skip Wikipedia — not a valid academic source
+            if 'wikipedia.org' in (web_source_id or '').lower():
+                continue
             if web_source_id in processed_source_ids:
                 continue
             processed_source_ids.add(web_source_id)
@@ -2600,6 +2612,16 @@ If no relevant sub-questions are identified, return an empty list for "sub_quest
                     aggregated_results["document"].extend(result_list)
                 elif tool_name == "web_search":  # Check against the generic tool name
                     aggregated_results["web"].extend(result_list)
+
+        # Filter out Wikipedia — not a valid academic source
+        original_web_count = len(aggregated_results["web"])
+        aggregated_results["web"] = [
+            r for r in aggregated_results["web"]
+            if 'wikipedia.org' not in (r.get('url', '') or '').lower()
+        ]
+        filtered_wiki_count = original_web_count - len(aggregated_results["web"])
+        if filtered_wiki_count:
+            logger.info(f"Filtered {filtered_wiki_count} Wikipedia results (not valid for academic research)")
 
         # TODO: Add deduplication logic here if needed
         logger.info(

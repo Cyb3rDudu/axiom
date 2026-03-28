@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { CheckCircle, AlertTriangle, AlertCircle } from 'lucide-react';
+import { CheckCircle, AlertTriangle, AlertCircle, Ban } from 'lucide-react';
 import type { Document } from '../types';
 import { calculateMetadataCompleteness } from '../utils/metadataCompleteness';
 
@@ -14,6 +14,7 @@ interface MetadataCompletenessBadgeProps {
  * - Green checkmark: >= 80  (complete)
  * - Amber warning:  40-79   (partial)
  * - Red alert:      < 40    (poor)
+ * - Red ban:        Wikipedia (not a valid academic source)
  *
  * On hover (for incomplete documents) a tooltip shows which fields are missing
  * and provides a link to open the metadata editor.
@@ -22,7 +23,7 @@ export const MetadataCompletenessBadge: React.FC<MetadataCompletenessBadgeProps>
   document,
   onEditMetadata,
 }) => {
-  const { score, missingFields, level } = calculateMetadataCompleteness(document);
+  const { score, missingFields, level, isWikipedia } = calculateMetadataCompleteness(document);
   const [showTooltip, setShowTooltip] = useState(false);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const badgeRef = useRef<HTMLDivElement>(null);
@@ -45,6 +46,48 @@ export const MetadataCompletenessBadge: React.FC<MetadataCompletenessBadgeProps>
   }, [showTooltip]);
 
   const iconClasses = 'h-3.5 w-3.5 flex-shrink-0';
+
+  // Wikipedia gets a distinct ban icon
+  if (isWikipedia) {
+    return (
+      <div className="relative inline-flex" ref={badgeRef}>
+        <button
+          type="button"
+          className="flex items-center focus:outline-none"
+          onMouseEnter={() => setShowTooltip(true)}
+          onMouseLeave={() => setShowTooltip(false)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowTooltip((prev) => !prev);
+          }}
+          aria-label="Wikipedia source — not accepted for academic research"
+        >
+          <Ban className={`${iconClasses} text-red-500`} />
+        </button>
+
+        {showTooltip && (
+          <div
+            ref={tooltipRef}
+            className="fixed z-[9999] w-56 rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-md"
+            style={{
+              top: badgeRef.current ? badgeRef.current.getBoundingClientRect().top - 8 : 0,
+              left: badgeRef.current ? badgeRef.current.getBoundingClientRect().right + 8 : 0,
+              transform: 'translateY(-100%)',
+            }}
+            onMouseEnter={() => setShowTooltip(true)}
+            onMouseLeave={() => setShowTooltip(false)}
+          >
+            <p className="text-xs font-medium mb-1.5 text-red-600">
+              Wikipedia source
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Wikipedia is not accepted as an academic source. Consider replacing with primary sources.
+            </p>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   const icon =
     level === 'complete' ? (

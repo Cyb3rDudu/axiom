@@ -89,6 +89,15 @@ class WebPageFetcherTool:
             A dictionary containing the extracted text under the key 'text', 'title', and 'metadata' on success,
             or a dictionary with an 'error' key on failure.
         """
+        # Block Wikipedia — not a valid academic source
+        if 'wikipedia.org' in url.lower():
+            logger.info(f"Skipping Wikipedia URL (not valid for academic research): {url}")
+            return {
+                "error": "Wikipedia is not accepted as an academic source. Consider using primary sources instead.",
+                "error_type": "wikipedia_blocked",
+                "url": url,
+            }
+
         # FIRST: Check if this is an arXiv URL - this takes priority over fetch provider
         # ArXiv papers should always use the specialized fetcher regardless of provider setting
         from ai_researcher.agentic_layer.tools.arxiv_fetcher_tool import ArXivFetcherTool
