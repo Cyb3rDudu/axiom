@@ -159,7 +159,8 @@ export function calculateMetadataCompleteness(doc: Document): MetadataCompletene
 
 /**
  * Summarise metadata completeness across a list of documents.
- * Returns the number of documents with incomplete metadata (score < 80).
+ * Returns the number of documents with incomplete metadata (score < 70).
+ * Wikipedia sources are excluded — they have their own distinct indicator.
  */
 export function countIncompleteDocuments(documents: Document[]): {
   incomplete: number;
@@ -167,7 +168,9 @@ export function countIncompleteDocuments(documents: Document[]): {
 } {
   let incomplete = 0;
   for (const doc of documents) {
-    if (calculateMetadataCompleteness(doc).score < 70) {
+    const result = calculateMetadataCompleteness(doc);
+    if (result.isWikipedia) continue;
+    if (result.score < 70) {
       incomplete++;
     }
   }
