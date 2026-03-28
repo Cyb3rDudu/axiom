@@ -398,6 +398,22 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                         f"Document result missing original_filename in metadata: {doc_result.get('id')}"
                     )
 
+            # --- Extract document-level metadata from chunk metadata ---
+            doc_level_metadata_by_file = {}
+            for filename, file_chunks in doc_results_by_file.items():
+                first_meta = file_chunks[0].get("metadata", {}) if file_chunks else {}
+                authors_raw = first_meta.get("authors")
+                if isinstance(authors_raw, list):
+                    authors_raw = ", ".join(str(a) for a in authors_raw)
+                doc_level_metadata_by_file[filename] = {
+                    "title": first_meta.get("title"),
+                    "authors": authors_raw,
+                    "publication_year": first_meta.get("publication_year"),
+                    "original_filename": first_meta.get("original_filename", filename),
+                    "journal_or_source": first_meta.get("journal_or_source"),
+                    "url": first_meta.get("url"),
+                }
+
             # --- Process Each Document (Extract Windows, Schedule Note Gen) ---
             for filename, chunks in doc_results_by_file.items():
                 logger.info(
@@ -446,7 +462,8 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                         f"window_{first_chunk_id}"  # Keep for potential internal use
                     )
 
-                    # Use the enhanced window metadata
+                    # Use the enhanced window metadata + document-level metadata for citations
+                    doc_meta = doc_level_metadata_by_file.get(filename, {})
                     window_metadata = {
                         "beginning_omitted": window["beginning_omitted"],
                         "end_omitted": window["end_omitted"],
@@ -458,6 +475,13 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                         "overlapping_chunks": window["window_metadata"][
                             "overlapping_chunks"
                         ],  # This metadata will be cleaned later
+                        # Document-level metadata for citation formatting
+                        "title": doc_meta.get("title"),
+                        "authors": doc_meta.get("authors"),
+                        "publication_year": doc_meta.get("publication_year"),
+                        "original_filename": doc_meta.get("original_filename"),
+                        "journal_or_source": doc_meta.get("journal_or_source"),
+                        "url": doc_meta.get("url"),
                     }
 
                     # --- Get doc_id for the primary source_id ---
@@ -682,6 +706,20 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                                 f"Proactive search: Document result missing original_filename: {doc_result.get('id')}"
                             )
 
+                    # --- Extract document-level metadata from chunk metadata (Cycle 1) ---
+                    proactive_doc_meta_by_file = {}
+                    for fn, fc in proactive_doc_results_by_file.items():
+                        fm = fc[0].get("metadata", {}) if fc else {}
+                        _authors = fm.get("authors")
+                        if isinstance(_authors, list):
+                            _authors = ", ".join(str(a) for a in _authors)
+                        proactive_doc_meta_by_file[fn] = {
+                            "title": fm.get("title"), "authors": _authors,
+                            "publication_year": fm.get("publication_year"),
+                            "original_filename": fm.get("original_filename", fn),
+                            "journal_or_source": fm.get("journal_or_source"), "url": fm.get("url"),
+                        }
+
                     # --- Process Each Document (Extract Windows, Schedule Note Gen - Cycle 1) ---
                     for filename, chunks in proactive_doc_results_by_file.items():
                         logger.info(
@@ -715,7 +753,8 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                             )
                             window_source_id = f"window_{first_chunk_id}"  # Keep for potential internal use
 
-                            # Use the enhanced window metadata
+                            # Use the enhanced window metadata + document-level metadata
+                            p_doc_meta = proactive_doc_meta_by_file.get(filename, {})
                             window_metadata = {
                                 "beginning_omitted": window["beginning_omitted"],
                                 "end_omitted": window["end_omitted"],
@@ -727,6 +766,12 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                                 "overlapping_chunks": window["window_metadata"][
                                     "overlapping_chunks"
                                 ],  # This metadata will be cleaned later
+                                "title": p_doc_meta.get("title"),
+                                "authors": p_doc_meta.get("authors"),
+                                "publication_year": p_doc_meta.get("publication_year"),
+                                "original_filename": p_doc_meta.get("original_filename"),
+                                "journal_or_source": p_doc_meta.get("journal_or_source"),
+                                "url": p_doc_meta.get("url"),
                             }
 
                             # --- Get doc_id for the primary source_id ---
@@ -966,6 +1011,20 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                     f"Document result missing original_filename in metadata: {doc_result.get('id')}"
                 )
 
+        # Extract document-level metadata from chunk metadata
+        struct_doc_meta_by_file = {}
+        for fn, fc in doc_results_by_file.items():
+            fm = fc[0].get("metadata", {}) if fc else {}
+            _authors = fm.get("authors")
+            if isinstance(_authors, list):
+                _authors = ", ".join(str(a) for a in _authors)
+            struct_doc_meta_by_file[fn] = {
+                "title": fm.get("title"), "authors": _authors,
+                "publication_year": fm.get("publication_year"),
+                "original_filename": fm.get("original_filename", fn),
+                "journal_or_source": fm.get("journal_or_source"), "url": fm.get("url"),
+            }
+
         for filename, chunks in doc_results_by_file.items():
             # Determine question context for chunk evaluation
             question_context = (
@@ -990,6 +1049,7 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                     if window["original_chunk_ids"]
                     else "unknown"
                 )
+                s_doc_meta = struct_doc_meta_by_file.get(filename, {})
                 window_metadata = {
                     "beginning_omitted": window["beginning_omitted"],
                     "end_omitted": window["end_omitted"],
@@ -1001,6 +1061,12 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                     "overlapping_chunks": window["window_metadata"][
                         "overlapping_chunks"
                     ],
+                    "title": s_doc_meta.get("title"),
+                    "authors": s_doc_meta.get("authors"),
+                    "publication_year": s_doc_meta.get("publication_year"),
+                    "original_filename": s_doc_meta.get("original_filename"),
+                    "journal_or_source": s_doc_meta.get("journal_or_source"),
+                    "url": s_doc_meta.get("url"),
                 }
                 doc_id_for_note = "unknown_doc"
                 if window_metadata["overlapping_chunks"]:
@@ -1384,6 +1450,20 @@ Now, generate the questions for the provided research request.
                     f"Initial exploration: Document result missing original_filename: {doc_result.get('id')}"
                 )
 
+        # --- Extract document-level metadata from chunk metadata (Initial Exploration) ---
+        initial_doc_meta_by_file = {}
+        for fn, fc in initial_doc_results_by_file.items():
+            fm = fc[0].get("metadata", {}) if fc else {}
+            _authors = fm.get("authors")
+            if isinstance(_authors, list):
+                _authors = ", ".join(str(a) for a in _authors)
+            initial_doc_meta_by_file[fn] = {
+                "title": fm.get("title"), "authors": _authors,
+                "publication_year": fm.get("publication_year"),
+                "original_filename": fm.get("original_filename", fn),
+                "journal_or_source": fm.get("journal_or_source"), "url": fm.get("url"),
+            }
+
         # --- Process Each Document (Extract Windows, Schedule Note Gen - Initial Exploration) ---
         for filename, chunks in initial_doc_results_by_file.items():
             logger.info(
@@ -1417,7 +1497,8 @@ Now, generate the questions for the provided research request.
                     f"window_{first_chunk_id}"  # Keep for potential internal use
                 )
 
-                # Use the enhanced window metadata
+                # Use the enhanced window metadata + document-level metadata
+                i_doc_meta = initial_doc_meta_by_file.get(filename, {})
                 window_metadata = {
                     "beginning_omitted": window["beginning_omitted"],
                     "end_omitted": window["end_omitted"],
@@ -1429,6 +1510,12 @@ Now, generate the questions for the provided research request.
                     "overlapping_chunks": window["window_metadata"][
                         "overlapping_chunks"
                     ],  # This metadata will be cleaned later
+                    "title": i_doc_meta.get("title"),
+                    "authors": i_doc_meta.get("authors"),
+                    "publication_year": i_doc_meta.get("publication_year"),
+                    "original_filename": i_doc_meta.get("original_filename"),
+                    "journal_or_source": i_doc_meta.get("journal_or_source"),
+                    "url": i_doc_meta.get("url"),
                 }
 
                 # --- Get doc_id for the primary source_id ---
