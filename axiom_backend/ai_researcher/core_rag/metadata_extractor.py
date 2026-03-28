@@ -184,8 +184,18 @@ class MetadataExtractor:
             print("MetadataExtractor: No text sample provided.")
             return None
 
-        # Limit the text sample size
-        text_sample_truncated = text_sample[:self.max_text_sample]
+        # Limit the text sample size – include beginning AND end of document
+        # The end often contains colophon, imprint page with publisher/ISBN/year
+        head_size = self.max_text_sample
+        tail_size = 2000
+        if len(text_sample) > head_size + tail_size:
+            text_sample_truncated = (
+                text_sample[:head_size]
+                + "\n\n[...]\n\n"
+                + text_sample[-tail_size:]
+            )
+        else:
+            text_sample_truncated = text_sample[:head_size + tail_size]
         
         # Debug: Print the first part of the text sample
         print(f"MetadataExtractor: Processing text sample (first 500 chars):")
@@ -410,3 +420,48 @@ Extract the metadata based *only* on the text provided above and return it as JS
         except Exception as e:
             print(f"MetadataExtractor: An unexpected error occurred: {e}")
             return None
+
+    def extract_and_enrich_sync(self, text_sample: str) -> Optional[Dict[str, Any]]:
+        """Extract metadata via LLM, then enrich with external databases (synchronous wrapper).
+
+        This is meant to be called from synchronous code (e.g. the background
+        document processor).  It runs the async enrichment pipeline in a new
+        event loop if necessary.
+        """
+        # Step 1: LLM extraction (synchronous)
+        metadata = self.extract(text_sample)
+
+        # Step 2: Async enrichment
+        try:
+            from services.metadata_enrichment import enrich_metadata
+            import asyncio
+
+            async def _do_enrich():
+                return await enrich_metadata(
+                    existing_metadata=metadata or {},
+                    document_text=text_sample,
+                )
+
+            # Try to use a running loop, otherwise create one
+            try:
+                loop = asyncio.get_running_loop()
+                # If we're already in an async context, we can't call run_until_complete
+                # Use asyncio.ensure_future and wait synchronously via threading
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    enriched = pool.submit(lambda: asyncio.run(_do_enrich())).result(timeout=60)
+            except RuntimeError:
+                # No running loop – safe to use asyncio.run
+                enriched = asyncio.run(_do_enrich())
+
+            if enriched:
+                print(f"MetadataExtractor: Enrichment complete – "
+                      f"completeness={enriched.get('metadata_completeness', 'N/A')}, "
+                      f"sources={enriched.get('metadata_sources', [])}")
+                return enriched
+
+        except Exception as e:
+            print(f"MetadataExtractor: Enrichment failed (non-fatal): {e}")
+            # Fall through and return LLM-only metadata
+
+        return metadata

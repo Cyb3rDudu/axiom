@@ -383,6 +383,25 @@ class WebPageFetcherTool:
             # --- Metadata Extraction (Live Fetch - Placed after text extraction) ---
             # This block is moved up slightly to be before the cache write
 
+            # --- Web Metadata Enrichment (HTML structured data) ---
+            if not is_pdf and extracted_text:
+                try:
+                    from services.metadata_enrichment import extract_web_metadata
+                    raw_html = response.text if hasattr(response, 'text') else ""
+                    if raw_html:
+                        web_meta = extract_web_metadata(raw_html)
+                        if web_meta:
+                            logger.info(f"Extracted web metadata from HTML for {url}: {list(web_meta.keys())}")
+                            if extracted_metadata is None:
+                                extracted_metadata = {}
+                            # Merge: web_meta fills in gaps only
+                            for key, value in web_meta.items():
+                                if value and not extracted_metadata.get(key):
+                                    extracted_metadata[key] = value
+                except Exception as web_meta_err:
+                    logger.warning(f"Web metadata extraction failed for {url}: {web_meta_err}")
+            # --- End Web Metadata Enrichment ---
+
             # --- Send Feedback: Fetch Complete (Common for both PDF and HTML) ---
             if extracted_text is None: extracted_text = ""
             if extracted_title is None: extracted_title = url

@@ -294,7 +294,7 @@ class WritingAgent(BaseAgent):
             formatted_text += "\n"
         return formatted_text
 
-    def _format_notes_for_writing(
+    async def _format_notes_for_writing(
         self, notes: List[Note], mission_id: Optional[str] = None
     ) -> str:
         """Formats the list of Note objects, grouped by source, into a string for the writing prompt.
@@ -384,6 +384,32 @@ class WritingAgent(BaseAgent):
                     getattr(first_note.source_metadata, "authors", None)
                     or "Unknown Authors"
                 )
+
+                # --- Quick metadata enrichment for missing authors/year ---
+                if use_author_year and (authors == "Unknown Authors" or year == "N/A"):
+                    try:
+                        from services.metadata_enrichment import quick_enrich_for_writing
+                        enrichment = await quick_enrich_for_writing(
+                            source_id=source_id,
+                            title=title,
+                            existing_authors=authors,
+                            existing_year=year,
+                        )
+                        if enrichment:
+                            if enrichment.get("authors") and authors == "Unknown Authors":
+                                enriched_authors = enrichment["authors"]
+                                if isinstance(enriched_authors, list):
+                                    authors = ", ".join(enriched_authors)
+                                else:
+                                    authors = str(enriched_authors)
+                                logger.info(f"Enriched authors for {source_id}: {authors}")
+                            if enrichment.get("publication_year") and year == "N/A":
+                                year = enrichment["publication_year"]
+                                logger.info(f"Enriched year for {source_id}: {year}")
+                    except Exception as enrich_err:
+                        logger.debug(f"Quick enrichment skipped for {source_id}: {enrich_err}")
+                # --- End quick enrichment ---
+
                 if use_author_year:
                     # Build a concrete citation example with actual author/year
                     # Extract first author surname for the example
@@ -655,7 +681,7 @@ class WritingAgent(BaseAgent):
                 # Proceed without notes if revising, scratchpad update will be set later
             else:
                 # Format notes only if research_based and notes exist
-                notes_context = self._format_notes_for_writing(
+                notes_context = await self._format_notes_for_writing(
                     notes_for_section, mission_id
                 )
         elif not notes_for_section and is_revision_pass:

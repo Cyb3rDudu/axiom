@@ -414,7 +414,7 @@ class BackgroundDocumentProcessor:
             else:
                 initial_text = processor.document_converter.extract_initial_text_for_metadata(target_path)
             
-            extracted_metadata = processor.metadata_extractor.extract(initial_text)
+            extracted_metadata = processor.metadata_extractor.extract_and_enrich_sync(initial_text)
             
             if extracted_metadata:
                 final_metadata = {"doc_id": doc_id, "original_filename": original_filename}
@@ -661,7 +661,10 @@ class BackgroundDocumentProcessor:
                         "journal_or_source": extracted_metadata.get('journal_or_source') or extracted_metadata.get('journal'),
                         "abstract": extracted_metadata.get('abstract'),
                         "doi": extracted_metadata.get('doi'),
+                        "isbn": extracted_metadata.get('isbn'),
                         "keywords": extracted_metadata.get('keywords'),
+                        "metadata_completeness": extracted_metadata.get('metadata_completeness'),
+                        "metadata_sources": extracted_metadata.get('metadata_sources'),
                         "processed_at": datetime.utcnow().isoformat(),
                         "processing_job_id": job_id,
                         "status": "completed",
