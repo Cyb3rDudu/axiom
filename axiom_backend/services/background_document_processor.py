@@ -469,7 +469,10 @@ class BackgroundDocumentProcessor:
             # Retry metadata extraction with markdown content if initial extraction failed
             # (covers PDFs with image-only cover pages where header extraction returned empty)
             if not extracted_metadata or not (extracted_metadata.get('title') or extracted_metadata.get('authors')):
-                md_sample = markdown_content[:4000] + (markdown_content[-2000:] if len(markdown_content) > 6000 else "")
+                # Strip image markdown before sampling — images waste chars and carry no metadata
+                import re
+                md_clean = re.sub(r'!\[.*?\]\([^)]*\)\s*', '', markdown_content)
+                md_sample = md_clean[:4000] + (md_clean[-2000:] if len(md_clean) > 6000 else "")
                 if md_sample.strip():
                     print(f"[{doc_id}] Retrying metadata extraction with markdown content ({len(md_sample)} chars)...")
                     retry_metadata = processor.metadata_extractor.extract_and_enrich_sync(md_sample, filename=original_filename)
