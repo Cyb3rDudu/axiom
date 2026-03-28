@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 from typing import List, Optional, ClassVar, Union
 
 class WritingChangeSuggestion(BaseModel):
@@ -10,6 +10,26 @@ class WritingChangeSuggestion(BaseModel):
     issue_description: str = Field(..., description="A clear description of the issue identified (e.g., repetition, lack of clarity, missing transition).")
     suggested_change: str = Field(..., description="Specific guidance on how to address the issue or what content should be added/modified.")
     priority: Union[int, str] = Field(default=1, description="Suggested priority for addressing the change (e.g., 1=High, 2=Medium, 3=Low).")
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_field_names(cls, data):
+        """Normalize common LLM field name variations to expected names."""
+        if not isinstance(data, dict):
+            return data
+        # Map common LLM variations -> expected field names
+        aliases = {
+            'issue_description': ['description', 'issue', 'problem', 'issue_desc'],
+            'suggested_change': ['suggestion', 'change', 'recommended_change', 'fix', 'recommendation'],
+            'section_id': ['section', 'id'],
+        }
+        for target, sources in aliases.items():
+            if target not in data:
+                for src in sources:
+                    if src in data:
+                        data[target] = data.pop(src)
+                        break
+        return data
 
     @field_validator('priority', mode='before')
     @classmethod
