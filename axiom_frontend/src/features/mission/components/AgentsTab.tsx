@@ -16,7 +16,7 @@ interface AgentsTabProps {
   totalLogsCount?: number;
 }
 
-export const AgentsTab: React.FC<AgentsTabProps> = ({ 
+export const AgentsTab: React.FC<AgentsTabProps> = ({
   missionId,
   hasMoreLogs,
   onLoadMoreLogs,
@@ -24,35 +24,32 @@ export const AgentsTab: React.FC<AgentsTabProps> = ({
   isLoadingMoreLogs,
   totalLogsCount
 }) => {
-  const { activeMission, missionLogs } = useMissionStore();
+  const { activeMission, missionLogs, fetchMissionLogs } = useMissionStore();
   const [isLoading, setIsLoading] = useState(false);
 
   // Get logs from the store (shared with ResearchPanel)
   const logs = missionLogs[missionId] || [];
-  
-  // Debug logging to understand what's happening
-  useEffect(() => {
-    // console.log(`AgentsTab: missionId=${missionId}, logs.length=${logs.length}`);
-    // console.log('AgentsTab: First few logs:', logs.slice(0, 3));
-  }, [missionId, logs]);
 
   // Memoize logs to prevent unnecessary re-renders
   const memoizedLogs = useMemo(() => {
-    // Keep only the most recent logs to prevent memory issues
     return logs;
   }, [logs]);
 
-  // Set loading state when mission changes
+  // Catch-up fetch: when this tab mounts with an active mission but empty logs,
+  // fetch from the API to recover logs that may have been missed by WebSocket.
+  // This handles the case where the user navigates away and back while mission runs.
   useEffect(() => {
-    if (missionId && logs.length === 0) {
+    if (missionId && logs.length === 0 && activeMission?.status === 'running') {
       setIsLoading(true);
-      // Loading will be handled by ResearchPanel, just wait a bit
+      fetchMissionLogs(missionId).finally(() => setIsLoading(false));
+    } else if (missionId && logs.length === 0) {
+      setIsLoading(true);
       const timer = setTimeout(() => setIsLoading(false), 1000);
       return () => clearTimeout(timer);
     } else {
       setIsLoading(false);
     }
-  }, [missionId, logs.length]);
+  }, [missionId, logs.length, activeMission?.status, fetchMissionLogs]);
 
   return (
     <div className="h-full flex flex-col">

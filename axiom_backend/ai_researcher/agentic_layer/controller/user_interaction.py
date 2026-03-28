@@ -20,6 +20,96 @@ from ai_researcher.agentic_layer.utils.json_utils import sanitize_json_string
 
 logger = logging.getLogger(__name__)
 
+# Localized UI status strings appended to chat responses.
+# These are controller-level messages (not LLM-generated), so we use a simple dict.
+# Falls back to English for unsupported languages.
+_UI_STRINGS = {
+    "research_starting": {
+        "en": "Great! I'll now start the research process with the approved questions. You can monitor the progress in the research tabs.",
+        "de": "Sehr gut! Ich starte jetzt den Rechercheprozess mit den genehmigten Fragen. Sie können den Fortschritt in den Recherche-Tabs verfolgen.",
+        "fr": "Parfait ! Je lance maintenant le processus de recherche avec les questions approuvées. Vous pouvez suivre la progression dans les onglets de recherche.",
+        "es": "¡Perfecto! Ahora iniciaré el proceso de investigación con las preguntas aprobadas. Puede seguir el progreso en las pestañas de investigación.",
+        "pt": "Ótimo! Vou iniciar agora o processo de pesquisa com as perguntas aprovadas. Pode acompanhar o progresso nos separadores de investigação.",
+    },
+    "questions_intro": {
+        "en": "Here are some initial research questions to guide our investigation:",
+        "de": "Hier sind einige erste Forschungsfragen zur Orientierung unserer Untersuchung:",
+        "fr": "Voici quelques questions de recherche initiales pour guider notre investigation :",
+        "es": "Aquí hay algunas preguntas de investigación iniciales para guiar nuestra investigación:",
+        "pt": "Aqui estão algumas perguntas de pesquisa iniciais para orientar nossa investigação:",
+    },
+    "questions_prompt": {
+        "en": "Would you like to refine these, or shall we proceed?",
+        "de": "Möchten Sie diese anpassen, oder sollen wir fortfahren?",
+        "fr": "Souhaitez-vous les affiner, ou devons-nous poursuivre ?",
+        "es": "¿Le gustaría refinarlas o procedemos?",
+        "pt": "Gostaria de refiná-las ou devemos prosseguir?",
+    },
+    "refine_error": {
+        "en": "Sorry, I had trouble refining the questions. Please try again or proceed with the current ones.",
+        "de": "Entschuldigung, bei der Überarbeitung der Fragen ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut oder fahren Sie mit den aktuellen Fragen fort.",
+        "fr": "Désolé, j'ai eu des difficultés à affiner les questions. Veuillez réessayer ou poursuivre avec les questions actuelles.",
+        "es": "Lo siento, tuve problemas para refinar las preguntas. Por favor, intente de nuevo o continúe con las actuales.",
+        "pt": "Desculpe, tive problemas ao refinar as perguntas. Por favor, tente novamente ou continue com as atuais.",
+    },
+    "ready_to_research": {
+        "en": "I'm ready to start the research. Please let me know if you have any specific questions you'd like me to focus on, or I can proceed with a general investigation.",
+        "de": "Ich bin bereit, mit der Recherche zu beginnen. Lassen Sie mich wissen, ob Sie bestimmte Fragen haben, auf die ich mich konzentrieren soll, oder ich kann mit einer allgemeinen Untersuchung fortfahren.",
+        "fr": "Je suis prêt à commencer la recherche. Dites-moi si vous avez des questions spécifiques sur lesquelles vous souhaitez que je me concentre, ou je peux procéder à une investigation générale.",
+        "es": "Estoy listo para comenzar la investigación. Hágame saber si tiene preguntas específicas en las que desea que me enfoque, o puedo proceder con una investigación general.",
+        "pt": "Estou pronto para iniciar a pesquisa. Diga-me se tem perguntas específicas nas quais gostaria que eu me concentrasse, ou posso prosseguir com uma investigação geral.",
+    },
+}
+
+
+def _get_ui_string(key: str, lang_code: str = "en") -> str:
+    """Get a localized UI string, falling back to English."""
+    strings = _UI_STRINGS.get(key, {})
+    return strings.get(lang_code, strings.get("en", ""))
+
+
+def _detect_language(controller, mission_id: Optional[str] = None, llm_response: Optional[str] = None) -> str:
+    """Detect the conversation language.
+
+    Priority:
+    1. Mission language_code (explicitly set by user for this research)
+    2. Simple heuristic on the LLM response (mirrors the user's chat language)
+    3. User profile language
+    4. English fallback
+    """
+    # 1. Try mission language
+    if mission_id:
+        try:
+            mc = controller.context_manager.get_mission_context(mission_id)
+            if mc and mc.metadata:
+                lang = mc.metadata.get("language_code")
+                if lang:
+                    return lang
+        except Exception:
+            pass
+    # 2. Heuristic: detect from LLM response (which mirrors user's chat language)
+    if llm_response:
+        # Check for common German/French/Spanish/Portuguese words in the response
+        lower = llm_response[:300].lower()
+        if any(w in lower for w in ["ich ", "die ", "der ", "und ", "für ", "dass ", "wird ", "nicht ", "eine ", "kann "]):
+            return "de"
+        if any(w in lower for w in ["je ", "les ", "des ", "une ", "pour ", "dans ", "qui ", "est "]):
+            return "fr"
+        if any(w in lower for w in ["las ", "los ", "una ", "para ", "que ", "con ", "del "]):
+            return "es"
+        if any(w in lower for w in [" os ", " uma ", " para ", " que ", " com ", " das "]):
+            return "pt"
+    # 3. Try user preference
+    try:
+        from ai_researcher.user_context import get_current_user
+        user = get_current_user()
+        if user and hasattr(user, 'language_code') and user.language_code:
+            return user.language_code
+    except Exception:
+        pass
+    return "en"
+
+
 class UserInteractionManager:
     """
     Manages user interactions, including message handling, request analysis,
@@ -409,9 +499,10 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     mission_context = self.controller.context_manager.get_mission_context(mission_id)
                     if not mission_context:
                         logger.warning(f"Mission {mission_id} not found, creating new mission")
-                        mission_context = await self.controller.context_manager.start_mission(user_request=request_content, chat_id=chat_id)
+                        detected_lang = _detect_language(self.controller, llm_response=user_message)
+                        mission_context = await self.controller.context_manager.start_mission(user_request=request_content, chat_id=chat_id, language_code=detected_lang)
                         mission_id = mission_context.mission_id
-                        logger.info(f"Created new mission with ID: {mission_id}")
+                        logger.info(f"Created new mission with ID: {mission_id} (detected language: {detected_lang})")
                     
                     # Get user settings to build comprehensive_settings
                     from ai_researcher.user_context import get_current_user
@@ -476,9 +567,10 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     await self.controller.context_manager.update_mission_metadata(mission_id, existing_metadata)
                 else:
                     # Create mission if no existing mission_id
-                    mission_context = await self.controller.context_manager.start_mission(user_request=request_content, chat_id=chat_id)
+                    detected_lang = _detect_language(self.controller, llm_response=user_message)
+                    mission_context = await self.controller.context_manager.start_mission(user_request=request_content, chat_id=chat_id, language_code=detected_lang)
                     mission_id = mission_context.mission_id
-                    logger.info(f"Created new mission with ID: {mission_id}")
+                    logger.info(f"Created new mission with ID: {mission_id} (detected language: {detected_lang})")
                     
                     # Get user settings to build comprehensive_settings
                     from ai_researcher.user_context import get_current_user
@@ -577,19 +669,22 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                         
                         # Update the agent response to include the questions
                         questions_text = "\n".join([f"- {q}" for q in questions])
-                        agent_output["response"] = f"{agent_output['response']}\n\nHere are some initial research questions to guide our investigation:\n\n{questions_text}\n\nWould you like to refine these, or shall we proceed?"
+                        lang = _detect_language(self.controller, mission_id, agent_output.get("response"))
+                        agent_output["response"] = f"{agent_output['response']}\n\n{_get_ui_string('questions_intro', lang)}\n\n{questions_text}\n\n{_get_ui_string('questions_prompt', lang)}"
                         agent_output["questions"] = questions  # Add questions to the response for frontend use
                         
                         logger.info(f"Generated {len(questions)} initial questions for mission {mission_id} via ResearchAgent and included them in chat response")
                     
                     else:
                         logger.warning(f"ResearchAgent failed to generate questions for mission {mission_id}, proceeding without questions")
-                        agent_output["response"] = f"{agent_output['response']}\n\nI'm ready to start the research. Please let me know if you have any specific questions you'd like me to focus on, or I can proceed with a general investigation."
+                        lang = _detect_language(self.controller, mission_id, agent_output.get("response"))
+                        agent_output["response"] = f"{agent_output['response']}\n\n{_get_ui_string('ready_to_research', lang)}"
                 
                 except Exception as e:
                     logger.error(f"Error generating questions for mission {mission_id} with ResearchAgent: {e}", exc_info=True)
                     # Continue without questions rather than failing the whole flow
-                    agent_output["response"] = f"{agent_output['response']}\n\nI'm ready to start the research. Please let me know if you have any specific questions you'd like me to focus on, or I can proceed with a general investigation."
+                    lang = _detect_language(self.controller, mission_id, agent_output.get("response"))
+                    agent_output["response"] = f"{agent_output['response']}\n\n{_get_ui_string('ready_to_research', lang)}"
                 
                 # Return the agent output with the mission_id added
                 agent_output["mission_id"] = mission_id
@@ -639,7 +734,8 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     
                 except Exception as e:
                     logger.error(f"Error refining questions for mission {target_mission_id}: {e}", exc_info=True)
-                    agent_output["response"] = f"Sorry, I had trouble refining the questions. Please try again or proceed with the current ones."
+                    lang = _detect_language(self.controller, target_mission_id, agent_output.get("response", ""))
+                    agent_output["response"] = _get_ui_string('refine_error', lang)
                     agent_output["mission_id"] = target_mission_id
                     return agent_output
             
@@ -829,7 +925,8 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                 ctx.run(run_with_context)
                 
                 # Update the response to confirm research is starting
-                agent_output["response"] = f"{agent_output['response']}\n\nGreat! I'll now start the research process with the approved questions. You can monitor the progress in the research tabs."
+                lang = _detect_language(self.controller, mission_id, agent_output.get("response"))
+                agent_output["response"] = f"{agent_output['response']}\n\n{_get_ui_string('research_starting', lang)}"
                 agent_output["mission_id"] = mission_id  # Ensure mission ID is returned
                 
                 logger.info(f"Research approved and background execution started for mission {mission_id}")
