@@ -29,6 +29,8 @@ import { useDocumentUploadManager } from '../context/DocumentUploadContext';
 import { DocumentMetadataEditModal } from './DocumentMetadataEditModal';
 import { DocumentViewModal } from './DocumentViewModal';
 import { AddToGroupModal } from './AddToGroupModal';
+import { MetadataCompletenessBadge } from './MetadataCompletenessBadge';
+import { MetadataWarningBanner } from './MetadataWarningBanner';
 
 interface EnhancedDocumentListProps {
   documents: Document[];
@@ -392,6 +394,9 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
         </div>
       )}
 
+      {/* Metadata completeness warning banner */}
+      <MetadataWarningBanner documents={filteredDocuments} />
+
       {/* Document List */}
       <div className="flex-1 overflow-y-auto min-h-0">
         {/* Select All Header */}
@@ -545,6 +550,14 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
                   {/* Document Icon */}
                   <div className="flex-shrink-0 mt-0.5">
                     <FileText className={`h-4 w-4 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} />
+                  </div>
+
+                  {/* Metadata Completeness Badge */}
+                  <div className="flex-shrink-0 mt-0.5">
+                    <MetadataCompletenessBadge
+                      document={doc}
+                      onEditMetadata={handleEditDocument}
+                    />
                   </div>
 
                   {/* Document Content */}
