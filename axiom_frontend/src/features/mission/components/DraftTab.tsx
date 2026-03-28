@@ -134,12 +134,13 @@ export const DraftTab: React.FC<DraftTabProps> = ({ missionId }) => {
     setCurrentVersion(1)
     setSelectedVersion(1)
     
-    // Fetch draft content
-    if (!activeMission?.draft && !activeMission?.report) {
+    // Always fetch fresh content when mission changes or status changes to completed
+    // This ensures we don't show stale drafts from IndexedDB
+    if (activeMission?.status === 'completed') {
       fetchDraft()
-    } else if (activeMission?.status === 'completed') {
-      // Also fetch versions for completed missions
       fetchReportVersions()
+    } else if (!activeMission?.draft && !activeMission?.report) {
+      fetchDraft()
     }
   }, [missionId, activeMission?.status]) // Trigger on mission ID or status change
 
