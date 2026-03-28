@@ -152,7 +152,7 @@ export function calculateMetadataCompleteness(doc: Document): MetadataCompletene
   const finalScore = apiScore ?? score;
 
   const level: MetadataCompletenessResult['level'] =
-    finalScore >= 80 ? 'complete' : finalScore >= 40 ? 'partial' : 'poor';
+    finalScore >= 70 ? 'complete' : finalScore >= 40 ? 'partial' : 'poor';
 
   return { score: finalScore, missingFields, level };
 }
@@ -167,7 +167,7 @@ export function countIncompleteDocuments(documents: Document[]): {
 } {
   let incomplete = 0;
   for (const doc of documents) {
-    if (calculateMetadataCompleteness(doc).score < 80) {
+    if (calculateMetadataCompleteness(doc).score < 70) {
       incomplete++;
     }
   }
