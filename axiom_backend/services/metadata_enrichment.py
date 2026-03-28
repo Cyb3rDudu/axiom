@@ -221,8 +221,13 @@ async def lookup_openalex(title: str, authors: Optional[List[str]] = None) -> Op
     if not title or len(title.strip()) < 5:
         return None
 
-    # Clean the title for the search query
+    # Clean the title for the search query — OpenAlex filter syntax chokes on
+    # colons, commas, percent signs, parentheses and other special chars
     search_title = title.strip()[:200]
+    search_title = re.sub(r'[,:;%§()"\[\]{}|/\\&#+*<>]', ' ', search_title)
+    search_title = re.sub(r'\s+', ' ', search_title).strip()
+    if len(search_title) < 5:
+        return None
     url = "https://api.openalex.org/works"
     params = {
         "filter": f"title.search:{search_title}",

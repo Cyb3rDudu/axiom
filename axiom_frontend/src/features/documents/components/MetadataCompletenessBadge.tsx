@@ -86,13 +86,15 @@ export const MetadataCompletenessBadge: React.FC<MetadataCompletenessBadgeProps>
       {showTooltip && (
         <div
           ref={tooltipRef}
-          className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-md"
+          className="fixed z-[9999] w-56 rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-md"
+          style={{
+            top: badgeRef.current ? badgeRef.current.getBoundingClientRect().top - 8 : 0,
+            left: badgeRef.current ? badgeRef.current.getBoundingClientRect().right + 8 : 0,
+            transform: 'translateY(-100%)',
+          }}
           onMouseEnter={() => setShowTooltip(true)}
           onMouseLeave={() => setShowTooltip(false)}
         >
-          {/* Arrow */}
-          <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-x-[6px] border-x-transparent border-t-[6px] border-t-border" />
-
           <p className="text-xs font-medium mb-1.5">
             Incomplete metadata ({score}%)
           </p>
