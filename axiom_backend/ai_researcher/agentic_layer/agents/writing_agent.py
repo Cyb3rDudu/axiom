@@ -1103,7 +1103,7 @@ class WritingAgent(BaseAgent):
             if synthesized_content and not synthesized_content.startswith("[Error:")
             else "failure"
         )
-        self.controller.context_manager.log_execution_step(
+        await self.controller.context_manager.log_execution_step(
             mission_id=mission_id,
             agent_name=self.agent_name,  # Use agent's name
             action=action_name,
