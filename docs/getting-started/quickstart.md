@@ -232,7 +232,7 @@ docker compose logs -f axiom-backend
 
 Change the port in your `.env` file:
 ```bash
-FRONTEND_PORT=3030  # Change to available port
+AXIOM_PORT=80  # Change to available port (nginx entry point)
 ```
 
 ### GPU Not Detected

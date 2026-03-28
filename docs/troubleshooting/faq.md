@@ -28,7 +28,9 @@ Your tracked costs may typically be 40-60% of actual dashboard charges, especial
 **A:** It depends on your needs:
 
 - **OpenAI**: Most consistent pricing and reliability
-- **OpenRouter**: Access to 100+ models, but pricing can be inconsistent
+- **DeepSeek**: Excellent value with native support; deepseek-reasoner has special handling for reasoning tasks
+- **Z.AI (Zhipu GLM)**: GLM models with up to 205K context window, great for long research documents
+- **OpenRouter**: Access to 100+ models including Claude, Gemini, and more
 - **Local Models**: Zero API costs, but requires GPU/CPU resources
 
 ### Q: Can I use local LLMs?

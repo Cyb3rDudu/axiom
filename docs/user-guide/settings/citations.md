@@ -13,7 +13,7 @@ AXIOM ships with three built-in citation profiles. These profiles cannot be edit
 | Profile | Mode | Language | Description |
 |---------|------|----------|-------------|
 | **Numbered Citations** | Numbered | English | Uses `[doc_id]` markers that are post-processed into sequential `[1]`, `[2]` references. This is the system default. |
-| **KMU Akademie APA 6 (Deutsch)** | Author-Year | German | Follows APA 6th Edition conventions in German with `(Autor, Jahr, S. XX)` format. |
+| **KMU Akademie APA 7 (Deutsch)** | Author-Year | German | Follows APA 7th Edition conventions in German with `(Autor, Jahr, S. XX)` format, aligned with official KMU Akademie Zitierrichtlinien. |
 | **APA 7th Edition (English)** | Author-Year | English | Follows APA 7th Edition conventions in English with `(Author, Year, p. XX)` format. |
 
 ### Citation Modes

@@ -212,7 +212,7 @@ All RAG and knowledge graph features are controlled through environment variable
 | Variable | Default | Description |
 |---|---|---|
 | `ENABLE_OPENSEARCH` | `true` | Enable OpenSearch fulltext search alongside vector search |
-| `OPENSEARCH_HOST` | `10.36.0.110` | OpenSearch server hostname or IP |
+| `OPENSEARCH_HOST` | `localhost` | OpenSearch server hostname or IP (change to your OpenSearch instance address) |
 | `OPENSEARCH_PORT` | `9200` | OpenSearch server port |
 | `OPENSEARCH_INDEX` | `axiom_chunks` | Index name for document chunks |
 | `OPENSEARCH_USE_SSL` | `false` | Enable SSL for OpenSearch connections |

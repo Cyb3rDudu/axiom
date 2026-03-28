@@ -32,7 +32,7 @@
 <div class="grid" markdown>
 
 :material-brain: **Advanced AI Integration**  
-Leverage multiple LLMs including GPT-5, Claude, and local models for diverse research capabilities
+Leverage multiple LLMs including GPT-5, DeepSeek, Z.AI (Zhipu GLM), Claude (via OpenRouter), and local models for diverse research capabilities
 
 :material-magnify: **Deep Document Analysis**  
 Advanced RAG pipeline with dual embeddings for superior search accuracy
@@ -237,6 +237,20 @@ graph TB
 ## Latest Updates
 
 <div class="grid cards" markdown>
+
+-   :material-rocket: **Post-Fork Enhancements** <small>Oct 2025 – March 2026</small>
+
+    ---
+
+    **Major additions since forking from Maestro (170+ commits)**
+
+    - Native DeepSeek and Z.AI (Zhipu GLM) provider support with special handling
+    - Configurable citation profiles: Numbered, KMU Akademie APA 7, APA 7 English, and custom
+    - RAG: Knowledge graphs, OpenSearch BM25 hybrid retrieval with RRF fusion
+    - Apple Silicon MPS GPU support, device-agnostic hardware management
+    - 3-level JSON fallback and context window truncation for provider robustness
+    - Document-aware RAG chat with grounded responses and embedded images
+    - Deployment: Podman Quadlet, Proxmox LXC, macOS hybrid dev stack
 
 -   :material-rocket: **Version 0.1.10-alpha** <small>Released Oct 12, 2025</small>
 

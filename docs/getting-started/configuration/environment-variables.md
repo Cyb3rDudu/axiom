@@ -56,6 +56,24 @@ CLI_GPU_DEVICE=0               # CLI operations GPU
 
 ```
 
+### Device Configuration
+
+```bash
+# Force CPU mode for all operations
+# Set to "true" to disable GPU usage entirely
+# Default: false
+FORCE_CPU_MODE=false
+
+# Preferred device type for hardware acceleration
+# Options: auto (detect automatically), cuda (NVIDIA), rocm (AMD), mps (Apple Silicon), cpu
+# Default: auto
+PREFERRED_DEVICE_TYPE=auto
+
+# Enable MPS fallback for unsupported PyTorch operations on Apple Silicon
+# Only relevant when PREFERRED_DEVICE_TYPE=mps
+# PYTORCH_ENABLE_MPS_FALLBACK=1
+```
+
 ### Resource Limits
 
 ```bash
@@ -187,6 +205,68 @@ DEEPSEEK_VERIFIER_MODEL=deepseek-chat     # Default verifier model
 
 !!! note
     DeepSeek enforces an 8192 max_tokens limit on completions. AXIOM applies this cap automatically. The `deepseek-reasoner` model also requires special parameter handling (no temperature, adjusted max_tokens), which AXIOM manages internally.
+
+## RAG Pipeline Configuration
+
+### Knowledge Graph
+
+```bash
+# Enable knowledge graph entity extraction during document processing
+# Default: true
+ENABLE_KNOWLEDGE_GRAPH=true
+
+# Enable graph-enhanced retrieval (uses knowledge graph during search)
+# Default: true
+ENABLE_GRAPH_RETRIEVAL=true
+```
+
+### OpenSearch (BM25 Fulltext Search)
+
+```bash
+# Enable OpenSearch for hybrid BM25 + vector retrieval with RRF fusion
+# Default: true
+# Set to false if you don't have an OpenSearch instance
+ENABLE_OPENSEARCH=true
+
+# OpenSearch connection settings
+# IMPORTANT: Default host is a deployment-specific IP.
+# Change to your OpenSearch instance address.
+OPENSEARCH_HOST=localhost
+OPENSEARCH_PORT=9200
+```
+
+!!! warning
+    If `ENABLE_OPENSEARCH=true` (the default) but no OpenSearch instance is reachable, the system will log connection errors but continue operating with vector-only search. Set `ENABLE_OPENSEARCH=false` if you don't have OpenSearch deployed.
+
+### Image Processing
+
+```bash
+# Enable image extraction from documents (figures, diagrams)
+# Default: true
+ENABLE_IMAGE_EXTRACTION=true
+
+# Enable CLIP image embeddings for visual search
+# Default: true
+ENABLE_IMAGE_EMBEDDINGS=true
+```
+
+### LLM-Enhanced OCR (Marker)
+
+```bash
+# Use LLM for enhanced PDF text extraction
+# Default: false (standard OCR is used)
+MARKER_USE_LLM=false
+
+# LLM service class for Marker
+MARKER_LLM_SERVICE=marker.services.openai.OpenAIService
+
+# Model to use for LLM-enhanced OCR
+MARKER_LLM_MODEL=gpt-5.2
+
+# API credentials for Marker LLM (falls back to OPENAI_API_KEY)
+MARKER_LLM_API_KEY=
+MARKER_LLM_BASE_URL=
+```
 
 ## Performance Tuning
 

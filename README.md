@@ -9,13 +9,15 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://hub.docker.com/r/murtaza-nasir/axiom)
 [![Documentation](https://img.shields.io/badge/Docs-Available-brightgreen.svg)](https://murtaza-nasir.github.io/axiom/)
 
-> **Version 0.1.10-alpha (Oct 12, 2025) - Azure OpenAI & Configuration Improvements**
+> **Latest Development (March 2026) - Major post-fork enhancements**
 >
-> - **Azure OpenAI Support**: Support for Azure OpenAI including GPT-5 models with automatic parameter handling
-> - **Manual Model Entry**: New toggle to bypass automatic model fetching for providers like Azure that don't support `/models` endpoint
-> - **Improved Error Handling**: Fixed 401 errors from external providers no longer logging users out
-> - **Settings Fixes**: Mission settings now persist correctly across server restarts with proper priority handling
-> - **UX Improvements**: Disabled autocomplete on API key fields to prevent browser autofill issues 
+> Since forking from Maestro, AXIOM has added 170+ commits including:
+> - **New AI Providers**: Native DeepSeek and Z.AI (Zhipu GLM) support with special handling
+> - **Citation System**: Configurable citation profiles (Numbered, APA 6/7, custom) with per-mission overrides
+> - **RAG Enhancements**: Knowledge graphs, OpenSearch BM25, hybrid retrieval with RRF fusion
+> - **Apple Silicon**: MPS GPU support for native macOS deployment
+> - **Robustness**: 3-level JSON fallback, context window truncation, multilingual support
+> - **Deployment**: Podman Quadlet, Proxmox LXC, macOS hybrid dev stack
 
 AXIOM is an AI-powered research platform you can host on your own hardware. It's designed to manage complex research tasks from start to finish in a collaborative research environment. Plan your research, let AI agents carry it out, and watch as they generate detailed reports based on your documents and sources from the web.
 
@@ -173,11 +175,14 @@ For troubleshooting and advanced configuration, see the [documentation](https://
 ## Core Features
 
 - **Multi-Agent Research System**: Planning, Research, Reflection, and Writing agents working in concert
-- **Advanced RAG Pipeline**: Dual BGE-M3 embeddings with PostgreSQL + pgvector
-- **Document Management**: PDF, Word, and Markdown support with semantic search
+- **Advanced RAG Pipeline**: Dual BGE-M3 embeddings with PostgreSQL + pgvector, Knowledge Graph entity extraction, OpenSearch BM25 hybrid retrieval
+- **5 Native AI Providers**: OpenAI, DeepSeek, Z.AI (Zhipu GLM), OpenRouter, and any OpenAI-compatible endpoint
+- **Citation Profiles**: Numbered, APA 6 (German/KMU), APA 7 (English), and custom citation styles with per-mission overrides
+- **Document Management**: PDF, Word, and Markdown support with semantic search and image extraction
 - **Web Integration**: Multiple search providers (Tavily, LinkUp, Jina, SearXNG)
+- **Hardware Flexibility**: CUDA, ROCm, MPS (Apple Silicon), and CPU — auto-detected or configurable
 - **Self-Hosted**: Complete control over your data and infrastructure
-- **Local LLM Support**: OpenAI-compatible API for running your own models
+- **Local LLM Support**: OpenAI-compatible API for running your own models (vLLM, SGLang)
 
 ## License
 

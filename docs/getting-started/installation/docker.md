@@ -1,10 +1,8 @@
 # Docker Installation
 
-This guide provides comprehensive instructions for installing and running AXIOM using Docker, the recommended deployment method.
+This guide provides instructions for installing and running AXIOM using Docker, the recommended deployment method.
 
 ## Prerequisites
-
-Before installing AXIOM, ensure you have the following:
 
 ### Required Software
 
@@ -24,7 +22,7 @@ Before installing AXIOM, ensure you have the following:
 
 ### Optional: GPU Support
 
-For faster document processing (especially PDF conversion):
+For faster document processing (especially PDF conversion and embeddings):
 
 - **NVIDIA GPU** with CUDA support
 - **NVIDIA Container Toolkit** ([installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html))
@@ -51,10 +49,11 @@ AXIOM provides two configuration methods:
 ```
 
 This script will guide you through:
+
 - Setting up API keys for AI providers
 - Configuring search providers
 - Setting network parameters
-- Choosing deployment options
+- Generating secure database credentials
 
 #### Option B: Manual Configuration
 
@@ -71,131 +70,75 @@ nano .env  # or vim, code, etc.
 Key configurations to set:
 
 ```bash
-# Network Configuration
-BACKEND_HOST=localhost
-BACKEND_PORT=8001
-FRONTEND_HOST=localhost
-FRONTEND_PORT=3030
+# Main application port (nginx proxy — the only port most users need)
+AXIOM_PORT=80
 
-# AI Provider Settings (choose one)
-OPENAI_API_KEY=your-openai-key
-ANTHROPIC_API_KEY=your-anthropic-key
-GROQ_API_KEY=your-groq-key
-
-# Search Provider (optional but recommended)
-TAVILY_API_KEY=your-tavily-key
+# Database credentials (CHANGE THESE for production!)
+POSTGRES_USER=axiom_user
+POSTGRES_PASSWORD=your_secure_password
+POSTGRES_DB=axiom_db
 ```
+
+!!! note
+    AI provider API keys (OpenAI, DeepSeek, Z.AI, OpenRouter) are configured through the web UI after first login, **not** in the `.env` file. Only search provider keys (Tavily, LinkUp, Jina) are set in `.env`.
 
 ### Step 3: Start AXIOM
 
+Choose the appropriate compose file for your hardware:
+
+**CPU Only (default):**
 ```bash
-docker compose up
+docker compose up -d
+```
+
+**NVIDIA GPU:**
+```bash
+docker compose -f docker-compose.gpu.yml up -d
+```
+
+**macOS (Apple Silicon / Intel):**
+```bash
+docker compose -f docker-compose.macos.yml up -d
+```
+
+**External Database (bring your own PostgreSQL):**
+```bash
+docker compose -f docker-compose.external-db.yml up -d
 ```
 
 This command will:
+
 1. Download necessary Docker images
 2. Build the AXIOM containers
 3. Initialize the PostgreSQL database
-4. Start all services
+4. Start all services (backend, frontend, nginx proxy, PostgreSQL)
 
 ### Step 4: Access the Application
 
-Once running, access AXIOM at:
-- **Web Interface**: http://localhost:3030
-- **API Documentation**: http://localhost:8001/docs
+Once running, access AXIOM through the nginx proxy at:
+
+- **Web Interface**: `http://localhost` (or `http://localhost:<AXIOM_PORT>` if changed)
 
 Default login credentials:
-- **Username**: admin
-- **Password**: admin123
+
+- **Username**: `admin`
+- **Password**: The password from your `.env` file (the setup script generates a secure random password; if you used manual configuration, check your `AXIOM_ADMIN_PASSWORD` setting)
 
 **Important**: Change the default password immediately after first login.
 
-## Detailed Configuration
+## Available Docker Compose Files
 
-### Environment Variables
+AXIOM ships with several compose files for different deployment scenarios:
 
-AXIOM uses environment variables for configuration. Here are the key settings:
-
-#### Network Configuration
-
-```bash
-# Backend server settings
-BACKEND_HOST=localhost          # Backend hostname
-BACKEND_PORT=8001               # Backend port
-API_PROTOCOL=http               # http or https
-WS_PROTOCOL=ws                  # ws or wss
-
-# Frontend server settings
-FRONTEND_HOST=localhost         # Frontend hostname
-FRONTEND_PORT=3030              # Frontend port
-```
-
-#### Database Configuration
-
-```bash
-# PostgreSQL settings (usually no changes needed)
-POSTGRES_USER=axiom_user
-POSTGRES_PASSWORD=axiom_password
-POSTGRES_DB=axiom_db
-DATABASE_URL=postgresql://axiom_user:axiom_password@postgres:5432/axiom_db
-```
-
-#### AI Provider Configuration
-
-Choose and configure at least one AI provider:
-
-```bash
-# OpenAI
-OPENAI_API_KEY=sk-...
-OPENAI_BASE_URL=https://api.openai.com/v1
-
-# Anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_BASE_URL=https://api.anthropic.com
-
-# Groq (fast inference)
-GROQ_API_KEY=gsk_...
-GROQ_BASE_URL=https://api.groq.com/openai/v1
-
-# OpenRouter (access to multiple models)
-OPENROUTER_API_KEY=sk-or-...
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-```
-
-#### Search Provider Configuration
-
-```bash
-# Tavily (recommended)
-TAVILY_API_KEY=tvly-...
-
-# LinkUp
-LINKUP_API_KEY=lnkp_...
-
-# Jina (for advanced web scraping)
-JINA_API_KEY=jina_...
-```
-
-### Docker Compose Profiles
-
-AXIOM supports different deployment profiles:
-
-#### Default Profile (CPU Only)
-
-```bash
-docker compose up
-```
-
-#### GPU Profile (NVIDIA CUDA)
-
-```bash
-docker compose --profile gpu up
-```
-
-#### Development Profile
-
-```bash
-docker compose --profile dev up
-```
+| File | Use Case |
+|------|----------|
+| `docker-compose.yml` | Default CPU-only deployment |
+| `docker-compose.gpu.yml` | NVIDIA GPU acceleration |
+| `docker-compose.cpu.yml` | Explicit CPU-only (same as default) |
+| `docker-compose.macos.yml` | Optimized for macOS (CPU mode in containers) |
+| `docker-compose.external-db.yml` | Use an external PostgreSQL database |
+| `docker-compose.gpu-external-db.yml` | GPU + external PostgreSQL |
+| `docker-compose.override.yml` | Local overrides (not committed) |
 
 ## Managing AXIOM
 
@@ -225,9 +168,9 @@ docker compose logs
 
 View specific service logs:
 ```bash
-docker compose logs backend
-docker compose logs frontend
-docker compose logs postgres
+docker compose logs axiom-backend
+docker compose logs axiom-frontend
+docker compose logs axiom-postgres
 ```
 
 Follow logs in real-time:
@@ -247,8 +190,10 @@ docker compose down
 git pull
 
 # Rebuild and start
-docker compose up --build
+docker compose up --build -d
 ```
+
+The multi-stage Dockerfile caches dependency layers, so rebuilds only recompile the application code unless `requirements.txt` has changed.
 
 ### Database Management
 
@@ -271,55 +216,29 @@ docker exec -i axiom-postgres psql -U axiom_user axiom_db < backup.sql
 
 ### Local Development
 
-Standard configuration for local development:
+Standard configuration — use the defaults in `.env.example`:
 
 ```bash
-BACKEND_HOST=localhost
-FRONTEND_HOST=localhost
-API_PROTOCOL=http
-WS_PROTOCOL=ws
+AXIOM_PORT=80
 ```
+
+All services are accessed through the nginx reverse proxy on a single port.
 
 ### Production Deployment
 
-For production on a single server:
+For production on a single server, configure HTTPS via an external reverse proxy (e.g., Caddy, Traefik, or nginx on the host) that terminates TLS and forwards to `AXIOM_PORT`:
 
 ```bash
-BACKEND_HOST=0.0.0.0
-FRONTEND_HOST=0.0.0.0
-API_PROTOCOL=https
-WS_PROTOCOL=wss
+AXIOM_PORT=8080  # Use a non-privileged port behind your reverse proxy
 ```
 
-### Distributed Deployment
+### Alternative Deployment Methods
 
-For multi-server deployment:
+For non-Docker deployments, see:
 
-**Backend Server:**
-```bash
-BACKEND_HOST=0.0.0.0
-BACKEND_PORT=8001
-```
-
-**Frontend Server:**
-```bash
-FRONTEND_HOST=0.0.0.0
-FRONTEND_PORT=3030
-VITE_API_HTTP_URL=https://api.yourdomain.com
-VITE_API_WS_URL=wss://api.yourdomain.com
-```
-
-### Docker Swarm
-
-For Docker Swarm deployment:
-
-```bash
-docker stack deploy -c docker-compose.yml axiom
-```
-
-### Kubernetes
-
-See [Kubernetes Deployment](../../deployment/local-llms.md) for Helm chart installation.
+- [Proxmox LXC Deployment](../../deployment/proxmox-lxc.md)
+- [Local LLM Deployment](../../deployment/local-llms.md) (vLLM / SGLang)
+- [macOS Native Dev Stack](../../DEV_MACOS.md) (Apple Silicon with MPS GPU)
 
 ## Troubleshooting
 
@@ -327,13 +246,14 @@ See [Kubernetes Deployment](../../deployment/local-llms.md) for Helm chart insta
 
 Check logs for errors:
 ```bash
-docker compose logs backend
+docker compose logs axiom-backend
 ```
 
 Common issues:
-- Port already in use: Change ports in `.env`
-- Missing API keys: Verify `.env` configuration
-- Database connection failed: Check PostgreSQL is running
+
+- Port already in use: Change `AXIOM_PORT` in `.env`
+- Database connection failed: Check PostgreSQL is running with `docker compose ps`
+- Backend crash on startup: Check for missing config variables with `docker compose logs axiom-backend | head -50`
 
 ### GPU Not Detected
 
@@ -343,23 +263,14 @@ nvidia-smi
 docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi
 ```
 
+Make sure you are using the GPU compose file: `docker compose -f docker-compose.gpu.yml up -d`
+
 ### Memory Issues
 
 Increase Docker memory allocation:
-- **Docker Desktop**: Preferences → Resources → Memory
+
+- **Docker Desktop**: Preferences → Resources → Memory (16GB+ recommended)
 - **Linux**: Check system memory with `free -h`
-
-### Network Issues
-
-Test connectivity:
-```bash
-# From host
-curl http://localhost:8001/health
-curl http://localhost:3030
-
-# Inside container
-docker exec axiom-backend curl http://localhost:8000/health
-```
 
 ### Permission Errors
 
@@ -374,45 +285,18 @@ chmod -R 755 ./data
 ### Production Checklist
 
 - [ ] Change default admin password
-- [ ] Use HTTPS in production
-- [ ] Secure database credentials
-- [ ] Limit network exposure
-- [ ] Regular security updates
-- [ ] Enable firewall rules
-- [ ] Use secrets management
-- [ ] Regular backups
-
-### SSL/TLS Configuration
-
-For HTTPS support, use a reverse proxy:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name your-domain.com;
-    
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-    
-    location / {
-        proxy_pass http://localhost:3030;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-    
-    location /api {
-        proxy_pass http://localhost:8001;
-    }
-}
-```
+- [ ] Use HTTPS via reverse proxy in production
+- [ ] Use strong database credentials (setup script generates these)
+- [ ] Limit network exposure with firewall rules
+- [ ] Regular security updates (`git pull && docker compose up --build -d`)
+- [ ] Regular database backups
 
 ## Next Steps
 
 After successful installation:
 
 1. **[First Login](../first-login.md)** - Set up your account
-2. **[Configure AI Providers](../configuration/ai-providers.md)** - Set up language models
+2. **[Configure AI Providers](../configuration/ai-providers.md)** - Set up language models (OpenAI, DeepSeek, Z.AI, OpenRouter, or local)
 3. **[Upload Documents](../../user-guide/documents/uploading.md)** - Build your library
 4. **[Quick Start Guide](../quickstart.md)** - Start using AXIOM
 

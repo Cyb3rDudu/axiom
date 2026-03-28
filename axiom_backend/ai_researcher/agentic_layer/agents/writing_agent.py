@@ -385,9 +385,14 @@ class WritingAgent(BaseAgent):
                     or "Unknown Authors"
                 )
                 if use_author_year:
+                    # Build a concrete citation example with actual author/year
+                    # Extract first author surname for the example
+                    author_surname = authors.split(",")[0].split("&")[0].strip() if authors and authors != "Unknown Authors" else "Author"
+                    year_example = year if year and year != "N/A" else "Jahr"
+                    cite_example = f"({author_surname}, {year_example}, {page_abbr})"
                     source_header = f"### Source Document: {title}\n"
-                    source_header += f"**Metadata for citation:** Author(s): {authors}, Year: {year}, Title: {title}\n"
-                    source_header += f"**Cite as:** (Author, Year, {page_abbr}) \u2014 use the author names and year above.\n\n"
+                    source_header += f"**Author(s):** {authors} | **Year:** {year} | **Title:** {title}\n"
+                    source_header += f"**Cite this source as:** `{cite_example}` (use exact author name and year shown above, replace {page_abbr} with actual page number)\n\n"
                 else:
                     source_header = f"### Source Document: {simple_ref_id} (Title: {title}, Year: {year}, Authors: {authors})\n"
                     source_header += (
@@ -402,9 +407,12 @@ class WritingAgent(BaseAgent):
                     getattr(first_note.source_metadata, "url", None) or source_id
                 )  # Use metadata URL if available
                 if use_author_year:
+                    # For web sources, use title or URL as author if no author available
+                    web_author = title if title and title != "Unknown Title" else url
+                    cite_example = f"({web_author}, {no_page_abbr})"
                     source_header = f"### Web Source: {title}\n"
-                    source_header += f"**Metadata for citation:** URL: {url}, Title: {title}\n"
-                    source_header += f"**Cite as:** (Author/Organization, Year, {no_page_abbr}) \u2014 use available metadata above.\n\n"
+                    source_header += f"**URL:** {url} | **Title:** {title}\n"
+                    source_header += f"**Cite this source as:** `{cite_example}` (use the organization/author if known, otherwise use the title shown above)\n\n"
                 else:
                     # For web sources, the doc_id for citation IS the URL
                     source_header = f"### Web Source: {url} (Title: {title})\n"
@@ -465,8 +473,10 @@ class WritingAgent(BaseAgent):
                         year = agg_metadata.get("publication_year", "N/A")
                         authors = agg_metadata.get("authors", "Unknown Authors")
                         if use_author_year:
+                            agg_surname = authors.split(",")[0].split("&")[0].strip() if authors and authors != "Unknown Authors" else "Author"
+                            agg_year = year if year and year != "N/A" else "Jahr"
                             formatted_text += f"  - Document: {title} (Author(s): {authors}, Year: {year})\n"
-                            formatted_text += f"    **Cite as:** (Author, Year, {page_abbr}) \u2014 use the author names and year above.\n"
+                            formatted_text += f"    **Cite this source as:** `({agg_surname}, {agg_year}, {page_abbr})` (replace {page_abbr} with actual page)\n"
                         else:
                             formatted_text += f"  - Document: {citation_id_for_agg} (Title: {title}, Year: {year}, Authors: {authors})\n"
                             formatted_text += f"    **Use `[{citation_id_for_agg}]` when citing information derived from this document via the synthesis note.**\n"
@@ -474,8 +484,9 @@ class WritingAgent(BaseAgent):
                         title = agg_metadata.get("title", "Unknown Title")
                         url = agg_metadata.get("url", agg_source_id)
                         if use_author_year:
+                            web_cite_name = title if title and title != "Unknown Title" else url
                             formatted_text += f"  - Web Page: {title} (URL: {url})\n"
-                            formatted_text += f"    **Cite as:** (Author/Organization, Year, {no_page_abbr}) \u2014 use available metadata above.\n"
+                            formatted_text += f"    **Cite this source as:** `({web_cite_name}, {no_page_abbr})` (use the organization/author if known)\n"
                         else:
                             formatted_text += f"  - Web Page: {url} (Title: {title})\n"
                             formatted_text += f"    **Use `[{citation_id_for_agg}]` when citing information derived from this web page via the synthesis note.**\n"

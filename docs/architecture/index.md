@@ -245,9 +245,11 @@ AXIOM's capabilities are driven by specialized agents, each with distinct respon
 2. **Store** → PostgreSQL record → Raw file to disk
 3. **Convert** → PDF (Marker), Word (python-docx), Markdown (direct)
 4. **Extract** → LLM metadata extraction
-5. **Chunk** → Overlapping paragraphs
-6. **Embed** → Dual BGE-M3 embeddings (dense + sparse)
-7. **Index** → Store in PostgreSQL with pgvector
+5. **Chunk** → Structure-aware token-based chunking with hierarchical title padding (respects section boundaries, recursive semantic splitting for oversized chunks)
+6. **Embed** → Dual BGE-M3 embeddings (dense + sparse) with section title prepending for context
+7. **Entity Extract** → Knowledge graph entity extraction with context snippets
+8. **Index** → Store in PostgreSQL with pgvector + OpenSearch BM25 fulltext index
+9. **Retrieve** → Parallel vector + OpenSearch search with Reciprocal Rank Fusion (RRF)
 
 ### Research Execution Flow
 1. **Mission Creation** → User defines objectives
@@ -351,7 +353,7 @@ AXIOM's capabilities are driven by specialized agents, each with distinct respon
     
     ---
     
-    - **LLM Providers** - OpenAI, OpenRouter, Local models, any OpenAI compatible API provider
+    - **LLM Providers** - OpenAI, DeepSeek, Z.AI (Zhipu GLM), OpenRouter, Local models, any OpenAI-compatible API provider
     - **Search Providers** - Tavily, LinkUp, Jina, SearXNG
     - **Document Formats** - PDF, Word, Markdown support
     - **Output Formats** - Formatted reports as Markdown or Word files
@@ -458,10 +460,17 @@ AXIOM's capabilities are driven by specialized agents, each with distinct respon
     
     ---
     
-    - **Additional Agents** - Fact-checker, Citation Manager
     - **Enhanced Collaboration** - Multi-user research teams
-    - **Knowledge Graphs** - Structured knowledge representation
-    - **Multi-modal Research** - Image and video analysis
+    - **Multi-modal Research** - Advanced image and video analysis
+    - **Additional Agents** - Specialized fact-checking and domain-specific agents
+
+    **Recently Implemented:**
+
+    - **Knowledge Graphs** - Entity extraction with graph-enhanced retrieval
+    - **Citation Profiles** - Configurable citation styles (numbered, APA 6/7, custom)
+    - **3-Level JSON Fallback** - Graceful degradation across all providers (json_schema → json_object → prompt-only)
+    - **Context Window Truncation** - Automatic prompt truncation with correction factor retry
+    - **Device-Agnostic GPU** - CUDA, ROCm, MPS (Apple Silicon), and CPU support
 
 -   :material-graph: **Architecture Evolution**
     

@@ -139,7 +139,9 @@ docker compose up -d
 
 ## Performance Tips
 
-Since Macs don't have CUDA GPUs, AXIOM runs in CPU mode:
+When running AXIOM via Docker on macOS, containers use CPU mode. However, for Apple Silicon Macs running natively (outside Docker), AXIOM supports **Metal Performance Shaders (MPS)** GPU acceleration — see the [macOS Native Dev Stack guide](../../DEV_MACOS.md) for details. Set `PREFERRED_DEVICE_TYPE=mps` in your `.env` to enable it.
+
+For Docker deployments, use CPU-optimized configuration:
 
 1. **Use CPU-optimized configuration:**
    ```bash

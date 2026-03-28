@@ -11,7 +11,9 @@ For complete details on AI provider configuration, see the comprehensive [AI Pro
 AXIOM supports multiple AI providers through a unified interface:
 
 - **OpenRouter** - Access to 100+ models via unified API
-- **OpenAI** - Direct access to GPT models  
+- **OpenAI** - Direct access to GPT models
+- **DeepSeek** - Native support for deepseek-chat and deepseek-reasoner with automatic special handling (8192 max_tokens, no temperature for reasoner)
+- **Z.AI (Zhipu GLM)** - Native support for GLM models (glm-5, glm-4.5, glm-4.5-air) with up to 205K context window
 - **Custom Provider** - Any OpenAI-compatible endpoint (local LLMs, enterprise endpoints)
 
 ## Model Types Used by AXIOM

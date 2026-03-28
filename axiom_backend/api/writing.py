@@ -1003,6 +1003,8 @@ async def process_writing_chat_in_background(
             "session_id": session_id,
             "custom_system_prompt": custom_system_prompt,
             "citation_mode": citation_profile.citation_mode,
+            "citation_profile_id": citation_profile.id,
+            "user_settings": user_settings,
             "search_config": {
                 "deep_search": request.deep_search or False,
                 "max_iterations": request.max_search_iterations or default_iterations,

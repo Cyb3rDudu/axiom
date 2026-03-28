@@ -286,4 +286,4 @@ sudo setsebool -P httpd_can_network_connect 1
 1. Check logs: `docker compose logs`
 2. Enable debug: `LOG_LEVEL=DEBUG` in .env
 3. See [FAQ](../faq.md)
-4. Create [GitHub issue](https://github.com/yourusername/axiom/issues)
+4. Create [GitHub issue](https://github.com/murtaza-nasir/axiom/issues)

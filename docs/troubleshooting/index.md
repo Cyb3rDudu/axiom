@@ -243,7 +243,7 @@ docker compose restart
 ### Support
 
 - Check [FAQ](faq.md) first
-- Search existing [GitHub Issues](https://github.com/yourusername/axiom/issues)
+- Search existing [GitHub Issues](https://github.com/murtaza-nasir/axiom/issues)
 - Create new issue with:
       - Error messages
       - Docker logs
