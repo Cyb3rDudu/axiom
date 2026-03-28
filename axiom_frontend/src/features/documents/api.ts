@@ -159,6 +159,13 @@ export const bulkReprocessDocuments = async (documentIds: string[]): Promise<any
   return response.data;
 };
 
+export const bulkEnrichMetadata = async (documentIds: string[]): Promise<any> => {
+  const response = await apiClient.post('/api/documents/bulk-enrich', {
+    document_ids: documentIds
+  });
+  return response.data;
+};
+
 export const bulkReembedDocuments = async (documentIds: string[]): Promise<any> => {
   const response = await apiClient.post('/api/documents/bulk-reembed', {
     document_ids: documentIds

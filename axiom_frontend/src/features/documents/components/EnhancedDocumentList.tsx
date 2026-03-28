@@ -21,7 +21,8 @@ import {
   bulkAddDocumentsToGroup, 
   bulkRemoveDocumentsFromGroup,
   bulkReprocessDocuments,
-  bulkReembedDocuments
+  bulkReembedDocuments,
+  bulkEnrichMetadata
 } from '../api';
 import { useDocumentContext } from '../context/DocumentContext';
 import { DeleteConfirmationModal } from '../../../components/ui/DeleteConfirmationModal';
@@ -260,6 +261,33 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
     }
   };
 
+  const handleEnrichMetadata = async () => {
+    if (selectedDocuments.size === 0) return;
+
+    const confirmMessage = `Enrich metadata for ${selectedDocuments.size} document(s)? This looks up CrossRef, OpenLibrary, and OpenAlex for missing authors, year, DOI, ISBN.`;
+    if (!confirm(confirmMessage)) return;
+
+    try {
+      setIsProcessing(true);
+      const result = await bulkEnrichMetadata(Array.from(selectedDocuments));
+      setSelectedDocuments(new Set());
+      onDocumentAdded?.();
+      setError(null);
+
+      if (result.success_count > 0) {
+        console.log(`Successfully enriched metadata for ${result.success_count} documents`);
+      }
+      if (result.failed_count > 0) {
+        setError(`Failed to enrich ${result.failed_count} documents`);
+      }
+    } catch (err) {
+      setError('Failed to enrich metadata');
+      console.error('Enrich error:', err);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const formatAuthors = (authors: string | string[] | undefined): string => {
     if (!authors) return 'Unknown';
     if (typeof authors === 'string') {
@@ -466,6 +494,16 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
                   >
                     <RefreshCw className="h-3 w-3" />
                     Reprocess
+                  </button>
+                  {/* Enrich metadata button */}
+                  <button
+                    onClick={handleEnrichMetadata}
+                    disabled={isProcessing}
+                    className="flex items-center gap-1 px-3 py-1 text-sm bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50"
+                    title="Look up CrossRef, OpenLibrary, OpenAlex for missing metadata"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    Enrich
                   </button>
                   {/* Re-embed button */}
                   <button

@@ -1290,7 +1290,89 @@ async def bulk_reprocess_documents(
         logger.error(f"Error in bulk_reprocess_documents: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/documents/bulk-reembed", response_model=schemas.BulkOperationResponse)  
+@router.post("/documents/bulk-enrich", response_model=schemas.BulkOperationResponse)
+async def bulk_enrich_metadata(
+    request: schemas.BulkDocumentRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie)
+):
+    """
+    Re-enrich metadata for selected documents using external databases
+    (CrossRef, OpenLibrary, OpenAlex) and reclassify document types.
+    Lightweight — no GPU, no reprocessing, runs inline.
+    """
+    try:
+        from services.metadata_enrichment import enrich_metadata, classify_document_type, calculate_completeness
+        from sqlalchemy.orm.attributes import flag_modified
+        import os, re as _re
+
+        doc_ids = request.document_ids
+        logger.info(f"User {current_user.id} requested metadata enrichment for {len(doc_ids)} documents")
+
+        success_count = 0
+        failed_count = 0
+        failed_docs = []
+
+        for doc_id in doc_ids:
+            try:
+                document = crud.get_document(db, doc_id=doc_id, user_id=current_user.id)
+                if not document:
+                    failed_count += 1
+                    failed_docs.append({"id": doc_id, "error": "Document not found"})
+                    continue
+
+                meta = document.metadata_ or {}
+                fn = document.original_filename or ''
+
+                # Read markdown for DOI/ISBN detection (strip images first)
+                doc_text = ""
+                md_path = os.path.join("/app/data/processed/markdown", f"{doc_id}.md")
+                if os.path.exists(md_path):
+                    with open(md_path, 'r') as f:
+                        raw = f.read()
+                    clean = _re.sub(r'!\[.*?\]\([^)]*\)\s*', '', raw)
+                    doc_text = clean[:4000] + (clean[-2000:] if len(clean) > 6000 else "")
+
+                enriched = await enrich_metadata(meta, doc_text, filename=fn)
+                if enriched:
+                    for key, val in enriched.items():
+                        if val is not None:
+                            old = meta.get(key)
+                            if old is None or old == '' or old == [] or key in (
+                                'metadata_completeness', 'metadata_sources', 'document_type'):
+                                meta[key] = val
+                    meta['document_type'] = classify_document_type(meta, fn)
+                    meta['metadata_completeness'] = calculate_completeness(meta, fn)
+                    document.metadata_ = meta
+                    flag_modified(document, 'metadata_')
+                    db.commit()
+
+                    await send_document_update(str(current_user.id), {
+                        "type": "document_metadata_updated",
+                        "doc_id": doc_id,
+                        "metadata_completeness": meta.get('metadata_completeness', 0),
+                        "document_type": meta.get('document_type'),
+                    })
+
+                success_count += 1
+            except Exception as e:
+                failed_count += 1
+                failed_docs.append({"id": doc_id, "error": str(e)})
+                logger.error(f"Failed to enrich document {doc_id}: {e}")
+
+        return schemas.BulkOperationResponse(
+            success_count=success_count,
+            failed_count=failed_count,
+            failed_items=failed_docs,
+            message=f"Enriched metadata for {success_count} documents"
+        )
+
+    except Exception as e:
+        logger.error(f"Error in bulk_enrich_metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/documents/bulk-reembed", response_model=schemas.BulkOperationResponse)
 async def bulk_reembed_documents(
     request: schemas.BulkDocumentRequest,
     db: Session = Depends(get_db),
