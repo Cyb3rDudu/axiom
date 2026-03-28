@@ -1382,17 +1382,29 @@ class ModelDispatcher:
                     import re as _re
                     limit_match = _re.search(r"maximum context length is (\d+) tokens", error_msg)
                     requested_match = _re.search(r"you requested (\d+) tokens", error_msg)
+                    in_messages_match = _re.search(r"(\d+) in the messages", error_msg)
                     if limit_match:
                         actual_limit = int(limit_match.group(1))
-                        requested = int(requested_match.group(1)) if requested_match else 0
-                        logger.warning(
-                            f"Context overflow: requested {requested} tokens, limit {actual_limit}. "
-                            f"Force-truncating to 80% of limit and retrying..."
-                        )
-                        safe_limit = int(actual_limit * 0.8)
+                        actual_requested = int(requested_match.group(1)) if requested_match else 0
+                        actual_in_messages = int(in_messages_match.group(1)) if in_messages_match else actual_requested
+
+                        # Calculate correction factor: how far off our estimate is from reality
                         current_msgs = request_params.get("messages", messages)
+                        estimated_tokens = estimate_messages_tokens(current_msgs)
+                        if estimated_tokens > 0:
+                            correction = actual_in_messages / estimated_tokens
+                        else:
+                            correction = 1.5
+
+                        # Target 75% of real limit, adjusted by correction factor
+                        safe_estimated = int((actual_limit * 0.75) / correction)
+                        logger.warning(
+                            f"Context overflow: actual {actual_in_messages} msg tokens vs estimated {estimated_tokens} "
+                            f"(correction factor {correction:.2f}). Truncating to ~{safe_estimated} estimated tokens "
+                            f"(={int(actual_limit * 0.75)} real tokens) and retrying..."
+                        )
                         truncated_msgs, _ = truncate_messages_to_context(
-                            current_msgs, safe_limit, max_tokens_for_call
+                            current_msgs, safe_estimated, max_tokens_for_call
                         )
                         request_params["messages"] = truncated_msgs
                         context_overflow_retried = True
