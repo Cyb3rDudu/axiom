@@ -122,11 +122,11 @@ class ModelDispatcher:
         self.semaphore = semaphore
         self.context_manager = context_manager
         self.model_pricing_cache: Dict[str, Dict[str, Decimal]] = {}
-        self.openai_pricing: Dict[str, Dict[str, Decimal]] = {}
+        self.model_pricing: Dict[str, Dict[str, Decimal]] = {}
         self.user_settings = user_settings
 
         # Load OpenAI pricing on initialization
-        self._load_openai_pricing()
+        self._load_model_pricing()
 
         # Determine the providers to initialize based on user settings and system config
         providers_in_use = self._get_providers_from_settings()
@@ -466,9 +466,10 @@ class ModelDispatcher:
                 return model_config.get("provider"), model_config.get("model_name")
         return None, None
 
-    def _load_openai_pricing(self):
+    def _load_model_pricing(self):
         """
-        Load OpenAI pricing from the JSON configuration file.
+        Load model pricing from the JSON configuration file.
+        Covers OpenAI, DeepSeek, and any other provider with known per-token rates.
         Converts prices from per-million to per-token for consistent calculation.
         """
         try:
@@ -476,7 +477,7 @@ class ModelDispatcher:
             current_dir = Path(
                 __file__
             ).parent.parent  # Go up to ai_researcher directory
-            pricing_file = current_dir / "openai_pricing.json"
+            pricing_file = current_dir / "model_pricing.json"
 
             if not pricing_file.exists():
                 logger.warning(f"OpenAI pricing file not found at {pricing_file}")
@@ -501,19 +502,19 @@ class ModelDispatcher:
                     str(per_tokens)
                 )
 
-                self.openai_pricing[model_id] = {
+                self.model_pricing[model_id] = {
                     "prompt": input_price,
                     "completion": output_price,
                 }
 
             logger.info(
-                f"Loaded OpenAI pricing for {len(self.openai_pricing)} models from {pricing_file}"
+                f"Loaded pricing for {len(self.model_pricing)} models from {pricing_file}"
             )
 
         except Exception as e:
             logger.error(f"Failed to load OpenAI pricing: {e}", exc_info=True)
             # Initialize with empty dict on failure
-            self.openai_pricing = {}
+            self.model_pricing = {}
 
     async def _fetch_and_cache_pricing(self):
         """
@@ -971,7 +972,7 @@ class ModelDispatcher:
                             )
                     elif provider_name == "openai":
                         # Use loaded OpenAI pricing from configuration file
-                        model_pricing = self.openai_pricing.get(selected_model_name)
+                        model_pricing = self.model_pricing.get(selected_model_name)
                         if model_pricing:
                             prompt_cost_per_token = model_pricing.get(
                                 "prompt", Decimal("0")
@@ -984,20 +985,36 @@ class ModelDispatcher:
                             ) + (Decimal(completion_tokens) * completion_cost_per_token)
                             model_call_details["cost"] = float(total_cost)
                             logger.info(
-                                f"Calculated OpenAI cost for {selected_model_name}: ${float(total_cost):.6f}"
+                                f"Calculated cost for {selected_model_name} (provider: openai): ${float(total_cost):.6f}"
                             )
                         else:
                             logger.warning(
-                                f"OpenAI pricing not found for model: {selected_model_name}. Cost set to $0.00. Please update openai_pricing.json"
+                                f"Pricing not found for model: {selected_model_name}. Cost set to $0.00. Please update model_pricing.json"
                             )
                             model_call_details["cost"] = 0.0
                     else:
-                        logger.info(
-                            f"Cost calculation skipped: Provider '{provider_name}' is not OpenRouter or OpenAI. Setting cost to $0.00."
-                        )
-                        model_call_details["cost"] = (
-                            0.0  # Set cost to 0 for other providers
-                        )
+                        # For other providers (deepseek, zai, custom, etc.),
+                        # check the static pricing file by model name
+                        model_pricing = self.model_pricing.get(selected_model_name)
+                        if model_pricing:
+                            prompt_cost_per_token = model_pricing.get(
+                                "prompt", Decimal("0")
+                            )
+                            completion_cost_per_token = model_pricing.get(
+                                "completion", Decimal("0")
+                            )
+                            total_cost = (
+                                Decimal(prompt_tokens) * prompt_cost_per_token
+                            ) + (Decimal(completion_tokens) * completion_cost_per_token)
+                            model_call_details["cost"] = float(total_cost)
+                            logger.info(
+                                f"Calculated cost for {selected_model_name} (provider: {provider_name}): ${float(total_cost):.6f}"
+                            )
+                        else:
+                            logger.info(
+                                f"No pricing found for model '{selected_model_name}' (provider: {provider_name}). Cost set to $0.00."
+                            )
+                            model_call_details["cost"] = 0.0
 
                     # --- COMPREHENSIVE COST TRACKING LOGS ---
                     # Log the calculated cost with detailed tracking info for analysis

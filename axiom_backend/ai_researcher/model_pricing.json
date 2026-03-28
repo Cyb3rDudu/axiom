@@ -144,6 +144,18 @@
       "input": 3.00,
       "output": 12.00,
       "description": "Smaller O1 reasoning model"
+    },
+    "deepseek-chat": {
+      "input": 0.27,
+      "output": 1.10,
+      "cached_input": 0.07,
+      "description": "DeepSeek V3 chat model"
+    },
+    "deepseek-reasoner": {
+      "input": 0.55,
+      "output": 2.19,
+      "cached_input": 0.14,
+      "description": "DeepSeek R1 reasoning model"
     }
   }
 }
