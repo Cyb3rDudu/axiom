@@ -256,8 +256,10 @@ DEEPSEEK_INTELLIGENT_MODEL = os.getenv(
     "DEEPSEEK_INTELLIGENT_MODEL", "deepseek-reasoner"
 )
 DEEPSEEK_VERIFIER_MODEL = os.getenv("DEEPSEEK_VERIFIER_MODEL", "deepseek-chat")
-# DeepSeek has a max_tokens limit of 8192
-DEEPSEEK_MAX_TOKENS_LIMIT = 8192
+# DeepSeek-reasoner's max_tokens budget includes internal reasoning tokens,
+# which can consume 80%+ of the budget on complex prompts. 16384 gives enough
+# headroom for both reasoning (~10-12k) and the actual JSON output (~2-4k).
+DEEPSEEK_MAX_TOKENS_LIMIT = 16384
 DEEPSEEK_CONTEXT_WINDOW = 128000
 
 # --- Z.AI (Zhipu GLM) Configuration ---

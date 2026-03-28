@@ -255,6 +255,16 @@ Task: Output ONLY a JSON object conforming to the WritingReflectionOutput schema
                     and response.choices
                     and response.choices[0].message.content
                 ):
+                    # Check for truncation (finish_reason=length) which is common
+                    # with deepseek-reasoner where reasoning tokens consume most of max_tokens
+                    finish_reason = getattr(response.choices[0], 'finish_reason', None)
+                    if finish_reason == "length":
+                        logger.warning(
+                            f"{self.agent_name}: Response truncated (finish_reason=length). "
+                            f"Reasoning tokens likely consumed most of max_tokens budget. "
+                            f"Retrying with higher token limit may help."
+                        )
+
                     json_str = response.choices[0].message.content
                     match = re.search(
                         r"```(?:json)?\s*(\{.*?\})\s*```", json_str, re.DOTALL
@@ -264,6 +274,24 @@ Task: Output ONLY a JSON object conforming to the WritingReflectionOutput schema
 
                     try:
                         parsed_json = parse_llm_json_response(json_str)
+                        # Handle case where LLM returns a flat list of suggestions
+                        # instead of the expected {overall_assessment, change_suggestions, ...} structure
+                        if isinstance(parsed_json, list):
+                            logger.info(f"{self.agent_name}: LLM returned a list instead of object, wrapping into WritingReflectionOutput structure")
+                            parsed_json = {
+                                "overall_assessment": "Draft reviewed. See suggestions below.",
+                                "change_suggestions": parsed_json,
+                                "scratchpad_update": f"Reflection produced {len(parsed_json)} change suggestions.",
+                            }
+                        elif isinstance(parsed_json, dict) and "overall_assessment" not in parsed_json and "change_suggestions" not in parsed_json:
+                            # LLM returned a single suggestion dict instead of the wrapper
+                            if "section_id" in parsed_json:
+                                logger.info(f"{self.agent_name}: LLM returned a single suggestion dict, wrapping into WritingReflectionOutput structure")
+                                parsed_json = {
+                                    "overall_assessment": "Draft reviewed. See suggestion below.",
+                                    "change_suggestions": [parsed_json],
+                                    "scratchpad_update": "Reflection produced 1 change suggestion.",
+                                }
                         prepared_data = prepare_for_pydantic_validation(
                             parsed_json, WritingReflectionOutput
                         )
