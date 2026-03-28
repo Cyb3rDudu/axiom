@@ -579,7 +579,10 @@ def extract_author_from_bundestag(title: str, metadata: dict) -> Optional[str]:
 def classify_document_type(metadata: dict, filename: str = "") -> str:
     """Classify document into: academic, book, legal, institutional, web, wikipedia.
 
-    Uses metadata fields, filename patterns, and URL patterns.
+    Priority:
+    1. LLM-extracted document_type (most reliable — the LLM read the content)
+    2. Hard signals (Wikipedia URL, ISBN → book, DOI → academic)
+    3. Soft rule-based fallback (title keywords, URL patterns)
     """
     title = (metadata.get('title') or '').lower()
     url = (metadata.get('url') or '').lower()
@@ -588,38 +591,56 @@ def classify_document_type(metadata: dict, filename: str = "") -> str:
     doi = metadata.get('doi')
     isbn = metadata.get('isbn')
 
-    # Wikipedia detection
+    # --- Always override: Wikipedia detection from URL ---
     if 'wikipedia.org' in url or 'wikipedia' in title:
         return 'wikipedia'
 
-    # Legal/regulatory detection (German law references)
-    legal_patterns = ['§', 'sgb', 'ksvg', 'aktg', 'bgb', 'hgb', 'gesetz', 'verordnung',
-                      'richtlinie', 'rechtsverordnung', 'satzung']
-    if any(p in title for p in legal_patterns) or any(p in fn for p in legal_patterns):
-        return 'legal'
+    # --- Priority 1: Trust LLM-extracted type if present and meaningful ---
+    llm_type = metadata.get('document_type', '')
+    if llm_type:
+        # Map LLM enum to our types
+        type_map = {
+            'paper': 'academic',
+            'academic': 'academic',
+            'book': 'book',
+            'legal': 'legal',
+            'institutional': 'institutional',
+            'web': 'web',
+        }
+        mapped = type_map.get(llm_type.lower())
+        if mapped:
+            return mapped
+        # 'other' or unknown → fall through to rules
 
-    # Book detection
+    # --- Priority 2: Hard signals from metadata fields ---
     if isbn or metadata.get('publisher') or metadata.get('edition') or metadata.get('chapters'):
         return 'book'
 
-    # Academic detection (has DOI, or journal, or is a PDF with authors)
     if doi or metadata.get('journal_or_source'):
         return 'academic'
-    if fn.endswith('.pdf') and isinstance(authors, list) and len(authors) > 0:
-        return 'academic'
 
-    # Institutional reports (ECB, Bundesbank, government orgs)
+    # --- Priority 3: Soft rules (title/URL pattern matching) ---
+    # Legal — only match actual statute references, not articles about legal topics
+    # Require § at the START of the title (actual law reference, not article discussing law)
+    if title.startswith('§') or title.startswith('sgb ') or title.startswith('ksvg'):
+        return 'legal'
+
+    # Institutional — known org domains or title patterns
     inst_patterns = ['ezb', 'ecb', 'bundesbank', 'euroraum', 'projektion', 'prognose',
                      'gemeinschaftsdiagnose', 'sachverständigenrat', 'bundesregierung',
                      'bundesministerium', 'european commission', 'imf', 'world bank', 'oecd']
     if any(p in title for p in inst_patterns) or metadata.get('organization'):
         return 'institutional'
 
+    # PDF with authors → likely academic
+    if fn.endswith('.pdf') and isinstance(authors, list) and len(authors) > 0:
+        return 'academic'
+
     # Web documents (fetched by research agent)
     if '_web_document' in fn or url:
         return 'web'
 
-    # Default to academic for uploaded PDFs, web for everything else
+    # Default: uploaded PDFs → academic, everything else → web
     if fn.endswith('.pdf') or fn.endswith('.docx'):
         return 'academic'
     return 'web'

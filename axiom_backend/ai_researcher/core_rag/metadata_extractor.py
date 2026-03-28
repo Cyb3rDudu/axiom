@@ -13,8 +13,8 @@ METADATA_SCHEMA = {
     "properties": {
         "document_type": {
             "type": "string",
-            "enum": ["paper", "book", "web", "other"],
-            "description": "Type of document: 'paper' (academic paper/article), 'book', 'web' (web article/blog), or 'other'"
+            "enum": ["paper", "book", "legal", "institutional", "web", "other"],
+            "description": "Type of document: 'paper' (academic paper/journal article/working paper/thesis), 'book' (textbook/monograph/edited volume/handbook/lexicon), 'legal' (law text/statute/regulation/court ruling), 'institutional' (government report/central bank publication/policy document), 'web' (web article/blog post/news), or 'other'"
         },
         "title": {"type": "string", "description": "The full title of the document"},
         "authors": {
