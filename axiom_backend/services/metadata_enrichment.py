@@ -472,6 +472,89 @@ def extract_web_metadata(html: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# URL-based metadata extraction
+# ---------------------------------------------------------------------------
+
+# Known institutional domains → organization name mapping
+_KNOWN_ORGS: Dict[str, str] = {
+    "ecb.europa.eu": "Europäische Zentralbank (EZB)",
+    "europa.eu": "Europäische Union",
+    "bundesbank.de": "Deutsche Bundesbank",
+    "destatis.de": "Statistisches Bundesamt",
+    "bmas.de": "Bundesministerium für Arbeit und Soziales",
+    "bmwk.de": "Bundesministerium für Wirtschaft und Klimaschutz",
+    "bmf.de": "Bundesministerium der Finanzen",
+    "bundestag.de": "Deutscher Bundestag",
+    "bundesregierung.de": "Bundesregierung",
+    "sachverstaendigenrat-wirtschaft.de": "Sachverständigenrat",
+    "imf.org": "International Monetary Fund (IMF)",
+    "worldbank.org": "World Bank",
+    "oecd.org": "OECD",
+    "bis.org": "Bank for International Settlements (BIS)",
+    "eurostat.ec.europa.eu": "Eurostat",
+    "ec.europa.eu": "Europäische Kommission",
+    "publications.europa.eu": "EU Publications Office",
+}
+
+
+def extract_metadata_from_url(url: str) -> dict:
+    """Extract website name, organization, and year from a URL.
+
+    Covers three gaps:
+    1. Website/org name from domain (e.g., ecb.europa.eu → EZB)
+    2. Publication year from URL path (e.g., /2023/ or /202303_)
+    3. Known institutional org mapping
+    """
+    result: Dict[str, Any] = {}
+    if not url:
+        return result
+
+    url_lower = url.lower()
+
+    # --- Extract domain-based website name ---
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url_lower)
+        host = parsed.hostname or ""
+
+        # Check known orgs (longest match first)
+        for domain, org in sorted(_KNOWN_ORGS.items(), key=lambda x: -len(x[0])):
+            if host.endswith(domain):
+                result["organization"] = org
+                result["website_name"] = org
+                break
+
+        # Generic website name from domain if no known org
+        if "website_name" not in result and host:
+            # Remove www. and common TLDs to get a readable name
+            parts = host.replace("www.", "").split(".")
+            if len(parts) >= 2:
+                # Use the main domain part, capitalize
+                site_name = parts[-2].capitalize()
+                # Special cases for compound domains
+                if parts[-1] in ("de", "com", "org", "net", "eu", "at", "ch"):
+                    result["website_name"] = site_name
+    except Exception:
+        pass
+
+    # --- Extract year from URL path ---
+    # Common patterns: /2023/, /202303_, /2021-06, ?year=2024
+    year_match = re.search(r'[/=_-](20[1-2]\d)(?:[/\-_.?&]|$)', url)
+    if year_match:
+        result["publication_year"] = int(year_match.group(1))
+
+    return result
+
+
+def extract_author_from_bundestag(title: str, metadata: dict) -> Optional[str]:
+    """For Bundestag Wissenschaftliche Dienste, use the org as author."""
+    journal = metadata.get("journal_or_source", "")
+    if "wissenschaftliche dienste" in (journal or "").lower() or "bundestag" in (title or "").lower():
+        return "Wissenschaftliche Dienste des Deutschen Bundestages"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Document type classification
 # ---------------------------------------------------------------------------
 
@@ -699,6 +782,28 @@ async def enrich_metadata(
         web_meta = extract_web_metadata(html_content)
         if web_meta:
             _merge_metadata(enriched, web_meta, "web_html", sources)
+
+    # --- Step 3b: URL-based metadata (domain → org/website, path → year) ---
+    url = enriched.get("url", "")
+    if url:
+        url_meta = extract_metadata_from_url(url)
+        if url_meta:
+            _merge_metadata(enriched, url_meta, "url_pattern", sources)
+
+    # --- Step 3c: Institutional author fallback ---
+    # For Bundestag Wissenschaftliche Dienste and similar, use org as author
+    authors = enriched.get("authors")
+    if not authors or authors == [] or authors == "[]":
+        bundestag_author = extract_author_from_bundestag(
+            enriched.get("title", ""), enriched
+        )
+        if bundestag_author:
+            enriched["authors"] = [bundestag_author]
+            sources["authors"] = "org_fallback"
+        elif enriched.get("organization"):
+            # Generic: use organization as author for institutional/web sources
+            enriched["authors"] = [enriched["organization"]]
+            sources["authors"] = "org_fallback"
 
     # --- Step 4 & 5: Document type, completeness scoring, and source tracking ---
     enriched["document_type"] = classify_document_type(enriched, filename)
