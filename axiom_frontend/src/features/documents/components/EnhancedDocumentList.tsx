@@ -632,8 +632,8 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
                         </div>
                       )}
 
-                      {/* Book-specific: ISBN */}
-                      {documentType === 'book' && doc.metadata_?.isbn && (
+                      {/* ISBN — show whenever present */}
+                      {doc.metadata_?.isbn && (
                         <div className="flex items-center gap-1 text-xs text-muted-foreground">
                           <span className="font-mono truncate">ISBN: {doc.metadata_.isbn}</span>
                         </div>
