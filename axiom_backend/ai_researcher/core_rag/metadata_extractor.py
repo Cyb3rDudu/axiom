@@ -222,6 +222,7 @@ IMPORTANT INSTRUCTIONS:
 5. Extract chapter titles from table of contents for books (limit to first 10-15 chapters)
 6. CRITICAL for title extraction: Look for the MAIN title of the document, usually marked with a large heading (# in markdown). Do NOT confuse series names, collection titles, or publisher imprint names with the actual document title. The main title is typically followed by the author names.
 7. Use the filename as a hint if the text is ambiguous — filenames often contain the actual title or topic
+8. For titles: include subtitles, edition info, and issue/volume designations as part of the title (e.g., "Aktuelle Volkswirtschaftslehre Ausgabe 2022/2023", not just "Aktuelle Volkswirtschaftslehre"). The full title is needed for correct citation.
 
 JSON Schema:
 ```json
