@@ -479,13 +479,17 @@ class BackgroundDocumentProcessor:
                     return True
                 title = meta.get('title', '')
                 authors = meta.get('authors')
-                if not title and not authors:
+                has_authors = authors and authors != [] and authors != '[]' and authors != ''
+                # Retry if missing both title and authors
+                if not title and not has_authors:
+                    return True
+                # Retry if has title but missing authors (incomplete extraction)
+                if title and not has_authors:
                     return True
                 # Check if title looks like it was derived from the filename
-                # (LLM fabricates title from filename when text sample is empty)
                 if title:
                     import re as _re
-                    fn_stem = _re.sub(r'\.[^.]+$', '', filename)  # Remove extension
+                    fn_stem = _re.sub(r'\.[^.]+$', '', filename)
                     fn_normalized = fn_stem.replace('_', ' ').replace('-', ' ').lower().strip()
                     title_normalized = title.lower().strip()
                     if fn_normalized and (title_normalized == fn_normalized or
