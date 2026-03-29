@@ -131,8 +131,19 @@ class EntityExtractor:
 
     # ── spaCy NER extraction ────────────────────────────────────────────
 
+    # Regex patterns for noise filtering
+    _NOISE_PATTERNS = re.compile(
+        r'<[^>]+>'           # HTML tags
+        r'|\\[a-z]+'         # LaTeX commands
+        r'|\{[^}]*\}'        # LaTeX braces
+        r'|https?://\S+'     # URLs
+        r'|\d{4,}'           # Long numbers
+        r'|id="[^"]*"'       # HTML ids
+        r'|page-\d+'         # Page markers
+    )
+
     def _extract_with_spacy(self, text: str) -> List[Dict]:
-        """Extract entities using spaCy NER. Canonical form is lowercased original."""
+        """Extract entities using spaCy NER with noise filtering."""
         if not self.nlp:
             return []
 
@@ -144,7 +155,21 @@ class EntityExtractor:
             if not entity_type:
                 continue
             ent_text = ent.text.strip()
-            if len(ent_text) < 2:
+
+            # Filter noise
+            if len(ent_text) < 3:
+                continue
+            if self._NOISE_PATTERNS.search(ent_text):
+                continue
+            # Skip single initials and abbreviations like "M.", "A.", "J."
+            if re.match(r'^[A-Z]\.$', ent_text) or re.match(r'^[A-Z]\.\s*[A-Z]\.$', ent_text):
+                continue
+            # Skip entities that are mostly non-alpha (math, references)
+            alpha_ratio = sum(c.isalpha() for c in ent_text) / max(len(ent_text), 1)
+            if alpha_ratio < 0.6:
+                continue
+            # Skip Roman numerals standing alone
+            if re.match(r'^[IVXLCDM]+\.?$', ent_text):
                 continue
 
             context_start = max(0, ent.start_char - 100)
