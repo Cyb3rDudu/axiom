@@ -253,67 +253,46 @@ Return JSON:
 }}
 
 Text:
-{chunk_text[:2000]}"""
+{chunk_text[:1200]}"""
 
         messages = [{"role": "user", "content": prompt}]
 
-        # 3-level JSON fallback
-        attempts = [
-            ("json_object", {"type": "json_object"}, messages),
-            ("json_enhanced", {"type": "json_object"},
-             [{"role": "user", "content": prompt + "\n\nCRITICAL: Return ONLY valid JSON."}]),
-            ("no_format", None,
-             [{"role": "user", "content": prompt + "\n\nReturn ONLY a valid JSON object, nothing else."}]),
-        ]
+        try:
+            response = self.llm_client.chat.completions.create(
+                messages=messages,
+                model=self.llm_model,
+                max_tokens=1000,
+                temperature=0.1,
+                timeout=15,
+                response_format={"type": "json_object"},
+            )
+            content = response.choices[0].message.content
+            data = json.loads(content)
 
-        for attempt_name, response_format, attempt_messages in attempts:
-            try:
-                kwargs = {
-                    "messages": attempt_messages,
-                    "model": self.llm_model,
-                    "max_tokens": 1000,
-                    "temperature": 0.1,
-                    "timeout": 20,
-                }
-                if response_format:
-                    kwargs["response_format"] = response_format
+            # Parse entities
+            raw_entities = data.get("entities", [])
+            entities = []
+            for e in raw_entities:
+                ent_text = (e.get("text") or "").strip()
+                etype = (e.get("type") or "").upper()
+                canonical = (e.get("canonical") or ent_text).lower().strip()
+                if ent_text and etype in self.ENTITY_TYPES and len(ent_text) >= 2:
+                    entities.append({
+                        "text": ent_text,
+                        "type": etype,
+                        "canonical_form": re.sub(r'[^\w\s]', '', canonical),
+                        "position": 0,
+                        "confidence": 0.9,
+                        "context_snippet": "",
+                    })
 
-                response = self.llm_client.chat.completions.create(**kwargs)
-                content = response.choices[0].message.content
-                data = json.loads(content)
+            relationships = data.get("relationships", [])
+            logger.debug(f"LLM extracted {len(entities)} entities, {len(relationships)} relationships")
+            return entities, relationships
 
-                # Parse entities
-                raw_entities = data.get("entities", [])
-                entities = []
-                for e in raw_entities:
-                    ent_text = (e.get("text") or "").strip()
-                    etype = (e.get("type") or "").upper()
-                    canonical = (e.get("canonical") or ent_text).lower().strip()
-                    if ent_text and etype in self.ENTITY_TYPES and len(ent_text) >= 2:
-                        entities.append({
-                            "text": ent_text,
-                            "type": etype,
-                            "canonical_form": re.sub(r'[^\w\s]', '', canonical),
-                            "position": 0,
-                            "confidence": 0.9,
-                            "context_snippet": "",
-                        })
-
-                relationships = data.get("relationships", [])
-                logger.debug(f"LLM extracted {len(entities)} entities, {len(relationships)} relationships ({attempt_name})")
-                return entities, relationships
-
-            except json.JSONDecodeError as e:
-                logger.warning(f"JSON parse error ({attempt_name}): {str(e)[:100]}")
-                if attempt_name == "no_format":
-                    logger.error("All JSON attempts failed for LLM entity extraction")
-                    return [], []
-            except Exception as e:
-                logger.error(f"LLM entity extraction failed ({attempt_name}): {str(e)[:100]}")
-                if attempt_name == "no_format":
-                    return [], []
-
-        return [], []
+        except Exception as e:
+            logger.warning(f"LLM entity extraction failed: {str(e)[:150]}")
+            return [], []
 
     # ── Main extraction entry points ────────────────────────────────────
 
