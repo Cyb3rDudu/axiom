@@ -207,16 +207,19 @@ class PGVectorStore:
             if isinstance(query_dense_embedding, np.ndarray):
                 query_dense_embedding = query_dense_embedding.tolist()
             
-            # Build filter conditions
+            # Build filter conditions using parameterized queries
             where_clauses = []
+            filter_params = {}
             if filter_metadata:
                 if "doc_id" in filter_metadata:
                     if isinstance(filter_metadata["doc_id"], dict) and "$in" in filter_metadata["doc_id"]:
                         doc_ids = filter_metadata["doc_id"]["$in"]
-                        where_clauses.append(f"doc_id = ANY(ARRAY{doc_ids}::uuid[])")
+                        where_clauses.append("doc_id = ANY(:filter_doc_ids::uuid[])")
+                        filter_params['filter_doc_ids'] = doc_ids
                     else:
-                        where_clauses.append(f"doc_id = '{filter_metadata['doc_id']}'")
-            
+                        where_clauses.append("doc_id = CAST(:filter_doc_id AS uuid)")
+                        filter_params['filter_doc_id'] = str(filter_metadata['doc_id'])
+
             where_clause = " AND " + " AND ".join(where_clauses) if where_clauses else ""
             
             # Perform hybrid search using PostgreSQL
@@ -250,12 +253,14 @@ class PGVectorStore:
                 LIMIT :n_results
             """)
             
-            results = db.execute(query, {
+            query_params = {
                 'query_embedding': embedding_str,
                 'limit': n_results * 2,  # Get more for potential filtering
                 'n_results': n_results,
-                'dense_weight': dense_weight
-            }).fetchall()
+                'dense_weight': dense_weight,
+                **filter_params
+            }
+            results = db.execute(query, query_params).fetchall()
             
             # Format results
             formatted_results = []
@@ -271,7 +276,7 @@ class PGVectorStore:
             # If sparse weight > 0, also compute sparse similarity and merge
             if sparse_weight > 0 and query_sparse_embedding_dict:
                 sparse_results = self._query_sparse(
-                    db, query_sparse_embedding_dict, n_results * 2, where_clause
+                    db, query_sparse_embedding_dict, n_results * 2, where_clause, filter_params
                 )
                 
                 # Merge results
@@ -309,7 +314,8 @@ class PGVectorStore:
         db: Session,
         query_sparse_dict: Dict[int, float],
         n_results: int,
-        where_clause: str
+        where_clause: str,
+        filter_params: Dict[str, Any] = None
     ) -> List[Dict[str, Any]]:
         """
         Query sparse embeddings using cosine similarity.
@@ -317,7 +323,7 @@ class PGVectorStore:
         """
         # Get chunks with sparse embeddings
         query = text(f"""
-            SELECT 
+            SELECT
                 chunk_id,
                 doc_id,
                 chunk_text,
@@ -327,8 +333,9 @@ class PGVectorStore:
             WHERE sparse_embedding IS NOT NULL {where_clause}
             LIMIT :limit
         """)
-        
-        results = db.execute(query, {'limit': n_results * 3}).fetchall()
+
+        query_params = {'limit': n_results * 3, **(filter_params or {})}
+        results = db.execute(query, query_params).fetchall()
         
         # Compute similarity scores
         scored_results = []
