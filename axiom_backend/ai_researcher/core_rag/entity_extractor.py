@@ -144,6 +144,8 @@ class EntityExtractor:
         r'|_[a-z{]'          # LaTeX subscripts like N_t
         r'|\^[a-z{]'         # LaTeX superscripts
         r'|sup>'             # Leftover HTML sup tags
+        r'|image_\d+'        # Image references
+        r'|\.jpe?g|\.png'    # Image extensions
     )
 
     def _extract_with_spacy(self, text: str) -> List[Dict]:
