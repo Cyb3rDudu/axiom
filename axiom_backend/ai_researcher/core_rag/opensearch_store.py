@@ -225,7 +225,8 @@ class OpenSearchStore:
                     "match": {
                         "chunk_text": {
                             "query": query,
-                            "operator": "or"
+                            "operator": "or",
+                            "minimum_should_match": "50%"
                         }
                     }
                 }

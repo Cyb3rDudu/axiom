@@ -125,7 +125,7 @@ class UnifiedDocumentDatabase:
                 if 'year' in metadata:
                     try:
                         doc.extracted_year = int(metadata['year'])
-                    except:
+                    except (ValueError, TypeError, KeyError):
                         pass
                 if 'journal' in metadata:
                     doc.extracted_journal = metadata['journal']
@@ -294,7 +294,7 @@ class UnifiedDocumentDatabase:
                         # Authors might be JSON string
                         try:
                             metadata['authors'] = json.loads(doc.authors) if isinstance(doc.authors, str) else doc.authors
-                        except:
+                        except (ValueError, TypeError, json.JSONDecodeError):
                             metadata['authors'] = doc.authors
                     elif hasattr(doc, 'extracted_authors') and doc.extracted_authors:
                         metadata['authors'] = doc.extracted_authors
@@ -382,7 +382,7 @@ class UnifiedDocumentDatabase:
                     if hasattr(doc, 'authors') and doc.authors:
                         try:
                             metadata['authors'] = json.loads(doc.authors) if isinstance(doc.authors, str) else doc.authors
-                        except:
+                        except (ValueError, TypeError, json.JSONDecodeError):
                             metadata['authors'] = doc.authors
                     elif hasattr(doc, 'extracted_authors') and doc.extracted_authors:
                         metadata['authors'] = doc.extracted_authors
