@@ -380,7 +380,7 @@ class TextEmbedder:
                     return None
                 else:
                     # Re-raise non-OOM RuntimeErrors
-                    raise re
+                    raise
             # --- Catch other potential exceptions ---
             except Exception as e:
                 logger.error(f"embed_query: Error embedding query '{query_text}': {e}", exc_info=True)
@@ -397,8 +397,7 @@ class TextEmbedder:
         semaphore = get_embedding_semaphore()
         async with semaphore:
             # Run the synchronous embedding in a thread pool to avoid blocking
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, self.embed_query, query_text)
+            return await asyncio.get_running_loop().run_in_executor(None, self.embed_query, query_text)
 
     async def embed_chunks_async(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -411,8 +410,7 @@ class TextEmbedder:
         semaphore = get_embedding_semaphore()
         async with semaphore:
             # Run the synchronous embedding in a thread pool to avoid blocking
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, self.embed_chunks, chunks)
+            return await asyncio.get_running_loop().run_in_executor(None, self.embed_chunks, chunks)
 
     def __del__(self):
         """Cleanup when the embedder is destroyed."""

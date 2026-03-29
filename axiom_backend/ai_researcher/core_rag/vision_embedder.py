@@ -328,7 +328,7 @@ class VisionEmbedder:
                     return np.zeros(self.embedding_dim, dtype=np.float32)
                 else:
                     # Re-raise non-OOM RuntimeErrors
-                    raise re
+                    raise
             except Exception as e:
                 logger.debug(f"Error embedding image '{image_path}': {e}")
                 import traceback
@@ -346,8 +346,7 @@ class VisionEmbedder:
         semaphore = get_vision_embedding_semaphore()
         async with semaphore:
             # Run the synchronous embedding in a thread pool to avoid blocking
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, self.embed_images, image_paths)
+            return await asyncio.get_running_loop().run_in_executor(None, self.embed_images, image_paths)
 
     async def embed_single_image_async(self, image_path: str) -> Optional[np.ndarray]:
         """
@@ -360,8 +359,7 @@ class VisionEmbedder:
         semaphore = get_vision_embedding_semaphore()
         async with semaphore:
             # Run the synchronous embedding in a thread pool to avoid blocking
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, self.embed_single_image, image_path)
+            return await asyncio.get_running_loop().run_in_executor(None, self.embed_single_image, image_path)
 
     def __del__(self):
         """Cleanup when the embedder is destroyed."""
