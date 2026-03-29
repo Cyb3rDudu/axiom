@@ -474,32 +474,8 @@ class BackgroundDocumentProcessor:
             self._update_document_progress_sync(doc_id, user_id, 55, "processing")
 
             # Retry metadata extraction with markdown content if initial extraction failed
-            # or produced low-quality results (e.g., title derived from filename)
-            def _needs_retry(meta, filename):
-                if not meta:
-                    return True
-                title = meta.get('title', '')
-                authors = meta.get('authors')
-                has_authors = authors and authors != [] and authors != '[]' and authors != ''
-                # Retry if missing both title and authors
-                if not title and not has_authors:
-                    return True
-                # Retry if has title but missing authors (incomplete extraction)
-                if title and not has_authors:
-                    return True
-                # Check if title looks like it was derived from the filename
-                if title:
-                    import re as _re
-                    fn_stem = _re.sub(r'\.[^.]+$', '', filename)
-                    fn_normalized = fn_stem.replace('_', ' ').replace('-', ' ').lower().strip()
-                    title_normalized = title.lower().strip()
-                    if fn_normalized and (title_normalized == fn_normalized or
-                                          fn_normalized.startswith(title_normalized) or
-                                          title_normalized.startswith(fn_normalized)):
-                        return True
-                return False
-
-            if _needs_retry(extracted_metadata, original_filename):
+            from services.metadata_enrichment import needs_metadata_retry
+            if needs_metadata_retry(extracted_metadata, original_filename):
                 from services.metadata_enrichment import prepare_text_sample
                 md_sample = prepare_text_sample(markdown_content)
                 if md_sample.strip():

@@ -217,7 +217,7 @@ IMPORTANT INSTRUCTIONS:
 4. For arrays (authors, keywords, chapters), use empty array [] if none found
 5. Extract chapter titles from table of contents for books (limit to first 10-15 chapters)
 6. CRITICAL for title extraction: Look for the MAIN title of the document, usually marked with a large heading (# in markdown). Do NOT confuse series names, collection titles, or publisher imprint names with the actual document title. The main title is typically followed by the author names.
-7. For titles: include subtitles, edition info, and issue/volume designations as part of the title (e.g., "Aktuelle Volkswirtschaftslehre Ausgabe 2022/2023", not just "Aktuelle Volkswirtschaftslehre"). The full title is needed for correct citation.
+7. For titles: include the subtitle if present (e.g., "Volkswirtschaftslehre: Grundlagen der Mikro und Makroökonomie"). Include issue/volume designations (e.g., "Ausgabe 2022/2023"). Do NOT include edition text like "2., überarbeitete Auflage" in the title — that belongs in the "edition" field.
 8. If the provided text is too short or contains no meaningful document content, return null for title and other fields — do NOT guess or fabricate metadata.
 9. For titles in ALL CAPS (e.g., "GABLER KOMPAKT-LEXIKON"), convert to proper Title Case (e.g., "Gabler Kompakt-Lexikon"). Same for author names in all caps. Preserve original case only if mixed case is already used.
 
@@ -456,10 +456,10 @@ Extract the metadata based *only* on the text provided above and return it as JS
             import asyncio
 
             async def _do_enrich():
-                # Reset the shared httpx client to avoid "Event loop is closed" errors
-                # when called from a fresh event loop in a thread
+                # Close stale httpx client before running on a new event loop
                 from services import metadata_enrichment
-                metadata_enrichment._http_client = None
+                if metadata_enrichment._http_client and metadata_enrichment._http_client.is_closed:
+                    metadata_enrichment._http_client = None
                 return await enrich_metadata(
                     existing_metadata=metadata or {},
                     document_text=text_sample,

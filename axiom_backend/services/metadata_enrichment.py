@@ -724,6 +724,35 @@ def calculate_completeness(metadata: dict, filename: str = "") -> int:
 # Shared helpers — used by all three paths (upload, reprocess, enrich button)
 # ---------------------------------------------------------------------------
 
+def needs_metadata_retry(metadata: Optional[dict], filename: str = "") -> bool:
+    """Check if metadata extraction needs a retry with better text.
+
+    Returns True when:
+    - No metadata at all
+    - Missing authors (incomplete extraction)
+    - Title looks like it was derived from the filename (LLM fabrication)
+    """
+    if not metadata:
+        return True
+    title = metadata.get('title', '')
+    authors = metadata.get('authors')
+    has_authors = authors and authors != [] and authors != '[]' and authors != ''
+    if not title and not has_authors:
+        return True
+    if title and not has_authors:
+        return True
+    if title and filename:
+        fn_stem = re.sub(r'\.[^.]+$', '', filename)
+        fn_normalized = fn_stem.replace('_', ' ').replace('-', ' ').lower().strip()
+        title_normalized = title.lower().strip()
+        if fn_normalized and (title_normalized == fn_normalized or
+                              fn_normalized.startswith(title_normalized) or
+                              title_normalized.startswith(fn_normalized)):
+            return True
+    return False
+
+
+
 def prepare_text_sample(markdown_content: str) -> str:
     """Prepare a clean text sample from markdown for metadata extraction.
 
