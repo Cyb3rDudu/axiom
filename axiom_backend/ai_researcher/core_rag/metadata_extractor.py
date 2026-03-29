@@ -437,23 +437,21 @@ Extract the metadata based *only* on the text provided above and return it as JS
             import asyncio
 
             async def _do_enrich():
+                # Reset the shared httpx client to avoid "Event loop is closed" errors
+                # when called from a fresh event loop in a thread
+                from services import metadata_enrichment
+                metadata_enrichment._http_client = None
                 return await enrich_metadata(
                     existing_metadata=metadata or {},
                     document_text=text_sample,
                     filename=filename,
                 )
 
-            # Try to use a running loop, otherwise create one
-            try:
-                loop = asyncio.get_running_loop()
-                # If we're already in an async context, we can't call run_until_complete
-                # Use asyncio.ensure_future and wait synchronously via threading
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    enriched = pool.submit(lambda: asyncio.run(_do_enrich())).result(timeout=60)
-            except RuntimeError:
-                # No running loop – safe to use asyncio.run
-                enriched = asyncio.run(_do_enrich())
+            # Always run in a new thread with a fresh event loop to avoid
+            # "Event loop is closed" errors on subsequent calls
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                enriched = pool.submit(lambda: asyncio.run(_do_enrich())).result(timeout=60)
 
             if enriched:
                 print(f"MetadataExtractor: Enrichment complete – "
