@@ -305,14 +305,14 @@ class DocumentSearchTool:
                 filter_metadata = {"doc_id": filter_doc_id}
                 logger.info(f"Filtering by single document ID: {filter_doc_id}")
 
-            # 5. Concurrent Retrieval (without reranking at this stage)
+            # 5. Concurrent Retrieval (skip per-query reranking -- rerank once on aggregated results)
             logger.info(f"Document search: calling retriever.retrieve for {len(prepared_queries)} queries, retriever={self.retriever}, graph={getattr(self.retriever, 'graph_retriever', 'N/A')}, filter={filter_metadata}")
             retrieval_tasks = [
                 self.retriever.retrieve(
                     query_text=q,
                     n_results=n_results_per_query,
                     filter_metadata=filter_metadata,
-                    use_reranker=use_reranker, # Pass the flag from execute args
+                    use_reranker=False,  # Skip per-query reranking; final rerank below
                     dense_weight=dense_weight,
                     sparse_weight=sparse_weight
                 ) for q in prepared_queries
@@ -352,18 +352,10 @@ class DocumentSearchTool:
             initial_aggregated_list = list(aggregated_results.values())
             logger.info(f"Aggregated {len(initial_aggregated_list)} unique chunks from {len(prepared_queries)} queries.")
 
-            # 6. Final Reranking (Optional) - This logic remains for reranking *after* aggregation if needed by the caller.
-            # The change above enables reranking *within* the initial retriever.retrieve call if requested.
-            # We might want to disable this final reranking step if the initial retrieval already reranked?
-            # For now, let's keep it, but be aware it might rerank already reranked results.
-            # A better approach might be to only run this if the initial use_reranker was False.
-            run_final_rerank = use_reranker # Use the original flag passed to the tool execute method
-            if run_final_rerank and self.retriever.reranker and initial_aggregated_list:
-                logger.info(f"Applying final reranking (if enabled) to {len(initial_aggregated_list)} aggregated chunks using original query: '{query}'")
+            # 6. Final Reranking -- single rerank pass on aggregated results using the original query
+            if use_reranker and self.retriever.reranker and initial_aggregated_list:
+                logger.info(f"Applying final reranking to {len(initial_aggregated_list)} aggregated chunks using original query: '{query}'")
                 try:
-                    # Rerank the aggregated list using the *original* query.
-                    # Note: If initial retrieval was already reranked, this reranks again.
-                    # The reranker now returns a list of tuples (score, item)
                     reranked_tuples = await asyncio.to_thread(
                         self.retriever.reranker.rerank, query, initial_aggregated_list, top_n=n_results
                     )
