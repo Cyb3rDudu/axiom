@@ -154,8 +154,10 @@ export class UploadService {
         if (data.status === 'completed') {
           this.notifyCompletionCallbacks(docId);
         }
-      } else {
-        // console.log(`No callbacks found for document ${docId}`);
+      } else if (data.status === 'completed') {
+        // No upload callbacks for this doc (e.g., reprocessing/enrichment),
+        // but still notify completion so the document list refreshes
+        this.notifyCompletionCallbacks(docId);
       }
     } else if (data.type === 'job_progress') {
       // Handle job progress updates
