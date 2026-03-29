@@ -1,12 +1,14 @@
 import os
-import threading # Import the threading module
+import logging
+import threading
 from typing import List, Dict, Any, Optional, Tuple
 import torch
 from FlagEmbedding import FlagReranker
-from tqdm import tqdm
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from hardware_detection import hardware_detector
+
+logger = logging.getLogger(__name__)
 
 class TextReranker:
     """
@@ -33,7 +35,7 @@ class TextReranker:
             # Adjust batch size based on hardware
             optimal_batch = hardware_detector.get_optimal_batch_size(batch_size)
             if optimal_batch != batch_size:
-                print(f"Adjusting batch size from {batch_size} to {optimal_batch} based on hardware")
+                logger.info(f"Adjusting batch size from {batch_size} to {optimal_batch} based on hardware")
                 batch_size = optimal_batch
         self.model_name = model_name
         self.batch_size = batch_size
@@ -41,7 +43,7 @@ class TextReranker:
         # Log hardware detection results
         hardware_detector.log_device_info()
         
-        print(f"Initializing TextReranker with model {self.model_name} on device {self.device}")
+        logger.info(f"Initializing TextReranker with model {self.model_name} on device {self.device}")
         try:
             # Determine FP16 usage based on device type
             device_info = hardware_detector.detect_hardware()
@@ -49,15 +51,15 @@ class TextReranker:
             
             # Initialize the FlagReranker model
             self.model = FlagReranker(self.model_name, use_fp16=use_fp16)
-            print(f"Reranker model loaded successfully (FP16: {use_fp16})")
+            logger.info(f"Reranker model loaded successfully (FP16: {use_fp16})")
             
             # Set CPU optimizations if needed
             if device_info["device_type"] == "cpu":
                 torch.set_num_threads(hardware_detector.get_num_workers())
-                print(f"Set PyTorch threads to {hardware_detector.get_num_workers()} for CPU processing")
+                logger.info(f"Set PyTorch threads to {hardware_detector.get_num_workers()} for CPU processing")
         
         except Exception as e:
-            print(f"Error loading reranker model {self.model_name}: {e}")
+            logger.error(f"Error loading reranker model {self.model_name}: {e}")
             self.model = None # Indicate failure
             # Optionally raise
 
@@ -81,15 +83,15 @@ class TextReranker:
             If reranking fails, returns the original items with default scores of 0.0.
         """
         if not self.model:
-            print("Warning: Reranker model not loaded. Returning original results order with default scores.")
+            logger.warning("Reranker model not loaded. Returning original results with default scores.")
             return [(0.0, result) for result in results]
         if not results:
             return []
         if not query:
-             print("Warning: Empty query provided for reranking. Returning original results with default scores.")
+             logger.warning("Empty query provided for reranking. Returning original results with default scores.")
              return [(0.0, result) for result in results]
 
-        print(f"Reranking {len(results)} results for query: '{query}'...")
+        logger.debug(f"Reranking {len(results)} results for query: '{query[:80]}'...")
 
         # Prepare pairs for the reranker: [query, document_text]
         # Handle both dictionary results and Pydantic models like Note
@@ -132,20 +134,20 @@ class TextReranker:
                                          processed_scores = [scores]
                                     else:
                                          # If conversion fails and it's not a scalar, log an error
-                                         print(f"Error: Unexpected return type from reranker compute_score: {type(scores)}. Cannot process scores for this batch.")
+                                         logger.error(f"Unexpected return type from reranker compute_score: {type(scores)}")
                                          # Skip extending for this batch if type is unknown
                                          continue # This is now correctly inside the loop
 
                           all_scores.extend(processed_scores)
 
         except Exception as e:
-             print(f"Error during reranking computation: {e}")
+             logger.error(f"Error during reranking computation: {e}")
              # Fallback: return original results with default scores if reranking fails critically
              return [(0.0, result) for result in results]
 
         # Check if scores length matches results length
         if len(all_scores) != len(results):
-             print(f"Warning: Mismatch between number of results ({len(results)}) and computed reranker scores ({len(all_scores)}). Returning original results with default scores.")
+             logger.warning(f"Mismatch between results ({len(results)}) and scores ({len(all_scores)}). Returning original results with default scores.")
              return [(0.0, result) for result in results]
 
 
@@ -155,7 +157,8 @@ class TextReranker:
         # Sort by score in descending order
         reranked_results = sorted(scored_results, key=lambda x: x[0], reverse=True)
         
-        print(f"Reranking complete. Top score: {reranked_results[0][0]:.4f}" if reranked_results else "Reranking complete. No results.")
+        if reranked_results:
+            logger.debug(f"Reranking complete. Top score: {reranked_results[0][0]:.4f}")
         
         # Return top N if specified
         if top_n is not None:

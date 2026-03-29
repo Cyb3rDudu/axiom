@@ -3,10 +3,13 @@ Singleton cache for ML models to avoid repeated initialization.
 This prevents unnecessary GPU memory allocation and model loading.
 """
 
+import logging
 import threading
 from typing import Optional
 from .embedder import TextEmbedder
 from .reranker import TextReranker
+
+logger = logging.getLogger(__name__)
 
 class ModelCache:
     """Thread-safe singleton cache for ML models."""
@@ -28,7 +31,7 @@ class ModelCache:
         if self._embedder is None:
             with self._lock:
                 if self._embedder is None:
-                    print("Initializing singleton TextEmbedder...")
+                    logger.info("Initializing singleton TextEmbedder...")
                     self._embedder = TextEmbedder()
         return self._embedder
     
@@ -37,7 +40,7 @@ class ModelCache:
         if self._reranker is None:
             with self._lock:
                 if self._reranker is None:
-                    print("Initializing singleton TextReranker...")
+                    logger.info("Initializing singleton TextReranker...")
                     self._reranker = TextReranker()
         return self._reranker
     
@@ -46,7 +49,7 @@ class ModelCache:
         with self._lock:
             self._embedder = None
             self._reranker = None
-            print("Model cache cleared")
+            logger.info("Model cache cleared")
 
 # Global singleton instance
 model_cache = ModelCache()

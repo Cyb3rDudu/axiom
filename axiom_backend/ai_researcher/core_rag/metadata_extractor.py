@@ -179,10 +179,10 @@ class MetadataExtractor:
             A dictionary containing the extracted metadata, or None if extraction fails.
         """
         if not self.client:
-            print("MetadataExtractor: LLM client not initialized. Cannot extract metadata.")
+            logger.error("LLM client not initialized. Cannot extract metadata.")
             return None
         if not text_sample:
-            print("MetadataExtractor: No text sample provided.")
+            logger.warning("No text sample provided.")
             return None
 
         self._current_filename = filename
@@ -201,9 +201,9 @@ class MetadataExtractor:
             text_sample_truncated = text_sample[:head_size + tail_size]
         
         # Debug: Print the first part of the text sample
-        print(f"MetadataExtractor: Processing text sample (first 500 chars):")
-        print(f"{text_sample_truncated[:500]}...")
-        print(f"MetadataExtractor: Total text sample length: {len(text_sample_truncated)} chars")
+        logger.debug(f"Processing text sample (first 500 chars):")
+        logger.debug(f"{text_sample_truncated[:500]}...")
+        logger.debug(f"Total text sample length: {len(text_sample_truncated)} chars")
 
         # Construct the prompt
         system_prompt = "You are a meticulous metadata extraction assistant. You always return valid JSON conforming exactly to the provided schema. Extract information based *only* on the provided text. If the text is too short or contains no meaningful content, return null for all fields."
@@ -256,7 +256,7 @@ Extract the metadata based *only* on the text provided above and return it as JS
             {"role": "user", "content": user_prompt}
         ]
 
-        print(f"MetadataExtractor: Sending request to {self.model}...")
+        logger.info(f"Sending request to {self.model}...")
         
         # Check if this is a GPT-5 model that requires special handling
         is_gpt5_model = any(x in self.model.lower() for x in ['gpt-5', 'gpt5'])
@@ -264,9 +264,9 @@ Extract the metadata based *only* on the text provided above and return it as JS
         
         try:
             if is_gpt5_model and is_openai_api:
-                print(f"MetadataExtractor: Using GPT-5 specific parameters for {self.model}")
-                print(f"MetadataExtractor: Base URL: {self.base_url}")
-                print(f"MetadataExtractor: API key present: {bool(self.api_key)}")
+                logger.debug(f"Using GPT-5 specific parameters for {self.model}")
+                logger.debug(f"Base URL: {self.base_url}")
+                logger.debug(f"API key present: {bool(self.api_key)}")
                 # GPT-5 models via OpenAI API require special parameters
                 response = self.client.chat.completions.create(
                     model=self.model,
@@ -298,42 +298,42 @@ Extract the metadata based *only* on the text provided above and return it as JS
                 )
 
             response_content = response.choices[0].message.content
-            print("MetadataExtractor: Received response from LLM.")
-            print(f"MetadataExtractor: Response content length: {len(response_content) if response_content else 0}")
+            logger.info("Received response from LLM.")
+            logger.debug(f"Response content length: {len(response_content) if response_content else 0}")
             if response_content and len(response_content) < 1000:
-                print(f"MetadataExtractor: Raw response: {response_content[:500]}")  # Show first 500 chars for debugging
+                logger.debug(f"Raw response: {response_content[:500]}")  # Show first 500 chars for debugging
 
             if not response_content:
-                 print("MetadataExtractor: LLM returned empty content.")
+                 logger.warning("LLM returned empty content.")
                  return None
 
             # Parse the JSON response
             metadata = json.loads(response_content)
-            print("MetadataExtractor: Successfully parsed JSON response.")
+            logger.info("Successfully parsed JSON response.")
 
             # Basic validation
             if not isinstance(metadata, dict):
-                 print(f"MetadataExtractor: LLM response is not a JSON object: {type(metadata)}")
+                 logger.error(f"LLM response is not a JSON object: {type(metadata)}")
                  return None
             if "title" not in metadata or not metadata["title"]:
-                 print("MetadataExtractor: Error - Extracted metadata missing required 'title'.")
+                 logger.error("Extracted metadata missing required 'title'.")
                  return None
 
             # Ensure document_type is set
             if "document_type" not in metadata:
-                print("MetadataExtractor: Warning - 'document_type' missing, defaulting to 'other'.")
+                logger.warning(" - 'document_type' missing, defaulting to 'other'.")
                 metadata["document_type"] = "other"
 
             # Ensure authors field exists
             if "authors" not in metadata or not isinstance(metadata["authors"], list):
-                print("MetadataExtractor: Warning - 'authors' field is missing or invalid, using empty list.")
+                logger.warning(" - 'authors' field is missing or invalid, using empty list.")
                 metadata["authors"] = []
 
             # Normalize ALL CAPS titles/authors to Title Case
             title = metadata.get("title", "")
             if title and title == title.upper() and len(title) > 5:
                 metadata["title"] = title.title()
-                print(f"MetadataExtractor: Normalized ALL CAPS title to Title Case")
+                logger.info(f"Normalized ALL CAPS title to Title Case")
             authors = metadata.get("authors", [])
             metadata["authors"] = [
                 a.title() if a == a.upper() and len(a) > 3 else a
@@ -342,46 +342,46 @@ Extract the metadata based *only* on the text provided above and return it as JS
 
             # Debug: Print the extracted metadata based on document type
             doc_type = metadata.get('document_type', 'other')
-            print(f"MetadataExtractor: Extracted metadata for {doc_type.upper()}:")
-            print(f"  - Title: {metadata.get('title', 'N/A')}")
-            print(f"  - Authors: {metadata.get('authors', [])}")
-            print(f"  - Year: {metadata.get('publication_year', 'N/A')}")
-            print(f"  - Keywords: {metadata.get('keywords', [])}")
+            logger.info(f"Extracted metadata for {doc_type.upper()}:")
+            logger.info(f"  - Title: {metadata.get('title', 'N/A')}")
+            logger.info(f"  - Authors: {metadata.get('authors', [])}")
+            logger.info(f"  - Year: {metadata.get('publication_year', 'N/A')}")
+            logger.info(f"  - Keywords: {metadata.get('keywords', [])}")
 
             if doc_type == "paper":
-                print(f"  - Journal: {metadata.get('journal_or_source', 'N/A')}")
-                print(f"  - DOI: {metadata.get('doi', 'N/A')}")
+                logger.info(f"  - Journal: {metadata.get('journal_or_source', 'N/A')}")
+                logger.info(f"  - DOI: {metadata.get('doi', 'N/A')}")
                 if metadata.get('description'):
-                    print(f"  - Abstract: {metadata.get('description', '')[:100]}...")
+                    logger.info(f"  - Abstract: {metadata.get('description', '')[:100]}...")
             elif doc_type == "book":
-                print(f"  - Publisher: {metadata.get('publisher', 'N/A')}")
-                print(f"  - Edition: {metadata.get('edition', 'N/A')}")
-                print(f"  - ISBN: {metadata.get('isbn', 'N/A')}")
-                print(f"  - Pages: {metadata.get('page_count', 'N/A')}")
+                logger.info(f"  - Publisher: {metadata.get('publisher', 'N/A')}")
+                logger.info(f"  - Edition: {metadata.get('edition', 'N/A')}")
+                logger.info(f"  - ISBN: {metadata.get('isbn', 'N/A')}")
+                logger.info(f"  - Pages: {metadata.get('page_count', 'N/A')}")
                 chapters = metadata.get('chapters', [])
                 if chapters:
-                    print(f"  - Chapters: {len(chapters)} chapters extracted")
+                    logger.info(f"  - Chapters: {len(chapters)} chapters extracted")
             elif doc_type == "web":
-                print(f"  - Website: {metadata.get('website_name', 'N/A')}")
-                print(f"  - Organization: {metadata.get('organization', 'N/A')}")
-                print(f"  - URL: {metadata.get('url', 'N/A')}")
+                logger.info(f"  - Website: {metadata.get('website_name', 'N/A')}")
+                logger.info(f"  - Organization: {metadata.get('organization', 'N/A')}")
+                logger.info(f"  - URL: {metadata.get('url', 'N/A')}")
 
             if metadata.get('description'):
-                print(f"  - Description: {metadata.get('description', '')[:100]}...")
+                logger.info(f"  - Description: {metadata.get('description', '')[:100]}...")
 
             # Optional: Check for publication_year if you want to be even stricter,
             # but it's not required by the current schema definition.
             # if "publication_year" not in metadata or metadata["publication_year"] is None:
-            #     print("MetadataExtractor: Warning - Extracted metadata missing 'publication_year'.")
+            #     logger.warning(" - Extracted metadata missing 'publication_year'.")
 
             return metadata
 
         except json.JSONDecodeError as e:
-            print(f"MetadataExtractor: Error decoding JSON response from LLM: {e}")
-            print(f"Raw response content was:\n{response_content}")
+            logger.error(f"Error decoding JSON response from LLM: {e}")
+            logger.debug(f"Raw response content was:\n{response_content}")
             return None
         except openai.APIError as e:
-            print(f"MetadataExtractor: OpenAI API error: {e}")
+            logger.error(f"OpenAI API error: {e}")
             
             # Check for GPT-5 specific errors and retry with correct parameters
             error_str = str(e)
@@ -390,7 +390,7 @@ Extract the metadata based *only* on the text provided above and return it as JS
                 "maximum" in error_str.lower() or
                 "temperature" in error_str.lower()
             ):
-                print(f"MetadataExtractor: Detected GPT-5 parameter error, retrying with correct parameters...")
+                logger.info(f"Detected GPT-5 parameter error, retrying with correct parameters...")
                 try:
                     # Retry with GPT-5 specific parameters
                     response = self.client.chat.completions.create(
@@ -403,41 +403,41 @@ Extract the metadata based *only* on the text provided above and return it as JS
                         }
                     )
                     response_content = response.choices[0].message.content
-                    print("MetadataExtractor: GPT-5 retry successful")
+                    logger.info("GPT-5 retry successful")
                     
                     if not response_content:
-                        print("MetadataExtractor: LLM returned empty content on retry.")
+                        logger.warning("LLM returned empty content on retry.")
                         return None
                     
                     metadata = json.loads(response_content)
-                    print("MetadataExtractor: Successfully parsed JSON response from GPT-5 retry.")
+                    logger.info("Successfully parsed JSON response from GPT-5 retry.")
 
                     # Validate the metadata
                     if not isinstance(metadata, dict):
-                        print(f"MetadataExtractor: LLM response is not a JSON object: {type(metadata)}")
+                        logger.error(f"LLM response is not a JSON object: {type(metadata)}")
                         return None
                     if "title" not in metadata or not metadata["title"]:
-                        print("MetadataExtractor: Error - Extracted metadata missing required 'title'.")
+                        logger.error("Extracted metadata missing required 'title'.")
                         return None
 
                     # Ensure document_type is set
                     if "document_type" not in metadata:
-                        print("MetadataExtractor: Warning - 'document_type' missing in retry, defaulting to 'other'.")
+                        logger.warning(" - 'document_type' missing in retry, defaulting to 'other'.")
                         metadata["document_type"] = "other"
 
                     # Ensure authors field exists
                     if "authors" not in metadata or not isinstance(metadata["authors"], list):
-                        print("MetadataExtractor: Warning - 'authors' field is missing or invalid in retry, using empty list.")
+                        logger.warning(" - 'authors' field is missing or invalid in retry, using empty list.")
                         metadata["authors"] = []
 
                     return metadata
                     
                 except Exception as retry_e:
-                    print(f"MetadataExtractor: GPT-5 retry failed: {retry_e}")
+                    logger.error(f"GPT-5 retry failed: {retry_e}")
                     return None
             return None
         except Exception as e:
-            print(f"MetadataExtractor: An unexpected error occurred: {e}")
+            logger.error(f"An unexpected error occurred: {e}")
             return None
 
     def extract_and_enrich_sync(self, text_sample: str, filename: str = "") -> Optional[Dict[str, Any]]:
@@ -473,13 +473,13 @@ Extract the metadata based *only* on the text provided above and return it as JS
                 enriched = pool.submit(lambda: asyncio.run(_do_enrich())).result(timeout=60)
 
             if enriched:
-                print(f"MetadataExtractor: Enrichment complete – "
+                logger.info(f"Enrichment complete – "
                       f"completeness={enriched.get('metadata_completeness', 'N/A')}, "
                       f"sources={enriched.get('metadata_sources', [])}")
                 return enriched
 
         except Exception as e:
-            print(f"MetadataExtractor: Enrichment failed (non-fatal): {e}")
+            logger.warning(f"Enrichment failed (non-fatal): {e}")
             # Fall through and return LLM-only metadata
 
         return metadata

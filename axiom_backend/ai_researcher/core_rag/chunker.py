@@ -44,7 +44,7 @@ class Chunker:
         # Pattern to detect markdown images
         self._image_pattern = re.compile(r'!\[([^\]]*)\]\(([^\)]+)\)')
 
-        print(f"Chunker initialized: {logger_msg}")
+        logger.info(f"Chunker initialized: {logger_msg}")
 
     def _count_tokens(self, text: str) -> int:
         """Approximate token count using word count * 1.3 ratio."""
