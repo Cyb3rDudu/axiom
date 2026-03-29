@@ -806,6 +806,14 @@ async def enrich_metadata(
         enriched["isbn"] = ids["isbn"]
         sources["isbn"] = "regex_detection"
 
+    # Extract ISBN from DOI if DOI contains an ISBN-13 pattern (e.g., 10.xxxxx/9783791043500)
+    doi_val = enriched.get("doi", "")
+    if doi_val and not enriched.get("isbn"):
+        isbn_in_doi = re.search(r'(97[89]\d{10})', doi_val.replace('-', ''))
+        if isbn_in_doi:
+            enriched["isbn"] = isbn_in_doi.group(1)
+            sources["isbn"] = "doi_derived"
+
     # --- Step 2: External lookups ---
     # Try CrossRef first (most reliable for papers with DOIs)
     if ids["doi"]:
