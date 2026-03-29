@@ -926,11 +926,12 @@ async def enrich_metadata(
                 _merge_metadata(enriched, ol_result, "openlibrary", sources)
                 logger.info(f"OpenLibrary: fallback to DOI-derived ISBN {doi_isbn.group(1)} succeeded")
 
-    # Fall back to OpenAlex title search if we still lack key fields
+    # Fall back to OpenAlex title search if we still lack key fields or DOI
     needs_more = (
         not enriched.get("authors")
         or not enriched.get("publication_year")
         or not enriched.get("journal_or_source")
+        or not enriched.get("doi")
     )
     if needs_more and enriched.get("title"):
         oa_result = await lookup_openalex(
