@@ -456,10 +456,9 @@ Extract the metadata based *only* on the text provided above and return it as JS
             import asyncio
 
             async def _do_enrich():
-                # Close stale httpx client before running on a new event loop
+                # Always reset httpx client -- previous asyncio.run() closed its event loop
                 from services import metadata_enrichment
-                if metadata_enrichment._http_client and metadata_enrichment._http_client.is_closed:
-                    metadata_enrichment._http_client = None
+                metadata_enrichment._http_client = None
                 return await enrich_metadata(
                     existing_metadata=metadata or {},
                     document_text=text_sample,
