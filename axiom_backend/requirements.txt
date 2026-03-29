@@ -52,6 +52,7 @@ rich
 html2text
 beautifulsoup4
 spacy==3.7.2
+gliner
 
 # OpenSearch for fulltext search
 opensearch-py
