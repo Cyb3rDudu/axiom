@@ -588,6 +588,7 @@ class BackgroundDocumentProcessor:
 
                                 entity_extractor = EntityExtractor(
                                     llm_client=processor.metadata_extractor.client if use_llm else None,
+                                    llm_model=processor.metadata_extractor.model if use_llm else None,
                                     enable_llm_refinement=use_llm,
                                     language=doc_language,
                                 )

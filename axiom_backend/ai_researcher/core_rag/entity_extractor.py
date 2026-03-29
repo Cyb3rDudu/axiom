@@ -75,10 +75,12 @@ class EntityExtractor:
         self,
         embedder=None,  # kept for API compat
         llm_client=None,
+        llm_model: str = None,
         enable_llm_refinement: bool = False,
         language: str = "en",
     ):
         self.llm_client = llm_client
+        self.llm_model = llm_model
         self.enable_llm_refinement = enable_llm_refinement
         self.language = language
         self.nlp = None
@@ -194,6 +196,7 @@ Return JSON:
         try:
             response = self.llm_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
+                model=self.llm_model,
                 response_format={"type": "json_object"},
             )
             mapping = json.loads(response.choices[0].message.content)
@@ -266,7 +269,7 @@ Text:
 
         for attempt_name, response_format, attempt_messages in attempts:
             try:
-                kwargs = {"messages": attempt_messages}
+                kwargs = {"messages": attempt_messages, "model": self.llm_model}
                 if response_format:
                     kwargs["response_format"] = response_format
 

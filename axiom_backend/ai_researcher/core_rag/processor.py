@@ -802,6 +802,7 @@ class DocumentProcessor:
 
                             entity_extractor = EntityExtractor(
                                 llm_client=llm_client,
+                                llm_model=me.model if use_llm else None,
                                 enable_llm_refinement=use_llm,
                                 language=doc_language,
                             )
