@@ -161,7 +161,7 @@ class UnifiedDocumentDatabase:
         finally:
             db.close()
     
-    def get_all_documents(self, limit: int = None) -> List[Dict[str, Any]]:
+    def get_all_documents(self, limit: int = None, session: Session = None) -> List[Dict[str, Any]]:
         """Get all documents."""
         db = session if session else self._get_session()
         try:
