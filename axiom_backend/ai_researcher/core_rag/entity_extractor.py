@@ -81,16 +81,18 @@ _EN_STOPWORDS = frozenset({
 
 
 def _get_gliner_model():
-    """Lazy-load singleton GLiNER model."""
+    """Lazy-load singleton GLiNER model on GPU if available."""
     global _gliner_model
     if _gliner_model is None and GLINER_AVAILABLE:
+        import torch
         cache_dir = os.getenv("HF_HOME", "/root/.cache/huggingface/hub")
-        logger.info("Loading GLiNER model (urchade/gliner_multi-v2.1)...")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Loading GLiNER model (urchade/gliner_multi-v2.1) on {device}...")
         _gliner_model = GLiNER.from_pretrained(
             "urchade/gliner_multi-v2.1",
             cache_dir=cache_dir,
-        )
-        logger.info("GLiNER model loaded.")
+        ).to(device)
+        logger.info(f"GLiNER model loaded on {device}.")
     return _gliner_model
 
 
