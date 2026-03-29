@@ -793,6 +793,14 @@ async def enrich_metadata(
     if enriched.get("isbn") and not ids["isbn"]:
         ids["isbn"] = enriched["isbn"]
 
+    # Store detected identifiers even if lookups fail
+    if ids["doi"] and not enriched.get("doi"):
+        enriched["doi"] = ids["doi"]
+        sources["doi"] = "regex_detection"
+    if ids["isbn"] and not enriched.get("isbn"):
+        enriched["isbn"] = ids["isbn"]
+        sources["isbn"] = "regex_detection"
+
     # --- Step 2: External lookups ---
     # Try CrossRef first (most reliable for papers with DOIs)
     if ids["doi"]:
