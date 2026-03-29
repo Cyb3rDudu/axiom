@@ -143,19 +143,23 @@ class Retriever:
                 filter_doc_ids = [filter_metadata["doc_id"]]
 
         # Parallel search: vector + OpenSearch
+        # When OpenSearch is available, it handles lexical/BM25 search via RRF merge.
+        # pgvector does dense-only to avoid the slow Python-side sparse computation.
+        # When OpenSearch is unavailable, fall back to pgvector's sparse search.
+        use_pgvector_sparse = not self.opensearch_available
         async def vector_search_task():
             try:
                 return await asyncio.to_thread(
                     self.vector_store.query,
                     query_dense_embedding=query_dense,
-                    query_sparse_embedding_dict=query_sparse,
+                    query_sparse_embedding_dict=query_sparse if use_pgvector_sparse else None,
                     n_results=initial_fetch_n,
                     filter_metadata=filter_metadata,
                     dense_weight=dense_weight,
-                    sparse_weight=sparse_weight
+                    sparse_weight=sparse_weight if use_pgvector_sparse else 0.0
                 )
             except Exception as e:
-                print(f"Error during vector store query thread execution: {e}")
+                logger.error(f"Error during vector store query: {e}")
                 return []
 
         async def opensearch_search_task():
