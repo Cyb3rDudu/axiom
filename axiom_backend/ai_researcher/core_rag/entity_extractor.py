@@ -36,7 +36,7 @@ GLINER_LABELS = [
     "organization",
     "location",
     "concept",
-    "academic work",
+    "book or journal",
     "research method",
 ]
 
@@ -46,9 +46,12 @@ _GLINER_TYPE_MAP = {
     "organization": "ORGANIZATION",
     "location": "LOCATION",
     "concept": "CONCEPT",
-    "academic work": "WORK",
+    "book or journal": "WORK",
     "research method": "METHOD",
 }
+
+# Patterns to filter from entity text
+_NOISE_RE = re.compile(r'\bet\s+al\.?$', re.IGNORECASE)
 
 # spaCy fallback label mapping (covers English and German models)
 _SPACY_LABEL_MAP = {
@@ -153,7 +156,9 @@ class EntityExtractor:
 
         try:
             raw_entities = self._gliner.predict_entities(
-                text, GLINER_LABELS, threshold=self.gliner_threshold
+                text, GLINER_LABELS,
+                threshold=self.gliner_threshold,
+                multi_label=True,
             )
         except Exception as e:
             logger.error(f"GLiNER prediction failed: {e}")
@@ -168,6 +173,15 @@ class EntityExtractor:
             if not ent_type:
                 continue
             if len(ent_text) < 2 or len(ent_text) > 100:
+                continue
+            # Filter "et al." citation patterns
+            if _NOISE_RE.search(ent_text):
+                continue
+            # Skip generic single common words
+            if len(ent_text.split()) == 1 and ent_text.lower() in {
+                "firm", "firms", "workers", "government", "governments",
+                "countries", "borrowers", "savers", "lenders", "households",
+            }:
                 continue
 
             key = (ent_text.lower(), ent_type)
