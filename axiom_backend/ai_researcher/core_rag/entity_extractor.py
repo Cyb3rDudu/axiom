@@ -192,7 +192,7 @@ Return JSON:
 {{"Europäische Zentralbank": "european central bank", "Adam Smith": "adam smith", "Marktwirtschaft": "market economy"}}"""
 
         try:
-            response = await self.llm_client.chat(
+            response = self.llm_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
             )
@@ -270,7 +270,7 @@ Text:
                 if response_format:
                     kwargs["response_format"] = response_format
 
-                response = await self.llm_client.chat(**kwargs)
+                response = self.llm_client.chat.completions.create(**kwargs)
                 content = response.choices[0].message.content
                 data = json.loads(content)
 
