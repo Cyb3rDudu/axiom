@@ -548,7 +548,11 @@ MARKER_LLM_BASE_URL = os.getenv("MARKER_LLM_BASE_URL", "")
 
 # --- Knowledge Graph Configuration ---
 ENABLE_KNOWLEDGE_GRAPH = os.getenv("ENABLE_KNOWLEDGE_GRAPH", "True").lower() == "true"
-ENABLE_GRAPH_RETRIEVAL = os.getenv("ENABLE_GRAPH_RETRIEVAL", "True").lower() == "true"
+# Disabled by default: without entity extraction (ENTITY_ENABLE_LLM=False), the graph
+# only contains sequential chunk links, making graph traversal an expensive sliding window
+# with no quality benefit over requesting more chunks from the vector store.
+# Enable once entity extraction is turned on to get meaningful cross-document relationships.
+ENABLE_GRAPH_RETRIEVAL = os.getenv("ENABLE_GRAPH_RETRIEVAL", "False").lower() == "true"
 
 GRAPH_RETRIEVAL_CONFIG = {
     "max_depth": int(os.getenv("GRAPH_MAX_DEPTH", "2")),
