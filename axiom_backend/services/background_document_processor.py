@@ -414,8 +414,8 @@ class BackgroundDocumentProcessor:
             else:
                 initial_text = processor.document_converter.extract_initial_text_for_metadata(target_path)
             
-            extracted_metadata = processor.metadata_extractor.extract_and_enrich_sync(initial_text)
-            
+            extracted_metadata = processor.metadata_extractor.extract_and_enrich_sync(initial_text, filename=original_filename)
+
             if extracted_metadata:
                 final_metadata = {"doc_id": doc_id, "original_filename": original_filename}
                 final_metadata.update(extracted_metadata)

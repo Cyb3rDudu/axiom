@@ -166,13 +166,14 @@ class MetadataExtractor:
             max_text_sample=max_text_sample
         )
 
-    def extract(self, text_sample: str) -> Optional[Dict[str, Any]]:
+    def extract(self, text_sample: str, filename: str = "") -> Optional[Dict[str, Any]]:
         """
         Extracts metadata from the provided text sample using the configured LLM.
 
         Args:
             text_sample: The text snippet (ideally from the start of the document)
                          to extract metadata from.
+            filename: Original filename, used as a hint for the LLM.
 
         Returns:
             A dictionary containing the extracted metadata, or None if extraction fails.
@@ -183,6 +184,8 @@ class MetadataExtractor:
         if not text_sample:
             print("MetadataExtractor: No text sample provided.")
             return None
+
+        self._current_filename = filename
 
         # Limit the text sample size – include beginning AND end of document
         # The end often contains colophon, imprint page with publisher/ISBN/year
@@ -204,14 +207,21 @@ class MetadataExtractor:
 
         # Construct the prompt
         system_prompt = "You are a meticulous metadata extraction assistant. You always return valid JSON conforming exactly to the provided schema. Extract information based *only* on the provided text."
-        user_prompt = f"""Extract metadata from the following document text snippet. Follow the JSON schema precisely.
+        # Include filename as a hint for the LLM
+        filename_hint = ""
+        if hasattr(self, '_current_filename') and self._current_filename:
+            filename_hint = f"\nOriginal filename: {self._current_filename}\n"
 
+        user_prompt = f"""Extract metadata from the following document text snippet. Follow the JSON schema precisely.
+{filename_hint}
 IMPORTANT INSTRUCTIONS:
-1. First determine the document_type: 'paper' (academic paper), 'book', 'web' (web article/blog), or 'other'
+1. First determine the document_type: 'paper' (academic paper/journal article/working paper/thesis), 'book' (textbook/monograph/handbook/lexicon), 'legal' (law text/statute/regulation), 'institutional' (government report/central bank publication), 'web' (web article/blog/news), or 'other'
 2. Extract ALL relevant fields based on the document type
 3. Use `null` for fields you cannot confidently determine
 4. For arrays (authors, keywords, chapters), use empty array [] if none found
 5. Extract chapter titles from table of contents for books (limit to first 10-15 chapters)
+6. CRITICAL for title extraction: Look for the MAIN title of the document, usually marked with a large heading (# in markdown). Do NOT confuse series names, collection titles, or publisher imprint names with the actual document title. The main title is typically followed by the author names.
+7. Use the filename as a hint if the text is ambiguous — filenames often contain the actual title or topic
 
 JSON Schema:
 ```json
@@ -429,7 +439,7 @@ Extract the metadata based *only* on the text provided above and return it as JS
         event loop if necessary.
         """
         # Step 1: LLM extraction (synchronous)
-        metadata = self.extract(text_sample)
+        metadata = self.extract(text_sample, filename=filename)
 
         # Step 2: Async enrichment
         try:
