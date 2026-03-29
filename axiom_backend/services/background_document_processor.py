@@ -498,7 +498,35 @@ class BackgroundDocumentProcessor:
                 # Strip image markdown before sampling — images waste chars and carry no metadata
                 import re
                 md_clean = re.sub(r'!\[.*?\]\([^)]*\)\s*', '', markdown_content)
-                md_sample = md_clean[:4000] + (md_clean[-2000:] if len(md_clean) > 6000 else "")
+
+                # Smart sampling: skip series catalog pages that fill the start
+                # of textbooks. Detect by looking for the actual title page:
+                # a # heading followed by author names (not a book listing).
+                sample_start = 0
+                # If first 500 chars look like a series catalog (many italicized
+                # author-title pairs like "*Author,* Title"), skip ahead to find
+                # the actual title page (usually marked with a large # heading
+                # after the catalog, or an ISBN/copyright page)
+                first_500 = md_clean[:500]
+                italic_entries = len(re.findall(r'\*[A-Z][a-zäöü]+[\s·•,]', first_500))
+                if italic_entries >= 5:
+                    # Likely a series catalog — find the first ISBN or copyright marker
+                    isbn_pos = re.search(r'ISBN\s', md_clean)
+                    copyright_pos = re.search(r'©\s*\d{4}|Alle Rechte vorbehalten', md_clean)
+                    # Or find a heading that's NOT the series name (after the catalog)
+                    # Look for a # heading after at least 1000 chars
+                    late_heading = re.search(r'\n#\s+', md_clean[1000:])
+
+                    candidates = []
+                    if isbn_pos: candidates.append(max(0, isbn_pos.start() - 200))
+                    if copyright_pos: candidates.append(max(0, copyright_pos.start() - 500))
+                    if late_heading: candidates.append(1000 + late_heading.start())
+
+                    if candidates:
+                        sample_start = min(candidates)
+                        print(f"[{doc_id}] Detected series catalog ({italic_entries} entries), sampling from offset {sample_start}")
+
+                md_sample = md_clean[sample_start:sample_start + 4000] + (md_clean[-2000:] if len(md_clean) > 6000 else "")
                 if md_sample.strip():
                     print(f"[{doc_id}] Retrying metadata extraction with markdown content ({len(md_sample)} chars)...")
                     retry_metadata = processor.metadata_extractor.extract_and_enrich_sync(md_sample, filename=original_filename)
