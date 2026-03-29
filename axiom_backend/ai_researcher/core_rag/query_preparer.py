@@ -480,21 +480,3 @@ Concise query (under {max_length} chars):"""
 
         logger.info(f"Prepared queries for '{original_query}': {final_queries}")
         return final_queries, all_model_details
-
-# Example Usage (for testing purposes, would be called by ResearchAgent)
-def main_test(): # Removed async
-    # This requires setting up dispatcher and potentially env vars outside this script
-    # For simplicity, this is just a placeholder structure
-    print("Testing QueryPreparer (requires external setup)...")
-    # dispatcher = ModelDispatcher() # Needs proper initialization
-    # preparer = QueryPreparer(dispatcher)
-    # test_query = "How did Park Hotels & Resorts' strategy for addressing underperforming assets in 2023, particularly the San Francisco properties, impact their financial metrics, capital allocation decisions, and future investment plans through 2024?"
-    # queries, details = preparer.prepare_queries(test_query, ["sub_query", "step_back"]) # Removed await
-    # print("Final Queries:", queries)
-    # print("Model Details:", details)
-
-if __name__ == "__main__":
-    # Basic logging setup for testing
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    # main_test() # Removed asyncio.run
-    print("QueryPreparer class defined. Run integration tests for actual usage.")

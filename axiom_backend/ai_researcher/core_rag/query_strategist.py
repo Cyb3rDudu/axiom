@@ -124,19 +124,3 @@ Output *only* a comma-separated list of the chosen technique names (e.g., `sub_q
         logger.info(f"Query strategy determined for '{original_query}': {chosen_techniques}")
 
         return chosen_techniques, model_details
-
-# Example Usage (for testing)
-async def main_test():
-    # Requires setting up dispatcher and potentially env vars
-    print("Testing QueryStrategist (requires external setup)...")
-    # dispatcher = ModelDispatcher() # Needs proper initialization
-    # strategist = QueryStrategist(dispatcher)
-    # test_query = "Compare the effects of remote work policies on employee productivity and mental health in the tech vs finance sectors since 2020."
-    # techniques, details = await strategist.determine_techniques(test_query, research_context="Impact of Remote Work", agent_context="Comparison Section")
-    # print("Chosen Techniques:", techniques)
-    # print("Model Details:", details)
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    # asyncio.run(main_test()) # Requires async setup
-    print("QueryStrategist class defined. Run integration tests for actual usage.")

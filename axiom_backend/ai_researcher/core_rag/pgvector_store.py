@@ -722,11 +722,6 @@ class PGVectorStore:
         finally:
             db.close()
 
-    # Compatibility methods for backward compatibility
-    def _get_client(self):
-        """For backward compatibility - returns None."""
-        return None, None, None
-
 
 # Export for compatibility
 __all__ = ['PGVectorStore']

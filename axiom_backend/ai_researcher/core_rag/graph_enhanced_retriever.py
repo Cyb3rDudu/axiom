@@ -26,20 +26,17 @@ class GraphEnhancedRetriever:
         max_depth: int = 2,
         vector_weight: float = 0.6,
         graph_weight: float = 0.3,
-        diversity_weight: float = 0.1,
         decay_factor: float = 0.6,
         min_relationship_strength: float = 0.3,
-        cache_size: int = 1000
+        **kwargs  # Accept unused config keys (diversity_weight, cache_size) without error
     ):
         self.base_retriever = base_retriever
         self.graph_store = graph_store
         self.max_depth = max_depth
         self.vector_weight = vector_weight
         self.graph_weight = graph_weight
-        self.diversity_weight = diversity_weight
         self.decay_factor = decay_factor
         self.min_relationship_strength = min_relationship_strength
-        self.cache_size = cache_size
 
     async def retrieve(
         self,

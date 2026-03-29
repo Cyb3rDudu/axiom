@@ -35,7 +35,7 @@ class EntityExtractor:
         llm_client=None,
         enable_llm_refinement: bool = False
     ):
-        self.embedder = embedder
+        # embedder param kept for API compatibility but unused
         self.llm_client = llm_client
         self.enable_llm_refinement = enable_llm_refinement
         self.nlp = None
