@@ -504,31 +504,31 @@ class BackgroundDocumentProcessor:
                 import re
                 md_clean = re.sub(r'!\[.*?\]\([^)]*\)\s*', '', markdown_content)
 
-                # Smart sampling: skip series catalog pages that fill the start
-                # of textbooks. Detect by looking for the actual title page:
-                # a # heading followed by author names (not a book listing).
+                # Smart sampling: for books with series catalogs, find the title page.
+                # Strategy: find the # heading closest to the ISBN/copyright block,
+                # then sample from just before that heading.
                 sample_start = 0
-                # If first 500 chars look like a series catalog (many italicized
-                # author-title pairs like "*Author,* Title"), skip ahead to find
-                # the actual title page (usually marked with a large # heading
-                # after the catalog, or an ISBN/copyright page)
                 first_500 = md_clean[:500]
                 italic_entries = len(re.findall(r'\*[A-Z][a-zäöü]+[\s·•,]', first_500))
                 if italic_entries >= 5:
-                    # Likely a series catalog — find the first ISBN or copyright marker
+                    # Find the first # heading that appears AFTER the catalog listing
+                    # The title page heading usually comes after the catalog but before ISBN
+                    headings = list(re.finditer(r'\n(#{1,2}\s+\*?\*?[A-ZÄÖÜ])', md_clean))
                     isbn_pos = re.search(r'ISBN\s', md_clean)
-                    copyright_pos = re.search(r'©\s*\d{4}|Alle Rechte vorbehalten', md_clean)
-                    # Or find a heading that's NOT the series name (after the catalog)
-                    # Look for a # heading after at least 1000 chars
-                    late_heading = re.search(r'\n#\s+', md_clean[1000:])
 
-                    candidates = []
-                    if isbn_pos: candidates.append(max(0, isbn_pos.start() - 200))
-                    if copyright_pos: candidates.append(max(0, copyright_pos.start() - 500))
-                    if late_heading: candidates.append(1000 + late_heading.start())
+                    # Find the heading closest to (but before) the ISBN
+                    if isbn_pos and headings:
+                        title_heading = None
+                        for h in headings:
+                            if h.start() < isbn_pos.start() and h.start() > 200:
+                                title_heading = h
+                        if title_heading:
+                            sample_start = max(0, title_heading.start() - 50)
+                    elif headings and len(headings) > 1:
+                        # No ISBN found, use second heading (first is usually the series name)
+                        sample_start = max(0, headings[1].start() - 50)
 
-                    if candidates:
-                        sample_start = min(candidates)
+                    if sample_start > 0:
                         print(f"[{doc_id}] Detected series catalog ({italic_entries} entries), sampling from offset {sample_start}")
 
                 md_sample = md_clean[sample_start:sample_start + 4000] + (md_clean[-2000:] if len(md_clean) > 6000 else "")
