@@ -785,46 +785,50 @@ class DocumentProcessor:
                         graph_store.build_sequential_relationships(doc_id, len(chunks))
                         print(f"  Built sequential relationships for {len(chunks)} chunks.")
 
-                        # Extract entities if LLM refinement enabled
-                        if config.ENTITY_EXTRACTION_CONFIG['enable_llm_refinement']:
-                            try:
+                        # Extract entities (always: spaCy for free, LLM when enabled)
+                        try:
+                            from .entity_extractor import EntityExtractor
+
+                            doc_language = EntityExtractor.detect_language(
+                                markdown_content if markdown_content else ""
+                            )
+                            use_llm = config.ENTITY_EXTRACTION_CONFIG['enable_llm_refinement']
+                            llm_client = None
+                            if use_llm:
                                 from database.user_settings import get_user_settings
-                                from .entity_extractor import EntityExtractor
-
                                 user_settings = get_user_settings()
-                                metadata_extractor = MetadataExtractor.from_user_settings(user_settings)
+                                me = MetadataExtractor.from_user_settings(user_settings)
+                                llm_client = me.client
 
-                                entity_extractor = EntityExtractor(
-                                    embedder=self.embedder,
-                                    llm_client=metadata_extractor.client,
-                                    enable_llm_refinement=True
+                            entity_extractor = EntityExtractor(
+                                llm_client=llm_client,
+                                enable_llm_refinement=use_llm,
+                                language=doc_language,
+                            )
+
+                            entities_count = 0
+                            for chunk in chunks:
+                                entities, relationships = entity_extractor.extract_from_chunk_sync(
+                                    chunk['text'],
+                                    chunk['metadata']
                                 )
-
-                                entities_count = 0
-                                for chunk in chunks:
-                                    entities, relationships = entity_extractor.extract_from_chunk_sync(
-                                        chunk['text'],
-                                        chunk['metadata']
+                                for entity in entities:
+                                    entity_id = graph_store.add_entity(
+                                        entity['text'],
+                                        entity['type'],
+                                        entity['canonical_form'],
+                                        description=entity.get('context_snippet')
                                     )
+                                    graph_store.link_entity_to_chunk(
+                                        entity_id,
+                                        chunk['metadata']['chunk_id'],
+                                        doc_id
+                                    )
+                                    entities_count += 1
 
-                                    for entity in entities:
-                                        # Pass context_snippet as description for entity merging
-                                        entity_id = graph_store.add_entity(
-                                            entity['text'],
-                                            entity['type'],
-                                            entity['canonical_form'],
-                                            description=entity.get('context_snippet')
-                                        )
-                                        graph_store.link_entity_to_chunk(
-                                            entity_id,
-                                            chunk['metadata']['chunk_id'],
-                                            doc_id
-                                        )
-                                        entities_count += 1
-
-                                print(f"  Extracted {entities_count} entities from chunks.")
-                            except Exception as e_entity:
-                                print(f"  Warning: Entity extraction failed: {e_entity}")
+                            print(f"  Extracted {entities_count} entities ({doc_language}, llm={'on' if use_llm else 'off'}).")
+                        except Exception as e_entity:
+                            print(f"  Warning: Entity extraction failed: {e_entity}")
 
                         # Build co-occurrence relationships (always, regardless of LLM setting)
                         cooccurrence_count = graph_store.build_cooccurrence_relationships(

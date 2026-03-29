@@ -578,42 +578,54 @@ class BackgroundDocumentProcessor:
                             graph_store.build_sequential_relationships(doc_id, len(chunks))
                             print(f"[{doc_id}] Built sequential relationships for {len(chunks)} chunks")
 
-                            # Extract entities if LLM refinement enabled (optional)
-                            if config.ENTITY_EXTRACTION_CONFIG['enable_llm_refinement']:
-                                try:
-                                    from ai_researcher.core_rag.entity_extractor import EntityExtractor
+                            # Extract entities (always runs: spaCy for free, LLM when enabled)
+                            try:
+                                from ai_researcher.core_rag.entity_extractor import EntityExtractor
 
-                                    entity_extractor = EntityExtractor(
-                                        embedder=processor.embedder,
-                                        llm_client=processor.metadata_extractor.client,
-                                        enable_llm_refinement=True
+                                # Detect language once from full markdown
+                                doc_language = EntityExtractor.detect_language(markdown_content)
+                                use_llm = config.ENTITY_EXTRACTION_CONFIG['enable_llm_refinement']
+
+                                entity_extractor = EntityExtractor(
+                                    llm_client=processor.metadata_extractor.client if use_llm else None,
+                                    enable_llm_refinement=use_llm,
+                                    language=doc_language,
+                                )
+
+                                entities_count = 0
+                                all_entities = []
+                                for chunk in chunks:
+                                    entities, relationships = entity_extractor.extract_from_chunk_sync(
+                                        chunk['text'],
+                                        chunk['metadata']
                                     )
 
-                                    entities_count = 0
-                                    for chunk in chunks:
-                                        entities, relationships = entity_extractor.extract_from_chunk_sync(
-                                            chunk['text'],
-                                            chunk['metadata']
+                                    for entity in entities:
+                                        entity_id = graph_store.add_entity(
+                                            entity['text'],
+                                            entity['type'],
+                                            entity['canonical_form'],
+                                            description=entity.get('context_snippet')
                                         )
+                                        graph_store.link_entity_to_chunk(
+                                            entity_id,
+                                            chunk['metadata']['chunk_id'],
+                                            doc_id
+                                        )
+                                        entities_count += 1
+                                    all_entities.extend(entities)
 
-                                        for entity in entities:
-                                            # Pass context_snippet as description for entity merging
-                                            entity_id = graph_store.add_entity(
-                                                entity['text'],
-                                                entity['type'],
-                                                entity['canonical_form'],
-                                                description=entity.get('context_snippet')
-                                            )
-                                            graph_store.link_entity_to_chunk(
-                                                entity_id,
-                                                chunk['metadata']['chunk_id'],
-                                                doc_id
-                                            )
-                                            entities_count += 1
+                                # Cross-language canonicalization for spaCy path
+                                if not use_llm and doc_language != "en" and entity_extractor.llm_client:
+                                    try:
+                                        import asyncio as _asyncio
+                                        _asyncio.run(entity_extractor.canonicalize_entities_batch(all_entities))
+                                    except Exception:
+                                        pass  # non-fatal
 
-                                    print(f"[{doc_id}] Extracted {entities_count} entities from chunks")
-                                except Exception as e_entity:
-                                    print(f"[{doc_id}] Warning: Entity extraction failed: {e_entity}")
+                                print(f"[{doc_id}] Extracted {entities_count} entities ({doc_language}, llm={'on' if use_llm else 'off'})")
+                            except Exception as e_entity:
+                                print(f"[{doc_id}] Warning: Entity extraction failed: {e_entity}")
 
                             # Build co-occurrence relationships (always, regardless of LLM setting)
                             cooccurrence_count = graph_store.build_cooccurrence_relationships(
