@@ -881,10 +881,21 @@ async def enrich_metadata(
             _merge_metadata(enriched, cr_result, "crossref", sources)
 
     # Try OpenLibrary for books with ISBNs
+    ol_result = None
     if ids["isbn"]:
         ol_result = await lookup_openlibrary(ids["isbn"])
         if ol_result:
             _merge_metadata(enriched, ol_result, "openlibrary", sources)
+
+    # If OpenLibrary failed for text ISBN, try DOI-derived ISBN as fallback
+    # (print ISBN vs eBook ISBN — publishers often only register one)
+    if not ol_result and enriched.get("doi"):
+        doi_isbn = re.search(r'(97[89]\d{10})', enriched["doi"].replace('-', ''))
+        if doi_isbn and doi_isbn.group(1) != (ids.get("isbn") or ""):
+            ol_result = await lookup_openlibrary(doi_isbn.group(1))
+            if ol_result:
+                _merge_metadata(enriched, ol_result, "openlibrary", sources)
+                logger.info(f"OpenLibrary: fallback to DOI-derived ISBN {doi_isbn.group(1)} succeeded")
 
     # Fall back to OpenAlex title search if we still lack key fields
     needs_more = (
