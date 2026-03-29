@@ -54,17 +54,16 @@ class Retriever:
                     graph_store=graph_store,
                     **config.GRAPH_RETRIEVAL_CONFIG
                 )
-                print("Retriever initialized with graph enhancement.")
+                logger.info("Retriever initialized with graph enhancement.")
             except Exception as e:
-                print(f"Warning: Failed to initialize graph retriever: {e}")
-                print("Falling back to standard vector retrieval.")
+                logger.warning(f"Failed to initialize graph retriever: {e}. Falling back to standard vector retrieval.")
         else:
-            print("Retriever initialized.")
+            logger.info("Retriever initialized.")
 
         if self.reranker:
-             print("Retriever: Reranker is enabled.")
+            logger.info("Reranker is enabled.")
         else:
-              print("Retriever: Reranker is disabled.")
+            logger.info("Reranker is disabled.")
 
 
     async def retrieve( # <-- Make async
@@ -92,11 +91,9 @@ class Retriever:
         Returns:
             A list of retrieved chunk dictionaries, sorted by relevance.
         """
-        import logging as _logging
-        _ret_logger = _logging.getLogger(__name__)
         # Use graph retriever if enabled and requested
         if use_graph and self.graph_retriever:
-            _ret_logger.info(f"Retriever: Delegating to graph retriever for query '{query_text[:50]}'")
+            logger.info(f"Delegating to graph retriever for query '{query_text[:50]}'")
             return await self.graph_retriever.retrieve(
                 query_text=query_text,
                 n_results=n_results,
@@ -107,32 +104,32 @@ class Retriever:
             )
 
         # Otherwise use standard retrieval
-        _ret_logger.info(f"Retriever: Standard path for query '{query_text[:50]}', use_graph={use_graph}")
-        print(f"\n--- Retrieving documents for query: '{query_text}' ---")
+        logger.info(f"Retriever: Standard path for query '{query_text[:50]}', use_graph={use_graph}")
+        logger.debug(f"Retrieving documents for query: '{query_text[:80]}'...")
 
         # 1. Embed the query (using async method with semaphore)
-        _ret_logger.info("Retriever: Embedding query...")
+        logger.info("Retriever: Embedding query...")
         try:
             # Use the new async embedding method that includes semaphore control
             query_embeddings = await self.embedder.embed_query_async(query_text)
             if not query_embeddings:
-                _ret_logger.error(f"Retriever: Failed to embed query (returned None) for '{query_text[:50]}'")
+                logger.error(f"Retriever: Failed to embed query (returned None) for '{query_text[:50]}'")
                 return []
         except Exception as e:
-            _ret_logger.error(f"Retriever: Error during query embedding: {e}", exc_info=True)
+            logger.error(f"Retriever: Error during query embedding: {e}", exc_info=True)
             return []
 
         query_dense = query_embeddings.get("dense")
         query_sparse = query_embeddings.get("sparse") # This is the dict
 
         if not query_dense or query_sparse is None:
-             _ret_logger.error(f"Retriever: Query embedding returned unexpected format. dense={query_dense is not None}, sparse={query_sparse is not None}")
+             logger.error(f"Retriever: Query embedding returned unexpected format. dense={query_dense is not None}, sparse={query_sparse is not None}")
              return []
 
         # 2. Query the Vector Store (and OpenSearch in parallel if available)
         # Fetch potentially more results initially if reranking is enabled
         initial_fetch_n = n_results * 3 if (use_reranker and self.reranker) else n_results
-        print(f"Querying vector store (in thread, fetching up to {initial_fetch_n} results)...")
+        logger.debug(f"Querying vector store (fetching up to {initial_fetch_n} results)...")
 
         # Prepare filter for OpenSearch
         filter_doc_ids = None
@@ -173,7 +170,7 @@ class Retriever:
                     filter_doc_ids=filter_doc_ids
                 )
             except Exception as e:
-                print(f"Error during OpenSearch query: {e}")
+                logger.error(f"Error during OpenSearch query: {e}")
                 return []
 
         # Execute searches in parallel
@@ -182,7 +179,7 @@ class Retriever:
                 vector_search_task(),
                 opensearch_search_task()
             )
-            print(f"Retrieved {len(vector_results)} vector results, {len(opensearch_results)} OpenSearch results.")
+            logger.info(f"Retrieved {len(vector_results)} vector results, {len(opensearch_results)} OpenSearch results.")
 
             # Merge results with configurable weights
             initial_results = self._merge_results(
@@ -191,37 +188,17 @@ class Retriever:
             )
         else:
             initial_results = await vector_search_task()
-            print(f"Retrieved {len(initial_results)} results from vector store.")
+            logger.info(f"Retrieved {len(initial_results)} results from vector store.")
 
         if not initial_results:
-            print("No results found in vector store. Attempting to refresh client and retry...")
+            logger.warning(f"No results found for query: '{query_text[:80]}'")
+            return []
 
-            # Try retry once without refresh_client (method doesn't exist)
-            try:
-                initial_results = await asyncio.to_thread(
-                    self.vector_store.query,
-                    query_dense_embedding=query_dense,
-                    query_sparse_embedding_dict=query_sparse,
-                    n_results=initial_fetch_n,
-                    filter_metadata=filter_metadata,
-                    dense_weight=dense_weight,
-                    sparse_weight=sparse_weight
-                )
-
-                if initial_results:
-                    print(f"After refresh: Retrieved {len(initial_results)} results from vector store.")
-                else:
-                    print("No results found in vector store even after refresh.")
-                    return []
-            except Exception as e:
-                print(f"Error during vector store retry after refresh: {e}")
-                return []
-
-        print(f"Retrieved {len(initial_results)} initial results from vector store.")
+        logger.info(f"Retrieved {len(initial_results)} initial results.")
 
         # 3. Optionally Rerank (run sync reranker in thread)
         if use_reranker and self.reranker:
-            print("Applying reranker (in thread)...")
+            logger.debug("Applying reranker...")
             try:
                 # Run the synchronous rerank method in a separate thread
                 # The reranker now returns a list of tuples (score, item)
@@ -230,15 +207,15 @@ class Retriever:
                 )
                 # Extract just the items from the tuples
                 final_results = [item for _, item in reranked_tuples]
-                print(f"Returning {len(final_results)} reranked results.")
+                logger.info(f"Returning {len(final_results)} reranked results.")
             except Exception as e:
-                 print(f"Error during reranker thread execution: {e}. Falling back to initial results.")
+                 logger.error(f"Error during reranker: {e}. Falling back to initial results.")
                  # Fallback to initial results if reranking fails
                  final_results = initial_results[:n_results]
         else:
             # If not reranking, just take the top N from the initial results
             final_results = initial_results[:n_results]
-            print(f"Returning {len(final_results)} results (reranker disabled or skipped).")
+            logger.info(f"Returning {len(final_results)} results (reranker skipped).")
 
 
         # Return the list of dictionaries as retrieved/reranked
