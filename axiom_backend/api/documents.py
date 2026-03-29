@@ -1354,6 +1354,17 @@ async def bulk_enrich_metadata(
                             if old is None or old == '' or old == [] or key in (
                                 'metadata_completeness', 'metadata_sources', 'document_type'):
                                 meta[key] = val
+                    # Normalize ALL CAPS titles/authors to Title Case
+                    title = meta.get('title', '')
+                    if title and title == title.upper() and len(title) > 5:
+                        meta['title'] = title.title()
+                    authors = meta.get('authors', [])
+                    if isinstance(authors, list):
+                        meta['authors'] = [
+                            a.title() if isinstance(a, str) and a == a.upper() and len(a) > 3 else a
+                            for a in authors
+                        ]
+
                     meta['document_type'] = classify_document_type(meta, fn)
                     meta['metadata_completeness'] = calculate_completeness(meta, fn)
                     document.metadata_ = meta
