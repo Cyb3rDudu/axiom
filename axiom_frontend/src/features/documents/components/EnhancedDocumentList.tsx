@@ -561,12 +561,8 @@ export const EnhancedDocumentList: React.FC<EnhancedDocumentListProps> = ({
             const websiteName = doc.metadata_?.website_name;
             const organization = doc.metadata_?.organization;
 
-            // Determine what to show based on document type
-            const sourceInfo = documentType === 'book'
-              ? publisher
-              : documentType === 'web'
-              ? websiteName || organization
-              : journal;
+            // Show the most relevant source info — prefer specific over generic
+            const sourceInfo = journal || publisher || websiteName || organization;
             
             return (
               <div 
