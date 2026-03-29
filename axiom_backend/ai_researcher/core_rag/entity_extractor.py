@@ -12,8 +12,7 @@ import os
 import re
 import json
 import logging
-import asyncio
-import concurrent.futures
+import asyncio  # used by canonicalize_entities_batch caller
 from typing import List, Dict, Tuple, Optional
 
 logger = logging.getLogger(__name__)
@@ -215,7 +214,7 @@ Return JSON:
 
     # ── LLM entity + relationship extraction ────────────────────────────
 
-    async def _extract_entities_llm(self, chunk_text: str) -> Tuple[List[Dict], List[Dict]]:
+    def _extract_entities_llm(self, chunk_text: str) -> Tuple[List[Dict], List[Dict]]:
         """Extract entities and relationships via LLM. Returns English canonical forms."""
         if not self.llm_client:
             return [], []
@@ -269,7 +268,13 @@ Text:
 
         for attempt_name, response_format, attempt_messages in attempts:
             try:
-                kwargs = {"messages": attempt_messages, "model": self.llm_model}
+                kwargs = {
+                    "messages": attempt_messages,
+                    "model": self.llm_model,
+                    "max_tokens": 1000,
+                    "temperature": 0.1,
+                    "timeout": 20,
+                }
                 if response_format:
                     kwargs["response_format"] = response_format
 
@@ -312,7 +317,7 @@ Text:
 
     # ── Main extraction entry points ────────────────────────────────────
 
-    async def extract_from_chunk(
+    def extract_from_chunk(
         self,
         chunk_text: str,
         chunk_metadata: Dict,
@@ -323,7 +328,7 @@ Text:
         spaCy path: entities only, canonical = lowercased original.
         """
         if self.enable_llm_refinement and self.llm_client:
-            return await self._extract_entities_llm(chunk_text)
+            return self._extract_entities_llm(chunk_text)
 
         entities = self._extract_with_spacy(chunk_text)
         return entities, []
@@ -334,14 +339,11 @@ Text:
         chunk_metadata: Dict,
     ) -> Tuple[List[Dict], List[Dict]]:
         """
-        Synchronous wrapper. Runs LLM extraction in a thread pool when enabled.
+        Synchronous entry point. Same as extract_from_chunk (both are sync now).
         """
         if self.enable_llm_refinement and self.llm_client:
             try:
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    return pool.submit(
-                        lambda: asyncio.run(self._extract_entities_llm(chunk_text))
-                    ).result(timeout=30)
+                return self._extract_entities_llm(chunk_text)
             except Exception as e:
                 logger.error(f"LLM entity extraction failed (sync): {e}")
                 # Fall through to spaCy
