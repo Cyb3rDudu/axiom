@@ -595,7 +595,14 @@ def classify_document_type(metadata: dict, filename: str = "") -> str:
     if 'wikipedia.org' in url or 'wikipedia' in title:
         return 'wikipedia'
 
-    # --- Priority 1: Trust LLM-extracted type if present and meaningful ---
+    # --- Priority 1: Hard signals from metadata fields (override LLM) ---
+    # ISBN + publisher is definitive proof of a book, regardless of what the LLM said
+    if isbn and metadata.get('publisher'):
+        return 'book'
+    if isbn and (metadata.get('edition') or metadata.get('chapters')):
+        return 'book'
+
+    # --- Priority 2: Trust LLM-extracted type if present and meaningful ---
     llm_type = metadata.get('document_type', '')
     if llm_type:
         # Map LLM enum to our types
