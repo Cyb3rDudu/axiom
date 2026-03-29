@@ -721,6 +721,65 @@ def calculate_completeness(metadata: dict, filename: str = "") -> int:
 
 
 # ---------------------------------------------------------------------------
+# Shared helpers — used by all three paths (upload, reprocess, enrich button)
+# ---------------------------------------------------------------------------
+
+def prepare_text_sample(markdown_content: str) -> str:
+    """Prepare a clean text sample from markdown for metadata extraction.
+
+    Shared logic for all code paths:
+    1. Strip image markdown (wastes chars, no metadata value)
+    2. Detect and skip series catalog pages (find title heading before ISBN)
+    3. Take first 4000 + last 2000 chars
+    """
+    md_clean = re.sub(r'!\[.*?\]\([^)]*\)\s*', '', markdown_content)
+
+    sample_start = 0
+    first_500 = md_clean[:500]
+    italic_entries = len(re.findall(r'\*[A-Z][a-zäöü]+[\s·•,]', first_500))
+    if italic_entries >= 5:
+        headings = list(re.finditer(r'\n(#{1,2}\s+\*?\*?[A-ZÄÖÜ])', md_clean))
+        isbn_pos = re.search(r'ISBN\s', md_clean)
+        if isbn_pos and headings:
+            title_heading = None
+            for h in headings:
+                if h.start() < isbn_pos.start() and h.start() > 200:
+                    title_heading = h
+            if title_heading:
+                sample_start = max(0, title_heading.start() - 50)
+        elif headings and len(headings) > 1:
+            sample_start = max(0, headings[1].start() - 50)
+
+    return md_clean[sample_start:sample_start + 4000] + (md_clean[-2000:] if len(md_clean) > 6000 else "")
+
+
+def finalize_metadata(metadata: dict, filename: str = "") -> dict:
+    """Apply final normalization, classification, and scoring to metadata.
+
+    Shared logic for all code paths:
+    1. Normalize ALL CAPS titles/authors to Title Case
+    2. Classify document type
+    3. Calculate completeness score
+    """
+    # Title case normalization
+    title = metadata.get('title', '')
+    if title and title == title.upper() and len(title) > 5:
+        metadata['title'] = title.title()
+    authors = metadata.get('authors', [])
+    if isinstance(authors, list):
+        metadata['authors'] = [
+            a.title() if isinstance(a, str) and a == a.upper() and len(a) > 3 else a
+            for a in authors
+        ]
+
+    # Classification and scoring
+    metadata['document_type'] = classify_document_type(metadata, filename)
+    metadata['metadata_completeness'] = calculate_completeness(metadata, filename)
+
+    return metadata
+
+
+# ---------------------------------------------------------------------------
 # Merge helper
 # ---------------------------------------------------------------------------
 

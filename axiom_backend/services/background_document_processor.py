@@ -500,38 +500,8 @@ class BackgroundDocumentProcessor:
                 return False
 
             if _needs_retry(extracted_metadata, original_filename):
-                # Strip image markdown before sampling — images waste chars and carry no metadata
-                import re
-                md_clean = re.sub(r'!\[.*?\]\([^)]*\)\s*', '', markdown_content)
-
-                # Smart sampling: for books with series catalogs, find the title page.
-                # Strategy: find the # heading closest to the ISBN/copyright block,
-                # then sample from just before that heading.
-                sample_start = 0
-                first_500 = md_clean[:500]
-                italic_entries = len(re.findall(r'\*[A-Z][a-zäöü]+[\s·•,]', first_500))
-                if italic_entries >= 5:
-                    # Find the first # heading that appears AFTER the catalog listing
-                    # The title page heading usually comes after the catalog but before ISBN
-                    headings = list(re.finditer(r'\n(#{1,2}\s+\*?\*?[A-ZÄÖÜ])', md_clean))
-                    isbn_pos = re.search(r'ISBN\s', md_clean)
-
-                    # Find the heading closest to (but before) the ISBN
-                    if isbn_pos and headings:
-                        title_heading = None
-                        for h in headings:
-                            if h.start() < isbn_pos.start() and h.start() > 200:
-                                title_heading = h
-                        if title_heading:
-                            sample_start = max(0, title_heading.start() - 50)
-                    elif headings and len(headings) > 1:
-                        # No ISBN found, use second heading (first is usually the series name)
-                        sample_start = max(0, headings[1].start() - 50)
-
-                    if sample_start > 0:
-                        print(f"[{doc_id}] Detected series catalog ({italic_entries} entries), sampling from offset {sample_start}")
-
-                md_sample = md_clean[sample_start:sample_start + 4000] + (md_clean[-2000:] if len(md_clean) > 6000 else "")
+                from services.metadata_enrichment import prepare_text_sample
+                md_sample = prepare_text_sample(markdown_content)
                 if md_sample.strip():
                     print(f"[{doc_id}] Retrying metadata extraction with markdown content ({len(md_sample)} chars)...")
                     retry_metadata = processor.metadata_extractor.extract_and_enrich_sync(md_sample, filename=original_filename)
@@ -698,6 +668,10 @@ class BackgroundDocumentProcessor:
                     chunks_added_count = 0
                     print(f"[{doc_id}] Skipping embedding/storing: No embedder or vector store")
             
+            # Finalize: normalize titles, classify type, score completeness
+            from services.metadata_enrichment import finalize_metadata
+            final_metadata = finalize_metadata(final_metadata, original_filename)
+
             processing_result = {
                 "doc_id": doc_id,
                 "original_filename": original_filename,

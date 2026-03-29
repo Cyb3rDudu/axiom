@@ -1302,9 +1302,9 @@ async def bulk_enrich_metadata(
     Lightweight — no GPU, no reprocessing, runs inline.
     """
     try:
-        from services.metadata_enrichment import enrich_metadata, classify_document_type, calculate_completeness
+        from services.metadata_enrichment import enrich_metadata
         from sqlalchemy.orm.attributes import flag_modified
-        import os, re as _re
+        import os
 
         doc_ids = request.document_ids
         logger.info(f"User {current_user.id} requested metadata enrichment for {len(doc_ids)} documents")
@@ -1324,27 +1324,13 @@ async def bulk_enrich_metadata(
                 meta = document.metadata_ or {}
                 fn = document.original_filename or ''
 
-                # Read markdown for DOI/ISBN detection (strip images first)
+                # Read markdown and prepare clean text sample
+                from services.metadata_enrichment import prepare_text_sample, finalize_metadata
                 doc_text = ""
                 md_path = os.path.join("/app/data/processed/markdown", f"{doc_id}.md")
                 if os.path.exists(md_path):
                     with open(md_path, 'r') as f:
-                        raw = f.read()
-                    clean = _re.sub(r'!\[.*?\]\([^)]*\)\s*', '', raw)
-                    # Smart sampling: skip series catalog pages in textbooks
-                    sample_start = 0
-                    first_500 = clean[:500]
-                    italic_entries = len(_re.findall(r'\*[A-Z][a-zäöü]+[\s·•,]', first_500))
-                    if italic_entries >= 5:
-                        candidates = []
-                        isbn_pos = _re.search(r'ISBN\s', clean)
-                        copyright_pos = _re.search(r'©\s*\d{4}|Alle Rechte vorbehalten', clean)
-                        late_heading = _re.search(r'\n#\s+', clean[1000:])
-                        if isbn_pos: candidates.append(max(0, isbn_pos.start() - 200))
-                        if copyright_pos: candidates.append(max(0, copyright_pos.start() - 500))
-                        if late_heading: candidates.append(1000 + late_heading.start())
-                        if candidates: sample_start = min(candidates)
-                    doc_text = clean[sample_start:sample_start + 4000] + (clean[-2000:] if len(clean) > 6000 else "")
+                        doc_text = prepare_text_sample(f.read())
 
                 enriched = await enrich_metadata(meta, doc_text, filename=fn)
                 if enriched:
@@ -1354,19 +1340,7 @@ async def bulk_enrich_metadata(
                             if old is None or old == '' or old == [] or key in (
                                 'metadata_completeness', 'metadata_sources', 'document_type'):
                                 meta[key] = val
-                    # Normalize ALL CAPS titles/authors to Title Case
-                    title = meta.get('title', '')
-                    if title and title == title.upper() and len(title) > 5:
-                        meta['title'] = title.title()
-                    authors = meta.get('authors', [])
-                    if isinstance(authors, list):
-                        meta['authors'] = [
-                            a.title() if isinstance(a, str) and a == a.upper() and len(a) > 3 else a
-                            for a in authors
-                        ]
-
-                    meta['document_type'] = classify_document_type(meta, fn)
-                    meta['metadata_completeness'] = calculate_completeness(meta, fn)
+                    meta = finalize_metadata(meta, fn)
                     document.metadata_ = meta
                     flag_modified(document, 'metadata_')
                     db.commit()
