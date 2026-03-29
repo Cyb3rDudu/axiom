@@ -595,7 +595,8 @@ class BackgroundDocumentProcessor:
 
                                 entities_count = 0
                                 all_entities = []
-                                for chunk in chunks:
+                                for i, chunk in enumerate(chunks):
+                                    print(f"[{doc_id}] Entity extraction chunk {i+1}/{len(chunks)}...", flush=True)
                                     entities, relationships = entity_extractor.extract_from_chunk_sync(
                                         chunk['text'],
                                         chunk['metadata']
