@@ -206,14 +206,10 @@ class MetadataExtractor:
         print(f"MetadataExtractor: Total text sample length: {len(text_sample_truncated)} chars")
 
         # Construct the prompt
-        system_prompt = "You are a meticulous metadata extraction assistant. You always return valid JSON conforming exactly to the provided schema. Extract information based *only* on the provided text."
-        # Include filename as a hint for the LLM
-        filename_hint = ""
-        if hasattr(self, '_current_filename') and self._current_filename:
-            filename_hint = f"\nOriginal filename: {self._current_filename}\n"
+        system_prompt = "You are a meticulous metadata extraction assistant. You always return valid JSON conforming exactly to the provided schema. Extract information based *only* on the provided text. If the text is too short or contains no meaningful content, return null for all fields."
 
         user_prompt = f"""Extract metadata from the following document text snippet. Follow the JSON schema precisely.
-{filename_hint}
+
 IMPORTANT INSTRUCTIONS:
 1. First determine the document_type: 'paper' (academic paper/journal article/working paper/thesis), 'book' (textbook/monograph/handbook/lexicon), 'legal' (law text/statute/regulation), 'institutional' (government report/central bank publication), 'web' (web article/blog/news), or 'other'
 2. Extract ALL relevant fields based on the document type
@@ -221,8 +217,8 @@ IMPORTANT INSTRUCTIONS:
 4. For arrays (authors, keywords, chapters), use empty array [] if none found
 5. Extract chapter titles from table of contents for books (limit to first 10-15 chapters)
 6. CRITICAL for title extraction: Look for the MAIN title of the document, usually marked with a large heading (# in markdown). Do NOT confuse series names, collection titles, or publisher imprint names with the actual document title. The main title is typically followed by the author names.
-7. Use the filename as a hint if the text is ambiguous — filenames often contain the actual title or topic
-8. For titles: include subtitles, edition info, and issue/volume designations as part of the title (e.g., "Aktuelle Volkswirtschaftslehre Ausgabe 2022/2023", not just "Aktuelle Volkswirtschaftslehre"). The full title is needed for correct citation.
+7. For titles: include subtitles, edition info, and issue/volume designations as part of the title (e.g., "Aktuelle Volkswirtschaftslehre Ausgabe 2022/2023", not just "Aktuelle Volkswirtschaftslehre"). The full title is needed for correct citation.
+8. If the provided text is too short or contains no meaningful document content, return null for title and other fields — do NOT guess or fabricate metadata.
 
 JSON Schema:
 ```json

@@ -413,8 +413,14 @@ class BackgroundDocumentProcessor:
                 initial_text = processor._extract_header_footer_text(target_path)
             else:
                 initial_text = processor.document_converter.extract_initial_text_for_metadata(target_path)
-            
-            extracted_metadata = processor.metadata_extractor.extract_and_enrich_sync(initial_text, filename=original_filename)
+
+            # Skip LLM extraction if initial text is too short (image-only cover pages)
+            # The markdown retry after conversion will handle these cases
+            extracted_metadata = None
+            if initial_text and len(initial_text.strip()) > 100:
+                extracted_metadata = processor.metadata_extractor.extract_and_enrich_sync(initial_text, filename=original_filename)
+            else:
+                print(f"[{doc_id}] Initial text too short ({len((initial_text or '').strip())} chars), skipping to markdown retry")
 
             if extracted_metadata:
                 final_metadata = {"doc_id": doc_id, "original_filename": original_filename}
@@ -467,8 +473,28 @@ class BackgroundDocumentProcessor:
             print(f"[{doc_id}] Saved Markdown to: {md_save_path}")
 
             # Retry metadata extraction with markdown content if initial extraction failed
-            # (covers PDFs with image-only cover pages where header extraction returned empty)
-            if not extracted_metadata or not (extracted_metadata.get('title') or extracted_metadata.get('authors')):
+            # or produced low-quality results (e.g., title derived from filename)
+            def _needs_retry(meta, filename):
+                if not meta:
+                    return True
+                title = meta.get('title', '')
+                authors = meta.get('authors')
+                if not title and not authors:
+                    return True
+                # Check if title looks like it was derived from the filename
+                # (LLM fabricates title from filename when text sample is empty)
+                if title:
+                    import re as _re
+                    fn_stem = _re.sub(r'\.[^.]+$', '', filename)  # Remove extension
+                    fn_normalized = fn_stem.replace('_', ' ').replace('-', ' ').lower().strip()
+                    title_normalized = title.lower().strip()
+                    if fn_normalized and (title_normalized == fn_normalized or
+                                          fn_normalized.startswith(title_normalized) or
+                                          title_normalized.startswith(fn_normalized)):
+                        return True
+                return False
+
+            if _needs_retry(extracted_metadata, original_filename):
                 # Strip image markdown before sampling — images waste chars and carry no metadata
                 import re
                 md_clean = re.sub(r'!\[.*?\]\([^)]*\)\s*', '', markdown_content)
