@@ -596,10 +596,8 @@ def classify_document_type(metadata: dict, filename: str = "") -> str:
         return 'wikipedia'
 
     # --- Priority 1: Hard signals from metadata fields (override LLM) ---
-    # ISBN + publisher is definitive proof of a book, regardless of what the LLM said
-    if isbn and metadata.get('publisher'):
-        return 'book'
-    if isbn and (metadata.get('edition') or metadata.get('chapters')):
+    # ISBN is definitive proof of a book — only books have ISBNs
+    if isbn:
         return 'book'
 
     # --- Priority 2: Trust LLM-extracted type if present and meaningful ---
