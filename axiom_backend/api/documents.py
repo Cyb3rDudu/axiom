@@ -1331,7 +1331,20 @@ async def bulk_enrich_metadata(
                     with open(md_path, 'r') as f:
                         raw = f.read()
                     clean = _re.sub(r'!\[.*?\]\([^)]*\)\s*', '', raw)
-                    doc_text = clean[:4000] + (clean[-2000:] if len(clean) > 6000 else "")
+                    # Smart sampling: skip series catalog pages in textbooks
+                    sample_start = 0
+                    first_500 = clean[:500]
+                    italic_entries = len(_re.findall(r'\*[A-Z][a-zäöü]+[\s·•,]', first_500))
+                    if italic_entries >= 5:
+                        candidates = []
+                        isbn_pos = _re.search(r'ISBN\s', clean)
+                        copyright_pos = _re.search(r'©\s*\d{4}|Alle Rechte vorbehalten', clean)
+                        late_heading = _re.search(r'\n#\s+', clean[1000:])
+                        if isbn_pos: candidates.append(max(0, isbn_pos.start() - 200))
+                        if copyright_pos: candidates.append(max(0, copyright_pos.start() - 500))
+                        if late_heading: candidates.append(1000 + late_heading.start())
+                        if candidates: sample_start = min(candidates)
+                    doc_text = clean[sample_start:sample_start + 4000] + (clean[-2000:] if len(clean) > 6000 else "")
 
                 enriched = await enrich_metadata(meta, doc_text, filename=fn)
                 if enriched:
