@@ -403,10 +403,9 @@ class BackgroundDocumentProcessor:
                 shutil.copy2(file_path, target_path)
                 print(f"[{doc_id}] Copied file to processor directory: {target_path}")
             
-            # Step 3: Extract metadata and convert to Markdown (50% progress)
+            # Step 3: Extract metadata and convert to Markdown
             print(f"[{doc_id}] Extracting metadata and converting to Markdown...")
-            self._update_job_progress_sync(job_id, user_id, 50, "running")
-            self._update_document_progress_sync(doc_id, user_id, 50, "processing")
+            self._update_document_progress_sync(doc_id, user_id, 35, "processing")
             
             # Extract metadata using appropriate method based on file type
             if original_filename.lower().endswith('.pdf'):
@@ -415,7 +414,7 @@ class BackgroundDocumentProcessor:
                 initial_text = processor.document_converter.extract_initial_text_for_metadata(target_path)
 
             # Skip LLM extraction if initial text is too short (image-only cover pages)
-            # The markdown retry after conversion will handle these cases
+            self._update_document_progress_sync(doc_id, user_id, 40, "processing")
             extracted_metadata = None
             if initial_text and len(initial_text.strip()) > 100:
                 extracted_metadata = processor.metadata_extractor.extract_and_enrich_sync(initial_text, filename=original_filename)
@@ -429,6 +428,7 @@ class BackgroundDocumentProcessor:
                 final_metadata = {"doc_id": doc_id, "original_filename": original_filename}
             
             # Convert document to Markdown based on file type
+            self._update_document_progress_sync(doc_id, user_id, 45, "processing")
             marker_images = {}  # Initialize empty dict for non-PDF files
             if original_filename.lower().endswith('.pdf'):
                 print(f"[{doc_id}] Converting PDF to Markdown using Marker with intelligent table handling...")
@@ -471,6 +471,7 @@ class BackgroundDocumentProcessor:
             with open(md_save_path, "w", encoding="utf-8") as f:
                 f.write(markdown_content)
             print(f"[{doc_id}] Saved Markdown to: {md_save_path}")
+            self._update_document_progress_sync(doc_id, user_id, 55, "processing")
 
             # Retry metadata extraction with markdown content if initial extraction failed
             # or produced low-quality results (e.g., title derived from filename)
@@ -548,16 +549,16 @@ class BackgroundDocumentProcessor:
                 import json
                 json.dump(final_metadata, f, indent=2, ensure_ascii=False)
             print(f"[{doc_id}] Saved metadata to: {metadata_save_path}")
-            
+            self._update_document_progress_sync(doc_id, user_id, 65, "processing")
+
             # No separate AI database anymore - everything is in the main database
             # The metadata was already saved to JSON file above for reference
-            
+
             chunks_added_count = 0
-            
+
             # Skip embeddings if this is metadata-only reprocessing
             if is_reprocess_only:
                 print(f"[{doc_id}] SKIPPING embeddings (metadata-only reprocess mode)")
-                self._update_job_progress_sync(job_id, user_id, 90, "running")
                 self._update_document_progress_sync(doc_id, user_id, 90, "processing")
                 
                 # Get existing chunk count from database
