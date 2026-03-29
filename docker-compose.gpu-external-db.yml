@@ -36,7 +36,6 @@ services:
       - SPACY_DATA=/root/.local/share/spacy
       - ENABLE_KNOWLEDGE_GRAPH=${ENABLE_KNOWLEDGE_GRAPH:-true}
       - ENABLE_GRAPH_RETRIEVAL=${ENABLE_GRAPH_RETRIEVAL:-false}
-      - ENTITY_ENABLE_LLM=${ENTITY_ENABLE_LLM:-false}
     networks:
       - axiom-network
     deploy:
@@ -82,7 +81,6 @@ services:
       - SPACY_DATA=/root/.local/share/spacy
       - ENABLE_KNOWLEDGE_GRAPH=${ENABLE_KNOWLEDGE_GRAPH:-true}
       - ENABLE_GRAPH_RETRIEVAL=${ENABLE_GRAPH_RETRIEVAL:-false}
-      - ENTITY_ENABLE_LLM=${ENTITY_ENABLE_LLM:-false}
     deploy:
       resources:
         reservations:

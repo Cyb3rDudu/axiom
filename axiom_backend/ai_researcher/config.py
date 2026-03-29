@@ -548,10 +548,8 @@ MARKER_LLM_BASE_URL = os.getenv("MARKER_LLM_BASE_URL", "")
 
 # --- Knowledge Graph Configuration ---
 ENABLE_KNOWLEDGE_GRAPH = os.getenv("ENABLE_KNOWLEDGE_GRAPH", "True").lower() == "true"
-# Disabled by default: without entity extraction (ENTITY_ENABLE_LLM=False), the graph
-# only contains sequential chunk links, making graph traversal an expensive sliding window
-# with no quality benefit over requesting more chunks from the vector store.
-# Enable once entity extraction is turned on to get meaningful cross-document relationships.
+# Disabled by default: graph retrieval adds latency via N+1 DB queries.
+# Enable when the knowledge graph has meaningful entity relationships (from GLiNER + mREBEL).
 ENABLE_GRAPH_RETRIEVAL = os.getenv("ENABLE_GRAPH_RETRIEVAL", "False").lower() == "true"
 
 GRAPH_RETRIEVAL_CONFIG = {
@@ -565,7 +563,6 @@ GRAPH_RETRIEVAL_CONFIG = {
 }
 
 ENTITY_EXTRACTION_CONFIG = {
-    "enable_llm_refinement": os.getenv("ENTITY_ENABLE_LLM", "False").lower() == "true",
     "batch_size": int(os.getenv("ENTITY_BATCH_SIZE", "50")),
     "confidence_threshold": float(os.getenv("ENTITY_CONFIDENCE_THRESHOLD", "0.7")),
 }

@@ -584,24 +584,15 @@ class BackgroundDocumentProcessor:
 
                                 # Detect language once from full markdown
                                 doc_language = EntityExtractor.detect_language(markdown_content)
-                                use_llm = config.ENTITY_EXTRACTION_CONFIG['enable_llm_refinement']
 
-                                entity_extractor = EntityExtractor(
-                                    llm_client=processor.metadata_extractor.client if use_llm else None,
-                                    llm_model=processor.metadata_extractor.model if use_llm else None,
-                                    enable_llm_refinement=use_llm,
-                                    language=doc_language,
-                                )
+                                entity_extractor = EntityExtractor(language=doc_language)
 
                                 entities_count = 0
-                                all_entities = []
-                                for i, chunk in enumerate(chunks):
-                                    print(f"[{doc_id}] Entity extraction chunk {i+1}/{len(chunks)}...", flush=True)
-                                    entities, relationships = entity_extractor.extract_from_chunk_sync(
+                                for chunk in chunks:
+                                    entities, _ = entity_extractor.extract_from_chunk_sync(
                                         chunk['text'],
                                         chunk['metadata']
                                     )
-
                                     for entity in entities:
                                         entity_id = graph_store.add_entity(
                                             entity['text'],
@@ -615,26 +606,79 @@ class BackgroundDocumentProcessor:
                                             doc_id
                                         )
                                         entities_count += 1
-                                    all_entities.extend(entities)
 
-                                # Cross-language canonicalization for spaCy path
-                                if not use_llm and doc_language != "en" and entity_extractor.llm_client:
-                                    try:
-                                        import asyncio as _asyncio
-                                        _asyncio.run(entity_extractor.canonicalize_entities_batch(all_entities))
-                                    except Exception:
-                                        pass  # non-fatal
-
-                                print(f"[{doc_id}] Extracted {entities_count} entities ({doc_language}, llm={'on' if use_llm else 'off'})")
+                                print(f"[{doc_id}] Extracted {entities_count} entities ({doc_language})")
                             except Exception as e_entity:
                                 print(f"[{doc_id}] Warning: Entity extraction failed: {e_entity}")
 
-                            # Build co-occurrence relationships (always, regardless of LLM setting)
+                            # Build co-occurrence relationships
                             cooccurrence_count = graph_store.build_cooccurrence_relationships(
                                 doc_id=doc_id,
                                 min_cooccurrence=2
                             )
                             print(f"[{doc_id}] Built {cooccurrence_count} co-occurrence relationships")
+
+                            # --- mREBEL relation extraction ---
+                            try:
+                                from ai_researcher.core_rag.relation_extractor import (
+                                    extract_relations_from_chunks, unload_mrebel
+                                )
+                                from ai_researcher.core_rag.model_cache import model_cache
+
+                                # Free GPU memory from embedder/reranker
+                                print(f"[{doc_id}] Freeing GPU for relation extraction...")
+                                model_cache.clear_cache()
+                                import torch, gc
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
+                                gc.collect()
+
+                                print(f"[{doc_id}] Extracting relations with mREBEL...")
+                                triples = extract_relations_from_chunks(chunks)
+
+                                # Store triples as entity relationships
+                                rel_count = 0
+                                for triple in triples:
+                                    try:
+                                        # Ensure head and tail entities exist
+                                        head_canonical = triple["head"].lower().strip()
+                                        tail_canonical = triple["tail"].lower().strip()
+
+                                        head_id = graph_store.add_entity(
+                                            triple["head"],
+                                            triple["head_type"],
+                                            head_canonical,
+                                        )
+                                        tail_id = graph_store.add_entity(
+                                            triple["tail"],
+                                            triple["tail_type"],
+                                            tail_canonical,
+                                        )
+                                        graph_store.add_entity_relationship(
+                                            source_entity_id=head_id,
+                                            target_entity_id=tail_id,
+                                            relationship_type=triple["relation"],
+                                            strength=0.8,
+                                            evidence_chunks=[triple.get("chunk_id", "")],
+                                            source="mrebel",
+                                        )
+                                        rel_count += 1
+                                    except Exception as e_rel:
+                                        logger.debug(f"Failed to store triple: {e_rel}")
+
+                                print(f"[{doc_id}] Stored {rel_count} mREBEL relations")
+
+                                # Unload mREBEL to free GPU for future embedder/reranker use
+                                unload_mrebel()
+
+                            except Exception as e_mrebel:
+                                print(f"[{doc_id}] Warning: mREBEL relation extraction failed: {e_mrebel}")
+                                try:
+                                    from ai_researcher.core_rag.relation_extractor import unload_mrebel
+                                    unload_mrebel()
+                                except Exception:
+                                    pass
+
                         except Exception as e_graph:
                             print(f"[{doc_id}] Warning: Knowledge graph building failed: {e_graph}")
 

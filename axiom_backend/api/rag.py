@@ -89,24 +89,15 @@ async def rebuild_graph(
         metadata_extractor = MetadataExtractor.from_user_settings(user_settings)
         embedder = TextEmbedder()
 
-        # Create entity extractor (uses spaCy + optional LLM)
-        entity_extractor = EntityExtractor(
-            embedder=embedder,
-            llm_client=metadata_extractor.client if config.ENTITY_EXTRACTION_CONFIG['enable_llm_refinement'] else None,
-            enable_llm_refinement=config.ENTITY_EXTRACTION_CONFIG['enable_llm_refinement']
-        )
+        # Create entity extractor (GLiNER or spaCy fallback)
+        entity_extractor = EntityExtractor()
 
         entities_count = 0
-        llm_relationships_count = 0
-        entity_id_map = {}  # canonical_form -> entity_id
-
         for chunk in chunks:
-            entities, relationships = await entity_extractor.extract_from_chunk(
+            entities, _ = entity_extractor.extract_from_chunk(
                 chunk['text'],
                 chunk['metadata']
             )
-
-            # Store entities
             for entity in entities:
                 entity_id = graph_store.add_entity(
                     entity['text'],
@@ -120,38 +111,6 @@ async def rebuild_graph(
                 )
                 entities_count += 1
 
-                # Track entity IDs for relationship building
-                key = f"{entity['canonical_form']}:{entity['type']}"
-                entity_id_map[key] = entity_id
-
-            # Store LLM-extracted relationships if any
-            if relationships and config.ENTITY_EXTRACTION_CONFIG['enable_llm_refinement']:
-                for rel in relationships:
-                    try:
-                        # Find entity IDs
-                        source_key = None
-                        target_key = None
-
-                        for key, eid in entity_id_map.items():
-                            canonical = key.split(':')[0]
-                            if canonical == entity_extractor._normalize_entity(rel.get('source', '')):
-                                source_key = key
-                            if canonical == entity_extractor._normalize_entity(rel.get('target', '')):
-                                target_key = key
-
-                        if source_key and target_key:
-                            graph_store.add_entity_relationship(
-                                entity_id_map[source_key],
-                                entity_id_map[target_key],
-                                rel.get('type', 'RELATED'),
-                                rel.get('confidence', 0.8),
-                                [chunk['metadata']['chunk_id']],
-                                source='llm'
-                            )
-                            llm_relationships_count += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to add LLM relationship: {e}")
-
         # 4. Build co-occurrence relationships (always, regardless of LLM setting)
         logger.info(f"Building co-occurrence relationships for doc_id={doc_id}")
         cooccurrence_count = graph_store.build_cooccurrence_relationships(
@@ -164,9 +123,8 @@ async def rebuild_graph(
             "doc_id": doc_id,
             "chunks_processed": len(chunks),
             "entities_extracted": entities_count,
-            "llm_relationships": llm_relationships_count,
             "cooccurrence_relationships": cooccurrence_count,
-            "message": "Knowledge graph rebuilt successfully with both co-occurrence and LLM relationships"
+            "message": "Knowledge graph rebuilt successfully"
         }
 
     except Exception as e:

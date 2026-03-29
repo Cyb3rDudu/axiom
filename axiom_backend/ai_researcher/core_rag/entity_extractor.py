@@ -3,12 +3,14 @@ Entity Extractor for Knowledge Graph
 
 Uses GLiNER (zero-shot NER) for high-quality, multilingual entity extraction
 with custom academic entity types. Falls back to spaCy if GLiNER unavailable.
+
+Relation extraction is handled separately by relation_extractor.py (mREBEL).
 """
 
 import os
 import re
 import logging
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,12 @@ _GLINER_TYPE_MAP = {
 
 # Patterns to filter from entity text
 _NOISE_RE = re.compile(r'\bet\s+al\.?$', re.IGNORECASE)
+
+# Generic words to skip as entities
+_GENERIC_WORDS = frozenset({
+    "firm", "firms", "workers", "government", "governments",
+    "countries", "borrowers", "savers", "lenders", "households",
+})
 
 # spaCy fallback label mapping (covers English and German models)
 _SPACY_LABEL_MAP = {
@@ -113,15 +121,12 @@ class EntityExtractor:
     def __init__(
         self,
         embedder=None,  # kept for API compat
-        llm_client=None,
-        llm_model: str = None,
-        enable_llm_refinement: bool = False,
+        llm_client=None,  # kept for API compat (unused)
+        llm_model: str = None,  # kept for API compat (unused)
+        enable_llm_refinement: bool = False,  # kept for API compat (unused)
         language: str = "en",
         gliner_threshold: float = 0.45,
     ):
-        self.llm_client = llm_client
-        self.llm_model = llm_model
-        self.enable_llm_refinement = enable_llm_refinement
         self.language = language
         self.gliner_threshold = gliner_threshold
         self.nlp = None  # spaCy fallback
@@ -165,7 +170,7 @@ class EntityExtractor:
             return []
 
         entities = []
-        seen = set()  # deduplicate by (text, type)
+        seen = set()
 
         for e in raw_entities:
             ent_text = e["text"].strip()
@@ -174,14 +179,9 @@ class EntityExtractor:
                 continue
             if len(ent_text) < 2 or len(ent_text) > 100:
                 continue
-            # Filter "et al." citation patterns
             if _NOISE_RE.search(ent_text):
                 continue
-            # Skip generic single common words
-            if len(ent_text.split()) == 1 and ent_text.lower() in {
-                "firm", "firms", "workers", "government", "governments",
-                "countries", "borrowers", "savers", "lenders", "households",
-            }:
+            if len(ent_text.split()) == 1 and ent_text.lower() in _GENERIC_WORDS:
                 continue
 
             key = (ent_text.lower(), ent_type)
@@ -239,7 +239,7 @@ class EntityExtractor:
             })
         return entities
 
-    # ── Shared utils ────────────────────────────────────────────────────
+    # ── Utils ───────────────────────────────────────────────────────────
 
     @staticmethod
     def _normalize(text: str) -> str:
@@ -249,11 +249,9 @@ class EntityExtractor:
     # ── Main entry points ───────────────────────────────────────────────
 
     def extract_from_chunk(
-        self,
-        chunk_text: str,
-        chunk_metadata: Dict,
+        self, chunk_text: str, chunk_metadata: Dict,
     ) -> Tuple[List[Dict], List[Dict]]:
-        """Extract entities from a chunk. Returns (entities, relationships)."""
+        """Extract entities from a chunk. Returns (entities, [])."""
         if self._gliner:
             entities = self._extract_with_gliner(chunk_text)
         else:
@@ -261,9 +259,7 @@ class EntityExtractor:
         return entities, []
 
     def extract_from_chunk_sync(
-        self,
-        chunk_text: str,
-        chunk_metadata: Dict,
+        self, chunk_text: str, chunk_metadata: Dict,
     ) -> Tuple[List[Dict], List[Dict]]:
         """Synchronous entry point (same as extract_from_chunk)."""
         return self.extract_from_chunk(chunk_text, chunk_metadata)
