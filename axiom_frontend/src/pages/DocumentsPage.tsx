@@ -166,14 +166,20 @@ const DocumentsPage: React.FC = () => {
 
   // Register for document processing completion notifications
   useEffect(() => {
-    const unsubscribe = uploadService.onDocumentProcessingComplete((documentId) => {
-      // console.log('Document processing completed:', documentId);
-      // Refresh the document list and groups when processing completes
+    const unsubscribeComplete = uploadService.onDocumentProcessingComplete((documentId) => {
       handleDocumentAdded();
       refreshGroups();
     });
 
-    return unsubscribe;
+    // Listen for reprocess/enrich progress to update document status live
+    const unsubscribeProgress = uploadService.onReprocessProgress((docId, progress, status) => {
+      // Update the document in the current list to show progress
+      const updateList = (docs: any[]) =>
+        docs.map(d => d.id === docId ? { ...d, processing_status: status, upload_progress: progress } : d);
+      setDocuments(prev => updateList(prev));
+    });
+
+    return () => { unsubscribeComplete(); unsubscribeProgress(); };
   }, [handleDocumentAdded, refreshGroups]);
 
   // Drag and drop handlers

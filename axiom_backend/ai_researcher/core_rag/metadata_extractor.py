@@ -219,6 +219,7 @@ IMPORTANT INSTRUCTIONS:
 6. CRITICAL for title extraction: Look for the MAIN title of the document, usually marked with a large heading (# in markdown). Do NOT confuse series names, collection titles, or publisher imprint names with the actual document title. The main title is typically followed by the author names.
 7. For titles: include subtitles, edition info, and issue/volume designations as part of the title (e.g., "Aktuelle Volkswirtschaftslehre Ausgabe 2022/2023", not just "Aktuelle Volkswirtschaftslehre"). The full title is needed for correct citation.
 8. If the provided text is too short or contains no meaningful document content, return null for title and other fields — do NOT guess or fabricate metadata.
+9. For titles in ALL CAPS (e.g., "GABLER KOMPAKT-LEXIKON"), convert to proper Title Case (e.g., "Gabler Kompakt-Lexikon"). Same for author names in all caps. Preserve original case only if mixed case is already used.
 
 JSON Schema:
 ```json
@@ -327,6 +328,17 @@ Extract the metadata based *only* on the text provided above and return it as JS
             if "authors" not in metadata or not isinstance(metadata["authors"], list):
                 print("MetadataExtractor: Warning - 'authors' field is missing or invalid, using empty list.")
                 metadata["authors"] = []
+
+            # Normalize ALL CAPS titles/authors to Title Case
+            title = metadata.get("title", "")
+            if title and title == title.upper() and len(title) > 5:
+                metadata["title"] = title.title()
+                print(f"MetadataExtractor: Normalized ALL CAPS title to Title Case")
+            authors = metadata.get("authors", [])
+            metadata["authors"] = [
+                a.title() if a == a.upper() and len(a) > 3 else a
+                for a in authors
+            ]
 
             # Debug: Print the extracted metadata based on document type
             doc_type = metadata.get('document_type', 'other')

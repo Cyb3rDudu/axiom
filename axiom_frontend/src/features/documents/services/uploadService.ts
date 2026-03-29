@@ -25,9 +25,12 @@ interface CompletionCallback {
   callback: (documentId: string) => void;
 }
 
+type ReprocessProgressCallback = (docId: string, progress: number, status: string) => void;
+
 export class UploadService {
   private progressCallbacks: Map<string, ProgressCallback> = new Map();
   private completionCallbacks: Set<CompletionCallback> = new Set();
+  private reprocessCallbacks: Set<ReprocessProgressCallback> = new Set();
   private connectionKey: string | null = null;
   private userId: number | null = null;
   private connectionPromise: Promise<void> | null = null;
@@ -154,10 +157,13 @@ export class UploadService {
         if (data.status === 'completed') {
           this.notifyCompletionCallbacks(docId);
         }
-      } else if (data.status === 'completed') {
-        // No upload callbacks for this doc (e.g., reprocessing/enrichment),
-        // but still notify completion so the document list refreshes
-        this.notifyCompletionCallbacks(docId);
+      } else {
+        // No upload callbacks — this is a reprocess/enrich operation
+        // Notify reprocess progress listeners for live UI updates
+        this.reprocessCallbacks.forEach(cb => cb(docId, data.progress || 0, data.status || 'processing'));
+        if (data.status === 'completed') {
+          this.notifyCompletionCallbacks(docId);
+        }
       }
     } else if (data.type === 'job_progress') {
       // Handle job progress updates
@@ -412,6 +418,11 @@ export class UploadService {
     // Remove the progress callback for dismissed file
     this.progressCallbacks.delete(fileId);
     // console.log(`File dismissed: ${fileId}`);
+  }
+
+  public onReprocessProgress(callback: ReprocessProgressCallback): () => void {
+    this.reprocessCallbacks.add(callback);
+    return () => { this.reprocessCallbacks.delete(callback); };
   }
 
   public onDocumentProcessingComplete(callback: (documentId: string) => void): () => void {

@@ -577,13 +577,14 @@ class BackgroundDocumentProcessor:
                 
                 # Chunk the content
                 print(f"[{doc_id}] Chunking Markdown content...")
+                self._update_document_progress_sync(doc_id, user_id, 72, "processing")
                 chunks = processor.chunker.chunk(markdown_content, doc_metadata=final_metadata)
                 print(f"[{doc_id}] Generated {len(chunks)} chunks")
-                
-                # Step 5: Store in vector database (90% progress)
-                print(f"[{doc_id}] Storing in vector database...")
-                self._update_job_progress_sync(job_id, user_id, 90, "running")
-                self._update_document_progress_sync(doc_id, user_id, 90, "processing")
+                self._update_document_progress_sync(doc_id, user_id, 75, "processing")
+
+                # Step 5: Embed and store in vector database
+                print(f"[{doc_id}] Embedding and storing in vector database...")
+                self._update_document_progress_sync(doc_id, user_id, 78, "processing")
                 
                 # Embed and store chunks
                 if processor.embedder and processor.vector_store and chunks:
@@ -604,6 +605,7 @@ class BackgroundDocumentProcessor:
                     )
                     chunks_added_count = len(chunks)
                     print(f"[{doc_id}] Successfully added {chunks_added_count} chunks to vector store")
+                    self._update_document_progress_sync(doc_id, user_id, 92, "processing")
 
                     # --- Index in OpenSearch for fulltext search ---
                     if config.ENABLE_OPENSEARCH:
@@ -615,6 +617,8 @@ class BackgroundDocumentProcessor:
                                 print(f"[{doc_id}] Indexed {os_indexed} chunks in OpenSearch for fulltext search")
                         except Exception as e_opensearch:
                             print(f"[{doc_id}] Warning: OpenSearch indexing failed: {e_opensearch}")
+
+                    self._update_document_progress_sync(doc_id, user_id, 94, "processing")
 
                     # --- Build Knowledge Graph ---
                     if config.ENABLE_KNOWLEDGE_GRAPH:
