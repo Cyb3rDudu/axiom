@@ -640,9 +640,12 @@ class BackgroundDocumentProcessor:
                                 rel_count = 0
                                 for triple in triples:
                                     try:
-                                        # Ensure head and tail entities exist
                                         head_canonical = triple["head"].lower().strip()
                                         tail_canonical = triple["tail"].lower().strip()
+
+                                        # Skip self-referencing triples
+                                        if head_canonical == tail_canonical:
+                                            continue
 
                                         head_id = graph_store.add_entity(
                                             triple["head"],
@@ -664,7 +667,7 @@ class BackgroundDocumentProcessor:
                                         )
                                         rel_count += 1
                                     except Exception as e_rel:
-                                        logger.debug(f"Failed to store triple: {e_rel}")
+                                        print(f"[{doc_id}] Failed to store triple: {e_rel}")
 
                                 print(f"[{doc_id}] Stored {rel_count} mREBEL relations")
 
