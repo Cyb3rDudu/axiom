@@ -230,6 +230,8 @@ graph TB
 ### Advanced Topics
 
 - **[Architecture](architecture/index.md)** - System design and components
+- **[Document Processing Pipeline](architecture/document-pipeline.md)** - Full ingestion pipeline from upload to indexed content
+- **[VRAM Management](architecture/vram-management.md)** - GPU memory sharing between ML models
 - **[Local LLM Deployment](deployment/local-llms.md)** - Running models on your hardware
 - **[Example Reports](example-reports/index.md)** - Sample outputs from various models
 - **[Troubleshooting](troubleshooting/index.md)** - Solutions to common issues
@@ -242,14 +244,17 @@ graph TB
 
     ---
 
-    **Major additions since forking from Maestro (170+ commits)**
+    **Major additions since forking from Maestro (260+ commits)**
 
+    - **RAG pipeline overhaul**: hybrid vector+BM25 search with RRF fusion, graph-enhanced retrieval, BGE-reranker-v2-m3 cross-encoder reranking
+    - **Knowledge graph**: GLiNER zero-shot NER + mREBEL relation extraction with VRAM management
+    - **PDF page numbers**: 3-tier fallback (PDF labels, header/footer parsing, physical+1) for accurate citations
+    - **Metadata enrichment**: CrossRef, OpenLibrary, OpenAlex lookups with fallback pipeline
+    - **Chat RAG prompt**: unified DOCUMENT LIBRARY + TEXT EXCERPTS architecture with source references
     - Native DeepSeek and Z.AI (Zhipu GLM) provider support with special handling
     - Configurable citation profiles: Numbered, KMU Akademie APA 7, APA 7 English, and custom
-    - RAG: Knowledge graphs, OpenSearch BM25 hybrid retrieval with RRF fusion
     - Apple Silicon MPS GPU support, device-agnostic hardware management
     - 3-level JSON fallback and context window truncation for provider robustness
-    - Document-aware RAG chat with grounded responses and embedded images
     - Deployment: Podman Quadlet, Proxmox LXC, macOS hybrid dev stack
 
 -   :material-rocket: **Version 0.1.10-alpha** <small>Released Oct 12, 2025</small>

@@ -122,23 +122,27 @@ AXIOM's capabilities are driven by specialized agents, each with distinct respon
 <div class="grid cards" markdown>
 
 -   :material-server: **Backend Services**
-    
+
     ---
-    
+
     - **FastAPI** - High-performance API framework
     - **SQLAlchemy** - ORM for database operations
     - **LangChain** - LLM orchestration
-    - **BGE-M3** - Dual embedding model
+    - **BGE-M3** - Dual embedding model (dense + sparse)
+    - **BGE-reranker-v2-m3** - Cross-encoder reranker
+    - **GLiNER** - Zero-shot multilingual NER
+    - **mREBEL** - Multilingual relation extraction
     - **AsyncIO** - Asynchronous task processing
 
 -   :material-database: **Database Layer**
-    
+
     ---
-    
+
     - **PostgreSQL** - Primary database with pgvector
+    - **OpenSearch** - BM25 fulltext index with RRF fusion
     - **JSONB** - Flexible metadata storage
     - **UUID** - Unique identifiers throughout
-    - **Vector Storage** - Hybrid dense/sparse embeddings
+    - **Vector Storage** - Hybrid dense/sparse embeddings + knowledge graph
 
 -   :material-application: **Frontend**
     
@@ -243,13 +247,17 @@ AXIOM's capabilities are driven by specialized agents, each with distinct respon
 ### Document Processing Pipeline
 1. **Upload** → Generate UUID → SHA256 deduplication
 2. **Store** → PostgreSQL record → Raw file to disk
-3. **Convert** → PDF (Marker), Word (python-docx), Markdown (direct)
-4. **Extract** → LLM metadata extraction
-5. **Chunk** → Structure-aware token-based chunking with hierarchical title padding (respects section boundaries, recursive semantic splitting for oversized chunks)
-6. **Embed** → Dual BGE-M3 embeddings (dense + sparse) with section title prepending for context
-7. **Entity Extract** → Knowledge graph entity extraction with context snippets
-8. **Index** → Store in PostgreSQL with pgvector + OpenSearch BM25 fulltext index
-9. **Retrieve** → Parallel vector + OpenSearch search with Reciprocal Rank Fusion (RRF)
+3. **Metadata** → LLM extraction → CrossRef (DOI) → OpenLibrary (ISBN) → OpenAlex (title search)
+4. **Convert** → PDF (Marker with `paginate_output`), Word (python-docx), Markdown (direct)
+5. **Page Labels** → 3-tier fallback: PDF labels → header/footer parsing → physical+1
+6. **Chunk** → Structure-aware token-based chunking with hierarchical title padding, page tracking, recursive semantic splitting
+7. **Embed** → Dual BGE-M3 embeddings (dense + sparse) with section title prepending for context
+8. **Entity Extract** → GLiNER zero-shot NER (multilingual, custom academic types)
+9. **Relation Extract** → mREBEL triple extraction (after GPU cleanup)
+10. **Index** → pgvector + OpenSearch BM25 fulltext index
+11. **Retrieve** → Hybrid search (vector + BM25 via RRF) → graph-enhanced retrieval → cross-encoder reranking
+
+For the full pipeline walkthrough, see [Document Processing Pipeline](document-pipeline.md).
 
 ### Research Execution Flow
 1. **Mission Creation** → User defines objectives
@@ -380,11 +388,16 @@ AXIOM's capabilities are driven by specialized agents, each with distinct respon
 ### Core Tables
 - **users** - User authentication and profiles
 - **documents** - Document metadata and processing status
-- **document_chunks** - Vectorized document segments
+- **document_chunks** - Vectorized document segments with page numbers
 - **chats** - Conversation sessions
 - **missions** - Research mission tracking
 - **messages** - Chat and mission messages
 - **drafts** - Writing mode drafts
+
+### Knowledge Graph Tables
+- **document_entities** - Entities extracted by GLiNER (text, type, canonical form)
+- **entity_chunk_occurrences** - Links entities to chunks and documents
+- **entity_relationships** - Typed relationships between entities (from mREBEL and co-occurrence analysis)
 
 ### Vector Storage
 - **PostgreSQL with pgvector**:
@@ -466,7 +479,12 @@ AXIOM's capabilities are driven by specialized agents, each with distinct respon
 
     **Recently Implemented:**
 
-    - **Knowledge Graphs** - Entity extraction with graph-enhanced retrieval
+    - **RAG Pipeline Overhaul** - Hybrid vector+BM25 search with RRF fusion, graph-enhanced retrieval, cross-encoder reranking (BGE-reranker-v2-m3)
+    - **GLiNER Entity Extraction** - Zero-shot multilingual NER with custom academic entity types
+    - **mREBEL Relation Extraction** - Multilingual triple extraction for knowledge graph relationships
+    - **PDF Page Numbers** - 3-tier page label extraction with end-to-end citation flow
+    - **Metadata Enrichment** - CrossRef, OpenLibrary, OpenAlex lookups with fallback pipeline
+    - **VRAM Management** - Model cache with idle timeout, aggressive GPU cleanup for mREBEL loading
     - **Citation Profiles** - Configurable citation styles (numbered, APA 6/7, custom)
     - **3-Level JSON Fallback** - Graceful degradation across all providers (json_schema → json_object → prompt-only)
     - **Context Window Truncation** - Automatic prompt truncation with correction factor retry
