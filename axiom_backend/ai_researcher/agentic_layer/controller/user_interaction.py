@@ -1068,13 +1068,22 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
 
                                 # Build source reference
                                 author_str = ", ".join(authors) if isinstance(authors, list) else str(authors)
+                                # Clean section title: strip markdown, URLs, single letters
+                                clean_section = section
+                                if clean_section:
+                                    clean_section = re.sub(r'\*+', '', clean_section)  # strip markdown bold/italic
+                                    clean_section = re.sub(r'<[^>]+>', '', clean_section)  # strip HTML
+                                    clean_section = clean_section.strip()
+                                    if len(clean_section) < 3 or clean_section.startswith("http"):
+                                        clean_section = ""
+
                                 ref = f"[{i}] {title}"
                                 if author_str:
                                     ref += f" — {author_str}"
                                 if year:
                                     ref += f" ({year})"
-                                if section:
-                                    ref += f", Section: {section}"
+                                if clean_section:
+                                    ref += f', Kapitel: "{clean_section}"'
                                 source_references.append(ref)
 
                             document_context = "\n\n---\n\n".join(context_parts)
@@ -1108,7 +1117,7 @@ SOURCE REFERENCE LIST (use these for citations at the end of your response):
 {doc_library_section}{excerpts_section}RULES:
 - For questions about what documents exist, authors, titles, years, or metadata: answer from the DOCUMENT LIBRARY section above.
 - For questions about document content, arguments, or topics: answer from the TEXT EXCERPTS section above and cite sources using [1], [2], etc.
-- At the end of your response, include a "Sources" section listing the full references from the SOURCE REFERENCE LIST for all sources you cited.
+- At the end of your response, include a "Quellen" section. Copy the entries from the SOURCE REFERENCE LIST for all [N] you cited. Do NOT modify the source titles or authors -- use them exactly as listed.
 - References and citations mentioned WITHIN the text excerpts are NOT documents in your library. Only the DOCUMENT LIBRARY list is authoritative.
 - Do NOT invent or hallucinate document titles. If you don't know, say so.
 - Images: The context may contain image references marked as [Available image: description](url:path).
