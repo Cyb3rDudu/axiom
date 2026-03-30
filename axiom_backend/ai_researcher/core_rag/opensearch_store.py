@@ -170,6 +170,9 @@ class OpenSearchStore:
                 if not chunk_id:
                     continue
 
+                # Strip fields that may have inconsistent types for OpenSearch
+                os_metadata = {k: v for k, v in metadata.items()
+                               if k not in ("page_start", "page_end", "page_label_map", "image_refs")}
                 doc = {
                     "chunk_id": chunk_id,
                     "doc_id": doc_id,
@@ -177,7 +180,7 @@ class OpenSearchStore:
                     "section_titles": " ".join(metadata.get("section_titles", [])),
                     "chunk_index": metadata.get("chunk_index", 0),
                     "token_count": metadata.get("token_count", len(text.split())),
-                    "metadata": metadata
+                    "metadata": os_metadata
                 }
 
                 # Index document (upsert by chunk_id)
