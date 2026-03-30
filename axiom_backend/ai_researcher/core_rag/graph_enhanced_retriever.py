@@ -68,25 +68,40 @@ class GraphEnhancedRetriever:
         if not use_graph or not seed_results:
             return seed_results[:n_results]
 
-        # Phase 2: Entity graph expansion
+        # Phase 2a: Query-level entity extraction → direct cross-document lookup
+        query_entity_chunks = await asyncio.to_thread(
+            self._find_chunks_by_query_entities,
+            query_text,
+            {c["id"] for c in seed_results},
+            max_results=n_results,
+        )
+
+        # Phase 2b: Seed-based entity graph expansion (existing)
         graph_chunks = await asyncio.to_thread(
             self._expand_via_entities,
             seed_results,
-            max_extra=n_results * 2,
+            max_extra=n_results,
         )
 
-        # Phase 3: Merge seeds + graph-discovered chunks
+        # Phase 3: Merge seeds + query entity chunks + graph-discovered chunks
         candidates = {}
         for chunk in seed_results:
             candidates[chunk["id"]] = chunk
 
+        for chunk in query_entity_chunks:
+            if chunk["id"] not in candidates:
+                candidates[chunk["id"]] = chunk
+
         for chunk in graph_chunks:
-            cid = chunk["id"]
-            if cid not in candidates:
-                candidates[cid] = chunk
+            if chunk["id"] not in candidates:
+                candidates[chunk["id"]] = chunk
 
         merged = list(candidates.values())
-        logger.info(f"Graph expansion: {len(seed_results)} seeds + {len(graph_chunks)} graph → {len(merged)} merged")
+        logger.info(
+            f"Graph expansion: {len(seed_results)} seeds + "
+            f"{len(query_entity_chunks)} query-entity + "
+            f"{len(graph_chunks)} graph → {len(merged)} merged"
+        )
 
         # Phase 4: Rerank merged set
         if self.base_retriever.reranker and len(merged) > n_results:
@@ -102,6 +117,107 @@ class GraphEnhancedRetriever:
                 logger.error(f"Reranking failed: {e}")
 
         return merged[:n_results]
+
+    def _find_chunks_by_query_entities(
+        self,
+        query_text: str,
+        exclude_chunk_ids: set,
+        max_results: int = 10,
+    ) -> List[Dict]:
+        """
+        Run GLiNER on the query text to extract entities, then find chunks
+        containing those entities across ALL documents. This ensures
+        cross-document coverage regardless of vector similarity.
+        """
+        from database.database import get_db
+        from sqlalchemy import text
+
+        try:
+            from .entity_extractor import EntityExtractor, GLINER_AVAILABLE, _get_gliner_model
+            if not GLINER_AVAILABLE:
+                return []
+
+            gliner = _get_gliner_model()
+            if not gliner:
+                return []
+
+            # Extract entities from the query (fast, ~5ms)
+            from .entity_extractor import GLINER_LABELS
+            raw_entities = gliner.predict_entities(
+                query_text, GLINER_LABELS, threshold=0.4, multi_label=False,
+            )
+            if not raw_entities:
+                return []
+
+            entity_texts = [e["text"].lower().strip() for e in raw_entities if len(e["text"]) >= 2]
+            if not entity_texts:
+                return []
+
+            logger.info(f"Query entities: {entity_texts}")
+
+            # Find matching entities in the knowledge graph by canonical_form
+            db = next(get_db())
+            try:
+                # Match query entities against canonical_form
+                conditions = " OR ".join(f"canonical_form ILIKE :e{i}" for i in range(len(entity_texts)))
+                params = {f"e{i}": f"%{et}%" for i, et in enumerate(entity_texts)}
+                params["limit"] = max_results
+
+                entity_rows = db.execute(text(f"""
+                    SELECT DISTINCT id::text FROM document_entities
+                    WHERE {conditions}
+                    LIMIT 50
+                """), params).fetchall()
+
+                if not entity_rows:
+                    return []
+
+                entity_ids = [r[0] for r in entity_rows]
+
+                # Find chunks containing these entities
+                eid_placeholders = ", ".join(f":eid{i}" for i in range(len(entity_ids)))
+                eid_params = {f"eid{i}": eid for i, eid in enumerate(entity_ids)}
+
+                # Exclude seed chunks
+                excl_parts = []
+                for i, cid in enumerate(exclude_chunk_ids):
+                    eid_params[f"excl{i}"] = cid
+                    excl_parts.append(f":excl{i}")
+                excl_clause = f"AND dc.chunk_id NOT IN ({', '.join(excl_parts)})" if excl_parts else ""
+
+                eid_params["limit"] = max_results
+
+                rows = db.execute(text(f"""
+                    SELECT DISTINCT ON (dc.chunk_id)
+                        dc.chunk_id, dc.chunk_text, dc.chunk_metadata, dc.doc_id::text
+                    FROM entity_chunk_occurrences eco
+                    JOIN document_chunks dc ON dc.chunk_id = eco.chunk_id
+                    WHERE eco.entity_id::text IN ({eid_placeholders})
+                    {excl_clause}
+                    LIMIT :limit
+                """), eid_params).fetchall()
+
+                chunks = []
+                for row in rows:
+                    meta = row[2] or {}
+                    meta["doc_id"] = row[3]
+                    chunks.append({
+                        "id": row[0],
+                        "text": row[1],
+                        "metadata": meta,
+                        "doc_id": row[3],
+                        "score": 0.45,
+                    })
+
+                logger.info(f"Query-entity lookup: {len(entity_texts)} entities → {len(chunks)} cross-doc chunks")
+                return chunks
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.error(f"Query-entity chunk lookup failed: {e}")
+            return []
 
     def _expand_via_entities(
         self,
