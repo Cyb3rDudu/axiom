@@ -1022,55 +1022,18 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                         except Exception as e:
                             logger.debug(f"Failed to fetch document metadata: {e}")
 
-                        # ── Step 2: Classify query — metadata vs content ──
-                        _METADATA_KEYWORDS = {
-                            "what documents", "which documents", "list documents",
-                            "list all documents", "list the documents", "list my documents",
-                            "what papers", "which papers", "list papers",
-                            "list all papers", "list the papers", "list my papers",
-                            "what do we have", "what files", "how many documents",
-                            "what authors", "which authors", "who wrote",
-                            "document inventory", "document library", "document list",
-                            "show documents", "show all documents", "show me the documents",
-                            "what docs", "show docs", "list docs", "our documents",
-                            "available documents", "uploaded documents",
-                            # German
-                            "welche dokumente", "welche papers", "was haben wir",
-                            "liste der dokumente", "welche autoren",
-                            "dokumentenbibliothek", "verfügbare dokumente",
-                        }
-                        msg_lower = user_message.lower()
-                        is_metadata_query = any(kw in msg_lower for kw in _METADATA_KEYWORDS)
+                        # ── Step 2: Search chunks ──
+                        logger.info(f"RAG chat: Searching chunks for '{user_message[:60]}...'")
+                        search_results = await doc_search_tool.execute(
+                            query=user_message,
+                            document_group_id=document_group_id,
+                            n_results=8,
+                            use_reranker=True
+                        )
 
-                        if is_metadata_query and doc_metadata_summary:
-                            # ── Metadata mode: answer from library list only ──
-                            logger.info(f"RAG chat: Metadata query detected, answering from document library")
-                            rag_system_prompt = f"""You are a helpful assistant managing a document library.
-Answer the user's question based ONLY on the document library list below.
-Be precise and list the exact documents with their metadata.
-
-Document library:
-{doc_metadata_summary}"""
-
-                            rag_messages = [
-                                {"role": "system", "content": rag_system_prompt},
-                                {"role": "user", "content": user_message}
-                            ]
-                        else:
-                            # ── Content mode: search chunks + include metadata ──
-                            logger.info(f"RAG chat: Content query, searching chunks for '{user_message[:60]}...'")
-                            search_results = await doc_search_tool.execute(
-                                query=user_message,
-                                document_group_id=document_group_id,
-                                n_results=8,
-                                use_reranker=True
-                            )
-
-                            if not search_results:
-                                logger.info("RAG chat: No document results found")
-                                return agent_output
-
-                            # Build chunk context with truncation guard
+                        # Build chunk context with truncation guard
+                        document_context = ""
+                        if search_results:
                             MAX_RAG_CONTEXT_CHARS = 12000
                             context_parts = []
                             total_chars = 0
@@ -1081,14 +1044,12 @@ Document library:
                                 title = metadata.get("title")
                                 source_label = f"{title} ({source})" if title else source
 
-                                # Truncate individual chunk if needed
                                 max_per_chunk = MAX_RAG_CONTEXT_CHARS // 8
                                 if len(chunk_text) > max_per_chunk:
                                     chunk_text = chunk_text[:max_per_chunk] + "\n[... truncated]"
 
                                 chunk_context = f"[Source {i}: {source_label}]\n{chunk_text}"
 
-                                # Add image references
                                 image_refs = metadata.get("image_refs", [])
                                 if image_refs:
                                     img_lines = [f"[Available image: {r.get('alt_text', 'Figure')}](url:{r.get('path', '')})"
@@ -1103,27 +1064,39 @@ Document library:
 
                             document_context = "\n\n---\n\n".join(context_parts)
 
-                            doc_list_section = ""
-                            if doc_metadata_summary:
-                                doc_list_section = f"""
+                        # If nothing found at all, fall back to original response
+                        if not doc_metadata_summary and not document_context:
+                            logger.info("RAG chat: No documents or chunks found")
+                            return agent_output
 
-IMPORTANT: The 'Document library' below is the authoritative list of documents you have access to.
-Do NOT treat references or citations mentioned within the text passages as documents in your library.
-
-Document library:
+                        # ── Step 3: Build unified prompt with both metadata + chunks ──
+                        doc_library_section = ""
+                        if doc_metadata_summary:
+                            doc_library_section = f"""
+DOCUMENT LIBRARY (authoritative — this is the complete list of documents you have access to):
 {doc_metadata_summary}
 """
 
-                            rag_system_prompt = f"""You are a helpful assistant that answers questions based on the user's documents.
-Use the provided document context to answer the user's question. Be specific and cite which source(s) your information comes from.
-If the context doesn't contain relevant information, say so and offer to help differently.
-Do NOT make up information that isn't in the provided context.{doc_list_section}
-When the context includes images (marked as [Available image: description](url:path)), embed them using markdown: ![description](path)"""
+                        excerpts_section = ""
+                        if document_context:
+                            excerpts_section = f"""
+RELEVANT TEXT EXCERPTS (passages FROM the documents listed above — use these to answer content questions):
+{document_context}
+"""
 
-                            rag_messages = [
-                                {"role": "system", "content": rag_system_prompt},
-                                {"role": "user", "content": f"Document Context:\n\n{document_context}\n\n---\n\nUser Question: {user_message}"}
-                            ]
+                        rag_system_prompt = f"""You are a helpful assistant that answers questions based on the user's document library.
+
+{doc_library_section}{excerpts_section}RULES:
+- For questions about what documents exist, authors, titles, years, or metadata: answer from the DOCUMENT LIBRARY section above.
+- For questions about document content, arguments, or topics: answer from the TEXT EXCERPTS section above and cite which source.
+- References and citations mentioned WITHIN the text excerpts are NOT documents in your library. Only the DOCUMENT LIBRARY list is authoritative.
+- Do NOT invent or hallucinate document titles. If you don't know, say so.
+- When the context includes images (marked as [Available image: description](url:path)), embed them using markdown: ![description](path)"""
+
+                        rag_messages = [
+                            {"role": "system", "content": rag_system_prompt},
+                            {"role": "user", "content": user_message}
+                        ]
 
                         # Add chat history for conversational context
                         if chat_history:
@@ -1146,7 +1119,7 @@ When the context includes images (marked as [Available image: description](url:p
                             response_text = rag_response.choices[0].message.content
                             response_text = re.sub(r'!\[([^\]]*)\]\(url:(/api/images/[^)]+)\)', r'![\1](\2)', response_text)
                             agent_output["response"] = response_text
-                            logger.info(f"RAG chat: Generated {'metadata' if is_metadata_query else 'content'} response")
+                            logger.info(f"RAG chat: Generated grounded response")
 
                             if rag_model_details and mission_id:
                                 await self.controller.context_manager.update_mission_stats(
