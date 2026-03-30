@@ -137,11 +137,20 @@ async def lookup_crossref(doi: str) -> Optional[dict]:
         title_list = item.get("title", [])
         title = title_list[0] if title_list else None
 
+        # Publisher
+        publisher = item.get("publisher")
+
+        # ISBN
+        isbn_list = item.get("ISBN", [])
+        isbn = isbn_list[0] if isbn_list else None
+
         result = {
             "title": title,
             "authors": authors if authors else None,
             "publication_year": year,
             "journal_or_source": journal,
+            "publisher": publisher,
+            "isbn": isbn,
             "doi": normalize_doi(item.get("DOI") or doi or ""),
             "document_type": "paper",
         }
