@@ -217,7 +217,34 @@ def delete_document_atomically_sync(
         if files_deleted:
             logger.info(f"Deleted {len(files_deleted)} physical files")
         
-        # Step 4: Delete from main database (last step - point of no return)
+        # Step 4: Clean knowledge graph entities and relationships
+        try:
+            from sqlalchemy import text as sql_text
+            # Delete entity_relationships where either side belongs exclusively to this doc
+            db.execute(sql_text("""
+                DELETE FROM entity_relationships
+                WHERE source_entity_id IN (
+                    SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id = CAST(:did AS uuid)
+                ) OR target_entity_id IN (
+                    SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id = CAST(:did AS uuid)
+                )
+            """), {"did": doc_id})
+
+            # Delete entities that are ONLY linked to this document (not shared across docs)
+            db.execute(sql_text("""
+                DELETE FROM document_entities
+                WHERE id IN (
+                    SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id = CAST(:did AS uuid)
+                ) AND id NOT IN (
+                    SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id != CAST(:did AS uuid)
+                )
+            """), {"did": doc_id})
+
+            logger.info(f"Cleaned knowledge graph for document {doc_id}")
+        except Exception as e:
+            logger.error(f"Failed to clean knowledge graph (non-fatal): {e}")
+
+        # Step 5: Delete from main database (last step - point of no return)
         try:
             db.delete(document)
             db.commit()

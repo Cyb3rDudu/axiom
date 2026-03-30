@@ -376,7 +376,33 @@ class BackgroundDocumentProcessor:
                 db.close()
             
             processor = self._get_processor_with_user_settings(user_settings)
-            
+
+            # Clean old knowledge graph data for this document (handles reprocess case)
+            try:
+                from sqlalchemy import text as sql_text
+                db_clean = next(get_db())
+                try:
+                    db_clean.execute(sql_text("""
+                        DELETE FROM entity_relationships
+                        WHERE source_entity_id IN (
+                            SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id = CAST(:did AS uuid)
+                        ) OR target_entity_id IN (
+                            SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id = CAST(:did AS uuid)
+                        )
+                    """), {"did": doc_id})
+                    db_clean.execute(sql_text("""
+                        DELETE FROM document_entities
+                        WHERE id IN (
+                            SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id = CAST(:did AS uuid)
+                        )
+                    """), {"did": doc_id})
+                    db_clean.commit()
+                    print(f"[{doc_id}] Cleaned old knowledge graph data")
+                finally:
+                    db_clean.close()
+            except Exception as e:
+                print(f"[{doc_id}] Knowledge graph cleanup failed (non-fatal): {e}")
+
             # Step 2: Process document to Markdown (30% progress)
             file_extension = original_filename.lower().split('.')[-1]
             print(f"[{doc_id}] Starting {file_extension.upper()} processing...")
