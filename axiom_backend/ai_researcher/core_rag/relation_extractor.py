@@ -81,33 +81,29 @@ def _parse_mrebel_output(decoded: str) -> List[Dict]:
         head, head_type, tail, tail_type, relation
     """
     triples = []
-    # Split on <triplet> markers
-    parts = decoded.split("<triplet>")
+    # Clean up output
+    decoded = decoded.replace("</s>", "").replace("<pad>", "")
 
-    for part in parts[1:]:  # skip first empty part
-        part = part.replace("</s>", "").replace("<pad>", "").strip()
-        if not part:
-            continue
+    # Extract all triples using findall -- handles cascading triples in one beam
+    # Pattern: <triplet> HEAD <type> TAIL <type> RELATION
+    # RELATION ends at the next <triplet>, <type>, or end of string
+    for match in re.finditer(
+        r'<triplet>\s*(.+?)\s*<(\w+)>\s*(.+?)\s*<(\w+)>\s*([^<]+)',
+        decoded
+    ):
+        head, head_type, tail, tail_type, relation = match.groups()
+        head = head.strip()
+        tail = tail.strip()
+        relation = relation.strip()
 
-        # Pattern: HEAD <type> TAIL <type> RELATION
-        match = re.match(
-            r'^(.+?)\s*<(\w+)>\s*(.+?)\s*<(\w+)>\s*(.+)$',
-            part.strip()
-        )
-        if match:
-            head, head_type, tail, tail_type, relation = match.groups()
-            head = head.strip()
-            tail = tail.strip()
-            relation = relation.strip()
-
-            if head and tail and relation and len(head) >= 2 and len(tail) >= 2:
-                triples.append({
-                    "head": head,
-                    "head_type": _MREBEL_TYPE_MAP.get(head_type.lower(), "CONCEPT"),
-                    "tail": tail,
-                    "tail_type": _MREBEL_TYPE_MAP.get(tail_type.lower(), "CONCEPT"),
-                    "relation": relation,
-                })
+        if head and tail and relation and len(head) >= 2 and len(tail) >= 2:
+            triples.append({
+                "head": head,
+                "head_type": _MREBEL_TYPE_MAP.get(head_type.lower(), "CONCEPT"),
+                "tail": tail,
+                "tail_type": _MREBEL_TYPE_MAP.get(tail_type.lower(), "CONCEPT"),
+                "relation": relation,
+            })
 
     return triples
 
