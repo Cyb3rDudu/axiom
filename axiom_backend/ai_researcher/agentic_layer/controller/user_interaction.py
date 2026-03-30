@@ -1093,7 +1093,8 @@ RELEVANT TEXT EXCERPTS (passages FROM the documents listed above — use these t
 - Do NOT invent or hallucinate document titles. If you don't know, say so.
 - Images: The context may contain image references marked as [Available image: description](url:path).
   - When the user asks generally about graphics/images/figures: list what's available by description, ask which ones they want to see. Do NOT show all images at once.
-  - When the user asks for a specific figure or diagram: show it using markdown ![description](path).
+  - When the user asks for a specific figure or diagram: only show it if the image path is explicitly referenced in the text excerpts. Do NOT guess which image file corresponds to a figure number.
+  - If you cannot determine which image matches a requested figure, say so honestly.
   - Never show journal headers, logos, or decorative images — only figures, charts, diagrams, and tables."""
 
                         rag_messages = [
