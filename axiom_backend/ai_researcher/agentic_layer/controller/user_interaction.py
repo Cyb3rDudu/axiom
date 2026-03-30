@@ -1025,12 +1025,19 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                         # ── Step 2: Classify query — metadata vs content ──
                         _METADATA_KEYWORDS = {
                             "what documents", "which documents", "list documents",
+                            "list all documents", "list the documents", "list my documents",
                             "what papers", "which papers", "list papers",
+                            "list all papers", "list the papers", "list my papers",
                             "what do we have", "what files", "how many documents",
                             "what authors", "which authors", "who wrote",
+                            "document inventory", "document library", "document list",
+                            "show documents", "show all documents", "show me the documents",
+                            "what docs", "show docs", "list docs", "our documents",
+                            "available documents", "uploaded documents",
+                            # German
                             "welche dokumente", "welche papers", "was haben wir",
                             "liste der dokumente", "welche autoren",
-                            "what docs", "show documents", "show me the documents",
+                            "dokumentenbibliothek", "verfügbare dokumente",
                         }
                         msg_lower = user_message.lower()
                         is_metadata_query = any(kw in msg_lower for kw in _METADATA_KEYWORDS)
