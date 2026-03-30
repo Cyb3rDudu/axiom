@@ -1,34 +1,41 @@
 """
 Graph-Enhanced Retriever
 
-Enhanced retrieval combining vector search with graph traversal.
+Combines vector search with knowledge graph traversal for cross-document
+entity-based chunk discovery. Uses entity relationships (from mREBEL) to
+find related chunks that vector similarity alone would miss.
 """
 
 from typing import List, Dict, Any, Optional, Set, Tuple
+from collections import deque
 import asyncio
 import logging
-from .graph_store import GraphStore, Relationship
 
 logger = logging.getLogger(__name__)
-
-GRAPH_DISCOVERED_DEFAULT_SCORE = 0.5
 
 
 class GraphEnhancedRetriever:
     """
-    Enhanced retrieval combining vector search with graph traversal.
+    Enhanced retrieval combining vector search with entity graph expansion.
+
+    Flow:
+    1. Vector search for seed chunks
+    2. Extract entities from seed chunks (via entity_chunk_occurrences)
+    3. Walk entity_relationships to find related entities
+    4. Find chunks containing related entities
+    5. Merge and rerank all candidates
     """
 
     def __init__(
         self,
         base_retriever,
-        graph_store: GraphStore,
+        graph_store,
         max_depth: int = 2,
         vector_weight: float = 0.6,
         graph_weight: float = 0.3,
         decay_factor: float = 0.6,
         min_relationship_strength: float = 0.3,
-        **kwargs  # Accept unused config keys (diversity_weight, cache_size) without error
+        **kwargs,
     ):
         self.base_retriever = base_retriever
         self.graph_store = graph_store
@@ -44,140 +51,159 @@ class GraphEnhancedRetriever:
         n_results: int = 5,
         filter_metadata: Optional[Dict[str, Any]] = None,
         use_graph: bool = True,
-        **kwargs
+        **kwargs,
     ) -> List[Dict[str, Any]]:
-        """
-        Retrieve with optional graph enhancement.
-        """
+        """Retrieve with optional entity graph enhancement."""
         # Phase 1: Vector search for seeds
-        seed_size = min(n_results, 15)
+        seed_size = min(n_results * 2, 15)
         seed_results = await self.base_retriever.retrieve(
             query_text=query_text,
             n_results=seed_size,
             filter_metadata=filter_metadata,
-            use_reranker=False,  # Skip reranking at this stage
-            use_graph=False,  # Prevent recursion
-            **kwargs
+            use_reranker=False,
+            use_graph=False,
+            **kwargs,
         )
 
-        # If graph disabled or no seeds, return base results
         if not use_graph or not seed_results:
             return seed_results[:n_results]
 
-        # Phase 2: Graph expansion
-        expanded_results = await self._expand_with_graph(
-            seeds=seed_results,
-            query_text=query_text,
-            max_candidates=50
+        # Phase 2: Entity graph expansion
+        graph_chunks = await asyncio.to_thread(
+            self._expand_via_entities,
+            seed_results,
+            max_extra=n_results * 2,
         )
 
-        # Phase 3: Final reranking
-        if self.base_retriever.reranker and len(expanded_results) > n_results:
+        # Phase 3: Merge seeds + graph-discovered chunks
+        candidates = {}
+        for chunk in seed_results:
+            candidates[chunk["id"]] = chunk
+
+        for chunk in graph_chunks:
+            cid = chunk["id"]
+            if cid not in candidates:
+                candidates[cid] = chunk
+
+        merged = list(candidates.values())
+        logger.info(f"Graph expansion: {len(seed_results)} seeds + {len(graph_chunks)} graph → {len(merged)} merged")
+
+        # Phase 4: Rerank merged set
+        if self.base_retriever.reranker and len(merged) > n_results:
             try:
                 reranked = await asyncio.to_thread(
                     self.base_retriever.reranker.rerank,
                     query_text,
-                    expanded_results[:n_results * 2],
-                    top_n=n_results
+                    merged[:n_results * 3],
+                    top_n=n_results,
                 )
                 return [item for _, item in reranked]
             except Exception as e:
                 logger.error(f"Reranking failed: {e}")
-                return expanded_results[:n_results]
 
-        return expanded_results[:n_results]
+        return merged[:n_results]
 
-    async def _expand_with_graph(
+    def _expand_via_entities(
         self,
-        seeds: List[Dict],
-        query_text: str,
-        max_candidates: int = 50
+        seed_chunks: List[Dict],
+        max_extra: int = 20,
     ) -> List[Dict]:
-        """Expand seed results using graph traversal."""
-        visited: Set[str] = set()
-        candidates: Dict[str, Tuple[Dict, float]] = {}
+        """
+        Find additional chunks by walking the entity relationship graph.
 
-        # Initialize with seeds
-        for seed in seeds:
-            chunk_id = seed['id']
-            candidates[chunk_id] = (seed, seed['score'])
-            visited.add(chunk_id)
-
-        # BFS traversal from each seed
-        for seed in seeds:
-            queue = [(seed['id'], 0, seed['score'])]
-
-            while queue and len(candidates) < max_candidates:
-                current_id, depth, parent_score = queue.pop(0)
-
-                if depth >= self.max_depth:
-                    continue
-
-                # Get neighbors
-                neighbors = self.graph_store.get_chunk_neighbors(
-                    current_id,
-                    min_strength=self.min_relationship_strength
-                )
-
-                for neighbor_id, relationship in neighbors:
-                    if neighbor_id in visited:
-                        continue
-
-                    visited.add(neighbor_id)
-
-                    # Calculate graph score with decay
-                    graph_score = relationship.strength * (
-                        self.decay_factor ** (depth + 1)
-                    )
-
-                    # Fetch chunk and compute combined score
-                    neighbor_chunk = await self._fetch_chunk(neighbor_id)
-                    if not neighbor_chunk:
-                        continue
-
-                    # Combined scoring
-                    vector_sim = neighbor_chunk.get('score', 0.5)
-                    combined_score = (
-                        self.vector_weight * vector_sim +
-                        self.graph_weight * graph_score
-                    )
-
-                    candidates[neighbor_id] = (neighbor_chunk, combined_score)
-                    queue.append((neighbor_id, depth + 1, combined_score))
-
-        # Sort by combined score
-        ranked = sorted(
-            candidates.values(),
-            key=lambda x: x[1],
-            reverse=True
-        )
-
-        return [chunk for chunk, score in ranked]
-
-    async def _fetch_chunk(self, chunk_id: str) -> Optional[Dict]:
-        """Fetch chunk data from vector store."""
+        1. Get entities from seed chunks
+        2. Find related entities (1 hop via entity_relationships)
+        3. Find chunks containing those related entities
+        4. Return chunks not already in seeds
+        """
         from database.database import get_db
         from sqlalchemy import text
 
+        seed_chunk_ids = {c["id"] for c in seed_chunks}
+        if not seed_chunk_ids:
+            return []
+
         db = next(get_db())
         try:
-            query = text("""
-                SELECT chunk_id, chunk_text, chunk_metadata, dense_embedding
-                FROM document_chunks
-                WHERE chunk_id = :chunk_id
-            """)
-            result = db.execute(query, {'chunk_id': chunk_id}).fetchone()
+            # Step 1: Get entity IDs from seed chunks
+            placeholders = ", ".join(f":cid{i}" for i in range(len(seed_chunk_ids)))
+            params = {f"cid{i}": cid for i, cid in enumerate(seed_chunk_ids)}
 
-            if result:
-                return {
-                    'id': result[0],
-                    'text': result[1],
-                    'metadata': result[2],
-                    'score': GRAPH_DISCOVERED_DEFAULT_SCORE
-                }
-            return None
+            seed_entities = db.execute(text(f"""
+                SELECT DISTINCT entity_id
+                FROM entity_chunk_occurrences
+                WHERE chunk_id IN ({placeholders})
+            """), params).fetchall()
+
+            if not seed_entities:
+                logger.debug("No entities found in seed chunks")
+                return []
+
+            seed_entity_ids = [str(r[0]) for r in seed_entities]
+            logger.debug(f"Found {len(seed_entity_ids)} entities in {len(seed_chunk_ids)} seed chunks")
+
+            # Step 2: Find related entities via entity_relationships (1 hop)
+            eid_placeholders = ", ".join(f":eid{i}" for i in range(len(seed_entity_ids)))
+            eid_params = {f"eid{i}": eid for i, eid in enumerate(seed_entity_ids)}
+            eid_params["min_strength"] = self.min_relationship_strength
+
+            related_entities = db.execute(text(f"""
+                SELECT DISTINCT
+                    CASE
+                        WHEN source_entity_id::text IN ({eid_placeholders}) THEN target_entity_id
+                        ELSE source_entity_id
+                    END as related_id,
+                    relationship_strength
+                FROM entity_relationships
+                WHERE (source_entity_id::text IN ({eid_placeholders})
+                    OR target_entity_id::text IN ({eid_placeholders}))
+                AND relationship_strength >= :min_strength
+                LIMIT 100
+            """), eid_params).fetchall()
+
+            if not related_entities:
+                logger.debug("No related entities found")
+                return []
+
+            related_ids = [str(r[0]) for r in related_entities]
+            logger.debug(f"Found {len(related_ids)} related entities")
+
+            # Step 3: Find chunks containing related entities (excluding seeds)
+            rid_placeholders = ", ".join(f":rid{i}" for i in range(len(related_ids)))
+            rid_params = {f"rid{i}": rid for i, rid in enumerate(related_ids)}
+            # Also exclude seed chunk IDs
+            excl_placeholders = ", ".join(f":excl{i}" for i in range(len(seed_chunk_ids)))
+            rid_params.update({f"excl{i}": cid for i, cid in enumerate(seed_chunk_ids)})
+            rid_params["limit"] = max_extra
+
+            graph_chunks_rows = db.execute(text(f"""
+                SELECT DISTINCT ON (dc.chunk_id)
+                    dc.chunk_id,
+                    dc.chunk_text,
+                    dc.chunk_metadata,
+                    dc.doc_id::text
+                FROM entity_chunk_occurrences eco
+                JOIN document_chunks dc ON dc.chunk_id = eco.chunk_id
+                WHERE eco.entity_id::text IN ({rid_placeholders})
+                AND eco.chunk_id NOT IN ({excl_placeholders})
+                LIMIT :limit
+            """), rid_params).fetchall()
+
+            chunks = []
+            for row in graph_chunks_rows:
+                chunks.append({
+                    "id": row[0],
+                    "text": row[1],
+                    "metadata": row[2] or {},
+                    "doc_id": row[3],
+                    "score": 0.4,  # graph-discovered score (will be reranked)
+                })
+
+            logger.info(f"Entity graph expansion found {len(chunks)} additional chunks")
+            return chunks
+
         except Exception as e:
-            logger.error(f"Failed to fetch chunk {chunk_id}: {e}")
-            return None
+            logger.error(f"Entity graph expansion failed: {e}")
+            return []
         finally:
             db.close()
