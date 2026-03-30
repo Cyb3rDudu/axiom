@@ -163,7 +163,7 @@ class DocumentSearchTool:
                     # Create lookup dictionary
                     doc_metadata_lookup = {}
                     for doc in documents:
-                        doc_metadata_lookup[doc.id] = {
+                        doc_metadata_lookup[str(doc.id)] = {
                             "original_filename": doc.original_filename or doc.filename,
                             "filename": doc.filename,
                             "title": doc.metadata_.get("title") if doc.metadata_ else None,

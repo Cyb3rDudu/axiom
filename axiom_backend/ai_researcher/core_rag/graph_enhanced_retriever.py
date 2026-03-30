@@ -191,10 +191,13 @@ class GraphEnhancedRetriever:
 
             chunks = []
             for row in graph_chunks_rows:
+                meta = row[2] or {}
+                # Ensure doc_id is in metadata for downstream enrichment
+                meta["doc_id"] = row[3]
                 chunks.append({
                     "id": row[0],
                     "text": row[1],
-                    "metadata": row[2] or {},
+                    "metadata": meta,
                     "doc_id": row[3],
                     "score": 0.4,  # graph-discovered score (will be reranked)
                 })
