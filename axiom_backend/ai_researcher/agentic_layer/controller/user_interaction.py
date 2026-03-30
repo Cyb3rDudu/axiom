@@ -1033,6 +1033,7 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
 
                         # Build chunk context with truncation guard
                         document_context = ""
+                        source_references = []
                         if search_results:
                             MAX_RAG_CONTEXT_CHARS = 12000
                             context_parts = []
@@ -1041,14 +1042,17 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                                 chunk_text = chunk.get("text", "")
                                 metadata = chunk.get("metadata", {})
                                 source = metadata.get("original_filename") or "Unknown"
-                                title = metadata.get("title")
-                                source_label = f"{title} ({source})" if title else source
+                                title = metadata.get("title") or source
+                                authors = metadata.get("authors", [])
+                                year = metadata.get("publication_year", "")
+                                section_titles = metadata.get("section_titles", [])
+                                section = section_titles[-1] if section_titles else ""
 
                                 max_per_chunk = MAX_RAG_CONTEXT_CHARS // 8
                                 if len(chunk_text) > max_per_chunk:
                                     chunk_text = chunk_text[:max_per_chunk] + "\n[... truncated]"
 
-                                chunk_context = f"[Source {i}: {source_label}]\n{chunk_text}"
+                                chunk_context = f"[Source {i}]\n{chunk_text}"
 
                                 image_refs = metadata.get("image_refs", [])
                                 if image_refs:
@@ -1061,6 +1065,17 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                                 if total_chars > MAX_RAG_CONTEXT_CHARS:
                                     break
                                 context_parts.append(chunk_context)
+
+                                # Build source reference
+                                author_str = ", ".join(authors) if isinstance(authors, list) else str(authors)
+                                ref = f"[{i}] {title}"
+                                if author_str:
+                                    ref += f" — {author_str}"
+                                if year:
+                                    ref += f" ({year})"
+                                if section:
+                                    ref += f", Section: {section}"
+                                source_references.append(ref)
 
                             document_context = "\n\n---\n\n".join(context_parts)
 
@@ -1079,16 +1094,21 @@ DOCUMENT LIBRARY (authoritative — this is the complete list of documents you h
 
                         excerpts_section = ""
                         if document_context:
+                            ref_list = "\n".join(source_references)
                             excerpts_section = f"""
 RELEVANT TEXT EXCERPTS (passages FROM the documents listed above — use these to answer content questions):
 {document_context}
+
+SOURCE REFERENCE LIST (use these for citations at the end of your response):
+{ref_list}
 """
 
                         rag_system_prompt = f"""You are a helpful assistant that answers questions based on the user's document library.
 
 {doc_library_section}{excerpts_section}RULES:
 - For questions about what documents exist, authors, titles, years, or metadata: answer from the DOCUMENT LIBRARY section above.
-- For questions about document content, arguments, or topics: answer from the TEXT EXCERPTS section above and cite which source.
+- For questions about document content, arguments, or topics: answer from the TEXT EXCERPTS section above and cite sources using [1], [2], etc.
+- At the end of your response, include a "Sources" section listing the full references from the SOURCE REFERENCE LIST for all sources you cited.
 - References and citations mentioned WITHIN the text excerpts are NOT documents in your library. Only the DOCUMENT LIBRARY list is authoritative.
 - Do NOT invent or hallucinate document titles. If you don't know, say so.
 - Images: The context may contain image references marked as [Available image: description](url:path).
