@@ -70,20 +70,43 @@ def extract_page_labels(pdf_path: str) -> Dict[int, str]:
     # Validate: check if parsed numbers are roughly sequential
     parsed_nums = [(i, int(labels[i])) for i in sorted(labels) if labels.get(i, "").isdigit()]
     if len(parsed_nums) >= len(sample_pages) * 0.3:
+        # Outlier detection: remove entries where the gap to neighbors is too large
+        # e.g., [60, 536, 537, 538] → 60 is an outlier (volume number, not page)
+        if len(parsed_nums) >= 3:
+            cleaned = []
+            for j, (phys, logical) in enumerate(parsed_nums):
+                # Compare with next entry
+                if j < len(parsed_nums) - 1:
+                    next_logical = parsed_nums[j + 1][1]
+                    gap = abs(next_logical - logical)
+                else:
+                    prev_logical = parsed_nums[j - 1][1]
+                    gap = abs(logical - prev_logical)
+
+                if gap > 20:
+                    # Check if this is the outlier or the rest is
+                    # Count how many entries are close to this one vs far
+                    close_count = sum(1 for _, l in parsed_nums if abs(l - logical) <= 20)
+                    if close_count < len(parsed_nums) * 0.5:
+                        # This entry is the outlier, skip it
+                        logger.debug(f"Page label outlier: physical={phys}, parsed={logical} (gap={gap})")
+                        del labels[phys]
+                        continue
+                cleaned.append((phys, logical))
+            parsed_nums = cleaned
+
         increasing = sum(1 for j in range(1, len(parsed_nums))
                         if parsed_nums[j][1] > parsed_nums[j - 1][1])
-        if increasing > len(parsed_nums) * 0.7:
+        if len(parsed_nums) >= 2 and increasing > len(parsed_nums) * 0.7:
             # Extrapolate to all pages based on sampled pattern
-            # Find the offset between physical and logical pages
-            if parsed_nums:
-                offsets = [logical - physical for physical, logical in parsed_nums]
-                median_offset = sorted(offsets)[len(offsets) // 2]
-                full_labels = {i: str(i + median_offset) for i in range(n)}
-                # Override with actual parsed values
-                full_labels.update(labels)
-                logger.info(f"Page labels: Tier 2 (header/footer) - offset={median_offset}")
-                doc.close()
-                return full_labels
+            offsets = [logical - physical for physical, logical in parsed_nums]
+            median_offset = sorted(offsets)[len(offsets) // 2]
+            full_labels = {i: str(i + median_offset) for i in range(n)}
+            # Override with actual parsed values
+            full_labels.update(labels)
+            logger.info(f"Page labels: Tier 2 (header/footer) - offset={median_offset}")
+            doc.close()
+            return full_labels
 
     # Tier 3: Physical page + 1
     logger.info(f"Page labels: Tier 3 (physical index + 1)")
