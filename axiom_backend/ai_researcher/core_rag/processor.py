@@ -172,6 +172,7 @@ class DocumentProcessor:
             "batch_multiplier": batch_multiplier,
             "disable_image_extraction": not config.ENABLE_IMAGE_EXTRACTION,
             "disable_image_captions": True,  # Skip LLM captions (using CLIP embeddings instead)
+            "paginate_output": True,  # Inject page markers for citation page numbers
         }
 
         # Add LLM support for enhanced OCR (formulas, tables, etc.)

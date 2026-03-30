@@ -23,7 +23,9 @@ class SourceMetadata(BaseModel):
     abstract: Optional[str] = Field(None, description="Abstract from the source")
     publication_year: Optional[int] = Field(None, description="Publication year as integer")
     doc_id: Optional[str] = Field(None, description="Document ID")
-    
+    page_start: Optional[int] = Field(None, description="Starting page number in source PDF")
+    page_end: Optional[int] = Field(None, description="Ending page number in source PDF")
+
     model_config: ClassVar[ConfigDict] = ConfigDict(extra='allow')  # Allow extra fields for backward compatibility with existing data
 
 class Note(BaseModel):

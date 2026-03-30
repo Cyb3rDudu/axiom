@@ -325,12 +325,13 @@ class WritingAgent(BaseAgent):
         use_author_year = citation_mode == "author_year"
 
         # Determine page abbreviation based on profile language
-        page_abbr = "p. XX"
+        # Determine page abbreviation prefix based on profile language
+        page_prefix = "p."
         no_page_abbr = "n.p."
         if use_author_year and hasattr(self, '_active_citation_profile') and self._active_citation_profile:
             rules = self._active_citation_profile.in_text_rules
             if "S. XX" in rules or ", S." in rules:
-                page_abbr = "S. XX"
+                page_prefix = "S."
                 no_page_abbr = "o. S."
 
         formatted_text = "## Research Notes (Grouped by Source Document/Synthesis):\n\n"
@@ -412,13 +413,24 @@ class WritingAgent(BaseAgent):
 
                 if use_author_year:
                     # Build a concrete citation example with actual author/year
-                    # Extract first author surname for the example
                     author_surname = authors.split(",")[0].split("&")[0].strip() if authors and authors != "Unknown Authors" else "Author"
                     year_example = year if year and year != "N/A" else "Jahr"
-                    cite_example = f"({author_surname}, {year_example}, {page_abbr})"
+
+                    # Check if any note in this group has page numbers
+                    has_pages = any(
+                        getattr(n.source_metadata, "page_start", None)
+                        for n in source_notes
+                    )
+                    if has_pages:
+                        cite_example = f"({author_surname}, {year_example}, {page_prefix} [page])"
+                        page_instruction = f"Use the page numbers shown in each note's [Page: X] marker"
+                    else:
+                        cite_example = f"({author_surname}, {year_example})"
+                        page_instruction = "No page numbers available for this source"
+
                     source_header = f"### Source Document: {title}\n"
                     source_header += f"**Author(s):** {authors} | **Year:** {year} | **Title:** {title}\n"
-                    source_header += f"**Cite this source as:** `{cite_example}` (use exact author name and year shown above, replace {page_abbr} with actual page number)\n\n"
+                    source_header += f"**Cite this source as:** `{cite_example}` ({page_instruction})\n\n"
                 else:
                     source_header = f"### Source Document: {simple_ref_id} (Title: {title}, Year: {year}, Authors: {authors})\n"
                     source_header += (
@@ -461,7 +473,16 @@ class WritingAgent(BaseAgent):
 
             formatted_text += source_header
             for note in source_notes:
-                formatted_text += f"- **Note ID: {note.note_id}**\n"
+                # Add page reference if available
+                pg_start = getattr(note.source_metadata, "page_start", None) if note.source_metadata else None
+                pg_end = getattr(note.source_metadata, "page_end", None) if note.source_metadata else None
+                page_label = ""
+                if pg_start and pg_start > 0:
+                    if pg_end and pg_end != pg_start:
+                        page_label = f" [Page: {pg_start}-{pg_end}]"
+                    else:
+                        page_label = f" [Page: {pg_start}]"
+                formatted_text += f"- **Note ID: {note.note_id}**{page_label}\n"
                 formatted_text += f"  - Content: {note.content}\n"
             formatted_text += "\n"
 
@@ -502,7 +523,7 @@ class WritingAgent(BaseAgent):
                             agg_surname = authors.split(",")[0].split("&")[0].strip() if authors and authors != "Unknown Authors" else "Author"
                             agg_year = year if year and year != "N/A" else "Jahr"
                             formatted_text += f"  - Document: {title} (Author(s): {authors}, Year: {year})\n"
-                            formatted_text += f"    **Cite this source as:** `({agg_surname}, {agg_year}, {page_abbr})` (replace {page_abbr} with actual page)\n"
+                            formatted_text += f"    **Cite this source as:** `({agg_surname}, {agg_year})` (add {page_prefix} [page] if page number is available)\n"
                         else:
                             formatted_text += f"  - Document: {citation_id_for_agg} (Title: {title}, Year: {year}, Authors: {authors})\n"
                             formatted_text += f"    **Use `[{citation_id_for_agg}]` when citing information derived from this document via the synthesis note.**\n"

@@ -2017,6 +2017,8 @@ If no relevant sub-questions are identified, return an empty list for "sub_quest
                         "original_filename",
                         "start_paragraph_index",
                         "end_paragraph_index",
+                        "page_start",
+                        "page_end",
                     }
                     for i, chunk_info in enumerate(overlapping_chunks_info):
                         meta = chunk_info.get("metadata", {})

@@ -5,6 +5,9 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# Marker page marker pattern: {0}------------------------------------------------
+_PAGE_MARKER_RE = re.compile(r'^\{(\d+)\}-{10,}$')
+
 class Chunker:
     """
     Splits Markdown text into overlapping chunks based on section boundaries and token budget.
@@ -235,9 +238,31 @@ class Chunker:
         if not paragraphs:
             return []
 
+        # Extract page numbers from Marker pagination markers and build
+        # paragraph_index -> page_number mapping. Strip markers from content.
+        paragraph_to_page = {}
+        current_page = 0
+        clean_paragraphs = []
+        for i, para in enumerate(paragraphs):
+            page_match = _PAGE_MARKER_RE.match(para.strip())
+            if page_match:
+                current_page = int(page_match.group(1)) + 1  # 0-indexed -> 1-indexed
+                continue  # Skip the marker paragraph itself
+            paragraph_to_page[len(clean_paragraphs)] = current_page
+            clean_paragraphs.append(para)
+
+        if not clean_paragraphs:
+            return []
+
+        # Re-extract heading hierarchy for clean paragraphs if we removed markers
+        if len(clean_paragraphs) != len(paragraphs):
+            clean_content = "\n\n".join(clean_paragraphs)
+            paragraph_to_headings = self._extract_heading_hierarchy(clean_content)
+            paragraphs = clean_paragraphs
+
         # Choose chunking mode
         if self._use_token_chunking:
-            return self._chunk_token_based(paragraphs, paragraph_to_headings, doc_metadata)
+            return self._chunk_token_based(paragraphs, paragraph_to_headings, doc_metadata, paragraph_to_page)
         else:
             return self._chunk_paragraph_based(paragraphs, doc_metadata)
 
@@ -245,17 +270,21 @@ class Chunker:
         self,
         paragraphs: List[str],
         paragraph_to_headings: Dict[int, List[str]],
-        doc_metadata: Optional[Dict[str, Any]]
+        doc_metadata: Optional[Dict[str, Any]],
+        paragraph_to_page: Optional[Dict[int, int]] = None,
     ) -> List[Dict[str, Any]]:
-        """Token-based structure-aware chunking."""
+        """Token-based structure-aware chunking with page number tracking."""
         chunks = []
         doc_id = doc_metadata.get("doc_id", "unknown_doc") if doc_metadata else "unknown_doc"
         chunk_id_counter = 0
+        paragraph_to_page = paragraph_to_page or {}
 
         current_chunk_paras = []
         current_chunk_tokens = 0
         current_start_idx = 0
         heading_stack = []
+        current_chunk_page_start = paragraph_to_page.get(0, 0)
+        current_chunk_page_end = current_chunk_page_start
 
         for i, para in enumerate(paragraphs):
             para_tokens = self._count_tokens(para)
@@ -293,16 +322,22 @@ class Chunker:
                         chunks.append(self._create_chunk(
                             sub_text, doc_id, chunk_id_counter,
                             current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
-                            heading_stack, doc_metadata
+                            heading_stack, doc_metadata,
+                            page_start=current_chunk_page_start, page_end=current_chunk_page_end,
                         ))
                         chunk_id_counter += 1
                 else:
                     chunks.append(self._create_chunk(
                         chunk_text, doc_id, chunk_id_counter,
                         current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
-                        heading_stack, doc_metadata
+                        heading_stack, doc_metadata,
+                        page_start=current_chunk_page_start, page_end=current_chunk_page_end,
                     ))
                     chunk_id_counter += 1
+
+                # Reset page tracking for new chunk
+                current_chunk_page_start = paragraph_to_page.get(i, current_chunk_page_end)
+                current_chunk_page_end = current_chunk_page_start
 
                 # Start new chunk with overlap
                 if self.overlap_tokens > 0 and current_chunk_paras:
@@ -326,6 +361,12 @@ class Chunker:
             current_chunk_paras.append(para)
             current_chunk_tokens += para_tokens
 
+            # Track page range for current chunk
+            para_page = paragraph_to_page.get(i, current_chunk_page_end)
+            if not current_chunk_paras or len(current_chunk_paras) == 1:
+                current_chunk_page_start = para_page
+            current_chunk_page_end = para_page
+
             # Update heading stack if not a heading itself
             if not is_heading:
                 heading_stack = para_headings
@@ -342,6 +383,7 @@ class Chunker:
                 last_chunk["text"] = last_chunk["text"] + "\n\n" + chunk_text
                 last_chunk["metadata"]["end_paragraph_index"] = current_start_idx + len(current_chunk_paras) - 1
                 last_chunk["metadata"]["token_count"] = self._count_tokens(last_chunk["text"])
+                last_chunk["metadata"]["page_end"] = current_chunk_page_end
             else:
                 # Check if needs recursive splitting
                 if chunk_tokens > self.max_chunk_tokens:
@@ -352,14 +394,16 @@ class Chunker:
                         chunks.append(self._create_chunk(
                             sub_text, doc_id, chunk_id_counter,
                             current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
-                            heading_stack, doc_metadata
+                            heading_stack, doc_metadata,
+                            page_start=current_chunk_page_start, page_end=current_chunk_page_end,
                         ))
                         chunk_id_counter += 1
                 else:
                     chunks.append(self._create_chunk(
                         chunk_text, doc_id, chunk_id_counter,
                         current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
-                        heading_stack, doc_metadata
+                        heading_stack, doc_metadata,
+                        page_start=current_chunk_page_start, page_end=current_chunk_page_end,
                     ))
 
         return chunks
@@ -403,7 +447,9 @@ class Chunker:
         start_para: int,
         end_para: int,
         section_titles: List[str],
-        doc_metadata: Optional[Dict[str, Any]]
+        doc_metadata: Optional[Dict[str, Any]],
+        page_start: int = 0,
+        page_end: int = 0,
     ) -> Dict[str, Any]:
         """Create a chunk dictionary with all metadata."""
         image_refs = self._extract_images_from_text(text)
@@ -416,7 +462,9 @@ class Chunker:
             "end_paragraph_index": end_para,
             "section_titles": section_titles,
             "token_count": self._count_tokens(text),
-            "image_refs": image_refs
+            "image_refs": image_refs,
+            "page_start": page_start,
+            "page_end": page_end,
         }
 
         if doc_metadata:
