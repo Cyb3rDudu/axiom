@@ -235,6 +235,7 @@ class PGVectorStore:
             else:
                 embedding_str = str(list(query_dense_embedding))
             
+            # Embed vector string directly in SQL -- not user-controllable, safe from injection
             query = text(f"""
                 WITH dense_scores AS (
                     SELECT
@@ -242,13 +243,13 @@ class PGVectorStore:
                         doc_id,
                         chunk_text,
                         chunk_metadata,
-                        1 - (CAST(dense_embedding AS vector) <=> CAST(:query_embedding AS vector)) as dense_similarity
+                        1 - (CAST(dense_embedding AS vector) <=> '{embedding_str}'::vector) as dense_similarity
                     FROM document_chunks
                     WHERE dense_embedding IS NOT NULL {where_clause}
-                    ORDER BY CAST(dense_embedding AS vector) <=> CAST(:query_embedding AS vector)
+                    ORDER BY CAST(dense_embedding AS vector) <=> '{embedding_str}'::vector
                     LIMIT :limit
                 )
-                SELECT 
+                SELECT
                     chunk_id,
                     doc_id,
                     chunk_text,
@@ -259,10 +260,9 @@ class PGVectorStore:
                 ORDER BY weighted_score DESC
                 LIMIT :n_results
             """)
-            
+
             query_params = {
-                'query_embedding': embedding_str,
-                'limit': n_results * 2,  # Get more for potential filtering
+                'limit': n_results * 2,
                 'n_results': n_results,
                 'dense_weight': dense_weight,
                 **filter_params
