@@ -1117,7 +1117,7 @@ SOURCE REFERENCE LIST (use these for citations at the end of your response):
 {doc_library_section}{excerpts_section}RULES:
 - For questions about what documents exist, authors, titles, years, or metadata: answer from the DOCUMENT LIBRARY section above.
 - For questions about document content, arguments, or topics: answer from the TEXT EXCERPTS section above and cite sources using [1], [2], etc.
-- At the end of your response, include a "Quellen" section. Copy the entries from the SOURCE REFERENCE LIST for all [N] you cited. Do NOT modify the source titles or authors -- use them exactly as listed.
+- At the end of your response, include a "Quellen" section as a markdown bullet list. For each [N] you cited, add a bullet point using the SOURCE REFERENCE LIST entry. Format: `- **[N]** Title — Authors (Year), Kapitel: "..."`. Do NOT modify source titles or authors.
 - References and citations mentioned WITHIN the text excerpts are NOT documents in your library. Only the DOCUMENT LIBRARY list is authoritative.
 - Do NOT invent or hallucinate document titles. If you don't know, say so.
 - Images: The context may contain image references marked as [Available image: description](url:path).
