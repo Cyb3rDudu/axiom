@@ -715,6 +715,35 @@ class BackgroundDocumentProcessor:
                     chunks_added_count = 0
                     print(f"[{doc_id}] Skipping embedding/storing: No embedder or vector store")
             
+            # Fallback enrichment: if only LLM sources, retry enrichment with markdown
+            existing_sources = final_metadata.get('metadata_sources', [])
+            if not any(s in existing_sources for s in ['crossref', 'openlibrary', 'openalex', 'regex_detection']):
+                try:
+                    from services.metadata_enrichment import enrich_metadata, prepare_text_sample
+                    from services import metadata_enrichment
+                    import asyncio as _aio
+
+                    md_sample = prepare_text_sample(markdown_content) if markdown_content else ""
+                    if md_sample and len(md_sample) > 100:
+                        async def _fallback_enrich():
+                            metadata_enrichment._http_client = None
+                            return await enrich_metadata(
+                                existing_metadata=final_metadata,
+                                document_text=md_sample,
+                                filename=original_filename,
+                            )
+
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as pool:
+                            enriched = pool.submit(lambda: _aio.run(_fallback_enrich())).result(timeout=30)
+                        if enriched:
+                            new_sources = enriched.get('metadata_sources', [])
+                            if len(new_sources) > len(existing_sources):
+                                final_metadata.update(enriched)
+                                print(f"[{doc_id}] Fallback enrichment succeeded: sources={new_sources}")
+                except Exception as e:
+                    print(f"[{doc_id}] Fallback enrichment failed (non-fatal): {e}")
+
             # Finalize: normalize titles, classify type, score completeness
             from services.metadata_enrichment import finalize_metadata
             final_metadata = finalize_metadata(final_metadata, original_filename)
