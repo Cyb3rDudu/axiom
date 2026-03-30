@@ -91,6 +91,19 @@ _EN_STOPWORDS = frozenset({
 })
 
 
+def unload_gliner():
+    """Unload GLiNER from GPU to free VRAM."""
+    global _gliner_model
+    if _gliner_model is not None:
+        del _gliner_model
+        _gliner_model = None
+        import torch, gc
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+        logger.info("GLiNER unloaded, GPU memory freed")
+
+
 def _get_gliner_model():
     """Lazy-load singleton GLiNER model on GPU if available."""
     global _gliner_model

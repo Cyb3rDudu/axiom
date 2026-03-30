@@ -624,14 +624,24 @@ class BackgroundDocumentProcessor:
                                     extract_relations_from_chunks, unload_mrebel
                                 )
                                 from ai_researcher.core_rag.model_cache import model_cache
+                                from ai_researcher.core_rag.entity_extractor import unload_gliner
 
-                                # Free GPU memory from embedder/reranker
+                                # Free ALL GPU models before loading mREBEL
                                 print(f"[{doc_id}] Freeing GPU for relation extraction...")
                                 model_cache.clear_cache()
+                                unload_gliner()
+                                # Clear Marker models from processor
+                                if hasattr(processor, 'converter') and processor.converter is not None:
+                                    del processor.converter
+                                    processor.converter = None
+                                if hasattr(processor, 'model_dict') and processor.model_dict is not None:
+                                    del processor.model_dict
+                                    processor.model_dict = None
                                 import torch, gc
+                                gc.collect()
                                 if torch.cuda.is_available():
                                     torch.cuda.empty_cache()
-                                gc.collect()
+                                print(f"[{doc_id}] GPU freed: {torch.cuda.memory_allocated()/1e9:.1f}GB used")
 
                                 print(f"[{doc_id}] Extracting relations with mREBEL...")
                                 triples = extract_relations_from_chunks(chunks)
