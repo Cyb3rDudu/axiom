@@ -1091,7 +1091,10 @@ RELEVANT TEXT EXCERPTS (passages FROM the documents listed above — use these t
 - For questions about document content, arguments, or topics: answer from the TEXT EXCERPTS section above and cite which source.
 - References and citations mentioned WITHIN the text excerpts are NOT documents in your library. Only the DOCUMENT LIBRARY list is authoritative.
 - Do NOT invent or hallucinate document titles. If you don't know, say so.
-- When the context includes images (marked as [Available image: description](url:path)), embed them using markdown: ![description](path)"""
+- Images: The context may contain image references marked as [Available image: description](url:path).
+  - When the user asks generally about graphics/images/figures: list what's available by description, ask which ones they want to see. Do NOT show all images at once.
+  - When the user asks for a specific figure or diagram: show it using markdown ![description](path).
+  - Never show journal headers, logos, or decorative images — only figures, charts, diagrams, and tables."""
 
                         rag_messages = [
                             {"role": "system", "content": rag_system_prompt},
