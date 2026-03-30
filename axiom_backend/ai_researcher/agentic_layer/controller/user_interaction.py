@@ -978,12 +978,11 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                 # Return the original agent_output, which contains the user-facing response
                 return agent_output
             else:
-                # Chat intent (or no specific action) — attempt RAG-grounded response
-                # Search documents and ground the LLM response in retrieved chunks
+                # Chat intent — RAG-grounded response from document library
                 try:
                     doc_search_tool = getattr(self.controller, 'document_search_tool', None)
                     if doc_search_tool and self.controller.retriever:
-                        # Fetch document metadata summary for the LLM
+                        # ── Step 1: Fetch document metadata (always) ──
                         doc_metadata_summary = ""
                         try:
                             from database.database import get_db
@@ -1008,107 +1007,150 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                                         authors = meta.get("authors", [])
                                         year = meta.get("publication_year", "")
                                         doc_type = meta.get("document_type", "")
+                                        journal = meta.get("journal_or_source", "")
+                                        doi = meta.get("doi", "")
                                         author_str = ", ".join(authors) if isinstance(authors, list) else str(authors)
-                                        doc_lines.append(f"- {title} ({author_str}, {year}) [{doc_type}]")
+                                        line = f"- {title}\n  Authors: {author_str} | Year: {year} | Type: {doc_type}"
+                                        if journal:
+                                            line += f" | Journal: {journal}"
+                                        if doi:
+                                            line += f" | DOI: {doi}"
+                                        doc_lines.append(line)
                                     doc_metadata_summary = "\n".join(doc_lines)
                             finally:
                                 db.close()
                         except Exception as e:
                             logger.debug(f"Failed to fetch document metadata: {e}")
 
-                        logger.info(f"RAG chat: Searching documents for query '{user_message[:60]}...' with group_id={document_group_id}")
-                        search_results = await doc_search_tool.execute(
-                            query=user_message,
-                            document_group_id=document_group_id,
-                            n_results=8,
-                            use_reranker=True
-                        )
+                        # ── Step 2: Classify query — metadata vs content ──
+                        _METADATA_KEYWORDS = {
+                            "what documents", "which documents", "list documents",
+                            "what papers", "which papers", "list papers",
+                            "what do we have", "what files", "how many documents",
+                            "what authors", "which authors", "who wrote",
+                            "welche dokumente", "welche papers", "was haben wir",
+                            "liste der dokumente", "welche autoren",
+                            "what docs", "show documents", "show me the documents",
+                        }
+                        msg_lower = user_message.lower()
+                        is_metadata_query = any(kw in msg_lower for kw in _METADATA_KEYWORDS)
 
-                        if search_results:
-                            # Build context from retrieved chunks
+                        if is_metadata_query and doc_metadata_summary:
+                            # ── Metadata mode: answer from library list only ──
+                            logger.info(f"RAG chat: Metadata query detected, answering from document library")
+                            rag_system_prompt = f"""You are a helpful assistant managing a document library.
+Answer the user's question based ONLY on the document library list below.
+Be precise and list the exact documents with their metadata.
+
+Document library:
+{doc_metadata_summary}"""
+
+                            rag_messages = [
+                                {"role": "system", "content": rag_system_prompt},
+                                {"role": "user", "content": user_message}
+                            ]
+                        else:
+                            # ── Content mode: search chunks + include metadata ──
+                            logger.info(f"RAG chat: Content query, searching chunks for '{user_message[:60]}...'")
+                            search_results = await doc_search_tool.execute(
+                                query=user_message,
+                                document_group_id=document_group_id,
+                                n_results=8,
+                                use_reranker=True
+                            )
+
+                            if not search_results:
+                                logger.info("RAG chat: No document results found")
+                                return agent_output
+
+                            # Build chunk context with truncation guard
+                            MAX_RAG_CONTEXT_CHARS = 12000
                             context_parts = []
+                            total_chars = 0
                             for i, chunk in enumerate(search_results, 1):
-                                text = chunk.get("text", "")
+                                chunk_text = chunk.get("text", "")
                                 metadata = chunk.get("metadata", {})
-                                source = metadata.get("original_filename") or metadata.get("filename") or "Unknown source"
+                                source = metadata.get("original_filename") or "Unknown"
                                 title = metadata.get("title")
                                 source_label = f"{title} ({source})" if title else source
-                                # Build chunk context with images
-                                chunk_context = f"[Source {i}: {source_label}]\n{text}"
 
-                                # Add image references from this chunk
+                                # Truncate individual chunk if needed
+                                max_per_chunk = MAX_RAG_CONTEXT_CHARS // 8
+                                if len(chunk_text) > max_per_chunk:
+                                    chunk_text = chunk_text[:max_per_chunk] + "\n[... truncated]"
+
+                                chunk_context = f"[Source {i}: {source_label}]\n{chunk_text}"
+
+                                # Add image references
                                 image_refs = metadata.get("image_refs", [])
                                 if image_refs:
-                                    image_lines = []
-                                    for img_ref in image_refs:
-                                        alt = img_ref.get("alt_text", "Figure")
-                                        path = img_ref.get("path", "")
-                                        if path:
-                                            image_lines.append(f"[Available image: {alt}](url:{path})")
-                                    if image_lines:
-                                        chunk_context += "\n\nImages in this source:\n" + "\n".join(image_lines)
+                                    img_lines = [f"[Available image: {r.get('alt_text', 'Figure')}](url:{r.get('path', '')})"
+                                                 for r in image_refs if r.get("path")]
+                                    if img_lines:
+                                        chunk_context += "\n\nImages:\n" + "\n".join(img_lines)
 
+                                total_chars += len(chunk_context)
+                                if total_chars > MAX_RAG_CONTEXT_CHARS:
+                                    break
                                 context_parts.append(chunk_context)
 
                             document_context = "\n\n---\n\n".join(context_parts)
 
-                            # Build RAG-grounded prompt
                             doc_list_section = ""
                             if doc_metadata_summary:
-                                doc_list_section = f"\n\nAvailable documents in the library:\n{doc_metadata_summary}\n"
+                                doc_list_section = f"""
+
+IMPORTANT: The 'Document library' below is the authoritative list of documents you have access to.
+Do NOT treat references or citations mentioned within the text passages as documents in your library.
+
+Document library:
+{doc_metadata_summary}
+"""
 
                             rag_system_prompt = f"""You are a helpful assistant that answers questions based on the user's documents.
 Use the provided document context to answer the user's question. Be specific and cite which source(s) your information comes from.
-If the document context doesn't contain relevant information to answer the question, say "I couldn't find information about that in your documents" and offer to help with a different question.
-Do NOT make up information that isn't in the provided context. Keep your response concise and helpful.
-{doc_list_section}
-When the context includes images (marked as [Available image: description](url:path)), embed them in your response using markdown: ![description](path)
-Place images where they are most relevant to your explanation. Only include images that are directly relevant to the answer."""
+If the context doesn't contain relevant information, say so and offer to help differently.
+Do NOT make up information that isn't in the provided context.{doc_list_section}
+When the context includes images (marked as [Available image: description](url:path)), embed them using markdown: ![description](path)"""
 
                             rag_messages = [
                                 {"role": "system", "content": rag_system_prompt},
                                 {"role": "user", "content": f"Document Context:\n\n{document_context}\n\n---\n\nUser Question: {user_message}"}
                             ]
 
-                            # Add chat history for conversational context
-                            if chat_history:
-                                history_messages = []
-                                for hist_user, hist_assistant in chat_history[-3:]:  # Last 3 turns
-                                    history_messages.append({"role": "user", "content": hist_user})
-                                    history_messages.append({"role": "assistant", "content": hist_assistant})
-                                # Insert history between system and current user message
-                                rag_messages = [rag_messages[0]] + history_messages + [rag_messages[1]]
+                        # Add chat history for conversational context
+                        if chat_history:
+                            history_messages = []
+                            for hist_user, hist_assistant in chat_history[-3:]:
+                                history_messages.append({"role": "user", "content": hist_user})
+                                history_messages.append({"role": "assistant", "content": hist_assistant})
+                            rag_messages = [rag_messages[0]] + history_messages + [rag_messages[-1]]
 
-                            # Call LLM with RAG context
-                            rag_response, rag_model_details = await self.controller.model_dispatcher.dispatch(
-                                messages=rag_messages,
-                                agent_mode="messenger",
-                                mission_id=mission_id,
-                                log_queue=log_queue,
-                                update_callback=update_callback
-                            )
+                        # Call LLM
+                        rag_response, rag_model_details = await self.controller.model_dispatcher.dispatch(
+                            messages=rag_messages,
+                            agent_mode="messenger",
+                            mission_id=mission_id,
+                            log_queue=log_queue,
+                            update_callback=update_callback
+                        )
 
-                            if rag_response and rag_response.choices and rag_response.choices[0].message.content:
-                                response_text = rag_response.choices[0].message.content
-                                # Clean up image URLs: remove url: prefix the LLM might keep
-                                response_text = re.sub(r'!\[([^\]]*)\]\(url:(/api/images/[^)]+)\)', r'![\1](\2)', response_text)
-                                agent_output["response"] = response_text
-                                logger.info(f"RAG chat: Generated grounded response from {len(search_results)} document chunks")
+                        if rag_response and rag_response.choices and rag_response.choices[0].message.content:
+                            response_text = rag_response.choices[0].message.content
+                            response_text = re.sub(r'!\[([^\]]*)\]\(url:(/api/images/[^)]+)\)', r'![\1](\2)', response_text)
+                            agent_output["response"] = response_text
+                            logger.info(f"RAG chat: Generated {'metadata' if is_metadata_query else 'content'} response")
 
-                                # Update stats
-                                if rag_model_details and mission_id:
-                                    await self.controller.context_manager.update_mission_stats(
-                                        mission_id, rag_model_details, log_queue, update_callback
-                                    )
-                            else:
-                                logger.warning("RAG chat: LLM returned empty response, falling back to original")
+                            if rag_model_details and mission_id:
+                                await self.controller.context_manager.update_mission_stats(
+                                    mission_id, rag_model_details, log_queue, update_callback
+                                )
                         else:
-                            logger.info("RAG chat: No document results found, using original MessengerAgent response")
+                            logger.warning("RAG chat: LLM returned empty response, falling back to original")
                     else:
-                        logger.debug("RAG chat: No document search tool or retriever available, using original response")
+                        logger.debug("RAG chat: No document search tool or retriever available")
                 except Exception as rag_error:
                     logger.error(f"RAG chat: Error during document-grounded response: {rag_error}", exc_info=True)
-                    # Fall back to original agent_output on any error
 
                 return agent_output
 
