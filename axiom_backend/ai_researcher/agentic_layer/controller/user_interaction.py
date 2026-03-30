@@ -984,6 +984,8 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     if doc_search_tool and self.controller.retriever:
                         # ── Step 1: Fetch document metadata (always) ──
                         doc_metadata_summary = ""
+                        doc_title_lookup = {}  # filename -> authoritative title
+                        doc_meta_lookup = {}   # filename -> {title, authors, year}
                         try:
                             from database.database import get_db
                             from sqlalchemy import text as sql_text
@@ -1010,6 +1012,9 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                                         journal = meta.get("journal_or_source", "")
                                         doi = meta.get("doi", "")
                                         author_str = ", ".join(authors) if isinstance(authors, list) else str(authors)
+                                        # Build authoritative lookup
+                                        doc_title_lookup[row[0]] = title
+                                        doc_meta_lookup[row[0]] = {"title": title, "authors": authors, "year": year}
                                         line = f"- {title}\n  Authors: {author_str} | Year: {year} | Type: {doc_type}"
                                         if journal:
                                             line += f" | Journal: {journal}"
@@ -1042,9 +1047,11 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                                 chunk_text = chunk.get("text", "")
                                 metadata = chunk.get("metadata", {})
                                 source = metadata.get("original_filename") or "Unknown"
-                                title = metadata.get("title") or source
-                                authors = metadata.get("authors", [])
-                                year = metadata.get("publication_year", "")
+                                # Use authoritative doc table title, not chunk metadata
+                                auth_meta = doc_meta_lookup.get(source, {})
+                                title = auth_meta.get("title") or metadata.get("title") or source
+                                authors = auth_meta.get("authors") or metadata.get("authors", [])
+                                year = auth_meta.get("year") or metadata.get("publication_year", "")
                                 section_titles = metadata.get("section_titles", [])
                                 section = section_titles[-1] if section_titles else ""
 
