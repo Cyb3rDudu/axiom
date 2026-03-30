@@ -986,6 +986,7 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                         doc_metadata_summary = ""
                         doc_title_lookup = {}  # filename -> authoritative title
                         doc_meta_lookup = {}   # filename -> {title, authors, year}
+                        doc_id_to_meta = {}    # doc_id -> {title, authors, year}
                         try:
                             from database.database import get_db
                             from sqlalchemy import text as sql_text
@@ -997,7 +998,7 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                                     filter_clause = "JOIN document_group_memberships dgm ON d.id = dgm.document_id WHERE dgm.group_id = :gid"
                                     params["gid"] = document_group_id
                                 rows = db.execute(sql_text(f"""
-                                    SELECT d.original_filename, d.metadata_
+                                    SELECT d.original_filename, d.metadata_, d.id::text
                                     FROM documents d {filter_clause}
                                     ORDER BY d.created_at DESC LIMIT 50
                                 """), params).fetchall()
@@ -1012,9 +1013,12 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                                         journal = meta.get("journal_or_source", "")
                                         doi = meta.get("doi", "")
                                         author_str = ", ".join(authors) if isinstance(authors, list) else str(authors)
-                                        # Build authoritative lookup
+                                        # Build authoritative lookups (by filename and by doc_id)
+                                        meta_entry = {"title": title, "authors": authors, "year": year}
                                         doc_title_lookup[row[0]] = title
-                                        doc_meta_lookup[row[0]] = {"title": title, "authors": authors, "year": year}
+                                        doc_meta_lookup[row[0]] = meta_entry
+                                        if len(row) > 2 and row[2]:
+                                            doc_id_to_meta[row[2]] = meta_entry
                                         line = f"- {title}\n  Authors: {author_str} | Year: {year} | Type: {doc_type}"
                                         if journal:
                                             line += f" | Journal: {journal}"
@@ -1047,9 +1051,10 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                                 chunk_text = chunk.get("text", "")
                                 metadata = chunk.get("metadata", {})
                                 source = metadata.get("original_filename") or "Unknown"
-                                # Use authoritative doc table title, not chunk metadata
-                                auth_meta = doc_meta_lookup.get(source, {})
-                                title = auth_meta.get("title") or metadata.get("title") or source
+                                doc_id = metadata.get("doc_id") or chunk.get("doc_id") or ""
+                                # Use authoritative doc table (by filename or doc_id), not chunk metadata
+                                auth_meta = doc_meta_lookup.get(source) or doc_id_to_meta.get(doc_id, {})
+                                title = auth_meta.get("title") or source
                                 authors = auth_meta.get("authors") or metadata.get("authors", [])
                                 year = auth_meta.get("year") or metadata.get("publication_year", "")
                                 section_titles = metadata.get("section_titles", [])
