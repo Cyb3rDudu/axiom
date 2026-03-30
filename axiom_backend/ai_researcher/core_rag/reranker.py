@@ -114,7 +114,7 @@ class TextReranker:
             with self._lock:
                 # Compute scores in batches
                 with torch.no_grad(): # Ensure no gradients are computed
-                     for i in tqdm(range(0, len(pairs), self.batch_size), desc="Reranking"):
+                     for i in range(0, len(pairs), self.batch_size):
                           batch_pairs = pairs[i : i + self.batch_size]
                           # Compute scores for the batch
                           # This part is now protected by the lock
