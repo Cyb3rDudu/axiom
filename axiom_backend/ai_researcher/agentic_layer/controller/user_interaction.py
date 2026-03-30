@@ -983,6 +983,39 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                 try:
                     doc_search_tool = getattr(self.controller, 'document_search_tool', None)
                     if doc_search_tool and self.controller.retriever:
+                        # Fetch document metadata summary for the LLM
+                        doc_metadata_summary = ""
+                        try:
+                            from database.database import get_db
+                            from sqlalchemy import text as sql_text
+                            db = next(get_db())
+                            try:
+                                filter_clause = ""
+                                params = {}
+                                if document_group_id:
+                                    filter_clause = "JOIN document_group_memberships dgm ON d.id = dgm.document_id WHERE dgm.group_id = :gid"
+                                    params["gid"] = document_group_id
+                                rows = db.execute(sql_text(f"""
+                                    SELECT d.original_filename, d.metadata_
+                                    FROM documents d {filter_clause}
+                                    ORDER BY d.created_at DESC LIMIT 50
+                                """), params).fetchall()
+                                if rows:
+                                    doc_lines = []
+                                    for row in rows:
+                                        meta = row[1] or {}
+                                        title = meta.get("title") or row[0]
+                                        authors = meta.get("authors", [])
+                                        year = meta.get("publication_year", "")
+                                        doc_type = meta.get("document_type", "")
+                                        author_str = ", ".join(authors) if isinstance(authors, list) else str(authors)
+                                        doc_lines.append(f"- {title} ({author_str}, {year}) [{doc_type}]")
+                                    doc_metadata_summary = "\n".join(doc_lines)
+                            finally:
+                                db.close()
+                        except Exception as e:
+                            logger.debug(f"Failed to fetch document metadata: {e}")
+
                         logger.info(f"RAG chat: Searching documents for query '{user_message[:60]}...' with group_id={document_group_id}")
                         search_results = await doc_search_tool.execute(
                             query=user_message,
@@ -1020,11 +1053,15 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                             document_context = "\n\n---\n\n".join(context_parts)
 
                             # Build RAG-grounded prompt
-                            rag_system_prompt = """You are a helpful assistant that answers questions based on the user's documents.
+                            doc_list_section = ""
+                            if doc_metadata_summary:
+                                doc_list_section = f"\n\nAvailable documents in the library:\n{doc_metadata_summary}\n"
+
+                            rag_system_prompt = f"""You are a helpful assistant that answers questions based on the user's documents.
 Use the provided document context to answer the user's question. Be specific and cite which source(s) your information comes from.
 If the document context doesn't contain relevant information to answer the question, say "I couldn't find information about that in your documents" and offer to help with a different question.
 Do NOT make up information that isn't in the provided context. Keep your response concise and helpful.
-
+{doc_list_section}
 When the context includes images (marked as [Available image: description](url:path)), embed them in your response using markdown: ![description](path)
 Place images where they are most relevant to your explanation. Only include images that are directly relevant to the answer."""
 
