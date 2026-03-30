@@ -477,11 +477,11 @@ class WritingAgent(BaseAgent):
                 pg_start = getattr(note.source_metadata, "page_start", None) if note.source_metadata else None
                 pg_end = getattr(note.source_metadata, "page_end", None) if note.source_metadata else None
                 page_label = ""
-                if pg_start and pg_start > 0:
-                    if pg_end and pg_end != pg_start:
-                        page_label = f" [Page: {pg_start}-{pg_end}]"
+                if pg_start and str(pg_start) not in ("0", "", "None"):
+                    if pg_end and str(pg_end) != str(pg_start):
+                        page_label = f" [{page_prefix} {pg_start}-{pg_end}]"
                     else:
-                        page_label = f" [Page: {pg_start}]"
+                        page_label = f" [{page_prefix} {pg_start}]"
                 formatted_text += f"- **Note ID: {note.note_id}**{page_label}\n"
                 formatted_text += f"  - Content: {note.content}\n"
             formatted_text += "\n"

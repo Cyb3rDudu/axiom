@@ -239,14 +239,18 @@ class Chunker:
             return []
 
         # Extract page numbers from Marker pagination markers and build
-        # paragraph_index -> page_number mapping. Strip markers from content.
+        # paragraph_index -> page_label mapping. Strip markers from content.
+        # Uses page_label_map from doc_metadata to convert physical index → logical label.
+        page_label_map = doc_metadata.get("page_label_map", {}) if doc_metadata else {}
         paragraph_to_page = {}
-        current_page = 0
+        current_page = "1"
         clean_paragraphs = []
         for i, para in enumerate(paragraphs):
             page_match = _PAGE_MARKER_RE.match(para.strip())
             if page_match:
-                current_page = int(page_match.group(1)) + 1  # 0-indexed -> 1-indexed
+                physical_idx = int(page_match.group(1))
+                # Map to logical label, fallback to physical + 1
+                current_page = page_label_map.get(physical_idx, str(physical_idx + 1))
                 continue  # Skip the marker paragraph itself
             paragraph_to_page[len(clean_paragraphs)] = current_page
             clean_paragraphs.append(para)
@@ -283,7 +287,7 @@ class Chunker:
         current_chunk_tokens = 0
         current_start_idx = 0
         heading_stack = []
-        current_chunk_page_start = paragraph_to_page.get(0, 0)
+        current_chunk_page_start = paragraph_to_page.get(0, "1")
         current_chunk_page_end = current_chunk_page_start
 
         for i, para in enumerate(paragraphs):
@@ -448,8 +452,8 @@ class Chunker:
         end_para: int,
         section_titles: List[str],
         doc_metadata: Optional[Dict[str, Any]],
-        page_start: int = 0,
-        page_end: int = 0,
+        page_start: str = "",
+        page_end: str = "",
     ) -> Dict[str, Any]:
         """Create a chunk dictionary with all metadata."""
         image_refs = self._extract_images_from_text(text)
@@ -468,7 +472,9 @@ class Chunker:
         }
 
         if doc_metadata:
-            chunk_meta.update({k: v for k, v in doc_metadata.items() if k != "doc_id"})
+            # Exclude large internal fields that shouldn't be stored per-chunk
+            _EXCLUDE_KEYS = {"doc_id", "page_label_map"}
+            chunk_meta.update({k: v for k, v in doc_metadata.items() if k not in _EXCLUDE_KEYS})
 
         return {
             "text": text,

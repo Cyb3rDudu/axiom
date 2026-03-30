@@ -10,9 +10,86 @@ import sys
 import signal
 from contextlib import contextmanager
 
+import re
 import torch
 import pymupdf # PyMuPDF
 import pymupdf4llm # For fallback or specific markdown conversion if needed later
+
+
+def extract_page_labels(pdf_path: str) -> Dict[int, str]:
+    """
+    Extract logical page labels from PDF with 3-tier fallback.
+
+    Tier 1: PDF embedded page labels (publisher metadata)
+    Tier 2: Header/footer page number parsing
+    Tier 3: Physical page index + 1
+
+    Returns: Dict mapping physical page index (0-based) to display label string.
+    """
+    doc = pymupdf.open(str(pdf_path))
+    n = doc.page_count
+    logger = logging.getLogger(__name__)
+
+    # Tier 1: PDF page labels
+    labels = {}
+    empty_count = 0
+    for i in range(n):
+        label = doc[i].get_label()
+        if label and label.strip():
+            labels[i] = label.strip()
+        else:
+            empty_count += 1
+
+    if empty_count < n * 0.5:
+        logger.info(f"Page labels: Tier 1 (PDF labels) - {len(labels)}/{n} pages labeled")
+        doc.close()
+        return labels
+
+    # Tier 2: Parse header/footer numbers
+    labels = {}
+    sample_pages = list(range(min(n, 20))) + list(range(max(0, n - 5), n))
+    sample_pages = sorted(set(p for p in sample_pages if p < n))
+
+    for i in sample_pages:
+        page = doc[i]
+        rect = page.rect
+        # Bottom 8% of page
+        footer_rect = pymupdf.Rect(rect.x0, rect.y1 * 0.92, rect.x1, rect.y1)
+        footer_text = page.get_text("text", clip=footer_rect).strip()
+        # Top 8% of page
+        header_rect = pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y1 * 0.08)
+        header_text = page.get_text("text", clip=header_rect).strip()
+
+        for text in [footer_text, header_text]:
+            # Look for standalone number (1-4 digits)
+            match = re.search(r'(?:^|\s)(\d{1,4})(?:\s|$)', text)
+            if match:
+                labels[i] = match.group(1)
+                break
+
+    # Validate: check if parsed numbers are roughly sequential
+    parsed_nums = [(i, int(labels[i])) for i in sorted(labels) if labels.get(i, "").isdigit()]
+    if len(parsed_nums) >= len(sample_pages) * 0.3:
+        increasing = sum(1 for j in range(1, len(parsed_nums))
+                        if parsed_nums[j][1] > parsed_nums[j - 1][1])
+        if increasing > len(parsed_nums) * 0.7:
+            # Extrapolate to all pages based on sampled pattern
+            # Find the offset between physical and logical pages
+            if parsed_nums:
+                offsets = [logical - physical for physical, logical in parsed_nums]
+                median_offset = sorted(offsets)[len(offsets) // 2]
+                full_labels = {i: str(i + median_offset) for i in range(n)}
+                # Override with actual parsed values
+                full_labels.update(labels)
+                logger.info(f"Page labels: Tier 2 (header/footer) - offset={median_offset}")
+                doc.close()
+                return full_labels
+
+    # Tier 3: Physical page + 1
+    logger.info(f"Page labels: Tier 3 (physical index + 1)")
+    labels = {i: str(i + 1) for i in range(n)}
+    doc.close()
+    return labels
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.config.parser import ConfigParser

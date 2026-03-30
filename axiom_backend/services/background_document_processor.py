@@ -522,6 +522,15 @@ class BackgroundDocumentProcessor:
                 self._update_job_progress_sync(job_id, user_id, 70, "running")
                 self._update_document_progress_sync(doc_id, user_id, 70, "processing")
                 
+                # Extract page labels for accurate citations
+                if original_filename.lower().endswith('.pdf'):
+                    try:
+                        from ai_researcher.core_rag.processor import extract_page_labels
+                        page_labels = extract_page_labels(str(target_path))
+                        final_metadata["page_label_map"] = page_labels
+                    except Exception as e_pages:
+                        print(f"[{doc_id}] Page label extraction failed (non-fatal): {e_pages}")
+
                 # Chunk the content
                 print(f"[{doc_id}] Chunking Markdown content...")
                 self._update_document_progress_sync(doc_id, user_id, 72, "processing")
