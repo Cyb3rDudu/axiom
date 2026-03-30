@@ -1052,7 +1052,7 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                                 if len(chunk_text) > max_per_chunk:
                                     chunk_text = chunk_text[:max_per_chunk] + "\n[... truncated]"
 
-                                chunk_context = f"[Source {i}]\n{chunk_text}"
+                                chunk_context = f"[Source {i} — from: {title}]\n{chunk_text}"
 
                                 image_refs = metadata.get("image_refs", [])
                                 if image_refs:
