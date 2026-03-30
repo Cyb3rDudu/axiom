@@ -709,6 +709,42 @@ class BackgroundDocumentProcessor:
             from services.metadata_enrichment import finalize_metadata
             final_metadata = finalize_metadata(final_metadata, original_filename)
 
+            # Generate description if missing -- use LLM to summarize from first chunks
+            if not final_metadata.get('abstract') and not final_metadata.get('description'):
+                try:
+                    if processor.metadata_extractor and processor.metadata_extractor.client:
+                        title = final_metadata.get('title', original_filename)
+                        # Take first ~2000 chars of markdown, skip images/headers
+                        sample_lines = []
+                        for line in (markdown_content or "").split("\n"):
+                            stripped = line.strip()
+                            if not stripped or stripped.startswith("!["):
+                                continue
+                            if stripped.startswith("#") and len(sample_lines) == 0:
+                                continue  # skip title heading
+                            sample_lines.append(stripped)
+                            if sum(len(l) for l in sample_lines) > 2000:
+                                break
+                        sample_text = "\n".join(sample_lines)
+
+                        if sample_text and len(sample_text) > 100:
+                            desc_response = processor.metadata_extractor.client.chat.completions.create(
+                                model=processor.metadata_extractor.model,
+                                messages=[{
+                                    "role": "user",
+                                    "content": f"Write a concise 2-3 sentence summary/description of this document in the same language as the text. Do not start with 'This document' or 'This paper'. Just describe what it covers.\n\nTitle: {title}\n\nText excerpt:\n{sample_text[:2000]}"
+                                }],
+                                max_tokens=200,
+                                temperature=0.3,
+                                timeout=15,
+                            )
+                            desc = desc_response.choices[0].message.content.strip()
+                            if desc and len(desc) > 20:
+                                final_metadata['abstract'] = desc
+                                print(f"[{doc_id}] Generated description: {desc[:80]}...")
+                except Exception as e_desc:
+                    print(f"[{doc_id}] Description generation failed (non-fatal): {e_desc}")
+
             processing_result = {
                 "doc_id": doc_id,
                 "original_filename": original_filename,
