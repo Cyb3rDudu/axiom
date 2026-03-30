@@ -1068,22 +1068,33 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
 
                                 # Build source reference
                                 author_str = ", ".join(authors) if isinstance(authors, list) else str(authors)
-                                # Clean section title: strip markdown, URLs, single letters
+
+                                # Extract page number from section titles (Marker embeds <span id="page-N">)
+                                page_num = ""
+                                for st in section_titles:
+                                    page_match = re.search(r'page-(\d+)', str(st))
+                                    if page_match:
+                                        page_num = page_match.group(1)
+                                        break
+
+                                # Clean section title
                                 clean_section = section
                                 if clean_section:
-                                    clean_section = re.sub(r'\*+', '', clean_section)  # strip markdown bold/italic
-                                    clean_section = re.sub(r'<[^>]+>', '', clean_section)  # strip HTML
+                                    clean_section = re.sub(r'\*+', '', clean_section)
+                                    clean_section = re.sub(r'<[^>]+>', '', clean_section)
                                     clean_section = clean_section.strip()
                                     if len(clean_section) < 3 or clean_section.startswith("http"):
                                         clean_section = ""
 
-                                ref = f"[{i}] {title}"
+                                ref = f"- **[{i}]** {title}"
                                 if author_str:
                                     ref += f" — {author_str}"
                                 if year:
                                     ref += f" ({year})"
                                 if clean_section:
-                                    ref += f', Kapitel: "{clean_section}"'
+                                    ref += f', Kap. "{clean_section}"'
+                                if page_num:
+                                    ref += f", S. {page_num}"
                                 source_references.append(ref)
 
                             document_context = "\n\n---\n\n".join(context_parts)
