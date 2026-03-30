@@ -103,37 +103,16 @@ class GraphEnhancedRetriever:
             f"{len(graph_chunks)} graph → {len(merged)} merged"
         )
 
-        # Phase 4: Rerank with document diversity
+        # Phase 4: Rerank merged set
         if self.base_retriever.reranker and len(merged) > n_results:
             try:
                 reranked = await asyncio.to_thread(
                     self.base_retriever.reranker.rerank,
                     query_text,
                     merged[:n_results * 3],
-                    top_n=n_results * 2,  # get more than needed for diversity
+                    top_n=n_results,
                 )
-                ranked_chunks = [item for _, item in reranked]
-
-                # Enforce document diversity: pick top chunk from each doc first,
-                # then fill remaining slots with best overall
-                seen_docs = set()
-                diverse_results = []
-                remaining = []
-                for chunk in ranked_chunks:
-                    doc_id = chunk.get("doc_id") or chunk.get("metadata", {}).get("doc_id", "")
-                    if doc_id not in seen_docs:
-                        seen_docs.add(doc_id)
-                        diverse_results.append(chunk)
-                    else:
-                        remaining.append(chunk)
-
-                # Fill up to n_results
-                while len(diverse_results) < n_results and remaining:
-                    diverse_results.append(remaining.pop(0))
-
-                logger.info(f"Diversity: {len(seen_docs)} docs in top {len(diverse_results)} results")
-                return diverse_results[:n_results]
-
+                return [item for _, item in reranked]
             except Exception as e:
                 logger.error(f"Reranking failed: {e}")
 
