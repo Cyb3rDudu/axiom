@@ -226,7 +226,14 @@ class PGVectorStore:
             # Dense similarity using pgvector's cosine distance operator
             # Note: <=> operator returns distance, so we use 1 - distance for similarity
             # Convert embedding to string format for casting
-            embedding_str = str(query_dense_embedding) if isinstance(query_dense_embedding, list) else query_dense_embedding
+            # pgvector needs [x,y,z] string format -- must pass as string to avoid
+            # psycopg2 converting Python list to PostgreSQL array {x,y,z} syntax
+            if hasattr(query_dense_embedding, 'tolist'):
+                embedding_str = str(query_dense_embedding.tolist())
+            elif isinstance(query_dense_embedding, list):
+                embedding_str = str(query_dense_embedding)
+            else:
+                embedding_str = str(list(query_dense_embedding))
             
             query = text(f"""
                 WITH dense_scores AS (
