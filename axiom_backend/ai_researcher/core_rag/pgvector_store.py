@@ -214,7 +214,7 @@ class PGVectorStore:
                 if "doc_id" in filter_metadata:
                     if isinstance(filter_metadata["doc_id"], dict) and "$in" in filter_metadata["doc_id"]:
                         doc_ids = filter_metadata["doc_id"]["$in"]
-                        where_clauses.append("doc_id = ANY(:filter_doc_ids::uuid[])")
+                        where_clauses.append("doc_id = ANY(CAST(:filter_doc_ids AS uuid[]))")
                         filter_params['filter_doc_ids'] = doc_ids
                     else:
                         where_clauses.append("doc_id = CAST(:filter_doc_id AS uuid)")

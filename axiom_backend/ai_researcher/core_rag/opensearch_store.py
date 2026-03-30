@@ -261,8 +261,10 @@ class OpenSearchStore:
             results = []
             for hit in response.get("hits", {}).get("hits", []):
                 source = hit.get("_source", {})
+                cid = source.get("chunk_id")
                 results.append({
-                    "chunk_id": source.get("chunk_id"),
+                    "id": cid,
+                    "chunk_id": cid,
                     "doc_id": source.get("doc_id"),
                     "text": source.get("chunk_text", ""),
                     "score": hit.get("_score", 0.0),
