@@ -19,9 +19,14 @@ class WritingChangeSuggestion(BaseModel):
             return data
         # Map common LLM variations -> expected field names
         aliases = {
-            'issue_description': ['description', 'issue', 'problem', 'issue_desc'],
-            'suggested_change': ['suggestion', 'change', 'recommended_change', 'fix', 'recommendation'],
-            'section_id': ['section', 'id'],
+            'issue_description': ['description', 'issue', 'problem', 'issue_desc',
+                                  'feedback', 'comment', 'reason', 'critique',
+                                  'finding', 'analysis', 'assessment', 'note',
+                                  'observation', 'concern', 'explanation'],
+            'suggested_change': ['suggestion', 'change', 'recommended_change', 'fix',
+                                 'recommendation', 'action', 'proposed_change',
+                                 'improvement', 'revision', 'solution'],
+            'section_id': ['section', 'id', 'target_section', 'section_name'],
         }
         for target, sources in aliases.items():
             if target not in data:
@@ -29,6 +34,19 @@ class WritingChangeSuggestion(BaseModel):
                     if src in data:
                         data[target] = data.pop(src)
                         break
+
+        # Last resort: if issue_description still missing, use any remaining string value
+        if 'issue_description' not in data:
+            known_keys = {'section_id', 'suggested_change', 'priority', 'issue_description'}
+            for key, val in list(data.items()):
+                if key not in known_keys and isinstance(val, str) and len(val) > 10:
+                    data['issue_description'] = data.pop(key)
+                    break
+
+        # If suggested_change still missing, duplicate issue_description
+        if 'suggested_change' not in data and 'issue_description' in data:
+            data['suggested_change'] = data['issue_description']
+
         return data
 
     @field_validator('priority', mode='before')
