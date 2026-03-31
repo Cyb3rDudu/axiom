@@ -464,6 +464,11 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
 
                     # Use the enhanced window metadata + document-level metadata for citations
                     doc_meta = doc_level_metadata_by_file.get(filename, {})
+                    # Extract page range from overlapping chunks
+                    _overlap_chunks = window["window_metadata"]["overlapping_chunks"]
+                    _first_chunk_meta = _overlap_chunks[0] if _overlap_chunks else {}
+                    _last_chunk_meta = _overlap_chunks[-1] if _overlap_chunks else {}
+
                     window_metadata = {
                         "beginning_omitted": window["beginning_omitted"],
                         "end_omitted": window["end_omitted"],
@@ -472,9 +477,7 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                             "start": window["window_metadata"]["start_pos"],
                             "end": window["window_metadata"]["end_pos"],
                         },
-                        "overlapping_chunks": window["window_metadata"][
-                            "overlapping_chunks"
-                        ],  # This metadata will be cleaned later
+                        "overlapping_chunks": _overlap_chunks,
                         # Document-level metadata for citation formatting
                         "title": doc_meta.get("title"),
                         "authors": doc_meta.get("authors"),
@@ -482,6 +485,9 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                         "original_filename": doc_meta.get("original_filename"),
                         "journal_or_source": doc_meta.get("journal_or_source"),
                         "url": doc_meta.get("url"),
+                        # Page range from chunks for accurate citations
+                        "page_start": _first_chunk_meta.get("page_start"),
+                        "page_end": _last_chunk_meta.get("page_end"),
                     }
 
                     # --- Get doc_id for the primary source_id ---
@@ -758,6 +764,9 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
 
                             # Use the enhanced window metadata + document-level metadata
                             p_doc_meta = proactive_doc_meta_by_file.get(filename, {})
+                            _p_overlap = window["window_metadata"]["overlapping_chunks"]
+                            _p_first = _p_overlap[0] if _p_overlap else {}
+                            _p_last = _p_overlap[-1] if _p_overlap else {}
                             window_metadata = {
                                 "beginning_omitted": window["beginning_omitted"],
                                 "end_omitted": window["end_omitted"],
@@ -766,15 +775,15 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                                     "start": window["window_metadata"]["start_pos"],
                                     "end": window["window_metadata"]["end_pos"],
                                 },
-                                "overlapping_chunks": window["window_metadata"][
-                                    "overlapping_chunks"
-                                ],  # This metadata will be cleaned later
+                                "overlapping_chunks": _p_overlap,
                                 "title": p_doc_meta.get("title"),
                                 "authors": p_doc_meta.get("authors"),
                                 "publication_year": p_doc_meta.get("publication_year"),
                                 "original_filename": p_doc_meta.get("original_filename"),
                                 "journal_or_source": p_doc_meta.get("journal_or_source"),
                                 "url": p_doc_meta.get("url"),
+                                "page_start": _p_first.get("page_start"),
+                                "page_end": _p_last.get("page_end"),
                             }
 
                             # --- Get doc_id for the primary source_id ---
@@ -1056,6 +1065,9 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                     else "unknown"
                 )
                 s_doc_meta = struct_doc_meta_by_file.get(filename, {})
+                _s_overlap = window["window_metadata"]["overlapping_chunks"]
+                _s_first = _s_overlap[0] if _s_overlap else {}
+                _s_last = _s_overlap[-1] if _s_overlap else {}
                 window_metadata = {
                     "beginning_omitted": window["beginning_omitted"],
                     "end_omitted": window["end_omitted"],
@@ -1064,15 +1076,15 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                         "start": window["window_metadata"]["start_pos"],
                         "end": window["window_metadata"]["end_pos"],
                     },
-                    "overlapping_chunks": window["window_metadata"][
-                        "overlapping_chunks"
-                    ],
+                    "overlapping_chunks": _s_overlap,
                     "title": s_doc_meta.get("title"),
                     "authors": s_doc_meta.get("authors"),
                     "publication_year": s_doc_meta.get("publication_year"),
                     "original_filename": s_doc_meta.get("original_filename"),
                     "journal_or_source": s_doc_meta.get("journal_or_source"),
                     "url": s_doc_meta.get("url"),
+                    "page_start": _s_first.get("page_start"),
+                    "page_end": _s_last.get("page_end"),
                 }
                 doc_id_for_note = "unknown_doc"
                 if window_metadata["overlapping_chunks"]:
@@ -1508,6 +1520,9 @@ Now, generate the questions for the provided research request.
 
                 # Use the enhanced window metadata + document-level metadata
                 i_doc_meta = initial_doc_meta_by_file.get(filename, {})
+                _i_overlap = window["window_metadata"]["overlapping_chunks"]
+                _i_first = _i_overlap[0] if _i_overlap else {}
+                _i_last = _i_overlap[-1] if _i_overlap else {}
                 window_metadata = {
                     "beginning_omitted": window["beginning_omitted"],
                     "end_omitted": window["end_omitted"],
@@ -1516,15 +1531,15 @@ Now, generate the questions for the provided research request.
                         "start": window["window_metadata"]["start_pos"],
                         "end": window["window_metadata"]["end_pos"],
                     },
-                    "overlapping_chunks": window["window_metadata"][
-                        "overlapping_chunks"
-                    ],  # This metadata will be cleaned later
+                    "overlapping_chunks": _i_overlap,
                     "title": i_doc_meta.get("title"),
                     "authors": i_doc_meta.get("authors"),
                     "publication_year": i_doc_meta.get("publication_year"),
                     "original_filename": i_doc_meta.get("original_filename"),
                     "journal_or_source": i_doc_meta.get("journal_or_source"),
                     "url": i_doc_meta.get("url"),
+                    "page_start": _i_first.get("page_start"),
+                    "page_end": _i_last.get("page_end"),
                 }
 
                 # --- Get doc_id for the primary source_id ---
