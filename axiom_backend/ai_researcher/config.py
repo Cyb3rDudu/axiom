@@ -276,6 +276,7 @@ AGENT_ROLE_MODEL_TYPE = {
     "writing": "mid",
     "simplified_writing": "mid",
     "reflection": "intelligent",
+    "writing_reflection": "mid",  # Use mid (deepseek-chat) not reasoner -- avoids truncation
     "messenger": "mid",
     "note_assignment": "fast",
     "query_preparation": "intelligent",

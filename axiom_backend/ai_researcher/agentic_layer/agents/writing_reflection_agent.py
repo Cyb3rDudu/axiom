@@ -243,7 +243,7 @@ Task: Output ONLY a JSON object conforming to the WritingReflectionOutput schema
 
                 response, model_call_details = await self._call_llm(
                     user_prompt=prompt,
-                    agent_mode="reflection",
+                    agent_mode="writing_reflection",
                     response_format=current_response_format,
                     log_queue=log_queue,
                     update_callback=update_callback,
