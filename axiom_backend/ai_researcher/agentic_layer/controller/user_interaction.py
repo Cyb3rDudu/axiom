@@ -659,19 +659,21 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     if questions:
                         # Store the questions in mission metadata
                         await self.controller.context_manager.update_mission_metadata(
-                            mission_id, 
+                            mission_id,
                             {"initial_questions": questions}
                         )
-                        
+
                         # Update mission stats
                         if model_details:
                             await self.controller.context_manager.update_mission_stats(mission_id, model_details, log_queue, update_callback)
-                        
-                        # Update the agent response to include the questions
-                        questions_text = "\n".join([f"- {q}" for q in questions])
+
+                        # Replace the MessengerAgent's response entirely with a clean
+                        # message + the ResearchAgent's questions only. The MessengerAgent
+                        # often includes its own question suggestions that duplicate/conflict.
                         lang = _detect_language(self.controller, mission_id, agent_output.get("response"))
-                        agent_output["response"] = f"{agent_output['response']}\n\n{_get_ui_string('questions_intro', lang)}\n\n{questions_text}\n\n{_get_ui_string('questions_prompt', lang)}"
-                        agent_output["questions"] = questions  # Add questions to the response for frontend use
+                        questions_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(questions)])
+                        agent_output["response"] = f"{_get_ui_string('questions_intro', lang)}\n\n{questions_text}\n\n{_get_ui_string('questions_prompt', lang)}"
+                        agent_output["questions"] = questions
                         
                         logger.info(f"Generated {len(questions)} initial questions for mission {mission_id} via ResearchAgent and included them in chat response")
                     
