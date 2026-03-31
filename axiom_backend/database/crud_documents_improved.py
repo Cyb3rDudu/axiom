@@ -159,21 +159,44 @@ def delete_document_atomically_sync(
                 logger.info(f"Document {doc_id} does not exist - may already be deleted")
                 return True
         
-        # Step 2: Delete from ChromaDB vector store
+        # Step 2: Clean knowledge graph BEFORE deleting chunks (CASCADE would remove occurrences)
+        try:
+            from sqlalchemy import text as sql_text
+            db.execute(sql_text("""
+                DELETE FROM entity_relationships
+                WHERE source_entity_id IN (
+                    SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id = CAST(:did AS uuid)
+                ) OR target_entity_id IN (
+                    SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id = CAST(:did AS uuid)
+                )
+            """), {"did": doc_id})
+            db.execute(sql_text("""
+                DELETE FROM document_entities
+                WHERE id IN (
+                    SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id = CAST(:did AS uuid)
+                ) AND id NOT IN (
+                    SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id != CAST(:did AS uuid)
+                )
+            """), {"did": doc_id})
+            db.flush()
+            logger.info(f"Cleaned knowledge graph for document {doc_id}")
+        except Exception as e:
+            logger.error(f"Failed to clean knowledge graph (non-fatal): {e}")
+
+        # Step 3: Delete from vector store
         try:
             from ai_researcher.core_rag.vector_store_singleton import get_vector_store
             vector_store = get_vector_store()
             dense_deleted, sparse_deleted = vector_store.delete_document(doc_id)
-            
+
             if dense_deleted > 0 or sparse_deleted > 0:
                 logger.info(f"Deleted {dense_deleted + sparse_deleted} chunks from vector store")
             else:
                 logger.info(f"No chunks found in vector store for {doc_id}")
         except Exception as e:
             logger.error(f"Failed to delete from vector store: {e}")
-            # Continue with other deletions even if vector store fails
-        
-        # Step 3: Delete physical files
+
+        # Step 4: Delete physical files
         import shutil
         from pathlib import Path
         
@@ -217,33 +240,6 @@ def delete_document_atomically_sync(
         if files_deleted:
             logger.info(f"Deleted {len(files_deleted)} physical files")
         
-        # Step 4: Clean knowledge graph entities and relationships
-        try:
-            from sqlalchemy import text as sql_text
-            # Delete entity_relationships where either side belongs exclusively to this doc
-            db.execute(sql_text("""
-                DELETE FROM entity_relationships
-                WHERE source_entity_id IN (
-                    SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id = CAST(:did AS uuid)
-                ) OR target_entity_id IN (
-                    SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id = CAST(:did AS uuid)
-                )
-            """), {"did": doc_id})
-
-            # Delete entities that are ONLY linked to this document (not shared across docs)
-            db.execute(sql_text("""
-                DELETE FROM document_entities
-                WHERE id IN (
-                    SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id = CAST(:did AS uuid)
-                ) AND id NOT IN (
-                    SELECT entity_id FROM entity_chunk_occurrences WHERE doc_id != CAST(:did AS uuid)
-                )
-            """), {"did": doc_id})
-
-            logger.info(f"Cleaned knowledge graph for document {doc_id}")
-        except Exception as e:
-            logger.error(f"Failed to clean knowledge graph (non-fatal): {e}")
-
         # Step 5: Delete from main database (last step - point of no return)
         try:
             db.delete(document)
