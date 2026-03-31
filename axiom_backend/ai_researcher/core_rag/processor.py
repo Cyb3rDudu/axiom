@@ -101,9 +101,35 @@ def extract_page_labels(pdf_path: str) -> Dict[int, str]:
             # Extrapolate to all pages based on sampled pattern
             offsets = [logical - physical for physical, logical in parsed_nums]
             median_offset = sorted(offsets)[len(offsets) // 2]
-            full_labels = {i: str(i + median_offset) for i in range(n)}
-            # Override with actual parsed values
+            full_labels = {}
+            for i in range(n):
+                val = i + median_offset
+                if val < 1:
+                    full_labels[i] = ""  # Front matter before page 1
+                else:
+                    full_labels[i] = str(val)
+            # Override with actual parsed values (including Roman numerals)
             full_labels.update(labels)
+
+            # Also try to parse Roman numerals from front matter headers
+            _ROMAN_RE = re.compile(r'^((?:X{0,3})(?:IX|IV|V?I{0,3}))$', re.IGNORECASE)
+            for i in range(min(n, 30)):
+                if full_labels.get(i):
+                    continue  # Already has a label
+                page = doc[i]
+                rect = page.rect
+                header_rect = pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y1 * 0.08)
+                header_text = page.get_text("text", clip=header_rect).strip()
+                footer_rect = pymupdf.Rect(rect.x0, rect.y1 * 0.92, rect.x1, rect.y1)
+                footer_text = page.get_text("text", clip=footer_rect).strip()
+                for text_block in [header_text, footer_text]:
+                    for word in text_block.split():
+                        if _ROMAN_RE.match(word.strip()):
+                            full_labels[i] = word.strip().upper()
+                            break
+                    if full_labels.get(i):
+                        break
+
             logger.info(f"Page labels: Tier 2 (header/footer) - offset={median_offset}")
             doc.close()
             return full_labels
