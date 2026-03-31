@@ -602,6 +602,14 @@ class BackgroundDocumentProcessor:
 
                     self._update_document_progress_sync(doc_id, user_id, 94, "processing")
 
+                    # Unload embedder after embedding is done -- no longer needed
+                    try:
+                        from ai_researcher.core_rag.model_cache import model_cache as _mc
+                        _mc.unload_embedder()
+                        print(f"[{doc_id}] Embedder unloaded after chunk storage")
+                    except Exception:
+                        pass
+
                     # --- Build Knowledge Graph ---
                     if config.ENABLE_KNOWLEDGE_GRAPH:
                         try:
@@ -643,6 +651,11 @@ class BackgroundDocumentProcessor:
                                         entities_count += 1
 
                                 print(f"[{doc_id}] Extracted {entities_count} entities ({doc_language})")
+
+                                # Unload GLiNER after entity extraction
+                                from ai_researcher.core_rag.model_cache import model_cache as _mc2
+                                _mc2.unload_gliner()
+                                print(f"[{doc_id}] GLiNER unloaded after entity extraction")
                             except Exception as e_entity:
                                 print(f"[{doc_id}] Warning: Entity extraction failed: {e_entity}")
 
@@ -659,12 +672,10 @@ class BackgroundDocumentProcessor:
                                     extract_relations_from_chunks, unload_mrebel
                                 )
                                 from ai_researcher.core_rag.model_cache import model_cache
-                                from ai_researcher.core_rag.entity_extractor import unload_gliner
 
-                                # Free ALL GPU models before loading mREBEL
-                                print(f"[{doc_id}] Freeing GPU for relation extraction...")
-                                model_cache.clear_cache()
-                                unload_gliner()
+                                # Unload ALL other GPU models before loading mREBEL
+                                print(f"[{doc_id}] Unloading GPU models for mREBEL...")
+                                model_cache.unload_all()
                                 # Clear Marker models from processor
                                 if hasattr(processor, 'converter') and processor.converter is not None:
                                     del processor.converter
@@ -672,11 +683,8 @@ class BackgroundDocumentProcessor:
                                 if hasattr(processor, 'model_dict') and processor.model_dict is not None:
                                     del processor.model_dict
                                     processor.model_dict = None
-                                import torch, gc
-                                gc.collect()
-                                if torch.cuda.is_available():
-                                    torch.cuda.empty_cache()
-                                print(f"[{doc_id}] GPU freed: {torch.cuda.memory_allocated()/1e9:.1f}GB used")
+                                import torch
+                                print(f"[{doc_id}] GPU before mREBEL: {torch.cuda.memory_allocated()/1e9:.1f}GB")
 
                                 print(f"[{doc_id}] Extracting relations with mREBEL...")
                                 triples = extract_relations_from_chunks(chunks)

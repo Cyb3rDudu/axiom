@@ -17,8 +17,6 @@ logger = logging.getLogger(__name__)
 # ── GLiNER setup ────────────────────────────────────────────────────────
 
 GLINER_AVAILABLE = False
-_gliner_model = None
-
 try:
     from gliner import GLiNER
     GLINER_AVAILABLE = True
@@ -92,32 +90,17 @@ _EN_STOPWORDS = frozenset({
 
 
 def unload_gliner():
-    """Unload GLiNER from GPU to free VRAM."""
-    global _gliner_model
-    if _gliner_model is not None:
-        del _gliner_model
-        _gliner_model = None
-        import torch, gc
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
-        logger.info("GLiNER unloaded, GPU memory freed")
+    """Unload GLiNER from GPU via model_cache."""
+    from .model_cache import model_cache
+    model_cache.unload_gliner()
 
 
 def _get_gliner_model():
-    """Lazy-load singleton GLiNER model on GPU if available."""
-    global _gliner_model
-    if _gliner_model is None and GLINER_AVAILABLE:
-        import torch
-        cache_dir = os.getenv("HF_HOME", "/root/.cache/huggingface/hub")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info(f"Loading GLiNER model (urchade/gliner_multi-v2.1) on {device}...")
-        _gliner_model = GLiNER.from_pretrained(
-            "urchade/gliner_multi-v2.1",
-            cache_dir=cache_dir,
-        ).to(device)
-        logger.info(f"GLiNER model loaded on {device}.")
-    return _gliner_model
+    """Get GLiNER model from the unified model cache."""
+    if not GLINER_AVAILABLE:
+        return None
+    from .model_cache import model_cache
+    return model_cache.get_gliner()
 
 
 class EntityExtractor:
