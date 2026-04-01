@@ -353,7 +353,7 @@ class WebSearchTool:
                 params = {
                     'q': search_query,
                     'format': 'json',
-                    'engines': 'google,bing,duckduckgo,brave,qwant,mojeek',  # Google may fail in some regions, others compensate
+                    'engines': os.getenv('SEARXNG_ENGINES', 'google,bing,duckduckgo,brave,qwant,mojeek,startpage,presearch,yep,wiby'),
                     'categories': categories,
                     'safesearch': '1'
                 }
