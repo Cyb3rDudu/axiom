@@ -154,10 +154,9 @@ def query(
     try:
         # 1. Initialize components
         typer.echo("\nInitializing components...")
-        embedder = TextEmbedder(model_name=embedding_model)
-        vector_store = VectorStore() # Chroma needs str path
-        reranker = TextReranker(model_name=reranker_model) if use_reranker else None
-        retriever = Retriever(embedder=embedder, vector_store=vector_store, reranker=reranker)
+        vector_store = VectorStore()
+        # Retriever fetches embedder/reranker from model_cache on demand
+        retriever = Retriever(vector_store=vector_store)
         typer.echo("Components initialized.")
 
         # 2. Prepare filter if provided
@@ -477,10 +476,9 @@ def run_research( # Changed to synchronous 'def'
     typer.echo("\nInitializing components...")
     try:
         # RAG Components
-        embedder = TextEmbedder(model_name=embedding_model)
         vector_store = VectorStore()
-        reranker = TextReranker(model_name=reranker_model)
-        retriever = Retriever(embedder=embedder, vector_store=vector_store, reranker=reranker)
+        # Retriever fetches embedder/reranker from model_cache on demand
+        retriever = Retriever(vector_store=vector_store)
 
         # Agentic Layer Components
         model_dispatcher = ModelDispatcher() # Assumes API keys are in env

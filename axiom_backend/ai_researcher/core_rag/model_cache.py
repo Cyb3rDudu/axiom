@@ -25,6 +25,13 @@ def _free_gpu():
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            try:
+                torch._C._cuda_clearCublasWorkspaces()
+            except AttributeError:
+                pass  # older PyTorch versions
+            allocated = torch.cuda.memory_allocated() / 1e6
+            reserved = torch.cuda.memory_reserved() / 1e6
+            logger.info(f"GPU after cleanup: {allocated:.0f}MB allocated, {reserved:.0f}MB reserved")
     except Exception:
         pass
 
@@ -153,11 +160,18 @@ class ModelCache:
             if self._timer is not None:
                 self._timer.cancel()
                 self._timer = None
-            had = self._embedder or self._reranker or self._gliner
+            had_any = self._embedder is not None or self._reranker is not None or self._gliner is not None
+            # Explicitly delete before setting to None to avoid lingering refs
+            if self._embedder is not None:
+                del self._embedder
+            if self._reranker is not None:
+                del self._reranker
+            if self._gliner is not None:
+                del self._gliner
             self._embedder = None
             self._reranker = None
             self._gliner = None
-            if had:
+            if had_any:
                 _free_gpu()
                 logger.info("All models unloaded, GPU memory freed")
 

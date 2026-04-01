@@ -163,3 +163,23 @@ async def check_user_consistency(
     except Exception as e:
         logger.error(f"Error checking user consistency: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/gpu")
+async def get_gpu_status(current_user: User = Depends(get_current_user_from_cookie)):
+    """Get current GPU/VRAM status for monitoring."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return {"available": False, "reason": "CUDA not available"}
+
+        from ai_researcher.core_rag.model_cache import model_cache
+        return {
+            "available": True,
+            "cuda_initialized": torch.cuda.is_initialized(),
+            "allocated_mb": round(torch.cuda.memory_allocated() / 1e6, 1) if torch.cuda.is_initialized() else 0,
+            "reserved_mb": round(torch.cuda.memory_reserved() / 1e6, 1) if torch.cuda.is_initialized() else 0,
+            "models_loaded": model_cache.vram_usage(),
+        }
+    except ImportError:
+        return {"available": False, "reason": "torch not installed"}

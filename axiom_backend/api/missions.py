@@ -318,24 +318,19 @@ async def initialize_ai_components():
         tool_registry = ToolRegistry()
         
         # Initialize RAG components
-        from ai_researcher.core_rag.embedder import TextEmbedder
         from ai_researcher.core_rag.pgvector_store import PGVectorStore as VectorStore
-        
-        # Use cached model instances to avoid repeated initialization
-        from ai_researcher.core_rag.model_cache import model_cache
-        embedder = model_cache.get_embedder()
-        reranker = model_cache.get_reranker()
+
         # PGVectorStore uses PostgreSQL database connection, no directory needed
         vector_store = VectorStore()
-        retriever = Retriever(embedder=embedder, vector_store=vector_store, reranker=reranker)
-        
+        # Retriever fetches embedder/reranker from model_cache on demand (no persistent refs)
+        retriever = Retriever(vector_store=vector_store)
+
         # Initialize agent controller
         agent_controller = AgentController(
             model_dispatcher=model_dispatcher,
             context_manager=context_manager,
             tool_registry=tool_registry,
             retriever=retriever,
-            reranker=reranker
         )
         
         # Only log at ERROR level or higher based on LOG_LEVEL setting
@@ -417,7 +412,6 @@ def get_user_specific_agent_controller(
         context_manager=agent_controller.context_manager,
         tool_registry=agent_controller.tool_registry,
         retriever=agent_controller.retriever,
-        reranker=agent_controller.reranker,
         language_code=user_language  # Use user's language preference for chat
     )
     
