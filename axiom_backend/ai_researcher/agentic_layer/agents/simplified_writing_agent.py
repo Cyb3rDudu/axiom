@@ -830,11 +830,17 @@ class SimplifiedWritingAgent:
                 logger.error(f"Failed to initialize vector store: {e}", exc_info=True)
                 return f"Error: Unable to access document database. Error: {str(e)}", []
             try:
+                # Use cached model instances to avoid repeated initialization
+                from ai_researcher.core_rag.model_cache import model_cache
+                embedder = model_cache.get_embedder()
+                reranker = model_cache.get_reranker()
+                
                 # Use cached retriever or create new one
-                # Retriever fetches embedder/reranker from model_cache on demand
                 if not self._retriever:
                     self._retriever = Retriever(
                         vector_store=vector_store,
+                        embedder=embedder,
+                        reranker=reranker
                     )
                     logger.info("Created new Retriever instance (cached for reuse)")
             except Exception as e:

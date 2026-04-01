@@ -39,7 +39,7 @@ class AgentController(CoreAgentController):
         context_manager: AsyncContextManager,
         tool_registry: ToolRegistry,
         retriever: Optional[Retriever],
-        reranker: Optional['TextReranker'] = None,
+        reranker: Optional[TextReranker],
         language_code: str = 'en'
     ):
         """
@@ -50,7 +50,7 @@ class AgentController(CoreAgentController):
             context_manager: The ContextManager for mission state
             tool_registry: The ToolRegistry for available tools
             retriever: The Retriever for document search
-            reranker: Deprecated, fetched from model_cache on demand
+            reranker: The TextReranker for result reranking
             language_code: Language for prompts (default: English)
         """
         super().__init__(
@@ -58,6 +58,7 @@ class AgentController(CoreAgentController):
             context_manager=context_manager,
             tool_registry=tool_registry,
             retriever=retriever,
+            reranker=reranker,
             language_code=language_code
         )
         logger.info("AgentController initialized with modular architecture.")

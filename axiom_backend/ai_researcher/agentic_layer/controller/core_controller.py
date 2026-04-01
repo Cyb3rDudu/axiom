@@ -153,7 +153,7 @@ class AgentController:
         context_manager: AsyncContextManager,
         tool_registry: ToolRegistry,
         retriever: Optional[Retriever],
-        reranker: Optional['TextReranker'] = None,
+        reranker: Optional[TextReranker],
         language_code: str = 'en' # Language for prompts (default: English)
     ):
         # Concurrency Limiter
@@ -174,8 +174,7 @@ class AgentController:
         self.context_manager = context_manager
         self.tool_registry = tool_registry
         self.retriever = retriever
-        # NOTE: reranker param accepted for backward compat but NOT stored.
-        # Use self.reranker property which fetches from model_cache on demand.
+        self.reranker = reranker
         self.language_code = language_code # Store language code
         # Query components will be initialized per-mission to use user-specific models
         self.query_preparer = None
@@ -216,12 +215,6 @@ class AgentController:
         logger.debug(f"  Research Loop Settings: max_research_cycles_per_section={self.max_research_cycles_per_section}")
         logger.debug(f"  Writing Settings: writing_passes={config.WRITING_PASSES}")
         self._register_core_tools()
-
-    @property
-    def reranker(self):
-        """Fetch reranker from model_cache on demand (no persistent reference)."""
-        from ai_researcher.core_rag.model_cache import model_cache
-        return model_cache.get_reranker()
 
     def set_language(self, language_code: str):
         """

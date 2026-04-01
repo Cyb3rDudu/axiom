@@ -16,18 +16,16 @@ class Retriever:
     """
     def __init__(
         self,
+        embedder: TextEmbedder,
         vector_store: VectorStore,
-        embedder: Optional[TextEmbedder] = None,
-        reranker: Optional[TextReranker] = None
+        reranker: Optional[TextReranker] = None # Allow optional reranker
     ):
-        # NOTE: embedder/reranker params are accepted for backward compat but ignored.
-        # Models are fetched from model_cache on demand so they can be unloaded when idle.
+        self.embedder = embedder
         self.vector_store = vector_store
+        self.reranker = reranker
         self.graph_retriever = None
         self.opensearch_available = False
         self.os_store = None
-
-        logger.info("Retriever initialized (models fetched on demand from model_cache)")
 
         # Initialize OpenSearch for fulltext search
         from ai_researcher import config
@@ -62,17 +60,11 @@ class Retriever:
         else:
             logger.info("Retriever initialized.")
 
-    @property
-    def embedder(self):
-        """Fetch embedder from model_cache on demand (no persistent reference)."""
-        from .model_cache import model_cache
-        return model_cache.get_embedder()
+        if self.reranker:
+            logger.info("Reranker is enabled.")
+        else:
+            logger.info("Reranker is disabled.")
 
-    @property
-    def reranker(self):
-        """Fetch reranker from model_cache on demand (no persistent reference)."""
-        from .model_cache import model_cache
-        return model_cache.get_reranker()
 
     async def retrieve( # <-- Make async
         self,
@@ -115,15 +107,11 @@ class Retriever:
         logger.info(f"Retriever: Standard path for query '{query_text[:50]}', use_graph={use_graph}")
         logger.debug(f"Retrieving documents for query: '{query_text[:80]}'...")
 
-        # Cache model references locally to avoid repeated property/model_cache lookups
-        _embedder = self.embedder
-        _reranker = self.reranker
-
         # 1. Embed the query (using async method with semaphore)
         logger.info("Retriever: Embedding query...")
         try:
             # Use the new async embedding method that includes semaphore control
-            query_embeddings = await _embedder.embed_query_async(query_text)
+            query_embeddings = await self.embedder.embed_query_async(query_text)
             if not query_embeddings:
                 logger.error(f"Retriever: Failed to embed query (returned None) for '{query_text[:50]}'")
                 return []
@@ -140,7 +128,7 @@ class Retriever:
 
         # 2. Query the Vector Store (and OpenSearch in parallel if available)
         # Fetch potentially more results initially if reranking is enabled
-        initial_fetch_n = n_results * 3 if (use_reranker and _reranker) else n_results
+        initial_fetch_n = n_results * 3 if (use_reranker and self.reranker) else n_results
         logger.debug(f"Querying vector store (fetching up to {initial_fetch_n} results)...")
 
         # Prepare filter for OpenSearch
@@ -209,13 +197,13 @@ class Retriever:
         logger.info(f"Retrieved {len(initial_results)} initial results.")
 
         # 3. Optionally Rerank (run sync reranker in thread)
-        if use_reranker and _reranker:
+        if use_reranker and self.reranker:
             logger.debug("Applying reranker...")
             try:
                 # Run the synchronous rerank method in a separate thread
                 # The reranker now returns a list of tuples (score, item)
                 reranked_tuples = await asyncio.to_thread(
-                    _reranker.rerank, query_text, initial_results, top_n=n_results
+                    self.reranker.rerank, query_text, initial_results, top_n=n_results
                 )
                 # Extract just the items from the tuples
                 final_results = [item for _, item in reranked_tuples]
