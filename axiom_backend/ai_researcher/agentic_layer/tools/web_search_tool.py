@@ -13,7 +13,8 @@ from datetime import datetime
 from ai_researcher.dynamic_config import (
     get_web_search_provider, get_tavily_api_key, get_linkup_api_key, get_searxng_base_url, get_searxng_categories,
     get_jina_api_key, get_search_depth,
-    get_jina_read_full_content, get_jina_fetch_favicons, get_jina_bypass_cache
+    get_jina_read_full_content, get_jina_fetch_favicons, get_jina_bypass_cache,
+    get_yacy_base_url
 )
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,17 @@ class WebSearchTool:
                 self.client = api_key  # Store the API key as the "client" for Jina
                 self.api_key_configured = True
                 logger.info("WebSearchTool initialized with Jina.")
+            elif self.provider == "yacy":
+                if not requests:
+                    raise ImportError("YaCy provider selected, but 'requests' library not installed.")
+                base_url = get_yacy_base_url()
+                if not base_url:
+                    logger.warning("YaCy base URL not configured in user settings or environment variables.")
+                    self.api_key_configured = False
+                    return
+                self.client = base_url.rstrip('/')  # Store the base URL as the "client"
+                self.api_key_configured = True
+                logger.info("WebSearchTool initialized with YaCy.")
             else:
                 raise ValueError(f"Unsupported web search provider configured: {self.provider}")
         except Exception as e:
@@ -177,6 +189,8 @@ class WebSearchTool:
                 user_friendly_error = f"Web search is not available. Please configure your SearXNG base URL in Settings > Search to enable web search functionality."
             elif self.provider == "jina":
                 user_friendly_error = f"Web search is not available. Please configure your Jina API key in Settings > Search to enable web search functionality."
+            elif self.provider == "yacy":
+                user_friendly_error = f"Web search is not available. Please configure your YaCy base URL in Settings > Search to enable web search functionality."
             else:
                 user_friendly_error = f"Web search is not available. Please configure your {self.provider.capitalize()} API key in Settings > Search to enable web search functionality."
             logger.warning(f"Web search attempted but {self.provider} configuration not available")
@@ -461,6 +475,34 @@ class WebSearchTool:
                 if not formatted_results and not error_msg:
                     logger.info(f"Jina search returned no results for query: {search_query}")
                     # Don't set error_msg here, just return empty results
+
+            elif self.provider == "yacy":
+                # YaCy search using JSON API
+                search_url = f"{self.client}/yacysearch.json"
+                params = {
+                    'query': search_query,
+                    'count': max_results,
+                    'format': 'json'
+                }
+
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(search_url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                        response.raise_for_status()
+                        search_data = await response.json()
+
+                # YaCy returns { "channels": [{ "items": [...] }] }
+                channels = search_data.get('channels', [])
+                items = channels[0].get('items', []) if channels else []
+
+                for item in items[:max_results]:
+                    formatted_results.append({
+                        "title": item.get('title', 'No Title'),
+                        "snippet": item.get('description', 'No Snippet'),
+                        "url": item.get('url', '#')
+                    })
+
+                if not formatted_results and not error_msg:
+                    logger.info(f"YaCy search returned no results for query: {search_query}")
 
             if error_msg:
                  return {"error": error_msg}

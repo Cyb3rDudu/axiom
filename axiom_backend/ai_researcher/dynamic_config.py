@@ -222,6 +222,16 @@ def get_searxng_categories(mission_id: Optional[str] = None) -> str:
     return os.getenv("SEARXNG_CATEGORIES", "general")
 
 
+def get_yacy_base_url(mission_id: Optional[str] = None) -> Optional[str]:
+    """Get the YACY base URL from user settings or environment."""
+    user_settings = get_user_settings()
+    if user_settings:
+        search_settings = user_settings.get("search", {})
+        if search_settings and search_settings.get("yacy_base_url"):
+            return search_settings["yacy_base_url"]
+    return os.getenv("YACY_BASE_URL")
+
+
 def get_search_depth(mission_id: Optional[str] = None) -> str:
     """Get the search depth (standard/advanced) from user settings or environment."""
     # Check user settings first

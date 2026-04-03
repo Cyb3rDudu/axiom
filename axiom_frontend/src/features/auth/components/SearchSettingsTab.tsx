@@ -28,7 +28,7 @@ const SEARXNG_CATEGORIES = [
 export const SearchSettingsTab: React.FC = () => {
   const { draftSettings, setDraftSettings } = useSettingsStore()
 
-  const handleProviderChange = (provider: 'tavily' | 'linkup' | 'searxng' | 'jina') => {
+  const handleProviderChange = (provider: 'tavily' | 'linkup' | 'searxng' | 'jina' | 'yacy') => {
     if (!draftSettings) return
     
     const newSearch = {
@@ -120,6 +120,7 @@ export const SearchSettingsTab: React.FC = () => {
                   <SelectItem value="linkup">LinkUp</SelectItem>
                   <SelectItem value="searxng">SearXNG</SelectItem>
                   <SelectItem value="jina">Jina</SelectItem>
+                  <SelectItem value="yacy">YaCy</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -283,9 +284,9 @@ export const SearchSettingsTab: React.FC = () => {
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Enter the URL of your SearXNG instance. You can use a public instance or{' '}
-                  <a 
-                    href="https://docs.searxng.org/" 
-                    target="_blank" 
+                  <a
+                    href="https://docs.searxng.org/"
+                    target="_blank"
                     rel="noopener noreferrer"
                     className="text-purple-600 hover:underline"
                   >
@@ -293,6 +294,39 @@ export const SearchSettingsTab: React.FC = () => {
                   </a>
                   <br />
                   <strong>Note:</strong> Your SearXNG instance must be configured to output JSON format.
+                </p>
+              </div>
+            )}
+
+            {draftSettings.search.provider === 'yacy' && (
+              <div className="space-y-3 pl-3 border-l-2 border-teal-200 bg-teal-50/30 rounded-r-lg p-3">
+                <p className="text-xs text-muted-foreground-foreground mb-2">
+                  Decentralized, open-source peer-to-peer search engine.
+                </p>
+                <div className="space-y-1.5">
+                  <Label htmlFor="yacy-base-url" className="text-sm">YaCy Base URL</Label>
+                  <Input
+                    id="yacy-base-url"
+                    type="url"
+                    value={draftSettings.search.yacy_base_url || ''}
+                    onChange={(e) => handleApiKeyChange('yacy_base_url', e.target.value)}
+                    placeholder="http://localhost:8090"
+                    className="h-8 text-sm"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Enter the URL of your YaCy instance. You can{' '}
+                  <a
+                    href="https://yacy.net/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-teal-600 hover:underline"
+                  >
+                    download and run YaCy
+                  </a>
+                  {' '}locally or connect to a remote peer.
+                  <br />
+                  <strong>Note:</strong> No API key is required. YaCy exposes a JSON search API by default.
                 </p>
               </div>
             )}
