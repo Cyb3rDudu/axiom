@@ -7,7 +7,7 @@ import asyncio
 
 from database.database import SessionLocal, test_connection, init_db
 from database import crud
-from api import auth, missions, system, chat, chats, documents, websockets, settings, writing, dashboard, admin, research_reports, languages, rag
+from api import auth, missions, system, chat, chats, documents, websockets, settings, writing, dashboard, admin, research_reports, languages, rag, openai_compat
 from middleware import user_context_middleware
 from config.paths import LEGACY_MARKDOWN_PATH
 
@@ -104,6 +104,7 @@ app.include_router(admin.router)
 app.include_router(research_reports.router, tags=["research_reports"])
 app.include_router(languages.router, tags=["languages"])
 app.include_router(rag.router, tags=["rag"])
+app.include_router(openai_compat.router, prefix="/api", tags=["openai-compat"])
 
 @app.on_event("startup")
 async def startup_event():
@@ -127,8 +128,9 @@ async def startup_event():
 
         # For PostgreSQL, ensure required extensions are available
         if os.getenv("DATABASE_URL", "").startswith("postgresql"):
-            from database.init_postgres import ensure_extensions
+            from database.init_postgres import ensure_extensions, run_column_migrations
             ensure_extensions()
+            run_column_migrations()
 
         # Initialize PromptLoader for multilingual support
         try:

@@ -109,6 +109,41 @@ def get_current_admin_user(current_user: models.User = Depends(get_current_user_
         )
     return current_user
 
+def get_current_user_from_bearer(request: Request, db: Session = Depends(get_db)):
+    """
+    Extract user from Bearer token in Authorization header.
+    Tries JWT verification first, then falls back to API key lookup.
+    Intended for programmatic / API access (no CSRF, no cookies).
+    """
+    auth_header = request.headers.get("authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = auth_header.split(" ", 1)[1]
+
+    # 1. Try JWT verification
+    username = security.verify_token(token)
+    if username is not None:
+        user = crud.get_user_by_username(db, username=username)
+        if user is not None:
+            return user
+
+    # 2. Fall back to API key lookup
+    user = db.query(models.User).filter(models.User.api_key == token).first()
+    if user is not None:
+        return user
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid authentication credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 async def get_current_user_from_cookie_ws(websocket: "WebSocket", db: Session):
     """
     Extract user from JWT token stored in HttpOnly cookie for WebSocket connections

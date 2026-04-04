@@ -12,8 +12,9 @@ import { ProfileSettingsTab } from './ProfileSettingsTab'
 import { AppearanceSettingsTab } from './AppearanceSettingsTab'
 import { AdminSettingsTab } from './AdminSettingsTab'
 import { CitationSettingsTab } from './CitationSettingsTab'
+import { APIAccessSettingsTab } from './APIAccessSettingsTab'
 import { Card, CardContent } from '../../../components/ui/card'
-import { AlertCircle, Loader2, User, Cpu, Search, Beaker, Paintbrush, Shield, FileText, Quote } from 'lucide-react'
+import { AlertCircle, Loader2, User, Cpu, Search, Beaker, Paintbrush, Shield, FileText, Quote, Key } from 'lucide-react'
 
 interface SettingsDialogProps {
   open: boolean
@@ -76,7 +77,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ open, onOpenChan
           )}
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full flex-1 flex flex-col min-h-0 px-6 pt-4">
-            <TabsList className={`grid w-full ${user?.is_admin ? 'grid-cols-8' : 'grid-cols-7'} h-10 flex-shrink-0 mb-4`}>
+            <TabsList className={`grid w-full ${user?.is_admin ? 'grid-cols-9' : 'grid-cols-8'} h-10 flex-shrink-0 mb-4`}>
               <TabsTrigger value="profile" className="text-sm">
                 <User className="w-4 h-4 mr-2" />
                 Profile
@@ -104,6 +105,10 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ open, onOpenChan
               <TabsTrigger value="citations" className="text-sm">
                 <Quote className="w-4 h-4 mr-2" />
                 Citations
+              </TabsTrigger>
+              <TabsTrigger value="api-access" className="text-sm">
+                <Key className="w-4 h-4 mr-2" />
+                API
               </TabsTrigger>
               {user?.is_admin && (
                 <TabsTrigger value="admin" className="text-sm">
@@ -140,6 +145,10 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ open, onOpenChan
 
               <TabsContent value="citations" className="h-full overflow-y-auto settings-scrollbar data-[state=active]:flex data-[state=active]:flex-col pr-2 pb-4">
                 <CitationSettingsTab />
+              </TabsContent>
+
+              <TabsContent value="api-access" className="h-full overflow-y-auto settings-scrollbar data-[state=active]:flex data-[state=active]:flex-col pr-2 pb-4">
+                <APIAccessSettingsTab />
               </TabsContent>
               {user?.is_admin && (
                 <TabsContent value="admin" className="h-full overflow-y-auto settings-scrollbar data-[state=active]:flex data-[state=active]:flex-col pr-2 pb-4">

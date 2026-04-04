@@ -165,6 +165,28 @@ def verify_database_setup():
         logger.error(f"Database verification failed: {str(e)}")
         return False
 
+def run_column_migrations():
+    """Add new columns to existing tables if they don't exist."""
+    migrations = [
+        ("users", "api_key", "VARCHAR UNIQUE"),
+    ]
+    try:
+        with engine.connect() as conn:
+            for table, column, col_type in migrations:
+                result = conn.execute(text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = :table AND column_name = :column"
+                ), {"table": table, "column": column})
+                if not result.fetchone():
+                    conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {col_type}'))
+                    conn.commit()
+                    logger.info(f"Added column {table}.{column}")
+                else:
+                    logger.debug(f"Column {table}.{column} already exists")
+    except Exception as e:
+        logger.error(f"Column migration failed: {e}")
+
+
 def run_sql_migrations():
     """Run SQL migration files for existing databases"""
     try:
@@ -221,7 +243,10 @@ def main():
     
     # Create tables
     create_tables()
-    
+
+    # Run column migrations for new columns on existing tables
+    run_column_migrations()
+
     # Run SQL migrations for existing databases
     run_sql_migrations()
     

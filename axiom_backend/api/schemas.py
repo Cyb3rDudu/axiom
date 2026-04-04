@@ -812,3 +812,42 @@ class BulkOperationResponse(BaseModel):
     failed_count: int
     failed_items: List[Dict[str, Any]] = []
     message: str
+
+
+# ── OpenAI-compatible Chat Completion schemas ──────────────────────────
+
+class OpenAIChatMessage(BaseModel):
+    role: str
+    content: str
+
+class OpenAIChatRequest(BaseModel):
+    model: str = "axiom"
+    messages: List[OpenAIChatMessage]
+    stream: bool = False
+    document_group_id: Optional[str] = None
+    temperature: Optional[float] = 0.7
+    max_tokens: Optional[int] = 2000
+
+class OpenAIChatChoice(BaseModel):
+    index: int = 0
+    message: OpenAIChatMessage
+    finish_reason: str = "stop"
+
+class OpenAIUsage(BaseModel):
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+class OpenAIChatResponse(BaseModel):
+    id: str
+    object: str = "chat.completion"
+    created: int
+    model: str = "axiom-rag"
+    choices: List[OpenAIChatChoice]
+    usage: OpenAIUsage = OpenAIUsage()
+    sources: List[Dict[str, Any]] = []
+
+class APIKeyResponse(BaseModel):
+    api_key: Optional[str] = None
+    created: bool = False
+    masked_key: Optional[str] = None

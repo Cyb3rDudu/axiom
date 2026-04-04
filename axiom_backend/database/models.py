@@ -56,6 +56,9 @@ class User(Base):
     role = Column(String, default="user", nullable=False)
     user_type = Column(String, default="individual", nullable=False)
 
+    # API key for OpenAI-compatible endpoint authentication
+    api_key = Column(String, nullable=True, unique=True, index=True)
+
     # Relationships
     chats = relationship("Chat", back_populates="user", cascade="all, delete-orphan")
 
