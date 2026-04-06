@@ -28,10 +28,9 @@ class TextReranker:
         if device:
             self.device = device
         else:
-            # Get device from hardware detector
-            torch_device = hardware_detector.get_torch_device()
-            self.device = str(torch_device)
-            
+            # Get device from per-model device config
+            self.device = hardware_detector.get_model_device("reranker")
+
             # Adjust batch size based on hardware
             optimal_batch = hardware_detector.get_optimal_batch_size(batch_size)
             if optimal_batch != batch_size:
@@ -42,13 +41,14 @@ class TextReranker:
 
         # Log hardware detection results
         hardware_detector.log_device_info()
-        
+
         logger.info(f"Initializing TextReranker with model {self.model_name} on device {self.device}")
         try:
-            # Determine FP16 usage based on device type
-            device_info = hardware_detector.detect_hardware()
-            use_fp16 = device_info["device_type"] in ["cuda", "rocm", "mps"]
-            
+            # Determine FP16 usage based on device — force FP32 on CPU
+            use_fp16 = self.device not in ("cpu",) and self.device != "cpu"
+            if not use_fp16:
+                logger.info("Reranker on CPU: forcing FP32")
+
             # Initialize the FlagReranker model
             self.model = FlagReranker(self.model_name, use_fp16=use_fp16)
             logger.info(f"Reranker model loaded successfully (FP16: {use_fp16})")

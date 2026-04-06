@@ -55,10 +55,9 @@ class TextEmbedder:
         if device:
             self.device = device
         else:
-            # Get device from hardware detector
-            torch_device = hardware_detector.get_torch_device()
-            self.device = str(torch_device)
-            
+            # Get device from per-model device config
+            self.device = hardware_detector.get_model_device("embedder")
+
             # Adjust batch size based on hardware
             optimal_batch = hardware_detector.get_optimal_batch_size(batch_size)
             if optimal_batch != batch_size:

@@ -36,6 +36,12 @@ services:
       - SPACY_DATA=/root/.local/share/spacy
       - ENABLE_KNOWLEDGE_GRAPH=${ENABLE_KNOWLEDGE_GRAPH:-true}
       - ENABLE_GRAPH_RETRIEVAL=${ENABLE_GRAPH_RETRIEVAL:-false}
+      - DEVICE_EMBEDDER=${DEVICE_EMBEDDER:-auto}
+      - DEVICE_RERANKER=${DEVICE_RERANKER:-auto}
+      - DEVICE_GLINER=${DEVICE_GLINER:-auto}
+      - DEVICE_MREBEL=${DEVICE_MREBEL:-auto}
+      - DEVICE_MARKER=${DEVICE_MARKER:-auto}
+      - DEVICE_VISION=${DEVICE_VISION:-auto}
     networks:
       - axiom-network
     deploy:
@@ -81,6 +87,12 @@ services:
       - SPACY_DATA=/root/.local/share/spacy
       - ENABLE_KNOWLEDGE_GRAPH=${ENABLE_KNOWLEDGE_GRAPH:-true}
       - ENABLE_GRAPH_RETRIEVAL=${ENABLE_GRAPH_RETRIEVAL:-false}
+      - DEVICE_EMBEDDER=${DEVICE_EMBEDDER:-auto}
+      - DEVICE_RERANKER=${DEVICE_RERANKER:-auto}
+      - DEVICE_GLINER=${DEVICE_GLINER:-auto}
+      - DEVICE_MREBEL=${DEVICE_MREBEL:-auto}
+      - DEVICE_MARKER=${DEVICE_MARKER:-auto}
+      - DEVICE_VISION=${DEVICE_VISION:-auto}
     deploy:
       resources:
         reservations:

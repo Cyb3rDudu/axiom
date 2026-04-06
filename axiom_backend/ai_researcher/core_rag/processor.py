@@ -224,13 +224,8 @@ class DocumentProcessor:
         if device:
             self.device = device
         else:
-            # Get device from hardware detector, prefer GPU 4 if available for backward compatibility
-            device_info = hardware_detector.detect_hardware()
-            if device_info["device_type"] == "cuda" and device_info["device_count"] > 4:
-                self.device = "cuda:4"
-            else:
-                torch_device = hardware_detector.get_torch_device()
-                self.device = str(torch_device)
+            # Get device from per-model device config
+            self.device = hardware_detector.get_model_device("marker")
         
         # Log hardware detection results
         hardware_detector.log_device_info()

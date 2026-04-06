@@ -358,6 +358,33 @@ class HardwareDetector:
             "Insufficient Memory",
         ])
 
+    def get_model_device(self, model_name: str) -> str:
+        """
+        Resolve the device for a specific model using per-model config.
+
+        Args:
+            model_name: Key in config.MODEL_DEVICE_MAP (e.g. 'embedder', 'reranker')
+
+        Returns:
+            Device string ('cpu', 'cuda', 'cuda:0', 'mps', etc.)
+        """
+        from ai_researcher import config
+
+        # FORCE_CPU_MODE overrides everything
+        if config.FORCE_CPU_MODE:
+            logger.info(f"Model '{model_name}' assigned to device: cpu (FORCE_CPU_MODE)")
+            return "cpu"
+
+        device_setting = config.MODEL_DEVICE_MAP.get(model_name, "auto")
+
+        if device_setting == "auto":
+            device = str(self.get_torch_device())
+        else:
+            device = device_setting
+
+        logger.info(f"Model '{model_name}' assigned to device: {device}")
+        return device
+
     def log_device_info(self):
         """Log detected hardware information."""
         info = self.detect_hardware()

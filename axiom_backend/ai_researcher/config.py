@@ -180,6 +180,18 @@ PREFERRED_DEVICE_TYPE = os.getenv(
     "PREFERRED_DEVICE_TYPE", "auto"
 ).lower()  # auto, cuda, rocm, mps, cpu
 
+# --- Per-Model Device Configuration ---
+# Each model can be assigned to a specific device: "auto" (GPU if available), "cpu", "cuda", "cuda:0", "mps"
+# Defaults: GPU-heavy models on "auto", lightweight models on "cpu" to save VRAM
+MODEL_DEVICE_MAP = {
+    "embedder": os.getenv("DEVICE_EMBEDDER", "auto"),
+    "reranker": os.getenv("DEVICE_RERANKER", "cpu"),
+    "gliner": os.getenv("DEVICE_GLINER", "cpu"),
+    "mrebel": os.getenv("DEVICE_MREBEL", "auto"),
+    "marker": os.getenv("DEVICE_MARKER", "auto"),
+    "vision_embedder": os.getenv("DEVICE_VISION", "cpu"),
+}
+
 
 # Check if running in Docker
 def is_running_in_docker():

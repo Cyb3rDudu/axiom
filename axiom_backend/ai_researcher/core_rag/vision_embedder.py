@@ -55,9 +55,8 @@ class VisionEmbedder:
         if device:
             self.device = device
         else:
-            # Get device from hardware detector
-            torch_device = hardware_detector.get_torch_device()
-            self.device = str(torch_device)
+            # Get device from per-model device config
+            self.device = hardware_detector.get_model_device("vision_embedder")
 
             # Adjust batch size based on hardware (use smaller batch for images)
             optimal_batch = hardware_detector.get_optimal_batch_size(batch_size)

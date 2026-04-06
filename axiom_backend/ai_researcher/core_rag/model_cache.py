@@ -120,10 +120,10 @@ class ModelCache:
                 if self._gliner is None:
                     try:
                         import os
-                        import torch
                         from gliner import GLiNER
+                        from hardware_detection import hardware_detector
                         cache_dir = os.getenv("HF_HOME", "/root/.cache/huggingface/hub")
-                        device = "cuda" if torch.cuda.is_available() else "cpu"
+                        device = hardware_detector.get_model_device("gliner")
                         logger.info(f"Loading GLiNER (urchade/gliner_multi-v2.1) on {device}...")
                         self._gliner = GLiNER.from_pretrained(
                             "urchade/gliner_multi-v2.1",

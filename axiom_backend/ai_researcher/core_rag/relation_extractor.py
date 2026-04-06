@@ -36,9 +36,11 @@ def load_mrebel():
     _mrebel_model = AutoModelForSeq2SeqLM.from_pretrained(
         "Babelscape/mrebel-large", cache_dir=cache_dir
     )
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    from hardware_detection import hardware_detector
+    device = hardware_detector.get_model_device("mrebel")
     _mrebel_model = _mrebel_model.to(device).eval()
-    logger.info(f"mREBEL loaded on {device} ({torch.cuda.memory_allocated()/1e9:.1f}GB VRAM)")
+    vram_info = f" ({torch.cuda.memory_allocated()/1e9:.1f}GB VRAM)" if device.startswith("cuda") else ""
+    logger.info(f"mREBEL loaded on {device}{vram_info}")
     return _mrebel_model, _mrebel_tokenizer
 
 
