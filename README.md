@@ -9,15 +9,31 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://hub.docker.com/r/murtaza-nasir/axiom)
 [![Documentation](https://img.shields.io/badge/Docs-Available-brightgreen.svg)](https://murtaza-nasir.github.io/axiom/)
 
-> **Latest Development (March 2026) - Major post-fork enhancements**
+> **Latest Development (April 2026) - Major post-fork enhancements**
 >
-> Since forking from Maestro, AXIOM has added 170+ commits including:
+> Since forking from Maestro, AXIOM has added 200+ commits including:
+> - **OpenAI-Compatible API**: `/api/v1/chat/completions` endpoint with API key management for programmatic document Q&A
+> - **Per-Model Device Config**: Fine-grained GPU/CPU assignment per model (BGE, reranker, GLiNER, mREBEL, Marker) for tight VRAM budgets
+> - **GLiNER + mREBEL**: Zero-shot multilingual entity and relation extraction replacing spaCy
+> - **Knowledge Graph Retrieval**: Entity-based chunk expansion across documents with query-level entity extraction
+> - **PDF Page Numbers**: 3-tier page label extraction (publisher metadata → header/footer parsing → physical) for accurate academic citations
 > - **New AI Providers**: Native DeepSeek and Z.AI (Zhipu GLM) support with special handling
 > - **Citation System**: Configurable citation profiles (Numbered, APA 6/7, custom) with per-mission overrides
-> - **RAG Enhancements**: Knowledge graphs, OpenSearch BM25, hybrid retrieval with RRF fusion
+> - **RAG Enhancements**: OpenSearch BM25, hybrid retrieval with RRF fusion, cuBLAS workspace cleanup
+> - **Search Providers**: SearXNG with configurable engines, YaCy support, Brave API integration
 > - **Apple Silicon**: MPS GPU support for native macOS deployment
 > - **Robustness**: 3-level JSON fallback, context window truncation, multilingual support
 > - **Deployment**: Podman Quadlet, Proxmox LXC, macOS hybrid dev stack
+
+## Roadmap
+
+Upcoming improvements planned:
+
+- **[OpenDataLoader PDF Integration](docs/OPENDATALOADER_INTEGRATION.md)** — CPU-based PDF parser alternative to Marker, frees ~2.5GB VRAM during imports and provides best-in-class table extraction (0.928 accuracy)
+- **VRAM Leak Fix**: Resolve reference retention in the global agent controller so idle models can actually be unloaded between missions
+- **Streaming API**: Server-Sent Events for the OpenAI-compatible endpoint
+- **Cross-Container GPU Coordination**: Doc-processor and backend coordination to prevent VRAM contention during simultaneous imports and queries
+- **Frontend Question Refinement**: Complete the UI flow for research question refinement (currently stub functions in the frontend)
 
 AXIOM is an AI-powered research platform you can host on your own hardware. It's designed to manage complex research tasks from start to finish in a collaborative research environment. Plan your research, let AI agents carry it out, and watch as they generate detailed reports based on your documents and sources from the web.
 
