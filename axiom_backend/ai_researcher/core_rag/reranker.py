@@ -54,7 +54,7 @@ class TextReranker:
             logger.info(f"Reranker model loaded successfully (FP16: {use_fp16})")
             
             # Set CPU optimizations if needed
-            if device_info["device_type"] == "cpu":
+            if self.device == "cpu":
                 torch.set_num_threads(hardware_detector.get_num_workers())
                 logger.info(f"Set PyTorch threads to {hardware_detector.get_num_workers()} for CPU processing")
         

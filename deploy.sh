@@ -5,6 +5,7 @@ set -e
 
 TARGET="dudu@192.168.1.120"
 REMOTE_SRC="/home/dudu/axiom-src"
+NERDCTL="sudo nerdctl"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -33,15 +34,15 @@ git push 2>/dev/null || warn "git push failed or nothing to push"
 log "Pulling latest code on LXC..."
 ssh "$TARGET" "cd $REMOTE_SRC && git pull"
 
-# Step 3: Build images
+# Step 3: Build images with nerdctl
 if [ "$BUILD_BACKEND" = true ]; then
     log "Building backend image (this may take a minute)..."
-    ssh "$TARGET" "cd $REMOTE_SRC && buildah bud -t localhost/axiom-backend:local -f axiom_backend/Dockerfile axiom_backend/"
+    ssh "$TARGET" "cd $REMOTE_SRC && $NERDCTL build -t axiom-backend:local -f axiom_backend/Dockerfile axiom_backend/"
 fi
 
 if [ "$BUILD_FRONTEND" = true ]; then
     log "Building frontend image..."
-    ssh "$TARGET" "cd $REMOTE_SRC && buildah bud -t localhost/axiom-frontend:local -f axiom_frontend/Dockerfile axiom_frontend/"
+    ssh "$TARGET" "cd $REMOTE_SRC && $NERDCTL build -t axiom-frontend:local -f axiom_frontend/Dockerfile axiom_frontend/"
 fi
 
 # Step 4: Restart service
@@ -51,13 +52,13 @@ if [ "$RESTART" = true ]; then
 
     log "Waiting for backend health check..."
     sleep 15
-    HEALTH=$(ssh "$TARGET" "podman exec axiom-backend python3 -c \"import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health'); print(r.read().decode())\"" 2>/dev/null || echo "FAILED")
+    HEALTH=$(ssh "$TARGET" "$NERDCTL exec axiom-backend python3 -c \"import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health'); print(r.read().decode())\"" 2>/dev/null || echo "FAILED")
 
     if echo "$HEALTH" | grep -q "healthy"; then
         log "Backend is healthy!"
     else
         err "Health check failed: $HEALTH"
-        warn "Check logs: ssh $TARGET 'podman logs axiom-backend --tail 50'"
+        warn "Check logs: ssh $TARGET '$NERDCTL logs axiom-backend --tail 50'"
         exit 1
     fi
 fi
