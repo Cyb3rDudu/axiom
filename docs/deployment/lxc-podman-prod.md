@@ -1,27 +1,29 @@
-# Production Deployment: Podman on Proxmox LXC
+# Production Deployment: nerdctl + containerd on Proxmox LXC
 
-This documents the production Axiom deployment on LXC 120 with Podman, Buildah, and an NVIDIA A3000 GPU.
+This documents the production Axiom deployment on LXC 120 with nerdctl, containerd, buildkit, and an NVIDIA A3000 GPU.
 
 ## Architecture
 
 ```
 MacBook (dev) ──git push + deploy.sh──> LXC 120 (192.168.1.120)
-                                         ├── axiom-backend   (podman, GPU, :8000)
-                                         ├── axiom-doc-processor (podman, GPU)
-                                         ├── axiom-frontend   (podman, :3000)
+                                         ├── axiom-backend   (nerdctl, GPU, :8000)
+                                         ├── axiom-doc-processor (nerdctl, GPU)
+                                         ├── axiom-frontend   (nerdctl, :3000)
                                          └── NO nginx (NPM proxies directly)
                                                │
                                          LXC 107 (192.168.1.107)
                                          └── PostgreSQL + pgvector + OpenSearch
 ```
 
-Nginx Proxy Manager (on carrier) routes `maestro.i.catdev.io` to the LXC.
+Nginx Proxy Manager (on carrier) routes `axiom.i.catdev.io` to the LXC.
 
 ## LXC Requirements
 
-- Debian 13+ with Podman 5.x and Buildah
-- NVIDIA GPU passed through with nvidia-container-toolkit (CDI)
-- LXC features: `nesting=1`, `fuse=1`, TUN/TAP device
+- Debian 13+ with containerd, nerdctl, and buildkit (buildkitd with `--containerd-worker`)
+- NVIDIA GPU passed through with nvidia-container-toolkit
+- LXC config: `lxc.apparmor.profile: unconfined`, `lxc.cap.drop:` (empty), `lxc.mount.auto: proc:rw sys:rw`
+- LXC cgroup2 device allow: `c 195:* rwm` (nvidia), `c 508:* rwm` (nvidia-uvm), `c 511:* rwm` (nvidia-caps), `c 10:200 rwm` (tun)
+- TUN/TAP device bind-mounted from host
 - Network access to PostgreSQL (LXC 107) and SearXNG
 
 ## Directory Layout on LXC
@@ -49,8 +51,8 @@ git clone git@github.com:Cyb3rDudu/axiom.git ~/axiom-src
 
 ```bash
 cd ~/axiom-src
-buildah bud -t localhost/axiom-backend:local -f axiom_backend/Dockerfile axiom_backend/
-buildah bud -t localhost/axiom-frontend:local -f axiom_frontend/Dockerfile axiom_frontend/
+nerdctl build bud -t localhost/axiom-backend:local -f axiom_backend/Dockerfile axiom_backend/
+nerdctl build bud -t localhost/axiom-frontend:local -f axiom_frontend/Dockerfile axiom_frontend/
 ```
 
 ### 3. Configure environment
@@ -116,19 +118,19 @@ From the MacBook (project root):
 
 ```bash
 # Container status
-podman pod ps
-podman ps --pod
+nerdctl pod ps
+nerdctl ps --pod
 
 # Logs
-podman logs axiom-backend -f
-podman logs axiom-doc-processor -f
-podman logs axiom-frontend -f
+nerdctl logs axiom-backend -f
+nerdctl logs axiom-doc-processor -f
+nerdctl logs axiom-frontend -f
 
 # GPU usage
 nvidia-smi
 
 # Health check
-podman exec axiom-backend python3 -c "
+nerdctl exec axiom-backend python3 -c "
 import urllib.request
 r = urllib.request.urlopen('http://127.0.0.1:8000/health')
 print(r.read().decode())
@@ -204,20 +206,20 @@ DEVICE_VISION=auto
 
 **Pod won't start:**
 ```bash
-podman pod rm -f axiom  # Force remove stuck pod
+nerdctl pod rm -f axiom  # Force remove stuck pod
 sudo systemctl start axiom
 ```
 
 **GPU not visible in container:**
 ```bash
 nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
-podman run --rm --device nvidia.com/gpu=all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
+nerdctl run --rm --device nvidia.com/gpu=all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
 ```
 
 **Database connection failed:**
 ```bash
 # Test from LXC
-podman exec axiom-backend python3 -c "
+nerdctl exec axiom-backend python3 -c "
 from database.database import test_connection
 print(test_connection())
 "
