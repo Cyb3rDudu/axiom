@@ -18,26 +18,28 @@ PostgreSQL runs on the shared database server (CT 107, 10.36.0.107).
 
 ## Prerequisites
 
-- Proxmox VE 9.1+ with `buildah` installed
+- Proxmox VE 9.1+ with `containerd` and `nerdctl` installed
 - External PostgreSQL with `pgvector` extension (CT 107)
 - GPU passthrough configured (optional, for CUDA acceleration)
 
 ```bash
-apt install -y buildah
+apt install -y containerd
+# Install nerdctl from GitHub releases
+curl -sL https://github.com/containerd/nerdctl/releases/latest/download/nerdctl-full-linux-amd64.tar.gz | tar xz -C /usr/local
 ```
 
 ## Step 1: Build Docker images locally
 
-On a machine with Docker (or on the Proxmox host with buildah):
+On a machine with Docker or nerdctl:
 
 ```bash
 cd /path/to/axiom
 
 # Build all images
-buildah build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
-buildah build -t axiom-frontend -f axiom_frontend/Dockerfile axiom_frontend/
-buildah build -t axiom-nginx -f nginx/Dockerfile nginx/
-buildah build -t axiom-doc-processor -f axiom_backend/Dockerfile axiom_backend/
+nerdctl build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
+nerdctl build -t axiom-frontend -f axiom_frontend/Dockerfile axiom_frontend/
+nerdctl build -t axiom-nginx -f nginx/Dockerfile nginx/
+nerdctl build -t axiom-doc-processor -f axiom_backend/Dockerfile axiom_backend/
 ```
 
 Or with Docker on another machine, then export:
@@ -53,11 +55,11 @@ docker save axiom-nginx | gzip > axiom-nginx.tar.gz
 ## Step 2: Export to Proxmox template storage
 
 ```bash
-# From buildah
-buildah push axiom-backend oci-archive:/var/lib/vz/template/cache/axiom-backend.tar
-buildah push axiom-frontend oci-archive:/var/lib/vz/template/cache/axiom-frontend.tar
-buildah push axiom-nginx oci-archive:/var/lib/vz/template/cache/axiom-nginx.tar
-buildah push axiom-doc-processor oci-archive:/var/lib/vz/template/cache/axiom-doc-processor.tar
+# From nerdctl (export as OCI archive for Proxmox native LXC)
+nerdctl save axiom-backend -o /var/lib/vz/template/cache/axiom-backend.tar
+nerdctl save axiom-frontend -o /var/lib/vz/template/cache/axiom-frontend.tar
+nerdctl save axiom-nginx -o /var/lib/vz/template/cache/axiom-nginx.tar
+nerdctl save axiom-doc-processor -o /var/lib/vz/template/cache/axiom-doc-processor.tar
 ```
 
 Or pull pre-built images from a registry:
@@ -197,212 +199,142 @@ pct exec 120 -- bash -c 'cd /opt/axiom && docker compose -f docker-compose.exter
 
 ## Updating
 
-### Native OCI method
+### containerd + nerdctl method
 
 ```bash
-# Rebuild images
-buildah build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
-
-# Re-export
-buildah push axiom-backend oci-archive:/var/lib/vz/template/cache/axiom-backend.tar
-
-# Recreate container (data volumes persist if using bind mounts)
-pct stop 120
-pct destroy 120
-# Re-run pct create with same config
-pct start 120
+ssh dudu@192.168.1.120
+cd /opt/axiom && git pull
+nerdctl compose -f docker-compose.external-db.yml down
+nerdctl build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
+nerdctl compose -f docker-compose.external-db.yml up -d
 ```
 
-### Docker Compose method
+## Recommended: containerd + nerdctl on a privileged LXC
+
+containerd with nerdctl provides Docker-compatible CLI with native GPU support via NVIDIA CDI,
+running inside a Proxmox LXC with GPU passthrough.
+
+### LXC Setup (CT 120)
 
 ```bash
-pct exec 120 -- bash -c 'cd /opt/axiom && git pull && docker compose -f docker-compose.external-db.yml up -d --build'
-```
-
-## Alternative: Podman Quadlet on a privileged LXC
-
-Podman Quadlet replaces Docker Compose with native systemd unit files — no Docker daemon, proper
-process management, and automatic restart/logging via journald.
-
-### Setup
-
-```bash
-# Create a privileged Debian LXC with nesting
-pct create 120 local:vztmpl/debian-13-standard_13.0-1_amd64.tar.zst \
+# Create privileged LXC from custom template
+pct create 120 local:vztmpl/debian-13-dudu-gpu-podman.tar.zst \
   --hostname axiom \
   --cores 8 \
   --memory 16384 \
-  --net0 name=eth0,bridge=vmbr0,ip=10.36.0.120/22,gw=10.36.0.1 \
+  --net0 name=eth0,bridge=vmbr0,ip=192.168.1.120/24,gw=192.168.1.1 \
   --storage local-lvm \
   --rootfs local-lvm:32 \
   --unprivileged 0 \
-  --features nesting=1,keyctl=1
-
-pct start 120
-pct exec 120 -- bash -c 'apt update && apt install -y podman'
+  --features nesting=1,keyctl=1,fuse=1
 ```
 
-### Convert Compose to Quadlet
+Add to `/etc/pve/lxc/120.conf`:
+```conf
+lxc.apparmor.profile: unconfined
+lxc.cap.drop:
+lxc.mount.auto: proc:rw sys:rw
+lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
 
-Create unit files in `/etc/containers/systemd/` inside the LXC:
+# NVIDIA GPU passthrough
+lxc.cgroup2.devices.allow: c 195:* rwm
+lxc.cgroup2.devices.allow: c 506:* rwm
+lxc.mount.entry: /dev/nvidia0 dev/nvidia0 none bind,optional,create=file
+lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
 
-**axiom-network.network**
-```ini
-[Network]
-NetworkName=axiom
+# NVIDIA libs from host
+lxc.mount.entry: /opt/nvidia-libs opt/nvidia-libs none bind,optional,create=dir,ro
 ```
 
-**axiom-data.volume**
-```ini
-[Volume]
-VolumeName=axiom-data
-```
-
-**axiom-backend.container**
-```ini
-[Unit]
-Description=Axiom Backend
-After=network-online.target
-
-[Container]
-Image=localhost/axiom-backend
-ContainerName=axiom-backend
-Network=axiom.network
-PublishPort=8000:8000
-Volume=axiom-data.volume:/app/ai_researcher/data
-Environment=DATABASE_URL=postgresql://axiom:dsHXpLsy7qDyVIeI80FlZ7Yn/Gzht1N6pNRoiAvKPZ4=@10.36.0.107:5432/axiom
-Environment=ADMIN_USERNAME=admin
-Environment=ADMIN_PASSWORD=qExzeg-xowqo9-gycwyr
-Environment=JWT_SECRET_KEY=change-me
-Environment=LOG_LEVEL=ERROR
-Environment=MAX_WORKER_THREADS=10
-Environment=EMBEDDING_BATCH_SIZE=32
-Environment=CORS_ALLOWED_ORIGINS=*
-
-[Service]
-Restart=always
-
-[Install]
-WantedBy=default.target
-```
-
-**axiom-frontend.container**
-```ini
-[Unit]
-Description=Axiom Frontend
-After=axiom-backend.service
-
-[Container]
-Image=localhost/axiom-frontend
-ContainerName=axiom-frontend
-Network=axiom.network
-
-[Service]
-Restart=always
-
-[Install]
-WantedBy=default.target
-```
-
-**axiom-doc-processor.container**
-```ini
-[Unit]
-Description=Axiom Document Processor
-After=axiom-backend.service
-
-[Container]
-Image=localhost/axiom-doc-processor
-ContainerName=axiom-doc-processor
-Network=axiom.network
-Volume=axiom-data.volume:/app/ai_researcher/data
-Exec=python -u services/background_document_processor.py
-Environment=DATABASE_URL=postgresql://axiom:dsHXpLsy7qDyVIeI80FlZ7Yn/Gzht1N6pNRoiAvKPZ4=@10.36.0.107:5432/axiom
-Environment=EMBEDDING_BATCH_SIZE=32
-
-[Service]
-Restart=always
-
-[Install]
-WantedBy=default.target
-```
-
-**axiom-nginx.container**
-```ini
-[Unit]
-Description=Axiom Nginx Proxy
-After=axiom-backend.service axiom-frontend.service
-
-[Container]
-Image=localhost/axiom-nginx
-ContainerName=axiom-nginx
-Network=axiom.network
-PublishPort=80:80
-
-[Service]
-Restart=always
-
-[Install]
-WantedBy=default.target
-```
-
-### Build and start
+### Install containerd + nerdctl inside LXC
 
 ```bash
-# Build images with podman inside the LXC
-pct exec 120 -- bash -c '
-  cd /opt/axiom
-  podman build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
-  podman build -t axiom-frontend -f axiom_frontend/Dockerfile axiom_frontend/
-  podman build -t axiom-nginx -f nginx/Dockerfile nginx/
-  podman build -t axiom-doc-processor -f axiom_backend/Dockerfile axiom_backend/
-'
+# Install containerd
+apt install -y containerd
 
-# Reload systemd to pick up quadlet files, then start
-pct exec 120 -- bash -c '
-  systemctl daemon-reload
-  systemctl start axiom-backend axiom-frontend axiom-doc-processor axiom-nginx
-  systemctl enable axiom-backend axiom-frontend axiom-doc-processor axiom-nginx
-'
+# Install nerdctl (Docker-compatible CLI for containerd)
+curl -sL https://github.com/containerd/nerdctl/releases/latest/download/nerdctl-full-linux-amd64.tar.gz | tar xz -C /usr/local
+
+# Install nvidia-container-toolkit for CDI
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+  > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+apt update && apt install -y nvidia-container-toolkit
+
+# Generate CDI spec
+nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+
+# Configure containerd for NVIDIA
+nvidia-ctk runtime configure --runtime=containerd
+systemctl restart containerd
+```
+
+### Deploy axiom
+
+```bash
+# Clone repo
+cd /opt && git clone https://github.com/Cyb3rDudu/axiom.git
+cd axiom && cp env.example .env
+# Edit .env with external DB settings (192.168.1.107)
+
+# Build images
+nerdctl build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
+nerdctl build -t axiom-frontend -f axiom_frontend/Dockerfile axiom_frontend/
+nerdctl build -t axiom-nginx -f nginx/Dockerfile nginx/
+
+# Run with compose
+nerdctl compose -f docker-compose.external-db.yml up -d
+```
+
+### GPU access in containers
+
+```bash
+# Run with GPU (CDI)
+nerdctl run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
 ```
 
 ### Management
 
 ```bash
 # Status
-systemctl status axiom-backend
-systemctl status axiom-frontend
+nerdctl compose -f docker-compose.external-db.yml ps
 
 # Logs
-journalctl -u axiom-backend -f
+nerdctl compose -f docker-compose.external-db.yml logs -f backend
 
-# Restart a service
-systemctl restart axiom-backend
+# Restart
+nerdctl compose -f docker-compose.external-db.yml restart backend
 
-# Update: rebuild image, then restart
-podman build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
-systemctl restart axiom-backend
+# Update
+nerdctl compose -f docker-compose.external-db.yml down
+nerdctl build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
+nerdctl compose -f docker-compose.external-db.yml up -d
 ```
 
-### Advantages over Docker Compose
+### Advantages
 
-- No Docker daemon (Podman is daemonless)
-- Native systemd integration (ordering, restart, logging)
-- Each container is a proper systemd service
-- Works in unprivileged LXC with nesting
-- `journalctl` for logs instead of `docker logs`
+- Docker Compose compatible (uses the same `docker-compose.yml` files)
+- Native GPU support via NVIDIA CDI
+- No Docker daemon (containerd is lighter)
+- `nerdctl` CLI is drop-in replacement for `docker`
+- Works in privileged LXC with full GPU passthrough
 
 ## Deployment method comparison
 
 | Method | Maturity | Compose support | GPU | Best for |
 |--------|----------|-----------------|-----|----------|
 | Native OCI LXC | Tech preview | No (1 image = 1 LXC) | Via device passthrough | Single-image services |
-| Docker Compose in LXC | Production | Full | Via nvidia-container-toolkit | Complex stacks, quick setup |
-| Podman Quadlet in LXC | Production | Via unit files | Via CDI/device mount | Systemd-native, no daemon |
+| Docker Compose in LXC | Production | Full | Via nvidia-container-toolkit | Quick Docker migration |
+| **containerd + nerdctl in LXC** | **Production** | **Full (nerdctl compose)** | **Via NVIDIA CDI** | **Current setup** |
 
 ## Notes
 
-- Native OCI containers are a Proxmox 9.1 tech preview — use Docker Compose or Podman Quadlet in LXC for production
+- containerd + nerdctl replaced podman/buildah for better Docker Compose compatibility
 - Always use static IPs for native OCI containers (minimal images lack dhclient)
 - Use `pct exec <id> -- <command>` to access containers
-- PostgreSQL runs on CT 107 (shared), not inside axiom containers
-- The `docker-compose.external-db.yml` variant is designed for external DB setups
+- PostgreSQL runs on CT 107 (192.168.1.107, shared), not inside axiom containers
+- The `docker-compose.external-db.yml` variant is designed for this setup (no embedded postgres)
+- GPU is shared between host and LXC — multiple containers can use the A3000 simultaneously
