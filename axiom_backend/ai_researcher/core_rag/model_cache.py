@@ -1,21 +1,17 @@
 """
-Unified GPU model cache with automatic idle unloading.
+Unified GPU model cache.
 
 All GPU models go through this cache. Models load on demand and
-unload after IDLE_TIMEOUT_SECONDS of inactivity. On a 16GB GPU
-shared between backend (chat) and doc-processor (import), no model
-should stay loaded when not actively needed.
+stay loaded for the lifetime of the process. Explicit unload methods
+are available for the doc-processor pipeline to free VRAM between steps.
 """
 
 import logging
 import threading
-import time
 import gc
 from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-IDLE_TIMEOUT_SECONDS = 120
 
 
 def _free_gpu():
@@ -30,7 +26,7 @@ def _free_gpu():
 
 
 class ModelCache:
-    """Thread-safe singleton cache for all GPU models with idle timeout."""
+    """Thread-safe singleton cache for all GPU models."""
 
     _instance = None
     _lock = threading.Lock()
@@ -40,32 +36,12 @@ class ModelCache:
     _reranker = None
     _gliner = None
 
-    # Idle timer
-    _last_access: float = 0
-    _timer: Optional[threading.Timer] = None
-
     def __new__(cls):
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
         return cls._instance
-
-    def _touch(self):
-        """Record access time and reset idle timer."""
-        self._last_access = time.time()
-        if self._timer is not None:
-            self._timer.cancel()
-        self._timer = threading.Timer(IDLE_TIMEOUT_SECONDS, self._idle_unload)
-        self._timer.daemon = True
-        self._timer.start()
-
-    def _idle_unload(self):
-        """Called by timer when models have been idle."""
-        elapsed = time.time() - self._last_access
-        if elapsed >= IDLE_TIMEOUT_SECONDS - 1:
-            logger.info(f"Models idle for {elapsed:.0f}s, unloading all GPU models")
-            self.unload_all()
 
     # ── Embedder ────────────────────────────────────────────────────────
 
@@ -77,7 +53,6 @@ class ModelCache:
                     from .embedder import TextEmbedder
                     logger.info("Loading TextEmbedder...")
                     self._embedder = TextEmbedder()
-        self._touch()
         return self._embedder
 
     def unload_embedder(self):
@@ -99,7 +74,6 @@ class ModelCache:
                     from .reranker import TextReranker
                     logger.info("Loading TextReranker...")
                     self._reranker = TextReranker()
-        self._touch()
         return self._reranker
 
     def unload_reranker(self):
@@ -133,7 +107,6 @@ class ModelCache:
                     except ImportError:
                         logger.warning("GLiNER not available")
                         return None
-        self._touch()
         return self._gliner
 
     def unload_gliner(self):
@@ -150,9 +123,6 @@ class ModelCache:
     def unload_all(self):
         """Unload all models and free GPU memory."""
         with self._lock:
-            if self._timer is not None:
-                self._timer.cancel()
-                self._timer = None
             had = self._embedder or self._reranker or self._gliner
             self._embedder = None
             self._reranker = None
