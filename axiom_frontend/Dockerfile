@@ -10,6 +10,9 @@ COPY package*.json ./
 # Install dependencies (including dev dependencies for build)
 RUN npm install
 
+# Cache bust: changes every deploy to ensure fresh COPY
+ARG CACHEBUST=0
+
 # Copy source code
 COPY . .
 

@@ -48,6 +48,9 @@ FROM deps AS app
 
 WORKDIR /app
 
+# Cache bust: changes every deploy to ensure fresh COPY
+ARG CACHEBUST=0
+
 # Copy the application code
 COPY . /app/
 

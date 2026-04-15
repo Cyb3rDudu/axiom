@@ -35,14 +35,17 @@ log "Pulling latest code on LXC..."
 ssh "$TARGET" "cd $REMOTE_SRC && git pull"
 
 # Step 3: Build images with nerdctl
+# Use CACHEBUST to force the app COPY layer to rebuild
+CACHEBUST=$(date +%s)
+
 if [ "$BUILD_BACKEND" = true ]; then
-    log "Building backend image (this may take a minute)..."
-    ssh "$TARGET" "cd $REMOTE_SRC && $NERDCTL build -t axiom-backend:local -f axiom_backend/Dockerfile axiom_backend/"
+    log "Building backend image..."
+    ssh "$TARGET" "cd $REMOTE_SRC && $NERDCTL build --build-arg CACHEBUST=$CACHEBUST -t axiom-backend:local -f axiom_backend/Dockerfile axiom_backend/"
 fi
 
 if [ "$BUILD_FRONTEND" = true ]; then
     log "Building frontend image..."
-    ssh "$TARGET" "cd $REMOTE_SRC && $NERDCTL build -t axiom-frontend:local -f axiom_frontend/Dockerfile axiom_frontend/"
+    ssh "$TARGET" "cd $REMOTE_SRC && $NERDCTL build --build-arg CACHEBUST=$CACHEBUST -t axiom-frontend:local -f axiom_frontend/Dockerfile axiom_frontend/"
 fi
 
 # Step 4: Restart service
