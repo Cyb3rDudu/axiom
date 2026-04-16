@@ -75,7 +75,11 @@ class GpuWorkerServer:
                     try:
                         import os as _os
                         from gliner import GLiNER
-                        from hardware_detection import hardware_detector
+                        # hardware_detection lives at axiom_backend/ai_researcher/hardware_detection.py
+                        # Use the full package path so the import works in a fresh
+                        # subprocess where the legacy sys.path-polluting imports
+                        # (embedder/reranker/processor) haven't run yet.
+                        from ai_researcher.hardware_detection import hardware_detector
 
                         cache_dir = _os.getenv("HF_HOME", "/root/.cache/huggingface/hub")
                         device = hardware_detector.get_model_device("gliner")
@@ -85,8 +89,8 @@ class GpuWorkerServer:
                             cache_dir=cache_dir,
                         ).to(device)
                         logger.info("GLiNER ready")
-                    except ImportError:
-                        logger.warning("GLiNER not available")
+                    except ImportError as exc:
+                        logger.warning(f"GLiNER not available: {exc}")
                         return None
         return self._gliner
 
