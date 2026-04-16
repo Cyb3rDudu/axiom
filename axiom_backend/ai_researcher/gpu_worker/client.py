@@ -120,18 +120,35 @@ class GpuWorkerClient:
             return False
 
     def _ensure_worker(self) -> None:
-        """Spawn the worker if not running. Client-mode: only verify socket exists."""
+        """Spawn the worker if not running.
+
+        In client mode we first wait briefly for the intended owner (the
+        backend) to have the socket ready. If it doesn't appear within
+        ``CLIENT_WAIT_SEC`` we fall through to owner-mode spawn as a
+        self-heal — the idempotent-spawn check (dbf6af5) will still refuse
+        to create a duplicate if someone else beat us to it, and the stdio
+        reattachment (66c150d) means the worker keeps logging cleanly even
+        if it's later orphaned.
+        """
+        CLIENT_WAIT_SEC = int(os.getenv("AXIOM_GPU_WORKER_CLIENT_WAIT_SEC", "5"))
         if self._client_mode:
-            # Doc-processor case: backend owns the worker. Wait for socket.
-            deadline = time.time() + SPAWN_WAIT_TIMEOUT
+            deadline = time.time() + CLIENT_WAIT_SEC
             while not os.path.exists(self._socket_path):
                 if time.time() > deadline:
-                    raise GpuWorkerError(
+                    logger.warning(
                         f"GPU worker socket not found at {self._socket_path} "
-                        f"(client_mode=True — the backend should own the worker)"
+                        f"after {CLIENT_WAIT_SEC}s — falling back to owner-mode spawn"
                     )
-                time.sleep(0.5)
-            return
+                    break
+                time.sleep(0.2)
+            else:
+                # Socket exists — use it as a client.
+                return
+            # Fall through: spawn the worker ourselves as a self-heal.
+            # Flip mode so _ensure_worker's spawn branch below runs; the
+            # idempotent-spawn check prevents duplicates if the backend
+            # has just raced us.
+            self._client_mode = False
 
         with self._proc_lock:
             if self._worker_alive():

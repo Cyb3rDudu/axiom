@@ -157,7 +157,34 @@ async def startup_event():
     max_workers = int(os.getenv("MAX_WORKER_THREADS", "20"))
     app.state.thread_pool = ThreadPoolExecutor(max_workers=max_workers)
     logger.info(f"Initialized thread pool with {max_workers} workers")
-    
+
+    # In worker mode (issue #9), the backend owns the shared GPU worker
+    # subprocess that doc-processor connects to as a client. Spawn it
+    # eagerly here so the socket exists before the first doc-processor
+    # import arrives — otherwise doc-processor would wait 60 s for a
+    # socket that only appears once the backend processes a chat query,
+    # leading to "GPU worker socket not found" on a cold start.
+    if os.getenv("AXIOM_USE_GPU_WORKER", "false").lower() == "true":
+        try:
+            from ai_researcher.gpu_worker.client import get_client
+            client = get_client()
+            if not client._client_mode:
+                import threading
+                def _warmup():
+                    try:
+                        client._ensure_worker()
+                        logger.info("GPU worker subprocess spawned at startup")
+                    except Exception as exc:
+                        logger.warning(
+                            f"Eager GPU worker spawn failed (will retry lazily): {exc}"
+                        )
+                # Run in a background thread so the startup path doesn't
+                # block on model loads; the worker is fully ready by the
+                # time the first real embed call hits it in most cases.
+                threading.Thread(target=_warmup, daemon=True, name="gpu-worker-warmup").start()
+        except Exception as exc:
+            logger.warning(f"Could not trigger GPU worker warmup: {exc}")
+
     # Create first user for development if no users exist
     db = SessionLocal()
     try:

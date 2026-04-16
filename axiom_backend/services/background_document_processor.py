@@ -816,15 +816,12 @@ class BackgroundDocumentProcessor:
                             print(f"[{doc_id}] Built {cooccurrence_count} co-occurrence relationships")
 
                             # --- mREBEL relation extraction (subprocess, issue #13) ---
+                            # Since mREBEL runs in its own subprocess with its
+                            # own CUDA context (#13), it doesn't share VRAM
+                            # with the shared GPU worker — no need to kill the
+                            # worker first. (Before #13, mREBEL was in-process
+                            # and we had to free the GPU for it; that's gone.)
                             try:
-                                from ai_researcher.core_rag.model_cache import model_cache
-
-                                # Shut the shared GPU worker down so mREBEL has
-                                # the whole card. After the subprocess exits
-                                # the worker respawns on the next embed call.
-                                print(f"[{doc_id}] Shutting down shared GPU worker before mREBEL...")
-                                model_cache.unload_all()
-
                                 print(f"[{doc_id}] Extracting relations with mREBEL (subprocess)...")
                                 triples = self._extract_relations_via_subprocess(doc_id, chunks)
 
