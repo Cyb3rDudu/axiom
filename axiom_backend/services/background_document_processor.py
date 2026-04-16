@@ -552,6 +552,32 @@ class BackgroundDocumentProcessor:
             print(f"[{doc_id}] Saved Markdown to: {md_save_path}")
             self._update_document_progress_sync(doc_id, user_id, 55, "processing")
 
+            # --- Unload Marker models before embedding (frees ~2.5GB VRAM) ---
+            # Peak VRAM during embedding was 11.5GB on 12GB GPU; keeping Marker
+            # resident here was the main reason. Marker is no longer needed.
+            if original_filename.lower().endswith('.pdf'):
+                try:
+                    print(f"[{doc_id}] Unloading Marker models (no longer needed)...")
+                    for attr in ('table_converter', 'no_table_converter', 'converter', 'marker_models', 'model_dict'):
+                        obj = getattr(processor, attr, None)
+                        if obj is not None:
+                            try:
+                                del obj
+                            except Exception:
+                                pass
+                            setattr(processor, attr, None)
+                    import gc
+                    gc.collect()
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            print(f"[{doc_id}] GPU after Marker unload: {torch.cuda.memory_allocated()/1e9:.1f}GB")
+                    except Exception:
+                        pass
+                except Exception as e_unload:
+                    print(f"[{doc_id}] Warning: Marker unload failed: {e_unload}")
+
             # Retry metadata extraction with markdown content if initial extraction failed
             from services.metadata_enrichment import needs_metadata_retry
             if needs_metadata_retry(extracted_metadata, original_filename):
