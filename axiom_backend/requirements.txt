@@ -56,3 +56,7 @@ gliner
 
 # OpenSearch for fulltext search
 opensearch-py
+
+# GPU worker subprocess IPC (msgpack + native numpy arrays)
+msgpack
+msgpack-numpy
