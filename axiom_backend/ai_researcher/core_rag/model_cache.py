@@ -83,11 +83,17 @@ class ModelCache:
                     )
                     if not in_use:
                         logger.info(
-                            f"Auto-restart triggered: {reason} — SIGTERM self for "
+                            f"Auto-restart triggered: {reason} — SIGTERM PID 1 for "
                             f"clean CUDA context reset. Container will auto-restart."
                         )
-                        # SIGTERM lets uvicorn gracefully drain connections first
-                        os.kill(os.getpid(), signal.SIGTERM)
+                        # Kill PID 1 so container exits cleanly and nerdctl restarts it.
+                        # Using os.getpid() killed the uvicorn worker but left the parent
+                        # alive with a zombie — container stayed "Up" but served nothing.
+                        try:
+                            os.kill(1, signal.SIGTERM)
+                        except PermissionError:
+                            # Fallback: kill self (works when running as PID 1)
+                            os.kill(os.getpid(), signal.SIGTERM)
                         return
                 except Exception as e:
                     logger.error(f"Idle monitor error: {e}")
