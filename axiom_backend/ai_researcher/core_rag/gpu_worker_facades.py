@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -159,9 +160,30 @@ class GlinerFacade:
 # ── Worker lifecycle passthroughs ───────────────────────────────────────
 
 def shutdown_worker_if_running() -> None:
-    """Kill the worker subprocess (best-effort). Used by ``model_cache.unload_all``."""
+    """Ask the worker to shut down (best-effort).
+
+    Two paths:
+    - **Owner** (backend): SIGTERM the Popen via ``shutdown_worker`` — the
+      socket file and child process are cleaned up in-process.
+    - **Client** (doc-processor): can't kill another container's subprocess
+      directly, so send a ``shutdown`` RPC. The worker's signal-handler-like
+      ``_shutdown`` event breaks its accept loop and it exits cleanly.
+
+    Either path frees VRAM so callers like ``model_cache.unload_all`` can
+    rely on this being effective regardless of which container invokes it.
+    """
+    c = _client()
     try:
-        _client().shutdown_worker()
+        if c._client_mode:
+            if os.path.exists(c._socket_path):
+                try:
+                    c._call("shutdown", timeout=5)
+                except Exception as exc:
+                    # Worker may have closed the socket before responding —
+                    # that's the desired end state, so ignore.
+                    logger.debug(f"shutdown RPC: {exc}")
+        else:
+            c.shutdown_worker()
     except Exception as exc:
         logger.warning(f"shutdown_worker_if_running: {exc}")
 

@@ -48,9 +48,21 @@ class GpuWorkerClient:
 
     @classmethod
     def instance(cls) -> "GpuWorkerClient":
+        """Build the singleton using environment-derived defaults.
+
+        - ``AXIOM_GPU_WORKER_SOCKET`` — socket path shared by both the owner
+          (backend) and the connect-only client (doc-processor). When set,
+          both containers agree on where the socket lives.
+        - ``AXIOM_GPU_WORKER_CLIENT_MODE=true`` — tell this process *not* to
+          spawn a worker itself; just connect to the one the owner created.
+          doc-processor sets this so backend alone owns the subprocess.
+        """
         with cls._instance_lock:
             if cls._instance is None:
-                cls._instance = cls()
+                env_client_mode = (
+                    os.getenv("AXIOM_GPU_WORKER_CLIENT_MODE", "false").lower() == "true"
+                )
+                cls._instance = cls(client_mode=env_client_mode)
         return cls._instance
 
     def __init__(
@@ -63,8 +75,9 @@ class GpuWorkerClient:
         Parameters
         ----------
         socket_path : Optional[str]
-            Override socket path. Default: /tmp/axiom-gpu-{pid}.sock if the
-            client is the owner (spawns worker), otherwise must be provided.
+            Override socket path. Otherwise the ``AXIOM_GPU_WORKER_SOCKET``
+            env var is honored; falls back to ``/tmp/axiom-gpu-{pid}.sock``
+            in owner mode, or ``/tmp/axiom-gpu.sock`` in client mode.
         client_mode : bool
             If True, never spawn the worker — only connect to an existing
             socket. Used by doc-processor which shares the backend's worker.
@@ -74,14 +87,15 @@ class GpuWorkerClient:
         self._client_mode = client_mode
         self._idle_sec = idle_sec if idle_sec is not None else DEFAULT_IDLE_SEC
 
+        env_socket = os.getenv("AXIOM_GPU_WORKER_SOCKET")
         if socket_path:
             self._socket_path = socket_path
+        elif env_socket:
+            # Explicit shared path — both owner and client read it. Used in
+            # LXC prod where backend + doc-processor mount the same dir.
+            self._socket_path = env_socket
         elif client_mode:
-            # Shared socket path when the worker is owned by another container.
-            self._socket_path = os.getenv(
-                "AXIOM_GPU_WORKER_SOCKET",
-                os.path.join(DEFAULT_SOCKET_DIR, "axiom-gpu.sock"),
-            )
+            self._socket_path = os.path.join(DEFAULT_SOCKET_DIR, "axiom-gpu.sock")
         else:
             self._socket_path = os.path.join(DEFAULT_SOCKET_DIR, f"axiom-gpu-{os.getpid()}.sock")
 
@@ -112,6 +126,13 @@ class GpuWorkerClient:
         with self._proc_lock:
             if self._worker_alive():
                 return
+
+            # Ensure the parent directory exists (matters when the socket
+            # lives under a shared bind-mount like /tmp/axiom-gpu/ that was
+            # created fresh by the container start script).
+            sock_dir = os.path.dirname(self._socket_path)
+            if sock_dir:
+                os.makedirs(sock_dir, exist_ok=True)
 
             # Clean any stale socket from a previous run.
             try:
