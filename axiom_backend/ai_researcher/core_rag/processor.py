@@ -208,7 +208,8 @@ class DocumentProcessor:
         vector_store: Optional[VectorStore] = None,
         force_reembed: bool = False, # Add force_reembed flag
         # marker_model_dir is handled by env var MARKER_MODEL_DIR
-        device: Optional[str] = None
+        device: Optional[str] = None,
+        load_marker: bool = True,
     ):
         self.pdf_dir = Path(pdf_dir)
         self.markdown_dir = Path(markdown_dir)
@@ -237,11 +238,17 @@ class DocumentProcessor:
             torch.set_num_threads(hardware_detector.get_num_workers())
             print(f"Set PyTorch threads to {hardware_detector.get_num_workers()} for CPU processing")
 
-        # Initialize Marker components
-        self.marker_models = create_model_dict(device=self.device)
-        
-        # Store different configurations for table handling
-        self._init_marker_configs()
+        # Initialize Marker components (skipped by doc-processor, which runs
+        # Marker in a short-lived per-import subprocess — see issue #13).
+        if load_marker:
+            self.marker_models = create_model_dict(device=self.device)
+            self._init_marker_configs()
+        else:
+            self.marker_models = None
+            self.table_converter = None
+            self.no_table_converter = None
+            self.marker_converter = None
+            logger.info("DocumentProcessor: Marker loading skipped (load_marker=False)")
 
         # Initialize other components
         self.metadata_extractor = MetadataExtractor()

@@ -198,7 +198,11 @@ class BackgroundDocumentProcessor:
                     db_path=self.db_path,
                     embedder=embedder,
                     vector_store=vector_store,
-                    force_reembed=False
+                    force_reembed=False,
+                    # Marker runs in a short-lived per-import subprocess now
+                    # (see issue #13); keep this long-lived doc-processor
+                    # free of its ~2.5 GB of model weights.
+                    load_marker=False,
                 )
             return self._processor
     
@@ -218,7 +222,11 @@ class BackgroundDocumentProcessor:
                     db_path=self.db_path,
                     embedder=embedder,
                     vector_store=vector_store,
-                    force_reembed=False
+                    force_reembed=False,
+                    # Marker runs in a short-lived per-import subprocess now
+                    # (see issue #13); keep this long-lived doc-processor
+                    # free of its ~2.5 GB of model weights.
+                    load_marker=False,
                 )
             else:
                 print("Reusing existing DocumentProcessor, updating metadata extractor...")
@@ -229,7 +237,127 @@ class BackgroundDocumentProcessor:
             self._processor.metadata_extractor = metadata_extractor
             
             return self._processor
-    
+
+    # ── Per-import model subprocesses (issue #13) ──────────────────────
+
+    def _convert_pdf_via_subprocess(
+        self,
+        doc_id: str,
+        pdf_path: Path,
+        out_md_path: Path,
+        out_images_dir: Path,
+    ) -> tuple:
+        """Run Marker in a short-lived subprocess and return (markdown, image_mapping).
+
+        ``image_mapping`` is ``{marker_original_filename: saved_filename}`` for
+        the caller to rewrite markdown references with.
+
+        Raises ``RuntimeError`` on any failure — the import is marked as failed.
+        """
+        import subprocess
+        import sys as _sys
+        out_md_path.parent.mkdir(parents=True, exist_ok=True)
+        out_images_dir.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            _sys.executable,
+            "-m",
+            "ai_researcher.pdf_worker",
+            str(pdf_path),
+            str(out_md_path),
+            str(out_images_dir),
+        ]
+        print(f"[{doc_id}] Spawning pdf_worker: {' '.join(cmd)}")
+        # Don't hard-cap runtime here; the pdf_worker inherits Marker's 9h
+        # internal timeout from _convert_pdf_with_table_handling.
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+        )
+        if proc.returncode != 0:
+            if proc.stderr:
+                print(f"[{doc_id}] pdf_worker stderr: {proc.stderr}")
+            raise RuntimeError(
+                f"pdf_worker exited with code {proc.returncode} — see stderr above"
+            )
+
+        # Last non-empty stdout line is the final JSON result (logger lines
+        # printed earlier go via sys.stdout too but in a separate format).
+        last_line = ""
+        for line in (proc.stdout or "").splitlines()[::-1]:
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                last_line = line
+                break
+        if not last_line:
+            raise RuntimeError(f"pdf_worker produced no JSON result; stdout={proc.stdout[-400:]}")
+        result = json.loads(last_line)
+        if not result.get("ok"):
+            raise RuntimeError(f"pdf_worker reported failure: {result.get('error')}")
+
+        markdown = out_md_path.read_text(encoding="utf-8")
+        image_mapping = result.get("image_mapping") or {}
+        return markdown, image_mapping
+
+    def _extract_relations_via_subprocess(
+        self,
+        doc_id: str,
+        chunks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Run mREBEL in a short-lived subprocess and return the triple list."""
+        import subprocess
+        import sys as _sys
+        import tempfile
+
+        # Pass chunks via temp file so large payloads don't go through argv or
+        # stdin buffers; the subprocess parses them with json.load.
+        tmp_dir = Path(tempfile.mkdtemp(prefix=f"axiom-mrebel-{doc_id[:8]}-"))
+        chunks_path = tmp_dir / "chunks.json"
+        triples_path = tmp_dir / "triples.json"
+        try:
+            # Serialize only the fields relation_extractor actually uses to
+            # keep the file small (text + metadata.chunk_id).
+            minimal = [
+                {"text": c.get("text", ""), "metadata": {"chunk_id": c.get("metadata", {}).get("chunk_id", "")}}
+                for c in chunks
+            ]
+            chunks_path.write_text(json.dumps(minimal), encoding="utf-8")
+
+            cmd = [
+                _sys.executable,
+                "-m",
+                "ai_researcher.relation_worker",
+                str(chunks_path),
+                str(triples_path),
+            ]
+            print(f"[{doc_id}] Spawning relation_worker: {' '.join(cmd)}")
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                env=os.environ.copy(),
+            )
+            if proc.returncode != 0:
+                if proc.stderr:
+                    print(f"[{doc_id}] relation_worker stderr: {proc.stderr}")
+                raise RuntimeError(
+                    f"relation_worker exited with code {proc.returncode}"
+                )
+
+            with open(triples_path, "r", encoding="utf-8") as f:
+                triples = json.load(f)
+            return triples
+        finally:
+            # Best-effort cleanup of the temp dir; don't mask real errors.
+            try:
+                for p in (chunks_path, triples_path):
+                    p.unlink(missing_ok=True)
+                tmp_dir.rmdir()
+            except Exception:
+                pass
+
     def add_websocket_connection(self, user_id: str, websocket):
         """Add a WebSocket connection for a user."""
         if user_id not in self.websocket_connections:
@@ -471,75 +599,54 @@ class BackgroundDocumentProcessor:
             
             # Convert document to Markdown based on file type
             self._update_document_progress_sync(doc_id, user_id, 45, "processing")
-            marker_images = {}  # Initialize empty dict for non-PDF files
+            extracted_images = []  # Filled below for PDFs with images
             if original_filename.lower().endswith('.pdf'):
-                print(f"[{doc_id}] Converting PDF to Markdown using Marker with intelligent table handling...")
-                markdown_content, marker_images = processor._convert_pdf_with_table_handling(target_path)
+                print(f"[{doc_id}] Converting PDF to Markdown via pdf_worker subprocess...")
+                md_filename = f"{doc_id}.md"
+                md_save_path = processor.markdown_dir / md_filename
+                image_dir = processor.image_dir / doc_id
+                markdown_content, image_mapping = self._convert_pdf_via_subprocess(
+                    doc_id=doc_id,
+                    pdf_path=target_path,
+                    out_md_path=md_save_path,
+                    out_images_dir=image_dir,
+                )
+
+                # Rewrite image references in markdown from Marker's original
+                # filenames to our stable /api/images/<doc_id>/image_N.ext form.
+                from ai_researcher import config
+                if config.ENABLE_IMAGE_EXTRACTION and image_mapping:
+                    mapping_as_paths = {orig: image_dir / new for orig, new in image_mapping.items()}
+                    markdown_content = processor._update_markdown_image_paths(
+                        markdown_content, doc_id, mapping_as_paths
+                    )
+                    # Persist the updated markdown (pdf_worker wrote the pre-rewrite version).
+                    md_save_path.write_text(markdown_content, encoding="utf-8")
+                    extracted_images = mapping_as_paths  # dict form matches legacy callers
+                    print(f"[{doc_id}] Organized {len(image_mapping)} images")
             elif original_filename.lower().endswith(('.docx', '.doc')):
                 print(f"[{doc_id}] Converting Word document to Markdown...")
                 markdown_content = processor.document_converter.convert_word_to_markdown(target_path)
+                md_filename = f"{doc_id}.md"
+                md_save_path = processor.markdown_dir / md_filename
+                md_save_path.write_text(markdown_content, encoding="utf-8")
             elif original_filename.lower().endswith(('.md', '.markdown')):
                 print(f"[{doc_id}] Reading Markdown file content...")
                 markdown_content = processor.document_converter.read_markdown_file(target_path)
+                md_filename = f"{doc_id}.md"
+                md_save_path = processor.markdown_dir / md_filename
+                md_save_path.write_text(markdown_content, encoding="utf-8")
             else:
                 raise Exception(f"Unsupported file format for processing: {original_filename}")
 
             if not markdown_content:
                 raise Exception(f"Document processing produced empty markdown content for {original_filename}")
 
-            # Handle extracted images from Marker
-            from ai_researcher import config
-            extracted_images = []  # Track extracted images for later embedding
-            if config.ENABLE_IMAGE_EXTRACTION and marker_images:
-                try:
-                    print(f"[{doc_id}] Processing extracted images...")
-                    image_dir = processor.image_dir / doc_id
-                    image_dir.mkdir(parents=True, exist_ok=True)
-
-                    # Save images from marker output
-                    extracted_images = processor._save_marker_images(doc_id, marker_images, image_dir)
-
-                    if extracted_images:
-                        # Update markdown references
-                        markdown_content = processor._update_markdown_image_paths(markdown_content, doc_id, extracted_images)
-                        print(f"[{doc_id}] Organized {len(extracted_images)} images")
-                except Exception as e:
-                    print(f"[{doc_id}] Warning: Image processing failed: {e}")
-                    # Non-fatal error, continue with document processing
-
-            # Save markdown with our doc_id (with updated image paths if applicable)
-            md_filename = f"{doc_id}.md"
-            md_save_path = processor.markdown_dir / md_filename
-            with open(md_save_path, "w", encoding="utf-8") as f:
-                f.write(markdown_content)
             print(f"[{doc_id}] Saved Markdown to: {md_save_path}")
             self._update_document_progress_sync(doc_id, user_id, 55, "processing")
 
-            # --- Unload Marker models before embedding (frees ~2.5GB VRAM) ---
-            # Peak VRAM during embedding was 11.5GB on 12GB GPU; keeping Marker
-            # resident here was the main reason. Marker is no longer needed.
-            if original_filename.lower().endswith('.pdf'):
-                try:
-                    print(f"[{doc_id}] Unloading Marker models (no longer needed)...")
-                    for attr in ('table_converter', 'no_table_converter', 'converter', 'marker_models', 'model_dict'):
-                        obj = getattr(processor, attr, None)
-                        if obj is not None:
-                            try:
-                                del obj
-                            except Exception:
-                                pass
-                            setattr(processor, attr, None)
-                    import gc
-                    gc.collect()
-                    try:
-                        import torch
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                            print(f"[{doc_id}] GPU after Marker unload: {torch.cuda.memory_allocated()/1e9:.1f}GB")
-                    except Exception:
-                        pass
-                except Exception as e_unload:
-                    print(f"[{doc_id}] Warning: Marker unload failed: {e_unload}")
+            # Note: Marker model lifecycle is fully contained in pdf_worker's
+            # subprocess — no in-process unload needed here anymore (issue #13).
 
             # Retry metadata extraction with markdown content if initial extraction failed
             from services.metadata_enrichment import needs_metadata_retry
@@ -708,28 +815,18 @@ class BackgroundDocumentProcessor:
                             )
                             print(f"[{doc_id}] Built {cooccurrence_count} co-occurrence relationships")
 
-                            # --- mREBEL relation extraction ---
+                            # --- mREBEL relation extraction (subprocess, issue #13) ---
                             try:
-                                from ai_researcher.core_rag.relation_extractor import (
-                                    extract_relations_from_chunks, unload_mrebel
-                                )
                                 from ai_researcher.core_rag.model_cache import model_cache
 
-                                # Unload ALL other GPU models before loading mREBEL
-                                print(f"[{doc_id}] Unloading GPU models for mREBEL...")
+                                # Shut the shared GPU worker down so mREBEL has
+                                # the whole card. After the subprocess exits
+                                # the worker respawns on the next embed call.
+                                print(f"[{doc_id}] Shutting down shared GPU worker before mREBEL...")
                                 model_cache.unload_all()
-                                # Clear Marker models from processor
-                                if hasattr(processor, 'converter') and processor.converter is not None:
-                                    del processor.converter
-                                    processor.converter = None
-                                if hasattr(processor, 'model_dict') and processor.model_dict is not None:
-                                    del processor.model_dict
-                                    processor.model_dict = None
-                                import torch
-                                print(f"[{doc_id}] GPU before mREBEL: {torch.cuda.memory_allocated()/1e9:.1f}GB")
 
-                                print(f"[{doc_id}] Extracting relations with mREBEL...")
-                                triples = extract_relations_from_chunks(chunks)
+                                print(f"[{doc_id}] Extracting relations with mREBEL (subprocess)...")
+                                triples = self._extract_relations_via_subprocess(doc_id, chunks)
 
                                 # Store triples as entity relationships
                                 rel_count = 0
@@ -765,17 +862,10 @@ class BackgroundDocumentProcessor:
                                         print(f"[{doc_id}] Failed to store triple: {e_rel}")
 
                                 print(f"[{doc_id}] Stored {rel_count} mREBEL relations")
-
-                                # Unload mREBEL to free GPU for future embedder/reranker use
-                                unload_mrebel()
+                                # mREBEL is freed automatically — the subprocess exited.
 
                             except Exception as e_mrebel:
                                 print(f"[{doc_id}] Warning: mREBEL relation extraction failed: {e_mrebel}")
-                                try:
-                                    from ai_researcher.core_rag.relation_extractor import unload_mrebel
-                                    unload_mrebel()
-                                except Exception:
-                                    pass
 
                         except Exception as e_graph:
                             print(f"[{doc_id}] Warning: Knowledge graph building failed: {e_graph}")
