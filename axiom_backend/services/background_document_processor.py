@@ -289,9 +289,11 @@ class BackgroundDocumentProcessor:
         """Sends a progress update to the main backend via an internal API call."""
         import requests
 
-        # Use environment-aware hostname (Docker network or native localhost)
+        # Use environment-aware hostname. With host networking (podman/nerdctl
+        # on LXC), localhost works. For Docker with bridge network, set
+        # BACKEND_HOST=axiom-backend in .env.
         import os
-        backend_host = os.getenv("BACKEND_HOST", "axiom-backend")
+        backend_host = os.getenv("BACKEND_HOST", "127.0.0.1")
         backend_port = os.getenv("BACKEND_PORT", "8000")
         backend_url = f"http://{backend_host}:{backend_port}/api/internal/document-progress"
         
