@@ -6,6 +6,7 @@ This service implements a queue-based system to process documents one at a time
 to avoid GPU VRAM conflicts while keeping the processing non-blocking.
 """
 import asyncio
+import os
 import uuid
 import json
 import traceback
@@ -16,6 +17,10 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 import time
 from dataclasses import dataclass
+
+# Idle unload settings (opt-in via AXIOM_AUTO_UNLOAD=true)
+AUTO_UNLOAD_ENABLED = os.getenv("AXIOM_AUTO_UNLOAD", "false").lower() == "true"
+IDLE_UNLOAD_THRESHOLD_SEC = int(os.getenv("AXIOM_IDLE_UNLOAD_SEC", "900"))
 
 from ai_researcher.core_rag.processor import DocumentProcessor
 from ai_researcher.core_rag.vector_store_singleton import get_vector_store
@@ -60,7 +65,11 @@ class BackgroundDocumentProcessor:
         self.is_processing = False
         self.current_job: Optional[ProcessingJob] = None
         self.shutdown_event = Event()
-        
+
+        # Track last activity for idle unload
+        self._last_job_finished_at: float = 0.0
+        self._models_loaded: bool = False
+
         # WebSocket connections for progress updates
         self.websocket_connections: Dict[str, List] = {}
 
@@ -140,11 +149,90 @@ class BackgroundDocumentProcessor:
             finally:
                 db.close()
 
-            # If no job was processed, wait before polling again
+            # If no job was processed, check for idle unload then wait
             if not job_processed:
-                time.sleep(5) # Poll every 5 seconds
+                self._maybe_unload_idle_models()
+                time.sleep(5)  # Poll every 5 seconds
+            else:
+                self._last_job_finished_at = time.time()
+                self._models_loaded = True
     
     
+    def _maybe_unload_idle_models(self):
+        """Check if models can be unloaded (no jobs pending, idle threshold met)."""
+        if not AUTO_UNLOAD_ENABLED or not self._models_loaded:
+            return
+        if self._last_job_finished_at == 0:
+            return
+        idle_sec = time.time() - self._last_job_finished_at
+        if idle_sec < IDLE_UNLOAD_THRESHOLD_SEC:
+            return
+
+        # Also check if any docs are pending (belt and suspenders)
+        try:
+            from sqlalchemy import text as sql_text
+            db = next(get_db())
+            try:
+                pending = db.execute(sql_text(
+                    "SELECT count(*) FROM documents WHERE processing_status IN ('pending','processing')"
+                )).scalar()
+                if pending and pending > 0:
+                    return
+            finally:
+                db.close()
+        except Exception:
+            pass
+
+        print(f"[doc-processor] Auto-unload: {idle_sec:.0f}s idle, freeing GPU/RAM")
+        with self._components_lock:
+            # Unload via shared model_cache (covers any models it holds)
+            try:
+                from ai_researcher.core_rag.model_cache import model_cache
+                model_cache.unload_all()
+            except Exception as e:
+                print(f"[doc-processor] model_cache unload failed: {e}")
+
+            # Unload our own references
+            self._embedder = None
+            if self._processor is not None:
+                # Processor holds Marker models — drop them
+                try:
+                    if hasattr(self._processor, 'converter') and self._processor.converter is not None:
+                        del self._processor.converter
+                        self._processor.converter = None
+                    if hasattr(self._processor, 'no_table_converter') and self._processor.no_table_converter is not None:
+                        del self._processor.no_table_converter
+                        self._processor.no_table_converter = None
+                    if hasattr(self._processor, 'model_dict') and self._processor.model_dict is not None:
+                        del self._processor.model_dict
+                        self._processor.model_dict = None
+                    if hasattr(self._processor, 'marker_models') and self._processor.marker_models is not None:
+                        del self._processor.marker_models
+                        self._processor.marker_models = None
+                except Exception as e:
+                    print(f"[doc-processor] Marker cleanup failed: {e}")
+                self._processor = None
+
+            # Release any lingering mREBEL
+            try:
+                from ai_researcher.core_rag.relation_extractor import unload_mrebel
+                unload_mrebel()
+            except Exception:
+                pass
+
+            # GC + CUDA cache clear
+            try:
+                import gc
+                gc.collect()
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+            self._models_loaded = False
+            print("[doc-processor] Models unloaded")
+
     def _get_vector_store(self) -> VectorStore:
         """Get or initialize the vector store (thread-safe)."""
         with self._components_lock:
