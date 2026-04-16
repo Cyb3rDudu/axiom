@@ -109,6 +109,16 @@ class GpuWorkerClient:
     def _worker_alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
+    def _socket_responsive(self, timeout: float = 1.0) -> bool:
+        """Quick liveness probe: can we open a UDS connection to the socket?"""
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(timeout)
+                s.connect(self._socket_path)
+            return True
+        except (FileNotFoundError, ConnectionRefusedError, OSError):
+            return False
+
     def _ensure_worker(self) -> None:
         """Spawn the worker if not running. Client-mode: only verify socket exists."""
         if self._client_mode:
@@ -134,7 +144,19 @@ class GpuWorkerClient:
             if sock_dir:
                 os.makedirs(sock_dir, exist_ok=True)
 
-            # Clean any stale socket from a previous run.
+            # If the socket is already bound by *another* owner process
+            # (e.g. the real uvicorn already spawned the worker and we're
+            # a helper / debug script in the same container), don't spawn
+            # a duplicate — just connect. Unlinking and re-spawning here
+            # would orphan the real worker and break shared-socket setups.
+            if os.path.exists(self._socket_path) and self._socket_responsive():
+                logger.info(
+                    f"GPU worker socket already live at {self._socket_path}; "
+                    f"connecting instead of spawning"
+                )
+                return
+
+            # Clean any stale socket from a dead previous run.
             try:
                 os.unlink(self._socket_path)
             except FileNotFoundError:
