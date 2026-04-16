@@ -159,7 +159,13 @@ class BackgroundDocumentProcessor:
     
     
     def _maybe_unload_idle_models(self):
-        """Check if models can be unloaded (no jobs pending, idle threshold met)."""
+        """Exit the process if idle long enough. Docker/systemd restarts clean.
+
+        In-process unload is unreliable — PyTorch's CUDA context gets into a bad
+        state after `del model + empty_cache()`, causing 'CUDA devices busy' on
+        the next load. Exiting the process is the only way to truly free RAM
+        and guarantee a clean CUDA context on the next import.
+        """
         if not AUTO_UNLOAD_ENABLED or not self._models_loaded:
             return
         if self._last_job_finished_at == 0:
@@ -168,7 +174,7 @@ class BackgroundDocumentProcessor:
         if idle_sec < IDLE_UNLOAD_THRESHOLD_SEC:
             return
 
-        # Also check if any docs are pending (belt and suspenders)
+        # Belt and suspenders: check for pending docs
         try:
             from sqlalchemy import text as sql_text
             db = next(get_db())
@@ -183,55 +189,14 @@ class BackgroundDocumentProcessor:
         except Exception:
             pass
 
-        print(f"[doc-processor] Auto-unload: {idle_sec:.0f}s idle, freeing GPU/RAM")
-        with self._components_lock:
-            # Unload via shared model_cache (covers any models it holds)
-            try:
-                from ai_researcher.core_rag.model_cache import model_cache
-                model_cache.unload_all()
-            except Exception as e:
-                print(f"[doc-processor] model_cache unload failed: {e}")
-
-            # Unload our own references
-            self._embedder = None
-            if self._processor is not None:
-                # Processor holds Marker models — drop them
-                try:
-                    if hasattr(self._processor, 'converter') and self._processor.converter is not None:
-                        del self._processor.converter
-                        self._processor.converter = None
-                    if hasattr(self._processor, 'no_table_converter') and self._processor.no_table_converter is not None:
-                        del self._processor.no_table_converter
-                        self._processor.no_table_converter = None
-                    if hasattr(self._processor, 'model_dict') and self._processor.model_dict is not None:
-                        del self._processor.model_dict
-                        self._processor.model_dict = None
-                    if hasattr(self._processor, 'marker_models') and self._processor.marker_models is not None:
-                        del self._processor.marker_models
-                        self._processor.marker_models = None
-                except Exception as e:
-                    print(f"[doc-processor] Marker cleanup failed: {e}")
-                self._processor = None
-
-            # Release any lingering mREBEL
-            try:
-                from ai_researcher.core_rag.relation_extractor import unload_mrebel
-                unload_mrebel()
-            except Exception:
-                pass
-
-            # GC + CUDA cache clear
-            try:
-                import gc
-                gc.collect()
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
-
-            self._models_loaded = False
-            print("[doc-processor] Models unloaded")
+        print(
+            f"[doc-processor] Auto-unload: {idle_sec:.0f}s idle — exiting process "
+            f"for clean RAM + CUDA reset. Container will auto-restart."
+        )
+        # Flush stdout so the log line is visible before exit
+        import sys
+        sys.stdout.flush()
+        sys.exit(0)
 
     def _get_vector_store(self) -> VectorStore:
         """Get or initialize the vector store (thread-safe)."""

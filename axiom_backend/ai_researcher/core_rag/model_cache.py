@@ -67,10 +67,11 @@ class ModelCache:
             self._idle_thread_started = True
 
         def monitor():
+            import signal
             from services.activity_detector import is_system_in_use
             logger.info(
                 f"Idle monitor started (check every {IDLE_CHECK_INTERVAL_SEC}s, "
-                f"unload after {IDLE_UNLOAD_THRESHOLD_SEC}s inactivity)"
+                f"restart after {IDLE_UNLOAD_THRESHOLD_SEC}s inactivity)"
             )
             while True:
                 time.sleep(IDLE_CHECK_INTERVAL_SEC)
@@ -81,8 +82,13 @@ class ModelCache:
                         max_request_idle_sec=IDLE_UNLOAD_THRESHOLD_SEC
                     )
                     if not in_use:
-                        logger.info(f"Auto-unload triggered: {reason}")
-                        self.unload_all()
+                        logger.info(
+                            f"Auto-restart triggered: {reason} — SIGTERM self for "
+                            f"clean CUDA context reset. Container will auto-restart."
+                        )
+                        # SIGTERM lets uvicorn gracefully drain connections first
+                        os.kill(os.getpid(), signal.SIGTERM)
+                        return
                 except Exception as e:
                     logger.error(f"Idle monitor error: {e}")
 
