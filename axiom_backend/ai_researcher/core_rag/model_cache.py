@@ -24,6 +24,11 @@ IDLE_CHECK_INTERVAL_SEC = 60
 IDLE_UNLOAD_THRESHOLD_SEC = int(os.getenv("AXIOM_IDLE_UNLOAD_SEC", "900"))
 AUTO_UNLOAD_ENABLED = os.getenv("AXIOM_AUTO_UNLOAD", "false").lower() == "true"
 
+# When true, GPU models run in a child subprocess managed by
+# ai_researcher.gpu_worker.client — the main backend process stays alive
+# forever and only the worker subprocess dies on idle. See issue #6/#7.
+USE_GPU_WORKER = os.getenv("AXIOM_USE_GPU_WORKER", "false").lower() == "true"
+
 
 def _free_gpu():
     """Force GPU memory cleanup."""
@@ -47,6 +52,12 @@ class ModelCache:
     _reranker = None
     _gliner = None
 
+    # Facades returned when USE_GPU_WORKER=true. Constructed lazily — the
+    # worker subprocess itself is only spawned on the first RPC call.
+    _embedder_facade = None
+    _reranker_facade = None
+    _gliner_facade = None
+
     # Idle monitor
     _idle_thread_started: bool = False
 
@@ -58,8 +69,13 @@ class ModelCache:
         return cls._instance
 
     def _start_idle_monitor_if_enabled(self):
-        """Start the idle monitor thread (once, opt-in via env var)."""
-        if self._idle_thread_started or not AUTO_UNLOAD_ENABLED:
+        """Start the idle monitor thread (once, opt-in via env var).
+
+        In worker mode the GpuWorkerClient owns the idle lifecycle, so the
+        legacy SIGTERM-PID-1 monitor must stay dormant — otherwise the two
+        mechanisms would fight and restart the backend unnecessarily.
+        """
+        if self._idle_thread_started or not AUTO_UNLOAD_ENABLED or USE_GPU_WORKER:
             return
         with self._lock:
             if self._idle_thread_started:
@@ -104,7 +120,16 @@ class ModelCache:
     # ── Embedder ────────────────────────────────────────────────────────
 
     def get_embedder(self):
-        """Get or create the TextEmbedder."""
+        """Get or create the TextEmbedder (or facade in worker mode)."""
+        if USE_GPU_WORKER:
+            if self._embedder_facade is None:
+                with self._lock:
+                    if self._embedder_facade is None:
+                        from .gpu_worker_facades import EmbedderFacade
+                        logger.info("Embedder routed through GPU worker subprocess")
+                        self._embedder_facade = EmbedderFacade()
+            return self._embedder_facade
+
         if self._embedder is None:
             with self._lock:
                 if self._embedder is None:
@@ -115,7 +140,10 @@ class ModelCache:
         return self._embedder
 
     def unload_embedder(self):
-        """Unload embedder from GPU."""
+        """Unload embedder from GPU. No-op in worker mode (models unload together)."""
+        if USE_GPU_WORKER:
+            logger.debug("unload_embedder skipped — worker owns models as a group")
+            return
         with self._lock:
             if self._embedder is not None:
                 del self._embedder
@@ -126,7 +154,16 @@ class ModelCache:
     # ── Reranker ────────────────────────────────────────────────────────
 
     def get_reranker(self):
-        """Get or create the TextReranker."""
+        """Get or create the TextReranker (or facade in worker mode)."""
+        if USE_GPU_WORKER:
+            if self._reranker_facade is None:
+                with self._lock:
+                    if self._reranker_facade is None:
+                        from .gpu_worker_facades import RerankerFacade
+                        logger.info("Reranker routed through GPU worker subprocess")
+                        self._reranker_facade = RerankerFacade()
+            return self._reranker_facade
+
         if self._reranker is None:
             with self._lock:
                 if self._reranker is None:
@@ -137,7 +174,10 @@ class ModelCache:
         return self._reranker
 
     def unload_reranker(self):
-        """Unload reranker from GPU."""
+        """Unload reranker from GPU. No-op in worker mode (models unload together)."""
+        if USE_GPU_WORKER:
+            logger.debug("unload_reranker skipped — worker owns models as a group")
+            return
         with self._lock:
             if self._reranker is not None:
                 del self._reranker
@@ -148,7 +188,16 @@ class ModelCache:
     # ── GLiNER ──────────────────────────────────────────────────────────
 
     def get_gliner(self):
-        """Get or create the GLiNER model."""
+        """Get or create the GLiNER model (or facade in worker mode)."""
+        if USE_GPU_WORKER:
+            if self._gliner_facade is None:
+                with self._lock:
+                    if self._gliner_facade is None:
+                        from .gpu_worker_facades import GlinerFacade
+                        logger.info("GLiNER routed through GPU worker subprocess")
+                        self._gliner_facade = GlinerFacade()
+            return self._gliner_facade
+
         if self._gliner is None:
             with self._lock:
                 if self._gliner is None:
@@ -171,7 +220,10 @@ class ModelCache:
         return self._gliner
 
     def unload_gliner(self):
-        """Unload GLiNER from GPU."""
+        """Unload GLiNER from GPU. No-op in worker mode (models unload together)."""
+        if USE_GPU_WORKER:
+            logger.debug("unload_gliner skipped — worker owns models as a group")
+            return
         with self._lock:
             if self._gliner is not None:
                 del self._gliner
@@ -182,7 +234,18 @@ class ModelCache:
     # ── Bulk operations ─────────────────────────────────────────────────
 
     def unload_all(self):
-        """Unload all models and free GPU memory."""
+        """Unload all models and free GPU memory.
+
+        In worker mode this terminates the GPU worker subprocess, which is
+        the clean way to release its CUDA context. The main backend
+        process stays alive and the worker will respawn on the next call.
+        """
+        if USE_GPU_WORKER:
+            from .gpu_worker_facades import shutdown_worker_if_running
+            shutdown_worker_if_running()
+            logger.info("GPU worker subprocess terminated — VRAM released")
+            return
+
         with self._lock:
             had = self._embedder or self._reranker or self._gliner
             self._embedder = None
@@ -218,6 +281,19 @@ class ModelCache:
 
     def vram_usage(self) -> str:
         """Return a human-readable summary of loaded models."""
+        if USE_GPU_WORKER:
+            try:
+                from .gpu_worker_facades import worker_health
+                h = worker_health()
+                if not h.get("loaded"):
+                    return "worker: none"
+                loaded = [name for name, is_loaded in h["loaded"].items() if is_loaded]
+                vram = h.get("vram_mb")
+                vram_str = f" ({vram} MB)" if vram else ""
+                return f"worker: {', '.join(loaded) if loaded else 'none'}{vram_str}"
+            except Exception as exc:
+                return f"worker: error ({exc})"
+
         loaded = []
         if self._embedder:
             loaded.append("embedder")
