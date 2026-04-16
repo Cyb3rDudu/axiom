@@ -5,24 +5,21 @@ All GPU models go through this cache. Models load on demand and stay
 loaded for the lifetime of the process. Explicit unload methods are
 available for the doc-processor pipeline to free VRAM between steps.
 
-Optional idle monitor (enabled via AXIOM_AUTO_UNLOAD=true env var) unloads
-models after AXIOM_IDLE_UNLOAD_SEC (default 900s/15min) of complete
-inactivity across all signals (missions, docs, API). Safe because the
-activity detector covers mid-mission LLM waits.
+Idle VRAM cleanup is now handled by the GPU worker subprocess (see
+ai_researcher.gpu_worker.client). When the worker is idle past
+AXIOM_GPU_WORKER_IDLE_SEC and the activity detector reports the system
+as idle, the worker exits on its own — the main backend process stays
+alive. The legacy "SIGTERM PID 1 to force a container restart" path
+(issue #10) has been removed.
 """
 
 import logging
 import os
 import threading
-import time
 import gc
 from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-IDLE_CHECK_INTERVAL_SEC = 60
-IDLE_UNLOAD_THRESHOLD_SEC = int(os.getenv("AXIOM_IDLE_UNLOAD_SEC", "900"))
-AUTO_UNLOAD_ENABLED = os.getenv("AXIOM_AUTO_UNLOAD", "false").lower() == "true"
 
 # When true, GPU models run in a child subprocess managed by
 # ai_researcher.gpu_worker.client — the main backend process stays alive
@@ -58,64 +55,12 @@ class ModelCache:
     _reranker_facade = None
     _gliner_facade = None
 
-    # Idle monitor
-    _idle_thread_started: bool = False
-
     def __new__(cls):
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
         return cls._instance
-
-    def _start_idle_monitor_if_enabled(self):
-        """Start the idle monitor thread (once, opt-in via env var).
-
-        In worker mode the GpuWorkerClient owns the idle lifecycle, so the
-        legacy SIGTERM-PID-1 monitor must stay dormant — otherwise the two
-        mechanisms would fight and restart the backend unnecessarily.
-        """
-        if self._idle_thread_started or not AUTO_UNLOAD_ENABLED or USE_GPU_WORKER:
-            return
-        with self._lock:
-            if self._idle_thread_started:
-                return
-            self._idle_thread_started = True
-
-        def monitor():
-            import signal
-            from services.activity_detector import is_system_in_use
-            logger.info(
-                f"Idle monitor started (check every {IDLE_CHECK_INTERVAL_SEC}s, "
-                f"restart after {IDLE_UNLOAD_THRESHOLD_SEC}s inactivity)"
-            )
-            while True:
-                time.sleep(IDLE_CHECK_INTERVAL_SEC)
-                try:
-                    if self._embedder is None and self._reranker is None and self._gliner is None:
-                        continue
-                    in_use, reason = is_system_in_use(
-                        max_request_idle_sec=IDLE_UNLOAD_THRESHOLD_SEC
-                    )
-                    if not in_use:
-                        logger.info(
-                            f"Auto-restart triggered: {reason} — SIGTERM PID 1 for "
-                            f"clean CUDA context reset. Container will auto-restart."
-                        )
-                        # Kill PID 1 so container exits cleanly and nerdctl restarts it.
-                        # Using os.getpid() killed the uvicorn worker but left the parent
-                        # alive with a zombie — container stayed "Up" but served nothing.
-                        try:
-                            os.kill(1, signal.SIGTERM)
-                        except PermissionError:
-                            # Fallback: kill self (works when running as PID 1)
-                            os.kill(os.getpid(), signal.SIGTERM)
-                        return
-                except Exception as e:
-                    logger.error(f"Idle monitor error: {e}")
-
-        t = threading.Thread(target=monitor, daemon=True, name="axiom-idle-monitor")
-        t.start()
 
     # ── Embedder ────────────────────────────────────────────────────────
 
@@ -136,7 +81,6 @@ class ModelCache:
                     from .embedder import TextEmbedder
                     logger.info("Loading TextEmbedder...")
                     self._embedder = TextEmbedder()
-        self._start_idle_monitor_if_enabled()
         return self._embedder
 
     def unload_embedder(self):
@@ -170,7 +114,6 @@ class ModelCache:
                     from .reranker import TextReranker
                     logger.info("Loading TextReranker...")
                     self._reranker = TextReranker()
-        self._start_idle_monitor_if_enabled()
         return self._reranker
 
     def unload_reranker(self):
@@ -216,7 +159,6 @@ class ModelCache:
                     except ImportError:
                         logger.warning("GLiNER not available")
                         return None
-        self._start_idle_monitor_if_enabled()
         return self._gliner
 
     def unload_gliner(self):
