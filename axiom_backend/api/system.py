@@ -163,3 +163,26 @@ async def check_user_consistency(
     except Exception as e:
         logger.error(f"Error checking user consistency: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/gpu/unload")
+async def force_gpu_unload(current_user: User = Depends(get_current_user_from_cookie)):
+    """Manually trigger unload of all GPU models. Admin-only."""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin only")
+    try:
+        from ai_researcher.core_rag.model_cache import model_cache
+        from services.activity_detector import is_system_in_use
+        in_use, reason = is_system_in_use(max_request_idle_sec=0)
+        loaded_before = model_cache.vram_usage()
+        model_cache.unload_all()
+        return {
+            "status": "ok",
+            "loaded_before": loaded_before,
+            "loaded_after": model_cache.vram_usage(),
+            "system_was_in_use": in_use,
+            "activity_reason": reason,
+        }
+    except Exception as e:
+        logger.error(f"Force unload failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

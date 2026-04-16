@@ -89,6 +89,10 @@ app.add_middleware(
 # Add user context middleware
 app.middleware("http")(user_context_middleware)
 
+# Track user-facing request activity for smart idle unload
+from api.activity_middleware import ActivityTrackerMiddleware
+app.add_middleware(ActivityTrackerMiddleware)
+
 # Include API routers
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(missions.router, prefix="/api", tags=["missions"])
