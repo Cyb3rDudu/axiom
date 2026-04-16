@@ -17,7 +17,46 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional
 
-# Configure logging before heavy imports so startup errors are visible.
+
+def _reattach_stdio_to_container_init() -> None:
+    """Reopen stdout/stderr against PID 1's fds.
+
+    Rationale: when spawned by a short-lived parent (e.g. an ``nerdctl exec``
+    debugging session or an interactive script), the worker inherits that
+    parent's stdout/stderr pipes. When the parent exits, those pipes close,
+    and the next write by the worker (model load progress, logging)
+    triggers ``BrokenPipeError`` — which bubbles up to RPC callers as
+    "[Errno 32] Broken pipe" and mysteriously crashes otherwise-healthy
+    handlers (caught during #9 single-worker rollout).
+
+    Inside a PID-namespaced container, PID 1 is the container's init
+    (uvicorn for us) and ``/proc/1/fd/{1,2}`` always points at the
+    containerd log pipe. Reopening our own fds 1/2 there makes worker
+    stdio survive the death of whoever spawned it.
+
+    No-op outside a container or when /proc isn't mounted.
+    """
+    for fd in (1, 2):
+        try:
+            new = os.open(f"/proc/1/fd/{fd}", os.O_WRONLY)
+        except OSError:
+            continue
+        try:
+            os.dup2(new, fd)
+        finally:
+            os.close(new)
+    # Reinstall Python-level wrappers so print() and logging see the new fds.
+    try:
+        sys.stdout = os.fdopen(1, "w", buffering=1, closefd=False)
+        sys.stderr = os.fdopen(2, "w", buffering=1, closefd=False)
+    except OSError:
+        pass
+
+
+_reattach_stdio_to_container_init()
+
+# Configure logging AFTER stdio reattachment so the StreamHandler binds to
+# the stable fds, not the spawner's doomed pipes.
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s [gpu-worker] %(levelname)s %(name)s: %(message)s",
