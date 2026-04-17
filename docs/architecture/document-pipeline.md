@@ -17,25 +17,27 @@ Background Document Processor (polls every 5s)
   +-- 2. Extract initial text (header/footer for PDFs, first N chars for others)
   +-- 3. LLM metadata extraction (title, authors, year, DOI, ISBN, ...)
   +-- 4. Metadata enrichment (CrossRef, OpenLibrary, OpenAlex)
-  +-- 5. Convert to Markdown (Marker for PDF, python-docx for Word, direct for .md)
+  +-- 5. Convert to Markdown (pdf_worker subprocess for PDF, python-docx for Word)
   +-- 6. Retry metadata extraction with markdown content if initial attempt failed
   +-- 7. Extract page labels (3-tier fallback for PDFs)
   +-- 8. Chunk content (token-based, structure-aware, with page tracking)
-  +-- 9. Embed chunks (BGE-M3 dense + sparse)
+  +-- 9. Embed chunks via GPU worker RPC (BGE-M3 dense + sparse)
   +-- 10. Store in pgvector + index in OpenSearch
   +-- 11. Build knowledge graph:
   |       a. Sequential chunk relationships
-  |       b. GLiNER entity extraction
+  |       b. GLiNER entity extraction via GPU worker RPC
   |       c. Co-occurrence relationships (min 2 shared chunks)
-  |       d. Unload all GPU models
-  |       e. mREBEL relation extraction
-  |       f. Unload mREBEL
+  |       d. Kill GPU worker subprocess (model_cache.unload_all)
+  |       e. relation_worker subprocess (mREBEL, exits after use)
   +-- 12. Embed and store images (CLIP, if enabled)
   +-- 13. Fallback metadata enrichment (if LLM-only sources)
   |
   v
 Document ready (status = "completed")
 ```
+
+!!! info "Subprocess Isolation"
+    GPU-intensive steps run in isolated subprocesses. PDF conversion runs in `pdf_worker` (loads Marker, exits after use). Embedding and entity extraction use the shared GPU worker over Unix socket RPC. Relation extraction runs in `relation_worker` (loads mREBEL, exits after use). See [GPU Worker Architecture](gpu-worker.md) for the full design.
 
 ## Step Details
 
@@ -69,7 +71,7 @@ If the initial LLM extraction failed (e.g., image-only cover page), a **retry** 
 
 ### 5. Document Conversion
 
-- **PDF** -- Marker with `paginate_output=True` for page boundary markers. Includes intelligent table handling.
+- **PDF** -- converted in a short-lived `pdf_worker` subprocess that loads Marker with `paginate_output=True` for page boundary markers. The subprocess exits after conversion, freeing all Marker GPU memory (~2-4 GB). Output is markdown text and extracted images, communicated via JSON on stdout.
 - **Word** -- python-docx extracts text and structure.
 - **Markdown** -- read directly.
 
@@ -98,7 +100,7 @@ The `Chunker` uses token-based, structure-aware splitting:
 
 ### 9-10. Embedding and Indexing
 
-Chunks are embedded with **BGE-M3** producing both dense (1024-dim) and sparse (30,000-dim) vectors. Chunks are stored in:
+Chunks are embedded via the GPU worker's `embed_chunks` RPC method, which calls **BGE-M3** to produce both dense (1024-dim) and sparse (30,000-dim) vectors. The doc-processor connects to the backend's GPU worker over a shared Unix socket (see [GPU Worker Architecture](gpu-worker.md)). Chunks are stored in:
 
 - **pgvector** -- dense embeddings with HNSW index for approximate nearest neighbor search.
 - **OpenSearch** -- BM25 fulltext index for lexical matching (when enabled).
@@ -108,12 +110,11 @@ Chunks are embedded with **BGE-M3** producing both dense (1024-dim) and sparse (
 See [RAG and Knowledge Graph](../user-guide/documents/rag-knowledge-graph.md) for full details. The pipeline:
 
 1. Builds sequential relationships between adjacent chunks.
-2. Runs GLiNER entity extraction on each chunk.
+2. Runs GLiNER entity extraction on each chunk via GPU worker RPC.
 3. Builds co-occurrence relationships (entities appearing in 2+ shared chunks).
-4. Unloads all GPU models to free VRAM.
-5. Runs mREBEL relation extraction on all chunks.
+4. Kills the GPU worker subprocess (`model_cache.unload_all()`) to free all VRAM.
+5. Spawns `relation_worker` subprocess -- loads mREBEL, extracts triples, exits.
 6. Stores triples as typed entity relationships.
-7. Unloads mREBEL.
 
 ### 13. Fallback Metadata Enrichment
 

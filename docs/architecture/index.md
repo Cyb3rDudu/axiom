@@ -154,12 +154,13 @@ AXIOM's capabilities are driven by specialized agents, each with distinct respon
     - **Material-UI** - Design system
 
 -   :material-docker: **Infrastructure**
-    
+
     ---
-    
+
     - **Docker Compose** - Container orchestration
     - **Nginx** - Reverse proxy and load balancing
-    - **GPU Support** - CUDA acceleration for embeddings
+    - **GPU Worker Subprocess** - Shared embedder/reranker/GLiNER over Unix socket
+    - **Subprocess Isolation** - Marker and mREBEL in per-import processes
     - **Volume Management** - Persistent data storage
 
 </div>
@@ -411,28 +412,39 @@ For the full pipeline walkthrough, see [Document Processing Pipeline](document-p
 <div class="grid cards" markdown>
 
 -   :material-package-variant: **Service Containers**
-    
+
     ---
-    
-    - **axiom-backend** - Main API and agent orchestration
+
+    - **axiom-backend** - Main API, agent orchestration, GPU worker owner
     - **axiom-frontend** - React web interface
     - **axiom-postgres** - PostgreSQL with pgvector
     - **axiom-nginx** - Reverse proxy and static files
-    - **doc-processor** - Document processing service
+    - **doc-processor** - Document processing, GPU worker client
+
+-   :material-memory: **GPU Subprocess Architecture**
+
+    ---
+
+    - **GPU worker** - Shared embedder/reranker/GLiNER over Unix socket RPC
+    - **pdf_worker** - Per-import Marker subprocess (exits after use)
+    - **relation_worker** - Per-import mREBEL subprocess (exits after use)
+    - Idle auto-unload kills the worker to free VRAM
+    - See [GPU Worker Architecture](gpu-worker.md) for details
 
 -   :material-harddisk: **Volume Management**
-    
+
     ---
-    
+
     - `./axiom_backend/data` - Document storage
     - `./axiom_model_cache` - Model caches
     - `./reports` - Generated reports
+    - `/tmp/axiom-gpu/` - Shared GPU worker socket (bind-mount)
     - PostgreSQL data persisted in Docker volumes
 
 -   :material-network: **Network Architecture**
-    
+
     ---
-    
+
     - Internal Docker network for service communication
     - Single external entry point through nginx
     - Port 80/443 for web access
@@ -484,7 +496,8 @@ For the full pipeline walkthrough, see [Document Processing Pipeline](document-p
     - **mREBEL Relation Extraction** - Multilingual triple extraction for knowledge graph relationships
     - **PDF Page Numbers** - 3-tier page label extraction with end-to-end citation flow
     - **Metadata Enrichment** - CrossRef, OpenLibrary, OpenAlex lookups with fallback pipeline
-    - **VRAM Management** - Model cache with idle timeout, aggressive GPU cleanup for mREBEL loading
+    - **GPU Worker Subprocess** - Shared embedder/reranker/GLiNER in isolated subprocess with Unix socket RPC, idle auto-unload, cross-container sharing
+    - **VRAM Management** - Subprocess isolation for clean CUDA context release, per-import Marker and mREBEL subprocesses
     - **Citation Profiles** - Configurable citation styles (numbered, APA 6/7, custom)
     - **3-Level JSON Fallback** - Graceful degradation across all providers (json_schema → json_object → prompt-only)
     - **Context Window Truncation** - Automatic prompt truncation with correction factor retry

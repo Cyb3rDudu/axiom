@@ -240,6 +240,10 @@ nav:
 
   - Architecture:
     - architecture/index.md
+    - GPU Worker: architecture/gpu-worker.md
+    - GPU Worker Operations: architecture/gpu-worker-operations.md
+    - VRAM Management: architecture/vram-management.md
+    - Document Pipeline: architecture/document-pipeline.md
     - JSON Fallback System: architecture/json-fallback.md
 
   - Troubleshooting:

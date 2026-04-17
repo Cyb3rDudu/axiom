@@ -7,13 +7,17 @@ This documents the production Axiom deployment on LXC 120 with nerdctl, containe
 ```
 MacBook (dev) ──git push + deploy.sh──> LXC 120 (192.168.1.120)
                                          ├── axiom-backend   (nerdctl, GPU, :8000)
+                                         │   └── GPU worker subprocess (shared socket)
                                          ├── axiom-doc-processor (nerdctl, GPU)
+                                         │   └── connects to backend's GPU worker
                                          ├── axiom-frontend   (nerdctl, :3000)
                                          └── NO nginx (NPM proxies directly)
                                                │
                                          LXC 107 (192.168.1.107)
                                          └── PostgreSQL + pgvector + OpenSearch
 ```
+
+The backend spawns a GPU worker subprocess that serves the embedder, reranker, and GLiNER over a Unix socket. The doc-processor connects to this same worker via a shared bind-mount. See [GPU Worker Architecture](../architecture/gpu-worker.md) for details.
 
 Nginx Proxy Manager (on carrier) routes `axiom.i.catdev.io` to the LXC.
 
@@ -181,6 +185,55 @@ location / {
 location /health {
     proxy_pass http://192.168.1.120:8000/health;
 }
+```
+
+## GPU Worker Shared Socket
+
+The backend and doc-processor share a single GPU worker subprocess. This requires a shared directory bind-mounted into both containers so they can access the same Unix socket.
+
+### Required Volume Mount
+
+Both containers need the same bind-mount in `start-pod.sh`:
+
+```bash
+# In start-pod.sh, for both axiom-backend and axiom-doc-processor:
+-v /tmp/axiom-gpu:/tmp/axiom-gpu
+```
+
+### Required Environment Variables
+
+```bash
+# In .env (applies to both containers)
+AXIOM_GPU_WORKER_SOCKET=/tmp/axiom-gpu/axiom-gpu.sock
+
+# Override for doc-processor only (via -e flag in start-pod.sh)
+# AXIOM_GPU_WORKER_CLIENT_MODE=true
+```
+
+The doc-processor container should pass `-e AXIOM_GPU_WORKER_CLIENT_MODE=true` so it connects to the backend's worker rather than spawning its own.
+
+### Verifying the Worker
+
+After starting the pod, trigger any search or chat query to spawn the GPU worker, then verify:
+
+```bash
+# Check the socket exists
+ls -la /tmp/axiom-gpu/axiom-gpu.sock
+
+# Check the worker is running inside the backend container
+nerdctl exec axiom-backend pgrep -f "gpu_worker.server"
+
+# Check the doc-processor can reach the socket
+nerdctl exec axiom-doc-processor ls -la /tmp/axiom-gpu/axiom-gpu.sock
+```
+
+### Idle Behavior
+
+The GPU worker automatically exits after 15 minutes of inactivity (`AXIOM_GPU_WORKER_IDLE_SEC=900`). This frees all VRAM. The next GPU request transparently respawns the worker. Adjust the idle threshold in `.env` if needed:
+
+```bash
+# Kill worker after 5 minutes of idle (shorter for memory-constrained GPUs)
+AXIOM_GPU_WORKER_IDLE_SEC=300
 ```
 
 ## GPU Configuration

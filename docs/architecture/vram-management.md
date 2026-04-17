@@ -1,102 +1,122 @@
 # VRAM Management
 
-AXIOM runs multiple GPU-accelerated ML models on a single NVIDIA GPU (tested on 16 GB RTX 4060 Ti). This page describes how GPU memory is shared between the backend and document processor services to avoid out-of-memory errors.
+AXIOM runs multiple GPU-accelerated ML models on a single NVIDIA GPU (tested on 12 GB A3000 and 16 GB RTX 4060 Ti). This page describes how GPU memory is shared between processes to avoid out-of-memory errors.
 
 ## GPU Memory Budget
 
-The 16 GB VRAM budget is shared between two services:
+All GPU models run in isolated subprocesses. Only one heavyweight process occupies the GPU at a time.
 
-| Service | Models | Approximate VRAM |
-|---|---|---|
-| **axiom-backend** | BGE-M3 embedder (~1.5 GB), BGE-reranker-v2-m3 (~1.1 GB), GLiNER (~0.5 GB) | ~3.1 GB peak |
-| **doc-processor** | Marker PDF converter (~2-4 GB), mREBEL relation extractor (~2.4 GB) | ~4 GB peak |
+| Process | Models | Approximate VRAM | Lifecycle |
+|---|---|---|---|
+| **GPU worker** | BGE-M3 embedder (~1.5 GB), BGE-reranker-v2-m3 (~1.1 GB), GLiNER (~0.5 GB) | ~3.1 GB peak | Shared, idle-killed |
+| **pdf_worker** | Marker PDF converter (~2-4 GB) | ~4 GB peak | Per-import, exits after use |
+| **relation_worker** | mREBEL relation extractor (~2.4 GB) | ~2.4 GB peak | Per-import, exits after use |
 
-Because both services share the same physical GPU, AXIOM uses several strategies to keep total VRAM usage within budget.
+Because these processes share the same physical GPU, AXIOM sequences GPU-intensive work during document imports and kills idle processes to reclaim VRAM.
 
-## Model Cache with Idle Timeout
+## Subprocess Isolation Pattern
 
-The backend's `ModelCache` (in `core_rag/model_cache.py`) is a thread-safe singleton that manages the embedder and reranker lifecycle:
+All GPU models run in subprocesses rather than inside the main backend or doc-processor processes. When a subprocess exits, the OS reclaims its entire CUDA context -- there is no residual memory leak. See [GPU Worker Architecture](gpu-worker.md) for the full design rationale.
 
-- Models are **loaded on first use** and kept in memory for fast subsequent requests.
-- After **120 seconds of inactivity** (configurable via `IDLE_TIMEOUT_SECONDS`), a timer fires and unloads both models, calling `torch.cuda.empty_cache()` and `gc.collect()`.
-- This ensures that during long document processing jobs, the backend releases GPU memory that the document processor needs for Marker and mREBEL.
+The three subprocess types serve different purposes:
+
+- **GPU worker** -- long-lived shared process serving the embedder, reranker, and GLiNER over a Unix socket. Used by both the backend (search, chat, missions) and the doc-processor (chunk embedding, entity extraction). Killed on idle to free VRAM.
+- **pdf_worker** -- short-lived process that loads Marker, converts one PDF to markdown, writes output to disk, and exits. Spawned once per document import.
+- **relation_worker** -- short-lived process that loads mREBEL, extracts relation triples from all chunks, writes output to disk, and exits. Spawned once per document import, after all other GPU work is done.
 
 ## Document Processing Pipeline Order
 
 The document processor runs GPU-intensive steps in a specific order to minimize concurrent VRAM usage:
 
 ```
-1. Marker PDF conversion        (GPU: ~2-4 GB)
+1. pdf_worker subprocess          (GPU: ~2-4 GB, then exits -> 0 GB)
    |
-2. Embed chunks with BGE-M3     (GPU: ~1.5 GB)
+2. GPU worker: embed chunks       (GPU: ~1.5 GB, loaded on demand)
    |
-3. GLiNER entity extraction     (GPU: ~0.5 GB)
+3. GPU worker: GLiNER extraction  (GPU: ~0.5 GB, loaded on demand)
    |
-4. ── Unload ALL GPU models ──  (GPU: ~0 GB)
-   |  - model_cache.clear_cache()  (embedder + reranker)
-   |  - unload_gliner()
-   |  - Delete Marker converter and model_dict
-   |  - gc.collect() + torch.cuda.empty_cache()
+4. model_cache.unload_all()       (GPU: ~0 GB, worker subprocess killed)
    |
-5. mREBEL relation extraction   (GPU: ~2.4 GB)
-   |
-6. unload_mrebel()              (GPU: ~0 GB)
-   |
-7. Image embedding (CLIP)       (GPU: ~0.5 GB, if enabled)
+5. relation_worker subprocess     (GPU: ~2.4 GB, then exits -> 0 GB)
 ```
 
-The critical step is **step 4**: before loading mREBEL, the processor aggressively frees all other GPU models. This is necessary because mREBEL alone requires approximately 2.4 GB, and loading it alongside Marker or the embedder would exceed the 16 GB budget.
+The critical step is **step 4**: before spawning the relation worker, the doc-processor kills the GPU worker subprocess entirely. This guarantees a clean GPU with no residual CUDA context when mREBEL loads.
+
+## Idle Unload
+
+The GPU worker client runs a background monitor that kills the worker subprocess when:
+
+1. No RPC call has been made for `AXIOM_GPU_WORKER_IDLE_SEC` seconds (default: 900).
+2. The activity detector reports no active missions, document processing, or recent API requests.
+
+When the worker is killed, the main backend process stays alive. The next GPU request (search query, chat message, document import) transparently respawns the worker in approximately 10 seconds.
 
 ## GLiNER Lifecycle
 
-GLiNER (`urchade/gliner_multi-v2.1`, ~0.5 GB) is used in two contexts:
+GLiNER (`urchade/gliner_multi-v2.1`, ~0.5 GB) is loaded inside the GPU worker and used in two contexts:
 
-1. **Document processing** -- entity extraction runs after embedding, then GLiNER is unloaded before mREBEL.
-2. **Query-time graph retrieval** -- GLiNER runs on the user's query text (~5 ms) to extract entities for cross-document lookup. The model is lazy-loaded and kept in memory (managed by the backend's model cache idle timeout).
+1. **Document processing** -- entity extraction runs after embedding, via the GPU worker's `extract_entities` RPC method. The GPU worker stays alive during this phase.
+2. **Query-time graph retrieval** -- GLiNER runs on user query text (~5 ms) to extract entities for cross-document lookup. The model loads lazily on first use.
 
-The `unload_gliner()` function explicitly deletes the model and calls `torch.cuda.empty_cache()`.
+GLiNER is not individually unloadable. When the GPU worker is killed (idle timeout or force unload), all three models are freed together.
 
 ## mREBEL Lifecycle
 
-mREBEL (`Babelscape/mrebel-large`, ~2.4 GB) is the most VRAM-intensive model after Marker. It is:
+mREBEL (`Babelscape/mrebel-large`, ~2.4 GB) runs in a dedicated `relation_worker` subprocess:
 
-1. **Never kept resident** -- loaded on demand via `load_mrebel()`, used for extraction, then immediately unloaded via `unload_mrebel()`.
-2. **Loaded only after cleanup** -- the document processor explicitly frees all other GPU models before calling `load_mrebel()`.
-3. **Logged** -- on load, the current VRAM usage is logged to help diagnose memory issues.
+1. **Spawned only after GPU cleanup** -- the doc-processor kills the GPU worker before launching the relation worker.
+2. **Exits immediately after** -- the subprocess writes triples to a JSON file and exits, freeing all VRAM.
+3. **Non-fatal** -- if the relation worker fails (OOM, model error), the document continues processing without relation extraction.
 
 ## Failure Handling
 
-If mREBEL loading or extraction fails (e.g., due to insufficient VRAM), the error is caught and logged as a non-fatal warning. The document continues processing without relation extraction. The `unload_mrebel()` call runs in the `except` block to ensure cleanup even on failure.
+- **GPU worker crash** -- the client retries once, killing the dead worker and spawning a fresh one.
+- **pdf_worker failure** -- the document is marked as `failed`. Marker errors are captured in the subprocess stderr.
+- **relation_worker failure** -- logged as a non-fatal warning. The document completes without relation extraction.
+- **OOM during mREBEL** -- the relation worker subprocess exits and the OS reclaims all VRAM. No cleanup code needed.
 
 ## Monitoring VRAM Usage
 
-Check current GPU memory allocation in the document processor logs:
+GPU worker log lines indicate model lifecycle events:
 
 ```
-[doc_id] GPU freed: 0.3GB used
-[doc_id] mREBEL loaded on cuda (2.7GB VRAM)
-[doc_id] mREBEL extracted 42 unique triples from 15 chunks
-[doc_id] mREBEL unloaded, GPU memory freed
+[gpu-worker] INFO: Loading TextEmbedder...
+[gpu-worker] INFO: TextEmbedder ready
+[gpu-worker] INFO: GPU worker idle 905s and system not in use; killing subprocess
 ```
 
-You can also monitor from the host:
+Document processor log lines show subprocess lifecycle:
+
+```
+[doc_id] Spawning pdf_worker: python -m ai_researcher.pdf_worker ...
+[doc_id] Spawning relation_worker: python -m ai_researcher.relation_worker ...
+```
+
+Monitor from the host:
 
 ```bash
 # Real-time GPU memory usage
 watch -n 1 nvidia-smi
 
 # Inside Docker container
-docker exec axiom-doc-processor nvidia-smi
+nerdctl exec axiom-backend nvidia-smi
 ```
 
 ## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `IDLE_TIMEOUT_SECONDS` | `120` | Seconds before idle backend models are unloaded (in `model_cache.py`) |
-| `ENABLE_KNOWLEDGE_GRAPH` | `true` | When `false`, skips GLiNER and mREBEL entirely |
+| `AXIOM_GPU_WORKER_IDLE_SEC` | `900` | Floor idle time (seconds) before the GPU worker subprocess is killed. Activity detector must also report idle. |
+| `ENABLE_KNOWLEDGE_GRAPH` | `true` | When `false`, skips GLiNER and mREBEL entirely. |
+| `DEVICE_EMBEDDER` | `auto` | Device override for the embedder (`auto`, `cuda`, `cpu`, `mps`). |
+| `DEVICE_RERANKER` | `auto` | Device override for the reranker. |
+| `DEVICE_GLINER` | `auto` | Device override for GLiNER. |
+| `DEVICE_MREBEL` | `auto` | Device override for mREBEL. |
+| `DEVICE_MARKER` | `auto` | Device override for Marker. |
 
 ## Next Steps
 
+- [GPU Worker Architecture](gpu-worker.md) - Subprocess design and RPC protocol
+- [GPU Worker Operations](gpu-worker-operations.md) - Monitoring, troubleshooting, force unload
 - [RAG and Knowledge Graph](../user-guide/documents/rag-knowledge-graph.md) - How the knowledge graph enhances retrieval
 - [Architecture Overview](index.md) - System design and components
