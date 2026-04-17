@@ -219,7 +219,10 @@ class DocumentProcessor:
         # loading Marker (which uses torch). When load_marker=False (the
         # doc-processor path), skip entirely — no torch import.
         if load_marker:
-            from hardware_detection import hardware_detector
+            try:
+                from ai_researcher.hardware_detection import hardware_detector
+            except ImportError:
+                from hardware_detection import hardware_detector
             import torch
 
             if device:
