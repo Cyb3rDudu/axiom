@@ -594,6 +594,7 @@ class BackgroundDocumentProcessor:
             
             # Convert document to Markdown based on file type
             self._update_document_progress_sync(doc_id, user_id, 45, "processing")
+            from ai_researcher import config  # needed below for ENABLE_* flags
             extracted_images = []  # Filled below for PDFs with images
             if original_filename.lower().endswith('.pdf'):
                 print(f"[{doc_id}] Converting PDF to Markdown via pdf_worker subprocess...")
@@ -609,7 +610,6 @@ class BackgroundDocumentProcessor:
 
                 # Rewrite image references in markdown from Marker's original
                 # filenames to our stable /api/images/<doc_id>/image_N.ext form.
-                from ai_researcher import config
                 if config.ENABLE_IMAGE_EXTRACTION and image_mapping:
                     mapping_as_paths = {orig: image_dir / new for orig, new in image_mapping.items()}
                     markdown_content = processor._update_markdown_image_paths(
