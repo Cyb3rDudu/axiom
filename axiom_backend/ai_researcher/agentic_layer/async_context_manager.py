@@ -1837,7 +1837,24 @@ class AsyncContextManager:
                                 if full_text:
                                     content = full_text
                                     logger.info(f"Using full fetched text for document {doc_id} ({len(content)} chars)")
-                                
+
+                                # If the title is a URL (web_page_fetcher couldn't
+                                # extract a real title, e.g. for PDF downloads),
+                                # try to find one in the first few lines of content.
+                                if title and (title.startswith('http://') or title.startswith('https://')):
+                                    for line in (content or '').split('\n')[:30]:
+                                        line = line.strip()
+                                        # Skip empty, URL-like, and very short lines
+                                        if not line or line.startswith('http') or line.startswith('Source:') or len(line) < 10:
+                                            continue
+                                        # Skip lines that look like metadata, not titles
+                                        if any(line.lower().startswith(p) for p in ['date:', 'author:', 'abstract:', 'keywords:']):
+                                            continue
+                                        # Use the first substantial text line as title
+                                        title = line[:200].rstrip('.')
+                                        logger.info(f"Extracted title from content: {title[:60]}")
+                                        break
+
                                 # Create markdown file with the content
                                 import pathlib
                                 from config.paths import LEGACY_MARKDOWN_PATH

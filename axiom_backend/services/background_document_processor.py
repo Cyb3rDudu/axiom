@@ -578,6 +578,23 @@ class BackgroundDocumentProcessor:
             else:
                 initial_text = processor.document_converter.extract_initial_text_for_metadata(target_path)
 
+            # For web documents, the markdown heading is often just the URL
+            # (web_page_fetcher_tool can't extract a title from PDF downloads).
+            # Strip the URL heading + Source line so the LLM sees the real
+            # content instead of echoing the URL as the title.
+            if '_web_document' in original_filename and initial_text:
+                cleaned_lines = []
+                for line in initial_text.split('\n'):
+                    stripped = line.strip()
+                    # Skip "# https://..." heading and "Source: https://..." line
+                    if stripped.startswith('# http') or stripped.startswith('Source: http'):
+                        continue
+                    cleaned_lines.append(line)
+                cleaned = '\n'.join(cleaned_lines).strip()
+                if len(cleaned) > 100:
+                    initial_text = cleaned
+                    print(f"[{doc_id}] Cleaned URL heading from web document initial text ({len(initial_text)} chars)")
+
             # Skip LLM extraction if initial text is too short (image-only cover pages)
             self._update_document_progress_sync(doc_id, user_id, 40, "processing")
             extracted_metadata = None
