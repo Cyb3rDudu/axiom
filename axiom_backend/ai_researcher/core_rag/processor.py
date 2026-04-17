@@ -11,9 +11,12 @@ import signal
 from contextlib import contextmanager
 
 import re
-import torch
 import pymupdf # PyMuPDF
 import pymupdf4llm # For fallback or specific markdown conversion if needed later
+# NOTE: torch, marker, FlagEmbedding, and hardware_detection are NOT
+# imported at module level. They are lazy-loaded inside the methods
+# that need them (see issue #14) so that the doc-processor's long-lived
+# Python process never touches torch (saving ~1 GB idle RAM + CUDA context).
 
 
 def extract_page_labels(pdf_path: str) -> Dict[int, str]:
@@ -139,25 +142,18 @@ def extract_page_labels(pdf_path: str) -> Dict[int, str]:
     labels = {i: str(i + 1) for i in range(n)}
     doc.close()
     return labels
-from marker.converters.pdf import PdfConverter
-from marker.models import create_model_dict
-from marker.config.parser import ConfigParser
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from hardware_detection import hardware_detector
-
 import sqlite3 # Needed for Database integration (error handling)
-# json is imported above
 
-# Import the new components
+# Torch-free components — safe to import at module level.
 from .metadata_extractor import MetadataExtractor
 from .chunker import Chunker
-# Database operations now handled by main application database
-# No need to import the old Database class
-from .embedder import TextEmbedder # Import Embedder
-from .vector_store_singleton import get_vector_store # Import the singleton vector store
-from .pgvector_store import PGVectorStore as VectorStore  # Import for type hints
-from .document_converter import DocumentConverter # Import the document converter
+from .vector_store_singleton import get_vector_store
+from .pgvector_store import PGVectorStore as VectorStore
+from .document_converter import DocumentConverter
+
+# Heavy imports (torch, marker, hardware_detection, embedder) are
+# lazy-loaded inside __init__ / _init_marker_configs so importing this
+# module doesn't pull torch into the process (issue #14).
 
 # Set up logging for table processing
 logger = logging.getLogger(__name__)
@@ -204,51 +200,51 @@ class DocumentProcessor:
         markdown_dir: str | Path = "data/processed/markdown",
         metadata_dir: str | Path = "data/processed/metadata",
         db_path: Optional[str | Path] = None,
-        embedder: Optional[TextEmbedder] = None,
+        embedder=None,
         vector_store: Optional[VectorStore] = None,
-        force_reembed: bool = False, # Add force_reembed flag
-        # marker_model_dir is handled by env var MARKER_MODEL_DIR
+        force_reembed: bool = False,
         device: Optional[str] = None,
         load_marker: bool = True,
     ):
         self.pdf_dir = Path(pdf_dir)
         self.markdown_dir = Path(markdown_dir)
         self.metadata_dir = Path(metadata_dir)
-        db_path = Path(db_path) if db_path else Path("data/processed/metadata.db") # Default path
+        db_path = Path(db_path) if db_path else Path("data/processed/metadata.db")
 
-        # Ensure directories exist
         self.markdown_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_dir.mkdir(parents=True, exist_ok=True)
-        db_path.parent.mkdir(parents=True, exist_ok=True) # Ensure DB directory exists too
+        db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Use hardware detector for device selection
-        if device:
-            self.device = device
-        else:
-            # Get device from per-model device config
-            self.device = hardware_detector.get_model_device("marker")
-        
-        # Log hardware detection results
-        hardware_detector.log_device_info()
-        print(f"DocumentProcessor using device: {self.device}")
-        
-        # Set CPU optimizations if needed
-        device_info = hardware_detector.detect_hardware()
-        if device_info["device_type"] == "cpu":
-            torch.set_num_threads(hardware_detector.get_num_workers())
-            print(f"Set PyTorch threads to {hardware_detector.get_num_workers()} for CPU processing")
-
-        # Initialize Marker components (skipped by doc-processor, which runs
-        # Marker in a short-lived per-import subprocess — see issue #13).
+        # Device selection and hardware detection are only needed when
+        # loading Marker (which uses torch). When load_marker=False (the
+        # doc-processor path), skip entirely — no torch import.
         if load_marker:
+            from hardware_detection import hardware_detector
+            import torch
+
+            if device:
+                self.device = device
+            else:
+                self.device = hardware_detector.get_model_device("marker")
+
+            hardware_detector.log_device_info()
+            print(f"DocumentProcessor using device: {self.device}")
+
+            device_info = hardware_detector.detect_hardware()
+            if device_info["device_type"] == "cpu":
+                torch.set_num_threads(hardware_detector.get_num_workers())
+                print(f"Set PyTorch threads to {hardware_detector.get_num_workers()} for CPU processing")
+
+            from marker.models import create_model_dict
             self.marker_models = create_model_dict(device=self.device)
             self._init_marker_configs()
         else:
+            self.device = device or "cpu"
             self.marker_models = None
             self.table_converter = None
             self.no_table_converter = None
             self.marker_converter = None
-            logger.info("DocumentProcessor: Marker loading skipped (load_marker=False)")
+            logger.info("DocumentProcessor: Marker + torch loading skipped (load_marker=False)")
 
         # Initialize other components
         self.metadata_extractor = MetadataExtractor()
@@ -287,7 +283,10 @@ class DocumentProcessor:
 
     def _init_marker_configs(self):
         """Initialize different marker configurations for table handling."""
-        # Base configuration options
+        from hardware_detection import hardware_detector
+        from marker.converters.pdf import PdfConverter
+        from marker.config.parser import ConfigParser
+
         device_info = hardware_detector.detect_hardware()
         # Adjust batch multiplier based on hardware
         # Reduce batch multiplier to avoid overwhelming Ollama with concurrent vision requests

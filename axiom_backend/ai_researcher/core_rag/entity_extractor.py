@@ -14,21 +14,30 @@ from typing import List, Dict, Tuple
 
 logger = logging.getLogger(__name__)
 
-# ── GLiNER setup ────────────────────────────────────────────────────────
+# ── GLiNER / spaCy availability ────────────────────────────────────────
+# Probe availability WITHOUT importing the full packages at module load,
+# because both gliner and spacy pull torch — which we want to keep out
+# of the doc-processor's long-lived process (issue #14).
 
-GLINER_AVAILABLE = False
-try:
-    from gliner import GLiNER
-    GLINER_AVAILABLE = True
-except ImportError:
+def _check_gliner_available() -> bool:
+    try:
+        import importlib.util
+        return importlib.util.find_spec("gliner") is not None
+    except Exception:
+        return False
+
+def _check_spacy_available() -> bool:
+    try:
+        import importlib.util
+        return importlib.util.find_spec("spacy") is not None
+    except Exception:
+        return False
+
+GLINER_AVAILABLE = _check_gliner_available()
+SPACY_AVAILABLE = _check_spacy_available()
+
+if not GLINER_AVAILABLE:
     logger.warning("GLiNER not available - falling back to spaCy NER")
-
-SPACY_AVAILABLE = False
-try:
-    import spacy
-    SPACY_AVAILABLE = True
-except ImportError:
-    pass
 
 # Entity labels for GLiNER (plain text, defined at inference time)
 GLINER_LABELS = [
@@ -202,6 +211,7 @@ class EntityExtractor:
         """Load spaCy model for the given language."""
         if not SPACY_AVAILABLE:
             return
+        import spacy  # deferred to avoid torch pull at module level (#14)
         spacy_data = os.getenv("SPACY_DATA", "/root/.local/share/spacy")
         models = _SPACY_MODELS.get(language, _SPACY_MODELS["en"])
         for version_dir, inner_dir in models:

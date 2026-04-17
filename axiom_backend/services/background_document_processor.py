@@ -20,8 +20,7 @@ from dataclasses import dataclass
 
 from ai_researcher.core_rag.processor import DocumentProcessor
 from ai_researcher.core_rag.vector_store_singleton import get_vector_store
-from ai_researcher.core_rag.pgvector_store import PGVectorStore as VectorStore  # For type hints
-from ai_researcher.core_rag.embedder import TextEmbedder
+from ai_researcher.core_rag.pgvector_store import PGVectorStore as VectorStore
 try:
     from ai_researcher.core_rag.unified_database import UnifiedDocumentDatabase as Database
 except ImportError:
