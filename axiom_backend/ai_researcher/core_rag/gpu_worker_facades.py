@@ -2,7 +2,7 @@
 public API but route calls through the GPU worker subprocess (see
 ``ai_researcher/gpu_worker/client.py``).
 
-These are returned by ``model_cache`` when ``AXIOM_USE_GPU_WORKER=true``.
+These are returned by ``model_cache`` (the only code path since #8).
 Call sites in ``retriever.py``, ``entity_extractor.py``,
 ``simplified_writing_agent.py``, ``api/missions.py`` etc. need no changes —
 the facade instances quack like the original model objects.

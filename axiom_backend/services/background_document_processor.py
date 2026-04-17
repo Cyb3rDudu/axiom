@@ -156,23 +156,19 @@ class BackgroundDocumentProcessor:
             return self._vector_store
     
     def _get_embedder(self):
-        """Get or initialize the embedder (thread-safe).
+        """Get or initialize the embedder facade (thread-safe).
 
-        In worker mode (``AXIOM_USE_GPU_WORKER=true``) the doc-processor does
-        NOT load BGE-M3 itself — it returns an ``EmbedderFacade`` that
-        connects to the backend container's GPU worker over a shared Unix
-        socket (see issue #9). That way only one BGE-M3 is in VRAM across
-        both containers, and idle unload is driven by the single worker.
+        The doc-processor never loads BGE-M3 itself — it returns an
+        ``EmbedderFacade`` that connects to the backend container's shared
+        GPU worker over a Unix socket (see issue #9). That way only one
+        BGE-M3 is in VRAM across both containers, and idle unload is
+        driven by the single worker.
         """
         with self._components_lock:
             if self._embedder is None:
-                if os.getenv("AXIOM_USE_GPU_WORKER", "false").lower() == "true":
-                    from ai_researcher.core_rag.gpu_worker_facades import EmbedderFacade
-                    print("Doc-processor embedder routed through shared GPU worker")
-                    self._embedder = EmbedderFacade()
-                else:
-                    print("Initializing TextEmbedder...")
-                    self._embedder = TextEmbedder(model_name="BAAI/bge-m3")
+                from ai_researcher.core_rag.gpu_worker_facades import EmbedderFacade
+                print("Doc-processor embedder routed through shared GPU worker")
+                self._embedder = EmbedderFacade()
             return self._embedder
     
     def _get_ai_db(self) -> Database:
