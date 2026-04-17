@@ -286,7 +286,10 @@ class DocumentProcessor:
 
     def _init_marker_configs(self):
         """Initialize different marker configurations for table handling."""
-        from hardware_detection import hardware_detector
+        try:
+            from ai_researcher.hardware_detection import hardware_detector
+        except ImportError:
+            from hardware_detection import hardware_detector
         from marker.converters.pdf import PdfConverter
         from marker.config.parser import ConfigParser
 

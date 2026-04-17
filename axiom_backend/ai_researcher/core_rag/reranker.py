@@ -6,7 +6,10 @@ import torch
 from FlagEmbedding import FlagReranker
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from hardware_detection import hardware_detector
+try:
+    from ai_researcher.hardware_detection import hardware_detector
+except ImportError:
+    from hardware_detection import hardware_detector
 
 logger = logging.getLogger(__name__)
 
