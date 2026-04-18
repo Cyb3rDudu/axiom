@@ -30,7 +30,7 @@
 
 Upcoming improvements planned:
 
-- **[OpenDataLoader PDF Integration](docs/OPENDATALOADER_INTEGRATION.md)** — CPU-based PDF parser alternative to Marker, frees ~2.5GB VRAM during imports and provides best-in-class table extraction (0.928 accuracy)
+- **[OpenDataLoader PDF Integration](docs/plans/opendataloader-integration.md)** — CPU-based PDF parser alternative to Marker, frees ~2.5GB VRAM during imports and provides best-in-class table extraction (0.928 accuracy)
 - **Streaming API**: Server-Sent Events for the OpenAI-compatible endpoint
 - **Frontend Question Refinement**: Complete the UI flow for research question refinement (currently stub functions in the frontend)
 

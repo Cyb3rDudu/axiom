@@ -246,6 +246,7 @@ nav:
     - VRAM Management: architecture/vram-management.md
     - Document Pipeline: architecture/document-pipeline.md
     - JSON Fallback System: architecture/json-fallback.md
+    - Verifier & Model Findings: architecture/verifier-findings.md
 
   - Troubleshooting:
     - troubleshooting/index.md
