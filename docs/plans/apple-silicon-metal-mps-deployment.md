@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-03
 **Branch:** `feat/apple-silicon-deploy`
-**Status:** Proposed
+**Status:** Implemented (April 2026) — hybrid native+container stack ships as `docker-compose.macos.yml` plus macOS-native backend, documented in [DEV_MACOS.md](../DEV_MACOS.md). This plan is retained as historical context; see the DEV_MACOS page for the current setup.
 **Prerequisite:** [Apple Silicon Docker Compose Stack Plan](apple-silicon-docker-compose.md) (CPU-only fallback)
 
 ---

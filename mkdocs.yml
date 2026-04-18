@@ -230,9 +230,10 @@ nav:
       - Creative & Narrative: example-reports/creative-narrative.md
   
   - Deployment:
+    - Deployment Comparison: deployment/comparison.md
     - Local LLMs: deployment/local-llms.md
     - Proxmox LXC: deployment/proxmox-lxc.md
-    - Deployment Comparison: deployment/comparison.md
+    - Podman Quadlet (LXC Production): deployment/lxc-podman-prod.md
 
   - Development:
     - macOS Native Stack: DEV_MACOS.md

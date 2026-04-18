@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-03
 **Branch:** `feat/apple-silicon-docker`
-**Status:** Proposed
+**Status:** Superseded (April 2026) — implemented as `docker-compose.macos.yml` and the hybrid native/container dev stack documented in [DEV_MACOS.md](../DEV_MACOS.md). Keep this file as historical context; no further work planned.
 
 ---
 
