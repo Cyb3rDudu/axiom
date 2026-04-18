@@ -74,6 +74,57 @@ PREFERRED_DEVICE_TYPE=auto
 # PYTORCH_ENABLE_MPS_FALLBACK=1
 ```
 
+### Per-Model Device Placement
+
+Each ML model can be assigned independently to GPU or CPU. Useful for tight VRAM budgets (for example, keeping the reranker on CPU to reserve VRAM for the embedder and GLiNER).
+
+```bash
+# Values: auto (use PREFERRED_DEVICE_TYPE), cuda, cuda:0, cuda:1, rocm, mps, cpu
+# Defaults shown below match axiom_backend/ai_researcher/config.py::MODEL_DEVICE_MAP
+DEVICE_EMBEDDER=auto   # BGE-M3 dense + sparse embedder
+DEVICE_RERANKER=cpu    # BGE-reranker-v2-m3 cross-encoder
+DEVICE_GLINER=cpu      # GLiNER zero-shot NER
+DEVICE_MREBEL=auto     # mREBEL relation extractor (per-import subprocess)
+DEVICE_MARKER=auto     # Marker PDF converter (per-import subprocess)
+DEVICE_VISION=cpu      # CLIP vision embedder for figures
+```
+
+!!! tip "Recommended for 12 GB GPUs"
+    Keep the reranker, GLiNER, and vision embedder on CPU and put only the BGE-M3 embedder on GPU. mREBEL and Marker run in their own short-lived subprocesses, so they only occupy VRAM during document imports.
+
+### GPU Worker Subprocess
+
+The embedder, reranker, and GLiNER run inside a shared subprocess that communicates with the backend (owner) and doc-processor (client) over a Unix domain socket. See [GPU Worker Architecture](../../architecture/gpu-worker.md) for the full design.
+
+```bash
+# Shared Unix socket path. Both backend and doc-processor must agree.
+# In containerized deploys, bind-mount a host dir to /tmp/axiom-gpu in both containers.
+# Default: /tmp/axiom-gpu-{pid}.sock (owner) or /tmp/axiom-gpu.sock (client)
+AXIOM_GPU_WORKER_SOCKET=/tmp/axiom-gpu/axiom-gpu.sock
+
+# When true, this process only connects to an existing worker, never spawns one.
+# Set on the doc-processor container so the backend alone owns the subprocess.
+# Default: false
+AXIOM_GPU_WORKER_CLIENT_MODE=false
+
+# Idle threshold (seconds) before the worker is killed to free VRAM.
+# The activity detector must also report idle, so this is a floor, not a hard timer.
+# Default: 900 (15 min)
+AXIOM_GPU_WORKER_IDLE_SEC=900
+
+# Number of concurrent RPC handler threads inside the worker.
+# Default: 4
+AXIOM_GPU_WORKER_THREADS=4
+
+# Timeout for worker startup (socket binding).
+# Default: 60
+AXIOM_GPU_WORKER_SPAWN_TIMEOUT_SEC=60
+
+# Client-side wait for the socket to appear before the doc-processor self-heals
+# by spawning its own worker. Default: 5
+AXIOM_GPU_WORKER_CLIENT_WAIT_SEC=5
+```
+
 ### Resource Limits
 
 ```bash
