@@ -12,8 +12,9 @@
 > **Latest Development (April 2026) - Major post-fork enhancements**
 >
 > Since forking from Maestro, AXIOM has added 200+ commits including:
+> - **GPU Worker Subprocess** *(new, production since April 2026)*: Shared embedder/reranker/GLiNER run in an isolated subprocess communicating with backend and doc-processor over msgpack-over-Unix-socket RPC. Clean CUDA context release on idle, zero backend downtime during unload, single worker shared across containers. See [Architecture](docs/architecture/gpu-worker.md).
 > - **OpenAI-Compatible API**: `/api/v1/chat/completions` endpoint with API key management for programmatic document Q&A
-> - **Per-Model Device Config**: Fine-grained GPU/CPU assignment per model (BGE, reranker, GLiNER, mREBEL, Marker) for tight VRAM budgets
+> - **Per-Model Device Config**: Fine-grained GPU/CPU assignment per model (`DEVICE_EMBEDDER`, `DEVICE_RERANKER`, `DEVICE_GLINER`, `DEVICE_MREBEL`, `DEVICE_MARKER`, `DEVICE_VISION`) for tight VRAM budgets
 > - **GLiNER + mREBEL**: Zero-shot multilingual entity and relation extraction replacing spaCy
 > - **Knowledge Graph Retrieval**: Entity-based chunk expansion across documents with query-level entity extraction
 > - **PDF Page Numbers**: 3-tier page label extraction (publisher metadata → header/footer parsing → physical) for accurate academic citations
@@ -23,16 +24,14 @@
 > - **Search Providers**: SearXNG with configurable engines, YaCy support, Brave API integration
 > - **Apple Silicon**: MPS GPU support for native macOS deployment
 > - **Robustness**: 3-level JSON fallback, context window truncation, multilingual support
-> - **Deployment**: Podman Quadlet, Proxmox LXC, macOS hybrid dev stack
+> - **Deployment**: Podman Quadlet (production on Proxmox LXC 120), pre-built Docker images on nimbus, macOS hybrid dev stack
 
 ## Roadmap
 
 Upcoming improvements planned:
 
 - **[OpenDataLoader PDF Integration](docs/OPENDATALOADER_INTEGRATION.md)** — CPU-based PDF parser alternative to Marker, frees ~2.5GB VRAM during imports and provides best-in-class table extraction (0.928 accuracy)
-- **VRAM Leak Fix**: Resolve reference retention in the global agent controller so idle models can actually be unloaded between missions
 - **Streaming API**: Server-Sent Events for the OpenAI-compatible endpoint
-- **Cross-Container GPU Coordination**: Doc-processor and backend coordination to prevent VRAM contention during simultaneous imports and queries
 - **Frontend Question Refinement**: Complete the UI flow for research question refinement (currently stub functions in the frontend)
 
 AXIOM is an AI-powered research platform you can host on your own hardware. It's designed to manage complex research tasks from start to finish in a collaborative research environment. Plan your research, let AI agents carry it out, and watch as they generate detailed reports based on your documents and sources from the web.

@@ -174,40 +174,55 @@ graph TB
     subgraph "Client"
         A[React Frontend]
     end
-    
+
     subgraph "Gateway"
         B[Nginx Reverse Proxy]
     end
-    
-    subgraph "Backend Services"
-        C[FastAPI Server]
-        D[Multi-Agent System<br/>Controller • Planning • Research<br/>Reflection • Writing]
-        E[RAG Pipeline<br/>BGE-M3 Embeddings]
+
+    subgraph "Backend Container"
+        C[FastAPI Server + Agent Controller]
+        E[RAG Pipeline<br/>hybrid vector + BM25 + RRF]
     end
-    
+
+    subgraph "Doc-Processor Container"
+        DP[Background Document Processor]
+        PW[pdf_worker subprocess<br/>Marker, per-import]
+        RW[relation_worker subprocess<br/>mREBEL, per-import]
+    end
+
+    subgraph "Shared GPU Worker"
+        GW[GPU Worker Subprocess<br/>BGE-M3 • BGE-reranker • GLiNER<br/>msgpack-over-AF_UNIX]
+    end
+
     subgraph "Data Layer"
-        F[(PostgreSQL + pgvector<br/>Documents • Vectors • Chats)]
-        G[File Storage<br/>PDFs • Markdown]
+        F[(PostgreSQL + pgvector)]
+        OS[(OpenSearch BM25)]
+        G[File Storage<br/>PDFs • Markdown • Images]
     end
-    
+
     subgraph "External"
-        H[AI Providers<br/>OpenAI • Anthropic • Local LLMs]
-        I[Search Providers<br/>Tavily • LinkUp • Jina]
+        H[AI Providers<br/>OpenAI • DeepSeek • Z.AI • OpenRouter]
+        I[Search Providers<br/>Tavily • LinkUp • Jina • SearXNG]
     end
-    
+
     A --> B
     B --> C
-    C --> D
     C --> E
-    D --> E
+    C -- RPC over /tmp/axiom-gpu/*.sock --> GW
+    DP -- RPC client_mode --> GW
+    DP --> PW
+    DP --> RW
     E --> F
+    E --> OS
     C --> F
     C --> G
-    D --> H
-    D --> I
-    
+    DP --> F
+    DP --> G
+    C --> H
+    C --> I
+
     style F fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    style D fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    style GW fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
 ```
 
 ## Documentation Sections
@@ -240,14 +255,16 @@ graph TB
 
 <div class="grid cards" markdown>
 
--   :material-rocket: **Post-Fork Enhancements** <small>Oct 2025 – March 2026</small>
+-   :material-rocket: **Post-Fork Enhancements** <small>Oct 2025 – April 2026</small>
 
     ---
 
-    **Major additions since forking from Maestro (260+ commits)**
+    **Major additions since forking from Maestro (350+ commits)**
 
+    - **GPU worker subprocess** (production April 2026): shared embedder/reranker/GLiNER over msgpack-over-Unix-socket RPC, idle auto-unload, clean CUDA context release. See [GPU Worker Architecture](architecture/gpu-worker.md).
     - **RAG pipeline overhaul**: hybrid vector+BM25 search with RRF fusion, graph-enhanced retrieval, BGE-reranker-v2-m3 cross-encoder reranking
     - **Knowledge graph**: GLiNER zero-shot NER + mREBEL relation extraction with VRAM management
+    - **Per-model device config**: `DEVICE_EMBEDDER`, `DEVICE_RERANKER`, `DEVICE_GLINER`, `DEVICE_MREBEL`, `DEVICE_MARKER`, `DEVICE_VISION` for tight VRAM budgets
     - **PDF page numbers**: 3-tier fallback (PDF labels, header/footer parsing, physical+1) for accurate citations
     - **Metadata enrichment**: CrossRef, OpenLibrary, OpenAlex lookups with fallback pipeline
     - **Chat RAG prompt**: unified DOCUMENT LIBRARY + TEXT EXCERPTS architecture with source references
@@ -255,7 +272,7 @@ graph TB
     - Configurable citation profiles: Numbered, KMU Akademie APA 7, APA 7 English, and custom
     - Apple Silicon MPS GPU support, device-agnostic hardware management
     - 3-level JSON fallback and context window truncation for provider robustness
-    - Deployment: Podman Quadlet, Proxmox LXC, macOS hybrid dev stack
+    - Deployment: Podman Quadlet on Proxmox LXC (production), pre-built images on nimbus, macOS hybrid dev stack
 
 -   :material-rocket: **Version 0.1.10-alpha** <small>Released Oct 12, 2025</small>
 
