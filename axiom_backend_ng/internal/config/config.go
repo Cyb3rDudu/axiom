@@ -1,0 +1,64 @@
+// Package config loads axiom-ng runtime configuration from env vars
+// (with optional YAML file override) using koanf.
+package config
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/env"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
+)
+
+// Config is the full axiom-ng runtime configuration. Fields will grow as the
+// migration proceeds; bootstrap only needs Port and LogLevel.
+type Config struct {
+	Port            int    `koanf:"port"`
+	LogLevel        string `koanf:"log_level"`
+	DatabaseURL     string `koanf:"database_url"`
+	GPUWorkerSocket string `koanf:"gpu_worker_socket"`
+	OpenSearchURL   string `koanf:"opensearch_url"`
+}
+
+// Defaults returns the config populated with bootstrap defaults.
+func Defaults() Config {
+	return Config{
+		Port:     8010,
+		LogLevel: "info",
+	}
+}
+
+// Load reads configuration, in order of increasing precedence:
+//  1. Defaults
+//  2. YAML file at configPath (if non-empty and readable)
+//  3. Environment variables prefixed with AXIOM_NG_
+//
+// AXIOM_NG_PORT → Port, AXIOM_NG_LOG_LEVEL → LogLevel, etc.
+func Load(configPath string) (Config, error) {
+	k := koanf.New(".")
+	cfg := Defaults()
+	if err := k.Load(structDefaultsProvider(cfg), nil); err != nil {
+		return Config{}, fmt.Errorf("load defaults: %w", err)
+	}
+
+	if configPath != "" {
+		if err := k.Load(file.Provider(configPath), yaml.Parser()); err != nil {
+			return Config{}, fmt.Errorf("load config file %q: %w", configPath, err)
+		}
+	}
+
+	envProvider := env.Provider("AXIOM_NG_", ".", func(s string) string {
+		return strings.ToLower(strings.TrimPrefix(s, "AXIOM_NG_"))
+	})
+	if err := k.Load(envProvider, nil); err != nil {
+		return Config{}, fmt.Errorf("load env: %w", err)
+	}
+
+	var out Config
+	if err := k.Unmarshal("", &out); err != nil {
+		return Config{}, fmt.Errorf("unmarshal config: %w", err)
+	}
+	return out, nil
+}

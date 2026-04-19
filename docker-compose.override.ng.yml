@@ -1,0 +1,35 @@
+# Overlay that brings up axiom-ng (Go backend) alongside the existing Python stack.
+# Use it while the migration is in progress:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.override.ng.yml up -d axiom-ng
+#
+# axiom-ng runs on a separate internal port (8010) and does NOT take over any
+# Python routes. Route a subset of traffic via nginx once AXIOM_NG_ENABLED=true
+# and the nginx split-route config is in use.
+
+services:
+  axiom-ng:
+    image: axiom-ng:dev
+    container_name: axiom-ng
+    build:
+      context: ./axiom_backend_ng
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${AXIOM_NG_VERSION:-dev}
+        COMMIT: ${AXIOM_NG_COMMIT:-none}
+        DATE: ${AXIOM_NG_DATE:-unknown}
+    environment:
+      AXIOM_NG_PORT: "8010"
+      AXIOM_NG_LOG_LEVEL: ${AXIOM_NG_LOG_LEVEL:-info}
+      # DATABASE_URL / GPU worker socket will be wired up in later slices.
+      AXIOM_NG_DATABASE_URL: ${AXIOM_NG_DATABASE_URL:-}
+      AXIOM_NG_GPU_WORKER_SOCKET: ${AXIOM_NG_GPU_WORKER_SOCKET:-}
+      AXIOM_NG_OPENSEARCH_URL: ${AXIOM_NG_OPENSEARCH_URL:-}
+      TZ: ${TZ:-UTC}
+    networks:
+      - axiom-network
+    restart: unless-stopped
+    # No host port binding: reached from inside the compose network at
+    # http://axiom-ng:8010 (e.g. from nginx). Uncomment to expose for local dev.
+    # ports:
+    #   - "8010:8010"
