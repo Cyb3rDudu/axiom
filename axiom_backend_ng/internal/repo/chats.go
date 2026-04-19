@@ -108,6 +108,20 @@ func (c *Chats) UpdateTitle(ctx context.Context, userID int32, id uuid.UUID, tit
 	return nil
 }
 
+// UpdateSettings replaces the chats.settings JSONB blob.
+func (c *Chats) UpdateSettings(ctx context.Context, userID int32, id uuid.UUID, settings json.RawMessage) error {
+	res := c.gdb.WithContext(ctx).Model(&models.Chat{}).
+		Where("id = ? AND user_id = ?", id, userID).
+		Updates(map[string]any{"settings": []byte(settings), "updated_at": time.Now().UTC()})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ListOptions controls pagination + filtering for List.
 type ListOptions struct {
 	Page     int
@@ -118,10 +132,11 @@ type ListOptions struct {
 
 // Paginated bundles chat rows with the cursor metadata the frontend expects.
 type Paginated struct {
-	Items    []Chat `json:"items"`
-	Total    int64  `json:"total"`
-	Page     int    `json:"page"`
-	PageSize int    `json:"page_size"`
+	Items      []Chat `json:"items"`
+	Total      int64  `json:"total"`
+	Page       int    `json:"page"`
+	PageSize   int    `json:"page_size"`
+	TotalPages int    `json:"total_pages"`
 }
 
 // List returns a page of chats for userID. page is 1-indexed.
@@ -159,7 +174,17 @@ func (c *Chats) List(ctx context.Context, userID int32, opt ListOptions) (Pagina
 	for _, r := range rows {
 		items = append(items, chatFromModel(r))
 	}
-	return Paginated{Items: items, Total: total, Page: opt.Page, PageSize: opt.PageSize}, nil
+	totalPages := 0
+	if opt.PageSize > 0 {
+		totalPages = int((total + int64(opt.PageSize) - 1) / int64(opt.PageSize))
+	}
+	return Paginated{
+		Items:      items,
+		Total:      total,
+		Page:       opt.Page,
+		PageSize:   opt.PageSize,
+		TotalPages: totalPages,
+	}, nil
 }
 
 // ListMessages returns all messages for a chat, oldest first.

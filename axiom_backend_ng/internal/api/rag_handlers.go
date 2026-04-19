@@ -50,7 +50,10 @@ func (d RAGDeps) ListChunks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
-// GetChunk handles GET /api/rag/chunks/{chunk_id}.
+// GetChunk handles GET /api/rag/chunks/{chunk_id}. Matches Python's
+// shape including the relationships/entities arrays — empty until the
+// knowledge-graph schema lands so the frontend's chunk-detail page
+// renders without undefined-reference errors.
 func (d RAGDeps) GetChunk(w http.ResponseWriter, r *http.Request) {
 	uid := requireUserID(r)
 	chunkID := chi.URLParam(r, "chunk_id")
@@ -67,16 +70,34 @@ func (d RAGDeps) GetChunk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "chunk fetch failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, c)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":                      c.ID,
+		"chunk_id":                c.ChunkID,
+		"chunk_index":             c.ChunkIndex,
+		"text":                    c.Text,
+		"doc_id":                  c.DocID,
+		"document_filename":       c.DocumentFilename,
+		"document_metadata_title": c.DocumentMetadataTitle,
+		"metadata":                c.Metadata,
+		"created_at":              c.CreatedAt,
+		"relationships":           []any{},
+		"entities":                []any{},
+	})
 }
 
 // ListEntities handles GET /api/rag/entities. Stubbed to an empty page
-// until the knowledge-graph tables are ported.
+// until the knowledge-graph tables are ported. Shape matches Python's
+// PaginatedEntitiesResponse so the frontend renders without surprises.
 func (d RAGDeps) ListEntities(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"entities": []any{},
 		"pagination": repo.Pagination{
-			Page: 1, Limit: 50,
+			TotalCount:  0,
+			Page:        1,
+			Limit:       50,
+			TotalPages:  0,
+			HasNext:     false,
+			HasPrevious: false,
 		},
 	})
 }

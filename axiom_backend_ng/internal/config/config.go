@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/knadh/koanf/parsers/yaml"
@@ -12,6 +13,9 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 )
+
+// defaultGetenv is the indirection point for osLookupEnv.
+var defaultGetenv = os.Getenv
 
 // Config is the full axiom-ng runtime configuration. Fields will grow as the
 // migration proceeds; bootstrap only needs Port and LogLevel.
@@ -68,5 +72,16 @@ func Load(configPath string) (Config, error) {
 	if err := k.Unmarshal("", &out); err != nil {
 		return Config{}, fmt.Errorf("unmarshal config: %w", err)
 	}
+
+	// Compatibility with Python deployments that set DATABASE_URL (no
+	// prefix). AXIOM_NG_DATABASE_URL wins when both are set.
+	if out.DatabaseURL == "" {
+		if v := osLookupEnv("DATABASE_URL"); v != "" {
+			out.DatabaseURL = v
+		}
+	}
 	return out, nil
 }
+
+// osLookupEnv is a seam so tests can stub os.Getenv deterministically.
+var osLookupEnv = func(k string) string { return defaultGetenv(k) }

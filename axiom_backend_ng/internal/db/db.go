@@ -40,7 +40,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		MaxOpenConns:     80, // pool_size (50) + max_overflow (30)
-		MaxIdleConns:     5,
+		MaxIdleConns:     20, // closer to SQLAlchemy's idle-pool default
 		ConnMaxLifetime:  1 * time.Hour,
 		ConnMaxIdleTime:  15 * time.Minute,
 		StatementTimeout: 30 * time.Second,

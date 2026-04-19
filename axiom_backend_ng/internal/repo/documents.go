@@ -300,13 +300,22 @@ func (d *Documents) Cancel(ctx context.Context, userID int32, id uuid.UUID) erro
 
 // QueueReprocess flips the processing status back to 'pending' so the
 // background processor picks it up. The bulk handler fans this out.
+// The Python doc-processor reads metadata_['reprocess_metadata']=true
+// to know this is a metadata-only re-extraction rather than a full
+// re-embed; we must merge that flag in or the processor will re-embed
+// unnecessarily (axiom_backend/api/documents.py:1263).
 func (d *Documents) QueueReprocess(ctx context.Context, userID int32, ids []uuid.UUID) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 	res := d.gdb.WithContext(ctx).Model(&models.Document{}).
 		Where("id IN ? AND user_id = ?", ids, userID).
-		Updates(map[string]any{"processing_status": "pending", "upload_progress": 0, "updated_at": time.Now().UTC()})
+		Updates(map[string]any{
+			"processing_status": "pending",
+			"upload_progress":   0,
+			"metadata_":         gorm.Expr(`COALESCE(metadata_, '{}'::jsonb) || '{"reprocess_metadata": true}'::jsonb`),
+			"updated_at":        time.Now().UTC(),
+		})
 	if res.Error != nil {
 		return 0, res.Error
 	}

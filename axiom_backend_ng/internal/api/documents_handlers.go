@@ -312,6 +312,10 @@ func (d DocumentDeps) Image(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = f.Close() }()
 	w.Header().Set("Content-Type", contentTypeForFilename(name))
+	if st, err := f.Stat(); err == nil {
+		w.Header().Set("Content-Length", strconv.FormatInt(st.Size(), 10))
+		w.Header().Set("Last-Modified", st.ModTime().UTC().Format(http.TimeFormat))
+	}
 	_, _ = io.Copy(w, f)
 }
 

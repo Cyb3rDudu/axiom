@@ -96,6 +96,14 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 	groups := repo.NewDocumentGroups(gormDB)
 	chunks := repo.NewChunks(gormDB)
 
+	// Bootstrap admin user if the table is empty, matching Python's
+	// setup_first_user.py behaviour. ADMIN_USERNAME / ADMIN_PASSWORD /
+	// ADMIN_EMAIL env vars override the defaults.
+	if err := ensureFirstUser(ctx, users, logger); err != nil {
+		logger.Warn("first-user bootstrap failed",
+			slog.String("error", err.Error()))
+	}
+
 	deps := server.Deps{
 		Auth: api.AuthDeps{
 			Users:          users,
@@ -143,6 +151,50 @@ func secretFromEnv() string {
 		return v
 	}
 	return os.Getenv("SECRET_KEY")
+}
+
+// ensureFirstUser creates a default admin when the users table is
+// empty. Matches axiom_backend/setup_first_user.py + the wiring in
+// axiom_backend/main.py:186. No-op if users already exist.
+func ensureFirstUser(ctx context.Context, users *repo.Users, logger *slog.Logger) error {
+	count, err := users.Count(ctx)
+	if err != nil {
+		return fmt.Errorf("count users: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+	username := envOr("ADMIN_USERNAME", "admin")
+	password := envOr("ADMIN_PASSWORD", "admin123")
+	email := envOr("ADMIN_EMAIL", "admin@axiom.local")
+
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	if _, err := users.Create(ctx, repo.CreateInput{
+		Username:       username,
+		Email:          email,
+		HashedPassword: hash,
+		IsAdmin:        true,
+	}); err != nil {
+		return fmt.Errorf("create admin: %w", err)
+	}
+	if password == "admin123" {
+		logger.Warn("default admin bootstrapped with password 'admin123' — change it immediately",
+			slog.String("username", username))
+	} else {
+		logger.Info("admin user bootstrapped from ADMIN_* env vars",
+			slog.String("username", username))
+	}
+	return nil
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }
 
 // dbHealth adapts *gorm.DB to the system-handler Ping signature without

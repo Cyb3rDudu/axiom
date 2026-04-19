@@ -118,6 +118,7 @@ func NewWithDeps(cfg config.Config, logger *slog.Logger, deps Deps) *Server {
 					r.Get("/", deps.Chats.List)
 					r.Post("/", deps.Chats.Create)
 					r.Get("/{id}", deps.Chats.Get)
+					r.Put("/{id}", deps.Chats.Update)
 					r.Delete("/{id}", deps.Chats.Delete)
 					r.Get("/{id}/title", deps.Chats.GetTitle)
 					r.Put("/{id}/title", deps.Chats.UpdateTitle)
@@ -140,6 +141,10 @@ func NewWithDeps(cfg config.Config, logger *slog.Logger, deps Deps) *Server {
 				r.Put("/document-groups/{group_id}", deps.DocumentGroups.Update)
 				r.Delete("/document-groups/{group_id}", deps.DocumentGroups.Delete)
 				r.Post("/document-groups/{group_id}/add-document/{doc_id}", deps.DocumentGroups.AddDocument)
+				// Python exposes the same add action at a second path
+				// (axiom_backend/api/documents.py:812). Keep both so the
+				// frontend can call either.
+				r.Post("/document-groups/{group_id}/documents/{doc_id}", deps.DocumentGroups.AddDocument)
 				r.Delete("/document-groups/{group_id}/documents/{doc_id}", deps.DocumentGroups.RemoveDocument)
 				r.Post("/document-groups/{group_id}/bulk-add-documents", deps.DocumentGroups.BulkAdd)
 				r.Post("/document-groups/{group_id}/bulk-remove-documents", deps.DocumentGroups.BulkRemove)
