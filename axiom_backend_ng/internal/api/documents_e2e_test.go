@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +15,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/api"
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/auth"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/repo"
 )
 
@@ -377,6 +382,124 @@ func TestRAGChunksList(t *testing.T) {
 }
 
 // userIDFor looks up the numeric ID of a registered user so tests can
+// uploadMultipart sends a multipart POST with the given file part to the
+// e2e fixture, reusing the cookie-jar client for auth. Returns status +
+// body so the test can assert on both.
+func uploadMultipart(t *testing.T, f *fixture, client *http.Client, csrf, path, filename, content string) (int, []byte) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", `form-data; name="file"; filename="`+filename+`"`)
+	h.Set("Content-Type", "application/octet-stream")
+	part, err := mw.CreatePart(h)
+	if err != nil {
+		t.Fatalf("create part: %v", err)
+	}
+	if _, err := part.Write([]byte(content)); err != nil {
+		t.Fatalf("write part: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close mw: %v", err)
+	}
+	req, _ := http.NewRequest(http.MethodPost, f.url(path), &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if csrf != "" {
+		req.Header.Set(auth.CSRFHeader, csrf)
+	}
+	resp, err := client.Do(req) //nolint:bodyclose
+	if err != nil {
+		t.Fatalf("do upload: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body
+}
+
+func TestUploadEndToEnd(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	defer f.close()
+	client, csrf := f.registerAndLogin(t, "uploader", "hunter22")
+
+	status, body := uploadMultipart(t, f, client, csrf, "/api/documents/upload", "paper.pdf", "PDF-BODY")
+	if status != http.StatusOK {
+		t.Fatalf("upload: %d %s", status, body)
+	}
+	var resp api.UploadResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Filename != "paper.pdf" || resp.Status != "processing" || resp.ProcessingStatus != "pending" {
+		t.Fatalf("unexpected shape: %+v", resp)
+	}
+
+	// File should actually exist on disk under the configured raw dir.
+	entries, err := os.ReadDir(f.rawDir)
+	if err != nil {
+		t.Fatalf("read raw dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(entries))
+	}
+
+	// Row should be visible via GET /api/documents/{id}.
+	status, body = f.do(t, client, http.MethodGet, "/api/documents/"+resp.ID.String(), "", nil)
+	if status != http.StatusOK {
+		t.Fatalf("get uploaded doc: %d %s", status, body)
+	}
+
+	// Second upload of the same content → 409 duplicate.
+	status, body = uploadMultipart(t, f, client, csrf, "/api/documents/upload", "paper.pdf", "PDF-BODY")
+	if status != http.StatusConflict {
+		t.Fatalf("dedup: %d %s", status, body)
+	}
+	var dup api.UploadResponse
+	_ = json.Unmarshal(body, &dup)
+	if !dup.Duplicate || dup.ID != resp.ID {
+		t.Fatalf("dedup mismatch: %+v (expected id=%s)", dup, resp.ID)
+	}
+
+	// Upload to a new group → doc is created and added to group.
+	uid := userIDFor(t, f, "uploader")
+	group, err := repo.NewDocumentGroups(f.pg.DB).Create(context.Background(), uid, "group-a", "desc")
+	if err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+	status, body = uploadMultipart(t, f, client, csrf,
+		"/api/document-groups/"+group.ID.String()+"/upload/", "other.pdf", "OTHER-BODY")
+	if status != http.StatusOK {
+		t.Fatalf("group upload: %d %s", status, body)
+	}
+	var g1 api.UploadResponse
+	_ = json.Unmarshal(body, &g1)
+
+	// Upload same content again with different filename → 'existing' + added once.
+	// First re-upload lands in the group via the addNotInGroup branch only
+	// if the doc is NOT yet in the group, so we re-use a fresh group.
+	group2, err := repo.NewDocumentGroups(f.pg.DB).Create(context.Background(), uid, "group-b", "desc")
+	if err != nil {
+		t.Fatalf("seed group2: %v", err)
+	}
+	status, body = uploadMultipart(t, f, client, csrf,
+		"/api/document-groups/"+group2.ID.String()+"/upload/", "other.pdf", "OTHER-BODY")
+	if status != http.StatusOK {
+		t.Fatalf("group re-upload: %d %s", status, body)
+	}
+	var g2 api.UploadResponse
+	_ = json.Unmarshal(body, &g2)
+	if g2.Status != "existing" || g2.ID != g1.ID {
+		t.Fatalf("expected existing status reusing id=%s, got %+v", g1.ID, g2)
+	}
+
+	// Uploading the same content again into the SAME group → 409 duplicate.
+	status, body = uploadMultipart(t, f, client, csrf,
+		"/api/document-groups/"+group2.ID.String()+"/upload/", "other.pdf", "OTHER-BODY")
+	if status != http.StatusConflict {
+		t.Fatalf("already-in-group dup: %d %s", status, body)
+	}
+}
+
 // seed rows owned by them.
 func userIDFor(t *testing.T, f *fixture, username string) int32 {
 	t.Helper()

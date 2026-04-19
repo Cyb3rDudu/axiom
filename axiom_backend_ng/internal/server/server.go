@@ -40,6 +40,7 @@ type Deps struct {
 	DocumentGroups api.DocumentGroupDeps
 	RAG            api.RAGDeps
 	Search         api.SearchDeps
+	Upload         api.UploadDeps
 	// UserCtx, if set, wires the JWT-cookie middleware so authenticated
 	// routes can resolve the current user.
 	UserCtx UserContextConfig
@@ -134,6 +135,7 @@ func NewWithDeps(cfg config.Config, logger *slog.Logger, deps Deps) *Server {
 				})
 
 				// Document mutations.
+				r.Post("/documents/upload", deps.Upload.Upload)
 				r.Put("/documents/{doc_id}/metadata", deps.Documents.UpdateMetadata)
 				r.Delete("/documents/{doc_id}", deps.Documents.Delete)
 				r.Post("/documents/{doc_id}/cancel", deps.Documents.Cancel)
@@ -152,6 +154,7 @@ func NewWithDeps(cfg config.Config, logger *slog.Logger, deps Deps) *Server {
 				r.Delete("/document-groups/{group_id}/documents/{doc_id}", deps.DocumentGroups.RemoveDocument)
 				r.Post("/document-groups/{group_id}/bulk-add-documents", deps.DocumentGroups.BulkAdd)
 				r.Post("/document-groups/{group_id}/bulk-remove-documents", deps.DocumentGroups.BulkRemove)
+				r.Post("/document-groups/{group_id}/upload/", deps.Upload.UploadToGroup)
 			})
 		})
 	})
