@@ -47,8 +47,10 @@ type FusedHit struct {
 //
 //	score(chunk) = Σ (weight_i · 1/(k + rank_i))
 //
-// k defaults to DefaultRRFConstant when 0 is passed. Missing channels
-// contribute 0.
+// Chunks absent from a channel receive a synthetic rank of
+// `len(channel) + 1`, matching Python's retriever.py missing-channel
+// penalty so a single-channel hit is slightly deprioritised against a
+// multi-channel agreement. k defaults to DefaultRRFConstant when 0.
 func RRF(inputs []FusionInput, k int) []FusedHit {
 	if k <= 0 {
 		k = DefaultRRFConstant
@@ -80,6 +82,20 @@ func RRF(inputs []FusionInput, k int) []FusedHit {
 			if f.Payload == nil {
 				f.Payload = r.Payload
 			}
+		}
+	}
+
+	// Missing-channel penalty: every chunk that was not seen in a
+	// given channel contributes w_i · 1/(k + N_i + 1), where N_i is
+	// the channel size. Matches retriever.py lines ~287-303.
+	for i, in := range inputs {
+		w := weights[i]
+		penalty := 1.0 / float64(k+len(in.Hits)+1)
+		for _, f := range acc {
+			if _, present := f.ChannelRanks[in.Name]; present {
+				continue
+			}
+			f.CombinedScore += w * penalty
 		}
 	}
 

@@ -35,12 +35,15 @@ type Config struct {
 	Index    string
 }
 
-// DefaultConfig returns parity defaults — matches the Python backend's
-// config.py values. Callers still need to read env vars for Host / Port
-// / credentials.
+// DefaultConfig returns parity defaults. axiom-ng opts OUT of
+// OpenSearch unless explicitly enabled — the Python backend defaults
+// to enabled with a localhost:9200 target, but that triggers an
+// unwanted DNS lookup on container startup in production deployments
+// that didn't intend to run OpenSearch. Callers that want search
+// should set ENABLE_OPENSEARCH=true (or AXIOM_NG_OPENSEARCH_URL).
 func DefaultConfig() Config {
 	return Config{
-		Enabled: true,
+		Enabled: false,
 		Host:    "localhost",
 		Port:    9200,
 		Index:   "axiom_chunks",
@@ -52,9 +55,10 @@ func DefaultConfig() Config {
 func FromEnv(lookup func(string) string) Config {
 	cfg := DefaultConfig()
 	if v := readEnv(lookup, "ENABLE_OPENSEARCH"); v != "" {
-		// Python treats any value other than literal 'false' (case
-		// insensitive) as enabled; match that.
-		cfg.Enabled = !strings.EqualFold(v, "false")
+		// Python reads the env var as a literal "true"/"True"; match
+		// that strict semantic so values like "1" or "yes" don't
+		// silently enable the subsystem.
+		cfg.Enabled = strings.EqualFold(v, "true")
 	}
 	if v := readEnv(lookup, "OPENSEARCH_HOST"); v != "" {
 		cfg.Host = v

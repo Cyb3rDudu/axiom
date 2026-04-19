@@ -43,12 +43,25 @@ func (s *stubRetriever) Retrieve(_ context.Context, _ retriever.Options) ([]retr
 }
 
 type stubUserDocs struct {
-	ids []uuid.UUID
-	err error
+	ids      []uuid.UUID
+	err      error
+	groupIDs []uuid.UUID
+	groupErr error
+	groupHit uuid.UUID // if set and matches, return groupIDs
 }
 
 func (s *stubUserDocs) DocIDs(_ context.Context, _ int32) ([]uuid.UUID, error) {
 	return s.ids, s.err
+}
+
+func (s *stubUserDocs) DocIDsInGroup(_ context.Context, _ int32, groupID uuid.UUID) ([]uuid.UUID, error) {
+	if s.groupErr != nil {
+		return nil, s.groupErr
+	}
+	if s.groupHit != uuid.Nil && groupID == s.groupHit {
+		return s.groupIDs, nil
+	}
+	return s.groupIDs, nil
 }
 
 // --- fixture ---
@@ -280,6 +293,68 @@ func TestSearchEmptyLibraryReturnsEmpty(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte(`"results":[]`)) {
 		t.Errorf("empty: %s", body)
+	}
+}
+
+func TestFulltextScopesByGroupID(t *testing.T) {
+	t.Parallel()
+	f := newSearchFixture(t, true, true)
+	groupID := uuid.New()
+	groupDocID := uuid.New()
+	// Library has two docs but only one belongs to the group.
+	f.userDocs.ids = []uuid.UUID{uuid.New(), groupDocID}
+	f.userDocs.groupIDs = []uuid.UUID{groupDocID}
+	f.userDocs.groupHit = groupID
+	f.fulltext.hits = []opensearch.Hit{
+		{ChunkID: "g_0", DocID: groupDocID, Text: "in group", Score: 9.0},
+	}
+	status, body := getSearchAuthed(t, f.srv.URL+"/api/documents/search/fulltext?query=rag&group_id="+groupID.String(), f.token)
+	if status != http.StatusOK {
+		t.Fatalf("%d %s", status, body)
+	}
+	var hits []api.FulltextHit
+	_ = json.Unmarshal(body, &hits)
+	if len(hits) != 1 || hits[0].ID != groupDocID {
+		t.Errorf("expected single in-group result, got %+v", hits)
+	}
+}
+
+func TestFulltextSurfacesMetadataFields(t *testing.T) {
+	t.Parallel()
+	f := newSearchFixture(t, true, true)
+	docID := uuid.New()
+	f.fulltext.hits = []opensearch.Hit{
+		{
+			ChunkID: "a_0", DocID: docID, Text: "x", Score: 1.0,
+			Metadata: map[string]any{
+				"title":             "A Paper",
+				"original_filename": "paper.pdf",
+				"authors":           []any{"Alice", "Bob"},
+				"publication_year":  float64(2025),
+				"document_type":     "article",
+			},
+		},
+	}
+	status, body := getSearchAuthed(t, f.srv.URL+"/api/documents/search/fulltext?query=rag", f.token)
+	if status != http.StatusOK {
+		t.Fatalf("%d %s", status, body)
+	}
+	var hits []api.FulltextHit
+	if err := json.Unmarshal(body, &hits); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("got %d hits", len(hits))
+	}
+	h := hits[0]
+	if h.Title != "A Paper" || h.OriginalFilename != "paper.pdf" || h.DocumentType != "article" {
+		t.Errorf("metadata extraction: %+v", h)
+	}
+	if len(h.Authors) != 2 || h.Authors[0] != "Alice" {
+		t.Errorf("authors: %+v", h.Authors)
+	}
+	if h.PublicationYear == nil || *h.PublicationYear != 2025 {
+		t.Errorf("year: %+v", h.PublicationYear)
 	}
 }
 

@@ -88,6 +88,9 @@ func (r *Retriever) Retrieve(ctx context.Context, opt Options) ([]Result, error)
 		}
 		if len(sparseVec) > 0 {
 			if hits, err := r.sparseSearch(ctx, sparseVec, opt.DocIDs, fetchN); err == nil && len(hits) > 0 {
+				// Sparse rides the same weight as dense: both are
+				// embedder channels. Python retriever.py merges sparse
+				// into the dense channel's weight bucket too.
 				inputs = append(inputs, FusionInput{Name: "sparse", Weight: weightOrDefault(opt.DenseWeight, DefaultDenseWeight), Hits: hits})
 			}
 		}

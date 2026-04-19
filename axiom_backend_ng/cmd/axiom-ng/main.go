@@ -99,6 +99,10 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 	groups := repo.NewDocumentGroups(gormDB)
 	chunks := repo.NewChunks(gormDB)
 
+	// Single GPU client shared between /api/system/gpu-status and
+	// the retriever — both just probe/embed, no persistent state.
+	gpuProbe := newGPUProbe(cfg)
+
 	// Bootstrap admin user if the table is empty, matching Python's
 	// setup_first_user.py behaviour. ADMIN_USERNAME / ADMIN_PASSWORD /
 	// ADMIN_EMAIL env vars override the defaults.
@@ -116,7 +120,7 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 		Languages: api.LanguageDeps{Languages: langs},
 		System: api.SystemDeps{
 			Health: dbHealth{gdb: gormDB},
-			GPU:    newGPUProbe(cfg),
+			GPU:    gpuProbe,
 		},
 		Dashboard: api.DashboardDeps{Stats: dash},
 		Settings:  api.SettingsDeps{Users: users},
@@ -131,7 +135,7 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 		},
 		DocumentGroups: api.DocumentGroupDeps{Groups: groups, Documents: documents},
 		RAG:            api.RAGDeps{Chunks: chunks},
-		Search:         newSearchDeps(gormDB, documents, cfg, logger),
+		Search:         newSearchDeps(gormDB, documents, gpuProbe, cfg, logger),
 		UserCtx: server.UserContextConfig{
 			Signer:     signer,
 			UserLookup: userLookup{users: users},
@@ -207,12 +211,12 @@ func envOr(k, def string) string {
 // newSearchDeps wires the OpenSearch client + hybrid retriever for
 // /api/documents/search/fulltext and /api/search/. Missing OpenSearch
 // config is fine — handlers degrade gracefully (503 / empty results).
-func newSearchDeps(gdb *gorm.DB, docs *repo.Documents, cfg config.Config, logger *slog.Logger) api.SearchDeps {
+// The caller passes in the already-constructed GPU probe so it is
+// shared with /api/system/gpu-status rather than dialled twice.
+func newSearchDeps(gdb *gorm.DB, docs *repo.Documents, gpu *gpuworker.Client, cfg config.Config, logger *slog.Logger) api.SearchDeps {
 	var osClient *opensearch.Client
 	osCfg := opensearch.FromEnv(nil)
 	if cfg.OpenSearchURL != "" {
-		// Explicit AXIOM_NG_OPENSEARCH_URL overrides host/port.
-		// Simplest parse: trim scheme, split on last colon.
 		osCfg.Enabled = true
 	}
 	if osCfg.Enabled {
@@ -224,11 +228,10 @@ func newSearchDeps(gdb *gorm.DB, docs *repo.Documents, cfg config.Config, logger
 		}
 	}
 
-	gpuProbe := newGPUProbe(cfg)
 	ret := &retriever.Retriever{
 		DB:         gdb,
 		OpenSearch: osClient,
-		GPU:        gpuProbe,
+		GPU:        gpu,
 	}
 
 	return api.SearchDeps{
@@ -244,15 +247,15 @@ type dbHealth struct{ gdb *gorm.DB }
 
 func (h dbHealth) Ping(ctx context.Context) error { return db.Ping(ctx, h.gdb) }
 
-// newGPUProbe constructs the /api/system/gpu-status probe. Honors
+// newGPUProbe constructs the shared GPU probe. Honors
 // AXIOM_NG_GPU_WORKER_SOCKET first, then AXIOM_GPU_WORKER_SOCKET
-// (Python parity). An empty socket path is valid — the client
-// returns ErrNoSocket and the handler serves the "not_connected"
-// payload.
+// (Python parity), then the Python default /tmp/axiom-gpu.sock. A
+// missing socket file still returns a valid client — the handler
+// surfaces ErrNoSocket as 'not_connected'.
 func newGPUProbe(cfg config.Config) *gpuworker.Client {
 	path := cfg.GPUWorkerSocket
 	if path == "" {
-		path = gpuworker.SocketPathFromEnv(nil)
+		path = gpuworker.ResolveSocketPath(nil)
 	}
 	return gpuworker.NewClient(path)
 }

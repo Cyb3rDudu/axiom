@@ -27,9 +27,11 @@ type HybridRetriever interface {
 
 // UserDocIDs returns the UUIDs the current user owns, used to scope
 // OpenSearch queries. Any implementation that reads from the documents
-// table works.
+// table works. DocIDsInGroup narrows the list to documents that belong
+// to the given group (ownership still enforced).
 type UserDocIDs interface {
 	DocIDs(ctx context.Context, userID int32) ([]uuid.UUID, error)
+	DocIDsInGroup(ctx context.Context, userID int32, groupID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // SearchDeps wires fulltext + hybrid search.
@@ -41,11 +43,16 @@ type SearchDeps struct {
 
 // FulltextHit matches axiom_backend/api/documents.py's search/fulltext
 // response item shape (dedup'd by doc_id, highest-score kept, snippet
-// truncated at 200 chars).
+// truncated at 200 chars). Extra fields (authors, year, type,
+// original_filename) are surfaced from the indexed metadata — the
+// frontend's search-results card reads them directly.
 type FulltextHit struct {
 	ID               uuid.UUID      `json:"id"`
 	Title            string         `json:"title,omitempty"`
 	OriginalFilename string         `json:"original_filename,omitempty"`
+	Authors          []string       `json:"authors,omitempty"`
+	PublicationYear  *int           `json:"publication_year,omitempty"`
+	DocumentType     string         `json:"document_type,omitempty"`
 	Score            float64        `json:"score"`
 	Snippet          string         `json:"snippet"`
 	Metadata         map[string]any `json:"metadata_,omitempty"`
@@ -125,11 +132,15 @@ func (d SearchDeps) Fulltext(w http.ResponseWriter, r *http.Request) {
 			order = append(order, h.DocID)
 		}
 		seen[h.DocID] = FulltextHit{
-			ID:       h.DocID,
-			Score:    h.Score,
-			Snippet:  snippet,
-			Metadata: h.Metadata,
-			Title:    titleFromMetadata(h.Metadata),
+			ID:               h.DocID,
+			Score:            h.Score,
+			Snippet:          snippet,
+			Metadata:         h.Metadata,
+			Title:            stringFromMetadata(h.Metadata, "title"),
+			OriginalFilename: stringFromMetadata(h.Metadata, "original_filename"),
+			Authors:          stringSliceFromMetadata(h.Metadata, "authors"),
+			PublicationYear:  intFromMetadata(h.Metadata, "publication_year"),
+			DocumentType:     stringFromMetadata(h.Metadata, "document_type"),
 		}
 	}
 	out := make([]FulltextHit, 0, len(order))
@@ -204,28 +215,82 @@ func (d SearchDeps) Search(w http.ResponseWriter, r *http.Request) {
 // scoped to a group. Returns an empty slice (not nil) when the user
 // has no documents — callers should then short-circuit.
 func (d SearchDeps) resolveUserDocIDs(ctx context.Context, userID int32, groupID *uuid.UUID) ([]uuid.UUID, error) {
-	// group_id filtering pushes through to the UserDocs impl via a
-	// future extension; current impl ignores groups to keep the
-	// interface tight. OpenSearch still scopes correctly because
-	// DocIDs returns the user's full library and BM25 filters by
-	// the passed terms.
-	_ = groupID
 	if d.UserDocs == nil {
 		return nil, nil
+	}
+	if groupID != nil {
+		return d.UserDocs.DocIDsInGroup(ctx, userID, *groupID)
 	}
 	return d.UserDocs.DocIDs(ctx, userID)
 }
 
-// titleFromMetadata pulls the display title out of the OpenSearch
+// stringFromMetadata pulls a string field out of the OpenSearch
 // `metadata` object. Falls back to empty string.
-func titleFromMetadata(m map[string]any) string {
+func stringFromMetadata(m map[string]any, key string) string {
 	if m == nil {
 		return ""
 	}
-	if v, ok := m["title"].(string); ok {
+	if v, ok := m[key].(string); ok {
 		return v
 	}
 	return ""
+}
+
+// stringSliceFromMetadata returns a []string from a JSONB list field.
+// Accepts either a native []any of strings or a comma-separated string
+// (the Python backend has stored both shapes over time).
+func stringSliceFromMetadata(m map[string]any, key string) []string {
+	if m == nil {
+		return nil
+	}
+	v, ok := m[key]
+	if !ok {
+		return nil
+	}
+	switch s := v.(type) {
+	case []any:
+		out := make([]string, 0, len(s))
+		for _, e := range s {
+			if str, ok := e.(string); ok {
+				out = append(out, str)
+			}
+		}
+		return out
+	case []string:
+		return s
+	case string:
+		if s == "" {
+			return nil
+		}
+		return []string{s}
+	}
+	return nil
+}
+
+// intFromMetadata returns a *int from an integer-ish metadata field.
+// JSON numbers round-trip as float64 through map[string]any.
+func intFromMetadata(m map[string]any, key string) *int {
+	if m == nil {
+		return nil
+	}
+	v, ok := m[key]
+	if !ok || v == nil {
+		return nil
+	}
+	switch n := v.(type) {
+	case int:
+		return &n
+	case int32:
+		v := int(n)
+		return &v
+	case int64:
+		v := int(n)
+		return &v
+	case float64:
+		v := int(n)
+		return &v
+	}
+	return nil
 }
 
 // UserDocsRepoAdapter adapts repo.Documents into UserDocIDs. Lives in
@@ -239,11 +304,17 @@ type UserDocsRepoAdapter struct {
 // adapter needs.
 type DocumentIDLister interface {
 	IDsForUser(ctx context.Context, userID int32) ([]uuid.UUID, error)
+	IDsForUserInGroup(ctx context.Context, userID int32, groupID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // DocIDs forwards to the repo.
 func (a UserDocsRepoAdapter) DocIDs(ctx context.Context, userID int32) ([]uuid.UUID, error) {
 	return a.DB.IDsForUser(ctx, userID)
+}
+
+// DocIDsInGroup forwards the group-scoped query to the repo.
+func (a UserDocsRepoAdapter) DocIDsInGroup(ctx context.Context, userID int32, groupID uuid.UUID) ([]uuid.UUID, error) {
+	return a.DB.IDsForUserInGroup(ctx, userID, groupID)
 }
 
 // Compile-time sanity: make sure repo.Document's store fits the adapter.
@@ -267,6 +338,26 @@ func (l docIDLister) IDsForUser(ctx context.Context, userID int32) ([]uuid.UUID,
 	}
 	out := make([]uuid.UUID, 0, len(docs))
 	for _, doc := range docs {
+		out = append(out, doc.ID)
+	}
+	return out, nil
+}
+
+// IDsForUserInGroup returns the UUIDs the user owns that ALSO belong
+// to the given group. Uses the paginated List with an explicit group
+// filter (parity with Python's intersection query in documents.py).
+func (l docIDLister) IDsForUserInGroup(ctx context.Context, userID int32, groupID uuid.UUID) ([]uuid.UUID, error) {
+	const cap = 2000
+	page, err := l.d.List(ctx, userID, repo.DocumentListOptions{
+		Page:    1,
+		Limit:   cap,
+		GroupID: &groupID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uuid.UUID, 0, len(page.Documents))
+	for _, doc := range page.Documents {
 		out = append(out, doc.ID)
 	}
 	return out, nil

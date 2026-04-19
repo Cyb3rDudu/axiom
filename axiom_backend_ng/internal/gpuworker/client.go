@@ -17,6 +17,11 @@ import (
 // (our own prefix) → AXIOM_GPU_WORKER_SOCKET (Python legacy).
 var SocketEnvVars = []string{"AXIOM_NG_GPU_WORKER_SOCKET", "AXIOM_GPU_WORKER_SOCKET"}
 
+// DefaultClientSocket is the socket path the Python gpu_worker spawns
+// under `/tmp/axiom-gpu.sock` when a sibling process connects in
+// client mode. Used as the last-resort fallback.
+const DefaultClientSocket = "/tmp/axiom-gpu.sock"
+
 // DefaultCallTimeout bounds every round-trip by default. Override with
 // WithTimeout or by passing a deadline via context.
 const DefaultCallTimeout = 30 * time.Second
@@ -62,6 +67,17 @@ func SocketPathFromEnv(lookup func(string) string) string {
 		}
 	}
 	return ""
+}
+
+// ResolveSocketPath falls back to the Python-parity default when no
+// env var is set, mirroring axiom_backend/ai_researcher/gpu_worker/
+// client.py:90 (client mode → /tmp/axiom-gpu.sock). Returns "" only
+// when the caller explicitly wants opt-out behaviour.
+func ResolveSocketPath(lookup func(string) string) string {
+	if p := SocketPathFromEnv(lookup); p != "" {
+		return p
+	}
+	return DefaultClientSocket
 }
 
 // SocketPath returns the socket path this client is configured to use.

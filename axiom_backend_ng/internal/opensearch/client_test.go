@@ -53,6 +53,7 @@ func (m *mockOS) newClient(t *testing.T) *opensearch.Client {
 	t.Helper()
 	host, port := splitHostPort(t, m.srv.URL)
 	cfg := opensearch.DefaultConfig()
+	cfg.Enabled = true // DefaultConfig is now opt-out
 	cfg.Host = host
 	cfg.Port = port
 	cli, err := opensearch.NewClient(cfg)
@@ -127,6 +128,33 @@ func TestFromEnvTrueEnabled(t *testing.T) {
 	}
 	if !opensearch.FromEnv(lookup).Enabled {
 		t.Error("ENABLE_OPENSEARCH=true should enable")
+	}
+}
+
+func TestFromEnvNonTrueValuesLeaveDisabled(t *testing.T) {
+	t.Parallel()
+	// Audit finding: Python treats only literal "true" as enabled.
+	// Values like "1", "yes", random strings should NOT enable.
+	for _, v := range []string{"1", "yes", "random", "", "True "} {
+		lookup := func(string) string { return v }
+		cfg := opensearch.FromEnv(lookup)
+		if v == "" {
+			// unset → default stays false (disabled-by-default)
+			if cfg.Enabled {
+				t.Errorf("unset ENABLE_OPENSEARCH: expected false, got true")
+			}
+			continue
+		}
+		if cfg.Enabled {
+			t.Errorf("ENABLE_OPENSEARCH=%q should NOT enable (strict 'true' only)", v)
+		}
+	}
+}
+
+func TestDefaultConfigIsOptOut(t *testing.T) {
+	t.Parallel()
+	if opensearch.DefaultConfig().Enabled {
+		t.Error("axiom-ng opts OUT of OpenSearch by default")
 	}
 }
 
