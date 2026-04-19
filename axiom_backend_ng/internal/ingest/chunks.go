@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -34,6 +36,12 @@ type ChunkCounter interface {
 	MarkStatus(ctx context.Context, docID uuid.UUID, userID int32, in repo.MarkStatusInput) error
 }
 
+// DefaultMaxMarkdownBytes caps the size of a markdown file the
+// ChunkProcessor will load into memory. 64 MiB easily fits any
+// realistic document (a 2000-page textbook converts to ~20 MiB of
+// markdown) while preventing a 2 GiB raw-upload from pinning RSS.
+const DefaultMaxMarkdownBytes int64 = 64 << 20
+
 // ChunkProcessor reads the markdown file produced by PDFProcessor,
 // runs the structure-aware chunker, calls the GPU worker's
 // embed_chunks, then persists every chunk + embedding into
@@ -53,6 +61,9 @@ type ChunkProcessor struct {
 	// round-trip (e.g. Marker-only smoke tests, or a redeploy where
 	// embeddings are re-computed later).
 	SkipEmbeddings bool
+	// MaxMarkdownBytes caps os.ReadFile before it pulls the whole
+	// markdown into memory. Zero → DefaultMaxMarkdownBytes.
+	MaxMarkdownBytes int64
 }
 
 // Process implements Processor.
@@ -67,7 +78,7 @@ func (p ChunkProcessor) Process(ctx context.Context, job Job) error {
 		return errors.New("chunk_processor: MarkdownDir not configured")
 	}
 	mdPath := filepath.Join(p.MarkdownDir, job.DocID.String()+".md")
-	body, err := os.ReadFile(mdPath) //nolint:gosec // path under configured dir
+	body, err := readMarkdownBounded(mdPath, p.maxMarkdownBytes())
 	if err != nil {
 		return fmt.Errorf("read markdown: %w", err)
 	}
@@ -103,17 +114,27 @@ func (p ChunkProcessor) Process(ctx context.Context, job Job) error {
 
 // embedIfEnabled returns the enriched slice when embeddings are
 // configured, or nil when SkipEmbeddings is true / Embedder is nil.
+//
+// The payload must carry `metadata.section_titles` so the Python
+// embedder can prepend the section context to the text before
+// encoding — see axiom_backend/ai_researcher/core_rag/embedder.py
+// lines ~175-181. Sending just `{text, chunk_id}` would produce
+// observably different embeddings vs the Python pipeline on every
+// document with headings.
 func (p ChunkProcessor) embedIfEnabled(ctx context.Context, chunks []chunker.Chunk) ([]map[string]any, error) {
 	if p.SkipEmbeddings || p.Embedder == nil {
 		return nil, nil
 	}
-	// Build the embed_chunks payload: one dict per chunk with "text" as
-	// Python expects (plus chunk metadata for any worker-side logging).
 	payload := make([]map[string]any, len(chunks))
 	for i, c := range chunks {
 		payload[i] = map[string]any{
 			"text":     c.Text,
 			"chunk_id": c.Metadata.ChunkID,
+			"metadata": map[string]any{
+				"section_titles": sectionTitlesOrEmpty(c.Metadata.SectionTitles),
+				"chunk_id":       c.Metadata.ChunkID,
+				"chunk_index":    c.Metadata.ChunkIndex,
+			},
 		}
 	}
 	enriched, err := p.Embedder.EmbedChunks(ctx, payload)
@@ -126,18 +147,35 @@ func (p ChunkProcessor) embedIfEnabled(ctx context.Context, chunks []chunker.Chu
 	return enriched, nil
 }
 
+// sectionTitlesOrEmpty guarantees a non-nil slice in the JSON/msgpack
+// encoding so the Python embedder's `.get("section_titles", [])`
+// fallback path never has to fire.
+func sectionTitlesOrEmpty(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
 // persist writes chunks + updates chunk_count on the parent document.
-// The status write uses a fresh-ctx fallback like the pool does, so a
-// SIGTERM during persistence can still update the count.
+// Both writes use a fresh-ctx fallback when the parent ctx is already
+// cancelled — otherwise a SIGTERM mid-persist would leave
+// document_chunks rows inserted but chunk_count still 0 (or the
+// chunks themselves half-committed if the InsertChunks transaction
+// rolled back).
 func (p ChunkProcessor) persist(ctx context.Context, job Job, inserts []repo.ChunkInsert) error {
-	if err := p.Store.InsertChunks(ctx, job.DocID, inserts); err != nil {
+	writeCtx, cancel := freshCtxIfCancelled(ctx, persistFallbackTimeout)
+	if cancel != nil {
+		defer cancel()
+	}
+	if err := p.Store.InsertChunks(writeCtx, job.DocID, inserts); err != nil {
 		return fmt.Errorf("insert chunks: %w", err)
 	}
 	if p.StatusStore == nil {
 		return nil
 	}
 	count := int32(len(inserts))
-	if err := p.StatusStore.MarkStatus(ctx, job.DocID, job.UserID, repo.MarkStatusInput{
+	if err := p.StatusStore.MarkStatus(writeCtx, job.DocID, job.UserID, repo.MarkStatusInput{
 		// Leave processing_status where the pool set it ("processing");
 		// the pool flips to 'completed' after the chain returns.
 		Status:     repo.StatusProcessing,
@@ -146,6 +184,46 @@ func (p ChunkProcessor) persist(ctx context.Context, job Job, inserts []repo.Chu
 		return fmt.Errorf("update chunk_count: %w", err)
 	}
 	return nil
+}
+
+// persistFallbackTimeout is the grace period for committing chunks
+// after ctx is already cancelled. Matches the pool's fallback.
+const persistFallbackTimeout = 5 * time.Second
+
+// freshCtxIfCancelled returns ctx untouched when it's still live, or a
+// fresh timeout-bound context (+ its cancel func) when ctx is already
+// cancelled. The caller defers the returned cancel when non-nil.
+func freshCtxIfCancelled(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx.Err() == nil {
+		return ctx, nil
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
+// readMarkdownBounded reads the markdown file at path but refuses to
+// load more than maxBytes into RAM. Returning an error here is safer
+// than OOM-killing the worker process.
+func readMarkdownBounded(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.Open(path) //nolint:gosec // path under configured dir
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > maxBytes {
+		return nil, fmt.Errorf("markdown too large: %d bytes (max %d)", info.Size(), maxBytes)
+	}
+	return io.ReadAll(io.LimitReader(f, maxBytes+1))
+}
+
+func (p ChunkProcessor) maxMarkdownBytes() int64 {
+	if p.MaxMarkdownBytes > 0 {
+		return p.MaxMarkdownBytes
+	}
+	return DefaultMaxMarkdownBytes
 }
 
 func (p ChunkProcessor) logger() *slog.Logger {
