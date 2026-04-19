@@ -20,6 +20,11 @@ import (
 // errors.Is to decide between 404 and 500.
 var ErrNotFound = errors.New("repo: not found")
 
+// ErrNoPendingJobs is returned by Documents.ClaimPending when the
+// documents table has no rows in processing_status='pending'/'queued'.
+// The ingest worker treats this as a cue to sleep one poll interval.
+var ErrNoPendingJobs = errors.New("repo: no pending jobs")
+
 // User is the application-level view of a users-table row. Matches the
 // JSON shape returned by the Python backend's schemas.User.
 type User struct {
