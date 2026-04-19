@@ -2,15 +2,19 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"runtime"
+	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/gpuworker"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/version"
 )
 
 // SystemDeps exposes the minimum set of dependencies for /api/system/*.
 type SystemDeps struct {
 	Health DBHealth
+	GPU    GPUProbe
 }
 
 // DBHealth is a single-method interface the system handlers use to
@@ -18,6 +22,13 @@ type SystemDeps struct {
 // fine; production uses db.Ping.
 type DBHealth interface {
 	Ping(ctx context.Context) error
+}
+
+// GPUProbe is the single-method interface /api/system/gpu-status uses
+// to poke the Python gpu_worker. Production wires this to
+// *gpuworker.Client; tests can stub it directly.
+type GPUProbe interface {
+	Health(ctx context.Context) (gpuworker.HealthInfo, error)
 }
 
 // Status handles GET /api/system/status — mirrors SystemStatus schema.
@@ -64,15 +75,44 @@ func (d SystemDeps) Config(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// GPUStatus handles GET /api/system/gpu-status. The GPU worker client
-// ships in a later slice; for now we return a stub so the frontend's
-// status pages do not 404.
-func (d SystemDeps) GPUStatus(w http.ResponseWriter, _ *http.Request) {
+// GPUStatus handles GET /api/system/gpu-status. Talks to the Python
+// gpu_worker over msgpack; falls back to a "not_connected" payload
+// when no socket is configured or the worker is unreachable, so the
+// frontend's status page renders without error.
+func (d SystemDeps) GPUStatus(w http.ResponseWriter, r *http.Request) {
+	if d.GPU == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":     "not_connected",
+			"loaded":     map[string]bool{},
+			"pid":        0,
+			"uptime_sec": 0,
+			"vram_mb":    nil,
+		})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	h, err := d.GPU.Health(ctx)
+	if err != nil {
+		status := "error"
+		if errors.Is(err, gpuworker.ErrNoSocket) {
+			status = "not_connected"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":     status,
+			"loaded":     map[string]bool{},
+			"pid":        0,
+			"uptime_sec": 0,
+			"vram_mb":    nil,
+			"error":      err.Error(),
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":     "not_connected",
-		"loaded":     false,
-		"pid":        0,
-		"uptime_sec": 0,
-		"vram_mb":    0,
+		"status":     "ready",
+		"loaded":     h.Loaded,
+		"pid":        h.PID,
+		"uptime_sec": h.UptimeSec,
+		"vram_mb":    h.VRAMMB,
 	})
 }
