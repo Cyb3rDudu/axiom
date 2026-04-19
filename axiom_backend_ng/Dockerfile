@@ -2,9 +2,8 @@
 # Multi-stage build: static Go binary, then minimal scratch image with CA certs.
 
 ARG GO_VERSION=1.25
-ARG ALPINE_VERSION=3.20
 
-FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
+FROM golang:${GO_VERSION}-alpine AS builder
 RUN apk add --no-cache git ca-certificates
 WORKDIR /src
 
