@@ -1,0 +1,107 @@
+name: axiom-ng CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'axiom_backend_ng/**'
+      - '.github/workflows/axiom-ng-ci.yml'
+  pull_request:
+    paths:
+      - 'axiom_backend_ng/**'
+      - '.github/workflows/axiom-ng-ci.yml'
+
+defaults:
+  run:
+    working-directory: axiom_backend_ng
+
+jobs:
+  test:
+    name: Test & lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: axiom_backend_ng/go.sum
+
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -trimpath -race -count=1 ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61.0
+          working-directory: axiom_backend_ng
+
+  build:
+    name: Build ${{ matrix.target.goos }}/${{ matrix.target.goarch }}
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      matrix:
+        target:
+          - { goos: linux,  goarch: amd64 }
+          - { goos: linux,  goarch: arm64 }
+          - { goos: darwin, goarch: arm64 }
+    env:
+      CGO_ENABLED: '0'
+      GOOS: ${{ matrix.target.goos }}
+      GOARCH: ${{ matrix.target.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: axiom_backend_ng/go.sum
+
+      - name: Build
+        run: |
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags "-s -w \
+              -X github.com/Cyb3rDudu/axiom/axiom-ng/internal/version.Version=${GITHUB_REF_NAME} \
+              -X github.com/Cyb3rDudu/axiom/axiom-ng/internal/version.Commit=${GITHUB_SHA::7} \
+              -X github.com/Cyb3rDudu/axiom/axiom-ng/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o dist/axiom-ng_${GOOS}_${GOARCH} \
+            ./cmd/axiom-ng
+          ls -lh dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: axiom-ng_${{ matrix.target.goos }}_${{ matrix.target.goarch }}
+          path: axiom_backend_ng/dist/axiom-ng_${{ matrix.target.goos }}_${{ matrix.target.goarch }}
+          retention-days: 7
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: axiom_backend_ng
+          file: axiom_backend_ng/Dockerfile
+          push: false
+          tags: axiom-ng:ci
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ github.event.repository.updated_at }}
