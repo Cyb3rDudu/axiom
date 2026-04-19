@@ -72,12 +72,14 @@ func run() error {
 
 	// Run HTTP server and ingest pool under the same ctx so a single
 	// SIGTERM brings both down together. The processor is a chain:
-	// PDFProcessor (markdown conversion) then ChunkProcessor (chunking
-	// + embeddings + document_chunks write). Either stage can be
-	// disabled independently by leaving its config empty.
+	// PDFProcessor (markdown conversion) → ChunkProcessor (chunking +
+	// embeddings + document_chunks write) → OpenSearchIndexer (BM25
+	// upsert). Any stage can be disabled independently by leaving its
+	// config empty.
 	documents := repo.NewDocuments(gormDB)
 	chunkStore := repo.NewChunks(gormDB)
-	proc := buildIngestProcessor(cfg, documents, chunkStore, logger)
+	osClient := buildOpenSearchClient(cfg, logger)
+	proc := buildIngestProcessor(cfg, documents, chunkStore, osClient, logger)
 	pool := ingest.New(
 		documents,
 		proc,
@@ -244,10 +246,12 @@ func envOr(k, def string) string {
 
 // buildIngestProcessor composes the ingest pipeline behind the pool.
 // Missing config degrades gracefully:
-//   - No MarkdownDir / ImagesDir → skip the PDF stage.
+//   - No MarkdownDir / ImagesDir → skip the PDF + chunk stages.
 //   - No GPU socket → keep the chunk stage but disable embeddings.
-//   - Neither → NoopProcessor so the pool still proves liveness.
-func buildIngestProcessor(cfg config.Config, documents *repo.Documents, chunks *repo.Chunks, logger *slog.Logger) ingest.Processor {
+//   - No OpenSearch → skip the indexer stage (retriever still works,
+//     just without BM25 hits for newly ingested docs).
+//   - No stages at all → NoopProcessor so the pool proves liveness.
+func buildIngestProcessor(cfg config.Config, documents *repo.Documents, chunks *repo.Chunks, osClient *opensearch.Client, logger *slog.Logger) ingest.Processor {
 	var chain ingest.Chain
 	if cfg.MarkdownDir != "" && cfg.ImagesDir != "" {
 		chain = append(chain, ingest.PDFProcessor{
@@ -273,6 +277,15 @@ func buildIngestProcessor(cfg config.Config, documents *repo.Documents, chunks *
 			Logger:         logger,
 			SkipEmbeddings: embedder == nil,
 		})
+		if osClient != nil {
+			chain = append(chain, ingest.OpenSearchIndexer{
+				Store:  chunks,
+				Index:  osClient,
+				Logger: logger,
+			})
+		} else {
+			logger.Warn("ingest indexer stage disabled — enable OpenSearch to populate BM25 index")
+		}
 	}
 	if len(chain) == 0 {
 		logger.Warn("ingest pool running with NoopProcessor — set AXIOM_NG_MARKDOWN_DIR + AXIOM_NG_IMAGES_DIR to enable conversion")
@@ -281,32 +294,38 @@ func buildIngestProcessor(cfg config.Config, documents *repo.Documents, chunks *
 	return chain
 }
 
+// buildOpenSearchClient constructs a shared *opensearch.Client for
+// both the ingest indexer stage and the search/retriever handlers.
+// Returns nil when OpenSearch is disabled or unreachable — callers
+// branch on that.
+func buildOpenSearchClient(cfg config.Config, logger *slog.Logger) *opensearch.Client {
+	osCfg := opensearch.FromEnv(nil)
+	if cfg.OpenSearchURL != "" {
+		osCfg.Enabled = true
+	}
+	if !osCfg.Enabled {
+		return nil
+	}
+	c, err := opensearch.NewClient(osCfg)
+	if err != nil {
+		logger.Warn("opensearch disabled", slog.String("error", err.Error()))
+		return nil
+	}
+	return c
+}
+
 // newSearchDeps wires the OpenSearch client + hybrid retriever for
 // /api/documents/search/fulltext and /api/search/. Missing OpenSearch
 // config is fine — handlers degrade gracefully (503 / empty results).
 // The caller passes in the already-constructed GPU probe so it is
 // shared with /api/system/gpu-status rather than dialled twice.
 func newSearchDeps(gdb *gorm.DB, docs *repo.Documents, gpu *gpuworker.Client, cfg config.Config, logger *slog.Logger) api.SearchDeps {
-	var osClient *opensearch.Client
-	osCfg := opensearch.FromEnv(nil)
-	if cfg.OpenSearchURL != "" {
-		osCfg.Enabled = true
-	}
-	if osCfg.Enabled {
-		c, err := opensearch.NewClient(osCfg)
-		if err != nil {
-			logger.Warn("opensearch disabled", slog.String("error", err.Error()))
-		} else {
-			osClient = c
-		}
-	}
-
+	osClient := buildOpenSearchClient(cfg, logger)
 	ret := &retriever.Retriever{
 		DB:         gdb,
 		OpenSearch: osClient,
 		GPU:        gpu,
 	}
-
 	return api.SearchDeps{
 		OpenSearch: osClient,
 		Retriever:  ret,

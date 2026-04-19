@@ -149,6 +149,65 @@ type ChunkInsert struct {
 	Metadata   map[string]any // JSONB; merged into chunk_metadata
 }
 
+// IndexedChunk is the view of a persisted chunk the ingest indexer
+// consumes. Populated by ListForDoc from document_chunks rows +
+// unmarshalled chunk_metadata JSONB.
+type IndexedChunk struct {
+	ChunkID       string
+	ChunkIndex    int32
+	Text          string
+	SectionTitles []string
+	TokenCount    int
+	Metadata      map[string]any
+}
+
+// ListForDoc returns every chunk for a document in chunk_index order.
+// Kept narrow — the OpenSearch indexer is the only caller so we don't
+// pay for a general-purpose ORDER BY + filter API.
+func (c *Chunks) ListForDoc(ctx context.Context, docID uuid.UUID) ([]IndexedChunk, error) {
+	var rows []models.DocumentChunk
+	err := c.gdb.WithContext(ctx).
+		Where("doc_id = ?", docID).
+		Order("chunk_index ASC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]IndexedChunk, 0, len(rows))
+	for _, r := range rows {
+		ic := IndexedChunk{
+			ChunkID:    r.ChunkID,
+			ChunkIndex: r.ChunkIndex,
+			Text:       r.ChunkText,
+		}
+		if len(r.ChunkMetadata) > 0 {
+			var meta map[string]any
+			if err := json.Unmarshal(r.ChunkMetadata, &meta); err == nil {
+				ic.Metadata = meta
+				if v, ok := meta["token_count"]; ok {
+					switch n := v.(type) {
+					case float64:
+						ic.TokenCount = int(n)
+					case int:
+						ic.TokenCount = n
+					}
+				}
+				if v, ok := meta["section_titles"].([]any); ok {
+					titles := make([]string, 0, len(v))
+					for _, s := range v {
+						if str, ok := s.(string); ok {
+							titles = append(titles, str)
+						}
+					}
+					ic.SectionTitles = titles
+				}
+			}
+		}
+		out = append(out, ic)
+	}
+	return out, nil
+}
+
 // InsertChunks replaces all chunks for a document in a single
 // transaction. The delete-then-insert pattern mirrors what the Python
 // doc-processor does on reprocess and keeps the chunk_id uniqueness

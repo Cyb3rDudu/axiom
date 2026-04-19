@@ -264,6 +264,54 @@ func TestChunkProcessorEmptyMarkdownPersistsZero(t *testing.T) {
 	}
 }
 
+func TestChunksListForDocRoundTrip(t *testing.T) {
+	t.Parallel()
+	pg := testutil.StartPostgres(t)
+	uid := seedUser(t, pg, "list-for-doc")
+	ids := seedPending(t, pg, uid, 1)
+	docID := ids[0]
+
+	mdDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(mdDir, docID.String()+".md"),
+		[]byte("# Intro\n\nBody one.\n\n# Method\n\nBody two."), 0o644)
+	proc := ingest.ChunkProcessor{
+		Chunker:     chunker.New(chunker.Config{MaxChunkTokens: 50, OverlapTokens: 0, MinChunkTokens: 1}),
+		Embedder:    &fakeEmbedder{},
+		Store:       repo.NewChunks(pg.DB),
+		StatusStore: repo.NewDocuments(pg.DB),
+		MarkdownDir: mdDir,
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if err := proc.Process(context.Background(), ingest.Job{DocID: docID, UserID: uid}); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	out, err := repo.NewChunks(pg.DB).ListForDoc(context.Background(), docID)
+	if err != nil {
+		t.Fatalf("ListForDoc: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("no chunks returned")
+	}
+	// Chunks should be ordered by chunk_index.
+	for i := 1; i < len(out); i++ {
+		if out[i-1].ChunkIndex >= out[i].ChunkIndex {
+			t.Errorf("ChunkIndex not ascending: %d -> %d", out[i-1].ChunkIndex, out[i].ChunkIndex)
+		}
+	}
+	// section_titles should have round-tripped as []string.
+	foundTitles := false
+	for _, c := range out {
+		if len(c.SectionTitles) > 0 {
+			foundTitles = true
+			break
+		}
+	}
+	if !foundTitles {
+		t.Error("section_titles not populated after round-trip")
+	}
+}
+
 func TestChunkProcessorConfigurationGuards(t *testing.T) {
 	t.Parallel()
 	base := ingest.Job{DocID: uuid.New(), UserID: 1}
