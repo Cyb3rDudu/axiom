@@ -45,6 +45,33 @@ jobs:
           version: v2.11.4
           working-directory: axiom_backend_ng
 
+  coverage:
+    name: Coverage gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: axiom_backend_ng
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: axiom_backend_ng/go.sum
+
+      - name: Run coverage gate
+        run: bash scripts/coverage-gate.sh
+        env:
+          FLOOR_TOTAL: '80.0'
+
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage.out
+          path: axiom_backend_ng/coverage.out
+          retention-days: 14
+
   build:
     name: Build ${{ matrix.target.goos }}/${{ matrix.target.goarch }}
     runs-on: ubuntu-latest

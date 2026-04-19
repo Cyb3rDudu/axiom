@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 )
 
@@ -39,4 +40,76 @@ func TestLoadOverridesFromEnv(t *testing.T) {
 	if cfg.LogLevel != "debug" {
 		t.Errorf("log level: got %q, want %q", cfg.LogLevel, "debug")
 	}
+}
+
+func TestLoadReadsYAMLFile(t *testing.T) {
+	t.Parallel()
+	path := writeYAML(t, `
+port: 7777
+log_level: warn
+database_url: postgres://yaml/test
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Port != 7777 {
+		t.Errorf("port: got %d, want 7777", cfg.Port)
+	}
+	if cfg.LogLevel != "warn" {
+		t.Errorf("log level: got %q", cfg.LogLevel)
+	}
+	if cfg.DatabaseURL != "postgres://yaml/test" {
+		t.Errorf("database_url: got %q", cfg.DatabaseURL)
+	}
+}
+
+func TestLoadEnvOverridesYAML(t *testing.T) {
+	path := writeYAML(t, "port: 7777\n")
+	t.Setenv("AXIOM_NG_PORT", "8888")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Port != 8888 {
+		t.Errorf("port: got %d, want 8888", cfg.Port)
+	}
+}
+
+func TestLoadRejectsMissingConfigFile(t *testing.T) {
+	t.Parallel()
+	_, err := Load("/nonexistent/axiom-ng.yaml")
+	if err == nil {
+		t.Fatal("expected error for missing config file")
+	}
+}
+
+func TestLoadRejectsMalformedYAML(t *testing.T) {
+	t.Parallel()
+	path := writeYAML(t, "port: [unclosed\n")
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for malformed YAML")
+	}
+}
+
+func TestLoadRejectsTypeMismatchInConfig(t *testing.T) {
+	t.Parallel()
+	// port must be an integer; a string value should fail unmarshal.
+	path := writeYAML(t, "port: not-a-number\n")
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected unmarshal error for non-integer port")
+	}
+}
+
+func writeYAML(t *testing.T, body string) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "axiom-ng-*.yaml")
+	if err != nil {
+		t.Fatalf("tempfile: %v", err)
+	}
+	if _, err := f.WriteString(body); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = f.Close()
+	return f.Name()
 }
