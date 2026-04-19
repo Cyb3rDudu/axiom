@@ -139,41 +139,74 @@ func (f *fixture) url(path string) string { return f.srv.URL + path }
 func (f *fixture) registerAndLogin(t *testing.T, username, password string) (*http.Client, string) {
 	t.Helper()
 	client := f.httpClient(t)
-	body, err := json.Marshal(map[string]string{"username": username, "password": password})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+
+	status, body := f.do(t, client, http.MethodPost, "/api/auth/register", "", map[string]string{
+		"username": username, "password": password,
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("register status: got %d, body=%s", status, body)
 	}
-	resp, err := client.Post(f.url("/api/auth/register"), "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("register: %v", err)
-	}
-	if resp.StatusCode != http.StatusCreated {
-		defer resp.Body.Close()
-		out, _ := io.ReadAll(resp.Body)
-		t.Fatalf("register status: got %d, body=%s", resp.StatusCode, out)
-	}
-	resp.Body.Close()
 
 	form := url.Values{"username": {username}, "password": {password}}
-	resp, err = client.Post(f.url("/api/auth/login"), "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
-	if err != nil {
-		t.Fatalf("login: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		out, _ := io.ReadAll(resp.Body)
-		t.Fatalf("login status: got %d, body=%s", resp.StatusCode, out)
+	status, body = f.doForm(t, client, http.MethodPost, "/api/auth/login", form)
+	if status != http.StatusOK {
+		t.Fatalf("login status: got %d, body=%s", status, body)
 	}
 	var lr api.LoginResponse
-	if err := json.NewDecoder(resp.Body).Decode(&lr); err != nil {
+	if err := json.Unmarshal(body, &lr); err != nil {
 		t.Fatalf("login decode: %v", err)
 	}
 	return client, lr.CSRFToken
 }
 
+// doRaw sends an arbitrary body string with Content-Type: application/json
+// and optional CSRF header, closing the response body for the caller.
+func (f *fixture) doRaw(t *testing.T, client *http.Client, method, path, csrf, body string) (int, []byte) {
+	t.Helper()
+	req, err := http.NewRequest(method, f.url(path), strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new raw request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if csrf != "" {
+		req.Header.Set(auth.CSRFHeader, csrf)
+	}
+	resp, err := client.Do(req) //nolint:bodyclose // closed below
+	if err != nil {
+		t.Fatalf("do raw: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read raw body: %v", err)
+	}
+	return resp.StatusCode, out
+}
+
+// doForm POSTs form-encoded data and closes the response body.
+func (f *fixture) doForm(t *testing.T, client *http.Client, method, path string, form url.Values) (int, []byte) {
+	t.Helper()
+	req, err := http.NewRequest(method, f.url(path), strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("new form request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := client.Do(req) //nolint:bodyclose // closed below
+	if err != nil {
+		t.Fatalf("do form: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read form body: %v", err)
+	}
+	return resp.StatusCode, out
+}
+
 // do issues a request with optional body + CSRF header and returns the
-// parsed status + body for assertions.
-func (f *fixture) do(t *testing.T, client *http.Client, method, path, csrf string, body any) (*http.Response, []byte) {
+// status code and response body. The response is fully consumed and
+// closed inside the helper, so callers never see a dangling body.
+func (f *fixture) do(t *testing.T, client *http.Client, method, path, csrf string, body any) (int, []byte) {
 	t.Helper()
 	var rdr io.Reader
 	if body != nil {
@@ -193,16 +226,16 @@ func (f *fixture) do(t *testing.T, client *http.Client, method, path, csrf strin
 	if csrf != "" {
 		req.Header.Set(auth.CSRFHeader, csrf)
 	}
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:bodyclose // closed below
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	out, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
-	resp.Body.Close()
-	return resp, out
+	return resp.StatusCode, out
 }
 
 // TestPublicEndpointsNoDB runs the / and /health / /api/system/*
@@ -213,21 +246,21 @@ func TestHealthAndSystemStatus(t *testing.T) {
 	defer f.close()
 
 	client := f.httpClient(t)
-	resp, body := f.do(t, client, http.MethodGet, "/health", "", nil)
-	if resp.StatusCode != 200 || !bytes.Contains(body, []byte(`"healthy"`)) {
-		t.Errorf("/health: got %d %s", resp.StatusCode, body)
+	status, body := f.do(t, client, http.MethodGet, "/health", "", nil)
+	if status != 200 || !bytes.Contains(body, []byte(`"healthy"`)) {
+		t.Errorf("/health: got %d %s", status, body)
 	}
-	resp, body = f.do(t, client, http.MethodGet, "/api/system/status", "", nil)
-	if resp.StatusCode != 200 || !bytes.Contains(body, []byte(`"components"`)) {
-		t.Errorf("/api/system/status: got %d %s", resp.StatusCode, body)
+	status, body = f.do(t, client, http.MethodGet, "/api/system/status", "", nil)
+	if status != 200 || !bytes.Contains(body, []byte(`"components"`)) {
+		t.Errorf("/api/system/status: got %d %s", status, body)
 	}
-	resp, body = f.do(t, client, http.MethodGet, "/api/system/config", "", nil)
-	if resp.StatusCode != 200 || !bytes.Contains(body, []byte(`"version"`)) {
-		t.Errorf("/api/system/config: got %d %s", resp.StatusCode, body)
+	status, body = f.do(t, client, http.MethodGet, "/api/system/config", "", nil)
+	if status != 200 || !bytes.Contains(body, []byte(`"version"`)) {
+		t.Errorf("/api/system/config: got %d %s", status, body)
 	}
-	resp, _ = f.do(t, client, http.MethodGet, "/api/system/gpu-status", "", nil)
-	if resp.StatusCode != 200 {
-		t.Errorf("/api/system/gpu-status: got %d", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodGet, "/api/system/gpu-status", "", nil)
+	if status != 200 {
+		t.Errorf("/api/system/gpu-status: got %d", status)
 	}
 }
 
@@ -239,9 +272,9 @@ func TestLanguagesListAndGet(t *testing.T) {
 	client := f.httpClient(t)
 
 	// Default: active only → 2 rows.
-	resp, body := f.do(t, client, http.MethodGet, "/api/languages", "", nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("list status: %d %s", resp.StatusCode, body)
+	status, body := f.do(t, client, http.MethodGet, "/api/languages", "", nil)
+	if status != 200 {
+		t.Fatalf("list status: %d %s", status, body)
 	}
 	var langs []repo.Language
 	if err := json.Unmarshal(body, &langs); err != nil {
@@ -255,22 +288,22 @@ func TestLanguagesListAndGet(t *testing.T) {
 	}
 
 	// include_inactive=true → 3 rows.
-	resp, body = f.do(t, client, http.MethodGet, "/api/languages?include_inactive=true", "", nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("include_inactive status: %d %s", resp.StatusCode, body)
+	status, body = f.do(t, client, http.MethodGet, "/api/languages?include_inactive=true", "", nil)
+	if status != 200 {
+		t.Fatalf("include_inactive status: %d %s", status, body)
 	}
 	_ = json.Unmarshal(body, &langs)
 	if len(langs) != 3 {
 		t.Errorf("all languages: got %d, want 3", len(langs))
 	}
 
-	resp, body = f.do(t, client, http.MethodGet, "/api/languages/en", "", nil)
-	if resp.StatusCode != 200 || !bytes.Contains(body, []byte(`"native_name":"English"`)) {
-		t.Errorf("GET /api/languages/en: got %d %s", resp.StatusCode, body)
+	status, body = f.do(t, client, http.MethodGet, "/api/languages/en", "", nil)
+	if status != 200 || !bytes.Contains(body, []byte(`"native_name":"English"`)) {
+		t.Errorf("GET /api/languages/en: got %d %s", status, body)
 	}
-	resp, _ = f.do(t, client, http.MethodGet, "/api/languages/xx", "", nil)
-	if resp.StatusCode != 404 {
-		t.Errorf("missing language status: got %d, want 404", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodGet, "/api/languages/xx", "", nil)
+	if status != 404 {
+		t.Errorf("missing language status: got %d, want 404", status)
 	}
 }
 
@@ -281,15 +314,15 @@ func TestAuthRegisterDuplicateAndDisabledFlag(t *testing.T) {
 
 	client := f.httpClient(t)
 	body := map[string]string{"username": "alice", "password": "hunter22"}
-	resp, _ := f.do(t, client, http.MethodPost, "/api/auth/register", "", body)
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("first register: %d", resp.StatusCode)
+	status, _ := f.do(t, client, http.MethodPost, "/api/auth/register", "", body)
+	if status != http.StatusCreated {
+		t.Fatalf("first register: %d", status)
 	}
 
 	// Duplicate → 400.
-	resp, _ = f.do(t, client, http.MethodPost, "/api/auth/register", "", body)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("dup register: got %d, want 400", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodPost, "/api/auth/register", "", body)
+	if status != http.StatusBadRequest {
+		t.Errorf("dup register: got %d, want 400", status)
 	}
 
 	// Disable registration via system setting.
@@ -298,9 +331,9 @@ func TestAuthRegisterDuplicateAndDisabledFlag(t *testing.T) {
 		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`).Error; err != nil {
 		t.Fatalf("set registration_enabled: %v", err)
 	}
-	resp, _ = f.do(t, client, http.MethodPost, "/api/auth/register", "", map[string]string{"username": "bob", "password": "x"})
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("registration disabled: got %d, want 403", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodPost, "/api/auth/register", "", map[string]string{"username": "bob", "password": "x"})
+	if status != http.StatusForbidden {
+		t.Errorf("registration disabled: got %d, want 403", status)
 	}
 }
 
@@ -311,46 +344,46 @@ func TestAuthLoginFlow(t *testing.T) {
 	client, csrf := f.registerAndLogin(t, "carol", "hunter22")
 
 	// /auth/me
-	resp, body := f.do(t, client, http.MethodGet, "/api/auth/me", "", nil)
-	if resp.StatusCode != 200 || !bytes.Contains(body, []byte(`"carol"`)) {
-		t.Errorf("/me: %d %s", resp.StatusCode, body)
+	status, body := f.do(t, client, http.MethodGet, "/api/auth/me", "", nil)
+	if status != 200 || !bytes.Contains(body, []byte(`"carol"`)) {
+		t.Errorf("/me: %d %s", status, body)
 	}
 
 	// test-csrf without header → 403
-	resp, _ = f.do(t, client, http.MethodPost, "/api/auth/test-csrf", "", nil)
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("test-csrf missing: got %d", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodPost, "/api/auth/test-csrf", "", nil)
+	if status != http.StatusForbidden {
+		t.Errorf("test-csrf missing: got %d", status)
 	}
 
 	// test-csrf with header → 200
-	resp, body = f.do(t, client, http.MethodPost, "/api/auth/test-csrf", csrf, nil)
-	if resp.StatusCode != 200 || !bytes.Contains(body, []byte("carol")) {
-		t.Errorf("test-csrf ok: %d %s", resp.StatusCode, body)
+	status, body = f.do(t, client, http.MethodPost, "/api/auth/test-csrf", csrf, nil)
+	if status != 200 || !bytes.Contains(body, []byte("carol")) {
+		t.Errorf("test-csrf ok: %d %s", status, body)
 	}
 
 	// change-password: wrong current → 400
-	resp, _ = f.do(t, client, http.MethodPost, "/api/auth/change-password", csrf, map[string]string{
+	status, _ = f.do(t, client, http.MethodPost, "/api/auth/change-password", csrf, map[string]string{
 		"current_password": "wrong", "new_password": "new-secret",
 	})
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("wrong current pw: got %d", resp.StatusCode)
+	if status != http.StatusBadRequest {
+		t.Errorf("wrong current pw: got %d", status)
 	}
 	// right current → 200
-	resp, _ = f.do(t, client, http.MethodPost, "/api/auth/change-password", csrf, map[string]string{
+	status, _ = f.do(t, client, http.MethodPost, "/api/auth/change-password", csrf, map[string]string{
 		"current_password": "hunter22", "new_password": "new-secret",
 	})
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("change pw: got %d", resp.StatusCode)
+	if status != http.StatusOK {
+		t.Errorf("change pw: got %d", status)
 	}
 
 	// Logout clears cookies.
-	resp, _ = f.do(t, client, http.MethodPost, "/api/auth/logout", csrf, nil)
-	if resp.StatusCode != 200 {
-		t.Errorf("logout: got %d", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodPost, "/api/auth/logout", csrf, nil)
+	if status != 200 {
+		t.Errorf("logout: got %d", status)
 	}
-	resp, _ = f.do(t, client, http.MethodGet, "/api/auth/me", "", nil)
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("after logout /me: got %d, want 401", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodGet, "/api/auth/me", "", nil)
+	if status != http.StatusUnauthorized {
+		t.Errorf("after logout /me: got %d, want 401", status)
 	}
 }
 
@@ -360,27 +393,22 @@ func TestLoginRejectsBadCredentials(t *testing.T) {
 	defer f.close()
 
 	client := f.httpClient(t)
-	resp, _ := f.do(t, client, http.MethodPost, "/api/auth/register", "", map[string]string{
+	status, _ := f.do(t, client, http.MethodPost, "/api/auth/register", "", map[string]string{
 		"username": "dave", "password": "rightpass",
 	})
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("register: %d", resp.StatusCode)
+	if status != http.StatusCreated {
+		t.Fatalf("register: %d", status)
 	}
 	form := url.Values{"username": {"dave"}, "password": {"wrongpass"}}
-	resp, err := client.Post(f.url("/api/auth/login"), "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
-	if err != nil {
-		t.Fatalf("login: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("bad password: got %d", resp.StatusCode)
+	status, _ = f.doForm(t, client, http.MethodPost, "/api/auth/login", form)
+	if status != http.StatusUnauthorized {
+		t.Errorf("bad password: got %d", status)
 	}
 
 	form = url.Values{"username": {"nobody"}, "password": {"x"}}
-	resp, _ = client.Post(f.url("/api/auth/login"), "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("missing user: got %d", resp.StatusCode)
+	status, _ = f.doForm(t, client, http.MethodPost, "/api/auth/login", form)
+	if status != http.StatusUnauthorized {
+		t.Errorf("missing user: got %d", status)
 	}
 }
 
@@ -391,9 +419,9 @@ func TestDashboardAndSettings(t *testing.T) {
 	client, csrf := f.registerAndLogin(t, "eve", "hunter22")
 
 	// Dashboard: empty counters.
-	resp, body := f.do(t, client, http.MethodGet, "/api/dashboard/stats", "", nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("dashboard: %d %s", resp.StatusCode, body)
+	status, body := f.do(t, client, http.MethodGet, "/api/dashboard/stats", "", nil)
+	if status != 200 {
+		t.Fatalf("dashboard: %d %s", status, body)
 	}
 	var stats repo.DashboardStats
 	_ = json.Unmarshal(body, &stats)
@@ -402,9 +430,9 @@ func TestDashboardAndSettings(t *testing.T) {
 	}
 
 	// GET settings returns {} on a fresh user.
-	resp, body = f.do(t, client, http.MethodGet, "/api/me/settings", "", nil)
-	if resp.StatusCode != 200 {
-		t.Errorf("get settings: %d", resp.StatusCode)
+	status, body = f.do(t, client, http.MethodGet, "/api/me/settings", "", nil)
+	if status != 200 {
+		t.Errorf("get settings: %d", status)
 	}
 	if strings.TrimSpace(string(body)) != "{}" && string(body) != "null" {
 		// accept {} or null since JSONB column may be NULL on insert
@@ -412,34 +440,27 @@ func TestDashboardAndSettings(t *testing.T) {
 	}
 
 	// PUT settings without CSRF → 403.
-	resp, _ = f.do(t, client, http.MethodPut, "/api/me/settings", "", map[string]string{"theme": "dark"})
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("PUT no csrf: got %d", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodPut, "/api/me/settings", "", map[string]string{"theme": "dark"})
+	if status != http.StatusForbidden {
+		t.Errorf("PUT no csrf: got %d", status)
 	}
 
 	// PUT settings with CSRF → 200.
-	resp, _ = f.do(t, client, http.MethodPut, "/api/me/settings", csrf, map[string]string{"theme": "dark"})
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("PUT settings: got %d", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodPut, "/api/me/settings", csrf, map[string]string{"theme": "dark"})
+	if status != http.StatusOK {
+		t.Errorf("PUT settings: got %d", status)
 	}
 
 	// PUT invalid JSON → 400.
-	req, _ := http.NewRequest(http.MethodPut, f.url("/api/me/settings"), strings.NewReader("not-json"))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(auth.CSRFHeader, csrf)
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("invalid json do: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("invalid json: got %d", resp.StatusCode)
+	status, _ = f.doRaw(t, client, http.MethodPut, "/api/me/settings", csrf, "not-json")
+	if status != http.StatusBadRequest {
+		t.Errorf("invalid json: got %d", status)
 	}
 
 	// GET settings reflects update.
-	resp, body = f.do(t, client, http.MethodGet, "/api/me/settings", "", nil)
-	if resp.StatusCode != 200 || !bytes.Contains(body, []byte(`"dark"`)) {
-		t.Errorf("updated settings: %d %s", resp.StatusCode, body)
+	status, body = f.do(t, client, http.MethodGet, "/api/me/settings", "", nil)
+	if status != 200 || !bytes.Contains(body, []byte(`"dark"`)) {
+		t.Errorf("updated settings: %d %s", status, body)
 	}
 }
 
@@ -450,15 +471,15 @@ func TestChatsLifecycle(t *testing.T) {
 	client, csrf := f.registerAndLogin(t, "frank", "hunter22")
 
 	// Empty list.
-	resp, body := f.do(t, client, http.MethodGet, "/api/chats/", "", nil)
-	if resp.StatusCode != 200 || !bytes.Contains(body, []byte(`"total":0`)) {
-		t.Errorf("empty list: %d %s", resp.StatusCode, body)
+	status, body := f.do(t, client, http.MethodGet, "/api/chats/", "", nil)
+	if status != 200 || !bytes.Contains(body, []byte(`"total":0`)) {
+		t.Errorf("empty list: %d %s", status, body)
 	}
 
 	// Create.
-	resp, body = f.do(t, client, http.MethodPost, "/api/chats/", csrf, map[string]string{"title": "Mission 1", "chat_type": "research"})
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create chat: %d %s", resp.StatusCode, body)
+	status, body = f.do(t, client, http.MethodPost, "/api/chats/", csrf, map[string]string{"title": "Mission 1", "chat_type": "research"})
+	if status != http.StatusCreated {
+		t.Fatalf("create chat: %d %s", status, body)
 	}
 	var chat repo.Chat
 	if err := json.Unmarshal(body, &chat); err != nil {
@@ -466,28 +487,28 @@ func TestChatsLifecycle(t *testing.T) {
 	}
 
 	// Title rename.
-	resp, _ = f.do(t, client, http.MethodPut, "/api/chats/"+chat.ID.String()+"/title", csrf, map[string]string{"title": "Renamed"})
-	if resp.StatusCode != 200 {
-		t.Errorf("rename: %d", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodPut, "/api/chats/"+chat.ID.String()+"/title", csrf, map[string]string{"title": "Renamed"})
+	if status != 200 {
+		t.Errorf("rename: %d", status)
 	}
-	resp, body = f.do(t, client, http.MethodGet, "/api/chats/"+chat.ID.String()+"/title", "", nil)
-	if resp.StatusCode != 200 || !bytes.Contains(body, []byte(`"Renamed"`)) {
-		t.Errorf("get title: %d %s", resp.StatusCode, body)
+	status, body = f.do(t, client, http.MethodGet, "/api/chats/"+chat.ID.String()+"/title", "", nil)
+	if status != 200 || !bytes.Contains(body, []byte(`"Renamed"`)) {
+		t.Errorf("get title: %d %s", status, body)
 	}
 
 	// Message append + list + delete.
-	resp, body = f.do(t, client, http.MethodPost, "/api/chats/"+chat.ID.String()+"/messages", csrf, map[string]any{
+	status, body = f.do(t, client, http.MethodPost, "/api/chats/"+chat.ID.String()+"/messages", csrf, map[string]any{
 		"role": "user", "content": "hello",
 	})
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("append: %d %s", resp.StatusCode, body)
+	if status != http.StatusCreated {
+		t.Fatalf("append: %d %s", status, body)
 	}
 	var msg repo.Message
 	_ = json.Unmarshal(body, &msg)
 
-	resp, body = f.do(t, client, http.MethodGet, "/api/chats/"+chat.ID.String()+"/messages", "", nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("list messages: %d", resp.StatusCode)
+	status, body = f.do(t, client, http.MethodGet, "/api/chats/"+chat.ID.String()+"/messages", "", nil)
+	if status != 200 {
+		t.Fatalf("list messages: %d", status)
 	}
 	var msgs []repo.Message
 	_ = json.Unmarshal(body, &msgs)
@@ -495,39 +516,39 @@ func TestChatsLifecycle(t *testing.T) {
 		t.Errorf("messages: got %d, want 1", len(msgs))
 	}
 
-	resp, _ = f.do(t, client, http.MethodDelete, "/api/chats/"+chat.ID.String()+"/messages/"+msg.ID.String(), csrf, nil)
-	if resp.StatusCode != 200 {
-		t.Errorf("delete msg: %d", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodDelete, "/api/chats/"+chat.ID.String()+"/messages/"+msg.ID.String(), csrf, nil)
+	if status != 200 {
+		t.Errorf("delete msg: %d", status)
 	}
 
 	// Clear all messages (no-op since already empty, but exercises the handler).
-	resp, _ = f.do(t, client, http.MethodDelete, "/api/chats/"+chat.ID.String()+"/messages", csrf, nil)
-	if resp.StatusCode != 200 {
-		t.Errorf("clear msgs: %d", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodDelete, "/api/chats/"+chat.ID.String()+"/messages", csrf, nil)
+	if status != 200 {
+		t.Errorf("clear msgs: %d", status)
 	}
 
 	// Missions list (empty).
-	resp, body = f.do(t, client, http.MethodGet, "/api/chats/"+chat.ID.String()+"/missions", "", nil)
-	if resp.StatusCode != 200 || !bytes.Contains(body, []byte("[]")) {
-		t.Errorf("missions list: %d %s", resp.StatusCode, body)
+	status, body = f.do(t, client, http.MethodGet, "/api/chats/"+chat.ID.String()+"/missions", "", nil)
+	if status != 200 || !bytes.Contains(body, []byte("[]")) {
+		t.Errorf("missions list: %d %s", status, body)
 	}
 
 	// Get chat.
-	resp, _ = f.do(t, client, http.MethodGet, "/api/chats/"+chat.ID.String(), "", nil)
-	if resp.StatusCode != 200 {
-		t.Errorf("get chat: %d", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodGet, "/api/chats/"+chat.ID.String(), "", nil)
+	if status != 200 {
+		t.Errorf("get chat: %d", status)
 	}
 
 	// Delete.
-	resp, _ = f.do(t, client, http.MethodDelete, "/api/chats/"+chat.ID.String(), csrf, nil)
-	if resp.StatusCode != 200 {
-		t.Errorf("delete chat: %d", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodDelete, "/api/chats/"+chat.ID.String(), csrf, nil)
+	if status != 200 {
+		t.Errorf("delete chat: %d", status)
 	}
 
 	// After delete: get returns 404.
-	resp, _ = f.do(t, client, http.MethodGet, "/api/chats/"+chat.ID.String(), "", nil)
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("post-delete get: got %d, want 404", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodGet, "/api/chats/"+chat.ID.String(), "", nil)
+	if status != http.StatusNotFound {
+		t.Errorf("post-delete get: got %d, want 404", status)
 	}
 }
 
@@ -537,13 +558,13 @@ func TestChatsRejectsInvalidUUID(t *testing.T) {
 	defer f.close()
 	client, csrf := f.registerAndLogin(t, "gwen", "hunter22")
 
-	resp, _ := f.do(t, client, http.MethodGet, "/api/chats/not-a-uuid", "", nil)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("bad id: got %d", resp.StatusCode)
+	status, _ := f.do(t, client, http.MethodGet, "/api/chats/not-a-uuid", "", nil)
+	if status != http.StatusBadRequest {
+		t.Errorf("bad id: got %d", status)
 	}
-	resp, _ = f.do(t, client, http.MethodPost, "/api/chats/not-a-uuid/messages", csrf, map[string]string{"role": "user", "content": "x"})
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("bad id on msg: got %d", resp.StatusCode)
+	status, _ = f.do(t, client, http.MethodPost, "/api/chats/not-a-uuid/messages", csrf, map[string]string{"role": "user", "content": "x"})
+	if status != http.StatusBadRequest {
+		t.Errorf("bad id on msg: got %d", status)
 	}
 }
 
@@ -554,22 +575,15 @@ func TestChatCreateValidation(t *testing.T) {
 	client, csrf := f.registerAndLogin(t, "hank", "hunter22")
 
 	// Missing title.
-	resp, _ := f.do(t, client, http.MethodPost, "/api/chats/", csrf, map[string]string{})
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("missing title: got %d", resp.StatusCode)
+	status, _ := f.do(t, client, http.MethodPost, "/api/chats/", csrf, map[string]string{})
+	if status != http.StatusBadRequest {
+		t.Errorf("missing title: got %d", status)
 	}
 
 	// Bad JSON.
-	req, _ := http.NewRequest(http.MethodPost, f.url("/api/chats/"), strings.NewReader("{"))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(auth.CSRFHeader, csrf)
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("bad json: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("bad json: got %d", resp.StatusCode)
+	status, _ = f.doRaw(t, client, http.MethodPost, "/api/chats/", csrf, "{")
+	if status != http.StatusBadRequest {
+		t.Errorf("bad json: got %d", status)
 	}
 }
 
@@ -579,20 +593,14 @@ func TestRegisterMissingFields(t *testing.T) {
 	defer f.close()
 	client := f.httpClient(t)
 
-	resp, _ := f.do(t, client, http.MethodPost, "/api/auth/register", "", map[string]string{"username": ""})
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("missing password: got %d", resp.StatusCode)
+	status, _ := f.do(t, client, http.MethodPost, "/api/auth/register", "", map[string]string{"username": ""})
+	if status != http.StatusBadRequest {
+		t.Errorf("missing password: got %d", status)
 	}
 
-	req, _ := http.NewRequest(http.MethodPost, f.url("/api/auth/register"), strings.NewReader("{"))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("bad body: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("bad body: got %d", resp.StatusCode)
+	status, _ = f.doRaw(t, client, http.MethodPost, "/api/auth/register", "", "{")
+	if status != http.StatusBadRequest {
+		t.Errorf("bad body: got %d", status)
 	}
 }
 
@@ -603,9 +611,9 @@ func TestProtectedEndpointsRejectAnon(t *testing.T) {
 	client := f.httpClient(t)
 
 	for _, path := range []string{"/api/auth/me", "/api/dashboard/stats", "/api/me/settings", "/api/chats/"} {
-		resp, _ := f.do(t, client, http.MethodGet, path, "", nil)
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("%s: got %d, want 401", path, resp.StatusCode)
+		status, _ := f.do(t, client, http.MethodGet, path, "", nil)
+		if status != http.StatusUnauthorized {
+			t.Errorf("%s: got %d, want 401", path, status)
 		}
 	}
 }

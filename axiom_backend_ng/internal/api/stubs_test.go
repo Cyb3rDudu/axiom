@@ -26,16 +26,16 @@ var errStub = errors.New("stub: boom")
 type stubUsers struct {
 	user repo.User
 
-	getByUsernameErr   error
-	getByUsernameNF    bool // return ErrNotFound
-	getByIDErr         error
-	createErr          error
-	updatePasswordErr  error
-	updatePasswordNF   bool
-	updateSettingsErr  error
-	updateSettingsNF   bool
-	countErr           error
-	countValue         int64
+	getByUsernameErr  error
+	getByUsernameNF   bool // return ErrNotFound
+	getByIDErr        error
+	createErr         error
+	updatePasswordErr error
+	updatePasswordNF  bool
+	updateSettingsErr error
+	updateSettingsNF  bool
+	countErr          error
+	countValue        int64
 }
 
 func (s *stubUsers) GetByUsername(_ context.Context, _ string) (repo.User, error) {
@@ -135,13 +135,13 @@ func (s stubHealth) Ping(_ context.Context) error { return s.err }
 // --- ChatStore ---
 
 type stubChats struct {
-	create, get, del, upd, list, lm, am, dm, cm, lmi error
+	create, get, del, upd, list, lm, am, dm, cm, lmi             error
 	createNF, getNF, delNF, updNF, lmNF, amNF, dmNF, cmNF, lmiNF bool
-	chat  repo.Chat
-	page  repo.Paginated
-	msgs  []repo.Message
-	msg   repo.Message
-	miss  []repo.MissionSummary
+	chat                                                         repo.Chat
+	page                                                         repo.Paginated
+	msgs                                                         []repo.Message
+	msg                                                          repo.Message
+	miss                                                         []repo.MissionSummary
 }
 
 func (s *stubChats) Create(_ context.Context, _ int32, _, _ string) (repo.Chat, error) {
@@ -205,16 +205,16 @@ func (s *stubChats) ListMissions(_ context.Context, _ int32, _ uuid.UUID) ([]rep
 // stubFixture wires a router with per-test stub repos, so error-path
 // tests don't pay the dockertest container cost.
 type stubFixture struct {
-	srv     *httptest.Server
-	signer  *auth.Signer
-	users   *stubUsers
-	sys     *stubSettings
-	langs   *stubLangs
-	dash    *stubDash
-	chats   *stubChats
-	health  stubHealth
-	token   string
-	csrf    string
+	srv    *httptest.Server
+	signer *auth.Signer
+	users  *stubUsers
+	sys    *stubSettings
+	langs  *stubLangs
+	dash   *stubDash
+	chats  *stubChats
+	health stubHealth
+	token  string
+	csrf   string
 }
 
 func newStubFixture() *stubFixture {

@@ -81,7 +81,7 @@ func StartPostgres(t *testing.T) *Postgres {
 		if perr != nil {
 			return perr
 		}
-		defer sqlDB.Close()
+		defer func() { _ = sqlDB.Close() }()
 		return sqlDB.PingContext(ctx)
 	}); err != nil {
 		_ = dockerPool.Purge(resource)
@@ -148,7 +148,7 @@ func applyInitSchema(ctx context.Context, url string) error {
 	if err != nil {
 		return fmt.Errorf("open bootstrap db: %w", err)
 	}
-	defer sqlDB.Close()
+	defer func() { _ = sqlDB.Close() }()
 
 	root, err := repoRoot()
 	if err != nil {

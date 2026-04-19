@@ -17,7 +17,7 @@ type DashboardDeps struct {
 	Stats DashboardStore
 }
 
-// Stats handles GET /api/dashboard/stats.
+// StatsHandler handles GET /api/dashboard/stats.
 func (d DashboardDeps) StatsHandler(w http.ResponseWriter, r *http.Request) {
 	uid := requireUserID(r)
 	stats, err := d.Stats.ForUser(r.Context(), uid)
