@@ -20,6 +20,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/authctx"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/db"
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/gpuworker"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/server"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/version"
@@ -111,7 +112,10 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 			Signer:         signer,
 		},
 		Languages: api.LanguageDeps{Languages: langs},
-		System:    api.SystemDeps{Health: dbHealth{gdb: gormDB}},
+		System: api.SystemDeps{
+			Health: dbHealth{gdb: gormDB},
+			GPU:    newGPUProbe(cfg),
+		},
 		Dashboard: api.DashboardDeps{Stats: dash},
 		Settings:  api.SettingsDeps{Users: users},
 		Chats:     api.ChatDeps{Chats: chats},
@@ -202,6 +206,19 @@ func envOr(k, def string) string {
 type dbHealth struct{ gdb *gorm.DB }
 
 func (h dbHealth) Ping(ctx context.Context) error { return db.Ping(ctx, h.gdb) }
+
+// newGPUProbe constructs the /api/system/gpu-status probe. Honors
+// AXIOM_NG_GPU_WORKER_SOCKET first, then AXIOM_GPU_WORKER_SOCKET
+// (Python parity). An empty socket path is valid — the client
+// returns ErrNoSocket and the handler serves the "not_connected"
+// payload.
+func newGPUProbe(cfg config.Config) *gpuworker.Client {
+	path := cfg.GPUWorkerSocket
+	if path == "" {
+		path = gpuworker.SocketPathFromEnv(nil)
+	}
+	return gpuworker.NewClient(path)
+}
 
 // userLookup adapts *repo.Users to server.UserResolver.
 type userLookup struct{ users *repo.Users }
