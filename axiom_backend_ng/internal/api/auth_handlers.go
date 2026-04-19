@@ -186,12 +186,7 @@ func (d AuthDeps) Logout(w http.ResponseWriter, r *http.Request) {
 
 // Me handles GET /api/auth/me.
 func (d AuthDeps) Me(w http.ResponseWriter, r *http.Request) {
-	username, ok := usernameFromRequest(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "Not authenticated")
-		return
-	}
-	user, err := d.Users.GetByUsername(r.Context(), username)
+	user, err := d.Users.GetByUsername(r.Context(), requireUsername(r))
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "User not found")
 		return
@@ -202,9 +197,8 @@ func (d AuthDeps) Me(w http.ResponseWriter, r *http.Request) {
 // TestCSRF handles POST /api/auth/test-csrf. CSRF middleware has
 // already validated by the time we get here.
 func (d AuthDeps) TestCSRF(w http.ResponseWriter, r *http.Request) {
-	username, _ := usernameFromRequest(r)
 	writeJSON(w, http.StatusOK, map[string]string{
-		"message": "CSRF protection working for user: " + username,
+		"message": "CSRF protection working for user: " + requireUsername(r),
 	})
 }
 
@@ -219,17 +213,12 @@ func (d AuthDeps) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "new_password is required")
 		return
 	}
-	username, ok := usernameFromRequest(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "Not authenticated")
-		return
-	}
-	user, err := d.Users.GetByUsername(r.Context(), username)
+	user, err := d.Users.GetByUsername(r.Context(), requireUsername(r))
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "User not found")
 		return
 	}
-	ok, err = auth.VerifyPassword(req.CurrentPassword, user.HashedPassword)
+	ok, err := auth.VerifyPassword(req.CurrentPassword, user.HashedPassword)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "password verification failed")
 		return

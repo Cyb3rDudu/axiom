@@ -188,6 +188,12 @@ func applyInitSchema(ctx context.Context, url string) error {
 			}
 		}
 	}
+	// Replicate axiom_backend/database/init_postgres.py:run_column_migrations().
+	// api_key is added as a runtime column migration in Python; axiom-ng
+	// expects it in place.
+	if _, err := p.Exec(ctx, `ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key VARCHAR UNIQUE`); err != nil {
+		return fmt.Errorf("column migration users.api_key: %w", err)
+	}
 	return nil
 }
 

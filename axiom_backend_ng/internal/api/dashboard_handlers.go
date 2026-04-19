@@ -19,11 +19,7 @@ type DashboardDeps struct {
 
 // Stats handles GET /api/dashboard/stats.
 func (d DashboardDeps) StatsHandler(w http.ResponseWriter, r *http.Request) {
-	uid, ok := userIDFromRequest(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "Not authenticated")
-		return
-	}
+	uid := requireUserID(r)
 	stats, err := d.Stats.ForUser(r.Context(), uid)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "dashboard query failed")

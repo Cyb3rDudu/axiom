@@ -26,20 +26,29 @@ func writeError(w http.ResponseWriter, status int, detail string) {
 	writeJSON(w, status, map[string]string{"detail": detail})
 }
 
-// usernameFromRequest reads the JWT subject previously attached by the
-// UserContext middleware.
-func usernameFromRequest(r *http.Request) (string, bool) {
-	return authctx.UsernameFrom(r.Context())
+// requireUsername reads the JWT subject attached by UserContext. As
+// with requireUserID this is only legal inside the RequireAuth
+// subtree, and panics otherwise.
+func requireUsername(r *http.Request) string {
+	v, ok := authctx.UsernameFrom(r.Context())
+	if !ok {
+		// coverage:ignore — RequireAuth guarantees this.
+		panic("requireUsername called outside RequireAuth subtree")
+	}
+	return v
 }
 
-// userIDFromRequest reads the in-context user ID (attached by the same
-// middleware after a successful DB lookup).
-func userIDFromRequest(r *http.Request) (int32, bool) {
+// requireUserID reads the in-context user ID. Must only be called from
+// routes that sit behind RequireAuth — that middleware guarantees a
+// user is present, so this function panics if the invariant is violated
+// (indicates a router wiring bug, not a runtime condition).
+func requireUserID(r *http.Request) int32 {
 	u, ok := authctx.UserFrom(r.Context())
 	if !ok {
-		return 0, false
+		// coverage:ignore — RequireAuth middleware makes this unreachable.
+		panic("requireUserID called outside RequireAuth subtree")
 	}
-	return u.ID, true
+	return u.ID
 }
 
 // readLoginRequest accepts JSON or form-encoded bodies, plus an

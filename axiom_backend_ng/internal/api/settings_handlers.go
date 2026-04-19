@@ -24,11 +24,7 @@ type SettingsDeps struct {
 // Get handles GET /api/me/settings. Returns the raw JSONB settings
 // blob; the frontend parses and validates the nested shape.
 func (d SettingsDeps) Get(w http.ResponseWriter, r *http.Request) {
-	uid, ok := userIDFromRequest(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "Not authenticated")
-		return
-	}
+	uid := requireUserID(r)
 	user, err := d.Users.GetByID(r.Context(), uid)
 	if errors.Is(err, repo.ErrNotFound) {
 		writeError(w, http.StatusUnauthorized, "User not found")
@@ -50,11 +46,7 @@ func (d SettingsDeps) Get(w http.ResponseWriter, r *http.Request) {
 // Put handles PUT /api/me/settings. Accepts any JSON object and stores
 // it verbatim; validation is the frontend's job (matching Python).
 func (d SettingsDeps) Put(w http.ResponseWriter, r *http.Request) {
-	uid, ok := userIDFromRequest(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "Not authenticated")
-		return
-	}
+	uid := requireUserID(r)
 	buf, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1 MiB cap
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "body read failed")

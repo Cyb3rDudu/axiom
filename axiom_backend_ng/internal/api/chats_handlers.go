@@ -51,11 +51,7 @@ type MessageRequest struct {
 
 // List handles GET /api/chats.
 func (d ChatDeps) List(w http.ResponseWriter, r *http.Request) {
-	uid, ok := userIDFromRequest(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "Not authenticated")
-		return
-	}
+	uid := requireUserID(r)
 	opt := repo.ListOptions{
 		Page:     atoi(r.URL.Query().Get("page")),
 		PageSize: atoi(r.URL.Query().Get("page_size")),
@@ -72,11 +68,7 @@ func (d ChatDeps) List(w http.ResponseWriter, r *http.Request) {
 
 // Create handles POST /api/chats.
 func (d ChatDeps) Create(w http.ResponseWriter, r *http.Request) {
-	uid, ok := userIDFromRequest(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "Not authenticated")
-		return
-	}
+	uid := requireUserID(r)
 	var req ChatCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid request body")
@@ -270,11 +262,7 @@ func (d ChatDeps) ListMissions(w http.ResponseWriter, r *http.Request) {
 // ownedChat parses {id} and dispatches to fn only when a valid UUID
 // and authenticated user are present.
 func (d ChatDeps) ownedChat(w http.ResponseWriter, r *http.Request, fn func(int32, uuid.UUID)) {
-	uid, ok := userIDFromRequest(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "Not authenticated")
-		return
-	}
+	uid := requireUserID(r)
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid chat id")
