@@ -208,6 +208,41 @@ type DocumentImage struct {
 // TableName forces the canonical table name.
 func (DocumentImage) TableName() string { return "document_images" }
 
+// DocumentEntity matches the document_entities table (knowledge-graph
+// layer). Created by database/migrations/add_knowledge_graph_tables.sql.
+type DocumentEntity struct {
+	ID             uuid.UUID      `gorm:"type:uuid;primaryKey;column:id"`
+	EntityText     string         `gorm:"column:entity_text;not null"`
+	EntityType     string         `gorm:"column:entity_type;not null"`
+	CanonicalForm  string         `gorm:"column:canonical_form;not null"`
+	Description    *string        `gorm:"column:description"`
+	EntityMetadata datatypes.JSON `gorm:"column:entity_metadata;type:jsonb;not null;default:'{}'"`
+	Embedding      *string        `gorm:"column:embedding;type:vector(1024)"`
+	CreatedAt      time.Time      `gorm:"column:created_at;autoCreateTime:false"`
+	UpdatedAt      time.Time      `gorm:"column:updated_at;autoUpdateTime:false"`
+}
+
+// TableName forces the canonical table name.
+func (DocumentEntity) TableName() string { return "document_entities" }
+
+// EntityChunkOccurrence matches the entity_chunk_occurrences table.
+// One row per (entity, chunk) pair; occurrence_count incremented on
+// conflict so repeated ingests don't lose history.
+type EntityChunkOccurrence struct {
+	ID              uuid.UUID `gorm:"type:uuid;primaryKey;column:id"`
+	EntityID        uuid.UUID `gorm:"type:uuid;column:entity_id;not null;index"`
+	ChunkID         string    `gorm:"column:chunk_id;not null;index"`
+	DocID           uuid.UUID `gorm:"type:uuid;column:doc_id;not null;index"`
+	OccurrenceCount int32     `gorm:"column:occurrence_count;not null;default:1"`
+	ContextSnippet  *string   `gorm:"column:context_snippet"`
+	PositionInChunk *int32    `gorm:"column:position_in_chunk"`
+	RelevanceScore  *float64  `gorm:"column:relevance_score"`
+	CreatedAt       time.Time `gorm:"column:created_at;autoCreateTime:false"`
+}
+
+// TableName forces the canonical table name.
+func (EntityChunkOccurrence) TableName() string { return "entity_chunk_occurrences" }
+
 // WritingSession matches the writing_sessions table (subset — only what
 // dashboard counts today; full schema lands with the writing-session PR).
 type WritingSession struct {
