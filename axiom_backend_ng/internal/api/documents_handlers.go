@@ -49,13 +49,13 @@ type DocumentDeps struct {
 
 // DocumentMetadataUpdate is the PUT body.
 type DocumentMetadataUpdate struct {
-	Title            *string   `json:"title,omitempty"`
-	Authors          *[]string `json:"authors,omitempty"`
-	JournalOrSource  *string   `json:"journal_or_source,omitempty"`
-	PublicationYear  *int      `json:"publication_year,omitempty"`
-	Abstract         *string   `json:"abstract,omitempty"`
-	Keywords         *[]string `json:"keywords,omitempty"`
-	DOI              *string   `json:"doi,omitempty"`
+	Title           *string   `json:"title,omitempty"`
+	Authors         *[]string `json:"authors,omitempty"`
+	JournalOrSource *string   `json:"journal_or_source,omitempty"`
+	PublicationYear *int      `json:"publication_year,omitempty"`
+	Abstract        *string   `json:"abstract,omitempty"`
+	Keywords        *[]string `json:"keywords,omitempty"`
+	DOI             *string   `json:"doi,omitempty"`
 }
 
 // BulkDocumentIDs is the shape of POST bodies that take a list of UUIDs.
@@ -65,10 +65,10 @@ type BulkDocumentIDs struct {
 
 // BulkOperationResponse matches the Python schemas.BulkOperationResponse.
 type BulkOperationResponse struct {
-	SuccessCount int         `json:"success_count"`
-	FailedCount  int         `json:"failed_count"`
-	FailedItems  []BulkFail  `json:"failed_items"`
-	Message      string      `json:"message"`
+	SuccessCount int        `json:"success_count"`
+	FailedCount  int        `json:"failed_count"`
+	FailedItems  []BulkFail `json:"failed_items"`
+	Message      string     `json:"message"`
 }
 
 // BulkFail is one entry of BulkOperationResponse.FailedItems.

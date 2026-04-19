@@ -72,15 +72,15 @@ func (c *Chunks) List(ctx context.Context, userID int32, opt ChunkListOptions) (
 	}
 
 	type row struct {
-		ID             uuid.UUID
-		ChunkID        string
-		ChunkIndex     int32
-		ChunkText      string
-		DocID          uuid.UUID
-		ChunkMetadata  []byte
-		CreatedAt      time.Time
-		Filename       string
-		MetadataTitle  *string
+		ID            uuid.UUID
+		ChunkID       string
+		ChunkIndex    int32
+		ChunkText     string
+		DocID         uuid.UUID
+		ChunkMetadata []byte
+		CreatedAt     time.Time
+		Filename      string
+		MetadataTitle *string
 	}
 	var rows []row
 	err := q.

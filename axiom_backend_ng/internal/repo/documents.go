@@ -17,26 +17,26 @@ import (
 // top-level fields for the frontend, but the raw JSONB blob is still
 // returned in `metadata` for round-tripping.
 type Document struct {
-	ID                  uuid.UUID       `json:"id"`
-	UserID              int32           `json:"user_id"`
-	Filename            string          `json:"filename"`
-	OriginalFilename    string          `json:"original_filename"`
-	Title               string          `json:"title,omitempty"`
-	Authors             any             `json:"authors,omitempty"`
-	PublicationYear     *int32          `json:"publication_year,omitempty"`
-	Journal             string          `json:"journal,omitempty"`
-	Abstract            string          `json:"abstract,omitempty"`
-	Keywords            any             `json:"keywords,omitempty"`
-	DOI                 string          `json:"doi,omitempty"`
-	DocumentType        string          `json:"document_type,omitempty"`
-	Metadata            json.RawMessage `json:"metadata_,omitempty"`
-	ProcessingStatus    string          `json:"processing_status"`
-	UploadProgress      int32           `json:"upload_progress"`
-	ProcessingError     string          `json:"processing_error,omitempty"`
-	FileSize            *int64          `json:"file_size,omitempty"`
-	ChunkCount          int32           `json:"chunk_count"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
+	ID               uuid.UUID       `json:"id"`
+	UserID           int32           `json:"user_id"`
+	Filename         string          `json:"filename"`
+	OriginalFilename string          `json:"original_filename"`
+	Title            string          `json:"title,omitempty"`
+	Authors          any             `json:"authors,omitempty"`
+	PublicationYear  *int32          `json:"publication_year,omitempty"`
+	Journal          string          `json:"journal,omitempty"`
+	Abstract         string          `json:"abstract,omitempty"`
+	Keywords         any             `json:"keywords,omitempty"`
+	DOI              string          `json:"doi,omitempty"`
+	DocumentType     string          `json:"document_type,omitempty"`
+	Metadata         json.RawMessage `json:"metadata_,omitempty"`
+	ProcessingStatus string          `json:"processing_status"`
+	UploadProgress   int32           `json:"upload_progress"`
+	ProcessingError  string          `json:"processing_error,omitempty"`
+	FileSize         *int64          `json:"file_size,omitempty"`
+	ChunkCount       int32           `json:"chunk_count"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
 // DocumentListOptions drives /api/documents/all pagination + filtering.
@@ -441,4 +441,3 @@ func nilIfEmpty(s string) any {
 	}
 	return s
 }
-

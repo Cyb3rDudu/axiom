@@ -49,6 +49,9 @@ func newFixture(t *testing.T) *fixture {
 	sys := repo.NewSystemSettings(pg.DB)
 	dash := repo.NewDashboard(pg.DB)
 	chats := repo.NewChats(pg.DB)
+	documents := repo.NewDocuments(pg.DB)
+	groups := repo.NewDocumentGroups(pg.DB)
+	chunks := repo.NewChunks(pg.DB)
 
 	deps := server.Deps{
 		Auth: api.AuthDeps{
@@ -56,11 +59,14 @@ func newFixture(t *testing.T) *fixture {
 			SystemSettings: sys,
 			Signer:         signer,
 		},
-		Languages: api.LanguageDeps{Languages: langs},
-		System:    api.SystemDeps{Health: pingFromPool{pool: pg}},
-		Dashboard: api.DashboardDeps{Stats: dash},
-		Settings:  api.SettingsDeps{Users: users},
-		Chats:     api.ChatDeps{Chats: chats},
+		Languages:      api.LanguageDeps{Languages: langs},
+		System:         api.SystemDeps{Health: pingFromPool{pool: pg}},
+		Dashboard:      api.DashboardDeps{Stats: dash},
+		Settings:       api.SettingsDeps{Users: users},
+		Chats:          api.ChatDeps{Chats: chats},
+		Documents:      api.DocumentDeps{Documents: documents},
+		DocumentGroups: api.DocumentGroupDeps{Groups: groups, Documents: documents},
+		RAG:            api.RAGDeps{Chunks: chunks},
 		UserCtx: server.UserContextConfig{
 			Signer:     signer,
 			UserLookup: userLookup{users: users},

@@ -88,8 +88,8 @@ func (d RAGDeps) Graph(w http.ResponseWriter, _ *http.Request) {
 		"nodes": []any{},
 		"edges": []any{},
 		"stats": map[string]any{
-			"total_nodes":   0,
-			"total_edges":   0,
+			"total_nodes":  0,
+			"total_edges":  0,
 			"entity_types": []string{},
 		},
 	})
