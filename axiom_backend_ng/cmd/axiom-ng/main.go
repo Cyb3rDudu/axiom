@@ -92,6 +92,9 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 	sysSettings := repo.NewSystemSettings(gormDB)
 	dash := repo.NewDashboard(gormDB)
 	chats := repo.NewChats(gormDB)
+	documents := repo.NewDocuments(gormDB)
+	groups := repo.NewDocumentGroups(gormDB)
+	chunks := repo.NewChunks(gormDB)
 
 	deps := server.Deps{
 		Auth: api.AuthDeps{
@@ -104,6 +107,16 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 		Dashboard: api.DashboardDeps{Stats: dash},
 		Settings:  api.SettingsDeps{Users: users},
 		Chats:     api.ChatDeps{Chats: chats},
+		Documents: api.DocumentDeps{
+			Documents: documents,
+			Paths: api.DocumentPaths{
+				MarkdownDir:       os.Getenv("AXIOM_NG_MARKDOWN_DIR"),
+				LegacyMarkdownDir: os.Getenv("AXIOM_NG_LEGACY_MARKDOWN_DIR"),
+				ImagesDir:         os.Getenv("AXIOM_NG_IMAGES_DIR"),
+			},
+		},
+		DocumentGroups: api.DocumentGroupDeps{Groups: groups, Documents: documents},
+		RAG:            api.RAGDeps{Chunks: chunks},
 		UserCtx: server.UserContextConfig{
 			Signer:     signer,
 			UserLookup: userLookup{users: users},
