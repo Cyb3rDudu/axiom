@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -136,7 +137,82 @@ func (c *Chunks) List(ctx context.Context, userID int32, opt ChunkListOptions) (
 	}, nil
 }
 
-// GetByChunkID returns the full chunk text + its document context for a
+// ChunkInsert carries the fields the ingest pipeline writes to
+// document_chunks. Dense is nil when the embedding failed; Sparse
+// defaults to {} to satisfy the NOT NULL column.
+type ChunkInsert struct {
+	ChunkID    string
+	ChunkIndex int32
+	Text       string
+	Dense      []float32      // pgvector dim 1024; nil → NULL column
+	Sparse     map[string]any // JSONB; nil → {}
+	Metadata   map[string]any // JSONB; merged into chunk_metadata
+}
+
+// InsertChunks replaces all chunks for a document in a single
+// transaction. The delete-then-insert pattern mirrors what the Python
+// doc-processor does on reprocess and keeps the chunk_id uniqueness
+// constraint honest. Empty input is a no-op.
+func (c *Chunks) InsertChunks(ctx context.Context, docID uuid.UUID, chunks []ChunkInsert) error {
+	return c.gdb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("doc_id = ?", docID).Delete(&models.DocumentChunk{}).Error; err != nil {
+			return err
+		}
+		if len(chunks) == 0 {
+			return nil
+		}
+		// pgvector's Go driver would add a dep; we format the literal
+		// ourselves since the insert only touches this column when a
+		// dense embedding is actually present.
+		for _, ch := range chunks {
+			metaJSON, err := json.Marshal(ch.Metadata)
+			if err != nil {
+				return err
+			}
+			sparse := ch.Sparse
+			if sparse == nil {
+				sparse = map[string]any{}
+			}
+			sparseJSON, err := json.Marshal(sparse)
+			if err != nil {
+				return err
+			}
+			var dense any
+			if ch.Dense != nil {
+				dense = gorm.Expr("?::vector", formatPGVector(ch.Dense))
+			}
+			if err := tx.Exec(`
+				INSERT INTO document_chunks
+					(id, doc_id, chunk_id, chunk_index, chunk_text,
+					 dense_embedding, sparse_embedding, chunk_metadata, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, NOW())`,
+				uuid.New(), docID, ch.ChunkID, ch.ChunkIndex, ch.Text,
+				dense, string(sparseJSON), string(metaJSON),
+			).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// formatPGVector renders a float32 slice into the pgvector text form
+// "[1.0,2.0,...]". %g is compact and round-trips cleanly for the
+// [-1,1] magnitudes BGE-M3 produces.
+func formatPGVector(v []float32) string {
+	var b []byte
+	b = append(b, '[')
+	for i, f := range v {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		b = strconv.AppendFloat(b, float64(f), 'f', -1, 32)
+	}
+	b = append(b, ']')
+	return string(b)
+}
+
+// GetByChunkID returns a single chunk (scoped by user via join) for the
 // given chunk_id (the Python API key, format '{doc_id}_{index}').
 func (c *Chunks) GetByChunkID(ctx context.Context, userID int32, chunkID string) (Chunk, error) {
 	var m models.DocumentChunk

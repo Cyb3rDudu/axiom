@@ -19,6 +19,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/api"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/auth"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/authctx"
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/chunker"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/gpuworker"
@@ -70,24 +71,13 @@ func run() error {
 	}
 
 	// Run HTTP server and ingest pool under the same ctx so a single
-	// SIGTERM brings both down together. Use the real PDFProcessor when
-	// MarkdownDir + ImagesDir are configured; otherwise fall back to
-	// NoopProcessor so the pool can still prove liveness in minimal
-	// deployments.
+	// SIGTERM brings both down together. The processor is a chain:
+	// PDFProcessor (markdown conversion) then ChunkProcessor (chunking
+	// + embeddings + document_chunks write). Either stage can be
+	// disabled independently by leaving its config empty.
 	documents := repo.NewDocuments(gormDB)
-	var proc ingest.Processor = ingest.NoopProcessor{Logger: logger}
-	if cfg.MarkdownDir != "" && cfg.ImagesDir != "" {
-		proc = ingest.PDFProcessor{
-			Sink:        documents,
-			Runner:      ingest.ExecRunner{},
-			PythonBin:   cfg.PythonBin,
-			MarkdownDir: cfg.MarkdownDir,
-			ImagesDir:   cfg.ImagesDir,
-			Logger:      logger,
-		}
-	} else {
-		logger.Warn("ingest pool running with NoopProcessor — set AXIOM_NG_MARKDOWN_DIR and AXIOM_NG_IMAGES_DIR to enable PDF conversion")
-	}
+	chunkStore := repo.NewChunks(gormDB)
+	proc := buildIngestProcessor(cfg, documents, chunkStore, logger)
 	pool := ingest.New(
 		documents,
 		proc,
@@ -250,6 +240,45 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// buildIngestProcessor composes the ingest pipeline behind the pool.
+// Missing config degrades gracefully:
+//   - No MarkdownDir / ImagesDir → skip the PDF stage.
+//   - No GPU socket → keep the chunk stage but disable embeddings.
+//   - Neither → NoopProcessor so the pool still proves liveness.
+func buildIngestProcessor(cfg config.Config, documents *repo.Documents, chunks *repo.Chunks, logger *slog.Logger) ingest.Processor {
+	var chain ingest.Chain
+	if cfg.MarkdownDir != "" && cfg.ImagesDir != "" {
+		chain = append(chain, ingest.PDFProcessor{
+			Sink:        documents,
+			Runner:      ingest.ExecRunner{},
+			PythonBin:   cfg.PythonBin,
+			MarkdownDir: cfg.MarkdownDir,
+			ImagesDir:   cfg.ImagesDir,
+			Logger:      logger,
+		})
+		var embedder ingest.Embedder
+		if cfg.GPUWorkerSocket != "" {
+			embedder = gpuworker.NewClient(cfg.GPUWorkerSocket)
+		} else {
+			logger.Warn("ingest chunk stage running without embeddings — set AXIOM_NG_GPU_WORKER_SOCKET to enable")
+		}
+		chain = append(chain, ingest.ChunkProcessor{
+			Chunker:        chunker.New(chunker.DefaultConfig()),
+			Embedder:       embedder,
+			Store:          chunks,
+			StatusStore:    documents,
+			MarkdownDir:    cfg.MarkdownDir,
+			Logger:         logger,
+			SkipEmbeddings: embedder == nil,
+		})
+	}
+	if len(chain) == 0 {
+		logger.Warn("ingest pool running with NoopProcessor — set AXIOM_NG_MARKDOWN_DIR + AXIOM_NG_IMAGES_DIR to enable conversion")
+		return ingest.NoopProcessor{Logger: logger}
+	}
+	return chain
 }
 
 // newSearchDeps wires the OpenSearch client + hybrid retriever for
