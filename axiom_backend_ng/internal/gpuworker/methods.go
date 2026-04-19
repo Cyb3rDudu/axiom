@@ -3,6 +3,7 @@ package gpuworker
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // HealthInfo is the typed shape of the worker's `health` RPC result.
@@ -39,6 +40,12 @@ func (c *Client) EmbedQuery(ctx context.Context, text string) (EmbedResult, erro
 	return out, nil
 }
 
+// EmbedChunksTimeout is the deadline applied to EmbedChunks when the
+// caller does not supply its own context deadline. Large batches on a
+// loaded GPU can easily exceed the 30s default used for other RPCs;
+// the Python client lets embed_chunks run for up to 600s.
+const EmbedChunksTimeout = 3 * time.Minute
+
 // EmbedChunks runs the embedder over a batch of chunk dicts. Each
 // chunk must at minimum carry a `text` field (the Python facade
 // convention). The returned slice mirrors the input and adds
@@ -46,6 +53,11 @@ func (c *Client) EmbedQuery(ctx context.Context, text string) (EmbedResult, erro
 func (c *Client) EmbedChunks(ctx context.Context, chunks []map[string]any) ([]map[string]any, error) {
 	if chunks == nil {
 		chunks = []map[string]any{}
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, EmbedChunksTimeout)
+		defer cancel()
 	}
 	var out []map[string]any
 	args := map[string]any{"chunks": chunks}
