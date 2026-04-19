@@ -37,6 +37,10 @@ type Document struct {
 	ChunkCount       int32           `json:"chunk_count"`
 	CreatedAt        time.Time       `json:"created_at"`
 	UpdatedAt        time.Time       `json:"updated_at"`
+	// FilePath is the absolute path to the staged raw file. Kept for
+	// internal callers (the ingest pool) only — the frontend schema
+	// never exposed it, so it is excluded from JSON on purpose.
+	FilePath string `json:"-"`
 }
 
 // DocumentListOptions drives /api/documents/all pagination + filtering.
@@ -390,6 +394,25 @@ func (d *Documents) MarkStatus(ctx context.Context, docID uuid.UUID, userID int3
 	return nil
 }
 
+// SetMarkdownPath records where the ingest pipeline wrote the converted
+// markdown file. The frontend's /api/documents/{id}/view serves the
+// file at this path.
+func (d *Documents) SetMarkdownPath(ctx context.Context, docID uuid.UUID, userID int32, path string) error {
+	res := d.gdb.WithContext(ctx).Model(&models.Document{}).
+		Where("id = ? AND user_id = ?", docID, userID).
+		Updates(map[string]any{
+			"markdown_path": path,
+			"updated_at":    time.Now().UTC(),
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Delete removes a document and cascades to chunks, images, processing
 // jobs via SQL FK constraints. Association rows are cleaned up explicitly
 // to be safe.
@@ -562,6 +585,11 @@ func documentFromModel(m models.Document) Document {
 		FileSize:         m.FileSize,
 		CreatedAt:        m.CreatedAt,
 		UpdatedAt:        m.UpdatedAt,
+	}
+	if m.FilePath != nil {
+		d.FilePath = *m.FilePath
+	} else if m.RawFilePath != nil {
+		d.FilePath = *m.RawFilePath
 	}
 	if m.OriginalFilename != nil && *m.OriginalFilename != "" {
 		d.OriginalFilename = *m.OriginalFilename

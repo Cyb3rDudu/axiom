@@ -39,6 +39,15 @@ type Config struct {
 	// IngestPollInterval controls how long workers wait between empty
 	// queue polls. 0 → default (5s, parity with Python).
 	IngestPollInterval time.Duration `koanf:"ingest_poll_interval"`
+	// PythonBin is the interpreter axiom-ng shells out to for the
+	// pdf_worker / relation_worker subprocesses. Empty → "python3".
+	PythonBin string `koanf:"python_bin"`
+	// MarkdownDir is where the ingest pipeline writes converted
+	// markdown. Parity with the Python MARKDOWN_PATH.
+	MarkdownDir string `koanf:"markdown_dir"`
+	// ImagesDir is where pdf_worker drops extracted images, organised
+	// as {ImagesDir}/{doc_id}/image_N.ext.
+	ImagesDir string `koanf:"images_dir"`
 }
 
 // Defaults returns the config populated with bootstrap defaults.
@@ -68,6 +77,9 @@ func Load(configPath string) (Config, error) {
 		"ingest_enabled":       cfg.IngestEnabled,
 		"ingest_pool_size":     cfg.IngestPoolSize,
 		"ingest_poll_interval": cfg.IngestPollInterval,
+		"python_bin":           cfg.PythonBin,
+		"markdown_dir":         cfg.MarkdownDir,
+		"images_dir":           cfg.ImagesDir,
 	}
 	// confmap.Provider.Read cannot fail on a plain map literal, so the only
 	// error path through koanf here is an internal impossibility; we ignore

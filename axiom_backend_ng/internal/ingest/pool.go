@@ -39,7 +39,6 @@ type Job struct {
 	// empty if the row was injected by a route that did not populate
 	// it; the Processor must handle that case.
 	FilePath string
-	FileHash string
 }
 
 // Processor runs one pipeline iteration against a claimed job. It must
@@ -181,15 +180,7 @@ func (p *Pool) claimNext(ctx context.Context, log *slog.Logger) (Job, bool, erro
 		DocID:    doc.ID,
 		UserID:   doc.UserID,
 		Filename: doc.Filename,
-	}
-	// Pull file_path + file_hash out of metadata_ so the Processor can
-	// locate the staged file without re-reading the row.
-	if doc.Metadata != nil {
-		// Metadata is RawMessage; leave decoding to the Processor since
-		// the on-disk path is not needed by the noop stage. File_path
-		// lives on the models-level struct — this slice sticks to the
-		// Document view and defers the richer Job projection.
-		_ = doc.Metadata
+		FilePath: doc.FilePath,
 	}
 	log.Info("job claimed",
 		slog.String("doc_id", job.DocID.String()),
