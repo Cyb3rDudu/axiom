@@ -7,29 +7,14 @@ import (
 	"strings"
 
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/auth"
-)
-
-type ctxKey int
-
-const (
-	ctxKeyUsername ctxKey = iota
-	ctxKeyClaims
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/authctx"
 )
 
 // UserResolver loads a user record by username. Implementations typically
 // query the database; pass nil to skip DB lookups during middleware
 // testing or for endpoints that only need the JWT subject.
 type UserResolver interface {
-	GetUserByUsername(ctx context.Context, username string) (User, error)
-}
-
-// User is the minimal user shape exposed through request context.
-// Full user CRUD lives in internal/users once sqlc is wired.
-type User struct {
-	ID       int32
-	Username string
-	IsAdmin  bool
-	IsActive bool
+	GetUserByUsername(ctx context.Context, username string) (authctx.User, error)
 }
 
 // UserContextConfig configures the UserContext middleware.
@@ -60,11 +45,11 @@ func UserContext(cfg UserContextConfig) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			ctx := context.WithValue(r.Context(), ctxKeyClaims, claims)
-			ctx = context.WithValue(ctx, ctxKeyUsername, claims.Subject)
+			ctx := authctx.WithClaims(r.Context(), claims)
+			ctx = authctx.WithUsername(ctx, claims.Subject)
 			if cfg.UserLookup != nil {
 				if user, err := cfg.UserLookup.GetUserByUsername(ctx, claims.Subject); err == nil {
-					ctx = WithUser(ctx, user)
+					ctx = authctx.WithUser(ctx, user)
 				}
 			}
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -76,7 +61,7 @@ func UserContext(cfg UserContextConfig) func(http.Handler) http.Handler {
 // 401. Must be mounted after UserContext.
 func RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := UserFromContext(r.Context()); !ok {
+		if _, ok := authctx.UserFrom(r.Context()); !ok {
 			writeJSONError(w, http.StatusUnauthorized, "Not authenticated")
 			return
 		}
@@ -104,36 +89,6 @@ func CSRF(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
-// WithUser stores user in ctx. Exported for tests and for handlers that
-// want to inject a user manually (e.g. API-key auth flows).
-func WithUser(ctx context.Context, user User) context.Context {
-	return context.WithValue(ctx, ctxKeyUser, user)
-}
-
-// UserFromContext returns the user attached by UserContext (or a manual
-// WithUser call). ok is false if no user is attached.
-func UserFromContext(ctx context.Context) (User, bool) {
-	v, ok := ctx.Value(ctxKeyUser).(User)
-	return v, ok
-}
-
-// UsernameFromContext returns the JWT subject attached by UserContext.
-// Useful when an endpoint needs the username even if the DB lookup
-// (UserLookup) was skipped or failed.
-func UsernameFromContext(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(ctxKeyUsername).(string)
-	return v, ok
-}
-
-// ClaimsFromContext returns the full JWT claims. Typically callers only
-// need the username; this is here for diagnostics.
-func ClaimsFromContext(ctx context.Context) (*auth.Claims, bool) {
-	v, ok := ctx.Value(ctxKeyClaims).(*auth.Claims)
-	return v, ok
-}
-
-const ctxKeyUser ctxKey = 2
 
 func extractToken(r *http.Request) string {
 	if c, err := r.Cookie(auth.AccessTokenCookie); err == nil && c.Value != "" {

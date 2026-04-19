@@ -9,20 +9,21 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/auth"
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/authctx"
 )
 
 type stubLookup struct {
-	byName map[string]User
+	byName map[string]authctx.User
 	err    error
 }
 
-func (s *stubLookup) GetUserByUsername(_ context.Context, name string) (User, error) {
+func (s *stubLookup) GetUserByUsername(_ context.Context, name string) (authctx.User, error) {
 	if s.err != nil {
-		return User{}, s.err
+		return authctx.User{}, s.err
 	}
 	u, ok := s.byName[name]
 	if !ok {
-		return User{}, errors.New("not found")
+		return authctx.User{}, errors.New("not found")
 	}
 	return u, nil
 }
@@ -40,13 +41,13 @@ func TestUserContextAttachesClaimsFromCookie(t *testing.T) {
 	t.Parallel()
 	s := mustSigner(t)
 	tok, _ := s.Issue("alice", false, time.Hour)
-	lookup := &stubLookup{byName: map[string]User{"alice": {ID: 42, Username: "alice"}}}
+	lookup := &stubLookup{byName: map[string]authctx.User{"alice": {ID: 42, Username: "alice"}}}
 
 	mw := UserContext(UserContextConfig{Signer: s, UserLookup: lookup})
-	var got User
+	var got authctx.User
 	var ok bool
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got, ok = UserFromContext(r.Context())
+		got, ok = authctx.UserFrom(r.Context())
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
@@ -65,12 +66,12 @@ func TestUserContextAttachesFromAuthorizationHeader(t *testing.T) {
 	t.Parallel()
 	s := mustSigner(t)
 	tok, _ := s.Issue("bob", false, time.Hour)
-	lookup := &stubLookup{byName: map[string]User{"bob": {Username: "bob"}}}
+	lookup := &stubLookup{byName: map[string]authctx.User{"bob": {Username: "bob"}}}
 
 	mw := UserContext(UserContextConfig{Signer: s, UserLookup: lookup})
 	var username string
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if u, ok := UsernameFromContext(r.Context()); ok {
+		if u, ok := authctx.UsernameFrom(r.Context()); ok {
 			username = u
 		}
 	}))
@@ -91,7 +92,7 @@ func TestUserContextDoesNotFailOnMissingToken(t *testing.T) {
 	called := false
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
-		if _, ok := UserFromContext(r.Context()); ok {
+		if _, ok := authctx.UserFrom(r.Context()); ok {
 			t.Error("unexpected user attached on unauthenticated request")
 		}
 	}))
@@ -108,7 +109,7 @@ func TestUserContextIgnoresInvalidToken(t *testing.T) {
 	s := mustSigner(t)
 	mw := UserContext(UserContextConfig{Signer: s})
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := UserFromContext(r.Context()); ok {
+		if _, ok := authctx.UserFrom(r.Context()); ok {
 			t.Error("invalid token should not attach user")
 		}
 	}))
@@ -126,13 +127,13 @@ func TestUserContextSkipsLookupFailure(t *testing.T) {
 
 	mw := UserContext(UserContextConfig{Signer: s, UserLookup: lookup})
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := UserFromContext(r.Context()); ok {
+		if _, ok := authctx.UserFrom(r.Context()); ok {
 			t.Error("user should not be attached when lookup fails")
 		}
-		if _, ok := UsernameFromContext(r.Context()); !ok {
+		if _, ok := authctx.UsernameFrom(r.Context()); !ok {
 			t.Error("username should still be attached from JWT")
 		}
-		if _, ok := ClaimsFromContext(r.Context()); !ok {
+		if _, ok := authctx.ClaimsFrom(r.Context()); !ok {
 			t.Error("claims should be attached")
 		}
 	}))
@@ -161,7 +162,7 @@ func TestRequireAuthPassesWithUser(t *testing.T) {
 	}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	req = req.WithContext(WithUser(req.Context(), User{ID: 1}))
+	req = req.WithContext(authctx.WithUser(req.Context(), authctx.User{ID: 1}))
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTeapot {
 		t.Errorf("status: got %d", rec.Code)
