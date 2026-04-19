@@ -19,7 +19,6 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/api"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/auth"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/authctx"
-	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/chunker"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/gpuworker"
@@ -71,15 +70,23 @@ func run() error {
 	}
 
 	// Run HTTP server and ingest pool under the same ctx so a single
-	// SIGTERM brings both down together. The processor is a chain:
-	// PDFProcessor (markdown conversion) → ChunkProcessor (chunking +
-	// embeddings + document_chunks write) → OpenSearchIndexer (BM25
-	// upsert). Any stage can be disabled independently by leaving its
-	// config empty.
+	// SIGTERM brings both down together. Pipeline composition lives in
+	// internal/ingest/builder.go so main.go stays as thin DI.
 	documents := repo.NewDocuments(gormDB)
 	chunkStore := repo.NewChunks(gormDB)
+	entityStore := repo.NewEntities(gormDB)
 	osClient := buildOpenSearchClient(cfg, logger)
-	proc := buildIngestProcessor(cfg, documents, chunkStore, osClient, logger)
+	proc := ingest.BuildProcessor(ingest.BuilderOptions{
+		Documents:       documents,
+		ChunkStore:      chunkStore,
+		EntityStore:     entityStore,
+		OpenSearch:      osClient,
+		GPUWorkerSocket: cfg.GPUWorkerSocket,
+		PythonBin:       cfg.PythonBin,
+		MarkdownDir:     cfg.MarkdownDir,
+		ImagesDir:       cfg.ImagesDir,
+		Logger:          logger,
+	})
 	pool := ingest.New(
 		documents,
 		proc,
@@ -242,56 +249,6 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
-}
-
-// buildIngestProcessor composes the ingest pipeline behind the pool.
-// Missing config degrades gracefully:
-//   - No MarkdownDir / ImagesDir → skip the PDF + chunk stages.
-//   - No GPU socket → keep the chunk stage but disable embeddings.
-//   - No OpenSearch → skip the indexer stage (retriever still works,
-//     just without BM25 hits for newly ingested docs).
-//   - No stages at all → NoopProcessor so the pool proves liveness.
-func buildIngestProcessor(cfg config.Config, documents *repo.Documents, chunks *repo.Chunks, osClient *opensearch.Client, logger *slog.Logger) ingest.Processor {
-	var chain ingest.Chain
-	if cfg.MarkdownDir != "" && cfg.ImagesDir != "" {
-		chain = append(chain, ingest.PDFProcessor{
-			Sink:        documents,
-			Runner:      ingest.ExecRunner{},
-			PythonBin:   cfg.PythonBin,
-			MarkdownDir: cfg.MarkdownDir,
-			ImagesDir:   cfg.ImagesDir,
-			Logger:      logger,
-		})
-		var embedder ingest.Embedder
-		if cfg.GPUWorkerSocket != "" {
-			embedder = gpuworker.NewClient(cfg.GPUWorkerSocket)
-		} else {
-			logger.Warn("ingest chunk stage running without embeddings — set AXIOM_NG_GPU_WORKER_SOCKET to enable")
-		}
-		chain = append(chain, ingest.ChunkProcessor{
-			Chunker:        chunker.New(chunker.DefaultConfig()),
-			Embedder:       embedder,
-			Store:          chunks,
-			StatusStore:    documents,
-			MarkdownDir:    cfg.MarkdownDir,
-			Logger:         logger,
-			SkipEmbeddings: embedder == nil,
-		})
-		if osClient != nil {
-			chain = append(chain, ingest.OpenSearchIndexer{
-				Store:  chunks,
-				Index:  osClient,
-				Logger: logger,
-			})
-		} else {
-			logger.Warn("ingest indexer stage disabled — enable OpenSearch to populate BM25 index")
-		}
-	}
-	if len(chain) == 0 {
-		logger.Warn("ingest pool running with NoopProcessor — set AXIOM_NG_MARKDOWN_DIR + AXIOM_NG_IMAGES_DIR to enable conversion")
-		return ingest.NoopProcessor{Logger: logger}
-	}
-	return chain
 }
 
 // buildOpenSearchClient constructs a shared *opensearch.Client for
