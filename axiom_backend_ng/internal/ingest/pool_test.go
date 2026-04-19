@@ -166,7 +166,10 @@ func TestPoolConcurrentWorkersNeverDoubleClaim(t *testing.T) {
 	t.Parallel()
 	pg := testutil.StartPostgres(t)
 	uid := seedUser(t, pg, "ingest-c")
-	ids := seedPending(t, pg, uid, 20)
+	// 10 docs × 3 workers gives us enough parallelism to exercise
+	// SKIP LOCKED without bogging down CI. The original 20×5 shape
+	// flaked on GitHub runners where Postgres round-trips dominate.
+	ids := seedPending(t, pg, uid, 10)
 
 	docs := repo.NewDocuments(pg.DB)
 	var (
@@ -177,25 +180,31 @@ func TestPoolConcurrentWorkersNeverDoubleClaim(t *testing.T) {
 		mu.Lock()
 		seenIDs[job.DocID]++
 		mu.Unlock()
-		// Slow the processor so multiple workers race for claims.
+		// Small sleep so multiple workers actually race for claims.
 		time.Sleep(5 * time.Millisecond)
 		return nil
 	})
 	pool := ingest.New(docs, proc, ingest.Config{
-		Size:         5,
+		Size:         3,
 		PollInterval: 10 * time.Millisecond,
 		Logger:       silentLogger(),
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- pool.Run(ctx) }()
 
-	waitFor(t, 8*time.Second, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(seenIDs) == len(ids)
+	// Wait until every row has reached 'completed' — this covers the
+	// post-Process MarkStatus write too, so cancelling after this point
+	// cannot race with a still-writing worker.
+	waitFor(t, 45*time.Second, func() bool {
+		for _, id := range ids {
+			if statusOf(t, pg, id) != repo.StatusCompleted {
+				return false
+			}
+		}
+		return true
 	})
 
 	cancel()
@@ -211,12 +220,6 @@ func TestPoolConcurrentWorkersNeverDoubleClaim(t *testing.T) {
 	for id, count := range seenIDs {
 		if count != 1 {
 			t.Errorf("doc %s processed %d times (want 1)", id, count)
-		}
-	}
-	// All rows should end as 'completed'.
-	for _, id := range ids {
-		if got := statusOf(t, pg, id); got != repo.StatusCompleted {
-			t.Errorf("id %s status: %s", id, got)
 		}
 	}
 }

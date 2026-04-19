@@ -199,19 +199,19 @@ func (p *Pool) claimNext(ctx context.Context, log *slog.Logger) (Job, bool, erro
 }
 
 // processOne runs the Processor for one job and writes the terminal
-// status row.
+// status row. Both success and failure paths write under a fresh
+// timeout context when the parent ctx is already cancelled — without
+// this guard, a SIGTERM arriving during the tail of Processor.Process
+// would leave the row stuck in 'processing' forever.
 func (p *Pool) processOne(ctx context.Context, job Job, log *slog.Logger) {
 	err := p.proc.Process(ctx, job)
+	writeCtx := ctx
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		writeCtx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+	}
 	if err != nil {
-		// Drop the status write through a fresh context when the parent
-		// is already cancelled, so the row does not get stuck in
-		// 'processing' on SIGTERM.
-		writeCtx := ctx
-		if ctx.Err() != nil {
-			var cancel context.CancelFunc
-			writeCtx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-		}
 		msg := err.Error()
 		progress := int32(0)
 		if err := p.store.MarkStatus(writeCtx, job.DocID, job.UserID, repo.MarkStatusInput{
@@ -229,7 +229,7 @@ func (p *Pool) processOne(ctx context.Context, job Job, log *slog.Logger) {
 		return
 	}
 	progress := int32(100)
-	if err := p.store.MarkStatus(ctx, job.DocID, job.UserID, repo.MarkStatusInput{
+	if err := p.store.MarkStatus(writeCtx, job.DocID, job.UserID, repo.MarkStatusInput{
 		Status:   repo.StatusCompleted,
 		Progress: &progress,
 	}); err != nil {
