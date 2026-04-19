@@ -30,12 +30,15 @@ type Server struct {
 // full API surface. All fields may be nil when only the bootstrap
 // endpoints (/, /health) are required (e.g. in smoke tests).
 type Deps struct {
-	Auth      api.AuthDeps
-	Languages api.LanguageDeps
-	System    api.SystemDeps
-	Dashboard api.DashboardDeps
-	Settings  api.SettingsDeps
-	Chats     api.ChatDeps
+	Auth           api.AuthDeps
+	Languages      api.LanguageDeps
+	System         api.SystemDeps
+	Dashboard      api.DashboardDeps
+	Settings       api.SettingsDeps
+	Chats          api.ChatDeps
+	Documents      api.DocumentDeps
+	DocumentGroups api.DocumentGroupDeps
+	RAG            api.RAGDeps
 	// UserCtx, if set, wires the JWT-cookie middleware so authenticated
 	// routes can resolve the current user.
 	UserCtx UserContextConfig
@@ -85,6 +88,24 @@ func NewWithDeps(cfg config.Config, logger *slog.Logger, deps Deps) *Server {
 			r.Get("/dashboard/stats", deps.Dashboard.StatsHandler)
 			r.Get("/me/settings", deps.Settings.Get)
 
+			// Document + group + RAG reads — authenticated but no
+			// CSRF required (GET-only, no state change).
+			r.Get("/documents/all", deps.Documents.ListAll)
+			r.Get("/documents/", deps.Documents.ListSimple)
+			r.Get("/documents/filter-options", deps.Documents.FilterOptions)
+			r.Get("/documents/{doc_id}", deps.Documents.Get)
+			r.Get("/documents/{doc_id}/view", deps.Documents.View)
+			r.Get("/images/{doc_id}/{image_filename}", deps.Documents.Image)
+
+			r.Get("/document-groups/", deps.DocumentGroups.List)
+			r.Get("/document-groups/{group_id}", deps.DocumentGroups.Get)
+			r.Get("/document-groups/{group_id}/documents/", deps.DocumentGroups.ListDocuments)
+
+			r.Get("/rag/chunks", deps.RAG.ListChunks)
+			r.Get("/rag/chunks/{chunk_id}", deps.RAG.GetChunk)
+			r.Get("/rag/entities", deps.RAG.ListEntities)
+			r.Get("/rag/graph", deps.RAG.Graph)
+
 			// CSRF-protected subtree: mutations that rely on the
 			// cookie-scoped session.
 			r.Group(func(r chi.Router) {
@@ -97,6 +118,7 @@ func NewWithDeps(cfg config.Config, logger *slog.Logger, deps Deps) *Server {
 					r.Get("/", deps.Chats.List)
 					r.Post("/", deps.Chats.Create)
 					r.Get("/{id}", deps.Chats.Get)
+					r.Put("/{id}", deps.Chats.Update)
 					r.Delete("/{id}", deps.Chats.Delete)
 					r.Get("/{id}/title", deps.Chats.GetTitle)
 					r.Put("/{id}/title", deps.Chats.UpdateTitle)
@@ -106,6 +128,26 @@ func NewWithDeps(cfg config.Config, logger *slog.Logger, deps Deps) *Server {
 					r.Delete("/{id}/messages/{msgID}", deps.Chats.DeleteMessage)
 					r.Get("/{id}/missions", deps.Chats.ListMissions)
 				})
+
+				// Document mutations.
+				r.Put("/documents/{doc_id}/metadata", deps.Documents.UpdateMetadata)
+				r.Delete("/documents/{doc_id}", deps.Documents.Delete)
+				r.Post("/documents/{doc_id}/cancel", deps.Documents.Cancel)
+				r.Post("/documents/bulk-delete", deps.Documents.BulkDelete)
+				r.Post("/documents/bulk-reprocess", deps.Documents.BulkReprocess)
+
+				// Document group mutations.
+				r.Post("/document-groups/", deps.DocumentGroups.Create)
+				r.Put("/document-groups/{group_id}", deps.DocumentGroups.Update)
+				r.Delete("/document-groups/{group_id}", deps.DocumentGroups.Delete)
+				r.Post("/document-groups/{group_id}/add-document/{doc_id}", deps.DocumentGroups.AddDocument)
+				// Python exposes the same add action at a second path
+				// (axiom_backend/api/documents.py:812). Keep both so the
+				// frontend can call either.
+				r.Post("/document-groups/{group_id}/documents/{doc_id}", deps.DocumentGroups.AddDocument)
+				r.Delete("/document-groups/{group_id}/documents/{doc_id}", deps.DocumentGroups.RemoveDocument)
+				r.Post("/document-groups/{group_id}/bulk-add-documents", deps.DocumentGroups.BulkAdd)
+				r.Post("/document-groups/{group_id}/bulk-remove-documents", deps.DocumentGroups.BulkRemove)
 			})
 		})
 	})

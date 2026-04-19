@@ -92,6 +92,17 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 	sysSettings := repo.NewSystemSettings(gormDB)
 	dash := repo.NewDashboard(gormDB)
 	chats := repo.NewChats(gormDB)
+	documents := repo.NewDocuments(gormDB)
+	groups := repo.NewDocumentGroups(gormDB)
+	chunks := repo.NewChunks(gormDB)
+
+	// Bootstrap admin user if the table is empty, matching Python's
+	// setup_first_user.py behaviour. ADMIN_USERNAME / ADMIN_PASSWORD /
+	// ADMIN_EMAIL env vars override the defaults.
+	if err := ensureFirstUser(ctx, users, logger); err != nil {
+		logger.Warn("first-user bootstrap failed",
+			slog.String("error", err.Error()))
+	}
 
 	deps := server.Deps{
 		Auth: api.AuthDeps{
@@ -104,6 +115,16 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 		Dashboard: api.DashboardDeps{Stats: dash},
 		Settings:  api.SettingsDeps{Users: users},
 		Chats:     api.ChatDeps{Chats: chats},
+		Documents: api.DocumentDeps{
+			Documents: documents,
+			Paths: api.DocumentPaths{
+				MarkdownDir:       os.Getenv("AXIOM_NG_MARKDOWN_DIR"),
+				LegacyMarkdownDir: os.Getenv("AXIOM_NG_LEGACY_MARKDOWN_DIR"),
+				ImagesDir:         os.Getenv("AXIOM_NG_IMAGES_DIR"),
+			},
+		},
+		DocumentGroups: api.DocumentGroupDeps{Groups: groups, Documents: documents},
+		RAG:            api.RAGDeps{Chunks: chunks},
 		UserCtx: server.UserContextConfig{
 			Signer:     signer,
 			UserLookup: userLookup{users: users},
@@ -130,6 +151,50 @@ func secretFromEnv() string {
 		return v
 	}
 	return os.Getenv("SECRET_KEY")
+}
+
+// ensureFirstUser creates a default admin when the users table is
+// empty. Matches axiom_backend/setup_first_user.py + the wiring in
+// axiom_backend/main.py:186. No-op if users already exist.
+func ensureFirstUser(ctx context.Context, users *repo.Users, logger *slog.Logger) error {
+	count, err := users.Count(ctx)
+	if err != nil {
+		return fmt.Errorf("count users: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+	username := envOr("ADMIN_USERNAME", "admin")
+	password := envOr("ADMIN_PASSWORD", "admin123")
+	email := envOr("ADMIN_EMAIL", "admin@axiom.local")
+
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	if _, err := users.Create(ctx, repo.CreateInput{
+		Username:       username,
+		Email:          email,
+		HashedPassword: hash,
+		IsAdmin:        true,
+	}); err != nil {
+		return fmt.Errorf("create admin: %w", err)
+	}
+	if password == "admin123" {
+		logger.Warn("default admin bootstrapped with password 'admin123' — change it immediately",
+			slog.String("username", username))
+	} else {
+		logger.Info("admin user bootstrapped from ADMIN_* env vars",
+			slog.String("username", username))
+	}
+	return nil
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }
 
 // dbHealth adapts *gorm.DB to the system-handler Ping signature without

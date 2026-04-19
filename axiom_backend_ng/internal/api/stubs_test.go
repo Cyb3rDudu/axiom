@@ -168,6 +168,12 @@ func (s *stubChats) UpdateTitle(_ context.Context, _ int32, _ uuid.UUID, _ strin
 	}
 	return s.upd
 }
+func (s *stubChats) UpdateSettings(_ context.Context, _ int32, _ uuid.UUID, _ json.RawMessage) error {
+	if s.updNF {
+		return repo.ErrNotFound
+	}
+	return s.upd
+}
 func (s *stubChats) List(_ context.Context, _ int32, _ repo.ListOptions) (repo.Paginated, error) {
 	return s.page, s.list
 }
