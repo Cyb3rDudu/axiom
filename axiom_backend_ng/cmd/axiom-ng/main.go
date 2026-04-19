@@ -96,9 +96,44 @@ func run() error {
 			Logger:       logger,
 		},
 	)
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { return srv.Run(gctx) })
-	g.Go(func() error { return pool.Run(gctx) })
+	return runHTTPWithPool(ctx, srv, pool, logger)
+}
+
+// runHTTPWithPool runs the HTTP server and ingest pool with a phased
+// shutdown on SIGTERM:
+//  1. srvCtx cancels first → HTTP server stops accepting new uploads
+//     and drains in-flight requests under its own 15s grace.
+//  2. Once srv.Run returns, poolCtx cancels → the ingest pool stops
+//     claiming new jobs, lets the current in-flight job finish (its
+//     MarkStatus write uses a fresh-ctx fallback so it completes even
+//     after the parent ctx is cancelled), and then returns.
+//
+// Without this ordering, a SIGTERM races: new uploads can still land
+// while the pool is already winding down, and the HTTP drain + pool
+// drain deadlines fight each other for wall-clock budget.
+func runHTTPWithPool(ctx context.Context, srv *server.Server, pool *ingest.Pool, logger *slog.Logger) error {
+	srvCtx, stopSrv := context.WithCancel(context.Background())
+	defer stopSrv()
+	poolCtx, stopPool := context.WithCancel(context.Background())
+	defer stopPool()
+
+	// Bridge the parent ctx to the HTTP server only. The pool keeps
+	// running until the HTTP server has drained.
+	go func() {
+		<-ctx.Done()
+		logger.Info("shutdown signal received; stopping HTTP server first")
+		stopSrv()
+	}()
+
+	g, _ := errgroup.WithContext(context.Background())
+	g.Go(func() error {
+		err := srv.Run(srvCtx)
+		// HTTP drained (or errored). Now let the pool wind down.
+		logger.Info("HTTP server stopped; draining ingest pool")
+		stopPool()
+		return err
+	})
+	g.Go(func() error { return pool.Run(poolCtx) })
 	return g.Wait()
 }
 

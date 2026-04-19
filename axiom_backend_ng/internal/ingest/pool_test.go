@@ -331,6 +331,65 @@ func TestPoolFailedStatusWriteUsesFreshContext(t *testing.T) {
 
 type cancelKey struct{}
 
+func TestPoolResetsStaleProcessingOnStartup(t *testing.T) {
+	t.Parallel()
+	pg := testutil.StartPostgres(t)
+	uid := seedUser(t, pg, "ingest-stale")
+	ids := seedPending(t, pg, uid, 1)
+	docID := ids[0]
+
+	// Flip the row to 'processing' with a backdated updated_at as if
+	// a prior process crashed mid-ingest. There's a BEFORE UPDATE
+	// trigger on documents that forces updated_at = NOW() on every
+	// UPDATE, so we disable it for this one backdate.
+	if err := pg.DB.Exec(
+		`ALTER TABLE documents DISABLE TRIGGER update_documents_updated_at`,
+	).Error; err != nil {
+		t.Fatalf("disable trigger: %v", err)
+	}
+	if err := pg.DB.Exec(`
+		UPDATE documents
+		   SET processing_status = 'processing',
+		       updated_at        = NOW() - INTERVAL '1 hour'
+		 WHERE id = ?`, docID).Error; err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	if err := pg.DB.Exec(
+		`ALTER TABLE documents ENABLE TRIGGER update_documents_updated_at`,
+	).Error; err != nil {
+		t.Fatalf("enable trigger: %v", err)
+	}
+
+	docs := repo.NewDocuments(pg.DB)
+	var processed atomic.Int32
+	proc := ingest.ProcessorFunc(func(_ context.Context, _ ingest.Job) error {
+		processed.Add(1)
+		return nil
+	})
+	pool := ingest.New(docs, proc, ingest.Config{
+		Size:                     1,
+		PollInterval:             10 * time.Millisecond,
+		Logger:                   silentLogger(),
+		StaleProcessingThreshold: 30 * time.Minute,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- pool.Run(ctx) }()
+
+	// The stale row should be reset to 'pending', then reclaimed and
+	// processed to 'completed'.
+	waitFor(t, 5*time.Second, func() bool {
+		return statusOf(t, pg, docID) == repo.StatusCompleted
+	})
+	cancel()
+	<-done
+	if got := processed.Load(); got != 1 {
+		t.Errorf("processed count: want 1, got %d", got)
+	}
+}
+
 func TestNoopProcessorIsHarmless(t *testing.T) {
 	t.Parallel()
 	// Exercises the NoopProcessor log branch with a real logger so the

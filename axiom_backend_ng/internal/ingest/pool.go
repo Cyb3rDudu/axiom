@@ -79,6 +79,22 @@ type Store interface {
 	MarkStatus(ctx context.Context, docID uuid.UUID, userID int32, in repo.MarkStatusInput) error
 }
 
+// StaleResetter is the optional subset of repo.Documents Pool.Run
+// uses on startup to recover rows stuck in 'processing' from a prior
+// crash. Pulled out into its own interface so callers who embed the
+// pool with a custom store don't have to implement it if they don't
+// need recovery.
+type StaleResetter interface {
+	ResetStaleProcessing(ctx context.Context, staleAfter time.Duration) (int64, error)
+}
+
+// DefaultStaleProcessingThreshold controls how old a 'processing' row
+// must be before startup recovery resets it to 'pending'. 15 minutes
+// is comfortably longer than DefaultJobTimeout (5m) so we never fight
+// a still-running worker from another replica, while still recovering
+// crashed jobs before operators need to intervene.
+const DefaultStaleProcessingThreshold = 15 * time.Minute
+
 // Config is the tunable set for a Pool. Zero values fall back to the
 // Default* constants so callers can pass Config{} when they only want
 // the package defaults.
@@ -86,15 +102,19 @@ type Config struct {
 	Size         int
 	PollInterval time.Duration
 	Logger       *slog.Logger
+	// StaleProcessingThreshold overrides the default (15 min) age at
+	// which a 'processing' row is considered abandoned on startup.
+	StaleProcessingThreshold time.Duration
 }
 
 // Pool drains pending documents with Size concurrent workers.
 type Pool struct {
-	store Store
-	proc  Processor
-	size  int
-	poll  time.Duration
-	log   *slog.Logger
+	store      Store
+	proc       Processor
+	size       int
+	poll       time.Duration
+	log        *slog.Logger
+	staleGrace time.Duration
 }
 
 // New constructs a Pool. store and proc are required. Pass cfg.Size = 0
@@ -112,7 +132,11 @@ func New(store Store, proc Processor, cfg Config) *Pool {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Pool{store: store, proc: proc, size: size, poll: poll, log: log}
+	stale := cfg.StaleProcessingThreshold
+	if stale <= 0 {
+		stale = DefaultStaleProcessingThreshold
+	}
+	return &Pool{store: store, proc: proc, size: size, poll: poll, log: log, staleGrace: stale}
 }
 
 // Run spawns Size workers and blocks until ctx is cancelled. Every
@@ -126,6 +150,20 @@ func (p *Pool) Run(ctx context.Context) error {
 		slog.Int("size", p.size),
 		slog.Duration("poll_interval", p.poll),
 	)
+	// Best-effort startup recovery: reclaim rows stuck in 'processing'
+	// from a prior crash. Implemented only when the store supports it
+	// (tests often inject a narrower stub).
+	if resetter, ok := p.store.(StaleResetter); ok {
+		n, err := resetter.ResetStaleProcessing(ctx, p.staleGrace)
+		if err != nil {
+			p.log.Warn("stale-processing recovery failed; continuing",
+				slog.String("error", err.Error()))
+		} else if n > 0 {
+			p.log.Info("stale-processing rows reset",
+				slog.Int64("count", n),
+				slog.Duration("threshold", p.staleGrace))
+		}
+	}
 	g, gctx := errgroup.WithContext(ctx)
 	for i := 0; i < p.size; i++ {
 		id := i

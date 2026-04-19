@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -113,7 +115,19 @@ type PDFProcessor struct {
 	MarkdownDir string // where to write {doc_id}.md
 	ImagesDir   string // where to write {doc_id}/image_N.ext
 	Logger      *slog.Logger
+	// JobTimeout caps how long a single pdf_worker subprocess can
+	// run. Zero → DefaultJobTimeout. Hitting the deadline sends
+	// SIGKILL to the subprocess (via exec.CommandContext) and
+	// returns a wrapped context.DeadlineExceeded to the pool.
+	JobTimeout time.Duration
 }
+
+// DefaultJobTimeout caps pdf_worker runtime. Marker is the expensive
+// stage here — on a mid-tier GPU a 100-page PDF converts in
+// ~2 minutes; a 5 minute ceiling is a generous upper bound that
+// still prevents a hung subprocess from pinning an ingest worker
+// indefinitely.
+const DefaultJobTimeout = 5 * time.Minute
 
 // ErrUnsupportedFileType is returned when the Processor cannot handle
 // the input extension. Callers (the Pool) translate this to a failed
@@ -191,8 +205,18 @@ func (p PDFProcessor) convertPDF(ctx context.Context, job Job) error {
 		slog.String("images", imageDir),
 	)
 
-	stdout, stderr, _, err := runner.Run(ctx, python, "-m", PDFModule, job.FilePath, mdPath, imageDir)
+	timeout := p.JobTimeout
+	if timeout <= 0 {
+		timeout = DefaultJobTimeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	stdout, stderr, _, err := runner.Run(runCtx, python, "-m", PDFModule, job.FilePath, mdPath, imageDir)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("pdf_worker timed out after %s: %w", timeout, err)
+		}
 		return fmt.Errorf("pdf_worker exec: %w; stderr=%s", err, truncate(stderr, 512))
 	}
 
@@ -262,9 +286,27 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	// O_NOFOLLOW + O_EXCL guards against an attacker pre-creating
+	// {doc_id}.md as a symlink to an arbitrary file and having the
+	// ingest worker (which may run as a more privileged user than
+	// the uploader) truncate the target. O_EXCL ensures we only ever
+	// write to a freshly-created file; callers that want to overwrite
+	// must remove the destination first.
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
-		return err
+		// A pre-existing destination is a legitimate reprocess path, so
+		// unlink + retry once. The second Open still carries
+		// O_NOFOLLOW so a symlink planted between the unlink and the
+		// open still fails safely.
+		if errors.Is(err, os.ErrExist) {
+			if rmErr := os.Remove(dst); rmErr != nil {
+				return fmt.Errorf("remove stale destination: %w", rmErr)
+			}
+			out, err = os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	if _, err := io.Copy(out, in); err != nil {
 		_ = out.Close()
