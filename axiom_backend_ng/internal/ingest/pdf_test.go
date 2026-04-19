@@ -369,6 +369,38 @@ func TestPDFProcessorSinkError(t *testing.T) {
 	}
 }
 
+func TestExecRunnerCapsHugeOutput(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh available")
+	}
+	// Ask the shell to emit ~2 MiB to stdout; cap is 4 KiB so only
+	// the first 4 KiB must land in the captured bytes.
+	r := ingest.ExecRunner{OutputCap: 4 << 10}
+	stdout, _, _, err := r.Run(context.Background(),
+		"/bin/sh", "-c", `yes A | head -c 2097152`)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(stdout) != 4<<10 {
+		t.Errorf("stdout cap honoured? len=%d (want 4096)", len(stdout))
+	}
+}
+
+func TestCappedBufferDropsExcessBytes(t *testing.T) {
+	t.Parallel()
+	// Direct test of the cappedBuffer — via the ExecRunner path that
+	// uses it. Write 10 times the cap; Bytes() should still be capped.
+	r := ingest.ExecRunner{OutputCap: 256}
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh available")
+	}
+	stdout, _, _, _ := r.Run(context.Background(), "/bin/sh", "-c", `yes | head -c 2560`)
+	if len(stdout) != 256 {
+		t.Errorf("cap not honoured across multiple writes: len=%d", len(stdout))
+	}
+}
+
 // TestExecRunnerAgainstRealSubprocess exercises the production path
 // with /bin/sh, so we know ExecRunner's stdout/stderr capture actually
 // works end-to-end. No Python needed.

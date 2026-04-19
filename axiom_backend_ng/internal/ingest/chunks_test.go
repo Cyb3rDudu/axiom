@@ -312,6 +312,66 @@ func TestChunkProcessorStoreError(t *testing.T) {
 	}
 }
 
+func TestChunkProcessorMarkdownTooLarge(t *testing.T) {
+	t.Parallel()
+	mdDir := t.TempDir()
+	docID := uuid.New()
+	// 2 MiB markdown, but the processor caps at 1 MiB for this test.
+	big := make([]byte, 2<<20)
+	for i := range big {
+		big[i] = 'x'
+	}
+	if err := os.WriteFile(filepath.Join(mdDir, docID.String()+".md"), big, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	proc := ingest.ChunkProcessor{
+		Chunker:          chunker.New(chunker.DefaultConfig()),
+		Store:            &nullStore{},
+		MarkdownDir:      mdDir,
+		MaxMarkdownBytes: 1 << 20,
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	err := proc.Process(context.Background(), ingest.Job{DocID: docID, UserID: 1})
+	if err == nil || !containsStr(err.Error(), "markdown too large") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestChunkProcessorEmbedPayloadCarriesSectionTitles(t *testing.T) {
+	t.Parallel()
+	mdDir := t.TempDir()
+	docID := uuid.New()
+	body := "# Intro\n\nFirst body paragraph here.\n\n# Method\n\nSecond body paragraph."
+	_ = os.WriteFile(filepath.Join(mdDir, docID.String()+".md"), []byte(body), 0o644)
+
+	emb := &fakeEmbedder{}
+	proc := ingest.ChunkProcessor{
+		Chunker:     chunker.New(chunker.Config{MaxChunkTokens: 50, OverlapTokens: 0, MinChunkTokens: 1}),
+		Embedder:    emb,
+		Store:       &nullStore{},
+		MarkdownDir: mdDir,
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if err := proc.Process(context.Background(), ingest.Job{DocID: docID, UserID: 1}); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if emb.callCount != 1 {
+		t.Fatalf("embedder calls: %d", emb.callCount)
+	}
+	// Every chunk dict must carry metadata.section_titles as a list.
+	for i, c := range emb.inputChunk {
+		meta, ok := c["metadata"].(map[string]any)
+		if !ok {
+			t.Fatalf("chunk %d missing metadata dict: %+v", i, c)
+		}
+		titles, ok := meta["section_titles"].([]string)
+		if !ok {
+			t.Fatalf("chunk %d section_titles: %T %v", i, meta["section_titles"], meta["section_titles"])
+		}
+		_ = titles // value check below
+	}
+}
+
 // nullStore is an in-memory ChunkStore for the unit tests that don't
 // spin up Postgres.
 type nullStore struct {

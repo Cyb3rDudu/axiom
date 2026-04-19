@@ -36,21 +36,65 @@ type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) (stdout, stderr []byte, exitCode int, err error)
 }
 
+// DefaultSubprocessOutputCap limits how much stdout/stderr ExecRunner
+// buffers per call. A misbehaving pdf_worker that emits gigabytes of
+// logs would otherwise pin the ingest worker's RSS; 16 MiB is plenty
+// for pdf_worker's real output (a JSON result line + Marker's
+// progress log).
+const DefaultSubprocessOutputCap = 16 << 20
+
 // ExecRunner is the production CommandRunner — a thin wrapper over
-// exec.CommandContext that captures stdout + stderr separately.
-type ExecRunner struct{}
+// exec.CommandContext that captures stdout + stderr separately, each
+// bounded by OutputCap.
+type ExecRunner struct {
+	// OutputCap is the per-stream byte ceiling. Zero →
+	// DefaultSubprocessOutputCap.
+	OutputCap int
+}
 
 // Run implements CommandRunner.
-func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, int, error) {
+func (r ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, int, error) {
+	capSize := r.OutputCap
+	if capSize <= 0 {
+		capSize = DefaultSubprocessOutputCap
+	}
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // caller-controlled, vetted path
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &cappedBuffer{cap: capSize}
+	stderr := &cappedBuffer{cap: capSize}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	err := cmd.Run()
 	code := cmd.ProcessState.ExitCode()
-	// Non-zero exit is surfaced as err by exec; preserve that contract.
 	return stdout.Bytes(), stderr.Bytes(), code, err
 }
+
+// cappedBuffer is a bytes.Buffer-style writer that silently drops
+// writes once cap bytes have been accumulated. The subprocess does
+// not see back-pressure (we do not want to deadlock pdf_worker), it
+// just never sees its excess output reflected back in the Go buffer.
+type cappedBuffer struct {
+	buf bytes.Buffer
+	cap int
+}
+
+// Write implements io.Writer. Bytes past the cap are dropped but
+// reported as written so the subprocess's writer does not block.
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	remaining := c.cap - c.buf.Len()
+	if remaining <= 0 {
+		return len(p), nil
+	}
+	if len(p) <= remaining {
+		return c.buf.Write(p)
+	}
+	if _, err := c.buf.Write(p[:remaining]); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// Bytes returns the captured (possibly truncated) contents.
+func (c *cappedBuffer) Bytes() []byte { return c.buf.Bytes() }
 
 // PDFProcessor converts an uploaded file to markdown. PDFs are shelled
 // out to the Python pdf_worker (parity with
