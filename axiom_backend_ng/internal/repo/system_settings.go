@@ -5,32 +5,29 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
+
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/models"
 )
 
 // SystemSettings owns the system_settings key/value JSONB store.
-type SystemSettings struct{ pool *pgxpool.Pool }
+type SystemSettings struct{ gdb *gorm.DB }
 
-// NewSystemSettings wires the repo to the pool.
-func NewSystemSettings(pool *pgxpool.Pool) *SystemSettings { return &SystemSettings{pool: pool} }
+// NewSystemSettings wires the repo to the DB.
+func NewSystemSettings(gdb *gorm.DB) *SystemSettings { return &SystemSettings{gdb: gdb} }
 
 // Get returns the raw JSON value stored under key, or ErrNotFound.
 func (s *SystemSettings) Get(ctx context.Context, key string) (json.RawMessage, error) {
-	var raw []byte
-	err := s.pool.QueryRow(ctx, `SELECT value FROM system_settings WHERE key = $1`, key).Scan(&raw)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
+	var m models.SystemSetting
+	if err := s.gdb.WithContext(ctx).Where("key = ?", key).First(&m).Error; err != nil {
+		return nil, mapErr(err)
 	}
-	return raw, nil
+	return json.RawMessage(m.Value), nil
 }
 
-// RegistrationEnabled mirrors the Python check: if the setting is
-// missing OR explicitly false the API returns 403. Treat "missing" as
-// enabled to keep out-of-the-box installs open.
+// RegistrationEnabled mirrors the Python check: missing setting → true,
+// explicitly false → false. Anything else → true (only literal false
+// disables, matching axiom_backend/api/auth.py:17).
 func (s *SystemSettings) RegistrationEnabled(ctx context.Context) (bool, error) {
 	raw, err := s.Get(ctx, "registration_enabled")
 	if err != nil {
@@ -41,16 +38,7 @@ func (s *SystemSettings) RegistrationEnabled(ctx context.Context) (bool, error) 
 	}
 	var v bool
 	if err := json.Unmarshal(raw, &v); err != nil {
-		// non-boolean value → treat as enabled, same as Python's
-		// `setting.value is False` check (only literal False disables).
 		return true, nil
 	}
 	return v, nil
-}
-
-func wrapNotFound(err error) error {
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	return err
 }

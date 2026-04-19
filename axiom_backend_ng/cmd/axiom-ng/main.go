@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 
+	"gorm.io/gorm"
+
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/api"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/auth"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/authctx"
@@ -21,7 +23,6 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/server"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/version"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -49,21 +50,21 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	deps, pool, err := buildDeps(ctx, cfg, logger)
+	deps, gormDB, err := buildDeps(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
-	if pool != nil {
-		defer pool.Close()
+	if gormDB != nil {
+		defer closeDB(gormDB, logger)
 	}
 
 	return server.NewWithDeps(cfg, logger, deps).Run(ctx)
 }
 
 // buildDeps constructs the concrete dependency graph. It opens the
-// pgxpool if DatabaseURL is set; otherwise returns an empty Deps so the
-// binary can still serve / and /health for smoke testing.
-func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (server.Deps, *pgxpool.Pool, error) {
+// *gorm.DB if DatabaseURL is set; otherwise returns an empty Deps so
+// the binary can still serve / and /health for smoke testing.
+func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (server.Deps, *gorm.DB, error) {
 	if cfg.DatabaseURL == "" {
 		logger.Warn("AXIOM_NG_DATABASE_URL not set; serving bootstrap routes only")
 		return server.Deps{}, nil, nil
@@ -71,30 +72,26 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 
 	dbCfg := db.DefaultConfig()
 	dbCfg.URL = cfg.DatabaseURL
-	pool, err := db.NewPool(ctx, dbCfg)
+	gormDB, err := db.Open(ctx, dbCfg)
 	if err != nil {
-		return server.Deps{}, nil, fmt.Errorf("db pool: %w", err)
+		return server.Deps{}, nil, fmt.Errorf("db open: %w", err)
 	}
-	if err := db.Ping(ctx, pool); err != nil {
-		pool.Close()
-		return server.Deps{}, nil, fmt.Errorf("db ping: %w", err)
-	}
-	if err := db.RequireSchema(ctx, pool); err != nil {
-		pool.Close()
+	if err := db.RequireSchema(ctx, gormDB); err != nil {
+		closeDB(gormDB, logger)
 		return server.Deps{}, nil, fmt.Errorf("schema check: %w", err)
 	}
 
 	signer, err := auth.NewSigner(secretFromEnv())
 	if err != nil {
-		pool.Close()
+		closeDB(gormDB, logger)
 		return server.Deps{}, nil, fmt.Errorf("jwt signer: %w", err)
 	}
 
-	users := repo.NewUsers(pool)
-	langs := repo.NewLanguages(pool)
-	sysSettings := repo.NewSystemSettings(pool)
-	dash := repo.NewDashboard(pool)
-	chats := repo.NewChats(pool)
+	users := repo.NewUsers(gormDB)
+	langs := repo.NewLanguages(gormDB)
+	sysSettings := repo.NewSystemSettings(gormDB)
+	dash := repo.NewDashboard(gormDB)
+	chats := repo.NewChats(gormDB)
 
 	deps := server.Deps{
 		Auth: api.AuthDeps{
@@ -103,7 +100,7 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 			Signer:         signer,
 		},
 		Languages: api.LanguageDeps{Languages: langs},
-		System:    api.SystemDeps{Health: dbHealth{pool: pool}},
+		System:    api.SystemDeps{Health: dbHealth{gdb: gormDB}},
 		Dashboard: api.DashboardDeps{Stats: dash},
 		Settings:  api.SettingsDeps{Users: users},
 		Chats:     api.ChatDeps{Chats: chats},
@@ -112,7 +109,18 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 			UserLookup: userLookup{users: users},
 		},
 	}
-	return deps, pool, nil
+	return deps, gormDB, nil
+}
+
+func closeDB(gormDB *gorm.DB, logger *slog.Logger) {
+	sqlDB, err := gormDB.DB()
+	if err != nil {
+		logger.Warn("close db: gorm.DB unwrap failed", slog.String("error", err.Error()))
+		return
+	}
+	if err := sqlDB.Close(); err != nil {
+		logger.Warn("close db", slog.String("error", err.Error()))
+	}
 }
 
 // secretFromEnv reads the JWT signing secret honouring the Python
@@ -124,11 +132,11 @@ func secretFromEnv() string {
 	return os.Getenv("SECRET_KEY")
 }
 
-// dbHealth adapts *pgxpool.Pool to the db.Ping signature used by the
-// system handlers without creating an import cycle.
-type dbHealth struct{ pool *pgxpool.Pool }
+// dbHealth adapts *gorm.DB to the system-handler Ping signature without
+// creating an import cycle.
+type dbHealth struct{ gdb *gorm.DB }
 
-func (h dbHealth) Ping(ctx context.Context) error { return db.Ping(ctx, h.pool) }
+func (h dbHealth) Ping(ctx context.Context) error { return db.Ping(ctx, h.gdb) }
 
 // userLookup adapts *repo.Users to server.UserResolver.
 type userLookup struct{ users *repo.Users }

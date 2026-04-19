@@ -3,6 +3,7 @@ package testutil
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,17 +12,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver for bootstrap
 	"github.com/ory/dockertest/v3"
 	"github.com/ory/dockertest/v3/docker"
+	"gorm.io/gorm"
 
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/db"
 )
 
 // Postgres is a running pgvector-enabled Postgres container for tests.
 type Postgres struct {
-	Pool   *pgxpool.Pool
-	URL    string
+	DB       *gorm.DB
+	URL      string
 	Resource *dockertest.Resource
 
 	pool *dockertest.Pool
@@ -74,23 +76,17 @@ func StartPostgres(t *testing.T) *Postgres {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	var pool *pgxpool.Pool
 	if err := dockerPool.Retry(func() error {
-		p, perr := pgxpool.New(ctx, url)
+		sqlDB, perr := sql.Open("pgx", url)
 		if perr != nil {
 			return perr
 		}
-		if perr := p.Ping(ctx); perr != nil {
-			p.Close()
-			return perr
-		}
-		pool = p
-		return nil
+		defer sqlDB.Close()
+		return sqlDB.PingContext(ctx)
 	}); err != nil {
 		_ = dockerPool.Purge(resource)
 		t.Fatalf("dockertest: wait for pgvector to become ready: %v", err)
 	}
-	pool.Close()
 
 	if err := applyInitSchema(ctx, url); err != nil {
 		_ = dockerPool.Purge(resource)
@@ -99,13 +95,13 @@ func StartPostgres(t *testing.T) *Postgres {
 
 	cfg := db.DefaultConfig()
 	cfg.URL = url
-	pgxPool, err := db.NewPool(ctx, cfg)
+	gormDB, err := db.Open(ctx, cfg)
 	if err != nil {
 		_ = dockerPool.Purge(resource)
-		t.Fatalf("dockertest: open axiom pool: %v", err)
+		t.Fatalf("dockertest: open gorm: %v", err)
 	}
 
-	return &Postgres{Pool: pgxPool, URL: url, Resource: resource, pool: dockerPool}
+	return &Postgres{DB: gormDB, URL: url, Resource: resource, pool: dockerPool}
 }
 
 // Close tears down the pool and container.
@@ -113,8 +109,10 @@ func (p *Postgres) Close() {
 	if p == nil {
 		return
 	}
-	if p.Pool != nil {
-		p.Pool.Close()
+	if p.DB != nil {
+		if sqlDB, err := p.DB.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
 	}
 	if p.pool != nil && p.Resource != nil {
 		_ = p.pool.Purge(p.Resource)
@@ -131,30 +129,26 @@ func (p *Postgres) Reset(ctx context.Context, t *testing.T) {
 		WHERE schemaname = 'public'
 	`
 	var tables *string
-	if err := p.Pool.QueryRow(ctx, q).Scan(&tables); err != nil {
+	if err := p.DB.WithContext(ctx).Raw(q).Scan(&tables).Error; err != nil {
 		t.Fatalf("pgtest: collect tables: %v", err)
 	}
 	if tables == nil || *tables == "" {
 		return
 	}
-	_, err := p.Pool.Exec(ctx, "TRUNCATE "+*tables+" RESTART IDENTITY CASCADE")
-	if err != nil {
+	if err := p.DB.WithContext(ctx).Exec("TRUNCATE " + *tables + " RESTART IDENTITY CASCADE").Error; err != nil {
 		t.Fatalf("pgtest: truncate: %v", err)
 	}
 }
 
 // applyInitSchema runs every SQL file under <repoRoot>/init-db/ in lexical
-// order against the freshly-started container.
+// order against the freshly-started container via database/sql (so we
+// don't pull full GORM into bootstrap).
 func applyInitSchema(ctx context.Context, url string) error {
-	cfg, err := pgxpool.ParseConfig(url)
+	sqlDB, err := sql.Open("pgx", url)
 	if err != nil {
-		return fmt.Errorf("parse url: %w", err)
+		return fmt.Errorf("open bootstrap db: %w", err)
 	}
-	p, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	defer p.Close()
+	defer sqlDB.Close()
 
 	root, err := repoRoot()
 	if err != nil {
@@ -183,7 +177,7 @@ func applyInitSchema(ctx context.Context, url string) error {
 			if err != nil {
 				return fmt.Errorf("read %s: %w", f, err)
 			}
-			if _, err := p.Exec(ctx, string(b)); err != nil {
+			if _, err := sqlDB.ExecContext(ctx, string(b)); err != nil {
 				return fmt.Errorf("exec %s: %w", filepath.Base(f), err)
 			}
 		}
@@ -191,7 +185,7 @@ func applyInitSchema(ctx context.Context, url string) error {
 	// Replicate axiom_backend/database/init_postgres.py:run_column_migrations().
 	// api_key is added as a runtime column migration in Python; axiom-ng
 	// expects it in place.
-	if _, err := p.Exec(ctx, `ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key VARCHAR UNIQUE`); err != nil {
+	if _, err := sqlDB.ExecContext(ctx, `ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key VARCHAR UNIQUE`); err != nil {
 		return fmt.Errorf("column migration users.api_key: %w", err)
 	}
 	return nil

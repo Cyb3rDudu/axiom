@@ -1,7 +1,8 @@
 // Package repo holds the typed database access layer for axiom-ng.
 // Each file in this package owns a small domain slice (users, chats,
-// settings, ...) using the pgx/v5 pool directly. A future sqlc
-// migration can swap these out without changing handler signatures.
+// settings, ...) using GORM on top of pgx. Handler-facing types are
+// derived from the raw GORM models so the HTTP layer never imports
+// GORM directly.
 package repo
 
 import (
@@ -10,8 +11,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
+
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/models"
 )
 
 // ErrNotFound is returned when no row matches the query. Handlers use
@@ -42,60 +44,36 @@ type User struct {
 }
 
 // Users provides CRUD over the users table.
-type Users struct {
-	pool *pgxpool.Pool
-}
+type Users struct{ gdb *gorm.DB }
 
-// NewUsers wires the repository to a pool.
-func NewUsers(pool *pgxpool.Pool) *Users { return &Users{pool: pool} }
-
-const userColumns = `id, username, email, hashed_password,
-	COALESCE(full_name, ''), COALESCE(location, ''), COALESCE(job_title, ''),
-	COALESCE(theme, ''), COALESCE(color_scheme, ''), COALESCE(language_code, 'en'),
-	settings, COALESCE(is_admin, false), COALESCE(is_active, true),
-	COALESCE(role, 'user'), COALESCE(user_type, 'individual'),
-	COALESCE(api_key, ''), created_at, updated_at`
-
-func scanUser(row pgx.Row) (User, error) {
-	var u User
-	var settings []byte
-	err := row.Scan(
-		&u.ID, &u.Username, &u.Email, &u.HashedPassword,
-		&u.FullName, &u.Location, &u.JobTitle,
-		&u.Theme, &u.ColorScheme, &u.LanguageCode,
-		&settings, &u.IsAdmin, &u.IsActive,
-		&u.Role, &u.UserType,
-		&u.APIKey, &u.CreatedAt, &u.UpdatedAt,
-	)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return User{}, ErrNotFound
-		}
-		return User{}, err
-	}
-	if len(settings) > 0 {
-		u.Settings = settings
-	}
-	return u, nil
-}
+// NewUsers wires the repository to a gorm.DB.
+func NewUsers(gdb *gorm.DB) *Users { return &Users{gdb: gdb} }
 
 // GetByUsername matches on username. Returns ErrNotFound if none.
 func (u *Users) GetByUsername(ctx context.Context, username string) (User, error) {
-	row := u.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE username = $1`, username)
-	return scanUser(row)
+	var m models.User
+	if err := u.gdb.WithContext(ctx).Where("username = ?", username).First(&m).Error; err != nil {
+		return User{}, mapErr(err)
+	}
+	return userFromModel(m), nil
 }
 
 // GetByID fetches a user by primary key.
 func (u *Users) GetByID(ctx context.Context, id int32) (User, error) {
-	row := u.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id)
-	return scanUser(row)
+	var m models.User
+	if err := u.gdb.WithContext(ctx).Where("id = ?", id).First(&m).Error; err != nil {
+		return User{}, mapErr(err)
+	}
+	return userFromModel(m), nil
 }
 
-// GetByAPIKey fetches a user via the api_key column used by the
-// OpenAI-compatible Bearer auth path.
+// GetByAPIKey fetches a user via the api_key column.
 func (u *Users) GetByAPIKey(ctx context.Context, key string) (User, error) {
-	row := u.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE api_key = $1`, key)
-	return scanUser(row)
+	var m models.User
+	if err := u.gdb.WithContext(ctx).Where("api_key = ?", key).First(&m).Error; err != nil {
+		return User{}, mapErr(err)
+	}
+	return userFromModel(m), nil
 }
 
 // CreateInput carries the fields needed to register a new user.
@@ -107,27 +85,35 @@ type CreateInput struct {
 	IsAdmin        bool
 }
 
-// Create inserts a new user and returns the populated row. Returns a
-// raw PG duplicate-key error to the caller so handlers can map it to
-// 400 without colour-coding the error string.
+// Create inserts a new user and returns the populated row.
 func (u *Users) Create(ctx context.Context, in CreateInput) (User, error) {
-	row := u.pool.QueryRow(ctx, `
-		INSERT INTO users (username, email, hashed_password, is_admin, is_active, role, user_type, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, true, $5, $6, NOW(), NOW())
-		RETURNING `+userColumns,
-		in.Username, in.Email, in.HashedPassword, in.IsAdmin,
-		roleFor(in.IsAdmin), userTypeFor(in.IsAdmin),
-	)
-	return scanUser(row)
+	now := time.Now().UTC()
+	m := models.User{
+		Username:       in.Username,
+		Email:          in.Email,
+		HashedPassword: in.HashedPassword,
+		IsAdmin:        in.IsAdmin,
+		IsActive:       true,
+		Role:           roleFor(in.IsAdmin),
+		UserType:       userTypeFor(in.IsAdmin),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := u.gdb.WithContext(ctx).Create(&m).Error; err != nil {
+		return User{}, err
+	}
+	return userFromModel(m), nil
 }
 
 // UpdatePassword sets a new bcrypt hash for the given user.
 func (u *Users) UpdatePassword(ctx context.Context, id int32, hashed string) error {
-	cmd, err := u.pool.Exec(ctx, `UPDATE users SET hashed_password = $1, updated_at = NOW() WHERE id = $2`, hashed, id)
-	if err != nil {
-		return err
+	res := u.gdb.WithContext(ctx).Model(&models.User{}).
+		Where("id = ?", id).
+		Updates(map[string]any{"hashed_password": hashed, "updated_at": time.Now().UTC()})
+	if res.Error != nil {
+		return res.Error
 	}
-	if cmd.RowsAffected() == 0 {
+	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -135,22 +121,72 @@ func (u *Users) UpdatePassword(ctx context.Context, id int32, hashed string) err
 
 // UpdateSettings replaces the JSONB settings blob.
 func (u *Users) UpdateSettings(ctx context.Context, id int32, settings json.RawMessage) error {
-	cmd, err := u.pool.Exec(ctx, `UPDATE users SET settings = $1::jsonb, updated_at = NOW() WHERE id = $2`, settings, id)
-	if err != nil {
-		return err
+	res := u.gdb.WithContext(ctx).Model(&models.User{}).
+		Where("id = ?", id).
+		Updates(map[string]any{"settings": []byte(settings), "updated_at": time.Now().UTC()})
+	if res.Error != nil {
+		return res.Error
 	}
-	if cmd.RowsAffected() == 0 {
+	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
 	return nil
 }
 
-// Count returns the total number of users. Used by bootstrap code to
-// decide whether to seed a default admin.
+// Count returns the total number of users.
 func (u *Users) Count(ctx context.Context) (int64, error) {
 	var n int64
-	err := u.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)
+	err := u.gdb.WithContext(ctx).Model(&models.User{}).Count(&n).Error
 	return n, err
+}
+
+func userFromModel(m models.User) User {
+	user := User{
+		ID:             m.ID,
+		Username:       m.Username,
+		Email:          m.Email,
+		HashedPassword: m.HashedPassword,
+		IsAdmin:        m.IsAdmin,
+		IsActive:       m.IsActive,
+		Role:           m.Role,
+		UserType:       m.UserType,
+		CreatedAt:      m.CreatedAt,
+		UpdatedAt:      m.UpdatedAt,
+	}
+	if m.FullName != nil {
+		user.FullName = *m.FullName
+	}
+	if m.Location != nil {
+		user.Location = *m.Location
+	}
+	if m.JobTitle != nil {
+		user.JobTitle = *m.JobTitle
+	}
+	if m.Theme != nil {
+		user.Theme = *m.Theme
+	}
+	if m.ColorScheme != nil {
+		user.ColorScheme = *m.ColorScheme
+	}
+	if m.LanguageCode != nil {
+		user.LanguageCode = *m.LanguageCode
+	}
+	if m.APIKey != nil {
+		user.APIKey = *m.APIKey
+	}
+	if len(m.Settings) > 0 {
+		user.Settings = json.RawMessage(m.Settings)
+	}
+	return user
+}
+
+// mapErr converts GORM's sentinel errors to repo-level ones so handlers
+// can keep using errors.Is(err, repo.ErrNotFound).
+func mapErr(err error) error {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrNotFound
+	}
+	return err
 }
 
 func roleFor(isAdmin bool) string {

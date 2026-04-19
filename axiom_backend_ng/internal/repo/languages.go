@@ -4,7 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
+
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/models"
 )
 
 // Language matches supported_languages rows + Python's SupportedLanguage schema.
@@ -18,48 +20,47 @@ type Language struct {
 }
 
 // Languages owns supported_languages queries.
-type Languages struct{ pool *pgxpool.Pool }
+type Languages struct{ gdb *gorm.DB }
 
-// NewLanguages wires the repo to the pool.
-func NewLanguages(pool *pgxpool.Pool) *Languages { return &Languages{pool: pool} }
+// NewLanguages wires the repo to the DB.
+func NewLanguages(gdb *gorm.DB) *Languages { return &Languages{gdb: gdb} }
 
 // List returns supported languages. When includeInactive is false only
-// rows with is_active = true are returned. Rows are ordered
+// is_active = true rows are returned. Ordered
 // (completion_percentage DESC, code ASC) to match the Python API.
 func (l *Languages) List(ctx context.Context, includeInactive bool) ([]Language, error) {
-	q := `SELECT code, name, native_name, is_active, completion_percentage, created_at
-	      FROM supported_languages`
+	q := l.gdb.WithContext(ctx).Model(&models.SupportedLanguage{}).
+		Order("completion_percentage DESC, code ASC")
 	if !includeInactive {
-		q += ` WHERE is_active = true`
+		q = q.Where("is_active = true")
 	}
-	q += ` ORDER BY completion_percentage DESC, code ASC`
-
-	rows, err := l.pool.Query(ctx, q)
-	if err != nil {
+	var rows []models.SupportedLanguage
+	if err := q.Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []Language
-	for rows.Next() {
-		var lang Language
-		if err := rows.Scan(&lang.Code, &lang.Name, &lang.NativeName, &lang.IsActive, &lang.CompletionPercentage, &lang.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, lang)
+	out := make([]Language, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, languageFromModel(r))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// Get returns a single language by code or ErrNotFound.
+// Get returns a single language by code.
 func (l *Languages) Get(ctx context.Context, code string) (Language, error) {
-	var lang Language
-	err := l.pool.QueryRow(ctx, `
-		SELECT code, name, native_name, is_active, completion_percentage, created_at
-		FROM supported_languages WHERE code = $1
-	`, code).Scan(&lang.Code, &lang.Name, &lang.NativeName, &lang.IsActive, &lang.CompletionPercentage, &lang.CreatedAt)
-	if err != nil {
-		return Language{}, wrapNotFound(err)
+	var m models.SupportedLanguage
+	if err := l.gdb.WithContext(ctx).Where("code = ?", code).First(&m).Error; err != nil {
+		return Language{}, mapErr(err)
 	}
-	return lang, nil
+	return languageFromModel(m), nil
+}
+
+func languageFromModel(m models.SupportedLanguage) Language {
+	return Language{
+		Code:                 m.Code,
+		Name:                 m.Name,
+		NativeName:           m.NativeName,
+		IsActive:             m.IsActive,
+		CompletionPercentage: m.CompletionPercentage,
+		CreatedAt:            m.CreatedAt,
+	}
 }

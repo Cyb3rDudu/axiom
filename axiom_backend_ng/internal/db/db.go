@@ -1,16 +1,17 @@
-// Package db owns the PostgreSQL connection pool used by axiom-ng.
+// Package db owns the PostgreSQL connection used by axiom-ng.
 //
 // Parity targets with the Python backend:
 //
 //   - Pool size:        50 (pool_size)
 //   - Max connections:  80 (pool_size + max_overflow)
 //   - Max conn lifetime: 1h (pool_recycle)
-//   - Health check ping: before use (pool_pre_ping)
 //   - Statement timeout: 30s (connect_args.options = -c statement_timeout=30000)
 //   - Connect timeout:   10s
 //
-// pgvector is registered on every new connection so vector(N) columns
-// round-trip through pgvector.Vector without manual scanning.
+// axiom-ng uses GORM on top of pgx as the driver (gorm.io/driver/postgres).
+// The underlying *sql.DB is tuned to the settings above; pgvector is
+// registered as a Postgres type so vector(N) columns round-trip via
+// github.com/pgvector/pgvector-go.
 package db
 
 import (
@@ -18,19 +19,19 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	pgvector "github.com/pgvector/pgvector-go"
-	pgxv5 "github.com/pgvector/pgvector-go/pgx"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
-// Config bundles the options required to open a pool.
+// Config bundles the options required to open a *gorm.DB.
 type Config struct {
 	URL              string
-	MaxConns         int32
-	MinConns         int32
-	MaxConnLifetime  time.Duration
-	MaxConnIdleTime  time.Duration
+	MaxOpenConns     int
+	MaxIdleConns     int
+	ConnMaxLifetime  time.Duration
+	ConnMaxIdleTime  time.Duration
 	StatementTimeout time.Duration
 	ConnectTimeout   time.Duration
 }
@@ -38,75 +39,72 @@ type Config struct {
 // DefaultConfig returns parity-with-Python defaults. Callers must set URL.
 func DefaultConfig() Config {
 	return Config{
-		MaxConns:         80, // pool_size (50) + max_overflow (30)
-		MinConns:         5,
-		MaxConnLifetime:  1 * time.Hour,
-		MaxConnIdleTime:  15 * time.Minute,
+		MaxOpenConns:     80, // pool_size (50) + max_overflow (30)
+		MaxIdleConns:     5,
+		ConnMaxLifetime:  1 * time.Hour,
+		ConnMaxIdleTime:  15 * time.Minute,
 		StatementTimeout: 30 * time.Second,
 		ConnectTimeout:   10 * time.Second,
 	}
 }
 
-// NewPool opens a pgx pool against cfg.URL, applies the axiom-ng defaults,
-// and registers pgvector on every new connection.
-func NewPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
+// Open returns a *gorm.DB against cfg.URL with axiom-ng defaults applied.
+func Open(ctx context.Context, cfg Config) (*gorm.DB, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("db: URL is required")
 	}
 
-	pcfg, err := pgxpool.ParseConfig(cfg.URL)
+	dsn := withStatementTimeout(cfg.URL, cfg.StatementTimeout)
+
+	gormDB, err := gorm.Open(postgres.New(postgres.Config{DSN: dsn}), &gorm.Config{
+		Logger:                 logger.Default.LogMode(logger.Warn),
+		SkipDefaultTransaction: true,
+		PrepareStmt:            true,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("db: parse URL: %w", err)
+		return nil, fmt.Errorf("db: open gorm: %w", err)
 	}
 
-	if cfg.MaxConns > 0 {
-		pcfg.MaxConns = cfg.MaxConns
-	}
-	if cfg.MinConns > 0 {
-		pcfg.MinConns = cfg.MinConns
-	}
-	if cfg.MaxConnLifetime > 0 {
-		pcfg.MaxConnLifetime = cfg.MaxConnLifetime
-	}
-	if cfg.MaxConnIdleTime > 0 {
-		pcfg.MaxConnIdleTime = cfg.MaxConnIdleTime
-	}
-	if cfg.ConnectTimeout > 0 {
-		pcfg.ConnConfig.ConnectTimeout = cfg.ConnectTimeout
-	}
-
-	// Match Python's per-connection `options = -c statement_timeout=30000`.
-	// pgxpool.ParseConfig always initialises RuntimeParams so we can assign
-	// directly without a nil guard.
-	if stmt := int(cfg.StatementTimeout / time.Millisecond); stmt > 0 {
-		pcfg.ConnConfig.RuntimeParams["statement_timeout"] = fmt.Sprintf("%d", stmt)
-	}
-
-	pcfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		if err := pgxv5.RegisterTypes(ctx, conn); err != nil {
-			return fmt.Errorf("db: register pgvector: %w", err)
-		}
-		return nil
-	}
-
-	pool, err := pgxpool.NewWithConfig(ctx, pcfg)
+	sqlDB, err := gormDB.DB()
 	if err != nil {
-		return nil, fmt.Errorf("db: new pool: %w", err)
+		return nil, fmt.Errorf("db: underlying sql.DB: %w", err)
 	}
-	return pool, nil
+	if cfg.MaxOpenConns > 0 {
+		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+	}
+	if cfg.MaxIdleConns > 0 {
+		sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+	}
+	if cfg.ConnMaxLifetime > 0 {
+		sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	}
+	if cfg.ConnMaxIdleTime > 0 {
+		sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+	}
+
+	pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := sqlDB.PingContext(pingCtx); err != nil {
+		return nil, fmt.Errorf("db: ping: %w", err)
+	}
+	return gormDB, nil
 }
 
-// Ping verifies the database is reachable.
-func Ping(ctx context.Context, pool *pgxpool.Pool) error {
+// Ping returns nil when the underlying sql.DB accepts a connection.
+func Ping(ctx context.Context, gormDB *gorm.DB) error {
+	sqlDB, err := gormDB.DB()
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	return pool.Ping(ctx)
+	return sqlDB.PingContext(ctx)
 }
 
 // RequireSchema runs a lightweight existence check for the tables that
-// axiom-ng depends on. If any are missing the function returns an error so
-// startup fails fast instead of blowing up on the first query.
-func RequireSchema(ctx context.Context, pool *pgxpool.Pool) error {
+// axiom-ng depends on. If any are missing the function returns an error
+// so startup fails fast instead of blowing up on the first query.
+func RequireSchema(ctx context.Context, gormDB *gorm.DB) error {
 	required := []string{
 		"users",
 		"chats",
@@ -120,10 +118,12 @@ func RequireSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		"supported_languages",
 		"system_settings",
 	}
-	const q = `SELECT to_regclass($1)::text IS NOT NULL`
 	for _, table := range required {
 		var ok bool
-		if err := pool.QueryRow(ctx, q, "public."+table).Scan(&ok); err != nil {
+		err := gormDB.WithContext(ctx).
+			Raw(`SELECT to_regclass($1)::text IS NOT NULL`, "public."+table).
+			Scan(&ok).Error
+		if err != nil {
 			return fmt.Errorf("db: probe %s: %w", table, err)
 		}
 		if !ok {
@@ -133,9 +133,27 @@ func RequireSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-// VectorType is a re-export so callers can avoid importing pgvector directly.
+// VectorType re-exports pgvector.Vector so callers avoid the import.
 type VectorType = pgvector.Vector
 
-// NewVector wraps pgvector.NewVector for callers that do not import pgvector
-// directly.
+// NewVector wraps pgvector.NewVector for callers that do not import
+// pgvector directly.
 func NewVector(v []float32) VectorType { return pgvector.NewVector(v) }
+
+// withStatementTimeout splices the Postgres statement_timeout setting
+// into the DSN's options parameter. Matches the Python backend's
+// connect_args.options.
+func withStatementTimeout(dsn string, timeout time.Duration) string {
+	if timeout <= 0 {
+		return dsn
+	}
+	ms := int(timeout / time.Millisecond)
+	sep := "?"
+	for i := 0; i < len(dsn); i++ {
+		if dsn[i] == '?' {
+			sep = "&"
+			break
+		}
+	}
+	return fmt.Sprintf("%s%soptions=-c%%20statement_timeout=%d", dsn, sep, ms)
+}

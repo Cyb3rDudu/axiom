@@ -44,11 +44,11 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("signer: %v", err)
 	}
 
-	users := repo.NewUsers(pg.Pool)
-	langs := repo.NewLanguages(pg.Pool)
-	sys := repo.NewSystemSettings(pg.Pool)
-	dash := repo.NewDashboard(pg.Pool)
-	chats := repo.NewChats(pg.Pool)
+	users := repo.NewUsers(pg.DB)
+	langs := repo.NewLanguages(pg.DB)
+	sys := repo.NewSystemSettings(pg.DB)
+	dash := repo.NewDashboard(pg.DB)
+	chats := repo.NewChats(pg.DB)
 
 	deps := server.Deps{
 		Auth: api.AuthDeps{
@@ -80,7 +80,7 @@ func (f *fixture) close() { f.pg.Close() }
 
 type pingFromPool struct{ pool *testutil.Postgres }
 
-func (p pingFromPool) Ping(ctx context.Context) error { return db.Ping(ctx, p.pool.Pool) }
+func (p pingFromPool) Ping(ctx context.Context) error { return db.Ping(ctx, p.pool.DB) }
 
 type userLookup struct{ users *repo.Users }
 
@@ -97,7 +97,7 @@ func seedSupportedLanguages(t *testing.T, pg *testutil.Postgres) {
 	ctx := context.Background()
 	// Wipe seed data from the multilingual migration so tests own the
 	// full supported_languages state.
-	if _, err := pg.Pool.Exec(ctx, `DELETE FROM supported_languages`); err != nil {
+	if err := pg.DB.WithContext(ctx).Exec(`DELETE FROM supported_languages`).Error; err != nil {
 		t.Fatalf("wipe languages: %v", err)
 	}
 	rows := []struct {
@@ -110,10 +110,10 @@ func seedSupportedLanguages(t *testing.T, pg *testutil.Postgres) {
 		{"fr", "French", "Français", 40, false},
 	}
 	for _, r := range rows {
-		_, err := pg.Pool.Exec(ctx, `
+		err := pg.DB.WithContext(ctx).Exec(`
 			INSERT INTO supported_languages (code, name, native_name, is_active, completion_percentage, created_at)
-			VALUES ($1, $2, $3, $4, $5, NOW())
-		`, r.Code, r.Name, r.Native, r.Active, r.Completion)
+			VALUES (?, ?, ?, ?, ?, NOW())
+		`, r.Code, r.Name, r.Native, r.Active, r.Completion).Error
 		if err != nil {
 			t.Fatalf("seed language %s: %v", r.Code, err)
 		}
@@ -293,9 +293,9 @@ func TestAuthRegisterDuplicateAndDisabledFlag(t *testing.T) {
 	}
 
 	// Disable registration via system setting.
-	if _, err := f.pg.Pool.Exec(context.Background(),
+	if err := f.pg.DB.WithContext(context.Background()).Exec(
 		`INSERT INTO system_settings (key, value) VALUES ('registration_enabled', 'false'::jsonb)
-		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`); err != nil {
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`).Error; err != nil {
 		t.Fatalf("set registration_enabled: %v", err)
 	}
 	resp, _ = f.do(t, client, http.MethodPost, "/api/auth/register", "", map[string]string{"username": "bob", "password": "x"})

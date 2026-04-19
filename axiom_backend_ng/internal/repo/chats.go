@@ -3,17 +3,15 @@ package repo
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
+
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/models"
 )
 
-// Chat matches the subset of chats fields the API returns. Nested
-// messages and missions arrive via separate queries so this struct
-// stays narrow.
+// Chat matches the subset of chats fields the API returns.
 type Chat struct {
 	ID              uuid.UUID       `json:"id"`
 	UserID          int32           `json:"user_id"`
@@ -35,62 +33,62 @@ type Message struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-// Chats owns chat + message CRUD.
-type Chats struct{ pool *pgxpool.Pool }
-
-// NewChats wires the repo to the pool.
-func NewChats(pool *pgxpool.Pool) *Chats { return &Chats{pool: pool} }
-
-const chatColumns = `id, user_id, document_group_id, COALESCE(title, ''),
-	COALESCE(chat_type, 'research'), settings, created_at, updated_at`
-
-func scanChat(row pgx.Row) (Chat, error) {
-	var c Chat
-	var docGroup *uuid.UUID
-	var settings []byte
-	err := row.Scan(&c.ID, &c.UserID, &docGroup, &c.Title, &c.ChatType, &settings, &c.CreatedAt, &c.UpdatedAt)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Chat{}, ErrNotFound
-		}
-		return Chat{}, err
-	}
-	c.DocumentGroupID = docGroup
-	if len(settings) > 0 {
-		c.Settings = settings
-	}
-	return c, nil
+// MissionSummary is a trimmed Mission shape for list responses.
+type MissionSummary struct {
+	ID                   uuid.UUID `json:"id"`
+	ChatID               uuid.UUID `json:"chat_id"`
+	UserRequest          string    `json:"user_request"`
+	Status               string    `json:"status"`
+	CurrentReportVersion int32     `json:"current_report_version"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
-// Create inserts a chat with the given title and optional chat_type
-// (defaults to "research") and returns the populated row.
+// Chats owns chat + message CRUD.
+type Chats struct{ gdb *gorm.DB }
+
+// NewChats wires the repo to the DB.
+func NewChats(gdb *gorm.DB) *Chats { return &Chats{gdb: gdb} }
+
+// Create inserts a chat with the given title and optional chat_type.
 func (c *Chats) Create(ctx context.Context, userID int32, title, chatType string) (Chat, error) {
 	if chatType == "" {
 		chatType = "research"
 	}
-	row := c.pool.QueryRow(ctx, `
-		INSERT INTO chats (id, user_id, title, chat_type, created_at, updated_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
-		RETURNING `+chatColumns,
-		userID, title, chatType,
-	)
-	return scanChat(row)
+	now := time.Now().UTC()
+	m := models.Chat{
+		ID:        uuid.New(),
+		UserID:    userID,
+		Title:     title,
+		ChatType:  chatType,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := c.gdb.WithContext(ctx).Create(&m).Error; err != nil {
+		return Chat{}, err
+	}
+	return chatFromModel(m), nil
 }
 
 // Get returns a chat by id scoped to userID (404 on mismatch).
 func (c *Chats) Get(ctx context.Context, userID int32, id uuid.UUID) (Chat, error) {
-	row := c.pool.QueryRow(ctx, `SELECT `+chatColumns+` FROM chats WHERE id = $1 AND user_id = $2`, id, userID)
-	return scanChat(row)
+	var m models.Chat
+	err := c.gdb.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).First(&m).Error
+	if err != nil {
+		return Chat{}, mapErr(err)
+	}
+	return chatFromModel(m), nil
 }
 
-// Delete removes a chat owned by userID. Silently succeeds on
-// already-deleted rows to keep the client idempotent.
+// Delete removes a chat owned by userID.
 func (c *Chats) Delete(ctx context.Context, userID int32, id uuid.UUID) error {
-	cmd, err := c.pool.Exec(ctx, `DELETE FROM chats WHERE id = $1 AND user_id = $2`, id, userID)
-	if err != nil {
-		return err
+	res := c.gdb.WithContext(ctx).
+		Where("id = ? AND user_id = ?", id, userID).
+		Delete(&models.Chat{})
+	if res.Error != nil {
+		return res.Error
 	}
-	if cmd.RowsAffected() == 0 {
+	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -98,11 +96,13 @@ func (c *Chats) Delete(ctx context.Context, userID int32, id uuid.UUID) error {
 
 // UpdateTitle renames a chat.
 func (c *Chats) UpdateTitle(ctx context.Context, userID int32, id uuid.UUID, title string) error {
-	cmd, err := c.pool.Exec(ctx, `UPDATE chats SET title = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3`, title, id, userID)
-	if err != nil {
-		return err
+	res := c.gdb.WithContext(ctx).Model(&models.Chat{}).
+		Where("id = ? AND user_id = ?", id, userID).
+		Updates(map[string]any{"title": title, "updated_at": time.Now().UTC()})
+	if res.Error != nil {
+		return res.Error
 	}
-	if cmd.RowsAffected() == 0 {
+	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -124,8 +124,7 @@ type Paginated struct {
 	PageSize int    `json:"page_size"`
 }
 
-// List returns a page of chats for userID. page is 1-indexed; the
-// response shape matches schemas.PaginatedChatsResponse.
+// List returns a page of chats for userID. page is 1-indexed.
 func (c *Chats) List(ctx context.Context, userID int32, opt ListOptions) (Paginated, error) {
 	if opt.Page < 1 {
 		opt.Page = 1
@@ -134,95 +133,72 @@ func (c *Chats) List(ctx context.Context, userID int32, opt ListOptions) (Pagina
 		opt.PageSize = 50
 	}
 
-	where := "user_id = $1"
-	args := []any{userID}
+	q := c.gdb.WithContext(ctx).Model(&models.Chat{}).Where("user_id = ?", userID)
 	if opt.ChatType != "" {
-		args = append(args, opt.ChatType)
-		where += " AND chat_type = $" + itoa(len(args))
+		q = q.Where("chat_type = ?", opt.ChatType)
 	}
 	if opt.Search != "" {
-		args = append(args, "%"+opt.Search+"%")
-		where += " AND title ILIKE $" + itoa(len(args))
+		q = q.Where("title ILIKE ?", "%"+opt.Search+"%")
 	}
 
 	var total int64
-	if err := c.pool.QueryRow(ctx, `SELECT COUNT(*) FROM chats WHERE `+where, args...).Scan(&total); err != nil {
+	if err := q.Count(&total).Error; err != nil {
 		return Paginated{}, err
 	}
 
-	args = append(args, opt.PageSize, (opt.Page-1)*opt.PageSize)
-	q := `SELECT ` + chatColumns + ` FROM chats WHERE ` + where +
-		` ORDER BY updated_at DESC LIMIT $` + itoa(len(args)-1) + ` OFFSET $` + itoa(len(args))
-
-	rows, err := c.pool.Query(ctx, q, args...)
+	var rows []models.Chat
+	err := q.Order("updated_at DESC").
+		Limit(opt.PageSize).
+		Offset((opt.Page - 1) * opt.PageSize).
+		Find(&rows).Error
 	if err != nil {
 		return Paginated{}, err
 	}
-	defer rows.Close()
 
-	items := make([]Chat, 0, opt.PageSize)
-	for rows.Next() {
-		ch, scanErr := scanChat(rows)
-		if scanErr != nil {
-			return Paginated{}, scanErr
-		}
-		items = append(items, ch)
-	}
-	if err := rows.Err(); err != nil {
-		return Paginated{}, err
+	items := make([]Chat, 0, len(rows))
+	for _, r := range rows {
+		items = append(items, chatFromModel(r))
 	}
 	return Paginated{Items: items, Total: total, Page: opt.Page, PageSize: opt.PageSize}, nil
 }
 
 // ListMessages returns all messages for a chat, oldest first.
 func (c *Chats) ListMessages(ctx context.Context, userID int32, chatID uuid.UUID) ([]Message, error) {
-	// ownership check
 	if _, err := c.Get(ctx, userID, chatID); err != nil {
 		return nil, err
 	}
-	rows, err := c.pool.Query(ctx, `
-		SELECT id, chat_id, content, role, sources, created_at
-		FROM messages WHERE chat_id = $1 ORDER BY created_at ASC`, chatID)
+	var rows []models.Message
+	err := c.gdb.WithContext(ctx).
+		Where("chat_id = ?", chatID).
+		Order("created_at ASC").
+		Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []Message
-	for rows.Next() {
-		var m Message
-		var sources []byte
-		if err := rows.Scan(&m.ID, &m.ChatID, &m.Content, &m.Role, &sources, &m.CreatedAt); err != nil {
-			return nil, err
-		}
-		if len(sources) > 0 {
-			m.Sources = sources
-		}
-		out = append(out, m)
+	out := make([]Message, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, messageFromModel(r))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// AppendMessage inserts a new message. Ownership of chatID is checked.
+// AppendMessage inserts a new message after verifying chat ownership.
 func (c *Chats) AppendMessage(ctx context.Context, userID int32, chatID uuid.UUID, role, content string, sources json.RawMessage) (Message, error) {
 	if _, err := c.Get(ctx, userID, chatID); err != nil {
 		return Message{}, err
 	}
-	row := c.pool.QueryRow(ctx, `
-		INSERT INTO messages (id, chat_id, content, role, sources, created_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW())
-		RETURNING id, chat_id, content, role, sources, created_at`,
-		chatID, content, role, sources,
-	)
-	var m Message
-	var s []byte
-	if err := row.Scan(&m.ID, &m.ChatID, &m.Content, &m.Role, &s, &m.CreatedAt); err != nil {
+	m := models.Message{
+		ID:        uuid.New(),
+		ChatID:    chatID,
+		Content:   content,
+		Role:      role,
+		Sources:   []byte(sources),
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := c.gdb.WithContext(ctx).Create(&m).Error; err != nil {
 		return Message{}, err
 	}
-	if len(s) > 0 {
-		m.Sources = s
-	}
-	return m, nil
+	return messageFromModel(m), nil
 }
 
 // DeleteMessage removes a single message owned by userID.
@@ -230,11 +206,13 @@ func (c *Chats) DeleteMessage(ctx context.Context, userID int32, chatID, msgID u
 	if _, err := c.Get(ctx, userID, chatID); err != nil {
 		return err
 	}
-	cmd, err := c.pool.Exec(ctx, `DELETE FROM messages WHERE id = $1 AND chat_id = $2`, msgID, chatID)
-	if err != nil {
-		return err
+	res := c.gdb.WithContext(ctx).
+		Where("id = ? AND chat_id = ?", msgID, chatID).
+		Delete(&models.Message{})
+	if res.Error != nil {
+		return res.Error
 	}
-	if cmd.RowsAffected() == 0 {
+	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -245,61 +223,71 @@ func (c *Chats) ClearMessages(ctx context.Context, userID int32, chatID uuid.UUI
 	if _, err := c.Get(ctx, userID, chatID); err != nil {
 		return err
 	}
-	_, err := c.pool.Exec(ctx, `DELETE FROM messages WHERE chat_id = $1`, chatID)
-	return err
+	return c.gdb.WithContext(ctx).
+		Where("chat_id = ?", chatID).
+		Delete(&models.Message{}).Error
 }
 
-// ListMissions returns mission summaries for the chat. Only the
-// mission fields the frontend actually renders are selected to keep
-// this query cheap.
+// ListMissions returns mission summaries for the chat.
 func (c *Chats) ListMissions(ctx context.Context, userID int32, chatID uuid.UUID) ([]MissionSummary, error) {
 	if _, err := c.Get(ctx, userID, chatID); err != nil {
 		return nil, err
 	}
-	rows, err := c.pool.Query(ctx, `
-		SELECT id, chat_id, COALESCE(user_request, ''), COALESCE(status, 'pending'),
-		       current_report_version, created_at, updated_at
-		FROM missions WHERE chat_id = $1 ORDER BY created_at DESC`, chatID)
+	var rows []models.Mission
+	err := c.gdb.WithContext(ctx).
+		Where("chat_id = ?", chatID).
+		Order("created_at DESC").
+		Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []MissionSummary
-	for rows.Next() {
-		var m MissionSummary
-		if err := rows.Scan(&m.ID, &m.ChatID, &m.UserRequest, &m.Status, &m.CurrentReportVersion, &m.CreatedAt, &m.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, m)
+	out := make([]MissionSummary, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, missionFromModel(r))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// MissionSummary is a trimmed Mission shape for list responses.
-type MissionSummary struct {
-	ID                   uuid.UUID `json:"id"`
-	ChatID               uuid.UUID `json:"chat_id"`
-	UserRequest          string    `json:"user_request"`
-	Status               string    `json:"status"`
-	CurrentReportVersion int32     `json:"current_report_version"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+func chatFromModel(m models.Chat) Chat {
+	c := Chat{
+		ID:        m.ID,
+		UserID:    m.UserID,
+		Title:     m.Title,
+		ChatType:  m.ChatType,
+		CreatedAt: m.CreatedAt,
+		UpdatedAt: m.UpdatedAt,
+	}
+	if m.DocumentGroupID != nil {
+		c.DocumentGroupID = m.DocumentGroupID
+	}
+	if len(m.Settings) > 0 {
+		c.Settings = json.RawMessage(m.Settings)
+	}
+	return c
 }
 
-// itoa is a zero-alloc int→string for small integers used in query
-// placeholder numbering. strconv.Itoa works too; this keeps the hot
-// List path free of an import.
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
+func messageFromModel(m models.Message) Message {
+	msg := Message{
+		ID:        m.ID,
+		ChatID:    m.ChatID,
+		Content:   m.Content,
+		Role:      m.Role,
+		CreatedAt: m.CreatedAt,
 	}
-	var b [20]byte
-	pos := len(b)
-	for i > 0 {
-		pos--
-		b[pos] = byte('0' + i%10)
-		i /= 10
+	if len(m.Sources) > 0 {
+		msg.Sources = json.RawMessage(m.Sources)
 	}
-	return string(b[pos:])
+	return msg
+}
+
+func missionFromModel(m models.Mission) MissionSummary {
+	return MissionSummary{
+		ID:                   m.ID,
+		ChatID:               m.ChatID,
+		UserRequest:          m.UserRequest,
+		Status:               m.Status,
+		CurrentReportVersion: m.CurrentReportVersion,
+		CreatedAt:            m.CreatedAt,
+		UpdatedAt:            m.UpdatedAt,
+	}
 }
