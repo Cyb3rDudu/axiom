@@ -306,6 +306,90 @@ func (d *Documents) InGroup(ctx context.Context, docID, groupID uuid.UUID) (bool
 	return n > 0, nil
 }
 
+// ClaimPending atomically claims the oldest pending/queued document and
+// transitions it to processing_status='processing' (progress=0). Returns
+// ErrNoPendingJobs when nothing is queued, so the worker loop can sleep.
+//
+// Implementation: UPDATE ... WHERE id = (SELECT ... FOR UPDATE SKIP LOCKED
+// LIMIT 1) RETURNING ... — the Postgres-native pattern for a safe job
+// queue. Two concurrent workers will never observe the same row.
+func (d *Documents) ClaimPending(ctx context.Context) (Document, error) {
+	var rows []models.Document
+	err := d.gdb.WithContext(ctx).Raw(`
+		UPDATE documents
+		   SET processing_status = 'processing',
+		       upload_progress   = 0,
+		       updated_at        = NOW()
+		 WHERE id = (
+		       SELECT id FROM documents
+		        WHERE processing_status IN ('pending', 'queued')
+		        ORDER BY created_at ASC
+		        FOR UPDATE SKIP LOCKED
+		        LIMIT 1
+		 )
+		 RETURNING *`).Scan(&rows).Error
+	if err != nil {
+		return Document{}, err
+	}
+	if len(rows) == 0 {
+		return Document{}, ErrNoPendingJobs
+	}
+	return documentFromModel(rows[0]), nil
+}
+
+// Processing status constants — kept here so callers import one symbol.
+const (
+	StatusPending    = "pending"
+	StatusQueued     = "queued"
+	StatusProcessing = "processing"
+	StatusCompleted  = "completed"
+	StatusFailed     = "failed"
+)
+
+// MarkStatusInput is the set of fields MarkStatus can update in a single
+// round-trip. Pointer fields left nil are skipped — the column keeps its
+// current value — so callers can patch just progress without clobbering
+// chunk_count, and vice versa.
+type MarkStatusInput struct {
+	Status     string
+	Progress   *int32
+	ErrorMsg   *string
+	ChunkCount *int32
+}
+
+// MarkStatus updates processing_status + any of the optional fields.
+// A non-nil ErrorMsg is stored under metadata_.processing_error so the
+// frontend can read it without a separate column.
+func (d *Documents) MarkStatus(ctx context.Context, docID uuid.UUID, userID int32, in MarkStatusInput) error {
+	updates := map[string]any{
+		"processing_status": in.Status,
+		"updated_at":        time.Now().UTC(),
+	}
+	if in.Progress != nil {
+		updates["upload_progress"] = *in.Progress
+	}
+	if in.ChunkCount != nil {
+		updates["chunk_count"] = *in.ChunkCount
+	}
+	if in.ErrorMsg != nil {
+		// Merge into metadata_ without overwriting unrelated fields.
+		updates["metadata_"] = gorm.Expr(
+			`COALESCE(metadata_, '{}'::jsonb) || jsonb_build_object('processing_error', ?::text)`,
+			*in.ErrorMsg,
+		)
+	}
+	res := d.gdb.WithContext(ctx).Model(&models.Document{}).
+		Where("id = ? AND user_id = ?", docID, userID).
+		Updates(updates)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Delete removes a document and cascades to chunks, images, processing
 // jobs via SQL FK constraints. Association rows are cleaned up explicitly
 // to be safe.

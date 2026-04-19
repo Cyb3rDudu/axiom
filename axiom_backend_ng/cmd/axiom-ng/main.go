@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/api"
@@ -21,6 +22,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/gpuworker"
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/ingest"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/opensearch"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/retriever"
@@ -61,7 +63,27 @@ func run() error {
 		defer closeDB(gormDB, logger)
 	}
 
-	return server.NewWithDeps(cfg, logger, deps).Run(ctx)
+	srv := server.NewWithDeps(cfg, logger, deps)
+
+	if !cfg.IngestEnabled || gormDB == nil {
+		return srv.Run(ctx)
+	}
+
+	// Run HTTP server and ingest pool under the same ctx so a single
+	// SIGTERM brings both down together.
+	pool := ingest.New(
+		repo.NewDocuments(gormDB),
+		ingest.NoopProcessor{Logger: logger},
+		ingest.Config{
+			Size:         cfg.IngestPoolSize,
+			PollInterval: cfg.IngestPollInterval,
+			Logger:       logger,
+		},
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error { return srv.Run(gctx) })
+	g.Go(func() error { return pool.Run(gctx) })
+	return g.Wait()
 }
 
 // buildDeps constructs the concrete dependency graph. It opens the

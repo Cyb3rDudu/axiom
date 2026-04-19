@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/confmap"
@@ -28,6 +29,16 @@ type Config struct {
 	// RawFilesDir is where axiom-ng persists uploaded documents.
 	// Matches the Python backend's RAW_FILES_PATH.
 	RawFilesDir string `koanf:"raw_files_dir"`
+	// IngestEnabled toggles the in-process ingest worker pool. Off by
+	// default during the migration so operators can keep running the
+	// Python doc-processor side-by-side and flip over per deployment.
+	IngestEnabled bool `koanf:"ingest_enabled"`
+	// IngestPoolSize sets the number of concurrent worker goroutines.
+	// 0 → default (single worker, parity with Python).
+	IngestPoolSize int `koanf:"ingest_pool_size"`
+	// IngestPollInterval controls how long workers wait between empty
+	// queue polls. 0 → default (5s, parity with Python).
+	IngestPollInterval time.Duration `koanf:"ingest_poll_interval"`
 }
 
 // Defaults returns the config populated with bootstrap defaults.
@@ -48,12 +59,15 @@ func Load(configPath string) (Config, error) {
 	k := koanf.New(".")
 	cfg := Defaults()
 	defaults := map[string]interface{}{
-		"port":              cfg.Port,
-		"log_level":         cfg.LogLevel,
-		"database_url":      cfg.DatabaseURL,
-		"gpu_worker_socket": cfg.GPUWorkerSocket,
-		"opensearch_url":    cfg.OpenSearchURL,
-		"raw_files_dir":     cfg.RawFilesDir,
+		"port":                 cfg.Port,
+		"log_level":            cfg.LogLevel,
+		"database_url":         cfg.DatabaseURL,
+		"gpu_worker_socket":    cfg.GPUWorkerSocket,
+		"opensearch_url":       cfg.OpenSearchURL,
+		"raw_files_dir":        cfg.RawFilesDir,
+		"ingest_enabled":       cfg.IngestEnabled,
+		"ingest_pool_size":     cfg.IngestPoolSize,
+		"ingest_poll_interval": cfg.IngestPollInterval,
 	}
 	// confmap.Provider.Read cannot fail on a plain map literal, so the only
 	// error path through koanf here is an internal impossibility; we ignore

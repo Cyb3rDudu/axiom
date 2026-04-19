@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestDefaults(t *testing.T) {
@@ -98,6 +99,25 @@ func TestLoadRejectsTypeMismatchInConfig(t *testing.T) {
 	path := writeYAML(t, "port: not-a-number\n")
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected unmarshal error for non-integer port")
+	}
+}
+
+func TestLoadIngestFlagsFromEnv(t *testing.T) {
+	t.Setenv("AXIOM_NG_INGEST_ENABLED", "true")
+	t.Setenv("AXIOM_NG_INGEST_POOL_SIZE", "3")
+	t.Setenv("AXIOM_NG_INGEST_POLL_INTERVAL", "250ms")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.IngestEnabled {
+		t.Errorf("IngestEnabled: want true")
+	}
+	if cfg.IngestPoolSize != 3 {
+		t.Errorf("IngestPoolSize: want 3, got %d", cfg.IngestPoolSize)
+	}
+	if cfg.IngestPollInterval != 250*time.Millisecond {
+		t.Errorf("IngestPollInterval: want 250ms, got %s", cfg.IngestPollInterval)
 	}
 }
 
