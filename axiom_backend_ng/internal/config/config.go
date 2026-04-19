@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
@@ -39,9 +40,17 @@ func Defaults() Config {
 func Load(configPath string) (Config, error) {
 	k := koanf.New(".")
 	cfg := Defaults()
-	if err := k.Load(structDefaultsProvider(cfg), nil); err != nil {
-		return Config{}, fmt.Errorf("load defaults: %w", err)
+	defaults := map[string]interface{}{
+		"port":              cfg.Port,
+		"log_level":         cfg.LogLevel,
+		"database_url":      cfg.DatabaseURL,
+		"gpu_worker_socket": cfg.GPUWorkerSocket,
+		"opensearch_url":    cfg.OpenSearchURL,
 	}
+	// confmap.Provider.Read cannot fail on a plain map literal, so the only
+	// error path through koanf here is an internal impossibility; we ignore
+	// it on purpose and have a unit test guarding the resulting defaults.
+	_ = k.Load(confmap.Provider(defaults, "."), nil)
 
 	if configPath != "" {
 		if err := k.Load(file.Provider(configPath), yaml.Parser()); err != nil {
@@ -52,9 +61,8 @@ func Load(configPath string) (Config, error) {
 	envProvider := env.Provider("AXIOM_NG_", ".", func(s string) string {
 		return strings.ToLower(strings.TrimPrefix(s, "AXIOM_NG_"))
 	})
-	if err := k.Load(envProvider, nil); err != nil {
-		return Config{}, fmt.Errorf("load env: %w", err)
-	}
+	// env.Provider.Read iterates os.Environ() in-memory and never fails.
+	_ = k.Load(envProvider, nil)
 
 	var out Config
 	if err := k.Unmarshal("", &out); err != nil {
