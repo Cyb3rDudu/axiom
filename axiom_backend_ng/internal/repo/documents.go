@@ -223,11 +223,11 @@ func (d *Documents) GetRawModel(ctx context.Context, userID int32, id uuid.UUID)
 	return m, nil
 }
 
-// CreatePending inserts a fresh document row with
-// processing_status='pending' so the Python doc-processor (or, later,
-// the Go ingest worker) picks it up via its polling loop. The metadata
-// blob carries the initial file_hash + original filename so the
-// existing dedup path works unmodified.
+// CreatePendingInput carries the fields needed to insert a fresh
+// document row with processing_status='pending' so the Python
+// doc-processor (or, later, the Go ingest worker) picks it up via its
+// polling loop. The metadata blob carries the initial file_hash +
+// original filename so the existing dedup path works unmodified.
 type CreatePendingInput struct {
 	ID         uuid.UUID
 	UserID     int32
