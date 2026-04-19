@@ -223,6 +223,89 @@ func (d *Documents) GetRawModel(ctx context.Context, userID int32, id uuid.UUID)
 	return m, nil
 }
 
+// CreatePending inserts a fresh document row with
+// processing_status='pending' so the Python doc-processor (or, later,
+// the Go ingest worker) picks it up via its polling loop. The metadata
+// blob carries the initial file_hash + original filename so the
+// existing dedup path works unmodified.
+type CreatePendingInput struct {
+	ID         uuid.UUID
+	UserID     int32
+	Filename   string
+	FileSize   int64
+	FilePath   string
+	FileHash   string
+	Title      string
+	UploadedAt time.Time
+}
+
+// CreatePending writes the row. Returns the populated application-view Document.
+func (d *Documents) CreatePending(ctx context.Context, in CreatePendingInput) (Document, error) {
+	if in.ID == uuid.Nil {
+		in.ID = uuid.New()
+	}
+	now := in.UploadedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	meta := map[string]any{
+		"title":            in.Title,
+		"file_hash":        in.FileHash,
+		"upload_timestamp": now.Format(time.RFC3339Nano),
+	}
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return Document{}, err
+	}
+	original := in.Filename
+	m := models.Document{
+		ID:                   in.ID,
+		UserID:               in.UserID,
+		Filename:             in.Filename,
+		OriginalFilename:     &original,
+		Metadata:             metaJSON,
+		ProcessingStatus:     "pending",
+		UploadProgress:       0,
+		FileSize:             &in.FileSize,
+		FilePath:             &in.FilePath,
+		RawFilePath:          &in.FilePath,
+		ChunkCount:           0,
+		DenseCollectionName:  "documents_dense",
+		SparseCollectionName: "documents_sparse",
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+	if err := d.gdb.WithContext(ctx).Create(&m).Error; err != nil {
+		return Document{}, err
+	}
+	return documentFromModel(m), nil
+}
+
+// FindByHash returns the document the user already owns with the
+// matching file_hash in metadata_, or ErrNotFound.
+func (d *Documents) FindByHash(ctx context.Context, userID int32, hash string) (Document, error) {
+	var m models.Document
+	err := d.gdb.WithContext(ctx).
+		Where(`user_id = ? AND metadata_->>'file_hash' = ?`, userID, hash).
+		First(&m).Error
+	if err != nil {
+		return Document{}, mapErr(err)
+	}
+	return documentFromModel(m), nil
+}
+
+// InGroup returns true when the document already belongs to the group.
+func (d *Documents) InGroup(ctx context.Context, docID, groupID uuid.UUID) (bool, error) {
+	var n int64
+	err := d.gdb.WithContext(ctx).Model(&models.DocumentGroupAssociation{}).
+		Where("document_id = ? AND document_group_id = ?", docID, groupID).
+		Count(&n).Error
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // Delete removes a document and cascades to chunks, images, processing
 // jobs via SQL FK constraints. Association rows are cleaned up explicitly
 // to be safe.

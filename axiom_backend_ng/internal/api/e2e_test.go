@@ -33,6 +33,7 @@ type fixture struct {
 	signer *auth.Signer
 	users  *repo.Users
 	langs  *repo.Languages
+	rawDir string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -53,6 +54,7 @@ func newFixture(t *testing.T) *fixture {
 	groups := repo.NewDocumentGroups(pg.DB)
 	chunks := repo.NewChunks(pg.DB)
 
+	rawDir := t.TempDir()
 	deps := server.Deps{
 		Auth: api.AuthDeps{
 			Users:          users,
@@ -67,6 +69,11 @@ func newFixture(t *testing.T) *fixture {
 		Documents:      api.DocumentDeps{Documents: documents},
 		DocumentGroups: api.DocumentGroupDeps{Groups: groups, Documents: documents},
 		RAG:            api.RAGDeps{Chunks: chunks},
+		Upload: api.UploadDeps{
+			Documents:   documents,
+			Groups:      groups,
+			RawFilesDir: rawDir,
+		},
 		UserCtx: server.UserContextConfig{
 			Signer:     signer,
 			UserLookup: userLookup{users: users},
@@ -79,7 +86,7 @@ func newFixture(t *testing.T) *fixture {
 	// Seed minimum-required rows so repo queries don't short-circuit.
 	seedSupportedLanguages(t, pg)
 
-	return &fixture{pg: pg, srv: srv, signer: signer, users: users, langs: langs}
+	return &fixture{pg: pg, srv: srv, signer: signer, users: users, langs: langs, rawDir: rawDir}
 }
 
 func (f *fixture) close() { f.pg.Close() }

@@ -136,6 +136,11 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 		DocumentGroups: api.DocumentGroupDeps{Groups: groups, Documents: documents},
 		RAG:            api.RAGDeps{Chunks: chunks},
 		Search:         newSearchDeps(gormDB, documents, gpuProbe, cfg, logger),
+		Upload: api.UploadDeps{
+			Documents:   documents,
+			Groups:      groups,
+			RawFilesDir: cfg.RawFilesDir,
+		},
 		UserCtx: server.UserContextConfig{
 			Signer:     signer,
 			UserLookup: userLookup{users: users},

@@ -25,6 +25,9 @@ type Config struct {
 	DatabaseURL     string `koanf:"database_url"`
 	GPUWorkerSocket string `koanf:"gpu_worker_socket"`
 	OpenSearchURL   string `koanf:"opensearch_url"`
+	// RawFilesDir is where axiom-ng persists uploaded documents.
+	// Matches the Python backend's RAW_FILES_PATH.
+	RawFilesDir string `koanf:"raw_files_dir"`
 }
 
 // Defaults returns the config populated with bootstrap defaults.
@@ -50,6 +53,7 @@ func Load(configPath string) (Config, error) {
 		"database_url":      cfg.DatabaseURL,
 		"gpu_worker_socket": cfg.GPUWorkerSocket,
 		"opensearch_url":    cfg.OpenSearchURL,
+		"raw_files_dir":     cfg.RawFilesDir,
 	}
 	// confmap.Provider.Read cannot fail on a plain map literal, so the only
 	// error path through koanf here is an internal impossibility; we ignore
