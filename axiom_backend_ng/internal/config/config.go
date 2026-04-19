@@ -15,11 +15,11 @@ import (
 // Config is the full axiom-ng runtime configuration. Fields will grow as the
 // migration proceeds; bootstrap only needs Port and LogLevel.
 type Config struct {
-	Port             int    `koanf:"port"`
-	LogLevel         string `koanf:"log_level"`
-	DatabaseURL      string `koanf:"database_url"`
-	GPUWorkerSocket  string `koanf:"gpu_worker_socket"`
-	OpenSearchURL    string `koanf:"opensearch_url"`
+	Port            int    `koanf:"port"`
+	LogLevel        string `koanf:"log_level"`
+	DatabaseURL     string `koanf:"database_url"`
+	GPUWorkerSocket string `koanf:"gpu_worker_socket"`
+	OpenSearchURL   string `koanf:"opensearch_url"`
 }
 
 // Defaults returns the config populated with bootstrap defaults.

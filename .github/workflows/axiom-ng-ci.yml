@@ -40,9 +40,9 @@ jobs:
         run: go test -trimpath -race -count=1 ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.61.0
+          version: v2.11.4
           working-directory: axiom_backend_ng
 
   build:
