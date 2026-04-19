@@ -1,0 +1,35 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - revive
+    - bodyclose
+    - unconvert
+
+linters-settings:
+  revive:
+    severity: warning
+    rules:
+      - name: var-naming
+      - name: exported
+      - name: error-return
+      - name: error-strings
+
+issues:
+  exclude-dirs:
+    - bin
+    - dist
+  max-issues-per-linter: 0
+  max-same-issues: 0
