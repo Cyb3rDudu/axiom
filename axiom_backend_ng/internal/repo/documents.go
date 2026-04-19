@@ -341,6 +341,30 @@ func (d *Documents) ClaimPending(ctx context.Context) (Document, error) {
 	return documentFromModel(rows[0]), nil
 }
 
+// ResetStaleProcessing flips rows stuck in processing_status='processing'
+// older than staleAfter back to 'pending' so the pool can reclaim them
+// on the next poll cycle. Returns the number of rows reset.
+//
+// The pool calls this once on startup to recover from a prior crash
+// that killed the process mid-Process — without it, those rows would
+// sit in 'processing' until an operator manually flipped them back.
+// Called outside any running workers so there's no race on the rows
+// we reset.
+func (d *Documents) ResetStaleProcessing(ctx context.Context, staleAfter time.Duration) (int64, error) {
+	res := d.gdb.WithContext(ctx).Exec(`
+		UPDATE documents
+		   SET processing_status = 'pending',
+		       upload_progress   = 0,
+		       updated_at        = NOW()
+		 WHERE processing_status = 'processing'
+		   AND updated_at < NOW() - make_interval(secs => ?)`,
+		staleAfter.Seconds())
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
+}
+
 // Processing status constants — kept here so callers import one symbol.
 const (
 	StatusPending    = "pending"

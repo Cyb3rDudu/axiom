@@ -55,6 +55,10 @@ type BuilderOptions struct {
 	MaxSubprocessOutput int
 	PersistReadTimeout  time.Duration // reserved for a future slice
 
+	// JobTimeout caps how long pdf_worker can run per job. Zero →
+	// DefaultJobTimeout (5 min).
+	JobTimeout time.Duration
+
 	Logger *slog.Logger
 }
 
@@ -89,6 +93,7 @@ func BuildProcessor(opt BuilderOptions) Processor {
 		MarkdownDir: opt.MarkdownDir,
 		ImagesDir:   opt.ImagesDir,
 		Logger:      log,
+		JobTimeout:  opt.JobTimeout,
 	})
 
 	var gpuClient *gpuworker.Client

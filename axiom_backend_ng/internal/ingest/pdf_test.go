@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -156,6 +157,24 @@ func TestPDFProcessorSubprocessFailure(t *testing.T) {
 	}
 	if sink.path != "" {
 		t.Errorf("sink should not have been called on failure, got %q", sink.path)
+	}
+}
+
+func TestPDFProcessorTimesOutSubprocess(t *testing.T) {
+	t.Parallel()
+	p, _, runner, dir := newPDFFixture(t)
+	pdf := filepath.Join(dir, "paper.pdf")
+	mustWrite(t, pdf, "%PDF-1.4")
+	// Make the fake runner report a deadline error — simulating what
+	// exec.CommandContext surfaces when its ctx is cancelled.
+	runner.runErr = context.DeadlineExceeded
+	p.JobTimeout = 10 * time.Millisecond
+
+	err := p.Process(context.Background(), ingest.Job{
+		DocID: uuid.New(), UserID: 1, Filename: "paper.pdf", FilePath: pdf,
+	})
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("want timeout error, got %v", err)
 	}
 }
 
@@ -315,6 +334,89 @@ func TestPDFProcessorImagesDirNotConfigured(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "ImagesDir") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestPDFProcessorMarkdownPassThroughSymlinkDstCannotLeakTarget(t *testing.T) {
+	t.Parallel()
+	p, _, _, dir := newPDFFixture(t)
+	md := filepath.Join(dir, "notes.md")
+	mustWrite(t, md, "# H\n\nBody.\n")
+
+	// Plant a symlink at the destination path the processor will pick
+	// (MarkdownDir/{doc_id}.md). Without O_NOFOLLOW, copyFile would
+	// follow the symlink and truncate the target's contents, leaking
+	// write access to wherever the symlink points. With O_NOFOLLOW +
+	// O_EXCL the initial open fails with EEXIST (symlink itself
+	// counts), the fallback unlinks the symlink (not its target),
+	// and the retry writes to a regular file at dst. The sensitive
+	// target file is never opened.
+	if err := os.MkdirAll(p.MarkdownDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	docID := uuid.New()
+	dst := filepath.Join(p.MarkdownDir, docID.String()+".md")
+	target := filepath.Join(dir, "sensitive-file")
+	mustWrite(t, target, "DO NOT TOUCH")
+	if err := os.Symlink(target, dst); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	if err := p.Process(context.Background(), ingest.Job{
+		DocID: docID, UserID: 1, Filename: "notes.md", FilePath: md,
+	}); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	// Target must be untouched.
+	body, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read target: %v", readErr)
+	}
+	if string(body) != "DO NOT TOUCH" {
+		t.Errorf("symlink target was modified: %q", body)
+	}
+	// Destination must now be a regular file, not a symlink.
+	info, err := os.Lstat(dst)
+	if err != nil {
+		t.Fatalf("lstat dst: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("dst still a symlink after write: %v", info.Mode())
+	}
+	dstBody, _ := os.ReadFile(dst)
+	if string(dstBody) != "# H\n\nBody.\n" {
+		t.Errorf("dst body: %q", dstBody)
+	}
+}
+
+func TestPDFProcessorMarkdownPassThroughReplacesStaleDst(t *testing.T) {
+	t.Parallel()
+	p, sink, _, dir := newPDFFixture(t)
+	md := filepath.Join(dir, "notes.md")
+	mustWrite(t, md, "fresh body\n")
+
+	// Pre-create a regular file at the destination to simulate a
+	// re-ingest. copyFile should unlink + recreate; final contents
+	// must be the fresh body.
+	if err := os.MkdirAll(p.MarkdownDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	docID := uuid.New()
+	dst := filepath.Join(p.MarkdownDir, docID.String()+".md")
+	mustWrite(t, dst, "stale body\n")
+
+	if err := p.Process(context.Background(), ingest.Job{
+		DocID: docID, UserID: 1, Filename: "notes.md", FilePath: md,
+	}); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	body, _ := os.ReadFile(dst)
+	if string(body) != "fresh body\n" {
+		t.Errorf("dst not replaced: %q", body)
+	}
+	if sink.path != dst {
+		t.Errorf("sink path mismatch: %q", sink.path)
 	}
 }
 
