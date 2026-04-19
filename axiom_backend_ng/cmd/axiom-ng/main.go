@@ -21,7 +21,9 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/gpuworker"
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/opensearch"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/retriever"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/server"
 	"github.com/Cyb3rDudu/axiom/axiom-ng/internal/version"
 )
@@ -129,6 +131,7 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (ser
 		},
 		DocumentGroups: api.DocumentGroupDeps{Groups: groups, Documents: documents},
 		RAG:            api.RAGDeps{Chunks: chunks},
+		Search:         newSearchDeps(gormDB, documents, cfg, logger),
 		UserCtx: server.UserContextConfig{
 			Signer:     signer,
 			UserLookup: userLookup{users: users},
@@ -199,6 +202,40 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// newSearchDeps wires the OpenSearch client + hybrid retriever for
+// /api/documents/search/fulltext and /api/search/. Missing OpenSearch
+// config is fine — handlers degrade gracefully (503 / empty results).
+func newSearchDeps(gdb *gorm.DB, docs *repo.Documents, cfg config.Config, logger *slog.Logger) api.SearchDeps {
+	var osClient *opensearch.Client
+	osCfg := opensearch.FromEnv(nil)
+	if cfg.OpenSearchURL != "" {
+		// Explicit AXIOM_NG_OPENSEARCH_URL overrides host/port.
+		// Simplest parse: trim scheme, split on last colon.
+		osCfg.Enabled = true
+	}
+	if osCfg.Enabled {
+		c, err := opensearch.NewClient(osCfg)
+		if err != nil {
+			logger.Warn("opensearch disabled", slog.String("error", err.Error()))
+		} else {
+			osClient = c
+		}
+	}
+
+	gpuProbe := newGPUProbe(cfg)
+	ret := &retriever.Retriever{
+		DB:         gdb,
+		OpenSearch: osClient,
+		GPU:        gpuProbe,
+	}
+
+	return api.SearchDeps{
+		OpenSearch: osClient,
+		Retriever:  ret,
+		UserDocs:   api.UserDocsRepoAdapter{DB: api.NewDocumentIDLister(docs)},
+	}
 }
 
 // dbHealth adapts *gorm.DB to the system-handler Ping signature without

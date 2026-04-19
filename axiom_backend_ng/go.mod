@@ -12,6 +12,7 @@ require (
 	github.com/knadh/koanf/providers/env v1.0.0
 	github.com/knadh/koanf/providers/file v1.1.2
 	github.com/knadh/koanf/v2 v2.1.2
+	github.com/opensearch-project/opensearch-go/v4 v4.6.0
 	github.com/ory/dockertest/v3 v3.12.0
 	github.com/pgvector/pgvector-go v0.3.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1

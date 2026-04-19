@@ -39,6 +39,7 @@ type Deps struct {
 	Documents      api.DocumentDeps
 	DocumentGroups api.DocumentGroupDeps
 	RAG            api.RAGDeps
+	Search         api.SearchDeps
 	// UserCtx, if set, wires the JWT-cookie middleware so authenticated
 	// routes can resolve the current user.
 	UserCtx UserContextConfig
@@ -105,6 +106,9 @@ func NewWithDeps(cfg config.Config, logger *slog.Logger, deps Deps) *Server {
 			r.Get("/rag/chunks/{chunk_id}", deps.RAG.GetChunk)
 			r.Get("/rag/entities", deps.RAG.ListEntities)
 			r.Get("/rag/graph", deps.RAG.Graph)
+
+			r.Get("/documents/search/fulltext", deps.Search.Fulltext)
+			r.Get("/search/", deps.Search.Search)
 
 			// CSRF-protected subtree: mutations that rely on the
 			// cookie-scoped session.
