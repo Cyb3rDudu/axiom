@@ -70,10 +70,27 @@ func run() error {
 	}
 
 	// Run HTTP server and ingest pool under the same ctx so a single
-	// SIGTERM brings both down together.
+	// SIGTERM brings both down together. Use the real PDFProcessor when
+	// MarkdownDir + ImagesDir are configured; otherwise fall back to
+	// NoopProcessor so the pool can still prove liveness in minimal
+	// deployments.
+	documents := repo.NewDocuments(gormDB)
+	var proc ingest.Processor = ingest.NoopProcessor{Logger: logger}
+	if cfg.MarkdownDir != "" && cfg.ImagesDir != "" {
+		proc = ingest.PDFProcessor{
+			Sink:        documents,
+			Runner:      ingest.ExecRunner{},
+			PythonBin:   cfg.PythonBin,
+			MarkdownDir: cfg.MarkdownDir,
+			ImagesDir:   cfg.ImagesDir,
+			Logger:      logger,
+		}
+	} else {
+		logger.Warn("ingest pool running with NoopProcessor — set AXIOM_NG_MARKDOWN_DIR and AXIOM_NG_IMAGES_DIR to enable PDF conversion")
+	}
 	pool := ingest.New(
-		repo.NewDocuments(gormDB),
-		ingest.NoopProcessor{Logger: logger},
+		documents,
+		proc,
 		ingest.Config{
 			Size:         cfg.IngestPoolSize,
 			PollInterval: cfg.IngestPollInterval,

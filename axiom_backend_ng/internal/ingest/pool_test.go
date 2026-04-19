@@ -287,6 +287,50 @@ func TestPoolConfigDefaults(t *testing.T) {
 	}
 }
 
+// TestPoolFailedStatusWriteUsesFreshContext guards the processOne
+// fallback: if the parent ctx is already cancelled when a job fails,
+// the pool MUST write 'failed' under a fresh short-deadline context —
+// otherwise rows get stuck in 'processing' forever.
+func TestPoolFailedStatusWriteUsesFreshContext(t *testing.T) {
+	t.Parallel()
+	pg := testutil.StartPostgres(t)
+	uid := seedUser(t, pg, "ingest-freshctx")
+	ids := seedPending(t, pg, uid, 1)
+
+	docs := repo.NewDocuments(pg.DB)
+	// Processor that cancels the parent ctx mid-job and then returns an
+	// error, forcing processOne to write under its fallback context.
+	var cancelOnce sync.Once
+	proc := ingest.ProcessorFunc(func(ctx context.Context, _ ingest.Job) error {
+		cancelOnce.Do(func() {
+			if cancel, ok := ctx.Value(cancelKey{}).(context.CancelFunc); ok {
+				cancel()
+			}
+		})
+		return errors.New("simulated failure")
+	})
+	pool := ingest.New(docs, proc, ingest.Config{
+		Size:         1,
+		PollInterval: 10 * time.Millisecond,
+		Logger:       silentLogger(),
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = context.WithValue(ctx, cancelKey{}, cancel)
+
+	done := make(chan error, 1)
+	go func() { done <- pool.Run(ctx) }()
+
+	// Wait for status to flip to failed, then confirm run exits.
+	waitFor(t, 3*time.Second, func() bool {
+		return statusOf(t, pg, ids[0]) == repo.StatusFailed
+	})
+	cancel()
+	<-done
+}
+
+type cancelKey struct{}
+
 func TestNoopProcessorIsHarmless(t *testing.T) {
 	t.Parallel()
 	// Exercises the NoopProcessor log branch with a real logger so the
