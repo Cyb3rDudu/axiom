@@ -128,8 +128,21 @@ jobs:
         id: tags
         shell: bash
         env:
-          REGISTRY: ${{ secrets.VULTR_CR_REGISTRY }}
+          RAW_REGISTRY: ${{ secrets.VULTR_CR_REGISTRY }}
         run: |
+          # Sanitise the secret: strip optional scheme, trailing slashes,
+          # and any leading/trailing whitespace/newlines that commonly
+          # slip in when the value is pasted into the GitHub UI. Docker
+          # refs must not contain '://' and reject uppercase letters.
+          REGISTRY="${RAW_REGISTRY#https://}"
+          REGISTRY="${REGISTRY#http://}"
+          REGISTRY="${REGISTRY%/}"
+          REGISTRY="$(printf '%s' "$REGISTRY" | tr -d '[:space:]' | tr 'A-Z' 'a-z')"
+          # docker/login-action expects ONLY the registry host (e.g.
+          # sgp.vultrcr.com), not a host+path like sgp.vultrcr.com/catdev.
+          # Extract the host for the login, keep the full prefix for
+          # image tags so the namespace is preserved.
+          REGISTRY_HOST="${REGISTRY%%/*}"
           IMAGE_BASE="${REGISTRY:-axiom-ng}/axiom-ng"
           if [[ -z "$REGISTRY" ]]; then
             IMAGE_BASE="axiom-ng"
@@ -145,16 +158,18 @@ jobs:
           fi
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
           echo "image_base=${IMAGE_BASE}" >> "$GITHUB_OUTPUT"
+          echo "registry_host=${REGISTRY_HOST}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to container registry
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
         uses: docker/login-action@v3
         with:
           # VULTR_CR_REGISTRY is stored as a repo secret (same namespace
-          # as the credentials), not a repo variable. Using `vars.` here
-          # left `registry:` empty and made docker/login default to
-          # Docker Hub, which rejected the Vultr credentials.
-          registry: ${{ secrets.VULTR_CR_REGISTRY }}
+          # as the credentials), not a repo variable. Passing the raw
+          # secret through the previous step that strips scheme +
+          # whitespace avoids 'invalid reference format' when the value
+          # was pasted with an https:// prefix or trailing newline.
+          registry: ${{ steps.tags.outputs.registry_host }}
           username: ${{ secrets.VULTR_CR_USERNAME }}
           password: ${{ secrets.VULTR_CR_PASSWORD }}
 
