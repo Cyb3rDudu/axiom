@@ -101,6 +101,51 @@ def test_extracts_four_leitfragen_from_kmu():
     assert fragen[3].startswith("Welche empirisch belegbaren Chancen und Risiken")
 
 
+def test_prefers_leitfragen_over_gliederung_when_both_present():
+    """Regression: a briefing with both ## Pflicht-Leitfragen and ## Gliederung
+    should return the Leitfragen, not the (often longer) Gliederung."""
+    msg = """## Kontext
+Eine Hausarbeit zum Thema X.
+
+## Pflicht-Leitfragen
+1. Welches sind die theoretischen Grundlagen des Themas X konkret?
+2. Wie hat sich Phänomen X historisch entwickelt seit 2000?
+3. Was sind die aktuellen Treiber und Hindernisse von X in DACH?
+
+## Ziel-Gliederung
+1. Einleitung (content_based, 250 Wörter)
+2. Theoretische Grundlagen (research_based, 600 Wörter)
+3. Entwicklung und Status quo (research_based, 700 Wörter)
+4. Analyse der Fallstudie (research_based, 900 Wörter)
+5. Kritische Diskussion und Ausblick (research_based, 400 Wörter)
+
+## Quellenstrategie
+APA 7, 10 bis 20 Quellen
+""" + ("filler " * 40)
+
+    fragen = extract_leitfragen(msg)
+    # Must be the 3 Leitfragen, NOT the 5 Gliederungs-items.
+    assert len(fragen) == 3
+    assert "theoretischen Grundlagen" in fragen[0]
+    assert "historisch entwickelt" in fragen[1]
+    # The Einleitung line from the outline must NOT appear.
+    assert not any("Einleitung (content_based" in f for f in fragen)
+
+
+def test_falls_back_to_longest_when_no_leitfragen_header():
+    msg = """## Aufgabe
+Ein konkretes Forschungsprojekt zu Thema Y.
+
+1. Was sind die zentralen Begriffe und ihre Operationalisierung?
+2. Welche empirischen Studien existieren bereits zum Thema Y?
+3. Welche methodischen Herausforderungen sind zu adressieren?
+""" + ("filler " * 40)
+
+    fragen = extract_leitfragen(msg)
+    assert len(fragen) == 3
+    assert "zentralen Begriffe" in fragen[0]
+
+
 def test_extracts_empty_on_casual():
     assert extract_leitfragen(CASUAL_SHORT) == []
     assert extract_leitfragen(CASUAL_LONGISH) == []

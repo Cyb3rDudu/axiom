@@ -108,42 +108,125 @@ def detect_structured_briefing(message: str) -> bool:
     return signals >= 3
 
 
+_LEITFRAGEN_HEADER_RE = re.compile(
+    r"(?im)^\s{0,3}#{1,6}\s+.*(?:"
+    r"leitfragen|forschungsfragen|research\s+questions?|pflicht-?fragen|fragen|questions"
+    r")"
+)
+
+_OUTLINE_HEADER_RE = re.compile(
+    r"(?im)^\s{0,3}#{1,6}\s+.*(?:"
+    r"gliederung|struktur|outline|aufbau|soll[-\s]?gliederung|table\s+of\s+contents"
+    r")"
+)
+
+
+def _collect_numbered_blocks(message: str) -> List[tuple[int, List[str]]]:
+    """Return every contiguous block of numbered lines as (starting_line_index, items)."""
+    lines = message.splitlines()
+    num_re = re.compile(r"^\s{0,3}(\d+)\.\s+(.*)$")
+    blocks: List[tuple[int, List[str]]] = []
+    current: List[str] = []
+    current_start = -1
+    for i, line in enumerate(lines):
+        m = num_re.match(line)
+        if m:
+            if not current:
+                current_start = i
+            current.append(m.group(2).strip())
+        else:
+            if current and line.strip() and line.startswith((" ", "\t")):
+                current[-1] = (current[-1] + " " + line.strip()).strip()
+                continue
+            if current:
+                blocks.append((current_start, current))
+            current = []
+            current_start = -1
+    if current:
+        blocks.append((current_start, current))
+    return blocks
+
+
+def _line_offsets(message: str) -> List[int]:
+    """Return character offset of the start of each line."""
+    offsets = [0]
+    for i, ch in enumerate(message):
+        if ch == "\n":
+            offsets.append(i + 1)
+    return offsets
+
+
+def _header_line_numbers(message: str, pattern: re.Pattern) -> List[int]:
+    """Return line numbers of headers matching `pattern`."""
+    offsets = _line_offsets(message)
+    line_nums: List[int] = []
+    for m in pattern.finditer(message):
+        start = m.start()
+        # Binary-search-ish: find the line containing this offset.
+        for i, off in enumerate(offsets):
+            if off > start:
+                line_nums.append(i - 1)
+                break
+        else:
+            line_nums.append(len(offsets) - 1)
+    return line_nums
+
+
 def extract_leitfragen(message: str) -> List[str]:
     """Extract the user's numbered Leitfragen from the message.
 
-    Heuristic: find the longest contiguous block of numbered lines and return
-    each as a string. Returns an empty list if no numbered block is found.
+    Selection order:
+      1. First numbered block appearing below a heading whose text contains
+         "Leitfragen" / "Forschungsfragen" / "Fragen" / "Questions".
+      2. If none, the longest numbered block that is NOT below a "Gliederung"
+         / "Outline" / "Struktur" heading.
+      3. Fallback: longest numbered block overall.
+    Returns at least 3 items (each ≥ 30 chars), otherwise an empty list.
     """
     if not message:
         return []
 
-    lines = message.splitlines()
-    current: List[str] = []
-    best: List[str] = []
-
-    num_re = re.compile(r"^\s{0,3}(\d+)\.\s+(.*)$")
-
-    for line in lines:
-        m = num_re.match(line)
-        if m:
-            current.append(m.group(2).strip())
-        else:
-            # Allow continuation lines (indented) to extend the last item.
-            if current and line.strip() and line.startswith((" ", "\t")):
-                current[-1] = (current[-1] + " " + line.strip()).strip()
-                continue
-            if len(current) > len(best):
-                best = current
-            current = []
-
-    if len(current) > len(best):
-        best = current
-
-    # Only return if we found at least 3 items — otherwise it's not a
-    # Leitfragen-list, probably just ordered steps or enumeration noise.
-    if len(best) < 3:
+    blocks = _collect_numbered_blocks(message)
+    if not blocks:
         return []
 
-    # Filter out obviously non-question items (lines shorter than 30 chars).
+    fragen_headers = _header_line_numbers(message, _LEITFRAGEN_HEADER_RE)
+    outline_headers = _header_line_numbers(message, _OUTLINE_HEADER_RE)
+
+    def _nearest_header(start_line: int, headers: List[int]) -> int:
+        """Return the line number of the nearest preceding header, or -1."""
+        best = -1
+        for h in headers:
+            if h <= start_line and h > best:
+                best = h
+        return best
+
+    def _is_under_header(start_line: int, headers_for: List[int], other_headers: List[int]) -> bool:
+        """Return True when the nearest preceding header (any kind) belongs to headers_for."""
+        nearest_for = _nearest_header(start_line, headers_for)
+        nearest_other = _nearest_header(start_line, other_headers)
+        return nearest_for != -1 and nearest_for >= nearest_other
+
+    # (1) Prefer blocks directly under a Leitfragen/Forschungsfragen header.
+    for start_line, items in blocks:
+        if _is_under_header(start_line, fragen_headers, outline_headers):
+            cleaned = [q for q in items if len(q) >= 30]
+            if len(cleaned) >= 3:
+                return cleaned
+
+    # (2) Longest block that is NOT under an Outline/Gliederung header.
+    non_outline = [
+        (start, items)
+        for start, items in blocks
+        if not _is_under_header(start, outline_headers, fragen_headers)
+    ]
+    pool = non_outline or blocks
+    best: List[str] = []
+    for _, items in pool:
+        if len(items) > len(best):
+            best = items
+
+    if len(best) < 3:
+        return []
     cleaned = [q for q in best if len(q) >= 30]
     return cleaned if len(cleaned) >= 3 else []
