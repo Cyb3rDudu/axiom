@@ -1,5 +1,7 @@
 # Stage 1: Dependencies (cached unless requirements.txt or system deps change)
-FROM nvidia/cuda:12.9.1-base-ubuntu24.04 AS deps
+# CUDA 13 base — matches host driver 595.58.03 on LXC 120 (driver 595 is
+# CUDA 13.x compatible, below is NOT covered by CUDA 12.9 forward-compat).
+FROM nvidia/cuda:13.0.1-base-ubuntu24.04 AS deps
 
 WORKDIR /app
 
