@@ -374,6 +374,50 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
         Returns a dictionary containing the agent's response and potential actions.
         """
         logger.info(f"Handling user message via MessengerAgent: '{user_message[:50]}...'")
+
+        # Look up the chat's mode so the MessengerAgent can gate its intent set.
+        # chat_type='chat' disables start_research / refine_questions entirely
+        # (see docs/plans/CHAT_MODES_AND_STRUCTURED_BRIEFING.md).
+        chat_mode = "research"
+        if chat_id:
+            try:
+                from database.database import get_db
+                from database import models as _models
+                _db = next(get_db())
+                try:
+                    _chat_row = (
+                        _db.query(_models.Chat.chat_type)
+                        .filter(_models.Chat.id == chat_id)
+                        .first()
+                    )
+                    if _chat_row and _chat_row.chat_type in ("chat", "research"):
+                        chat_mode = _chat_row.chat_type
+                finally:
+                    _db.close()
+            except Exception as _e:
+                logger.debug(f"chat_mode lookup failed for chat_id={chat_id}: {_e}")
+
+        # Pre-detect structured briefing on the raw user message so we can
+        # preserve the full body + Leitfragen when a mission is later created.
+        from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
+            detect_structured_briefing,
+            extract_leitfragen,
+        )
+        is_structured_briefing = (
+            chat_mode == "research"
+            and detect_structured_briefing(user_message)
+        )
+        briefing_leitfragen: List[str] = (
+            extract_leitfragen(user_message) if is_structured_briefing else []
+        )
+        if is_structured_briefing:
+            logger.info(
+                "Detected structured briefing in user message (chat_id=%s): "
+                "%d Leitfragen extracted",
+                chat_id,
+                len(briefing_leitfragen),
+            )
+
         # Fetch relevant context if needed (e.g., current mission status, plan summary)
         mission_context_summary = None
         if mission_id:
@@ -449,7 +493,8 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                 agent_scratchpad=current_scratchpad,
                 mission_id=mission_id,
                 log_queue=log_queue,
-                update_callback=update_callback
+                update_callback=update_callback,
+                chat_mode=chat_mode,
             )
 
             # Update scratchpad if the agent provided an update and mission_id exists
@@ -639,23 +684,50 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                         source_agent=self.controller.messenger_agent.agent_name
                     )
                     logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
-                
+
+                # Structured-briefing passthrough: when the user's message was a
+                # full research briefing (headings + numbered Leitfragen + KMU
+                # keywords etc.), skip question-generation and use the user's
+                # Leitfragen directly. See docs/plans/CHAT_MODES_AND_STRUCTURED_BRIEFING.md
+                questions = None
+                model_details = None
+                if is_structured_briefing and briefing_leitfragen:
+                    await self.controller.context_manager.update_mission_metadata(
+                        mission_id,
+                        {
+                            "briefing_style": "structured",
+                            "full_briefing": user_message,
+                        },
+                    )
+                    await self.controller.context_manager.add_goal(
+                        mission_id=mission_id,
+                        text="briefing_style=structured — use the user's Leitfragen and outline verbatim; do not invent alternative questions",
+                        source_agent="BriefingDetector",
+                    )
+                    logger.info(
+                        "Structured briefing detected for mission %s; using %d user-provided Leitfragen instead of generating new ones",
+                        mission_id,
+                        len(briefing_leitfragen),
+                    )
+                    questions = briefing_leitfragen
+
                 # Generate initial questions using the ResearchAgent for higher quality
                 try:
-                    logger.info(f"Generating initial questions for mission {mission_id} using ResearchAgent")
-                    
-                    # Get active goals for the mission to provide context
-                    active_goals = self.controller.context_manager.get_active_goals(mission_id)
-                    
-                    # Use the ResearchAgent to generate high-quality initial questions
-                    questions, model_details = await self.controller.research_agent.generate_initial_questions(
-                        mission_id=mission_id,
-                        user_request=request_content,
-                        active_goals=active_goals,
-                        log_queue=log_queue,
-                        update_callback=update_callback
-                    )
-                    
+                    if questions is None:
+                        logger.info(f"Generating initial questions for mission {mission_id} using ResearchAgent")
+
+                        # Get active goals for the mission to provide context
+                        active_goals = self.controller.context_manager.get_active_goals(mission_id)
+
+                        # Use the ResearchAgent to generate high-quality initial questions
+                        questions, model_details = await self.controller.research_agent.generate_initial_questions(
+                            mission_id=mission_id,
+                            user_request=request_content,
+                            active_goals=active_goals,
+                            log_queue=log_queue,
+                            update_callback=update_callback
+                        )
+
                     if questions:
                         # Store the questions in mission metadata
                         await self.controller.context_manager.update_mission_metadata(

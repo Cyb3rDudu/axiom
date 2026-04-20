@@ -114,6 +114,7 @@ class MessengerAgent(BaseAgent):
         update_callback: Optional[
             Any
         ] = None,  # Add update_callback parameter for UI updates
+        chat_mode: str = "research",  # 'chat' | 'research' — see docs/plans/CHAT_MODES_AND_STRUCTURED_BRIEFING.md
         **kwargs: Any,
     ) -> AgentOutput:
         """
@@ -128,6 +129,8 @@ class MessengerAgent(BaseAgent):
             mission_id: Optional ID of the current mission.
             log_queue: Optional queue for logging.
             update_callback: Optional callback for UI updates.
+            chat_mode: 'chat' disables start_research / refine_questions intents;
+                       'research' (default) permits the full intent set.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -139,6 +142,7 @@ class MessengerAgent(BaseAgent):
         # Store mission_id as instance attribute for the duration of this call
         # This allows _call_llm to access it for updating mission stats
         self.mission_id = mission_id
+        self._chat_mode = chat_mode if chat_mode in ("chat", "research") else "research"
 
         logger.info(f"{self.agent_name} received message: '{user_message}'")
 
@@ -174,7 +178,33 @@ Recent Thoughts (Consider these for context):
 
         # Build system prompt (instructions) and user prompt (task) separately
         # Simplified prompt since Pydantic schema enforces structure
-        system_prompt = """You are a research assistant that helps users with research tasks.
+        if self._chat_mode == "chat":
+            # Chat-only chat: the MessengerAgent must never spawn a research
+            # mission. Users who want to escalate to a mission must open a
+            # new chat in research mode.
+            system_prompt = """You are a conversational assistant grounded in the user's document library (RAG).
+
+This chat is in CHAT-ONLY MODE. You MUST NEVER return intent "start_research" or "refine_questions".
+Your allowed intents are exactly:
+
+1. "chat" — for any content question, meta question, casual conversation, or analysis request.
+   Even if the user asks to "analyse", "summarise", "compare", "write about" something, stay in "chat".
+   The user will always get a conversational, RAG-grounded answer. If they want a full research mission,
+   they are expected to open a new chat in research mode; you do not escalate on their behalf.
+
+2. "refine_goal" — the user is expressing preferences about tone, length, audience, or format
+   that you should carry through the conversation. Extract the preferences.
+
+3. "approve_questions" — a bare yes/ok/proceed affirmation. Rare in chat-only mode; treat as a continuation.
+
+Important:
+- extracted_content MUST be null for all three intents in chat-only mode.
+- formatting_preferences should still be populated when detected.
+- Provide a helpful response_to_user and explain your reasoning in thoughts.
+- Do NOT mention that this is "chat-only mode" in the user-visible response — just have the conversation.
+"""
+        else:
+            system_prompt = """You are a research assistant that helps users with research tasks.
 
 Analyze the user's message and determine their intent:
 
@@ -1415,6 +1445,20 @@ Output:
         # Ensure final_response is never None
         if not final_response:
             final_response = "Sorry, I couldn't process that request."
+
+        # Safety-net for chat-only mode: if the LLM ignored the prompt gating
+        # and still returned a research-triggering action, downgrade it to
+        # chat so the user never accidentally starts a mission.
+        if (
+            getattr(self, "_chat_mode", "research") == "chat"
+            and final_action in ("start_research", "refine_questions")
+        ):
+            logger.info(
+                "Messenger: downgrading '%s' to 'chat' (chat-only mode)",
+                final_action,
+            )
+            final_action = None
+            final_request = None
 
         # Construct the final output dictionary expected by AgentController
         agent_result = {

@@ -25,6 +25,12 @@ async def create_chat(
     """Create a new chat for the current user."""
     try:
         chat_id = generate_uuid()
+        requested_chat_type = getattr(chat_data, 'chat_type', None) or 'research'
+        if requested_chat_type not in ('chat', 'research', 'writing'):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"chat_type must be one of chat|research|writing, got {requested_chat_type!r}",
+            )
         async_db = await get_async_db_session()
         try:
             db_chat = await async_crud.create_chat(
@@ -32,7 +38,7 @@ async def create_chat(
                 chat_id=chat_id,
                 user_id=current_user.id,
                 title=chat_data.title,
-                chat_type=getattr(chat_data, 'chat_type', 'research')  # Default to research for backward compatibility
+                chat_type=requested_chat_type,
             )
             logger.info(f"Created new chat {chat_id} for user {current_user.username}")
             return db_chat
