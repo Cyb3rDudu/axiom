@@ -997,7 +997,7 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                                 filter_clause = ""
                                 params = {}
                                 if document_group_id:
-                                    filter_clause = "JOIN document_group_memberships dgm ON d.id = dgm.document_id WHERE dgm.group_id = :gid"
+                                    filter_clause = "JOIN document_group_association dga ON d.id = dga.document_id WHERE dga.document_group_id = :gid"
                                     params["gid"] = document_group_id
                                 rows = db.execute(sql_text(f"""
                                     SELECT d.original_filename, d.metadata_, d.id::text
