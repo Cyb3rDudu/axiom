@@ -72,6 +72,16 @@ from ai_researcher.gpu_worker.protocol import (
 )
 
 
+def _vram_allocated_mb() -> Optional[float]:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return round(torch.cuda.memory_allocated() / 1e6, 1)
+    except Exception:
+        pass
+    return None
+
+
 class GpuWorkerServer:
     """Loads GPU models on demand and dispatches RPC calls."""
 
@@ -136,13 +146,6 @@ class GpuWorkerServer:
     # ── RPC handlers ──────────────────────────────────────────────────
 
     def handle_health(self, **_ignored) -> dict:
-        import torch
-        vram_mb = None
-        try:
-            if torch.cuda.is_available():
-                vram_mb = round(torch.cuda.memory_allocated() / 1e6, 1)
-        except Exception:
-            pass
         return {
             "pid": os.getpid(),
             "uptime_sec": round(time.time() - self._start_time, 1),
@@ -151,7 +154,7 @@ class GpuWorkerServer:
                 "reranker": self._reranker is not None,
                 "gliner": self._gliner is not None,
             },
-            "vram_mb": vram_mb,
+            "vram_mb": _vram_allocated_mb(),
         }
 
     def handle_embed_query(self, text: str) -> Any:
@@ -198,6 +201,42 @@ class GpuWorkerServer:
         self._shutdown.set()
         return {"ok": True}
 
+    def handle_unload_models(self, **_ignored) -> dict:
+        """Drop all loaded models and release their VRAM.
+
+        Callers use this to reclaim GPU memory before spawning a peer
+        subprocess (e.g. the Marker pdf_worker) that needs several GB of
+        contiguous VRAM on a shared card. The models are lazily reloaded on
+        the next RPC that needs them, so this is cheap to call — one cold
+        reload (~5–10 s) beats an OOM crash.
+        """
+        import gc
+
+        before_mb = _vram_allocated_mb()
+        with self._load_lock:
+            had = {
+                "embedder": self._embedder is not None,
+                "reranker": self._reranker is not None,
+                "gliner": self._gliner is not None,
+            }
+            self._embedder = None
+            self._reranker = None
+            self._gliner = None
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+        except Exception as exc:
+            logger.warning(f"torch cache clear failed: {exc}")
+        after_mb = _vram_allocated_mb()
+        logger.info(
+            f"unload_models: dropped {sum(had.values())} models "
+            f"(vram {before_mb}→{after_mb} MB)"
+        )
+        return {"unloaded": had, "vram_before_mb": before_mb, "vram_after_mb": after_mb}
+
     # ── Dispatch ──────────────────────────────────────────────────────
 
     _HANDLERS = {
@@ -206,6 +245,7 @@ class GpuWorkerServer:
         "embed_chunks": "handle_embed_chunks",
         "rerank": "handle_rerank",
         "extract_entities": "handle_extract_entities",
+        "unload_models": "handle_unload_models",
         "shutdown": "handle_shutdown",
     }
 

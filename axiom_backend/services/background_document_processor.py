@@ -235,6 +235,32 @@ class BackgroundDocumentProcessor:
 
     # ── Per-import model subprocesses (issue #13) ──────────────────────
 
+    def _prepare_vram_for_gpu_subprocess(self, doc_id: str, reason: str) -> None:
+        """Tell the shared GPU worker to unload its models before we spawn a
+        peer subprocess (Marker, mREBEL) that needs several GB of VRAM.
+
+        The A3000 has 12 GB total. After a doc completes, gpu_worker is still
+        holding embedder + reranker + GLiNER (~2–3 GB warm). When the next
+        doc's Marker subprocess tries to load Surya's layout/OCR models
+        (~5.5 GB), it OOMs. Forcing the unload here gives Marker clean VRAM;
+        the worker lazily reloads its models the next time they're needed.
+
+        Failures are logged but never raised — a temporarily unreachable
+        worker must not block an ingest.
+        """
+        try:
+            from ai_researcher.gpu_worker.client import GpuWorkerClient
+            client = GpuWorkerClient.instance()
+            result = client.unload_models(timeout=30)
+            before = result.get("vram_before_mb")
+            after = result.get("vram_after_mb")
+            print(
+                f"[{doc_id}] pre-{reason} vram: {before} MB → {after} MB "
+                f"(unloaded={result.get('unloaded')})"
+            )
+        except Exception as exc:
+            print(f"[{doc_id}] pre-{reason} VRAM unload skipped: {exc}")
+
     def _convert_pdf_via_subprocess(
         self,
         doc_id: str,
@@ -618,6 +644,9 @@ class BackgroundDocumentProcessor:
                 md_filename = f"{doc_id}.md"
                 md_save_path = processor.markdown_dir / md_filename
                 image_dir = processor.image_dir / doc_id
+                # Free the shared gpu_worker's VRAM so Marker can grab ~5 GB
+                # without fighting embedder/reranker/GLiNER on a 12 GB card.
+                self._prepare_vram_for_gpu_subprocess(doc_id, reason="marker")
                 markdown_content, image_mapping = self._convert_pdf_via_subprocess(
                     doc_id=doc_id,
                     pdf_path=target_path,
@@ -828,12 +857,14 @@ class BackgroundDocumentProcessor:
                             print(f"[{doc_id}] Built {cooccurrence_count} co-occurrence relationships")
 
                             # --- mREBEL relation extraction (subprocess, issue #13) ---
-                            # Since mREBEL runs in its own subprocess with its
-                            # own CUDA context (#13), it doesn't share VRAM
-                            # with the shared GPU worker — no need to kill the
-                            # worker first. (Before #13, mREBEL was in-process
-                            # and we had to free the GPU for it; that's gone.)
+                            # mREBEL runs in its own subprocess with its own
+                            # CUDA context, but VRAM is a shared resource on
+                            # the physical card — the gpu_worker's warm
+                            # models + mREBEL's ~2.4 GB can still add up to
+                            # OOM on a 12 GB card. Free gpu_worker's VRAM
+                            # first for the same reason we do for Marker.
                             try:
+                                self._prepare_vram_for_gpu_subprocess(doc_id, reason="mrebel")
                                 print(f"[{doc_id}] Extracting relations with mREBEL (subprocess)...")
                                 triples = self._extract_relations_via_subprocess(doc_id, chunks)
 

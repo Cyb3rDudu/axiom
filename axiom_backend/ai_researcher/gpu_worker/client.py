@@ -338,6 +338,15 @@ class GpuWorkerClient:
     def health(self, timeout: int = 10) -> dict:
         return self._call("health", timeout=timeout)
 
+    def unload_models(self, timeout: int = 30) -> dict:
+        """Ask the worker to drop all loaded models and empty the CUDA cache.
+
+        Used before spawning a peer GPU subprocess (Marker / mREBEL) so the
+        ~2–3 GB held by embedder+reranker+GLiNER doesn't push the card into
+        OOM. Returns ``{"unloaded": {...}, "vram_before_mb", "vram_after_mb"}``.
+        """
+        return self._call("unload_models", timeout=timeout)
+
 
 # Convenience module-level accessor (don't instantiate at import time —
 # wait until first use to avoid spawning the worker during test collection).

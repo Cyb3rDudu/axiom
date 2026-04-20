@@ -149,6 +149,15 @@ _FAKE_SERVER_SRC = textwrap.dedent(
     GpuWorkerServer.handle_rerank = _rerank
     GpuWorkerServer.handle_extract_entities = _extract_entities
 
+    # Pre-seed the model slots so handle_unload_models has something to drop.
+    original_init = GpuWorkerServer.__init__
+    def _init(self):
+        original_init(self)
+        self._embedder = object()
+        self._reranker = object()
+        self._gliner = object()
+    GpuWorkerServer.__init__ = _init
+
     GpuWorkerServer().run(sys.argv[1])
     """
 ).strip()
@@ -252,6 +261,31 @@ class TestWorkerLifecycle(unittest.TestCase):
             ents = client.extract_entities("Paris is nice", ["LOC"])
             self.assertEqual(ents[0]["text"], "Paris")
             self.assertEqual(ents[0]["label"], "LOC")
+
+    def test_unload_models_clears_slots(self):
+        """Calling unload_models must drop embedder/reranker/gliner refs on the server."""
+        with _FakeWorker() as w:
+            client = _make_client(w.socket_path)
+            # Fake server pre-seeds all three slots in its __init__.
+            health_before = client.health()
+            self.assertTrue(health_before["loaded"]["embedder"])
+            self.assertTrue(health_before["loaded"]["reranker"])
+            self.assertTrue(health_before["loaded"]["gliner"])
+
+            result = client.unload_models()
+            self.assertEqual(
+                result["unloaded"],
+                {"embedder": True, "reranker": True, "gliner": True},
+            )
+            # vram_*_mb may be None on CPU-only CI; the contract is just that
+            # the keys exist.
+            self.assertIn("vram_before_mb", result)
+            self.assertIn("vram_after_mb", result)
+
+            health_after = client.health()
+            self.assertFalse(health_after["loaded"]["embedder"])
+            self.assertFalse(health_after["loaded"]["reranker"])
+            self.assertFalse(health_after["loaded"]["gliner"])
 
     def test_respawn_after_kill(self):
         """Kill the worker mid-session; a fresh client connect must fail cleanly."""
