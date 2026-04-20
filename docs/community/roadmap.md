@@ -16,7 +16,7 @@ These features have been implemented since the fork:
 - **Provider Robustness** - 3-level JSON response format fallback (json_schema → json_object → prompt-only), context window truncation with correction factor retry
 - **Multilingual Support** - Language code propagation through all agents and prompts
 - **Cost Tracking** - Generalized cost tracking across all providers via model_pricing.json
-- **Deployment Options** - Podman Quadlet, Proxmox LXC, macOS hybrid dev stack, multi-stage Dockerfile
+- **Deployment Options** - Proxmox LXC with nerdctl + containerd, macOS hybrid dev stack, multi-stage Dockerfile
 
 ### Current Focus
 

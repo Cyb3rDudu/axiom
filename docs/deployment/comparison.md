@@ -7,8 +7,7 @@ AXIOM can be deployed in several ways depending on your infrastructure, hardware
 | Method | GPU Support | Complexity | Best For | Maturity |
 |--------|-------------|------------|----------|----------|
 | Docker Compose | NVIDIA (native), MPS (macOS variant) | Low | Production servers, quick setup | Stable |
-| Proxmox LXC | NVIDIA passthrough | Medium | Homelab / virtualized environments | Stable |
-| Podman Quadlet | NVIDIA (CDI) | Medium-High | Systemd-native, daemonless deployments | Experimental |
+| Proxmox LXC + nerdctl | NVIDIA passthrough | Medium | Homelab / virtualized environments, current production setup | Stable |
 | macOS Native Dev | Apple MPS (Metal) | Medium | Development with Apple Silicon GPUs | Experimental |
 
 ## Docker Compose
@@ -38,44 +37,29 @@ The default and most straightforward deployment method. AXIOM provides several C
 !!! tip
     For most production deployments on Linux with an NVIDIA GPU, start with `docker-compose.gpu.yml`. See the [Installation Guide](../getting-started/installation/cli-commands.md) for step-by-step instructions.
 
-## Proxmox LXC
+## Proxmox LXC + nerdctl
 
-Run AXIOM inside a Proxmox LXC container, either with native OCI containers (using Podman) or by installing Docker/Podman inside the LXC.
+Run AXIOM inside a Proxmox LXC container with nerdctl + containerd + buildkit.
+This is the current production setup (LXC 120).
 
 **Pros:**
 
 - Lightweight virtualization with near-native performance.
 - NVIDIA GPU passthrough supported via Proxmox device mapping.
 - Good isolation without full VM overhead.
+- systemd-managed container lifecycle (single `axiom.service` starts the full pod).
 
 **Cons:**
 
 - Requires Proxmox host configuration for GPU passthrough.
-- Nested container runtimes (Docker-in-LXC) add complexity.
+- Nested container runtime (containerd-in-LXC) adds some complexity.
 - Storage and network configuration needs careful planning.
 
 !!! note
-    See the [Proxmox LXC Guide](proxmox-lxc.md) for detailed setup instructions including GPU passthrough configuration.
-
-## Podman Quadlet
-
-A systemd-native approach using Podman Quadlets. Containers are managed as systemd units with no container daemon required.
-
-**Pros:**
-
-- No Docker daemon -- containers run as systemd services.
-- Rootless execution supported.
-- Automatic restart and dependency management through systemd.
-- CDI (Container Device Interface) for clean GPU access.
-
-**Cons:**
-
-- More configuration files to manage (one `.container` unit per service).
-- Less community documentation compared to Docker Compose.
-- Newer approach -- some edge cases may require manual troubleshooting.
-
-!!! note
-    Podman Quadlet configuration is covered in the [Proxmox LXC Guide](proxmox-lxc.md), as it is commonly used together with LXC deployments.
+    See the [Proxmox LXC Guide](proxmox-lxc.md) for detailed setup
+    instructions including GPU passthrough configuration, and the
+    [LXC + nerdctl Production Guide](lxc-nerdctl-prod.md) for the
+    specific runtime, systemd unit, and GPU driver tuning details.
 
 ## macOS Native Dev Stack
 
@@ -105,10 +89,7 @@ Use this decision tree to pick the right deployment method:
     - Yes, but CPU-only is fine: **Docker Compose** (`docker-compose.macos.yml`)
 
 2. **Are you deploying to a Proxmox host?**
-    - Yes: **Proxmox LXC** (with Docker or Podman inside)
+    - Yes: **Proxmox LXC + nerdctl**
 
-3. **Do you need daemonless, systemd-managed containers?**
-    - Yes: **Podman Quadlet**
-
-4. **Everything else:**
+3. **Everything else:**
     - **Docker Compose** -- choose the variant matching your hardware.

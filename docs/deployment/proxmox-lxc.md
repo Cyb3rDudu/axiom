@@ -18,46 +18,38 @@ PostgreSQL runs on the shared database server (CT 107, 10.36.0.107).
 
 ## Prerequisites
 
-- Proxmox VE 9.1+ with `buildah` installed
+- Proxmox VE 9.1+ (native OCI-as-LXC feature in tech preview)
 - External PostgreSQL with `pgvector` extension (CT 107)
 - GPU passthrough configured (optional, for CUDA acceleration)
+- A build host with nerdctl + containerd + buildkit (see
+  [LXC + nerdctl Production Guide](lxc-nerdctl-prod.md) for the runtime
+  setup). The Proxmox host itself is a fine build host.
 
-```bash
-apt install -y buildah
-```
-
-## Step 1: Build Docker images locally
-
-On a machine with Docker (or on the Proxmox host with buildah):
+## Step 1: Build images on a build host
 
 ```bash
 cd /path/to/axiom
 
-# Build all images
-buildah build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
-buildah build -t axiom-frontend -f axiom_frontend/Dockerfile axiom_frontend/
-buildah build -t axiom-nginx -f nginx/Dockerfile nginx/
-buildah build -t axiom-doc-processor -f axiom_backend/Dockerfile axiom_backend/
+sudo nerdctl build -t axiom-backend       -f axiom_backend/Dockerfile  axiom_backend/
+sudo nerdctl build -t axiom-frontend      -f axiom_frontend/Dockerfile axiom_frontend/
+sudo nerdctl build -t axiom-nginx         -f nginx/Dockerfile          nginx/
+sudo nerdctl build -t axiom-doc-processor -f axiom_backend/Dockerfile  axiom_backend/
+
+# Export to tarball for import into Proxmox template storage
+sudo nerdctl save axiom-backend       | gzip > axiom-backend.tar.gz
+sudo nerdctl save axiom-frontend      | gzip > axiom-frontend.tar.gz
+sudo nerdctl save axiom-nginx         | gzip > axiom-nginx.tar.gz
+sudo nerdctl save axiom-doc-processor | gzip > axiom-doc-processor.tar.gz
 ```
 
-Or with Docker on another machine, then export:
+## Step 2: Copy to Proxmox template storage
+
+Copy the tarballs to `/var/lib/vz/template/cache/` on the Proxmox host.
+Proxmox's native OCI feature accepts standard OCI image tarballs:
 
 ```bash
-docker compose build
-docker save axiom-backend | gzip > axiom-backend.tar.gz
-docker save axiom-frontend | gzip > axiom-frontend.tar.gz
-docker save axiom-nginx | gzip > axiom-nginx.tar.gz
-# Transfer to Proxmox host
-```
-
-## Step 2: Export to Proxmox template storage
-
-```bash
-# From buildah
-buildah push axiom-backend oci-archive:/var/lib/vz/template/cache/axiom-backend.tar
-buildah push axiom-frontend oci-archive:/var/lib/vz/template/cache/axiom-frontend.tar
-buildah push axiom-nginx oci-archive:/var/lib/vz/template/cache/axiom-nginx.tar
-buildah push axiom-doc-processor oci-archive:/var/lib/vz/template/cache/axiom-doc-processor.tar
+scp axiom-*.tar.gz root@<proxmox>:/var/lib/vz/template/cache/
+ssh root@<proxmox> 'cd /var/lib/vz/template/cache/ && gunzip axiom-*.tar.gz'
 ```
 
 Or pull pre-built images from a registry:
@@ -200,11 +192,11 @@ pct exec 120 -- bash -c 'cd /opt/axiom && docker compose -f docker-compose.exter
 ### Native OCI method
 
 ```bash
-# Rebuild images
-buildah build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
-
-# Re-export
-buildah push axiom-backend oci-archive:/var/lib/vz/template/cache/axiom-backend.tar
+# Rebuild image on build host
+sudo nerdctl build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
+sudo nerdctl save axiom-backend | gzip > axiom-backend.tar.gz
+scp axiom-backend.tar.gz root@<proxmox>:/var/lib/vz/template/cache/
+ssh root@<proxmox> 'cd /var/lib/vz/template/cache/ && gunzip -f axiom-backend.tar.gz'
 
 # Recreate container (data volumes persist if using bind mounts)
 pct stop 120
@@ -213,195 +205,35 @@ pct destroy 120
 pct start 120
 ```
 
-### Docker Compose method
+### nerdctl production setup
 
-```bash
-pct exec 120 -- bash -c 'cd /opt/axiom && git pull && docker compose -f docker-compose.external-db.yml up -d --build'
-```
+For the one-LXC-multi-container production pattern actually used by this
+project, rebuilds and deploys run from the developer's workstation via
+`./deploy.sh`. See [LXC + nerdctl Production Guide](lxc-nerdctl-prod.md).
 
-## Alternative: Podman Quadlet on a privileged LXC
+## Alternative: One LXC, multiple containers via nerdctl + systemd
 
-Podman Quadlet replaces Docker Compose with native systemd unit files — no Docker daemon, proper
-process management, and automatic restart/logging via journald.
+The pattern above runs one LXC per service. The production setup at LXC 120
+takes a different approach: **one LXC, multiple containers inside it**,
+orchestrated by nerdctl + containerd + a single systemd unit that manages
+the whole pod.
 
-### Setup
+This is currently the recommended production deployment. See the dedicated
+guide for the full pod script, GPU driver tuning, and NPM proxy config:
 
-```bash
-# Create a privileged Debian LXC with nesting
-pct create 120 local:vztmpl/debian-13-standard_13.0-1_amd64.tar.zst \
-  --hostname axiom \
-  --cores 8 \
-  --memory 16384 \
-  --net0 name=eth0,bridge=vmbr0,ip=10.36.0.120/22,gw=10.36.0.1 \
-  --storage local-lvm \
-  --rootfs local-lvm:32 \
-  --unprivileged 0 \
-  --features nesting=1,keyctl=1
-
-pct start 120
-pct exec 120 -- bash -c 'apt update && apt install -y podman'
-```
-
-### Convert Compose to Quadlet
-
-Create unit files in `/etc/containers/systemd/` inside the LXC:
-
-**axiom-network.network**
-```ini
-[Network]
-NetworkName=axiom
-```
-
-**axiom-data.volume**
-```ini
-[Volume]
-VolumeName=axiom-data
-```
-
-**axiom-backend.container**
-```ini
-[Unit]
-Description=Axiom Backend
-After=network-online.target
-
-[Container]
-Image=localhost/axiom-backend
-ContainerName=axiom-backend
-Network=axiom.network
-PublishPort=8000:8000
-Volume=axiom-data.volume:/app/ai_researcher/data
-Environment=DATABASE_URL=postgresql://axiom:dsHXpLsy7qDyVIeI80FlZ7Yn/Gzht1N6pNRoiAvKPZ4=@10.36.0.107:5432/axiom
-Environment=ADMIN_USERNAME=admin
-Environment=ADMIN_PASSWORD=qExzeg-xowqo9-gycwyr
-Environment=JWT_SECRET_KEY=change-me
-Environment=LOG_LEVEL=ERROR
-Environment=MAX_WORKER_THREADS=10
-Environment=EMBEDDING_BATCH_SIZE=32
-Environment=CORS_ALLOWED_ORIGINS=*
-
-[Service]
-Restart=always
-
-[Install]
-WantedBy=default.target
-```
-
-**axiom-frontend.container**
-```ini
-[Unit]
-Description=Axiom Frontend
-After=axiom-backend.service
-
-[Container]
-Image=localhost/axiom-frontend
-ContainerName=axiom-frontend
-Network=axiom.network
-
-[Service]
-Restart=always
-
-[Install]
-WantedBy=default.target
-```
-
-**axiom-doc-processor.container**
-```ini
-[Unit]
-Description=Axiom Document Processor
-After=axiom-backend.service
-
-[Container]
-Image=localhost/axiom-doc-processor
-ContainerName=axiom-doc-processor
-Network=axiom.network
-Volume=axiom-data.volume:/app/ai_researcher/data
-Exec=python -u services/background_document_processor.py
-Environment=DATABASE_URL=postgresql://axiom:dsHXpLsy7qDyVIeI80FlZ7Yn/Gzht1N6pNRoiAvKPZ4=@10.36.0.107:5432/axiom
-Environment=EMBEDDING_BATCH_SIZE=32
-
-[Service]
-Restart=always
-
-[Install]
-WantedBy=default.target
-```
-
-**axiom-nginx.container**
-```ini
-[Unit]
-Description=Axiom Nginx Proxy
-After=axiom-backend.service axiom-frontend.service
-
-[Container]
-Image=localhost/axiom-nginx
-ContainerName=axiom-nginx
-Network=axiom.network
-PublishPort=80:80
-
-[Service]
-Restart=always
-
-[Install]
-WantedBy=default.target
-```
-
-### Build and start
-
-```bash
-# Build images with podman inside the LXC
-pct exec 120 -- bash -c '
-  cd /opt/axiom
-  podman build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
-  podman build -t axiom-frontend -f axiom_frontend/Dockerfile axiom_frontend/
-  podman build -t axiom-nginx -f nginx/Dockerfile nginx/
-  podman build -t axiom-doc-processor -f axiom_backend/Dockerfile axiom_backend/
-'
-
-# Reload systemd to pick up quadlet files, then start
-pct exec 120 -- bash -c '
-  systemctl daemon-reload
-  systemctl start axiom-backend axiom-frontend axiom-doc-processor axiom-nginx
-  systemctl enable axiom-backend axiom-frontend axiom-doc-processor axiom-nginx
-'
-```
-
-### Management
-
-```bash
-# Status
-systemctl status axiom-backend
-systemctl status axiom-frontend
-
-# Logs
-journalctl -u axiom-backend -f
-
-# Restart a service
-systemctl restart axiom-backend
-
-# Update: rebuild image, then restart
-podman build -t axiom-backend -f axiom_backend/Dockerfile axiom_backend/
-systemctl restart axiom-backend
-```
-
-### Advantages over Docker Compose
-
-- No Docker daemon (Podman is daemonless)
-- Native systemd integration (ordering, restart, logging)
-- Each container is a proper systemd service
-- Works in unprivileged LXC with nesting
-- `journalctl` for logs instead of `docker logs`
+- [LXC + nerdctl Production Guide](lxc-nerdctl-prod.md)
 
 ## Deployment method comparison
 
 | Method | Maturity | Compose support | GPU | Best for |
 |--------|----------|-----------------|-----|----------|
-| Native OCI LXC | Tech preview | No (1 image = 1 LXC) | Via device passthrough | Single-image services |
+| Native OCI LXC (one per service) | Tech preview | No (1 image = 1 LXC) | Via device passthrough | Single-image services |
 | Docker Compose in LXC | Production | Full | Via nvidia-container-toolkit | Complex stacks, quick setup |
-| Podman Quadlet in LXC | Production | Via unit files | Via CDI/device mount | Systemd-native, no daemon |
+| nerdctl + containerd in LXC | Production | No (custom pod script) | Via nvidia-container-toolkit | systemd-native, current production |
 
 ## Notes
 
-- Native OCI containers are a Proxmox 9.1 tech preview — use Docker Compose or Podman Quadlet in LXC for production
+- Native OCI containers are a Proxmox 9.1 tech preview — use Docker Compose or the nerdctl production setup for long-running services
 - Always use static IPs for native OCI containers (minimal images lack dhclient)
 - Use `pct exec <id> -- <command>` to access containers
 - PostgreSQL runs on CT 107 (shared), not inside axiom containers

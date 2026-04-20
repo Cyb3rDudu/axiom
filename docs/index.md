@@ -272,7 +272,7 @@ graph TB
     - Configurable citation profiles: Numbered, KMU Akademie APA 7, APA 7 English, and custom
     - Apple Silicon MPS GPU support, device-agnostic hardware management
     - 3-level JSON fallback and context window truncation for provider robustness
-    - Deployment: Podman Quadlet on Proxmox LXC (production), pre-built images on nimbus, macOS hybrid dev stack
+    - Deployment: nerdctl + containerd on Proxmox LXC (production), pre-built images, macOS hybrid dev stack
 
 -   :material-rocket: **Version 0.1.10-alpha** <small>Released Oct 12, 2025</small>
 

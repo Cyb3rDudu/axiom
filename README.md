@@ -24,7 +24,7 @@
 > - **Search Providers**: SearXNG with configurable engines, YaCy support, Brave API integration
 > - **Apple Silicon**: MPS GPU support for native macOS deployment
 > - **Robustness**: 3-level JSON fallback, context window truncation, multilingual support
-> - **Deployment**: Podman Quadlet (production on Proxmox LXC 120), pre-built Docker images on nimbus, macOS hybrid dev stack
+> - **Deployment**: nerdctl + containerd on Proxmox LXC (production), pre-built images, macOS hybrid dev stack
 
 ## Roadmap
 

@@ -5,7 +5,7 @@ Hybrid architecture: infrastructure runs in containers, ML services run natively
 ## Prerequisites
 
 - **macOS** with Apple Silicon (M1/M2/M3/M4)
-- **Apple Container** (`brew install container`) or Docker/Podman/OrbStack
+- **Apple Container** (`brew install container`), Docker Desktop, or OrbStack
 - **Python 3.12** (`brew install python@3.12`)
 - **Node.js 20+** (`brew install node`)
 - **PostgreSQL client** (`brew install libpq`) — for `pg_isready` and `psql`

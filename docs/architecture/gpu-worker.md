@@ -166,5 +166,5 @@ Both subprocesses communicate via JSON on stdout/stderr and exit as soon as thei
 
 - [VRAM Management](vram-management.md) - GPU memory budget and per-model sizing
 - [Document Processing Pipeline](document-pipeline.md) - Full pipeline walkthrough
-- [Deployment Guide](../deployment/lxc-podman-prod.md) - Production deployment with shared socket
+- [Deployment Guide](../deployment/lxc-nerdctl-prod.md) - Production deployment with shared socket
 - [GPU Worker Operations](gpu-worker-operations.md) - Monitoring, troubleshooting, and force unload

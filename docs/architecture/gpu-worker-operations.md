@@ -242,4 +242,4 @@ The document processor normally calls `model_cache.unload_all()` before spawning
 - [GPU Worker Architecture](gpu-worker.md) - How the subprocess pattern works
 - [VRAM Management](vram-management.md) - GPU memory budget and per-model sizing
 - [Document Processing Pipeline](document-pipeline.md) - Full pipeline walkthrough
-- [Production Deployment](../deployment/lxc-podman-prod.md) - Container configuration
+- [Production Deployment](../deployment/lxc-nerdctl-prod.md) - Container configuration

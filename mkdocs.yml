@@ -233,7 +233,7 @@ nav:
     - Deployment Comparison: deployment/comparison.md
     - Local LLMs: deployment/local-llms.md
     - Proxmox LXC: deployment/proxmox-lxc.md
-    - Podman Quadlet (LXC Production): deployment/lxc-podman-prod.md
+    - LXC + nerdctl Production: deployment/lxc-nerdctl-prod.md
 
   - Development:
     - macOS Native Stack: DEV_MACOS.md

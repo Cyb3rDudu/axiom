@@ -9,13 +9,12 @@
 
 ## Problem
 
-Docker Desktop, Apple Containers (`apple/container`), and Podman all **cannot pass through Metal GPU** to Linux containers on Apple Silicon:
+Docker Desktop and Apple Containers (`apple/container`) both **cannot pass through Metal GPU** to Linux containers on Apple Silicon:
 
 | Runtime | GPU support | Notes |
 |---------|------------|-------|
 | **Docker Desktop** | None | Linux VM, no Metal exposure |
 | **Apple Containers** (`apple/container`) | None | [Officially wontfix](https://github.com/apple/containerization/issues/46); requires macOS 26 |
-| **Podman + krunkit** | Vulkan only | Vulkan-to-Metal via MoltenVK; ~74-80% native perf but **only for Vulkan apps** (llama.cpp), not PyTorch |
 
 PyTorch's MPS backend (`torch.backends.mps`) requires **direct Metal API access** which is only available on native macOS — not inside any container VM. This means the 5 local ML models used by Axiom cannot benefit from Apple Silicon GPU acceleration when containerized.
 
@@ -329,7 +328,7 @@ Apple's `container` CLI (`apple/container`) is a potential replacement for Docke
 | Resource usage | ~2-4 GB VM | Lightweight VMs (sub-second start) |
 | Registry support | Full | Full |
 
-**Recommendation for now:** Use Docker Desktop (or Podman) for the infrastructure containers. Apple Containers is not yet viable:
+**Recommendation for now:** Use Docker Desktop (or OrbStack) for the infrastructure containers. Apple Containers is not yet viable:
 - Requires macOS 26 (current system is Darwin 25.3.0 / macOS Sequoia 15)
 - No compose-like orchestration for multi-service stacks
 - Pre-1.0 with breaking changes between minor versions
