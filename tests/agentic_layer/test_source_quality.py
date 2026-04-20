@@ -138,6 +138,66 @@ def test_internal_note_is_unknown() -> None:
     assert assign_scientific_tier(signals) == "C"  # conservative fallback
 
 
+def test_local_rag_document_with_thin_metadata_defaults_to_tier_a() -> None:
+    """Regression: user-ingested PDFs without publisher/url metadata should
+    land on Tier A (academic library), not on Tier C ('unknown' fallback).
+    Mirrors the first mission run where Mankiw/Bofinger PDFs surfaced as
+    Publisher-Tier unknown."""
+    note = _make_note(
+        source_type="document",
+        metadata={
+            "authors": "Bofinger, Peter",
+            "publication_year": 2011,
+            "title": "Grundzüge der Volkswirtschaftslehre",
+            "original_filename": "Bofinger2011_VWL.pdf",
+            # note: no publisher, no url, no doi
+        },
+    )
+    signals = compute_quality_signals(note, now=_dt.date(2026, 4, 20))
+    assert signals.publisher_tier == "A"
+    assert signals.publication_type == "monograph_scientific_publisher"
+    assert assign_scientific_tier(signals) == "A"
+
+
+def test_document_with_known_publisher_keeps_its_real_tier() -> None:
+    """The local-RAG fallback must not override explicit publisher signals."""
+    note = _make_note(
+        source_type="document",
+        metadata={
+            "title": "Enterprise X",
+            "publisher": "McKinsey Global Institute",
+            "publication_year": 2023,
+        },
+    )
+    signals = compute_quality_signals(note, now=_dt.date(2026, 4, 20))
+    assert signals.publisher_tier == "D"  # McKinsey is practitioner
+    assert assign_scientific_tier(signals) == "D"
+
+
+def test_web_note_without_publisher_stays_unknown() -> None:
+    """Fallback is source_type='document' only — web notes stay unknown."""
+    note = _make_note(
+        source_type="web",
+        metadata={"title": "Random blog", "url": "https://example.com/x"},
+    )
+    signals = compute_quality_signals(note)
+    assert signals.publisher_tier == "unknown"
+
+
+def test_bpb_classified_as_tier_b() -> None:
+    """Bundeszentrale für politische Bildung — mentioned in regression."""
+    from ai_researcher.agentic_layer.services.publisher_tiers import classify_tier
+    assert classify_tier("https://www.bpb.de/themen/asien/china/") == "B"
+
+
+def test_bwl_lexikon_and_wirtschaftslexikon24_blacklisted() -> None:
+    """KMU Dos-and-Don'ts excludes lexicon-style sites as primary sources."""
+    from ai_researcher.agentic_layer.services.publisher_tiers import classify_tier
+    assert classify_tier("https://www.bwl-lexikon.de/wiki/foo") == "blacklist"
+    assert classify_tier("https://www.wirtschaftslexikon24.com/d/bar") == "blacklist"
+    assert classify_tier("https://www.scribbr.de/aufbau-und-gliederung/") == "blacklist"
+
+
 # ---------------------------------------------------------------------------
 # assign_scientific_tier policy
 # ---------------------------------------------------------------------------

@@ -1465,7 +1465,7 @@ async def stop_mission_execution(
         logger.info(f"[ENDPOINT] Calling controller.pause_mission for {mission_id}")
         await controller.pause_mission(mission_id)
         logger.info(f"[ENDPOINT] Successfully called pause_mission for {mission_id}")
-        
+
         return {"message": "Mission execution paused", "mission_id": mission_id}
     except HTTPException:
         raise
@@ -1475,6 +1475,68 @@ async def stop_mission_execution(
             status_code=500,
             detail="Failed to stop mission execution"
         )
+
+
+@router.delete("/missions/{mission_id}")
+async def delete_mission_endpoint(
+    mission_id: str,
+    current_user: User = Depends(get_current_user_from_cookie),
+    controller: AgentController = Depends(get_agent_controller),
+):
+    """Delete a mission and its execution logs.
+
+    Leaves the parent chat intact. If the mission is still running/planning,
+    it is paused first so no orphan tasks keep writing to the deleted row.
+
+    Auth: the mission must belong to a chat owned by the current user.
+    """
+    logger.info(
+        f"[ENDPOINT] Delete mission {mission_id} requested by user {current_user.username}"
+    )
+    async_db = await get_async_db_session()
+    try:
+        # Ownership check via async_crud.get_mission (filters by user_id through chat join)
+        existing = await async_crud.get_mission(async_db, mission_id, current_user.id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Mission not found")
+
+        # Pause any in-flight execution before the row goes away
+        try:
+            mission_context = controller.context_manager.get_mission_context(mission_id)
+            if mission_context and mission_context.status in {"running", "planning", "pending"}:
+                logger.info(f"[ENDPOINT] Pausing mission {mission_id} before delete")
+                await controller.pause_mission(mission_id)
+        except Exception as pause_error:
+            # Pause best-effort — don't block delete on it
+            logger.warning(f"Pre-delete pause failed for {mission_id}: {pause_error}")
+
+        # Delete logs first (FK dependency), then the mission row
+        deleted_logs = await async_crud.delete_mission_execution_logs(
+            async_db, mission_id=mission_id, user_id=current_user.id
+        )
+        ok = await async_crud.delete_mission(
+            async_db, mission_id=mission_id, user_id=current_user.id
+        )
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to delete mission row")
+
+        # Also drop from in-memory context store so subsequent GETs don't resurrect it
+        try:
+            controller.context_manager.remove_mission_from_memory(mission_id)
+        except Exception as cache_error:
+            logger.warning(f"In-memory cache eviction failed for {mission_id}: {cache_error}")
+
+        logger.info(
+            f"Deleted mission {mission_id} ({deleted_logs} log rows) for user {current_user.username}"
+        )
+        return {"message": "Mission deleted", "mission_id": mission_id, "deleted_log_rows": deleted_logs}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete mission {mission_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete mission")
+    finally:
+        await async_db.close()
 
 
 @router.post("/missions/{mission_id}/resume-round/{round_num}")

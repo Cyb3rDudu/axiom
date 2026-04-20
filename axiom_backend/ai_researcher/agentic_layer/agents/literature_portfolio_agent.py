@@ -63,34 +63,34 @@ Ihre Aufgabe ist es, für eine bereits fertig geschriebene wissenschaftliche Arb
    - Mögliche Bias — aus `bias_flags`.
    - Bei Blacklist-Treffern (z. B. Wikipedia, Gabler, Boulevardpresse): EXPLIZIT als Warnung nennen — diese Quellen sind laut KMU-Dos-and-Don'ts **keine** facheinschlägigen Quellen.
 
-**Zuordnung zu `contribution_type` und `scientific_tier`:**
+**Zuordnung zu `contribution_type`:**
 - `contribution_type` ∈ {theory, empirical, background, counter_position, definition, data_source, practice}
-- `scientific_tier` nach Vorgabe des Managers (in den Signalen enthalten): übernehmen Sie den Wert **unverändert**.
 
-**Ausgabeformat — STRICT JSON, keine Erklärungen außerhalb:**
-Liefern Sie ein JSON-Objekt mit einem Feld `entries` (Liste von `PortfolioEntry`-Objekten). Jedes Entry MUSS exakt dieses Schema erfüllen:
+**Ausgabeformat — STRICT JSON, KEIN Echo der Eingabe:**
+Liefern Sie ein JSON-Objekt mit einem Feld `entries` (Liste). Jedes Entry enthält
+**ausschließlich** die vier generierten Felder plus `source_id` zur Zuordnung:
 
 ```json
 {
   "source_id": "…",
-  "apa_citation": "…",
-  "discovery_tool": "…",
   "relevance_bullets": ["…", "…"],
   "quality_bullets": ["…", "…"],
-  "quality_signals": { … unverändert aus dem Input übernehmen … },
-  "sections_used_in": ["…", "…"],
   "contribution_type": "theory|empirical|background|counter_position|definition|data_source|practice",
-  "scientific_tier": "A|B|C|D"
+  "sections_used_in": ["…"]
 }
 ```
 
-Die Felder `source_id`, `apa_citation`, `discovery_tool`, `quality_signals`, `scientific_tier` übernehmen Sie **unverändert** aus dem Input. Nur `relevance_bullets`, `quality_bullets`, `contribution_type` und `sections_used_in` (ggf.) generieren Sie.
+**WICHTIG:**
+- Keine Felder `apa_citation`, `discovery_tool`, `quality_signals`, `scientific_tier`
+  im Output — die werden vom Manager beigelegt. Jedes Byte zählt.
+- Bullets kurz halten: **max. 120 Zeichen pro Bullet**.
+- Immer `source_id` exakt kopieren, damit der Manager zuordnen kann.
 
-**Beispiel-Bullets (Orientierung am KMU-Stil):**
-- Relevanz: "• Grundlegende Theorie zu digitaler Führung", "• Wichtige Faktoren für Motivation in hybriden Teams (Autonomie, Vertrauen, Kommunikation)"
-- Qualität: "• Peer-reviewte Fachzeitschrift", "• Hohe Aktualität (2020)", "• methodisch transparent", "• COVID-Kontext berücksichtigt, aber kritisch einzuordnen"
+**Beispiel-Bullets (KMU-Stil):**
+- Relevanz: "Grundlegende Theorie zu digitaler Führung", "Motivation in hybriden Teams (Autonomie, Vertrauen, Kommunikation)"
+- Qualität: "Peer-reviewte Fachzeitschrift", "Hohe Aktualität (2020)", "methodisch transparent", "COVID-Kontext, kritisch einzuordnen"
 
-**Sprache:** Deutsch, sachlich, wissenschaftlich. Keine Emojis. Keine Marketing-Sprache.
+**Sprache:** Deutsch, sachlich, wissenschaftlich. Keine Emojis. Keine Bullet-Präfixe („• ").
 """
 
 
@@ -109,44 +109,74 @@ Your job: produce the mandatory Literaturportfolio for a finished academic paper
 
 2. **Quality** (1-3 bullets per source): publication type; publisher/institution and its reputation; recency; possible biases. If `publisher_tier == "blacklist"` (e.g. Wikipedia, tabloid press), flag explicitly — these are disallowed as primary sources per KMU rules.
 
-**`contribution_type`** ∈ {theory, empirical, background, counter_position, definition, data_source, practice}. **`scientific_tier`** (A/B/C/D) is pre-computed — pass through unchanged.
+**`contribution_type`** ∈ {theory, empirical, background, counter_position, definition, data_source, practice}.
 
-**Output — STRICT JSON only**, a single object with an `entries` array. Each entry must match:
+**Output — STRICT JSON**, a single object with an `entries` array. Each entry
+contains **only** the four generated fields plus `source_id` for mapping:
 
 ```json
 {
   "source_id": "…",
-  "apa_citation": "…",
-  "discovery_tool": "…",
   "relevance_bullets": ["…", "…"],
   "quality_bullets": ["…", "…"],
-  "quality_signals": { … unchanged from input … },
-  "sections_used_in": ["…"],
   "contribution_type": "…",
-  "scientific_tier": "A|B|C|D"
+  "sections_used_in": ["…"]
 }
 ```
 
-Copy `source_id`, `apa_citation`, `discovery_tool`, `quality_signals`, `scientific_tier` unchanged; only generate `relevance_bullets`, `quality_bullets`, `contribution_type`, and `sections_used_in` (where missing).
+**IMPORTANT:**
+- Do NOT echo `apa_citation`, `discovery_tool`, `quality_signals`, or
+  `scientific_tier` — the manager reattaches them. Every byte counts.
+- Keep bullets short: **max 120 characters per bullet**.
+- Always copy `source_id` verbatim so the manager can merge rows.
 
-**Language:** English, formal, scholarly. No emojis. No marketing voice.
+**Language:** English, formal, scholarly. No emojis. No "• " prefix inside strings.
 """
 
 
-class _PortfolioEntriesEnvelope:
-    """Lightweight schema-like helper for validating LLM output."""
+# Maximum sources per LLM call. DeepSeek's ~8k-token output cap was hit
+# during the first live run at 52 sources → truncation → JSON parse fail.
+# Batching keeps each call well under the cap.
+_MAX_SOURCES_PER_BATCH = 20
+
+
+class _SlimEntriesEnvelope:
+    """Lightweight validator for the minimal LLM output shape.
+
+    The agent only returns the fields it actually generates — the manager
+    reattaches apa_citation, discovery_tool, quality_signals, scientific_tier.
+    """
 
     @staticmethod
-    def validate(data: Dict[str, Any]) -> List[PortfolioEntry]:
+    def validate(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not isinstance(data, dict):
             raise ValueError("LLM response is not an object.")
         raw_entries = data.get("entries")
         if not isinstance(raw_entries, list):
             raise ValueError("LLM response missing 'entries' list.")
-        parsed: List[PortfolioEntry] = []
+        slim: List[Dict[str, Any]] = []
         for raw in raw_entries:
-            parsed.append(PortfolioEntry(**raw))
-        return parsed
+            if not isinstance(raw, dict):
+                continue
+            sid = raw.get("source_id")
+            if not sid:
+                continue
+            slim.append(
+                {
+                    "source_id": str(sid),
+                    "relevance_bullets": [
+                        str(b) for b in raw.get("relevance_bullets", []) if isinstance(b, str)
+                    ],
+                    "quality_bullets": [
+                        str(b) for b in raw.get("quality_bullets", []) if isinstance(b, str)
+                    ],
+                    "contribution_type": raw.get("contribution_type") or "background",
+                    "sections_used_in": [
+                        str(s) for s in raw.get("sections_used_in", []) if isinstance(s, str)
+                    ],
+                }
+            )
+        return slim
 
 
 class LiteraturePortfolioAgent(BaseAgent):
@@ -202,43 +232,107 @@ class LiteraturePortfolioAgent(BaseAgent):
 
         self._reload_prompt_if_needed(language_code)
 
+        # Batch to stay under the model's output token cap. DeepSeek hit 8k
+        # tokens at 52 entries in mission d9260a20 → truncation. _MAX_SOURCES_PER_BATCH
+        # is tuned so each call produces ~2-3k tokens of output max.
+        batches: List[List[Dict[str, Any]]] = [
+            source_records[i : i + _MAX_SOURCES_PER_BATCH]
+            for i in range(0, len(source_records), _MAX_SOURCES_PER_BATCH)
+        ]
+        logger.info(
+            "LiteraturePortfolioAgent: processing %d sources in %d batch(es) of <= %d",
+            len(source_records),
+            len(batches),
+            _MAX_SOURCES_PER_BATCH,
+        )
+
+        all_slim: List[Dict[str, Any]] = []
+        combined_details: Optional[Dict[str, Any]] = None
+
+        for bidx, batch in enumerate(batches, start=1):
+            slim, details = await self._run_single_batch(
+                batch_index=bidx,
+                total_batches=len(batches),
+                mission_goal=mission_goal,
+                source_records=batch,
+                language_code=language_code,
+                log_queue=log_queue,
+                update_callback=update_callback,
+            )
+            all_slim.extend(slim)
+            # Best-effort aggregated model details for cost tracking
+            if details:
+                if combined_details is None:
+                    combined_details = dict(details)
+                else:
+                    for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                        if k in details and isinstance(details[k], (int, float)):
+                            combined_details[k] = combined_details.get(k, 0) + details[k]
+
+        return ({"entries": all_slim}, combined_details, None)
+
+    async def _run_single_batch(
+        self,
+        *,
+        batch_index: int,
+        total_batches: int,
+        mission_goal: str,
+        source_records: List[Dict[str, Any]],
+        language_code: str,
+        log_queue: Optional[Any],
+        update_callback: Optional[Any],
+    ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """One LLM call for one batch. Returns slim entry dicts keyed by source_id."""
         user_prompt = self._build_user_prompt(
             mission_goal=mission_goal,
             source_records=source_records,
             language_code=language_code,
+            batch_index=batch_index,
+            total_batches=total_batches,
         )
 
         response, model_details = await self._call_llm(
             user_prompt=user_prompt,
             agent_mode="writing",  # uses the intelligent/writing model pool
             response_format={"type": "json_object"},
+            max_tokens=8192,  # slim output rarely exceeds ~2k tokens; headroom for batching
             log_queue=log_queue,
             update_callback=update_callback,
         )
 
         if not response or not response.choices:
-            logger.error("LiteraturePortfolioAgent: LLM returned no choices.")
-            return ({"entries": []}, model_details, None)
+            logger.error(
+                "LiteraturePortfolioAgent batch %d/%d: LLM returned no choices.",
+                batch_index,
+                total_batches,
+            )
+            return [], model_details
 
         raw_content = response.choices[0].message.content or ""
         try:
             parsed_json = parse_llm_json_response(raw_content)
-            entries = _PortfolioEntriesEnvelope.validate(parsed_json)
+            slim_entries = _SlimEntriesEnvelope.validate(parsed_json)
         except (ValueError, ValidationError, json.JSONDecodeError) as exc:
             logger.error(
-                "LiteraturePortfolioAgent: failed to parse LLM output (%s). Raw preview: %s",
+                "LiteraturePortfolioAgent batch %d/%d: failed to parse LLM output (%s). Raw preview: %s",
+                batch_index,
+                total_batches,
                 exc,
                 raw_content[:500] if raw_content else "<empty>",
             )
-            # Try a lighter sanitisation pass as fallback
             try:
                 parsed_json = json.loads(sanitize_json_string(raw_content))
-                entries = _PortfolioEntriesEnvelope.validate(parsed_json)
+                slim_entries = _SlimEntriesEnvelope.validate(parsed_json)
             except Exception as exc2:  # noqa: BLE001
-                logger.error("LiteraturePortfolioAgent: fallback parse also failed: %s", exc2)
-                return ({"entries": []}, model_details, None)
+                logger.error(
+                    "LiteraturePortfolioAgent batch %d/%d: fallback parse also failed: %s",
+                    batch_index,
+                    total_batches,
+                    exc2,
+                )
+                return [], model_details
 
-        return ({"entries": [e.model_dump(mode="json") for e in entries]}, model_details, None)
+        return slim_entries, model_details
 
     # ----- helpers -----
 
@@ -273,6 +367,8 @@ class LiteraturePortfolioAgent(BaseAgent):
         mission_goal: str,
         source_records: List[Dict[str, Any]],
         language_code: str,
+        batch_index: int = 1,
+        total_batches: int = 1,
     ) -> str:
         is_de = language_code.startswith("de")
         header = (
@@ -285,21 +381,35 @@ class LiteraturePortfolioAgent(BaseAgent):
 
         today = _dt.date.today().isoformat()
 
+        batch_line = ""
+        if total_batches > 1:
+            batch_line = (
+                f"Batch {batch_index} von {total_batches} — Verarbeiten Sie nur die unten gelisteten Quellen."
+                if is_de
+                else f"Batch {batch_index} of {total_batches} — process only the sources listed below."
+            )
+
         parts: List[str] = [
             header,
             "",
             f"{goal_label}: {mission_goal}",
             f"Aktuelles Datum / Current date: {today}",
-            "",
-            sources_label + ":",
-            "```json",
-            json.dumps(source_records, ensure_ascii=False, indent=2),
-            "```",
-            "",
-            (
-                "Liefern Sie ausschließlich das JSON-Objekt gemäß Schema (kein Markdown-Fence, kein Kommentar)."
-                if is_de
-                else "Return only the JSON object matching the schema (no markdown fence, no commentary)."
-            ),
         ]
+        if batch_line:
+            parts.append(batch_line)
+        parts.extend(
+            [
+                "",
+                sources_label + ":",
+                "```json",
+                json.dumps(source_records, ensure_ascii=False, indent=2),
+                "```",
+                "",
+                (
+                    "Liefern Sie ausschließlich das JSON-Objekt gemäß Schema (kein Markdown-Fence, kein Kommentar)."
+                    if is_de
+                    else "Return only the JSON object matching the schema (no markdown fence, no commentary)."
+                ),
+            ]
+        )
         return "\n".join(parts)

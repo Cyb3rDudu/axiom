@@ -32,6 +32,8 @@ class TierDefinition:
 # we still verify via metadata when possible.
 _TIER_A: List[str] = [
     "springer", "springer nature", "nature publishing", "naturenature",
+    "springer gabler", "springer vs", "springer fachmedien",
+    "link.springer",  # DOI path for Springer chapters
     "wiley", "blackwell",
     "elsevier", "sciencedirect",
     "sage",
@@ -45,6 +47,17 @@ _TIER_A: List[str] = [
     "palgrave",
     "de gruyter", "degruyter",
     "nomos",
+    # German academic / university-press publishers
+    "schäffer-poeschel", "schaeffer-poeschel", "schaffer poeschel",
+    "vahlen", "beck.de", "beck-online", "beck eLibrary", "c.h.beck",
+    "duncker & humblot", "duncker&humblot",
+    "mohr siebeck", "mohr-siebeck",
+    "campus verlag",
+    "utb-shop", "utb.de",
+    "hanser", "carl hanser",
+    "haufe lexware", "haufe-lexware", "haufe.de",
+    "pearson education",
+    # Indexes / aggregators
     "jstor",
     "oecd ilibrary",  # peer-reviewed OECD working series
     "american psychological association", "apa.org",
@@ -69,12 +82,23 @@ _TIER_B: List[str] = [
     "jrc.ec.europa.eu",
     "eurostat.ec.europa.eu", "eurostat",
     "destatis", "statistik austria", "statistik.at", "bfs.admin",
+    "bundesbank.de", "deutsche bundesbank",
     "ifo.de", "ifo institute",
     "diw.de", "diw berlin",
     "iwkoeln", "iwkoeln.de", "iw köln", "iw koeln",
     "wifo.ac.at", "wifo",
     "ihs.ac.at",
     "zew.de", "zew mannheim",
+    "ifw-kiel.de", "kielinstitut.de", "ifw kiel", "kiel institute",
+    "wsi.de", "wirtschafts- und sozialwissenschaftliches institut",
+    "bpb.de", "bundeszentrale für politische bildung",
+    "bmwi.de", "bmwk.de", "bmwe.de", "bundesministerium",
+    "auswaertiges-amt.de", "auswärtiges amt",
+    "kfw.de", "kfw research",
+    "swp-berlin.org", "stiftung wissenschaft und politik",
+    "dgap.org", "dgap.de",
+    "giga-hamburg.de", "giga hamburg",
+    "boell.de", "heinrich-böll-stiftung",  # politische Stiftungen
     "bruegel.org",
     "piie.com", "peterson institute",
     "csis.org",
@@ -88,6 +112,7 @@ _TIER_B: List[str] = [
     "repec.org", "ideas.repec",
     "iso.org",
     "din.de",
+    "bmbf.de", "dfg.de", "deutsche forschungsgemeinschaft",
 ]
 
 # Tier C — scientific-ish but unverified (generic preprints, unknown
@@ -119,10 +144,15 @@ _TIER_D: List[str] = [
 ]
 
 # Blacklist — disallowed as primary scientific source per KMU "Dos and
-# Don'ts" handout. Agent must surface as warnings, not silently include.
+# Don'ts" handout (Wikipedia, Gabler Wirtschaftslexikon, Tageszeitungen
+# ausdrücklich genannt). Agent must surface as warnings, not silently include.
 _BLACKLIST: List[str] = [
     "wikipedia.org",
     "wirtschaftslexikon.gabler", "gabler wirtschaftslexikon",
+    "bwl-lexikon.de",  # similar lexicon-style site
+    "wirtschaftslexikon24.com",
+    "economics-online.co.uk",
+    "scribbr.de", "scribbr.com",  # academic-help blog, not a source
     "investopedia",
     "medium.com",
     "quora.com",
@@ -137,6 +167,9 @@ _BLACKLIST: List[str] = [
     "spiegel.de/online",  # the tabloidy sibling — Spiegel proper is tier D
     "heise.de/news",
     "tomshardware",
+    "fibu-magazin.de",    # tax/financial blog without editorial review
+    "finanzkun.de",
+    "martinkaessler.com",  # personal blog
 ]
 
 

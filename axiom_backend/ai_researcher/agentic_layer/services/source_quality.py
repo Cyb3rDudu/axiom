@@ -71,6 +71,16 @@ def _infer_publication_type(
     if source_type == "internal":
         return "unknown"
 
+    # Local-RAG documents that end up on tier A/B without an explicit journal
+    # are academic monographs / edited volumes. This covers the typical case
+    # of ingesting a VWL textbook into the user's library.
+    if source_type == "document" and publisher_tier in ("A", "B") and not journal:
+        if isbn:
+            return "monograph_scientific_publisher"
+        # Even without ISBN, a document-type source on a scientific publisher
+        # is very likely a book or book chapter.
+        return "monograph_scientific_publisher"
+
     # Explicit signals first. Any non-empty `journal` field on a tier-A or
     # tier-B publisher is a peer-reviewed journal article for our purposes
     # — we also accept common title tokens for edge cases where publisher
@@ -151,8 +161,19 @@ def compute_quality_signals(note: Note, now: Optional[_dt.date] = None) -> Quali
     url = meta.get("url") if isinstance(meta.get("url"), str) else None
     publisher = meta.get("publisher") if isinstance(meta.get("publisher"), str) else None
     journal = meta.get("journal") if isinstance(meta.get("journal"), str) else None
+    filename = meta.get("original_filename") or meta.get("filename") or ""
 
-    tier = classify_tier(publisher, journal, url, _extract_domain(url), meta.get("doi"))
+    # Also look at filename for publisher hints — many ingested books encode
+    # the publisher in the filename (e.g. "Mankiw2018_Book_…").
+    tier = classify_tier(publisher, journal, url, _extract_domain(url), meta.get("doi"), filename)
+
+    # Local-RAG document fallback: when the user has ingested a document into
+    # their library and no external signal matches a known tier, default to
+    # Tier A. The assumption is that scientific-library ingestion is curated;
+    # this keeps Mankiw / Bofinger / Heine books etc. from landing in Tier C
+    # (unknown → conservative "C") just because their metadata block is thin.
+    if note.source_type == "document" and tier == "unknown":
+        tier = "A"
 
     pubtype = _infer_publication_type(note.source_type, meta, tier)
     peer = _peer_reviewed_from_type(pubtype)
