@@ -452,12 +452,24 @@ def update_mission_status(db: Session, mission_id: str, status: str,
         db.refresh(db_mission)
     return db_mission
 
-def update_mission_context(db: Session, mission_id: str, 
+def update_mission_context(db: Session, mission_id: str,
                           mission_context: Dict[str, Any]) -> Optional[Mission]:
     """Update a mission's context data."""
     db_mission = db.query(Mission).filter(Mission.id == mission_id).first()
     if db_mission:
         db_mission.mission_context = mission_context
+        db_mission.updated_at = get_current_time()
+        db.commit()
+        db.refresh(db_mission)
+    return db_mission
+
+def update_mission_literature_portfolio_output(
+    db: Session, mission_id: str, portfolio_output: Optional[Dict[str, Any]]
+) -> Optional[Mission]:
+    """Persist the generated Literaturportfolio JSON on the mission row."""
+    db_mission = db.query(Mission).filter(Mission.id == mission_id).first()
+    if db_mission:
+        db_mission.literature_portfolio_output = portfolio_output
         db_mission.updated_at = get_current_time()
         db.commit()
         db.refresh(db_mission)

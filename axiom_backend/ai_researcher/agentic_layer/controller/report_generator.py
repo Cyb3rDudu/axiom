@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional, List, Callable, Tuple
+from typing import Dict, Any, Optional, List, Callable, Set, Tuple
 import queue
 import re
 import datetime
@@ -9,6 +9,9 @@ import hashlib
 from ai_researcher.config import THOUGHT_PAD_CONTEXT_LIMIT
 from ai_researcher.agentic_layer.async_context_manager import ExecutionLogEntry
 from ai_researcher.agentic_layer.schemas.planning import ReportSection
+from ai_researcher.agentic_layer.controller.literature_portfolio_manager import (
+    LiteraturePortfolioManager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +24,58 @@ class ReportGenerator:
     def __init__(self, controller):
         """
         Initialize the ReportGenerator with a reference to the AgentController.
-        
+
         Args:
             controller: The AgentController instance
         """
         self.controller = controller
+        self._portfolio_manager = LiteraturePortfolioManager(controller)
+
+    async def _maybe_generate_portfolio(
+        self,
+        *,
+        mission_id: str,
+        full_draft: str,
+        used_doc_ids: Set[str],
+        doc_metadata_source: Dict[str, Any],
+        log_queue: Optional[queue.Queue] = None,
+        update_callback: Optional[Callable[[queue.Queue, ExecutionLogEntry], None]] = None,
+    ) -> str:
+        """If enabled for this mission, build the Literaturportfolio and
+        return a markdown snippet to append to the final report. Returns ''
+        when disabled, no cited sources, or on any failure (non-fatal)."""
+        try:
+            output = await self._portfolio_manager.run_if_enabled(
+                mission_id=mission_id,
+                full_draft=full_draft,
+                used_doc_ids=used_doc_ids,
+                doc_metadata_source=doc_metadata_source,
+                log_queue=log_queue,
+                update_callback=update_callback,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Literaturportfolio generation failed for mission %s (non-fatal): %s",
+                mission_id,
+                exc,
+                exc_info=True,
+            )
+            return ""
+
+        if output is None or not output.markdown_table:
+            return ""
+
+        await self.controller.context_manager.log_execution_step(
+            mission_id, "LiteraturePortfolioAgent", "Generate Literaturportfolio",
+            output_summary=(
+                f"Portfolio generated: {output.compliance.source_count} sources, "
+                f"{output.compliance.scientific_share:.0%} scientific, "
+                f"traffic_light={output.compliance.traffic_light}."
+            ),
+            status="success",
+            log_queue=log_queue, update_callback=update_callback,
+        )
+        return "\n\n" + output.markdown_table.strip()
         
     async def generate_report_title(
         self,
@@ -505,6 +555,19 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
                 bibliography = self._build_author_year_bibliography(all_notes, doc_metadata_source, mission_id)
                 if bibliography:
                     full_draft = full_draft.strip() + "\n\n" + bibliography
+                # Author-year mode: every note's source counts as a citation
+                # for the purpose of the Literaturportfolio (they all appear
+                # in the bibliography). We pass the full doc_metadata_source
+                # keyset so the portfolio reflects the same sources.
+                portfolio_md = await self._maybe_generate_portfolio(
+                    mission_id=mission_id,
+                    full_draft=full_draft,
+                    used_doc_ids=set(doc_metadata_source.keys()),
+                    doc_metadata_source=doc_metadata_source,
+                    log_queue=log_queue, update_callback=update_callback,
+                )
+                if portfolio_md:
+                    full_draft = full_draft.strip() + portfolio_md
                 await self.controller.context_manager.store_final_report(mission_id, full_draft.strip())
                 await self.controller.context_manager.update_mission_status(mission_id, "completed")
                 await self.controller.context_manager.log_execution_step(
@@ -813,7 +876,20 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
         else:
             logger.warning(f"Mission context or metadata not found when trying to prepend title for mission {mission_id}.")
 
-        final_report_string += final_text_body.strip() + references_section
+        # Insert the Literaturportfolio (if enabled) between body and references
+        # so the references list still sits at the very end of the document.
+        portfolio_md = await self._maybe_generate_portfolio(
+            mission_id=mission_id,
+            full_draft=final_text_body,
+            used_doc_ids=used_doc_ids,
+            doc_metadata_source=doc_metadata_source,
+            log_queue=log_queue, update_callback=update_callback,
+        )
+        body_with_portfolio = final_text_body.strip()
+        if portfolio_md:
+            body_with_portfolio = body_with_portfolio + portfolio_md
+
+        final_report_string += body_with_portfolio + references_section
 
         await self.controller.context_manager.store_final_report(mission_id, final_report_string.strip())
         await self.controller.context_manager.update_mission_status(mission_id, "completed")

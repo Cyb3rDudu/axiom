@@ -126,6 +126,26 @@ async def update_mission_context_no_timestamp(
     await db.commit()
     return result.scalar_one_or_none()
 
+
+async def update_mission_literature_portfolio_output(
+    db: AsyncSession,
+    mission_id: str,
+    portfolio_output: Optional[Dict[str, Any]],
+) -> Optional[models.Mission]:
+    """Persist the generated Literaturportfolio JSON on the mission row."""
+    stmt = (
+        update(models.Mission)
+        .where(models.Mission.id == mission_id)
+        .values(
+            literature_portfolio_output=portfolio_output,
+            updated_at=get_current_time(),
+        )
+        .returning(models.Mission)
+    )
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.scalar_one_or_none()
+
 async def delete_mission(
     db: AsyncSession,
     mission_id: str,

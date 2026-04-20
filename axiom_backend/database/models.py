@@ -108,6 +108,10 @@ class Mission(Base):
     # Language used for this mission (can override user default)
     language_code = Column(String(10), ForeignKey("supported_languages.code"), default='en', nullable=True)
 
+    # Literaturportfolio deliverable — KMU-compliant source reflection.
+    # NULL when disabled via opt-out keyword / flag or when generation failed hard.
+    literature_portfolio_output = Column(JSONB, nullable=True)
+
     created_at = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True))
 

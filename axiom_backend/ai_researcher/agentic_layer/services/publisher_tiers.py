@@ -1,0 +1,178 @@
+"""
+Curated publisher / institution tier classification used by the
+Literaturportfolio workflow.
+
+Lookup is intentionally substring-based on normalised strings — the incoming
+metadata (URL domain, publisher name, journal title, DOI prefix) is messy,
+so exact-match would miss too many sources. We normalise to lowercase and
+strip common noise before matching.
+
+Extensions should add entries here rather than introducing per-mission
+configuration — drift in this list is acceptable; the agent always sees the
+computed tier plus the raw publisher string, so it can sanity-check.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import List, Literal, Optional
+
+
+Tier = Literal["A", "B", "C", "D", "blacklist", "unknown"]
+
+
+@dataclass(frozen=True)
+class TierDefinition:
+    tier: Tier
+    keywords: List[str] = field(default_factory=list)
+    """Normalised substrings to match against publisher / URL / journal."""
+
+
+# Tier A — established scientific publishers. Peer-review is the norm, though
+# we still verify via metadata when possible.
+_TIER_A: List[str] = [
+    "springer", "springer nature", "nature publishing", "naturenature",
+    "wiley", "blackwell",
+    "elsevier", "sciencedirect",
+    "sage",
+    "taylor & francis", "taylorandfrancis", "routledge", "tandfonline",
+    "oxford university press", "oup.com", "academic.oup",
+    "cambridge university press", "cambridge.org",
+    "mit press",
+    "ieee", "ieee xplore", "ieeexplore",
+    "acm", "dl.acm.org",
+    "emerald",
+    "palgrave",
+    "de gruyter", "degruyter",
+    "nomos",
+    "jstor",
+    "oecd ilibrary",  # peer-reviewed OECD working series
+    "american psychological association", "apa.org",
+    "american economic association",
+    "frontiers in",
+    "plos",
+    "bmc ",
+    "mdpi",  # controversial, but peer-reviewed; agent can flag
+]
+
+# Tier B — reputable research institutions, central banks, standards bodies,
+# official statistics. Not strictly peer-reviewed but authoritative.
+_TIER_B: List[str] = [
+    "imf.org", "international monetary fund",
+    "worldbank.org", "world bank",
+    "oecd.org",
+    "unctad.org", "un.org", "united nations",
+    "wto.org",
+    "bis.org", "bank for international settlements",
+    "ecb.europa.eu", "european central bank",
+    "ec.europa.eu", "european commission",
+    "jrc.ec.europa.eu",
+    "eurostat.ec.europa.eu", "eurostat",
+    "destatis", "statistik austria", "statistik.at", "bfs.admin",
+    "ifo.de", "ifo institute",
+    "diw.de", "diw berlin",
+    "iwkoeln", "iwkoeln.de", "iw köln", "iw koeln",
+    "wifo.ac.at", "wifo",
+    "ihs.ac.at",
+    "zew.de", "zew mannheim",
+    "bruegel.org",
+    "piie.com", "peterson institute",
+    "csis.org",
+    "merics.org",
+    "rhodium group",
+    "brookings",
+    "rand.org",
+    "nber.org",
+    "cepr.org",
+    "ssrn.com",  # working papers (peer-review uncertain but reputable)
+    "repec.org", "ideas.repec",
+    "iso.org",
+    "din.de",
+]
+
+# Tier C — scientific-ish but unverified (generic preprints, unknown
+# academic publishers, edited collections we can't classify).
+_TIER_C: List[str] = [
+    "arxiv.org",
+    "biorxiv.org",
+    "chemrxiv.org",
+    "researchsquare",
+    "preprints.org",
+    "osf.io",
+]
+
+# Tier D — practitioner / grey literature. Useful as "Praxisquelle" per KMU
+# rules, but counts against the ≥ 50 % scientific share.
+_TIER_D: List[str] = [
+    "mckinsey", "bcg.com", "boston consulting",
+    "deloitte", "pwc.", "kpmg", "ey.com", "ernst & young",
+    "accenture",
+    "gartner", "forrester",
+    "harvard business review", "hbr.org",
+    "handelsblatt", "wiwo.de", "wirtschaftswoche",
+    "faz.net", "nzz.ch",
+    "ft.com", "financial times",
+    "economist.com",
+    "bloomberg",
+    "reuters",
+    "statista.com",
+]
+
+# Blacklist — disallowed as primary scientific source per KMU "Dos and
+# Don'ts" handout. Agent must surface as warnings, not silently include.
+_BLACKLIST: List[str] = [
+    "wikipedia.org",
+    "wirtschaftslexikon.gabler", "gabler wirtschaftslexikon",
+    "investopedia",
+    "medium.com",
+    "quora.com",
+    "reddit.com",
+    "stackexchange",
+    "substack.com",
+    "linkedin.com/pulse",
+    "bild.de",
+    "kronen zeitung", "krone.at",
+    "oe24.at",
+    "blick.ch",
+    "spiegel.de/online",  # the tabloidy sibling — Spiegel proper is tier D
+    "heise.de/news",
+    "tomshardware",
+]
+
+
+def _normalise(s: Optional[str]) -> str:
+    if not s:
+        return ""
+    return s.lower().strip().replace("  ", " ")
+
+
+def classify_tier(*candidates: Optional[str]) -> Tier:
+    """Return the tier for a source given one or more candidate strings
+    (publisher name, journal title, URL, DOI prefix). The *strongest* tier
+    wins — blacklist > A > B > C > D > unknown. That way a Wikipedia mirror
+    hosted at a reputable university's domain still ends up flagged.
+    """
+    haystack = " ".join(_normalise(c) for c in candidates if c)
+    if not haystack:
+        return "unknown"
+
+    for kw in _BLACKLIST:
+        if kw in haystack:
+            return "blacklist"
+    for kw in _TIER_A:
+        if kw in haystack:
+            return "A"
+    for kw in _TIER_B:
+        if kw in haystack:
+            return "B"
+    for kw in _TIER_C:
+        if kw in haystack:
+            return "C"
+    for kw in _TIER_D:
+        if kw in haystack:
+            return "D"
+    return "unknown"
+
+
+def is_blacklisted(*candidates: Optional[str]) -> bool:
+    return classify_tier(*candidates) == "blacklist"

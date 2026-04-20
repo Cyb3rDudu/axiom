@@ -563,6 +563,22 @@ async def create_mission(
             "document_group_name": document_group_name,
             "use_web_search": use_web_search
         }
+
+        # Literaturportfolio deliverable — default ON, opt-out via keyword in
+        # user_request or explicit API flag literature_portfolio=false.
+        # Keeps KMU-style missions compliant out of the box without forcing
+        # the switch on users who don't want the extra deliverable.
+        from ai_researcher.agentic_layer.controller.utils.portfolio_optout import (
+            deliverables_for_mission,
+        )
+        explicit_portfolio_flag = mission_data.get("literature_portfolio")
+        if explicit_portfolio_flag is not None:
+            explicit_portfolio_flag = bool(explicit_portfolio_flag)
+        all_settings["deliverables"] = deliverables_for_mission(
+            user_request,
+            explicit_flag=explicit_portfolio_flag,
+        )
+
         mission_context.mission_settings = all_settings
         
         final_mission_settings_dict = None
