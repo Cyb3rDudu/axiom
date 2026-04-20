@@ -994,14 +994,27 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                             from sqlalchemy import text as sql_text
                             db = next(get_db())
                             try:
-                                filter_clause = ""
+                                # Scope the metadata list to the calling user.
+                                # Group filter (if provided) layers on top.
+                                from ai_researcher.user_context import get_current_user as _get_cu
+                                _cu = _get_cu()
+                                _uid = getattr(_cu, "id", None) if _cu else None
+
+                                join_clause = ""
+                                where_parts = []
                                 params = {}
+                                if _uid is not None:
+                                    where_parts.append("d.user_id = :uid")
+                                    params["uid"] = _uid
                                 if document_group_id:
-                                    filter_clause = "JOIN document_group_association dga ON d.id = dga.document_id WHERE dga.document_group_id = :gid"
+                                    join_clause = "JOIN document_group_association dga ON d.id = dga.document_id"
+                                    where_parts.append("dga.document_group_id = :gid")
                                     params["gid"] = document_group_id
+
+                                where_clause = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
                                 rows = db.execute(sql_text(f"""
                                     SELECT d.original_filename, d.metadata_, d.id::text
-                                    FROM documents d {filter_clause}
+                                    FROM documents d {join_clause}{where_clause}
                                     ORDER BY d.created_at DESC LIMIT 50
                                 """), params).fetchall()
                                 if rows:
