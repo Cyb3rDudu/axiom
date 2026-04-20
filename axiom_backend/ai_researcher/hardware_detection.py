@@ -90,7 +90,7 @@ class HardwareDetector:
             # Check PyTorch CUDA availability
             if torch.cuda.is_available():
                 return True
-                
+
             # Check nvidia-smi as fallback
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
@@ -99,7 +99,9 @@ class HardwareDetector:
                 timeout=5
             )
             return result.returncode == 0
-        except (subprocess.SubprocessError, FileNotFoundError):
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
+            # OSError catches "Exec format error" when a cross-arch nvidia-smi
+            # binary is present in the container but unusable on the host.
             return False
             
     def _check_amd_rocm(self) -> bool:
