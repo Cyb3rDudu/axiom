@@ -15,7 +15,7 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { draftSettings, setDraftSettings, loadSettings } = useSettingsStore();
+  const { draftSettings, setDraftSettings, loadSettings, persistAppearance } = useSettingsStore();
 
   // Get theme from settings or localStorage fallback
   const theme = draftSettings?.appearance?.theme ||
@@ -75,26 +75,34 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const setTheme = (newTheme: Theme) => {
     if (!draftSettings) return;
-    
+
+    const nextAppearance = {
+      ...draftSettings.appearance,
+      theme: newTheme,
+    };
     setDraftSettings({
       ...draftSettings,
-      appearance: {
-        ...draftSettings.appearance,
-        theme: newTheme,
-      },
+      appearance: nextAppearance,
     });
+    // Fire-and-forget persistence. The store does an optimistic update and
+    // reverts on failure, so we don't need to await or catch here — without
+    // this call the switch would snap back after logout (only draftSettings
+    // gets mutated, never the backend).
+    void persistAppearance(nextAppearance);
   };
 
   const setColorScheme = (newScheme: ColorScheme) => {
     if (!draftSettings) return;
-    
+
+    const nextAppearance = {
+      ...draftSettings.appearance,
+      color_scheme: newScheme,
+    };
     setDraftSettings({
       ...draftSettings,
-      appearance: {
-        ...draftSettings.appearance,
-        color_scheme: newScheme,
-      },
+      appearance: nextAppearance,
     });
+    void persistAppearance(nextAppearance);
   };
 
   return (

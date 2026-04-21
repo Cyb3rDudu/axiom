@@ -135,6 +135,7 @@ interface SettingsState {
   // Actions
   loadSettings: () => Promise<void>
   updateSettings: () => Promise<void>
+  persistAppearance: (appearance: AppearanceSettings) => Promise<void>
   setDraftSettings: (settings: Partial<UserSettings>) => void
   setProfileField: (field: keyof UserProfile, value: string) => void
   discardDraftChanges: () => void
@@ -495,6 +496,42 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         error: errorMessage, 
         isLoading: false 
       })
+      throw error
+    }
+  },
+
+  persistAppearance: async (appearance) => {
+    // Optimistically update both settings and draftSettings so the UI snaps
+    // to the new value immediately. On server error, revert to the previous
+    // value so the toggle stays in sync with what's actually stored.
+    const previous = get().settings?.appearance
+    set(state => ({
+      settings: state.settings ? { ...state.settings, appearance } : state.settings,
+      draftSettings: state.draftSettings
+        ? { ...state.draftSettings, appearance }
+        : state.draftSettings,
+    }))
+
+    try {
+      const savedSettings = await settingsApi.updateAppearance(appearance)
+      set(state => ({
+        settings: savedSettings,
+        draftSettings: state.draftSettings
+          ? { ...state.draftSettings, appearance: savedSettings.appearance }
+          : savedSettings,
+      }))
+    } catch (error) {
+      console.error('Failed to persist appearance settings:', error)
+      if (previous) {
+        set(state => ({
+          settings: state.settings
+            ? { ...state.settings, appearance: previous }
+            : state.settings,
+          draftSettings: state.draftSettings
+            ? { ...state.draftSettings, appearance: previous }
+            : state.draftSettings,
+        }))
+      }
       throw error
     }
   },

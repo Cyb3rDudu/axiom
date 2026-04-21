@@ -137,6 +137,19 @@ export const settingsApi = {
     return response.data
   },
 
+  // Persist only the appearance block (theme + color scheme). Backend uses
+  // exclude_unset=True and routes appearance to its own column, so we can
+  // PUT a partial payload without touching AI endpoints, search, etc. and
+  // without triggering AI-config validation on the full settings object.
+  updateAppearance: async (
+    appearance: UserSettings['appearance']
+  ): Promise<UserSettings> => {
+    const response = await apiClient.put(API_CONFIG.ENDPOINTS.SETTINGS.UPDATE, {
+      settings: { appearance },
+    })
+    return response.data
+  },
+
   // Test AI connection
   testConnection: async (
     provider: string,
