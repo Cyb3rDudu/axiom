@@ -1885,15 +1885,78 @@ class SimplifiedWritingAgent:
         try:
             response, model_details = await self.model_dispatcher.dispatch(messages=messages, agent_mode="simplified_writing")
 
-            # Track LLM call for stats
             session_id = context_info.get("session_id")
             if session_id and model_details:
                 await self.stats_tracker.track_llm_call(session_id, model_details)
 
-            if response and response.choices:
-                return response.choices[0].message.content
-                
-            return "Error: Could not generate a response."
+            if not (response and response.choices):
+                return "Error: Could not generate a response."
+
+            choice = response.choices[0]
+            content = choice.message.content or ""
+            finish_reason = getattr(choice, "finish_reason", None)
+
+            # Auto-continuation for max_tokens truncation. DeepSeek-chat caps
+            # at 8192 output tokens (~6k words); a full 3k-word report
+            # shrink still fits comfortably, but aggressive revision tasks
+            # on larger drafts can overshoot. We run up to
+            # AXIOM_WRITING_MAX_CONTINUATIONS follow-up calls feeding the
+            # partial response back as an assistant turn, asking the model
+            # to resume exactly where it stopped. If still truncated after
+            # the budget is exhausted, surface a visible warning.
+            import os as _os
+            max_cont = int(_os.getenv("AXIOM_WRITING_MAX_CONTINUATIONS", "2"))
+            cont_count = 0
+            while finish_reason == "length" and cont_count < max_cont:
+                cont_count += 1
+                logger.info(
+                    f"simplified_writing response truncated (finish_reason=length), "
+                    f"auto-continuing ({cont_count}/{max_cont})"
+                )
+                cont_messages = list(messages) + [
+                    {"role": "assistant", "content": content},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Deine letzte Antwort wurde beim Token-Limit abgeschnitten. "
+                            "Setze NAHTLOS dort fort, wo du aufgehört hast (keine "
+                            "Wiederholung des bereits geschriebenen Teils, keine erneute "
+                            "Einleitung). Wenn du innerhalb eines content-block warst, "
+                            "schreibe NUR den fehlenden Rest und schließe ihn korrekt "
+                            "mit ```. Wenn du außerhalb warst, schreibe normal weiter."
+                        ),
+                    },
+                ]
+                cont_resp, cont_details = await self.model_dispatcher.dispatch(
+                    messages=cont_messages, agent_mode="simplified_writing"
+                )
+                if session_id and cont_details:
+                    await self.stats_tracker.track_llm_call(session_id, cont_details)
+                if not (cont_resp and cont_resp.choices):
+                    break
+                cont_choice = cont_resp.choices[0]
+                cont_text = cont_choice.message.content or ""
+                if not cont_text.strip():
+                    break
+                # Glue continuation directly — the prompt forbids the model
+                # from re-echoing the already-emitted prefix, so the join is
+                # a simple concatenation. A leading space avoids fused words
+                # when the cut happened inside a token.
+                content = content + ("" if content.endswith(("\n", " ")) else "") + cont_text
+                finish_reason = getattr(cont_choice, "finish_reason", None)
+
+            if finish_reason == "length":
+                logger.warning(
+                    f"simplified_writing response still truncated after "
+                    f"{max_cont} continuations — surfacing warning to user"
+                )
+                content += (
+                    "\n\n> ⚠️ *Die Antwort wurde trotz mehrerer Fortsetzungen "
+                    "gekürzt (Output-Token-Limit). Bitte den Task in kleinere "
+                    "Teile zerlegen — z. B. eine Sektion pro Prompt.*"
+                )
+
+            return content
             
         except Exception as e:
             # Handle authentication and other API errors with user-friendly messages

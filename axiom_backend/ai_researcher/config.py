@@ -338,6 +338,13 @@ AGENT_ROLE_MAX_TOKENS = {
     "query_strategy": int(
         os.getenv("QUERY_STRATEGY_MAX_TOKENS", 2000)
     ),  # Increased for thinking models that need reasoning tokens
+    # SimplifiedWritingAgent (the interactive writing-mode chat) may need to
+    # emit large revisions of the full draft in a single turn — e.g. shrink
+    # a 15k-word research draft down to a 3k-word Hausarbeit. The previous
+    # default of 2048 truncated mid-sentence in such cases. 8192 lets the
+    # agent return a complete ~6k-word revision per turn and is capped by
+    # the provider limit (DeepSeek-chat = 8192) where lower.
+    "simplified_writing": int(os.getenv("SIMPLIFIED_WRITING_MAX_TOKENS", 8192)),
     "default": int(
         os.getenv("DEFAULT_MAX_TOKENS", 2048)
     ),  # Default max tokens if role not specified
