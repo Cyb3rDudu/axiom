@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime
 import logging
+import re
 from typing import Dict, Any, Optional, List
 
 from ai_researcher.agentic_layer.model_dispatcher import ModelDispatcher
@@ -116,6 +117,48 @@ class WritingStatsTracker:
             logger.error(f"Error sending stats update for session {session_id}: {e}")
 
 
+# German + English revision verbs. Matched as whole words near the start
+# of the prompt to avoid false positives like "Please explain the
+# shrinking of demand in section 2" — that's a content question, not a
+# revision of the draft itself. Anchoring to the first ~200 chars keeps
+# the heuristic tight while still catching multi-line briefs whose first
+# paragraph states the task.
+_REVISION_PATTERNS = re.compile(
+    r"\b("
+    r"kürze|kürzen|kurzfassen|einkürzen|einkürzung|"
+    r"überarbeite|überarbeiten|überarbeitung|"
+    r"revidiere|revidieren|revision|"
+    r"umschreibe|umschreiben|umformuliere|umformulieren|"
+    r"rewrite|rewriting|"
+    r"revise|revising|revision|"
+    r"shorten|shortening|condense|condensing|trim|trimming|"
+    r"polish|polishing|edit|editing|refactor|"
+    r"shrink|shrinking"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_draft_revision(prompt: str, draft_content: str) -> bool:
+    """Return True when the user is clearly asking to revise an existing
+    draft (shrink/rewrite/polish/…) rather than generate new content.
+
+    Gate conditions — all must hold:
+      1. There is a non-trivial draft already (more than ~200 chars).
+         Without a draft, "überarbeite" has nothing to act on, so we
+         still want the full agent flow.
+      2. A revision verb appears in the prompt head (first 240 chars).
+         This avoids misfiring on long research briefs that happen to
+         contain the word "überarbeitet" somewhere in the middle.
+    """
+    if not prompt or not draft_content:
+        return False
+    if len(draft_content) < 200:
+        return False
+    head = prompt[:240]
+    return bool(_REVISION_PATTERNS.search(head))
+
+
 class SimplifiedWritingAgent:
     """
     A stateless agent for handling writing tasks. It uses a two-step process:
@@ -169,17 +212,42 @@ class SimplifiedWritingAgent:
             if status_callback:
                 await status_callback("analyzing", "Analyzing your request...")
             
-            # Step 1: Router LLM call - determine if external tools are needed
-            if status_callback:
-                await status_callback("router_thinking", "Router agent is deciding which tools to use...")
-            
-            router_decision = await self._run_router(prompt, chat_history, context_info, status_callback)
-            logger.info(f"Router decision: {router_decision}")
-            
-            # Send router decision feedback to frontend
-            if status_callback:
-                decision_message = self._get_router_decision_message(router_decision, context_info)
-                await status_callback("router_decision", decision_message)
+            # Fast-path: when the user is asking for a revision of an
+            # existing draft (shrink, rewrite, polish, restructure…) we
+            # skip the router and go straight to the main LLM. The
+            # router tends to decompose revision briefs into research
+            # queries — e.g. "Behalte China 2023-2025 Daten" turns into
+            # a web search about gallium exports — which burns minutes
+            # of search time to retrieve information already cited in
+            # the draft. Heuristic: draft present + prompt contains a
+            # revision verb at the start or as an explicit action.
+            is_revision_task = _looks_like_draft_revision(prompt, draft_content)
+            if is_revision_task:
+                logger.info(
+                    "Revision task detected — bypassing router and "
+                    "retrieval. Main LLM call operates on the draft + "
+                    "chat history only."
+                )
+                router_decision = "none"
+                if status_callback:
+                    await status_callback(
+                        "router_decision",
+                        "Entwurfs-Revision erkannt – überspringe Recherche.",
+                    )
+            else:
+                # Step 1: Router LLM call - determine if external tools are needed
+                if status_callback:
+                    await status_callback("router_thinking", "Router agent is deciding which tools to use...")
+
+                router_decision = await self._run_router(prompt, chat_history, context_info, status_callback)
+                logger.info(f"Router decision: {router_decision}")
+
+                # Send router decision feedback to frontend. Skipped on
+                # the revision fast-path because we already sent a
+                # tailored message there.
+                if status_callback:
+                    decision_message = self._get_router_decision_message(router_decision, context_info)
+                    await status_callback("router_decision", decision_message)
 
             # Step 2: Gather external information with iterative improvement
             external_context = ""
