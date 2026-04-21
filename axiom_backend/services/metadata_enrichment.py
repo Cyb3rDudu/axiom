@@ -6,6 +6,7 @@ to supplement LLM-based metadata extraction. Includes web page metadata extracti
 from HTML using Schema.org JSON-LD, Dublin Core, and Open Graph tags.
 """
 
+import asyncio
 import re
 import json
 import logging
@@ -58,6 +59,54 @@ def _get_client() -> httpx.AsyncClient:
     return _http_client
 
 
+async def _get_with_retry(
+    url: str,
+    *,
+    max_retries: int = 2,
+    backoff_base: float = 1.0,
+    label: str = "",
+) -> Optional[httpx.Response]:
+    """GET ``url`` with retry on timeout / transient 5xx / connection errors.
+
+    Lookups to CrossRef/OpenLibrary/OpenAlex routinely see spurious 10 s
+    timeouts during heavy ingest windows — one retry with short backoff
+    avoids losing the entire enrichment for a single network blip (observed
+    on Woeckener_Mikrooekonomik DOI 10.1007/978-3-642-36897-4). Retries
+    happen inline and never block longer than ~3 s total on the happy path.
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = await _get_client().get(url)
+            # Retry on transient server errors; let 4xx propagate to the caller.
+            if resp.status_code >= 500 and attempt < max_retries:
+                logger.info(
+                    f"{label or url}: HTTP {resp.status_code} "
+                    f"(attempt {attempt + 1}/{max_retries + 1}), retrying"
+                )
+                await asyncio.sleep(backoff_base * (2 ** attempt))
+                continue
+            return resp
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                delay = backoff_base * (2 ** attempt)
+                logger.info(
+                    f"{label or url}: {type(exc).__name__} "
+                    f"(attempt {attempt + 1}/{max_retries + 1}), retry in {delay:.1f}s"
+                )
+                await asyncio.sleep(delay)
+                continue
+            logger.warning(
+                f"{label or url}: {type(exc).__name__} after "
+                f"{max_retries + 1} attempts – {exc}"
+            )
+            return None
+    if last_exc is not None:
+        logger.warning(f"{label or url}: exhausted retries – {last_exc}")
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Identifier detection
 # ---------------------------------------------------------------------------
@@ -100,14 +149,18 @@ async def lookup_crossref(doi: str) -> Optional[dict]:
     """Look up a DOI via the CrossRef API (free, no auth).
 
     Returns a dict matching the Axiom metadata schema, or ``None`` on failure.
+    The returned dict may carry two private keys — ``_isbn_print`` and
+    ``_isbn_electronic`` — for callers that want to drive an OpenLibrary
+    fallback with the print variant. Both are stripped before persistence.
     """
     url = f"https://api.crossref.org/works/{doi}"
+    resp = await _get_with_retry(url, label=f"CrossRef {doi}")
+    if resp is None:
+        return None
+    if resp.status_code == 404:
+        logger.info(f"CrossRef lookup for DOI {doi}: not found (404)")
+        return None
     try:
-        client = _get_client()
-        resp = await client.get(url)
-        if resp.status_code == 404:
-            logger.info(f"CrossRef lookup for DOI {doi}: not found (404)")
-            return None
         resp.raise_for_status()
         data = resp.json()
         item = data.get("message", {})
@@ -140,9 +193,21 @@ async def lookup_crossref(doi: str) -> Optional[dict]:
         # Publisher
         publisher = item.get("publisher")
 
-        # ISBN
+        # ISBN — split print vs electronic when CrossRef discloses it. Prefer
+        # print for the canonical field since OpenLibrary indexes print
+        # editions more reliably than eBooks.
+        isbn_print: Optional[str] = None
+        isbn_electronic: Optional[str] = None
+        for entry in item.get("isbn-type", []):
+            val = entry.get("value")
+            if not val:
+                continue
+            if entry.get("type") == "print" and not isbn_print:
+                isbn_print = val
+            elif entry.get("type") == "electronic" and not isbn_electronic:
+                isbn_electronic = val
         isbn_list = item.get("ISBN", [])
-        isbn = isbn_list[0] if isbn_list else None
+        canonical_isbn = isbn_print or isbn_electronic or (isbn_list[0] if isbn_list else None)
 
         result = {
             "title": title,
@@ -150,18 +215,17 @@ async def lookup_crossref(doi: str) -> Optional[dict]:
             "publication_year": year,
             "journal_or_source": journal,
             "publisher": publisher,
-            "isbn": isbn,
+            "isbn": canonical_isbn,
+            "_isbn_print": isbn_print,
+            "_isbn_electronic": isbn_electronic,
             "doi": normalize_doi(item.get("DOI") or doi or ""),
             "document_type": "paper",
         }
         logger.info(f"CrossRef lookup for DOI {doi}: found")
         return result
 
-    except httpx.TimeoutException:
-        logger.warning(f"CrossRef lookup for DOI {doi}: timeout")
-        return None
     except Exception as exc:
-        logger.warning(f"CrossRef lookup for DOI {doi}: error – {exc}")
+        logger.warning(f"CrossRef lookup for DOI {doi}: parse error – {exc}")
         return None
 
 
@@ -176,14 +240,16 @@ async def lookup_openlibrary(isbn: str) -> Optional[dict]:
     Returns a dict matching the Axiom metadata schema, or ``None`` on failure.
     """
     url = f"https://openlibrary.org/isbn/{isbn}.json"
+    resp = await _get_with_retry(url, label=f"OpenLibrary {isbn}")
+    if resp is None:
+        return None
+    if resp.status_code == 404:
+        logger.info(f"OpenLibrary lookup for ISBN {isbn}: not found (404)")
+        return None
     try:
-        client = _get_client()
-        resp = await client.get(url)
-        if resp.status_code == 404:
-            logger.info(f"OpenLibrary lookup for ISBN {isbn}: not found (404)")
-            return None
         resp.raise_for_status()
         book = resp.json()
+        client = _get_client()
 
         # Resolve author names
         authors = []
@@ -222,11 +288,8 @@ async def lookup_openlibrary(isbn: str) -> Optional[dict]:
         logger.info(f"OpenLibrary lookup for ISBN {isbn}: found")
         return result
 
-    except httpx.TimeoutException:
-        logger.warning(f"OpenLibrary lookup for ISBN {isbn}: timeout")
-        return None
     except Exception as exc:
-        logger.warning(f"OpenLibrary lookup for ISBN {isbn}: error – {exc}")
+        logger.warning(f"OpenLibrary lookup for ISBN {isbn}: parse error – {exc}")
         return None
 
 
@@ -830,6 +893,10 @@ def _merge_metadata(existing: dict, external: dict, source_name: str, sources_tr
     for key, value in external.items():
         if value is None:
             continue
+        # Private keys (e.g. CrossRef's _isbn_print/_isbn_electronic) are
+        # for in-pipeline use only — never persist them.
+        if key.startswith("_"):
+            continue
         # For list fields, treat empty list as missing
         if isinstance(value, list) and len(value) == 0:
             continue
@@ -913,27 +980,53 @@ async def enrich_metadata(
 
     # --- Step 2: External lookups ---
     # Try CrossRef first (most reliable for papers with DOIs)
+    crossref_isbn_print: Optional[str] = None
+    crossref_isbn_electronic: Optional[str] = None
     if ids["doi"]:
         cr_result = await lookup_crossref(ids["doi"])
         if cr_result:
+            # Strip the private ISBN variants before merge so they don't
+            # pollute persisted metadata; keep them for the OL fallback.
+            crossref_isbn_print = cr_result.pop("_isbn_print", None)
+            crossref_isbn_electronic = cr_result.pop("_isbn_electronic", None)
             _merge_metadata(enriched, cr_result, "crossref", sources)
 
-    # Try OpenLibrary for books with ISBNs
+    # Try OpenLibrary for books with ISBNs. OL indexes print editions more
+    # reliably than eBooks, so we walk a prioritized list of ISBN variants
+    # and stop at the first hit.
     ol_result = None
+    tried_isbns: set = set()
+    isbn_candidates: List[str] = []
+    # 1. Primary ISBN detected in the PDF text (usually what the cover shows)
     if ids["isbn"]:
-        ol_result = await lookup_openlibrary(ids["isbn"])
+        isbn_candidates.append(ids["isbn"])
+    # 2. CrossRef's canonical print ISBN (when CrossRef came through)
+    if crossref_isbn_print:
+        isbn_candidates.append(crossref_isbn_print)
+    # 3. CrossRef's electronic ISBN, only if print wasn't tried
+    if crossref_isbn_electronic:
+        isbn_candidates.append(crossref_isbn_electronic)
+    # 4. ISBN embedded in the DOI (Springer-style 10.xxxx/9783xxxxxxxxx)
+    if enriched.get("doi"):
+        m = re.search(r'(97[89]\d{10})', enriched["doi"].replace('-', ''))
+        if m:
+            isbn_candidates.append(m.group(1))
+
+    for cand in isbn_candidates:
+        # Normalize for dedup: OL accepts dashed and undashed forms.
+        key = cand.replace('-', '').strip()
+        if not key or key in tried_isbns:
+            continue
+        tried_isbns.add(key)
+        ol_result = await lookup_openlibrary(cand)
         if ol_result:
             _merge_metadata(enriched, ol_result, "openlibrary", sources)
-
-    # If OpenLibrary failed for text ISBN, try DOI-derived ISBN as fallback
-    # (print ISBN vs eBook ISBN — publishers often only register one)
-    if not ol_result and enriched.get("doi"):
-        doi_isbn = re.search(r'(97[89]\d{10})', enriched["doi"].replace('-', ''))
-        if doi_isbn and doi_isbn.group(1) != (ids.get("isbn") or ""):
-            ol_result = await lookup_openlibrary(doi_isbn.group(1))
-            if ol_result:
-                _merge_metadata(enriched, ol_result, "openlibrary", sources)
-                logger.info(f"OpenLibrary: fallback to DOI-derived ISBN {doi_isbn.group(1)} succeeded")
+            if cand != ids.get("isbn"):
+                logger.info(
+                    f"OpenLibrary: fallback ISBN {cand} succeeded after "
+                    f"primary {ids.get('isbn')} failed"
+                )
+            break
 
     # Fall back to OpenAlex title search if we still lack key fields or DOI
     needs_more = (
