@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
 
 interface DropdownMenuProps {
   children: React.ReactNode
@@ -81,18 +81,48 @@ export const DropdownMenuTrigger: React.FC<DropdownMenuTriggerProps> = ({
   )
 }
 
-export const DropdownMenuContent: React.FC<DropdownMenuContentProps> = ({ 
+export const DropdownMenuContent: React.FC<DropdownMenuContentProps> = ({
   align = 'start',
   className = '',
   children
 }) => {
   const { isOpen } = React.useContext(DropdownContext)
+  const contentRef = useRef<HTMLDivElement>(null)
+  // Vertical placement. "bottom" opens below the trigger (default),
+  // "top" opens above. We measure on open and flip up when the content
+  // won't fit below but has room above — prevents the dropdown from
+  // disappearing behind fixed-bottom toolbars like the writing-chat
+  // composer.
+  const [placement, setPlacement] = useState<'bottom' | 'top'>('bottom')
+
+  useLayoutEffect(() => {
+    if (!isOpen || !contentRef.current) return
+    const el = contentRef.current
+    const parent = el.parentElement
+    if (!parent) return
+    const rect = parent.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom
+    const spaceAbove = rect.top
+    // Measure actual content height in the initial bottom-placement so
+    // the comparison is honest. A 16 px cushion keeps the dropdown
+    // slightly inside the viewport when it just barely fits.
+    const neededHeight = el.offsetHeight + 16
+    if (neededHeight > spaceBelow && spaceAbove >= spaceBelow) {
+      setPlacement('top')
+    } else {
+      setPlacement('bottom')
+    }
+  }, [isOpen, children])
 
   if (!isOpen) return null
 
+  const verticalClasses =
+    placement === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'
+
   return (
     <div
-      className={`absolute top-full mt-1 min-w-[12rem] overflow-hidden rounded-md border border-gray-200 bg-white p-1 text-gray-950 shadow-md z-50 whitespace-nowrap ${
+      ref={contentRef}
+      className={`absolute ${verticalClasses} min-w-[12rem] overflow-hidden rounded-md border border-gray-200 bg-white p-1 text-gray-950 shadow-md z-50 whitespace-nowrap ${
         align === 'end' ? 'right-0' : align === 'center' ? 'left-1/2 transform -translate-x-1/2' : 'left-0'
       } ${className}`}
     >
