@@ -18,6 +18,10 @@ export interface WritingSessionCreate {
   document_group_id?: string | null;
   document_group_ids?: string[] | null;
   web_search_enabled?: boolean;
+  /** Per-session settings blob. Currently used to carry the citation
+   *  profile inherited from a research mission during the Continue-
+   *  Writing handoff, but open-ended by design. */
+  settings?: Record<string, unknown> | null;
 }
 
 export interface WritingSessionUpdate {

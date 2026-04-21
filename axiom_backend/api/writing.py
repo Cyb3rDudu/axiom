@@ -1045,10 +1045,33 @@ async def process_writing_chat_in_background(
                 f"{len(filter_doc_ids)} doc(s) — {document_group_names}"
             )
 
-        # Resolve citation profile for this writing session
+        # Resolve citation profile for this writing session. Resolution
+        # order: request.session_settings > writing_session.settings >
+        # user default > "numbered". This carries the mission's chosen
+        # profile through the "Continue Writing" handoff, which used to
+        # drop the value and fall back to numbered [1]/[2] refs.
         from services.citation_profiles import resolve_citation_profile
         user_settings = current_user.settings if current_user.settings else {}
-        citation_profile = resolve_citation_profile(None, user_settings)
+        session_settings_obj = (
+            getattr(writing_session, "settings", None) or {}
+        )
+        session_citation_profile_id = None
+        if isinstance(session_settings_obj, dict):
+            session_citation_profile_id = session_settings_obj.get("citation_profile_id")
+        request_citation_profile_id = None
+        if request.session_settings and hasattr(request.session_settings, "model_dump"):
+            request_citation_profile_id = (
+                request.session_settings.model_dump().get("citation_profile_id")
+            )
+        effective_profile_id = (
+            request_citation_profile_id or session_citation_profile_id
+        )
+        session_override = (
+            {"citation_profile_id": effective_profile_id}
+            if effective_profile_id
+            else None
+        )
+        citation_profile = resolve_citation_profile(session_override, user_settings)
 
         context_info = {
             "document_group_id": document_group_id,

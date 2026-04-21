@@ -275,30 +275,69 @@ export const DraftTab: React.FC<DraftTabProps> = ({ missionId }) => {
     try {
       // Get the mission to find its document group
       const mission = missions.find(m => m.id === missionId)
-      
+
       // Get the document group ID from the mission
       // First try to get the generated_document_group_id
       let documentGroupId = mission?.generated_document_group_id || null
-      
+
+      // Full selected-groups list from mission. The auto-generated web-
+      // sources group lives in `generated_document_group_id`; the user's
+      // chosen research scope is in metadata. We hand both over to the
+      // writing session so the assistant can cross-check citations
+      // against original sources AND the curated book library.
+      const missionMeta: any = mission?.metadata || {}
+      const comprehensive: any = missionMeta.comprehensive_settings || {}
+      const researchGroupIds: string[] = (
+        comprehensive.document_group_ids
+        ?? missionMeta.document_group_ids
+        ?? (mission?.document_group_id ? [mission.document_group_id] : [])
+      ).filter(Boolean)
+      const allGroupIds: string[] = []
+      if (documentGroupId && !allGroupIds.includes(documentGroupId)) {
+        allGroupIds.push(documentGroupId)
+      }
+      for (const gid of researchGroupIds) {
+        if (gid && !allGroupIds.includes(gid)) {
+          allGroupIds.push(gid)
+        }
+      }
+
       // If not found, fetch fresh status from backend to get the latest data
       if (!documentGroupId) {
         try {
           const statusResponse = await apiClient.get(`/api/missions/${missionId}/status`)
           documentGroupId = statusResponse.data.generated_document_group_id || null
+          if (documentGroupId && !allGroupIds.includes(documentGroupId)) {
+            allGroupIds.unshift(documentGroupId)
+          }
         } catch (err) {
           console.error('Could not fetch mission status for document group:', err)
         }
       }
-      
+
+      // Carry the mission's citation profile into the writing session so
+      // the assistant keeps emitting (Autor, Jahr, S. X) instead of
+      // falling back to `numbered` and producing bare [1] / [2] refs.
+      // Resolution mirrors the research panel: comprehensive_settings >
+      // top-level metadata > null (user default applies).
+      const missionCitationProfileId: string | null =
+        comprehensive.citation_profile_id
+        ?? missionMeta.citation_profile_id
+        ?? null
+
       // Extract title from the draft content
       const titleMatch = content.match(/^#\s+(.+)$/m)
       const draftTitle = titleMatch ? titleMatch[1].trim() : `Draft from Research ${missionId.slice(0, 8)}`
-      
+
       // Create a new writing session with the document group if it exists
       const newSession = await createSession({
         name: `Writing: ${draftTitle}`,
         document_group_id: documentGroupId,
-        web_search_enabled: true
+        document_group_ids: allGroupIds.length > 0 ? allGroupIds : null,
+        web_search_enabled: true,
+        ...(missionCitationProfileId
+          ? { settings: { citation_profile_id: missionCitationProfileId } }
+          : {}),
       })
       
       // Get the draft (which will be created automatically if it doesn't exist)
