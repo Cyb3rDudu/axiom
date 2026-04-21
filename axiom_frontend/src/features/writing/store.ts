@@ -708,7 +708,7 @@ export const useWritingStore = create<WritingState>((set, get) => ({
   },
 
   // Enhanced chat
-  sendMessage: async (message: string, options?: { documentGroupId?: string | null; useWebSearch?: boolean; deepSearch?: boolean; maxIterations?: number; maxQueries?: number }) => {
+  sendMessage: async (message: string, options?: { documentGroupId?: string | null; documentGroupIds?: string[] | null; useWebSearch?: boolean; deepSearch?: boolean; maxIterations?: number; maxQueries?: number }) => {
     const state = get()
     let session = state.currentSession
 
@@ -965,7 +965,7 @@ export const useWritingStore = create<WritingState>((set, get) => ({
     }
   },
 
-  regenerateMessage: async (messageId: string, options?: { documentGroupId?: string | null; useWebSearch?: boolean; deepSearch?: boolean; maxIterations?: number; maxQueries?: number }) => {
+  regenerateMessage: async (messageId: string, options?: { documentGroupId?: string | null; documentGroupIds?: string[] | null; useWebSearch?: boolean; deepSearch?: boolean; maxIterations?: number; maxQueries?: number }) => {
     const state = get()
     const messages = state.getCurrentMessages()
     const messageIndex = messages.findIndex(m => m.id === messageId)
