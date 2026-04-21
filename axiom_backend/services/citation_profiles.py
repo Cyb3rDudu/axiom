@@ -54,8 +54,8 @@ KMU_APA6_PROFILE = CitationProfile(
 9.  **Wörtliche Zitate:** In Anführungszeichen mit exakter Seitenangabe: `„Zitat" (Müller, 2020, S. 45)`. Wörtliche Zitate sparsam einsetzen (max. 2-3 Sätze).
 10. **Organisationen als Autor:** Beim ersten Zitat den vollen Namen, danach die Abkürzung: `(Weltgesundheitsorganisation [WHO], 2020, S. 10)`, danach: `(WHO, 2020, S. 10)`.
 11. **Online-Quellen MIT Autor und Jahr:** Behandle sie wie Buchquellen: `(Dresing & Pehl, 2018, o. S.)`.
-12. **Online-Quellen OHNE Autor, aber mit Organisation:** Verwende die herausgebende Institution/Organisation als Autor: `(Scribbr, 2024, o. S.)`.
-13. **Online-Quellen OHNE Autor UND ohne Organisation:** Verwende den Online-Link als Kurzbeleg: `(https://www.example.com/page)`.
+12. **Online-Quellen OHNE Autor, aber mit Organisation:** Verwende die herausgebende Institution/Organisation als Autor: `(BPB, 2024, o. S.)`, `(DIW Berlin, 2023, o. S.)`, `(Deutsche Bundesbank, 2024, o. S.)`.
+13. **Online-Quellen OHNE Autor UND ohne Organisation:** Verwende den Sitenamen/Domain als Kurzbeleg: `(bpb.de, 2024, o. S.)`, `(faz.net, 2024, o. S.)`. **Keine rohen URLs in Klammern** — niemals `(https://…)` oder `(www.example.com/page)`. Die konkrete „Cite this source as"-Vorlage im Research-Notes-Header ist verbindlich; übernimm sie exakt.
 14. **Keine Kumulativzitate:** Setze den Kurzbeleg NICHT pauschal ans Ende eines Absatzes. Der Kurzbeleg muss dem Zitat möglichst genau zugeordnet sein (wo das Zitat beginnt und endet muss klar sein).
 15. **Quellenverankerung:** Verwende die Metadaten (Autor, Jahr) aus den 'Research Notes'-Überschriften. Erfinde KEINE Zitate. Jede Behauptung MUSS durch die bereitgestellten Forschungsnotizen belegt sein.
 16. **WICHTIG:** Verwende NICHT das `[doc_id]`-Klammer-Format. Verwende NUR das `(Autor, Jahr, S. XX)`-Format.""",

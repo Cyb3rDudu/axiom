@@ -36,6 +36,11 @@ from ai_researcher.agentic_layer.schemas.writing import (
 from ai_researcher.agentic_layer.schemas.goal import GoalEntry  # <-- Import GoalEntry
 from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry  # Added import
 
+# Domain → institution mapping for web citations (KMU APA 7 Rule 12:
+# prefer the publishing institution over a raw URL when no personal
+# author is known). ``web_citation_author`` owns the priority order.
+from services.domain_institutions import web_citation_author as _web_citation_author
+
 # Import deque for finding next section
 from collections import deque
 
@@ -445,12 +450,22 @@ class WritingAgent(BaseAgent):
                     getattr(first_note.source_metadata, "url", None) or source_id
                 )  # Use metadata URL if available
                 if use_author_year:
-                    # For web sources, use title or URL as author if no author available
-                    web_author = title if title and title != "Unknown Title" else url
-                    cite_example = f"({web_author}, {no_page_abbr})"
+                    web_authors = getattr(first_note.source_metadata, "authors", None)
+                    web_year = (
+                        getattr(first_note.source_metadata, "publication_year", None)
+                        or getattr(first_note.source_metadata, "year", None)
+                    )
+                    web_cite_author = _web_citation_author(web_authors, url)
+                    web_cite_year = web_year if web_year else None
+                    if web_cite_year:
+                        cite_example = f"({web_cite_author}, {web_cite_year}, {no_page_abbr})"
+                    else:
+                        cite_example = f"({web_cite_author}, {no_page_abbr})"
                     source_header = f"### Web Source: {title}\n"
                     source_header += f"**URL:** {url} | **Title:** {title}\n"
-                    source_header += f"**Cite this source as:** `{cite_example}` (use the organization/author if known, otherwise use the title shown above)\n\n"
+                    if web_authors:
+                        source_header += f"**Author(s):** {web_authors}\n"
+                    source_header += f"**Cite this source as:** `{cite_example}` (use exactly this form — never insert the raw URL or the page title into the citation parentheses)\n\n"
                 else:
                     # For web sources, the doc_id for citation IS the URL
                     source_header = f"### Web Source: {url} (Title: {title})\n"
@@ -531,9 +546,18 @@ class WritingAgent(BaseAgent):
                         title = agg_metadata.get("title", "Unknown Title")
                         url = agg_metadata.get("url", agg_source_id)
                         if use_author_year:
-                            web_cite_name = title if title and title != "Unknown Title" else url
+                            agg_web_authors = agg_metadata.get("authors")
+                            agg_web_year = (
+                                agg_metadata.get("publication_year")
+                                or agg_metadata.get("year")
+                            )
+                            web_cite_name = _web_citation_author(agg_web_authors, url)
+                            if agg_web_year:
+                                web_cite_example = f"({web_cite_name}, {agg_web_year}, {no_page_abbr})"
+                            else:
+                                web_cite_example = f"({web_cite_name}, {no_page_abbr})"
                             formatted_text += f"  - Web Page: {title} (URL: {url})\n"
-                            formatted_text += f"    **Cite this source as:** `({web_cite_name}, {no_page_abbr})` (use the organization/author if known)\n"
+                            formatted_text += f"    **Cite this source as:** `{web_cite_example}` (use exactly this form — never the raw URL)\n"
                         else:
                             formatted_text += f"  - Web Page: {url} (Title: {title})\n"
                             formatted_text += f"    **Use `[{citation_id_for_agg}]` when citing information derived from this web page via the synthesis note.**\n"
