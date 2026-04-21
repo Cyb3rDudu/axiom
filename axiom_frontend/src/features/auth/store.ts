@@ -2,6 +2,26 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { apiClient } from '../../config/api'
 
+/**
+ * Re-pull the user's persisted settings (theme, color scheme, AI config,
+ * citation profile, …) after a successful login or register. ThemeProvider
+ * only runs loadSettings once on mount, so without this hook the UI keeps
+ * the defaults that the settings store received after a 401 — for example
+ * light theme persists even when the DB says dark.
+ *
+ * Dynamic import avoids pulling the SettingsStore module graph into the
+ * auth bundle and sidesteps the potential circular import between the
+ * two Zustand stores.
+ */
+async function reloadUserSettingsSafely(): Promise<void> {
+  try {
+    const mod = await import('./components/SettingsStore')
+    await mod.useSettingsStore.getState().loadSettings()
+  } catch (err) {
+    console.warn('Post-login settings reload failed:', err)
+  }
+}
+
 interface User {
   id: number
   username: string
@@ -41,28 +61,37 @@ export const useAuthStore = create<AuthState>()(
           const formData = new FormData()
           formData.append('username', username)
           formData.append('password', password)
-          
+
           const headers: Record<string, string> = {
             'Content-Type': 'application/x-www-form-urlencoded',
           }
-          
+
           if (rememberMe) {
             headers['X-Remember-Me'] = 'true'
           }
 
-          const response = await apiClient.post('/api/auth/login', 
-            new URLSearchParams(formData as any), 
+          const response = await apiClient.post('/api/auth/login',
+            new URLSearchParams(formData as any),
             { headers }
           )
-          
+
           if (response.data.access_token) {
-            set({ 
+            set({
               user: response.data.user,
               isAuthenticated: true,
               accessToken: response.data.access_token
             })
-            
+
             apiClient.defaults.headers.common['Authorization'] = `Bearer ${response.data.access_token}`
+
+            // Refresh user settings after successful login so the theme,
+            // color scheme, citation profile, etc. reflect the logged-in
+            // user's persisted values — not the defaults that may have
+            // landed in the settings store from an earlier 401-forced
+            // logout. ThemeProvider's useEffect only runs once on mount
+            // so without this explicit reload the UI stays on the
+            // default (light) theme until a full page reload.
+            await reloadUserSettingsSafely()
           }
         } catch (error) {
           console.error('Login failed:', error)
@@ -76,15 +105,16 @@ export const useAuthStore = create<AuthState>()(
             username,
             password
           })
-          
+
           if (response.data.access_token) {
-            set({ 
+            set({
               user: response.data.user,
               isAuthenticated: true,
               accessToken: response.data.access_token
             })
-            
+
             apiClient.defaults.headers.common['Authorization'] = `Bearer ${response.data.access_token}`
+            await reloadUserSettingsSafely()
           }
         } catch (error) {
           console.error('Registration failed:', error)
