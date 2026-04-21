@@ -149,11 +149,28 @@ async def create_writing_session(
             detail="Writing session already exists for this chat"
         )
     
+    # Validate every doc group in the list belongs to the user.
+    if session_data.document_group_ids:
+        bad = (
+            db.query(models.DocumentGroup.id)
+            .filter(
+                models.DocumentGroup.id.in_(session_data.document_group_ids),
+                models.DocumentGroup.user_id == current_user.id,
+            )
+            .count()
+        )
+        if bad < len({g for g in session_data.document_group_ids if g}):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="One or more document groups not found or access denied",
+            )
+
     # Create new writing session
     writing_session = models.WritingSession(
         id=str(uuid.uuid4()),
         chat_id=session_data.chat_id,
         document_group_id=session_data.document_group_id,
+        document_group_ids=session_data.document_group_ids,
         use_web_search=session_data.use_web_search,
         settings=session_data.settings,
         created_at=datetime.utcnow(),
@@ -680,12 +697,26 @@ async def update_writing_session(
                 models.DocumentGroup.id == session_update.document_group_id,
                 models.DocumentGroup.user_id == current_user.id
             ).first()
-            
+
             if not doc_group:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Document group not found or access denied"
                 )
+    if session_update.document_group_ids is not None and session_update.document_group_ids:
+        owned = (
+            db.query(models.DocumentGroup.id)
+            .filter(
+                models.DocumentGroup.id.in_(session_update.document_group_ids),
+                models.DocumentGroup.user_id == current_user.id,
+            )
+            .count()
+        )
+        if owned < len({g for g in session_update.document_group_ids if g}):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="One or more document groups not found or access denied",
+            )
     
     # Update fields
     update_data = session_update.dict(exclude_unset=True)
@@ -940,7 +971,17 @@ async def process_writing_chat_in_background(
             document_group_id = None
         elif document_group_id is None:
             document_group_id = writing_session.document_group_id
-        
+
+        # Multi-group scope. Request overrides session row; if neither is
+        # set, fall back to the singular primary group.
+        from services.doc_group_resolution import (
+            normalize_group_ids, resolve_group_ids_to_doc_ids
+        )
+        request_group_ids = request.document_group_ids
+        if request_group_ids is None:
+            request_group_ids = writing_session.document_group_ids
+        effective_group_ids = normalize_group_ids(document_group_id, request_group_ids)
+
         use_web_search = request.use_web_search
         if use_web_search is None:
             use_web_search = writing_session.use_web_search
@@ -975,16 +1016,35 @@ async def process_writing_chat_in_background(
             default_iterations = user_research_params.get("writing_search_max_iterations", 1)
             default_queries = user_research_params.get("writing_search_max_queries", 3)
         
-        # Fetch document group name if document_group_id is provided
+        # Fetch document group names for all selected groups. Used both as
+        # a human-readable hint in the agent context and for resolving the
+        # union of doc IDs that bound the vector search.
         document_group_name = None
-        if document_group_id:
-            document_group = db.query(models.DocumentGroup).filter(
-                models.DocumentGroup.id == document_group_id,
-                models.DocumentGroup.user_id == current_user.id
-            ).first()
-            if document_group:
-                document_group_name = document_group.name
-        
+        document_group_names: List[str] = []
+        filter_doc_ids: List[str] = []
+        if effective_group_ids:
+            group_rows = (
+                db.query(models.DocumentGroup)
+                .filter(
+                    models.DocumentGroup.id.in_(effective_group_ids),
+                    models.DocumentGroup.user_id == current_user.id,
+                )
+                .all()
+            )
+            by_id = {str(g.id): g for g in group_rows}
+            document_group_names = [
+                by_id[gid].name for gid in effective_group_ids if gid in by_id
+            ]
+            if document_group_names:
+                document_group_name = " + ".join(document_group_names)
+            filter_doc_ids = resolve_group_ids_to_doc_ids(
+                db, current_user.id, effective_group_ids
+            )
+            logger.info(
+                f"Writing-chat scope: {len(effective_group_ids)} group(s) → "
+                f"{len(filter_doc_ids)} doc(s) — {document_group_names}"
+            )
+
         # Resolve citation profile for this writing session
         from services.citation_profiles import resolve_citation_profile
         user_settings = current_user.settings if current_user.settings else {}
@@ -992,7 +1052,10 @@ async def process_writing_chat_in_background(
 
         context_info = {
             "document_group_id": document_group_id,
+            "document_group_ids": effective_group_ids,
             "document_group_name": document_group_name,
+            "document_group_names": document_group_names,
+            "filter_doc_ids": filter_doc_ids,
             "use_web_search": use_web_search,
             "operation_mode": request.operation_mode or "balanced",
             "user_profile": {

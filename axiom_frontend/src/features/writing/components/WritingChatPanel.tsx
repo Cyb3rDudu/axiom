@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../../../components/ui/select'
+import { MultiGroupSelect } from '../../../components/ui/multi-group-select'
 import { Send, Loader2, Bot, Trash2, Sparkles, Settings, SlidersHorizontal } from 'lucide-react'
 import { CustomSystemPromptModal } from './CustomSystemPromptModal'
 import { WritingSearchSettingsModal } from './WritingSearchSettingsModal'
@@ -24,7 +25,15 @@ import { useSettingsStore } from '../../auth/components/SettingsStore'
 export const WritingChatPanel: React.FC = () => {
   const [message, setMessage] = useState('')
   const [documentGroups, setDocumentGroups] = useState<DocumentGroup[]>([])
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  // Multi-group selection. `selectedGroupId` is kept as a derived getter
+  // so the rest of this component — toggles, conditional rendering,
+  // legacy API fields — keeps working without cascade changes. It's
+  // simply the first entry of the list, or null.
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
+  const selectedGroupId = selectedGroupIds[0] ?? null
+  const setSelectedGroupId = (id: string | null) => {
+    setSelectedGroupIds(id ? [id] : [])
+  }
   const [showCustomPromptModal, setShowCustomPromptModal] = useState(false)
   const [showSearchSettingsModal, setShowSearchSettingsModal] = useState(false)
   
@@ -106,18 +115,26 @@ export const WritingChatPanel: React.FC = () => {
   // Load saved tool settings when activeChat or currentSession changes
   useEffect(() => {
     setIsLoadingChatSettings(true)
-    
-    // Prioritize currentSession's document_group_id over chat settings
-    if (currentSession && currentSession.document_group_id) {
-      console.log('Setting document group from currentSession:', currentSession.document_group_id)
-      setSelectedGroupId(currentSession.document_group_id)
+
+    // Prioritize currentSession's document group(s) over chat settings
+    const sessionIds =
+      (currentSession as any)?.document_group_ids ??
+      (currentSession?.document_group_id ? [currentSession.document_group_id] : null)
+    if (currentSession && sessionIds && sessionIds.length > 0) {
+      console.log('Setting document group(s) from currentSession:', sessionIds)
+      setSelectedGroupIds(sessionIds.filter(Boolean))
       setSearchSettings(prev => ({
         ...prev,
         useWebSearch: currentSession.web_search_enabled ?? false
       }))
     } else if (activeChat && activeChat.settings?.tools) {
       const tools = activeChat.settings.tools
-      setSelectedGroupId(tools.documentGroupId || null)
+      const loadedIds: string[] = Array.isArray(tools.documentGroupIds)
+        ? tools.documentGroupIds.filter(Boolean)
+        : tools.documentGroupId
+          ? [tools.documentGroupId]
+          : []
+      setSelectedGroupIds(loadedIds)
       setSearchSettings({
         useWebSearch: tools.useWebSearch ?? false,
         deepSearch: tools.deepSearch ?? false,
@@ -128,7 +145,7 @@ export const WritingChatPanel: React.FC = () => {
       })
     } else {
       // No saved settings, use defaults
-      setSelectedGroupId(null)
+      setSelectedGroupIds([])
       setSearchSettings({
         useWebSearch: false,
         deepSearch: false,
@@ -154,6 +171,7 @@ export const WritingChatPanel: React.FC = () => {
         ...(activeChat.settings || {}),
         tools: {
           documentGroupId: selectedGroupId,
+          documentGroupIds: selectedGroupIds,
           useWebSearch: searchSettings.useWebSearch,
           deepSearch: searchSettings.deepSearch,
           maxIterations: searchSettings.maxIterations,
@@ -199,6 +217,7 @@ export const WritingChatPanel: React.FC = () => {
       // The sendMessage method will create a chat/session if none exists
       await sendMessage(userMessage, {
         documentGroupId: selectedGroupId,
+        documentGroupIds: selectedGroupIds,
         useWebSearch: searchSettings.useWebSearch,
         deepSearch: searchSettings.deepSearch,
         maxIterations: searchSettings.deepSearch ? searchSettings.deepSearchIterations : searchSettings.maxIterations,
@@ -227,6 +246,7 @@ export const WritingChatPanel: React.FC = () => {
     try {
       await regenerateMessage(messageId, {
         documentGroupId: selectedGroupId,
+        documentGroupIds: selectedGroupIds,
         useWebSearch: searchSettings.useWebSearch,
         deepSearch: searchSettings.deepSearch,
         maxIterations: searchSettings.deepSearch ? searchSettings.deepSearchIterations : searchSettings.maxIterations,
@@ -458,34 +478,14 @@ export const WritingChatPanel: React.FC = () => {
                 <div className="mt-2 space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="flex items-center space-x-1.5 min-w-0">
-                      <label className="text-xs text-muted-foreground whitespace-nowrap">Document Group:</label>
-                      <Select
-                        value={selectedGroupId || 'none'}
-                        onValueChange={(value) => {
-                          if (value === "none") {
-                            setSelectedGroupId(null);
-                          } else {
-                            setSelectedGroupId(value);
-                          }
-                        }}
+                      <label className="text-xs text-muted-foreground whitespace-nowrap">Doc Groups:</label>
+                      <MultiGroupSelect
+                        groups={documentGroups.map(g => ({ id: g.id, name: g.name }))}
+                        selectedIds={selectedGroupIds}
+                        onChange={setSelectedGroupIds}
                         disabled={isLoading}
-                      >
-                        <SelectTrigger className="text-xs h-6 w-[110px]">
-                          <span className="truncate block w-full text-left">
-                            {selectedGroupId && selectedGroupId !== '' 
-                              ? documentGroups.find(g => g.id === selectedGroupId)?.name || 'None'
-                              : 'None'}
-                          </span>
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">None</SelectItem>
-                          {documentGroups.map((group) => (
-                            <SelectItem key={group.id} value={group.id}>
-                              {group.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                        placeholder="Keine"
+                      />
                     </div>
                     
                     <div className="flex items-center space-x-1.5">

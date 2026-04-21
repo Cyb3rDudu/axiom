@@ -91,8 +91,8 @@ interface WritingState {
   saveDraftChanges: (content: string, title?: string) => Promise<void>
   
   // Enhanced chat
-  sendMessage: (message: string, options?: { documentGroupId?: string | null; useWebSearch?: boolean; deepSearch?: boolean; maxIterations?: number; maxQueries?: number }) => Promise<void>
-  regenerateMessage: (messageId: string, options?: { documentGroupId?: string | null; useWebSearch?: boolean; deepSearch?: boolean; maxIterations?: number; maxQueries?: number }) => Promise<void>
+  sendMessage: (message: string, options?: { documentGroupId?: string | null; documentGroupIds?: string[] | null; useWebSearch?: boolean; deepSearch?: boolean; maxIterations?: number; maxQueries?: number }) => Promise<void>
+  regenerateMessage: (messageId: string, options?: { documentGroupId?: string | null; documentGroupIds?: string[] | null; useWebSearch?: boolean; deepSearch?: boolean; maxIterations?: number; maxQueries?: number }) => Promise<void>
   removeMessage: (messageId: string) => void;
   
   // WebSocket management
@@ -723,6 +723,7 @@ export const useWritingStore = create<WritingState>((set, get) => ({
             name: state.activeChat.title,
             chat_id: state.activeChat.id,
             document_group_id: options?.documentGroupId,
+            document_group_ids: options?.documentGroupIds,
             web_search_enabled: options?.useWebSearch
           })
           session = sessionResponse.data
@@ -749,6 +750,7 @@ export const useWritingStore = create<WritingState>((set, get) => ({
           session = await state.createSession({
             name: 'New Writing Chat',
             document_group_id: options?.documentGroupId,
+            document_group_ids: options?.documentGroupIds,
             web_search_enabled: options?.useWebSearch
           })
         }
@@ -823,6 +825,7 @@ export const useWritingStore = create<WritingState>((set, get) => ({
         draft_id: currentDraft.id,
         operation_mode: 'balanced',
         document_group_id: options?.documentGroupId,
+        document_group_ids: options?.documentGroupIds,
         use_web_search: options?.useWebSearch,
         deep_search: options?.deepSearch,
         max_search_iterations: options?.maxIterations,
@@ -1034,6 +1037,7 @@ export const useWritingStore = create<WritingState>((set, get) => ({
         draft_id: currentDraft!.id,
         operation_mode: 'balanced',
         document_group_id: options?.documentGroupId,
+        document_group_ids: options?.documentGroupIds,
         use_web_search: options?.useWebSearch,
         deep_search: options?.deepSearch,
         max_search_iterations: options?.maxIterations,

@@ -146,6 +146,35 @@ async def update_mission_literature_portfolio_output(
     await db.commit()
     return result.scalar_one_or_none()
 
+
+async def set_mission_document_group_ids(
+    mission_id: str,
+    document_group_ids: List[str],
+) -> Optional[models.Mission]:
+    """Persist the full list of selected document-group IDs on a mission.
+
+    Wraps its own async DB session so callers don't need to plumb one
+    through; kept deliberately thin so the mission-create flow can fire
+    and forget.
+    """
+    from database.async_database import get_async_db_session
+    db = await get_async_db_session()
+    try:
+        stmt = (
+            update(models.Mission)
+            .where(models.Mission.id == mission_id)
+            .values(
+                document_group_ids=document_group_ids or None,
+                updated_at=get_current_time(),
+            )
+            .returning(models.Mission)
+        )
+        result = await db.execute(stmt)
+        await db.commit()
+        return result.scalar_one_or_none()
+    finally:
+        await db.close()
+
 async def delete_mission(
     db: AsyncSession,
     mission_id: str,

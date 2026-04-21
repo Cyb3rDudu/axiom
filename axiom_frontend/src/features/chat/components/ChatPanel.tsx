@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from '../../../components/ui/select'
 import { useToast } from '../../../components/ui/toast'
+import { MultiGroupSelect } from '../../../components/ui/multi-group-select'
 import { Send, Loader2, Bot, User, Sparkles, Settings, FolderPlus, Quote } from 'lucide-react'
 import { buildApiUrl, API_CONFIG, apiClient } from '../../../config/api'
 import { MissionSettingsDialog } from '../../mission/components/MissionSettingsDialog'
@@ -37,7 +38,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
   const [message, setMessage] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [documentGroups, setDocumentGroups] = useState<DocumentGroup[]>([])
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  // Multi-group selection. `selectedGroupId` is kept as a derived value so
+  // the rest of this component — save/load, API calls expecting the legacy
+  // singular field — continues to work. It's the first entry of the list,
+  // or null. Treat the array as the authoritative state.
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
+  const selectedGroupId = selectedGroupIds[0] ?? null
+  const setSelectedGroupId = (id: string | null) => {
+    setSelectedGroupIds(id ? [id] : [])
+  }
   const [useWebSearch, setUseWebSearch] = useState<boolean>(true)
   const [autoCreateDocumentGroup, setAutoCreateDocumentGroup] = useState<boolean>(false)
   const [showMissionSettings, setShowMissionSettings] = useState(false)
@@ -215,6 +224,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
           const comprehensiveSettings = activeMission.metadata.comprehensive_settings || {}
 
           groupId = comprehensiveSettings.document_group_id ?? activeMission.metadata.document_group_id ?? null
+          // Multi-group scope lives in comprehensive_settings.document_group_ids;
+          // absent on older missions which only wrote the singular field.
+          const metaGroupIds: string[] = (
+            comprehensiveSettings.document_group_ids
+            ?? activeMission.metadata.document_group_ids
+            ?? (groupId ? [groupId] : [])
+          ).filter(Boolean)
+          setSelectedGroupIds(metaGroupIds)
           webSearch = comprehensiveSettings.use_web_search ?? activeMission.metadata.use_web_search ?? true
           autoSaveDocs = comprehensiveSettings.auto_create_document_group ??
                         activeMission.metadata.auto_create_document_group ??
@@ -233,12 +250,22 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
       } else {
         // Fall back to chat settings
         groupId = currentChat.settings?.document_group_id || null
+        const chatGroupIds: string[] = (
+          currentChat.settings?.document_group_ids
+          ?? (groupId ? [groupId] : [])
+        ).filter(Boolean)
+        setSelectedGroupIds(chatGroupIds)
         webSearch = currentChat.settings?.use_web_search !== undefined ? currentChat.settings.use_web_search : true
         autoSaveDocs = currentChat.settings?.auto_create_document_group !== undefined ? currentChat.settings.auto_create_document_group : false
       }
-      
+
       console.log('Setting values - Group:', groupId, 'WebSearch:', webSearch, 'AutoSave:', autoSaveDocs)
-      setSelectedGroupId(groupId)
+      // (selectedGroupIds was populated above during load; keep singular
+      // setter here only as a safety net for code paths that didn't set
+      // the list explicitly.)
+      if (groupId && selectedGroupIds.length === 0) {
+        setSelectedGroupId(groupId)
+      }
       setUseWebSearch(webSearch)
       setAutoCreateDocumentGroup(autoSaveDocs)
 
@@ -296,12 +323,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
             newAutoSaveDocs = missionMetadata.auto_create_document_group
           }
 
-          setSelectedGroupId(prevGroupId => {
-            if (prevGroupId !== newGroupId) {
+          setSelectedGroupIds(prevIds => {
+            const prevPrimary = prevIds[0] ?? null
+            if (prevPrimary !== newGroupId) {
               console.log('Mission document group changed:', newGroupId)
-              return newGroupId
+              return newGroupId ? [newGroupId] : []
             }
-            return prevGroupId
+            return prevIds
           })
 
           setUseWebSearch(prevWebSearch => {
@@ -352,6 +380,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
     
     const settingsToSave = {
       document_group_id: selectedGroupId,
+      document_group_ids: selectedGroupIds,
       use_web_search: useWebSearch,
       auto_create_document_group: autoCreateDocumentGroup,
       citation_profile_id: selectedCitationProfile || undefined
@@ -381,7 +410,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
         duration: 5000
       })
     }
-  }, [chatId, activeChat?.id, selectedGroupId, useWebSearch, autoCreateDocumentGroup, updateChatInStore, addToast])
+  }, [chatId, activeChat?.id, selectedGroupId, selectedGroupIds, useWebSearch, autoCreateDocumentGroup, updateChatInStore, addToast])
 
   // Save settings when selectedGroupId, useWebSearch, or autoCreateDocumentGroup changes
   useEffect(() => {
@@ -419,7 +448,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
     }, 500)
 
     return () => clearTimeout(timer)
-  }, [selectedGroupId, useWebSearch, autoCreateDocumentGroup, isLoadingSettings, hasInitializedSettings, saveSettings, currentChat?.missionId, currentMission?.status])
+  }, [selectedGroupId, selectedGroupIds, useWebSearch, autoCreateDocumentGroup, isLoadingSettings, hasInitializedSettings, saveSettings, currentChat?.missionId, currentMission?.status])
 
   const handleSendMessage = async () => {
     if (!message.trim() || isLoading) return
@@ -439,6 +468,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
         await updateChatInStore(newChat.id, {
           settings: {
             document_group_id: selectedGroupId,
+            document_group_ids: selectedGroupIds,
             use_web_search: useWebSearch,
             auto_create_document_group: autoCreateDocumentGroup
           }
@@ -503,6 +533,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
           conversation_history: conversationHistory,
           mission_id: updatedCurrentChat?.missionId || null, // Pass existing mission ID if available
           document_group_id: selectedGroupId,
+          document_group_ids: selectedGroupIds,
           use_web_search: useWebSearch,
           auto_create_document_group: autoCreateDocumentGroup,
           citation_profile_id: selectedCitationProfile || null
@@ -1019,34 +1050,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
                 <div className="mt-2 space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="flex items-center space-x-1.5 min-w-0">
-                      <label className="text-xs text-muted-foreground whitespace-nowrap">Document Group:</label>
-                      <Select
-                        value={selectedGroupId || ''}
-                        onValueChange={(value) => {
-                          if (value === "none") {
-                            setSelectedGroupId(null);
-                          } else {
-                            setSelectedGroupId(value);
-                          }
-                        }}
+                      <label className="text-xs text-muted-foreground whitespace-nowrap">Doc Groups:</label>
+                      <MultiGroupSelect
+                        groups={documentGroups.map(g => ({ id: g.id, name: g.name }))}
+                        selectedIds={selectedGroupIds}
+                        onChange={setSelectedGroupIds}
                         disabled={isChatDisabled}
-                      >
-                        <SelectTrigger className="text-xs h-6 w-[110px]">
-                          <span className="truncate block w-full text-left">
-                            {selectedGroupId && selectedGroupId !== '' 
-                              ? documentGroups.find(g => g.id === selectedGroupId)?.name || 'None'
-                              : 'None'}
-                          </span>
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">None</SelectItem>
-                          {documentGroups.map((group) => (
-                            <SelectItem key={group.id} value={group.id} title={group.name}>
-                              {group.name.length > 40 ? group.name.substring(0, 40) + '...' : group.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                        placeholder="Keine"
+                      />
                     </div>
                     
                     <div className="flex items-center space-x-1.5">

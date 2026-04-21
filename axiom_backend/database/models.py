@@ -68,6 +68,9 @@ class Chat(Base):
     id = Column(StringUUID, primary_key=True, default=uuid.uuid4, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     document_group_id = Column(StringUUID, ForeignKey("document_groups.id"), nullable=True, index=True)
+    # Array of doc-group UUIDs (strings). Supersedes the singular column
+    # above when present; older rows still read via document_group_id.
+    document_group_ids = Column(JSONB, nullable=True)
     title = Column(String, nullable=False)
     chat_type = Column(String, nullable=False, default="research", index=True)  # 'research' or 'writing'
     settings = Column(JSONB, nullable=True)  # Store chat-specific settings (web search, doc group, etc.)
@@ -102,6 +105,10 @@ class Mission(Base):
     status = Column(String, nullable=False, default="pending", index=True)  # pending, running, completed, stopped, failed
     mission_context = Column(JSONB, nullable=True)  # Store the full mission context as JSONB
     error_info = Column(Text, nullable=True)
+    # Array of doc-group UUIDs (strings) selected for this mission's RAG
+    # scope. New code reads this when present; older missions fall back to
+    # chat.document_group_id / mission_context.metadata.document_group_id.
+    document_group_ids = Column(JSONB, nullable=True)
     generated_document_group_id = Column(StringUUID, ForeignKey("document_groups.id"), nullable=True, index=True)  # Document group created from this mission
     current_report_version = Column(Integer, default=1)  # Track current version of the research report
 
@@ -248,6 +255,9 @@ class WritingSession(Base):
     id = Column(StringUUID, primary_key=True, default=uuid.uuid4, index=True)
     chat_id = Column(StringUUID, ForeignKey("chats.id"), nullable=False, index=True)
     document_group_id = Column(StringUUID, ForeignKey("document_groups.id"), nullable=True, index=True)
+    # Array of doc-group UUIDs (strings). Supersedes the singular column
+    # when present; older rows still read via document_group_id.
+    document_group_ids = Column(JSONB, nullable=True)
     use_web_search = Column(Boolean, default=True)
     current_draft_id = Column(StringUUID, nullable=True)  # References the active draft
     settings = Column(JSONB, nullable=True)  # Writing-specific settings

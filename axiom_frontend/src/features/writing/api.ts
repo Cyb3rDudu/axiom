@@ -5,6 +5,8 @@ export interface WritingSession {
   id: string;
   name: string;
   document_group_id: string | null;
+  /** Multi-group scope. Null/empty means the singular field is authoritative. */
+  document_group_ids?: string[] | null;
   web_search_enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -14,12 +16,14 @@ export interface WritingSession {
 export interface WritingSessionCreate {
   name: string;
   document_group_id?: string | null;
+  document_group_ids?: string[] | null;
   web_search_enabled?: boolean;
 }
 
 export interface WritingSessionUpdate {
   name?: string;
   document_group_id?: string | null;
+  document_group_ids?: string[] | null;
   web_search_enabled?: boolean;
 }
 
@@ -62,6 +66,9 @@ export interface WritingChatRequest {
   context_override?: { [key: string]: any };
   operation_mode?: string;
   document_group_id?: string | null;
+  // Multi-group scope. When present, backend uses this list (union of docs)
+  // and ignores `document_group_id`. Send both for forward/backward compat.
+  document_group_ids?: string[] | null;
   use_web_search?: boolean;
   deep_search?: boolean;
   max_search_iterations?: number;

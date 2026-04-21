@@ -448,6 +448,22 @@ async def create_mission(
         chat_id = mission_data.get("chat_id")
         use_web_search = mission_data.get("use_web_search", True)
         document_group_id = mission_data.get("document_group_id")
+        # Multi-group scope. When a list is supplied, the first element is
+        # treated as the primary group for display and research-tool
+        # filtering; all listed groups feed their docs into the searchable
+        # scope. Back-compat: if only singular is sent, we synthesize a
+        # single-element list.
+        document_group_ids = mission_data.get("document_group_ids") or (
+            [document_group_id] if document_group_id else []
+        )
+        # Deduplicate while preserving order.
+        _seen_groups: set = set()
+        document_group_ids = [
+            gid for gid in document_group_ids
+            if gid and not (gid in _seen_groups or _seen_groups.add(gid))
+        ]
+        if document_group_ids and not document_group_id:
+            document_group_id = document_group_ids[0]
         auto_create_document_group = mission_data.get("auto_create_document_group", False)
         mission_settings_data = mission_data.get("mission_settings")
 
@@ -455,12 +471,16 @@ async def create_mission(
         language_code = mission_data.get("language_code") or current_user.language_code or 'en'
         citation_profile_id = mission_data.get("citation_profile_id")
 
-        logger.info(f"Creating mission with settings - Web Search: {use_web_search}, Doc Group: {document_group_id}, Auto-save: {auto_create_document_group}, Language: {language_code}")
+        logger.info(
+            f"Creating mission with settings - Web Search: {use_web_search}, "
+            f"Doc Groups: {document_group_ids or [document_group_id]}, "
+            f"Auto-save: {auto_create_document_group}, Language: {language_code}"
+        )
 
         if not user_request or not chat_id:
             raise HTTPException(status_code=422, detail="Request and chat_id are required.")
 
-        use_local_rag = document_group_id is not None
+        use_local_rag = bool(document_group_ids)
         if not use_web_search and not use_local_rag:
             raise HTTPException(status_code=422, detail="At least one information source must be enabled.")
 
@@ -487,17 +507,25 @@ async def create_mission(
         search_settings = user_settings.get("search", {})
         web_fetch_settings = user_settings.get("web_fetch", {})
         
-        # Get document group name if ID is provided
-        document_group_name = None
-        if document_group_id:
+        # Get document group name(s). For single-group back-compat, keep
+        # document_group_name as the primary one. For multi-group we also
+        # persist the full list of names for UI display.
+        document_group_name: Optional[str] = None
+        document_group_names: List[str] = []
+        if document_group_ids:
             async_db = await get_async_db_session()
             try:
-                doc_group = await async_crud.get_document_group(async_db, document_group_id=document_group_id, user_id=current_user.id)
-                if doc_group:
-                    document_group_name = doc_group.name
+                for gid in document_group_ids:
+                    doc_group = await async_crud.get_document_group(
+                        async_db, document_group_id=gid, user_id=current_user.id
+                    )
+                    if doc_group:
+                        document_group_names.append(doc_group.name)
+                if document_group_names:
+                    document_group_name = document_group_names[0]
             finally:
                 await async_db.close()
-        
+
         # Create mission with all settings including language
         mission_context = await context_mgr.start_mission(
             user_request=user_request,
@@ -510,7 +538,22 @@ async def create_mission(
             language_code=language_code  # Pass language to mission context
         )
         mission_id = mission_context.mission_id
-        
+
+        # Persist the full list on the mission row so downstream callers
+        # (research manager, tools, UI) see every selected group.
+        if document_group_ids:
+            try:
+                await async_crud.set_mission_document_group_ids(
+                    mission_id=mission_id,
+                    document_group_ids=document_group_ids,
+                )
+            except AttributeError:
+                # CRUD helper not available — best-effort update via
+                # mission context metadata. The persistence column is
+                # optional for multi-group features to kick in on writing
+                # handoff; the search paths still read it from context.
+                logger.debug("async_crud.set_mission_document_group_ids unavailable")
+
         # Store comprehensive mission metadata including all settings
         comprehensive_settings = {
             # Tool selection
@@ -518,7 +561,9 @@ async def create_mission(
             "use_local_rag": use_local_rag,
             "auto_create_document_group": research_params.get("auto_create_document_group", False) if research_params else False,
             "document_group_id": document_group_id,
+            "document_group_ids": document_group_ids,
             "document_group_name": document_group_name,
+            "document_group_names": document_group_names,
 
             # Language preference
             "language_code": language_code,

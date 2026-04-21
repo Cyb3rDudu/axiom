@@ -2295,22 +2295,75 @@ If no relevant sub-questions are identified, return an empty list for "sub_quest
                             logger.info(
                                 f"DEBUG: Mission context found. Metadata keys: {list(mission_context.metadata.keys())}"
                             )
-                            logger.info(
-                                f"DEBUG: Full mission metadata: {mission_context.metadata}"
-                            )
                             document_group_id = mission_context.metadata.get(
                                 "document_group_id"
                             )
-                            if document_group_id:
+                            document_group_ids = mission_context.metadata.get(
+                                "document_group_ids"
+                            ) or ([document_group_id] if document_group_id else [])
+                            # Deduplicate preserving first-seen order
+                            _seen: set = set()
+                            document_group_ids = [
+                                gid for gid in document_group_ids
+                                if gid and not (gid in _seen or _seen.add(gid))
+                            ]
+
+                            if len(document_group_ids) > 1:
+                                # Multi-group scope: resolve the union of
+                                # doc IDs and pass as filter_doc_ids so the
+                                # search tool hits every selected library.
+                                try:
+                                    from database.database import get_db
+                                    from services.doc_group_resolution import (
+                                        resolve_group_ids_to_doc_ids,
+                                    )
+                                    _db = next(get_db())
+                                    try:
+                                        user_id = getattr(
+                                            mission_context, "user_id", None
+                                        ) or mission_context.metadata.get("user_id")
+                                        if user_id:
+                                            filter_ids = resolve_group_ids_to_doc_ids(
+                                                _db, int(user_id), document_group_ids
+                                            )
+                                            if filter_ids:
+                                                execute_args["filter_doc_ids"] = filter_ids
+                                                logger.info(
+                                                    f"Research doc-search: multi-group "
+                                                    f"({len(document_group_ids)} groups) → "
+                                                    f"{len(filter_ids)} doc(s) for mission "
+                                                    f"{current_mission_id}"
+                                                )
+                                            elif document_group_id:
+                                                execute_args["document_group_id"] = str(
+                                                    document_group_id
+                                                )
+                                        elif document_group_id:
+                                            execute_args["document_group_id"] = str(
+                                                document_group_id
+                                            )
+                                    finally:
+                                        _db.close()
+                                except Exception as resolve_err:
+                                    logger.warning(
+                                        f"Multi-group doc-id resolution failed, "
+                                        f"falling back to primary group: {resolve_err}"
+                                    )
+                                    if document_group_id:
+                                        execute_args["document_group_id"] = str(
+                                            document_group_id
+                                        )
+                            elif document_group_id:
+                                # Legacy single-group path
                                 execute_args["document_group_id"] = str(
                                     document_group_id
-                                )  # Ensure it's a string
+                                )
                                 logger.info(
                                     f"DEBUG: Added document_group_id={document_group_id} to document search for mission {current_mission_id}"
                                 )
                             else:
                                 logger.warning(
-                                    f"DEBUG: No document_group_id found in mission {current_mission_id} metadata. Available keys: {list(mission_context.metadata.keys())}"
+                                    f"DEBUG: No document_group_id(s) found in mission {current_mission_id} metadata. Available keys: {list(mission_context.metadata.keys())}"
                                 )
                         else:
                             logger.warning(

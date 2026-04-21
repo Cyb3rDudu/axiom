@@ -126,13 +126,18 @@ class SimplifiedWritingAgent:
     def __init__(self, model_dispatcher: ModelDispatcher):
         self.model_dispatcher = model_dispatcher
         self.stats_tracker = WritingStatsTracker()
-        
+
         # Tool cache to avoid re-initialization
         self._web_search_tool = None
         self._web_page_fetcher = None
         self._document_search_tool = None
         self._retriever = None
         self._query_preparer = None
+        # Per-request doc-ID filter for multi-group scope. Set at the top
+        # of run() from context_info["filter_doc_ids"] and consulted by
+        # _search_documents so we don't have to thread the list through
+        # every intermediate helper signature.
+        self._current_filter_doc_ids: Optional[List[str]] = None
 
     async def run(self, prompt: str, draft_content: str, chat_history: List[Dict[str, str]], context_info: Optional[Dict[str, Any]] = None, status_callback: Optional[callable] = None) -> Dict[str, Any]:
         """
@@ -140,7 +145,13 @@ class SimplifiedWritingAgent:
         """
         context_info = context_info or {}
         session_id = context_info.get("session_id")  # Extract session_id for stats tracking
-        
+
+        # Multi-group doc-ID filter. When the caller resolved one or more
+        # document groups into a union of doc_ids, we store it on the
+        # instance and consult it inside _search_documents so all existing
+        # single-group call sites transparently get the wider scope.
+        self._current_filter_doc_ids = context_info.get("filter_doc_ids") or None
+
         # Extract search configuration from context_info
         search_config = context_info.get("search_config", {})
         use_deep_search = search_config.get("deep_search", False)
@@ -193,16 +204,33 @@ class SimplifiedWritingAgent:
                 sources.extend(web_sources)
                 tools_used["web_search"] = True
             
-            if router_decision in ["documents", "both"] and context_info.get("document_group_id"):
+            # Document search is available when the caller either supplied
+            # a single group_id (legacy path) or a resolved filter_doc_ids
+            # list (new multi-group path — set on self._current_filter_doc_ids
+            # at the top of run()).
+            doc_scope_available = bool(
+                context_info.get("document_group_id")
+                or self._current_filter_doc_ids
+            )
+            if router_decision in ["documents", "both"] and doc_scope_available:
                 if status_callback:
                     search_mode = "deep document search" if use_deep_search else "document search"
                     # Include the actual query in the status message
                     query_preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
                     await status_callback("searching_documents", f"Performing {search_mode} in your collection for: {query_preview}")
-                
-                logger.info(f"Performing iterative document search in group: {context_info['document_group_id']} (deep={use_deep_search})")
+
+                # Primary group_id kept for log context and for the iterative
+                # search signature. When filter_doc_ids is set, _search_documents
+                # will use those directly and ignore the singular group.
+                primary_group = context_info.get("document_group_id")
+                logger.info(
+                    f"Performing iterative document search: "
+                    f"group={primary_group}, "
+                    f"filter_doc_ids={len(self._current_filter_doc_ids or [])}, "
+                    f"deep={use_deep_search}"
+                )
                 doc_results, doc_sources = await self._perform_iterative_document_search(
-                    prompt, context_info["document_group_id"], chat_history, session_id, status_callback,
+                    prompt, primary_group, chat_history, session_id, status_callback,
                     max_attempts=max_search_iterations,
                     max_decomposed_queries=max_decomposed_queries,
                     max_doc_results=max_doc_results
@@ -864,14 +892,34 @@ class SimplifiedWritingAgent:
                 logger.info("Created new DocumentSearchTool instance (cached for reuse)")
             doc_search_tool = self._document_search_tool
             
-            # Perform the search with enriched query
-            logger.info(f"Executing document search for enriched query: {enriched_query} in group: {document_group_id}")
-            results = await doc_search_tool.execute(
-                query=enriched_query,
-                n_results=max_doc_results,
-                document_group_id=document_group_id,
-                use_reranker=True
-            )
+            # Perform the search with enriched query. When the caller set
+            # a multi-group filter_doc_ids list, prefer it and leave the
+            # singular group_id at None so the tool's metadata filter uses
+            # the explicit doc-ID list.
+            active_filter = self._current_filter_doc_ids
+            if active_filter:
+                logger.info(
+                    f"Executing document search for enriched query: "
+                    f"{enriched_query} across {len(active_filter)} doc(s) "
+                    f"(multi-group filter_doc_ids)"
+                )
+                results = await doc_search_tool.execute(
+                    query=enriched_query,
+                    n_results=max_doc_results,
+                    filter_doc_ids=active_filter,
+                    use_reranker=True,
+                )
+            else:
+                logger.info(
+                    f"Executing document search for enriched query: "
+                    f"{enriched_query} in group: {document_group_id}"
+                )
+                results = await doc_search_tool.execute(
+                    query=enriched_query,
+                    n_results=max_doc_results,
+                    document_group_id=document_group_id,
+                    use_reranker=True,
+                )
             
             # Track document search for stats
             if session_id:
@@ -1955,6 +2003,19 @@ class SimplifiedWritingAgent:
                     "gekürzt (Output-Token-Limit). Bitte den Task in kleinere "
                     "Teile zerlegen — z. B. eine Sektion pro Prompt.*"
                 )
+
+            # Defensive fence-balancer. The continuation prompt tells the
+            # model to close content-blocks correctly, but if it forgets the
+            # frontend regex (`/```content-block:\w+\s*\n...\n```/g`) won't
+            # match an unclosed block and the whole block renders as plain
+            # text — so we count opening/closing ``` fences and append any
+            # missing closers. Safe because Markdown ignores trailing ```.
+            if content.count("```") % 2 == 1:
+                logger.info(
+                    "simplified_writing: detected unbalanced ``` fences in "
+                    "merged response, auto-closing"
+                )
+                content = content.rstrip() + "\n```"
 
             return content
             

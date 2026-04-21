@@ -286,6 +286,7 @@ class MissionStatus(BaseModel):
     error_info: Optional[str] = None
     tool_selection: Optional[Dict[str, Any]] = None
     document_group_id: Optional[str] = None
+    document_group_ids: Optional[List[str]] = None  # Multi-group scope
     generated_document_group_id: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None  # Full mission metadata including all settings
 
@@ -546,6 +547,10 @@ class DocumentFilters(BaseModel):
 
 class WritingSessionBase(BaseModel):
     document_group_id: Optional[str] = None
+    # Array of doc-group UUIDs. When present, supersedes document_group_id
+    # for scoping document search. Kept as None for back-compat with older
+    # callers that only pass the singular field.
+    document_group_ids: Optional[List[str]] = None
     use_web_search: bool = True
     settings: Optional[Dict[str, Any]] = None
 
@@ -554,6 +559,7 @@ class WritingSessionCreate(WritingSessionBase):
 
 class WritingSessionUpdate(BaseModel):
     document_group_id: Optional[str] = None
+    document_group_ids: Optional[List[str]] = None
     use_web_search: Optional[bool] = None
     current_draft_id: Optional[str] = None
     settings: Optional[Dict[str, Any]] = None
@@ -623,6 +629,7 @@ class WritingSessionWithChat(BaseModel):
     name: str  # Chat title
     chat_id: str
     document_group_id: Optional[str] = None
+    document_group_ids: Optional[List[str]] = None
     document_group_name: Optional[str] = None
     web_search_enabled: bool = True
     current_draft_id: Optional[str] = None
@@ -738,6 +745,9 @@ class EnhancedWritingChatRequest(BaseModel):
     context_override: Optional[Dict[str, Any]] = None  # Override default context inclusion
     operation_mode: Optional[str] = None  # 'research_heavy', 'writing_focused', 'balanced'
     document_group_id: Optional[str] = None
+    # Array of doc-group UUIDs for multi-group scoped search. When set,
+    # overrides document_group_id for this request. Accept single or many.
+    document_group_ids: Optional[List[str]] = None
     use_web_search: Optional[bool] = None
     deep_search: Optional[bool] = False  # Enable deep search with multiple iterations
     max_search_iterations: Optional[int] = None  # Override default max iterations
