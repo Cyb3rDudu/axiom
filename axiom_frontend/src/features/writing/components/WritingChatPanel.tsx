@@ -66,6 +66,8 @@ export const WritingChatPanel: React.FC = () => {
     regenerateMessage,
     removeMessage,
     getCurrentAgentStatus,
+    currentDraft,
+    saveDraftChanges,
   } = useWritingStore()
   
   const agentStatus = getCurrentAgentStatus()
@@ -411,6 +413,66 @@ export const WritingChatPanel: React.FC = () => {
                   }
                 }}
                 isRegenerating={isLoading}
+                onApplyToDraft={async (blockContent: string) => {
+                  if (!currentDraft) {
+                    addToast({
+                      type: 'error',
+                      title: 'Kein Draft',
+                      message: 'Es ist kein Entwurf aktiv, der ersetzt werden könnte.',
+                      duration: 4000,
+                    })
+                    return
+                  }
+                  try {
+                    await saveDraftChanges(blockContent)
+                    addToast({
+                      type: 'success',
+                      title: 'Entwurf ersetzt',
+                      message: 'Der Block wurde in den Editor übernommen.',
+                      duration: 3000,
+                    })
+                  } catch (error) {
+                    console.error('Apply-to-draft failed:', error)
+                    addToast({
+                      type: 'error',
+                      title: 'Übernahme fehlgeschlagen',
+                      message: 'Der Block konnte nicht in den Editor geschrieben werden.',
+                      duration: 5000,
+                    })
+                  }
+                }}
+                onAppendToDraft={async (blockContent: string) => {
+                  if (!currentDraft) {
+                    addToast({
+                      type: 'error',
+                      title: 'Kein Draft',
+                      message: 'Es ist kein Entwurf aktiv, an den angehängt werden könnte.',
+                      duration: 4000,
+                    })
+                    return
+                  }
+                  try {
+                    const existing = (currentDraft.content || '').trimEnd()
+                    const merged = existing
+                      ? `${existing}\n\n${blockContent}`
+                      : blockContent
+                    await saveDraftChanges(merged)
+                    addToast({
+                      type: 'success',
+                      title: 'Entwurf erweitert',
+                      message: 'Der Block wurde ans Ende des Entwurfs angehängt.',
+                      duration: 3000,
+                    })
+                  } catch (error) {
+                    console.error('Append-to-draft failed:', error)
+                    addToast({
+                      type: 'error',
+                      title: 'Anhängen fehlgeschlagen',
+                      message: 'Der Block konnte nicht an den Entwurf angehängt werden.',
+                      duration: 5000,
+                    })
+                  }
+                }}
               />
             ))
           )}

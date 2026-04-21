@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { MathMarkdown } from '../../../components/markdown/MathMarkdown'
-import { Copy, RotateCcw, Check, Bot, User, Trash2 } from 'lucide-react'
+import { Copy, RotateCcw, Check, Bot, User, Trash2, FileDown, FilePlus } from 'lucide-react'
 import { formatChatMessageTime } from '../../../utils/timezone'
 import { SourceBubbles } from './SourceBubbles'
 import type { Source } from '../api'
@@ -16,13 +16,21 @@ interface MessageBubbleProps {
   onRegenerate?: () => void
   onDelete?: () => void
   isRegenerating?: boolean
+  /** Replace the current draft content with the block text.
+   *  Used by content-block:document blocks ("übernehmen"). */
+  onApplyToDraft?: (content: string) => void | Promise<void>
+  /** Append the block to the end of the current draft.
+   *  Used by content-block:section / paragraph / list blocks. */
+  onAppendToDraft?: (content: string) => void | Promise<void>
 }
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({
   message,
   onRegenerate,
   onDelete,
-  isRegenerating = false
+  isRegenerating = false,
+  onApplyToDraft,
+  onAppendToDraft,
 }) => {
   const [copiedContent, setCopiedContent] = useState<string | null>(null)
   const [hoveredCodeBlock, setHoveredCodeBlock] = useState<string | null>(null)
@@ -392,20 +400,53 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                   )
                 } else {
                   // Render content block inline
+                  const isCode = segment.blockType === 'code'
+                  // "Replace draft" (FileDown) is appropriate when the
+                  // block is a full document revision. Append (FilePlus)
+                  // is the right action for smaller granularity — a
+                  // single section or paragraph the user wants to graft
+                  // onto what's already in the editor.
+                  const canReplace = !isCode &&
+                    (segment.blockType === 'document') &&
+                    typeof onApplyToDraft === 'function'
+                  const canAppend = !isCode &&
+                    segment.blockType !== 'document' &&
+                    typeof onAppendToDraft === 'function'
                   return (
                     <div key={segment.id || index} className="relative my-3 group/content-block">
-                      {/* Content block copy button */}
-                      <button
-                        onClick={() => copyToClipboard(segment.content, 'code')}
-                        className="absolute top-1.5 right-1.5 z-10 bg-background border border-border rounded-md p-1 shadow-sm hover:bg-muted opacity-100"
-                        title={`Copy ${segment.blockType} content`}
-                      >
-                        {copiedContent === segment.content ? (
-                          <Check className="h-2.5 w-2.5 text-green-500" />
-                        ) : (
-                          <Copy className="h-2.5 w-2.5 text-text-secondary" />
+                      {/* Action row: Copy always, Replace/Append when the
+                          block is applicable to the draft editor. */}
+                      <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1">
+                        {canReplace && (
+                          <button
+                            onClick={() => onApplyToDraft!(segment.content)}
+                            className="bg-background border border-border rounded-md p-1 shadow-sm hover:bg-primary/10 hover:border-primary text-primary"
+                            title="Entwurf durch diesen Block ersetzen"
+                          >
+                            <FileDown className="h-2.5 w-2.5" />
+                          </button>
                         )}
-                      </button>
+                        {canAppend && (
+                          <button
+                            onClick={() => onAppendToDraft!(segment.content)}
+                            className="bg-background border border-border rounded-md p-1 shadow-sm hover:bg-primary/10 hover:border-primary text-primary"
+                            title="An den Entwurf anhängen"
+                          >
+                            <FilePlus className="h-2.5 w-2.5" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => copyToClipboard(segment.content, 'code')}
+                          className="bg-background border border-border rounded-md p-1 shadow-sm hover:bg-muted opacity-100"
+                          title={`Copy ${segment.blockType} content`}
+                        >
+                          {copiedContent === segment.content ? (
+                            <Check className="h-2.5 w-2.5 text-green-500" />
+                          ) : (
+                            <Copy className="h-2.5 w-2.5 text-text-secondary" />
+                          )}
+                        </button>
+                      </div>
 
                       {/* Content block container */}
                       <div className="border border-border rounded-lg p-3 bg-muted">
