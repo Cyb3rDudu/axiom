@@ -905,12 +905,53 @@ async def delete_chat(db: AsyncSession, chat_id: str, user_id: int) -> bool:
         )
         logger.info(f"Deleted {msg_result.rowcount} messages")
 
-        # Delete any writing_sessions pointing at this chat. The
-        # writing_sessions.chat_id FK is declared without ON DELETE
-        # CASCADE, so the delete-chat call otherwise fails with an
-        # IntegrityError when the user ever opened Writing mode for
-        # this chat (observed in prod). We let the session's drafts
-        # cascade via their own FK on writing_session_id.
+        # Tear the writing-mode tree down explicitly before dropping the
+        # chat row. None of the FKs in this chain declare ON DELETE
+        # CASCADE at the database level, and bulk DELETE statements
+        # bypass the ORM-level "cascade=all, delete-orphan" relationship
+        # cascades — so we walk the chain ourselves bottom-up:
+        #   chat → writing_sessions → drafts → draft_references
+        #                           → writing_session_stats
+        # Each level uses an in-select so we only touch rows rooted at
+        # this chat. Any missing rows (e.g. session without drafts) are
+        # harmless no-ops.
+        session_ids_sq = (
+            select(models.WritingSession.id)
+            .where(models.WritingSession.chat_id == chat_id)
+            .scalar_subquery()
+        )
+        draft_ids_sq = (
+            select(models.Draft.id)
+            .where(models.Draft.writing_session_id.in_(session_ids_sq))
+            .scalar_subquery()
+        )
+        ref_result = await db.execute(
+            delete(models.Reference).where(
+                models.Reference.draft_id.in_(draft_ids_sq)
+            )
+        )
+        if ref_result.rowcount:
+            logger.info(
+                f"Deleted {ref_result.rowcount} draft_reference(s) for chat {chat_id}"
+            )
+        draft_result = await db.execute(
+            delete(models.Draft).where(
+                models.Draft.writing_session_id.in_(session_ids_sq)
+            )
+        )
+        if draft_result.rowcount:
+            logger.info(
+                f"Deleted {draft_result.rowcount} draft(s) for chat {chat_id}"
+            )
+        stats_result = await db.execute(
+            delete(models.WritingSessionStats).where(
+                models.WritingSessionStats.session_id.in_(session_ids_sq)
+            )
+        )
+        if stats_result.rowcount:
+            logger.info(
+                f"Deleted {stats_result.rowcount} writing_session_stats row(s) for chat {chat_id}"
+            )
         ws_result = await db.execute(
             delete(models.WritingSession).where(
                 models.WritingSession.chat_id == chat_id
