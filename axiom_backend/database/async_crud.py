@@ -905,6 +905,22 @@ async def delete_chat(db: AsyncSession, chat_id: str, user_id: int) -> bool:
         )
         logger.info(f"Deleted {msg_result.rowcount} messages")
 
+        # Delete any writing_sessions pointing at this chat. The
+        # writing_sessions.chat_id FK is declared without ON DELETE
+        # CASCADE, so the delete-chat call otherwise fails with an
+        # IntegrityError when the user ever opened Writing mode for
+        # this chat (observed in prod). We let the session's drafts
+        # cascade via their own FK on writing_session_id.
+        ws_result = await db.execute(
+            delete(models.WritingSession).where(
+                models.WritingSession.chat_id == chat_id
+            )
+        )
+        if ws_result.rowcount:
+            logger.info(
+                f"Deleted {ws_result.rowcount} writing_session(s) for chat {chat_id}"
+            )
+
         # Delete the chat (missions will cascade delete)
         logger.info(f"Deleting chat {chat_id}")
         await db.delete(chat)
