@@ -158,12 +158,18 @@ export const createWritingSession = async (sessionData: WritingSessionCreate): P
   
   const chat = chatResponse.data;
   
-  // Then create the writing session linked to the chat
+  // Then create the writing session linked to the chat. Forward the
+  // full sessionData shape — earlier versions of this helper dropped
+  // document_group_ids and settings on the floor, which silently broke
+  // both the multi-group handoff (list got replaced by a single group)
+  // and the citation-profile handoff (settings clobbered to {} and the
+  // writer fell back to numbered [1]/[2] refs).
   const writingSessionPayload = {
     chat_id: chat.id,
     document_group_id: sessionData.document_group_id,
+    document_group_ids: sessionData.document_group_ids ?? null,
     use_web_search: sessionData.web_search_enabled ?? true,
-    settings: {}
+    settings: (sessionData.settings as Record<string, unknown> | undefined) ?? {},
   };
   
   const response = await apiClient.post('/api/writing/sessions', writingSessionPayload);
