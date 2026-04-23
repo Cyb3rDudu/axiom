@@ -2349,7 +2349,30 @@ class SimplifiedWritingAgent:
             recent_history = chat_history[-MAX_HISTORY_MESSAGES:]
         else:
             recent_history = chat_history
-        
+
+        # Rolling summary for long revision chains (#50). Each
+        # assistant turn carries a full revised draft (~30 k chars);
+        # by turn 4 the accumulated context in the main-LLM call hits
+        # 100 k+ chars and scales linearly per iteration. The flag-
+        # gated _build_router_history helper was built for router
+        # scope but produces exactly the right trim for the main LLM
+        # too: keep system + all user turns + the most recent
+        # assistant turn verbatim, summarise older assistants. Gated
+        # behind env `WRITING_CONTEXT_SUMMARISATION` until we've
+        # logged a few runs in production.
+        import os as _os
+        if _os.getenv("WRITING_CONTEXT_SUMMARISATION", "true").lower() in (
+            "true",
+            "1",
+            "yes",
+        ):
+            # Only apply when iteration depth warrants it — 3+ turns
+            # means at least one older assistant turn to compress.
+            if len(recent_history) >= 3:
+                recent_history = _build_router_history(
+                    recent_history, prompt, summary_cap=800
+                )
+
         # Add the conversation history, ensuring role alternation
         last_role = "system"
         for msg in recent_history:

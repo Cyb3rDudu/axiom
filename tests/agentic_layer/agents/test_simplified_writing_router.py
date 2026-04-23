@@ -221,6 +221,39 @@ class TestPreflightKeywordExtractor:
         assert len(kw) == 5
 
 
+class TestRollingContextSummary:
+    """#50 — _build_router_history used for main-LLM context as well.
+
+    These tests pin the behaviour specific to the rolling-summary
+    use-case: long revision iteration chains still fit comfortably
+    after the helper trims them.
+    """
+
+    def test_5_turn_chain_bounded_after_summary(self) -> None:
+        # Simulate 5 revision iterations, each with a ~30k-char
+        # assistant response. Raw total ≈ 150 k chars; summarised
+        # total should be well under 40 k because 4 older assistant
+        # turns collapse to ~800 chars each.
+        history = []
+        for i in range(5):
+            history.append({"role": "user", "content": f"Iterate {i}"})
+            history.append(
+                {"role": "assistant", "content": "x" * 30000}
+            )
+        bounded = _build_router_history(history, "current", summary_cap=800)
+        total_chars = sum(len(m["content"]) for m in bounded)
+        # Most recent assistant stays verbatim (30k); rest summarised
+        assert total_chars < 40000
+
+    def test_short_history_returned_verbatim(self) -> None:
+        history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+        bounded = _build_router_history(history, "next")
+        assert bounded == history
+
+
 class TestReplaceModeDetection:
     """_is_replace_mode_prompt flags swaps-style prompts."""
 
