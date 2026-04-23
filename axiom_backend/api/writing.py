@@ -1173,26 +1173,44 @@ async def process_writing_chat_in_background(
             status_callback=status_callback
         )
         
-        # Save the assistant response
+        # Post-response audit (#47): check URL-in-parens citations,
+        # fence balance, and declared-vs-actual wordcount. Warnings
+        # are surfaced on the assistant message (`meta.audit`) and
+        # pushed over WebSocket so the UI can badge the bubble.
+        from services.writing_response_audit import audit_writing_response
+        audit = audit_writing_response(result.get("chat_response", ""))
+        if audit.has_warnings:
+            logger.warning(
+                f"Writing response audit warnings for task {task_id}: "
+                f"url_in_parens={len(audit.url_in_parens)} "
+                f"unbalanced_fences={audit.unbalanced_fences} "
+                f"wordcount_delta_pct={audit.wordcount_delta_pct}"
+            )
+
+        # Save the assistant response. Audit data rides on the WebSocket
+        # payload only for now — adding a DB column would require a
+        # migration, and the UI only needs it for the badge on the
+        # live response. Re-rendering on reload just loses the badge.
         agent_response_msg = models.Message(
             id=str(uuid.uuid4()),
             chat_id=chat_id,
             role="assistant",
             content=result["chat_response"],
             sources=result.get("sources", []),
-            created_at=datetime.utcnow()
+            created_at=datetime.utcnow(),
         )
         db.add(agent_response_msg)
         db.commit()
-        
+
         # Send the complete response via WebSocket (not as streaming chunks)
         await send_agent_status_update(session_id, "completed", "Response generated successfully")
-        
+
         # Send the full response message with sources
         await send_draft_content_update(session_id, {
             "message": result["chat_response"],
             "sources": result.get("sources", []),
-            "task_id": task_id
+            "task_id": task_id,
+            "audit": audit.to_dict() if audit.has_warnings else None,
         }, "complete")
         
         # Update chat title if needed
