@@ -29,6 +29,7 @@ import api as _api_primer  # noqa: F401, E402
 
 from ai_researcher.agentic_layer.agents.simplified_writing_agent import (  # noqa: E402
     _build_router_history,
+    _extract_preflight_keywords,
     _looks_like_draft_revision,
     _summarise_assistant_turn,
 )
@@ -173,3 +174,47 @@ class TestAssistantTurnSummariser:
         out = _summarise_assistant_turn(body, cap=400)
         assert "SWAP 1" in out
         assert "SWAP 2" in out
+
+
+class TestPreflightKeywordExtractor:
+    """_extract_preflight_keywords picks discriminative terms."""
+
+    def test_destatis_query_keeps_proper_nouns_and_year(self) -> None:
+        kw = _extract_preflight_keywords(
+            "Destatis 2024 Außenhandel China Deutschland Handelsvolumen"
+        )
+        assert "Destatis" in kw
+        assert "2024" in kw
+        assert "Außenhandel" in kw
+        assert "China" in kw
+
+    def test_stopwords_dropped(self) -> None:
+        kw = _extract_preflight_keywords("Finde mir Daten zu der aktuellen Lage")
+        for sw in ("der", "zu", "mir", "Daten"):
+            # "Daten" starts uppercase so it's kept — that's fine
+            pass
+        assert "mir" not in [k.lower() for k in kw]
+        assert "zu" not in [k.lower() for k in kw]
+        assert "der" not in [k.lower() for k in kw]
+
+    def test_acronyms_kept(self) -> None:
+        kw = _extract_preflight_keywords("WTO und IMF Daten für OECD")
+        assert "WTO" in kw
+        assert "IMF" in kw
+        assert "OECD" in kw
+
+    def test_domain_tokens_kept(self) -> None:
+        kw = _extract_preflight_keywords(
+            "search destatis.de and data.worldbank.org"
+        )
+        assert any("destatis.de" in k for k in kw)
+        assert any("worldbank.org" in k for k in kw)
+
+    def test_empty_query_returns_empty(self) -> None:
+        assert _extract_preflight_keywords("") == []
+        assert _extract_preflight_keywords("der die das") == []
+
+    def test_max_terms_respected(self) -> None:
+        query = " ".join(f"Keyword{i}" for i in range(30))
+        kw = _extract_preflight_keywords(query, max_terms=5)
+        assert len(kw) == 5

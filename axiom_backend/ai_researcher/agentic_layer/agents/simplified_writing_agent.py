@@ -247,6 +247,75 @@ def _build_router_history(
     return bounded
 
 
+# German + English stopwords for the preflight keyword extractor.
+# Intentionally small — we want discriminative terms (proper nouns,
+# years, domain words like "Destatis", "Außenhandel") to survive.
+_PREFLIGHT_STOPWORDS = frozenset(
+    w.lower()
+    for w in (
+        # German
+        "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer", "eines",
+        "einem", "einen", "und", "oder", "aber", "als", "am", "an", "auf", "aus",
+        "bei", "bis", "durch", "für", "gegen", "im", "in", "mit", "nach", "ob",
+        "ohne", "über", "um", "unter", "vor", "von", "vom", "zu", "zum", "zur",
+        "ist", "sind", "war", "waren", "sein", "wird", "werden", "wurde",
+        "haben", "hat", "hatte", "kann", "könnte", "soll", "sollte", "muss",
+        "müssen", "dürfen", "wenn", "dann", "weil", "dass", "sowie", "auch",
+        "nur", "noch", "nicht", "mehr", "aktuelle", "aktuellen", "alle", "mir",
+        "sie", "er", "es", "wir", "ihr", "ich", "du", "du", "diese", "dieser",
+        "dieses", "jene", "jener", "welche", "welcher", "welches", "bitte",
+        # English
+        "the", "a", "an", "and", "or", "but", "of", "in", "on", "at", "to",
+        "for", "with", "without", "by", "from", "as", "is", "are", "was",
+        "were", "be", "been", "being", "has", "have", "had", "will", "would",
+        "can", "could", "shall", "should", "may", "might", "must", "not", "no",
+        "all", "any", "some", "this", "that", "these", "those", "which", "who",
+        "what", "when", "where", "why", "how", "please", "also", "into",
+    )
+)
+
+
+def _extract_preflight_keywords(query: str, max_terms: int = 8) -> List[str]:
+    """Pull discriminative keywords for the doc-group preflight probe.
+
+    Heuristic: tokenise the query, drop stopwords, keep:
+      - tokens starting with an uppercase letter (proper nouns, orgs)
+      - 4-digit year-like tokens (2023, 2024, …)
+      - tokens with domain-style dots (destatis.de, data.worldbank.org)
+      - all-uppercase acronyms (WTO, IMF, OECD, BPB, DIW)
+      - long tokens (≥ 6 chars) that aren't stopwords
+
+    Tight by design: if the query only has stopwords + short words the
+    function returns [] and the caller keeps the existing search flow.
+    """
+    if not query:
+        return []
+    # Preserve dots inside domain-like tokens but split on whitespace
+    # and general punctuation.
+    tokens = re.findall(r"[A-Za-zÄÖÜäöüß0-9][A-Za-zÄÖÜäöüß0-9\.\-]{0,40}", query)
+    kept: List[str] = []
+    seen: set = set()
+    for t in tokens:
+        tl = t.lower()
+        if tl in seen:
+            continue
+        if tl in _PREFLIGHT_STOPWORDS:
+            continue
+        if len(t) < 2:
+            continue
+        is_year = bool(re.fullmatch(r"(?:19|20)\d{2}", t))
+        is_domain = "." in t and len(t) >= 5
+        is_capitalised = t[0].isupper() and len(t) >= 3
+        is_long = len(t) >= 6
+        is_acronym = t.isupper() and 2 <= len(t) <= 6
+        if is_year or is_domain or is_capitalised or is_long or is_acronym:
+            kept.append(t)
+            seen.add(tl)
+        if len(kept) >= max_terms:
+            break
+    return kept
+
+
 def _summarise_assistant_turn(content: str, cap: int = 600) -> str:
     """Compress an assistant turn for router-scoped history.
 
@@ -1808,16 +1877,145 @@ class SimplifiedWritingAgent:
         
         return focused_results, focused_sources
 
+    async def _preflight_doc_group_coverage(
+        self,
+        query: str,
+        document_group_id: Optional[str],
+        filter_doc_ids: Optional[List[str]],
+        status_callback: Optional[callable] = None,
+    ) -> Optional[str]:
+        """Quick zero-hit check before spawning the iterative search loop.
+
+        Extracts a few keyword candidates from the user's query and
+        asks OpenSearch whether ANY chunk in the currently-scoped
+        doc-group(s) matches. If not, return a short formatted-results
+        string so the caller skips the 3×5 focused-search loop.
+
+        Returns ``None`` when the preflight is inconclusive (keep the
+        existing flow) or when the scope has at least one match.
+        Returns a formatted-results string when the preflight is
+        conclusively zero and we should skip.
+
+        The preflight is best-effort: any error in the keyword
+        extraction, the OpenSearch client, or the scope resolution
+        falls back to the current behaviour.
+        """
+        keywords = _extract_preflight_keywords(query)
+        if not keywords:
+            return None
+
+        # Resolve the doc-ID scope. For multi-group sessions we've
+        # already got a union on self._current_filter_doc_ids; for
+        # legacy single-group sessions we expand via the tool helper.
+        doc_ids: Optional[List[str]] = None
+        if filter_doc_ids:
+            doc_ids = list(filter_doc_ids)
+        elif document_group_id:
+            try:
+                if not self._document_search_tool:
+                    # Tool isn't built yet; fall back to no preflight.
+                    return None
+                doc_ids = await self._document_search_tool._get_document_ids_from_group(
+                    document_group_id
+                )
+            except Exception as exc:
+                logger.debug(f"Preflight: doc-id resolution failed: {exc}")
+                return None
+
+        if not doc_ids:
+            return None
+
+        try:
+            import os as _os
+            import urllib.parse as _up
+            import urllib.request as _ur
+            import json as _json
+
+            host = _os.getenv("OPENSEARCH_HOST", "localhost")
+            port = _os.getenv("OPENSEARCH_PORT", "9200")
+            # Index name follows the prod convention (see init-db and
+            # existing search pipeline); "axiom_chunks" is the live
+            # index as of 2026-04-20.
+            index = _os.getenv("OPENSEARCH_INDEX", "axiom_chunks")
+            # Keep the keyword list short; OR-join for BM25.
+            probe_terms = " OR ".join(
+                f'"{_up.quote(k)}"' for k in keywords[:5]
+            )
+            url = (
+                f"http://{host}:{port}/{index}/_count"
+                f"?q=chunk_text:({probe_terms})"
+            )
+            body = _json.dumps(
+                {"query": {"terms": {"doc_id": doc_ids[:1024]}}}
+            ).encode("utf-8")
+            req = _ur.Request(
+                url,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="GET",  # _count accepts GET with a body
+            )
+            import asyncio as _asyncio
+
+            def _sync_count() -> int:
+                with _ur.urlopen(req, timeout=3) as resp:
+                    payload = _json.load(resp)
+                return int(payload.get("count") or 0)
+
+            hit_count = await _asyncio.to_thread(_sync_count)
+        except Exception as exc:
+            logger.debug(f"Preflight: OpenSearch probe failed, skipping: {exc}")
+            return None
+
+        if hit_count > 0:
+            logger.info(
+                f"Preflight: {hit_count} BM25 hits for keywords={keywords[:5]} "
+                f"across {len(doc_ids)} docs — proceeding with iterative search"
+            )
+            return None
+
+        # Zero hits — short-circuit.
+        logger.info(
+            f"Preflight: 0 doc-group hits for keywords={keywords[:5]} "
+            f"across {len(doc_ids)} docs — skipping iterative document search"
+        )
+        if status_callback:
+            try:
+                await status_callback(
+                    "searching_documents",
+                    f"Lokale Dokumente enthalten nichts zu {', '.join(keywords[:3])} "
+                    "— überspringe Dokument-Suche.",
+                )
+            except Exception:
+                pass
+        return (
+            f"\n\n[Preflight: die ausgewählten Dokument-Gruppen enthalten "
+            f"keine Treffer für die Stichworte {', '.join(keywords[:5])}. "
+            f"Dokument-Suche übersprungen.]\n"
+        )
+
     async def _perform_iterative_document_search(self, query: str, document_group_id: str, chat_history: List[Dict[str, str]] = None, session_id: str = None, status_callback: Optional[callable] = None, max_attempts: int = 3, max_decomposed_queries: int = 10, max_doc_results: int = 5) -> tuple[str, List[Dict[str, Any]]]:
         """
-        Performs iterative document search with advanced reasoning - decomposes complex queries 
+        Performs iterative document search with advanced reasoning - decomposes complex queries
         into focused searches and performs quality-driven iteration.
         Returns: (formatted_results, sources_list)
         """
+        # Preflight (#43): cheap keyword probe against the doc-group
+        # index before spawning the full 3×5 iterative search loop.
+        # Returning early when we know the scope cannot answer the
+        # query saves 30 s + ~$0.003 per misrouted request.
+        preflight_skip = await self._preflight_doc_group_coverage(
+            query=query,
+            document_group_id=document_group_id,
+            filter_doc_ids=self._current_filter_doc_ids,
+            status_callback=status_callback,
+        )
+        if preflight_skip:
+            return preflight_skip, []
+
         # Step 1: Decompose the query into focused searches
         if status_callback:
             await status_callback("analyzing_query", "Breaking down your request for focused document searches...")
-        
+
         decomposed_queries = await self._decompose_complex_query(query, chat_history, "document", max_queries=max_decomposed_queries)
         logger.info(f"Decomposed into {len(decomposed_queries)} focused document searches")
         
