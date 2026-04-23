@@ -2288,6 +2288,49 @@ class SimplifiedWritingAgent:
             "- \\begin{equation}...\\end{equation} ← Wrong! Use $$ instead"
         )
         
+        # Structured-bibliography injection (#53): when the feature flag
+        # is on, instruct the writer to emit a content-block:references
+        # fence containing a JSON array alongside (or instead of) the
+        # inline Markdown Literaturverzeichnis. Legacy flow unchanged
+        # when the flag is off.
+        if context_info.get("structured_bibliography_enabled"):
+            system_prompt += (
+                "\n\nSTRUCTURED BIBLIOGRAPHY (required when you cite any source):\n"
+                "In addition to the inline citations, emit ONE content-block "
+                "with the full bibliography as structured JSON:\n"
+                "```content-block:references\n"
+                "[\n"
+                '  {\n'
+                '    \"entry_key\": \"destatis-2024\",\n'
+                '    \"authors\": [{\"family\": \"Destatis\", \"given\": \"\"}],\n'
+                '    \"year\": 2024,\n'
+                '    \"title\": \"Außenhandel 2024\",\n'
+                '    \"container_title\": \"Statistisches Bundesamt\",\n'
+                '    \"url\": \"https://www.destatis.de/...\",\n'
+                '    \"accessed_at\": \"2026-04-24\",\n'
+                '    \"reference_type\": \"web\"\n'
+                '  }\n'
+                "]\n"
+                "```\n"
+                "RULES for the references block:\n"
+                "1. entry_key: stable per-draft slug (lowercase, ASCII, dash-separated). "
+                "The SAME key that your in-text citations reference.\n"
+                "2. authors: array of {family, given}. Institutional authors use "
+                "{family: 'Destatis', given: ''}.\n"
+                "3. year: integer; omit the field for 'n.d.' / 'o. J.' sources.\n"
+                "4. At least one of url / container_title / publisher must be set.\n"
+                "5. Every in-text citation in this response MUST have a matching "
+                "entry in this block. No orphan citations.\n"
+                "6. EVERY entry in this block MUST be cited at least once in the "
+                "body. No dead entries.\n"
+                "7. This block REPLACES the full bibliography — on each revision "
+                "turn you own the entire registry. Missing a previous entry means "
+                "it gets deleted.\n"
+                "8. Still keep the Markdown Literaturverzeichnis if the user asked "
+                "for it in the draft text; the structured block is the source of "
+                "truth for downstream rendering.\n"
+            )
+
         # Replace-mode injection (#44): when the user's prompt uses
         # replace-style verbs (ersetze / tausche / swap / replace) the
         # writer tends to ADD the new item alongside the old one

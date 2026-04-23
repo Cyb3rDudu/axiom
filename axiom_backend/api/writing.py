@@ -16,6 +16,11 @@ from api import schemas
 from auth.dependencies import get_current_user_from_cookie
 from services.document_service import DocumentService
 from services.reference_service import ReferenceService
+from services.structured_bibliography import (
+    StructuredBibliographyService,
+    ensure_unique_entry_key,
+    slugify_entry_key,
+)
 from services.chat_title_service import ChatTitleService
 from ai_researcher.agentic_layer.controller.writing_controller import WritingController
 from ai_researcher.agentic_layer.agents.simplified_writing_agent import SimplifiedWritingAgent
@@ -827,7 +832,7 @@ async def update_reference(
     current_user: models.User = Depends(get_current_user_from_cookie)
 ):
     """Update an existing reference."""
-    
+
     ref_service = ReferenceService(db)
     reference = await ref_service.update_reference(
         reference_id=reference_id,
@@ -835,8 +840,137 @@ async def update_reference(
         context=context,
         user_id=current_user.id
     )
-    
+
     return schemas.Reference.from_orm(reference)
+
+
+# Structured bibliography endpoints (#51/#52). These accept the new
+# structured fields (authors, year, entry_key, …) and operate on the
+# citation registry directly, bypassing the legacy chunk/web source
+# creation paths that go through ReferenceService.
+
+@router.post(
+    "/drafts/{draft_id}/references/structured",
+    response_model=schemas.Reference,
+)
+async def create_structured_reference(
+    draft_id: str,
+    payload: schemas.StructuredReferenceCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Create or update a structured reference entry."""
+    service = StructuredBibliographyService(db)
+
+    data = payload.dict()
+    entry_key = (data.get("entry_key") or "").strip()
+    if not entry_key:
+        # Synthesize a slug from authors + year + title
+        hint_parts = [
+            (payload.authors[0].family if payload.authors else ""),
+            str(payload.year) if payload.year else "",
+            (payload.title or "")[:40],
+        ]
+        entry_key = slugify_entry_key(*hint_parts)
+    data["entry_key"] = ensure_unique_entry_key(db, draft_id, entry_key)
+
+    result = service.upsert_structured(
+        draft_id=draft_id,
+        payload=data,
+        user_id=current_user.id,
+        citation_text=data.get("citation_text") or "",
+    )
+    return schemas.Reference.from_orm(result.reference)
+
+
+@router.put(
+    "/drafts/{draft_id}/references/{reference_id}/structured",
+    response_model=schemas.Reference,
+)
+async def update_structured_reference(
+    draft_id: str,
+    reference_id: str,
+    payload: schemas.StructuredReferenceCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Replace a reference's structured fields. entry_key must match."""
+    service = StructuredBibliographyService(db)
+    existing = service.get_reference(reference_id, current_user.id)
+    if existing.draft_id != draft_id:
+        raise HTTPException(status_code=404, detail="Reference not found for this draft")
+
+    data = payload.dict()
+    # Preserve the existing key unless caller explicitly changes it
+    data["entry_key"] = data.get("entry_key") or existing.entry_key
+    result = service.upsert_structured(
+        draft_id=draft_id,
+        payload=data,
+        user_id=current_user.id,
+        citation_text=data.get("citation_text") or existing.citation_text or "",
+    )
+    return schemas.Reference.from_orm(result.reference)
+
+
+@router.post("/drafts/{draft_id}/references/migrate-from-markdown")
+async def migrate_bibliography_from_markdown(
+    draft_id: str,
+    dry_run: bool = True,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Parse inline Literaturverzeichnis into structured entries (#54).
+
+    `dry_run=true` returns the preview without persisting (the frontend
+    shows the diff for user confirmation). `dry_run=false` commits the
+    parsed entries via replace_draft_registry; unparsable lines are
+    returned so the user can retry or enter them manually.
+    """
+    from services.feature_flags import structured_bibliography_enabled
+    from services.bibliography_migrator import migrate_markdown_bibliography
+    from services.citation_profiles import resolve_citation_profile
+    from services.citation_rendering import render_entry
+
+    if not structured_bibliography_enabled(current_user.settings):
+        raise HTTPException(status_code=404, detail="Structured bibliography is not enabled")
+
+    service = StructuredBibliographyService(db)
+    draft = service._assert_draft_access(draft_id, current_user.id)
+
+    profile = resolve_citation_profile(None, current_user.settings)
+    preview = migrate_markdown_bibliography(
+        draft.content or "",
+        profile_hint=profile.citation_mode if profile else None,
+    )
+
+    if dry_run or not preview.entries:
+        return preview.to_dict()
+
+    pid = profile.id if profile else "numbered"
+    service.replace_draft_registry(
+        draft_id=draft_id,
+        entries=[e.to_dict() for e in preview.entries],
+        user_id=current_user.id,
+        render_citation=lambda e, _pid=pid: render_entry(e, _pid),
+    )
+
+    return preview.to_dict()
+
+
+@router.delete("/drafts/{draft_id}/references/{reference_id}")
+async def delete_structured_reference(
+    draft_id: str,
+    reference_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Delete a reference. Cascades to any citation_entries rows."""
+    service = StructuredBibliographyService(db)
+    existing = service.get_reference(reference_id, current_user.id)
+    if existing.draft_id != draft_id:
+        raise HTTPException(status_code=404, detail="Reference not found for this draft")
+    service.delete_reference(reference_id, current_user.id)
+    return {"status": "deleted"}
 
 
 # Writing task registry (#45). Each in-flight background chat task is
@@ -1131,6 +1265,9 @@ async def process_writing_chat_in_background(
             else:
                 session_mode = "fresh_research"
 
+        from services.feature_flags import structured_bibliography_enabled
+        structured_refs_on = structured_bibliography_enabled(user_settings)
+
         context_info = {
             "document_group_id": document_group_id,
             "document_group_ids": effective_group_ids,
@@ -1150,6 +1287,7 @@ async def process_writing_chat_in_background(
             "citation_mode": citation_profile.citation_mode,
             "citation_profile_id": citation_profile.id,
             "user_settings": user_settings,
+            "structured_bibliography_enabled": structured_refs_on,
             "search_config": {
                 "deep_search": request.deep_search or False,
                 "max_iterations": request.max_search_iterations or default_iterations,
@@ -1198,12 +1336,100 @@ async def process_writing_chat_in_background(
             status_callback=status_callback
         )
         
+        # Structured bibliography ingest (#53): when the feature flag is
+        # on and the writer emitted a content-block:references fence,
+        # parse and replace the draft's structured registry atomically.
+        # Malformed block → log warning, fall back to legacy inline path.
+        structured_refs_summary: Optional[Dict[str, Any]] = None
+        if structured_refs_on:
+            try:
+                from services.structured_bibliography import (
+                    StructuredBibliographyService,
+                    parse_references_block,
+                )
+                from services.citation_rendering import render_entry
+
+                parse_result = parse_references_block(result.get("chat_response", ""))
+                if parse_result.block_found:
+                    if parse_result.errors:
+                        logger.warning(
+                            "Structured references block malformed for task %s: %s",
+                            task_id,
+                            parse_result.errors,
+                        )
+                    if parse_result.entries:
+                        service = StructuredBibliographyService(db)
+                        pid = citation_profile.id if citation_profile else "numbered"
+                        rendered_refs = service.replace_draft_registry(
+                            draft_id=draft.id,
+                            entries=parse_result.entries,
+                            user_id=user_id,
+                            render_citation=lambda e, _pid=pid: render_entry(e, _pid),
+                        )
+                        structured_refs_summary = {
+                            "count": len(rendered_refs),
+                            "errors": parse_result.errors,
+                        }
+                        logger.info(
+                            "Persisted %d structured references for draft %s (task %s)",
+                            len(rendered_refs),
+                            draft.id,
+                            task_id,
+                        )
+            except Exception as exc:
+                logger.exception(
+                    "Structured references ingest failed for task %s: %s", task_id, exc
+                )
+
         # Post-response audit (#47): check URL-in-parens citations,
         # fence balance, and declared-vs-actual wordcount. Warnings
         # are surfaced on the assistant message (`meta.audit`) and
         # pushed over WebSocket so the UI can badge the bubble.
         from services.writing_response_audit import audit_writing_response
         audit = audit_writing_response(result.get("chat_response", ""))
+
+        # Citation sync (#55): when structured refs are on, compare
+        # in-text citations in the response against the freshly-persisted
+        # registry. Surface orphan citations / dead entries on the same
+        # WebSocket payload so the UI can badge mismatches inline.
+        sync_report_dict: Optional[Dict[str, Any]] = None
+        if structured_refs_on:
+            try:
+                from services.citation_sync import (
+                    strip_references_block,
+                    validate_citations,
+                )
+                body_for_sync = strip_references_block(result.get("chat_response", ""))
+                registry_dicts = [
+                    {
+                        "entry_key": r.entry_key,
+                        "authors": r.authors,
+                        "year": r.year,
+                        "publisher": r.publisher,
+                        "container_title": r.container_title,
+                    }
+                    for r in (
+                        db.query(models.Reference)
+                        .filter(
+                            models.Reference.draft_id == draft.id,
+                            models.Reference.entry_key.isnot(None),
+                        )
+                        .all()
+                    )
+                ]
+                sync_report = validate_citations(body_for_sync, registry_dicts)
+                if sync_report.has_warnings:
+                    logger.warning(
+                        "Citation sync warnings for task %s: orphans=%d dead=%d",
+                        task_id,
+                        len(sync_report.orphan_markers),
+                        len(sync_report.dead_entries),
+                    )
+                sync_report_dict = sync_report.to_dict()
+            except Exception as exc:
+                logger.exception(
+                    "Citation sync failed for task %s: %s", task_id, exc
+                )
         if audit.has_warnings:
             logger.warning(
                 f"Writing response audit warnings for task {task_id}: "
@@ -1236,6 +1462,8 @@ async def process_writing_chat_in_background(
             "sources": result.get("sources", []),
             "task_id": task_id,
             "audit": audit.to_dict() if audit.has_warnings else None,
+            "structured_references": structured_refs_summary,
+            "citation_sync": sync_report_dict,
         }, "complete")
         
         # Update chat title if needed
@@ -1387,6 +1615,96 @@ from fastapi.responses import FileResponse, Response
 class MarkdownContent(BaseModel):
     markdown_content: str
     filename: Optional[str] = None
+    # #57: when draft_id is provided AND the structured-bibliography flag
+    # is on AND the draft has structured refs, the export path strips any
+    # inline Literaturverzeichnis in markdown_content and appends a fresh
+    # render from the registry. Legacy drafts without structured refs
+    # export unchanged.
+    draft_id: Optional[str] = None
+    citation_profile_id: Optional[str] = None
+
+
+def _strip_inline_bibliography(markdown: str) -> str:
+    """Remove an inline ## Literaturverzeichnis / ## References section.
+
+    Conservative: matches a level-2 heading that reads exactly
+    'Literaturverzeichnis' or 'References' (case-sensitive as the writer
+    emits it) and drops everything from there to end-of-document. Falls
+    back to returning markdown unchanged if no such heading is found.
+    """
+    import re as _re
+
+    pattern = _re.compile(
+        r"\n##\s+(?:Literaturverzeichnis|References)\s*\n.*$",
+        flags=_re.DOTALL,
+    )
+    return pattern.sub("", markdown)
+
+
+def _maybe_append_structured_bibliography(
+    db: Session,
+    user: models.User,
+    draft_id: Optional[str],
+    markdown: str,
+    profile_id_override: Optional[str] = None,
+) -> str:
+    """If the draft has structured refs AND the flag is on, replace any
+    inline bibliography in `markdown` with the rendered registry."""
+    if not draft_id:
+        return markdown
+
+    from services.feature_flags import structured_bibliography_enabled
+    from services.citation_rendering import render_bibliography
+    from services.citation_profiles import resolve_citation_profile
+
+    if not structured_bibliography_enabled(user.settings):
+        return markdown
+
+    # Collect structured refs for this draft (owned by this user)
+    refs = (
+        db.query(models.Reference)
+        .join(models.Draft, models.Reference.draft_id == models.Draft.id)
+        .join(models.WritingSession, models.Draft.writing_session_id == models.WritingSession.id)
+        .join(models.Chat, models.WritingSession.chat_id == models.Chat.id)
+        .filter(
+            models.Reference.draft_id == draft_id,
+            models.Chat.user_id == user.id,
+            models.Reference.entry_key.isnot(None),
+        )
+        .all()
+    )
+    if not refs:
+        return markdown
+
+    entries = [
+        {
+            "entry_key": r.entry_key,
+            "authors": r.authors,
+            "year": r.year,
+            "title": r.title,
+            "container_title": r.container_title,
+            "publisher": r.publisher,
+            "pages": r.pages,
+            "url": r.url or r.web_url,
+            "accessed_at": r.accessed_at,
+            "doi": r.doi,
+            "reference_type": r.reference_type,
+        }
+        for r in refs
+    ]
+
+    profile_id = profile_id_override
+    if not profile_id:
+        profile = resolve_citation_profile(None, user.settings)
+        profile_id = profile.id if profile else "numbered"
+
+    rendered = render_bibliography(entries, profile_id, include_heading=True)
+    if not rendered:
+        return markdown
+
+    stripped = _strip_inline_bibliography(markdown).rstrip()
+    return f"{stripped}\n\n{rendered}"
+
 
 @router.post("/sessions/{session_id}/draft/docx")
 async def export_draft_as_docx(
@@ -1396,7 +1714,7 @@ async def export_draft_as_docx(
     current_user: models.User = Depends(get_current_user_from_cookie)
 ):
     """Export a writing draft as a Word document."""
-    
+
     # Verify the user has access to this writing session
     writing_session = db.query(models.WritingSession).join(
         models.Chat, models.WritingSession.chat_id == models.Chat.id
@@ -1404,19 +1722,27 @@ async def export_draft_as_docx(
         models.WritingSession.id == session_id,
         models.Chat.user_id == current_user.id
     ).first()
-    
+
     if not writing_session:
         raise HTTPException(status_code=404, detail="Writing session not found or access denied")
-    
+
+    markdown_to_render = _maybe_append_structured_bibliography(
+        db=db,
+        user=current_user,
+        draft_id=content.draft_id,
+        markdown=content.markdown_content,
+        profile_id_override=content.citation_profile_id,
+    )
+
     try:
         # Create a temporary file for the DOCX output
         with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as temp_file:
             temp_path = temp_file.name
-        
+
         try:
             # Convert markdown to DOCX using pypandoc with output file
             pypandoc.convert_text(
-                content.markdown_content,
+                markdown_to_render,
                 'docx',
                 format='md',
                 outputfile=temp_path,
