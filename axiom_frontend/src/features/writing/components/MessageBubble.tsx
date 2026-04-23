@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { MathMarkdown } from '../../../components/markdown/MathMarkdown'
-import { Copy, RotateCcw, Check, Bot, User, Trash2, FileDown, FilePlus } from 'lucide-react'
+import { Copy, RotateCcw, Check, Bot, User, Trash2, FileDown, FilePlus, FileCheck } from 'lucide-react'
 import { formatChatMessageTime } from '../../../utils/timezone'
 import { SourceBubbles } from './SourceBubbles'
 import type { Source } from '../api'
@@ -22,6 +22,11 @@ interface MessageBubbleProps {
   /** Append the block to the end of the current draft.
    *  Used by content-block:section / paragraph / list blocks. */
   onAppendToDraft?: (content: string) => void | Promise<void>
+  /** One-click apply: replace draft with the document block and
+   *  append all remaining section/paragraph/list blocks. Useful for
+   *  Hausarbeit-style revision responses that come as [document +
+   *  Literaturverzeichnis]. */
+  onApplyAllBlocks?: (reconstructed: string) => void | Promise<void>
 }
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -31,9 +36,47 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   isRegenerating = false,
   onApplyToDraft,
   onAppendToDraft,
+  onApplyAllBlocks,
 }) => {
   const [copiedContent, setCopiedContent] = useState<string | null>(null)
   const [hoveredCodeBlock, setHoveredCodeBlock] = useState<string | null>(null)
+
+  // Precompute whether this message has a content-block:document that
+  // the "Apply all blocks" button should act on. Only assistant
+  // messages with at least one document-level block qualify — for
+  // chat-only responses the granular per-block buttons remain the
+  // only apply action.
+  const hasDocumentBlock = React.useMemo(() => {
+    if (message.role !== 'assistant') return false
+    const regex = /```content-block:document\s*\n([\s\S]*?)\n```/g
+    return regex.test(message.content || '')
+  }, [message.content, message.role])
+
+  // Build the reconstructed draft content: document block replaces,
+  // subsequent section/paragraph/list blocks append. Skips code
+  // blocks and freeform text between blocks — those are chat
+  // commentary, not part of the deliverable.
+  const reconstructAllBlocks = React.useCallback((): string | null => {
+    if (!message.content) return null
+    const regex = /```content-block:(\w+)\s*\n([\s\S]*?)\n```/g
+    let documentBody: string | null = null
+    const appendables: string[] = []
+    let m: RegExpExecArray | null
+    while ((m = regex.exec(message.content)) !== null) {
+      const blockType = m[1]
+      const body = (m[2] || '').trim()
+      if (!body) continue
+      if (blockType === 'code') continue
+      if (blockType === 'document' && documentBody === null) {
+        documentBody = body
+      } else if (blockType !== 'document') {
+        appendables.push(body)
+      }
+    }
+    if (documentBody === null) return null
+    if (appendables.length === 0) return documentBody
+    return [documentBody, ...appendables].join('\n\n')
+  }, [message.content])
 
   // Function to process content and highlight citations
   const processCitations = (text: string) => {
@@ -204,6 +247,24 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             : 'flex-1'
         }`}>
           <div className="absolute top-1.5 right-1.5 flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+            {/* #46 — single-click apply for responses that carry a
+                document block + any number of section/paragraph/list
+                blocks. Shortcuts the otherwise 2-click FileDown +
+                FilePlus dance for the common Hausarbeit shape. */}
+            {hasDocumentBlock && onApplyAllBlocks && (
+              <button
+                onClick={async () => {
+                  const reconstructed = reconstructAllBlocks()
+                  if (reconstructed) {
+                    await onApplyAllBlocks(reconstructed)
+                  }
+                }}
+                className="bg-background border border-border rounded-md p-1 shadow-sm hover:bg-primary/10 hover:border-primary z-10 transition-colors duration-150"
+                title="Ganze Antwort in Entwurf übernehmen (Haupttext ersetzen, weitere Blöcke anhängen)"
+              >
+                <FileCheck className="h-2.5 w-2.5 text-primary" />
+              </button>
+            )}
             <button
               onClick={() => copyToClipboard(message.content)}
               className="bg-background border border-border rounded-md p-1 shadow-sm hover:bg-muted z-10 transition-colors duration-150"

@@ -475,6 +475,36 @@ export const WritingChatPanel: React.FC = () => {
                     })
                   }
                 }}
+                onApplyAllBlocks={async (reconstructed: string) => {
+                  if (!currentDraft) {
+                    addToast({
+                      type: 'error',
+                      title: 'Kein Draft',
+                      message: 'Es ist kein Entwurf aktiv.',
+                      duration: 4000,
+                    })
+                    return
+                  }
+                  try {
+                    await saveDraftChanges(reconstructed)
+                    addToast({
+                      type: 'success',
+                      title: 'Antwort übernommen',
+                      message:
+                        'Haupttext ersetzt, weitere Blöcke (z. B. Literaturverzeichnis) angehängt.',
+                      duration: 3000,
+                    })
+                  } catch (error) {
+                    console.error('Apply-all-blocks failed:', error)
+                    addToast({
+                      type: 'error',
+                      title: 'Übernahme fehlgeschlagen',
+                      message:
+                        'Die Antwort konnte nicht in den Editor geschrieben werden.',
+                      duration: 5000,
+                    })
+                  }
+                }}
               />
             ))
           )}
