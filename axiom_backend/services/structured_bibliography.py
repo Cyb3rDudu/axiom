@@ -18,6 +18,7 @@ legacy drafts that only use ReferenceService's chunk/web paths.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import unicodedata
@@ -421,6 +422,98 @@ def record_citation_occurrences(
         rows.append(row)
     db.commit()
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Writer output parser (#53) — extracts content-block:references JSON
+# ---------------------------------------------------------------------------
+
+
+_REFERENCES_BLOCK_RE = re.compile(
+    r"```content-block:references\s*\n(?P<json>.*?)\n```",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+@dataclass
+class ReferencesParseResult:
+    entries: List[Dict[str, Any]]  # validated (partially) dicts, ready for upsert
+    block_found: bool
+    errors: List[str]  # human-readable warnings; non-empty -> treat as malformed
+
+
+def parse_references_block(response_text: str) -> ReferencesParseResult:
+    """Extract structured references from the writer's response.
+
+    Returns ReferencesParseResult. Callers treat a non-empty `errors`
+    list as a signal to fall back to the legacy inline-Markdown path
+    (the agent still emits a Markdown Literaturverzeichnis in parallel,
+    so nothing is lost).
+    """
+    match = _REFERENCES_BLOCK_RE.search(response_text or "")
+    if match is None:
+        return ReferencesParseResult(entries=[], block_found=False, errors=[])
+
+    raw = match.group("json").strip()
+    if not raw:
+        return ReferencesParseResult(
+            entries=[], block_found=True, errors=["references block is empty"]
+        )
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return ReferencesParseResult(
+            entries=[], block_found=True, errors=[f"malformed JSON: {exc}"]
+        )
+
+    if not isinstance(parsed, list):
+        return ReferencesParseResult(
+            entries=[], block_found=True, errors=["references payload must be a JSON array"]
+        )
+
+    entries: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    seen_keys: set[str] = set()
+    for i, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            errors.append(f"entry {i}: not an object")
+            continue
+        entry_key = (item.get("entry_key") or "").strip()
+        title = (item.get("title") or "").strip()
+        if not entry_key:
+            errors.append(f"entry {i}: missing entry_key")
+            continue
+        if not title:
+            errors.append(f"entry {i} ({entry_key}): missing title")
+            continue
+        if entry_key in seen_keys:
+            errors.append(f"duplicate entry_key: {entry_key}")
+            continue
+        # Structural minimum: at least one of url / container_title / publisher / document_id
+        if not any(item.get(k) for k in ("url", "container_title", "publisher", "document_id")):
+            errors.append(
+                f"entry {entry_key}: needs at least one of url, container_title, publisher, document_id"
+            )
+            continue
+
+        seen_keys.add(entry_key)
+        entries.append({
+            "entry_key": entry_key,
+            "authors": item.get("authors") or [],
+            "year": item.get("year"),
+            "title": title,
+            "container_title": item.get("container_title"),
+            "publisher": item.get("publisher"),
+            "pages": item.get("pages"),
+            "url": item.get("url"),
+            "doi": item.get("doi"),
+            "accessed_at": item.get("accessed_at"),
+            "reference_type": item.get("reference_type", "web"),
+            "document_id": item.get("document_id"),
+        })
+
+    return ReferencesParseResult(entries=entries, block_found=True, errors=errors)
 
 
 def count_occurrences_by_reference(

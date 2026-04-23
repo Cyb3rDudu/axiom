@@ -1220,6 +1220,9 @@ async def process_writing_chat_in_background(
             else:
                 session_mode = "fresh_research"
 
+        from services.feature_flags import structured_bibliography_enabled
+        structured_refs_on = structured_bibliography_enabled(user_settings)
+
         context_info = {
             "document_group_id": document_group_id,
             "document_group_ids": effective_group_ids,
@@ -1239,6 +1242,7 @@ async def process_writing_chat_in_background(
             "citation_mode": citation_profile.citation_mode,
             "citation_profile_id": citation_profile.id,
             "user_settings": user_settings,
+            "structured_bibliography_enabled": structured_refs_on,
             "search_config": {
                 "deep_search": request.deep_search or False,
                 "max_iterations": request.max_search_iterations or default_iterations,
@@ -1287,6 +1291,51 @@ async def process_writing_chat_in_background(
             status_callback=status_callback
         )
         
+        # Structured bibliography ingest (#53): when the feature flag is
+        # on and the writer emitted a content-block:references fence,
+        # parse and replace the draft's structured registry atomically.
+        # Malformed block → log warning, fall back to legacy inline path.
+        structured_refs_summary: Optional[Dict[str, Any]] = None
+        if structured_refs_on:
+            try:
+                from services.structured_bibliography import (
+                    StructuredBibliographyService,
+                    parse_references_block,
+                )
+                from services.citation_rendering import render_entry
+
+                parse_result = parse_references_block(result.get("chat_response", ""))
+                if parse_result.block_found:
+                    if parse_result.errors:
+                        logger.warning(
+                            "Structured references block malformed for task %s: %s",
+                            task_id,
+                            parse_result.errors,
+                        )
+                    if parse_result.entries:
+                        service = StructuredBibliographyService(db)
+                        pid = citation_profile.id if citation_profile else "numbered"
+                        rendered_refs = service.replace_draft_registry(
+                            draft_id=draft.id,
+                            entries=parse_result.entries,
+                            user_id=user_id,
+                            render_citation=lambda e, _pid=pid: render_entry(e, _pid),
+                        )
+                        structured_refs_summary = {
+                            "count": len(rendered_refs),
+                            "errors": parse_result.errors,
+                        }
+                        logger.info(
+                            "Persisted %d structured references for draft %s (task %s)",
+                            len(rendered_refs),
+                            draft.id,
+                            task_id,
+                        )
+            except Exception as exc:
+                logger.exception(
+                    "Structured references ingest failed for task %s: %s", task_id, exc
+                )
+
         # Post-response audit (#47): check URL-in-parens citations,
         # fence balance, and declared-vs-actual wordcount. Warnings
         # are surfaced on the assistant message (`meta.audit`) and
@@ -1325,6 +1374,7 @@ async def process_writing_chat_in_background(
             "sources": result.get("sources", []),
             "task_id": task_id,
             "audit": audit.to_dict() if audit.has_warnings else None,
+            "structured_references": structured_refs_summary,
         }, "complete")
         
         # Update chat title if needed
