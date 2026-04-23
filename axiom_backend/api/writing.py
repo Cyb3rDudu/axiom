@@ -912,6 +912,51 @@ async def update_structured_reference(
     return schemas.Reference.from_orm(result.reference)
 
 
+@router.post("/drafts/{draft_id}/references/migrate-from-markdown")
+async def migrate_bibliography_from_markdown(
+    draft_id: str,
+    dry_run: bool = True,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Parse inline Literaturverzeichnis into structured entries (#54).
+
+    `dry_run=true` returns the preview without persisting (the frontend
+    shows the diff for user confirmation). `dry_run=false` commits the
+    parsed entries via replace_draft_registry; unparsable lines are
+    returned so the user can retry or enter them manually.
+    """
+    from services.feature_flags import structured_bibliography_enabled
+    from services.bibliography_migrator import migrate_markdown_bibliography
+    from services.citation_profiles import resolve_citation_profile
+    from services.citation_rendering import render_entry
+
+    if not structured_bibliography_enabled(current_user.settings):
+        raise HTTPException(status_code=404, detail="Structured bibliography is not enabled")
+
+    service = StructuredBibliographyService(db)
+    draft = service._assert_draft_access(draft_id, current_user.id)
+
+    profile = resolve_citation_profile(None, current_user.settings)
+    preview = migrate_markdown_bibliography(
+        draft.content or "",
+        profile_hint=profile.citation_mode if profile else None,
+    )
+
+    if dry_run or not preview.entries:
+        return preview.to_dict()
+
+    pid = profile.id if profile else "numbered"
+    service.replace_draft_registry(
+        draft_id=draft_id,
+        entries=[e.to_dict() for e in preview.entries],
+        user_id=current_user.id,
+        render_citation=lambda e, _pid=pid: render_entry(e, _pid),
+    )
+
+    return preview.to_dict()
+
+
 @router.delete("/drafts/{draft_id}/references/{reference_id}")
 async def delete_structured_reference(
     draft_id: str,
