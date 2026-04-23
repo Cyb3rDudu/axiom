@@ -1342,6 +1342,49 @@ async def process_writing_chat_in_background(
         # pushed over WebSocket so the UI can badge the bubble.
         from services.writing_response_audit import audit_writing_response
         audit = audit_writing_response(result.get("chat_response", ""))
+
+        # Citation sync (#55): when structured refs are on, compare
+        # in-text citations in the response against the freshly-persisted
+        # registry. Surface orphan citations / dead entries on the same
+        # WebSocket payload so the UI can badge mismatches inline.
+        sync_report_dict: Optional[Dict[str, Any]] = None
+        if structured_refs_on:
+            try:
+                from services.citation_sync import (
+                    strip_references_block,
+                    validate_citations,
+                )
+                body_for_sync = strip_references_block(result.get("chat_response", ""))
+                registry_dicts = [
+                    {
+                        "entry_key": r.entry_key,
+                        "authors": r.authors,
+                        "year": r.year,
+                        "publisher": r.publisher,
+                        "container_title": r.container_title,
+                    }
+                    for r in (
+                        db.query(models.Reference)
+                        .filter(
+                            models.Reference.draft_id == draft.id,
+                            models.Reference.entry_key.isnot(None),
+                        )
+                        .all()
+                    )
+                ]
+                sync_report = validate_citations(body_for_sync, registry_dicts)
+                if sync_report.has_warnings:
+                    logger.warning(
+                        "Citation sync warnings for task %s: orphans=%d dead=%d",
+                        task_id,
+                        len(sync_report.orphan_markers),
+                        len(sync_report.dead_entries),
+                    )
+                sync_report_dict = sync_report.to_dict()
+            except Exception as exc:
+                logger.exception(
+                    "Citation sync failed for task %s: %s", task_id, exc
+                )
         if audit.has_warnings:
             logger.warning(
                 f"Writing response audit warnings for task {task_id}: "
@@ -1375,6 +1418,7 @@ async def process_writing_chat_in_background(
             "task_id": task_id,
             "audit": audit.to_dict() if audit.has_warnings else None,
             "structured_references": structured_refs_summary,
+            "citation_sync": sync_report_dict,
         }, "complete")
         
         # Update chat title if needed
