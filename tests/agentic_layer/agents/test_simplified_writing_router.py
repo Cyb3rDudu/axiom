@@ -30,6 +30,7 @@ import api as _api_primer  # noqa: F401, E402
 from ai_researcher.agentic_layer.agents.simplified_writing_agent import (  # noqa: E402
     _build_router_history,
     _extract_preflight_keywords,
+    _is_replace_mode_prompt,
     _looks_like_draft_revision,
     _summarise_assistant_turn,
 )
@@ -218,3 +219,35 @@ class TestPreflightKeywordExtractor:
         query = " ".join(f"Keyword{i}" for i in range(30))
         kw = _extract_preflight_keywords(query, max_terms=5)
         assert len(kw) == 5
+
+
+class TestReplaceModeDetection:
+    """_is_replace_mode_prompt flags swaps-style prompts."""
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "Ersetze de.statista.com durch Destatis 2024.",
+            "Tausche die Quelle A gegen Quelle B.",
+            "Swap source A for source B in section 3.",
+            "Replace all occurrences of X with Y.",
+            # Replace verb deeper in a multi-task brief still triggers
+            "Vier kleine Fixes:\n"
+            "1. Entferne studyflix-Referenzen.\n"
+            "2. Ersetze bundeswirtschaftsministerium durch EU-Kommission.\n",
+        ],
+    )
+    def test_positive(self, prompt: str) -> None:
+        assert _is_replace_mode_prompt(prompt) is True
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "Kürze den Entwurf auf 3000 Wörter.",
+            "Entferne die Einleitung.",  # plain delete, not replace
+            "Schreib einen neuen Abschnitt über Z.",
+            "",
+        ],
+    )
+    def test_negative(self, prompt: str) -> None:
+        assert _is_replace_mode_prompt(prompt) is False

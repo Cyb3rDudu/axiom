@@ -247,6 +247,29 @@ def _build_router_history(
     return bounded
 
 
+# Replace-mode detection (#44). Matches whole words anywhere in the
+# first ~500 chars of the prompt — replace-intent often appears on a
+# later line of a multi-task brief, not just at the head, so this is
+# deliberately looser than the revision-start anchor.
+_REPLACE_VERBS = re.compile(
+    r"\b(ersetze|ersetzen|ersatz|tausche|tauschen|swap|swaps|swapping|"
+    r"replace|replaces|replacing)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_replace_mode_prompt(prompt: str, lookahead: int = 500) -> bool:
+    """Return True when the prompt contains replace-style instructions.
+
+    Matched against the first ``lookahead`` chars so a long fix-list
+    ("5 tweaks: … 3. ersetze X durch Y …") still triggers the
+    replace-mode system-prompt injection.
+    """
+    if not prompt:
+        return False
+    return bool(_REPLACE_VERBS.search(prompt[:lookahead]))
+
+
 # German + English stopwords for the preflight keyword extractor.
 # Intentionally small — we want discriminative terms (proper nouns,
 # years, domain words like "Destatis", "Außenhandel") to survive.
@@ -2261,6 +2284,27 @@ class SimplifiedWritingAgent:
             "- \\begin{equation}...\\end{equation} ← Wrong! Use $$ instead"
         )
         
+        # Replace-mode injection (#44): when the user's prompt uses
+        # replace-style verbs (ersetze / tausche / swap / replace) the
+        # writer tends to ADD the new item alongside the old one
+        # instead of removing the old. Inject an explicit anti-hoard
+        # instruction so revisions with source swaps actually replace.
+        if _is_replace_mode_prompt(prompt):
+            system_prompt += (
+                "\n\nREPLACE-MODE: The user's prompt asks you to replace existing "
+                "content, sources, or phrases. For EVERY swap the user requests "
+                "you MUST:\n"
+                "1. Remove ALL occurrences of the old item from the draft body.\n"
+                "2. Remove the old item from the bibliography if present.\n"
+                "3. Insert the new item in its place, keeping surrounding context.\n"
+                "4. Do NOT leave the old item alongside the new one — that is the "
+                "failure mode to avoid.\n"
+                "If you cannot find the old item, or cannot locate a suitable "
+                "replacement, state that explicitly in the response rather than "
+                "silently skipping. When multiple old items should be removed, "
+                "confirm in one line per swap how many instances you removed."
+            )
+
         # Append user's custom instructions if provided
         if custom_system_prompt_addition and custom_system_prompt_addition.strip():
             system_prompt += f"\n\nADDITIONAL USER INSTRUCTIONS:\n{custom_system_prompt_addition.strip()}"
