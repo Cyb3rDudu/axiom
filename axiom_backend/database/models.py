@@ -292,14 +292,54 @@ class Reference(Base):
     draft_id = Column(StringUUID, ForeignKey("drafts.id"), nullable=False, index=True)
     document_id = Column(StringUUID, ForeignKey("documents.id"), nullable=True, index=True)  # For RAG document references
     web_url = Column(String, nullable=True)  # For web search references
-    citation_text = Column(Text, nullable=False)  # The actual citation text
+    citation_text = Column(Text, nullable=False)  # The actual citation text (legacy inline-Markdown path)
     context = Column(Text, nullable=True)  # Context where this reference is used
     reference_type = Column(String, nullable=False)  # 'document' or 'web'
     created_at = Column(DateTime(timezone=True))
 
+    # Structured citation fields (#51/#52). NULL for legacy entries.
+    authors = Column(JSONB, nullable=True)
+    year = Column(Integer, nullable=True)
+    title = Column(Text, nullable=True)
+    container_title = Column(Text, nullable=True)
+    publisher = Column(Text, nullable=True)
+    pages = Column(Text, nullable=True)
+    url = Column(Text, nullable=True)
+    accessed_at = Column(DateTime(timezone=True), nullable=True)
+    doi = Column(Text, nullable=True)
+    entry_key = Column(Text, nullable=True, index=True)
+    source_fingerprint = Column(Text, nullable=True)
+
     # Relationships
     draft = relationship("Draft", back_populates="references")
     document = relationship("Document")
+    citation_entries = relationship(
+        "CitationEntry",
+        back_populates="reference",
+        cascade="all, delete-orphan",
+    )
+
+
+class CitationEntry(Base):
+    """One row per in-text citation occurrence in a draft body (#51/#52).
+
+    Populated by the citation-sync parser; drives orphan/dead-entry
+    diagnostics and the live picker UI.
+    """
+
+    __tablename__ = "citation_entries"
+
+    id = Column(StringUUID, primary_key=True, default=uuid.uuid4, index=True)
+    draft_id = Column(StringUUID, ForeignKey("drafts.id"), nullable=False, index=True)
+    reference_id = Column(StringUUID, ForeignKey("draft_references.id"), nullable=False, index=True)
+    in_text_marker = Column(Text, nullable=False)
+    paragraph_index = Column(Integer, nullable=True)
+    char_offset_start = Column(Integer, nullable=True)
+    char_offset_end = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    reference = relationship("Reference", back_populates="citation_entries")
+    draft = relationship("Draft")
 
 class WritingSessionStats(Base):
     __tablename__ = "writing_session_stats"

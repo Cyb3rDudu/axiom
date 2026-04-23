@@ -16,6 +16,11 @@ from api import schemas
 from auth.dependencies import get_current_user_from_cookie
 from services.document_service import DocumentService
 from services.reference_service import ReferenceService
+from services.structured_bibliography import (
+    StructuredBibliographyService,
+    ensure_unique_entry_key,
+    slugify_entry_key,
+)
 from services.chat_title_service import ChatTitleService
 from ai_researcher.agentic_layer.controller.writing_controller import WritingController
 from ai_researcher.agentic_layer.agents.simplified_writing_agent import SimplifiedWritingAgent
@@ -827,7 +832,7 @@ async def update_reference(
     current_user: models.User = Depends(get_current_user_from_cookie)
 ):
     """Update an existing reference."""
-    
+
     ref_service = ReferenceService(db)
     reference = await ref_service.update_reference(
         reference_id=reference_id,
@@ -835,8 +840,92 @@ async def update_reference(
         context=context,
         user_id=current_user.id
     )
-    
+
     return schemas.Reference.from_orm(reference)
+
+
+# Structured bibliography endpoints (#51/#52). These accept the new
+# structured fields (authors, year, entry_key, …) and operate on the
+# citation registry directly, bypassing the legacy chunk/web source
+# creation paths that go through ReferenceService.
+
+@router.post(
+    "/drafts/{draft_id}/references/structured",
+    response_model=schemas.Reference,
+)
+async def create_structured_reference(
+    draft_id: str,
+    payload: schemas.StructuredReferenceCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Create or update a structured reference entry."""
+    service = StructuredBibliographyService(db)
+
+    data = payload.dict()
+    entry_key = (data.get("entry_key") or "").strip()
+    if not entry_key:
+        # Synthesize a slug from authors + year + title
+        hint_parts = [
+            (payload.authors[0].family if payload.authors else ""),
+            str(payload.year) if payload.year else "",
+            (payload.title or "")[:40],
+        ]
+        entry_key = slugify_entry_key(*hint_parts)
+    data["entry_key"] = ensure_unique_entry_key(db, draft_id, entry_key)
+
+    result = service.upsert_structured(
+        draft_id=draft_id,
+        payload=data,
+        user_id=current_user.id,
+        citation_text=data.get("citation_text") or "",
+    )
+    return schemas.Reference.from_orm(result.reference)
+
+
+@router.put(
+    "/drafts/{draft_id}/references/{reference_id}/structured",
+    response_model=schemas.Reference,
+)
+async def update_structured_reference(
+    draft_id: str,
+    reference_id: str,
+    payload: schemas.StructuredReferenceCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Replace a reference's structured fields. entry_key must match."""
+    service = StructuredBibliographyService(db)
+    existing = service.get_reference(reference_id, current_user.id)
+    if existing.draft_id != draft_id:
+        raise HTTPException(status_code=404, detail="Reference not found for this draft")
+
+    data = payload.dict()
+    # Preserve the existing key unless caller explicitly changes it
+    data["entry_key"] = data.get("entry_key") or existing.entry_key
+    result = service.upsert_structured(
+        draft_id=draft_id,
+        payload=data,
+        user_id=current_user.id,
+        citation_text=data.get("citation_text") or existing.citation_text or "",
+    )
+    return schemas.Reference.from_orm(result.reference)
+
+
+@router.delete("/drafts/{draft_id}/references/{reference_id}")
+async def delete_structured_reference(
+    draft_id: str,
+    reference_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Delete a reference. Cascades to any citation_entries rows."""
+    service = StructuredBibliographyService(db)
+    existing = service.get_reference(reference_id, current_user.id)
+    if existing.draft_id != draft_id:
+        raise HTTPException(status_code=404, detail="Reference not found for this draft")
+    service.delete_reference(reference_id, current_user.id)
+    return {"status": "deleted"}
 
 
 # Writing task registry (#45). Each in-flight background chat task is

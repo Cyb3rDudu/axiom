@@ -603,12 +603,34 @@ class Draft(DraftBase):
             datetime: lambda v: v.isoformat()
         }
 
+class AuthorName(BaseModel):
+    """Structured author name (#51/#52). Either field may be empty for
+    institutional authors — convention: institution goes in `family`,
+    `given` is left empty."""
+    family: str
+    given: Optional[str] = ""
+
+
 class ReferenceBase(BaseModel):
     document_id: Optional[str] = None
     web_url: Optional[str] = None
     citation_text: str
     context: Optional[str] = None
     reference_type: str  # 'document' or 'web'
+
+    # Structured fields (#51/#52). All optional so legacy clients and
+    # legacy rows continue to work through citation_text.
+    authors: Optional[List[AuthorName]] = None
+    year: Optional[int] = None
+    title: Optional[str] = None
+    container_title: Optional[str] = None
+    publisher: Optional[str] = None
+    pages: Optional[str] = None
+    url: Optional[str] = None
+    accessed_at: Optional[datetime] = None
+    doi: Optional[str] = None
+    entry_key: Optional[str] = None
+
 
 class ReferenceCreate(ReferenceBase):
     draft_id: str
@@ -623,6 +645,49 @@ class Reference(ReferenceBase):
         json_encoders = {
             datetime: lambda v: v.isoformat()
         }
+
+
+class CitationEntry(BaseModel):
+    """In-text citation occurrence (#51/#52)."""
+    id: str
+    draft_id: str
+    reference_id: str
+    in_text_marker: str
+    paragraph_index: Optional[int] = None
+    char_offset_start: Optional[int] = None
+    char_offset_end: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class StructuredReferenceCreate(BaseModel):
+    """Create a reference directly from structured fields (#52).
+
+    Skips the legacy ReferenceService chunk/web-source paths — used by
+    the writer's content-block:references flow and the bibliography
+    widget. At least one of `url`, `container_title`, or `publisher`
+    must be set (enforced at service level, not schema, for better
+    error messages).
+    """
+    entry_key: str
+    authors: List[AuthorName]
+    year: Optional[int] = None
+    title: str
+    container_title: Optional[str] = None
+    publisher: Optional[str] = None
+    pages: Optional[str] = None
+    url: Optional[str] = None
+    doi: Optional[str] = None
+    accessed_at: Optional[datetime] = None
+    reference_type: str = "web"  # 'document' or 'web'
+    document_id: Optional[str] = None
+    source_fingerprint: Optional[str] = None
+    citation_text: Optional[str] = None  # pre-rendered; service will compute if omitted
 
 class WritingSessionWithChat(BaseModel):
     id: str
