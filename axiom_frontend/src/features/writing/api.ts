@@ -264,6 +264,121 @@ export const deleteDraftReference = async (draftId: string, referenceId: string)
   await apiClient.delete(`/api/writing/drafts/${draftId}/references/${referenceId}`);
 };
 
+// Structured bibliography (#51/#56). Fully separate shape from the
+// legacy Reference interface above because the fields are richer and
+// we don't want to retrofit the old callers.
+export interface AuthorName {
+  family: string;
+  given?: string;
+}
+
+export interface StructuredReference {
+  id: string;
+  draft_id: string;
+  entry_key: string;
+  authors: AuthorName[] | null;
+  year: number | null;
+  title: string | null;
+  container_title: string | null;
+  publisher: string | null;
+  pages: string | null;
+  url: string | null;
+  accessed_at: string | null;
+  doi: string | null;
+  reference_type: string;
+  citation_text: string;
+  created_at: string;
+}
+
+export interface StructuredReferenceCreateInput {
+  entry_key?: string;
+  authors: AuthorName[];
+  year?: number | null;
+  title: string;
+  container_title?: string | null;
+  publisher?: string | null;
+  pages?: string | null;
+  url?: string | null;
+  doi?: string | null;
+  accessed_at?: string | null;
+  reference_type?: 'document' | 'web';
+  document_id?: string | null;
+}
+
+export const getStructuredReferences = async (
+  draftId: string
+): Promise<StructuredReference[]> => {
+  const response = await apiClient.get(`/api/writing/drafts/${draftId}/references`);
+  return response.data as StructuredReference[];
+};
+
+export const createStructuredReference = async (
+  draftId: string,
+  payload: StructuredReferenceCreateInput
+): Promise<StructuredReference> => {
+  const response = await apiClient.post(
+    `/api/writing/drafts/${draftId}/references/structured`,
+    payload
+  );
+  return response.data;
+};
+
+export const updateStructuredReference = async (
+  draftId: string,
+  referenceId: string,
+  payload: StructuredReferenceCreateInput
+): Promise<StructuredReference> => {
+  const response = await apiClient.put(
+    `/api/writing/drafts/${draftId}/references/${referenceId}/structured`,
+    payload
+  );
+  return response.data;
+};
+
+export const deleteStructuredReference = async (
+  draftId: string,
+  referenceId: string
+): Promise<void> => {
+  await apiClient.delete(`/api/writing/drafts/${draftId}/references/${referenceId}`);
+};
+
+export interface MigrationPreview {
+  entries: Array<{
+    entry_key: string;
+    source_markdown: string;
+    authors: AuthorName[];
+    year: number | null;
+    title: string | null;
+    container_title: string | null;
+    publisher: string | null;
+    url: string | null;
+    doi: string | null;
+    reference_type: string;
+    confidence: string;
+  }>;
+  unparsable: string[];
+  parsed_count: number;
+  unparsable_count: number;
+}
+
+export const previewBibliographyMigration = async (
+  draftId: string
+): Promise<MigrationPreview> => {
+  const response = await apiClient.post(
+    `/api/writing/drafts/${draftId}/references/migrate-from-markdown?dry_run=true`
+  );
+  return response.data;
+};
+
+export const commitBibliographyMigration = async (
+  draftId: string
+): Promise<MigrationPreview> => {
+  const response = await apiClient.post(
+    `/api/writing/drafts/${draftId}/references/migrate-from-markdown?dry_run=false`
+  );
+  return response.data;
+};
+
 // Chat message management API
 export const clearChatMessages = async (chatId: string): Promise<void> => {
   await apiClient.delete(`/api/chats/${chatId}/messages`);

@@ -10,6 +10,7 @@ import type { Options } from 'easymde';
 import 'easymde/dist/easymde.min.css';
 import './editor.css';
 // import { ReferencePanel } from './ReferencePanel'; // Not currently used - references are shown inline in chat
+import { BibliographyWidget } from './BibliographyWidget';
 import { useWritingStore } from '../store';
 import { useDebounce } from '../../../hooks/useDebounce';
 import * as writingApi from '../api';
@@ -781,11 +782,14 @@ export const DraftPanel: React.FC = () => {
               </div>
             </TabsContent>
 
-            <TabsContent value="references" className="h-full m-0">
-              {/* References are now handled inline in chat messages */}
-              <div className="h-full flex items-center justify-center text-text-secondary">
-                <p>References appear inline in chat messages when sources are used</p>
-              </div>
+            <TabsContent value="references" className="h-full m-0 overflow-auto p-3">
+              {currentDraft ? (
+                <BibliographyWidget draftId={currentDraft.id} />
+              ) : (
+                <div className="h-full flex items-center justify-center text-text-secondary">
+                  <p>No draft available</p>
+                </div>
+              )}
             </TabsContent>
           </div>
         </Tabs>
