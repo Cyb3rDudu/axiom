@@ -117,46 +117,180 @@ class WritingStatsTracker:
             logger.error(f"Error sending stats update for session {session_id}: {e}")
 
 
-# German + English revision verbs. Matched as whole words near the start
-# of the prompt to avoid false positives like "Please explain the
-# shrinking of demand in section 2" — that's a content question, not a
-# revision of the draft itself. Anchoring to the first ~200 chars keeps
-# the heuristic tight while still catching multi-line briefs whose first
-# paragraph states the task.
+# German + English revision verbs. Anchored to the start of a line
+# (after optional formatting prefix like "1. ", "- ", "**", "#") so
+# mid-sentence occurrences like "the shrinking of demand in section 2"
+# don't misfire. MULTILINE lets us match "Aufgabe:\nKürze …" too.
 _REVISION_PATTERNS = re.compile(
-    r"\b("
+    r"^[\s\*#\-\.\)\d]{0,10}"
+    r"(?:"
+    # shorten / reduce
     r"kürze|kürzen|kurzfassen|einkürzen|einkürzung|"
+    r"shorten|shortening|condense|condensing|trim|trimming|"
+    r"shrink|"
+    # overhaul / rewrite
     r"überarbeite|überarbeiten|überarbeitung|"
     r"revidiere|revidieren|revision|"
     r"umschreibe|umschreiben|umformuliere|umformulieren|"
     r"rewrite|rewriting|"
-    r"revise|revising|revision|"
-    r"shorten|shortening|condense|condensing|trim|trimming|"
-    r"polish|polishing|edit|editing|refactor|"
-    r"shrink|shrinking"
+    r"revise|revising|"
+    # surgical edits — added in #42 based on real Hausarbeit prompts
+    # that didn't match the original list
+    r"entferne|ersetze|tausche|streiche|lösche|"
+    r"korrigiere|korrektur|fixe|nachbessere|nachbesserung|"
+    r"ergänze|füge|aktualisiere|glätte|"
+    r"remove|replace|swap|delete|strip|"
+    r"fix|correct|patch|tweak|adjust|update|modify|"
+    # polish
+    r"polish|polishing|edit|editing|refactor"
     r")\b",
-    re.IGNORECASE,
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Structural patterns that appear at prompt head without a verb —
+# observed form: "Vier gezielte Fixes …", "Drei kleine Änderungen", "N
+# Änderungen am Entwurf", "Liste von Korrekturen", "A few targeted
+# edits". Users write this shape often; treat it as a revision intent.
+_REVISION_STRUCTURAL = re.compile(
+    r"^\s*"
+    r"(?:"
+    r"\d+|ein|zwei|drei|vier|fünf|sechs|sieben|acht|neun|zehn|"
+    r"one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"liste|list|mehrere|several|a\s+few|einige"
+    r")\s+"
+    # optional connector ("von", "of", "mit", "an", "für", "with", "for")
+    # — lets "Liste von Korrekturen", "A few of the fixes" match too
+    r"(?:(?:von|vom|of|mit|an|für|with|for)\s+)?"
+    r"(?:kleine\s+|gezielte\s+|konkrete\s+|quick\s+|targeted\s+|surgical\s+|small\s+)?"
+    r"(?:fixe?s?|änderungen|korrekturen|swaps?|updates?|patches|edits?|revisions?|"
+    r"anpassungen|nacharbeiten|tweaks?)"
+    r"\b",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
 def _looks_like_draft_revision(prompt: str, draft_content: str) -> bool:
     """Return True when the user is clearly asking to revise an existing
-    draft (shrink/rewrite/polish/…) rather than generate new content.
+    draft (shrink/rewrite/polish/swap sources/fix typos/…) rather than
+    generate new content.
 
     Gate conditions — all must hold:
       1. There is a non-trivial draft already (more than ~200 chars).
          Without a draft, "überarbeite" has nothing to act on, so we
          still want the full agent flow.
-      2. A revision verb appears in the prompt head (first 240 chars).
-         This avoids misfiring on long research briefs that happen to
-         contain the word "überarbeitet" somewhere in the middle.
+      2. Either a revision verb or a revision-structural pattern
+         appears in the prompt head (first 240 chars). This avoids
+         misfiring on long research briefs that happen to contain
+         "überarbeitet" or a number somewhere in the middle.
     """
     if not prompt or not draft_content:
         return False
     if len(draft_content) < 200:
         return False
     head = prompt[:240]
-    return bool(_REVISION_PATTERNS.search(head))
+    if _REVISION_PATTERNS.search(head):
+        return True
+    if _REVISION_STRUCTURAL.search(head):
+        return True
+    return False
+
+
+def _build_router_history(
+    chat_history: List[Dict[str, str]],
+    current_prompt: str,
+    keep_last_assistant_full: bool = True,
+    summary_cap: int = 600,
+) -> List[Dict[str, str]]:
+    """Build a bounded chat-history payload for the router.
+
+    The router's job is to output a single word ("both"/"search"/
+    "documents"/"none"). Feeding it the verbatim 80k-char history of a
+    revision iteration chain is wasteful and has been observed to make
+    DeepSeek ignore its "output one word" system prompt entirely and
+    start writing the actual answer. #42 cuts that down to:
+
+      - all user turns kept verbatim (intent carrier, cheap)
+      - the most recent assistant turn kept verbatim (load-bearing
+        for "fix what you just said" prompts)
+      - older assistant turns replaced by a short summary noting the
+        turn's length + any declared ``Wortbilanz`` so references like
+        "keep the wordcount from last time" still resolve
+    """
+    if not chat_history:
+        return []
+
+    # Find the index of the most recent assistant turn (from the end).
+    last_assistant_idx = None
+    for i in range(len(chat_history) - 1, -1, -1):
+        if chat_history[i].get("role") == "assistant":
+            last_assistant_idx = i
+            break
+
+    bounded: List[Dict[str, str]] = []
+    for idx, msg in enumerate(chat_history):
+        role = msg.get("role")
+        content = msg.get("content", "") or ""
+        if role == "user":
+            bounded.append({"role": "user", "content": content})
+            continue
+        if role == "assistant":
+            if keep_last_assistant_full and idx == last_assistant_idx:
+                bounded.append({"role": "assistant", "content": content})
+                continue
+            # Summarise older assistant turns.
+            summary = _summarise_assistant_turn(content, cap=summary_cap)
+            bounded.append({"role": "assistant", "content": summary})
+            continue
+        # system turns should already live in the caller's layout; pass
+        # them through unchanged if encountered.
+        bounded.append(msg)
+    return bounded
+
+
+def _summarise_assistant_turn(content: str, cap: int = 600) -> str:
+    """Compress an assistant turn for router-scoped history.
+
+    Keeps the semantically load-bearing fragments most user prompts
+    reference back to (declared word budget, swap list, block types)
+    and drops the full revision body. If the turn is already shorter
+    than ``cap`` the original is returned verbatim.
+    """
+    if not content:
+        return ""
+    if len(content) <= cap:
+        return content
+
+    # Pull the Wortbilanz header if present.
+    wb_match = re.search(r"Wortbilanz:\s*[^\n]{0,160}", content)
+    wortbilanz = wb_match.group(0) if wb_match else None
+
+    # Pull any SWAP lines the writer emitted.
+    swap_lines = re.findall(r"^\s*SWAP\s+\d+.*$", content, re.MULTILINE)
+
+    # Identify content-block types used.
+    blocks = re.findall(r"```content-block:(\w+)", content)
+    block_summary = (
+        f"content-blocks: {', '.join(sorted(set(blocks)))}" if blocks else None
+    )
+
+    parts = [
+        f"[summarised assistant turn — full length {len(content)} chars]"
+    ]
+    if wortbilanz:
+        parts.append(wortbilanz)
+    if block_summary:
+        parts.append(block_summary)
+    if swap_lines:
+        parts.append("previous swaps: " + " | ".join(swap_lines[:6]))
+    # Always keep the first ~200 chars of the original so references
+    # to specific phrasing still have an anchor.
+    parts.append("opening excerpt: " + content[:200].replace("\n", " "))
+
+    summary = "\n".join(parts)
+    # Hard cap as a safety net.
+    if len(summary) > cap * 2:
+        summary = summary[: cap * 2] + "…"
+    return summary
 
 
 class SimplifiedWritingAgent:
@@ -468,7 +602,7 @@ class SimplifiedWritingAgent:
         
         # Build messages list with proper structure
         messages = []
-        
+
         # Add conversation history as proper messages (limit to recent history to avoid token overflow)
         MAX_HISTORY_MESSAGES = 20  # Keep last 20 messages (10 exchanges)
         if len(chat_history) > MAX_HISTORY_MESSAGES:
@@ -477,10 +611,16 @@ class SimplifiedWritingAgent:
             system_prompt = "Note: Earlier conversation history has been truncated for context window management.\n\n" + system_prompt
         else:
             recent_history = chat_history
-        
+
+        # Router-scoped history: summarise older assistant turns so the
+        # router doesn't see the full 30 k-char revised drafts from
+        # prior iterations. Keeps all user turns + the most recent
+        # assistant turn verbatim. See #42.
+        recent_history = _build_router_history(recent_history, prompt)
+
         # Add system message
         messages.append({"role": "system", "content": system_prompt})
-        
+
         # Add the conversation history, ensuring role alternation
         last_role = "system"
         for msg in recent_history:

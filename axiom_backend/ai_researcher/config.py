@@ -336,8 +336,16 @@ AGENT_ROLE_MAX_TOKENS = {
         os.getenv("VERIFIER_MAX_TOKENS", 1000)
     ),  # Added verifier max tokens
     "query_strategy": int(
-        os.getenv("QUERY_STRATEGY_MAX_TOKENS", 2000)
-    ),  # Increased for thinking models that need reasoning tokens
+        # Router / query-strategy calls must emit a single word
+        # ("both"/"search"/"documents"/"none" or a comma-separated
+        # technique list with ~5 options). The old ceiling of 2000
+        # tokens let DeepSeek run away with the full budget when it
+        # ignored its "output one word" system prompt — observed
+        # collapsing into full response generation twice during real
+        # usage. 64 tokens is enough for the longest legitimate output,
+        # fails fast otherwise.
+        os.getenv("QUERY_STRATEGY_MAX_TOKENS", 64)
+    ),
     # SimplifiedWritingAgent (the interactive writing-mode chat) may need to
     # emit large revisions of the full draft in a single turn — e.g. shrink
     # a 15k-word research draft down to a 3k-word Hausarbeit. The previous
