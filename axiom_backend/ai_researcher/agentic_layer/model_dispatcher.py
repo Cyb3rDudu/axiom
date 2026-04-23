@@ -339,6 +339,38 @@ class ModelDispatcher:
             )
             return None
 
+    def _select_non_deepseek_fallback(
+        self,
+    ) -> Tuple[Optional[Any], Optional[str], Optional[str]]:
+        """Return (client, model_name, provider_name) for the first
+        non-DeepSeek provider configured in the user's advanced_models.
+
+        Used by the Content-Risk auto-fallback (#48). Iteration order:
+        scan advanced_models in priority order (intelligent → mid →
+        fast → verifier) so the most capable available model is tried
+        first. A provider is "configured" when its advanced_models
+        entry has a model_name set — credentials resolution falls
+        through to _get_or_create_client which mirrors the primary
+        path.
+        """
+        settings = get_user_settings() or {}
+        ai = settings.get("ai_endpoints") or {}
+        advanced = ai.get("advanced_models") or {}
+        priority = ("intelligent", "mid", "fast", "verifier")
+        for slot in priority:
+            cfg = advanced.get(slot) or {}
+            provider = (cfg.get("provider") or "").strip().lower()
+            model_name = (cfg.get("model_name") or "").strip()
+            if not provider or not model_name:
+                continue
+            if provider == "deepseek":
+                continue
+            client = self._get_or_create_client(provider, settings)
+            if client is None:
+                continue
+            return client, model_name, provider
+        return None, None, None
+
     def _select_model_and_client(
         self, requested_model: Optional[str] = None, agent_mode: Optional[str] = None
     ) -> Tuple[Optional[openai.OpenAI], Optional[str], Optional[str]]:
@@ -1378,6 +1410,69 @@ class ModelDispatcher:
                         if "temperature" in request_params:
                             request_params["temperature"] = 1
                         # Continue with retry logic below
+
+                # DeepSeek moderation recovery (#48). DeepSeek rejects
+                # some China-politics / flagged content with a 400 that
+                # carries `{"error": {"message": "Content Exists Risk"}}`.
+                # The failure is deterministic (same prompt will always
+                # fail) so a generic retry is pointless — but a retry
+                # on a non-Chinese provider from the user's
+                # advanced_models config usually goes through. Fallback
+                # is per-request, the session's primary provider is
+                # unchanged.
+                if (
+                    provider_name == "deepseek"
+                    and e.status_code == 400
+                    and "Content Exists Risk" in error_msg
+                ):
+                    fb_client, fb_model, fb_provider = self._select_non_deepseek_fallback()
+                    if fb_client and fb_model and fb_provider:
+                        logger.warning(
+                            f"DeepSeek Content Exists Risk on "
+                            f"{selected_model_name} — retrying on "
+                            f"{fb_provider}/{fb_model}"
+                        )
+                        fb_params = dict(request_params)
+                        fb_params["model"] = fb_model
+                        try:
+                            fb_response = await fb_client.chat.completions.create(
+                                **fb_params
+                            )
+                            end_time = time.time()
+                            fb_details = {
+                                "provider": fb_provider,
+                                "model_name": fb_model,
+                                "duration_sec": round(end_time - start_time, 2),
+                                "fallback_from": "deepseek_content_risk",
+                            }
+                            if fb_response and fb_response.usage:
+                                fb_details["prompt_tokens"] = (
+                                    fb_response.usage.prompt_tokens or 0
+                                )
+                                fb_details["completion_tokens"] = (
+                                    fb_response.usage.completion_tokens or 0
+                                )
+                                fb_details["total_tokens"] = (
+                                    fb_response.usage.total_tokens or 0
+                                )
+                            logger.info(
+                                f"Content-Risk fallback succeeded on "
+                                f"{fb_provider}/{fb_model} in "
+                                f"{fb_details['duration_sec']}s"
+                            )
+                            return fb_response, fb_details
+                        except Exception as fb_err:
+                            logger.warning(
+                                f"Content-Risk fallback to "
+                                f"{fb_provider} also failed: {fb_err}"
+                            )
+                            # Fall through to the original error path
+                    else:
+                        logger.info(
+                            "Content Exists Risk triggered but no "
+                            "non-DeepSeek fallback provider is "
+                            "configured — surfacing original error"
+                        )
 
                 # DeepSeek-reasoner error recovery
                 if is_deepseek_reasoner and e.status_code == 400:
