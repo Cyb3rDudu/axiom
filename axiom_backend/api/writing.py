@@ -1476,6 +1476,96 @@ from fastapi.responses import FileResponse, Response
 class MarkdownContent(BaseModel):
     markdown_content: str
     filename: Optional[str] = None
+    # #57: when draft_id is provided AND the structured-bibliography flag
+    # is on AND the draft has structured refs, the export path strips any
+    # inline Literaturverzeichnis in markdown_content and appends a fresh
+    # render from the registry. Legacy drafts without structured refs
+    # export unchanged.
+    draft_id: Optional[str] = None
+    citation_profile_id: Optional[str] = None
+
+
+def _strip_inline_bibliography(markdown: str) -> str:
+    """Remove an inline ## Literaturverzeichnis / ## References section.
+
+    Conservative: matches a level-2 heading that reads exactly
+    'Literaturverzeichnis' or 'References' (case-sensitive as the writer
+    emits it) and drops everything from there to end-of-document. Falls
+    back to returning markdown unchanged if no such heading is found.
+    """
+    import re as _re
+
+    pattern = _re.compile(
+        r"\n##\s+(?:Literaturverzeichnis|References)\s*\n.*$",
+        flags=_re.DOTALL,
+    )
+    return pattern.sub("", markdown)
+
+
+def _maybe_append_structured_bibliography(
+    db: Session,
+    user: models.User,
+    draft_id: Optional[str],
+    markdown: str,
+    profile_id_override: Optional[str] = None,
+) -> str:
+    """If the draft has structured refs AND the flag is on, replace any
+    inline bibliography in `markdown` with the rendered registry."""
+    if not draft_id:
+        return markdown
+
+    from services.feature_flags import structured_bibliography_enabled
+    from services.citation_rendering import render_bibliography
+    from services.citation_profiles import resolve_citation_profile
+
+    if not structured_bibliography_enabled(user.settings):
+        return markdown
+
+    # Collect structured refs for this draft (owned by this user)
+    refs = (
+        db.query(models.Reference)
+        .join(models.Draft, models.Reference.draft_id == models.Draft.id)
+        .join(models.WritingSession, models.Draft.writing_session_id == models.WritingSession.id)
+        .join(models.Chat, models.WritingSession.chat_id == models.Chat.id)
+        .filter(
+            models.Reference.draft_id == draft_id,
+            models.Chat.user_id == user.id,
+            models.Reference.entry_key.isnot(None),
+        )
+        .all()
+    )
+    if not refs:
+        return markdown
+
+    entries = [
+        {
+            "entry_key": r.entry_key,
+            "authors": r.authors,
+            "year": r.year,
+            "title": r.title,
+            "container_title": r.container_title,
+            "publisher": r.publisher,
+            "pages": r.pages,
+            "url": r.url or r.web_url,
+            "accessed_at": r.accessed_at,
+            "doi": r.doi,
+            "reference_type": r.reference_type,
+        }
+        for r in refs
+    ]
+
+    profile_id = profile_id_override
+    if not profile_id:
+        profile = resolve_citation_profile(None, user.settings)
+        profile_id = profile.id if profile else "numbered"
+
+    rendered = render_bibliography(entries, profile_id, include_heading=True)
+    if not rendered:
+        return markdown
+
+    stripped = _strip_inline_bibliography(markdown).rstrip()
+    return f"{stripped}\n\n{rendered}"
+
 
 @router.post("/sessions/{session_id}/draft/docx")
 async def export_draft_as_docx(
@@ -1485,7 +1575,7 @@ async def export_draft_as_docx(
     current_user: models.User = Depends(get_current_user_from_cookie)
 ):
     """Export a writing draft as a Word document."""
-    
+
     # Verify the user has access to this writing session
     writing_session = db.query(models.WritingSession).join(
         models.Chat, models.WritingSession.chat_id == models.Chat.id
@@ -1493,19 +1583,27 @@ async def export_draft_as_docx(
         models.WritingSession.id == session_id,
         models.Chat.user_id == current_user.id
     ).first()
-    
+
     if not writing_session:
         raise HTTPException(status_code=404, detail="Writing session not found or access denied")
-    
+
+    markdown_to_render = _maybe_append_structured_bibliography(
+        db=db,
+        user=current_user,
+        draft_id=content.draft_id,
+        markdown=content.markdown_content,
+        profile_id_override=content.citation_profile_id,
+    )
+
     try:
         # Create a temporary file for the DOCX output
         with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as temp_file:
             temp_path = temp_file.name
-        
+
         try:
             # Convert markdown to DOCX using pypandoc with output file
             pypandoc.convert_text(
-                content.markdown_content,
+                markdown_to_render,
                 'docx',
                 format='md',
                 outputfile=temp_path,
