@@ -839,6 +839,35 @@ async def update_reference(
     return schemas.Reference.from_orm(reference)
 
 
+# Writing task registry (#45). Each in-flight background chat task is
+# keyed on its task_id here so the DELETE endpoint can cancel it. The
+# registry is per-process — fine for single-backend deployments, and
+# acceptable for multi-replica since each WS-connected user hits one
+# replica at a time. Protected by an asyncio.Lock so the register /
+# cancel / unregister ops are safe across concurrent chat calls.
+_writing_task_registry: Dict[str, asyncio.Task] = {}
+_writing_task_registry_lock = asyncio.Lock()
+
+
+async def _register_writing_task(task_id: str, task: asyncio.Task) -> None:
+    async with _writing_task_registry_lock:
+        _writing_task_registry[task_id] = task
+
+
+async def _unregister_writing_task(task_id: str) -> None:
+    async with _writing_task_registry_lock:
+        _writing_task_registry.pop(task_id, None)
+
+
+async def _cancel_writing_task(task_id: str) -> bool:
+    async with _writing_task_registry_lock:
+        task = _writing_task_registry.get(task_id)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
+
+
 # Enhanced Writing Chat Endpoint - Non-blocking version
 
 @router.post("/enhanced-chat-stream")
@@ -913,18 +942,23 @@ async def enhanced_writing_chat_stream(
         db.commit()
     
     # Don't send any immediate updates - let the agent handle all status updates
-    
-    # Add the actual processing to background tasks
-    background_tasks.add_task(
-        process_writing_chat_in_background,
+
+    # Spawn via asyncio.create_task so we get a Task handle we can
+    # register and later cancel from the DELETE endpoint. FastAPI's
+    # own BackgroundTasks runs post-response but gives no handle; this
+    # path runs outside the request lifecycle and is owned entirely
+    # by the registry.
+    bg_coro = process_writing_chat_in_background(
         task_id=task_id,
         request=request,
         draft_id=draft.id,
         session_id=session_id,
         chat_id=draft.writing_session.chat_id,
         user_id=current_user.id,
-        user_message_id=user_message.id
+        user_message_id=user_message.id,
     )
+    bg_task = asyncio.create_task(bg_coro, name=f"writing-chat:{task_id}")
+    await _register_writing_task(task_id, bg_task)
     
     # Return immediately with task ID
     return JSONResponse(
@@ -1174,6 +1208,41 @@ async def process_writing_chat_in_background(
         except Exception as e:
             logger.warning(f"Failed to update chat title: {e}")
             
+    except asyncio.CancelledError:
+        # #45 — user hit the Stop button in the UI. Persist a short
+        # terminator message so the chat history is coherent, notify
+        # the client, then re-raise so the task's cancelled state is
+        # honoured by the asyncio runtime.
+        logger.info(f"Writing chat task {task_id} cancelled by user")
+        try:
+            cancelled_msg = models.Message(
+                id=str(uuid.uuid4()),
+                chat_id=chat_id,
+                role="assistant",
+                content="⏹ Anfrage vom Benutzer gestoppt.",
+                sources=[],
+                created_at=datetime.utcnow(),
+            )
+            db.add(cancelled_msg)
+            db.commit()
+        except Exception as persist_err:
+            logger.warning(
+                f"Failed to persist cancel marker for task {task_id}: {persist_err}"
+            )
+        try:
+            await send_agent_status_update(session_id, "cancelled", "Anfrage gestoppt")
+            await send_draft_content_update(
+                session_id,
+                {
+                    "message": "⏹ Anfrage vom Benutzer gestoppt.",
+                    "sources": [],
+                    "task_id": task_id,
+                },
+                "cancelled",
+            )
+        except Exception:
+            pass
+        raise
     except Exception as e:
         logger.error(f"Error in background writing chat processing: {e}", exc_info=True)
         try:
@@ -1182,7 +1251,50 @@ async def process_writing_chat_in_background(
         except:
             pass
     finally:
-        db.close()
+        try:
+            db.close()
+        finally:
+            await _unregister_writing_task(task_id)
+
+
+@router.delete("/sessions/{session_id}/tasks/{task_id}")
+async def cancel_writing_task(
+    session_id: str,
+    task_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Cancel an in-flight writing-chat background task (#45).
+
+    Ownership check: the session_id must belong to a chat owned by the
+    current user. Returns ``{\"cancelled\": true}`` when the task was
+    running and received the cancel signal, ``{\"cancelled\": false,
+    \"reason\": \"not_found\"}`` when it was already finished or never
+    existed.
+    """
+    writing_session = (
+        db.query(models.WritingSession)
+        .join(models.Chat, models.WritingSession.chat_id == models.Chat.id)
+        .filter(
+            models.WritingSession.id == session_id,
+            models.Chat.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not writing_session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Writing session not found or access denied",
+        )
+
+    cancelled = await _cancel_writing_task(task_id)
+    if cancelled:
+        logger.info(
+            f"User {current_user.id} cancelled writing task {task_id} "
+            f"on session {session_id}"
+        )
+        return {"cancelled": True, "task_id": task_id}
+    return {"cancelled": False, "reason": "not_found", "task_id": task_id}
 
 
 @router.put("/sessions/{session_id}/settings", response_model=schemas.WritingSession)

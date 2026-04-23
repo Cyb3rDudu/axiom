@@ -224,6 +224,20 @@ export const sendWritingChatMessageStream = async (chatData: WritingChatRequest)
   return response.data;
 };
 
+// Cancel an in-flight writing-chat task (#45). Backend marks the
+// coroutine cancelled, persists a terminator assistant message and
+// sends a `cancelled` WebSocket event so the UI can clear its loading
+// state.
+export const cancelWritingTask = async (
+  sessionId: string,
+  taskId: string
+): Promise<{ cancelled: boolean; task_id: string; reason?: string }> => {
+  const response = await apiClient.delete(
+    `/api/writing/sessions/${sessionId}/tasks/${taskId}`
+  );
+  return response.data;
+};
+
 // Document Operations API
 export const performDocumentOperation = async (draftId: string, operation: DocumentOperation): Promise<any> => {
   const response = await apiClient.post(`/api/writing/drafts/${draftId}/operations`, operation);

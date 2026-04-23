@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from '../../../components/ui/select'
 import { MultiGroupSelect } from '../../../components/ui/multi-group-select'
-import { Send, Loader2, Bot, Trash2, Sparkles, Settings, SlidersHorizontal } from 'lucide-react'
+import { Send, Loader2, Bot, Trash2, Sparkles, Settings, SlidersHorizontal, Square } from 'lucide-react'
 import { CustomSystemPromptModal } from './CustomSystemPromptModal'
 import { WritingSearchSettingsModal } from './WritingSearchSettingsModal'
 import { apiClient } from '../../../config/api'
@@ -68,7 +68,9 @@ export const WritingChatPanel: React.FC = () => {
     getCurrentAgentStatus,
     currentDraft,
     saveDraftChanges,
+    cancelCurrentTask,
   } = useWritingStore()
+  const currentTaskId = useWritingStore((s) => s.currentTaskId)
   
   const agentStatus = getCurrentAgentStatus()
   
@@ -524,18 +526,42 @@ export const WritingChatPanel: React.FC = () => {
                       target.style.height = target.scrollHeight + 'px'
                     }}
                   />
-                  <Button
-                    onClick={handleSendMessage}
-                    disabled={!message.trim() || isLoading}
-                    size="sm"
-                    className="self-end"
-                  >
-                    {isLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Send className="h-4 w-4" />
-                    )}
-                  </Button>
+                  {isLoading && currentTaskId ? (
+                    <Button
+                      onClick={async () => {
+                        try {
+                          await cancelCurrentTask()
+                          addToast({
+                            type: 'info',
+                            title: 'Anfrage gestoppt',
+                            message: 'Die laufende Anfrage wurde abgebrochen.',
+                            duration: 3000,
+                          })
+                        } catch (error) {
+                          console.error('Cancel failed:', error)
+                        }
+                      }}
+                      size="sm"
+                      variant="destructive"
+                      className="self-end"
+                      title="Anfrage stoppen"
+                    >
+                      <Square className="h-4 w-4" />
+                    </Button>
+                  ) : (
+                    <Button
+                      onClick={handleSendMessage}
+                      disabled={!message.trim() || isLoading}
+                      size="sm"
+                      className="self-end"
+                    >
+                      {isLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Send className="h-4 w-4" />
+                      )}
+                    </Button>
+                  )}
                 </div>
                 <div className="mt-2 space-y-2">
                   <div className="flex flex-wrap items-center gap-2">

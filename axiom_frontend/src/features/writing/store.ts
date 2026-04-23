@@ -93,6 +93,7 @@ interface WritingState {
   // Enhanced chat
   sendMessage: (message: string, options?: { documentGroupId?: string | null; documentGroupIds?: string[] | null; useWebSearch?: boolean; deepSearch?: boolean; maxIterations?: number; maxQueries?: number }) => Promise<void>
   regenerateMessage: (messageId: string, options?: { documentGroupId?: string | null; documentGroupIds?: string[] | null; useWebSearch?: boolean; deepSearch?: boolean; maxIterations?: number; maxQueries?: number }) => Promise<void>
+  cancelCurrentTask: () => Promise<void>
   removeMessage: (messageId: string) => void;
   
   // WebSocket management
@@ -1138,6 +1139,27 @@ export const useWritingStore = create<WritingState>((set, get) => ({
         // Reset agent status to idle on error
         state.setAgentStatus(loadingId, 'idle')
       }
+    }
+  },
+
+  // Cancel the in-flight writing-chat request (#45). Fires DELETE on
+  // the task endpoint; backend persists a terminator assistant message
+  // and pushes a `cancelled` WebSocket event so the UI's normal
+  // completion path clears loading state. If the request already
+  // finished this is a harmless no-op.
+  cancelCurrentTask: async () => {
+    const state = get()
+    const taskId = state.currentTaskId
+    const sessionId = state.currentSession?.id
+    if (!taskId || !sessionId) {
+      return
+    }
+    try {
+      await writingApi.cancelWritingTask(sessionId, taskId)
+    } catch (err) {
+      console.error('Failed to cancel writing task:', err)
+    } finally {
+      set({ currentTaskId: undefined })
     }
   },
 
