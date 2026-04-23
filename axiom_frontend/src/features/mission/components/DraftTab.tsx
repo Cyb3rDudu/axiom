@@ -341,15 +341,25 @@ export const DraftTab: React.FC<DraftTabProps> = ({ missionId }) => {
       const titleMatch = content.match(/^#\s+(.+)$/m)
       const draftTitle = titleMatch ? titleMatch[1].trim() : `Draft from Research ${missionId.slice(0, 8)}`
 
+      // Sessions created from a completed mission's "Continue Writing"
+      // handoff start as iterative_revision mode (#49) — the draft is
+      // already there, that's the whole point of the handoff. This
+      // lets the router-bypass path kick in on turn 1 without needing
+      // the first user prompt to contain a revision verb.
+      const handoffSettings: Record<string, unknown> = {
+        session_mode: 'iterative_revision',
+      }
+      if (missionCitationProfileId) {
+        handoffSettings.citation_profile_id = missionCitationProfileId
+      }
+
       // Create a new writing session with the document group if it exists
       const newSession = await createSession({
         name: `Writing: ${draftTitle}`,
         document_group_id: documentGroupId,
         document_group_ids: allGroupIds.length > 0 ? allGroupIds : null,
         web_search_enabled: true,
-        ...(missionCitationProfileId
-          ? { settings: { citation_profile_id: missionCitationProfileId } }
-          : {}),
+        settings: handoffSettings,
       })
       
       // Get the draft (which will be created automatically if it doesn't exist)

@@ -1107,6 +1107,30 @@ async def process_writing_chat_in_background(
         )
         citation_profile = resolve_citation_profile(session_override, user_settings)
 
+        # Session-mode classifier (#49). Honours a persisted
+        # `session_mode` on the writing-session settings blob, with
+        # a sensible default derived from the session's context:
+        # sessions created from a research handoff land on
+        # "iterative_revision"; fresh Writing-tab sessions land on
+        # "fresh_research". The agent reads this to decide whether to
+        # short-circuit the router.
+        session_mode = None
+        if isinstance(session_settings_obj, dict):
+            session_mode = session_settings_obj.get("session_mode")
+        if session_mode not in ("fresh_research", "iterative_revision", "mixed"):
+            # Fallback: infer from chat metadata — chats created via
+            # handoff have a title starting with "Writing: " (see
+            # DraftTab). Defaults stay conservative (fresh_research)
+            # so we don't accidentally suppress retrieval.
+            chat_row = (
+                db.query(models.Chat).filter(models.Chat.id == chat_id).first()
+            )
+            title = (chat_row.title if chat_row else "") or ""
+            if title.startswith("Writing:"):
+                session_mode = "iterative_revision"
+            else:
+                session_mode = "fresh_research"
+
         context_info = {
             "document_group_id": document_group_id,
             "document_group_ids": effective_group_ids,
@@ -1115,6 +1139,7 @@ async def process_writing_chat_in_background(
             "filter_doc_ids": filter_doc_ids,
             "use_web_search": use_web_search,
             "operation_mode": request.operation_mode or "balanced",
+            "session_mode": session_mode,
             "user_profile": {
                 "full_name": current_user.full_name,
                 "location": current_user.location,

@@ -445,9 +445,13 @@ class SimplifiedWritingAgent:
             # queries — e.g. "Behalte China 2023-2025 Daten" turns into
             # a web search about gallium exports — which burns minutes
             # of search time to retrieve information already cited in
-            # the draft. Heuristic: draft present + prompt contains a
-            # revision verb at the start or as an explicit action.
-            is_revision_task = _looks_like_draft_revision(prompt, draft_content)
+            # the draft. Triggers: session_mode=="iterative_revision"
+            # OR (draft present + prompt contains a revision verb).
+            session_mode_classifier = context_info.get("session_mode")
+            is_revision_task = (
+                session_mode_classifier == "iterative_revision"
+                or _looks_like_draft_revision(prompt, draft_content)
+            )
             if is_revision_task:
                 logger.info(
                     "Revision task detected — bypassing router and "
