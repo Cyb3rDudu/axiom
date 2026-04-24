@@ -1067,7 +1067,7 @@ async def generate_writing_portfolio(
     # Resolve the writing controller's model dispatcher — same one the
     # chat endpoint uses. Keeps generation consistent with the agent's
     # preferred routing.
-    writing_controller = WritingController()
+    writing_controller = WritingController(current_user)
     manager = WritingPortfolioManager(writing_controller.model_dispatcher, db)
 
     try:
@@ -1146,7 +1146,7 @@ async def finalize_writing_session(
             return {"status": "already_generating"}
         _portfolio_generation_in_flight[draft.id] = task
 
-    writing_controller = WritingController()
+    writing_controller = WritingController(current_user)
     manager = WritingPortfolioManager(writing_controller.model_dispatcher, db)
     try:
         output = await manager.run_if_enabled(
