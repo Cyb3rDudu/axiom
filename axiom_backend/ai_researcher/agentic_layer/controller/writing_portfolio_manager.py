@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from ai_researcher.agentic_layer.controller.utils import portfolio_compliance
 from ai_researcher.agentic_layer.schemas.portfolio import (
     ComplianceReport,
     PortfolioEntry,
@@ -28,13 +29,13 @@ from database import models
 logger = logging.getLogger(__name__)
 
 
-# Same thresholds as the mission-side rubric. Kept in sync deliberately
-# — changing them here implicitly changes the KMU compliance definition,
-# so mirror the mission manager's constants verbatim.
-COMPLIANCE_MIN_SOURCES = 10
-COMPLIANCE_MAX_SOURCES = 20
-COMPLIANCE_SCIENTIFIC_SHARE_MIN = 0.5
-RECENCY_WARNING_YEARS = 10
+# Re-export compliance constants + functions from the shared module so
+# callers (and older tests) keep working. All thresholds live in
+# portfolio_compliance.py now — do not duplicate values here.
+COMPLIANCE_MIN_SOURCES = portfolio_compliance.COMPLIANCE_MIN_SOURCES
+COMPLIANCE_MAX_SOURCES = portfolio_compliance.COMPLIANCE_MAX_SOURCES
+COMPLIANCE_SCIENTIFIC_SHARE_MIN = portfolio_compliance.COMPLIANCE_SCIENTIFIC_SHARE_MIN
+RECENCY_WARNING_YEARS = portfolio_compliance.RECENCY_WARNING_YEARS
 
 
 _VALID_CONTRIBUTIONS = {
@@ -260,72 +261,9 @@ class WritingPortfolioManager:
     def _compute_compliance(
         entries: List[PortfolioEntry], *, language_code: str
     ) -> ComplianceReport:
-        n = len(entries)
-        scientific = sum(1 for e in entries if e.scientific_tier in {"A", "B"})
-        share = (scientific / n) if n else 0.0
-        blacklist_hits = [
-            e.apa_citation
-            for e in entries
-            if e.quality_signals.publisher_tier == "blacklist"
-        ]
-        recency_warnings = [
-            e.apa_citation
-            for e in entries
-            if e.quality_signals.recency_years is not None
-            and e.quality_signals.recency_years > RECENCY_WARNING_YEARS
-        ]
-        source_count_ok = COMPLIANCE_MIN_SOURCES <= n <= COMPLIANCE_MAX_SOURCES
-        share_ok = share >= COMPLIANCE_SCIENTIFIC_SHARE_MIN
-
-        advice: List[str] = []
-        de = language_code.startswith("de")
-        if n < COMPLIANCE_MIN_SOURCES:
-            advice.append(
-                f"Quellenanzahl {n} unter dem Zielkorridor ({COMPLIANCE_MIN_SOURCES}–{COMPLIANCE_MAX_SOURCES}) — zusätzliche Quellen aufnehmen."
-                if de
-                else f"Source count {n} below target ({COMPLIANCE_MIN_SOURCES}–{COMPLIANCE_MAX_SOURCES}) — add more sources."
-            )
-        if n > COMPLIANCE_MAX_SOURCES:
-            advice.append(
-                f"Quellenanzahl {n} über dem Zielkorridor — Liste fokussieren."
-                if de
-                else f"Source count {n} exceeds target — tighten the selection."
-            )
-        if not share_ok:
-            advice.append(
-                f"Wissenschaftlicher Anteil nur {share:.0%} (Ziel ≥ 50 %) — mehr peer-reviewte Quellen aufnehmen."
-                if de
-                else f"Scientific share only {share:.0%} (target ≥ 50%) — include more peer-reviewed sources."
-            )
-        if blacklist_hits:
-            advice.append(
-                "Blacklist-Treffer erkannt — durch facheinschlägige Quellen ersetzen."
-                if de
-                else "Blacklist hits detected — replace with scholarly sources."
-            )
-        if recency_warnings:
-            advice.append(
-                f"{len(recency_warnings)} Quelle(n) älter als {RECENCY_WARNING_YEARS} Jahre — aktuellere Literatur prüfen."
-                if de
-                else f"{len(recency_warnings)} source(s) older than {RECENCY_WARNING_YEARS} years — consider more recent literature."
-            )
-
-        if source_count_ok and share_ok and not blacklist_hits:
-            traffic = "green"
-        elif blacklist_hits or not share_ok:
-            traffic = "red"
-        else:
-            traffic = "yellow"
-
-        return ComplianceReport(
-            source_count=n,
-            source_count_ok=source_count_ok,
-            scientific_share=share,
-            scientific_share_ok=share_ok,
-            blacklist_hits=blacklist_hits,
-            recency_warnings=recency_warnings,
-            traffic_light=traffic,  # type: ignore[arg-type]
-            advice=advice,
+        """Thin wrapper kept for test/back-compat; delegates to shared module."""
+        return portfolio_compliance.compute_compliance(
+            entries, language_code=language_code
         )
 
     @staticmethod
@@ -335,53 +273,18 @@ class WritingPortfolioManager:
         *,
         language_code: str,
     ) -> str:
+        """Writing-mode renderer uses a writing-specific intro line but
+        otherwise shares the table layout + compliance summary with the
+        mission-side manager via `portfolio_compliance.render_markdown`."""
         de = language_code.startswith("de")
-        heading = "## Literaturportfolio" if de else "## Literature Portfolio"
         intro = (
             "_Automatisch aus der strukturierten Bibliografie erstellt. Umfasst alle im Entwurf tatsächlich zitierten Quellen._"
             if de
             else "_Automatically generated from the structured bibliography. Covers every source actually cited in the draft._"
         )
-        cols = (
-            ["Quellenangabe (lt. Literaturverzeichnis)", "Recherchetool", "Relevanz", "Qualität"]
-            if de
-            else ["Source (as in bibliography)", "Discovery tool", "Relevance", "Quality"]
+        return portfolio_compliance.render_markdown(
+            entries, compliance, language_code=language_code, intro=intro
         )
-
-        def _bullets(lines: Iterable[str]) -> str:
-            return "<br>".join(f"• {ln}" for ln in lines)
-
-        out: List[str] = [heading, "", intro, ""]
-        out.append("| " + " | ".join(cols) + " |")
-        out.append("|" + "|".join(["---"] * len(cols)) + "|")
-        for e in entries:
-            citation_cell = e.apa_citation.replace("\n", " ").replace("|", r"\|")
-            discovery_cell = e.discovery_tool.replace("|", r"\|")
-            rel_cell = _bullets(e.relevance_bullets).replace("|", r"\|")
-            qua_cell = _bullets(e.quality_bullets).replace("|", r"\|")
-            out.append(f"| {citation_cell} | {discovery_cell} | {rel_cell} | {qua_cell} |")
-
-        traffic_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}[compliance.traffic_light]
-        traffic_word = {"green": "grün", "yellow": "gelb", "red": "rot"}[compliance.traffic_light] if de else compliance.traffic_light
-        label = "Compliance-Ampel" if de else "Compliance traffic light"
-        share_pct = f"{compliance.scientific_share * 100:.0f}%"
-
-        out.append("")
-        out.append(f"**{label}: {traffic_emoji} {traffic_word}**")
-        if de:
-            out.append(f"- {compliance.source_count} Quellen (Zielkorridor {COMPLIANCE_MIN_SOURCES}–{COMPLIANCE_MAX_SOURCES})")
-            out.append(f"- {share_pct} wissenschaftlich/facheinschlägig (Ziel ≥ {int(COMPLIANCE_SCIENTIFIC_SHARE_MIN * 100)} %)")
-        else:
-            out.append(f"- {compliance.source_count} sources (target range {COMPLIANCE_MIN_SOURCES}–{COMPLIANCE_MAX_SOURCES})")
-            out.append(f"- {share_pct} scientific / in-field (target ≥ {int(COMPLIANCE_SCIENTIFIC_SHARE_MIN * 100)}%)")
-        if compliance.blacklist_hits:
-            out.append(f"- **{('Blacklist-Treffer' if de else 'Blacklist hits')}:** {len(compliance.blacklist_hits)}")
-        if compliance.recency_warnings:
-            out.append(f"- {('Aktualitäts-Warnungen' if de else 'Recency warnings')}: {len(compliance.recency_warnings)}")
-        for msg in compliance.advice:
-            out.append(f"- {msg}")
-
-        return "\n".join(out)
 
     # ----- persistence -----
 
