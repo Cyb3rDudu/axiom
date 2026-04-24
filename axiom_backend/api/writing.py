@@ -170,6 +170,21 @@ async def create_writing_session(
                 detail="One or more document groups not found or access denied",
             )
 
+    # Portfolio opt-out (#68): keyword in the chat title → writes
+    # settings.portfolio_enabled=False at creation time so later gates
+    # don't need to re-inspect the title. Mirrors the mission-side
+    # detect_portfolio_optout pattern.
+    from ai_researcher.agentic_layer.controller.utils.portfolio_optout import (
+        detect_portfolio_optout,
+    )
+
+    effective_settings = dict(session_data.settings or {})
+    if "portfolio_enabled" not in effective_settings:
+        if detect_portfolio_optout(chat.title or ""):
+            effective_settings["portfolio_enabled"] = False
+        else:
+            effective_settings["portfolio_enabled"] = True
+
     # Create new writing session
     writing_session = models.WritingSession(
         id=str(uuid.uuid4()),
@@ -177,7 +192,7 @@ async def create_writing_session(
         document_group_id=session_data.document_group_id,
         document_group_ids=session_data.document_group_ids,
         use_web_search=session_data.use_web_search,
-        settings=session_data.settings,
+        settings=effective_settings,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
@@ -957,6 +972,164 @@ async def migrate_bibliography_from_markdown(
     return preview.to_dict()
 
 
+# Writing-mode Portfolio generation (#61/#65). In-process registry so
+# concurrent "generate" clicks on the same draft return 409 instead of
+# racing to a duplicate agent call.
+_portfolio_generation_in_flight: Dict[str, asyncio.Task] = {}
+_portfolio_generation_lock = asyncio.Lock()
+
+
+@router.post("/drafts/{draft_id}/portfolio/generate")
+async def generate_writing_portfolio(
+    draft_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Run WritingPortfolioManager for a draft and return the PortfolioOutput.
+
+    Gated on the structured-bibliography flag and the per-session
+    portfolio opt-out. Concurrent generations on the same draft return
+    409. Errors propagate so the UI can badge failure.
+    """
+    from services.feature_flags import structured_bibliography_enabled
+    from ai_researcher.agentic_layer.controller.writing_portfolio_manager import (
+        WritingPortfolioManager,
+    )
+
+    if not structured_bibliography_enabled(current_user.settings):
+        raise HTTPException(status_code=404, detail="Structured bibliography is not enabled")
+
+    draft = (
+        db.query(models.Draft)
+        .join(models.WritingSession, models.Draft.writing_session_id == models.WritingSession.id)
+        .join(models.Chat, models.WritingSession.chat_id == models.Chat.id)
+        .filter(models.Draft.id == draft_id, models.Chat.user_id == current_user.id)
+        .first()
+    )
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found or access denied")
+
+    writing_session = (
+        db.query(models.WritingSession)
+        .filter(models.WritingSession.id == draft.writing_session_id)
+        .first()
+    )
+
+    async with _portfolio_generation_lock:
+        existing = _portfolio_generation_in_flight.get(draft_id)
+        if existing is not None and not existing.done():
+            raise HTTPException(status_code=409, detail="Portfolio generation already in flight for this draft")
+
+    # Resolve the writing controller's model dispatcher — same one the
+    # chat endpoint uses. Keeps generation consistent with the agent's
+    # preferred routing.
+    writing_controller = WritingController()
+    manager = WritingPortfolioManager(writing_controller.model_dispatcher, db)
+
+    task = asyncio.current_task()
+    async with _portfolio_generation_lock:
+        _portfolio_generation_in_flight[draft_id] = task
+
+    try:
+        output = await manager.run_if_enabled(
+            draft=draft,
+            writing_session=writing_session,
+            user=current_user,
+            trigger="manual",
+        )
+    finally:
+        async with _portfolio_generation_lock:
+            if _portfolio_generation_in_flight.get(draft_id) is task:
+                _portfolio_generation_in_flight.pop(draft_id, None)
+
+    if output is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Portfolio not generated — check flag, opt-out, or empty bibliography",
+        )
+
+    return output.model_dump(mode="json")
+
+
+@router.post("/sessions/{session_id}/finalize")
+async def finalize_writing_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Session-close hook: run the portfolio on the current draft (#68).
+
+    Idempotent: if portfolio_output is already populated for the current
+    draft, returns it as-is. Otherwise runs the manager (subject to the
+    usual gates — flag, opt-out, non-empty bibliography). Designed for
+    the frontend to call on session unmount / explicit 'Fertigstellen'.
+    """
+    from ai_researcher.agentic_layer.controller.writing_portfolio_manager import (
+        WritingPortfolioManager,
+    )
+
+    writing_session = (
+        db.query(models.WritingSession)
+        .join(models.Chat, models.WritingSession.chat_id == models.Chat.id)
+        .filter(
+            models.WritingSession.id == session_id,
+            models.Chat.user_id == current_user.id,
+        )
+        .first()
+    )
+    if writing_session is None:
+        raise HTTPException(status_code=404, detail="Writing session not found or access denied")
+
+    if not writing_session.current_draft_id:
+        return {"status": "no_draft"}
+
+    draft = (
+        db.query(models.Draft)
+        .filter(models.Draft.id == writing_session.current_draft_id)
+        .first()
+    )
+    if draft is None:
+        return {"status": "no_draft"}
+
+    # Idempotent: if the current draft already has a portfolio, return it.
+    if draft.portfolio_output:
+        return {"status": "already_generated", "portfolio_output": draft.portfolio_output}
+
+    writing_controller = WritingController()
+    manager = WritingPortfolioManager(writing_controller.model_dispatcher, db)
+    output = await manager.run_if_enabled(
+        draft=draft,
+        writing_session=writing_session,
+        user=current_user,
+        trigger="session_close",
+    )
+    if output is None:
+        return {"status": "skipped"}
+    return {"status": "generated", "portfolio_output": output.model_dump(mode="json")}
+
+
+@router.delete("/drafts/{draft_id}/portfolio")
+async def clear_writing_portfolio(
+    draft_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Null the portfolio_output column so the UI can force regeneration."""
+    draft = (
+        db.query(models.Draft)
+        .join(models.WritingSession, models.Draft.writing_session_id == models.WritingSession.id)
+        .join(models.Chat, models.WritingSession.chat_id == models.Chat.id)
+        .filter(models.Draft.id == draft_id, models.Chat.user_id == current_user.id)
+        .first()
+    )
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found or access denied")
+    draft.portfolio_output = None
+    draft.updated_at = datetime.utcnow()
+    db.commit()
+    return {"status": "cleared"}
+
+
 @router.delete("/drafts/{draft_id}/references/{reference_id}")
 async def delete_structured_reference(
     draft_id: str,
@@ -1399,7 +1572,18 @@ async def process_writing_chat_in_background(
                     strip_references_block,
                     validate_citations,
                 )
+                from services.structured_bibliography import (
+                    record_citation_occurrences,
+                )
                 body_for_sync = strip_references_block(result.get("chat_response", ""))
+                registry_rows = (
+                    db.query(models.Reference)
+                    .filter(
+                        models.Reference.draft_id == draft.id,
+                        models.Reference.entry_key.isnot(None),
+                    )
+                    .all()
+                )
                 registry_dicts = [
                     {
                         "entry_key": r.entry_key,
@@ -1408,14 +1592,7 @@ async def process_writing_chat_in_background(
                         "publisher": r.publisher,
                         "container_title": r.container_title,
                     }
-                    for r in (
-                        db.query(models.Reference)
-                        .filter(
-                            models.Reference.draft_id == draft.id,
-                            models.Reference.entry_key.isnot(None),
-                        )
-                        .all()
-                    )
+                    for r in registry_rows
                 ]
                 sync_report = validate_citations(body_for_sync, registry_dicts)
                 if sync_report.has_warnings:
@@ -1426,6 +1603,26 @@ async def process_writing_chat_in_background(
                         len(sync_report.dead_entries),
                     )
                 sync_report_dict = sync_report.to_dict()
+
+                # #63: persist resolved markers into citation_entries so the
+                # portfolio adapter (and future live-sync UI) can read
+                # per-occurrence offsets without re-parsing the body. Only
+                # resolved markers persist; orphans stay diagnostics-only on
+                # the WebSocket payload.
+                ref_id_by_key = {r.entry_key: r.id for r in registry_rows if r.entry_key}
+                occurrences = []
+                for marker, entry_key in sync_report.resolved:
+                    ref_id = ref_id_by_key.get(entry_key)
+                    if ref_id is None:
+                        continue
+                    occurrences.append({
+                        "reference_id": ref_id,
+                        "in_text_marker": marker.marker,
+                        "paragraph_index": marker.paragraph_index,
+                        "char_offset_start": marker.char_offset_start,
+                        "char_offset_end": marker.char_offset_end,
+                    })
+                record_citation_occurrences(db, draft.id, occurrences)
             except Exception as exc:
                 logger.exception(
                     "Citation sync failed for task %s: %s", task_id, exc
@@ -1624,21 +1821,31 @@ class MarkdownContent(BaseModel):
     citation_profile_id: Optional[str] = None
 
 
-def _strip_inline_bibliography(markdown: str) -> str:
-    """Remove an inline ## Literaturverzeichnis / ## References section.
+def _strip_inline_section(markdown: str, heading_pattern: str) -> str:
+    """Remove an inline section starting at a ## heading that matches pattern.
 
-    Conservative: matches a level-2 heading that reads exactly
-    'Literaturverzeichnis' or 'References' (case-sensitive as the writer
-    emits it) and drops everything from there to end-of-document. Falls
-    back to returning markdown unchanged if no such heading is found.
+    Matches `\\n## <pattern>\\n` and drops from there to either the next
+    `\\n## ` (same-level heading) or end-of-document. Returns markdown
+    unchanged if no match. Used for both the Literaturverzeichnis and
+    Literaturportfolio strippers below.
     """
     import re as _re
 
-    pattern = _re.compile(
-        r"\n##\s+(?:Literaturverzeichnis|References)\s*\n.*$",
+    full = _re.compile(
+        rf"(?:^|\n)##\s+(?:{heading_pattern})\s*\n(.*?)(?=\n##\s+|\Z)",
         flags=_re.DOTALL,
     )
-    return pattern.sub("", markdown)
+    return full.sub("", markdown)
+
+
+def _strip_inline_bibliography(markdown: str) -> str:
+    """Remove inline ## Literaturverzeichnis / ## References section."""
+    return _strip_inline_section(markdown, "Literaturverzeichnis|References")
+
+
+def _strip_inline_portfolio(markdown: str) -> str:
+    """Remove inline ## Literaturportfolio / ## Literature Portfolio section (#67)."""
+    return _strip_inline_section(markdown, "Literaturportfolio|Literature Portfolio")
 
 
 def _maybe_append_structured_bibliography(
@@ -1706,6 +1913,48 @@ def _maybe_append_structured_bibliography(
     return f"{stripped}\n\n{rendered}"
 
 
+def _maybe_append_portfolio_section(
+    db: Session,
+    user: models.User,
+    draft_id: Optional[str],
+    markdown: str,
+) -> str:
+    """Append ## Literaturportfolio from drafts.portfolio_output (#67).
+
+    Runs after _maybe_append_structured_bibliography so the order in the
+    export is: body → Literaturverzeichnis → Literaturportfolio. Strips
+    any inline portfolio section first to avoid duplicates. No-op when
+    the column is null or the flag is off.
+    """
+    if not draft_id:
+        return markdown
+
+    from services.feature_flags import structured_bibliography_enabled
+
+    if not structured_bibliography_enabled(user.settings):
+        return markdown
+
+    draft = (
+        db.query(models.Draft)
+        .join(models.WritingSession, models.Draft.writing_session_id == models.WritingSession.id)
+        .join(models.Chat, models.WritingSession.chat_id == models.Chat.id)
+        .filter(models.Draft.id == draft_id, models.Chat.user_id == user.id)
+        .first()
+    )
+    if draft is None or not draft.portfolio_output:
+        return markdown
+
+    portfolio = draft.portfolio_output
+    if not isinstance(portfolio, dict):
+        return markdown
+    rendered = portfolio.get("markdown_table") or ""
+    if not rendered.strip():
+        return markdown
+
+    stripped = _strip_inline_portfolio(markdown).rstrip()
+    return f"{stripped}\n\n{rendered}\n"
+
+
 @router.post("/sessions/{session_id}/draft/docx")
 async def export_draft_as_docx(
     session_id: str,
@@ -1732,6 +1981,12 @@ async def export_draft_as_docx(
         draft_id=content.draft_id,
         markdown=content.markdown_content,
         profile_id_override=content.citation_profile_id,
+    )
+    markdown_to_render = _maybe_append_portfolio_section(
+        db=db,
+        user=current_user,
+        draft_id=content.draft_id,
+        markdown=markdown_to_render,
     )
 
     try:

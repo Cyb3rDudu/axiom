@@ -596,6 +596,8 @@ class Draft(DraftBase):
     is_current: bool = True
     created_at: datetime
     updated_at: datetime
+    # Writing-mode Literaturportfolio (#61/#64). NULL until generated.
+    portfolio_output: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True

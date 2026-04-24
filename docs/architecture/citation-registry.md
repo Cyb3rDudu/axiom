@@ -165,6 +165,57 @@ enabled users, not expand it.
 - **Migration is best-effort.** Unparsable lines are surfaced, not
   crashed on. The user is responsible for curating them.
 
+## Portfolio integration (Epic #61)
+
+The writing-mode Literaturportfolio layers on top of the registry
+without touching its contract. Full design:
+`docs/plans/WRITING_MODE_LITERATURE_PORTFOLIO.md`.
+
+### Data flow
+
+```
+draft_references  ─┐
+citation_entries  ─┼─▶  writing_portfolio_adapter  ─▶  source_record[]  ─▶  LiteraturePortfolioAgent
+draft.content      ─┘                                                         │
+                                                                              ▼
+                                      WritingPortfolioManager ◀── entries + compliance + markdown_table
+                                      persists to drafts.portfolio_output (JSONB)
+```
+
+### Invariants
+
+- **Per-draft persistence**: `drafts.portfolio_output` is per-draft
+  (not per-session). New draft versions start null so the old
+  version's portfolio stays frozen — matching the mission-side
+  `missions.literature_portfolio_output` immutability.
+- **Agent reuse**: `LiteraturePortfolioAgent.run` is called unchanged.
+  No prompt fork, no schema fork.
+- **Compliance mirror**: `WritingPortfolioManager._compute_compliance`
+  mirrors `LiteraturePortfolioManager._compute_compliance` byte-for-
+  byte (same thresholds 10–20 sources, ≥50% wissenschaftlich, same
+  blacklist semantics). Keep them in sync if either moves.
+- **Section IDs** in writing mode come from the nearest preceding
+  Markdown heading, slugified with German-umlaut folding. Context
+  snippets are ±180 chars around each `citation_entries` offset.
+- **Feature gating**: resolved by
+  `structured_bibliography_enabled(user.settings)` AND
+  `writing_session.settings.portfolio_enabled != False` AND keyword
+  detector absence on the chat title (when the explicit flag is None).
+
+### Export order
+
+`api.writing.export_draft_as_docx` composes:
+
+1. Draft body (with inline Literaturverzeichnis stripped)
+2. `## Literaturverzeichnis` (rendered from structured registry via
+   `citation_rendering.render_bibliography`)
+3. `## Literaturportfolio` (rendered from
+   `drafts.portfolio_output.markdown_table`)
+
+Both `_strip_inline_bibliography` and `_strip_inline_portfolio`
+run first so a draft that still carries inline markdown for either
+section exports cleanly.
+
 ## Related modules
 
 - `axiom_backend/services/structured_bibliography.py` — service layer
@@ -174,6 +225,12 @@ enabled users, not expand it.
   validator.
 - `axiom_backend/services/bibliography_migrator.py` — Markdown →
   structured parser.
+- `axiom_backend/services/writing_portfolio_adapter.py` — Reference →
+  source_record projection (#61/#62).
+- `axiom_backend/ai_researcher/agentic_layer/controller/writing_portfolio_manager.py`
+  — per-draft portfolio orchestrator (#61/#65).
 - `axiom_backend/services/feature_flags.py` — two-layer flag resolver.
 - `axiom_backend/database/migrations/add_structured_bibliography.sql` —
   the schema extension.
+- `axiom_backend/database/migrations/add_writing_portfolio.sql` —
+  drafts.portfolio_output column (#64).

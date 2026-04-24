@@ -281,6 +281,12 @@ class Draft(Base):
     created_at = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True))
 
+    # Writing-mode Literaturportfolio (#61/#64). NULL until generation runs.
+    # New draft versions start null so the old version's portfolio stays
+    # frozen with its revision, matching the mission-side per-deliverable
+    # immutability semantics.
+    portfolio_output = Column(JSONB, nullable=True)
+
     # Relationships
     writing_session = relationship("WritingSession", back_populates="drafts")
     references = relationship("Reference", back_populates="draft", cascade="all, delete-orphan")
