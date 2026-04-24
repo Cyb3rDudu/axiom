@@ -2497,13 +2497,23 @@ class SimplifiedWritingAgent:
             # Auto-continuation for max_tokens truncation. DeepSeek-chat caps
             # at 8192 output tokens (~6k words); a full 3k-word report
             # shrink still fits comfortably, but aggressive revision tasks
-            # on larger drafts can overshoot. We run up to
-            # AXIOM_WRITING_MAX_CONTINUATIONS follow-up calls feeding the
-            # partial response back as an assistant turn, asking the model
-            # to resume exactly where it stopped. If still truncated after
-            # the budget is exhausted, surface a visible warning.
+            # on larger drafts can overshoot.
+            #
+            # Observation from live Hausarbeit runs: DeepSeek ignores
+            # the "resume where you stopped" instruction and instead
+            # RESTARTS the whole content-block:document from scratch,
+            # producing TWO full drafts concatenated in the response
+            # that Apply-all-Blocks then glues together. Corrupted
+            # output is worse than honest truncation.
+            #
+            # Default OFF. Set AXIOM_WRITING_MAX_CONTINUATIONS>0 only
+            # in environments where the model is known to honour the
+            # continuation contract. The writer prompt already puts
+            # the structured references block FIRST so if truncation
+            # hits, the prose tail is lost — still applicable — but
+            # the registry and DOCX export stay coherent.
             import os as _os
-            max_cont = int(_os.getenv("AXIOM_WRITING_MAX_CONTINUATIONS", "2"))
+            max_cont = int(_os.getenv("AXIOM_WRITING_MAX_CONTINUATIONS", "0"))
             cont_count = 0
             while finish_reason == "length" and cont_count < max_cont:
                 cont_count += 1
@@ -2545,13 +2555,15 @@ class SimplifiedWritingAgent:
 
             if finish_reason == "length":
                 logger.warning(
-                    f"simplified_writing response still truncated after "
-                    f"{max_cont} continuations — surfacing warning to user"
+                    "simplified_writing response truncated at token limit — "
+                    "auto-continue disabled, surfacing warning to user"
                 )
                 content += (
-                    "\n\n> ⚠️ *Die Antwort wurde trotz mehrerer Fortsetzungen "
-                    "gekürzt (Output-Token-Limit). Bitte den Task in kleinere "
-                    "Teile zerlegen — z. B. eine Sektion pro Prompt.*"
+                    "\n\n> ⚠️ *Die Antwort wurde am Token-Limit gekürzt. "
+                    "Der strukturierte Literaturverzeichnis-Block (ganz am "
+                    "Anfang) wurde gespeichert. Für die vollständige Prosa "
+                    "den Task in kleinere Teile zerlegen — z. B. eine "
+                    "Sektion pro Prompt, oder die Wortbudgets enger setzen.*"
                 )
 
             # Defensive fence-balancer. The continuation prompt tells the
