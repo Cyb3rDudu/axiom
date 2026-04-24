@@ -164,6 +164,48 @@ class TestValidateCitations:
         assert report.orphan_markers == []
         assert report.resolved[0][1] == "smith-2020"
 
+    def test_given_family_citation_resolves_via_fallback(self):
+        """Writer emits '(Beat Hotz-Hart & Adrian Rohner, 2014)' with
+        given names — APA violation but we still match on the last
+        token per author-head so the citation_sync doesn't flag it as
+        an orphan (#75 follow-up)."""
+        entry = {
+            "entry_key": "hotz-hart-2014",
+            "authors": [{"family": "Hotz-Hart", "given": "Beat"}],
+            "year": 2014,
+            "title": "Nationen im Innovationswettlauf",
+            "publisher": "vdf Hochschulverlag",
+        }
+        body = "Studien zeigen X (Beat Hotz-Hart & Adrian Rohner, 2014, S. 4-6)."
+        report = validate_citations(body, [entry])
+        assert report.orphan_markers == [], (
+            "expected Given-Family citation to resolve via last-token fallback"
+        )
+        assert report.resolved[0][1] == "hotz-hart-2014"
+
+    def test_family_only_citation_still_prefers_primary(self):
+        """Canonical '(Hotz-Hart, 2014)' resolves via the primary hint,
+        not the fallback — fallback only triggers on primary miss."""
+        entry = {
+            "entry_key": "hotz-hart-2014",
+            "authors": [{"family": "Hotz-Hart", "given": "Beat"}],
+            "year": 2014,
+            "title": "Nationen",
+            "publisher": "vdf",
+        }
+        body = "(Hotz-Hart & Rohner, 2014, S. 4)."
+        report = validate_citations(body, [entry])
+        assert report.orphan_markers == []
+        assert report.resolved[0][1] == "hotz-hart-2014"
+
+    def test_parser_exposes_fallback_hint(self):
+        body = "(Beat Hotz-Hart & Adrian Rohner, 2014, S. 4-6)."
+        markers = parse_in_text_citations(body)
+        assert len(markers) == 1
+        # _norm_family strips hyphens + lowercases, so Hotz-Hart → hotzhart
+        assert markers[0].author_hint == "beathotzhart"
+        assert markers[0].author_hint_fallback == "hotzhart"
+
 
 class TestStripReferencesBlock:
     def test_strips_references_fence(self):

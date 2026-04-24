@@ -69,6 +69,7 @@ class ParsedMarker:
     marker: str                # original string as it appears
     mode: str                  # 'apa' | 'numbered'
     author_hint: Optional[str] = None   # normalised family token (first listed)
+    author_hint_fallback: Optional[str] = None  # last-token family fallback (#75 follow-up)
     year: Optional[int] = None
     page: Optional[str] = None
     key_hint: Optional[str] = None      # numbered: the literal bracket payload
@@ -138,11 +139,21 @@ def parse_in_text_citations(body: str) -> List[ParsedMarker]:
         year_token = m.group("year") or ""
         year = _parse_year(year_token)
         page = m.group("page")
+        # Primary hint: the head as parsed (may include a given name
+        # the writer forgot to strip, e.g. 'Beat Hotz-Hart').
+        primary = _norm_family(author)
+        # Fallback hint: last whitespace-separated token of the head.
+        # Covers the 'Given Family' and 'Given Hyphenated-Family' cases
+        # where the writer emitted a non-compliant APA citation. The
+        # validator tries the primary first, falls back if it misses.
+        tokens = author.replace(",", " ").split()
+        fallback = _norm_family(tokens[-1]) if tokens else None
         markers.append(
             ParsedMarker(
                 marker=m.group(0),
                 mode="apa",
-                author_hint=_norm_family(author),
+                author_hint=primary,
+                author_hint_fallback=fallback if fallback and fallback != primary else None,
                 year=year,
                 page=page.strip() if page else None,
                 char_offset_start=m.start(),
@@ -267,21 +278,36 @@ def validate_citations(
         ambiguous_candidates: List[str] = []
 
         if marker.mode == "apa" and marker.author_hint:
-            candidates = by_family_year.get((marker.author_hint, marker.year)) or []
-            if len(candidates) == 1:
-                resolved_key = candidates[0]
-            elif len(candidates) > 1:
-                ambiguous_candidates = candidates
+            # Try primary hint first, then the last-token fallback for
+            # cases where the writer emitted 'Given Family' instead of
+            # pure 'Family' (#75 follow-up: 'Beat Hotz-Hart & Adrian
+            # Rohner' → primary 'beathotzhart' misses, fallback 'hotzhart'
+            # matches the registry entry for Hotz-Hart 2014).
+            hints_to_try = [marker.author_hint]
+            if marker.author_hint_fallback:
+                hints_to_try.append(marker.author_hint_fallback)
+
+            for hint in hints_to_try:
+                candidates = by_family_year.get((hint, marker.year)) or []
+                if len(candidates) == 1:
+                    resolved_key = candidates[0]
+                    break
+                if len(candidates) > 1:
+                    ambiguous_candidates = candidates
+                    break
             else:
-                # No (family, year) match. Family-only fallback only fires
-                # when the marker carried no year (e.g. 'n.d.'), otherwise
-                # a year mismatch is a real orphan.
+                # No (family, year) match on any hint. Family-only fallback
+                # only fires when the marker carried no year (e.g. 'n.d.'),
+                # otherwise a year mismatch is a real orphan.
                 if marker.year is None:
-                    fam_candidates = by_family_only.get(marker.author_hint) or []
-                    if len(fam_candidates) == 1:
-                        resolved_key = fam_candidates[0]
-                    elif len(fam_candidates) > 1:
-                        ambiguous_candidates = fam_candidates
+                    for hint in hints_to_try:
+                        fam_candidates = by_family_only.get(hint) or []
+                        if len(fam_candidates) == 1:
+                            resolved_key = fam_candidates[0]
+                            break
+                        if len(fam_candidates) > 1:
+                            ambiguous_candidates = fam_candidates
+                            break
 
         elif marker.mode == "numbered" and marker.key_hint:
             payload = marker.key_hint
