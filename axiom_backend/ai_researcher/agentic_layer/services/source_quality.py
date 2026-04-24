@@ -193,8 +193,12 @@ def compute_quality_signals(note: Note, now: Optional[_dt.date] = None) -> Quali
 
 
 def assign_scientific_tier(signals: QualitySignals) -> ScientificTier:
-    """Map QualitySignals to the wissenschaftlich-facheinschlägig tier used
-    in the KMU compliance check (A/B = wissenschaftlich; C/D = nicht)."""
+    """Map QualitySignals to a scientific-vs-practitioner tier.
+
+    A/B = peer-reviewed / scientific; C/D = grey / practitioner.
+    Consumed by portfolio compliance rubrics that enforce a minimum
+    scientific share (for example the KMU APA 7 ≥50 % rule, but the
+    tiers themselves are style-agnostic)."""
     if signals.publication_type == "peer_reviewed_journal":
         return "A"
     if signals.publisher_tier == "blacklist":

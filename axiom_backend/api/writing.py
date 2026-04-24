@@ -1563,7 +1563,44 @@ async def process_writing_chat_in_background(
                 logger.warning(f"Failed to send status update: {e}")
         
         # Don't send initial status - let the agent handle it
-        
+
+        # Writing Completeness Contract — figure pre-fetch
+        # When the prompt or draft carries figure-intent, pre-fetch
+        # candidates from document_images and inject them into the
+        # agent's context via the custom_system_prompt channel. No-op
+        # when intent is absent or the library is empty.
+        figure_resolution: Optional[Dict[str, Any]] = None
+        try:
+            from services.feature_flags import rag_figures_enabled
+            from services.figure_resolution import resolve_figures
+            if rag_figures_enabled(user_settings):
+                figure_resolution = resolve_figures(
+                    db,
+                    prompt=request.message or "",
+                    draft_body=draft.content or "",
+                    doc_ids=filter_doc_ids or [],
+                    language_code=(user_settings or {}).get("language_code", "de"),
+                )
+                if figure_resolution and figure_resolution.get("system_prompt_addendum"):
+                    existing = context_info.get("custom_system_prompt") or ""
+                    context_info["custom_system_prompt"] = (
+                        (existing + "\n\n" if existing else "")
+                        + figure_resolution["system_prompt_addendum"]
+                    )
+                    logger.info(
+                        "Writing figure resolver: intent=%s queries=%d candidates_total=%d",
+                        figure_resolution.get("intent_detected"),
+                        len(figure_resolution.get("queries") or []),
+                        sum(
+                            len(v)
+                            for v in (figure_resolution.get("candidates_by_description") or {}).values()
+                        ),
+                    )
+        except Exception as exc:
+            logger.warning(
+                "Figure resolver failed (non-fatal): %s", exc, exc_info=True
+            )
+
         # Run the agent with status callback (not streaming callback)
         result = await agent.run(
             prompt=request.message,
@@ -1745,6 +1782,66 @@ async def process_writing_chat_in_background(
                 f"wordcount_delta_pct={audit.wordcount_delta_pct}"
             )
 
+        # Writing Completeness Contract — post-response passes
+        # Each one is independently flag-gated and idempotent. The
+        # mutated `chat_response` is what the user sees and what
+        # lands in the DB — not the raw LLM output. Telemetry for
+        # each pass ships via writing_telemetry.
+        final_response_text: str = result.get("chat_response", "") or ""
+        completeness_telemetry: Dict[str, Any] = {}
+        try:
+            from services.feature_flags import (
+                wordcount_fix_enabled,
+                sources_always_enabled,
+                rag_figures_enabled,
+            )
+
+            # Deterministic Wortbilanz recompute
+            if wordcount_fix_enabled(user_settings):
+                from services.writing_response_audit import recompute_wortbilanz
+                final_response_text, wc_tele = recompute_wortbilanz(
+                    final_response_text
+                )
+                completeness_telemetry["wordcount_fix"] = wc_tele
+
+            # Backend-synthesized references block
+            if sources_always_enabled(user_settings):
+                from services.response_postprocess import synthesize_sources_block
+                registry_for_sources = (
+                    db.query(models.Reference)
+                    .filter(
+                        models.Reference.draft_id == draft.id,
+                        models.Reference.entry_key.isnot(None),
+                    )
+                    .all()
+                )
+                final_response_text, sources_tele = synthesize_sources_block(
+                    final_response_text, registry_for_sources
+                )
+                completeness_telemetry["sources_always"] = sources_tele
+
+            # Figure URL validation — only when the resolver actually ran
+            if figure_resolution and rag_figures_enabled(user_settings):
+                from services.response_postprocess import validate_figure_urls
+                valid_urls = figure_resolution.get("valid_image_urls") or set()
+                final_response_text, fig_tele = validate_figure_urls(
+                    final_response_text, valid_urls if valid_urls else None
+                )
+                completeness_telemetry["figures_validated"] = fig_tele
+        except Exception as exc:
+            logger.warning(
+                "Writing completeness post-process failed (non-fatal): %s",
+                exc,
+                exc_info=True,
+            )
+
+        if completeness_telemetry:
+            logger.info(
+                "Writing completeness telemetry for task %s: %s",
+                task_id,
+                {k: v for k, v in completeness_telemetry.items() if v},
+            )
+
         # Save the assistant response. Audit data rides on the WebSocket
         # payload only for now — adding a DB column would require a
         # migration, and the UI only needs it for the badge on the
@@ -1753,7 +1850,7 @@ async def process_writing_chat_in_background(
             id=str(uuid.uuid4()),
             chat_id=chat_id,
             role="assistant",
-            content=result["chat_response"],
+            content=final_response_text,
             sources=result.get("sources", []),
             created_at=datetime.utcnow(),
         )
@@ -1763,14 +1860,19 @@ async def process_writing_chat_in_background(
         # Send the complete response via WebSocket (not as streaming chunks)
         await send_agent_status_update(session_id, "completed", "Response generated successfully")
 
-        # Send the full response message with sources
+        # Send the full response message with sources. We ship the
+        # post-processed `final_response_text` (fixed Wortbilanz,
+        # synthesized sources block, validated figure URLs) rather
+        # than the raw LLM output so the chat UI shows the same text
+        # the DB has.
         await send_draft_content_update(session_id, {
-            "message": result["chat_response"],
+            "message": final_response_text,
             "sources": result.get("sources", []),
             "task_id": task_id,
             "audit": audit.to_dict() if audit.has_warnings else None,
             "structured_references": structured_refs_summary,
             "citation_sync": sync_report_dict,
+            "completeness": completeness_telemetry or None,
         }, "complete")
         
         # Update chat title if needed
