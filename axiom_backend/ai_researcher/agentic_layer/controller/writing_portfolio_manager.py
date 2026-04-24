@@ -73,12 +73,17 @@ class WritingPortfolioManager:
         no-op, not an error.
         """
         from services.feature_flags import structured_bibliography_enabled
+        from services.writing_telemetry import record_portfolio_generation
         from ai_researcher.agentic_layer.controller.utils.portfolio_optout import (
             detect_portfolio_optout,
         )
 
         if not structured_bibliography_enabled(user.settings):
             logger.info("WritingPortfolioManager: flag off for user %s", user.id)
+            record_portfolio_generation(
+                trigger=trigger, outcome="skipped_flag",
+                draft_id=draft.id, user_id=user.id,
+            )
             return None
 
         # Per-session opt-out: the session's `settings.portfolio_enabled`
@@ -88,6 +93,10 @@ class WritingPortfolioManager:
         explicit_flag = session_settings.get("portfolio_enabled") if session_settings else None
         if explicit_flag is False:
             logger.info("WritingPortfolioManager: disabled on session %s", writing_session.id)
+            record_portfolio_generation(
+                trigger=trigger, outcome="skipped_optout",
+                draft_id=draft.id, user_id=user.id,
+            )
             return None
 
         # Keyword check on chat title as secondary signal
@@ -101,6 +110,10 @@ class WritingPortfolioManager:
             logger.info(
                 "WritingPortfolioManager: opt-out keyword in chat title for session %s",
                 writing_session.id,
+            )
+            record_portfolio_generation(
+                trigger=trigger, outcome="skipped_optout",
+                draft_id=draft.id, user_id=user.id,
             )
             return None
 
@@ -116,6 +129,10 @@ class WritingPortfolioManager:
             logger.info(
                 "WritingPortfolioManager: no structured refs for draft %s",
                 draft.id,
+            )
+            record_portfolio_generation(
+                trigger=trigger, outcome="skipped_empty",
+                draft_id=draft.id, user_id=user.id,
             )
             return None
 
@@ -185,6 +202,14 @@ class WritingPortfolioManager:
             trigger,
             len(entries),
             compliance.traffic_light,
+        )
+        record_portfolio_generation(
+            trigger=trigger,
+            outcome="generated",
+            traffic_light=compliance.traffic_light,
+            draft_id=draft.id,
+            user_id=user.id,
+            source_count=len(entries),
         )
         return output
 
