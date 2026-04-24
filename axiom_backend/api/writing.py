@@ -170,6 +170,21 @@ async def create_writing_session(
                 detail="One or more document groups not found or access denied",
             )
 
+    # Portfolio opt-out (#68): keyword in the chat title → writes
+    # settings.portfolio_enabled=False at creation time so later gates
+    # don't need to re-inspect the title. Mirrors the mission-side
+    # detect_portfolio_optout pattern.
+    from ai_researcher.agentic_layer.controller.utils.portfolio_optout import (
+        detect_portfolio_optout,
+    )
+
+    effective_settings = dict(session_data.settings or {})
+    if "portfolio_enabled" not in effective_settings:
+        if detect_portfolio_optout(chat.title or ""):
+            effective_settings["portfolio_enabled"] = False
+        else:
+            effective_settings["portfolio_enabled"] = True
+
     # Create new writing session
     writing_session = models.WritingSession(
         id=str(uuid.uuid4()),
@@ -177,7 +192,7 @@ async def create_writing_session(
         document_group_id=session_data.document_group_id,
         document_group_ids=session_data.document_group_ids,
         use_web_search=session_data.use_web_search,
-        settings=session_data.settings,
+        settings=effective_settings,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
@@ -1034,6 +1049,63 @@ async def generate_writing_portfolio(
         )
 
     return output.model_dump(mode="json")
+
+
+@router.post("/sessions/{session_id}/finalize")
+async def finalize_writing_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Session-close hook: run the portfolio on the current draft (#68).
+
+    Idempotent: if portfolio_output is already populated for the current
+    draft, returns it as-is. Otherwise runs the manager (subject to the
+    usual gates — flag, opt-out, non-empty bibliography). Designed for
+    the frontend to call on session unmount / explicit 'Fertigstellen'.
+    """
+    from ai_researcher.agentic_layer.controller.writing_portfolio_manager import (
+        WritingPortfolioManager,
+    )
+
+    writing_session = (
+        db.query(models.WritingSession)
+        .join(models.Chat, models.WritingSession.chat_id == models.Chat.id)
+        .filter(
+            models.WritingSession.id == session_id,
+            models.Chat.user_id == current_user.id,
+        )
+        .first()
+    )
+    if writing_session is None:
+        raise HTTPException(status_code=404, detail="Writing session not found or access denied")
+
+    if not writing_session.current_draft_id:
+        return {"status": "no_draft"}
+
+    draft = (
+        db.query(models.Draft)
+        .filter(models.Draft.id == writing_session.current_draft_id)
+        .first()
+    )
+    if draft is None:
+        return {"status": "no_draft"}
+
+    # Idempotent: if the current draft already has a portfolio, return it.
+    if draft.portfolio_output:
+        return {"status": "already_generated", "portfolio_output": draft.portfolio_output}
+
+    writing_controller = WritingController()
+    manager = WritingPortfolioManager(writing_controller.model_dispatcher, db)
+    output = await manager.run_if_enabled(
+        draft=draft,
+        writing_session=writing_session,
+        user=current_user,
+        trigger="session_close",
+    )
+    if output is None:
+        return {"status": "skipped"}
+    return {"status": "generated", "portfolio_output": output.model_dump(mode="json")}
 
 
 @router.delete("/drafts/{draft_id}/portfolio")

@@ -437,6 +437,20 @@ export const clearWritingPortfolio = async (draftId: string): Promise<void> => {
   await apiClient.delete(`/api/writing/drafts/${draftId}/portfolio`);
 };
 
+export interface FinalizeResult {
+  status: 'generated' | 'already_generated' | 'skipped' | 'no_draft';
+  portfolio_output?: PortfolioOutput | null;
+}
+
+export const finalizeWritingSession = async (
+  sessionId: string
+): Promise<FinalizeResult> => {
+  const response = await apiClient.post(
+    `/api/writing/sessions/${sessionId}/finalize`
+  );
+  return response.data;
+};
+
 // Chat message management API
 export const clearChatMessages = async (chatId: string): Promise<void> => {
   await apiClient.delete(`/api/chats/${chatId}/messages`);
