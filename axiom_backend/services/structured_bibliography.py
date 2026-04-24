@@ -21,7 +21,6 @@ import hashlib
 import json
 import logging
 import re
-import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,6 +30,9 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from database import models
+from services.author_parser import parse_authors
+from services.text_utils import slugify_ascii
+from services.writing_markdown import REFS_FENCE_RE
 
 logger = logging.getLogger(__name__)
 
@@ -39,28 +41,15 @@ logger = logging.getLogger(__name__)
 # Entry-key slugging
 # ---------------------------------------------------------------------------
 
-_SLUG_DROP = re.compile(r"[^a-z0-9]+")
-_GERMAN_UMLAUTS = str.maketrans({
-    "ä": "ae", "Ä": "ae",
-    "ö": "oe", "Ö": "oe",
-    "ü": "ue", "Ü": "ue",
-    "ß": "ss",
-})
-
 
 def slugify_entry_key(*parts: str) -> str:
     """Turn author/year/title hints into a stable ASCII slug.
 
     The writer emits entry_keys explicitly; this helper is used when the
     UI or migration layer needs to synthesize one (e.g. inline-markdown
-    backfill). German umlauts are transliterated explicitly because NFKD
-    decomposition doesn't map ß → ss.
+    backfill).
     """
-    joined = "-".join(p for p in parts if p)
-    transliterated = joined.translate(_GERMAN_UMLAUTS)
-    normalised = unicodedata.normalize("NFKD", transliterated).encode("ascii", "ignore").decode("ascii")
-    slug = _SLUG_DROP.sub("-", normalised.lower()).strip("-")
-    return slug or "ref"
+    return slugify_ascii("-".join(p for p in parts if p), fallback="ref")
 
 
 def ensure_unique_entry_key(
@@ -366,26 +355,8 @@ class StructuredBibliographyService:
 
 def _normalise_authors(authors: Any) -> Optional[List[Dict[str, str]]]:
     """Accept list[AuthorName|dict|str] and return list[{family, given}]."""
-    if not authors:
-        return None
-    out: List[Dict[str, str]] = []
-    for a in authors:
-        if isinstance(a, str):
-            # "Family, Given" or "Given Family"
-            if "," in a:
-                family, _, given = a.partition(",")
-                out.append({"family": family.strip(), "given": given.strip()})
-            else:
-                parts = a.strip().split()
-                if len(parts) >= 2:
-                    out.append({"family": parts[-1], "given": " ".join(parts[:-1])})
-                else:
-                    out.append({"family": a.strip(), "given": ""})
-        elif hasattr(a, "family"):
-            out.append({"family": getattr(a, "family", ""), "given": getattr(a, "given", "") or ""})
-        elif isinstance(a, dict):
-            out.append({"family": a.get("family", ""), "given": a.get("given", "") or ""})
-    return out or None
+    parsed = parse_authors(authors)
+    return parsed or None
 
 
 # ---------------------------------------------------------------------------
@@ -429,10 +400,7 @@ def record_citation_occurrences(
 # ---------------------------------------------------------------------------
 
 
-_REFERENCES_BLOCK_RE = re.compile(
-    r"```content-block:references\s*\n(?P<json>.*?)\n```",
-    re.DOTALL | re.IGNORECASE,
-)
+_REFERENCES_BLOCK_RE = REFS_FENCE_RE
 
 
 @dataclass
@@ -454,7 +422,7 @@ def parse_references_block(response_text: str) -> ReferencesParseResult:
     if match is None:
         return ReferencesParseResult(entries=[], block_found=False, errors=[])
 
-    raw = match.group("json").strip()
+    raw = match.group("body").strip()
     if not raw:
         return ReferencesParseResult(
             entries=[], block_found=True, errors=["references block is empty"]

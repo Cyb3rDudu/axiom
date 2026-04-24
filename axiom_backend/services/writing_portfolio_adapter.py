@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from database import models
 from ai_researcher.agentic_layer.services import source_quality
+from services.text_utils import slugify_ascii
 
 
 # ---------------------------------------------------------------------------
@@ -30,13 +31,6 @@ SECTION_SLUG_FALLBACK = "body"
 
 
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.+?)\s*$", re.MULTILINE)
-_SLUG_DROP = re.compile(r"[^a-z0-9]+")
-_GERMAN_UMLAUTS = str.maketrans({
-    "ä": "ae", "Ä": "ae",
-    "ö": "oe", "Ö": "oe",
-    "ü": "ue", "Ü": "ue",
-    "ß": "ss",
-})
 
 
 # ---------------------------------------------------------------------------
@@ -45,12 +39,7 @@ _GERMAN_UMLAUTS = str.maketrans({
 
 
 def _slugify_heading(heading: str) -> str:
-    import unicodedata
-
-    transliterated = (heading or "").translate(_GERMAN_UMLAUTS)
-    ascii_ = unicodedata.normalize("NFKD", transliterated).encode("ascii", "ignore").decode("ascii")
-    slug = _SLUG_DROP.sub("-", ascii_.lower()).strip("-")
-    return slug or SECTION_SLUG_FALLBACK
+    return slugify_ascii(heading or "", fallback=SECTION_SLUG_FALLBACK)
 
 
 def _authors_to_apa_string(authors: Optional[Iterable[Mapping[str, Any]]]) -> str:

@@ -41,19 +41,15 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+
+from services.writing_i18n import normalize_language_code, t
+from services.writing_markdown import (
+    SECTION_HEADING_RE as _SECTION_HEADING_RE,
+    extract_document_body,
+)
 
 logger = logging.getLogger(__name__)
-
-
-# Numbered section headings at any Markdown level (H1-H4). The writer
-# chooses the level based on document style:
-#   # 1. Section   — flat report style
-#   ## 1. Section  — paper with H1 title + H2 sections (academic norm)
-#   ### 1. Section — chapter-with-sections
-# We accept all of them as cut-point landmarks; index ordering (1/2/3…)
-# is what the continuation logic cares about, not heading depth.
-_SECTION_HEADING_RE = re.compile(r"^#{1,4}\s+(\d+)\.\s+([^\n]+)$", re.MULTILINE)
 
 
 # Cheap token-based language detector — no ML dependency needed for the
@@ -90,10 +86,7 @@ def infer_language_code(text: str) -> str:
         return "en"
     # Prefer the document-block body when present; JSON fields outside
     # it are English irrespective of the deliverable's language.
-    doc_match = re.search(
-        r"```content-block:document\s*\n(.*?)\n```", text, re.DOTALL
-    )
-    sample_source = doc_match.group(1) if doc_match else text
+    sample_source = extract_document_body(text) or text
     sample = sample_source[:8000]
     de_hits = len(_DE_MARKERS.findall(sample))
     en_hits = len(_EN_MARKERS.findall(sample))
@@ -203,10 +196,9 @@ def detect_cut_point(content: str, expected_sections: int = 5) -> Optional[dict]
             "partial_tail_chars": str  # last 400 chars of document body
         }
     """
-    m = re.search(r"```content-block:document\s*\n(.*?)\n```", content or "", re.DOTALL)
-    if not m:
+    body = extract_document_body(content)
+    if body is None:
         return None
-    body = m.group(1)
     sections = parse_sections(body)
     if not sections:
         return None
