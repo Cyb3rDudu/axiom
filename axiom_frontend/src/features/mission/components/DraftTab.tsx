@@ -348,6 +348,11 @@ export const DraftTab: React.FC<DraftTabProps> = ({ missionId }) => {
       // the first user prompt to contain a revision verb.
       const handoffSettings: Record<string, unknown> = {
         session_mode: 'iterative_revision',
+        // #73 — marker the backend picks up on first draft-create to
+        // project the mission's citation graph + Literaturportfolio
+        // into the new draft's draft_references + drafts.portfolio_
+        // output. One-shot: cleared from settings after projection.
+        mission_source_id: missionId,
       }
       if (missionCitationProfileId) {
         handoffSettings.citation_profile_id = missionCitationProfileId

@@ -489,17 +489,46 @@ async def get_current_draft(
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow()
         )
-        
+
         db.add(current_draft)
-        
+
         # Update writing session to point to this draft
         writing_session.current_draft_id = current_draft.id
         writing_session.updated_at = datetime.utcnow()
-        
+
         db.commit()
         db.refresh(current_draft)
-        
+
         logger.info(f"Created new blank draft {current_draft.id} for writing session {session_id}")
+
+        # Mission → writing handoff (#73): if the session was created
+        # from a finished research mission, project its citation graph
+        # + Literaturportfolio into this draft so the user doesn't have
+        # to click "Aus Markdown importieren" or wait for a writer
+        # turn to re-emit the references block.
+        session_settings = writing_session.settings if isinstance(writing_session.settings, dict) else {}
+        mission_source_id = session_settings.get("mission_source_id") if session_settings else None
+        if mission_source_id:
+            try:
+                from services.mission_to_writing_handoff import project_mission_into_draft
+                project_mission_into_draft(
+                    db,
+                    mission_id=mission_source_id,
+                    draft=current_draft,
+                    user_id=current_user.id,
+                )
+                # Clear the marker so re-fetches don't re-project
+                session_settings.pop("mission_source_id", None)
+                writing_session.settings = dict(session_settings)
+                db.commit()
+                db.refresh(current_draft)
+            except Exception as exc:
+                logger.warning(
+                    "Handoff projection failed for mission=%s draft=%s: %s",
+                    mission_source_id,
+                    current_draft.id,
+                    exc,
+                )
     
     # Get references for this draft
     references = db.query(models.Reference).filter(
