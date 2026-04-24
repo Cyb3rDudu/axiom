@@ -57,6 +57,11 @@ _TIER_A: List[str] = [
     "hanser", "carl hanser",
     "haufe lexware", "haufe-lexware", "haufe.de",
     "pearson education",
+    # Swiss / Austrian academic presses
+    "vdf hochschulverlag", "vdf.ethz.ch", "vdf-hochschulverlag",
+    "böhlau", "boehlau", "böhlau verlag",
+    "facultas", "facultas.at",
+    "linde verlag", "linde.at",
     # Indexes / aggregators
     "jstor",
     "oecd ilibrary",  # peer-reviewed OECD working series
@@ -113,6 +118,25 @@ _TIER_B: List[str] = [
     "iso.org",
     "din.de",
     "bmbf.de", "dfg.de", "deutsche forschungsgemeinschaft",
+    # Wirtschaftsberatung / Sachverständige
+    "sachverstaendigenrat-wirtschaft.de", "sachverständigenrat",
+    "sachverstandigenrat", "svr-wirtschaft.de",
+    # EU institutions beyond Commission / Parliament / ECB
+    "europarl.europa.eu", "european parliament", "europäisches parlament",
+    "consilium.europa.eu", "rat der eu",
+    "eca.europa.eu", "european court of auditors",
+    # Think tanks / research networks
+    "cer.eu", "centre for european reform",
+    "ceps.eu", "centre for european policy studies",
+    "epc.eu", "european policy centre",
+    "chathamhouse.org", "chatham house",
+    "iiss.org", "international institute for strategic studies",
+    "kof.ethz.ch", "kof ethz", "kof konjunkturforschungsstelle",
+    "seco.admin.ch", "seco bern",
+    # Scholarly repositories (peer-review mixed, but authoritative hosts)
+    "econstor.eu",
+    "cesifo.org", "cesifo-group",
+    "vfst.de",  # Verein für Socialpolitik
 ]
 
 # Tier C — scientific-ish but unverified (generic preprints, unknown
@@ -136,6 +160,12 @@ _TIER_D: List[str] = [
     "harvard business review", "hbr.org",
     "handelsblatt", "wiwo.de", "wirtschaftswoche",
     "faz.net", "nzz.ch",
+    "sueddeutsche.de", "sueddeutsche",
+    "fr.de", "frankfurter rundschau",
+    "spiegel.de", "spiegel online",
+    "zeit.de", "die zeit",
+    "welt.de",
+    "manager-magazin.de", "manager magazin",
     "ft.com", "financial times",
     "economist.com",
     "bloomberg",
