@@ -9,23 +9,45 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Trash2, RefreshCw, BookOpen, AlertCircle } from 'lucide-react';
+import {
+  Trash2, RefreshCw, BookOpen, AlertCircle, FileCheck2, RotateCcw,
+} from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
+import { MathMarkdown } from '../../../components/markdown/MathMarkdown';
 import {
+  clearWritingPortfolio,
   commitBibliographyMigration,
   deleteStructuredReference,
+  generateWritingPortfolio,
+  getSessionDraft,
   getStructuredReferences,
   previewBibliographyMigration,
   type MigrationPreview,
+  type PortfolioOutput,
   type StructuredReference,
 } from '../api';
 
 interface BibliographyWidgetProps {
   draftId: string;
+  /** When provided, the widget reads portfolio_output from the live
+   *  session draft via getSessionDraft; otherwise the Portfolio section
+   *  stays collapsed. Passed from DraftPanel which already has session
+   *  context in scope. */
+  sessionId?: string;
   /** Set to false to render the widget compact (inline) vs. card. */
   asCard?: boolean;
 }
+
+const TRAFFIC_LABEL: Record<string, string> = {
+  green: '🟢 grün',
+  yellow: '🟡 gelb',
+  red: '🔴 rot',
+};
+
+const TRAFFIC_HINT =
+  'Ampel: grün = 10–20 Quellen, ≥50 % wissenschaftlich, keine Blacklist-Treffer. ' +
+  'Rot = Blacklist oder Anteil unter 50 %. Gelb = Mengen-/Aktualitätsproblem.';
 
 const formatAuthors = (authors: StructuredReference['authors']) => {
   if (!authors || authors.length === 0) return 'o. A.';
@@ -36,12 +58,15 @@ const formatAuthors = (authors: StructuredReference['authors']) => {
 
 export const BibliographyWidget: React.FC<BibliographyWidgetProps> = ({
   draftId,
+  sessionId,
   asCard = true,
 }) => {
   const [entries, setEntries] = useState<StructuredReference[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<MigrationPreview | null>(null);
+  const [portfolio, setPortfolio] = useState<PortfolioOutput | null>(null);
+  const [portfolioLoading, setPortfolioLoading] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -56,12 +81,23 @@ export const BibliographyWidget: React.FC<BibliographyWidgetProps> = ({
     } finally {
       setLoading(false);
     }
+    // Pull the draft to read any pre-existing portfolio_output. We go
+    // via the session-draft endpoint because the per-draft fetch is
+    // only wired as part of WritingSessionWithDrafts today.
+    if (sessionId) {
+      try {
+        const draft = await getSessionDraft(sessionId);
+        setPortfolio(draft?.portfolio_output ?? null);
+      } catch {
+        // non-fatal — Portfolio stays collapsed.
+      }
+    }
   };
 
   useEffect(() => {
     if (draftId) void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftId]);
+  }, [draftId, sessionId]);
 
   const onDelete = async (refId: string) => {
     try {
@@ -96,6 +132,33 @@ export const BibliographyWidget: React.FC<BibliographyWidgetProps> = ({
       setError((e as Error).message || 'Migration commit failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const onGeneratePortfolio = async () => {
+    setPortfolioLoading(true);
+    setError(null);
+    try {
+      const output = await generateWritingPortfolio(draftId);
+      setPortfolio(output);
+    } catch (e) {
+      setError((e as Error).message || 'Portfolio-Generierung fehlgeschlagen');
+    } finally {
+      setPortfolioLoading(false);
+    }
+  };
+
+  const onRegeneratePortfolio = async () => {
+    setPortfolioLoading(true);
+    setError(null);
+    try {
+      await clearWritingPortfolio(draftId);
+      const output = await generateWritingPortfolio(draftId);
+      setPortfolio(output);
+    } catch (e) {
+      setError((e as Error).message || 'Portfolio-Neugenerierung fehlgeschlagen');
+    } finally {
+      setPortfolioLoading(false);
     }
   };
 
@@ -193,6 +256,70 @@ export const BibliographyWidget: React.FC<BibliographyWidgetProps> = ({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Literaturportfolio section (#61/#66) */}
+      {entries.length > 0 && (
+        <div className="mt-4 border-t pt-3">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <FileCheck2 className="h-4 w-4" />
+              <span className="text-sm font-medium">Literaturportfolio</span>
+              {portfolio?.compliance && (
+                <span
+                  className="text-xs px-2 py-0.5 rounded-full border"
+                  title={TRAFFIC_HINT}
+                >
+                  {TRAFFIC_LABEL[portfolio.compliance.traffic_light] ?? portfolio.compliance.traffic_light}
+                </span>
+              )}
+            </div>
+            <div className="flex gap-1">
+              {portfolio ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={onRegeneratePortfolio}
+                  disabled={portfolioLoading}
+                  title="Portfolio mit aktuellem Bestand neu erzeugen"
+                >
+                  <RotateCcw className="mr-2 h-3 w-3" />
+                  Aktualisieren
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={onGeneratePortfolio}
+                  disabled={portfolioLoading}
+                  title="KMU-konformes Literaturportfolio erzeugen"
+                >
+                  <FileCheck2 className="mr-2 h-3 w-3" />
+                  Portfolio generieren
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {portfolioLoading && (
+            <p className="text-xs text-muted-foreground">
+              Portfolio wird erzeugt … (Agent-Call, ca. 30 s)
+            </p>
+          )}
+
+          {portfolio?.markdown_table && !portfolioLoading && (
+            <div className="prose prose-sm max-w-none rounded border bg-muted/30 p-2 overflow-x-auto">
+              <MathMarkdown content={portfolio.markdown_table} />
+            </div>
+          )}
+
+          {!portfolio && !portfolioLoading && (
+            <p className="text-xs text-muted-foreground">
+              Noch kein Portfolio erzeugt. KMU verlangt die tabellarische
+              Reflexionsleistung (Quellenangabe · Recherchetool · Relevanz ·
+              Qualität) mit jedem Einsendeschein.
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

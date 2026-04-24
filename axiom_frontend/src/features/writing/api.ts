@@ -39,6 +39,8 @@ export interface Draft {
   references: Reference[]
   created_at: string
   updated_at: string
+  // Writing-mode Literaturportfolio (#61). Null until generated.
+  portfolio_output?: PortfolioOutput | null
 }
 
 export interface Reference {
@@ -377,6 +379,62 @@ export const commitBibliographyMigration = async (
     `/api/writing/drafts/${draftId}/references/migrate-from-markdown?dry_run=false`
   );
   return response.data;
+};
+
+// Literaturportfolio (#61/#66). PortfolioOutput JSON is opaque to the UI;
+// we just render markdown_table + show the compliance traffic light.
+export interface PortfolioQualitySignals {
+  publication_type: string;
+  peer_reviewed: boolean | null;
+  publisher_tier: string;
+  recency_years: number | null;
+  has_doi: boolean;
+  has_isbn: boolean;
+}
+
+export interface PortfolioEntry {
+  source_id: string;
+  apa_citation: string;
+  discovery_tool: string;
+  relevance_bullets: string[];
+  quality_bullets: string[];
+  quality_signals: PortfolioQualitySignals;
+  sections_used_in: string[];
+  contribution_type: string;
+  scientific_tier: 'A' | 'B' | 'C' | 'D';
+}
+
+export interface PortfolioCompliance {
+  source_count: number;
+  source_count_ok: boolean;
+  scientific_share: number;
+  scientific_share_ok: boolean;
+  blacklist_hits: string[];
+  recency_warnings: string[];
+  traffic_light: 'green' | 'yellow' | 'red';
+  advice: string[];
+}
+
+export interface PortfolioOutput {
+  mission_id: string;
+  language_code: 'de' | 'en';
+  generated_at: string;
+  entries: PortfolioEntry[];
+  compliance: PortfolioCompliance;
+  markdown_table: string;
+}
+
+export const generateWritingPortfolio = async (
+  draftId: string
+): Promise<PortfolioOutput> => {
+  const response = await apiClient.post(
+    `/api/writing/drafts/${draftId}/portfolio/generate`
+  );
+  return response.data;
+};
+
+export const clearWritingPortfolio = async (draftId: string): Promise<void> => {
+  await apiClient.delete(`/api/writing/drafts/${draftId}/portfolio`);
 };
 
 // Chat message management API

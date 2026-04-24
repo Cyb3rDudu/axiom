@@ -784,7 +784,10 @@ export const DraftPanel: React.FC = () => {
 
             <TabsContent value="references" className="h-full m-0 overflow-auto p-3">
               {currentDraft ? (
-                <BibliographyWidget draftId={currentDraft.id} />
+                <BibliographyWidget
+                  draftId={currentDraft.id}
+                  sessionId={currentSession?.id}
+                />
               ) : (
                 <div className="h-full flex items-center justify-center text-text-secondary">
                   <p>No draft available</p>
