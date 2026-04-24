@@ -2345,20 +2345,20 @@ class SimplifiedWritingAgent:
                 "8. EMIT THE BLOCK EXACTLY ONCE per response. Do not split it, "
                 "do not re-emit a 'continued' second references block. If your "
                 "registry is too large to fit in the token budget, prune to the "
-                "10-20 entries actually cited in the final body — KMU compliance "
-                "expects 10-20, not 154.\n"
+                "entries actually cited in the final body. Dead entries and "
+                "unused items should be removed — the target count depends on "
+                "the deliverable and the active citation profile.\n"
                 "\n"
                 "IN-TEXT CITATION FORMAT (strict, for reliable sync against the "
                 "references block):\n"
-                "- Use FAMILY-NAME ONLY in the Kurzbeleg, no given names:\n"
-                "  ✅ (Hotz-Hart & Rohner, 2014, S. 4-6)\n"
-                "  ❌ (Beat Hotz-Hart & Adrian Rohner, 2014, S. 4-6)\n"
+                "- Use FAMILY-NAME ONLY in in-text citations, no given names:\n"
+                "  ✅ (Smith & Jones, 2020, p. 45) / (Hotz-Hart & Rohner, 2014, S. 4-6)\n"
+                "  ❌ (John Smith & Alice Jones, 2020, p. 45)\n"
                 "- Hyphenated surnames stay intact: (Hotz-Hart, 2014, S. 4).\n"
-                "- Three or more authors: (Müller et al., 2020, S. 45) — no "
-                "given names, no '&' expansion.\n"
-                "- Institutional authors follow the mapping rules above "
-                "(BPB, Destatis, Deutsche Bundesbank …), never the full "
-                "unabbreviated form after the first mention.\n"
+                "- Three or more authors: use 'et al.' from the first citation, "
+                "no given names, no '&' expansion.\n"
+                "- Institutional authors follow the first-full-then-abbreviation "
+                "convention of the active citation profile.\n"
             )
 
         # Replace-mode injection (#44): when the user's prompt uses
@@ -2512,59 +2512,128 @@ class SimplifiedWritingAgent:
             # the structured references block FIRST so if truncation
             # hits, the prose tail is lost — still applicable — but
             # the registry and DOCX export stay coherent.
+            # Transparent section-scoped continuation — replaces the
+            # naive auto-continue that was observed restarting entire
+            # content-block:document fences. Opt-in via feature flag;
+            # fallback to the legacy env-var toggle remains below for
+            # environments that want the old behaviour temporarily.
             import os as _os
-            max_cont = int(_os.getenv("AXIOM_WRITING_MAX_CONTINUATIONS", "0"))
-            cont_count = 0
-            while finish_reason == "length" and cont_count < max_cont:
-                cont_count += 1
-                logger.info(
-                    f"simplified_writing response truncated (finish_reason=length), "
-                    f"auto-continuing ({cont_count}/{max_cont})"
-                )
-                cont_messages = list(messages) + [
-                    {"role": "assistant", "content": content},
-                    {
-                        "role": "user",
-                        "content": (
-                            "Deine letzte Antwort wurde beim Token-Limit abgeschnitten. "
-                            "Setze NAHTLOS dort fort, wo du aufgehört hast (keine "
-                            "Wiederholung des bereits geschriebenen Teils, keine erneute "
-                            "Einleitung). Wenn du innerhalb eines content-block warst, "
-                            "schreibe NUR den fehlenden Rest und schließe ihn korrekt "
-                            "mit ```. Wenn du außerhalb warst, schreibe normal weiter."
-                        ),
-                    },
-                ]
-                cont_resp, cont_details = await self.model_dispatcher.dispatch(
-                    messages=cont_messages, agent_mode="simplified_writing"
-                )
-                if session_id and cont_details:
-                    await self.stats_tracker.track_llm_call(session_id, cont_details)
-                if not (cont_resp and cont_resp.choices):
-                    break
-                cont_choice = cont_resp.choices[0]
-                cont_text = cont_choice.message.content or ""
-                if not cont_text.strip():
-                    break
-                # Glue continuation directly — the prompt forbids the model
-                # from re-echoing the already-emitted prefix, so the join is
-                # a simple concatenation. A leading space avoids fused words
-                # when the cut happened inside a token.
-                content = content + ("" if content.endswith(("\n", " ")) else "") + cont_text
-                finish_reason = getattr(cont_choice, "finish_reason", None)
+            from services.feature_flags import transparent_continuation_enabled
 
-            if finish_reason == "length":
-                logger.warning(
-                    "simplified_writing response truncated at token limit — "
-                    "auto-continue disabled, surfacing warning to user"
+            transparent_on = transparent_continuation_enabled(
+                context_info.get("user_settings")
+            )
+
+            if transparent_on and finish_reason == "length":
+                from services.writing_continuation import (
+                    infer_language_code,
+                    parse_sections,
+                    run_continuations,
                 )
-                content += (
-                    "\n\n> ⚠️ *Die Antwort wurde am Token-Limit gekürzt. "
-                    "Der strukturierte Literaturverzeichnis-Block (ganz am "
-                    "Anfang) wurde gespeichert. Für die vollständige Prosa "
-                    "den Task in kleinere Teile zerlegen — z. B. eine "
-                    "Sektion pro Prompt, oder die Wortbudgets enger setzen.*"
+
+                user_settings_ci = context_info.get("user_settings") or {}
+                language_code = (
+                    user_settings_ci.get("language_code")
+                    or infer_language_code(content)
                 )
+                # Infer expected_sections from the numbered headings the
+                # writer actually emitted. Falls back to explicit context
+                # hint or env override. If neither present and no headings
+                # parsed, set to the count we DID see (no continuation
+                # fires because all observed sections are reachable).
+                headings_seen = max(
+                    [s.index for s in parse_sections(content)], default=0
+                )
+                expected_sections = int(
+                    context_info.get("expected_sections")
+                    or _os.getenv("WRITING_EXPECTED_SECTIONS", 0)
+                    or headings_seen
+                )
+
+                async def _stats_cb(details):
+                    if session_id and details:
+                        await self.stats_tracker.track_llm_call(session_id, details)
+
+                content, cont_tele = await run_continuations(
+                    initial_content=content,
+                    finish_reason=finish_reason,
+                    base_messages=messages,
+                    dispatcher=self.model_dispatcher,
+                    agent_mode="simplified_writing",
+                    max_attempts=int(
+                        _os.getenv("AXIOM_WRITING_MAX_CONTINUATIONS", "2")
+                    ),
+                    expected_sections=expected_sections,
+                    section_budgets=context_info.get("section_budgets"),
+                    language_code=language_code,
+                    stats_callback=_stats_cb,
+                )
+                logger.info(
+                    "transparent continuation outcome=%s attempts=%d missing_initial=%d missing_final=%d",
+                    cont_tele.get("outcome"),
+                    cont_tele.get("attempts", 0),
+                    cont_tele.get("sections_missing_initially", 0),
+                    cont_tele.get("sections_missing_final", 0),
+                )
+                # Reset finish_reason so the legacy truncation warning
+                # below doesn't double-append — the orchestrator handles
+                # its own warning when it runs out of budget.
+                finish_reason = "stop" if cont_tele.get("outcome") == "success" else finish_reason
+
+            else:
+                # Legacy path: naive auto-continue, off by default (see PR #83).
+                # Kept for environments that explicitly set
+                # AXIOM_WRITING_MAX_CONTINUATIONS>0 without opting into the
+                # transparent path.
+                max_cont = int(_os.getenv("AXIOM_WRITING_MAX_CONTINUATIONS", "0"))
+                cont_count = 0
+                while finish_reason == "length" and cont_count < max_cont and not transparent_on:
+                    cont_count += 1
+                    logger.info(
+                        f"simplified_writing response truncated (finish_reason=length), "
+                        f"auto-continuing ({cont_count}/{max_cont})"
+                    )
+                    cont_messages = list(messages) + [
+                        {"role": "assistant", "content": content},
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your previous response was cut off at the token "
+                                "limit. Resume SEAMLESSLY from where you stopped "
+                                "(no repetition of what was already written, no "
+                                "re-introduction). If you were inside a content-"
+                                "block, write ONLY the missing tail and close it "
+                                "correctly with ```. If you were outside, "
+                                "continue normally."
+                            ),
+                        },
+                    ]
+                    cont_resp, cont_details = await self.model_dispatcher.dispatch(
+                        messages=cont_messages, agent_mode="simplified_writing"
+                    )
+                    if session_id and cont_details:
+                        await self.stats_tracker.track_llm_call(session_id, cont_details)
+                    if not (cont_resp and cont_resp.choices):
+                        break
+                    cont_choice = cont_resp.choices[0]
+                    cont_text = cont_choice.message.content or ""
+                    if not cont_text.strip():
+                        break
+                    content = content + ("" if content.endswith(("\n", " ")) else "") + cont_text
+                    finish_reason = getattr(cont_choice, "finish_reason", None)
+
+                if finish_reason == "length":
+                    logger.warning(
+                        "simplified_writing response truncated at token limit — "
+                        "transparent continuation disabled, surfacing warning"
+                    )
+                    content += (
+                        "\n\n> ⚠️ *The response was truncated at the token "
+                        "limit. The persisted references block is retained. "
+                        "For the remaining prose please split the task into "
+                        "smaller pieces — e.g. one section per prompt, or "
+                        "tighten the word budgets.*"
+                    )
 
             # Defensive fence-balancer. The continuation prompt tells the
             # model to close content-blocks correctly, but if it forgets the

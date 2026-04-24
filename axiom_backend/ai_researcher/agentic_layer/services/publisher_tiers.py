@@ -261,8 +261,9 @@ _TIER_C: List[str] = [
     "osf.io",
 ]
 
-# Tier D — practitioner / grey literature. Useful as "Praxisquelle" per KMU
-# rules, but counts against the ≥ 50 % scientific share.
+# Tier D — practitioner / grey literature. Useful as an evidential
+# source ("Praxisquelle") but counts against the scientific-share
+# minimum in rubrics that enforce one (e.g. KMU APA 7 requires ≥50 %).
 _TIER_D: List[str] = [
     "mckinsey", "bcg.com", "boston consulting",
     "deloitte", "pwc.", "kpmg", "ey.com", "ernst & young",
@@ -307,9 +308,11 @@ _TIER_D: List[str] = [
     "theatlantic.com",
 ]
 
-# Blacklist — disallowed as primary scientific source per KMU "Dos and
-# Don'ts" handout (Wikipedia, Gabler Wirtschaftslexikon, Tageszeitungen
-# ausdrücklich genannt). Agent must surface as warnings, not silently include.
+# Blacklist — disallowed as primary scientific source by most academic
+# style guides (Wikipedia, generic business lexica, tabloid newspapers,
+# essay-mill sites are common exclusions across KMU APA 7, Harvard,
+# Chicago, and other rubrics). Agent surfaces these as warnings rather
+# than silently including them.
 _BLACKLIST: List[str] = [
     "wikipedia.org",
     "wirtschaftslexikon.gabler", "gabler wirtschaftslexikon",
@@ -340,7 +343,7 @@ _BLACKLIST: List[str] = [
     "martinkaessler.com",  # personal blog
     # Common academic-help blogs misused as sources
     "thesiusbettina.com", "ghostwriter-24.com",
-    "diplomarbeiten24.de",  # essay mill — blacklist per KMU explicitly
+    "diplomarbeiten24.de",  # essay mill
     "studyflix.de", "studysmarter.de", "studyhelp.de", "studyhelper",
     "hausarbeiten.de",  # essay mill
     "lehrer-online.de/blog",

@@ -79,3 +79,66 @@ def resolve_flag_for_logging(user_settings: Any) -> dict:
         "user": bool(_nested_get(user_settings, *STRUCTURED_BIBLIOGRAPHY_SETTING)),
         "resolved": structured_bibliography_enabled(user_settings),
     }
+
+
+# ---------------------------------------------------------------------------
+# Writing Completeness Contract (docs/plans/WRITING_COMPLETENESS_CONTRACT.md)
+# ---------------------------------------------------------------------------
+#
+# Four sub-flags gated by one env kill switch + per-user opt-in. The
+# stages can be rolled in independently so a single bad path doesn't
+# force a full rollback.
+#
+# Resolution mirrors structured_bibliography_enabled:
+# - env kill switch false → all four stages off
+# - env unset OR true → per-user settings.writing.completeness.*
+#                        (each independently defaults off)
+
+COMPLETENESS_ENV = "WRITING_COMPLETENESS_CONTRACT_ENABLED"
+
+
+def _completeness_flag(user_settings: Any, sub_key: str) -> bool:
+    """Resolve writing.completeness.<sub_key> with env kill-switch."""
+    env_flag = _env_bool(COMPLETENESS_ENV)
+    if env_flag is False:
+        return False
+    val = _nested_get(user_settings, "writing_settings", "completeness", sub_key)
+    return bool(val)
+
+
+def wordcount_fix_enabled(user_settings: Any) -> bool:
+    """Stage 1a — deterministic Wortbilanz recompute overrides the LLM's
+    hallucinated word count in the response before persist."""
+    return _completeness_flag(user_settings, "wordcount_fix")
+
+
+def sources_always_enabled(user_settings: Any) -> bool:
+    """Stage 1b — backend always emits a canonical references block
+    based on the current registry, regardless of what the LLM produced
+    this turn."""
+    return _completeness_flag(user_settings, "sources_always")
+
+
+def transparent_continuation_enabled(user_settings: Any) -> bool:
+    """Stage 2 — backend detects truncation, fires section-scoped
+    continuation calls, stitches deterministically. User sees a single
+    coherent draft regardless of token budget hit."""
+    return _completeness_flag(user_settings, "transparent_continuation")
+
+
+def rag_figures_enabled(user_settings: Any) -> bool:
+    """Stage 3 — backend pre-fetches figure candidates from
+    document_images before the writer call when the prompt carries
+    figure-intent signals."""
+    return _completeness_flag(user_settings, "rag_figures")
+
+
+def resolve_completeness_flags(user_settings: Any) -> dict:
+    """One-shot resolver for structured telemetry / debug logs."""
+    return {
+        "env": _env_bool(COMPLETENESS_ENV),
+        "wordcount_fix": wordcount_fix_enabled(user_settings),
+        "sources_always": sources_always_enabled(user_settings),
+        "transparent_continuation": transparent_continuation_enabled(user_settings),
+        "rag_figures": rag_figures_enabled(user_settings),
+    }

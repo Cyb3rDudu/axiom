@@ -8,8 +8,10 @@ plus the in-memory Note list, to produce a `PortfolioOutput` — the
 persisted to `missions.literature_portfolio_output` (JSONB).
 
 The manager purposefully keeps all policy (tier thresholds, blacklist
-handling, compliance rules) here and not inside the agent — the agent only
-does KMU-style prose. That way the rubric is testable and deterministic.
+handling, compliance rules) here and not inside the agent — the agent
+only emits the prose dictated by the active portfolio profile. That way
+the rubric is testable and deterministic regardless of which style
+guide's conventions the user is following.
 """
 
 from __future__ import annotations
@@ -94,7 +96,7 @@ class LiteraturePortfolioManager:
             report_content=mission.report_content or {},
         )
 
-        # Call agent for KMU-style prose (Relevanz/Qualität bullets).
+        # Call agent for the per-source prose (relevance + quality bullets).
         # Imported lazily to avoid triggering the agents package init on
         # lightweight call paths (e.g. unit tests of manager internals).
         from ai_researcher.agentic_layer.agents.literature_portfolio_agent import (
