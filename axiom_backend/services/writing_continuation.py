@@ -74,10 +74,22 @@ def infer_language_code(text: str) -> str:
     Conservative — ties or empty input → 'en'. Designed for selecting
     the language of a backend-generated instruction message, not for
     user-visible content classification.
+
+    If the input contains a `content-block:document` fence, the
+    classifier scores only the body inside that fence — not the
+    response as a whole — because the references-block JSON is
+    English (`entry_key`, `title`, `reference_type`) and would
+    otherwise swamp a German document's marker count.
     """
     if not text:
         return "en"
-    sample = text[:8000]
+    # Prefer the document-block body when present; JSON fields outside
+    # it are English irrespective of the deliverable's language.
+    doc_match = re.search(
+        r"```content-block:document\s*\n(.*?)\n```", text, re.DOTALL
+    )
+    sample_source = doc_match.group(1) if doc_match else text
+    sample = sample_source[:8000]
     de_hits = len(_DE_MARKERS.findall(sample))
     en_hits = len(_EN_MARKERS.findall(sample))
     return "de" if de_hits > en_hits else "en"
@@ -98,15 +110,50 @@ class SectionInfo:
 # ---------------------------------------------------------------------------
 
 
+def _last_real_terminator(text: str) -> Optional[str]:
+    """Strip trailing Markdown artifacts / whitespace from `text` and
+    return the last character IF it is a real sentence terminator.
+
+    Markdown bold/italic/code fences (`**`, `*`, `_`, `` ` ``) are NOT
+    sentence terminators — they're formatting markers. A response that
+    ends on `**` is truncated inside bold emphasis, not finished.
+    Parentheses/brackets mid-sentence also don't count unless they
+    follow a terminator.
+    """
+    if not text:
+        return None
+    # Peel off trailing whitespace
+    s = text.rstrip()
+    # Peel off trailing markdown formatting sigils — these wrap content,
+    # they never end a sentence on their own.
+    while s and s[-1] in "*_`":
+        s = s[:-1].rstrip()
+    if not s:
+        return None
+    last = s[-1]
+    if last in ".!?…":
+        return last
+    # Handle `... ).` / `... ].` — the closing bracket follows after
+    # the period. We already peeled formatting; accept if second-to-
+    # last is a terminator and last is a closer.
+    if last in ")]" and len(s) >= 2 and s[-2] in ".!?…":
+        return s[-2]
+    return None
+
+
 def parse_sections(document_body: str) -> List[SectionInfo]:
     """Walk a content-block:document body, return structural info per section.
 
-    A section is "complete" if its last non-whitespace character is a
-    sentence terminator (`.`, `!`, `?`, `…`) OR its last non-empty line
-    ends the way a well-formed paragraph does. This is a conservative
-    check: false-positive "incomplete" is fine (triggers redundant
-    continuation), false-negative "complete" is bad (user sees a cut
-    sentence).
+    A section is "complete" if its last non-whitespace, non-formatting
+    character is a real sentence terminator (`.`, `!`, `?`, `…`).
+    Markdown sigils (`**`, `*`, `_`, `` ` ``) are stripped before the
+    check — they wrap content but don't end sentences. This prevents
+    the detector from treating a mid-bold truncation ("Zwei Szenarien**")
+    as a complete section.
+
+    Conservative: false-positive "incomplete" is fine (triggers
+    redundant continuation), false-negative "complete" is bad (user
+    sees a cut sentence).
     """
     if not document_body:
         return []
@@ -124,13 +171,7 @@ def parse_sections(document_body: str) -> List[SectionInfo]:
         body = document_body[m.end():end]
         words = len(body.split())
 
-        # Completeness check — inspect the last 80 chars of the body
-        tail = body.rstrip()[-80:] if body.strip() else ""
-        is_complete = bool(tail) and (
-            tail.endswith(
-                (".", "!", "?", "…", ".*", "].", "**", ")", "]", "`")
-            )
-        )
+        is_complete = _last_real_terminator(body) is not None
         sections.append(
             SectionInfo(
                 index=idx,

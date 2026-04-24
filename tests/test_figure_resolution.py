@@ -91,6 +91,55 @@ class TestImageUrl:
         assert url.endswith("unknown")
 
 
+class TestCandidateSnippet:
+    def test_no_candidate_figure_label_leaks(self):
+        """Regression: to_prompt_snippet used to emit
+        '![candidate figure](url)' which the LLM copied verbatim as alt
+        text in the final draft. Snippet must now present URL+caption
+        as labelled fields the writer has to wrap themselves."""
+        c = FigureCandidate(
+            image_id="img-1",
+            doc_id="doc-1",
+            image_url="/api/documents/images/doc-1/chart.png",
+            alt_text="BIP 2000-2024",
+            relevance=0.87,
+            source_document_title="Macro Trends",
+            source_page=12,
+        )
+        snippet = c.to_prompt_snippet()
+        # MUST NOT contain a Markdown image embed — that invites copy-paste
+        assert "![" not in snippet
+        assert "candidate figure" not in snippet.lower()
+        # MUST expose URL + caption as labelled fields
+        assert "/api/documents/images/doc-1/chart.png" in snippet
+        assert "BIP 2000-2024" in snippet
+        assert "0.87" in snippet
+
+
+class TestInjectionGuidance:
+    def test_injection_tells_writer_to_write_own_alt_text(self):
+        """Header must instruct the writer to write meaningful alt text
+        rather than copying backend labels."""
+        qs = [FigureQuery(description="Chinas BIP", source="placeholder")]
+        cand = FigureCandidate(
+            image_id="img-1",
+            doc_id="doc-1",
+            image_url="/api/documents/images/doc-1/chart.png",
+            alt_text="Some stored caption",
+            relevance=0.8,
+        )
+        for lang in ("de", "en"):
+            out = build_figure_injection(
+                qs, {"Chinas BIP": [cand]}, language_code=lang
+            )
+            assert "candidate figure" in out.lower(), (
+                "the injection must explicitly warn against copying "
+                "'candidate figure' as alt text"
+            )
+            # Must include the correct-format template
+            assert "![" in out and "](" in out
+
+
 class TestBuildFigureInjection:
     def _cands(self, alt_text: str = "Some chart"):
         return [
