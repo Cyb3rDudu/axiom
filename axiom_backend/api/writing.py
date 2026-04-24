@@ -1399,7 +1399,18 @@ async def process_writing_chat_in_background(
                     strip_references_block,
                     validate_citations,
                 )
+                from services.structured_bibliography import (
+                    record_citation_occurrences,
+                )
                 body_for_sync = strip_references_block(result.get("chat_response", ""))
+                registry_rows = (
+                    db.query(models.Reference)
+                    .filter(
+                        models.Reference.draft_id == draft.id,
+                        models.Reference.entry_key.isnot(None),
+                    )
+                    .all()
+                )
                 registry_dicts = [
                     {
                         "entry_key": r.entry_key,
@@ -1408,14 +1419,7 @@ async def process_writing_chat_in_background(
                         "publisher": r.publisher,
                         "container_title": r.container_title,
                     }
-                    for r in (
-                        db.query(models.Reference)
-                        .filter(
-                            models.Reference.draft_id == draft.id,
-                            models.Reference.entry_key.isnot(None),
-                        )
-                        .all()
-                    )
+                    for r in registry_rows
                 ]
                 sync_report = validate_citations(body_for_sync, registry_dicts)
                 if sync_report.has_warnings:
@@ -1426,6 +1430,26 @@ async def process_writing_chat_in_background(
                         len(sync_report.dead_entries),
                     )
                 sync_report_dict = sync_report.to_dict()
+
+                # #63: persist resolved markers into citation_entries so the
+                # portfolio adapter (and future live-sync UI) can read
+                # per-occurrence offsets without re-parsing the body. Only
+                # resolved markers persist; orphans stay diagnostics-only on
+                # the WebSocket payload.
+                ref_id_by_key = {r.entry_key: r.id for r in registry_rows if r.entry_key}
+                occurrences = []
+                for marker, entry_key in sync_report.resolved:
+                    ref_id = ref_id_by_key.get(entry_key)
+                    if ref_id is None:
+                        continue
+                    occurrences.append({
+                        "reference_id": ref_id,
+                        "in_text_marker": marker.marker,
+                        "paragraph_index": marker.paragraph_index,
+                        "char_offset_start": marker.char_offset_start,
+                        "char_offset_end": marker.char_offset_end,
+                    })
+                record_citation_occurrences(db, draft.id, occurrences)
             except Exception as exc:
                 logger.exception(
                     "Citation sync failed for task %s: %s", task_id, exc
