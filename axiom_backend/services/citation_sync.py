@@ -50,8 +50,16 @@ _APA_MARKER = re.compile(
 )
 
 # Numbered bracket citations. Covers `[1]`, `[12]`, and doc-id style
-# (`[f28769c8]`) but excludes `[Wortstand: 500]` scaffolding.
-_NUMBERED_MARKER = re.compile(r"\[([a-z0-9]{6,12}|\d{1,3})\]")
+# (`[f28769c8]`). Requires digit or hyphen in the bracket payload (#75)
+# so all-lowercase scaffolding tokens like `[wortstand]`, `[abschnitt]`,
+# `[todo]` don't get mis-identified as doc-id citations.
+_NUMBERED_MARKER = re.compile(
+    r"\[("
+    r"\d{1,3}"                           # plain numeric [1] / [42]
+    r"|[a-z0-9]*[0-9][a-z0-9]*"          # hex/slug containing at least one digit
+    r"|[a-z0-9]+-[a-z0-9]+"              # slug containing a hyphen
+    r")\]"
+)
 
 
 @dataclass(frozen=True)
@@ -175,10 +183,16 @@ class CitationSyncReport:
     dead_entries: List[str] = field(default_factory=list)  # entry_keys
     # marker → entry_key assignments (only where resolved)
     resolved: List[Tuple[ParsedMarker, str]] = field(default_factory=list)
+    # marker → list of candidate keys when >1 registry entry shares
+    # (family, year). APA allows 'Müller, 2024a' vs 'Müller, 2024b'
+    # suffixes to disambiguate, but today's parser strips them. Until
+    # that's fixed (separate follow-up), we surface the ambiguity
+    # rather than silently picking one entry.
+    ambiguous: List[Tuple[ParsedMarker, List[str]]] = field(default_factory=list)
 
     @property
     def has_warnings(self) -> bool:
-        return bool(self.orphan_markers or self.dead_entries)
+        return bool(self.orphan_markers or self.dead_entries or self.ambiguous)
 
     def to_dict(self) -> dict:
         return {
@@ -187,6 +201,11 @@ class CitationSyncReport:
             "dead_entry_count": len(self.dead_entries),
             "dead_entry_samples": self.dead_entries[:5],
             "resolved_count": len(self.resolved),
+            "ambiguous_count": len(self.ambiguous),
+            "ambiguous_samples": [
+                {"marker": m.marker, "candidates": keys}
+                for m, keys in self.ambiguous[:3]
+            ],
             "has_warnings": self.has_warnings,
         }
 
@@ -217,9 +236,13 @@ def validate_citations(
     # Build lookup indices. APA matches on (family, year). Numbered
     # bracket payload can match either a digit index (position in
     # registry; we build a 1-based index later) or an entry_key / doc_id.
-    by_family_year: dict[Tuple[str, Optional[int]], str] = {}
+    # #75: keep a LIST of candidate keys per (family, year) + family
+    # so duplicates surface as `ambiguous` diagnostics instead of
+    # resolving non-deterministically to whichever row was last
+    # iterated.
+    by_family_year: dict[Tuple[str, Optional[int]], List[str]] = {}
     by_entry_key: dict[str, str] = {}
-    by_family_only: dict[str, str] = {}
+    by_family_only: dict[str, List[str]] = {}
 
     for entry in entries:
         key = entry.get("entry_key") or ""
@@ -232,8 +255,8 @@ def validate_citations(
         except (TypeError, ValueError):
             year_int = None
         if family:
-            by_family_year[(family, year_int)] = key
-            by_family_only.setdefault(family, key)
+            by_family_year.setdefault((family, year_int), []).append(key)
+            by_family_only.setdefault(family, []).append(key)
         by_entry_key.setdefault(key, key)
 
     report = CitationSyncReport()
@@ -241,19 +264,24 @@ def validate_citations(
 
     for marker in markers:
         resolved_key: Optional[str] = None
+        ambiguous_candidates: List[str] = []
 
         if marker.mode == "apa" and marker.author_hint:
-            key = by_family_year.get((marker.author_hint, marker.year))
-            if key is None:
-                # Year mismatch is a softer failure — still surface as orphan
-                # but include a family-only fallback so a single-work author
-                # resolves rather than floating.
-                key = by_family_only.get(marker.author_hint)
-                if key is not None and marker.year is not None:
-                    # The family exists but the year is different — treat as
-                    # unresolved so the user gets the diagnostic.
-                    key = None
-            resolved_key = key
+            candidates = by_family_year.get((marker.author_hint, marker.year)) or []
+            if len(candidates) == 1:
+                resolved_key = candidates[0]
+            elif len(candidates) > 1:
+                ambiguous_candidates = candidates
+            else:
+                # No (family, year) match. Family-only fallback only fires
+                # when the marker carried no year (e.g. 'n.d.'), otherwise
+                # a year mismatch is a real orphan.
+                if marker.year is None:
+                    fam_candidates = by_family_only.get(marker.author_hint) or []
+                    if len(fam_candidates) == 1:
+                        resolved_key = fam_candidates[0]
+                    elif len(fam_candidates) > 1:
+                        ambiguous_candidates = fam_candidates
 
         elif marker.mode == "numbered" and marker.key_hint:
             payload = marker.key_hint
@@ -270,6 +298,14 @@ def validate_citations(
         if resolved_key:
             cited_keys.add(resolved_key)
             report.resolved.append((marker, resolved_key))
+        elif ambiguous_candidates:
+            # All candidate entries count as "cited" so they don't
+            # also surface as dead entries downstream — the user must
+            # disambiguate via year-suffix (2024a/b) or explicit
+            # entry_key to resolve.
+            for k in ambiguous_candidates:
+                cited_keys.add(k)
+            report.ambiguous.append((marker, ambiguous_candidates))
         else:
             report.orphan_markers.append(marker)
 

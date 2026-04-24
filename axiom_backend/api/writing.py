@@ -1857,17 +1857,26 @@ class MarkdownContent(BaseModel):
 
 
 def _strip_inline_section(markdown: str, heading_pattern: str) -> str:
-    """Remove an inline section starting at a ## heading that matches pattern.
+    """Remove an inline section starting at a `## heading_pattern` line.
 
-    Matches `\\n## <pattern>\\n` and drops from there to either the next
-    `\\n## ` (same-level heading) or end-of-document. Returns markdown
-    unchanged if no match. Used for both the Literaturverzeichnis and
-    Literaturportfolio strippers below.
+    Matches the heading line (level 2 only) and drops from there up to
+    but not including the next level-1 or level-2 heading — so deeper
+    sub-sections (`### …`) inside the target section get stripped along
+    with it, but sibling level-2 sections (e.g. `## Anhang`) survive.
+
+    #75 fix: the earlier implementation used `re.DOTALL` + `.*?` + a
+    lookahead that only checked for `## `, which meant a
+    `## Literaturverzeichnis` with `### Primärliteratur` / `### Sekundärliteratur`
+    sub-sections got fully swallowed — correct for THIS use case — but
+    followed by an unrelated `### Appendix` at the wrong level, the
+    stripper kept eating. The explicit `\\n(?=#{1,2}\\s)|\\Z` bound
+    below stops at the next level-1/level-2 heading.
     """
     import re as _re
 
     full = _re.compile(
-        rf"(?:^|\n)##\s+(?:{heading_pattern})\s*\n(.*?)(?=\n##\s+|\Z)",
+        rf"(?:^|\n)##\s+(?:{heading_pattern})\s*\n"
+        rf"(?:(?!\n#{{1,2}}\s).)*",
         flags=_re.DOTALL,
     )
     return full.sub("", markdown)
