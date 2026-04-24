@@ -1749,21 +1749,31 @@ class MarkdownContent(BaseModel):
     citation_profile_id: Optional[str] = None
 
 
-def _strip_inline_bibliography(markdown: str) -> str:
-    """Remove an inline ## Literaturverzeichnis / ## References section.
+def _strip_inline_section(markdown: str, heading_pattern: str) -> str:
+    """Remove an inline section starting at a ## heading that matches pattern.
 
-    Conservative: matches a level-2 heading that reads exactly
-    'Literaturverzeichnis' or 'References' (case-sensitive as the writer
-    emits it) and drops everything from there to end-of-document. Falls
-    back to returning markdown unchanged if no such heading is found.
+    Matches `\\n## <pattern>\\n` and drops from there to either the next
+    `\\n## ` (same-level heading) or end-of-document. Returns markdown
+    unchanged if no match. Used for both the Literaturverzeichnis and
+    Literaturportfolio strippers below.
     """
     import re as _re
 
-    pattern = _re.compile(
-        r"\n##\s+(?:Literaturverzeichnis|References)\s*\n.*$",
+    full = _re.compile(
+        rf"(?:^|\n)##\s+(?:{heading_pattern})\s*\n(.*?)(?=\n##\s+|\Z)",
         flags=_re.DOTALL,
     )
-    return pattern.sub("", markdown)
+    return full.sub("", markdown)
+
+
+def _strip_inline_bibliography(markdown: str) -> str:
+    """Remove inline ## Literaturverzeichnis / ## References section."""
+    return _strip_inline_section(markdown, "Literaturverzeichnis|References")
+
+
+def _strip_inline_portfolio(markdown: str) -> str:
+    """Remove inline ## Literaturportfolio / ## Literature Portfolio section (#67)."""
+    return _strip_inline_section(markdown, "Literaturportfolio|Literature Portfolio")
 
 
 def _maybe_append_structured_bibliography(
@@ -1831,6 +1841,48 @@ def _maybe_append_structured_bibliography(
     return f"{stripped}\n\n{rendered}"
 
 
+def _maybe_append_portfolio_section(
+    db: Session,
+    user: models.User,
+    draft_id: Optional[str],
+    markdown: str,
+) -> str:
+    """Append ## Literaturportfolio from drafts.portfolio_output (#67).
+
+    Runs after _maybe_append_structured_bibliography so the order in the
+    export is: body → Literaturverzeichnis → Literaturportfolio. Strips
+    any inline portfolio section first to avoid duplicates. No-op when
+    the column is null or the flag is off.
+    """
+    if not draft_id:
+        return markdown
+
+    from services.feature_flags import structured_bibliography_enabled
+
+    if not structured_bibliography_enabled(user.settings):
+        return markdown
+
+    draft = (
+        db.query(models.Draft)
+        .join(models.WritingSession, models.Draft.writing_session_id == models.WritingSession.id)
+        .join(models.Chat, models.WritingSession.chat_id == models.Chat.id)
+        .filter(models.Draft.id == draft_id, models.Chat.user_id == user.id)
+        .first()
+    )
+    if draft is None or not draft.portfolio_output:
+        return markdown
+
+    portfolio = draft.portfolio_output
+    if not isinstance(portfolio, dict):
+        return markdown
+    rendered = portfolio.get("markdown_table") or ""
+    if not rendered.strip():
+        return markdown
+
+    stripped = _strip_inline_portfolio(markdown).rstrip()
+    return f"{stripped}\n\n{rendered}\n"
+
+
 @router.post("/sessions/{session_id}/draft/docx")
 async def export_draft_as_docx(
     session_id: str,
@@ -1857,6 +1909,12 @@ async def export_draft_as_docx(
         draft_id=content.draft_id,
         markdown=content.markdown_content,
         profile_id_override=content.citation_profile_id,
+    )
+    markdown_to_render = _maybe_append_portfolio_section(
+        db=db,
+        user=current_user,
+        draft_id=content.draft_id,
+        markdown=markdown_to_render,
     )
 
     try:
