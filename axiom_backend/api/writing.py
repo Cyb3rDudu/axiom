@@ -875,6 +875,10 @@ async def create_structured_reference(
     current_user: models.User = Depends(get_current_user_from_cookie),
 ):
     """Create or update a structured reference entry."""
+    from services.feature_flags import structured_bibliography_enabled
+
+    if not structured_bibliography_enabled(current_user.settings):
+        raise HTTPException(status_code=404, detail="Structured bibliography is not enabled")
     service = StructuredBibliographyService(db)
 
     data = payload.dict()
@@ -910,6 +914,10 @@ async def update_structured_reference(
     current_user: models.User = Depends(get_current_user_from_cookie),
 ):
     """Replace a reference's structured fields. entry_key must match."""
+    from services.feature_flags import structured_bibliography_enabled
+
+    if not structured_bibliography_enabled(current_user.settings):
+        raise HTTPException(status_code=404, detail="Structured bibliography is not enabled")
     service = StructuredBibliographyService(db)
     existing = service.get_reference(reference_id, current_user.id)
     if existing.draft_id != draft_id:
@@ -1015,20 +1023,23 @@ async def generate_writing_portfolio(
         .first()
     )
 
+    # Atomic check-and-register: hold the lock across both the
+    # duplicate check and the task registration so two concurrent
+    # callers can't both see "no in-flight" and race the agent run.
+    # The same lock also coordinates the finalize endpoint — hold
+    # here, finalize acquires the same lock before running the manager.
+    task = asyncio.current_task()
     async with _portfolio_generation_lock:
         existing = _portfolio_generation_in_flight.get(draft_id)
         if existing is not None and not existing.done():
             raise HTTPException(status_code=409, detail="Portfolio generation already in flight for this draft")
+        _portfolio_generation_in_flight[draft_id] = task
 
     # Resolve the writing controller's model dispatcher — same one the
     # chat endpoint uses. Keeps generation consistent with the agent's
     # preferred routing.
     writing_controller = WritingController()
     manager = WritingPortfolioManager(writing_controller.model_dispatcher, db)
-
-    task = asyncio.current_task()
-    async with _portfolio_generation_lock:
-        _portfolio_generation_in_flight[draft_id] = task
 
     try:
         output = await manager.run_if_enabled(
@@ -1095,14 +1106,30 @@ async def finalize_writing_session(
     if draft.portfolio_output:
         return {"status": "already_generated", "portfolio_output": draft.portfolio_output}
 
+    # Coordinate with the generate endpoint's in-flight registry so a
+    # user who hammers both Generate and session-close doesn't trigger
+    # two agent runs. If generation is already in flight, report
+    # as-is — the other caller will write the column shortly.
+    task = asyncio.current_task()
+    async with _portfolio_generation_lock:
+        existing = _portfolio_generation_in_flight.get(draft.id)
+        if existing is not None and not existing.done():
+            return {"status": "already_generating"}
+        _portfolio_generation_in_flight[draft.id] = task
+
     writing_controller = WritingController()
     manager = WritingPortfolioManager(writing_controller.model_dispatcher, db)
-    output = await manager.run_if_enabled(
-        draft=draft,
-        writing_session=writing_session,
-        user=current_user,
-        trigger="session_close",
-    )
+    try:
+        output = await manager.run_if_enabled(
+            draft=draft,
+            writing_session=writing_session,
+            user=current_user,
+            trigger="session_close",
+        )
+    finally:
+        async with _portfolio_generation_lock:
+            if _portfolio_generation_in_flight.get(draft.id) is task:
+                _portfolio_generation_in_flight.pop(draft.id, None)
     if output is None:
         return {"status": "skipped"}
     return {"status": "generated", "portfolio_output": output.model_dump(mode="json")}
@@ -1115,6 +1142,10 @@ async def clear_writing_portfolio(
     current_user: models.User = Depends(get_current_user_from_cookie),
 ):
     """Null the portfolio_output column so the UI can force regeneration."""
+    from services.feature_flags import structured_bibliography_enabled
+
+    if not structured_bibliography_enabled(current_user.settings):
+        raise HTTPException(status_code=404, detail="Structured bibliography is not enabled")
     draft = (
         db.query(models.Draft)
         .join(models.WritingSession, models.Draft.writing_session_id == models.WritingSession.id)
@@ -1138,6 +1169,10 @@ async def delete_structured_reference(
     current_user: models.User = Depends(get_current_user_from_cookie),
 ):
     """Delete a reference. Cascades to any citation_entries rows."""
+    from services.feature_flags import structured_bibliography_enabled
+
+    if not structured_bibliography_enabled(current_user.settings):
+        raise HTTPException(status_code=404, detail="Structured bibliography is not enabled")
     service = StructuredBibliographyService(db)
     existing = service.get_reference(reference_id, current_user.id)
     if existing.draft_id != draft_id:
