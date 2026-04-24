@@ -957,6 +957,107 @@ async def migrate_bibliography_from_markdown(
     return preview.to_dict()
 
 
+# Writing-mode Portfolio generation (#61/#65). In-process registry so
+# concurrent "generate" clicks on the same draft return 409 instead of
+# racing to a duplicate agent call.
+_portfolio_generation_in_flight: Dict[str, asyncio.Task] = {}
+_portfolio_generation_lock = asyncio.Lock()
+
+
+@router.post("/drafts/{draft_id}/portfolio/generate")
+async def generate_writing_portfolio(
+    draft_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Run WritingPortfolioManager for a draft and return the PortfolioOutput.
+
+    Gated on the structured-bibliography flag and the per-session
+    portfolio opt-out. Concurrent generations on the same draft return
+    409. Errors propagate so the UI can badge failure.
+    """
+    from services.feature_flags import structured_bibliography_enabled
+    from ai_researcher.agentic_layer.controller.writing_portfolio_manager import (
+        WritingPortfolioManager,
+    )
+
+    if not structured_bibliography_enabled(current_user.settings):
+        raise HTTPException(status_code=404, detail="Structured bibliography is not enabled")
+
+    draft = (
+        db.query(models.Draft)
+        .join(models.WritingSession, models.Draft.writing_session_id == models.WritingSession.id)
+        .join(models.Chat, models.WritingSession.chat_id == models.Chat.id)
+        .filter(models.Draft.id == draft_id, models.Chat.user_id == current_user.id)
+        .first()
+    )
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found or access denied")
+
+    writing_session = (
+        db.query(models.WritingSession)
+        .filter(models.WritingSession.id == draft.writing_session_id)
+        .first()
+    )
+
+    async with _portfolio_generation_lock:
+        existing = _portfolio_generation_in_flight.get(draft_id)
+        if existing is not None and not existing.done():
+            raise HTTPException(status_code=409, detail="Portfolio generation already in flight for this draft")
+
+    # Resolve the writing controller's model dispatcher — same one the
+    # chat endpoint uses. Keeps generation consistent with the agent's
+    # preferred routing.
+    writing_controller = WritingController()
+    manager = WritingPortfolioManager(writing_controller.model_dispatcher, db)
+
+    task = asyncio.current_task()
+    async with _portfolio_generation_lock:
+        _portfolio_generation_in_flight[draft_id] = task
+
+    try:
+        output = await manager.run_if_enabled(
+            draft=draft,
+            writing_session=writing_session,
+            user=current_user,
+            trigger="manual",
+        )
+    finally:
+        async with _portfolio_generation_lock:
+            if _portfolio_generation_in_flight.get(draft_id) is task:
+                _portfolio_generation_in_flight.pop(draft_id, None)
+
+    if output is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Portfolio not generated — check flag, opt-out, or empty bibliography",
+        )
+
+    return output.model_dump(mode="json")
+
+
+@router.delete("/drafts/{draft_id}/portfolio")
+async def clear_writing_portfolio(
+    draft_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Null the portfolio_output column so the UI can force regeneration."""
+    draft = (
+        db.query(models.Draft)
+        .join(models.WritingSession, models.Draft.writing_session_id == models.WritingSession.id)
+        .join(models.Chat, models.WritingSession.chat_id == models.Chat.id)
+        .filter(models.Draft.id == draft_id, models.Chat.user_id == current_user.id)
+        .first()
+    )
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found or access denied")
+    draft.portfolio_output = None
+    draft.updated_at = datetime.utcnow()
+    db.commit()
+    return {"status": "cleared"}
+
+
 @router.delete("/drafts/{draft_id}/references/{reference_id}")
 async def delete_structured_reference(
     draft_id: str,
