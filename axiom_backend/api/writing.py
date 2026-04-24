@@ -489,17 +489,46 @@ async def get_current_draft(
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow()
         )
-        
+
         db.add(current_draft)
-        
+
         # Update writing session to point to this draft
         writing_session.current_draft_id = current_draft.id
         writing_session.updated_at = datetime.utcnow()
-        
+
         db.commit()
         db.refresh(current_draft)
-        
+
         logger.info(f"Created new blank draft {current_draft.id} for writing session {session_id}")
+
+        # Mission → writing handoff (#73): if the session was created
+        # from a finished research mission, project its citation graph
+        # + Literaturportfolio into this draft so the user doesn't have
+        # to click "Aus Markdown importieren" or wait for a writer
+        # turn to re-emit the references block.
+        session_settings = writing_session.settings if isinstance(writing_session.settings, dict) else {}
+        mission_source_id = session_settings.get("mission_source_id") if session_settings else None
+        if mission_source_id:
+            try:
+                from services.mission_to_writing_handoff import project_mission_into_draft
+                project_mission_into_draft(
+                    db,
+                    mission_id=mission_source_id,
+                    draft=current_draft,
+                    user_id=current_user.id,
+                )
+                # Clear the marker so re-fetches don't re-project
+                session_settings.pop("mission_source_id", None)
+                writing_session.settings = dict(session_settings)
+                db.commit()
+                db.refresh(current_draft)
+            except Exception as exc:
+                logger.warning(
+                    "Handoff projection failed for mission=%s draft=%s: %s",
+                    mission_source_id,
+                    current_draft.id,
+                    exc,
+                )
     
     # Get references for this draft
     references = db.query(models.Reference).filter(
@@ -1544,6 +1573,21 @@ async def process_writing_chat_in_background(
             status_callback=status_callback
         )
         
+        # Log the resolved flag state per session so we can spot flag-off
+        # users who still ended up with structured state (#74).
+        from services.writing_telemetry import (
+            log_flag_state,
+            record_bibliography_parse,
+            record_sync_report,
+        )
+        log_flag_state(
+            subsystem="writing_chat",
+            user_settings=user_settings,
+            draft_id=draft.id,
+            user_id=user_id,
+            session_id=session_id,
+        )
+
         # Structured bibliography ingest (#53): when the feature flag is
         # on and the writer emitted a content-block:references fence,
         # parse and replace the draft's structured registry atomically.
@@ -1558,7 +1602,13 @@ async def process_writing_chat_in_background(
                 from services.citation_rendering import render_entry
 
                 parse_result = parse_references_block(result.get("chat_response", ""))
-                if parse_result.block_found:
+                if not parse_result.block_found:
+                    record_bibliography_parse(
+                        result="no_block",
+                        draft_id=draft.id,
+                        user_id=user_id,
+                    )
+                else:
                     if parse_result.errors:
                         logger.warning(
                             "Structured references block malformed for task %s: %s",
@@ -1583,6 +1633,22 @@ async def process_writing_chat_in_background(
                             len(rendered_refs),
                             draft.id,
                             task_id,
+                        )
+                        record_bibliography_parse(
+                            result="parsed" if not parse_result.errors else "malformed",
+                            entries_count=len(parse_result.entries),
+                            errors_count=len(parse_result.errors),
+                            draft_id=draft.id,
+                            user_id=user_id,
+                        )
+                    else:
+                        # Block present but no usable entries
+                        record_bibliography_parse(
+                            result="malformed" if parse_result.errors else "empty_valid",
+                            entries_count=0,
+                            errors_count=len(parse_result.errors),
+                            draft_id=draft.id,
+                            user_id=user_id,
                         )
             except Exception as exc:
                 logger.exception(
@@ -1632,12 +1698,21 @@ async def process_writing_chat_in_background(
                 sync_report = validate_citations(body_for_sync, registry_dicts)
                 if sync_report.has_warnings:
                     logger.warning(
-                        "Citation sync warnings for task %s: orphans=%d dead=%d",
+                        "Citation sync warnings for task %s: orphans=%d dead=%d ambiguous=%d",
                         task_id,
                         len(sync_report.orphan_markers),
                         len(sync_report.dead_entries),
+                        len(sync_report.ambiguous),
                     )
                 sync_report_dict = sync_report.to_dict()
+                record_sync_report(
+                    resolved_count=len(sync_report.resolved),
+                    orphan_count=len(sync_report.orphan_markers),
+                    dead_count=len(sync_report.dead_entries),
+                    ambiguous_count=len(sync_report.ambiguous),
+                    draft_id=draft.id,
+                    user_id=user_id,
+                )
 
                 # #63: persist resolved markers into citation_entries so the
                 # portfolio adapter (and future live-sync UI) can read
@@ -1857,17 +1932,26 @@ class MarkdownContent(BaseModel):
 
 
 def _strip_inline_section(markdown: str, heading_pattern: str) -> str:
-    """Remove an inline section starting at a ## heading that matches pattern.
+    """Remove an inline section starting at a `## heading_pattern` line.
 
-    Matches `\\n## <pattern>\\n` and drops from there to either the next
-    `\\n## ` (same-level heading) or end-of-document. Returns markdown
-    unchanged if no match. Used for both the Literaturverzeichnis and
-    Literaturportfolio strippers below.
+    Matches the heading line (level 2 only) and drops from there up to
+    but not including the next level-1 or level-2 heading — so deeper
+    sub-sections (`### …`) inside the target section get stripped along
+    with it, but sibling level-2 sections (e.g. `## Anhang`) survive.
+
+    #75 fix: the earlier implementation used `re.DOTALL` + `.*?` + a
+    lookahead that only checked for `## `, which meant a
+    `## Literaturverzeichnis` with `### Primärliteratur` / `### Sekundärliteratur`
+    sub-sections got fully swallowed — correct for THIS use case — but
+    followed by an unrelated `### Appendix` at the wrong level, the
+    stripper kept eating. The explicit `\\n(?=#{1,2}\\s)|\\Z` bound
+    below stops at the next level-1/level-2 heading.
     """
     import re as _re
 
     full = _re.compile(
-        rf"(?:^|\n)##\s+(?:{heading_pattern})\s*\n(.*?)(?=\n##\s+|\Z)",
+        rf"(?:^|\n)##\s+(?:{heading_pattern})\s*\n"
+        rf"(?:(?!\n#{{1,2}}\s).)*",
         flags=_re.DOTALL,
     )
     return full.sub("", markdown)
@@ -2010,18 +2094,37 @@ async def export_draft_as_docx(
     if not writing_session:
         raise HTTPException(status_code=404, detail="Writing session not found or access denied")
 
+    original_markdown = content.markdown_content
     markdown_to_render = _maybe_append_structured_bibliography(
         db=db,
         user=current_user,
         draft_id=content.draft_id,
-        markdown=content.markdown_content,
+        markdown=original_markdown,
         profile_id_override=content.citation_profile_id,
     )
+    bib_source = (
+        "structured" if markdown_to_render is not original_markdown and markdown_to_render != original_markdown
+        else ("inline" if "## Literaturverzeichnis" in original_markdown or "## References" in original_markdown else "none")
+    )
+    post_bib_markdown = markdown_to_render
     markdown_to_render = _maybe_append_portfolio_section(
         db=db,
         user=current_user,
         draft_id=content.draft_id,
         markdown=markdown_to_render,
+    )
+    port_source = (
+        "structured" if markdown_to_render != post_bib_markdown
+        else ("inline" if "## Literaturportfolio" in original_markdown or "## Literature Portfolio" in original_markdown else "none")
+    )
+
+    from services.writing_telemetry import record_docx_export
+    record_docx_export(
+        bibliography_source=bib_source,  # type: ignore[arg-type]
+        portfolio_source=port_source,  # type: ignore[arg-type]
+        draft_id=content.draft_id,
+        user_id=current_user.id,
+        markdown_size=len(markdown_to_render),
     )
 
     try:

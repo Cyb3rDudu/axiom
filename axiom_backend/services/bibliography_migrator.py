@@ -212,8 +212,18 @@ def _parse_apa_line(body: str) -> Optional[MigratedEntry]:
             publisher_or_container = trailing.split(".", 1)[0].strip()
             publisher = publisher_or_container.strip("*") or None
     else:
-        # Fallback: split on ". " but forgiving around initials like "A. B."
-        segments = [s.strip() for s in re.split(r"(?<!\b[A-Z])\.\s+", without_url) if s.strip()]
+        # Fallback (#75): split on ". " but skip both (a) single
+        # uppercase initials like "A." and (b) multi-initial runs like
+        # "A. B." / "P. U.". The old lookbehind only covered case (a)
+        # and fragmented titles like "Müller, P. U. (2024). Title …"
+        # into ["…P. U", "Title …"]. We now pre-replace the initial
+        # runs with sentinel tokens, split, then restore.
+        protected = re.sub(
+            r"\b([A-Z])\.(?=\s)",
+            lambda m: f"{m.group(1)}\x00",
+            without_url,
+        )
+        segments = [s.replace("\x00", ".").strip() for s in re.split(r"\.\s+", protected) if s.strip()]
         if segments:
             title = segments[0].rstrip(".").strip(" *_")
         if len(segments) >= 2:
