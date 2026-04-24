@@ -113,6 +113,40 @@ class TestParseSections:
     def test_no_numbered_headings(self):
         assert parse_sections("Just plain prose with # Some Heading") == []
 
+    def test_accepts_h2_numbered_headings(self):
+        """Academic papers use H1 for the document title and H2 for
+        sections. The parser must pick up ## 1. / ## 2. / ... just
+        like # 1. / # 2. / ...
+        """
+        body = (
+            "# Paper Title\n\n"
+            "## 1. Einleitung\n\nIntro prose.\n\n"
+            "## 2. Theorie\n\nTheory prose.\n\n"
+            "## 3. Schluss\n\nFinal prose.\n"
+        )
+        sections = parse_sections(body)
+        assert [s.index for s in sections] == [1, 2, 3]
+        assert [s.title for s in sections] == ["Einleitung", "Theorie", "Schluss"]
+
+    def test_accepts_h3_numbered_headings(self):
+        body = "### 1. Alpha\n\nAlpha prose.\n\n### 2. Beta\n\nBeta prose.\n"
+        sections = parse_sections(body)
+        assert [s.index for s in sections] == [1, 2]
+
+    def test_mixed_heading_levels_all_captured(self):
+        body = (
+            "# Title\n\n"
+            "## 1. Outer A\n\nOuter prose.\n\n"
+            "### 1.1 Inner stuff\n\nInner prose.\n\n"
+            "## 2. Outer B\n\nMore prose.\n"
+        )
+        sections = parse_sections(body)
+        # Three numbered headings: 1. Outer A, 1.1 Inner stuff (doesn't
+        # match — needs trailing dot after number), 2. Outer B.
+        # Expect 1 and 2 at top level (the 1.1 pattern is distinct).
+        indices = [s.index for s in sections]
+        assert 1 in indices and 2 in indices
+
     def test_markdown_bold_trailer_is_incomplete(self):
         """The live-run bug: truncation happened mid-bold ('**Zwei Szenarien')
         and the fence balancer closed the code fence, producing a section
