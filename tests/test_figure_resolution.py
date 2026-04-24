@@ -92,11 +92,10 @@ class TestImageUrl:
 
 
 class TestCandidateSnippet:
-    def test_no_candidate_figure_label_leaks(self):
-        """Regression: to_prompt_snippet used to emit
-        '![candidate figure](url)' which the LLM copied verbatim as alt
-        text in the final draft. Snippet must now present URL+caption
-        as labelled fields the writer has to wrap themselves."""
+    def test_includes_real_url_in_markdown_scaffold(self):
+        """Writer needs the URL present as a copy-paste target. Prior
+        attempts that hid the URL inside labelled text led the writer
+        to invent its own paths."""
         c = FigureCandidate(
             image_id="img-1",
             doc_id="doc-1",
@@ -107,19 +106,20 @@ class TestCandidateSnippet:
             source_page=12,
         )
         snippet = c.to_prompt_snippet()
-        # MUST NOT contain a Markdown image embed — that invites copy-paste
-        assert "![" not in snippet
-        assert "candidate figure" not in snippet.lower()
-        # MUST expose URL + caption as labelled fields
         assert "/api/documents/images/doc-1/chart.png" in snippet
         assert "BIP 2000-2024" in snippet
-        assert "0.87" in snippet
+        # Uses scaffold with an EXPLICIT replace sigil the writer can't
+        # accidentally leave in place
+        assert "REPLACE" in snippet
+        # No backend-internal label as alt text
+        assert "candidate figure" not in snippet.lower()
 
 
 class TestInjectionGuidance:
-    def test_injection_tells_writer_to_write_own_alt_text(self):
-        """Header must instruct the writer to write meaningful alt text
-        rather than copying backend labels."""
+    def test_injection_warns_against_placeholder_leak(self):
+        """Header must explicitly tell writer not to leave scaffold
+        tokens (REPLACE-WITH / candidate figure / stored caption) as
+        alt text."""
         qs = [FigureQuery(description="Chinas BIP", source="placeholder")]
         cand = FigureCandidate(
             image_id="img-1",
@@ -132,12 +132,25 @@ class TestInjectionGuidance:
             out = build_figure_injection(
                 qs, {"Chinas BIP": [cand]}, language_code=lang
             )
-            assert "candidate figure" in out.lower(), (
-                "the injection must explicitly warn against copying "
-                "'candidate figure' as alt text"
-            )
-            # Must include the correct-format template
-            assert "![" in out and "](" in out
+            # Header must warn about the specific scaffold tokens
+            assert "REPLACE" in out
+            assert "candidate figure" in out.lower()
+            # Must NOT modify URL instruction
+            assert "url" in out.lower()
+
+    def test_injection_spells_out_copy_unchanged_rule(self):
+        """The 'do not fabricate paths' rule needs to be unmissable —
+        previous wording let the writer invent URLs anyway."""
+        qs = [FigureQuery(description="X", source="placeholder")]
+        cand = FigureCandidate(
+            image_id="i", doc_id="d",
+            image_url="/api/documents/images/d/x.png",
+            alt_text="c", relevance=0.8,
+        )
+        out_de = build_figure_injection(qs, {"X": [cand]}, language_code="de")
+        assert "unverändert" in out_de or "NICHT-ÄNDERN" in out_de
+        out_en = build_figure_injection(qs, {"X": [cand]}, language_code="en")
+        assert "unchanged" in out_en.lower() or "do not modify" in out_en.lower()
 
 
 class TestBuildFigureInjection:
@@ -159,7 +172,13 @@ class TestBuildFigureInjection:
         out = build_figure_injection(qs, {"Chinas BIP 2000-2024": self._cands()})
         assert "Chinas BIP 2000-2024" in out
         assert "/api/documents/images/doc-1/fig1.png" in out
-        assert "KOPIERE" in out or "COPY" in out
+        # Must tell the writer the URL is immutable
+        assert (
+            "unverändert" in out
+            or "NICHT-ÄNDERN" in out
+            or "do not modify" in out.lower()
+            or "unchanged" in out.lower()
+        )
 
     def test_no_candidates_builds_no_hit_hint(self):
         qs = [FigureQuery(description="Something", source="instruction")]
@@ -172,8 +191,10 @@ class TestBuildFigureInjection:
         out = build_figure_injection(
             qs, {"Market share": self._cands()}, language_code="en"
         )
-        assert "COPY" in out
-        assert "verbatim" in out
+        # English header must also enforce URL immutability
+        assert "unchanged" in out.lower() or "do not modify" in out.lower()
+        # And spell out the replace-alt-text rule
+        assert "REPLACE" in out
 
 
 class TestResolveFiguresEndToEnd:

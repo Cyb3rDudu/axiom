@@ -46,9 +46,14 @@ from typing import Any, Awaitable, Callable, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
-# The writer's prompt specifies a numbered `# N. Title` heading per
-# section. We use those as our cut-point landmarks.
-_SECTION_HEADING_RE = re.compile(r"^# (\d+)\.\s+([^\n]+)$", re.MULTILINE)
+# Numbered section headings at any Markdown level (H1-H4). The writer
+# chooses the level based on document style:
+#   # 1. Section   — flat report style
+#   ## 1. Section  — paper with H1 title + H2 sections (academic norm)
+#   ### 1. Section — chapter-with-sections
+# We accept all of them as cut-point landmarks; index ordering (1/2/3…)
+# is what the continuation logic cares about, not heading depth.
+_SECTION_HEADING_RE = re.compile(r"^#{1,4}\s+(\d+)\.\s+([^\n]+)$", re.MULTILINE)
 
 
 # Cheap token-based language detector — no ML dependency needed for the

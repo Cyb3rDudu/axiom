@@ -147,23 +147,29 @@ class FigureCandidate:
     def to_prompt_snippet(self) -> str:
         """Render the candidate as a prompt line the writer copies from.
 
-        We deliberately DO NOT pre-render a Markdown image tag with a
-        placeholder alt text — previous iterations used
-        `![candidate figure](...)` as the example, which the writer
-        then copied verbatim into the final draft, leaving every
-        figure with the alt "candidate figure". Instead we present the
-        URL as a labelled field the writer has to wrap into the
-        appropriate Markdown embed WITH a meaningful alt text drawn
-        from the surrounding prose / requested description.
+        Previous iterations failed two different ways:
+        - First: pre-rendered `![candidate figure](url)` → writer
+          copied verbatim, leaving every figure with alt="candidate
+          figure".
+        - Then: switched to labelled fields with "URL (copy verbatim)"
+          → writer invented its own paths instead of pasting the real
+          URL, producing invalid links the backend had to replace with
+          `about:blank#figure-not-resolved`.
+
+        Current approach: emit a FULLY-FORMED Markdown image tag with a
+        WRITER-REPLACES-THIS alt-text sigil. The writer is instructed
+        (in the injection header) to keep the URL and replace ONLY the
+        alt text between the square brackets. This gives the writer a
+        syntactic scaffold while still requiring a meaningful caption.
         """
         alt = (self.alt_text or "").strip() or "(no stored caption)"
         src = self.source_document_title or self.doc_id[:8]
         page = f", p. {self.source_page}" if self.source_page else ""
         return (
-            f"  URL (copy verbatim): {self.image_url}\n"
-            f"  stored caption: {alt}\n"
-            f"  source: {src}{page}\n"
-            f"  relevance: {self.relevance:.2f}"
+            f"  ![<REPLACE-WITH-GERMAN-CAPTION>]({self.image_url})\n"
+            f"  ↑ stored caption hint: {alt}\n"
+            f"  ↑ source: {src}{page}\n"
+            f"  ↑ relevance: {self.relevance:.2f}"
         )
 
 
@@ -297,28 +303,39 @@ def build_figure_injection(
 
     header = (
         "VERFÜGBARE ABBILDUNGEN AUS DEINEM DOKUMENT-KORPUS:\n"
-        "Wenn eine der folgenden Abbildungen zu einer geforderten Darstellung "
-        "passt, KOPIERE die URL verbatim in deine Markdown-Einbindung. "
-        "Erfinde KEINE Pfade.\n"
         "\n"
-        "WICHTIG beim Einbinden: Schreibe eine AUSSAGEKRÄFTIGE "
-        "Bildunterschrift (alt-Text) die zur Stelle im Text passt. "
-        "Verwende NICHT die Wörter 'candidate figure' oder 'stored "
-        "caption' als alt-Text — das sind Backend-Labels. Format:\n"
-        "  `![Abbildung N: <konkrete Beschreibung>](<URL-aus-der-Liste>)`\n"
-        "  `*Abbildung N: <Beschreibung>. Quelle: <Quelle>. Eigene Darstellung.*`\n"
+        "Jede Abbildung ist als fertige Markdown-Zeile vorgegeben mit\n"
+        "  ![<REPLACE-WITH-GERMAN-CAPTION>](<echte-URL-NICHT-ÄNDERN>)\n"
+        "\n"
+        "WAS DU TUST:\n"
+        "1. URL unverändert kopieren — Zeichen für Zeichen. KEINE Pfade "
+        "erfinden, KEINE Domänen ersetzen, KEINE placeholder-fig.png\n"
+        "2. Nur den alt-Text in den eckigen Klammern ersetzen durch eine "
+        "inhaltlich passende Beschreibung, Format 'Abbildung N: <was zu "
+        "sehen ist>'.\n"
+        "3. Danach eine Bildunterschriften-Zeile in Kursiv direkt drunter:\n"
+        "  `*Abbildung N: <Beschreibung>. Quelle: <Quellenangabe>. "
+        "Eigene Darstellung.*`\n"
+        "\n"
+        "NIEMALS: 'candidate figure', 'stored caption', 'REPLACE-WITH' "
+        "als alt-Text belassen — das sind Platzhalter.\n"
         if de
         else "AVAILABLE FIGURES FROM YOUR DOCUMENT CORPUS:\n"
-        "If one of the following figures matches a requested illustration, "
-        "COPY its URL verbatim into your Markdown embed. Do NOT fabricate "
-        "paths.\n"
         "\n"
-        "IMPORTANT when embedding: write a MEANINGFUL caption (alt text) "
-        "that fits the surrounding prose. Do NOT use the words 'candidate "
-        "figure' or 'stored caption' as alt text — those are backend "
-        "labels. Format:\n"
-        "  `![Figure N: <concrete description>](<url-from-list-above>)`\n"
-        "  `*Figure N: <description>. Source: <source>.*`\n"
+        "Each figure is pre-rendered as a ready-to-use Markdown line:\n"
+        "  ![<REPLACE-WITH-CAPTION>](<real-url-do-not-modify>)\n"
+        "\n"
+        "WHAT YOU DO:\n"
+        "1. Copy the URL unchanged — character for character. Do NOT "
+        "fabricate paths, do NOT substitute domains, do NOT use "
+        "placeholder-fig.png.\n"
+        "2. Replace ONLY the alt text between the square brackets with "
+        "a meaningful 'Figure N: <what it shows>' description.\n"
+        "3. Follow with an italic caption line:\n"
+        "  `*Figure N: <description>. Source: <citation>.*`\n"
+        "\n"
+        "NEVER leave 'candidate figure', 'stored caption', or "
+        "'REPLACE-WITH' as alt text — those are placeholder tokens.\n"
     )
     sections: List[str] = [header]
     for q in queries:
