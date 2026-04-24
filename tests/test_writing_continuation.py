@@ -17,6 +17,7 @@ import api as _api_primer  # noqa: F401, E402
 from services.writing_continuation import (  # noqa: E402
     build_continuation_prompt,
     detect_cut_point,
+    infer_language_code,
     parse_sections,
     stitch_continuation,
 )
@@ -112,6 +113,45 @@ class TestParseSections:
     def test_no_numbered_headings(self):
         assert parse_sections("Just plain prose with # Some Heading") == []
 
+    def test_markdown_bold_trailer_is_incomplete(self):
+        """The live-run bug: truncation happened mid-bold ('**Zwei Szenarien')
+        and the fence balancer closed the code fence, producing a section
+        ending on `**`. Previous detector accepted `**` as sentence
+        terminator → continuation skipped. Real terminator check must
+        strip markdown sigils first.
+        """
+        body = (
+            "# 1. Intro\n\nComplete sentence.\n\n"
+            "# 2. Body\n\nThis is fine.\n\n"
+            "# 3. Conclusion\n\nPartial thought **"
+        )
+        sections = parse_sections(body)
+        assert len(sections) == 3
+        assert sections[0].is_complete is True
+        assert sections[1].is_complete is True
+        assert sections[2].is_complete is False, (
+            "section ending on bare '**' must be incomplete"
+        )
+
+    @pytest.mark.parametrize(
+        "trailer,expected",
+        [
+            ("finishes cleanly.", True),
+            ("ends with an exclamation!", True),
+            ("rhetorical question?", True),
+            ("italic *emphasis*", False),  # stripped to "emphasis", no terminator
+            ("bold text**", False),
+            ("code `snippet`", False),
+            ("sentence ends with bracketed source (BPB, 2024).", True),
+            ("parenthetical without terminator (note)", False),
+            ("citation mid-thought ( Müller, 2020", False),
+        ],
+    )
+    def test_terminator_edge_cases(self, trailer, expected):
+        body = f"# 1. Test\n\nLead-in prose. {trailer}"
+        sections = parse_sections(body)
+        assert sections[0].is_complete is expected
+
 
 class TestDetectCutPoint:
     def test_complete_response_returns_none(self):
@@ -179,6 +219,53 @@ class TestBuildContinuationPrompt:
             self._cut(partial_tail="TAIL SENTINEL"), language_code="en"
         )
         assert "TAIL SENTINEL" in prompt
+
+
+class TestInferLanguageCode:
+    def test_german_document_classified_de(self):
+        text = (
+            "# 1. Einleitung\n\nDie Rolle Chinas in der Weltwirtschaft "
+            "zwischen Angebot und Nachfrage ist für die deutsche Wirtschaft "
+            "zentral, nicht zuletzt aufgrund der Abbildungen und Diagramme "
+            "aus den Quellen."
+        )
+        assert infer_language_code(text) == "de"
+
+    def test_english_document_classified_en(self):
+        text = (
+            "# 1. Introduction\n\nThe role of China in the world economy "
+            "is central for the German economy, between supply and demand, "
+            "with figures and diagrams drawn from the sources."
+        )
+        assert infer_language_code(text) == "en"
+
+    def test_scoped_to_document_block_ignoring_refs_json(self):
+        """The live-run bug: refs block JSON has English field names
+        (entry_key, reference_type, authors, title) that pollute a
+        German document's English-marker count."""
+        response = (
+            "```content-block:references\n"
+            '[\n'
+            '  {"entry_key": "x-2024", "title": "Some Title",\n'
+            '   "reference_type": "web", "url": "https://example.com",\n'
+            '   "authors": [{"family": "X", "given": "Y"}]},\n'
+            '  {"entry_key": "y-2024", "title": "Another Title",\n'
+            '   "reference_type": "document", "publisher": "Vahlen",\n'
+            '   "authors": [{"family": "Müller", "given": "P."}]}\n'
+            "]\n"
+            "```\n\n"
+            "```content-block:document\n"
+            "# 1. Einleitung\n\n"
+            "Die Rolle Chinas in der Weltwirtschaft zwischen Angebot und "
+            "Nachfrage ist für die deutsche Wirtschaft zentral aufgrund "
+            "der Abbildungen und Diagramme aus den Quellen.\n"
+            "```"
+        )
+        assert infer_language_code(response) == "de"
+
+    def test_empty_defaults_to_english(self):
+        assert infer_language_code("") == "en"
+        assert infer_language_code(None) == "en"
 
 
 class TestStitchContinuation:

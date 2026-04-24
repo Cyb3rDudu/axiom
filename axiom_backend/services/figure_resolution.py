@@ -145,12 +145,23 @@ class FigureCandidate:
     metadata: Dict[str, Any] = None  # type: ignore[assignment]
 
     def to_prompt_snippet(self) -> str:
-        alt = (self.alt_text or "").strip() or "(no caption)"
+        """Render the candidate as a prompt line the writer copies from.
+
+        We deliberately DO NOT pre-render a Markdown image tag with a
+        placeholder alt text — previous iterations used
+        `![candidate figure](...)` as the example, which the writer
+        then copied verbatim into the final draft, leaving every
+        figure with the alt "candidate figure". Instead we present the
+        URL as a labelled field the writer has to wrap into the
+        appropriate Markdown embed WITH a meaningful alt text drawn
+        from the surrounding prose / requested description.
+        """
+        alt = (self.alt_text or "").strip() or "(no stored caption)"
         src = self.source_document_title or self.doc_id[:8]
         page = f", p. {self.source_page}" if self.source_page else ""
         return (
-            f"![candidate figure]({self.image_url})\n"
-            f"  description: {alt}\n"
+            f"  URL (copy verbatim): {self.image_url}\n"
+            f"  stored caption: {alt}\n"
             f"  source: {src}{page}\n"
             f"  relevance: {self.relevance:.2f}"
         )
@@ -289,11 +300,25 @@ def build_figure_injection(
         "Wenn eine der folgenden Abbildungen zu einer geforderten Darstellung "
         "passt, KOPIERE die URL verbatim in deine Markdown-Einbindung. "
         "Erfinde KEINE Pfade.\n"
+        "\n"
+        "WICHTIG beim Einbinden: Schreibe eine AUSSAGEKRÄFTIGE "
+        "Bildunterschrift (alt-Text) die zur Stelle im Text passt. "
+        "Verwende NICHT die Wörter 'candidate figure' oder 'stored "
+        "caption' als alt-Text — das sind Backend-Labels. Format:\n"
+        "  `![Abbildung N: <konkrete Beschreibung>](<URL-aus-der-Liste>)`\n"
+        "  `*Abbildung N: <Beschreibung>. Quelle: <Quelle>. Eigene Darstellung.*`\n"
         if de
         else "AVAILABLE FIGURES FROM YOUR DOCUMENT CORPUS:\n"
         "If one of the following figures matches a requested illustration, "
         "COPY its URL verbatim into your Markdown embed. Do NOT fabricate "
         "paths.\n"
+        "\n"
+        "IMPORTANT when embedding: write a MEANINGFUL caption (alt text) "
+        "that fits the surrounding prose. Do NOT use the words 'candidate "
+        "figure' or 'stored caption' as alt text — those are backend "
+        "labels. Format:\n"
+        "  `![Figure N: <concrete description>](<url-from-list-above>)`\n"
+        "  `*Figure N: <description>. Source: <source>.*`\n"
     )
     sections: List[str] = [header]
     for q in queries:
