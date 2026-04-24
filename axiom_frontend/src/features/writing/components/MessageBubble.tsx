@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { MathMarkdown } from '../../../components/markdown/MathMarkdown'
-import { Copy, RotateCcw, Check, Bot, User, Trash2, FileDown, FilePlus, FileCheck } from 'lucide-react'
+import { Copy, RotateCcw, Check, Bot, User, Trash2, FileDown, FilePlus, FileCheck, BookMarked } from 'lucide-react'
 import { formatChatMessageTime } from '../../../utils/timezone'
 import { SourceBubbles } from './SourceBubbles'
 import type { Source } from '../api'
@@ -67,6 +67,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
       const body = (m[2] || '').trim()
       if (!body) continue
       if (blockType === 'code') continue
+      // #78 — references is a data payload for the backend, not
+      // draft content. Never include it in Apply-all-Blocks.
+      if (blockType === 'references') continue
       if (blockType === 'document' && documentBody === null) {
         documentBody = body
       } else if (blockType !== 'document') {
@@ -458,6 +461,41 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                         }}
                       />
                     </div>
+                  )
+                } else if (segment.blockType === 'references') {
+                  // #78 — the references block is a structured data payload
+                  // the backend parses into draft_references via
+                  // replace_draft_registry. Showing the raw JSON array in
+                  // the chat is visual noise; collapse to a summary pill
+                  // with a disclosure triangle for the rare case where
+                  // the user wants to eyeball what went in.
+                  let entryCount = 0
+                  try {
+                    const parsed = JSON.parse(segment.content)
+                    if (Array.isArray(parsed)) entryCount = parsed.length
+                  } catch {
+                    // Malformed JSON — still show the pill so user sees
+                    // something landed, but with a warning tone.
+                  }
+                  return (
+                    <details
+                      key={segment.id || index}
+                      className="my-3 rounded border border-border bg-muted/30"
+                    >
+                      <summary className="cursor-pointer list-none px-3 py-2 text-xs flex items-center gap-2 hover:bg-muted/60 rounded">
+                        <BookMarked className="h-3.5 w-3.5 text-primary" />
+                        <span className="font-medium">Bibliography updated</span>
+                        <span className="text-text-secondary">
+                          · {entryCount} {entryCount === 1 ? 'entry' : 'entries'} sent to registry
+                        </span>
+                        <span className="text-text-tertiary ml-auto text-xs">show JSON</span>
+                      </summary>
+                      <div className="px-3 pb-3">
+                        <pre className="bg-code-background text-code-foreground p-2 rounded overflow-x-auto text-xs font-mono whitespace-pre-wrap leading-relaxed">
+                          {segment.content}
+                        </pre>
+                      </div>
+                    </details>
                   )
                 } else {
                   // Render content block inline
