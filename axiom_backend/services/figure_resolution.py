@@ -188,6 +188,198 @@ def _image_url_from_path(doc_id: str, image_path: str) -> str:
     return f"/api/images/{doc_id}/{filename}"
 
 
+# ---------------------------------------------------------------------------
+# CLIP semantic search path
+# ---------------------------------------------------------------------------
+
+
+# Cosine threshold below which a CLIP candidate is dropped. CLIP
+# ViT-B/32 image-text similarities for genuine semantic matches sit in
+# 0.20-0.35; anything below ~0.20 is noise. 0.22 is the architect's
+# starting point — tune from telemetry, not from the spec.
+_CLIP_MIN_SIMILARITY = 0.22
+
+
+# Heuristic alt-text patterns we drop unconditionally. Logos, covers,
+# title pages, imprints — extracted by Marker from PDF prelims that
+# almost never carry analytical content. No word-boundary anchors:
+# German compounds like "Verlagslogo" / "Buchcover" must match.
+_ALT_TEXT_REJECT_RE = re.compile(
+    r"(?:logo|cover|titelblatt|impressum|copyright|frontispiz)",
+    re.IGNORECASE,
+)
+
+
+# Minimum image dimension (in pixels) we accept. Logos and decorative
+# bullets are usually <300px on at least one axis.
+_MIN_IMAGE_DIMENSION = 300
+
+
+def _is_likely_decorative(alt_text: Optional[str], metadata: Optional[dict]) -> bool:
+    """Heuristic pre-filter for the obvious-junk class.
+
+    Returns True if the candidate is almost certainly NOT useful for an
+    academic deliverable: alt_text matches the reject list, or the
+    image is too small on either axis. Applied AFTER cosine ordering
+    so we only drop candidates that the heuristic class catches, not
+    every unusual image.
+    """
+    if alt_text and _ALT_TEXT_REJECT_RE.search(alt_text):
+        return True
+    if isinstance(metadata, dict):
+        for k in ("width", "image_width"):
+            try:
+                w = int(metadata.get(k) or 0)
+            except (TypeError, ValueError):
+                w = 0
+            if w and w < _MIN_IMAGE_DIMENSION:
+                return True
+        for k in ("height", "image_height"):
+            try:
+                h = int(metadata.get(k) or 0)
+            except (TypeError, ValueError):
+                h = 0
+            if h and h < _MIN_IMAGE_DIMENSION:
+                return True
+    return False
+
+
+# Lazy module-level cache for the SentenceTransformer instance. The
+# CLIP model is ~150MB on disk and 2-4s to cold-load; we keep one
+# instance per process and reuse for every text-encode call.
+_clip_text_encoder = None
+
+
+def _get_clip_text_encoder():
+    """Return the shared SentenceTransformer used for query encoding.
+
+    CLIP ViT-B/32 lives in the same SentenceTransformer instance as the
+    one the indexer uses for image embedding (see
+    core_rag/vision_embedder.py). Reusing the existing class keeps us
+    on the same model + device config and avoids duplicate downloads.
+    """
+    global _clip_text_encoder
+    if _clip_text_encoder is None:
+        from ai_researcher.core_rag.vision_embedder import VisionEmbedder
+        _clip_text_encoder = VisionEmbedder()
+    return _clip_text_encoder
+
+
+def _load_candidates_clip(
+    db: Any,
+    queries: List[FigureQuery],
+    doc_ids: Iterable[str],
+    n_per_query: int = 3,
+) -> Dict[str, List[FigureCandidate]]:
+    """CLIP semantic-search candidate lookup.
+
+    For each non-empty description, encodes the description through
+    CLIP's text encoder, runs a cosine-similarity query against
+    pgvector image embeddings scoped to ``doc_ids``, applies the
+    heuristic pre-filter and the cosine threshold, and returns the
+    top-N survivors.
+
+    Failure modes (each returns ``[]`` for the offending query):
+    - Empty description (generic intent) — short-circuit.
+    - SentenceTransformer load error — propagate to the caller's
+      try/except so the keyword fallback can take over.
+    - All candidates below threshold — return [].
+    - All candidates filtered by heuristic — return [].
+
+    Logs structured per-query: (description, top-5 sims, accepted,
+    rejected_threshold, rejected_heuristic). The architect's tuning
+    workflow depends on this telemetry.
+    """
+    doc_ids_list = [d for d in doc_ids if d]
+    if not doc_ids_list:
+        return {q.description: [] for q in queries}
+
+    from ai_researcher.core_rag.pgvector_store import PGVectorStore
+
+    encoder = _get_clip_text_encoder()
+    store = PGVectorStore()
+
+    out: Dict[str, List[FigureCandidate]] = {}
+    for q in queries:
+        if not q.description.strip():
+            out[q.description] = []
+            continue
+
+        # CLIP's text encoder lives in the same SentenceTransformer
+        # instance as the image encoder (shared embedding space). We
+        # call .model.encode(text) — produces a 512-dim numpy array
+        # comparable to image embeddings via cosine similarity.
+        try:
+            text_vec = encoder.model.encode(
+                q.description, convert_to_numpy=True
+            )
+        except Exception as exc:
+            logger.warning(
+                "clip text-encode failed for description=%r: %s",
+                q.description[:80], exc,
+            )
+            out[q.description] = []
+            continue
+
+        # Cosine search against image_embedding column. Pull n*3
+        # candidates so heuristic + threshold filtering still leave
+        # us with n. doc_id scoping enforced by pgvector_store.
+        raw_results = store.query_multimodal(
+            query_image_embedding=text_vec,
+            n_results=n_per_query * 3,
+            text_weight=0.0,
+            image_weight=1.0,
+            doc_ids=doc_ids_list,
+        )
+
+        accepted: List[FigureCandidate] = []
+        rejected_threshold = 0
+        rejected_heuristic = 0
+        top_sims: List[float] = []
+        for r in raw_results:
+            if r.get("type") != "image":
+                continue
+            sim = float(r.get("similarity") or 0.0)
+            top_sims.append(sim)
+            if sim < _CLIP_MIN_SIMILARITY:
+                rejected_threshold += 1
+                continue
+            if _is_likely_decorative(r.get("alt_text"), r.get("metadata")):
+                rejected_heuristic += 1
+                continue
+
+            meta = r.get("metadata") if isinstance(r.get("metadata"), dict) else {}
+            page = meta.get("page") or meta.get("page_number")
+            accepted.append(
+                FigureCandidate(
+                    image_id=r.get("image_id") or "",
+                    doc_id=r.get("doc_id") or "",
+                    image_url=_image_url_from_path(
+                        r.get("doc_id") or "", r.get("image_path") or ""
+                    ),
+                    alt_text=r.get("alt_text"),
+                    relevance=sim,
+                    source_page=int(page) if isinstance(page, (int, str)) and str(page).isdigit() else None,
+                    metadata=meta,
+                )
+            )
+            if len(accepted) >= n_per_query:
+                break
+
+        logger.info(
+            "clip figure search: desc=%r top5_sims=%s accepted=%d "
+            "rejected_threshold=%d rejected_heuristic=%d",
+            q.description[:80],
+            [round(s, 3) for s in top_sims[:5]],
+            len(accepted),
+            rejected_threshold,
+            rejected_heuristic,
+        )
+        out[q.description] = accepted
+
+    return out
+
+
 def _load_candidates(
     db: Any,
     queries: List[FigureQuery],
@@ -367,6 +559,7 @@ def resolve_figures(
     doc_ids: Iterable[str],
     language_code: str = "de",
     max_candidates_per_query: int = 3,
+    use_clip: bool = False,
 ) -> Dict[str, Any]:
     """One-shot: intent detection + candidate lookup + prompt injection.
 
@@ -382,6 +575,13 @@ def resolve_figures(
     Safe on empty doc_ids (returns no-hit result), safe on DB errors
     (logs + returns empty result). Caller is expected to no-op when
     `intent_detected` is False.
+
+    When ``use_clip=True`` (gated on the writing.clip_figures.enabled
+    user flag), the candidate lookup uses CLIP semantic search via
+    pgvector cosine similarity instead of alt_text keyword matching.
+    Falls back to the keyword path on CLIP failure (model load error,
+    NULL embeddings, etc.) so a figure resolver outage never blocks the
+    writer.
     """
     queries = detect_figure_intent(prompt, draft_body)
     result: Dict[str, Any] = {
@@ -401,13 +601,34 @@ def resolve_figures(
         )
         return result
 
-    try:
-        candidates = _load_candidates(
-            db, queries, doc_ids_list, n_per_query=max_candidates_per_query
-        )
-    except Exception as exc:
-        logger.warning("figure candidate lookup failed: %s", exc, exc_info=True)
-        return result
+    candidates: Dict[str, List[FigureCandidate]] = {}
+    used_path = "keyword"
+    if use_clip:
+        try:
+            candidates = _load_candidates_clip(
+                db, queries, doc_ids_list, n_per_query=max_candidates_per_query
+            )
+            used_path = "clip"
+        except Exception as exc:
+            logger.warning(
+                "figure CLIP lookup failed, falling back to keyword: %s",
+                exc,
+                exc_info=True,
+            )
+            candidates = {}
+            used_path = "clip_failed"
+
+    if not candidates and used_path != "clip":
+        # Either CLIP path was off, or it errored — use the keyword path
+        # as a safety net. PR 4 will delete this branch once CLIP is
+        # default-on with backfill confirmed.
+        try:
+            candidates = _load_candidates(
+                db, queries, doc_ids_list, n_per_query=max_candidates_per_query
+            )
+        except Exception as exc:
+            logger.warning("figure candidate lookup failed: %s", exc, exc_info=True)
+            return result
 
     result["candidates_by_description"] = candidates
     valid_urls: set[str] = set()
@@ -415,6 +636,7 @@ def resolve_figures(
         for c in cands:
             valid_urls.add(c.image_url)
     result["valid_image_urls"] = valid_urls
+    result["resolver_path"] = used_path
 
     result["system_prompt_addendum"] = build_figure_injection(
         queries, candidates, language_code

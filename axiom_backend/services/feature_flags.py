@@ -141,6 +141,18 @@ def deliverable_planner_enabled(user_settings: Any) -> bool:
     return _completeness_flag(user_settings, "deliverable_planner")
 
 
+def clip_figures_enabled(user_settings: Any) -> bool:
+    """CLIP-based semantic figure search.
+
+    When on, the figure resolver replaces the alt_text keyword match
+    with a vector cosine-similarity query against pre-computed CLIP
+    image embeddings. Default off until embedding backfill is
+    confirmed for the user's document corpus (legacy rows have NULL
+    image_embedding which silently produces zero matches).
+    """
+    return _completeness_flag(user_settings, "clip_figures")
+
+
 def resolve_completeness_flags(user_settings: Any) -> dict:
     """One-shot resolver for structured telemetry / debug logs."""
     return {
@@ -150,4 +162,5 @@ def resolve_completeness_flags(user_settings: Any) -> dict:
         "transparent_continuation": transparent_continuation_enabled(user_settings),
         "rag_figures": rag_figures_enabled(user_settings),
         "deliverable_planner": deliverable_planner_enabled(user_settings),
+        "clip_figures": clip_figures_enabled(user_settings),
     }

@@ -319,3 +319,169 @@ class TestResolveFiguresEndToEnd:
         cb = result.get("candidates_by_description") or {}
         for desc, cands in cb.items():
             assert cands == [], f"unexpected candidates for {desc!r}: {cands}"
+
+
+class TestHeuristicPreFilter:
+    """Sanity checks for the CLIP-path heuristic filter that drops
+    obviously-decorative candidates. Logos, covers, tiny images."""
+
+    def test_logo_in_alt_text_dropped_with_compound_word(self):
+        from services.figure_resolution import _is_likely_decorative
+        # German compound — substring match required
+        assert _is_likely_decorative("Verlagslogo", None) is True
+        assert _is_likely_decorative("Logo of company X", None) is True
+        assert _is_likely_decorative("LOGO design", None) is True
+
+    def test_cover_in_alt_text_dropped(self):
+        from services.figure_resolution import _is_likely_decorative
+        assert _is_likely_decorative("Buchcover", None) is True
+        assert _is_likely_decorative("Cover image", None) is True
+
+    def test_titelblatt_dropped(self):
+        from services.figure_resolution import _is_likely_decorative
+        assert _is_likely_decorative("Titelblatt der Studie", None) is True
+
+    def test_legitimate_caption_not_dropped(self):
+        from services.figure_resolution import _is_likely_decorative
+        assert _is_likely_decorative(
+            "BIP-Wachstum Chinas 1980-2024", None
+        ) is False
+        assert _is_likely_decorative(
+            "Globale Wertschöpfungsketten — Übersicht",
+            {"width": 1200, "height": 800},
+        ) is False
+
+    def test_small_image_dropped_by_dimension(self):
+        from services.figure_resolution import _is_likely_decorative
+        assert _is_likely_decorative(
+            "Some chart", {"width": 200, "height": 200}
+        ) is True
+        assert _is_likely_decorative(
+            "Some chart", {"image_height": 100}
+        ) is True
+
+    def test_ok_dimensions_accepted(self):
+        from services.figure_resolution import _is_likely_decorative
+        assert _is_likely_decorative(
+            "Diagram", {"width": 800, "height": 600}
+        ) is False
+
+    def test_missing_metadata_not_a_failure(self):
+        from services.figure_resolution import _is_likely_decorative
+        # No metadata → only alt_text drives the decision
+        assert _is_likely_decorative("normal caption", None) is False
+        assert _is_likely_decorative("Logo des Verlags", None) is True
+
+
+class TestClipResolverFlag:
+    """Resolver flag dispatch — when use_clip=True, the CLIP path runs;
+    when False, the keyword path runs. CLIP errors fall back to keyword
+    so the writer never blocks on an embedder outage."""
+
+    def test_keyword_path_default_when_use_clip_false(self):
+        from services import figure_resolution as fr
+
+        called = {"clip": 0, "keyword": 0}
+        original_clip = fr._load_candidates_clip
+        original_kw = fr._load_candidates
+
+        def fake_clip(*a, **kw):
+            called["clip"] += 1
+            return {"x": []}
+
+        def fake_kw(*a, **kw):
+            called["keyword"] += 1
+            return {"x": []}
+
+        try:
+            fr._load_candidates_clip = fake_clip
+            fr._load_candidates = fake_kw
+            fr.resolve_figures(
+                None,
+                prompt="Add Figure 1: BIP-Wachstum von China.",
+                draft_body="",
+                doc_ids=["doc-1"],
+                use_clip=False,
+            )
+        finally:
+            fr._load_candidates_clip = original_clip
+            fr._load_candidates = original_kw
+
+        assert called["clip"] == 0
+        assert called["keyword"] == 1
+
+    def test_clip_path_selected_when_use_clip_true(self):
+        from services import figure_resolution as fr
+
+        called = {"clip": 0, "keyword": 0}
+        original_clip = fr._load_candidates_clip
+        original_kw = fr._load_candidates
+
+        def fake_clip(*a, **kw):
+            called["clip"] += 1
+            # Return a dict with one candidate so the keyword fallback
+            # branch (which fires when CLIP returns empty) doesn't run.
+            return {
+                "BIP-Wachstum von China": [
+                    fr.FigureCandidate(
+                        image_id="i", doc_id="doc-1",
+                        image_url="/api/images/doc-1/x.png",
+                        alt_text="BIP", relevance=0.42,
+                    )
+                ]
+            }
+
+        def fake_kw(*a, **kw):
+            called["keyword"] += 1
+            return {"x": []}
+
+        try:
+            fr._load_candidates_clip = fake_clip
+            fr._load_candidates = fake_kw
+            r = fr.resolve_figures(
+                None,
+                prompt="Add Figure 1: BIP-Wachstum von China.",
+                draft_body="",
+                doc_ids=["doc-1"],
+                use_clip=True,
+            )
+        finally:
+            fr._load_candidates_clip = original_clip
+            fr._load_candidates = original_kw
+
+        assert called["clip"] == 1
+        assert called["keyword"] == 0
+        assert r.get("resolver_path") == "clip"
+
+    def test_clip_failure_falls_back_to_keyword(self):
+        from services import figure_resolution as fr
+
+        called = {"clip": 0, "keyword": 0}
+        original_clip = fr._load_candidates_clip
+        original_kw = fr._load_candidates
+
+        def fake_clip(*a, **kw):
+            called["clip"] += 1
+            raise RuntimeError("CLIP encoder unavailable")
+
+        def fake_kw(*a, **kw):
+            called["keyword"] += 1
+            return {"x": []}
+
+        try:
+            fr._load_candidates_clip = fake_clip
+            fr._load_candidates = fake_kw
+            r = fr.resolve_figures(
+                None,
+                prompt="Add Figure 1: BIP-Wachstum von China.",
+                draft_body="",
+                doc_ids=["doc-1"],
+                use_clip=True,
+            )
+        finally:
+            fr._load_candidates_clip = original_clip
+            fr._load_candidates = original_kw
+
+        assert called["clip"] == 1
+        assert called["keyword"] == 1
+        assert r.get("resolver_path") == "clip_failed"

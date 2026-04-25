@@ -1621,6 +1621,7 @@ async def process_writing_chat_in_background(
         # when intent is absent or the library is empty.
         figure_resolution: Optional[Dict[str, Any]] = None
         try:
+            from services.feature_flags import clip_figures_enabled
             from services.figure_resolution import resolve_figures
             if flags.rag_figures:
                 figure_resolution = resolve_figures(
@@ -1629,6 +1630,7 @@ async def process_writing_chat_in_background(
                     draft_body=draft.content or "",
                     doc_ids=filter_doc_ids or [],
                     language_code=(user_settings or {}).get("language_code", "de"),
+                    use_clip=clip_figures_enabled(user_settings),
                 )
                 if figure_resolution and figure_resolution.get("system_prompt_addendum"):
                     existing = context_info.get("custom_system_prompt") or ""
@@ -1637,13 +1639,15 @@ async def process_writing_chat_in_background(
                         + figure_resolution["system_prompt_addendum"]
                     )
                     logger.info(
-                        "Writing figure resolver: intent=%s queries=%d candidates_total=%d",
+                        "Writing figure resolver: intent=%s queries=%d "
+                        "candidates_total=%d path=%s",
                         figure_resolution.get("intent_detected"),
                         len(figure_resolution.get("queries") or []),
                         sum(
                             len(v)
                             for v in (figure_resolution.get("candidates_by_description") or {}).values()
                         ),
+                        figure_resolution.get("resolver_path"),
                     )
         except Exception as exc:
             logger.warning(
