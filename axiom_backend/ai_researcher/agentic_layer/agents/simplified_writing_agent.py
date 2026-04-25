@@ -2310,30 +2310,12 @@ class SimplifiedWritingAgent:
             content = choice.message.content or ""
             finish_reason = getattr(choice, "finish_reason", None)
 
-            # Auto-continuation for max_tokens truncation. DeepSeek-chat caps
-            # at 8192 output tokens (~6k words); a full 3k-word report
-            # shrink still fits comfortably, but aggressive revision tasks
-            # on larger drafts can overshoot.
-            #
-            # Observation from live Hausarbeit runs: DeepSeek ignores
-            # the "resume where you stopped" instruction and instead
-            # RESTARTS the whole content-block:document from scratch,
-            # producing TWO full drafts concatenated in the response
-            # that Apply-all-Blocks then glues together. Corrupted
-            # output is worse than honest truncation.
-            #
-            # Default OFF. Set AXIOM_WRITING_MAX_CONTINUATIONS>0 only
-            # in environments where the model is known to honour the
-            # continuation contract. The writer prompt already puts
-            # the structured references block FIRST so if truncation
-            # hits, the prose tail is lost — still applicable — but
-            # the registry and DOCX export stay coherent.
-            # Transparent section-scoped continuation — replaces the
-            # naive auto-continue that was observed restarting entire
-            # content-block:document fences. Opt-in via feature flag;
-            # fallback to the legacy env-var toggle remains below for
-            # environments that want the old behaviour temporarily.
-            import os as _os
+            # Transparent section-scoped continuation. Triggers only on
+            # finish_reason=length AND when the user has opted in via
+            # the writing.transparent_continuation flag. The continuation
+            # helper handles tail-resume + section-coverage retries; this
+            # call site only owns the wiring (language code, expected
+            # section count, stats callback).
             from services.feature_flags import transparent_continuation_enabled
 
             transparent_on = transparent_continuation_enabled(
@@ -2341,6 +2323,7 @@ class SimplifiedWritingAgent:
             )
 
             if transparent_on and finish_reason == "length":
+                import os as _os
                 from services.writing_continuation import (
                     infer_language_code,
                     parse_sections,
@@ -2391,65 +2374,22 @@ class SimplifiedWritingAgent:
                     cont_tele.get("sections_missing_initially", 0),
                     cont_tele.get("sections_missing_final", 0),
                 )
-                # Reset finish_reason so the legacy truncation warning
-                # below doesn't double-append — the orchestrator handles
-                # its own warning when it runs out of budget.
-                finish_reason = "stop" if cont_tele.get("outcome") == "success" else finish_reason
+                if cont_tele.get("outcome") == "success":
+                    finish_reason = "stop"
 
-            else:
-                # Legacy path: naive auto-continue, off by default (see PR #83).
-                # Kept for environments that explicitly set
-                # AXIOM_WRITING_MAX_CONTINUATIONS>0 without opting into the
-                # transparent path.
-                max_cont = int(_os.getenv("AXIOM_WRITING_MAX_CONTINUATIONS", "0"))
-                cont_count = 0
-                while finish_reason == "length" and cont_count < max_cont and not transparent_on:
-                    cont_count += 1
-                    logger.info(
-                        f"simplified_writing response truncated (finish_reason=length), "
-                        f"auto-continuing ({cont_count}/{max_cont})"
-                    )
-                    cont_messages = list(messages) + [
-                        {"role": "assistant", "content": content},
-                        {
-                            "role": "user",
-                            "content": (
-                                "Your previous response was cut off at the token "
-                                "limit. Resume SEAMLESSLY from where you stopped "
-                                "(no repetition of what was already written, no "
-                                "re-introduction). If you were inside a content-"
-                                "block, write ONLY the missing tail and close it "
-                                "correctly with ```. If you were outside, "
-                                "continue normally."
-                            ),
-                        },
-                    ]
-                    cont_resp, cont_details = await self.model_dispatcher.dispatch(
-                        messages=cont_messages, agent_mode="simplified_writing"
-                    )
-                    if session_id and cont_details:
-                        await self.stats_tracker.track_llm_call(session_id, cont_details)
-                    if not (cont_resp and cont_resp.choices):
-                        break
-                    cont_choice = cont_resp.choices[0]
-                    cont_text = cont_choice.message.content or ""
-                    if not cont_text.strip():
-                        break
-                    content = content + ("" if content.endswith(("\n", " ")) else "") + cont_text
-                    finish_reason = getattr(cont_choice, "finish_reason", None)
-
-                if finish_reason == "length":
-                    logger.warning(
-                        "simplified_writing response truncated at token limit — "
-                        "transparent continuation disabled, surfacing warning"
-                    )
-                    content += (
-                        "\n\n> ⚠️ *The response was truncated at the token "
-                        "limit. The persisted references block is retained. "
-                        "For the remaining prose please split the task into "
-                        "smaller pieces — e.g. one section per prompt, or "
-                        "tighten the word budgets.*"
-                    )
+            if finish_reason == "length":
+                logger.warning(
+                    "simplified_writing response truncated at token limit — "
+                    "transparent continuation %s",
+                    "disabled" if not transparent_on else "exhausted retries",
+                )
+                content += (
+                    "\n\n> ⚠️ *The response was truncated at the token "
+                    "limit. The persisted references block is retained. "
+                    "For the remaining prose please split the task into "
+                    "smaller pieces — e.g. one section per prompt, or "
+                    "tighten the word budgets.*"
+                )
 
             # Defensive fence-balancer. The continuation prompt tells the
             # model to close content-blocks correctly, but if it forgets the
