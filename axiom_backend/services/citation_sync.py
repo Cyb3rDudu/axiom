@@ -23,9 +23,11 @@ post-response audit pipeline (#47) and the DB-sync path that writes
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Iterable, List, Mapping, Optional, Tuple
+
+from services.text_utils import normalise_family_name
+from services.writing_markdown import REFS_FENCE_RE
 
 
 # ---------------------------------------------------------------------------
@@ -84,13 +86,7 @@ def _norm_family(raw: str) -> str:
     Used for matching against structured entries whose ``authors[0].family``
     the writer already populated — keeps "Müller" == "mueller" etc.
     """
-    if not raw:
-        return ""
-    # Handle German umlauts first
-    t = raw.translate(str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss",
-                                     "Ä": "ae", "Ö": "oe", "Ü": "ue"}))
-    t = unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode("ascii")
-    return re.sub(r"[^a-z0-9]+", "", t.lower())
+    return normalise_family_name(raw)
 
 
 def _extract_author_head(author_str: str) -> str:
@@ -351,10 +347,7 @@ def validate_citations(
 # ---------------------------------------------------------------------------
 
 
-_REFERENCES_BLOCK = re.compile(
-    r"```content-block:references\s*\n.*?\n```",
-    re.DOTALL | re.IGNORECASE,
-)
+_REFERENCES_BLOCK = REFS_FENCE_RE
 
 
 def strip_references_block(content: str) -> str:

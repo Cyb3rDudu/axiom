@@ -22,7 +22,6 @@ draft-create path, depending on when `mission_source_id` is known.
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional
@@ -30,6 +29,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 from sqlalchemy.orm import Session
 
 from database import models
+from services.author_parser import parse_authors
 from services.structured_bibliography import (
     compute_source_fingerprint,
     slugify_entry_key,
@@ -44,47 +44,12 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_authors_string(raw: Any) -> List[Dict[str, str]]:
-    """Best-effort parse of the mission-side `authors` string field into
-    the [{family, given}] shape draft_references expects.
+    """Delegate to shared author parser for the {family, given} shape.
 
-    Mission-side `Note.source_metadata["authors"]` is typically a free
-    text string ('Müller, Peter; Schmidt, Anna' or 'Peter Müller and
-    Anna Schmidt'). We split on common separators and try to identify
-    family vs. given per entry.
+    Kept as a thin alias so the mission-handoff call site reads as a
+    semantic operation rather than a generic parser call.
     """
-    if not raw:
-        return []
-    if isinstance(raw, list):
-        # Already structured
-        out: List[Dict[str, str]] = []
-        for a in raw:
-            if isinstance(a, Mapping):
-                fam = (a.get("family") or "").strip()
-                giv = (a.get("given") or "").strip()
-                if fam:
-                    out.append({"family": fam, "given": giv})
-        return out
-
-    text = str(raw).strip()
-    if not text:
-        return []
-    # Split on ; or '; ' or ' and ' or ' & '
-    parts = re.split(r";\s*|\s+and\s+|\s+&\s+", text)
-    authors: List[Dict[str, str]] = []
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        if "," in part:
-            family, _, given = part.partition(",")
-            authors.append({"family": family.strip(), "given": given.strip()})
-        else:
-            tokens = part.split()
-            if len(tokens) >= 2:
-                authors.append({"family": tokens[-1], "given": " ".join(tokens[:-1])})
-            else:
-                authors.append({"family": part, "given": ""})
-    return authors
+    return parse_authors(raw)
 
 
 def _coerce_year(raw: Any) -> Optional[int]:

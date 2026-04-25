@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.author_parser import parse_authors
 from services.structured_bibliography import slugify_entry_key
 
 
@@ -136,21 +137,7 @@ def extract_bibliography_section(markdown: str) -> Optional[str]:
 def _parse_authors_apa_head(head: str) -> List[Dict[str, str]]:
     """APA author head: "Müller, P., & Schmidt, A." → [{family, given}, …]."""
     head = head.strip().rstrip(".").strip()
-    if not head:
-        return []
-    # Split on ", &" / " and " / ";"
-    normalised = re.sub(r"\s*&\s*|\s+and\s+|;\s*", "||", head)
-    chunks = [c.strip(" ,") for c in normalised.split("||") if c.strip(" ,")]
-
-    authors: List[Dict[str, str]] = []
-    for chunk in chunks:
-        if "," in chunk:
-            family, _, given = chunk.partition(",")
-            authors.append({"family": family.strip(), "given": given.strip()})
-        else:
-            # Institutional / single-token author
-            authors.append({"family": chunk, "given": ""})
-    return authors
+    return parse_authors(head)
 
 
 def _classify_reference_type(rest: str, url: Optional[str]) -> str:

@@ -23,12 +23,13 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.writing_markdown import REFS_FENCE_RE
+
 logger = logging.getLogger(__name__)
 
 
-_REFERENCES_FENCE_RE = re.compile(
-    r"```content-block:references\s*\n(.*?)\n```", re.DOTALL | re.IGNORECASE
-)
+# Re-export so existing tests that import `_REFERENCES_FENCE_RE` keep working.
+_REFERENCES_FENCE_RE = REFS_FENCE_RE
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,16 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+from services.writing_i18n import t
+from services.writing_markdown import (
+    DOC_FENCE_RE,
+    SECTION_HEADING_RE,
+    WORDCOUNT_BLOCK_RE,
+    WORDCOUNT_TRAILER_RE,
+    extract_document_body,
+    parse_declared_wordcount,
+)
+
 
 # Matches a URL wrapped in parentheses. Citation-like usage only —
 # markdown hyperlinks are also parens-wrapped but always follow a
@@ -38,22 +48,11 @@ from typing import List, Optional, Tuple
 # across the board (APA, KMU APA 7, Harvard, etc.).
 _URL_IN_PARENS = re.compile(r"(?<!\])\(https?://[^)\s]{1,400}\)")
 
-# Match the declared total from a word-count trailer, tolerant of the
-# Markdown-formatted variants the writer emits in either language:
-#   Wortbilanz: 2910 insgesamt
-#   **Wortbilanz: 2.910 Wörter**
-#   Wortbilanz (exkl. Titelblatt und Literaturverzeichnis): **2.910 Wörter**
-#   Word count: 2910
-#   **Word count (excl. title page and bibliography): 2,910 words**
-#   Total: 2910 words
-# Picks the first number after the colon.
-_WORDCOUNT_TRAILER = re.compile(
-    r"(?:Wortbilanz|Word\s*count|Total)"
-    r"(?:\s*\([^\)]*\))?\s*[:]\s*\**\s*([\d\.\s,]+)",
-    re.IGNORECASE,
-)
-# Back-compat alias — external callers used the old name.
-_WORTBILANZ = _WORDCOUNT_TRAILER
+# Word-count trailer patterns consolidated in writing_markdown. Re-exported
+# here as module-level names so external callers that import _WORTBILANZ
+# from this module keep working.
+_WORDCOUNT_TRAILER = WORDCOUNT_TRAILER_RE
+_WORTBILANZ = WORDCOUNT_TRAILER_RE
 
 
 @dataclass
@@ -90,19 +89,9 @@ class AuditResult:
 
 
 def _parse_declared_wordcount(content: str) -> Optional[int]:
-    match = _WORTBILANZ.search(content)
-    if not match:
-        return None
-    raw = match.group(1)
-    # Handle "2.910", "2,910", "2 910" — the writer's been observed to
-    # use all three separators.
-    digits = re.sub(r"[^\d]", "", raw)
-    if not digits:
-        return None
-    try:
-        return int(digits)
-    except ValueError:
-        return None
+    """Thin alias around the shared writing_markdown helper, kept here
+    for backwards compatibility with tests that import this symbol."""
+    return parse_declared_wordcount(content)
 
 
 def _count_words_outside_fences(content: str) -> int:
@@ -172,31 +161,24 @@ def audit_writing_response(content: str) -> AuditResult:
 # ---------------------------------------------------------------------------
 
 
-# Match the full word-count trailer block: header line + optional
-# breakdown continuations. A breakdown line looks like one of:
-#   - 1. Introduction: 410
-#   - Einleitung (410)
-#   - Introduction: 410 words
-# Matches Wortbilanz / Word count / Total headers; stops at a blank
-# line, a Markdown heading (`#`), or a code fence.
-_WORTBILANZ_BLOCK = re.compile(
-    r"(?P<prefix>^\s*(?:\*\*)?)"
-    r"(?P<full>(?:Wortbilanz|Word\s*count|Total)"
-    r"(?:\s*\([^\)]*\))?\s*[:]\s*[^\n]*"
-    r"(?:\n(?:[ \t]*[-•*·][^\n]*|[^\n#`\n]*\([\d\.]+\)[^\n]*))*"
-    r")",
-    re.MULTILINE | re.IGNORECASE,
-)
+# Re-export the shared block matcher.
+_WORTBILANZ_BLOCK = WORDCOUNT_BLOCK_RE
 
 
-# Match a document section starting at a level-1 heading. Captures header + body.
-_DOC_SECTION_SPLIT = re.compile(r"(?=^# \d+\.)", re.MULTILINE)
+# Section splitter now accepts H1-H4 (matches writing_markdown's
+# SECTION_HEADING_RE). A split point is the start of a numbered heading
+# line regardless of depth — this is what lets the Wortbilanz recompute
+# see sections in academic papers that use H2 for sections + H1 only
+# for the document title.
+_DOC_SECTION_SPLIT = re.compile(r"(?=^#{1,4}\s+\d+\.)", re.MULTILINE)
 
 
 def _extract_document_block(content: str) -> Optional[str]:
-    """Return the body of the first content-block:document fence, or None."""
-    m = re.search(r"```content-block:document\s*\n(.*?)\n```", content or "", re.DOTALL)
-    return m.group(1) if m else None
+    """Return the body of the first content-block:document fence, or None.
+
+    Alias for `writing_markdown.extract_document_body`; kept for tests.
+    """
+    return extract_document_body(content)
 
 
 def _strip_for_wordcount(text: str) -> str:
@@ -258,30 +240,11 @@ def _format_wortbilanz(
     sections: List[Tuple[str, int]],
     language_code: str = "en",
 ) -> str:
-    """Render the word-count trailer in the active language.
-
-    Example (de):
-        **Wortbilanz (exkl. Titelblatt und Literaturverzeichnis): 2.910 Wörter**
-        - 1. Einleitung: 410
-        ...
-    Example (en):
-        **Word count (excl. title page and bibliography): 2,910 words**
-        - 1. Introduction: 410
-        ...
-    """
+    """Render the word-count trailer in the active language."""
     de = (language_code or "en").lower().startswith("de")
-    if de:
-        total_str = f"{total:,}".replace(",", ".")
-        header = (
-            f"**Wortbilanz (exkl. Titelblatt und Literaturverzeichnis): "
-            f"{total_str} Wörter**"
-        )
-    else:
-        total_str = f"{total:,}"
-        header = (
-            f"**Word count (excl. title page and bibliography): "
-            f"{total_str} words**"
-        )
+    # German convention: 2.910 (dot as thousands separator)
+    total_str = f"{total:,}".replace(",", ".") if de else f"{total:,}"
+    header = t("wordcount.trailer_header", language_code, total=total_str)
     lines = [header]
     for title, words in sections:
         if title == "preamble":
