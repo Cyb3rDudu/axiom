@@ -2374,9 +2374,35 @@ class SimplifiedWritingAgent:
                     cont_tele.get("sections_missing_initially", 0),
                     cont_tele.get("sections_missing_final", 0),
                 )
-                if cont_tele.get("outcome") == "success":
+                # Outcomes that mean "the helper decided no continuation
+                # was needed or it succeeded": trust the helper, do not
+                # double-flag truncation. Only paper over with a warning
+                # when continuation actually FAILED (dispatch_error,
+                # empty_response, still_truncated after retries).
+                outcome = cont_tele.get("outcome")
+                if outcome in ("success", "not_needed"):
                     finish_reason = "stop"
 
+            # Defensive fence-balancer. The continuation prompt tells the
+            # model to close content-blocks correctly, but if it forgets the
+            # frontend regex (`/```content-block:\w+\s*\n...\n```/g`) won't
+            # match an unclosed block and the whole block renders as plain
+            # text — so we count opening/closing ``` fences and append any
+            # missing closers. Safe because Markdown ignores trailing ```.
+            # Runs BEFORE any truncation warning so the warning never lands
+            # inside a still-open content-block fence.
+            if content.count("```") % 2 == 1:
+                logger.info(
+                    "simplified_writing: detected unbalanced ``` fences in "
+                    "merged response, auto-closing"
+                )
+                content = content.rstrip() + "\n```"
+
+            # Truncation warning lands AFTER the fence-balancer so it
+            # never ends up inside a still-open content-block fence.
+            # Only fires when transparent continuation actually exhausted
+            # retries — `outcome=not_needed` means the helper deliberately
+            # decided no continuation was warranted, so we trust it.
             if finish_reason == "length":
                 logger.warning(
                     "simplified_writing response truncated at token limit — "
@@ -2390,19 +2416,6 @@ class SimplifiedWritingAgent:
                     "smaller pieces — e.g. one section per prompt, or "
                     "tighten the word budgets.*"
                 )
-
-            # Defensive fence-balancer. The continuation prompt tells the
-            # model to close content-blocks correctly, but if it forgets the
-            # frontend regex (`/```content-block:\w+\s*\n...\n```/g`) won't
-            # match an unclosed block and the whole block renders as plain
-            # text — so we count opening/closing ``` fences and append any
-            # missing closers. Safe because Markdown ignores trailing ```.
-            if content.count("```") % 2 == 1:
-                logger.info(
-                    "simplified_writing: detected unbalanced ``` fences in "
-                    "merged response, auto-closing"
-                )
-                content = content.rstrip() + "\n```"
 
             return content
             
