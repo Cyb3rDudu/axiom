@@ -296,7 +296,7 @@ class TestDetectCutPointUnderBudget:
         assert cut["underbudget_section"].index == 2
 
     def test_last_section_underrun_triggers(self):
-        # Section 1 fine (400), section 2 well below 0.6 of 800 (=200)
+        # Section 1 fine (400), section 2 well below 0.7 of 800 (=560)
         content = _build_complete_doc([400, 100])
         cut = detect_cut_point(
             content, expected_sections=2,
@@ -561,6 +561,28 @@ class TestWorstShortfallSelection:
         assert cut is not None
         assert cut["underbudget_section"].index == 2
         assert cut["is_last_section"] is True
+
+    def test_section_at_62_percent_of_target_triggers(self):
+        # Regression: 2026-04-25 live run, section 3 at 496/800 = 62%.
+        # With section-ratio 0.6 (old threshold) it escaped the trigger and
+        # the run landed at 83%. With 0.7 it now triggers correctly.
+        content = _build_complete_doc([400, 600, 496, 800, 400])
+        cut = detect_cut_point(
+            content, expected_sections=5,
+            section_budgets={1: 400, 2: 600, 3: 800, 4: 800, 5: 400},
+        )
+        assert cut is not None
+        assert cut["underbudget_section"].index == 3
+        assert cut["is_last_section"] is False
+
+    def test_section_at_75_percent_of_target_does_not_trigger(self):
+        # Boundary: 0.75 > 0.7 threshold → no trigger
+        content = _build_complete_doc([400, 600, 600, 800, 400])
+        cut = detect_cut_point(
+            content, expected_sections=5,
+            section_budgets={1: 400, 2: 600, 3: 800, 4: 800, 5: 400},
+        )
+        assert cut is None
 
 
 # ---------------------------------------------------------------------------

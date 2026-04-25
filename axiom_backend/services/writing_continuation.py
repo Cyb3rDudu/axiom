@@ -192,8 +192,16 @@ def parse_sections(document_body: str) -> List[SectionInfo]:
 #       target >= _MIN_SECTION_BUDGET_FOR_TRIGGER → underbudget
 # The per-section minimum-target guard prevents triggering on tiny sections
 # (e.g. 100-word intros where a 35-word shortfall is noise).
+#
+# Section-ratio history:
+#   0.6 — initial setting per architect review
+#   0.7 — bumped 2026-04-25 after live data: a section at 62% of target
+#   (496/800) just narrowly escaped the trigger and the run landed at
+#   83% on-budget. Tightening to 0.7 forces per-section expansion at
+#   that level so the worst-shortfall picker can route mid-body
+#   splices to it instead of falling back to total-budget tail-append.
 _UNDER_BUDGET_TOTAL_RATIO = 0.85
-_UNDER_BUDGET_SECTION_RATIO = 0.6
+_UNDER_BUDGET_SECTION_RATIO = 0.7
 _MIN_SECTION_BUDGET_FOR_TRIGGER = 200
 
 
