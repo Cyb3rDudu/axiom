@@ -276,23 +276,42 @@ def detect_cut_point(
         and total_actual < total_target_min * _UNDER_BUDGET_TOTAL_RATIO
     )
 
-    # Pick the last section (highest index) when underbudget. Stitching
-    # only supports tail-append; mid-body expansion of section 2 of 5 would
-    # require splicing before section 3's heading and is left for future
-    # work. The last-section restriction is intentional and conservative.
-    last_section = sections[-1] if sections else None
-    last_target: Optional[int] = None
-    last_under = False
-    if section_budgets and last_section is not None:
-        last_target = section_budgets.get(last_section.index)
-        if (
-            last_target is not None
-            and last_target >= _MIN_SECTION_BUDGET_FOR_TRIGGER
-            and last_section.words < last_target * _UNDER_BUDGET_SECTION_RATIO
-        ):
-            last_under = True
+    # Pick the WORST under-budget section by absolute shortfall (largest
+    # target-actual delta). Ties go to the lowest index so multi-pass
+    # continuations land predictably. Mid-body splicing is supported
+    # (see stitch_continuation) so any section is fair game; we only
+    # exclude the trailing-section special case is no longer needed.
+    underbudget_section: Optional[SectionInfo] = None
+    underbudget_target: Optional[int] = None
+    underbudget_shortfall = 0
+    if section_budgets:
+        for s in sections:
+            target = section_budgets.get(s.index)
+            if target is None or target < _MIN_SECTION_BUDGET_FOR_TRIGGER:
+                continue
+            if s.words >= target * _UNDER_BUDGET_SECTION_RATIO:
+                continue
+            shortfall = target - s.words
+            if (
+                underbudget_section is None
+                or shortfall > underbudget_shortfall
+                or (shortfall == underbudget_shortfall and s.index < underbudget_section.index)
+            ):
+                underbudget_section = s
+                underbudget_target = target
+                underbudget_shortfall = shortfall
 
-    if not (total_underrun or last_under):
+    # Total-budget underrun without per-section data still needs an
+    # expansion target — fall back to the last section.
+    if total_underrun and underbudget_section is None and sections:
+        underbudget_section = sections[-1]
+        underbudget_target = (
+            section_budgets.get(underbudget_section.index)
+            if section_budgets
+            else None
+        )
+
+    if not (total_underrun or underbudget_section is not None):
         return None
 
     return {
@@ -302,10 +321,17 @@ def detect_cut_point(
         "missing_section_indices": [],
         "partial_tail": body[-400:],
         "expected_sections": expected_sections,
-        "underbudget_section": last_section,
-        "underbudget_target": last_target,
+        "underbudget_section": underbudget_section,
+        "underbudget_target": underbudget_target,
         "total_actual": total_actual,
         "total_target_min": total_target_min,
+        # True when the target section is the last one — stitching can
+        # tail-append. False → mid-body splice required.
+        "is_last_section": (
+            underbudget_section is not None
+            and sections
+            and underbudget_section.index == sections[-1].index
+        ),
     }
 
 
@@ -426,7 +452,7 @@ def build_continuation_prompt(
 
 
 def _build_underbudget_prompt(cut: dict, language_code: str) -> str:
-    """User prompt for an in-place expansion of the last numbered section.
+    """User prompt for an in-place expansion of an under-budget section.
 
     Distinct from the truncation prompt: the section IS structurally
     complete (it ended on a sentence terminator), it's just thinner than
@@ -434,6 +460,11 @@ def _build_underbudget_prompt(cut: dict, language_code: str) -> str:
     analysis with concrete examples / counter-arguments rather than to
     pad with filler. Naming the rhetorical purpose is the architect's
     recommendation — see review for context.
+
+    Two flavours:
+    - target is the LAST numbered section → tail-extend
+    - target is a non-last section → mid-body splice; the prompt warns
+      against bleeding into the next section's topic
     """
     section = cut.get("underbudget_section")
     target = cut.get("underbudget_target")
@@ -442,23 +473,34 @@ def _build_underbudget_prompt(cut: dict, language_code: str) -> str:
     idx = section.index if section is not None else 0
     delta = max(0, (target or 0) - actual)
     tail = cut.get("partial_tail") or ""
+    is_last = bool(cut.get("is_last_section"))
 
     de = (language_code or "en").lower().startswith("de")
 
     if de:
+        position_clause = (
+            "Deine Erweiterung wird AM ENDE dieser letzten Sektion "
+            "angefügt."
+            if is_last
+            else f"Deine Erweiterung wird MITTEN IM Body eingefügt — direkt "
+            f"VOR der Überschrift von Abschnitt {idx + 1}. Bleibe daher "
+            f"thematisch streng innerhalb von Abschnitt {idx} und greife "
+            f"NICHT auf Inhalte vor, die zu Abschnitt {idx + 1} gehören."
+        )
         return (
             "Deine vorherige Antwort ist strukturell vollständig, aber "
             f"Abschnitt {idx} ('{title}') liegt deutlich unter dem "
             f"Wortbudget des Planners ({actual} Wörter, Ziel ~{target}, "
             f"Differenz ~{delta} Wörter).\n\n"
-            f"Letzte 400 Zeichen des Body (Anker, damit du im Stil und "
-            "Argumentationsfaden bleibst):\n"
+            f"Letzte 400 Zeichen des Body (Anker für Stil und "
+            "Argumentation):\n"
             f"```\n{tail}\n```\n\n"
             f"AUFGABE: Erweitere Abschnitt {idx} um ca. {delta} Wörter "
             "AN ORT UND STELLE — vertiefe die Analyse mit konkreten "
             "Beispielen, Gegenargumenten oder zusätzlichen Belegen aus "
             "dem mitgegebenen Literaturportfolio. KEINE Wiederholungen, "
             "KEINE Auflistungen, KEINE Floskeln.\n\n"
+            f"{position_clause}\n\n"
             "WICHTIG:\n"
             "- Emit KEINE neue Überschrift — die Sektion existiert "
             "bereits.\n"
@@ -466,7 +508,7 @@ def _build_underbudget_prompt(cut: dict, language_code: str) -> str:
             "- Emit KEINEN content-block:references-Block (bleibt "
             "unverändert).\n"
             "- Schreibe NUR den zusätzlichen Prosa-Text, der nahtlos "
-            "an das bestehende Sektions-Ende anschließt.\n"
+            f"in Abschnitt {idx} passt.\n"
             "- KEINE Wortbilanz/Wordcount-Zeile am Ende — der Backend "
             "rechnet die deterministisch aus.\n"
             "- Setze gegebenenfalls neue (Autor, Jahr, S. XX)-Zitate, "
@@ -474,24 +516,32 @@ def _build_underbudget_prompt(cut: dict, language_code: str) -> str:
             "ohnehin gelistet werden müssen."
         )
 
+    position_clause = (
+        "Your expansion will be appended to the END of this final section."
+        if is_last
+        else f"Your expansion will be spliced MID-BODY — directly BEFORE "
+        f"section {idx + 1}'s heading. Stay strictly within section {idx}'s "
+        f"topic and do NOT preempt content that belongs to section {idx + 1}."
+    )
     return (
         "Your previous response is structurally complete, but "
         f"section {idx} ('{title}') is significantly below the planner's "
         f"word budget ({actual} words, target ~{target}, "
         f"shortfall ~{delta} words).\n\n"
-        "Last 400 characters of the body (anchor — match the existing "
-        "voice + argument flow):\n"
+        "Last 400 characters of the body (anchor for voice and argument "
+        "flow):\n"
         f"```\n{tail}\n```\n\n"
         f"TASK: Expand section {idx} in place by roughly {delta} words "
         "— deepen the analysis with concrete examples, counter-arguments, "
         "or additional evidence from the supplied literature portfolio. "
         "No repetition, no bullet lists, no filler.\n\n"
+        f"{position_clause}\n\n"
         "IMPORTANT:\n"
         "- Do NOT emit a new heading — the section already exists.\n"
         "- Do NOT wrap your output in a content-block:document fence.\n"
         "- Do NOT emit a content-block:references block (unchanged).\n"
-        "- Write ONLY the additional prose, fitting seamlessly onto the "
-        "existing section end.\n"
+        f"- Write ONLY the additional prose, fitting seamlessly into "
+        f"section {idx}.\n"
         "- Do NOT emit a word-count trailer — the backend computes it.\n"
         "- Cite (Author, Year, p. XX) only references that are already "
         "in the registry or will be added there."
@@ -510,18 +560,21 @@ def stitch_continuation(
 ) -> str:
     """Insert continuation text into the original response at the cut point.
 
-    Strategy:
-    1. Extract the document body from the original content.
-    2. Strip trailing whitespace from the cut body.
-    3. Append the continuation text (with a joining space if the cut
-       landed mid-word).
-    4. Re-wrap into the original content-block:document fence.
-    5. Preserve everything outside the document block (references
-       block, Wortbilanz, anything else).
+    Two stitching modes, dispatched by the cut diagnosis:
+
+    - **Tail-append** (default; covers ``mode="truncated"`` and
+      last-section ``mode="underbudget"``): join the continuation onto
+      the end of the document body, with a joiner that respects
+      mid-word vs sentence-boundary cuts.
+    - **Mid-body splice** (``mode="underbudget"`` AND target section is
+      not the last numbered section): re-parse the body, locate the
+      heading of section N+1, and insert the continuation BEFORE that
+      heading. Preserves everything after section N (figure markdown,
+      caption italics, the next heading itself).
 
     The continuation text is expected to NOT contain its own
-    content-block:document wrapper (per the prompt). If it does
-    (LLM disobeys), we strip the wrapper before stitching.
+    content-block:document wrapper or new headings (per the prompt).
+    If the LLM disobeys, we strip the wrapper.
     """
     # Clean the continuation of any wrapper the LLM may have emitted
     # despite our instructions.
@@ -541,26 +594,85 @@ def stitch_continuation(
 
     prefix, body, suffix = doc_match.group(1), doc_match.group(2), doc_match.group(3)
 
-    # Cleanup the body's trailing tail if it ended mid-word
-    body_stripped = body.rstrip()
-    # Join without swallowing a sentence boundary: if body ends on a
-    # word-character, insert a space; otherwise no separator needed.
-    if body_stripped and body_stripped[-1].isalnum():
-        joiner = " "
-    elif body_stripped.endswith(("—", "–", "-")):
-        # Em-dash / hyphen — the sentence isn't done, continue directly
-        joiner = ""
+    # Decide tail-append vs mid-body splice. Mid-body only fires for
+    # underbudget cuts targeting a non-last section AND only when we
+    # can locate the next section's heading deterministically.
+    splice_offset: Optional[int] = None
+    if cut.get("mode") == "underbudget" and cut.get("is_last_section") is False:
+        target = cut.get("underbudget_section")
+        if target is not None:
+            splice_offset = _find_next_section_offset(body, target.index)
+
+    if splice_offset is not None:
+        new_body = _splice_mid_body(body, splice_offset, continuation_text)
     else:
-        joiner = "\n\n"
+        new_body = _tail_append_continuation(body, continuation_text)
 
-    new_body = body_stripped + joiner + continuation_text
     updated_doc_block = prefix + new_body + suffix
-
     return (
         original_content[: doc_match.start()]
         + updated_doc_block
         + original_content[doc_match.end():]
     )
+
+
+def _tail_append_continuation(body: str, continuation_text: str) -> str:
+    """Tail-append join — the original behaviour, preserved verbatim.
+
+    Picks a joiner that respects mid-word cuts (single space), em-dash /
+    hyphen continuations (no separator), and sentence boundaries
+    (paragraph break).
+    """
+    body_stripped = body.rstrip()
+    if body_stripped and body_stripped[-1].isalnum():
+        joiner = " "
+    elif body_stripped.endswith(("—", "–", "-")):
+        joiner = ""
+    else:
+        joiner = "\n\n"
+    return body_stripped + joiner + continuation_text
+
+
+def _find_next_section_offset(body: str, target_index: int) -> Optional[int]:
+    """Locate the start offset of the section that follows ``target_index``.
+
+    Returns the char offset where section (target_index + 1)'s heading
+    starts within ``body``. Returns None if the target section is the
+    last one, or the next heading can't be located. Callers use a None
+    return as a signal to fall back to tail-append.
+    """
+    for m in _SECTION_HEADING_RE.finditer(body):
+        try:
+            idx = int(m.group(1))
+        except (TypeError, ValueError):
+            continue
+        if idx > target_index:
+            return m.start()
+    return None
+
+
+def _splice_mid_body(body: str, splice_offset: int, continuation_text: str) -> str:
+    """Insert ``continuation_text`` BEFORE the heading at ``splice_offset``.
+
+    Preserves the trailing prose of the section being expanded (including
+    any figure markdown / caption italics that the writer placed before
+    the next heading). The inserted prose is wrapped with paragraph-
+    boundary newlines to avoid fusing into adjacent sentences.
+    """
+    before = body[:splice_offset].rstrip()
+    after = body[splice_offset:]  # starts with the next section's heading
+
+    # Choose joiner for the prose-side. Mid-word cut shouldn't happen for
+    # underbudget mode (the section ended on a terminator) but defend
+    # against it anyway.
+    if before and before[-1].isalnum():
+        joiner_before = " "
+    elif before.endswith(("—", "–", "-")):
+        joiner_before = ""
+    else:
+        joiner_before = "\n\n"
+
+    return before + joiner_before + continuation_text + "\n\n" + after
 
 
 # ---------------------------------------------------------------------------
@@ -614,6 +726,11 @@ async def run_continuations(
         "sections_missing_initially": 0,
         "sections_missing_final": 0,
         "initial_mode": None,
+        # Last cut mode observed before the loop exited. This is what
+        # determines the warning copy on exhaustion — a run that started
+        # truncated but ended underbudget should not get the "token limit"
+        # banner.
+        "last_observed_mode": None,
     }
 
     content = initial_content or ""
@@ -628,6 +745,7 @@ async def run_continuations(
         return content, telemetry
 
     telemetry["initial_mode"] = cut.get("mode")
+    telemetry["last_observed_mode"] = cut.get("mode")
     if cut.get("mode") == "truncated":
         telemetry["sections_missing_initially"] = len(cut["missing_section_indices"]) + (
             1 if cut["last_partial_section"] else 0
@@ -698,15 +816,17 @@ async def run_continuations(
             total_word_budget=total_word_budget,
         )
         if cut is None:
-            # All cleared — attribute the win to whichever path opened it.
+            # All cleared — attribute the win to whichever path was
+            # active when the loop ended.
             telemetry["outcome"] = (
                 "underbudget_resolved"
-                if telemetry["initial_mode"] == "underbudget"
+                if telemetry["last_observed_mode"] == "underbudget"
                 else "success"
             )
             telemetry["sections_missing_final"] = 0
             return content, telemetry
 
+        telemetry["last_observed_mode"] = cut.get("mode")
         if cut.get("mode") == "truncated":
             telemetry["sections_missing_final"] = len(cut["missing_section_indices"]) + (
                 1 if cut["last_partial_section"] else 0
@@ -718,13 +838,15 @@ async def run_continuations(
             # one more round if budget allows.
             continue
 
-    # Attempts exhausted. Pick the outcome string + warning copy that
-    # matches what was being chased — truncation vs underbudget have
-    # different user-facing failure modes.
+    # Attempts exhausted. Pick outcome + warning copy from the LAST cut
+    # diagnosis — a run that started truncated but ended underbudget gets
+    # the underbudget banner, not the token-limit one. A truncated run
+    # that resolved structurally then went underbudget gets the same
+    # treatment as any other underbudget unresolved.
     if telemetry["outcome"] == "not_needed":
         telemetry["outcome"] = (
             "underbudget_unfilled"
-            if telemetry["initial_mode"] == "underbudget"
+            if telemetry["last_observed_mode"] == "underbudget"
             else "still_truncated"
         )
 
