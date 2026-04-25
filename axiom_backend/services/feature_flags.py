@@ -133,6 +133,14 @@ def rag_figures_enabled(user_settings: Any) -> bool:
     return _completeness_flag(user_settings, "rag_figures")
 
 
+def deliverable_planner_enabled(user_settings: Any) -> bool:
+    """One cheap planner LLM call before the main writer turn that
+    decides expected section count, language, word budget, references
+    target, and figure intent. Subsequent revision turns reuse the
+    persisted plan from WritingSession.settings."""
+    return _completeness_flag(user_settings, "deliverable_planner")
+
+
 def resolve_completeness_flags(user_settings: Any) -> dict:
     """One-shot resolver for structured telemetry / debug logs."""
     return {
@@ -141,4 +149,5 @@ def resolve_completeness_flags(user_settings: Any) -> dict:
         "sources_always": sources_always_enabled(user_settings),
         "transparent_continuation": transparent_continuation_enabled(user_settings),
         "rag_figures": rag_figures_enabled(user_settings),
+        "deliverable_planner": deliverable_planner_enabled(user_settings),
     }

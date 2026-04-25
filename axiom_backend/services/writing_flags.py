@@ -33,6 +33,7 @@ class WritingFlags:
     sources_always: bool = False
     transparent_continuation: bool = False
     rag_figures: bool = False
+    deliverable_planner: bool = False
 
     @classmethod
     def resolve(cls, user_settings: Optional[Mapping[str, Any]]) -> "WritingFlags":
@@ -42,6 +43,7 @@ class WritingFlags:
         tests that stub the feature_flags layer.
         """
         from services.feature_flags import (
+            deliverable_planner_enabled,
             rag_figures_enabled,
             sources_always_enabled,
             structured_bibliography_enabled,
@@ -56,6 +58,7 @@ class WritingFlags:
             sources_always=sources_always_enabled(settings),
             transparent_continuation=transparent_continuation_enabled(settings),
             rag_figures=rag_figures_enabled(settings),
+            deliverable_planner=deliverable_planner_enabled(settings),
         )
 
     @classmethod

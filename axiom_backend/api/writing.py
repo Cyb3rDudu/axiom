@@ -1565,6 +1565,50 @@ async def process_writing_chat_in_background(
         
         # Don't send initial status - let the agent handle it
 
+        # Deliverable planner pre-pass. When the flag is on, run one
+        # cheap LLM call BEFORE the writer to decide section count,
+        # word budget, language, and figure intent. Reuse the persisted
+        # plan from a prior turn in this session if one exists. The
+        # continuation detector consumes the plan as ground truth so a
+        # truncated draft can't masquerade as complete.
+        deliverable_plan = None
+        if flags.deliverable_planner:
+            from services.writing_planner import (
+                load_plan_from_session,
+                plan_deliverable,
+                serialise_plan_to_session,
+            )
+            deliverable_plan = load_plan_from_session(session_settings_obj)
+            if deliverable_plan is None:
+                try:
+                    deliverable_plan = await plan_deliverable(
+                        prompt=request.message or "",
+                        existing_draft_body=draft.content or "",
+                        dispatcher=writing_controller.model_dispatcher,
+                    )
+                    if deliverable_plan is not None:
+                        writing_session.settings = serialise_plan_to_session(
+                            session_settings_obj, deliverable_plan
+                        )
+                        db.commit()
+                except Exception as exc:
+                    logger.warning(
+                        "Deliverable planner failed (non-fatal): %s",
+                        exc,
+                        exc_info=True,
+                    )
+            if deliverable_plan is not None:
+                context_info["expected_sections"] = deliverable_plan.expected_sections
+                context_info["section_budgets"] = deliverable_plan.section_budgets
+                # Planner-resolved language is authoritative; user-settings
+                # override (set explicitly by the user) still wins.
+                if not (user_settings or {}).get("language_code"):
+                    context_info.setdefault("user_settings", user_settings or {})
+                    if isinstance(context_info.get("user_settings"), dict):
+                        context_info["user_settings"]["language_code"] = (
+                            deliverable_plan.language_code
+                        )
+
         # Writing Completeness Contract — figure pre-fetch
         # When the prompt or draft carries figure-intent, pre-fetch
         # candidates from document_images and inject them into the
