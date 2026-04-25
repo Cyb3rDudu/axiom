@@ -140,11 +140,19 @@ def synthesize_sources_block(
 
 _FIGURE_MARKDOWN_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
-# Real figure URLs follow /api/documents/images/{doc_id}/{filename}
-# (see api/documents.py:1463). Anything else in a writing response
-# was either manually typed by a user (rare) or hallucinated by the
-# writer (common — "placeholder-fig1.png").
-_VALID_FIGURE_URL_RE = re.compile(r"^/api/documents/images/[^/]+/[^/]+$")
+# Real figure URLs follow /api/images/{doc_id}/{filename}
+# (route defined in api/documents.py:1463; documents router is mounted
+# at /api so the full served path is /api/images/...). Anything else in
+# a writing response was either manually typed by a user (rare) or
+# hallucinated by the writer (common — "placeholder-fig1.png").
+#
+# Legacy drafts persisted prior to PR #98 used the wrong path
+# /api/documents/images/... (figure resolver bug). Match either form so
+# old drafts don't get their valid URLs flagged as invalid; new drafts
+# emit only the correct path.
+_VALID_FIGURE_URL_RE = re.compile(
+    r"^/api/(?:documents/)?images/[^/]+/[^/]+$"
+)
 
 
 def validate_figure_urls(
@@ -153,10 +161,10 @@ def validate_figure_urls(
 ) -> Tuple[str, Dict[str, Any]]:
     """Flag figure Markdown with non-resolvable URLs.
 
-    `valid_image_paths` is a set of `/api/documents/images/{doc_id}/{file}`
-    paths that actually exist. If provided, paths outside the set get
-    flagged. If None, we only reject obviously-fabricated paths
-    (placeholder-fig1.png, example.com, etc.).
+    `valid_image_paths` is a set of `/api/images/{doc_id}/{file}` paths
+    that actually exist. If provided, paths outside the set get flagged.
+    If None, we only reject obviously-fabricated paths (placeholder-
+    fig1.png, example.com, etc.).
 
     Fabricated paths are rewritten to a deterministic placeholder:
       ![…](about:blank#figure-not-resolved)

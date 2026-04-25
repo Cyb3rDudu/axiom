@@ -80,11 +80,11 @@ class TestImageUrl:
         url = _image_url_from_path(
             "doc-123", "/app/data/processed/images/doc-123/fig_1.png"
         )
-        assert url == "/api/documents/images/doc-123/fig_1.png"
+        assert url == "/api/images/doc-123/fig_1.png"
 
     def test_handles_bare_filename(self):
         url = _image_url_from_path("doc-x", "fig.png")
-        assert url == "/api/documents/images/doc-x/fig.png"
+        assert url == "/api/images/doc-x/fig.png"
 
     def test_empty_path(self):
         url = _image_url_from_path("doc-x", "")
@@ -99,14 +99,14 @@ class TestCandidateSnippet:
         c = FigureCandidate(
             image_id="img-1",
             doc_id="doc-1",
-            image_url="/api/documents/images/doc-1/chart.png",
+            image_url="/api/images/doc-1/chart.png",
             alt_text="BIP 2000-2024",
             relevance=0.87,
             source_document_title="Macro Trends",
             source_page=12,
         )
         snippet = c.to_prompt_snippet()
-        assert "/api/documents/images/doc-1/chart.png" in snippet
+        assert "/api/images/doc-1/chart.png" in snippet
         assert "BIP 2000-2024" in snippet
         # Uses scaffold with an EXPLICIT replace sigil the writer can't
         # accidentally leave in place
@@ -124,7 +124,7 @@ class TestInjectionGuidance:
         cand = FigureCandidate(
             image_id="img-1",
             doc_id="doc-1",
-            image_url="/api/documents/images/doc-1/chart.png",
+            image_url="/api/images/doc-1/chart.png",
             alt_text="Some stored caption",
             relevance=0.8,
         )
@@ -144,7 +144,7 @@ class TestInjectionGuidance:
         qs = [FigureQuery(description="X", source="placeholder")]
         cand = FigureCandidate(
             image_id="i", doc_id="d",
-            image_url="/api/documents/images/d/x.png",
+            image_url="/api/images/d/x.png",
             alt_text="c", relevance=0.8,
         )
         out_de = build_figure_injection(qs, {"X": [cand]}, language_code="de")
@@ -159,7 +159,7 @@ class TestBuildFigureInjection:
             FigureCandidate(
                 image_id="img-1",
                 doc_id="doc-1",
-                image_url="/api/documents/images/doc-1/fig1.png",
+                image_url="/api/images/doc-1/fig1.png",
                 alt_text=alt_text,
                 relevance=0.85,
                 source_document_title="Source Book",
@@ -171,7 +171,7 @@ class TestBuildFigureInjection:
         qs = [FigureQuery(description="Chinas BIP 2000-2024", source="placeholder")]
         out = build_figure_injection(qs, {"Chinas BIP 2000-2024": self._cands()})
         assert "Chinas BIP 2000-2024" in out
-        assert "/api/documents/images/doc-1/fig1.png" in out
+        assert "/api/images/doc-1/fig1.png" in out
         # Must tell the writer the URL is immutable
         assert (
             "unverändert" in out
@@ -248,5 +248,5 @@ class TestResolveFiguresEndToEnd:
         )
         assert result["intent_detected"] is True
         urls = result["valid_image_urls"]
-        assert "/api/documents/images/doc-1/chart.png" in urls
+        assert "/api/images/doc-1/chart.png" in urls
         assert result["system_prompt_addendum"] is not None
