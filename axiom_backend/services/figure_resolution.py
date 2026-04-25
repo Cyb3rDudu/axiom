@@ -194,11 +194,26 @@ def _load_candidates(
     doc_ids: Iterable[str],
     n_per_query: int = 3,
 ) -> Dict[str, List[FigureCandidate]]:
-    """Execute the vector query for each figure description.
+    """Execute the alt-text keyword query for each figure description.
 
-    Returns {description: [candidates...]}. Descriptions with empty
-    strings return the top-N most-cited images in the document set
-    as a weak fallback.
+    Returns {description: [candidates...]}. Two FAILURE FAST paths
+    (architect + reviewer team consensus, after live bug where this
+    function surfaced publisher logos and unrelated diagrams as
+    "relevance: 0.90"):
+
+    - Empty description → []. The caller's writer prompt already has a
+      "no matching figures" branch; better to surface that than to
+      return arbitrary images sorted by SQL row order.
+    - alt_text ILIKE returns no rows → []. Same reasoning. The previous
+      "fall back to any image" path produced the publisher-logo-as-
+      relevance-0.9 incident.
+
+    The relevance score on returned candidates is intentionally a fixed
+    indication that the keyword path matched (0.5 = "matched on alt
+    text, no semantic ranking"). The earlier 0.9 / 0.75 / 0.6 positional
+    decay was misleading — it presented results sorted by SQL row order
+    as if they had cosine-similarity ranking. CLIP semantic search
+    lands in a follow-up PR; until then, the score is a flat indicator.
     """
     doc_ids_list = [d for d in doc_ids if d]
     if not doc_ids_list:
@@ -207,47 +222,31 @@ def _load_candidates(
     # Lazy import so the figure path only pays for the heavy
     # embedder/vector-store plumbing when it actually runs.
     from database import models
-    from sqlalchemy import text as sql_text
 
     out: Dict[str, List[FigureCandidate]] = {}
     for q in queries:
-        if q.description.strip():
-            # Text-only fallback: match alt_text against description.
-            # Real CLIP embedding path lives in pgvector_store.query_multimodal
-            # but that requires the GPU worker; we use the lighter
-            # PostgreSQL full-text search against the stored alt_text
-            # as an always-available baseline. The GPU variant is wired
-            # as an opt-in via `use_clip=True` in a follow-up.
-            rows = (
-                db.query(models.DocumentImage)
-                .filter(models.DocumentImage.doc_id.in_(doc_ids_list))
-                .filter(models.DocumentImage.alt_text.isnot(None))
-                .filter(
-                    models.DocumentImage.alt_text.ilike(
-                        f"%{q.description[:60]}%"
-                    )
+        if not q.description.strip():
+            # Generic figure intent without a description — refuse to
+            # guess. The writer gets the "library checked, 0 matches"
+            # branch and emits placeholder paths the user can replace.
+            out[q.description] = []
+            continue
+
+        rows = (
+            db.query(models.DocumentImage)
+            .filter(models.DocumentImage.doc_id.in_(doc_ids_list))
+            .filter(models.DocumentImage.alt_text.isnot(None))
+            .filter(
+                models.DocumentImage.alt_text.ilike(
+                    f"%{q.description[:60]}%"
                 )
-                .limit(n_per_query * 3)
-                .all()
             )
-            # Fall back to any image if ilike didn't hit
-            if not rows:
-                rows = (
-                    db.query(models.DocumentImage)
-                    .filter(models.DocumentImage.doc_id.in_(doc_ids_list))
-                    .limit(n_per_query)
-                    .all()
-                )
-        else:
-            rows = (
-                db.query(models.DocumentImage)
-                .filter(models.DocumentImage.doc_id.in_(doc_ids_list))
-                .limit(n_per_query)
-                .all()
-            )
+            .limit(n_per_query * 3)
+            .all()
+        )
 
         candidates: List[FigureCandidate] = []
-        for i, row in enumerate(rows[:n_per_query]):
+        for row in rows[:n_per_query]:
             meta = row.image_metadata if isinstance(row.image_metadata, dict) else {}
             page = meta.get("page") or meta.get("page_number")
             candidates.append(
@@ -256,9 +255,10 @@ def _load_candidates(
                     doc_id=row.doc_id,
                     image_url=_image_url_from_path(row.doc_id, row.image_path),
                     alt_text=row.alt_text,
-                    # Deterministic decay: first hit = 0.9, second = 0.75, etc.
-                    # Real similarity scoring lands in the CLIP follow-up.
-                    relevance=max(0.3, 0.9 - (i * 0.15)),
+                    # Flat indicator — keyword match has no ranking.
+                    # CLIP semantic search will replace this with real
+                    # cosine similarity.
+                    relevance=0.5,
                     source_page=int(page) if isinstance(page, (int, str)) and str(page).isdigit() else None,
                     metadata=meta,
                 )
