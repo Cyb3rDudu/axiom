@@ -656,13 +656,18 @@ class PGVectorStore:
         try:
             results = []
 
-            # Build the optional doc-scoping clause once. ANY(:doc_ids)
-            # idiom requires a Python list; SQLAlchemy expanding bindparam
-            # could be cleaner but raw text() is the existing pattern here.
+            # Build the optional doc-scoping clause once. The cast to
+            # uuid[] is mandatory: doc_id columns are uuid in the schema
+            # but psycopg2 binds Python list-of-strings as text[], and
+            # PostgreSQL refuses to compare uuid to text without an
+            # explicit cast (`operator does not exist: uuid = text`).
+            # The error is caught by the outer try/except below and the
+            # function silently returns []; without the cast the entire
+            # scoped CLIP path is dead. Discovered live 2026-04-25.
             doc_filter_clause = ""
             params_extra: Dict[str, Any] = {}
             if doc_ids:
-                doc_filter_clause = "AND doc_id = ANY(:doc_ids)"
+                doc_filter_clause = "AND doc_id = ANY(CAST(:doc_ids AS uuid[]))"
                 params_extra["doc_ids"] = list(doc_ids)
 
             # Search text chunks if text embedding provided
