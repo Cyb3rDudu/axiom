@@ -300,29 +300,65 @@ export const DraftPanel: React.FC = () => {
     }
   }, [localContent]);
 
-  // Export draft as Markdown
-  const handleExportMarkdown = useCallback(() => {
-    if (!currentDraft) return;
-    
-    let content = `# ${currentDraft.title || 'Untitled Document'}\n\n`;
-    content += localContent || '';
-    
-    const blob = new Blob([content], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${currentDraft.title || 'document'}.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    
-    addToast({
-      type: 'success',
-      title: 'Document Downloaded',
-      message: 'Document has been downloaded as Markdown.'
-    });
-  }, [currentDraft, localContent, addToast]);
+  // Export draft as Markdown — hits the backend so the rendered
+  // Literaturverzeichnis + Literaturportfolio get appended from the
+  // structured registry (matches DOCX export behaviour). Falls back to
+  // a client-side blob if the backend call fails so the user always
+  // gets at least the raw body.
+  const handleExportMarkdown = useCallback(async () => {
+    if (!currentDraft || !currentSession) return;
+
+    const baseBody = `# ${currentDraft.title || 'Untitled Document'}\n\n${localContent || ''}`;
+
+    const downloadBlob = (blob: Blob, filename: string) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+
+    try {
+      const response = await apiClient.post(
+        `/api/writing/sessions/${currentSession.id}/draft/markdown`,
+        {
+          markdown_content: baseBody,
+          filename: currentDraft.title || 'document',
+          draft_id: currentDraft.id,
+        },
+        {
+          responseType: 'blob',
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+
+      const blob =
+        response.data instanceof Blob
+          ? response.data
+          : new Blob([String(response.data)], { type: 'text/markdown' });
+      downloadBlob(blob, `${currentDraft.title || 'document'}.md`);
+
+      addToast({
+        type: 'success',
+        title: 'Document Downloaded',
+        message: 'Document has been downloaded as Markdown.',
+      });
+    } catch (error) {
+      console.error('Failed to download Markdown via API, falling back:', error);
+      // Degraded fallback — body only, no bibliography / portfolio.
+      const fallbackBlob = new Blob([baseBody], { type: 'text/markdown' });
+      downloadBlob(fallbackBlob, `${currentDraft.title || 'document'}.md`);
+      addToast({
+        type: 'warning',
+        title: 'Document Downloaded (raw)',
+        message:
+          'Markdown saved without bibliography/portfolio (server error). Try DOCX or retry.',
+      });
+    }
+  }, [currentDraft, currentSession, localContent, addToast]);
 
   // Export draft as Word document
   const handleExportWord = useCallback(async () => {
@@ -342,11 +378,16 @@ export const DraftPanel: React.FC = () => {
       
       const response = await apiClient.post(
         `/api/writing/sessions/${currentSession.id}/draft/docx`,
-        { 
+        {
           markdown_content: content,
-          filename: currentDraft.title || 'document'
+          filename: currentDraft.title || 'document',
+          // Backend appends Literaturverzeichnis + Literaturportfolio
+          // from the structured registry only when draft_id is present.
+          // Without this, the export shipped without bibliography or
+          // portfolio (silently — no log entry, no error).
+          draft_id: currentDraft.id,
         },
-        { 
+        {
           responseType: 'blob',
           headers: {
             'Content-Type': 'application/json',
