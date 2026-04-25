@@ -783,6 +783,12 @@ class ModelDispatcher:
         # Check if this is a DeepSeek-reasoner model (direct API or OpenRouter)
         is_deepseek_reasoner = "deepseek-reasoner" in selected_model_name.lower()
 
+        # Check if this is a DeepSeek V4 model (flash or pro). V4 supports
+        # 384K output + 1M context; thinking-mode is default-on and reasoning
+        # tokens count against max_tokens, so the old 8K cap throttles content
+        # output. Treat V4 like reasoner: bump max_tokens, omit temperature.
+        is_deepseek_v4 = "deepseek-v4" in selected_model_name.lower()
+
         # Check if this is Azure OpenAI by looking at the base URL
         base_url_str = str(getattr(client, "base_url", ""))
         is_azure = "azure" in base_url_str.lower()
@@ -841,6 +847,22 @@ class ModelDispatcher:
                 "model": selected_model_name,
                 "messages": messages,
                 "max_tokens": deepseek_max,
+            }
+        elif is_deepseek_v4:
+            # DeepSeek V4 (flash/pro): 384K output cap + 1M context, thinking
+            # mode default-on. Reasoning tokens count against max_tokens so
+            # the old 8K provider cap throttles real content. Bump to V4-aware
+            # limit; temperature works in V4 but is omitted to match the
+            # reasoner branch's stable-output contract.
+            v4_max = getattr(config, 'DEEPSEEK_V4_MAX_TOKENS_LIMIT', 65536)
+            logger.info(
+                f"Detected DeepSeek V4 model: {selected_model_name}, "
+                f"forcing max_tokens={v4_max} (was {max_tokens_for_call})"
+            )
+            request_params = {
+                "model": selected_model_name,
+                "messages": messages,
+                "max_tokens": v4_max,
             }
         else:
             # Standard parameters for non-GPT-5 models or GPT-5 via OpenRouter
@@ -1718,6 +1740,8 @@ class ModelDispatcher:
 
         # Check if this is a DeepSeek-reasoner model (direct API or OpenRouter)
         is_deepseek_reasoner = "deepseek-reasoner" in selected_model_name.lower()
+        # DeepSeek V4 (flash/pro) — see dispatch() for rationale.
+        is_deepseek_v4 = "deepseek-v4" in selected_model_name.lower()
 
         logger.info(
             f"Dispatching streaming request via client for '{client.base_url}' to model: {selected_model_name} (Agent Mode: {effective_agent_mode}, Max Tokens: {max_tokens_for_call}, Temp: {temperature_for_call})"
@@ -1735,6 +1759,18 @@ class ModelDispatcher:
                 "model": selected_model_name,
                 "messages": messages,
                 "max_tokens": deepseek_max,
+                "stream": True,
+            }
+        elif is_deepseek_v4:
+            v4_max = getattr(config, 'DEEPSEEK_V4_MAX_TOKENS_LIMIT', 65536)
+            logger.info(
+                f"Detected DeepSeek V4 model (stream): {selected_model_name}, "
+                f"forcing max_tokens={v4_max} (was {max_tokens_for_call})"
+            )
+            request_params = {
+                "model": selected_model_name,
+                "messages": messages,
+                "max_tokens": v4_max,
                 "stream": True,
             }
         else:

@@ -272,6 +272,11 @@ DEEPSEEK_VERIFIER_MODEL = os.getenv("DEEPSEEK_VERIFIER_MODEL", "deepseek-chat")
 DEEPSEEK_MAX_TOKENS_LIMIT = 8192
 # deepseek-reasoner's max_tokens includes reasoning tokens; needs higher budget
 DEEPSEEK_REASONER_MAX_TOKENS_LIMIT = 32768  # Reasoner needs headroom: reasoning + output tokens
+# DeepSeek V4 (flash + pro) supports 384K output and 1M context. Thinking-mode
+# is default-on and reasoning tokens count against max_tokens. 64K gives a
+# 3000-word draft plenty of headroom while keeping the cost ceiling sane.
+DEEPSEEK_V4_MAX_TOKENS_LIMIT = int(os.getenv("DEEPSEEK_V4_MAX_TOKENS_LIMIT", "65536"))
+DEEPSEEK_V4_CONTEXT_WINDOW = 1000000
 DEEPSEEK_CONTEXT_WINDOW = 128000
 
 # --- Z.AI (Zhipu GLM) Configuration ---
