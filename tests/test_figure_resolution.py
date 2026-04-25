@@ -53,6 +53,44 @@ class TestDetectFigureIntent:
         assert any("BIP" in q.description for q in qs)
         assert qs[0].source == "placeholder"
 
+    def test_description_does_not_bleed_across_markdown_delimiters(self):
+        # Regression: a prompt that contains a Markdown image example
+        # like
+        #   ![Abbildung 1: BIP-Wachstum](/api/images/x/y.png)
+        # used to produce description="BIP-Wachstum](/api/images/...)"
+        # — captured EVERYTHING after the colon up to the next newline,
+        # including the URL bracket. CLIP would then encode noise and
+        # return zero candidates. Description must stop at `]` / `*` /
+        # `(` Markdown delimiters.
+        from services.figure_resolution import detect_figure_intent
+        prompt = (
+            "Bitte 3 Abbildungen einbauen. Beispiel:\n"
+            "  ![Abbildung 1: BIP-Wachstum Chinas 1980–2024]"
+            "(/api/images/4e54fd23/image_0.jpeg)\n"
+        )
+        qs = detect_figure_intent(prompt)
+        # Exactly one query parsed from the "Abbildung 1: …" line
+        assert len(qs) == 1
+        # Description must NOT contain the URL fragment
+        assert "/api/" not in qs[0].description
+        assert "]" not in qs[0].description
+        # The clean description survives
+        assert "BIP-Wachstum" in qs[0].description
+
+    def test_description_stops_at_italic_caption_close(self):
+        # Italic-wrapped captions like
+        #   *Abbildung 1: Foo. Quelle: Bar. Eigene Darstellung.*
+        # used to capture trailing `Eigene Darstellung.*` because the
+        # description regex didn't stop at `*`.
+        from services.figure_resolution import detect_figure_intent
+        prompt = (
+            "*Abbildung 1: BIP Chinas. Quelle: Destatis. "
+            "Eigene Darstellung.*"
+        )
+        qs = detect_figure_intent(prompt)
+        assert len(qs) == 1
+        assert "*" not in qs[0].description
+
     def test_explicit_numbered_description_in_prompt(self):
         prompt = (
             "Please add:\n"
