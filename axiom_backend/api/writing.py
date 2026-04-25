@@ -1502,8 +1502,9 @@ async def process_writing_chat_in_background(
             else:
                 session_mode = "fresh_research"
 
-        from services.feature_flags import structured_bibliography_enabled
-        structured_refs_on = structured_bibliography_enabled(user_settings)
+        from services.writing_flags import WritingFlags
+        flags = WritingFlags.resolve(user_settings)
+        structured_refs_on = flags.structured_bibliography
 
         context_info = {
             "document_group_id": document_group_id,
@@ -1571,9 +1572,8 @@ async def process_writing_chat_in_background(
         # when intent is absent or the library is empty.
         figure_resolution: Optional[Dict[str, Any]] = None
         try:
-            from services.feature_flags import rag_figures_enabled
             from services.figure_resolution import resolve_figures
-            if rag_figures_enabled(user_settings):
+            if flags.rag_figures:
                 figure_resolution = resolve_figures(
                     db,
                     prompt=request.message or "",
@@ -1610,270 +1610,41 @@ async def process_writing_chat_in_background(
             status_callback=status_callback
         )
         
-        # Log the resolved flag state per session so we can spot flag-off
-        # users who still ended up with structured state (#74).
-        from services.writing_telemetry import (
-            log_flag_state,
-            record_bibliography_parse,
-            record_sync_report,
+        # Post-agent processing — bib ingest, audit, citation sync,
+        # completeness post-process, persistence, WebSocket payload —
+        # all run as one pipeline so the chat task stays a thin caller.
+        # Each stage is independently flag-gated inside the pipeline.
+        from services.writing_pipeline import (
+            PipelineContext,
+            run_response_pipeline,
         )
-        log_flag_state(
-            subsystem="writing_chat",
-            user_settings=user_settings,
-            draft_id=draft.id,
-            user_id=user_id,
-            session_id=session_id,
-        )
-
-        # Structured bibliography ingest (#53): when the feature flag is
-        # on and the writer emitted a content-block:references fence,
-        # parse and replace the draft's structured registry atomically.
-        # Malformed block → log warning, fall back to legacy inline path.
-        structured_refs_summary: Optional[Dict[str, Any]] = None
-        if structured_refs_on:
-            try:
-                from services.structured_bibliography import (
-                    StructuredBibliographyService,
-                    parse_references_block,
-                )
-                from services.citation_rendering import render_entry
-
-                parse_result = parse_references_block(result.get("chat_response", ""))
-                if not parse_result.block_found:
-                    record_bibliography_parse(
-                        result="no_block",
-                        draft_id=draft.id,
-                        user_id=user_id,
-                    )
-                else:
-                    if parse_result.errors:
-                        logger.warning(
-                            "Structured references block malformed for task %s: %s",
-                            task_id,
-                            parse_result.errors,
-                        )
-                    if parse_result.entries:
-                        service = StructuredBibliographyService(db)
-                        pid = citation_profile.id if citation_profile else "numbered"
-                        rendered_refs = service.replace_draft_registry(
-                            draft_id=draft.id,
-                            entries=parse_result.entries,
-                            user_id=user_id,
-                            render_citation=lambda e, _pid=pid: render_entry(e, _pid),
-                        )
-                        structured_refs_summary = {
-                            "count": len(rendered_refs),
-                            "errors": parse_result.errors,
-                        }
-                        logger.info(
-                            "Persisted %d structured references for draft %s (task %s)",
-                            len(rendered_refs),
-                            draft.id,
-                            task_id,
-                        )
-                        record_bibliography_parse(
-                            result="parsed" if not parse_result.errors else "malformed",
-                            entries_count=len(parse_result.entries),
-                            errors_count=len(parse_result.errors),
-                            draft_id=draft.id,
-                            user_id=user_id,
-                        )
-                    else:
-                        # Block present but no usable entries
-                        record_bibliography_parse(
-                            result="malformed" if parse_result.errors else "empty_valid",
-                            entries_count=0,
-                            errors_count=len(parse_result.errors),
-                            draft_id=draft.id,
-                            user_id=user_id,
-                        )
-            except Exception as exc:
-                logger.exception(
-                    "Structured references ingest failed for task %s: %s", task_id, exc
-                )
-
-        # Post-response audit (#47): check URL-in-parens citations,
-        # fence balance, and declared-vs-actual wordcount. Warnings
-        # are surfaced on the assistant message (`meta.audit`) and
-        # pushed over WebSocket so the UI can badge the bubble.
-        from services.writing_response_audit import audit_writing_response
-        audit = audit_writing_response(result.get("chat_response", ""))
-
-        # Citation sync (#55): when structured refs are on, compare
-        # in-text citations in the response against the freshly-persisted
-        # registry. Surface orphan citations / dead entries on the same
-        # WebSocket payload so the UI can badge mismatches inline.
-        sync_report_dict: Optional[Dict[str, Any]] = None
-        if structured_refs_on:
-            try:
-                from services.citation_sync import (
-                    strip_references_block,
-                    validate_citations,
-                )
-                from services.structured_bibliography import (
-                    record_citation_occurrences,
-                )
-                body_for_sync = strip_references_block(result.get("chat_response", ""))
-                registry_rows = (
-                    db.query(models.Reference)
-                    .filter(
-                        models.Reference.draft_id == draft.id,
-                        models.Reference.entry_key.isnot(None),
-                    )
-                    .all()
-                )
-                registry_dicts = [
-                    {
-                        "entry_key": r.entry_key,
-                        "authors": r.authors,
-                        "year": r.year,
-                        "publisher": r.publisher,
-                        "container_title": r.container_title,
-                    }
-                    for r in registry_rows
-                ]
-                sync_report = validate_citations(body_for_sync, registry_dicts)
-                if sync_report.has_warnings:
-                    logger.warning(
-                        "Citation sync warnings for task %s: orphans=%d dead=%d ambiguous=%d",
-                        task_id,
-                        len(sync_report.orphan_markers),
-                        len(sync_report.dead_entries),
-                        len(sync_report.ambiguous),
-                    )
-                sync_report_dict = sync_report.to_dict()
-                record_sync_report(
-                    resolved_count=len(sync_report.resolved),
-                    orphan_count=len(sync_report.orphan_markers),
-                    dead_count=len(sync_report.dead_entries),
-                    ambiguous_count=len(sync_report.ambiguous),
-                    draft_id=draft.id,
-                    user_id=user_id,
-                )
-
-                # #63: persist resolved markers into citation_entries so the
-                # portfolio adapter (and future live-sync UI) can read
-                # per-occurrence offsets without re-parsing the body. Only
-                # resolved markers persist; orphans stay diagnostics-only on
-                # the WebSocket payload.
-                ref_id_by_key = {r.entry_key: r.id for r in registry_rows if r.entry_key}
-                occurrences = []
-                for marker, entry_key in sync_report.resolved:
-                    ref_id = ref_id_by_key.get(entry_key)
-                    if ref_id is None:
-                        continue
-                    occurrences.append({
-                        "reference_id": ref_id,
-                        "in_text_marker": marker.marker,
-                        "paragraph_index": marker.paragraph_index,
-                        "char_offset_start": marker.char_offset_start,
-                        "char_offset_end": marker.char_offset_end,
-                    })
-                record_citation_occurrences(db, draft.id, occurrences)
-            except Exception as exc:
-                logger.exception(
-                    "Citation sync failed for task %s: %s", task_id, exc
-                )
-        if audit.has_warnings:
-            logger.warning(
-                f"Writing response audit warnings for task {task_id}: "
-                f"url_in_parens={len(audit.url_in_parens)} "
-                f"unbalanced_fences={audit.unbalanced_fences} "
-                f"wordcount_delta_pct={audit.wordcount_delta_pct}"
-            )
-
-        # Writing Completeness Contract — post-response passes
-        # Each one is independently flag-gated and idempotent. The
-        # mutated `chat_response` is what the user sees and what
-        # lands in the DB — not the raw LLM output. Telemetry for
-        # each pass ships via writing_telemetry.
-        final_response_text: str = result.get("chat_response", "") or ""
-        completeness_telemetry: Dict[str, Any] = {}
-        try:
-            from services.feature_flags import (
-                wordcount_fix_enabled,
-                sources_always_enabled,
-                rag_figures_enabled,
-            )
-
-            # Deterministic Wortbilanz recompute
-            if wordcount_fix_enabled(user_settings):
-                from services.writing_response_audit import recompute_wortbilanz
-                final_response_text, wc_tele = recompute_wortbilanz(
-                    final_response_text
-                )
-                completeness_telemetry["wordcount_fix"] = wc_tele
-
-            # Backend-synthesized references block
-            if sources_always_enabled(user_settings):
-                from services.response_postprocess import synthesize_sources_block
-                registry_for_sources = (
-                    db.query(models.Reference)
-                    .filter(
-                        models.Reference.draft_id == draft.id,
-                        models.Reference.entry_key.isnot(None),
-                    )
-                    .all()
-                )
-                final_response_text, sources_tele = synthesize_sources_block(
-                    final_response_text, registry_for_sources
-                )
-                completeness_telemetry["sources_always"] = sources_tele
-
-            # Figure URL validation — only when the resolver actually ran
-            if figure_resolution and rag_figures_enabled(user_settings):
-                from services.response_postprocess import validate_figure_urls
-                valid_urls = figure_resolution.get("valid_image_urls") or set()
-                final_response_text, fig_tele = validate_figure_urls(
-                    final_response_text, valid_urls if valid_urls else None
-                )
-                completeness_telemetry["figures_validated"] = fig_tele
-        except Exception as exc:
-            logger.warning(
-                "Writing completeness post-process failed (non-fatal): %s",
-                exc,
-                exc_info=True,
-            )
-
-        if completeness_telemetry:
-            logger.info(
-                "Writing completeness telemetry for task %s: %s",
-                task_id,
-                {k: v for k, v in completeness_telemetry.items() if v},
-            )
-
-        # Save the assistant response. Audit data rides on the WebSocket
-        # payload only for now — adding a DB column would require a
-        # migration, and the UI only needs it for the badge on the
-        # live response. Re-rendering on reload just loses the badge.
-        agent_response_msg = models.Message(
-            id=str(uuid.uuid4()),
+        pipeline_ctx = PipelineContext(
+            db=db,
+            draft=draft,
             chat_id=chat_id,
-            role="assistant",
-            content=final_response_text,
-            sources=result.get("sources", []),
-            created_at=datetime.utcnow(),
+            session_id=session_id,
+            user_id=user_id,
+            task_id=task_id,
+            flags=flags,
+            citation_profile=citation_profile,
+            figure_resolution=figure_resolution,
         )
-        db.add(agent_response_msg)
-        db.commit()
+        pipeline_result = await run_response_pipeline(
+            raw_response=result.get("chat_response", "") or "",
+            sources=result.get("sources", []),
+            context=pipeline_ctx,
+        )
+        final_response_text = pipeline_result.final_response_text
 
-        # Send the complete response via WebSocket (not as streaming chunks)
-        await send_agent_status_update(session_id, "completed", "Response generated successfully")
-
-        # Send the full response message with sources. We ship the
-        # post-processed `final_response_text` (fixed Wortbilanz,
-        # synthesized sources block, validated figure URLs) rather
-        # than the raw LLM output so the chat UI shows the same text
-        # the DB has.
-        await send_draft_content_update(session_id, {
-            "message": final_response_text,
-            "sources": result.get("sources", []),
-            "task_id": task_id,
-            "audit": audit.to_dict() if audit.has_warnings else None,
-            "structured_references": structured_refs_summary,
-            "citation_sync": sync_report_dict,
-            "completeness": completeness_telemetry or None,
-        }, "complete")
+        # Send the complete response via WebSocket. The WebSocket payload
+        # uses the post-processed text so the chat UI shows the same
+        # content the DB has.
+        await send_agent_status_update(
+            session_id, "completed", "Response generated successfully"
+        )
+        await send_draft_content_update(
+            session_id, pipeline_result.websocket_payload, "complete"
+        )
         
         # Update chat title if needed
         try:
