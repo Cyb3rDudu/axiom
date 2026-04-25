@@ -221,7 +221,10 @@ class TestResolveFiguresEndToEnd:
 
     def test_returns_valid_urls_for_downstream_validation(self):
         # Stub the DB query path by shimming the model_loader to return
-        # a fake image row.
+        # a fake image row. Prompt uses the explicit "Figure N: desc"
+        # pattern so detect_figure_intent extracts a concrete description
+        # that exercises the alt_text-keyword path (not the empty-
+        # description short-circuit).
         from services import figure_resolution as fr
 
         class _FakeRow:
@@ -242,7 +245,7 @@ class TestResolveFiguresEndToEnd:
 
         result = fr.resolve_figures(
             _FakeDB(),
-            prompt="Include a figure about market share.",
+            prompt="Add Figure 1: market share chart for the corpus.",
             draft_body="",
             doc_ids=["doc-1"],
         )
@@ -250,3 +253,69 @@ class TestResolveFiguresEndToEnd:
         urls = result["valid_image_urls"]
         assert "/api/images/doc-1/chart.png" in urls
         assert result["system_prompt_addendum"] is not None
+
+    def test_generic_intent_without_description_returns_no_candidates(self):
+        # Regression: prior to the kill-fallback fix, a prompt with
+        # generic figure intent ("Add 3 figures") triggered a DB query
+        # for "any 3 images from the doc set" with fake 0.9/0.75/0.6
+        # relevance scores. Result: publisher logos surfaced for
+        # economics papers. The fix returns [] for empty descriptions
+        # and lets the writer hit the "no matching figures" branch.
+        from services import figure_resolution as fr
+
+        class _FakeRow:
+            doc_id = "doc-1"
+            image_id = "img-1"
+            image_path = "/app/data/processed/images/doc-1/logo.png"
+            alt_text = "Verlagslogo"
+            image_metadata = {"page": 1}
+
+        class _FakeQuery:
+            def __init__(self, rows): self.rows = rows
+            def filter(self, *args, **kwargs): return self
+            def limit(self, n): self.rows = self.rows[:n]; return self
+            def all(self): return self.rows
+
+        class _FakeDB:
+            def query(self, model): return _FakeQuery([_FakeRow()])
+
+        result = fr.resolve_figures(
+            _FakeDB(),
+            prompt="Bitte 3 Abbildungen einbauen.",
+            draft_body="",
+            doc_ids=["doc-1"],
+        )
+        assert result["intent_detected"] is True
+        # No candidates emitted despite the fake DB row that would
+        # match "any image" — empty description must short-circuit.
+        urls = result.get("valid_image_urls") or set()
+        assert "/api/images/doc-1/logo.png" not in urls
+
+    def test_no_alt_text_match_returns_no_candidates(self):
+        # Regression: when the alt_text query returns no rows, we must
+        # NOT fall back to "any image from the doc set" — that was the
+        # second arm of the publisher-logo bug. Fake DB returns empty,
+        # asserts no candidates come out.
+        from services import figure_resolution as fr
+
+        class _FakeQuery:
+            def filter(self, *_a, **_k): return self
+            def limit(self, _n): return self
+            def all(self): return []  # ILIKE finds nothing
+
+        class _FakeDB:
+            def query(self, _model): return _FakeQuery()
+
+        result = fr.resolve_figures(
+            _FakeDB(),
+            prompt="Add Figure 1: BIP-Wachstum von China.",
+            draft_body="",
+            doc_ids=["doc-1"],
+        )
+        assert result["intent_detected"] is True
+        # No candidates → valid_image_urls is empty set
+        assert (result.get("valid_image_urls") or set()) == set()
+        # candidates_by_description should be empty list for the query
+        cb = result.get("candidates_by_description") or {}
+        for desc, cands in cb.items():
+            assert cands == [], f"unexpected candidates for {desc!r}: {cands}"
