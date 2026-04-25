@@ -617,7 +617,8 @@ class PGVectorStore:
         query_image_embedding: Optional[np.ndarray] = None,
         n_results: int = 10,
         text_weight: float = 0.5,
-        image_weight: float = 0.5
+        image_weight: float = 0.5,
+        doc_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Perform multimodal search combining text and image embeddings.
@@ -629,6 +630,11 @@ class PGVectorStore:
             n_results: Number of results to return
             text_weight: Weight for text similarity (0-1)
             image_weight: Weight for image similarity (0-1)
+            doc_ids: When provided, restrict the search to images/chunks
+                whose document_id is in this list. Without scoping, the
+                query searches the entire corpus — which leaks images
+                from unrelated sessions when callers like the figure
+                resolver hit it.
 
         Returns:
             List of search results with metadata, type, and combined scores
@@ -650,26 +656,41 @@ class PGVectorStore:
         try:
             results = []
 
+            # Build the optional doc-scoping clause once. ANY(:doc_ids)
+            # idiom requires a Python list; SQLAlchemy expanding bindparam
+            # could be cleaner but raw text() is the existing pattern here.
+            doc_filter_clause = ""
+            params_extra: Dict[str, Any] = {}
+            if doc_ids:
+                doc_filter_clause = "AND doc_id = ANY(:doc_ids)"
+                params_extra["doc_ids"] = list(doc_ids)
+
             # Search text chunks if text embedding provided
             if query_text_embedding is not None:
                 query_embedding_list = query_text_embedding.tolist() if isinstance(query_text_embedding, np.ndarray) else query_text_embedding
 
-                # Use cosine similarity for text chunks
-                text_query = text("""
+                # Use cosine similarity for text chunks. Skip rows
+                # without an embedding and (when scoped) restrict to the
+                # caller's doc_ids.
+                text_query = text(f"""
                     SELECT
                         chunk_id,
                         chunk_text,
                         chunk_metadata,
                         1 - (dense_embedding <=> CAST(:query_embedding AS vector)) AS similarity
                     FROM document_chunks
+                    WHERE dense_embedding IS NOT NULL
+                    {doc_filter_clause}
                     ORDER BY dense_embedding <=> CAST(:query_embedding AS vector)
                     LIMIT :limit
                 """)
 
-                text_results = db.execute(text_query, {
+                text_params = {
                     'query_embedding': str(query_embedding_list),
-                    'limit': n_results
-                }).fetchall()
+                    'limit': n_results,
+                    **params_extra,
+                }
+                text_results = db.execute(text_query, text_params).fetchall()
 
                 for row in text_results:
                     results.append({
@@ -685,42 +706,58 @@ class PGVectorStore:
             if query_image_embedding is not None:
                 query_image_list = query_image_embedding.tolist() if isinstance(query_image_embedding, np.ndarray) else query_image_embedding
 
-                # Use cosine similarity for images
-                image_query = text("""
+                # Use cosine similarity for images. The SQLAlchemy model
+                # column is `image_metadata` (the underscored name avoids
+                # SQLAlchemy's reserved-word collision); the previous
+                # SELECT referred to a non-existent `metadata` column.
+                # Also skip NULL embeddings (legacy rows from before the
+                # vision embedder was wired) and restrict to caller's
+                # doc_ids when scoping is requested.
+                image_query = text(f"""
                     SELECT
                         image_id,
+                        doc_id,
                         image_path,
                         alt_text,
                         chunk_id,
-                        metadata,
+                        image_metadata,
                         1 - (image_embedding <=> CAST(:query_embedding AS vector(512))) AS similarity
                     FROM document_images
+                    WHERE image_embedding IS NOT NULL
+                    {doc_filter_clause}
                     ORDER BY image_embedding <=> CAST(:query_embedding AS vector(512))
                     LIMIT :limit
                 """)
 
-                image_results = db.execute(image_query, {
+                image_params = {
                     'query_embedding': str(query_image_list),
-                    'limit': n_results
-                }).fetchall()
+                    'limit': n_results,
+                    **params_extra,
+                }
+                image_results = db.execute(image_query, image_params).fetchall()
 
                 for row in image_results:
                     results.append({
                         'type': 'image',
                         'image_id': row[0],
-                        'image_path': row[1],
-                        'alt_text': row[2],
-                        'chunk_id': row[3],
-                        'metadata': row[4],
-                        'similarity': float(row[5]),
-                        'weighted_score': float(row[5]) * image_weight
+                        'doc_id': row[1],
+                        'image_path': row[2],
+                        'alt_text': row[3],
+                        'chunk_id': row[4],
+                        'metadata': row[5],
+                        'similarity': float(row[6]),
+                        'weighted_score': float(row[6]) * image_weight
                     })
 
             # Sort by weighted score and limit results
             results.sort(key=lambda x: x['weighted_score'], reverse=True)
             results = results[:n_results]
 
-            logger.info(f"Multimodal search returned {len(results)} results")
+            logger.info(
+                "Multimodal search returned %d results (scoped=%s)",
+                len(results),
+                bool(doc_ids),
+            )
             return results
 
         except Exception as e:
