@@ -137,7 +137,7 @@ class FigureCandidate:
 
     image_id: str
     doc_id: str
-    image_url: str       # /api/documents/images/{doc_id}/{filename}
+    image_url: str       # /api/images/{doc_id}/{filename}
     alt_text: Optional[str]
     relevance: float     # 0-1; higher = more confident match
     source_document_title: Optional[str] = None
@@ -178,13 +178,14 @@ def _image_url_from_path(doc_id: str, image_path: str) -> str:
 
     `DocumentImage.image_path` is typically
     `/app/data/processed/images/{doc_id}/{filename}`; the serving
-    endpoint lives at `/api/documents/images/{doc_id}/{filename}`.
+    endpoint lives at `/api/images/{doc_id}/{filename}` (defined on
+    api/documents.py:1463 with the documents router mounted at /api).
     Fall back gracefully for unexpected shapes.
     """
     if not image_path:
-        return f"/api/documents/images/{doc_id}/unknown"
+        return f"/api/images/{doc_id}/unknown"
     filename = image_path.rsplit("/", 1)[-1]
-    return f"/api/documents/images/{doc_id}/{filename}"
+    return f"/api/images/{doc_id}/{filename}"
 
 
 def _load_candidates(
