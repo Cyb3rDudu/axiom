@@ -1501,3 +1501,25 @@ async def serve_document_image(
         media_type=media_type,
         filename=image_filename
     )
+
+
+@router.get("/documents/images/{doc_id}/{image_filename}")
+async def serve_document_image_legacy(
+    doc_id: str,
+    image_filename: str,
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Backwards-compat alias for legacy figure-resolver URL shape.
+
+    Drafts persisted before the resolver was fixed (PR #98) embedded
+    `/api/documents/images/{doc_id}/{filename}` paths in their figure
+    Markdown. The canonical route is `/api/images/{doc_id}/{filename}`;
+    this alias keeps those legacy drafts rendering in the editor
+    without requiring a manual rewrite. Delegates to the same handler
+    so disk-path resolution + security check stay in one place.
+    """
+    return await serve_document_image(
+        doc_id=doc_id,
+        image_filename=image_filename,
+        current_user=current_user,
+    )
