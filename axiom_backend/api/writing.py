@@ -2110,3 +2110,92 @@ async def export_draft_as_docx(
             status_code=500,
             detail=f"Failed to generate Word document: {str(e)}"
         )
+
+
+@router.post("/sessions/{session_id}/draft/markdown")
+async def export_draft_as_markdown(
+    session_id: str,
+    content: MarkdownContent,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user_from_cookie),
+):
+    """Export a writing draft as Markdown with bibliography + portfolio appended.
+
+    Counterpart to /draft/docx. Without this endpoint, the frontend's
+    Markdown export was 100% client-side — just blob-wrapping the raw
+    draft body — and never included the rendered Literaturverzeichnis
+    or Literaturportfolio. This endpoint runs the same append logic the
+    DOCX export uses (`_maybe_append_structured_bibliography` then
+    `_maybe_append_portfolio_section`) and returns the resulting
+    Markdown as text/markdown.
+    """
+    # Verify the user has access to this writing session.
+    writing_session = (
+        db.query(models.WritingSession)
+        .join(models.Chat, models.WritingSession.chat_id == models.Chat.id)
+        .filter(
+            models.WritingSession.id == session_id,
+            models.Chat.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not writing_session:
+        raise HTTPException(
+            status_code=404, detail="Writing session not found or access denied"
+        )
+
+    original_markdown = content.markdown_content
+    markdown_to_render = _maybe_append_structured_bibliography(
+        db=db,
+        user=current_user,
+        draft_id=content.draft_id,
+        markdown=original_markdown,
+        profile_id_override=content.citation_profile_id,
+    )
+    bib_source = (
+        "structured"
+        if markdown_to_render is not original_markdown
+        and markdown_to_render != original_markdown
+        else (
+            "inline"
+            if "## Literaturverzeichnis" in original_markdown
+            or "## References" in original_markdown
+            else "none"
+        )
+    )
+    post_bib_markdown = markdown_to_render
+    markdown_to_render = _maybe_append_portfolio_section(
+        db=db,
+        user=current_user,
+        draft_id=content.draft_id,
+        markdown=markdown_to_render,
+    )
+    port_source = (
+        "structured"
+        if markdown_to_render != post_bib_markdown
+        else (
+            "inline"
+            if "## Literaturportfolio" in original_markdown
+            or "## Literature Portfolio" in original_markdown
+            else "none"
+        )
+    )
+
+    from services.writing_telemetry import record_docx_export
+
+    # Reuse the same telemetry helper — the export "kind" lives in the
+    # log line so dashboards can split if needed without a new metric.
+    record_docx_export(
+        bibliography_source=bib_source,  # type: ignore[arg-type]
+        portfolio_source=port_source,  # type: ignore[arg-type]
+        draft_id=content.draft_id,
+        user_id=current_user.id,
+        markdown_size=len(markdown_to_render),
+    )
+
+    filename = f"{content.filename or 'document'}.md"
+    return Response(
+        content=markdown_to_render,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
