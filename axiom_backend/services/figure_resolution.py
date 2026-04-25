@@ -67,6 +67,32 @@ _FIGURE_PLACEHOLDER_RE = re.compile(
 )
 
 
+# Description fragments that mark a captured "Abbildung N: ..." string
+# as a TEMPLATE rather than a real figure description. User prompts
+# often contain example caption shapes like
+#   *Abbildung N: <Beschreibung>. Quelle: <Quellenangabe>. Eigene Darstellung.*
+# meant as a writer instruction. Captured descriptions that read like
+# `... Quelle: ... Eigene Darstellung` or `<Beschreibung>` would otherwise
+# be embedded by CLIP into noise and produce zero matches.
+_TEMPLATE_PLACEHOLDER_TOKENS = (
+    "...",  # ellipsis as placeholder
+    "<",    # angle-bracket placeholder like <Beschreibung>
+    "[",    # square-bracket placeholder like [Beschreibung]
+)
+
+
+def _is_template_placeholder(description: str) -> bool:
+    """Return True if ``description`` looks like an instruction template.
+
+    Conservative: triggers only when the description contains an
+    ellipsis or angle/square-bracket placeholder marker. Real captions
+    almost never contain these characters, while template phrasings do.
+    """
+    if not description:
+        return False
+    return any(token in description for token in _TEMPLATE_PLACEHOLDER_TOKENS)
+
+
 @dataclass(frozen=True)
 class FigureQuery:
     """One description the writer intends to illustrate."""
@@ -114,8 +140,17 @@ def detect_figure_intent(prompt: str, draft_body: str = "") -> List[FigureQuery]
         re.IGNORECASE,
     ):
         desc = m.group(1).strip().rstrip(".").rstrip(",")
-        if desc:
-            queries.append(FigureQuery(description=desc, source="prompt"))
+        if not desc:
+            continue
+        # Template/placeholder filter: prompts often contain example
+        # captions like `*Abbildung N: <Beschreibung>. Quelle: ...*`
+        # to instruct the writer. Such templated descriptions encode
+        # to noise in CLIP and produce zero matches. Skip when the
+        # captured text is dominated by ellipses or angle-bracket
+        # placeholders.
+        if _is_template_placeholder(desc):
+            continue
+        queries.append(FigureQuery(description=desc, source="prompt"))
 
     # (3) Fallback — generic intent signal without specific descriptions
     if not queries and _FIGURE_INTENT_RE.search(text):

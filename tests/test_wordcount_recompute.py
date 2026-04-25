@@ -82,6 +82,57 @@ class TestCountDocumentWords:
         assert "preamble" in titles
         assert "1. First" in titles
 
+    def test_h2_subsections_roll_up_into_parent(self):
+        # Regression: previously, `## 2.1 Sub` chunks split out as
+        # separate "preamble" entries because the head matcher was
+        # H1-only. The user-visible Wortbilanz showed Sektion 2 with
+        # only the H1's body (~30 words) instead of the rolled-up
+        # total (~700 words). H2/H3 subsections must fold back into
+        # their top-level parent.
+        body = (
+            "# 1. Einleitung\n\nintro words.\n\n"
+            "# 2. Theoretische Grundlagen\n\nshort H1 chunk only.\n\n"
+            "## 2.1 Subsection one\n\nfirst sub has additional words present here.\n\n"
+            "## 2.2 Subsection two\n\nsecond sub has even more additional words.\n\n"
+            "# 3. Fazit\n\nfazit words.\n"
+        )
+        total, sections = count_document_words(body)
+        titles = [t for t, _ in sections]
+        # Exactly three top-level sections — no "2.1" / "2.2" leakage
+        assert titles == [
+            "1. Einleitung",
+            "2. Theoretische Grundlagen",
+            "3. Fazit",
+        ]
+        # Sektion 2's word count rolls subsections up
+        sec2_words = next(w for t, w in sections if t.startswith("2. "))
+        # H1 chunk = 4 words, 2.1 = 7 words, 2.2 = 7 words → ~18
+        assert sec2_words >= 15
+
+    def test_h3_subsections_also_roll_up(self):
+        body = (
+            "# 1. Foo\n\none two\n"
+            "## 1.1 Bar\n\nthree four\n"
+            "### 1.1.1 Baz\n\nfive six\n"
+        )
+        total, sections = count_document_words(body)
+        # All three nested headings roll up into section 1
+        assert len(sections) == 1
+        assert sections[0][0].startswith("1. ")
+        # Total words: 2 + 2 + 2 = 6
+        assert total == 6
+
+    def test_dotted_subsection_with_trailing_period_accepted(self):
+        # Some writers emit `## 2.1.` with a trailing period. The head
+        # matcher accepts both `## 2.1 Title` and `## 2.1. Title`.
+        body = (
+            "# 1. Foo\n\nfoo words\n"
+            "## 1.1. Sub\n\nsub words here\n"
+        )
+        total, sections = count_document_words(body)
+        assert len(sections) == 1
+        assert sections[0][0].startswith("1. ")
+
 
 class TestRecomputeWortbilanz:
     def test_replaces_hallucinated_numbers(self):
