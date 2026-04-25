@@ -259,15 +259,13 @@ _REPLACE_VERBS = re.compile(
 
 
 def _is_replace_mode_prompt(prompt: str, lookahead: int = 500) -> bool:
-    """Return True when the prompt contains replace-style instructions.
+    """Backwards-compatible alias around services.writing_prompt.is_replace_mode_prompt.
 
-    Matched against the first ``lookahead`` chars so a long fix-list
-    ("5 tweaks: … 3. ersetze X durch Y …") still triggers the
-    replace-mode system-prompt injection.
+    Kept for tests that import ``_is_replace_mode_prompt`` from this module.
+    New code should import from ``services.writing_prompt``.
     """
-    if not prompt:
-        return False
-    return bool(_REPLACE_VERBS.search(prompt[:lookahead]))
+    from services.writing_prompt import is_replace_mode_prompt
+    return is_replace_mode_prompt(prompt, lookahead)
 
 
 # German + English stopwords for the preflight keyword extractor.
@@ -2200,220 +2198,33 @@ class SimplifiedWritingAgent:
         custom_system_prompt_addition = context_info.get("custom_system_prompt", "")
         citation_mode = context_info.get("citation_mode", "numbered")
 
-        # Build citation instructions based on citation mode
+        # Resolve the full citation profile when in author-year mode so
+        # the builder can embed its in_text_rules. Numbered mode doesn't
+        # need it; the builder falls back to a generic numbered block.
+        citation_profile = None
         if citation_mode == "author_year":
-            # Resolve the full citation profile to get its rules
             from services.citation_profiles import resolve_citation_profile
             citation_profile_id = context_info.get("citation_profile_id")
             user_settings = context_info.get("user_settings")
-            mission_metadata = {"citation_profile_id": citation_profile_id} if citation_profile_id else None
+            mission_metadata = (
+                {"citation_profile_id": citation_profile_id}
+                if citation_profile_id
+                else None
+            )
             citation_profile = resolve_citation_profile(mission_metadata, user_settings)
-            citation_instructions = (
-                "CITATION INSTRUCTIONS:\n"
-                "When you have access to external information (web search or document search results), you MUST:\n"
-                "1. Integrate that information naturally into your response\n"
-                "2. Use author-year citation format as described below\n"
-                "3. Place citations IMMEDIATELY after the relevant statement or claim\n\n"
-                f"{citation_profile.in_text_rules}\n\n"
-                "Always be specific about where information comes from when using external sources.\n\n"
-            )
-        else:
-            citation_instructions = (
-                "CITATION INSTRUCTIONS:\n"
-                "When you have access to external information (web search or document search results), you MUST:\n"
-                "1. Integrate that information naturally into your response\n"
-                "2. Add citations using the EXACT Citation IDs provided in square brackets\n"
-                "3. Place citations IMMEDIATELY after the relevant statement or claim\n"
-                "4. Use ONLY the 8-character Citation IDs shown in the search results\n\n"
-                "CORRECT citation examples:\n"
-                "- 'Recent studies show that climate change is accelerating [a3b4c5d6].'\n"
-                "- 'The document states that revenue increased by 25% [f2e8d9c1] in Q3.'\n"
-                "- 'According to the research [b7a4e3f2], this method improves accuracy.'\n\n"
-                "INCORRECT citations (NEVER do this):\n"
-                "- 'Recent studies show this [1].' ← Wrong! Don't use numbers\n"
-                "- 'The data shows [Source 1]...' ← Wrong! Use the exact Citation ID\n"
-                "- 'According to research...' ← Wrong! Missing citation\n\n"
-                "Each search result will show '**Citation ID: [xxxxxxxx]**' - use these EXACT IDs.\n"
-                "Always be specific about where information comes from when using external sources.\n\n"
-            )
 
-        # Default system prompt (always used as base)
-        system_prompt = (
-            "You are Axiom, a collaborative writing assistant helping users write documents. "
-            "Your responses should be helpful, informative, and directly address the user's request. "
-            "You have access to information about which tools are currently enabled or disabled. "
-            "\n\nCRITICAL - MATHEMATICAL NOTATION: Always use standard Markdown/LaTeX notation:\n"
-            "• For inline math: $formula$ (single dollar signs)\n"
-            "• For display math: $$formula$$ (double dollar signs on separate lines)\n"
-            "• NEVER use square brackets [ ], parentheses \\( \\), or \\begin{equation} for math delimiters\n"
-            "If a user's request would benefit from a tool that is currently disabled, suggest they enable it.\n\n"
-            + citation_instructions +
-            "If the user's request implies changes to the document, describe what changes you would make. \n\n"
-            "WRITING STYLE GUIDELINES:\n"
-            "Use bullet points only sparingly and only if absolutely necessary. Otherwise, write in reasonably length paragraphs that flow naturally and provide comprehensive coverage of topics.\n\n"
-            "IMPORTANT FORMATTING INSTRUCTIONS:\n"
-            "When generating substantial content, wrap each distinct content block using this format:\n"
-            "```content-block:BLOCK_TYPE\n"
-            "Your content here...\n"
-            "```\n\n"
-            "Available BLOCK_TYPE options (USE THE MOST APPROPRIATE ONE):\n"
-            "- document: Complete document or article (use for full documents with multiple sections)\n"
-            "- section: Individual section with headings and content (use for major parts of a document)\n"
-            "- paragraph: Single paragraph or brief explanatory text (use for short responses)\n"
-            "- list: Bullet points or numbered lists (use ONLY for actual lists)\n"
-            "- note: Important notes, warnings, or callouts (use sparingly for special notices)\n"
-            "- code: ONLY for actual programming code, scripts, or terminal commands\n\n"
-            "CRITICAL RULES:\n"
-            "1. DO NOT use 'code' block type for regular text, formulas, or tables\n"
-            "2. For mathematical formulas and equations:\n"
-            "   - Use single dollar signs for inline math: $E = mc^2$\n"
-            "   - Use double dollar signs for display math: $$\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$$\n"
-            "   - NEVER use square brackets [ ] or parentheses \\( \\) for LaTeX delimiters\n"
-            "   - ALWAYS escape backslashes in LaTeX commands (use \\\\ instead of \\)\n"
-            "3. For tables, use 'section' or 'paragraph' with Markdown table syntax\n"
-            "4. Default to 'section' for most structured content\n"
-            "5. Use 'paragraph' for brief responses\n\n"
-            "Example for scientific content with formulas:\n"
-            "```content-block:section\n"
-            "# Mathematical Formulas\n\n"
-            "The quadratic equation $ax^2 + bx + c = 0$ has solutions given by:\n\n"
-            "$$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$\n\n"
-            "For quantum mechanics, the Schrödinger equation is:\n\n"
-            "$$i\\hbar\\frac{\\partial}{\\partial t}\\Psi = \\hat{H}\\Psi$$\n\n"
-            "Note how we use $ for inline math and $$ for display equations.\n"
-            "```\n\n"
-            "WRONG FORMAT (NEVER DO THIS):\n"
-            "- [ \\hbar\\frac{\\partial}{\\partial t}\\Psi ] ← Wrong! Use $$ instead\n"
-            "- \\( E = mc^2 \\) ← Wrong! Use $ instead\n"
-            "- \\begin{equation}...\\end{equation} ← Wrong! Use $$ instead"
+        from services.writing_prompt import build_writer_system_prompt
+
+        system_prompt = build_writer_system_prompt(
+            citation_mode=citation_mode,
+            citation_profile=citation_profile,
+            structured_bibliography_enabled=bool(
+                context_info.get("structured_bibliography_enabled")
+            ),
+            user_prompt=prompt,
+            custom_prompt=custom_system_prompt_addition,
+            external_context=external_context,
         )
-        
-        # Structured-bibliography injection (#53): when the feature flag
-        # is on, instruct the writer to emit a content-block:references
-        # fence containing a JSON array alongside (or instead of) the
-        # inline Markdown Literaturverzeichnis. Legacy flow unchanged
-        # when the flag is off.
-        if context_info.get("structured_bibliography_enabled"):
-            system_prompt += (
-                "\n\nSTRUCTURED BIBLIOGRAPHY (required when you cite any source):\n"
-                "\n"
-                "OUTPUT ORDER (critical for token budget):\n"
-                "1. EMIT THE `content-block:references` BLOCK FIRST, before any\n"
-                "   other content-block. The block is small JSON; if the response\n"
-                "   gets truncated, the recoverable prose tail is what we lose,\n"
-                "   not the structured bibliography.\n"
-                "2. THEN emit the `content-block:document` with the draft body.\n"
-                "3. DO NOT emit a Markdown `## Literaturverzeichnis` section\n"
-                "   inside the document body. The structured registry is the\n"
-                "   single source of truth — the DOCX export and UI render the\n"
-                "   bibliography deterministically from it. A duplicate inline\n"
-                "   section just inflates the token budget and risks drift.\n"
-                "\n"
-                "FORMAT:\n"
-                "```content-block:references\n"
-                "[\n"
-                '  {\n'
-                '    \"entry_key\": \"destatis-2024\",\n'
-                '    \"authors\": [{\"family\": \"Destatis\", \"given\": \"\"}],\n'
-                '    \"year\": 2024,\n'
-                '    \"title\": \"Außenhandel 2024\",\n'
-                '    \"container_title\": \"Statistisches Bundesamt\",\n'
-                '    \"url\": \"https://www.destatis.de/...\",\n'
-                '    \"accessed_at\": \"2026-04-24\",\n'
-                '    \"reference_type\": \"web\"\n'
-                '  }\n'
-                "]\n"
-                "```\n"
-                "RULES for the references block:\n"
-                "1. entry_key: stable per-draft slug (lowercase, ASCII, dash-separated). "
-                "The SAME key that your in-text citations reference.\n"
-                "2. authors: array of {family, given}. Institutional authors use "
-                "{family: 'Destatis', given: ''}.\n"
-                "3. year: integer; omit the field for 'n.d.' / 'o. J.' sources.\n"
-                "4. At least one of url / container_title / publisher must be set. "
-                "For BOOK references without a URL, `publisher` is MANDATORY "
-                "(e.g. 'Vahlen', 'Springer Gabler', 'vdf Hochschulverlag ETH Zürich', "
-                "'Mohr Siebeck', 'Nomos'). Entries without any of the four "
-                "fields get rejected by the backend and drop out silently.\n"
-                "5. Every in-text citation in this response MUST have a matching "
-                "entry in this block. No orphan citations.\n"
-                "6. EVERY entry in this block MUST be cited at least once in the "
-                "body with a proper in-text citation. An entry that is not "
-                "cited ANYWHERE in the body gets flagged as a DEAD ENTRY "
-                "by the backend sync and damages the response quality score. "
-                "Before emitting an entry, mentally check: where exactly in "
-                "my body does a citation for it appear? If the answer is "
-                "'nowhere', OMIT THE ENTRY.\n"
-                "7. This block REPLACES the full bibliography — on each revision "
-                "turn you own the entire registry. Missing a previous entry means "
-                "it gets deleted.\n"
-                "8. EMIT THE BLOCK EXACTLY ONCE per response. Do not split it, "
-                "do not re-emit a 'continued' second references block. Start "
-                "by listing the in-text citations you intend to make, THEN "
-                "emit only those entries. A registry handed to you from a "
-                "prior turn (e.g. mission handoff) is a candidate set, not a "
-                "requirement — keep only what you actually cite.\n"
-                "\n"
-                "IN-TEXT CITATION FORMAT (strict, for reliable sync against the "
-                "references block):\n"
-                "- Use FAMILY-NAME ONLY in in-text citations, no given names:\n"
-                "  ✅ (Smith & Jones, 2020, p. 45) / (Hotz-Hart & Rohner, 2014, S. 4-6)\n"
-                "  ❌ (John Smith & Alice Jones, 2020, p. 45)\n"
-                "- Hyphenated surnames stay intact: (Hotz-Hart, 2014, S. 4).\n"
-                "- Three or more authors: use 'et al.' from the first citation, "
-                "no given names, no '&' expansion.\n"
-                "- Institutional authors follow the first-full-then-abbreviation "
-                "convention of the active citation profile.\n"
-            )
-
-        # Replace-mode injection (#44): when the user's prompt uses
-        # replace-style verbs (ersetze / tausche / swap / replace) the
-        # writer tends to ADD the new item alongside the old one
-        # instead of removing the old. Inject an explicit anti-hoard
-        # instruction so revisions with source swaps actually replace.
-        if _is_replace_mode_prompt(prompt):
-            system_prompt += (
-                "\n\nREPLACE-MODE: The user's prompt asks you to replace existing "
-                "content, sources, or phrases. For EVERY swap the user requests "
-                "you MUST:\n"
-                "1. Remove ALL occurrences of the old item from the draft body.\n"
-                "2. Remove the old item from the bibliography if present.\n"
-                "3. Insert the new item in its place, keeping surrounding context.\n"
-                "4. Do NOT leave the old item alongside the new one — that is the "
-                "failure mode to avoid.\n"
-                "If you cannot find the old item, or cannot locate a suitable "
-                "replacement, state that explicitly in the response rather than "
-                "silently skipping. When multiple old items should be removed, "
-                "confirm in one line per swap how many instances you removed."
-            )
-
-        # Append user's custom instructions if provided
-        if custom_system_prompt_addition and custom_system_prompt_addition.strip():
-            system_prompt += f"\n\nADDITIONAL USER INSTRUCTIONS:\n{custom_system_prompt_addition.strip()}"
-        
-        if external_context:
-            # Check if we have the "sources were deemed not relevant" note
-            if "sources were deemed not relevant and excluded" in external_context:
-                system_prompt += (
-                    "\n\nIMPORTANT: Some or all search results were filtered as not relevant to your query. "
-                    "You should inform the user that you couldn't find highly relevant current sources. "
-                    "Suggest they either: 1) Enable deep search mode for more thorough results, 2) Rephrase their query to be more specific, "
-                    "or 3) Check if the information they're looking for might be too recent or specialized. "
-                    "Do NOT attempt to answer based on general knowledge when the user explicitly asked for current/recent information."
-                )
-            else:
-                system_prompt += (
-                    "\n\nIMPORTANT: You have access to external information from enabled tools. "
-                    "Use this information to provide more accurate, detailed, and well-sourced responses. "
-                    "When referencing information from these sources, mention the source (e.g., 'According to [source]' or 'Based on the search results'). "
-                    "If the external information contradicts something in the current draft, point this out to the user."
-                )
-        else:
-            system_prompt += (
-                "\n\nNOTE: No external information was gathered for this request. "
-                "If the user's question would benefit from web search or document search, "
-                "suggest they enable the appropriate tools using the controls in the interface."
-            )
         
         # Build messages list with proper structure
         messages = []
