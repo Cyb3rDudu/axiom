@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from services.writing_i18n import t
 from services.writing_markdown import (
@@ -208,28 +208,76 @@ def _strip_for_wordcount(text: str) -> str:
 def count_document_words(document_body: str) -> Tuple[int, List[Tuple[str, int]]]:
     """Deterministic word count per section.
 
-    Returns (total, [(section_title, words), ...]). Sections are
-    identified by level-1 Markdown headings; any prose before the
-    first `# 1.` heading is counted as a "preamble" section.
+    Returns (total, [(section_title, words), ...]). Top-level sections
+    are identified by their numeric prefix (the integer before the dot
+    in `# N. Title` or `## N.X Subtitle`). Subsection word counts roll
+    UP into their parent section so the user-visible Wortbilanz lists
+    one row per top-level section regardless of how the writer nested
+    its headings.
+
+    Prose before the first numbered heading is reported as "preamble"
+    (filtered out by `_format_wortbilanz` before user display).
     """
     if not document_body:
         return 0, []
     cleaned = _strip_for_wordcount(document_body)
     parts = _DOC_SECTION_SPLIT.split(cleaned)
-    sections: List[Tuple[str, int]] = []
-    total = 0
+
+    # Walk parts in order, accumulate words into the most-recent
+    # top-level section. A part that starts with `# N. …` (H1) opens a
+    # new section; subsequent `## N.X …` (H2/H3) chunks for the same
+    # top-level N roll their words up into that section.
+    #
+    # Heading shapes accepted (the trailing dot after the integer chain
+    # is optional — academic markdown is inconsistent about it):
+    #   # 1. Einleitung           → top=1, sub=None
+    #   ## 2.1 Subsection         → top=2, sub=.1
+    #   ## 2.1. Subsection        → top=2, sub=.1
+    #   ### 3.1.2 Sub-sub         → top=3, sub=.1.2
+    head_re = re.compile(r"^(#{1,4})\s+(\d+)((?:\.\d+)*)\.?\s+([^\n]+)")
+    by_index: Dict[int, Tuple[str, int]] = {}
+    order: List[int] = []
+    preamble_words = 0
+
     for part in parts:
         part = part.strip()
         if not part:
             continue
-        head_match = re.match(r"^# (\d+\.\s+[^\n]+)", part)
-        if head_match:
-            title = head_match.group(1).strip()
-            body = part[head_match.end():]
+        head_match = head_re.match(part)
+        if not head_match:
+            preamble_words += len(part.split())
+            continue
+
+        top_level_idx = int(head_match.group(2))
+        sub_idx = head_match.group(3) or None  # "" → None
+        title_text = head_match.group(4).strip()
+        body_words = len(part[head_match.end():].split())
+
+        if top_level_idx in by_index:
+            # Existing section — roll subsection words up.
+            current_title, current_words = by_index[top_level_idx]
+            by_index[top_level_idx] = (current_title, current_words + body_words)
         else:
-            title = "preamble"
-            body = part
-        words = len(body.split())
+            # First time we see this top-level section.
+            if sub_idx is None:
+                # H1 numbered heading: use its title as the section title.
+                section_title = f"{top_level_idx}. {title_text}"
+            else:
+                # The H1 itself never appeared (unusual) — synthesize a
+                # title from the subsection's top-level index. The
+                # writer should always emit `# N. Title` first; this
+                # only fires on malformed structures.
+                section_title = f"{top_level_idx}. (untitled)"
+            by_index[top_level_idx] = (section_title, body_words)
+            order.append(top_level_idx)
+
+    sections: List[Tuple[str, int]] = []
+    total = 0
+    if preamble_words:
+        sections.append(("preamble", preamble_words))
+        total += preamble_words
+    for idx in order:
+        title, words = by_index[idx]
         sections.append((title, words))
         total += words
     return total, sections

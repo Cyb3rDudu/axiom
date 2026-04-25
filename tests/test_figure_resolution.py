@@ -91,6 +91,53 @@ class TestDetectFigureIntent:
         assert len(qs) == 1
         assert "*" not in qs[0].description
 
+    def test_template_placeholder_descriptions_skipped(self):
+        # Regression: live CLIP run produced 0 candidates because the
+        # extracted description was `... Quelle: ... Eigene Darstellung`
+        # — captured from a writer-instruction template. CLIP encoded
+        # the ellipses into noise. Templates must be skipped before
+        # they hit the CLIP encoder.
+        from services.figure_resolution import detect_figure_intent
+        prompt = (
+            "Beispiel für die Bildunterschrift:\n"
+            "  Abbildung 1: ... Quelle: ... Eigene Darstellung\n"
+            "\n"
+            "Konkretes Thema:\n"
+            "  Abbildung 2: BIP-Wachstum Chinas 1980-2024.\n"
+        )
+        qs = detect_figure_intent(prompt)
+        # Only the concrete description survives; the templated one
+        # with ellipses is filtered out.
+        descs = [q.description for q in qs]
+        assert any("BIP-Wachstum Chinas" in d for d in descs)
+        assert not any("..." in d for d in descs)
+
+    def test_angle_bracket_placeholder_skipped(self):
+        # The templated description gets filtered, but the generic
+        # figure-intent fallback (path 3) still fires because the
+        # prompt contains "Abbildung". Result: one empty-description
+        # query that the resolver short-circuits to "0 matches".
+        from services.figure_resolution import detect_figure_intent
+        prompt = "Abbildung 1: <Beschreibung der Abbildung>"
+        qs = detect_figure_intent(prompt)
+        # Either no queries (template filtered + no generic fallback)
+        # OR exactly one generic-intent query with empty description.
+        # Crucially: NO query with the templated description bleeding in.
+        assert all("<" not in q.description for q in qs)
+        assert all("..." not in q.description for q in qs)
+        # If a query is emitted, it must be the generic-intent fallback
+        if qs:
+            assert qs[0].source == "instruction"
+            assert qs[0].description == ""
+
+    def test_is_template_placeholder_helper(self):
+        from services.figure_resolution import _is_template_placeholder
+        assert _is_template_placeholder("... Quelle: ...") is True
+        assert _is_template_placeholder("<Beschreibung>") is True
+        assert _is_template_placeholder("[caption]") is True
+        assert _is_template_placeholder("BIP-Wachstum 1980-2024") is False
+        assert _is_template_placeholder("") is False
+
     def test_explicit_numbered_description_in_prompt(self):
         prompt = (
             "Please add:\n"
