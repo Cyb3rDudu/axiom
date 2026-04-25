@@ -2215,6 +2215,36 @@ class SimplifiedWritingAgent:
 
         from services.writing_prompt import build_writer_system_prompt
 
+        # Project the planner's plan (if any) into primitives the prompt
+        # builder can consume without a domain dependency. When the
+        # planner flag is off, all of these stay None and the prompt
+        # behaves exactly as before.
+        plan = context_info.get("deliverable_plan")
+        section_budgets_for_prompt = None
+        total_word_budget = None
+        plan_language = None
+        if plan is not None:
+            try:
+                section_budgets_for_prompt = {
+                    s.index: (s.target_words, s.title) for s in plan.sections
+                }
+                total_word_budget = plan.total_word_budget
+                plan_language = plan.language_code
+            except AttributeError:
+                # Plan dict from a stale session row; ignore gracefully.
+                section_budgets_for_prompt = None
+                total_word_budget = None
+                plan_language = None
+
+        # Resolve language for the prompt: explicit user setting wins,
+        # then planner-derived, then default English.
+        user_settings_for_lang = context_info.get("user_settings") or {}
+        language_code = (
+            (user_settings_for_lang.get("language_code") if isinstance(user_settings_for_lang, dict) else None)
+            or plan_language
+            or "en"
+        )
+
         system_prompt = build_writer_system_prompt(
             citation_mode=citation_mode,
             citation_profile=citation_profile,
@@ -2224,6 +2254,9 @@ class SimplifiedWritingAgent:
             user_prompt=prompt,
             custom_prompt=custom_system_prompt_addition,
             external_context=external_context,
+            section_budgets=section_budgets_for_prompt,
+            total_word_budget=total_word_budget,
+            language_code=language_code,
         )
         
         # Build messages list with proper structure
@@ -2322,7 +2355,21 @@ class SimplifiedWritingAgent:
                 context_info.get("user_settings")
             )
 
-            if transparent_on and finish_reason == "length":
+            # Transparent continuation runs on EITHER:
+            #   - finish_reason=length (structural truncation), OR
+            #   - the helper detects an underbudget complete response
+            #     (only possible when the planner provided budgets).
+            # Letting it run on every turn is cheap when nothing fires
+            # — detect_cut_point is a pure-Python pass over the body.
+            section_budgets_for_cont = context_info.get("section_budgets")
+            total_word_budget_for_cont = context_info.get("total_word_budget")
+            should_check_cuts = transparent_on and (
+                finish_reason == "length"
+                or section_budgets_for_cont
+                or total_word_budget_for_cont
+            )
+
+            if should_check_cuts:
                 import os as _os
                 from services.writing_continuation import (
                     infer_language_code,
@@ -2363,13 +2410,16 @@ class SimplifiedWritingAgent:
                         _os.getenv("AXIOM_WRITING_MAX_CONTINUATIONS", "2")
                     ),
                     expected_sections=expected_sections,
-                    section_budgets=context_info.get("section_budgets"),
+                    section_budgets=section_budgets_for_cont,
+                    total_word_budget=total_word_budget_for_cont,
                     language_code=language_code,
                     stats_callback=_stats_cb,
                 )
                 logger.info(
-                    "transparent continuation outcome=%s attempts=%d missing_initial=%d missing_final=%d",
+                    "transparent continuation outcome=%s mode=%s attempts=%d "
+                    "missing_initial=%d missing_final=%d",
                     cont_tele.get("outcome"),
+                    cont_tele.get("initial_mode"),
                     cont_tele.get("attempts", 0),
                     cont_tele.get("sections_missing_initially", 0),
                     cont_tele.get("sections_missing_final", 0),
@@ -2378,9 +2428,9 @@ class SimplifiedWritingAgent:
                 # was needed or it succeeded": trust the helper, do not
                 # double-flag truncation. Only paper over with a warning
                 # when continuation actually FAILED (dispatch_error,
-                # empty_response, still_truncated after retries).
+                # empty_response, still_truncated, underbudget_unfilled).
                 outcome = cont_tele.get("outcome")
-                if outcome in ("success", "not_needed"):
+                if outcome in ("success", "not_needed", "underbudget_resolved"):
                     finish_reason = "stop"
 
             # Defensive fence-balancer. The continuation prompt tells the
