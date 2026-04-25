@@ -100,9 +100,16 @@ def detect_figure_intent(prompt: str, draft_body: str = "") -> List[FigureQuery]
             queries.append(FigureQuery(description=desc, source="placeholder"))
 
     # (2) User-described figures in the prompt — lines matching
-    #     "Abbildung N: description" or "Figure N: description"
+    #     "Abbildung N: description" or "Figure N: description".
+    #
+    # Description capture stops at Markdown delimiters (`]`, `*`, `(`)
+    # so URLs and italic-caption boundaries don't bleed in. Without
+    # this, a prompt that contains a Markdown image example like
+    #   ![Abbildung 1: BIP-Wachstum](/api/images/x/y.png)
+    # would yield description="BIP-Wachstum](/api/images/x/y.png)" —
+    # which the CLIP encoder dutifully embeds into noise.
     for m in re.finditer(
-        r"(?:Abbildung|Figure|Diagramm|Chart)\s+\d+\s*[:—-]\s*([^\n]{8,200})",
+        r"(?:Abbildung|Figure|Diagramm|Chart)\s+\d+\s*[:—-]\s*([^\n\]\*\(]{8,200})",
         prompt or "",
         re.IGNORECASE,
     ):
