@@ -19,6 +19,7 @@ from services.writing_continuation import (  # noqa: E402
     detect_cut_point,
     infer_language_code,
     parse_sections,
+    run_continuations,
     stitch_continuation,
 )
 
@@ -343,7 +344,7 @@ class TestDetectCutPointUnderBudget:
 
 
 class TestUnderBudgetPrompt:
-    def _underbudget_cut(self):
+    def _underbudget_cut(self, is_last=True):
         from services.writing_continuation import SectionInfo
         return {
             "mode": "underbudget",
@@ -352,6 +353,7 @@ class TestUnderBudgetPrompt:
             "missing_section_indices": [],
             "partial_tail": "der letzte Satz endet hier mit einem Punkt.",
             "expected_sections": 2,
+            "is_last_section": is_last,
             "underbudget_section": SectionInfo(
                 index=2, title="Fazit",
                 start_offset=0, end_offset=0,
@@ -493,3 +495,371 @@ class TestStitchContinuation:
             stitched = stitch_continuation(content, "continuation text.", cut)
             assert "content-block:references" in stitched
             assert '"entry_key": "x"' in stitched
+
+
+# ---------------------------------------------------------------------------
+# Worst-shortfall selection (mid-body splicing prerequisite)
+# ---------------------------------------------------------------------------
+
+
+class TestWorstShortfallSelection:
+    """detect_cut_point must pick the section with the largest absolute
+    word shortfall (not the last section, not the lowest index by default).
+    Ties broken by lowest index."""
+
+    def test_worst_section_picked_over_last(self):
+        # sec 3 shortfall=700, sec 5 shortfall=300 → sec 3 wins
+        content = _build_complete_doc([400, 600, 100, 800, 100])
+        cut = detect_cut_point(
+            content, expected_sections=5,
+            section_budgets={1: 400, 2: 600, 3: 800, 4: 800, 5: 400},
+        )
+        assert cut is not None
+        assert cut["mode"] == "underbudget"
+        assert cut["underbudget_section"].index == 3
+        assert cut["underbudget_target"] == 800
+        assert cut["is_last_section"] is False
+
+    def test_tie_broken_by_lowest_index(self):
+        # sec 1 and 2 both shortfall=300 → sec 1 wins
+        content = _build_complete_doc([100, 100, 800])
+        cut = detect_cut_point(
+            content, expected_sections=3,
+            section_budgets={1: 400, 2: 400, 3: 800},
+        )
+        assert cut is not None
+        assert cut["underbudget_section"].index == 1
+
+    def test_last_section_underbudget_keeps_tail_append(self):
+        # Only sec 5 underbudget → last → tail-append
+        content = _build_complete_doc([400, 600, 800, 800, 100])
+        cut = detect_cut_point(
+            content, expected_sections=5,
+            section_budgets={1: 400, 2: 600, 3: 800, 4: 800, 5: 400},
+        )
+        assert cut is not None
+        assert cut["underbudget_section"].index == 5
+        assert cut["is_last_section"] is True
+
+    def test_small_target_sections_excluded_from_selection(self):
+        # sec 1 has target<200 (below trigger); sec 2 has 600 → sec 2 picks
+        content = _build_complete_doc([20, 100, 800])
+        cut = detect_cut_point(
+            content, expected_sections=3,
+            section_budgets={1: 100, 2: 600, 3: 800},  # 1 < threshold
+        )
+        assert cut is not None
+        assert cut["underbudget_section"].index == 2
+
+    def test_total_budget_only_falls_back_to_last(self):
+        # No section budgets → total drives detection → last section is target
+        content = _build_complete_doc([100, 100])
+        cut = detect_cut_point(
+            content, expected_sections=2,
+            total_word_budget=(1000, 1500),
+        )
+        assert cut is not None
+        assert cut["underbudget_section"].index == 2
+        assert cut["is_last_section"] is True
+
+
+# ---------------------------------------------------------------------------
+# Mid-body splice: stitch_continuation insertion before next heading
+# ---------------------------------------------------------------------------
+
+
+class TestMidBodySplice:
+    """stitch_continuation must insert continuation prose BEFORE the next
+    section's heading when cut targets a non-last section."""
+
+    def _doc_with_three_sections(self):
+        return (
+            "```content-block:document\n"
+            "# 1. Intro\nFirst section ends.\n\n"
+            "# 2. Body\nSecond section ends.\n\n"
+            "# 3. Fazit\nThird section ends.\n"
+            "```\n"
+        )
+
+    def _mid_cut(self, target_idx: int):
+        from services.writing_continuation import SectionInfo
+        return {
+            "mode": "underbudget",
+            "underbudget_section": SectionInfo(
+                index=target_idx, title=f"Section{target_idx}",
+                start_offset=0, end_offset=0, words=10, is_complete=True,
+            ),
+            "underbudget_target": 800,
+            "is_last_section": False,
+            "partial_tail": "Second section ends.",
+        }
+
+    def test_splice_lands_before_next_heading(self):
+        original = self._doc_with_three_sections()
+        cut = self._mid_cut(target_idx=2)
+        stitched = stitch_continuation(
+            original, "EXTRA BODY PROSE.", cut
+        )
+        assert "EXTRA BODY PROSE." in stitched
+        # Order: section 2's prose → EXTRA → section 3's heading
+        i_existing = stitched.index("Second section ends.")
+        i_extra = stitched.index("EXTRA BODY PROSE.")
+        i_next_head = stitched.index("# 3. Fazit")
+        assert i_existing < i_extra < i_next_head
+
+    def test_next_section_heading_not_duplicated(self):
+        original = self._doc_with_three_sections()
+        cut = self._mid_cut(target_idx=2)
+        stitched = stitch_continuation(original, "EXTRA.", cut)
+        assert stitched.count("# 3. Fazit") == 1
+
+    def test_target_section_heading_not_duplicated(self):
+        original = self._doc_with_three_sections()
+        cut = self._mid_cut(target_idx=2)
+        stitched = stitch_continuation(original, "EXTRA.", cut)
+        assert stitched.count("# 2. Body") == 1
+
+    def test_subsequent_sections_preserved_intact(self):
+        original = self._doc_with_three_sections()
+        cut = self._mid_cut(target_idx=2)
+        stitched = stitch_continuation(original, "EXTRA.", cut)
+        # Section 3's prose still there
+        assert "Third section ends." in stitched
+
+    def test_last_section_underbudget_falls_back_to_tail_append(self):
+        original = self._doc_with_three_sections()
+        from services.writing_continuation import SectionInfo
+        cut = {
+            "mode": "underbudget",
+            "underbudget_section": SectionInfo(
+                index=3, title="Fazit",
+                start_offset=0, end_offset=0, words=10, is_complete=True,
+            ),
+            "is_last_section": True,
+            "partial_tail": "Third section ends.",
+        }
+        stitched = stitch_continuation(original, "FAZIT EXTRA.", cut)
+        # Tail-append: extra appears AFTER last section's existing prose,
+        # BEFORE the closing ``` fence
+        i_existing = stitched.index("Third section ends.")
+        i_extra = stitched.index("FAZIT EXTRA.")
+        assert i_existing < i_extra
+        # Closing fence still present
+        assert stitched.endswith("```\n")
+
+    def test_truncated_mode_still_uses_tail_append(self):
+        # Even with target_index set, mode=truncated forces tail-append
+        original = self._doc_with_three_sections()
+        from services.writing_continuation import SectionInfo
+        cut = {
+            "mode": "truncated",
+            "last_complete_section_index": 2,
+            "last_partial_section": SectionInfo(
+                index=3, title="Fazit", start_offset=0, end_offset=0,
+                words=5, is_complete=False,
+            ),
+            "missing_section_indices": [],
+            "partial_tail": "Third section ends.",
+        }
+        stitched = stitch_continuation(original, "MORE PROSE.", cut)
+        # Continuation appears at the end, not before any heading
+        assert stitched.index("MORE PROSE.") > stitched.index("Third section ends.")
+        # Heading order preserved
+        assert stitched.index("# 1. Intro") < stitched.index("# 2. Body") < stitched.index("# 3. Fazit")
+
+    def test_splice_preserves_figure_markdown_before_next_heading(self):
+        # Realistic case: section 2 has a figure markdown at its tail
+        original = (
+            "```content-block:document\n"
+            "# 1. Intro\nfirst.\n\n"
+            "# 2. Body\nbody prose.\n\n"
+            "![Abb 1](/api/documents/images/x/y.png)\n"
+            "*Abbildung 1: Caption.*\n\n"
+            "# 3. Fazit\nlast prose.\n"
+            "```\n"
+        )
+        from services.writing_continuation import SectionInfo
+        cut = {
+            "mode": "underbudget",
+            "underbudget_section": SectionInfo(
+                index=2, title="Body", start_offset=0, end_offset=0,
+                words=20, is_complete=True,
+            ),
+            "is_last_section": False,
+            "partial_tail": "*Abbildung 1: Caption.*",
+        }
+        stitched = stitch_continuation(original, "EXTRA INSIGHT.", cut)
+        # Figure + caption stay BEFORE the # 3 heading. The expansion
+        # lands AFTER the figure (between caption and # 3).
+        assert "Abbildung 1" in stitched
+        assert stitched.index("Abbildung 1") < stitched.index("EXTRA INSIGHT.") < stitched.index("# 3. Fazit")
+
+
+# ---------------------------------------------------------------------------
+# Integration: run_continuations multi-section underbudget recovery
+# ---------------------------------------------------------------------------
+
+
+class _StubResponse:
+    def __init__(self, content: str, finish_reason: str = "stop"):
+        self.choices = [
+            type(
+                "Choice",
+                (),
+                {
+                    "message": type("Msg", (), {"content": content})(),
+                    "finish_reason": finish_reason,
+                },
+            )()
+        ]
+
+
+class _ScriptedDispatcher:
+    """Returns canned continuation responses in order."""
+
+    def __init__(self, responses: list[str]):
+        self._responses = list(responses)
+        self.calls: list[dict] = []
+
+    async def dispatch(self, *, messages, agent_mode=None, **kwargs):
+        self.calls.append({"messages": messages, "agent_mode": agent_mode})
+        if not self._responses:
+            return _StubResponse(""), {}
+        text = self._responses.pop(0)
+        return _StubResponse(text, finish_reason="stop"), {"provider": "stub"}
+
+
+class TestRunContinuationsUnderBudgetRecovery:
+    """Live-scenario integration: planner sets per-section budgets, writer
+    produces a complete-but-thin draft, helper picks worst-shortfall
+    section, mid-body splices an expansion, re-detects, repeats until
+    on-budget or budget exhausted."""
+
+    def _initial_thin_draft(self):
+        # Sec 3 is the worst (target 800, actual 100 → shortfall 700).
+        # Sec 2 next worst (target 600, actual 200 → shortfall 400).
+        body = (
+            "# 1. Einleitung\n" + ("lorem " * 280).strip() + ".\n\n"
+            "# 2. Theorie\n" + ("lorem " * 200).strip() + ".\n\n"
+            "# 3. Analyse\n" + ("lorem " * 100).strip() + ".\n\n"
+            "# 4. Diskussion\n" + ("lorem " * 700).strip() + ".\n\n"
+            "# 5. Fazit\n" + ("lorem " * 350).strip() + "."
+        )
+        return f"```content-block:document\n{body}\n```\n"
+
+    def test_picks_worst_section_first_then_re_detects(self):
+        budgets = {1: 400, 2: 600, 3: 800, 4: 800, 5: 400}
+        # Two responses: one big enough to lift sec 3 over threshold,
+        # one for sec 2 (next worst).
+        sec3_expansion = ("expanded analysis " * 350).strip() + "."
+        sec2_expansion = ("expanded theory " * 250).strip() + "."
+        dispatcher = _ScriptedDispatcher([sec3_expansion, sec2_expansion])
+
+        import asyncio
+        final_content, telemetry = asyncio.run(
+            run_continuations(
+                initial_content=self._initial_thin_draft(),
+                finish_reason="stop",
+                base_messages=[{"role": "system", "content": "stub"}],
+                dispatcher=dispatcher,
+                agent_mode="simplified_writing",
+                max_attempts=2,
+                expected_sections=5,
+                section_budgets=budgets,
+                total_word_budget=(2960, 3300),
+                language_code="de",
+            )
+        )
+
+        # Both expansions should have fired (total of 2 calls)
+        assert len(dispatcher.calls) == 2
+        # Telemetry: initial mode is underbudget (no truncation upstream)
+        assert telemetry["initial_mode"] == "underbudget"
+        # Both expansions land in the body; sec 3's lands BEFORE
+        # sec 4 heading; sec 2's lands BEFORE sec 3 heading
+        assert "expanded analysis" in final_content
+        assert "expanded theory" in final_content
+        # Section heading order preserved (no duplicates)
+        for h in ("# 1. Einleitung", "# 2. Theorie", "# 3. Analyse",
+                  "# 4. Diskussion", "# 5. Fazit"):
+            assert final_content.count(h) == 1, f"heading dup: {h}"
+
+    def test_outcome_underbudget_resolved_when_budget_met(self):
+        # Tight setup: only sec 3 underbudget; one expansion clears total + section
+        budgets = {1: 400, 2: 600, 3: 800, 4: 800, 5: 400}
+        body = (
+            "# 1. Einleitung\n" + ("lorem " * 400).strip() + ".\n\n"
+            "# 2. Theorie\n" + ("lorem " * 500).strip() + ".\n\n"
+            "# 3. Analyse\n" + ("lorem " * 100).strip() + ".\n\n"
+            "# 4. Diskussion\n" + ("lorem " * 800).strip() + ".\n\n"
+            "# 5. Fazit\n" + ("lorem " * 400).strip() + "."
+        )
+        initial = f"```content-block:document\n{body}\n```\n"
+        # Initial total = 2200 words; 0.85 × 2960 = 2516 → underbudget total
+        # Expanding sec 3 by 800 words → total 3000, sec 3 = 900 → all on-budget
+        big_expansion = ("expanded prose " * 800).strip() + "."
+        dispatcher = _ScriptedDispatcher([big_expansion])
+
+        import asyncio
+        final_content, telemetry = asyncio.run(
+            run_continuations(
+                initial_content=initial,
+                finish_reason="stop",
+                base_messages=[{"role": "system", "content": "stub"}],
+                dispatcher=dispatcher,
+                agent_mode="simplified_writing",
+                max_attempts=2,
+                expected_sections=5,
+                section_budgets=budgets,
+                total_word_budget=(2960, 3300),
+                language_code="de",
+            )
+        )
+        assert telemetry["outcome"] == "underbudget_resolved"
+
+    def test_outcome_underbudget_unfilled_after_exhaustion(self):
+        budgets = {1: 400, 2: 600, 3: 800, 4: 800, 5: 400}
+        # Both expansions are tiny — nowhere near budget
+        dispatcher = _ScriptedDispatcher(["tiny.", "tinier."])
+
+        import asyncio
+        _, telemetry = asyncio.run(
+            run_continuations(
+                initial_content=self._initial_thin_draft(),
+                finish_reason="stop",
+                base_messages=[{"role": "system", "content": "stub"}],
+                dispatcher=dispatcher,
+                agent_mode="simplified_writing",
+                max_attempts=2,
+                expected_sections=5,
+                section_budgets=budgets,
+                total_word_budget=(2960, 3300),
+                language_code="de",
+            )
+        )
+        assert telemetry["outcome"] == "underbudget_unfilled"
+        assert telemetry["last_observed_mode"] == "underbudget"
+
+    def test_warning_copy_matches_underbudget_failure(self):
+        # Truncation warning would say "Token-Limit"; underbudget should NOT
+        budgets = {1: 400, 2: 600, 3: 800, 4: 800, 5: 400}
+        dispatcher = _ScriptedDispatcher(["tiny.", "tinier."])
+
+        import asyncio
+        final_content, _ = asyncio.run(
+            run_continuations(
+                initial_content=self._initial_thin_draft(),
+                finish_reason="stop",
+                base_messages=[{"role": "system", "content": "stub"}],
+                dispatcher=dispatcher,
+                agent_mode="simplified_writing",
+                max_attempts=2,
+                expected_sections=5,
+                section_budgets=budgets,
+                total_word_budget=(2960, 3300),
+                language_code="de",
+            )
+        )
+        assert "Token-Limit" not in final_content
+        # Underbudget warning should be present at the bottom
+        assert "Wortbudget" in final_content or "geplanten" in final_content
