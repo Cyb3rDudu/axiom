@@ -100,19 +100,6 @@ async def run_response_pipeline(
     citation_sync_dict: Optional[Dict[str, Any]] = None
     completeness_telemetry: Dict[str, Any] = {}
 
-    # ---- Telemetry: per-request flag state ---------------------------------
-    try:
-        from services.writing_telemetry import log_flag_state
-        log_flag_state(
-            subsystem="writing_chat",
-            user_settings=None,  # snapshot already resolved into flags
-            draft_id=context.draft.id,
-            user_id=context.user_id,
-            session_id=context.session_id,
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("flag-state log failed (non-fatal): %s", exc)
-
     # ---- Structured bibliography ingest ------------------------------------
     if context.flags.structured_bibliography:
         structured_refs_summary = await _ingest_structured_bibliography(

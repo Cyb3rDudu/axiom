@@ -1610,6 +1610,19 @@ async def process_writing_chat_in_background(
             status_callback=status_callback
         )
         
+        # Per-request flag-state telemetry runs here (still has access
+        # to user_settings) so the env/user/resolved triple lands in
+        # observability. The pipeline below only sees the frozen flags
+        # snapshot.
+        from services.writing_telemetry import log_flag_state
+        log_flag_state(
+            subsystem="writing_chat",
+            user_settings=user_settings,
+            draft_id=draft.id,
+            user_id=user_id,
+            session_id=session_id,
+        )
+
         # Post-agent processing — bib ingest, audit, citation sync,
         # completeness post-process, persistence, WebSocket payload —
         # all run as one pipeline so the chat task stays a thin caller.
