@@ -1600,6 +1600,11 @@ async def process_writing_chat_in_background(
             if deliverable_plan is not None:
                 context_info["expected_sections"] = deliverable_plan.expected_sections
                 context_info["section_budgets"] = deliverable_plan.section_budgets
+                context_info["total_word_budget"] = deliverable_plan.total_word_budget
+                # Pass the plan itself so the writer prompt builder can
+                # render the per-section targets + titles. The continuation
+                # helper still uses section_budgets above (int → int).
+                context_info["deliverable_plan"] = deliverable_plan
                 # Planner-resolved language is authoritative; user-settings
                 # override (set explicitly by the user) still wins.
                 if not (user_settings or {}).get("language_code"):

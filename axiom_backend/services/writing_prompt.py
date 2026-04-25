@@ -20,7 +20,7 @@ pipeline / agent.
 from __future__ import annotations
 
 import re
-from typing import Optional, Protocol
+from typing import Dict, Mapping, Optional, Protocol, Tuple
 
 
 # Replace-mode trigger words — German + English revision verbs that the
@@ -282,6 +282,90 @@ def _external_context_segment(external_context: str) -> str:
     return _EXTERNAL_CONTEXT_AVAILABLE_BLOCK
 
 
+def _plan_budget_segment(
+    section_budgets: Optional[Mapping[int, Tuple[int, str]]],
+    total_word_budget: Optional[Tuple[int, int]],
+    language_code: str,
+) -> str:
+    """Inject the deliverable planner's per-section word budget into the prompt.
+
+    Empty (no budgets, no totals) → returns "" so the segment stays absent
+    when the planner flag is off or the planner produced no plan. Renders in
+    German when ``language_code`` starts with ``de``, English otherwise.
+
+    The block is intentionally short and instruction-heavy: the writer treats
+    it as a contract, not a soft suggestion. The closing line is the
+    cheating-prevention rule that pairs with the deterministic backend
+    word counter.
+    """
+    if not section_budgets and not total_word_budget:
+        return ""
+
+    de = (language_code or "en").lower().startswith("de")
+    lines: list[str] = []
+
+    if total_word_budget:
+        lo, hi = total_word_budget
+        if de:
+            lines.append(
+                f"GESAMT-WORTBUDGET: {lo}–{hi} Wörter im Body "
+                "(exklusive Titel, Wortbilanz und Referenzen-Block)."
+            )
+        else:
+            lines.append(
+                f"TOTAL WORD BUDGET: {lo}–{hi} words in the body "
+                "(excluding title, word-count line, references block)."
+            )
+
+    if section_budgets:
+        if de:
+            lines.append("")
+            lines.append("PRO-SEKTION-BUDGET (verbindliche Mindestgrößen):")
+        else:
+            lines.append("")
+            lines.append("PER-SECTION BUDGET (binding minimums):")
+        for idx in sorted(section_budgets.keys()):
+            target, title = section_budgets[idx]
+            if de:
+                lines.append(f"  {idx}. {title}: ~{target} Wörter")
+            else:
+                lines.append(f"  {idx}. {title}: ~{target} words")
+
+    if de:
+        lines.extend([
+            "",
+            "REGELN:",
+            "1. Jede Sektion muss inhaltlich tragen — keine Auflistungen, "
+            "keine Wiederholungen, keine Füllsätze. Argumentation entwickeln.",
+            "2. Bleib innerhalb des Gesamtbudgets, aber unterschreite es NICHT. "
+            "Der Backend zählt Wörter deterministisch — Schummeln in einer "
+            "Wortbilanz-Zeile fällt auf und triggert eine Continuation, die "
+            "zu kurze Sektionen erweitert.",
+            "3. Emit KEINE eigene 'Wortbilanz: NNNN'-Zeile. Der Backend "
+            "berechnet sie deterministisch aus dem Body und hängt sie an.",
+        ])
+    else:
+        lines.extend([
+            "",
+            "RULES:",
+            "1. Each section must carry substantive analysis — no bullet "
+            "lists, no repetition, no filler. Develop the argument.",
+            "2. Stay within the total budget, but do NOT undershoot it. The "
+            "backend counts words deterministically — fudging a word-count "
+            "line will be detected and trigger a continuation that expands "
+            "under-budget sections.",
+            "3. Do NOT emit your own 'Word count: NNNN' line. The backend "
+            "computes it deterministically from the body and appends it.",
+        ])
+
+    header = (
+        "WORD-BUDGET CONTRACT (planner-derived):\n"
+        if not de
+        else "WORTBUDGET-VORGABE (vom Planner berechnet):\n"
+    )
+    return "\n\n" + header + "\n".join(lines)
+
+
 def _custom_prompt_segment(custom_prompt: str) -> str:
     """Optional user-supplied addendum block."""
     custom = (custom_prompt or "").strip()
@@ -303,12 +387,21 @@ def build_writer_system_prompt(
     user_prompt: str = "",
     custom_prompt: str = "",
     external_context: str = "",
+    section_budgets: Optional[Mapping[int, Tuple[int, str]]] = None,
+    total_word_budget: Optional[Tuple[int, int]] = None,
+    language_code: str = "en",
 ) -> str:
     """Compose the writer's system prompt from pure segments.
 
-    Fixed ordering: base + citation + content-block formatting →
-    structured bibliography (flagged) → replace mode (prompt-triggered) →
-    custom user instructions → external-context trailer.
+    Fixed ordering: base + citation + content-block formatting → plan
+    budget (planner-flag) → structured bibliography (flagged) →
+    replace mode (prompt-triggered) → custom user instructions →
+    external-context trailer.
+
+    The plan-budget segment is the planner's word-budget contract,
+    projected to primitives (``{idx: (target_words, title)}`` and a
+    ``(min, max)`` total). When neither is provided the segment stays
+    absent, preserving the prior behaviour for planner-disabled flows.
 
     Each segment is independently testable. The function does no I/O —
     it's safe to call from tests without a DB or dispatcher.
@@ -319,6 +412,10 @@ def build_writer_system_prompt(
         _BLOCK_FORMATTING_SUFFIX,
     ]
     system_prompt = "".join(parts)
+
+    system_prompt += _plan_budget_segment(
+        section_budgets, total_word_budget, language_code
+    )
 
     if structured_bibliography_enabled:
         system_prompt += _STRUCTURED_BIBLIOGRAPHY_BLOCK

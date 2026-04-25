@@ -255,6 +255,150 @@ class TestBuildContinuationPrompt:
         assert "TAIL SENTINEL" in prompt
 
 
+def _build_complete_doc(per_section_words: list[int]) -> str:
+    """Helper: emit a content-block:document with N numbered sections, each
+    containing the requested word count, every section ending on a period."""
+    body_parts = []
+    for i, w in enumerate(per_section_words, start=1):
+        sentence = ("lorem " * w).strip() + "."
+        body_parts.append(f"# {i}. Section{i}\n\n{sentence}")
+    body = "\n\n".join(body_parts)
+    return f"```content-block:document\n{body}\n```\n"
+
+
+class TestDetectCutPointUnderBudget:
+    def test_no_trigger_when_no_budgets_provided(self):
+        # Section is small but no budget signal → not flagged
+        content = _build_complete_doc([50])
+        cut = detect_cut_point(content, expected_sections=1)
+        assert cut is None
+
+    def test_no_trigger_when_section_meets_budget(self):
+        content = _build_complete_doc([400, 400])
+        cut = detect_cut_point(
+            content, expected_sections=2,
+            section_budgets={1: 400, 2: 400},
+            total_word_budget=(800, 1000),
+        )
+        assert cut is None
+
+    def test_total_underrun_triggers(self):
+        # Total 200 of 1000 target → under 850 floor, fires
+        content = _build_complete_doc([100, 100])
+        cut = detect_cut_point(
+            content, expected_sections=2,
+            total_word_budget=(1000, 1200),
+        )
+        assert cut is not None
+        assert cut["mode"] == "underbudget"
+        # Last section is the expansion target
+        assert cut["underbudget_section"].index == 2
+
+    def test_last_section_underrun_triggers(self):
+        # Section 1 fine (400), section 2 well below 0.6 of 800 (=200)
+        content = _build_complete_doc([400, 100])
+        cut = detect_cut_point(
+            content, expected_sections=2,
+            section_budgets={1: 400, 2: 800},
+        )
+        assert cut is not None
+        assert cut["mode"] == "underbudget"
+        assert cut["underbudget_section"].index == 2
+        assert cut["underbudget_target"] == 800
+
+    def test_small_section_target_below_threshold_skipped(self):
+        # Target 150 < 200 minimum-trigger → tiny shortfall ignored
+        content = _build_complete_doc([50])
+        cut = detect_cut_point(
+            content, expected_sections=1,
+            section_budgets={1: 150},
+        )
+        assert cut is None
+
+    def test_truncation_takes_precedence_over_budget(self):
+        # Section ends mid-word (no terminator) → structural truncation
+        # wins over the underbudget check, mode is "truncated".
+        body = (
+            "```content-block:document\n"
+            "# 1. Einleitung\n\n"
+            "Some prose ends without a terminat\n"
+            "```\n"
+        )
+        cut = detect_cut_point(
+            body, expected_sections=2,
+            section_budgets={1: 400, 2: 400},
+        )
+        assert cut is not None
+        assert cut["mode"] == "truncated"
+
+    def test_total_target_min_via_total_budget_only(self):
+        # No section_budgets, just total budget — total is 200 of 1000 → fire
+        content = _build_complete_doc([200])
+        cut = detect_cut_point(
+            content, expected_sections=1,
+            total_word_budget=(1000, 1500),
+        )
+        assert cut is not None
+        assert cut["mode"] == "underbudget"
+
+
+class TestUnderBudgetPrompt:
+    def _underbudget_cut(self):
+        from services.writing_continuation import SectionInfo
+        return {
+            "mode": "underbudget",
+            "last_complete_section_index": 2,
+            "last_partial_section": None,
+            "missing_section_indices": [],
+            "partial_tail": "der letzte Satz endet hier mit einem Punkt.",
+            "expected_sections": 2,
+            "underbudget_section": SectionInfo(
+                index=2, title="Fazit",
+                start_offset=0, end_offset=0,
+                words=120, is_complete=True,
+            ),
+            "underbudget_target": 400,
+            "total_actual": 600,
+            "total_target_min": 1000,
+        }
+
+    def test_german_expand_prompt_avoids_truncation_language(self):
+        prompt = build_continuation_prompt(
+            self._underbudget_cut(), language_code="de"
+        )
+        assert "abgeschnitten" not in prompt.lower(), (
+            "expand-mode prompt should not say 'truncated'"
+        )
+        assert "Token-Limit" not in prompt
+        assert "Abschnitt 2" in prompt
+        assert "Fazit" in prompt
+        assert "AN ORT UND STELLE" in prompt
+        assert "KEINE neue Überschrift" in prompt
+
+    def test_english_expand_prompt_avoids_truncation_language(self):
+        prompt = build_continuation_prompt(
+            self._underbudget_cut(), language_code="en"
+        )
+        assert "truncated" not in prompt.lower()
+        assert "section 2" in prompt.lower()
+        assert "in place" in prompt.lower()
+        assert "do not emit a new heading" in prompt.lower()
+
+    def test_expand_prompt_includes_shortfall_estimate(self):
+        prompt = build_continuation_prompt(
+            self._underbudget_cut(), language_code="en"
+        )
+        # actual=120, target=400 → shortfall 280
+        assert "280" in prompt
+
+    def test_expand_prompt_does_not_emit_new_doc_wrapper_instruction(self):
+        prompt = build_continuation_prompt(
+            self._underbudget_cut(), language_code="en"
+        )
+        assert "content-block:document" in prompt
+        assert "Do NOT wrap" in prompt or "Do NOT emit" in prompt
+
+
 class TestInferLanguageCode:
     def test_german_document_classified_de(self):
         text = (

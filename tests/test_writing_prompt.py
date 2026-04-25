@@ -201,3 +201,72 @@ class TestSegmentOrdering:
     def test_base_appears_before_citation(self):
         p = build_writer_system_prompt(citation_mode="numbered")
         assert p.index("You are Axiom") < p.index("CITATION INSTRUCTIONS")
+
+
+class TestPlanBudgetSegment:
+    def test_absent_when_no_plan_provided(self):
+        p = build_writer_system_prompt(citation_mode="numbered")
+        assert "WORD-BUDGET" not in p
+        assert "WORTBUDGET" not in p
+
+    def test_present_with_section_budgets_de(self):
+        p = build_writer_system_prompt(
+            citation_mode="numbered",
+            section_budgets={
+                1: (400, "Einleitung"),
+                2: (600, "Hauptteil"),
+                3: (400, "Fazit"),
+            },
+            total_word_budget=(2960, 3300),
+            language_code="de",
+        )
+        assert "WORTBUDGET-VORGABE" in p
+        assert "1. Einleitung: ~400 Wörter" in p
+        assert "2. Hauptteil: ~600 Wörter" in p
+        assert "3. Fazit: ~400 Wörter" in p
+        assert "2960–3300 Wörter" in p
+        # Anti-cheating clause must reference deterministic backend count
+        assert "deterministisch" in p
+        # No self-declared word-count line allowed
+        assert "Wortbilanz" in p
+
+    def test_present_with_section_budgets_en(self):
+        p = build_writer_system_prompt(
+            citation_mode="numbered",
+            section_budgets={1: (400, "Intro"), 2: (600, "Body")},
+            total_word_budget=(2000, 2500),
+            language_code="en",
+        )
+        assert "WORD-BUDGET CONTRACT" in p
+        assert "1. Intro: ~400 words" in p
+        assert "2000–2500 words" in p
+        assert "deterministically" in p
+
+    def test_total_only_no_sections(self):
+        p = build_writer_system_prompt(
+            citation_mode="numbered",
+            total_word_budget=(1000, 1500),
+            language_code="en",
+        )
+        assert "WORD-BUDGET CONTRACT" in p
+        assert "1000–1500 words" in p
+        assert "PER-SECTION BUDGET" not in p
+
+    def test_sections_only_no_total(self):
+        p = build_writer_system_prompt(
+            citation_mode="numbered",
+            section_budgets={1: (400, "Intro")},
+            language_code="en",
+        )
+        assert "WORD-BUDGET CONTRACT" in p
+        assert "PER-SECTION BUDGET" in p
+        assert "TOTAL WORD BUDGET" not in p
+
+    def test_appears_before_structured_bibliography(self):
+        p = build_writer_system_prompt(
+            citation_mode="numbered",
+            structured_bibliography_enabled=True,
+            section_budgets={1: (400, "Intro")},
+            language_code="en",
+        )
+        assert p.index("WORD-BUDGET CONTRACT") < p.index("STRUCTURED BIBLIOGRAPHY")
