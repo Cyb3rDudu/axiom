@@ -168,3 +168,76 @@ class TestValidateFigureUrls:
         updated, tele = validate_figure_urls("")
         assert updated == ""
         assert tele["figures_total"] == 0
+
+
+class TestTrustedExternalImageUrls:
+    """Citable institutional sources (Destatis, IWF, IEA, KPMG, …) may
+    legitimately appear as figure URLs when the user pastes them into
+    the writing prompt for the agent to copy verbatim. The validator
+    must accept these without flipping them to about:blank, while
+    still rejecting hallucinated URLs from random hosts.
+    """
+
+    def test_accepts_kpmg_klardenker_chart(self):
+        url = (
+            "https://klardenker.kpmg.de/wp-content/uploads/2025/03/"
+            "250305-Aussenhandel-1.ai_-1-e1763042397568.png"
+        )
+        content = f"![Außenhandel D-China]({url})"
+        updated, tele = validate_figure_urls(content)
+        assert updated == content
+        assert tele["figures_resolved"] == 1
+
+    def test_accepts_globaleconomy_dynamic_chart(self):
+        # PHP-served PNG — no .png extension but graph_country.php is
+        # a known chart-serving idiom we whitelist.
+        url = "https://www.theglobaleconomy.com/graph_country.php?p=0&c=China&i=current_account"
+        content = f"![Leistungsbilanz]({url})"
+        updated, tele = validate_figure_urls(content)
+        assert updated == content
+        assert tele["figures_resolved"] == 1
+
+    def test_accepts_iea_charts_path(self):
+        url = "https://www.iea.org/data-and-statistics/charts/some-chart"
+        content = f"![Tech share]({url})"
+        updated, tele = validate_figure_urls(content)
+        assert updated == content
+        assert tele["figures_resolved"] == 1
+
+    def test_accepts_wikimedia_commons(self):
+        url = "https://upload.wikimedia.org/wikipedia/commons/a/aa/China_GDP.png"
+        content = f"![BIP]({url})"
+        updated, tele = validate_figure_urls(content)
+        assert updated == content
+        assert tele["figures_resolved"] == 1
+
+    def test_rejects_random_host_with_png_extension(self):
+        url = "https://random-host.example/figure.png"
+        content = f"![Chart]({url})"
+        updated, tele = validate_figure_urls(content)
+        assert "about:blank" in updated
+        # placeholder-keyword regex catches `example.com|.org`, but
+        # `random-host.example` doesn't match — should land in invalid
+        assert tele["figures_invalid"] == 1 or tele["figures_placeholder"] == 1
+
+    def test_rejects_http_to_trusted_host(self):
+        # Plain http (not https) → rejected to avoid mixed-content
+        # warnings in the editor.
+        url = "http://destatis.de/some-chart.png"
+        content = f"![Chart]({url})"
+        updated, tele = validate_figure_urls(content)
+        assert "about:blank" in updated
+
+    def test_rejects_trusted_host_without_image_path_hint(self):
+        # iea.org but pointing at a press-release HTML path with no
+        # image-shaped suffix nor known chart-serving idiom → reject.
+        url = "https://www.iea.org/news/some-press-release"
+        content = f"![Bogus]({url})"
+        updated, tele = validate_figure_urls(content)
+        assert "about:blank" in updated
+
+    def test_subdomains_of_trusted_apex_pass(self):
+        # Apex domain `kpmg.de` is trusted; a subdomain like
+        # `klardenker.kpmg.de` should pass automatically.
+        url = "https://klardenker.kpmg.de/wp-content/uploads/2025/01/foo.png"
+        assert validate_figure_urls(f"![X]({url})")[1]["figures_resolved"] == 1
