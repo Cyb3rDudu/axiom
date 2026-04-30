@@ -155,6 +155,99 @@ _VALID_FIGURE_URL_RE = re.compile(
 )
 
 
+# Trusted external hosts that may legitimately appear in figure
+# Markdown when the user explicitly cites institutional / official-data
+# sources (Bundesbank, Destatis, IWF, World Bank, IEA reports etc.) —
+# typically pasted by the user into the writing prompt as concrete
+# image URLs the agent is told to copy verbatim.
+#
+# Hosts are matched as exact equals OR as a suffix (so subdomains pass:
+# `data.worldbank.org`, `klardenker.kpmg.de`). HTTPS is required —
+# plain http:// is rejected to avoid mixed-content warnings in the
+# editor.
+_TRUSTED_EXTERNAL_HOSTS = frozenset({
+    # Statistical / central-bank sources
+    "destatis.de",
+    "bundesbank.de",
+    "ecb.europa.eu",
+    "imf.org",
+    "data.worldbank.org",
+    "worldbank.org",
+    "oecd.org",
+    "data.oecd.org",
+    "stats.oecd.org",
+    # German institutional / federal sources
+    "bpb.de",
+    "bmwk.de",
+    "bmf.bund.de",
+    "europarl.europa.eu",
+    # Swiss
+    "seco.admin.ch",
+    "snb.ch",
+    "bfs.admin.ch",
+    # Austrian
+    "wko.at",
+    "statistik.at",
+    "oenb.at",
+    # Trade promotion / specialised aggregators commonly used in
+    # academic citations (curated, not exhaustive)
+    "gtai.de",
+    "theglobaleconomy.com",
+    "iea.org",
+    "ember-energy.org",
+    # Press / consultancy charts that are routinely cited
+    "klardenker.kpmg.de",
+    "kpmg.de",
+    "merics.org",
+    "atlanticcouncil.org",
+    "cer.eu",
+    "swp-berlin.org",
+    "ifo.de",
+    "iwkoeln.de",
+    "bertelsmann-stiftung.de",
+    # Wikimedia Commons / Wikipedia
+    "upload.wikimedia.org",
+    "commons.wikimedia.org",
+})
+
+
+# Image-bearing path patterns we accept when matching against a
+# trusted host: explicit image extension OR a query-string that hints
+# at chart rendering (TheGlobalEconomy uses ?p=…&i=… to serve PNGs).
+_TRUSTED_PATH_HINT_RE = re.compile(
+    r"\.(?:png|jpe?g|gif|webp|svg)(?:\?|#|$)"
+    r"|graph_country\.php"
+    r"|/charts?/"
+    r"|/wp-content/uploads/",
+    re.IGNORECASE,
+)
+
+
+def _is_trusted_external_image_url(url: str) -> bool:
+    """Return True for an HTTPS URL pointing at a known citable host
+    AND whose path pattern looks like an image (extension OR known
+    chart-serving idiom). Both checks must pass — neither alone is
+    sufficient (a PDF on iea.org is not a figure; an arbitrary .png
+    on a random host could be hallucinated).
+    """
+    if not url or not url.startswith("https://"):
+        return False
+    # Extract host
+    rest = url[len("https://"):]
+    host = rest.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].lower()
+    if not host:
+        return False
+    # Suffix match against trusted set: `data.worldbank.org` matches
+    # `worldbank.org` and `data.worldbank.org`; arbitrary subdomains
+    # of trusted apex domains pass.
+    host_matches = host in _TRUSTED_EXTERNAL_HOSTS or any(
+        host.endswith("." + h) for h in _TRUSTED_EXTERNAL_HOSTS
+    )
+    if not host_matches:
+        return False
+    return bool(_TRUSTED_PATH_HINT_RE.search(url))
+
+
 def validate_figure_urls(
     content: str,
     valid_image_paths: Optional[set[str]] = None,
@@ -186,6 +279,14 @@ def validate_figure_urls(
         is_valid = bool(_VALID_FIGURE_URL_RE.match(url))
         if is_valid and valid_image_paths is not None and url not in valid_image_paths:
             is_valid = False
+        # Trusted-external pass-through: HTTPS URLs to a curated set of
+        # citable institutional sources (Destatis, IWF, IEA, KPMG, …)
+        # with an image-shaped path are accepted when the user pasted
+        # them into the writing prompt and the writer copied them
+        # verbatim. Internal corpus URLs (the matcher above) remain the
+        # primary path.
+        if not is_valid and _is_trusted_external_image_url(url):
+            is_valid = True
         if is_valid:
             telemetry["figures_resolved"] += 1
             return m.group(0)
