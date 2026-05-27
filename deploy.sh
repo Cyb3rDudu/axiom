@@ -1,11 +1,12 @@
 #!/bin/bash
-# Deploy Axiom to LXC 120 (production) from MacBook
+# Deploy Axiom to LXC 107 (production) from MacBook
 # Usage: ./deploy.sh [--backend-only] [--frontend-only] [--restart-only]
 set -e
 
-TARGET="dudu@192.168.1.120"
+TARGET="dudu@192.168.1.107"
 REMOTE_SRC="/home/dudu/axiom-src"
 NERDCTL="sudo nerdctl"
+COMPOSE_FILE="/home/dudu/axiom/docker-compose.prod.yml"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -55,13 +56,13 @@ if [ "$RESTART" = true ]; then
 
     log "Waiting for backend health check..."
     sleep 15
-    HEALTH=$(ssh "$TARGET" "$NERDCTL exec axiom-backend python3 -c \"import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health'); print(r.read().decode())\"" 2>/dev/null || echo "FAILED")
+    HEALTH=$(ssh "$TARGET" "curl -sf http://127.0.0.1:8000/health" 2>/dev/null || echo "FAILED")
 
     if echo "$HEALTH" | grep -q "healthy"; then
         log "Backend is healthy!"
     else
         err "Health check failed: $HEALTH"
-        warn "Check logs: ssh $TARGET '$NERDCTL logs axiom-backend --tail 50'"
+        warn "Check logs: ssh $TARGET '$NERDCTL compose -f $COMPOSE_FILE logs --tail 50'"
         exit 1
     fi
 fi

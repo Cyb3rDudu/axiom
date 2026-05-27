@@ -317,6 +317,10 @@ maestro_datalab_cache/
 docker-logs.txt
 *.log
 
+# Deployment compose files (host-specific, not source)
+docker-compose.prod.yml
+docker-compose.gpu-external-db.yml
+
 # =============================================================================
 # REPORTS & OUTPUT FILES
 # =============================================================================
