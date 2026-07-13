@@ -176,3 +176,35 @@ def test_is_supported_format_includes_epub(converter) -> None:
     assert converter.is_supported_format("novel.epub")
     assert converter.is_supported_format("paper.pdf")
     assert not converter.is_supported_format("book.mobi")
+
+
+def test_inject_page_markers_maps_landmarks_to_chunker_pages() -> None:
+    """EPUB pagebreak landmarks -> {P-1} markers so the chunker lands on page P.
+
+    The chunker maps a ``{N}`` marker to ``str(N + 1)``, so a landmark for
+    printed page P must become ``{P-1}``. Also asserts the visible ``\\[P\\]``
+    echo is stripped (Marker-style) while index links ``[97](#..._page_97)``
+    are left intact.
+    """
+    try:
+        from ai_researcher.epub_worker.__main__ import _inject_page_markers
+    except Exception as exc:  # pragma: no cover - env-dependent
+        pytest.skip(f"epub_worker import unavailable: {exc}")
+    md = (
+        "Intro paragraph.\n\n"
+        "\\[5\\]<span id=\"ch1.xhtml_page_5\"></span>Page five starts here.\n\n"
+        "Index: term [97](#ch3.xhtml_page_97) more.\n\n"
+        "\\[6\\] <span id=\"ch1.xhtml_page_6\"></span>six content"
+    )
+    out = _inject_page_markers(md)
+    # page 5 -> {4}, page 6 -> {5} (chunker: {N} -> str(N+1))
+    assert "{4}" + "-" * 10 in out
+    assert "{5}" + "-" * 10 in out
+    # landmark spans and \[N\] echoes removed
+    assert "_page_5\"></span>" not in out
+    assert "\\[5\\]" not in out
+    assert "\\[6\\]" not in out
+    # body text + index link preserved
+    assert "Page five starts here." in out
+    assert "six content" in out
+    assert "[97](#ch3.xhtml_page_97)" in out

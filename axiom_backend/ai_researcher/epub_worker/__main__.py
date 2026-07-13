@@ -74,6 +74,41 @@ def _strip_styling_html(markdown: str) -> str:
     return cleaned
 
 
+# EPUB 3 pagebreak landmarks surface from pandoc as
+# ``\[P\]<span id="..._page_P"></span>`` where P is the printed page number.
+# Must run BEFORE _strip_styling_html (which would delete the landmark spans).
+_PAGEBREAK_RE = re.compile(
+    r'(?:\\\[(\d+)\\\])?\s*<span id="[^"]*?_page_(\d+)"></span>'
+)
+
+
+def _inject_page_markers(markdown: str) -> str:
+    """Turn EPUB pagebreak landmarks into Marker-style ``{N}----`` markers.
+
+    Each landmark carries the printed page P (in the ``_page_P`` anchor id,
+    optionally echoed as a visible ``\\[P\\]``). We replace it with a
+    ``{P-1}----`` paragraph so the chunker — which maps marker index N to
+    ``str(N + 1)`` — assigns the surrounding text to printed page P. The
+    visible ``\\[P\\]`` is dropped so the page number doesn't echo in the
+    body, mirroring how Marker strips page numbers from PDF output. This
+    gives EPUBs accurate printed page numbers (when the EPUB ships a
+    page-list); EPUBs without landmarks are unaffected (chunks stay "1").
+    """
+    def repl(match: re.Match) -> str:
+        page = int(match.group(2))
+        return f"\n\n{{{page - 1}}}" + "-" * 48 + "\n\n"
+
+    result = _PAGEBREAK_RE.sub(repl, markdown)
+    # Strip standalone page-number echoes (\\[N\\]) that pandoc also emits at
+    # page breaks but which weren't adjacent to a landmark span. The {N}
+    # markers already carry the page info, so these echoes are redundant body
+    # noise (mirrors Marker stripping page numbers from PDF body text).
+    # Only matches escaped brackets with digits — leaves markdown links like
+    # [97](#..._page_97) (index entries) and footnotes [^1] untouched.
+    result = re.sub(r"\\\[\d+\\\]\s*", "", result)
+    return result
+
+
 def _save_extracted_images(media_dir: Path, out_dir: Path) -> Dict[str, str]:
     """Move every image pandoc extracted into ``out_dir`` under a stable name.
 
@@ -173,6 +208,9 @@ def main() -> int:
         _convert_via_pandoc(epub_path, out_md, media_tmp)
 
         markdown = out_md.read_text(encoding="utf-8")
+        # Convert EPUB pagebreak landmarks -> {N} markers FIRST (the landmarks
+        # live in <span> tags that _strip_styling_html would otherwise delete).
+        markdown = _inject_page_markers(markdown)
         # pandoc leaves stylistic <span>/<div> wrappers in GFM output; strip
         # them and persist the cleaned markdown so the caller reads a clean
         # file from out_md (it consumes markdown_path, not the in-memory text).
