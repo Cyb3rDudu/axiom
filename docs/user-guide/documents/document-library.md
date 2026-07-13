@@ -20,7 +20,7 @@ Each document card shows:
 - **Authors**: If available in metadata
 - **Year**: Publication year if detected
 - **Status Badge**: Processing state with chunk count for completed documents
-- **File Type Icon**: PDF, Word, or Markdown
+- **File Type Icon**: PDF, Word, Markdown, or EPUB
 - **Chunk Count**: Number of processed chunks for semantic search
 - **Actions Menu**: View, download, delete options
 
@@ -49,7 +49,7 @@ Alternative compact display:
 ### Available Filters
 Filter your library by:
 - **Status**: Processing, completed, failed
-- **File Type**: PDF, Word, Markdown
+- **File Type**: PDF, Word, Markdown, EPUB
 - **Date Range**: Upload or creation date
 - **Document Groups**: Associated collections
 - **Authors**: Filter by author name
@@ -174,7 +174,7 @@ Customize display:
 ### Collection Metrics
 View statistics about:
 - **Total Documents**: Count and size
-- **By Type**: PDF, Word, Markdown counts
+- **By Type**: PDF, Word, Markdown, EPUB counts
 - **By Status**: Processing breakdown
 - **Storage Used**: Disk space consumed
 - **Average Size**: Per document type

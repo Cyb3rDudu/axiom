@@ -16,6 +16,7 @@ When you upload a document, AXIOM:
    - **PDF**: Marker with `paginate_output` (GPU-accelerated when available)
    - **Word**: python-docx for .docx/.doc files
    - **Markdown**: Direct processing
+   - **EPUB**: pandoc conversion with figure extraction
 6. **Extracts page labels** for PDFs (3-tier fallback: PDF labels, header/footer, physical+1)
 7. **Chunks** content using token-based, structure-aware splitting with page tracking
 8. **Generates** BGE-M3 embeddings (dense 1024-dim + sparse 30,000-dim)
@@ -31,6 +32,7 @@ For the full pipeline details, see [Document Processing Pipeline](../../architec
 - **PDF** (.pdf) - Processed with Marker
 - **Microsoft Word** (.docx, .doc) - Extracted with python-docx
 - **Markdown** (.md, .markdown) - Direct processing
+- **EPUB** (.epub) - Converted via pandoc
 - **Plain Text** (.txt) - Simple text extraction
 
 ## Document Library Features

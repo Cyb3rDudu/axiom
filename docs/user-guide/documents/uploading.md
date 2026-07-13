@@ -39,6 +39,7 @@ This method is ideal for:
 - **PDF** (.pdf) - Full text extraction with GPU acceleration
 - **Word** (.docx, .doc) - Microsoft Word documents
 - **Markdown** (.md, .markdown) - Plain text with formatting
+- **EPUB** (.epub) - Ebooks with embedded figures
 - **Text** (.txt) - Plain text files
 - **Rich Text** (.rtf) - Formatted text documents
 
@@ -46,6 +47,7 @@ This method is ideal for:
 - **PDF**: Extracts text, preserves structure, handles images
 - **Word**: Maintains formatting, extracts embedded content
 - **Markdown**: Preserves formatting syntax, code blocks
+- **EPUB**: Converts chapters to Markdown, extracts embedded figures
 - **Text**: Direct processing, fast indexing
 
 ## Upload Process
@@ -295,6 +297,7 @@ AXIOM supports the following document formats:
 - **PDF** (.pdf) - Portable Document Format
 - **Microsoft Word** (.docx, .doc) - Word documents
 - **Markdown** (.md, .markdown) - Markdown files
+- **EPUB** (.epub) - Ebooks with embedded figures
 - **Plain Text** (.txt) - Plain text files
 - **Rich Text Format** (.rtf) - RTF documents
 

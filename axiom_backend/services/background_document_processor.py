@@ -13,7 +13,7 @@ import traceback
 from threading import Thread, RLock, Event
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable, List
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 import time
 from dataclasses import dataclass
@@ -512,7 +512,7 @@ class BackgroundDocumentProcessor:
                 "progress": progress,
                 "status": status,
                 "error": error_message,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
             self._send_progress_update_sync(str(user_id), update)
             
@@ -539,9 +539,9 @@ class BackgroundDocumentProcessor:
                 if error_message:
                     job.error_message = error_message
                 if status == "running" and not job.started_at:
-                    job.started_at = datetime.utcnow()
+                    job.started_at = datetime.now(timezone.utc)
                 elif status in ["completed", "failed"]:
-                    job.completed_at = datetime.utcnow()
+                    job.completed_at = datetime.now(timezone.utc)
                 db.commit()
             
             # Send WebSocket update
@@ -552,7 +552,7 @@ class BackgroundDocumentProcessor:
                 "progress": progress,
                 "status": status,
                 "error_message": error_message,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
             # self._send_progress_update_sync(str(user_id), update) # Websockets not used in this service
             
@@ -1153,7 +1153,7 @@ class BackgroundDocumentProcessor:
                         "keywords": extracted_metadata.get('keywords'),
                         "metadata_completeness": extracted_metadata.get('metadata_completeness'),
                         "metadata_sources": extracted_metadata.get('metadata_sources'),
-                        "processed_at": datetime.utcnow().isoformat(),
+                        "processed_at": datetime.now(timezone.utc).isoformat(),
                         "processing_job_id": job_id,
                         "status": "completed",
                         "chunks_generated": processing_result.get('chunks_generated', 0),
