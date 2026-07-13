@@ -33,12 +33,17 @@ class DocumentConverter:
     def is_markdown_file(self, filename: str) -> bool:
         """Check if file is a Markdown file."""
         return filename.lower().endswith(('.md', '.markdown'))
-    
+
+    def is_epub_file(self, filename: str) -> bool:
+        """Check if file is an EPUB ebook."""
+        return filename.lower().endswith('.epub')
+
     def is_supported_format(self, filename: str) -> bool:
         """Check if file format is supported for processing."""
-        return (filename.lower().endswith('.pdf') or 
-                self.is_word_document(filename) or 
-                self.is_markdown_file(filename))
+        return (filename.lower().endswith('.pdf') or
+                self.is_word_document(filename) or
+                self.is_markdown_file(filename) or
+                self.is_epub_file(filename))
     
     def convert_word_to_markdown(self, word_file_path: Path) -> Optional[str]:
         """
@@ -210,6 +215,41 @@ class DocumentConverter:
                 logger.info(f"Extracted initial text from Markdown file: {filename} ({len(initial_text)} characters)")
                 return initial_text
             
+            # For EPUB files, convert to plain text via pandoc for a quick
+            # metadata-preview sample (analogous to the PDF header/footer
+            # preview). The full conversion runs later in epub_worker; this
+            # is a cheap second pass (no images, no GPU) so the title/author
+            # extractor has text to work from before the import converts.
+            elif self.is_epub_file(filename):
+                import shutil
+                import subprocess
+                pandoc = shutil.which("pandoc")
+                if not pandoc:
+                    logger.warning("pandoc not available for EPUB text extraction")
+                    return ""
+                try:
+                    proc = subprocess.run(
+                        [pandoc, "--from", "epub", "--to", "plain", str(file_path)],
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                    )
+                    if proc.returncode != 0:
+                        logger.warning(
+                            f"pandoc plain-text extraction failed for {filename}: "
+                            f"{(proc.stderr or '').strip()}"
+                        )
+                        return ""
+                    initial_text = (proc.stdout or "")[:2000]
+                    logger.info(
+                        f"Extracted initial text from EPUB: {filename} "
+                        f"({len(initial_text)} characters)"
+                    )
+                    return initial_text
+                except Exception as e:
+                    logger.warning(f"Failed to extract text from EPUB {filename}: {e}")
+                    return ""
+
             # For PDF files, return empty (existing PDF processing handles this)
             elif filename.lower().endswith('.pdf'):
                 return ""  # Let existing PDF processing handle this

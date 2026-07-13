@@ -64,6 +64,8 @@ async def create_document_atomically(
             file_dir = get_consistency_manager().pdf_dir / 'word_documents'  # Store Word docs in subdirectory
         elif filename_lower.endswith(('.md', '.markdown')):
             file_dir = get_consistency_manager().pdf_dir / 'markdown_files'  # Store Markdown files in subdirectory
+        elif filename_lower.endswith('.epub'):
+            file_dir = get_consistency_manager().pdf_dir / 'epub_files'  # Store EPUB files in subdirectory
         else:
             raise ValueError(f"Unsupported file format: {original_filename}")
             

@@ -322,6 +322,78 @@ class BackgroundDocumentProcessor:
         image_mapping = result.get("image_mapping") or {}
         return markdown, image_mapping
 
+    def _convert_epub_via_subprocess(
+        self,
+        doc_id: str,
+        epub_path: Path,
+        out_md_path: Path,
+        out_images_dir: Path,
+    ) -> tuple:
+        """Run the epub_worker subprocess and return (markdown, image_mapping).
+
+        Structural mirror of ``_convert_pdf_via_subprocess``: same CLI
+        contract (``<epub> <out_md> <out_images_dir>``), same JSON-on-stdout
+        protocol, same ``image_mapping`` shape
+        ``{extracted_basename: saved_filename}``. The engine is pandoc (CPU)
+        instead of Marker (GPU), so — unlike the PDF path — there is no
+        VRAM to prepare or reclaim.
+
+        Raises ``RuntimeError`` on any failure — the import is marked as
+        failed. Common failure: DRM-protected or corrupt EPUBs make pandoc
+        exit non-zero; the worker surfaces pandoc's error message.
+        """
+        import subprocess
+        import sys as _sys
+        out_md_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            _sys.executable,
+            "-m",
+            "ai_researcher.epub_worker",
+            str(epub_path),
+            str(out_md_path),
+            str(out_images_dir),
+        ]
+        print(f"[{doc_id}] Spawning epub_worker: {' '.join(cmd)}")
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+        )
+        if proc.returncode != 0:
+            if proc.stderr:
+                print(f"[{doc_id}] epub_worker stderr: {proc.stderr}")
+            # The worker emits a JSON error line on stderr; try to surface
+            # its 'error' field for a friendlier failed-row message.
+            message = f"epub_worker exited with code {proc.returncode}"
+            for line in (proc.stderr or "").splitlines()[::-1]:
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    try:
+                        message = f"epub_worker: {json.loads(line).get('error', message)}"
+                    except json.JSONDecodeError:
+                        pass
+                    break
+            raise RuntimeError(message)
+
+        # Last {...} line on stdout is the result (logger lines precede it).
+        last_line = ""
+        for line in (proc.stdout or "").splitlines()[::-1]:
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                last_line = line
+                break
+        if not last_line:
+            raise RuntimeError(f"epub_worker produced no JSON result; stdout={proc.stdout[-400:]}")
+        result = json.loads(last_line)
+        if not result.get("ok"):
+            raise RuntimeError(f"epub_worker reported failure: {result.get('error')}")
+
+        markdown = out_md_path.read_text(encoding="utf-8")
+        image_mapping = result.get("image_mapping") or {}
+        return markdown, image_mapping
+
     def _extract_relations_via_subprocess(
         self,
         doc_id: str,
@@ -586,6 +658,10 @@ class BackgroundDocumentProcessor:
                 markdown_dir = self.pdf_dir / 'markdown_files'
                 markdown_dir.mkdir(parents=True, exist_ok=True)
                 target_path = markdown_dir / f"{doc_id}_{original_filename}"
+            elif original_filename.lower().endswith('.epub'):
+                epub_dir = self.pdf_dir / 'epub_files'
+                epub_dir.mkdir(parents=True, exist_ok=True)
+                target_path = epub_dir / f"{doc_id}_{original_filename}"
             else:
                 raise Exception(f"Unsupported file format: {original_filename}")
                 
@@ -671,6 +747,32 @@ class BackgroundDocumentProcessor:
                 md_filename = f"{doc_id}.md"
                 md_save_path = processor.markdown_dir / md_filename
                 md_save_path.write_text(markdown_content, encoding="utf-8")
+            elif original_filename.lower().endswith('.epub'):
+                print(f"[{doc_id}] Converting EPUB to Markdown via epub_worker subprocess...")
+                md_filename = f"{doc_id}.md"
+                md_save_path = processor.markdown_dir / md_filename
+                image_dir = processor.image_dir / doc_id
+                markdown_content, image_mapping = self._convert_epub_via_subprocess(
+                    doc_id=doc_id,
+                    epub_path=target_path,
+                    out_md_path=md_save_path,
+                    out_images_dir=image_dir,
+                )
+
+                # Rewrite image references the same way the PDF branch does
+                # (Marker → epub_worker emits the same image_mapping contract).
+                # EPUB image extraction is a free side-effect of pandoc's
+                # conversion (no Marker GPU cost to gate on), so we always
+                # rewrite when images were extracted — otherwise pandoc's
+                # temp-dir paths would be left dangling in the markdown.
+                if image_mapping:
+                    mapping_as_paths = {orig: image_dir / new for orig, new in image_mapping.items()}
+                    markdown_content = processor._update_markdown_image_paths(
+                        markdown_content, doc_id, mapping_as_paths
+                    )
+                    md_save_path.write_text(markdown_content, encoding="utf-8")
+                    extracted_images = mapping_as_paths  # dict form matches legacy callers
+                    print(f"[{doc_id}] Organized {len(image_mapping)} images")
             elif original_filename.lower().endswith(('.md', '.markdown')):
                 print(f"[{doc_id}] Reading Markdown file content...")
                 markdown_content = processor.document_converter.read_markdown_file(target_path)

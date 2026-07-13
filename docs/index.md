@@ -77,7 +77,7 @@ Self-hosted solution ensures your sensitive research never leaves your infrastru
     
     Upload and manage your research documents in a central library
     
-    - PDF, Word, and Markdown support
+    - PDF, Word, Markdown, and EPUB support
     - Advanced RAG pipeline with BGE-M3 embeddings
     - Semantic search across all documents
     - Document groups for organized research

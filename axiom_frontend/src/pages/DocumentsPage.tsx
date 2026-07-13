@@ -199,16 +199,17 @@ const DocumentsPage: React.FC = () => {
     e.preventDefault();
     setIsDragOver(false);
     
-    // Accept multiple file types: PDF, Word documents, and Markdown files
+    // Accept multiple file types: PDF, Word documents, Markdown, and EPUB files
     const supportedTypes = [
       'application/pdf',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
       'application/msword', // .doc
       'text/markdown', // .md
-      'text/x-markdown' // alternative .md MIME type
+      'text/x-markdown', // alternative .md MIME type
+      'application/epub+zip' // .epub
     ];
-    
-    const supportedExtensions = ['.pdf', '.docx', '.doc', '.md', '.markdown'];
+
+    const supportedExtensions = ['.pdf', '.docx', '.doc', '.md', '.markdown', '.epub'];
     
     const allFiles = Array.from(e.dataTransfer.files);
     // console.log(`DocumentsPage: Files dropped:`, allFiles.map(f => `${f.name} (type: ${f.type})`));
@@ -232,7 +233,7 @@ const DocumentsPage: React.FC = () => {
       handleFilesSelected(files);
     } else if (allFiles.length > 0) {
       console.error('All files were rejected by validation');
-      setError(`Unsupported file types. Supported: PDF, Word (docx/doc), Markdown (md/markdown)`);
+      setError(`Unsupported file types. Supported: PDF, Word (docx/doc), Markdown (md/markdown), EPUB`);
     }
   }, [handleFilesSelected]);
 

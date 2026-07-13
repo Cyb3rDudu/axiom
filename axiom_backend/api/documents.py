@@ -237,12 +237,12 @@ async def upload_document(
     """
     # Check for supported file formats
     filename_lower = file.filename.lower()
-    supported_extensions = ['.pdf', '.docx', '.doc', '.md', '.markdown']
+    supported_extensions = ['.pdf', '.docx', '.doc', '.md', '.markdown', '.epub']
     
     if not any(filename_lower.endswith(ext) for ext in supported_extensions):
         raise HTTPException(
             status_code=400, 
-            detail="Only PDF, Word (docx, doc), and Markdown (md, markdown) files are supported"
+            detail="Only PDF, Word (docx, doc), Markdown (md, markdown), and EPUB files are supported"
         )
     
     try:
@@ -358,12 +358,12 @@ async def upload_document_to_group(
     """
     # Check for supported file formats
     filename_lower = file.filename.lower()
-    supported_extensions = ['.pdf', '.docx', '.doc', '.md', '.markdown']
+    supported_extensions = ['.pdf', '.docx', '.doc', '.md', '.markdown', '.epub']
     
     if not any(filename_lower.endswith(ext) for ext in supported_extensions):
         raise HTTPException(
             status_code=400, 
-            detail="Only PDF, Word (docx, doc), and Markdown (md, markdown) files are supported"
+            detail="Only PDF, Word (docx, doc), Markdown (md, markdown), and EPUB files are supported"
         )
     
     try:

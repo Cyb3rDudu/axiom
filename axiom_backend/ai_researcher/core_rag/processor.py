@@ -1316,6 +1316,80 @@ class DocumentProcessor:
             "extracted_metadata": final_metadata
         }
 
+    def process_epub(self, epub_path: Path, doc_id: Optional[str] = None) -> Optional[Dict]:
+        """
+        Processes a single EPUB ebook (batch/CLI path).
+
+        Converts to Markdown via the epub_worker subprocess — the same engine
+        the upload path (background_document_processor) uses — rewrites image
+        references to ``/api/images/<doc_id>/``, then delegates chunking /
+        embedding / metadata to ``process_markdown_file``. The upload path is
+        the primary entry point; this method gives the CLI/batch path parity.
+        """
+        if not epub_path.exists() or not self.document_converter.is_epub_file(epub_path.name):
+            print(f"Error: Invalid EPUB file path: {epub_path}")
+            return None
+
+        if doc_id is None:
+            doc_id = str(uuid.uuid4())
+
+        md_save_path = self.markdown_dir / f"{doc_id}.md"
+        image_dir = self.image_dir / doc_id
+
+        print(f"Converting EPUB '{epub_path.name}' via epub_worker...")
+        markdown_content, image_mapping = self._run_epub_worker(
+            doc_id, epub_path, md_save_path, image_dir
+        )
+        if not markdown_content:
+            print(f"Error: epub_worker produced empty markdown for {epub_path.name}")
+            return None
+
+        if image_mapping:
+            mapping_as_paths = {orig: image_dir / new for orig, new in image_mapping.items()}
+            markdown_content = self._update_markdown_image_paths(markdown_content, doc_id, mapping_as_paths)
+            md_save_path.write_text(markdown_content, encoding="utf-8")
+
+        # Delegate the rest (chunking, embedding, metadata) to the markdown
+        # pipeline — the converted .md is a first-class markdown document.
+        return self.process_markdown_file(md_save_path, doc_id=doc_id)
+
+    def _run_epub_worker(
+        self, doc_id: str, epub_path: Path, out_md_path: Path, out_images_dir: Path
+    ) -> Tuple[str, Dict[str, str]]:
+        """Invoke ``ai_researcher.epub_worker`` and parse its JSON result.
+
+        Returns ``(markdown, image_mapping)``. Raises RuntimeError on any
+        failure (non-zero exit, missing result line, or ``ok: false``).
+        Mirrors background_document_processor._convert_epub_via_subprocess;
+        kept separate because the two processors are independent modules.
+        """
+        import os as _os
+        import subprocess
+        import sys as _sys
+        out_md_path.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            _sys.executable, "-m", "ai_researcher.epub_worker",
+            str(epub_path), str(out_md_path), str(out_images_dir),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=_os.environ.copy())
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"epub_worker exited with code {proc.returncode}: "
+                f"{(proc.stderr or '').strip()[-400:]}"
+            )
+        last_line = ""
+        for line in (proc.stdout or "").splitlines()[::-1]:
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                last_line = line
+                break
+        if not last_line:
+            raise RuntimeError("epub_worker produced no JSON result")
+        result = json.loads(last_line)
+        if not result.get("ok"):
+            raise RuntimeError(f"epub_worker reported failure: {result.get('error')}")
+        return out_md_path.read_text(encoding="utf-8"), result.get("image_mapping") or {}
+
     def process_document(self, file_path: Path, doc_id: Optional[str] = None) -> Optional[Dict]:
         """
         Generic method to process any supported document format.
@@ -1333,6 +1407,8 @@ class DocumentProcessor:
             return self.process_word_document(file_path, doc_id=doc_id)
         elif self.document_converter.is_markdown_file(filename):
             return self.process_markdown_file(file_path, doc_id=doc_id)
+        elif self.document_converter.is_epub_file(filename):
+            return self.process_epub(file_path, doc_id=doc_id)
         else:
             print(f"Error: Unsupported file format: {filename}")
             return None
@@ -1352,24 +1428,26 @@ class DocumentProcessor:
         total_chunks_added = 0
         
         # Find all supported file types
-        supported_extensions = ['*.pdf', '*.docx', '*.doc', '*.md', '*.markdown']
+        supported_extensions = ['*.pdf', '*.docx', '*.doc', '*.md', '*.markdown', '*.epub']
         all_files = []
-        
+
         for extension in supported_extensions:
             files = list(process_path.glob(extension))
             all_files.extend(files)
-        
+
         total_docs_attempted = len(all_files)
         print(f"Found {total_docs_attempted} supported document(s) in {process_path}")
-        
+
         # Group files by type for reporting
         pdf_files = [f for f in all_files if f.suffix.lower() == '.pdf']
         word_files = [f for f in all_files if f.suffix.lower() in ['.docx', '.doc']]
         markdown_files = [f for f in all_files if f.suffix.lower() in ['.md', '.markdown']]
-        
+        epub_files = [f for f in all_files if f.suffix.lower() == '.epub']
+
         print(f"  - {len(pdf_files)} PDF file(s)")
-        print(f"  - {len(word_files)} Word document(s)")  
+        print(f"  - {len(word_files)} Word document(s)")
         print(f"  - {len(markdown_files)} Markdown file(s)")
+        print(f"  - {len(epub_files)} EPUB file(s)")
 
         if not all_files:
             print("No supported document files found to process.")

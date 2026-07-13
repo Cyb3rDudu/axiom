@@ -193,7 +193,7 @@ For troubleshooting and advanced configuration, see the [documentation](https://
 - **Advanced RAG Pipeline**: Dual BGE-M3 embeddings with PostgreSQL + pgvector, Knowledge Graph entity extraction, OpenSearch BM25 hybrid retrieval
 - **5 Native AI Providers**: OpenAI, DeepSeek, Z.AI (Zhipu GLM), OpenRouter, and any OpenAI-compatible endpoint
 - **Citation Profiles**: Numbered, APA 6 (German/KMU), APA 7 (English), and custom citation styles with per-mission overrides
-- **Document Management**: PDF, Word, and Markdown support with semantic search and image extraction
+- **Document Management**: PDF, Word, Markdown, and EPUB support with semantic search and image extraction
 - **Web Integration**: Multiple search providers (Tavily, LinkUp, Jina, SearXNG)
 - **Hardware Flexibility**: CUDA, ROCm, MPS (Apple Silicon), and CPU — auto-detected or configurable
 - **Self-Hosted**: Complete control over your data and infrastructure

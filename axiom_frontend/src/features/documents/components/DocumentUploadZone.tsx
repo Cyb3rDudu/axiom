@@ -33,14 +33,14 @@ export const DocumentUploadZone: React.FC<DocumentUploadZoneProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const validateFile = (file: File): string | null => {
-    const supportedExtensions = ['.pdf', '.docx', '.doc', '.md', '.markdown'];
+    const supportedExtensions = ['.pdf', '.docx', '.doc', '.md', '.markdown', '.epub'];
     const fileName = file.name.toLowerCase();
-    
+
     // Debug logging
     // console.log(`Validating file: ${file.name}, size: ${file.size}, type: ${file.type}`);
-    
+
     if (!supportedExtensions.some(ext => fileName.endsWith(ext))) {
-      const error = `Only PDF, Word (docx, doc), and Markdown (md, markdown) files are supported. Got: ${file.name}`;
+      const error = `Only PDF, Word (docx, doc), Markdown (md, markdown), and EPUB files are supported. Got: ${file.name}`;
       console.error('File validation failed:', error);
       return error;
     }
@@ -178,7 +178,7 @@ export const DocumentUploadZone: React.FC<DocumentUploadZoneProps> = ({
           ref={fileInputRef}
           type="file"
           multiple
-          accept=".pdf,.docx,.doc,.md,.markdown"
+          accept=".pdf,.docx,.doc,.md,.markdown,.epub"
           onChange={handleFileInputChange}
           className="hidden"
           disabled={disabled || !selectedGroupId}
@@ -206,7 +206,7 @@ export const DocumentUploadZone: React.FC<DocumentUploadZoneProps> = ({
               }
             </p>
             <p className="text-xs text-text-tertiary">
-              Maximum {maxFiles} files, up to {maxFileSize}MB each • Supported: PDF, DOCX, DOC, MD
+              Maximum {maxFiles} files, up to {maxFileSize}MB each • Supported: PDF, DOCX, DOC, MD, EPUB
             </p>
           </div>
         </div>
