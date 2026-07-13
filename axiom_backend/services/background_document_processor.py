@@ -1157,7 +1157,13 @@ class BackgroundDocumentProcessor:
                         "processing_job_id": job_id,
                         "status": "completed",
                         "chunks_generated": processing_result.get('chunks_generated', 0),
-                        "chunks_added_to_vector_store": processing_result.get('chunks_added_to_vector_store', 0)
+                        "chunks_added_to_vector_store": processing_result.get('chunks_added_to_vector_store', 0),
+                        # Preserve the page_label_map built at chunk time
+                        # (extract_page_labels) so re-chunking/citation can
+                        # re-apply printed-page labels instead of falling
+                        # back to physical index + 1. Without this the map is
+                        # computed, used for chunking, then dropped here.
+                        "page_label_map": extracted_metadata.get('page_label_map')
                     }
                     
                     # Merge existing metadata with new metadata, preserving important fields like file_hash
