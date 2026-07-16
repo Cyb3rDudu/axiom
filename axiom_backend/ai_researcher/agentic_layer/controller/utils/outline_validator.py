@@ -169,7 +169,23 @@ class OutlineValidator:
             return outline, report
 
         required_tree = self._build_required_tree(required_outline)
-        merged = self._merge_required_sections(outline, required_tree, report)
+
+        # Flatten ALL generated sections into a single global pool. This is the
+        # key fix for review finding 1 (flat subsections): required subsections
+        # may exist as flat top-level siblings (e.g. the planner emitted 3,
+        # 3.1, 3.3 all at top-level) instead of nested under their parent. A
+        # global pool lets a required subsection be claimed regardless of where
+        # it currently sits, and then be moved into its matched parent.
+        pool: List[Dict[str, Any]] = []
+        self._flatten_generated(outline, pool, original_parent=None)
+
+        result = self._rebuild_from_required(required_tree, pool, report)
+
+        # Re-attach generated sections that were not claimed by any required
+        # node (LLM extras). Preserve their original nesting: an extra that was
+        # nested under a (now-matched) parent stays nested under it; a top-level
+        # extra stays at the top level.
+        self._reattach_extras(result, pool)
 
         if report["inserted"]:
             logger.warning(
@@ -183,7 +199,7 @@ class OutlineValidator:
                 "section(s) present.",
                 report.get("required_count", 0),
             )
-        return merged, report
+        return result, report
 
     # ----- helpers for enforce_required_outline -----
 
@@ -260,59 +276,127 @@ class OutlineValidator:
         ratio = difflib.SequenceMatcher(None, a, b).ratio()
         return ratio >= 0.8 or a in b or b in a
 
-    def _merge_required_sections(
+    @staticmethod
+    def _parse_leading_number(title: str) -> Optional[str]:
+        """Extract a leading numeric label from a section *title*.
+
+        ``"3.1 Makroumwelt"`` -> ``"3.1"``; ``"3. Darstellung"`` -> ``"3"``;
+        ``"## 3.2 Foo"`` -> ``"3.2"``; ``"Makroumwelt"`` -> ``None``.
+        Used to determine where a flat-emitted section belongs in the hierarchy
+        (so a flat ``3.1`` can be recognised as a child of ``3``).
+        """
+        import re
+        t = (title or "").lstrip("#").lstrip()
+        m = re.match(r"(\d+(?:\.\d+)*)[.)]?\s*", t)
+        return m.group(1) if m else None
+
+    def _numbers_equal(self, a: Optional[str], b: Optional[str]) -> bool:
+        """True if two section-number strings are equivalent (by tuple)."""
+        if not a or not b:
+            return False
+        return self._number_key(a) == self._number_key(b)
+
+    def _flatten_generated(
         self,
-        generated: List[ReportSection],
+        sections: List[ReportSection],
+        pool: List[Dict[str, Any]],
+        original_parent: Optional[ReportSection],
+    ) -> None:
+        """Recursively flatten the generated outline into a flat pool.
+
+        Each pool entry records the parsed leading number (from the title), the
+        normalized title, the underlying ``ReportSection`` (identity preserved),
+        a ``used`` flag, and the section it was originally nested under (so
+        unclaimed extras can be re-attached in place).
+        """
+        for s in sections:
+            pool.append(
+                {
+                    "number": self._parse_leading_number(s.title),
+                    "norm_title": _normalize_title_for_match(s.title),
+                    "section": s,
+                    "used": False,
+                    "original_parent": original_parent,
+                }
+            )
+            if s.subsections:
+                self._flatten_generated(s.subsections, pool, original_parent=s)
+
+    def _claim_from_pool(
+        self, rn: Dict[str, Any], pool: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Claim the best-matching unused pool entry for required node ``rn``.
+
+        Among unused entries whose title matches, an entry whose parsed number
+        equals the required number is strongly preferred (disambiguates e.g.
+        ``3 Darstellung`` from ``3.1 Darstellung``). Otherwise the first
+        title-match is used.
+        """
+        target = _normalize_title_for_match(rn["title"])
+        req_number = rn.get("number") or ""
+        first_title_match: Optional[Dict[str, Any]] = None
+        for item in pool:
+            if item["used"]:
+                continue
+            if not self._titles_match(target, item["norm_title"]):
+                continue
+            if self._numbers_equal(item.get("number"), req_number):
+                return item  # exact number match wins
+            if first_title_match is None:
+                first_title_match = item
+        return first_title_match
+
+    @staticmethod
+    def _strategy_for_inserted(has_children: bool) -> str:
+        """Research strategy for a freshly-inserted required section.
+
+        Mirrors the validator's own rule (see ``_validate_and_correct_strategies``):
+        a section WITH subsections synthesises from them; a leaf section does its
+        own research. Because ``enforce_required_outline`` runs AFTER the final
+        ``validate_and_correct``, we must set this correctly here rather than
+        rely on the later pass (review finding 2).
+        """
+        return "synthesize_from_subsections" if has_children else "research_based"
+
+    def _rebuild_from_required(
+        self,
         required_nodes: List[Dict[str, Any]],
+        pool: List[Dict[str, Any]],
         report: Dict[str, Any],
     ) -> List[ReportSection]:
-        """Recursively merge required nodes into the generated section list.
+        """Rebuild an outline section list from the required tree + global pool.
 
-        For each required node (in required/Gliederung order):
-          - if a generated section matches its title (fuzzy), claim it, recurse
-            the required children into its subsections, and keep it;
-          - else create a new ReportSection (with its required children as
-            subsections) and insert it.
+        For each required node (in Gliederung order):
+          - claim its best match from the GLOBAL pool (any depth/position); if
+            found, recurse to populate its subsections from the same pool and
+            keep the claimed section;
+          - else create a new ``ReportSection`` (strategy chosen by
+            ``_strategy_for_inserted``) and populate its subsections from the
+            pool (all new).
 
-        Any generated section not claimed by a required node is appended after,
-        in its original relative order. The result therefore follows the user's
-        Gliederung order for required sections while preserving LLM-added extras.
+        Because the pool is global, this correctly handles required subsections
+        that the planner emitted flat (as top-level siblings): they are claimed
+        and moved into their matched parent instead of being duplicated.
         """
         if not required_nodes:
-            return list(generated)
-
-        used_indices: Set[int] = set()
-        match_for_required: Dict[int, int] = {}  # id(node) -> index in generated
-
-        # Greedy first-match: each required node claims the first unused
-        # generated section whose title matches.
-        for rn in required_nodes:
-            target = _normalize_title_for_match(rn["title"])
-            for i, g in enumerate(generated):
-                if i in used_indices:
-                    continue
-                if self._titles_match(target, _normalize_title_for_match(g.title)):
-                    used_indices.add(i)
-                    match_for_required[id(rn)] = i
-                    report["matched"].append(rn["title"])
-                    break
-            else:
-                report["missing_required"].append(rn["title"])
+            return []
 
         result: List[ReportSection] = []
         for rn in required_nodes:
-            idx = match_for_required.get(id(rn))
-            if idx is not None:
-                g = generated[idx]
-                if rn["children"]:
-                    g.subsections = self._merge_required_sections(
-                        list(g.subsections), rn["children"], report
-                    )
+            claimed = self._claim_from_pool(rn, pool)
+            if claimed is not None:
+                claimed["used"] = True
+                report["matched"].append(rn["title"])
+                g = claimed["section"]
+                # Reset subsections then rebuild from required children so the
+                # hierarchy follows the required tree (flattens extras into the
+                # pool for re-attachment).
+                g.subsections = self._rebuild_from_required(
+                    rn.get("children") or [], pool, report
+                )
                 result.append(g)
             else:
-                # Record the parent's insertion BEFORE recursing into its
-                # children so report ordering is parent-first (deterministic,
-                # matches document order).
+                report["missing_required"].append(rn["title"])
                 report["inserted"].append(rn["title"])
                 logger.warning(
                     "OutlineValidator: required section '%s' (%s, level %d) was "
@@ -333,22 +417,68 @@ class OutlineValidator:
                         f"({rn['number']}). Cover the topics specified in the "
                         f"briefing for this section."
                     ),
-                    research_strategy="research_based",
+                    research_strategy=self._strategy_for_inserted(
+                        bool(rn.get("children"))
+                    ),
                     subsections=[],
                 )
-                if rn["children"]:
-                    new_sec.subsections = self._merge_required_sections(
-                        [], rn["children"], report
+                if rn.get("children"):
+                    new_sec.subsections = self._rebuild_from_required(
+                        rn["children"], pool, report
                     )
                 result.append(new_sec)
-
-        # Append generated sections not claimed by any required node.
-        for i, g in enumerate(generated):
-            if i not in used_indices:
-                result.append(g)
-
         return result
-    
+
+    def _reattach_extras(
+        self, outline: List[ReportSection], pool: List[Dict[str, Any]]
+    ) -> None:
+        """Re-attach unclaimed generated sections (LLM extras) in place.
+
+        An extra that was originally nested under a parent that is still present
+        in the rebuilt outline is appended to that parent's subsections; a
+        top-level extra is appended to the top-level list. Mutates ``outline``
+        (top-level list) and matched sections' ``subsections`` in place.
+        """
+        if not pool:
+            return
+        # Collect identity of all sections currently in the rebuilt tree.
+        present_ids: Set[int] = set()
+
+        def _collect(sections: List[ReportSection]) -> None:
+            for s in sections:
+                present_ids.add(id(s))
+                if s.subsections:
+                    _collect(s.subsections)
+
+        _collect(outline)
+
+        top_level_extras: List[ReportSection] = []
+        # Group nested extras by their original parent (by id).
+        nested_extras: Dict[int, List[ReportSection]] = defaultdict(list)
+        for item in pool:
+            if item["used"]:
+                continue
+            parent = item.get("original_parent")
+            if parent is not None and id(parent) in present_ids:
+                nested_extras[id(parent)].append(item["section"])
+            else:
+                top_level_extras.append(item["section"])
+
+        # Append nested extras back under their (still-present) parent.
+        if nested_extras:
+            def _append_nested(sections: List[ReportSection]) -> None:
+                for s in sections:
+                    if id(s) in nested_extras:
+                        s.subsections.extend(nested_extras[id(s)])
+                    if s.subsections:
+                        _append_nested(s.subsections)
+
+            _append_nested(outline)
+
+        # Append top-level extras at the end.
+        if top_level_extras:
+            outline.extend(top_level_extras)
+
     def _calculate_max_depth(self, outline: List[ReportSection], current_depth: int = 0) -> int:
         """Calculate the maximum depth of the outline."""
         if not outline:

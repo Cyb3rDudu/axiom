@@ -1,9 +1,10 @@
-"""Tests for the deterministic required-outline enforcement (Finding 1).
+"""Tests for the deterministic required-outline enforcement.
 
 These exercise ``OutlineValidator.enforce_required_outline`` — the post-LLM
 check that guarantees every required briefing section (parsed from the user's
 Gliederung) is present in the generated outline, **including nested level-2+
-subsections**, regardless of LLM behaviour.
+subsections**, regardless of how the LLM emitted them (flat or nested), and
+that freshly-inserted parents get the correct research strategy.
 """
 
 # Prime axiom_backend's import graph.
@@ -28,27 +29,30 @@ def _section(title: str, subsections=None) -> ReportSection:
     )
 
 
-def _find_subsection(outline, parent_title, child_norm) -> bool:
-    """True if a child whose normalized title == ``child_norm`` is nested under
-    a section matching ``parent_title``."""
+def _find_sec(outline, title_frag):
+    """Return the first section whose normalized title contains ``title_frag``."""
     for s in outline:
-        if _normalize_title_for_match(parent_title) in _normalize_title_for_match(
-            s.title
-        ):
-            for c in s.subsections:
-                if _normalize_title_for_match(c.title) == child_norm:
-                    return True
-    return False
+        if title_frag in _normalize_title_for_match(s.title):
+            return s
+        r = _find_sec(s.subsections, title_frag)
+        if r:
+            return r
+    return None
+
+
+def _subtitles(outline, parent_frag):
+    s = _find_sec(outline, parent_frag)
+    return [c.title for c in s.subsections] if s else None
 
 
 # ---------------------------------------------------------------------------
-# title normalization / matching (Finding 2)
+# title normalization (regression: heading marker before number)
 # ---------------------------------------------------------------------------
 
 
 def test_normalize_strips_leading_number():
     assert _normalize_title_for_match("1. Einleitung") == "einleitung"
-    # Regression (Finding 2): heading marker BEFORE number must also reduce.
+    # Regression: heading marker BEFORE number must also reduce.
     assert (
         _normalize_title_for_match("## 2.1 NexMach als Unternehmung")
         == "nexmach als unternehmung"
@@ -90,18 +94,13 @@ def test_all_present_no_changes():
     out, report = v.enforce_required_outline(outline, required)
     assert report["inserted"] == []
     assert report["missing_required"] == []
-    # top-level count preserved, no duplicates
     assert len(out) == 3
 
 
 def test_missing_nested_subsection_is_inserted():
-    """REGRESSION for the production failure (Finding 1, the actual bug).
-
-    The LLM dropped ``3.2 Branchen- und Wettbewerbsumwelt`` — a level-2
-    subsection under section 3. The previous ``enforce_required_outline`` only
-    handled level-1 sections and silently ignored this. It must be detected and
-    inserted nested under its parent section 3, with sibling 3.1 preserved.
-    """
+    """REGRESSION (original finding 1): the LLM dropped ``3.2 Branchen- und
+    Wettbewerbsumwelt``, a level-2 subsection. Must be inserted nested under its
+    parent section 3, with sibling 3.1 preserved."""
     v = OutlineValidator(mission_id=None, controller=None)
     required = [
         {"number": "1", "title": "Einleitung", "level": 1},
@@ -112,7 +111,6 @@ def test_missing_nested_subsection_is_inserted():
         {"number": "4", "title": "Umweltanalyse der NexMach", "level": 1},
         {"number": "5", "title": "Fazit", "level": 1},
     ]
-    # Generated outline has section 3 with ONLY 3.1 (3.2 is missing).
     outline = [
         _section("1. Einleitung"),
         _section("2. Theoretischer Bezugsrahmen"),
@@ -126,16 +124,117 @@ def test_missing_nested_subsection_is_inserted():
 
     assert report["inserted"] == ["Branchen- und Wettbewerbsumwelt"]
     assert report["missing_required"] == ["Branchen- und Wettbewerbsumwelt"]
-    # 3.2 now nested under section 3.
-    assert _find_subsection(
-        out, "Darstellung und Analyse", "branchen- und wettbewerbsumwelt"
-    )
-    # Section 3 now has both subsections, in order.
-    sec3 = [s for s in out if "darstellung" in s.title.lower()][0]
-    assert [c.title for c in sec3.subsections] == [
+    assert _subtitles(out, "darstellung") == [
         "3.1 NexMach als Unternehmung",
         "Branchen- und Wettbewerbsumwelt",
     ]
+
+
+def test_flat_top_level_subsections_are_not_duplicated():
+    """REGRESSION (review finding 1): when the planner emits 3, 3.1, 3.3 FLAT at
+    top-level (instead of nesting them under 3), the flat 3.1/3.3 must be
+    claimed and moved into section 3 — NOT re-inserted as duplicates while their
+    flat originals linger at the top.
+
+    Previously the matcher only looked inside the matched parent's existing
+    subsections, so flat 3.1/3.3 were treated as missing, re-inserted under 3,
+    and their flat originals appended again as extras (Makroumwelt appeared
+    twice).
+    """
+    v = OutlineValidator(mission_id=None, controller=None)
+    required = [
+        {"number": "1", "title": "Einleitung", "level": 1},
+        {"number": "2", "title": "Theoretischer Bezugsrahmen", "level": 1},
+        {"number": "3", "title": "Darstellung und Analyse", "level": 1},
+        {"number": "3.1", "title": "Makroumwelt", "level": 2},
+        {"number": "3.2", "title": "Branchen- und Wettbewerbsumwelt", "level": 2},
+        {"number": "3.3", "title": "Stakeholder- und Netzwerkumwelt", "level": 2},
+        {"number": "4", "title": "Umweltanalyse der NexMach", "level": 1},
+        {"number": "5", "title": "Fazit", "level": 1},
+    ]
+    # 3, 3.1, 3.3 are all emitted flat at top-level (3.2 missing entirely).
+    outline = [
+        _section("1. Einleitung"),
+        _section("2. Theoretischer Bezugsrahmen"),
+        _section("3. Darstellung und Analyse"),
+        _section("3.1 Makroumwelt"),
+        _section("3.3 Stakeholder- und Netzwerkumwelt"),
+        _section("4. Umweltanalyse der NexMach"),
+        _section("5. Fazit"),
+    ]
+    out, report = v.enforce_required_outline(outline, required)
+
+    # Only the genuinely-missing 3.2 is inserted; flat 3.1/3.3 are NOT duplicated.
+    assert report["inserted"] == ["Branchen- und Wettbewerbsumwelt"]
+    # Flat 3.1 and 3.3 moved into section 3.
+    assert _subtitles(out, "darstellung") == [
+        "3.1 Makroumwelt",
+        "Branchen- und Wettbewerbsumwelt",
+        "3.3 Stakeholder- und Netzwerkumwelt",
+    ]
+    # No leftover flat subsections at the top level.
+    top_norm = [_normalize_title_for_match(s.title) for s in out]
+    assert "makroumwelt" not in top_norm
+    assert "stakeholder- und netzwerkumwelt" not in top_norm
+    # Top level has exactly the 5 top-level sections (1,2,3,4,5).
+    assert len(out) == 5
+
+
+def test_mixed_nesting_flat_and_nested_subsections():
+    """3.1 nested under 3, 3.3 flat at top-level — both must end up nested under
+    section 3 with only the missing 3.2 inserted."""
+    v = OutlineValidator(mission_id=None, controller=None)
+    required = [
+        {"number": "1", "title": "Einleitung", "level": 1},
+        {"number": "2", "title": "Theoretischer Bezugsrahmen", "level": 1},
+        {"number": "3", "title": "Darstellung und Analyse", "level": 1},
+        {"number": "3.1", "title": "Makroumwelt", "level": 2},
+        {"number": "3.2", "title": "Branchen- und Wettbewerbsumwelt", "level": 2},
+        {"number": "3.3", "title": "Stakeholder- und Netzwerkumwelt", "level": 2},
+        {"number": "4", "title": "Umweltanalyse der NexMach", "level": 1},
+        {"number": "5", "title": "Fazit", "level": 1},
+    ]
+    outline = [
+        _section("1. Einleitung"),
+        _section("2. Theoretischer Bezugsrahmen"),
+        _section("3. Darstellung und Analyse", subsections=[
+            _section("3.1 Makroumwelt"),
+        ]),
+        _section("3.3 Stakeholder- und Netzwerkumwelt"),  # flat
+        _section("4. Umweltanalyse der NexMach"),
+        _section("5. Fazit"),
+    ]
+    out, report = v.enforce_required_outline(outline, required)
+    assert report["inserted"] == ["Branchen- und Wettbewerbsumwelt"]
+    assert _subtitles(out, "darstellung") == [
+        "3.1 Makroumwelt",
+        "Branchen- und Wettbewerbsumwelt",
+        "3.3 Stakeholder- und Netzwerkumwelt",
+    ]
+    assert len(out) == 5  # no flat 3.3 leftover
+
+
+def test_inserted_parent_uses_synthesize_strategy():
+    """REGRESSION (review finding 2): enforce_required_outline runs AFTER the
+    final validate_and_correct, so it must itself set the right research
+    strategy for inserted sections. A parent WITH subsections must use
+    'synthesize_from_subsections' (the validator's own rule for such sections),
+    not the default 'research_based'."""
+    v = OutlineValidator(mission_id=None, controller=None)
+    required = [
+        {"number": "1", "title": "Einleitung", "level": 1},
+        {"number": "4", "title": "Methodik", "level": 1},
+        {"number": "4.1", "title": "Datenerhebung", "level": 2},
+        {"number": "5", "title": "Fazit", "level": 1},
+    ]
+    outline = [_section("1. Einleitung"), _section("5. Fazit")]
+    out, report = v.enforce_required_outline(outline, required)
+
+    assert report["inserted"] == ["Methodik", "Datenerhebung"]  # parent first
+    methodik = _find_sec(out, "methodik")
+    assert methodik.research_strategy == "synthesize_from_subsections"
+    # Leaf insert stays research_based.
+    assert _find_sec(out, "datenerhebung").research_strategy == "research_based"
 
 
 def test_missing_top_level_section_is_inserted():
@@ -160,9 +259,6 @@ def test_missing_top_level_section_is_inserted():
 
 
 def test_missing_parent_and_child_both_inserted():
-    """When a required parent AND its child are both missing, the parent is
-    created at top level and the child nested under it (report order is
-    parent-first)."""
     v = OutlineValidator(mission_id=None, controller=None)
     required = [
         {"number": "1", "title": "Einleitung", "level": 1},
@@ -173,15 +269,12 @@ def test_missing_parent_and_child_both_inserted():
     outline = [_section("1. Einleitung"), _section("5. Fazit")]
     out, report = v.enforce_required_outline(outline, required)
     assert report["inserted"] == ["Methodik", "Datenerhebung"]  # parent first
-    top_titles = [s.title for s in out]
-    assert top_titles == ["1. Einleitung", "Methodik", "5. Fazit"]
+    assert [s.title for s in out] == ["1. Einleitung", "Methodik", "5. Fazit"]
     methodik = [s for s in out if s.title == "Methodik"][0]
     assert [c.title for c in methodik.subsections] == ["Datenerhebung"]
 
 
-def test_extra_llm_sections_preserved_and_appended():
-    """Sections the LLM added that aren't in the required outline are kept,
-    appended after the required (ordered) sections."""
+def test_extra_llm_sections_preserved_top_level():
     v = OutlineValidator(mission_id=None, controller=None)
     required = [
         {"number": "1", "title": "Einleitung", "level": 1},
@@ -201,8 +294,36 @@ def test_extra_llm_sections_preserved_and_appended():
     ]
 
 
+def test_extra_nested_subsection_preserved_under_parent():
+    """An extra subsection nested under a matched parent that isn't in the
+    required outline must stay nested under that parent (not be hoisted to top
+    level or dropped)."""
+    v = OutlineValidator(mission_id=None, controller=None)
+    required = [
+        {"number": "1", "title": "Einleitung", "level": 1},
+        {"number": "3", "title": "Darstellung", "level": 1},
+        {"number": "3.1", "title": "Sub", "level": 2},
+        {"number": "3.2", "title": "Missing", "level": 2},
+        {"number": "5", "title": "Fazit", "level": 1},
+    ]
+    outline = [
+        _section("1. Einleitung"),
+        _section("3. Darstellung", subsections=[
+            _section("3.1 Sub"),
+            _section("3.4 Extra Analysis"),  # extra, not required
+        ]),
+        _section("5. Fazit"),
+    ]
+    out, report = v.enforce_required_outline(outline, required)
+    assert report["inserted"] == ["Missing"]
+    assert _subtitles(out, "darstellung") == [
+        "3.1 Sub",
+        "Missing",
+        "3.4 Extra Analysis",
+    ]
+
+
 def test_deep_nesting_level3_inserted():
-    """A missing level-3 subsection is inserted under its level-2 parent."""
     v = OutlineValidator(mission_id=None, controller=None)
     required = [
         {"number": "3", "title": "Analyse", "level": 1},
@@ -217,15 +338,28 @@ def test_deep_nesting_level3_inserted():
     ]
     out, report = v.enforce_required_outline(outline, required)
     assert report["inserted"] == ["Deeper Missing"]
-    # Navigate to 3.1's subsections.
     sec3 = [s for s in out if "analyse" in s.title.lower()][0]
     sub31 = sec3.subsections[0]
     assert [c.title for c in sub31.subsections] == ["3.1.1 Deep", "Deeper Missing"]
 
 
+def test_number_disambiguation_parent_vs_child_same_word():
+    """``3 Darstellung`` vs ``3.1 Darstellung der Methodik`` must not be confused:
+    required ``3`` must claim the number-3 section, and ``3.1`` the number-3.1
+    section, nested under it."""
+    v = OutlineValidator(mission_id=None, controller=None)
+    required = [
+        {"number": "3", "title": "Darstellung", "level": 1},
+        {"number": "3.1", "title": "Darstellung der Methodik", "level": 2},
+    ]
+    outline = [_section("3. Darstellung"), _section("3.1 Darstellung der Methodik")]
+    out, report = v.enforce_required_outline(outline, required)
+    assert report["inserted"] == []
+    assert out[0].title == "3. Darstellung"
+    assert _subtitles(out, "darstellung") == ["3.1 Darstellung der Methodik"]
+
+
 def test_fuzzy_match_avoids_false_insertion():
-    """A required title present with slightly different wording must NOT be
-    inserted again (avoid duplicates)."""
     v = OutlineValidator(mission_id=None, controller=None)
     required = [
         {"number": "1", "title": "Zentrale Umwelteinflüsse und Managementimplikationen", "level": 1},
@@ -236,7 +370,7 @@ def test_fuzzy_match_avoids_false_insertion():
     assert len(out) == 1
 
 
-def test_inserted_sections_get_research_strategy():
+def test_inserted_sections_get_section_id():
     v = OutlineValidator(mission_id=None, controller=None)
     required = [
         {"number": "1", "title": "Einleitung", "level": 1},
@@ -245,5 +379,4 @@ def test_inserted_sections_get_research_strategy():
     outline = [_section("1. Einleitung")]
     out, _ = v.enforce_required_outline(outline, required)
     inserted = [s for s in out if s.title == "Conclusion"][0]
-    assert inserted.research_strategy == "research_based"
     assert inserted.section_id
