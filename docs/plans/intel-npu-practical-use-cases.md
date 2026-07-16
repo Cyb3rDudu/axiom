@@ -1,6 +1,6 @@
 # Intel NPU: Practical Use Cases
 
-**Date:** May 2026  
+**Date:** May 2026
 **Purpose:** What can you actually DO with an Intel NPU?
 
 ---
@@ -153,7 +153,7 @@ Intel NPUs excel at **small, low-power, always-on AI tasks**:
 npus_tasks:
   - Whisper-small: Voice-to-text
   - DistilBERT: Intent classification
-  
+
 cpu_gpu_tasks:
   - BGE-M3: Document embeddings
   - LLM: Research generation
@@ -299,7 +299,7 @@ class HybridInference:
         self.npu = self._init_npu()      # Small, fast tasks
         self.cpu = self._init_cpu()      # Fallback
         self.gpu = self._init_gpu()      # Heavy tasks
-    
+
     def route_task(self, task_type, model_size):
         if model_size < 50M and task_type == "continuous":
             return self.npu  # Voice, streaming

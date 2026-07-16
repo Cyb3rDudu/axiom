@@ -14,6 +14,24 @@ from ai_researcher.dynamic_config import get_max_total_depth
 logger = logging.getLogger(__name__)
 
 
+def _normalize_title_for_match(title: str) -> str:
+    """Normalize a section title for fuzzy matching.
+
+    Lower-cases, strips leading numbering (``1.`` / ``2.1``), punctuation and
+    collapses whitespace so that ``"1. Einleitung"`` and ``"Einleitung"`` and
+    ``"einleitung."`` all compare equal.
+    """
+    import re
+    t = title or ""
+    # Strip a leading numeric label like ``1.`` / ``2.1.``.
+    t = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*", "", t)
+    t = t.lower().strip()
+    # Drop common trailing punctuation / heading markers.
+    t = t.strip("#:.-_")
+    t = re.sub(r"\s+", " ", t)
+    return t
+
+
 class OutlineValidator:
     """Validates and corrects outline structure with configurable rules."""
     
@@ -89,6 +107,124 @@ class OutlineValidator:
         }
         
         return working_outline, report
+
+    # ------------------------------------------------------------------
+    # Required-outline enforcement (Finding 1, deterministic merge)
+    # ------------------------------------------------------------------
+
+    def enforce_required_outline(
+        self,
+        outline: List[ReportSection],
+        required_outline: List[Dict[str, Any]],
+    ) -> Tuple[List[ReportSection], Dict[str, Any]]:
+        """Deterministically ensure every required briefing section is present.
+
+        Unlike the LLM-driven reflection loop, this is a pure post-LLM check: it
+        matches the generated ``outline`` against the user's required
+        ``structured_outline`` (number / title / level records parsed from the
+        Gliederung) and INSERTS any missing required section at the correct
+        position, preserving the user's order and hierarchy. Existing sections
+        are left untouched (titles, descriptions, strategies, notes all kept).
+
+        Args:
+            outline: the generated/corrected outline (a flat list of top-level
+                ``ReportSection`` possibly with subsections).
+            required_outline: list of ``{"number","title","level"}`` dicts from
+                mission metadata ``structured_outline``.
+
+        Returns:
+            (updated_outline, report) where report lists matched / inserted.
+        """
+        report: Dict[str, Any] = {
+            "required_count": len(required_outline),
+            "matched": [],
+            "inserted": [],
+            "missing_required": [],
+        }
+        if not required_outline:
+            return outline, report
+
+        # Collect normalized titles already present in the generated outline.
+        present_titles: List[str] = []
+
+        def _collect_present(sections: List[ReportSection]) -> None:
+            for sec in sections:
+                present_titles.append(_normalize_title_for_match(sec.title))
+                if sec.subsections:
+                    _collect_present(sec.subsections)
+
+        _collect_present(outline)
+
+        def _is_present(required_title: str) -> bool:
+            target = _normalize_title_for_match(required_title)
+            if not target:
+                return True  # nothing to match
+            for existing in present_titles:
+                if existing == target:
+                    return True
+                # Fuzzy match for minor wording differences (e.g. "Fazit" vs
+                # "Fazit und Ausblick"). Require a strong match to avoid false
+                # positives, and also accept substring containment.
+                ratio = difflib.SequenceMatcher(None, target, existing).ratio()
+                if ratio >= 0.8 or target in existing or existing in target:
+                    return True
+            return False
+
+        # Map required top-level numbers ("1", "2", ...) to their position so we
+        # can insert missing sections in the right place. Top-level required
+        # sections (level 1) map to the top-level list; nested required sections
+        # (level >= 2) are folded into the description of their parent if the
+        # parent exists (we don't fabricate deep subsection structure blindly).
+        top_level_required = [
+            r for r in required_outline if int(r.get("level", 1) or 1) <= 1
+        ]
+
+        new_outline = list(outline)
+        for req in top_level_required:
+            req_title = req.get("title") or ""
+            req_number = req.get("number") or ""
+            if _is_present(req_title):
+                report["matched"].append(req_title)
+                continue
+            # Missing required top-level section -> insert deterministically.
+            report["missing_required"].append(req_title)
+            inserted = ReportSection(
+                section_id=(req_title.lower().replace(" ", "_")[:40] or f"section_{req_number}"),
+                title=req_title,
+                description=(
+                    f"Required section from the user's Gliederung ({req_number}). "
+                    f"Cover the topics specified in the briefing for this section."
+                ),
+                research_strategy="research_based",
+            )
+            report["inserted"].append(req_title)
+            logger.warning(
+                "OutlineValidator: required section '%s' (%s) was MISSING from the "
+                "generated outline; inserting it deterministically.",
+                req_title, req_number,
+            )
+            new_outline.append(inserted)
+            present_titles.append(_normalize_title_for_match(req_title))
+
+        # Re-order top-level sections to follow the required order as closely as
+        # possible (required sections first, in their Gliederung order; any extra
+        # generated sections appended afterwards in their original order).
+        order_index: Dict[str, int] = {}
+        for i, req in enumerate(top_level_required):
+            order_index[_normalize_title_for_match(req.get("title") or "")] = i
+
+        def _order_key(section: ReportSection) -> Tuple[int, int]:
+            return (order_index.get(_normalize_title_for_match(section.title), 10_000), 0)
+
+        # Only re-sort if we actually matched/inserted at least 2 required
+        # sections, to avoid shuffling purely-LLM outlines with no briefing.
+        if len(top_level_required) >= 2:
+            # Keep stable: sort by required order, preserving original order for ties.
+            indexed = list(enumerate(new_outline))
+            indexed.sort(key=lambda pair: (_order_key(pair[1])[0], pair[0]))
+            new_outline = [s for _, s in indexed]
+
+        return new_outline, report
     
     def _calculate_max_depth(self, outline: List[ReportSection], current_depth: int = 0) -> int:
         """Calculate the maximum depth of the outline."""

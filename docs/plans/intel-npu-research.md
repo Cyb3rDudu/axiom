@@ -1,7 +1,7 @@
 # Intel NPU Research Report
 
-**Date:** May 2026  
-**Purpose:** Evaluate Intel NPU capabilities for running AI models in AXIOM  
+**Date:** May 2026
+**Purpose:** Evaluate Intel NPU capabilities for running AI models in AXIOM
 **Status:** ✅ Complete - Models analyzed
 
 ---
@@ -321,7 +321,7 @@ NPU_MODEL_CONFIG = {
    # Detect available devices
    core = ov.Core()
    devices = core.available_devices  # ['CPU', 'GPU', 'NPU']
-   
+
    # Auto-select best device
    if 'NPU' in devices and workload_is_small:
        device = 'NPU'
@@ -455,7 +455,7 @@ result = compiled(inputs)
 
 ---
 
-**Document Status:** Complete  
+**Document Status:** Complete
 **Next Steps:** Review with team, decide on NPU support priority
 
 ---

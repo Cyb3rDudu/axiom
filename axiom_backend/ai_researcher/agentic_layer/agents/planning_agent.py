@@ -742,17 +742,22 @@ Available Research Tools:
             if initial_context:
                 user_prompt += f"Initial Context:\n{initial_context}\n\n"
             # If the user supplied a structured briefing with an outline, instruct
-            # the planner to adopt that structure verbatim rather than inventing
-            # a new one. (P1)
+            # the planner to adopt that structure rather than inventing a new one.
+            # (P1 + Finding 2) The authoritative structure is the parsed
+            # REQUIRED OUTLINE block (number-free titles). Do NOT re-parse the
+            # raw `# N. Title` headings from the verbatim briefing below and do
+            # NOT prepend your own numbers to titles (that caused duplicates like
+            # "# 1. 1. Einleitung").
             if briefing_context:
                 user_prompt += (
                     "IMPORTANT: The user provided a complete structured briefing above "
-                    "(Leitfrage, Gliederung, word budget, deliverable). Adopt the user's "
-                    "outline structure and section titles VERBATIM — map each `# N. Title` "
-                    "heading to a top-level section. Do NOT invent a different structure, "
-                    "do NOT merge or rename the user's sections, and do NOT invent new "
-                    "research questions. Honour section research-strategy hints if present. "
-                    "Generate the outline from the briefing."
+                    "(Leitfrage, Gliederung, word budget, deliverable). Use ONLY the "
+                    "parsed 'REQUIRED OUTLINE' block earlier in this prompt for section "
+                    "titles and hierarchy — reproduce those titles exactly (they are "
+                    "already number-free). Do NOT read the raw `# N. Title` headings from "
+                    "the verbatim briefing, do NOT invent a different structure, do NOT "
+                    "merge or rename sections, and do NOT invent new research questions. "
+                    "Generate one outline section per required outline entry."
                 )
             else:
                 user_prompt += "Generate a structured outline for this research task."
@@ -1309,6 +1314,39 @@ Available Research Tools:
             auto_correct=True
         )
         current_response.report_outline = final_outline
+
+        # Deterministic required-outline enforcement (Finding 1): the LLM may
+        # still drop a required briefing section even with a strong prompt.
+        # After validation, merge any missing required sections from the user's
+        # parsed Gliederung (mission metadata `structured_outline`) back in, in
+        # the correct order. This guarantees the production failure (missing
+        # section 3.2) cannot recur, regardless of LLM behaviour.
+        try:
+            required_outline = None
+            controller = getattr(self, "controller", None)
+            context_manager = getattr(controller, "context_manager", None) if controller else None
+            if context_manager and mission_id:
+                mc = context_manager.get_mission_context(mission_id)
+                if mc:
+                    required_outline = (getattr(mc, "metadata", None) or {}).get("structured_outline")
+            if required_outline:
+                final_outline, req_report = final_validator.enforce_required_outline(
+                    current_response.report_outline, required_outline
+                )
+                current_response.report_outline = final_outline
+                if req_report.get("inserted"):
+                    logger.warning(
+                        "%s: enforced_required_outline inserted %d missing section(s): %s",
+                        self.agent_name, len(req_report["inserted"]), req_report["inserted"],
+                    )
+                else:
+                    logger.info(
+                        "%s: required-outline check OK — all %d required section(s) present.",
+                        self.agent_name, req_report.get("required_count", 0),
+                    )
+        except Exception as req_err:
+            logger.warning("%s: required-outline enforcement skipped due to error: %s",
+                           self.agent_name, req_err, exc_info=True)
         
         # Log final summary
         logger.info(f"{self.agent_name}: Reflection loop complete. Final outline has "
