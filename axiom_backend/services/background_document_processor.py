@@ -105,6 +105,24 @@ class BackgroundDocumentProcessor:
                   "continuing to poll (will keep retrying in the worker loop).")
         self._worker_loop()
 
+    def _recover_db_pool_if_needed(self, exc: Exception) -> None:
+        """Dispose the SQLAlchemy pool when ``exc`` is a DB/connection error.
+
+        Shared recovery primitive for the internal DB-write paths (progress /
+        status updates). Without this, a macvlan drop during an update would
+        invalidate the pool and leave every subsequent update failing silently
+        until some later non-swallowed operation tripped the outer worker loop
+        (review finding 2). Safe to call on any exception; it only acts on
+        DB-class errors.
+        """
+        if not _is_db_error(exc):
+            return
+        print("DB error during internal update — disposing connection pool to recover.")
+        try:
+            engine.dispose()
+        except Exception as disp_err:
+            print(f"engine.dispose() failed: {disp_err}")
+
     def _worker_loop(self):
         """Main worker loop that polls the database for queued documents."""
         while not self.shutdown_event.is_set():
@@ -173,14 +191,10 @@ class BackgroundDocumentProcessor:
                 # INVALIDATED (a connect-time failure during pool population).
                 # pool_pre_ping cannot recover an invalidated pool; without
                 # dispose() every subsequent next(get_db()) re-raises the same
-                # error forever and the worker spins silently. Dispose so the
-                # next loop iteration gets a fresh connection attempt.
-                if _is_db_error(e):
-                    print("DB error detected — disposing connection pool to recover.")
-                    try:
-                        engine.dispose()
-                    except Exception as disp_err:
-                        print(f"engine.dispose() failed: {disp_err}")
+                # error forever and the worker spins silently. Dispose via the
+                # shared recovery primitive so the next loop iteration gets a
+                # fresh connection attempt.
+                self._recover_db_pool_if_needed(e)
                 if self.current_job:
                     if db is not None:
                         try:
@@ -558,8 +572,9 @@ class BackgroundDocumentProcessor:
                                      status: str, error_message: Optional[str] = None):
         """Update document progress in database and send WebSocket update (synchronous)."""
         # Get database session
-        db = next(get_db())
+        db = None
         try:
+            db = next(get_db())
             # Update document in database
             document = crud.get_document(db, doc_id=doc_id, user_id=user_id)
             if document:
@@ -582,15 +597,23 @@ class BackgroundDocumentProcessor:
             
         except Exception as e:
             print(f"Error updating document progress: {e}")
+            # Recover from a macvlan-induced invalidated pool so the next update
+            # doesn't keep failing silently (review finding 2).
+            self._recover_db_pool_if_needed(e)
         finally:
-            db.close()
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
     
     def _update_job_progress_sync(self, job_id: str, user_id: int, progress: int, 
                                 status: str, error_message: Optional[str] = None):
         """Update processing job progress in database and send WebSocket update (synchronous)."""
         # Get database session
-        db = next(get_db())
+        db = None
         try:
+            db = next(get_db())
             # Update job in database
             job = db.query(models.DocumentProcessingJob).filter(
                 models.DocumentProcessingJob.id == job_id,
@@ -622,8 +645,14 @@ class BackgroundDocumentProcessor:
             
         except Exception as e:
             print(f"Error updating job progress: {e}")
+            # Recover from a macvlan-induced invalidated pool (review finding 2).
+            self._recover_db_pool_if_needed(e)
         finally:
-            db.close()
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
     
     def _process_document_sync(self, job: ProcessingJob) -> bool:
         """Process a document synchronously in the worker thread."""

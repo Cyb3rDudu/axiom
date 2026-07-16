@@ -203,7 +203,13 @@ def run_sql_migrations():
     run previously hung the backend here (migration 05) on a blocked socket
     read with no timeout. On ``OperationalError`` we dispose the pool and retry
     the whole migration so a restart-time blip is self-healing instead of fatal.
+
+    Returns the list of migration filenames that genuinely FAILED (i.e. could
+    not be applied or confirmed already-applied after all retries). The caller
+    (``main``) fails fast on a non-empty list rather than booting the app with
+    missing schema (review finding 1).
     """
+    failed: list[str] = []
     try:
         import glob
         import os
@@ -226,16 +232,17 @@ def run_sql_migrations():
                     with open(sql_file, 'r') as f:
                         sql_content = f.read()
 
-                    applied = False
+                    outcome = "pending"  # "applied" | "already_applied" | "failed"
+                    last_db_err = None
                     for attempt in range(1, 4):  # up to 3 attempts per migration
                         try:
                             with engine.connect() as conn:
                                 conn.execute(text(sql_content))
                                 conn.commit()
-                            logger.info(f"✅ Migration {filename} completed")
-                            applied = True
+                            outcome = "applied"
                             break
                         except OperationalError as oe:
+                            last_db_err = oe
                             logger.warning(
                                 "Migration %s DB error (attempt %d/3): %s — disposing pool, retrying",
                                 filename, attempt, str(getattr(oe, "orig", oe))[:160],
@@ -245,18 +252,33 @@ def run_sql_migrations():
                             except Exception:
                                 pass
                             time.sleep(3)
-                        except Exception as e:
-                            # Log but don't fail - migration might already be applied
-                            logger.warning(f"Migration {filename} skipped or already applied: {str(e)}")
-                            applied = True  # treat as done (e.g. already applied)
-                            break
-                    if not applied:
-                        logger.error(f"Migration {filename} failed after retries")
+                    if outcome == "applied":
+                        logger.info(f"✅ Migration {filename} completed")
+                    elif outcome == "pending":
+                        # OperationalError on every retry, or a non-DB exception.
+                        # Distinguish: a non-DB ProgrammingError here usually means
+                        # the migration is already applied (e.g. "column already
+                        # exists") — treat that as already-applied, not a failure.
+                        # A persistent OperationalError is a real failure.
+                        if last_db_err is not None:
+                            logger.error(
+                                "Migration %s FAILED after retries: %s",
+                                filename, str(getattr(last_db_err, "orig", last_db_err))[:200],
+                            )
+                            failed.append(filename)
+                        else:
+                            logger.warning(
+                                "Migration %s treated as already applied (non-DB error)",
+                                filename,
+                            )
 
         logger.info("SQL migrations check completed")
 
     except Exception as e:
         logger.error(f"Error running SQL migrations: {str(e)}")
+        failed.append("<migrations-runner>")
+
+    return failed
 
 def main():
     """Main initialization function"""
@@ -281,9 +303,17 @@ def main():
     # Run column migrations for new columns on existing tables
     run_column_migrations()
 
-    # Run SQL migrations for existing databases
-    run_sql_migrations()
-    
+    # Run SQL migrations for existing databases; fail fast if any genuinely
+    # failed so we never boot the app with missing migration schema. The init
+    # container / systemd unit will restart and retry (review finding 1).
+    migration_failures = run_sql_migrations()
+    if migration_failures:
+        logger.error(
+            "❌ %d SQL migration(s) failed: %s — aborting startup",
+            len(migration_failures), migration_failures,
+        )
+        sys.exit(1)
+
     # Create default admin
     create_default_admin()
     

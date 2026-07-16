@@ -5,7 +5,13 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 
-from database.database import SessionLocal, test_connection, init_db
+from database.database import (
+    SessionLocal,
+    test_connection,
+    init_db,
+    connect_with_retries,
+    engine,
+)
 from database import crud
 from api import auth, missions, system, chat, chats, documents, websockets, settings, writing, dashboard, admin, research_reports, languages, rag, openai_compat
 from middleware import user_context_middleware
@@ -121,9 +127,15 @@ async def startup_event():
     
     # Initialize database connection and tables
     try:
-        # Test database connection
-        if not test_connection():
-            logger.error("Failed to connect to database")
+        # Verify database connectivity with retries instead of a single-shot
+        # probe. init_postgres (run by start.sh) already migrated, but a
+        # transient macvlan blip in the few seconds between that and uvicorn's
+        # startup event would otherwise fail app startup with a false-negative
+        # 'Database connection failed' (review finding 3).
+        if not connect_with_retries(
+            engine, max_retries=10, base_delay=2.0, purpose="app startup"
+        ):
+            logger.error("Failed to connect to database after retries")
             raise Exception("Database connection failed")
         
         # Initialize database tables
