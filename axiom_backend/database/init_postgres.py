@@ -175,25 +175,70 @@ def verify_database_setup():
         return False
 
 def run_column_migrations():
-    """Add new columns to existing tables if they don't exist."""
+    """Add new columns to existing tables if they don't exist.
+
+    Uses the same retry/dispose/fail-reporting pattern as run_sql_migrations so
+    a transient macvlan drop can't silently skip a column (e.g. users.api_key)
+    and still let verify_database_setup() pass (review finding 2).
+
+    Returns the list of columns ("table.column") that genuinely FAILED to apply
+    after all retries; main() fails fast on a non-empty list.
+    """
+    from sqlalchemy.exc import OperationalError
+
     migrations = [
         ("users", "api_key", "VARCHAR UNIQUE"),
     ]
-    try:
-        with engine.connect() as conn:
-            for table, column, col_type in migrations:
-                result = conn.execute(text(
-                    "SELECT 1 FROM information_schema.columns "
-                    "WHERE table_name = :table AND column_name = :column"
-                ), {"table": table, "column": column})
-                if not result.fetchone():
-                    conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {col_type}'))
-                    conn.commit()
-                    logger.info(f"Added column {table}.{column}")
-                else:
-                    logger.debug(f"Column {table}.{column} already exists")
-    except Exception as e:
-        logger.error(f"Column migration failed: {e}")
+    failed: list[str] = []
+
+    for table, column, col_type in migrations:
+        outcome = "pending"  # "applied" | "already_present" | "failed"
+        last_db_err = None
+        for attempt in range(1, 4):  # up to 3 attempts per column
+            try:
+                with engine.connect() as conn:
+                    result = conn.execute(text(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = :table AND column_name = :column"
+                    ), {"table": table, "column": column})
+                    if not result.fetchone():
+                        conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {col_type}'))
+                        conn.commit()
+                        logger.info(f"Added column {table}.{column}")
+                        outcome = "applied"
+                    else:
+                        logger.debug(f"Column {table}.{column} already exists")
+                        outcome = "already_present"
+                    break
+            except OperationalError as oe:
+                last_db_err = oe
+                logger.warning(
+                    "Column migration %s.%s DB error (attempt %d/3): %s — disposing pool, retrying",
+                    table, column, attempt, str(getattr(oe, "orig", oe))[:160],
+                )
+                try:
+                    engine.dispose()
+                except Exception:
+                    pass
+                time.sleep(3)
+            except Exception as e:
+                # Non-DB error (e.g. column already exists at the DBAPI level).
+                # Treat as already present, not a failure.
+                logger.warning(
+                    "Column migration %s.%s treated as already present (non-DB error): %s",
+                    table, column, e,
+                )
+                outcome = "already_present"
+                break
+        if outcome == "pending":
+            if last_db_err is not None:
+                logger.error(
+                    "Column migration %s.%s FAILED after retries: %s",
+                    table, column, str(getattr(last_db_err, "orig", last_db_err))[:200],
+                )
+                failed.append(f"{table}.{column}")
+
+    return failed
 
 
 def run_sql_migrations():
@@ -300,8 +345,15 @@ def main():
     # Create tables
     create_tables()
 
-    # Run column migrations for new columns on existing tables
-    run_column_migrations()
+    # Run column migrations for new columns on existing tables; fail fast if
+    # any genuinely failed (consistent with SQL migrations, review finding 2).
+    column_failures = run_column_migrations()
+    if column_failures:
+        logger.error(
+            "❌ %d column migration(s) failed: %s — aborting startup",
+            len(column_failures), column_failures,
+        )
+        sys.exit(1)
 
     # Run SQL migrations for existing databases; fail fast if any genuinely
     # failed so we never boot the app with missing migration schema. The init

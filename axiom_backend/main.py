@@ -146,7 +146,11 @@ async def startup_event():
         if os.getenv("DATABASE_URL", "").startswith("postgresql"):
             from database.init_postgres import ensure_extensions, run_column_migrations
             ensure_extensions()
-            run_column_migrations()
+            column_failures = run_column_migrations()
+            if column_failures:
+                raise RuntimeError(
+                    f"Column migrations failed: {column_failures}"
+                )
 
         # Initialize PromptLoader for multilingual support
         try:
@@ -161,8 +165,13 @@ async def startup_event():
             logger.warning(f"PromptLoader initialization failed: {e}. Will use hardcoded prompts as fallback.", exc_info=True)
 
     except Exception as e:
+        # DB-critical startup failure: re-raise so uvicorn aborts startup and
+        # systemd restarts the unit (which then retries the full init). The
+        # previous 'continue anyway' let the process reach 'Application startup
+        # complete' with a broken DB layer, undermining the fail-fast behavior
+        # in start.sh (review finding 1).
         logger.error(f"Database initialization failed: {e}", exc_info=True)
-        # Continue anyway, as tables might already exist
+        raise
     
     # Create a configurable thread pool
     # Increased default from 10 to 20 to handle concurrent web fetches better
