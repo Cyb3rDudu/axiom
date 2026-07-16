@@ -1494,11 +1494,21 @@ Instructions:
     ) -> bool:
         """Launch mission execution in a background thread (P2: direct start).
 
-        Mirrors the background-launch path of ``POST /missions/{id}/start`` so a
-        complete structured briefing can start immediately from the chat handler.
-        Sets status to ``planning``, preserves the current user context for model
-        selection, registers with the lifecycle manager, and runs
-        ``controller.run_mission`` on a fresh event loop in a daemon thread.
+        Mirrors the canonical start path (``POST /missions/{id}/start`` and the
+        ``approve_questions`` branch in ``handle_user_message``) so a complete
+        structured briefing behaves **identically** to an open-research mission:
+
+          1. ``prepare_mission_start`` — creates the auto-save "R:" document
+             group (``generated_document_group_id``) and captures
+             ``comprehensive_settings.settings_captured_at_start``.
+          2. ``apply_auto_optimization`` — sets the research parameters
+             (rounds, depth, max_concurrent, web/doc results, writing_passes)
+             that determine how much agentic activity the mission runs.
+          3. ``controller.run_mission`` — the actual research execution.
+
+        Skipping 1+2 (the earlier hacky version) produced missions with empty
+        research_params and no R: group, i.e. far less agentic activity than an
+        open-research mission. See docs/plans/STRUCTURED_BRIEFING_DIRECT_START.md.
 
         Returns True if the background task was scheduled, False on failure.
         """
@@ -1517,13 +1527,16 @@ Instructions:
         # /missions/{id}/start. Fall back (return False) so the caller degrades
         # gracefully to the question loop instead of launching a doomed mission.
         meta = {}
+        mission_context_obj = None
         try:
-            mc = context_mgr.get_mission_context(mission_id)
-            meta = (getattr(mc, "metadata", None) or {}) if mc else {}
+            mission_context_obj = context_mgr.get_mission_context(mission_id)
+            meta = (getattr(mission_context_obj, "metadata", None) or {}) if mission_context_obj else {}
         except Exception:
             pass
         use_web = meta.get("use_web_search", True)
-        use_rag = meta.get("use_local_rag") or bool(meta.get("document_group_id"))
+        doc_group_id = meta.get("document_group_id")
+        use_rag = meta.get("use_local_rag") or bool(doc_group_id)
+        auto_create_dg = bool(meta.get("auto_create_document_group"))
         if not use_web and not use_rag:
             logger.warning(
                 "Direct-start aborted for mission %s: no information source enabled.",
@@ -1531,14 +1544,124 @@ Instructions:
             )
             return False
 
+        # Read the chat_id so apply_auto_optimization can pull chat history.
+        chat_id = meta.get("chat_id")
+
         # Mark as planning so the frontend shows the running state immediately.
         try:
             await context_mgr.update_mission_status(mission_id, "planning")
         except Exception:
             logger.debug("update_mission_status(planning) failed for %s", mission_id, exc_info=True)
 
+        # Capture the prep inputs now (they depend on the calling user/mission
+        # state); the background thread runs them on its own event loop.
+        prep_inputs = {
+            "mission_id": mission_id,
+            "use_web_search": use_web,
+            "document_group_id": doc_group_id,
+            "auto_create_document_group": auto_create_dg,
+            "chat_id": chat_id,
+        }
+
+        async def _prepare_and_run():
+            """prepare_mission_start -> apply_auto_optimization -> run_mission.
+
+            Identical prep to the approve_questions / /missions/{id}/start path so
+            a complete-briefing mission gets the same R: group, settings capture
+            and research parameters as an open-research mission.
+            """
+            mid = prep_inputs["mission_id"]
+            cm = self.controller.context_manager
+
+            # (1) prepare_mission_start — R: group + comprehensive_settings.
+            try:
+                from services.mission_service import prepare_mission_start
+                from ai_researcher.user_context import get_current_user as _gcu
+                from database.database import SessionLocal
+                from database import models
+                import json as _json
+
+                current_research_params = {}
+                cu = _gcu()
+                if cu:
+                    try:
+                        with SessionLocal() as db:
+                            dbu = db.query(models.User).filter(models.User.id == cu.id).first()
+                            if dbu and dbu.settings:
+                                sd = _json.loads(dbu.settings) if isinstance(dbu.settings, str) else dbu.settings
+                                rs = sd.get("research_parameters", {})
+                                current_research_params = {k: v for k, v in rs.items() if v is not None}
+                    except Exception as _e:
+                        logger.warning("Direct-start: failed to read user research_params for %s: %s", mid, _e)
+
+                mission_settings = {
+                    "use_web_search": prep_inputs["use_web_search"],
+                    "document_group_id": prep_inputs["document_group_id"],
+                    "auto_create_document_group": prep_inputs["auto_create_document_group"],
+                    "current_research_params": current_research_params,
+                }
+                mc = cm.get_mission_context(mid)
+                if mc is not None:
+                    await prepare_mission_start(
+                        mission_id=mid,
+                        mission_context=mc,
+                        context_mgr=cm,
+                        settings=mission_settings,
+                        log_to_frontend=True,
+                    )
+                    logger.info("Direct-start: prepare_mission_start completed for %s", mid)
+                else:
+                    logger.warning("Direct-start: mission context missing for prepare_mission_start %s", mid)
+            except Exception as e:
+                logger.error("Direct-start: prepare_mission_start failed for %s: %s", mid, e, exc_info=True)
+                # Non-fatal: continue to run_mission with existing settings.
+
+            # (2) apply_auto_optimization — sets rounds/depth/concurrency etc.
+            try:
+                from ai_researcher.user_context import get_current_user as _gcu
+                from database.async_database import get_async_db_session
+                from database import async_crud
+                from ai_researcher.settings_optimizer import apply_auto_optimization
+
+                cu = _gcu()
+                if cu and prep_inputs.get("chat_id"):
+                    chat_history = []
+                    try:
+                        _adb = await get_async_db_session()
+                        try:
+                            chat_history = await async_crud.get_chat_messages(
+                                _adb, chat_id=prep_inputs["chat_id"], user_id=cu.id
+                            )
+                        finally:
+                            await _adb.close()
+                    except Exception as _e:
+                        logger.warning("Direct-start: failed to load chat history for %s: %s", mid, _e)
+                    await apply_auto_optimization(
+                        mission_id=mid,
+                        current_user=cu,
+                        context_mgr=cm,
+                        controller=self.controller,
+                        chat_history=chat_history,
+                        log_queue=log_queue,
+                        update_callback=update_callback,
+                    )
+                    logger.info("Direct-start: apply_auto_optimization completed for %s", mid)
+                else:
+                    logger.info("Direct-start: skipping apply_auto_optimization for %s (no user/chat_id)", mid)
+            except Exception as e:
+                logger.error("Direct-start: apply_auto_optimization failed for %s: %s", mid, e, exc_info=True)
+                # Non-fatal: continue with current parameters.
+
+            # (3) run_mission — actual research execution.
+            await self.controller.run_mission(
+                mid,
+                log_queue=log_queue,
+                update_callback=update_callback,
+            )
+
         def run_background_task():
-            """Run run_mission on a fresh event loop with preserved user context."""
+            """Run prepare+optimize+run_mission on a fresh event loop with
+            preserved user context."""
             if set_current_user and background_user is not None:
                 set_current_user(background_user)
             # Register the thread/loop with the lifecycle manager so stop/resume work.
@@ -1559,13 +1682,7 @@ Instructions:
                 except Exception:
                     pass
             try:
-                loop.run_until_complete(
-                    self.controller.run_mission(
-                        mission_id,
-                        log_queue=log_queue,
-                        update_callback=update_callback,
-                    )
-                )
+                loop.run_until_complete(_prepare_and_run())
             except Exception as e:
                 logger.error("Background run_mission failed for mission %s: %s", mission_id, e, exc_info=True)
                 try:
