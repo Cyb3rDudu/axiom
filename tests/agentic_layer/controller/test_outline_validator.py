@@ -45,6 +45,17 @@ def _subtitles(outline, parent_frag):
     return [c.title for c in s.subsections] if s else None
 
 
+def _count_occurrences(outline, title_frag) -> int:
+    """Count sections (anywhere in the tree) whose normalized title contains
+    ``title_frag``."""
+    count = 0
+    for s in outline:
+        if title_frag in _normalize_title_for_match(s.title):
+            count += 1
+        count += _count_occurrences(s.subsections, title_frag)
+    return count
+
+
 # ---------------------------------------------------------------------------
 # title normalization (regression: heading marker before number)
 # ---------------------------------------------------------------------------
@@ -357,6 +368,89 @@ def test_number_disambiguation_parent_vs_child_same_word():
     assert report["inserted"] == []
     assert out[0].title == "3. Darstellung"
     assert _subtitles(out, "darstellung") == ["3.1 Darstellung der Methodik"]
+
+
+def test_missing_parent_not_satisfied_by_cross_level_child():
+    """REGRESSION (review finding 1): when ONLY the child exists (no parent),
+    the missing parent must NOT be satisfied by claiming the child via a
+    substring title match across hierarchy levels.
+
+    Previously ``_claim_from_pool`` fell back to the first title/substring match
+    regardless of number level: required ``3 Darstellung`` claimed
+    ``3.1 Darstellung der Methodik`` as section 3 (substring 'darstellung'), so
+    the parent was never created and 3.1 was duplicated. The parent must be
+    inserted as missing, and the existing child claimed under it.
+    """
+    v = OutlineValidator(mission_id=None, controller=None)
+    required = [
+        {"number": "3", "title": "Darstellung", "level": 1},
+        {"number": "3.1", "title": "Darstellung der Methodik", "level": 2},
+    ]
+    # Only the child exists; the parent is missing.
+    outline = [_section("3.1 Darstellung der Methodik")]
+    out, report = v.enforce_required_outline(outline, required)
+
+    # Parent created as missing; child matched (NOT claimed as the parent).
+    assert report["inserted"] == ["Darstellung"]
+    assert report["matched"] == ["Darstellung der Methodik"]
+    # The existing child is nested under the newly-created parent; no duplicate.
+    assert _count_occurrences(out, "darstellung der methodik") == 1
+    assert _subtitles(out, "darstellung") == ["3.1 Darstellung der Methodik"]
+
+
+def test_claimed_subsection_pruned_from_extra_container():
+    """REGRESSION (review finding 2): when a subsection is claimed and moved into
+    the required tree, it must NOT also remain inside its original extra
+    container (which is re-attached as an LLM extra).
+
+    Generated: 3. Darstellung + an EXTRA WRAPPER that contains 3.1 Makroumwelt.
+    Required: 3 + 3.1. 3.1 must be claimed under section 3 and pruned from the
+    wrapper (which was a pure container and is dropped). Makroumwelt must appear
+    exactly once.
+    """
+    v = OutlineValidator(mission_id=None, controller=None)
+    required = [
+        {"number": "3", "title": "Darstellung", "level": 1},
+        {"number": "3.1", "title": "Makroumwelt", "level": 2},
+    ]
+    outline = [
+        _section("3. Darstellung"),
+        _section("Extra Wrapper", subsections=[_section("3.1 Makroumwelt")]),
+    ]
+    out, report = v.enforce_required_outline(outline, required)
+
+    assert report["inserted"] == []
+    assert _count_occurrences(out, "makroumwelt") == 1
+    # The empty wrapper container was dropped; it is not in the output.
+    assert all("wrapper" not in _normalize_title_for_match(s.title) for s in out)
+
+
+def test_extra_descendant_not_hoisted_to_top_level():
+    """REGRESSION (review finding 2, variant): an unused section nested under an
+    unused extra must stay nested under that extra (reached via the parent's
+    pruned subtree), NOT be independently hoisted to the top level (which would
+    duplicate it).
+
+    Generated: 3. Darstellung (with 3.1) + top-level 'Extra Analysis' that
+    contains '3.4.1 Detail'. Required: 3 + 3.1. '3.4.1 Detail' is an extra and
+    must appear exactly once (under 'Extra Analysis'), never at top level.
+    """
+    v = OutlineValidator(mission_id=None, controller=None)
+    required = [
+        {"number": "3", "title": "Darstellung", "level": 1},
+        {"number": "3.1", "title": "Makroumwelt", "level": 2},
+    ]
+    outline = [
+        _section("3. Darstellung", subsections=[_section("3.1 Makroumwelt")]),
+        _section("Extra Analysis", subsections=[_section("3.4.1 Detail")]),
+    ]
+    out, report = v.enforce_required_outline(outline, required)
+
+    assert _count_occurrences(out, "detail") == 1
+    # Detail must be nested under Extra Analysis, not at the top level.
+    top_norm = [_normalize_title_for_match(s.title) for s in out]
+    assert "detail" not in top_norm
+    assert _subtitles(out, "extra analysis") == ["3.4.1 Detail"]
 
 
 def test_fuzzy_match_avoids_false_insertion():

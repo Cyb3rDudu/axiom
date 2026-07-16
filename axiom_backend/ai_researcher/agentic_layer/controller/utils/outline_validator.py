@@ -330,7 +330,11 @@ class OutlineValidator:
         Among unused entries whose title matches, an entry whose parsed number
         equals the required number is strongly preferred (disambiguates e.g.
         ``3 Darstellung`` from ``3.1 Darstellung``). Otherwise the first
-        title-match is used.
+        title-match is used — but ONLY if its number is hierarchy-compatible
+        with the required number: a fuzzy/substring title match must NEVER claim
+        a section at a different Gliederung level (review finding 1: required
+        ``3 Darstellung`` wrongly claimed ``3.1 Darstellung der Methodik`` via
+        substring, leaving the missing parent un-created and duplicating 3.1).
         """
         target = _normalize_title_for_match(rn["title"])
         req_number = rn.get("number") or ""
@@ -342,9 +346,34 @@ class OutlineValidator:
                 continue
             if self._numbers_equal(item.get("number"), req_number):
                 return item  # exact number match wins
-            if first_title_match is None:
-                first_title_match = item
+            # Fuzzy title fallback: reject if the candidate's number sits at a
+            # different hierarchy level (one is a prefix-parent of the other).
+            if self._numbers_compatible_for_fuzzy(req_number, item.get("number")):
+                if first_title_match is None:
+                    first_title_match = item
         return first_title_match
+
+    def _numbers_compatible_for_fuzzy(
+        self, req_number: Optional[str], cand_number: Optional[str]
+    ) -> bool:
+        """Whether a fuzzy title match may claim a candidate with this number.
+
+        Returns False when both sides carry numbers and one is a strict
+        prefix-parent of the other (i.e. they are at different Gliederung
+        levels, like ``3`` vs ``3.1``), so a parent can never claim its child's
+        slot (or vice versa) by title/substring similarity alone. When either
+        number is absent we cannot judge the level, so the title match is
+        allowed.
+        """
+        if not req_number or not cand_number:
+            return True
+        if self._numbers_equal(req_number, cand_number):
+            return True
+        if self._is_prefix_parent(req_number, cand_number) or self._is_prefix_parent(
+            cand_number, req_number
+        ):
+            return False
+        return True
 
     @staticmethod
     def _strategy_for_inserted(has_children: bool) -> str:
@@ -436,48 +465,93 @@ class OutlineValidator:
 
         An extra that was originally nested under a parent that is still present
         in the rebuilt outline is appended to that parent's subsections; a
-        top-level extra is appended to the top-level list. Mutates ``outline``
-        (top-level list) and matched sections' ``subsections`` in place.
+        top-level extra is appended to the top-level list.
+
+        Crucially (review finding 2), when a section is claimed and moved into
+        the required tree, it must NOT also remain inside its original extra
+        container. We therefore PRUNE claimed (used) descendants from every
+        extra subtree before re-attaching it, and an unused section whose parent
+        is itself an unused extra is reached only via that parent's pruned
+        subtree (it is not independently hoisted to the top level — the previous
+        implementation did exactly that, duplicating 3.4.1 Detail).
+
+        Mutates ``outline`` (top-level list) and matched sections'
+        ``subsections`` in place.
         """
         if not pool:
             return
-        # Collect identity of all sections currently in the rebuilt tree.
-        present_ids: Set[int] = set()
+
+        used_ids: Set[int] = {id(it["section"]) for it in pool if it["used"]}
+
+        # Map id -> section for every section currently in the rebuilt tree, so
+        # nested extras can be appended to their matched parent.
+        present_by_id: Dict[int, ReportSection] = {}
 
         def _collect(sections: List[ReportSection]) -> None:
             for s in sections:
-                present_ids.add(id(s))
+                present_by_id[id(s)] = s
                 if s.subsections:
                     _collect(s.subsections)
 
         _collect(outline)
 
+        # Identify which extras are FOREST ROOTS: an unused section whose
+        # original parent is None (top-level) or USED (a matched parent that is
+        # still present -> nested extra). Unused sections whose parent is ALSO
+        # unused are NOT roots: they are reached through their parent's pruned
+        # subtree, which avoids duplicating them at the top level.
         top_level_extras: List[ReportSection] = []
-        # Group nested extras by their original parent (by id).
         nested_extras: Dict[int, List[ReportSection]] = defaultdict(list)
         for item in pool:
             if item["used"]:
                 continue
             parent = item.get("original_parent")
-            if parent is not None and id(parent) in present_ids:
-                nested_extras[id(parent)].append(item["section"])
-            else:
+            if parent is None:
                 top_level_extras.append(item["section"])
+            elif id(parent) in used_ids:
+                # Parent was claimed -> it is present in the rebuilt tree.
+                nested_extras[id(parent)].append(item["section"])
+            # else: parent is unused -> reached via parent's pruned subtree.
 
-        # Append nested extras back under their (still-present) parent.
-        if nested_extras:
-            def _append_nested(sections: List[ReportSection]) -> None:
-                for s in sections:
-                    if id(s) in nested_extras:
-                        s.subsections.extend(nested_extras[id(s)])
-                    if s.subsections:
-                        _append_nested(s.subsections)
+        # Prune claimed descendants from a section's subtree, in place.
+        def _prune_claimed(section: ReportSection) -> bool:
+            """Remove used descendants; return True if the section should be
+            KEPT, False if it became an empty container (originally had
+            children, all of which were claimed) and should be dropped."""
+            had_children = bool(section.subsections)
+            kept: List[ReportSection] = []
+            for child in section.subsections:
+                if id(child) in used_ids:
+                    continue  # claimed elsewhere -> drop
+                if _prune_claimed(child):
+                    kept.append(child)
+                # else: child became an empty container -> drop
+            section.subsections = kept
+            # Drop a section that was a pure container and is now empty.
+            return bool(section.subsections) or not had_children
 
-            _append_nested(outline)
+        # Prune + filter top-level extras.
+        pruned_top: List[ReportSection] = []
+        for sec in top_level_extras:
+            if _prune_claimed(sec):
+                pruned_top.append(sec)
+
+        # Prune + filter nested extras.
+        pruned_nested: Dict[int, List[ReportSection]] = defaultdict(list)
+        for parent_id, secs in nested_extras.items():
+            for sec in secs:
+                if _prune_claimed(sec):
+                    pruned_nested[parent_id].append(sec)
+
+        # Append nested extras back under their (still-present) matched parent.
+        for parent_id, secs in pruned_nested.items():
+            parent = present_by_id.get(parent_id)
+            if parent is not None:
+                parent.subsections.extend(secs)
 
         # Append top-level extras at the end.
-        if top_level_extras:
-            outline.extend(top_level_extras)
+        if pruned_top:
+            outline.extend(pruned_top)
 
     def _calculate_max_depth(self, outline: List[ReportSection], current_depth: int = 0) -> int:
         """Calculate the maximum depth of the outline."""
