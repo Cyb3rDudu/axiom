@@ -5,22 +5,29 @@ When a user sends a fully-specified research briefing (Leitfragen, Gliederung,
 word count, etc.) we want axiom to honour it 1:1 rather than distilling the
 topic and re-inventing research questions. This module provides:
 
-- `detect_structured_briefing(msg) -> bool`
-- `extract_leitfragen(msg) -> list[str]`
+- ``detect_structured_briefing(msg) -> bool``
+- ``extract_leitfragen(msg) -> list[str]``
+- ``extract_primary_leitfrage(msg) -> Optional[str]``
+- ``extract_outline(msg) -> list[OutlineSection]``
+- ``classify_assignment(msg) -> dict``
 
-Both are pure, testable, no LLM involved.
+All pure / testable, no LLM involved.
 """
 
 from __future__ import annotations
 
 import re
-from typing import List
+from typing import List, Optional
 
+
+# ---------------------------------------------------------------------------
+# Low-level patterns
+# ---------------------------------------------------------------------------
 
 # Markdown heading regex — at least ``##`` (not just ``#`` title).
 _HEADING_RE = re.compile(r"(?m)^\s{0,3}#{2,}\s+\S+.*$")
 
-# Numbered list line ≥ 40 chars.
+# Numbered list line >= 40 chars.
 _NUMBERED_LINE_RE = re.compile(r"(?m)^\s{0,3}\d+\.\s+(.{40,})$")
 
 # Word-count hint.
@@ -41,31 +48,184 @@ _SOURCES_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Generic Leitfragen/Fragen header (singular OR plural) — used to locate the
+# block of numbered sub-questions.
+_LEITFRAGEN_HEADER_RE = re.compile(
+    r"(?im)^\s{0,3}#{1,6}\s+.*(?:"
+    r"leitfrage(n)?|forschungsfrage(n)?|research\s+questions?|pflicht-?frage(n)?|frage(n)?|questions"
+    r")"
+)
+
+# A SINGULAR primary-question header (Leitfrage / Forschungsfrage / zentrale Frage)
+# — deliberately excludes the plural "Leitfragen"/"Fragen" which hold sub-questions.
+_PRIMARY_LEITFRAGE_HEADER_RE = re.compile(
+    r"(?im)^\s{0,3}#{1,6}\s+.*?(?:"
+    r"leitfrage(?![n])|forschungsfrage(?![n])|zentrale\s+frage|research\s+question"
+    r")"
+)
+
+# Explicit lead-in phrasing, e.g. "Verwende folgende Leitfrage:" / "Die Leitfrage lautet:".
+_PRIMARY_LEITFRAGE_LEADIN_RE = re.compile(
+    r"(?im)(?:verwende|nutze|verfolge|die\s+leitfrage\s+(?:ist|lautet)|"
+    r"zentrale\s+leitfrage\s*(?:ist|lautet)?)\s*(?:folgende\s*)?leitfrage\s*[:\-]"
+)
+
+# A primary research question is usually a quoted sentence or a sentence ending
+# in "?". German typographic quotes („… ") are common in academic briefings.
+_QUOTED_SPAN_RE = re.compile(
+    r"[\u201E\u00AB\u201C\u201D\"]([^\u201E\u00AB\u201C\u201D\u00BB\"]{15,600}?)[\u201D\u00BB\u201C\u201E\"]",
+    re.DOTALL,
+)
+# A standalone question sentence (line ending with "?").
+_QUESTION_LINE_RE = re.compile(r"(?m)^\s{0,3}([^\n]{15,400}\?)\s*$")
+
+# An outline section line, e.g. ``# 1. Einleitung``, ``## 2.1 Foo``, ``1. Einleitung``.
+# IMPORTANT: a bare numbered Leitfrage line (``1. Welche Rolle ...?``) also matches
+# this, so callers MUST scope it to an outline-header region, never the whole text.
+_OUTLINE_SECTION_RE = re.compile(r"(?m)^\s{0,3}#{0,6}\s*(\d+(?:\.\d+)*)\.?\s+(\S.*)$")
+
+_OUTLINE_HEADER_RE = re.compile(
+    r"(?im)^\s{0,3}#{1,6}\s+.*(?:"
+    r"gliederung|struktur|outline|aufbau|soll[-\s]?gliederung|table\s+of\s+contents"
+    r")"
+)
+
+
+# ---------------------------------------------------------------------------
+# Structured outline extraction (Finding 1)
+# ---------------------------------------------------------------------------
+
+class OutlineSection:
+    """A single section parsed out of a user's Gliederung.
+
+    ``number`` is the original numeric label (``"1"``, ``"2.1"``) kept separately
+    so the planner can reproduce the user's hierarchy WITHOUT baking the number
+    into the ``title`` (which caused duplicated headings like ``# 1. 1. Einleitung``).
+    ``title`` is the cleaned, number-free heading text.
+    ``level`` is derived from the number depth (``1`` -> 1, ``2.1`` -> 2).
+    """
+
+    __slots__ = ("number", "title", "level", "heading_marker")
+
+    def __init__(self, number: str, title: str, heading_marker: str = ""):
+        self.number = number
+        self.title = title
+        self.level = (number.count(".") + 1) if number else 1
+        self.heading_marker = heading_marker
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging only
+        return f"OutlineSection(number={self.number!r}, title={self.title!r}, level={self.level})"
+
+    def to_dict(self) -> dict:
+        return {"number": self.number, "title": self.title, "level": self.level}
+
+
+def _strip_number_prefix(title: str) -> str:
+    """Remove a leading numeric label like ``1.`` / ``2.1 `` from a heading title."""
+    # Collapse the "1. 1. Einleitung" double-numbering the planner produced when
+    # it prepended its own number to a title that still carried the briefing number.
+    title = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*-?\s*", "", title)
+    return title.strip()
+
+
+def _outline_region(message: str) -> Optional[tuple[int, int]]:
+    """Return the (start_char, end_char) span of the Gliederung/Outline section.
+
+    Starts at the outline header. The region extends across all numbered
+    outline sections (including nested ``## 2.1`` subsections) and only ends at
+    the next heading that is NOT itself a numbered outline section — e.g. a
+    new category like ``## Literaturanforderungen`` or ``## Arbeitsauftrag``.
+    Returns None if no outline header is present.
+    """
+    hm = _OUTLINE_HEADER_RE.search(message)
+    if not hm:
+        return None
+    start = hm.start()
+    # Walk every heading after the outline header. Keep extending the region
+    # as long as each heading is itself a numbered outline section (``# 1.`` /
+    # ``## 2.1``). Stop at the first heading that is not a numbered section.
+    # Note: _HEADING_RE only matches ``##`` (2+ hashes); the outline's top-level
+    # ``# 1.`` sections are NOT matched here, which is fine — they sit between
+    # the ``##`` subsections and never terminate the region prematurely.
+    end = len(message)
+    for m in _HEADING_RE.finditer(message, hm.end()):
+        # _HEADING_RE may capture a leading newline as part of the leading
+        # whitespace, so strip before splitting to get the actual heading line.
+        heading_line = m.group(0).strip().splitlines()[0]
+        if not re.match(r"\s*#{1,6}\s*\d+(?:\.\d+)*\.?\s+\S", heading_line):
+            # This heading has no numeric prefix -> a new category; region ends.
+            end = m.start()
+            break
+    return start, end
+
+
+def extract_outline(message: str) -> List[OutlineSection]:
+    """Extract the structured Gliederung from a briefing.
+
+    Returns one ``OutlineSection`` per numbered heading found INSIDE the
+    Gliederung/Outline region. Each section's ``title`` is the number-free
+    heading. Numbered Leitfragen outside the outline region are ignored.
+
+    Example input::
+
+        ## Empfohlene Gliederung
+        # 1. Einleitung
+        Umfang: ca. 250 Wörter
+        ## 2.1 NexMach als Unternehmung
+        # 3. Analyse
+
+    -> [OutlineSection("1","Einleitung"), OutlineSection("2.1","NexMach als Unternehmung"),
+        OutlineSection("3","Analyse")]
+    """
+    if not message:
+        return []
+    region = _outline_region(message)
+    if region is None:
+        return []
+    start, end = region
+    region_text = message[start:end]
+
+    sections: List[OutlineSection] = []
+    seen_titles: set = set()
+    for m in _OUTLINE_SECTION_RE.finditer(region_text):
+        number = m.group(1)
+        raw_title = m.group(2).strip()
+        # Capture the markdown marker (e.g. "##") preceding the number, if any.
+        prefix = region_text[m.start(): m.start() + 6]
+        marker_match = re.match(r"\s*(#{1,6})\s*", prefix)
+        marker = marker_match.group(1) if marker_match else ""
+        title = _strip_number_prefix(raw_title)
+        # Skip lines that are obviously questions (Leitfragen that slipped in),
+        # very short fragments, or duplicates of a title already seen.
+        if not title or len(title) < 3:
+            continue
+        if title.endswith("?"):
+            continue
+        if title.lower() in seen_titles:
+            continue
+        seen_titles.add(title.lower())
+        sections.append(OutlineSection(number=number, title=title, heading_marker=marker))
+    return sections
+
+
+# ---------------------------------------------------------------------------
+# Structural-briefing detection
+# ---------------------------------------------------------------------------
 
 def _count_multiple_numbered_items(text: str) -> int:
-    """Return True when the text contains a bloc of ≥ 3 consecutive numbered lines."""
+    """Return the count of numbered items when there is a bloc of >= 3 of them."""
     matches = [m for m in _NUMBERED_LINE_RE.finditer(text)]
     if len(matches) < 3:
         return 0
-    # Count consecutive numbered lines appearing close together.
-    # We only care about "≥ 3" vs "fewer".
     lines = text.splitlines()
-    line_index = {}
-    running_idx = 0
-    for i, line in enumerate(lines):
-        line_index[running_idx] = i
-        running_idx += len(line) + 1  # +1 for newline
-    # Simpler: check that at least 3 numbered items exist within a 40-line window.
-    positions = [m.start() for m in matches]
-    window = 40  # lines proxy; we use character distance approximation
-    # Convert char positions to line numbers
     char_to_line = {}
     idx = 0
     for i, line in enumerate(lines):
         for _ in range(len(line) + 1):
             char_to_line[idx] = i
             idx += 1
-    line_nums = [char_to_line.get(p, 0) for p in positions]
+    line_nums = [char_to_line.get(m.start(), 0) for m in matches]
+    window = 40
     for i in range(len(line_nums) - 2):
         if line_nums[i + 2] - line_nums[i] <= window:
             return len(matches)
@@ -75,7 +235,7 @@ def _count_multiple_numbered_items(text: str) -> int:
 def detect_structured_briefing(message: str) -> bool:
     """Return True when the message looks like a structured research briefing.
 
-    Conservative: requires ≥ 3 signal groups to fire, so casual prompts and
+    Conservative: requires >= 3 signal groups to fire, so casual prompts and
     short questions stay classified as open research.
     """
     if not message or len(message) < 200:
@@ -89,7 +249,7 @@ def detect_structured_briefing(message: str) -> bool:
     if len(headings) >= 2:
         signals += 1
 
-    # Signal 2: ≥ 3 numbered Leitfragen-style lines.
+    # Signal 2: >= 3 numbered Leitfragen-style lines.
     if _count_multiple_numbered_items(message) >= 3:
         signals += 1
 
@@ -108,32 +268,48 @@ def detect_structured_briefing(message: str) -> bool:
     return signals >= 3
 
 
-# NOTE: matches both singular and plural — "Leitfrage" / "Leitfragen",
-# "Forschungsfrage(n)", "Frage(n)" — so a `## Zentrale Leitfrage` heading
-# (singular) is recognised, not only `## Leitfragen` (plural).
-_LEITFRAGEN_HEADER_RE = re.compile(
-    r"(?im)^\s{0,3}#{1,6}\s+.*(?:"
-    r"leitfrage(n)?|forschungsfrage(n)?|research\s+questions?|pflicht-?frage(n)?|frage(n)?|questions"
-    r")"
-)
+# ---------------------------------------------------------------------------
+# Header-region helpers
+# ---------------------------------------------------------------------------
 
-# A primary research question is usually a quoted sentence or a sentence ending
-# in "?". German typographic quotes („… ") are common in academic briefings.
-_QUOTED_SPAN_RE = re.compile(
-    r"[\u201E\u00AB\u201C\u201D\"]([^\u201E\u00AB\u201C\u201D\u00BB\"]{15,600}?)[\u201D\u00BB\u201C\u201E\"]",
-    re.DOTALL,
-)
-# A standalone question sentence (line ending with "?").
-_QUESTION_LINE_RE = re.compile(r"(?m)^\s{0,3}([^\n]{15,400}\?)\s*$")
+def _line_offsets(message: str) -> List[int]:
+    """Return character offset of the start of each line."""
+    offsets = [0]
+    for i, ch in enumerate(message):
+        if ch == "\n":
+            offsets.append(i + 1)
+    return offsets
 
-# Outline section headings: `# 1. Einleitung`, `## 2.1 Foo`, `1. Einleitung`, etc.
-_OUTLINE_SECTION_RE = re.compile(r"(?m)^\s{0,3}#{0,6}\s*\d+\.\d*\s+\S+")
 
-_OUTLINE_HEADER_RE = re.compile(
-    r"(?im)^\s{0,3}#{1,6}\s+.*(?:"
-    r"gliederung|struktur|outline|aufbau|soll[-\s]?gliederung|table\s+of\s+contents"
-    r")"
-)
+def _header_line_numbers(message: str, pattern: re.Pattern) -> List[int]:
+    """Return line numbers of headers matching ``pattern``."""
+    offsets = _line_offsets(message)
+    line_nums: List[int] = []
+    for m in pattern.finditer(message):
+        start = m.start()
+        for i, off in enumerate(offsets):
+            if off > start:
+                line_nums.append(i - 1)
+                break
+        else:
+            line_nums.append(len(offsets) - 1)
+    return line_nums
+
+
+def _nearest_header(start_line: int, headers: List[int]) -> int:
+    """Return the line number of the nearest preceding header, or -1."""
+    best = -1
+    for h in headers:
+        if h <= start_line and h > best:
+            best = h
+    return best
+
+
+def _is_under_header(start_line: int, headers_for: List[int], other_headers: List[int]) -> bool:
+    """Return True when the nearest preceding header (any kind) belongs to ``headers_for``."""
+    nearest_for = _nearest_header(start_line, headers_for)
+    nearest_other = _nearest_header(start_line, other_headers)
+    return nearest_for != -1 and nearest_for >= nearest_other
 
 
 def _collect_numbered_blocks(message: str) -> List[tuple[int, List[str]]]:
@@ -162,49 +338,12 @@ def _collect_numbered_blocks(message: str) -> List[tuple[int, List[str]]]:
     return blocks
 
 
-def _line_offsets(message: str) -> List[int]:
-    """Return character offset of the start of each line."""
-    offsets = [0]
-    for i, ch in enumerate(message):
-        if ch == "\n":
-            offsets.append(i + 1)
-    return offsets
-
-
-def _header_line_numbers(message: str, pattern: re.Pattern) -> List[int]:
-    """Return line numbers of headers matching `pattern`."""
-    offsets = _line_offsets(message)
-    line_nums: List[int] = []
-    for m in pattern.finditer(message):
-        start = m.start()
-        # Binary-search-ish: find the line containing this offset.
-        for i, off in enumerate(offsets):
-            if off > start:
-                line_nums.append(i - 1)
-                break
-        else:
-            line_nums.append(len(offsets) - 1)
-    return line_nums
-
-
-def _nearest_header(start_line: int, headers: List[int]) -> int:
-    """Return the line number of the nearest preceding header, or -1."""
-    best = -1
-    for h in headers:
-        if h <= start_line and h > best:
-            best = h
-    return best
-
-
-def _is_under_header(start_line: int, headers_for: List[int], other_headers: List[int]) -> bool:
-    """Return True when the nearest preceding header (any kind) belongs to headers_for."""
-    nearest_for = _nearest_header(start_line, headers_for)
-    nearest_other = _nearest_header(start_line, other_headers)
-    return nearest_for != -1 and nearest_for >= nearest_other
-
+# ---------------------------------------------------------------------------
+# Leitfragen extraction
+# ---------------------------------------------------------------------------
 
 def extract_leitfragen(message: str) -> List[str]:
-    """Extract the user's numbered Leitfragen from the message.
+    """Extract the user's numbered Leitfragen (sub-questions) from the message.
 
     Selection order:
       1. First numbered block appearing below a heading whose text contains
@@ -212,7 +351,7 @@ def extract_leitfragen(message: str) -> List[str]:
       2. If none, the longest numbered block that is NOT below a "Gliederung"
          / "Outline" / "Struktur" heading.
       3. Fallback: longest numbered block overall.
-    Returns at least 3 items (each ≥ 30 chars), otherwise an empty list.
+    Returns at least 3 items (each >= 30 chars), otherwise an empty list.
     """
     if not message:
         return []
@@ -227,7 +366,7 @@ def extract_leitfragen(message: str) -> List[str]:
     # (1) Prefer blocks directly under a Leitfragen/Forschungsfragen header.
     for start_line, items in blocks:
         if _is_under_header(start_line, fragen_headers, outline_headers):
-            cleaned = [q for q in items if len(q) >= 30]
+            cleaned = [_strip_number_prefix(q) for q in items if len(q) >= 30]
             if len(cleaned) >= 3:
                 return cleaned
 
@@ -245,33 +384,37 @@ def extract_leitfragen(message: str) -> List[str]:
 
     if len(best) < 3:
         return []
-    cleaned = [q for q in best if len(q) >= 30]
+    cleaned = [_strip_number_prefix(q) for q in best if len(q) >= 30]
     return cleaned if len(cleaned) >= 3 else []
 
 
-def extract_primary_leitfrage(message: str) -> "Optional[str]":
+def extract_primary_leitfrage(message: str) -> Optional[str]:
     """Return the primary research question (Leitfrage) when present.
 
-    A primary Leitfrage is typically a single quoted sentence or a standalone
-    question line appearing right under a ``## ... Leitfrage`` heading. This
-    is distinct from the numbered sub-questions (`extract_leitfragen`).
+    A primary Leitfrage is a SINGLE quoted sentence or standalone question line
+    appearing under a SINGULAR Leitfrage/Forschungsfrage heading (or after an
+    explicit lead-in like "Verwende folgende Leitfrage:"). This is distinct from
+    the numbered sub-questions handled by ``extract_leitfragen``.
 
-    Selection order:
-      1. First quoted span / question line below a Leitfrage header.
-      2. Fallback: first quoted span anywhere in the message.
-    Returns the cleaned question string, or None.
+    To avoid the bug where the first numbered sub-question under a plural
+    "## Pflicht-Leitfragen" / "## Fragen" header was mistaken for the primary
+    question, we now ONLY accept:
+      1. a question under a singular header, or
+      2. a question immediately after an explicit lead-in, or
+      3. fallback: first quoted span anywhere (quoted spans are almost never
+         numbered sub-questions).
     """
     if not message:
         return None
 
     offsets = _line_offsets(message)
+    singular_headers = _header_line_numbers(message, _PRIMARY_LEITFRAGE_HEADER_RE)
     fragen_headers = _header_line_numbers(message, _LEITFRAGEN_HEADER_RE)
     outline_headers = _header_line_numbers(message, _OUTLINE_HEADER_RE)
 
-    def _char_range_for_line_block(start_line: int) -> "tuple[int, int]":
+    def _char_range_for_line_block(start_line: int) -> tuple[int, int]:
         """Char range from start_line until the next heading or end of message."""
         start_off = offsets[start_line] if start_line < len(offsets) else 0
-        # find next heading after start_line
         next_off = len(message)
         for m in _HEADING_RE.finditer(message):
             if m.start() > start_off:
@@ -279,10 +422,10 @@ def extract_primary_leitfrage(message: str) -> "Optional[str]":
                 break
         return start_off, next_off
 
-    # (1) Look under a Leitfrage header (not under Gliederung).
-    for h_line in fragen_headers:
-        if h_line != -1 and _is_under_header(h_line, outline_headers, fragen_headers):
-            # this Leitfrage header is itself under a Gliederung header — skip
+    # (1) Singular primary-question header (e.g. "## Zentrale Leitfrage").
+    for h_line in singular_headers:
+        # Skip if this header is itself nested under a Gliederung header.
+        if _is_under_header(h_line, outline_headers, singular_headers):
             continue
         start, end = _char_range_for_line_block(h_line)
         block = message[start:end]
@@ -290,12 +433,40 @@ def extract_primary_leitfrage(message: str) -> "Optional[str]":
         if q:
             return _clean_question(q)
 
-    # (2) Fallback: first quoted span anywhere.
-    q = _first_question_in(message)
-    return _clean_question(q) if q else None
+    # (2) Explicit lead-in phrasing ("Verwende folgende Leitfrage: ...").
+    lead = _PRIMARY_LEITFRAGE_LEADIN_RE.search(message)
+    if lead:
+        tail = message[lead.end():]
+        q = _first_question_in(tail)
+        if q:
+            return _clean_question(q)
+
+    # (3) Fallback: first quoted span anywhere — but ONLY if it is NOT one of the
+    # numbered sub-questions (i.e. not directly under a plural "Fragen" header).
+    m_q = _QUOTED_SPAN_RE.search(message)
+    if m_q:
+        q_line = _char_to_line(message, m_q.start(), offsets)
+        # If the nearest preceding header is a plural Fragen/Leitfragen header
+        # (and not a singular one), treat it as a sub-question, not the primary.
+        if not _is_under_header(q_line, fragen_headers, singular_headers):
+            return _clean_question(m_q.group(1))
+
+    return None
 
 
-def _first_question_in(text: str) -> "Optional[str]":
+def _char_to_line(message: str, char_pos: int, offsets: Optional[List[int]] = None) -> int:
+    """Return the line number containing ``char_pos``."""
+    if offsets is None:
+        offsets = _line_offsets(message)
+    line = 0
+    for i, off in enumerate(offsets):
+        if off > char_pos:
+            return i - 1
+        line = i
+    return line
+
+
+def _first_question_in(text: str) -> Optional[str]:
     """Return the first quoted span, else the first standalone '?' line."""
     m = _QUOTED_SPAN_RE.search(text)
     if m:
@@ -307,17 +478,26 @@ def _first_question_in(text: str) -> "Optional[str]":
 
 
 def _clean_question(q: str) -> str:
-    """Normalise a extracted question: collapse whitespace, strip surrounding quotes."""
+    """Normalise an extracted question: collapse whitespace, strip surrounding quotes/numbers."""
     quote_chars = "\u201E\u201C\u201D\u00AB\u00BB\u201A\u2018\u2019\"'"
     q = q.strip().strip(quote_chars).strip()
+    q = _strip_number_prefix(q)
     q = re.sub(r"\s+", " ", q)
     return q
 
 
 def _count_outline_sections(message: str) -> int:
-    """Count numbered outline section headings (e.g. `# 1. Einleitung`)."""
-    return len(_OUTLINE_SECTION_RE.findall(message))
+    """Count numbered outline section headings, scoped to the Gliederung region.
 
+    Only counts sections that appear under a Gliederung/Outline/Struktur header,
+    so numbered Leitfragen elsewhere are NOT mis-counted as outline sections.
+    """
+    return len(extract_outline(message))
+
+
+# ---------------------------------------------------------------------------
+# Classification
+# ---------------------------------------------------------------------------
 
 def classify_assignment(message: str) -> dict:
     """Classify how specific a mission assignment is.
@@ -326,43 +506,33 @@ def classify_assignment(message: str) -> dict:
 
         {
           "specificity": "open" | "structured" | "complete",
-          "primary_question": Optional[str],   # the main Leitfrage
-          "questions": List[str],               # numbered sub-questions / Leitfragen
-          "has_outline": bool,                  # ≥3 numbered outline sections
-          "has_scope": bool,                    # word-count hint present
-          "has_deliverable": bool,              # Hausarbeit/Report/Thesis keyword
-          "deliverable": Optional[str],         # the matched deliverable keyword
+          "primary_question": Optional[str],
+          "questions": List[str],
+          "outline": List[dict],            # structured Gliederung (number/title/level)
+          "has_outline": bool,
+          "has_scope": bool,
+          "has_deliverable": bool,
+          "deliverable": Optional[str],
           "briefing_style": "open" | "structured",
         }
 
     Thresholds:
-      - ``open``       : not a structured briefing (current behaviour: generate
-                         questions, ask for approval).
-      - ``structured`` : a briefing was detected (Leitfragen/Gliederung/etc.)
-                         but it is not a *complete* ready-to-run assignment —
-                         present the extracted questions, honour the briefing
-                         in planning, but keep the approval loop.
-      - ``complete``   : a structured briefing **and** an outline (≥3 sections)
-                         **and** a scope (word count) **and** a deliverable
-                         keyword. This is the "don't roll the dice" case: skip
-                         question generation and start directly.
+      - ``open``       : not a structured briefing.
+      - ``structured`` : a briefing was detected but not a complete ready-to-run
+                         assignment — present extracted questions, honour the
+                         briefing in planning, keep the approval loop.
+      - ``complete``   : a structured briefing AND a real Gliederung (>=3 numbered
+                         sections inside an outline region) AND a scope (word count)
+                         AND a deliverable keyword.
     """
     if not message:
-        return {
-            "specificity": "open",
-            "primary_question": None,
-            "questions": [],
-            "has_outline": False,
-            "has_scope": False,
-            "has_deliverable": False,
-            "deliverable": None,
-            "briefing_style": "open",
-        }
+        return _empty_classification()
 
     is_structured = detect_structured_briefing(message)
     questions = extract_leitfragen(message) if is_structured else []
     primary_question = extract_primary_leitfrage(message) if is_structured else None
-    has_outline = _count_outline_sections(message) >= 3
+    outline = extract_outline(message) if is_structured else []
+    has_outline = len(outline) >= 3
     has_scope = bool(_WORDCOUNT_RE.search(message))
     deliverable_match = _TASK_RE.search(message)
     has_deliverable = bool(deliverable_match)
@@ -381,6 +551,7 @@ def classify_assignment(message: str) -> dict:
         "specificity": specificity,
         "primary_question": primary_question,
         "questions": questions,
+        "outline": [s.to_dict() for s in outline],
         "has_outline": has_outline,
         "has_scope": has_scope,
         "has_deliverable": has_deliverable,
@@ -389,9 +560,25 @@ def classify_assignment(message: str) -> dict:
     }
 
 
+def _empty_classification() -> dict:
+    return {
+        "specificity": "open",
+        "primary_question": None,
+        "questions": [],
+        "outline": [],
+        "has_outline": False,
+        "has_scope": False,
+        "has_deliverable": False,
+        "deliverable": None,
+        "briefing_style": "open",
+    }
+
+
 __all__ = [
     "detect_structured_briefing",
     "extract_leitfragen",
     "extract_primary_leitfrage",
+    "extract_outline",
     "classify_assignment",
+    "OutlineSection",
 ]

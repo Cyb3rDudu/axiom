@@ -725,8 +725,9 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                 model_details = None
 
                 if briefing_style == "structured":
-                    # P1: persist the full briefing + primary Leitfrage so downstream
-                    # agents (Planning) honour it instead of the distilled one-liner.
+                    # P1: persist the full briefing + primary Leitfrage + structured
+                    # outline so downstream agents (Planning) honour it instead of
+                    # the distilled one-liner.
                     metadata_update = {
                         "briefing_style": "structured",
                         "full_briefing": user_message,
@@ -734,21 +735,23 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     }
                     if sub_qs:
                         metadata_update["initial_questions"] = sub_qs
+                    # Structured Gliederung (Finding 1): store the parsed outline as
+                    # (number, title, level) records with number-free titles, so the
+                    # planner can reproduce the user's hierarchy deterministically
+                    # instead of being tempted to invent its own / duplicate numbers.
+                    outline_records = classification.get("outline") or []
+                    if outline_records:
+                        metadata_update["structured_outline"] = outline_records
                     await self.controller.context_manager.update_mission_metadata(mission_id, metadata_update)
 
-                    # P1: replace the distilled user_request with the full briefing so
-                    # every downstream agent (Planning, Research) sees the real
-                    # assignment. Keep the distilled version for reference.
-                    try:
-                        _mc = self.controller.context_manager.get_mission_context(mission_id)
-                        if _mc and getattr(_mc, "user_request", None) != user_message:
-                            _mc.user_request = user_message
-                            await self.controller.context_manager.update_mission_metadata(
-                                mission_id, {"original_user_request": request_content}
-                            )
-                            logger.info("Replaced distilled user_request with full briefing for mission %s", mission_id)
-                    except Exception:
-                        logger.debug("Could not swap user_request to full briefing", exc_info=True)
+                    # NOTE: we deliberately do NOT overwrite mission_context.user_request
+                    # with the full briefing (Finding 3). user_request is the short
+                    # mission label/name and is used by prepare_mission_start() to name
+                    # the auto-save document group ("R: <title>"). Overwriting it with
+                    # the whole briefing produced group names like
+                    # "R: Du unterstützt mich bei der Konzeption und sp...".
+                    # The full briefing is already available to agents via the
+                    # ``full_briefing`` metadata field consumed by the planning agent.
 
                     await self.controller.context_manager.add_goal(
                         mission_id=mission_id,
@@ -756,9 +759,9 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                         source_agent="BriefingDetector",
                     )
                     logger.info(
-                        "Structured briefing (specificity=%s) for mission %s; primary_leitfrage=%s, %d sub-questions",
+                        "Structured briefing (specificity=%s) for mission %s; primary_leitfrage=%s, %d sub-questions, %d outline sections",
                         classification.get("specificity"), mission_id,
-                        bool(primary_q), len(sub_qs),
+                        bool(primary_q), len(sub_qs), len(outline_records),
                     )
 
                     # COMPLETE assignment -> behave EXACTLY like an open research

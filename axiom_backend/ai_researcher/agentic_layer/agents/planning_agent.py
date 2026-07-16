@@ -246,6 +246,27 @@ Remember: Keep it focused, logical, and actionable. Do NOT include section IDs -
             parts.append("Sub-questions / Leitfragen to honour (do not replace):")
             for i, q in enumerate(initial_questions, 1):
                 parts.append(f"  {i}. {q}")
+
+        # Structured Gliederung (Finding 1): present the parsed outline with
+        # number-free titles so the planner reproduces the user's hierarchy
+        # EXACTLY. The titles below have had their leading numbers stripped, so
+        # do NOT prepend your own number to a title (that caused duplicate
+        # headings like "# 1. 1. Einleitung"). Build one outline section per entry.
+        structured_outline = metadata.get("structured_outline") or []
+        if structured_outline:
+            parts.append("")
+            parts.append("REQUIRED OUTLINE (parsed from the user's Gliederung — reproduce these")
+            parts.append("sections and this nesting exactly; titles are number-free):")
+            for sec in structured_outline:
+                num = sec.get("number") or ""
+                title = sec.get("title") or ""
+                level = sec.get("level") or 1
+                parts.append(f"  [section number={num} level={level}] {title}")
+            parts.append(
+                "Validation: your generated report_outline MUST contain one section "
+                "per required outline title above (same order). If any required "
+                "section is missing, add it. Do not merge or drop sections."
+            )
         parts.append("")
         parts.append(
             "Note: the 'Research Request:' line that follows is a distilled summary "

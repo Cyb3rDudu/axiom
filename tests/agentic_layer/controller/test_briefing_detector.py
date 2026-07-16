@@ -269,3 +269,141 @@ def test_classify_empty():
     c = classify_assignment("")
     assert c["specificity"] == "open"
     assert c["questions"] == []
+
+
+# ---------------------------------------------------------------------------
+# Finding 1: structured outline extraction (deterministic Gliederung)
+# ---------------------------------------------------------------------------
+
+from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
+    extract_outline,
+)
+
+
+NEXMACH_BRIEFING = """Du unterst\u00fctzt mich bei der Konzeption einer wissenschaftlichen Hausarbeit.
+Umfang ca. 3.000 W\u00f6rter.
+
+## Zentrale Leitfrage
+
+Verwende folgende Leitfrage:
+
+\u201eWie beeinflussen die Makroumwelt, die Branchenumwelt und zentrale Anspruchsgruppen die NexMach Systems GmbH und welche Konsequenzen ergeben sich daraus?\u201c
+
+M\u00f6gliche Unterfragen:
+
+1. Wie l\u00e4sst sich NexMach als marktwirtschaftliche Unternehmung einordnen?
+2. \u00dcber welche Mechanismen wirken Makroumwelt und Branchenumwelt auf das Unternehmen ein?
+3. Mit welchen Instrumenten kann NexMach relevante Umweltentwicklungen analysieren?
+4. Welche drei bis f\u00fcnf Umweltfaktoren besitzen die h\u00f6chste strategische Relevanz?
+5. Wie kann NexMach auf diese Einfl\u00fcsse reagieren?
+
+## Empfohlene Gliederung
+
+# 1. Einleitung
+
+Umfang: ungef\u00e4hr 250 bis 300 W\u00f6rter
+
+# 2. Theoretischer Bezugsrahmen
+
+## 2.1 NexMach als marktwirtschaftliche Unternehmung
+
+## 2.2 NexMach als offenes soziales System
+
+# 3. Darstellung und Analyse der Unternehmensumwelt
+
+## 3.1 Makroumwelt
+
+## 3.2 Branchen- und Wettbewerbsumwelt
+
+# 4. Umweltanalyse der NexMach Systems GmbH
+
+# 5. Zentrale Umwelteinfl\u00fcsse und Managementimplikationen
+
+# 6. Fazit
+
+## Literaturanforderungen
+
+Verwende insgesamt 10 bis 20 Quellen.
+"""
+
+
+def test_extract_outline_captures_all_sections_including_nested():
+    """Regression (Finding 1): the production NexMach run was missing section
+    3.2 (Branchen- und Wettbewerbsumwelt) and produced duplicate headings like
+    '# 1. 1. Einleitung'. The structured outline must capture every section,
+    keep nesting via the number, and yield number-free titles."""
+    outline = extract_outline(NEXMACH_BRIEFING)
+    titles = [s.title for s in outline]
+    numbers = [s.number for s in outline]
+
+    # All 8 top-level + 4 nested sections present (10 total).
+    assert len(outline) >= 10
+    assert "Branchen- und Wettbewerbsumwelt" in titles  # the one that was missing
+    assert "Einleitung" in titles
+    assert "Fazit" in titles
+
+    # Titles are number-free (no double numbering).
+    assert not any(t.startswith("1.") or t.startswith("#") for t in titles)
+
+    # Nesting preserved through the number.
+    assert "2.1" in numbers and "3.2" in numbers
+    two_one = [s for s in outline if s.number == "2.1"][0]
+    assert two_one.level == 2
+    one = [s for s in outline if s.number == "1"][0]
+    assert one.level == 1
+
+
+def test_classify_complete_with_nested_outline():
+    c = classify_assignment(NEXMACH_BRIEFING)
+    assert c["specificity"] == "complete"
+    assert c["has_outline"] is True
+    assert len(c["outline"]) >= 10
+    assert c["primary_question"].startswith("Wie beeinflussen")
+    assert len(c["questions"]) == 5
+
+
+# ---------------------------------------------------------------------------
+# Finding 2: classify_assignment must not be over-broad
+# ---------------------------------------------------------------------------
+
+
+def test_classify_not_complete_without_real_outline():
+    """Regression (Finding 2): Hausarbeit + 3.000 words + 3 numbered Leitfragen,
+    but NO Gliederung region, must be 'structured' (not 'complete') and must not
+    count the Leitfragen as outline sections."""
+    msg = """## Aufgabenstellung
+Hausarbeit f\u00fcr das Modul Organisation.
+
+Umfang: ca. 3.000 W\u00f6rter.
+
+## Leitfragen
+1. Welche Rolle spielt die Makroumwelt f\u00fcr Unternehmen im Bereich industrieller Software?
+2. Wie lassen sich Umwelteinfl\u00fcsse systematisch analysieren und priorisieren?
+3. Welche strategischen Konsequenzen ergeben sich daraus f\u00fcr ein mittelst\u00e4ndisches Unternehmen?
+"""
+    c = classify_assignment(msg)
+    assert c["specificity"] == "structured"  # NOT complete
+    assert c["has_outline"] is False  # numbered Leitfragen are not outline sections
+    assert c["outline"] == []
+    # No primary question under a plural "## Leitfragen" header.
+    assert c["primary_question"] is None
+
+
+def test_primary_leitfrage_not_taken_from_plural_fragen_header():
+    """Regression (Finding 2): a numbered sub-question under ## Pflicht-Leitfragen
+    (plural) must NOT be returned as the primary Leitfrage."""
+    msg = """Hausarbeit, ca. 3.000 W\u00f6rter.
+
+## Pflicht-Leitfragen
+1. Welche au\u00dfenwirtschaftstheoretischen Konzepte sind einschl\u00e4gig, um etwas zu erkl\u00e4ren?
+2. Wie hat sich die Position seit dem Beitritt verschoben?
+3. Was sind die strukturellen Probleme und Treiber?
+4. Welche empirisch belegbaren Chancen und Risiken ergeben sich f\u00fcr Deutschland?
+
+## Gliederung
+# 1. Einleitung
+# 2. Theorie
+# 3. Analyse
+""" + ("filler " * 30)
+    q = extract_primary_leitfrage(msg)
+    assert q is None
