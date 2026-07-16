@@ -14,23 +14,32 @@ from sqlalchemy.exc import OperationalError
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database.database import DATABASE_URL, Base, engine, init_db, test_connection
+from database.database import (
+    DATABASE_URL,
+    Base,
+    engine,
+    init_db,
+    test_connection,
+    connect_with_retries,
+)
 from database import models  # Import all models
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def wait_for_database(max_retries=30, retry_interval=2):
-    """Wait for database to be available"""
-    for attempt in range(max_retries):
-        try:
-            if test_connection():
-                logger.info("Database is ready!")
-                return True
-        except Exception as e:
-            logger.warning(f"Database not ready yet (attempt {attempt + 1}/{max_retries}): {str(e)}")
-            time.sleep(retry_interval)
-    
+def wait_for_database(max_retries: int = 15, retry_interval: float = 2.0):
+    """Wait for the database to become reachable, self-healing through the
+    transient macvlan drop that can occur right after a podman restart.
+
+    Uses :func:`connect_with_retries`, which disposes the pool on each failed
+    attempt so we never get stuck on an invalidated pool (the previous failure
+    mode: the migration runner hung at 0% CPU on a blocked socket read).
+    """
+    if connect_with_retries(
+        engine, max_retries=max_retries, base_delay=retry_interval, purpose="startup"
+    ):
+        logger.info("Database is ready!")
+        return True
     logger.error("Database did not become available in time")
     return False
 
@@ -188,39 +197,64 @@ def run_column_migrations():
 
 
 def run_sql_migrations():
-    """Run SQL migration files for existing databases"""
+    """Run SQL migration files for existing databases.
+
+    Each migration executes inside a retry loop: a transient macvlan drop mid-
+    run previously hung the backend here (migration 05) on a blocked socket
+    read with no timeout. On ``OperationalError`` we dispose the pool and retry
+    the whole migration so a restart-time blip is self-healing instead of fatal.
+    """
     try:
         import glob
         import os
-        
+
+        from sqlalchemy.exc import OperationalError
+
         # Get the init-db directory path
         init_db_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'init-db')
-        
+
         if os.path.exists(init_db_dir):
             # Get all SQL files sorted by name
             sql_files = sorted(glob.glob(os.path.join(init_db_dir, '*.sql')))
-            
+
             for sql_file in sql_files:
                 filename = os.path.basename(sql_file)
                 # Skip the main schema files, only run migration files
                 # Run migration files that start with 03- or higher numbers
                 if any(filename.startswith(f'{num:02d}-') for num in range(3, 100)):
                     logger.info(f"Running migration: {filename}")
-                    try:
-                        with open(sql_file, 'r') as f:
-                            sql_content = f.read()
-                        
-                        with engine.connect() as conn:
-                            # Execute the migration SQL
-                            conn.execute(text(sql_content))
-                            conn.commit()
+                    with open(sql_file, 'r') as f:
+                        sql_content = f.read()
+
+                    applied = False
+                    for attempt in range(1, 4):  # up to 3 attempts per migration
+                        try:
+                            with engine.connect() as conn:
+                                conn.execute(text(sql_content))
+                                conn.commit()
                             logger.info(f"✅ Migration {filename} completed")
-                    except Exception as e:
-                        # Log but don't fail - migration might already be applied
-                        logger.warning(f"Migration {filename} skipped or already applied: {str(e)}")
-        
+                            applied = True
+                            break
+                        except OperationalError as oe:
+                            logger.warning(
+                                "Migration %s DB error (attempt %d/3): %s — disposing pool, retrying",
+                                filename, attempt, str(getattr(oe, "orig", oe))[:160],
+                            )
+                            try:
+                                engine.dispose()
+                            except Exception:
+                                pass
+                            time.sleep(3)
+                        except Exception as e:
+                            # Log but don't fail - migration might already be applied
+                            logger.warning(f"Migration {filename} skipped or already applied: {str(e)}")
+                            applied = True  # treat as done (e.g. already applied)
+                            break
+                    if not applied:
+                        logger.error(f"Migration {filename} failed after retries")
+
         logger.info("SQL migrations check completed")
-        
+
     except Exception as e:
         logger.error(f"Error running SQL migrations: {str(e)}")
 

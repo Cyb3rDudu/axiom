@@ -26,7 +26,33 @@ try:
 except ImportError:
     from ai_researcher.core_rag.database import Database
 from database import crud, models
-from database.database import get_db
+from database.database import get_db, engine
+from sqlalchemy.exc import OperationalError as SAOperationalError
+
+
+def _is_db_error(exc: Exception) -> bool:
+    """True if ``exc`` is a connection/pool-level DB error we should recover from
+    by disposing the engine pool.
+
+    Covers SQLAlchemy's OperationalError (connect refused / timeout / macvlan
+    drop) and DBAPIError generally. We chase the ``__cause__``/``__context__``
+    chain (guarded against cycles) so a wrapped DBAPI error never leaves the
+    worker silently spinning on an invalidated pool.
+    """
+    try:
+        from sqlalchemy.exc import DBAPIError
+        dbapi_types = (SAOperationalError, DBAPIError)
+    except Exception:
+        dbapi_types = (SAOperationalError,)
+
+    cur: Optional[Exception] = exc
+    seen = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, dbapi_types):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 @dataclass
 class ProcessingJob:
@@ -67,14 +93,30 @@ class BackgroundDocumentProcessor:
     def start(self):
         """Start the background worker thread."""
         print("Document processing worker started")
+        # Resilient startup: the macvlan path to Postgres can drop right after a
+        # podman restart. Establish a working connection (disposing/retrying on
+        # failure) before entering the loop so we never start polling on an
+        # already-invalidated pool.
+        from database.database import connect_with_retries
+        if not connect_with_retries(
+            engine, max_retries=15, base_delay=2.0, purpose="doc-processor startup"
+        ):
+            print("ERROR: doc-processor could not reach the database after retries; "
+                  "continuing to poll (will keep retrying in the worker loop).")
         self._worker_loop()
 
     def _worker_loop(self):
         """Main worker loop that polls the database for queued documents."""
         while not self.shutdown_event.is_set():
             job_processed = False
-            db = next(get_db())
+            db = None
             try:
+                # NOTE: acquiring the session must be INSIDE the try. If the
+                # pool is invalidated (transient macvlan drop), next(get_db())
+                # itself raises OperationalError; if it sat outside the try it
+                # escaped and killed the worker silently (the observed
+                # "spinning/dead, no logs" failure).
+                db = next(get_db())
                 # Fetch the next queued document
                 document = crud.get_next_queued_document(db)
                 
@@ -127,18 +169,40 @@ class BackgroundDocumentProcessor:
                 print(f"Error in worker loop: {e}")
                 traceback.print_exc()
                 self.is_processing = False
-                if self.current_job:
-                    crud.update_document_status(db, self.current_job.doc_id, self.current_job.user_id, "failed", 0)
-                    # Also attempt cleanup for the failed job
+                # If this was a DB-level error, the SQLAlchemy pool is likely
+                # INVALIDATED (a connect-time failure during pool population).
+                # pool_pre_ping cannot recover an invalidated pool; without
+                # dispose() every subsequent next(get_db()) re-raises the same
+                # error forever and the worker spins silently. Dispose so the
+                # next loop iteration gets a fresh connection attempt.
+                if _is_db_error(e):
+                    print("DB error detected — disposing connection pool to recover.")
                     try:
-                        from database.crud_documents_improved import cleanup_failed_document_improved
-                        cleanup_failed_document_improved(db, self.current_job.doc_id, self.current_job.user_id)
-                        print(f"[{self.current_job.doc_id}] Cleaned up after unexpected error")
-                    except Exception as cleanup_error:
-                        print(f"[{self.current_job.doc_id}] Cleanup after error failed: {cleanup_error}")
+                        engine.dispose()
+                    except Exception as disp_err:
+                        print(f"engine.dispose() failed: {disp_err}")
+                if self.current_job:
+                    if db is not None:
+                        try:
+                            crud.update_document_status(db, self.current_job.doc_id, self.current_job.user_id, "failed", 0)
+                        except Exception as status_err:
+                            print(f"[{self.current_job.doc_id}] Could not mark as failed: {status_err}")
+                        # Also attempt cleanup for the failed job
+                        try:
+                            from database.crud_documents_improved import cleanup_failed_document_improved
+                            cleanup_failed_document_improved(db, self.current_job.doc_id, self.current_job.user_id)
+                            print(f"[{self.current_job.doc_id}] Cleaned up after unexpected error")
+                        except Exception as cleanup_error:
+                            print(f"[{self.current_job.doc_id}] Cleanup after error failed: {cleanup_error}")
+                    else:
+                        print(f"[{self.current_job.doc_id}] No DB session available; cannot mark/clean up.")
                 self.current_job = None
             finally:
-                db.close()
+                if db is not None:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
 
             # Idle wait between polls. VRAM cleanup is now the GPU worker
             # subprocess's responsibility (see issue #9/#10); the doc-processor
