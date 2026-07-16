@@ -46,14 +46,16 @@ _UI_STRINGS = {
         "pt": "Gostaria de refiná-las ou devemos prosseguir?",
     },
     # P2: acknowledgment shown when a user submits a COMPLETE structured
-    # briefing (Leitfrage + Gliederung + scope + deliverable). The mission
-    # starts directly — no generic question-generation / approval loop.
+    # briefing (Leitfrage + Gliederung + scope + deliverable). The mission is
+    # staged like an open one (Leitfragen become the displayed questions) but
+    # NOT auto-started — the user launches it via the settings menu, the Start
+    # button, or a chat "start" message, exactly like an open mission.
     "complete_briefing_ack": {
-        "en": "I've recorded your complete assignment and am starting the mission now.",
-        "de": "Ich habe deinen vollständigen Auftrag übernommen und starte die Mission jetzt direkt — mit deiner Leitfrage, deiner Gliederung und deinem Wortbudget.",
-        "fr": "J'ai enregistré votre commande complète et je lance la mission maintenant.",
-        "es": "He registrado su asignación completa y estoy iniciando la misión ahora.",
-        "pt": "Registrei sua atribuição completa e estou iniciando a missão agora.",
+        "en": "I've understood your assignment.",
+        "de": "Ich habe deinen Auftrag verstanden.",
+        "fr": "J'ai bien compris votre commande.",
+        "es": "He entendido su asignación.",
+        "pt": "Entendi a sua atribuição.",
     },
     "refine_error": {
         "en": "Sorry, I had trouble refining the questions. Please try again or proceed with the current ones.",
@@ -759,7 +761,18 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                         bool(primary_q), len(sub_qs),
                     )
 
-                    # P2: COMPLETE assignment -> start directly, skip question generation.
+                    # COMPLETE assignment -> behave EXACTLY like an open research
+                    # mission, but WITHOUT the generic question-generation step:
+                    #   * take the user's own Leitfragen/sub-questions as the displayed
+                    #     questions (stored as initial_questions),
+                    #   * reply "I've understood the assignment",
+                    #   * leave the mission in the normal pre-start state so the user
+                    #     can edit settings, click Start, or send a chat "start"
+                    #     message — identical lifecycle to an open mission.
+                    # This replaces the earlier auto-start hack, which bypassed the
+                    # Settings menu and the canonical /missions/{id}/start prep
+                    # (prepare_mission_start + apply_auto_optimization), causing both
+                    # missing R: document groups and far less agentic activity.
                     if is_complete:
                         final_qs = ([primary_q] if primary_q else []) + sub_qs
                         if not final_qs:
@@ -770,42 +783,31 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                                 "falling back to question generation.", mission_id
                             )
                         else:
+                            # Use the user's Leitfragen as the questions to display.
+                            # Persist them so /missions/{id}/start and the chat
+                            # "approve_questions"/"start" flow can pick them up.
                             await self.controller.context_manager.update_mission_metadata(mission_id, {
-                                "final_questions": final_qs,
                                 "initial_questions": final_qs,
                             })
-                            # Build a specific acknowledgment (don't use the generic
-                            # questions_intro/questions_prompt strings).
+                            # Acknowledge the assignment (do NOT auto-start). Tell the
+                            # user how to launch, mirroring the open-mission prompt.
                             lang = _detect_language(self.controller, mission_id, agent_output.get("response"))
                             ack_lines = [_get_ui_string("complete_briefing_ack", lang)]
                             if primary_q:
                                 ack_lines.append(f"\n**Leitfrage:** {primary_q}")
                             if sub_qs:
                                 ack_lines.append(f"**Unterfragen:** {len(sub_qs)}")
-                            ack_lines.append(
-                                f"**Startmethode:** direkt (vollständiger Auftrag erkannt). "
-                                f"Fortschritt im Recherche-Panel."
-                            )
+                            ack_lines.append(_get_ui_string("questions_prompt", lang))
                             agent_output["response"] = "\n".join(ack_lines)
                             agent_output["questions"] = final_qs
                             agent_output["mission_id"] = mission_id
-                            agent_output["auto_start"] = True  # signal to frontend
-
-                            # Launch the mission in the background (mirrors /missions/{id}/start).
-                            started = await self._launch_mission_background(
-                                mission_id=mission_id,
-                                log_queue=log_queue,
-                                update_callback=update_callback,
-                            )
-                            if started:
-                                logger.info("Direct-start launched for complete briefing mission %s", mission_id)
-                                return agent_output
-                            # If launch failed, fall through to question-generation path
-                            # so the user still gets a usable response.
-                            logger.warning(
-                                "Direct-start launch failed for mission %s; falling back to question loop.",
+                            questions = final_qs  # skip the ResearchAgent generation below
+                            logger.info(
+                                "Complete briefing for mission %s staged as questions (no auto-start); "
+                                "user will start via settings menu / Start button / chat.",
                                 mission_id,
                             )
+                            return agent_output
 
                     # structured-but-not-complete: use the user's sub-questions for display.
                     if sub_qs:
@@ -813,7 +815,8 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
 
                 # Generate initial questions using the ResearchAgent for higher quality
                 # (only reached for open research, structured-without-subquestions,
-                # or a failed complete-briefing direct-start).
+                # (only reached for open research or structured-without-subquestions;
+                # a complete briefing returns earlier with its own Leitfragen).
                 try:
                     if questions is None:
                         logger.info(f"Generating initial questions for mission {mission_id} using ResearchAgent")
@@ -1485,229 +1488,6 @@ Instructions:
             error_response += "\n".join([f"- {q}" for q in current_questions])
             error_response += "\n\nType 'start research' to proceed."
             return current_questions, error_response  # Return original questions and error message
-
-    async def _launch_mission_background(
-        self,
-        mission_id: str,
-        log_queue: Optional[queue.Queue] = None,
-        update_callback: Optional[Callable[[queue.Queue, Any], None]] = None,
-    ) -> bool:
-        """Launch mission execution in a background thread (P2: direct start).
-
-        Mirrors the canonical start path (``POST /missions/{id}/start`` and the
-        ``approve_questions`` branch in ``handle_user_message``) so a complete
-        structured briefing behaves **identically** to an open-research mission:
-
-          1. ``prepare_mission_start`` — creates the auto-save "R:" document
-             group (``generated_document_group_id``) and captures
-             ``comprehensive_settings.settings_captured_at_start``.
-          2. ``apply_auto_optimization`` — sets the research parameters
-             (rounds, depth, max_concurrent, web/doc results, writing_passes)
-             that determine how much agentic activity the mission runs.
-          3. ``controller.run_mission`` — the actual research execution.
-
-        Skipping 1+2 (the earlier hacky version) produced missions with empty
-        research_params and no R: group, i.e. far less agentic activity than an
-        open-research mission. See docs/plans/STRUCTURED_BRIEFING_DIRECT_START.md.
-
-        Returns True if the background task was scheduled, False on failure.
-        """
-        import asyncio
-        import threading
-        try:
-            from ai_researcher.user_context import get_current_user, set_current_user
-        except Exception:
-            get_current_user = None
-            set_current_user = None
-
-        background_user = get_current_user() if get_current_user else None
-        context_mgr = self.controller.context_manager
-
-        # Validate that at least one information source is enabled, mirroring
-        # /missions/{id}/start. Fall back (return False) so the caller degrades
-        # gracefully to the question loop instead of launching a doomed mission.
-        meta = {}
-        mission_context_obj = None
-        try:
-            mission_context_obj = context_mgr.get_mission_context(mission_id)
-            meta = (getattr(mission_context_obj, "metadata", None) or {}) if mission_context_obj else {}
-        except Exception:
-            pass
-        use_web = meta.get("use_web_search", True)
-        doc_group_id = meta.get("document_group_id")
-        use_rag = meta.get("use_local_rag") or bool(doc_group_id)
-        auto_create_dg = bool(meta.get("auto_create_document_group"))
-        if not use_web and not use_rag:
-            logger.warning(
-                "Direct-start aborted for mission %s: no information source enabled.",
-                mission_id,
-            )
-            return False
-
-        # Read the chat_id so apply_auto_optimization can pull chat history.
-        chat_id = meta.get("chat_id")
-
-        # Mark as planning so the frontend shows the running state immediately.
-        try:
-            await context_mgr.update_mission_status(mission_id, "planning")
-        except Exception:
-            logger.debug("update_mission_status(planning) failed for %s", mission_id, exc_info=True)
-
-        # Capture the prep inputs now (they depend on the calling user/mission
-        # state); the background thread runs them on its own event loop.
-        prep_inputs = {
-            "mission_id": mission_id,
-            "use_web_search": use_web,
-            "document_group_id": doc_group_id,
-            "auto_create_document_group": auto_create_dg,
-            "chat_id": chat_id,
-        }
-
-        async def _prepare_and_run():
-            """prepare_mission_start -> apply_auto_optimization -> run_mission.
-
-            Identical prep to the approve_questions / /missions/{id}/start path so
-            a complete-briefing mission gets the same R: group, settings capture
-            and research parameters as an open-research mission.
-            """
-            mid = prep_inputs["mission_id"]
-            cm = self.controller.context_manager
-
-            # (1) prepare_mission_start — R: group + comprehensive_settings.
-            try:
-                from services.mission_service import prepare_mission_start
-                from ai_researcher.user_context import get_current_user as _gcu
-                from database.database import SessionLocal
-                from database import models
-                import json as _json
-
-                current_research_params = {}
-                cu = _gcu()
-                if cu:
-                    try:
-                        with SessionLocal() as db:
-                            dbu = db.query(models.User).filter(models.User.id == cu.id).first()
-                            if dbu and dbu.settings:
-                                sd = _json.loads(dbu.settings) if isinstance(dbu.settings, str) else dbu.settings
-                                rs = sd.get("research_parameters", {})
-                                current_research_params = {k: v for k, v in rs.items() if v is not None}
-                    except Exception as _e:
-                        logger.warning("Direct-start: failed to read user research_params for %s: %s", mid, _e)
-
-                mission_settings = {
-                    "use_web_search": prep_inputs["use_web_search"],
-                    "document_group_id": prep_inputs["document_group_id"],
-                    "auto_create_document_group": prep_inputs["auto_create_document_group"],
-                    "current_research_params": current_research_params,
-                }
-                mc = cm.get_mission_context(mid)
-                if mc is not None:
-                    await prepare_mission_start(
-                        mission_id=mid,
-                        mission_context=mc,
-                        context_mgr=cm,
-                        settings=mission_settings,
-                        log_to_frontend=True,
-                    )
-                    logger.info("Direct-start: prepare_mission_start completed for %s", mid)
-                else:
-                    logger.warning("Direct-start: mission context missing for prepare_mission_start %s", mid)
-            except Exception as e:
-                logger.error("Direct-start: prepare_mission_start failed for %s: %s", mid, e, exc_info=True)
-                # Non-fatal: continue to run_mission with existing settings.
-
-            # (2) apply_auto_optimization — sets rounds/depth/concurrency etc.
-            try:
-                from ai_researcher.user_context import get_current_user as _gcu
-                from database.async_database import get_async_db_session
-                from database import async_crud
-                from ai_researcher.settings_optimizer import apply_auto_optimization
-
-                cu = _gcu()
-                if cu and prep_inputs.get("chat_id"):
-                    chat_history = []
-                    try:
-                        _adb = await get_async_db_session()
-                        try:
-                            chat_history = await async_crud.get_chat_messages(
-                                _adb, chat_id=prep_inputs["chat_id"], user_id=cu.id
-                            )
-                        finally:
-                            await _adb.close()
-                    except Exception as _e:
-                        logger.warning("Direct-start: failed to load chat history for %s: %s", mid, _e)
-                    await apply_auto_optimization(
-                        mission_id=mid,
-                        current_user=cu,
-                        context_mgr=cm,
-                        controller=self.controller,
-                        chat_history=chat_history,
-                        log_queue=log_queue,
-                        update_callback=update_callback,
-                    )
-                    logger.info("Direct-start: apply_auto_optimization completed for %s", mid)
-                else:
-                    logger.info("Direct-start: skipping apply_auto_optimization for %s (no user/chat_id)", mid)
-            except Exception as e:
-                logger.error("Direct-start: apply_auto_optimization failed for %s: %s", mid, e, exc_info=True)
-                # Non-fatal: continue with current parameters.
-
-            # (3) run_mission — actual research execution.
-            await self.controller.run_mission(
-                mid,
-                log_queue=log_queue,
-                update_callback=update_callback,
-            )
-
-        def run_background_task():
-            """Run prepare+optimize+run_mission on a fresh event loop with
-            preserved user context."""
-            if set_current_user and background_user is not None:
-                set_current_user(background_user)
-            # Register the thread/loop with the lifecycle manager so stop/resume work.
-            try:
-                from ai_researcher.agentic_layer.controller.utils.mission_lifecycle import (
-                    get_lifecycle_manager,
-                )
-                lifecycle_manager = get_lifecycle_manager()
-                lifecycle_manager.register_mission_thread(mission_id, threading.current_thread())
-            except Exception:
-                lifecycle_manager = None
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            if lifecycle_manager:
-                try:
-                    lifecycle_manager.register_mission_loop(mission_id, loop)
-                except Exception:
-                    pass
-            try:
-                loop.run_until_complete(_prepare_and_run())
-            except Exception as e:
-                logger.error("Background run_mission failed for mission %s: %s", mission_id, e, exc_info=True)
-                try:
-                    asyncio.run(context_mgr.update_mission_status(mission_id, "failed", str(e)))
-                except Exception:
-                    pass
-            finally:
-                try:
-                    loop.close()
-                except Exception:
-                    pass
-                if lifecycle_manager:
-                    try:
-                        lifecycle_manager.cleanup_mission(mission_id)
-                    except Exception:
-                        pass
-
-        thread = threading.Thread(
-            target=run_background_task,
-            name=f"research_mission_{mission_id}_directstart",
-            daemon=True,
-        )
-        thread.start()
-        logger.info("Direct-start background thread launched for mission %s", mission_id)
-        return True
 
     async def confirm_questions_and_run(
         self,

@@ -585,7 +585,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
 
         // Handle MessengerAgent actions
         if (data.action) {
-          await handleAgentAction(data.action, data.request, data.mission_id, targetChatId, !!data.auto_start)
+          await handleAgentAction(data.action, data.request, data.mission_id, targetChatId)
         }
       }
       
@@ -615,7 +615,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
     }
   }
 
-  const handleAgentAction = async (action: string, request: string | null, missionId: string | null, chatId: string, autoStart: boolean = false) => {
+  const handleAgentAction = async (action: string, request: string | null, missionId: string | null, chatId: string) => {
     try {
       switch (action) {
         case 'start_research':
@@ -628,26 +628,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
               panelControls.toggleRightPanel()
             }
 
-            // P2: when the backend detected a COMPLETE structured briefing it has
-            // already launched the mission in the background. Skip the (deprecated)
-            // question-generation call and just refresh the mission status so the
-            // panel reflects the running state.
-            if (autoStart) {
-              try {
-                await useMissionStore.getState().fetchMissionStatus(missionId)
-              } catch (e) {
-                console.error('Error refreshing mission status after direct start:', e)
-              }
-              addToast({
-                type: 'success',
-                title: 'Research Mission Started',
-                message: 'I\'ve taken over your complete assignment and started the mission directly. Monitor progress in the research panel.',
-                duration: 5000
-              })
-              break
-            }
-
-            // Generate initial questions for the research topic
+            // Generate initial questions for the research topic.
+            // NOTE: /api/chat/generate-questions is now a deprecated no-op (returns
+            // []); questions are produced by the backend in the start_research flow.
+            // For a COMPLETE structured briefing the backend stages the user's own
+            // Leitfragen as initial_questions and returns "I've understood your
+            // assignment"; the user then launches via the settings menu / Start
+            // button / a chat "start" message — identical lifecycle to an open
+            // research mission. This call therefore never overwrites those.
             const questionsGenerated = await generateInitialQuestions(missionId, request || '')
             
             // Show combined toast after questions are generated
