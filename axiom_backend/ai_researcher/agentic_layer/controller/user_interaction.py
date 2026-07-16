@@ -45,6 +45,16 @@ _UI_STRINGS = {
         "es": "¿Le gustaría refinarlas o procedemos?",
         "pt": "Gostaria de refiná-las ou devemos prosseguir?",
     },
+    # P2: acknowledgment shown when a user submits a COMPLETE structured
+    # briefing (Leitfrage + Gliederung + scope + deliverable). The mission
+    # starts directly — no generic question-generation / approval loop.
+    "complete_briefing_ack": {
+        "en": "I've recorded your complete assignment and am starting the mission now.",
+        "de": "Ich habe deinen vollständigen Auftrag übernommen und starte die Mission jetzt direkt — mit deiner Leitfrage, deiner Gliederung und deinem Wortbudget.",
+        "fr": "J'ai enregistré votre commande complète et je lance la mission maintenant.",
+        "es": "He registrado su asignación completa y estoy iniciando la misión ahora.",
+        "pt": "Registrei sua atribuição completa e estou iniciando a missão agora.",
+    },
     "refine_error": {
         "en": "Sorry, I had trouble refining the questions. Please try again or proceed with the current ones.",
         "de": "Entschuldigung, bei der Überarbeitung der Fragen ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut oder fahren Sie mit den aktuellen Fragen fort.",
@@ -402,6 +412,7 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
         from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
             detect_structured_briefing,
             extract_leitfragen,
+            classify_assignment,
         )
         is_structured_briefing = (
             chat_mode == "research"
@@ -410,11 +421,22 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
         briefing_leitfragen: List[str] = (
             extract_leitfragen(user_message) if is_structured_briefing else []
         )
+        # P2: full assignment classification. `classification` drives the
+        # complete-briefing direct-start path further below. Computed once here
+        # so both the structured-passthrough and the start_research branch see
+        # the same signals.
+        classification = (
+            classify_assignment(user_message)
+            if chat_mode == "research"
+            else {"specificity": "open", "briefing_style": "open",
+                  "primary_question": None, "questions": []}
+        )
         if is_structured_briefing:
             logger.info(
                 "Detected structured briefing in user message (chat_id=%s): "
-                "%d Leitfragen extracted",
+                "specificity=%s, %d Leitfragen extracted",
                 chat_id,
+                classification.get("specificity"),
                 len(briefing_leitfragen),
             )
 
@@ -685,33 +707,113 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     )
                     logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
 
-                # Structured-briefing passthrough: when the user's message was a
-                # full research briefing (headings + numbered Leitfragen + KMU
-                # keywords etc.), skip question-generation and use the user's
-                # Leitfragen directly. See docs/plans/CHAT_MODES_AND_STRUCTURED_BRIEFING.md
+                # --- Structured-briefing handling (P1 + P2) ---
+                # `classification` was computed at the top of handle_user_message.
+                #   specificity == 'complete'  -> direct start (P2)
+                #   specificity == 'structured' -> honour briefing in Planning (P1),
+                #                                 but keep the question/approval loop
+                #   specificity == 'open'       -> current behaviour (generate questions)
+                # See docs/plans/STRUCTURED_BRIEFING_DIRECT_START.md
+                briefing_style = classification.get("briefing_style", "open")
+                is_complete = classification.get("specificity") == "complete"
+                primary_q = classification.get("primary_question")
+                sub_qs: List[str] = classification.get("questions") or briefing_leitfragen or []
+
                 questions = None
                 model_details = None
-                if is_structured_briefing and briefing_leitfragen:
-                    await self.controller.context_manager.update_mission_metadata(
-                        mission_id,
-                        {
-                            "briefing_style": "structured",
-                            "full_briefing": user_message,
-                        },
-                    )
+
+                if briefing_style == "structured":
+                    # P1: persist the full briefing + primary Leitfrage so downstream
+                    # agents (Planning) honour it instead of the distilled one-liner.
+                    metadata_update = {
+                        "briefing_style": "structured",
+                        "full_briefing": user_message,
+                        "primary_leitfrage": primary_q,
+                    }
+                    if sub_qs:
+                        metadata_update["initial_questions"] = sub_qs
+                    await self.controller.context_manager.update_mission_metadata(mission_id, metadata_update)
+
+                    # P1: replace the distilled user_request with the full briefing so
+                    # every downstream agent (Planning, Research) sees the real
+                    # assignment. Keep the distilled version for reference.
+                    try:
+                        _mc = self.controller.context_manager.get_mission_context(mission_id)
+                        if _mc and getattr(_mc, "user_request", None) != user_message:
+                            _mc.user_request = user_message
+                            await self.controller.context_manager.update_mission_metadata(
+                                mission_id, {"original_user_request": request_content}
+                            )
+                            logger.info("Replaced distilled user_request with full briefing for mission %s", mission_id)
+                    except Exception:
+                        logger.debug("Could not swap user_request to full briefing", exc_info=True)
+
                     await self.controller.context_manager.add_goal(
                         mission_id=mission_id,
                         text="briefing_style=structured — use the user's Leitfragen and outline verbatim; do not invent alternative questions",
                         source_agent="BriefingDetector",
                     )
                     logger.info(
-                        "Structured briefing detected for mission %s; using %d user-provided Leitfragen instead of generating new ones",
-                        mission_id,
-                        len(briefing_leitfragen),
+                        "Structured briefing (specificity=%s) for mission %s; primary_leitfrage=%s, %d sub-questions",
+                        classification.get("specificity"), mission_id,
+                        bool(primary_q), len(sub_qs),
                     )
-                    questions = briefing_leitfragen
+
+                    # P2: COMPLETE assignment -> start directly, skip question generation.
+                    if is_complete:
+                        final_qs = ([primary_q] if primary_q else []) + sub_qs
+                        if not final_qs:
+                            # Degenerate: classified complete but nothing to use as
+                            # questions. Fall back to generating.
+                            logger.warning(
+                                "Complete briefing for mission %s had no usable Leitfragen; "
+                                "falling back to question generation.", mission_id
+                            )
+                        else:
+                            await self.controller.context_manager.update_mission_metadata(mission_id, {
+                                "final_questions": final_qs,
+                                "initial_questions": final_qs,
+                            })
+                            # Build a specific acknowledgment (don't use the generic
+                            # questions_intro/questions_prompt strings).
+                            lang = _detect_language(self.controller, mission_id, agent_output.get("response"))
+                            ack_lines = [_get_ui_string("complete_briefing_ack", lang)]
+                            if primary_q:
+                                ack_lines.append(f"\n**Leitfrage:** {primary_q}")
+                            if sub_qs:
+                                ack_lines.append(f"**Unterfragen:** {len(sub_qs)}")
+                            ack_lines.append(
+                                f"**Startmethode:** direkt (vollständiger Auftrag erkannt). "
+                                f"Fortschritt im Recherche-Panel."
+                            )
+                            agent_output["response"] = "\n".join(ack_lines)
+                            agent_output["questions"] = final_qs
+                            agent_output["mission_id"] = mission_id
+                            agent_output["auto_start"] = True  # signal to frontend
+
+                            # Launch the mission in the background (mirrors /missions/{id}/start).
+                            started = await self._launch_mission_background(
+                                mission_id=mission_id,
+                                log_queue=log_queue,
+                                update_callback=update_callback,
+                            )
+                            if started:
+                                logger.info("Direct-start launched for complete briefing mission %s", mission_id)
+                                return agent_output
+                            # If launch failed, fall through to question-generation path
+                            # so the user still gets a usable response.
+                            logger.warning(
+                                "Direct-start launch failed for mission %s; falling back to question loop.",
+                                mission_id,
+                            )
+
+                    # structured-but-not-complete: use the user's sub-questions for display.
+                    if sub_qs:
+                        questions = sub_qs
 
                 # Generate initial questions using the ResearchAgent for higher quality
+                # (only reached for open research, structured-without-subquestions,
+                # or a failed complete-briefing direct-start).
                 try:
                     if questions is None:
                         logger.info(f"Generating initial questions for mission {mission_id} using ResearchAgent")
@@ -1383,6 +1485,112 @@ Instructions:
             error_response += "\n".join([f"- {q}" for q in current_questions])
             error_response += "\n\nType 'start research' to proceed."
             return current_questions, error_response  # Return original questions and error message
+
+    async def _launch_mission_background(
+        self,
+        mission_id: str,
+        log_queue: Optional[queue.Queue] = None,
+        update_callback: Optional[Callable[[queue.Queue, Any], None]] = None,
+    ) -> bool:
+        """Launch mission execution in a background thread (P2: direct start).
+
+        Mirrors the background-launch path of ``POST /missions/{id}/start`` so a
+        complete structured briefing can start immediately from the chat handler.
+        Sets status to ``planning``, preserves the current user context for model
+        selection, registers with the lifecycle manager, and runs
+        ``controller.run_mission`` on a fresh event loop in a daemon thread.
+
+        Returns True if the background task was scheduled, False on failure.
+        """
+        import asyncio
+        import threading
+        try:
+            from ai_researcher.user_context import get_current_user, set_current_user
+        except Exception:
+            get_current_user = None
+            set_current_user = None
+
+        background_user = get_current_user() if get_current_user else None
+        context_mgr = self.controller.context_manager
+
+        # Validate that at least one information source is enabled, mirroring
+        # /missions/{id}/start. Fall back (return False) so the caller degrades
+        # gracefully to the question loop instead of launching a doomed mission.
+        meta = {}
+        try:
+            mc = context_mgr.get_mission_context(mission_id)
+            meta = (getattr(mc, "metadata", None) or {}) if mc else {}
+        except Exception:
+            pass
+        use_web = meta.get("use_web_search", True)
+        use_rag = meta.get("use_local_rag") or bool(meta.get("document_group_id"))
+        if not use_web and not use_rag:
+            logger.warning(
+                "Direct-start aborted for mission %s: no information source enabled.",
+                mission_id,
+            )
+            return False
+
+        # Mark as planning so the frontend shows the running state immediately.
+        try:
+            await context_mgr.update_mission_status(mission_id, "planning")
+        except Exception:
+            logger.debug("update_mission_status(planning) failed for %s", mission_id, exc_info=True)
+
+        def run_background_task():
+            """Run run_mission on a fresh event loop with preserved user context."""
+            if set_current_user and background_user is not None:
+                set_current_user(background_user)
+            # Register the thread/loop with the lifecycle manager so stop/resume work.
+            try:
+                from ai_researcher.agentic_layer.controller.utils.mission_lifecycle import (
+                    get_lifecycle_manager,
+                )
+                lifecycle_manager = get_lifecycle_manager()
+                lifecycle_manager.register_mission_thread(mission_id, threading.current_thread())
+            except Exception:
+                lifecycle_manager = None
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            if lifecycle_manager:
+                try:
+                    lifecycle_manager.register_mission_loop(mission_id, loop)
+                except Exception:
+                    pass
+            try:
+                loop.run_until_complete(
+                    self.controller.run_mission(
+                        mission_id,
+                        log_queue=log_queue,
+                        update_callback=update_callback,
+                    )
+                )
+            except Exception as e:
+                logger.error("Background run_mission failed for mission %s: %s", mission_id, e, exc_info=True)
+                try:
+                    asyncio.run(context_mgr.update_mission_status(mission_id, "failed", str(e)))
+                except Exception:
+                    pass
+            finally:
+                try:
+                    loop.close()
+                except Exception:
+                    pass
+                if lifecycle_manager:
+                    try:
+                        lifecycle_manager.cleanup_mission(mission_id)
+                    except Exception:
+                        pass
+
+        thread = threading.Thread(
+            target=run_background_task,
+            name=f"research_mission_{mission_id}_directstart",
+            daemon=True,
+        )
+        thread.start()
+        logger.info("Direct-start background thread launched for mission %s", mission_id)
+        return True
 
     async def confirm_questions_and_run(
         self,

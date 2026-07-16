@@ -194,6 +194,71 @@ Generate a JSON object with:
 Remember: Keep it focused, logical, and actionable. Do NOT include section IDs - those will be added programmatically. The outline will be automatically validated for depth and duplication."""
         return prompt
 
+    def _get_briefing_context(self, mission_id: "Optional[str]") -> "Optional[str]":
+        """Return a directive+full-briefing block when the mission is a structured briefing.
+
+        Reads the mission metadata and, when ``briefing_style == 'structured'`` and a
+        ``full_briefing`` is present, returns a formatted block that the Phase-1
+        prompt builder prepends to the user prompt. Returns None otherwise (open
+        research, or metadata unavailable) so planning behaves exactly as before.
+
+        This is the root-cause fix for "the mission always starts generically":
+        without it, planning only ever sees the distilled ``user_request`` one-liner
+        and reinvents the outline/questions from scratch. See
+        ``docs/plans/STRUCTURED_BRIEFING_DIRECT_START.md`` (P1).
+        """
+        if not mission_id:
+            return None
+        controller = getattr(self, "controller", None)
+        context_manager = getattr(controller, "context_manager", None) if controller else None
+        if context_manager is None:
+            return None
+        try:
+            mission_context = context_manager.get_mission_context(mission_id)
+        except Exception:
+            return None
+        if not mission_context:
+            return None
+        metadata = getattr(mission_context, "metadata", None) or {}
+        if metadata.get("briefing_style") != "structured":
+            return None
+        full_briefing = metadata.get("full_briefing")
+        if not full_briefing:
+            return None
+
+        # Surface the user's primary Leitfrage + sub-questions explicitly so the
+        # planner treats them as authoritative rather than re-deriving.
+        parts = [
+            "USER PROVIDED A COMPLETE STRUCTURED BRIEFING (briefing_style=structured).",
+            "You MUST follow this briefing. The outline, Leitfrage, word budget and",
+            "deliverable below are authoritative — do not substitute your own.",
+            "",
+            f"--- BEGIN USER BRIEFING (verbatim) ---",
+            full_briefing.strip(),
+            f"--- END USER BRIEFING ---",
+        ]
+        primary_q = metadata.get("primary_leitfrage") or metadata.get("primary_question")
+        if primary_q:
+            parts.append("")
+            parts.append(f"Primary research question (Leitfrage): {primary_q}")
+        initial_questions = metadata.get("initial_questions") or metadata.get("final_questions") or []
+        if initial_questions:
+            parts.append("Sub-questions / Leitfragen to honour (do not replace):")
+            for i, q in enumerate(initial_questions, 1):
+                parts.append(f"  {i}. {q}")
+        parts.append("")
+        parts.append(
+            "Note: the 'Research Request:' line that follows is a distilled summary "
+            "of the briefing above for reference only. The briefing above is the "
+            "source of truth."
+        )
+        logger.info(
+            "%s: Phase 1 using STRUCTURED BRIEFING context (full_briefing=%d chars) "
+            "for mission %s",
+            self.agent_name, len(full_briefing), mission_id,
+        )
+        return "\n".join(parts)
+
     def _phase2_system_prompt(self) -> str:
         """Phase 2: Outline with Note Assignment - Assigns collected notes to sections."""
         # Try to use loaded prompt from database
@@ -604,6 +669,19 @@ Available Research Tools:
         
         # Construct the user prompt based on phase
         user_prompt = f"Research Request: {user_request}\n\n"
+
+        # --- Structured-briefing honouring (Phase 1 only) ---
+        # When the mission was created from a complete/structured user briefing,
+        # the user already supplied a Leitfrage, a Gliederung, a word budget and
+        # a deliverable. Planning must use them verbatim instead of reinventing
+        # an outline from the distilled `user_request` one-liner. See
+        # docs/plans/STRUCTURED_BRIEFING_DIRECT_START.md (P1).
+        briefing_context = self._get_briefing_context(mission_id)
+        if briefing_context:
+            # Prepend the full briefing ahead of (not replacing) the distilled
+            # request so the LLM sees both, with an explicit directive to follow
+            # the user's structure.
+            user_prompt = briefing_context + "\n\n" + user_prompt
         
         if final_outline_context:
             # Phase 2: Note assignment
@@ -642,7 +720,21 @@ Available Research Tools:
             logger.info(f"{self.agent_name}: Phase 1 - Initial outline generation")
             if initial_context:
                 user_prompt += f"Initial Context:\n{initial_context}\n\n"
-            user_prompt += "Generate a structured outline for this research task."
+            # If the user supplied a structured briefing with an outline, instruct
+            # the planner to adopt that structure verbatim rather than inventing
+            # a new one. (P1)
+            if briefing_context:
+                user_prompt += (
+                    "IMPORTANT: The user provided a complete structured briefing above "
+                    "(Leitfrage, Gliederung, word budget, deliverable). Adopt the user's "
+                    "outline structure and section titles VERBATIM — map each `# N. Title` "
+                    "heading to a top-level section. Do NOT invent a different structure, "
+                    "do NOT merge or rename the user's sections, and do NOT invent new "
+                    "research questions. Honour section research-strategy hints if present. "
+                    "Generate the outline from the briefing."
+                )
+            else:
+                user_prompt += "Generate a structured outline for this research task."
 
         # Add goals and thoughts if available (for all phases)
         if active_goals:

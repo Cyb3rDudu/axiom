@@ -7,8 +7,10 @@ import api as _api_primer  # noqa: F401  # isort: skip
 import pytest
 
 from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
+    classify_assignment,
     detect_structured_briefing,
     extract_leitfragen,
+    extract_primary_leitfrage,
 )
 
 
@@ -171,3 +173,99 @@ def test_filters_out_short_items():
     fragen = extract_leitfragen(msg)
     assert len(fragen) == 3
     assert all(len(f) >= 30 for f in fragen)
+
+
+# ---------------------------------------------------------------------------
+# extract_primary_leitfrage (P0)
+# ---------------------------------------------------------------------------
+
+
+BERGTECH_BRIEFING = """Du unterst\u00fctzt mich bei der Konzeption einer wissenschaftlichen Hausarbeit.
+
+Die Hausarbeit umfasst ungef\u00e4hr 3.000 W\u00f6rter.
+
+## Zentrale Leitfrage
+
+Verwende folgende Leitfrage:
+
+\u201eWie beeinflussen die Makroumwelt, die Branchenumwelt und zentrale Anspruchsgruppen die Bergtech Maschinenbau GmbH als mittelst\u00e4ndisches Sondermaschinenbauunternehmen, wie k\u00f6nnen diese Einfl\u00fcsse systematisch analysiert werden und welche Konsequenzen ergeben sich daraus?\u201c
+
+M\u00f6gliche Unterfragen:
+
+1. Wie l\u00e4sst sich Bergtech als offene marktwirtschaftliche Unternehmung und soziotechnisches System einordnen?
+2. \u00dcber welche Mechanismen wirken Makroumwelt, Branchenumwelt und Stakeholder auf das Unternehmen ein?
+3. Mit welchen Instrumenten kann Bergtech relevante Umweltentwicklungen analysieren?
+4. Welche drei bis f\u00fcnf Umweltfaktoren besitzen f\u00fcr Bergtech die h\u00f6chste strategische Relevanz?
+5. Wie kann Bergtech auf diese Einfl\u00fcsse reagieren und Teile ihrer Umwelt aktiv mitgestalten?
+
+## Empfohlene Gliederung
+
+# 1. Einleitung
+# 2. Theoretischer Bezugsrahmen
+# 3. Darstellung und Analyse der Unternehmensumwelt
+# 4. Umweltanalyse der Bergtech Maschinenbau GmbH
+# 5. Zentrale Umwelteinfl\u00fcsse und Managementimplikationen
+# 6. Fazit
+
+## Literaturanforderungen
+Verwende insgesamt 10 bis 20 Quellen. Schrey\u00f6gg und Koch.
+"""
+
+
+def test_primary_leitfrage_under_singular_header():
+    """Regression: `## Zentrale Leitfrage` (singular) must be recognised and the
+    quoted Leitfrage extracted — not the numbered sub-questions."""
+    q = extract_primary_leitfrage(BERGTECH_BRIEFING)
+    assert q is not None
+    assert q.startswith("Wie beeinflussen die Makroumwelt")
+    assert "Bergtech" in q
+
+
+def test_primary_leitfrage_none_for_casual():
+    assert extract_primary_leitfrage(CASUAL_SHORT) is None
+
+
+def test_primary_leitfrage_ascii_quotes():
+    msg = ("## Forschungsfrage\n\n" "\"Wie wirkt sich der Fachkr\u00e4ftemangel auf KMU aus?\"\n"
+           + ("filler " * 40))
+    q = extract_primary_leitfrage(msg)
+    assert q is not None and "Fachkr\u00e4ftemangel" in q
+
+
+# ---------------------------------------------------------------------------
+# classify_assignment (P2)
+# ---------------------------------------------------------------------------
+
+
+def test_classify_complete_briefing():
+    """The Bergtech-style prompt has outline + scope + deliverable → complete."""
+    c = classify_assignment(BERGTECH_BRIEFING)
+    assert c["specificity"] == "complete"
+    assert c["briefing_style"] == "structured"
+    assert c["has_outline"] is True
+    assert c["has_scope"] is True
+    assert c["has_deliverable"] is True
+    assert c["deliverable"] == "Hausarbeit"
+    assert c["primary_question"].startswith("Wie beeinflussen die Makroumwelt")
+    assert len(c["questions"]) == 5  # the numbered sub-questions
+
+
+def test_classify_kmu_briefing_is_structured_or_complete():
+    """The KMU fixture is structured; with its scope + deliverable it is complete."""
+    c = classify_assignment(KMU_BRIEFING)
+    assert c["specificity"] in ("structured", "complete")
+    assert c["briefing_style"] == "structured"
+
+
+def test_classify_open_research():
+    """A vague 'go research this' prompt must stay 'open' (no false positive)."""
+    c = classify_assignment(CASUAL_LONGISH)
+    assert c["specificity"] == "open"
+    assert c["briefing_style"] == "open"
+    assert c["primary_question"] is None
+
+
+def test_classify_empty():
+    c = classify_assignment("")
+    assert c["specificity"] == "open"
+    assert c["questions"] == []

@@ -585,7 +585,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
 
         // Handle MessengerAgent actions
         if (data.action) {
-          await handleAgentAction(data.action, data.request, data.mission_id, targetChatId)
+          await handleAgentAction(data.action, data.request, data.mission_id, targetChatId, !!data.auto_start)
         }
       }
       
@@ -615,7 +615,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
     }
   }
 
-  const handleAgentAction = async (action: string, request: string | null, missionId: string | null, chatId: string) => {
+  const handleAgentAction = async (action: string, request: string | null, missionId: string | null, chatId: string, autoStart: boolean = false) => {
     try {
       switch (action) {
         case 'start_research':
@@ -626,6 +626,25 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
             // Auto-open the research panel
             if (panelControls?.isRightPanelCollapsed) {
               panelControls.toggleRightPanel()
+            }
+
+            // P2: when the backend detected a COMPLETE structured briefing it has
+            // already launched the mission in the background. Skip the (deprecated)
+            // question-generation call and just refresh the mission status so the
+            // panel reflects the running state.
+            if (autoStart) {
+              try {
+                await useMissionStore.getState().fetchMissionStatus(missionId)
+              } catch (e) {
+                console.error('Error refreshing mission status after direct start:', e)
+              }
+              addToast({
+                type: 'success',
+                title: 'Research Mission Started',
+                message: 'I\'ve taken over your complete assignment and started the mission directly. Monitor progress in the research panel.',
+                duration: 5000
+              })
+              break
             }
 
             // Generate initial questions for the research topic
