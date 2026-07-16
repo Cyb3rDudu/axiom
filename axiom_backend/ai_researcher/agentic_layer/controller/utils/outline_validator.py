@@ -17,18 +17,35 @@ logger = logging.getLogger(__name__)
 def _normalize_title_for_match(title: str) -> str:
     """Normalize a section title for fuzzy matching.
 
-    Lower-cases, strips leading numbering (``1.`` / ``2.1``), punctuation and
-    collapses whitespace so that ``"1. Einleitung"`` and ``"Einleitung"`` and
-    ``"einleitung."`` all compare equal.
+    Order-independent: strips leading heading markers (``##``), leading numeric
+    labels (``1.`` / ``2.1`` / ``2.1.``) and trailing punctuation, then
+    lower-cases and collapses whitespace. Applied iteratively until stable so
+    that all of these compare equal:
+
+    - ``"1. Einleitung"``
+    - ``"## 2.1 NexMach als Unternehmung"``
+    - ``"Einleitung"``
+    - ``"einleitung."``
+
+    The previous implementation ran the numeric-strip once *before* stripping
+    heading markers, so ``## 2.1 Foo`` survived as `` 2.1 foo``. The loop here
+    fixes that (review finding 2).
     """
     import re
-    t = title or ""
-    # Strip a leading numeric label like ``1.`` / ``2.1.``.
-    t = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*", "", t)
+    t = (title or "").strip()
+    # Iteratively strip leading heading markers and numeric labels until stable.
+    # Bounded loop guards against pathological inputs.
+    for _ in range(5):
+        prev = t
+        t = t.lstrip("#").lstrip()
+        m = re.match(r"\d+(?:\.\d+)*[.)]?\s*", t)
+        if m:
+            t = t[m.end():]
+        if t == prev:
+            break
     t = t.lower().strip()
-    # Drop common trailing punctuation / heading markers.
-    t = t.strip("#:.-_")
-    t = re.sub(r"\s+", " ", t)
+    t = t.strip("#:.-_ ").strip()
+    t = re.sub(r"\s+", " ", t).strip()
     return t
 
 
@@ -122,18 +139,25 @@ class OutlineValidator:
         Unlike the LLM-driven reflection loop, this is a pure post-LLM check: it
         matches the generated ``outline`` against the user's required
         ``structured_outline`` (number / title / level records parsed from the
-        Gliederung) and INSERTS any missing required section at the correct
-        position, preserving the user's order and hierarchy. Existing sections
-        are left untouched (titles, descriptions, strategies, notes all kept).
+        Gliederung) and INSERTS any missing required section — including nested
+        subsections (level >= 2) — at the correct position, preserving the
+        user's order and hierarchy. Existing sections are left untouched.
+
+        The production failure this guards against: the LLM dropped a required
+        level-2 subsection (``3.2 Branchen- und Wettbewerbsumwelt``). The first
+        iteration of this method only handled top-level (level 1) sections and
+        silently ignored nested required subsections (review finding 1). This
+        version builds the required tree and recurses into matched parents.
 
         Args:
-            outline: the generated/corrected outline (a flat list of top-level
+            outline: the generated/corrected outline (a list of top-level
                 ``ReportSection`` possibly with subsections).
-            required_outline: list of ``{"number","title","level"}`` dicts from
-                mission metadata ``structured_outline``.
+            required_outline: flat list of ``{"number","title","level"}`` dicts
+                from mission metadata ``structured_outline``.
 
         Returns:
-            (updated_outline, report) where report lists matched / inserted.
+            (updated_outline, report) where report lists matched / inserted /
+            missing_required (across all levels).
         """
         report: Dict[str, Any] = {
             "required_count": len(required_outline),
@@ -144,87 +168,186 @@ class OutlineValidator:
         if not required_outline:
             return outline, report
 
-        # Collect normalized titles already present in the generated outline.
-        present_titles: List[str] = []
+        required_tree = self._build_required_tree(required_outline)
+        merged = self._merge_required_sections(outline, required_tree, report)
 
-        def _collect_present(sections: List[ReportSection]) -> None:
-            for sec in sections:
-                present_titles.append(_normalize_title_for_match(sec.title))
-                if sec.subsections:
-                    _collect_present(sec.subsections)
-
-        _collect_present(outline)
-
-        def _is_present(required_title: str) -> bool:
-            target = _normalize_title_for_match(required_title)
-            if not target:
-                return True  # nothing to match
-            for existing in present_titles:
-                if existing == target:
-                    return True
-                # Fuzzy match for minor wording differences (e.g. "Fazit" vs
-                # "Fazit und Ausblick"). Require a strong match to avoid false
-                # positives, and also accept substring containment.
-                ratio = difflib.SequenceMatcher(None, target, existing).ratio()
-                if ratio >= 0.8 or target in existing or existing in target:
-                    return True
-            return False
-
-        # Map required top-level numbers ("1", "2", ...) to their position so we
-        # can insert missing sections in the right place. Top-level required
-        # sections (level 1) map to the top-level list; nested required sections
-        # (level >= 2) are folded into the description of their parent if the
-        # parent exists (we don't fabricate deep subsection structure blindly).
-        top_level_required = [
-            r for r in required_outline if int(r.get("level", 1) or 1) <= 1
-        ]
-
-        new_outline = list(outline)
-        for req in top_level_required:
-            req_title = req.get("title") or ""
-            req_number = req.get("number") or ""
-            if _is_present(req_title):
-                report["matched"].append(req_title)
-                continue
-            # Missing required top-level section -> insert deterministically.
-            report["missing_required"].append(req_title)
-            inserted = ReportSection(
-                section_id=(req_title.lower().replace(" ", "_")[:40] or f"section_{req_number}"),
-                title=req_title,
-                description=(
-                    f"Required section from the user's Gliederung ({req_number}). "
-                    f"Cover the topics specified in the briefing for this section."
-                ),
-                research_strategy="research_based",
-            )
-            report["inserted"].append(req_title)
+        if report["inserted"]:
             logger.warning(
-                "OutlineValidator: required section '%s' (%s) was MISSING from the "
-                "generated outline; inserting it deterministically.",
-                req_title, req_number,
+                "OutlineValidator: enforce_required_outline inserted %d missing "
+                "section(s): %s",
+                len(report["inserted"]), report["inserted"],
             )
-            new_outline.append(inserted)
-            present_titles.append(_normalize_title_for_match(req_title))
+        else:
+            logger.info(
+                "OutlineValidator: required-outline check OK — all %d required "
+                "section(s) present.",
+                report.get("required_count", 0),
+            )
+        return merged, report
 
-        # Re-order top-level sections to follow the required order as closely as
-        # possible (required sections first, in their Gliederung order; any extra
-        # generated sections appended afterwards in their original order).
-        order_index: Dict[str, int] = {}
-        for i, req in enumerate(top_level_required):
-            order_index[_normalize_title_for_match(req.get("title") or "")] = i
+    # ----- helpers for enforce_required_outline -----
 
-        def _order_key(section: ReportSection) -> Tuple[int, int]:
-            return (order_index.get(_normalize_title_for_match(section.title), 10_000), 0)
+    @staticmethod
+    def _number_key(number: str) -> Tuple[int, ...]:
+        """Parse a section number like '3.2' into a sortable tuple (3, 2).
 
-        # Only re-sort if we actually matched/inserted at least 2 required
-        # sections, to avoid shuffling purely-LLM outlines with no briefing.
-        if len(top_level_required) >= 2:
-            # Keep stable: sort by required order, preserving original order for ties.
-            indexed = list(enumerate(new_outline))
-            indexed.sort(key=lambda pair: (_order_key(pair[1])[0], pair[0]))
-            new_outline = [s for _, s in indexed]
+        Non-numeric / empty numbers sort as ``(0,)`` so parents sort before
+        children and malformed entries don't crash the sort.
+        """
+        if not number:
+            return (0,)
+        parts = []
+        for p in str(number).split("."):
+            p = p.strip()
+            if p.isdigit():
+                parts.append(int(p))
+            else:
+                parts.append(0)
+        return tuple(parts) if parts else (0,)
 
-        return new_outline, report
+    @classmethod
+    def _is_prefix_parent(cls, parent_number: str, child_number: str) -> bool:
+        """True if ``parent_number`` is a strict prefix-parent of ``child_number``.
+
+        ``3`` is a parent of ``3.2`` and ``3.2.1``; ``3.2`` is a parent of
+        ``3.2.1``; ``3`` is NOT a parent of ``3`` (same) or of ``30``.
+        """
+        pp = cls._number_key(parent_number)
+        cp = cls._number_key(child_number)
+        return len(pp) < len(cp) and cp[: len(pp)] == pp
+
+    def _build_required_tree(
+        self, required_outline: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Build a nested tree from the flat required-outline list.
+
+        Returns a list of root nodes, each:
+            {"number", "title", "level", "children": [ <node>, ... ]}
+        Parent/child relationships are derived from the section *number* prefix
+        (``3`` parents ``3.2``), so this is robust even if levels are absent or
+        inconsistent. Nodes are sorted by number so parents precede children.
+        """
+        nodes = []
+        for r in required_outline:
+            nodes.append(
+                {
+                    "number": str(r.get("number", "") or ""),
+                    "title": str(r.get("title", "") or ""),
+                    "level": int(r.get("level", 1) or 1),
+                    "children": [],
+                }
+            )
+        nodes.sort(key=lambda n: self._number_key(n["number"]))
+
+        roots: List[Dict[str, Any]] = []
+        stack: List[Dict[str, Any]] = []
+        for n in nodes:
+            while stack and not self._is_prefix_parent(stack[-1]["number"], n["number"]):
+                stack.pop()
+            if stack:
+                stack[-1]["children"].append(n)
+            else:
+                roots.append(n)
+            stack.append(n)
+        return roots
+
+    def _titles_match(self, a: str, b: str) -> bool:
+        """Compare two normalized titles for equivalence."""
+        if not a:
+            return True  # empty required title -> treat as present (no-op)
+        if a == b:
+            return True
+        ratio = difflib.SequenceMatcher(None, a, b).ratio()
+        return ratio >= 0.8 or a in b or b in a
+
+    def _merge_required_sections(
+        self,
+        generated: List[ReportSection],
+        required_nodes: List[Dict[str, Any]],
+        report: Dict[str, Any],
+    ) -> List[ReportSection]:
+        """Recursively merge required nodes into the generated section list.
+
+        For each required node (in required/Gliederung order):
+          - if a generated section matches its title (fuzzy), claim it, recurse
+            the required children into its subsections, and keep it;
+          - else create a new ReportSection (with its required children as
+            subsections) and insert it.
+
+        Any generated section not claimed by a required node is appended after,
+        in its original relative order. The result therefore follows the user's
+        Gliederung order for required sections while preserving LLM-added extras.
+        """
+        if not required_nodes:
+            return list(generated)
+
+        used_indices: Set[int] = set()
+        match_for_required: Dict[int, int] = {}  # id(node) -> index in generated
+
+        # Greedy first-match: each required node claims the first unused
+        # generated section whose title matches.
+        for rn in required_nodes:
+            target = _normalize_title_for_match(rn["title"])
+            for i, g in enumerate(generated):
+                if i in used_indices:
+                    continue
+                if self._titles_match(target, _normalize_title_for_match(g.title)):
+                    used_indices.add(i)
+                    match_for_required[id(rn)] = i
+                    report["matched"].append(rn["title"])
+                    break
+            else:
+                report["missing_required"].append(rn["title"])
+
+        result: List[ReportSection] = []
+        for rn in required_nodes:
+            idx = match_for_required.get(id(rn))
+            if idx is not None:
+                g = generated[idx]
+                if rn["children"]:
+                    g.subsections = self._merge_required_sections(
+                        list(g.subsections), rn["children"], report
+                    )
+                result.append(g)
+            else:
+                # Record the parent's insertion BEFORE recursing into its
+                # children so report ordering is parent-first (deterministic,
+                # matches document order).
+                report["inserted"].append(rn["title"])
+                logger.warning(
+                    "OutlineValidator: required section '%s' (%s, level %d) was "
+                    "MISSING from the generated outline; inserting it "
+                    "deterministically.",
+                    rn["title"],
+                    rn["number"],
+                    rn["level"],
+                )
+                new_sec = ReportSection(
+                    section_id=(
+                        rn["title"].lower().replace(" ", "_")[:40]
+                        or f"section_{rn['number']}"
+                    ),
+                    title=rn["title"],
+                    description=(
+                        f"Required section from the user's Gliederung "
+                        f"({rn['number']}). Cover the topics specified in the "
+                        f"briefing for this section."
+                    ),
+                    research_strategy="research_based",
+                    subsections=[],
+                )
+                if rn["children"]:
+                    new_sec.subsections = self._merge_required_sections(
+                        [], rn["children"], report
+                    )
+                result.append(new_sec)
+
+        # Append generated sections not claimed by any required node.
+        for i, g in enumerate(generated):
+            if i not in used_indices:
+                result.append(g)
+
+        return result
     
     def _calculate_max_depth(self, outline: List[ReportSection], current_depth: int = 0) -> int:
         """Calculate the maximum depth of the outline."""
