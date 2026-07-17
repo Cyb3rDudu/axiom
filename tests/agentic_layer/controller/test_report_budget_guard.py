@@ -210,3 +210,128 @@ class TestReportBudgetGuard(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# _persist_final_word_metrics: final_file_words must equal the stored string
+# (review round 4). The report gains a title, portfolio and references AFTER
+# the early budget decision, so metrics must be computed from the EXACT final
+# string passed to store_final_report().
+# ---------------------------------------------------------------------------
+
+class _MetricsContextManager:
+    """Minimal fake: returns a mission context with configurable metadata and
+    captures the metadata updates from _persist_final_word_metrics."""
+    def __init__(self, metadata):
+        self._mc = _MissionContext(plan=None, report_content={}, metadata=dict(metadata))
+
+    def get_mission_context(self, mission_id):
+        return self._mc
+
+    async def update_mission_metadata(self, mission_id, metadata):
+        self._mc.metadata.update(metadata)
+        self._last = metadata
+
+
+class _MetricsController:
+    def __init__(self, metadata):
+        self.context_manager = _MetricsContextManager(metadata)
+
+
+class TestPersistFinalWordMetrics(unittest.IsolatedAsyncioTestCase):
+    async def test_final_file_words_equals_stored_with_title_portfolio_refs(self):
+        """A report containing a title, a literature portfolio and a references
+        section: final_file_words must equal len(final_string.split()), and the
+        content/heading/banner/reference breakdown must sum to it."""
+        content_body = _para(40)                       # 40 content words
+        title_block = "# NexMach als Unternehmung\n\n"  # a title heading
+        portfolio = "\n\n## Literaturportfolio\n\nEntry A. Entry B.\n"
+        references = "\n\n## References\n\n1. Smith (2020). 2. Jones (2021)."
+        final_string = title_block + content_body + portfolio + references
+
+        controller = _MetricsController({
+            "word_budget": {"total_word_budget": {"min": 1, "target": 1, "max": 100}}
+        })
+        rg = ReportGenerator(controller)
+
+        content_words = 40
+        banner_words = 0
+        reference_words = len(portfolio.split()) + len(references.split()) + len(title_block.split())
+
+        await rg._persist_final_word_metrics(
+            "m1", final_string, content_words, banner_words, reference_words,
+        )
+
+        meta = controller.context_manager._mc.metadata
+        exceeded = meta["word_budget_exceeded"]
+        # content (40) is within max (100) -> flags cleared, not set.
+        self.assertIsNone(exceeded)
+        self.assertFalse(meta.get("completed_with_word_budget_warning"))
+
+    async def test_over_budget_final_file_words_matches_stored(self):
+        """Over budget AND the stored string has title+portfolio+refs:
+        final_file_words == len(final_string.split()) exactly, even though
+        those add words the early measurement would have missed."""
+        content_body = _para(120)                      # 120 content -> over max 100
+        title_block = "# Titel\n\n"
+        portfolio = "\n\n## Literaturportfolio\n\nA B C D E F G H I J.\n"
+        references = "\n\n## References\n\n1. A. 2. B. 3. C."
+        final_string = title_block + content_body + portfolio + references
+
+        controller = _MetricsController({
+            "word_budget": {"total_word_budget": {"min": 1, "target": 1, "max": 100}}
+        })
+        rg = ReportGenerator(controller)
+
+        reference_words = (
+            len(title_block.split()) + len(portfolio.split()) + len(references.split())
+        )
+        await rg._persist_final_word_metrics(
+            "m1", final_string, content_words=120, banner_words=0,
+            reference_words=reference_words,
+        )
+
+        meta = controller.context_manager._mc.metadata
+        exceeded = meta["word_budget_exceeded"]
+        self.assertIsNotNone(exceeded)
+        # THE core assertion: final_file_words is EXACTLY the stored string length.
+        self.assertEqual(exceeded["final_file_words"], len(final_string.split()))
+        self.assertEqual(exceeded["content_words"], 120)
+        self.assertEqual(exceeded["budget_max"], 100)
+        self.assertEqual(exceeded["over_by"], 20)
+        self.assertEqual(exceeded["reference_words"], reference_words)
+        self.assertEqual(exceeded["banner_words"], 0)
+        # breakdown sums to final_file_words (heading_words is the residual).
+        self.assertEqual(
+            exceeded["content_words"] + exceeded["heading_words"]
+            + exceeded["banner_words"] + exceeded["reference_words"],
+            exceeded["final_file_words"],
+        )
+        self.assertTrue(meta.get("completed_with_word_budget_warning"))
+
+    async def test_banner_words_tracked_separately_from_headings(self):
+        """When a banner is present it is counted as banner_words, NOT folded
+        into heading_words (review round 4 complaint)."""
+        content_body = _para(120)
+        banner = "> Hinweis zur Wortanzahl. Bitte kuerzen.\n\n"
+        final_string = banner + content_body
+
+        controller = _MetricsController({
+            "word_budget": {"total_word_budget": {"min": 1, "target": 1, "max": 100}}
+        })
+        rg = ReportGenerator(controller)
+        banner_words = len(banner.split())
+        await rg._persist_final_word_metrics(
+            "m1", final_string, content_words=120, banner_words=banner_words,
+            reference_words=0,
+        )
+        exceeded = controller.context_manager._mc.metadata["word_budget_exceeded"]
+        self.assertEqual(exceeded["banner_words"], banner_words)
+        self.assertGreater(banner_words, 0)
+        self.assertEqual(exceeded["final_file_words"], len(final_string.split()))
+        # breakdown still sums exactly.
+        self.assertEqual(
+            exceeded["content_words"] + exceeded["heading_words"]
+            + exceeded["banner_words"] + exceeded["reference_words"],
+            exceeded["final_file_words"],
+        )

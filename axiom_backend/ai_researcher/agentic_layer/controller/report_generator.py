@@ -402,6 +402,77 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
         logger.info(f"Built author-year bibliography with {len(entries)} entries for mission {mission_id}")
         return bibliography
 
+    async def _persist_final_word_metrics(
+        self, mission_id: str, final_string: str,
+        content_words: int, banner_words: int, reference_words: int,
+    ) -> None:
+        """Persist the word-budget metrics computed from the EXACT final report
+        string (review round 4).
+
+        This MUST be called right before ``store_final_report()`` with the same
+        string that is stored, so ``final_file_words`` always equals
+        ``len(stored_report.split())`` — the report gains a title, literature
+        portfolio and references section AFTER the early budget decision, so any
+        earlier measurement would undercount the stored file.
+
+        The over/under DECISION is still based on ``content_words`` (the budget /
+        Umfang describes section content, not headings/title/references). The
+        breakdown components are best-effort: ``heading_words`` is the residual
+        (section headings + title + anything not accounted as content/banner/
+        reference). ``final_file_words`` is exact.
+        """
+        try:
+            mc = self.controller.context_manager.get_mission_context(mission_id)
+            _wb = ((mc.metadata if mc else {}) or {}).get("word_budget") or {}
+            _total_max = ((_wb.get("total_word_budget") or {})).get("max")
+            if not _total_max:
+                return  # no budget configured -> no metrics
+            final_file_words = len(final_string.split())
+            heading_words = max(
+                0, final_file_words - content_words - banner_words - reference_words
+            )
+            if content_words > _total_max:
+                over_by = content_words - _total_max
+                logger.warning(
+                    "FINAL WORD-BUDGET: mission %s over budget — content %d / max %d "
+                    "(file %d = content %d + headings %d + banner %d + refs %d). "
+                    "Marking completed_with_word_budget_warning.",
+                    mission_id, content_words, _total_max, final_file_words,
+                    content_words, heading_words, banner_words, reference_words,
+                )
+                await self.controller.context_manager.update_mission_metadata(
+                    mission_id,
+                    {
+                        "word_budget_exceeded": {
+                            "content_words": content_words,
+                            "heading_words": heading_words,
+                            "banner_words": banner_words,
+                            "reference_words": reference_words,
+                            "final_file_words": final_file_words,
+                            "budget_max": _total_max,
+                            "over_by": over_by,
+                        },
+                        "completed_with_word_budget_warning": True,
+                    },
+                )
+            else:
+                logger.info(
+                    "FINAL WORD-BUDGET: mission %s OK — content %d / max %d "
+                    "(file %d = content %d + headings %d + banner %d + refs %d).",
+                    mission_id, content_words, _total_max, final_file_words,
+                    content_words, heading_words, banner_words, reference_words,
+                )
+                # Clear stale exceeded/warning flags from a prior over-budget run.
+                await self.controller.context_manager.update_mission_metadata(
+                    mission_id,
+                    {
+                        "word_budget_exceeded": None,
+                        "completed_with_word_budget_warning": None,
+                    },
+                )
+        except Exception as _wbm_err:
+            logger.warning("Final word-budget metrics persistence skipped: %s", _wbm_err)
+
     async def process_citations(
         self,
         mission_id: str,
@@ -521,15 +592,19 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
         # Some LLMs use 【】 instead of []
         full_draft = full_draft.replace('【', '[').replace('】', ']')
 
-        # Aggregate word-budget guard. The budget (Umfang) describes section
-        # CONTENT, so the decision uses _content_words (stored section text only,
-        # no headings/numbering — review finding 1). We keep separate metrics:
-        # content_words (budget-relevant), heading_words (assembled file minus
-        # content), and final_file_words (the actual stored file incl. headings
-        # and the warning banner if any). Only when the CONTENT itself exceeds
-        # total_max do we flag over-budget — headings no longer trigger a false
-        # positive (NexMach: ~3,290 content + ~80 heading words vs max 3,300).
-        _budget_overrun = None
+        # Aggregate word-budget DECISION (the metric PERSISTENCE is deferred to
+        # _persist_final_word_metrics(), called right before each
+        # store_final_report() with the EXACT final string — review round 4: the
+        # report gains a title, literature portfolio and references section AFTER
+        # this point, so measuring final_file_words here would undercount the
+        # stored file). The budget (Umfang) describes section CONTENT, so the
+        # over/under decision is based on _content_words (stored section text
+        # only, no headings/numbering). Only when CONTENT exceeds total_max do we
+        # prepend a visible banner (banner_words tracked separately so
+        # heading_words is not polluted by it).
+        _banner_words = 0
+        _over_content = False
+        _total_max = None
         try:
             _wb = (mission_context.metadata or {}).get("word_budget") or {}
             _wb_total = (_wb.get("total_word_budget") or {})
@@ -542,7 +617,7 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
                         "AGGREGATE WORD-BUDGET GUARD: mission %s CONTENT is %d "
                         "words, HARD total max is %d — over by %d even after the "
                         "per-section trim pass (section budgets likely sum > total). "
-                        "Marking completed_with_word_budget_warning.",
+                        "Will mark completed_with_word_budget_warning.",
                         mission_id, _content_words, _total_max, _budget_overrun,
                     )
                     # Visible banner uses the CONTENT word count (what the user
@@ -555,42 +630,15 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
                         f"Bitte vor Abgabe entsprechend kürzen.\n\n"
                     )
                     full_draft = _banner + full_draft
-                # Final file word count (post-banner if a banner was prepended).
-                _final_file_words = len(full_draft.split())
-                _heading_words = max(0, _final_file_words - _content_words)
-                if _over_content:
-                    await self.controller.context_manager.update_mission_metadata(
-                        mission_id,
-                        {
-                            "word_budget_exceeded": {
-                                "content_words": _content_words,
-                                "heading_words": _heading_words,
-                                "final_file_words": _final_file_words,
-                                "budget_max": _total_max,
-                                "over_by": _budget_overrun,
-                            },
-                            "completed_with_word_budget_warning": True,
-                        },
-                    )
+                    _banner_words = len(_banner.split())
                 else:
                     logger.info(
-                        "Aggregate word-budget OK: mission %s content %d words "
-                        "(file %d incl. %d heading) / max %d.",
-                        mission_id, _content_words, _final_file_words,
-                        _heading_words, _total_max,
-                    )
-                    # Review finding 3: a retry/regenerated report that is now within
-                    # budget must NOT keep stale exceeded/warning flags from a
-                    # previous over-budget run. Explicitly clear them.
-                    await self.controller.context_manager.update_mission_metadata(
-                        mission_id,
-                        {
-                            "word_budget_exceeded": None,
-                            "completed_with_word_budget_warning": None,
-                        },
+                        "Aggregate word-budget OK so far: mission %s content %d "
+                        "words / max %d (final metrics persisted after assembly).",
+                        mission_id, _content_words, _total_max,
                     )
         except Exception as _wbg_err:
-            logger.warning("Aggregate word-budget guard skipped: %s", _wbg_err)
+            logger.warning("Aggregate word-budget decision skipped: %s", _wbg_err)
         
         # Get mission context to check for simple reference mappings
         has_simple_refs = False
@@ -701,7 +749,18 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
                 )
                 if portfolio_md:
                     full_draft = full_draft.strip() + portfolio_md
-                await self.controller.context_manager.store_final_report(mission_id, full_draft.strip())
+                _ay_final = full_draft.strip()
+                # Review round 4: persist metrics from the EXACT final string
+                # (incl. bibliography + portfolio), so final_file_words matches
+                # the stored report. bibliography + portfolio count as references.
+                _ay_ref_words = (
+                    (len(bibliography.split()) if bibliography else 0)
+                    + (len(portfolio_md.split()) if portfolio_md else 0)
+                )
+                await self._persist_final_word_metrics(
+                    mission_id, _ay_final, _content_words, _banner_words, _ay_ref_words,
+                )
+                await self.controller.context_manager.store_final_report(mission_id, _ay_final)
                 await self.controller.context_manager.update_mission_status(mission_id, "completed")
                 await self.controller.context_manager.log_execution_step(
                     mission_id, "AgentController", "Process Citations",
@@ -712,7 +771,13 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
                 return True
 
             logger.info(f"No valid citation placeholders containing known document IDs found in the draft for mission {mission_id}.")
-            await self.controller.context_manager.store_final_report(mission_id, full_draft.strip())
+            _nc_final = full_draft.strip()
+            # Review round 4: persist metrics from the EXACT final string (no
+            # references/title appended in this branch -> reference_words 0).
+            await self._persist_final_word_metrics(
+                mission_id, _nc_final, _content_words, _banner_words, 0,
+            )
+            await self.controller.context_manager.store_final_report(mission_id, _nc_final)
             await self.controller.context_manager.update_mission_status(mission_id, "completed")
             await self.controller.context_manager.log_execution_step(
                 mission_id, "AgentController", "Process Citations",
@@ -998,11 +1063,14 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
 
         # Prepend Report Title
         final_report_string = ""
+        _title_words = 0
         mission_context_for_title = self.controller.context_manager.get_mission_context(mission_id)  # Re-fetch context
         if mission_context_for_title and mission_context_for_title.metadata:
             report_title = mission_context_for_title.metadata.get("report_title")
             if report_title:
-                final_report_string += f"# {report_title}\n\n"
+                _title_block = f"# {report_title}\n\n"
+                final_report_string += _title_block
+                _title_words = len(_title_block.split())
                 logger.info(f"Prepending report title: '{report_title}'")
             else:
                 logger.warning(f"Report title not found in metadata for mission {mission_id}. Final report will not have a title.")
@@ -1024,7 +1092,19 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
 
         final_report_string += body_with_portfolio + references_section
 
-        await self.controller.context_manager.store_final_report(mission_id, final_report_string.strip())
+        _cite_final = final_report_string.strip()
+        # Review round 4: persist metrics from the EXACT final string, which in
+        # this branch includes a title, portfolio and references section. Those
+        # count as reference/overhead words (title + portfolio + refs).
+        _cite_ref_words = (
+            _title_words
+            + (len(portfolio_md.split()) if portfolio_md else 0)
+            + len(references_section.split())
+        )
+        await self._persist_final_word_metrics(
+            mission_id, _cite_final, _content_words, _banner_words, _cite_ref_words,
+        )
+        await self.controller.context_manager.store_final_report(mission_id, _cite_final)
         await self.controller.context_manager.update_mission_status(mission_id, "completed")
         logger.info(f"Citation processing complete. {num_references} unique references generated for mission {mission_id}.")
         await self.controller.context_manager.log_execution_step(
