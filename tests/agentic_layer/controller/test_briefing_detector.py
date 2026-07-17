@@ -697,3 +697,185 @@ def test_detect_conflicts_no_false_positive_on_word_counts():
     )
     conflicts = _detect_conflicts(msg)
     assert conflicts == []
+
+
+# ---------------------------------------------------------------------------
+# Case-assumption CORRECTION resolution (review finding 1)
+# ---------------------------------------------------------------------------
+# The defining bug: the old approach concatenated the correction onto the
+# original briefing text, so BOTH the stale figure (19 Mio.) and the corrected
+# figure (40 Mio.) were still present and the conflict could never resolve.
+# resolve_case_assumptions treats the follow-up as an authoritative override
+# for the fields it mentions.
+
+from ai_researcher.agentic_layer.controller.utils.briefing_detector import (  # noqa: E402
+    resolve_case_assumptions,
+    extract_case_assumptions,
+)
+
+
+def test_resolve_conflict_turnover_correction_resolves():
+    """A follow-up giving the authoritative turnover resolves the conflict."""
+    merged, remaining = resolve_case_assumptions(
+        _CONFLICT_BRIEFING,
+        "Jahresumsatz ist 40 Mio. Euro, die 470.000 \u20ac pro Mitarbeitendem "
+        "sind die bewusste Fallannahme.",
+    )
+    # The follow-up's turnover (40 Mio) REPLACED the original's 19 Mio, so the
+    # per-employee\u00d7headcount math is now consistent (470k\u00d785 \u2248 40 Mio).
+    assert remaining == [], f"expected resolution, got {remaining}"
+    # The merged turnover must be the CORRECTED value, not the stale one.
+    assert merged.has_turnover()
+    assert merged.turnovers[0][0] == 40_000_000
+    assert merged.turnovers[0][0] != 19_000_000
+
+
+def test_resolve_conflict_old_concat_approach_still_conflicts():
+    """Regression guard: the naive text-concatenation approach the old code used
+    must STILL report a conflict (this is the bug finding 1 fixes)."""
+    followup = ("Jahresumsatz ist 40 Mio. Euro, die 470.000 \u20ac pro "
+                "Mitarbeitendem sind die bewusste Fallannahme.")
+    conflicts = _detect_conflicts(_CONFLICT_BRIEFING + "\n\n" + followup)
+    assert conflicts, "concat approach must still conflict (bug reproduction)"
+
+
+def test_resolve_conflict_non_correction_keeps_conflict():
+    """A follow-up that does NOT mention turnover must keep the conflict."""
+    merged, remaining = resolve_case_assumptions(
+        _CONFLICT_BRIEFING,
+        "Ich m\u00f6chte weitere Quellen zu NexMach hinzuf\u00fcgen.",
+    )
+    assert remaining, "a non-correction follow-up must not clear the conflict"
+    # Untouched fields keep the original values.
+    assert merged.has_per_employee()
+    assert merged.per_employees[0][0] == 470_000
+
+
+def test_resolve_conflict_only_per_employee_correction():
+    """A follow-up giving only the per-employee figure overrides just that field."""
+    merged, remaining = resolve_case_assumptions(
+        _CONFLICT_BRIEFING,
+        "Die korrekte Umsatzleistung betr\u00e4gt 220.000 Euro pro Mitarbeitendem.",
+    )
+    # Original turnover (19 Mio) and headcount (85) kept; per-employee replaced.
+    assert merged.has_turnover() and merged.turnovers[0][0] == 19_000_000
+    assert merged.has_headcount() and merged.headcounts[0][0] == 85
+    assert merged.per_employees[0][0] == 220_000
+    # 220k\u00d785 = 18.7M \u2248 19M -> now consistent (within 25%), no conflict.
+    assert remaining == [], f"expected consistency, got {remaining}"
+
+
+def test_extract_case_assumptions_per_employee_not_counted_as_turnover():
+    """A per-employee metric ('470.000 Euro pro Mitarbeitendem') must NOT be
+    double-counted as a company-total turnover figure (that previously caused
+    both false conflicts and a mis-captured '1')."""
+    ca = extract_case_assumptions(_CONFLICT_BRIEFING)
+    # Only the company-total turnover (19 Mio) should appear as a turnover.
+    turnover_values = [v for v, _ in ca.turnovers]
+    assert 19_000_000 in turnover_values
+    assert 470_000 not in turnover_values, "per-employee figure leaked into turnovers"
+    assert ca.has_per_employee() and ca.per_employees[0][0] == 470_000
+    assert ca.has_headcount() and ca.headcounts[0][0] == 85
+
+
+# ---------------------------------------------------------------------------
+# Integration: full create -> conflict -> correct -> resolved sequence
+# (review finding 1). Exercises the metadata-state transitions the chat flow
+# performs, using the pure _resolve_awaiting_clarification helper plus the
+# /start guard's view of the metadata, so the whole sequence is covered without
+# a live controller/database.
+# ---------------------------------------------------------------------------
+
+from ai_researcher.agentic_layer.controller.user_interaction import (  # noqa: E402
+    UserInteractionManager,
+)
+
+
+def test_full_sequence_create_conflict_correct_resolved():
+    """End-to-end metadata sequence:
+      1. briefing classified -> awaiting_clarification set, conflicts stored,
+         NO initial_questions staged (finding 2).
+      2. user correction follow-up -> _resolve_awaiting_clarification returns
+         an update that clears BOTH flags and carries the corrected overlay
+         (finding 1).
+      3. after applying the update, the /start guard sees no
+         awaiting_clarification -> start would succeed; the overlay exposes the
+         CORRECTED turnover (40 Mio), not the stale original (19 Mio).
+    """
+    # A briefing that is BOTH structured (has Gliederung, word count, task)
+    # AND has contradictory case assumptions (19 Mio vs 470k*85). The conflict
+    # detector only runs for briefings classified as structured.
+    briefing = _CONFLICT_BRIEFING + "\n" + (
+        "\nDie Hausarbeit umfasst ca. 3.000 W\u00f6rter (Hausarbeit).\n\n"
+        "# Verbindliche Gliederung\n"
+        "## 1. Einleitung\n"
+        "## 2. Analyse\n"
+        "## 3. Fazit\n"
+        "Literaturportfolio, APA-7, Quellenangaben verpflichtend."
+    )
+    # --- Step 1: classify the briefing ---
+    classification = classify_assignment(briefing)
+    assert classification["specificity"] == "structured_needs_clarification", \
+        f"step 1: expected structured_needs_clarification, got {classification['specificity']}"
+    conflicts = classification["case_assumption_conflicts"]
+    assert conflicts, "step 1: conflict must be detected"
+
+    # Metadata as the chat flow would persist it on the HARD STOP branch
+    # (finding 2: initial_questions is NOT staged while blocked).
+    metadata = {
+        "briefing_style": "structured",
+        "full_briefing": briefing,
+        "case_assumption_conflicts": conflicts,
+        "awaiting_clarification": conflicts,
+    }
+    assert "initial_questions" not in metadata, "finding 2: no questions while blocked"
+
+    # --- Step 2: user submits the authoritative correction ---
+    correction = ("Jahresumsatz ist 40 Mio. Euro, die 470.000 \u20ac pro "
+                 "Mitarbeitendem sind die bewusste Fallannahme.")
+    update = UserInteractionManager._resolve_awaiting_clarification(metadata, correction)
+    assert update is not None, "step 2: correction must resolve the conflict"
+    # Both flags cleared (finding 1).
+    assert update["awaiting_clarification"] is None
+    assert update["case_assumption_conflicts"] == []
+    overlay = update["case_assumption_corrections"]
+    assert overlay["correction_text"] == correction
+
+    # --- Step 3: apply the update and assert the /start guard + planner view ---
+    metadata.update(update)
+    # /missions/{id}/start checks `awaiting_clarification`; it is now cleared.
+    assert not metadata.get("awaiting_clarification"), \
+        "step 3: start guard must pass after resolution"
+    # The planner overlay must expose the CORRECTED turnover (40 Mio), and must
+    # NOT carry the stale contradictory turnover (19 Mio).
+    turnovers = overlay["resolved_assumptions"]["turnovers"]
+    assert any(t["value"] == 40_000_000 for t in turnovers), \
+        "planner overlay must carry the corrected 40 Mio turnover"
+    assert all(t["value"] != 19_000_000 for t in turnovers), \
+        "planner overlay must NOT carry the stale 19 Mio turnover"
+
+
+def test_full_sequence_non_correction_stays_blocked():
+    """A follow-up that does not address the conflict must leave the mission
+    blocked (awaiting_clarification stays set, /start guard still rejects)."""
+    briefing = _CONFLICT_BRIEFING + "\n" + (
+        "\nDie Hausarbeit umfasst ca. 3.000 W\u00f6rter (Hausarbeit).\n\n"
+        "# Verbindliche Gliederung\n"
+        "## 1. Einleitung\n## 2. Analyse\n## 3. Fazit\n"
+        "Literaturportfolio, APA-7."
+    )
+    classification = classify_assignment(briefing)
+    conflicts = classification["case_assumption_conflicts"]
+    assert conflicts
+    metadata = {
+        "briefing_style": "structured",
+        "full_briefing": briefing,
+        "case_assumption_conflicts": conflicts,
+        "awaiting_clarification": conflicts,
+    }
+    update = UserInteractionManager._resolve_awaiting_clarification(
+        metadata, "Bitte verwende APA-7 als Zitierstil."
+    )
+    assert update is None, "non-correction must not clear the conflict"
+    assert metadata.get("awaiting_clarification"), \
+        "mission must stay blocked"

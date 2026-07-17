@@ -93,7 +93,11 @@ def _distribute_word_budgets_impl(
     # parent-intro slice first (review finding 3) so the parent's synthesis text
     # + the children's budgets together stay within the chapter budget, rather
     # than the children consuming the full amount and the parent intro adding on
-    # top (the NexMach blowup pattern).
+    # top (the NexMach blowup pattern). We also SUBTRACT the budgets of any
+    # children that already have an explicit budget before dividing the
+    # remainder among the IMPLICIT children only — otherwise the sum of
+    # (explicit children + distributed children + intro) exceeds the parent
+    # budget (review finding 4: 220+220+184+97 = 721 > 650).
     def _distribute_parent(lst):
         for sec in lst:
             if sec.subsections:
@@ -104,30 +108,56 @@ def _distribute_word_budgets_impl(
                 if parent_has_explicit and children_needing:
                     total_min = sec.target_words_min or 0
                     total_max = sec.target_words_max or 0
-                    n = len(sec.subsections)
-                    if n > 0 and total_max > 0:
+                    # Implicit children = those without a budget; explicit = rest.
+                    n_implicit = len(children_needing)
+                    if total_max > 0:
                         # Reserve a short intro slice for the parent synthesis
-                        # (~15% of the chapter, capped at 120 words), then split
-                        # the remainder across the subsections.
+                        # (~15% of the chapter, capped at 120 words).
                         intro_max = min(120, max(40, int(total_max * 0.15)))
+                        # Subtract budgets of EXPLICITLY-allocated children so the
+                        # remainder is what the implicit children may share.
+                        explicit_max = sum(
+                            (c.target_words_max or 0)
+                            for c in sec.subsections
+                            if c.target_words_max is not None
+                        )
+                        explicit_min = sum(
+                            (c.target_words_min or 0)
+                            for c in sec.subsections
+                            if c.target_words_min is not None
+                        )
+                        remainder_min = max(0, total_min - intro_max - explicit_min)
+                        remainder_max = max(n_implicit * 60, total_max - intro_max - explicit_max)
                         sec.target_words_max = intro_max
                         sec.budget_source = (
                             f"synthesis-intro reserved ({intro_max}w), "
                             f"remainder distributed to subsections"
                         )
-                        remainder_min = max(0, total_min - intro_max)
-                        remainder_max = max(n * 60, total_max - intro_max)
-                        per_min = max(60, remainder_min // n)
-                        per_max = max(80, remainder_max // n)
-                        for c in sec.subsections:
-                            if c.target_words_max is None:
-                                c.target_words_min = per_min
-                                c.target_words_max = per_max
-                                c.budget_source = (
-                                    f"distributed from parent [{_assign(sec)}] "
-                                    f"(chapter {total_min}-{total_max}, intro "
-                                    f"{intro_max}w reserved, / {n})"
-                                )
+                        per_min = max(60, remainder_min // n_implicit) if n_implicit else 0
+                        per_max = max(80, remainder_max // n_implicit) if n_implicit else 0
+                        for c in children_needing:
+                            c.target_words_min = per_min
+                            c.target_words_max = per_max
+                            c.budget_source = (
+                                f"distributed from parent [{_assign(sec)}] "
+                                f"(chapter {total_min}-{total_max}, intro "
+                                f"{intro_max}w reserved, explicit children "
+                                f"{explicit_max}w, / {n_implicit})"
+                            )
+                        # Invariant check (review finding 4): parent_intro +
+                        # sum(child_max) must not exceed the chapter max.
+                        _sum_max = intro_max + sum(
+                            (c.target_words_max or 0) for c in sec.subsections
+                        )
+                        if _sum_max > total_max:
+                            logger.warning(
+                                "_distribute_word_budgets: parent '%s' budget "
+                                "invariant violated: intro+children max=%d > "
+                                "chapter max=%d (explicit children may have "
+                                "over-allocated). Consider tightening the "
+                                "explicit section budgets.",
+                                getattr(sec, "title", "?"), _sum_max, total_max,
+                            )
                 _distribute_parent(sec.subsections)
 
     _distribute_parent(sections)
@@ -344,6 +374,34 @@ Remember: Keep it focused, logical, and actionable. Do NOT include section IDs -
             full_briefing.strip(),
             f"--- END USER BRIEFING ---",
         ])
+        # Case-assumption correction overlay (review finding 1): when the user
+        # resolved a 'feste Fallannahmen' conflict via chat, the original
+        # briefing text still contains the OLD (contradictory) figures. We
+        # inject the user's authoritative correction here so the planner/
+        # writer uses the corrected figures, not the stale ones. This overlay
+        # OVERRIDES any conflicting number in the verbatim briefing above.
+        corrections = metadata.get("case_assumption_corrections") or {}
+        if corrections:
+            parts.append("")
+            parts.append(
+                "!!! CASE-ASSUMPTION CORRECTION (user-confirmed; OVERRIDES the "
+                "conflicting figures in the briefing above) !!!"
+            )
+            parts.append(f"User's correction (verbatim): {corrections.get('correction_text') or ''}")
+            resolved = corrections.get("resolved_assumptions") or {}
+            if resolved.get("turnovers"):
+                tv = resolved["turnovers"][0]
+                parts.append(f"  Authoritative turnover/Umsatz: {tv.get('value')} ({tv.get('raw')})")
+            if resolved.get("per_employees"):
+                pe = resolved["per_employees"][0]
+                parts.append(f"  Authoritative per-employee revenue: {pe.get('value')} ({pe.get('raw')})")
+            if resolved.get("headcounts"):
+                hc = resolved["headcounts"][0]
+                parts.append(f"  Authoritative headcount: {hc.get('value')} ({hc.get('raw')})")
+            parts.append(
+                "Use ONLY these corrected figures throughout the report; ignore any "
+                "contradictory figure that still appears in the verbatim briefing."
+            )
         primary_q = metadata.get("primary_leitfrage") or metadata.get("primary_question")
         if primary_q:
             parts.append("")

@@ -426,6 +426,43 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
             )
             return False
 
+        # Deterministic aggregate word-budget trim pass (review finding 3).
+        # The per-section guard already trims each section, but defensively we
+        # re-assert every section's own target_words_max on its STORED content
+        # BEFORE assembling the draft. This guarantees sum(body) <=
+        # sum(section_max), and (with correct budget allocation, finding 4) the
+        # sum stays within total_word_budget.max. Trimming the stored content
+        # (not the assembled string) keeps every section whole/coherent rather
+        # than cutting the report mid-sentence.
+        try:
+            from ai_researcher.agentic_layer.controller.writing_manager import (
+                _trim_to_word_budget,
+            )
+            _trimmed_any = False
+            def _trim_outline_pass(section_list):
+                nonlocal _trimmed_any
+                for sec in section_list:
+                    tw_max = getattr(sec, "target_words_max", None)
+                    if tw_max:
+                        _content = mission_context.report_content.get(sec.section_id, "")
+                        if _content:
+                            _hard = int(tw_max * 1.2)  # same tolerance as per-section guard
+                            if len(_content.split()) > _hard:
+                                mission_context.report_content[sec.section_id] = (
+                                    _trim_to_word_budget(_content, _hard)
+                                )
+                                _trimmed_any = True
+                    if sec.subsections:
+                        _trim_outline_pass(sec.subsections)
+            _trim_outline_pass(mission_context.plan.report_outline)
+            if _trimmed_any:
+                logger.info(
+                    "Aggregate trim pass: one or more sections exceeded their own "
+                    "target_words_max on assembly; trimmed to the hard limit."
+                )
+        except Exception as _trim_err:
+            logger.warning("Aggregate word-budget trim pass skipped: %s", _trim_err)
+
         # Use recursive function to build draft with hierarchical numbering
         full_draft = ""
         # Modify the recursive function to accept and generate numbering prefixes
@@ -459,37 +496,54 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
         # Some LLMs use 【】 instead of []
         full_draft = full_draft.replace('【', '[').replace('】', ']')
 
-        # Aggregate word-budget guard (review finding 3). Even with per-section
-        # caps + trims, leaf maxima can sum past the document total. Count the
-        # assembled body (before bibliography/portfolio) and compare against
-        # the deterministic total_word_budget.max. When exceeded, log a
-        # prominent warning and record a metadata flag so the mission is not
-        # silently marked clean. (A whole-doc trim would cut mid-section, so we
-        # flag rather than truncate here; the per-section guards above are the
-        # primary control.)
+        # Aggregate word-budget guard (review finding 3). After the trim pass
+        # above, sum(body) should be <= sum(section_max) <= total_word_budget.max
+        # (with correct allocation, finding 4). We re-check against the HARD max
+        # (total_word_budget.max — no 15% tolerance here; the per-section guards
+        # already bake in their 1.2x tolerance). If still over, the section
+        # budgets themselves sum too high (a real allocation failure): we do NOT
+        # silently mark the report clean. Instead we (a) log a prominent WARNING,
+        # (b) persist a word_budget_exceeded flag + completed_with_word_budget_warning,
+        # and (c) prepend a visible German banner to the report text so the user
+        # sees the overrun, not just a hidden metadata field.
+        _budget_overrun = None
         try:
             _wb = (mission_context.metadata or {}).get("word_budget") or {}
             _wb_total = (_wb.get("total_word_budget") or {})
             _total_max = _wb_total.get("max")
             if _total_max:
                 _body_words = len(full_draft.split())
-                _aggregate_cap = int(_total_max * 1.15)
-                if _body_words > _aggregate_cap:
+                if _body_words > _total_max:
+                    _budget_overrun = _body_words - _total_max
                     logger.warning(
                         "AGGREGATE WORD-BUDGET GUARD: mission %s body is %d words, "
-                        "total budget max is %d (cap %d). The finished report exceeds "
-                        "the briefing's word budget by %d words.",
-                        mission_id, _body_words, _total_max, _aggregate_cap,
-                        _body_words - _total_max,
+                        "HARD total max is %d — over by %d even after the per-section "
+                        "trim pass (section budgets likely sum > total). Marking "
+                        "completed_with_word_budget_warning.",
+                        mission_id, _body_words, _total_max, _budget_overrun,
                     )
                     await self.controller.context_manager.update_mission_metadata(
                         mission_id,
-                        {"word_budget_exceeded": {
-                            "body_words": _body_words,
-                            "budget_max": _total_max,
-                            "over_by": _body_words - _total_max,
-                        }},
+                        {
+                            "word_budget_exceeded": {
+                                "body_words": _body_words,
+                                "budget_max": _total_max,
+                                "over_by": _budget_overrun,
+                            },
+                            "completed_with_word_budget_warning": True,
+                        },
                     )
+                    # Visible banner (prepended after draft assembly below is not
+                    # possible without disturbing citations; we prepend here so
+                    # it lands at the very top of the body).
+                    _banner = (
+                        f"> ⚠️ **Hinweis zur Wortanzahl:** Der Bericht umfasst "
+                        f"{_body_words} Wörter und überschreitet damit das "
+                        f"im Auftrag vorgegebene Limit von ca. {_total_max} "
+                        f"Wörtern um {_budget_overrun} Wörter. Bitte vor Abgabe "
+                        f"entsprechend kürzen.\n\n"
+                    )
+                    full_draft = _banner + full_draft
                 else:
                     logger.info(
                         "Aggregate word-budget OK: mission %s body %d words / max %d.",

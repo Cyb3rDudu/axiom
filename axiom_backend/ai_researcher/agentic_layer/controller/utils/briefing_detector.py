@@ -17,7 +17,8 @@ All pure / testable, no LLM involved.
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -103,20 +104,28 @@ def detect_staged_output(message: str) -> bool:
     return bool(_STAGED_OUTPUT_RE.search(message))
 
 
-# A monetary figure tagged as a turnover/revenue/per-employee metric. We capture
-# the number + the unit scale so two statements about the same metric can be
-# compared. German uses Mio./Million and pro Mitarbeitendem/per employee.
+# A monetary figure tagged as a turnover/revenue metric. We capture the
+# keyword, number + unit scale so two statements about the same metric can be
+# compared. German uses Mio./Million (jahresumsatz/umsatz/erträge) and English
+# revenue/turnover. NOTE: we deliberately do NOT use a negative lookahead to
+# exclude per-employee figures here — a lookbehind/ahead window large enough to
+# catch '470.000 Euro pro Mitarbeitendem' also caught unrelated per-employee
+# lines ~40 chars later and rejected the CORRECT '19 Mio.' turnover match (it
+# shrank the capture to '1'). Instead, per-employee matches are filtered AFTER
+# extraction in extract_case_assumptions() by checking the SAME clause for a
+# 'pro/per/je Mitarbeitend' marker.
 _TURNOVER_RE = re.compile(
     r"(?im)"
     r"(?:jahresumsatz|umsatz|ertr(?:a|ä)ge|revenue|turnover)"
     r"[^\n]{0,40}?"
     r"(\d[\d.,]*)\s*"
     r"(mio\.|million(en)?|m\.|mrd\.|milliarde(n)?|billion(en)?|eur[ o]?|€)?"
-    # Negative lookahead: do NOT match a 'turnover' figure whose same line
-    # also scales it per employee (e.g. 'Umsatzleistung 470.000 Euro pro
-    # Mitarbeitendem' is a per-head metric, not the company total — that's
-    # handled by _PER_EMPLOYEE_RE). Prevents false conflict flags.
-    r"(?![^\n]{0,40}(?:pro|per|/|je)\s*(?:mitarbeitend|beschäftigt|employee))"
+)
+# Marker that a turnover candidate is actually a per-employee metric. Checked
+# within a SHORT window (same clause) AFTER the number, so an unrelated
+# per-employee line further down is not mis-attributed.
+_PER_EMPLOYEE_AFTER_RE = re.compile(
+    r"(?im)\s*(?:eur[ o]?|€)?\s*(?:pro|per|/|je)\s*(?:mitarbeitend|besch(?:ä|ae)ftigt|employee)"
 )
 _PER_EMPLOYEE_RE = re.compile(
     r"(?im)"
@@ -127,13 +136,86 @@ _HEADCOUNT_RE = re.compile(
 )
 
 
-def detect_case_assumption_conflicts(message: str) -> List[str]:
-    """Detect contradictory 'feste Fallannahmen' in a case-study briefing.
+@dataclass
+class CaseAssumptions:
+    """Structured extraction of the 'feste Fallannahmen' in a case-study briefing.
 
-    Returns a list of human-readable conflict descriptions. When non-empty,
-    classify_assignment should downgrade specificity to
-    'structured_needs_clarification' so the user resolves the conflict before
-    the mission starts (the writer must not silently pick one figure).
+    Each field holds a list of ``(normalised_value, raw_text)`` pairs. We keep
+    ALL occurrences (not just one) so conflict detection can compare multiple
+    stated figures, and so a user correction can REPLACE every value for a
+    field it mentions (resolving the conflict deterministically rather than by
+    string concatenation — review finding 1).
+    """
+    turnovers: List[Tuple[int, str]] = field(default_factory=list)
+    per_employees: List[Tuple[int, str]] = field(default_factory=list)
+    headcounts: List[Tuple[int, str]] = field(default_factory=list)
+
+    def has_turnover(self) -> bool:
+        return bool(self.turnovers)
+
+    def has_per_employee(self) -> bool:
+        return bool(self.per_employees)
+
+    def has_headcount(self) -> bool:
+        return bool(self.headcounts)
+
+
+def _normalise_turnover(raw_num: str, unit: str) -> Optional[int]:
+    """Normalise a turnover token to absolute units (euros)."""
+    n = _parse_int(raw_num)
+    if n is None or n <= 0:
+        return None
+    unit = (unit or "").lower()
+    if "mio" in unit or "million" in unit or unit in ("m.",):
+        return n * 1_000_000
+    if "mrd" in unit or "milliard" in unit:
+        return n * 1_000_000_000
+    if "billion" in unit:
+        return n * 1_000_000_000_000
+    return n  # plain euros (e.g. 470.000 Euro)
+
+
+def extract_case_assumptions(message: str) -> CaseAssumptions:
+    """Extract the structured case assumptions from a briefing or correction.
+
+    Used by ``detect_case_assumption_conflicts`` and by the correction-resolution
+    flow (review finding 1): a follow-up correction is parsed with the same
+    extractor so we know precisely WHICH assumption fields it addresses, and can
+    override only those fields while leaving untouched ones in place.
+    """
+    ca = CaseAssumptions()
+    if not message:
+        return ca
+    for m in _TURNOVER_RE.finditer(message):
+        # Post-filter (was a fragile negative lookahead): a turnover candidate
+        # like 'Umsatzleistung 470.000 Euro pro Mitarbeitendem' is actually a
+        # per-employee metric, not the company total. We detect that by checking
+        # the SAME clause (a short window right after the number/unit) for a
+        # 'pro/per/je Mitarbeitend' marker. An unrelated per-employee line
+        # further down is NOT mis-attributed because the window is short.
+        tail = message[m.end(): m.end() + 30]
+        if _PER_EMPLOYEE_AFTER_RE.match(tail):
+            continue
+        value = _normalise_turnover(m.group(1), m.group(2))
+        if value is not None:
+            ca.turnovers.append((value, m.group(0).strip()))
+    for m in _PER_EMPLOYEE_RE.finditer(message):
+        n = _parse_int(m.group(1))
+        if n is not None and n > 0:
+            ca.per_employees.append((n, m.group(0).strip()))
+    for m in _HEADCOUNT_RE.finditer(message):
+        n = _parse_int(m.group(1))
+        if n is not None and n > 0:
+            ca.headcounts.append((n, m.group(0).strip()))
+    return ca
+
+
+def conflicts_in_assumptions(ca: CaseAssumptions) -> List[str]:
+    """Detect contradictory case assumptions from a structured ``CaseAssumptions``.
+
+    Pure: the same logic ``detect_case_assumption_conflicts`` used to inline, now
+    factored out so it can run on EITHER the raw text OR a corrected/merged
+    assumption set (review finding 1).
 
     Currently detects:
       - Two different annual-turnover figures for the same case company
@@ -143,32 +225,11 @@ def detect_case_assumption_conflicts(message: str) -> List[str]:
     Conservative: only flags when the gap is large (>25%) and the numbers are
     explicitly anchored to the same metric keyword.
     """
-    if not message:
-        return []
     conflicts: List[str] = []
 
     # --- Turnover conflicts: multiple distinct turnover figures ---
-    turnovers: list[tuple[int, str]] = []  # (normalised_value_in_units, raw)
-    for m in _TURNOVER_RE.finditer(message):
-        raw_num = m.group(1)
-        unit = (m.group(2) or "").lower()
-        n = _parse_int(raw_num)
-        if n is None or n <= 0:
-            continue
-        # Normalise to absolute units (Mio = *1e6, Mrd = *1e9, else raw).
-        if "mio" in unit or "million" in unit or unit in ("m.",):
-            value = n * 1_000_000
-        elif "mrd" in unit or "milliard" in unit:
-            value = n * 1_000_000_000
-        elif "billion" in unit:
-            value = n * 1_000_000_000_000
-        else:
-            value = n  # plain euros (e.g. 470.000 Euro)
-        turnovers.append((value, m.group(0).strip()))
-
-    # Keep only the distinct turnover magnitudes; compare each pair.
-    distinct = {}
-    for value, raw in turnovers:
+    distinct: Dict[int, str] = {}
+    for value, raw in ca.turnovers:
         bucket = round(value, -4)  # bucket to 10k to absorb rounding noise
         distinct.setdefault(bucket, raw)
     turnover_vals = sorted(distinct.keys())
@@ -182,14 +243,8 @@ def detect_case_assumption_conflicts(message: str) -> List[str]:
             )
 
     # --- Per-employee revenue vs turnover×headcount consistency ---
-    per_emp = None
-    pm = _PER_EMPLOYEE_RE.search(message)
-    if pm:
-        per_emp = _parse_int(pm.group(1))
-    headcount = None
-    hm = _HEADCOUNT_RE.search(message)
-    if hm:
-        headcount = _parse_int(hm.group(1))
+    per_emp = ca.per_employees[0][0] if ca.per_employees else None
+    headcount = ca.headcounts[0][0] if ca.headcounts else None
     if per_emp and headcount and per_emp > 0 and headcount > 0:
         implied = per_emp * headcount
         # Compare against the largest stated turnover (the 'real' one).
@@ -208,6 +263,50 @@ def detect_case_assumption_conflicts(message: str) -> List[str]:
                     )
 
     return conflicts
+
+
+def detect_case_assumption_conflicts(message: str) -> List[str]:
+    """Detect contradictory 'feste Fallannahmen' in a case-study briefing.
+
+    Returns a list of human-readable conflict descriptions. When non-empty,
+    classify_assignment should downgrade specificity to
+    'structured_needs_clarification' so the user resolves the conflict before
+    the mission starts (the writer must not silently pick one figure).
+    """
+    return conflicts_in_assumptions(extract_case_assumptions(message))
+
+
+def resolve_case_assumptions(
+    original_text: str, correction_text: str
+) -> Tuple[CaseAssumptions, List[str]]:
+    """Merge a user correction into the original case assumptions.
+
+    A correction (the user's follow-up while ``awaiting_clarification`` is set)
+    is interpreted as an AUTHORITATIVE override for every assumption field it
+    explicitly mentions. For each field the correction touches, the original's
+    values for that field are fully REPLACED (not concatenated) — so e.g. a
+    follow-up "Jahresumsatz ist 40 Mio. Euro" replaces the original "19 Mio."
+    instead of adding a second, still-contradictory figure (review finding 1:
+    the old text-concatenation approach could never resolve a conflict).
+
+    Fields the correction does NOT mention keep the original's values.
+
+    Returns ``(merged_assumptions, remaining_conflicts)``. When
+    ``remaining_conflicts`` is empty the conflict is resolved and the caller can
+    clear ``awaiting_clarification`` and persist the merged assumptions.
+    """
+    orig = extract_case_assumptions(original_text)
+    corr = extract_case_assumptions(correction_text)
+
+    # Correction overrides ONLY the fields it explicitly mentions.
+    turnovers = corr.turnovers if corr.has_turnover() else orig.turnovers
+    per_employees = corr.per_employees if corr.has_per_employee() else orig.per_employees
+    headcounts = corr.headcounts if corr.has_headcount() else orig.headcounts
+
+    merged = CaseAssumptions(
+        turnovers=turnovers, per_employees=per_employees, headcounts=headcounts
+    )
+    return merged, conflicts_in_assumptions(merged)
 
 
 def _parse_int(s: str) -> Optional[int]:
@@ -979,6 +1078,10 @@ __all__ = [
     "detect_structured_briefing",
     "detect_staged_output",
     "detect_case_assumption_conflicts",
+    "extract_case_assumptions",
+    "conflicts_in_assumptions",
+    "resolve_case_assumptions",
+    "CaseAssumptions",
     "extract_leitfragen",
     "extract_primary_leitfrage",
     "extract_outline",

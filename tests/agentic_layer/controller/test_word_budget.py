@@ -153,6 +153,55 @@ def test_distribute_word_budgets_budget_source_set():
     assert "briefing" in by_title["Einleitung"].budget_source
 
 
+def test_distribute_word_budgets_mixed_explicit_implicit_children():
+    """Review finding 4: with two explicit-budget children and one implicit
+    child, the implicit child must receive a share of the REMAINDER (parent max
+    minus intro minus explicit children), not a naive parent/n split. The
+    invariant parent_intro + sum(child_max) <= parent_max must hold.
+
+    Reproduction before the fix:
+      parent 550-650, intro 97, A=220, B=220, C=184 -> sum_max=721 > 650.
+    """
+    parent = ReportSection(
+        section_id="s2", title="Chapter", description="x",
+        research_strategy="synthesize_from_subsections",
+        target_words_min=550, target_words_max=650,
+        budget_source="briefing Umfang: 550-650 Wörter",
+        subsections=[
+            ReportSection(section_id="a", title="A", description="x",
+                          research_strategy="research_based",
+                          target_words_min=200, target_words_max=220,
+                          budget_source="briefing Umfang: 200-220"),
+            ReportSection(section_id="b", title="B", description="x",
+                          research_strategy="research_based",
+                          target_words_min=200, target_words_max=220,
+                          budget_source="briefing Umfang: 200-220"),
+            ReportSection(section_id="c", title="C", description="x",
+                          research_strategy="research_based"),  # implicit
+        ],
+    )
+    budget = {"total_word_budget": None,
+              "section_word_budgets": {"2": [550, 650]}, "budget_source": "t"}
+    required = [{"number": "2", "title": "Chapter", "level": 1}]
+    PlanningAgent._distribute_word_budgets(None, [parent], budget, required)
+
+    intro_max = parent.target_words_max
+    a = parent.subsections[0].target_words_max
+    b = parent.subsections[1].target_words_max
+    c = parent.subsections[2].target_words_max
+    sum_max = intro_max + a + b + c
+    # The hard invariant.
+    assert sum_max <= 650, (
+        f"parent budget invariant violated: intro({intro_max})+A({a})+B({b})"
+        f"+C({c}) = {sum_max} > parent max 650"
+    )
+    # The implicit child got a budget (not None) and its source records the
+    # explicit-children subtraction.
+    assert c is not None
+    assert "distributed from parent" in parent.subsections[2].budget_source
+    assert "explicit children" in parent.subsections[2].budget_source
+
+
 def test_distribute_word_budgets_noop_without_budget():
     outline = _build_outline_for_budget()
     PlanningAgent._distribute_word_budgets(None, outline, {}, None)
@@ -190,3 +239,40 @@ def test_trim_respects_hard_cap():
 def test_trim_empty_and_zero():
     assert _trim_to_word_budget("", 100) == ""
     assert _trim_to_word_budget(_TRIM_TEXT, 0) == _TRIM_TEXT
+
+
+# ---------------------------------------------------------------------------
+# writing_manager.is_empty_or_placeholder_content (review finding 5)
+# ---------------------------------------------------------------------------
+# Parent synthesis must recognise the structured '[QUELLE ERFORDERLICH]' gap
+# marker (and the legacy/error placeholders) so it does not synthesise a
+# chapter intro on top of placeholder stubs.
+
+from ai_researcher.agentic_layer.controller.writing_manager import (  # noqa: E402
+    is_empty_or_placeholder_content,
+)
+
+
+def test_placeholder_detects_source_gap_marker():
+    assert is_empty_or_placeholder_content(
+        "[QUELLE ERFORDERLICH] F\u00fcr den Abschnitt \u201eEinleitung\u201c "
+        "konnte keine ausreichende Literaturfundstelle recherchiert werden."
+    )
+
+
+def test_placeholder_detects_legacy_phrase_and_errors():
+    assert is_empty_or_placeholder_content("No information found to write this section.")
+    assert is_empty_or_placeholder_content("[Error: LLM call failed]")
+
+
+def test_placeholder_does_not_flag_real_content():
+    assert not is_empty_or_placeholder_content(
+        "NexMach erzielte im Gesch\u00e4ftsjahr 2023 einen Jahresumsatz von "
+        "rund 40 Mio. Euro [doc_abc123]."
+    )
+    assert not is_empty_or_placeholder_content("Kurzer echter Absatz.")
+
+
+def test_placeholder_detects_empty():
+    assert is_empty_or_placeholder_content("")
+    assert is_empty_or_placeholder_content("   \n  ")

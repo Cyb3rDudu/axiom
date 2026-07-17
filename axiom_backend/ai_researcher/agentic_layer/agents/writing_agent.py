@@ -1125,6 +1125,21 @@ class WritingAgent(BaseAgent):
                 if len(sub_content) > char_limit
                 else sub_content
             )
+            # Annotate placeholder/source-gap content (review finding 5) so the
+            # synthesis LLM does NOT treat a '[QUELLE ERFORDERLICH]' stub or an
+            # error placeholder as real, sourced subsection content to summarise.
+            try:
+                from ai_researcher.agentic_layer.controller.writing_manager import (
+                    is_empty_or_placeholder_content,
+                )
+                if is_empty_or_placeholder_content(sub_content):
+                    preview = (
+                        f"[HINWEIS: Dieser Unterabschnitt ist eine Quellenlücke / "
+                        f"Platzhalter und enthält KEINE verwertbaren Inhalte. "
+                        f"Nicht als Beleg zusammenfassen.] {preview}"
+                    )
+            except Exception:
+                pass
             subsection_context_str += (
                 f"### Subsection: {sub_id} ('{sub_title}')\n{preview}\n\n"
             )

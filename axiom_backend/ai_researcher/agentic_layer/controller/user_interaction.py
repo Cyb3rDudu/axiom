@@ -368,6 +368,46 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
 
         return analysis_result
 
+    @staticmethod
+    def _resolve_awaiting_clarification(metadata: dict, user_message: str) -> Optional[dict]:
+        """Decide whether a user follow-up resolves an open case-assumption conflict.
+
+        Pure/testable (no controller access). Returns the metadata update to
+        persist on resolution, or None when there is no pending conflict or the
+        follow-up did not resolve it.
+
+        The follow-up is parsed as an AUTHORITATIVE override (review finding 1):
+        every assumption field it explicitly mentions REPLACES the original's
+        values for that field (no text concatenation — concatenation could
+        never resolve a conflict because both figures would remain). On
+        resolution we clear BOTH ``awaiting_clarification`` AND
+        ``case_assumption_conflicts`` and persist the resolved assumptions +
+        the correction overlay so the planner sees the corrected figures.
+        """
+        pending = metadata.get("awaiting_clarification")
+        if not pending:
+            return None
+        full_briefing = metadata.get("full_briefing") or ""
+        from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
+            resolve_case_assumptions as _resolve,
+        )
+        merged, still_conflicting = _resolve(full_briefing, user_message)
+        if still_conflicting:
+            return None
+        resolved = {
+            "turnovers": [{"value": v, "raw": r} for v, r in merged.turnovers],
+            "per_employees": [{"value": v, "raw": r} for v, r in merged.per_employees],
+            "headcounts": [{"value": v, "raw": r} for v, r in merged.headcounts],
+        }
+        return {
+            "awaiting_clarification": None,
+            "case_assumption_conflicts": [],
+            "case_assumption_corrections": {
+                "resolved_assumptions": resolved,
+                "correction_text": user_message,
+            },
+        }
+
     async def handle_user_message(
         self,
         user_message: str,
@@ -502,34 +542,31 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
         active_goals = self.controller.context_manager.get_active_goals(mission_id) if mission_id else None
         active_thoughts = self.controller.context_manager.get_recent_thoughts(mission_id, limit=THOUGHT_PAD_CONTEXT_LIMIT) if mission_id else None
 
-        # Resolve awaiting_clarification state (review finding 2): when the user
-        # sends a follow-up to a mission blocked on case-assumption conflicts,
-        # re-check whether the conflicts are resolved. We re-run detection on the
-        # full briefing with the user's follow-up appended; if no conflict
-        # remains, clear the flag so the mission can proceed. The follow-up is
-        # typically the corrected figure ("Jahresumsatz ist 40 Mio. Euro, ...").
+        # Resolve awaiting_clarification state (review finding 1+2): when the
+        # user sends a follow-up to a mission blocked on case-assumption
+        # conflicts, re-check whether the conflicts are resolved. The decision
+        # logic lives in the pure/testable helper _resolve_awaiting_clarification()
+        # (returns the metadata update or None); we only persist the result here.
         if mission_id:
             try:
                 _mc = self.controller.context_manager.get_mission_context(mission_id)
                 _md = (getattr(_mc, "metadata", None) or {}) if _mc else {}
-                _pending_conflicts = _md.get("awaiting_clarification")
-                if _pending_conflicts:
-                    _full_briefing = _md.get("full_briefing") or ""
-                    # Append the user's correction so a resolved figure overrides the stale one.
-                    _combined = (_full_briefing + "\n\nKorrektur/Nachricht des Nutzers:\n" + (user_message or ""))
-                    from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
-                        detect_case_assumption_conflicts as _detect_conflicts,
+                _update = self._resolve_awaiting_clarification(_md, user_message or "")
+                if _update:
+                    await self.controller.context_manager.update_mission_metadata(mission_id, _update)
+                    logger.info(
+                        "Mission %s: case-assumption conflicts RESOLVED via "
+                        "follow-up (structured override). Cleared "
+                        "awaiting_clarification + case_assumption_conflicts; "
+                        "persisted resolved assumptions + correction overlay.",
+                        mission_id,
                     )
-                    _still_conflicting = _detect_conflicts(_combined)
-                    if not _still_conflicting:
-                        await self.controller.context_manager.update_mission_metadata(
-                            mission_id, {"awaiting_clarification": None}
-                        )
-                        logger.info(
-                            "Mission %s: case-assumption conflicts resolved via follow-up; "
-                            "awaiting_clarification cleared.",
-                            mission_id,
-                        )
+                elif _md.get("awaiting_clarification"):
+                    logger.info(
+                        "Mission %s: follow-up did not resolve all conflicts; "
+                        "staying blocked.",
+                        mission_id,
+                    )
             except Exception as _clar_err:
                 logger.warning("awaiting_clarification re-check failed: %s", _clar_err)
 
@@ -759,13 +796,17 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     # P1: persist the full briefing + primary Leitfrage + structured
                     # outline so downstream agents (Planning) honour it instead of
                     # the distilled one-liner.
+                    # NOTE (review finding 2): we deliberately do NOT stage
+                    # initial_questions here. Conflicts are checked below and, when
+                    # present, must block the mission WITHOUT leaving questions
+                    # persisted (otherwise the normal approve/start flow can still
+                    # fire and the hard stop is cosmetic). initial_questions is
+                    # persisted in a SEPARATE update AFTER the conflict check.
                     metadata_update = {
                         "briefing_style": "structured",
                         "full_briefing": user_message,
                         "primary_leitfrage": primary_q,
                     }
-                    if sub_qs:
-                        metadata_update["initial_questions"] = sub_qs
                     # Structured Gliederung (Finding 1): store the parsed outline as
                     # (number, title, level) records with number-free titles, so the
                     # planner can reproduce the user's hierarchy deterministically
@@ -845,6 +886,16 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                             mission_id, len(case_conflicts),
                         )
                         return agent_output
+
+                    # No conflicts (review finding 2): NOW it is safe to stage the
+                    # user's Leitfragen as initial_questions. This happens AFTER the
+                    # conflict hard-stop above, so a blocked mission never has
+                    # questions persisted and the normal approve/start flow cannot
+                    # fire while awaiting_clarification is set.
+                    if sub_qs:
+                        await self.controller.context_manager.update_mission_metadata(
+                            mission_id, {"initial_questions": sub_qs}
+                        )
 
                     # NOTE: we deliberately do NOT overwrite mission_context.user_request
                     # with the full briefing (Finding 3). user_request is the short
