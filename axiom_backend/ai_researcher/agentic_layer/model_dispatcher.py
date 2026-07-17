@@ -933,11 +933,47 @@ class ModelDispatcher:
         # --- DEBUGGING ADDITION END ---
 
         context_overflow_retried = False
+        _apply_force_instruction = False  # set when a thinking model returns empty content
         for attempt in range(self.max_retries):
             # Generate unique attempt ID for tracking
             import uuid
 
             attempt_id = str(uuid.uuid4())[:8]  # Short ID for logging
+
+            # Thinking-model empty-content recovery: if a previous attempt on a
+            # V4/reasoner model returned empty content (reasoning only), append a
+            # forcing instruction to the messages so THIS attempt coaxes out the
+            # actual answer instead of re-hitting the same empty-content edge case.
+            if _apply_force_instruction:
+                _apply_force_instruction = False  # one-shot
+                try:
+                    _forced = [
+                        (dict(m) if isinstance(m, dict) else m)
+                        for m in request_params.get("messages", [])
+                    ]
+                    # Append the forcing suffix to the last USER message.
+                    for _mi in range(len(_forced) - 1, -1, -1):
+                        _mm = _forced[_mi]
+                        _role = _mm.get("role") if isinstance(_mm, dict) else getattr(_mm, "role", None)
+                        if _role == "user":
+                            _cur = _mm.get("content") if isinstance(_mm, dict) else getattr(_mm, "content", "")
+                            _forced_content = (_cur or "") + (
+                                "\n\n[IMPORTANT: Output your final answer NOW as the "
+                                "message content. Do not repeat your reasoning."
+                            )
+                            if isinstance(_mm, dict):
+                                _mm["content"] = _forced_content
+                            else:
+                                _mm.content = _forced_content
+                            break
+                    request_params["messages"] = _forced
+                    logger.info(
+                        "Applied force-output instruction for retry (attempt %d/%d, "
+                        "model=%s) to recover from empty thinking-model content.",
+                        attempt + 1, self.max_retries, selected_model_name,
+                    )
+                except Exception as _force_err:
+                    logger.debug("Could not apply force instruction: %s", _force_err)
 
             try:
                 start_time = time.time()
@@ -1129,20 +1165,26 @@ class ModelDispatcher:
                     logger.info(f"Calculated cost for {selected_model_name}: $0.000000")
                 # --- END NEW ---
 
-                # --- Thinking-model empty-content recovery (DeepSeek V4/reasoner) ---
+                # --- Thinking-model empty-content handling (DeepSeek V4/reasoner) ---
                 # These models occasionally emit reasoning_content but leave the
-                # visible `content` empty (observed in production: success=True,
-                # completion_tokens=20, content=""). The retry loop below used to
-                # treat this as a hard failure and retry 3x — always re-hitting
-                # the same edge case, producing a retry storm and cascading
-                # ResearchAgent failures. Instead, promote reasoning_content to
-                # content so the caller receives the model's gathered info and the
-                # response is accepted as valid (no retry, no crash).
+                # visible `content` empty (observed: success=True, content="").
+                #
+                # IMPORTANT: we must NEVER promote reasoning_content into `content`.
+                # reasoning_content is the model's chain-of-thought (e.g. "The user
+                # wants me to write...", "Let me look at the sources...") — it is
+                # NOT usable prose. Promoting it polluted both research notes and
+                # the final report ("reasoning report generator" regression on
+                # mission d1678d4b). Instead, when a thinking model returns empty
+                # content but produced reasoning, we flag the messages so the NEXT
+                # retry appends a forcing instruction that makes the model emit its
+                # actual answer. The empty case is intermittent, so a forced retry
+                # reliably recovers real content without ever injecting reasoning.
                 if (
                     (is_deepseek_v4 or is_deepseek_reasoner)
                     and response
                     and response.choices
                     and response.choices[0].message
+                    and not getattr(response.choices[0].message, "tool_calls", None)
                 ):
                     _msg = response.choices[0].message
                     _content_empty = not (
@@ -1153,21 +1195,15 @@ class ModelDispatcher:
                         _content_empty
                         and isinstance(_rc, str)
                         and _rc.strip()
-                        and not getattr(_msg, "tool_calls", None)
                     ):
-                        try:
-                            _msg.content = _rc
-                            logger.info(
-                                "Thinking model %s returned empty content but %d chars "
-                                "of reasoning_content; promoted reasoning_content to "
-                                "content (recovered empty-content edge case, agent_mode=%s).",
-                                selected_model_name, len(_rc), effective_agent_mode,
-                            )
-                        except Exception as _promote_err:
-                            logger.debug(
-                                "Could not promote reasoning_content (immutable message?): %s",
-                                _promote_err,
-                            )
+                        logger.warning(
+                            "Thinking model %s returned empty content (reasoning=%d "
+                            "chars, agent_mode=%s). Flagging for a forced retry to "
+                            "recover actual content (NOT promoting reasoning).",
+                            selected_model_name, len(_rc), effective_agent_mode,
+                        )
+                        # Ensure the next attempt forces real output.
+                        _apply_force_instruction = True
 
                 # More robust check for valid response structure
                 if (
