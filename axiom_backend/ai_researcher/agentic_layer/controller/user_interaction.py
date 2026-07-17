@@ -390,6 +390,7 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
         full_briefing = metadata.get("full_briefing") or ""
         from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
             resolve_case_assumptions as _resolve,
+            apply_corrections_to_briefing as _apply_corr,
         )
         merged, still_conflicting = _resolve(full_briefing, user_message)
         if still_conflicting:
@@ -399,7 +400,11 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
             "per_employees": [{"value": v, "raw": r} for v, r in merged.per_employees],
             "headcounts": [{"value": v, "raw": r} for v, r in merged.headcounts],
         }
-        return {
+        # Review finding 2: persist a CANONICAL corrected briefing — the stale
+        # figures replaced inline by the corrected values — so the planner reads
+        # consistent figures in the verbatim text itself, not just in an overlay.
+        corrected_briefing = _apply_corr(full_briefing, merged)
+        update = {
             "awaiting_clarification": None,
             "case_assumption_conflicts": [],
             "case_assumption_corrections": {
@@ -407,6 +412,11 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                 "correction_text": user_message,
             },
         }
+        # Only store the corrected briefing when it actually differs from the
+        # original (a correction that changed nothing leaves the text intact).
+        if corrected_briefing != full_briefing:
+            update["full_briefing_corrected"] = corrected_briefing
+        return update
 
     async def handle_user_message(
         self,

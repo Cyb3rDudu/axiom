@@ -853,6 +853,13 @@ def test_full_sequence_create_conflict_correct_resolved():
         "planner overlay must carry the corrected 40 Mio turnover"
     assert all(t["value"] != 19_000_000 for t in turnovers), \
         "planner overlay must NOT carry the stale 19 Mio turnover"
+    # Review finding 2: a CANONICAL corrected briefing must be persisted with
+    # the stale figure REPLACED INLINE, so the planner never sees the stale
+    # figure in the verbatim text it reads (overlay is only secondary).
+    corrected = metadata.get("full_briefing_corrected")
+    assert corrected is not None, "step 3: full_briefing_corrected must be persisted"
+    assert "19 Mio" not in corrected, "stale 19 Mio must be gone from canonical briefing"
+    assert "40 Mio" in corrected, "corrected 40 Mio must appear in canonical briefing"
 
 
 def test_full_sequence_non_correction_stays_blocked():
@@ -879,3 +886,56 @@ def test_full_sequence_non_correction_stays_blocked():
     assert update is None, "non-correction must not clear the conflict"
     assert metadata.get("awaiting_clarification"), \
         "mission must stay blocked"
+
+
+# ---------------------------------------------------------------------------
+# apply_corrections_to_briefing (review finding 2) — canonical inline surgery
+# ---------------------------------------------------------------------------
+# The planner must receive a briefing where the stale figures are REPLACED
+# inline, not just annotated in an overlay.
+
+from ai_researcher.agentic_layer.controller.utils.briefing_detector import (  # noqa: E402
+    apply_corrections_to_briefing as _apply_corr,
+    resolve_case_assumptions as _resolve_for_corr,
+)
+
+
+def test_apply_corrections_replaces_stale_turnover_inline():
+    orig = (
+        "Jahresumsatz: rund 19 Mio. Euro.\n"
+        "Unternehmensgroesse: 85 Mitarbeitende.\n"
+        "Umsatzleistung von rund 470.000 Euro pro Mitarbeitendem.\n"
+    )
+    merged, _ = _resolve_for_corr(
+        orig, "Jahresumsatz ist 40 Mio. Euro, die 470.000 Euro pro Mitarbeitendem sind bewusst."
+    )
+    corrected = _apply_corr(orig, merged)
+    assert "19 Mio" not in corrected
+    assert "40 Mio" in corrected
+    # Per-employee and headcount must be untouched by a turnover-only correction.
+    assert "470.000" in corrected
+    assert "85 Mitarbeitende" in corrected
+
+
+def test_apply_corrections_replaces_per_employee_inline():
+    orig = (
+        "Jahresumsatz: rund 40 Mio. Euro.\n"
+        "Unternehmensgroesse: 85 Mitarbeitende.\n"
+        "Umsatzleistung von rund 470.000 Euro pro Mitarbeitendem.\n"
+    )
+    merged, _ = _resolve_for_corr(
+        orig, "Die korrekte Umsatzleistung betraegt 220.000 Euro pro Mitarbeitendem."
+    )
+    corrected = _apply_corr(orig, merged)
+    # 470.000 replaced by 220.000; turnover and headcount untouched.
+    assert "470.000" not in corrected
+    assert "220.000" in corrected
+    assert "40 Mio" in corrected
+    assert "85 Mitarbeitende" in corrected
+
+
+def test_apply_corrections_idempotent_when_nothing_changes():
+    orig = "Jahresumsatz: rund 40 Mio. Euro.\n"
+    merged, _ = _resolve_for_corr(orig, "Jahresumsatz 40 Mio. Euro.")
+    corrected = _apply_corr(orig, merged)
+    assert corrected == orig

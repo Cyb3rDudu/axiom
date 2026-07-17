@@ -446,7 +446,12 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
                     if tw_max:
                         _content = mission_context.report_content.get(sec.section_id, "")
                         if _content:
-                            _hard = int(tw_max * 1.2)  # same tolerance as per-section guard
+                            # HARD trim to target_words_max exactly (review
+                            # finding 1): the 1.2x tolerance is allowed only
+                            # DURING generation (writing_agent guard); the FINAL
+                            # assembly trim must enforce the hard per-section max
+                            # so sum(body) <= sum(section_max) <= total_max.
+                            _hard = int(tw_max)
                             if len(_content.split()) > _hard:
                                 mission_context.report_content[sec.section_id] = (
                                     _trim_to_word_budget(_content, _hard)
@@ -522,20 +527,9 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
                         "completed_with_word_budget_warning.",
                         mission_id, _body_words, _total_max, _budget_overrun,
                     )
-                    await self.controller.context_manager.update_mission_metadata(
-                        mission_id,
-                        {
-                            "word_budget_exceeded": {
-                                "body_words": _body_words,
-                                "budget_max": _total_max,
-                                "over_by": _budget_overrun,
-                            },
-                            "completed_with_word_budget_warning": True,
-                        },
-                    )
-                    # Visible banner (prepended after draft assembly below is not
-                    # possible without disturbing citations; we prepend here so
-                    # it lands at the very top of the body).
+                    # Visible banner (prepended so it lands at the top of the body).
+                    # Uses the pre-banner CONTENT word count so the user sees the
+                    # actual content length they must trim.
                     _banner = (
                         f"> ⚠️ **Hinweis zur Wortanzahl:** Der Bericht umfasst "
                         f"{_body_words} Wörter und überschreitet damit das "
@@ -544,10 +538,36 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
                         f"entsprechend kürzen.\n\n"
                     )
                     full_draft = _banner + full_draft
+                    # Review finding 4: the banner itself adds words, so record the
+                    # FINAL (post-banner) word count so the persisted metric matches
+                    # the report file the user actually receives.
+                    _final_words = len(full_draft.split())
+                    await self.controller.context_manager.update_mission_metadata(
+                        mission_id,
+                        {
+                            "word_budget_exceeded": {
+                                "body_words": _final_words,
+                                "content_words": _body_words,
+                                "budget_max": _total_max,
+                                "over_by": _final_words - _total_max,
+                            },
+                            "completed_with_word_budget_warning": True,
+                        },
+                    )
                 else:
                     logger.info(
                         "Aggregate word-budget OK: mission %s body %d words / max %d.",
                         mission_id, _body_words, _total_max,
+                    )
+                    # Review finding 3: a retry/regenerated report that is now within
+                    # budget must NOT keep stale exceeded/warning flags from a
+                    # previous over-budget run. Explicitly clear them.
+                    await self.controller.context_manager.update_mission_metadata(
+                        mission_id,
+                        {
+                            "word_budget_exceeded": None,
+                            "completed_with_word_budget_warning": None,
+                        },
                     )
         except Exception as _wbg_err:
             logger.warning("Aggregate word-budget guard skipped: %s", _wbg_err)

@@ -350,7 +350,11 @@ Remember: Keep it focused, logical, and actionable. Do NOT include section IDs -
         metadata = getattr(mission_context, "metadata", None) or {}
         if metadata.get("briefing_style") != "structured":
             return None
-        full_briefing = metadata.get("full_briefing")
+        # Review finding 2: prefer the CANONICAL CORRECTED briefing (stale case
+        # figures replaced inline) over the original verbatim text, so the
+        # planner never sees the contradictory original figures at all. The
+        # prompt overlay below is only a secondary safeguard.
+        full_briefing = metadata.get("full_briefing_corrected") or metadata.get("full_briefing")
         if not full_briefing:
             return None
 
@@ -369,38 +373,23 @@ Remember: Keep it focused, logical, and actionable. Do NOT include section IDs -
             parts.append("STAGED OUTPUT — FIRST DELIVERABLE (PLANNING ONLY):")
             parts.append(staged_first_output)
             parts.append("")
+        _was_corrected = bool(metadata.get("full_briefing_corrected"))
         parts.extend([
-            f"--- BEGIN USER BRIEFING (verbatim) ---",
+            f"--- BEGIN USER BRIEFING (verbatim{' — CASE ASSUMPTIONS CORRECTED' if _was_corrected else ''}) ---",
             full_briefing.strip(),
             f"--- END USER BRIEFING ---",
         ])
-        # Case-assumption correction overlay (review finding 1): when the user
-        # resolved a 'feste Fallannahmen' conflict via chat, the original
-        # briefing text still contains the OLD (contradictory) figures. We
-        # inject the user's authoritative correction here so the planner/
-        # writer uses the corrected figures, not the stale ones. This overlay
-        # OVERRIDES any conflicting number in the verbatim briefing above.
+        # Secondary confirmation (review finding 2): the verbatim briefing above
+        # is already the CANONICAL CORRECTED text when a correction was applied,
+        # so this is only a short notice, not the primary correction mechanism.
         corrections = metadata.get("case_assumption_corrections") or {}
         if corrections:
             parts.append("")
             parts.append(
-                "!!! CASE-ASSUMPTION CORRECTION (user-confirmed; OVERRIDES the "
-                "conflicting figures in the briefing above) !!!"
-            )
-            parts.append(f"User's correction (verbatim): {corrections.get('correction_text') or ''}")
-            resolved = corrections.get("resolved_assumptions") or {}
-            if resolved.get("turnovers"):
-                tv = resolved["turnovers"][0]
-                parts.append(f"  Authoritative turnover/Umsatz: {tv.get('value')} ({tv.get('raw')})")
-            if resolved.get("per_employees"):
-                pe = resolved["per_employees"][0]
-                parts.append(f"  Authoritative per-employee revenue: {pe.get('value')} ({pe.get('raw')})")
-            if resolved.get("headcounts"):
-                hc = resolved["headcounts"][0]
-                parts.append(f"  Authoritative headcount: {hc.get('value')} ({hc.get('raw')})")
-            parts.append(
-                "Use ONLY these corrected figures throughout the report; ignore any "
-                "contradictory figure that still appears in the verbatim briefing."
+                "NOTE: the case assumptions in the briefing above were corrected "
+                "per the user's confirmation. If you should ever see two different "
+                "figures for the same metric, the values in the verbatim briefing "
+                f"above are authoritative (correction: {corrections.get('correction_text') or ''})."
             )
         primary_q = metadata.get("primary_leitfrage") or metadata.get("primary_question")
         if primary_q:

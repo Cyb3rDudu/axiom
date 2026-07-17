@@ -309,6 +309,82 @@ def resolve_case_assumptions(
     return merged, conflicts_in_assumptions(merged)
 
 
+def _render_turnover_token(value: int) -> str:
+    """Render a normalised turnover value as a natural German figure token.
+
+    Used by ``apply_corrections_to_briefing`` to substitute a stale figure in
+    the briefing text. ``40_000_000`` -> "40 Mio.", ``2_000_000_000`` ->
+    "2 Mrd.", ``470_000`` -> "470.000".
+    """
+    if value >= 1_000_000_000:
+        v = value / 1_000_000_000
+        n = int(v) if v == int(v) else round(v, 1)
+        return f"{n} Mrd."
+    if value >= 1_000_000:
+        v = value / 1_000_000
+        n = int(v) if v == int(v) else round(v, 1)
+        return f"{n} Mio."
+    # plain euros -> German thousands separators (470000 -> "470.000")
+    return f"{value:,}".replace(",", ".")
+
+
+def _de_int(value: int) -> str:
+    """German-formatted integer with '.' thousands separators."""
+    return f"{value:,}".replace(",", ".")
+
+
+def apply_corrections_to_briefing(briefing: str, merged: CaseAssumptions) -> str:
+    """Return a copy of ``briefing`` with stale case-assumption figures replaced
+    inline by the corrected values in ``merged``.
+
+    Review finding 2: previously the planner still received the ORIGINAL verbatim
+    briefing (containing the stale, contradictory figure) with only a prompt
+    overlay appended afterwards — so an LLM could follow the stale value despite
+    the instruction. This performs deterministic text surgery: it re-runs the
+    same extractors over the briefing and substitutes the NUMBER spans with the
+    corrected values, so the canonical text the planner sees no longer contains
+    the stale figures at all. The prompt overlay becomes a secondary safeguard.
+
+    Conservative: replaces only figures for fields the correction touched
+    (i.e. fields present in ``merged``). Per-employee figures are not touched
+    when correcting the company-total turnover.
+    """
+    text = briefing or ""
+
+    if merged.turnovers:
+        rendered = _render_turnover_token(merged.turnovers[0][0])
+
+        def _repl_turnover(m: re.Match) -> str:
+            # Skip per-employee figures (post-filter, same as extraction).
+            tail = text[m.end(): m.end() + 30]
+            if _PER_EMPLOYEE_AFTER_RE.match(tail):
+                return m.group(0)
+            # Replace the number + optional unit span with the corrected token.
+            unit_end = m.end(2) if m.group(2) else m.end(1)
+            return text[m.start(0): m.start(1)] + rendered + text[unit_end: m.end(0)]
+
+        text = _TURNOVER_RE.sub(_repl_turnover, text)
+
+    if merged.per_employees:
+        rendered = _de_int(merged.per_employees[0][0])
+
+        def _repl_per_employee(m: re.Match) -> str:
+            unit_end = m.end(2) if m.group(2) else m.end(1)
+            return text[m.start(0): m.start(1)] + rendered + text[unit_end: m.end(0)]
+
+        text = _PER_EMPLOYEE_RE.sub(_repl_per_employee, text)
+
+    if merged.headcounts:
+        rendered = _de_int(merged.headcounts[0][0])
+
+        def _repl_headcount(m: re.Match) -> str:
+            return text[m.start(0): m.start(1)] + rendered + text[m.end(1): m.end(0)]
+
+        text = _HEADCOUNT_RE.sub(_repl_headcount, text)
+
+    return text
+
+
 def _parse_int(s: str) -> Optional[int]:
     """Parse a number token like ``3.000`` / ``1,200`` / ``3000`` into an int.
 
@@ -1081,6 +1157,7 @@ __all__ = [
     "extract_case_assumptions",
     "conflicts_in_assumptions",
     "resolve_case_assumptions",
+    "apply_corrections_to_briefing",
     "CaseAssumptions",
     "extract_leitfragen",
     "extract_primary_leitfrage",
