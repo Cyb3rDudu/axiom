@@ -36,6 +36,45 @@ class TestJunkWebHostHardFilter(unittest.TestCase):
     def test_clean_host_not_dropped(self):
         self.assertIsNone(_is_junk_web_host("https://link.springer.com/chapter/x"))
 
+    def test_substring_lookalike_not_dropped(self):
+        """Review round 6, issue 1: matching must be on the real host, not a
+        substring, so a domain that merely CONTAINS a junk host string is kept.
+        The old ``host in url`` check wrongly dropped these."""
+        # 'notreddit.com' contains 'reddit.com' as a substring but is a
+        # different domain — must NOT be dropped.
+        self.assertIsNone(_is_junk_web_host("https://notreddit.com/page"))
+        self.assertIsNone(_is_junk_web_host("https://www.notreddit.com/page"))
+        # 'notamazon.com' must not match the 'amazon.' wildcard.
+        self.assertIsNone(_is_junk_web_host("https://notamazon.com/x"))
+        # 'fx.com' must not match 'x.com'.
+        self.assertIsNone(_is_junk_web_host("https://fx.com/x"))
+
+    def test_real_subdomain_is_dropped(self):
+        """Conversely, a genuine subdomain of a junk host IS dropped."""
+        self.assertIsNotNone(_is_junk_web_host("https://www.reddit.com/r/x"))
+        self.assertIsNotNone(_is_junk_web_host("https://us.soccerway.com/team/x"))
+
+    def test_schemeless_url_handled(self):
+        self.assertIsNone(_is_junk_web_host("notreddit.com"))
+        self.assertIsNotNone(_is_junk_web_host("www.reddit.com/r/x"))
+
+    def test_marketplace_wildcard_matches_across_tlds(self):
+        """The 'amazon.' / 'ebay.' wildcards match the SLD across any TLD and
+        under any subdomain."""
+        for url in [
+            "https://amazon.com/dp/1",
+            "https://amazon.de/dp/1",
+            "https://www.amazon.co.uk/dp/1",
+            "https://www.ebay.de/itm/1",
+        ]:
+            self.assertIsNotNone(_is_junk_web_host(url), f"should drop {url}")
+
+    def test_bing_translator_path_filtered_but_bing_search_kept(self):
+        """'bing.com/translator' is path-qualified: only the translator is junk,
+        not all of bing.com."""
+        self.assertIsNotNone(_is_junk_web_host("https://www.bing.com/translator?text=x"))
+        self.assertIsNone(_is_junk_web_host("https://www.bing.com/search?q=x"))
+
     def test_empty_url_safe(self):
         self.assertIsNone(_is_junk_web_host(""))
         self.assertIsNone(_is_junk_web_host(None))

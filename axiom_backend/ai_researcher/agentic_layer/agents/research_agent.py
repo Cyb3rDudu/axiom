@@ -3,6 +3,7 @@ import logging
 import re
 import asyncio
 import queue  # <-- Add queue import
+from urllib.parse import urlparse
 import inspect  # <-- Add inspect import
 from pathlib import Path
 from typing import (
@@ -82,13 +83,33 @@ _OBVIOUS_JUNK_WEB_HOSTS = (
 _MIN_WEB_SNIPPET_CHARS = 200
 
 
-def _is_junk_web_host(url: str) -> Optional[tuple]:
-    """Hard, deterministic pre-filter on the URL HOST only.
+def _host_or_subdomain(hostname: str, domain: str) -> bool:
+    """hostname is exactly domain OR a real subdomain of it.
 
-    Returns ``(host, reason)`` when the URL host is an obvious non-academic /
+    ``'reddit.com'`` matches ``www.reddit.com`` but NOT ``notreddit.com`` —
+    the previous substring check (``'reddit.com' in url``) wrongly matched the
+    latter. Review round 6, issue 1.
+    """
+    return hostname == domain or hostname.endswith("." + domain)
+
+
+def _is_junk_web_host(url: str) -> Optional[tuple]:
+    """Hard, deterministic pre-filter on the URL HOST (exact domain or a real
+    subdomain — never a bare substring).
+
+    Returns ``(entry, reason)`` when the URL host is an obvious non-academic /
     navigational / shopping / social site that can never yield usable research
     material, else ``None``. This is a HARD drop applied before any LLM call —
     such hosts have no value regardless of snippet length.
+
+    Matching uses ``urlparse(...).hostname`` so only EXACT domains or real
+    subdomains match (``reddit.com`` matches ``www.reddit.com`` but not
+    ``notreddit.com``). Three entry shapes in ``_OBVIOUS_JUNK_WEB_HOSTS`` are
+    supported:
+      * bare host (``reddit.com``)         -> exact domain or subdomain;
+      * path-qualified (``bing.com/translator``) -> host + path prefix;
+      * trailing-dot wildcard (``amazon.``)  -> the SLD across any TLD /
+        subdomain (amazon.com / amazon.de / www.amazon.de).
 
     Separated from the snippet-length check because a short snippet from a
     LEGITIMATE host must NOT be dropped outright: the full page may still be
@@ -96,10 +117,38 @@ def _is_junk_web_host(url: str) -> Optional[tuple]:
     """
     if not url:
         return None
-    url_l = url.lower()
-    for host in _OBVIOUS_JUNK_WEB_HOSTS:
-        if host in url_l:
-            return host, f"junk host ({host})"
+    # urlparse needs a scheme; tolerate schemeless inputs like 'notreddit.com'.
+    candidate = url if "://" in url else "//" + url
+    try:
+        parsed = urlparse(candidate)
+    except Exception:
+        return None
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        return None
+    host_labels = hostname.split(".")
+    path = (parsed.path or "").lower()
+    for entry in _OBVIOUS_JUNK_WEB_HOSTS:
+        e = entry.lower()
+        if "/" in e:
+            # path-qualified entry, e.g. 'bing.com/translator'
+            host_part, _, path_part = e.partition("/")
+            if (
+                _host_or_subdomain(hostname, host_part)
+                and path.startswith("/" + path_part)
+            ):
+                return entry, f"junk host ({entry})"
+        elif e.endswith("."):
+            # marketplace-TLD wildcard 'amazon.' / 'ebay.' -> the SLD across any
+            # TLD (amazon.com/de/co.uk) and under any subdomain (www.amazon.de).
+            # The label must be a non-last label so it is genuinely the SLD.
+            label = e[:-1]
+            if label and any(lbl == label for lbl in host_labels[:-1]):
+                return entry, f"junk host ({entry})"
+        else:
+            # bare host: exact domain or real subdomain. NOT a substring.
+            if _host_or_subdomain(hostname, e):
+                return entry, f"junk host ({entry})"
     return None
 
 

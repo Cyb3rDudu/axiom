@@ -462,12 +462,16 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
                     mission_id, content_words, _total_max, final_file_words,
                     content_words, heading_words, banner_words, reference_words,
                 )
-                # Clear stale exceeded/warning flags from a prior over-budget run.
+                # Clear stale flags from a prior run. A transient DB failure on a
+                # previous run can have left word_metrics_persistence_failed set;
+                # since this run persisted metrics successfully, clear it too so
+                # a temporary error does not linger as a permanent failure status.
                 await self.controller.context_manager.update_mission_metadata(
                     mission_id,
                     {
                         "word_budget_exceeded": None,
                         "completed_with_word_budget_warning": None,
+                        "word_metrics_persistence_failed": None,
                     },
                 )
         except Exception as _wbm_err:

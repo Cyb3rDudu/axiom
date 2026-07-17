@@ -399,3 +399,31 @@ class TestPersistFailureMarksMission(unittest.IsolatedAsyncioTestCase):
         meta = controller.context_manager._mc.metadata
         self.assertIn("word_metrics_persistence_failed", meta)
         self.assertIn("DB connection lost", meta["word_metrics_persistence_failed"]["error"])
+
+    async def test_persistence_failed_flag_cleared_on_successful_run(self):
+        """Review round 6, issue 2: a successful metrics-persist run must CLEAR
+        a stale word_metrics_persistence_failed flag left by a prior transient
+        DB failure, so a temporary error does not linger as a permanent failure
+        status."""
+        # Mission metadata carries a stale failure flag from a previous run.
+        controller = _MetricsController({
+            "word_budget": {"total_word_budget": {"min": 1, "target": 1, "max": 100}},
+            "word_metrics_persistence_failed": {"error": "DB connection lost"},
+        })
+        rg = ReportGenerator(controller)
+
+        # This run is within budget (40 <= 100) and the write succeeds.
+        await rg._persist_final_word_metrics(
+            "m1", "final report content", content_words=40,
+            banner_words=0, reference_words=0,
+        )
+
+        meta = controller.context_manager._mc.metadata
+        # The success path must have cleared the stale failure flag (set to None).
+        self.assertIsNone(
+            meta.get("word_metrics_persistence_failed"),
+            "successful persist must clear the stale failure flag",
+        )
+        # And the budget-exceeded flags stay cleared too.
+        self.assertIsNone(meta.get("word_budget_exceeded"))
+        self.assertFalse(meta.get("completed_with_word_budget_warning"))
