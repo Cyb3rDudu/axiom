@@ -471,7 +471,29 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
                     },
                 )
         except Exception as _wbm_err:
-            logger.warning("Final word-budget metrics persistence skipped: %s", _wbm_err)
+            # Do NOT silently swallow: a configured academic word-budget report
+            # must record its metrics or surface the failure explicitly. Mark
+            # the mission so a missing budget metadata / stale-flag can never
+            # masquerade as a clean OK run. (Nested try: the DB itself may be
+            # the reason this failed.)
+            logger.error(
+                "Final word-budget metrics persistence FAILED for mission %s: %s",
+                mission_id, _wbm_err, exc_info=True,
+            )
+            try:
+                await self.controller.context_manager.update_mission_metadata(
+                    mission_id,
+                    {
+                        "word_metrics_persistence_failed": {
+                            "error": repr(_wbm_err)[:300],
+                        }
+                    },
+                )
+            except Exception:
+                logger.error(
+                    "Could not even set word_metrics_persistence_failed flag for "
+                    "mission %s (DB unavailable?)", mission_id, exc_info=True,
+                )
 
     async def process_citations(
         self,

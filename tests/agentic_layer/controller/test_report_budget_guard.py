@@ -335,3 +335,67 @@ class TestPersistFinalWordMetrics(unittest.IsolatedAsyncioTestCase):
             + exceeded["banner_words"] + exceeded["reference_words"],
             exceeded["final_file_words"],
         )
+
+
+class TestPersistFailureMarksMission(unittest.IsolatedAsyncioTestCase):
+    """Review round 5, issue 4: a metric-persistence failure must NOT be
+    swallowed silently. The mission is marked with word_metrics_persistence_failed
+    so a missing/stale budget state can never masquerade as a clean OK run."""
+
+    async def test_db_failure_does_not_propagate(self):
+        """A DB failure during the real budget write must not crash report
+        completion."""
+
+        class _ExplodingCM(_MetricsContextManager):
+            async def update_mission_metadata(self, mission_id, metadata):
+                raise RuntimeError("DB connection lost")
+
+        controller = _MetricsController({
+            "word_budget": {"total_word_budget": {"min": 1, "target": 1, "max": 100}}
+        })
+        controller.context_manager = _ExplodingCM(
+            {"word_budget": {"total_word_budget": {"min": 1, "target": 1, "max": 100}}}
+        )
+        rg = ReportGenerator(controller)
+
+        # Must NOT raise — the report should still complete.
+        await rg._persist_final_word_metrics(
+            "m1", "some final report content", content_words=40,
+            banner_words=0, reference_words=0,
+        )
+
+    async def test_persistence_failed_flag_recorded(self):
+        """When the budget write fails but the failure-flag write succeeds, the
+        flag is recorded on the mission metadata."""
+        calls = {"n": 0}
+
+        class _FailOnceThenOK:
+            def __init__(self):
+                self._mc = _MissionContext(
+                    plan=None, report_content={},
+                    metadata={"word_budget": {"total_word_budget": {"min": 1, "target": 1, "max": 100}}},
+                )
+
+            def get_mission_context(self, mission_id):
+                return self._mc
+
+            async def update_mission_metadata(self, mission_id, metadata):
+                calls["n"] += 1
+                # First call (the real budget write) fails; the second call
+                # (the failure-flag write) succeeds.
+                if calls["n"] == 1:
+                    raise RuntimeError("DB connection lost")
+                self._mc.metadata.update(metadata)
+
+        controller = _MetricsController({})
+        controller.context_manager = _FailOnceThenOK()
+        rg = ReportGenerator(controller)
+
+        await rg._persist_final_word_metrics(
+            "m1", "final report content", content_words=120,
+            banner_words=0, reference_words=0,
+        )
+
+        meta = controller.context_manager._mc.metadata
+        self.assertIn("word_metrics_persistence_failed", meta)
+        self.assertIn("DB connection lost", meta["word_metrics_persistence_failed"]["error"])

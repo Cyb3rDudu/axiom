@@ -75,28 +75,49 @@ _OBVIOUS_JUNK_WEB_HOSTS = (
     "amazon.", "ebay.", "aliexpress.com",
 )
 
-# Minimum content length (chars) for a web snippet to be worth a note-generation
-# LLM call. Snippets shorter than this are usually navigation/error/boilerplate
-# (e.g. 74-150 char fragments from the junk domains above) and almost never
-# produce a usable note.
+# Minimum content length (chars) for a web snippet to be a STRONG signal.
+# Snippets shorter than this are NOT dropped outright (a short search-engine
+# snippet can still point at a valuable full page that we then fetch and
+# evaluate); they are only treated as a weak signal (see _classify_web_result).
 _MIN_WEB_SNIPPET_CHARS = 200
 
 
-def _is_obvious_junk_web_result(web_result: dict) -> tuple[bool, str]:
-    """Cheap, deterministic pre-filter for obviously useless web results.
+def _is_junk_web_host(url: str) -> Optional[tuple]:
+    """Hard, deterministic pre-filter on the URL HOST only.
 
-    Returns ``(is_junk, reason)``. Drop the result when ``is_junk`` is True so
-    no LLM note-generation call is wasted on it. Conservative by design — only
-    filters blatant non-academic utility/navigational hosts and trivially short
-    snippets; relevance judgment for everything else stays with the LLM.
+    Returns ``(host, reason)`` when the URL host is an obvious non-academic /
+    navigational / shopping / social site that can never yield usable research
+    material, else ``None``. This is a HARD drop applied before any LLM call —
+    such hosts have no value regardless of snippet length.
+
+    Separated from the snippet-length check because a short snippet from a
+    LEGITIMATE host must NOT be dropped outright: the full page may still be
+    valuable, so we keep it and let the fetch-then-evaluate flow decide.
+    """
+    if not url:
+        return None
+    url_l = url.lower()
+    for host in _OBVIOUS_JUNK_WEB_HOSTS:
+        if host in url_l:
+            return host, f"junk host ({host})"
+    return None
+
+
+def _classify_web_result(web_result: dict) -> tuple:
+    """Classify a web result as junk (hard drop) vs short-snippet (weak signal).
+
+    Returns ``(classification, reason)`` where classification is one of:
+      * 'junk'        — hard drop (junk host); never has value.
+      * 'short'        — weak signal: snippet is short but the host is clean,
+                         so the full page may still be valuable. Callers should
+                         NOT drop these; the note-generation + fetch-then-
+                         evaluate flow decides whether they are useful.
+      * 'ok'           — content-rich snippet from a clean host.
     """
     url = (web_result.get("url") or "").lower()
-    if url:
-        for host in _OBVIOUS_JUNK_WEB_HOSTS:
-            if host in url:
-                return True, f"junk host ({host})"
-    # Check snippet/content length across the common field names returned by
-    # different search backends (searxng uses 'content', some use 'snippet').
+    host_hit = _is_junk_web_host(url)
+    if host_hit:
+        return "junk", host_hit[1]
     snippet = (
         web_result.get("content")
         or web_result.get("snippet")
@@ -104,7 +125,26 @@ def _is_obvious_junk_web_result(web_result: dict) -> tuple[bool, str]:
         or ""
     )
     if isinstance(snippet, str) and len(snippet.strip()) < _MIN_WEB_SNIPPET_CHARS:
-        return True, f"snippet too short ({len(snippet.strip())} chars)"
+        return "short", f"short snippet ({len(snippet.strip())} chars, will fetch to evaluate)"
+    return "ok", ""
+
+
+# Backwards-compatible alias. Older callers/tests checked this for a single
+# boolean 'is junk'. It now treats ONLY junk hosts as a hard drop and returns
+# False for short snippets from clean hosts (those are a weak signal, not junk).
+def _is_obvious_junk_web_result(web_result: dict) -> tuple[bool, str]:
+    """Hard-drop pre-filter for obviously useless web results (junk HOSTS only).
+
+    Returns ``(is_junk, reason)``. A result is junk only when its URL host is an
+    obvious non-academic / navigational / shopping / social site. Short snippets
+    from clean hosts are NOT junk — they are a weak signal and are kept so the
+    fetch-then-evaluate flow can recover a valuable full page behind a terse
+    search-engine snippet.
+    """
+    url = (web_result.get("url") or "").lower()
+    host_hit = _is_junk_web_host(url)
+    if host_hit:
+        return True, host_hit[1]
     return False, ""
 
 
@@ -573,8 +613,10 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                 # Skip Wikipedia — not a valid academic source
                 if 'wikipedia.org' in (web_source_id or '').lower():
                     continue
-                # Drop obvious junk web results (non-academic utility hosts /
-                # trivially short snippets) BEFORE spending an LLM note call.
+                # Hard-drop junk web HOSTS (social/shopping/navigation) before
+                # spending an LLM note call. Short snippets from clean hosts are
+                # NOT dropped (weak signal): the fetch-then-evaluate flow can
+                # still recover a valuable full page behind a terse snippet.
                 _junk, _jreason = _is_obvious_junk_web_result(web_result)
                 if _junk:
                     logger.debug("Skipping junk web result (%s): %s", _jreason, web_source_id)
@@ -874,7 +916,7 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                         # Skip Wikipedia — not a valid academic source
                         if 'wikipedia.org' in (web_source_id or '').lower():
                             continue
-                        # Drop obvious junk web results before spending an LLM note call.
+                        # Hard-drop junk web HOSTS only. Short snippets from clean hosts are kept (fetch-then-evaluate).
                         _junk, _jreason = _is_obvious_junk_web_result(web_result)
                         if _junk:
                             logger.debug("Skipping junk web result (%s): %s", _jreason, web_source_id)
@@ -1178,7 +1220,7 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
             # Skip Wikipedia — not a valid academic source
             if 'wikipedia.org' in (web_source_id or '').lower():
                 continue
-            # Drop obvious junk web results before spending an LLM note call.
+            # Hard-drop junk web HOSTS only. Short snippets from clean hosts are kept (fetch-then-evaluate).
             _junk, _jreason = _is_obvious_junk_web_result(web_result)
             if _junk:
                 logger.debug("Skipping junk web result (%s): %s", _jreason, web_source_id)
@@ -1641,7 +1683,7 @@ Now, generate the questions for the provided research request.
             # Skip Wikipedia — not a valid academic source
             if 'wikipedia.org' in (web_source_id or '').lower():
                 continue
-            # Drop obvious junk web results before spending an LLM note call.
+            # Hard-drop junk web HOSTS only. Short snippets from clean hosts are kept (fetch-then-evaluate).
             _junk, _jreason = _is_obvious_junk_web_result(web_result)
             if _junk:
                 logger.debug("Skipping junk web result (%s): %s", _jreason, web_source_id)

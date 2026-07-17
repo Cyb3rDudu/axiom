@@ -5,15 +5,17 @@ import unittest
 
 from ai_researcher.agentic_layer.agents.research_agent import (
     _is_obvious_junk_web_result,
+    _is_junk_web_host,
+    _classify_web_result,
     _OBVIOUS_JUNK_WEB_HOSTS,
     _MIN_WEB_SNIPPET_CHARS,
 )
 
 
-class TestJunkWebResultFilter(unittest.TestCase):
-    """Fix #2b: deterministic pre-filter for obviously useless web results so
-    no LLM note-generation call is wasted on junk (observed for NexMach:
-    soccerway.com, zhihu.com, langenscheidt dictionary, etc.)."""
+class TestJunkWebHostHardFilter(unittest.TestCase):
+    """The URL HOST is a hard, deterministic drop (social/shopping/navigation
+    sites can never yield usable research material). Applied before any LLM
+    call in BOTH ResearchAgent and SimplifiedWritingAgent."""
 
     def test_junk_hosts_dropped(self):
         for host in [
@@ -23,23 +25,55 @@ class TestJunkWebResultFilter(unittest.TestCase):
             "https://support.microsoft.com/en-gb/contactus",
             "https://support.google.com/translate/?hl=en",
         ]:
-            result = {"url": host, "content": "x" * 500}
-            is_junk, reason = _is_obvious_junk_web_result(result)
-            self.assertTrue(is_junk, f"should drop {host} ({reason})")
-            self.assertIn("junk host", reason)
+            self.assertIsNotNone(_is_junk_web_host(host), f"should hard-drop {host}")
 
-    def test_too_short_snippet_dropped(self):
-        # The junk mission had 74-150 char snippets from nav/error pages.
-        result = {"url": "https://example.org/page", "content": "x" * 120}
+    def test_junk_host_in_result_dict_dropped(self):
+        result = {"url": "https://www.reddit.com/r/anything", "content": "z" * 5000}
         is_junk, reason = _is_obvious_junk_web_result(result)
         self.assertTrue(is_junk)
-        self.assertIn("too short", reason)
+        self.assertIn("junk host", reason)
 
-    def test_short_snippet_under_threshold_dropped(self):
-        result = {"url": "https://example.org/page", "snippet": "short"}
+    def test_clean_host_not_dropped(self):
+        self.assertIsNone(_is_junk_web_host("https://link.springer.com/chapter/x"))
+
+    def test_empty_url_safe(self):
+        self.assertIsNone(_is_junk_web_host(""))
+        self.assertIsNone(_is_junk_web_host(None))
+
+
+class TestShortSnippetIsWeakSignal(unittest.TestCase):
+    """A short search-engine snippet from a CLEAN host is NOT a hard drop: the
+    full page behind it may still be valuable, so the fetch-then-evaluate flow
+    must get a chance to recover it. (Review issue: a legitimate academic
+    source with a short snippet but a valuable full page was being discarded
+    permanently.)"""
+
+    def test_short_snippet_from_clean_host_not_junk(self):
+        # Was previously hard-dropped; now kept so it can be fetched.
+        result = {"url": "https://example.org/page", "content": "x" * 120}
         is_junk, _ = _is_obvious_junk_web_result(result)
-        self.assertTrue(is_junk)
+        self.assertFalse(is_junk)
 
+    def test_short_snippet_classified_as_weak_signal(self):
+        result = {"url": "https://example.org/page", "snippet": "short"}
+        classification, reason = _classify_web_result(result)
+        self.assertEqual(classification, "short")
+        self.assertIn("fetch", reason.lower())
+
+    def test_long_snippet_classified_ok(self):
+        result = {"url": "https://example.org/pestel", "content": "y" * _MIN_WEB_SNIPPET_CHARS}
+        classification, _ = _classify_web_result(result)
+        self.assertEqual(classification, "ok")
+
+    def test_junk_host_short_snippet_still_hard_dropped(self):
+        # Junk host takes precedence even with a short snippet.
+        result = {"url": "https://www.amazon.de/dp/123", "snippet": "x"}
+        classification, reason = _classify_web_result(result)
+        self.assertEqual(classification, "junk")
+        self.assertIn("junk host", reason)
+
+
+class TestLegitimateSources(unittest.TestCase):
     def test_legitimate_academic_source_kept(self):
         # A real, content-rich source from a non-junk host must pass.
         result = {
@@ -50,32 +84,20 @@ class TestJunkWebResultFilter(unittest.TestCase):
         }
         is_junk, reason = _is_obvious_junk_web_result(result)
         self.assertFalse(is_junk, f"should keep legitimate source ({reason})")
-
-    def test_kept_when_content_long_enough_and_host_clean(self):
-        result = {"url": "https://example.org/pestel", "content": "y" * _MIN_WEB_SNIPPET_CHARS}
-        is_junk, _ = _is_obvious_junk_web_result(result)
-        self.assertFalse(is_junk)
+        classification, _ = _classify_web_result(result)
+        self.assertEqual(classification, "ok")
 
     def test_wikipedia_not_in_junk_list_handled_separately(self):
         # Wikipedia is filtered by the existing explicit check in the loop,
-        # NOT by this helper — confirm the helper itself does not touch it
-        # (so the two filters compose without surprises).
+        # NOT by this helper — confirm the helper itself does not touch it.
         result = {"url": "https://en.wikipedia.org/wiki/PEST_analysis", "content": "x" * 500}
-        is_junk, _ = _is_obvious_junk_web_result(result)
-        self.assertFalse(is_junk)
+        self.assertFalse(_is_obvious_junk_web_result(result)[0])
+        self.assertIsNone(_is_junk_web_host(result["url"]))
 
     def test_missing_fields_safe(self):
-        # No url, no content — must not raise, and should be dropped (too short).
-        is_junk, reason = _is_obvious_junk_web_result({})
-        self.assertTrue(is_junk)
-        self.assertIn("too short", reason)
-
-    def test_junk_host_takes_precedence_over_long_content(self):
-        # Even with a long snippet, a junk host is dropped.
-        result = {"url": "https://www.reddit.com/r/anything", "content": "z" * 5000}
-        is_junk, reason = _is_obvious_junk_web_result(result)
-        self.assertTrue(is_junk)
-        self.assertIn("junk host", reason)
+        # No url, no content — must not raise.
+        self.assertFalse(_is_obvious_junk_web_result({})[0])
+        self.assertIsNone(_is_junk_web_host(None))
 
 
 if __name__ == "__main__":

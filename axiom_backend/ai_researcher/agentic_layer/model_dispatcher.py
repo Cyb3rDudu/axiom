@@ -28,11 +28,70 @@ logger = logging.getLogger(__name__)
 # content). For these prose/synthesis modes we DISABLE thinking so the model
 # emits content directly. Reasoning-heavy modes keep thinking enabled.
 # (Per https://api-docs.deepseek.com/guides/thinking_mode; verified empirically.)
-_V4_THINKING_DISABLED_MODES = {
-    "writing",           # report-section prose (tight word budget, MUST emit content)
-    "query_preparation", # deterministic sub-query generation
-    "research",          # note synthesis from chunks (prose, not deep reasoning)
+#
+# Every mode that produces USER-VISIBLE PROSE belongs here. Keep this set in
+# sync with the agent_mode strings passed to dispatch()/get_completion().
+_V4_CONTENT_GENERATION_MODES = {
+    "writing",                    # WritingAgent report-section prose (tight word budget)
+    "simplified_writing",         # SimplifiedWritingAgent interactive revisions (full draft)
+    "writing_content_generator",  # paragraph-generation tool (writing_tools.propose_and_add_paragraph)
+    "writing_planner",            # EnhancedCollaborativeWritingAgent outline/plan prose
+    "query_preparation",          # deterministic sub-query generation (QueryPreparer)
+    "research",                   # ResearchAgent note synthesis from chunks
 }
+
+
+def _v4_thinking_for_mode(agent_mode: str) -> str:
+    """DeepSeek V4 thinking toggle for a given agent_mode.
+
+    Returns 'disabled' for content-generation modes (prose with a tight word
+    budget) and 'enabled' (the model default) for reasoning-heavy modes.
+    Shared by the streaming and non-streaming dispatch paths.
+    """
+    return (
+        "disabled"
+        if agent_mode in _V4_CONTENT_GENERATION_MODES
+        else "enabled"
+    )
+
+
+def _build_deepseek_v4_params(
+    model_name: str,
+    messages: list,
+    caller_cap,
+    agent_mode: str,
+    stream: bool = False,
+) -> dict:
+    """Build request_params for a DeepSeek V4 model (flash/pro).
+
+    Shared by the non-streaming (dispatch) and streaming (stream_completion)
+    paths so the thinking-mode policy is applied consistently to BOTH.
+    Thinking is DISABLED for content-generation modes (otherwise reasoning
+    tokens eat a tight word-budget max_tokens and the model emits empty
+    content) and ENABLED (default) for reasoning-heavy modes.
+
+    caller_cap is applied as a CEILING (see dispatch() docstring): when present,
+    effective_max = min(v4_max, caller_cap).
+    """
+    v4_max = getattr(config, "DEEPSEEK_V4_MAX_TOKENS_LIMIT", 65536)
+    _thinking = _v4_thinking_for_mode(agent_mode)
+    effective_max = v4_max if caller_cap is None else min(v4_max, caller_cap)
+    params = {
+        "model": model_name,
+        "messages": messages,
+        "max_tokens": effective_max,
+        # thinking-mode toggle (DeepSeek V4). Disabled for prose/budgeted
+        # generation; enabled (default) for reasoning-heavy tasks.
+        "extra_body": {"thinking": {"type": _thinking}},
+    }
+    if stream:
+        params["stream"] = True
+    logger.info(
+        f"Detected DeepSeek V4 model{' (stream)' if stream else ''}: {model_name}, "
+        f"max_tokens={effective_max} (cap={caller_cap}), "
+        f"thinking={_thinking} (agent_mode={agent_mode})"
+    )
+    return params
 
 
 def estimate_token_count(text: str) -> int:
@@ -904,27 +963,11 @@ class ModelDispatcher:
             # modes (planning/reflection/query_strategy/messenger) keep thinking
             # enabled because chain-of-thought genuinely improves them and they
             # have generous token budgets.
-            v4_max = getattr(config, 'DEEPSEEK_V4_MAX_TOKENS_LIMIT', 65536)
-            _thinking_for_mode = (
-                "disabled"
-                if effective_agent_mode in _V4_THINKING_DISABLED_MODES
-                else "enabled"
+            #
+            # Shared builder used by the streaming path too (stream=False here).
+            request_params = _build_deepseek_v4_params(
+                selected_model_name, messages, caller_cap, effective_agent_mode,
             )
-            logger.info(
-                f"Detected DeepSeek V4 model: {selected_model_name}, "
-                f"max_tokens={v4_max if caller_cap is None else 'cap='+str(caller_cap)}, "
-                f"thinking={_thinking_for_mode} (agent_mode={effective_agent_mode})"
-            )
-            # Caller cap applies as a CEILING (see dispatch() docstring).
-            effective_max = v4_max if caller_cap is None else min(v4_max, caller_cap)
-            request_params = {
-                "model": selected_model_name,
-                "messages": messages,
-                "max_tokens": effective_max,
-                # thinking mode toggle (DeepSeek V4). Disabled for prose/budgeted
-                # generation; enabled (default) for reasoning-heavy tasks.
-                "extra_body": {"thinking": {"type": _thinking_for_mode}},
-            }
         else:
             # Standard parameters for non-GPT-5 models or GPT-5 via OpenRouter
             request_params = {
@@ -1922,18 +1965,16 @@ class ModelDispatcher:
                 "stream": True,
             }
         elif is_deepseek_v4:
-            v4_max = getattr(config, 'DEEPSEEK_V4_MAX_TOKENS_LIMIT', 65536)
-            logger.info(
-                f"Detected DeepSeek V4 model (stream): {selected_model_name}, "
-                f"forcing max_tokens={v4_max} (was {max_tokens_for_call})"
+            # DeepSeek V4 (flash/pro) — see dispatch() for rationale. Uses the
+            # SAME shared builder as the non-streaming path so the thinking-mode
+            # policy (disabled for content-generation modes) is applied
+            # consistently to streaming requests too. Without this, a streaming
+            # writing/research call would retain default thinking and reproduce
+            # the empty-content failure (thinking eats the tight word budget).
+            request_params = _build_deepseek_v4_params(
+                selected_model_name, messages, caller_cap, effective_agent_mode,
+                stream=True,
             )
-            effective_max = v4_max if caller_cap is None else min(v4_max, caller_cap)
-            request_params = {
-                "model": selected_model_name,
-                "messages": messages,
-                "max_tokens": effective_max,
-                "stream": True,
-            }
         else:
             request_params = {
                 "model": selected_model_name,
