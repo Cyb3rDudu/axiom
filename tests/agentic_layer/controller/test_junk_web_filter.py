@@ -3,11 +3,17 @@ import api as _api_primer  # noqa: F401  # isort: skip
 
 import unittest
 
+# The HOST filter now lives in a shared LEAF utility (review round 7, issue 1)
+# so both ResearchAgent and SimplifiedWritingAgent can import it without a
+# cross-agent circular import. Import it directly here too.
+from ai_researcher.agentic_layer.utils.web_host_filter import (
+    is_junk_web_host as _is_junk_web_host,
+    JUNK_WEB_HOSTS as _OBVIOUS_JUNK_WEB_HOSTS,
+)
+# Snippet classification is research-specific and stays in research_agent.
 from ai_researcher.agentic_layer.agents.research_agent import (
     _is_obvious_junk_web_result,
-    _is_junk_web_host,
     _classify_web_result,
-    _OBVIOUS_JUNK_WEB_HOSTS,
     _MIN_WEB_SNIPPET_CHARS,
 )
 

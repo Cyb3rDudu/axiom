@@ -3,7 +3,6 @@ import logging
 import re
 import asyncio
 import queue  # <-- Add queue import
-from urllib.parse import urlparse
 import inspect  # <-- Add inspect import
 from pathlib import Path
 from typing import (
@@ -60,20 +59,14 @@ from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry  # Added im
 logger = logging.getLogger(__name__)  # <-- Initialize logger
 
 
-# Domains / patterns that never yield usable research material for an
-# academic / business-analysis mission. A web result whose URL host matches
-# one of these is dropped BEFORE any LLM note-generation call is spent on it
-# (observed junk for the NexMach Umweltanalyse mission: soccerway.com,
-# zhihu.com, langenscheidt dictionary, microsoft support, google translate).
-# Intentionally conservative: only obvious non-academic utility/navigational
-# sites are listed so we never drop a genuinely relevant source.
-_OBVIOUS_JUNK_WEB_HOSTS = (
-    "soccerway.com", "zhihu.com", "langenscheidt.com",
-    "support.microsoft.com", "support.google.com",
-    "translate.google.com", "bing.com/translator",
-    "facebook.com", "instagram.com", "tiktok.com", "twitter.com", "x.com",
-    "youtube.com", "pinterest.com", "reddit.com",
-    "amazon.", "ebay.", "aliexpress.com",
+# Web-host junk filter lives in a shared LEAF utility module so both
+# ResearchAgent and SimplifiedWritingAgent can import it WITHOUT creating a
+# cross-agent circular import (review round 7, issue 1: a direct
+# ``simplified_writing_agent -> research_agent`` import raised
+# ``ImportError: partially initialized module``).
+from ai_researcher.agentic_layer.utils.web_host_filter import (  # noqa: E402
+    is_junk_web_host as _is_junk_web_host,
+    JUNK_WEB_HOSTS as _OBVIOUS_JUNK_WEB_HOSTS,
 )
 
 # Minimum content length (chars) for a web snippet to be a STRONG signal.
@@ -81,75 +74,6 @@ _OBVIOUS_JUNK_WEB_HOSTS = (
 # snippet can still point at a valuable full page that we then fetch and
 # evaluate); they are only treated as a weak signal (see _classify_web_result).
 _MIN_WEB_SNIPPET_CHARS = 200
-
-
-def _host_or_subdomain(hostname: str, domain: str) -> bool:
-    """hostname is exactly domain OR a real subdomain of it.
-
-    ``'reddit.com'`` matches ``www.reddit.com`` but NOT ``notreddit.com`` —
-    the previous substring check (``'reddit.com' in url``) wrongly matched the
-    latter. Review round 6, issue 1.
-    """
-    return hostname == domain or hostname.endswith("." + domain)
-
-
-def _is_junk_web_host(url: str) -> Optional[tuple]:
-    """Hard, deterministic pre-filter on the URL HOST (exact domain or a real
-    subdomain — never a bare substring).
-
-    Returns ``(entry, reason)`` when the URL host is an obvious non-academic /
-    navigational / shopping / social site that can never yield usable research
-    material, else ``None``. This is a HARD drop applied before any LLM call —
-    such hosts have no value regardless of snippet length.
-
-    Matching uses ``urlparse(...).hostname`` so only EXACT domains or real
-    subdomains match (``reddit.com`` matches ``www.reddit.com`` but not
-    ``notreddit.com``). Three entry shapes in ``_OBVIOUS_JUNK_WEB_HOSTS`` are
-    supported:
-      * bare host (``reddit.com``)         -> exact domain or subdomain;
-      * path-qualified (``bing.com/translator``) -> host + path prefix;
-      * trailing-dot wildcard (``amazon.``)  -> the SLD across any TLD /
-        subdomain (amazon.com / amazon.de / www.amazon.de).
-
-    Separated from the snippet-length check because a short snippet from a
-    LEGITIMATE host must NOT be dropped outright: the full page may still be
-    valuable, so we keep it and let the fetch-then-evaluate flow decide.
-    """
-    if not url:
-        return None
-    # urlparse needs a scheme; tolerate schemeless inputs like 'notreddit.com'.
-    candidate = url if "://" in url else "//" + url
-    try:
-        parsed = urlparse(candidate)
-    except Exception:
-        return None
-    hostname = (parsed.hostname or "").lower()
-    if not hostname:
-        return None
-    host_labels = hostname.split(".")
-    path = (parsed.path or "").lower()
-    for entry in _OBVIOUS_JUNK_WEB_HOSTS:
-        e = entry.lower()
-        if "/" in e:
-            # path-qualified entry, e.g. 'bing.com/translator'
-            host_part, _, path_part = e.partition("/")
-            if (
-                _host_or_subdomain(hostname, host_part)
-                and path.startswith("/" + path_part)
-            ):
-                return entry, f"junk host ({entry})"
-        elif e.endswith("."):
-            # marketplace-TLD wildcard 'amazon.' / 'ebay.' -> the SLD across any
-            # TLD (amazon.com/de/co.uk) and under any subdomain (www.amazon.de).
-            # The label must be a non-last label so it is genuinely the SLD.
-            label = e[:-1]
-            if label and any(lbl == label for lbl in host_labels[:-1]):
-                return entry, f"junk host ({entry})"
-        else:
-            # bare host: exact domain or real subdomain. NOT a substring.
-            if _host_or_subdomain(hostname, e):
-                return entry, f"junk host ({entry})"
-    return None
 
 
 def _classify_web_result(web_result: dict) -> tuple:
@@ -178,18 +102,12 @@ def _classify_web_result(web_result: dict) -> tuple:
     return "ok", ""
 
 
-# Backwards-compatible alias. Older callers/tests checked this for a single
-# boolean 'is junk'. It now treats ONLY junk hosts as a hard drop and returns
-# False for short snippets from clean hosts (those are a weak signal, not junk).
+# Hard-drop pre-filter for obviously useless web results (junk HOSTS only).
+# A result is junk only when its URL host is an obvious non-academic /
+# navigational / shopping / social site. Short snippets from clean hosts are
+# NOT junk — they are a weak signal and are kept so the fetch-then-evaluate
+# flow can recover a valuable full page behind a terse search-engine snippet.
 def _is_obvious_junk_web_result(web_result: dict) -> tuple[bool, str]:
-    """Hard-drop pre-filter for obviously useless web results (junk HOSTS only).
-
-    Returns ``(is_junk, reason)``. A result is junk only when its URL host is an
-    obvious non-academic / navigational / shopping / social site. Short snippets
-    from clean hosts are NOT junk — they are a weak signal and are kept so the
-    fetch-then-evaluate flow can recover a valuable full page behind a terse
-    search-engine snippet.
-    """
     url = (web_result.get("url") or "").lower()
     host_hit = _is_junk_web_host(url)
     if host_hit:

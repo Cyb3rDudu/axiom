@@ -5,7 +5,7 @@ import re
 from typing import Dict, Any, Optional, List
 
 from ai_researcher.agentic_layer.model_dispatcher import ModelDispatcher
-from ai_researcher.agentic_layer.agents.research_agent import _is_junk_web_host
+from ai_researcher.agentic_layer.utils.web_host_filter import is_junk_web_host as _is_junk_web_host
 from ai_researcher import config
 
 logger = logging.getLogger(__name__)
