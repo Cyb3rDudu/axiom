@@ -468,6 +468,26 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
         except Exception as _trim_err:
             logger.warning("Aggregate word-budget trim pass skipped: %s", _trim_err)
 
+        # Review finding 1: the briefing's word budget (Umfang) describes section
+        # CONTENT, not the generated Markdown headings/numbering. The assembled
+        # draft mixes both, so counting the assembled string would flag a false
+        # over-budget whenever headings push the file past total_max even though
+        # all section CONTENT is within budget (NexMach: section maxima already
+        # sum to ~3,290; 18 headings add ~80 words). We therefore count CONTENT
+        # words separately (stored section text only) and base the budget
+        # decision on content_words; the final FILE word count (incl. headings
+        # and the warning banner) is recorded as a separate metric.
+        _content_words = 0
+        def _count_content_pass(section_list):
+            nonlocal _content_words
+            for sec in section_list:
+                _c = mission_context.report_content.get(sec.section_id, "")
+                if _c:
+                    _content_words += len(_c.split())
+                if sec.subsections:
+                    _count_content_pass(sec.subsections)
+        _count_content_pass(mission_context.plan.report_outline)
+
         # Use recursive function to build draft with hierarchical numbering
         full_draft = ""
         # Modify the recursive function to accept and generate numbering prefixes
@@ -501,63 +521,63 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
         # Some LLMs use 【】 instead of []
         full_draft = full_draft.replace('【', '[').replace('】', ']')
 
-        # Aggregate word-budget guard (review finding 3). After the trim pass
-        # above, sum(body) should be <= sum(section_max) <= total_word_budget.max
-        # (with correct allocation, finding 4). We re-check against the HARD max
-        # (total_word_budget.max — no 15% tolerance here; the per-section guards
-        # already bake in their 1.2x tolerance). If still over, the section
-        # budgets themselves sum too high (a real allocation failure): we do NOT
-        # silently mark the report clean. Instead we (a) log a prominent WARNING,
-        # (b) persist a word_budget_exceeded flag + completed_with_word_budget_warning,
-        # and (c) prepend a visible German banner to the report text so the user
-        # sees the overrun, not just a hidden metadata field.
+        # Aggregate word-budget guard. The budget (Umfang) describes section
+        # CONTENT, so the decision uses _content_words (stored section text only,
+        # no headings/numbering — review finding 1). We keep separate metrics:
+        # content_words (budget-relevant), heading_words (assembled file minus
+        # content), and final_file_words (the actual stored file incl. headings
+        # and the warning banner if any). Only when the CONTENT itself exceeds
+        # total_max do we flag over-budget — headings no longer trigger a false
+        # positive (NexMach: ~3,290 content + ~80 heading words vs max 3,300).
         _budget_overrun = None
         try:
             _wb = (mission_context.metadata or {}).get("word_budget") or {}
             _wb_total = (_wb.get("total_word_budget") or {})
             _total_max = _wb_total.get("max")
             if _total_max:
-                _body_words = len(full_draft.split())
-                if _body_words > _total_max:
-                    _budget_overrun = _body_words - _total_max
+                _over_content = _content_words > _total_max
+                if _over_content:
+                    _budget_overrun = _content_words - _total_max
                     logger.warning(
-                        "AGGREGATE WORD-BUDGET GUARD: mission %s body is %d words, "
-                        "HARD total max is %d — over by %d even after the per-section "
-                        "trim pass (section budgets likely sum > total). Marking "
-                        "completed_with_word_budget_warning.",
-                        mission_id, _body_words, _total_max, _budget_overrun,
+                        "AGGREGATE WORD-BUDGET GUARD: mission %s CONTENT is %d "
+                        "words, HARD total max is %d — over by %d even after the "
+                        "per-section trim pass (section budgets likely sum > total). "
+                        "Marking completed_with_word_budget_warning.",
+                        mission_id, _content_words, _total_max, _budget_overrun,
                     )
-                    # Visible banner (prepended so it lands at the top of the body).
-                    # Uses the pre-banner CONTENT word count so the user sees the
-                    # actual content length they must trim.
+                    # Visible banner uses the CONTENT word count (what the user
+                    # can actually trim) so the message is actionable.
                     _banner = (
-                        f"> ⚠️ **Hinweis zur Wortanzahl:** Der Bericht umfasst "
-                        f"{_body_words} Wörter und überschreitet damit das "
-                        f"im Auftrag vorgegebene Limit von ca. {_total_max} "
-                        f"Wörtern um {_budget_overrun} Wörter. Bitte vor Abgabe "
-                        f"entsprechend kürzen.\n\n"
+                        f"> ⚠️ **Hinweis zur Wortanzahl:** Der Berichtstext umfasst "
+                        f"{_content_words} Wörter und überschreitet damit das im "
+                        f"Auftrag vorgegebene Limit von ca. {_total_max} Wörtern um "
+                        f"{_budget_overrun} Wörter (ohne Überschriften gezählt). "
+                        f"Bitte vor Abgabe entsprechend kürzen.\n\n"
                     )
                     full_draft = _banner + full_draft
-                    # Review finding 4: the banner itself adds words, so record the
-                    # FINAL (post-banner) word count so the persisted metric matches
-                    # the report file the user actually receives.
-                    _final_words = len(full_draft.split())
+                # Final file word count (post-banner if a banner was prepended).
+                _final_file_words = len(full_draft.split())
+                _heading_words = max(0, _final_file_words - _content_words)
+                if _over_content:
                     await self.controller.context_manager.update_mission_metadata(
                         mission_id,
                         {
                             "word_budget_exceeded": {
-                                "body_words": _final_words,
-                                "content_words": _body_words,
+                                "content_words": _content_words,
+                                "heading_words": _heading_words,
+                                "final_file_words": _final_file_words,
                                 "budget_max": _total_max,
-                                "over_by": _final_words - _total_max,
+                                "over_by": _budget_overrun,
                             },
                             "completed_with_word_budget_warning": True,
                         },
                     )
                 else:
                     logger.info(
-                        "Aggregate word-budget OK: mission %s body %d words / max %d.",
-                        mission_id, _body_words, _total_max,
+                        "Aggregate word-budget OK: mission %s content %d words "
+                        "(file %d incl. %d heading) / max %d.",
+                        mission_id, _content_words, _final_file_words,
+                        _heading_words, _total_max,
                     )
                     # Review finding 3: a retry/regenerated report that is now within
                     # budget must NOT keep stale exceeded/warning flags from a
