@@ -748,7 +748,43 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     word_budget = classification.get("word_budget") or {}
                     if word_budget.get("total_word_budget") or word_budget.get("section_word_budgets"):
                         metadata_update["word_budget"] = word_budget
+                    # Staged-output directive (Priority 5): if the briefing asks
+                    # for a planning-only first deliverable ("Gib zunächst noch
+                    # keinen vollständigen Fließtext aus"), flag it so the
+                    # planner produces the staged deliverable (outline/theses/
+                    # source matrix) and the mission does NOT jump straight to a
+                    # full draft. Specificity is already 'structured' (not
+                    # 'complete') in that case, so the approval loop stays.
+                    output_stage = classification.get("output_stage")
+                    if output_stage == "planning_only":
+                        metadata_update["output_stage"] = "planning_only"
+                        metadata_update["staged_first_output"] = (
+                            "Deliver ONLY the planning artefacts first: Hauptthese, "
+                            "Unterthesen, kommentierte Gliederung mit Wortbudget, "
+                            "Quellenmatrix, Liste der benötigten Praxisquellen, "
+            "vorläufige Auswahl der zentralen Faktoren, offene Quellenlücken. "
+                            "Do NOT write the full Fließtext/Hausarbeit yet — await "
+                            "user confirmation."
+                        )
+                    # Plausibility conflicts (Priority 6): store them and add a
+                    # goal so the agent surfaces them to the user rather than
+                    # silently picking one figure.
+                    case_conflicts = classification.get("case_assumption_conflicts") or []
+                    if case_conflicts:
+                        metadata_update["case_assumption_conflicts"] = case_conflicts
                     await self.controller.context_manager.update_mission_metadata(mission_id, metadata_update)
+
+                    # Surface conflicts as a goal so the agent flags them in its
+                    # reply (the user must resolve e.g. 19 Mio. vs 40 Mio. Euro
+                    # before the mission can produce a consistent Hausarbeit).
+                    if case_conflicts:
+                        conflict_text = "Widersprüchliche Fallannahmen erkannt (bitte vom Nutzer auflösen lassen): "
+                        conflict_text += " | ".join(case_conflicts)
+                        await self.controller.context_manager.add_goal(
+                            mission_id=mission_id,
+                            text=conflict_text,
+                            source_agent="BriefingDetector",
+                        )
 
                     # NOTE: we deliberately do NOT overwrite mission_context.user_request
                     # with the full briefing (Finding 3). user_request is the short

@@ -74,6 +74,141 @@ _SECTION_SCOPE_RE = re.compile(
     r"(?im)^\s*(?:umfang|scope|length)\s*[:\-]?\s*(.+?(?:Wörter|Worte|words).*)$"
 )
 
+# Staged-output directive. A briefing that says "Gib zunächst noch keinen
+# vollständigen Fließtext aus" / "Liefere als erste Ausgabe ..." / "do NOT write
+# the full text yet" is asking for a PLANNING-ONLY first deliverable (outline,
+# thesis, source matrix), NOT an immediate full draft. This must override the
+# 'complete -> direct full-draft start' path (Priority 5).
+_STAGED_OUTPUT_RE = re.compile(
+    r"(?im)(?:"
+    r"gib\s+(?:zun(?:ä|ae)chst|zuerst)\s+(?:noch\s+)?keinen?\s+(?:vollst(?:ä|ae)ndigen?\s+)?(?:flie(?:ß|ss)text|text)\s*(?:aus|her)"
+    r"|liefere\s+(?:zun(?:ä|ae)chst|zuerst|als\s+erste\s+ausgabe)"
+    r"|erstelle\s+(?:zun(?:ä|ae)chst|zuerst|als\s+erste\s+ausgabe)"
+    r"|als\s+erste\s+ausgabe\s*[:\-]"
+    r"|do\s+not\s+(?:write|generate|produce)\s+(?:the\s+)?(?:full|complete)\s+(?:text|draft|report)\s+(?:yet|first)"
+    r"|first\s+(?:deliverable|output|stage)\s*[:\-]"
+    r")"
+)
+
+
+def detect_staged_output(message: str) -> bool:
+    """Return True when the briefing asks for a planning-only first deliverable.
+
+    Such a briefing should NOT trigger the 'complete -> immediate full-draft
+    start' path. Instead the first output should be the outline / theses /
+    source matrix, then await user confirmation before writing the full text.
+    """
+    if not message:
+        return False
+    return bool(_STAGED_OUTPUT_RE.search(message))
+
+
+# A monetary figure tagged as a turnover/revenue/per-employee metric. We capture
+# the number + the unit scale so two statements about the same metric can be
+# compared. German uses Mio./Million and pro Mitarbeitendem/per employee.
+_TURNOVER_RE = re.compile(
+    r"(?im)"
+    r"(?:jahresumsatz|umsatz|ertr(?:a|ä)ge|revenue|turnover)"
+    r"[^\n]{0,40}?"
+    r"(\d[\d.,]*)\s*"
+    r"(mio\.|million(en)?|m\.|mrd\.|milliarde(n)?|billion(en)?|eur[ o]?|€)?"
+    # Negative lookahead: do NOT match a 'turnover' figure whose same line
+    # also scales it per employee (e.g. 'Umsatzleistung 470.000 Euro pro
+    # Mitarbeitendem' is a per-head metric, not the company total — that's
+    # handled by _PER_EMPLOYEE_RE). Prevents false conflict flags.
+    r"(?![^\n]{0,40}(?:pro|per|/|je)\s*(?:mitarbeitend|beschäftigt|employee))"
+)
+_PER_EMPLOYEE_RE = re.compile(
+    r"(?im)"
+    r"(\d[\d.,]*)\s*(eur[ o]?|€)\s*(?:pro|per|/)?\s*(?:mitarbeitend(?:em|er)?|besch(?:ä|ae)ftigt(?:em|er)?|employee)"
+)
+_HEADCOUNT_RE = re.compile(
+    r"(?im)(\d[\d.,]*)\s*(?:mitarbeitende|besch(?:ä|ae)ftigte|angestellte|employees|staff|kopf)"
+)
+
+
+def detect_case_assumption_conflicts(message: str) -> List[str]:
+    """Detect contradictory 'feste Fallannahmen' in a case-study briefing.
+
+    Returns a list of human-readable conflict descriptions. When non-empty,
+    classify_assignment should downgrade specificity to
+    'structured_needs_clarification' so the user resolves the conflict before
+    the mission starts (the writer must not silently pick one figure).
+
+    Currently detects:
+      - Two different annual-turnover figures for the same case company
+        (e.g. 'Jahresumsatz: 19 Mio. Euro' vs 'rund 40 Mio. Euro').
+      - A per-employee revenue figure inconsistent with turnover/headcount
+        (e.g. 470.000 €/employee × 85 employees ≈ 40 Mio. ≠ stated 19 Mio.).
+    Conservative: only flags when the gap is large (>25%) and the numbers are
+    explicitly anchored to the same metric keyword.
+    """
+    if not message:
+        return []
+    conflicts: List[str] = []
+
+    # --- Turnover conflicts: multiple distinct turnover figures ---
+    turnovers: list[tuple[int, str]] = []  # (normalised_value_in_units, raw)
+    for m in _TURNOVER_RE.finditer(message):
+        raw_num = m.group(1)
+        unit = (m.group(2) or "").lower()
+        n = _parse_int(raw_num)
+        if n is None or n <= 0:
+            continue
+        # Normalise to absolute units (Mio = *1e6, Mrd = *1e9, else raw).
+        if "mio" in unit or "million" in unit or unit in ("m.",):
+            value = n * 1_000_000
+        elif "mrd" in unit or "milliard" in unit:
+            value = n * 1_000_000_000
+        elif "billion" in unit:
+            value = n * 1_000_000_000_000
+        else:
+            value = n  # plain euros (e.g. 470.000 Euro)
+        turnovers.append((value, m.group(0).strip()))
+
+    # Keep only the distinct turnover magnitudes; compare each pair.
+    distinct = {}
+    for value, raw in turnovers:
+        bucket = round(value, -4)  # bucket to 10k to absorb rounding noise
+        distinct.setdefault(bucket, raw)
+    turnover_vals = sorted(distinct.keys())
+    if len(turnover_vals) >= 2:
+        lo, hi = turnover_vals[0], turnover_vals[-1]
+        # Two genuinely different turnover figures (gap > 25%).
+        if lo > 0 and (hi - lo) / hi > 0.25:
+            conflicts.append(
+                f"Widersprüchliche Umsatz-Fallannahmen: "
+                f"'{distinct[lo]}' vs '{distinct[hi]}' (Abweichung > 25%)."
+            )
+
+    # --- Per-employee revenue vs turnover×headcount consistency ---
+    per_emp = None
+    pm = _PER_EMPLOYEE_RE.search(message)
+    if pm:
+        per_emp = _parse_int(pm.group(1))
+    headcount = None
+    hm = _HEADCOUNT_RE.search(message)
+    if hm:
+        headcount = _parse_int(hm.group(1))
+    if per_emp and headcount and per_emp > 0 and headcount > 0:
+        implied = per_emp * headcount
+        # Compare against the largest stated turnover (the 'real' one).
+        if turnover_vals:
+            stated = max(turnover_vals)
+            if stated > 0:
+                ratio = implied / stated
+                # Flag if implied turnover differs from stated by > 25% in EITHER
+                # direction, but only when implied is in a plausible turnover
+                # range (> 100k, i.e. not a per-section word count coincidence).
+                if implied > 100_000 and (ratio > 1.25 or ratio < 0.8):
+                    conflicts.append(
+                        f"Umsatzleistung/Personal-Zahl inkonsistent mit Umsatz: "
+                        f"{per_emp} € × {headcount} = {implied:,} € vs "
+                        f"angegebener Umsatz ~{stated:,} €."
+                    )
+
+    return conflicts
+
 
 def _parse_int(s: str) -> Optional[int]:
     """Parse a number token like ``3.000`` / ``1,200`` / ``3000`` into an int.
@@ -781,14 +916,31 @@ def classify_assignment(message: str) -> dict:
     has_deliverable = bool(deliverable_match)
     deliverable = deliverable_match.group(0) if deliverable_match else None
 
+    # Staged-output directive (Priority 5). A briefing that says "Gib zunächst
+    # noch keinen vollständigen Fließtext aus" wants a planning-only first
+    # deliverable (outline/theses/source matrix), then confirmation. It must
+    # NOT trigger the 'complete -> immediate full-draft start' path: we
+    # downgrade specificity to 'structured' (keeps the approval loop) and flag
+    # output_stage='planning_only' so downstream agents produce the staged
+    # deliverable first instead of the full Hausarbeit.
+    staged = detect_staged_output(message)
+
     is_complete = (
         is_structured
         and has_outline
         and has_scope
         and has_deliverable
+        and not staged  # a staged briefing is never a direct full-draft start
     )
 
-    specificity = "complete" if is_complete else ("structured" if is_structured else "open")
+    # Plausibility check (Priority 6): contradictory case assumptions
+    # (e.g. 19 Mio. vs 40 Mio. Euro turnover) block a direct start and surface
+    # the conflict list so the user can resolve it first.
+    case_conflicts = detect_case_assumption_conflicts(message) if is_structured else []
+    if case_conflicts:
+        specificity = "structured_needs_clarification"
+    else:
+        specificity = "complete" if is_complete else ("structured" if is_structured else "open")
 
     return {
         "specificity": specificity,
@@ -796,6 +948,8 @@ def classify_assignment(message: str) -> dict:
         "questions": questions,
         "outline": [s.to_dict() for s in outline],
         "word_budget": word_budget.to_dict(),
+        "output_stage": "planning_only" if staged else "full",
+        "case_assumption_conflicts": case_conflicts,
         "has_outline": has_outline,
         "has_scope": has_scope,
         "has_deliverable": has_deliverable,
@@ -811,6 +965,8 @@ def _empty_classification() -> dict:
         "questions": [],
         "outline": [],
         "word_budget": WordBudget().to_dict(),
+        "output_stage": "full",
+        "case_assumption_conflicts": [],
         "has_outline": False,
         "has_scope": False,
         "has_deliverable": False,
@@ -821,6 +977,8 @@ def _empty_classification() -> dict:
 
 __all__ = [
     "detect_structured_briefing",
+    "detect_staged_output",
+    "detect_case_assumption_conflicts",
     "extract_leitfragen",
     "extract_primary_leitfrage",
     "extract_outline",

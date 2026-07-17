@@ -315,10 +315,19 @@ Remember: Keep it focused, logical, and actionable. Do NOT include section IDs -
             "You MUST follow this briefing. The outline, Leitfrage, word budget and",
             "deliverable below are authoritative — do not substitute your own.",
             "",
+        ]
+        # Staged-output directive (Priority 5): if the briefing asked for a
+        # planning-only first deliverable, make that the explicit instruction.
+        staged_first_output = metadata.get("staged_first_output")
+        if metadata.get("output_stage") == "planning_only" and staged_first_output:
+            parts.append("STAGED OUTPUT — FIRST DELIVERABLE (PLANNING ONLY):")
+            parts.append(staged_first_output)
+            parts.append("")
+        parts.extend([
             f"--- BEGIN USER BRIEFING (verbatim) ---",
             full_briefing.strip(),
             f"--- END USER BRIEFING ---",
-        ]
+        ])
         primary_q = metadata.get("primary_leitfrage") or metadata.get("primary_question")
         if primary_q:
             parts.append("")

@@ -582,3 +582,118 @@ def test_classify_includes_word_budget():
     assert c["word_budget"]["total_word_budget"]["target"] == 3000
     assert c["word_budget"]["section_word_budgets"]["1"] == [230, 270]
     assert c["word_budget"]["budget_source"]  # non-empty provenance
+
+
+# ---------------------------------------------------------------------------
+# Priority 5: staged-output detection ("Gib zunächst noch keinen Fließtext aus")
+# ---------------------------------------------------------------------------
+
+from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
+    detect_staged_output as _detect_staged_output,
+)
+
+
+def test_detect_staged_output_german():
+    msg = ("Gib zunächst noch keinen vollständigen Fließtext aus. Liefere als "
+           "erste Ausgabe die Gliederung, These und Quellenmatrix.")
+    assert _detect_staged_output(msg) is True
+
+
+def test_detect_staged_output_english():
+    msg = "Do NOT write the full text yet. First deliverable: outline + thesis."
+    assert _detect_staged_output(msg) is True
+
+
+def test_detect_staged_output_absent_for_normal_briefing():
+    msg = "Schreibe eine vollständige Hausarbeit zum Thema NexMach."
+    assert _detect_staged_output(msg) is False
+
+
+def test_classify_staged_downgrades_specificity_to_structured():
+    """A complete briefing that ALSO asks for a staged output must NOT be
+    'complete' (which would direct-start a full draft); it stays 'structured'
+    and is flagged output_stage='planning_only'."""
+    msg = (
+        "Hausarbeit, ca. 3.000 W\u00f6rter.\n\n"
+        "Gib zun\u00e4chst noch keinen vollst\u00e4ndigen Flie\u00dftext aus. "
+        "Liefere als erste Ausgabe die kommentierte Gliederung.\n\n"
+        "# Verbindliche Gliederung\n"
+        "## 1. Einleitung\n"
+        "## 2. Theorie\n"
+        "## 3. Analyse\n"
+        "## 4. Fazit\n"
+    )
+    c = classify_assignment(msg)
+    assert c["specificity"] == "structured"  # NOT complete -> no direct full start
+    assert c["output_stage"] == "planning_only"
+
+
+def test_classify_normal_complete_briefing_not_staged():
+    """Sanity: a complete briefing without a staged directive (and without
+    contradictory case assumptions) is still complete."""
+    msg = (
+        "Hausarbeit im Modul Organisation und Management, ca. 3.000 W\u00f6rter. "
+        "Analysiere die Unternehmensumwelt eines fiktiven Unternehmens.\n"
+        "Verwende APA-7 als Zitierstil und facheinschl\u00e4gige wissenschaftliche Literatur.\n\n"
+        "# Verbindliche Gliederung\n"
+        "## 1. Einleitung\n"
+        "## 2. Theorie\n"
+        "## 3. Analyse\n"
+        "## 4. Fazit\n"
+    )
+    c = classify_assignment(msg)
+    assert c["specificity"] == "complete"
+    assert c["output_stage"] == "full"
+    assert c["case_assumption_conflicts"] == []
+
+
+# ---------------------------------------------------------------------------
+# Priority 6: contradictory case-assumption detection (19 vs 40 Mio. Euro)
+# ---------------------------------------------------------------------------
+
+from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
+    detect_case_assumption_conflicts as _detect_conflicts,
+)
+
+
+_CONFLICT_BRIEFING = (
+    "Fallunternehmen NexMach Systems GmbH.\n"
+    "Jahresumsatz: rund 19 Mio. Euro.\n"
+    "Unternehmensgr\u00f6\u00dfe: 85 Mitarbeitende.\n"
+    "Umsatzleistung von rund 470.000 Euro pro Mitarbeitendem.\n"
+)
+
+
+def test_detect_conflicts_flags_contradictory_turnover():
+    conflicts = _detect_conflicts(_CONFLICT_BRIEFING)
+    assert len(conflicts) >= 1
+    # The 19 Mio. vs (470k × 85 ≈ 40 Mio.) inconsistency must be reported.
+    joined = " ".join(conflicts)
+    assert "950" in joined or "nksistent" in joined or "rspr\u00fcchlich" in joined
+
+
+def test_classify_conflict_briefing_needs_clarification():
+    c = classify_assignment(_CONFLICT_BRIEFING + "\n" + _BUDGET_BRIEFING)
+    assert c["specificity"] == "structured_needs_clarification"
+    assert len(c["case_assumption_conflicts"]) >= 1
+
+
+def test_detect_conflicts_none_for_consistent_briefing():
+    msg = (
+        "Jahresumsatz: rund 40 Mio. Euro.\n"
+        "Unternehmensgr\u00f6\u00dfe: 85 Mitarbeitende.\n"
+        "Umsatzleistung von rund 470.000 Euro pro Mitarbeitendem.\n"
+    )
+    # 470k × 85 ≈ 40 Mio. matches the stated 40 Mio. — no conflict.
+    conflicts = _detect_conflicts(msg)
+    assert conflicts == []
+
+
+def test_detect_conflicts_no_false_positive_on_word_counts():
+    """Word counts and source counts must not trigger case-assumption conflicts."""
+    msg = (
+        "Die Hausarbeit umfasst ca. 3.000 W\u00f6rter.\n"
+        "Verwende 13 bis 16 Quellen. 85 Mitarbeitende arbeiten hier."
+    )
+    conflicts = _detect_conflicts(msg)
+    assert conflicts == []
