@@ -41,6 +41,227 @@ _NUMBERED_LINE_RE = re.compile(r"(?m)^\s{0,3}\d+\.\s+(.{40,})$")
 # Word-count hint.
 _WORDCOUNT_RE = re.compile(r"\b\d[\d.,]*\s*(?:Wörter|Worte|words)\b", re.IGNORECASE)
 
+# ---------------------------------------------------------------------------
+# Word-budget extraction (deterministic, prompt-independent)
+# ---------------------------------------------------------------------------
+# IMPORTANT: only numbers adjacent to a word-count unit (Wörter/Worte/words)
+# qualify as a budget. We deliberately must NOT match "470.000 Euro",
+# "85 Mitarbeitende", "13 bis 16 Quellen", etc. This is enforced by anchoring
+# the number to the unit and stripping thousands separators carefully.
+
+# A bare integer or a "min bis/–/-/to max" range, in German or English, that is
+# IMMEDIATELY followed (possibly after whitespace) by a word-count unit.
+# Units include German inflections (Wörter/Worte/Wörtern) and English
+# (words/word). Captures the raw number tokens (e.g. "3.000", "230 bis 270",
+# "1,100 to 1,200") so they can be parsed into ints after removing thousands
+# separators.
+_WORD_RANGE_RE = re.compile(
+    r"\b(\d[\d.,]*)\s*(?:bis|\u2013|-|to|\u2013|\u2014)\s*(\d[\d.,]*)\s*"
+    r"(?:Wörter|Worte|Wörtern|words|word)\b",
+    re.IGNORECASE,
+)
+_WORD_SINGLE_RE = re.compile(
+    r"\b(?:ca\.|ca|circa|ungef\u00e4hr|about|around|~)?\s*(\d[\d.,]*)\s*"
+    r"(?:Wörter|Worte|Wörtern|words|word)\b",
+    re.IGNORECASE,
+)
+
+# A per-section scope line, e.g. "Umfang: ungefähr 230 bis 270 Wörter" /
+# "Scope: 550-650 words". Captures the full numeric range phrase; the caller
+# parses the min/max out. Scoped to a line so we can attach it to the nearest
+# preceding numbered outline heading.
+_SECTION_SCOPE_RE = re.compile(
+    r"(?im)^\s*(?:umfang|scope|length)\s*[:\-]?\s*(.+?(?:Wörter|Worte|words).*)$"
+)
+
+
+def _parse_int(s: str) -> Optional[int]:
+    """Parse a number token like ``3.000`` / ``1,200`` / ``3000`` into an int.
+
+    German uses ``.`` as a thousands separator and ``,`` as a decimal point;
+    English is the reverse. A trailing decimal part is dropped (word budgets
+    are integers). Returns None if the token is not a clean integer.
+    """
+    s = s.strip().replace(".", "").replace(",", "")
+    if not s.isdigit():
+        # Allow a trailing .0 / ,0 style that survived the strip — unlikely
+        # after removing both separators, but be safe.
+        if s.replace("0", "").isdigit() and s.endswith("0"):
+            pass
+        else:
+            return None
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
+def _parse_range(phrase: str) -> Optional[tuple[int, int]]:
+    """Parse a numeric word-count phrase into ``(min, max)``.
+
+    Accepts:
+      - "230 bis 270 Wörter"        -> (230, 270)
+      - "1,100 to 1,200 words"      -> (1100, 1200)
+      - "ca. 3000 Wörter"           -> (2700, 3300)   # ±10% window
+      - "ungefähr 3.000 Wörter"     -> (2700, 3300)
+      - "3000-3500 Wörter"          -> (3000, 3500)
+    Returns None when no clean number is adjacent to a word-count unit.
+    """
+    # Range first (min bis/–/-/to max).
+    m = _WORD_RANGE_RE.search(phrase)
+    if m:
+        lo = _parse_int(m.group(1))
+        hi = _parse_int(m.group(2))
+        if lo is not None and hi is not None and lo <= hi:
+            return lo, hi
+        # swapped range (e.g. "500 to 300") — take the ordered pair
+        if lo is not None and hi is not None:
+            return min(lo, hi), max(lo, hi)
+    # Single number -> ±10% window (a single figure is a target, not a max).
+    m = _WORD_SINGLE_RE.search(phrase)
+    if m:
+        n = _parse_int(m.group(1))
+        if n is not None and n > 0:
+            return max(1, round(n * 0.9)), round(n * 1.1)
+    return None
+
+
+class WordBudget:
+    """Structured word-count budget extracted from a briefing.
+
+    Deterministic (no LLM). Drives the planner's per-section budget contract
+    and the writer's hard ``max_tokens`` limit, so a briefing that says
+    "ca. 3.000 Wörter" cannot balloon into 47.000.
+
+    - ``total``: ``(min, max, target)`` for the whole document body, or None.
+    - ``sections``: maps an outline NUMBER (``"1"``, ``"2.1"``) to ``(min, max)``.
+      Keyed by number (not title) so it survives title normalisation.
+    - ``source``: short human-readable note about where the budget came from,
+      for debugging / budget_source on the section model.
+    """
+
+    __slots__ = ("total", "sections", "source")
+
+    def __init__(
+        self,
+        total: Optional[tuple[int, int, int]] = None,
+        sections: Optional[dict[str, tuple[int, int]]] = None,
+        source: str = "",
+    ):
+        self.total = total
+        self.sections = sections or {}
+        self.source = source
+
+    @property
+    def has_any(self) -> bool:
+        return self.total is not None or bool(self.sections)
+
+    def to_dict(self) -> dict:
+        total = None
+        if self.total:
+            lo, hi, tgt = self.total
+            total = {"min": lo, "target": tgt, "max": hi}
+        return {
+            "total_word_budget": total,
+            "section_word_budgets": {
+                k: [lo, hi] for k, (lo, hi) in self.sections.items()
+            },
+            "budget_source": self.source,
+        }
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"WordBudget(total={self.total!r}, sections={self.sections!r}, source={self.source!r})"
+
+
+def extract_word_budget(message: str) -> WordBudget:
+    """Extract the total + per-section word budget from a briefing.
+
+    Deterministic. Only counts numbers directly attached to a word-count unit
+    (Wörter/Worte/words); "470.000 Euro", "85 Mitarbeitende" and "13 bis 16
+    Quellen" never qualify because the unit anchor is missing.
+
+    Per-section budgets are scoped to the Gliederung region and attached to the
+    nearest preceding numbered outline heading (``## 1.`` / ``### 2.1``), so an
+    "Umfang: 230 bis 270 Wörter" line lands on section ``"1"``, not on a bare
+    instruction list.
+    """
+    if not message:
+        return WordBudget()
+
+    total: Optional[tuple[int, int, int]] = None
+    total_source = ""
+    sections: dict[str, tuple[int, int]] = {}
+    source_bits: list[str] = []
+
+    # --- TOTAL budget: a word count stated BEFORE the Gliederung region ---
+    # The document total is conventionally stated up top ("Die Hausarbeit
+    # umfasst ca. 3.000 Wörter"). A per-section scope line like "230 bis 270
+    # Wörter" sits INSIDE the Gliederung region and must not be mistaken for
+    # the total. So: only consider word-count mentions that appear before the
+    # outline region starts (or before any Gliederung/Outline header).
+    region = _outline_region(message)
+    total_search_end = region[0] if region is not None else len(message)
+    total_search_end = _OUTLINE_HEADER_RE.search(message).start() \
+        if _OUTLINE_HEADER_RE.search(message) else total_search_end
+    head = message[:total_search_end]
+    m_range = _WORD_RANGE_RE.search(head)
+    m_single = _WORD_SINGLE_RE.search(head)
+    candidates = []
+    if m_range:
+        candidates.append((m_range.start(), "range", m_range))
+    if m_single:
+        candidates.append((m_single.start(), "single", m_single))
+    candidates.sort(key=lambda c: c[0])
+    if candidates:
+        _, kind, m = candidates[0]
+        if kind == "range":
+            lo = _parse_int(m.group(1)); hi = _parse_int(m.group(2))
+            if lo is not None and hi is not None:
+                lo, hi = (lo, hi) if lo <= hi else (hi, lo)
+                total = (lo, hi, (lo + hi) // 2)
+                total_source = f"total range '{m.group(0).strip()}'"
+        else:
+            n = _parse_int(m.group(1))
+            if n is not None and n > 0:
+                total = (round(n * 0.9), round(n * 1.1), n)
+                total_source = f"total single '{m.group(0).strip()}' (±10%)"
+
+    # --- PER-SECTION budgets: scan the outline region, attach scope lines ---
+    if region is not None:
+        r_start, r_end = region
+        region_text = message[r_start:r_end]
+        # Map each section_scope line to the nearest preceding numbered heading.
+        # Build a list of (char_pos_in_region, number) for every outline heading.
+        heading_positions: list[tuple[int, str]] = []
+        for hm in _OUTLINE_SECTION_RE.finditer(region_text):
+            prefix = region_text[hm.start(): hm.start() + 6]
+            marker_match = re.match(r"\s*(#{1,6})\s*", prefix)
+            if not marker_match:
+                continue  # bare numbered list — not a real heading
+            heading_positions.append((hm.start(), hm.group(1)))
+        for sm in _SECTION_SCOPE_RE.finditer(region_text):
+            phrase = sm.group(1)
+            rng = _parse_range(phrase)
+            if rng is None:
+                continue
+            # Find nearest preceding heading.
+            sp = sm.start()
+            nearest_num = None
+            for hp, num in heading_positions:
+                if hp < sp:
+                    nearest_num = num
+                else:
+                    break
+            if nearest_num is not None:
+                sections[nearest_num] = rng
+                source_bits.append(f"sec {nearest_num}: {phrase.strip()}")
+
+    source = total_source
+    if source_bits:
+        source = (source + "; " if source else "") + "; ".join(source_bits[:8])
+
+    return WordBudget(total=total, sections=sections, source=source)
+
 # Academic task keywords.
 _TASK_RE = re.compile(
     r"\b(?:Hausarbeit|Seminararbeit|Bachelor(?:arbeit)?|Master(?:arbeit)?|Diplomarbeit|"
@@ -529,6 +750,7 @@ def classify_assignment(message: str) -> dict:
           "primary_question": Optional[str],
           "questions": List[str],
           "outline": List[dict],            # structured Gliederung (number/title/level)
+          "word_budget": dict,             # {total_word_budget, section_word_budgets, budget_source}
           "has_outline": bool,
           "has_scope": bool,
           "has_deliverable": bool,
@@ -552,8 +774,9 @@ def classify_assignment(message: str) -> dict:
     questions = extract_leitfragen(message) if is_structured else []
     primary_question = extract_primary_leitfrage(message) if is_structured else None
     outline = extract_outline(message) if is_structured else []
+    word_budget = extract_word_budget(message) if is_structured else WordBudget()
     has_outline = len(outline) >= 3
-    has_scope = bool(_WORDCOUNT_RE.search(message))
+    has_scope = bool(_WORDCOUNT_RE.search(message)) or word_budget.has_any
     deliverable_match = _TASK_RE.search(message)
     has_deliverable = bool(deliverable_match)
     deliverable = deliverable_match.group(0) if deliverable_match else None
@@ -572,6 +795,7 @@ def classify_assignment(message: str) -> dict:
         "primary_question": primary_question,
         "questions": questions,
         "outline": [s.to_dict() for s in outline],
+        "word_budget": word_budget.to_dict(),
         "has_outline": has_outline,
         "has_scope": has_scope,
         "has_deliverable": has_deliverable,
@@ -586,6 +810,7 @@ def _empty_classification() -> dict:
         "primary_question": None,
         "questions": [],
         "outline": [],
+        "word_budget": WordBudget().to_dict(),
         "has_outline": False,
         "has_scope": False,
         "has_deliverable": False,
@@ -599,6 +824,8 @@ __all__ = [
     "extract_leitfragen",
     "extract_primary_leitfrage",
     "extract_outline",
+    "extract_word_budget",
     "classify_assignment",
     "OutlineSection",
+    "WordBudget",
 ]

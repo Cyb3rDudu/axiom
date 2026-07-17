@@ -497,3 +497,88 @@ def test_classify_complete_outline_not_inflated_by_noise():
     assert c["has_outline"] is True
     assert len(c["outline"]) == 11
     assert c["outline"][0] == {"number": "1", "title": "Einleitung", "level": 1}
+
+
+# ---------------------------------------------------------------------------
+# Word-budget extraction (deterministic). Must extract total + per-section
+# budgets, and MUST NOT treat "470.000 Euro", "85 Mitarbeitende" or
+# "13 bis 16 Quellen" as word counts.
+# ---------------------------------------------------------------------------
+
+from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
+    extract_word_budget as _extract_word_budget,
+)
+
+
+_BUDGET_BRIEFING = (
+    "Die Hausarbeit umfasst ca. 3.000 W\u00f6rter.\n\n"
+    "# Fallunternehmen\n"
+    "Jahresumsatz: rund 19 Mio. Euro.\n"
+    "Unternehmensgr\u00f6\u00dfe: 85 Mitarbeitende.\n"
+    "Umsatzleistung: rund 470.000 Euro pro Mitarbeitendem.\n\n"
+    "# Verbindliche Gliederung\n\n"
+    "## 1. Einleitung\n"
+    "Umfang: ungef\u00e4hr 230 bis 270 W\u00f6rter\n\n"
+    "## 2. Theorie\n\n"
+    "### 2.1 Unternehmung\n"
+    "Umfang: ca. 180 bis 220 W\u00f6rter\n\n"
+    "## 3. Analyse\n"
+    "Umfang: 1.100 bis 1.200 W\u00f6rter\n\n"
+    "## 4. Fazit\n\n"
+    "# Quellenanforderungen\n"
+    "Verwende 13 bis 16 Quellen.\n"
+)
+
+
+def test_extract_word_budget_total():
+    wb = _extract_word_budget(_BUDGET_BRIEFING)
+    # Total = 3000 with +/-10% window, target 3000.
+    assert wb.total == (2700, 3300, 3000)
+
+
+def test_extract_word_budget_sections_keyed_by_number():
+    wb = _extract_word_budget(_BUDGET_BRIEFING)
+    assert wb.sections == {
+        "1": (230, 270),
+        "2.1": (180, 220),
+        "3": (1100, 1200),
+    }
+
+
+def test_extract_word_budget_no_false_positives_from_decoy_numbers():
+    """Euro amounts, headcounts and source counts must never be budgets."""
+    wb = _extract_word_budget(_BUDGET_BRIEFING)
+    all_nums = set()
+    if wb.total:
+        all_nums.update(wb.total[:2])
+    all_nums.update(v for rng in wb.sections.values() for v in rng)
+    for bad in (19, 470000, 85, 13, 16):
+        assert bad not in all_nums, f"decoy number {bad} leaked into budget"
+
+
+def test_extract_word_budget_single_total_gets_window():
+    wb = _extract_word_budget("ca. 2500 words total.\n# Gliederung\n## 1. A\n")
+    assert wb.total == (2250, 2750, 2500)
+
+
+def test_extract_word_budget_total_not_confused_with_section_scope():
+    """The total must come from the document-level statement, not the first
+    per-section scope line (regression: previously total was 250 = sec 1)."""
+    wb = _extract_word_budget(_BUDGET_BRIEFING)
+    assert wb.total[2] == 3000  # not 250
+
+
+def test_extract_word_budget_english_range():
+    wb = _extract_word_budget(
+        "About 3,000 words.\n# Outline\n## 1. Intro\nScope: 200 to 250 words\n"
+    )
+    assert wb.total == (2700, 3300, 3000)
+    assert wb.sections == {"1": (200, 250)}
+
+
+def test_classify_includes_word_budget():
+    c = classify_assignment(_BUDGET_BRIEFING)
+    assert "word_budget" in c
+    assert c["word_budget"]["total_word_budget"]["target"] == 3000
+    assert c["word_budget"]["section_word_budgets"]["1"] == [230, 270]
+    assert c["word_budget"]["budget_source"]  # non-empty provenance
