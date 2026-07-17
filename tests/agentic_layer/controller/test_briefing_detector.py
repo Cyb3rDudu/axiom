@@ -407,3 +407,93 @@ def test_primary_leitfrage_not_taken_from_plural_fragen_header():
 """ + ("filler " * 30)
     q = extract_primary_leitfrage(msg)
     assert q is None
+
+
+# ---------------------------------------------------------------------------
+# Regression: production mission c00de8dd generated 47.000 words with a 17-
+# section scrambled outline because extract_outline() pulled in BARE numbered
+# lists nested inside outline subsections (the per-factor analysis structure
+# "1. Beschreibung ... 2. Beleg ...") and numbered lists from post-outline
+# single-# categories (# Quellenanforderungen) whose single hash did not end
+# the outline region. The real Gliederung uses ##/### markdown headings; bare
+# numbered lines are instruction text, not sections.
+# ---------------------------------------------------------------------------
+
+_OUTLINE_NOISE_BRIEFING = (
+    "Hausarbeit, ca. 3.000 W\u00f6rter.\n\n"
+    "# Verbindliche Gliederung\n\n"
+    "## 1. Einleitung\n\n"
+    "## 2. Theoretischer Bezugsrahmen\n\n"
+    "### 2.1 NexMach als Unternehmung\n\n"
+    "### 2.2 NexMach als System\n\n"
+    "## 3. Darstellung und Analyse\n\n"
+    "### 3.1 Makroumweltanalyse\n\n"
+    "### 3.2 Branchenstrukturanalyse\n\n"
+    "## 4. Umweltanalyse der NexMach\n\n"
+    "### 4.2 Makroumwelt von NexMach\n\n"
+    "F\u00fcr jeden Faktor ist folgende Struktur einzuhalten:\n\n"
+    "1. Beschreibung der externen Entwicklung\n"
+    "2. Beleg durch eine aktuelle Quelle\n"
+    "3. konkreter Wirkungsmechanismus\n"
+    "4. Betroffenheit des Gesch\u00e4ftsmodells\n"
+    "5. Chance oder Risiko\n"
+    "6. m\u00f6gliche Reaktion von NexMach\n\n"
+    "## 5. Zentrale Umwelteinfl\u00fcsse\n\n"
+    "Vorl\u00e4ufige Auswahl:\n\n"
+    "1. Zugang zu Industrie- und Maschinendaten\n"
+    "2. KI-, Daten- und Cybersecurity-Regulierung\n"
+    "3. technologische Dynamik und Plattformabh\u00e4ngigkeit\n\n"
+    "## 6. Fazit\n\n"
+    "# Quellenanforderungen\n\n"
+    "Verwende insgesamt 13 bis 16 Quellen.\n\n"
+    "1. facheinschl\u00e4gige wissenschaftliche Quellen\n"
+    "2. Praxisquellen\n"
+)
+
+
+def test_extract_outline_ignores_bare_numbered_lists_inside_outline():
+    """Bare numbered instruction lists nested under a markdown outline
+    subsection must NOT become top-level outline sections."""
+    outline = extract_outline(_OUTLINE_NOISE_BRIEFING)
+    titles = [s.title for s in outline]
+    numbers = [s.number for s in outline]
+
+    # Exactly the 11 real Gliederung sections.
+    assert len(outline) == 11
+    assert numbers == [
+        "1", "2", "2.1", "2.2", "3", "3.1", "3.2", "4", "4.2", "5", "6",
+    ]
+    # None of the bare-list instruction items leaked in.
+    for noise in [
+        "Beschreibung der externen Entwicklung",
+        "Beleg durch eine aktuelle Quelle",
+        "m\u00f6gliche Reaktion von NexMach",
+        "Zugang zu Industrie- und Maschinendaten",
+        "KI-, Daten- und Cybersecurity-Regulierung",
+    ]:
+        assert noise not in titles, f"bogus section leaked in: {noise!r}"
+    # Every surviving section carries a markdown heading marker.
+    assert all(s.heading_marker for s in outline)
+
+
+def test_outline_region_ends_at_single_hash_post_outline_category():
+    """A single-# category after the Gliederung (e.g. # Quellenanforderungen)
+    must terminate the outline region so its numbered lists are not collected."""
+    import ai_researcher.agentic_layer.controller.utils.briefing_detector as bd
+    region = bd._outline_region(_OUTLINE_NOISE_BRIEFING)
+    assert region is not None
+    start, end = region
+    region_text = _OUTLINE_NOISE_BRIEFING[start:end]
+    # Region must contain Fazit but NOT the post-outline Quellenanforderungen.
+    assert "## 6. Fazit" in region_text
+    assert "Quellenanforderungen" not in region_text
+    assert "facheinschl\u00e4gige" not in region_text
+
+
+def test_classify_complete_outline_not_inflated_by_noise():
+    """classify_assignment must report the real section count, not the inflated
+    one that caused the planner to generate 17 sections for a 6-chapter thesis."""
+    c = classify_assignment(_OUTLINE_NOISE_BRIEFING)
+    assert c["has_outline"] is True
+    assert len(c["outline"]) == 11
+    assert c["outline"][0] == {"number": "1", "title": "Einleitung", "level": 1}

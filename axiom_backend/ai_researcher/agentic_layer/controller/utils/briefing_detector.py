@@ -27,6 +27,14 @@ from typing import List, Optional
 # Markdown heading regex — at least ``##`` (not just ``#`` title).
 _HEADING_RE = re.compile(r"(?m)^\s{0,3}#{2,}\s+\S+.*$")
 
+# ANY markdown heading (``#``..``######``). Used by ``_outline_region`` to
+# detect where the Gliederung ends: the next heading of ANY depth that is
+# not itself a numbered outline section terminates the region. (Previously
+# only ``##``+ was scanned, so a single-``#`` category like ``# Quellen-``
+# ``anforderungen`` after the outline never ended the region, and numbered
+# lists in those later sections were pulled in as bogus outline entries.)
+_ANY_HEADING_RE = re.compile(r"(?m)^\s{0,3}#{1,6}\s+\S.*$")
+
 # Numbered list line >= 40 chars.
 _NUMBERED_LINE_RE = re.compile(r"(?m)^\s{0,3}\d+\.\s+(.{40,})$")
 
@@ -141,16 +149,15 @@ def _outline_region(message: str) -> Optional[tuple[int, int]]:
     if not hm:
         return None
     start = hm.start()
-    # Walk every heading after the outline header. Keep extending the region
-    # as long as each heading is itself a numbered outline section (``# 1.`` /
-    # ``## 2.1``). Stop at the first heading that is not a numbered section.
-    # Note: _HEADING_RE only matches ``##`` (2+ hashes); the outline's top-level
-    # ``# 1.`` sections are NOT matched here, which is fine — they sit between
-    # the ``##`` subsections and never terminate the region prematurely.
+    # Walk every heading (of ANY depth) after the outline header. Keep
+    # extending the region as long as each heading is itself a numbered
+    # outline section (``# 1.`` / ``## 2.1``). Stop at the first heading that
+    # is not a numbered section. Using ANY-depth headings (not just ``##``+)
+    # means a later single-``#`` category like ``# Quellenanforderungen`` now
+    # correctly terminates the region instead of letting numbered lists in
+    # the post-outline body leak in as bogus outline sections.
     end = len(message)
-    for m in _HEADING_RE.finditer(message, hm.end()):
-        # _HEADING_RE may capture a leading newline as part of the leading
-        # whitespace, so strip before splitting to get the actual heading line.
+    for m in _ANY_HEADING_RE.finditer(message, hm.end()):
         heading_line = m.group(0).strip().splitlines()[0]
         if not re.match(r"\s*#{1,6}\s*\d+(?:\.\d+)*\.?\s+\S", heading_line):
             # This heading has no numeric prefix -> a new category; region ends.
@@ -205,6 +212,19 @@ def extract_outline(message: str) -> List[OutlineSection]:
             continue
         seen_titles.add(title.lower())
         sections.append(OutlineSection(number=number, title=title, heading_marker=marker))
+
+    # A real Gliederung marks its sections with markdown headings (``# 1.``,
+    # ``## 2.1``). Instruction text inside the outline — e.g. the per-factor
+    # structure block "Für jeden Faktor ist folgende Struktur einzuhalten:
+    # 1. Beschreibung ... 2. Beleg ..." nested under ``### 4.2`` — uses BARE
+    # numbered lists (no ``#``). Such bare items were collected as bogus
+    # top-level sections, which made the planner invent ~17 sections instead
+    # of the required 6. When the outline uses markdown headings at all, drop
+    # any item lacking a heading marker so only genuine headings survive.
+    # (If NO item carries a marker — a plain numbered-list outline — we keep
+    # everything, since there the bare numbers ARE the headings.)
+    if any(s.heading_marker for s in sections):
+        sections = [s for s in sections if s.heading_marker]
     return sections
 
 
