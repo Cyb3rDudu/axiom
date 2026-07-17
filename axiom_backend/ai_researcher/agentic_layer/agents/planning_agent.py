@@ -34,6 +34,88 @@ logger = logging.getLogger(__name__) # <-- Add logger
 # Enable debug mode via environment variable
 DEBUG_PLANNING = os.getenv('DEBUG_PLANNING', 'false').lower() == 'true'
 
+
+def _normalize_title_for_budget(title: str) -> str:
+    """Lowercase + collapse whitespace for title matching (budget join key)."""
+    return re.sub(r"\s+", " ", (title or "").strip().lower())
+
+
+def _distribute_word_budgets_impl(
+    sections: List["ReportSection"],
+    mission_word_budget: dict,
+    required_outline: "Optional[List[dict]]",
+) -> None:
+    """Project the briefing's word budget onto the generated sections in place.
+
+    Module-level implementation (testable without instantiating PlanningAgent).
+    See ``PlanningAgent._distribute_word_budgets`` for the full rationale.
+    """
+    if not sections:
+        return
+    section_budgets = (mission_word_budget or {}).get("section_word_budgets") or {}
+    budget_source = (mission_word_budget or {}).get("budget_source") or "briefing"
+    if not section_budgets and not (mission_word_budget or {}).get("total_word_budget"):
+        return
+
+    # Build title -> number map from required_outline (parsed Gliederung).
+    title_to_number: dict[str, str] = {}
+    if required_outline:
+        for rec in required_outline:
+            num = rec.get("number")
+            title = rec.get("title")
+            if num and title:
+                title_to_number[_normalize_title_for_budget(title)] = num
+
+    def _assign(sec) -> Optional[str]:
+        """Return the outline number for this section by title match, else None."""
+        return title_to_number.get(_normalize_title_for_budget(sec.title))
+
+    def _walk(lst):
+        for sec in lst:
+            num = _assign(sec)
+            rng = section_budgets.get(num) if num else None
+            if rng and len(rng) == 2:
+                sec.target_words_min = int(rng[0])
+                sec.target_words_max = int(rng[1])
+                sec.budget_source = f"briefing Umfang [{num}] ({budget_source})"
+            elif sec.subsections:
+                # Parent with subsections but no explicit budget: this chapter
+                # should synthesise, not re-spend. Cap the parent at a short
+                # synthesis budget.
+                sec.target_words_max = 120
+                sec.budget_source = "synthesis-parent (short, distributed to subsections)"
+            _walk(sec.subsections)
+
+    _walk(sections)
+
+    # Second pass: distribute a parent's explicit budget across its subsections
+    # when those subsections have no budget of their own.
+    def _distribute_parent(lst):
+        for sec in lst:
+            if sec.subsections:
+                parent_has_explicit = bool(sec.budget_source) and \
+                    sec.budget_source.startswith("briefing Umfang")
+                children_needing = [c for c in sec.subsections
+                                    if c.target_words_max is None]
+                if parent_has_explicit and children_needing:
+                    total_min = sec.target_words_min or 0
+                    total_max = sec.target_words_max or 0
+                    n = len(sec.subsections)
+                    if n > 0 and total_max > 0:
+                        per_min = max(60, total_min // n)
+                        per_max = max(80, total_max // n)
+                        for c in sec.subsections:
+                            if c.target_words_max is None:
+                                c.target_words_min = per_min
+                                c.target_words_max = per_max
+                                c.budget_source = (
+                                    f"distributed from parent [{_assign(sec)}] "
+                                    f"({total_min}-{total_max} / {n})"
+                                )
+                _distribute_parent(sec.subsections)
+
+    _distribute_parent(sections)
+
 class PlanningAgent(BaseAgent):
     """
     Agent responsible for creating a step-by-step research plan based on the user request
@@ -267,6 +349,35 @@ Remember: Keep it focused, logical, and actionable. Do NOT include section IDs -
                 "per required outline title above (same order). If any required "
                 "section is missing, add it. Do not merge or drop sections."
             )
+        # Deterministic word budget (Priority 2): present the parsed total +
+        # per-section budgets as a binding contract. The planner must respect
+        # the totals and, for parent sections whose own budget spans
+        # subsections, distribute the budget across those subsections. A parent
+        # with subsections should itself stay SHORT (synthesis only), not double
+        # its budget on top of the subsections' budgets.
+        word_budget = metadata.get("word_budget") or {}
+        wb_total = (word_budget.get("total_word_budget") or {})
+        wb_sections = word_budget.get("section_word_budgets") or {}
+        if wb_total or wb_sections:
+            parts.append("")
+            parts.append("WORD BUDGET (binding, parsed deterministically from the briefing):")
+            if wb_total:
+                parts.append(
+                    f"  TOTAL document length: {wb_total.get('min')}–{wb_total.get('max')} "
+                    f"words (target {wb_total.get('target')}). The finished report "
+                    "body MUST stay within this range."
+                )
+            if wb_sections:
+                parts.append("  Per-section targets (min–max words):")
+                for num, rng in wb_sections.items():
+                    parts.append(f"    [{num}] {rng[0]}–{rng[1]} words")
+                parts.append(
+                    "  HARD RULES: (a) the SUM of all section budgets must not exceed "
+                    "the TOTAL; (b) a parent section that has subsections must stay "
+                    "SHORT (intro/synthesis only) — do NOT re-spend its full word "
+                    "budget on top of its subsections; (c) distribute a parent's budget "
+                    "across its subsections when the subsections have no explicit budget."
+                )
         parts.append("")
         parts.append(
             "Note: the 'Research Request:' line that follows is a distilled summary "
@@ -279,6 +390,35 @@ Remember: Keep it focused, logical, and actionable. Do NOT include section IDs -
             self.agent_name, len(full_briefing), mission_id,
         )
         return "\n".join(parts)
+
+    def _distribute_word_budgets(
+        self,
+        sections: List["ReportSection"],
+        mission_word_budget: dict,
+        required_outline: Optional[List[dict]],
+    ) -> None:
+        """Project the briefing's word budget onto the generated sections in place.
+
+        ``mission_word_budget`` is the dict stored at mission creation:
+        ``{total_word_budget, section_word_budgets: {number: [min,max]}, budget_source}``.
+        We match each section to its outline number via title (using
+        ``required_outline``, which carries the number + title pairs parsed from
+        the Gliederung), then set ``target_words_min``/``target_words_max``/
+        ``budget_source`` directly on the ReportSection so the writer enforces a
+        hard cap.
+
+        Distribution rules:
+          - A section with an explicit per-section budget keeps it.
+          - A parent section that has subsections but no explicit budget: if the
+            *required outline* gave this number a budget, split it evenly across
+            its subsections (the parent itself stays a short synthesis — we set
+            a small synthetic cap so it doesn't re-spend the chapter budget).
+          - Leaves without any budget get nothing (writer uses the total as a
+            soft guide only).
+        """
+        _distribute_word_budgets_impl(
+            sections, mission_word_budget, required_outline
+        )
 
     def _phase2_system_prompt(self) -> str:
         """Phase 2: Outline with Note Assignment - Assigns collected notes to sections."""
@@ -1347,6 +1487,33 @@ Available Research Tools:
         except Exception as req_err:
             logger.warning("%s: required-outline enforcement skipped due to error: %s",
                            self.agent_name, req_err, exc_info=True)
+
+        # Deterministic word-budget distribution (Priority 2/3). The briefing's
+        # word_budget (section_word_budgets keyed by outline number) is now
+        # projected onto the generated ReportSection objects so the writer can
+        # enforce a per-section max_tokens cap. We match sections to their
+        # required-outline number via title, then set target_words_min/max.
+        # A parent with subsections distributes its own budget across those
+        # subsections when they lack an explicit budget (so a 550-650 chapter
+        # with three subsections gives each ~180-220 instead of the parent
+        # ALSO spending 550-650 on synthesis text).
+        try:
+            controller = getattr(self, "controller", None)
+            context_manager = getattr(controller, "context_manager", None) if controller else None
+            mission_word_budget = None
+            if context_manager and mission_id:
+                mc = context_manager.get_mission_context(mission_id)
+                if mc:
+                    mission_word_budget = (getattr(mc, "metadata", None) or {}).get("word_budget")
+            if mission_word_budget:
+                self._distribute_word_budgets(
+                    current_response.report_outline,
+                    mission_word_budget,
+                    required_outline,
+                )
+        except Exception as wb_err:
+            logger.warning("%s: word-budget distribution skipped due to error: %s",
+                           self.agent_name, wb_err, exc_info=True)
         
         # Log final summary
         logger.info(f"{self.agent_name}: Reflection loop complete. Final outline has "

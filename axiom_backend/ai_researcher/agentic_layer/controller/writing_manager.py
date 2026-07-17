@@ -18,6 +18,34 @@ from ai_researcher.agentic_layer.controller.utils.status_checks import acheck_mi
 
 logger = logging.getLogger(__name__)
 
+
+def _trim_to_word_budget(text: str, max_words: int) -> str:
+    """Trim ``text`` to at most ``max_words`` words, cutting at the last full
+    sentence boundary at or before the word limit.
+
+    Used by the post-generation word guard (Priority 4) to enforce the
+    briefing's per-section 'Umfang'. Appends an ellipsis when content is cut.
+    Deterministic, no LLM call.
+    """
+    if max_words <= 0 or not text:
+        return text
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    # Take the first max_words words, then walk back to the last sentence end.
+    head = " ".join(words[:max_words])
+    # Sentence enders across languages (., !, ?, …). Keep it simple.
+    best = -1
+    for ch in (".", "!", "?", "…", ".\"", ")"):
+        idx = head.rfind(ch)
+        if idx > best:
+            best = idx
+    if best > int(len(head) * 0.5):  # only cut at a sentence if reasonably far in
+        return head[: best + 1].rstrip() + " …"
+    # No clean sentence boundary — cut at the word limit.
+    return head.rstrip(" ,;:") + " …"
+
+
 class WritingManager:
     """
     Manages the writing phase of the mission, including multi-pass writing,
@@ -591,6 +619,26 @@ class WritingManager:
             model_details=model_call_details,
             log_queue=log_queue, update_callback=update_callback
         )
+
+        # Post-generation word guard (Priority 4). Count words deterministically
+        # and TRIM any section that overran its hard cap by more than 20%. The
+        # max_tokens cap above already prevents 16x blowups, but a model can
+        # still emit 1.5-2x the target; this guarantees the stored text respects
+        # the briefing's 'Umfang'. Trims at the last full sentence <= limit*1.2.
+        tw_max = getattr(section, "target_words_max", None)
+        if tw_max and section_content and log_status == "success":
+            hard_limit = int(tw_max * 1.2)
+            word_count = len(section_content.split())
+            if word_count > hard_limit:
+                trimmed = _trim_to_word_budget(section_content, hard_limit)
+                if trimmed and len(trimmed.split()) < word_count:
+                    logger.warning(
+                        "Word guard: section '%s' wrote %d words (limit %d, cap %d) "
+                        "— trimmed to %d words.",
+                        section.title, word_count, tw_max, hard_limit,
+                        len(trimmed.split()),
+                    )
+                    section_content = trimmed
 
         # Store the generated/revised (or error) content for this section
         await self.controller.context_manager.store_report_section(mission_id, section.section_id, section_content)

@@ -825,6 +825,29 @@ class WritingAgent(BaseAgent):
 - **Research Strategy:** {section_to_write.research_strategy}
 """
 
+        # Deterministic word-budget guard (Priority 3). When the briefing
+        # provided a per-section word target, state it as a HARD instruction and
+        # cap max_tokens below so the model literally cannot overrun by 16x.
+        # max_tokens ~= max_words * 1.8 (German ~1.6 tokens/word incl. umlauts
+        # and markdown) plus a small buffer; clamped to a sane floor.
+        section_word_guard = ""
+        per_section_max_tokens = None
+        tw_min = getattr(section_to_write, "target_words_min", None)
+        tw_max = getattr(section_to_write, "target_words_max", None)
+        if tw_max:
+            lo = tw_min or int(tw_max * 0.8)
+            section_word_guard = (
+                f"\n**HARD LENGTH LIMIT:** Write approximately {lo}-{tw_max} words "
+                "for this section. Do NOT exceed "
+                f"{int(tw_max * 1.2)} words under any circumstances — be concise, "
+                "develop the argument without filler, lists, or repetition. "
+                "The backend counts words and will truncate over-long sections."
+            )
+            per_section_max_tokens = max(256, int(tw_max * 1.8) + 120)
+        budget_src = getattr(section_to_write, "budget_source", None)
+        if budget_src and section_word_guard:
+            section_word_guard += f" (source: {budget_src})"
+
         revision_section = ""
         if is_revision_pass:
             revision_section = f"""
@@ -843,6 +866,7 @@ class WritingAgent(BaseAgent):
 **Task:** {'Revise the "Current Draft Content" based *specifically* on the "Revision Suggestions".' if is_revision_pass else "Write the initial draft content."} Ensure the final output is the *complete* text for the '{section_to_write.title}' section/subsection, adhering to all system prompt guidelines (style, citations, NO HEADERS, transitions, avoiding repetition). 
 
 **CRITICAL:** Output *only* the section text. Do NOT include any meta-commentary, agent thoughts, or scratchpad content. Do NOT prefix your response with "Agent Scratchpad:" or any similar text.
+{section_word_guard}
 """
 
         # Calculate other context size (everything except notes, previous sections, and outline)
@@ -893,6 +917,7 @@ class WritingAgent(BaseAgent):
             update_callback=update_callback,  # Pass update_callback for UI updates
             model=model,  # <-- Pass the model parameter down
             log_llm_call=False,  # Disable duplicate LLM call logging since writing operations are logged by higher-level methods
+            **({"max_tokens": per_section_max_tokens} if per_section_max_tokens else {}),
             # Temperature is handled by the ModelDispatcher based on model defaults/config
             # No specific response format needed, expect raw text
         )

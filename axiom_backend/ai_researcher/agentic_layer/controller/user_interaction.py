@@ -742,6 +742,12 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     outline_records = classification.get("outline") or []
                     if outline_records:
                         metadata_update["structured_outline"] = outline_records
+                    # Deterministic word budget (Priority 1 of the metadata plan):
+                    # store total + per-section budgets so the planner and writer
+                    # can enforce them instead of blowing past 'ca. 3.000 Wörter'.
+                    word_budget = classification.get("word_budget") or {}
+                    if word_budget.get("total_word_budget") or word_budget.get("section_word_budgets"):
+                        metadata_update["word_budget"] = word_budget
                     await self.controller.context_manager.update_mission_metadata(mission_id, metadata_update)
 
                     # NOTE: we deliberately do NOT overwrite mission_context.user_request

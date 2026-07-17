@@ -747,6 +747,21 @@ class ModelDispatcher:
         )
         # --- END NEW ---
 
+        # --- Per-call max_tokens override (deterministic word budgets) ---
+        # Callers (e.g. the writing agent enforcing a per-section word cap)
+        # may pass max_tokens= in kwargs to cap completion length. We honour it
+        # as a CEILING: take the smaller of the caller's cap and the role's
+        # configured budget, so a section budget can only ever REDUCE output,
+        # never blow past the provider/role limit.
+        caller_max_tokens = kwargs.get("max_tokens")
+        if caller_max_tokens is not None:
+            try:
+                caller_cap = int(caller_max_tokens)
+                if caller_cap > 0:
+                    max_tokens_for_call = min(max_tokens_for_call, caller_cap)
+            except (TypeError, ValueError):
+                pass
+
         # --- Cap max_tokens based on provider limits ---
         provider_config = config.PROVIDER_CONFIG.get(provider_name, {})
         provider_max_tokens = provider_config.get("max_tokens_limit")
