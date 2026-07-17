@@ -21,6 +21,20 @@ from ai_researcher.global_semaphore import get_global_llm_semaphore
 logger = logging.getLogger(__name__)
 
 
+# DeepSeek V4 thinking-mode policy by agent_mode. Thinking mode is DEFAULT-ON
+# (effort high) and its reasoning tokens count against max_tokens — fatal for
+# content-generation calls whose max_tokens is capped to a tight per-section
+# word budget (the model reasons away the whole budget and emits EMPTY
+# content). For these prose/synthesis modes we DISABLE thinking so the model
+# emits content directly. Reasoning-heavy modes keep thinking enabled.
+# (Per https://api-docs.deepseek.com/guides/thinking_mode; verified empirically.)
+_V4_THINKING_DISABLED_MODES = {
+    "writing",           # report-section prose (tight word budget, MUST emit content)
+    "query_preparation", # deterministic sub-query generation
+    "research",          # note synthesis from chunks (prose, not deep reasoning)
+}
+
+
 def estimate_token_count(text: str) -> int:
     # Use ~3.2 chars/token (conservative) instead of 4 chars/token.
     # Non-English text (especially German compound words) and technical
@@ -873,22 +887,43 @@ class ModelDispatcher:
                 "max_tokens": effective_max,
             }
         elif is_deepseek_v4:
-            # DeepSeek V4 (flash/pro): 384K output cap + 1M context, thinking
-            # mode default-on. Reasoning tokens count against max_tokens so
-            # the old 8K provider cap throttles real content. Bump to V4-aware
-            # limit; temperature works in V4 but is omitted to match the
-            # reasoner branch's stable-output contract.
+            # DeepSeek V4 (flash/pro): 384K output cap + 1M context. Thinking
+            # mode is DEFAULT-ON (effort high) per DeepSeek docs. Reasoning
+            # tokens count against max_tokens, which is catastrophic for tight
+            # content-generation budgets: a writing call capped at max_tokens=256
+            # (the per-section word budget) leaves the model reasoning for all
+            # 256 tokens and emitting EMPTY content (finish=length, confirmed in
+            # production: ~half the report sections failed as
+            # '[Error: Failed to generate content]').
+            #
+            # Fix per DeepSeek thinking-mode docs: for content-generation agent
+            # modes (fluent prose + tight word budget), DISABLE thinking so the
+            # model emits content directly with zero reasoning tokens. Verified:
+            # thinking=disabled + max_tokens=256 -> 4/4 clean academic prose;
+            # thinking=enabled + max_tokens=256 -> 2/3 empty. Reasoning-heavy
+            # modes (planning/reflection/query_strategy/messenger) keep thinking
+            # enabled because chain-of-thought genuinely improves them and they
+            # have generous token budgets.
             v4_max = getattr(config, 'DEEPSEEK_V4_MAX_TOKENS_LIMIT', 65536)
+            _thinking_for_mode = (
+                "disabled"
+                if effective_agent_mode in _V4_THINKING_DISABLED_MODES
+                else "enabled"
+            )
             logger.info(
                 f"Detected DeepSeek V4 model: {selected_model_name}, "
-                f"forcing max_tokens={v4_max} (was {max_tokens_for_call})"
+                f"max_tokens={v4_max if caller_cap is None else 'cap='+str(caller_cap)}, "
+                f"thinking={_thinking_for_mode} (agent_mode={effective_agent_mode})"
             )
-            # Same caller-cap-as-ceiling rationale as the reasoner branch above.
+            # Caller cap applies as a CEILING (see dispatch() docstring).
             effective_max = v4_max if caller_cap is None else min(v4_max, caller_cap)
             request_params = {
                 "model": selected_model_name,
                 "messages": messages,
                 "max_tokens": effective_max,
+                # thinking mode toggle (DeepSeek V4). Disabled for prose/budgeted
+                # generation; enabled (default) for reasoning-heavy tasks.
+                "extra_body": {"thinking": {"type": _thinking_for_mode}},
             }
         else:
             # Standard parameters for non-GPT-5 models or GPT-5 via OpenRouter

@@ -801,6 +801,11 @@ class WritingAgent(BaseAgent):
             # Simple approach: provide all previous sections passed in. Limit length.
             # TODO: Consider providing only immediately preceding sections or summaries?
             for sec_id, sec_content in previous_sections_content.items():
+                # Defensive: a failed previous-section write can store None
+                # (e.g. before thinking-mode fix); guard against it instead of
+                # crashing with "object of type 'NoneType' has no len()".
+                if sec_content is None:
+                    continue
                 # Limit length to avoid excessive context
                 char_limit = get_writing_previous_content_preview_chars(self.mission_id)
                 preview = (
