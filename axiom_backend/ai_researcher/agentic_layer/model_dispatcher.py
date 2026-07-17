@@ -1129,6 +1129,46 @@ class ModelDispatcher:
                     logger.info(f"Calculated cost for {selected_model_name}: $0.000000")
                 # --- END NEW ---
 
+                # --- Thinking-model empty-content recovery (DeepSeek V4/reasoner) ---
+                # These models occasionally emit reasoning_content but leave the
+                # visible `content` empty (observed in production: success=True,
+                # completion_tokens=20, content=""). The retry loop below used to
+                # treat this as a hard failure and retry 3x — always re-hitting
+                # the same edge case, producing a retry storm and cascading
+                # ResearchAgent failures. Instead, promote reasoning_content to
+                # content so the caller receives the model's gathered info and the
+                # response is accepted as valid (no retry, no crash).
+                if (
+                    (is_deepseek_v4 or is_deepseek_reasoner)
+                    and response
+                    and response.choices
+                    and response.choices[0].message
+                ):
+                    _msg = response.choices[0].message
+                    _content_empty = not (
+                        isinstance(_msg.content, str) and _msg.content.strip()
+                    )
+                    _rc = getattr(_msg, "reasoning_content", None)
+                    if (
+                        _content_empty
+                        and isinstance(_rc, str)
+                        and _rc.strip()
+                        and not getattr(_msg, "tool_calls", None)
+                    ):
+                        try:
+                            _msg.content = _rc
+                            logger.info(
+                                "Thinking model %s returned empty content but %d chars "
+                                "of reasoning_content; promoted reasoning_content to "
+                                "content (recovered empty-content edge case, agent_mode=%s).",
+                                selected_model_name, len(_rc), effective_agent_mode,
+                            )
+                        except Exception as _promote_err:
+                            logger.debug(
+                                "Could not promote reasoning_content (immutable message?): %s",
+                                _promote_err,
+                            )
+
                 # More robust check for valid response structure
                 if (
                     response and response.choices and response.choices[0].message

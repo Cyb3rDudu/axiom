@@ -59,6 +59,55 @@ from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry  # Added im
 logger = logging.getLogger(__name__)  # <-- Initialize logger
 
 
+# Domains / patterns that never yield usable research material for an
+# academic / business-analysis mission. A web result whose URL host matches
+# one of these is dropped BEFORE any LLM note-generation call is spent on it
+# (observed junk for the NexMach Umweltanalyse mission: soccerway.com,
+# zhihu.com, langenscheidt dictionary, microsoft support, google translate).
+# Intentionally conservative: only obvious non-academic utility/navigational
+# sites are listed so we never drop a genuinely relevant source.
+_OBVIOUS_JUNK_WEB_HOSTS = (
+    "soccerway.com", "zhihu.com", "langenscheidt.com",
+    "support.microsoft.com", "support.google.com",
+    "translate.google.com", "bing.com/translator",
+    "facebook.com", "instagram.com", "tiktok.com", "twitter.com", "x.com",
+    "youtube.com", "pinterest.com", "reddit.com",
+    "amazon.", "ebay.", "aliexpress.com",
+)
+
+# Minimum content length (chars) for a web snippet to be worth a note-generation
+# LLM call. Snippets shorter than this are usually navigation/error/boilerplate
+# (e.g. 74-150 char fragments from the junk domains above) and almost never
+# produce a usable note.
+_MIN_WEB_SNIPPET_CHARS = 200
+
+
+def _is_obvious_junk_web_result(web_result: dict) -> tuple[bool, str]:
+    """Cheap, deterministic pre-filter for obviously useless web results.
+
+    Returns ``(is_junk, reason)``. Drop the result when ``is_junk`` is True so
+    no LLM note-generation call is wasted on it. Conservative by design — only
+    filters blatant non-academic utility/navigational hosts and trivially short
+    snippets; relevance judgment for everything else stays with the LLM.
+    """
+    url = (web_result.get("url") or "").lower()
+    if url:
+        for host in _OBVIOUS_JUNK_WEB_HOSTS:
+            if host in url:
+                return True, f"junk host ({host})"
+    # Check snippet/content length across the common field names returned by
+    # different search backends (searxng uses 'content', some use 'snippet').
+    snippet = (
+        web_result.get("content")
+        or web_result.get("snippet")
+        or web_result.get("description")
+        or ""
+    )
+    if isinstance(snippet, str) and len(snippet.strip()) < _MIN_WEB_SNIPPET_CHARS:
+        return True, f"snippet too short ({len(snippet.strip())} chars)"
+    return False, ""
+
+
 class ResearchAgent(BaseAgent):
     """
     Agent responsible for executing research steps: using tools for information
@@ -524,6 +573,12 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                 # Skip Wikipedia — not a valid academic source
                 if 'wikipedia.org' in (web_source_id or '').lower():
                     continue
+                # Drop obvious junk web results (non-academic utility hosts /
+                # trivially short snippets) BEFORE spending an LLM note call.
+                _junk, _jreason = _is_obvious_junk_web_result(web_result)
+                if _junk:
+                    logger.debug("Skipping junk web result (%s): %s", _jreason, web_source_id)
+                    continue
                 if web_source_id in processed_source_ids:
                     continue
                 processed_source_ids.add(web_source_id)
@@ -818,6 +873,11 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                         web_source_id = web_result.get("url", "unknown_url")
                         # Skip Wikipedia — not a valid academic source
                         if 'wikipedia.org' in (web_source_id or '').lower():
+                            continue
+                        # Drop obvious junk web results before spending an LLM note call.
+                        _junk, _jreason = _is_obvious_junk_web_result(web_result)
+                        if _junk:
+                            logger.debug("Skipping junk web result (%s): %s", _jreason, web_source_id)
                             continue
                         if web_source_id in processed_proactive_ids:
                             continue
@@ -1117,6 +1177,11 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
             web_source_id = web_result.get("url", "unknown_url")
             # Skip Wikipedia — not a valid academic source
             if 'wikipedia.org' in (web_source_id or '').lower():
+                continue
+            # Drop obvious junk web results before spending an LLM note call.
+            _junk, _jreason = _is_obvious_junk_web_result(web_result)
+            if _junk:
+                logger.debug("Skipping junk web result (%s): %s", _jreason, web_source_id)
                 continue
             if web_source_id in processed_source_ids:
                 continue
@@ -1575,6 +1640,11 @@ Now, generate the questions for the provided research request.
             web_source_id = web_result.get("url", "unknown_url")
             # Skip Wikipedia — not a valid academic source
             if 'wikipedia.org' in (web_source_id or '').lower():
+                continue
+            # Drop obvious junk web results before spending an LLM note call.
+            _junk, _jreason = _is_obvious_junk_web_result(web_result)
+            if _junk:
+                logger.debug("Skipping junk web result (%s): %s", _jreason, web_source_id)
                 continue
             if web_source_id in processed_source_ids:
                 continue
