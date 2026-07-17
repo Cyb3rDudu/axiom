@@ -502,6 +502,37 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
         active_goals = self.controller.context_manager.get_active_goals(mission_id) if mission_id else None
         active_thoughts = self.controller.context_manager.get_recent_thoughts(mission_id, limit=THOUGHT_PAD_CONTEXT_LIMIT) if mission_id else None
 
+        # Resolve awaiting_clarification state (review finding 2): when the user
+        # sends a follow-up to a mission blocked on case-assumption conflicts,
+        # re-check whether the conflicts are resolved. We re-run detection on the
+        # full briefing with the user's follow-up appended; if no conflict
+        # remains, clear the flag so the mission can proceed. The follow-up is
+        # typically the corrected figure ("Jahresumsatz ist 40 Mio. Euro, ...").
+        if mission_id:
+            try:
+                _mc = self.controller.context_manager.get_mission_context(mission_id)
+                _md = (getattr(_mc, "metadata", None) or {}) if _mc else {}
+                _pending_conflicts = _md.get("awaiting_clarification")
+                if _pending_conflicts:
+                    _full_briefing = _md.get("full_briefing") or ""
+                    # Append the user's correction so a resolved figure overrides the stale one.
+                    _combined = (_full_briefing + "\n\nKorrektur/Nachricht des Nutzers:\n" + (user_message or ""))
+                    from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
+                        detect_case_assumption_conflicts as _detect_conflicts,
+                    )
+                    _still_conflicting = _detect_conflicts(_combined)
+                    if not _still_conflicting:
+                        await self.controller.context_manager.update_mission_metadata(
+                            mission_id, {"awaiting_clarification": None}
+                        )
+                        logger.info(
+                            "Mission %s: case-assumption conflicts resolved via follow-up; "
+                            "awaiting_clarification cleared.",
+                            mission_id,
+                        )
+            except Exception as _clar_err:
+                logger.warning("awaiting_clarification re-check failed: %s", _clar_err)
+
         try:
             # Don't apply semaphore for chat operations to allow concurrent chats
             # The semaphore should only be used for heavy research operations
@@ -785,6 +816,35 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                             text=conflict_text,
                             source_agent="BriefingDetector",
                         )
+                        # HARD STOP (review finding 2): conflicts must block the
+                        # mission from proceeding to question display / planning.
+                        # Persist an awaiting_clarification flag so /missions/{id}/start
+                        # and prepare_mission_start() can reject the start, and
+                        # return a clarification response now — no initial_questions
+                        # are staged, so the normal approve/start flow cannot fire.
+                        await self.controller.context_manager.update_mission_metadata(
+                            mission_id, {"awaiting_clarification": case_conflicts}
+                        )
+                        lang = _detect_language(self.controller, mission_id, agent_output.get("response"))
+                        bullet_conflicts = "\n".join(f"- {c}" for c in case_conflicts)
+                        clarify = (
+                            "⚠️ Bevor ich starte, müssen wir einige widersprüchliche "
+                            "Fallannahmen klären:\n\n"
+                            f"{bullet_conflicts}\n\n"
+                            "Bitte korrigiere oder bestätige die relevanten Zahlen, "
+                            "damit die Hausarbeit auf einer konsistenten Grundlage beruht. "
+                            "(z. B. „Jahresumsatz ist 40 Mio. Euro, die 470.000 € pro "
+                            "Mitarbeitendem sind die bewusste Fallannahme.“)"
+                        )
+                        agent_output["response"] = clarify
+                        agent_output["mission_id"] = mission_id
+                        questions = []  # explicit: do NOT stage questions
+                        logger.warning(
+                            "Mission %s blocked: %d case-assumption conflict(s) — "
+                            "awaiting user clarification before start.",
+                            mission_id, len(case_conflicts),
+                        )
+                        return agent_output
 
                     # NOTE: we deliberately do NOT overwrite mission_context.user_request
                     # with the full briefing (Finding 3). user_request is the short

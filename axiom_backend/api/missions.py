@@ -2582,6 +2582,23 @@ async def start_mission_execution(
                 detail="Cannot start mission: At least one information source must be enabled (Web Search or Document Group). Please configure your sources before starting."
             )
 
+        # HARD STOP for unresolved case-assumption conflicts (review finding 2).
+        # A briefing with contradictory 'feste Fallannahmen' is flagged
+        # awaiting_clarification; it must not start until the user resolves
+        # the conflicts (e.g. 19 Mio. vs 40 Mio. Euro). The flag is cleared in
+        # user_interaction.py once the user provides a corrected briefing.
+        awaiting_clarification = mission_context.metadata.get("awaiting_clarification")
+        if awaiting_clarification:
+            conflicts_str = "; ".join(awaiting_clarification) if isinstance(awaiting_clarification, list) else str(awaiting_clarification)
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Diese Mission kann nicht gestartet werden, weil noch "
+                    "widersprüchliche Fallannahmen offen sind. Bitte kläre diese "
+                    "zuerst im Chat: " + conflicts_str
+                ),
+            )
+
         # Allow starting from 'pending' or 'stopped' states
         if mission_context.status not in ["pending", "stopped", "planning"]:
             raise HTTPException(

@@ -754,13 +754,16 @@ class ModelDispatcher:
         # configured budget, so a section budget can only ever REDUCE output,
         # never blow past the provider/role limit.
         caller_max_tokens = kwargs.get("max_tokens")
+        caller_cap: Optional[int] = None
         if caller_max_tokens is not None:
             try:
                 caller_cap = int(caller_max_tokens)
-                if caller_cap > 0:
-                    max_tokens_for_call = min(max_tokens_for_call, caller_cap)
+                if caller_cap <= 0:
+                    caller_cap = None
             except (TypeError, ValueError):
-                pass
+                caller_cap = None
+        if caller_cap is not None:
+            max_tokens_for_call = min(max_tokens_for_call, caller_cap)
 
         # --- Cap max_tokens based on provider limits ---
         provider_config = config.PROVIDER_CONFIG.get(provider_name, {})
@@ -858,10 +861,16 @@ class ModelDispatcher:
                 f"Detected DeepSeek-reasoner model: {selected_model_name}, "
                 f"forcing max_tokens={deepseek_max} (was {max_tokens_for_call}), omitting temperature"
             )
+            # NOTE: reasoning tokens count against max_tokens, so a tiny per-section
+            # writer cap would leave almost no room for content. We still honour the
+            # caller cap as a CEILING so a budgeted writer cannot emit 16K tokens of
+            # content; the post-generation word guard is the real backstop for these
+            # models (see writing_manager._trim_to_word_budget).
+            effective_max = deepseek_max if caller_cap is None else min(deepseek_max, caller_cap)
             request_params = {
                 "model": selected_model_name,
                 "messages": messages,
-                "max_tokens": deepseek_max,
+                "max_tokens": effective_max,
             }
         elif is_deepseek_v4:
             # DeepSeek V4 (flash/pro): 384K output cap + 1M context, thinking
@@ -874,10 +883,12 @@ class ModelDispatcher:
                 f"Detected DeepSeek V4 model: {selected_model_name}, "
                 f"forcing max_tokens={v4_max} (was {max_tokens_for_call})"
             )
+            # Same caller-cap-as-ceiling rationale as the reasoner branch above.
+            effective_max = v4_max if caller_cap is None else min(v4_max, caller_cap)
             request_params = {
                 "model": selected_model_name,
                 "messages": messages,
-                "max_tokens": v4_max,
+                "max_tokens": effective_max,
             }
         else:
             # Standard parameters for non-GPT-5 models or GPT-5 via OpenRouter
@@ -1520,10 +1531,14 @@ class ModelDispatcher:
                         request_params.pop("temperature", None)
                         # Continue with retry logic below
                     elif "max_tokens" in error_msg:
+                        _retry_max = config.DEEPSEEK_MAX_TOKENS_LIMIT
+                        # Honour the caller cap even on error-recovery retry.
+                        if caller_cap is not None:
+                            _retry_max = min(_retry_max, caller_cap)
                         logger.info(
-                            f"DeepSeek-reasoner max_tokens error, forcing max_tokens={config.DEEPSEEK_MAX_TOKENS_LIMIT} and retrying..."
+                            f"DeepSeek-reasoner max_tokens error, forcing max_tokens={_retry_max} and retrying..."
                         )
-                        request_params["max_tokens"] = config.DEEPSEEK_MAX_TOKENS_LIMIT
+                        request_params["max_tokens"] = _retry_max
                         # Continue with retry logic below
 
                 # Check for context length overflow and retry with aggressive truncation (once)
@@ -1683,6 +1698,7 @@ class ModelDispatcher:
         tool_choice: Optional[Any] = None,
         response_format: Optional[Dict[str, str]] = None,
         mission_id: Optional[str] = None,
+        max_tokens: Optional[int] = None,
     ):
         """
         Streams the LLM response using the appropriate client and model.
@@ -1695,6 +1711,8 @@ class ModelDispatcher:
             tool_choice: Optional tool choice constraint.
             response_format: Optional response format constraint.
             mission_id: Optional mission ID for status checking.
+            max_tokens: Optional per-call ceiling on completion length (applied
+                as a CEILING in every model branch, matching dispatch()).
 
         Yields:
             Streaming response chunks from the LLM.
@@ -1734,6 +1752,20 @@ class ModelDispatcher:
             effective_agent_mode, config.AGENT_ROLE_TEMPERATURE["default"]
         )
 
+        # Per-call max_tokens override (deterministic word budgets). Same
+        # ceiling semantics as the non-streaming dispatch(): a caller cap can
+        # only REDUCE output, never raise it past the role/provider limit.
+        caller_cap: Optional[int] = None
+        if max_tokens is not None:
+            try:
+                caller_cap = int(max_tokens)
+                if caller_cap <= 0:
+                    caller_cap = None
+            except (TypeError, ValueError):
+                caller_cap = None
+        if caller_cap is not None:
+            max_tokens_for_call = min(max_tokens_for_call, caller_cap)
+
         # --- Cap max_tokens based on provider limits ---
         provider_config = config.PROVIDER_CONFIG.get(provider_name, {})
         provider_max_tokens = provider_config.get("max_tokens_limit")
@@ -1770,10 +1802,12 @@ class ModelDispatcher:
                 f"Detected DeepSeek-reasoner model (stream): {selected_model_name}, "
                 f"forcing max_tokens={deepseek_max} (was {max_tokens_for_call}), omitting temperature"
             )
+            # Caller cap applies as a CEILING (see dispatch()).
+            effective_max = deepseek_max if caller_cap is None else min(deepseek_max, caller_cap)
             request_params = {
                 "model": selected_model_name,
                 "messages": messages,
-                "max_tokens": deepseek_max,
+                "max_tokens": effective_max,
                 "stream": True,
             }
         elif is_deepseek_v4:
@@ -1782,10 +1816,11 @@ class ModelDispatcher:
                 f"Detected DeepSeek V4 model (stream): {selected_model_name}, "
                 f"forcing max_tokens={v4_max} (was {max_tokens_for_call})"
             )
+            effective_max = v4_max if caller_cap is None else min(v4_max, caller_cap)
             request_params = {
                 "model": selected_model_name,
                 "messages": messages,
-                "max_tokens": v4_max,
+                "max_tokens": effective_max,
                 "stream": True,
             }
         else:
@@ -1871,10 +1906,14 @@ class ModelDispatcher:
                     )
                     request_params.pop("temperature", None)
                 elif "max_tokens" in error_msg:
+                    _retry_max = config.DEEPSEEK_MAX_TOKENS_LIMIT
+                    # Honour the caller cap even on error-recovery retry.
+                    if caller_cap is not None:
+                        _retry_max = min(_retry_max, caller_cap)
                     logger.info(
-                        f"DeepSeek-reasoner stream max_tokens error, forcing max_tokens={config.DEEPSEEK_MAX_TOKENS_LIMIT} and retrying..."
+                        f"DeepSeek-reasoner stream max_tokens error, forcing max_tokens={_retry_max} and retrying..."
                     )
-                    request_params["max_tokens"] = config.DEEPSEEK_MAX_TOKENS_LIMIT
+                    request_params["max_tokens"] = _retry_max
                 else:
                     raise e
                 # Retry the streaming call with corrected params

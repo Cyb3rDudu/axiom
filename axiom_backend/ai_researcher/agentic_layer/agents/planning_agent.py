@@ -89,7 +89,11 @@ def _distribute_word_budgets_impl(
     _walk(sections)
 
     # Second pass: distribute a parent's explicit budget across its subsections
-    # when those subsections have no budget of their own.
+    # when those subsections have no budget of their own. We RESERVE a short
+    # parent-intro slice first (review finding 3) so the parent's synthesis text
+    # + the children's budgets together stay within the chapter budget, rather
+    # than the children consuming the full amount and the parent intro adding on
+    # top (the NexMach blowup pattern).
     def _distribute_parent(lst):
         for sec in lst:
             if sec.subsections:
@@ -102,15 +106,27 @@ def _distribute_word_budgets_impl(
                     total_max = sec.target_words_max or 0
                     n = len(sec.subsections)
                     if n > 0 and total_max > 0:
-                        per_min = max(60, total_min // n)
-                        per_max = max(80, total_max // n)
+                        # Reserve a short intro slice for the parent synthesis
+                        # (~15% of the chapter, capped at 120 words), then split
+                        # the remainder across the subsections.
+                        intro_max = min(120, max(40, int(total_max * 0.15)))
+                        sec.target_words_max = intro_max
+                        sec.budget_source = (
+                            f"synthesis-intro reserved ({intro_max}w), "
+                            f"remainder distributed to subsections"
+                        )
+                        remainder_min = max(0, total_min - intro_max)
+                        remainder_max = max(n * 60, total_max - intro_max)
+                        per_min = max(60, remainder_min // n)
+                        per_max = max(80, remainder_max // n)
                         for c in sec.subsections:
                             if c.target_words_max is None:
                                 c.target_words_min = per_min
                                 c.target_words_max = per_max
                                 c.budget_source = (
                                     f"distributed from parent [{_assign(sec)}] "
-                                    f"({total_min}-{total_max} / {n})"
+                                    f"(chapter {total_min}-{total_max}, intro "
+                                    f"{intro_max}w reserved, / {n})"
                                 )
                 _distribute_parent(sec.subsections)
 

@@ -127,13 +127,18 @@ def test_distribute_word_budgets_assigns_explicit_per_section():
 
 
 def test_distribute_word_budgets_distributes_parent_across_subsections():
-    """A parent with an explicit budget but subsections lacking one must split
-    its budget across the subsections (so the parent doesn't ALSO spend 550-650)."""
+    """A parent with an explicit budget but subsections lacking one must reserve
+    a short intro slice and split the remainder across the subsections (so the
+    parent intro + children together stay within the chapter budget)."""
     outline = _build_outline_for_budget()
     PlanningAgent._distribute_word_budgets(None, outline, _MISSION_WORD_BUDGET, _REQUIRED_OUTLINE)
     parent = next(s for s in outline if s.title == "Theoretischer Bezugsrahmen")
-    assert parent.target_words_max == 650  # parent keeps explicit budget
-    # Each subsection inherited a share of 550-650 / 2.
+    # Parent now reserves a SHORT intro slice (~15% of 650, capped), not the full 650.
+    assert parent.target_words_max is not None
+    assert parent.target_words_max <= 120, (
+        f"parent intro should be a short reserved slice (<=120), got {parent.target_words_max}"
+    )
+    # Each subsection inherited a share of the remainder.
     for sub in parent.subsections:
         assert sub.target_words_max is not None
         assert sub.target_words_min is not None

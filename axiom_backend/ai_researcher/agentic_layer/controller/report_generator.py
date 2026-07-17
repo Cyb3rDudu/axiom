@@ -458,6 +458,45 @@ CRITICAL: Do NOT include formatting like "**Title:**", "Title:", markdown, or an
         # Normalize Unicode brackets to square brackets for consistent processing
         # Some LLMs use 【】 instead of []
         full_draft = full_draft.replace('【', '[').replace('】', ']')
+
+        # Aggregate word-budget guard (review finding 3). Even with per-section
+        # caps + trims, leaf maxima can sum past the document total. Count the
+        # assembled body (before bibliography/portfolio) and compare against
+        # the deterministic total_word_budget.max. When exceeded, log a
+        # prominent warning and record a metadata flag so the mission is not
+        # silently marked clean. (A whole-doc trim would cut mid-section, so we
+        # flag rather than truncate here; the per-section guards above are the
+        # primary control.)
+        try:
+            _wb = (mission_context.metadata or {}).get("word_budget") or {}
+            _wb_total = (_wb.get("total_word_budget") or {})
+            _total_max = _wb_total.get("max")
+            if _total_max:
+                _body_words = len(full_draft.split())
+                _aggregate_cap = int(_total_max * 1.15)
+                if _body_words > _aggregate_cap:
+                    logger.warning(
+                        "AGGREGATE WORD-BUDGET GUARD: mission %s body is %d words, "
+                        "total budget max is %d (cap %d). The finished report exceeds "
+                        "the briefing's word budget by %d words.",
+                        mission_id, _body_words, _total_max, _aggregate_cap,
+                        _body_words - _total_max,
+                    )
+                    await self.controller.context_manager.update_mission_metadata(
+                        mission_id,
+                        {"word_budget_exceeded": {
+                            "body_words": _body_words,
+                            "budget_max": _total_max,
+                            "over_by": _body_words - _total_max,
+                        }},
+                    )
+                else:
+                    logger.info(
+                        "Aggregate word-budget OK: mission %s body %d words / max %d.",
+                        mission_id, _body_words, _total_max,
+                    )
+        except Exception as _wbg_err:
+            logger.warning("Aggregate word-budget guard skipped: %s", _wbg_err)
         
         # Get mission context to check for simple reference mappings
         has_simple_refs = False
