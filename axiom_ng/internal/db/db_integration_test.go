@@ -40,7 +40,8 @@ func TestMigrateCreatesIngestJobs(t *testing.T) {
 		t.Fatal("ingest_jobs table was not created by migration")
 	}
 
-	for _, table := range []string{"zotero_sources", "zotero_documents", "zotero_attachments"} {
+	for _, table := range []string{"zotero_sources", "zotero_documents", "zotero_attachments",
+		"zotero_items", "zotero_collections", "zotero_item_collections"} {
 		if err := d.pool.QueryRow(ctx,
 			`SELECT EXISTS (
 				SELECT 1 FROM information_schema.tables WHERE table_name = $1
