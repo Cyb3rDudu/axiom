@@ -489,42 +489,56 @@ func (a *LocalAPI) fetchItem(key string) (*decodedItem, error) {
 }
 
 // ListDeletedKeys returns the zotero keys of items currently in the trash,
-// which represents items the user removed from the library. The library
-// version from the Last-Modified-Version header is returned so the cursor can
-// advance even when nothing else changed.
+// which represents items the user removed from the library. It paginates over
+// the trash feed and propagates decode errors so the sync aborts rather than
+// advancing its cursor over unverifiable deletions. A library version from the
+// Last-Modified-Version header is returned to advance the cursor when nothing
+// else changed.
 func (a *LocalAPI) ListDeletedKeys(since int64) ([]string, int64, error) {
-	q := url.Values{"format": {"json"}, "limit": {"100"}}
-	if since > 0 {
-		q.Set("since", fmt.Sprintf("%d", since))
-	}
-	path := a.libraryID + "/items/trash"
-	resp, err := a.get(path, q)
-	if err != nil {
-		// Some Zotero versions do not expose a trash endpoint; treat that as
-		// "no deletions" rather than aborting the sync.
-		var se *StatusError
-		if errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusNotImplemented) {
-			return nil, 0, nil
+	var allKeys []string
+	version := int64(0)
+	start := 0
+	for {
+		q := url.Values{"format": {"json"}, "limit": {"100"}}
+		if since > 0 {
+			q.Set("since", fmt.Sprintf("%d", since))
 		}
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-	version := versionHeader(resp.Header.Get("Last-Modified-Version"))
-	var trash []struct {
-		Key string `json:"key"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&trash); err != nil {
-		// Failed to decode (e.g. not JSON); treat as no deletions to stay
-		// resilient, but do not fabricate data.
-		return nil, version, nil
-	}
-	keys := make([]string, 0, len(trash))
-	for _, it := range trash {
-		if it.Key != "" {
-			keys = append(keys, it.Key)
+		q.Set("start", fmt.Sprintf("%d", start))
+		path := a.libraryID + "/items/trash"
+		resp, err := a.get(path, q)
+		if err != nil {
+			var se *StatusError
+			if errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusNotImplemented) {
+				// Some Zotero versions do not expose a trash endpoint; treat as
+				// no deletions.
+				return nil, version, nil
+			}
+			return nil, 0, err
 		}
+		if v := versionHeader(resp.Header.Get("Last-Modified-Version")); v > version {
+			version = v
+		}
+		var trash []struct {
+			Key string `json:"key"`
+		}
+		decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&trash)
+		resp.Body.Close()
+		if decodeErr != nil {
+			// A malformed trash response must stop the sync so deletions are not
+			// silently dropped; propagate the error.
+			return nil, 0, fmt.Errorf("zotero trash decode: %w", decodeErr)
+		}
+		for _, it := range trash {
+			if it.Key != "" {
+				allKeys = append(allKeys, it.Key)
+			}
+		}
+		if len(trash) < 100 {
+			break
+		}
+		start += len(trash)
 	}
-	return keys, version, nil
+	return allKeys, version, nil
 }
 
 // ResolveAttachmentPath returns the local filesystem path of an attachment.
