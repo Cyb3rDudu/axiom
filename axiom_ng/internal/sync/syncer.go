@@ -64,27 +64,40 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 
-	// Resolve, hash and enqueue the preferred attachment per document.
+	// Resolve, hash and enqueue the preferred attachment per document. Also
+	// collect the attachment keys seen this run so reconciliation can mark
+	// removed attachments / preffered swaps correctly.
 	preferred := 0
 	var pending []repo.PendingJob
+	seenKeys := make([]string, 0, len(items)*2)
+	preferredKeys := make([]string, 0, len(items))
 	for _, it := range items {
+		for _, att := range it.Attachments {
+			seenKeys = append(seenKeys, att.Key)
+		}
 		pref := zotero.PreferredAttachment(it.Attachments)
 		if pref == nil {
 			continue
 		}
 		job, err := s.preferredJob(ctx, sourceID, it, pref)
 		if err != nil {
-			// Persist the failure as a failed ingest job so it is not silently
-			// lost: a retryable file error (FILE_NOT_FOUND is non-retryable,
-			// other I/O errors are) will be re-attempted on a later run once a
-			// lease-based retry path exists. Never silently drop it.
-			if failed := s.enqueueFailure(ctx, sourceID, it, pref, err); failed != nil {
-				s.log.Printf("sync: %s %q: %v", it.Key, it.Title, err)
+			// Record the file-resolution failure as a failed ingest job so it
+			// is not silently lost (FILE_NOT_FOUND non-retryable, IO_ERROR
+			// retryable). If even recording fails we must abort the sync,
+			// otherwise the attachment is dropped and the cursor is advanced
+			// over it.
+			if rerr := s.enqueueFailure(ctx, sourceID, it, pref, err); rerr != nil {
+				return Result{}, fmt.Errorf("record failure for %s: %w", it.Key, rerr)
 			}
 			continue
 		}
 		pending = append(pending, *job)
+		preferredKeys = append(preferredKeys, pref.Key)
 		preferred++
+	}
+
+	if err := s.repo.Reconcile(ctx, sourceID, seenKeys, preferredKeys); err != nil {
+		return Result{}, err
 	}
 
 	enqueued, err := s.repo.Enqueue(ctx, pending)

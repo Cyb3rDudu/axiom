@@ -106,3 +106,80 @@ func TestSyncEndToEndAndIdempotent(t *testing.T) {
 		t.Fatal("attachment not mirrored")
 	}
 }
+
+// missingSource is a fake zotero.Source whose preferred attachment has no
+// local file on disk, so hashing fails and a failed ingest job must be recorded.
+type missingSource struct {
+	serverID string
+	item     zotero.Item
+}
+
+func (f *missingSource) ServerID() string { return f.serverID }
+
+func (f *missingSource) ListCollections() ([]zotero.Collection, error) { return nil, nil }
+
+func (f *missingSource) ListPDFItems(since int64) ([]zotero.Item, int64, error) {
+	return []zotero.Item{f.item}, 42, nil
+}
+
+func (f *missingSource) ResolveAttachmentPath(key string) (string, error) {
+	return "", nil
+}
+
+// TestSyncRecordsMissingFileAsFailedJob verifies that a preferred attachment
+// whose local file is missing is recorded as a failed ingest job (not silently
+// dropped) and that the source cursor still advances — because the failure was
+// persisted. If recording the failure were to error, Run would abort instead.
+func TestSyncRecordsMissingFileAsFailedJob(t *testing.T) {
+	dsn := os.Getenv("AXIOMNG_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOMNG_TEST_DATABASE_URL not set; skipping integration test")
+	}
+	ctx := context.Background()
+	d, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	missingPath := filepath.Join(t.TempDir(), "missing.pdf") // does not exist
+	src := &missingSource{
+		serverID: "test-server",
+		item: zotero.Item{
+			Key: "M1", Version: 1, ItemType: "book", Title: "Missing",
+			Attachments: []zotero.Attachment{{Key: "M-A1", Version: 1, ParentKey: "M1", ContentType: "application/pdf", Filename: "missing.pdf", LocalPath: missingPath}},
+		},
+	}
+
+	r := repo.New(d.Pool())
+	svc := New(src, r, "http://test/api", "users/0", log.Default())
+
+	res, err := svc.Run(ctx)
+	if err != nil {
+		t.Fatalf("sync with missing file should not fail: %v", err)
+	}
+	if res.Enqueued != 0 {
+		t.Errorf("Enqueued = %d, want 0 (missing file yields no job)", res.Enqueued)
+	}
+	// The failure must be persisted as a failed job.
+	jobs, err := r.ListJobs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	found := false
+	for _, j := range jobs {
+		if j.ErrorCode != nil && *j.ErrorCode == "FILE_NOT_FOUND" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected a failed ingest job with FILE_NOT_FOUND")
+	}
+	// Cursor must have advanced (the failure was recorded, sync completed).
+	if res.NewVersion != 42 {
+		t.Errorf("NewVersion = %d, want 42 (cursor advanced after recorded failure)", res.NewVersion)
+	}
+}
