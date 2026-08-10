@@ -3,8 +3,6 @@ package repo
 import (
 	"context"
 	"fmt"
-
-	"github.com/jackc/pgx/v5"
 )
 
 // PendingJob describes a processing unit the sync layer wants to enqueue.
@@ -33,7 +31,13 @@ type Job struct {
 
 // Enqueue inserts new ingest_jobs for the given pending units, skipping any
 // that already have a job for the same attachment_id + content_hash unless
-// ForceRebuild is set (guarded by the partial unique index).
+// ForceRebuild is set. The partial unique index
+//
+//	ingest_jobs_idempotency_idx (attachment_id, content_hash) WHERE NOT force_rebuild
+//
+// makes this atomic and safe under concurrent Sync calls: two goroutines
+// inserting the same unit race, but only one wins; the loser's ON CONFLICT DO
+// NOTHING just inserts no row.
 func (r *Repo) Enqueue(ctx context.Context, pending []PendingJob) (int, error) {
 	if len(pending) == 0 {
 		return 0, nil
@@ -46,25 +50,15 @@ func (r *Repo) Enqueue(ctx context.Context, pending []PendingJob) (int, error) {
 
 	inserted := 0
 	for _, p := range pending {
-		// Force-rebuild rows bypass the idempotency guard; a matching job for
-		// this attachment content is left alone otherwise.
-		if !p.ForceRebuild {
-			existing, err := r.hasJob(ctx, tx, p.AttachmentID, p.ContentHash)
-			if err != nil {
-				return inserted, err
-			}
-			if existing {
-				continue
-			}
-		}
-		_, err := tx.Exec(ctx, `
-			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status)
-			VALUES ($1,$2,$3,$4, 'pending')
-		`, p.SourceID, p.DocumentID, p.AttachmentID, p.ContentHash)
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
+			VALUES ($1,$2,$3,$4, 'pending', $5)
+			ON CONFLICT (attachment_id, content_hash) WHERE force_rebuild = false DO NOTHING
+		`, p.SourceID, p.DocumentID, p.AttachmentID, p.ContentHash, p.ForceRebuild)
 		if err != nil {
 			return inserted, err
 		}
-		inserted++
+		inserted += int(tag.RowsAffected())
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return inserted, err
@@ -72,22 +66,38 @@ func (r *Repo) Enqueue(ctx context.Context, pending []PendingJob) (int, error) {
 	return inserted, nil
 }
 
-// hasJob reports whether a job already covers this attachment content, in
-// which case we should not enqueue another.
-func (r *Repo) hasJob(ctx context.Context, tx pgx.Tx, attachmentID, contentHash string) (bool, error) {
-	var one int
-	err := tx.QueryRow(ctx, `
-		SELECT 1 FROM ingest_jobs
-		WHERE attachment_id = $1 AND content_hash = $2
-		LIMIT 1
-	`, attachmentID, contentHash).Scan(&one)
-	if err == pgx.ErrNoRows {
-		return false, nil
+// FailedJob describes a file-resolution failure that should be persisted as a
+// failed ingest job so it is not silently dropped.
+type FailedJob struct {
+	SourceID     string
+	DocumentID   string
+	AttachmentID string
+	ErrorCode    string
+	ErrorMessage string
+	Retryable    bool
+}
+
+// EnqueueFailed records a failed ingest job for an attachment whose local file
+// could not be resolved. A retryable failure is re-attempted by a future run;
+// a non-retryable one (e.g. FILE_NOT_FOUND) stays failed.
+func (r *Repo) EnqueueFailed(ctx context.Context, f FailedJob) error {
+	code := f.ErrorCode
+	if code == "" {
+		code = "IO_ERROR"
 	}
+	maxAttempts := 0
+	if f.Retryable {
+		maxAttempts = 3
+	}
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO ingest_jobs
+			(source_id, document_id, attachment_id, status, error_code, error_message, max_attempts)
+		VALUES ($1,$2,$3, 'failed', $4, $5, $6)
+	`, f.SourceID, f.DocumentID, f.AttachmentID, code, f.ErrorMessage, maxAttempts)
 	if err != nil {
-		return false, err
+		return fmt.Errorf("enqueue failed job: %w", err)
 	}
-	return true, nil
+	return nil
 }
 
 // ListJobs returns the most recent ingest jobs, newest first.

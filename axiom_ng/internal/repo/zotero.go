@@ -129,6 +129,9 @@ func (r *Repo) upsertDocument(ctx context.Context, tx pgx.Tx, sourceID string, i
 }
 
 func (r *Repo) upsertAttachment(ctx context.Context, tx pgx.Tx, sourceID, docID, parentKey string, att zotero.Attachment) error {
+	// local_path must be a native filesystem path for downstream processors;
+	// keep the original Zotero file:// URI separately in file_uri.
+	native := zotero.LocalFilePath(att.LocalPath)
 	_, err := tx.Exec(ctx, `
 		INSERT INTO zotero_attachments (
 			source_id, document_id, zotero_key, zotero_version, parent_zotero_key,
@@ -147,10 +150,25 @@ func (r *Repo) upsertAttachment(ctx context.Context, tx pgx.Tx, sourceID, docID,
 			updated_at = now()
 	`,
 		sourceID, docID, att.Key, att.Version, parentKey, att.LinkMode,
-		att.ContentType, att.Filename, att.LocalPath, att.LocalPath,
+		att.ContentType, att.Filename, att.LocalPath, native,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert attachment %s: %w", att.Key, err)
+	}
+	return nil
+}
+
+// UpdateAttachmentFileInfo persists the resolved content hash, size, mtime and
+// preferred flag for one attachment after its local file has been inspected.
+func (r *Repo) UpdateAttachmentFileInfo(ctx context.Context, sourceID, zoteroKey string, hash string, fileSize int64, mtimeMs int64, preferred bool) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE zotero_attachments
+		SET content_hash = $3, file_size = $4, mtime_ms = $5, preferred = $6,
+		    updated_at = now()
+		WHERE source_id = $1 AND zotero_key = $2
+	`, sourceID, zoteroKey, hash, fileSize, mtimeMs, preferred)
+	if err != nil {
+		return fmt.Errorf("update attachment file info %s: %w", zoteroKey, err)
 	}
 	return nil
 }

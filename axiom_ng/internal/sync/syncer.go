@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
@@ -73,7 +74,13 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		}
 		job, err := s.preferredJob(ctx, sourceID, it, pref)
 		if err != nil {
-			s.log.Printf("sync: %s %q: %v", it.Key, it.Title, err)
+			// Persist the failure as a failed ingest job so it is not silently
+			// lost: a retryable file error (FILE_NOT_FOUND is non-retryable,
+			// other I/O errors are) will be re-attempted on a later run once a
+			// lease-based retry path exists. Never silently drop it.
+			if failed := s.enqueueFailure(ctx, sourceID, it, pref, err); failed != nil {
+				s.log.Printf("sync: %s %q: %v", it.Key, it.Title, err)
+			}
 			continue
 		}
 		pending = append(pending, *job)
@@ -99,16 +106,28 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 }
 
 // preferredJob builds a pending job for one preferred attachment, hashing its
-// local file to establish the idempotency key. The attachment path may be a
-// file:// URI from Zotero and is normalised to a native path first.
+// local file to establish the idempotency key, and persists the resolved file
+// info (hash, size, mtime, preferred) on the attachment row. The attachment
+// path may be a file:// URI from Zotero and is normalised to a native path
+// first.
 func (s *Service) preferredJob(ctx context.Context, sourceID string, item zotero.Item, pref *zotero.Attachment) (*repo.PendingJob, error) {
 	localPath := zotero.LocalFilePath(pref.LocalPath)
 	if localPath == "" {
 		return nil, fmt.Errorf("attachment %s has no local path", pref.Key)
 	}
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("attachment %s: local file missing: %w", pref.Key, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("attachment %s: local path is not a regular file", pref.Key)
+	}
 	hash, err := zotero.ContentHash(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("hash attachment %s: %w", pref.Key, err)
+	}
+	if err := s.repo.UpdateAttachmentFileInfo(ctx, sourceID, pref.Key, hash, info.Size(), info.ModTime().UnixMilli(), true); err != nil {
+		return nil, err
 	}
 	docID, err := s.repo.DocumentID(ctx, sourceID, item.Key)
 	if err != nil {
@@ -124,6 +143,35 @@ func (s *Service) preferredJob(ctx context.Context, sourceID string, item zotero
 		AttachmentID: attID,
 		ContentHash:  hash,
 	}, nil
+}
+
+// enqueueFailure records a preferred attachment that could not be resolved as
+// a failed ingest job so the error is visible and non-silently retained.
+// Unrecoverable problems (missing file) are tagged FILE_NOT_FOUND; transient
+// I/O errors are tagged IO_ERROR and left retryable for a later run.
+func (s *Service) enqueueFailure(ctx context.Context, sourceID string, item zotero.Item, pref *zotero.Attachment, cause error) error {
+	code := "IO_ERROR"
+	retryable := true
+	if errors.Is(cause, os.ErrNotExist) {
+		code = "FILE_NOT_FOUND"
+		retryable = false
+	}
+	docID, err := s.repo.DocumentID(ctx, sourceID, item.Key)
+	if err != nil {
+		return fmt.Errorf("document id for failed attachment %s: %w", pref.Key, err)
+	}
+	attID, err := s.repo.AttachmentID(ctx, sourceID, pref.Key)
+	if err != nil {
+		return err
+	}
+	return s.repo.EnqueueFailed(ctx, repo.FailedJob{
+		SourceID:     sourceID,
+		DocumentID:   docID,
+		AttachmentID: attID,
+		ErrorCode:    code,
+		ErrorMessage: cause.Error(),
+		Retryable:    retryable,
+	})
 }
 
 func (s *Service) mirror(ctx context.Context, sourceID string, items []zotero.Item) error {
