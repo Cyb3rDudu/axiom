@@ -54,6 +54,55 @@ func (r *Repo) SetSourceVersion(ctx context.Context, sourceID string, version in
 	return nil
 }
 
+// lockKey derives a stable bigint advisory-lock key from a source UUID so two
+// concurrent syncs of the same source are serialised.
+func lockKey(sourceID string) int64 {
+	// Use the last 8 bytes of the UUID string's hash-like value; good enough
+	// for a per-source lock and avoids any collision-sensitive hashing lib.
+	var acc int64
+	for i := 0; i < len(sourceID); i++ {
+		acc = acc*31 + int64(sourceID[i])
+	}
+	return acc & 0x7FFFFFFFFFFFFFFF
+}
+
+// AcquireSourceLock acquires a session-level advisory lock for a source on a
+// dedicated connection and returns a release function. The lock serialises a
+// whole sync (cursor read, reconciliation, cursor commit) per source_id across
+// pool connections, so a slow stale delta cannot overwrite a newer
+// reconciliation. Release closes the dedicated connection, dropping the lock.
+func (r *Repo) AcquireSourceLock(ctx context.Context, sourceID string) (func(), error) {
+	conn, err := r.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire lock conn: %w", err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockKey(sourceID)); err != nil {
+		conn.Release()
+		return nil, fmt.Errorf("lock source: %w", err)
+	}
+	return func() { conn.Release() }, nil
+}
+
+// LockSource acquires a session-level advisory lock for a source. It must be
+// paired with UnlockSource. The lock serialises the whole sync per source_id so
+// a slow stale delta cannot overwrite a newer reconciliation.
+func (r *Repo) LockSource(ctx context.Context, sourceID string) error {
+	_, err := r.pool.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockKey(sourceID))
+	if err != nil {
+		return fmt.Errorf("lock source: %w", err)
+	}
+	return nil
+}
+
+// UnlockSource releases the advisory lock acquired by LockSource.
+func (r *Repo) UnlockSource(ctx context.Context, sourceID string) error {
+	_, err := r.pool.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockKey(sourceID))
+	if err != nil {
+		return fmt.Errorf("unlock source: %w", err)
+	}
+	return nil
+}
+
 // SourceVersion returns the stored library version for a source (0 if none).
 func (r *Repo) SourceVersion(ctx context.Context, sourceID string) (int64, error) {
 	var v int64
@@ -276,37 +325,93 @@ func (r *Repo) Reconcile(ctx context.Context, req ReconcileReq) error {
 		}
 	}
 
-	// Deletion path: the accepted attachment is removed; only mark a preferred
-	// false if the doc itself is deleted.
-	if len(req.DeletedDocKeys) > 0 {
-		if _, err := tx.Exec(ctx, `
-			UPDATE zotero_attachments
-			SET deleted = true, preferred = false, updated_at = now()
-			WHERE source_id = $1
-			  AND parent_zotero_key = ANY($2::text[])
-			  AND deleted = false
-		`, req.SourceID, req.DeletedDocKeys); err != nil {
-			return fmt.Errorf("reconcile deleted attachments: %w", err)
+	// Deletion path: a deleted key can be either a parent document or a single
+	// attachment. Resolve each generically: if the key is a document (parent),
+	// mark the parent and all of its attachments removed; otherwise treat it as
+	// an attachment and remove only that file (correcting preferred).
+	for _, delKey := range req.DeletedDocKeys {
+		var docDeleted bool
+		err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM zotero_documents
+				WHERE source_id = $1 AND zotero_key = $2 AND deleted = false
+			)
+		`, req.SourceID, delKey).Scan(&docDeleted)
+		if err != nil {
+			return fmt.Errorf("reconcile resolve deleted %s: %w", delKey, err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE zotero_documents
-			SET deleted = true, updated_at = now()
-			WHERE source_id = $1 AND zotero_key = ANY($2::text[])
-		`, req.SourceID, req.DeletedDocKeys); err != nil {
-			return fmt.Errorf("reconcile deleted documents: %w", err)
+
+		if docDeleted {
+			// Parent deletion: delete the document and all its attachments.
+			if _, err := tx.Exec(ctx, `
+				UPDATE zotero_attachments
+				SET deleted = true, preferred = false, updated_at = now()
+				WHERE source_id = $1 AND parent_zotero_key = $2 AND deleted = false
+			`, req.SourceID, delKey); err != nil {
+				return fmt.Errorf("reconcile delete parent attachments %s: %w", delKey, err)
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE zotero_documents
+				SET deleted = true, updated_at = now()
+				WHERE source_id = $1 AND zotero_key = $2
+			`, req.SourceID, delKey); err != nil {
+				return fmt.Errorf("reconcile delete document %s: %w", delKey, err)
+			}
+			continue
 		}
+
+		// Otherwise treat the key as a single deleted attachment.
+		affected := int64(0)
+		if err := tx.QueryRow(ctx, `
+			UPDATE zotero_attachments SET deleted = true, preferred = false, updated_at = now()
+			WHERE source_id = $1 AND zotero_key = $2 AND deleted = false
+			RETURNING 1
+		`, req.SourceID, delKey).Scan(&affected); err != nil && err != pgx.ErrNoRows {
+			return fmt.Errorf("reconcile delete attachment %s: %w", delKey, err)
+		}
+		_ = affected
 	}
 
 	return tx.Commit(ctx)
 }
 
-func containsReqKey(keys []string, key string) bool {
-	for _, k := range keys {
-		if k == key {
-			return true
+// MarkMissingDocumentsDeleted marks documents of a source that were previously
+// active but are no longer present in the current Zotero listing as deleted
+// (with their attachments), so content removed entirely from Zotero does not
+// linger as active in the mirror. Only called on a full sync, where presentKeys
+// is the complete set of currently existing document keys.
+func (r *Repo) MarkMissingDocumentsDeleted(ctx context.Context, sourceID string, presentKeys []string) error {
+	if presentKeys == nil {
+		presentKeys = []string{}
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	mark, err := tx.Exec(ctx, `
+		UPDATE zotero_documents
+		SET deleted = true, updated_at = now()
+		WHERE source_id = $1
+		  AND deleted = false
+		  AND (cardinality($2::text[]) = 0 OR zotero_key <> ALL($2::text[]))
+	`, sourceID, presentKeys)
+	if err != nil {
+		return fmt.Errorf("mark missing documents: %w", err)
+	}
+	if mark.RowsAffected() > 0 {
+		// Also remove the attachments of the vanished documents.
+		if _, err := tx.Exec(ctx, `
+			UPDATE zotero_attachments a
+			SET deleted = true, preferred = false, updated_at = now()
+			FROM zotero_documents d
+			WHERE a.source_id = $1 AND a.document_id = d.id AND d.deleted = true AND a.deleted = false
+		`, sourceID); err != nil {
+			return fmt.Errorf("mark missing document attachments: %w", err)
 		}
 	}
-	return false
+	return tx.Commit(ctx)
 }
 
 // UpdateAttachmentFileInfo persists the resolved content hash, size, mtime and
@@ -346,4 +451,14 @@ func (r *Repo) AttachmentID(ctx context.Context, sourceID, zoteroKey string) (st
 		return "", fmt.Errorf("attachment id for %s: %w", zoteroKey, err)
 	}
 	return id, nil
+}
+
+// containsReqKey reports whether key is present in keys.
+func containsReqKey(keys []string, key string) bool {
+	for _, k := range keys {
+		if k == key {
+			return true
+		}
+	}
+	return false
 }

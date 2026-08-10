@@ -210,3 +210,74 @@ func TestReconcileMarksRemovedAndUnpreferred(t *testing.T) {
 		t.Errorf("EPUB should stay not-deleted")
 	}
 }
+
+// TestReconcileSingleDeletedAttachment: deleting a single attachment (via a
+// deleted key that matches an attachment, not a document) leaves the parent
+// document and sibling attachments intact.
+func TestReconcileSingleDeletedAttachment(t *testing.T) {
+	ctx := context.Background()
+	r, pool := testRepo(t, ctx)
+	sourceID := newUUID(t, ctx, pool)
+	docID := newDoc(t, ctx, pool, sourceID)
+	var docKey string
+	if err := pool.QueryRow(ctx, `SELECT zotero_key FROM zotero_documents WHERE id=$1`, docID).Scan(&docKey); err != nil {
+		t.Fatal(err)
+	}
+	att1 := newAttForDoc(t, ctx, pool, sourceID, docID, docKey)
+	var att1Key string
+	if err := pool.QueryRow(ctx, `SELECT zotero_key FROM zotero_attachments WHERE id=$1`, att1).Scan(&att1Key); err != nil {
+		t.Fatal(err)
+	}
+	// A sibling attachment that must survive.
+	var att2Key string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version, parent_zotero_key, link_mode, content_type, filename)
+		 VALUES ($1,$2,$3,1,$4,'imported_file','application/pdf','b.pdf') RETURNING zotero_key`,
+		sourceID, docID, "sibling"+docKey, docKey).Scan(&att2Key); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete only the single attachment by its key.
+	if err := r.Reconcile(ctx, ReconcileReq{
+		SourceID:       sourceID,
+		DeletedDocKeys: []string{att1Key},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	flags := attFlagsByKey(t, r, ctx, sourceID, docKey)
+	if a := flags[att1Key]; !a[0] {
+		t.Errorf("deleted attachment %s must be marked deleted", att1Key)
+	}
+	if a := flags[att2Key]; a[0] {
+		t.Errorf("sibling attachment %s must survive single-attachment deletion", att2Key)
+	}
+	var docFlag bool
+	if err := pool.QueryRow(ctx,
+		`SELECT deleted FROM zotero_documents WHERE source_id=$1 AND zotero_key=$2`,
+		sourceID, docKey).Scan(&docFlag); err != nil {
+		t.Fatal(err)
+	}
+	if docFlag {
+		t.Errorf("parent document must NOT be deleted when only an attachment was removed")
+	}
+}
+
+func attFlagsByKey(t *testing.T, r *Repo, ctx context.Context, sourceID, docKey string) map[string][2]bool {
+	t.Helper()
+	rows, err := r.pool.Query(ctx, `
+		SELECT zotero_key, deleted, preferred FROM zotero_attachments
+		WHERE source_id=$1 AND parent_zotero_key=$2`, sourceID, docKey)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer rows.Close()
+	out := map[string][2]bool{}
+	for rows.Next() {
+		var k string
+		var del, pref bool
+		rows.Scan(&k, &del, &pref)
+		out[k] = [2]bool{del, pref}
+	}
+	return out
+}
