@@ -34,6 +34,134 @@ logger = logging.getLogger(__name__) # <-- Add logger
 # Enable debug mode via environment variable
 DEBUG_PLANNING = os.getenv('DEBUG_PLANNING', 'false').lower() == 'true'
 
+
+def _normalize_title_for_budget(title: str) -> str:
+    """Lowercase + collapse whitespace for title matching (budget join key)."""
+    return re.sub(r"\s+", " ", (title or "").strip().lower())
+
+
+def _distribute_word_budgets_impl(
+    sections: List["ReportSection"],
+    mission_word_budget: dict,
+    required_outline: "Optional[List[dict]]",
+) -> None:
+    """Project the briefing's word budget onto the generated sections in place.
+
+    Module-level implementation (testable without instantiating PlanningAgent).
+    See ``PlanningAgent._distribute_word_budgets`` for the full rationale.
+    """
+    if not sections:
+        return
+    section_budgets = (mission_word_budget or {}).get("section_word_budgets") or {}
+    budget_source = (mission_word_budget or {}).get("budget_source") or "briefing"
+    if not section_budgets and not (mission_word_budget or {}).get("total_word_budget"):
+        return
+
+    # Build title -> number map from required_outline (parsed Gliederung).
+    title_to_number: dict[str, str] = {}
+    if required_outline:
+        for rec in required_outline:
+            num = rec.get("number")
+            title = rec.get("title")
+            if num and title:
+                title_to_number[_normalize_title_for_budget(title)] = num
+
+    def _assign(sec) -> Optional[str]:
+        """Return the outline number for this section by title match, else None."""
+        return title_to_number.get(_normalize_title_for_budget(sec.title))
+
+    def _walk(lst):
+        for sec in lst:
+            num = _assign(sec)
+            rng = section_budgets.get(num) if num else None
+            if rng and len(rng) == 2:
+                sec.target_words_min = int(rng[0])
+                sec.target_words_max = int(rng[1])
+                sec.budget_source = f"briefing Umfang [{num}] ({budget_source})"
+            elif sec.subsections:
+                # Parent with subsections but no explicit budget: this chapter
+                # should synthesise, not re-spend. Cap the parent at a short
+                # synthesis budget.
+                sec.target_words_max = 120
+                sec.budget_source = "synthesis-parent (short, distributed to subsections)"
+            _walk(sec.subsections)
+
+    _walk(sections)
+
+    # Second pass: distribute a parent's explicit budget across its subsections
+    # when those subsections have no budget of their own. We RESERVE a short
+    # parent-intro slice first (review finding 3) so the parent's synthesis text
+    # + the children's budgets together stay within the chapter budget, rather
+    # than the children consuming the full amount and the parent intro adding on
+    # top (the NexMach blowup pattern). We also SUBTRACT the budgets of any
+    # children that already have an explicit budget before dividing the
+    # remainder among the IMPLICIT children only — otherwise the sum of
+    # (explicit children + distributed children + intro) exceeds the parent
+    # budget (review finding 4: 220+220+184+97 = 721 > 650).
+    def _distribute_parent(lst):
+        for sec in lst:
+            if sec.subsections:
+                parent_has_explicit = bool(sec.budget_source) and \
+                    sec.budget_source.startswith("briefing Umfang")
+                children_needing = [c for c in sec.subsections
+                                    if c.target_words_max is None]
+                if parent_has_explicit and children_needing:
+                    total_min = sec.target_words_min or 0
+                    total_max = sec.target_words_max or 0
+                    # Implicit children = those without a budget; explicit = rest.
+                    n_implicit = len(children_needing)
+                    if total_max > 0:
+                        # Reserve a short intro slice for the parent synthesis
+                        # (~15% of the chapter, capped at 120 words).
+                        intro_max = min(120, max(40, int(total_max * 0.15)))
+                        # Subtract budgets of EXPLICITLY-allocated children so the
+                        # remainder is what the implicit children may share.
+                        explicit_max = sum(
+                            (c.target_words_max or 0)
+                            for c in sec.subsections
+                            if c.target_words_max is not None
+                        )
+                        explicit_min = sum(
+                            (c.target_words_min or 0)
+                            for c in sec.subsections
+                            if c.target_words_min is not None
+                        )
+                        remainder_min = max(0, total_min - intro_max - explicit_min)
+                        remainder_max = max(n_implicit * 60, total_max - intro_max - explicit_max)
+                        sec.target_words_max = intro_max
+                        sec.budget_source = (
+                            f"synthesis-intro reserved ({intro_max}w), "
+                            f"remainder distributed to subsections"
+                        )
+                        per_min = max(60, remainder_min // n_implicit) if n_implicit else 0
+                        per_max = max(80, remainder_max // n_implicit) if n_implicit else 0
+                        for c in children_needing:
+                            c.target_words_min = per_min
+                            c.target_words_max = per_max
+                            c.budget_source = (
+                                f"distributed from parent [{_assign(sec)}] "
+                                f"(chapter {total_min}-{total_max}, intro "
+                                f"{intro_max}w reserved, explicit children "
+                                f"{explicit_max}w, / {n_implicit})"
+                            )
+                        # Invariant check (review finding 4): parent_intro +
+                        # sum(child_max) must not exceed the chapter max.
+                        _sum_max = intro_max + sum(
+                            (c.target_words_max or 0) for c in sec.subsections
+                        )
+                        if _sum_max > total_max:
+                            logger.warning(
+                                "_distribute_word_budgets: parent '%s' budget "
+                                "invariant violated: intro+children max=%d > "
+                                "chapter max=%d (explicit children may have "
+                                "over-allocated). Consider tightening the "
+                                "explicit section budgets.",
+                                getattr(sec, "title", "?"), _sum_max, total_max,
+                            )
+                _distribute_parent(sec.subsections)
+
+    _distribute_parent(sections)
+
 class PlanningAgent(BaseAgent):
     """
     Agent responsible for creating a step-by-step research plan based on the user request
@@ -193,6 +321,176 @@ Generate a JSON object with:
 
 Remember: Keep it focused, logical, and actionable. Do NOT include section IDs - those will be added programmatically. The outline will be automatically validated for depth and duplication."""
         return prompt
+
+    def _get_briefing_context(self, mission_id: "Optional[str]") -> "Optional[str]":
+        """Return a directive+full-briefing block when the mission is a structured briefing.
+
+        Reads the mission metadata and, when ``briefing_style == 'structured'`` and a
+        ``full_briefing`` is present, returns a formatted block that the Phase-1
+        prompt builder prepends to the user prompt. Returns None otherwise (open
+        research, or metadata unavailable) so planning behaves exactly as before.
+
+        This is the root-cause fix for "the mission always starts generically":
+        without it, planning only ever sees the distilled ``user_request`` one-liner
+        and reinvents the outline/questions from scratch. See
+        ``docs/plans/STRUCTURED_BRIEFING_DIRECT_START.md`` (P1).
+        """
+        if not mission_id:
+            return None
+        controller = getattr(self, "controller", None)
+        context_manager = getattr(controller, "context_manager", None) if controller else None
+        if context_manager is None:
+            return None
+        try:
+            mission_context = context_manager.get_mission_context(mission_id)
+        except Exception:
+            return None
+        if not mission_context:
+            return None
+        metadata = getattr(mission_context, "metadata", None) or {}
+        if metadata.get("briefing_style") != "structured":
+            return None
+        # Review finding 2: prefer the CANONICAL CORRECTED briefing (stale case
+        # figures replaced inline) over the original verbatim text, so the
+        # planner never sees the contradictory original figures at all. The
+        # prompt overlay below is only a secondary safeguard.
+        full_briefing = metadata.get("full_briefing_corrected") or metadata.get("full_briefing")
+        if not full_briefing:
+            return None
+
+        # Surface the user's primary Leitfrage + sub-questions explicitly so the
+        # planner treats them as authoritative rather than re-deriving.
+        parts = [
+            "USER PROVIDED A COMPLETE STRUCTURED BRIEFING (briefing_style=structured).",
+            "You MUST follow this briefing. The outline, Leitfrage, word budget and",
+            "deliverable below are authoritative — do not substitute your own.",
+            "",
+        ]
+        # Staged-output directive (Priority 5): if the briefing asked for a
+        # planning-only first deliverable, make that the explicit instruction.
+        staged_first_output = metadata.get("staged_first_output")
+        if metadata.get("output_stage") == "planning_only" and staged_first_output:
+            parts.append("STAGED OUTPUT — FIRST DELIVERABLE (PLANNING ONLY):")
+            parts.append(staged_first_output)
+            parts.append("")
+        _was_corrected = bool(metadata.get("full_briefing_corrected"))
+        parts.extend([
+            f"--- BEGIN USER BRIEFING (verbatim{' — CASE ASSUMPTIONS CORRECTED' if _was_corrected else ''}) ---",
+            full_briefing.strip(),
+            f"--- END USER BRIEFING ---",
+        ])
+        # Secondary confirmation (review finding 2): the verbatim briefing above
+        # is already the CANONICAL CORRECTED text when a correction was applied,
+        # so this is only a short notice, not the primary correction mechanism.
+        corrections = metadata.get("case_assumption_corrections") or {}
+        if corrections:
+            parts.append("")
+            parts.append(
+                "NOTE: the case assumptions in the briefing above were corrected "
+                "per the user's confirmation. If you should ever see two different "
+                "figures for the same metric, the values in the verbatim briefing "
+                f"above are authoritative (correction: {corrections.get('correction_text') or ''})."
+            )
+        primary_q = metadata.get("primary_leitfrage") or metadata.get("primary_question")
+        if primary_q:
+            parts.append("")
+            parts.append(f"Primary research question (Leitfrage): {primary_q}")
+        initial_questions = metadata.get("initial_questions") or metadata.get("final_questions") or []
+        if initial_questions:
+            parts.append("Sub-questions / Leitfragen to honour (do not replace):")
+            for i, q in enumerate(initial_questions, 1):
+                parts.append(f"  {i}. {q}")
+
+        # Structured Gliederung (Finding 1): present the parsed outline with
+        # number-free titles so the planner reproduces the user's hierarchy
+        # EXACTLY. The titles below have had their leading numbers stripped, so
+        # do NOT prepend your own number to a title (that caused duplicate
+        # headings like "# 1. 1. Einleitung"). Build one outline section per entry.
+        structured_outline = metadata.get("structured_outline") or []
+        if structured_outline:
+            parts.append("")
+            parts.append("REQUIRED OUTLINE (parsed from the user's Gliederung — reproduce these")
+            parts.append("sections and this nesting exactly; titles are number-free):")
+            for sec in structured_outline:
+                num = sec.get("number") or ""
+                title = sec.get("title") or ""
+                level = sec.get("level") or 1
+                parts.append(f"  [section number={num} level={level}] {title}")
+            parts.append(
+                "Validation: your generated report_outline MUST contain one section "
+                "per required outline title above (same order). If any required "
+                "section is missing, add it. Do not merge or drop sections."
+            )
+        # Deterministic word budget (Priority 2): present the parsed total +
+        # per-section budgets as a binding contract. The planner must respect
+        # the totals and, for parent sections whose own budget spans
+        # subsections, distribute the budget across those subsections. A parent
+        # with subsections should itself stay SHORT (synthesis only), not double
+        # its budget on top of the subsections' budgets.
+        word_budget = metadata.get("word_budget") or {}
+        wb_total = (word_budget.get("total_word_budget") or {})
+        wb_sections = word_budget.get("section_word_budgets") or {}
+        if wb_total or wb_sections:
+            parts.append("")
+            parts.append("WORD BUDGET (binding, parsed deterministically from the briefing):")
+            if wb_total:
+                parts.append(
+                    f"  TOTAL document length: {wb_total.get('min')}–{wb_total.get('max')} "
+                    f"words (target {wb_total.get('target')}). The finished report "
+                    "body MUST stay within this range."
+                )
+            if wb_sections:
+                parts.append("  Per-section targets (min–max words):")
+                for num, rng in wb_sections.items():
+                    parts.append(f"    [{num}] {rng[0]}–{rng[1]} words")
+                parts.append(
+                    "  HARD RULES: (a) the SUM of all section budgets must not exceed "
+                    "the TOTAL; (b) a parent section that has subsections must stay "
+                    "SHORT (intro/synthesis only) — do NOT re-spend its full word "
+                    "budget on top of its subsections; (c) distribute a parent's budget "
+                    "across its subsections when the subsections have no explicit budget."
+                )
+        parts.append("")
+        parts.append(
+            "Note: the 'Research Request:' line that follows is a distilled summary "
+            "of the briefing above for reference only. The briefing above is the "
+            "source of truth."
+        )
+        logger.info(
+            "%s: Phase 1 using STRUCTURED BRIEFING context (full_briefing=%d chars) "
+            "for mission %s",
+            self.agent_name, len(full_briefing), mission_id,
+        )
+        return "\n".join(parts)
+
+    def _distribute_word_budgets(
+        self,
+        sections: List["ReportSection"],
+        mission_word_budget: dict,
+        required_outline: Optional[List[dict]],
+    ) -> None:
+        """Project the briefing's word budget onto the generated sections in place.
+
+        ``mission_word_budget`` is the dict stored at mission creation:
+        ``{total_word_budget, section_word_budgets: {number: [min,max]}, budget_source}``.
+        We match each section to its outline number via title (using
+        ``required_outline``, which carries the number + title pairs parsed from
+        the Gliederung), then set ``target_words_min``/``target_words_max``/
+        ``budget_source`` directly on the ReportSection so the writer enforces a
+        hard cap.
+
+        Distribution rules:
+          - A section with an explicit per-section budget keeps it.
+          - A parent section that has subsections but no explicit budget: if the
+            *required outline* gave this number a budget, split it evenly across
+            its subsections (the parent itself stays a short synthesis — we set
+            a small synthetic cap so it doesn't re-spend the chapter budget).
+          - Leaves without any budget get nothing (writer uses the total as a
+            soft guide only).
+        """
+        _distribute_word_budgets_impl(
+            sections, mission_word_budget, required_outline
+        )
 
     def _phase2_system_prompt(self) -> str:
         """Phase 2: Outline with Note Assignment - Assigns collected notes to sections."""
@@ -604,6 +902,19 @@ Available Research Tools:
         
         # Construct the user prompt based on phase
         user_prompt = f"Research Request: {user_request}\n\n"
+
+        # --- Structured-briefing honouring (Phase 1 only) ---
+        # When the mission was created from a complete/structured user briefing,
+        # the user already supplied a Leitfrage, a Gliederung, a word budget and
+        # a deliverable. Planning must use them verbatim instead of reinventing
+        # an outline from the distilled `user_request` one-liner. See
+        # docs/plans/STRUCTURED_BRIEFING_DIRECT_START.md (P1).
+        briefing_context = self._get_briefing_context(mission_id)
+        if briefing_context:
+            # Prepend the full briefing ahead of (not replacing) the distilled
+            # request so the LLM sees both, with an explicit directive to follow
+            # the user's structure.
+            user_prompt = briefing_context + "\n\n" + user_prompt
         
         if final_outline_context:
             # Phase 2: Note assignment
@@ -642,7 +953,26 @@ Available Research Tools:
             logger.info(f"{self.agent_name}: Phase 1 - Initial outline generation")
             if initial_context:
                 user_prompt += f"Initial Context:\n{initial_context}\n\n"
-            user_prompt += "Generate a structured outline for this research task."
+            # If the user supplied a structured briefing with an outline, instruct
+            # the planner to adopt that structure rather than inventing a new one.
+            # (P1 + Finding 2) The authoritative structure is the parsed
+            # REQUIRED OUTLINE block (number-free titles). Do NOT re-parse the
+            # raw `# N. Title` headings from the verbatim briefing below and do
+            # NOT prepend your own numbers to titles (that caused duplicates like
+            # "# 1. 1. Einleitung").
+            if briefing_context:
+                user_prompt += (
+                    "IMPORTANT: The user provided a complete structured briefing above "
+                    "(Leitfrage, Gliederung, word budget, deliverable). Use ONLY the "
+                    "parsed 'REQUIRED OUTLINE' block earlier in this prompt for section "
+                    "titles and hierarchy — reproduce those titles exactly (they are "
+                    "already number-free). Do NOT read the raw `# N. Title` headings from "
+                    "the verbatim briefing, do NOT invent a different structure, do NOT "
+                    "merge or rename sections, and do NOT invent new research questions. "
+                    "Generate one outline section per required outline entry."
+                )
+            else:
+                user_prompt += "Generate a structured outline for this research task."
 
         # Add goals and thoughts if available (for all phases)
         if active_goals:
@@ -1196,6 +1526,66 @@ Available Research Tools:
             auto_correct=True
         )
         current_response.report_outline = final_outline
+
+        # Deterministic required-outline enforcement (Finding 1): the LLM may
+        # still drop a required briefing section even with a strong prompt.
+        # After validation, merge any missing required sections from the user's
+        # parsed Gliederung (mission metadata `structured_outline`) back in, in
+        # the correct order. This guarantees the production failure (missing
+        # section 3.2) cannot recur, regardless of LLM behaviour.
+        try:
+            required_outline = None
+            controller = getattr(self, "controller", None)
+            context_manager = getattr(controller, "context_manager", None) if controller else None
+            if context_manager and mission_id:
+                mc = context_manager.get_mission_context(mission_id)
+                if mc:
+                    required_outline = (getattr(mc, "metadata", None) or {}).get("structured_outline")
+            if required_outline:
+                final_outline, req_report = final_validator.enforce_required_outline(
+                    current_response.report_outline, required_outline
+                )
+                current_response.report_outline = final_outline
+                if req_report.get("inserted"):
+                    logger.warning(
+                        "%s: enforced_required_outline inserted %d missing section(s): %s",
+                        self.agent_name, len(req_report["inserted"]), req_report["inserted"],
+                    )
+                else:
+                    logger.info(
+                        "%s: required-outline check OK — all %d required section(s) present.",
+                        self.agent_name, req_report.get("required_count", 0),
+                    )
+        except Exception as req_err:
+            logger.warning("%s: required-outline enforcement skipped due to error: %s",
+                           self.agent_name, req_err, exc_info=True)
+
+        # Deterministic word-budget distribution (Priority 2/3). The briefing's
+        # word_budget (section_word_budgets keyed by outline number) is now
+        # projected onto the generated ReportSection objects so the writer can
+        # enforce a per-section max_tokens cap. We match sections to their
+        # required-outline number via title, then set target_words_min/max.
+        # A parent with subsections distributes its own budget across those
+        # subsections when they lack an explicit budget (so a 550-650 chapter
+        # with three subsections gives each ~180-220 instead of the parent
+        # ALSO spending 550-650 on synthesis text).
+        try:
+            controller = getattr(self, "controller", None)
+            context_manager = getattr(controller, "context_manager", None) if controller else None
+            mission_word_budget = None
+            if context_manager and mission_id:
+                mc = context_manager.get_mission_context(mission_id)
+                if mc:
+                    mission_word_budget = (getattr(mc, "metadata", None) or {}).get("word_budget")
+            if mission_word_budget:
+                self._distribute_word_budgets(
+                    current_response.report_outline,
+                    mission_word_budget,
+                    required_outline,
+                )
+        except Exception as wb_err:
+            logger.warning("%s: word-budget distribution skipped due to error: %s",
+                           self.agent_name, wb_err, exc_info=True)
         
         # Log final summary
         logger.info(f"{self.agent_name}: Reflection loop complete. Final outline has "

@@ -59,6 +59,62 @@ from ai_researcher.agentic_layer.schemas.thought import ThoughtEntry  # Added im
 logger = logging.getLogger(__name__)  # <-- Initialize logger
 
 
+# Web-host junk filter lives in a shared LEAF utility module so both
+# ResearchAgent and SimplifiedWritingAgent can import it WITHOUT creating a
+# cross-agent circular import (review round 7, issue 1: a direct
+# ``simplified_writing_agent -> research_agent`` import raised
+# ``ImportError: partially initialized module``).
+from ai_researcher.agentic_layer.utils.web_host_filter import (  # noqa: E402
+    is_junk_web_host as _is_junk_web_host,
+    JUNK_WEB_HOSTS as _OBVIOUS_JUNK_WEB_HOSTS,
+)
+
+# Minimum content length (chars) for a web snippet to be a STRONG signal.
+# Snippets shorter than this are NOT dropped outright (a short search-engine
+# snippet can still point at a valuable full page that we then fetch and
+# evaluate); they are only treated as a weak signal (see _classify_web_result).
+_MIN_WEB_SNIPPET_CHARS = 200
+
+
+def _classify_web_result(web_result: dict) -> tuple:
+    """Classify a web result as junk (hard drop) vs short-snippet (weak signal).
+
+    Returns ``(classification, reason)`` where classification is one of:
+      * 'junk'        — hard drop (junk host); never has value.
+      * 'short'        — weak signal: snippet is short but the host is clean,
+                         so the full page may still be valuable. Callers should
+                         NOT drop these; the note-generation + fetch-then-
+                         evaluate flow decides whether they are useful.
+      * 'ok'           — content-rich snippet from a clean host.
+    """
+    url = (web_result.get("url") or "").lower()
+    host_hit = _is_junk_web_host(url)
+    if host_hit:
+        return "junk", host_hit[1]
+    snippet = (
+        web_result.get("content")
+        or web_result.get("snippet")
+        or web_result.get("description")
+        or ""
+    )
+    if isinstance(snippet, str) and len(snippet.strip()) < _MIN_WEB_SNIPPET_CHARS:
+        return "short", f"short snippet ({len(snippet.strip())} chars, will fetch to evaluate)"
+    return "ok", ""
+
+
+# Hard-drop pre-filter for obviously useless web results (junk HOSTS only).
+# A result is junk only when its URL host is an obvious non-academic /
+# navigational / shopping / social site. Short snippets from clean hosts are
+# NOT junk — they are a weak signal and are kept so the fetch-then-evaluate
+# flow can recover a valuable full page behind a terse search-engine snippet.
+def _is_obvious_junk_web_result(web_result: dict) -> tuple[bool, str]:
+    url = (web_result.get("url") or "").lower()
+    host_hit = _is_junk_web_host(url)
+    if host_hit:
+        return True, host_hit[1]
+    return False, ""
+
+
 class ResearchAgent(BaseAgent):
     """
     Agent responsible for executing research steps: using tools for information
@@ -524,6 +580,14 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                 # Skip Wikipedia — not a valid academic source
                 if 'wikipedia.org' in (web_source_id or '').lower():
                     continue
+                # Hard-drop junk web HOSTS (social/shopping/navigation) before
+                # spending an LLM note call. Short snippets from clean hosts are
+                # NOT dropped (weak signal): the fetch-then-evaluate flow can
+                # still recover a valuable full page behind a terse snippet.
+                _junk, _jreason = _is_obvious_junk_web_result(web_result)
+                if _junk:
+                    logger.debug("Skipping junk web result (%s): %s", _jreason, web_source_id)
+                    continue
                 if web_source_id in processed_source_ids:
                     continue
                 processed_source_ids.add(web_source_id)
@@ -818,6 +882,11 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
                         web_source_id = web_result.get("url", "unknown_url")
                         # Skip Wikipedia — not a valid academic source
                         if 'wikipedia.org' in (web_source_id or '').lower():
+                            continue
+                        # Hard-drop junk web HOSTS only. Short snippets from clean hosts are kept (fetch-then-evaluate).
+                        _junk, _jreason = _is_obvious_junk_web_result(web_result)
+                        if _junk:
+                            logger.debug("Skipping junk web result (%s): %s", _jreason, web_source_id)
                             continue
                         if web_source_id in processed_proactive_ids:
                             continue
@@ -1117,6 +1186,11 @@ If you DO NOT receive 'Focus Questions' but receive 'Existing Relevant Notes':
             web_source_id = web_result.get("url", "unknown_url")
             # Skip Wikipedia — not a valid academic source
             if 'wikipedia.org' in (web_source_id or '').lower():
+                continue
+            # Hard-drop junk web HOSTS only. Short snippets from clean hosts are kept (fetch-then-evaluate).
+            _junk, _jreason = _is_obvious_junk_web_result(web_result)
+            if _junk:
+                logger.debug("Skipping junk web result (%s): %s", _jreason, web_source_id)
                 continue
             if web_source_id in processed_source_ids:
                 continue
@@ -1575,6 +1649,11 @@ Now, generate the questions for the provided research request.
             web_source_id = web_result.get("url", "unknown_url")
             # Skip Wikipedia — not a valid academic source
             if 'wikipedia.org' in (web_source_id or '').lower():
+                continue
+            # Hard-drop junk web HOSTS only. Short snippets from clean hosts are kept (fetch-then-evaluate).
+            _junk, _jreason = _is_obvious_junk_web_result(web_result)
+            if _junk:
+                logger.debug("Skipping junk web result (%s): %s", _jreason, web_source_id)
                 continue
             if web_source_id in processed_source_ids:
                 continue

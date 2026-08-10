@@ -2,7 +2,7 @@ import json
 import uuid
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Literal, Callable, Set 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 import datetime
 import logging
 import queue 
@@ -194,6 +194,21 @@ class MissionContext(BaseModel):
     reference_id_map: Dict[str, str] = Field(default_factory=dict, description="Maps UUID/complex IDs to simple reference IDs (e.g., 'ref1', 'ref2')")
     reverse_reference_map: Dict[str, str] = Field(default_factory=dict, description="Maps simple reference IDs back to original UUIDs")
     reference_counter: int = Field(default=0, description="Counter for generating sequential reference IDs")
+
+    @field_validator("report_content", mode="before")
+    @classmethod
+    def _coerce_none_report_content(cls, v):
+        """Coerce None section values to empty string.
+
+        A section whose write failed can be stored as None (e.g. mission
+        7acd5677 had report_content.einleitung = None after a writing failure,
+        which made the whole MissionContext fail Pydantic validation on load
+        and the mission became unloadable). Treat None as an unwritten/empty
+        section so one failed write never corrupts the entire mission state.
+        """
+        if not isinstance(v, dict):
+            return v
+        return {k: ("" if val is None else val) for k, val in v.items()}
 
     def update_timestamp(self):
         self.updated_at = get_current_time()

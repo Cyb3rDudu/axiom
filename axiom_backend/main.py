@@ -5,7 +5,13 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 
-from database.database import SessionLocal, test_connection, init_db
+from database.database import (
+    SessionLocal,
+    test_connection,
+    init_db,
+    connect_with_retries,
+    engine,
+)
 from database import crud
 from api import auth, missions, system, chat, chats, documents, websockets, settings, writing, dashboard, admin, research_reports, languages, rag, openai_compat
 from middleware import user_context_middleware
@@ -121,9 +127,15 @@ async def startup_event():
     
     # Initialize database connection and tables
     try:
-        # Test database connection
-        if not test_connection():
-            logger.error("Failed to connect to database")
+        # Verify database connectivity with retries instead of a single-shot
+        # probe. init_postgres (run by start.sh) already migrated, but a
+        # transient macvlan blip in the few seconds between that and uvicorn's
+        # startup event would otherwise fail app startup with a false-negative
+        # 'Database connection failed' (review finding 3).
+        if not connect_with_retries(
+            engine, max_retries=10, base_delay=2.0, purpose="app startup"
+        ):
+            logger.error("Failed to connect to database after retries")
             raise Exception("Database connection failed")
         
         # Initialize database tables
@@ -134,7 +146,11 @@ async def startup_event():
         if os.getenv("DATABASE_URL", "").startswith("postgresql"):
             from database.init_postgres import ensure_extensions, run_column_migrations
             ensure_extensions()
-            run_column_migrations()
+            column_failures = run_column_migrations()
+            if column_failures:
+                raise RuntimeError(
+                    f"Column migrations failed: {column_failures}"
+                )
 
         # Initialize PromptLoader for multilingual support
         try:
@@ -149,8 +165,13 @@ async def startup_event():
             logger.warning(f"PromptLoader initialization failed: {e}. Will use hardcoded prompts as fallback.", exc_info=True)
 
     except Exception as e:
+        # DB-critical startup failure: re-raise so uvicorn aborts startup and
+        # systemd restarts the unit (which then retries the full init). The
+        # previous 'continue anyway' let the process reach 'Application startup
+        # complete' with a broken DB layer, undermining the fail-fast behavior
+        # in start.sh (review finding 1).
         logger.error(f"Database initialization failed: {e}", exc_info=True)
-        # Continue anyway, as tables might already exist
+        raise
     
     # Create a configurable thread pool
     # Increased default from 10 to 20 to handle concurrent web fetches better

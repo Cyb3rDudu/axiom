@@ -5,6 +5,7 @@ import re
 from typing import Dict, Any, Optional, List
 
 from ai_researcher.agentic_layer.model_dispatcher import ModelDispatcher
+from ai_researcher.agentic_layer.utils.web_host_filter import is_junk_web_host as _is_junk_web_host
 from ai_researcher import config
 
 logger = logging.getLogger(__name__)
@@ -997,6 +998,14 @@ class SimplifiedWritingAgent:
                 title = result_item.get("title", "No Title")
                 snippet = result_item.get("snippet", "No content available")
                 url = result_item.get("url", "#")
+                # Hard-drop obvious junk hosts (social/shopping/navigation) before
+                # spending a relevance-assessment LLM call on them. Short snippets
+                # from clean hosts are KEPT (assessed + fetched like ResearchAgent).
+                _junk_host = _is_junk_web_host(url)
+                if _junk_host:
+                    logger.debug("Skipping junk web host (%s) in writing web search", _junk_host[0])
+                    continue
+                
                 
                 # Create coroutine for parallel relevance assessment
                 task = self._assess_search_result_relevance(

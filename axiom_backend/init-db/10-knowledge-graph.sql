@@ -1,9 +1,11 @@
 -- Knowledge Graph Layer Migration
 -- Adds entity storage, relationships, and chunk connectivity for enhanced RAG retrieval
 --
--- DEPRECATED: this file is NOT executed at startup (database/migrations/ is not
--- scanned by init_postgres). The live copy is now axiom_backend/init-db/10-knowledge-graph.sql,
--- which run_sql_migrations() applies automatically. Keep this file in sync or delete it.
+-- This file is executed automatically at backend startup by
+-- database/init_postgres.py::run_sql_migrations() (files prefixed 03-..99- in
+-- this directory). All statements are idempotent (CREATE ... IF NOT EXISTS) and
+-- contain no DELETEs/DROPs, so applying it to an existing production database
+-- is safe and preserves existing data.
 
 -- Entity storage
 CREATE TABLE IF NOT EXISTS document_entities (

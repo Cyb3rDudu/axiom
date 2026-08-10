@@ -2582,6 +2582,23 @@ async def start_mission_execution(
                 detail="Cannot start mission: At least one information source must be enabled (Web Search or Document Group). Please configure your sources before starting."
             )
 
+        # HARD STOP for unresolved case-assumption conflicts (review finding 2).
+        # A briefing with contradictory 'feste Fallannahmen' is flagged
+        # awaiting_clarification; it must not start until the user resolves
+        # the conflicts (e.g. 19 Mio. vs 40 Mio. Euro). The flag is cleared in
+        # user_interaction.py once the user provides a corrected briefing.
+        awaiting_clarification = mission_context.metadata.get("awaiting_clarification")
+        if awaiting_clarification:
+            conflicts_str = "; ".join(awaiting_clarification) if isinstance(awaiting_clarification, list) else str(awaiting_clarification)
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Diese Mission kann nicht gestartet werden, weil noch "
+                    "widersprüchliche Fallannahmen offen sind. Bitte kläre diese "
+                    "zuerst im Chat: " + conflicts_str
+                ),
+            )
+
         # Allow starting from 'pending' or 'stopped' states
         if mission_context.status not in ["pending", "stopped", "planning"]:
             raise HTTPException(
@@ -2642,13 +2659,39 @@ async def start_mission_execution(
                     )
                     
                     if plan_response and plan_response.report_outline:
-                        questions = [section.title for section in plan_response.report_outline if section.title]
-                        if not questions: # Fallback if titles are empty
+                        # IMPORTANT: do NOT use bare section TITLES as research
+                        # questions (e.g. "Einleitung", "Fazit", "Theoretischer
+                        # Bezugsrahmen"). Titles are outline headings, not
+                        # searchable topics — feeding them to the web search
+                        # returns junk (observed: soccerway.com, zhihu.com,
+                        # langenscheidt dictionary). Instead:
+                        #   * skip content_based sections (Intro/Conclusion) — they
+                        #     are written, never researched;
+                        #   * for research_based / synthesize_from_subsections
+                        #     sections, derive a thematic search question from the
+                        #     section's DESCRIPTION (which lists the concrete
+                        #     sub-topics), falling back to the title only if no
+                        #     description exists.
+                        questions = []
+                        for section in plan_response.report_outline:
+                            strategy = getattr(section, "research_strategy", None)
+                            if strategy == "content_based":
+                                # Intro/Conclusion: synthesized from other sections,
+                                # nothing to search for. Skipping avoids junk queries.
+                                continue
+                            desc = (section.description or "").strip()
+                            title = (section.title or "").strip()
+                            # Prefer the detailed description (thematic); trim to a
+                            # usable search-query length. Title is last-resort only.
+                            base = desc if len(desc) >= 12 else title
+                            if base:
+                                questions.append(base[:240])
+                        if not questions:
                             questions = [f"What are the key aspects of {mission_context.user_request}?"]
                         
                         # Store the generated questions as the final questions
                         await context_mgr.update_mission_metadata(mission_id, {"final_questions": questions})
-                        logger.info(f"Generated and stored {len(questions)} questions for mission {mission_id}.")
+                        logger.info(f"Generated and stored {len(questions)} research questions (description-based, content_based sections skipped) for mission {mission_id}.")
                         
                         # Log success to frontend
                         await context_mgr.log_execution_step(

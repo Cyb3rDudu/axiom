@@ -14,6 +14,41 @@ from ai_researcher.dynamic_config import get_max_total_depth
 logger = logging.getLogger(__name__)
 
 
+def _normalize_title_for_match(title: str) -> str:
+    """Normalize a section title for fuzzy matching.
+
+    Order-independent: strips leading heading markers (``##``), leading numeric
+    labels (``1.`` / ``2.1`` / ``2.1.``) and trailing punctuation, then
+    lower-cases and collapses whitespace. Applied iteratively until stable so
+    that all of these compare equal:
+
+    - ``"1. Einleitung"``
+    - ``"## 2.1 NexMach als Unternehmung"``
+    - ``"Einleitung"``
+    - ``"einleitung."``
+
+    The previous implementation ran the numeric-strip once *before* stripping
+    heading markers, so ``## 2.1 Foo`` survived as `` 2.1 foo``. The loop here
+    fixes that (review finding 2).
+    """
+    import re
+    t = (title or "").strip()
+    # Iteratively strip leading heading markers and numeric labels until stable.
+    # Bounded loop guards against pathological inputs.
+    for _ in range(5):
+        prev = t
+        t = t.lstrip("#").lstrip()
+        m = re.match(r"\d+(?:\.\d+)*[.)]?\s*", t)
+        if m:
+            t = t[m.end():]
+        if t == prev:
+            break
+    t = t.lower().strip()
+    t = t.strip("#:.-_ ").strip()
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
 class OutlineValidator:
     """Validates and corrects outline structure with configurable rules."""
     
@@ -89,7 +124,435 @@ class OutlineValidator:
         }
         
         return working_outline, report
-    
+
+    # ------------------------------------------------------------------
+    # Required-outline enforcement (Finding 1, deterministic merge)
+    # ------------------------------------------------------------------
+
+    def enforce_required_outline(
+        self,
+        outline: List[ReportSection],
+        required_outline: List[Dict[str, Any]],
+    ) -> Tuple[List[ReportSection], Dict[str, Any]]:
+        """Deterministically ensure every required briefing section is present.
+
+        Unlike the LLM-driven reflection loop, this is a pure post-LLM check: it
+        matches the generated ``outline`` against the user's required
+        ``structured_outline`` (number / title / level records parsed from the
+        Gliederung) and INSERTS any missing required section — including nested
+        subsections (level >= 2) — at the correct position, preserving the
+        user's order and hierarchy. Existing sections are left untouched.
+
+        The production failure this guards against: the LLM dropped a required
+        level-2 subsection (``3.2 Branchen- und Wettbewerbsumwelt``). The first
+        iteration of this method only handled top-level (level 1) sections and
+        silently ignored nested required subsections (review finding 1). This
+        version builds the required tree and recurses into matched parents.
+
+        Args:
+            outline: the generated/corrected outline (a list of top-level
+                ``ReportSection`` possibly with subsections).
+            required_outline: flat list of ``{"number","title","level"}`` dicts
+                from mission metadata ``structured_outline``.
+
+        Returns:
+            (updated_outline, report) where report lists matched / inserted /
+            missing_required (across all levels).
+        """
+        report: Dict[str, Any] = {
+            "required_count": len(required_outline),
+            "matched": [],
+            "inserted": [],
+            "missing_required": [],
+        }
+        if not required_outline:
+            return outline, report
+
+        required_tree = self._build_required_tree(required_outline)
+
+        # Flatten ALL generated sections into a single global pool. This is the
+        # key fix for review finding 1 (flat subsections): required subsections
+        # may exist as flat top-level siblings (e.g. the planner emitted 3,
+        # 3.1, 3.3 all at top-level) instead of nested under their parent. A
+        # global pool lets a required subsection be claimed regardless of where
+        # it currently sits, and then be moved into its matched parent.
+        pool: List[Dict[str, Any]] = []
+        self._flatten_generated(outline, pool, original_parent=None)
+
+        result = self._rebuild_from_required(required_tree, pool, report)
+
+        # Re-attach generated sections that were not claimed by any required
+        # node (LLM extras). Preserve their original nesting: an extra that was
+        # nested under a (now-matched) parent stays nested under it; a top-level
+        # extra stays at the top level.
+        self._reattach_extras(result, pool)
+
+        if report["inserted"]:
+            logger.warning(
+                "OutlineValidator: enforce_required_outline inserted %d missing "
+                "section(s): %s",
+                len(report["inserted"]), report["inserted"],
+            )
+        else:
+            logger.info(
+                "OutlineValidator: required-outline check OK — all %d required "
+                "section(s) present.",
+                report.get("required_count", 0),
+            )
+        return result, report
+
+    # ----- helpers for enforce_required_outline -----
+
+    @staticmethod
+    def _number_key(number: str) -> Tuple[int, ...]:
+        """Parse a section number like '3.2' into a sortable tuple (3, 2).
+
+        Non-numeric / empty numbers sort as ``(0,)`` so parents sort before
+        children and malformed entries don't crash the sort.
+        """
+        if not number:
+            return (0,)
+        parts = []
+        for p in str(number).split("."):
+            p = p.strip()
+            if p.isdigit():
+                parts.append(int(p))
+            else:
+                parts.append(0)
+        return tuple(parts) if parts else (0,)
+
+    @classmethod
+    def _is_prefix_parent(cls, parent_number: str, child_number: str) -> bool:
+        """True if ``parent_number`` is a strict prefix-parent of ``child_number``.
+
+        ``3`` is a parent of ``3.2`` and ``3.2.1``; ``3.2`` is a parent of
+        ``3.2.1``; ``3`` is NOT a parent of ``3`` (same) or of ``30``.
+        """
+        pp = cls._number_key(parent_number)
+        cp = cls._number_key(child_number)
+        return len(pp) < len(cp) and cp[: len(pp)] == pp
+
+    def _build_required_tree(
+        self, required_outline: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Build a nested tree from the flat required-outline list.
+
+        Returns a list of root nodes, each:
+            {"number", "title", "level", "children": [ <node>, ... ]}
+        Parent/child relationships are derived from the section *number* prefix
+        (``3`` parents ``3.2``), so this is robust even if levels are absent or
+        inconsistent. Nodes are sorted by number so parents precede children.
+        """
+        nodes = []
+        for r in required_outline:
+            nodes.append(
+                {
+                    "number": str(r.get("number", "") or ""),
+                    "title": str(r.get("title", "") or ""),
+                    "level": int(r.get("level", 1) or 1),
+                    "children": [],
+                }
+            )
+        nodes.sort(key=lambda n: self._number_key(n["number"]))
+
+        roots: List[Dict[str, Any]] = []
+        stack: List[Dict[str, Any]] = []
+        for n in nodes:
+            while stack and not self._is_prefix_parent(stack[-1]["number"], n["number"]):
+                stack.pop()
+            if stack:
+                stack[-1]["children"].append(n)
+            else:
+                roots.append(n)
+            stack.append(n)
+        return roots
+
+    def _titles_match(self, a: str, b: str) -> bool:
+        """Compare two normalized titles for equivalence."""
+        if not a:
+            return True  # empty required title -> treat as present (no-op)
+        if a == b:
+            return True
+        ratio = difflib.SequenceMatcher(None, a, b).ratio()
+        return ratio >= 0.8 or a in b or b in a
+
+    @staticmethod
+    def _parse_leading_number(title: str) -> Optional[str]:
+        """Extract a leading numeric label from a section *title*.
+
+        ``"3.1 Makroumwelt"`` -> ``"3.1"``; ``"3. Darstellung"`` -> ``"3"``;
+        ``"## 3.2 Foo"`` -> ``"3.2"``; ``"Makroumwelt"`` -> ``None``.
+        Used to determine where a flat-emitted section belongs in the hierarchy
+        (so a flat ``3.1`` can be recognised as a child of ``3``).
+        """
+        import re
+        t = (title or "").lstrip("#").lstrip()
+        m = re.match(r"(\d+(?:\.\d+)*)[.)]?\s*", t)
+        return m.group(1) if m else None
+
+    def _numbers_equal(self, a: Optional[str], b: Optional[str]) -> bool:
+        """True if two section-number strings are equivalent (by tuple)."""
+        if not a or not b:
+            return False
+        return self._number_key(a) == self._number_key(b)
+
+    def _flatten_generated(
+        self,
+        sections: List[ReportSection],
+        pool: List[Dict[str, Any]],
+        original_parent: Optional[ReportSection],
+    ) -> None:
+        """Recursively flatten the generated outline into a flat pool.
+
+        Each pool entry records the parsed leading number (from the title), the
+        normalized title, the underlying ``ReportSection`` (identity preserved),
+        a ``used`` flag, and the section it was originally nested under (so
+        unclaimed extras can be re-attached in place).
+        """
+        for s in sections:
+            pool.append(
+                {
+                    "number": self._parse_leading_number(s.title),
+                    "norm_title": _normalize_title_for_match(s.title),
+                    "section": s,
+                    "used": False,
+                    "original_parent": original_parent,
+                }
+            )
+            if s.subsections:
+                self._flatten_generated(s.subsections, pool, original_parent=s)
+
+    def _claim_from_pool(
+        self, rn: Dict[str, Any], pool: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Claim the best-matching unused pool entry for required node ``rn``.
+
+        Among unused entries whose title matches, an entry whose parsed number
+        equals the required number is strongly preferred (disambiguates e.g.
+        ``3 Darstellung`` from ``3.1 Darstellung``). Otherwise the first
+        title-match is used — but ONLY if its number is hierarchy-compatible
+        with the required number: a fuzzy/substring title match must NEVER claim
+        a section at a different Gliederung level (review finding 1: required
+        ``3 Darstellung`` wrongly claimed ``3.1 Darstellung der Methodik`` via
+        substring, leaving the missing parent un-created and duplicating 3.1).
+        """
+        target = _normalize_title_for_match(rn["title"])
+        req_number = rn.get("number") or ""
+        first_title_match: Optional[Dict[str, Any]] = None
+        for item in pool:
+            if item["used"]:
+                continue
+            if not self._titles_match(target, item["norm_title"]):
+                continue
+            if self._numbers_equal(item.get("number"), req_number):
+                return item  # exact number match wins
+            # Fuzzy title fallback: reject if the candidate's number sits at a
+            # different hierarchy level (one is a prefix-parent of the other).
+            if self._numbers_compatible_for_fuzzy(req_number, item.get("number")):
+                if first_title_match is None:
+                    first_title_match = item
+        return first_title_match
+
+    def _numbers_compatible_for_fuzzy(
+        self, req_number: Optional[str], cand_number: Optional[str]
+    ) -> bool:
+        """Whether a fuzzy title match may claim a candidate with this number.
+
+        Returns False when both sides carry numbers and one is a strict
+        prefix-parent of the other (i.e. they are at different Gliederung
+        levels, like ``3`` vs ``3.1``), so a parent can never claim its child's
+        slot (or vice versa) by title/substring similarity alone. When either
+        number is absent we cannot judge the level, so the title match is
+        allowed.
+        """
+        if not req_number or not cand_number:
+            return True
+        if self._numbers_equal(req_number, cand_number):
+            return True
+        if self._is_prefix_parent(req_number, cand_number) or self._is_prefix_parent(
+            cand_number, req_number
+        ):
+            return False
+        return True
+
+    @staticmethod
+    def _strategy_for_inserted(has_children: bool) -> str:
+        """Research strategy for a freshly-inserted required section.
+
+        Mirrors the validator's own rule (see ``_validate_and_correct_strategies``):
+        a section WITH subsections synthesises from them; a leaf section does its
+        own research. Because ``enforce_required_outline`` runs AFTER the final
+        ``validate_and_correct``, we must set this correctly here rather than
+        rely on the later pass (review finding 2).
+        """
+        return "synthesize_from_subsections" if has_children else "research_based"
+
+    def _rebuild_from_required(
+        self,
+        required_nodes: List[Dict[str, Any]],
+        pool: List[Dict[str, Any]],
+        report: Dict[str, Any],
+    ) -> List[ReportSection]:
+        """Rebuild an outline section list from the required tree + global pool.
+
+        For each required node (in Gliederung order):
+          - claim its best match from the GLOBAL pool (any depth/position); if
+            found, recurse to populate its subsections from the same pool and
+            keep the claimed section;
+          - else create a new ``ReportSection`` (strategy chosen by
+            ``_strategy_for_inserted``) and populate its subsections from the
+            pool (all new).
+
+        Because the pool is global, this correctly handles required subsections
+        that the planner emitted flat (as top-level siblings): they are claimed
+        and moved into their matched parent instead of being duplicated.
+        """
+        if not required_nodes:
+            return []
+
+        result: List[ReportSection] = []
+        for rn in required_nodes:
+            claimed = self._claim_from_pool(rn, pool)
+            if claimed is not None:
+                claimed["used"] = True
+                report["matched"].append(rn["title"])
+                g = claimed["section"]
+                # Reset subsections then rebuild from required children so the
+                # hierarchy follows the required tree (flattens extras into the
+                # pool for re-attachment).
+                g.subsections = self._rebuild_from_required(
+                    rn.get("children") or [], pool, report
+                )
+                result.append(g)
+            else:
+                report["missing_required"].append(rn["title"])
+                report["inserted"].append(rn["title"])
+                logger.warning(
+                    "OutlineValidator: required section '%s' (%s, level %d) was "
+                    "MISSING from the generated outline; inserting it "
+                    "deterministically.",
+                    rn["title"],
+                    rn["number"],
+                    rn["level"],
+                )
+                new_sec = ReportSection(
+                    section_id=(
+                        rn["title"].lower().replace(" ", "_")[:40]
+                        or f"section_{rn['number']}"
+                    ),
+                    title=rn["title"],
+                    description=(
+                        f"Required section from the user's Gliederung "
+                        f"({rn['number']}). Cover the topics specified in the "
+                        f"briefing for this section."
+                    ),
+                    research_strategy=self._strategy_for_inserted(
+                        bool(rn.get("children"))
+                    ),
+                    subsections=[],
+                )
+                if rn.get("children"):
+                    new_sec.subsections = self._rebuild_from_required(
+                        rn["children"], pool, report
+                    )
+                result.append(new_sec)
+        return result
+
+    def _reattach_extras(
+        self, outline: List[ReportSection], pool: List[Dict[str, Any]]
+    ) -> None:
+        """Re-attach unclaimed generated sections (LLM extras) in place.
+
+        An extra that was originally nested under a parent that is still present
+        in the rebuilt outline is appended to that parent's subsections; a
+        top-level extra is appended to the top-level list.
+
+        Crucially (review finding 2), when a section is claimed and moved into
+        the required tree, it must NOT also remain inside its original extra
+        container. We therefore PRUNE claimed (used) descendants from every
+        extra subtree before re-attaching it, and an unused section whose parent
+        is itself an unused extra is reached only via that parent's pruned
+        subtree (it is not independently hoisted to the top level — the previous
+        implementation did exactly that, duplicating 3.4.1 Detail).
+
+        Mutates ``outline`` (top-level list) and matched sections'
+        ``subsections`` in place.
+        """
+        if not pool:
+            return
+
+        used_ids: Set[int] = {id(it["section"]) for it in pool if it["used"]}
+
+        # Map id -> section for every section currently in the rebuilt tree, so
+        # nested extras can be appended to their matched parent.
+        present_by_id: Dict[int, ReportSection] = {}
+
+        def _collect(sections: List[ReportSection]) -> None:
+            for s in sections:
+                present_by_id[id(s)] = s
+                if s.subsections:
+                    _collect(s.subsections)
+
+        _collect(outline)
+
+        # Identify which extras are FOREST ROOTS: an unused section whose
+        # original parent is None (top-level) or USED (a matched parent that is
+        # still present -> nested extra). Unused sections whose parent is ALSO
+        # unused are NOT roots: they are reached through their parent's pruned
+        # subtree, which avoids duplicating them at the top level.
+        top_level_extras: List[ReportSection] = []
+        nested_extras: Dict[int, List[ReportSection]] = defaultdict(list)
+        for item in pool:
+            if item["used"]:
+                continue
+            parent = item.get("original_parent")
+            if parent is None:
+                top_level_extras.append(item["section"])
+            elif id(parent) in used_ids:
+                # Parent was claimed -> it is present in the rebuilt tree.
+                nested_extras[id(parent)].append(item["section"])
+            # else: parent is unused -> reached via parent's pruned subtree.
+
+        # Prune claimed descendants from a section's subtree, in place.
+        def _prune_claimed(section: ReportSection) -> bool:
+            """Remove used descendants; return True if the section should be
+            KEPT, False if it became an empty container (originally had
+            children, all of which were claimed) and should be dropped."""
+            had_children = bool(section.subsections)
+            kept: List[ReportSection] = []
+            for child in section.subsections:
+                if id(child) in used_ids:
+                    continue  # claimed elsewhere -> drop
+                if _prune_claimed(child):
+                    kept.append(child)
+                # else: child became an empty container -> drop
+            section.subsections = kept
+            # Drop a section that was a pure container and is now empty.
+            return bool(section.subsections) or not had_children
+
+        # Prune + filter top-level extras.
+        pruned_top: List[ReportSection] = []
+        for sec in top_level_extras:
+            if _prune_claimed(sec):
+                pruned_top.append(sec)
+
+        # Prune + filter nested extras.
+        pruned_nested: Dict[int, List[ReportSection]] = defaultdict(list)
+        for parent_id, secs in nested_extras.items():
+            for sec in secs:
+                if _prune_claimed(sec):
+                    pruned_nested[parent_id].append(sec)
+
+        # Append nested extras back under their (still-present) matched parent.
+        for parent_id, secs in pruned_nested.items():
+            parent = present_by_id.get(parent_id)
+            if parent is not None:
+                parent.subsections.extend(secs)
+
+        # Append top-level extras at the end.
+        if pruned_top:
+            outline.extend(pruned_top)
+
     def _calculate_max_depth(self, outline: List[ReportSection], current_depth: int = 0) -> int:
         """Calculate the maximum depth of the outline."""
         if not outline:

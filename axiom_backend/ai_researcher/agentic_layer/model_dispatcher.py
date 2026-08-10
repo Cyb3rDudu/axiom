@@ -21,6 +21,79 @@ from ai_researcher.global_semaphore import get_global_llm_semaphore
 logger = logging.getLogger(__name__)
 
 
+# DeepSeek V4 thinking-mode policy by agent_mode. Thinking mode is DEFAULT-ON
+# (effort high) and its reasoning tokens count against max_tokens — fatal for
+# content-generation calls whose max_tokens is capped to a tight per-section
+# word budget (the model reasons away the whole budget and emits EMPTY
+# content). For these prose/synthesis modes we DISABLE thinking so the model
+# emits content directly. Reasoning-heavy modes keep thinking enabled.
+# (Per https://api-docs.deepseek.com/guides/thinking_mode; verified empirically.)
+#
+# Every mode that produces USER-VISIBLE PROSE belongs here. Keep this set in
+# sync with the agent_mode strings passed to dispatch()/get_completion().
+_V4_CONTENT_GENERATION_MODES = {
+    "writing",                    # WritingAgent report-section prose (tight word budget)
+    "simplified_writing",         # SimplifiedWritingAgent interactive revisions (full draft)
+    "writing_content_generator",  # paragraph-generation tool (writing_tools.propose_and_add_paragraph)
+    "writing_planner",            # EnhancedCollaborativeWritingAgent outline/plan prose
+    "query_preparation",          # deterministic sub-query generation (QueryPreparer)
+    "research",                   # ResearchAgent note synthesis from chunks
+}
+
+
+def _v4_thinking_for_mode(agent_mode: str) -> str:
+    """DeepSeek V4 thinking toggle for a given agent_mode.
+
+    Returns 'disabled' for content-generation modes (prose with a tight word
+    budget) and 'enabled' (the model default) for reasoning-heavy modes.
+    Shared by the streaming and non-streaming dispatch paths.
+    """
+    return (
+        "disabled"
+        if agent_mode in _V4_CONTENT_GENERATION_MODES
+        else "enabled"
+    )
+
+
+def _build_deepseek_v4_params(
+    model_name: str,
+    messages: list,
+    caller_cap,
+    agent_mode: str,
+    stream: bool = False,
+) -> dict:
+    """Build request_params for a DeepSeek V4 model (flash/pro).
+
+    Shared by the non-streaming (dispatch) and streaming (stream_completion)
+    paths so the thinking-mode policy is applied consistently to BOTH.
+    Thinking is DISABLED for content-generation modes (otherwise reasoning
+    tokens eat a tight word-budget max_tokens and the model emits empty
+    content) and ENABLED (default) for reasoning-heavy modes.
+
+    caller_cap is applied as a CEILING (see dispatch() docstring): when present,
+    effective_max = min(v4_max, caller_cap).
+    """
+    v4_max = getattr(config, "DEEPSEEK_V4_MAX_TOKENS_LIMIT", 65536)
+    _thinking = _v4_thinking_for_mode(agent_mode)
+    effective_max = v4_max if caller_cap is None else min(v4_max, caller_cap)
+    params = {
+        "model": model_name,
+        "messages": messages,
+        "max_tokens": effective_max,
+        # thinking-mode toggle (DeepSeek V4). Disabled for prose/budgeted
+        # generation; enabled (default) for reasoning-heavy tasks.
+        "extra_body": {"thinking": {"type": _thinking}},
+    }
+    if stream:
+        params["stream"] = True
+    logger.info(
+        f"Detected DeepSeek V4 model{' (stream)' if stream else ''}: {model_name}, "
+        f"max_tokens={effective_max} (cap={caller_cap}), "
+        f"thinking={_thinking} (agent_mode={agent_mode})"
+    )
+    return params
+
+
 def estimate_token_count(text: str) -> int:
     # Use ~3.2 chars/token (conservative) instead of 4 chars/token.
     # Non-English text (especially German compound words) and technical
@@ -747,6 +820,24 @@ class ModelDispatcher:
         )
         # --- END NEW ---
 
+        # --- Per-call max_tokens override (deterministic word budgets) ---
+        # Callers (e.g. the writing agent enforcing a per-section word cap)
+        # may pass max_tokens= in kwargs to cap completion length. We honour it
+        # as a CEILING: take the smaller of the caller's cap and the role's
+        # configured budget, so a section budget can only ever REDUCE output,
+        # never blow past the provider/role limit.
+        caller_max_tokens = kwargs.get("max_tokens")
+        caller_cap: Optional[int] = None
+        if caller_max_tokens is not None:
+            try:
+                caller_cap = int(caller_max_tokens)
+                if caller_cap <= 0:
+                    caller_cap = None
+            except (TypeError, ValueError):
+                caller_cap = None
+        if caller_cap is not None:
+            max_tokens_for_call = min(max_tokens_for_call, caller_cap)
+
         # --- Cap max_tokens based on provider limits ---
         provider_config = config.PROVIDER_CONFIG.get(provider_name, {})
         provider_max_tokens = provider_config.get("max_tokens_limit")
@@ -843,27 +934,40 @@ class ModelDispatcher:
                 f"Detected DeepSeek-reasoner model: {selected_model_name}, "
                 f"forcing max_tokens={deepseek_max} (was {max_tokens_for_call}), omitting temperature"
             )
+            # NOTE: reasoning tokens count against max_tokens, so a tiny per-section
+            # writer cap would leave almost no room for content. We still honour the
+            # caller cap as a CEILING so a budgeted writer cannot emit 16K tokens of
+            # content; the post-generation word guard is the real backstop for these
+            # models (see writing_manager._trim_to_word_budget).
+            effective_max = deepseek_max if caller_cap is None else min(deepseek_max, caller_cap)
             request_params = {
                 "model": selected_model_name,
                 "messages": messages,
-                "max_tokens": deepseek_max,
+                "max_tokens": effective_max,
             }
         elif is_deepseek_v4:
-            # DeepSeek V4 (flash/pro): 384K output cap + 1M context, thinking
-            # mode default-on. Reasoning tokens count against max_tokens so
-            # the old 8K provider cap throttles real content. Bump to V4-aware
-            # limit; temperature works in V4 but is omitted to match the
-            # reasoner branch's stable-output contract.
-            v4_max = getattr(config, 'DEEPSEEK_V4_MAX_TOKENS_LIMIT', 65536)
-            logger.info(
-                f"Detected DeepSeek V4 model: {selected_model_name}, "
-                f"forcing max_tokens={v4_max} (was {max_tokens_for_call})"
+            # DeepSeek V4 (flash/pro): 384K output cap + 1M context. Thinking
+            # mode is DEFAULT-ON (effort high) per DeepSeek docs. Reasoning
+            # tokens count against max_tokens, which is catastrophic for tight
+            # content-generation budgets: a writing call capped at max_tokens=256
+            # (the per-section word budget) leaves the model reasoning for all
+            # 256 tokens and emitting EMPTY content (finish=length, confirmed in
+            # production: ~half the report sections failed as
+            # '[Error: Failed to generate content]').
+            #
+            # Fix per DeepSeek thinking-mode docs: for content-generation agent
+            # modes (fluent prose + tight word budget), DISABLE thinking so the
+            # model emits content directly with zero reasoning tokens. Verified:
+            # thinking=disabled + max_tokens=256 -> 4/4 clean academic prose;
+            # thinking=enabled + max_tokens=256 -> 2/3 empty. Reasoning-heavy
+            # modes (planning/reflection/query_strategy/messenger) keep thinking
+            # enabled because chain-of-thought genuinely improves them and they
+            # have generous token budgets.
+            #
+            # Shared builder used by the streaming path too (stream=False here).
+            request_params = _build_deepseek_v4_params(
+                selected_model_name, messages, caller_cap, effective_agent_mode,
             )
-            request_params = {
-                "model": selected_model_name,
-                "messages": messages,
-                "max_tokens": v4_max,
-            }
         else:
             # Standard parameters for non-GPT-5 models or GPT-5 via OpenRouter
             request_params = {
@@ -907,11 +1011,47 @@ class ModelDispatcher:
         # --- DEBUGGING ADDITION END ---
 
         context_overflow_retried = False
+        _apply_force_instruction = False  # set when a thinking model returns empty content
         for attempt in range(self.max_retries):
             # Generate unique attempt ID for tracking
             import uuid
 
             attempt_id = str(uuid.uuid4())[:8]  # Short ID for logging
+
+            # Thinking-model empty-content recovery: if a previous attempt on a
+            # V4/reasoner model returned empty content (reasoning only), append a
+            # forcing instruction to the messages so THIS attempt coaxes out the
+            # actual answer instead of re-hitting the same empty-content edge case.
+            if _apply_force_instruction:
+                _apply_force_instruction = False  # one-shot
+                try:
+                    _forced = [
+                        (dict(m) if isinstance(m, dict) else m)
+                        for m in request_params.get("messages", [])
+                    ]
+                    # Append the forcing suffix to the last USER message.
+                    for _mi in range(len(_forced) - 1, -1, -1):
+                        _mm = _forced[_mi]
+                        _role = _mm.get("role") if isinstance(_mm, dict) else getattr(_mm, "role", None)
+                        if _role == "user":
+                            _cur = _mm.get("content") if isinstance(_mm, dict) else getattr(_mm, "content", "")
+                            _forced_content = (_cur or "") + (
+                                "\n\n[IMPORTANT: Output your final answer NOW as the "
+                                "message content. Do not repeat your reasoning."
+                            )
+                            if isinstance(_mm, dict):
+                                _mm["content"] = _forced_content
+                            else:
+                                _mm.content = _forced_content
+                            break
+                    request_params["messages"] = _forced
+                    logger.info(
+                        "Applied force-output instruction for retry (attempt %d/%d, "
+                        "model=%s) to recover from empty thinking-model content.",
+                        attempt + 1, self.max_retries, selected_model_name,
+                    )
+                except Exception as _force_err:
+                    logger.debug("Could not apply force instruction: %s", _force_err)
 
             try:
                 start_time = time.time()
@@ -1102,6 +1242,46 @@ class ModelDispatcher:
                     # Log cost as 0.000000 when usage is missing
                     logger.info(f"Calculated cost for {selected_model_name}: $0.000000")
                 # --- END NEW ---
+
+                # --- Thinking-model empty-content handling (DeepSeek V4/reasoner) ---
+                # These models occasionally emit reasoning_content but leave the
+                # visible `content` empty (observed: success=True, content="").
+                #
+                # IMPORTANT: we must NEVER promote reasoning_content into `content`.
+                # reasoning_content is the model's chain-of-thought (e.g. "The user
+                # wants me to write...", "Let me look at the sources...") — it is
+                # NOT usable prose. Promoting it polluted both research notes and
+                # the final report ("reasoning report generator" regression on
+                # mission d1678d4b). Instead, when a thinking model returns empty
+                # content but produced reasoning, we flag the messages so the NEXT
+                # retry appends a forcing instruction that makes the model emit its
+                # actual answer. The empty case is intermittent, so a forced retry
+                # reliably recovers real content without ever injecting reasoning.
+                if (
+                    (is_deepseek_v4 or is_deepseek_reasoner)
+                    and response
+                    and response.choices
+                    and response.choices[0].message
+                    and not getattr(response.choices[0].message, "tool_calls", None)
+                ):
+                    _msg = response.choices[0].message
+                    _content_empty = not (
+                        isinstance(_msg.content, str) and _msg.content.strip()
+                    )
+                    _rc = getattr(_msg, "reasoning_content", None)
+                    if (
+                        _content_empty
+                        and isinstance(_rc, str)
+                        and _rc.strip()
+                    ):
+                        logger.warning(
+                            "Thinking model %s returned empty content (reasoning=%d "
+                            "chars, agent_mode=%s). Flagging for a forced retry to "
+                            "recover actual content (NOT promoting reasoning).",
+                            selected_model_name, len(_rc), effective_agent_mode,
+                        )
+                        # Ensure the next attempt forces real output.
+                        _apply_force_instruction = True
 
                 # More robust check for valid response structure
                 if (
@@ -1505,10 +1685,14 @@ class ModelDispatcher:
                         request_params.pop("temperature", None)
                         # Continue with retry logic below
                     elif "max_tokens" in error_msg:
+                        _retry_max = config.DEEPSEEK_MAX_TOKENS_LIMIT
+                        # Honour the caller cap even on error-recovery retry.
+                        if caller_cap is not None:
+                            _retry_max = min(_retry_max, caller_cap)
                         logger.info(
-                            f"DeepSeek-reasoner max_tokens error, forcing max_tokens={config.DEEPSEEK_MAX_TOKENS_LIMIT} and retrying..."
+                            f"DeepSeek-reasoner max_tokens error, forcing max_tokens={_retry_max} and retrying..."
                         )
-                        request_params["max_tokens"] = config.DEEPSEEK_MAX_TOKENS_LIMIT
+                        request_params["max_tokens"] = _retry_max
                         # Continue with retry logic below
 
                 # Check for context length overflow and retry with aggressive truncation (once)
@@ -1668,6 +1852,7 @@ class ModelDispatcher:
         tool_choice: Optional[Any] = None,
         response_format: Optional[Dict[str, str]] = None,
         mission_id: Optional[str] = None,
+        max_tokens: Optional[int] = None,
     ):
         """
         Streams the LLM response using the appropriate client and model.
@@ -1680,6 +1865,8 @@ class ModelDispatcher:
             tool_choice: Optional tool choice constraint.
             response_format: Optional response format constraint.
             mission_id: Optional mission ID for status checking.
+            max_tokens: Optional per-call ceiling on completion length (applied
+                as a CEILING in every model branch, matching dispatch()).
 
         Yields:
             Streaming response chunks from the LLM.
@@ -1719,6 +1906,20 @@ class ModelDispatcher:
             effective_agent_mode, config.AGENT_ROLE_TEMPERATURE["default"]
         )
 
+        # Per-call max_tokens override (deterministic word budgets). Same
+        # ceiling semantics as the non-streaming dispatch(): a caller cap can
+        # only REDUCE output, never raise it past the role/provider limit.
+        caller_cap: Optional[int] = None
+        if max_tokens is not None:
+            try:
+                caller_cap = int(max_tokens)
+                if caller_cap <= 0:
+                    caller_cap = None
+            except (TypeError, ValueError):
+                caller_cap = None
+        if caller_cap is not None:
+            max_tokens_for_call = min(max_tokens_for_call, caller_cap)
+
         # --- Cap max_tokens based on provider limits ---
         provider_config = config.PROVIDER_CONFIG.get(provider_name, {})
         provider_max_tokens = provider_config.get("max_tokens_limit")
@@ -1755,24 +1956,25 @@ class ModelDispatcher:
                 f"Detected DeepSeek-reasoner model (stream): {selected_model_name}, "
                 f"forcing max_tokens={deepseek_max} (was {max_tokens_for_call}), omitting temperature"
             )
+            # Caller cap applies as a CEILING (see dispatch()).
+            effective_max = deepseek_max if caller_cap is None else min(deepseek_max, caller_cap)
             request_params = {
                 "model": selected_model_name,
                 "messages": messages,
-                "max_tokens": deepseek_max,
+                "max_tokens": effective_max,
                 "stream": True,
             }
         elif is_deepseek_v4:
-            v4_max = getattr(config, 'DEEPSEEK_V4_MAX_TOKENS_LIMIT', 65536)
-            logger.info(
-                f"Detected DeepSeek V4 model (stream): {selected_model_name}, "
-                f"forcing max_tokens={v4_max} (was {max_tokens_for_call})"
+            # DeepSeek V4 (flash/pro) — see dispatch() for rationale. Uses the
+            # SAME shared builder as the non-streaming path so the thinking-mode
+            # policy (disabled for content-generation modes) is applied
+            # consistently to streaming requests too. Without this, a streaming
+            # writing/research call would retain default thinking and reproduce
+            # the empty-content failure (thinking eats the tight word budget).
+            request_params = _build_deepseek_v4_params(
+                selected_model_name, messages, caller_cap, effective_agent_mode,
+                stream=True,
             )
-            request_params = {
-                "model": selected_model_name,
-                "messages": messages,
-                "max_tokens": v4_max,
-                "stream": True,
-            }
         else:
             request_params = {
                 "model": selected_model_name,
@@ -1856,10 +2058,14 @@ class ModelDispatcher:
                     )
                     request_params.pop("temperature", None)
                 elif "max_tokens" in error_msg:
+                    _retry_max = config.DEEPSEEK_MAX_TOKENS_LIMIT
+                    # Honour the caller cap even on error-recovery retry.
+                    if caller_cap is not None:
+                        _retry_max = min(_retry_max, caller_cap)
                     logger.info(
-                        f"DeepSeek-reasoner stream max_tokens error, forcing max_tokens={config.DEEPSEEK_MAX_TOKENS_LIMIT} and retrying..."
+                        f"DeepSeek-reasoner stream max_tokens error, forcing max_tokens={_retry_max} and retrying..."
                     )
-                    request_params["max_tokens"] = config.DEEPSEEK_MAX_TOKENS_LIMIT
+                    request_params["max_tokens"] = _retry_max
                 else:
                     raise e
                 # Retry the streaming call with corrected params

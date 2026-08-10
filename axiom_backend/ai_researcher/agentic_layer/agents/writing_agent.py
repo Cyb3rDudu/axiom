@@ -266,7 +266,7 @@ class WritingAgent(BaseAgent):
 {{CITATION_RULES}}
 
 **Handling Empty Notes:**
-- If the 'Research Notes' list is empty or contains no relevant information for the section's goal AND you are writing the section for the first time (no 'Current Draft Content' provided), output only the phrase: "No information found to write this section."
+- If the 'Research Notes' list is empty or contains no relevant information for the section's goal AND you are writing the section for the first time (no 'Current Draft Content' provided), output only a short source-gap marker rather than leaving the section empty. In an academic/structured briefing use the marker `[QUELLE ERFORDERLICH]` followed by one factual sentence derived from the assignment/fixed case assumptions — NEVER emit 'No information found', NEVER leave a section blank, and NEVER fabricate a source or page number. (For non-academic open research you may instead output: "No information found to write this section.")
 - If revising, and notes are empty for a `research_based` section, rely *only* on the 'Current Draft Content' and 'Revision Suggestions'.
 
 **Revision Mode (If 'Current Draft Content' and 'Revision Suggestions' are provided):**
@@ -681,6 +681,45 @@ class WritingAgent(BaseAgent):
             finally:
                 self.system_prompt = original_system_prompt
 
+    def _empty_notes_placeholder(self, section_to_write) -> str:
+        """Return the empty-notes placeholder for a section.
+
+        For structured/academic briefings we must NOT emit the generic
+        'No information found to write this section.' phrasing (the NexMach
+        Hausarbeit prompt, and similar, explicitly forbid it and require a
+        source-gap marker instead). We detect the structured mode from the
+        mission metadata and emit a German '[QUELLE ERFORDERLICH]' gap marker
+        that downstream report processing can collect under 'Offene
+        Quellenlücken'. Falls back to the legacy English phrase only for
+        non-structured (open-research) missions.
+        """
+        title = getattr(section_to_write, "title", "dieser Abschnitt")
+        is_structured = False
+        lang_de = False
+        try:
+            if self.controller and hasattr(self.controller, "context_manager"):
+                mc = self.controller.context_manager.get_mission_context(
+                    getattr(self, "mission_id", None)
+                )
+                if mc:
+                    md = getattr(mc, "metadata", None) or {}
+                    is_structured = md.get("briefing_style") == "structured"
+                    lang_de = (getattr(mc, "language_code", None) or "").lower().startswith("de")
+        except Exception:
+            pass
+        if is_structured:
+            # German academic source-gap marker (matches the NexMach prompt's
+            # '[QUELLE ERFORDERLICH]' convention).
+            return (
+                f"[QUELLE ERFORDERLICH] Für den Abschnitt „{title}“ konnte keine "
+                "ausreichende Literaturfundstelle recherchiert werden. Dieser "
+                "Abschnitt muss mit einer facheinschlägigen Quelle belegt werden. "
+                "(Offene Quellenlücke — nicht als empirisch erhobene Tatsache darstellen.)"
+            )
+        if lang_de:
+            return "Für diesen Abschnitt konnten keine relevanten Informationen gefunden werden."
+        return "No information found to write this section."
+
     async def _write_section_inner(
         self,
         section_to_write,
@@ -714,8 +753,14 @@ class WritingAgent(BaseAgent):
                     f"No notes provided for initial writing of research_based section {section_to_write.section_id}. Returning placeholder."
                 )
                 scratchpad_update = f"Skipped writing section {section_to_write.section_id}: No notes provided for initial pass (research_based)."
+                # Structured/academic briefings explicitly forbid the generic
+                # 'No information found' phrasing (e.g. the NexMach Hausarbeit
+                # prompt). In that mode, emit a source-gap marker so the missing
+                # evidence is visible and can be collected under 'Offene
+                # Quellenlücken' rather than silently dropping the section.
+                _placeholder = self._empty_notes_placeholder(section_to_write)
                 return (
-                    "No information found to write this section.",
+                    _placeholder,
                     None,
                     scratchpad_update,
                 )
@@ -756,6 +801,11 @@ class WritingAgent(BaseAgent):
             # Simple approach: provide all previous sections passed in. Limit length.
             # TODO: Consider providing only immediately preceding sections or summaries?
             for sec_id, sec_content in previous_sections_content.items():
+                # Defensive: a failed previous-section write can store None
+                # (e.g. before thinking-mode fix); guard against it instead of
+                # crashing with "object of type 'NoneType' has no len()".
+                if sec_content is None:
+                    continue
                 # Limit length to avoid excessive context
                 char_limit = get_writing_previous_content_preview_chars(self.mission_id)
                 preview = (
@@ -825,6 +875,29 @@ class WritingAgent(BaseAgent):
 - **Research Strategy:** {section_to_write.research_strategy}
 """
 
+        # Deterministic word-budget guard (Priority 3). When the briefing
+        # provided a per-section word target, state it as a HARD instruction and
+        # cap max_tokens below so the model literally cannot overrun by 16x.
+        # max_tokens ~= max_words * 1.8 (German ~1.6 tokens/word incl. umlauts
+        # and markdown) plus a small buffer; clamped to a sane floor.
+        section_word_guard = ""
+        per_section_max_tokens = None
+        tw_min = getattr(section_to_write, "target_words_min", None)
+        tw_max = getattr(section_to_write, "target_words_max", None)
+        if tw_max:
+            lo = tw_min or int(tw_max * 0.8)
+            section_word_guard = (
+                f"\n**HARD LENGTH LIMIT:** Write approximately {lo}-{tw_max} words "
+                "for this section. Do NOT exceed "
+                f"{int(tw_max * 1.2)} words under any circumstances — be concise, "
+                "develop the argument without filler, lists, or repetition. "
+                "The backend counts words and will truncate over-long sections."
+            )
+            per_section_max_tokens = max(256, int(tw_max * 1.8) + 120)
+        budget_src = getattr(section_to_write, "budget_source", None)
+        if budget_src and section_word_guard:
+            section_word_guard += f" (source: {budget_src})"
+
         revision_section = ""
         if is_revision_pass:
             revision_section = f"""
@@ -843,6 +916,7 @@ class WritingAgent(BaseAgent):
 **Task:** {'Revise the "Current Draft Content" based *specifically* on the "Revision Suggestions".' if is_revision_pass else "Write the initial draft content."} Ensure the final output is the *complete* text for the '{section_to_write.title}' section/subsection, adhering to all system prompt guidelines (style, citations, NO HEADERS, transitions, avoiding repetition). 
 
 **CRITICAL:** Output *only* the section text. Do NOT include any meta-commentary, agent thoughts, or scratchpad content. Do NOT prefix your response with "Agent Scratchpad:" or any similar text.
+{section_word_guard}
 """
 
         # Calculate other context size (everything except notes, previous sections, and outline)
@@ -893,6 +967,7 @@ class WritingAgent(BaseAgent):
             update_callback=update_callback,  # Pass update_callback for UI updates
             model=model,  # <-- Pass the model parameter down
             log_llm_call=False,  # Disable duplicate LLM call logging since writing operations are logged by higher-level methods
+            **({"max_tokens": per_section_max_tokens} if per_section_max_tokens else {}),
             # Temperature is handled by the ModelDispatcher based on model defaults/config
             # No specific response format needed, expect raw text
         )
@@ -1055,6 +1130,21 @@ class WritingAgent(BaseAgent):
                 if len(sub_content) > char_limit
                 else sub_content
             )
+            # Annotate placeholder/source-gap content (review finding 5) so the
+            # synthesis LLM does NOT treat a '[QUELLE ERFORDERLICH]' stub or an
+            # error placeholder as real, sourced subsection content to summarise.
+            try:
+                from ai_researcher.agentic_layer.controller.writing_manager import (
+                    is_empty_or_placeholder_content,
+                )
+                if is_empty_or_placeholder_content(sub_content):
+                    preview = (
+                        f"[HINWEIS: Dieser Unterabschnitt ist eine Quellenlücke / "
+                        f"Platzhalter und enthält KEINE verwertbaren Inhalte. "
+                        f"Nicht als Beleg zusammenfassen.] {preview}"
+                    )
+            except Exception:
+                pass
             subsection_context_str += (
                 f"### Subsection: {sub_id} ('{sub_title}')\n{preview}\n\n"
             )
@@ -1122,6 +1212,15 @@ class WritingAgent(BaseAgent):
 
         try:
             # Call the LLM using the agent's internal method
+            # Word-budget guard (review finding 3): parent intros must also
+            # respect a max_tokens cap so synthesis cannot blow the total budget.
+            # A synthesis parent's target_words_max is small (set to 120 by the
+            # budget distributor); derive max_tokens from it the same way as a
+            # normal section (~max_words * 1.8 + buffer).
+            syn_max_tokens = None
+            tw_max = getattr(section, "target_words_max", None)
+            if tw_max:
+                syn_max_tokens = max(160, int(tw_max * 1.8) + 80)
             llm_response, model_call_details = await self._call_llm(
                 user_prompt=prompt,
                 agent_mode="writing",  # Use writing mode
@@ -1129,6 +1228,7 @@ class WritingAgent(BaseAgent):
                 update_callback=update_callback,
                 model=model,  # Pass optional model override
                 log_llm_call=False,  # Disable duplicate LLM call logging since synthesis operations are logged by higher-level methods
+                **({"max_tokens": syn_max_tokens} if syn_max_tokens else {}),
             )
 
             if (
@@ -1137,6 +1237,15 @@ class WritingAgent(BaseAgent):
                 and llm_response.choices[0].message.content
             ):
                 synthesized_content = llm_response.choices[0].message.content.strip()
+                # Post-trim (review finding 3): cap synthesized intros at their
+                # hard limit too, identically to normal sections.
+                if tw_max and synthesized_content:
+                    from ai_researcher.agentic_layer.controller.writing_manager import (
+                        _trim_to_word_budget,
+                    )
+                    _hard = int(tw_max * 1.2)
+                    if len(synthesized_content.split()) > _hard:
+                        synthesized_content = _trim_to_word_budget(synthesized_content, _hard)
                 if synthesized_content:
                     # Store the synthesized content
                     await self.controller.context_manager.store_report_section(

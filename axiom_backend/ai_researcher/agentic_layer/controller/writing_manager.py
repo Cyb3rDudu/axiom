@@ -1,5 +1,6 @@
 from collections import deque
 import logging
+import re
 from typing import Dict, Any, Optional, List, Callable, Tuple, Set
 import asyncio
 import queue
@@ -17,6 +18,69 @@ from ai_researcher.agentic_layer.controller.utils import outline_utils
 from ai_researcher.agentic_layer.controller.utils.status_checks import acheck_mission_status, check_mission_status_async
 
 logger = logging.getLogger(__name__)
+
+
+def _trim_to_word_budget(text: str, max_words: int) -> str:
+    """Trim ``text`` to at most ``max_words`` words, cutting at the last full
+    sentence boundary at or before the word limit.
+
+    Used by the post-generation word guard (Priority 4) to enforce the
+    briefing's per-section 'Umfang'. Appends an ellipsis when content is cut.
+    Deterministic, no LLM call.
+    """
+    if max_words <= 0 or not text:
+        return text
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    # Take the first max_words words, then walk back to the last sentence end.
+    head = " ".join(words[:max_words])
+    # Sentence enders across languages (., !, ?, …). Keep it simple.
+    best = -1
+    for ch in (".", "!", "?", "…", ".\"", ")"):
+        idx = head.rfind(ch)
+        if idx > best:
+            best = idx
+    if best > int(len(head) * 0.5):  # only cut at a sentence if reasonably far in
+        return head[: best + 1].rstrip() + " …"
+    # No clean sentence boundary — cut at the word limit.
+    return head.rstrip(" ,;:") + " …"
+
+
+# Pattern for the structured-briefing source-gap marker emitted by
+# WritingAgent._empty_notes_placeholder (review finding 5). Centralised so both
+# the parent-synthesis decision and the synthesis routine recognise it
+# consistently and do NOT treat a source-gap placeholder as real subsection
+# content to summarise.
+_SOURCE_GAP_RE = re.compile(r"\[QUELLE\s+ERFORDERLICH\]", re.IGNORECASE)
+
+
+def is_empty_or_placeholder_content(content: str) -> bool:
+    """Return True when ``content`` is absent or a known placeholder.
+
+    Recognises:
+      - empty / whitespace-only content,
+      - the legacy English 'No information found to write this section.' phrase,
+      - error placeholders of the form '[Error: ...]',
+      - the structured-academic '[QUELLE ERFORDERLICH] ...' source-gap marker.
+
+    Used by the parent-synthesis flow to decide whether a section (or all of a
+    parent's subsections) lacks real content and should therefore NOT be
+    synthesised from placeholders (review finding 5: previously only the legacy
+    English phrase was detected, so a '[QUELLE ERFORDERLICH]' subsection was
+    treated as valid content and the parent intro was built on top of it).
+    """
+    if not content or not content.strip():
+        return True
+    c = content.strip()
+    if c.lower().startswith("no information found to write this section"):
+        return True
+    if "[error:" in c.lower():
+        return True
+    if _SOURCE_GAP_RE.search(c):
+        return True
+    return False
+
 
 class WritingManager:
     """
@@ -592,6 +656,26 @@ class WritingManager:
             log_queue=log_queue, update_callback=update_callback
         )
 
+        # Post-generation word guard (Priority 4). Count words deterministically
+        # and TRIM any section that overran its hard cap by more than 20%. The
+        # max_tokens cap above already prevents 16x blowups, but a model can
+        # still emit 1.5-2x the target; this guarantees the stored text respects
+        # the briefing's 'Umfang'. Trims at the last full sentence <= limit*1.2.
+        tw_max = getattr(section, "target_words_max", None)
+        if tw_max and section_content and log_status == "success":
+            hard_limit = int(tw_max * 1.2)
+            word_count = len(section_content.split())
+            if word_count > hard_limit:
+                trimmed = _trim_to_word_budget(section_content, hard_limit)
+                if trimmed and len(trimmed.split()) < word_count:
+                    logger.warning(
+                        "Word guard: section '%s' wrote %d words (limit %d, cap %d) "
+                        "— trimmed to %d words.",
+                        section.title, word_count, tw_max, hard_limit,
+                        len(trimmed.split()),
+                    )
+                    section_content = trimmed
+
         # Store the generated/revised (or error) content for this section
         await self.controller.context_manager.store_report_section(mission_id, section.section_id, section_content)
 
@@ -619,39 +703,59 @@ class WritingManager:
         for section in full_outline:
             if section.subsections:
                 current_content = mission_context.report_content.get(section.section_id, "")
-                
-                # Check if section has no content or just placeholder content
-                if not current_content or current_content == "No information found to write this section." or "[Error:" in current_content:
-                    logger.info(f"Synthesizing content for top-level section {section.section_id}: '{section.title}'")
-                    
-                    # Check if all subsections have content
-                    all_subsections_have_content = True
-                    for subsec in section.subsections:
-                        subsec_content = mission_context.report_content.get(subsec.section_id, "")
-                        if not subsec_content or subsec_content == "No information found to write this section." or "[Error:" in subsec_content:
-                            all_subsections_have_content = False
-                            logger.warning(f"Subsection {subsec.section_id} has no valid content. Skipping synthesis for parent section {section.section_id}.")
-                            break
-                    
-                    if all_subsections_have_content:
-                        # Temporarily set research_strategy to synthesize_from_subsections
-                        original_strategy = section.research_strategy
-                        section.research_strategy = "synthesize_from_subsections"
-                        
-                        # Call synthesize_intro to generate content
-                        await self.controller.writing_agent.synthesize_intro(
-                            mission_id=mission_id,
-                            section=section,
-                            log_queue=log_queue,
-                            update_callback=update_callback
+
+                # Use the centralised placeholder detector (review finding 5):
+                # recognises the legacy 'No information found...' phrase, '[Error:...]'
+                # AND the structured-academic '[QUELLE ERFORDERLICH]' source-gap marker.
+                if is_empty_or_placeholder_content(current_content):
+                    # Check whether the subsections have REAL content. A subsection
+                    # whose content is itself a source-gap placeholder does NOT
+                    # count as content to synthesise from — otherwise the parent
+                    # intro would be built on top of '[QUELLE ERFORDERLICH]' stubs
+                    # and present made-up summaries as if they were sourced.
+                    subsec_blobs = [
+                        mission_context.report_content.get(subsec.section_id, "")
+                        for subsec in section.subsections
+                    ]
+                    usable = [b for b in subsec_blobs if not is_empty_or_placeholder_content(b)]
+                    gap_only = [b for b in subsec_blobs if b.strip() and is_empty_or_placeholder_content(b)]
+
+                    if not usable:
+                        # ALL subsections are empty/placeholder/source-gap: do NOT
+                        # synthesise a fabricated parent intro. Propagate the
+                        # source-gap state so the gap is visible at the chapter
+                        # level too (collectable under 'Offene Quellenlücken').
+                        logger.warning(
+                            "All subsections of %s are empty/placeholder/source-gap "
+                            "(%d gap markers). Propagating source-gap; skipping parent synthesis.",
+                            section.section_id, len(gap_only),
                         )
-                        
-                        # Restore original strategy
-                        section.research_strategy = original_strategy
-                        
-                        logger.info(f"Successfully synthesized content for top-level section {section.section_id}")
-                    else:
-                        logger.warning(f"Not all subsections have content for section {section.section_id}. Skipping synthesis.")
+                        if not current_content.strip():
+                            await self.controller.context_manager.store_report_section(
+                                mission_id, section.section_id,
+                                f"[QUELLE ERFORDERLICH] Für den Abschnitt „{section.title}“ "
+                                "liegen noch keine ausgewerteten Quellen vor. Dieser "
+                                "Abschnitt erfordert facheinschlägige Literatur.",
+                            )
+                        continue
+
+                    logger.info(f"Synthesizing content for top-level section {section.section_id}: '{section.title}'")
+                    # Temporarily set research_strategy to synthesize_from_subsections
+                    original_strategy = section.research_strategy
+                    section.research_strategy = "synthesize_from_subsections"
+
+                    # Call synthesize_intro to generate content
+                    await self.controller.writing_agent.synthesize_intro(
+                        mission_id=mission_id,
+                        section=section,
+                        log_queue=log_queue,
+                        update_callback=update_callback
+                    )
+
+                    # Restore original strategy
+                    section.research_strategy = original_strategy
+
+                    logger.info(f"Successfully synthesized content for top-level section {section.section_id}")
         
         logger.info("Completed post-processing synthesis of top-level sections.")
 

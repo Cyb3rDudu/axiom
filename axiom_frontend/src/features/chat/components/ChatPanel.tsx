@@ -628,25 +628,25 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
               panelControls.toggleRightPanel()
             }
 
-            // Generate initial questions for the research topic
-            const questionsGenerated = await generateInitialQuestions(missionId, request || '')
-            
-            // Show combined toast after questions are generated
-            if (questionsGenerated) {
-              addToast({
-                type: 'success',
-                title: 'Research Mission Started',
-                message: 'I\'ve created a new research mission and generated initial research questions. Check the research panel to review them.',
-                duration: 5000
-              })
-            } else {
-              addToast({
-                type: 'success',
-                title: 'Research Mission Started',
-                message: 'I\'ve created a new research mission. Check the research panel to monitor progress.',
-                duration: 5000
-              })
+            // The backend produces the research questions directly in the
+            // start_research chat flow (the agent response carries `questions`,
+ // which are stored as the mission's initial_questions). For a COMPLETE
+            // structured briefing the backend stages the user's own Leitfragen.
+            // There is no separate /api/chat/generate-questions call to make —
+            // that endpoint is a deprecated no-op that always returns [].
+            // Instead, refresh the mission status so the research panel shows the
+            // backend-stored questions, and surface an accurate toast.
+            try {
+              await useMissionStore.getState().fetchMissionStatus(missionId)
+            } catch (e) {
+              console.error('Error refreshing mission status after start_research:', e)
             }
+            addToast({
+              type: 'success',
+              title: 'Research Mission Started',
+              message: "I've created a new research mission. Review the research questions in the research panel, then start when you're ready.",
+              duration: 5000
+            })
           }
           break
           
@@ -678,34 +678,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ chatId: propChatId }) => {
         message: 'There was an error processing the agent action. Please try again.',
         duration: 5000
       })
-    }
-  }
-
-  const generateInitialQuestions = async (missionId: string, researchTopic: string): Promise<boolean> => {
-    try {
-      const response = await fetch(buildApiUrl('/api/chat/generate-questions'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('access_token') || ''}`,
-        },
-        credentials: 'include',
-        body: JSON.stringify({
-          mission_id: missionId,
-          research_topic: researchTopic
-        })
-      })
-
-      if (response.ok) {
-        // Questions are generated and stored in the backend
-        // The UI will show them through the research tabs
-        // Return true to indicate success (toast will be shown by caller)
-        return true
-      }
-      return false
-    } catch (error) {
-      console.error('Error generating questions:', error)
-      return false
     }
   }
 

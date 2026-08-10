@@ -43,6 +43,14 @@ class ReportSection(BaseModel):
     )
     # is_section_intro field removed as it's redundant with research_strategy='synthesize_from_subsections'
     # --- END NEW FIELDS ---
+    # --- Word-budget fields (deterministic, from the briefing's 'Umfang:') ---
+    # Optional so legacy/LLM-only outlines still validate. When set, the
+    # writer uses target_words_max to cap max_tokens and the prompt states
+    # the range. A parent section with subsections typically leaves these
+    # None and instead distributes its budget across its subsections.
+    target_words_min: Optional[int] = Field(default=None, description="Minimum target word count for this section (from the briefing's Umfang). The writer should reach at least this many words.")
+    target_words_max: Optional[int] = Field(default=None, description="Maximum target word count for this section (from the briefing's Umfang). Drives the writer's hard max_tokens cap; do not exceed.")
+    budget_source: Optional[str] = Field(default=None, description="Provenance of the word budget (e.g. the original 'Umfang:' line) for traceability.")
 
 # Update forward references to allow for recursive subsections
 ReportSection.model_rebuild()

@@ -45,6 +45,18 @@ _UI_STRINGS = {
         "es": "¿Le gustaría refinarlas o procedemos?",
         "pt": "Gostaria de refiná-las ou devemos prosseguir?",
     },
+    # P2: acknowledgment shown when a user submits a COMPLETE structured
+    # briefing (Leitfrage + Gliederung + scope + deliverable). The mission is
+    # staged like an open one (Leitfragen become the displayed questions) but
+    # NOT auto-started — the user launches it via the settings menu, the Start
+    # button, or a chat "start" message, exactly like an open mission.
+    "complete_briefing_ack": {
+        "en": "I've understood your assignment.",
+        "de": "Ich habe deinen Auftrag verstanden.",
+        "fr": "J'ai bien compris votre commande.",
+        "es": "He entendido su asignación.",
+        "pt": "Entendi a sua atribuição.",
+    },
     "refine_error": {
         "en": "Sorry, I had trouble refining the questions. Please try again or proceed with the current ones.",
         "de": "Entschuldigung, bei der Überarbeitung der Fragen ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut oder fahren Sie mit den aktuellen Fragen fort.",
@@ -356,6 +368,56 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
 
         return analysis_result
 
+    @staticmethod
+    def _resolve_awaiting_clarification(metadata: dict, user_message: str) -> Optional[dict]:
+        """Decide whether a user follow-up resolves an open case-assumption conflict.
+
+        Pure/testable (no controller access). Returns the metadata update to
+        persist on resolution, or None when there is no pending conflict or the
+        follow-up did not resolve it.
+
+        The follow-up is parsed as an AUTHORITATIVE override (review finding 1):
+        every assumption field it explicitly mentions REPLACES the original's
+        values for that field (no text concatenation — concatenation could
+        never resolve a conflict because both figures would remain). On
+        resolution we clear BOTH ``awaiting_clarification`` AND
+        ``case_assumption_conflicts`` and persist the resolved assumptions +
+        the correction overlay so the planner sees the corrected figures.
+        """
+        pending = metadata.get("awaiting_clarification")
+        if not pending:
+            return None
+        full_briefing = metadata.get("full_briefing") or ""
+        from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
+            resolve_case_assumptions as _resolve,
+            apply_corrections_to_briefing as _apply_corr,
+        )
+        merged, still_conflicting = _resolve(full_briefing, user_message)
+        if still_conflicting:
+            return None
+        resolved = {
+            "turnovers": [{"value": v, "raw": r} for v, r in merged.turnovers],
+            "per_employees": [{"value": v, "raw": r} for v, r in merged.per_employees],
+            "headcounts": [{"value": v, "raw": r} for v, r in merged.headcounts],
+        }
+        # Review finding 2: persist a CANONICAL corrected briefing — the stale
+        # figures replaced inline by the corrected values — so the planner reads
+        # consistent figures in the verbatim text itself, not just in an overlay.
+        corrected_briefing = _apply_corr(full_briefing, merged)
+        update = {
+            "awaiting_clarification": None,
+            "case_assumption_conflicts": [],
+            "case_assumption_corrections": {
+                "resolved_assumptions": resolved,
+                "correction_text": user_message,
+            },
+        }
+        # Only store the corrected briefing when it actually differs from the
+        # original (a correction that changed nothing leaves the text intact).
+        if corrected_briefing != full_briefing:
+            update["full_briefing_corrected"] = corrected_briefing
+        return update
+
     async def handle_user_message(
         self,
         user_message: str,
@@ -402,6 +464,7 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
         from ai_researcher.agentic_layer.controller.utils.briefing_detector import (
             detect_structured_briefing,
             extract_leitfragen,
+            classify_assignment,
         )
         is_structured_briefing = (
             chat_mode == "research"
@@ -410,11 +473,22 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
         briefing_leitfragen: List[str] = (
             extract_leitfragen(user_message) if is_structured_briefing else []
         )
+        # P2: full assignment classification. `classification` drives the
+        # complete-briefing direct-start path further below. Computed once here
+        # so both the structured-passthrough and the start_research branch see
+        # the same signals.
+        classification = (
+            classify_assignment(user_message)
+            if chat_mode == "research"
+            else {"specificity": "open", "briefing_style": "open",
+                  "primary_question": None, "questions": []}
+        )
         if is_structured_briefing:
             logger.info(
                 "Detected structured briefing in user message (chat_id=%s): "
-                "%d Leitfragen extracted",
+                "specificity=%s, %d Leitfragen extracted",
                 chat_id,
+                classification.get("specificity"),
                 len(briefing_leitfragen),
             )
 
@@ -477,6 +551,34 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
         # Fetch Active Goals & Thoughts
         active_goals = self.controller.context_manager.get_active_goals(mission_id) if mission_id else None
         active_thoughts = self.controller.context_manager.get_recent_thoughts(mission_id, limit=THOUGHT_PAD_CONTEXT_LIMIT) if mission_id else None
+
+        # Resolve awaiting_clarification state (review finding 1+2): when the
+        # user sends a follow-up to a mission blocked on case-assumption
+        # conflicts, re-check whether the conflicts are resolved. The decision
+        # logic lives in the pure/testable helper _resolve_awaiting_clarification()
+        # (returns the metadata update or None); we only persist the result here.
+        if mission_id:
+            try:
+                _mc = self.controller.context_manager.get_mission_context(mission_id)
+                _md = (getattr(_mc, "metadata", None) or {}) if _mc else {}
+                _update = self._resolve_awaiting_clarification(_md, user_message or "")
+                if _update:
+                    await self.controller.context_manager.update_mission_metadata(mission_id, _update)
+                    logger.info(
+                        "Mission %s: case-assumption conflicts RESOLVED via "
+                        "follow-up (structured override). Cleared "
+                        "awaiting_clarification + case_assumption_conflicts; "
+                        "persisted resolved assumptions + correction overlay.",
+                        mission_id,
+                    )
+                elif _md.get("awaiting_clarification"):
+                    logger.info(
+                        "Mission %s: follow-up did not resolve all conflicts; "
+                        "staying blocked.",
+                        mission_id,
+                    )
+            except Exception as _clar_err:
+                logger.warning("awaiting_clarification re-check failed: %s", _clar_err)
 
         try:
             # Don't apply semaphore for chat operations to allow concurrent chats
@@ -685,33 +787,202 @@ Output ONLY a single JSON object conforming EXACTLY to the RequestAnalysisOutput
                     )
                     logger.info(f"Added formatting preferences as goal '{goal_id}': '{formatting_preferences}'")
 
-                # Structured-briefing passthrough: when the user's message was a
-                # full research briefing (headings + numbered Leitfragen + KMU
-                # keywords etc.), skip question-generation and use the user's
-                # Leitfragen directly. See docs/plans/CHAT_MODES_AND_STRUCTURED_BRIEFING.md
+                # --- Structured-briefing handling (P1 + P2) ---
+                # `classification` was computed at the top of handle_user_message.
+                #   specificity == 'complete'  -> direct start (P2)
+                #   specificity == 'structured' -> honour briefing in Planning (P1),
+                #                                 but keep the question/approval loop
+                #   specificity == 'open'       -> current behaviour (generate questions)
+                # See docs/plans/STRUCTURED_BRIEFING_DIRECT_START.md
+                briefing_style = classification.get("briefing_style", "open")
+                is_complete = classification.get("specificity") == "complete"
+                primary_q = classification.get("primary_question")
+                sub_qs: List[str] = classification.get("questions") or briefing_leitfragen or []
+
                 questions = None
                 model_details = None
-                if is_structured_briefing and briefing_leitfragen:
-                    await self.controller.context_manager.update_mission_metadata(
-                        mission_id,
-                        {
-                            "briefing_style": "structured",
-                            "full_briefing": user_message,
-                        },
-                    )
+
+                if briefing_style == "structured":
+                    # P1: persist the full briefing + primary Leitfrage + structured
+                    # outline so downstream agents (Planning) honour it instead of
+                    # the distilled one-liner.
+                    # NOTE (review finding 2): we deliberately do NOT stage
+                    # initial_questions here. Conflicts are checked below and, when
+                    # present, must block the mission WITHOUT leaving questions
+                    # persisted (otherwise the normal approve/start flow can still
+                    # fire and the hard stop is cosmetic). initial_questions is
+                    # persisted in a SEPARATE update AFTER the conflict check.
+                    metadata_update = {
+                        "briefing_style": "structured",
+                        "full_briefing": user_message,
+                        "primary_leitfrage": primary_q,
+                    }
+                    # Structured Gliederung (Finding 1): store the parsed outline as
+                    # (number, title, level) records with number-free titles, so the
+                    # planner can reproduce the user's hierarchy deterministically
+                    # instead of being tempted to invent its own / duplicate numbers.
+                    outline_records = classification.get("outline") or []
+                    if outline_records:
+                        metadata_update["structured_outline"] = outline_records
+                    # Deterministic word budget (Priority 1 of the metadata plan):
+                    # store total + per-section budgets so the planner and writer
+                    # can enforce them instead of blowing past 'ca. 3.000 Wörter'.
+                    word_budget = classification.get("word_budget") or {}
+                    if word_budget.get("total_word_budget") or word_budget.get("section_word_budgets"):
+                        metadata_update["word_budget"] = word_budget
+                    # Staged-output directive (Priority 5): if the briefing asks
+                    # for a planning-only first deliverable ("Gib zunächst noch
+                    # keinen vollständigen Fließtext aus"), flag it so the
+                    # planner produces the staged deliverable (outline/theses/
+                    # source matrix) and the mission does NOT jump straight to a
+                    # full draft. Specificity is already 'structured' (not
+                    # 'complete') in that case, so the approval loop stays.
+                    output_stage = classification.get("output_stage")
+                    if output_stage == "planning_only":
+                        metadata_update["output_stage"] = "planning_only"
+                        metadata_update["staged_first_output"] = (
+                            "Deliver ONLY the planning artefacts first: Hauptthese, "
+                            "Unterthesen, kommentierte Gliederung mit Wortbudget, "
+                            "Quellenmatrix, Liste der benötigten Praxisquellen, "
+            "vorläufige Auswahl der zentralen Faktoren, offene Quellenlücken. "
+                            "Do NOT write the full Fließtext/Hausarbeit yet — await "
+                            "user confirmation."
+                        )
+                    # Plausibility conflicts (Priority 6): store them and add a
+                    # goal so the agent surfaces them to the user rather than
+                    # silently picking one figure.
+                    case_conflicts = classification.get("case_assumption_conflicts") or []
+                    if case_conflicts:
+                        metadata_update["case_assumption_conflicts"] = case_conflicts
+                    await self.controller.context_manager.update_mission_metadata(mission_id, metadata_update)
+
+                    # Surface conflicts as a goal so the agent flags them in its
+                    # reply (the user must resolve e.g. 19 Mio. vs 40 Mio. Euro
+                    # before the mission can produce a consistent Hausarbeit).
+                    if case_conflicts:
+                        conflict_text = "Widersprüchliche Fallannahmen erkannt (bitte vom Nutzer auflösen lassen): "
+                        conflict_text += " | ".join(case_conflicts)
+                        await self.controller.context_manager.add_goal(
+                            mission_id=mission_id,
+                            text=conflict_text,
+                            source_agent="BriefingDetector",
+                        )
+                        # HARD STOP (review finding 2): conflicts must block the
+                        # mission from proceeding to question display / planning.
+                        # Persist an awaiting_clarification flag so /missions/{id}/start
+                        # and prepare_mission_start() can reject the start, and
+                        # return a clarification response now — no initial_questions
+                        # are staged, so the normal approve/start flow cannot fire.
+                        await self.controller.context_manager.update_mission_metadata(
+                            mission_id, {"awaiting_clarification": case_conflicts}
+                        )
+                        lang = _detect_language(self.controller, mission_id, agent_output.get("response"))
+                        bullet_conflicts = "\n".join(f"- {c}" for c in case_conflicts)
+                        clarify = (
+                            "⚠️ Bevor ich starte, müssen wir einige widersprüchliche "
+                            "Fallannahmen klären:\n\n"
+                            f"{bullet_conflicts}\n\n"
+                            "Bitte korrigiere oder bestätige die relevanten Zahlen, "
+                            "damit die Hausarbeit auf einer konsistenten Grundlage beruht. "
+                            "(z. B. „Jahresumsatz ist 40 Mio. Euro, die 470.000 € pro "
+                            "Mitarbeitendem sind die bewusste Fallannahme.“)"
+                        )
+                        agent_output["response"] = clarify
+                        agent_output["mission_id"] = mission_id
+                        questions = []  # explicit: do NOT stage questions
+                        logger.warning(
+                            "Mission %s blocked: %d case-assumption conflict(s) — "
+                            "awaiting user clarification before start.",
+                            mission_id, len(case_conflicts),
+                        )
+                        return agent_output
+
+                    # No conflicts (review finding 2): NOW it is safe to stage the
+                    # user's Leitfragen as initial_questions. This happens AFTER the
+                    # conflict hard-stop above, so a blocked mission never has
+                    # questions persisted and the normal approve/start flow cannot
+                    # fire while awaiting_clarification is set.
+                    if sub_qs:
+                        await self.controller.context_manager.update_mission_metadata(
+                            mission_id, {"initial_questions": sub_qs}
+                        )
+
+                    # NOTE: we deliberately do NOT overwrite mission_context.user_request
+                    # with the full briefing (Finding 3). user_request is the short
+                    # mission label/name and is used by prepare_mission_start() to name
+                    # the auto-save document group ("R: <title>"). Overwriting it with
+                    # the whole briefing produced group names like
+                    # "R: Du unterstützt mich bei der Konzeption und sp...".
+                    # The full briefing is already available to agents via the
+                    # ``full_briefing`` metadata field consumed by the planning agent.
+
                     await self.controller.context_manager.add_goal(
                         mission_id=mission_id,
                         text="briefing_style=structured — use the user's Leitfragen and outline verbatim; do not invent alternative questions",
                         source_agent="BriefingDetector",
                     )
                     logger.info(
-                        "Structured briefing detected for mission %s; using %d user-provided Leitfragen instead of generating new ones",
-                        mission_id,
-                        len(briefing_leitfragen),
+                        "Structured briefing (specificity=%s) for mission %s; primary_leitfrage=%s, %d sub-questions, %d outline sections",
+                        classification.get("specificity"), mission_id,
+                        bool(primary_q), len(sub_qs), len(outline_records),
                     )
-                    questions = briefing_leitfragen
+
+                    # COMPLETE assignment -> behave EXACTLY like an open research
+                    # mission, but WITHOUT the generic question-generation step:
+                    #   * take the user's own Leitfragen/sub-questions as the displayed
+                    #     questions (stored as initial_questions),
+                    #   * reply "I've understood the assignment",
+                    #   * leave the mission in the normal pre-start state so the user
+                    #     can edit settings, click Start, or send a chat "start"
+                    #     message — identical lifecycle to an open mission.
+                    # This replaces the earlier auto-start hack, which bypassed the
+                    # Settings menu and the canonical /missions/{id}/start prep
+                    # (prepare_mission_start + apply_auto_optimization), causing both
+                    # missing R: document groups and far less agentic activity.
+                    if is_complete:
+                        final_qs = ([primary_q] if primary_q else []) + sub_qs
+                        if not final_qs:
+                            # Degenerate: classified complete but nothing to use as
+                            # questions. Fall back to generating.
+                            logger.warning(
+                                "Complete briefing for mission %s had no usable Leitfragen; "
+                                "falling back to question generation.", mission_id
+                            )
+                        else:
+                            # Use the user's Leitfragen as the questions to display.
+                            # Persist them so /missions/{id}/start and the chat
+                            # "approve_questions"/"start" flow can pick them up.
+                            await self.controller.context_manager.update_mission_metadata(mission_id, {
+                                "initial_questions": final_qs,
+                            })
+                            # Acknowledge the assignment (do NOT auto-start). Tell the
+                            # user how to launch, mirroring the open-mission prompt.
+                            lang = _detect_language(self.controller, mission_id, agent_output.get("response"))
+                            ack_lines = [_get_ui_string("complete_briefing_ack", lang)]
+                            if primary_q:
+                                ack_lines.append(f"\n**Leitfrage:** {primary_q}")
+                            if sub_qs:
+                                ack_lines.append(f"**Unterfragen:** {len(sub_qs)}")
+                            ack_lines.append(_get_ui_string("questions_prompt", lang))
+                            agent_output["response"] = "\n".join(ack_lines)
+                            agent_output["questions"] = final_qs
+                            agent_output["mission_id"] = mission_id
+                            questions = final_qs  # skip the ResearchAgent generation below
+                            logger.info(
+                                "Complete briefing for mission %s staged as questions (no auto-start); "
+                                "user will start via settings menu / Start button / chat.",
+                                mission_id,
+                            )
+                            return agent_output
+
+                    # structured-but-not-complete: use the user's sub-questions for display.
+                    if sub_qs:
+                        questions = sub_qs
 
                 # Generate initial questions using the ResearchAgent for higher quality
+                # (only reached for open research, structured-without-subquestions,
+                # (only reached for open research or structured-without-subquestions;
+                # a complete briefing returns earlier with its own Leitfragen).
                 try:
                     if questions is None:
                         logger.info(f"Generating initial questions for mission {mission_id} using ResearchAgent")

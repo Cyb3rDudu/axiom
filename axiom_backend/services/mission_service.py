@@ -60,6 +60,18 @@ async def prepare_mission_start(
     # Get existing metadata
     existing_metadata = mission_context.metadata or {}
 
+    # HARD STOP for unresolved case-assumption conflicts (review finding 2).
+    # Even if /missions/{id}/start is bypassed (e.g. a direct chat "start"),
+    # we must not prepare/launch a mission whose briefing still has
+    # contradictory assumptions.
+    awaiting_clarification = existing_metadata.get("awaiting_clarification")
+    if awaiting_clarification:
+        conflicts_str = "; ".join(awaiting_clarification) if isinstance(awaiting_clarification, list) else str(awaiting_clarification)
+        raise ValueError(
+            "Mission blocked: unresolved case-assumption conflicts. "
+            "Resolve in chat first: " + conflicts_str
+        )
+
     # Create document group if auto_create_document_group is enabled
     # This is INDEPENDENT of whether there's a search group selected!
     # - document_group_id = group to SEARCH from (user-selected)

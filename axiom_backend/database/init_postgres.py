@@ -14,23 +14,32 @@ from sqlalchemy.exc import OperationalError
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database.database import DATABASE_URL, Base, engine, init_db, test_connection
+from database.database import (
+    DATABASE_URL,
+    Base,
+    engine,
+    init_db,
+    test_connection,
+    connect_with_retries,
+)
 from database import models  # Import all models
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def wait_for_database(max_retries=30, retry_interval=2):
-    """Wait for database to be available"""
-    for attempt in range(max_retries):
-        try:
-            if test_connection():
-                logger.info("Database is ready!")
-                return True
-        except Exception as e:
-            logger.warning(f"Database not ready yet (attempt {attempt + 1}/{max_retries}): {str(e)}")
-            time.sleep(retry_interval)
-    
+def wait_for_database(max_retries: int = 15, retry_interval: float = 2.0):
+    """Wait for the database to become reachable, self-healing through the
+    transient macvlan drop that can occur right after a podman restart.
+
+    Uses :func:`connect_with_retries`, which disposes the pool on each failed
+    attempt so we never get stuck on an invalidated pool (the previous failure
+    mode: the migration runner hung at 0% CPU on a blocked socket read).
+    """
+    if connect_with_retries(
+        engine, max_retries=max_retries, base_delay=retry_interval, purpose="startup"
+    ):
+        logger.info("Database is ready!")
+        return True
     logger.error("Database did not become available in time")
     return False
 
@@ -166,63 +175,155 @@ def verify_database_setup():
         return False
 
 def run_column_migrations():
-    """Add new columns to existing tables if they don't exist."""
+    """Add new columns to existing tables if they don't exist.
+
+    Uses the same retry/dispose/fail-reporting pattern as run_sql_migrations so
+    a transient macvlan drop can't silently skip a column (e.g. users.api_key)
+    and still let verify_database_setup() pass (review finding 2).
+
+    Returns the list of columns ("table.column") that genuinely FAILED to apply
+    after all retries; main() fails fast on a non-empty list.
+    """
+    from sqlalchemy.exc import OperationalError
+
     migrations = [
         ("users", "api_key", "VARCHAR UNIQUE"),
     ]
-    try:
-        with engine.connect() as conn:
-            for table, column, col_type in migrations:
-                result = conn.execute(text(
-                    "SELECT 1 FROM information_schema.columns "
-                    "WHERE table_name = :table AND column_name = :column"
-                ), {"table": table, "column": column})
-                if not result.fetchone():
-                    conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {col_type}'))
-                    conn.commit()
-                    logger.info(f"Added column {table}.{column}")
-                else:
-                    logger.debug(f"Column {table}.{column} already exists")
-    except Exception as e:
-        logger.error(f"Column migration failed: {e}")
+    failed: list[str] = []
+
+    for table, column, col_type in migrations:
+        outcome = "pending"  # "applied" | "already_present" | "failed"
+        last_db_err = None
+        for attempt in range(1, 4):  # up to 3 attempts per column
+            try:
+                with engine.connect() as conn:
+                    result = conn.execute(text(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = :table AND column_name = :column"
+                    ), {"table": table, "column": column})
+                    if not result.fetchone():
+                        conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {col_type}'))
+                        conn.commit()
+                        logger.info(f"Added column {table}.{column}")
+                        outcome = "applied"
+                    else:
+                        logger.debug(f"Column {table}.{column} already exists")
+                        outcome = "already_present"
+                    break
+            except OperationalError as oe:
+                last_db_err = oe
+                logger.warning(
+                    "Column migration %s.%s DB error (attempt %d/3): %s — disposing pool, retrying",
+                    table, column, attempt, str(getattr(oe, "orig", oe))[:160],
+                )
+                try:
+                    engine.dispose()
+                except Exception:
+                    pass
+                time.sleep(3)
+            except Exception as e:
+                # Non-DB error (e.g. column already exists at the DBAPI level).
+                # Treat as already present, not a failure.
+                logger.warning(
+                    "Column migration %s.%s treated as already present (non-DB error): %s",
+                    table, column, e,
+                )
+                outcome = "already_present"
+                break
+        if outcome == "pending":
+            if last_db_err is not None:
+                logger.error(
+                    "Column migration %s.%s FAILED after retries: %s",
+                    table, column, str(getattr(last_db_err, "orig", last_db_err))[:200],
+                )
+                failed.append(f"{table}.{column}")
+
+    return failed
 
 
 def run_sql_migrations():
-    """Run SQL migration files for existing databases"""
+    """Run SQL migration files for existing databases.
+
+    Each migration executes inside a retry loop: a transient macvlan drop mid-
+    run previously hung the backend here (migration 05) on a blocked socket
+    read with no timeout. On ``OperationalError`` we dispose the pool and retry
+    the whole migration so a restart-time blip is self-healing instead of fatal.
+
+    Returns the list of migration filenames that genuinely FAILED (i.e. could
+    not be applied or confirmed already-applied after all retries). The caller
+    (``main``) fails fast on a non-empty list rather than booting the app with
+    missing schema (review finding 1).
+    """
+    failed: list[str] = []
     try:
         import glob
         import os
-        
+
+        from sqlalchemy.exc import OperationalError
+
         # Get the init-db directory path
         init_db_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'init-db')
-        
+
         if os.path.exists(init_db_dir):
             # Get all SQL files sorted by name
             sql_files = sorted(glob.glob(os.path.join(init_db_dir, '*.sql')))
-            
+
             for sql_file in sql_files:
                 filename = os.path.basename(sql_file)
                 # Skip the main schema files, only run migration files
                 # Run migration files that start with 03- or higher numbers
                 if any(filename.startswith(f'{num:02d}-') for num in range(3, 100)):
                     logger.info(f"Running migration: {filename}")
-                    try:
-                        with open(sql_file, 'r') as f:
-                            sql_content = f.read()
-                        
-                        with engine.connect() as conn:
-                            # Execute the migration SQL
-                            conn.execute(text(sql_content))
-                            conn.commit()
-                            logger.info(f"✅ Migration {filename} completed")
-                    except Exception as e:
-                        # Log but don't fail - migration might already be applied
-                        logger.warning(f"Migration {filename} skipped or already applied: {str(e)}")
-        
+                    with open(sql_file, 'r') as f:
+                        sql_content = f.read()
+
+                    outcome = "pending"  # "applied" | "already_applied" | "failed"
+                    last_db_err = None
+                    for attempt in range(1, 4):  # up to 3 attempts per migration
+                        try:
+                            with engine.connect() as conn:
+                                conn.execute(text(sql_content))
+                                conn.commit()
+                            outcome = "applied"
+                            break
+                        except OperationalError as oe:
+                            last_db_err = oe
+                            logger.warning(
+                                "Migration %s DB error (attempt %d/3): %s — disposing pool, retrying",
+                                filename, attempt, str(getattr(oe, "orig", oe))[:160],
+                            )
+                            try:
+                                engine.dispose()
+                            except Exception:
+                                pass
+                            time.sleep(3)
+                    if outcome == "applied":
+                        logger.info(f"✅ Migration {filename} completed")
+                    elif outcome == "pending":
+                        # OperationalError on every retry, or a non-DB exception.
+                        # Distinguish: a non-DB ProgrammingError here usually means
+                        # the migration is already applied (e.g. "column already
+                        # exists") — treat that as already-applied, not a failure.
+                        # A persistent OperationalError is a real failure.
+                        if last_db_err is not None:
+                            logger.error(
+                                "Migration %s FAILED after retries: %s",
+                                filename, str(getattr(last_db_err, "orig", last_db_err))[:200],
+                            )
+                            failed.append(filename)
+                        else:
+                            logger.warning(
+                                "Migration %s treated as already applied (non-DB error)",
+                                filename,
+                            )
+
         logger.info("SQL migrations check completed")
-        
+
     except Exception as e:
         logger.error(f"Error running SQL migrations: {str(e)}")
+        failed.append("<migrations-runner>")
+
+    return failed
 
 def main():
     """Main initialization function"""
@@ -244,12 +345,27 @@ def main():
     # Create tables
     create_tables()
 
-    # Run column migrations for new columns on existing tables
-    run_column_migrations()
+    # Run column migrations for new columns on existing tables; fail fast if
+    # any genuinely failed (consistent with SQL migrations, review finding 2).
+    column_failures = run_column_migrations()
+    if column_failures:
+        logger.error(
+            "❌ %d column migration(s) failed: %s — aborting startup",
+            len(column_failures), column_failures,
+        )
+        sys.exit(1)
 
-    # Run SQL migrations for existing databases
-    run_sql_migrations()
-    
+    # Run SQL migrations for existing databases; fail fast if any genuinely
+    # failed so we never boot the app with missing migration schema. The init
+    # container / systemd unit will restart and retry (review finding 1).
+    migration_failures = run_sql_migrations()
+    if migration_failures:
+        logger.error(
+            "❌ %d SQL migration(s) failed: %s — aborting startup",
+            len(migration_failures), migration_failures,
+        )
+        sys.exit(1)
+
     # Create default admin
     create_default_admin()
     
