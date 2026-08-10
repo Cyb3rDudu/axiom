@@ -1,0 +1,73 @@
+package zotero
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+)
+
+// PreferredAttachment picks the attachment to enqueue for a document. The rule
+// for v1: prefer a PDF over an EPUB when both exist; fall back to EPUB only if
+// no PDF is present. Returns nil when there is nothing processable.
+func PreferredAttachment(atts []Attachment) *Attachment {
+	if len(atts) == 0 {
+		return nil
+	}
+	var pdf *Attachment
+	var epub *Attachment
+	for i := range atts {
+		a := &atts[i]
+		switch strings.ToLower(a.ContentType) {
+		case "application/pdf":
+			pdf = a
+		case "application/vnd.openxmlformats-officedocument.epub+zip",
+			"application/epub", "application/epub+zip":
+			epub = a
+		default:
+			// files with an epub-style extension and no content type are
+			// treated as EPUB as a fallback
+			if epub == nil && strings.HasSuffix(strings.ToLower(a.Filename), ".epub") {
+				epub = a
+			}
+		}
+	}
+	if pdf != nil {
+		return pdf
+	}
+	return epub
+}
+
+// ContentHash returns a stable sha256 hex digest of a local file's contents,
+// used as the idempotency key for ingest jobs. Missing files yield an error so
+// callers can mark the job FILE_NOT_FOUND rather than silently skip.
+func ContentHash(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("hash %s: %w", path, err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// ParseYear extracts a four-digit year from a Zotero date string (e.g.
+// "2010", "2010-05", "2010-05-14"). It returns nil when no year is present.
+func ParseYear(date string) *int {
+	for _, part := range strings.FieldsFunc(date, func(r rune) bool {
+		return r == '-' || r == '/' || r == '.'
+	}) {
+		if len(part) == 4 && part[0] >= '1' && part[0] <= '2' {
+			if y, err := strconv.Atoi(part); err == nil && y > 999 && y < 3000 {
+				return &y
+			}
+		}
+	}
+	return nil
+}
