@@ -48,6 +48,15 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	// Serialise the whole sync per source so a slower, stale delta cannot
+	// overwrite a newer run's reconciliation or cursor. The dedicated
+	// connection holding the lock is released via the returned func on exit.
+	release, err := s.repo.AcquireSourceLock(ctx, sourceID)
+	if err != nil {
+		return Result{}, err
+	}
+	defer release()
+
 	since, err := s.repo.SourceVersion(ctx, sourceID)
 	if err != nil {
 		return Result{}, err
@@ -124,6 +133,16 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		PreferredAttachments: prefAtts,
 	}); err != nil {
 		return Result{}, err
+	}
+
+	// On a full sync, reconcile documents that no longer exist in Zotero at
+	// all (not just attachments): their document row and attachments are marked
+	// removed. AffectedKeys on a full sync is the complete set of present
+	// parent keys.
+	if since == 0 {
+		if err := s.repo.MarkMissingDocumentsDeleted(ctx, sourceID, res.AffectedKeys); err != nil {
+			return Result{}, err
+		}
 	}
 
 	enqueued, err := s.repo.Enqueue(ctx, pending)
