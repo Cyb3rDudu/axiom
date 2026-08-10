@@ -9,6 +9,16 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://hub.docker.com/r/murtaza-nasir/axiom)
 [![Documentation](https://img.shields.io/badge/Docs-Available-brightgreen.svg)](https://murtaza-nasir.github.io/axiom/)
 
+> **⚠️ Architecture Transition (Aug 2026)**
+>
+> AXIOM is being restructured into a new microservice architecture. The core
+> RAG retrieval, document processing, and search are moving toward a new
+> standalone orchestration layer (`axiom-ng`) that uses **Zotero** as its
+> document source of truth. While this transition is underway, the existing
+> Python backend and document processor continue to run unchanged. See
+> [`docs/plans/AXIOM_NG_ZOTERO_DESKTOP.md`](docs/plans/AXIOM_NG_ZOTERO_DESKTOP.md)
+> for the architecture/plan and the README of `axiom-ng` as it lands.
+
 > **Latest Development (April 2026) - Major post-fork enhancements**
 >
 > Since forking from Maestro, AXIOM has added 200+ commits including:
