@@ -129,25 +129,36 @@ type zoteroTag struct {
 }
 
 func (a *LocalAPI) getItems(query url.Values) ([]zoteroObject, error) {
+	items, _, err := a.getItemsWithVersion(query)
+	return items, err
+}
+
+// getItemsWithVersion paginates over /items and also returns the library
+// version reported in the Last-Modified-Version header of the last response.
+func (a *LocalAPI) getItemsWithVersion(query url.Values) ([]zoteroObject, int64, error) {
 	if query == nil {
 		query = url.Values{}
 	}
 	query.Set("format", "json")
 	query.Set("limit", "100")
 	var all []zoteroObject
+	var lastVersion int64
 	start := 0
 	for {
 		q := cloneValues(query)
 		q.Set("start", fmt.Sprintf("%d", start))
 		resp, err := a.get(a.libraryID+"/items", q)
 		if err != nil {
-			return nil, err
+			return nil, lastVersion, err
+		}
+		if v := versionHeader(resp.Header.Get("Last-Modified-Version")); v > lastVersion {
+			lastVersion = v
 		}
 		var batch []zoteroObject
 		err = json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&batch)
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("zotero items decode: %w", err)
+			return nil, lastVersion, fmt.Errorf("zotero items decode: %w", err)
 		}
 		all = append(all, batch...)
 		if len(batch) < 100 {
@@ -155,7 +166,37 @@ func (a *LocalAPI) getItems(query url.Values) ([]zoteroObject, error) {
 		}
 		start += len(batch)
 	}
-	return all, nil
+	return all, lastVersion, nil
+}
+
+// getChildren returns all child items (attachments, notes) of a parent item so
+// a delta-triggered refresh can reconstruct a complete document.
+func (a *LocalAPI) getChildren(parentKey string) ([]zoteroObject, error) {
+	q := url.Values{"format": {"json"}, "limit": {"100"}}
+	path := a.libraryID + "/items/" + parentKey + "/children"
+	resp, err := a.get(path, q)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out []zoteroObject
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&out); err != nil {
+		return nil, fmt.Errorf("zotero children %s decode: %w", parentKey, err)
+	}
+	return out, nil
+}
+
+// versionHeader parses an unsigned library version string, returning 0 for
+// empty or malformed values.
+func versionHeader(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	var v int64
+	if _, err := fmt.Sscanf(s, "%d", &v); err != nil || v < 0 {
+		return 0
+	}
+	return v
 }
 
 // ListCollections returns the library's collections.
@@ -188,59 +229,38 @@ func (a *LocalAPI) ListCollections() ([]Collection, error) {
 	return out, nil
 }
 
-// ListPDFItems returns top-level items that have at least one attachment.
-// since filters items modified after the given library version (0 = full sync).
+// ListPDFItems returns complete top-level documents that carry at least one
+// file attachment.
+//
+// since is the last known library version: pass 0 for a full sync, or a stored
+// version for an incremental sync. For incremental syncs the library is first
+// queried with ?since=<since>; the affected parent keys are then reconstructed
+// into complete documents (each parent item plus its current children) so a
+// change to an attachment alone never loses its parent, and vice versa.
+//
+// The returned version is taken from the Last-Modified-Version header and is
+// never allowed to fall below `since`, so a delta response that turns up no
+// items still advances (or at least never rewinds) the sync cursor.
 func (a *LocalAPI) ListPDFItems(since int64) ([]Item, int64, error) {
 	q := url.Values{}
 	if since > 0 {
 		q.Set("since", fmt.Sprintf("%d", since))
 	}
-	raw, err := a.getItems(q)
+	raw, headerVersion, err := a.getItemsWithVersion(q)
 	if err != nil {
 		return nil, 0, err
 	}
-	var maxVersion int64
 
-	// Decode each item's data once, splitting attachments from parent items.
-	type decoded struct {
-		obj  zoteroObject
-		item *zoteroItemData
+	// Cursor: trust the server's Last-Modified-Version, and never fall below
+	// the version we already committed to.
+	newVersion := headerVersion
+	if newVersion < since {
+		newVersion = since
 	}
-	var parents []decoded
-	parentOf := map[string][]Attachment{}
 
-	for _, obj := range raw {
-		if obj.Version > maxVersion {
-			maxVersion = obj.Version
-		}
-		var data zoteroItemData
-		if err := json.Unmarshal(obj.Data, &data); err != nil {
-			continue
-		}
-		if data.ItemType == "" {
-			continue
-		}
-		if data.ItemType == "attachment" {
-			if data.ParentItem == "" {
-				continue
-			}
-			att := Attachment{
-				Key:         data.Key,
-				Version:     data.Version,
-				ParentKey:   data.ParentItem,
-				ContentType: data.ContentType,
-				LinkMode:    data.LinkMode,
-				Filename:    data.Filename,
-				LocalPath:   obj.Links.Enclosure.Href,
-			}
-			if att.ContentType != "application/pdf" && !strings.HasSuffix(strings.ToLower(att.Filename), ".epub") {
-				continue
-			}
-			parentOf[data.ParentItem] = append(parentOf[data.ParentItem], att)
-			continue
-		}
-		parents = append(parents, decoded{obj: obj, item: &data})
-	}
+	// Decode the raw objects and reconstruct complete documents (parents with
+	// their current children) from those touched by this response.
+	parents, parentOf := a.completeItems(raw, since)
 
 	items := make([]Item, 0, len(parents))
 	for _, d := range parents {
@@ -268,7 +288,146 @@ func (a *LocalAPI) ListPDFItems(since int64) ([]Item, int64, error) {
 			Attachments: atts,
 		})
 	}
-	return items, maxVersion, nil
+	return items, newVersion, nil
+}
+
+// completeItems decodes the raw delta response and returns complete documents.
+// For a full sync every parent with a file attachment is included. For an
+// incremental sync (since > 0) it also re-fetches the full parent + children
+// for every parent that was touched directly OR whose attachment changed, so a
+// partial change still reconstructs a complete document.
+type decodedItem struct {
+	obj  zoteroObject
+	item *zoteroItemData
+}
+
+func (a *LocalAPI) completeItems(raw []zoteroObject, since int64) ([]decodedItem, map[string][]Attachment) {
+	changedParents := map[string]bool{}
+	var parents []decodedItem
+	parentOf := map[string][]Attachment{}
+
+	addAttachment := func(obj zoteroObject, data *zoteroItemData) {
+		if data.ParentItem == "" {
+			return
+		}
+		if data.ContentType != "application/pdf" && !strings.HasSuffix(strings.ToLower(data.Filename), ".epub") {
+			return
+		}
+		changedParents[data.ParentItem] = true
+	}
+
+	for _, obj := range raw {
+		var data zoteroItemData
+		if err := json.Unmarshal(obj.Data, &data); err != nil {
+			continue
+		}
+		if data.ItemType == "" {
+			continue
+		}
+		if data.ItemType == "attachment" {
+			addAttachment(obj, &data)
+			continue
+		}
+		changedParents[data.Key] = true
+	}
+
+	// For an incremental sync we must reconstruct complete documents. Gather
+	// the full item lists for each touched parent (parent item + children).
+	if since > 0 {
+		return a.reconstructParents(changedParents, parents, parentOf)
+	}
+
+	// Full sync: raw already contains every parent and attachment. Build the
+	// attachment map and parents list directly from the raw response.
+	var rawParents []decodedItem
+	rawAtts := map[string][]Attachment{}
+	for _, obj := range raw {
+		var data zoteroItemData
+		if err := json.Unmarshal(obj.Data, &data); err != nil {
+			continue
+		}
+		if data.ItemType == "attachment" {
+			if data.ParentItem == "" {
+				continue
+			}
+			att := Attachment{
+				Key:         data.Key,
+				Version:     data.Version,
+				ParentKey:   data.ParentItem,
+				ContentType: data.ContentType,
+				LinkMode:    data.LinkMode,
+				Filename:    data.Filename,
+				LocalPath:   obj.Links.Enclosure.Href,
+			}
+			if att.ContentType != "application/pdf" && !strings.HasSuffix(strings.ToLower(att.Filename), ".epub") {
+				continue
+			}
+			rawAtts[data.ParentItem] = append(rawAtts[data.ParentItem], att)
+			continue
+		}
+		rawParents = append(rawParents, decodedItem{obj: obj, item: &data})
+	}
+	return rawParents, rawAtts
+}
+
+// reconstructParents loads the complete parent + children for each touched key
+// from the API, so a delta that only changed an attachment still yields the
+// full parent document and its current attachments.
+func (a *LocalAPI) reconstructParents(changed map[string]bool, parents []decodedItem, parentOf map[string][]Attachment) ([]decodedItem, map[string][]Attachment) {
+	for key := range changed {
+		children, err := a.getChildren(key)
+		if err != nil {
+			continue // parent not fetchable; nothing to enqueue for it
+		}
+		for _, obj := range children {
+			var data zoteroItemData
+			if err := json.Unmarshal(obj.Data, &data); err != nil {
+				continue
+			}
+			if data.ParentItem == "" {
+				continue
+			}
+			if data.ContentType != "application/pdf" && !strings.HasSuffix(strings.ToLower(data.Filename), ".epub") {
+				continue
+			}
+			att := Attachment{
+				Key:         data.Key,
+				Version:     data.Version,
+				ParentKey:   data.ParentItem,
+				ContentType: data.ContentType,
+				LinkMode:    data.LinkMode,
+				Filename:    data.Filename,
+				LocalPath:   obj.Links.Enclosure.Href,
+			}
+			parentOf[key] = append(parentOf[key], att)
+		}
+		// Also fetch the parent item itself so a parent-only change is covered.
+		if p := a.fetchItem(key); p != nil {
+			parents = append(parents, *p)
+		}
+	}
+	return parents, parentOf
+}
+
+// fetchItem returns a single item (parent) envelope, or nil if unavailable.
+func (a *LocalAPI) fetchItem(key string) *decodedItem {
+	resp, err := a.get(a.libraryID+"/items/"+key, url.Values{"format": {"json"}})
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	var obj zoteroObject
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&obj); err != nil {
+		return nil
+	}
+	var data zoteroItemData
+	if err := json.Unmarshal(obj.Data, &data); err != nil {
+		return nil
+	}
+	if data.ItemType == "attachment" || data.ItemType == "" {
+		return nil
+	}
+	return &decodedItem{obj: obj, item: &data}
 }
 
 // ResolveAttachmentPath returns the local filesystem path of an attachment.
