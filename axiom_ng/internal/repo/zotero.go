@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 	"github.com/jackc/pgx/v5"
@@ -70,37 +71,35 @@ func lockKey(sourceID string) int64 {
 // dedicated connection and returns a release function. The lock serialises a
 // whole sync (cursor read, reconciliation, cursor commit) per source_id across
 // pool connections, so a slow stale delta cannot overwrite a newer
-// reconciliation. Release closes the dedicated connection, dropping the lock.
+// reconciliation.
+//
+// The returned release function explicitly runs pg_advisory_unlock on the same
+// connection (with its own timeout context) before returning the connection to
+// the pool; a plain conn.Release() would not end the session-level lock. If the
+// unlock fails the physical connection is closed instead of being reused.
 func (r *Repo) AcquireSourceLock(ctx context.Context, sourceID string) (func(), error) {
 	conn, err := r.pool.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("acquire lock conn: %w", err)
 	}
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockKey(sourceID)); err != nil {
+	key := lockKey(sourceID)
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, key); err != nil {
 		conn.Release()
 		return nil, fmt.Errorf("lock source: %w", err)
 	}
-	return func() { conn.Release() }, nil
-}
 
-// LockSource acquires a session-level advisory lock for a source. It must be
-// paired with UnlockSource. The lock serialises the whole sync per source_id so
-// a slow stale delta cannot overwrite a newer reconciliation.
-func (r *Repo) LockSource(ctx context.Context, sourceID string) error {
-	_, err := r.pool.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockKey(sourceID))
-	if err != nil {
-		return fmt.Errorf("lock source: %w", err)
+	release := func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if _, err := conn.Exec(unlockCtx, `SELECT pg_advisory_unlock($1)`, key); err == nil {
+			conn.Release()
+			return
+		}
+		// Unlock failed: close the physical connection so the advisory lock is
+		// dropped by the session end rather than leaking on a reused session.
+		_ = conn.Conn().Close(ctx)
 	}
-	return nil
-}
-
-// UnlockSource releases the advisory lock acquired by LockSource.
-func (r *Repo) UnlockSource(ctx context.Context, sourceID string) error {
-	_, err := r.pool.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockKey(sourceID))
-	if err != nil {
-		return fmt.Errorf("unlock source: %w", err)
-	}
-	return nil
+	return release, nil
 }
 
 // SourceVersion returns the stored library version for a source (0 if none).

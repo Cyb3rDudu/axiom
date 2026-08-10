@@ -12,7 +12,6 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var _scopedN int
@@ -178,13 +177,7 @@ func TestEmptyDeltaLeavesStateUnchanged(t *testing.T) {
 	}
 }
 
-// repoAndPool builds a Repo+Pool for direct repo-level assertions in tests.
-func repoAndPool(t *testing.T, d *db.DB) (*repo.Repo, *pgxpool.Pool) {
-	t.Helper()
-	pool := d.Pool()
-	return repo.New(pool), pool
-}
-
+// repoAndPool is no longer used after the lock test moved to independent pools.
 // newUUIDShort returns a unique non-empty string for tests that key state by id.
 func newUUIDShort() string {
 	_scopedN++
@@ -412,50 +405,88 @@ func TestVanishedDocumentMarkedDeletedOnFullSync(t *testing.T) {
 }
 
 // TestSourceLockSerializesSyncs verifies the advisory lock serialises syncs:
-// while one connection holds the lock, another cannot obtain it; after release
-// it can. Uses pg_try_advisory_lock to avoid goroutine/pool timing flakiness.
+// while one connection holds the lock, an independent pool's connection cannot
+// obtain it; after release no lock persists (a fresh try succeeds from a
+// separate session). Uses two independent pools and pg_try_advisory_lock to
+// avoid the same-session/reentrant false pass.
 func TestSourceLockSerializesSyncs(t *testing.T) {
 	ctx := context.Background()
-	d := openTestDB(t, ctx)
+	dsn := os.Getenv("AXIOMNG_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOMNG_TEST_DATABASE_URL not set; skipping integration test")
+	}
 	sourceID := "serialize-test-source-" + newUUIDShort()
 
-	r1, pool := repoAndPool(t, d)
+	// Two independent pools (separate Postgres sessions).
+	poolA, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open poolA: %v", err)
+	}
+	defer poolA.Close()
+	poolB, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open poolB: %v", err)
+	}
+	defer poolB.Close()
+
+	r1 := repo.New(poolA.Pool())
 	release, err := r1.AcquireSourceLock(ctx, sourceID)
 	if err != nil {
 		t.Fatalf("lock: %v", err)
 	}
-	defer release()
 
-	// Attempt to lock from a separate pool connection: must fail (already held).
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire conn: %v", err)
-	}
-	var obtained bool
-	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, lockKeyForTest(sourceID)).Scan(&obtained); err != nil {
-		conn.Release()
-		t.Fatalf("try lock: %v", err)
-	}
-	conn.Release()
-	if obtained {
-		t.Fatal("second connection acquired the lock while the first still held it (not serialising)")
+	// From pool B (independent session) the lock must be held.
+	if b, err := tryAdvisoryLock(t, ctx, poolB, sourceID); err != nil {
+		t.Fatalf("try lock B: %v", err)
+	} else if b {
+		t.Fatal("independent pool acquired the lock while held (not serialising)")
 	}
 
-	// After releasing, a second try succeeds.
+	// Release: pool A's session-level lock must be explicitly dropped.
 	release()
-	conn2, err := pool.Acquire(ctx)
+
+	// From pool B a fresh try must now succeed (lock actually released).
+	if b, err := tryAdvisoryLock(t, ctx, poolB, sourceID); err != nil {
+		t.Fatalf("try lock B after release: %v", err)
+	} else if !b {
+		t.Fatal("independent pool could not acquire after release; session-level lock leaked")
+	}
+	// Unlock what we just acquired on B to keep the DB clean.
+	if err := unlockLock(t, ctx, poolB, sourceID); err != nil {
+		t.Fatalf("cleanup unlock B: %v", err)
+	}
+
+	// And pool A (fresh connection) must also be free of the lock.
+	if b, err := tryAdvisoryLock(t, ctx, poolA, sourceID); err != nil {
+		t.Fatalf("try lock A after release: %v", err)
+	} else if !b {
+		t.Fatal("poolA session still holds the leaked lock")
+	}
+	if err := unlockLock(t, ctx, poolA, sourceID); err != nil {
+		t.Fatalf("cleanup unlock A: %v", err)
+	}
+}
+
+func tryAdvisoryLock(t *testing.T, ctx context.Context, d *db.DB, sourceID string) (bool, error) {
+	t.Helper()
+	conn, err := d.Pool().Acquire(ctx)
 	if err != nil {
-		t.Fatalf("acquire conn2: %v", err)
+		return false, err
 	}
-	defer conn2.Release()
-	if err := conn2.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, lockKeyForTest(sourceID)).Scan(&obtained); err != nil {
-		t.Fatalf("try lock2: %v", err)
+	defer conn.Release()
+	var obtained bool
+	err = conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, lockKeyForTest(sourceID)).Scan(&obtained)
+	return obtained, err
+}
+
+func unlockLock(t *testing.T, ctx context.Context, d *db.DB, sourceID string) error {
+	conn, err := d.Pool().Acquire(ctx)
+	if err != nil {
+		return err
 	}
-	if !obtained {
-		t.Fatal("second connection could not acquire the lock after the first released")
-	}
-	// Release to leave the DB clean for other tests.
-	conn2.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockKeyForTest(sourceID))
+	defer conn.Release()
+	_, err = conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockKeyForTest(sourceID))
+	return err
 }
 
 func lockKeyForTest(sourceID string) int64 {
