@@ -56,6 +56,7 @@ func main() {
 		rep := repo.New(database.Pool())
 		syncSvc := sync.New(src, rep, cfg.ZoteroBaseURL, cfg.ZoteroLibraryID, logger)
 		srv.SetSyncAPI(syncSvc)
+		srv.SetCanonicalSync(syncSvc)
 		srv.SetJobRepo(rep)
 	}
 	logger.Printf("listening on %s", addr)
