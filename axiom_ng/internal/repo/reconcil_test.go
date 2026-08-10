@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,9 +19,8 @@ var _cnt int64
 
 func uniq(kind string) string {
 	_cnt++
-	return fmt.Sprintf("%s%x", kind, _cnt)
+	return fmt.Sprintf("%s%x-%d", kind, _cnt, time.Now().UnixNano())
 }
-
 func newUUID(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
 	t.Helper()
 	var id string
@@ -47,13 +47,17 @@ func newDoc(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sourceID stri
 }
 
 func newAtt(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sourceID, docID string) string {
+	return newAttForDoc(t, ctx, pool, sourceID, docID, "parent")
+}
+
+func newAttForDoc(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sourceID, docID, parentKey string) string {
 	t.Helper()
 	var id string
 	key := uniq("A")
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version, parent_zotero_key, link_mode, content_type, filename)
-		 VALUES ($1, $2, $3, 1, 'parent', 'imported_file', 'application/pdf', 'a.pdf') RETURNING id::text`,
-		sourceID, docID, key).Scan(&id); err != nil {
+		 VALUES ($1, $2, $3, 1, $4, 'imported_file', 'application/pdf', 'a.pdf') RETURNING id::text`,
+		sourceID, docID, key, parentKey).Scan(&id); err != nil {
 		t.Fatalf("new att: %v", err)
 	}
 	return id
@@ -145,7 +149,12 @@ func TestReconcileMarksRemovedAndUnpreferred(t *testing.T) {
 	r, pool := testRepo(t, ctx)
 	sourceID := newUUID(t, ctx, pool)
 	docID := newDoc(t, ctx, pool, sourceID)
-	attPdfID := newAtt(t, ctx, pool, sourceID, docID)
+	var docKey string
+	if err := pool.QueryRow(ctx,
+		`SELECT zotero_key FROM zotero_documents WHERE id = $1`, docID).Scan(&docKey); err != nil {
+		t.Fatal(err)
+	}
+	attPdfID := newAttForDoc(t, ctx, pool, sourceID, docID, docKey)
 
 	var pdfKey string
 	if err := pool.QueryRow(ctx,
@@ -157,8 +166,8 @@ func TestReconcileMarksRemovedAndUnpreferred(t *testing.T) {
 	var attEpubID, epubKey string
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version, parent_zotero_key, link_mode, content_type, filename)
-		 VALUES ($1,$2,$3,1,'parent','imported_file','application/epub+zip','a.epub') RETURNING id::text`,
-		sourceID, docID, uniq("E")).Scan(&attEpubID); err != nil {
+		 VALUES ($1,$2,$3,1,$4,'imported_file','application/epub+zip','a.epub') RETURNING id::text`,
+		sourceID, docID, uniq("E"), docKey).Scan(&attEpubID); err != nil {
 		t.Fatalf("new epub: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
@@ -172,7 +181,12 @@ func TestReconcileMarksRemovedAndUnpreferred(t *testing.T) {
 	}
 
 	// The PDF is no longer present and not preferred anymore.
-	if err := r.Reconcile(ctx, sourceID, []string{epubKey}, []string{epubKey}); err != nil {
+	if err := r.Reconcile(ctx, ReconcileReq{
+		SourceID:             sourceID,
+		AffectedDocKeys:      []string{docKey},
+		SeenAttachments:      map[string][]string{docKey: {epubKey}},
+		PreferredAttachments: map[string]string{docKey: epubKey},
+	}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 

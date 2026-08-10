@@ -24,8 +24,16 @@ func (f *fakeSource) ServerID() string { return f.serverID }
 
 func (f *fakeSource) ListCollections() ([]zotero.Collection, error) { return nil, nil }
 
-func (f *fakeSource) ListPDFItems(since int64) ([]zotero.Item, int64, error) {
-	return []zotero.Item{f.item}, 42, nil
+func (f *fakeSource) ListPDFItems(since int64) (zotero.ListResult, error) {
+	return zotero.ListResult{
+		Items:        []zotero.Item{f.item},
+		AffectedKeys: []string{f.item.Key},
+		NewVersion:   42,
+	}, nil
+}
+
+func (f *fakeSource) ListDeletedKeys(since int64) ([]string, int64, error) {
+	return nil, 42, nil
 }
 
 func (f *fakeSource) ResolveAttachmentPath(key string) (string, error) {
@@ -118,8 +126,16 @@ func (f *missingSource) ServerID() string { return f.serverID }
 
 func (f *missingSource) ListCollections() ([]zotero.Collection, error) { return nil, nil }
 
-func (f *missingSource) ListPDFItems(since int64) ([]zotero.Item, int64, error) {
-	return []zotero.Item{f.item}, 42, nil
+func (f *missingSource) ListPDFItems(since int64) (zotero.ListResult, error) {
+	return zotero.ListResult{
+		Items:        []zotero.Item{f.item},
+		AffectedKeys: []string{f.item.Key},
+		NewVersion:   42,
+	}, nil
+}
+
+func (f *missingSource) ListDeletedKeys(since int64) ([]string, int64, error) {
+	return nil, 42, nil
 }
 
 func (f *missingSource) ResolveAttachmentPath(key string) (string, error) {

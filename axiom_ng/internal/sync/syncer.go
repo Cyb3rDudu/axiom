@@ -53,10 +53,15 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 
-	items, newVersion, err := s.src.ListPDFItems(since)
+	// Fetch the touched documents (plus affected/deleted parent keys) and any
+	// items Zotero reports as deleted, so reconciliation is scoped to exactly
+	// what changed.
+	res, err := s.src.ListPDFItems(since)
 	if err != nil {
 		return Result{}, fmt.Errorf("list items: %w", err)
 	}
+	items := res.Items
+	newVersion := res.NewVersion
 
 	// Mirror every document (and all of its attachments) first so the ingest
 	// jobs can reference the mirror rows by id.
@@ -65,16 +70,19 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 
 	// Resolve, hash and enqueue the preferred attachment per document. Also
-	// collect the attachment keys seen this run so reconciliation can mark
-	// removed attachments / preffered swaps correctly.
+	// collect the per-document attachment keys and preferred key so
+	// reconciliation can mark removed/preferred-swapped attachments — scoped
+	// only to the documents this run actually touched.
 	preferred := 0
 	var pending []repo.PendingJob
-	seenKeys := make([]string, 0, len(items)*2)
-	preferredKeys := make([]string, 0, len(items))
+	seenAtts := map[string][]string{} // docKey -> attachment keys still present
+	prefAtts := map[string]string{}   // docKey -> preferred attachment key
 	for _, it := range items {
+		var keys []string
 		for _, att := range it.Attachments {
-			seenKeys = append(seenKeys, att.Key)
+			keys = append(keys, att.Key)
 		}
+		seenAtts[it.Key] = keys
 		pref := zotero.PreferredAttachment(it.Attachments)
 		if pref == nil {
 			continue
@@ -92,11 +100,29 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 			continue
 		}
 		pending = append(pending, *job)
-		preferredKeys = append(preferredKeys, pref.Key)
+		prefAtts[it.Key] = pref.Key
 		preferred++
 	}
 
-	if err := s.repo.Reconcile(ctx, sourceID, seenKeys, preferredKeys); err != nil {
+	// Deleted keys: parents that 404'd during reconstruction plus any the
+	// trash feed reports. Scoped reconciliation never touches other documents.
+	deletedKeys := res.DeletedKeys
+	trashDeleted, _, derr := s.src.ListDeletedKeys(since)
+	if derr != nil {
+		// A failure reading deletions must not silently drop them; abort so the
+		// cursor is not advanced.
+		return Result{}, fmt.Errorf("list deleted items: %w", derr)
+	}
+	deletedKeys = append(deletedKeys, trashDeleted...)
+
+	if err := s.repo.Reconcile(ctx, repo.ReconcileReq{
+		SourceID:             sourceID,
+		ReconcileAll:         since == 0,
+		AffectedDocKeys:      res.AffectedKeys,
+		DeletedDocKeys:       zotero.DedupKeys(deletedKeys),
+		SeenAttachments:      seenAtts,
+		PreferredAttachments: prefAtts,
+	}); err != nil {
 		return Result{}, err
 	}
 
