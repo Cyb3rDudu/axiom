@@ -10,7 +10,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-// Checker reports reachability of a backing dependency (e.g. Zotero).
+// Checker reports reachability of a backing dependency (e.g. Zotero, Postgres).
 type Checker interface {
 	// Ready returns nil if the dependency is healthy, else an error describing
 	// why it is not.
@@ -19,23 +19,19 @@ type Checker interface {
 
 // Server is the axiom-ng HTTP API.
 type Server struct {
-	cfg    Config
-	zotero Checker
-	// postgres and opensearch checkers are attached once the store layers land.
-	log *log.Logger
+	addr     string
+	checkers map[string]Checker
+	log      *log.Logger
 }
 
-// Config carries server options.
-type Config struct {
-	// Addr is the listen address, e.g. ":8011".
-	Addr string
+// New builds a Server with no backing-dependency checkers yet. Register them
+// via RegisterCheck so /api/health reports their reachability.
+func New(addr string, log *log.Logger) *Server {
+	return &Server{addr: addr, checkers: map[string]Checker{}, log: log}
 }
 
-// New builds a Server. zotero may be nil; the health report will mark Zotero
-// as unknown in that case.
-func New(addr string, zotero Checker, log *log.Logger) *Server {
-	return &Server{cfg: Config{Addr: addr}, zotero: zotero, log: log}
-}
+// RegisterCheck adds a named dependency checker reported by /api/health.
+func (s *Server) RegisterCheck(name string, c Checker) { s.checkers[name] = c }
 
 // Handler returns the chi router.
 func (s *Server) Handler() http.Handler {
@@ -62,14 +58,18 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	checks := map[string]any{}
 	ok := true
 
-	if s.zotero == nil {
-		checks["zotero"] = "unknown"
-		ok = false
-	} else if err := s.zotero.Ready(); err != nil {
-		checks["zotero"] = err.Error()
-		ok = false
-	} else {
-		checks["zotero"] = "ok"
+	for name, checker := range s.checkers {
+		if checker == nil {
+			checks[name] = "unknown"
+			ok = false
+			continue
+		}
+		if err := checker.Ready(); err != nil {
+			checks[name] = err.Error()
+			ok = false
+			continue
+		}
+		checks[name] = "ok"
 	}
 
 	writeJSON(w, http.StatusOK, healthResponse{OK: ok, Checks: checks})

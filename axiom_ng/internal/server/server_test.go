@@ -16,7 +16,8 @@ type fakeChecker struct {
 func (f fakeChecker) Ready() error { return f.err }
 
 func TestHealthZoteroOK(t *testing.T) {
-	s := New(":0", fakeChecker{nil}, log.Default())
+	s := New(":0", log.Default())
+	s.RegisterCheck("zotero", fakeChecker{nil})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	s.Handler().ServeHTTP(rec, req)
@@ -37,7 +38,8 @@ func TestHealthZoteroOK(t *testing.T) {
 }
 
 func TestHealthZoteroUnreachable(t *testing.T) {
-	s := New(":0", fakeChecker{errors.New("zotero local api unreachable")}, log.Default())
+	s := New(":0", log.Default())
+	s.RegisterCheck("zotero", fakeChecker{errors.New("zotero local api unreachable")})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	s.Handler().ServeHTTP(rec, req)
@@ -54,8 +56,10 @@ func TestHealthZoteroUnreachable(t *testing.T) {
 	}
 }
 
-func TestHealthZoteroUnknown(t *testing.T) {
-	s := New(":0", nil, log.Default())
+func TestHealthChecksAllRegistered(t *testing.T) {
+	s := New(":0", log.Default())
+	s.RegisterCheck("zotero", fakeChecker{nil})
+	s.RegisterCheck("postgres", fakeChecker{nil})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	s.Handler().ServeHTTP(rec, req)
@@ -64,10 +68,10 @@ func TestHealthZoteroUnknown(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.OK {
-		t.Errorf("OK = true with no checker, want false")
+	if !body.OK {
+		t.Errorf("OK = false, want true")
 	}
-	if body.Checks["zotero"] != "unknown" {
-		t.Errorf("zotero = %v, want unknown", body.Checks["zotero"])
+	if body.Checks["zotero"] != "ok" || body.Checks["postgres"] != "ok" {
+		t.Errorf("checks = %v, want both ok", body.Checks)
 	}
 }
