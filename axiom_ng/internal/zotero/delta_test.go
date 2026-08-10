@@ -155,3 +155,30 @@ func TestListPDFItemsDeltaReconstructsParentOnAttachmentChange(t *testing.T) {
 		t.Fatalf("expected children to be reconstructed from /children, got %+v", listed[0].Attachments)
 	}
 }
+
+// TestListPDFItemsErrorsWhenReconstructionFails verifies that a transient
+// failure during delta reconstruction (e.g. /children returning 500) surfaces
+// as an error instead of silently advancing the sync cursor over incomplete
+// data.
+func TestListPDFItemsErrorsWhenReconstructionFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		if strings.HasSuffix(path, "/items") {
+			w.Header().Set("Last-Modified-Version", "110")
+			// Delta: parent B1 changed (only the parent appears).
+			b, _ := json.Marshal([]map[string]any{envelope("B1", "book", "", "A Book", nil)})
+			w.Write(b)
+			return
+		}
+		// /items/B1/children -> transient 500
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
+	_, _, err := api.ListPDFItems(100)
+	if err == nil {
+		t.Fatal("expected error when children reconstruction fails; cursor must not advance")
+	}
+}

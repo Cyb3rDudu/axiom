@@ -2,6 +2,7 @@ package zotero
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -50,6 +51,18 @@ func (a *LocalAPI) url(path string, query url.Values) string {
 	return u
 }
 
+// StatusError is an error carrying the HTTP status of a non-2xx Zotero
+// response, so callers can distinguish a genuinely missing resource (404)
+// from a transient failure that should abort the sync.
+type StatusError struct {
+	Status int
+	Body   string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("zotero http %d: %s", e.Status, e.Body)
+}
+
 func (a *LocalAPI) get(path string, query url.Values) (*http.Response, error) {
 	req, _ := http.NewRequest(http.MethodGet, a.url(path, query), nil)
 	req.Header.Set("Zotero-API-Version", "3")
@@ -60,7 +73,7 @@ func (a *LocalAPI) get(path string, query url.Values) (*http.Response, error) {
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		resp.Body.Close()
-		return nil, fmt.Errorf("zotero %s: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
+		return nil, &StatusError{Status: resp.StatusCode, Body: strings.TrimSpace(string(body))}
 	}
 	return resp, nil
 }
@@ -260,7 +273,10 @@ func (a *LocalAPI) ListPDFItems(since int64) ([]Item, int64, error) {
 
 	// Decode the raw objects and reconstruct complete documents (parents with
 	// their current children) from those touched by this response.
-	parents, parentOf := a.completeItems(raw, since)
+	parents, parentOf, err := a.completeItems(raw, since)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	items := make([]Item, 0, len(parents))
 	for _, d := range parents {
@@ -301,16 +317,17 @@ type decodedItem struct {
 	item *zoteroItemData
 }
 
-func (a *LocalAPI) completeItems(raw []zoteroObject, since int64) ([]decodedItem, map[string][]Attachment) {
+func (a *LocalAPI) completeItems(raw []zoteroObject, since int64) ([]decodedItem, map[string][]Attachment, error) {
 	changedParents := map[string]bool{}
 	var parents []decodedItem
 	parentOf := map[string][]Attachment{}
 
 	addAttachment := func(obj zoteroObject, data *zoteroItemData) {
+		// Every attachment marks its parent as touched, including attachments
+		// that are not processable (e.g. an HTML note), so a change that turns
+		// the only PDF into another type still triggers a full-parent refresh
+		// and lets reconciliation mark the old attachment as removed.
 		if data.ParentItem == "" {
-			return
-		}
-		if data.ContentType != "application/pdf" && !strings.HasSuffix(strings.ToLower(data.Filename), ".epub") {
 			return
 		}
 		changedParents[data.ParentItem] = true
@@ -359,25 +376,28 @@ func (a *LocalAPI) completeItems(raw []zoteroObject, since int64) ([]decodedItem
 				Filename:    data.Filename,
 				LocalPath:   obj.Links.Enclosure.Href,
 			}
-			if att.ContentType != "application/pdf" && !strings.HasSuffix(strings.ToLower(att.Filename), ".epub") {
-				continue
-			}
 			rawAtts[data.ParentItem] = append(rawAtts[data.ParentItem], att)
 			continue
 		}
 		rawParents = append(rawParents, decodedItem{obj: obj, item: &data})
 	}
-	return rawParents, rawAtts
+	return rawParents, rawAtts, nil
 }
 
 // reconstructParents loads the complete parent + children for each touched key
 // from the API, so a delta that only changed an attachment still yields the
-// full parent document and its current attachments.
-func (a *LocalAPI) reconstructParents(changed map[string]bool, parents []decodedItem, parentOf map[string][]Attachment) ([]decodedItem, map[string][]Attachment) {
+// full parent document and its current attachments. A parent that no longer
+// exists (404) is skipped; any other failure is returned so the caller does
+// not advance the sync cursor over an incompletely reconstructed delta.
+func (a *LocalAPI) reconstructParents(changed map[string]bool, parents []decodedItem, parentOf map[string][]Attachment) ([]decodedItem, map[string][]Attachment, error) {
 	for key := range changed {
 		children, err := a.getChildren(key)
 		if err != nil {
-			continue // parent not fetchable; nothing to enqueue for it
+			var se *StatusError
+			if errors.As(err, &se) && se.Status == http.StatusNotFound {
+				continue // parent was deleted; nothing to enqueue for it
+			}
+			return parents, parentOf, fmt.Errorf("reconstruct children of %s: %w", key, err)
 		}
 		for _, obj := range children {
 			var data zoteroItemData
@@ -385,9 +405,6 @@ func (a *LocalAPI) reconstructParents(changed map[string]bool, parents []decoded
 				continue
 			}
 			if data.ParentItem == "" {
-				continue
-			}
-			if data.ContentType != "application/pdf" && !strings.HasSuffix(strings.ToLower(data.Filename), ".epub") {
 				continue
 			}
 			att := Attachment{
@@ -402,32 +419,44 @@ func (a *LocalAPI) reconstructParents(changed map[string]bool, parents []decoded
 			parentOf[key] = append(parentOf[key], att)
 		}
 		// Also fetch the parent item itself so a parent-only change is covered.
-		if p := a.fetchItem(key); p != nil {
-			parents = append(parents, *p)
+		p, err := a.fetchItem(key)
+		if err != nil {
+			var se *StatusError
+			if errors.As(err, &se) && se.Status == http.StatusNotFound {
+				continue // parent deleted
+			}
+			return parents, parentOf, fmt.Errorf("reconstruct parent %s: %w", key, err)
 		}
+		if p == nil {
+			// Attachment-type or empty item; nothing to enqueue.
+			continue
+		}
+		parents = append(parents, *p)
 	}
-	return parents, parentOf
+	return parents, parentOf, nil
 }
 
-// fetchItem returns a single item (parent) envelope, or nil if unavailable.
-func (a *LocalAPI) fetchItem(key string) *decodedItem {
+// fetchItem returns a single item (parent) envelope, or (nil, nil) if it is
+// not a parent item (e.g. an attachment). Errors are returned so callers can
+// distinguish a transient failure from a graceful skip.
+func (a *LocalAPI) fetchItem(key string) (*decodedItem, error) {
 	resp, err := a.get(a.libraryID+"/items/"+key, url.Values{"format": {"json"}})
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer resp.Body.Close()
 	var obj zoteroObject
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&obj); err != nil {
-		return nil
+		return nil, fmt.Errorf("zotero item %s decode: %w", key, err)
 	}
 	var data zoteroItemData
 	if err := json.Unmarshal(obj.Data, &data); err != nil {
-		return nil
+		return nil, fmt.Errorf("zotero item %s data: %w", key, err)
 	}
 	if data.ItemType == "attachment" || data.ItemType == "" {
-		return nil
+		return nil, nil
 	}
-	return &decodedItem{obj: obj, item: &data}
+	return &decodedItem{obj: obj, item: &data}, nil
 }
 
 // ResolveAttachmentPath returns the local filesystem path of an attachment.

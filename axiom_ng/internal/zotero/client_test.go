@@ -99,14 +99,17 @@ func TestListPDFItemsGroupsAttachments(t *testing.T) {
 		t.Fatalf("ListPDFItems: %v", err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("got %d items, want 1 (only BOOK1 has a PDF/EPUB attachment)", len(got))
+		t.Fatalf("got %d items, want 1 (BOOK1 has attachments)", len(got))
 	}
 	book := got[0]
 	if book.Key != "BOOK1" || book.Title != "A Book" {
 		t.Errorf("unexpected item: %+v", book)
 	}
-	if len(book.Attachments) != 2 {
-		t.Errorf("expected 2 attachments (pdf+epub), got %d", len(book.Attachments))
+	// The client now returns all attachments (incl. non-PDF/EPUB) so the sync
+	// layer can reconcile removed files; preferred selection happens later via
+	// PreferredAttachment.
+	if len(book.Attachments) != 3 {
+		t.Errorf("expected 3 attachments (pdf+epub+html), got %d", len(book.Attachments))
 	}
 	if book.Attachments[0].Key != "ATT-PDF1" || book.Attachments[0].LocalPath != "file:///X/storage/ATT-PDF1/book.pdf" {
 		t.Errorf("pdf attachment not resolved: %+v", book.Attachments[0])
