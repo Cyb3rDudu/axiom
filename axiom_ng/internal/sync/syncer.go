@@ -99,12 +99,14 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 }
 
 // preferredJob builds a pending job for one preferred attachment, hashing its
-// local file to establish the idempotency key.
+// local file to establish the idempotency key. The attachment path may be a
+// file:// URI from Zotero and is normalised to a native path first.
 func (s *Service) preferredJob(ctx context.Context, sourceID string, item zotero.Item, pref *zotero.Attachment) (*repo.PendingJob, error) {
-	if pref.LocalPath == "" {
+	localPath := zotero.LocalFilePath(pref.LocalPath)
+	if localPath == "" {
 		return nil, fmt.Errorf("attachment %s has no local path", pref.Key)
 	}
-	hash, err := zotero.ContentHash(pref.LocalPath)
+	hash, err := zotero.ContentHash(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("hash attachment %s: %w", pref.Key, err)
 	}

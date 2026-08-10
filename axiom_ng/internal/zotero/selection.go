@@ -41,6 +41,17 @@ func PreferredAttachment(atts []Attachment) *Attachment {
 	return epub
 }
 
+// LocalFilePath converts a Zotero file:// URI into a native filesystem path
+// (e.g. "file:///Users/x/y.pdf" -> "/Users/x/y.pdf"). Non-file URIs are
+// returned unchanged so a plain path still works.
+func LocalFilePath(uri string) string {
+	const prefix = "file://"
+	if !strings.HasPrefix(uri, prefix) {
+		return uri
+	}
+	return strings.TrimPrefix(uri, prefix)
+}
+
 // ContentHash returns a stable sha256 hex digest of a local file's contents,
 // used as the idempotency key for ingest jobs. Missing files yield an error so
 // callers can mark the job FILE_NOT_FOUND rather than silently skip.

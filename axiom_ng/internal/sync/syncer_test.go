@@ -2,10 +2,12 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
@@ -45,19 +47,23 @@ func TestSyncEndToEndAndIdempotent(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	// A real local file so ContentHash has something to hash.
+	// A real local file so ContentHash has something to hash. A unique key and
+	// file content per run keeps this integration test isolated from earlier
+	// runs against the same database.
 	dir := t.TempDir()
 	pdf := filepath.Join(dir, "doc.pdf")
-	if err := os.WriteFile(pdf, []byte("pdf content bytes"), 0o600); err != nil {
+	key := fmt.Sprintf("BK%d", time.Now().UnixNano())
+	attKey := "A" + key
+	if err := os.WriteFile(pdf, []byte("pdf content "+key), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	src := &fakeSource{
 		serverID: "test-server",
 		item: zotero.Item{
-			Key: "BOOK1", Version: 1, ItemType: "book", Title: "A Book",
+			Key: key, Version: 1, ItemType: "book", Title: "A Book",
 			Creators:    []zotero.Creator{{FirstName: "Ada", LastName: "Lovelace"}},
-			Attachments: []zotero.Attachment{{Key: "ATT1", ParentKey: "BOOK1", ContentType: "application/pdf", Filename: "doc.pdf", LocalPath: pdf}},
+			Attachments: []zotero.Attachment{{Key: attKey, ParentKey: key, ContentType: "application/pdf", Filename: "doc.pdf", LocalPath: pdf}},
 		},
 	}
 
@@ -85,14 +91,14 @@ func TestSyncEndToEndAndIdempotent(t *testing.T) {
 	}
 
 	// And the mirror rows must exist.
-	docID, err := r.DocumentID(ctx, res1.SourceID, "BOOK1")
+	docID, err := r.DocumentID(ctx, res1.SourceID, key)
 	if err != nil {
 		t.Fatalf("document lookup: %v", err)
 	}
 	if docID == "" {
 		t.Fatal("document not mirrored")
 	}
-	attID, err := r.AttachmentID(ctx, res1.SourceID, "ATT1")
+	attID, err := r.AttachmentID(ctx, res1.SourceID, attKey)
 	if err != nil {
 		t.Fatalf("attachment lookup: %v", err)
 	}
