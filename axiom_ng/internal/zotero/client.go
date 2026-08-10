@@ -182,6 +182,171 @@ func (a *LocalAPI) getItemsWithVersion(query url.Values) ([]zoteroObject, int64,
 	return all, lastVersion, nil
 }
 
+// getItemsRaw paginates over /items and returns each item as its full raw JSON
+// envelope (preserving all fields for the canonical lossless mirror) plus the
+// Last-Modified-Version.
+func (a *LocalAPI) getItemsRaw(query url.Values) ([]json.RawMessage, int64, error) {
+	if query == nil {
+		query = url.Values{}
+	}
+	query.Set("format", "json")
+	query.Set("limit", "100")
+	var all []json.RawMessage
+	var lastVersion int64
+	start := 0
+	for {
+		q := cloneValues(query)
+		q.Set("start", fmt.Sprintf("%d", start))
+		resp, err := a.get(a.libraryID+"/items", q)
+		if err != nil {
+			return nil, lastVersion, err
+		}
+		if v := versionHeader(resp.Header.Get("Last-Modified-Version")); v > lastVersion {
+			lastVersion = v
+		}
+		var batch []json.RawMessage
+		err = json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&batch)
+		resp.Body.Close()
+		if err != nil {
+			return nil, lastVersion, fmt.Errorf("zotero items decode: %w", err)
+		}
+		all = append(all, batch...)
+		if len(batch) < 100 {
+			break
+		}
+		start += len(batch)
+	}
+	return all, lastVersion, nil
+}
+
+// canonicalDims extracts the queryable dimensions of a raw item envelope.
+type canonicalDims struct {
+	key       string
+	version   int64
+	itemType  string
+	parentKey string
+}
+
+func (d *canonicalDims) fromRaw(env json.RawMessage) bool {
+	var top struct {
+		Key     string `json:"key"`
+		Version int64  `json:"version"`
+		Data    struct {
+			Key        string `json:"key"`
+			Version    int64  `json:"version"`
+			ItemType   string `json:"itemType"`
+			ParentItem string `json:"parentItem,omitempty"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(env, &top); err != nil {
+		return false
+	}
+	d.key = top.Key
+	if d.key == "" {
+		d.key = top.Data.Key
+	}
+	d.version = top.Data.Version
+	if d.version == 0 {
+		d.version = top.Version
+	}
+	d.itemType = top.Data.ItemType
+	d.parentKey = top.Data.ParentItem
+	return d.key != ""
+}
+
+// ListCanonicalItems returns every item (parent, attachment, note, annotation)
+// as a lossless mirror, honouring `since`. A since of 0 is a full snapshot.
+// Items with an older version than what the caller already stores are guarded
+// by the caller; this method just delivers the raw envelopes + extracted key/
+// version/type/parent dimensions.
+func (a *LocalAPI) ListCanonicalItems(since int64) ([]CanonicalItem, int64, error) {
+	q := url.Values{}
+	if since > 0 {
+		q.Set("since", fmt.Sprintf("%d", since))
+	}
+	raw, version, err := a.getItemsRaw(q)
+	if err != nil {
+		return nil, 0, err
+	}
+	items := make([]CanonicalItem, 0, len(raw))
+	for _, env := range raw {
+		var dims canonicalDims
+		if !dims.fromRaw(env) {
+			continue
+		}
+		// Extract raw_data (the item's own data object).
+		var data json.RawMessage
+		var holder struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(env, &holder); err != nil || len(holder.Data) == 0 {
+			data = env // fallback: the whole envelope
+		} else {
+			data = holder.Data
+		}
+		items = append(items, CanonicalItem{
+			Key:       dims.key,
+			Version:   dims.version,
+			ItemType:  dims.itemType,
+			ParentKey: dims.parentKey,
+			Envelope:  env,
+			Data:      data,
+		})
+	}
+	return items, version, nil
+}
+
+// ListCanonicalCollections returns all collections as lossless mirrors with
+// their parent hierarchy, paginated so collections beyond `limit` are also
+// captured.
+func (a *LocalAPI) ListCanonicalCollections() ([]CanonicalCollection, error) {
+	var all []CanonicalCollection
+	start := 0
+	for {
+		q := url.Values{"format": {"json"}, "limit": {"100"}, "start": {fmt.Sprintf("%d", start)}}
+		resp, err := a.get(a.libraryID+"/collections", q)
+		if err != nil {
+			return nil, err
+		}
+		var batch []json.RawMessage
+		decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&batch)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return nil, fmt.Errorf("zotero collections decode: %w", decodeErr)
+		}
+		for _, env := range batch {
+			var dims struct {
+				Key  string `json:"key"`
+				Data struct {
+					Key              string          `json:"key"`
+					Name             string          `json:"name"`
+					ParentCollection json.RawMessage `json:"parentCollection"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(env, &dims); err != nil {
+				continue
+			}
+			key := dims.Key
+			if key == "" {
+				key = dims.Data.Key
+			}
+			if key == "" {
+				continue
+			}
+			parent := ""
+			if len(dims.Data.ParentCollection) > 0 && dims.Data.ParentCollection[0] == '"' {
+				_ = json.Unmarshal(dims.Data.ParentCollection, &parent)
+			}
+			all = append(all, CanonicalCollection{Key: key, Name: dims.Data.Name, ParentKey: parent, Envelope: env})
+		}
+		if len(batch) < 100 {
+			break
+		}
+		start += len(batch)
+	}
+	return all, nil
+}
+
 // getChildren returns all child items (attachments, notes) of a parent item so
 // a delta-triggered refresh can reconstruct a complete document. Children are
 // paginated over /children with start/limit so parents with more than `limit`

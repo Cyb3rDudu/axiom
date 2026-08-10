@@ -4,6 +4,8 @@
 // processors never interact with Zotero directly.
 package zotero
 
+import "encoding/json"
+
 // Source is the contract for reading a Zotero library for indexing.
 //
 // axiom-ng runs on the same host as Zotero and resolves attachments to
@@ -59,6 +61,28 @@ type ListResult struct {
 	AffectedKeys []string // parent keys touched this run (for scoped reconciliation)
 	DeletedKeys  []string // parent keys reported deleted by Zotero
 	NewVersion   int64    // Last-Modified-Version (never below since)
+}
+
+// CanonicalItem is a lossless mirror of a Zotero item. Envelope is the full
+// item object (key, version, library, links, meta, data); Data is the item's
+// own "data" object. Both are kept as raw JSON so unknown fields survive the
+// round-trip semantically intact.
+type CanonicalItem struct {
+	Key       string
+	Version   int64
+	ItemType  string
+	ParentKey string
+	Envelope  json.RawMessage
+	Data      json.RawMessage
+}
+
+// CanonicalCollection is a lossless mirror of a Zotero collection, including
+// its parent hierarchy.
+type CanonicalCollection struct {
+	Key       string
+	Name      string
+	ParentKey string
+	Envelope  json.RawMessage
 }
 
 // Collection is a named container within the library.

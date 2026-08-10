@@ -260,3 +260,74 @@ func TestChildrenPaginationReconstructsAll(t *testing.T) {
 		t.Errorf("children across pages must all be present (got keys: has0=%v has100=%v)", seen["AX0"], seen["AX100"])
 	}
 }
+
+// TestCanonicalItemsLosslessRoundtrip: unknown fields in an item envelope must
+// survive the semantic JSON round-trip through ListCanonicalItems.
+func TestCanonicalItemsLosslessRoundtrip(t *testing.T) {
+	const unknownEnv = `{"key":"B1","version":3,"library":{"type":"user"},"x_custom_top":42,"data":{"key":"B1","version":3,"itemType":"book","title":"A Book","extraField":{"nested":[1,2,3]},"creator":"unknown-field"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Last-Modified-Version", "7")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `[%s]`, unknownEnv)
+	}))
+	defer srv.Close()
+
+	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
+	items, ver, err := api.ListCanonicalItems(0)
+	if err != nil {
+		t.Fatalf("ListCanonicalItems: %v", err)
+	}
+	if ver != 7 {
+		t.Errorf("version = %d, want 7", ver)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	it := items[0]
+	if it.Key != "B1" || it.ItemType != "book" || it.Version != 3 {
+		t.Errorf("dims: key=%s type=%s ver=%d", it.Key, it.ItemType, it.Version)
+	}
+	// Envelope must contain the unknown top-level field.
+	if !strings.Contains(string(it.Envelope), `"x_custom_top":42`) {
+		t.Errorf("envelope lost unknown top-level field: %s", it.Envelope)
+	}
+	// Data must contain the unknown nested field.
+	if !strings.Contains(string(it.Data), `"extraField"`) || !strings.Contains(string(it.Data), `"unknown-field"`) {
+		t.Errorf("data lost unknown fields: %s", it.Data)
+	}
+}
+
+// TestCanonicalCollectionsPagination: more than `limit` collections must all be
+// returned (pagination).
+func TestCanonicalCollectionsPagination(t *testing.T) {
+	const total = 120
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		start, limit := 0, 100
+		if s := r.URL.Query().Get("start"); s != "" {
+			fmt.Sscanf(s, "%d", &start)
+		}
+		if l := r.URL.Query().Get("limit"); l != "" {
+			fmt.Sscanf(l, "%d", &limit)
+		}
+		end := start + limit
+		if end > total {
+			end = total
+		}
+		var parts []string
+		for i := start; i < end; i++ {
+			parts = append(parts, fmt.Sprintf(`{"key":"C%d","data":{"key":"C%d","name":"col%d","parentCollection":false}}`, i, i, i))
+		}
+		fmt.Fprintf(w, `[%s]`, strings.Join(parts, ","))
+	}))
+	defer srv.Close()
+
+	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
+	cols, err := api.ListCanonicalCollections()
+	if err != nil {
+		t.Fatalf("ListCanonicalCollections: %v", err)
+	}
+	if len(cols) != total {
+		t.Fatalf("expected %d collections, got %d", total, len(cols))
+	}
+}
