@@ -24,20 +24,34 @@ type scriptedSource struct {
 	serverID string
 	baseURL  string
 	results  map[int64]zotero.ListResult // by since
-	deleted  map[int64][]string
+	deleted  map[int64][]zotero.DeleteEvent
 	fallback zotero.ListResult
-	fallDel  []string
+	fallDel  []zotero.DeleteEvent
+	fetch    map[string]zotero.Item // parent key -> reconstructed item for FetchParent
 }
 
 func (s *scriptedSource) ServerID() string { return s.serverID }
 func (s *scriptedSource) ListCollections() ([]zotero.Collection, error) {
 	return nil, nil
 }
-func (s *scriptedSource) ListDeletedKeys(since int64) ([]string, int64, error) {
+func (s *scriptedSource) ListDeletedKeys(since int64) ([]zotero.DeleteEvent, int64, error) {
 	if k, ok := s.deleted[since]; ok {
 		return k, since + 1, nil
 	}
-	return s.fallDel, since + 1, nil
+	if s.fallDel != nil {
+		return s.fallDel, since + 1, nil
+	}
+	return nil, since + 1, nil
+}
+func (s *scriptedSource) FetchParent(parentKey string) (*zotero.Item, error) {
+	if s.fetch == nil {
+		return nil, nil
+	}
+	it, ok := s.fetch[parentKey]
+	if !ok {
+		return nil, nil
+	}
+	return &it, nil
 }
 func (s *scriptedSource) ResolveAttachmentPath(key string) (string, error) {
 	return "", nil
@@ -276,7 +290,7 @@ func TestDeletedParentMarksDocAndAttachmentsDeleted(t *testing.T) {
 	}
 
 	// Zotero reports A deleted.
-	src.deleted = map[int64][]string{10: {"A"}}
+	src.deleted = map[int64][]zotero.DeleteEvent{10: {{Key: "A", ItemType: "book", ParentKey: ""}}}
 	src.fallback = zotero.ListResult{NewVersion: 11}
 	runSyncAt(t, src, d)
 
@@ -351,7 +365,7 @@ type errDeletedSource struct {
 	scriptedSource
 }
 
-func (s *errDeletedSource) ListDeletedKeys(since int64) ([]string, int64, error) {
+func (s *errDeletedSource) ListDeletedKeys(since int64) ([]zotero.DeleteEvent, int64, error) {
 	return nil, 0, errMalformedTrash
 }
 
@@ -495,4 +509,120 @@ func lockKeyForTest(sourceID string) int64 {
 		acc = acc*31 + int64(sourceID[i])
 	}
 	return acc & 0x7FFFFFFFFFFFFFFF
+}
+
+// keyPDF makes an item for a doc with `atts` attachments and returns the item.
+func itemWithAtts(key string, atts []zotero.Attachment, ver int64) zotero.Item {
+	return zotero.Item{Key: key, Version: ver, ItemType: "book", Title: key, Attachments: atts}
+}
+
+// TestDeletePreferredAttachmentEnqueuesReplacement: deleting a document's
+// preferred PDF leaves the parent otherwise unchanged; the EPUB sibling must
+// become preferred and a single new EPUB job must be enqueued.
+func TestDeletePreferredAttachmentEnqueuesReplacement(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t, ctx)
+
+	pdfPath := makePdf(t, "a")
+	epubPath := t.TempDir() + "/a.epub"
+	os.WriteFile(epubPath, []byte("e"), 0o600)
+
+	prefPDF := zotero.Attachment{Key: "A-PDF", Version: 1, ParentKey: "A", ContentType: "application/pdf", Filename: "a.pdf", LocalPath: pdfPath}
+	epub := zotero.Attachment{Key: "A-EPUB", Version: 1, ParentKey: "A", ContentType: "application/epub+zip", Filename: "a.epub", LocalPath: epubPath}
+
+	src := &scriptedSource{serverID: "srv", baseURL: newScriptedBase(), fallback: zotero.ListResult{
+		Items:        []zotero.Item{itemWithAtts("A", []zotero.Attachment{prefPDF, epub}, 1)},
+		AffectedKeys: []string{"A"},
+		NewVersion:   10,
+	}}
+	sourceID := runSyncAt(t, src, d)
+	if err := forceCursor(t, d, sourceID, 10); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now the preferred PDF is deleted (trash). The parent is otherwise
+	// unchanged; FetchParent re-returns it with only the EPUB.
+	src.deleted = map[int64][]zotero.DeleteEvent{10: {{Key: "A-PDF", ItemType: "attachment", ParentKey: "A"}}}
+	src.fetch = map[string]zotero.Item{"A": itemWithAtts("A", []zotero.Attachment{epub}, 2)}
+	src.fallback = zotero.ListResult{NewVersion: 11} // nothing else changed
+
+	runSyncAt(t, src, d)
+
+	flags := attFlags(t, d, ctx, sourceID, "A")
+	if a := flags["A-PDF"]; !a[0] {
+		t.Errorf("deleted preferred PDF should be marked deleted")
+	}
+	if a := flags["A-EPUB"]; a[0] || !a[1] {
+		t.Errorf("remaining EPUB should be active and preferred (del=%v pref=%v)", a[0], a[1])
+	}
+
+	// Exactly one new job for the EPUB replacement.
+	jobs, err := repo.New(d.Pool()).ListJobsByAttachment(ctx, attIDByKey(t, d, sourceID, "A-EPUB"))
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("expected exactly 1 EPUB job, got %d", len(jobs))
+	}
+	if jobs[0].Status != "pending" {
+		t.Errorf("expected pending EPUB job, got %q", jobs[0].Status)
+	}
+}
+
+// TestDeleteNonPreferredAttachmentNoNewJob: deleting a non-preferred attachment
+// must not create a new processing job (the preferred one is unchanged).
+func TestDeleteNonPreferredAttachmentNoNewJob(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t, ctx)
+
+	pdfPath := makePdf(t, "a")
+	epubPath := t.TempDir() + "/a.epub"
+	os.WriteFile(epubPath, []byte("e"), 0o600)
+	prefPDF := zotero.Attachment{Key: "A-PDF", Version: 1, ParentKey: "A", ContentType: "application/pdf", Filename: "a.pdf", LocalPath: pdfPath}
+	epub := zotero.Attachment{Key: "A-EPUB", Version: 1, ParentKey: "A", ContentType: "application/epub+zip", Filename: "a.epub", LocalPath: epubPath}
+
+	src := &scriptedSource{serverID: "srv", baseURL: newScriptedBase(), fallback: zotero.ListResult{
+		Items:        []zotero.Item{itemWithAtts("A", []zotero.Attachment{prefPDF, epub}, 1)},
+		AffectedKeys: []string{"A"},
+		NewVersion:   10,
+	}}
+	sourceID := runSyncAt(t, src, d)
+	// Count jobs created by the initial sync.
+	before, err := repo.New(d.Pool()).CountJobsForSource(ctx, sourceID)
+	if err != nil {
+		t.Fatalf("count jobs before: %v", err)
+	}
+	if err := forceCursor(t, d, sourceID, 10); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete the non-preferred EPUB; the PDF remains preferred.
+	src.deleted = map[int64][]zotero.DeleteEvent{10: {{Key: "A-EPUB", ItemType: "attachment", ParentKey: "A"}}}
+	src.fetch = map[string]zotero.Item{"A": itemWithAtts("A", []zotero.Attachment{prefPDF}, 2)}
+	src.fallback = zotero.ListResult{NewVersion: 11}
+
+	runSyncAt(t, src, d)
+
+	after, err := repo.New(d.Pool()).CountJobsForSource(ctx, sourceID)
+	if err != nil {
+		t.Fatalf("count jobs after: %v", err)
+	}
+	if after != before {
+		t.Errorf("deleting a non-preferred attachment must not create a new job (before=%d after=%d)", before, after)
+	}
+	flags := attFlags(t, d, ctx, sourceID, "A")
+	if a := flags["A-PDF"]; a[0] || !a[1] {
+		t.Errorf("preferred PDF must remain active and preferred (del=%v pref=%v)", a[0], a[1])
+	}
+}
+
+func attIDByKey(t *testing.T, d *db.DB, sourceID, attKey string) string {
+	t.Helper()
+	var id string
+	if err := d.Pool().QueryRow(context.Background(),
+		`SELECT id::text FROM zotero_attachments WHERE source_id=$1 AND zotero_key=$2`,
+		sourceID, attKey).Scan(&id); err != nil {
+		t.Fatalf("attachment id: %v", err)
+	}
+	return id
 }

@@ -32,9 +32,10 @@ func (f *fakeSource) ListPDFItems(since int64) (zotero.ListResult, error) {
 	}, nil
 }
 
-func (f *fakeSource) ListDeletedKeys(since int64) ([]string, int64, error) {
+func (f *fakeSource) ListDeletedKeys(since int64) ([]zotero.DeleteEvent, int64, error) {
 	return nil, 42, nil
 }
+func (f *fakeSource) FetchParent(parentKey string) (*zotero.Item, error) { return nil, nil }
 
 func (f *fakeSource) ResolveAttachmentPath(key string) (string, error) {
 	return f.item.Attachments[0].LocalPath, nil
@@ -134,9 +135,10 @@ func (f *missingSource) ListPDFItems(since int64) (zotero.ListResult, error) {
 	}, nil
 }
 
-func (f *missingSource) ListDeletedKeys(since int64) ([]string, int64, error) {
+func (f *missingSource) ListDeletedKeys(since int64) ([]zotero.DeleteEvent, int64, error) {
 	return nil, 42, nil
 }
+func (f *missingSource) FetchParent(parentKey string) (*zotero.Item, error) { return nil, nil }
 
 func (f *missingSource) ResolveAttachmentPath(key string) (string, error) {
 	return "", nil
