@@ -86,7 +86,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	var pending []repo.PendingJob
 	seenAtts := map[string][]string{} // docKey -> attachment keys still present
 	prefAtts := map[string]string{}   // docKey -> preferred attachment key
-	for _, it := range items {
+	processItem := func(it zotero.Item) error {
 		var keys []string
 		for _, att := range it.Attachments {
 			keys = append(keys, att.Key)
@@ -94,7 +94,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		seenAtts[it.Key] = keys
 		pref := zotero.PreferredAttachment(it.Attachments)
 		if pref == nil {
-			continue
+			return nil
 		}
 		job, err := s.preferredJob(ctx, sourceID, it, pref)
 		if err != nil {
@@ -104,25 +104,60 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 			// otherwise the attachment is dropped and the cursor is advanced
 			// over it.
 			if rerr := s.enqueueFailure(ctx, sourceID, it, pref, err); rerr != nil {
-				return Result{}, fmt.Errorf("record failure for %s: %w", it.Key, rerr)
+				return fmt.Errorf("record failure for %s: %w", it.Key, rerr)
 			}
-			continue
+			return nil
 		}
 		pending = append(pending, *job)
 		prefAtts[it.Key] = pref.Key
 		preferred++
+		return nil
+	}
+	for i := range items {
+		if err := processItem(items[i]); err != nil {
+			return Result{}, err
+		}
 	}
 
-	// Deleted keys: parents that 404'd during reconstruction plus any the
-	// trash feed reports. Scoped reconciliation never touches other documents.
-	deletedKeys := res.DeletedKeys
+	// Deleted keys: parents that 404'd during reconstruction plus structured
+	// trash events. A deleted parent is removed with its attachments. A deleted
+	// single attachment is removed individually, and its parent is re-processed
+	// so a remaining sibling (e.g. EPUB) can become the new preferred and be
+	// enqueued even though the parent was not otherwise changed.
+	deletedKeys := append([]string(nil), res.DeletedKeys...)
 	trashDeleted, _, derr := s.src.ListDeletedKeys(since)
 	if derr != nil {
 		// A failure reading deletions must not silently drop them; abort so the
 		// cursor is not advanced.
 		return Result{}, fmt.Errorf("list deleted items: %w", derr)
 	}
-	deletedKeys = append(deletedKeys, trashDeleted...)
+	reprocessParents := map[string]bool{}
+	for _, ev := range trashDeleted {
+		deletedKeys = append(deletedKeys, ev.Key)
+		if ev.ItemType == "attachment" && ev.ParentKey != "" {
+			reprocessParents[ev.ParentKey] = true
+		}
+	}
+
+	// Re-process parents whose (preferred) attachment was deleted: reconstruct
+	// them and run the normal preferred/hash/enqueue path so a replacement
+	// sibling is selected and a job is created.
+	for parentKey := range reprocessParents {
+		if _, already := seenAtts[parentKey]; already {
+			continue // already processed in this run's items
+		}
+		parent, err := s.src.FetchParent(parentKey)
+		if err != nil {
+			return Result{}, fmt.Errorf("reprocess deleted-attachment parent %s: %w", parentKey, err)
+		}
+		if parent == nil {
+			continue // parent gone entirely; reconcile deletion covers it
+		}
+		if err := processItem(*parent); err != nil {
+			return Result{}, err
+		}
+		res.AffectedKeys = append(res.AffectedKeys, parentKey)
+	}
 
 	if err := s.repo.Reconcile(ctx, repo.ReconcileReq{
 		SourceID:             sourceID,
