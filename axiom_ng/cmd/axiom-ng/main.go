@@ -47,7 +47,7 @@ func main() {
 		logger.Printf("postgres ready and migrated")
 	}
 
-	addr := ":" + strconv.Itoa(cfg.APIPort)
+	addr := cfg.BindAddr + ":" + strconv.Itoa(cfg.APIPort)
 	srv := server.New(addr, logger)
 	srv.RegisterCheck("zotero", server.CheckZotero(src))
 	if database != nil {
