@@ -39,6 +39,18 @@ func TestMigrateCreatesIngestJobs(t *testing.T) {
 	if !exists {
 		t.Fatal("ingest_jobs table was not created by migration")
 	}
+
+	for _, table := range []string{"zotero_sources", "zotero_documents", "zotero_attachments"} {
+		if err := d.pool.QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM information_schema.tables WHERE table_name = $1
+			)`, table).Scan(&exists); err != nil {
+			t.Fatalf("check %s: %v", table, err)
+		}
+		if !exists {
+			t.Errorf("%s table was not created by migration", table)
+		}
+	}
 }
 
 func TestMigrateIdempotent(t *testing.T) {
