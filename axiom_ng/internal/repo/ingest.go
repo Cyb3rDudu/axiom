@@ -26,8 +26,8 @@ type Job struct {
 	ContentHash  string
 	Attempt      int
 	MaxAttempts  int
-	ErrorCode    string
-	ErrorMessage string
+	ErrorCode    *string
+	ErrorMessage *string
 	EnqueuedAt   string
 }
 
