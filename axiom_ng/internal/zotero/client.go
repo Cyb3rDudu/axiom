@@ -183,20 +183,33 @@ func (a *LocalAPI) getItemsWithVersion(query url.Values) ([]zoteroObject, int64,
 }
 
 // getChildren returns all child items (attachments, notes) of a parent item so
-// a delta-triggered refresh can reconstruct a complete document.
+// a delta-triggered refresh can reconstruct a complete document. Children are
+// paginated over /children with start/limit so parents with more than `limit`
+// children are not truncated (which would otherwise mark valid attachments as
+// deleted during reconciliation).
 func (a *LocalAPI) getChildren(parentKey string) ([]zoteroObject, error) {
-	q := url.Values{"format": {"json"}, "limit": {"100"}}
 	path := a.libraryID + "/items/" + parentKey + "/children"
-	resp, err := a.get(path, q)
-	if err != nil {
-		return nil, err
+	var all []zoteroObject
+	start := 0
+	for {
+		q := url.Values{"format": {"json"}, "limit": {"100"}, "start": {fmt.Sprintf("%d", start)}}
+		resp, err := a.get(path, q)
+		if err != nil {
+			return nil, err
+		}
+		var batch []zoteroObject
+		err = json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&batch)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("zotero children %s decode: %w", parentKey, err)
+		}
+		all = append(all, batch...)
+		if len(batch) < 100 {
+			break
+		}
+		start += len(batch)
 	}
-	defer resp.Body.Close()
-	var out []zoteroObject
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&out); err != nil {
-		return nil, fmt.Errorf("zotero children %s decode: %w", parentKey, err)
-	}
-	return out, nil
+	return all, nil
 }
 
 // versionHeader parses an unsigned library version string, returning 0 for

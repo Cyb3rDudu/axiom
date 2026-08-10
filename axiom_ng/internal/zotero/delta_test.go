@@ -186,3 +186,77 @@ func TestListPDFItemsErrorsWhenReconstructionFails(t *testing.T) {
 		t.Fatal("expected error when children reconstruction fails; cursor must not advance")
 	}
 }
+
+// TestChildrenPaginationReconstructsAll: a parent with more than `limit`
+// children (default 100) must have all of them reconstructed, not truncated.
+func TestChildrenPaginationReconstructsAll(t *testing.T) {
+	// children[i] = attachment key AX<i> for parent B1
+	const total = 101
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		if strings.HasSuffix(path, "/items") {
+			w.Header().Set("Last-Modified-Version", "200")
+			// Delta: parent B1 changed.
+			b, _ := json.Marshal([]map[string]any{envelope("B1", "book", "", "A Book", nil)})
+			w.Write(b)
+			return
+		}
+		if strings.HasSuffix(path, "/children") && strings.Contains(path, "/B1/children") {
+			start := 0
+			limit := 100
+			if s := r.URL.Query().Get("start"); s != "" {
+				fmt.Sscanf(s, "%d", &start)
+			}
+			if l := r.URL.Query().Get("limit"); l != "" {
+				fmt.Sscanf(l, "%d", &limit)
+			}
+			end := start + limit
+			if end > total {
+				end = total
+			}
+			items := make([]map[string]any, 0, end-start)
+			for i := start; i < end; i++ {
+				key := fmt.Sprintf("AX%d", i)
+				items = append(items, map[string]any{
+					"key": key, "version": 1,
+					"links": map[string]any{"enclosure": map[string]any{"href": "file:///X/" + key + "/c.pdf"}},
+					"data": map[string]any{
+						"key": key, "version": 1, "itemType": "attachment", "parentItem": "B1",
+						"contentType": "application/pdf", "filename": "c.pdf",
+					},
+				})
+			}
+			b, _ := json.Marshal(items)
+			w.Write(b)
+			return
+		}
+		if strings.HasSuffix(path, "/B1") {
+			b, _ := json.Marshal(envelope("B1", "book", "", "A Book", nil))
+			w.Write(b)
+			return
+		}
+		http.Error(w, "unexpected path "+path, http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
+	res, err := api.ListPDFItems(150)
+	if err != nil {
+		t.Fatalf("ListPDFItems: %v", err)
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("expected 1 reconstructed parent, got %d", len(res.Items))
+	}
+	atts := res.Items[0].Attachments
+	if len(atts) != total {
+		t.Fatalf("expected %d children reconstructed, got %d", total, len(atts))
+	}
+	seen := map[string]bool{}
+	for _, a := range atts {
+		seen[a.Key] = true
+	}
+	if !seen["AX0"] || !seen["AX100"] {
+		t.Errorf("children across pages must all be present (got keys: has0=%v has100=%v)", seen["AX0"], seen["AX100"])
+	}
+}
