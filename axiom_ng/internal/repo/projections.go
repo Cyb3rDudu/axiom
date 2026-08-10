@@ -26,6 +26,8 @@ type CanonicalDocFlag struct {
 func (r *Repo) deriveDocumentProjections(ctx context.Context, tx pgx.Tx, sourceID string, items []zotero.CanonicalItem) ([]CanonicalDocFlag, error) {
 	// Group canonical items by parent key, keeping parents separate.
 	parents := map[string]zotero.NormalizedMetadata{} // parent key -> normalized
+	parentVersion := map[string]int64{}
+
 	attByParent := map[string][]attachmentProjection{}
 	var parentOrder []string
 
@@ -35,6 +37,7 @@ func (r *Repo) deriveDocumentProjections(ctx context.Context, tx pgx.Tx, sourceI
 		if dims.ParentKey == "" {
 			// a top-level (parent) item
 			parents[dims.Key] = zotero.Normalize(it.Data)
+			parentVersion[dims.Key] = it.Version
 			parentOrder = append(parentOrder, dims.Key)
 			continue
 		}
@@ -63,7 +66,7 @@ func (r *Repo) deriveDocumentProjections(ctx context.Context, tx pgx.Tx, sourceI
 		if pref == nil {
 			continue
 		}
-		docID, err := r.ensureDocumentProjection(ctx, tx, sourceID, parentKey, nm)
+		docID, err := r.ensureDocumentProjection(ctx, tx, sourceID, parentKey, parentVersion[parentKey], nm)
 		if err != nil {
 			return nil, err
 		}
@@ -102,8 +105,9 @@ func isBibliographic(itemType string) bool {
 }
 
 // ensureDocumentProjection writes a normalized zotero_documents row from a
-// canonical parent's data and returns its id.
-func (r *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID, parentKey string, nm zotero.NormalizedMetadata) (string, error) {
+// canonical parent's data and returns its id. The projection is version-guarded
+// so an older incoming item cannot overwrite a newer projection.
+func (r *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID, parentKey string, version int64, nm zotero.NormalizedMetadata) (string, error) {
 	creators, _ := json.Marshal(nm.Creators)
 	tags, _ := json.Marshal(nm.Tags)
 	cols, _ := json.Marshal(nm.Collections)
@@ -118,19 +122,29 @@ func (r *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID
 			source_id, zotero_key, zotero_version, item_type, title, creators,
 			publication_year, publication_date, publisher, isbn, doi, url,
 			language, abstract_note, tags, collections, metadata
-		) VALUES ($1,$2,0,$3,$4,$5,$6,NULLIF($7,''),$8,$9,$10,$11,$12,$13,$14,$15,
-			jsonb_build_object('edition',$16::text,'volume',$17::text,'issue',$18::text,'pages',$19::text,'issn',$20::text,'extra',$21::text,'relations',$22::jsonb))
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$10,$11,$12,$13,$14,$15,$16,
+			jsonb_build_object('edition',$17::text,'volume',$18::text,'issue',$19::text,'pages',$20::text,'issn',$21::text,'extra',$22::text,'relations',$23::jsonb))
 		ON CONFLICT (source_id, zotero_key) DO UPDATE SET
+			zotero_version = GREATEST(zotero_documents.zotero_version, EXCLUDED.zotero_version),
 			item_type=EXCLUDED.item_type, title=EXCLUDED.title, creators=EXCLUDED.creators,
 			publication_year=EXCLUDED.publication_year, publication_date=EXCLUDED.publication_date,
 			publisher=EXCLUDED.publisher, isbn=EXCLUDED.isbn, doi=EXCLUDED.doi, url=EXCLUDED.url,
 			language=EXCLUDED.language, abstract_note=EXCLUDED.abstract_note, tags=EXCLUDED.tags,
 			collections=EXCLUDED.collections, metadata=EXCLUDED.metadata, deleted=false, updated_at=now()
+		WHERE EXCLUDED.zotero_version >= zotero_documents.zotero_version
 		RETURNING id::text
-	`, sourceID, parentKey, nm.ItemType, nm.Title, creators, year, nm.Date, nm.Publisher,
+	`, sourceID, parentKey, version, nm.ItemType, nm.Title, creators, year, nm.Date, nm.Publisher,
 		nm.ISBN, nm.DOI, nm.URL, nm.Language, nm.Abstract, tags, cols,
 		nm.Edition, nm.Volume, nm.Issue, nm.Pages, nm.ISSN, nm.Extra, rels).Scan(&id)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			// Older version: DO UPDATE WHERE was suppressed; return existing id.
+			if e2 := tx.QueryRow(ctx, `SELECT id::text FROM zotero_documents WHERE source_id=$1 AND zotero_key=$2`,
+				sourceID, parentKey).Scan(&id); e2 != nil {
+				return "", fmt.Errorf("lookup document projection %s: %w", parentKey, e2)
+			}
+			return id, nil
+		}
 		return "", fmt.Errorf("upsert document projection %s: %w", parentKey, err)
 	}
 	return id, nil

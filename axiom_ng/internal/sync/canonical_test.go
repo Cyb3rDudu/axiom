@@ -161,3 +161,110 @@ func TestRunCanonicalLosslessAndNoAnnotateEnqueue(t *testing.T) {
 		t.Errorf("canonical note raw_data lost text: %s", noteData)
 	}
 }
+
+// TestCanonicalVersionGuard: an incoming item with an OLDER version must not
+// overwrite the stored raw_data or projection of a newer one.
+func TestCanonicalVersionGuard(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("AXIOMNG_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOMNG_TEST_DATABASE_URL not set; skipping integration test")
+	}
+	d, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	pdfPath := t.TempDir() + "/a.pdf"
+	os.WriteFile(pdfPath, []byte("a"), 0o600)
+
+	src := &canonicalFake{serverID: "canon", baseURL: newScriptedBase(), version: 2}
+	itemV2 := mkItemJSON("B1", "book", "", "Title V2", map[string]any{"date": "2020", "DOI": "10.1/v2"})
+	itemV2.Version = 2
+	att := mkItemJSON("A1", "attachment", "B1", "a.pdf", map[string]any{"contentType": "application/pdf", "filename": "a.pdf"})
+	attEnv, _ := json.Marshal(map[string]any{
+		"key": "A1", "version": 1,
+		"links": map[string]any{"enclosure": map[string]any{"href": "file://" + pdfPath}},
+		"data":  map[string]any{"key": "A1", "version": 1, "itemType": "attachment", "parentItem": "B1", "contentType": "application/pdf", "filename": "a.pdf"},
+	})
+	att.Envelope = attEnv
+	src.items = []zotero.CanonicalItem{itemV2, att}
+
+	svc := New(src, repo.New(d.Pool()), src.baseURL, "users/0", log.Default())
+	res1, err := svc.RunCanonical(ctx)
+	if err != nil {
+		t.Fatalf("first canonical: %v", err)
+	}
+	sourceID := res1.SourceID
+
+	// Now an OLDER version (1) of B1 must NOT overwrite the stored raw_data (v2).
+	itemV1 := mkItemJSON("B1", "book", "", "Title V1", map[string]any{"date": "2010", "DOI": "10.1/v1"})
+	itemV1.Version = 1
+	src.items = []zotero.CanonicalItem{itemV1, att}
+	src.version = 2
+	if _, err := svc.RunCanonical(ctx); err != nil {
+		t.Fatalf("second canonical: %v", err)
+	}
+
+	var rawData string
+	if err := d.Pool().QueryRow(ctx,
+		`SELECT raw_data::text FROM zotero_items WHERE zotero_key='B1' AND source_id=$1`,
+		sourceID).Scan(&rawData); err != nil {
+		t.Fatal(err)
+	}
+	if !containsStr(rawData, "10.1/v2") {
+		t.Errorf("older version overwrote newer raw_data: %s", rawData)
+	}
+	var title string
+	if err := d.Pool().QueryRow(ctx,
+		`SELECT title FROM zotero_documents WHERE source_id=$1 AND zotero_key='B1'`,
+		sourceID).Scan(&title); err == nil && title != "Title V2" {
+		t.Errorf("older version overwrote projection title: %q", title)
+	}
+}
+
+// TestCanonicalBootstrapOldCursor: even when the existing document cursor is
+// high, the canonical cursor starts at 0 so the first canonical sync is a full
+// snapshot (all items present).
+func TestCanonicalBootstrapOldCursor(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("AXIOMNG_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOMNG_TEST_DATABASE_URL not set; skipping integration test")
+	}
+	d, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	pdfPath := t.TempDir() + "/a.pdf"
+	os.WriteFile(pdfPath, []byte("a"), 0o600)
+	src := &canonicalFake{serverID: "canon", baseURL: newScriptedBase(), version: 5}
+	att := mkItemJSON("A1", "attachment", "B1", "a.pdf", map[string]any{"contentType": "application/pdf", "filename": "a.pdf"})
+	attEnv, _ := json.Marshal(map[string]any{"key": "A1", "version": 1, "links": map[string]any{"enclosure": map[string]any{"href": "file://" + pdfPath}}, "data": map[string]any{"key": "A1", "version": 1, "itemType": "attachment", "parentItem": "B1", "contentType": "application/pdf", "filename": "a.pdf"}})
+	att.Envelope = attEnv
+	src.items = []zotero.CanonicalItem{mkItemJSON("B1", "book", "", "A Book", nil), att}
+
+	repoObj := repo.New(d.Pool())
+	// The legacy document cursor is irrelevant: the canonical cursor is separate
+	// and starts at 0, so the first canonical sync is a full snapshot.
+	if _, err := repoObj.EnsureSource(ctx, src.baseURL, "users/0", src.serverID); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+	res, err := svc.RunCanonical(ctx)
+	if err != nil {
+		t.Fatalf("RunCanonical: %v", err)
+	}
+	if res.Items != 2 {
+		t.Errorf("bootstrap must full-sync all items even with old legacy cursor; got %d", res.Items)
+	}
+}
