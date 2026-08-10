@@ -174,37 +174,139 @@ func (r *Repo) upsertAttachment(ctx context.Context, tx pgx.Tx, sourceID, docID,
 	return nil
 }
 
-// Reconcile marks attachments that are no longer present in the library as
-// removed, and clears the preferred flag from attachments that are no longer
-// the chosen processable file so a change of the preferred file (or switch to
-// an unsupported type) is reflected. Data already persisted from a later
-// removed attachment is thereby marked for pruning rather than staying active.
-func (r *Repo) Reconcile(ctx context.Context, sourceID string, seenKeys []string, preferredKeys []string) error {
+// ReconcileReq scopes attachment reconciliation to a subset of the library.
+// A full sync sets ReconcileAll to cover every document of the source. An
+// incremental sync must set AffectedDocKeys (and optionally DeletedDocKeys) so
+// it never touches documents that were not part of this run; an empty delta
+// reconciles nothing.
+type ReconcileReq struct {
+	SourceID             string
+	ReconcileAll         bool
+	AffectedDocKeys      []string
+	DeletedDocKeys       []string
+	SeenAttachments      map[string][]string // docKey -> attachment keys still present
+	PreferredAttachments map[string]string   // docKey -> preferred attachment key
+}
+
+// Reconcile marks attachments that are no longer present as removed and clears
+// the preferred flag from files that are no longer the chosen processable one.
+// Scope is strictly limited:
+//
+//   - ReconcileAll true (full sync): every document of the source is reconciled
+//     against SeenAttachments.
+//   - otherwise: only AffectedDocKeys are reconciled; DeletedDocKeys have their
+//     document and all attachments marked removed.
+//   - an empty incremental scope changes nothing.
+func (r *Repo) Reconcile(ctx context.Context, req ReconcileReq) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `
-		UPDATE zotero_attachments
-		SET deleted = true, updated_at = now()
-		WHERE source_id = $1 AND deleted = false
-		  AND (cardinality($2::text[]) = 0 OR zotero_key <> ALL($2::text[]))
-	`, sourceID, seenKeys); err != nil {
-		return fmt.Errorf("reconcile removed attachments: %w", err)
+	// Determine the set of documents to reconcile: everything if full sync,
+	// otherwise just the affected docs. Deleted docs are handled separately.
+	var reconcileDocKeys []string
+	if req.ReconcileAll {
+		rows, err := tx.Query(ctx,
+			`SELECT zotero_key FROM zotero_documents WHERE source_id = $1 AND deleted = false`,
+			req.SourceID)
+		if err != nil {
+			return fmt.Errorf("reconcile list docs: %w", err)
+		}
+		reconcileDocKeys = make([]string, 0)
+		for rows.Next() {
+			var k string
+			if err := rows.Scan(&k); err != nil {
+				rows.Close()
+				return err
+			}
+			reconcileDocKeys = append(reconcileDocKeys, k)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	} else if len(req.AffectedDocKeys) > 0 {
+		reconcileDocKeys = req.AffectedDocKeys
 	}
 
-	if _, err := tx.Exec(ctx, `
-		UPDATE zotero_attachments
-		SET preferred = false, updated_at = now()
-		WHERE source_id = $1 AND preferred = true
-		  AND (cardinality($2::text[]) = 0 OR zotero_key <> ALL($2::text[]))
-	`, sourceID, preferredKeys); err != nil {
-		return fmt.Errorf("reconcile preferred: %w", err)
+	// Reconcile each in-scope, non-deleted document's attachments.
+	for _, docKey := range reconcileDocKeys {
+		if containsReqKey(req.DeletedDocKeys, docKey) {
+			continue // handled by the deletion path below
+		}
+		seen := req.SeenAttachments[docKey] // may be nil/empty
+		if seen == nil {
+			seen = []string{}
+		}
+		preferred := req.PreferredAttachments[docKey]
+		if _, err := tx.Exec(ctx, `
+			UPDATE zotero_attachments
+			SET deleted = true, updated_at = now()
+			WHERE source_id = $1
+			  AND parent_zotero_key = $2
+			  AND deleted = false
+			  AND NOT (zotero_key = ANY($3::text[]))
+		`, req.SourceID, docKey, seen); err != nil {
+			return fmt.Errorf("reconcile removed attachments for %s: %w", docKey, err)
+		}
+
+		if preferred == "" {
+			// No preferred processable file remains for this document: clear the
+			// flag on any attachment that still had it.
+			if _, err := tx.Exec(ctx, `
+				UPDATE zotero_attachments
+				SET preferred = false, updated_at = now()
+				WHERE source_id = $1
+				  AND parent_zotero_key = $2
+				  AND preferred = true
+			`, req.SourceID, docKey); err != nil {
+				return fmt.Errorf("reconcile clear preferred for %s: %w", docKey, err)
+			}
+		} else if _, err := tx.Exec(ctx, `
+			UPDATE zotero_attachments
+			SET preferred = false, updated_at = now()
+			WHERE source_id = $1
+			  AND parent_zotero_key = $2
+			  AND preferred = true
+			  AND zotero_key <> $3
+		`, req.SourceID, docKey, preferred); err != nil {
+			return fmt.Errorf("reconcile preferred for %s: %w", docKey, err)
+		}
+	}
+
+	// Deletion path: the accepted attachment is removed; only mark a preferred
+	// false if the doc itself is deleted.
+	if len(req.DeletedDocKeys) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE zotero_attachments
+			SET deleted = true, preferred = false, updated_at = now()
+			WHERE source_id = $1
+			  AND parent_zotero_key = ANY($2::text[])
+			  AND deleted = false
+		`, req.SourceID, req.DeletedDocKeys); err != nil {
+			return fmt.Errorf("reconcile deleted attachments: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE zotero_documents
+			SET deleted = true, updated_at = now()
+			WHERE source_id = $1 AND zotero_key = ANY($2::text[])
+		`, req.SourceID, req.DeletedDocKeys); err != nil {
+			return fmt.Errorf("reconcile deleted documents: %w", err)
+		}
 	}
 
 	return tx.Commit(ctx)
+}
+
+func containsReqKey(keys []string, key string) bool {
+	for _, k := range keys {
+		if k == key {
+			return true
+		}
+	}
+	return false
 }
 
 // UpdateAttachmentFileInfo persists the resolved content hash, size, mtime and
