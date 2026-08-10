@@ -501,22 +501,19 @@ func (a *LocalAPI) fetchItem(key string) (*decodedItem, error) {
 	return &decodedItem{obj: obj, item: &data}, nil
 }
 
-// ListDeletedKeys returns the zotero keys of items currently in the trash,
-// which represents items the user removed from the library. It paginates over
-// the trash feed and propagates decode errors so the sync aborts rather than
-// advancing its cursor over unverifiable deletions. A library version from the
-// Last-Modified-Version header is returned to advance the cursor when nothing
-// else changed.
-func (a *LocalAPI) ListDeletedKeys(since int64) ([]string, int64, error) {
-	var allKeys []string
+// ListDeletedKeys returns the items Zotero reports as removed (currently: the
+// trash feed), structured so a single deleted attachment is distinguished from
+// a deleted parent document. It paginates and propagates decode errors so the
+// sync aborts rather than advancing its cursor over unverifiable deletions.
+func (a *LocalAPI) ListDeletedKeys(since int64) ([]DeleteEvent, int64, error) {
+	var allEvents []DeleteEvent
 	version := int64(0)
 	start := 0
 	for {
-		q := url.Values{"format": {"json"}, "limit": {"100"}}
+		q := url.Values{"format": {"json"}, "limit": {"100"}, "start": {fmt.Sprintf("%d", start)}}
 		if since > 0 {
 			q.Set("since", fmt.Sprintf("%d", since))
 		}
-		q.Set("start", fmt.Sprintf("%d", start))
 		path := a.libraryID + "/items/trash"
 		resp, err := a.get(path, q)
 		if err != nil {
@@ -524,7 +521,7 @@ func (a *LocalAPI) ListDeletedKeys(since int64) ([]string, int64, error) {
 			if errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusNotImplemented) {
 				// Some Zotero versions do not expose a trash endpoint; treat as
 				// no deletions.
-				return nil, version, nil
+				return allEvents, version, nil
 			}
 			return nil, 0, err
 		}
@@ -532,26 +529,105 @@ func (a *LocalAPI) ListDeletedKeys(since int64) ([]string, int64, error) {
 			version = v
 		}
 		var trash []struct {
-			Key string `json:"key"`
+			Key  string `json:"key"`
+			Data struct {
+				Key        string `json:"key"`
+				ItemType   string `json:"itemType"`
+				ParentItem string `json:"parentItem,omitempty"`
+			} `json:"data"`
 		}
 		decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&trash)
 		resp.Body.Close()
 		if decodeErr != nil {
 			// A malformed trash response must stop the sync so deletions are not
-			// silently dropped; propagate the error.
+			// silently dropped.
 			return nil, 0, fmt.Errorf("zotero trash decode: %w", decodeErr)
 		}
 		for _, it := range trash {
-			if it.Key != "" {
-				allKeys = append(allKeys, it.Key)
+			key := it.Key
+			if key == "" {
+				key = it.Data.Key
 			}
+			if key == "" {
+				continue
+			}
+			allEvents = append(allEvents, DeleteEvent{
+				Key:       key,
+				ItemType:  it.Data.ItemType,
+				ParentKey: it.Data.ParentItem,
+			})
 		}
 		if len(trash) < 100 {
 			break
 		}
 		start += len(trash)
 	}
-	return allKeys, version, nil
+	return allEvents, version, nil
+}
+
+// FetchParent reconstructs a single parent document (with its current children)
+// by key. It returns nil when the parent is gone or is not a parent item. Used
+// to re-process a document whose preferred attachment was deleted but that was
+// otherwise unchanged (so the normal preferred/hash/enqueue path can select a
+// remaining sibling).
+func (a *LocalAPI) FetchParent(parentKey string) (*Item, error) {
+	children, err := a.getChildren(parentKey)
+	if err != nil {
+		var se *StatusError
+		if errors.As(err, &se) && se.Status == http.StatusNotFound {
+			return nil, nil // parent gone
+		}
+		return nil, err
+	}
+	p, err := a.fetchItem(parentKey)
+	if err != nil {
+		var se *StatusError
+		if errors.As(err, &se) && se.Status == http.StatusNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if p == nil {
+		return nil, nil
+	}
+	var atts []Attachment
+	for _, obj := range children {
+		var data zoteroItemData
+		if err := json.Unmarshal(obj.Data, &data); err != nil {
+			continue
+		}
+		if data.ItemType != "attachment" || data.ParentItem == "" {
+			continue
+		}
+		atts = append(atts, Attachment{
+			Key:         data.Key,
+			Version:     data.Version,
+			ParentKey:   data.ParentItem,
+			ContentType: data.ContentType,
+			LinkMode:    data.LinkMode,
+			Filename:    data.Filename,
+			LocalPath:   obj.Links.Enclosure.Href,
+		})
+	}
+	var creat []Creator
+	for _, c := range p.item.Creators {
+		creat = append(creat, Creator{FirstName: c.FirstName, LastName: c.LastName})
+	}
+	var tags []Tag
+	for _, t := range p.item.Tags {
+		tags = append(tags, Tag{Tag: t.Tag})
+	}
+	return &Item{
+		Key:         p.item.Key,
+		Version:     p.item.Version,
+		ItemType:    p.item.ItemType,
+		Title:       p.item.Title,
+		Creators:    creat,
+		Tags:        tags,
+		Collections: p.item.Collections,
+		URL:         p.item.URL,
+		Attachments: atts,
+	}, nil
 }
 
 // ResolveAttachmentPath returns the local filesystem path of an attachment.

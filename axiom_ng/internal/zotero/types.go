@@ -27,15 +27,30 @@ type Source interface {
 	// reconstruction), used to mark their documents/attachments as deleted.
 	ListPDFItems(since int64) (ListResult, error)
 
-	// ListDeletedKeys returns the keys of items deleted from Zotero since the
-	// given library version (trashed or removed items) and the current library
-	// version.
-	ListDeletedKeys(since int64) (keys []string, newVersion int64, err error)
+	// ListDeletedKeys returns the items Zotero reports as removed since the given
+	// library version (trash items and/or the deleted feed). Each event is
+	// structured so the caller can distinguish a deleted parent document from a
+	// deleted single attachment (and identify the attachment's parent). It also
+	// returns the current library version.
+	ListDeletedKeys(since int64) (events []DeleteEvent, newVersion int64, err error)
+
+	// FetchParent reconstructs a single parent document (with its current
+	// children) by key, or returns (nil, nil) when the parent no longer exists.
+	// Used to reprocess a document whose preferred attachment was deleted but
+	// that was otherwise unchanged, so a remaining sibling can be selected.
+	FetchParent(parentKey string) (*Item, error)
 
 	// ResolveAttachmentPath maps an attachment to a local filesystem path
 	// (e.g. via the Zotero /file/view/url endpoint). It returns the path and
 	// the attachment's content type.
 	ResolveAttachmentPath(attachmentKey string) (string, error)
+}
+
+// DeleteEvent is a structured record of an item removed from the library.
+type DeleteEvent struct {
+	Key       string
+	ItemType  string
+	ParentKey string // only set for attachment deletions
 }
 
 // ListResult bundles what a full/incremental item listing yields.
