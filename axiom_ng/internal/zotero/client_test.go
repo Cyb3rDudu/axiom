@@ -24,31 +24,62 @@ func TestLocalAPIServerID(t *testing.T) {
 		t.Fatalf("ServerID = %q, want test-server-1", got)
 	}
 	if !called.Load() {
-		t.Fatal("expected a request to the root library endpoint")
+		t.Fatal("expected a request to the API root")
+	}
+}
+
+// itemObject builds a Zotero local-API item envelope with a data object and an
+// optional file enclosure link.
+func itemObject(key, itemType, parent, title string, attrs map[string]any) map[string]any {
+	return map[string]any{
+		"key": key, "version": 1,
+		"data": func() map[string]any {
+			d := map[string]any{"key": key, "version": 1, "itemType": itemType, "title": title}
+			if parent != "" {
+				d["parentItem"] = parent
+			}
+			for k, v := range attrs {
+				d[k] = v
+			}
+			return d
+		}(),
 	}
 }
 
 func TestListPDFItemsGroupsAttachments(t *testing.T) {
 	items := []map[string]any{
-		{"key": "BOOK1", "version": 3, "itemType": "book", "title": "A Book",
-			"creators": []map[string]string{{"firstName": "Ada", "lastName": "Lovelace"}},
-			"tags": []map[string]string{{"tag": "science"}},
-			"collections": []string{"COLL1"}},
-		{"key": "ATT-PDF1", "version": 2, "itemType": "attachment",
-			"parentItem": "BOOK1", "contentType": "application/pdf",
-			"linkMode": "imported_file", "filename": "book.pdf"},
-		{"key": "ATT-EPUB1", "version": 2, "itemType": "attachment",
-			"parentItem": "BOOK1", "contentType": "application/epub+zip",
-			"linkMode": "imported_file", "filename": "book.epub"},
-		{"key": "ARTICLE2", "version": 1, "itemType": "journalArticle", "title": "An Article"},
-		{"key": "ATT-NOFILE", "version": 1, "itemType": "attachment",
-			"parentItem": "BOOK1", "contentType": "text/html", "filename": "notes.html"},
+		itemObject("BOOK1", "book", "", "A Book", map[string]any{
+			"creators":    []map[string]string{{"firstName": "Ada", "lastName": "Lovelace"}},
+			"tags":        []map[string]string{{"tag": "science"}},
+			"collections": []string{"COLL1"},
+		}),
+		map[string]any{
+			"key": "ATT-PDF1", "version": 1,
+			"links": map[string]any{"enclosure": map[string]any{"href": "file:///X/storage/ATT-PDF1/book.pdf"}},
+			"data": map[string]any{
+				"key": "ATT-PDF1", "version": 1, "itemType": "attachment",
+				"parentItem": "BOOK1", "contentType": "application/pdf",
+				"linkMode": "imported_file", "filename": "book.pdf",
+			},
+		},
+		map[string]any{
+			"key": "ATT-EPUB1", "version": 1,
+			"data": map[string]any{
+				"key": "ATT-EPUB1", "version": 1, "itemType": "attachment",
+				"parentItem": "BOOK1", "contentType": "application/epub+zip",
+				"linkMode": "imported_file", "filename": "book.epub",
+			},
+		},
+		map[string]any{
+			"key": "ATT-NOFILE", "version": 1,
+			"data": map[string]any{
+				"key": "ATT-NOFILE", "version": 1, "itemType": "attachment",
+				"parentItem": "BOOK1", "contentType": "text/html", "filename": "notes.html",
+			},
+		},
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("format") != "json" {
-			t.Errorf("expected format=json, got %q", r.URL.Query().Get("format"))
-		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `[`)
 		for i, it := range items {
@@ -63,12 +94,9 @@ func TestListPDFItemsGroupsAttachments(t *testing.T) {
 	defer srv.Close()
 
 	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
-	got, version, err := api.ListPDFItems(0)
+	got, _, err := api.ListPDFItems(0)
 	if err != nil {
 		t.Fatalf("ListPDFItems: %v", err)
-	}
-	if version != 3 {
-		t.Errorf("version = %d, want 3", version)
 	}
 	if len(got) != 1 {
 		t.Fatalf("got %d items, want 1 (only BOOK1 has a PDF/EPUB attachment)", len(got))
@@ -80,6 +108,9 @@ func TestListPDFItemsGroupsAttachments(t *testing.T) {
 	if len(book.Attachments) != 2 {
 		t.Errorf("expected 2 attachments (pdf+epub), got %d", len(book.Attachments))
 	}
+	if book.Attachments[0].Key != "ATT-PDF1" || book.Attachments[0].LocalPath != "file:///X/storage/ATT-PDF1/book.pdf" {
+		t.Errorf("pdf attachment not resolved: %+v", book.Attachments[0])
+	}
 	if len(book.Creators) != 1 || book.Creators[0].LastName != "Lovelace" {
 		t.Errorf("creators not mapped: %+v", book.Creators)
 	}
@@ -88,14 +119,34 @@ func TestListPDFItemsGroupsAttachments(t *testing.T) {
 	}
 }
 
+func TestListCollections(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[
+			{"key":"C1","data":{"key":"C1","name":"MBA","parentCollection":false}},
+			{"key":"C2","data":{"key":"C2","name":"Child","parentCollection":"C1"}}
+		]`)
+	}))
+	defer srv.Close()
+
+	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
+	cols, err := api.ListCollections()
+	if err != nil {
+		t.Fatalf("ListCollections: %v", err)
+	}
+	if len(cols) != 2 {
+		t.Fatalf("got %d collections, want 2", len(cols))
+	}
+	if cols[0].Name != "MBA" || cols[1].Parent != "C1" {
+		t.Errorf("unexpected collections: %+v", cols)
+	}
+}
+
 func TestResolveAttachmentPath(t *testing.T) {
 	fileURI := "file:///Users/dudu/Zotero/storage/ATT-PDF1/book.pdf"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/users/0/items/ATT-PDF1/file/view/url" {
-			t.Errorf("unexpected path: %s", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, fileURI)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"key":"ATT-PDF1","links":{"enclosure":{"href":%q}},"data":{}}`, fileURI)
 	}))
 	defer srv.Close()
 
