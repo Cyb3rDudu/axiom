@@ -21,7 +21,7 @@ type Job struct {
 	DocumentID   string
 	AttachmentID string
 	Status       string
-	ContentHash  string
+	ContentHash  *string
 	Attempt      int
 	MaxAttempts  int
 	ErrorCode    *string

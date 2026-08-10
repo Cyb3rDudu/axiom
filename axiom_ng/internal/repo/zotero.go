@@ -5,6 +5,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
@@ -37,11 +38,14 @@ func (r *Repo) EnsureSource(ctx context.Context, baseURL, libraryID, serverID st
 	return id, nil
 }
 
-// SetSourceVersion stores the last known library version after a sync.
+// SetSourceVersion advances the stored library version, never moving it
+// backwards. Under concurrent Sync calls a slower goroutine with an older
+// version cannot rewind the cursor below what another goroutine already wrote.
 func (r *Repo) SetSourceVersion(ctx context.Context, sourceID string, version int64) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE zotero_sources
-		SET last_modified_version = $2, last_sync_at = now(), updated_at = now()
+		SET last_modified_version = GREATEST(last_modified_version, $2),
+		    last_sync_at = now(), updated_at = now()
 		WHERE id = $1
 	`, sourceID, version)
 	if err != nil {
@@ -94,14 +98,14 @@ func (r *Repo) upsertDocument(ctx context.Context, tx pgx.Tx, sourceID string, i
 	}
 
 	var docID string
-	err := tx.QueryRow(ctx, `
+	row := tx.QueryRow(ctx, `
 		INSERT INTO zotero_documents (
 			source_id, zotero_key, zotero_version, item_type, title, creators,
 			publication_year, url, tags, collections, metadata
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, '{}'::jsonb)
 		ON CONFLICT (source_id, zotero_key)
 		DO UPDATE SET
-			zotero_version = EXCLUDED.zotero_version,
+			zotero_version = GREATEST(zotero_documents.zotero_version, EXCLUDED.zotero_version),
 			item_type = EXCLUDED.item_type,
 			title = EXCLUDED.title,
 			creators = EXCLUDED.creators,
@@ -111,13 +115,24 @@ func (r *Repo) upsertDocument(ctx context.Context, tx pgx.Tx, sourceID string, i
 			collections = EXCLUDED.collections,
 			deleted = false,
 			updated_at = now()
+		WHERE EXCLUDED.zotero_version >= zotero_documents.zotero_version
 		RETURNING id
 	`,
 		sourceID, item.Key, item.Version, item.ItemType, item.Title, creators,
 		year, item.URL, tags, cols,
-	).Scan(&docID)
-	if err != nil {
-		return fmt.Errorf("upsert document %s: %w", item.Key, err)
+	)
+	if err := row.Scan(&docID); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("upsert document %s: %w", item.Key, err)
+		}
+		// Incoming version is older than the stored one; the DO UPDATE WHERE
+		// guard suppressed the write and therefore returned no row. Keep the
+		// existing document id so attachments can still reference it.
+		if err2 := tx.QueryRow(ctx,
+			`SELECT id::text FROM zotero_documents WHERE source_id = $1 AND zotero_key = $2`,
+			sourceID, item.Key).Scan(&docID); err2 != nil {
+			return fmt.Errorf("lookup document %s: %w", item.Key, err2)
+		}
 	}
 
 	for _, att := range item.Attachments {
@@ -140,7 +155,7 @@ func (r *Repo) upsertAttachment(ctx context.Context, tx pgx.Tx, sourceID, docID,
 		ON CONFLICT (source_id, zotero_key)
 		DO UPDATE SET
 			document_id = EXCLUDED.document_id,
-			zotero_version = EXCLUDED.zotero_version,
+			zotero_version = GREATEST(zotero_attachments.zotero_version, EXCLUDED.zotero_version),
 			link_mode = EXCLUDED.link_mode,
 			content_type = EXCLUDED.content_type,
 			filename = EXCLUDED.filename,
@@ -148,6 +163,7 @@ func (r *Repo) upsertAttachment(ctx context.Context, tx pgx.Tx, sourceID, docID,
 			local_path = EXCLUDED.local_path,
 			deleted = false,
 			updated_at = now()
+		WHERE EXCLUDED.zotero_version >= zotero_attachments.zotero_version
 	`,
 		sourceID, docID, att.Key, att.Version, parentKey, att.LinkMode,
 		att.ContentType, att.Filename, att.LocalPath, native,
@@ -156,6 +172,39 @@ func (r *Repo) upsertAttachment(ctx context.Context, tx pgx.Tx, sourceID, docID,
 		return fmt.Errorf("upsert attachment %s: %w", att.Key, err)
 	}
 	return nil
+}
+
+// Reconcile marks attachments that are no longer present in the library as
+// removed, and clears the preferred flag from attachments that are no longer
+// the chosen processable file so a change of the preferred file (or switch to
+// an unsupported type) is reflected. Data already persisted from a later
+// removed attachment is thereby marked for pruning rather than staying active.
+func (r *Repo) Reconcile(ctx context.Context, sourceID string, seenKeys []string, preferredKeys []string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE zotero_attachments
+		SET deleted = true, updated_at = now()
+		WHERE source_id = $1 AND deleted = false
+		  AND (cardinality($2::text[]) = 0 OR zotero_key <> ALL($2::text[]))
+	`, sourceID, seenKeys); err != nil {
+		return fmt.Errorf("reconcile removed attachments: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE zotero_attachments
+		SET preferred = false, updated_at = now()
+		WHERE source_id = $1 AND preferred = true
+		  AND (cardinality($2::text[]) = 0 OR zotero_key <> ALL($2::text[]))
+	`, sourceID, preferredKeys); err != nil {
+		return fmt.Errorf("reconcile preferred: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
 // UpdateAttachmentFileInfo persists the resolved content hash, size, mtime and
