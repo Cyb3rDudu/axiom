@@ -13,7 +13,9 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
 
@@ -50,6 +52,11 @@ func main() {
 	srv.RegisterCheck("zotero", server.CheckZotero(src))
 	if database != nil {
 		srv.RegisterCheck("postgres", server.CheckDB(database.Pool()))
+		// Wire the sync service and ingest-job listing into the API.
+		rep := repo.New(database.Pool())
+		syncSvc := sync.New(src, rep, cfg.ZoteroBaseURL, cfg.ZoteroLibraryID, logger)
+		srv.SetSyncAPI(syncSvc)
+		srv.SetJobRepo(rep)
 	}
 	logger.Printf("listening on %s", addr)
 	httpServer := &http.Server{
