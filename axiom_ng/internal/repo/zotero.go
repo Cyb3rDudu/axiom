@@ -95,9 +95,12 @@ func (r *Repo) AcquireSourceLock(ctx context.Context, sourceID string) (func(), 
 			conn.Release()
 			return
 		}
-		// Unlock failed: close the physical connection so the advisory lock is
-		// dropped by the session end rather than leaking on a reused session.
-		_ = conn.Conn().Close(ctx)
+		// Unlock failed: hijack the physical connection out of the pool so the
+		// session-level lock is dropped by the session end and the pool slot is
+		// not leaked, then close it and return the wrapper to the pool.
+		physical := conn.Hijack()
+		_ = physical.Close(unlockCtx)
+		conn.Release()
 	}
 	return release, nil
 }
