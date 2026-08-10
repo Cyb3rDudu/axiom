@@ -31,15 +31,23 @@ class GraphStore:
         entity_type: str,
         canonical_form: str,
         description: Optional[str] = None,
-        embedding: Optional[list] = None
+        embedding: Optional[list] = None,
+        session=None,
     ) -> str:
-        """Add or update entity with description accumulation, return entity_id."""
+        """Add or update entity with description accumulation, return entity_id.
+
+        If ``session`` is provided (an existing SQLAlchemy session/connection), it
+        is reused and NO commit is issued — the caller owns the transaction so a
+        multi-step rebuild can be committed/rolled back atomically. Otherwise a
+        fresh session is opened and committed as before.
+        """
         # Truncate text fields to fit database column constraints
         entity_text = entity_text[:255] if entity_text else entity_text
         canonical_form = canonical_form[:255] if canonical_form else canonical_form
         description = description[:2000] if description else description
 
-        db = next(get_db())
+        own_session = session is None
+        db = session if session is not None else next(get_db())
         try:
             # Updated SQL to accumulate descriptions on conflict (capped at 2000 chars)
             query = text("""
@@ -65,15 +73,21 @@ class GraphStore:
                 'desc': description,
                 'emb': embedding
             })
-            db.commit()
+            if own_session:
+                db.commit()
 
             return str(result.fetchone()[0])
         except Exception as e:
-            db.rollback()
+            # When the caller supplied its own session, the transaction belongs
+            # to the caller — let the exception propagate so they can roll back
+            # the whole unit of work themselves.
+            if own_session:
+                db.rollback()
             logger.error(f"Failed to add entity: {e}")
             raise
         finally:
-            db.close()
+            if own_session:
+                db.close()
 
     def summarize_entity_descriptions(self, llm_client=None) -> int:
         """
@@ -193,10 +207,16 @@ Return only the consolidated description (max 500 chars):"""
         doc_id: str,
         occurrence_count: int = 1,
         context_snippet: Optional[str] = None,
-        relevance_score: float = 0.5
+        relevance_score: float = 0.5,
+        session=None,
     ):
-        """Link entity to chunk where it appears."""
-        db = next(get_db())
+        """Link entity to chunk where it appears.
+
+        Reuses ``session`` (no commit) when provided so callers can run a
+        rebuild atomically; otherwise opens/commits/closes its own session.
+        """
+        own_session = session is None
+        db = session if session is not None else next(get_db())
         try:
             query = text("""
                 INSERT INTO entity_chunk_occurrences
@@ -216,13 +236,16 @@ Return only the consolidated description (max 500 chars):"""
                 'context': context_snippet,
                 'relevance': relevance_score
             })
-            db.commit()
+            if own_session:
+                db.commit()
         except Exception as e:
-            db.rollback()
+            if own_session:
+                db.rollback()
             logger.error(f"Failed to link entity to chunk: {e}")
             raise
         finally:
-            db.close()
+            if own_session:
+                db.close()
 
     def add_chunk_relationship(
         self,
@@ -230,10 +253,16 @@ Return only the consolidated description (max 500 chars):"""
         target_chunk_id: str,
         relationship_type: str,
         strength: float,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        session=None,
     ):
-        """Add relationship between chunks."""
-        db = next(get_db())
+        """Add relationship between chunks.
+
+        Reuses ``session`` (no commit) when provided so callers can run a
+        rebuild atomically; otherwise opens/commits/closes its own session.
+        """
+        own_session = session is None
+        db = session if session is not None else next(get_db())
         try:
             import json
             query = text("""
@@ -251,13 +280,16 @@ Return only the consolidated description (max 500 chars):"""
                 'strength': strength,
                 'metadata': json.dumps(metadata or {})
             })
-            db.commit()
+            if own_session:
+                db.commit()
         except Exception as e:
-            db.rollback()
+            if own_session:
+                db.rollback()
             logger.error(f"Failed to add chunk relationship: {e}")
             raise
         finally:
-            db.close()
+            if own_session:
+                db.close()
 
     def get_chunk_neighbors(
         self,
@@ -304,8 +336,12 @@ Return only the consolidated description (max 500 chars):"""
         finally:
             db.close()
 
-    def build_sequential_relationships(self, doc_id: str, chunk_count: int):
-        """Build next/previous relationships for document chunks."""
+    def build_sequential_relationships(self, doc_id: str, chunk_count: int, session=None):
+        """Build next/previous relationships for document chunks.
+
+        When ``session`` is provided it is forwarded to add_chunk_relationship so
+        everything lands in the same transaction as the caller.
+        """
         relationships = []
         for i in range(chunk_count - 1):
             relationships.append({
@@ -316,20 +352,18 @@ Return only the consolidated description (max 500 chars):"""
                 'metadata': {}
             })
 
-        # Batch insert
-        db = next(get_db())
         try:
             for rel in relationships:
                 self.add_chunk_relationship(
                     rel['source'], rel['target'],
-                    rel['type'], rel['strength'], rel['metadata']
+                    rel['type'], rel['strength'], rel['metadata'],
+                    session=session,
                 )
         except Exception as e:
             logger.error(f"Failed to build sequential relationships: {e}")
-        finally:
-            db.close()
+            raise
 
-    def build_cooccurrence_relationships(self, doc_id: Optional[str] = None, min_cooccurrence: int = 2):
+    def build_cooccurrence_relationships(self, doc_id: Optional[str] = None, min_cooccurrence: int = 2, session=None):
         """
         Build entity relationships based on co-occurrence in chunks.
         Creates relationships between entities that appear together frequently.
@@ -337,8 +371,11 @@ Return only the consolidated description (max 500 chars):"""
         Args:
             doc_id: Optional document ID to limit to specific document
             min_cooccurrence: Minimum number of co-occurrences to create relationship
+            session: Optional SQLAlchemy session to reuse (no commit) for atomic
+                multi-step operations.
         """
-        db = next(get_db())
+        own_session = session is None
+        db = session if session is not None else next(get_db())
         try:
             # Find entity pairs that co-occur in chunks
             query = text("""
@@ -379,17 +416,20 @@ Return only the consolidated description (max 500 chars):"""
                 'min_cooccurrence': min_cooccurrence
             })
             rows = result.fetchall()
-            db.commit()
+            if own_session:
+                db.commit()
 
             logger.info(f"Created {len(rows)} co-occurrence relationships for doc_id={doc_id}")
             return len(rows)
 
         except Exception as e:
-            db.rollback()
+            if own_session:
+                db.rollback()
             logger.error(f"Failed to build co-occurrence relationships: {e}")
             raise
         finally:
-            db.close()
+            if own_session:
+                db.close()
 
     def add_entity_relationship(
         self,
@@ -398,7 +438,8 @@ Return only the consolidated description (max 500 chars):"""
         relationship_type: str,
         strength: float,
         evidence_chunks: Optional[List[str]] = None,
-        source: str = "llm"
+        source: str = "llm",
+        session=None,
     ):
         """
         Add relationship between entities (from LLM extraction).
@@ -410,8 +451,11 @@ Return only the consolidated description (max 500 chars):"""
             strength: Relationship strength (0.0-1.0)
             evidence_chunks: List of chunk IDs that support this relationship
             source: Source of relationship ('llm' or 'cooccurrence')
+            session: Optional SQLAlchemy session to reuse (no commit) for
+                atomic multi-step operations.
         """
-        db = next(get_db())
+        own_session = session is None
+        db = session if session is not None else next(get_db())
         try:
             import json
             query = text("""
@@ -447,13 +491,16 @@ Return only the consolidated description (max 500 chars):"""
                     'chunk_ids': evidence_chunks or []
                 })
             })
-            db.commit()
+            if own_session:
+                db.commit()
 
             return str(result.fetchone()[0])
 
         except Exception as e:
-            db.rollback()
+            if own_session:
+                db.rollback()
             logger.error(f"Failed to add entity relationship: {e}")
             raise
         finally:
-            db.close()
+            if own_session:
+                db.close()
