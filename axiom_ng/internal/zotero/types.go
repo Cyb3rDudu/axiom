@@ -108,10 +108,14 @@ type Item struct {
 	URL             string       `json:"url,omitempty"`
 }
 
-// Creator is a single author/editor of an Item.
+// Creator is a single author/editor of an Item, including order and role.
 type Creator struct {
 	FirstName string `json:"firstName"`
 	LastName  string `json:"lastName"`
+	// Name is the single-field (corporate) creator display name, when present.
+	Name string `json:"name,omitempty"`
+	// CreatorType preserves the role/order (e.g. author, editor).
+	CreatorType string `json:"creatorType,omitempty"`
 }
 
 // Tag is a label assigned to an Item.

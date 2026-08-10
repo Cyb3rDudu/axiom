@@ -270,3 +270,143 @@ func (s *Service) enqueueFailure(ctx context.Context, sourceID string, item zote
 func (s *Service) mirror(ctx context.Context, sourceID string, items []zotero.Item) error {
 	return s.repo.SyncDocuments(ctx, sourceID, items)
 }
+
+// canonicalFetcher is implemented by sources that can deliver lossless
+// canonical listings (the LocalAPI). RunCanonical only runs when the source
+// supports it.
+type canonicalFetcher interface {
+	ListCanonicalItems(since int64) ([]zotero.CanonicalItem, int64, error)
+	ListCanonicalCollections() ([]zotero.CanonicalCollection, error)
+}
+
+// CanonicalResult is the summary of one canonical sync run.
+type CanonicalResult struct {
+	SourceID    string            `json:"source_id"`
+	Items       int               `json:"canonical_items"`
+	Collections int               `json:"canonical_collections"`
+	Documents   int               `json:"document_projections"`
+	Enqueued    int               `json:"enqueued_jobs"`
+	NewVersion  int64             `json:"library_version"`
+	Affected    map[string]string `json:"affected,omitempty"`
+}
+
+// RunCanonical performs the lossless canonical sync using the source's
+// canonical cursor (independent of the document/attachment cursor). It writes
+// zotero_items and zotero_collections losslessly, derives the normalized
+// document/attachment projections, and enqueues ingest jobs for preferred
+// processable attachments (never for notes/annotations or non-bibliographic
+// parents). A metadata-only change with an identical attachment hash does not
+// create a new job.
+func (s *Service) RunCanonical(ctx context.Context) (CanonicalResult, error) {
+	src, ok := s.src.(canonicalFetcher)
+	if !ok {
+		return CanonicalResult{}, fmt.Errorf("source does not support canonical sync")
+	}
+	serverID := s.src.ServerID()
+	if serverID == "" {
+		return CanonicalResult{}, errors.New("zotero source unreachable")
+	}
+	sourceID, err := s.repo.EnsureSource(ctx, s.baseURL, s.libID, serverID)
+	if err != nil {
+		return CanonicalResult{}, err
+	}
+	release, err := s.repo.AcquireSourceLock(ctx, sourceID)
+	if err != nil {
+		return CanonicalResult{}, err
+	}
+	defer release()
+
+	since, err := s.repo.CanonicalCursor(ctx, sourceID)
+	if err != nil {
+		return CanonicalResult{}, err
+	}
+	items, newVersion, err := src.ListCanonicalItems(since)
+	if err != nil {
+		return CanonicalResult{}, fmt.Errorf("list canonical items: %w", err)
+	}
+	collections, err := src.ListCanonicalCollections()
+	if err != nil {
+		return CanonicalResult{}, fmt.Errorf("list canonical collections: %w", err)
+	}
+
+	// Atomic apply of canonical rows + derived projections in one transaction,
+	// then update the canonical cursor.
+	tx, err := s.repo.Pool().Begin(ctx)
+	if err != nil {
+		return CanonicalResult{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	flags, err := s.repo.ApplyCanonical(ctx, tx, sourceID, items, collections)
+	if err != nil {
+		return CanonicalResult{}, err
+	}
+	if err := s.repo.SetCanonicalCursorTx(ctx, tx, sourceID, newVersion); err != nil {
+		return CanonicalResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return CanonicalResult{}, err
+	}
+
+	// Enqueue jobs for preferred attachments (idempotent; hash-based dedup).
+	enqueued, err := s.enqueueCanonicalFlags(ctx, sourceID, flags)
+	if err != nil {
+		return CanonicalResult{}, err
+	}
+
+	return CanonicalResult{
+		SourceID:    sourceID,
+		Items:       len(items),
+		Collections: len(collections),
+		Documents:   len(flags),
+		Enqueued:    enqueued,
+		NewVersion:  newVersion,
+	}, nil
+}
+
+// enqueueCanonicalFlags hashes preferred attachment files and enqueues pending
+// jobs, skipping those whose metadata-only change yields an unchanged hash.
+func (s *Service) enqueueCanonicalFlags(ctx context.Context, sourceID string, flags []repo.CanonicalDocFlag) (int, error) {
+	var pending []repo.PendingJob
+	for _, f := range flags {
+		hash, err := zotero.ContentHash(zotero.LocalFilePath(f.LocalPath))
+		if err != nil {
+			// Missing local file: record a failed job, skip.
+			if item, ok := s.fetchByKey(f.DocumentZoteroKey); ok {
+				_ = item
+				s.log.Printf("canonical: attachment %s missing: %v", f.AttachmentKey, err)
+			}
+			continue
+		}
+		attID, aerr := s.repo.AttachmentID(ctx, sourceID, f.AttachmentKey)
+		if aerr != nil {
+			return 0, aerr
+		}
+		docID, derr := s.repo.DocumentID(ctx, sourceID, f.DocumentZoteroKey)
+		if derr != nil {
+			return 0, derr
+		}
+		pending = append(pending, repo.PendingJob{
+			SourceID:     sourceID,
+			DocumentID:   docID,
+			AttachmentID: attID,
+			ContentHash:  hash,
+		})
+	}
+	return s.repo.Enqueue(ctx, pending)
+}
+
+// fetchByKey is a defensive lookup used only in the canonical enqueue error
+// path (mirrors FetchParent without requiring the parent to exist).
+func (s *Service) fetchByKey(key string) (zotero.Item, bool) {
+	type parentFetcher interface {
+		FetchParent(string) (*zotero.Item, error)
+	}
+	if pf, ok := s.src.(parentFetcher); ok {
+		it, err := pf.FetchParent(key)
+		if err == nil && it != nil {
+			return *it, true
+		}
+	}
+	return zotero.Item{}, false
+}

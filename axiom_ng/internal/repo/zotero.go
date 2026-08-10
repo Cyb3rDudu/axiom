@@ -22,6 +22,9 @@ type Repo struct {
 // New builds a Repo from an existing pool.
 func New(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 
+// Pool returns the underlying pgx pool (used by canonical sync orchestration).
+func (r *Repo) Pool() *pgxpool.Pool { return r.pool }
+
 // EnsureSource returns the id of a zotero_sources row for the given base URL
 // and library, creating it if absent (upsert on the unique pair).
 func (r *Repo) EnsureSource(ctx context.Context, baseURL, libraryID, serverID string) (string, error) {
