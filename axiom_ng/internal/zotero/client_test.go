@@ -94,10 +94,11 @@ func TestListPDFItemsGroupsAttachments(t *testing.T) {
 	defer srv.Close()
 
 	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
-	got, _, err := api.ListPDFItems(0)
+	res, err := api.ListPDFItems(0)
 	if err != nil {
 		t.Fatalf("ListPDFItems: %v", err)
 	}
+	got := res.Items
 	if len(got) != 1 {
 		t.Fatalf("got %d items, want 1 (BOOK1 has attachments)", len(got))
 	}

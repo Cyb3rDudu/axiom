@@ -36,12 +36,12 @@ func TestListPDFItemsCursorNeverFallsBelowSince(t *testing.T) {
 	defer srv.Close()
 
 	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
-	_, newVersion, err := api.ListPDFItems(179)
+	res, err := api.ListPDFItems(179)
 	if err != nil {
 		t.Fatalf("ListPDFItems: %v", err)
 	}
-	if newVersion != 181 {
-		t.Fatalf("newVersion = %d, want 181 (from header)", newVersion)
+	if res.NewVersion != 181 {
+		t.Fatalf("newVersion = %d, want 181 (from header)", res.NewVersion)
 	}
 	if !strings.Contains(lastSince, "179") {
 		t.Fatalf("since query = %q, want 179", lastSince)
@@ -78,10 +78,12 @@ func TestListPDFItemsFullSync(t *testing.T) {
 	defer srv.Close()
 
 	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
-	listed, ver, err := api.ListPDFItems(0)
+	res, err := api.ListPDFItems(0)
 	if err != nil {
 		t.Fatalf("ListPDFItems: %v", err)
 	}
+	listed := res.Items
+	ver := res.NewVersion
 	if ver != 5 {
 		t.Fatalf("version = %d, want 5", ver)
 	}
@@ -138,10 +140,12 @@ func TestListPDFItemsDeltaReconstructsParentOnAttachmentChange(t *testing.T) {
 	defer srv.Close()
 
 	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
-	listed, ver, err := api.ListPDFItems(100)
+	res, err := api.ListPDFItems(100)
 	if err != nil {
 		t.Fatalf("ListPDFItems: %v", err)
 	}
+	listed := res.Items
+	ver := res.NewVersion
 	if ver != 110 {
 		t.Fatalf("version = %d, want 110", ver)
 	}
@@ -177,7 +181,7 @@ func TestListPDFItemsErrorsWhenReconstructionFails(t *testing.T) {
 	defer srv.Close()
 
 	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
-	_, _, err := api.ListPDFItems(100)
+	_, err := api.ListPDFItems(100)
 	if err == nil {
 		t.Fatal("expected error when children reconstruction fails; cursor must not advance")
 	}

@@ -254,14 +254,22 @@ func (a *LocalAPI) ListCollections() ([]Collection, error) {
 // The returned version is taken from the Last-Modified-Version header and is
 // never allowed to fall below `since`, so a delta response that turns up no
 // items still advances (or at least never rewinds) the sync cursor.
-func (a *LocalAPI) ListPDFItems(since int64) ([]Item, int64, error) {
+func (a *LocalAPI) ListPDFItems(since int64) (ListResult, error) {
+	result, err := a.listItems(since)
+	if err != nil {
+		return ListResult{}, err
+	}
+	return result, nil
+}
+
+func (a *LocalAPI) listItems(since int64) (ListResult, error) {
 	q := url.Values{}
 	if since > 0 {
 		q.Set("since", fmt.Sprintf("%d", since))
 	}
 	raw, headerVersion, err := a.getItemsWithVersion(q)
 	if err != nil {
-		return nil, 0, err
+		return ListResult{}, err
 	}
 
 	// Cursor: trust the server's Last-Modified-Version, and never fall below
@@ -272,10 +280,13 @@ func (a *LocalAPI) ListPDFItems(since int64) ([]Item, int64, error) {
 	}
 
 	// Decode the raw objects and reconstruct complete documents (parents with
-	// their current children) from those touched by this response.
-	parents, parentOf, err := a.completeItems(raw, since)
+	// their current children) from those touched by this response. affectedKeys
+	// is every parent key touched by the delta (incl. parents that now have no
+	// processable attachment), used to scope reconciliation. deletedKeys is the
+	// set of parents Zotero reports removed during reconstruction.
+	parents, parentOf, affectedKeys, deletedKeys, err := a.completeItems(raw, since)
 	if err != nil {
-		return nil, 0, err
+		return ListResult{}, err
 	}
 
 	items := make([]Item, 0, len(parents))
@@ -304,7 +315,12 @@ func (a *LocalAPI) ListPDFItems(since int64) ([]Item, int64, error) {
 			Attachments: atts,
 		})
 	}
-	return items, newVersion, nil
+	return ListResult{
+		Items:        items,
+		AffectedKeys: uniqueKeys(affectedKeys),
+		DeletedKeys:  uniqueKeys(deletedKeys),
+		NewVersion:   newVersion,
+	}, nil
 }
 
 // completeItems decodes the raw delta response and returns complete documents.
@@ -317,10 +333,11 @@ type decodedItem struct {
 	item *zoteroItemData
 }
 
-func (a *LocalAPI) completeItems(raw []zoteroObject, since int64) ([]decodedItem, map[string][]Attachment, error) {
+func (a *LocalAPI) completeItems(raw []zoteroObject, since int64) ([]decodedItem, map[string][]Attachment, []string, []string, error) {
 	changedParents := map[string]bool{}
 	var parents []decodedItem
 	parentOf := map[string][]Attachment{}
+	deletedKeys := []string{}
 
 	addAttachment := func(obj zoteroObject, data *zoteroItemData) {
 		// Every attachment marks its parent as touched, including attachments
@@ -351,13 +368,15 @@ func (a *LocalAPI) completeItems(raw []zoteroObject, since int64) ([]decodedItem
 	// For an incremental sync we must reconstruct complete documents. Gather
 	// the full item lists for each touched parent (parent item + children).
 	if since > 0 {
-		return a.reconstructParents(changedParents, parents, parentOf)
+		reconstructed, atts, aff, del, err := a.reconstructParents(changedParents, parents, parentOf)
+		return reconstructed, atts, aff, del, err
 	}
-
 	// Full sync: raw already contains every parent and attachment. Build the
-	// attachment map and parents list directly from the raw response.
+	// attachment map and parents list directly from the raw response. Every
+	// parent key seen is affected (the whole source is reconciled).
 	var rawParents []decodedItem
 	rawAtts := map[string][]Attachment{}
+	affected := make([]string, 0, len(rawParents))
 	for _, obj := range raw {
 		var data zoteroItemData
 		if err := json.Unmarshal(obj.Data, &data); err != nil {
@@ -377,11 +396,13 @@ func (a *LocalAPI) completeItems(raw []zoteroObject, since int64) ([]decodedItem
 				LocalPath:   obj.Links.Enclosure.Href,
 			}
 			rawAtts[data.ParentItem] = append(rawAtts[data.ParentItem], att)
+			affected = append(affected, data.ParentItem)
 			continue
 		}
 		rawParents = append(rawParents, decodedItem{obj: obj, item: &data})
+		affected = append(affected, data.Key)
 	}
-	return rawParents, rawAtts, nil
+	return rawParents, rawAtts, uniqueKeys(affected), deletedKeys, nil
 }
 
 // reconstructParents loads the complete parent + children for each touched key
@@ -389,15 +410,21 @@ func (a *LocalAPI) completeItems(raw []zoteroObject, since int64) ([]decodedItem
 // full parent document and its current attachments. A parent that no longer
 // exists (404) is skipped; any other failure is returned so the caller does
 // not advance the sync cursor over an incompletely reconstructed delta.
-func (a *LocalAPI) reconstructParents(changed map[string]bool, parents []decodedItem, parentOf map[string][]Attachment) ([]decodedItem, map[string][]Attachment, error) {
+func (a *LocalAPI) reconstructParents(changed map[string]bool, parents []decodedItem, parentOf map[string][]Attachment) ([]decodedItem, map[string][]Attachment, []string, []string, error) {
+	affected := make([]string, 0, len(changed))
+	deleted := []string{}
 	for key := range changed {
+		affected = append(affected, key)
 		children, err := a.getChildren(key)
 		if err != nil {
 			var se *StatusError
 			if errors.As(err, &se) && se.Status == http.StatusNotFound {
-				continue // parent was deleted; nothing to enqueue for it
+				// Parent was deleted in Zotero; record it so the sync can mark
+				// its document and attachments as removed.
+				deleted = append(deleted, key)
+				continue
 			}
-			return parents, parentOf, fmt.Errorf("reconstruct children of %s: %w", key, err)
+			return parents, parentOf, affected, deleted, fmt.Errorf("reconstruct children of %s: %w", key, err)
 		}
 		for _, obj := range children {
 			var data zoteroItemData
@@ -423,17 +450,19 @@ func (a *LocalAPI) reconstructParents(changed map[string]bool, parents []decoded
 		if err != nil {
 			var se *StatusError
 			if errors.As(err, &se) && se.Status == http.StatusNotFound {
-				continue // parent deleted
+				deleted = append(deleted, key)
+				continue
 			}
-			return parents, parentOf, fmt.Errorf("reconstruct parent %s: %w", key, err)
+			return parents, parentOf, affected, deleted, fmt.Errorf("reconstruct parent %s: %w", key, err)
 		}
 		if p == nil {
-			// Attachment-type or empty item; nothing to enqueue.
+			// Attachment-type or empty item; nothing to enqueue, but still an
+			// affected parent so reconciliation can clear its attachments.
 			continue
 		}
 		parents = append(parents, *p)
 	}
-	return parents, parentOf, nil
+	return parents, parentOf, affected, deleted, nil
 }
 
 // fetchItem returns a single item (parent) envelope, or (nil, nil) if it is
@@ -457,6 +486,45 @@ func (a *LocalAPI) fetchItem(key string) (*decodedItem, error) {
 		return nil, nil
 	}
 	return &decodedItem{obj: obj, item: &data}, nil
+}
+
+// ListDeletedKeys returns the zotero keys of items currently in the trash,
+// which represents items the user removed from the library. The library
+// version from the Last-Modified-Version header is returned so the cursor can
+// advance even when nothing else changed.
+func (a *LocalAPI) ListDeletedKeys(since int64) ([]string, int64, error) {
+	q := url.Values{"format": {"json"}, "limit": {"100"}}
+	if since > 0 {
+		q.Set("since", fmt.Sprintf("%d", since))
+	}
+	path := a.libraryID + "/items/trash"
+	resp, err := a.get(path, q)
+	if err != nil {
+		// Some Zotero versions do not expose a trash endpoint; treat that as
+		// "no deletions" rather than aborting the sync.
+		var se *StatusError
+		if errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusNotImplemented) {
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	version := versionHeader(resp.Header.Get("Last-Modified-Version"))
+	var trash []struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&trash); err != nil {
+		// Failed to decode (e.g. not JSON); treat as no deletions to stay
+		// resilient, but do not fabricate data.
+		return nil, version, nil
+	}
+	keys := make([]string, 0, len(trash))
+	for _, it := range trash {
+		if it.Key != "" {
+			keys = append(keys, it.Key)
+		}
+	}
+	return keys, version, nil
 }
 
 // ResolveAttachmentPath returns the local filesystem path of an attachment.
@@ -502,3 +570,21 @@ func cloneValues(v url.Values) url.Values {
 	}
 	return out
 }
+
+// uniqueKeys returns the input keys with duplicates removed, preserving first
+// occurrence order.
+func uniqueKeys(keys []string) []string {
+	seen := make(map[string]struct{}, len(keys))
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	return out
+}
+
+// DedupKeys is the exported form of uniqueKeys, used by the sync layer.
+func DedupKeys(keys []string) []string { return uniqueKeys(keys) }
