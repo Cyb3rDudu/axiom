@@ -66,6 +66,7 @@ type Tag struct {
 // Attachment is a concrete file (PDF/EPUB) belonging to an Item.
 type Attachment struct {
 	Key         string `json:"key"`
+	Version     int64  `json:"version"`
 	ParentKey   string `json:"parentKey"`
 	ContentType string `json:"contentType"`
 	LinkMode    string `json:"linkMode"`

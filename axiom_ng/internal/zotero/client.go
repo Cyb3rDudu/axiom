@@ -226,6 +226,7 @@ func (a *LocalAPI) ListPDFItems(since int64) ([]Item, int64, error) {
 			}
 			att := Attachment{
 				Key:         data.Key,
+				Version:     data.Version,
 				ParentKey:   data.ParentItem,
 				ContentType: data.ContentType,
 				LinkMode:    data.LinkMode,
