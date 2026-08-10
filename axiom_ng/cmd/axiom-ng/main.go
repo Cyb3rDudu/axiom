@@ -5,9 +5,12 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
 
@@ -22,5 +25,10 @@ func main() {
 		logger.Printf("Zotero local API reachable: server-id=%s", id)
 	}
 
-	logger.Printf("listening on :%d", cfg.APIPort)
+	addr := ":" + strconv.Itoa(cfg.APIPort)
+	srv := server.New(addr, server.CheckZotero(src), logger)
+	logger.Printf("listening on %s", addr)
+	if err := http.ListenAndServe(addr, srv); err != nil {
+		logger.Fatalf("http server: %v", err)
+	}
 }
