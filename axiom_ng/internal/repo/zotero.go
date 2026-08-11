@@ -38,8 +38,11 @@ func (r *Repo) EnsureSource(ctx context.Context, baseURL, libraryID, serverID st
 	return id, nil
 }
 
-// lockKey derives a stable bigint advisory-lock key from a source UUID so two
-// concurrent syncs of the same source are serialised.
+// lockKey derives a stable bigint advisory-lock key from a source UUID. The same
+// key coordinates both the canonical sync (session-level pg_advisory_lock) and
+// the claim (transaction-level pg_advisory_xact_lock); session and transaction
+// advisory locks on the same key share one lock namespace and therefore exclude
+// each other, serializing claim vs sync for a source.
 func lockKey(sourceID string) int64 {
 	// Use the last 8 bytes of the UUID string's hash-like value; good enough
 	// for a per-source lock and avoids any collision-sensitive hashing lib.

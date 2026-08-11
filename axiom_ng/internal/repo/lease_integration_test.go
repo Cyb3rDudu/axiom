@@ -193,26 +193,20 @@ func (lr *leaseRepo) seed(t *testing.T, spec seedSpec, jobStatus string, maxAtte
 	return attachmentID, jobID
 }
 
-// seedExtraJob inserts a second ingest_jobs row referencing the SAME attachment
-// as an existing job (reading its source/document/attachment FKs). force selects
-// force_rebuild. This is used to create multiple force jobs for one attachment.
-func (lr *leaseRepo) seedExtraJob(t *testing.T, refJobID string, force bool) string {
+// seedExtraForceJob copies an existing job's source/document/attachment/hash and
+// inserts an ADDITIONAL force-rebuild job for the same attachment. Used to create
+// multiple force jobs for one attachment (allowed: the partial unique idempotency
+// index only applies to force_rebuild=false rows).
+func (lr *leaseRepo) seedExtraForceJob(t *testing.T, refJobID string) string {
 	t.Helper()
 	ctx := context.Background()
-	var srcID, docID, attID, hash *string
-	if err := lr.pool.QueryRow(ctx, `
-		SELECT source_id::text, document_id::text, attachment_id::text, content_hash
-		FROM ingest_jobs WHERE id=$1`, refJobID).Scan(&srcID, &docID, &attID, &hash); err != nil {
-		t.Fatal(err)
-	}
-	if srcID == nil || docID == nil || attID == nil {
-		t.Fatalf("ref job %s lacks FK projections", refJobID)
-	}
 	var jobID string
 	if err := lr.pool.QueryRow(ctx, `
 		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, max_attempts, force_rebuild)
-		VALUES ($1,$2,$3,$4,'pending',3,$5) RETURNING id::text`, *srcID, *docID, *attID, hash, force).Scan(&jobID); err != nil {
-		t.Fatalf("insert extra job: %v", err)
+		SELECT source_id, document_id, attachment_id, content_hash, 'pending', 3, true
+		FROM ingest_jobs WHERE id=$1
+		RETURNING id::text`, refJobID).Scan(&jobID); err != nil {
+		t.Fatalf("insert extra force job: %v", err)
 	}
 	return jobID
 }

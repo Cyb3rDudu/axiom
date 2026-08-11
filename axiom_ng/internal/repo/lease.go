@@ -3,8 +3,10 @@
 // axiom-ng owns all durable state; the processor only computes.
 //
 // Claim, obsolete-terminalization, lease-exhaustion, cancellation-terminalization
-// and frozen-input freeze all happen in one short transaction. Every post-claim
-// mutation is fenced by job_id + worker_id + lease_token and returns
+// and frozen-input freeze for a claimed job happen within one candidate's
+// transaction; each obsolete skip COMMITS its own transaction before the next
+// candidate is examined (so no source locks are held across candidates). Every
+// post-claim mutation is fenced by job_id + worker_id + lease_token and returns
 // ErrLostLease when the caller no longer owns a valid, unexpired lease.
 //
 // Time handling: worker-owned fence PREDICATES compare against clock_timestamp()
@@ -89,23 +91,24 @@ type execer interface {
 // conservative and replaced by real config in the dispatcher (Gate 2).
 const DefaultLeaseDuration = 120 * time.Second
 
-// ClaimNextJob atomically claims the oldest eligible ingest job for the worker,
-// terminalizing stale jobs first, all in one transaction.
+// ClaimNextJob atomically claims the oldest eligible ingest job for the worker.
 //
-// The one transaction:
-//  1. Terminalizes cancel-requested pending jobs (->cancelled) and expired
-//     claimed/processing jobs at attempt exhaustion (->failed/LEASE_EXHAUSTED)
-//     and expired cancel-requested jobs (->cancelled).
-//  2. Scans for a claimable candidate with FOR UPDATE SKIP LOCKED (FIFO),
-//     skipping obsolete candidates (deleted/unpreferred/hash-stale) by marking
-//     them skipped in-tx.
+// Each candidate attempt runs in its own short transaction:
+//  1. Terminalizes cancel-requested / expired-exhausted / exhausted-pending rows
+//     once on the first attempt
+//  2. Scans for a claimable candidate with FOR UPDATE SKIP LOCKED (FIFO);
+//     obsolete candidates (deleted/unpreferred/hash-stale) are marked skipped
+//     and that skip's transaction is COMMITTED immediately, releasing the
+//     per-source advisory lock + dependency row locks before examining the next
+//     candidate (so a claim never holds one source's locks while taking another
+//     source's - no cross-source claimer deadlock).
 //  3. Freezes the immutable input snapshot (built from the locked current
 //     source/document/attachment state) plus the processing profile and
 //     idempotency key if not already frozen (reclaims keep stored values).
 //  4. Increments attempt, assigns a fresh lease_token and owner, and commits.
 //
-// Returns (nil, nil) when nothing is claimable now. Errors are transactional:
-// any failure rolls back the whole pass including all skips/terminalizations.
+// Returns (nil, nil) when nothing is claimable now. An error aborts the *current*
+// candidate's transaction; earlier committed skips remain durable.
 func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob, error) {
 	if opts.WorkerID == "" {
 		return nil, errors.New("claim: worker id is required")
@@ -117,6 +120,7 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 	leaseSec := int(leaseDur.Seconds())
 
 	skipped := 0
+	first := true
 	for {
 		// A fresh transaction per candidate attempt. Each obsolete skip COMMITS its
 		// own transaction, which releases the source advisory + row locks held by
@@ -127,9 +131,15 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			return nil, err
 		}
 
-		if err := r.terminalizeStale(ctx, tx); err != nil {
-			tx.Rollback(ctx)
-			return nil, err
+		// Terminalization only needs to run once per claim call; running it on
+		// every candidate attempt across a large obsolete-drain would re-issue the
+		// broad UPDATEs unnecessarily.
+		if first {
+			if err := r.terminalizeStale(ctx, tx); err != nil {
+				tx.Rollback(ctx)
+				return nil, err
+			}
+			first = false
 		}
 
 		cand, err := claimCandidate(ctx, tx)
@@ -386,9 +396,11 @@ type zoteroAttachRow struct {
 //
 // Deadlock avoidance: BEFORE locking any dependency row the claim takes the same
 // per-source advisory lock the canonical sync holds for its whole run
-// (pg_advisory_xact_lock on lockKey(sourceID)). Only one of a claim or a sync for
-// that source is then active at a time, so the claim can never deadlock against
-// the sync's item->document write order; it simply waits. Dependency rows are
+// (pg_advisory_xact_lock on lockKey(sourceID); session and transaction advisory
+// locks on the same key share one namespace and exclude each other). Only one of
+// a claim or a sync for that source is then active at a time, so the claim can
+// never deadlock against the sync's item->document write order; it simply waits.
+// Dependency rows are
 // then locked in a fixed order (source -> document -> attachment -> canonical
 // item).
 //

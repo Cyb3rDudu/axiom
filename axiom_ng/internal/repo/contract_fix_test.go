@@ -353,8 +353,8 @@ func TestForceRebuildIdempotencyDistinct(t *testing.T) {
 		sourceBaseURL: "http://localhost:44", libraryID: "users/0",
 		docKey: "X1", attKey: "X1", contentHash: h("sha256:x1"), preferred: true,
 	}, "pending", 3) // jNorm is the single non-force job
-	jForce1 := lr.seedExtraJob(t, jNorm, true) // first force job, same attachment
-	jForce2 := lr.seedExtraJob(t, jNorm, true) // second force job, same attachment
+	jForce1 := lr.seedExtraForceJob(t, jNorm) // first force job, same attachment
+	jForce2 := lr.seedExtraForceJob(t, jNorm) // second force job, same attachment
 
 	cjN := lr.claim(t, defaultClaim("worker-a")) // FIFO: jNorm first (non-force)
 	if cjN == nil || cjN.JobID != jNorm {
