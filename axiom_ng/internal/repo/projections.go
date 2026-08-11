@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 	"github.com/jackc/pgx/v5"
@@ -108,18 +107,18 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 	var out fullProjections
 	for _, parentKey := range parentOrder {
 		p := parents[parentKey]
-		if isBibliographic(p.nm.ItemType) && p.deleted {
-			// Deleted parent: deactivate its document + attachments projections.
+		projectable := isProjectable(p.nm.ItemType) && !p.deleted
+		if !projectable {
+			// Deleted parent OR type no longer projectable (e.g. book -> note):
+			// deactivate any stale document + attachment projections so a former
+			// book does not keep an active, preferred projection after becoming
+			// a note. No-ops when no projection existed.
 			if err := r.deactivateDocument(ctx, tx, sourceID, parentKey); err != nil {
 				return fullProjections{}, err
 			}
 			if err := r.deactivateDocumentAttachments(ctx, tx, sourceID, parentKey); err != nil {
 				return fullProjections{}, err
 			}
-			continue
-		}
-		if p.deleted || !isBibliographic(p.nm.ItemType) {
-			// Non-bibliographic (e.g. note top-level) or deleted: no projection.
 			continue
 		}
 		// Preferred only from ACTIVE attachment items (deleted ones are excluded),
@@ -168,9 +167,14 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 				SourceID: sourceID, DocumentID: docID, AttachmentID: attIDs[pref.Key], ContentHash: fin.Hash,
 			})
 		} else {
+			code, msg, retryable := "FILE_NOT_FOUND", "local file missing", false
+			if fin.ErrCode != "" {
+				code, msg = fin.ErrCode, fin.ErrMsg
+				retryable = fin.Retryable
+			}
 			out.failed = append(out.failed, FailedJob{
 				SourceID: sourceID, DocumentID: docID, AttachmentID: attIDs[pref.Key],
-				ErrorCode: "FILE_NOT_FOUND", ErrorMessage: "local file missing", Retryable: false,
+				ErrorCode: code, ErrorMessage: msg, Retryable: retryable,
 			})
 		}
 		out.flags = append(out.flags, CanonicalDocFlag{DocumentZoteroKey: parentKey, AttachmentKey: pref.Key, LocalPath: pref.LocalPath})
@@ -179,48 +183,21 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 }
 
 // preferredActive picks the preferred attachment from ACTIVE (not deleted)
-// attachment items, deterministically: order processable attachments stably
-// (PDF first, then EPUB), preserving sort order by key. Uses only
-// item_type='attachment' rows already filtered into atts.
+// attachment items. It filters out deleted attachments, sorts the remaining by
+// key for a deterministic order, then reuses the central
+// zotero.PreferredAttachment selection (PDF over EPUB; detects
+// application/epub, application/epub+zip, vendor MIME, and .epub filename).
 func preferredActive(atts []zotero.Attachment, deleted map[string]attMeta) *zotero.Attachment {
-	type cand struct {
-		key      string
-		content  string
-		filename string
-		pref     int // 0 invalid, 1 epub, 2 pdf
-	}
-	var cands []cand
+	var active []zotero.Attachment
 	for _, a := range atts {
-		meta, ok := deleted[a.Key]
-		if ok && meta.deleted {
+		if meta, ok := deleted[a.Key]; ok && meta.deleted {
 			continue // deleted attachments are never preferred
 		}
-		if a.ContentType != "application/pdf" && !strings.HasSuffix(strings.ToLower(a.Filename), ".epub") {
-			continue
-		}
-		p := 1
-		if a.ContentType == "application/pdf" {
-			p = 2
-		}
-		cands = append(cands, cand{key: a.Key, content: a.ContentType, filename: a.Filename, pref: p})
+		active = append(active, a)
 	}
-	// Sort: PDF (2) before EPUB (1), then by key for determinism.
-	sort.SliceStable(cands, func(i, j int) bool {
-		if cands[i].pref != cands[j].pref {
-			return cands[i].pref > cands[j].pref
-		}
-		return cands[i].key < cands[j].key
-	})
-	if len(cands) == 0 {
-		return nil
-	}
-	for _, a := range atts {
-		if a.Key == cands[0].key {
-			ac := a
-			return &ac
-		}
-	}
-	return nil
+	// Deterministic order: the central selector takes the first processable match.
+	sort.SliceStable(active, func(i, j int) bool { return active[i].Key < active[j].Key })
+	return zotero.PreferredAttachment(active)
 }
 
 // deactivateDocumentAttachments marks all attachment projections of a document

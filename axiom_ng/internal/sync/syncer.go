@@ -428,21 +428,38 @@ func statFile(path string) bool {
 }
 
 func (s *Service) statAndHash(fi repo.AttachmentFileInfo) repo.AttachmentFileInfo {
-	if !fi.Exists {
-		return repo.AttachmentFileInfo{LocalPath: fi.LocalPath, Exists: false}
-	}
 	info, err := os.Stat(fi.LocalPath)
-	if err != nil || !info.Mode().IsRegular() {
-		return repo.AttachmentFileInfo{LocalPath: fi.LocalPath, Exists: false}
+	if err != nil {
+		return classifyFileError(fi.LocalPath, err, nil)
+	}
+	if !info.Mode().IsRegular() {
+		return repo.AttachmentFileInfo{LocalPath: fi.LocalPath, Exists: false,
+			ErrCode: "FILE_NOT_FOUND", ErrMsg: "not a regular file", Retryable: false}
 	}
 	hash, herr := zotero.ContentHash(fi.LocalPath)
 	if herr != nil {
-		return repo.AttachmentFileInfo{LocalPath: fi.LocalPath, Exists: false}
+		return classifyFileError(fi.LocalPath, herr, info)
 	}
 	return repo.AttachmentFileInfo{
 		LocalPath: fi.LocalPath, Exists: true, Hash: hash,
 		FileSize: info.Size(), MtimeMS: info.ModTime().UnixMilli(),
 	}
+}
+
+// classifyFileError maps a concrete os.Stat/read error onto FILE_NOT_FOUND
+// (absent, non-retryable) or IO_ERROR (permission / transient I/O, retryable)
+// so a temporary failure is not permanently dropped from the job queue.
+func classifyFileError(path string, err error, info os.FileInfo) repo.AttachmentFileInfo {
+	base := repo.AttachmentFileInfo{LocalPath: path, Exists: false}
+	if info != nil {
+		base.FileSize = info.Size()
+	}
+	if os.IsNotExist(err) {
+		return repo.AttachmentFileInfo{LocalPath: path, Exists: false,
+			ErrCode: "FILE_NOT_FOUND", ErrMsg: fmt.Sprintf("file missing: %s", path), Retryable: false}
+	}
+	return repo.AttachmentFileInfo{LocalPath: path, Exists: false,
+		ErrCode: "IO_ERROR", ErrMsg: fmt.Sprintf("read file %s: %v", path, err), Retryable: true}
 }
 
 func itemLocalPathFromEnv(env []byte) string {

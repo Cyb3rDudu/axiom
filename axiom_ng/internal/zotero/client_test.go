@@ -163,3 +163,57 @@ func TestResolveAttachmentPath(t *testing.T) {
 		t.Errorf("got %q, want %q", got, fileURI)
 	}
 }
+
+// TestListDeletedKeysMergesTrashAndPermanent verifies ListDeletedKeys merges the
+// /items/trash feed (currently-trashed, rich details) with the permanent
+// /deleted feed (keys), deduplicating by key. This covers the case where an
+// item is trashed and purged between two syncs: it appears only in /deleted,
+// not in the live trash.
+func TestListDeletedKeysMergesTrashAndPermanent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Last-Modified-Version", "42")
+		switch r.URL.Path {
+		case "/users/0/items/trash":
+			// Today's live trash: only T1 (T2 was already purged).
+			json.NewEncoder(w).Encode([]map[string]any{
+				{"key": "T1", "data": map[string]any{"key": "T1", "itemType": "book"}},
+			})
+		case "/users/0/deleted":
+			// Permanent deletions since last sync: T2 (gone from trash) + D1.
+			json.NewEncoder(w).Encode(map[string]any{
+				"collections": []string{"C9"},
+				"items":       []string{"T2", "D1"},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
+	events, version, err := api.ListDeletedKeys(40)
+	if err != nil {
+		t.Fatalf("ListDeletedKeys: %v", err)
+	}
+	if version != 42 {
+		t.Errorf("version = %d, want 42", version)
+	}
+	got := map[string]bool{}
+	for _, e := range events {
+		got[e.Key] = true
+	}
+	// T1: live trash, T2: permanent /deleted, D1: permanent /deleted.
+	for _, k := range []string{"T1", "T2", "D1"} {
+		if !got[k] {
+			t.Errorf("missing deleted event for %s", k)
+		}
+	}
+	if len(events) != 3 {
+		t.Errorf("expected exactly 3 deduplicated events, got %d", len(events))
+	}
+	// The purge-without-trash-sighting case is the key regression: T2 must be
+	// deleted even though it is absent from both the delta and the live trash.
+	if !got["T2"] {
+		t.Error("permanently-deleted key T2 must produce a delete event")
+	}
+}

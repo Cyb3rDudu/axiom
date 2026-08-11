@@ -689,11 +689,47 @@ func (a *LocalAPI) fetchItem(key string) (*decodedItem, error) {
 	return &decodedItem{obj: obj, item: &data}, nil
 }
 
-// ListDeletedKeys returns the items Zotero reports as removed (currently: the
-// trash feed), structured so a single deleted attachment is distinguished from
-// a deleted parent document. It paginates and propagates decode errors so the
-// sync aborts rather than advancing its cursor over unverifiable deletions.
+// ListDeletedKeys returns the items Zotero reports as removed, structured so a
+// single deleted attachment is distinguished from a deleted parent document. It
+// merges two sources and deduplicates by key:
+//   - /items/trash?since=      – items currently in the trash (rich details)
+//   - /deleted?since=          – items permanently deleted (trashed and purged)
+//
+// Merging both guarantees a mirror can't stay active for an item that was
+// trashed and purged between two syncs (it appears in neither the normal delta
+// nor the live trash, but is listed by /deleted). The trash event (which has
+// item type + parent) wins for the same key. Responses are paginated and decode
+// errors abort the sync rather than advancing its cursor over unverifiable
+// deletions.
 func (a *LocalAPI) ListDeletedKeys(since int64) ([]DeleteEvent, int64, error) {
+	allEvents, trashVersion, err := a.listTrashedKeys(since)
+	if err != nil {
+		return nil, 0, err
+	}
+	deletedKeys, delVersion, err := a.listPermanentlyDeletedKeys(since)
+	if err != nil {
+		return nil, 0, err
+	}
+	version := trashVersion
+	if delVersion > version {
+		version = delVersion
+	}
+	// Merge + dedup: trash-rich entries win; /deleted adds permanent deletions
+	// that are no longer present in the trash.
+	seen := map[string]bool{}
+	for _, ev := range allEvents {
+		seen[ev.Key] = true
+	}
+	for _, k := range deletedKeys {
+		if seen[k] {
+			continue
+		}
+		allEvents = append(allEvents, DeleteEvent{Key: k})
+	}
+	return allEvents, version, nil
+}
+
+func (a *LocalAPI) listTrashedKeys(since int64) ([]DeleteEvent, int64, error) {
 	var allEvents []DeleteEvent
 	version := int64(0)
 	start := 0
@@ -751,6 +787,34 @@ func (a *LocalAPI) ListDeletedKeys(since int64) ([]DeleteEvent, int64, error) {
 		start += len(trash)
 	}
 	return allEvents, version, nil
+}
+
+// listPermanentlyDeletedKeys returns the keys of items permanently deleted
+// (trashed and purged) since <version>, via the documented GET /deleted feed.
+func (a *LocalAPI) listPermanentlyDeletedKeys(since int64) ([]string, int64, error) {
+	path := a.libraryID + "/deleted"
+	q := url.Values{}
+	if since > 0 {
+		q.Set("since", fmt.Sprintf("%d", since))
+	}
+	resp, err := a.get(path, q)
+	if err != nil {
+		var se *StatusError
+		if errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusNotImplemented) {
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+	version := versionHeader(resp.Header.Get("Last-Modified-Version"))
+	var body struct {
+		Items []string `json:"items"`
+	}
+	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&body)
+	resp.Body.Close()
+	if decodeErr != nil {
+		return nil, 0, fmt.Errorf("zotero /deleted decode: %w", decodeErr)
+	}
+	return body.Items, version, nil
 }
 
 // FetchParent reconstructs a single parent document (with its current children)

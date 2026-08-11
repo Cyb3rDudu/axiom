@@ -14,13 +14,17 @@ import (
 
 // AttachmentFileInfo holds pre-computed (pre-transaction) file facts for an
 // attachment, used to write preferred/hash/stats and craft ingest jobs. Ids are
-// resolved inside the transaction.
+// resolved inside the transaction. When a file cannot be processed, ErrCode
+// distinguishes FILE_NOT_FOUND (absent) from a retryable IO_ERROR.
 type AttachmentFileInfo struct {
 	LocalPath string
 	Exists    bool
 	Hash      string
 	FileSize  int64
 	MtimeMS   int64
+	ErrCode   string
+	ErrMsg    string
+	Retryable bool
 }
 
 // CanonicalApplyResult summarises an atomic canonical apply.
@@ -143,6 +147,14 @@ func (r *Repo) writeJobsTx(ctx context.Context, tx pgx.Tx, sourceID string, pend
 			return 0, 0, err
 		}
 		inserted += int(tag.RowsAffected())
+		// A pending job means the file is processable again: any prior failed job
+		// for this attachment is now resolved, so a later real failure can create
+		// a fresh failed job instead of being masked by a stale one.
+		if _, err := tx.Exec(ctx, `UPDATE ingest_jobs
+			SET resolved_at=now(), updated_at=now()
+			WHERE attachment_id=$1 AND status='failed' AND resolved_at IS NULL`, p.AttachmentID); err != nil {
+			return 0, 0, err
+		}
 	}
 	failedWritten := 0
 	for _, f := range failed {
@@ -154,10 +166,11 @@ func (r *Repo) writeJobsTx(ctx context.Context, tx pgx.Tx, sourceID string, pend
 		if f.Retryable {
 			maxAt = 3
 		}
-		// Idempotent: do not stack duplicate failed jobs for the same attachment.
+		// Idempotent only against an UNRESOLVED identical failure; a historical
+		// (resolved) failure must not suppress a new error event.
 		var existing bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (
-			SELECT 1 FROM ingest_jobs WHERE attachment_id=$1 AND status='failed' AND error_code=$2
+			SELECT 1 FROM ingest_jobs WHERE attachment_id=$1 AND status='failed' AND error_code=$2 AND resolved_at IS NULL
 		)`, f.AttachmentID, code).Scan(&existing); err != nil {
 			return 0, 0, err
 		}
@@ -212,16 +225,18 @@ func itemLinkMode(data json.RawMessage) string {
 	return d.LinkMode
 }
 
-// isBibliographic reports whether a canonical item type may become a document
-// projection.
-func isBibliographic(itemType string) bool {
+// isProjectable reports whether a canonical item type may become a document
+// projection. Rather than maintaining an incomplete allow-list, every top-level
+// item type is projectable EXCEPT the known non-document types (which have
+// neither bibliographic metadata nor a processable file). Scientific types that
+// carry a PDF/EPUB attachment — document, dataset, presentation, computerProgram,
+// interview, patent, case, etc. — are therefore projected and enqueued.
+func isProjectable(itemType string) bool {
 	switch itemType {
-	case "book", "bookSection", "journalArticle", "conferencePaper", "report",
-		"thesis", "preprint", "magazineArticle", "newspaperArticle", "encyclopediaArticle",
-		"dictionaryEntry", "standard", "manuscript", "webpage":
-		return true
-	default:
+	case "note", "attachment", "annotation":
 		return false
+	default:
+		return true
 	}
 }
 
