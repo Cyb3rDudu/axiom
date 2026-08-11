@@ -18,11 +18,12 @@ func containsStr(s, sub string) bool { return strings.Contains(s, sub) }
 // canonicalFake implements zotero.Source + the canonicalFetcher capability for
 // RunCanonical, returning a fixed set of items and collections.
 type canonicalFake struct {
-	serverID    string
-	baseURL     string
-	items       []zotero.CanonicalItem
-	collections []zotero.CanonicalCollection
-	version     int64
+	serverID     string
+	baseURL      string
+	items        []zotero.CanonicalItem
+	deleteEvents []zotero.DeleteEvent
+	collections  []zotero.CanonicalCollection
+	version      int64
 }
 
 func (c *canonicalFake) ServerID() string { return c.serverID }
@@ -37,8 +38,13 @@ func (c *canonicalFake) ListDeletedKeys(since int64) ([]zotero.DeleteEvent, int6
 }
 func (c *canonicalFake) ResolveAttachmentPath(key string) (string, error) { return "", nil }
 func (c *canonicalFake) FetchParent(key string) (*zotero.Item, error)     { return nil, nil }
-func (c *canonicalFake) ListCanonicalItems(since int64) ([]zotero.CanonicalItem, int64, error) {
-	return c.items, c.version, nil
+func (c *canonicalFake) ListCanonicalItems(since int64) (zotero.CanonicalBatch, error) {
+	return zotero.CanonicalBatch{
+		FullSnapshot: since == 0,
+		Items:        c.items,
+		DeleteEvents: c.deleteEvents,
+		NewVersion:   c.version,
+	}, nil
 }
 func (c *canonicalFake) ListCanonicalCollections() ([]zotero.CanonicalCollection, error) {
 	return c.collections, nil

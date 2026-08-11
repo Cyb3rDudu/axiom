@@ -273,17 +273,20 @@ func TestCanonicalItemsLosslessRoundtrip(t *testing.T) {
 	defer srv.Close()
 
 	api := NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
-	items, ver, err := api.ListCanonicalItems(0)
+	batch, err := api.ListCanonicalItems(0)
 	if err != nil {
 		t.Fatalf("ListCanonicalItems: %v", err)
 	}
-	if ver != 7 {
-		t.Errorf("version = %d, want 7", ver)
+	if batch.NewVersion != 7 {
+		t.Errorf("version = %d, want 7", batch.NewVersion)
 	}
-	if len(items) != 1 {
-		t.Fatalf("got %d items, want 1", len(items))
+	if !batch.FullSnapshot {
+		t.Errorf("since==0 must be a full snapshot")
 	}
-	it := items[0]
+	if len(batch.Items) != 1 {
+		t.Fatalf("got %d items, want 1", len(batch.Items))
+	}
+	it := batch.Items[0]
 	if it.Key != "B1" || it.ItemType != "book" || it.Version != 3 {
 		t.Errorf("dims: key=%s type=%s ver=%d", it.Key, it.ItemType, it.Version)
 	}

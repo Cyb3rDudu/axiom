@@ -1,0 +1,263 @@
+// Atomic canonical apply: in ONE transaction writes canonical rows, applies
+// deletions, derives projections from the full active zotero_items state,
+// updates memberships, writes pending/failed jobs and the cursor.
+package repo
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/jackc/pgx/v5"
+)
+
+// AttachmentFileInfo holds pre-computed (pre-transaction) file facts for an
+// attachment, used to write preferred/hash/stats and craft ingest jobs. Ids are
+// resolved inside the transaction.
+type AttachmentFileInfo struct {
+	LocalPath string
+	Exists    bool
+	Hash      string
+	FileSize  int64
+	MtimeMS   int64
+}
+
+// CanonicalApplyResult summarises an atomic canonical apply.
+type CanonicalApplyResult struct {
+	Flags               []CanonicalDocFlag
+	Enqueued            int
+	FailedJobs          int
+	DocumentProjections int
+}
+
+// ApplyCanonicalBatch atomically applies a canonical batch. markMissing of
+// absent items only happens when batch.FullSnapshot is true (since==0);
+// incremental batches never infer deletions from absence. Explicit
+// deleteEvents are applied by resolving each key against documents or
+// attachments. Projections are derived from the complete active state of
+// zotero_items (not the delta). Pending and failed jobs plus the cursor are
+// written in the same transaction via the caller-provided tx.
+func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID string, batch zotero.CanonicalBatch, collections []zotero.CanonicalCollection, files map[string]AttachmentFileInfo) (CanonicalApplyResult, error) {
+	var res CanonicalApplyResult
+
+	// 1. Upsert canonical items (version guarded).
+	presentKeys := make([]string, 0, len(batch.Items))
+	for _, it := range batch.Items {
+		if err := r.upsertCanonicalItem(ctx, tx, sourceID, it); err != nil {
+			return res, err
+		}
+		presentKeys = append(presentKeys, it.Key)
+	}
+	// 2. Mark missing items only on a full snapshot.
+	if batch.FullSnapshot {
+		if err := r.markCanonicalItemsMissing(ctx, tx, sourceID, presentKeys); err != nil {
+			return res, err
+		}
+	}
+	// 3. Absent from a full snapshot's canonical items are deleted; for a delta
+	// only the deleteEvents are applied.
+	if err := r.applyCanonicalDeleteEvents(ctx, tx, sourceID, batch.DeleteEvents); err != nil {
+		return res, err
+	}
+
+	// 4. Collections.
+	presentCols := make([]string, 0, len(collections))
+	for _, c := range collections {
+		if err := r.upsertCanonicalCollection(ctx, tx, sourceID, c); err != nil {
+			return res, err
+		}
+		presentCols = append(presentCols, c.Key)
+	}
+	if batch.FullSnapshot {
+		if err := r.markCanonicalCollectionsMissing(ctx, tx, sourceID, presentCols); err != nil {
+			return res, err
+		}
+	}
+
+	// 5. Memberships for collections referenced by active items.
+	if err := r.rebuildMemberships(ctx, tx, sourceID); err != nil {
+		return res, err
+	}
+
+	// 6. Derive projections from the full active state.
+	proj, err := r.deriveFullProjections(ctx, tx, sourceID, files)
+	if err != nil {
+		return res, err
+	}
+	res.Flags = proj.flags
+	res.DocumentProjections = len(proj.flags)
+
+	// 7. Pending + failed jobs in the same transaction.
+	enqueued, failed, err := r.writeJobsTx(ctx, tx, sourceID, proj.pending, proj.failed)
+	if err != nil {
+		return res, err
+	}
+	res.Enqueued = enqueued
+	res.FailedJobs = failed
+
+	return res, nil
+}
+
+// applyCanonicalDeleteEvents resolves each deleted key against documents or
+// attachments: a document deletion removes the parent + attachments; a single
+// attachment deletion removes only that file.
+func (r *Repo) applyCanonicalDeleteEvents(ctx context.Context, tx pgx.Tx, sourceID string, events []zotero.DeleteEvent) error {
+	for _, ev := range events {
+		if ev.Key == "" {
+			continue
+		}
+		var isDoc bool
+		_ = tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM zotero_items WHERE source_id=$1 AND zotero_key=$2 AND deleted=false AND parent_key IS NULL)`,
+			sourceID, ev.Key).Scan(&isDoc)
+		if isDoc {
+			// Parent document deleted: remove doc-level item + its children.
+			if _, err := tx.Exec(ctx, `UPDATE zotero_items SET deleted=true, updated_at=now()
+				WHERE source_id=$1 AND (zotero_key=$2 OR parent_key=$2)`, sourceID, ev.Key); err != nil {
+				return fmt.Errorf("canonical delete parent %s: %w", ev.Key, err)
+			}
+			continue
+		}
+		// Single attachment (or note) deletion.
+		if _, err := tx.Exec(ctx, `UPDATE zotero_items SET deleted=true, updated_at=now()
+			WHERE source_id=$1 AND zotero_key=$2 AND deleted=false`, sourceID, ev.Key); err != nil {
+			return fmt.Errorf("canonical delete attachment %s: %w", ev.Key, err)
+		}
+	}
+	return nil
+}
+
+// writeJobsTx writes pending and failed ingest jobs within the given
+// transaction (ON CONFLICT DO NOTHING dedup for pending; failed jobs are
+// inserted). Returns (enqueued new jobs, failed jobs written).
+func (r *Repo) writeJobsTx(ctx context.Context, tx pgx.Tx, sourceID string, pending []PendingJob, failed []FailedJob) (int, int, error) {
+	inserted := 0
+	for _, p := range pending {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
+			VALUES ($1,$2,$3,$4,'pending',false)
+			ON CONFLICT (attachment_id, content_hash) WHERE force_rebuild=false DO NOTHING
+		`, p.SourceID, p.DocumentID, p.AttachmentID, p.ContentHash)
+		if err != nil {
+			return 0, 0, err
+		}
+		inserted += int(tag.RowsAffected())
+	}
+	failedWritten := 0
+	for _, f := range failed {
+		code := f.ErrorCode
+		if code == "" {
+			code = "IO_ERROR"
+		}
+		maxAt := 0
+		if f.Retryable {
+			maxAt = 3
+		}
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, status, error_code, error_message, max_attempts)
+			VALUES ($1,$2,$3,'failed',$4,$5,$6)
+		`, f.SourceID, f.DocumentID, f.AttachmentID, code, f.ErrorMessage, maxAt)
+		if err != nil {
+			return 0, 0, err
+		}
+		failedWritten += int(tag.RowsAffected())
+	}
+	return inserted, failedWritten, nil
+}
+
+func itemContentType(data json.RawMessage) string {
+	var d struct {
+		ContentType string `json:"contentType"`
+	}
+	_ = json.Unmarshal(data, &d)
+	return d.ContentType
+}
+
+func itemFilename(data json.RawMessage) string {
+	var d struct {
+		Filename string `json:"filename"`
+	}
+	_ = json.Unmarshal(data, &d)
+	return d.Filename
+}
+
+func itemLocalPath(env json.RawMessage) string {
+	var e struct {
+		Links struct {
+			Enclosure struct {
+				Href string `json:"href"`
+			} `json:"enclosure"`
+		} `json:"links"`
+	}
+	_ = json.Unmarshal(env, &e)
+	return e.Links.Enclosure.Href
+}
+
+// isBibliographic reports whether a canonical item type may become a document
+// projection.
+func isBibliographic(itemType string) bool {
+	switch itemType {
+	case "book", "bookSection", "journalArticle", "conferencePaper", "report",
+		"thesis", "preprint", "magazineArticle", "newspaperArticle", "encyclopediaArticle",
+		"dictionaryEntry", "standard", "manuscript", "webpage":
+		return true
+	default:
+		return false
+	}
+}
+
+// rebuildMemberships (re)writes zotero_item_collections from active items'
+// data.collections keys against the canonical collection keys.
+func (r *Repo) rebuildMemberships(ctx context.Context, tx pgx.Tx, sourceID string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM zotero_item_collections
+		WHERE item_id IN (SELECT id FROM zotero_items WHERE source_id=$1)`, sourceID); err != nil {
+		return fmt.Errorf("clear memberships: %w", err)
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT i.id, i.raw_data
+		FROM zotero_items i
+		WHERE i.source_id=$1 AND i.deleted=false AND i.parent_key IS NULL`, sourceID)
+	if err != nil {
+		return fmt.Errorf("query active parents for memberships: %w", err)
+	}
+	defer rows.Close()
+	type pair struct{ itemID, colID, colKey string }
+	var pairs []pair
+	var ids []string
+	var keys []string
+	for rows.Next() {
+		var id string
+		var raw []byte
+		if err := rows.Scan(&id, &raw); err != nil {
+			return err
+		}
+		var d struct {
+			Collections []string `json:"collections"`
+		}
+		_ = json.Unmarshal(raw, &d)
+		for _, ck := range d.Collections {
+			pairs = append(pairs, pair{itemID: id, colKey: ck})
+			ids = append(ids, id)
+			keys = append(keys, ck)
+		}
+	}
+	// Resolve collection keys to ids.
+	for _, p := range pairs {
+		var colID string
+		if err := tx.QueryRow(ctx, `SELECT id::text FROM zotero_collections WHERE source_id=$1 AND zotero_key=$2`,
+			sourceID, p.colKey).Scan(&colID); err == nil {
+			p.colID = colID
+		}
+	}
+	for _, p := range pairs {
+		if p.colID == "" {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO zotero_item_collections (item_id, collection_id)
+			VALUES ($1,$2) ON CONFLICT DO NOTHING`, p.itemID, p.colID); err != nil {
+			return fmt.Errorf("insert membership: %w", err)
+		}
+	}
+	return nil
+}

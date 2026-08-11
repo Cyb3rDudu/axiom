@@ -5,10 +5,12 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
@@ -275,7 +277,7 @@ func (s *Service) mirror(ctx context.Context, sourceID string, items []zotero.It
 // canonical listings (the LocalAPI). RunCanonical only runs when the source
 // supports it.
 type canonicalFetcher interface {
-	ListCanonicalItems(since int64) ([]zotero.CanonicalItem, int64, error)
+	ListCanonicalItems(since int64) (zotero.CanonicalBatch, error)
 	ListCanonicalCollections() ([]zotero.CanonicalCollection, error)
 }
 
@@ -320,7 +322,7 @@ func (s *Service) RunCanonical(ctx context.Context) (CanonicalResult, error) {
 	if err != nil {
 		return CanonicalResult{}, err
 	}
-	items, newVersion, err := src.ListCanonicalItems(since)
+	batch, err := src.ListCanonicalItems(since)
 	if err != nil {
 		return CanonicalResult{}, fmt.Errorf("list canonical items: %w", err)
 	}
@@ -329,84 +331,110 @@ func (s *Service) RunCanonical(ctx context.Context) (CanonicalResult, error) {
 		return CanonicalResult{}, fmt.Errorf("list canonical collections: %w", err)
 	}
 
-	// Atomic apply of canonical rows + derived projections in one transaction,
-	// then update the canonical cursor.
+	// Pre-compute file facts (hash/size/mtime/existence) for every active
+	// attachment BEFORE opening the apply transaction, so no long DB
+	// transaction holds an open file handle. Missing files are recorded as
+	// failed jobs by the apply.
+	files, err := s.prepareAttachmentFiles(ctx, sourceID, batch.Items)
+	if err != nil {
+		return CanonicalResult{}, err
+	}
+
+	// One atomic transaction: canonical rows + deletions + projections +
+	// memberships + pending/failed jobs + cursor.
 	tx, err := s.repo.Pool().Begin(ctx)
 	if err != nil {
 		return CanonicalResult{}, err
 	}
 	defer tx.Rollback(ctx)
 
-	flags, err := s.repo.ApplyCanonical(ctx, tx, sourceID, items, collections)
+	applyRes, err := s.repo.ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files)
 	if err != nil {
 		return CanonicalResult{}, err
 	}
-	if err := s.repo.SetCanonicalCursorTx(ctx, tx, sourceID, newVersion); err != nil {
+	if err := s.repo.SetCanonicalCursorTx(ctx, tx, sourceID, batch.NewVersion); err != nil {
 		return CanonicalResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return CanonicalResult{}, err
 	}
 
-	// Enqueue jobs for preferred attachments (idempotent; hash-based dedup).
-	enqueued, err := s.enqueueCanonicalFlags(ctx, sourceID, flags)
-	if err != nil {
-		return CanonicalResult{}, err
-	}
-
 	return CanonicalResult{
 		SourceID:    sourceID,
-		Items:       len(items),
+		Items:       len(batch.Items),
 		Collections: len(collections),
-		Documents:   len(flags),
-		Enqueued:    enqueued,
-		NewVersion:  newVersion,
+		Documents:   applyRes.DocumentProjections,
+		Enqueued:    applyRes.Enqueued,
+		NewVersion:  batch.NewVersion,
 	}, nil
 }
 
-// enqueueCanonicalFlags hashes preferred attachment files and enqueues pending
-// jobs, skipping those whose metadata-only change yields an unchanged hash.
-func (s *Service) enqueueCanonicalFlags(ctx context.Context, sourceID string, flags []repo.CanonicalDocFlag) (int, error) {
-	var pending []repo.PendingJob
-	for _, f := range flags {
-		hash, err := zotero.ContentHash(zotero.LocalFilePath(f.LocalPath))
-		if err != nil {
-			// Missing local file: record a failed job, skip.
-			if item, ok := s.fetchByKey(f.DocumentZoteroKey); ok {
-				_ = item
-				s.log.Printf("canonical: attachment %s missing: %v", f.AttachmentKey, err)
-			}
+// prepareAttachmentFiles hashes/stats the local file of every processable
+// attachment present in the batch items, keyed by attachment zotero key.
+func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, items []zotero.CanonicalItem) (map[string]repo.AttachmentFileInfo, error) {
+	out := map[string]repo.AttachmentFileInfo{}
+	for _, it := range items {
+		dims := zotero.ItemDims(it.Data)
+		if dims.ParentKey == "" || dims.ItemType != "attachment" {
 			continue
 		}
-		attID, aerr := s.repo.AttachmentID(ctx, sourceID, f.AttachmentKey)
-		if aerr != nil {
-			return 0, aerr
+		if !processableAttachment(it.Data) {
+			continue
 		}
-		docID, derr := s.repo.DocumentID(ctx, sourceID, f.DocumentZoteroKey)
-		if derr != nil {
-			return 0, derr
+		path := zotero.LocalFilePath(itemLocalPathFor(it))
+		fi := repo.AttachmentFileInfo{LocalPath: path}
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			fi.Exists = false
+			// Missing file recorded as failed job by the apply.
+			out[it.Key] = fi
+			continue
 		}
-		pending = append(pending, repo.PendingJob{
-			SourceID:     sourceID,
-			DocumentID:   docID,
-			AttachmentID: attID,
-			ContentHash:  hash,
-		})
+		if !info.Mode().IsRegular() {
+			out[it.Key] = fi
+			continue
+		}
+		hash, herr := zotero.ContentHash(path)
+		if herr != nil {
+			out[it.Key] = repo.AttachmentFileInfo{LocalPath: path, Exists: false}
+			continue
+		}
+		out[it.Key] = repo.AttachmentFileInfo{
+			LocalPath: path, Exists: true, Hash: hash,
+			FileSize: info.Size(), MtimeMS: info.ModTime().UnixMilli(),
+		}
 	}
-	return s.repo.Enqueue(ctx, pending)
+	return out, nil
 }
 
-// fetchByKey is a defensive lookup used only in the canonical enqueue error
-// path (mirrors FetchParent without requiring the parent to exist).
-func (s *Service) fetchByKey(key string) (zotero.Item, bool) {
-	type parentFetcher interface {
-		FetchParent(string) (*zotero.Item, error)
+func itemLocalPathFor(it zotero.CanonicalItem) string {
+	var e struct {
+		Links struct {
+			Enclosure struct {
+				Href string `json:"href"`
+			} `json:"enclosure"`
+		} `json:"links"`
 	}
-	if pf, ok := s.src.(parentFetcher); ok {
-		it, err := pf.FetchParent(key)
-		if err == nil && it != nil {
-			return *it, true
-		}
+	_ = json.Unmarshal(it.Envelope, &e)
+	return e.Links.Enclosure.Href
+}
+
+func processableAttachment(data json.RawMessage) bool {
+	return itemContentTypeOf(data) == "application/pdf" || hasEPUBSuffix(data)
+}
+
+func itemContentTypeOf(data json.RawMessage) string {
+	var d struct {
+		ContentType string `json:"contentType"`
 	}
-	return zotero.Item{}, false
+	_ = json.Unmarshal(data, &d)
+	return d.ContentType
+}
+
+func hasEPUBSuffix(data json.RawMessage) bool {
+	var d struct {
+		Filename string `json:"filename"`
+	}
+	_ = json.Unmarshal(data, &d)
+	return strings.HasSuffix(strings.ToLower(d.Filename), ".epub")
 }

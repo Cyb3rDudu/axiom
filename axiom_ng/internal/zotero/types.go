@@ -76,6 +76,18 @@ type CanonicalItem struct {
 	Data      json.RawMessage
 }
 
+// CanonicalBatch is the result of a canonical listing. FullSnapshot is true for
+// a since==0 (full) sync and signals the caller that absent items were truly
+// removed and can be marked deleted. For incremental batches FullSnapshot is
+// false and only DeleteEvents represent removals; the delta Items are upserted
+// without implying that anything not listed disappeared.
+type CanonicalBatch struct {
+	FullSnapshot bool
+	Items        []CanonicalItem
+	DeleteEvents []DeleteEvent
+	NewVersion   int64
+}
+
 // CanonicalCollection is a lossless mirror of a Zotero collection, including
 // its parent hierarchy.
 type CanonicalCollection struct {

@@ -24,19 +24,6 @@ func (r *Repo) CanonicalCursor(ctx context.Context, sourceID string) (int64, err
 	return v, nil
 }
 
-// SetCanonicalCursor advances the canonical sync cursor (monotonic).
-func (r *Repo) SetCanonicalCursor(ctx context.Context, sourceID string, version int64) error {
-	_, err := r.pool.Exec(ctx, `
-		UPDATE zotero_sources
-		SET canonical_last_modified_version = GREATEST(canonical_last_modified_version, $2)
-		WHERE id = $1
-	`, sourceID, version)
-	if err != nil {
-		return fmt.Errorf("set canonical cursor: %w", err)
-	}
-	return nil
-}
-
 // SetCanonicalCursorTx advances the canonical cursor within the caller's
 // transaction so the apply + cursor commit is atomic.
 func (r *Repo) SetCanonicalCursorTx(ctx context.Context, tx pgx.Tx, sourceID string, version int64) error {
@@ -49,35 +36,6 @@ func (r *Repo) SetCanonicalCursorTx(ctx context.Context, tx pgx.Tx, sourceID str
 		return fmt.Errorf("set canonical cursor (tx): %w", err)
 	}
 	return nil
-}
-
-// ApplyCanonical writes the canonical items + collections atomically with a
-// version guard and derives the normalized document/attachment projections. It
-// marks items/collections that disappeared from the current listing as deleted
-// and returns a flag per bibliographic parent whose preferred processable
-// attachment should be enqueued. Runs on the caller-provided transaction.
-func (r *Repo) ApplyCanonical(ctx context.Context, tx pgx.Tx, sourceID string, items []zotero.CanonicalItem, collections []zotero.CanonicalCollection) ([]CanonicalDocFlag, error) {
-	presentItemKeys := make([]string, 0, len(items))
-	for i := range items {
-		if err := r.upsertCanonicalItem(ctx, tx, sourceID, items[i]); err != nil {
-			return nil, err
-		}
-		presentItemKeys = append(presentItemKeys, items[i].Key)
-	}
-	if err := r.markCanonicalItemsMissing(ctx, tx, sourceID, presentItemKeys); err != nil {
-		return nil, err
-	}
-	presentColKeys := make([]string, 0, len(collections))
-	for _, c := range collections {
-		if err := r.upsertCanonicalCollection(ctx, tx, sourceID, c); err != nil {
-			return nil, err
-		}
-		presentColKeys = append(presentColKeys, c.Key)
-	}
-	if err := r.markCanonicalCollectionsMissing(ctx, tx, sourceID, presentColKeys); err != nil {
-		return nil, err
-	}
-	return r.deriveDocumentProjections(ctx, tx, sourceID, items)
 }
 
 func (r *Repo) upsertCanonicalItem(ctx context.Context, tx pgx.Tx, sourceID string, it zotero.CanonicalItem) error {

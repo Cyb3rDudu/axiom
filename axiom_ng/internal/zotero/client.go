@@ -255,24 +255,24 @@ func (d *canonicalDims) fromRaw(env json.RawMessage) bool {
 }
 
 // ListCanonicalItems returns every item (parent, attachment, note, annotation)
-// as a lossless mirror, honouring `since`. A since of 0 is a full snapshot.
-// Items with an older version than what the caller already stores are guarded
-// by the caller; this method just delivers the raw envelopes + extracted key/
-// version/type/parent dimensions.
-func (a *LocalAPI) ListCanonicalItems(since int64) ([]CanonicalItem, int64, error) {
+// losslessly for the canonical mirror, honouring `since`. A since of 0 is a
+// full snapshot (FullSnapshot=true); incrementals deliver only the changed
+// items (FullSnapshot=false). A non-decodable item envelope aborts the sync
+// rather than being silently skipped, so the mirror stays lossless.
+func (a *LocalAPI) ListCanonicalItems(since int64) (CanonicalBatch, error) {
 	q := url.Values{}
 	if since > 0 {
 		q.Set("since", fmt.Sprintf("%d", since))
 	}
 	raw, version, err := a.getItemsRaw(q)
 	if err != nil {
-		return nil, 0, err
+		return CanonicalBatch{}, err
 	}
 	items := make([]CanonicalItem, 0, len(raw))
 	for _, env := range raw {
 		var dims canonicalDims
 		if !dims.fromRaw(env) {
-			continue
+			return CanonicalBatch{}, fmt.Errorf("undecodable item envelope: %s", truncate(env, 200))
 		}
 		// Extract raw_data (the item's own data object).
 		var data json.RawMessage
@@ -293,7 +293,28 @@ func (a *LocalAPI) ListCanonicalItems(since int64) ([]CanonicalItem, int64, erro
 			Data:      data,
 		})
 	}
-	return items, version, nil
+	// Incremental deletions come from the trash feed.
+	var deletes []DeleteEvent
+	if since > 0 {
+		deletes, _, err = a.ListDeletedKeys(since)
+		if err != nil {
+			return CanonicalBatch{}, err
+		}
+	}
+	return CanonicalBatch{
+		FullSnapshot: since == 0,
+		Items:        items,
+		DeleteEvents: deletes,
+		NewVersion:   version,
+	}, nil
+}
+
+func truncate(b json.RawMessage, n int) string {
+	s := string(b)
+	if len(s) > n {
+		return s[:n] + "..."
+	}
+	return s
 }
 
 // ListCanonicalCollections returns all collections as lossless mirrors with
