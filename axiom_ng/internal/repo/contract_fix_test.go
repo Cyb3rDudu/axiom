@@ -90,7 +90,7 @@ func TestFrozenInputIsContractComplete(t *testing.T) {
 	lr.truncateFixtures(t)
 	attID, jobID := lr.seedWithCanonical(t, seedSpec{
 		sourceBaseURL: "http://localhost:40", libraryID: "users/0",
-		docKey: "U1", attKey: "U1", contentHash: h("sha256:u1"), preferred: true,
+		docKey: "UDOC", attKey: "UATT", contentHash: h("sha256:u1"), preferred: true,
 	}, 3)
 	cj := lr.claim(t, defaultClaim("worker-a"))
 	if cj == nil || cj.JobID != jobID {
@@ -110,14 +110,16 @@ func TestFrozenInputIsContractComplete(t *testing.T) {
 	if fi.Source.ServerID == nil || *fi.Source.ServerID != "srv-1" {
 		t.Errorf("source.server_id = %v, want srv-1", fi.Source.ServerID)
 	}
-	if fi.Document.ZoteroKey != "U1" || fi.Document.ZoteroVersion != 7 {
-		t.Errorf("document zotero identity = %s@%d, want U1@7", fi.Document.ZoteroKey, fi.Document.ZoteroVersion)
+	// Distinct document vs attachment keys: a cross-wired doc/att identity would
+	// be caught here.
+	if fi.Document.ZoteroKey != "UDOC" || fi.Document.ZoteroVersion != 7 {
+		t.Errorf("document zotero identity = %s@%d, want UDOC@7", fi.Document.ZoteroKey, fi.Document.ZoteroVersion)
 	}
 	if fi.Attachment.AttachmentID != attID {
 		t.Errorf("attachment id = %s", fi.Attachment.AttachmentID)
 	}
-	if fi.Attachment.ZoteroKey != "U1" || fi.Attachment.ZoteroVersion != 9 {
-		t.Errorf("attachment zotero identity = %s@%d, want U1@9", fi.Attachment.ZoteroKey, fi.Attachment.ZoteroVersion)
+	if fi.Attachment.ZoteroKey != "UATT" || fi.Attachment.ZoteroVersion != 9 {
+		t.Errorf("attachment zotero identity = %s@%d, want UATT@9", fi.Attachment.ZoteroKey, fi.Attachment.ZoteroVersion)
 	}
 	if fi.Attachment.ContentHash == nil || *fi.Attachment.ContentHash != "sha256:u1" {
 		t.Errorf("attachment.content_hash = %v", fi.Attachment.ContentHash)
@@ -129,14 +131,31 @@ func TestFrozenInputIsContractComplete(t *testing.T) {
 		t.Errorf("attachment.mtime_ms = %v", fi.Attachment.MtimeMS)
 	}
 
+	// The processing block carries the structured profile object (not a
+	// stringified string) and the derived hash.
+	var prof map[string]any
+	if err := json.Unmarshal(fi.Processing.Profile, &prof); err != nil {
+		t.Fatalf("processing.profile is not JSON: %v", err)
+	}
+	if prof["profile"] != "full-rag-v1" {
+		t.Errorf("processing.profile.profile = %v, want full-rag-v1", prof["profile"])
+	}
+	if fi.Processing.ForceRebuild {
+		t.Error("processing.force_rebuild should be false")
+	}
+	if fi.Processing.ProfileHash == "" {
+		t.Error("processing.profile_hash is empty")
+	}
+
+	// metadata_snapshot is the LOSSESS canonical raw_data: compare semantically
+	// against the full expected raw map (creators/tags/ISSN/edition/pages/date all
+	// preserved) and assert no normalized-only key leaked in that would indicate a
+	// merge implementation.
 	var ms map[string]any
 	if err := json.Unmarshal(fi.Document.MetadataSnapshot, &ms); err != nil {
 		t.Fatalf("decode metadata_snapshot: %v", err)
 	}
-	// The metadata_snapshot is the LOSSESS canonical raw_data, so it carries
-	// Zotero's own field names (date, DOI, ISSN, edition, pages) rather than the
-	// normalized projection names.
-	for key, want := range map[string]any{
+	want := map[string]any{
 		"title":     "Full Title",
 		"itemType":  "book",
 		"language":  "en",
@@ -144,19 +163,26 @@ func TestFrozenInputIsContractComplete(t *testing.T) {
 		"isbn":      "978-0-12345",
 		"DOI":       "10.1000/xyz",
 		"date":      "1843",
-	} {
-		if ms[key] != want {
-			t.Errorf("metadata[%s] = %q, want %q (lossless raw_data)", key, ms[key], want)
+		"edition":   "1",
+		"pages":     "1-10",
+		"ISSN":      "0000-0000",
+	}
+	for k, v := range want {
+		if ms[k] != v {
+			t.Errorf("metadata_snapshot[%s] = %q, want %q (lossless raw_data)", k, ms[k], v)
 		}
 	}
 	if ms["creators"] == nil {
-		t.Error("metadata_snapshot missing creators (with creatorType)")
+		t.Error("metadata_snapshot missing creators")
 	}
 	if ms["tags"] == nil || ms["collections"] == nil {
 		t.Error("metadata_snapshot missing tags/collections")
 	}
-	if ms["edition"] == nil || ms["pages"] == nil || ms["ISSN"] == nil {
-		t.Error("metadata_snapshot missing raw fields edition/pages/ISSN")
+	// The normalized projection columns use different key names (publication_year)
+	// and would only appear if the snapshot were merge-built. Their absence proves
+	// lossless raw_data was returned as-is.
+	if _, present := ms["publication_year"]; present {
+		t.Error("metadata_snapshot leaked a normalized-only key; not the lossless raw_data")
 	}
 }
 
@@ -319,33 +345,20 @@ func TestClaimWaitsForConcurrentAttachmentChange(t *testing.T) {
 func TestForceRebuildIdempotencyDistinct(t *testing.T) {
 	lr := openLeaseDB(t)
 	lr.truncateFixtures(t)
-	ctx := context.Background()
 
-	// Normal (non-force) job for attachment A1.
+	// One normal (non-force) job on an attachment, plus TWO force jobs for the
+	// SAME attachment (allowed: the partial unique idempotency index only applies
+	// to force_rebuild=false rows, and there is a single non-force job).
 	_, jNorm := lr.seed(t, seedSpec{
 		sourceBaseURL: "http://localhost:44", libraryID: "users/0",
 		docKey: "X1", attKey: "X1", contentHash: h("sha256:x1"), preferred: true,
-	}, "pending", 3)
+	}, "pending", 3) // jNorm is the single non-force job
+	jForce1 := lr.seedExtraJob(t, jNorm, true) // first force job, same attachment
+	jForce2 := lr.seedExtraJob(t, jNorm, true) // second force job, same attachment
 
-	// Two FORCE jobs for the SAME attachment A1 (allowed: the partial unique
-	// idempotency index only applies to force_rebuild=false rows).
-	_, jForce1 := lr.seed(t, seedSpec{
-		sourceBaseURL: "http://localhost:45", libraryID: "users/1",
-		docKey: "Y1", attKey: "Y1", contentHash: h("sha256:x1"), preferred: true,
-	}, "pending", 3)
-	_, jForce2 := lr.seed(t, seedSpec{
-		sourceBaseURL: "http://localhost:46", libraryID: "users/2",
-		docKey: "Y2", attKey: "Y2", contentHash: h("sha256:x1"), preferred: true,
-	}, "pending", 3)
-	for _, j := range []string{jForce1, jForce2} {
-		if _, err := lr.pool.Exec(ctx, `UPDATE ingest_jobs SET force_rebuild=true WHERE id=$1`, j); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	cjNorm := lr.claim(t, defaultClaim("worker-a"))
-	if cjNorm == nil || cjNorm.JobID != jNorm {
-		t.Fatalf("expected normal claim %s, got %v", jNorm, cjNorm)
+	cjN := lr.claim(t, defaultClaim("worker-a")) // FIFO: jNorm first (non-force)
+	if cjN == nil || cjN.JobID != jNorm {
+		t.Fatalf("expected normal claim %s, got %v", jNorm, cjN)
 	}
 	cjF1 := lr.claim(t, defaultClaim("worker-b"))
 	if cjF1 == nil || cjF1.JobID != jForce1 {
@@ -356,22 +369,23 @@ func TestForceRebuildIdempotencyDistinct(t *testing.T) {
 		t.Fatalf("expected forced claim %s, got %v", jForce2, cjF2)
 	}
 
-	if cjNorm.IdempotencyKey == nil || cjF1.IdempotencyKey == nil || cjF2.IdempotencyKey == nil {
+	if cjF1.IdempotencyKey == nil || cjF2.IdempotencyKey == nil || cjN.IdempotencyKey == nil {
 		t.Fatal("idempotency keys missing")
 	}
-	// Force vs normal must differ.
-	if *cjNorm.IdempotencyKey == *cjF1.IdempotencyKey {
+	// Force vs normal differ (force marker present/absent).
+	if *cjF1.IdempotencyKey == *cjN.IdempotencyKey {
 		t.Fatalf("force-rebuild idempotency key collides with normal job: %s", *cjF1.IdempotencyKey)
 	}
-	// Two force jobs for the SAME attachment/hash/profile must STILL differ (job_id
-	// disambiguates) - this is the regression guard for reusing an old result.
+	if strings.Contains(*cjN.IdempotencyKey, "force-") {
+		t.Fatalf("normal job idempotency key must not carry force marker: %s", *cjN.IdempotencyKey)
+	}
+	// Two FORCE jobs for the SAME attachment/hash/profile MUST differ: job_id is
+	// the disambiguator. If job_id were omitted, both would be ...:force-<same>
+	// and a rebuild would reuse an old processor result.
 	if *cjF1.IdempotencyKey == *cjF2.IdempotencyKey {
 		t.Fatalf("two force jobs for same attachment share idempotency key: %s", *cjF2.IdempotencyKey)
 	}
 	if !strings.Contains(*cjF1.IdempotencyKey, "force-") || !strings.Contains(*cjF2.IdempotencyKey, "force-") {
 		t.Fatalf("force-rebuild key lacks force marker: %s / %s", *cjF1.IdempotencyKey, *cjF2.IdempotencyKey)
-	}
-	if strings.Contains(*cjNorm.IdempotencyKey, "force-") {
-		t.Fatalf("normal job idempotency key must not carry force marker: %s", *cjNorm.IdempotencyKey)
 	}
 }

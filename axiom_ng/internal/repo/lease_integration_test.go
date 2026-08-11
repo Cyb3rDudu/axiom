@@ -193,6 +193,30 @@ func (lr *leaseRepo) seed(t *testing.T, spec seedSpec, jobStatus string, maxAtte
 	return attachmentID, jobID
 }
 
+// seedExtraJob inserts a second ingest_jobs row referencing the SAME attachment
+// as an existing job (reading its source/document/attachment FKs). force selects
+// force_rebuild. This is used to create multiple force jobs for one attachment.
+func (lr *leaseRepo) seedExtraJob(t *testing.T, refJobID string, force bool) string {
+	t.Helper()
+	ctx := context.Background()
+	var srcID, docID, attID, hash *string
+	if err := lr.pool.QueryRow(ctx, `
+		SELECT source_id::text, document_id::text, attachment_id::text, content_hash
+		FROM ingest_jobs WHERE id=$1`, refJobID).Scan(&srcID, &docID, &attID, &hash); err != nil {
+		t.Fatal(err)
+	}
+	if srcID == nil || docID == nil || attID == nil {
+		t.Fatalf("ref job %s lacks FK projections", refJobID)
+	}
+	var jobID string
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, max_attempts, force_rebuild)
+		VALUES ($1,$2,$3,$4,'pending',3,$5) RETURNING id::text`, *srcID, *docID, *attID, hash, force).Scan(&jobID); err != nil {
+		t.Fatalf("insert extra job: %v", err)
+	}
+	return jobID
+}
+
 func h(s string) *string { return &s }
 
 // defaultClaim returns a claim with a fixed profile so freeze assertions are

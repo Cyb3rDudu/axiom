@@ -116,44 +116,55 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 	}
 	leaseSec := int(leaseDur.Seconds())
 
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	if err := r.terminalizeStale(ctx, tx); err != nil {
-		return nil, err
-	}
-
 	skipped := 0
-	var excludedID *string
 	for {
-		cand, err := claimCandidate(ctx, tx, excludedID)
+		// A fresh transaction per candidate attempt. Each obsolete skip COMMITS its
+		// own transaction, which releases the source advisory + row locks held by
+		// loadAndLockState, so a claim never holds one source's advisory lock while
+		// trying the next source (which would let two claimers deadlock across A/B).
+		tx, err := r.pool.Begin(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if cand == nil {
-			break // nothing more claimable this pass
+
+		if err := r.terminalizeStale(ctx, tx); err != nil {
+			tx.Rollback(ctx)
+			return nil, err
 		}
 
-		// Lock and read the job's source/document/attachment/canonical rows in a
-		// fixed (deadlock-avoidant) order, then validate obsolescence against the
-		// LOCKED state so a snapshot is never built from a row that changed under
-		// us or from a mixed transaction snapshot.
+		cand, err := claimCandidate(ctx, tx)
+		if err != nil {
+			tx.Rollback(ctx)
+			return nil, err
+		}
+		if cand == nil {
+			// Nothing claimable now; persist any terminalizations and stop.
+			if err := tx.Commit(ctx); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		}
+
+		// Lock and read the job's source/document/attachment/canonical rows, then
+		// validate obsolescence against the LOCKED state so a snapshot is never
+		// built from a row that changed under us or a mixed transaction snapshot.
 		state, reason, err := r.loadAndLockState(ctx, tx, cand)
 		if err != nil {
+			tx.Rollback(ctx)
 			return nil, err
 		}
 		if reason != "" {
 			if err := r.markObsolete(ctx, tx, cand.id, reason); err != nil {
+				tx.Rollback(ctx)
+				return nil, err
+			}
+			// Commit the skip and release the source locks before the next candidate.
+			if err := tx.Commit(ctx); err != nil {
 				return nil, err
 			}
 			skipped++
-			id := cand.id
-			excludedID = &id
 			if skipped >= maxObsoleteSkips {
-				break
+				return nil, nil
 			}
 			continue
 		}
@@ -162,6 +173,7 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 		// then build the immutable FrozenInput from the locked state.
 		profileHash, err := canonicalProfile(opts.Profile)
 		if err != nil {
+			tx.Rollback(ctx)
 			return nil, err
 		}
 		idemKey := idempotencyKey(cand.id, state.attachment.id, state.attachment.contentHash, profileHash, cand.forceRebuild)
@@ -188,11 +200,13 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 		`, cand.id, opts.WorkerID, leaseSec, snapshot, opts.Profile, profileHash, idemKey).
 			Scan(&newAttempt, &tsToken)
 		if err != nil {
+			tx.Rollback(ctx)
 			return nil, fmt.Errorf("claim update: %w", err)
 		}
 
 		inputSnapshot, profile, storedHash, storedIdem, err := frozenFields(ctx, tx, cand.id)
 		if err != nil {
+			tx.Rollback(ctx)
 			return nil, err
 		}
 
@@ -215,13 +229,6 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			IdempotencyKey: storedIdem,
 		}, nil
 	}
-
-	// Nothing claimable: commit the batch of terminalizations/skips done in this
-	// pass so they are durable, then signal the caller to poll again.
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	return nil, nil
 }
 
 // terminalizeStale marks jobs that cannot proceed as terminal, exactly once, in
@@ -273,17 +280,11 @@ func (r *Repo) terminalizeStale(ctx context.Context, tx pgx.Tx) error {
 }
 
 // claimCandidate locks and returns the oldest still-claimable JOB (FOR UPDATE
-// OF j SKIP LOCKED) excluding a just-skipped id. It locks only the ingest_jobs
-// row; the dependent source/document/attachment/canonical rows are locked and
-// read separately by loadAndLockState in a fixed order. Returns (nil, nil) when
-// nothing is claimable.
-func claimCandidate(ctx context.Context, tx pgx.Tx, excludedID *string) (*candidate, error) {
-	filter := ""
-	args := []any{}
-	if excludedID != nil {
-		filter = ` AND j.id <> $1`
-		args = append(args, *excludedID)
-	}
+// OF j SKIP LOCKED). It locks only the ingest_jobs row; the dependent
+// source/document/attachment/canonical rows are locked and read separately by
+// loadAndLockState in a fixed order. Returns (nil, nil) when nothing is
+// claimable.
+func claimCandidate(ctx context.Context, tx pgx.Tx) (*candidate, error) {
 	sql := `
 		SELECT j.id::text, j.attempt, j.max_attempts, j.content_hash, j.force_rebuild,
 		       COALESCE(j.source_id::text, '') AS src_id,
@@ -296,13 +297,13 @@ func claimCandidate(ctx context.Context, tx pgx.Tx, excludedID *string) (*candid
 		  AND (
 		        (j.status='pending' AND (j.next_attempt_at IS NULL OR j.next_attempt_at<=now()))
 		     OR (j.status IN ('claimed','processing') AND j.lease_until IS NOT NULL AND j.lease_until<=now())
-		  )` + filter + `
+		  )
 		ORDER BY j.enqueued_at ASC
 		FOR UPDATE OF j SKIP LOCKED
 		LIMIT 1`
 
 	var c candidate
-	err := tx.QueryRow(ctx, sql, args...).Scan(
+	err := tx.QueryRow(ctx, sql).Scan(
 		&c.id, &c.attempt, &c.maxAttempts, &c.contentHash, &c.forceRebuild,
 		&c.sourceID, &c.documentID, &c.attachmentID)
 	if err == pgx.ErrNoRows {
@@ -360,10 +361,8 @@ type zoteroDocRow struct {
 	collections     json.RawMessage
 	metadata        map[string]any
 	deleted         bool
-	relativePath    *string
 	parentKey       *string
 	linkMode        *string
-	attachmentID    *string
 	rawData         json.RawMessage
 }
 
