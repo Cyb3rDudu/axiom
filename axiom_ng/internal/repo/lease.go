@@ -434,8 +434,10 @@ func (r *Repo) markObsolete(ctx context.Context, tx pgx.Tx, jobID, reason string
 
 // fencedUpdate runs an UPDATE whose $1,$2,$3 are job_id, claimed_by and
 // lease_token (the fencing predicate) and returns whether it affected a row.
-// Every post-claim mutation routes through this so a single zero-row guard
-// catches a lost lease for all callers. The expected-status filter is written
+// Most post-claim mutations route through this so a single zero-row guard
+// catches a lost lease for all callers; the two mutations that need a returned
+// outcome (ScheduleRetry) or a terminal-vs-pending decision handle the zero-row
+// case with their own QueryRow RETURNING. The expected-status filter is written
 // as SQL literals in each statement. `ex` may be the pool (autocommit) or a
 // caller-owned transaction (MarkCompletedTx).
 func (r *Repo) fencedUpdate(ctx context.Context, ex execer, sqlStmt string, ref LeaseRef, args ...any) (bool, error) {
@@ -654,13 +656,12 @@ func (r *Repo) RequestCancellation(ctx context.Context, jobID string) error {
 	return err
 }
 
-// ReleaseOrExpireLease clears the lease fields for a job owned by ref so an
-// in-flight job survives a graceful shutdown without being lost. When the job
 // ReleaseOrExpireLease clears the lease fields for an UNEXPIRED job owned by ref
-// so in-flight work survives a graceful shutdown. When the job has consumed its
-// max attempts it is terminalized to failed/RETRY_EXHAUSTED instead of being
-// returned to pending (a pending row at the attempt ceiling would be stranded, as
-// it can neither be claimed nor would normal retry push it further). Otherwise it
+// so in-flight work survives a graceful shutdown without being lost. When the job
+// has consumed its max attempts it is terminalized to failed/RETRY_EXHAUSTED
+// instead of being returned to pending (a pending row at the attempt ceiling
+// would be stranded, as it can neither be claimed nor would normal retry push it
+// further). Otherwise it returns to pending, due now.
 // returns to pending, due now.
 func (r *Repo) ReleaseOrExpireLease(ctx context.Context, ref LeaseRef) error {
 	ok, err := r.fencedUpdate(ctx, r.pool, `

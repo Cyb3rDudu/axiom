@@ -1100,6 +1100,40 @@ func TestExpiredLeaseIsLost(t *testing.T) {
 	}
 }
 
+// TestMarkCompletedUsesStatementTime proves the completion expiry fence is
+// evaluated at STATEMENT time (clock_timestamp), not transaction start. We begin
+// the completion transaction while the lease is still valid, then expire the
+// lease through a separate connection, then run MarkCompletedTx: a now()-based
+// fence (fixed at tx start) would see a valid lease and complete, whereas the
+// correct clock_timestamp()-based fence rejects it.
+func TestMarkCompletedUsesStatementTime(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	_, jobID := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:39", libraryID: "users/0",
+		docKey: "T1", attKey: "T1", contentHash: h("sha256:stmt"), preferred: true,
+	}, "pending", 3)
+	cj := lr.claim(t, defaultClaim("worker-a"))
+	if err := lr.rep.MarkProcessing(context.Background(), cj.LeaseRef); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	// Begin the completion transaction BEFORE the lease expires.
+	tx, err := lr.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Expire the lease through a separate connection while the tx is open.
+	lr.expire(t, jobID)
+
+	err = lr.rep.MarkCompletedTx(ctx, tx, cj.LeaseRef, "p", "1", "snap")
+	_ = tx.Rollback(ctx)
+	if !errors.Is(err, ErrLostLease) {
+		t.Fatalf("completion after in-tx expiry = %v, want ErrLostLease (statement-time fence)", err)
+	}
+}
+
 // TestNullableParentsTerminalizeToSkipped tests that legacy / broken FK rows are
 // terminalized to skipped (not a scan/transaction error), covering each FK
 // independently: attachment-only, document-only, and source-only missing.
@@ -1136,13 +1170,14 @@ func TestNullableParentsTerminalizeToSkipped(t *testing.T) {
 	// (c) source missing => PARENT_REMOVED.
 	jNoSrc := lr.seedPendingOnly(t, nil, &docID, &attID, 3)
 
-	// One claim pass must drain all three to skipped without error or claim.
-	for i := 0; i < 4; i++ {
-		cj := lr.claim(t, defaultClaim("worker-a"))
-		if cj != nil {
-			t.Fatalf("a NULL-parent job was claimed: %v", cj)
-		}
+	// One claim pass must drain all three (maxObsoleteSkips=100) to skipped without
+	// error or claim. A single call forces the whole queue behind the head to be
+	// cleaned in one pass.
+	cj := lr.claim(t, defaultClaim("worker-a"))
+	if cj != nil {
+		t.Fatalf("a NULL-parent job was claimed: %v", cj)
 	}
+	// The pass must have drained every one of the three fixtures.
 	for _, id := range []string{jNoAtt, jNoDoc, jNoSrc} {
 		r := lr.rowOf(t, id)
 		if r.status != "skipped" {
