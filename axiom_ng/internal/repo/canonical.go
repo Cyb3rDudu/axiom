@@ -39,6 +39,12 @@ func (r *Repo) SetCanonicalCursorTx(ctx context.Context, tx pgx.Tx, sourceID str
 }
 
 func (r *Repo) upsertCanonicalItem(ctx context.Context, tx pgx.Tx, sourceID string, it zotero.CanonicalItem) error {
+	// A parent item has no parent: store NULL (not an empty string) so
+	// parent_key IS NULL predicates select parents correctly.
+	var parentKey any
+	if it.ParentKey != "" {
+		parentKey = it.ParentKey
+	}
 	_, err := tx.Exec(ctx, `
 		INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -53,7 +59,7 @@ func (r *Repo) upsertCanonicalItem(ctx context.Context, tx pgx.Tx, sourceID stri
 			synced_at = now(),
 			updated_at = now()
 		WHERE EXCLUDED.zotero_version >= zotero_items.zotero_version
-	`, sourceID, it.Key, it.Version, it.ItemType, it.ParentKey, it.Envelope, it.Data)
+	`, sourceID, it.Key, it.Version, it.ItemType, parentKey, it.Envelope, it.Data)
 	if err != nil {
 		return fmt.Errorf("upsert canonical item %s: %w", it.Key, err)
 	}

@@ -208,28 +208,48 @@ func isBibliographic(itemType string) bool {
 }
 
 // rebuildMemberships (re)writes zotero_item_collections from active items'
-// data.collections keys against the canonical collection keys.
+// data.collections keys against the canonical collection keys. It loads the
+// collection key->id map up front so it does not issue nested queries while a
+// result set is open on the same transaction connection.
 func (r *Repo) rebuildMemberships(ctx context.Context, tx pgx.Tx, sourceID string) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM zotero_item_collections
 		WHERE item_id IN (SELECT id FROM zotero_items WHERE source_id=$1)`, sourceID); err != nil {
 		return fmt.Errorf("clear memberships: %w", err)
 	}
-	rows, err := tx.Query(ctx, `
+	// Collection key -> id map.
+	colMap := map[string]string{}
+	rows, err := tx.Query(ctx, `SELECT zotero_key, id::text FROM zotero_collections WHERE source_id=$1`, sourceID)
+	if err != nil {
+		return fmt.Errorf("query collections: %w", err)
+	}
+	for rows.Next() {
+		var k, id string
+		if err := rows.Scan(&k, &id); err != nil {
+			rows.Close()
+			return err
+		}
+		colMap[k] = id
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	parents, err := tx.Query(ctx, `
 		SELECT i.id, i.raw_data
 		FROM zotero_items i
-		WHERE i.source_id=$1 AND i.deleted=false AND i.parent_key IS NULL`, sourceID)
+		WHERE i.source_id=$1 AND i.deleted=false AND (i.parent_key IS NULL OR i.parent_key='')`, sourceID)
 	if err != nil {
 		return fmt.Errorf("query active parents for memberships: %w", err)
 	}
-	defer rows.Close()
-	type pair struct{ itemID, colID, colKey string }
-	var pairs []pair
-	var ids []string
-	var keys []string
-	for rows.Next() {
+	// Collect parent -> collection refs first (do not run nested queries on the
+	// transaction connection while a result set is open).
+	var refs []struct{ itemID, colID string }
+	for parents.Next() {
 		var id string
 		var raw []byte
-		if err := rows.Scan(&id, &raw); err != nil {
+		if err := parents.Scan(&id, &raw); err != nil {
+			parents.Close()
 			return err
 		}
 		var d struct {
@@ -237,25 +257,18 @@ func (r *Repo) rebuildMemberships(ctx context.Context, tx pgx.Tx, sourceID strin
 		}
 		_ = json.Unmarshal(raw, &d)
 		for _, ck := range d.Collections {
-			pairs = append(pairs, pair{itemID: id, colKey: ck})
-			ids = append(ids, id)
-			keys = append(keys, ck)
+			if colID, ok := colMap[ck]; ok {
+				refs = append(refs, struct{ itemID, colID string }{id, colID})
+			}
 		}
 	}
-	// Resolve collection keys to ids.
-	for _, p := range pairs {
-		var colID string
-		if err := tx.QueryRow(ctx, `SELECT id::text FROM zotero_collections WHERE source_id=$1 AND zotero_key=$2`,
-			sourceID, p.colKey).Scan(&colID); err == nil {
-			p.colID = colID
-		}
+	parents.Close()
+	if err := parents.Err(); err != nil {
+		return err
 	}
-	for _, p := range pairs {
-		if p.colID == "" {
-			continue
-		}
+	for _, ref := range refs {
 		if _, err := tx.Exec(ctx, `INSERT INTO zotero_item_collections (item_id, collection_id)
-			VALUES ($1,$2) ON CONFLICT DO NOTHING`, p.itemID, p.colID); err != nil {
+			VALUES ($1,$2) ON CONFLICT DO NOTHING`, ref.itemID, ref.colID); err != nil {
 			return fmt.Errorf("insert membership: %w", err)
 		}
 	}

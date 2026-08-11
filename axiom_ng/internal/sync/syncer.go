@@ -369,42 +369,83 @@ func (s *Service) RunCanonical(ctx context.Context) (CanonicalResult, error) {
 	}, nil
 }
 
-// prepareAttachmentFiles hashes/stats the local file of every processable
-// attachment present in the batch items, keyed by attachment zotero key.
+// prepareAttachmentFiles hashes/stats the local file of every ACTIVE attachment
+// currently in zotero_items (not just the batch delta), keyed by attachment
+// zotero key. Runs before the apply transaction so no file handle is held
+// across the DB transaction; missing files are recorded as failed jobs by the
+// apply.
 func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, items []zotero.CanonicalItem) (map[string]repo.AttachmentFileInfo, error) {
 	out := map[string]repo.AttachmentFileInfo{}
+	// Seed facts from the incoming (delta) items first.
 	for _, it := range items {
 		dims := zotero.ItemDims(it.Data)
 		if dims.ParentKey == "" || dims.ItemType != "attachment" {
 			continue
 		}
-		if !processableAttachment(it.Data) {
-			continue
-		}
 		path := zotero.LocalFilePath(itemLocalPathFor(it))
-		fi := repo.AttachmentFileInfo{LocalPath: path}
-		info, statErr := os.Stat(path)
-		if statErr != nil {
-			fi.Exists = false
-			// Missing file recorded as failed job by the apply.
-			out[it.Key] = fi
-			continue
-		}
-		if !info.Mode().IsRegular() {
-			out[it.Key] = fi
-			continue
-		}
-		hash, herr := zotero.ContentHash(path)
-		if herr != nil {
-			out[it.Key] = repo.AttachmentFileInfo{LocalPath: path, Exists: false}
-			continue
-		}
-		out[it.Key] = repo.AttachmentFileInfo{
-			LocalPath: path, Exists: true, Hash: hash,
-			FileSize: info.Size(), MtimeMS: info.ModTime().UnixMilli(),
-		}
+		out[dims.Key] = repo.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
 	}
-	return out, nil
+	// Then fill in every active attachment from the store so a no-op/empty delta
+	// does not lose the preferred file's hash/stats.
+	rows, err := s.repo.Pool().Query(ctx, `
+		SELECT zotero_key, raw_envelope::text
+		FROM zotero_items WHERE source_id=$1 AND deleted=false AND item_type='attachment'`, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, env string
+		if err := rows.Scan(&key, &env); err != nil {
+			return nil, err
+		}
+		if _, ok := out[key]; ok {
+			continue // already has batch info (subject to refresh below)
+		}
+		path := zotero.LocalFilePath(itemLocalPathFromEnv([]byte(env)))
+		out[key] = repo.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
+	}
+	// Hash/stat every attachment file (existing + newly added).
+	res := map[string]repo.AttachmentFileInfo{}
+	for key, fi := range out {
+		res[key] = s.statAndHash(fi)
+	}
+	return res, nil
+}
+
+func statFile(path string) bool {
+	i, err := os.Stat(path)
+	return err == nil && i.Mode().IsRegular()
+}
+
+func (s *Service) statAndHash(fi repo.AttachmentFileInfo) repo.AttachmentFileInfo {
+	if !fi.Exists {
+		return repo.AttachmentFileInfo{LocalPath: fi.LocalPath, Exists: false}
+	}
+	info, err := os.Stat(fi.LocalPath)
+	if err != nil || !info.Mode().IsRegular() {
+		return repo.AttachmentFileInfo{LocalPath: fi.LocalPath, Exists: false}
+	}
+	hash, herr := zotero.ContentHash(fi.LocalPath)
+	if herr != nil {
+		return repo.AttachmentFileInfo{LocalPath: fi.LocalPath, Exists: false}
+	}
+	return repo.AttachmentFileInfo{
+		LocalPath: fi.LocalPath, Exists: true, Hash: hash,
+		FileSize: info.Size(), MtimeMS: info.ModTime().UnixMilli(),
+	}
+}
+
+func itemLocalPathFromEnv(env []byte) string {
+	var e struct {
+		Links struct {
+			Enclosure struct {
+				Href string `json:"href"`
+			} `json:"enclosure"`
+		} `json:"links"`
+	}
+	_ = json.Unmarshal(env, &e)
+	return e.Links.Enclosure.Href
 }
 
 func itemLocalPathFor(it zotero.CanonicalItem) string {
