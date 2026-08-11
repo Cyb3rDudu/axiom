@@ -869,7 +869,7 @@ func TestMarkCompletedTxAtomic(t *testing.T) {
 	if r.completedAt != nil {
 		t.Fatal("rolled-back completion set completed_at")
 	}
-	// No processor/snapshot provenance may be recorded either.
+	// Processor/snapshot provenance must not be recorded either.
 	if r.processorName != nil || r.processorVersion != nil || r.snapshotID != nil {
 		t.Fatalf("rolled-back completion persisted processor/result state: name=%v ver=%v snap=%v",
 			r.processorName, r.processorVersion, r.snapshotID)
@@ -1422,7 +1422,7 @@ func TestFinalAttemptExhaustion(t *testing.T) {
 	}
 
 	// (d) terminalizeStale cleans an existing exhausted pending row EVEN with a
-	// non-NULL (already-elapsed retry) next_attempt_at, which is the realistic
+	// non-NULL next_attempt_at (here a future timetable), which is the realistic
 	// leftover from earlier retry/release paths. Restoring the defective
 	// 'next_attempt_at IS NULL' predicate would let this strand, so it is the
 	// regression guard for the broadened cleanup.
