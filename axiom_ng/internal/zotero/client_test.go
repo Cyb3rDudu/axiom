@@ -217,3 +217,66 @@ func TestListDeletedKeysMergesTrashAndPermanent(t *testing.T) {
 		t.Error("permanently-deleted key T2 must produce a delete event")
 	}
 }
+
+// fullCanonicalServer wires an httptest server with configurable Last-Modified-
+// Version per path and an optional delete-feed status, returning the API.
+func fullCanonicalServer(t *testing.T, itemVersion, trashVersion, deletedVersion int64, deletedStatus int) *LocalAPI {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/users/0/items":
+			w.Header().Set("Last-Modified-Version", fmt.Sprintf("%d", itemVersion))
+			json.NewEncoder(w).Encode([]map[string]any{itemObject("B1", "book", "", "A", nil)})
+		case "/users/0/items/trash":
+			w.Header().Set("Last-Modified-Version", fmt.Sprintf("%d", trashVersion))
+			json.NewEncoder(w).Encode([]map[string]any{})
+		case "/users/0/deleted":
+			w.Header().Set("Last-Modified-Version", fmt.Sprintf("%d", deletedVersion))
+			if deletedStatus != 0 {
+				w.WriteHeader(deletedStatus)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"items": []string{}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return NewLocalAPI(srv.URL, "users/0", WithHTTPClient(srv.Client()))
+}
+
+// TestCanonicalFallbackOnMissingDeletedFeed: when /deleted returns 501, an
+// incremental canonical sync must fall back to a FULL snapshot so deletions are
+// reconciled by item absence, and never report an incremental (unknown-deletion)
+// batch.
+func TestCanonicalFallbackOnMissingDeletedFeed(t *testing.T) {
+	api := fullCanonicalServer(t, 41, 41, 42, http.StatusNotImplemented)
+	b, err := api.ListCanonicalItems(5)
+	if err != nil {
+		t.Fatalf("ListCanonicalItems: %v", err)
+	}
+	if !b.FullSnapshot {
+		t.Error("missing /deleted feed must force FullSnapshot=true (reconcile-by-absence), got incremental")
+	}
+	if len(b.Items) < 1 {
+		t.Error("full-snapshot fallback must still deliver the items")
+	}
+	if b.NewVersion < 41 {
+		t.Errorf("NewVersion = %d, want >= 41 (item feed version)", b.NewVersion)
+	}
+}
+
+// TestCanonicalCursorIsMaxOfFeeds: the new cursor must be max(since,
+// itemsVersion, deletedVersion), not just the item feed version.
+func TestCanonicalCursorIsMaxOfFeeds(t *testing.T) {
+	api := fullCanonicalServer(t, 41, 41, 42, 0)
+	b, err := api.ListCanonicalItems(5)
+	if err != nil {
+		t.Fatalf("ListCanonicalItems: %v", err)
+	}
+	if b.NewVersion != 42 {
+		t.Errorf("NewVersion must be max(items=41, deleted=42) = 42, got %d", b.NewVersion)
+	}
+	if b.FullSnapshot {
+		t.Error("deleted feed usable: expected an incremental batch, not a full snapshot")
+	}
+}

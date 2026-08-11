@@ -25,28 +25,6 @@ func (s *Server) SetSyncAPI(svc SyncService) { s.jobsSvc = svc }
 // SetJobRepo wires the ingest-job listing (nil disables the route).
 func (s *Server) SetJobRepo(r JobRepo) { s.repo = r }
 
-// SetCanonicalSync wires the canonical (lossless) sync trigger.
-func (s *Server) SetCanonicalSync(svc *sync.Service) {
-	if svc == nil {
-		return
-	}
-	s.canonical = svc
-}
-
-// handleCanonicalSync triggers the lossless canonical sync and returns a summary.
-func (s *Server) handleCanonicalSync(w http.ResponseWriter, r *http.Request) {
-	if s.canonical == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "canonical sync not configured"})
-		return
-	}
-	res, err := s.canonical.RunCanonical(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
-}
-
 // handleSync triggers a Zotero sync and returns the result summary.
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	if s.jobsSvc == nil {

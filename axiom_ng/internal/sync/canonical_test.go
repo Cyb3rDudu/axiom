@@ -16,7 +16,7 @@ import (
 func containsStr(s, sub string) bool { return strings.Contains(s, sub) }
 
 // canonicalFake implements zotero.Source + the canonicalFetcher capability for
-// RunCanonical, returning a fixed set of items and collections.
+// Returns a fixed set of items and collections for the canonical sync path.
 type canonicalFake struct {
 	serverID     string
 	baseURL      string
@@ -27,17 +27,6 @@ type canonicalFake struct {
 }
 
 func (c *canonicalFake) ServerID() string { return c.serverID }
-func (c *canonicalFake) ListCollections() ([]zotero.Collection, error) {
-	return nil, nil
-}
-func (c *canonicalFake) ListPDFItems(since int64) (zotero.ListResult, error) {
-	return zotero.ListResult{}, nil
-}
-func (c *canonicalFake) ListDeletedKeys(since int64) ([]zotero.DeleteEvent, int64, error) {
-	return nil, c.version, nil
-}
-func (c *canonicalFake) ResolveAttachmentPath(key string) (string, error) { return "", nil }
-func (c *canonicalFake) FetchParent(key string) (*zotero.Item, error)     { return nil, nil }
 func (c *canonicalFake) ListCanonicalItems(since int64) (zotero.CanonicalBatch, error) {
 	return zotero.CanonicalBatch{
 		FullSnapshot: since == 0,
@@ -70,7 +59,7 @@ func mkItemJSON(key, itemType, parent, title string, extra map[string]any) zoter
 
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 
-// TestRunCanonicalLosslessAndNoAnnotateEnqueue verifies RunCanonical stores all
+// TestRunCanonicalLosslessAndNoAnnotateEnqueue verifies Run stores all
 // item types losslessly (incl. note/annotation), derives the document/attachment
 // projection for the bibliographic parent's preferred attachment, and enqueues
 // a job only for it (never for notes/annotations).
@@ -121,9 +110,9 @@ func TestRunCanonicalLosslessAndNoAnnotateEnqueue(t *testing.T) {
 
 	repoObj := repo.New(d.Pool())
 	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
-	res, err := svc.RunCanonical(ctx)
+	res, err := svc.Run(ctx)
 	if err != nil {
-		t.Fatalf("RunCanonical: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if res.Items != 3 {
 		t.Errorf("expected 3 canonical items (book+attachment+note), got %d", res.Items)
@@ -201,7 +190,7 @@ func TestCanonicalVersionGuard(t *testing.T) {
 	src.items = []zotero.CanonicalItem{itemV2, att}
 
 	svc := New(src, repo.New(d.Pool()), src.baseURL, "users/0", log.Default())
-	res1, err := svc.RunCanonical(ctx)
+	res1, err := svc.Run(ctx)
 	if err != nil {
 		t.Fatalf("first canonical: %v", err)
 	}
@@ -212,7 +201,7 @@ func TestCanonicalVersionGuard(t *testing.T) {
 	itemV1.Version = 1
 	src.items = []zotero.CanonicalItem{itemV1, att}
 	src.version = 2
-	if _, err := svc.RunCanonical(ctx); err != nil {
+	if _, err := svc.Run(ctx); err != nil {
 		t.Fatalf("second canonical: %v", err)
 	}
 
@@ -266,9 +255,9 @@ func TestCanonicalBootstrapOldCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
-	res, err := svc.RunCanonical(ctx)
+	res, err := svc.Run(ctx)
 	if err != nil {
-		t.Fatalf("RunCanonical: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if res.Items != 2 {
 		t.Errorf("bootstrap must full-sync all items even with old legacy cursor; got %d", res.Items)

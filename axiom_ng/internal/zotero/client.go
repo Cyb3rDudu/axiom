@@ -268,11 +268,70 @@ func (a *LocalAPI) ListCanonicalItems(since int64) (CanonicalBatch, error) {
 	if err != nil {
 		return CanonicalBatch{}, err
 	}
+	items, err := canonicalItemsFromRaw(raw)
+	if err != nil {
+		return CanonicalBatch{}, err
+	}
+
+	var deletes []DeleteEvent
+	deletedVersion := int64(0)
+	deletedFeedSupported := true
+	if since > 0 {
+		allEvents, v, derr := a.ListDeletedKeys(since)
+		if errors.Is(derr, errMissingDeletedFeed) {
+			// The /deleted feed is unsupported (404/501) on this Zotero instance.
+			// The deletion state is unknown for an incremental sync: silently
+			// advancing would risk leaving deleted items active. Fall back to a
+			// FULL item snapshot so absent items are reconciled (marked deleted)
+			// by item absence, and never advance over an incomplete deletion view.
+			deletedFeedSupported = false
+		} else if derr != nil {
+			return CanonicalBatch{}, derr
+		} else {
+			deletes = allEvents
+			deletedVersion = v
+		}
+	}
+
+	fullSnapshot := since == 0
+	if since > 0 && !deletedFeedSupported {
+		fullSnapshot = true
+		// Re-fetch the complete item listing without a since window so missing
+		// items are truly a full-snapshot signal for reconciliation.
+		raw, version, err = a.getItemsRaw(url.Values{})
+		if err != nil {
+			return CanonicalBatch{}, err
+		}
+		items, err = canonicalItemsFromRaw(raw)
+		if err != nil {
+			return CanonicalBatch{}, err
+		}
+	}
+
+	// The cursor must reflect the highest version observed across every feed we
+	// read this run: items + trash/deleted. Never below the prior since.
+	newVersion := since
+	if version > newVersion {
+		newVersion = version
+	}
+	if deletedVersion > newVersion {
+		newVersion = deletedVersion
+	}
+
+	return CanonicalBatch{
+		FullSnapshot: fullSnapshot,
+		Items:        items,
+		DeleteEvents: deletes,
+		NewVersion:   newVersion,
+	}, nil
+}
+
+func canonicalItemsFromRaw(raw []json.RawMessage) ([]CanonicalItem, error) {
 	items := make([]CanonicalItem, 0, len(raw))
 	for _, env := range raw {
 		var dims canonicalDims
 		if !dims.fromRaw(env) {
-			return CanonicalBatch{}, fmt.Errorf("undecodable item envelope: %s", truncate(env, 200))
+			return nil, fmt.Errorf("undecodable item envelope: %s", truncate(env, 200))
 		}
 		// Extract raw_data (the item's own data object).
 		var data json.RawMessage
@@ -293,20 +352,7 @@ func (a *LocalAPI) ListCanonicalItems(since int64) (CanonicalBatch, error) {
 			Data:      data,
 		})
 	}
-	// Incremental deletions come from the trash feed.
-	var deletes []DeleteEvent
-	if since > 0 {
-		deletes, _, err = a.ListDeletedKeys(since)
-		if err != nil {
-			return CanonicalBatch{}, err
-		}
-	}
-	return CanonicalBatch{
-		FullSnapshot: since == 0,
-		Items:        items,
-		DeleteEvents: deletes,
-		NewVersion:   version,
-	}, nil
+	return items, nil
 }
 
 func truncate(b json.RawMessage, n int) string {
@@ -701,21 +747,23 @@ func (a *LocalAPI) fetchItem(key string) (*decodedItem, error) {
 // item type + parent) wins for the same key. Responses are paginated and decode
 // errors abort the sync rather than advancing its cursor over unverifiable
 // deletions.
+// ListDeletedKeys merges the trash feed and the permanent /deleted feed and
+// deduplicates by key (trash wins). It returns an error when the /deleted feed
+// is unavailable, signalling that the deletion state is incomplete and the
+// caller must not advance a cursor over it.
 func (a *LocalAPI) ListDeletedKeys(since int64) ([]DeleteEvent, int64, error) {
 	allEvents, trashVersion, err := a.listTrashedKeys(since)
 	if err != nil {
 		return nil, 0, err
 	}
-	deletedKeys, delVersion, err := a.listPermanentlyDeletedKeys(since)
-	if err != nil {
-		return nil, 0, err
+	deletedKeys, delVersion, derr := a.listPermanentlyDeletedKeys(since)
+	if derr != nil {
+		return nil, 0, derr
 	}
 	version := trashVersion
 	if delVersion > version {
 		version = delVersion
 	}
-	// Merge + dedup: trash-rich entries win; /deleted adds permanent deletions
-	// that are no longer present in the trash.
 	seen := map[string]bool{}
 	for _, ev := range allEvents {
 		seen[ev.Key] = true
@@ -791,7 +839,10 @@ func (a *LocalAPI) listTrashedKeys(since int64) ([]DeleteEvent, int64, error) {
 
 // listPermanentlyDeletedKeys returns the keys of items permanently deleted
 // (trashed and purged) since <version>, via the documented GET /deleted feed.
-func (a *LocalAPI) listPermanentlyDeletedKeys(since int64) ([]string, int64, error) {
+// supported false means the Zotero instance does not expose the /deleted feed
+// (404/501) and the caller must reconcile deletions another way (e.g. a full
+// item snapshot) rather than silently assuming nothing was deleted.
+func (a *LocalAPI) listPermanentlyDeletedKeys(since int64) (items []string, version int64, err error) {
 	path := a.libraryID + "/deleted"
 	q := url.Values{}
 	if since > 0 {
@@ -801,11 +852,11 @@ func (a *LocalAPI) listPermanentlyDeletedKeys(since int64) ([]string, int64, err
 	if err != nil {
 		var se *StatusError
 		if errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusNotImplemented) {
-			return nil, 0, nil
+			return nil, 0, errMissingDeletedFeed
 		}
 		return nil, 0, err
 	}
-	version := versionHeader(resp.Header.Get("Last-Modified-Version"))
+	version = versionHeader(resp.Header.Get("Last-Modified-Version"))
 	var body struct {
 		Items []string `json:"items"`
 	}
@@ -816,6 +867,10 @@ func (a *LocalAPI) listPermanentlyDeletedKeys(since int64) ([]string, int64, err
 	}
 	return body.Items, version, nil
 }
+
+// errMissingDeletedFeed reports that the Zotero instance does not expose the
+// /deleted incremental-deletion feed.
+var errMissingDeletedFeed = fmt.Errorf("zotero /deleted feed unavailable")
 
 // FetchParent reconstructs a single parent document (with its current children)
 // by key. It returns nil when the parent is gone or is not a parent item. Used

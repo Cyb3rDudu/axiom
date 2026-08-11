@@ -10,42 +10,26 @@ import "encoding/json"
 //
 // axiom-ng runs on the same host as Zotero and resolves attachments to
 // local filesystem paths, so processors receive local paths instead of a
-// Zotero URL or API token.
+// Zotero URL or API token. The single sync path (POST /api/zotero/sync,
+// Service.Run) drives this contract directly: there is no separate legacy
+// item/PDF sync path.
 type Source interface {
 	// ServerID returns the Zotero-Server-ID that identifies this library
 	// instance. Clients partition any cached state by this ID.
 	ServerID() string
 
-	// ListCollections returns the top-level library structure (collections,
-	// tags) used for workspace scoping and filters.
-	ListCollections() ([]Collection, error)
+	// ListCanonicalItems returns a lossless canonical batch of items changed
+	// since the given library version (0 = full snapshot). A since of 0 yields
+	// FullSnapshot=true so absent items can be reconciled; incremental batches
+	// deliver only changed items plus explicit delete events. Deletions are
+	// sourced from the trash feed and the /deleted feed when available; when
+	// the /deleted feed is unsupported an incremental batch falls back to a
+	// full snapshot rather than advancing over an unknown deletion state.
+	ListCanonicalItems(since int64) (CanonicalBatch, error)
 
-	// ListPDFItems returns complete top-level documents touched since the given
-	// library version (0 = full sync), together with the library's affected and
-	// deleted keys and the new library version. The affected keys include
-	// parents that were changed even if they currently have no processable
-	// attachment, so reconciliation can mark their prior attachments removed.
-	// DeletedKeys are keys that Zotero reports as removed (or that 404 during
-	// reconstruction), used to mark their documents/attachments as deleted.
-	ListPDFItems(since int64) (ListResult, error)
-
-	// ListDeletedKeys returns the items Zotero reports as removed since the given
-	// library version (trash items and/or the deleted feed). Each event is
-	// structured so the caller can distinguish a deleted parent document from a
-	// deleted single attachment (and identify the attachment's parent). It also
-	// returns the current library version.
-	ListDeletedKeys(since int64) (events []DeleteEvent, newVersion int64, err error)
-
-	// FetchParent reconstructs a single parent document (with its current
-	// children) by key, or returns (nil, nil) when the parent no longer exists.
-	// Used to reprocess a document whose preferred attachment was deleted but
-	// that was otherwise unchanged, so a remaining sibling can be selected.
-	FetchParent(parentKey string) (*Item, error)
-
-	// ResolveAttachmentPath maps an attachment to a local filesystem path
-	// (e.g. via the Zotero /file/view/url endpoint). It returns the path and
-	// the attachment's content type.
-	ResolveAttachmentPath(attachmentKey string) (string, error)
+	// ListCanonicalCollections returns all collections as lossless mirrors with
+	// their parent hierarchy.
+	ListCanonicalCollections() ([]CanonicalCollection, error)
 }
 
 // DeleteEvent is a structured record of an item removed from the library.

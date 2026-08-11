@@ -30,43 +30,6 @@ type Job struct {
 	EnqueuedAt   string
 }
 
-// Enqueue inserts new ingest_jobs for the given pending units, skipping any
-// that already have a job for the same attachment_id + content_hash unless
-// ForceRebuild is set. The partial unique index
-//
-//	ingest_jobs_idempotency_idx (attachment_id, content_hash) WHERE NOT force_rebuild
-//
-// makes this atomic and safe under concurrent Sync calls: two goroutines
-// inserting the same unit race, but only one wins; the loser's ON CONFLICT DO
-// NOTHING just inserts no row.
-func (r *Repo) Enqueue(ctx context.Context, pending []PendingJob) (int, error) {
-	if len(pending) == 0 {
-		return 0, nil
-	}
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx)
-
-	inserted := 0
-	for _, p := range pending {
-		tag, err := tx.Exec(ctx, `
-			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-			VALUES ($1,$2,$3,$4, 'pending', $5)
-			ON CONFLICT (attachment_id, content_hash) WHERE force_rebuild = false DO NOTHING
-		`, p.SourceID, p.DocumentID, p.AttachmentID, p.ContentHash, p.ForceRebuild)
-		if err != nil {
-			return inserted, err
-		}
-		inserted += int(tag.RowsAffected())
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return inserted, err
-	}
-	return inserted, nil
-}
-
 // FailedJob describes a file-resolution failure that should be persisted as a
 // failed ingest job so it is not silently dropped.
 type FailedJob struct {
@@ -76,29 +39,6 @@ type FailedJob struct {
 	ErrorCode    string
 	ErrorMessage string
 	Retryable    bool
-}
-
-// EnqueueFailed records a failed ingest job for an attachment whose local file
-// could not be resolved. A retryable failure is re-attempted by a future run;
-// a non-retryable one (e.g. FILE_NOT_FOUND) stays failed.
-func (r *Repo) EnqueueFailed(ctx context.Context, f FailedJob) error {
-	code := f.ErrorCode
-	if code == "" {
-		code = "IO_ERROR"
-	}
-	maxAttempts := 0
-	if f.Retryable {
-		maxAttempts = 3
-	}
-	_, err := r.pool.Exec(ctx, `
-		INSERT INTO ingest_jobs
-			(source_id, document_id, attachment_id, status, error_code, error_message, max_attempts)
-		VALUES ($1,$2,$3, 'failed', $4, $5, $6)
-	`, f.SourceID, f.DocumentID, f.AttachmentID, code, f.ErrorMessage, maxAttempts)
-	if err != nil {
-		return fmt.Errorf("enqueue failed job: %w", err)
-	}
-	return nil
 }
 
 // ListJobs returns the most recent ingest jobs, newest first.

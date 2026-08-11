@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -20,12 +19,11 @@ type Checker interface {
 
 // Server is the axiom-ng HTTP API.
 type Server struct {
-	addr      string
-	checkers  map[string]Checker
-	jobsSvc   SyncService
-	repo      JobRepo
-	canonical *sync.Service
-	log       *log.Logger
+	addr     string
+	checkers map[string]Checker
+	jobsSvc  SyncService
+	repo     JobRepo
+	log      *log.Logger
 }
 
 // New builds a Server with no backing-dependency checkers yet. Register them
@@ -45,7 +43,6 @@ func (s *Server) Handler() http.Handler {
 
 	r.Get("/api/health", s.handleHealth)
 	r.Post("/api/zotero/sync", s.handleSync)
-	r.Post("/api/zotero/canonical-sync", s.handleCanonicalSync)
 	r.Get("/api/ingest/jobs", s.handleJobs)
 
 	return r

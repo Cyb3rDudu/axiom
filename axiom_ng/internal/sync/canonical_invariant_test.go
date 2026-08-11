@@ -12,7 +12,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
 
-func runCanon(t *testing.T, src zotero.Source, d *db.DB) (CanonicalResult, error) {
+func runCanon(t *testing.T, src zotero.Source, d *db.DB) (Result, error) {
 	t.Helper()
 	ctx := context.Background()
 	repoObj := repo.New(d.Pool())
@@ -30,16 +30,13 @@ func runCanon(t *testing.T, src zotero.Source, d *db.DB) (CanonicalResult, error
 		}
 		_, _ = d.Pool().Exec(context.Background(), `DELETE FROM zotero_sources WHERE id=$1`, sourceID)
 	})
-	res, err := svc.RunCanonical(ctx)
+	res, err := svc.Run(ctx)
 	return res, err
 }
 
 func baseOf(src zotero.Source) string {
 	if cf, ok := src.(*canonicalFake); ok {
 		return cf.baseURL
-	}
-	if ss, ok := src.(*errDeletedSource); ok {
-		return ss.baseURL
 	}
 	return "http://test/api"
 }
