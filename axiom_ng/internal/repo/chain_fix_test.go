@@ -5,6 +5,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -329,5 +330,69 @@ func TestProcessingBlockCarriesFeatureFlags(t *testing.T) {
 	}
 	if !fi.Processing.ExtractEntities {
 		t.Error("processing.extract_entities should be true")
+	}
+}
+
+// TestCanonicalItemDriftFallsBackToNormalized proves the claim only uses a
+// canonical item whose source_id + zotero_key match the document and that is not
+// deleted: a drifted/inactive canonical row yields no raw_data (the metadata
+// snapshot falls back to normalized projection columns) instead of freezing
+// contaminated metadata.
+func TestCanonicalItemDriftFallsBackToNormalized(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	var srcID, docID, itemCID string
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_sources (base_url, library_id) VALUES ('http://localhost:60','users/0') RETURNING id::text`).Scan(&srcID); err != nil {
+		t.Fatal(err)
+	}
+	// Canonical raw_data intentionally differs from the normalized title, so we
+	// can tell which source won.
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data)
+		VALUES ($1,'DOC','1','book',NULL,'{}','{"title":"CONTAMINATED","itemType":"book"}') RETURNING id::text`, srcID).Scan(&itemCID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title, canonical_item_id)
+		VALUES ($1,'DOC',1,'book','Real Title',$2) RETURNING id::text`, srcID, itemCID).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+	// The canonical item is soft-deleted (or drifted); the claim must NOT freeze
+	// its raw_data.
+	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_items SET deleted=true WHERE id=$1`, itemCID); err != nil {
+		t.Fatal(err)
+	}
+	var attID string
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version, parent_zotero_key, link_mode, content_type, filename, content_hash, preferred)
+		VALUES ($1,$2,'ATT',1,'DOC','imported_file','application/pdf','a.pdf','sha256:g',true) RETURNING id::text`, srcID, docID).Scan(&attID); err != nil {
+		t.Fatal(err)
+	}
+	var jobID string
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, max_attempts)
+		VALUES ($1,$2,$3,'sha256:g','pending',3) RETURNING id::text`, srcID, docID, attID).Scan(&jobID); err != nil {
+		t.Fatal(err)
+	}
+
+	cj := lr.claim(t, defaultClaim("worker-a"))
+	if cj == nil || cj.JobID != jobID {
+		t.Fatalf("expected claim %s, got %v", jobID, cj)
+	}
+	fi := frozenInput(t, cj)
+	var ms map[string]any
+	if err := json.Unmarshal(fi.Document.MetadataSnapshot, &ms); err != nil {
+		t.Fatalf("decode metadata_snapshot: %v", err)
+	}
+	// The inactive canonical raw_data must NOT win: title must come from the
+	// normalized projection, never "CONTAMINATED".
+	if ms["title"] == "CONTAMINATED" {
+		t.Fatalf("inactive canonical raw_data leaked into metadata_snapshot: %v", ms)
+	}
+	if ms["title"] != "Real Title" {
+		t.Fatalf("metadata title = %v, want normalized Real Title (canonical item inactive)", ms["title"])
 	}
 }
