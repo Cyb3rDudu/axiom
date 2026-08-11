@@ -14,12 +14,15 @@ type PendingJob struct {
 	ForceRebuild bool
 }
 
-// Job is a row of ingest_jobs.
+// Job is a row of ingest_jobs. The FK projections are nullable because a job may
+// reference a source/document/attachment that no longer resolves (a legacy or
+// broken job); nil means the reference is absent in SQL. This keeps GetJob/
+// ListJobs and the REST API from failing on a NULL FK.
 type Job struct {
 	ID           string
-	SourceID     string
-	DocumentID   string
-	AttachmentID string
+	SourceID     *string
+	DocumentID   *string
+	AttachmentID *string
 	Status       string
 	ContentHash  *string
 	Attempt      int
@@ -41,13 +44,15 @@ type FailedJob struct {
 	Retryable    bool
 }
 
-// ListJobs returns the most recent ingest jobs, newest first.
+// ListJobs returns the most recent ingest jobs, newest first. Nullable FK
+// columns are scanned as pointers so a legacy/broken job with a NULL reference
+// does not abort the whole listing.
 func (r *Repo) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	rows, err := r.pool.Query(ctx, `
-		SELECT id::text, source_id::text, document_id::text, attachment_id::text,
+		SELECT id::text, source_id, document_id, attachment_id,
 		       status::text, content_hash, attempt, max_attempts, error_code,
 		       error_message, resolved_at::text, enqueued_at::text
 		FROM ingest_jobs
@@ -75,7 +80,7 @@ func (r *Repo) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 // ListJobsByAttachment returns the jobs for a single attachment, newest first.
 func (r *Repo) ListJobsByAttachment(ctx context.Context, attachmentID string) ([]Job, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id::text, source_id::text, document_id::text, attachment_id::text,
+		SELECT id::text, source_id, document_id, attachment_id,
 		       status::text, content_hash, attempt, max_attempts, error_code,
 		       error_message, resolved_at::text, enqueued_at::text
 		FROM ingest_jobs

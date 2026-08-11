@@ -50,15 +50,14 @@ type LeaseRef struct {
 var ErrLostLease = errors.New("lease lost or job not in expected state")
 
 // ClaimOptions supplies the dispatcher-engine parts of a claim: the worker's
-// stable id, the lease duration and the processing-profile identity to freeze
-// for this job. The immutable input snapshot is built inside the claim
-// transaction from the locked source/document/attachment state.
+// stable id, the lease duration and the processing-profile to freeze. The
+// immutable input snapshot is built inside the claim transaction from the locked
+// source/document/attachment/canonical state; profile_hash and idempotency_key
+// are COMPUTED deterministically in Go, never taken unchecked from the caller.
 type ClaimOptions struct {
-	WorkerID       string
-	LeaseDuration  time.Duration
-	Profile        json.RawMessage
-	ProfileHash    string
-	IdempotencyKey string
+	WorkerID      string
+	LeaseDuration time.Duration
+	Profile       json.RawMessage
 }
 
 // ClaimedJob is the immutable claim payload returned to a dispatcher so it can
@@ -138,10 +137,15 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			break // nothing more claimable this pass
 		}
 
-		// Obsolete: terminalize with a stable reason and continue scanning the
-		// queue; when the run hits the skip bound, commit the batch and yield so
-		// the next poll continues draining.
-		if reason := obsoleteReason(cand); reason != "" {
+		// Lock and read the job's source/document/attachment/canonical rows in a
+		// fixed (deadlock-avoidant) order, then validate obsolescence against the
+		// LOCKED state so a snapshot is never built from a row that changed under
+		// us or from a mixed transaction snapshot.
+		state, reason, err := r.loadAndLockState(ctx, tx, cand)
+		if err != nil {
+			return nil, err
+		}
+		if reason != "" {
 			if err := r.markObsolete(ctx, tx, cand.id, reason); err != nil {
 				return nil, err
 			}
@@ -154,10 +158,15 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			continue
 		}
 
-		// Build the immutable snapshot from the locked candidate state and
-		// claim, freezing it (COALESCE) so a reclaim never overwrites stored
-		// input.
-		snapshot := buildSnapshot(cand)
+		// Deterministically derive the profile hash and idempotency key in Go,
+		// then build the immutable FrozenInput from the locked state.
+		profileHash, err := canonicalProfile(opts.Profile)
+		if err != nil {
+			return nil, err
+		}
+		idemKey := idempotencyKey(state.attachment.id, state.attachment.contentHash, profileHash, cand.forceRebuild, cand.attempt+1)
+		snapshot := buildFrozenInput(cand, state, opts.Profile, profileHash, idemKey)
+
 		var newAttempt int
 		var tsToken string
 		err = tx.QueryRow(ctx, `
@@ -176,13 +185,13 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 				updated_at        = now()
 			WHERE id = $1
 			RETURNING attempt, lease_token::text
-		`, cand.id, opts.WorkerID, leaseSec, snapshot, opts.Profile, opts.ProfileHash, opts.IdempotencyKey).
+		`, cand.id, opts.WorkerID, leaseSec, snapshot, opts.Profile, profileHash, idemKey).
 			Scan(&newAttempt, &tsToken)
 		if err != nil {
 			return nil, fmt.Errorf("claim update: %w", err)
 		}
 
-		inputSnapshot, profile, profileHash, idemKey, err := frozenFields(ctx, tx, cand.id)
+		inputSnapshot, profile, storedHash, storedIdem, err := frozenFields(ctx, tx, cand.id)
 		if err != nil {
 			return nil, err
 		}
@@ -197,13 +206,13 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			MaxAttempts:    cand.maxAttempts,
 			ContentHash:    cand.contentHash,
 			ForceRebuild:   cand.forceRebuild,
-			SourceID:       cand.sourceID,
-			DocumentID:     cand.documentID,
-			AttachmentID:   cand.attachmentID,
+			SourceID:       state.source.id,
+			DocumentID:     state.document.id,
+			AttachmentID:   state.attachment.id,
 			InputSnapshot:  inputSnapshot,
 			Profile:        profile,
-			ProfileHash:    profileHash,
-			IdempotencyKey: idemKey,
+			ProfileHash:    storedHash,
+			IdempotencyKey: storedIdem,
 		}, nil
 	}
 
@@ -263,14 +272,12 @@ func (r *Repo) terminalizeStale(ctx context.Context, tx pgx.Tx) error {
 	return nil
 }
 
-// claimCandidate locks and returns the oldest still-claimable job, excluding a
-// just-skipped id so a burst of obsolete jobs is drained in one pass. It uses
-// FOR UPDATE SKIP LOCKED so concurrent claimers never double-grant. Returns
-// (nil, nil) when nothing is claimable.
+// claimCandidate locks and returns the oldest still-claimable JOB (FOR UPDATE
+// OF j SKIP LOCKED) excluding a just-skipped id. It locks only the ingest_jobs
+// row; the dependent source/document/attachment/canonical rows are locked and
+// read separately by loadAndLockState in a fixed order. Returns (nil, nil) when
+// nothing is claimable.
 func claimCandidate(ctx context.Context, tx pgx.Tx, excludedID *string) (*candidate, error) {
-	// The exclusion clause is assembled only when a just-skipped id exists. This
-	// keeps the first (no-exclusion) claim free of a uuid-typed parameter, which
-	// pgx otherwise has trouble binding on the very first prepared execution.
 	filter := ""
 	args := []any{}
 	if excludedID != nil {
@@ -278,22 +285,11 @@ func claimCandidate(ctx context.Context, tx pgx.Tx, excludedID *string) (*candid
 		args = append(args, *excludedID)
 	}
 	sql := `
-		SELECT j.id, j.attempt, j.max_attempts, j.content_hash, j.force_rebuild,
-		       COALESCE(j.source_id::text, '')     AS src_id,
-		       COALESCE(j.document_id::text, '')   AS doc_id,
-		       COALESCE(j.attachment_id::text, '') AS att_id,
-		       COALESCE(a.deleted, true)            AS att_deleted,
-		       COALESCE(a.preferred, false)         AS att_preferred,
-		       COALESCE(d.deleted, true)            AS doc_deleted,
-		       COALESCE(s.id::text, '')             AS src_uuid,
-		       a.content_type, a.filename, a.local_path, a.content_hash AS att_hash,
-		       COALESCE(a.file_size,0), COALESCE(a.mtime_ms,0),
-		       a.zotero_key AS att_key, d.zotero_key AS doc_key, d.title,
-		       CASE WHEN j.force_rebuild THEN NULL ELSE a.content_hash END AS cur_hash
+		SELECT j.id::text, j.attempt, j.max_attempts, j.content_hash, j.force_rebuild,
+		       COALESCE(j.source_id::text, '') AS src_id,
+		       COALESCE(j.document_id::text, '') AS doc_id,
+		       COALESCE(j.attachment_id::text, '') AS att_id
 		FROM ingest_jobs j
-		LEFT JOIN zotero_attachments a ON a.id = j.attachment_id
-		LEFT JOIN zotero_documents d ON d.id = j.document_id
-		LEFT JOIN zotero_sources s ON s.id = j.source_id
 		WHERE j.status IN ('pending','claimed','processing')
 		  AND j.cancel_requested_at IS NULL
 		  AND j.attempt < j.max_attempts
@@ -305,14 +301,17 @@ func claimCandidate(ctx context.Context, tx pgx.Tx, excludedID *string) (*candid
 		FOR UPDATE OF j SKIP LOCKED
 		LIMIT 1`
 
-	c, err := scanCandidate(tx.QueryRow(ctx, sql, args...))
+	var c candidate
+	err := tx.QueryRow(ctx, sql, args...).Scan(
+		&c.id, &c.attempt, &c.maxAttempts, &c.contentHash, &c.forceRebuild,
+		&c.sourceID, &c.documentID, &c.attachmentID)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("claim candidate: %w", err)
 	}
-	return c, nil
+	return &c, nil
 }
 
 type candidate struct {
@@ -324,89 +323,230 @@ type candidate struct {
 	sourceID     string
 	documentID   string
 	attachmentID string
-
-	attDeleted   bool
-	attPreferred bool
-	docDeleted   bool
-	srcID        string
-
-	contentType *string
-	filename    *string
-	localPath   *string
-	attHash     *string
-	fileSize    int64
-	mtimeMS     int64
-	attKey      *string
-	docKey      *string
-	title       *string
-	curHash     *string
 }
 
-func scanCandidate(row pgx.Row) (*candidate, error) {
-	var c candidate
-	err := row.Scan(
-		&c.id, &c.attempt, &c.maxAttempts, &c.contentHash, &c.forceRebuild,
-		&c.sourceID, &c.documentID, &c.attachmentID,
-		&c.attDeleted, &c.attPreferred, &c.docDeleted, &c.srcID,
-		&c.contentType, &c.filename, &c.localPath, &c.attHash,
-		&c.fileSize, &c.mtimeMS, &c.attKey, &c.docKey, &c.title,
-		&c.curHash,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &c, nil
+// frozenState is the locked-and-read source/document/attachment/canonical state
+// for a claim. Every field is read WITH the row locked in the claim transaction,
+// so the snapshot built from it is a consistent point-in-time view (never a mix
+// of rows changed concurrently by a sync).
+type frozenState struct {
+	source     zoteroSourceRow
+	document   zoteroDocRow
+	attachment zoteroAttachRow
 }
 
-// obsoleteReason returns a stable SKIPPED reason when the locked job can no
-// longer be processed, or "" when it is claimable. For a non-forced rebuild:
-//   - current hash present and differs from the job hash (or job hash NULL) -> CONTENT_HASH_CHANGED
-//   - current hash missing but the job expects one                        -> CONTENT_HASH_MISSING
-//   - both NULL (no baseline)                                              -> claimable
+type zoteroSourceRow struct {
+	id       string
+	serverID *string
+}
+
+type zoteroDocRow struct {
+	id              string
+	zoteroKey       string
+	zoteroVersion   int64
+	canonicalItemID *string
+	itemType        string
+	title           *string
+	creators        json.RawMessage
+	abstract        *string
+	publicationYear *int
+	publicationDate *string
+	publisher       *string
+	isbn            *string
+	doi             *string
+	url             *string
+	language        *string
+	tags            json.RawMessage
+	collections     json.RawMessage
+	metadata        map[string]any
+	deleted         bool
+	relativePath    *string
+	parentKey       *string
+	linkMode        *string
+	attachmentID    *string
+	rawData         json.RawMessage
+}
+
+type zoteroAttachRow struct {
+	id            string
+	zoteroKey     string
+	zoteroVersion int64
+	contentType   *string
+	filename      *string
+	localPath     *string
+	contentHash   *string
+	fileSize      *int64
+	mtimeMS       *int64
+	preferred     bool
+	deleted       bool
+}
+
+// loadAndLockState locks and reads the job's source, document, attachment and
+// the document's canonical item rows in a FIXED order (deadlock-avoidant):
 //
-// A forced rebuild deliberately ignores the stale job-level hash.
-func obsoleteReason(c *candidate) string {
-	if c.attachmentID == "" || c.srcID == "" || c.documentID == "" {
-		return "PARENT_REMOVED"
+//  1. zotero_sources
+//  2. zotero_documents
+//  3. zotero_attachments
+//  4. zotero_items (document's canonical item)
+//
+// Every worker takes these locks in this same order and only after its own
+// ingest_jobs row is already locked (from claimCandidate's FOR UPDATE OF j).
+//
+// Returns a non-empty obsolete reason when any dependent row is missing,
+// deleted/unpreferred or hash-stale, so no FrozenInput is ever built from a
+// broken or mid-flight state.
+func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*frozenState, string, error) {
+	s := &frozenState{}
+
+	// 1. / 2. Source then document.
+	if c.sourceID == "" || c.documentID == "" {
+		return nil, "PARENT_REMOVED", nil
 	}
-	if c.attDeleted || c.docDeleted {
-		return "ATTACHMENT_REMOVED"
+	err := tx.QueryRow(ctx, `
+		SELECT id::text, server_id FROM zotero_sources WHERE id=$1 FOR UPDATE`, c.sourceID).Scan(
+		&s.source.id, &s.source.serverID)
+	if err == pgx.ErrNoRows {
+		return nil, "PARENT_REMOVED", nil
 	}
-	if !c.attPreferred {
-		return "ATTACHMENT_NOT_PREFERRED"
+	if err != nil {
+		return nil, "", fmt.Errorf("lock source: %w", err)
 	}
+
+	var docParentKey, docLinkMode *string
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, zotero_key, zotero_version, canonical_item_id::text,
+		       item_type, title, creators, abstract_note, publication_year,
+		       publication_date, publisher, isbn, doi, url, language,
+		       tags, collections, metadata, deleted
+		FROM zotero_documents WHERE id=$1 FOR UPDATE`, c.documentID).Scan(
+		&s.document.id, &s.document.zoteroKey, &s.document.zoteroVersion, &s.document.canonicalItemID,
+		&s.document.itemType, &s.document.title, &s.document.creators, &s.document.abstract, &s.document.publicationYear,
+		&s.document.publicationDate, &s.document.publisher, &s.document.isbn, &s.document.doi, &s.document.url, &s.document.language,
+		&s.document.tags, &s.document.collections, &s.document.metadata, &s.document.deleted)
+	if err == pgx.ErrNoRows {
+		return nil, "PARENT_REMOVED", nil
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("lock document: %w", err)
+	}
+	if s.document.deleted {
+		return nil, "ATTACHMENT_REMOVED", nil
+	}
+
+	// 3. Attachment (parent_zotero_key + link_mode come from the attachment row).
+	if c.attachmentID == "" {
+		return nil, "PARENT_REMOVED", nil
+	}
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, zotero_key, zotero_version, content_type, filename, local_path,
+		       content_hash, file_size, mtime_ms, preferred, deleted, parent_zotero_key, link_mode
+		FROM zotero_attachments WHERE id=$1 FOR UPDATE`, c.attachmentID).Scan(
+		&s.attachment.id, &s.attachment.zoteroKey, &s.attachment.zoteroVersion,
+		&s.attachment.contentType, &s.attachment.filename, &s.attachment.localPath,
+		&s.attachment.contentHash, &s.attachment.fileSize, &s.attachment.mtimeMS,
+		&s.attachment.preferred, &s.attachment.deleted,
+		&docParentKey, &docLinkMode)
+	if err == pgx.ErrNoRows {
+		return nil, "ATTACHMENT_REMOVED", nil
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("lock attachment: %w", err)
+	}
+	if s.attachment.deleted {
+		return nil, "ATTACHMENT_REMOVED", nil
+	}
+	if !s.attachment.preferred {
+		return nil, "ATTACHMENT_NOT_PREFERRED", nil
+	}
+	// Check job-vs-current hash consistency exactly as the previous obsoleteReason
+	// did. For a non-forced rebuild:
+	//   - current hash present and differs from the job hash (or job hash NULL) -> CHANGED
+	//   - current hash missing but the job expects one                        -> MISSING
+	//
+	// A forced rebuild deliberately ignores the stale job-level hash.
 	if !c.forceRebuild {
 		switch {
-		case c.curHash != nil && (c.contentHash == nil || *c.curHash != *c.contentHash):
-			return "CONTENT_HASH_CHANGED"
-		case c.curHash == nil && c.contentHash != nil:
-			return "CONTENT_HASH_MISSING"
+		case s.attachment.contentHash != nil && (c.contentHash == nil || *s.attachment.contentHash != *c.contentHash):
+			return nil, "CONTENT_HASH_CHANGED", nil
+		case s.attachment.contentHash == nil && c.contentHash != nil:
+			return nil, "CONTENT_HASH_MISSING", nil
 		}
 	}
-	return ""
+	s.document.parentKey, s.document.linkMode = docParentKey, docLinkMode
+
+	// 4. Document's canonical item raw_data (lossless bibliographic source).
+	if s.document.canonicalItemID != nil {
+		var raw []byte
+		if err := tx.QueryRow(ctx, `SELECT raw_data FROM zotero_items WHERE id=$1 FOR UPDATE`, *s.document.canonicalItemID).Scan(&raw); err == nil {
+			s.document.rawData = raw
+		}
+		// ErrNoRows (canonical item absent) is tolerated: normalized projection
+		// columns still populate the snapshot.
+	}
+	return s, "", nil
 }
 
-// buildSnapshot produces the immutable input snapshot from the locked current
-// attachment/document/source state. In Gate 1 it captures the processing-relevant
-// identifiers and file facts; Gate 2 assembles the full contract request from it.
-func buildSnapshot(c *candidate) []byte {
-	m := map[string]any{
-		"attachment_id":  c.attachmentID,
-		"document_id":    c.documentID,
-		"source_id":      c.srcID,
-		"attachment_key": c.attKey,
-		"document_key":   c.docKey,
-		"content_type":   c.contentType,
-		"filename":       c.filename,
-		"local_path":     c.localPath,
-		"content_hash":   c.attHash,
-		"file_size":      c.fileSize,
-		"mtime_ms":       c.mtimeMS,
-		"title":          c.title,
-		"force_rebuild":  c.forceRebuild,
+// buildFrozenInput assembles the durable immutable snapshot for a claim from the
+// locked state, the canonicalized profile and the derived hashes/keys.
+func buildFrozenInput(c *candidate, s *frozenState, profile json.RawMessage, profileHash, idemKey string) []byte {
+	fi := FrozenInput{
+		ContractVersion: "1.0",
+		JobID:           c.id,
+		IdempotencyKey:  idemKey,
+		Source: FrozenSource{
+			Type:     "zotero",
+			SourceID: s.source.id,
+			ServerID: s.source.serverID,
+		},
+		Document: FrozenDocument{
+			DocumentID:    s.document.id,
+			ZoteroKey:     s.document.zoteroKey,
+			ZoteroVersion: s.document.zoteroVersion,
+			MetadataSnapshot: metadataSnapshot(s.document.rawData, zoteroDocFacts{
+				ItemType:        s.document.itemType,
+				Title:           s.document.title,
+				Creators:        s.document.creators,
+				Abstract:        s.document.abstract,
+				PublicationYear: s.document.publicationYear,
+				PublicationDate: s.document.publicationDate,
+				Publisher:       s.document.publisher,
+				ISBN:            s.document.isbn,
+				DOI:             s.document.doi,
+				URL:             s.document.url,
+				Language:        s.document.language,
+				Tags:            s.document.tags,
+				Collections:     s.document.collections,
+				Metadata:        s.document.metadata,
+			}),
+		},
+		Attachment: FrozenAttachment{
+			AttachmentID:  s.attachment.id,
+			ZoteroKey:     s.attachment.zoteroKey,
+			ZoteroVersion: s.attachment.zoteroVersion,
+			ParentKey:     derefStr(s.document.parentKey),
+			LinkMode:      derefStr(s.document.linkMode),
+			ContentType:   s.attachment.contentType,
+			Filename:      s.attachment.filename,
+			LocalPath:     s.attachment.localPath,
+			ContentHash:   s.attachment.contentHash,
+			SizeBytes:     s.attachment.fileSize,
+			MtimeMS:       s.attachment.mtimeMS,
+		},
+		Processing: FrozenProcessing{
+			Profile:      string(profile),
+			ForceRebuild: c.forceRebuild,
+			ProfileHash:  profileHash,
+		},
 	}
-	b, _ := json.Marshal(m)
+	b, _ := json.Marshal(fi)
 	return b
+}
+
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // frozenFields reads back the COALESCE-resolved frozen input after a claim so
@@ -596,8 +736,8 @@ func (r *Repo) MarkCompletedTx(ctx context.Context, tx pgx.Tx, ref LeaseRef, pro
 		        WHERE a.id = j.attachment_id
 		          AND a.deleted = false AND a.preferred = true
 		          AND j.input_snapshot IS NOT NULL
-		          AND (j.input_snapshot->>'content_hash') IS NOT NULL
-		          AND (j.input_snapshot->>'content_hash') = a.content_hash
+		          AND (j.input_snapshot->'attachment'->>'content_hash') IS NOT NULL
+		          AND (j.input_snapshot->'attachment'->>'content_hash') = a.content_hash
 		      )
 	`, ref, processorName, processorVersion, snapshotID)
 	if err != nil {
@@ -649,13 +789,20 @@ func (r *Repo) MarkSkipped(ctx context.Context, ref LeaseRef, reason string) err
 	return nil
 }
 
-// RequestCancellation records a cancellation request on a non-terminal job so
-// the dispatcher/recovery converges it to cancelled. It is idempotent and does
-// not require ownership (an operator may cancel a job any worker holds). Pending
-// jobs are terminalized immediately by the next claim pass.
+// RequestCancellation converges a non-terminal job to cancelled. It is
+// idempotent and does not require ownership (an operator may cancel a job any
+// worker holds). A PENDING job is cancelled in the same SQL operation; a
+// claimed/processing job has its cancellation request recorded and is converged
+// by the dispatcher (which observes cancel_requested_at).
 func (r *Repo) RequestCancellation(ctx context.Context, jobID string) error {
 	_, err := r.pool.Exec(ctx, `
-		UPDATE ingest_jobs SET cancel_requested_at=COALESCE(cancel_requested_at, now()), updated_at=now()
+		UPDATE ingest_jobs SET
+			status = CASE WHEN status = 'pending' THEN 'cancelled'::ingest_job_status ELSE status END,
+			cancel_requested_at = COALESCE(cancel_requested_at, now()),
+			claimed_by = CASE WHEN status = 'pending' THEN NULL ELSE claimed_by END,
+			lease_token = CASE WHEN status = 'pending' THEN NULL ELSE lease_token END,
+			completed_at = CASE WHEN status = 'pending' THEN COALESCE(completed_at, now()) END,
+			updated_at=now()
 		WHERE id=$1 AND status NOT IN ('completed','failed','cancelled','skipped')
 	`, jobID)
 	return err
@@ -695,7 +842,7 @@ func (r *Repo) ReleaseOrExpireLease(ctx context.Context, ref LeaseRef) error {
 func (r *Repo) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	var j Job
 	err := r.pool.QueryRow(ctx, `
-		SELECT id::text, source_id::text, document_id::text, attachment_id::text,
+		SELECT id::text, source_id, document_id, attachment_id,
 		       status::text, content_hash, attempt, max_attempts, error_code,
 		       error_message, resolved_at::text, enqueued_at::text
 		FROM ingest_jobs WHERE id=$1

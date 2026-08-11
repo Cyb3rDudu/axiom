@@ -1,0 +1,348 @@
+// Gate-1 contract-completeness integration tests: typed FrozenInput / full
+// metadata snapshot, deterministic profile-hash + idempotency key, immediate
+// pending cancellation, lock-and-read of dependent rows during claim (so a
+// concurrent change is seen, never a mixed-state snapshot), and NULL-FK jobs
+// remaining readable through GetJob/ListJobs. Run against the isolated
+// axiom_ng_repo_test database; every test truncates only after the harness
+// re-verifies current_database() ends in "_test".
+package repo
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
+
+// seedWithCanonical is like seed but additionally creates a canonical
+// zotero_items row for the document (with rich raw_data) and links it, so the
+// metadata_snapshot is populated from the lossless mirror plus normalized fields.
+func (lr *leaseRepo) seedWithCanonical(t *testing.T, spec seedSpec, maxAttempts int) (attachmentID, jobID string) {
+	t.Helper()
+	ctx := context.Background()
+	var srcID, docID string
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_sources (base_url, library_id, server_id)
+		VALUES ($1, $2, 'srv-1') RETURNING id::text`, spec.sourceBaseURL, spec.libraryID).Scan(&srcID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title,
+			creators, publication_year, publication_date, publisher, isbn, doi, url, language,
+			abstract_note, tags, collections, metadata, deleted)
+		VALUES ($1, $2, 7, 'book', 'Full Title',
+			'[{"creatorType":"author","firstName":"Ada","lastName":"Lovelace"}]',
+			1843, '1843', 'Taylor', '978-0-12345', '10.1000/xyz', 'https://x', 'en',
+			'Sample abstract', '[{"tag":"math"}]', '["c1"]',
+			'{"edition":"1","volume":"v1","issue":"i2","pages":"1-10","issn":"0000-0000","extra":"x","relations":{}}',
+			false) RETURNING id::text`, srcID, spec.docKey).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+	var itemID string
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data)
+		VALUES ($1, $2, 7, 'book', NULL, $3, $4)
+		RETURNING id::text`, srcID, spec.docKey,
+		`{"key":"`+spec.docKey+`"}`,
+		`{"key":"`+spec.docKey+`","version":7,"itemType":"book","title":"Full Title","language":"en","DOI":"10.1000/xyz"}`,
+	).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_documents SET canonical_item_id=$2 WHERE id=$1`, docID, itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+			parent_zotero_key, link_mode, content_type, filename, local_path,
+			content_hash, file_size, mtime_ms, preferred, deleted)
+		VALUES ($1, $2, $3, 9, $4, 'imported_file', 'application/pdf',
+			'full.pdf', '/zotero/storage/9/p.pdf', $5, 1024, 1786336894000, true, false) RETURNING id::text`,
+		srcID, docID, spec.attKey, spec.docKey, spec.contentHash).Scan(&attachmentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, max_attempts)
+		VALUES ($1, $2, $3, $4, 'pending', $5) RETURNING id::text`,
+		srcID, docID, attachmentID, spec.contentHash, maxAttempts).Scan(&jobID); err != nil {
+		t.Fatal(err)
+	}
+	return attachmentID, jobID
+}
+
+// frozenInput decodes a ClaimedJob's InputSnapshot into FrozenInput.
+func frozenInput(t *testing.T, cj *ClaimedJob) FrozenInput {
+	t.Helper()
+	var fi FrozenInput
+	if err := json.Unmarshal(cj.InputSnapshot, &fi); err != nil {
+		t.Fatalf("decode frozen input: %v", err)
+	}
+	return fi
+}
+
+// TestFrozenInputIsContractComplete verifies the snapshot mirrors the
+// PROCESSOR_CONTRACT.md request structure losslessly: server_id, document and
+// attachment zotero keys/versions, full file facts, and the complete
+// metadata_snapshot (lossless from raw_data plus normalized fields).
+func TestFrozenInputIsContractComplete(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	attID, jobID := lr.seedWithCanonical(t, seedSpec{
+		sourceBaseURL: "http://localhost:40", libraryID: "users/0",
+		docKey: "U1", attKey: "U1", contentHash: h("sha256:u1"), preferred: true,
+	}, 3)
+	cj := lr.claim(t, defaultClaim("worker-a"))
+	if cj == nil || cj.JobID != jobID {
+		t.Fatalf("expected claim %s, got %v", jobID, cj)
+	}
+	fi := frozenInput(t, cj)
+
+	if fi.ContractVersion != "1.0" {
+		t.Errorf("contract_version = %q, want 1.0", fi.ContractVersion)
+	}
+	if fi.JobID != jobID {
+		t.Errorf("job_id = %q", fi.JobID)
+	}
+	if fi.Source.Type != "zotero" {
+		t.Errorf("source.type = %q", fi.Source.Type)
+	}
+	if fi.Source.ServerID == nil || *fi.Source.ServerID != "srv-1" {
+		t.Errorf("source.server_id = %v, want srv-1", fi.Source.ServerID)
+	}
+	if fi.Document.ZoteroKey != "U1" || fi.Document.ZoteroVersion != 7 {
+		t.Errorf("document zotero identity = %s@%d, want U1@7", fi.Document.ZoteroKey, fi.Document.ZoteroVersion)
+	}
+	if fi.Attachment.AttachmentID != attID {
+		t.Errorf("attachment id = %s", fi.Attachment.AttachmentID)
+	}
+	if fi.Attachment.ZoteroKey != "U1" || fi.Attachment.ZoteroVersion != 9 {
+		t.Errorf("attachment zotero identity = %s@%d, want U1@9", fi.Attachment.ZoteroKey, fi.Attachment.ZoteroVersion)
+	}
+	if fi.Attachment.ContentHash == nil || *fi.Attachment.ContentHash != "sha256:u1" {
+		t.Errorf("attachment.content_hash = %v", fi.Attachment.ContentHash)
+	}
+	if fi.Attachment.SizeBytes == nil || *fi.Attachment.SizeBytes != 1024 {
+		t.Errorf("attachment.size_bytes = %v", fi.Attachment.SizeBytes)
+	}
+	if fi.Attachment.MtimeMS == nil || *fi.Attachment.MtimeMS != 1786336894000 {
+		t.Errorf("attachment.mtime_ms = %v", fi.Attachment.MtimeMS)
+	}
+
+	var ms map[string]any
+	if err := json.Unmarshal(fi.Document.MetadataSnapshot, &ms); err != nil {
+		t.Fatalf("decode metadata_snapshot: %v", err)
+	}
+	for key, want := range map[string]any{
+		"title":            "Full Title",
+		"itemType":         "book",
+		"language":         "en",
+		"publisher":        "Taylor",
+		"isbn":             "978-0-12345",
+		"doi":              "10.1000/xyz",
+		"publication_year": float64(1843),
+	} {
+		if ms[key] != want {
+			t.Errorf("metadata[%s] = %v, want %v", key, ms[key], want)
+		}
+	}
+	if ms["creators"] == nil {
+		t.Error("metadata_snapshot missing creators (with creatorType)")
+	}
+	if ms["tags"] == nil || ms["collections"] == nil {
+		t.Error("metadata_snapshot missing tags/collections")
+	}
+	if ms["edition"] == nil || ms["pages"] == nil || ms["issn"] == nil {
+		t.Error("metadata_snapshot missing metadata JSONB fields (edition/pages/issn)")
+	}
+}
+
+// TestRequestCancellationImmediatePending verifies a pending job is cancelled in
+// the same SQL operation, while a claimed job only records the request.
+func TestRequestCancellationImmediatePending(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	_, jPend := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:41", libraryID: "users/0",
+		docKey: "V1", attKey: "V1", contentHash: h("sha256:v1"), preferred: true,
+	}, "pending", 3)
+	if err := lr.rep.RequestCancellation(ctx, jPend); err != nil {
+		t.Fatal(err)
+	}
+	r := lr.rowOf(t, jPend)
+	if r.status != "cancelled" {
+		t.Fatalf("pending cancel status = %s, want cancelled (immediate)", r.status)
+	}
+	if r.completedAt == nil {
+		t.Fatal("immediate pending cancel must set completed_at")
+	}
+
+	_, jClaim := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:42", libraryID: "users/1",
+		docKey: "V2", attKey: "V2", contentHash: h("sha256:v2"), preferred: true,
+	}, "pending", 3)
+	cj := lr.claim(t, defaultClaim("worker-a"))
+	if cj == nil || cj.JobID != jClaim {
+		t.Fatalf("expected claim %s, got %v", jClaim, cj)
+	}
+	if err := lr.rep.RequestCancellation(ctx, jClaim); err != nil {
+		t.Fatal(err)
+	}
+	r2 := lr.rowOf(t, jClaim)
+	if r2.status != "claimed" {
+		t.Fatalf("claimed job after cancel-request status = %s, want claimed", r2.status)
+	}
+	if r2.cancelRequested == nil {
+		t.Fatal("claimed job cancel request was not recorded")
+	}
+}
+
+// TestNullParentJobsReadable proves that after NULL-parent jobs are terminalized
+// to skipped, GetJob and ListJobs still work and expose the nullable FKs as nil
+// (no scan error). The REST /api/ingest/jobs null-FK 200 response is covered in
+// internal/server/reconcil_test.go.
+func TestNullParentJobsReadable(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	j := lr.seedPendingOnly(t, nil, nil, nil, 3)
+	_ = lr.claim(t, defaultClaim("worker-a"))
+	if r := lr.rowOf(t, j); r.status != "skipped" {
+		t.Fatalf("NULL-FK job status = %s, want skipped", r.status)
+	}
+
+	got, err := lr.rep.GetJob(ctx, j)
+	if err != nil {
+		t.Fatalf("GetJob on NULL-FK job: %v", err)
+	}
+	if got.SourceID != nil || got.DocumentID != nil || got.AttachmentID != nil {
+		t.Fatalf("GetJob nullable FKs = %v/%v/%v, want all nil", got.SourceID, got.DocumentID, got.AttachmentID)
+	}
+
+	list, err := lr.rep.ListJobs(ctx, 50)
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	found := false
+	for _, lj := range list {
+		if lj.ID == j {
+			found = true
+			if lj.SourceID != nil || lj.AttachmentID != nil {
+				t.Fatalf("ListJobs nullable FKs not nil for %s", j)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("ListJobs did not include %s", j)
+	}
+}
+
+// TestClaimWaitsForConcurrentAttachmentChange proves the claim locks the
+// attachment row: an independent transaction mutating the attachment hash while
+// the claim is waiting is seen by the claim (the claim blocks then observes the
+// new hash and marks the job obsolete), never committing a FrozenInput built
+// from a pre-change hash.
+func TestClaimWaitsForConcurrentAttachmentChange(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	_, jobID := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:43", libraryID: "users/0",
+		docKey: "W1", attKey: "W1", contentHash: h("sha256:w1"), preferred: true,
+	}, "pending", 3)
+
+	conn, err := lr.pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT id FROM zotero_attachments WHERE zotero_key='W1' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+
+	type claimRes struct {
+		cj  *ClaimedJob
+		err error
+	}
+	done := make(chan claimRes, 1)
+	go func() {
+		cj, err := lr.rep.ClaimNextJob(ctx, defaultClaim("worker-b"))
+		done <- claimRes{cj: cj, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		t.Fatalf("claim completed while attachment row was locked (should block): err=%v cj=%v", res.err, res.cj)
+	case <-time.After(300 * time.Millisecond):
+		// still blocked -> good
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE zotero_attachments SET content_hash='sha256:changed' WHERE zotero_key='W1'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("claim after attachment release failed: %v", res.err)
+	}
+	// force-rebuild false; job content_hash 'sha256:w1' no longer matches the
+	// new 'sha256:changed', so the claim must mark it obsolete, never claim.
+	if res.cj != nil {
+		t.Fatalf("claim succeeded despite concurrent hash change (mixed state committed): %v", res.cj)
+	}
+	if r := lr.rowOf(t, jobID); r.status != "skipped" {
+		t.Fatalf("job status = %s, want skipped (obsolete after concurrent hash change)", r.status)
+	}
+}
+
+// TestForceRebuildIdempotencyDistinct verifies a force-rebuild job derives an
+// idempotency key that cannot collide with a normal job, so a rebuild never
+// reuses an old processor result.
+func TestForceRebuildIdempotencyDistinct(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+
+	_, jNorm := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:44", libraryID: "users/0",
+		docKey: "X1", attKey: "X1", contentHash: h("sha256:x1"), preferred: true,
+	}, "pending", 3)
+	_, jForce := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:45", libraryID: "users/1",
+		docKey: "X2", attKey: "X2", contentHash: h("sha256:x1"), preferred: true,
+	}, "pending", 3)
+	if _, err := lr.pool.Exec(context.Background(), `UPDATE ingest_jobs SET force_rebuild=true WHERE id=$1`, jForce); err != nil {
+		t.Fatal(err)
+	}
+
+	cj1 := lr.claim(t, defaultClaim("worker-a"))
+	if cj1 == nil || cj1.JobID != jNorm {
+		t.Fatalf("expected normal claim %s, got %v", jNorm, cj1)
+	}
+	cj2 := lr.claim(t, defaultClaim("worker-b"))
+	if cj2 == nil || cj2.JobID != jForce {
+		t.Fatalf("expected forced claim %s, got %v", jForce, cj2)
+	}
+
+	if cj1.IdempotencyKey == nil || cj2.IdempotencyKey == nil {
+		t.Fatal("idempotency keys missing")
+	}
+	if *cj1.IdempotencyKey == *cj2.IdempotencyKey {
+		t.Fatalf("force-rebuild idempotency key collides with normal job: %s", *cj2.IdempotencyKey)
+	}
+	if !strings.Contains(*cj2.IdempotencyKey, "force-") {
+		t.Fatalf("force-rebuild idempotency key lacks force marker: %s", *cj2.IdempotencyKey)
+	}
+	if strings.Contains(*cj1.IdempotencyKey, "force-") {
+		t.Fatalf("normal job idempotency key must not carry force marker: %s", *cj1.IdempotencyKey)
+	}
+}

@@ -24,7 +24,7 @@ func TestJobsEndpointReturnsFailedJobWithNullHash(t *testing.T) {
 	code := "FILE_NOT_FOUND"
 	msg := "no such file"
 	jobs := []repo.Job{{
-		ID: "job-1", SourceID: "s", DocumentID: "d", AttachmentID: "a",
+		ID: "job-1", SourceID: nil, DocumentID: nil, AttachmentID: nil,
 		Status: "failed", ContentHash: nil, Attempt: 0, MaxAttempts: 0,
 		ErrorCode: &code, ErrorMessage: &msg,
 	}}
@@ -36,12 +36,13 @@ func TestJobsEndpointReturnsFailedJobWithNullHash(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (failed job with NULL hash must be readable)", rec.Code)
+		t.Fatalf("status = %d, want 200 (failed job with NULL hash AND NULL FKs must be readable)", rec.Code)
 	}
 	var body struct {
 		Jobs []struct {
 			ID          string  `json:"ID"`
 			Status      string  `json:"Status"`
+			SourceID    *string `json:"SourceID"`
 			ContentHash *string `json:"ContentHash"`
 			ErrorCode   *string `json:"ErrorCode"`
 		} `json:"jobs"`
@@ -54,6 +55,9 @@ func TestJobsEndpointReturnsFailedJobWithNullHash(t *testing.T) {
 	}
 	if body.Jobs[0].ContentHash != nil {
 		t.Errorf("content_hash = %v, want null", body.Jobs[0].ContentHash)
+	}
+	if body.Jobs[0].SourceID != nil {
+		t.Errorf("source_id = %v, want null (nullable FK)", body.Jobs[0].SourceID)
 	}
 	if body.Jobs[0].ErrorCode == nil || *body.Jobs[0].ErrorCode != "FILE_NOT_FOUND" {
 		t.Errorf("error_code = %v, want FILE_NOT_FOUND", body.Jobs[0].ErrorCode)

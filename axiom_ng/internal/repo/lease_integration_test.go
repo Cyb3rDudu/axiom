@@ -122,11 +122,22 @@ func openLeaseDB(t *testing.T) *leaseRepo {
 	return &leaseRepo{pool: d.Pool(), rep: New(d.Pool()), dsn: repoDSN}
 }
 
-// truncateFixtures clears the tables under test. Only callable after the DB name
-// has been verified to end in "_test".
+// truncateFixtures clears the tables under test. Unlike relying on the harness
+// open-time guard, it verifies the ACTUAL database of the TRUNCATE session
+// (current_database) ends in "_test" immediately before issuing the TRUNCATE, so
+// a mis-wired pool can never wipe a non-test database even if the harness guard
+// was bypassed.
 func (lr *leaseRepo) truncateFixtures(t *testing.T) {
 	t.Helper()
-	if _, err := lr.pool.Exec(context.Background(), `
+	ctx := context.Background()
+	var dbName string
+	if err := lr.pool.QueryRow(ctx, `SELECT current_database()`).Scan(&dbName); err != nil {
+		t.Fatalf("read current_database: %v", err)
+	}
+	if !strings.HasSuffix(dbName, "_test") {
+		t.Fatalf("REFUSING to truncate: current_database %q does not end in _test", dbName)
+	}
+	if _, err := lr.pool.Exec(ctx, `
 		TRUNCATE ingest_jobs, zotero_attachments, zotero_documents, zotero_items,
 		         zotero_item_collections, zotero_collections, zotero_sources`); err != nil {
 		t.Fatalf("truncate fixtures: %v", err)
@@ -185,14 +196,13 @@ func (lr *leaseRepo) seed(t *testing.T, spec seedSpec, jobStatus string, maxAtte
 func h(s string) *string { return &s }
 
 // defaultClaim returns a claim with a fixed profile so freeze assertions are
-// deterministic.
+// deterministic. profile_hash and idempotency_key are COMPUTED by the repo, not
+// supplied.
 func defaultClaim(worker string) ClaimOptions {
 	return ClaimOptions{
-		WorkerID:       worker,
-		LeaseDuration:  120 * time.Second,
-		Profile:        []byte(`{"profile":"full-rag-v1"}`),
-		ProfileHash:    "sha256:profile-v1",
-		IdempotencyKey: "att:hash:profile",
+		WorkerID:      worker,
+		LeaseDuration: 120 * time.Second,
+		Profile:       []byte(`{"profile":"full-rag-v1"}`),
 	}
 }
 
@@ -744,13 +754,28 @@ func TestInputFrozenAtClaimAndImmutableAcrossRetries(t *testing.T) {
 	if cj.InputSnapshot == nil || len(cj.InputSnapshot) == 0 {
 		t.Fatal("claimed job returned no input snapshot")
 	}
-	if cj.IdempotencyKey == nil || *cj.IdempotencyKey != "att:hash:profile" {
-		t.Fatalf("idempotency key not frozen: %v", cj.IdempotencyKey)
+
+	// The profile hash and idempotency key are COMPUTED deterministically in Go,
+	// never taken from the caller.
+	wantHash, err := canonicalProfile([]byte(`{"profile":"full-rag-v1"}`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Retry: expire and reclaim with DIFFERENT opts; stored values must win.
+	if cj.ProfileHash == nil || *cj.ProfileHash != wantHash {
+		t.Fatalf("profile hash = %v, want computed %s", cj.ProfileHash, wantHash)
+	}
+	// The frozen key must exactly equal the repo-computed key for this identity.
+	wantKey := idempotencyKey(cj.AttachmentID, h("sha256:o"), wantHash, false, 1)
+	if cj.IdempotencyKey == nil || *cj.IdempotencyKey != wantKey {
+		t.Fatalf("idempotency key = %v, want computed %s", cj.IdempotencyKey, wantKey)
+	}
+	if !strings.Contains(*cj.IdempotencyKey, ":sha256:o:") {
+		t.Fatalf("idempotency key lacks frozen content hash: %v", cj.IdempotencyKey)
+	}
+
+	// Retry: expire and reclaim; stored frozen values must win (immutable).
 	lr.expire(t, jobID)
 	changed := defaultClaim("worker-b")
-	changed.IdempotencyKey = "should-not-overwrite"
 	changed.Profile = []byte(`{"profile":"other"}`)
 	cj2 := lr.claim(t, changed)
 	if cj2 == nil || cj2.JobID != jobID {
@@ -759,10 +784,10 @@ func TestInputFrozenAtClaimAndImmutableAcrossRetries(t *testing.T) {
 	if string(cj2.InputSnapshot) != string(cj.InputSnapshot) {
 		t.Fatal("input snapshot overwritten on reclaim")
 	}
-	if cj2.IdempotencyKey == nil || *cj2.IdempotencyKey != "att:hash:profile" {
+	if cj2.IdempotencyKey == nil || *cj2.IdempotencyKey != *cj.IdempotencyKey {
 		t.Fatal("stored idempotency key overwritten on reclaim")
 	}
-	if cj2.ProfileHash == nil || *cj2.ProfileHash != "sha256:profile-v1" {
+	if cj2.ProfileHash == nil || *cj2.ProfileHash != wantHash {
 		t.Fatal("stored profile hash overwritten on reclaim")
 	}
 }
