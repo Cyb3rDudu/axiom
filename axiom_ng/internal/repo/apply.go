@@ -61,7 +61,9 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 		return res, err
 	}
 
-	// 4. Collections.
+	// 4. Collections. ListCanonicalCollections always returns a complete
+	// snapshot, so missing collections are reconciled (marked deleted) on every
+	// run — regardless of whether the item batch was a full snapshot.
 	presentCols := make([]string, 0, len(collections))
 	for _, c := range collections {
 		if err := r.upsertCanonicalCollection(ctx, tx, sourceID, c); err != nil {
@@ -69,10 +71,8 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 		}
 		presentCols = append(presentCols, c.Key)
 	}
-	if batch.FullSnapshot {
-		if err := r.markCanonicalCollectionsMissing(ctx, tx, sourceID, presentCols); err != nil {
-			return res, err
-		}
+	if err := r.markCanonicalCollectionsMissing(ctx, tx, sourceID, presentCols); err != nil {
+		return res, err
 	}
 
 	// 5. Memberships for collections referenced by active items.
@@ -154,6 +154,16 @@ func (r *Repo) writeJobsTx(ctx context.Context, tx pgx.Tx, sourceID string, pend
 		if f.Retryable {
 			maxAt = 3
 		}
+		// Idempotent: do not stack duplicate failed jobs for the same attachment.
+		var existing bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM ingest_jobs WHERE attachment_id=$1 AND status='failed' AND error_code=$2
+		)`, f.AttachmentID, code).Scan(&existing); err != nil {
+			return 0, 0, err
+		}
+		if existing {
+			continue
+		}
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, status, error_code, error_message, max_attempts)
 			VALUES ($1,$2,$3,'failed',$4,$5,$6)
@@ -192,6 +202,14 @@ func itemLocalPath(env json.RawMessage) string {
 	}
 	_ = json.Unmarshal(env, &e)
 	return e.Links.Enclosure.Href
+}
+
+func itemLinkMode(data json.RawMessage) string {
+	var d struct {
+		LinkMode string `json:"linkMode"`
+	}
+	_ = json.Unmarshal(data, &d)
+	return d.LinkMode
 }
 
 // isBibliographic reports whether a canonical item type may become a document

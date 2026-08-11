@@ -345,14 +345,16 @@ func (a *LocalAPI) ListCanonicalCollections() ([]CanonicalCollection, error) {
 				} `json:"data"`
 			}
 			if err := json.Unmarshal(env, &dims); err != nil {
-				continue
+				// A malformed collection envelope would silently lose data from
+				// a lossless mirror: abort the sync.
+				return nil, fmt.Errorf("undecodable collection envelope: %s", truncate(env, 200))
 			}
 			key := dims.Key
 			if key == "" {
 				key = dims.Data.Key
 			}
 			if key == "" {
-				continue
+				return nil, fmt.Errorf("collection envelope missing key")
 			}
 			parent := ""
 			if len(dims.Data.ParentCollection) > 0 && dims.Data.ParentCollection[0] == '"' {

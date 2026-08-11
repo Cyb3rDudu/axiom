@@ -15,7 +15,21 @@ import (
 func runCanon(t *testing.T, src zotero.Source, d *db.DB) (CanonicalResult, error) {
 	t.Helper()
 	svc := New(src, repo.New(d.Pool()), baseOf(src), "users/0", log.Default())
-	return svc.RunCanonical(context.Background())
+	res, err := svc.RunCanonical(context.Background())
+	if err != nil {
+		return res, err
+	}
+	// Cleanup: remove this test source (FK cascades remove its mirror rows) so
+	// repeated runs against the shared test DB do not accumulate persistent
+	// test sources.
+	sourceID := res.SourceID
+	t.Cleanup(func() {
+		if sourceID == "" {
+			return
+		}
+		_, _ = d.Pool().Exec(context.Background(), `DELETE FROM zotero_sources WHERE id=$1`, sourceID)
+	})
+	return res, nil
 }
 
 func baseOf(src zotero.Source) string {
@@ -86,8 +100,9 @@ func TestCanonicalFullThenEmptyDeltaKeepsItems(t *testing.T) {
 	if n := countActiveFor(t, d, "zotero_items", res1.SourceID); n != 2 {
 		t.Fatalf("after full sync: %d active items, want 2", n)
 	}
-	// Empty delta (same version, no new items, no deletes).
+	// Empty delta: no items at all, no deletes. Must keep items active.
 	src.deleteEvents = []zotero.DeleteEvent{}
+	src.items = nil
 	res2, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("second sync: %v", err)
@@ -113,9 +128,10 @@ func TestCanonicalMetadataDeltaNoNewJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Metadata-only change: same attachment, new title/DOI.
+	// Metadata-only change: send ONLY the parent in the delta (no attachment),
+	// new title/DOI; the attachment hash is unchanged.
 	src.version = 11
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "New Title", map[string]any{"DOI": "10.1/new"}), pdfAttEnv("A1", "B1", pdf)}
+	src.items = []zotero.CanonicalItem{bookEnv("B1", "New Title", map[string]any{"DOI": "10.1/new"})}
 	res2, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("second: %v", err)
@@ -236,5 +252,143 @@ func TestCanonicalFreshDBPreferredWithStats(t *testing.T) {
 	}
 	if res.Documents != 3 {
 		t.Errorf("doc projections = %d, want 3", res.Documents)
+	}
+}
+
+// TestCanonicalAttachmentDeleteUpdatesProjection: deleting a preferred attachment
+// marks it deleted + not preferred; the sibling EPUB becomes preferred.
+func TestCanonicalAttachmentDeleteUpdatesProjection(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t, ctx)
+	pdf := makePdf(t, "a")
+	epub := t.TempDir() + "/a.epub"
+	os.WriteFile(epub, []byte("e"), 0o600)
+
+	pdfItem := pdfAttEnv("A-PDF", "B1", pdf)
+	epubItem := itemEnv("A-EPUB", "attachment", "B1", map[string]any{"contentType": "application/epub+zip", "filename": "a.epub"})
+	epubEnv, _ := json.Marshal(map[string]any{"key": "A-EPUB", "version": 1, "links": map[string]any{"enclosure": map[string]any{"href": "file://" + epub}}, "data": map[string]any{"key": "A-EPUB", "version": 1, "itemType": "attachment", "parentItem": "B1", "contentType": "application/epub+zip", "filename": "a.epub"}})
+	epubItem.Envelope = epubEnv
+
+	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 10}
+	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfItem, epubItem}
+	res1, err := runCanon(t, src, d)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	// Delete A-PDF (preferred) via delete event; the EPUB sibling is reassessed.
+	src.version = 11
+	src.deleteEvents = []zotero.DeleteEvent{{Key: "A-PDF", ItemType: "attachment", ParentKey: "B1"}}
+	src.items = nil // only the delete event is the delta
+	res2, err := runCanon(t, src, d)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	// A-PDF must be deleted + not preferred.
+	var del, pref bool
+	_ = d.Pool().QueryRow(ctx, `SELECT deleted, preferred FROM zotero_attachments WHERE source_id=$1 AND zotero_key='A-PDF'`, res2.SourceID).Scan(&del, &pref)
+	if !del || pref {
+		t.Errorf("deleted preferred attachment A-PDF: deleted=%v preferred=%v, want deleted+not preferred", del, pref)
+	}
+	// A-EPUB must become preferred.
+	_ = d.Pool().QueryRow(ctx, `SELECT deleted, preferred FROM zotero_attachments WHERE source_id=$1 AND zotero_key='A-EPUB'`, res2.SourceID).Scan(&del, &pref)
+	if del || !pref {
+		t.Errorf("sibling EPUB must be active+preferred after delete: deleted=%v preferred=%v", del, pref)
+	}
+	_ = res1
+}
+
+// TestCanonicalRestoreAfterDelete sets the canonical item back (deleted=false
+// via a new version) and re-enables its projection.
+func TestCanonicalRestoreAfterDelete(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t, ctx)
+	pdf := makePdf(t, "a")
+	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 10}
+	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
+	res1, _ := runCanon(t, src, d)
+	// Delete the parent.
+	src.version = 11
+	src.deleteEvents = []zotero.DeleteEvent{{Key: "B1", ItemType: "book"}}
+	src.items = nil
+	runCanon(t, src, d)
+	var deleted bool
+	_ = d.Pool().QueryRow(ctx, `SELECT deleted FROM zotero_documents WHERE source_id=$1 AND zotero_key='B1'`, res1.SourceID).Scan(&deleted)
+	if !deleted {
+		t.Fatalf("parent delete should deactivate document projection")
+	}
+	// Restore: full snapshot re-sends B1+A1 (deleteEvents cleared).
+	src.version = 12
+	src.deleteEvents = nil
+	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
+	runCanon(t, src, d)
+	_ = d.Pool().QueryRow(ctx, `SELECT deleted FROM zotero_documents WHERE source_id=$1 AND zotero_key='B1'`, res1.SourceID).Scan(&deleted)
+	if deleted {
+		t.Errorf("restored parent must re-enable document projection")
+	}
+}
+
+// TestCanonicalRepeatedMissingFileNoDuplicateFailedJob: a missing file persists
+// exactly one FILE_NOT_FOUND failed job across repeated no-op syncs.
+func TestCanonicalRepeatedMissingFileNoDuplicateFailedJob(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t, ctx)
+	missing := t.TempDir() + "/missing.pdf"
+	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 5}
+	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", missing)}
+	res1, err := runCanon(t, src, d)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	attID := attIDByKey(t, d, res1.SourceID, "A1")
+	jobs1, _ := repo.New(d.Pool()).ListJobsByAttachment(ctx, attID)
+	// A second no-op sync (same missing file) must not add another failed job.
+	src.version = 6
+	src.items = nil
+	if _, err := runCanon(t, src, d); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	jobs2, _ := repo.New(d.Pool()).ListJobsByAttachment(ctx, attID)
+	var fail1, fail2 int
+	for _, j := range jobs1 {
+		if j.ErrorCode != nil && *j.ErrorCode == "FILE_NOT_FOUND" {
+			fail1++
+		}
+	}
+	for _, j := range jobs2 {
+		if j.ErrorCode != nil && *j.ErrorCode == "FILE_NOT_FOUND" {
+			fail2++
+		}
+	}
+	if fail2 != fail1 {
+		t.Errorf("repeated missing-file sync duplicated failed jobs: before=%d after=%d", fail1, fail2)
+	}
+}
+
+// TestCanonicalSQLNullSemantics: missing optional values are SQL NULL, not 0/”.
+func TestCanonicalSQLNullSemantics(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t, ctx)
+	pdf := makePdf(t, "a")
+	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 1}
+	// Book with no date, no DOI, no publisher -> year NULL, no empty strings.
+	src.items = []zotero.CanonicalItem{itemEnv("B1", "book", "", map[string]any{"title": "No meta"}), pdfAttEnv("A1", "B1", pdf)}
+	res, err := runCanon(t, src, d)
+	if err != nil {
+		t.Fatalf("canonical: %v", err)
+	}
+	var year *int
+	var pub *string
+	var doi *string
+	if err := d.Pool().QueryRow(ctx, `SELECT publication_year, publisher, doi FROM zotero_documents WHERE source_id=$1 AND zotero_key='B1'`, res.SourceID).Scan(&year, &pub, &doi); err != nil {
+		t.Fatal(err)
+	}
+	if year != nil {
+		t.Errorf("publication_year must be NULL for missing date, got %d", *year)
+	}
+	if pub != nil {
+		t.Errorf("publisher must be NULL, got %q", *pub)
+	}
+	if doi != nil {
+		t.Errorf("doi must be NULL, got %q", *doi)
 	}
 }

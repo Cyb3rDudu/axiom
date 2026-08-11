@@ -82,6 +82,10 @@ func (r *Repo) markCanonicalItemsMissing(ctx context.Context, tx pgx.Tx, sourceI
 }
 
 func (r *Repo) upsertCanonicalCollection(ctx context.Context, tx pgx.Tx, sourceID string, c zotero.CanonicalCollection) error {
+	var parentKey any
+	if c.ParentKey != "" {
+		parentKey = c.ParentKey
+	}
 	_, err := tx.Exec(ctx, `
 		INSERT INTO zotero_collections (source_id, zotero_key, name, parent_key, raw_envelope)
 		VALUES ($1,$2,$3,$4,$5)
@@ -93,7 +97,7 @@ func (r *Repo) upsertCanonicalCollection(ctx context.Context, tx pgx.Tx, sourceI
 			deleted = false,
 			synced_at = now(),
 			updated_at = now()
-	`, sourceID, c.Key, c.Name, c.ParentKey, c.Envelope)
+	`, sourceID, c.Key, c.Name, parentKey, c.Envelope)
 	if err != nil {
 		return fmt.Errorf("upsert canonical collection %s: %w", c.Key, err)
 	}

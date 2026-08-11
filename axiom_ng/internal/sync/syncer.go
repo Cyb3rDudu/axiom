@@ -369,43 +369,52 @@ func (s *Service) RunCanonical(ctx context.Context) (CanonicalResult, error) {
 	}, nil
 }
 
-// prepareAttachmentFiles hashes/stats the local file of every ACTIVE attachment
-// currently in zotero_items (not just the batch delta), keyed by attachment
-// zotero key. Runs before the apply transaction so no file handle is held
-// across the DB transaction; missing files are recorded as failed jobs by the
-// apply.
-func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, items []zotero.CanonicalItem) (map[string]repo.AttachmentFileInfo, error) {
+// prepareAttachmentFiles hashes/stats the local file of the AUTHORITATIVE
+// (version-merged) attachment set — the committed store state first, then only
+// batch items that are absent from the store or strictly newer. An older,
+// rejected delta attachment can therefore never override a newer projection's
+// path, hash or job. Runs before the apply transaction.
+func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, batch []zotero.CanonicalItem) (map[string]repo.AttachmentFileInfo, error) {
 	out := map[string]repo.AttachmentFileInfo{}
-	// Seed facts from the incoming (delta) items first.
-	for _, it := range items {
-		dims := zotero.ItemDims(it.Data)
-		if dims.ParentKey == "" || dims.ItemType != "attachment" {
-			continue
-		}
-		path := zotero.LocalFilePath(itemLocalPathFor(it))
-		out[dims.Key] = repo.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
-	}
-	// Then fill in every active attachment from the store so a no-op/empty delta
-	// does not lose the preferred file's hash/stats.
+
+	// 1. Committed store state: attachment key -> version + envelope path.
+	storeVer := map[string]int64{}
 	rows, err := s.repo.Pool().Query(ctx, `
-		SELECT zotero_key, raw_envelope::text
+		SELECT zotero_key, zotero_version, raw_envelope::text
 		FROM zotero_items WHERE source_id=$1 AND deleted=false AND item_type='attachment'`, sourceID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var key, env string
-		if err := rows.Scan(&key, &env); err != nil {
+		var ver int64
+		if err := rows.Scan(&key, &ver, &env); err != nil {
+			rows.Close()
 			return nil, err
 		}
-		if _, ok := out[key]; ok {
-			continue // already has batch info (subject to refresh below)
-		}
+		storeVer[key] = ver
 		path := zotero.LocalFilePath(itemLocalPathFromEnv([]byte(env)))
 		out[key] = repo.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
 	}
-	// Hash/stat every attachment file (existing + newly added).
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 2. Batch items: use their path only if absent in store or newer version.
+	for _, it := range batch {
+		dims := zotero.ItemDims(it.Data)
+		if dims.ParentKey == "" || dims.ItemType != "attachment" {
+			continue
+		}
+		if sv, ok := storeVer[dims.Key]; ok && sv > it.Version {
+			continue // rejected older delta: keep committed path/hash
+		}
+		path := zotero.LocalFilePath(itemLocalPathFor(it))
+		out[dims.Key] = repo.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
+	}
+
+	// 3. Hash/stat every attachment file.
 	res := map[string]repo.AttachmentFileInfo{}
 	for key, fi := range out {
 		res[key] = s.statAndHash(fi)

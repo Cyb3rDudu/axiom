@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 	"github.com/jackc/pgx/v5"
@@ -28,6 +30,19 @@ type fullProjections struct {
 	failed  []FailedJob
 }
 
+// attMeta holds canonical attachment-item dimensions used for projection.
+type attMeta struct {
+	key         string
+	parent      string
+	version     int64
+	itemType    string
+	deleted     bool
+	fileName    string
+	contentType string
+	localPath   string
+	linkMode    string
+}
+
 // deriveFullProjections reads all active zotero_items, groups parents vs
 // attachments, writes normalized document/attachment projections (version
 // guarded, preferred/hash/stats), marks documents that lost their preferred
@@ -45,20 +60,12 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 	type parent struct {
 		key     string
 		version int64
+		deleted bool
 		nm      zotero.NormalizedMetadata
 	}
 	parents := map[string]parent{}
 	var parentOrder []string
 	atts := map[string][]zotero.Attachment{}
-	type attMeta struct {
-		key         string
-		parent      string
-		version     int64
-		deleted     bool
-		fileName    string
-		contentType string
-		localPath   string
-	}
 	allAtts := map[string]attMeta{}
 
 	for rows.Next() {
@@ -68,25 +75,30 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 		if err := rows.Scan(&key, &pkey, &itype, &rawData, &rawEnv, &ver, &deleted); err != nil {
 			return fullProjections{}, err
 		}
-		_ = itype
 		if pkey == "" {
-			if deleted {
-				continue
-			}
-			parents[key] = parent{key: key, version: ver, nm: zotero.Normalize(json.RawMessage(rawData))}
+			// top-level: parent items (including deleted ones so their existing
+			// document/attachment projections can be deactivated).
 			parentOrder = append(parentOrder, key)
+			parents[key] = parent{key: key, version: ver, deleted: deleted, nm: zotero.Normalize(json.RawMessage(rawData))}
 			continue
 		}
+		// Children. Only item_type='attachment' may become an attachment
+		// projection; notes/annotations are canonical-only and never projected.
 		am := attMeta{
 			key:         key,
 			parent:      pkey,
 			version:     ver,
+			itemType:    itype,
 			deleted:     deleted,
 			fileName:    itemFilename(json.RawMessage(rawData)),
 			contentType: itemContentType(json.RawMessage(rawData)),
 			localPath:   itemLocalPath(json.RawMessage(rawEnv)),
+			linkMode:    itemLinkMode(json.RawMessage(rawData)),
 		}
 		allAtts[key] = am
+		if itype != "attachment" {
+			continue // note / annotation / etc.: never projected into zotero_attachments
+		}
 		atts[pkey] = append(atts[pkey], zotero.Attachment{
 			Key: key, Version: ver, ParentKey: pkey,
 			ContentType: am.contentType, Filename: am.fileName, LocalPath: am.localPath,
@@ -96,25 +108,48 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 	var out fullProjections
 	for _, parentKey := range parentOrder {
 		p := parents[parentKey]
-		if !isBibliographic(p.nm.ItemType) {
+		if isBibliographic(p.nm.ItemType) && p.deleted {
+			// Deleted parent: deactivate its document + attachments projections.
+			if err := r.deactivateDocument(ctx, tx, sourceID, parentKey); err != nil {
+				return fullProjections{}, err
+			}
+			if err := r.deactivateDocumentAttachments(ctx, tx, sourceID, parentKey); err != nil {
+				return fullProjections{}, err
+			}
 			continue
 		}
-		pref := zotero.PreferredAttachment(atts[parentKey])
+		if p.deleted || !isBibliographic(p.nm.ItemType) {
+			// Non-bibliographic (e.g. note top-level) or deleted: no projection.
+			continue
+		}
+		// Preferred only from ACTIVE attachment items (deleted ones are excluded),
+		// deterministically ordered so selection is stable.
+		pref := preferredActive(atts[parentKey], allAtts)
 		if pref == nil {
-			// No processable attachment remains: mark the doc projection deleted.
-			_ = r.deactivateDocument(ctx, tx, sourceID, parentKey)
+			// No active processable attachment remains: mark the doc projection
+			// deleted (along with any attachment projections).
+			if err := r.deactivateDocument(ctx, tx, sourceID, parentKey); err != nil {
+				return fullProjections{}, err
+			}
+			if err := r.deactivateDocumentAttachments(ctx, tx, sourceID, parentKey); err != nil {
+				return fullProjections{}, err
+			}
 			continue
 		}
 		docID, err := r.ensureDocumentProjection(ctx, tx, sourceID, parentKey, p.version, p.nm)
 		if err != nil {
 			return fullProjections{}, err
 		}
-		// Write all active attachments (version-guarded); set ONLY the preferred
-		// as preferred=true.
+		// Write all attachment projections (version-guarded); only the preferred
+		// becomes preferred=true; deleted attachments are marked deleted.
 		attIDs := map[string]string{}
 		for _, att := range atts[parentKey] {
 			deleted := allAtts[att.Key].deleted
-			aid, err := r.upsertAttachmentProjection(ctx, tx, sourceID, docID, parentKey, att, deleted)
+			lm := allAtts[att.Key].linkMode
+			if lm == "" {
+				lm = "imported_file"
+			}
+			aid, err := r.upsertAttachmentProjection(ctx, tx, sourceID, docID, parentKey, att, deleted, lm)
 			if err != nil {
 				return fullProjections{}, err
 			}
@@ -143,13 +178,71 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 	return out, nil
 }
 
+// preferredActive picks the preferred attachment from ACTIVE (not deleted)
+// attachment items, deterministically: order processable attachments stably
+// (PDF first, then EPUB), preserving sort order by key. Uses only
+// item_type='attachment' rows already filtered into atts.
+func preferredActive(atts []zotero.Attachment, deleted map[string]attMeta) *zotero.Attachment {
+	type cand struct {
+		key      string
+		content  string
+		filename string
+		pref     int // 0 invalid, 1 epub, 2 pdf
+	}
+	var cands []cand
+	for _, a := range atts {
+		meta, ok := deleted[a.Key]
+		if ok && meta.deleted {
+			continue // deleted attachments are never preferred
+		}
+		if a.ContentType != "application/pdf" && !strings.HasSuffix(strings.ToLower(a.Filename), ".epub") {
+			continue
+		}
+		p := 1
+		if a.ContentType == "application/pdf" {
+			p = 2
+		}
+		cands = append(cands, cand{key: a.Key, content: a.ContentType, filename: a.Filename, pref: p})
+	}
+	// Sort: PDF (2) before EPUB (1), then by key for determinism.
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].pref != cands[j].pref {
+			return cands[i].pref > cands[j].pref
+		}
+		return cands[i].key < cands[j].key
+	})
+	if len(cands) == 0 {
+		return nil
+	}
+	for _, a := range atts {
+		if a.Key == cands[0].key {
+			ac := a
+			return &ac
+		}
+	}
+	return nil
+}
+
+// deactivateDocumentAttachments marks all attachment projections of a document
+// as deleted (used when a parent is deleted or loses its processable file).
+func (r *Repo) deactivateDocumentAttachments(ctx context.Context, tx pgx.Tx, sourceID, parentKey string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE zotero_attachments
+		SET deleted=true, preferred=false, updated_at=now()
+		WHERE source_id=$1 AND parent_zotero_key=$2 AND deleted=false
+	`, sourceID, parentKey)
+	if err != nil {
+		return fmt.Errorf("deactivate document attachments %s: %w", parentKey, err)
+	}
+	return nil
+}
+
 // ensureDocumentProjection writes a normalized, version-guarded zotero_documents
 // projection (missing optional values as SQL NULL, never 0/”).
 func (r *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID, parentKey string, version int64, nm zotero.NormalizedMetadata) (string, error) {
 	creators, _ := json.Marshal(nm.Creators)
 	tags, _ := json.Marshal(nm.Tags)
 	cols, _ := json.Marshal(nm.Collections)
-	rels, _ := json.Marshal(nm.Relations)
 	year := (*int)(nil)
 	if nm.PublicationYear != nil {
 		year = nm.PublicationYear
@@ -176,7 +269,8 @@ func (r *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID
 	put("issn", strNull(nm.ISSN))
 	put("extra", strNull(nm.Extra))
 	if nm.Relations != nil {
-		meta["relations"] = rels
+		// Use the raw map so it serializes as a JSON object, NOT a base64 string.
+		meta["relations"] = nm.Relations
 	} else {
 		meta["relations"] = nil
 	}
@@ -217,15 +311,16 @@ func (r *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID
 }
 
 // upsertAttachmentProjection writes a version-guarded attachment projection and
-// returns its id.
-func (r *Repo) upsertAttachmentProjection(ctx context.Context, tx pgx.Tx, sourceID, docID, parentKey string, att zotero.Attachment, deleted bool) (string, error) {
+// returns its id. linkMode comes from the Zotero raw data (imported_file,
+// linked_file, imported_url, ...).
+func (r *Repo) upsertAttachmentProjection(ctx context.Context, tx pgx.Tx, sourceID, docID, parentKey string, att zotero.Attachment, deleted bool, linkMode string) (string, error) {
 	native := zotero.LocalFilePath(att.LocalPath)
 	var id string
 	err := tx.QueryRow(ctx, `
 		INSERT INTO zotero_attachments (
 			source_id, document_id, zotero_key, zotero_version, parent_zotero_key,
 			link_mode, content_type, filename, file_uri, local_path, preferred, deleted, canonical_item_id
-		) VALUES ($1,$2,$3,$4,$5,'imported_file',$6,$7,$8,$9,false,$10,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false,$11,
 			(SELECT id FROM zotero_items WHERE source_id=$1 AND zotero_key=$3))
 		ON CONFLICT (source_id, zotero_key) DO UPDATE SET
 			zotero_version=GREATEST(zotero_attachments.zotero_version, EXCLUDED.zotero_version),
@@ -236,7 +331,7 @@ func (r *Repo) upsertAttachmentProjection(ctx context.Context, tx pgx.Tx, source
 			canonical_item_id=EXCLUDED.canonical_item_id, updated_at=now()
 		WHERE EXCLUDED.zotero_version >= zotero_attachments.zotero_version
 		RETURNING id::text
-	`, sourceID, docID, att.Key, att.Version, parentKey, att.ContentType, att.Filename, att.LocalPath, native, deleted).Scan(&id)
+	`, sourceID, docID, att.Key, att.Version, parentKey, linkMode, att.ContentType, att.Filename, att.LocalPath, native, deleted).Scan(&id)
 	if err == pgx.ErrNoRows {
 		// Older version: return existing id.
 		if e2 := tx.QueryRow(ctx, `SELECT id::text FROM zotero_attachments WHERE source_id=$1 AND zotero_key=$2`,
