@@ -12,7 +12,8 @@ import (
 
 // PreferredAttachment picks the attachment to enqueue for a document. The rule
 // for v1: prefer a PDF over an EPUB when both exist; fall back to EPUB only if
-// no PDF is present. Returns nil when there is nothing processable.
+// no PDF is present. Returns nil when there is nothing processable. Selection
+// is deterministic (first match wins) so hash-based job dedup is stable.
 func PreferredAttachment(atts []Attachment) *Attachment {
 	if len(atts) == 0 {
 		return nil
@@ -23,13 +24,15 @@ func PreferredAttachment(atts []Attachment) *Attachment {
 		a := &atts[i]
 		switch strings.ToLower(a.ContentType) {
 		case "application/pdf":
-			pdf = a
+			if pdf == nil {
+				pdf = a
+			}
 		case "application/vnd.openxmlformats-officedocument.epub+zip",
 			"application/epub", "application/epub+zip":
-			epub = a
+			if epub == nil {
+				epub = a
+			}
 		default:
-			// files with an epub-style extension and no content type are
-			// treated as EPUB as a fallback
 			if epub == nil && strings.HasSuffix(strings.ToLower(a.Filename), ".epub") {
 				epub = a
 			}
