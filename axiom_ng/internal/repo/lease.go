@@ -164,7 +164,7 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 		if err != nil {
 			return nil, err
 		}
-		idemKey := idempotencyKey(state.attachment.id, state.attachment.contentHash, profileHash, cand.forceRebuild, cand.attempt+1)
+		idemKey := idempotencyKey(cand.id, state.attachment.id, state.attachment.contentHash, profileHash, cand.forceRebuild)
 		snapshot := buildFrozenInput(cand, state, opts.Profile, profileHash, idemKey)
 
 		var newAttempt int
@@ -382,15 +382,16 @@ type zoteroAttachRow struct {
 }
 
 // loadAndLockState locks and reads the job's source, document, attachment and
-// the document's canonical item rows in a FIXED order (deadlock-avoidant):
+// the document's canonical item rows so a snapshot is never built from a row
+// that changed under us or from a mixed transaction view.
 //
-//  1. zotero_sources
-//  2. zotero_documents
-//  3. zotero_attachments
-//  4. zotero_items (document's canonical item)
-//
-// Every worker takes these locks in this same order and only after its own
-// ingest_jobs row is already locked (from claimCandidate's FOR UPDATE OF j).
+// Deadlock avoidance: BEFORE locking any dependency row the claim takes the same
+// per-source advisory lock the canonical sync holds for its whole run
+// (pg_advisory_xact_lock on lockKey(sourceID)). Only one of a claim or a sync for
+// that source is then active at a time, so the claim can never deadlock against
+// the sync's item->document write order; it simply waits. Dependency rows are
+// then locked in a fixed order (source -> document -> attachment -> canonical
+// item).
 //
 // Returns a non-empty obsolete reason when any dependent row is missing,
 // deleted/unpreferred or hash-stale, so no FrozenInput is ever built from a
@@ -398,10 +399,15 @@ type zoteroAttachRow struct {
 func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*frozenState, string, error) {
 	s := &frozenState{}
 
-	// 1. / 2. Source then document.
 	if c.sourceID == "" || c.documentID == "" {
 		return nil, "PARENT_REMOVED", nil
 	}
+	// Serialize against the canonical sync for this source before locking any
+	// dependency rows.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey(c.sourceID)); err != nil {
+		return nil, "", fmt.Errorf("acquire source lock: %w", err)
+	}
+
 	err := tx.QueryRow(ctx, `
 		SELECT id::text, server_id FROM zotero_sources WHERE id=$1 FOR UPDATE`, c.sourceID).Scan(
 		&s.source.id, &s.source.serverID)
@@ -479,9 +485,13 @@ func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*
 		var raw []byte
 		if err := tx.QueryRow(ctx, `SELECT raw_data FROM zotero_items WHERE id=$1 FOR UPDATE`, *s.document.canonicalItemID).Scan(&raw); err == nil {
 			s.document.rawData = raw
+		} else if err != pgx.ErrNoRows {
+			// A canonical row is expected to exist; only a genuinely absent row is
+			// tolerated (the normalized projection columns still populate the
+			// snapshot). Any other failure must abort rather than claim with
+			// incomplete metadata.
+			return nil, "", fmt.Errorf("lock canonical item: %w", err)
 		}
-		// ErrNoRows (canonical item absent) is tolerated: normalized projection
-		// columns still populate the snapshot.
 	}
 	return s, "", nil
 }
@@ -533,7 +543,7 @@ func buildFrozenInput(c *candidate, s *frozenState, profile json.RawMessage, pro
 			MtimeMS:       s.attachment.mtimeMS,
 		},
 		Processing: FrozenProcessing{
-			Profile:      string(profile),
+			Profile:      json.RawMessage(profile),
 			ForceRebuild: c.forceRebuild,
 			ProfileHash:  profileHash,
 		},

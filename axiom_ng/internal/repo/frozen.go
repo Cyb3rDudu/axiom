@@ -58,32 +58,29 @@ type FrozenAttachment struct {
 	MtimeMS       *int64  `json:"mtime_ms"`
 }
 
-// FrozenProcessing records the processing profile identity and the
-// force-rebuild flag so the dispatcher can construct that part of the request.
+// FrozenProcessing records the processing identity frozen at claim time so the
+// dispatcher can assemble the contract request's processing block. Profile is the
+// structured profile object (e.g. {"profile":"full-rag-v1",...flags}), stored as
+// JSON (not a stringified string) so a dispatcher can read its fields.
 type FrozenProcessing struct {
-	Profile      string `json:"profile"`
-	ForceRebuild bool   `json:"force_rebuild"`
-	ProfileHash  string `json:"profile_hash"`
+	Profile      json.RawMessage `json:"profile"`
+	ForceRebuild bool            `json:"force_rebuild"`
+	ProfileHash  string          `json:"profile_hash"`
 }
 
-// metadataSnapshot builds the metadata_snapshot JSON for a claimed document from
-// the canonical mirror. `rawData` is the full canonical zotero_items.raw_data
-// (lossless, all Zotero fields incl. creators/date/DOI/ISBN etc.). The
-// normalized projection fields are merged on top only when they are non-NULL so
-// absent values stay absent and the snapshot is never enriched or guessed.
+// metadataSnapshot builds the metadata_snapshot JSON for a claimed document. If
+// the canonical mirror has the document's raw_data it is returned AS-IS
+// (lossless: typed creators, typed tags, collections and every Zotero field are
+// preserved, and nothing is overwritten by a normalized projection). When there
+// is no canonical item the normalized projection columns are used as a
+// best-effort snapshot. In both cases missing values stay missing (NULL preserved)
+// and the snapshot is never enriched or guessed.
 func metadataSnapshot(rawData json.RawMessage, doc zoteroDocFacts) json.RawMessage {
-	merged := map[string]any{}
-
-	// Start from the lossless canonical item data so nothing Zotero knows is lost.
-	rawMap := map[string]any{}
 	if len(rawData) > 0 {
-		_ = json.Unmarshal(rawData, &rawMap)
-		for k, v := range rawMap {
-			merged[k] = v
-		}
+		return rawData
 	}
 
-	// Null-preserving normalization from the dedicated projection columns.
+	merged := map[string]any{}
 	putStr := func(k string, v *string) {
 		if v != nil {
 			merged[k] = *v
@@ -168,15 +165,16 @@ func canonicalProfile(profile json.RawMessage) (string, error) {
 // idempotencyKey derives the processor idempotency key from the frozen identity.
 // For a normal job it is attachment_id:frozen_content_hash:profile_hash, so an
 // unchanged source reuses the processor result. A force rebuild deliberately
-// changes content and/or identity, so the attempt counter is folded into the key
-// to guarantee the rebuild never reuses an old processor result.
-func idempotencyKey(attachmentID string, contentHash *string, profileHash string, forceRebuild bool, attempt int) string {
+// changes content and/or identity and must never reuse an old processor result,
+// so the job_id (unique per rebuild job) is folded in: two separate force jobs
+// for the same attachment/hash/profile therefore always get distinct keys.
+func idempotencyKey(jobID, attachmentID string, contentHash *string, profileHash string, forceRebuild bool) string {
 	h := "<nil>"
 	if contentHash != nil && *contentHash != "" {
 		h = *contentHash
 	}
 	if forceRebuild {
-		return fmt.Sprintf("%s:%s:%s:force-%d", attachmentID, h, profileHash, attempt)
+		return fmt.Sprintf("%s:%s:%s:force-%s", attachmentID, h, profileHash, jobID)
 	}
 	return fmt.Sprintf("%s:%s:%s", attachmentID, h, profileHash)
 }

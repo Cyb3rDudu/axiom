@@ -40,12 +40,13 @@ func (lr *leaseRepo) seedWithCanonical(t *testing.T, spec seedSpec, maxAttempts 
 		t.Fatal(err)
 	}
 	var itemID string
+	richRaw := `{"key":"` + spec.docKey + `","version":7,"itemType":"book","title":"Full Title","creators":[{"creatorType":"author","firstName":"Ada","lastName":"Lovelace"}],"date":"1843","language":"en","publisher":"Taylor","isbn":"978-0-12345","DOI":"10.1000/xyz","url":"https://x","abstractNote":"Sample abstract","tags":[{"tag":"math"}],"collections":["c1"],"edition":"1","pages":"1-10","ISSN":"0000-0000"}`
 	if err := lr.pool.QueryRow(ctx, `
 		INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data)
 		VALUES ($1, $2, 7, 'book', NULL, $3, $4)
 		RETURNING id::text`, srcID, spec.docKey,
 		`{"key":"`+spec.docKey+`"}`,
-		`{"key":"`+spec.docKey+`","version":7,"itemType":"book","title":"Full Title","language":"en","DOI":"10.1000/xyz"}`,
+		richRaw,
 	).Scan(&itemID); err != nil {
 		t.Fatal(err)
 	}
@@ -132,17 +133,20 @@ func TestFrozenInputIsContractComplete(t *testing.T) {
 	if err := json.Unmarshal(fi.Document.MetadataSnapshot, &ms); err != nil {
 		t.Fatalf("decode metadata_snapshot: %v", err)
 	}
+	// The metadata_snapshot is the LOSSESS canonical raw_data, so it carries
+	// Zotero's own field names (date, DOI, ISSN, edition, pages) rather than the
+	// normalized projection names.
 	for key, want := range map[string]any{
-		"title":            "Full Title",
-		"itemType":         "book",
-		"language":         "en",
-		"publisher":        "Taylor",
-		"isbn":             "978-0-12345",
-		"doi":              "10.1000/xyz",
-		"publication_year": float64(1843),
+		"title":     "Full Title",
+		"itemType":  "book",
+		"language":  "en",
+		"publisher": "Taylor",
+		"isbn":      "978-0-12345",
+		"DOI":       "10.1000/xyz",
+		"date":      "1843",
 	} {
 		if ms[key] != want {
-			t.Errorf("metadata[%s] = %v, want %v", key, ms[key], want)
+			t.Errorf("metadata[%s] = %q, want %q (lossless raw_data)", key, ms[key], want)
 		}
 	}
 	if ms["creators"] == nil {
@@ -151,8 +155,8 @@ func TestFrozenInputIsContractComplete(t *testing.T) {
 	if ms["tags"] == nil || ms["collections"] == nil {
 		t.Error("metadata_snapshot missing tags/collections")
 	}
-	if ms["edition"] == nil || ms["pages"] == nil || ms["issn"] == nil {
-		t.Error("metadata_snapshot missing metadata JSONB fields (edition/pages/issn)")
+	if ms["edition"] == nil || ms["pages"] == nil || ms["ISSN"] == nil {
+		t.Error("metadata_snapshot missing raw fields edition/pages/ISSN")
 	}
 }
 
@@ -308,41 +312,66 @@ func TestClaimWaitsForConcurrentAttachmentChange(t *testing.T) {
 // TestForceRebuildIdempotencyDistinct verifies a force-rebuild job derives an
 // idempotency key that cannot collide with a normal job, so a rebuild never
 // reuses an old processor result.
+// TestForceRebuildIdempotencyDistinct verifies a force-rebuild job derives an
+// idempotency key that cannot collide with a normal job, AND that two separate
+// force jobs for the SAME attachment/hash/profile still get distinct keys
+// (via job_id), so a rebuild never reuses an old processor result.
 func TestForceRebuildIdempotencyDistinct(t *testing.T) {
 	lr := openLeaseDB(t)
 	lr.truncateFixtures(t)
+	ctx := context.Background()
 
+	// Normal (non-force) job for attachment A1.
 	_, jNorm := lr.seed(t, seedSpec{
 		sourceBaseURL: "http://localhost:44", libraryID: "users/0",
 		docKey: "X1", attKey: "X1", contentHash: h("sha256:x1"), preferred: true,
 	}, "pending", 3)
-	_, jForce := lr.seed(t, seedSpec{
+
+	// Two FORCE jobs for the SAME attachment A1 (allowed: the partial unique
+	// idempotency index only applies to force_rebuild=false rows).
+	_, jForce1 := lr.seed(t, seedSpec{
 		sourceBaseURL: "http://localhost:45", libraryID: "users/1",
-		docKey: "X2", attKey: "X2", contentHash: h("sha256:x1"), preferred: true,
+		docKey: "Y1", attKey: "Y1", contentHash: h("sha256:x1"), preferred: true,
 	}, "pending", 3)
-	if _, err := lr.pool.Exec(context.Background(), `UPDATE ingest_jobs SET force_rebuild=true WHERE id=$1`, jForce); err != nil {
-		t.Fatal(err)
+	_, jForce2 := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:46", libraryID: "users/2",
+		docKey: "Y2", attKey: "Y2", contentHash: h("sha256:x1"), preferred: true,
+	}, "pending", 3)
+	for _, j := range []string{jForce1, jForce2} {
+		if _, err := lr.pool.Exec(ctx, `UPDATE ingest_jobs SET force_rebuild=true WHERE id=$1`, j); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	cj1 := lr.claim(t, defaultClaim("worker-a"))
-	if cj1 == nil || cj1.JobID != jNorm {
-		t.Fatalf("expected normal claim %s, got %v", jNorm, cj1)
+	cjNorm := lr.claim(t, defaultClaim("worker-a"))
+	if cjNorm == nil || cjNorm.JobID != jNorm {
+		t.Fatalf("expected normal claim %s, got %v", jNorm, cjNorm)
 	}
-	cj2 := lr.claim(t, defaultClaim("worker-b"))
-	if cj2 == nil || cj2.JobID != jForce {
-		t.Fatalf("expected forced claim %s, got %v", jForce, cj2)
+	cjF1 := lr.claim(t, defaultClaim("worker-b"))
+	if cjF1 == nil || cjF1.JobID != jForce1 {
+		t.Fatalf("expected forced claim %s, got %v", jForce1, cjF1)
+	}
+	cjF2 := lr.claim(t, defaultClaim("worker-c"))
+	if cjF2 == nil || cjF2.JobID != jForce2 {
+		t.Fatalf("expected forced claim %s, got %v", jForce2, cjF2)
 	}
 
-	if cj1.IdempotencyKey == nil || cj2.IdempotencyKey == nil {
+	if cjNorm.IdempotencyKey == nil || cjF1.IdempotencyKey == nil || cjF2.IdempotencyKey == nil {
 		t.Fatal("idempotency keys missing")
 	}
-	if *cj1.IdempotencyKey == *cj2.IdempotencyKey {
-		t.Fatalf("force-rebuild idempotency key collides with normal job: %s", *cj2.IdempotencyKey)
+	// Force vs normal must differ.
+	if *cjNorm.IdempotencyKey == *cjF1.IdempotencyKey {
+		t.Fatalf("force-rebuild idempotency key collides with normal job: %s", *cjF1.IdempotencyKey)
 	}
-	if !strings.Contains(*cj2.IdempotencyKey, "force-") {
-		t.Fatalf("force-rebuild idempotency key lacks force marker: %s", *cj2.IdempotencyKey)
+	// Two force jobs for the SAME attachment/hash/profile must STILL differ (job_id
+	// disambiguates) - this is the regression guard for reusing an old result.
+	if *cjF1.IdempotencyKey == *cjF2.IdempotencyKey {
+		t.Fatalf("two force jobs for same attachment share idempotency key: %s", *cjF2.IdempotencyKey)
 	}
-	if strings.Contains(*cj1.IdempotencyKey, "force-") {
-		t.Fatalf("normal job idempotency key must not carry force marker: %s", *cj1.IdempotencyKey)
+	if !strings.Contains(*cjF1.IdempotencyKey, "force-") || !strings.Contains(*cjF2.IdempotencyKey, "force-") {
+		t.Fatalf("force-rebuild key lacks force marker: %s / %s", *cjF1.IdempotencyKey, *cjF2.IdempotencyKey)
+	}
+	if strings.Contains(*cjNorm.IdempotencyKey, "force-") {
+		t.Fatalf("normal job idempotency key must not carry force marker: %s", *cjNorm.IdempotencyKey)
 	}
 }

@@ -765,7 +765,7 @@ func TestInputFrozenAtClaimAndImmutableAcrossRetries(t *testing.T) {
 		t.Fatalf("profile hash = %v, want computed %s", cj.ProfileHash, wantHash)
 	}
 	// The frozen key must exactly equal the repo-computed key for this identity.
-	wantKey := idempotencyKey(cj.AttachmentID, h("sha256:o"), wantHash, false, 1)
+	wantKey := idempotencyKey(jobID, cj.AttachmentID, h("sha256:o"), wantHash, false)
 	if cj.IdempotencyKey == nil || *cj.IdempotencyKey != wantKey {
 		t.Fatalf("idempotency key = %v, want computed %s", cj.IdempotencyKey, wantKey)
 	}
