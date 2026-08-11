@@ -5,6 +5,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -474,5 +475,66 @@ func TestCompletionRejectsCommittedCancellation(t *testing.T) {
 	_ = tx.Rollback(ctx)
 	if !errors.Is(err, ErrLostLease) {
 		t.Fatalf("completion after committed cancellation = %v, want ErrLostLease", err)
+	}
+}
+
+// TestForceRebuildProfileMatchesEmitBlock validates the F1 invariant end-to-end
+// on a FORCE job: processing_profile.force_rebuild, input_snapshot.processing
+// .force_rebuild and the emitted request all carry true, and profile_hash equals
+// SHA-256 of the exact processing_profile bytes stored.
+func TestForceRebuildProfileMatchesEmitBlock(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	_, jForce := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:63", libraryID: "users/0",
+		docKey: "J1", attKey: "J1", contentHash: h("sha256:j1"), preferred: true,
+	}, "pending", 3)
+	if _, err := lr.pool.Exec(ctx, `UPDATE ingest_jobs SET force_rebuild=true WHERE id=$1`, jForce); err != nil {
+		t.Fatal(err)
+	}
+	// Caller profile includes force_rebuild:false, but the job is FORCED; the job
+	// value must win in every emitted place.
+	opts := defaultClaim("worker-a")
+	opts.Profile = []byte(`{"profile":"full-rag-v1","force_rebuild":false}`)
+	cj := lr.claim(t, opts)
+	if cj == nil || cj.JobID != jForce {
+		t.Fatalf("expected force claim %s, got %v", jForce, cj)
+	}
+
+	// processing_profile as stored must have force_rebuild=true (job override).
+	// Comparing the hash requires re-canonicalizing the stored JSONB (its ::text is
+	// a re-serialization, not the exact bytes we inserted), so decode and
+	// re-serialize with the same canonical function.
+	var ppRaw []byte
+	if err := lr.pool.QueryRow(ctx, `SELECT processing_profile::text FROM ingest_jobs WHERE id=$1`, jForce).Scan(&ppRaw); err != nil {
+		t.Fatal(err)
+	}
+	var pp FrozenProcessing
+	if err := json.Unmarshal(ppRaw, &pp); err != nil {
+		t.Fatal(err)
+	}
+	if !pp.ForceRebuild {
+		t.Fatalf("processing_profile.force_rebuild = false, want true (job override)")
+	}
+	_, canonical, err := canonicalBytes(pp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// profile_hash must equal SHA-256 of the canonical processing_profile form.
+	var storedHash string
+	if err := lr.pool.QueryRow(ctx, `SELECT profile_hash FROM ingest_jobs WHERE id=$1`, jForce).Scan(&storedHash); err != nil {
+		t.Fatal(err)
+	}
+	if storedHash != canonical {
+		t.Fatalf("profile_hash = %s, want SHA256(canonical processing_profile) = %s", storedHash, canonical)
+	}
+
+	// input_snapshot.processing must agree with processing_profile (both force=true).
+	fi := frozenInput(t, cj)
+	if !fi.Processing.ForceRebuild {
+		t.Error("input_snapshot.processing.force_rebuild must be true")
 	}
 }

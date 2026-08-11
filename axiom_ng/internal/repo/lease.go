@@ -178,19 +178,21 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 		}
 
 		// Deterministically derive the CANONICAL processing block and its hash in Go,
-		// then build the immutable FrozenInput from the locked state. Both the hash
-		// and the persisted processing_profile come from the same canonical form.
-		tlsProfile, profileHash, err := profileCanonical(opts.Profile)
-		if err != nil {
-			tx.Rollback(ctx)
-			return nil, err
-		}
+		// then build the immutable FrozenInput from the locked state. ForceRebuild is
+		// taken EXCLUSIVELY from the job (never the caller); the final block is
+		// serialized and hashed AFTER that override so processing_profile, the hash,
+		// the snapshot's processing block and the emitted request all agree.
 		proc, err := decodeProcessing(opts.Profile)
 		if err != nil {
 			tx.Rollback(ctx)
 			return nil, err
 		}
 		proc.ForceRebuild = cand.forceRebuild
+		tlsProfile, profileHash, err := canonicalBytes(proc)
+		if err != nil {
+			tx.Rollback(ctx)
+			return nil, err
+		}
 		idemKey := idempotencyKey(cand.id, state.attachment.id, state.attachment.contentHash, profileHash, cand.forceRebuild)
 		snapshot := buildFrozenInput(cand, state, proc, profileHash, idemKey)
 

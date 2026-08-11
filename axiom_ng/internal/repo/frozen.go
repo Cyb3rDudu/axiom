@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 )
 
 // FrozenInput is the durable, immutable snapshot stored in ingest_jobs.input_snapshot
@@ -93,20 +94,24 @@ func decodeProcessing(profile []byte) (FrozenProcessing, error) {
 	if err := dec.Decode(&p); err != nil {
 		return p, fmt.Errorf("invalid processing profile: %w", err)
 	}
+	// Reject any trailing (non-whitespace) JSON content after the first object:
+	// `{"profile":"x"} {"bogus":true}` must fail, not silently accept a suffix.
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return p, errors.New("processing profile has unexpected trailing JSON content")
+	}
 	if p.Profile == "" {
 		return p, errors.New("profile object has no \"profile\" name field")
 	}
 	return p, nil
 }
 
-// profileCanonical serializes a decoded FrozenProcessing to a stable, deterministic
-// canonical JSON form (struct field order) suitable for hashing and storage as
-// processing_profile. It returns both the canonical bytes and their SHA-256.
-func profileCanonical(profile []byte) ([]byte, string, error) {
-	p, err := decodeProcessing(profile)
-	if err != nil {
-		return nil, "", err
-	}
+// canonicalBytes serializes a finalized FrozenProcessing to a stable,
+// deterministic canonical JSON form (struct field order) suitable for hashing
+// and storage as processing_profile. It returns both the canonical bytes and
+// their SHA-256. Callers MUST serialize the FINAL block (after any per-job
+// overrides such as ForceRebuild) so the hash and the request can never diverge.
+func canonicalBytes(p FrozenProcessing) ([]byte, string, error) {
 	b, err := json.Marshal(p)
 	if err != nil {
 		return nil, "", fmt.Errorf("serialize processing profile: %w", err)

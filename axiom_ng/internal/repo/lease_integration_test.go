@@ -795,9 +795,15 @@ func TestInputFrozenAtClaimAndImmutableAcrossRetries(t *testing.T) {
 	}
 
 	// The profile hash and idempotency key are COMPUTED deterministically in Go,
-	// never taken from the caller. The hash is over the CANONICAL processing block,
-	// and the same canonical form is what is persisted as processing_profile.
-	_, wantHash, err := profileCanonical([]byte(`{"profile":"full-rag-v1"}`))
+	// never taken from the caller. The hash is over the CANONICAL final processing
+	// block (after ForceRebuild is applied from the job), and the same canonical
+	// form is what is persisted as processing_profile.
+	wantProc, err := decodeProcessing([]byte(`{"profile":"full-rag-v1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is a non-force job, matching defaultClaim.
+	_, wantHash, err := canonicalBytes(wantProc)
 	if err != nil {
 		t.Fatal(err)
 	}
