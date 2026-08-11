@@ -5,14 +5,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/dispatcher"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
@@ -57,6 +62,32 @@ func main() {
 		syncSvc := sync.New(src, rep, cfg.ZoteroBaseURL, cfg.ZoteroLibraryID, logger)
 		srv.SetSyncAPI(syncSvc)
 		srv.SetJobRepo(rep)
+
+		// The dispatcher is opt-in and runs only when explicitly enabled. It
+		// claims jobs, drives them through the processor and back to a terminal
+		// state; a broken processor is surfaced on start via capability
+		// negotiation, not silently stalling claims.
+		if cfg.DispatcherEnabled {
+			pclient, perr := processor.New(processor.Options{BaseURL: cfg.ProcessorURL})
+			if perr != nil {
+				logger.Fatalf("processor client: %v", perr)
+			}
+			dctx, dcancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer dcancel()
+			disp := dispatcher.New(rep, pclient, dispatcher.Config{
+				WorkerID:            cfg.DispatcherWorkerID,
+				Concurrency:         cfg.DispatcherConcurrency,
+				Profile:             json.RawMessage(cfg.DispatcherProfile),
+				RenewalInterval:     cfg.DispatcherLeaseDuration / 3, // sane default
+				LeaseDuration:       cfg.DispatcherLeaseDuration,
+				RequireCapabilities: true,
+			}, logger)
+			go func() {
+				if err := disp.Run(dctx); err != nil {
+					logger.Printf("dispatcher stopped: %v", err)
+				}
+			}()
+		}
 	}
 	logger.Printf("listening on %s", addr)
 	httpServer := &http.Server{
