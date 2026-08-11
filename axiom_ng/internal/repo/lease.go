@@ -113,11 +113,13 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 	if opts.WorkerID == "" {
 		return nil, errors.New("claim: worker id is required")
 	}
-	leaseDur := opts.LeaseDuration
-	if leaseDur <= 0 {
-		leaseDur = DefaultLeaseDuration
+	if opts.LeaseDuration <= 0 {
+		return nil, errors.New("claim: lease duration must be positive")
 	}
-	leaseSec := int(leaseDur.Seconds())
+	if opts.LeaseDuration < time.Second {
+		return nil, errors.New("claim: lease duration must be at least 1 second")
+	}
+	leaseSec := int(opts.LeaseDuration.Seconds())
 
 	skipped := 0
 	first := true
@@ -179,15 +181,22 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			continue
 		}
 
-		// Deterministically derive the profile hash and idempotency key in Go,
-		// then build the immutable FrozenInput from the locked state.
+		// Deterministically derive the profile hash and the flat processing block in
+		// Go, then build the immutable FrozenInput from the locked state.
 		profileHash, err := canonicalProfile(opts.Profile)
 		if err != nil {
 			tx.Rollback(ctx)
 			return nil, err
 		}
+		proc, err := profileFields(opts.Profile)
+		if err != nil {
+			tx.Rollback(ctx)
+			return nil, err
+		}
+		proc.ForceRebuild = cand.forceRebuild
+		proc.ProfileHash = profileHash
 		idemKey := idempotencyKey(cand.id, state.attachment.id, state.attachment.contentHash, profileHash, cand.forceRebuild)
-		snapshot := buildFrozenInput(cand, state, opts.Profile, profileHash, idemKey)
+		snapshot := buildFrozenInput(cand, state, proc, idemKey)
 
 		var newAttempt int
 		var tsToken string
@@ -353,6 +362,7 @@ type zoteroSourceRow struct {
 
 type zoteroDocRow struct {
 	id              string
+	sourceID        string
 	zoteroKey       string
 	zoteroVersion   int64
 	canonicalItemID *string
@@ -378,6 +388,8 @@ type zoteroDocRow struct {
 
 type zoteroAttachRow struct {
 	id            string
+	sourceID      string
+	documentID    string
 	zoteroKey     string
 	zoteroVersion int64
 	contentType   *string
@@ -431,12 +443,12 @@ func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*
 
 	var docParentKey, docLinkMode *string
 	err = tx.QueryRow(ctx, `
-		SELECT id::text, zotero_key, zotero_version, canonical_item_id::text,
+		SELECT id::text, source_id::text, zotero_key, zotero_version, canonical_item_id::text,
 		       item_type, title, creators, abstract_note, publication_year,
 		       publication_date, publisher, isbn, doi, url, language,
 		       tags, collections, metadata, deleted
 		FROM zotero_documents WHERE id=$1 FOR UPDATE`, c.documentID).Scan(
-		&s.document.id, &s.document.zoteroKey, &s.document.zoteroVersion, &s.document.canonicalItemID,
+		&s.document.id, &s.document.sourceID, &s.document.zoteroKey, &s.document.zoteroVersion, &s.document.canonicalItemID,
 		&s.document.itemType, &s.document.title, &s.document.creators, &s.document.abstract, &s.document.publicationYear,
 		&s.document.publicationDate, &s.document.publisher, &s.document.isbn, &s.document.doi, &s.document.url, &s.document.language,
 		&s.document.tags, &s.document.collections, &s.document.metadata, &s.document.deleted)
@@ -455,10 +467,10 @@ func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*
 		return nil, "PARENT_REMOVED", nil
 	}
 	err = tx.QueryRow(ctx, `
-		SELECT id::text, zotero_key, zotero_version, content_type, filename, local_path,
+		SELECT id::text, source_id::text, document_id::text, zotero_key, zotero_version, content_type, filename, local_path,
 		       content_hash, file_size, mtime_ms, preferred, deleted, parent_zotero_key, link_mode
 		FROM zotero_attachments WHERE id=$1 FOR UPDATE`, c.attachmentID).Scan(
-		&s.attachment.id, &s.attachment.zoteroKey, &s.attachment.zoteroVersion,
+		&s.attachment.id, &s.attachment.sourceID, &s.attachment.documentID, &s.attachment.zoteroKey, &s.attachment.zoteroVersion,
 		&s.attachment.contentType, &s.attachment.filename, &s.attachment.localPath,
 		&s.attachment.contentHash, &s.attachment.fileSize, &s.attachment.mtimeMS,
 		&s.attachment.preferred, &s.attachment.deleted,
@@ -475,19 +487,34 @@ func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*
 	if !s.attachment.preferred {
 		return nil, "ATTACHMENT_NOT_PREFERRED", nil
 	}
-	// Check job-vs-current hash consistency exactly as the previous obsoleteReason
-	// did. For a non-forced rebuild:
-	//   - current hash present and differs from the job hash (or job hash NULL) -> CHANGED
-	//   - current hash missing but the job expects one                        -> MISSING
-	//
-	// A forced rebuild deliberately ignores the stale job-level hash.
-	if !c.forceRebuild {
-		switch {
-		case s.attachment.contentHash != nil && (c.contentHash == nil || *s.attachment.contentHash != *c.contentHash):
-			return nil, "CONTENT_HASH_CHANGED", nil
-		case s.attachment.contentHash == nil && c.contentHash != nil:
-			return nil, "CONTENT_HASH_MISSING", nil
-		}
+	// FK membership chain: the job's source/document/attachment must all belong to
+	// one consistent Zotero hierarchy, or the job is broken (cross-source or
+	// cross-document) and must be skipped, not have B/C rows frozen together.
+	if s.document.sourceID != c.sourceID || s.attachment.sourceID != c.sourceID ||
+		s.attachment.documentID != c.documentID || s.document.id != c.documentID ||
+		s.attachment.id != c.attachmentID {
+		return nil, "PARENT_REMOVED", nil
+	}
+	// The attachment must be a child of this document: its parent_zotero_key must
+	// equal the document's zotero_key.
+	if docParentKey == nil || *docParentKey != s.document.zoteroKey {
+		return nil, "PARENT_REMOVED", nil
+	}
+
+	// Current-hash requirement (F4): the processor contract requires a hash
+	// comparison, so a job whose attachment has NO current hash cannot be claimed
+	// at all, including force-rebuild. Such jobs skip as CONTENT_HASH_MISSING.
+	hash := s.attachment.contentHash
+	if hash == nil || *hash == "" {
+		return nil, "CONTENT_HASH_MISSING", nil
+	}
+	// Job-vs-current hash consistency: with a real current hash, a non-forced job
+	// must not be claimed unless it knows the same hash. If the job's stored hash
+	// is NULL or differs, the job predates the current file -> CHANGED. A force
+	// rebuild intentionally ignores the stale job-level hash (but still requires a
+	// real current hash, per F4).
+	if !c.forceRebuild && (c.contentHash == nil || *c.contentHash != *hash) {
+		return nil, "CONTENT_HASH_CHANGED", nil
 	}
 	s.document.parentKey, s.document.linkMode = docParentKey, docLinkMode
 
@@ -509,7 +536,7 @@ func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*
 
 // buildFrozenInput assembles the durable immutable snapshot for a claim from the
 // locked state, the canonicalized profile and the derived hashes/keys.
-func buildFrozenInput(c *candidate, s *frozenState, profile json.RawMessage, profileHash, idemKey string) []byte {
+func buildFrozenInput(c *candidate, s *frozenState, proc FrozenProcessing, idemKey string) []byte {
 	fi := FrozenInput{
 		ContractVersion: "1.0",
 		JobID:           c.id,
@@ -553,11 +580,7 @@ func buildFrozenInput(c *candidate, s *frozenState, profile json.RawMessage, pro
 			SizeBytes:     s.attachment.fileSize,
 			MtimeMS:       s.attachment.mtimeMS,
 		},
-		Processing: FrozenProcessing{
-			Profile:      json.RawMessage(profile),
-			ForceRebuild: c.forceRebuild,
-			ProfileHash:  profileHash,
-		},
+		Processing: proc,
 	}
 	b, _ := json.Marshal(fi)
 	return b
@@ -619,6 +642,9 @@ func (r *Repo) fencedUpdate(ctx context.Context, ex execer, sqlStmt string, ref 
 // database time. Returns ErrLostLease if the job is no longer owned OR its
 // lease has expired (an expired token is lost even before recovery/reclaim).
 func (r *Repo) RenewLease(ctx context.Context, ref LeaseRef, duration time.Duration) error {
+	if duration < time.Second {
+		return errors.New("renew lease: duration must be at least 1 second")
+	}
 	ok, err := r.fencedUpdate(ctx, r.pool, `
 		UPDATE ingest_jobs SET
 			lease_until = now() + make_interval(secs => $4),
@@ -736,13 +762,33 @@ func (r *Repo) MarkFailed(ctx context.Context, ref LeaseRef, errorCode, errorMes
 
 // MarkCompletedTx finalises a job as completed inside a CALLER-OWNED
 // transaction, alongside the durable processing-snapshot persistence (Gate 4
-// persists the snapshot and completes the job in one commit). It re-fences with
-// owner+lease+unexpired and re-validates the current attachment: still not
-// deleted, still preferred, and its CURRENT hash unchanged from the hash frozen
-// in input_snapshot at claim time (forced-rebuild jobs included). A job whose
-// frozen snapshot has no content_hash cannot be completed. A rollback of the
-// caller's transaction rolls the completion back with it.
+// persists the snapshot and completes the job in one commit).
+//
+// It serializes against the Zotero canonical sync using the same per-source
+// advisory lock as the claim (pg_advisory_xact_lock on the job's source_id), so
+// a concurrent sync cannot change the attachment/document mid-completion. Under
+// that lock it re-fences owner+lease+unexpired and re-validates the CURRENT
+// source/document/attachment chain and the attachment hash unchanged from the
+// hash frozen in input_snapshot at claim time (forced-rebuild jobs included). A
+// job whose frozen snapshot has no content_hash cannot be completed. A rollback
+// of the caller's transaction rolls the completion back with it.
 func (r *Repo) MarkCompletedTx(ctx context.Context, tx pgx.Tx, ref LeaseRef, processorName, processorVersion, snapshotID string) error {
+	// Read the job's source to take the same per-source advisory lock the claim and
+	// the canonical sync share (this keeps completion atomic against a sync that
+	// could change the attachment hash/preferred or the document mid-flight).
+	var srcID string
+	err := tx.QueryRow(ctx, `SELECT COALESCE(source_id::text,'') FROM ingest_jobs WHERE id=$1`, ref.JobID).Scan(&srcID)
+	if err != nil {
+		return fmt.Errorf("mark completed: read source: %w", err)
+	}
+	if srcID == "" {
+		// No source reference => cannot validate the chain; lost/obsolete.
+		return fmt.Errorf("mark completed: %w", ErrLostLease)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey(srcID)); err != nil {
+		return fmt.Errorf("mark completed: acquire source lock: %w", err)
+	}
+
 	ok, err := r.fencedUpdate(ctx, tx, `
 		UPDATE ingest_jobs j SET
 			status='completed',
@@ -754,8 +800,14 @@ func (r *Repo) MarkCompletedTx(ctx context.Context, tx pgx.Tx, ref LeaseRef, pro
 		  AND j.lease_until IS NOT NULL AND j.lease_until > clock_timestamp()
 		  AND EXISTS (
 		        SELECT 1 FROM zotero_attachments a
+		        JOIN zotero_documents d ON d.id = a.document_id
 		        WHERE a.id = j.attachment_id
 		          AND a.deleted = false AND a.preferred = true
+		          AND d.deleted = false
+		          AND a.source_id = j.source_id
+		          AND a.document_id = j.document_id
+		          AND d.source_id = j.source_id
+		          AND a.parent_zotero_key = d.zotero_key
 		          AND j.input_snapshot IS NOT NULL
 		          AND (j.input_snapshot->'attachment'->>'content_hash') IS NOT NULL
 		          AND (j.input_snapshot->'attachment'->>'content_hash') = a.content_hash
@@ -822,6 +874,9 @@ func (r *Repo) RequestCancellation(ctx context.Context, jobID string) error {
 			cancel_requested_at = COALESCE(cancel_requested_at, now()),
 			claimed_by = CASE WHEN status = 'pending' THEN NULL ELSE claimed_by END,
 			lease_token = CASE WHEN status = 'pending' THEN NULL ELSE lease_token END,
+			lease_until = CASE WHEN status = 'pending' THEN NULL ELSE lease_until END,
+			last_heartbeat_at = CASE WHEN status = 'pending' THEN NULL ELSE last_heartbeat_at END,
+			next_attempt_at = CASE WHEN status = 'pending' THEN NULL ELSE next_attempt_at END,
 			completed_at = CASE WHEN status = 'pending' THEN COALESCE(completed_at, now()) END,
 			updated_at=now()
 		WHERE id=$1 AND status NOT IN ('completed','failed','cancelled','skipped')

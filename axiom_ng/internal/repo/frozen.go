@@ -58,14 +58,64 @@ type FrozenAttachment struct {
 	MtimeMS       *int64  `json:"mtime_ms"`
 }
 
-// FrozenProcessing records the processing identity frozen at claim time so the
-// dispatcher can assemble the contract request's processing block. Profile is the
-// structured profile object (e.g. {"profile":"full-rag-v1",...flags}), stored as
-// JSON (not a stringified string) so a dispatcher can read its fields.
+// FrozenProcessing is the processing block exactly as PROCESSOR_CONTRACT.md
+// defines it: `profile` is the profile NAME (a flat string) with sibling feature
+// flags, not a nested profile object. The dispatcher can deserialize this snapshot
+// directly into a contract request's processing object.
 type FrozenProcessing struct {
-	Profile      json.RawMessage `json:"profile"`
-	ForceRebuild bool            `json:"force_rebuild"`
-	ProfileHash  string          `json:"profile_hash"`
+	Profile                 string `json:"profile"`
+	ForceRebuild            bool   `json:"force_rebuild"`
+	ProfileHash             string `json:"profile_hash"`
+	LanguageHint            string `json:"language_hint,omitempty"`
+	ExtractImages           bool   `json:"extract_images"`
+	ComputeDenseEmbeddings  bool   `json:"compute_dense_embeddings"`
+	ComputeSparseEmbeddings bool   `json:"compute_sparse_embeddings"`
+	ExtractEntities         bool   `json:"extract_entities"`
+	ExtractRelationships    bool   `json:"extract_relationships"`
+}
+
+// profileFlags extracts the flat processing fields from a profile JSON object
+// (e.g. {"profile":"full-rag-v1","language_hint":"de","extract_images":true,
+// ...}). Unknown keys are ignored; booleans default to false. Returns the profile
+// name and the feature-flag struct.
+func profileFields(profile json.RawMessage) (FrozenProcessing, error) {
+	var p FrozenProcessing
+	if len(profile) == 0 {
+		return p, errors.New("profile is required for a claim")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(profile, &m); err != nil {
+		return p, fmt.Errorf("profile is not valid JSON: %w", err)
+	}
+	if name, ok := m["profile"].(string); ok {
+		p.Profile = name
+	}
+	if p.Profile == "" {
+		return p, errors.New("profile object has no \"profile\" name field")
+	}
+	trueIf := func(keys ...string) bool {
+		for _, k := range keys {
+			if b, ok := m[k].(bool); ok && b {
+				return true
+			}
+		}
+		return false
+	}
+	strIf := func(keys ...string) string {
+		for _, k := range keys {
+			if s, ok := m[k].(string); ok {
+				return s
+			}
+		}
+		return ""
+	}
+	p.LanguageHint = strIf("language_hint", "language")
+	p.ExtractImages = trueIf("extract_images")
+	p.ComputeDenseEmbeddings = trueIf("compute_dense_embeddings")
+	p.ComputeSparseEmbeddings = trueIf("compute_sparse_embeddings")
+	p.ExtractEntities = trueIf("extract_entities")
+	p.ExtractRelationships = trueIf("extract_relationships")
+	return p, nil
 }
 
 // metadataSnapshot builds the metadata_snapshot JSON for a claimed document. If

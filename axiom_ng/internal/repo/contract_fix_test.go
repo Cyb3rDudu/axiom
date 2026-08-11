@@ -131,20 +131,19 @@ func TestFrozenInputIsContractComplete(t *testing.T) {
 		t.Errorf("attachment.mtime_ms = %v", fi.Attachment.MtimeMS)
 	}
 
-	// The processing block carries the structured profile object (not a
-	// stringified string) and the derived hash.
-	var prof map[string]any
-	if err := json.Unmarshal(fi.Processing.Profile, &prof); err != nil {
-		t.Fatalf("processing.profile is not JSON: %v", err)
-	}
-	if prof["profile"] != "full-rag-v1" {
-		t.Errorf("processing.profile.profile = %v, want full-rag-v1", prof["profile"])
+	// The processing block matches PROCESSOR_CONTRACT.md: profile is a flat NAME
+	// string with sibling feature flags (no nested object).
+	if fi.Processing.Profile != "full-rag-v1" {
+		t.Errorf("processing.profile = %q, want the profile name full-rag-v1 (flat)", fi.Processing.Profile)
 	}
 	if fi.Processing.ForceRebuild {
 		t.Error("processing.force_rebuild should be false")
 	}
 	if fi.Processing.ProfileHash == "" {
 		t.Error("processing.profile_hash is empty")
+	}
+	if fi.Processing.LanguageHint != "" || fi.Processing.ExtractImages {
+		t.Error("processing feature flags should default to off for the default profile")
 	}
 
 	// metadata_snapshot is the LOSSESS canonical raw_data: compare semantically

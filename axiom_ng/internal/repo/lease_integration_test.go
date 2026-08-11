@@ -442,15 +442,21 @@ func TestNullHashAndForcedRebuildMismatch(t *testing.T) {
 	lr := openLeaseDB(t)
 	lr.truncateFixtures(t)
 
-	// (a) Attachment hash NULL -> job claimable (no hash baseline).
+	// (a) NULL/empty current attachment hash -> CONTENT_HASH_MISSING skip, even for
+	// a job with no stored hash (processor contract requires a hash to compare).
 	_, jNull := lr.seed(t, seedSpec{
 		sourceBaseURL: "http://localhost:5", libraryID: "users/0",
 		docKey: "D1", attKey: "D1", contentHash: nil, preferred: true,
 	}, "pending", 3)
-	if cj := lr.claim(t, defaultClaim("worker-a")); cj == nil {
-		t.Fatal("NULL current hash should claim")
-	} else if cj.JobID != jNull {
-		t.Fatalf("expected claim of NULL-hash job %s, got %s", jNull, cj.JobID)
+	if cj := lr.claim(t, defaultClaim("worker-a")); cj != nil {
+		t.Fatalf("NULL current-hash job must be skipped, got claimed %v", cj)
+	}
+	rNull := lr.rowOf(t, jNull)
+	if rNull.status != "skipped" {
+		t.Fatalf("NULL current-hash job status = %s, want skipped", rNull.status)
+	}
+	if rNull.errorCode == nil || *rNull.errorCode != "SKIPPED" || rNull.errorMessage == nil || *rNull.errorMessage != "CONTENT_HASH_MISSING" {
+		t.Fatalf("NULL-hash skip reason = %v/%v, want SKIPPED/CONTENT_HASH_MISSING", rNull.errorCode, rNull.errorMessage)
 	}
 
 	// (b) Job content_hash set but attachment hash differs -> mismatch -> skipped.
@@ -1032,16 +1038,14 @@ func TestUpgrade0005To0006Additive(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := lr.pool.QueryRow(ctx, `
-		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version, parent_zotero_key, link_mode, content_type, filename, preferred)
-		VALUES ($1,$2,'OLD',1,'OLD','imported_file','application/pdf','old.pdf',true) RETURNING id::text`, srcID, docID).Scan(&attID); err != nil {
+		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version, parent_zotero_key, link_mode, content_type, filename, content_hash, preferred)
+		VALUES ($1,$2,'OLD',1,'OLD','imported_file','application/pdf','old.pdf','sha256:upgrade',true) RETURNING id::text`, srcID, docID).Scan(&attID); err != nil {
 		t.Fatal(err)
 	}
-	// content_hash must be NULL to satisfy the partial unique index (0002) which
-	// covers (attachment_id, content_hash) WHERE force_rebuild=false.
 	var oldJobID string
 	if err := lr.pool.QueryRow(ctx, `
-		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, status)
-		VALUES ($1,$2,$3,'pending') RETURNING id::text`, srcID, docID, attID).Scan(&oldJobID); err != nil {
+		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status)
+		VALUES ($1,$2,$3,'sha256:upgrade','pending') RETURNING id::text`, srcID, docID, attID).Scan(&oldJobID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1360,26 +1364,22 @@ func TestForcedRebuildCompletionHashConsistency(t *testing.T) {
 		t.Fatalf("forced-rebuild attachment-change completion = %v, want ErrLostLease", err)
 	}
 
-	// (d) NULL snapshot hash (NULL-hash attachment at claim) can never complete.
+	// (d) NULL/empty current attachment hash can never be claimed (F4): the
+	// processor contract requires a hash, so even a forced job skips immediately.
 	_, jNull := lr.seed(t, seedSpec{
 		sourceBaseURL: "http://localhost:34", libraryID: "users/3",
 		docKey: "R4", attKey: "R4", contentHash: nil, preferred: true,
 	}, "pending", 3)
-	// The attachment and job both have a NULL hash at claim, so the frozen
-	// snapshot records a NULL content_hash and the job is claimable (NULL==NULL).
 	if _, err := lr.pool.Exec(ctx,
 		`UPDATE zotero_attachments SET content_hash=NULL WHERE zotero_key='R4'`); err != nil {
 		t.Fatal(err)
 	}
-	cj4 := lr.claim(t, defaultClaim("worker-d"))
-	if cj4 == nil || cj4.JobID != jNull {
-		t.Fatalf("expected claim %s, got %v", jNull, cj4)
+	if cj4 := lr.claim(t, defaultClaim("worker-d")); cj4 != nil {
+		t.Fatalf("NULL-current-hash job must be skipped, got claimed %v", cj4)
 	}
-	if err := lr.rep.MarkProcessing(ctx, cj4.LeaseRef); err != nil {
-		t.Fatal(err)
-	}
-	if err := complete(t, jNull, cj4.LeaseRef); !errors.Is(err, ErrLostLease) {
-		t.Fatalf("NULL-snapshot-hash completion = %v, want ErrLostLease", err)
+	rn := lr.rowOf(t, jNull)
+	if rn.status != "skipped" || rn.errorMessage == nil || *rn.errorMessage != "CONTENT_HASH_MISSING" {
+		t.Fatalf("NULL-current-hash job = %s/%v, want skipped/CONTENT_HASH_MISSING", rn.status, rn.errorMessage)
 	}
 }
 
