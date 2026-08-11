@@ -233,6 +233,18 @@ func (r *Repo) terminalizeStale(ctx context.Context, tx pgx.Tx) error {
 		   AND lease_until IS NOT NULL AND lease_until <= now()
 		   AND attempt >= max_attempts`,
 	}
+	// A genuine defect states can converge: an exhausted pending job (attempt was
+	// consumed on claim) is stranded otherwise, so drain it here rather than
+	// leaving it at the queue head forever.
+	stmts = append(stmts,
+		`UPDATE ingest_jobs SET status='failed', error_code='RETRY_EXHAUSTED',
+		          error_message='attempt limit reached',
+		          claimed_by=NULL, lease_token=NULL, lease_until=NULL,
+		          next_attempt_at=NULL,
+		          completed_at=COALESCE(completed_at, now()), updated_at=now()
+		 WHERE status='pending' AND next_attempt_at IS NULL
+		   AND attempt >= max_attempts AND cancel_requested_at IS NULL`,
+	)
 	for _, s := range stmts {
 		if _, err := tx.Exec(ctx, s); err != nil {
 			return fmt.Errorf("terminalize stale: %w", err)
@@ -257,11 +269,13 @@ func claimCandidate(ctx context.Context, tx pgx.Tx, excludedID *string) (*candid
 	}
 	sql := `
 		SELECT j.id, j.attempt, j.max_attempts, j.content_hash, j.force_rebuild,
-		       j.source_id::text, j.document_id::text, j.attachment_id::text,
+		       COALESCE(j.source_id::text, '')     AS src_id,
+		       COALESCE(j.document_id::text, '')   AS doc_id,
+		       COALESCE(j.attachment_id::text, '') AS att_id,
 		       COALESCE(a.deleted, true)            AS att_deleted,
 		       COALESCE(a.preferred, false)         AS att_preferred,
 		       COALESCE(d.deleted, true)            AS doc_deleted,
-		       COALESCE(s.id::text, '')             AS src_id,
+		       COALESCE(s.id::text, '')             AS src_uuid,
 		       a.content_type, a.filename, a.local_path, a.content_hash AS att_hash,
 		       COALESCE(a.file_size,0), COALESCE(a.mtime_ms,0),
 		       a.zotero_key AS att_key, d.zotero_key AS doc_key, d.title,
@@ -306,15 +320,15 @@ type candidate struct {
 	docDeleted   bool
 	srcID        string
 
-	contentType string
-	filename    string
+	contentType *string
+	filename    *string
 	localPath   *string
 	attHash     *string
 	fileSize    int64
 	mtimeMS     int64
-	attKey      string
-	docKey      string
-	title       string
+	attKey      *string
+	docKey      *string
+	title       *string
 	curHash     *string
 }
 
@@ -428,8 +442,8 @@ func (r *Repo) fencedUpdate(ctx context.Context, ex execer, sqlStmt string, ref 
 }
 
 // RenewLease extends the lease_until and heartbeat for a claimed job using
-// database time. Returns a lost-lease error if the job is no longer owned in an
-// expected state.
+// database time. Returns ErrLostLease if the job is no longer owned OR its
+// lease has expired (an expired token is lost even before recovery/reclaim).
 func (r *Repo) RenewLease(ctx context.Context, ref LeaseRef, duration time.Duration) error {
 	ok, err := r.fencedUpdate(ctx, r.pool, `
 		UPDATE ingest_jobs SET
@@ -438,6 +452,7 @@ func (r *Repo) RenewLease(ctx context.Context, ref LeaseRef, duration time.Durat
 			updated_at = now()
 		WHERE id=$1 AND claimed_by=$2 AND lease_token=$3
 		  AND status IN ('claimed','processing')
+		  AND lease_until IS NOT NULL AND lease_until > now()
 	`, ref, int(duration.Seconds()))
 	if err != nil {
 		return err
@@ -453,6 +468,7 @@ func (r *Repo) MarkProcessing(ctx context.Context, ref LeaseRef) error {
 	ok, err := r.fencedUpdate(ctx, r.pool, `
 		UPDATE ingest_jobs SET status='processing', updated_at=now()
 		WHERE id=$1 AND claimed_by=$2 AND lease_token=$3 AND status='claimed'
+		  AND lease_until IS NOT NULL AND lease_until > now()
 	`, ref)
 	if err != nil {
 		return err
@@ -463,34 +479,65 @@ func (r *Repo) MarkProcessing(ctx context.Context, ref LeaseRef) error {
 	return nil
 }
 
+// RetryOutcome distinguishes a scheduled retry from a final-attempt exhaustion.
+type RetryOutcome int
+
+const (
+	// RetryScheduled means the job was returned to pending for a later attempt.
+	RetryScheduled RetryOutcome = iota
+	// RetryExhausted means this was the last attempt and the job terminalized as
+	// failed/RETRY_EXHAUSTED.
+	RetryExhausted
+)
+
+func (o RetryOutcome) String() string {
+	if o == RetryExhausted {
+		return "retry_exhausted"
+	}
+	return "retry_scheduled"
+}
+
 // ScheduleRetry returns a claimed/processing job to pending for a later retry
-// with bounded backoff. The delay is clamped into [0, maxRetryDelaySeconds]; the
-// DB stores now()+delay so no sleeps happen inside a transaction or while
-// holding a lease.
-func (r *Repo) ScheduleRetry(ctx context.Context, ref LeaseRef, errorCode, errorMessage string, nextDelaySeconds int) error {
+// with bounded backoff, clamped into [0, maxRetryDelaySeconds]; the DB stores
+// now()+delay so no sleeps happen inside a transaction or while holding a lease.
+//
+// If the job has reached max_attempts (this is the last attempt), the job
+// becomes terminal failed/RETRY_EXHAUSTED instead of pending, with the lease
+// cleared, completed_at set and next_attempt_at NULL, so no stranded pending
+// row can be produced at the attempt ceiling.
+func (r *Repo) ScheduleRetry(ctx context.Context, ref LeaseRef, errorCode, errorMessage string, nextDelaySeconds int) (RetryOutcome, error) {
 	if nextDelaySeconds < 0 {
 		nextDelaySeconds = 0
 	}
 	if nextDelaySeconds > maxRetryDelaySeconds {
 		nextDelaySeconds = maxRetryDelaySeconds
 	}
-	ok, err := r.fencedUpdate(ctx, r.pool, `
+	var status string
+	err := r.pool.QueryRow(ctx, `
 		UPDATE ingest_jobs SET
-			status='pending',
-			next_attempt_at = now() + make_interval(secs => $6),
-			error_code=$4, error_message=$5,
+			status = CASE WHEN attempt >= max_attempts THEN 'failed'::ingest_job_status ELSE 'pending'::ingest_job_status END,
+			next_attempt_at = CASE WHEN attempt >= max_attempts THEN NULL
+			                      ELSE now() + make_interval(secs => $6) END,
+			error_code = CASE WHEN attempt >= max_attempts THEN 'RETRY_EXHAUSTED' ELSE $4 END,
+			error_message = $5,
 			claimed_by=NULL, lease_token=NULL, lease_until=NULL,
+			completed_at = CASE WHEN attempt >= max_attempts THEN COALESCE(completed_at, now()) END,
 			updated_at=now()
 		WHERE id=$1 AND claimed_by=$2 AND lease_token=$3
 		  AND status IN ('claimed','processing')
-	`, ref, errorCode, errorMessage, nextDelaySeconds)
+		  AND lease_until IS NOT NULL AND lease_until > now()
+		RETURNING status
+	`, ref.JobID, ref.WorkerID, ref.LeaseToken, errorCode, errorMessage, nextDelaySeconds).Scan(&status)
+	if err == pgx.ErrNoRows {
+		return 0, fmt.Errorf("schedule retry: %w", ErrLostLease)
+	}
 	if err != nil {
-		return err
+		return 0, fmt.Errorf("schedule retry: %w", err)
 	}
-	if !ok {
-		return fmt.Errorf("schedule retry: %w", ErrLostLease)
+	if status == "failed" {
+		return RetryExhausted, nil
 	}
-	return nil
+	return RetryScheduled, nil
 }
 
 // MarkFailed sets a terminal failed state, clearing the lease.
@@ -502,6 +549,7 @@ func (r *Repo) MarkFailed(ctx context.Context, ref LeaseRef, errorCode, errorMes
 			completed_at=COALESCE(completed_at, now()), updated_at=now()
 		WHERE id=$1 AND claimed_by=$2 AND lease_token=$3
 		  AND status IN ('claimed','processing')
+		  AND lease_until IS NOT NULL AND lease_until > now()
 	`, ref, errorCode, errorMessage)
 	if err != nil {
 		return err
@@ -515,8 +563,10 @@ func (r *Repo) MarkFailed(ctx context.Context, ref LeaseRef, errorCode, errorMes
 // MarkCompletedTx finalises a job as completed inside a CALLER-OWNED
 // transaction, alongside the durable processing-snapshot persistence (Gate 4
 // persists the snapshot and completes the job in one commit). It re-fences with
-// owner+lease and re-validates the current attachment state (not deleted, still
-// preferred, hash still matching unless forced rebuild). A rollback of the
+// owner+lease+unexpired and re-validates the current attachment: still not
+// deleted, still preferred, and its CURRENT hash unchanged from the hash frozen
+// in input_snapshot at claim time (forced-rebuild jobs included). A job whose
+// frozen snapshot has no content_hash cannot be completed. A rollback of the
 // caller's transaction rolls the completion back with it.
 func (r *Repo) MarkCompletedTx(ctx context.Context, tx pgx.Tx, ref LeaseRef, processorName, processorVersion, snapshotID string) error {
 	ok, err := r.fencedUpdate(ctx, tx, `
@@ -527,13 +577,14 @@ func (r *Repo) MarkCompletedTx(ctx context.Context, tx pgx.Tx, ref LeaseRef, pro
 			claimed_by=NULL, lease_token=NULL, lease_until=NULL,
 			completed_at=COALESCE(completed_at, now()), updated_at=now()
 		WHERE j.id=$1 AND j.claimed_by=$2 AND j.lease_token=$3 AND j.status='processing'
+		  AND j.lease_until IS NOT NULL AND j.lease_until > now()
 		  AND EXISTS (
 		        SELECT 1 FROM zotero_attachments a
 		        WHERE a.id = j.attachment_id
 		          AND a.deleted = false AND a.preferred = true
-		          AND (j.force_rebuild
-		               OR (j.content_hash IS NOT NULL AND a.content_hash IS NOT NULL
-		                   AND a.content_hash = j.content_hash))
+		          AND j.input_snapshot IS NOT NULL
+		          AND (j.input_snapshot->>'content_hash') IS NOT NULL
+		          AND (j.input_snapshot->>'content_hash') = a.content_hash
 		      )
 	`, ref, processorName, processorVersion, snapshotID)
 	if err != nil {
@@ -554,6 +605,7 @@ func (r *Repo) MarkCancelled(ctx context.Context, ref LeaseRef) error {
 			completed_at=COALESCE(completed_at, now()), updated_at=now()
 		WHERE id=$1 AND claimed_by=$2 AND lease_token=$3
 		  AND status IN ('claimed','processing')
+		  AND lease_until IS NOT NULL AND lease_until > now()
 	`, ref)
 	if err != nil {
 		return err
@@ -573,6 +625,7 @@ func (r *Repo) MarkSkipped(ctx context.Context, ref LeaseRef, reason string) err
 			completed_at=COALESCE(completed_at, now()), updated_at=now()
 		WHERE id=$1 AND claimed_by=$2 AND lease_token=$3
 		  AND status IN ('claimed','processing')
+		  AND lease_until IS NOT NULL AND lease_until > now()
 	`, ref, reason)
 	if err != nil {
 		return err
@@ -595,24 +648,33 @@ func (r *Repo) RequestCancellation(ctx context.Context, jobID string) error {
 	return err
 }
 
-// ReleaseOrExpireLease clears the lease fields for a job owned by ref, returning
-// it to pending so it is claimable again. Used by graceful shutdown so in-flight
-// work is not lost after restart.
+// ReleaseOrExpireLease clears the lease fields for a job owned by ref so an
+// in-flight job survives a graceful shutdown without being lost. When the job
+// has consumed its max attempts it is terminalized to failed/RETRY_EXHAUSTED
+// instead of being returned to pending (a pending row at the attempt ceiling
+// would be stranded, as it can neither be claimed nor would normal retry push it
+// further). Otherwise it returns to pending, due now.
 func (r *Repo) ReleaseOrExpireLease(ctx context.Context, ref LeaseRef) error {
-	ok, err := r.fencedUpdate(ctx, r.pool, `
+	var status string
+	err := r.pool.QueryRow(ctx, `
 		UPDATE ingest_jobs SET
 			claimed_by=NULL, lease_token=NULL, lease_until=NULL,
-			status='pending',
-			next_attempt_at=now(),
+			status = CASE WHEN attempt >= max_attempts THEN 'failed'::ingest_job_status ELSE 'pending'::ingest_job_status END,
+			next_attempt_at = CASE WHEN attempt >= max_attempts THEN NULL ELSE now() END,
+			error_code = CASE WHEN attempt >= max_attempts THEN 'RETRY_EXHAUSTED' ELSE error_code END,
+			error_message = CASE WHEN attempt >= max_attempts THEN 'attempt limit reached' ELSE error_message END,
+			completed_at = CASE WHEN attempt >= max_attempts THEN COALESCE(completed_at, now()) END,
 			updated_at=now()
 		WHERE id=$1 AND claimed_by=$2 AND lease_token=$3
 		  AND status IN ('claimed','processing')
-	`, ref)
-	if err != nil {
-		return err
-	}
-	if !ok {
+		  AND lease_until IS NOT NULL AND lease_until > now()
+		RETURNING status
+	`, ref.JobID, ref.WorkerID, ref.LeaseToken).Scan(&status)
+	if err == pgx.ErrNoRows {
 		return fmt.Errorf("release lease: %w", ErrLostLease)
+	}
+	if err != nil {
+		return fmt.Errorf("release lease: %w", err)
 	}
 	return nil
 }

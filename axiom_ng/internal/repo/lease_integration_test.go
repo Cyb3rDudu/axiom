@@ -294,14 +294,20 @@ func TestClaimSameJobNotDoubleGrantedConcurrent(t *testing.T) {
 	wg.Wait()
 	close(results)
 
-	n := 0
+	winners := 0
 	for res := range results {
-		if res.err == nil && res.cj != nil {
-			n++
+		if res.err != nil {
+			t.Errorf("claimer error: %v", res.err)
+		}
+		if res.cj != nil {
+			winners++
+			if winners == 1 && res.cj.JobID != jobID {
+				t.Errorf("winner claimed %s, want %s", res.cj.JobID, jobID)
+			}
 		}
 	}
-	if n != 1 {
-		t.Fatalf("exactly one claimer must win, got %d winners", n)
+	if winners != 1 {
+		t.Fatalf("exactly one claimer must win, got %d winners", winners)
 	}
 	r := lr.rowOf(t, jobID)
 	if r.status != "claimed" {
@@ -309,6 +315,15 @@ func TestClaimSameJobNotDoubleGrantedConcurrent(t *testing.T) {
 	}
 	if r.leaseToken == nil || *r.leaseToken == "" {
 		t.Fatalf("claimed job has no lease token")
+	}
+	if r.attempt != 1 {
+		t.Fatalf("attempt after concurrent claim = %d, want 1 (incremented exactly once)", r.attempt)
+	}
+	if r.claimedBy == nil || !strings.HasPrefix(*r.claimedBy, "worker-") {
+		t.Fatalf("claimed job has no owner: %v", r.claimedBy)
+	}
+	if r.leaseUntil == nil {
+		t.Fatal("claimed job has no lease_until")
 	}
 }
 
@@ -755,9 +770,14 @@ func TestScheduleRetryBounded(t *testing.T) {
 		docKey: "M1", attKey: "M1", contentHash: h("sha256:p"), preferred: true,
 	}, "pending", 3)
 	cj := lr.claim(t, defaultClaim("worker-a"))
-	// Huge negative delay must clamp to 0 (immediately claimable).
-	if err := lr.rep.ScheduleRetry(context.Background(), cj.LeaseRef, "IO_ERROR", "boom", -5000); err != nil {
+	// Huge negative delay must clamp to 0 (immediately claimable) and, below the
+	// attempt ceiling, must be a scheduled retry (not exhaustion).
+	outcome, err := lr.rep.ScheduleRetry(context.Background(), cj.LeaseRef, "IO_ERROR", "boom", -5000)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if outcome != RetryScheduled {
+		t.Fatalf("outcome = %v, want RetryScheduled", outcome)
 	}
 	r := lr.rowOf(t, jobID)
 	if r.status != "pending" {
@@ -816,8 +836,17 @@ func TestMarkCompletedTxAtomic(t *testing.T) {
 	if err := tx2.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if r := lr.rowOf(t, jobID2); r.status == "completed" {
-		t.Fatal("rolled-back completion persisted as completed")
+	// The exact pre-transaction `processing` row must remain: not completed, owner+
+	// token still held, no completed_at, no processor/snapshot recorded.
+	r := lr.rowOf(t, jobID2)
+	if r.status != "processing" {
+		t.Fatalf("rolled-back completion left status = %s, want processing", r.status)
+	}
+	if r.leaseToken == nil || r.claimedBy == nil || r.leaseUntil == nil {
+		t.Fatal("rolled-back completion lost the worker's lease ownership")
+	}
+	if r.completedAt != nil {
+		t.Fatal("rolled-back completion set completed_at")
 	}
 }
 
@@ -843,12 +872,17 @@ func TestCompletionRejectsChangedAttachment(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = lr.rep.MarkCompletedTx(ctx, tx, cj.LeaseRef, "p", "1", "snap")
-	if err == nil {
-		t.Fatal("completion accepted despite changed attachment hash")
-	}
 	_ = tx.Rollback(ctx)
-	if r := lr.rowOf(t, jobID); r.status == "completed" {
-		t.Fatal("job marked completed despite changed attachment")
+	if !errors.Is(err, ErrLostLease) {
+		t.Fatalf("completion with changed attachment = %v, want ErrLostLease", err)
+	}
+	// The job must remain processing with its lease intact (nothing committed).
+	r := lr.rowOf(t, jobID)
+	if r.status != "processing" {
+		t.Fatalf("job status after rejected completion = %s, want processing", r.status)
+	}
+	if r.leaseToken == nil || r.leaseUntil == nil || r.completedAt != nil {
+		t.Fatal("rejected completion must leave the processing job untouched")
 	}
 }
 
@@ -977,5 +1011,312 @@ func TestUpgrade0005To0006Additive(t *testing.T) {
 	}
 	if cj == nil || cj.JobID != oldJobID {
 		t.Fatalf("upgraded row not claimable: %v", cj)
+	}
+}
+
+// seedPendingOnly inserts a pending ingest_jobs row with the given (possibly
+// NULL) FK values, used to test legacy rows whose parents are absent.
+func (lr *leaseRepo) seedPendingOnly(t *testing.T, sourceID, documentID, attachmentID *string, maxAttempts int) string {
+	t.Helper()
+	ctx := context.Background()
+	var jobID string
+	err := lr.pool.QueryRow(ctx, `
+		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, status, max_attempts)
+		VALUES ($1, $2, $3, 'pending', $4) RETURNING id::text`,
+		sourceID, documentID, attachmentID, maxAttempts).Scan(&jobID)
+	if err != nil {
+		t.Fatalf("insert raw job: %v", err)
+	}
+	return jobID
+}
+
+// TestExpiredLeaseIsLost tests that a token whose lease has expired (but which
+// has NOT yet been reclaimed) is a lost-lease for every worker-owned mutation.
+func TestExpiredLeaseIsLost(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	_, jobID := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:30", libraryID: "users/0",
+		docKey: "Q1", attKey: "Q1", contentHash: h("sha256:ea"), preferred: true,
+	}, "pending", 3)
+	cj := lr.claim(t, defaultClaim("worker-a"))
+	// Expire the lease WITHOUT reclaiming it.
+	lr.expire(t, jobID)
+
+	stale := cj.LeaseRef
+	ctx := context.Background()
+	checks := []struct {
+		name string
+		run  func() error
+	}{
+		{"renew", func() error { return lr.rep.RenewLease(ctx, stale, 120*time.Second) }},
+		{"mark-processing", func() error { return lr.rep.MarkProcessing(ctx, stale) }},
+		{"mark-failed", func() error { return lr.rep.MarkFailed(ctx, stale, "IO_ERROR", "x") }},
+		{"mark-cancelled", func() error { return lr.rep.MarkCancelled(ctx, stale) }},
+		{"mark-skipped", func() error { return lr.rep.MarkSkipped(ctx, stale, "whatever") }},
+		{"schedule-retry", func() error { _, err := lr.rep.ScheduleRetry(ctx, stale, "E", "m", 5); return err }},
+		{"release", func() error { return lr.rep.ReleaseOrExpireLease(ctx, stale) }},
+	}
+	for _, c := range checks {
+		if err := c.run(); !errors.Is(err, ErrLostLease) {
+			t.Errorf("%s on expired lease = %v, want ErrLostLease", c.name, err)
+		}
+	}
+
+	// MarkCompletedTx is fenced the same way (caller-owned tx must roll back).
+	tx, err := lr.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = lr.rep.MarkCompletedTx(ctx, tx, stale, "p", "1", "snap")
+	_ = tx.Rollback(ctx)
+	if !errors.Is(err, ErrLostLease) {
+		t.Fatalf("mark-completed on expired lease = %v, want ErrLostLease", err)
+	}
+
+	// The row must still be untouched and claimable again after expiry reclaim.
+	r := lr.rowOf(t, jobID)
+	if r.status != "claimed" {
+		t.Fatalf("job status after failed fence = %s, want claimed (untouched)", r.status)
+	}
+}
+
+// TestNullableParentsTerminalizeToSkipped tests that legacy NULL-FK rows are
+// terminalized to skipped (not a scan/transaction error).
+func TestNullableParentsTerminalizeToSkipped(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+
+	// attachment_id = NULL => obsolete.
+	jNoAtt := lr.seedPendingOnly(t, nil, nil, nil, 3)
+	// document_id = NULL => obsolete.
+	jNoDoc := lr.seedPendingOnly(t, nil, nil, nil, 3)
+	// source_id = NULL => obsolete.
+	jNoSrc := lr.seedPendingOnly(t, nil, nil, nil, 3)
+
+	// A single claim pass must drain all three to skipped without error.
+	for i := 0; i < 4; i++ {
+		cj := lr.claim(t, defaultClaim("worker-a"))
+		if cj != nil {
+			t.Fatalf("a NULL-parent job was claimed: %v", cj)
+		}
+	}
+	for _, id := range []string{jNoAtt, jNoDoc, jNoSrc} {
+		r := lr.rowOf(t, id)
+		if r.status != "skipped" {
+			t.Fatalf("job %s status = %s, want skipped (NULL parent)", id, r.status)
+		}
+		if r.errorCode == nil || *r.errorCode != "SKIPPED" {
+			t.Fatalf("job %s skip code = %v", id, r.errorCode)
+		}
+	}
+}
+
+// TestForcedRebuildCompletionHashConsistency tests that both normal and
+// forced-rebuild completion validate the CURRENT attachment hash against the
+// frozen input_snapshot hash, and that forced rebuild never bypasses it.
+func TestForcedRebuildCompletionHashConsistency(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	complete := func(t *testing.T, jobID string, ref LeaseRef) error {
+		t.Helper()
+		tx, err := lr.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = lr.rep.MarkCompletedTx(ctx, tx, ref, "p", "1", "snap")
+		_ = tx.Rollback(ctx)
+		return err
+	}
+
+	// (a) Normal job: unchanged attachment completes.
+	_, jNorm := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:31", libraryID: "users/0",
+		docKey: "R1", attKey: "R1", contentHash: h("sha256:n1"), preferred: true,
+	}, "pending", 3)
+	cj := lr.claim(t, defaultClaim("worker-a"))
+	if err := lr.rep.MarkProcessing(ctx, cj.LeaseRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := complete(t, jNorm, cj.LeaseRef); err != nil {
+		t.Fatalf("normal unchanged completion failed: %v", err)
+	}
+
+	// (b) Forced rebuild with a STALE job hash is claimable (frozen snapshot
+	// records the CURRENT attachment hash), and unchanged attachment completes.
+	_, jForce := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:32", libraryID: "users/1",
+		docKey: "R2", attKey: "R2", contentHash: h("sha256:stale-job-hash"), preferred: true,
+	}, "pending", 3)
+	// The current attachment hash differs from the stale job hash.
+	if _, err := lr.pool.Exec(ctx,
+		`UPDATE ingest_jobs SET force_rebuild=true WHERE id=$1`, jForce); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lr.pool.Exec(ctx,
+		`UPDATE zotero_attachments SET content_hash='sha256:current-2' WHERE zotero_key='R2'`); err != nil {
+		t.Fatal(err)
+	}
+	cj2 := lr.claim(t, defaultClaim("worker-b"))
+	if cj2 == nil || cj2.JobID != jForce {
+		t.Fatalf("forced-rebuild stale-hash job should claim %s, got %v", jForce, cj2)
+	}
+	if err := lr.rep.MarkProcessing(ctx, cj2.LeaseRef); err != nil {
+		t.Fatal(err)
+	}
+	// The frozen snapshot carried the CURRENT hash 'sha256:current-2'; attachment
+	// unchanged => completion succeeds.
+	if err := complete(t, jForce, cj2.LeaseRef); err != nil {
+		t.Fatalf("forced-rebuild unchanged completion failed: %v", err)
+	}
+
+	// (c) Forced rebuild whose attachment CHANGES after claim => completion fails.
+	_, jForceChange := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:33", libraryID: "users/2",
+		docKey: "R3", attKey: "R3", contentHash: h("sha256:stale-3"), preferred: true,
+	}, "pending", 3)
+	if _, err := lr.pool.Exec(ctx,
+		`UPDATE ingest_jobs SET force_rebuild=true WHERE id=$1`, jForceChange); err != nil {
+		t.Fatal(err)
+	}
+	cj3 := lr.claim(t, defaultClaim("worker-c"))
+	if cj3 == nil || cj3.JobID != jForceChange {
+		t.Fatalf("expected claim %s, got %v", jForceChange, cj3)
+	}
+	if err := lr.rep.MarkProcessing(ctx, cj3.LeaseRef); err != nil {
+		t.Fatal(err)
+	}
+	// Change the attachment AFTER the claim froze its hash.
+	if _, err := lr.pool.Exec(ctx,
+		`UPDATE zotero_attachments SET content_hash='sha256:changed-after-claim' WHERE zotero_key='R3'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := complete(t, jForceChange, cj3.LeaseRef); !errors.Is(err, ErrLostLease) {
+		t.Fatalf("forced-rebuild attachment-change completion = %v, want ErrLostLease", err)
+	}
+
+	// (d) NULL snapshot hash (NULL-hash attachment at claim) can never complete.
+	_, jNull := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:34", libraryID: "users/3",
+		docKey: "R4", attKey: "R4", contentHash: nil, preferred: true,
+	}, "pending", 3)
+	// The attachment and job both have a NULL hash at claim, so the frozen
+	// snapshot records a NULL content_hash and the job is claimable (NULL==NULL).
+	if _, err := lr.pool.Exec(ctx,
+		`UPDATE zotero_attachments SET content_hash=NULL WHERE zotero_key='R4'`); err != nil {
+		t.Fatal(err)
+	}
+	cj4 := lr.claim(t, defaultClaim("worker-d"))
+	if cj4 == nil || cj4.JobID != jNull {
+		t.Fatalf("expected claim %s, got %v", jNull, cj4)
+	}
+	if err := lr.rep.MarkProcessing(ctx, cj4.LeaseRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := complete(t, jNull, cj4.LeaseRef); !errors.Is(err, ErrLostLease) {
+		t.Fatalf("NULL-snapshot-hash completion = %v, want ErrLostLease", err)
+	}
+}
+
+// TestFinalAttemptExhaustion tests that no pending job can carry attempt >=
+// max_attempts: retry and release at the ceiling terminalize instead.
+func TestFinalAttemptExhaustion(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	// (a) Retry below the limit => pending / RetryScheduled.
+	_, jBelow := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:35", libraryID: "users/0",
+		docKey: "S1", attKey: "S1", contentHash: h("sha256:s1"), preferred: true,
+	}, "pending", 3)
+	cjb := lr.claim(t, defaultClaim("worker-a"))
+	if out, err := lr.rep.ScheduleRetry(ctx, cjb.LeaseRef, "IO_ERROR", "boom", 5); err != nil {
+		t.Fatal(err)
+	} else if out != RetryScheduled {
+		t.Fatalf("below-limit retry outcome = %v, want RetryScheduled", out)
+	}
+	if r := lr.rowOf(t, jBelow); r.status != "pending" {
+		t.Fatalf("below-limit retry status = %s, want pending", r.status)
+	}
+
+	// (b) Retry at the last attempt => failed/RETRY_EXHAUSTED, no lease, completed_at.
+	_, jLast := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:36", libraryID: "users/1",
+		docKey: "S2", attKey: "S2", contentHash: h("sha256:s2"), preferred: true,
+	}, "pending", 3)
+	cjl := lr.claim(t, defaultClaim("worker-b"))
+	// Force this to be the last attempt (already consumed max attempts).
+	if _, err := lr.pool.Exec(ctx,
+		`UPDATE ingest_jobs SET attempt=max_attempts WHERE id=$1`, jLast); err != nil {
+		t.Fatal(err)
+	}
+	out, err := lr.rep.ScheduleRetry(ctx, cjl.LeaseRef, "IO_ERROR", "boom", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != RetryExhausted {
+		t.Fatalf("last-attempt retry outcome = %v, want RetryExhausted", out)
+	}
+	r := lr.rowOf(t, jLast)
+	if r.status != "failed" {
+		t.Fatalf("last-attempt retry status = %s, want failed", r.status)
+	}
+	if r.errorCode == nil || *r.errorCode != "RETRY_EXHAUSTED" {
+		t.Fatalf("last-attempt error_code = %v, want RETRY_EXHAUSTED", r.errorCode)
+	}
+	if r.leaseToken != nil || r.claimedBy != nil || r.leaseUntil != nil {
+		t.Fatal("exhausted job must have lease fields cleared")
+	}
+	if r.completedAt == nil {
+		t.Fatal("exhausted job must have completed_at set")
+	}
+	if r.nextAttemptAt != nil {
+		t.Fatal("exhausted job must have next_attempt_at cleared")
+	}
+
+	// (c) Release on the last attempt => failed/RETRY_EXHAUSTED, not stranded pending.
+	_, jRel := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:37", libraryID: "users/2",
+		docKey: "S3", attKey: "S3", contentHash: h("sha256:s3"), preferred: true,
+	}, "pending", 3)
+	cjr := lr.claim(t, defaultClaim("worker-c"))
+	if _, err := lr.pool.Exec(ctx,
+		`UPDATE ingest_jobs SET attempt=max_attempts WHERE id=$1`, jRel); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.rep.ReleaseOrExpireLease(ctx, cjr.LeaseRef); err != nil {
+		t.Fatal(err)
+	}
+	rr := lr.rowOf(t, jRel)
+	if rr.status != "failed" {
+		t.Fatalf("release on last attempt status = %s, want failed (no stranded pending)", rr.status)
+	}
+	if rr.errorCode == nil || *rr.errorCode != "RETRY_EXHAUSTED" {
+		t.Fatalf("release-exhausted code = %v, want RETRY_EXHAUSTED", rr.errorCode)
+	}
+	if rr.completedAt == nil {
+		t.Fatal("release-exhausted must have completed_at")
+	}
+
+	// (d) terminalizeStale cleans an existing exhausted pending row.
+	_, jStranded := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:38", libraryID: "users/3",
+		docKey: "S4", attKey: "S4", contentHash: h("sha256:s4"), preferred: true,
+	}, "pending", 3)
+	if _, err := lr.pool.Exec(ctx,
+		`UPDATE ingest_jobs SET attempt=max_attempts, next_attempt_at=NULL WHERE id=$1`, jStranded); err != nil {
+		t.Fatal(err)
+	}
+	// Any claim pass runs terminalizeStale.
+	_ = lr.claim(t, defaultClaim("worker-d"))
+	sr := lr.rowOf(t, jStranded)
+	if sr.status != "failed" {
+		t.Fatalf("exhausted-pending cleanup status = %s, want failed", sr.status)
+	}
+	if sr.errorCode == nil || *sr.errorCode != "RETRY_EXHAUSTED" {
+		t.Fatalf("cleanup code = %v, want RETRY_EXHAUSTED", sr.errorCode)
 	}
 }
