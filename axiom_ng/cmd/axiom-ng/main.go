@@ -74,11 +74,12 @@ func main() {
 			}
 			dctx, dcancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer dcancel()
+			// RenewalInterval is left unset; dispatcher.New derives a sane default
+			// (LeaseDuration/3) so the two can't drift.
 			disp := dispatcher.New(rep, pclient, dispatcher.Config{
 				WorkerID:            cfg.DispatcherWorkerID,
 				Concurrency:         cfg.DispatcherConcurrency,
 				Profile:             json.RawMessage(cfg.DispatcherProfile),
-				RenewalInterval:     cfg.DispatcherLeaseDuration / 3, // sane default
 				LeaseDuration:       cfg.DispatcherLeaseDuration,
 				RequireCapabilities: true,
 			}, logger)

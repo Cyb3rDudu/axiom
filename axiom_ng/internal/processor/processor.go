@@ -186,8 +186,7 @@ func (e *StatusError) Error() string {
 
 // do performs a request, decoding into out on 2xx. On non-2xx it returns a
 // *StatusError with a bounded body excerpt. Bodies are size-bounded and always
-// closed. idempotent controls retry safety at the call site (this client never
-// auto-retries).
+// closed. This client never auto-retries; callers decide retry safety per route.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
@@ -222,11 +221,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		return fmt.Errorf("processor %s: response body exceeds %d bytes", path, c.maxBody)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		excerpt := string(raw)
-		if len(excerpt) > 512 {
-			excerpt = excerpt[:512]
-		}
-		return &StatusError{Method: method, Path: path, Code: resp.StatusCode, Body: excerpts(strings.TrimSpace(excerpt))}
+		return &StatusError{Method: method, Path: path, Code: resp.StatusCode, Body: excerpts(strings.TrimSpace(string(raw)))}
 	}
 	if out == nil {
 		return nil
