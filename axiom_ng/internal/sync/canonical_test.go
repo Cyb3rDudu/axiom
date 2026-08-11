@@ -24,12 +24,17 @@ type canonicalFake struct {
 	deleteEvents []zotero.DeleteEvent
 	collections  []zotero.CanonicalCollection
 	version      int64
+	// forceFull forces FullSnapshot=true regardless of the cursor, simulating
+	// the reconcile-by-absence fallback when a deletion feed (trash or
+	// /deleted) is unavailable.
+	forceFull bool
 }
 
 func (c *canonicalFake) ServerID() string { return c.serverID }
 func (c *canonicalFake) ListCanonicalItems(since int64) (zotero.CanonicalBatch, error) {
+	full := since == 0 || c.forceFull
 	return zotero.CanonicalBatch{
-		FullSnapshot: since == 0,
+		FullSnapshot: full,
 		Items:        c.items,
 		DeleteEvents: c.deleteEvents,
 		NewVersion:   c.version,

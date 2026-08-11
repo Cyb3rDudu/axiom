@@ -94,94 +94,6 @@ func (a *LocalAPI) ServerID() string {
 	return id
 }
 
-// zoteroObject is the common envelope of every local API object.
-type zoteroObject struct {
-	Key     string          `json:"key"`
-	Version int64           `json:"version"`
-	Links   zoteroLinks     `json:"links"`
-	Meta    zoteroMeta      `json:"meta"`
-	Data    json.RawMessage `json:"data"`
-}
-
-type zoteroLinks struct {
-	Enclosure zoteroLink `json:"enclosure"`
-}
-
-type zoteroLink struct {
-	Href string `json:"href"`
-}
-
-type zoteroMeta struct {
-	NumChildren int `json:"numChildren"`
-}
-
-// zoteroItemData is the content of the "data" object of an item.
-type zoteroItemData struct {
-	Key         string          `json:"key"`
-	Version     int64           `json:"version"`
-	ItemType    string          `json:"itemType"`
-	Title       string          `json:"title"`
-	ParentItem  string          `json:"parentItem,omitempty"`
-	LinkMode    string          `json:"linkMode,omitempty"`
-	ContentType string          `json:"contentType,omitempty"`
-	Filename    string          `json:"filename,omitempty"`
-	Date        string          `json:"date"`
-	URL         string          `json:"url,omitempty"`
-	Creators    []zoteroCreator `json:"creators,omitempty"`
-	Tags        []zoteroTag     `json:"tags,omitempty"`
-	Collections []string        `json:"collections,omitempty"`
-}
-
-type zoteroCreator struct {
-	FirstName string `json:"firstName"`
-	LastName  string `json:"lastName"`
-}
-
-type zoteroTag struct {
-	Tag string `json:"tag"`
-}
-
-func (a *LocalAPI) getItems(query url.Values) ([]zoteroObject, error) {
-	items, _, err := a.getItemsWithVersion(query)
-	return items, err
-}
-
-// getItemsWithVersion paginates over /items and also returns the library
-// version reported in the Last-Modified-Version header of the last response.
-func (a *LocalAPI) getItemsWithVersion(query url.Values) ([]zoteroObject, int64, error) {
-	if query == nil {
-		query = url.Values{}
-	}
-	query.Set("format", "json")
-	query.Set("limit", "100")
-	var all []zoteroObject
-	var lastVersion int64
-	start := 0
-	for {
-		q := cloneValues(query)
-		q.Set("start", fmt.Sprintf("%d", start))
-		resp, err := a.get(a.libraryID+"/items", q)
-		if err != nil {
-			return nil, lastVersion, err
-		}
-		if v := versionHeader(resp.Header.Get("Last-Modified-Version")); v > lastVersion {
-			lastVersion = v
-		}
-		var batch []zoteroObject
-		err = json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&batch)
-		resp.Body.Close()
-		if err != nil {
-			return nil, lastVersion, fmt.Errorf("zotero items decode: %w", err)
-		}
-		all = append(all, batch...)
-		if len(batch) < 100 {
-			break
-		}
-		start += len(batch)
-	}
-	return all, lastVersion, nil
-}
-
 // getItemsRaw paginates over /items and returns each item as its full raw JSON
 // envelope (preserving all fields for the canonical lossless mirror) plus the
 // Last-Modified-Version.
@@ -278,7 +190,7 @@ func (a *LocalAPI) ListCanonicalItems(since int64) (CanonicalBatch, error) {
 	deletedFeedSupported := true
 	if since > 0 {
 		allEvents, v, derr := a.ListDeletedKeys(since)
-		if errors.Is(derr, errMissingDeletedFeed) {
+		if errors.Is(derr, errDeletionFeedUnavailable) {
 			// The /deleted feed is unsupported (404/501) on this Zotero instance.
 			// The deletion state is unknown for an incremental sync: silently
 			// advancing would risk leaving deleted items active. Fall back to a
@@ -421,31 +333,6 @@ func (a *LocalAPI) ListCanonicalCollections() ([]CanonicalCollection, error) {
 // paginated over /children with start/limit so parents with more than `limit`
 // children are not truncated (which would otherwise mark valid attachments as
 // deleted during reconciliation).
-func (a *LocalAPI) getChildren(parentKey string) ([]zoteroObject, error) {
-	path := a.libraryID + "/items/" + parentKey + "/children"
-	var all []zoteroObject
-	start := 0
-	for {
-		q := url.Values{"format": {"json"}, "limit": {"100"}, "start": {fmt.Sprintf("%d", start)}}
-		resp, err := a.get(path, q)
-		if err != nil {
-			return nil, err
-		}
-		var batch []zoteroObject
-		err = json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&batch)
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("zotero children %s decode: %w", parentKey, err)
-		}
-		all = append(all, batch...)
-		if len(batch) < 100 {
-			break
-		}
-		start += len(batch)
-	}
-	return all, nil
-}
-
 // versionHeader parses an unsigned library version string, returning 0 for
 // empty or malformed values.
 func versionHeader(s string) int64 {
@@ -457,282 +344,6 @@ func versionHeader(s string) int64 {
 		return 0
 	}
 	return v
-}
-
-// ListCollections returns the library's collections.
-func (a *LocalAPI) ListCollections() ([]Collection, error) {
-	resp, err := a.get(a.libraryID+"/collections", url.Values{"format": {"json"}})
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var raw []struct {
-		Data struct {
-			Key              string          `json:"key"`
-			Name             string          `json:"name"`
-			ParentCollection json.RawMessage `json:"parentCollection"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("zotero collections decode: %w", err)
-	}
-	out := make([]Collection, 0, len(raw))
-	for _, c := range raw {
-		// parentCollection is either a string (parent key) or the boolean
-		// false for top-level collections in the local API.
-		var parent string
-		if len(c.Data.ParentCollection) > 0 && c.Data.ParentCollection[0] == '"' {
-			_ = json.Unmarshal(c.Data.ParentCollection, &parent)
-		}
-		out = append(out, Collection{Key: c.Data.Key, Name: c.Data.Name, Parent: parent})
-	}
-	return out, nil
-}
-
-// ListPDFItems returns complete top-level documents that carry at least one
-// file attachment.
-//
-// since is the last known library version: pass 0 for a full sync, or a stored
-// version for an incremental sync. For incremental syncs the library is first
-// queried with ?since=<since>; the affected parent keys are then reconstructed
-// into complete documents (each parent item plus its current children) so a
-// change to an attachment alone never loses its parent, and vice versa.
-//
-// The returned version is taken from the Last-Modified-Version header and is
-// never allowed to fall below `since`, so a delta response that turns up no
-// items still advances (or at least never rewinds) the sync cursor.
-func (a *LocalAPI) ListPDFItems(since int64) (ListResult, error) {
-	result, err := a.listItems(since)
-	if err != nil {
-		return ListResult{}, err
-	}
-	return result, nil
-}
-
-func (a *LocalAPI) listItems(since int64) (ListResult, error) {
-	q := url.Values{}
-	if since > 0 {
-		q.Set("since", fmt.Sprintf("%d", since))
-	}
-	raw, headerVersion, err := a.getItemsWithVersion(q)
-	if err != nil {
-		return ListResult{}, err
-	}
-
-	// Cursor: trust the server's Last-Modified-Version, and never fall below
-	// the version we already committed to.
-	newVersion := headerVersion
-	if newVersion < since {
-		newVersion = since
-	}
-
-	// Decode the raw objects and reconstruct complete documents (parents with
-	// their current children) from those touched by this response. affectedKeys
-	// is every parent key touched by the delta (incl. parents that now have no
-	// processable attachment), used to scope reconciliation. deletedKeys is the
-	// set of parents Zotero reports removed during reconstruction.
-	parents, parentOf, affectedKeys, deletedKeys, err := a.completeItems(raw, since)
-	if err != nil {
-		return ListResult{}, err
-	}
-
-	items := make([]Item, 0, len(parents))
-	for _, d := range parents {
-		atts := parentOf[d.item.Key]
-		if len(atts) == 0 {
-			continue
-		}
-		var creat []Creator
-		for _, c := range d.item.Creators {
-			creat = append(creat, Creator{FirstName: c.FirstName, LastName: c.LastName})
-		}
-		var tags []Tag
-		for _, t := range d.item.Tags {
-			tags = append(tags, Tag{Tag: t.Tag})
-		}
-		items = append(items, Item{
-			Key:         d.item.Key,
-			Version:     d.item.Version,
-			ItemType:    d.item.ItemType,
-			Title:       d.item.Title,
-			Creators:    creat,
-			Tags:        tags,
-			Collections: d.item.Collections,
-			URL:         d.item.URL,
-			Attachments: atts,
-		})
-	}
-	return ListResult{
-		Items:        items,
-		AffectedKeys: uniqueKeys(affectedKeys),
-		DeletedKeys:  uniqueKeys(deletedKeys),
-		NewVersion:   newVersion,
-	}, nil
-}
-
-// completeItems decodes the raw delta response and returns complete documents.
-// For a full sync every parent with a file attachment is included. For an
-// incremental sync (since > 0) it also re-fetches the full parent + children
-// for every parent that was touched directly OR whose attachment changed, so a
-// partial change still reconstructs a complete document.
-type decodedItem struct {
-	obj  zoteroObject
-	item *zoteroItemData
-}
-
-func (a *LocalAPI) completeItems(raw []zoteroObject, since int64) ([]decodedItem, map[string][]Attachment, []string, []string, error) {
-	changedParents := map[string]bool{}
-	var parents []decodedItem
-	parentOf := map[string][]Attachment{}
-	deletedKeys := []string{}
-
-	addAttachment := func(obj zoteroObject, data *zoteroItemData) {
-		// Every attachment marks its parent as touched, including attachments
-		// that are not processable (e.g. an HTML note), so a change that turns
-		// the only PDF into another type still triggers a full-parent refresh
-		// and lets reconciliation mark the old attachment as removed.
-		if data.ParentItem == "" {
-			return
-		}
-		changedParents[data.ParentItem] = true
-	}
-
-	for _, obj := range raw {
-		var data zoteroItemData
-		if err := json.Unmarshal(obj.Data, &data); err != nil {
-			continue
-		}
-		if data.ItemType == "" {
-			continue
-		}
-		if data.ItemType == "attachment" {
-			addAttachment(obj, &data)
-			continue
-		}
-		changedParents[data.Key] = true
-	}
-
-	// For an incremental sync we must reconstruct complete documents. Gather
-	// the full item lists for each touched parent (parent item + children).
-	if since > 0 {
-		reconstructed, atts, aff, del, err := a.reconstructParents(changedParents, parents, parentOf)
-		return reconstructed, atts, aff, del, err
-	}
-	// Full sync: raw already contains every parent and attachment. Build the
-	// attachment map and parents list directly from the raw response. Every
-	// parent key seen is affected (the whole source is reconciled).
-	var rawParents []decodedItem
-	rawAtts := map[string][]Attachment{}
-	affected := make([]string, 0, len(rawParents))
-	for _, obj := range raw {
-		var data zoteroItemData
-		if err := json.Unmarshal(obj.Data, &data); err != nil {
-			continue
-		}
-		if data.ItemType == "attachment" {
-			if data.ParentItem == "" {
-				continue
-			}
-			att := Attachment{
-				Key:         data.Key,
-				Version:     data.Version,
-				ParentKey:   data.ParentItem,
-				ContentType: data.ContentType,
-				LinkMode:    data.LinkMode,
-				Filename:    data.Filename,
-				LocalPath:   obj.Links.Enclosure.Href,
-			}
-			rawAtts[data.ParentItem] = append(rawAtts[data.ParentItem], att)
-			affected = append(affected, data.ParentItem)
-			continue
-		}
-		rawParents = append(rawParents, decodedItem{obj: obj, item: &data})
-		affected = append(affected, data.Key)
-	}
-	return rawParents, rawAtts, uniqueKeys(affected), deletedKeys, nil
-}
-
-// reconstructParents loads the complete parent + children for each touched key
-// from the API, so a delta that only changed an attachment still yields the
-// full parent document and its current attachments. A parent that no longer
-// exists (404) is skipped; any other failure is returned so the caller does
-// not advance the sync cursor over an incompletely reconstructed delta.
-func (a *LocalAPI) reconstructParents(changed map[string]bool, parents []decodedItem, parentOf map[string][]Attachment) ([]decodedItem, map[string][]Attachment, []string, []string, error) {
-	affected := make([]string, 0, len(changed))
-	deleted := []string{}
-	for key := range changed {
-		affected = append(affected, key)
-		children, err := a.getChildren(key)
-		if err != nil {
-			var se *StatusError
-			if errors.As(err, &se) && se.Status == http.StatusNotFound {
-				// Parent was deleted in Zotero; record it so the sync can mark
-				// its document and attachments as removed.
-				deleted = append(deleted, key)
-				continue
-			}
-			return parents, parentOf, affected, deleted, fmt.Errorf("reconstruct children of %s: %w", key, err)
-		}
-		for _, obj := range children {
-			var data zoteroItemData
-			if err := json.Unmarshal(obj.Data, &data); err != nil {
-				continue
-			}
-			if data.ParentItem == "" {
-				continue
-			}
-			att := Attachment{
-				Key:         data.Key,
-				Version:     data.Version,
-				ParentKey:   data.ParentItem,
-				ContentType: data.ContentType,
-				LinkMode:    data.LinkMode,
-				Filename:    data.Filename,
-				LocalPath:   obj.Links.Enclosure.Href,
-			}
-			parentOf[key] = append(parentOf[key], att)
-		}
-		// Also fetch the parent item itself so a parent-only change is covered.
-		p, err := a.fetchItem(key)
-		if err != nil {
-			var se *StatusError
-			if errors.As(err, &se) && se.Status == http.StatusNotFound {
-				deleted = append(deleted, key)
-				continue
-			}
-			return parents, parentOf, affected, deleted, fmt.Errorf("reconstruct parent %s: %w", key, err)
-		}
-		if p == nil {
-			// Attachment-type or empty item; nothing to enqueue, but still an
-			// affected parent so reconciliation can clear its attachments.
-			continue
-		}
-		parents = append(parents, *p)
-	}
-	return parents, parentOf, affected, deleted, nil
-}
-
-// fetchItem returns a single item (parent) envelope, or (nil, nil) if it is
-// not a parent item (e.g. an attachment). Errors are returned so callers can
-// distinguish a transient failure from a graceful skip.
-func (a *LocalAPI) fetchItem(key string) (*decodedItem, error) {
-	resp, err := a.get(a.libraryID+"/items/"+key, url.Values{"format": {"json"}})
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var obj zoteroObject
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&obj); err != nil {
-		return nil, fmt.Errorf("zotero item %s decode: %w", key, err)
-	}
-	var data zoteroItemData
-	if err := json.Unmarshal(obj.Data, &data); err != nil {
-		return nil, fmt.Errorf("zotero item %s data: %w", key, err)
-	}
-	if data.ItemType == "attachment" || data.ItemType == "" {
-		return nil, nil
-	}
-	return &decodedItem{obj: obj, item: &data}, nil
 }
 
 // ListDeletedKeys returns the items Zotero reports as removed, structured so a
@@ -791,9 +402,11 @@ func (a *LocalAPI) listTrashedKeys(since int64) ([]DeleteEvent, int64, error) {
 		if err != nil {
 			var se *StatusError
 			if errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusNotImplemented) {
-				// Some Zotero versions do not expose a trash endpoint; treat as
-				// no deletions.
-				return allEvents, version, nil
+				// The trash feed is unsupported (404/501): the deletion state is
+				// incomplete, the same as a missing /deleted feed. Return the
+				// shared sentinel so the caller falls back to a full snapshot
+				// rather than silently treating deletions as empty.
+				return nil, 0, errDeletionFeedUnavailable
 			}
 			return nil, 0, err
 		}
@@ -852,7 +465,7 @@ func (a *LocalAPI) listPermanentlyDeletedKeys(since int64) (items []string, vers
 	if err != nil {
 		var se *StatusError
 		if errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusNotImplemented) {
-			return nil, 0, errMissingDeletedFeed
+			return nil, 0, errDeletionFeedUnavailable
 		}
 		return nil, 0, err
 	}
@@ -868,110 +481,11 @@ func (a *LocalAPI) listPermanentlyDeletedKeys(since int64) (items []string, vers
 	return body.Items, version, nil
 }
 
-// errMissingDeletedFeed reports that the Zotero instance does not expose the
-// /deleted incremental-deletion feed.
-var errMissingDeletedFeed = fmt.Errorf("zotero /deleted feed unavailable")
-
-// FetchParent reconstructs a single parent document (with its current children)
-// by key. It returns nil when the parent is gone or is not a parent item. Used
-// to re-process a document whose preferred attachment was deleted but that was
-// otherwise unchanged (so the normal preferred/hash/enqueue path can select a
-// remaining sibling).
-func (a *LocalAPI) FetchParent(parentKey string) (*Item, error) {
-	children, err := a.getChildren(parentKey)
-	if err != nil {
-		var se *StatusError
-		if errors.As(err, &se) && se.Status == http.StatusNotFound {
-			return nil, nil // parent gone
-		}
-		return nil, err
-	}
-	p, err := a.fetchItem(parentKey)
-	if err != nil {
-		var se *StatusError
-		if errors.As(err, &se) && se.Status == http.StatusNotFound {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if p == nil {
-		return nil, nil
-	}
-	var atts []Attachment
-	for _, obj := range children {
-		var data zoteroItemData
-		if err := json.Unmarshal(obj.Data, &data); err != nil {
-			continue
-		}
-		if data.ItemType != "attachment" || data.ParentItem == "" {
-			continue
-		}
-		atts = append(atts, Attachment{
-			Key:         data.Key,
-			Version:     data.Version,
-			ParentKey:   data.ParentItem,
-			ContentType: data.ContentType,
-			LinkMode:    data.LinkMode,
-			Filename:    data.Filename,
-			LocalPath:   obj.Links.Enclosure.Href,
-		})
-	}
-	var creat []Creator
-	for _, c := range p.item.Creators {
-		creat = append(creat, Creator{FirstName: c.FirstName, LastName: c.LastName})
-	}
-	var tags []Tag
-	for _, t := range p.item.Tags {
-		tags = append(tags, Tag{Tag: t.Tag})
-	}
-	return &Item{
-		Key:         p.item.Key,
-		Version:     p.item.Version,
-		ItemType:    p.item.ItemType,
-		Title:       p.item.Title,
-		Creators:    creat,
-		Tags:        tags,
-		Collections: p.item.Collections,
-		URL:         p.item.URL,
-		Attachments: atts,
-	}, nil
-}
-
-// ResolveAttachmentPath returns the local filesystem path of an attachment.
-// The file URI is read from the item's enclosure link; /file/view/url is a
-// fallback for attachments in responses that omit it.
-func (a *LocalAPI) ResolveAttachmentPath(attachmentKey string) (string, error) {
-	path := fmt.Sprintf("%s/items/%s", a.libraryID, attachmentKey)
-	resp, err := a.get(path, url.Values{"format": {"json"}})
-	if err != nil {
-		return "", err
-	}
-	var obj zoteroObject
-	err = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&obj)
-	resp.Body.Close()
-	if err != nil {
-		return "", fmt.Errorf("zotero item decode: %w", err)
-	}
-	if strings.HasPrefix(obj.Links.Enclosure.Href, "file://") {
-		return obj.Links.Enclosure.Href, nil
-	}
-	// Fallback to the explicit /file/view/url endpoint.
-	vu := fmt.Sprintf("%s/items/%s/file/view/url", a.libraryID, attachmentKey)
-	resp2, err := a.get(vu, nil)
-	if err != nil {
-		return "", err
-	}
-	b, rerr := io.ReadAll(io.LimitReader(resp2.Body, 16<<10))
-	resp2.Body.Close()
-	if rerr != nil {
-		return "", fmt.Errorf("zotero file/view/url: %w", rerr)
-	}
-	text := strings.TrimSpace(string(b))
-	if strings.HasPrefix(text, "file://") {
-		return text, nil
-	}
-	return "", fmt.Errorf("zotero attachment %s has no local file uri", attachmentKey)
-}
+// errDeletionFeedUnavailable reports that the Zotero instance does not expose
+// the trash feed and/or the /deleted incremental-deletion feed, so the
+// deletion state cannot be known incrementally (the caller must reconcile by a
+// full item snapshot instead of advancing the cursor).
+var errDeletionFeedUnavailable = fmt.Errorf("zotero deletion feed unavailable")
 
 func cloneValues(v url.Values) url.Values {
 	out := make(url.Values, len(v))

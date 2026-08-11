@@ -589,3 +589,63 @@ func TestClassifyFileErrorRetryableUnix(t *testing.T) {
 		t.Errorf("not-exist: code=%q retryable=%v, want FILE_NOT_FOUND+non-retryable", missing.ErrCode, missing.Retryable)
 	}
 }
+
+// TestCanonicalDeletedItemOnFallbackFullSnapshot: after a full sync, a later run
+// that simulates the actual LocalAPI fallback (deletion feed unavailable ->
+// force FullSnapshot=true) returns a snapshot WITHOUT the item; the item's
+// zotero_items row, document projection and attachment must all become
+// deleted=true, preferred=false, no new job is enqueued, and the cursor is
+// advanced to the snapshot version.
+func TestCanonicalDeletedItemOnFallbackFullSnapshot(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t, ctx)
+	pdf := makePdf(t, "a")
+	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 5}
+	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
+	res1, err := runCanon(t, src, d)
+	if err != nil {
+		t.Fatalf("full sync: %v", err)
+	}
+	srcID := res1.SourceID
+	if n := countActiveFor(t, d, "zotero_items", srcID); n != 2 {
+		t.Fatalf("after full sync active items = %d, want 2", n)
+	}
+	jobsBefore, _ := repo.New(d.Pool()).CountJobsForSource(ctx, srcID)
+
+	// Simulate the deletion-feed-unavailable fallback: force a full snapshot
+	// where the parent (and its attachment) no longer exist.
+	src.forceFull = true
+	src.version = 6
+	src.items = []zotero.CanonicalItem{} // item gone
+	res2, err := runCanon(t, src, d)
+	if err != nil {
+		t.Fatalf("fallback full snapshot: %v", err)
+	}
+	if res2.Items != 0 {
+		t.Fatalf("fallback snapshot should deliver 0 items, got %d", res2.Items)
+	}
+
+	var itemDeleted, docDeleted, attDeleted, attPref bool
+	_ = d.Pool().QueryRow(ctx, `SELECT deleted FROM zotero_items WHERE source_id=$1 AND zotero_key='B1'`, srcID).Scan(&itemDeleted)
+	_ = d.Pool().QueryRow(ctx, `SELECT deleted FROM zotero_documents WHERE source_id=$1 AND zotero_key='B1'`, srcID).Scan(&docDeleted)
+	_ = d.Pool().QueryRow(ctx, `SELECT deleted FROM zotero_attachments WHERE source_id=$1 AND zotero_key='A1'`, srcID).Scan(&attDeleted)
+	_ = d.Pool().QueryRow(ctx, `SELECT preferred FROM zotero_attachments WHERE source_id=$1 AND zotero_key='A1'`, srcID).Scan(&attPref)
+	if !itemDeleted || !docDeleted || !attDeleted {
+		t.Errorf("fallback full snapshot must delete item/doc/attachment: item=%v doc=%v att=%v",
+			itemDeleted, docDeleted, attDeleted)
+	}
+	if attPref {
+		t.Error("deleted attachment must not remain preferred")
+	}
+	jobsAfter, _ := repo.New(d.Pool()).CountJobsForSource(ctx, srcID)
+	if jobsAfter != jobsBefore {
+		t.Errorf("deleting an item must not enqueue new jobs: before=%d after=%d", jobsBefore, jobsAfter)
+	}
+	cur, err := repo.New(d.Pool()).CanonicalCursor(ctx, srcID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur != 6 {
+		t.Errorf("cursor = %d, want 6 (snapshot version)", cur)
+	}
+}

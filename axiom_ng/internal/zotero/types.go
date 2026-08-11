@@ -39,14 +39,6 @@ type DeleteEvent struct {
 	ParentKey string // only set for attachment deletions
 }
 
-// ListResult bundles what a full/incremental item listing yields.
-type ListResult struct {
-	Items        []Item   // complete documents with attachments
-	AffectedKeys []string // parent keys touched this run (for scoped reconciliation)
-	DeletedKeys  []string // parent keys reported deleted by Zotero
-	NewVersion   int64    // Last-Modified-Version (never below since)
-}
-
 // CanonicalItem is a lossless mirror of a Zotero item. Envelope is the full
 // item object (key, version, library, links, meta, data); Data is the item's
 // own "data" object. Both are kept as raw JSON so unknown fields survive the
@@ -79,29 +71,6 @@ type CanonicalCollection struct {
 	Name      string
 	ParentKey string
 	Envelope  json.RawMessage
-}
-
-// Collection is a named container within the library.
-type Collection struct {
-	Key    string `json:"key"`
-	Name   string `json:"name"`
-	Parent string `json:"parentCollection,omitempty"`
-}
-
-// Item is a top-level document (e.g. a book or journal article) with its
-// attachments resolved enough to enqueue processing work.
-type Item struct {
-	Key             string       `json:"key"`
-	Version         int64        `json:"version"`
-	ItemType        string       `json:"itemType"`
-	Title           string       `json:"title"`
-	Creators        []Creator    `json:"creators"`
-	PublicationYear *int         `json:"publicationYear,omitempty"`
-	AbstractNote    string       `json:"abstractNote,omitempty"`
-	Tags            []Tag        `json:"tags"`
-	Collections     []string     `json:"collections"`
-	Attachments     []Attachment `json:"attachments"`
-	URL             string       `json:"url,omitempty"`
 }
 
 // Creator is a single author/editor of an Item, including order and role.
