@@ -82,8 +82,9 @@ type FrozenProcessing struct {
 
 // decodeProcessing strictly decodes a profile JSON object into FrozenProcessing:
 // unknown keys and wrong-typed values are REJECTED (not silently ignored or
-// coerced), so the canonical form below — and therefore the profile hash and the
-// emitted request — cannot diverge from what will actually run.
+// coerced), and any trailing JSON content after the first object is rejected too,
+// so the canonical form below — and therefore the profile hash and the emitted
+// request — cannot diverge from what will actually run.
 func decodeProcessing(profile []byte) (FrozenProcessing, error) {
 	var p FrozenProcessing
 	if len(profile) == 0 {

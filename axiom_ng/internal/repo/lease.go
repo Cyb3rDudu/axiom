@@ -188,7 +188,7 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			return nil, err
 		}
 		proc.ForceRebuild = cand.forceRebuild
-		tlsProfile, profileHash, err := canonicalBytes(proc)
+		procCanonical, profileHash, err := canonicalBytes(proc)
 		if err != nil {
 			tx.Rollback(ctx)
 			return nil, err
@@ -214,7 +214,7 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 				updated_at        = now()
 			WHERE id = $1
 			RETURNING attempt, lease_token::text
-		`, cand.id, opts.WorkerID, leaseSec, snapshot, tlsProfile, profileHash, idemKey).
+		`, cand.id, opts.WorkerID, leaseSec, snapshot, procCanonical, profileHash, idemKey).
 			Scan(&newAttempt, &tsToken)
 		if err != nil {
 			tx.Rollback(ctx)
