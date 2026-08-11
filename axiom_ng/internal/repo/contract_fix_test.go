@@ -336,9 +336,6 @@ func TestClaimWaitsForConcurrentAttachmentChange(t *testing.T) {
 }
 
 // TestForceRebuildIdempotencyDistinct verifies a force-rebuild job derives an
-// idempotency key that cannot collide with a normal job, so a rebuild never
-// reuses an old processor result.
-// TestForceRebuildIdempotencyDistinct verifies a force-rebuild job derives an
 // idempotency key that cannot collide with a normal job, AND that two separate
 // force jobs for the SAME attachment/hash/profile still get distinct keys
 // (via job_id), so a rebuild never reuses an old processor result.
