@@ -173,6 +173,21 @@ func (lr *leaseRepo) seed(t *testing.T, spec seedSpec, jobStatus string, maxAtte
 	if err != nil {
 		t.Fatalf("insert document: %v", err)
 	}
+	// A canonical zotero_items row for the document (Zotero is the source of
+	// truth for metadata); claim requires it to be present and active.
+	var itemID string
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data)
+		VALUES ($1, $2, 1, 'book', NULL, $3, $4) RETURNING id::text`,
+		srcID, spec.docKey,
+		`{"key":"`+spec.docKey+`"}`,
+		`{"key":"`+spec.docKey+`","version":1,"itemType":"book","title":"Test Doc"}`,
+	).Scan(&itemID); err != nil {
+		t.Fatalf("insert canonical item: %v", err)
+	}
+	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_documents SET canonical_item_id=$2 WHERE id=$1`, docID, itemID); err != nil {
+		t.Fatalf("link canonical item: %v", err)
+	}
 	err = lr.pool.QueryRow(ctx, `
 		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
 			parent_zotero_key, link_mode, content_type, filename, local_path,
@@ -780,8 +795,9 @@ func TestInputFrozenAtClaimAndImmutableAcrossRetries(t *testing.T) {
 	}
 
 	// The profile hash and idempotency key are COMPUTED deterministically in Go,
-	// never taken from the caller.
-	wantHash, err := canonicalProfile([]byte(`{"profile":"full-rag-v1"}`))
+	// never taken from the caller. The hash is over the CANONICAL processing block,
+	// and the same canonical form is what is persisted as processing_profile.
+	_, wantHash, err := profileCanonical([]byte(`{"profile":"full-rag-v1"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1035,6 +1051,17 @@ func TestUpgrade0005To0006Additive(t *testing.T) {
 	if err := lr.pool.QueryRow(ctx, `
 		INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
 		VALUES ($1,'OLD',1,'book','Old') RETURNING id::text`, srcID).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+	// A canonical item is required for the upgraded row to be claimable under the
+	// no-lossy-fallback rule (Zotero is the source of truth for citation metadata).
+	var itemID string
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data)
+		VALUES ($1,'OLD',1,'book',NULL,'{}','{"key":"OLD","version":1,"itemType":"book","title":"Old"}') RETURNING id::text`, srcID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_documents SET canonical_item_id=$2 WHERE id=$1`, docID, itemID); err != nil {
 		t.Fatal(err)
 	}
 	if err := lr.pool.QueryRow(ctx, `

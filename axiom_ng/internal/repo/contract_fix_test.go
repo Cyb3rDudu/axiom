@@ -139,8 +139,8 @@ func TestFrozenInputIsContractComplete(t *testing.T) {
 	if fi.Processing.ForceRebuild {
 		t.Error("processing.force_rebuild should be false")
 	}
-	if fi.Processing.ProfileHash == "" {
-		t.Error("processing.profile_hash is empty")
+	if fi.ProfileHash == "" {
+		t.Error("snapshot profile_hash is empty (snapshot identity, not in the emit block)")
 	}
 	if fi.Processing.LanguageHint != "" || fi.Processing.ExtractImages {
 		t.Error("processing feature flags should default to off for the default profile")

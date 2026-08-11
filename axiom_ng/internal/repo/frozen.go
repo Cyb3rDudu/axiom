@@ -6,6 +6,7 @@
 package repo
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,11 +17,15 @@ import (
 // FrozenInput is the durable, immutable snapshot stored in ingest_jobs.input_snapshot
 // at claim time. It captures the source/document/attachment identity, all date
 // facts and the full bibliographic metadata snapshot (losslessly from the
-// canonical Zotero mirror), plus the processing identity.
+// canonical Zotero mirror), plus the processing identity. Field order follows the
+// PROCESSOR_CONTRACT.md request so a dispatcher can deserialize the source/
+// document/attachment/processing blocks directly; ProfileHash is snapshot
+// IDENTITY (also stored in ingest_jobs.profile_hash), not part of the emit block.
 type FrozenInput struct {
 	ContractVersion string           `json:"contract_version"`
 	JobID           string           `json:"job_id"`
 	IdempotencyKey  string           `json:"idempotency_key"`
+	ProfileHash     string           `json:"profile_hash"`
 	Source          FrozenSource     `json:"source"`
 	Document        FrozenDocument   `json:"document"`
 	Attachment      FrozenAttachment `json:"attachment"`
@@ -60,12 +65,12 @@ type FrozenAttachment struct {
 
 // FrozenProcessing is the processing block exactly as PROCESSOR_CONTRACT.md
 // defines it: `profile` is the profile NAME (a flat string) with sibling feature
-// flags, not a nested profile object. The dispatcher can deserialize this snapshot
-// directly into a contract request's processing object.
+// flags, and NO profile_hash (that is snapshot identity, not wire). The
+// dispatcher can deserialize this snapshot's processing block directly into a
+// contract request.
 type FrozenProcessing struct {
 	Profile                 string `json:"profile"`
 	ForceRebuild            bool   `json:"force_rebuild"`
-	ProfileHash             string `json:"profile_hash"`
 	LanguageHint            string `json:"language_hint,omitempty"`
 	ExtractImages           bool   `json:"extract_images"`
 	ComputeDenseEmbeddings  bool   `json:"compute_dense_embeddings"`
@@ -74,138 +79,53 @@ type FrozenProcessing struct {
 	ExtractRelationships    bool   `json:"extract_relationships"`
 }
 
-// profileFields extracts the flat processing fields from a profile JSON object
-// (e.g. {"profile":"full-rag-v1","language_hint":"de","extract_images":true,
-// ...}). Unknown keys are ignored; booleans default to false. Returns the profile
-// name and the feature-flag struct.
-func profileFields(profile json.RawMessage) (FrozenProcessing, error) {
+// decodeProcessing strictly decodes a profile JSON object into FrozenProcessing:
+// unknown keys and wrong-typed values are REJECTED (not silently ignored or
+// coerced), so the canonical form below — and therefore the profile hash and the
+// emitted request — cannot diverge from what will actually run.
+func decodeProcessing(profile []byte) (FrozenProcessing, error) {
 	var p FrozenProcessing
 	if len(profile) == 0 {
 		return p, errors.New("profile is required for a claim")
 	}
-	var m map[string]any
-	if err := json.Unmarshal(profile, &m); err != nil {
-		return p, fmt.Errorf("profile is not valid JSON: %w", err)
-	}
-	if name, ok := m["profile"].(string); ok {
-		p.Profile = name
+	dec := json.NewDecoder(bytes.NewReader(profile))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		return p, fmt.Errorf("invalid processing profile: %w", err)
 	}
 	if p.Profile == "" {
 		return p, errors.New("profile object has no \"profile\" name field")
 	}
-	trueIf := func(k string) bool {
-		b, ok := m[k].(bool)
-		return ok && b
-	}
-	strIf := func(keys ...string) string {
-		for _, k := range keys {
-			if s, ok := m[k].(string); ok {
-				return s
-			}
-		}
-		return ""
-	}
-	p.LanguageHint = strIf("language_hint", "language")
-	p.ExtractImages = trueIf("extract_images")
-	p.ComputeDenseEmbeddings = trueIf("compute_dense_embeddings")
-	p.ComputeSparseEmbeddings = trueIf("compute_sparse_embeddings")
-	p.ExtractEntities = trueIf("extract_entities")
-	p.ExtractRelationships = trueIf("extract_relationships")
 	return p, nil
 }
 
-// metadataSnapshot builds the metadata_snapshot JSON for a claimed document. If
-// the canonical mirror has the document's raw_data it is returned AS-IS
-// (lossless: typed creators, typed tags, collections and every Zotero field are
-// preserved, and nothing is overwritten by a normalized projection). When there
-// is no canonical item the normalized projection columns are used as a
-// best-effort snapshot. In both cases missing values stay missing (NULL preserved)
-// and the snapshot is never enriched or guessed.
-func metadataSnapshot(rawData json.RawMessage, doc zoteroDocFacts) json.RawMessage {
+// profileCanonical serializes a decoded FrozenProcessing to a stable, deterministic
+// canonical JSON form (struct field order) suitable for hashing and storage as
+// processing_profile. It returns both the canonical bytes and their SHA-256.
+func profileCanonical(profile []byte) ([]byte, string, error) {
+	p, err := decodeProcessing(profile)
+	if err != nil {
+		return nil, "", err
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil, "", fmt.Errorf("serialize processing profile: %w", err)
+	}
+	sum := sha256.Sum256(b)
+	return b, hex.EncodeToString(sum[:]), nil
+}
+
+// metadataSnapshot returns the lossless canonical zotero_items.raw_data AS-IS.
+// The caller is responsible for ensuring the canonical item exists and is active;
+// when rawData is empty (no canonical item/raw metadata), metadataSnapshot returns
+// nil so the caller must skip the job (CANONICAL_METADATA_MISSING) rather than
+// silently build a lossy projection. Zotero is the source of truth; missing,
+// deleted or drifted canonical metadata is never replaced by a runtime fallback.
+func metadataSnapshot(rawData json.RawMessage) json.RawMessage {
 	if len(rawData) > 0 {
 		return rawData
 	}
-
-	merged := map[string]any{}
-	putStr := func(k string, v *string) {
-		if v != nil {
-			merged[k] = *v
-		}
-	}
-	putInt := func(k string, v *int) {
-		if v != nil {
-			merged[k] = *v
-		}
-	}
-	if doc.ItemType != "" {
-		merged["itemType"] = doc.ItemType
-	}
-	putStr("title", doc.Title)
-	if doc.Creators != nil {
-		merged["creators"] = doc.Creators
-	}
-	putStr("abstract_note", doc.Abstract)
-	putInt("publication_year", doc.PublicationYear)
-	putStr("publication_date", doc.PublicationDate)
-	putStr("publisher", doc.Publisher)
-	putStr("isbn", doc.ISBN)
-	putStr("doi", doc.DOI)
-	putStr("url", doc.URL)
-	putStr("language", doc.Language)
-	if doc.Tags != nil {
-		merged["tags"] = doc.Tags
-	}
-	if doc.Collections != nil {
-		merged["collections"] = doc.Collections
-	}
-	if doc.Metadata != nil {
-		// edition/volume/issue/pages/issn/extra/relations live in metadata JSONB.
-		for k, v := range doc.Metadata {
-			if v != nil {
-				merged[k] = v
-			}
-		}
-	}
-	b, _ := json.Marshal(merged)
-	return b
-}
-
-// zoteroDocFacts carries the normalized document projection fields needed to
-// build a complete metadata_snapshot.
-type zoteroDocFacts struct {
-	ItemType        string
-	Title           *string
-	Creators        json.RawMessage
-	Abstract        *string
-	PublicationYear *int
-	PublicationDate *string
-	Publisher       *string
-	ISBN            *string
-	DOI             *string
-	URL             *string
-	Language        *string
-	Tags            json.RawMessage
-	Collections     json.RawMessage
-	Metadata        map[string]any
-}
-
-// canonicalProfile deterministically canonicalizes a processing profile so its
-// SHA-256 can be derived without trusting a caller-supplied hash. It marshals a
-// compact, key-sorted JSON form.
-func canonicalProfile(profile json.RawMessage) (string, error) {
-	if len(profile) == 0 {
-		return "", errors.New("profile is required for a claim")
-	}
-	var v any
-	if err := json.Unmarshal(profile, &v); err != nil {
-		return "", fmt.Errorf("profile is not valid JSON: %w", err)
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", fmt.Errorf("canonicalize profile: %w", err)
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]), nil
+	return nil
 }
 
 // idempotencyKey derives the processor idempotency key from the frozen identity.

@@ -177,22 +177,22 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			continue
 		}
 
-		// Deterministically derive the profile hash and the flat processing block in
-		// Go, then build the immutable FrozenInput from the locked state.
-		profileHash, err := canonicalProfile(opts.Profile)
+		// Deterministically derive the CANONICAL processing block and its hash in Go,
+		// then build the immutable FrozenInput from the locked state. Both the hash
+		// and the persisted processing_profile come from the same canonical form.
+		tlsProfile, profileHash, err := profileCanonical(opts.Profile)
 		if err != nil {
 			tx.Rollback(ctx)
 			return nil, err
 		}
-		proc, err := profileFields(opts.Profile)
+		proc, err := decodeProcessing(opts.Profile)
 		if err != nil {
 			tx.Rollback(ctx)
 			return nil, err
 		}
 		proc.ForceRebuild = cand.forceRebuild
-		proc.ProfileHash = profileHash
 		idemKey := idempotencyKey(cand.id, state.attachment.id, state.attachment.contentHash, profileHash, cand.forceRebuild)
-		snapshot := buildFrozenInput(cand, state, proc, idemKey)
+		snapshot := buildFrozenInput(cand, state, proc, profileHash, idemKey)
 
 		var newAttempt int
 		var tsToken string
@@ -212,7 +212,7 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 				updated_at        = now()
 			WHERE id = $1
 			RETURNING attempt, lease_token::text
-		`, cand.id, opts.WorkerID, leaseSec, snapshot, opts.Profile, profileHash, idemKey).
+		`, cand.id, opts.WorkerID, leaseSec, snapshot, tlsProfile, profileHash, idemKey).
 			Scan(&newAttempt, &tsToken)
 		if err != nil {
 			tx.Rollback(ctx)
@@ -513,63 +513,54 @@ func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*
 	}
 	s.document.parentKey, s.document.linkMode = docParentKey, docLinkMode
 
-	// 4. Document's canonical item raw_data (lossless bibliographic source). The
-	// canonical item must belong to the same source AND have the document's
-	// zotero_key AND be active (not deleted) - a drifted/inactive canonical row is
-	// treated as missing (PARENT_REMOVED) rather than freezing contaminated
-	// metadata.
-	if s.document.canonicalItemID != nil {
-		var raw []byte
-		err := tx.QueryRow(ctx, `
-			SELECT raw_data FROM zotero_items
-			WHERE id=$1 AND source_id=$2 AND zotero_key=$3 AND deleted=false
-			FOR UPDATE`, *s.document.canonicalItemID, c.sourceID, s.document.zoteroKey).Scan(&raw)
-		if err == nil {
-			s.document.rawData = raw
-		} else if err == pgx.ErrNoRows {
-			// Canonical item absent, drifted, or inactive: the normalized projection
-			// columns still populate the snapshot, but do not treat a drifted row as
-			// authoritative source data.
-			s.document.rawData = nil
-		} else {
-			return nil, "", fmt.Errorf("lock canonical item: %w", err)
-		}
+	// 4. Lossless canonical metadata (Zotero is the source of truth). The
+	// document's canonical item must exist, belong to this source AND carry the
+	// document's zotero_key AND be active (not deleted). Missing / drifted /
+	// deleted canonical metadata is a HARD skip (CANONICAL_METADATA_MISSING): it
+	// must never be silently replaced by a lossy normalized projection, because a
+	// document could otherwise be processed with incomplete citation metadata.
+	if s.document.canonicalItemID == nil {
+		return nil, "CANONICAL_METADATA_MISSING", nil
 	}
+	var raw []byte
+	err = tx.QueryRow(ctx, `
+		SELECT raw_data FROM zotero_items
+		WHERE id=$1 AND source_id=$2 AND zotero_key=$3 AND deleted=false
+		FOR UPDATE`, *s.document.canonicalItemID, c.sourceID, s.document.zoteroKey).Scan(&raw)
+	if err == pgx.ErrNoRows {
+		return nil, "CANONICAL_METADATA_MISSING", nil
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("lock canonical item: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, "CANONICAL_METADATA_MISSING", nil
+	}
+	s.document.rawData = raw
 	return s, "", nil
 }
 
 // buildFrozenInput assembles the durable immutable snapshot for a claim from the
-// locked state, the canonicalized profile and the derived hashes/keys.
-func buildFrozenInput(c *candidate, s *frozenState, proc FrozenProcessing, idemKey string) []byte {
+// locked state and the canonicalized processing profile. The metadata_snapshot is
+// the lossless canonical raw_data; if that is unavailable the caller must have
+// skipped the job, so buildFrozenInput is never reached with empty canonical
+// metadata.
+func buildFrozenInput(c *candidate, s *frozenState, proc FrozenProcessing, profileHash, idemKey string) []byte {
 	fi := FrozenInput{
 		ContractVersion: "1.0",
 		JobID:           c.id,
 		IdempotencyKey:  idemKey,
+		ProfileHash:     profileHash,
 		Source: FrozenSource{
 			Type:     "zotero",
 			SourceID: s.source.id,
 			ServerID: s.source.serverID,
 		},
 		Document: FrozenDocument{
-			DocumentID:    s.document.id,
-			ZoteroKey:     s.document.zoteroKey,
-			ZoteroVersion: s.document.zoteroVersion,
-			MetadataSnapshot: metadataSnapshot(s.document.rawData, zoteroDocFacts{
-				ItemType:        s.document.itemType,
-				Title:           s.document.title,
-				Creators:        s.document.creators,
-				Abstract:        s.document.abstract,
-				PublicationYear: s.document.publicationYear,
-				PublicationDate: s.document.publicationDate,
-				Publisher:       s.document.publisher,
-				ISBN:            s.document.isbn,
-				DOI:             s.document.doi,
-				URL:             s.document.url,
-				Language:        s.document.language,
-				Tags:            s.document.tags,
-				Collections:     s.document.collections,
-				Metadata:        s.document.metadata,
-			}),
+			DocumentID:       s.document.id,
+			ZoteroKey:        s.document.zoteroKey,
+			ZoteroVersion:    s.document.zoteroVersion,
+			MetadataSnapshot: metadataSnapshot(s.document.rawData),
 		},
 		Attachment: FrozenAttachment{
 			AttachmentID:  s.attachment.id,
@@ -771,11 +762,13 @@ func (r *Repo) MarkFailed(ctx context.Context, ref LeaseRef, errorCode, errorMes
 // It serializes against the Zotero canonical sync using the same per-source
 // advisory lock as the claim (pg_advisory_xact_lock on the job's source_id), so
 // a concurrent sync cannot change the attachment/document mid-completion. Under
-// that lock it re-fences owner+lease+unexpired and re-validates the CURRENT
-// source/document/attachment chain and the attachment hash unchanged from the
-// hash frozen in input_snapshot at claim time (forced-rebuild jobs included). A
-// job whose frozen snapshot has no content_hash cannot be completed. A rollback
-// of the caller's transaction rolls the completion back with it.
+// that lock it re-fences owner+lease+unexpired AND no-cancel-requested (a
+// committed cancellation must converge to cancelled, never be overtaken by
+// completion) and re-validates the CURRENT source/document/attachment chain and
+// the attachment hash unchanged from the hash frozen in input_snapshot at claim
+// time (forced-rebuild jobs included). A job whose frozen snapshot has no
+// content_hash cannot be completed. A rollback of the caller's transaction rolls
+// the completion back with it.
 func (r *Repo) MarkCompletedTx(ctx context.Context, tx pgx.Tx, ref LeaseRef, processorName, processorVersion, snapshotID string) error {
 	// Read the job's source to take the same per-source advisory lock the claim and
 	// the canonical sync share (this keeps completion atomic against a sync that
@@ -802,6 +795,7 @@ func (r *Repo) MarkCompletedTx(ctx context.Context, tx pgx.Tx, ref LeaseRef, pro
 			completed_at=COALESCE(completed_at, now()), updated_at=now()
 		WHERE j.id=$1 AND j.claimed_by=$2 AND j.lease_token=$3 AND j.status='processing'
 		  AND j.lease_until IS NOT NULL AND j.lease_until > clock_timestamp()
+		  AND j.cancel_requested_at IS NULL
 		  AND EXISTS (
 		        SELECT 1 FROM zotero_attachments a
 		        JOIN zotero_documents d ON d.id = a.document_id

@@ -5,7 +5,6 @@ package repo
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -333,12 +332,12 @@ func TestProcessingBlockCarriesFeatureFlags(t *testing.T) {
 	}
 }
 
-// TestCanonicalItemDriftFallsBackToNormalized proves the claim only uses a
-// canonical item whose source_id + zotero_key match the document and that is not
-// deleted: a drifted/inactive canonical row yields no raw_data (the metadata
-// snapshot falls back to normalized projection columns) instead of freezing
-// contaminated metadata.
-func TestCanonicalItemDriftFallsBackToNormalized(t *testing.T) {
+// TestCanonicalItemInactiveSkipped proves the claim only uses a canonical item
+// whose source_id + zotero_key match the document and that is not deleted: a
+// drifted / soft-deleted canonical row is a HARD skip (CANONICAL_METADATA_MISSING) -
+// it is never replaced by a lossy normalized projection, because Zotero is the
+// source of truth for citation metadata. The job must not be claimed.
+func TestCanonicalItemInactiveSkipped(t *testing.T) {
 	lr := openLeaseDB(t)
 	lr.truncateFixtures(t)
 	ctx := context.Background()
@@ -348,8 +347,6 @@ func TestCanonicalItemDriftFallsBackToNormalized(t *testing.T) {
 		INSERT INTO zotero_sources (base_url, library_id) VALUES ('http://localhost:60','users/0') RETURNING id::text`).Scan(&srcID); err != nil {
 		t.Fatal(err)
 	}
-	// Canonical raw_data intentionally differs from the normalized title, so we
-	// can tell which source won.
 	if err := lr.pool.QueryRow(ctx, `
 		INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data)
 		VALUES ($1,'DOC','1','book',NULL,'{}','{"title":"CONTAMINATED","itemType":"book"}') RETURNING id::text`, srcID).Scan(&itemCID); err != nil {
@@ -360,8 +357,7 @@ func TestCanonicalItemDriftFallsBackToNormalized(t *testing.T) {
 		VALUES ($1,'DOC',1,'book','Real Title',$2) RETURNING id::text`, srcID, itemCID).Scan(&docID); err != nil {
 		t.Fatal(err)
 	}
-	// The canonical item is soft-deleted (or drifted); the claim must NOT freeze
-	// its raw_data.
+	// The canonical item is soft-deleted; the claim must skip, not freeze its data.
 	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_items SET deleted=true WHERE id=$1`, itemCID); err != nil {
 		t.Fatal(err)
 	}
@@ -378,21 +374,105 @@ func TestCanonicalItemDriftFallsBackToNormalized(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if cj := lr.claim(t, defaultClaim("worker-a")); cj != nil {
+		t.Fatalf("job with inactive canonical metadata must be skipped, got claimed %v", cj)
+	}
+	r := lr.rowOf(t, jobID)
+	if r.status != "skipped" || r.errorMessage == nil || *r.errorMessage != "CANONICAL_METADATA_MISSING" {
+		t.Fatalf("inactive-canonical job = %s/%v, want skipped/CANONICAL_METADATA_MISSING", r.status, r.errorMessage)
+	}
+}
+
+// TestCompletionRevalidatesAfterSyncMutation proves that when a sync holds the
+// source advisory lock, changes the attachment hash, and COMMITS, the waiting
+// completion must re-validate and fail with ErrLostLease (rolling back its
+// persistence transaction) rather than blindly completing.
+func TestCompletionRevalidatesAfterSyncMutation(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	_, jobID := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:61", libraryID: "users/0",
+		docKey: "H1", attKey: "H1", contentHash: h("sha256:h1"), preferred: true,
+	}, "pending", 3)
 	cj := lr.claim(t, defaultClaim("worker-a"))
-	if cj == nil || cj.JobID != jobID {
-		t.Fatalf("expected claim %s, got %v", jobID, cj)
+	if err := lr.rep.MarkProcessing(ctx, cj.LeaseRef); err != nil {
+		t.Fatal(err)
 	}
-	fi := frozenInput(t, cj)
-	var ms map[string]any
-	if err := json.Unmarshal(fi.Document.MetadataSnapshot, &ms); err != nil {
-		t.Fatalf("decode metadata_snapshot: %v", err)
+
+	// Sync holds the source advisory lock and will change the attachment hash.
+	conn, err := lr.pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// The inactive canonical raw_data must NOT win: title must come from the
-	// normalized projection, never "CONTAMINATED".
-	if ms["title"] == "CONTAMINATED" {
-		t.Fatalf("inactive canonical raw_data leaked into metadata_snapshot: %v", ms)
+	defer conn.Release()
+	syncTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if ms["title"] != "Real Title" {
-		t.Fatalf("metadata title = %v, want normalized Real Title (canonical item inactive)", ms["title"])
+	var srcID string
+	if err := lr.pool.QueryRow(ctx, `SELECT source_id::text FROM ingest_jobs WHERE id=$1`, jobID).Scan(&srcID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syncTx.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockKey(srcID)); err != nil {
+		t.Fatal(err)
+	}
+	// Change the attachment hash while holding the session advisory lock (as a
+	// sync would), then release the lock and commit.
+	if _, err := syncTx.Exec(ctx, `UPDATE zotero_attachments SET content_hash='sha256:changed' WHERE zotero_key='H1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syncTx.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockKey(srcID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Completion now runs (after the sync released the lock) and must re-validate
+	// the frozen hash against the new current hash -> ErrLostLease.
+	tx, err := lr.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = lr.rep.MarkCompletedTx(ctx, tx, cj.LeaseRef, "p", "1", "snap")
+	_ = tx.Rollback(ctx)
+	if !errors.Is(err, ErrLostLease) {
+		t.Fatalf("completion after sync hash change = %v, want ErrLostLease", err)
+	}
+	if r := lr.rowOf(t, jobID); r.status == "completed" {
+		t.Fatal("completion must not commit after a sync hash change")
+	}
+}
+
+// TestCompletionRejectsCommittedCancellation proves a committed cancellation is
+// not overtaken by completion (completion fence requires cancel_requested_at IS NULL).
+func TestCompletionRejectsCommittedCancellation(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	_, jobID := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:62", libraryID: "users/0",
+		docKey: "I1", attKey: "I1", contentHash: h("sha256:i1"), preferred: true,
+	}, "pending", 3)
+	cj := lr.claim(t, defaultClaim("worker-a"))
+	if err := lr.rep.MarkProcessing(ctx, cj.LeaseRef); err != nil {
+		t.Fatal(err)
+	}
+	// A cancellation request is committed first.
+	if err := lr.rep.RequestCancellation(ctx, jobID); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := lr.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = lr.rep.MarkCompletedTx(ctx, tx, cj.LeaseRef, "p", "1", "snap")
+	_ = tx.Rollback(ctx)
+	if !errors.Is(err, ErrLostLease) {
+		t.Fatalf("completion after committed cancellation = %v, want ErrLostLease", err)
 	}
 }
