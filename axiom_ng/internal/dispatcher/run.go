@@ -73,17 +73,22 @@ func (d *Dispatcher) markTerminal(ctx context.Context, ref repo.LeaseRef, code, 
 	}
 }
 
+// gate2ProcessorVersion is the processor identity stamp written on completion
+// during Gate 2. It is deliberately a placeholder; Gate 4 replaces it with the
+// real processor name/version from capability negotiation and result validation.
+const gate2ProcessorVersion = "0.1.0"
+
 // markCompleted fence-completes a job under a caller-owned transaction so Gate 4
 // can persist the snapshot atomically with the completion in one commit. Here in
 // Gate 2 the transaction carries only the fenced completion and a marker
 // processor identity/snapshot id; full persistence arrives in Gate 4.
-func (d *Dispatcher) markCompleted(ctx context.Context, ref *repo.LeaseRef, processorName string) error {
+func (d *Dispatcher) markCompleted(ctx context.Context, ref repo.LeaseRef, processorName string) error {
 	tx, err := d.rep.Pool().Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := d.rep.MarkCompletedTx(ctx, tx, *ref, processorName, "0.1.0", ref.JobID); err != nil {
+	if err := d.rep.MarkCompletedTx(ctx, tx, ref, processorName, gate2ProcessorVersion, ref.JobID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -186,7 +191,7 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) 
 	// Mark completed under a caller-owned transaction so Gate 4 persists the
 	// snapshot atomically; here we use a short owner-transaction for the fenced
 	// completion and a marker snapshot id.
-	err = d.markCompleted(ctx, &ref, "fake-processor-gate2")
+	err = d.markCompleted(ctx, ref, "fake-processor-gate2")
 	if isLost(err) {
 		d.logger.Printf("%v: lost lease at completion; not acknowledging", []any{ref.JobID})
 		return
@@ -197,7 +202,10 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) 
 	}
 	// Ack after fenced success. ACK failure keeps the job completed; it is retried
 	// separately and never reruns processing.
-	if err := d.client.Ack(ctx, ref.JobID, processor.Ack{Persisted: true, SnapshotID: ref.JobID}); err != nil {
+	// ponytail: Gate 2 does NOT durably persist the snapshot/artifacts (that is
+	// Gate 4), so we must not tell a processor its result was persisted and may be
+	// GC'd. Send persisted=false until Gate 4 commits real storage, then flip.
+	if err := d.client.Ack(ctx, ref.JobID, processor.Ack{Persisted: false, SnapshotID: ref.JobID}); err != nil {
 		d.logger.Printf("%v: ack failed (job stays completed): %v", []any{ref.JobID}, err)
 	}
 }

@@ -166,12 +166,10 @@ func (h *dispatchHarness) insertAttachment(t *testing.T, srcID, docID, key strin
 type fakeProcessor struct {
 	srv *httptest.Server
 
-	mu          chan struct{} // not used; serialized by test author
 	processBody []byte
 	processHits int
 
-	// script holds one handler per probe. index is consumed atomically by the
-	// switch in serve.
+	// script holds one handler per probe. index is consumed by the switch in serve.
 	statuses      []string // sequence of statuses returned by GET /v1/jobs/{id}
 	statusIdx     int
 	failStatus    int    // HTTP code for status endpoint; 0 => 200
@@ -278,10 +276,14 @@ func mustClient(t *testing.T, base string) *processor.Client {
 	return cl
 }
 
-// runFor runs the dispatcher until ctx is done or the job reaches a terminal
-// state (polled), whichever comes first.
-func runUntilTerminal(t *testing.T, d *Dispatcher, ctx context.Context, wait time.Duration) {
+// runFor runs d.Run under a cancellable ctx for up to wait, then cancels the
+// context and waits for the dispatcher goroutine to exit cleanly. It always
+// derives a cancellable context so the dispatcher can be stopped and never
+// leaks, giving the lost-lease and cancellation tests a deterministic stop point.
+func runFor(t *testing.T, d *Dispatcher, parent context.Context, wait time.Duration) {
 	t.Helper()
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
 	done := make(chan struct{})
 	go func() {
 		d.Run(ctx)
@@ -289,7 +291,16 @@ func runUntilTerminal(t *testing.T, d *Dispatcher, ctx context.Context, wait tim
 	}()
 	select {
 	case <-done:
+		return
 	case <-time.After(wait):
+	}
+	// Stop the dispatcher loop so the worker goroutine cannot re-claim a job
+	// after an assertion has already read the job's DB state.
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Logf("dispatcher did not stop within 2s of cancel")
 	}
 }
 
@@ -314,6 +325,35 @@ func (h *dispatchHarness) leaseWasRenewed(t *testing.T, jobID string) bool {
 		t.Fatalf("read heartbeat: %v", err)
 	}
 	return hb != nil && claimed != nil && hb.After(*claimed)
+}
+
+// waitForStatus polls the job until it reaches want (or times out), returning
+// every intermediate state observed so a test can interleave an action (e.g.
+// expiring the lease) once the job reaches a specific state.
+func (h *dispatchHarness) waitForStatus(t *testing.T, jobID, want string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		s := h.jobStatus(t, jobID)
+		if s == want {
+			return s
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job %s did not reach %q (last=%q) within %s", jobID, want, s, timeout)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// expireLease forces the job's lease into the past, simulating a lease that has
+// been lost/expired (e.g. reclaimed or a clock jump), so the NEXT RenewLease
+// attempt fails with ErrLostLease.
+func (h *dispatchHarness) expireLease(t *testing.T, jobID string) {
+	t.Helper()
+	if _, err := h.pool.Exec(context.Background(),
+		`UPDATE ingest_jobs SET lease_until = now() - interval '5 seconds' WHERE id=$1`, jobID); err != nil {
+		t.Fatalf("expire lease: %v", err)
+	}
 }
 
 // repeatStr builds a slice of n identical strings.
@@ -362,7 +402,7 @@ func TestAcceptedJobTransitionsToProcessing(t *testing.T) {
 	fp.result = `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed"}`
 
 	d := newDispatcher(t, h, fp, Config{})
-	runUntilTerminal(t, d, context.Background(), 6*time.Second)
+	runFor(t, d, context.Background(), 6*time.Second)
 
 	if got := h.jobStatus(t, jobID); got != "completed" {
 		t.Fatalf("status = %q, want completed", got)
@@ -387,7 +427,7 @@ func TestProcessRequestBodyHasNoProfileHash(t *testing.T) {
 	fp.result = `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed"}`
 
 	d := newDispatcher(t, h, fp, Config{})
-	runUntilTerminal(t, d, context.Background(), 6*time.Second)
+	runFor(t, d, context.Background(), 6*time.Second)
 
 	if fp.processHits != 1 {
 		t.Fatalf("process hits = %d, want 1", fp.processHits)
@@ -434,7 +474,7 @@ func TestDuplicateProcessDedupe(t *testing.T) {
 	})
 
 	d := newDispatcher(t, h, fp, Config{})
-	runUntilTerminal(t, d, context.Background(), 6*time.Second)
+	runFor(t, d, context.Background(), 6*time.Second)
 	if got := h.jobStatus(t, jobID); got != "completed" {
 		t.Fatalf("status = %q, want completed", got)
 	}
@@ -455,7 +495,7 @@ func TestLeaseRenewsDuringLongProcessing(t *testing.T) {
 	fp.result = `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed"}`
 
 	d := newDispatcher(t, h, fp, Config{Concurrency: 1, LeaseDuration: 1500 * time.Millisecond, RenewalInterval: 150 * time.Millisecond})
-	runUntilTerminal(t, d, context.Background(), 10*time.Second)
+	runFor(t, d, context.Background(), 10*time.Second)
 
 	if got := h.jobStatus(t, jobID); got != "completed" {
 		t.Fatalf("status = %q, want completed (lease should have been renewed)", got)
@@ -465,26 +505,51 @@ func TestLeaseRenewsDuringLongProcessing(t *testing.T) {
 	}
 }
 
-// TestLostLeasePreventsPersistenceAndAck (14.2-4): if the lease is lost for this
-// worker while a job is processing (e.g. another worker reclaimed after expiry),
-// the dispatcher must not persist or acknowledge, and the processor must not get
-// an ack. We simulate by temporarily making the status loop exceed the lease and
-// then letting the repo reclaim the job with another worker. Directly, we assert
-// that an ErrLostLease on renew aborts before ack.
+// TestLostLeasePreventsPersistenceAndAck (14.2-4): the processor reports
+// completed (so completion is genuinely on the table), but our lease is lost
+// (forced into the past mid-processing) before we can fence the completion; the
+// dispatcher must NOT reach a completed job and must NOT acknowledge. Load-bearing:
+// if the lost-lease guards (the renew abort and/or MarkCompletedTx's lease fence)
+// were removed, the job would complete and ACK after the processor offers
+// completed; with the guards present it stays non-completed and never ACKs.
 func TestLostLeasePreventsPersistenceAndAck(t *testing.T) {
 	h := openDispatchDB(t)
 	h.truncateFixtures(t)
-	jobID := h.seedJob(t, "L1", 3)
+	// max_attempts=1: once the lost lease aborts the run, the job is already at
+	// the attempt ceiling so a re-claim can only terminalize, never re-submit
+	// and re-complete. This keeps the non-completed assertion robust regardless
+	// of dispatch-loop timing.
+	jobID := h.seedJob(t, "L1", 1)
 	fp := newFakeProcessor(t)
-	fp.statuses = []string{"running", "running", "running", "running", "running"}
+	fp.statuses = []string{"running", "completed"}
 	fp.result = `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed"}`
 
-	// Very short lease and long renew interval; the running statuses keep the
-	// loop alive beyond the lease, so the lease expires. The dispatcher's next
-	// renew returns lost lease and aborts.
-	d := newDispatcher(t, h, fp, Config{Concurrency: 1, LeaseDuration: 120 * time.Millisecond, RenewalInterval: 400 * time.Millisecond})
-	runUntilTerminal(t, d, context.Background(), 3*time.Second)
+	// A normal lease with a modest renew interval; the fake offers a "completed"
+	// status the dispatcher must refuse to reach after the lease is lost.
+	d := newDispatcher(t, h, fp, Config{Concurrency: 1, LeaseDuration: 5 * time.Second, RenewalInterval: 150 * time.Millisecond})
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	// Wait for the job to be claimed and processing, then forcibly lose the lease.
+	h.waitForStatus(t, jobID, "processing", 8*time.Second)
+	h.expireLease(t, jobID)
+
+	// Give the dispatcher a couple renew cycles to hit the lost lease and abort.
+	time.Sleep(600 * time.Millisecond)
+	cancel()
+	<-done
+
+	// The fake's script offered a completed status: the guards (not a missing
+	// completion) are what stopped the job from completing.
+	if fp.processHits == 0 {
+		t.Fatal("job was never submitted to the processor; test did not exercise the dispatcher")
+	}
 	// The job must NOT be completed and no ack must have been sent.
 	if got := h.jobStatus(t, jobID); got == "completed" {
 		t.Fatal("job completed despite lost lease (must never happen)")
@@ -508,7 +573,7 @@ func TestRetryableFailureSchedulesBackoff(t *testing.T) {
 	fp.failRetryable = true
 
 	d := newDispatcher(t, h, fp, Config{})
-	runUntilTerminal(t, d, context.Background(), 6*time.Second)
+	runFor(t, d, context.Background(), 6*time.Second)
 
 	if got := h.jobStatus(t, jobID); got != "pending" {
 		t.Fatalf("status = %q, want pending (retry scheduled)", got)
@@ -534,7 +599,7 @@ func TestNonRetryableFailureBecomesTerminal(t *testing.T) {
 	fp.failRetryable = false
 
 	d := newDispatcher(t, h, fp, Config{})
-	runUntilTerminal(t, d, context.Background(), 6*time.Second)
+	runFor(t, d, context.Background(), 6*time.Second)
 
 	if got := h.jobStatus(t, jobID); got != "failed" {
 		t.Fatalf("status = %q, want failed (terminal)", got)
