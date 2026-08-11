@@ -1040,7 +1040,13 @@ func TestExpiredLeaseIsLost(t *testing.T) {
 		docKey: "Q1", attKey: "Q1", contentHash: h("sha256:ea"), preferred: true,
 	}, "pending", 3)
 	cj := lr.claim(t, defaultClaim("worker-a"))
-	// Expire the lease WITHOUT reclaiming it.
+	// Advance to processing (completion requires processing), THEN expire the
+	// lease WITHOUT reclaiming it. Every check below then validates the expiry
+	// fence on a `processing` job, so MarkCompletedTx cannot pass on a false
+	// positive from status alone.
+	if err := lr.rep.MarkProcessing(context.Background(), cj.LeaseRef); err != nil {
+		t.Fatal(err)
+	}
 	lr.expire(t, jobID)
 
 	stale := cj.LeaseRef
@@ -1074,27 +1080,63 @@ func TestExpiredLeaseIsLost(t *testing.T) {
 		t.Fatalf("mark-completed on expired lease = %v, want ErrLostLease", err)
 	}
 
-	// The row must still be untouched and claimable again after expiry reclaim.
+	// The row must still be untouched (processing, lease held by worker-a) and
+	// claimable again after expiry reclaim.
 	r := lr.rowOf(t, jobID)
-	if r.status != "claimed" {
-		t.Fatalf("job status after failed fence = %s, want claimed (untouched)", r.status)
+	if r.status != "processing" {
+		t.Fatalf("job status after failed fence = %s, want processing (untouched)", r.status)
+	}
+	if r.claimedBy == nil || *r.claimedBy != "worker-a" {
+		t.Fatalf("ownership changed after failed fence: %v", r.claimedBy)
+	}
+	if r.leaseToken == nil || *r.leaseToken != cj.LeaseToken {
+		t.Fatal("lease token changed after failed fence")
+	}
+
+	// After expiry the job is reclaimable by a new worker.
+	grown := lr.claim(t, defaultClaim("worker-reclaim"))
+	if grown == nil || grown.JobID != jobID {
+		t.Fatalf("expired job not reclaimed: %v", grown)
 	}
 }
 
-// TestNullableParentsTerminalizeToSkipped tests that legacy NULL-FK rows are
-// terminalized to skipped (not a scan/transaction error).
+// TestNullableParentsTerminalizeToSkipped tests that legacy / broken FK rows are
+// terminalized to skipped (not a scan/transaction error), covering each FK
+// independently: attachment-only, document-only, and source-only missing.
 func TestNullableParentsTerminalizeToSkipped(t *testing.T) {
 	lr := openLeaseDB(t)
 	lr.truncateFixtures(t)
 
-	// attachment_id = NULL => obsolete.
-	jNoAtt := lr.seedPendingOnly(t, nil, nil, nil, 3)
-	// document_id = NULL => obsolete.
-	jNoDoc := lr.seedPendingOnly(t, nil, nil, nil, 3)
-	// source_id = NULL => obsolete.
-	jNoSrc := lr.seedPendingOnly(t, nil, nil, nil, 3)
+	// One real source + doc + attachment shared by the fixtures.
+	ctx := context.Background()
+	var srcID, docID, attID string
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_sources (base_url, library_id) VALUES ('http://np', 'users/0') RETURNING id::text`).Scan(&srcID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
+		VALUES ($1,'NP','1','book','NP') RETURNING id::text`, srcID).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version, parent_zotero_key, link_mode, content_type, filename, preferred)
+		VALUES ($1,$2,'NP-A',1,'NP','imported_file','application/pdf','a.pdf',true) RETURNING id::text`, srcID, docID).Scan(&attID); err != nil {
+		t.Fatal(err)
+	}
 
-	// A single claim pass must drain all three to skipped without error.
+	// The ingest_jobs FK columns allow NULL; since each FK REFERENCES an existing
+	// row, a non-NULL value is guaranteed to resolve. So the only way to represent
+	// a missing parent is a NULL in exactly that FK. Each fixture has exactly one
+	// NULL FK and the others set, exercising each independently.
+	// (a) attachment missing => PARENT_REMOVED.
+	jNoAtt := lr.seedPendingOnly(t, &srcID, &docID, nil, 3)
+	// (b) document missing => PARENT_REMOVED.
+	jNoDoc := lr.seedPendingOnly(t, &srcID, nil, &attID, 3)
+	// (c) source missing => PARENT_REMOVED.
+	jNoSrc := lr.seedPendingOnly(t, nil, &docID, &attID, 3)
+
+	// One claim pass must drain all three to skipped without error or claim.
 	for i := 0; i < 4; i++ {
 		cj := lr.claim(t, defaultClaim("worker-a"))
 		if cj != nil {
@@ -1104,10 +1146,13 @@ func TestNullableParentsTerminalizeToSkipped(t *testing.T) {
 	for _, id := range []string{jNoAtt, jNoDoc, jNoSrc} {
 		r := lr.rowOf(t, id)
 		if r.status != "skipped" {
-			t.Fatalf("job %s status = %s, want skipped (NULL parent)", id, r.status)
+			t.Fatalf("job %s status = %s, want skipped (missing parent)", id, r.status)
 		}
 		if r.errorCode == nil || *r.errorCode != "SKIPPED" {
 			t.Fatalf("job %s skip code = %v", id, r.errorCode)
+		}
+		if r.errorMessage == nil || *r.errorMessage != "PARENT_REMOVED" {
+			t.Fatalf("job %s skip reason = %v, want PARENT_REMOVED", id, r.errorMessage)
 		}
 	}
 }
