@@ -293,9 +293,9 @@ func TestNullCurrentHashSkippedEvenForced(t *testing.T) {
 	}
 }
 
-// TestProcessingBlockCarriesFeatureFlags verifies profileFields round-trips a
-// flagged profile into the flat contract processing block (the "flags" half of
-// the typed-block fix).
+// TestProcessingBlockCarriesFeatureFlags verifies decodeProcessing round-trips
+// a flagged profile into the flat contract processing block (the "flags" half
+// of the typed-block fix).
 func TestProcessingBlockCarriesFeatureFlags(t *testing.T) {
 	lr := openLeaseDB(t)
 	lr.truncateFixtures(t)

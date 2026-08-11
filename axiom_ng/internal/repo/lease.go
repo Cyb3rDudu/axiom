@@ -362,20 +362,6 @@ type zoteroDocRow struct {
 	zoteroKey       string
 	zoteroVersion   int64
 	canonicalItemID *string
-	itemType        string
-	title           *string
-	creators        json.RawMessage
-	abstract        *string
-	publicationYear *int
-	publicationDate *string
-	publisher       *string
-	isbn            *string
-	doi             *string
-	url             *string
-	language        *string
-	tags            json.RawMessage
-	collections     json.RawMessage
-	metadata        map[string]any
 	deleted         bool
 	parentKey       *string
 	linkMode        *string
@@ -439,15 +425,10 @@ func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*
 
 	var docParentKey, docLinkMode *string
 	err = tx.QueryRow(ctx, `
-		SELECT id::text, source_id::text, zotero_key, zotero_version, canonical_item_id::text,
-		       item_type, title, creators, abstract_note, publication_year,
-		       publication_date, publisher, isbn, doi, url, language,
-		       tags, collections, metadata, deleted
+		SELECT id::text, source_id::text, zotero_key, zotero_version, canonical_item_id::text, deleted
 		FROM zotero_documents WHERE id=$1 FOR UPDATE`, c.documentID).Scan(
-		&s.document.id, &s.document.sourceID, &s.document.zoteroKey, &s.document.zoteroVersion, &s.document.canonicalItemID,
-		&s.document.itemType, &s.document.title, &s.document.creators, &s.document.abstract, &s.document.publicationYear,
-		&s.document.publicationDate, &s.document.publisher, &s.document.isbn, &s.document.doi, &s.document.url, &s.document.language,
-		&s.document.tags, &s.document.collections, &s.document.metadata, &s.document.deleted)
+		&s.document.id, &s.document.sourceID, &s.document.zoteroKey, &s.document.zoteroVersion,
+		&s.document.canonicalItemID, &s.document.deleted)
 	if err == pgx.ErrNoRows {
 		return nil, "PARENT_REMOVED", nil
 	}
