@@ -5,7 +5,13 @@
 // Claim, obsolete-terminalization, lease-exhaustion, cancellation-terminalization
 // and frozen-input freeze all happen in one short transaction. Every post-claim
 // mutation is fenced by job_id + worker_id + lease_token and returns
-// ErrLostLease when the caller no longer owns the lease.
+// ErrLostLease when the caller no longer owns a valid, unexpired lease.
+//
+// Time handling: worker-owned fence PREDICATES compare against clock_timestamp()
+// so an expiry is honored at statement time even inside a caller-owned transaction
+// (MarkCompletedTx). Lease ASSIGNMENT and the short claim/recovery eligibility
+// scans intentionally use transaction-stable now(), which is fine for those
+// single-statement/short transactions.
 package repo
 
 import (
@@ -435,11 +441,10 @@ func (r *Repo) markObsolete(ctx context.Context, tx pgx.Tx, jobID, reason string
 // fencedUpdate runs an UPDATE whose $1,$2,$3 are job_id, claimed_by and
 // lease_token (the fencing predicate) and returns whether it affected a row.
 // Most post-claim mutations route through this so a single zero-row guard
-// catches a lost lease for all callers; the two mutations that need a returned
-// outcome (ScheduleRetry) or a terminal-vs-pending decision handle the zero-row
-// case with their own QueryRow RETURNING. The expected-status filter is written
-// as SQL literals in each statement. `ex` may be the pool (autocommit) or a
-// caller-owned transaction (MarkCompletedTx).
+// catches a lost lease for all callers; ScheduleRetry returns an outcome and so
+// handles its zero-row case with a QueryRow RETURNING instead. The
+// expected-status filter is written as SQL literals in each statement. `ex` may
+// be the pool (autocommit) or a caller-owned transaction (MarkCompletedTx).
 func (r *Repo) fencedUpdate(ctx context.Context, ex execer, sqlStmt string, ref LeaseRef, args ...any) (bool, error) {
 	tag, err := ex.Exec(ctx, sqlStmt,
 		append([]any{ref.JobID, ref.WorkerID, ref.LeaseToken}, args...)...)

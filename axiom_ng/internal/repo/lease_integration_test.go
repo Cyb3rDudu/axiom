@@ -213,6 +213,9 @@ type row struct {
 	errorMessage     *string
 	idempotencyKey   *string
 	profileHash      *string
+	processorName    *string
+	processorVersion *string
+	snapshotID       *string
 	hasInputSnapshot bool
 	hasProfile       bool
 }
@@ -224,11 +227,13 @@ func (lr *leaseRepo) rowOf(t *testing.T, jobID string) row {
 		SELECT status::text, attempt, max_attempts, claimed_by, lease_token::text,
 		       lease_until, last_heartbeat_at, cancel_requested_at, next_attempt_at,
 		       completed_at, error_code, error_message, idempotency_key, profile_hash,
+		       processor_name, processor_version, result->>'snapshot_id',
 		       input_snapshot IS NOT NULL, processing_profile IS NOT NULL
 		FROM ingest_jobs WHERE id=$1`, jobID).Scan(
 		&r.status, &r.attempt, &r.maxAttempts, &r.claimedBy, &r.leaseToken,
 		&r.leaseUntil, &r.lastHeartbeat, &r.cancelRequested, &r.nextAttemptAt,
 		&r.completedAt, &r.errorCode, &r.errorMessage, &r.idempotencyKey, &r.profileHash,
+		&r.processorName, &r.processorVersion, &r.snapshotID,
 		&r.hasInputSnapshot, &r.hasProfile)
 	if err != nil {
 		t.Fatalf("read row: %v", err)
@@ -812,8 +817,24 @@ func TestMarkCompletedTxAtomic(t *testing.T) {
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if r := lr.rowOf(t, jobID); r.status != "completed" {
-		t.Fatalf("job status = %s, want completed", r.status)
+	rc := lr.rowOf(t, jobID)
+	if rc.status != "completed" {
+		t.Fatalf("job status = %s, want completed", rc.status)
+	}
+	if rc.processorName == nil || *rc.processorName != "processor" {
+		t.Fatalf("committed completion processor_name = %v", rc.processorName)
+	}
+	if rc.processorVersion == nil || *rc.processorVersion != "1.0" {
+		t.Fatalf("committed completion processor_version = %v", rc.processorVersion)
+	}
+	if rc.snapshotID == nil || *rc.snapshotID != "snapshot-1" {
+		t.Fatalf("committed completion snapshot_id = %v", rc.snapshotID)
+	}
+	if rc.leaseToken != nil || rc.claimedBy != nil || rc.leaseUntil != nil {
+		t.Fatal("committed completion must have cleared the lease")
+	}
+	if rc.completedAt == nil {
+		t.Fatal("committed completion must set completed_at")
 	}
 
 	// Rollback path: complete a second job then roll the tx back; it must NOT
@@ -847,6 +868,11 @@ func TestMarkCompletedTxAtomic(t *testing.T) {
 	}
 	if r.completedAt != nil {
 		t.Fatal("rolled-back completion set completed_at")
+	}
+	// No processor/snapshot provenance may be recorded either.
+	if r.processorName != nil || r.processorVersion != nil || r.snapshotID != nil {
+		t.Fatalf("rolled-back completion persisted processor/result state: name=%v ver=%v snap=%v",
+			r.processorName, r.processorVersion, r.snapshotID)
 	}
 }
 
@@ -1101,11 +1127,13 @@ func TestExpiredLeaseIsLost(t *testing.T) {
 }
 
 // TestMarkCompletedUsesStatementTime proves the completion expiry fence is
-// evaluated at STATEMENT time (clock_timestamp), not transaction start. We begin
-// the completion transaction while the lease is still valid, then expire the
-// lease through a separate connection, then run MarkCompletedTx: a now()-based
-// fence (fixed at tx start) would see a valid lease and complete, whereas the
-// correct clock_timestamp()-based fence rejects it.
+// evaluated at STATEMENT time (clock_timestamp), not transaction start.
+//
+// We set lease_until to a value strictly between the completion transaction's
+// own now() (fixed at tx start) and the wall-clock moment MarkCompletedTx runs.
+// A now()-based fence would then see a still-valid lease and complete; the
+// correct clock_timestamp()-based fence sees it expired and rejects. This is the
+// only way to distinguish the two, and it must pass with clock_timestamp.
 func TestMarkCompletedUsesStatementTime(t *testing.T) {
 	lr := openLeaseDB(t)
 	lr.truncateFixtures(t)
@@ -1119,18 +1147,30 @@ func TestMarkCompletedUsesStatementTime(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	// Begin the completion transaction BEFORE the lease expires.
+	// Begin the completion transaction BEFORE setting the expiry so we can read
+	// the transaction's own (stable) now() while the tx is open.
 	tx, err := lr.pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Expire the lease through a separate connection while the tx is open.
-	lr.expire(t, jobID)
+	defer tx.Rollback(ctx)
+	var txStart time.Time
+	if err := tx.QueryRow(ctx, `SELECT now()`).Scan(&txStart); err != nil {
+		t.Fatal(err)
+	}
+	// Set lease_until to txStart + 100ms via a SEPARATE connection: it is after
+	// the transaction's now() but will have elapsed by statement time below.
+	if _, err := lr.pool.Exec(ctx,
+		`UPDATE ingest_jobs SET lease_until=$2 WHERE id=$1`, jobID, txStart.Add(100*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	// Wait past lease_until on the wall clock so statement-time clock_timestamp()
+	// is beyond it while the transaction's now() still equals txStart.
+	time.Sleep(300 * time.Millisecond)
 
 	err = lr.rep.MarkCompletedTx(ctx, tx, cj.LeaseRef, "p", "1", "snap")
-	_ = tx.Rollback(ctx)
 	if !errors.Is(err, ErrLostLease) {
-		t.Fatalf("completion after in-tx expiry = %v, want ErrLostLease (statement-time fence)", err)
+		t.Fatalf("completion with lease_until between tx-now and statement-time = %v, want ErrLostLease (statement-time fence)", err)
 	}
 }
 
@@ -1381,13 +1421,17 @@ func TestFinalAttemptExhaustion(t *testing.T) {
 		t.Fatal("release-exhausted must have completed_at")
 	}
 
-	// (d) terminalizeStale cleans an existing exhausted pending row.
+	// (d) terminalizeStale cleans an existing exhausted pending row EVEN with a
+	// non-NULL (already-elapsed retry) next_attempt_at, which is the realistic
+	// leftover from earlier retry/release paths. Restoring the defective
+	// 'next_attempt_at IS NULL' predicate would let this strand, so it is the
+	// regression guard for the broadened cleanup.
 	_, jStranded := lr.seed(t, seedSpec{
 		sourceBaseURL: "http://localhost:38", libraryID: "users/3",
 		docKey: "S4", attKey: "S4", contentHash: h("sha256:s4"), preferred: true,
 	}, "pending", 3)
 	if _, err := lr.pool.Exec(ctx,
-		`UPDATE ingest_jobs SET attempt=max_attempts, next_attempt_at=NULL WHERE id=$1`, jStranded); err != nil {
+		`UPDATE ingest_jobs SET attempt=max_attempts, next_attempt_at=now() + interval '1 hour' WHERE id=$1`, jStranded); err != nil {
 		t.Fatal(err)
 	}
 	// Any claim pass runs terminalizeStale.
@@ -1398,5 +1442,11 @@ func TestFinalAttemptExhaustion(t *testing.T) {
 	}
 	if sr.errorCode == nil || *sr.errorCode != "RETRY_EXHAUSTED" {
 		t.Fatalf("cleanup code = %v, want RETRY_EXHAUSTED", sr.errorCode)
+	}
+	if sr.nextAttemptAt != nil {
+		t.Fatal("cleanup must clear the stranded next_attempt_at")
+	}
+	if sr.leaseToken != nil || sr.completedAt == nil {
+		t.Fatal("cleanup must clear the lease and set completed_at")
 	}
 }
