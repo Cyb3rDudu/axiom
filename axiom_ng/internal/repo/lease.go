@@ -87,10 +87,6 @@ type execer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// DefaultLeaseDuration is used when a call omits ClaimOptions.LeaseDuration;
-// conservative and replaced by real config in the dispatcher (Gate 2).
-const DefaultLeaseDuration = 120 * time.Second
-
 // ClaimNextJob atomically claims the oldest eligible ingest job for the worker.
 //
 // Each candidate attempt runs in its own short transaction:
@@ -491,8 +487,7 @@ func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*
 	// one consistent Zotero hierarchy, or the job is broken (cross-source or
 	// cross-document) and must be skipped, not have B/C rows frozen together.
 	if s.document.sourceID != c.sourceID || s.attachment.sourceID != c.sourceID ||
-		s.attachment.documentID != c.documentID || s.document.id != c.documentID ||
-		s.attachment.id != c.attachmentID {
+		s.attachment.documentID != c.documentID {
 		return nil, "PARENT_REMOVED", nil
 	}
 	// The attachment must be a child of this document: its parent_zotero_key must
@@ -518,16 +513,25 @@ func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*
 	}
 	s.document.parentKey, s.document.linkMode = docParentKey, docLinkMode
 
-	// 4. Document's canonical item raw_data (lossless bibliographic source).
+	// 4. Document's canonical item raw_data (lossless bibliographic source). The
+	// canonical item must belong to the same source AND have the document's
+	// zotero_key AND be active (not deleted) - a drifted/inactive canonical row is
+	// treated as missing (PARENT_REMOVED) rather than freezing contaminated
+	// metadata.
 	if s.document.canonicalItemID != nil {
 		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT raw_data FROM zotero_items WHERE id=$1 FOR UPDATE`, *s.document.canonicalItemID).Scan(&raw); err == nil {
+		err := tx.QueryRow(ctx, `
+			SELECT raw_data FROM zotero_items
+			WHERE id=$1 AND source_id=$2 AND zotero_key=$3 AND deleted=false
+			FOR UPDATE`, *s.document.canonicalItemID, c.sourceID, s.document.zoteroKey).Scan(&raw)
+		if err == nil {
 			s.document.rawData = raw
-		} else if err != pgx.ErrNoRows {
-			// A canonical row is expected to exist; only a genuinely absent row is
-			// tolerated (the normalized projection columns still populate the
-			// snapshot). Any other failure must abort rather than claim with
-			// incomplete metadata.
+		} else if err == pgx.ErrNoRows {
+			// Canonical item absent, drifted, or inactive: the normalized projection
+			// columns still populate the snapshot, but do not treat a drifted row as
+			// authoritative source data.
+			s.document.rawData = nil
+		} else {
 			return nil, "", fmt.Errorf("lock canonical item: %w", err)
 		}
 	}

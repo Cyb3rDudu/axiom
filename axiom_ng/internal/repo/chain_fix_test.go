@@ -251,3 +251,83 @@ func TestLeaseDurationValidated(t *testing.T) {
 		t.Fatalf("renew with sub-second duration must error")
 	}
 }
+
+// TestNullCurrentHashSkippedEvenForced proves F4's headline: a NULL/empty current
+// attachment hash terminalizes the job to skipped/CONTENT_HASH_MISSING before ANY
+// claim, INCLUDING force-rebuild (the processor contract requires a hash).
+func TestNullCurrentHashSkippedEvenForced(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	// (a) NULL hash, FORCE rebuild -> still skipped/CONTENT_HASH_MISSING.
+	_, jForceNull := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:57", libraryID: "users/0",
+		docKey: "E1", attKey: "E1", contentHash: nil, preferred: true,
+	}, "pending", 3)
+	if _, err := lr.pool.Exec(ctx, `UPDATE ingest_jobs SET force_rebuild=true WHERE id=$1`, jForceNull); err != nil {
+		t.Fatal(err)
+	}
+	if cj := lr.claim(t, defaultClaim("worker-a")); cj != nil {
+		t.Fatalf("force NULL-hash job must be skipped, got claimed %v", cj)
+	}
+	r := lr.rowOf(t, jForceNull)
+	if r.status != "skipped" || r.errorMessage == nil || *r.errorMessage != "CONTENT_HASH_MISSING" {
+		t.Fatalf("force NULL-hash job = %s/%v, want skipped/CONTENT_HASH_MISSING", r.status, r.errorMessage)
+	}
+
+	// (b) EMPTY-string hash, non-force -> skipped/CONTENT_HASH_MISSING.
+	_, jEmpty := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:58", libraryID: "users/1",
+		docKey: "E2", attKey: "E2", contentHash: nil, preferred: true,
+	}, "pending", 3)
+	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_attachments SET content_hash='' WHERE zotero_key='E2'`); err != nil {
+		t.Fatal(err)
+	}
+	if cj := lr.claim(t, defaultClaim("worker-b")); cj != nil {
+		t.Fatalf("empty-hash job must be skipped, got claimed %v", cj)
+	}
+	r2 := lr.rowOf(t, jEmpty)
+	if r2.status != "skipped" || r2.errorMessage == nil || *r2.errorMessage != "CONTENT_HASH_MISSING" {
+		t.Fatalf("empty-hash job = %s/%v, want skipped/CONTENT_HASH_MISSING", r2.status, r2.errorMessage)
+	}
+}
+
+// TestProcessingBlockCarriesFeatureFlags verifies profileFields round-trips a
+// flagged profile into the flat contract processing block (the "flags" half of
+// the typed-block fix).
+func TestProcessingBlockCarriesFeatureFlags(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+
+	_, jobID := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:59", libraryID: "users/0",
+		docKey: "F1", attKey: "F1", contentHash: h("sha256:f1"), preferred: true,
+	}, "pending", 3)
+	opts := defaultClaim("worker-a")
+	opts.Profile = []byte(`{"profile":"full-rag-v2","language_hint":"de","extract_images":true,
+		"compute_dense_embeddings":true,"compute_sparse_embeddings":false,"extract_entities":true}`)
+	cj := lr.claim(t, opts)
+	if cj == nil || cj.JobID != jobID {
+		t.Fatalf("expected claim %s, got %v", jobID, cj)
+	}
+	fi := frozenInput(t, cj)
+	if fi.Processing.Profile != "full-rag-v2" {
+		t.Errorf("processing.profile = %q, want full-rag-v2", fi.Processing.Profile)
+	}
+	if fi.Processing.LanguageHint != "de" {
+		t.Errorf("processing.language_hint = %q, want de", fi.Processing.LanguageHint)
+	}
+	if !fi.Processing.ExtractImages {
+		t.Error("processing.extract_images should be true")
+	}
+	if !fi.Processing.ComputeDenseEmbeddings {
+		t.Error("processing.compute_dense_embeddings should be true")
+	}
+	if fi.Processing.ComputeSparseEmbeddings {
+		t.Error("processing.compute_sparse_embeddings should be false")
+	}
+	if !fi.Processing.ExtractEntities {
+		t.Error("processing.extract_entities should be true")
+	}
+}

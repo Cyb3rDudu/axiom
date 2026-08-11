@@ -74,7 +74,7 @@ type FrozenProcessing struct {
 	ExtractRelationships    bool   `json:"extract_relationships"`
 }
 
-// profileFlags extracts the flat processing fields from a profile JSON object
+// profileFields extracts the flat processing fields from a profile JSON object
 // (e.g. {"profile":"full-rag-v1","language_hint":"de","extract_images":true,
 // ...}). Unknown keys are ignored; booleans default to false. Returns the profile
 // name and the feature-flag struct.
@@ -93,13 +93,9 @@ func profileFields(profile json.RawMessage) (FrozenProcessing, error) {
 	if p.Profile == "" {
 		return p, errors.New("profile object has no \"profile\" name field")
 	}
-	trueIf := func(keys ...string) bool {
-		for _, k := range keys {
-			if b, ok := m[k].(bool); ok && b {
-				return true
-			}
-		}
-		return false
+	trueIf := func(k string) bool {
+		b, ok := m[k].(bool)
+		return ok && b
 	}
 	strIf := func(keys ...string) string {
 		for _, k := range keys {
