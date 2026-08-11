@@ -15,7 +15,8 @@ import (
 
 func containsStr(s, sub string) bool { return strings.Contains(s, sub) }
 
-// canonicalFake implements zotero.Source + the canonicalFetcher capability for
+// canonicalFake implements the zotero.Source canonical contract
+// (ServerID, ListCanonicalItems, ListCanonicalCollections) for sync tests.
 // Returns a fixed set of items and collections for the canonical sync path.
 type canonicalFake struct {
 	serverID     string

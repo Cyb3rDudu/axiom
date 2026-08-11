@@ -610,7 +610,10 @@ func TestCanonicalDeletedItemOnFallbackFullSnapshot(t *testing.T) {
 	if n := countActiveFor(t, d, "zotero_items", srcID); n != 2 {
 		t.Fatalf("after full sync active items = %d, want 2", n)
 	}
-	jobsBefore, _ := repo.New(d.Pool()).CountJobsForSource(ctx, srcID)
+	jobsBefore, err := repo.New(d.Pool()).CountJobsForSource(ctx, srcID)
+	if err != nil {
+		t.Fatalf("count jobs before: %v", err)
+	}
 
 	// Simulate the deletion-feed-unavailable fallback: force a full snapshot
 	// where the parent (and its attachment) no longer exist.
@@ -626,20 +629,30 @@ func TestCanonicalDeletedItemOnFallbackFullSnapshot(t *testing.T) {
 	}
 
 	var itemDeleted, docDeleted, attDeleted, attPref bool
-	_ = d.Pool().QueryRow(ctx, `SELECT deleted FROM zotero_items WHERE source_id=$1 AND zotero_key='B1'`, srcID).Scan(&itemDeleted)
-	_ = d.Pool().QueryRow(ctx, `SELECT deleted FROM zotero_documents WHERE source_id=$1 AND zotero_key='B1'`, srcID).Scan(&docDeleted)
-	_ = d.Pool().QueryRow(ctx, `SELECT deleted FROM zotero_attachments WHERE source_id=$1 AND zotero_key='A1'`, srcID).Scan(&attDeleted)
-	_ = d.Pool().QueryRow(ctx, `SELECT preferred FROM zotero_attachments WHERE source_id=$1 AND zotero_key='A1'`, srcID).Scan(&attPref)
+	if err := d.Pool().QueryRow(ctx, `SELECT deleted FROM zotero_items WHERE source_id=$1 AND zotero_key='B1'`, srcID).Scan(&itemDeleted); err != nil {
+		t.Fatalf("query item deleted: %v", err)
+	}
+	if err := d.Pool().QueryRow(ctx, `SELECT deleted FROM zotero_documents WHERE source_id=$1 AND zotero_key='B1'`, srcID).Scan(&docDeleted); err != nil {
+		t.Fatalf("query doc deleted: %v", err)
+	}
+	if err := d.Pool().QueryRow(ctx, `SELECT deleted FROM zotero_attachments WHERE source_id=$1 AND zotero_key='A1'`, srcID).Scan(&attDeleted); err != nil {
+		t.Fatalf("query attachment deleted: %v", err)
+	}
+	if err := d.Pool().QueryRow(ctx, `SELECT preferred FROM zotero_attachments WHERE source_id=$1 AND zotero_key='A1'`, srcID).Scan(&attPref); err != nil {
+		t.Fatalf("query attachment preferred: %v", err)
+	}
 	if !itemDeleted || !docDeleted || !attDeleted {
-		t.Errorf("fallback full snapshot must delete item/doc/attachment: item=%v doc=%v att=%v",
-			itemDeleted, docDeleted, attDeleted)
+		t.Fatal("fallback full snapshot must delete item/doc/attachment")
 	}
 	if attPref {
-		t.Error("deleted attachment must not remain preferred")
+		t.Fatal("deleted attachment must not remain preferred")
 	}
-	jobsAfter, _ := repo.New(d.Pool()).CountJobsForSource(ctx, srcID)
+	jobsAfter, err := repo.New(d.Pool()).CountJobsForSource(ctx, srcID)
+	if err != nil {
+		t.Fatalf("count jobs after: %v", err)
+	}
 	if jobsAfter != jobsBefore {
-		t.Errorf("deleting an item must not enqueue new jobs: before=%d after=%d", jobsBefore, jobsAfter)
+		t.Fatalf("deleting an item must not enqueue new jobs: before=%d after=%d", jobsBefore, jobsAfter)
 	}
 	cur, err := repo.New(d.Pool()).CanonicalCursor(ctx, srcID)
 	if err != nil {

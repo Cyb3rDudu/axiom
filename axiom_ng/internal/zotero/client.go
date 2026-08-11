@@ -328,11 +328,6 @@ func (a *LocalAPI) ListCanonicalCollections() ([]CanonicalCollection, error) {
 	return all, nil
 }
 
-// getChildren returns all child items (attachments, notes) of a parent item so
-// a delta-triggered refresh can reconstruct a complete document. Children are
-// paginated over /children with start/limit so parents with more than `limit`
-// children are not truncated (which would otherwise mark valid attachments as
-// deleted during reconciliation).
 // versionHeader parses an unsigned library version string, returning 0 for
 // empty or malformed values.
 func versionHeader(s string) int64 {
@@ -494,21 +489,3 @@ func cloneValues(v url.Values) url.Values {
 	}
 	return out
 }
-
-// uniqueKeys returns the input keys with duplicates removed, preserving first
-// occurrence order.
-func uniqueKeys(keys []string) []string {
-	seen := make(map[string]struct{}, len(keys))
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		if _, ok := seen[k]; ok {
-			continue
-		}
-		seen[k] = struct{}{}
-		out = append(out, k)
-	}
-	return out
-}
-
-// DedupKeys is the exported form of uniqueKeys, used by the sync layer.
-func DedupKeys(keys []string) []string { return uniqueKeys(keys) }
