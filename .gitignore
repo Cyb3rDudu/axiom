@@ -27,6 +27,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+# Ruff (Python linter) cache
+.ruff_cache/
 # Distribution / packaging
 .Python
 build/
@@ -466,3 +468,6 @@ setup.sh
 
 # Verification test files and artifacts
 tests/verification/
+
+# Agent session data
+/sessions/
