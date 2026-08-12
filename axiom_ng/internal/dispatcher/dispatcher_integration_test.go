@@ -192,6 +192,20 @@ func (fp *fakeProcessor) url() string { return fp.srv.URL }
 func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	switch {
+	case r.Method == http.MethodGet && path == "/v1/health":
+		writeJSON(w, 200, map[string]any{"ok": true})
+	case r.Method == http.MethodGet && path == "/v1/capabilities":
+		writeJSON(w, 200, map[string]any{
+			"contract_versions": []string{"1.0"},
+			"processor":         map[string]any{"name": "fake", "version": "0.1.0"},
+			"formats":           []string{"application/pdf", "application/epub+zip"},
+			"features": map[string]bool{
+				"markdown": true, "page_locators": true, "section_hierarchy": true,
+				"images": false, "dense_embeddings": true, "sparse_embeddings": true,
+				"entities": true, "entity_relationships": true,
+			},
+			"limits": map[string]any{"max_concurrent_jobs": 1, "max_source_bytes": 1 << 30},
+		})
 	case r.Method == http.MethodPost && path == "/v1/process":
 		b, _ := io.ReadAll(r.Body)
 		fp.processBody = b

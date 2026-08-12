@@ -77,11 +77,10 @@ func main() {
 			// RenewalInterval is left unset; dispatcher.New derives a sane default
 			// (LeaseDuration/3) so the two can't drift.
 			disp := dispatcher.New(rep, pclient, dispatcher.Config{
-				WorkerID:            cfg.DispatcherWorkerID,
-				Concurrency:         cfg.DispatcherConcurrency,
-				Profile:             json.RawMessage(cfg.DispatcherProfile),
-				LeaseDuration:       cfg.DispatcherLeaseDuration,
-				RequireCapabilities: true,
+				WorkerID:      cfg.DispatcherWorkerID,
+				Concurrency:   cfg.DispatcherConcurrency,
+				Profile:       json.RawMessage(cfg.DispatcherProfile),
+				LeaseDuration: cfg.DispatcherLeaseDuration,
 			}, logger)
 			go func() {
 				if err := disp.Run(dctx); err != nil {

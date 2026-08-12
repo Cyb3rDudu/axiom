@@ -8,6 +8,7 @@ package dispatcher
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -37,9 +38,6 @@ type Config struct {
 	MaxRetryBackoff time.Duration
 	// Profile is the processing profile to freeze at claim time.
 	Profile json.RawMessage
-	// RequireCapabilities, when true, checks the processor version + features
-	// before dispatch and treats an unsupported processor as fatal for the job.
-	RequireCapabilities bool
 }
 
 // Dispatcher owns the worker pool and the lease/processor plumbing.
@@ -48,6 +46,9 @@ type Dispatcher struct {
 	rep    *repo.Repo
 	client *processor.Client
 	logger *log.Logger
+	// caps is the negotiated processor capability set; set once in Run before any
+	// claim is dispatched and used to bound concurrency and validate each job.
+	caps *processor.Capabilities
 }
 
 // New builds a Dispatcher. It starts no goroutines; call Run to process.
@@ -80,17 +81,25 @@ func New(rep *repo.Repo, client *processor.Client, cfg Config, logger *log.Logge
 }
 
 // Run processes jobs until ctx is cancelled. It returns when all workers have
-// drained their current jobs and shut down gracefully.
+// drained their current jobs and shut down gracefully. Capability negotiation
+// is required (work order section 7 step 5): this fails fast on a broken or
+// unsupported processor so claims are never held hostage by one, and it clamps
+// the configured concurrency to the processor's declared maximum.
 func (d *Dispatcher) Run(ctx context.Context) error {
-	// Negotiate capabilities once up front; if capabilities are required and the
-	// processor is unhealthy, fail fast so a broken processor is visible instead
-	// of silently stalling every claim.
-	if d.cfg.RequireCapabilities {
-		if _, err := d.client.Capabilities(ctx); err != nil {
-			d.logger.Printf("capability negotiation failed: %v", err)
-			return err
-		}
+	caps, err := d.client.Capabilities(ctx)
+	if err != nil {
+		d.logger.Printf("capability negotiation failed: %v", err)
+		return fmt.Errorf("negotiate capabilities: %w", err)
 	}
+	if !supportsContract(caps) {
+		d.logger.Printf("processor does not support contract v1 (versions=%v)", caps.ContractVersions)
+		return fmt.Errorf("processor does not support contract v1")
+	}
+	if caps.Limits.MaxConcurrentJobs > 0 && d.cfg.Concurrency > caps.Limits.MaxConcurrentJobs {
+		d.logger.Printf("clamping concurrency %d -> %d (processor max)", d.cfg.Concurrency, caps.Limits.MaxConcurrentJobs)
+		d.cfg.Concurrency = caps.Limits.MaxConcurrentJobs
+	}
+	d.caps = caps
 	var wg sync.WaitGroup
 	for i := 0; i < d.cfg.Concurrency; i++ {
 		wg.Add(1)
@@ -98,6 +107,17 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	}
 	wg.Wait()
 	return nil
+}
+
+// supportsContract reports whether any advertised contract version is a v1-minor
+// this client can speak (additive v1 evolution).
+func supportsContract(caps *processor.Capabilities) bool {
+	for _, v := range caps.ContractVersions {
+		if v == "1.0" || v == "1.1" || v == "1.2" || v == "1.3" || v == "1.4" || v == "1.5" {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
@@ -152,6 +172,14 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 		return
 	}
 
+	// Capability check: the processor must support this job's content type and the
+	// requested processing features. Unsupported is a terminal, non-transient
+	// condition (the frozen snapshot cannot change at retry).
+	if reason := d.trimCapabilityReason(req); reason != "" {
+		d.markNotProcessable(ctx, ref, fields, fmt.Errorf("unsupported by processor: %s", reason))
+		return
+	}
+
 	if _, err := d.client.SubmitProcess(ctx, req); err != nil {
 		d.handleSubmitFailure(ctx, claimed, err)
 		return
@@ -169,6 +197,47 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 
 	// Poll the processor while renewing the lease.
 	d.pollAndFinish(ctx, claimed)
+}
+
+// trimCapabilityReason returns a non-empty reason if the negotiated capability
+// set cannot serve the request (unsupported content type or a requested feature
+// the processor does not advertise). Empty string means the job is supported.
+func (d *Dispatcher) trimCapabilityReason(req *processor.ProcessRequest) string {
+	if d.caps == nil {
+		return "no negotiated capabilities"
+	}
+	supported := func(f string) bool {
+		if d.caps.Features == nil {
+			return false
+		}
+		ok, _ := d.caps.Features[f]
+		return ok
+	}
+	ct := req.Attachment.ContentType
+	formatOK := false
+	if ct != "" {
+		for _, f := range d.caps.Formats {
+			if f == ct {
+				formatOK = true
+				break
+			}
+		}
+	}
+	if !formatOK {
+		return fmt.Sprintf("content type %q not in formats %v", ct, d.caps.Formats)
+	}
+	rs := req.Processing
+	switch {
+	case rs.ComputeDenseEmbeddings && !supported("dense_embeddings"):
+		return "dense_embeddings not supported"
+	case rs.ComputeSparseEmbeddings && !supported("sparse_embeddings"):
+		return "sparse_embeddings not supported"
+	case rs.ExtractEntities && !supported("entities"):
+		return "entities not supported"
+	case rs.ExtractRelationships && !supported("entity_relationships"):
+		return "entity_relationships not supported"
+	}
+	return ""
 }
 
 // markNotProcessable schedules a retry/terminal for a job whose frozen snapshot
