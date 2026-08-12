@@ -153,6 +153,21 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 			continue
 		}
 		d.driveJob(ctx, claimed)
+		// On graceful shutdown the driveJob may have aborted mid-flight (ctx
+		// cancelled) leaving the lease held; return the job to pending so another
+		// dispatcher or this one on restart can reclaim it. Releasing is safe even
+		// if the job already reached a terminal state (the fence no-ops).
+		if ctx.Err() != nil {
+			d.releaseLease(ctx, claimed)
+		}
+	}
+}
+
+// releaseLease returns a still-held lease to pending (or terminalizes at the
+// attempt ceiling) so in-flight work is not stranded by a shutdown.
+func (d *Dispatcher) releaseLease(ctx context.Context, claimed *repo.ClaimedJob) {
+	if err := d.rep.ReleaseOrExpireLease(ctx, claimed.LeaseRef); err != nil && !isLost(err) {
+		d.logger.Printf("%v: release lease on shutdown: %v", claimed.LeaseRef.JobID, err)
 	}
 }
 

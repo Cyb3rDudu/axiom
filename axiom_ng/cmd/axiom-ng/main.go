@@ -55,6 +55,12 @@ func main() {
 	addr := cfg.BindAddr + ":" + strconv.Itoa(cfg.APIPort)
 	srv := server.New(addr, logger)
 	srv.RegisterCheck("zotero", server.CheckZotero(src))
+
+	// One signal context drives graceful shutdown of BOTH the dispatcher and the
+	// HTTP server, so SIGINT/SIGTERM cannot be held off by one half the process.
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	if database != nil {
 		srv.RegisterCheck("postgres", server.CheckDB(database.Pool()))
 		// Wire the sync service and ingest-job listing into the API.
@@ -72,8 +78,6 @@ func main() {
 			if perr != nil {
 				logger.Fatalf("processor client: %v", perr)
 			}
-			dctx, dcancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-			defer dcancel()
 			// RenewalInterval is left unset; dispatcher.New derives a sane default
 			// (LeaseDuration/3) so the two can't drift.
 			disp := dispatcher.New(rep, pclient, dispatcher.Config{
@@ -83,19 +87,40 @@ func main() {
 				LeaseDuration: cfg.DispatcherLeaseDuration,
 			}, logger)
 			go func() {
-				if err := disp.Run(dctx); err != nil {
+				if err := disp.Run(sigCtx); err != nil {
 					logger.Printf("dispatcher stopped: %v", err)
 				}
 			}()
 		}
 	}
+
 	logger.Printf("listening on %s", addr)
 	httpServer := &http.Server{
 		Addr:              addr,
 		Handler:           srv,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	if err := httpServer.ListenAndServe(); err != nil {
-		logger.Fatalf("http server: %v", err)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- httpServer.ListenAndServe()
+	}()
+
+	select {
+	case <-sigCtx.Done():
+		logger.Printf("signal received; shutting down")
+		stop() // idempotent; release the signal handler
+	case err := <-errCh:
+		if err != nil && err != http.ErrServerClosed {
+			logger.Fatalf("http server: %v", err)
+		}
+	}
+
+	// Gracefully stop the HTTP server within a bounded window; the dispatcher's
+	// own context is the same sigCtx, so it drains and releases its leases in
+	// parallel.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		logger.Printf("http shutdown: %v", err)
 	}
 }
