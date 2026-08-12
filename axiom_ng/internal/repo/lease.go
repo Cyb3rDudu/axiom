@@ -865,6 +865,23 @@ func (r *Repo) RequestCancellation(ctx context.Context, jobID string) error {
 	return err
 }
 
+// JobCancelRequested reports whether a job has a pending cancellation request
+// (cancel_requested_at set). The dispatcher polls it while processing so it can
+// call the processor's cancel endpoint and converge fenced to cancelled, rather
+// than keep renewing a job an operator asked to stop.
+func (r *Repo) JobCancelRequested(ctx context.Context, jobID string) (bool, error) {
+	var ts *time.Time
+	err := r.pool.QueryRow(ctx,
+		`SELECT cancel_requested_at FROM ingest_jobs WHERE id=$1`, jobID).Scan(&ts)
+	if err == pgx.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return ts != nil, nil
+}
+
 // ReleaseOrExpireLease clears the lease fields for an UNEXPIRED job owned by ref
 // so in-flight work survives a graceful shutdown without being lost. When the job
 // has consumed its max attempts it is terminalized to failed/RETRY_EXHAUSTED

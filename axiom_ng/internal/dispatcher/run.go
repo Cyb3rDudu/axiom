@@ -94,6 +94,11 @@ func (d *Dispatcher) markCompleted(ctx context.Context, ref repo.LeaseRef, proce
 	return tx.Commit(ctx)
 }
 
+// maxConsecutiveStatusErrors caps how many consecutive processor status failures
+// a single run tolerates before scheduling a retry (instead of renewing the lease
+// forever against a dead/unsupported processor).
+const maxConsecutiveStatusErrors = 5
+
 // pollAndFinish drives a job from 'processing' to a terminal state: polls the
 // processor status while renewing the lease, handles cancellation, then on
 // completion fetches + minimally validates the result and marks completed.
@@ -101,10 +106,28 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 	ref := claimed.LeaseRef
 	fields := []any{ref.JobID, claimed.AttachmentID, claimed.DocumentID, claimed.Attempt}
 	next := time.Now()
+	consecutive := 0
 	for {
 		if ctx.Err() != nil {
 			return
 		}
+		// Honour a cancellation request before renewing/continuing: tell the
+		// processor to stop and converge fenced to cancelled. The repo's
+		// terminalize/claim scan would eventually cancel on lease expiry, but we
+		// must not keep renewing a job an operator asked to stop.
+		cancelRequested, cerr := d.rep.JobCancelRequested(ctx, ref.JobID)
+		if cerr != nil {
+			d.logger.Printf("%v: read cancel request: %v", fields, cerr)
+			return
+		}
+		if cancelRequested {
+			if err := d.client.Cancel(ctx, ref.JobID); err != nil {
+				d.logger.Printf("%v: processor cancel: %v", fields, err)
+			}
+			d.onCancelled(ctx, ref) // fenced MarkCancelled; lost lease no-ops
+			return
+		}
+
 		// Renew the lease on our interval so a long processor run is not lost.
 		if time.Now().After(next) {
 			if err := d.rep.RenewLease(ctx, ref, d.cfg.LeaseDuration); err != nil {
@@ -120,7 +143,17 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 
 		st, err := d.client.JobStatus(ctx, ref.JobID)
 		if err != nil {
-			// A transient status error is tolerable; keep polling.
+			// A transient status error is tolerable briefly, but a processor that
+			// keeps failing status (404/401/bad JSON -> the client rejects it) must
+			// not keep a lease renewed forever. After a cap of consecutive failures
+			// we return the job to pending via retry; when it is reclaimed later it
+			// is re-submitted with the SAME frozen idempotency key so a surviving
+			// processor dedupes (F6 recovery without rerunning duplicate work).
+			consecutive++
+			if consecutive >= maxConsecutiveStatusErrors {
+				d.scheduleRetry(ctx, ref, claimed.Attempt, "PROCESS_STATUS_FAILED", err.Error())
+				return
+			}
 			if ctx.Err() != nil {
 				return
 			}
@@ -129,6 +162,7 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 			}
 			continue
 		}
+		consecutive = 0
 		switch st.Status {
 		case "completed":
 			d.onCompleted(ctx, claimed)
