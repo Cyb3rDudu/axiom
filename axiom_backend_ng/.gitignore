@@ -1,7 +1,0 @@
-bin/
-dist/
-*.test
-*.out
-coverage.*
-.env
-.env.local
