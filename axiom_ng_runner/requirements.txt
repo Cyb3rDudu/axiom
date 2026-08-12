@@ -1,0 +1,19 @@
+# axiom_ng_runner — processor contract-v1 service
+# Loopback HTTP document processor. Only computation + temporary job output.
+# Heavy/GPU deps (torch, FlagEmbedding, gliner, mrebel, marker-pdf) are needed
+# ONLY for the "real" compute backend; the default "reference" backend (used by
+# the contract black-box suite) needs just fastapi, uvicorn, pydantic, httpx
+# and pymupdf.
+
+# Runtime
+fastapi
+uvicorn[standard]
+pydantic
+
+# Reference compute backend (lightweight, hermetic)
+pymupdf
+
+# Tests
+pytest
+httpx
+ruff

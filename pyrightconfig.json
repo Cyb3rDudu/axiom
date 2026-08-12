@@ -1,0 +1,8 @@
+{
+  "venvPath": "/tmp",
+  "venv": "axvenv",
+  "pythonVersion": "3.14",
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": "none",
+  "extraPaths": ["/Users/dudu/Code/axiom", "/Users/dudu/Code/axiom/axiom_backend"]
+}
