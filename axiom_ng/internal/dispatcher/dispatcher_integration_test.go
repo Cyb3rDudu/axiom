@@ -177,6 +177,7 @@ type fakeProcessor struct {
 	failRetryable bool
 	result        string // raw JSON result body returned by /result
 	ackHits       int
+	ackFailures   int // remaining /v1/ack calls that should return 500
 	cancelHits    int
 }
 
@@ -245,6 +246,11 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"contract_version": "1.0", "job_id": jobID, "status": st})
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/jobs/") && strings.HasSuffix(path, "/ack"):
 		fp.ackHits++
+		if fp.ackFailures > 0 {
+			fp.ackFailures--
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		writeJSON(w, 200, map[string]any{"contract_version": "1.0"})
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/jobs/") && strings.HasSuffix(path, "/cancel"):
 		fp.cancelHits++
@@ -487,29 +493,42 @@ func TestProcessRequestBodyHasNoProfileHash(t *testing.T) {
 	}
 }
 
-// TestDuplicateProcessDedupe (14.2-2): under transport ambiguity the processor
-// may echo deduplicated=true on a repeat POST; the dispatcher must tolerate it
-// (here the fake returns deduplicated on the same key, which is fine).
+// TestDuplicateProcessDedupe (14.2-2): transport ambiguity — the first POST is
+// accepted by the processor but its response is lost (modelled as a 500), so
+// the dispatcher schedules a retry; on re-claim it re-submits with the SAME
+// frozen idempotency key and the processor echoes deduplicated=true. The job
+// still completes and the processor never runs duplicate work (same key).
 func TestDuplicateProcessDedupe(t *testing.T) {
 	h := openDispatchDB(t)
 	h.truncateFixtures(t)
-	jobID := h.seedJob(t, "D1", 3)
+	jobID := h.seedJob(t, "D1", 5)
 	fp := newFakeProcessor(t)
 	fp.statuses = []string{"completed"}
 	fp.result = `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed"}`
+	processCalls := 0
 	fp.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/process" {
-			// Deduplicated accept.
+			processCalls++
+			if processCalls == 1 {
+				// Simulate a lost accept response (the processor accepted but we
+				// never saw the reply).
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			// Later submits with the same idempotency key are deduplicated.
 			writeJSON(w, 202, map[string]any{"contract_version": "1.0", "job_id": jobID, "status": "accepted", "deduplicated": true})
 			return
 		}
 		fp.serve(w, r)
 	})
 
-	d := newDispatcher(t, h, fp, Config{})
-	runFor(t, d, context.Background(), 6*time.Second)
+	d := newDispatcher(t, h, fp, Config{Concurrency: 1, PollInterval: 50 * time.Millisecond, AckRetryInterval: 2 * time.Second})
+	runFor(t, d, context.Background(), 8*time.Second)
 	if got := h.jobStatus(t, jobID); got != "completed" {
-		t.Fatalf("status = %q, want completed", got)
+		t.Fatalf("status = %q, want completed (dedup + recovery)", got)
+	}
+	if processCalls < 2 {
+		t.Fatalf("expected >= 2 process POSTs (lost accept then dedup), got %d", processCalls)
 	}
 }
 
@@ -640,5 +659,174 @@ func TestNonRetryableFailureBecomesTerminal(t *testing.T) {
 	code, _ := h.jobError(t, jobID)
 	if code != "PDF_CONVERSION_FAILED" {
 		t.Fatalf("error code = %q, want PDF_CONVERSION_FAILED", code)
+	}
+}
+
+// ackPendingAt reports whether a completed job has an ack-pending mark.
+func (h *dispatchHarness) ackPendingAt(t *testing.T, jobID string) bool {
+	t.Helper()
+	var ts *time.Time
+	if err := h.pool.QueryRow(context.Background(), `SELECT ack_pending_at FROM ingest_jobs WHERE id=$1`, jobID).Scan(&ts); err != nil {
+		t.Fatalf("read ack_pending_at: %v", err)
+	}
+	return ts != nil
+}
+
+func (fp *fakeProcessor) addAckFailure() {
+	fp.ackFailures = 1
+}
+
+// TestCancellationDuringProcessing (F8/F2): an operator cancels a processing
+// job; the dispatcher calls the processor cancel endpoint and converges fenced
+// to cancelled instead of renewing/continuing.
+func TestCancellationDuringProcessing(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "C1", 3)
+	fp := newFakeProcessor(t)
+	fp.statuses = []string{"running"}
+
+	d := newDispatcher(t, h, fp, Config{Concurrency: 1, LeaseDuration: 5 * time.Second, RenewalInterval: 100 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { d.Run(ctx); close(done) }()
+
+	// Let it reach processing, then operator-cancel.
+	h.waitForStatus(t, jobID, "processing", 8*time.Second)
+	if err := h.rep.RequestCancellation(ctx, jobID); err != nil {
+		t.Fatalf("request cancellation: %v", err)
+	}
+	h.waitForStatus(t, jobID, "cancelled", 8*time.Second)
+	cancel()
+	<-done
+
+	if fp.cancelHits == 0 {
+		t.Fatal("dispatcher never called the processor cancel endpoint")
+	}
+	if got := h.jobStatus(t, jobID); got != "cancelled" {
+		t.Fatalf("status = %q, want cancelled", got)
+	}
+}
+
+// TestAckFailureIsRetried (F8/F3): a failed ACK leaves the job completed but
+// ack-pending; the separate retry pass re-acknowledges and clears the mark,
+// without reprocessing.
+func TestAckFailureIsRetried(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "A1", 3)
+	fp := newFakeProcessor(t)
+	fp.statuses = []string{"running", "completed"}
+	fp.result = `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed"}`
+	fp.addAckFailure() // first ack returns 500
+
+	d := newDispatcher(t, h, fp, Config{Concurrency: 1, LeaseDuration: 5 * time.Second, RenewalInterval: 60 * time.Millisecond, AckRetryInterval: 2 * time.Second})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { d.Run(ctx); close(done) }()
+
+	// Job reaches completed; the initial ack fails once (ackFailures consumed) and
+	// the mark is set. A 2s retry interval keeps the mark visible long enough for
+	// this assertion instead of racing the immediate retry.
+	h.waitForStatus(t, jobID, "completed", 10*time.Second)
+	if !h.ackPendingAt(t, jobID) {
+		// onCompleted acks after flipping completed, so give it a moment.
+		time.Sleep(300 * time.Millisecond)
+	}
+	if !h.ackPendingAt(t, jobID) {
+		t.Fatal("expected ack_pending_at set after a failed ack")
+	}
+	if fp.ackHits < 1 {
+		t.Fatalf("expected at least the initial failed ack, got %d", fp.ackHits)
+	}
+
+	// The retry pass re-acks and clears the mark within its interval.
+	deadline := time.Now().Add(6 * time.Second)
+	for h.ackPendingAt(t, jobID) && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if h.ackPendingAt(t, jobID) {
+		t.Fatal("ack-pending mark was never cleared by the retry pass")
+	}
+	if fp.ackHits < 2 {
+		t.Fatalf("expected at least 2 ack attempts (initial + retry), got %d", fp.ackHits)
+	}
+	if fp.processHits != 1 {
+		t.Fatalf("process hits = %d, want exactly 1 (must never reprocess after ack failure)", fp.processHits)
+	}
+	cancel()
+	<-done
+}
+
+// TestResultInvalidFails (F8): a processor result that does not echo the job id
+// must fail the job, never complete it.
+func TestResultInvalidFails(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "V1", 3)
+	fp := newFakeProcessor(t)
+	fp.statuses = []string{"completed"}
+	fp.result = `{"contract_version":"1.0","job_id":"SOMEOTHER","status":"completed"}`
+
+	d := newDispatcher(t, h, fp, Config{Concurrency: 1})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { d.Run(ctx); close(done) }()
+
+	h.waitForStatus(t, jobID, "failed", 8*time.Second)
+	cancel()
+	<-done
+	if got := h.jobStatus(t, jobID); got != "failed" {
+		t.Fatalf("status = %q, want failed", got)
+	}
+	if h.ackPendingAt(t, jobID) {
+		t.Fatal("ack must not be pending for an invalid result")
+	}
+}
+
+// TestGracefulShutdownReleasesLease (F8/F7): cancelling the dispatcher during
+// processing returns the job to pending (lease released) so a restart can
+// reclaim it, instead of abandoning a held lease.
+func TestGracefulShutdownReleasesLease(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "G1", 3)
+	fp := newFakeProcessor(t)
+	fp.statuses = []string{"running"}
+
+	d := newDispatcher(t, h, fp, Config{Concurrency: 1, LeaseDuration: 5 * time.Minute, RenewalInterval: 100 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { d.Run(ctx); close(done) }()
+
+	h.waitForStatus(t, jobID, "processing", 8*time.Second)
+	cancel() // graceful shutdown mid-processing
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("dispatcher did not exit after cancel")
+	}
+	// The lease should have been released back to pending (not left processing).
+	if got := h.jobStatus(t, jobID); got != "pending" {
+		t.Fatalf("status = %q, want pending (lease released on shutdown)", got)
+	}
+}
+
+// TestLostLeaseIsNonVacuous asserts the fake's status script actually offers a
+// completed state, so TestLostLeasePreventsPersistenceAndAck is not vacuous.
+func TestLostLeaseIsNonVacuous(t *testing.T) {
+	fp := newFakeProcessor(t)
+	defer fp.srv.Close()
+	found := false
+	for _, s := range fp.statuses {
+		if s == "completed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("fake script must include a completed status for the lost-lease test to be non-vacuous")
 	}
 }

@@ -809,7 +809,7 @@ func (r *Repo) MarkCompletedTx(ctx context.Context, tx pgx.Tx, ref LeaseRef, pro
 func (r *Repo) MarkAckFailed(ctx context.Context, jobID string) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE ingest_jobs SET ack_pending_at = COALESCE(ack_pending_at, now()), updated_at=now()
-		WHERE id=$1 AND status='completed'`)
+		WHERE id=$1 AND status='completed'`, jobID)
 	return err
 }
 
@@ -819,7 +819,7 @@ func (r *Repo) MarkAckFailed(ctx context.Context, jobID string) error {
 func (r *Repo) ClearAckPending(ctx context.Context, jobID string) error {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE ingest_jobs SET ack_pending_at=NULL, updated_at=now()
-		WHERE id=$1 AND status='completed' AND ack_pending_at IS NOT NULL`)
+		WHERE id=$1 AND status='completed' AND ack_pending_at IS NOT NULL`, jobID)
 	if err != nil {
 		return err
 	}
