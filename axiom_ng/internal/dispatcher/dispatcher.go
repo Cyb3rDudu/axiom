@@ -179,16 +179,16 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 		// dispatcher or this one on restart can reclaim it. Releasing is safe even
 		// if the job already reached a terminal state (the fence no-ops).
 		if ctx.Err() != nil {
-			d.releaseLease(ctx, claimed)
+			d.releaseLease(claimed)
 		}
 	}
 }
 
 // releaseLease returns a still-held lease to pending (or terminalizes at the
-// attempt ceiling) so in-flight work is not stranded by a shutdown. It uses a
+// attempt ceiling) so in-flight work is not stranded by a shutdown. It builds a
 // fresh bounded context because the shutdown ctx is already cancelled and would
 // abort the DB update.
-func (d *Dispatcher) releaseLease(ctx context.Context, claimed *repo.ClaimedJob) {
+func (d *Dispatcher) releaseLease(claimed *repo.ClaimedJob) {
 	rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := d.rep.ReleaseOrExpireLease(rctx, claimed.LeaseRef); err != nil && !isLost(err) {
