@@ -261,6 +261,22 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 // newDispatcher runs a Dispatcher with fast, deterministic intervals for tests.
+// recordingPersister is the Gate-2 test persistence stub: it records the result
+// bytes it would have committed and returns a deterministic snapshot id, so a
+// job can legitimately reach completed and be acknowledged.
+type recordingPersister struct {
+	snapshotID string
+	persisted  int
+}
+
+func (r *recordingPersister) PersistResult(_ context.Context, _ string, _ []byte) (string, error) {
+	r.persisted++
+	if r.snapshotID == "" {
+		r.snapshotID = "snap-gate2"
+	}
+	return r.snapshotID, nil
+}
+
 func newDispatcher(t *testing.T, h *dispatchHarness, fp *fakeProcessor, cfg Config) *Dispatcher {
 	c := cfg
 	if c.Concurrency <= 0 {
@@ -275,10 +291,13 @@ func newDispatcher(t *testing.T, h *dispatchHarness, fp *fakeProcessor, cfg Conf
 	if c.PollInterval <= 0 {
 		c.PollInterval = 15 * time.Millisecond
 	}
+	if c.AckRetryInterval <= 0 {
+		c.AckRetryInterval = 100 * time.Millisecond
+	}
 	if len(c.Profile) == 0 {
 		c.Profile = json.RawMessage(`{"profile":"full-rag-v1"}`)
 	}
-	return New(h.rep, mustClient(t, fp.url()), c, log.New(io.Discard, "", 0))
+	return NewWithPersister(h.rep, mustClient(t, fp.url()), &recordingPersister{}, c, log.New(io.Discard, "", 0))
 }
 
 func mustClient(t *testing.T, base string) *processor.Client {

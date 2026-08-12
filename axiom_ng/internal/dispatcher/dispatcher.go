@@ -36,6 +36,9 @@ type Config struct {
 	// MaxRetryBackoff caps the exponential backoff scheduled on retryable
 	// processor failure.
 	MaxRetryBackoff time.Duration
+	// AckRetryInterval is how often the separate ack-retry pass looks for
+	// completed jobs with a pending acknowledgement.
+	AckRetryInterval time.Duration
 	// Profile is the processing profile to freeze at claim time.
 	Profile json.RawMessage
 }
@@ -46,13 +49,25 @@ type Dispatcher struct {
 	rep    *repo.Repo
 	client *processor.Client
 	logger *log.Logger
+	// persist is the durability boundary for completed results; nil means jobs
+	// that reach completion FAIL rather than being completed+acked without a
+	// durable snapshot (Gate 2 F1). Tests inject a recording fake.
+	persist ResultPersister
 	// caps is the negotiated processor capability set; set once in Run before any
 	// claim is dispatched and used to bound concurrency and validate each job.
 	caps *processor.Capabilities
 }
 
-// New builds a Dispatcher. It starts no goroutines; call Run to process.
+// New builds a Dispatcher. It starts no goroutines; call Run to process. It uses
+// an error persister by default (no durable storage until Gate 4), so no job can
+// be completed/acked without a real persistence boundary.
 func New(rep *repo.Repo, client *processor.Client, cfg Config, logger *log.Logger) *Dispatcher {
+	return NewWithPersister(rep, client, &errPersister{msg: "no result persister configured (Gate 2: persistence arrives in Gate 4)"}, cfg, logger)
+}
+
+// NewWithPersister builds a Dispatcher with an explicit result-persistence
+// boundary (tests supply a recording fake; Gate 4 will supply the real one).
+func NewWithPersister(rep *repo.Repo, client *processor.Client, persist ResultPersister, cfg Config, logger *log.Logger) *Dispatcher {
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 1
 	}
@@ -74,10 +89,13 @@ func New(rep *repo.Repo, client *processor.Client, cfg Config, logger *log.Logge
 	if cfg.MaxRetryBackoff <= 0 {
 		cfg.MaxRetryBackoff = 5 * time.Minute
 	}
+	if cfg.AckRetryInterval <= 0 {
+		cfg.AckRetryInterval = 30 * time.Second
+	}
 	if logger == nil {
 		logger = log.New(log.Writer(), "axiom-ng: dispatcher: ", log.LstdFlags)
 	}
-	return &Dispatcher{cfg: cfg, rep: rep, client: client, logger: logger}
+	return &Dispatcher{cfg: cfg, rep: rep, client: client, logger: logger, persist: persist}
 }
 
 // Run processes jobs until ctx is cancelled. It returns when all workers have
@@ -100,6 +118,9 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 		d.cfg.Concurrency = caps.Limits.MaxConcurrentJobs
 	}
 	d.caps = caps
+	// Separate ack-retry pass: re-acknowledges completed jobs whose ack failed,
+	// never reprocessing them (F3). Runs until ctx is cancelled.
+	go retryAcks(ctx, d)
 	var wg sync.WaitGroup
 	for i := 0; i < d.cfg.Concurrency; i++ {
 		wg.Add(1)

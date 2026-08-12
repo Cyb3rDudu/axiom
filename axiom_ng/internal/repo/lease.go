@@ -803,6 +803,61 @@ func (r *Repo) MarkCompletedTx(ctx context.Context, tx pgx.Tx, ref LeaseRef, pro
 	return nil
 }
 
+// MarkAckFailed records that the processor acknowledgement for a COMPLETED job
+// failed, so an ACK-retry pass can retry it later without ever reprocessing. It
+// is a no-op if the job has already been acknowledged (ack_pending_at NULL).
+func (r *Repo) MarkAckFailed(ctx context.Context, jobID string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE ingest_jobs SET ack_pending_at = COALESCE(ack_pending_at, now()), updated_at=now()
+		WHERE id=$1 AND status='completed'`)
+	return err
+}
+
+// ClearAckPending clears the ack-pending mark after a retried acknowledgement
+// succeeds. Returns ErrNoRows if the job is not completed+ack-pending (or
+// already cleared), so the retrier can stop.
+func (r *Repo) ClearAckPending(ctx context.Context, jobID string) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE ingest_jobs SET ack_pending_at=NULL, updated_at=now()
+		WHERE id=$1 AND status='completed' AND ack_pending_at IS NOT NULL`)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// AckPendingJobs returns the id and snapshot_id of every completed job whose
+// acknowledgement is still pending (ack_pending_at set) and has not been
+// terminalized, so the ACK-retry pass can re-acknowledge them.
+func (r *Repo) AckPendingJobs(ctx context.Context, limit int) ([][2]string, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id::text, COALESCE((result->>'snapshot_id')::text, '') AS snapshot_id
+		FROM ingest_jobs
+		WHERE status='completed' AND ack_pending_at IS NOT NULL
+		ORDER BY ack_pending_at
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out [][2]string
+	for rows.Next() {
+		var id, snap string
+		if err := rows.Scan(&id, &snap); err != nil {
+			return nil, err
+		}
+		out = append(out, [2]string{id, snap})
+	}
+	return out, rows.Err()
+}
+
 // MarkCancelled sets a terminal cancelled state, clearing the lease.
 func (r *Repo) MarkCancelled(ctx context.Context, ref LeaseRef) error {
 	ok, err := r.fencedUpdate(ctx, r.pool, `

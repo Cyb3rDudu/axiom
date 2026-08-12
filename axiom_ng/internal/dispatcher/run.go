@@ -79,16 +79,16 @@ func (d *Dispatcher) markTerminal(ctx context.Context, ref repo.LeaseRef, code, 
 const gate2ProcessorVersion = "0.1.0"
 
 // markCompleted fence-completes a job under a caller-owned transaction so Gate 4
-// can persist the snapshot atomically with the completion in one commit. Here in
-// Gate 2 the transaction carries only the fenced completion and a marker
-// processor identity/snapshot id; full persistence arrives in Gate 4.
-func (d *Dispatcher) markCompleted(ctx context.Context, ref repo.LeaseRef, processorName string) error {
+// can persist the snapshot atomically with the completion in one commit. The
+// snapshotID comes from the ResultPersister (the durable id for the committed
+// result), not from a placeholder.
+func (d *Dispatcher) markCompleted(ctx context.Context, ref repo.LeaseRef, processorName, snapshotID string) error {
 	tx, err := d.rep.Pool().Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := d.rep.MarkCompletedTx(ctx, tx, ref, processorName, gate2ProcessorVersion, ref.JobID); err != nil {
+	if err := d.rep.MarkCompletedTx(ctx, tx, ref, processorName, gate2ProcessorVersion, snapshotID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -213,7 +213,7 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) 
 		return
 	}
 	// Minimal Gate 2 validation: the result must echo the job id. Structural
-	// validation + persistence arrive in Gate 4.
+	// validation + artifact digest checks arrive in Gate 4.
 	var resMeta struct {
 		JobID string `json:"job_id"`
 	}
@@ -222,10 +222,17 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) 
 		return
 	}
 
-	// Mark completed under a caller-owned transaction so Gate 4 persists the
-	// snapshot atomically; here we use a short owner-transaction for the fenced
-	// completion and a marker snapshot id.
-	err = d.markCompleted(ctx, ref, "fake-processor-gate2")
+	// Durably persist the result BEFORE marking completed or acknowledging. ACK's
+	// persisted flag is only ever true once the persister returns a snapshot id
+	// (F1): a job whose result cannot be persisted is failed, never completed+acked.
+	snapshotID, err := d.persist.PersistResult(ctx, ref.JobID, resultBytes)
+	if err != nil {
+		d.markTerminal(ctx, ref, "RESULT_PERSIST_FAILED", err.Error())
+		return
+	}
+
+	// Fenced completion under a caller-owned transaction with the real snapshot id.
+	err = d.markCompleted(ctx, ref, "fake-processor-gate2", snapshotID)
 	if isLost(err) {
 		d.logger.Printf("%v: lost lease at completion; not acknowledging", []any{ref.JobID})
 		return
@@ -234,13 +241,14 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) 
 		d.logger.Printf("%v: mark completed: %v", []any{ref.JobID}, err)
 		return
 	}
-	// Ack after fenced success. ACK failure keeps the job completed; it is retried
-	// separately and never reruns processing.
-	// ponytail: Gate 2 does NOT durably persist the snapshot/artifacts (that is
-	// Gate 4), so we must not tell a processor its result was persisted and may be
-	// GC'd. Send persisted=false until Gate 4 commits real storage, then flip.
-	if err := d.client.Ack(ctx, ref.JobID, processor.Ack{Persisted: false, SnapshotID: ref.JobID}); err != nil {
-		d.logger.Printf("%v: ack failed (job stays completed): %v", []any{ref.JobID}, err)
+	// Acknowledge after durable commit. ACK failure keeps the job completed but
+	// marks ack_pending so the separate retry pass re-acknowledges it; it is never
+	// reprocessed (F3).
+	if err := d.client.Ack(ctx, ref.JobID, processor.Ack{Persisted: true, SnapshotID: snapshotID}); err != nil {
+		d.logger.Printf("%v: ack failed; will retry separately: %v", []any{ref.JobID}, err)
+		if merr := d.rep.MarkAckFailed(ctx, ref.JobID); merr != nil {
+			d.logger.Printf("%v: mark ack-pending: %v", []any{ref.JobID}, merr)
+		}
 	}
 }
 
