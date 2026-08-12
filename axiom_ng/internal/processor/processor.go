@@ -274,12 +274,38 @@ func (c *Client) Capabilities(ctx context.Context) (*Capabilities, error) {
 }
 
 // SubmitProcess sends a process request and returns the acceptance result.
+// The response is contract-validated: it must carry a supported contract
+// version, echo the submitted job_id, a known status, and the deduplicated flag.
 func (c *Client) SubmitProcess(ctx context.Context, req *ProcessRequest) (*ProcessAccepted, error) {
 	var acc ProcessAccepted
 	if err := c.do(ctx, http.MethodPost, "/v1/process", req, &acc); err != nil {
 		return nil, err
 	}
+	if !contractVersionOk(acc.ContractVersion) {
+		return nil, fmt.Errorf("processor /v1/process: unsupported contract_version %q", acc.ContractVersion)
+	}
+	if acc.JobID != req.JobID {
+		return nil, fmt.Errorf("processor /v1/process: acceptance echoes job_id %q, want %q", acc.JobID, req.JobID)
+	}
+	if !validJobStatus(acc.Status) {
+		return nil, fmt.Errorf("processor /v1/process: unknown acceptance status %q", acc.Status)
+	}
 	return &acc, nil
+}
+
+// validJobStatus reports whether s is one of the contract's known job states.
+func validJobStatus(s string) bool {
+	switch s {
+	case "accepted", "running", "completed", "failed", "cancelled":
+		return true
+	}
+	return false
+}
+
+// contractVersionOk reports whether a reported contract version is within the
+// minor-compatible v1 range this client supports.
+func contractVersionOk(v string) bool {
+	return v == "1.0" || v == "1.1" || v == "1.2" || v == "1.3" || v == "1.4" || v == "1.5"
 }
 
 // JobStatus fetches the current advisory status of a processor job.
@@ -287,6 +313,15 @@ func (c *Client) JobStatus(ctx context.Context, jobID string) (*JobStatus, error
 	var st JobStatus
 	if err := c.do(ctx, http.MethodGet, "/v1/jobs/"+jobID, nil, &st); err != nil {
 		return nil, err
+	}
+	if !contractVersionOk(st.ContractVersion) {
+		return nil, fmt.Errorf("processor /v1/jobs/%s: unsupported contract_version %q", jobID, st.ContractVersion)
+	}
+	if st.JobID != jobID {
+		return nil, fmt.Errorf("processor /v1/jobs/%s: status echoes job_id %q, want %q", jobID, st.JobID, jobID)
+	}
+	if !validJobStatus(st.Status) {
+		return nil, fmt.Errorf("processor /v1/jobs/%s: unknown status %q", jobID, st.Status)
 	}
 	return &st, nil
 }
