@@ -185,9 +185,13 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 }
 
 // releaseLease returns a still-held lease to pending (or terminalizes at the
-// attempt ceiling) so in-flight work is not stranded by a shutdown.
+// attempt ceiling) so in-flight work is not stranded by a shutdown. It uses a
+// fresh bounded context because the shutdown ctx is already cancelled and would
+// abort the DB update.
 func (d *Dispatcher) releaseLease(ctx context.Context, claimed *repo.ClaimedJob) {
-	if err := d.rep.ReleaseOrExpireLease(ctx, claimed.LeaseRef); err != nil && !isLost(err) {
+	rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := d.rep.ReleaseOrExpireLease(rctx, claimed.LeaseRef); err != nil && !isLost(err) {
 		d.logger.Printf("%v: release lease on shutdown: %v", claimed.LeaseRef.JobID, err)
 	}
 }
