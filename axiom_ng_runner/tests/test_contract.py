@@ -13,12 +13,13 @@ import time
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
+
 from axiom_ng_runner import CONTRACT_VERSION
 from axiom_ng_runner.app import app
 from axiom_ng_runner.config import Settings, settings
 from axiom_ng_runner.job_store import Job, JobStore
 from axiom_ng_runner.validation import compute_sha256
-from fastapi.testclient import TestClient
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 

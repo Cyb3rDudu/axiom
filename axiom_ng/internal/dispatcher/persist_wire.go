@@ -100,9 +100,14 @@ func (d *Dispatcher) stageArtifacts(ctx context.Context, jobID string, resultByt
 			return nil, fmt.Errorf("artifact %q size mismatch: got %d, result declared %d", a.Ref, len(bytes), a.SizeBytes)
 		}
 		sum := sha256.Sum256(bytes)
-		got := "sha256:" + hex.EncodeToString(sum[:])
-		if got != a.SHA256 {
-			return nil, fmt.Errorf("artifact %q digest mismatch: got %s, result declared %s", a.Ref, got, a.SHA256)
+		got := hex.EncodeToString(sum[:])
+		// Normalize: the processor may declare the sha256 with or without the
+		// "sha256:" prefix (contract §10 example shows bare hex). Compare on the
+		// bare hex to avoid a false mismatch on identical hashes.
+		declared := a.SHA256
+		declared = strings.TrimPrefix(declared, "sha256:")
+		if got != declared {
+			return nil, fmt.Errorf("artifact %q digest mismatch: got sha256:%s, result declared %s", a.Ref, got, a.SHA256)
 		}
 		finalPath := filepath.Join(d.cfg.ArtifactRoot, jobID, a.Ref)
 		if err := os.MkdirAll(filepath.Dir(finalPath), 0o755); err != nil {

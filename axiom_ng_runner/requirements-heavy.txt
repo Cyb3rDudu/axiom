@@ -1,0 +1,32 @@
+# axiom_ng_runner — heavy-compute dependencies for the REAL backend (Gate 5).
+# Install ON TOP of requirements.txt (the reference/lightweight deps) when running
+# AXIOM_PROCESSOR_COMPUTE=real. These pull torch, transformers, and ML models.
+#
+# Verified versions (fresh nix-python311 venv, Apple MPS available: True):
+# marker-pdf==1.10.2  — last v1 before the v2 API jump (proven in ~/Code/marker-poc)
+# torch 2.13.0 with surya-ocr 0.17.1 — Apple GPU acceleration via torch.backends.mps
+#
+# The old axiom_backend/ai_researcher/core_rag package eagerly imports sqlalchemy
+# via its __init__.py (pgvector_store) even though the runner never writes to the
+# DB — so sqlalchemy is needed as an import-time dependency, not a runtime one.
+# This is the S6 finding from Gate 3 (documented); a clean fix would isolate the
+# core_rag import path, but for Gate 5 we carry the dep.
+
+# PDF conversion (Marker v1).
+marker-pdf==1.10.2
+
+# Dense/sparse embeddings (BGE-M3).
+FlagEmbedding==1.4.0
+
+# Entity extraction (GLiNER).
+gliner==0.2.28
+
+# Import-time dependency: core_rag/__init__.py → pgvector_store → sqlalchemy.
+# Not used for writes (the runner is compute-only), but needed for the import chain.
+sqlalchemy==2.0.52
+
+# pymupdf4llm: imported by core_rag/processor.py (fallback markdown conversion).
+pymupdf4llm
+
+# mrebel (relation extraction) loads lazily via transformers AutoModelForSeq2SeqLM
+# at runtime — no explicit package beyond what marker-pdf/transformers pulls.

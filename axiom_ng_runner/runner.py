@@ -52,6 +52,23 @@ def _sha256_hex(path: Path) -> str:
     return h.hexdigest()
 
 
+def _normalize_image_refs(refs: Any) -> list[str]:
+    """Normalize the existing chunker's image_refs (list of dicts with
+    'path'/'alt_text'/'position') to plain string refs (contract §11)."""
+    if not refs:
+        return []
+    out: list[str] = []
+    for r in refs:
+        if isinstance(r, str):
+            out.append(r)
+        elif isinstance(r, dict):
+            # Use the path/filename as the ref string.
+            out.append(str(r.get("path", r.get("alt_text", ""))))
+        else:
+            out.append(str(r))
+    return out
+
+
 def _adapt_chunk(
     c: dict[str, Any], chunk_index: int, page_label_map: dict[int, str]
 ) -> dict[str, Any]:
@@ -115,7 +132,7 @@ def _adapt_chunk(
             "end_paragraph_index": meta.get("end_paragraph_index", 0),
         },
         "token_count": meta.get("token_count", 0),
-        "image_refs": meta.get("image_refs", []) or [],
+        "image_refs": _normalize_image_refs(meta.get("image_refs", [])),
         "embeddings": {},
         "metadata": {},
     }
@@ -221,6 +238,7 @@ def _build_reference_result(
     attachment_id: str,
     content_hash: str,
     source_page_count: int,
+    image_artifacts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     proc = request.get("processing", {}) or {}
     processor_name = "axiom-python-marker"
@@ -238,6 +256,8 @@ def _build_reference_result(
             "retention": "durable",
         }
     ]
+    if image_artifacts:
+        artifacts.extend(image_artifacts)
 
     chunks: list[dict[str, Any]] = []
     for idx, c in enumerate(chunk_dicts):
@@ -450,6 +470,7 @@ def _compute_real(request: dict[str, Any], work_dir: Path) -> dict[str, Any] | N
 
 
 def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
+    import json as _json
     import subprocess
     import sys
 
@@ -478,6 +499,19 @@ def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
     if proc.returncode != 0:
         raise RuntimeError(f"{convert} failed: {proc.stderr[-500:]}")
 
+    # Parse the pdf_worker JSON result for the image_mapping
+    # ({original_marker_filename → saved_filename}).
+    image_mapping: dict[str, str] = {}
+    for line in reversed((proc.stdout or "").splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                wresult = _json.loads(line)
+                image_mapping = wresult.get("image_mapping") or {}
+            except _json.JSONDecodeError:
+                continue
+            break
+
     markdown = out_md.read_text(encoding="utf-8")
     page_label_map: dict[int, str] = {}
     if content_type == "application/pdf":
@@ -499,6 +533,30 @@ def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
 
         TextEmbedder().embed_chunks(chunk_dicts)
 
+    # Collect Marker images and declare them as Contract artifacts (§13).
+    # Build a ref-mapping: original_marker_name → image-XXXX (Contract-konform).
+    # Both _adapt_chunk's _normalize_image_refs and the artifact declarations use
+    # this mapping so chunk.image_refs ⊆ {artifact.ref} (round-trip consistency).
+    image_artifacts, orig_to_ref = _collect_image_artifacts(out_images, image_mapping, work_dir)
+
+    # Apply the ref-mapping to chunk image_refs so they carry the Contract refs.
+    # Use basename for the lookup key: the Chunker captures the full markdown
+    # path (e.g. 'media/cover.png'), but image_mapping keys are basenames.
+    for c in chunk_dicts:
+        meta = c.get("metadata", {}) or {}
+        raw_refs = meta.get("image_refs", []) or []
+        normalized: list[str] = []
+        for r in raw_refs:
+            if isinstance(r, dict):
+                orig = str(r.get("path", r.get("alt_text", "")))
+            else:
+                orig = str(r)
+            # Basename lookup (C1 fix): matches the old processor's
+            # Path(old_path).name defense.
+            orig_base = Path(orig).name if orig else orig
+            normalized.append(orig_to_ref.get(orig_base, orig_to_ref.get(orig, orig)))
+        meta["image_refs"] = normalized
+
     return _build_reference_result(
         request=request,
         work_dir=work_dir,
@@ -508,4 +566,68 @@ def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
         attachment_id=attach["attachment_id"],
         content_hash="sha256:" + _sha256_hex(source_path),
         source_page_count=len(page_label_map) if page_label_map else 0,
+        image_artifacts=image_artifacts,
     )
+
+
+def _collect_image_artifacts(
+    images_dir: Path, image_mapping: dict[str, str], work_dir: Path
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Collect Marker images and build Contract artifact declarations.
+
+    Returns (artifacts, orig_to_ref) where:
+    - artifacts: list of §13-conformant artifact dicts (ref/kind/media_type/
+      sha256/size_bytes/retention) for each image
+    - orig_to_ref: mapping {original_marker_filename → image-XXXX ref} used
+      to normalize chunk.image_refs for round-trip consistency.
+
+    Images are copied to work_dir/artifacts/<ref> so the artifact endpoint can
+    serve them for Go to fetch+verify+commit.
+    """
+    if not image_mapping:
+        return [], {}
+
+    artifacts: list[dict[str, Any]] = []
+    orig_to_ref: dict[str, str] = {}
+    art_dir = work_dir / "artifacts"
+    art_dir.mkdir(parents=True, exist_ok=True)
+
+    ext_to_media: dict[str, str] = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }
+
+    for idx, (orig_name, saved_name) in enumerate(sorted(image_mapping.items())):
+        img_path = images_dir / saved_name
+        if not img_path.exists():
+            log.warning("image not found: %s", img_path)
+            continue
+        ext = img_path.suffix.lower()
+        ref = f"image-{idx:04d}"
+
+        # Copy to artifacts dir under the Contract ref name.
+        dest = art_dir / ref
+        try:
+            dest.write_bytes(img_path.read_bytes())
+        except OSError as err:
+            log.warning("failed to copy image %s: %s", img_path, err)
+            continue
+
+        # W1 fix: assign orig_to_ref ONLY after successful copy + artifact
+        # declaration, so a failed image is dropped from both (no dangling ref).
+        orig_to_ref[orig_name] = ref
+        sha = _sha256_hex(dest)
+        size = dest.stat().st_size
+        artifacts.append({
+            "ref": ref,
+            "kind": "extracted_image",
+            "media_type": ext_to_media.get(ext, "application/octet-stream"),
+            "sha256": sha,
+            "size_bytes": size,
+            "retention": "durable_if_referenced",
+        })
+
+    return artifacts, orig_to_ref

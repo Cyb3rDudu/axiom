@@ -471,3 +471,4 @@ tests/verification/
 
 # Agent session data
 /sessions/
+axiom_ng_runner/.venv/
