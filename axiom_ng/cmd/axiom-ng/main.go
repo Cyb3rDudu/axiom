@@ -78,13 +78,15 @@ func main() {
 			if perr != nil {
 				logger.Fatalf("processor client: %v", perr)
 			}
-			// RenewalInterval is left unset; dispatcher.New derives a sane default
-			// (LeaseDuration/3) so the two can't drift.
-			disp := dispatcher.New(rep, pclient, dispatcher.Config{
+			// Gate 4: wire the REAL persistence boundary (repo.PersistResult
+			// fence-completes the job atomically in its single TX). The
+			// errPersister default would fail every completion.
+			disp := dispatcher.NewWithPersister(rep, pclient, rep, dispatcher.Config{
 				WorkerID:      cfg.DispatcherWorkerID,
 				Concurrency:   cfg.DispatcherConcurrency,
 				Profile:       json.RawMessage(cfg.DispatcherProfile),
 				LeaseDuration: cfg.DispatcherLeaseDuration,
+				ArtifactRoot:  cfg.ArtifactRoot,
 			}, logger)
 			go func() {
 				if err := disp.Run(sigCtx); err != nil {

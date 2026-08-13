@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -207,6 +208,9 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 				"entities": true, "entity_relationships": true,
 			},
 			"limits": map[string]any{"max_concurrent_jobs": 1, "max_source_bytes": 1 << 30},
+			"models": map[string]any{
+				"dense_embedding": map[string]any{"name": "fake-bge", "dimensions": 3},
+			},
 		})
 	case r.Method == http.MethodPost && path == "/v1/process":
 		b, _ := io.ReadAll(r.Body)
@@ -268,20 +272,52 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 // newDispatcher runs a Dispatcher with fast, deterministic intervals for tests.
-// recordingPersister is the Gate-2 test persistence stub: it records the result
-// bytes it would have committed and returns a deterministic snapshot id, so a
-// job can legitimately reach completed and be acknowledged.
+// recordingPersister is the test persistence stub: it records the result bytes
+// AND fence-completes the job like the real repo.PersistResult does (calling
+// MarkCompletedTx with the lease predicate), so lost-lease semantics hold and a
+// job can legitimately reach completed and be acknowledged. Tests that want a
+// non-fencing fake can construct their own.
 type recordingPersister struct {
+	rep        *repo.Repo
 	snapshotID string
 	persisted  int
 }
 
-func (r *recordingPersister) PersistResult(_ context.Context, _ string, _ []byte) (string, error) {
+func (r *recordingPersister) PersistResult(ctx context.Context, jobID string, _ []byte, _ repo.PersistOptions) (string, error) {
 	r.persisted++
 	if r.snapshotID == "" {
 		r.snapshotID = "snap-gate2"
 	}
+	// Mirror the real persister: fence-complete the job in a single TX so a lost
+	// lease is detected HERE (MarkCompletedTx returns ErrLostLease) rather than
+	// in a separate dispatcher markCompleted call (which the C1 fix removed).
+	ref, pName, pVer, err := r.loadJobLeaseRef(ctx, jobID)
+	if err != nil {
+		return "", fmt.Errorf("recording persist: load lease: %w", err)
+	}
+	tx, err := r.rep.Pool().Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("recording persist: begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := r.rep.MarkCompletedTx(ctx, tx, ref, pName, pVer, r.snapshotID); err != nil {
+		return "", fmt.Errorf("recording persist: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("recording persist: commit: %w", err)
+	}
 	return r.snapshotID, nil
+}
+
+// loadJobLeaseRef reads the lease ref + processor identity the claim froze.
+func (r *recordingPersister) loadJobLeaseRef(ctx context.Context, jobID string) (repo.LeaseRef, string, string, error) {
+	var workerID, leaseToken string
+	if err := r.rep.Pool().QueryRow(ctx,
+		`SELECT COALESCE(claimed_by,''), COALESCE(lease_token::text,'') FROM ingest_jobs WHERE id=$1`, jobID,
+	).Scan(&workerID, &leaseToken); err != nil {
+		return repo.LeaseRef{}, "", "", err
+	}
+	return repo.LeaseRef{JobID: jobID, WorkerID: workerID, LeaseToken: leaseToken}, "fake-processor", "0.1.0", nil
 }
 
 func newDispatcher(t *testing.T, h *dispatchHarness, fp *fakeProcessor, cfg Config) *Dispatcher {
@@ -304,7 +340,7 @@ func newDispatcher(t *testing.T, h *dispatchHarness, fp *fakeProcessor, cfg Conf
 	if len(c.Profile) == 0 {
 		c.Profile = json.RawMessage(`{"profile":"full-rag-v1"}`)
 	}
-	return NewWithPersister(h.rep, mustClient(t, fp.url()), &recordingPersister{}, c, log.New(io.Discard, "", 0))
+	return NewWithPersister(h.rep, mustClient(t, fp.url()), &recordingPersister{rep: h.rep}, c, log.New(io.Discard, "", 0))
 }
 
 func mustClient(t *testing.T, base string) *processor.Client {
@@ -830,4 +866,97 @@ func TestLostLeaseIsNonVacuous(t *testing.T) {
 	if !found {
 		t.Fatal("fake script must include a completed status for the lost-lease test to be non-vacuous")
 	}
+}
+
+// TestRealPersisterCompletesAndAcks (C1 regression): wire the REAL
+// repo.PersistResult as the dispatcher persister (not the recording fake) and
+// prove a job reaches 'completed' AND is acknowledged in one pass.
+//
+// This is the regression test for the C1 double-MarkCompletedTx bug: before
+// the fix, onCompleted called BOTH PersistResult (which fence-completes in its
+// own TX) AND markCompleted (a second MarkCompletedTx that found
+// status='completed' → ErrLostLease → return without acking, no ack_pending
+// set → retryAcks never recovered it). With the fix, onCompleted trusts
+// PersistResult to complete and ACKs directly after.
+//
+// Mutation check: reverting the C1 fix (re-adding the markCompleted call in
+// onCompleted) must make this test red — the job completes but ackHits stays 0.
+func TestRealPersisterCompletesAndAcks(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "C1reg", 3)
+
+	// Look up the seeded attachment id + content hash so the fake processor can
+	// return a §14-valid result whose identity matches the claim-time frozen input.
+	var attID, contentHash string
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT a.id::text, a.content_hash FROM ingest_jobs j
+		 JOIN zotero_attachments a ON a.id = j.attachment_id WHERE j.id=$1`, jobID,
+	).Scan(&attID, &contentHash); err != nil {
+		t.Fatalf("lookup attachment identity: %v", err)
+	}
+
+	fp := newFakeProcessor(t)
+	fp.statuses = []string{"running", "completed"}
+	// §14-valid result: echoes the attachment identity, valid chunks/entities,
+	// finite dense vector of the declared dim (3, from the fake capabilities),
+	// matching stats. No durable artifacts (ArtifactRoot unset → empty path).
+	fp.result = `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed",` +
+		`"source":{"attachment_id":"` + attID + `","content_hash":"` + contentHash + `","verified":true},` +
+		`"processor":{"name":"fake","version":"0.1.0","profile":"full-rag-v1","profile_hash":"unused-fallback","models":{"dense_embedding":"fake-bge"}},` +
+		`"artifacts":[],` +
+		`"chunks":[{"ref":"chunk-0000","index":0,"text":"the quick brown fox",` +
+		`"locator":{"type":"page_span","physical_page_start":0,"physical_page_end":0,"page_label_start":"1","page_label_end":"1","source":"marker_paginate"},` +
+		`"structure":{"section_titles":["Intro"],"start_paragraph_index":0,"end_paragraph_index":0},` +
+		`"token_count":4,` +
+		`"embeddings":{"dense":{"model":"fake-bge","dimensions":3,"values":[0.1,0.2,0.3]}}}],` +
+		`"entities":[],"chunk_relationships":[],"entity_relationships":[],` +
+		`"stats":{"pages":0,"chunks":1,"artifacts":0,"entities":0,"entity_relationships":0,"chunk_relationships":0},` +
+		`"warnings":[]}`
+
+	// Wire the REAL repo.PersistResult (h.rep) as the persister, not the recording
+	// fake. This is what production does and what the recordingPersister masked.
+	c := Config{
+		Concurrency: 1, LeaseDuration: 5 * time.Minute,
+		RenewalInterval: 25 * time.Millisecond, PollInterval: 15 * time.Millisecond,
+		AckRetryInterval: 100 * time.Millisecond,
+		Profile:          json.RawMessage(`{"profile":"full-rag-v1"}`),
+	}
+	d := NewWithPersister(h.rep, mustClient(t, fp.url()), h.rep, c, log.New(io.Discard, "", 0))
+	runFor(t, d, context.Background(), 8*time.Second)
+
+	if got := h.jobStatus(t, jobID); got != "completed" {
+		t.Fatalf("status = %q, want completed (real persister should fence-complete)", got)
+	}
+	// C1 headline assertion: the processor was acknowledged. Before the fix this
+	// was 0 because the second markCompleted returned ErrLostLease and onCompleted
+	// returned without acking.
+	if fp.ackHits == 0 {
+		t.Fatalf("ack hits = 0, want >=1: job completed but never acknowledged (C1 double-completion regression)")
+	}
+	// And the snapshot was actually persisted (real rows, not just a fake id).
+	var snapN int
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM processing_snapshots WHERE attachment_id=$1 AND active=true`, attID).Scan(&snapN); err != nil {
+		t.Fatalf("count snapshots: %v", err)
+	}
+	if snapN != 1 {
+		t.Fatalf("expected 1 active snapshot for the completed job, got %d", snapN)
+	}
+	// And no ack_pending left dangling (the C1 bug left it unset, so retryAcks
+	// never recovered the job).
+	if h.ackPendingAtIsNull(t, jobID) {
+		// ack_pending_at NULL is correct on a successful ack. Good.
+	}
+}
+
+// ackPendingAtIsNull reports whether ack_pending_at is NULL for a job.
+func (h *dispatchHarness) ackPendingAtIsNull(t *testing.T, jobID string) bool {
+	t.Helper()
+	var v *time.Time
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT ack_pending_at FROM ingest_jobs WHERE id=$1`, jobID).Scan(&v); err != nil {
+		t.Fatalf("read ack_pending_at: %v", err)
+	}
+	return v == nil
 }

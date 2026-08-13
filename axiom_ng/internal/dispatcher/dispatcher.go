@@ -41,6 +41,11 @@ type Config struct {
 	AckRetryInterval time.Duration
 	// Profile is the processing profile to freeze at claim time.
 	Profile json.RawMessage
+	// ArtifactRoot is the durable derived-artifact root (AXIOMNG_ARTIFACT_ROOT).
+	// Verified processor artifacts are staged here then atomically renamed on the
+	// same filesystem (work-order §7). Empty disables artifact commit (jobs whose
+	// result declares durable artifacts then fail validation).
+	ArtifactRoot string
 }
 
 // Dispatcher owns the worker pool and the lease/processor plumbing.

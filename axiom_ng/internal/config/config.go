@@ -37,6 +37,9 @@ type Config struct {
 	// DispatcherLeaseDuration is the per-claim lease length.
 	DispatcherLeaseDuration time.Duration
 
+	// ArtifactRoot is the durable derived-artifact root (AXIOMNG_ARTIFACT_ROOT).
+	ArtifactRoot string
+
 	// APIPort is the port the axiom-ng REST API listens on.
 	APIPort int
 	// BindAddr is the interface the API binds to. Defaults to loopback so a
@@ -68,6 +71,7 @@ func Load() Config {
 		DispatcherConcurrency:   envInt("AXIOMNG_DISPATCHER_CONCURRENCY", 1),
 		DispatcherProfile:       env("AXIOMNG_DISPATCHER_PROFILE", defaultProfile),
 		DispatcherLeaseDuration: envDur("AXIOMNG_DISPATCHER_LEASE", 5*time.Minute),
+		ArtifactRoot:            env("AXIOMNG_ARTIFACT_ROOT", ""),
 		APIPort:                 envInt("AXIOMNG_API_PORT", defaultAPIPort),
 		BindAddr:                env("AXIOMNG_BIND_ADDR", defaultBindAddr),
 	}

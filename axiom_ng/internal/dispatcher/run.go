@@ -73,27 +73,6 @@ func (d *Dispatcher) markTerminal(ctx context.Context, ref repo.LeaseRef, code, 
 	}
 }
 
-// gate2ProcessorVersion is the processor identity stamp written on completion
-// during Gate 2. It is deliberately a placeholder; Gate 4 replaces it with the
-// real processor name/version from capability negotiation and result validation.
-const gate2ProcessorVersion = "0.1.0"
-
-// markCompleted fence-completes a job under a caller-owned transaction so Gate 4
-// can persist the snapshot atomically with the completion in one commit. The
-// snapshotID comes from the ResultPersister (the durable id for the committed
-// result), not from a placeholder.
-func (d *Dispatcher) markCompleted(ctx context.Context, ref repo.LeaseRef, processorName, snapshotID string) error {
-	tx, err := d.rep.Pool().Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if err := d.rep.MarkCompletedTx(ctx, tx, ref, processorName, gate2ProcessorVersion, snapshotID); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
 // maxConsecutiveStatusErrors caps how many consecutive processor status failures
 // a single run tolerates before scheduling a retry (instead of renewing the lease
 // forever against a dead/unsupported processor).
@@ -200,10 +179,18 @@ func (d *Dispatcher) onCancelled(ctx context.Context, ref repo.LeaseRef) {
 	}
 }
 
-// onCompleted encapsulates Gate 2's completion boundary. Full result validation
-// and durable snapshot/artifact persistence arrive in Gate 4. Here we fetch the
-// result, mark the job completed (serialized against sync) and acknowledge the
-// processor. An acknowledgement failure must never rerun processing.
+// onCompleted encapsulates the completion boundary. Here we fetch the
+// result, validate + durably persist the snapshot + verified artifacts in ONE
+// fenced transaction (the persister fence-completes the job atomically in
+// that same commit — §10.2), and acknowledge the processor. An
+// acknowledgement failure must never rerun processing.
+//
+// C1 fix: the persister owns the fenced completion (it runs MarkCompletedTx as
+// step 6 of its single transaction). The dispatcher must NOT call
+// markCompleted again: a second MarkCompletedTx finds status='completed' (not
+// 'processing'), returns ErrLostLease, and onCompleted would then skip the ACK
+// without setting ack_pending — breaking F3 in production. ACK directly after a
+// successful PersistResult.
 func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) {
 	ref := claimed.LeaseRef
 	resultBytes, err := d.client.JobResult(ctx, ref.JobID)
@@ -212,8 +199,8 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) 
 		d.markTerminal(ctx, ref, "RESULT_FETCH_FAILED", err.Error())
 		return
 	}
-	// Minimal Gate 2 validation: the result must echo the job id. Structural
-	// validation + artifact digest checks arrive in Gate 4.
+	// Minimal structural check: the result must echo the job id. Full §14
+	// validation runs inside PersistResult before any row is inserted.
 	var resMeta struct {
 		JobID string `json:"job_id"`
 	}
@@ -222,28 +209,34 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) 
 		return
 	}
 
-	// Durably persist the result BEFORE marking completed or acknowledging. ACK's
-	// persisted flag is only ever true once the persister returns a snapshot id
-	// (F1): a job whose result cannot be persisted is failed, never completed+acked.
-	snapshotID, err := d.persist.PersistResult(ctx, ref.JobID, resultBytes)
+	// Stage + verify the durable artifacts (§13/§14.4.6): fetch each artifact's
+	// bytes, hash + length-check against the result's declaration, commit via an
+	// atomic rename under ArtifactRoot. A digest/size mismatch makes the job
+	// terminal (validation failure) before any snapshot row is inserted.
+	arts, aerr := d.stageArtifacts(ctx, ref.JobID, resultBytes)
+	if aerr != nil {
+		d.markTerminal(ctx, ref, "RESULT_INVALID", aerr.Error())
+		return
+	}
+
+	// Durably persist + fence-complete the job in ONE transaction. The persister
+	// (repo.PersistResult) inserts the snapshot, switches the active flag, writes
+	// the outbox and calls MarkCompletedTx — all in a single commit. ACK's
+	// persisted flag is only ever true once this returns a snapshot id (F1).
+	// CapDim is the int dimension the processor declared in /v1/capabilities
+	// (no string fallback — Hivemind Gate-3 hint).
+	snapshotID, err := d.persist.PersistResult(ctx, ref.JobID, resultBytes, repo.PersistOptions{
+		CapDim:    d.capDim(),
+		Artifacts: arts,
+	})
 	if err != nil {
 		d.markTerminal(ctx, ref, "RESULT_PERSIST_FAILED", err.Error())
 		return
 	}
 
-	// Fenced completion under a caller-owned transaction with the real snapshot id.
-	err = d.markCompleted(ctx, ref, "fake-processor-gate2", snapshotID)
-	if isLost(err) {
-		d.logger.Printf("%v: lost lease at completion; not acknowledging", []any{ref.JobID})
-		return
-	}
-	if err != nil {
-		d.logger.Printf("%v: mark completed: %v", []any{ref.JobID}, err)
-		return
-	}
 	// Acknowledge after durable commit. ACK failure keeps the job completed but
-	// marks ack_pending so the separate retry pass re-acknowledges it; it is never
-	// reprocessed (F3).
+	// marks ack_pending so the separate retry pass re-acknowledges it; it is
+	// never reprocessed (F3).
 	if err := d.client.Ack(ctx, ref.JobID, processor.Ack{Persisted: true, SnapshotID: snapshotID}); err != nil {
 		d.logger.Printf("%v: ack failed; will retry separately: %v", []any{ref.JobID}, err)
 		if merr := d.rep.MarkAckFailed(ctx, ref.JobID); merr != nil {
