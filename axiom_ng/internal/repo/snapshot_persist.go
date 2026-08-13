@@ -1,0 +1,444 @@
+// Package repo: atomic processing-snapshot persistence (Gate 4, work-order §10).
+//
+// PersistResult is the production ResultPersister (replacing the Gate-2
+// errPersister). It runs the full §14 validation, then in ONE caller-owned
+// transaction:
+//
+//  1. inserts the new immutable processing_snapshots row (identity §10.1) — or
+//     returns the existing snapshot if the identity replays (idempotent);
+//  2. inserts chunks, dense/sparse embeddings, entities + mentions, chunk/entity
+//     relationships, verified durable artifacts — mapping job-local refs to
+//     durable ids;
+//  3. verifies row counts and references against the validated result;
+//  4. deactivates the previous active snapshot and activates the new one (§10.2);
+//  5. inserts the OpenSearch outbox entry (§10.3 — NEVER calls OpenSearch here);
+//  6. calls MarkCompletedTx to do the fenced lease completion in the SAME tx;
+//  7. commits once.
+//
+// On any failure the whole transaction rolls back and the previous active
+// snapshot survives untouched (§10.2/§14.4). Artifacts are streamed + hashed +
+// length-checked by the dispatcher before PersistResult is called; this layer
+// only records the verified digest/size/path (artifact bytes are committed via
+// an atomic rename on the same filesystem by the dispatcher, see work-order §7).
+package repo
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
+	"github.com/jackc/pgx/v5"
+)
+
+// ArtifactRecord is a verified durable artifact (digest/size/path checked by the
+// dispatcher before persist). PersistResult records these transactionally.
+type ArtifactRecord struct {
+	Ref       string
+	Kind      string
+	MediaType string
+	SHA256    string
+	SizeBytes int64
+	Retention string
+	// StoragePath is the final durable path under AXIOMNG_ARTIFACT_ROOT.
+	StoragePath string
+}
+
+// PersistOptions carries the verified artifacts and the capability dimension
+// (an int — Hivemind Gate-3 hint) alongside the result bytes.
+type PersistOptions struct {
+	CapDim    int
+	Artifacts []ArtifactRecord
+}
+
+// PersistResult is the production persistence entry point. It returns the
+// durable snapshot id (or an error). It is the implementation of
+// dispatcher.ResultPersister for the repo.
+func (r *Repo) PersistResult(ctx context.Context, jobID string, raw []byte, opts PersistOptions) (string, error) {
+	res, err := DecodeProcessorResult(raw)
+	if err != nil {
+		return "", &ValidationError{Code: "RESULT_INVALID", Message: err.Error()}
+	}
+
+	// Read the claim-time frozen input + the job's durable identity for validation.
+	frozen, ident, err := r.loadJobForPersist(ctx, jobID)
+	if err != nil {
+		return "", fmt.Errorf("persist %s: load job: %w", jobID, err)
+	}
+	if err := ValidateProcessorResult(res, frozen, opts.CapDim); err != nil {
+		return "", err
+	}
+	// §14.4: verified durable artifacts must match the result's declarations.
+	// The dispatcher hashes the fetched bytes and builds ArtifactRecords; this
+	// check refuses a record whose ref/sha256/size_bytes/media_type diverge
+	// from the result (digest or size mismatch) or a result artifact that has
+	// no verified record. Runs BEFORE any row is inserted so nothing rolls back
+	// a partial snapshot.
+	if err := validateArtifactsMatch(res, opts.Artifacts); err != nil {
+		return "", err
+	}
+
+	snapshotID, err := r.persistTx(ctx, jobID, ident, res, opts.Artifacts)
+	if err != nil {
+		return "", err
+	}
+	return snapshotID, nil
+}
+
+// persistTx runs the single fenced transaction.
+func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, res *processor.Result, arts []ArtifactRecord) (string, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return "", fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Identity replay (§10.1): "replaying the same completed result must return the
+	// existing snapshot and remain safe." Identity is the tuple
+	// (attachment_id, content_hash, processor_name, processor_version, profile_hash)
+	// INDEPENDENT of the active flag — the unique index covers identity alone.
+	// So we look up WITHOUT `active=true`: an inactive match (e.g. a superseded
+	// snapshot being re-asserted by a re-processed job with the same identity)
+	// must NOT fall through to INSERT, which would hit processing_snapshots_identity_uq
+	// and roll the whole transaction back with a DB error instead of clean idempotency.
+	//
+	// Decision on an inactive identity match (Hivemind schema checkpoint): REACTIVATE
+	// it (§10.1 mandates returning the existing snapshot). The generation mechanism
+	// is reserved for explicit force-rebuilds with a NEW identity (new hash/profile),
+	// not for identity collisions. Reactivation deactivates any other currently-active
+	// snapshot in the same scope first so the partial unique index is never violated.
+	var existingID string
+	var existingActive bool
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, active FROM processing_snapshots
+		WHERE attachment_id=$1 AND content_hash=$2
+		  AND processor_name=$3 AND processor_version=$4 AND profile_hash=$5
+		LIMIT 1`,
+		ident.attachmentID, ident.contentHash, res.Processor.Name, res.Processor.Version, ident.profileHash,
+	).Scan(&existingID, &existingActive)
+	switch {
+	case err == nil:
+		// Idempotent replay of the SAME completed result. If the existing snapshot
+		// is inactive, reactivate it (deactivating any other active one in scope
+		// first to preserve the <=1 active invariant). Its content is identical
+		// (same identity => same bytes), so no row re-insert is needed.
+		if !existingActive {
+			if _, err := tx.Exec(ctx, `
+				UPDATE processing_snapshots SET active=false, updated_at=now()
+				WHERE document_id=$1 AND attachment_id=$2 AND profile_hash=$3 AND active=true AND id<>$4`,
+				ident.documentID, ident.attachmentID, ident.profileHash, existingID); err != nil {
+				return "", fmt.Errorf("replay deactivate other: %w", err)
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE processing_snapshots SET active=true, updated_at=now() WHERE id=$1`, existingID); err != nil {
+				return "", fmt.Errorf("replay reactivate: %w", err)
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return "", fmt.Errorf("commit replay: %w", err)
+		}
+		return existingID, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		// proceed to insert
+	default:
+		return "", fmt.Errorf("lookup existing snapshot: %w", err)
+	}
+
+	// 1. Insert the new immutable snapshot row (inactive until step 4).
+	var snapshotID string
+	manifestJSON, _ := json.Marshal(res.Manifest)
+	modelsJSON, _ := json.Marshal(res.Processor.Models)
+	warningsJSON, _ := json.Marshal(res.Warnings)
+	err = tx.QueryRow(ctx, `
+		INSERT INTO processing_snapshots
+		  (attachment_id, content_hash, processor_name, processor_version, profile_hash,
+		   document_id, profile, models, manifest, warnings, source_verified, ingest_job_id, active)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,false)
+		RETURNING id::text`,
+		ident.attachmentID, ident.contentHash, res.Processor.Name, res.Processor.Version, ident.profileHash,
+		ident.documentID, res.Processor.Profile, modelsJSON, manifestJSON, warningsJSON,
+		res.Source.Verified, jobID,
+	).Scan(&snapshotID)
+	if err != nil {
+		return "", fmt.Errorf("insert snapshot: %w", err)
+	}
+
+	// 2a. Chunks + dense/sparse embeddings. Build job-local->durable id maps.
+	chunkIDs := make(map[string]string, len(res.Chunks))
+	for _, c := range res.Chunks {
+		var cid string
+		locJSON, _ := json.Marshal(c.Locator)
+		secJSON, _ := json.Marshal(c.Structure.SectionTitles)
+		imgJSON, _ := json.Marshal(c.ImageRefs)
+		err = tx.QueryRow(ctx, `
+			INSERT INTO processing_chunks
+			  (snapshot_id, chunk_index, text, locator, section_titles,
+			   start_paragraph_index, end_paragraph_index, token_count, image_refs)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			RETURNING id::text`,
+			snapshotID, c.Index, c.Text, locJSON, secJSON,
+			ptrToInt(c.Structure.StartParagraphIndex), ptrToInt(c.Structure.EndParagraphIndex),
+			c.TokenCount, imgJSON,
+		).Scan(&cid)
+		if err != nil {
+			return "", fmt.Errorf("insert chunk %d: %w", c.Index, err)
+		}
+		chunkIDs[c.Ref] = cid
+
+		if c.Embeddings.Dense != nil {
+			vecStr := denseVectorLiteral(c.Embeddings.Dense.Values)
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO processing_chunk_dense_embeddings (chunk_id, model, dimensions, vector)
+				VALUES ($1,$2,$3,$4::vector)`,
+				cid, c.Embeddings.Dense.Model, c.Embeddings.Dense.Dimensions, vecStr); err != nil {
+				return "", fmt.Errorf("insert dense embedding chunk %d: %w", c.Index, err)
+			}
+		}
+		if c.Embeddings.Sparse != nil {
+			valsJSON, _ := json.Marshal(c.Embeddings.Sparse.Values)
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO processing_chunk_sparse_embeddings (chunk_id, model, values)
+				VALUES ($1,$2,$3)`,
+				cid, c.Embeddings.Sparse.Model, valsJSON); err != nil {
+				return "", fmt.Errorf("insert sparse embedding chunk %d: %w", c.Index, err)
+			}
+		}
+	}
+
+	// 2b. Entities + mentions.
+	entityIDs := make(map[string]string, len(res.Entities))
+	for _, e := range res.Entities {
+		var eid string
+		err = tx.QueryRow(ctx, `
+			INSERT INTO processing_entities
+			  (snapshot_id, ref, text, canonical_form, type, description)
+			VALUES ($1,$2,$3,$4,$5,$6)
+			RETURNING id::text`,
+			snapshotID, e.Ref, e.Text, e.CanonicalForm, e.Type, e.Description,
+		).Scan(&eid)
+		if err != nil {
+			return "", fmt.Errorf("insert entity %s: %w", e.Ref, err)
+		}
+		entityIDs[e.Ref] = eid
+		for _, m := range e.Mentions {
+			durableChunk := chunkIDs[m.ChunkRef]
+			if durableChunk == "" {
+				return "", verrf("ENTITY_MENTION_CHUNK_UNRESOLVED", "entity %s mention chunk %s unresolved at persist", e.Ref, m.ChunkRef)
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO processing_entity_mentions
+				  (entity_id, chunk_id, start_char, end_char, confidence)
+				VALUES ($1,$2,$3,$4,$5)`,
+				eid, durableChunk, m.StartChar, m.EndChar, m.Confidence); err != nil {
+				return "", fmt.Errorf("insert entity mention: %w", err)
+			}
+		}
+	}
+
+	// 2c. Relationships with mandatory evidence for non-sequential (§12).
+	for _, rel := range res.ChunkRelationships {
+		src := chunkIDs[rel.SourceChunkRef]
+		tgt := chunkIDs[rel.TargetChunkRef]
+		if src == "" || tgt == "" {
+			return "", verrf("CHUNK_REL_REF_UNRESOLVED", "chunk relationship endpoint unresolved")
+		}
+		evIDs, err := resolveEvidenceIDs(ctx, tx, snapshotID, rel.EvidenceChunkRefs, chunkIDs)
+		if err != nil {
+			return "", err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO processing_chunk_relationships
+			  (snapshot_id, source_chunk_id, target_chunk_id, type, strength, evidence_chunk_ids)
+			VALUES ($1,$2,$3,$4,$5,$6)`,
+			snapshotID, src, tgt, rel.Type, rel.Strength, evIDs); err != nil {
+			return "", fmt.Errorf("insert chunk relationship: %w", err)
+		}
+	}
+	for _, rel := range res.EntityRelationships {
+		src := entityIDs[rel.SourceEntityRef]
+		tgt := entityIDs[rel.TargetEntityRef]
+		if src == "" || tgt == "" {
+			return "", verrf("ENTITY_REL_REF_UNRESOLVED", "entity relationship endpoint unresolved")
+		}
+		evIDs, err := resolveEvidenceIDs(ctx, tx, snapshotID, rel.EvidenceChunkRefs, chunkIDs)
+		if err != nil {
+			return "", err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO processing_entity_relationships
+			  (snapshot_id, source_entity_id, target_entity_id, type, strength, evidence_chunk_ids, extractor)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+			snapshotID, src, tgt, rel.Type, rel.Strength, evIDs, rel.Extractor); err != nil {
+			return "", fmt.Errorf("insert entity relationship: %w", err)
+		}
+	}
+
+	// 2d. Verified durable artifacts.
+	for _, a := range arts {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO processing_artifacts
+			  (snapshot_id, ref, kind, media_type, sha256, size_bytes, retention, storage_path)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			snapshotID, a.Ref, a.Kind, a.MediaType, a.SHA256, a.SizeBytes, a.Retention, a.StoragePath); err != nil {
+			return "", fmt.Errorf("insert artifact %s: %w", a.Ref, err)
+		}
+	}
+
+	// 3. Verify counts against the actual inserted rows (defence-in-depth).
+	if err := verifyCounts(ctx, tx, snapshotID, res, len(arts)); err != nil {
+		return "", err
+	}
+
+	// 4. Atomic active-snapshot switch: deactivate previous, activate new (§10.2).
+	// The partial unique index processing_snapshots_active_scope_uq guarantees at
+	// most one active per (document_id, attachment_id, profile_hash); do the flip
+	// in the right order so the index never sees two active rows.
+	if _, err := tx.Exec(ctx, `
+		UPDATE processing_snapshots SET active=false, updated_at=now()
+		WHERE document_id=$1 AND attachment_id=$2 AND profile_hash=$3 AND active=true AND id<>$4`,
+		ident.documentID, ident.attachmentID, ident.profileHash, snapshotID); err != nil {
+		return "", fmt.Errorf("deactivate previous snapshot: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE processing_snapshots SET active=true, updated_at=now() WHERE id=$1`, snapshotID); err != nil {
+		return "", fmt.Errorf("activate new snapshot: %w", err)
+	}
+
+	// 5. OpenSearch outbox entry (§10.3) — no OpenSearch call in this tx.
+	payload, _ := json.Marshal(map[string]any{
+		"snapshot_id":   snapshotID,
+		"document_id":   ident.documentID,
+		"attachment_id": ident.attachmentID,
+		"operation":     "index",
+	})
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO opensearch_outbox (snapshot_id, operation, payload)
+		VALUES ($1,'index',$2)`, snapshotID, payload); err != nil {
+		return "", fmt.Errorf("insert outbox: %w", err)
+	}
+
+	// 6. Fenced completion in the SAME transaction (lease predicate + source
+	// advisory lock handled by MarkCompletedTx).
+	if err := r.MarkCompletedTx(ctx, tx, ident.leaseRef, res.Processor.Name, res.Processor.Version, snapshotID); err != nil {
+		return "", fmt.Errorf("mark completed: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit: %w", err)
+	}
+	return snapshotID, nil
+}
+
+// jobIdentity is the durable identity needed for snapshot insert + fenced completion.
+type jobIdentity struct {
+	attachmentID string
+	documentID   string
+	contentHash  string
+	profileHash  string
+	leaseRef     LeaseRef
+}
+
+// loadJobForPersist reads the frozen input (for validation) and the durable
+// identity + lease ref (for snapshot insert + fenced MarkCompletedTx).
+func (r *Repo) loadJobForPersist(ctx context.Context, jobID string) (*FrozenInput, jobIdentity, error) {
+	var (
+		inputSnap                []byte
+		profileHash              string
+		attachmentID, documentID string
+		contentHash              *string
+		claimedBy, leaseToken    string
+	)
+	err := r.pool.QueryRow(ctx, `
+		SELECT input_snapshot, COALESCE(profile_hash,''),
+		       attachment_id::text, document_id::text,
+		       (input_snapshot->'attachment'->>'content_hash')::text,
+		       COALESCE(claimed_by,''), COALESCE(lease_token::text,'')
+		FROM ingest_jobs WHERE id=$1`, jobID).Scan(
+		&inputSnap, &profileHash, &attachmentID, &documentID, &contentHash, &claimedBy, &leaseToken)
+	if err != nil {
+		return nil, jobIdentity{}, err
+	}
+	var frozen FrozenInput
+	if err := json.Unmarshal(inputSnap, &frozen); err != nil {
+		return nil, jobIdentity{}, fmt.Errorf("decode frozen input: %w", err)
+	}
+	ch := ""
+	if contentHash != nil {
+		ch = *contentHash
+	}
+	ident := jobIdentity{
+		attachmentID: attachmentID,
+		documentID:   documentID,
+		contentHash:  ch,
+		profileHash:  profileHash,
+		leaseRef:     LeaseRef{JobID: jobID, WorkerID: claimedBy, LeaseToken: leaseToken},
+	}
+	return &frozen, ident, nil
+}
+
+// resolveEvidenceIDs turns job-local evidence chunk refs into a JSONB array of
+// durable chunk ids, verifying each resolves.
+func resolveEvidenceIDs(ctx context.Context, tx pgx.Tx, snapshotID string, refs []string, chunkIDs map[string]string) ([]byte, error) {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		id := chunkIDs[ref]
+		if id == "" {
+			return nil, verrf("RELATIONSHIP_EVIDENCE_UNRESOLVED", "evidence chunk %s unresolved", ref)
+		}
+		out = append(out, id)
+	}
+	b, _ := json.Marshal(out)
+	return b, nil
+}
+
+// verifyCounts double-checks the inserted row counts against the validated
+// result arrays (defence-in-depth before the active flip).
+func verifyCounts(ctx context.Context, tx pgx.Tx, snapshotID string, res *processor.Result, nArt int) error {
+	var nChunks, nEnt, nChunkRel, nEntRel, nArtDB int
+	row := tx.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*) FROM processing_chunks WHERE snapshot_id=$1),
+		  (SELECT count(*) FROM processing_entities WHERE snapshot_id=$1),
+		  (SELECT count(*) FROM processing_chunk_relationships WHERE snapshot_id=$1),
+		  (SELECT count(*) FROM processing_entity_relationships WHERE snapshot_id=$1),
+		  (SELECT count(*) FROM processing_artifacts WHERE snapshot_id=$1)`, snapshotID)
+	if err := row.Scan(&nChunks, &nEnt, &nChunkRel, &nEntRel, &nArtDB); err != nil {
+		return fmt.Errorf("verify counts: %w", err)
+	}
+	if nChunks != len(res.Chunks) || nEnt != len(res.Entities) ||
+		nChunkRel != len(res.ChunkRelationships) || nEntRel != len(res.EntityRelationships) ||
+		nArtDB != nArt {
+		return verrf("PERSIST_COUNT_MISMATCH",
+			"inserted (chunks=%d ent=%d chunkRel=%d entRel=%d art=%d) != validated (%d/%d/%d/%d/%d)",
+			nChunks, nEnt, nChunkRel, nEntRel, nArtDB,
+			len(res.Chunks), len(res.Entities), len(res.ChunkRelationships), len(res.EntityRelationships), nArt)
+	}
+	return nil
+}
+
+// denseVectorLiteral formats a dense vector for pgvector's textual cast:
+// "[0.1,0.2,0.3]". Uses strconv.AppendFloat into a scratch buffer (NOT the
+// output slice) to avoid the double-append aliasing bug fmt.Appendf caused.
+func denseVectorLiteral(vals []float32) string {
+	var scratch [32]byte
+	b := make([]byte, 0, len(vals)*12)
+	b = append(b, '[')
+	for i, v := range vals {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		num := strconv.AppendFloat(scratch[:0], float64(v), 'g', -1, 32)
+		b = append(b, num...)
+	}
+	b = append(b, ']')
+	return string(b)
+}
+
+func ptrToInt(p *int) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}

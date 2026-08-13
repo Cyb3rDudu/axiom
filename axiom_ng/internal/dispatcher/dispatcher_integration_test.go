@@ -86,7 +86,8 @@ func (h *dispatchHarness) truncateFixtures(t *testing.T) {
 	}
 	if _, err := h.pool.Exec(ctx,
 		`TRUNCATE ingest_jobs, zotero_attachments, zotero_documents, zotero_items,
-		         zotero_item_collections, zotero_collections, zotero_sources`); err != nil {
+		         zotero_item_collections, zotero_collections, zotero_sources
+		CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 }

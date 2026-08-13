@@ -139,7 +139,8 @@ func (lr *leaseRepo) truncateFixtures(t *testing.T) {
 	}
 	if _, err := lr.pool.Exec(ctx, `
 		TRUNCATE ingest_jobs, zotero_attachments, zotero_documents, zotero_items,
-		         zotero_item_collections, zotero_collections, zotero_sources`); err != nil {
+		         zotero_item_collections, zotero_collections, zotero_sources
+		CASCADE`); err != nil {
 		t.Fatalf("truncate fixtures: %v", err)
 	}
 }

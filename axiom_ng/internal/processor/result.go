@@ -1,0 +1,154 @@
+package processor
+
+// Result types for GET /v1/jobs/{id}/result (PROCESSOR_CONTRACT.md §10).
+//
+// Gate 2 only modelled the request/acceptance envelopes; the full result payload
+// is decoded and validated by Gate 4 (the result is untrusted input — contract
+// §14). Unknown additive fields are tolerated by Go's json (contract §4); the
+// required fields below are the ones §14 validates and §4.4 persists.
+//
+// All refs are job-local (the processor's own ids); axiom-ng maps them to
+// durable ids while persisting.
+
+// Result is the top-level processor result payload.
+type Result struct {
+	ContractVersion     string               `json:"contract_version"`
+	JobID               string               `json:"job_id"`
+	Status              string               `json:"status"`
+	Source              ResultSource         `json:"source"`
+	Processor           ResultProcessor      `json:"processor"`
+	Artifacts           []Artifact           `json:"artifacts"`
+	Manifest            map[string]any       `json:"manifest"`
+	Chunks              []Chunk              `json:"chunks"`
+	Entities            []Entity             `json:"entities"`
+	ChunkRelationships  []ChunkRelationship  `json:"chunk_relationships"`
+	EntityRelationships []EntityRelationship `json:"entity_relationships"`
+	Stats               Stats                `json:"stats"`
+	Warnings            []map[string]any     `json:"warnings"`
+}
+
+// ResultSource echoes the verified source identity (§10/§14).
+type ResultSource struct {
+	AttachmentID string `json:"attachment_id"`
+	ContentHash  string `json:"content_hash"`
+	Verified     bool   `json:"verified"`
+}
+
+// ResultProcessor is the processor/profile/model provenance block.
+type ResultProcessor struct {
+	Name        string            `json:"name"`
+	Version     string            `json:"version"`
+	Profile     string            `json:"profile"`
+	ProfileHash string            `json:"profile_hash"`
+	Models      map[string]string `json:"models"`
+}
+
+// Artifact is a durable derived artifact with a VERIFIED digest (§13).
+type Artifact struct {
+	Ref       string `json:"ref"`
+	Kind      string `json:"kind"`
+	MediaType string `json:"media_type"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"size_bytes"`
+	Retention string `json:"retention"`
+}
+
+// Chunk is an ordered text span with provenance (§11).
+type Chunk struct {
+	Ref        string          `json:"ref"`
+	Index      int             `json:"index"`
+	Text       string          `json:"text"`
+	Locator    *Locator        `json:"locator"`
+	Structure  ChunkStructure  `json:"structure"`
+	TokenCount int             `json:"token_count"`
+	ImageRefs  []string        `json:"image_refs"`
+	Embeddings ChunkEmbeddings `json:"embeddings"`
+	Metadata   map[string]any  `json:"metadata"`
+}
+
+// Locator is the source position (§11). page_span for PDFs (physical+logical),
+// epub_cfi for pageless EPUBs.
+type Locator struct {
+	Type              string `json:"type"`
+	PhysicalPageStart *int   `json:"physical_page_start,omitempty"`
+	PhysicalPageEnd   *int   `json:"physical_page_end,omitempty"`
+	PageLabelStart    string `json:"page_label_start,omitempty"`
+	PageLabelEnd      string `json:"page_label_end,omitempty"`
+	Source            string `json:"source"`
+	CFIStart          string `json:"cfi_start,omitempty"`
+	CFIEnd            string `json:"cfi_end,omitempty"`
+}
+
+// ChunkStructure carries the ordered heading hierarchy and paragraph range.
+type ChunkStructure struct {
+	SectionTitles       []string `json:"section_titles"`
+	StartParagraphIndex *int     `json:"start_paragraph_index,omitempty"`
+	EndParagraphIndex   *int     `json:"end_paragraph_index,omitempty"`
+}
+
+// ChunkEmbeddings holds optional dense/sparse vectors for a chunk.
+type ChunkEmbeddings struct {
+	Dense  *DenseEmbedding  `json:"dense,omitempty"`
+	Sparse *SparseEmbedding `json:"sparse,omitempty"`
+}
+
+// DenseEmbedding is a fixed-dimension real-valued vector.
+type DenseEmbedding struct {
+	Model      string    `json:"model"`
+	Dimensions int       `json:"dimensions"`
+	Values     []float32 `json:"values"`
+}
+
+// SparseEmbedding maps bucketed string keys to numeric weights (as strings to
+// match the JSON shape; validated numeric).
+type SparseEmbedding struct {
+	Model  string            `json:"model"`
+	Values map[string]string `json:"values"`
+}
+
+// Entity is an extracted entity with its chunk mentions.
+type Entity struct {
+	Ref           string          `json:"ref"`
+	Text          string          `json:"text"`
+	CanonicalForm string          `json:"canonical_form"`
+	Type          string          `json:"type"`
+	Description   string          `json:"description"`
+	Mentions      []EntityMention `json:"mentions"`
+}
+
+// EntityMention is an entity occurrence anchored in a chunk span.
+type EntityMention struct {
+	ChunkRef   string  `json:"chunk_ref"`
+	StartChar  int     `json:"start_char"`
+	EndChar    int     `json:"end_char"`
+	Confidence float64 `json:"confidence"`
+}
+
+// ChunkRelationship relates two chunks; non-sequential types need evidence.
+type ChunkRelationship struct {
+	SourceChunkRef    string   `json:"source_chunk_ref"`
+	TargetChunkRef    string   `json:"target_chunk_ref"`
+	Type              string   `json:"type"`
+	Strength          float64  `json:"strength"`
+	EvidenceChunkRefs []string `json:"evidence_chunk_refs"`
+}
+
+// EntityRelationship relates two entities; non-sequential types need evidence (§12).
+type EntityRelationship struct {
+	SourceEntityRef   string   `json:"source_entity_ref"`
+	TargetEntityRef   string   `json:"target_entity_ref"`
+	Type              string   `json:"type"`
+	Strength          float64  `json:"strength"`
+	EvidenceChunkRefs []string `json:"evidence_chunk_refs"`
+	Extractor         string   `json:"extractor"`
+}
+
+// Stats declares counts that must match the actual arrays (§14).
+type Stats struct {
+	Pages               int `json:"pages"`
+	Chunks              int `json:"chunks"`
+	Artifacts           int `json:"artifacts"`
+	Entities            int `json:"entities"`
+	EntityRelationships int `json:"entity_relationships"`
+	ChunkRelationships  int `json:"chunk_relationships"`
+}
