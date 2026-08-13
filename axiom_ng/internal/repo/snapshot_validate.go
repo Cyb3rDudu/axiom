@@ -50,11 +50,17 @@ func ValidateProcessorResult(res *processor.Result, frozen *FrozenInput, capDim 
 
 	// §14: echoed source identity and content hash must match the claim-time
 	// frozen snapshot (the processor must not assert a different attachment/hash).
+	// Normalize sha256 prefix: the frozen input stores bare hex (from Zotero),
+	// the processor may echo bare hex or prefixed (sha256:hex). Compare on bare.
 	if res.Source.AttachmentID != frozen.Attachment.AttachmentID {
 		return verrf("SOURCE_IDENTITY_MISMATCH", "result attachment %q != frozen %q", res.Source.AttachmentID, frozen.Attachment.AttachmentID)
 	}
-	if frozen.Attachment.ContentHash != nil && res.Source.ContentHash != *frozen.Attachment.ContentHash {
-		return verrf("SOURCE_HASH_MISMATCH", "result content_hash %q != frozen %q", res.Source.ContentHash, *frozen.Attachment.ContentHash)
+	if frozen.Attachment.ContentHash != nil {
+		frozenHash := strings.TrimPrefix(*frozen.Attachment.ContentHash, "sha256:")
+		resultHash := strings.TrimPrefix(res.Source.ContentHash, "sha256:")
+		if frozenHash != resultHash {
+			return verrf("SOURCE_HASH_MISMATCH", "result content_hash %q != frozen %q", res.Source.ContentHash, *frozen.Attachment.ContentHash)
+		}
 	}
 	if !res.Source.Verified {
 		return verrf("SOURCE_NOT_VERIFIED", "processor did not verify the source hash")
