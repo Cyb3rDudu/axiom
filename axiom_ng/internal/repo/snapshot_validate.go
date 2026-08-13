@@ -87,7 +87,7 @@ func ValidateProcessorResult(res *processor.Result, frozen *FrozenInput, capDim 
 		return err
 	}
 	// §14: required locators for page-based formats + §12 evidence on non-sequential.
-	if err := validateLocatorsAndRelationships(res); err != nil {
+	if err := validateLocatorsAndRelationships(res, frozen); err != nil {
 		return err
 	}
 	// §14: result counts against the actual arrays.
@@ -260,7 +260,14 @@ func validateSparseEmbeddings(res *processor.Result) error {
 	return nil
 }
 
-func validateLocatorsAndRelationships(res *processor.Result) error {
+func validateLocatorsAndRelationships(res *processor.Result, frozen *FrozenInput) error {
+	// Determine the source content type to enforce §11: EPUBs (no stable pages)
+	// MUST NOT carry fabricated page_span locators with invented page labels.
+	isEPUB := false
+	if frozen.Attachment.ContentType != nil {
+		isEPUB = *frozen.Attachment.ContentType == "application/epub+zip"
+	}
+
 	for _, c := range res.Chunks {
 		loc := c.Locator
 		if loc == nil {
@@ -268,8 +275,12 @@ func validateLocatorsAndRelationships(res *processor.Result) error {
 		}
 		switch loc.Type {
 		case "page_span":
-			// PDF/EPUB page-based formats need page labels (physical pages may be
-			// absent only for genuinely pageless sources that should use epub_cfi).
+			// §11: EPUBs have no physical pages — page_span with fabricated labels
+			// is a MUST-NOT violation. Reject so the job fails cleanly instead of
+			// committing 34 chunks all citing "page 1".
+			if isEPUB {
+				return verrf("LOCATOR_FABRICATED_PAGES", "chunk %d has page_span locator for an EPUB source (§11: page labels MUST NOT be fabricated for sources without stable pages; use epub_cfi)", c.Index)
+			}
 		case "epub_cfi":
 			// EPUB without stable pages — no fabricated page numbers.
 		default:
