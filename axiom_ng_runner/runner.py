@@ -69,6 +69,41 @@ def _normalize_image_refs(refs: Any) -> list[str]:
     return out
 
 
+def _adapt_embeddings(raw: Any) -> dict[str, Any]:
+    """Pass through real embeddings from TextEmbedder.embed_chunks() into the
+    Contract chunk shape. The real embedder writes
+    chunk['embeddings'] = {'dense': [float...], 'sparse': {token_id: weight}}.
+    We reformat sparse keys to strings (Contract §10: sparse values keys are
+    strings). Returns {} if no real embeddings present (the reference stub
+    fills in later)."""
+    if not raw or not isinstance(raw, dict):
+        return {}
+    out: dict[str, Any] = {}
+    dense = raw.get("dense")
+    if dense and isinstance(dense, list):
+        try:
+            vals = [float(v) for v in dense]
+        except (TypeError, ValueError):
+            vals = []
+        if vals:
+            out["dense"] = {
+                "model": DENSE_EMBEDDING_MODEL,
+                "dimensions": len(vals),
+                "values": vals,
+            }
+    sparse = raw.get("sparse")
+    if sparse and isinstance(sparse, dict):
+        sp: dict[str, str] = {}
+        for k, v in sparse.items():
+            try:
+                sp[str(k)] = str(float(v))
+            except (TypeError, ValueError):
+                continue
+        if sp:
+            out["sparse"] = {"model": DENSE_EMBEDDING_MODEL, "values": sp}
+    return out
+
+
 def _adapt_chunk(
     c: dict[str, Any], chunk_index: int, page_label_map: dict[int, str]
 ) -> dict[str, Any]:
@@ -133,7 +168,10 @@ def _adapt_chunk(
         },
         "token_count": meta.get("token_count", 0),
         "image_refs": _normalize_image_refs(meta.get("image_refs", [])),
-        "embeddings": {},
+        # Durchreichen echter Embeddings aus dem Original-Chunk (z.B. von
+        # TextEmbedder.embed_chunks), damit _build_reference_result sie nicht
+        # mit dem Reference-Stub überschreibt.
+        "embeddings": _adapt_embeddings(c.get("embeddings")),
         "metadata": {},
     }
 
@@ -262,9 +300,13 @@ def _build_reference_result(
     chunks: list[dict[str, Any]] = []
     for idx, c in enumerate(chunk_dicts):
         ch = _adapt_chunk(c, idx, page_label_map)
-        if proc.get("compute_dense_embeddings"):
+        # Bedingte Fill-Logik (b): nur mit Reference-Stub füllen, wenn keine
+        # echten Embeddings aus _adapt_embeddings durchgereicht wurden. Der
+        # Real-Backend (TextEmbedder.embed_chunks) setzt echte BGE-M3-Vektoren
+        # in c['embeddings']; der Reference-Backend liefert keine echten.
+        if proc.get("compute_dense_embeddings") and not ch["embeddings"].get("dense"):
             ch["embeddings"]["dense"] = _dense_embedding(ch)
-        if proc.get("compute_sparse_embeddings"):
+        if proc.get("compute_sparse_embeddings") and not ch["embeddings"].get("sparse"):
             ch["embeddings"]["sparse"] = _sparse_embedding(ch["text"])
         chunks.append(ch)
 
