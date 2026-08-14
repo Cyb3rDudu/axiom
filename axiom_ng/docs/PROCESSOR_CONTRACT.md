@@ -85,9 +85,13 @@ axiom-ng validation
 Processor removes temporary files
 ```
 
-Source files are read in place in local v1. A future remote transport may
-stream the source bytes, but those bytes remain temporary and are deleted after
-the job is acknowledged or expires.
+Source files are read in place in local v1. As an ADDITIVE v1 extension,
+`attachment.source_url` may carry an HMAC-signed download URL (dispatcher
+signs `job_id|lease_unix` with the shared `AXIOMNG_PROCESSOR_SOURCE_SECRET`;
+the axiom-ng endpoint `/api/processor/source/{job_id}` verifies signature,
+expiry, job status and lease before streaming the bytes). The pulled bytes
+are temporary and are deleted after the job is acknowledged or expires;
+the content hash gate applies to downloaded bytes exactly as to local files.
 
 ## 4. Versioning
 
@@ -204,6 +208,7 @@ the running processor and must not assume them from this document.
     "content_type": "application/pdf",
     "filename": "example-book.pdf",
     "local_path": "/Users/dudu/Zotero/storage/NU8SS6HG/example-book.pdf",
+    "source_url": "http://100.79.104.120:8011/api/processor/source/<job_id>?exp=1786715133&sig=<hmac-sha256-hex>",
     "content_hash": "sha256:3ab8c7d6",
     "size_bytes": 12345678,
     "mtime_ms": 1786336894000
@@ -623,8 +628,13 @@ Local v1 requirements:
 - Never include database or OpenSearch credentials in a processor request.
 - Do not log full document text, embeddings or secrets by default.
 
-Remote transport requires authenticated requests, encrypted transport and an
-explicit temporary content-delivery design. It is outside v1 scope.
+Remote transport (additive v1 extension): the processor pulls source bytes
+from a signed, expiring URL when `local_path` is not locally accessible
+(LOCAL path takes precedence). Requirements: HMAC-signed and expiring URLs,
+plain-HTTP only on a trusted transport (e.g. a tailnet), http(s) schemes
+only, a total download budget and byte cap, the hash gate over the
+downloaded bytes, no hash-value echo in mismatch errors, and temp files that
+die with the job's work dir.
 
 ## 19. Required Contract Tests
 
@@ -643,6 +653,10 @@ Every processor implementation must pass the same black-box test suite:
 10. Acknowledgement removes temporary output and is idempotent.
 11. Processor restart does not silently convert an accepted job into success.
 12. No durable copy of the original PDF/EPUB remains after acknowledgement.
+13. source_url delivery (additive v1 extension): a valid local_path wins over
+    source_url; non-http(s) schemes are rejected; the hash gate rejects
+    downloaded bytes that do not match content_hash (without echoing the
+    actual hash); the downloaded temp file dies with acknowledgement.
 
 axiom-ng integration tests must additionally prove that an invalid or partial
 processor result cannot replace the last valid processing snapshot.
