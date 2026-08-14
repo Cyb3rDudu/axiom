@@ -267,6 +267,168 @@ def _reference_relationships(
     return rels
 
 
+# ── L6: real entity/relationship extraction (GLiNER + mREBEL) ────────────
+
+
+def _extract_real_entities(
+    chunk_items: list[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    """GLiNER zero-shot NER → contract entities.
+
+    chunk_items: [(chunk_ref, text)]. Entities are grouped by
+    (text.lower(), type); every occurrence becomes a mention.
+    Reuses the established labels/type-map/filters from
+    ai_researcher.core_rag.entity_extractor.
+    """
+    from ai_researcher.core_rag.entity_extractor import (
+        _GENERIC_WORDS,
+        _GLINER_TYPE_MAP,
+        _NOISE_RE,
+        GLINER_LABELS,
+    )
+    from gliner import GLiNER
+
+    model = GLiNER.from_pretrained("urchade/gliner_multi-v2.1")
+    entities: list[dict[str, Any]] = []
+    seen: dict[tuple[str, str], int] = {}
+
+    for chunk_ref, text in chunk_items:
+        if not text.strip():
+            continue
+        spans = model.predict_entities(
+            text, GLINER_LABELS, threshold=0.45, multi_label=True
+        )
+        for e in spans:
+            ent_text = e["text"].strip()
+            ent_type = _GLINER_TYPE_MAP.get(e["label"])
+            if not ent_type or len(ent_text) < 2 or len(ent_text) > 100:
+                continue
+            if _NOISE_RE.search(ent_text):
+                continue
+            if len(ent_text.split()) == 1 and ent_text.lower() in _GENERIC_WORDS:
+                continue
+            # Trust boundary: GLiNER spans are model output — skip
+            # malformed entries BEFORE creating any entity (a span with
+            # unparseable offsets must not leave a mention-less entity).
+            try:
+                start = int(e.get("start", 0))
+                confidence = round(float(e.get("score", 0.5)), 3)
+            except (TypeError, ValueError):
+                continue
+            key = (ent_text.lower(), ent_type)
+            idx = seen.get(key)
+            if idx is None:
+                idx = len(entities)
+                seen[key] = idx
+                entities.append(
+                    {
+                        "ref": f"entity-{idx + 1:04d}",
+                        "text": ent_text,
+                        "canonical_form": ent_text.lower(),
+                        "type": ent_type,
+                        "description": None,
+                        "mentions": [],
+                    }
+                )
+            entities[idx]["mentions"].append(
+                {
+                    "chunk_ref": chunk_ref,
+                    "start_char": start,
+                    "end_char": start + len(e["text"]),
+                    "confidence": confidence,
+                }
+            )
+    return entities
+
+
+def _extract_real_relationships(
+    entities: list[dict[str, Any]],
+    chunk_dicts: list[dict[str, Any]],
+    chunk_texts: dict[str, str],
+) -> list[dict[str, Any]]:
+    """mREBEL triples → contract relationships.
+
+    Triple endpoints are matched against the GLiNER entities (exact, then
+    substring); unmatched endpoints become new entities — mREBEL finds
+    entities GLiNER misses, and the validator only needs refs to resolve.
+    Mutates `entities` (may append). Relationship dedup merges evidence.
+    """
+    from ai_researcher.core_rag.relation_extractor import (
+        extract_relations_from_chunks,
+    )
+
+    triples = extract_relations_from_chunks(chunk_dicts)
+
+    by_text: dict[str, str] = {}
+    for e in entities:
+        by_text.setdefault(e["text"].lower(), e["ref"])
+
+    def _resolve(name: str, ent_type: str, chunk_ref: str) -> str:
+        key = name.lower().strip()
+        if key in by_text:
+            return by_text[key]
+        for t, ref in by_text.items():
+            if key in t or t in key:
+                return ref
+        eid = f"entity-{len(entities) + 1:04d}"
+        by_text[key] = eid
+        text = chunk_texts.get(chunk_ref, "")
+        start = text.find(name)
+        entities.append(
+            {
+                "ref": eid,
+                "text": name.strip(),
+                "canonical_form": key,
+                "type": ent_type,
+                "description": None,
+                "mentions": (
+                    [
+                        {
+                            "chunk_ref": chunk_ref,
+                            "start_char": start,
+                            "end_char": start + len(name),
+                            "confidence": 0.6,
+                        }
+                    ]
+                    if start >= 0
+                    else []
+                ),
+            }
+        )
+        return eid
+
+    rels: list[dict[str, Any]] = []
+    rel_index: dict[tuple[str, str, str], int] = {}
+    for tr in triples:
+        chunk_ref = tr.get("chunk_id", "")
+        if not chunk_ref:
+            continue
+        src = _resolve(tr["head"], tr.get("head_type", "CONCEPT"), chunk_ref)
+        tgt = _resolve(tr["tail"], tr.get("tail_type", "CONCEPT"), chunk_ref)
+        if src == tgt:
+            continue
+        rtype = tr["relation"].lower().replace(" ", "_")[:64]
+        dkey = (src, tgt, rtype)
+        idx = rel_index.get(dkey)
+        if idx is not None:
+            if chunk_ref not in rels[idx]["evidence_chunk_refs"]:
+                rels[idx]["evidence_chunk_refs"].append(chunk_ref)
+            continue
+        rel_index[dkey] = len(rels)
+        rels.append(
+            {
+                "source_entity_ref": src,
+                "target_entity_ref": tgt,
+                "type": rtype,
+                "strength": 0.7,
+                "evidence_chunk_refs": [chunk_ref],
+                "extractor": "mrebel-large",
+                "metadata": {},
+            }
+        )
+    return rels
+
+
 def _build_reference_result(
     request: dict[str, Any],
     work_dir: Path,
@@ -277,6 +439,8 @@ def _build_reference_result(
     content_hash: str,
     source_page_count: int,
     image_artifacts: list[dict[str, Any]] | None = None,
+    real_entities: list[dict[str, Any]] | None = None,
+    real_relationships: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     proc = request.get("processing", {}) or {}
     processor_name = "axiom-python-marker"
@@ -310,12 +474,21 @@ def _build_reference_result(
             ch["embeddings"]["sparse"] = _sparse_embedding(ch["text"])
         chunks.append(ch)
 
-    entities: list[dict[str, Any]] = []
-    if proc.get("extract_entities"):
+    # L6 bedingte Füllung (wie embeddings, Variante b): echte GLiNER/mREBEL-
+    # Ergebnisse aus _real_pipeline werden durchgereicht; nur wenn KEINE
+    # geliefert wurden (Reference-Backend), greifen die Stubs.
+    entities = real_entities if real_entities is not None else []
+    if real_entities is None and proc.get("extract_entities"):
         entities = _reference_entities(chunks)
 
-    entity_relationships: list[dict[str, Any]] = []
-    if proc.get("extract_relationships") and entities:
+    entity_relationships = (
+        real_relationships if real_relationships is not None else []
+    )
+    if (
+        real_relationships is None
+        and proc.get("extract_relationships")
+        and entities
+    ):
         entity_relationships = _reference_relationships(entities, chunks)
 
     stats = {
@@ -349,8 +522,16 @@ def _build_reference_result(
             "models": {
                 "marker": "marker-1.0",
                 "dense_embedding": "reference-bge-m3",
-                "entity_extraction": "reference-gliner",
-                "relationship_extraction": "reference-mrebel",
+                "entity_extraction": (
+                    "urchade/gliner_multi-v2.1"
+                    if real_entities is not None
+                    else "reference-gliner"
+                ),
+                "relationship_extraction": (
+                    "Babelscape/mrebel-large"
+                    if real_relationships is not None
+                    else "reference-mrebel"
+                ),
             },
         },
         "artifacts": artifacts,
@@ -631,6 +812,25 @@ def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
             meta["cfi_start"] = cfi_start
             meta["cfi_end"] = cfi_end
 
+    # L6: real entity (GLiNER) and relationship (mREBEL) extraction.
+    # Contract chunk refs are deterministic (chunk-{i:04d} from enumerate),
+    # so extraction can run before _build_reference_result assigns them.
+    real_entities: list[dict[str, Any]] | None = None
+    real_relationships: list[dict[str, Any]] | None = None
+    chunk_items = [(f"chunk-{i:04d}", c.get("text", ""))
+                   for i, c in enumerate(chunk_dicts)]
+    if proc_opt.get("extract_entities") or proc_opt.get("extract_relationships"):
+        real_entities = _extract_real_entities(chunk_items)
+    if proc_opt.get("extract_relationships") and real_entities is not None:
+        # mREBEL reads metadata['chunk_id'] as evidence — set the contract
+        # ref so evidence_chunk_refs resolve without a second mapping.
+        for i, c in enumerate(chunk_dicts):
+            (c.get("metadata", {}) or {})["chunk_id"] = f"chunk-{i:04d}"
+        chunk_texts = dict(chunk_items)
+        real_relationships = _extract_real_relationships(
+            real_entities, chunk_dicts, chunk_texts
+        )
+
     return _build_reference_result(
         request=request,
         work_dir=work_dir,
@@ -641,6 +841,8 @@ def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
         content_hash="sha256:" + _sha256_hex(source_path),
         source_page_count=len(page_label_map) if page_label_map else 0,
         image_artifacts=image_artifacts,
+        real_entities=real_entities,
+        real_relationships=real_relationships,
     )
 
 
