@@ -96,7 +96,7 @@ func TestRenewalContinuesDuringSlowStatusPoll(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := New(h.rep, client, Config{
-		LeaseDuration:    2 * time.Second,
+		LeaseDuration:   2 * time.Second,
 		RenewalInterval: 500 * time.Millisecond,
 	}, testLogger())
 
