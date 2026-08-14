@@ -269,6 +269,32 @@ def _reference_relationships(
 
 # ── L6: real entity/relationship extraction (GLiNER + mREBEL) ────────────
 
+_GLINER_MODEL: Any = None
+
+
+def _get_gliner() -> Any:
+    """Load GLiNER once per process (module-level cache, mirroring
+    relation_extractor.load_mrebel's pattern). Deliberately in-process — NOT
+    via gpu_worker/model_cache: the runner is already the heavy process (same
+    reasoning as TextEmbedder). Device placement follows the repo's hardware
+    detector; if the detector is unavailable the model stays wherever
+    from_pretrained put it."""
+    global _GLINER_MODEL
+    if _GLINER_MODEL is not None:
+        return _GLINER_MODEL
+    from gliner import GLiNER
+
+    _GLINER_MODEL = GLiNER.from_pretrained("urchade/gliner_multi-v2.1")
+    try:
+        from ai_researcher.hardware_detection import hardware_detector
+
+        _GLINER_MODEL = _GLINER_MODEL.to(
+            hardware_detector.get_model_device("gliner")
+        )
+    except Exception as err:  # noqa: BLE001 — detector is optional here
+        log.warning("GLiNER device placement skipped: %s", err)
+    return _GLINER_MODEL
+
 
 def _extract_real_entities(
     chunk_items: list[tuple[str, str]],
@@ -276,9 +302,9 @@ def _extract_real_entities(
     """GLiNER zero-shot NER → contract entities.
 
     chunk_items: [(chunk_ref, text)]. Entities are grouped by
-    (text.lower(), type); every occurrence becomes a mention.
-    Reuses the established labels/type-map/filters from
-    ai_researcher.core_rag.entity_extractor.
+    (whitespace-normalized text.lower(), type); every occurrence becomes a
+    mention with chunk-local char offsets. Reuses the established
+    labels/type-map/filters from ai_researcher.core_rag.entity_extractor.
     """
     from ai_researcher.core_rag.entity_extractor import (
         _GENERIC_WORDS,
@@ -286,36 +312,40 @@ def _extract_real_entities(
         _NOISE_RE,
         GLINER_LABELS,
     )
-    from gliner import GLiNER
 
-    model = GLiNER.from_pretrained("urchade/gliner_multi-v2.1")
+    model = _get_gliner()
     entities: list[dict[str, Any]] = []
     seen: dict[tuple[str, str], int] = {}
 
     for chunk_ref, text in chunk_items:
         if not text.strip():
             continue
-        spans = model.predict_entities(
-            text, GLINER_LABELS, threshold=0.45, multi_label=True
-        )
+        try:
+            spans = model.predict_entities(
+                text, GLINER_LABELS, threshold=0.45, multi_label=True
+            )
+        except Exception as err:  # noqa: BLE001 — one bad chunk must not kill the job
+            log.warning("GLiNER prediction failed for %s: %s", chunk_ref, err)
+            continue
         for e in spans:
-            ent_text = e["text"].strip()
-            ent_type = _GLINER_TYPE_MAP.get(e["label"])
+            # Trust boundary: GLiNER spans are model output — skip malformed
+            # entries BEFORE creating any entity: missing keys or unparseable
+            # offsets must neither kill the job nor leave a mention-less
+            # entity.
+            try:
+                ent_text = e["text"].strip()
+                ent_type = _GLINER_TYPE_MAP.get(e["label"])
+                start = int(e.get("start", 0))
+                confidence = round(float(e.get("score", 0.5)), 3)
+            except (AttributeError, KeyError, TypeError, ValueError):
+                continue
             if not ent_type or len(ent_text) < 2 or len(ent_text) > 100:
                 continue
             if _NOISE_RE.search(ent_text):
                 continue
             if len(ent_text.split()) == 1 and ent_text.lower() in _GENERIC_WORDS:
                 continue
-            # Trust boundary: GLiNER spans are model output — skip
-            # malformed entries BEFORE creating any entity (a span with
-            # unparseable offsets must not leave a mention-less entity).
-            try:
-                start = int(e.get("start", 0))
-                confidence = round(float(e.get("score", 0.5)), 3)
-            except (TypeError, ValueError):
-                continue
-            key = (ent_text.lower(), ent_type)
+            key = (" ".join(ent_text.lower().split()), ent_type)
             idx = seen.get(key)
             if idx is None:
                 idx = len(entities)
@@ -353,6 +383,8 @@ def _extract_real_relationships(
     entities GLiNER misses, and the validator only needs refs to resolve.
     Mutates `entities` (may append). Relationship dedup merges evidence.
     """
+    import re
+
     from ai_researcher.core_rag.relation_extractor import (
         extract_relations_from_chunks,
     )
@@ -361,15 +393,20 @@ def _extract_real_relationships(
 
     by_text: dict[str, str] = {}
     for e in entities:
-        by_text.setdefault(e["text"].lower(), e["ref"])
+        by_text.setdefault(" ".join(e["text"].lower().split()), e["ref"])
 
     def _resolve(name: str, ent_type: str, chunk_ref: str) -> str:
-        key = name.lower().strip()
+        key = " ".join(name.lower().split())
         if key in by_text:
             return by_text[key]
-        for t, ref in by_text.items():
-            if key in t or t in key:
-                return ref
+        # Substring matches only for names long enough to be distinctive on
+        # BOTH sides — "UN" must not substring-match "united nations" (and
+        # an "ESG" entity must not swallow "ESG frameworks"). Shorter names
+        # require an exact match or become their own entity.
+        if len(key) >= 4:
+            for t, ref in by_text.items():
+                if len(t) >= 4 and (key in t or t in key):
+                    return ref
         eid = f"entity-{len(entities) + 1:04d}"
         by_text[key] = eid
         text = chunk_texts.get(chunk_ref, "")
@@ -407,7 +444,7 @@ def _extract_real_relationships(
         tgt = _resolve(tr["tail"], tr.get("tail_type", "CONCEPT"), chunk_ref)
         if src == tgt:
             continue
-        rtype = tr["relation"].lower().replace(" ", "_")[:64]
+        rtype = re.sub(r"\s+", "_", tr["relation"].lower())[:64]
         dkey = (src, tgt, rtype)
         idx = rel_index.get(dkey)
         if idx is not None:
@@ -427,6 +464,20 @@ def _extract_real_relationships(
             }
         )
     return rels
+
+
+def _assign_contract_chunk_ids(chunk_dicts: list[dict[str, Any]]) -> None:
+    """Overwrite the Chunker's doc-local chunk_id ("{doc_id}_chunk_0000")
+    with the deterministic contract ref (chunk-{i:04d}, same scheme as
+    _adapt_chunk) so mREBEL evidence chunk_refs resolve without a second
+    mapping. In-place; other metadata keys survive, missing/None metadata
+    is created without dropping sibling keys (lost-update-safe)."""
+    for i, c in enumerate(chunk_dicts):
+        meta = c.setdefault("metadata", {})
+        if not isinstance(meta, dict):
+            meta = {}
+            c["metadata"] = meta
+        meta["chunk_id"] = f"chunk-{i:04d}"
 
 
 def _build_reference_result(
@@ -824,8 +875,7 @@ def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
     if proc_opt.get("extract_relationships") and real_entities is not None:
         # mREBEL reads metadata['chunk_id'] as evidence — set the contract
         # ref so evidence_chunk_refs resolve without a second mapping.
-        for i, c in enumerate(chunk_dicts):
-            (c.get("metadata", {}) or {})["chunk_id"] = f"chunk-{i:04d}"
+        _assign_contract_chunk_ids(chunk_dicts)
         chunk_texts = dict(chunk_items)
         real_relationships = _extract_real_relationships(
             real_entities, chunk_dicts, chunk_texts
