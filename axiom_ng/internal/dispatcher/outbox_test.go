@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -117,8 +118,10 @@ func fakeOS(t *testing.T, failAll bool) (*httptest.Server, *osRecorder) {
 			return
 		}
 		if r.Method == http.MethodPut { // index create
+			b, _ := io.ReadAll(r.Body)
 			rec.mu.Lock()
 			rec.createdIndex = true
+			rec.createBody = b
 			rec.mu.Unlock()
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte(`{"acknowledged":true}`))
@@ -135,12 +138,42 @@ type osRecorder struct {
 	docs         []map[string]any
 	paths        []string
 	createdIndex bool
+	createBody   []byte
 }
 
 func (r *osRecorder) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.docs)
+}
+
+func (r *osRecorder) indexCreateBody() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.createBody
+}
+
+func TestOutboxBackoffShape(t *testing.T) {
+	cases := []struct {
+		attempts int
+		want     time.Duration
+	}{
+		{1, 5 * time.Second},
+		{2, 10 * time.Second},
+		{3, 20 * time.Second},
+		{4, 40 * time.Second},
+		{20, time.Hour},
+	}
+	for _, c := range cases {
+		if got := outboxBackoff(c.attempts); got != c.want {
+			t.Errorf("outboxBackoff(%d) = %v, want %v", c.attempts, got, c.want)
+		}
+	}
+	for n := 1; n <= 100; n++ {
+		if got := outboxBackoff(n); got > time.Hour {
+			t.Fatalf("outboxBackoff(%d) = %v exceeds the 1h cap", n, got)
+		}
+	}
 }
 
 func TestOutboxDrainedToDone(t *testing.T) {
@@ -150,7 +183,7 @@ func TestOutboxDrainedToDone(t *testing.T) {
 
 	srv, rec := fakeOS(t, false)
 	d := newOutboxDispatcher(h)
-	ix := newOpenSearchClient(srv.URL, "", "")
+	ix := newOpenSearchClient(srv.URL, "", "", nil)
 	if err := drainOutboxOnce(context.Background(), d, ix); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
@@ -177,6 +210,35 @@ func TestOutboxDrainedToDone(t *testing.T) {
 	}
 	if !rec.createdIndex {
 		t.Fatal("index was not ensured")
+	}
+	// The index was CREATED knn-first with the seeded 3-dim dimension — the
+	// create body must pin both, or the first doc auto-creates plain float.
+	var create struct {
+		Settings struct {
+			Index struct {
+				Knn bool `json:"knn"`
+			} `json:"index"`
+		} `json:"settings"`
+		Mappings struct {
+			Properties struct {
+				Embedding struct {
+					Type      string `json:"type"`
+					Dimension int    `json:"dimension"`
+				} `json:"embedding"`
+			} `json:"properties"`
+		} `json:"mappings"`
+	}
+	if err := json.Unmarshal(rec.indexCreateBody(), &create); err != nil {
+		t.Fatalf("index create body: %v", err)
+	}
+	if !create.Settings.Index.Knn {
+		t.Fatal("index create body must set settings.index.knn = true")
+	}
+	if create.Mappings.Properties.Embedding.Type != "knn_vector" {
+		t.Fatalf("embedding mapping type = %q, want knn_vector", create.Mappings.Properties.Embedding.Type)
+	}
+	if create.Mappings.Properties.Embedding.Dimension != 3 {
+		t.Fatalf("embedding mapping dimension = %d, want 3 (from the batch dim-peek)", create.Mappings.Properties.Embedding.Dimension)
 	}
 
 	status, attempts, _, _ := outboxRowStatus(t, h, rowID)
@@ -243,7 +305,7 @@ func TestOutboxRetryBackoffOnError(t *testing.T) {
 
 	srv, _ := fakeOS(t, true) // every request 500
 	d := newOutboxDispatcher(h)
-	ix := newOpenSearchClient(srv.URL, "", "")
+	ix := newOpenSearchClient(srv.URL, "", "", nil)
 	if err := drainOutboxOnce(context.Background(), d, ix); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
@@ -277,7 +339,7 @@ func TestOutboxFailedAfterMaxAttempts(t *testing.T) {
 
 	srv, _ := fakeOS(t, true)
 	d := newOutboxDispatcher(h)
-	ix := newOpenSearchClient(srv.URL, "", "")
+	ix := newOpenSearchClient(srv.URL, "", "", nil)
 	if err := drainOutboxOnce(context.Background(), d, ix); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
@@ -301,15 +363,111 @@ func TestOutboxFailedAfterMaxAttempts(t *testing.T) {
 	}
 }
 
-func TestOutboxWorkerDisabledNoError(t *testing.T) {
+func TestOutboxStaleFailDoesNotFlipDone(t *testing.T) {
 	h := openDispatchDB(t)
 	h.truncateFixtures(t)
-	_, _ = h.seedOutboxSnapshot(t, "disabled-key", 1, 0)
+	rowID, _ := h.seedOutboxSnapshot(t, "doneflip-key", 1, 0)
 
-	// Empty URL: the Run() startup never launches the goroutine; the client
-	// stays inert. Claiming still works (rows just stay pending).
-	ix := newOpenSearchClient("", "", "")
-	if ix.baseURL != "" {
-		t.Fatal("empty URL must leave the client inert")
+	// Worker A claims and finishes the row.
+	rows, err := h.rep.ClaimOutboxBatch(context.Background(), 1, outboxClaimVisibility)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("claimed %d rows, want 1", len(rows))
+	}
+	if err := h.rep.MarkOutboxDone(context.Background(), rows[0].ID); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+
+	// Worker B (stale — its claim's visibility window has since become
+	// irrelevant) drives the failure path against a failing OpenSearch.
+	// The status='pending' guard in FailOutboxAttempt must make this a
+	// no-op: the done row stays done with attempts unchanged.
+	srv, _ := fakeOS(t, true)
+	d := newOutboxDispatcher(h)
+	stale := rows[0]
+	if err := drainOutboxRow(context.Background(), d, newOpenSearchClient(srv.URL, "", "", nil), stale); err == nil {
+		t.Fatal("expected the stale drain attempt to report its error")
+	}
+
+	status, attempts, _, _ := outboxRowStatus(t, h, rowID)
+	if status != "done" || attempts != 0 {
+		t.Fatalf("row = %s/%d, want done/0 (stale failure must not flip a done row)", status, attempts)
+	}
+}
+
+func TestOutboxWarnsWhenExistingIndexStrandsKnn(t *testing.T) {
+	// Index already exists (HEAD 200) with a plain-float embedding mapping —
+	// the auto-create trap. ensureIndex must log a loud warning naming the
+	// fix, and only once per client.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead:
+			w.WriteHeader(200)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/_mapping"):
+			// Real OpenSearch response shape: wrapped under the index name.
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"axiom-ng-chunks-v1":{"mappings":{"properties":{"embedding":{"type":"float"}}}}}`))
+		default:
+			w.WriteHeader(400)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	buf := &strings.Builder{}
+	osc := newOpenSearchClient(srv.URL, "", "", log.New(buf, "", 0))
+	if err := osc.ensureIndex(context.Background(), 3); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if !strings.Contains(buf.String(), "knn_vector") {
+		t.Fatalf("expected stranded-knn WARNING in log, got %q", buf.String())
+	}
+
+	// Memoized: the second ensure (same client) must not re-check.
+	buf.Reset()
+	if err := osc.ensureIndex(context.Background(), 3); err != nil {
+		t.Fatalf("second ensure: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("mapping check must run once per client, second run logged %q", buf.String())
+	}
+}
+
+func TestOutboxWorkerDisabledLeavesRowsPending(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	rowID, _ := h.seedOutboxSnapshot(t, "disabled-key", 1, 0)
+
+	// Real Run() startup path with a live (fake) processor and an EMPTY
+	// OpenSearch URL: the outbox worker must never start, and a pending row
+	// must survive multiple outbox poll ticks untouched.
+	fp := newFakeProcessor(t)
+	c := Config{
+		Concurrency: 1, LeaseDuration: 5 * time.Minute,
+		RenewalInterval: 25 * time.Millisecond, PollInterval: 15 * time.Millisecond,
+		AckRetryInterval: 100 * time.Millisecond,
+		OpenSearchURL:    "", // disabled
+	}
+	d := New(h.rep, mustClient(t, fp.url()), c, log.New(io.Discard, "", 0))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	done := make(chan struct{})
+	go func() { errCh <- d.Run(ctx); close(done) }()
+	// ~2 outbox poll ticks (poll interval is 2s): enough for a wrongly
+	// started worker to have claimed and drained the row twice over.
+	select {
+	case err := <-errCh:
+		t.Fatalf("Run errored with the outbox worker disabled: %v", err)
+	case <-time.After(5 * time.Second):
+	}
+	cancel()
+	<-done
+
+	status, attempts, _, _ := outboxRowStatus(t, h, rowID)
+	if status != "pending" || attempts != 0 {
+		t.Fatalf("row = %s/%d, want pending/0 (disabled worker must leave rows untouched)", status, attempts)
 	}
 }

@@ -1,10 +1,12 @@
 package config
 
 import (
+	"os"
 	"testing"
 )
 
 func TestLoadDefaults(t *testing.T) {
+	os.Unsetenv("AXIOMNG_OPENSEARCH_URL") // pin the unset branch, not the developer shell
 	t.Setenv("AXIOMNG_ZOTERO_BASE", "")
 	t.Setenv("AXIOMNG_ZOTERO_LIBRARY", "")
 	t.Setenv("AXIOMNG_API_PORT", "")
@@ -34,5 +36,26 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if c.APIPort != 9999 {
 		t.Errorf("APIPort = %d, want 9999", c.APIPort)
+	}
+}
+
+func TestOpenSearchURLSetEmptyDisables(t *testing.T) {
+	// Explicitly SET to empty string = intentional disable (the L5 outbox
+	// drainer never starts; rows stay pending, no error).
+	t.Setenv("AXIOMNG_OPENSEARCH_URL", "")
+	if c := Load(); c.OpenSearchURL != "" {
+		t.Errorf("OpenSearchURL = %q, want empty (explicitly disabled)", c.OpenSearchURL)
+	}
+}
+
+func TestOpenSearchURLUnsetGoesDefault(t *testing.T) {
+	// UNSET (as opposed to set-empty) falls back to the local mothership.
+	old, had := os.LookupEnv("AXIOMNG_OPENSEARCH_URL")
+	os.Unsetenv("AXIOMNG_OPENSEARCH_URL")
+	if had {
+		defer os.Setenv("AXIOMNG_OPENSEARCH_URL", old)
+	}
+	if c := Load(); c.OpenSearchURL != "http://127.0.0.1:9200" {
+		t.Errorf("OpenSearchURL = %q, want default http://127.0.0.1:9200", c.OpenSearchURL)
 	}
 }

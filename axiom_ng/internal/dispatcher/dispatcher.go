@@ -123,8 +123,8 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	// processor outage must not stall outbox draining either. Empty URL
 	// disables it (rows just stay pending).
 	if d.cfg.OpenSearchURL != "" {
-		os := newOpenSearchClient(d.cfg.OpenSearchURL, d.cfg.OpenSearchUsername, d.cfg.OpenSearchPassword)
-		go outboxWorker(ctx, d, os)
+		osc := newOpenSearchClient(d.cfg.OpenSearchURL, d.cfg.OpenSearchUsername, d.cfg.OpenSearchPassword, d.logger)
+		go outboxWorker(ctx, d, osc)
 		d.logger.Printf("outbox drainer enabled: index=%s url=%s", outboxIndexName, d.cfg.OpenSearchURL)
 	} else {
 		d.logger.Printf("outbox drainer disabled (AXIOMNG_OPENSEARCH_URL empty); outbox rows stay pending")

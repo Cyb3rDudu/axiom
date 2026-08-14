@@ -42,7 +42,7 @@ type OutboxDoc struct {
 // a crashed worker's rows reappear for retry instead of being locked out.
 func (r *Repo) ClaimOutboxBatch(ctx context.Context, limit int, visibility time.Duration) ([]OutboxRow, error) {
 	if limit <= 0 {
-		limit = 64
+		limit = 64 // mirrors dispatcher outboxBatchSize (default claim size)
 	}
 	rows, err := r.pool.Query(ctx, `
 		UPDATE opensearch_outbox o
@@ -137,6 +137,18 @@ func (r *Repo) MarkOutboxDone(ctx context.Context, id string) error {
 // FailOutboxAttempt records a failed drain: attempts+1, last_error, and
 // either terminal 'failed' (attempts exhausted) or pending with
 // next_attempt_at = now()+backoff.
+//
+// The status='pending' guard makes the update a no-op (ErrNoRows) when the
+// row is already terminal or was finished by a faster worker — a stale
+// worker whose visibility window expired must never flip a done row back
+// to pending.
+//
+// Operator recovery — requeue a terminal 'failed' row (e.g. after fixing
+// an OpenSearch-side mapping problem):
+//
+//	UPDATE opensearch_outbox
+//	SET status='pending', attempts=0, next_attempt_at=now(), last_error=NULL
+//	WHERE id='...';
 func (r *Repo) FailOutboxAttempt(ctx context.Context, id, errMsg string, backoff time.Duration, maxAttempts int) error {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE opensearch_outbox
@@ -144,7 +156,7 @@ func (r *Repo) FailOutboxAttempt(ctx context.Context, id, errMsg string, backoff
 		    last_error = $2,
 		    next_attempt_at = now() + $3::interval,
 		    status = CASE WHEN attempts + 1 >= $4 THEN 'failed' ELSE 'pending' END
-		WHERE id = $1
+		WHERE id = $1 AND status = 'pending'
 	`, id, errMsg, backoff.String(), maxAttempts)
 	if err != nil {
 		return err

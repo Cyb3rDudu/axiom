@@ -10,12 +10,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -52,16 +55,21 @@ type openSearchClient struct {
 	password string
 	hc       *http.Client
 	index    string
+	logger   *log.Logger
 	ensured  bool // index existence verified once per client
 }
 
-func newOpenSearchClient(baseURL, username, password string) *openSearchClient {
+func newOpenSearchClient(baseURL, username, password string, logger *log.Logger) *openSearchClient {
+	if logger == nil {
+		logger = log.Default()
+	}
 	return &openSearchClient{
 		baseURL:  baseURL,
 		username: username,
 		password: password,
 		hc:       &http.Client{Timeout: 30 * time.Second},
 		index:    outboxIndexName,
+		logger:   logger,
 	}
 }
 
@@ -101,6 +109,7 @@ func (c *openSearchClient) ensureIndex(ctx context.Context, dim int) error {
 		return err
 	} else if code == http.StatusOK {
 		c.ensured = true
+		c.warnIfStrandedKnn(ctx)
 		return nil
 	}
 	mapping := map[string]any{
@@ -156,15 +165,43 @@ func truncate(b []byte, n int) string {
 	return string(b)
 }
 
-// outboxIndexer abstracts the OpenSearch side so tests can inject a fake.
-type outboxIndexer interface {
-	ensureIndex(ctx context.Context, dim int) error
-	indexDoc(ctx context.Context, id string, doc map[string]any) error
+// warnIfStrandedKnn runs once per client (ensureIndex short-circuits on the
+// `ensured` flag after the HEAD-200 branch). An index that already exists
+// with a plain-float embedding mapping — auto-created by a doc that landed
+// before any knn-first ensure — silently degrades every embedding search to
+// exact scoring. The only fix is delete + reindex with the right mapping, so
+// make the condition loud instead of leaving the operator guessing why k-NN
+// returns nothing. Non-2xx or malformed mapping responses are not fatal
+// (ensure stays satisfied); no warning means knn or no embedding field yet.
+func (c *openSearchClient) warnIfStrandedKnn(ctx context.Context) {
+	code, body, err := c.do(ctx, http.MethodGet, "/"+c.index+"/_mapping", nil)
+	if err != nil || code < 200 || code >= 300 {
+		return
+	}
+	// Real response shape: {"<index>":{"mappings":{"properties":{...}}}}.
+	var idx map[string]struct {
+		Mappings struct {
+			Properties struct {
+				Embedding struct {
+					Type string `json:"type"`
+				} `json:"embedding"`
+			} `json:"properties"`
+		} `json:"mappings"`
+	}
+	if json.Unmarshal(body, &idx) != nil {
+		return
+	}
+	for _, m := range idx {
+		if t := m.Mappings.Properties.Embedding.Type; t != "" && t != "knn_vector" {
+			c.logger.Printf("WARNING: OpenSearch index %s maps embedding as %q, not knn_vector — k-NN search is silently degraded; delete the index so it re-creates knn-first, then requeue the affected outbox rows", c.index, t)
+		}
+		return // single index queried
+	}
 }
 
 // outboxWorker polls the outbox until ctx is cancelled. Disabled (empty URL)
 // never starts — see Run.
-func outboxWorker(ctx context.Context, d *Dispatcher, ix outboxIndexer) {
+func outboxWorker(ctx context.Context, d *Dispatcher, osc *openSearchClient) {
 	ticker := time.NewTicker(outboxPollInterval)
 	defer ticker.Stop()
 	for {
@@ -172,7 +209,7 @@ func outboxWorker(ctx context.Context, d *Dispatcher, ix outboxIndexer) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := drainOutboxOnce(ctx, d, ix); err != nil && ctx.Err() == nil {
+			if err := drainOutboxOnce(ctx, d, osc); err != nil && ctx.Err() == nil {
 				d.logger.Printf("outbox drain: %v", err)
 			}
 		}
@@ -182,7 +219,7 @@ func outboxWorker(ctx context.Context, d *Dispatcher, ix outboxIndexer) {
 // drainOutboxOnce claims one batch and indexes it. Per-row outcome:
 // success → done; error → attempts+1 + backoff (terminal failed at max).
 // A row's failure never stops the rest of the batch.
-func drainOutboxOnce(ctx context.Context, d *Dispatcher, ix outboxIndexer) error {
+func drainOutboxOnce(ctx context.Context, d *Dispatcher, osc *openSearchClient) error {
 	rows, err := d.rep.ClaimOutboxBatch(ctx, outboxBatchSize, outboxClaimVisibility)
 	if err != nil {
 		return fmt.Errorf("claim: %w", err)
@@ -204,37 +241,40 @@ func drainOutboxOnce(ctx context.Context, d *Dispatcher, ix outboxIndexer) error
 	if dim, derr := d.rep.OutboxFirstEmbeddingDim(ctx, snapIDs); derr != nil {
 		d.logger.Printf("outbox dim peek: %v", derr)
 	} else if dim > 0 {
-		if err := ix.ensureIndex(ctx, dim); err != nil {
+		if err := osc.ensureIndex(ctx, dim); err != nil {
 			// Not fatal for rows without embeddings; rows with embeddings will
 			// surface the error per-row below via their own ensureIndex call.
 			d.logger.Printf("outbox ensure index (dim=%d): %v", dim, err)
 		}
 	}
 	for _, row := range rows {
-		if err := drainOutboxRow(ctx, d, ix, row); err != nil && ctx.Err() == nil {
+		if err := drainOutboxRow(ctx, d, osc, row); err != nil && ctx.Err() == nil {
 			d.logger.Printf("outbox row %s: %v", row.ID, err)
 		}
 	}
 	return nil
 }
 
-func drainOutboxRow(ctx context.Context, d *Dispatcher, ix outboxIndexer, row repo.OutboxRow) error {
+func drainOutboxRow(ctx context.Context, d *Dispatcher, osc *openSearchClient, row repo.OutboxRow) error {
 	docs, err := d.rep.OutboxDocs(ctx, row.SnapshotID)
 	if err != nil {
 		return d.failOutboxRow(ctx, row, fmt.Errorf("load docs: %w", err))
 	}
-	// Ensure the index (with knn dimension from the first embedding seen)
-	// before the first write; memoized on the client after that.
+	// Row-level ensure: the backstop for a failed (or embedding-less) batch
+	// dim-peek above. The two ensure layers cover different failures — the
+	// batch peek prevents the no-embedding-first auto-create, this loop
+	// guarantees every snapshot carrying embeddings still ensures the index
+	// (with its own dimension) before its first doc lands.
 	for _, doc := range docs {
 		if doc.Embedding != nil {
-			if err := ix.ensureIndex(ctx, len(doc.Embedding)); err != nil {
+			if err := osc.ensureIndex(ctx, len(doc.Embedding)); err != nil {
 				return d.failOutboxRow(ctx, row, fmt.Errorf("ensure index: %w", err))
 			}
 			break
 		}
 	}
 	for _, doc := range docs {
-		if err := ix.indexDoc(ctx, doc.ChunkID, outboxDocument(row, doc)); err != nil {
+		if err := osc.indexDoc(ctx, doc.ChunkID, outboxDocument(row, doc)); err != nil {
 			return d.failOutboxRow(ctx, row, err)
 		}
 	}
@@ -263,6 +303,11 @@ func outboxDocument(row repo.OutboxRow, doc repo.OutboxDoc) map[string]any {
 // failOutboxRow records the failure with capped exponential backoff.
 func (d *Dispatcher) failOutboxRow(ctx context.Context, row repo.OutboxRow, cause error) error {
 	err := d.rep.FailOutboxAttempt(ctx, row.ID, cause.Error(), outboxBackoff(row.Attempts+1), outboxMaxAttempts)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Row already terminal or finished by a faster worker (status='pending'
+		// guard in FailOutboxAttempt) — a stale attempt must not flip it back.
+		return cause
+	}
 	if err != nil {
 		return fmt.Errorf("record failure: %v (cause: %w)", err, cause)
 	}
