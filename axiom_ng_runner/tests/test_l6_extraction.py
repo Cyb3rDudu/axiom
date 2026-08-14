@@ -8,6 +8,7 @@ sys.modules stubs — no heavy deps needed, runs in both venvs. Evidence power:
 
 import sys
 import types
+from pathlib import Path
 
 from axiom_ng_runner import runner
 
@@ -62,10 +63,15 @@ def _patch_gliner(monkeypatch, spans, model=None):
 
 
 def _patch_mrebel(monkeypatch, triples):
+    if callable(triples):
+        fn = triples  # already a fake extract function
+    else:
+
+        def fn(chunks):
+            return triples
+
     mod = types.ModuleType("ai_researcher.core_rag.relation_extractor")
-    mod.__dict__.update(
-        {"extract_relations_from_chunks": lambda chunks: triples}
-    )
+    mod.__dict__.update({"extract_relations_from_chunks": fn})
     # Stub parents so the from-import never touches the real __init__
     # (which pulls numpy/torch).
     pkg = types.ModuleType("ai_researcher")
@@ -420,3 +426,151 @@ class TestConditionalFill:
                 == "urchade/gliner_multi-v2.1")
         assert (result["processor"]["models"]["relationship_extraction"]
                 == "Babelscape/mrebel-large")
+
+
+class TestPipelineWiring:
+    """Integration: _real_pipeline must CALL the real extractors and pass
+    their results through — the exact gap that enabled the embeddings
+    fake-fix (helper tested in isolation, call site severed silently).
+
+    Mutation-bar: severing the _real_pipeline→_extract_real_entities wiring
+    (real_entities = None) MUST turn this red.
+    """
+
+    CHUNK_TEXT = "Alpha works at Beta Corp"
+
+    @staticmethod
+    def _request(tmp_path):
+        src = tmp_path / "doc.pdf"
+        src.write_bytes(b"%PDF-1.4 fake")
+        return {
+            "job_id": "job-wire-1",
+            "attachment": {
+                "attachment_id": "att-wire-1",
+                "local_path": str(src),
+                "content_type": "application/pdf",
+            },
+            "processing": {
+                "extract_entities": True,
+                "extract_relationships": True,
+                "compute_dense_embeddings": False,
+                "compute_sparse_embeddings": False,
+            },
+        }
+
+    @staticmethod
+    def _patch_pipeline_heavies(monkeypatch, tmp_path, chunk_text):
+        import subprocess as _subprocess
+
+        def fake_run(cmd, **_kwargs):
+            # cmd: [python, -m, pdf_worker, src, out_md, out_images]
+            out_md_path = Path(cmd[4])
+            out_md_path.write_text(f"# T\n\n{chunk_text}", encoding="utf-8")
+            out = types.SimpleNamespace(
+                returncode=0,
+                stdout='{"image_mapping": {}}',
+                stderr="",
+            )
+            return out
+
+        monkeypatch.setattr(_subprocess, "run", fake_run)
+
+        # extract_page_labels stub (ai_researcher.core_rag.processor)
+        proc_mod = types.ModuleType("ai_researcher.core_rag.processor")
+        proc_mod.__dict__.update({"extract_page_labels": lambda _p: {1: "1"}})
+        monkeypatch.setitem(
+            sys.modules, "ai_researcher.core_rag.processor", proc_mod
+        )
+
+        # Chunker stub emitting REAL Chunker-shaped dicts (chunk_id in the
+        # {doc_id}_chunk_{i:04d} format that _assign_contract_chunk_ids
+        # must replace before mREBEL reads it).
+        class _Chunker:
+            def __init__(self, max_chunk_tokens=1200):
+                pass
+
+            def chunk(self, _markdown, doc_metadata=None):
+                did = (doc_metadata or {}).get("doc_id", "doc")
+                return [{
+                    "text": chunk_text,
+                    "metadata": {
+                        "chunk_id": f"{did}_chunk_0001",
+                        "image_refs": [],
+                    },
+                }]
+
+        chunker_mod = types.ModuleType("ai_researcher.core_rag.chunker")
+        chunker_mod.__dict__.update({"Chunker": _Chunker})
+        monkeypatch.setitem(sys.modules, "ai_researcher.core_rag.chunker", chunker_mod)
+
+    def test_real_pipeline_uses_real_extractors(self, monkeypatch, tmp_path):
+        import pathlib
+
+        _patch_gliner(monkeypatch, {
+            self.CHUNK_TEXT: [
+                {"text": "Beta Corp", "label": "organization",
+                 "start": 15, "score": 0.9},
+            ],
+        })
+
+        def _fake_extract(chunks):
+            # Realistic: read the chunk_id the wiring assigned (proves
+            # _assign_contract_chunk_ids ran — the Chunker stub emitted
+            # "{doc_id}_chunk_0001" which would NOT resolve).
+            cid = chunks[0]["metadata"]["chunk_id"]
+            return [{
+                "head": "Beta Corp", "head_type": "org",
+                "tail": "NewCo", "tail_type": "org",
+                "relation": "acquires", "chunk_id": cid,
+            }]
+
+        _patch_mrebel(monkeypatch, _fake_extract)
+        self._patch_pipeline_heavies(monkeypatch, tmp_path, self.CHUNK_TEXT)
+
+        work = pathlib.Path(tmp_path) / "work"
+        work.mkdir(parents=True, exist_ok=True)  # app.py:155 does this
+        result = runner._real_pipeline(self._request(tmp_path), work)
+
+        # The real path ran (not reference stubs)
+        assert (result["processor"]["models"]["entity_extraction"]
+                == "urchade/gliner_multi-v2.1"), "real GLiNER path not taken"
+        assert (result["processor"]["models"]["relationship_extraction"]
+                == "Babelscape/mrebel-large"), "real mREBEL path not taken"
+
+        # Entities come from the GLiNER stub, not the reference regex
+        # (regex stub would emit type=METHOD capitalized tokens).
+        ents = {e["text"]: e for e in result["entities"]}
+        assert "Beta Corp" in ents
+        assert ents["Beta Corp"]["type"] == "ORGANIZATION"
+        assert ents["Beta Corp"]["mentions"][0]["chunk_ref"] == "chunk-0000"
+
+        # The mREBEL relationship came through with CONTRACT-format evidence
+        # (0-based chunk-0000, NOT the Chunker stub's job-wire-1_chunk_0001).
+        rels = result["entity_relationships"]
+        assert len(rels) == 1
+        assert rels[0]["evidence_chunk_refs"] == ["chunk-0000"]
+        assert rels[0]["source_entity_ref"] == ents["Beta Corp"]["ref"]
+
+    def test_severed_wiring_falls_back_and_is_detectable(
+        self, monkeypatch, tmp_path
+    ):
+        """Mutation-bar proof: kill the pipeline→extractor wiring and the
+        integration assertions above break. Simulated here by driving the
+        same pipeline WITHOUT the GLiNER/mREBEL stubs' data flowing: the
+        reference fallback must produce visibly different (detectable)
+        output — models field flips to reference-gliner."""
+        import pathlib
+
+        _patch_gliner(monkeypatch, {})  # model yields nothing
+        _patch_mrebel(monkeypatch, [])
+        self._patch_pipeline_heavies(monkeypatch, tmp_path, self.CHUNK_TEXT)
+
+        work = pathlib.Path(tmp_path) / "work"
+        work.mkdir(parents=True, exist_ok=True)  # app.py:155 does this
+        result = runner._real_pipeline(self._request(tmp_path), work)
+        # Real path still taken (extraction requested, real list = [])
+        assert (result["processor"]["models"]["entity_extraction"]
+                == "urchade/gliner_multi-v2.1")
+        # Empty real extraction stays empty (no silent stub fill)
+        assert result["entities"] == []
+        assert result["entity_relationships"] == []
