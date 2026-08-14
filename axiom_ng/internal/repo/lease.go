@@ -78,6 +78,8 @@ type ClaimedJob struct {
 	Profile        json.RawMessage
 	ProfileHash    *string
 	IdempotencyKey *string
+	// LeaseUntil is when the current claim's lease expires (source_url exp).
+	LeaseUntil time.Time
 }
 
 // execer is the minimal SQL executor shared by pgxpool.Pool and pgx.Tx so the
@@ -198,6 +200,7 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 
 		var newAttempt int
 		var tsToken string
+		var leaseUntil time.Time
 		err = tx.QueryRow(ctx, `
 			UPDATE ingest_jobs SET
 				status            = 'claimed',
@@ -213,9 +216,9 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 				idempotency_key   = COALESCE(idempotency_key, $7),
 				updated_at        = now()
 			WHERE id = $1
-			RETURNING attempt, lease_token::text
+			RETURNING attempt, lease_token::text, lease_until
 		`, cand.id, opts.WorkerID, leaseSec, snapshot, procCanonical, profileHash, idemKey).
-			Scan(&newAttempt, &tsToken)
+			Scan(&newAttempt, &tsToken, &leaseUntil)
 		if err != nil {
 			tx.Rollback(ctx)
 			return nil, fmt.Errorf("claim update: %w", err)
@@ -234,6 +237,7 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			LeaseRef:       LeaseRef{JobID: cand.id, WorkerID: opts.WorkerID, LeaseToken: tsToken},
 			Status:         "claimed",
 			Attempt:        newAttempt,
+			LeaseUntil:     leaseUntil,
 			MaxAttempts:    cand.maxAttempts,
 			ContentHash:    cand.contentHash,
 			ForceRebuild:   cand.forceRebuild,

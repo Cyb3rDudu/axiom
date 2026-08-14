@@ -53,9 +53,12 @@ type Attachment struct {
 	ContentType   string `json:"content_type"`
 	Filename      string `json:"filename,omitempty"`
 	LocalPath     string `json:"local_path"`
-	ContentHash   string `json:"content_hash"`
-	SizeBytes     int64  `json:"size_bytes"`
-	MtimeMS       int64  `json:"mtime_ms"`
+	// SourceURL is the optional HMAC-signed download URL the runner pulls the
+	// source from when local_path is not locally accessible (remote mode).
+	SourceURL   string `json:"source_url,omitempty"`
+	ContentHash string `json:"content_hash"`
+	SizeBytes   int64  `json:"size_bytes"`
+	MtimeMS     int64  `json:"mtime_ms"`
 }
 
 // Processing is the flat processing block: a profile NAME plus feature flags.

@@ -28,8 +28,22 @@ type Config struct {
 	OpenSearchUsername string
 	OpenSearchPassword string
 
+	// ProcessorSourceSecret is the shared HMAC secret for remote source
+	// delivery (dispatcher signs, /api/processor/source verifies). Empty
+	// disables the feature on BOTH sides (endpoint 404s, no source_url sent).
+	ProcessorSourceSecret string
+	// ProcessorSourceBaseURL is the externally reachable base URL of
+	// axiom-ng that remote processors use to pull sources (Tailnet/LAN).
+	// Unset defaults to the loopback API — fine for co-located runners.
+	ProcessorSourceBaseURL string
+
 	// ProcessorURL is the base URL of the document processor sidecar.
 	ProcessorURL string
+	// ProcessorRequestTimeout bounds each HTTP request to the processor
+	// (AXIOMNG_PROCESSOR_TIMEOUT, Go duration). With remote source delivery
+	// POST /v1/process also downloads the source synchronously — remote
+	// deployments raise this to cover the runner's download budget.
+	ProcessorRequestTimeout time.Duration
 
 	// DispatcherEnabled gates the claim/process dispatcher loop. It never runs
 	// unless explicitly turned on; tests construct the dispatcher directly.
@@ -66,14 +80,17 @@ const (
 // Load reads configuration from the environment, applying local sidecar
 // defaults where a value is absent.
 func Load() Config {
-	return Config{
+	cfg := Config{
 		ZoteroBaseURL:           env("AXIOMNG_ZOTERO_BASE", defaultZoteroBase),
 		ZoteroLibraryID:         env("AXIOMNG_ZOTERO_LIBRARY", defaultLibraryID),
 		DatabaseURL:             env("AXIOMNG_DATABASE_URL", ""),
 		OpenSearchURL:           envEmptyDisables("AXIOMNG_OPENSEARCH_URL", "http://127.0.0.1:9200"),
 		OpenSearchUsername:      env("AXIOMNG_OPENSEARCH_USERNAME", ""),
 		OpenSearchPassword:      env("AXIOMNG_OPENSEARCH_PASSWORD", ""),
+		ProcessorSourceSecret:   env("AXIOMNG_PROCESSOR_SOURCE_SECRET", ""),
+		ProcessorSourceBaseURL:  env("AXIOMNG_PROCESSOR_SOURCE_BASE_URL", ""),
 		ProcessorURL:            env("AXIOMNG_PROCESSOR_URL", "http://localhost:8012"),
+		ProcessorRequestTimeout: envDur("AXIOMNG_PROCESSOR_TIMEOUT", 30*time.Second),
 		DispatcherEnabled:       envBool("AXIOMNG_DISPATCHER_ENABLED"),
 		DispatcherWorkerID:      env("AXIOMNG_DISPATCHER_WORKER_ID", "axiom-ng"),
 		DispatcherConcurrency:   envInt("AXIOMNG_DISPATCHER_CONCURRENCY", 1),
@@ -83,6 +100,12 @@ func Load() Config {
 		APIPort:                 envInt("AXIOMNG_API_PORT", defaultAPIPort),
 		BindAddr:                env("AXIOMNG_BIND_ADDR", defaultBindAddr),
 	}
+	// The source-endpoint base defaults to the local API port (co-located
+	// runners); remote deployments override with their Tailnet/LAN address.
+	if cfg.ProcessorSourceBaseURL == "" {
+		cfg.ProcessorSourceBaseURL = "http://127.0.0.1:" + strconv.Itoa(cfg.APIPort)
+	}
+	return cfg
 }
 
 func env(key, fallback string) string {

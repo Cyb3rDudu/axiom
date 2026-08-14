@@ -3,8 +3,10 @@ package dispatcher
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/sourceurl"
 )
 
 // frozenInput matches the frozen snapshot schema the claim persisted (see
@@ -19,6 +21,16 @@ type frozenInput struct {
 	Document        frozenDocument       `json:"document"`
 	Attachment      frozenAttachment     `json:"attachment"`
 	Processing      processor.Processing `json:"processing"`
+}
+
+// SourceURLOptions carries the remote source-delivery config for one request
+// build: the externally reachable base URL of axiom-ng's source endpoint, the
+// shared HMAC secret, and the current claim's lease expiry (the URL's exp).
+// Zero value (or empty BaseURL/Secret) builds no source_url — local delivery.
+type SourceURLOptions struct {
+	BaseURL    string
+	Secret     string
+	LeaseUntil time.Time
 }
 
 type frozenSource struct {
@@ -56,7 +68,7 @@ func (e *ErrNotProcessable) Error() string { return "not processable: " + e.Reas
 // The wire result intentionally carries no profile_hash. Empty-pointer optional
 // attachment fields are mapped to zero values; a missing content_hash or
 // local_path makes the job not processable (the contract requires both).
-func buildRequest(raw json.RawMessage) (*processor.ProcessRequest, error) {
+func buildRequest(raw json.RawMessage, sourceOpts SourceURLOptions) (*processor.ProcessRequest, error) {
 	var f frozenInput
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return nil, fmt.Errorf("parse frozen input snapshot: %w", err)
@@ -72,7 +84,19 @@ func buildRequest(raw json.RawMessage) (*processor.ProcessRequest, error) {
 	}
 	if a := f.Attachment; a.ContentHash == nil || *a.ContentHash == "" {
 		return nil, &ErrNotProcessable{Reason: "missing attachment content_hash"}
-	} else if a.LocalPath == nil || *a.LocalPath == "" {
+	}
+	// Remote source delivery: sign jobID|lease-exp into a download URL the
+	// runner can pull. Requires secret + base URL + a live lease; a half
+	// configuration (base without secret) builds NO url so the guard below
+	// fails instead of shipping an unreadable local_path.
+	var sourceURL string
+	if sourceOpts.BaseURL != "" && sourceOpts.Secret != "" && !sourceOpts.LeaseUntil.IsZero() {
+		exp := sourceOpts.LeaseUntil.Unix()
+		sourceURL = sourceurl.BuildURL(sourceOpts.BaseURL, f.JobID, exp,
+			sourceurl.Sign(sourceOpts.Secret, f.JobID, exp))
+	}
+	if (f.Attachment.LocalPath == nil || *f.Attachment.LocalPath == "") && sourceURL == "" {
+		// No local path AND no (complete) remote delivery => not processable.
 		return nil, &ErrNotProcessable{Reason: "missing attachment local_path"}
 	}
 	req := &processor.ProcessRequest{
@@ -97,6 +121,7 @@ func buildRequest(raw json.RawMessage) (*processor.ProcessRequest, error) {
 			ContentType:   derefString(f.Attachment.ContentType),
 			Filename:      derefString(f.Attachment.Filename),
 			LocalPath:     derefString(f.Attachment.LocalPath),
+			SourceURL:     sourceURL, // empty unless remote delivery is configured
 			ContentHash:   derefString(f.Attachment.ContentHash),
 			SizeBytes:     derefInt64(f.Attachment.SizeBytes),
 			MtimeMS:       derefInt64(f.Attachment.MtimeMS),

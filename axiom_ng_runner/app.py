@@ -9,9 +9,14 @@ the request connection open.
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
+import time
+import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Response
 
@@ -26,7 +31,13 @@ from .models import (
     ProcessAccept,
     ProcessRequest,
 )
-from .validation import SourceError, validate_content_type, validate_source
+from .validation import (
+    SourceError,
+    ensure_hash_matches,
+    ensure_regular_readable,
+    validate_content_type,
+    validate_source,
+)
 
 log = logging.getLogger(__name__)
 
@@ -128,7 +139,18 @@ def _raise_source(exc: SourceError) -> HTTPException:
 
 
 def _validate_request(req: ProcessRequest) -> Path:
-    """Validate source policy; returns the readable path or raises."""
+    """Validate source policy; returns the readable path or raises.
+
+    Precedence (contract §3 remote delivery):
+      1. local_path present, under ALLOWED_SOURCE_ROOTS, readable, hash ok —
+         unchanged local mode.
+      2. else source_url set — stream-download into a temp dir under the
+         work root and run the SAME integrity gates on the downloaded bytes
+         (regular file, readable, hash). The temp file is finalized into the
+         job's work dir on accept (dies with remove_work on ACK) and dropped
+         on dedup/collision.
+      3. else SOURCE_NOT_FOUND as before.
+    """
     s = settings.get()
     cf = req.attachment.content_type
     validate_content_type(cf, ("application/pdf", "application/epub+zip"))
@@ -140,8 +162,110 @@ def _validate_request(req: ProcessRequest) -> Path:
             s.allowed_source_roots,
             ("application/pdf", "application/epub+zip"),
         )
+    except SourceError:
+        if not req.attachment.source_url:
+            raise
+    return _download_source(req)
+
+
+def _download_source(req: ProcessRequest) -> Path:
+    """Stream source_url into work_root/.incoming/<uuid>/ and gate it."""
+    s = settings.get()
+    att = req.attachment
+    if not att.source_url:
+        raise SourceError("SOURCE_NOT_FOUND", "no source_url configured")
+    scheme = urlparse(att.source_url).scheme.lower()
+    if scheme not in ("http", "https"):
+        # Hard stop before urlopen: file:// (and every other scheme) must
+        # never reach the opener, regardless of the hash gate.
+        raise SourceError(
+            "SOURCE_NOT_FOUND", f"unsupported source_url scheme {scheme!r}"
+        )
+    incoming = s.work_root / ".incoming" / uuid.uuid4().hex
+    incoming.mkdir(parents=True, exist_ok=True)
+    suffix = Path(att.filename or "").suffix or ".bin"
+    dest = incoming / f"source{suffix}"
+    # Total budget (not per-socket-op) and a byte cap: the deadline loop below
+    # enforces both against a slow-drip or oversized sender.
+    budget = s.source_download_timeout
+    cap = att.size_bytes if att.size_bytes > 0 else 2_147_483_648
+    deadline = time.monotonic() + budget
+    try:
+        with urllib.request.urlopen(att.source_url, timeout=budget) as r:
+            if r.status != 200:
+                raise SourceError(
+                    "SOURCE_NOT_FOUND",
+                    f"source_url returned HTTP {r.status}",
+                )
+            with open(dest, "wb") as f:
+                total = 0
+                while True:
+                    if time.monotonic() > deadline:
+                        raise SourceError(
+                            "SOURCE_NOT_FOUND",
+                            f"source_url download exceeded {budget:.0f}s budget",
+                        )
+                    chunk = r.read(65536)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > cap:
+                        raise SourceError(
+                            "SOURCE_NOT_FOUND",
+                            f"source_url exceeded size cap {cap}",
+                        )
+                    f.write(chunk)
+    except SourceError:
+        shutil.rmtree(incoming, ignore_errors=True)
+        raise
+    except Exception as err:  # urllib errors: timeout, conn refused, HTTPError
+        shutil.rmtree(incoming, ignore_errors=True)
+        raise SourceError(
+            "SOURCE_NOT_FOUND", f"source_url download failed: {err}"
+        ) from err
+    # Same integrity gates as local sources — the hash gate makes no trust
+    # assumption about transport.
+    try:
+        path = ensure_regular_readable(dest)
+        ensure_hash_matches(path, att.content_hash)
     except SourceError as exc:
-        raise HTTPException(status_code=422, detail=exc.message) from exc
+        shutil.rmtree(incoming, ignore_errors=True)
+        if exc.code == "SOURCE_HASH_MISMATCH":
+            # Deliberately generic: no actual-hash echo for remote pulls
+            # (the detailed message stays a local-mode diagnostic).
+            raise SourceError(
+                "SOURCE_HASH_MISMATCH",
+                "downloaded source failed the content hash gate",
+            ) from exc
+        raise
+    return path
+
+
+def _finalize_source(src: Path, job: Job, deduplicated: bool) -> None:
+    """Move a downloaded temp source into the job's work dir (accept) or
+    drop it (dedup/collision). Local sources pass through untouched. Raises
+    OSError on staging failure (caller maps to 422; the accepted job then
+    fails cleanly at compute on the missing source)."""
+    # Anchored: downloads land exactly at work_root/.incoming/<uuid>/source*;
+    # a local source can never live there, and a dir merely NAMED .incoming
+    # deeper in a tree no longer matches.
+    if src.parent.parent != settings.get().work_root / ".incoming":
+        return  # local mode — nothing to finalize
+    if deduplicated:
+        shutil.rmtree(src.parent, ignore_errors=True)
+        return
+    work = job.path / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    dest = work / src.name
+    try:
+        shutil.move(str(src), dest)
+    finally:
+        shutil.rmtree(src.parent, ignore_errors=True)
+    # The compute pipeline reads local_path — point it at the pulled file and
+    # persist immediately: a crash before the first set_status must not leave
+    # an accepted job pointing at the original (invalid) path.
+    job.request["attachment"]["local_path"] = str(dest)
+    job.save()
 
 
 # --- background compute --------------------------------------------------
@@ -184,10 +308,9 @@ def capabilities() -> Capabilities:
 
 
 @app.post("/v1/process", status_code=202)
-async def process(body: ProcessRequest) -> dict[str, Any]:
-    # Validate the request and source *before* accepting.
-    _validate_request(body)
-
+def process(body: ProcessRequest) -> dict[str, Any]:
+    # Plain def (not async): source validation may download tens of MB
+    # synchronously — the event loop must never block on it.
     store = _store_impl()
     job_dir = store.work_root / body.job_id
     candidate = Job(
@@ -196,11 +319,50 @@ async def process(body: ProcessRequest) -> dict[str, Any]:
         request=body.model_dump(),
         path=job_dir,
     )
+
+    # Dedup/collision short-circuit BEFORE any download: a retried submit
+    # must not pull the source again, and a job_id collision must 409
+    # before spending the bandwidth (contract §8/§9 idempotency).
+    existing = store.find_by_idempotency(body.idempotency_key)
+    prior = store.get(body.job_id)
+    if existing is not None or prior is not None:
+        if prior is not None and prior.idempotency_key != body.idempotency_key:
+            raise HTTPException(
+                status_code=409,
+                detail=f"job {body.job_id} already exists with a different idempotency key",
+            )
+        job, _ = store.get_or_create(candidate)  # returns the existing job
+        _relaunch_if_needed(job)
+        return ProcessAccept(
+            contract_version=CONTRACT_VERSION,
+            job_id=job.job_id,
+            status=job.status,
+            deduplicated=True,
+        ).model_dump()
+
+    # Validate the request and source *before* accepting. For source_url
+    # delivery this downloads + hash-gates the bytes into a temp dir.
+    try:
+        src_path = _validate_request(body)
+    except SourceError as exc:
+        raise _raise_source(exc) from exc
+
     try:
         job, deduplicated = store.get_or_create(candidate)
     except JobIdCollision as exc:
         # job_id taken with a different idempotency key: refuse, do not clobber.
+        # (Race window: created between the short-circuit above and here.)
+        _finalize_source(src_path, candidate, deduplicated=True)  # drop temp
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    # Downloaded source: stage into the job's work dir (dies with ACK's
+    # remove_work) or drop it when this POST deduplicated onto an existing job.
+    try:
+        _finalize_source(src_path, job, deduplicated)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"source staging failed: {exc}"
+        ) from exc
 
     if deduplicated:
         # Dedup (W1 liveness): if the matched job recovered to `accepted`

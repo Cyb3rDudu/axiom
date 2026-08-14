@@ -20,6 +20,8 @@ class Settings:
     result_retention_seconds: float = 3600.0  # 1h default for restart recovery
     compute_backend: str = "reference"  # "reference" | "real"
     log_level: str = "INFO"
+    # Remote source delivery: total download budget for one source_url pull.
+    source_download_timeout: float = 120.0
 
     @property
     def bind(self) -> tuple[str, int]:
@@ -59,6 +61,9 @@ def load_settings() -> Settings:
         result_retention_seconds=_env_float("AXIOM_PROCESSOR_RESULT_RETENTION", 3600.0),
         compute_backend=os.getenv("AXIOM_PROCESSOR_COMPUTE", "reference"),
         log_level=os.getenv("AXIOM_PROCESSOR_LOG_LEVEL", "INFO"),
+        source_download_timeout=_env_float(
+            "AXIOM_PROCESSOR_SOURCE_TIMEOUT", 120.0
+        ),
     )
 
 

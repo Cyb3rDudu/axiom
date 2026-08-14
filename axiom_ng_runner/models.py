@@ -50,6 +50,10 @@ class AttachmentInfo(BaseModel):
     content_type: str
     filename: str
     local_path: str
+    # Optional HMAC-signed download URL (remote delivery): used only when
+    # local_path is not locally accessible. Declared explicitly because the
+    # model forbids unknown fields.
+    source_url: str | None = None
     content_hash: str
     size_bytes: int = 0
     mtime_ms: int = 0

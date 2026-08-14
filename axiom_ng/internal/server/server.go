@@ -24,6 +24,10 @@ type Server struct {
 	jobsSvc  SyncService
 	repo     JobRepo
 	log      *log.Logger
+	// sourceSecret enables /api/processor/source when non-empty (HMAC,
+	// shared with the dispatcher). sourceRepo is the job lookup for it.
+	sourceSecret string
+	sourceRepo   processorSourceRepo
 }
 
 // New builds a Server with no backing-dependency checkers yet. Register them
@@ -44,6 +48,8 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/api/health", s.handleHealth)
 	r.Post("/api/zotero/sync", s.handleSync)
 	r.Get("/api/ingest/jobs", s.handleJobs)
+	// Disabled (404 on everything) until SetProcessorSourceSecret wires it.
+	r.Get("/api/processor/source/{jobID}", s.handleProcessorSource)
 
 	return r
 }

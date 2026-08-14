@@ -106,6 +106,9 @@ class JobStore:
     def __init__(self, work_root: Path) -> None:
         self.work_root = Path(work_root)
         self.work_root.mkdir(parents=True, exist_ok=True)
+        # .incoming only ever holds downloads of in-flight requests; any
+        # residue belongs to a dead process — sweep it at startup.
+        shutil.rmtree(self.work_root / ".incoming", ignore_errors=True)
         self._lock = threading.RLock()
         self._jobs: dict[str, Job] = {}
         self._by_idempotency: dict[str, str] = {}

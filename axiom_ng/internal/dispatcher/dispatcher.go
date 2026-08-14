@@ -54,6 +54,15 @@ type Config struct {
 	// means anonymous (the local mothership runs without auth).
 	OpenSearchUsername string
 	OpenSearchPassword string
+
+	// ProcessorSourceBaseURL is the externally reachable base URL of
+	// axiom-ng's /api/processor/source endpoint (e.g. the Tailnet address).
+	// Non-empty (plus ProcessorSourceSecret) makes the dispatcher attach a
+	// signed source_url to every process request — remote source delivery.
+	ProcessorSourceBaseURL string
+	// ProcessorSourceSecret is the shared HMAC secret for source URLs; must
+	// match the server's AXIOMNG_PROCESSOR_SOURCE_SECRET.
+	ProcessorSourceSecret string
 }
 
 // Dispatcher owns the worker pool and the lease/processor plumbing.
@@ -231,7 +240,11 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 	}
 	fields := []any{ref.JobID, claimed.AttachmentID, claimed.DocumentID, claimed.Attempt, tokenPrefix}
 
-	req, err := buildRequest(claimed.InputSnapshot)
+	req, err := buildRequest(claimed.InputSnapshot, SourceURLOptions{
+		BaseURL:    d.cfg.ProcessorSourceBaseURL,
+		Secret:     d.cfg.ProcessorSourceSecret,
+		LeaseUntil: claimed.LeaseUntil,
+	})
 	if err != nil {
 		d.markNotProcessable(ctx, ref, fields, err)
 		return

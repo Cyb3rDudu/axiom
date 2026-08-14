@@ -68,13 +68,20 @@ func main() {
 		syncSvc := sync.New(src, rep, cfg.ZoteroBaseURL, cfg.ZoteroLibraryID, logger)
 		srv.SetSyncAPI(syncSvc)
 		srv.SetJobRepo(rep)
+		// Remote source delivery: same secret on both sides (endpoint verify,
+		// dispatcher sign). Empty secret disables the endpoint (404 on all).
+		srv.SetProcessorSourceSecret(cfg.ProcessorSourceSecret)
+		srv.SetProcessorSourceRepo(rep)
 
 		// The dispatcher is opt-in and runs only when explicitly enabled. It
 		// claims jobs, drives them through the processor and back to a terminal
 		// state; a broken processor is surfaced on start via capability
 		// negotiation, not silently stalling claims.
 		if cfg.DispatcherEnabled {
-			pclient, perr := processor.New(processor.Options{BaseURL: cfg.ProcessorURL})
+			pclient, perr := processor.New(processor.Options{
+				BaseURL:        cfg.ProcessorURL,
+				RequestTimeout: cfg.ProcessorRequestTimeout,
+			})
 			if perr != nil {
 				logger.Fatalf("processor client: %v", perr)
 			}
@@ -82,14 +89,16 @@ func main() {
 			// fence-completes the job atomically in its single TX). The
 			// errPersister default would fail every completion.
 			disp := dispatcher.NewWithPersister(rep, pclient, rep, dispatcher.Config{
-				WorkerID:           cfg.DispatcherWorkerID,
-				Concurrency:        cfg.DispatcherConcurrency,
-				Profile:            json.RawMessage(cfg.DispatcherProfile),
-				LeaseDuration:      cfg.DispatcherLeaseDuration,
-				ArtifactRoot:       cfg.ArtifactRoot,
-				OpenSearchURL:      cfg.OpenSearchURL,
-				OpenSearchUsername: cfg.OpenSearchUsername,
-				OpenSearchPassword: cfg.OpenSearchPassword,
+				WorkerID:               cfg.DispatcherWorkerID,
+				Concurrency:            cfg.DispatcherConcurrency,
+				Profile:                json.RawMessage(cfg.DispatcherProfile),
+				LeaseDuration:          cfg.DispatcherLeaseDuration,
+				ArtifactRoot:           cfg.ArtifactRoot,
+				OpenSearchURL:          cfg.OpenSearchURL,
+				OpenSearchUsername:     cfg.OpenSearchUsername,
+				OpenSearchPassword:     cfg.OpenSearchPassword,
+				ProcessorSourceBaseURL: cfg.ProcessorSourceBaseURL,
+				ProcessorSourceSecret:  cfg.ProcessorSourceSecret,
 			}, logger)
 			go func() {
 				if err := disp.Run(sigCtx); err != nil {
