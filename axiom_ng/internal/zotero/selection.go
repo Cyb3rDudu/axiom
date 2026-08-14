@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -45,14 +46,20 @@ func PreferredAttachment(atts []Attachment) *Attachment {
 }
 
 // LocalFilePath converts a Zotero file:// URI into a native filesystem path
-// (e.g. "file:///Users/x/y.pdf" -> "/Users/x/y.pdf"). Non-file URIs are
-// returned unchanged so a plain path still works.
+// (e.g. "file:///Users/x/y.pdf" -> "/Users/x/y.pdf"). Percent-escapes are
+// decoded — Zotero reports renamed attachments ("Author - Year - Title.pdf")
+// URL-encoded. Non-file URIs are returned unchanged so a plain path still
+// works; undecodable input falls back to the raw path.
 func LocalFilePath(uri string) string {
 	const prefix = "file://"
 	if !strings.HasPrefix(uri, prefix) {
 		return uri
 	}
-	return strings.TrimPrefix(uri, prefix)
+	raw := strings.TrimPrefix(uri, prefix)
+	if decoded, err := url.PathUnescape(raw); err == nil {
+		return decoded
+	}
+	return raw
 }
 
 // ContentHash returns a stable sha256 hex digest of a local file's contents,

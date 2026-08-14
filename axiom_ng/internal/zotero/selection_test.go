@@ -79,3 +79,20 @@ func TestParseYear(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalFilePathDecodesPercentEscapes(t *testing.T) {
+	// Zotero reports renamed attachments ("Author - Year - Title.pdf")
+	// URL-encoded; the native path must decode for os.Open to work.
+	cases := map[string]string{
+		"file:///Users/x/Englert%20-%202019%20-%20Nachhaltiges.pdf": "/Users/x/Englert - 2019 - Nachhaltiges.pdf",
+		"file:///Users/x/plain.pdf":                                 "/Users/x/plain.pdf",
+		"/already/native/path.pdf":                                  "/already/native/path.pdf",
+		// Apostrophes survive both encoded and raw.
+		"file:///Users/x/D%27heur%20-%202013.pdf": "/Users/x/D'heur - 2013.pdf",
+	}
+	for in, want := range cases {
+		if got := LocalFilePath(in); got != want {
+			t.Errorf("LocalFilePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
