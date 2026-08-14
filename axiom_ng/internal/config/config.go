@@ -19,8 +19,14 @@ type Config struct {
 
 	// DatabaseURL is the Postgres+pgvector DSN.
 	DatabaseURL string
-	// OpenSearchURL is the OpenSearch endpoint.
+	// OpenSearchURL is the OpenSearch endpoint. Unset defaults to the local
+	// mothership; explicitly SET to an empty string disables the L5 outbox
+	// drainer (rows stay pending, no error).
 	OpenSearchURL string
+	// OpenSearchUsername/OpenSearchPassword are optional basic-auth
+	// credentials for the outbox drainer; empty means anonymous.
+	OpenSearchUsername string
+	OpenSearchPassword string
 
 	// ProcessorURL is the base URL of the document processor sidecar.
 	ProcessorURL string
@@ -64,7 +70,9 @@ func Load() Config {
 		ZoteroBaseURL:           env("AXIOMNG_ZOTERO_BASE", defaultZoteroBase),
 		ZoteroLibraryID:         env("AXIOMNG_ZOTERO_LIBRARY", defaultLibraryID),
 		DatabaseURL:             env("AXIOMNG_DATABASE_URL", ""),
-		OpenSearchURL:           env("AXIOMNG_OPENSEARCH_URL", "http://localhost:9200"),
+		OpenSearchURL:           envEmptyDisables("AXIOMNG_OPENSEARCH_URL", "http://127.0.0.1:9200"),
+		OpenSearchUsername:      env("AXIOMNG_OPENSEARCH_USERNAME", ""),
+		OpenSearchPassword:      env("AXIOMNG_OPENSEARCH_PASSWORD", ""),
 		ProcessorURL:            env("AXIOMNG_PROCESSOR_URL", "http://localhost:8012"),
 		DispatcherEnabled:       envBool("AXIOMNG_DISPATCHER_ENABLED"),
 		DispatcherWorkerID:      env("AXIOMNG_DISPATCHER_WORKER_ID", "axiom-ng"),
@@ -79,6 +87,15 @@ func Load() Config {
 
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// envEmptyDisables treats an explicitly SET-but-empty value as intentional
+// (returns "" — disabled) and only falls back when the variable is UNSET.
+func envEmptyDisables(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok {
 		return v
 	}
 	return fallback

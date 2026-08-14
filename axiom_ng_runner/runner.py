@@ -525,6 +525,15 @@ def _build_reference_result(
             ch["embeddings"]["sparse"] = _sparse_embedding(ch["text"])
         chunks.append(ch)
 
+    # Dense-Modellname ehrlich (Known Gap Carrier-POC): echte Vektoren, die
+    # TextEmbedder in die chunk_dicts gelegt hat, bedeuten BAAI/bge-m3 —
+    # gleiche datengetriebene Variante-b-Erkennung wie beim Fill oben.
+    dense_model = (
+        "BAAI/bge-m3"
+        if any((c.get("embeddings") or {}).get("dense") for c in chunk_dicts)
+        else "reference-bge-m3"
+    )
+
     # L6 bedingte Füllung (wie embeddings, Variante b): echte GLiNER/mREBEL-
     # Ergebnisse aus _real_pipeline werden durchgereicht; nur wenn KEINE
     # geliefert wurden (Reference-Backend), greifen die Stubs.
@@ -572,7 +581,7 @@ def _build_reference_result(
             "profile_hash": None,  # Go records the profile hash from the request.
             "models": {
                 "marker": "marker-1.0",
-                "dense_embedding": "reference-bge-m3",
+                "dense_embedding": dense_model,
                 "entity_extraction": (
                     "urchade/gliner_multi-v2.1"
                     if real_entities is not None

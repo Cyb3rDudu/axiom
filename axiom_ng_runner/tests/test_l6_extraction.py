@@ -392,7 +392,7 @@ class TestConditionalFill:
         }
 
     @staticmethod
-    def _result(request, **kwargs):
+    def _result(request, chunk_dicts=None, **kwargs):
         import pathlib
         import tempfile
 
@@ -402,7 +402,7 @@ class TestConditionalFill:
         return runner._build_reference_result(
             request=request,
             work_dir=pathlib.Path(tempfile.mkdtemp()),
-            chunk_dicts=[{"text": "Some Capitalized Text", "metadata": {}}],
+            chunk_dicts=chunk_dicts or [{"text": "Some Capitalized Text", "metadata": {}}],
             page_label_map={1: "1"},
             markdown_path=path,
             attachment_id="att-1",
@@ -415,7 +415,32 @@ class TestConditionalFill:
         result = self._result(self._request())
         assert result["entities"]  # reference stub ran
         assert result["processor"]["models"]["entity_extraction"] == "reference-gliner"
+        # No real embeddings in chunk_dicts → stub model name (honesty fix:
+        # dense name is data-driven, same variant-b detection as the fill).
+        assert result["processor"]["models"]["dense_embedding"] == "reference-bge-m3"
         assert result["processor"]["models"]["relationship_extraction"] == "reference-mrebel"
+
+    def test_real_dense_embeddings_report_real_model(self):
+        # Known Gap Carrier-POC: chunks carrying REAL TextEmbedder vectors
+        # must report BAAI/bge-m3, not the reference stub name.
+        req = self._request()
+        req["processing"]["compute_dense_embeddings"] = True
+        result = self._result(
+            req,
+            chunk_dicts=[{
+                "text": "Some Capitalized Text",
+                "metadata": {},
+                # REAL TextEmbedder shape: dense is a plain float list
+                # (embedder.py:221 — .tolist()), not a contract dict.
+                "embeddings": {"dense": [0.1, 0.2, 0.3, 0.4]},
+            }],
+        )
+        assert (result["processor"]["models"]["dense_embedding"]
+                == "BAAI/bge-m3")
+        # And the real vectors pass through untouched (variant b: the stub
+        # fill must not overwrite them).
+        dense = result["chunks"][0]["embeddings"]["dense"]
+        assert list(dense["values"]) == [0.1, 0.2, 0.3, 0.4]
 
     def test_real_takes_precedence_even_when_empty(self):
         # Empty real extraction (0 entities) must NOT trigger the stub

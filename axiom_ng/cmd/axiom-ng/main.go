@@ -82,11 +82,14 @@ func main() {
 			// fence-completes the job atomically in its single TX). The
 			// errPersister default would fail every completion.
 			disp := dispatcher.NewWithPersister(rep, pclient, rep, dispatcher.Config{
-				WorkerID:      cfg.DispatcherWorkerID,
-				Concurrency:   cfg.DispatcherConcurrency,
-				Profile:       json.RawMessage(cfg.DispatcherProfile),
-				LeaseDuration: cfg.DispatcherLeaseDuration,
-				ArtifactRoot:  cfg.ArtifactRoot,
+				WorkerID:           cfg.DispatcherWorkerID,
+				Concurrency:        cfg.DispatcherConcurrency,
+				Profile:            json.RawMessage(cfg.DispatcherProfile),
+				LeaseDuration:      cfg.DispatcherLeaseDuration,
+				ArtifactRoot:       cfg.ArtifactRoot,
+				OpenSearchURL:      cfg.OpenSearchURL,
+				OpenSearchUsername: cfg.OpenSearchUsername,
+				OpenSearchPassword: cfg.OpenSearchPassword,
 			}, logger)
 			go func() {
 				if err := disp.Run(sigCtx); err != nil {

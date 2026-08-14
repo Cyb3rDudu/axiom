@@ -114,12 +114,17 @@ class TestMatchQuality:
     """Test 3: C3 proof — short entries don't poison, carry-forward works."""
 
     def test_short_entry_does_not_poison(self):
+        # Mutation-bar (Hivemind): the short entry's text ("1") APPEARS in
+        # the chunk, so WITHOUT the min-length guard it would win the first
+        # match and poison cfi_start. Guard `if False:` must turn this red
+        # (the old chunk text contained no "1", so the guard was untested).
         entries = [
             {"cfi": "epubcfi(/6/2!/4/2)", "text": "1", "tag": "p"},  # too short
-            {"cfi": "epubcfi(/6/4!/4/4)", "text": "ESG strategies can exploit it is never adequately explained", "tag": "p"},
+            {"cfi": "epubcfi(/6/4!/4/4)", "text": "ESG strategies can exploit regulatory gaps", "tag": "p"},
         ]
-        # Chunk mentioning "1" must NOT match the short entry; must match the longer one
-        start, _ = match_text_to_cfi("ESG strategies can exploit it is never adequately explained why", entries)
+        # Chunk contains "1" (so the short entry WOULD match unguarded);
+        # must still resolve to the longer entry.
+        start, _ = match_text_to_cfi("In 1 way ESG strategies can exploit regulatory gaps today", entries)
         assert start == "epubcfi(/6/4!/4/4)"
 
     def test_cover_chunk_gets_first_entry(self):

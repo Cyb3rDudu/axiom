@@ -46,6 +46,14 @@ type Config struct {
 	// same filesystem (work-order §7). Empty disables artifact commit (jobs whose
 	// result declares durable artifacts then fail validation).
 	ArtifactRoot string
+
+	// OpenSearchURL enables the L5 outbox drainer when non-empty. Empty
+	// disables the worker entirely (outbox rows stay pending, no error).
+	OpenSearchURL string
+	// OpenSearchUsername/Password are optional basic-auth credentials; empty
+	// means anonymous (the local mothership runs without auth).
+	OpenSearchUsername string
+	OpenSearchPassword string
 }
 
 // Dispatcher owns the worker pool and the lease/processor plumbing.
@@ -109,6 +117,18 @@ func NewWithPersister(rep *repo.Repo, client *processor.Client, persist ResultPe
 // unsupported processor so claims are never held hostage by one, and it clamps
 // the configured concurrency to the processor's declared maximum.
 func (d *Dispatcher) Run(ctx context.Context) error {
+	// L5: OpenSearch outbox drainer — own goroutine, own path; an OpenSearch
+	// outage never touches snapshots or jobs (work order §10.3). Starts BEFORE
+	// capability negotiation: draining has no processor dependency, and a
+	// processor outage must not stall outbox draining either. Empty URL
+	// disables it (rows just stay pending).
+	if d.cfg.OpenSearchURL != "" {
+		os := newOpenSearchClient(d.cfg.OpenSearchURL, d.cfg.OpenSearchUsername, d.cfg.OpenSearchPassword)
+		go outboxWorker(ctx, d, os)
+		d.logger.Printf("outbox drainer enabled: index=%s url=%s", outboxIndexName, d.cfg.OpenSearchURL)
+	} else {
+		d.logger.Printf("outbox drainer disabled (AXIOMNG_OPENSEARCH_URL empty); outbox rows stay pending")
+	}
 	caps, err := d.client.Capabilities(ctx)
 	if err != nil {
 		d.logger.Printf("capability negotiation failed: %v", err)
