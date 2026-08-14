@@ -143,10 +143,44 @@ The dispatcher performs capability negotiation against the remote runner on
 startup and will fail fast if it is unreachable or contract-incompatible.
 Test with one small document before batch processing.
 
+## 5b. Source delivery over source_url (no shared Zotero mount)
+
+The remote runner does NOT need access to the Zotero storage. The dispatcher
+attaches an HMAC-signed download URL (`attachment.source_url`) to every
+process request and the runner pulls the bytes over HTTP (contract §3
+additive v1 extension). Configure on the axiom-ng host:
+
+```bash
+# Shared HMAC secret (dispatcher signs, /api/processor/source verifies).
+# Empty = feature off on BOTH sides.
+export AXIOMNG_PROCESSOR_SOURCE_SECRET='<random-hex>'
+# The base URL the runner can use to reach axiom-ng — the Tailnet address,
+# NOT 127.0.0.1 (the runner resolves it on its own host):
+export AXIOMNG_PROCESSOR_SOURCE_BASE_URL=http://<mac-tailnet-ip>:8011
+# axiom-ng must listen on an interface the runner can reach:
+export AXIOMNG_BIND_ADDR=0.0.0.0
+# POST /v1/process waits for the synchronous download; raise the dispatcher's
+# request timeout to cover it (default 30s):
+export AXIOMNG_PROCESSOR_TIMEOUT=180s
+```
+
+Runner side: keep `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` unset or pointing
+at a nonexistent path — local delivery is then impossible by construction
+and every source arrives via the signed URL. The URL expires with the job's
+lease; downloaded bytes run the same hash gate as local files and die with
+the ACK (contract §18/§19-13).
+
+> The earlier rsync-bridge / sshfs-mount experiments are superseded by this
+> mechanism — do not stage Zotero copies on the GPU host (§4.15).
+
+Smoke-verified 2026-08-14 (Carrier): 163 kB EPUB end-to-end over source_url
+with zero Zotero access on the runner — completed, 34 chunks, outbox done,
+OpenSearch indexed, work dir (incl. the downloaded source) empty after ACK.
+
 ## Runtime knobs (runner env vars)
 
 | Env var | Default | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `AXIOM_PROCESSOR_BIND_ADDR` | `127.0.0.1` | `0.0.0.0` for remote access |
 | `AXIOM_PROCESSOR_PORT` | `8537` | HTTP port (8012 in our setups) |
 | `AXIOM_PROCESSOR_COMPUTE` | `reference` | `real` for GPU pipeline |
