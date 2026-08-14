@@ -20,7 +20,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const dispatchTestDatabaseName = "axiom_ng_dispatch_test"
+// Session-unique DB name (ends in _test for truncateFixtures' guard):
+// concurrent review/test sessions corrupted each other's shared DB, so
+// default to a per-PID database unless a name is pinned via env.
+var dispatchTestDatabaseName = func() string {
+	if n := os.Getenv("AXIOMNG_DISPATCH_TEST_DB_NAME"); n != "" {
+		return n
+	}
+	return fmt.Sprintf("axiom_ng_dispatch_%d_test", os.Getpid())
+}()
 
 // dispatchHarness owns an isolated _test database and the repo/pool.
 type dispatchHarness struct {

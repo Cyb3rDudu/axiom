@@ -99,7 +99,8 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 		}
 		// Stop early when renewal reports the lease lost (another owner took
 		// over): further fenced marks would no-op anyway; the claim scan's
-		// expired-recovery owns the row from here.
+		// expired-recovery owns the row from here (optimization — the fence is
+		// the correctness guard).
 		select {
 		case <-lost:
 			d.logger.Printf("%v: lease lost while processing; not acknowledging", fields)

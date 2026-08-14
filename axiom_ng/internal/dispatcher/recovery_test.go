@@ -25,7 +25,12 @@ func TestClaimPrefersExpiredProcessingOverPendingTie(t *testing.T) {
 	h.truncateFixtures(t)
 	ctx := context.Background()
 
-	// Two jobs from the same sync (identical enqueued_at by default now()).
+	// Two jobs enqueued back-to-back (µs apart — separate autocommits, not a
+	// true tie). Under the OLD `ORDER BY enqueued_at ASC` the pending row
+	// (seeded first, µs earlier) deterministically sorts first, which is
+	// exactly the red-under-mutation direction — the test is valid with or
+	// without ties; a true tie (bulk sync giving every job one timestamp) was
+	// merely the motivating production case.
 	pendingID := h.seedJob(t, "fair-pending", 3)
 	expiredID := h.seedJob(t, "fair-expired", 3)
 
@@ -107,10 +112,13 @@ func TestRenewalContinuesDuringSlowStatusPoll(t *testing.T) {
 		d.pollAndFinish(runCtx, claimed)
 	}()
 
-	// Wait past the renewal interval but NOT past the poll delay: if renewal
-	// were coupled to the poll cadence (the L8 bug), no renewal would happen
-	// until the 4s poll returned and the 2s lease would already be dead.
-	time.Sleep(1400 * time.Millisecond)
+	// Wait past the poll's first renewal window AND past the original 2s
+	// lease expiry (claim set lease_until = claim_time + 2s): the check must
+	// land where an UN-renewed lease is provably dead, otherwise the
+	// assertion below is vacuous. At 1400ms the remaining lease was ~580ms
+	// even with zero renewals, so the L8 regression shipped green; at 2600ms
+	// only a live renewal loop can keep lease_until in the future.
+	time.Sleep(2600 * time.Millisecond)
 
 	var leaseUntil time.Time
 	var status string
