@@ -74,7 +74,10 @@ const (
 	defaultLibraryID  = "users/0"
 	defaultAPIPort    = 8011
 	defaultBindAddr   = "127.0.0.1"
-	defaultProfile    = `{"profile":"full-rag-v1"}`
+	// The profile NAME alone does not enable features — the runner reads the
+	// explicit booleans (ProcessingOptions defaults are all false; benchmark
+	// finding 2026-08-14). full-rag-v1 therefore materializes every feature.
+	defaultProfile = `{"profile":"full-rag-v1","extract_entities":true,"extract_relationships":true,"compute_dense_embeddings":true,"compute_sparse_embeddings":true,"extract_images":true}`
 )
 
 // Load reads configuration from the environment, applying local sidecar

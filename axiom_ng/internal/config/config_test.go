@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -95,5 +96,41 @@ func TestProcessorRequestTimeoutOverride(t *testing.T) {
 	os.Unsetenv("AXIOMNG_PROCESSOR_TIMEOUT")
 	if c := Load(); c.ProcessorRequestTimeout != 30*time.Second {
 		t.Errorf("ProcessorRequestTimeout = %v, want default 30s", c.ProcessorRequestTimeout)
+	}
+}
+
+func TestDefaultProfileEnablesAllFeatures(t *testing.T) {
+	// Benchmark finding 2026-08-14: the bare profile name does NOT enable
+	// features (runner reads explicit booleans, defaults false) — the
+	// default must materialize every full-rag-v1 feature as true.
+	t.Setenv("AXIOMNG_DISPATCHER_PROFILE", "")
+	c := Load()
+	var p struct {
+		Profile                 string `json:"profile"`
+		ExtractEntities         bool   `json:"extract_entities"`
+		ExtractRelationships    bool   `json:"extract_relationships"`
+		ComputeDenseEmbeddings  bool   `json:"compute_dense_embeddings"`
+		ComputeSparseEmbeddings bool   `json:"compute_sparse_embeddings"`
+		ExtractImages           bool   `json:"extract_images"`
+	}
+	if err := json.Unmarshal([]byte(c.DispatcherProfile), &p); err != nil {
+		t.Fatalf("default profile is not valid JSON: %v", err)
+	}
+	if p.Profile != "full-rag-v1" {
+		t.Errorf("profile = %q", p.Profile)
+	}
+	for _, f := range []struct {
+		name string
+		ok   bool
+	}{
+		{"extract_entities", p.ExtractEntities},
+		{"extract_relationships", p.ExtractRelationships},
+		{"compute_dense_embeddings", p.ComputeDenseEmbeddings},
+		{"compute_sparse_embeddings", p.ComputeSparseEmbeddings},
+		{"extract_images", p.ExtractImages},
+	} {
+		if !f.ok {
+			t.Errorf("default profile feature %s = false, want true", f.name)
+		}
 	}
 }
