@@ -84,19 +84,40 @@ const maxConsecutiveStatusErrors = 5
 func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob) {
 	ref := claimed.LeaseRef
 	fields := []any{ref.JobID, claimed.AttachmentID, claimed.DocumentID, claimed.Attempt}
-	next := time.Now()
 	consecutive := 0
+	// Renewal decoupled from the poll cadence (L8 fix): one goroutine renews
+	// for the WHOLE job lifetime — poll loop, result fetch, artifact staging
+	// and persist. It stops on ctx or a lost lease; the fenced mutations plus
+	// the claim scan's expired-recovery keep correctness when it stops early.
+	renewCtx, stopRenew := context.WithCancel(ctx)
+	defer stopRenew()
+	lost := make(chan struct{})
+	go d.renewLoop(renewCtx, ref, fields, lost)
 	for {
 		if ctx.Err() != nil {
 			return
+		}
+		// Stop early when renewal reports the lease lost (another owner took
+		// over): further fenced marks would no-op anyway; the claim scan's
+		// expired-recovery owns the row from here.
+		select {
+		case <-lost:
+			d.logger.Printf("%v: lease lost while processing; not acknowledging", fields)
+			return
+		default:
 		}
 		// Honour a cancellation request before renewing/continuing: tell the
 		// processor to stop and converge fenced to cancelled. The repo's
 		// terminalize/claim scan would eventually cancel on lease expiry, but we
 		// must not keep renewing a job an operator asked to stop.
+		//
+		// Silent-exit fix (L8 anomaly): a failed cancel-request read used to
+		// bare-return, leaving the row 'processing' with a dying lease and NO
+		// marking — a single transient DB hiccup abandoned the job. Every exit
+		// from here on must mark (retry/terminal) or hand the row to recovery.
 		cancelRequested, cerr := d.rep.JobCancelRequested(ctx, ref.JobID)
 		if cerr != nil {
-			d.logger.Printf("%v: read cancel request: %v", fields, cerr)
+			d.scheduleRetry(ctx, ref, claimed.Attempt, "CANCEL_READ_FAILED", cerr.Error())
 			return
 		}
 		if cancelRequested {
@@ -107,19 +128,12 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 			return
 		}
 
-		// Renew the lease on our interval so a long processor run is not lost.
-		if time.Now().After(next) {
-			if err := d.rep.RenewLease(ctx, ref, d.cfg.LeaseDuration); err != nil {
-				if isLost(err) {
-					d.logger.Printf("%v: lease lost while processing; not acknowledging", fields)
-					return
-				}
-				d.logger.Printf("%v: renew lease: %v", fields, err)
-				return
-			}
-			next = time.Now().Add(jitter(d.cfg.RenewalInterval))
-		}
-
+		// Lease renewal runs in its own goroutine (renewLoop) so a slow status
+		// poll, the result fetch, artifact staging or the persist transaction
+		// can never consume the renewal window — the L8 anomaly showed a 300s
+		// poll budget starving the 300s lease mid-job, and onCompleted (hundreds
+		// of artifact fetches) ran entirely without renewal until every fenced
+		// mark no-op'd lost and the row stuck in 'processing' forever.
 		st, err := d.client.JobStatus(ctx, ref.JobID)
 		if err != nil {
 			// A transient status error is tolerable briefly, but a processor that
@@ -241,6 +255,34 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) 
 		d.logger.Printf("%v: ack failed; will retry separately: %v", []any{ref.JobID}, err)
 		if merr := d.rep.MarkAckFailed(ctx, ref.JobID); merr != nil {
 			d.logger.Printf("%v: mark ack-pending: %v", []any{ref.JobID}, merr)
+		}
+	}
+}
+
+// renewLoop renews the job's lease on RenewalInterval until ctx is done —
+// decoupled from the poll cadence (L8 fix) so slow status polls, the result
+// fetch, artifact staging and the persist transaction can never consume the
+// renewal window. Transient renew failures are logged and retried (the lease
+// may still be alive); a lost lease closes `lost` once so the poll loop stops
+// early — the claim scan's expired-recovery then owns the row.
+func (d *Dispatcher) renewLoop(ctx context.Context, ref repo.LeaseRef, fields []any, lost chan struct{}) {
+	ticker := time.NewTicker(jitter(d.cfg.RenewalInterval))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := d.rep.RenewLease(ctx, ref, d.cfg.LeaseDuration); err != nil {
+				if isLost(err) {
+					d.logger.Printf("%v: renewal: lease lost", fields)
+					close(lost) // exactly once: this is the only close site
+					return
+				}
+				// Transient (DB hiccup): keep trying; if the lease really expires,
+				// the next renew reports lost and the claim recovery takes over.
+				d.logger.Printf("%v: renewal failed (transient): %v", fields, err)
+			}
 		}
 	}
 }

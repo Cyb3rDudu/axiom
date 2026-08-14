@@ -319,7 +319,15 @@ func claimCandidate(ctx context.Context, tx pgx.Tx) (*candidate, error) {
 		        (j.status='pending' AND (j.next_attempt_at IS NULL OR j.next_attempt_at<=now()))
 		     OR (j.status IN ('claimed','processing') AND j.lease_until IS NOT NULL AND j.lease_until<=now())
 		  )
-		ORDER BY j.enqueued_at ASC
+		-- L8 fairness fix: expired-claim rows (abandoned workers) recover FIRST,
+		-- oldest expiry first; pending jobs follow by enqueued_at with a
+		-- deterministic id tie-break — a bulk sync gives every job the same
+		-- enqueued_at, so without the tie-break heap order decided invisibly
+		-- and abandoned rows never won a claim.
+		ORDER BY (j.status = 'pending') ASC,
+		         j.lease_until ASC NULLS LAST,
+		         j.enqueued_at ASC,
+		         j.id ASC
 		FOR UPDATE OF j SKIP LOCKED
 		LIMIT 1`
 
