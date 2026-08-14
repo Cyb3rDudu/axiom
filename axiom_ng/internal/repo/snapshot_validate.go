@@ -282,7 +282,11 @@ func validateLocatorsAndRelationships(res *processor.Result, frozen *FrozenInput
 				return verrf("LOCATOR_FABRICATED_PAGES", "chunk %d has page_span locator for an EPUB source (§11: page labels MUST NOT be fabricated for sources without stable pages; use epub_cfi)", c.Index)
 			}
 		case "epub_cfi":
-			// EPUB without stable pages — no fabricated page numbers.
+			// EPUB CFI must carry non-empty cfi_start/cfi_end — a locator with
+			// empty CFI strings is a broken extraction (Weg A: real CFI or reject).
+			if isEPUB && (loc.CFIStart == "" || loc.CFIEnd == "") {
+				return verrf("LOCATOR_CFI_EMPTY", "chunk %d has epub_cfi locator with empty cfi_start or cfi_end (§11 requires real CFI positions)", c.Index)
+			}
 		default:
 			return verrf("LOCATOR_TYPE_UNKNOWN", "chunk %d locator type %q", c.Index, loc.Type)
 		}

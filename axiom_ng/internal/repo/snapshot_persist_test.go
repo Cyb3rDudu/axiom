@@ -648,3 +648,70 @@ func TestPersistReactivatesInactiveIdentityMatch(t *testing.T) {
 		t.Fatalf("reactivated snapshot must be active, got %q", got)
 	}
 }
+
+// --- EPUB §11 locator validation (Weg A/B) ---------------------------------
+
+// TestValidateEPUBRejectsFabricatedPages proves LOCATOR_FABRICATED_PAGES:
+// an EPUB result with page_span locators must be rejected (§11 MUST NOT
+// fabricate page labels).
+func TestValidateEPUBRejectsFabricatedPages(t *testing.T) {
+	h := newPersistHarness(t, "epubpages")
+	const dims = 3
+	r := h.validResultRaw(dims)
+	// Make the frozen input an EPUB.
+	ct := "application/epub+zip"
+	h.frozen.Attachment.ContentType = &ct
+	// Result has page_span locators (from validResultRaw).
+	verr := ValidateProcessorResult(r, h.frozen, dims)
+	if verr == nil {
+		t.Fatal("expected LOCATOR_FABRICATED_PAGES for EPUB with page_span")
+	}
+	var ve *ValidationError
+	if !errors.As(verr, &ve) || ve.Code != "LOCATOR_FABRICATED_PAGES" {
+		t.Fatalf("expected LOCATOR_FABRICATED_PAGES, got %v", verr)
+	}
+}
+
+// TestValidateEPUBRejectsEmptyCFI proves LOCATOR_CFI_EMPTY: an EPUB result
+// with epub_cfi locators but empty cfi_start/cfi_end must be rejected (§11
+// Weg A: real CFI or reject).
+func TestValidateEPUBRejectsEmptyCFI(t *testing.T) {
+	h := newPersistHarness(t, "epubcfi")
+	const dims = 3
+	r := h.validResultRaw(dims)
+	// Make the frozen input an EPUB.
+	ct := "application/epub+zip"
+	h.frozen.Attachment.ContentType = &ct
+	// Replace locators with epub_cfi but empty strings.
+	for i := range r.Chunks {
+		r.Chunks[i].Locator.Type = "epub_cfi"
+		r.Chunks[i].Locator.CFIStart = ""
+		r.Chunks[i].Locator.CFIEnd = ""
+	}
+	verr := ValidateProcessorResult(r, h.frozen, dims)
+	if verr == nil {
+		t.Fatal("expected LOCATOR_CFI_EMPTY for EPUB with empty CFI strings")
+	}
+	var ve *ValidationError
+	if !errors.As(verr, &ve) || ve.Code != "LOCATOR_CFI_EMPTY" {
+		t.Fatalf("expected LOCATOR_CFI_EMPTY, got %v", verr)
+	}
+}
+
+// TestValidateEPUBAcceptsRealCFI proves the happy path: epub_cfi with
+// non-empty cfi_start/cfi_end passes validation.
+func TestValidateEPUBAcceptsRealCFI(t *testing.T) {
+	h := newPersistHarness(t, "epubok")
+	const dims = 3
+	r := h.validResultRaw(dims)
+	ct := "application/epub+zip"
+	h.frozen.Attachment.ContentType = &ct
+	for i := range r.Chunks {
+		r.Chunks[i].Locator.Type = "epub_cfi"
+		r.Chunks[i].Locator.CFIStart = "epubcfi(/6/2!/4/2)"
+		r.Chunks[i].Locator.CFIEnd = "epubcfi(/6/2!/4/4)"
+	}
+	if verr := ValidateProcessorResult(r, h.frozen, dims); verr != nil {
+		t.Fatalf("expected valid EPUB CFI to pass, got %v", verr)
+	}
+}

@@ -556,10 +556,27 @@ def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
 
     markdown = out_md.read_text(encoding="utf-8")
     page_label_map: dict[int, str] = {}
+    cfi_entries: list[dict[str, Any]] = []
     if content_type == "application/pdf":
         from ai_researcher.core_rag.processor import extract_page_labels
 
         page_label_map = extract_page_labels(str(source_path))
+    elif content_type == "application/epub+zip":
+        # EPUB CFI extraction (§11 Weg A): build text→CFI mapping from the
+        # original XHTML DOM so chunks carry real epub_cfi locators instead
+        # of fabricated page_span labels.
+        from .epub_cfi import build_cfi_map
+
+        cfi_entries = build_cfi_map(str(source_path))
+        # Rewrite absolute temp-path image references in the markdown to
+        # basename-only (temp-path-leak fix). The image_mapping below
+        # handles the final Contract-ref rewriting.
+        import re as _re
+
+        markdown = _re.sub(r"!\[([^\]]*)\]\(([^)]+)\)",
+                           lambda m: f"![{m.group(1)}]({Path(m.group(2)).name})",
+                           markdown)
+        out_md.write_text(markdown, encoding="utf-8")
 
     from ai_researcher.core_rag.chunker import Chunker
 
@@ -598,6 +615,21 @@ def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
             orig_base = Path(orig).name if orig else orig
             normalized.append(orig_to_ref.get(orig_base, orig_to_ref.get(orig, orig)))
         meta["image_refs"] = normalized
+
+    # EPUB CFI: override page_span locators with epub_cfi for EPUB sources.
+    # The real Chunker emits page_span with fabricated page labels (it doesn't
+    # know about EPUB structure). We replace them with real CFI locators from
+    # the original XHTML DOM (§11 Weg A).
+    if cfi_entries:
+        from .epub_cfi import match_text_to_cfi
+
+        for c in chunk_dicts:
+            meta = c.get("metadata", {}) or {}
+            meta["locator_type"] = "epub_cfi"
+            text = c.get("text", "")
+            cfi_start, cfi_end = match_text_to_cfi(text, cfi_entries)
+            meta["cfi_start"] = cfi_start
+            meta["cfi_end"] = cfi_end
 
     return _build_reference_result(
         request=request,
