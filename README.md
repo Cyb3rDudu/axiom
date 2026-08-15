@@ -52,7 +52,8 @@ curl -X POST http://127.0.0.1:8011/api/zotero/sync
 curl http://127.0.0.1:8011/api/ingest/jobs
 ```
 
-See the full [Quickstart](https://cyb3rdudu.github.io/axiom/get-started/quickstart/)
+The block above assumes Postgres and OpenSearch are already running and
+configured. See the full [Quickstart](https://cyb3rdudu.github.io/axiom/get-started/quickstart/)
 for every env var and the troubleshooting table.
 
 ## Tests

@@ -27,7 +27,7 @@ graph. What's still coming is the polished query + result surface on top
 ## Current state
 
 - The pipeline reliably produces processed, locator-precise, indexed chunks.
-  This was demonstrated end-to-end in the [measurement reports](../references/benchmarks/).
+  This was demonstrated end-to-end in the [measurement reports](../references/benchmarks.md).
 - The full retrieval *API/UI* for end users is not released yet.
 
 ## What you can do today
