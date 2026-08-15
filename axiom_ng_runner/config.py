@@ -22,6 +22,9 @@ class Settings:
     log_level: str = "INFO"
     # Remote source delivery: total download budget for one source_url pull.
     source_download_timeout: float = 120.0
+    # Query endpoints (epic #130): hard server caps; /v1/embed max_texts may
+    # only lower these, never raise them.
+    max_query_texts: int = 16
 
     @property
     def bind(self) -> tuple[str, int]:
@@ -64,6 +67,7 @@ def load_settings() -> Settings:
         source_download_timeout=_env_float(
             "AXIOM_PROCESSOR_SOURCE_TIMEOUT", 120.0
         ),
+        max_query_texts=max(1, _env_int("AXIOM_PROCESSOR_MAX_QUERY_TEXTS", 16)),
     )
 
 

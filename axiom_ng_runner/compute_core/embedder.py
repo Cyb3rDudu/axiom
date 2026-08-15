@@ -1,15 +1,18 @@
+import asyncio
+import contextlib
+import gc
+import logging
 import os
-from typing import List, Dict, Any, Optional, Tuple
+import sys
+import threading
+import time
+from typing import Any
+
 import numpy as np
 import torch
 from FlagEmbedding import BGEM3FlagModel
 from tqdm import tqdm
-import gc
-import threading
-import time
-import asyncio
-import logging
-import sys
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from axiom_ng_runner.compute_core.devices import hardware_detector
@@ -39,20 +42,20 @@ class TextEmbedder:
     def __init__(
         self,
         model_name: str = "BAAI/bge-m3",
-        device: Optional[str] = None,
-        batch_size: Optional[int] = None,
+        device: str | None = None,
+        batch_size: int | None = None,
         max_length: int = 8192, # Max sequence length for BGE-M3
-        enable_memory_management: Optional[bool] = None
+        enable_memory_management: bool | None = None
     ):
         # Use device from config if available, otherwise use provided device or fallback
         import os
-        
+
         # Env with the old config.py production defaults.
         if batch_size is None:
             batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "8"))
         if enable_memory_management is None:
             enable_memory_management = os.getenv("EMBEDDING_MEMORY_MANAGEMENT", "True").lower() == "true"
-        
+
         # Use hardware detector for device selection
         if device:
             self.device = device
@@ -65,15 +68,15 @@ class TextEmbedder:
             if optimal_batch != batch_size:
                 logger.info(f"Adjusting batch size from {batch_size} to {optimal_batch} based on hardware")
                 batch_size = optimal_batch
-        
+
         self.model_name = model_name
         self.batch_size = batch_size
         self.max_length = max_length
         self.enable_memory_management = enable_memory_management
-        
+
         # Thread lock for model access to prevent concurrent GPU operations
         self._model_lock = threading.Lock()
-        
+
         # Memory management settings
         self._memory_cleanup_threshold = 0.85  # Clean up when GPU memory usage exceeds 85%
         self._queries_since_cleanup = 0
@@ -81,10 +84,10 @@ class TextEmbedder:
 
         # Log hardware detection results
         hardware_detector.log_device_info()
-        
+
         logger.debug(f"Initializing TextEmbedder with model {self.model_name} on device {self.device}")
         logger.debug(f"Memory management: {'Enabled' if self.enable_memory_management else 'Disabled'}")
-        
+
         # Set PyTorch memory allocation strategy for better memory management
         device_info = hardware_detector.detect_hardware()
         if device_info["device_type"] in ["cuda", "rocm"] and self.enable_memory_management:
@@ -95,7 +98,7 @@ class TextEmbedder:
             # CPU-specific optimizations
             torch.set_num_threads(hardware_detector.get_num_workers())
             logger.debug(f"Set PyTorch threads to {hardware_detector.get_num_workers()} for CPU processing")
-        
+
         try:
             # Initialize the BGE-M3 model
             logger.debug("Attempting to load BGE-M3 model from Hugging Face...")
@@ -105,11 +108,11 @@ class TextEmbedder:
                 use_fp16=False
             )
             logger.debug("BGE-M3 model loaded successfully (forced fp32).")
-            
+
             # Initial memory cleanup
             if self.enable_memory_management:
                 self._cleanup_gpu_memory()
-                
+
         except Exception as e:
             logger.debug(f"Error loading embedding model {self.model_name}: {e}")
             # Potentially raise the error or handle it depending on desired robustness
@@ -152,7 +155,7 @@ class TextEmbedder:
         except Exception as e:
             logger.debug(f"Warning: GPU memory cleanup failed: {e}")
 
-    def embed_chunks(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def embed_chunks(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Generates dense and sparse embeddings for a list of text chunks.
         Includes memory management to prevent CUDA OOM errors.
@@ -263,7 +266,7 @@ class TextEmbedder:
             logger.debug("Finished generating embeddings.")
             return chunks
 
-    def embed_query(self, query_text: str) -> Optional[Dict[str, Any]]:
+    def embed_query(self, query_text: str) -> dict[str, Any] | None:
         """
         Generates dense and sparse embeddings for a single query text.
         Includes memory management to prevent CUDA OOM errors.
@@ -281,9 +284,9 @@ class TextEmbedder:
         with self._model_lock:  # Ensure thread-safe access to the model
             # Increment query counter and check for cleanup
             self._queries_since_cleanup += 1
-            
+
             # Periodic cleanup based on query count
-            if (self.enable_memory_management and 
+            if (self.enable_memory_management and
                 self._queries_since_cleanup >= self._cleanup_frequency):
                 self._cleanup_gpu_memory(force=True)
 
@@ -387,27 +390,49 @@ class TextEmbedder:
                 logger.error(f"embed_query: Error embedding query '{query_text}': {e}", exc_info=True)
                 return None
 
-    async def embed_query_async(self, query_text: str) -> Optional[Dict[str, Any]]:
+    def embed_queries_dense(self, texts: list[str]) -> list[list[float]]:
+        """Dense-only query embeddings for POST /v1/embed (epic #130 R1).
+
+        BGE-M3 is a symmetric encoder: passages and queries go through the
+        same model and pooling, so query vectors are cosine-comparable with
+        the chunk embeddings this same class produces at ingest (the OS
+        roundtrip integration test is the proof). Deliberately skips the
+        per-call GPU cache flush and cleanup counters of embed_query() —
+        the warm path must hold the <150 ms p95 budget.
+        """
+        with self._model_lock:
+            outputs = self.model.encode(
+                texts,
+                batch_size=len(texts),
+                max_length=512,  # queries are short; FlagEmbedding's own
+                # query_max_length default is 512 too. 8192 would only pad.
+                return_dense=True,
+                return_sparse=False,
+                return_colbert_vecs=False,
+            )
+        return np.asarray(outputs["dense_vecs"], dtype=np.float32).tolist()
+
+    async def embed_query_async(self, query_text: str) -> dict[str, Any] | None:
         """
         Async wrapper for embed_query that uses a semaphore to limit concurrent operations.
         This helps prevent GPU memory overload when multiple queries are processed simultaneously.
         """
         if not query_text:
             return None
-            
+
         semaphore = get_embedding_semaphore()
         async with semaphore:
             # Run the synchronous embedding in a thread pool to avoid blocking
             return await asyncio.get_running_loop().run_in_executor(None, self.embed_query, query_text)
 
-    async def embed_chunks_async(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def embed_chunks_async(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Async wrapper for embed_chunks that uses a semaphore to limit concurrent operations.
         This helps prevent GPU memory overload when multiple chunk batches are processed simultaneously.
         """
         if not chunks:
             return []
-            
+
         semaphore = get_embedding_semaphore()
         async with semaphore:
             # Run the synchronous embedding in a thread pool to avoid blocking
@@ -416,7 +441,5 @@ class TextEmbedder:
     def __del__(self):
         """Cleanup when the embedder is destroyed."""
         if hasattr(self, 'enable_memory_management') and self.enable_memory_management:
-            try:
-                self._cleanup_gpu_memory(force=True)
-            except:
-                pass  # Ignore errors during cleanup
+            with contextlib.suppress(BaseException):
+                self._cleanup_gpu_memory(force=True)  # best-effort: never raise in __del__

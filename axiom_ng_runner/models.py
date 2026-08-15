@@ -129,6 +129,27 @@ class JobStatus(BaseModel):
     completed_at: str | None = None
 
 
+# --- Query embedding (POST /v1/embed, contract §7a additive, #131) -------
+
+
+class EmbedRequest(BaseModel):
+    """Contract §7a. ``max_texts`` is an optional per-request cap; the
+    server-side limit (capabilities.limits.max_query_texts) always wins."""
+
+    model_config = _no_extra()
+    contract_version: str
+    texts: list[str]
+    max_texts: int | None = None
+
+
+class EmbedResponse(BaseModel):
+    model_config = _no_extra()
+    contract_version: str
+    model: str
+    dimensions: int
+    embeddings: list[list[float]]
+
+
 # --- Ack (POST /v1/jobs/{id}/ack, contract §15) ----------------------------
 
 
