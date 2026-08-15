@@ -57,7 +57,13 @@ var ErrLostLease = errors.New("lease lost or job not in expected state")
 // source/document/attachment/canonical state; profile_hash and idempotency_key
 // are COMPUTED deterministically in Go, never taken unchecked from the caller.
 type ClaimOptions struct {
-	WorkerID      string
+	WorkerID string
+	// RunnerName is the runner identity recorded on the job row (issue
+	// #122): which runner claimed which book — the TC2 scale-proof basis.
+	// Stored in ingest_jobs.runner_name (NOT processor_name: that column is
+	// the processor SOFTWARE identity written at completion). Empty leaves
+	// the column NULL (additive, no bestand rebuild).
+	RunnerName    string
 	LeaseDuration time.Duration
 	Profile       json.RawMessage
 }
@@ -205,19 +211,20 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			UPDATE ingest_jobs SET
 				status            = 'claimed',
 				claimed_by        = $2,
+				runner_name       = NULLIF($3, ''),
 				lease_token       = gen_random_uuid(),
 				attempt           = attempt + 1,
-				lease_until       = now() + make_interval(secs => $3),
+				lease_until       = now() + make_interval(secs => $4),
 				last_heartbeat_at = now(),
 				started_at        = COALESCE(started_at, now()),
-				input_snapshot    = COALESCE(input_snapshot, $4::jsonb),
-				processing_profile= COALESCE(processing_profile, $5::jsonb),
-				profile_hash      = COALESCE(profile_hash, $6),
-				idempotency_key   = COALESCE(idempotency_key, $7),
+				input_snapshot    = COALESCE(input_snapshot, $5::jsonb),
+				processing_profile= COALESCE(processing_profile, $6::jsonb),
+				profile_hash      = COALESCE(profile_hash, $7),
+				idempotency_key   = COALESCE(idempotency_key, $8),
 				updated_at        = now()
-			WHERE id = $1
-			RETURNING attempt, lease_token::text, lease_until
-		`, cand.id, opts.WorkerID, leaseSec, snapshot, procCanonical, profileHash, idemKey).
+				WHERE id = $1
+				RETURNING attempt, lease_token::text, lease_until
+		`, cand.id, opts.WorkerID, opts.RunnerName, leaseSec, snapshot, procCanonical, profileHash, idemKey).
 			Scan(&newAttempt, &tsToken, &leaseUntil)
 		if err != nil {
 			tx.Rollback(ctx)

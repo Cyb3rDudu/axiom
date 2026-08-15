@@ -1527,3 +1527,54 @@ func TestFinalAttemptExhaustion(t *testing.T) {
 		t.Fatal("cleanup must clear the lease and set completed_at")
 	}
 }
+
+// #122: the claim stamps the runner identity into ingest_jobs.runner_name —
+// the SQL basis for the TC2 scale proof. Empty opts leave the column NULL
+// (additive; no bestand rebuild). Note the column is deliberately NOT
+// processor_name: that one holds the processor software identity written at
+// completion and must not be clobbered.
+func TestClaimRecordsRunnerName(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	_, jobID := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:1", libraryID: "users/0",
+		docKey: "R1", attKey: "R1", contentHash: h("sha256:rr1"), preferred: true,
+	}, "pending", 3)
+	opts := defaultClaim("worker-rn")
+	opts.RunnerName = "carrier-gpu0"
+	cj := lr.claim(t, opts)
+	if cj == nil {
+		t.Fatal("expected a claim")
+	}
+
+	var got *string
+	if err := lr.pool.QueryRow(context.Background(),
+		`SELECT runner_name FROM ingest_jobs WHERE id=$1`, jobID).Scan(&got); err != nil {
+		t.Fatalf("read runner_name: %v", err)
+	}
+	if got == nil || *got != "carrier-gpu0" {
+		t.Fatalf("runner_name = %v, want carrier-gpu0", got)
+	}
+}
+
+func TestClaimWithoutRunnerNameLeavesNull(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	_, jobID := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:1", libraryID: "users/0",
+		docKey: "R2", attKey: "R2", contentHash: h("sha256:rr2"), preferred: true,
+	}, "pending", 3)
+	cj := lr.claim(t, defaultClaim("worker-rn2"))
+	if cj == nil {
+		t.Fatal("expected a claim")
+	}
+
+	var got *string
+	if err := lr.pool.QueryRow(context.Background(),
+		`SELECT runner_name FROM ingest_jobs WHERE id=$1`, jobID).Scan(&got); err != nil {
+		t.Fatalf("read runner_name: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("runner_name = %v, want NULL", *got)
+	}
+}

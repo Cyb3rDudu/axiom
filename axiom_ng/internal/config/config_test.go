@@ -134,3 +134,16 @@ func TestDefaultProfileEnablesAllFeatures(t *testing.T) {
 		}
 	}
 }
+
+func TestProcessorRunnerName(t *testing.T) {
+	t.Setenv("AXIOMNG_PROCESSOR_RUNNER_NAME", "carrier-gpu0")
+	if got := Load().ProcessorRunnerName; got != "carrier-gpu0" {
+		t.Fatalf("explicit runner name = %q, want carrier-gpu0", got)
+	}
+	// Unset stays empty: main falls back to the processor URL host so a bare
+	// single-runner deployment still gets a usable identity.
+	t.Setenv("AXIOMNG_PROCESSOR_RUNNER_NAME", "")
+	if got := Load().ProcessorRunnerName; got != "" {
+		t.Fatalf("default runner name = %q, want empty (URL-host fallback in main)", got)
+	}
+}

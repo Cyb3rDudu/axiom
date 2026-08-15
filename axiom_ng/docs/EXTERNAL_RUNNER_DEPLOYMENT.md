@@ -91,7 +91,7 @@ CMD ["python", "-m", "axiom_ng_runner"]
 breakthrough (2026-08-15, L8 mass-chunking):
 
 | Path | Result-fetch throughput (17 MB result) |
-|---|---|
+| --- | --- |
 | Port-mapped (`-p 19542:8012`, rootless Podman via **passt**) | **~123 KB/s** — bulk collapses while loopback inside the container serves 122 MB/s |
 | **`--network=host`** | **full LAN speed (~40 MB/s)** — result transfers ~0.5 s instead of 2+ min |
 
@@ -227,6 +227,36 @@ the ACK (contract §18/§19-13).
 Smoke-verified 2026-08-14 (Carrier): 163 kB EPUB end-to-end over source_url
 with zero Zotero access on the runner — completed, 34 chunks, outbox done,
 OpenSearch indexed, work dir (incl. the downloaded source) empty after ACK.
+
+## 5c. Runner identity + GPU sampler labels (TC2 parallel operation)
+
+With multiple runners (TC2), every log line and every job row must say WHICH
+runner produced it. Two pieces (issue #122):
+
+```bash
+# Dispatcher side: name each runner explicitly (empty = processor URL host,
+# e.g. "192.168.1.2:19542" — usable, but a name is readable).
+export AXIOMNG_PROCESSOR_RUNNER_NAME=carrier-gpu0
+```
+
+This lands in the phases log line (`phases[ok]: runner=carrier-gpu0 job=…`)
+and in `ingest_jobs.runner_name` at claim time — the TC2 scale proof
+(throughput/distribution per runner) is then pure SQL:
+`SELECT runner_name, count(*), avg(completed_at-started_at) FROM ingest_jobs
+WHERE status='completed' GROUP BY 1;`. The column is deliberately NOT
+`processor_name` (that one holds the processor software identity written at
+completion and must not be clobbered).
+
+GPU sampler with the runner label — one sampler per runner container, label
+first so lines stay attributable after merge:
+
+```bash
+nohup sh -c 'while true; do echo "carrier-gpu0 $(date +%s) $(nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader)"; sleep 30; done' \
+  > /tmp/gpu_sampler_carrier-gpu0.log 2>&1 &
+```
+
+With `CUDA_VISIBLE_DEVICES` pinning per container, GPU index + label identify
+the runner unambiguously.
 
 ## Runtime knobs (runner env vars)
 

@@ -46,6 +46,13 @@ type Config struct {
 	// fixed per-type budgets in the processor client.
 	ProcessorRequestTimeout time.Duration
 
+	// ProcessorRunnerName is the human identity of the processor this
+	// dispatcher drives (AXIOMNG_PROCESSOR_RUNNER_NAME, e.g. "carrier-gpu0").
+	// It lands in the phases log line and in ingest_jobs.processor_name at
+	// claim time — the TC2 scale proof needs "which runner ran which book"
+	// answerable from SQL. Empty defaults to the ProcessorURL host.
+	ProcessorRunnerName string
+
 	// DispatcherEnabled gates the claim/process dispatcher loop. It never runs
 	// unless explicitly turned on; tests construct the dispatcher directly.
 	DispatcherEnabled bool
@@ -95,6 +102,7 @@ func Load() Config {
 		ProcessorSourceBaseURL:  env("AXIOMNG_PROCESSOR_SOURCE_BASE_URL", ""),
 		ProcessorURL:            env("AXIOMNG_PROCESSOR_URL", "http://localhost:8012"),
 		ProcessorRequestTimeout: envDur("AXIOMNG_PROCESSOR_TIMEOUT", 300*time.Second),
+		ProcessorRunnerName:     env("AXIOMNG_PROCESSOR_RUNNER_NAME", ""),
 		DispatcherEnabled:       envBool("AXIOMNG_DISPATCHER_ENABLED"),
 		DispatcherWorkerID:      env("AXIOMNG_DISPATCHER_WORKER_ID", "axiom-ng"),
 		DispatcherConcurrency:   envInt("AXIOMNG_DISPATCHER_CONCURRENCY", 1),

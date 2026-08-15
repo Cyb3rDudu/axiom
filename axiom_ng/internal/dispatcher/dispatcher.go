@@ -22,6 +22,11 @@ type Config struct {
 	// WorkerID is the stable identity this process uses for claims. Empty
 	// defaults to a stable host-process-scoped id.
 	WorkerID string
+	// RunnerName is the human identity of the processor this dispatcher
+	// drives (#122): goes into the phases log line (runner=...) and into
+	// ingest_jobs.processor_name at claim time. Empty falls back to the
+	// processor URL host (wired in main).
+	RunnerName string
 	// Concurrency is the number of parallel claim/process worker slots, bounded
 	// by the processor's declared MaxConcurrentJobs.
 	Concurrency int
@@ -183,6 +188,7 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 		}
 		claimed, err := d.rep.ClaimNextJob(ctx, repo.ClaimOptions{
 			WorkerID:      d.cfg.WorkerID,
+			RunnerName:    d.cfg.RunnerName,
 			LeaseDuration: d.cfg.LeaseDuration,
 			Profile:       d.cfg.Profile,
 		})

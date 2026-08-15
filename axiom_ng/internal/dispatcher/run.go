@@ -106,12 +106,17 @@ func (ph *jobPhases) line() string {
 
 // logPhases emits the phases-so-far line with a terminal/retry note; no-op on
 // nil (W6: failed and error paths log too — the next anomaly must be readable
-// from the dispatcher log alone, not just the happy path).
+// from the dispatcher log alone, not just the happy path). The runner=
+// prefix (#122) makes the line assignable in 3-runner parallel operation.
 func (d *Dispatcher) logPhases(ph *jobPhases, note string) {
 	if ph == nil {
 		return
 	}
-	d.logger.Printf("phases[%s]: %s", note, ph.line())
+	runner := d.cfg.RunnerName
+	if runner == "" {
+		runner = "-"
+	}
+	d.logger.Printf("phases[%s]: runner=%s %s", note, runner, ph.line())
 }
 
 // pollAndFinish drives a job from 'processing' to a terminal state: polls the
