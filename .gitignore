@@ -18,6 +18,7 @@ docker-logs.txt
 
 # Tools
 .pi/
+.claude/
 .idea/
 .vscode/
 .DS_Store
