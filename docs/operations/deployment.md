@@ -292,5 +292,26 @@ the runner unambiguously.
   ~2.8 GB — fits a 12 GB card, leaves room on 24 GB cards for a second pinned
   runner per card.
 
+## Operating rules — and why
+
+Every deployment rule above is a requirement. This table restates each with its
+**reason** in one line, so an operator on an unfamiliar machine can decide when
+(and why not) to relax it.
+
+| Rule | Why (one line) |
+| --- | --- |
+| Use `--network=host` (no port mapping) | The rootless container's userspace port forward collapses MB-scale bulk flows to a crawl; host networking gives result/artifact transfers real LAN throughput. |
+| Direct LAN reachability for both directions | Result JSON and artifact bodies are MB-sized; routing them through a tunnel collapses throughput, so each side must reach the other's LAN address directly. |
+| `RUN touch /.dockerenv` in the image | Container-detection must positively identify the container; otherwise the config overwrites `CUDA_VISIBLE_DEVICES` and every runner stacks on one GPU. |
+| Set `DEVICE_GLINER=cuda`/`mps` explicitly | The entity extractor defaults to CPU (unique among the models), so leaving it unset silently costs ~hours per book instead of minutes on the accelerator. |
+| Pin 1 concurrent job per GPU | Marker + models are VRAM-heavy; parallel jobs on one card contend for VRAM and make results unpredictable. |
+| Pin Runner to one GPU with `CUDA_VISIBLE_DEVICES=<n>` | With multiple runners you must know which physical card each addresses; pinning makes `cuda:0` map to the intended card and keeps attribution clean. |
+| ACL `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` or leave it unset with `source_url` | The runner must not read arbitrary host paths; limiting the roots (or using signed URLs) makes local delivery impossible by construction. |
+| Bind `0.0.0.0` only on trusted/LAN hosts | The runner has no authentication by design (loopback or trusted network only per contract §18); exposing it wider is unsafe. |
+| Prefer MPS only when external GPUs are out of reach | MPS is a complete, supported alternative but ~10× slower than an external GPU — fine for occasional runs, not for mass processing. |
+
+> **Sizing guidance:** for hardware pick-up, see the measured orders of
+> magnitude in [Troubleshooting → sizing/performance](troubleshooting.md).
+
 Continue: [Monitoring](monitoring.md) · [Troubleshooting](troubleshooting.md) ·
 [PROCESSOR_CONTRACT v1](../developer-guide/processor-contract.md)
