@@ -26,7 +26,7 @@ theme:
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
-  logo: assets/icon_dark.png
+  logo: assets/icon_original.png
   favicon: assets/icon_original.png
   language: de
   features:
@@ -38,6 +38,7 @@ theme:
     - search.share
     - content.code.copy
     - content.tabs.link
+    - content.action.edit
 
 plugins:
   - search
@@ -57,7 +58,6 @@ markdown_extensions:
   - pymdownx.superfences
   - pymdownx.highlight
   - pymdownx.inlinehilite
-  - pymdownx.snippets
   - pymdownx.tasklist:
       custom_checkbox: true
   - toc:

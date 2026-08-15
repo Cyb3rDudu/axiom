@@ -35,7 +35,7 @@ allein axiom-ng besitzt durable Zustand.**
 2. **Python-Compute (`axiom_ng_runner`)** — ein Loopback-HTTP-Prozessor nach
    `PROCESSOR_CONTRACT` v1, mit vendor-ed `compute_core` (Marker-Konvertierung,
    Editor-Kern, BGE-M3-Embedder, GLiNER/mREBEL-Extraktoren). Er besitzt nur
-   Berechnung und temporäre Job-Ausgabe, nie durable Anwendungserwartung.
+   Berechnung und temporäre Job-Ausgabe, nie durable Anwendungszustand.
    [Weiter: axiom_ng_runner](axiom-ng-runner.md)
 3. **Transport-Regel (Contract v1)** — Dispatcher und Runner tauschen nur den
    HTTP-Vertrag aus (`PROCESSOR_CONTRACT`). Bulk-Flows (Ergebnis-JSON,
@@ -47,14 +47,14 @@ allein axiom-ng besitzt durable Zustand.**
 Der Runner ist **pure Compute** — niemals toucht er Zotero, Postgres,
 OpenSearch oder den Graph. Nur der Vertrag überquert die Leitung. Der Dispatcher
 verhandelt beim Start die Capabilities und schlägt fehl, wenn der Runner
-unerreichbar oder vertragsin kompatibel ist. Bullk-Daten laufen direkt übers LAN,
+unerreichbar oder vertragsinkompatibel ist. Bulk-Daten laufen direkt übers LAN,
 ein Tunnel taugt nur für die Kontrollebene (dritte Maskierungs-Ebene eines
 historischen Transportproblems).
 
 ## Invarianten (aus der aufgelösten Work-Order)
 
 - Nur der aktuelle Lease-Besitzer darf einen aktiven Job mutieren.
-- Jede Job-Mutation nach dem Claim ist über die Lease-Token gefeucht.
+- Jede Job-Mutation nach dem Claim ist über die Lease-Token gefenced.
 - Ein stale Worker kann eine reclaimten Job weder komplettieren noch failen.
 - Keine DB-Transaktion bleibt während CPU-/Modell-Ausführung offen (Go hält nie
   eine Transaktion, während es auf Python wartet).

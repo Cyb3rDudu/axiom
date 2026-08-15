@@ -74,7 +74,7 @@ Bild-/Tabellen-Extraktion, temporäre Dateien bis zur Acknowledgement.
   Seitenindizes + logische Seitentitel als Strings; für EPUB CFI-Lokator, niemals
   erfundene Seitenzahlen.
 - **Validierung vor Persistenz (§14):** Quell-Identität + Hash, eindeutige
-  zusammenhängende Chunk-Indizes, eindeutige lokale Refes, alle Referenzen,
+  zusammenhängende Chunk-Indizes, eindeutige lokale Refs, alle Referenzen,
   Dense-Vektor-Dimensionen/-Werte, Sparse-Key/Value-Typen, Pflicht-Locators,
   Evidence-Referenzen auf extrahierte Relationship, Results-Counts gegen die
   tatsächlichen Arrays.

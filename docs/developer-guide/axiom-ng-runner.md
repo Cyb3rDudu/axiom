@@ -83,7 +83,7 @@ damit sie nicht verloren gehen:
 - **Subprozess-Cancellation im real-Backend ist funktionslos.** `_real_pipeline`
   startet Marker/pdf_worker über einen blockierenden `subprocess.run` und
   registriert den Prozess-Handle nicht in `_running`; der Terminate-Zweig des
-  Cancel-Endpunkts ist für real-Jobs toter Code (Contract §17/§9.2). Fix: den
+  Cancel-Endpunkts ist für real-Jobs toter Code (Contract §17). Fix: den
   `Popen`-Handle in `_running[job_id]["process"]` halten, damit `job_cancel`
   `terminate()` aufrufen kann, und den Subprozess kooperativ machen (Cancel-Poll).
 - **Das real-Backend hat GLiNER/mREBEL-Extraktoren nicht angebunden.**
@@ -92,7 +92,7 @@ damit sie nicht verloren gehen:
 - **`prune_expired` wird nie eingeplant**, daher ist `result_retention_seconds`
   aktuell wirkungslos und ACKed-Job-Tombstones akkumulieren. Periodischen Sweep
   ergänzen.
-- **Kein Request-Queue-Cap** (§9.2): Jeder akzeptierte POST startet einen
+- **Kein Request-Queue-Cap**: Jeder akzeptierte POST startet einen
   unbegrenzten Daemon-Thread; das Semaphor begrenzt nur die Konkurrenz, nicht die
   Queue-Länge.
 

@@ -1,7 +1,7 @@
 # axiom_ng (Go)
 
 `axiom_ng` ist der Go-Orchestrator des Systems. Er besitzt alle durable
-Anwendungserwartung: Zotero-Synchronisation, Ingest-Jobs, Leases, Retries,
+Anwendungszustand: Zotero-Synchronisation, Ingest-Jobs, Leases, Retries,
 Cancellation, persistente IDs, versionierte Verarbeitungs-Snapshots, die
 durable abgeleitete Artefakte, Chunks/Embeddings/Entities/Beziehungen, die
 PostgreSQL/pgvector- und Knowledge-Graph-Schreibpfade sowie die
@@ -23,7 +23,7 @@ Der Python-Runner rechnet; `axiom_ng` orchestriert, validiert und persistiert.
 - **Persistenz** — atomare, als eine Transaktion committete Snapshots; die
   einzige Wahrheit für Verarbeitungsresultate.
 - **Fencing** (Claim-Exklusivität) — jeder Post-Claim-Job-Schreibvorgang ist über
-  `job_id + worker_id + lease_token` gefeucht: Nur der aktuelle Lease-Besitzer
+  `job_id + worker_id + lease_token` gefenced: Nur der aktuelle Lease-Besitzer
   darf einen aktiven Job mutieren. Ein stale Worker kann einen reclaimten Job
   weder komplettieren noch failen.
 - **Outbox** — OpenSearch-Indexierung ist outbox-getrieben: Im selben
@@ -54,7 +54,7 @@ der Datenbank-Zeit, Input-Snapshot + Profil + Idempotency-Key frieren.
 
 **Renewal:** deutlich vor Ablauf (z. B. jedes Drittel der Lease-Dauer),
 Datenbank-Zeit statt lokaler Wall-Clock, weiter während Status-Poll/Artifakt-
-Download/Validierung/Persistenz, stoppen nach einem terminalen gefeuchten
+Download/Validierung/Persistenz, stoppen nach einem terminalen gefenceden
 DB-Übergang. Wiederholter Renewal-Fehler bricht die lokale Dispatch-Arbeit ab.
 
 **Fencing-Prädikat für jeden Post-Claim-Update:**
@@ -88,7 +88,7 @@ Ersetzung. Die Persistenz-Transaktion:
 2. Zeilen-Zahlen und Referenzen verifizieren.
 3. Neuen Snapshot aktiv, den vorigen inaktiv markieren.
 4. OpenSearch-Outbox-Arbeit einfügen.
-5. Ingest-Job gefeucht als `completed` markieren.
+5. Ingest-Job gefenced als `completed` markieren.
 6. Einmal committen.
 
 Schlägt ein Schritt fehl, wird alles zurückgerollt; der vorige aktive Snapshot

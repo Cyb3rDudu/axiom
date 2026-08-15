@@ -62,7 +62,8 @@ Bau-Checks (aus der Betriebserfahrung abgeleitet, als Anforderungen formuliert):
 3. **Versionen identisch zu der Referenz-Venv pinnen** (siehe
    `axiom_ng_runner/requirements-heavy.txt`), allen voran
    `marker-pdf==1.10.2`. Divergente Versionen erzeugen divergente Ergebnisse.
-4. **`RUN touch /.dockerenv`** — siehe Falle 1 im Troubleshooting-Abschnitt.
+4. **`RUN touch /.dockerenv`** — siehe Falle 10 in der
+   [L8-Durchstichs-Analyse](../references/benchmarks/l8-durchstich.md).
 
 ```dockerfile
 FROM python:3.11-slim
@@ -202,7 +203,7 @@ export AXIOM_PROCESSOR_URL=http://<runner-host>:<port>   # direktes LAN — s. T
 ```
 
 Der Dispatcher verhandelt beim Start die Capabilities gegen den Remote-Runner
-und schlägt fehl, wenn er nicht erreichbar oder vertragsin kompatibel ist. Vor
+und schlägt fehl, wenn er nicht erreichbar oder vertragsinkompatibel ist. Vor
 Massenbetrieb einen Test mit einem kleinen Dokument fahren.
 
 ### Quell-Lieferung über `source_url` (ohne gemeinsames Zotero-Mount)
@@ -228,14 +229,14 @@ export AXIOM_PROCESSOR_TIMEOUT=180s
 #   AXIOM_PROCESSOR_SOURCE_TIMEOUT — RUNNER-seitiges Quell-Download-Budget (Default 120s)
 ```
 
-Runner-Seitig `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` ungesetzt oder auf einen
+Runner-seitig `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` ungesetzt oder auf einen
 nicht existenten Pfad lassen — dann ist lokale Zustellung konstruktiv unmöglich
 und jede Quelle kommt über die signierte URL. Die URL verfällt mit der Arbeit des
 Jobs; heruntergeladene Bytes laufen durch denselben Hash-Gate wie lokale Dateien
 und sterben mit dem ACK (Contract §18/§19-13).
 
 > Ältere Experimente mit rsync-Brücke oder sshfs-Mount sind durch diesen Mechanismus
-> abgelöst — keine Zotero-Kopien auf dem GPU-Host anlegen (Contract §4.15).
+> abgelöst — keine Zotero-Kopien auf dem GPU-Host anlegen (Contract §15 / §19 test 12).
 
 ## 6. Runner-Identität + GPU-Sampler-Labels
 

@@ -5,10 +5,9 @@ Wissenssystem.
 
 ## Logo
 
-Das Site-Logo ist das **Original-Axiom-Logo** aus der axiom-Ursprungsära,
-weitergeführt für das Branding. Es erscheint als helles Logo
-(`docs/assets/icon_dark.png`) und als Favicon
-(`docs/assets/icon_original.png`).
+Das Site-Branding nutzt das **Original-Axiom-Logo** aus der axiom-Ursprungsära
+als einzelne Quelldatei (`docs/assets/icon_original.png`) — dieselbe Datei
+dient als Header-Logo und als Favicon.
 
 ## Lizenz
 

@@ -1,6 +1,6 @@
 # axiom
 
-> 📚 **Dokumentation & Site:** [github.com/Cyb3rDudu/axiom](https://cyb3rdudu.github.io/axiom/) — Willkommen, Guides, Referenzen.
+> 📚 **Dokumentation & Site:** [cyb3rdudu.github.io/axiom](https://cyb3rdudu.github.io/axiom/) — Willkommen, Guides, Referenzen.
 
 Zotero-gestütztes Wissenssystem: **axiom-ng** (Go-Orchestrierung + Python-Compute-Runner)
 und die RAG-Datenpipeline (Marker → Chunks → BGE-M3-Embeddings → GLiNER/mREBEL →
