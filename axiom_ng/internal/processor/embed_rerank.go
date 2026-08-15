@@ -1,0 +1,84 @@
+package processor
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+// Query-side runner endpoints (contract §7a, epic #130 R1 #131 / R2 #132).
+// These reuse the same Client/transport/per-call budgets as the ingest
+// routes; the runner serves them from warm singletons, so warm latency is
+// tens of milliseconds while a COLD first call pays the model load (tens of
+// seconds) — the budgets below cover cold loads so the first search after a
+// runner restart succeeds instead of degrading.
+
+const (
+	budgetEmbed  = 45 * time.Second // cold BGE-M3 load ~30s, warm ~50ms
+	budgetRerank = 45 * time.Second // cold reranker load ~15s, warm 20 pairs ~6s (MPS)
+)
+
+// EmbedRequest is POST /v1/embed (contract §7a).
+type EmbedRequest struct {
+	ContractVersion string   `json:"contract_version"`
+	Texts           []string `json:"texts"`
+}
+
+// EmbedResponse is POST /v1/embed (contract §7a).
+type EmbedResponse struct {
+	ContractVersion string      `json:"contract_version"`
+	Model           string      `json:"model"`
+	Dimensions      int         `json:"dimensions"`
+	Embeddings      [][]float32 `json:"embeddings"`
+}
+
+// RerankRequest is POST /v1/rerank (contract §7a).
+type RerankRequest struct {
+	ContractVersion string   `json:"contract_version"`
+	Query           string   `json:"query"`
+	Texts           []string `json:"texts"`
+	TopN            int      `json:"top_n"`
+}
+
+// RerankScore is one entry of the rerank response scores.
+type RerankScore struct {
+	Index int     `json:"index"`
+	Score float64 `json:"score"`
+}
+
+// RerankResponse is POST /v1/rerank (contract §7a).
+type RerankResponse struct {
+	ContractVersion string        `json:"contract_version"`
+	Model           string        `json:"model"`
+	Scores          []RerankScore `json:"scores"`
+}
+
+// EmbedQueries returns dense query embeddings for texts (runner warm path).
+func (c *Client) EmbedQueries(ctx context.Context, texts []string) ([][]float32, error) {
+	var out EmbedResponse
+	if err := c.do(ctx, budgetEmbed, http.MethodPost, "/v1/embed", &EmbedRequest{
+		ContractVersion: ContractVersion,
+		Texts:           texts,
+	}, &out); err != nil {
+		return nil, fmt.Errorf("embed: %w", err)
+	}
+	if len(out.Embeddings) != len(texts) {
+		return nil, fmt.Errorf("embed: got %d embeddings for %d texts", len(out.Embeddings), len(texts))
+	}
+	return out.Embeddings, nil
+}
+
+// Rerank returns cross-encoder scores for (query, texts) pairs, descending.
+func (c *Client) Rerank(ctx context.Context, query string, texts []string, topN int) ([]RerankScore, error) {
+	var out RerankResponse
+	if err := c.do(ctx, budgetRerank, http.MethodPost, "/v1/rerank", &RerankRequest{
+		ContractVersion: ContractVersion,
+		Query:           query,
+		Texts:           texts,
+		TopN:            topN,
+	}, &out); err != nil {
+		return nil, fmt.Errorf("rerank: %w", err)
+	}
+	return out.Scores, nil
+}

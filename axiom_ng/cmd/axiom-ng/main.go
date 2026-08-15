@@ -19,6 +19,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/dispatcher"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
@@ -72,6 +73,19 @@ func main() {
 		// dispatcher sign). Empty secret disables the endpoint (404 on all).
 		srv.SetProcessorSourceSecret(cfg.ProcessorSourceSecret)
 		srv.SetProcessorSourceRepo(rep)
+
+		// R3 (#133): retrieval API. Hybrid recall + rerank orchestration over
+		// the runner's query endpoints (R1/R2) and the OS index; the processor
+		// client is built here because search needs it even when the ingest
+		// dispatcher is disabled.
+		searchPClient, sperr := processor.New(processor.Options{
+			BaseURL:       cfg.ProcessorURL,
+			ResultTimeout: cfg.ProcessorRequestTimeout,
+		})
+		if sperr != nil {
+			logger.Fatalf("processor client (search): %v", sperr)
+		}
+		srv.SetSearchService(search.New(cfg.OpenSearchURL, cfg.OpenSearchUsername, cfg.OpenSearchPassword, searchPClient, rep, logger))
 
 		// The dispatcher is opt-in and runs only when explicitly enabled. It
 		// claims jobs, drives them through the processor and back to a terminal

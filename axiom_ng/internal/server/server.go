@@ -19,11 +19,12 @@ type Checker interface {
 
 // Server is the axiom-ng HTTP API.
 type Server struct {
-	addr     string
-	checkers map[string]Checker
-	jobsSvc  SyncService
-	repo     JobRepo
-	log      *log.Logger
+	addr      string
+	checkers  map[string]Checker
+	jobsSvc   SyncService
+	repo      JobRepo
+	log       *log.Logger
+	searchSvc SearchService
 	// sourceSecret enables /api/processor/source when non-empty (HMAC,
 	// shared with the dispatcher). sourceRepo is the job lookup for it.
 	sourceSecret string
@@ -48,6 +49,7 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/api/health", s.handleHealth)
 	r.Post("/api/zotero/sync", s.handleSync)
 	r.Get("/api/ingest/jobs", s.handleJobs)
+	r.Post("/api/search", s.handleSearch)
 	// Disabled (404 on everything) until SetProcessorSourceSecret wires it.
 	r.Get("/api/processor/source/{jobID}", s.handleProcessorSource)
 
