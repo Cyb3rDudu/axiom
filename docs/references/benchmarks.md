@@ -1,28 +1,28 @@
-# Benchmarks & Analysen
+# Benchmarks & Analyses
 
-Historische, datierte Messberichte über die Verarbeitungspipeline. Sie
-dokumentieren Systemverhalten zu einem bestimmten Zeitpunkt — **keine**
-anhaltende Doku des aktuellen Zustands. Kennzahlen sind reale Messungen aus den
-jeweiligen Läufen und bleiben als solche gültig.
+Historical, dated measurement reports about the processing pipeline. They
+document system behavior at a point in time — **not** ongoing documentation of
+the current state. The figures are real measurements from the respective runs,
+and they remain valid as measurements.
 
-> **Rahmung:** Jeder Messbericht nennt Datum, Setup und Datenbasis. Konkrete
-> Maschinen-/Netz-Details sind auf Rollen (z. B. „GPU-Host") und Platzhalter
-> reduziert; die technischen Lehren (Transport, Fencing, GPU-Pinning) sind als
-> Betriebsregeln verallgemeinert in [Operations → Deployment](../operations/deployment.md)
-> und [Developer Guide](../developer-guide/architecture.md) dokumentiert.
+> **Framing:** Every measurement report states its date, setup, and data basis.
+> Concrete machine/network details are reduced to roles (e.g. "GPU host") and
+> placeholders; the technical lessons (transport, fencing, GPU pinning) are
+> generalized as operating rules in [Operations → Deployment](../operations/deployment.md)
+> and the [Developer Guide](../developer-guide/architecture.md).
 
-## Messberichte
+## Reports
 
-| Bericht | Datum | Kernaussage |
+| Report | Date | Key takeaway |
 | --- | --- | --- |
-| [L8-Durchstichs-Analyse](benchmarks/l8-durchstich.md) | 2026-08-15 | Horizontaler Durchstich (16/16 Bücher auf 3 GPUs, 1,71× Durchsatz), Quality-Gate-GO, Zwölf-Fallen-Täterkette |
-| [TC2: 3-Runner-Parallel-Test & Determinismus](benchmarks/tc2-parallel.md) | 2026-08-15 | Work-conserving Verteilung, Single-Snapshot-Exklusivität, Determinismus um Marker herum |
-| [Mass-Chunking-Benchmark](benchmarks/mass-chunking.md) | 2026-08-14 | 16/16 vollständig, 0 Fehler, Durchsatz/Kalt-Warm, Profil-Befund |
-| [Chunk-Qualitätsbewertung (Quality Gate)](benchmarks/chunk-quality.md) | 2026-08-15 | Chunk-/Locator-/Entity-/Relation-Qualität, kNN-Suchtest, GO für TC2 |
+| [L8 Throughput Analysis](benchmarks/l8-durchstich.md) | 2026-08-15 | Horizontal throughput (16/16 books on 3 GPUs, 1.71× throughput), quality-gate GO, twelve-trap offender chain |
+| [TC2: 3-Runner Parallel Test & Determinism](benchmarks/tc2-parallel.md) | 2026-08-15 | Work-conserving distribution, single-snapshot exclusivity, determinism around Marker |
+| [Mass Chunking](benchmarks/mass-chunking.md) | 2026-08-14 | 16/16 complete, 0 failures, throughput/cold-warm, profile finding |
+| [Chunk Quality (Quality Gate)](benchmarks/chunk-quality.md) | 2026-08-15 | Chunk/locator/entity/relation quality, kNN search test, GO for TC2 |
 
-Die **kanonischen Originale** liegen unter `axiom_ng/docs/`; diese Seiten sind die
-für die Site aufbereitete Sicht.
+The **canonical originals** live in `axiom_ng/docs/benchmarks/`; these pages are
+the site-facing view.
 
-## Verwandt
+## Related
 
-- [Datenmodell](data-model.md) · [FAQ](faq.md) · [Willkommen](../index.md)
+- [Data Model](data-model.md) · [FAQ](faq.md) · [Welcome](../index.md)

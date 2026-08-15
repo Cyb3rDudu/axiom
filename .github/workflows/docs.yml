@@ -1,4 +1,4 @@
-# Build and deploy the axiom-ng documentation site to GitHub Pages.
+# Build and deploy the axiom documentation site to GitHub Pages.
 # Trigger: docs(...) commits (paths) on main. Uses the standard Pages actions.
 #
 # Repo prerequisites (dudu): GitHub Settings → Pages → Build and deployment →
@@ -49,6 +49,23 @@ jobs:
         run: |
           if grep -rniE '192\.168\.|mothership|\/Users\/|100\.(6[4-9]|7[0-9]|8[0-9]|9[0-9]|1[0-2][0-7])\.' docs/ | grep -v '_inventory.md'; then
             echo "private infra found in published docs"
+            exit 1
+          fi
+
+      - name: Naming gate (product name 'axiom', not 'axiom-ng')
+        # Product name is 'axiom'. Allowed occurrences:
+        # 1) the single historical note in About ("was known as *axiom-ng*") —
+        #    exempted at phrase level, not whole-file;
+        # 2) go run/go build command lines referencing the module path
+        #    `axiom_ng/cmd/axiom-ng` (code paths are technical facts).
+        # mkdocs.yml is checked as well, so a `site_name: axiom-ng`
+        # regression fails CI. docs/_inventory.md is internal meta and exempt.
+        run: |
+          if { grep -ri 'axiom-ng' docs/ --include='*.md'; grep -i 'axiom-ng' mkdocs.yml; } \
+            | grep -v '_inventory.md' \
+            | grep -vF 'was known as *axiom-ng*' \
+            | grep -vE ':[[:space:]]*(go run|go build) .*axiom_ng/cmd/axiom-ng'; then
+            echo "legacy product name 'axiom-ng' found in site content"
             exit 1
           fi
 

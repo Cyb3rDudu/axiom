@@ -1,146 +1,149 @@
-# Chunk-Qualitätsbewertung (Quality Gate vor TC2)
+# Chunk Quality Assessment (quality gate before TC2)
 
-**Berichtstyp:** Messbericht (datiert) · **Datum:** 2026-08-15 · **Datenbasis:**
-DB nach L8 Test Case 1 (16/16 completed) · **Scope:** 4.810 Chunks, 4.810
-Dense-Embeddings (1024-dim), 26.353 Entities, 55.537 Mentions, 10.382
-Relationships, OpenSearch-Index. Original:
-`axiom_ng/docs/CHUNK_QUALITY_ASSESSMENT.md`.
+**Report type:** Measurement report (dated) · **Date:** 2026-08-15 · **Data
+basis:** DB after L8 test case 1 (16/16 completed) · **Scope:** 4,810 chunks,
+4,810 dense embeddings (1024-dim), 26,353 entities, 55,537 mentions, 10,382
+relationships, OpenSearch index. Original:
+`axiom_ng/docs/benchmarks/CHUNK_QUALITY_ASSESSMENT.md`.
 
-> **Charakter:** bewertend, read-only — Pipeline und Daten unverändert gelassen.
-> Dieser Bericht dokumentiert den **Systemzustand zum 2026-08-15**.
+> **Character:** evaluative, read-only — pipeline and data left unchanged. This
+> report documents the **system state as of 2026-08-15**.
 
-## Teil 1 — Quantitative Verteilungen
+## Part 1 — Quantitative distributions
 
-### Chunk-Größen (token_count)
+### Chunk sizes (token_count)
 
-| Kennzahl | Wert |
+| Metric | Value |
 | --- | --- |
-| Chunks | 4.810 |
-| Min / P25 / Median / P75 / Max | 1 / 175 / **382** / 730 / 1.199 |
-| Mittel | 472,3 |
-| Mikro-Chunks < 50 Tokens | 445 (9,2 %) |
-| Monster-Chunks > 1.500 Tokens | **0** |
+| Chunks | 4,810 |
+| Min / P25 / Median / P75 / Max | 1 / 175 / **382** / 730 / 1,199 |
+| Mean | 472.3 |
+| Micro-chunks < 50 tokens | 445 (9.2%) |
+| Monster-chunks > 1,500 tokens | **0** |
 
-Mikro-Chunk-Autopsie (12 von 445): ausschließlich **Überschriften-Anker** —
-Marker emittiert Headings als eigene Blöcke, der Chunker behält sie (z. B.
-`#### **1 Rolle von Softwaresystemen…**`, 10 Tokens). Sie sind strukturell
-korrekt (section_titles konsistent), aber für Retrieval wertarm — ein reiner
-Heading beantwortet keine Frage.
+Micro-chunk autopsy (12 of 445): exclusively **heading anchors** — Marker emits
+headings as own blocks, the chunker keeps them (e.g.
+`#### **1 Rolle von Softwaresystemen…**`, 10 tokens). They are structurally
+correct (consistent section_titles) but retrieval-low-value — a bare heading
+answers no question.
 
-### Chunk-Dichte pro Buch
+### Chunk density per book
 
-Spanne **0,50–1,38 Chunks/Seite** — kein pathologisches Over-/Under-Chunking;
-die Streuung erklärt sich aus Satzdichte und Abbildungsanteil der Bücher.
+Range **0.50–1.38 chunks/page** — no pathological over-/under-chunking; the
+spread is explained by sentence density and figure share of the books.
 
-### Locator-Vollständigkeit
+### Locator completeness
 
-| Art | Anzahl | Vollständig |
+| Type | Count | Complete |
 | --- | --- | --- |
-| PDF page_span (physical + label) | 4.524 | **100 %** |
-| EPUB cfi_start/cfi_end | 286 | **100 %** |
-| Gesamt | 4.810 | **100 %** |
+| PDF page_span (physical + label) | 4,524 | **100%** |
+| EPUB cfi_start/cfi_end | 286 | **100%** |
+| Total | 4,810 | **100%** |
 
-### Entity-Qualität
+### Entity quality
 
-Confidence-Histogramm der 55.537 Mentions (GLiNER-Schwelle ≥ 0,5):
+Confidence histogram of the 55,537 mentions (GLiNER threshold ≥ 0.5):
 
-| Bucket | 0,5 | 0,6 | 0,7 | 0,8 | 0,9 | 1,0 |
+| Bucket | 0.5 | 0.6 | 0.7 | 0.8 | 0.9 | 1.0 |
 | --- | --- | --- | --- | --- | --- | --- |
-| Mentions | 5.313 | 9.666 | 11.980 | 9.135 | 10.494 | 8.949 |
+| Mentions | 5,313 | 9,666 | 11,980 | 9,135 | 10,494 | 8,949 |
 
-Top-Entities (Auszug): `unternehmen` (ORG, 1.686), `nachhaltigkeit` (CONCEPT,
-1.164), `esg` (697), `deutschland` (LOC, 407), `csr` (333), `sap` (172),
-`symrise` (132), `gri` (127), `vaude` (108) — **korrektes Domänen-Vokabular**
-einer CSR/ESG-Bibliothek, kein Monopol-Müll. Leichtes Rauschen durch generische
-Nomen als Entities (`companies` ORG ×141, `world` LOC ×108).
+Top entities (excerpt): `unternehmen` (ORG, 1,686), `nachhaltigkeit` (CONCEPT,
+1,164), `esg` (697), `deutschland` (LOC, 407), `csr` (333), `sap` (172),
+`symrise` (132), `gri` (127), `vaude` (108) — **correct domain vocabulary** of a
+CSR/ESG library, no monopoly garbage. Some noise from generic nouns as entities
+(`companies` ORG ×141, `world` LOC ×108).
 
-Mentions pro Entity: Ø 2,12 · One-Hit 71,6 % (18.792) · stabil ≥3 Mentions 3.749.
-Der One-Hit-Anteil ist für offenes NER über Fachbücher normal; der stabile Kern
-(14 %) trägt den Graphen.
+Mentions per entity: avg 2.12 · one-hit 71.6% (18,792) · stable ≥3 mentions
+3,749. The one-hit share is normal for open NER over specialized books; the
+stable core (14%) carries the graph.
 
-### Relationship-Qualität
+### Relationship quality
 
-10.382 Relationen, **100 % mit Evidence-Chunk(s)**, 168 mREBEL-Typen. Top:
-`subclass_of` 2.548 · `part_of` 1.173 · `instance_of` 921 · `facet_of` 915 ·
-`country` 409 · `author` 253 · Long Tail bis `taxon_rank` ×1 (Wikipedia-Schema-
-Blutung aus dem mREBEL-Training).
+10,382 relations, **100% with evidence chunk(s)**, 168 mREBEL types. Top:
+`subclass_of` 2,548 · `part_of` 1,173 · `instance_of` 921 · `facet_of` 915 ·
+`country` 409 · `author` 253 · long tail to `taxon_rank` ×1 (Wikipedia-schema
+leak from mREBEL training).
 
-Kanten mit **beiden** Enden >1 Mention: 3.183 / 10.236 bewertbaren = **31,1 %**.
-`strength` ist über alle Zeilen konstant 0,7 — mREBEL liefert keine Konfidenz,
-wir persistieren einen Default → derzeit **keine Diskriminierung** über strength.
+Edges with **both** ends >1 mention: 3,183 / 10,236 assessable = **31.1%**.
+`strength` is constant at 0.7 across all rows — mREBEL yields no confidence, we
+persist a default → currently **no discrimination** over strength.
 
-## Teil 2 — Inhalts-Stichproben
+## Part 2 — Content spot checks
 
-3 Bücher (DE/EN/EPUB), je 3 zufällige Chunks inspiziert: Texte inhaltlich
-abgeschlossen (kein mittendrin abgehackter Satz in 9/9), section_titles-Hierarchie
-konsistent. EPUB-Chunks tragen saubere CFIs, PDF-Chunks page_span mit
-römischen/arabischen Labels. Kuriosum ohne Folgen: ein 1.197-Token-Chunk ist ein
-Literaturverzeichnis-Fließtext (Locator/Section stimmen).
+3 books (DE/EN/EPUB), 3 random chunks each inspected: texts substantively
+complete (no mid-sentence cut in 9/9), section_titles hierarchy consistent. EPUB
+chunks carry clean CFIs, PDF chunks page_span with roman/arabic labels.
+Harmless curiosity: a 1,197-token chunk is a bibliography running text (locator
+and section are correct).
 
-### Locator-Gegenprobe gegen Original-PDF (pymupdf)
+### Locator counter-check against the original PDF (pymupdf)
 
-3/3 **seiten-exakt** (physical_page_start = 0-basierter pymupdf-Index), keine
-Abweichung, auch nicht ±1. Zwei Schein-Misserfolge der ersten Suchrunde waren
-Zeilenumbrüche/Kommaposition in der Nadel, nicht Locator-Fehler.
+3/3 **page-exact** (physical_page_start = 0-based pymupdf index), no deviation,
+not even ±1. Two apparent misses in the first search pass were line breaks/
+comma position in the needle, not locator errors.
 
-### Entity-Stichprobe
+### Entity spot check
 
-Top-5 sämtlich plausibel getypt. Zufalls-5: `familienunternehmen` ORG ✓, `esg`
-CONCEPT ✓, `otto` PERSON ✓ (Zitaturkontext), `ozone depletion potential` CONCEPT ✓,
-`kennzahlen` CONCEPT ✓. **0 Fehlklassifikationen vom Typ „Tabelle 3 als PERSON".**
+Top-5 all plausibly typed. Random-5: `familienunternehmen` ORG ✓, `esg` CONCEPT
+✓, `otto` PERSON ✓ (citation context), `ozone depletion potential` CONCEPT ✓,
+`kennzahlen` CONCEPT ✓. **0 misclassifications of the "Table 3 as PERSON" type**
+in the sample.
 
-### Relationship-Stichprobe (5 zufällige, Evidence gelesen)
+### Relationship spot check (5 random, evidence read)
 
 - `grundbedürfnislohn ⊂ lohn`, `polyester ⊂ textiles`, `datenmanagement ⊂
-  informationsverarbeitung` — plausibel ✓
-- `human cloning ⊂ embryonic stem cell` (beide METHOD), `environmental ⊂ social`
-  (Geschwister) — Rauschen ✗
+  informationsverarbeitung` — plausible ✓
+- `human cloning ⊂ embryonic stem cell` (both METHOD), `environmental ⊂ social`
+  (siblings) — noise ✗
 
-**3/5 plausibel, 2/5 semantisch schief** — konsistent mit den 31 % stabilen
-Kanten: Der Roh-Graph ist ein Kandidatenraum, kein fertiges Wissen.
+**3/5 plausible, 2/5 semantically off** — consistent with the 31% stable edges:
+the raw graph is a candidate space, not finished knowledge.
 
-## Teil 3 — OpenSearch
+## Part 3 — OpenSearch
 
-- **Index-Integrität:** Mapping `embedding: knn_vector(1024)` ✓, Doc-Count 4.810 ==
-  Chunks ✓. Spot-Check 3 zufällige Docs: text-md5 **byteweise identisch** zur DB,
-  token_count exakt, embedding vorhanden, locator korrekt serialisiert.
-- **Sparse-Embeddings** liegen nur in Postgres, **nicht** im Index — Hybrid-
-  Retrieval braucht später ein zweites Indexfeld (kein Gate-Blocker).
+- **Index integrity:** mapping `embedding: knn_vector(1024)` ✓, doc-count
+  4,810 == chunks ✓. Spot-check 3 random docs: text-md5 **byte-identical** to
+  the DB, token_count exact, embedding present, locator serialized correctly.
+- **Sparse embeddings** live only in Postgres, **not** in the index — hybrid
+  retrieval later needs a second index field (not a gate blocker).
 
-### kNN-Suchtest (5 Queries, DE+EN, BGE-M3 Dense, k=5)
+### kNN search test (5 queries, DE+EN, BGE-M3 dense, k=5)
 
-| Query | Ergebnis |
+The query strings below are the literal English/German test inputs used in the
+run; results are described in English.
+
+| Query | Result |
 | --- | --- |
-| „Was ist CSR-Reporting und welche Standards gibt es dafür?" | Top-5 alle CSR-Bücher; **beantwortet vollständig** |
-| „Grundlagen der Stakeholder-Theory nach Freeman" | 4/5 aus *Stakeholder-Management*; **lehrbuch-exakt** |
-| „criticism of ESG ratings and rating divergence" | GRI-Kritik, Third-Party-Rating; **on-topic** |
-| „Beispiele für nachhaltige Lieferketten in der Textilbranche" | Lieferkette-/Lieferanten-Abschnitte; **beantwortet** (ein wertarmes Literaturverzeichnis-Hit) |
-| „Wie funktioniert die Methodik des Life Cycle Assessment?" | 4/5 aus *Life-Cycle-Management*; **Bullseye** |
+| "What is CSR reporting and which standards exist for it?" (DE test query) | Top-5 all CSR books; **answered fully** |
+| "Fundamentals of Stakeholder theory per Freeman" (DE test query) | 4/5 from *Stakeholder Management*; **textbook-exact** |
+| "criticism of ESG ratings and rating divergence" | GRI criticism, third-party rating; **on-topic** |
+| "Examples of sustainable supply chains in the textile sector" (DE test query) | supply-chain/supplier sections; **answered** (one low-value bibliography hit) |
+| "How does the Life Cycle Assessment methodology work?" (DE test query) | 4/5 from *Life Cycle Management*; **bullseye** |
 
-Score-Band 0,54–0,63 (Cosine). Cross-lingual: EN-Query findet DE-Bücher und
-umgekehrt, wo inhaltlich geboten. **Semantischer Müll: null Treffer in 25.**
+Score band 0.54–0.63 (cosine). Cross-lingual: an EN query finds DE books and
+vice versa where content warrants. **Semantic garbage: zero hits in 25.**
 
-## Teil 4 — Fazit & Empfehlung
+## Part 4 — Conclusion & recommendation
 
-| Dimension | Ampel | Begründung |
+| Dimension | Light | Rationale |
 | --- | --- | --- |
-| Chunk-Größen | 🟢 | Median 382, keine Monster; 9,2 % Heading-Anker |
-| Locator | 🟢 | 100 % Abdeckung, 3/3 seiten-exakt gegen Original-PDF |
-| Entities | 🟢/🟡 | Domänen-Vokabular korrekt, 0 Fehlklassifikationen; 71,6 % One-Hits normal, generische Nomen leicht rauschig |
-| Relationships | 🟡 | 100 % Evidence, aber nur 31 % stabile Kanten, Stichprobe 3/5 plausibel, strength konstant → Kandidatenraum, filtrierbar |
-| Retrieval | 🟢 | 5/5 Queries on-topic, cross-lingual, kein Müll — der Härtest besteht |
+| Chunk sizes | 🟢 | median 382, no monsters; 9.2% heading anchors |
+| Locator | 🟢 | 100% coverage, 3/3 page-exact against original PDF |
+| Entities | 🟢/🟡 | domain vocabulary correct, 0 misclassifications; 71.6% one-hits normal, generic nouns slightly noisy |
+| Relationships | 🟡 | 100% evidence, but only 31% stable edges, 3/5 sample plausible, constant strength → candidate space, filterable |
+| Retrieval | 🟢 | 5/5 queries on-topic, cross-lingual, no garbage — the hardest test passes |
 
-**Empfehlung: GO für TC2.** Das Herzstück (Dense-Retrieval über Chunks mit
-exakten Locators) liefert präzise, buch- und abschnittstreue Ergebnisse; der
-Knowledge-Graph ist ein brauchbarer Kandidatenraum sobald Stabilitäts-/
-Evidence-Filter greifen — kein Pipeline-Blocker.
+**Recommendation: GO for TC2.** The core (dense retrieval over chunks with exact
+locators) delivers precise, book- and section-accurate results; the knowledge
+graph is a usable candidate space once stability/evidence filters apply — no
+pipeline blocker.
 
-**Fundliste nach Schweregrad:** Blocker: keine.
+**Findings by severity:** blockers: none.
 
-Vor/nach TC2: (1) `strength` ohne Diskriminierung — mREBEL-Konfidenz oder
-evidence-basierte Stärke, bis dahin Mention-Stabilitäts-Filter; (2) Sparse-
-Embeddings nicht im Index. Nice-to-have: Heading-Mikro-Chunks mergen;
-generische Nomen stoppen; Literaturverzeichnis-Chunks downweighten.
+Before/after TC2: (1) `strength` without discrimination — mREBEL confidence or
+evidence-based strength, until then a mention-stability filter; (2) sparse
+embeddings not in the index. Nice-to-have: merge heading micro-chunks; stop
+generic nouns; downweight bibliography chunks.
 
-Weiter: [TC2-Parallel-Test](tc2-parallel.md) · [Messberichte](../benchmarks.md) ·
-[Benchmarks-Übersicht](../benchmarks.md)
+Continue: [TC2 Parallel Test](tc2-parallel.md) · [Reports](../benchmarks.md)

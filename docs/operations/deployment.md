@@ -1,69 +1,69 @@
-# Deployment: Runner-Betrieb (GPU-Compute-Offload)
+# Deployment: Running a Runner (GPU Compute Offload)
 
-Dieses Kapitel beschreibt, wie der `axiom_ng_runner` (der Python-Prozessor) auf
-einem externen GPU-Host betrieben und wie der `axiom_ng`-Dispatcher an ihn
-angeschlossen wird. Der Zweck: schwere Dokument-Verarbeitung (Marker-Konvertierung,
-BGE-M3-Embeddings, GLiNER-Entities, mREBEL-Relationships) auf NVIDIA-GPUs statt am
-Dispatcher-Host auszuführen.
+This chapter explains how to run the `axiom_ng_runner` (the Python processor)
+on an external GPU host and how to point the `axiom_ng` dispatcher at it. The
+purpose: run heavy document processing (Marker conversion, BGE-M3 embeddings,
+GLiNER entities, mREBEL relationships) on NVIDIA GPUs instead of on the
+dispatcher host.
 
-> **Allgemeingültig:** Konkrete Hostnamen, IPs und Benutzernamen sind durch
-> Platzhalter wie `<runner-host>`, `<port>` oder generische Beschreibungen ersetzt.
-> Die wiedergegebenen Muster sind **Anforderungen und Betriebsregeln** — sie stammen
-> aus Messungen, sind aber unabhängig von einer bestimmten Maschine formulierbar.
-> Beispiel-Ports (z. B. `19542`) sind Illustration, keine Vorgabe.
+> **Universal by design:** concrete hostnames, IPs and usernames are replaced
+> with placeholders such as `<runner-host>`, `<port>`, or generic descriptions.
+> The patterns shown are **requirements and operating rules** — they come from
+> measurements but are expressible independent of any particular machine.
+> Example ports (e.g. `19542`) are illustrative, not prescriptive.
 
-## Architektur
+## Architecture
 
 ```text
-Dispatcher-Host (axiom-ng)             Runner-Host (GPU)
+Dispatcher host (axiom)                Runner host (GPU)
 ┌──────────────────────────┐  HTTP/JSON ┌──────────────────────────────┐
-│ Go-Dispatcher             │ ──────────▶ │ axiom_ng_runner (Python)      │
-│ POST /v1/process          │   Port     │ Konvertierung + Embeddings +  │
-│ pollt Status/Ergebnis     │ ◀───────── │ Entity/Relation-Extraktion     │
-│ persistiert in Postgres   │            └──────────────────────────────┘
+│ Go dispatcher             │ ──────────▶ │ axiom_ng_runner (Python)      │
+│ POST /v1/process          │   Port     │ conversion + embeddings +    │
+│ polls status/result       │ ◀───────── │ entity/relation extraction    │
+│ persists to Postgres      │            └──────────────────────────────┘
 └──────────────────────────┘
 ```
 
-Der Runner ist **reine Compute**: Er greift weder auf Postgres, OpenSearch oder
-Zotero zu. Aller durable Zustand bleibt beim Dispatcher. Über die Leitung geht
-nur der HTTP-Vertrag (`PROCESSOR_CONTRACT v1`).
+The runner is **pure compute**: it never touches Postgres, OpenSearch, or
+Zotero. All durable state stays with the dispatcher. Only the HTTP contract
+(`PROCESSOR_CONTRACT v1`) crosses the wire.
 
-## Voraussetzungen auf dem GPU-Host
+## Prerequisites on the GPU host
 
-- NVIDIA-GPU(s) + Treiber (verifizieren: `nvidia-smi`)
-- Podman (rootless funktioniert) oder ein äquivalenter OCI-Container-Runner
-- NVIDIA-CDI-Integration: die CDI-Spezifikation
-  (`/var/run/cdi/nvidia-container-toolkit.json`) muss vorliegen. Läuft bereits ein
-  GPU-Container auf dem Host, ist CDI meist eingerichtet — diese Konfiguration kann
-  als Referenz übernommen werden.
+- NVIDIA GPU(s) + driver (verify with `nvidia-smi`)
+- Podman (rootless works) or an equivalent OCI container runner
+- NVIDIA CDI integration: the CDI spec
+  (`/var/run/cdi/nvidia-container-toolkit.json`) must be present. If a GPU
+  container already runs on the host, CDI is usually set up — reuse that
+  configuration as a reference.
 
-## 1. Code zum Runner-Host bringen
+## 1. Ship the code to the runner host
 
-Der Runner ist selbsttragend (das `compute_core`-Vendor-Verzeichnis ist in
-`axiom_ng_runner/` enthalten): Ein einzelner Verzeichnisbaum muss zum
-Runner-Host übertragen werden:
+The runner is self-contained (the vendored `compute_core` directory is inside
+`axiom_ng_runner/`): a single directory tree has to be transferred to the
+runner host:
 
 ```bash
 rsync -av --exclude='.venv' --exclude='__pycache__' --exclude='.pytest_cache' \
-  axiom_ng_runner/ <user>@<runner-host>:<pfad>/axiom_ng_runner/
+  axiom_ng_runner/ <user>@<runner-host>:<path>/axiom_ng_runner/
 ```
 
 ## 2. Containerfile
 
-Bau-Checks (aus der Betriebserfahrung abgeleitet, als Anforderungen formuliert):
+Build checks (derived from operating experience, stated as requirements):
 
-1. **Selbsttragender Runner:** Das Image kopiert **nur** `axiom_ng_runner/`
-   (inkl. `compute_core`). Kein DB-Adapter, kein veraltetes Modul — die
-   DB-Treiber-Importkette ist seit dem Compute-Core-Vendor-Split (#118) nicht
-   mehr im Runner.
-2. **Triton-JIT braucht einen Compiler + libc:** `gcc` und `libc6-dev` explizit
-   installieren (sonst schlägt der erste Dense-Embedding-Lauf an fehlendem
-   `crti.o` fehl). Kein `--no-install-recommends`, ohne diese Pakete beizulegen.
-3. **Versionen identisch zu der Referenz-Venv pinnen** (siehe
-   `axiom_ng_runner/requirements-heavy.txt`), allen voran
-   `marker-pdf==1.10.2`. Divergente Versionen erzeugen divergente Ergebnisse.
-4. **`RUN touch /.dockerenv`** — siehe Falle 10 in der
-   [L8-Durchstichs-Analyse](../references/benchmarks/l8-durchstich.md).
+1. **Self-contained runner:** The image copies **only** `axiom_ng_runner/`
+   (including `compute_core`). No DB adapter, no legacy module — the DB-driver
+   import chain is no longer in the runner since the compute-core vendor split
+   (#118).
+2. **Triton JIT needs a compiler + libc:** install `gcc` and `libc6-dev`
+   explicitly (otherwise the first dense-embedding run fails on a missing
+   `crti.o`). Do not use `--no-install-recommends` without these packages.
+3. **Pin versions identical to the reference venv** (see
+   `axiom_ng_runner/requirements-heavy.txt`), above all
+   `marker-pdf==1.10.2`. Divergent versions produce divergent output.
+4. **`RUN touch /.dockerenv`** — see Trap 10 in the
+   [L8 Throughput Analysis](../references/benchmarks/l8-durchstich.md).
 
 ```dockerfile
 FROM python:3.11-slim
@@ -79,22 +79,21 @@ RUN touch /.dockerenv
 CMD ["python", "-m", "axiom_ng_runner"]
 ```
 
-## 3. Bauen und mit GPU starten
+## 3. Build and run with GPU
 
-**`--network=host` verwenden — das ist die kritische Einstellung.** Eine Port-
-Weiterleitung (z. B. `-p <mapped>:<port>`) über den Userspace-Port-Forwarder von
-rootless Podman zeigt dieselbe Störsignatur wie ein langsamer Tunnel:
-Kleine Pakete (Polls, Health-Checks) sind millisekundenschnell, während
-mehrere-MB-Ergebnis-JSONs und Artifakt-Bodys kriechen. Ein Loopback-Test
-**innerhalb** des Containers misst nur inneren Schnellpfad, nicht den gemappten
-Weg. Symptom einer Transportfalle: GPU idle, keine Dispatcher-Fehler, Jobs
-hängen „nach Compute fertig". Dann zuerst den Serving-Pfad prüfen, nicht die
-Compute.
+**Use `--network=host` — this is the critical setting.** A port forward
+(e.g. `-p <mapped>:<port>`) through the rootless-Podman userspace port
+forwarder shows the same failure signature as a slow tunnel: small packets
+(polls, health checks) respond in milliseconds while multi-MB result JSONs and
+artifact bodies crawl. A loopback test **inside** the container measures only
+the internal fast path, not the mapped path. Symptom of a transport trap: GPU
+idle, no dispatcher errors, jobs stuck "after compute done". Then check the
+serving path first, not the compute.
 
 ```bash
-podman build -t runner <pfad>/
+podman build -t runner <path>/
 
-# Host-Network + CDI-Device-Injektion — bindet den Host-Port direkt; kein -p-Mapping nötig.
+# Host network + CDI device injection — binds the host port directly; no -p mapping needed.
 podman run -d --name runner \
   --network=host \
   --device nvidia.com/gpu=all \
@@ -106,198 +105,192 @@ podman run -d --name runner \
   localhost/runner
 ```
 
-- `--device nvidia.com/gpu=all` legt alle Host-GPUs offen. Zum Pinnen auf eine
-  GPU den CDI-Gerätenamen der gewünschten Index-Karte statt `all` verwenden
-  (Namen stehen in `/var/run/cdi/nvidia-container-toolkit.json`).
-- Für parallele Ein-GPU-Runner (ein Runner pro Karte) `CUDA_VISIBLE_DEVICES=<n>`
-  je Container setzen — `cuda:0` in PyTorch zeigt dann auf die jeweilige
-  physische GPU.
-- **Port wählen** einen dedizierten hohen Port und in der Host-Firewall öffnen.
-  Beide Richtungen müssen direkt erreichbar sein: Quell-Download (Runner zieht
-  vom Dispatcher) und Ergebnis-/Artifakt-Abruf (Dispatcher zieht vom Runner)
-  sind beides MB-große Bulk-Flows, die echten LAN-Durchsatz brauchen.
-- **GLiNER-Device:** `DEVICE_GLINER=cuda` muss explizit gesetzt werden. Der
-  Default ist `cpu` — ein CPU-GLiNER kostet ~1 Stunde pro Buch statt ~5 Minuten
-  auf GPU.
+- `--device nvidia.com/gpu=all` exposes all host GPUs. To pin to one GPU use
+  the CDI device name of the desired index card instead of `all` (names are in
+  `/var/run/cdi/nvidia-container-toolkit.json`).
+- For parallel one-GPU runners (one runner per card) set `CUDA_VISIBLE_DEVICES=<n>`
+  per container — `cuda:0` in PyTorch then maps to that physical GPU.
+- **Port choice:** pick a dedicated high port and open it in the host firewall.
+  Both directions must be directly reachable: source download (runner pulls
+  from the dispatcher) and result/artifact fetch (dispatcher pulls from the
+  runner) are both MB-sized bulk flows that need real LAN throughput.
+- **GLiNER device:** `DEVICE_GLINER=cuda` must be set explicitly. The default is
+  `cpu` — a CPU GLiNER costs ~1 hour per book instead of ~5 minutes on GPU.
 
-**Per-Model-Geräte-Knobs** (Quelle der Wahrheit: `compute_core/devices.py`,
+**Per-model device knobs** (source of truth: `compute_core/devices.py`,
 `_MODEL_DEVICE_ENV`):
 
-| Env-Var | Modell | Default |
+| Env var | Model | Default |
 | --- | --- | --- |
 | `DEVICE_EMBEDDER` | BGE-M3 | `auto` |
 | `DEVICE_MARKER` | Marker | `auto` |
 | `DEVICE_MREBEL` | mREBEL | `auto` |
 | `DEVICE_GLINER` | GLiNER | `cpu` |
 
-**Bind-Adresse:** `0.0.0.0` ist für Remote-Zugriff nötig. Nur auf LAN-only-Hosts
-verwenden — der Runner hat bewusst keine Authentisierung (er läuft per Design
-nur auf Loopback oder vertrauenswürdigem Netz, siehe Contract §18).
+**Bind address:** `0.0.0.0` is required for remote access. Only do this on
+LAN-only hosts — the runner deliberately has no authentication (it runs by
+design only on loopback or a trusted network, see contract §18).
 
-### Alternative: Ablauf am Dispatcher-Host (Apple-MPS)
+### Alternative: run on the dispatcher host (Apple MPS)
 
-Ein GPU-Lauf ist nicht zwingend extern. Auf einem Apple-Mac mit MPS ist der
-vollständige `real`-Pipeline-Ablauf möglich (Validierung #128):
+A GPU run is not necessarily external. On an Apple Mac with MPS the complete
+`real` pipeline can run (validation #128):
 
 ```bash
 DEVICE_GLINER=mps PYTORCH_ENABLE_MPS_FALLBACK=1 \
   AXIOM_PROCESSOR_COMPUTE=real .venv/bin/python -m axiom_ng_runner
 ```
 
-- Device-Auflösung braucht keine Env für Marker/Embedder/mREBEL (`auto` → mps);
-  GLiNER will explizit `DEVICE_GLINER=mps`.
-- Bekannte MPS-Grenze: suryas Tabellenerkennung (`TableRecEncoderDecoderModel`)
-  ist nicht MPS-kompatibel und fällt mit Warnung auf CPU zurück — tabellenlastige
-  PDFs zahlen extra.
-- MPS ist **vollständig, aber langsam** (gemessen ~13 s/Seite vs. ~0,7–1,2 s/Seite
-  auf einer RTX-3090-Klasse). Für Produktions-Massenbetrieb externe GPUs.
+- Device resolution needs no env for marker/embedder/mREBEL (`auto` → mps);
+  GLiNER wants explicit `DEVICE_GLINER=mps`.
+- Known MPS limitation: surya's table recognition
+  (`TableRecEncoderDecoderModel`) is not MPS-compatible and falls back to CPU
+  with a warning — table-heavy PDFs pay extra.
+- MPS is **complete but slow** (measured ~13 s/page vs. ~0.7–1.2 s/page on an
+  RTX-3090-class card). For production mass processing use external GPUs.
 
-## 4. Verifizieren
+## 4. Verify
 
 ```bash
-# CUDA im Container:
+# CUDA inside the container:
 podman exec runner python -c \
   "import torch; print('cuda:', torch.cuda.is_available(), '| devices:', torch.cuda.device_count())"
 
-# GLiNER lädt und sagt voraus:
+# GLiNER loads and predicts:
 podman exec runner python -c "
 from gliner import GLiNER
 m = GLiNER.from_pretrained('urchade/gliner_multi-v2.1')
 print(m.predict_entities('Steve Jobs founded Apple.', ['PERSON']))"
 
-# Health/Endpoints:
+# Health/endpoints:
 curl http://<runner-host>:<port>/v1/health
 curl http://<runner-host>:<port>/v1/capabilities
 ```
 
-Der erste Lauf lädt ~3 GB Modellgewichte (Marker/surya + GLiNER + mREBEL);
-spätere Läufe sind warm im Cache.
+The first run downloads ~3 GB of model weights (Marker/surya + GLiNER + mREBEL);
+later runs are warm-cache.
 
-## Transport-Regel (gemessene Lehre)
+## Transport rule (measured lesson)
 
-Zwei Transport-Ebenen nacheinander maskierten ein Problem während eines
-Massenlaufs:
+Two transport layers in sequence masked one problem during a mass run:
 
-1. **Tunnel-Bulk-Kollaps** auf dem Kontroll-Pfad (ms-Latenz auf kleinen Paketen,
-   aber ~35–83 KB/s auf MB-Flows trotz „direkter" Verbindung).
-2. **Userspace-Port-Weiterleitung** im rootless-Podman — dieselbe Kollaps-Signatur
-   auf der Container-Ebene (`--network=host` behebt sie).
+1. **Tunnel bulk collapse** on the control path (ms latency on small packets,
+   but ~35–83 KB/s on MB flows despite a "direct" connection).
+2. **Userspace port forwarding** in rootless Podman — the same collapse
+   signature at the container layer (`--network=host` fixes it).
 
-**Betriebsregel:** Dispatcher↔Runner-Bulk-Flows (Ergebnis-JSON, Artifakt-Bodies)
-brauchen **direkte LAN-Erreichbarkeit in beiden Richtungen** —
-`AXIOM_PROCESSOR_URL` auf den Runner-Host-Port, und die `source_url`-Basis des
-Runners auf die LAN-Adresse des Dispatchers. Ein Tunnel funktioniert für die
-Kontrollebene und ist der Fallback ohne direkten Pfad (mit Durchsatz-Nachteil).
-**Symptom-Signatur einer Transportfalle:** GPU idle, keine Dispatcher-Fehler,
-Jobs zwischen Compute-Fertig und Persistiert für Minuten aufgehängt — den
-Serving-Pfad (Loopback vs. gemappter Port vs. Tunnel) prüfen, bevor die Compute
-beschuldigt wird.
+**Operating rule:** dispatcher↔runner bulk flows (result JSON, artifact bodies)
+require **direct LAN reachability in both directions** — `AXIOM_PROCESSOR_URL`
+to the runner host port, and the runner's `source_url` base pointing at the
+dispatcher's LAN address. A tunnel works for the control plane and is the
+fallback when no direct path exists (accepting the throughput penalty).
+**Symptom signature of a transport trap:** GPU idle, no dispatcher errors, jobs
+hung for minutes between compute-done and persisted — check the serving path
+(loopback vs. mapped port vs. tunnel) before blaming compute.
 
-## 5. Dispatcher anbinden
+## 5. Wire up the dispatcher
 
-Auf dem Dispatcher-Host:
+On the dispatcher host:
 
 ```bash
 export AXIOM_DISPATCHER_ENABLED=true
-export AXIOM_PROCESSOR_URL=http://<runner-host>:<port>   # direktes LAN — s. Transport-Regel
+export AXIOM_PROCESSOR_URL=http://<runner-host>:<port>   # direct LAN — see transport rule
 ```
 
-Der Dispatcher verhandelt beim Start die Capabilities gegen den Remote-Runner
-und schlägt fehl, wenn er nicht erreichbar oder vertragsinkompatibel ist. Vor
-Massenbetrieb einen Test mit einem kleinen Dokument fahren.
+The dispatcher negotiates capabilities against the remote runner at startup and
+fails fast if it is unreachable or contract-incompatible. Test with one small
+document before batch processing.
 
-### Quell-Lieferung über `source_url` (ohne gemeinsames Zotero-Mount)
+### Source delivery over `source_url` (no shared Zotero mount)
 
-Der Remote-Runner braucht **keinen** Zugriff auf den Zotero-Speicher. Der
-Dispatcher hängt jedem Process-Request eine HMAC-signierte Download-URL
-(`attachment.source_url`) an; der Runner zieht die Bytes per HTTP (Contract §3,
-additive v1-Erweiterung). Dispatcher-seitig konfigurieren:
+The remote runner does **not** need access to the Zotero storage. The dispatcher
+attaches an HMAC-signed download URL (`attachment.source_url`) to every process
+request; the runner pulls the bytes over HTTP (contract §3, additive v1
+extension). Configure on the dispatcher side:
 
 ```bash
-# Gemeinsamer HMAC-Secret (Dispatcher signiert, .../source verifiziert).
-# Leer = Feature auf beiden Seiten aus.
+# Shared HMAC secret (dispatcher signs, .../source verifies). Empty = feature off on both sides.
 export AXIOM_PROCESSOR_SOURCE_SECRET='<random-hex>'
-# Basis-URL, mit der der Runner den Dispatcher erreicht — NICHT 127.0.0.1 (der Runner
-# löst auf seinem eigenen Host auf):
+# Base URL the runner uses to reach the dispatcher — NOT 127.0.0.1 (the runner resolves on its own host):
 export AXIOM_PROCESSOR_SOURCE_BASE_URL=http://<dispatcher-lan-ip>:<dispatcher-port>
-# Dispatcher muss auf einer erreichbaren Schnittstelle lauschen:
+# The dispatcher must listen on a reachable interface:
 export AXIOM_BIND_ADDR=0.0.0.0
-# POST /v1/process wartet den synchronen Download ab; das Ergebnisse-Budget floor-t die Submit-Call:
+# POST /v1/process waits for the synchronous download; the result budget floors the submit call:
 export AXIOM_PROCESSOR_TIMEOUT=180s
-# Hinweis auf das fast-gleiche Paar (anderer Scope):
-#   AXIOM_PROCESSOR_TIMEOUT        — DISPATCHER-seitiges Ergebnis-Fetch-Budget
-#   AXIOM_PROCESSOR_SOURCE_TIMEOUT — RUNNER-seitiges Quell-Download-Budget (Default 120s)
+# Note the near-identical pair (different scope):
+#   AXIOM_PROCESSOR_TIMEOUT        — DISPATCHER-side result-fetch budget
+#   AXIOM_PROCESSOR_SOURCE_TIMEOUT — RUNNER-side source-download budget (default 120s)
 ```
 
-Runner-seitig `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` ungesetzt oder auf einen
-nicht existenten Pfad lassen — dann ist lokale Zustellung konstruktiv unmöglich
-und jede Quelle kommt über die signierte URL. Die URL verfällt mit der Arbeit des
-Jobs; heruntergeladene Bytes laufen durch denselben Hash-Gate wie lokale Dateien
-und sterben mit dem ACK (Contract §18/§19-13).
+On the runner side leave `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` unset or
+pointing at a nonexistent path — then local delivery is constructively
+impossible and every source arrives via the signed URL. The URL expires with the
+job's lease; downloaded bytes run the same hash gate as local files and die with
+the ACK (contract §18/§19 test 13).
 
-> Ältere Experimente mit rsync-Brücke oder sshfs-Mount sind durch diesen Mechanismus
-> abgelöst — keine Zotero-Kopien auf dem GPU-Host anlegen (Contract §15 / §19 test 12).
+> Earlier experiments with an rsync bridge or sshfs mount are superseded by this
+> mechanism — do not stage Zotero copies on the GPU host (contract §15 / §19 test 12).
 
-## 6. Runner-Identität + GPU-Sampler-Labels
+## 6. Runner identity + GPU sampler labels
 
-Bei mehreren Runnern muss jede Log-Zeile und jede Job-Zeile sagen, welcher Runner
-sie erzeugt hat:
+With multiple runners, every log line and every job row must say which runner
+produced it:
 
 ```bash
 export AXIOM_PROCESSOR_RUNNER_NAME=<runner-label>
 ```
 
-Das Label landet in der Phasen-Log-Zeile (`phases[ok]: runner=<label> job=…`) und
-in `ingest_jobs.runner_name` zum Claim-Zeitpunkt. Die Verteilung ist dann reines SQL:
+The label lands in the phase log line (`phases[ok]: runner=<label> job=…`) and
+in `ingest_jobs.runner_name` at claim time. Distribution is then pure SQL:
 
 ```sql
 SELECT runner_name, count(*), avg(completed_at - started_at)
 FROM ingest_jobs WHERE status = 'completed' GROUP BY 1;
 ```
 
-> Die Spalte ist bewusst **nicht** `processor_name` (die trägt die
-> Prozessor-Software-Identität bei Fertigstellung und darf nicht überschrieben
-> werden).
+> The column is deliberately **not** `processor_name` (that one carries the
+> processor software identity written at completion and must not be clobbered).
 
-GPU-Sampler pro Runner (30-s-Takt), Label zuerst für Zuordenbarkeit nach Log-Merge:
+GPU sampler per runner (30-s cadence), label first so lines stay attributable
+after log merge:
 
 ```bash
 nohup sh -c 'while true; do echo "<runner-label> $(date +%s) $(nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader)"; sleep 30; done' \
   > /tmp/gpu_sampler_<runner>.log 2>&1 &
 ```
 
-Mit `CUDA_VISIBLE_DEVICES`-Pinning je Container identifizieren GPU-Index + Label
-den Runner eindeutig.
+With `CUDA_VISIBLE_DEVICES` pinning per container, GPU index + label identify
+the runner unambiguously.
 
-## Runner-Env-Variablen (Referenz)
+## Runner env variables (reference)
 
-| Env-Var | Default | Bedeutung |
+| Env var | Default | Meaning |
 | --- | --- | --- |
-| `AXIOM_PROCESSOR_BIND_ADDR` | `127.0.0.1` | `0.0.0.0` für Remote-Zugriff |
-| `AXIOM_PROCESSOR_PORT` | `8537` | HTTP-Port |
-| `AXIOM_PROCESSOR_COMPUTE` | `reference` | `real` für die GPU-Pipeline |
-| `AXIOM_PROCESSOR_MAX_CONCURRENT_JOBS` | `1` | Marker+Modelle sind VRAM-lastig; 1 pro GPU |
-| `AXIOM_PROCESSOR_WORK_ROOT` | `/tmp/axiom_processor_work` | Temporärer Job-Zustand |
-| `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` | — | Lokale Host-Pfade, die der Runner lesen darf |
-| `AXIOM_PROCESSOR_RESULT_RETENTION` | `3600` | Sekunden, bevor unacknowledged Ergebnisse verfallen |
+| `AXIOM_PROCESSOR_BIND_ADDR` | `127.0.0.1` | `0.0.0.0` for remote access |
+| `AXIOM_PROCESSOR_PORT` | `8537` | HTTP port |
+| `AXIOM_PROCESSOR_COMPUTE` | `reference` | `real` for the GPU pipeline |
+| `AXIOM_PROCESSOR_MAX_CONCURRENT_JOBS` | `1` | Marker+models are VRAM-heavy; keep 1 per GPU |
+| `AXIOM_PROCESSOR_WORK_ROOT` | `/tmp/axiom_processor_work` | Temporary job state |
+| `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` | — | Local host paths the runner may read |
+| `AXIOM_PROCESSOR_RESULT_RETENTION` | `3600` | Seconds before unacked results expire |
 
-## Massenverarbeitung mit dem Remote-Runner
+## Mass processing with the remote runner
 
-1. Dispatcher-`Concurrency=1` lassen (der Runner erzwingt
-   `MAX_CONCURRENT_JOBS=1` ohnehin; parallele Jobs stritten um VRAM).
-2. Bei kleinen Dokumenten auf warmem Cache auf einer 3090-Klasse ~30 s erwarten;
-   große gescannte Bücher skalieren mit der OCR-Last.
-3. Der Runner hält Ergebnisse bis zum ACK; der ACK-Retry-Pass des Dispatchers
-   erholt sich, wenn der Dispatcher mitten im Batch neu startet.
+1. Keep dispatcher `Concurrency=1` (the runner enforces
+   `MAX_CONCURRENT_JOBS=1` anyway; parallel jobs would contend for VRAM).
+2. Expect ~30 s per small document on a warm cache on a 3090-class card; large
+   scanned books scale with the OCR load.
+3. The runner holds results until ACK; the dispatcher's ack-retry pass recovers
+   if the dispatcher restarts mid-batch.
 
-## Bekannte Grenzen (ohne Verweis auf konkrete Maschinen)
+## Known limitations (without referencing specific machines)
 
-- `capabilities.models.dense_embedding.name` meldet auch im real-Modus
-  `reference-bge-m3` (kosmetisch; die Vektoren selbst sind echte 1024-dim-BGE-M3).
-  Zurückgestellt.
-- Der Runner lädt alle drei Modelle-Familien pro Prozess; der VRAM-Fußabdruck
-  liegt ~2,8 GB — passt auf eine 12-GB-Karte, lässt auf 24-GB-Karten Raum für
-  einen zweiten gepinnten Runner pro Karte.
+- `capabilities.models.dense_embedding.name` reports `reference-bge-m3` even in
+  real mode (cosmetic; the vectors themselves are genuine 1024-dim BGE-M3).
+  Deferred.
+- The runner loads all three model families per process; the VRAM footprint is
+  ~2.8 GB — fits a 12 GB card, leaves room on 24 GB cards for a second pinned
+  runner per card.
 
-Weiter: [Monitoring](monitoring.md) · [Troubleshooting](troubleshooting.md) ·
+Continue: [Monitoring](monitoring.md) · [Troubleshooting](troubleshooting.md) ·
 [PROCESSOR_CONTRACT v1](../developer-guide/processor-contract.md)

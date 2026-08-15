@@ -1,12 +1,12 @@
-# Datenmodell
+# Data Model
 
-!!! warning "In Arbeit"
-    Dieses Kapitel wird in D5 ausformuliert (Epic
-    [#138](https://github.com/Cyb3rDudu/axiom/issues/138)). Die Seite existiert in
-    der Struktur, damit alle Nav-Punkte auf echte Ziele zeigen.
+!!! warning "In progress"
+    This chapter will be written out in D5 (Epic
+    [#138](https://github.com/Cyb3rDudu/axiom/issues/138)). The page exists in
+    the structure so that every nav point targets a real destination.
 
-## Snapshots, Chunks, Entities, Outbox
+## Snapshots, chunks, entities, outbox
 
-Das Datenmodell-Schema-Doc (Snapshots, Chunks, Entities, Outbox) ist Teil von D5.
+The data-model schema doc (snapshots, chunks, entities, outbox) is part of D5.
 
-Weiter: [Benchmarks & Analysen](benchmarks.md) · [FAQ](faq.md) · [Willkommen](../index.md)
+Continue: [Benchmarks & Analyses](benchmarks.md) · [FAQ](faq.md) · [Welcome](../index.md)

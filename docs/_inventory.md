@@ -7,8 +7,10 @@ Repositories hat hier ein dokumentiertes Schicksal: **migriert + überarbeitet**
 
 > **Grundsatz:** Kanonische Quellen liegen in `axiom_ng/docs/` und
 > `axiom_ng_runner/`. Die Site rendert **abgeleitete, allgemeingültige Seiten**
-> aus `docs/`; die kanonischen Dateien werden nicht verschoben oder verändert.
-> Abweichungen sind in den Zielzeilen explizit ausgewiesen.
+> aus `docs/`; die kanonischen Dateien werden nicht verschoben oder verändert —
+> mit einer Ausnahme: die vier Benchmark-Originale wurden nach `axiom_ng/docs/benchmarks/`
+> verschoben und ins Englische überführt (dudu-Entscheidung, #147; die
+> Kanonikum-Ausnahme gilt nur für diese vier).
 
 ## Zuordnungstabelle
 
@@ -16,12 +18,12 @@ Repositories hat hier ein dokumentiertes Schicksal: **migriert + überarbeitet**
 | --- | --- | --- | --- |
 | `axiom_ng/docs/PROCESSOR_CONTRACT.md` | **Kanonisch bleiben** — nicht verschoben, nicht umgeschrieben | [Developer Guide → PROCESSOR_CONTRACT v1](developer-guide/processor-contract.md) (Referenz-Seite) | Site-Seite fasst zusammen + verweist auf die kanonische Datei; kein Verbatim-Render, um keine privaten Beispielwerte der kanonischen Datei öffentlich zu spiegeln. Kanonische Quelle benannt. |
 | `axiom_ng/docs/EXTERNAL_RUNNER_DEPLOYMENT.md` | **Migriert + stark überarbeitet** (Allgemeingültigkeit) | [Operations → Deployment](operations/deployment.md) | Private Infra (Rechnernamen, IPs, `/Users/…`-Pfade) → Platzhalter `<runner-host>`, `<port>`; die gemessenen Muster (host-network, CDI, GPU-Pinning, MPS) bleiben als Anforderungen/Regeln. |
-| `axiom_ng/docs/L8_DURCHSTICHS_ANALYSE.md` | **Migriert als datierter Messbericht** | [Referenzen → Benchmarks](references/benchmarks.md) | Rahmung „Messbericht“, Datum; Zahlensubstanz erhalten, Erzählstruktur neutralisiert; Betriebs-/Verlaufs-Storys → Troubleshooting-Muster-Verweis. |
-| `axiom_ng/docs/TC2_PARALLEL_BENCHMARK.md` | **Migriert als datierter Messbericht** | [Referenzen → Benchmarks](references/benchmarks.md) | Rahmung „Messbericht“, Datum; private Infra entfernt, Messwerte erhalten. |
-| `axiom_ng/docs/MASS_CHUNKING_BENCHMARK.md` | **Migriert als datierter Messbericht** | [Referenzen → Benchmarks](references/benchmarks.md) | Rahmung „Messbericht“, Datum; private Infra/IPs entfernt, Zahlen erhalten. |
-| `axiom_ng/docs/CHUNK_QUALITY_ASSESSMENT.md` | **Migriert als datierter Messbericht** | [Referenzen → Benchmarks](references/benchmarks.md) | Rahmung „Messbericht“, Datum; Inhalte weitgehend allgemeingültig, Verdichtung bei Bedarf. |
-| `axiom_ng/docs/LEASE_DISPATCHER_PROCESSOR_ADAPTER_WORK_ORDER.md` | **Aufgelöst** — Inhalt lebt verteilt in den Developer-Docs (Architektur-Übersicht, Go-, Runner-, Contract-Kapitel). Datei bleibt im Git als historische Quelle, **nicht** in der Nav. | aus der Nav → [Developer Guide](developer-guide/architecture.md), [Runner](developer-guide/axiom-ng-runner.md) | Inhalt extrahiert; die Arbeitsauftrags-/Session-Verwaltung (Checklisten, Reviewer-Instruktionen) gehört nicht in eine System-Doku. |
-| `axiom_ng_runner/README.md` | **Migriert + erweitert** in Developer/Runner-Kapitel; README bleibt Kurz-Datei am Code (sie verweist auf die Site). | [Developer Guide → axiom_ng_runner](developer-guide/axiom-ng-runner.md) | Gate-5-blockers → „Bekannte Einschränkungen", Herausforderungen neutral formuliert. |
+| `axiom_ng/docs/benchmarks/L8_DURCHSTICHS_ANALYSE.md` | **Migriert als datierter Messbericht** | [Referenzen → Benchmarks](references/benchmarks.md) | Rahmung „Messbericht“, Datum; Zahlensubstanz erhalten, Erzählstruktur neutralisiert; Betriebs-/Verlaufs-Storys → Troubleshooting-Muster-Verweis. |
+| `axiom_ng/docs/benchmarks/TC2_PARALLEL_BENCHMARK.md` | **Migriert als datierter Messbericht** | [Referenzen → Benchmarks](references/benchmarks.md) | Rahmung „Messbericht“, Datum; private Infra entfernt, Messwerte erhalten. |
+| `axiom_ng/docs/benchmarks/MASS_CHUNKING_BENCHMARK.md` | **Migriert als datierter Messbericht** | [Referenzen → Benchmarks](references/benchmarks.md) | Rahmung „Messbericht“, Datum; private Infra/IPs entfernt, Zahlen erhalten. |
+| `axiom_ng/docs/benchmarks/CHUNK_QUALITY_ASSESSMENT.md` | **Migriert als datierter Messbericht** | [Referenzen → Benchmarks](references/benchmarks.md) | Rahmung „Messbericht“, Datum; Inhalte weitgehend allgemeingültig, Verdichtung bei Bedarf. |
+| `axiom_ng/docs/LEASE_DISPATCHER_PROCESSOR_ADAPTER_WORK_ORDER.md` | **Aufgelöst** — Inhalt lebt verteilt in den Developer-Docs (Architektur-Übersicht, Go-, Runner-, Contract-Kapitel). Datei bleibt im Git als historische Quelle, **nicht** in der Nav. | aus der Nav → [Developer Guide](developer-guide/architecture.md), [Runner](developer-guide/axiom-runner.md) | Inhalt extrahiert; die Arbeitsauftrags-/Session-Verwaltung (Checklisten, Reviewer-Instruktionen) gehört nicht in eine System-Doku. |
+| `axiom_ng_runner/README.md` | **Migriert + erweitert** in Developer/Runner-Kapitel; README bleibt Kurz-Datei am Code (sie verweist auf die Site). | [Developer Guide → axiom_ng_runner](developer-guide/axiom-runner.md) | Gate-5-blockers → „Bekannte Einschränkungen", Herausforderungen neutral formuliert. |
 | root `README.md` | **Bleibt Schaufenster** (D3 erneuert es). | [Willkommen-Site](index.md) | Site-Link prominent (erledigt in D1). D3 schreibt Inhalt neu. |
 | `axiom_ng/docs/plans/*` (AXIOM_NG_GO_MIGRATION, ML_RUNTIME_ARCHITECTURE, ZOTERO_DESKTOP) | **Nicht in der Site** — verbleiben als Archiv-Referenz. | — | Reicht: Verweis auf Archiv in [About/Archiv](about/index.md). |
 

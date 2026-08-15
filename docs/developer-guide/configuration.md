@@ -1,13 +1,13 @@
-# Konfiguration
+# Configuration
 
-!!! warning "In Arbeit"
-    Dieses Kapitel wird in D5 ausformuliert (Epic
-    [#138](https://github.com/Cyb3rDudu/axiom/issues/138)). Die Seite existiert in
-    der Struktur, damit alle Nav-Punkte auf echte Ziele zeigen.
+!!! warning "In progress"
+    This chapter will be written out in D5 (Epic
+    [#138](https://github.com/Cyb3rDudu/axiom/issues/138)). The page exists in
+    the structure so that every nav point targets a real destination.
 
-## Alle AXIOM_*-Variablen
+## All AXIOM_* variables
 
-Die Konfigurations-Referenz (alle `AXIOM_*`-Variablen in einer Tabelle) ist Teil
-von D5.
+The configuration reference (all `AXIOM_*` variables in one table) is part of
+D5.
 
-Weiter: [Testing](testing.md) · [Architektur-Übersicht](architecture.md)
+Continue: [Testing](testing.md) · [Architecture Overview](architecture.md)

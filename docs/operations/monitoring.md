@@ -1,13 +1,13 @@
 # Monitoring
 
-!!! warning "In Arbeit"
-    Dieses Kapitel wird in D6 ausformuliert (Epic
-    [#138](https://github.com/Cyb3rDudu/axiom/issues/138)). Die Seite existiert in
-    der Struktur, damit alle Nav-Punkte auf echte Ziele zeigen.
+!!! warning "In progress"
+    This chapter will be written out in D6 (Epic
+    [#138](https://github.com/Cyb3rDudu/axiom/issues/138)). The page exists in
+    the structure so that every nav point targets a real destination.
 
-## Stage-Progression, Phasen-Logs, SQL-Nachfragen
+## Stage progression, phase logs, SQL queries
 
-Das Monitoring-Kapitel (Stage-Progression, Phasen-Logs, SQL-Nachfragen, generische
-SQL-/Log-Muster) ist Teil von D6.
+The monitoring chapter (stage progression, phase logs, SQL queries, generic
+SQL/log patterns) is part of D6.
 
-Weiter: [Deployment](deployment.md) · [Troubleshooting](troubleshooting.md)
+Continue: [Deployment](deployment.md) · [Troubleshooting](troubleshooting.md)
