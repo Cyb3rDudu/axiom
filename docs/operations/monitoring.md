@@ -27,9 +27,11 @@ The ingestion surface reports every document's lifecycle (see the
 curl http://<host>:<port>/api/ingest/jobs
 ```
 
-Expect a status like `pending`, `processing`, `completed`, `failed`, or
-`cancelled`. The same endpoint, filtered to one job, is the entry point for a
-deeper look.
+Expect a status of `pending`, `claimed`, `processing`, `completed`, `failed`,
+`cancelled`, or `skipped` (the full state list, in user terms, is in the
+[User Guide → Ingest](../user-guide/ingest.md)). This endpoint returns a paged
+list (a `limit` query param); it has no per-job detail route. The per-job look
+happens on the runner — see Level 2.
 
 ## Level 2 — Stage progression (per job)
 
@@ -40,10 +42,14 @@ per processor job:
 validate_source → convert → chunk → embed → entities → relationships → assemble
 ```
 
-To see where a job currently is, read its stage from the job detail (the exact
-path is the job/status endpoint; the stage vocabulary is the one above). After
-the job completes, the same stages are reconstructible from the persisted
-`manifest.stage_timings`, so post-hoc analysis needs no live observation.
+To see where a job currently is, ask the **runner**, not the dispatcher:
+`GET http://<runner-host>:<runner-port>/v1/jobs/{job_id}` returns the live
+`stage` (plus progress). Use the job id straight from the ingest list — the
+dispatcher submits that same id to the runner unchanged, so no id translation
+is needed; the dispatcher's `/api/ingest/jobs` simply has no per-job route
+(only the paged list). After the job completes, the same stages are
+reconstructible from the persisted `manifest.stage_timings`, so post-hoc
+analysis needs no live observation.
 
 **Use it to answer:** "is it converting, embedding, or stuck early?" A job that
 sits in `chunk` for a very long time points at a different cause than one stuck
@@ -58,9 +64,10 @@ through its lifecycle with explicit phase markers:
 claim → submit → completed → resultFetched → staged → persisted → acked
 ```
 
-Every phase line carries the identifiers that let you ask precise follow-ups —
-a job ID, an attempt counter, a lease token prefix, a document/attachment ID,
-and (when a runner is named) the runner that handled it. **No document content
+The `phases[…]` line itself identifies the runner (when named) and the job id,
+plus phase timestamps (and an artifact count on staging). The finer-grained
+identifiers — attempt counter, lease-token prefix, document/attachment id — ride
+the surrounding per-job log lines, not the phase line. **No document content
 is ever logged.**
 
 **Use it to answer:** "did the dispatcher actually claim the job, and did the
@@ -99,7 +106,7 @@ WHERE status = 'completed'
 GROUP BY 1
 ORDER BY 1;
 
--- 4. The long tail: jobs that are taking far longer than the median
+-- 4. The long tail: the longest-running in-flight jobs
 --    (a quick health proxy — see Troubleshooting for what it may mean)
 SELECT id, started_at, completed_at
 FROM ingest_jobs
