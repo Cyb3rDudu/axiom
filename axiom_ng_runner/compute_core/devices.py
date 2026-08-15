@@ -13,6 +13,17 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+# Per-model device env vars (defaults preserved from the old config.py —
+# production ran with these: gpu-heavy models 'auto', gliner 'cpu' unless
+# DEVICE_GLINER=cuda is set explicitly, see the L8 deployment lesson).
+_MODEL_DEVICE_ENV = {
+    "embedder": ("DEVICE_EMBEDDER", "auto"),
+    "marker": ("DEVICE_MARKER", "auto"),
+    "mrebel": ("DEVICE_MREBEL", "auto"),
+    "gliner": ("DEVICE_GLINER", "cpu"),
+}
+
+
 class HardwareDetector:
     """Centralized hardware detection and device management."""
     
@@ -362,22 +373,26 @@ class HardwareDetector:
 
     def get_model_device(self, model_name: str) -> str:
         """
-        Resolve the device for a specific model using per-model config.
+        Resolve the device for a specific model from per-model env vars.
+
+        Direct env reads replace the old vendored-config coupling —
+        including its non-Docker CUDA_VISIBLE_DEVICES override (the TC2
+        rootless-Podman trap: every runner stacked on GPU 0). Container
+        environment wins, no heuristics.
 
         Args:
-            model_name: Key in config.MODEL_DEVICE_MAP (e.g. 'embedder', 'reranker')
+            model_name: Key in _MODEL_DEVICE_ENV ('embedder', 'marker',
+                        'gliner', 'mrebel')
 
         Returns:
             Device string ('cpu', 'cuda', 'cuda:0', 'mps', etc.)
         """
-        from ai_researcher import config
-
-        # FORCE_CPU_MODE overrides everything
-        if config.FORCE_CPU_MODE:
+        if os.getenv("FORCE_CPU_MODE", "false").lower() == "true":
             logger.info(f"Model '{model_name}' assigned to device: cpu (FORCE_CPU_MODE)")
             return "cpu"
 
-        device_setting = config.MODEL_DEVICE_MAP.get(model_name, "auto")
+        env_var, default = _MODEL_DEVICE_ENV.get(model_name, (None, "auto"))
+        device_setting = os.getenv(env_var, default) if env_var else default
 
         if device_setting == "auto":
             device = str(self.get_torch_device())

@@ -36,13 +36,8 @@ def load_mrebel():
     _mrebel_model = AutoModelForSeq2SeqLM.from_pretrained(
         "Babelscape/mrebel-large", cache_dir=cache_dir
     )
-    # hardware_detection lives at axiom_backend/ai_researcher/hardware_detection.py
-    # Use the full package path so the import works in a fresh subprocess
-    # (issue #13 relation_worker) where sys.path-polluting imports haven't run.
-    try:
-        from ai_researcher.hardware_detection import hardware_detector
-    except ImportError:
-        from hardware_detection import hardware_detector  # legacy fallback
+    # Full package path so the import works in a fresh subprocess.
+    from axiom_ng_runner.compute_core.devices import hardware_detector
     device = hardware_detector.get_model_device("mrebel")
     _mrebel_model = _mrebel_model.to(device).eval()
     vram_info = f" ({torch.cuda.memory_allocated()/1e9:.1f}GB VRAM)" if device.startswith("cuda") else ""

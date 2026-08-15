@@ -35,53 +35,45 @@ Zotero. All durable state stays on the axiom-ng side. Only the HTTP contract
 
 ## 1. Ship the code
 
-The runner needs two source trees: `axiom_ng_runner/` itself and the
-`ai_researcher/` compute cores from `axiom_backend/` (chunker, embedder,
-entity/relation extractors).
+The runner is self-contained since the compute_core vendor move (#118):
+`axiom_ng_runner/` carries its own compute cores (chunker, embedder,
+entity/relation extractors, Marker path, workers) under
+`axiom_ng_runner/compute_core/`. One tree to ship:
 
 ```bash
-mkdir -p /tmp/runner_poc
+ssh <user>@<gpu-host> "mkdir -p ~/Code/runner-poc/axiom_ng_runner"
 rsync -av --exclude='.venv' --exclude='__pycache__' --exclude='.pytest_cache' \
-  <repo>/axiom_ng_runner/ /tmp/runner_poc/axiom_ng_runner/
-rsync -av --exclude='.venv' --exclude='__pycache__' \
-  <repo>/axiom_backend/ai_researcher/ /tmp/runner_poc/ai_researcher/
-
-ssh <user>@<gpu-host> "mkdir -p ~/Code/runner-poc"
-scp -r /tmp/runner_poc/* <user>@<gpu-host>:~/Code/runner-poc/
+  <repo>/axiom_ng_runner/ <user>@<gpu-host>:~/Code/runner-poc/axiom_ng_runner/
 ```
 
 ## 2. Containerfile
 
-Key points learned from the POC (all four build iterations):
+Key points learned from the POC (all four build iterations, plus the
+vendor-move simplification):
 
-1. **Mirror the repo layout.** `runner.py` derives
-   `_AXIOM_BACKEND = <parent-of-runner>/axiom_backend`, so place
-   `ai_researcher/` under `/app/axiom_backend/` in the image.
-2. **`database/` package must be present.** `core_rag/__init__` imports
-   `pgvector_store`, which imports `from database.database import get_db` at
-   module level. Ship an empty stub or the real package + `psycopg2-binary`.
-3. **Triton JIT needs gcc + libc6-dev** (`crti.o`). Do not use
+1. **Self-contained runner.** Since #118 the image copies ONLY
+   `axiom_ng_runner/` (compute_core included). No `ai_researcher/`, no
+   `database/` stub, no `psycopg2-binary` — the DB-driver import chain
+   stayed behind with the old tree.
+2. **Triton JIT needs gcc + libc6-dev** (`crti.o`). Do not use
    `--no-install-recommends` without adding these explicitly, or the first
    dense-embedding run dies.
-4. **Pin versions identical to the reference venv**
+3. **Pin versions identical to the reference venv**
    (`axiom_ng_runner/requirements-heavy.txt`), above all
    `marker-pdf==1.10.2`. Divergent versions produce divergent output.
+4. **`RUN touch /.dockerenv`** — see the trap section below.
 
 ```dockerfile
 FROM python:3.11-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libc6-dev pandoc libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir \
-    marker-pdf==1.10.2 \
-    FlagEmbedding gliner transformers \
-    pymupdf4llm fastapi uvicorn pydantic ebooklib \
-    psycopg2-binary==2.9.12
+RUN pip install --no-cache-dir -r requirements-heavy.txt
 COPY axiom_ng_runner/ /app/axiom_ng_runner/
-COPY ai_researcher/    /app/axiom_backend/ai_researcher/
 WORKDIR /app
 ENV PYTHONPATH=/app
 EXPOSE 8012
+RUN touch /.dockerenv
 CMD ["python", "-m", "axiom_ng_runner"]
 ```
 
@@ -134,7 +126,8 @@ result/artifact fetches (axiom-ng pulls from runner) are both multi-MB bulk
 flows that need real LAN throughput.
 
 **GLiNER device:** `DEVICE_GLINER=cuda` must be set explicitly — the default
-in `ai_researcher/config.py` is `cpu` and a CPU GLiNER eats ~1 h per book
+(in `compute_core/devices.py`, preserved from the old config) is `cpu` and a
+CPU GLiNER eats ~1 h per book
 that takes ~5 min on GPU (measured: 12/14 cores saturated, 3 jobs died of
 result-fetch timeouts under the load).
 
@@ -231,7 +224,7 @@ OpenSearch indexed, work dir (incl. the downloaded source) empty after ACK.
 ## 5b-bis. The /.dockerenv trap (TC2 round-1 lesson, 2026-08-15)
 
 Rootless Podman fails `is_running_in_docker()` checks: no `/.dockerenv`,
-cgroup v2 shows only `0::/`. The ai_researcher config then treats the
+cgroup v2 shows only `0::/`. The old vendored config then treated the
 container as bare metal and OVERWRITES `CUDA_VISIBLE_DEVICES=0` at import —
 trampling any per-container GPU pinning. Symptom: every runner stacks on GPU
 0 (VRAM pileup + Marker OOM) while pinned GPUs stay empty.

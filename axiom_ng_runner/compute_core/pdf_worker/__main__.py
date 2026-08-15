@@ -1,7 +1,7 @@
 """PDF -> markdown conversion via Marker, as a short-lived subprocess.
 
 Usage:
-    python -m ai_researcher.pdf_worker <pdf_path> <out_markdown_path> <out_images_dir>
+    python -m axiom_ng_runner.compute_core.pdf_worker <pdf_path> <out_markdown_path> <out_images_dir>
 
 Writes:
     - markdown to ``out_markdown_path``
@@ -75,7 +75,7 @@ def main() -> int:
             {
                 "ok": False,
                 "error": (
-                    "usage: python -m ai_researcher.pdf_worker "
+                    "usage: python -m axiom_ng_runner.compute_core.pdf_worker "
                     "<pdf_path> <out_markdown> <out_images_dir>"
                 ),
             }
@@ -98,7 +98,7 @@ def main() -> int:
         # conversion. It owns no embedder, no vector store, no DB — just
         # the Marker models. When this process exits, all that state is
         # freed to the OS.
-        from ai_researcher.core_rag.processor import DocumentProcessor
+        from axiom_ng_runner.compute_core.pdf_processing import DocumentProcessor
 
         processor = DocumentProcessor(
             pdf_dir=pdf_path.parent,

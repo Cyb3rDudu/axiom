@@ -1,7 +1,7 @@
 """EPUB -> markdown conversion via pandoc, as a short-lived subprocess.
 
 Usage:
-    python -m ai_researcher.epub_worker <epub_path> <out_markdown_path> <out_images_dir>
+    python -m axiom_ng_runner.compute_core.epub_worker <epub_path> <out_markdown_path> <out_images_dir>
 
 Writes:
     - markdown to ``out_markdown_path``
@@ -13,7 +13,7 @@ Writes:
 
 Exits non-zero on any failure (with JSON error on stderr).
 
-This is the EPUB counterpart of ``ai_researcher.pdf_worker`` — same CLI
+This is the EPUB counterpart of ``axiom_ng_runner.compute_core.pdf_worker`` — same CLI
 contract, same stdout/stderr JSON protocol, same image-naming scheme.
 The only difference is the engine: pandoc (CPU) instead of Marker (GPU).
 Requires the ``pandoc`` binary on PATH (installed in the Dockerfile).
@@ -181,7 +181,7 @@ def main() -> int:
             {
                 "ok": False,
                 "error": (
-                    "usage: python -m ai_researcher.epub_worker "
+                    "usage: python -m axiom_ng_runner.compute_core.epub_worker "
                     "<epub_path> <out_markdown> <out_images_dir>"
                 ),
             }

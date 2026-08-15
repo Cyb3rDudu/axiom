@@ -358,8 +358,8 @@ def test_no_durable_store_access(fixture_dirs):
     """Contract §19.8: the reference compute path must not import any durable
     store — verified by a real import-trace (sys.modules), not a text grep.
 
-    A text grep misses transitive imports (``from ai_researcher.core_rag import
-    ...`` -> sqlalchemy/pgvector). This snapshot-run-assert test catches them:
+    A text grep misses transitive imports (``from axiom_ng_runner.compute_core import
+    ...`` -> sqlalchemy/pgvector) [historical: pre-vendor-move example]. This snapshot-run-assert test catches them:
     we record sys.modules, run the reference compute end-to-end, then assert
     none of the banned durable-store modules were loaded as a side-effect.
     """

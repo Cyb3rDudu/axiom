@@ -39,13 +39,13 @@ def _patch_gliner(monkeypatch, spans, model=None):
     mod = types.ModuleType("gliner")
     mod.__dict__.update({"GLiNER": _G})
     monkeypatch.setitem(sys.modules, "gliner", mod)
-    # entity_extractor's import pulls ai_researcher.core_rag.__init__ →
+    # entity_extractor's import pulls the package __init__ chain →
     # numpy. Stub it with the constants the code reads.
     import re as _re
 
-    pkg = types.ModuleType("ai_researcher")
-    core = types.ModuleType("ai_researcher.core_rag")
-    ee = types.ModuleType("ai_researcher.core_rag.entity_extractor")
+    pkg = types.ModuleType("axiom_ng_runner")
+    core = types.ModuleType("axiom_ng_runner.compute_core")
+    ee = types.ModuleType("axiom_ng_runner.compute_core.entity_extractor")
     ee.__dict__.update({
         "GLINER_LABELS": ["person", "organization", "concept"],
         "_GLINER_TYPE_MAP": {
@@ -56,9 +56,9 @@ def _patch_gliner(monkeypatch, spans, model=None):
         "_GENERIC_WORDS": frozenset({"firm", "government"}),
     })
     pkg.__dict__.update({"core_rag": core})
-    monkeypatch.setitem(sys.modules, "ai_researcher", pkg)
-    monkeypatch.setitem(sys.modules, "ai_researcher.core_rag", core)
-    monkeypatch.setitem(sys.modules, "ai_researcher.core_rag.entity_extractor", ee)
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner", pkg)
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core", core)
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core.entity_extractor", ee)
     return fake
 
 
@@ -70,16 +70,16 @@ def _patch_mrebel(monkeypatch, triples):
         def fn(chunks):
             return triples
 
-    mod = types.ModuleType("ai_researcher.core_rag.relation_extractor")
+    mod = types.ModuleType("axiom_ng_runner.compute_core.relation_extractor")
     mod.__dict__.update({"extract_relations_from_chunks": fn})
     # Stub parents so the from-import never touches the real __init__
     # (which pulls numpy/torch).
-    pkg = types.ModuleType("ai_researcher")
-    core = types.ModuleType("ai_researcher.core_rag")
+    pkg = types.ModuleType("axiom_ng_runner")
+    core = types.ModuleType("axiom_ng_runner.compute_core")
     pkg.__dict__.update({"core_rag": core})
-    monkeypatch.setitem(sys.modules, "ai_researcher", pkg)
-    monkeypatch.setitem(sys.modules, "ai_researcher.core_rag", core)
-    monkeypatch.setitem(sys.modules, "ai_researcher.core_rag.relation_extractor", mod)
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner", pkg)
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core", core)
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core.relation_extractor", mod)
 
 
 class TestExtractRealEntities:
@@ -500,11 +500,11 @@ class TestPipelineWiring:
 
         monkeypatch.setattr(_subprocess, "run", fake_run)
 
-        # extract_page_labels stub (ai_researcher.core_rag.processor)
-        proc_mod = types.ModuleType("ai_researcher.core_rag.processor")
+        # extract_page_labels stub (compute_core.pdf_processing)
+        proc_mod = types.ModuleType("axiom_ng_runner.compute_core.pdf_processing")
         proc_mod.__dict__.update({"extract_page_labels": lambda _p: {1: "1"}})
         monkeypatch.setitem(
-            sys.modules, "ai_researcher.core_rag.processor", proc_mod
+            sys.modules, "axiom_ng_runner.compute_core.pdf_processing", proc_mod
         )
 
         # Chunker stub emitting REAL Chunker-shaped dicts (chunk_id in the
@@ -524,9 +524,9 @@ class TestPipelineWiring:
                     },
                 }]
 
-        chunker_mod = types.ModuleType("ai_researcher.core_rag.chunker")
+        chunker_mod = types.ModuleType("axiom_ng_runner.compute_core.chunker")
         chunker_mod.__dict__.update({"Chunker": _Chunker})
-        monkeypatch.setitem(sys.modules, "ai_researcher.core_rag.chunker", chunker_mod)
+        monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core.chunker", chunker_mod)
 
     def test_real_pipeline_uses_real_extractors(self, monkeypatch, tmp_path):
         import pathlib

@@ -1,7 +1,7 @@
 """Pytest support for the axiom_ng_runner black-box contract suite.
 
-Makes ``axiom_ng_runner`` and the existing ``ai_researcher`` cores importable,
-then stands up an isolated work root + source root per session.
+Makes ``axiom_ng_runner`` (incl. its compute_core) importable, then stands
+up an isolated work root + source root per session.
 """
 
 from __future__ import annotations
@@ -13,11 +13,9 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-AXIOM_BACKEND = REPO_ROOT / "axiom_backend"
 
-for _p in (str(REPO_ROOT), str(AXIOM_BACKEND)):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 # A 1x1 PNG for EPUB image content.
 _PNG_BYTES = bytes.fromhex(

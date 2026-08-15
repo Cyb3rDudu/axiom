@@ -12,7 +12,7 @@ import logging
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
-    from ai_researcher.hardware_detection import hardware_detector
+    from axiom_ng_runner.compute_core.devices import hardware_detector
 except ImportError:
     from hardware_detection import hardware_detector
 
@@ -25,8 +25,8 @@ def get_embedding_semaphore():
     """Get or create the global embedding semaphore."""
     global _embedding_semaphore
     if _embedding_semaphore is None:
-        from ai_researcher import config
-        max_concurrent = config.EMBEDDING_MAX_CONCURRENT_QUERIES
+        # Env with the old config.py production defaults (semaphore cap).
+        max_concurrent = int(os.getenv("EMBEDDING_MAX_CONCURRENT_QUERIES", "3"))
         _embedding_semaphore = asyncio.Semaphore(max_concurrent)
         logger.debug(f"Created embedding semaphore with limit: {max_concurrent}")
     return _embedding_semaphore
@@ -46,13 +46,12 @@ class TextEmbedder:
     ):
         # Use device from config if available, otherwise use provided device or fallback
         import os
-        from ai_researcher import config
         
-        # Use config values if not explicitly provided
+        # Env with the old config.py production defaults.
         if batch_size is None:
-            batch_size = config.EMBEDDING_BATCH_SIZE
+            batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "8"))
         if enable_memory_management is None:
-            enable_memory_management = config.EMBEDDING_MEMORY_MANAGEMENT
+            enable_memory_management = os.getenv("EMBEDDING_MEMORY_MANAGEMENT", "True").lower() == "true"
         
         # Use hardware detector for device selection
         if device:

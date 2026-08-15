@@ -35,10 +35,6 @@ from .config import settings
 
 log = logging.getLogger(__name__)
 
-_AXIOM_BACKEND = Path(__file__).resolve().parent.parent / "axiom_backend"
-
-if str(_AXIOM_BACKEND) not in sys.path:  # allow the runner to wrap existing cores
-    sys.path.insert(0, str(_AXIOM_BACKEND))
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +287,7 @@ def _get_gliner() -> Any:
 
     _GLINER_MODEL = GLiNER.from_pretrained("urchade/gliner_multi-v2.1")
     try:
-        from ai_researcher.hardware_detection import hardware_detector
+        from axiom_ng_runner.compute_core.devices import hardware_detector
 
         _GLINER_MODEL = _GLINER_MODEL.to(
             hardware_detector.get_model_device("gliner")
@@ -309,9 +305,9 @@ def _extract_real_entities(
     chunk_items: [(chunk_ref, text)]. Entities are grouped by
     (whitespace-normalized text.lower(), type); every occurrence becomes a
     mention with chunk-local char offsets. Reuses the established
-    labels/type-map/filters from ai_researcher.core_rag.entity_extractor.
+    labels/type-map/filters from compute_core.entity_extractor.
     """
-    from ai_researcher.core_rag.entity_extractor import (
+    from axiom_ng_runner.compute_core.entity_extractor import (
         _GENERIC_WORDS,
         _GLINER_TYPE_MAP,
         _NOISE_RE,
@@ -390,7 +386,7 @@ def _extract_real_relationships(
     """
     import re
 
-    from ai_researcher.core_rag.relation_extractor import (
+    from axiom_ng_runner.compute_core.relation_extractor import (
         extract_relations_from_chunks,
     )
 
@@ -846,9 +842,9 @@ def _real_pipeline(
 
     enter("convert")
     convert = (
-        "ai_researcher.pdf_worker"
+        "axiom_ng_runner.compute_core.pdf_worker"
         if content_type == "application/pdf"
-        else "ai_researcher.epub_worker"
+        else "axiom_ng_runner.compute_core.epub_worker"
     )
     cmd = [
         sys.executable,
@@ -859,7 +855,7 @@ def _real_pipeline(
         str(out_images),
     ]
     proc = subprocess.run(
-        cmd, cwd=str(_AXIOM_BACKEND), capture_output=True, text=True, check=False
+        cmd, cwd=str(Path(__file__).resolve().parent.parent), capture_output=True, text=True, check=False
     )
     if proc.returncode != 0:
         raise RuntimeError(f"{convert} failed: {proc.stderr[-500:]}")
@@ -881,7 +877,7 @@ def _real_pipeline(
     page_label_map: dict[int, str] = {}
     cfi_entries: list[dict[str, Any]] = []
     if content_type == "application/pdf":
-        from ai_researcher.core_rag.processor import extract_page_labels
+        from axiom_ng_runner.compute_core.pdf_processing import extract_page_labels
 
         page_label_map = extract_page_labels(str(source_path))
     elif content_type == "application/epub+zip":
@@ -900,7 +896,7 @@ def _real_pipeline(
         out_md.write_text(markdown, encoding="utf-8")
 
     enter("chunk")
-    from ai_researcher.core_rag.chunker import Chunker
+    from axiom_ng_runner.compute_core.chunker import Chunker
 
     chunk_dicts = Chunker(max_chunk_tokens=1200).chunk(
         markdown,
@@ -911,7 +907,7 @@ def _real_pipeline(
     proc_opt = request.get("processing", {}) or {}
     if proc_opt.get("compute_dense_embeddings"):
         enter("embed")
-        from ai_researcher.core_rag.embedder import TextEmbedder
+        from axiom_ng_runner.compute_core.embedder import TextEmbedder
 
         TextEmbedder().embed_chunks(chunk_dicts)
 

@@ -1,13 +1,12 @@
 """Pure, hermetic chunking for the *reference* compute backend.
 
-The existing ``ai_researcher.core_rag`` package eagerly imports the heavy
-vector-store chain (numpy/pgvector) via its ``__init__``, so a truly hermetic
-reference backend cannot safely import ``Chunker`` / ``extract_page_labels``
-from it without dragging in GPU/store dependencies. This module re-implements
-the *small* pure bit we need (deterministic struct-aware chunking + PDF page
-label extraction) with stdlib + PyMuPDF only, so the reference backend and the
-contract black-box suite stay dependency-light. The ``real`` backend still
-wraps the genuine ``ai_researcher`` cores.
+The real backend's compute_core still pulls GPU/store dependencies
+(numpy/pgvector/torch), so a truly hermetic reference backend cannot
+safely import them. This module re-implements the *small* pure bit we
+need (deterministic struct-aware chunking + PDF page label extraction)
+with stdlib + PyMuPDF only, so the reference backend and the contract
+black-box suite stay dependency-light. The ``real`` backend wraps the
+genuine compute_core.
 """
 
 from __future__ import annotations

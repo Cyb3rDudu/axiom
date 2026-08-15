@@ -6,7 +6,7 @@
 # marker-pdf==1.10.2  — last v1 before the v2 API jump (proven in ~/Code/marker-poc)
 # torch 2.13.0 with surya-ocr 0.17.1 — Apple GPU acceleration via torch.backends.mps
 #
-# The old axiom_backend/ai_researcher/core_rag package eagerly imports sqlalchemy
+# The vendored compute_core no longer pulls any DB driver (the old
 # via its __init__.py (pgvector_store) even though the runner never writes to the
 # DB — so sqlalchemy is needed as an import-time dependency, not a runtime one.
 # This is the S6 finding from Gate 3 (documented); a clean fix would isolate the

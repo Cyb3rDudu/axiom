@@ -8,5 +8,5 @@ in the long-lived doc-processor process, where the pages stay resident
 for the container's lifetime.
 
 Invoked as:
-    python -m ai_researcher.pdf_worker <pdf> <out_markdown> <out_images_dir>
+    python -m axiom_ng_runner.compute_core.pdf_worker <pdf> <out_markdown> <out_images_dir>
 """

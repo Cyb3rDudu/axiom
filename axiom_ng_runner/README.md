@@ -26,7 +26,7 @@ Processing is asynchronous: `POST /v1/process` validates the source, accepts
 | Backend | Use | Dependencies |
 | --- | --- | --- |
 | `reference` (default) | Hermetic contract tests; lightweight real conversion | fastapi, uvicorn, pydantic, pymupdf |
-| `real` | Wire the existing `ai_researcher` Marker/pdf_worker, epub_worker, embedder & extractors | torch, FlagEmbedding, gliner, mrebel, marker-pdf |
+| `real` | Wire the vendored `compute_core` Marker/pdf_worker, epub_worker, embedder & extractors | torch, FlagEmbedding, gliner, mrebel, marker-pdf |
 
 The reference backend converts PDF via PyMuPDF / EPUB via zipfile, reuses a
 hermetic deterministic chunker, and emits contract-shaped results with honest
@@ -78,11 +78,9 @@ they are not lost:
   endpoint's terminate branch is dead code for real jobs (contract §17 / §9.2).
   Fix: retain the `Popen` handle in `_running[job_id]["process"]` so `job_cancel`
   can `terminate()` it, and make the subprocess cooperative (poll cancel).
-- **Real backend transitively imports DB-store modules.** `from
-  ai_researcher.core_rag.chunker import Chunker` triggers
-  `core_rag/__init__.py` → `pgvector_store` → `sqlalchemy` as an import
-  side-effect (against work-order §5.4's spirit; no writes occur). Needs an
-  isolated import path or documented exception.
+- ~~**Real backend transitively imports DB-store modules.**~~ Resolved by
+  the compute_core vendor move (#118): the DB-store import chain stayed
+  behind with the old tree; compute_core has no driver imports at all.
 - **Real backend does not wire GLiNER/mREBEL extractors.** `_real_pipeline`
   calls converter + Chunker + TextEmbedder only; entities/relations still use
   the reference regex extractor for both backends. Wire the real extractors
