@@ -191,6 +191,19 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 				return "", fmt.Errorf("replay reindex: %w", err)
 			}
 		}
+		// #118-smoke root cause (closes the #126(a) mystery): the replay branch
+		// previously returned WITHOUT fence-completing the job row — the snapshot
+		// was correct but ingest_jobs stayed 'processing', the lease expired, the
+		// job was re-claimed and the resubmit hit the ACKed runner (ARTIFACTS_EXPIRED
+		// today, the artifact-404 wall pre-#126). A replay IS a valid completion:
+		// same fenced semantics as the insert path. An empty lease token means the
+		// row is already unleased/completed — nothing to fence (idempotent §10.1);
+		// fence loss is likewise tolerated.
+		if ident.leaseRef.LeaseToken != "" {
+			if err := r.MarkCompletedTx(ctx, tx, ident.leaseRef, res.Processor.Name, res.Processor.Version, existingID); err != nil && !errors.Is(err, ErrLostLease) {
+				return "", fmt.Errorf("replay mark completed: %w", err)
+			}
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return "", fmt.Errorf("commit replay: %w", err)
 		}

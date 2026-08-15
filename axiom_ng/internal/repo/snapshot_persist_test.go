@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -1023,5 +1024,84 @@ func TestPersistLateFailureRollsBackTombstones(t *testing.T) {
 	}
 	if nDel != 0 {
 		t.Fatalf("late failure must roll back tombstone planning; found %d delete rows", nDel)
+	}
+}
+
+// TestReplayPersistCompletesJobRow pins the #118-smoke root cause: an
+// identity REPLAY driven by a fresh job with a LIVE lease (a second force
+// job over an existing force identity) must FENCE-COMPLETE its job row.
+// Before the fix the replay branch never touched ingest_jobs — the row
+// stayed 'processing', the lease expired, the re-claim resubmitted into an
+// ACKed runner (ARTIFACTS_EXPIRED; pre-#126: the artifact-404 wall). A
+// replay over an already-completed row (empty lease token) stays a
+// tolerated no-op (§10.1).
+func TestReplayPersistCompletesJobRow(t *testing.T) {
+	h := newPersistHarness(t, "replaydone")
+	ctx := context.Background()
+
+	// The harness's own pending job would win the next claim — cancel it so
+	// the two force jobs drive this test.
+	if _, err := h.pool.Exec(ctx,
+		`UPDATE ingest_jobs SET status='cancelled', updated_at=now() WHERE id=$1`, h.jobID); err != nil {
+		t.Fatalf("cancel harness job: %v", err)
+	}
+
+	forceJob := func(n int) (jobID string) {
+		t.Helper()
+		var srcID, docID string
+		if err := h.pool.QueryRow(ctx,
+			`SELECT source_id::text, document_id::text FROM ingest_jobs WHERE id=$1`, h.jobID,
+		).Scan(&srcID, &docID); err != nil {
+			t.Fatalf("job refs: %v", err)
+		}
+		if err := h.pool.QueryRow(ctx, `
+			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
+			VALUES ($1,$2,$3,$4,'pending',true) RETURNING id::text`,
+			srcID, docID, h.attachmentID, h.contentHash).Scan(&jobID); err != nil {
+			t.Fatalf("seed force job %d: %v", n, err)
+		}
+		return jobID
+	}
+	drive := func(jobID string) (snapID string, err error) {
+		cj, cerr := h.rep.ClaimNextJob(ctx, defaultClaim("worker-replay-"+jobID[:8]))
+		if cerr != nil || cj == nil || cj.LeaseRef.JobID != jobID {
+			return "", fmt.Errorf("claim %s: %v %v", jobID, cj, cerr)
+		}
+		if err := h.rep.MarkProcessing(ctx, cj.LeaseRef); err != nil {
+			return "", err
+		}
+		raw := h.validResultRaw(3)
+		raw.JobID = cj.LeaseRef.JobID
+		b, merr := json.Marshal(raw)
+		if merr != nil {
+			return "", merr
+		}
+		return h.rep.PersistResult(ctx, cj.LeaseRef.JobID, b, PersistOptions{CapDim: 3, Artifacts: markdownArtifact()})
+	}
+
+	// Force job 1: INSERT path, creates the force identity, completes its row.
+	j1 := forceJob(1)
+	s1, err := drive(j1)
+	if err != nil {
+		t.Fatalf("force persist 1: %v", err)
+	}
+
+	// Force job 2: SAME identity (same canonical force profile hash), LIVE
+	// lease — the dispatcher-driven replay shape from the #118 smoke.
+	j2 := forceJob(2)
+	s2, err := drive(j2)
+	if err != nil {
+		t.Fatalf("replay persist (live lease): %v", err)
+	}
+	if s1 != s2 {
+		t.Fatalf("replay must return the existing snapshot %s, got %s", s1, s2)
+	}
+	var status string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT status::text FROM ingest_jobs WHERE id=$1`, j2).Scan(&status); err != nil {
+		t.Fatalf("read job 2 status: %v", err)
+	}
+	if status != "completed" {
+		t.Fatalf("job 2 status after replay persist = %q, want completed (replay must fence-complete)", status)
 	}
 }
