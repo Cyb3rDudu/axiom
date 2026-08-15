@@ -13,12 +13,17 @@ internally).
 Device policy mirrors the archive one: FP16 on CUDA, FP32 forced on CPU.
 MPS also runs FP32 — half-op coverage on MPS is spotty and the #128 Mac
 proofs ran fp32 — with PYTORCH_ENABLE_MPS_FALLBACK=1 as insurance for
-unsupported kernels.
+unsupported kernels (set at module top: torch reads it at import time,
+so setting it after torch is loaded would be dead code).
 """
 
 import logging
 import os
 import threading
+
+# MUST precede the devices import (which imports torch): torch captures this
+# flag at import time. Harmless on non-MPS hosts — it only affects MPS.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 from .devices import hardware_detector
 
@@ -35,10 +40,7 @@ class QueryReranker:
         max_length: int = 512,
     ):
         self.device = hardware_detector.get_model_device("reranker")
-        if self.device == "mps":
-            # Unsupported kernels fall back to CPU instead of crashing the
-            # endpoint (#132 Ziel 3: the reranker MUST run on the Mac).
-            os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+        # PYTORCH_ENABLE_MPS_FALLBACK is set at module top (before torch import).
         use_fp16 = self.device.startswith("cuda")
         logger.info(
             "loading reranker %s on %s (fp16=%s, batch_size=%d)",

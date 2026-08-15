@@ -170,6 +170,25 @@ def test_embed_lazy_no_heavy_imports(client):
     assert not heavy, f"heavy imports leaked into reference embed: {heavy}"
 
 
+def test_real_mode_embedder_load_failure_no_silent_fallback(monkeypatch, tmp_path):
+    """#131 invariant probe (service level): in real mode a model-load
+    failure MUST raise — never silently fall back to the reference stub
+    (a stub vector would poison the shared embedding space) — and the
+    failed attempt must not count as a load (counter integrity)."""
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core.embedder", None)
+    old = settings.get()
+    settings.set(Settings(work_root=tmp_path / "work", compute_backend="real"))
+    query_service.reset()
+    try:
+        with pytest.raises(ImportError):
+            query_service.get_query_embedder()
+        st = query_service.stats()
+        assert st["embedder_loads"] == 0 and st["embedder_warm"] is False
+    finally:
+        query_service.reset()
+        settings.set(old)
+
+
 def test_embed_shape_mismatch_surfaces_as_500(client, monkeypatch):
     """Mutation probe: if the model layer ever returns vectors that disagree
     with the declared capability dimensions, the endpoint must fail loudly
@@ -182,6 +201,22 @@ def test_embed_shape_mismatch_surfaces_as_500(client, monkeypatch):
 
     monkeypatch.setattr(qs, "get_query_embedder", lambda: _Broken())
     r = client.post("/v1/embed", json=_embed_payload(["x"]))
+    assert r.status_code == 500
+    assert r.json()["detail"]["code"] == "EMBEDDING_SHAPE_MISMATCH"
+
+
+def test_embed_count_mismatch_surfaces_as_500(client, monkeypatch):
+    """Mutation probe (count arm of the shape check): correct dimensions but
+    wrong vector count must 500 — a silent short/long list would misalign
+    query->vector mapping downstream."""
+    import axiom_ng_runner.query_service as qs
+
+    class _Broken:
+        def embed_queries_dense(self, texts):
+            return [[0.0] * DENSE_EMBEDDING_DIM]  # one vector, however many texts
+
+    monkeypatch.setattr(qs, "get_query_embedder", lambda: _Broken())
+    r = client.post("/v1/embed", json=_embed_payload(["x", "y"]))
     assert r.status_code == 500
     assert r.json()["detail"]["code"] == "EMBEDDING_SHAPE_MISMATCH"
 
@@ -326,6 +361,24 @@ def test_rerank_lazy_no_heavy_imports(client):
     assert not heavy, f"heavy imports leaked into reference rerank: {heavy}"
 
 
+def test_real_mode_reranker_load_failure_no_silent_fallback(monkeypatch, tmp_path):
+    """#132 invariant probe (service level): in real mode a model-load
+    failure MUST raise — no silent fallback to the Jaccard stub (fake
+    rankings are worse than an error) — and must not count as a load."""
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core.reranker", None)
+    old = settings.get()
+    settings.set(Settings(work_root=tmp_path / "work", compute_backend="real"))
+    query_service.reset()
+    try:
+        with pytest.raises(ImportError):
+            query_service.get_query_reranker()
+        st = query_service.stats()
+        assert st["reranker_loads"] == 0 and st["reranker_warm"] is False
+    finally:
+        query_service.reset()
+        settings.set(old)
+
+
 def test_rerank_shape_mismatch_surfaces_as_500(client, monkeypatch):
     """Mutation probe: a broken model layer (wrong count / bad indices / dupes)
     must surface as 500 instead of a silently wrong ranking."""
@@ -337,6 +390,22 @@ def test_rerank_shape_mismatch_surfaces_as_500(client, monkeypatch):
 
     monkeypatch.setattr(qs, "get_query_reranker", lambda: _Broken())
     r = client.post("/v1/rerank", json=_rerank_payload("q", ["a", "b"], top_n=2))
+    assert r.status_code == 500
+    assert r.json()["detail"]["code"] == "RERANK_SHAPE_MISMATCH"
+
+
+def test_rerank_index_out_of_range_surfaces_as_500(client, monkeypatch):
+    """Mutation probe (index-range arm of the shape check): an out-of-range
+    index must 500 — handing it back would make the caller dereference a
+    candidate that does not exist."""
+    import axiom_ng_runner.query_service as qs
+
+    class _Broken:
+        def rerank(self, query, texts, top_n=None):
+            return [{"index": 99, "score": 1.0}][:top_n]
+
+    monkeypatch.setattr(qs, "get_query_reranker", lambda: _Broken())
+    r = client.post("/v1/rerank", json=_rerank_payload("q", ["a", "b"], top_n=1))
     assert r.status_code == 500
     assert r.json()["detail"]["code"] == "RERANK_SHAPE_MISMATCH"
 

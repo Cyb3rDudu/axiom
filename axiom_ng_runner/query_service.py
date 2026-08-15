@@ -57,7 +57,9 @@ def _build_embedder() -> QueryEmbedder:
     if settings.get().compute_backend == "real":
         from .compute_core.embedder import TextEmbedder
 
-        return TextEmbedder()  # raises on load failure — no silent fallback
+        # Explicit model: capability report and loaded model share one
+        # source of truth (DENSE_EMBEDDING_MODEL) — no default-value drift.
+        return TextEmbedder(model_name=DENSE_EMBEDDING_MODEL)  # raises on load failure — no silent fallback
     return _ReferenceQueryEmbedder()
 
 
@@ -87,7 +89,8 @@ def _build_reranker() -> QueryRerankerLike:
     if settings.get().compute_backend == "real":
         from .compute_core.reranker import QueryReranker
 
-        return QueryReranker()  # raises on load failure — no silent fallback
+        # Explicit model: same rationale as _build_embedder.
+        return QueryReranker(model_name=RERANKER_MODEL)  # raises on load failure — no silent fallback
     return _ReferenceQueryReranker()
 
 

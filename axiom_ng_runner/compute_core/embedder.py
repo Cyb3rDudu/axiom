@@ -404,8 +404,8 @@ class TextEmbedder:
             outputs = self.model.encode(
                 texts,
                 batch_size=len(texts),
-                max_length=512,  # queries are short; FlagEmbedding's own
-                # query_max_length default is 512 too. 8192 would only pad.
+                max_length=512,  # queries are short: 512 tokens truncate
+                # nothing realistic; 8192 would only pad slower.
                 return_dense=True,
                 return_sparse=False,
                 return_colbert_vecs=False,

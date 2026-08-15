@@ -154,7 +154,8 @@ class EmbedResponse(BaseModel):
 
 
 class RerankRequest(BaseModel):
-    """Contract §7a. ``top_n`` must satisfy 1 <= top_n <= len(texts)."""
+    """Contract §7a. ``top_n`` must be >= 1; values above ``len(texts)`` are
+    clamped (archive slicing semantics — return all texts)."""
 
     model_config = _no_extra()
     contract_version: str

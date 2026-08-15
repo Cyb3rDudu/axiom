@@ -384,7 +384,7 @@ class HardwareDetector:
 
         Args:
             model_name: Key in _MODEL_DEVICE_ENV ('embedder', 'marker',
-                        'gliner', 'mrebel')
+                        'gliner', 'mrebel', 'reranker')
 
         Returns:
             Device string ('cpu', 'cuda', 'cuda:0', 'mps', etc.)
