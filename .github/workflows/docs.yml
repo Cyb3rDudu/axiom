@@ -52,6 +52,16 @@ jobs:
             exit 1
           fi
 
+      - name: Naming gate (product name 'axiom', not 'axiom-ng')
+        # Product name is 'axiom'. The single allowed occurrence is the historical
+        # reference in About (formerly known as axiom-ng during development).
+        # docs/_inventory.md is an internal meta file and is exempt.
+        run: |
+          if grep -ri 'axiom-ng' docs/ --include='*.md' | grep -v '_inventory.md' | grep -v 'about/index.md'; then
+            echo "legacy product name 'axiom-ng' found in published pages"
+            exit 1
+          fi
+
       - name: Build documentation
         run: mkdocs build --clean --strict
 

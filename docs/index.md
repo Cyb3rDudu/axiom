@@ -1,33 +1,33 @@
-# axiom-ng
+# axiom
 
-Ein Zotero-gestütztes Wissenssystem, das deine Literatur in eine durchsuchbare
-Wissensbasis verwandelt.
+A Zotero-powered research knowledge system that turns your literature into a
+searchable knowledge base.
 
 ```text
-Zotero-Bibliothek → Verarbeitungs-Pipeline → durchsuchbare Daten
+Zotero library → processing pipeline → searchable data
 ```
 
-**axiom-ng** organisiert die Verarbeitung mit einer Go-Anwendung (Dispatcher,
-Persistenz, Fencing, Outbox), während die eigentliche Rechenarbeit von einem
-Python-Compute-Runner erledigt wird. Das Ergebnis ist eine strukturierte,
-durchsuchbare Wissensbasis deiner Dokumente, Entitäten und Beziehungen.
+**axiom** orchestrates processing with a Go application (dispatcher,
+persistence, fencing, outbox), while the actual compute-heavy work is done by a
+Python compute runner. The result is a structured, searchable knowledge base of
+your documents, entities, and relationships.
 
-## Für wen ist das?
+## Who is this for?
 
-- **Nutzer** — verbinden Zotero, verarbeiten Dokumente, suchen in den Daten.
-  → weiter zum [User Guide](user-guide/ingest.md)
-- **Entwickler** — verstehen Architektur, Contract, Konfiguration, Testing.
-  → weiter zum [Developer Guide](developer-guide/architecture.md)
-- **Betreiber** — setzen einen Runner auf, überwachen Jobs, beheben Fehler.
-  → weiter zu [Operations](operations/deployment.md)
+- **Users** — connect Zotero, process documents, search the data.
+  → continue to the [User Guide](user-guide/ingest.md)
+- **Developers** — understand the architecture, contract, configuration, testing.
+  → continue to the [Developer Guide](developer-guide/architecture.md)
+- **Operators** — set up a runner, monitor jobs, resolve failures.
+  → continue to [Operations](operations/deployment.md)
 
-## Wo geht es weiter?
+## Where to go next?
 
-| Ziel | Pfad |
+| Goal | Path |
 | --- | --- |
-| In 10 Minuten verstehen, was passiert | [Konzept-Tour](get-started/concept-tour.md) |
-| Setup und erster Lauf | [Quickstart](get-started/quickstart.md) |
-| Systemarchitektur | [Architektur-Übersicht](developer-guide/architecture.md) |
-| Runner betreiben | [Deployment](operations/deployment.md) |
-| Messungen und Analysen | [Benchmarks & Analysen](references/benchmarks.md) |
-| Herkunft, Lizenz, Logo | [Über](about/index.md) |
+| Understand in 10 minutes what happens | [Concept Tour](get-started/concept-tour.md) |
+| Setup and first run | [Quickstart](get-started/quickstart.md) |
+| System architecture | [Architecture Overview](developer-guide/architecture.md) |
+| Operate a runner | [Deployment](operations/deployment.md) |
+| Measurements and analyses | [Benchmarks & Analyses](references/benchmarks.md) |
+| Origin, license, logo | [About](about/index.md) |

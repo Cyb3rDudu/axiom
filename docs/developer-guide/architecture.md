@@ -1,76 +1,76 @@
-# Architektur-Übersicht
+# Architecture Overview
 
-> Diese Seite ist das Einstiegskapitel für Entwickler. D5 vertieft einzelne
-> Bausteine und fügt ein mermaid-Diagramm hinzu; hier steht der Überblick.
+> This is the entry chapter for developers. D5 deepens individual components and
+> adds a mermaid diagram; here is the overview.
 
-axiom-ng ist ein **Zotero-gestütztes Wissenssystem**: eine RAG-Datenpipeline von
-der Zotero-Bibliothek über Dokument-Verarbeitung zu einer durchsuchbaren
-Wissensbasis aus Chunks, Entitäten und Beziehungen.
+axiom is a **Zotero-powered research knowledge system**: an RAG data pipeline
+from the Zotero library, through document processing, to a searchable knowledge
+base of chunks, entities, and relationships.
 
-## Grundprinzip
+## Core principle
 
 ```text
-Zotero (Quellen + Metadaten)
-        │ lokaler Pfad + unveränderlicher Metadaten-Snapshot
+Zotero (sources + metadata)
+        │ local path + immutable metadata snapshot
         ▼
-axiom-ng (Go) — Dispatcher, Leases, Fencing, Outbox, durable Persistenz
+axiom (Go) — dispatcher, leases, fencing, outbox, durable persistence
         │ HTTP/JSON: POST /v1/process
         ▼
-axiom_ng_runner (Python) — nur Compute (Konvertierung, Chunking, ML)
-        │ Resultat + Artefakte zurück
+axiom_ng_runner (Python) — compute only (conversion, chunking, ML)
+        │ result + artifacts back
         ▼
-axiom-ng validiert + persistiert (PostgreSQL/pgvector/Graph, Outbox→OpenSearch)
+axiom validates + persists (PostgreSQL/pgvector/graph, outbox→OpenSearch)
 ```
 
-Die zentrale Eigenschaft: **axiom-ng orchestriert, der Python-Runner rechnet, und
-allein axiom-ng besitzt durable Zustand.**
+The central property: **axiom orchestrates, the Python runner computes, and only
+axiom owns durable state.**
 
-## Die drei Ebenen
+## The three layers
 
-1. **Go-Orchestrierung (`axiom_ng`)** — Zotero-Sync, Ingest-Jobs, atomare
-   Lease-Claims mit Fencing, Retries, Cancellation, persistente IDs, versionierte
-   Verarbeitungs-Snapshots, durable abgeleitete Artefakte, Chunks/Embeddings/
-   Entitäten/Beziehungen, PostgreSQL/pgvector- und Graph-Schreibpfade, OpenSearch-
-   Outbox. [Weiter: axiom_ng (Go)](axiom-ng-go.md)
-2. **Python-Compute (`axiom_ng_runner`)** — ein Loopback-HTTP-Prozessor nach
-   `PROCESSOR_CONTRACT` v1, mit vendor-ed `compute_core` (Marker-Konvertierung,
-   Editor-Kern, BGE-M3-Embedder, GLiNER/mREBEL-Extraktoren). Er besitzt nur
-   Berechnung und temporäre Job-Ausgabe, nie durable Anwendungszustand.
-   [Weiter: axiom_ng_runner](axiom-ng-runner.md)
-3. **Transport-Regel (Contract v1)** — Dispatcher und Runner tauschen nur den
-   HTTP-Vertrag aus (`PROCESSOR_CONTRACT`). Bulk-Flows (Ergebnis-JSON,
-   Artifakt-Bodies) brauchen direkte LAN-Erreichbarkeit in beiden Richtungen.
-   [Details im Deployment-Kapitel](../operations/deployment.md)
+1. **Go orchestration (`axiom_ng`)** — Zotero sync, ingest jobs, atomic lease
+   claims with fencing, retries, cancellation, persistent IDs, versioned
+   processing snapshots, durable derived artifacts, chunks/embeddings/entities/
+   relationships, PostgreSQL/pgvector and graph write paths, OpenSearch outbox.
+   [Continue: axiom_ng (Go)](axiom-go.md)
+2. **Python compute (`axiom_ng_runner`)** — a loopback HTTP processor per
+   `PROCESSOR_CONTRACT` v1, with vendored `compute_core` (Marker conversion,
+   chunker, BGE-M3 embedder, GLiNER/mREBEL extractors). It owns only computation
+   and temporary job output, never durable application state.
+   [Continue: axiom_ng_runner](axiom-runner.md)
+3. **Transport rule (contract v1)** — dispatcher and runner exchange only the
+   HTTP contract (`PROCESSOR_CONTRACT`). Bulk flows (result JSON, artifact
+   bodies) need direct LAN reachability in both directions.
+   [Details in the Deployment chapter](../operations/deployment.md)
 
-## Die Transport-Grenze (entscheidend)
+## The transport boundary (decisive)
 
-Der Runner ist **pure Compute** — niemals toucht er Zotero, Postgres,
-OpenSearch oder den Graph. Nur der Vertrag überquert die Leitung. Der Dispatcher
-verhandelt beim Start die Capabilities und schlägt fehl, wenn der Runner
-unerreichbar oder vertragsinkompatibel ist. Bulk-Daten laufen direkt übers LAN,
-ein Tunnel taugt nur für die Kontrollebene (dritte Maskierungs-Ebene eines
-historischen Transportproblems).
+The runner is **pure compute** — it never touches Zotero, Postgres, OpenSearch,
+or the graph. Only the contract crosses the wire. The dispatcher negotiates
+capabilities at startup and fails if the runner is unreachable or
+contract-incompatible. Bulk data runs directly over LAN; a tunnel serves only
+the control plane (the third masking layer of a historical transport problem).
 
-## Invarianten (aus der aufgelösten Work-Order)
+## Invariants (from the resolved work order)
 
-- Nur der aktuelle Lease-Besitzer darf einen aktiven Job mutieren.
-- Jede Job-Mutation nach dem Claim ist über die Lease-Token gefenced.
-- Ein stale Worker kann eine reclaimten Job weder komplettieren noch failen.
-- Keine DB-Transaktion bleibt während CPU-/Modell-Ausführung offen (Go hält nie
-  eine Transaktion, während es auf Python wartet).
-- Ein Prozessor-Ergebnis ist unvertrauenswürdiger Input, bis Go es vollständig
-  validiert hat.
-- Ergebnis-Persistenz ist atomar; ein Fehler erhält den vorigen aktiven Snapshot.
-- Ein Job wird erst `completed`, wenn Ergebnis + Artefakte durable committet sind.
-- Prozessor-ACK erfolgt erst nach dem durable Commit und ist idempotent.
-- Original-PDF/EPUB werden in place gelesen und nie durable kopiert.
+- Only the current lease owner may mutate an active job.
+- Every job mutation after the claim is fenced by the lease token.
+- A stale worker can neither complete nor fail a reclaimed job.
+- No DB transaction stays open during CPU/model execution (Go never holds a
+  transaction while waiting on Python).
+- A processor result is untrusted input until Go fully validates it.
+- Result persistence is atomic; a failure preserves the previous active
+  snapshot.
+- A job becomes `completed` only after the result + artifacts are durably
+  committed.
+- Processor ACK happens only after the durable commit and is idempotent.
+- Original PDF/EPUB are read in place and never durably copied.
 
-## Wo weiter?
+## Where to continue?
 
-- Vertrag im Detail: [PROCESSOR_CONTRACT v1](processor-contract.md)
-- Dispatcher/Leases/Persistenz: [axiom_ng (Go)](axiom-ng-go.md)
-- Python-Runner + bekannte Grenzen: [axiom_ng_runner](axiom-ng-runner.md)
-- Betrieb: [Operations → Deployment](../operations/deployment.md)
-- Konfiguration + Testing: folgen in D5
+- Contract in detail: [PROCESSOR_CONTRACT v1](processor-contract.md)
+- Dispatcher/leases/persistence: [axiom_ng (Go)](axiom-go.md)
+- Python runner + known limitations: [axiom_ng_runner](axiom-runner.md)
+- Operations: [Operations → Deployment](../operations/deployment.md)
+- Configuration + testing: follows in D5
 
-Weiter: [axiom_ng (Go)](axiom-ng-go.md) · [axiom_ng_runner (Python)](axiom-ng-runner.md)
+Continue: [axiom_ng (Go)](axiom-go.md) · [axiom_ng_runner (Python)](axiom-runner.md)

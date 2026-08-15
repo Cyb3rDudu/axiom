@@ -1,29 +1,28 @@
 # PROCESSOR_CONTRACT v1
 
-!!! note "Kanonische Quelle"
-    Die kanonische Quelle des Vertrags ist die Datei
-    **`axiom_ng/docs/PROCESSOR_CONTRACT.md`** im Repository — sie wird nicht
-    verschoben oder umgeschrieben. Diese Site-Seite ist eine
-    Zusammenfassung + Verweis; alle für die Implementierung verbindlichen
-    Detailregeln stehen in der kanonischen Datei. Im Zweifel zählt der
-    kanonische Text, nicht diese Übersicht.
+!!! note "Canonical source"
+    The canonical source of the contract is the file
+    **`axiom_ng/docs/PROCESSOR_CONTRACT.md`** in the repository — it is not
+    moved or rewritten. This site page is a summary + reference; all
+    implementation-binding detail rules live in the canonical file. When in
+    doubt, the canonical text wins over this overview.
 
-Der Processor-Contract trennt durable Datenbesitz von hardware-/bibliotheks-
-spezifischer Dokument-Verarbeitung:
+The Processor Contract separates durable data ownership from hardware- and
+library-specific document processing:
 
-- **`axiom-ng`** besitzt Zotero-Synchronisation, Ingest-Jobs, persistente IDs,
-  PostgreSQL/pgvector-Daten, abgeleitete Artefakte, Knowledge-Graph und
-  Suchindex-Synchronisation.
-- **Ein Document-Processor** führt rechenintensive Extraktion aus (erste
-  Implementierung in Python, weil Marker und die ML-Bibliotheken dort die beste
-  Hardware-Unterstützung haben).
-- **Ein Prozessor besitzt keinen durable Anwendungszustand** und muss durch eine
-  andere Implementierung desselben Vertrags ersetzbar sein.
+- **axiom** owns Zotero synchronization, ingest jobs, persistent IDs,
+  PostgreSQL/pgvector data, derived artifacts, the knowledge graph, and search
+  index synchronization.
+- **A document processor** performs compute-heavy extraction (first
+  implementation in Python, because Marker and the ML libraries have the best
+  hardware support there).
+- **A processor owns no durable application state** and must be replaceable by
+  another implementation of the same contract.
 
-## Vertragsversionen & Endpoints
+## Contract versions & endpoints
 
-Alle Endpoints liegen unter `/v1`; jeder Request enthält `contract_version`.
-Additive optionale Felder sind innerhalb von v1 erlaubt.
+All endpoints live under `/v1`; every request carries `contract_version`.
+Additive optional fields are allowed within v1.
 
 ```text
 GET    /v1/health
@@ -36,72 +35,73 @@ POST   /v1/jobs/{job_id}/cancel
 POST   /v1/jobs/{job_id}/ack
 ```
 
-Verarbeitung ist asynchron. `POST /v1/process` akzeptiert oder dedupliziert einen
-Job und kehrt schnell zurück; langläufige Marker-/Modell-Operationen halten die
-Request-Verbindung nicht offen.
+Processing is asynchronous. `POST /v1/process` accepts or deduplicates a job
+and returns quickly; long-running Marker/model operations do not hold the
+request connection open.
 
-## Ownership-Grenze (kurz)
+## Ownership boundary (short)
 
-**Der Prozessor MUSS NICHT:**
+**The processor MUST NOT:**
 
-- direkt Zotero lesen,
-- nach PostgreSQL, pgvector, OpenSearch oder in den Knowledge-Graph schreiben,
-- den Ingest-Job-Zustand in der axiom-ng-Datenbank ändern,
-- vom Zotero gelieferte bibliografische Metadaten ändern,
-- durable Kopien der Quell-PDF/EPUB behalten,
-- fehlende Metadaten mit einer LLM erfinden.
+- read Zotero directly,
+- write to PostgreSQL, pgvector, OpenSearch, or the knowledge graph,
+- change ingest-job state in the axiom database,
+- change bibliographic metadata supplied by Zotero,
+- keep durable copies of the source PDF/EPUB,
+- invent missing metadata with an LLM.
 
-**Der Prozessor besitzt nur Berechnung:** Quell-Datei lesen (für die Dauer des
-Jobs), PDF/EPUB→Markdown, Seiten-/Quell-Lokator-Mapping, strukturbewusstes
-Chunking, Dense-/Sparse-Embeddings, Entity-/Relationship-Extraktion, optionale
-Bild-/Tabellen-Extraktion, temporäre Dateien bis zur Acknowledgement.
+**The processor owns only computation:** reading the source file (for the
+duration of the job), PDF/EPUB → Markdown, page/source-locator mapping,
+structure-aware chunking, dense/sparse embeddings, entity/relationship
+extraction, optional image/table extraction, and temporary files up to
+acknowledgement.
 
-## Kernmechanik
+## Core mechanics
 
-- **Verarbeitungs-Flow:** Ingest-Job → `POST /v1/process` → Prozessor → Resultat
-  - Compute-Payload + Artefakte → axiom-ng-Validierung → PostgreSQL/pgvector/
-  Graph-Transaktion + durable Artefakt-Speicher + OpenSearch-Outbox → `ack`. Ein
-  `ack` erlaubt dem Prozessor erst, temporäre Dateien zu entfernen; `ack` ist
-  idempotent und der Default darf axiom-ng-Restart-Recovery nicht verhindern.
-- **Idempotenz:** Der `idempotency_key` identifiziert äquivalente Prozessor-Arbeit;
-  derselbe akzeptierte Request liefert den bestehenden Prozessor-Job statt Doppel-
-  Arbeit. Re-Play nach einem `ack`ed Job antwortet `409/ARTIFACTS_EXPIRED`
-  (terminal, nicht-retrybar); Neuberechnung braucht einen frischen
-  Idempotency-Key (`force_rebuild`).
-- **Provenienz:** Chunk-Provenienz (ref, index, text, locator, section-Hierarchie,
-  Paragraph-Indexes, token_count, Embeddings) ist Pflicht, nicht optional — und
-  überlebt Prozessor-Ersetzung und Re-Indexing. Für PDFs physische 0-basierte
-  Seitenindizes + logische Seitentitel als Strings; für EPUB CFI-Lokator, niemals
-  erfundene Seitenzahlen.
-- **Validierung vor Persistenz (§14):** Quell-Identität + Hash, eindeutige
-  zusammenhängende Chunk-Indizes, eindeutige lokale Refs, alle Referenzen,
-  Dense-Vektor-Dimensionen/-Werte, Sparse-Key/Value-Typen, Pflicht-Locators,
-  Evidence-Referenzen auf extrahierte Relationship, Results-Counts gegen die
-  tatsächlichen Arrays.
-- **Fehler:** Terminal-Fehler verwenden stabile maschinenlesbare Codes (z. B.
+- **Processing flow:** ingest job → `POST /v1/process` → processor → result +
+  compute payload + artifacts → axiom validation → PostgreSQL/pgvector/graph
+  transaction + durable artifact storage + OpenSearch outbox → `ack`. An `ack`
+  lets the processor remove temporary files; `ack` is idempotent and the default
+  must not prevent axiom restart recovery.
+- **Idempotency:** the `idempotency_key` identifies equivalent processor work;
+  the same accepted request returns the existing processor job instead of
+  duplicate work. Replay after an acked job answers `409/ARTIFACTS_EXPIRED`
+  (terminal, non-retryable); recompute needs a fresh idempotency key
+  (`force_rebuild`).
+- **Provenance:** chunk provenance (ref, index, text, locator, section
+  hierarchy, paragraph indexes, token_count, embeddings) is required, not
+  optional — and survives processor replacement and re-indexing. For PDFs,
+  physical zero-based page indexes + logical page labels as strings; for EPUB,
+  a CFI locator, never invented page numbers.
+- **Validation before persistence (§14):** source identity + hash, unique
+  contiguous chunk indexes, unique local refs, all references, dense-vector
+  dimensions/values, sparse key/value types, required locators, evidence
+  references on extracted relationships, result counts against the actual
+  arrays.
+- **Errors:** terminal failures use stable machine-readable codes (e.g.
   `SOURCE_NOT_FOUND`, `SOURCE_HASH_MISMATCH`, `MODEL_UNAVAILABLE`,
-  `OUT_OF_MEMORY`, `CHUNKING_FAILED`, `CANCELLED`, `INTERNAL_ERROR`), je mit
-  Default-Retrybarkeit.
-- **Sicherheit (§18):** Loopback-Bind `127.0.0.1` standardmäßig; erlaubte
-  Quell-Roots; Pfad-Traversal-/Regular-File-Reject; niemals Zotero/DB/OS-
-  Zugangsdaten an den Prozessor; keine Dokumentvolltexte/-Embeddings/-Secrets in
-  Logs standardmäßig.
+  `OUT_OF_MEMORY`, `CHUNKING_FAILED`, `CANCELLED`, `INTERNAL_ERROR`), each with
+  a default retryability.
+- **Security (§18):** loopback bind `127.0.0.1` by default; allowed source
+  roots; path-traversal/regular-file rejection; never pass Zotero/DB/OS
+  credentials to the processor; no full document text/embeddings/secrets in logs
+  by default.
 
-## Vertrags-Tests (§19)
+## Contract tests (§19)
 
-Jede Prozessor-Implementierung muss dieselbe Black-Box-Suite bestehen:
-Health/Capabilities, Idempotenz, bekanntes PDF→Markdown+Chunk, Provenienz-Round-
-Trip, Hash-Mismatch-Fail, Referenz-Integrität, Embeddings vs. Capabilities, keine
-PostgreSQL/OpenSearch-Writes, Cancellation, ACK-Cleanup+Idempotenz,
-Restart-ohne-Fake-Success, keine durable Quell-Kopie, source_url-Delivery und
-Replay-after-ACK-Semantik.
+Every processor implementation must pass the same black-box suite:
+health/capabilities, idempotency, known PDF → Markdown + chunk, provenance
+round-trip, hash-mismatch failure, reference integrity, embeddings vs
+capabilities, no PostgreSQL/OpenSearch writes, cancellation, ack
+cleanup+idempotency, restart without fake success, no durable source copy,
+source_url delivery, and replay-after-ACK semantics.
 
-## Vollständige Referenz
+## Full reference
 
-Den verbindlichen, vollständigen Vertragstext liest du in der kanonischen Datei:
+You can read the binding, complete contract text in the canonical file:
 
-- Repo-Pfad: `axiom_ng/docs/PROCESSOR_CONTRACT.md`
+- Repo path: `axiom_ng/docs/PROCESSOR_CONTRACT.md`
 - GitHub: [PROCESSOR_CONTRACT.md](https://github.com/Cyb3rDudu/axiom/blob/main/axiom_ng/docs/PROCESSOR_CONTRACT.md)
 
-Weiter: [axiom_ng_runner (Python)](axiom-ng-runner.md) ·
-[axiom_ng (Go)](axiom-ng-go.md) · [Architektur-Übersicht](architecture.md)
+Continue: [axiom_ng_runner (Python)](axiom-runner.md) ·
+[axiom_ng (Go)](axiom-go.md) · [Architecture Overview](architecture.md)

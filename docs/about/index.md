@@ -1,24 +1,29 @@
-# Über
+# About
 
-Willkommen bei der Dokumentation von **axiom-ng** — dem Zotero-gestützten
-Wissenssystem.
+Welcome to the documentation of **axiom** — the Zotero-powered research
+knowledge system.
+
+> **Product name note:** axiom was known as *axiom-ng* during development. The
+> code module paths (`axiom_ng/`, `axiom_ng_runner/`) and the `AXIOM_*` env
+> names retain that historical spelling as technical facts.
 
 ## Logo
 
-Das Site-Branding nutzt das **Original-Axiom-Logo** aus der axiom-Ursprungsära
-als einzelne Quelldatei (`docs/assets/icon_original.png`) — dieselbe Datei
-dient als Header-Logo und als Favicon.
+The site branding uses the **original axiom logo** from the axiom origin era as
+a single source file (`docs/assets/icon_original.png`) — the same file serves as
+the header logo and the favicon.
 
-## Lizenz
+## License
 
-Der Quellcode ist unter [LICENSE](https://github.com/Cyb3rDudu/axiom/blob/main/LICENSE) lizenziert.
+The source code is licensed under the
+[LICENSE](https://github.com/Cyb3rDudu/axiom/blob/main/LICENSE).
 
-## Archiv
+## Archive
 
-Der alte Python-Stack (axiom_backend, axiom_frontend, datalab, maestro-Fork)
-lebt auf dem Branch
-[`archive/old-axiom-python`](https://github.com/Cyb3rDudu/axiom/tree/archive/old-axiom-python)
-weiter — einschließlich der Historie, aus der `compute_core` hervorgegangen ist.
-Die Dokumentation dieser Archiv-Ära wird nicht in die neue Site migriert.
+The old Python stack (axiom_backend, axiom_frontend, datalab, maestro fork)
+lives on the branch
+[`archive/old-axiom-python`](https://github.com/Cyb3rDudu/axiom/tree/archive/old-axiom-python) —
+including the history that `compute_core` grew out of. The documentation of that
+archive era is not migrated into the new site.
 
-Weiter: [Willkommen](../index.md)
+Continue: [Welcome](../index.md)

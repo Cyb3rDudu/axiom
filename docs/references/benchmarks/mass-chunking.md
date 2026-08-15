@@ -1,98 +1,100 @@
-# Mass-Chunking-Benchmark
+# Mass Chunking Benchmark
 
-**Berichtstyp:** Messbericht (datiert) · **Datum:** 2026-08-14 · **Kontext:**
-Produktions-DB-Aufbau (komplette Zotero-Lib, 16 Dokumente) über einen externen
-GPU-Runner · Original: `axiom_ng/docs/MASS_CHUNKING_BENCHMARK.md`.
+**Report type:** Measurement report (dated) · **Date:** 2026-08-14 · **Context:**
+production DB build (complete Zotero library, 16 documents) via an external GPU
+runner · Original: `axiom_ng/docs/benchmarks/MASS_CHUNKING_BENCHMARK.md`.
 
-> **Env-Namens-Hinweis:** Zur Laufzeit hießen die Dispatcher-Variablen noch
-> `AXIOMNG_*`; seit dem Rename sind es `AXIOM_*` (z. B. `AXIOMNG_PROCESSOR_URL` →
-> `AXIOM_PROCESSOR_URL`). Historische Befehle sind hier bewusst nicht umgeschrieben.
+> **Env-naming note:** at run time the dispatcher variables were still
+> `AXIOMNG_*`; since the rename they are `AXIOM_*` (e.g. `AXIOMNG_PROCESSOR_URL`
+> → `AXIOM_PROCESSOR_URL`). Historical commands are deliberately left
+> unchanged.
 
-> Dieser Bericht dokumentiert den **Systemzustand zum 2026-08-14**. Zahlen bleiben
-> als Messungen gültig; Setup-Details sind auf Rollen reduziert.
+> This report documents the **system state as of 2026-08-14**. Figures remain
+> valid as measurements; setup details are reduced to roles.
 
 ## Setup
 
-- Dispatcher am zentralen Host, Runner-Container auf einem externen GPU-Host
-  (RTX-3090-Klasse, CUDA-Container), Concurrency=1, Lease 5m (Defaults unverändert).
-- Quell-Lieferung damals über eine rsync-Brücke (Staging der Zotero-KEY-Ordner auf
-  den Runner-Host). **Heute abgelöst** durch die `source_url`-Mechanik
-  (HMAC-signierte Download-URL, siehe
-  [Operations → Deployment](../../operations/deployment.md), §5) — keine Zotero-Kopien
-  mehr auf dem GPU-Host.
-- Reset vor dem Lauf: DB `DROP SCHEMA public CASCADE`, OS-Index gelöscht,
-  ArtifactRoot geleert, Runner-Workroot frisch.
+- Dispatcher on the central host, runner container on an external GPU host
+  (RTX-3090 class, CUDA container), concurrency=1, 5m lease (defaults unchanged).
+- Source delivery at the time via an rsync bridge (staging the Zotero-KEY
+  folders onto the runner host). **Superseded today** by the `source_url`
+  mechanism (HMAC-signed download URL, see
+  [Operations → Deployment](../../operations/deployment.md), §5) — no Zotero
+  copies on the GPU host anymore.
+- Reset before the run: DB `DROP SCHEMA public CASCADE`, OS index cleared,
+  artifact root emptied, runner work root fresh.
 
-## Ergebnisse
+## Results
 
-**16/16 completed, 0 fehlgeschlagen, 0 Wiederholungen** (alle `attempt=1`).
+**16/16 completed, 0 failed, 0 retries** (all `attempt=1`).
 
-### Job-Tabelle (Reihenfolge nach Abschluss; Zeiten aus der DB)
+### Job table (order by completion; times from the DB)
 
-| # | Dokument | Typ | Größe | Dauer (s) |
+| # | Document | Type | Size | Duration (s) |
 | --- | --- | --- | --- | --- |
-| 1 | nachhaltiges-management-nachhaltigkeit-… | PDF | 19 MB | **323** (Kaltstart: Modell-Load + Triton-JIT) |
+| 1 | nachhaltiges-management-nachhaltigkeit-… | PDF | 19 MB | **323** (cold start: model load + Triton JIT) |
 | 2 | demystifying-environmental-social-governance-esg | EPUB | 11 MB | 108 |
-| 3–15 | diverses (Springer-PDFs, ESG-Investing, Nachhaltigkeit, Life Cycle …) | PDF/EPUB | 2,5–9,3 MB | 84–235 |
-| 16 | ganzheitliches-life-cycle-management | PDF | 17 MB | **403** (letzter Job; gespeichertes `started_at` veraltet → s. Hygiene) |
+| 3–15 | misc (Springer PDFs, ESG investing, sustainability, life cycle …) | PDF/EPUB | 2.5–9.3 MB | 84–235 |
+| 16 | ganzheitliches-life-cycle-management | PDF | 17 MB | **403** (last job; stored `started_at` stale → see hygiene) |
 
-### Gesamt
+### Totals
 
-| Metrik | Wert |
+| Metric | Value |
 | --- | --- |
-| Batch-Gesamtzeit (Wall) | **2.759 s ≈ 46 min** |
-| Durchsatz | **~20,9 Dokumente/Stunde** (Concurrency=1) |
-| Kalt/Warm | Erster Job 323 s inkl. Modell-Load; warm 84–403 s, Median ~114 s |
-| Dispatcher-Overhead | ~4 s Summe über 16 Jobs (started_at(n+1) == completed_at(n)) |
-| Größen↔Zeit | grob korrelierend, aber seitenzahl-/bildlastig dominiert |
+| Batch wall-clock total | **2,759 s ≈ 46 min** |
+| Throughput | **~20.9 documents/hour** (concurrency=1) |
+| Cold/warm | first job 323 s incl. model load; warm 84–403 s, median ~114 s |
+| Dispatcher overhead | ~4 s over 16 jobs (started_at(n+1) == completed_at(n)) |
+| Size↔time | roughly correlated, but page-count/image-heavy dominated |
 
-### Horizontaler Durchstich (nach dem Lauf)
+### Horizontal throughput (after the run)
 
-| Ebene | Anzahl | Konsistenz |
+| Level | Count | Consistency |
 | --- | --- | --- |
-| ingest_jobs completed | 16 | 0 Fehler, 0 Retries |
-| aktive Snapshots | 16 | 1 pro Attachment |
-| Chunks | 4.810 | |
-| Outbox | 16 done, 0 sonst | Follow-Delta ≤ 1 Poll-Tick nach Job-Completion |
-| OpenSearch-Index (`axiom-ng-chunks-v1`) | 4.810 Docs == Chunks | knn_vector-Mapping (1024) |
+| ingest_jobs completed | 16 | 0 errors, 0 retries |
+| active snapshots | 16 | 1 per attachment |
+| chunks | 4,810 | |
+| outbox | 16 done, 0 other | follow delta ≤ 1 poll tick after job completion |
+| OpenSearch chunks index | 4,810 docs == chunks | knn_vector mapping (1024) |
 
-GPU: VRAM-Fußabdruck ~2,8 GB bei Marker+GLiNER+mREBEL. Unbeaufsichtigter Lauf →
-keine nvidia-smi-Serie (Doku-Lücke, bewusst).
+GPU: VRAM footprint ~2.8 GB with Marker+GLiNER+mREBEL. Unattended run → no
+nvidia-smi series (documented gap, deliberate).
 
-## Profil-Befund (wichtig)
+## Profile finding (important)
 
-Der Zotero-Sync enqueue-d mit dem Dispatcher-Default-Profil
-`{"profile":"full-rag-v1"}` — der Claim materialisiert **alle Feature-Booleans als
-`false`** (extract_entities/relationships, compute_dense/sparse). Der
-Contract-Name „full-rag-v1" schaltet die Features NICHT: Der Runner liest die
-expliziten Booleans, nicht den Profilnamen. Folge für diesen Lauf: reine
-Marker→Markdown→Chunk→Locator-Pipeline (inkl. Bild-Artifacts und OS-Indexierung
-der Texte), **ohne** L4-Embeddings und **ohne** L6-Entities/Relationship.
+The Zotero sync enqueued with the dispatcher default profile
+`{"profile":"full-rag-v1"}` — the claim materializes **all feature booleans as
+`false`** (extract_entities/relationships, compute_dense/sparse). The contract
+name "full-rag-v1" does NOT enable features: the runner reads the explicit
+booleans, not the profile name. Consequence for this run: a pure
+Marker→Markdown→chunk→locator pipeline (incl. image artifacts and OS indexing
+of the texts), **without** L4 embeddings and **without** L6
+entities/relationships.
 
-Für den Voll-RAG-Lauf sind die Booleans explizit zu setzen (entweder
-Dispatcher-Profil mit true-Booleans beim Sync oder SQL-Update von
-`processing_profile`+`input_snapshot.processing` vor dem Claim).
+For a full-RAG run the booleans must be set explicitly (either a dispatcher
+profile with true booleans at sync time, or an SQL update of
+`processing_profile` + `input_snapshot.processing` before the claim).
 
-## Hygiene-/Messbefunde
+## Hygiene / measurement findings
 
-1. **Job-Reset-SQL vergaß `started_at`:** der vor dem Batch abgebrochene
-   Erstversuch hinterließ ein stale `started_at` (Job 16). Reset-Rezept um
-   `started_at=NULL` erweitern.
-2. `claimed_at` existiert nicht — Messgröße ist `started_at`/`completed_at`.
-3. nvidia-smi-Mitschnitt fehlt (unbeaufsichtigter Lauf) — beim Voll-RAG-Lauf
-   nachholen.
+1. **Job-reset SQL forgot `started_at`:** the aborted first attempt before the
+   batch left a stale `started_at` (job 16). Extend the reset recipe with
+   `started_at=NULL`.
+2. `claimed_at` does not exist — the measured quantity is
+   `started_at`/`completed_at`.
+3. No nvidia-smi recording (unattended run) — catch up on the full-RAG run.
 
-## Vergleichswerte
+## Comparison values
 
-| Umgebung | 3-Seiten-PDF | Anmerkung |
+| Environment | 3-page PDF | Note |
 | --- | --- | --- |
-| Apple MPS (Dispatcher-Host) | 110–160 s | Gate-5/6-Smokes |
-| Externer GPU-Host kalt | 150 s | inkl. Downloads+JIT |
-| Externer GPU-Host warm | 30 s | POC |
-| Bibliotheks-Schnitt | **0,58 s/Seite** | 4.787 Seiten gesamt, 2.759 s Batch |
+| Apple MPS (dispatcher host) | 110–160 s | Gate-5/6 smokes |
+| External GPU host cold | 150 s | incl. downloads+JIT |
+| External GPU host warm | 30 s | POC |
+| Library average | **0.58 s/page** | 4,787 pages total, 2,759 s batch |
 
-> Der 3-Seiten-POC (30 s warm) skaliert nicht linear auf ganze Bücher:
-> Marker-Layout-Recognition dominiert bei bildlastigen Seiten.
+> The 3-page POC (30 s warm) does not scale linearly to whole books:
+> Marker layout recognition dominates on image-heavy pages.
 
-Weiter: [TC2-Parallel-Test](tc2-parallel.md) · [L8-Analyse](l8-durchstich.md) ·
-[Messberichte](../benchmarks.md)
+Continue: [TC2 Parallel Test](tc2-parallel.md) · [L8 Analysis](l8-durchstich.md) ·
+[Reports](../benchmarks.md)

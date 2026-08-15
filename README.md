@@ -2,7 +2,7 @@
 
 > 📚 **Dokumentation & Site:** [cyb3rdudu.github.io/axiom](https://cyb3rdudu.github.io/axiom/) — Willkommen, Guides, Referenzen.
 
-Zotero-gestütztes Wissenssystem: **axiom-ng** (Go-Orchestrierung + Python-Compute-Runner)
+Zotero-gestütztes Wissenssystem: **axiom** (Go-Orchestrierung + Python-Compute-Runner)
 und die RAG-Datenpipeline (Marker → Chunks → BGE-M3-Embeddings → GLiNER/mREBEL →
 Postgres/pgvector + OpenSearch).
 
@@ -13,7 +13,7 @@ Postgres/pgvector + OpenSearch).
 | `axiom_ng/` | Go-Dispatcher, Persistenz, Contract-API, OpenSearch-Outbox |
 | `axiom_ng_runner/` | Python-Processor (Contract v1) inkl. `compute_core` (vendored Compute modules) |
 | `docs/` | Pläne, Architektur- und Betriebsdokumentation (auch der alten Ära) |
-| `axiom_ng/docs/` | Vertrag, Deployment, Benchmarks, L8-Analysen |
+| `axiom_ng/docs/` | Vertrag, Deployment, Benchmarks (`benchmarks/`), L8-Analysen |
 
 Einstieg: `axiom_ng/docs/PROCESSOR_CONTRACT.md` (Contract v1) und
 `axiom_ng/docs/EXTERNAL_RUNNER_DEPLOYMENT.md` (GPU-Runner-Betrieb, Mac/MPS inklusive).

@@ -1,166 +1,165 @@
-# L8 Durchstichs-Analyse — Epic #109 Abschluss
+# L8 End-to-End Analysis — Epic #109 Closure
 
-**Datum:** 2026-08-15 · **Issue:** #117 (Epic-Closure-Gate) · **Autoren:** Implementor (Messung/Text), Hivemind (Verifikation), dudu (Betrieb + Go-Entscheidungen)
-**Zweck:** Dieses Dokument beantwortet die Epic-Frage in einem lesbaren Durchgang und konserviert die
-Wahrheit über das System für ein Jahr später. Alle Zahlen sind gegen die Produktions-DBs
-`axiom_db` (TC2-Stand) und `axiom_db_tc1_ref` (TC1-Backup) reproduzierbar; die Beweisketten
-liegen in MASS_CHUNKING_BENCHMARK.md, TC2_PARALLEL_BENCHMARK.md, CHUNK_QUALITY_ASSESSMENT.md
-sowie den Issue-Kommentaren #109–#127.
+**Date:** 2026-08-15 · **Issue:** #117 (Epic-Closure-Gate) · **Authors:** Implementor (measurement/text), Hivemind (verification), dudu (operations + GO decisions)
+**Purpose:** This document answers the Epic question in one readable pass and preserves the
+truth about the system for a year from now. All numbers are reproducible against the
+production DBs `axiom_db` (TC2 state) and `axiom_db_tc1_ref` (TC1 backup); the evidence
+chains live in MASS_CHUNKING_BENCHMARK.md, TC2_PARALLEL_BENCHMARK.md, CHUNK_QUALITY_ASSESSMENT.md
+as well as the issue comments #109–#127.
 
 ---
 
-## 1. Die Epic-Frage
+## 1. The Epic question
 
-> Liefert das System den horizontalen Durchstich — zuverlässig, beobachtbar, zu welchen Kosten?
+> Does the system deliver the horizontal end-to-end run — reliably, observably, at what cost?
 
-**Antwort in einem Satz:** Ja — 16/16 Bücher fehlerfrei auf 3 heterogenen GPUs mit 1,71×
-Durchsatz, verteilt per SQL belegbar, Live-Stage-Sichtbarkeit pro Buch, zu ~8 GPU-Minuten
-pro Buch auf einer RTX 3090; der Durchstich skaliert solange die GPUs gleich schnell sind,
-und jede Betriebsfläche dieses Ziels ist jetzt Code, Test oder Checkliste.
+**Answer in one sentence:** Yes — 16/16 books error-free on 3 heterogeneous GPUs with 1.71×
+throughput, distribution provable via SQL, live stage visibility per book, at ~8 GPU-minutes
+per book on an RTX 3090; the end-to-end run scales as long as the GPUs are equally fast,
+and every operational surface of this goal is now code, test, or checklist.
 
-## 2. Die Messkette (alle Läufe gegen dieselbe 16-Bücher-Bibliothek)
+## 2. The measurement chain (all runs against the same 16-book library)
 
-| Lauf | Setup | Wand-Clock | Ergebnis |
+| Run | Setup | Wall-clock | Result |
 | --- | --- | --- | --- |
-| Benchmark (Vortag) | 1× 3090 seriell | 2.759 s (~46 min, warm) | 16/16, 4.810 Chunks — erste Voll-Extraktion |
-| TC1 (L8) | 1× 3090 seriell | 72 min (12 Bücher im Endlauf) | 16/16, 0 failed nach Täterketten-Fixes |
-| TC2 (L8) | 2× 3090 + A3000, 3 Dispatcher | **56 min / 16 Bücher** | 16/16, 0 failed, **0 Doppel-Processing** |
+| Benchmark (day before) | 1× 3090 serial | 2,759 s (~46 min, warm) | 16/16, 4,810 chunks — first full extraction |
+| TC1 (L8) | 1× 3090 serial | 72 min (12 books in the final run) | 16/16, 0 failed after culprit-chain fixes |
+| TC2 (L8) | 2× 3090 + A3000, 3 dispatchers | **56 min / 16 books** | 16/16, 0 failed, **0 duplicate processing** |
 
-- **TC2-Verteilung** (per `ingest_jobs.runner_name`, reines SQL): gpu0 6 Bücher/34,1
-  Compute-min · gpu1 7/43,2 · **A3000 3/53,0 (Ø 17,7 min/Buch)** — work-conserving ohne
-  Load-Balancer: die schnellen Karten nehmen mehr, SKIP LOCKED + Claim-Fencing exklusiv.
-- **Skalierungsfaktor:** 1,71× Durchsatz (6,0 → 3,5 min/Buch) bei heterogener dritter Karte;
-  homogen projiziert 2,9× (3× 3090 ≈ 32 min). Die A3000 verlängerte die Wand-Clock nicht
-  durch Rechenkraftmangel, sondern als Straggler-Tail (74 % busy vs 34 % auf den 3090ern —
-  sie war der Critical Path).
-- **GPU-Zeit pro Buch:** 3090 ≈ 6 min Vollprofil (Marker + BGE-M3 + GLiNER + mREBEL),
-  A3000 ≈ 17,7 min. Stage-Zerlegung via `manifest.stage_timings`: mREBEL dominiert
-  (~104 s/Buch), GLiNER ~34 s, Embedding ~57 s — der Retrieval-Ausbau beginnt also beim
-  Relationsextraktor, falls je nötig.
-- **Konsistenz unter Concurrent-Writern:** Outbox 16/16 done, OpenSearch-Doc-Count ==
-  aktive Chunk-Anzahl (seit #127 auch bei force_rebuild durch Tombstones garantiert).
+- **TC2 distribution** (per `ingest_jobs.runner_name`, pure SQL): gpu0 6 books/34.1
+  compute-min · gpu1 7/43.2 · **A3000 3/53.0 (avg. 17.7 min/book)** — work-conserving without
+  a load balancer: the fast cards take more, SKIP LOCKED + claim fencing make it exclusive.
+- **Scaling factor:** 1.71× throughput (6.0 → 3.5 min/book) with a heterogeneous third card;
+  projected 2.9× homogeneous (3× 3090 ≈ 32 min). The A3000 did not lengthen the wall-clock
+  through lack of compute power, but as a straggler tail (74% busy vs 34% on the 3090s —
+  it was the critical path).
+- **GPU time per book:** 3090 ≈ 6 min full profile (Marker + BGE-M3 + GLiNER + mREBEL),
+  A3000 ≈ 17.7 min. Stage breakdown via `manifest.stage_timings`: mREBEL dominates
+  (~104 s/book), GLiNER ~34 s, embedding ~57 s — so retrieval expansion starts at the
+  relation extractor, if ever needed.
+- **Consistency under concurrent writers:** Outbox 16/16 done, OpenSearch doc count ==
+  active chunk count (guaranteed since #127 even for force_rebuild via tombstones).
 
-## 3. Datenqualität (Quality Gate, #120-Vorläufer) — GO
+## 3. Data quality (Quality Gate, #120 precursor) — GO
 
-- **Chunk-Lagen:** Median 382 Token, 0 Monster-Chunks; 9,2 % Heading-Anker (strukturell
-  korrekt, retrieval-wertarm — Merge-Kandidat, kein Fehler).
-- **Locators:** 100 % Abdeckung (4.524 page_span + 286 CFI); Gegenprobe 3/3 **seiten-exakt**
-  gegen Original-PDFs.
-- **Retrieval (der Härtest):** 5/5 realistische DE+EN-Queries landeten on-topic in den
-  richtigen Büchern UND Abschnitten, cross-lingual; null semantischer Müll in 25 Treffern.
-- **Determinismus:** 13/16 Bücher byte-identisch über unabhängige Läufe; 1 further
-  (Sonko) nach Tempdir-Leak-Fix pfad-normalisiert identisch; **2/16 Marker-Grenzfälle**
-  (Tabellen-Spaltenzahl, Heading-Level — GPU-Float-Nondeterminismus im Layout-Modell).
-  **Embeddings bit-exakt** (Cosinus 1.000000 über GPU-Grenzen) — alles außer Marker ist
-  deterministisch.
-- **Graph:** 26.353 Entities, 55.537 Mentions, 10.382 Relations — 100 % mit Evidence-Chunk;
-  31 % stabile Kanten (beide Enden >1 Mention); siehe §6 (Querying-Filter Pflicht).
+- **Chunk size distribution:** median 382 tokens, 0 monster chunks; 9.2% heading anchors
+  (structurally correct, low retrieval value — merge candidate, not an error).
+- **Locators:** 100% coverage (4,524 page_span + 286 CFI); counter-check 3/3 **page-exact**
+  against the original PDFs.
+- **Retrieval (the acid test):** 5/5 realistic DE+EN queries landed on-topic in the
+  right books AND sections, cross-lingual; zero semantic garbage in 25 hits.
+- **Determinism:** 13/16 books byte-identical across independent runs; 1 further
+  (Sonko) path-normalized identical after the tempdir leak fix; **2/16 Marker edge cases**
+  (table column count, heading level — GPU float nondeterminism in the layout model).
+  **Embeddings bit-exact** (cosine 1.000000 across GPU boundaries) — everything except
+  Marker is deterministic.
+- **Graph:** 26,353 entities, 55,537 mentions, 10,382 relations — 100% with evidence chunk;
+  31% stable edges (both endpoints >1 mention); see §6 (querying filters mandatory).
 
-## 4. Die Täterkette — zwölf Fallen und wie sie starben
+## 4. The culprit chain — twelve traps and how they died
 
-Die L8-Geschichte ist eine gestaffelte Debugging-Kette: drei Täter maskierten sich
-gegenseitig; jeder Fix legte den nächsten frei. In einem Jahr wird das die wertvollste
-Sektion sein.
+The L8 story is a staggered debugging chain: three culprits masked each other; each fix
+exposed the next. In a year, this will be the most valuable section.
 
-**Pipeline-Täter (stille Ausfälle):**
+**Pipeline culprits (silent failures):**
 
-1. **Silent Exits im Dispatcher-Poll-Loop** — Jobs verrotteten unmarkiert (`processing`
-   ohneWorker). Fix: jede Exit-Fläche markiert Retry/Terminal + entkoppelte
-   Renewal-Goroutine über die gesamte Job-Lebensdauer (`05f7ddc`, `f55c8de`).
-2. **Replay ohne Fence-Complete** — der Identity-Replay-Zweig von PersistResult
-   kompletierte die Job-Zeile nie; die Lease lief ab, der Re-Claim resubmittierte auf
-   einen geACKten Runner (erst 404-Wand, dann sauber `ARTIFACTS_EXPIRED`). Diese Kante
-   klärte rückwirkend auch das #126-Rätsel (`befa516`).
-3. **force_rebuild-Doppelaktivierung** — Deaktivierung war per profile_hash gescoped,
-   der Force-Flag ändert ihn → zwei aktive Generationen (zählte ESGBS doppelt). Fix:
-   latest-persist-wins pro Attachment + DB-Level-Unique-Index 0011 (`a63b5eb`).
-4. **OS-Index served abgelöste Generationen** — kein Tombstone → 252 verwaiste Docs nach
-   Force-Rebuild. Fix: Outbox-delete-Ops in derselben Persist-TX + Obsolete-Guards +
-   Self-Heal (`2fe453e`, `1d4dc25`).
+1. **Silent exits in the dispatcher poll loop** — jobs rotted unmarked (`processing`
+   without a worker). Fix: every exit surface marks retry/terminal + a decoupled
+   renewal goroutine over the entire job lifetime (`05f7ddc`, `f55c8de`).
+2. **Replay without fence-complete** — the identity-replay branch of PersistResult
+   never completed the job row; the lease expired, the re-claim resubmitted to
+   an ACKed runner (first a 404 wall, then cleanly `ARTIFACTS_EXPIRED`). This edge
+   also retroactively explained the #126 mystery (`befa516`).
+3. **force_rebuild double activation** — deactivation was scoped by profile_hash,
+   but the force flag changes it → two active generations (counted ESGBS twice). Fix:
+   latest-persist-wins per attachment + DB-level unique index 0011 (`a63b5eb`).
+4. **OS index served superseded generations** — no tombstone → 252 orphaned docs after
+   the force rebuild. Fix: outbox delete ops in the same persist TX + obsolete guards +
+   self-heal (`2fe453e`, `1d4dc25`).
 
-**Performance-Täter (14–38 min Job-Gaps):**
-5. **Serielles Artifact-Staging + Shared-Timeout** — 6er-Parallelität + Per-Call-Budgets
-   (`f3b00fb`+`6fc17a7`); Nebeneffekt: der Submit-Floor `max(30 s, resultBudget)` bewahrt
-   die Remote-Source-Delivery.
-6. **Transport-Decke 1: Tailscale utun10** — Bulk-Collapse ~123 KB/s bei ms-Polls →
-   Direkt-LAN.
-7. **Transport-Decke 2: Podman-passt-Port-Mapping** — dieselbe Signatur (Loopback im
-   Container 122 MB/s, gemappter Port 123 KB/s) → `--network=host` ist Pflicht; Bulk
-   NIE über Tunnel, Tailscale nur Control-Plane.
-8. **GLiNER-CPU-Default** — `DEVICE_GLINER=cuda` muss explizit: ~1 h/Buch vs 5 min.
-9. **defaultProfile-Falle** — Profilname allein schaltet nichts; Sync materialisiert
-   jetzt alle Feature-Booleans explizit (`9aaad69`).
+**Performance culprits (14–38 min job gaps):**
+5. **Serial artifact staging + shared timeout** — 6-way parallelism + per-call budgets
+   (`f3b00fb`+`6fc17a7`); side effect: the submit floor `max(30 s, resultBudget)` preserves
+   remote source delivery.
+6. **Transport ceiling 1: Tailscale utun10** — bulk collapsed to ~123 KB/s under ms-polls →
+   direct LAN.
+7. **Transport ceiling 2: Podman's "perfectly fine" port mapping** — same signature
+   (loopback in the container 122 MB/s, mapped port 123 KB/s) → `--network=host` is
+   mandatory; bulk NEVER over a tunnel, Tailscale control plane only.
+8. **GLiNER CPU default** — `DEVICE_GLINER=cuda` must be set explicitly: ~1 h/book vs 5 min.
+9. **defaultProfile trap** — the profile name alone switches nothing; sync now materializes
+   all feature booleans explicitly (`9aaad69`).
 
-**Betriebs-Täter (TC2-Runde 1 verworfen):**
-10. **dockerenv-Falle** — `is_running_in_docker()` versagt in rootless Podman (kein
-    `/.dockerenv`, cgroup v2 nur `0::/`) → Config trampelte `CUDA_VISIBLE_DEVICES=0` über
-    das Container-Pinning: alle 3 Runner auf GPU 0, ein Marker-OOM. Fix:
-    `RUN touch /.dockerenv` im Image + **Start-Gate** (Torch-Device-Count/Name pro
-    Container + Test-Allokation auf JEDER Karte — der 30-Sekunden-Check, der die ganze
-    Fehlrunde verhindert hätte). Mit #118 ist die Override-Logik selbst tot.
-11. **Migrations-Rennen** — 3 Dispatcher migrieren eine frische DB gleichzeitig → 2
-    crashen an `pg_type` (fail-fast, Restart reicht). Lehre: Clean Slate → EINE Instanz
-    zuerst.
-12. **EPUB-Tempdir-Leak** — pandoc-`<img src="/tmp/epub_media_<random>/…">` in
-    Chunk-Texten machte jeden Re-Run byte-verschieden (Sonko, 27/252 Chunks). Fix:
-    Basename-Normalisierung vor dem Chunking (`a65be86`).
+**Operations culprits (TC2 round 1 discarded):**
+10. **dockerenv trap** — `is_running_in_docker()` fails in rootless Podman (no
+    `/.dockerenv`, cgroup v2 only `0::/`) → config stomped `CUDA_VISIBLE_DEVICES=0` over
+    the container pinning: all 3 runners on GPU 0, one Marker OOM. Fix:
+    `RUN touch /.dockerenv` in the image + **start gate** (torch device count/name per
+    container + test allocation on EVERY card — the 30-second check that would have
+    prevented the entire failed round). With #118, the override logic itself is dead.
+11. **Migration race** — 3 dispatchers migrate a fresh DB simultaneously → 2 crash on
+    `pg_type` (fail-fast, a restart suffices). Lesson: clean slate → ONE instance first.
+12. **EPUB tempdir leak** — pandoc-`<img src="/tmp/epub_media_<random>/…">` in
+    chunk texts made every re-run byte-different (Sonko, 27/252 chunks). Fix:
+    basename normalization before chunking (`a65be86`).
 
-**Prozess-Lektionen (nicht Code):** `go run` hinterlässt Orphan-Binaries (`pkill -f
-axiom-ng`, nie nur den Parent killen) · Jobs NIE „wegballern" vor Reset · Requeue-Regel:
-Zombies attempt-unverändert, nach Erschöpfung `attempt=0` · un-rückgebaute
-Mutations-Sonden im Worktree sind Build-Gefahren (rsync baut aus dem Worktree).
+**Process lessons (not code):** `go run` leaves orphan binaries behind (`pkill -f
+axiom-ng`, never kill only the parent) · NEVER blast jobs away before a reset · requeue
+rule: zombies keep their attempt count unchanged, `attempt=0` after exhaustion ·
+un-reverted mutation probes in the worktree are build hazards (rsync builds from the
+worktree).
 
-## 5. Beobachtbarkeit — was der Betrieb heute sieht
+## 5. Observability — what operations sees today
 
-- **Wer bearbeitet was:** `ingest_jobs.runner_name` (Claim-Zeitpunkt) + `runner=` in
-  jeder Phasen-Log-Zeile → Verteilung, Durchsatz, Lastgleichheit als SQL.
-- **Wo steht ein Buch:** Live-Stage über `GET /v1/jobs/{id}` (validate_source → … →
-  assemble) + `manifest.stage_timings` (nachträgliche Phasen-Rekonstruktion ohne
-  Live-Beobachtung).
-- **Wann war der Dispatcher wo:** Phasen-Zeilen claim→submit→completed→resultFetched→
-  staged→persisted→acked; Job-Gaps 0 s–Poll-Intervall.
-- **GPU-Zeit:** gelabelte nvidia-smi-Sampler pro Runner (30 s-Takt), eindeutig
-  zuordenbar nach Log-Merge.
-- **Fehler-Kommunikation:** Terminal-Codes statt 404-Hammering (`ARTIFACTS_EXPIRED` als
-  Muster: Runner ist die Wahrheitsquelle über seine Artefakte).
+- **Who is processing what:** `ingest_jobs.runner_name` (claim time) + `runner=` in
+  every phase log line → distribution, throughput, load balance as SQL.
+- **Where a book stands:** live stage via `GET /v1/jobs/{id}` (validate_source → … →
+  assemble) + `manifest.stage_timings` (retrospective phase reconstruction without
+  live observation).
+- **When the dispatcher was where:** phase lines claim→submit→completed→resultFetched→
+  staged→persisted→acked; job gaps 0 s–poll interval.
+- **GPU time:** labeled nvidia-smi samplers per runner (30 s cadence), unambiguously
+  attributable after the log merge.
+- **Error communication:** terminal codes instead of 404 hammering (`ARTIFACTS_EXPIRED` as
+  the pattern: the runner is the source of truth about its artifacts).
 
-## 6. Geprüfte Grenzen + Anforderungskatalog fürs RAG-Retrieval-Epic
+## 6. Verified limits + requirements catalog for the RAG retrieval Epic
 
-**Bekannte, bewusst akzeptierte Grenzen:**
+**Known, deliberately accepted limits:**
 
-| Grenze | Quantifizierung | Konsequenz |
+| Limit | Quantification | Consequence |
 | --- | --- | --- |
-| A3000-Straggler | Ø 17,7 vs 6 min/Buch; Critical Path in TC2 | Heterogenität wird toleriert, beschleunigt aber nichts — Skalierung rechnet nur mit gleichen Karten |
-| Marker-Nondeterminismus | 2/16 Bücher (Tabellen-/Heading-Grenzfälle) | Für Retrieval irrelevant; byte-identische Re-Runs bräuchten deterministische Torch-Algorithmen (Performance-Preis — Entscheidung offen) |
-| Entity-Rauschen | 71,6 % One-Hit-Entities; generische Nomen (`companies`, `world`); Relations-Strength konstant 0,7 | Graph ist Kandidatenraum: Querying MUSS filtern, nicht roh trusten |
-| Sparse fehlt im OS-Index | Dense-only Retrieval bewiesen | Hybrid braucht Index-Feld + Befüllung |
+| A3000 straggler | avg. 17.7 vs 6 min/book; critical path in TC2 | Heterogeneity is tolerated but accelerates nothing — the scaling math only holds with identical cards |
+| Marker nondeterminism | 2/16 books (table/heading edge cases) | Irrelevant for retrieval; byte-identical re-runs would need deterministic torch algorithms (performance cost — decision open) |
+| Entity noise | 71.6% one-hit entities; generic nouns (`companies`, `world`); relation strength constant 0.7 | The graph is a candidate space: querying MUST filter, not trust it raw |
+| Sparse missing from the OS index | Dense-only retrieval proven | Hybrid needs an index field + population |
 
-**Geprüfter Anforderungskatalog (aus den Quality-Gate-Befunden abgeleitet, jeweils mit
-Akzeptanzkriterium):**
+**Verified requirements catalog (derived from the Quality Gate findings, each with an
+acceptance criterion):**
 
-1. **Sparse-Embeddings in den OS-Index** (Hybrid-Retrieval): Feld + Outbox-Befüllung +
-   Query-Merge; Akzeptanz: knn- und sparse-Ergebnisse in einem Request vereinbart.
-2. **Relationship-Strength-Diskriminierung** (oder Ersatz): mREBEL liefert keine
-   Konfidenz — entweder Modell-seitig ableiten oder Evidence-basiert stärken; bis dahin
-   **Mention-Stabilitäts-Filter** (beide Enden ≥2 Mentions ≈ stabile 31 %) als
-   Query-Pflicht; Akzeptanz: Graph-Query ohne One-Hit-Rauschkanten.
-3. **Entity-Nomen-Filter:** Stoplist generischer Nomen + Mindest-Anforderung
-   (Kontext-Mentions) beim Entity-Onboarding; Akzeptanz: Top-Entity-Liste ohne
+1. **Sparse embeddings in the OS index** (hybrid retrieval): field + outbox population +
+   query merge; acceptance: knn and sparse results reconciled in a single request.
+2. **Relationship-strength discrimination** (or replacement): mREBEL delivers no
+   confidence — either derive it model-side or strengthen it evidence-based; until then
+   the **mention-stability filter** (both endpoints ≥2 mentions ≈ the stable 31%) is a
+   query requirement; acceptance: graph queries without one-hit noise edges.
+3. **Entity-noun filter:** stoplist of generic nouns + minimum requirement
+   (context mentions) at entity onboarding; acceptance: top entity list without
    `companies`/`world`.
-4. **(Optional) Heading-Chunk-Merge + Literaturverzeichnis-Downweighting:**
-   Retrieval-Ausbeute pro Index-Doc, kein Korrektheits-Thema.
+4. **(Optional) heading-chunk merge + bibliography down-weighting:**
+   retrieval yield per index doc, not a correctness issue.
 
-## 7. Fazit
+## 7. Conclusion
 
-Die Pipeline ist **mechanisch bewiesen** (zwei unabhängige Volläufe, 0 failed),
-**horizontal skalierend** (1,71× heterogen gemessen, 2,9× homogen projiziert, Exklusivität
-unter 3 Workern DB-erzwungen), **beobachtbar auf drei Ebenen** (SQL/Stage/Phasen-Log) und
-**deterministisch um den einen nichtdeterministischen Baustein** (Marker) herum, dessen
-Restrischen quantifiziert sind. Die Datenqualität trägt Retrieval (5/5-Smoke, Locators
-seiten-exakt, Embeddings bit-reproduzierbar). Die Betriebsfallen sind entweder tot (Code),
-gepint (Tests) oder als Checkliste konserviert (Deployment-Doc) — die dreischichtige
-Täterkette, die L8 kostete, kann sich in dieser Form nicht wiederholen, ohne rot zu werden.
+The pipeline is **mechanically proven** (two independent full runs, 0 failed),
+**horizontally scaling** (1.71× measured heterogeneous, 2.9× projected homogeneous, exclusivity
+DB-enforced under 3 workers), **observable on three levels** (SQL/stage/phase log), and
+**deterministic around the one nondeterministic component** (Marker), whose residual
+risks are quantified. The data quality carries retrieval (5/5 smoke test, locators
+page-exact, embeddings bit-reproducible). The operational traps are either dead (code),
+pinned (tests), or preserved as a checklist (deployment doc) — the three-layer culprit
+chain that cost L8 cannot repeat itself in this form without going red.
 
-**Was als Nächstes gilt, steht in §6 — nicht mehr in diesem Epic.**
+**What applies next is in §6 — no longer in this Epic.**
 
-— *Ende von L8 / Epic #109. Nächster Schritt: Closure + Archive-Branch.*
+— *End of L8 / Epic #109. Next step: closure + archive branch.*

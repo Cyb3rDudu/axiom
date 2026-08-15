@@ -1,10 +1,14 @@
 # Site: https://cyb3rdudu.github.io/axiom
-# Build with MkDocs Material. Rendered from docs/; source of truth for CI is
-# .github/workflows/docs.yml. Triggered on docs(...) commits (paths: docs/**).
+# Built with MkDocs Material. Source of truth for CI is .github/workflows/docs.yml.
+# Triggered on docs(...) commits (paths: docs/**).
+#
+# Mandatory rules (dudu, 2026-08-15): English content only; product name
+# "axiom" everywhere in prose/titles/nav. Code path names (axiom_ng/,
+# axiom_ng_runner/) and AXIOM_* env names are technical facts and stay as is.
 
-site_name: axiom-ng
-site_description: Zotero-gestütztes Wissenssystem — Go-Orchestrierung,
-  Python-Compute, durchsuchbare Wissensbasis
+site_name: axiom
+site_description: Zotero-powered research knowledge system — Go orchestration,
+  Python compute, searchable knowledge base
 site_url: https://cyb3rdudu.github.io/axiom/
 repo_url: https://github.com/Cyb3rDudu/axiom
 edit_uri: blob/main/docs/
@@ -28,7 +32,7 @@ theme:
         name: Switch to light mode
   logo: assets/icon_original.png
   favicon: assets/icon_original.png
-  language: de
+  language: en
   features:
     - navigation.sections
     - navigation.tracking
@@ -43,7 +47,7 @@ theme:
 plugins:
   - search
 
-# Working/auxiliary docs not published to the site (D2 inventory artifact +
+# Working/auxiliary docs not published to the site (D2b inventory artifact +
 # the Python dependency pin used by CI).
 exclude_docs: |
   _inventory.md
@@ -64,32 +68,32 @@ markdown_extensions:
       permalink: true
 
 nav:
-  - Willkommen: index.md
+  - Welcome: index.md
   - Get Started:
-      - Konzept-Tour: get-started/concept-tour.md
+      - Concept Tour: get-started/concept-tour.md
       - Quickstart: get-started/quickstart.md
   - User Guide:
-      - Zotero-Sync: user-guide/zotero-sync.md
+      - Zotero Sync: user-guide/zotero-sync.md
       - Ingest: user-guide/ingest.md
       - Retrieval: user-guide/retrieval.md
   - Developer Guide:
-      - Architektur-Übersicht: developer-guide/architecture.md
-      - "axiom_ng (Go)": developer-guide/axiom-ng-go.md
-      - "axiom_ng_runner (Python)": developer-guide/axiom-ng-runner.md
+      - Architecture Overview: developer-guide/architecture.md
+      - "axiom_ng (Go)": developer-guide/axiom-go.md
+      - "axiom_ng_runner (Python)": developer-guide/axiom-runner.md
       - "PROCESSOR_CONTRACT v1": developer-guide/processor-contract.md
-      - Konfiguration: developer-guide/configuration.md
+      - Configuration: developer-guide/configuration.md
       - Testing: developer-guide/testing.md
   - Operations:
       - Deployment: operations/deployment.md
       - Monitoring: operations/monitoring.md
       - Troubleshooting: operations/troubleshooting.md
-  - Referenzen:
-      - Datenmodell: references/data-model.md
-      - Benchmarks & Analysen:
-          - Überblick: references/benchmarks.md
-          - L8-Durchstich: references/benchmarks/l8-durchstich.md
-          - TC2-Parallel & Determinismus: references/benchmarks/tc2-parallel.md
-          - Mass-Chunking: references/benchmarks/mass-chunking.md
-          - Chunk-Qualität: references/benchmarks/chunk-quality.md
+  - References:
+      - Data Model: references/data-model.md
+      - Benchmarks & Analyses:
+          - Overview: references/benchmarks.md
+          - L8 Throughput Analysis: references/benchmarks/l8-durchstich.md
+          - TC2 Parallel & Determinism: references/benchmarks/tc2-parallel.md
+          - Mass Chunking: references/benchmarks/mass-chunking.md
+          - Chunk Quality: references/benchmarks/chunk-quality.md
       - FAQ: references/faq.md
   - About: about/index.md

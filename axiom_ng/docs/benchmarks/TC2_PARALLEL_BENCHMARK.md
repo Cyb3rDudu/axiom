@@ -1,186 +1,192 @@
 # TC2: 3-Runner Parallel Scale Test + Determinism Proof (L8 Test Case 2)
 
-**Datum:** 2026-08-15 · **Issue:** #123 · **Epic:** #109 (L8)
-· **Setup:** 3 Runner-Container (rootless Podman, `--network=host`) auf
-Carrier-GPUs: GPU0+GPU1 = RTX 3090 (24 GB), GPU2 = RTX A3000 Laptop (12 GB)
-· **Dispatcher:** 3 unabhängige Instanzen (disp-gpu0/1/2), je
-`AXIOM_PROCESSOR_RUNNER_NAME=carrier-gpuN`, Concurrency 1, gleiche DB
-(Claim-Exklusivität über SKIP LOCKED + Claim-Fencing)
-· **Datenbasis:** kompletter Neu-Lauf der 16 Bücher nach Clean Slate;
-Referenz = TC1-Backup (`backups/axiom_db_tc1_backup_20260815.sql`, 134 MB,
-Restore-verifiziert: 17 Jobs / 4.844 Chunks / 26.545 Entities / 10.464 Rels)
+**Date:** 2026-08-15 · **Issue:** #123 · **Epic:** #109 (L8)
+· **Setup:** 3 runner containers (rootless Podman, `--network=host`) on
+Carrier GPUs: GPU0+GPU1 = RTX 3090 (24 GB), GPU2 = RTX A3000 Laptop (12 GB)
+· **Dispatcher:** 3 independent instances (disp-gpu0/1/2), each
+`AXIOM_PROCESSOR_RUNNER_NAME=carrier-gpuN`, concurrency 1, same DB
+(claim exclusivity via SKIP LOCKED + claim fencing)
+· **Data basis:** full re-run of the 16 books from a clean slate;
+reference = TC1 backup (`backups/axiom_db_tc1_backup_20260815.sql`, 134 MB,
+restore-verified: 17 jobs / 4,844 chunks / 26,545 entities / 10,464 rels)
 
-## 1. Verlauf (inkl. Runde 1 — verworfen)
+## 1. History (incl. Round 1 — discarded)
 
-**Runde 1 (14:53–15:0x, VERWORFEN):** Alle drei Runner landeten auf GPU 0.
-Ursache (vollständige Kette bewiesen): `is_running_in_docker()` schlägt in
-rootless Podman fehl (kein `/.dockerenv`, cgroup v2 zeigt nur `0::/`) →
-`ai_researcher/config.py` überschreibt beim Import
-`CUDA_VISIBLE_DEVICES=0` ("Hardware configuration for non-Docker
-environments") → das Container-Pinning (`-e CUDA_VISIBLE_DEVICES=1/2`) wird
-niedergetrampelt. Symptome: 17,6 GB auf GPU 0, GPU 1/2 bei 1 MiB, ein
-Marker-OOM. **Fix (dauerhaft im Containerfile):** `RUN touch /.dockerenv` —
-die Config erkennt Container-Betrieb und lässt das Env-Pinning unangetastet.
-**Neues Start-Gate** (30 s, hätte Runde 1 verhindert): pro Container
-`torch.cuda.device_count()==1` + `get_device_name` prüfen UND host-seitig
-eine Test-Allokation je Container → nvidia-smi muss VRAM auf **allen drei**
-Karten zeigen (gemessen: 690/690/525 MiB parallel).
+**Round 1 (14:53–15:0x, DISCARDED):** All three runners landed on GPU 0.
+Cause (full chain proven): `is_running_in_docker()` fails in rootless
+Podman (no `/.dockerenv`, cgroup v2 shows only `0::/`) →
+`ai_researcher/config.py` overrides `CUDA_VISIBLE_DEVICES=0` at import
+time ("Hardware configuration for non-Docker environments") → the
+container pinning (`-e CUDA_VISIBLE_DEVICES=1/2`) gets trampled.
+Symptoms: 17.6 GB on GPU 0, GPU 1/2 at 1 MiB, one Marker OOM. **Fix
+(permanent, in the Containerfile):** `RUN touch /.dockerenv` — the config
+detects container operation and leaves the env pinning untouched. **New
+startup gate** (30 s, would have prevented Round 1): per container, check
+`torch.cuda.device_count()==1` + `get_device_name` AND host-side one test
+allocation per container → nvidia-smi must show VRAM on **all three**
+cards (measured: 690/690/525 MiB in parallel).
 
-**Betriebsfalle 2 (Runde 2, Start):** 3 Dispatcher-Instanzen migrieren eine
-frische DB gleichzeitig → 2 kollidieren bei `CREATE TYPE`
-(`pg_type_typname_nsp_index`, SQLSTATE 23505) und exiten. Gewinner-Instanz
-migriert fertig; Neustart der Verlierer ist sauber. Lehre: bei Clean Slate
-erst EINE Instanz hoch (migriert), dann die anderen — oder Migrations-Race
-akzeptieren (fail-fast + Restart reicht, keine Beschädigung).
+**Operational trap 2 (Round 2, startup):** 3 dispatcher instances migrate
+a fresh DB simultaneously → 2 collide on `CREATE TYPE`
+(`pg_type_typname_nsp_index`, SQLSTATE 23505) and exit. The winning
+instance finishes the migration; restarting the losers is clean. Lesson:
+on a clean slate, bring up ONE instance first (it migrates), then the
+others — or accept the migration race (fail-fast + restart suffices, no
+corruption).
 
-## 2. Der Lauf
+## 2. The Run
 
-15:05:17 Start → 16:01:25 komplett: **16/16 completed, 0 failed, 0 Zombies,
-0 pending** — Wand-Clock **56 min** (Runde 2).
+15:05:17 start → 16:01:25 complete: **16/16 completed, 0 failed, 0
+zombies, 0 pending** — wall-clock **56 min** (Round 2).
 
-### Job-Verteilung (runner_name-Spalte, #122-Messbasis)
+### Job distribution (runner_name column, #122 measurement basis)
 
-| Runner | GPU | Jobs | Ø min/Job | max | min | Compute-Summe |
+| Runner | GPU | Jobs | avg min/job | max | min | Compute total |
 | --- | --- | --- | --- | --- | --- | --- |
-| carrier-gpu0 | RTX 3090 | 6 | 5,7 | 7,6 | 3,2 | 34,1 min |
-| carrier-gpu1 | RTX 3090 | 7 | 6,2 | 13,3 | 2,0 | 43,2 min |
-| carrier-gpu2 | A3000 Laptop | 3 | **17,7** | 24,0 | 10,2 | 53,0 min |
+| carrier-gpu0 | RTX 3090 | 6 | 5.7 | 7.6 | 3.2 | 34.1 min |
+| carrier-gpu1 | RTX 3090 | 7 | 6.2 | 13.3 | 2.0 | 43.2 min |
+| carrier-gpu2 | A3000 Laptop | 3 | **17.7** | 24.0 | 10.2 | 53.0 min |
 
-Verteilung ist **work-conserving und fair nach Verfügbarkeit**: die schnellen
-3090s nehmen mehr Bücher (13), die A3000 schafft 3 — genau das
-Architekturversprechen (SKIP-LOCKED-Claim ohne Load-Balancer).
+The distribution is **work-conserving and fair by availability**: the
+fast 3090s take more books (13), the A3000 manages 3 — exactly the
+architectural promise (SKIP-LOCKED claiming without a load balancer).
 
-### Doppel-Processing-Check
+### Double-processing check
 
-- Aktive Snapshots >1 pro Attachment: **0**
-- Doppelte (attachment, chunk_index)-Paare: **0**
+- Active snapshots >1 per attachment: **0**
+- Duplicate (attachment, chunk_index) pairs: **0**
 
-Claim-Exklusivität hält unter 3 konkurrierenden Workern.
+Claim exclusivity holds under 3 competing workers.
 
-### GPU-Auslastung (gelabelte Sampler, 30 s-Takt, 123 Samples)
+### GPU utilization (labeled sampler, 30 s interval, 123 samples)
 
 | GPU | avg util | busy (≥50%) | max VRAM |
 | --- | --- | --- | --- |
-| GPU0 (3090) | 33 % | 34 % | 12,6 GB |
-| GPU1 (3090) | 34 % | 34 % | 15,1 GB |
-| GPU2 (A3000) | **74 %** | **75 %** | 11,4 GB |
+| GPU0 (3090) | 33% | 34% | 12.6 GB |
+| GPU1 (3090) | 34% | 34% | 15.1 GB |
+| GPU2 (A3000) | **74%** | **75%** | 11.4 GB |
 
-Die 3090s waren nach ~40 min durch und idleden; **die A3000 war der
-Critical Path** (53 Compute-min ≈ Wand-Clock 56 min).
+The 3090s finished after ~40 min and idled; **the A3000 was the critical
+path** (53 compute-min ≈ wall-clock 56 min).
 
-### Skalierungsfaktor
+### Scaling factor
 
-- TC1 (seriell, 1× 3090): 12 Bücher / 72 min → **6,0 min/Buch**
-- TC2 (3 GPUs, davon 1 Laptop-Karte): 16 Bücher / 56 min → **3,5 min/Buch**
-  → **1,71× Durchsatz** (Wand-Clock), bei heterogener dritter Karte
-- Homogen-Projektion: auf 2× 3090 allein wären alle 16 Bücher
-  (~95 Compute-min-Äquivalent) in ~48 min durch — die A3000 beschleunigt
-  die Wand-Clock nicht (Straggler-Tail), verbreitert aber die
-  Verarbeitungsbreite. 3× 3090 projiziert: ~32 min (2,9×).
+- TC1 (serial, 1× 3090): 12 books / 72 min → **6.0 min/book**
+- TC2 (3 GPUs, one of them a laptop card): 16 books / 56 min →
+  **3.5 min/book** → **1.71× throughput** (wall-clock), with a
+  heterogeneous third card
+- Homogeneous projection: on 2× 3090 alone, all 16 books (~95
+  compute-min equivalent) would finish in ~48 min — the A3000 does not
+  speed up the wall clock (straggler tail), but it widens the processing
+  breadth. 3× 3090 projected: ~32 min (2.9×).
 
-### Dispatcher-Takt (Phasen-Logs, alle 3 Instanzen)
+### Dispatcher cadence (phase logs, all 3 instances)
 
-`runner=` in jeder Zeile; Job-Gaps = Poll-Sekunden bis 0 s
-(`acked=15:12:58 → claim=15:12:58`); Staging/Persist im Sekundenbereich,
-auch bei 264 Artifacts in einem Result. Die dreischichtige
-Transport-Fehlerklasse aus TC1 bleibt behoben.
+`runner=` in every line; job gaps = poll seconds down to 0 s
+(`acked=15:12:58 → claim=15:12:58`); staging/persist in the seconds
+range, even with 264 artifacts in one result. The three-layer transport
+error class from TC1 remains fixed.
 
-### Konsistenz
+### Consistency
 
-- **Outbox 16/16 done** · **OpenSearch 4.813 Docs == 4.813 Chunks**
-- 16 aktive Snapshots, 0 verwaiste processing-Zeilen
+- **Outbox 16/16 done** · **OpenSearch 4,813 docs == 4,813 chunks**
+- 16 active snapshots, 0 orphaned processing rows
 
-## 3. Determinismus-Beweis (gegen TC1-Backup, per zotero_key gejoint)
+## 3. Determinism proof (against TC1 backup, joined by zotero_key)
 
-Methode: pro Dokument Chunk-Anzahl, `md5(string_agg(text,'' ORDER BY
-chunk_index))` und Locator-MD5 aggregiert; Abweichungen dann per-Chunk
-gedifft und klassifiziert. Join über `zotero_attachments.zotero_key`
-(stabil), NICHT über DB-UUIDs (frisch pro Sync).
+Method: per document, chunk count, `md5(string_agg(text,'' ORDER BY
+chunk_index))` and locator MD5 aggregated; deviations then diffed and
+classified per chunk. Join via `zotero_attachments.zotero_key` (stable),
+NOT via DB UUIDs (fresh per sync).
 
-| Dokument | Ergebnis |
+| Document | Result |
 | --- | --- |
-| 12 Bücher (inkl. beide Springer-PDFs) | **byte-identisch** (Anzahl+Text+Locator) |
-| ESGBS (Heaton, SKAP2JAE, EPUB) | **34/34 Chunks identisch** — das scheinbare 68/34-Delta war die force_rebuild-Doppelaktivierung (#125), kein Inhaltsunterschied |
-| Demystifying (Sonko, CDX5EBM3, EPUB) | 27/252 Chunks mit `/tmp/epub_media_<random>`-Leak → **nach Fix #124: 252/252 byte-identisch** (pfad-normalisiert über TC1-Ref und Re-Process) |
-| Perspektiven (EE8QHQIL, PDF) | 52/300 Chunk-Texte weichen ab |
-| Nachhaltiges Management (RWA5PT4J, PDF) | 615/754 weichen ab, 754→757 Chunks |
+| 12 books (incl. both Springer PDFs) | **byte-identical** (count+text+locator) |
+| ESGBS (Heaton, SKAP2JAE, EPUB) | **34/34 chunks identical** — the apparent 68/34 delta was the force_rebuild double activation (#125), not a content difference |
+| Demystifying (Sonko, CDX5EBM3, EPUB) | 27/252 chunks with `/tmp/epub_media_<random>` leak → **after fix #124: 252/252 byte-identical** (path-normalized via TC1 ref and re-processing) |
+| Perspektiven (EE8QHQIL, PDF) | 52/300 chunk texts deviate |
+| Nachhaltiges Management (RWA5PT4J, PDF) | 615/754 deviate, 754→757 chunks |
 
-> **Korrigierte Bilanz (Post-#124/#125):** 13/16 strikt byte-identisch,
-> 14/16 nach Pfad-Normalisierung (Sonko-Re-Process liefert leak-freie
-> Chunks, pfad-normalisiert 252/252 == TC1-Referenz), 2/16 Marker-Grenzfälle.
-> Nur EIN Buch war vom Tempdir-Leak betroffen (Sonko); Heatons ESGBS war
-> nachweislich sauber — die „zweite Abweichung" war das #125-Doppelaktivierungs-
-> Artefakt. Fixes: `a65be86` (#124), `a63b5eb` (#125).
+> **Corrected tally (post-#124/#125):** 13/16 strictly byte-identical,
+> 14/16 after path normalization (Sonko re-processing yields leak-free
+> chunks, path-normalized 252/252 == TC1 reference), 2/16 Marker edge
+> cases. Only ONE book was affected by the tempdir leak (Sonko); Heaton's
+> ESGBS was demonstrably clean — the "second deviation" was the
+> #125 double-activation artifact. Fixes: `a65be86` (#124), `a63b5eb`
+> (#125).
 
-### Klassifizierung der Abweichungen
+### Classification of the deviations
 
-1. **EPUB-Tempdir-Leak (CDX5EBM3, systematisch, kein Modell-Rauschen):**
-   `<img src="/tmp/epub_media_<random>/...">` — der Zufallssuffix des
-   EPUB-Extraktionstempdirs landet im Markdown und damit im Chunk-Text.
-   Nach Normalisierung (`s#/tmp/epub_media_[a-z0-9]+/#/X/#`) sind **alle
-   252 Chunks byte-identisch**. Deterministischer Bug — Fix wäre eine
-   Pfad-Normalisierung vor dem Chunking (bewusst NICHT hier gefixt, Issue
-   folgt).
-2. **Marker-Tabellen-Flip (EE8QHQIL):** dieselbe Tabelle wird einmal mit 3,
-   einmal mit 4 Spalten erkannt (Layout-Modell-Grenzfall, GPU-Float-
-   Nichtdeterminismus) → 52 Chunk-Texte weichen ab; Chunk-Anzahl und alle
-   Locatoren bleiben identisch.
-3. **Marker-Heading-Flip (RWA5PT4J):** `### Nachhaltiges Management` vs `# …`
-   — ein einziger Heading-Level-Flip früh im Buch verschiebt
-   Chunk-Grenzen kaskadierend (Heading-Reopen im Chunker) → 615/754
-   abweichende Chunks + 3 zusätzliche. Ein Grenzfall, große Wirkung.
+1. **EPUB tempdir leak (CDX5EBM3, systematic, not model noise):**
+   `<img src="/tmp/epub_media_<random>/...">` — the random suffix of the
+   EPUB extraction tempdir ends up in the Markdown and therefore in the
+   chunk text. After normalization (`s#/tmp/epub_media_[a-z0-9]+/#/X/#`),
+   **all 252 chunks are byte-identical**. Deterministic bug — the fix
+   would be path normalization before chunking (deliberately NOT fixed
+   here, issue to follow).
+2. **Marker table flip (EE8QHQIL):** the same table is detected once
+   with 3 columns, once with 4 (layout model edge case, GPU float
+   nondeterminism) → 52 chunk texts deviate; chunk count and all
+   locators remain identical.
+3. **Marker heading flip (RWA5PT4J):** `### Nachhaltiges Management` vs
+   `# …` — a single heading-level flip early in the book shifts chunk
+   boundaries in a cascade (heading reopen in the chunker) → 615/754
+   deviating chunks + 3 additional. One edge case, large impact.
 
-### Embedding-Determinismus
+### Embedding determinism
 
-6 identische Chunks (2 Bücher × 3 Indizes), TC1-Vektor vs TC2-Vektor:
-**Cosinus = 1.000000 exakt auf allen 6** — BGE-M3 ist auf dieser
-GPU-Klasse bit-reproduzierbar für identischen Input. Float-Rauschen ist
-auch über verschiedene physische 3090s hinweg nicht messbar.
+6 identical chunks (2 books × 3 indices), TC1 vector vs TC2 vector:
+**cosine = 1.000000 exact on all 6** — BGE-M3 is bit-reproducible on
+this GPU class for identical input. Float noise is not measurable even
+across different physical 3090s.
 
-### Fazit Determinismus
+### Determinism conclusion
 
-Die Pipeline **um den Marker herum ist vollständig deterministisch**
-(Chunker, EPUB-Weg-B/CFI, Embeddings bit-exakt; 13/16 Bücher
-byte-identisch, 14/16 nach Tempdir-Normalisierung). Nichtdeterminismus
-sitzt ausschließlich in Markers Layout-Klassifikation bei Grenzfällen
-(2/16 Bücher, betroffen: Tabellen-Spaltenzahl, Heading-Level). Für
-RAG-Retrieval irrelevant (lokale Textvarianten), für byte-identische
-Re-Runs muss Marker deterministisch laufen (Torch
-`torch.use_deterministic_algorithms` + CUBLAS_WORKSPACE_CONFIG wäre der
-Hebel — Entscheidung außerhalb dieses Issues).
+The pipeline **around Marker is fully deterministic** (chunker, EPUB
+path-B/CFI, embeddings bit-exact; 13/16 books byte-identical, 14/16
+after tempdir normalization). Nondeterminism sits exclusively in
+Marker's layout classification on edge cases (2/16 books, affected:
+table column count, heading level). Irrelevant for RAG retrieval (local
+text variants); for byte-identical re-runs Marker must run
+deterministically (Torch `torch.use_deterministic_algorithms` +
+CUBLAS_WORKSPACE_CONFIG would be the lever — decision outside this
+issue).
 
-### Nebenfund: force_rebuild hinterlässt Doppel-Aktivierung
+### Side finding: force_rebuild leaves a double activation behind
 
-Das TC1-Backup enthält für ESGBS **zwei aktive Snapshots** (Original-Lauf
-08-14 + Force-Smoke 08-15, je 34 Chunks): der force_rebuild-Pfad legt eine
-neue Generation an, deaktiviert aber die vorige nicht (andere profile_hash
-durch Force-Flag → kein Unique-Konflikt, aktive Flag bleibt doppelt).
-Folge-Issue empfohlen.
+The TC1 backup contains **two active snapshots** for ESGBS (original run
+08-14 + force smoke 08-15, 34 chunks each): the force_rebuild path
+creates a new generation but does not deactivate the previous one
+(different profile_hash due to the force flag → no unique conflict, the
+active flag remains doubled). Follow-up issue recommended.
 
-## 4. DoD-Abgleich
+## 4. DoD check
 
-- [x] Backup existiert + restore-verifiziert (17/4844/26545/10464 exakt)
-- [x] Clean Slate + Baseline (16 pending / 0 / 0 / 0)
-- [x] 3 Runner + 3 Dispatcher, runner_name gefüllt, Verteilungs-SQL oben
-- [x] 16/16 completed, 0 failed, 0 Zombies; OS == Chunks (4813); Outbox done
-- [x] GPU-Sampler gelabelt je Runner, Auswertung oben (GPU-Zeit über
-  Compute-Summe je Runner + Util-Profile)
-- [x] Skalierungsfaktor: 1,71× Durchsatz (heterogen), 2,9× projiziert (3× 3090)
-- [x] Determinismus: quantifiziert + klassifiziert (13/16 identisch,
-      1 Tempdir-Bug, 2 Marker-Grenzfälle, Embeddings bit-exakt)
-- [ ] Hivemind-Re-Review (Backup, Verteilungs-SQL, Determinismus-Rechnung)
+- [x] Backup exists + restore-verified (17/4844/26545/10464 exact)
+- [x] Clean slate + baseline (16 pending / 0 / 0 / 0)
+- [x] 3 runners + 3 dispatchers, runner_name populated, distribution SQL
+      above
+- [x] 16/16 completed, 0 failed, 0 zombies; OS == chunks (4813); outbox
+      done
+- [x] GPU sampler labeled per runner, analysis above (GPU time via
+      compute total per runner + util profiles)
+- [x] Scaling factor: 1.71× throughput (heterogeneous), 2.9× projected
+      (3× 3090)
+- [x] Determinism: quantified + classified (13/16 identical, 1 tempdir
+      bug, 2 Marker edge cases, embeddings bit-exact)
+- [ ] Hivemind re-review (backup, distribution SQL, determinism math)
 
-## 5. Empfehlungen (außerhalb dieses Issues)
+## 5. Recommendations (outside this issue)
 
-1. **EPUB-Tempdir-Normalisierung** vor Chunking (kleiner Fix, macht EPUBs
-   byte-deterministisch) — Folge-Issue.
-2. **force_rebuild: alte Generation deaktivieren** — Folge-Issue.
-3. **Deterministisches Marker** nur falls byte-identische Re-Runs je
-   Produktanforderung werden (Kosten: Performance-Verlust durch
-   deterministische Algorithmen).
-4. **Migration-Race dokumentieren:** Clean Slate → eine Instanz zuerst.
-5. `/.dockerenv`-Start-Gate als Deploy-Checkliste-Eintrag (Deployment-Doc
-   §5c aktualisiert).
+1. **EPUB tempdir normalization** before chunking (small fix, makes
+   EPUBs byte-deterministic) — follow-up issue.
+2. **force_rebuild: deactivate the old generation** — follow-up issue.
+3. **Deterministic Marker** only if byte-identical re-runs become a
+   product requirement (cost: performance loss from deterministic
+   algorithms).
+4. **Document the migration race:** clean slate → one instance first.
+5. `/.dockerenv` startup gate as a deploy checklist entry (deployment
+   doc §5c updated).
 
-— *Alle Zahlen reproduzierbar: axiom_db (TC2) vs axiom_db_tc1_ref
-(Backup-Restore), Queries in diesem Doc.*
+— *All numbers reproducible: axiom_db (TC2) vs axiom_db_tc1_ref
+(backup restore), queries in this doc.*

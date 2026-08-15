@@ -1,13 +1,13 @@
 # Retrieval
 
-!!! warning "In Arbeit"
-    Dieses Kapitel wächst mit Epic
-    [#130](https://github.com/Cyb3rDudu/axiom/issues/130) — die Seite existiert in
-    der Struktur, damit alle Nav-Punkte auf echte Ziele zeigen.
+!!! warning "In progress"
+    This chapter grows with Epic
+    [#130](https://github.com/Cyb3rDudu/axiom/issues/130) — the page exists in
+    the structure so that every nav point targets a real destination.
 
-## Suchen
+## Search
 
-Die Retrieval-Sektion wird ausformuliert, sobald die zugehörigen Fähigkeiten
-(Retrieval-Epic #130) existieren.
+The retrieval section will be written out once the corresponding capabilities
+(retrieval epic #130) exist.
 
-Weiter: [Ingest](ingest.md) · [Willkommen](../index.md)
+Continue: [Ingest](ingest.md) · [Welcome](../index.md)
