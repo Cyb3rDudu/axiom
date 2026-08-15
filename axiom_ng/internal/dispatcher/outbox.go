@@ -158,6 +158,19 @@ func (c *openSearchClient) indexDoc(ctx context.Context, id string, doc map[stri
 	return fmt.Errorf("index doc %s: HTTP %d: %s", id, code, truncate(respBody, 200))
 }
 
+// deleteDoc removes a chunk document. 404 counts as success (idempotent
+// tombstone: the doc may never have been indexed).
+func (c *openSearchClient) deleteDoc(ctx context.Context, id string) error {
+	code, _, err := c.do(ctx, http.MethodDelete, "/"+outboxIndexName+"/_doc/"+id, nil)
+	if err != nil {
+		return err
+	}
+	if code != 200 && code != 404 {
+		return fmt.Errorf("delete %s: status %d", id, code)
+	}
+	return nil
+}
+
 func truncate(b []byte, n int) string {
 	if len(b) > n {
 		return string(b[:n]) + "..."
@@ -256,6 +269,25 @@ func drainOutboxOnce(ctx context.Context, d *Dispatcher, osc *openSearchClient) 
 }
 
 func drainOutboxRow(ctx context.Context, d *Dispatcher, osc *openSearchClient, row repo.OutboxRow) error {
+	// #127 obsolete-op guards: only CURRENT state materializes. A delete for
+	// a since-reactivated snapshot, or an index for a since-superseded one,
+	// is marked done without touching OpenSearch — this makes draining
+	// order-insensitive (backoff reordering can no longer wipe an active
+	// generation or resurrect a stale one).
+	active, err := d.rep.SnapshotActive(ctx, row.SnapshotID)
+	if err != nil {
+		return d.failOutboxRow(ctx, row, fmt.Errorf("snapshot active check: %w", err))
+	}
+	if row.Operation == "delete" && active {
+		return d.rep.MarkOutboxDone(ctx, row.ID)
+	}
+	if row.Operation == "index" && !active {
+		return d.rep.MarkOutboxDone(ctx, row.ID)
+	}
+	if row.Operation == "delete" {
+		return drainOutboxDelete(ctx, d, osc, row)
+	}
+
 	docs, err := d.rep.OutboxDocs(ctx, row.SnapshotID)
 	if err != nil {
 		return d.failOutboxRow(ctx, row, fmt.Errorf("load docs: %w", err))
@@ -275,6 +307,21 @@ func drainOutboxRow(ctx context.Context, d *Dispatcher, osc *openSearchClient, r
 	}
 	for _, doc := range docs {
 		if err := osc.indexDoc(ctx, doc.ChunkID, outboxDocument(row, doc)); err != nil {
+			return d.failOutboxRow(ctx, row, err)
+		}
+	}
+	return d.rep.MarkOutboxDone(ctx, row.ID)
+}
+
+// drainOutboxDelete materializes a tombstone (#127): every chunk doc of the
+// (deactivated) snapshot leaves the index. Deleting an absent doc is fine.
+func drainOutboxDelete(ctx context.Context, d *Dispatcher, osc *openSearchClient, row repo.OutboxRow) error {
+	ids, err := d.rep.OutboxChunkIDs(ctx, row.SnapshotID)
+	if err != nil {
+		return d.failOutboxRow(ctx, row, fmt.Errorf("load chunk ids: %w", err))
+	}
+	for _, id := range ids {
+		if err := osc.deleteDoc(ctx, id); err != nil {
 			return d.failOutboxRow(ctx, row, err)
 		}
 	}

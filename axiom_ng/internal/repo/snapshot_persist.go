@@ -87,6 +87,50 @@ func (r *Repo) PersistResult(ctx context.Context, jobID string, raw []byte, opts
 	return snapshotID, nil
 }
 
+// deactivateSiblingsTx flips every OTHER active snapshot of the attachment to
+// inactive (#125 scope) and returns their ids so the caller can plan outbox
+// tombstones (#127) in the same transaction.
+func deactivateSiblingsTx(ctx context.Context, tx pgx.Tx, ident jobIdentity, keepID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		UPDATE processing_snapshots SET active=false, updated_at=now()
+		WHERE document_id=$1 AND attachment_id=$2 AND active=true AND id<>$3
+		RETURNING id::text`,
+		ident.documentID, ident.attachmentID, keepID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// enqueueOutboxTx plans an OpenSearch outbox operation for a snapshot inside
+// the persist transaction (#127): 'delete' tombstones a deactivated
+// generation's chunk docs, 'index' re-materializes a reactivated one. The
+// drainer's obsolete-op guards make execution order-insensitive.
+func enqueueOutboxTx(ctx context.Context, tx pgx.Tx, snapshotID, operation string, ident jobIdentity) error {
+	payload, err := json.Marshal(map[string]any{
+		"snapshot_id":   snapshotID,
+		"document_id":   ident.documentID,
+		"attachment_id": ident.attachmentID,
+		"operation":     operation,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO opensearch_outbox (snapshot_id, operation, payload)
+		VALUES ($1, $2, $3::jsonb)`, snapshotID, operation, payload)
+	return err
+}
+
 // persistTx runs the single fenced transaction.
 func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, res *processor.Result, arts []ArtifactRecord) (string, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -128,15 +172,23 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 			// #125: deactivate across profiles — readers count actives per
 			// ATTACHMENT; a profile-hash change (force_rebuild flag lives in the
 			// canonical block) must still supersede the old active snapshot.
-			if _, err := tx.Exec(ctx, `
-				UPDATE processing_snapshots SET active=false, updated_at=now()
-				WHERE document_id=$1 AND attachment_id=$2 AND active=true AND id<>$3`,
-				ident.documentID, ident.attachmentID, existingID); err != nil {
+			// #127: each deactivation plans an outbox tombstone, the reactivation
+			// plans a re-index — the index mirrors the active flip atomically.
+			siblings, err := deactivateSiblingsTx(ctx, tx, ident, existingID)
+			if err != nil {
 				return "", fmt.Errorf("replay deactivate other: %w", err)
+			}
+			for _, sib := range siblings {
+				if err := enqueueOutboxTx(ctx, tx, sib, "delete", ident); err != nil {
+					return "", fmt.Errorf("replay tombstone: %w", err)
+				}
 			}
 			if _, err := tx.Exec(ctx, `
 				UPDATE processing_snapshots SET active=true, updated_at=now() WHERE id=$1`, existingID); err != nil {
 				return "", fmt.Errorf("replay reactivate: %w", err)
+			}
+			if err := enqueueOutboxTx(ctx, tx, existingID, "index", ident); err != nil {
+				return "", fmt.Errorf("replay reindex: %w", err)
 			}
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -300,11 +352,17 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 	// and the old per-profile scope left the previous generation active next
 	// to the new one (TC2: ESGBS counted 68 = 34+34 chunks). Latest persist
 	// wins; superseded generations stay queryable, just inactive.
-	if _, err := tx.Exec(ctx, `
-		UPDATE processing_snapshots SET active=false, updated_at=now()
-		WHERE document_id=$1 AND attachment_id=$2 AND active=true AND id<>$3`,
-		ident.documentID, ident.attachmentID, snapshotID); err != nil {
+	// #127: every deactivation plans an outbox tombstone so OpenSearch stops
+	// serving superseded generations (same tx — the index flip mirrors the
+	// active flip).
+	siblings, err := deactivateSiblingsTx(ctx, tx, ident, snapshotID)
+	if err != nil {
 		return "", fmt.Errorf("deactivate previous snapshot: %w", err)
+	}
+	for _, sib := range siblings {
+		if err := enqueueOutboxTx(ctx, tx, sib, "delete", ident); err != nil {
+			return "", fmt.Errorf("tombstone superseded snapshot: %w", err)
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE processing_snapshots SET active=true, updated_at=now() WHERE id=$1`, snapshotID); err != nil {

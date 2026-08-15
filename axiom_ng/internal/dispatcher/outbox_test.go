@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"io"
 	"log"
 	"net/http"
@@ -117,6 +118,14 @@ func fakeOS(t *testing.T, failAll bool) (*httptest.Server, *osRecorder) {
 			_, _ = w.Write([]byte(`{"result":"created"}`))
 			return
 		}
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/axiom-ng-chunks-v1/_doc/") {
+			rec.mu.Lock()
+			rec.deletes = append(rec.deletes, strings.TrimPrefix(r.URL.Path, "/axiom-ng-chunks-v1/_doc/"))
+			rec.mu.Unlock()
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"result":"deleted"}`))
+			return
+		}
 		if r.Method == http.MethodPut { // index create
 			b, _ := io.ReadAll(r.Body)
 			rec.mu.Lock()
@@ -137,8 +146,17 @@ type osRecorder struct {
 	mu           sync.Mutex
 	docs         []map[string]any
 	paths        []string
+	deletes      []string
 	createdIndex bool
 	createBody   []byte
+}
+
+func (r *osRecorder) deletedIDs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.deletes))
+	copy(out, r.deletes)
+	return out
 }
 
 func (r *osRecorder) count() int {
@@ -469,5 +487,200 @@ func TestOutboxWorkerDisabledLeavesRowsPending(t *testing.T) {
 	status, attempts, _, _ := outboxRowStatus(t, h, rowID)
 	if status != "pending" || attempts != 0 {
 		t.Fatalf("row = %s/%d, want pending/0 (disabled worker must leave rows untouched)", status, attempts)
+	}
+}
+
+// TestOutboxTombstoneRoundtrip pins #127 (Option A): persisting generation B
+// over active A plans a tombstone for A; draining leaves ONLY B's chunks in
+// the index; a later replay-REACTIVATION of A re-indexes A and tombstones B.
+// The obsolete-op guards make stale operations no-ops.
+func TestOutboxTombstoneRoundtrip(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	ctx := context.Background()
+	srv, rec := fakeOS(t, false)
+	osc := newOpenSearchClient(srv.URL, "", "", nil)
+	d := newOutboxDispatcher(h)
+
+	// Helper: drive one generation end-to-end through the REAL persist path
+	// (claim → processing → PersistResult). force=true seeds a second job so
+	// the claim freezes a different profile hash (the #125/#127 trigger).
+	// attRefs: the SHARED attachment identity both generations process.
+	var attID, srcID, docID, chRef string
+	drive := func(key string, nChunks int, force bool) (jobID, snapID string) {
+		t.Helper()
+		if force {
+			// B re-processes A's attachment via a force job (different profile
+			// hash): the sibling/deactivation path only exists on a SHARED
+			// attachment.
+			if _, err := h.pool.Exec(ctx, `
+				INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
+				VALUES ($1,$2,$3,$4,'pending',true)`, srcID, docID, attID, chRef); err != nil {
+				t.Fatalf("force job: %v", err)
+			}
+			jobID = h.seededPendingForceID(t, attID)
+		} else {
+			jobID = h.seedJob(t, key, 3)
+			if err := h.pool.QueryRow(ctx,
+				`SELECT attachment_id::text, source_id::text, document_id::text, content_hash FROM ingest_jobs WHERE id=$1`, jobID,
+			).Scan(&attID, &srcID, &docID, &chRef); err != nil {
+				t.Fatalf("refs: %v", err)
+			}
+		}
+		cj, err := h.rep.ClaimNextJob(ctx, repo.ClaimOptions{
+			WorkerID: "w-rt-" + key, LeaseDuration: time.Minute,
+			Profile: json.RawMessage(`{"profile":"full-rag-v1"}`),
+		})
+		if err != nil || cj == nil {
+			t.Fatalf("claim %s: %v %v", key, cj, err)
+		}
+		if err := h.rep.MarkProcessing(ctx, cj.LeaseRef); err != nil {
+			t.Fatalf("mark processing: %v", err)
+		}
+		snapID, err = h.rep.PersistResult(ctx, cj.LeaseRef.JobID, []byte(rtResult(cj.LeaseRef.JobID, attID, chRef, nChunks)), repo.PersistOptions{CapDim: 3})
+		if err != nil {
+			t.Fatalf("persist %s: %v", key, err)
+		}
+		return jobID, snapID
+	}
+
+	chunkIDs := func(snapID string) []string {
+		rows, err := h.pool.Query(ctx, `SELECT id::text FROM processing_chunks WHERE snapshot_id=$1 ORDER BY chunk_index`, snapID)
+		if err != nil {
+			t.Fatalf("chunk ids: %v", err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var id string
+			_ = rows.Scan(&id)
+			out = append(out, id)
+		}
+		return out
+	}
+
+	// A: 2 chunks, active, indexed.
+	_, snapA := drive("rtA", 2, false)
+	if err := drainOutboxOnce(ctx, d, osc); err != nil {
+		t.Fatalf("drain A: %v", err)
+	}
+	if got := rec.count(); got != 2 {
+		t.Fatalf("after A: indexed = %d, want 2", got)
+	}
+
+	// B (force, different profile): 3 chunks; A must be tombstoned.
+	_, snapB := drive("rtB", 3, true)
+	if len(chunkIDs(snapB)) != 3 {
+		t.Fatalf("B chunks = %d, want 3", len(chunkIDs(snapB)))
+	}
+	if err := drainOutboxOnce(ctx, d, osc); err != nil {
+		t.Fatalf("drain B: %v", err)
+	}
+	del := rec.deletedIDs()
+	if len(del) != len(chunkIDs(snapA)) {
+		t.Fatalf("after B: deletes = %v, want A's %d chunk ids (got %d)", del, len(chunkIDs(snapA)), len(del))
+	}
+
+	// Reactivation of A: replay-persist identity A once more (duplicate-persist
+	// convention; the replay branch never touches the job row).
+	var attA, chA, jobA string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT j.attachment_id::text, j.content_hash, j.id::text FROM ingest_jobs j
+		 JOIN processing_snapshots s ON s.ingest_job_id = j.id
+		 WHERE s.id=$1`, snapA).Scan(&attA, &chA, &jobA); err != nil {
+		t.Fatalf("A job refs: %v", err)
+	}
+	reactivated, err := h.rep.PersistResult(ctx, jobA, []byte(rtResult(jobA, attA, chA, 2)), repo.PersistOptions{CapDim: 3})
+	if err != nil {
+		t.Fatalf("replay A: %v", err)
+	}
+	if reactivated != snapA {
+		t.Fatalf("replay must return A's snapshot %s, got %s", snapA, reactivated)
+	}
+	if err := drainOutboxOnce(ctx, d, osc); err != nil {
+		t.Fatalf("drain reactivate: %v", err)
+	}
+
+	// Net index state: A's 2 docs live; A's and B's docs each deleted exactly once.
+	netDocs := rec.count() - len(rec.deletedIDs())
+	if netDocs != 2 {
+		t.Fatalf("net docs = %d, want 2 (only A's chunks)", netDocs)
+	}
+	var activeSnap string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT id::text FROM processing_snapshots WHERE attachment_id=(SELECT attachment_id FROM processing_snapshots WHERE id=$1) AND active`,
+		snapA).Scan(&activeSnap); err != nil {
+		t.Fatalf("active: %v", err)
+	}
+	if activeSnap != snapA {
+		t.Fatalf("active snapshot = %s, want reactivated A", activeSnap)
+	}
+}
+
+// seededPendingForceID returns the force job's id for an attachment.
+func (h *dispatchHarness) seededPendingForceID(t *testing.T, attID string) string {
+	t.Helper()
+	var id string
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT id::text FROM ingest_jobs WHERE attachment_id=$1 AND force_rebuild ORDER BY enqueued_at DESC LIMIT 1`, attID).Scan(&id); err != nil {
+		t.Fatalf("force id: %v", err)
+	}
+	return id
+}
+
+// rtResult builds a §14-valid processor result with n chunks (dim 3).
+func rtResult(jobID, attID, contentHash string, n int) string {
+	chunks := ""
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			chunks += ","
+		}
+		chunks += `{"ref":"chunk-000` + string(rune('0'+i)) + `","index":` + string(rune('0'+i)) +
+			`,"text":"roundtrip chunk ` + string(rune('0'+i)) + `",` +
+			`"locator":{"type":"page_span","physical_page_start":0,"physical_page_end":0,"page_label_start":"1","page_label_end":"1","source":"marker_paginate"},` +
+			`"structure":{"section_titles":["RT"],"start_paragraph_index":0,"end_paragraph_index":0},"token_count":3,` +
+			`"embeddings":{"dense":{"model":"fake-bge","dimensions":3,"values":[0.1,0.2,0.3]}}}`
+	}
+	return `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed",` +
+		`"source":{"attachment_id":"` + attID + `","content_hash":"` + contentHash + `","verified":true},` +
+		`"processor":{"name":"fake","version":"0.1.0","profile":"full-rag-v1","profile_hash":"unused-fallback","models":{"dense_embedding":"fake-bge"}},` +
+		`"artifacts":[],"chunks":[` + chunks + `],"entities":[],"chunk_relationships":[],"entity_relationships":[],` +
+		`"stats":{"pages":0,"chunks":` + string(rune('0'+n)) + `,"artifacts":0,"entities":0,"entity_relationships":0,"chunk_relationships":0},"warnings":[]}`
+}
+
+// TestOutboxObsoleteDeleteSkipped pins the #127 order-insensitivity guard: a
+// tombstone whose snapshot is ACTIVE again (reactivated after the tombstone
+// was planned, before it drained — e.g. under backoff reordering) must be
+// marked done WITHOUT deleting the live generation's docs.
+func TestOutboxObsoleteDeleteSkipped(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	_, snapID := h.seedOutboxSnapshot(t, "obs-del", 2, 0)
+	// Seed an out-of-band delete row for the (still active) snapshot.
+	if _, err := h.pool.Exec(context.Background(), `
+		INSERT INTO opensearch_outbox (snapshot_id, operation, payload)
+		VALUES ($1, 'delete', '{"operation":"delete"}'::jsonb)`, snapID); err != nil {
+		t.Fatalf("seed delete row: %v", err)
+	}
+
+	srv, rec := fakeOS(t, false)
+	d := newOutboxDispatcher(h)
+	osc := newOpenSearchClient(srv.URL, "", "", nil)
+	if err := drainOutboxOnce(context.Background(), d, osc); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	if got := len(rec.deletedIDs()); got != 0 {
+		t.Fatalf("deletes = %v, want none (snapshot is active — obsolete op)", rec.deletedIDs())
+	}
+	// The obsolete row is done, the live index row indexed its 2 chunks.
+	var done, pending int
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FILTER (WHERE status='done'), count(*) FILTER (WHERE status='pending')
+		 FROM opensearch_outbox WHERE operation='delete'`).Scan(&done, &pending); err != nil {
+		t.Fatalf("row states: %v", err)
+	}
+	if done != 1 || pending != 0 {
+		t.Fatalf("delete row done=%d pending=%d, want 1/0", done, pending)
 	}
 }

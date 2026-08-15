@@ -212,3 +212,40 @@ func parseVector(s string) ([]float64, error) {
 	}
 	return out, nil
 }
+
+// SnapshotActive reports whether the snapshot is currently the active
+// generation for its attachment. The outbox drainer uses it to skip obsolete
+// operations (#127): a delete for a since-reactivated snapshot, or an index
+// for a since-superseded one, must not materialize stale state.
+func (r *Repo) SnapshotActive(ctx context.Context, snapshotID string) (bool, error) {
+	var active bool
+	err := r.pool.QueryRow(ctx,
+		`SELECT active FROM processing_snapshots WHERE id=$1`, snapshotID).Scan(&active)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return active, nil
+}
+
+// OutboxChunkIDs returns the durable chunk ids of a snapshot — the doc ids a
+// tombstone (#127) must delete from OpenSearch.
+func (r *Repo) OutboxChunkIDs(ctx context.Context, snapshotID string) ([]string, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT id::text FROM processing_chunks WHERE snapshot_id=$1 ORDER BY chunk_index`, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
