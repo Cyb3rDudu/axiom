@@ -22,6 +22,8 @@ import hashlib
 import logging
 import sys
 import zipfile
+from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -492,6 +494,7 @@ def _build_reference_result(
     image_artifacts: list[dict[str, Any]] | None = None,
     real_entities: list[dict[str, Any]] | None = None,
     real_relationships: list[dict[str, Any]] | None = None,
+    stage_timings: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     proc = request.get("processing", {}) or {}
     processor_name = "axiom-python-marker"
@@ -564,6 +567,10 @@ def _build_reference_result(
         "source_page_count": source_page_count,
         "page_label_map": {str(k): v for k, v in page_label_map.items()},
     }
+    if stage_timings:
+        # Per-stage UTC start timestamps (§9): post-hoc reconstruction of
+        # where a book spent its time, no live observation needed.
+        manifest["stage_timings"] = stage_timings
 
     return {
         "contract_version": CONTRACT_VERSION,
@@ -689,17 +696,40 @@ def _convert_epub_reference(epub_path: Path, md_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def compute(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
+def compute(
+    request: dict[str, Any],
+    work_dir: Path,
+    set_stage: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     """Run the pure compute pipeline for a validated source. Returns a
     contract processor-result dict (contract §10). Work dir is per-job and
-    already validated by the caller."""
+    already validated by the caller. ``set_stage`` advances the live job
+    stage (GET /v1/jobs) while compute runs (§9)."""
     backend = settings.get().compute_backend
     if backend == "real":
-        result = _compute_real(request, work_dir)
+        result = _compute_real(request, work_dir, set_stage)
         if result is not None:
             return result
         log.warning("real backend unavailable; falling back to reference")
-    return _compute_reference(request, work_dir)
+    return _compute_reference(request, work_dir, set_stage)
+
+
+def _stage_tracker(
+    set_stage: Callable[[str], None] | None,
+) -> tuple[Callable[[str], None], dict[str, str]]:
+    """Live-stage callback + per-stage UTC timestamps for the manifest.
+
+    enter(stage) records when the stage began and mirrors it into the job
+    store so /v1/jobs shows where a book is spending its time; the timings
+    land in manifest.stage_timings for post-hoc benchmark analysis."""
+    timings: dict[str, str] = {}
+
+    def enter(stage: str) -> None:
+        timings[stage] = datetime.now(timezone.utc).isoformat()
+        if set_stage is not None:
+            set_stage(stage)
+
+    return enter, timings
 
 
 def _int_keys(mapping: dict[Any, Any]) -> dict[int, Any]:
@@ -713,10 +743,14 @@ def _int_keys(mapping: dict[Any, Any]) -> dict[int, Any]:
     return out
 
 
-def _compute_reference(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
+def _compute_reference(
+    request: dict[str, Any], work_dir: Path, set_stage: Callable[[str], None] | None = None
+) -> dict[str, Any]:
+    enter, timings = _stage_tracker(set_stage)
     attach = request["attachment"]
     source_path = Path(attach["local_path"])
 
+    enter("convert")
     markdown, page_label_map, page_count, md_path = _convert_reference(
         request, source_path, work_dir
     )
@@ -724,10 +758,17 @@ def _compute_reference(request: dict[str, Any], work_dir: Path) -> dict[str, Any
 
     # Pure, hermetic deterministic chunker (stdlib-only). Produces chunks in
     # final contract shape directly (see chunking.chunk_markdown).
+    enter("chunk")
     from .chunking import chunk_markdown
 
     chunk_dicts = chunk_markdown(markdown, page_label_map)
 
+    # Same stage shape as the real backend (stubs are instant, but
+    # /v1/jobs must not look backend-dependent).
+    enter("embed")
+    enter("entities")
+    enter("relationships")
+    enter("assemble")
     return _build_reference_result(
         request=request,
         work_dir=work_dir,
@@ -737,32 +778,43 @@ def _compute_reference(request: dict[str, Any], work_dir: Path) -> dict[str, Any
         attachment_id=attach["attachment_id"],
         content_hash="sha256:" + _sha256_hex(source_path),
         source_page_count=page_count,
+        stage_timings=timings,
     )
 
 
-def _compute_real(request: dict[str, Any], work_dir: Path) -> dict[str, Any] | None:
+def _compute_real(
+    request: dict[str, Any],
+    work_dir: Path,
+    set_stage: Callable[[str], None] | None = None,
+) -> dict[str, Any] | None:
     """Wire the existing heavy pipeline (Marker/pdf_worker, epub_worker,
     embedder, extractors). Returns None if the heavy deps are unavailable so
     the caller can fall back. The contract black-box suite runs against
     ``reference``."""
     try:
-        return _real_pipeline(request, work_dir)
+        return _real_pipeline(request, work_dir, set_stage)
     except ImportError as err:
         log.warning("real compute deps unavailable: %s", err)
         return None
 
 
-def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
+def _real_pipeline(
+    request: dict[str, Any],
+    work_dir: Path,
+    set_stage: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     import json as _json
     import subprocess
     import sys
 
+    enter, stage_timings = _stage_tracker(set_stage)
     attach = request["attachment"]
     source_path = Path(attach["local_path"])
     content_type = attach["content_type"]
     out_md = work_dir / "markdown.md"
     out_images = work_dir / "images"
 
+    enter("convert")
     convert = (
         "ai_researcher.pdf_worker"
         if content_type == "application/pdf"
@@ -819,6 +871,7 @@ def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
                            markdown)
         out_md.write_text(markdown, encoding="utf-8")
 
+    enter("chunk")
     from ai_researcher.core_rag.chunker import Chunker
 
     chunk_dicts = Chunker(max_chunk_tokens=1200).chunk(
@@ -829,6 +882,7 @@ def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
     # Dense embeddings via the existing heavy core if requested.
     proc_opt = request.get("processing", {}) or {}
     if proc_opt.get("compute_dense_embeddings"):
+        enter("embed")
         from ai_researcher.core_rag.embedder import TextEmbedder
 
         TextEmbedder().embed_chunks(chunk_dicts)
@@ -880,16 +934,19 @@ def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
     chunk_items = [(f"chunk-{i:04d}", c.get("text", ""))
                    for i, c in enumerate(chunk_dicts)]
     if proc_opt.get("extract_entities") or proc_opt.get("extract_relationships"):
+        enter("entities")
         real_entities = _extract_real_entities(chunk_items)
     if proc_opt.get("extract_relationships") and real_entities is not None:
         # mREBEL reads metadata['chunk_id'] as evidence — set the contract
         # ref so evidence_chunk_refs resolve without a second mapping.
+        enter("relationships")
         _assign_contract_chunk_ids(chunk_dicts)
         chunk_texts = dict(chunk_items)
         real_relationships = _extract_real_relationships(
             real_entities, chunk_dicts, chunk_texts
         )
 
+    enter("assemble")
     return _build_reference_result(
         request=request,
         work_dir=work_dir,
@@ -902,6 +959,7 @@ def _real_pipeline(request: dict[str, Any], work_dir: Path) -> dict[str, Any]:
         image_artifacts=image_artifacts,
         real_entities=real_entities,
         real_relationships=real_relationships,
+        stage_timings=stage_timings,
     )
 
 

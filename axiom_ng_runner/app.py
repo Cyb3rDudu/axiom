@@ -278,8 +278,14 @@ def _run_compute(job: Job) -> None:
         try:
             work_dir = job.path / "work"
             work_dir.mkdir(parents=True, exist_ok=True)
+
+            def _advance(stage: str) -> None:
+                # Live stage for GET /v1/jobs (§9): compute reports progress,
+                # the store keeps the job visible as running.
+                _store_impl().set_status(job, "running", stage=stage)
+
             _store_impl().set_status(job, "running", stage="validate_source")
-            result = compute(job.request, work_dir)
+            result = compute(job.request, work_dir, set_stage=_advance)
             _store_impl().set_result(job, result)
         except SourceError as exc:
             _store_impl().set_error(

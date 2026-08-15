@@ -11,15 +11,15 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
-
 from axiom_ng_runner import CONTRACT_VERSION
 from axiom_ng_runner.app import app
 from axiom_ng_runner.config import Settings, settings
 from axiom_ng_runner.job_store import Job, JobStore
 from axiom_ng_runner.validation import compute_sha256
+from fastapi.testclient import TestClient
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -205,7 +205,7 @@ def test_chunker_section_hierarchy_from_markdown_headings():
         "{1}----------\n\n"
         "# Part Two\n\nMore body text for the second part."
     )
-    chunks = chunk_markdown(md, {0: "i", 1: "1"})
+    chunks: list[dict[str, Any]] = chunk_markdown(md, {0: "i", 1: "1"})
     assert chunks, "markdown with headings must produce chunks"
     hierarchies = [c["structure"]["section_titles"] for c in chunks]
     assert any(h for h in hierarchies), "section titles must be populated"
@@ -412,7 +412,7 @@ def test_cancellation_terminates_inflight_job(client, fixture_dirs, monkeypatch)
 
     cancel_seen: dict[str, bool] = {"seen": False}
 
-    def slow_cooperative_compute(request, work_dir):
+    def slow_cooperative_compute(request, work_dir, set_stage=None):
         # Simulate a long compute that cooperatively polls for cancellation.
         # Read status through the app's store singleton so we observe the
         # cancel endpoint's in-memory transition (a fresh JobStore would cache
@@ -664,3 +664,58 @@ def test_no_durable_source_copy_after_ack(client, fixture_dirs):
             assert found == 0, "durable copy of source remained after ack"
     finally:
         settings.set(old)
+
+
+# ---------------------------------------------------------------------------
+# 10. Stage progression: set_stage callback + manifest.stage_timings (§9)
+# ---------------------------------------------------------------------------
+
+
+def test_stage_progression_and_manifest_timings(fixture_dirs):
+    """Issue #122: compute must advance the live job stage through the
+    contract stages and persist per-stage UTC timestamps into the manifest
+    so phase durations are reconstructable after job end."""
+    from axiom_ng_runner.runner import compute
+
+    src = fixture_dirs["pdf"]
+    work_dir = fixture_dirs["work"] / "stage_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    payload = _process_payload(src, "job-stage", "key-stage")
+
+    seen: list[str] = []
+    result = compute(payload, work_dir, set_stage=seen.append)
+
+    # Live progression covers every contract stage in order (reference
+    # backend reports the same stage shape as the real backend).
+    assert seen == [
+        "convert",
+        "chunk",
+        "embed",
+        "entities",
+        "relationships",
+        "assemble",
+    ]
+
+    # Manifest carries parseable UTC timestamps for each stage.
+    from datetime import datetime
+
+    timings = result["manifest"]["stage_timings"]
+    assert set(timings) == set(seen)
+    stamps = [datetime.fromisoformat(timings[s]) for s in seen]
+    assert all(st.tzinfo is not None for st in stamps), "timestamps must be tz-aware"
+    assert stamps == sorted(stamps), "stage timestamps must be monotonically ordered"
+
+
+def test_stage_progression_without_callback(fixture_dirs):
+    """set_stage stays optional: compute must run unchanged (callers that
+    don't observe stages, e.g. ad-hoc scripts, keep working)."""
+    from axiom_ng_runner.runner import compute
+
+    src = fixture_dirs["pdf"]
+    work_dir = fixture_dirs["work"] / "stage_nocb"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    payload = _process_payload(src, "job-stage2", "key-stage2")
+
+    result = compute(payload, work_dir)
+    assert result["status"] == "completed"
+    assert "stage_timings" in result["manifest"]
