@@ -733,7 +733,8 @@ def test_normalize_epub_image_paths_strips_machine_paths():
         '# Kapitel\n\n'
         '<img src="/tmp/epub_media_k97091zv/images/532180_1_En_1_Chapter/'
         '532180_1_En_1_Fig1_HTML.png" style="width:31.9em" aria-describedby="d65e473" />\n\n'
-        'Text davor ![Fig 2](/tmp/epub_media_pg911a7r/images/ch2/fig2.png) Text danach\n'
+        'Text davor ![Fig 2](/tmp/epub_media_pg911a7r/images/ch2/fig2.png) Text danach\n\n'
+        '<img src="/tmp/epub_media_qx7wv2mn/images/fig9.png" />\n'
     )
     out = _normalize_epub_image_paths(md)
     # Keine Maschinenpfade, keine Zufallssuffixe — in keiner Form.
@@ -742,7 +743,21 @@ def test_normalize_epub_image_paths_strips_machine_paths():
     # Beide Formen tragen den stabilen Basename…
     assert 'src="532180_1_En_1_Fig1_HTML.png"' in out
     assert "![Fig 2](fig2.png)" in out
+    # …und JEDES <img>-Vorkommen (auch das zweite mit anderem Temp-Suffix).
+    assert 'src="fig9.png"' in out
     # …und alle anderen Attribute/Inhalte bleiben unberührt.
     assert 'style="width:31.9em"' in out
     assert "aria-describedby" in out
     assert out.startswith("# Kapitel")
+
+
+def test_real_pipeline_calls_image_path_normalization():
+    """#124 shipping guard: the EPUB pipeline branch needs heavy deps (pandoc,
+    marker) and never runs in this suite — when a stray mutation dropped the
+    pipeline's normalization call, the whole suite stayed green (rsync-built
+    images ship the working tree verbatim). Pin the call site by source
+    inspection."""
+    import axiom_ng_runner.runner as runner_mod
+
+    src = Path(runner_mod.__file__).read_text(encoding="utf-8")
+    assert "_normalize_epub_image_paths(markdown)" in src

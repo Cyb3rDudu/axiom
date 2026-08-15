@@ -796,3 +796,112 @@ func TestPersistForceRebuildDifferentProfileLeavesSingleActive(t *testing.T) {
 		t.Fatalf("exactly ONE active snapshot (the latest, %s) must remain per attachment; got %v", s2, actives)
 	}
 }
+
+// TestReplayReactivationDeactivatesOtherProfileSibling pins the #125 fix in
+// the REPLAY branch: after a force run superseded S1 with S2 (different
+// profile_hash), re-persisting S1's identity must reactivate S1 AND
+// deactivate the other-profile sibling S2. Pre-fix, the replay-branch
+// deactivation was scoped by profile_hash, so S2 stayed active next to the
+// reactivated S1 — the same per-attachment double-activation #125 fixed on
+// the insert path. The re-drive is the duplicate-persist pattern (§14.4 #2):
+// PersistResult on the same job; the replay branch never touches the job row
+// (no MarkCompletedTx), so re-persisting the completed job is the legitimate
+// idempotent replay.
+func TestReplayReactivationDeactivatesOtherProfileSibling(t *testing.T) {
+	h := newPersistHarness(t, "replaysib")
+
+	// (a) S1 under the claim's frozen profile hash (identity A) becomes active.
+	s1, err := h.persist(t, h.validResultBytes(t, 3), 3, markdownArtifact())
+	if err != nil {
+		t.Fatalf("first persist: %v", err)
+	}
+
+	// (b) Real force path (as in the TC2 repro): ops-INSERT force_rebuild=true,
+	// fresh claim freezes a DIFFERENT profile hash (identity B), persist
+	// creates S2 and must supersede S1.
+	ctx := context.Background()
+	var srcID, docID string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT source_id::text, document_id::text FROM ingest_jobs WHERE id=$1`, h.jobID,
+	).Scan(&srcID, &docID); err != nil {
+		t.Fatalf("load job refs: %v", err)
+	}
+	if _, err := h.pool.Exec(ctx, `
+		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
+		VALUES ($1,$2,$3,$4,'pending',true)`,
+		srcID, docID, h.attachmentID, h.contentHash); err != nil {
+		t.Fatalf("seed force job: %v", err)
+	}
+	cj2, err := h.rep.ClaimNextJob(ctx, defaultClaim("worker-force"))
+	if err != nil || cj2 == nil {
+		t.Fatalf("claim force job: %v", err)
+	}
+	if err := h.rep.MarkProcessing(ctx, cj2.LeaseRef); err != nil {
+		t.Fatalf("mark processing: %v", err)
+	}
+	s2, err := h.rep.PersistResult(ctx, cj2.LeaseRef.JobID, h.validResultBytes(t, 3), PersistOptions{CapDim: 3, Artifacts: markdownArtifact()})
+	if err != nil {
+		t.Fatalf("force persist: %v", err)
+	}
+	if s1 == s2 {
+		t.Fatalf("force run must create a NEW snapshot, got same id %s", s1)
+	}
+
+	// (c) Re-persist identity A: replay must return S1, reactivate it and
+	// deactivate the other-profile sibling S2.
+	replayID, err := h.persist(t, h.validResultBytes(t, 3), 3, markdownArtifact())
+	if err != nil {
+		t.Fatalf("replay persist: %v", err)
+	}
+	if replayID != s1 {
+		t.Fatalf("replay must return the existing snapshot %s, got %s", s1, replayID)
+	}
+
+	var actives []string
+	rows, err := h.pool.Query(ctx, `
+		SELECT id::text FROM processing_snapshots
+		WHERE attachment_id=$1 AND active=true`, h.attachmentID)
+	if err != nil {
+		t.Fatalf("query actives: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		actives = append(actives, id)
+	}
+	if len(actives) != 1 || actives[0] != s1 {
+		t.Fatalf("exactly ONE active snapshot must remain per attachment (the reactivated %s); got %v", s1, actives)
+	}
+}
+
+// TestOneActivePerAttachmentEnforcedByDB pins migration 0011: the #125
+// invariant (<=1 active snapshot per attachment) is enforced by a partial
+// unique index, so a mixed-binary deploy (old dispatcher binary still
+// running) or a rogue writer cannot recreate the TC2 double-activation at
+// the DB level.
+func TestOneActivePerAttachmentEnforcedByDB(t *testing.T) {
+	h := newPersistHarness(t, "oneactive")
+	if _, err := h.persist(t, h.validResultBytes(t, 3), 3, markdownArtifact()); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	var docID string
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT document_id::text FROM ingest_jobs WHERE id=$1`, h.jobID).Scan(&docID); err != nil {
+		t.Fatalf("get doc id: %v", err)
+	}
+	// Rogue writer: a second ACTIVE row with a different profile_hash (so the
+	// 0008 identity/scope indexes cannot reject it) — only the 0011 index can.
+	_, err := h.pool.Exec(context.Background(), `
+		INSERT INTO processing_snapshots
+		  (attachment_id, content_hash, processor_name, processor_version, profile_hash,
+		   document_id, profile, active)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,true)`,
+		h.attachmentID, h.contentHash, "axiom-python-marker", "0.1.0", h.profileHash+"-rogue",
+		docID, "full-rag-v1")
+	if err == nil || !strings.Contains(err.Error(), "processing_snapshots_one_active_per_attachment_uq") {
+		t.Fatalf("second active row for the same attachment must hit the 0011 unique index, got: %v", err)
+	}
+}
