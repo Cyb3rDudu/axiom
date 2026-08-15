@@ -228,6 +228,22 @@ Smoke-verified 2026-08-14 (Carrier): 163 kB EPUB end-to-end over source_url
 with zero Zotero access on the runner — completed, 34 chunks, outbox done,
 OpenSearch indexed, work dir (incl. the downloaded source) empty after ACK.
 
+## 5b-bis. The /.dockerenv trap (TC2 round-1 lesson, 2026-08-15)
+
+Rootless Podman fails `is_running_in_docker()` checks: no `/.dockerenv`,
+cgroup v2 shows only `0::/`. The ai_researcher config then treats the
+container as bare metal and OVERWRITES `CUDA_VISIBLE_DEVICES=0` at import —
+trampling any per-container GPU pinning. Symptom: every runner stacks on GPU
+0 (VRAM pileup + Marker OOM) while pinned GPUs stay empty.
+
+Fix (in the Containerfile, durable): `RUN touch /.dockerenv`.
+
+Start gate before any parallel run (30 s, would have saved round 1):
+per container `python -c "import torch; print(torch.cuda.device_count(),
+torch.cuda.get_device_name(0))"` must show exactly ONE device with the
+expected name, plus a host-side test allocation must light up VRAM on EVERY
+pinned card simultaneously.
+
 ## 5c. Runner identity + GPU sampler labels (TC2 parallel operation)
 
 With multiple runners (TC2), every log line and every job row must say WHICH
