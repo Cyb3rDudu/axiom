@@ -159,8 +159,8 @@ export AXIOMNG_PROCESSOR_SOURCE_SECRET='<random-hex>'
 export AXIOMNG_PROCESSOR_SOURCE_BASE_URL=http://<mac-tailnet-ip>:8011
 # axiom-ng must listen on an interface the runner can reach:
 export AXIOMNG_BIND_ADDR=0.0.0.0
-# POST /v1/process waits for the synchronous download; raise the dispatcher's
-# request timeout to cover it (default 30s):
+# POST /v1/process waits for the synchronous download; the dispatcher's result
+# budget also floors the submit call to cover it (default 300s):
 export AXIOMNG_PROCESSOR_TIMEOUT=180s
 ```
 

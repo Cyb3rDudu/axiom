@@ -122,7 +122,8 @@ type Client struct {
 	baseURL string
 	hc      *http.Client
 	maxBody int64
-	// resultBudget bounds JobResult only (opts.RequestTimeout).
+	// resultBudget bounds JobResult only (opts.ResultTimeout) and — via the
+	// submit floor in SubmitProcess — the synchronous remote source download.
 	resultBudget time.Duration
 }
 
@@ -132,12 +133,14 @@ type Options struct {
 	BaseURL string
 	// ConnectTimeout bounds connection establishment.
 	ConnectTimeout time.Duration
-	// RequestTimeout bounds the RESULT fetch (large JSON payloads under
+	// ResultTimeout bounds the RESULT fetch (large JSON payloads under
 	// load); every other call type has a fixed per-type budget (see
 	// budget* constants) sized for small payloads. Keeping the result
 	// budget separate prevents a shared 300s window from starving polls,
-	// submits and artifact fetches (L8 finding).
-	RequestTimeout time.Duration
+	// submits and artifact fetches (L8 finding). It also raises the submit
+	// budget floor (see SubmitProcess) because remote source delivery
+	// downloads synchronously inside POST /v1/process.
+	ResultTimeout time.Duration
 	// MaxBody bounds the largest accepted response body in bytes.
 	MaxBody int64
 }
@@ -169,7 +172,7 @@ func New(opts Options) (*Client, error) {
 	if connect <= 0 {
 		connect = defaultConnect
 	}
-	rq := opts.RequestTimeout
+	rq := opts.ResultTimeout
 	if rq <= 0 {
 		rq = defaultRequest
 	}
@@ -300,7 +303,15 @@ func (c *Client) Capabilities(ctx context.Context) (*Capabilities, error) {
 // version, echo the submitted job_id, a known status, and the deduplicated flag.
 func (c *Client) SubmitProcess(ctx context.Context, req *ProcessRequest) (*ProcessAccepted, error) {
 	var acc ProcessAccepted
-	if err := c.do(ctx, budgetSubmit, http.MethodPost, "/v1/process", req, &acc); err != nil {
+	// C1: remote runners download source_url SYNCHRONOUSLY inside
+	// POST /v1/process (runner budget default 120s), so the result budget
+	// (AXIOMNG_PROCESSOR_TIMEOUT) also acts as the submit FLOOR — a hard
+	// budgetSubmit would kill every remote book with a >30s download.
+	sub := budgetSubmit
+	if c.resultBudget > sub {
+		sub = c.resultBudget
+	}
+	if err := c.do(ctx, sub, http.MethodPost, "/v1/process", req, &acc); err != nil {
 		return nil, err
 	}
 	if !contractVersionOk(acc.ContractVersion) {

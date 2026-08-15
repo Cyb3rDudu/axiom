@@ -92,10 +92,10 @@ func TestProcessorRequestTimeoutOverride(t *testing.T) {
 	if c := Load(); c.ProcessorRequestTimeout != 5*time.Minute {
 		t.Errorf("ProcessorRequestTimeout = %v, want 5m", c.ProcessorRequestTimeout)
 	}
-	// Default keeps the tight 30s when unset.
+	// Default matches the result-budget table (300s) when unset.
 	os.Unsetenv("AXIOMNG_PROCESSOR_TIMEOUT")
-	if c := Load(); c.ProcessorRequestTimeout != 30*time.Second {
-		t.Errorf("ProcessorRequestTimeout = %v, want default 30s", c.ProcessorRequestTimeout)
+	if c := Load(); c.ProcessorRequestTimeout != 300*time.Second {
+		t.Errorf("ProcessorRequestTimeout = %v, want default 300s", c.ProcessorRequestTimeout)
 	}
 }
 

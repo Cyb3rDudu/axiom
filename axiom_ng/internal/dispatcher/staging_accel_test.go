@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -23,9 +24,8 @@ import (
 // artifactServer serves refs with a per-request delay; corrupt one ref's bytes
 // when asked (digest gate must still fire under parallelism).
 type artifactServer struct {
-	srv    *httptest.Server
-	refCnt int
-	delay  time.Duration
+	srv   *httptest.Server
+	delay time.Duration
 }
 
 func newArtifactServer(t *testing.T, refs map[string][]byte, delay time.Duration, corrupt string) *artifactServer {
@@ -38,9 +38,8 @@ func newArtifactServer(t *testing.T, refs map[string][]byte, delay time.Duration
 			http.NotFound(w, r)
 			return
 		}
-		a.refCnt++
 		if ref == corrupt {
-			b = []byte("corrupted!") // size+digest mismatch by construction
+			b = []byte("xxx") // SAME size as "ddd" — the DIGEST gate must fire
 		}
 		time.Sleep(delay)
 		w.Write(b)
@@ -73,13 +72,7 @@ func resultWithArtifacts(refs map[string][]byte) []byte {
 	for r := range refs {
 		names = append(names, r)
 	}
-	for i := 0; i < len(names); i++ {
-		for j := i + 1; j < len(names); j++ {
-			if names[j] < names[i] {
-				names[i], names[j] = names[j], names[i]
-			}
-		}
-	}
+	sort.Strings(names)
 	for _, r := range names {
 		sum := sha256.Sum256(refs[r])
 		out.Artifacts = append(out.Artifacts, art{
@@ -136,8 +129,8 @@ func TestStageArtifactsCorruptDigestStillTerminal(t *testing.T) {
 	if err == nil {
 		t.Fatal("corrupted artifact must fail the whole job")
 	}
-	if !strings.Contains(err.Error(), "artifact") || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("err = %v, want artifact mismatch detail", err)
+	if !strings.Contains(err.Error(), "digest") {
+		t.Fatalf("err = %v, want the DIGEST branch (same-size wrong bytes)", err)
 	}
 	// No partial commit: no FINAL file for the corrupt ref (staging cleaned),
 	// and the job dir only holds successfully renamed files.
@@ -174,5 +167,32 @@ func TestStatusPollTimesOutAtPerCallBudget(t *testing.T) {
 	}
 	if elapsed < 9*time.Second || elapsed > 12*time.Second {
 		t.Fatalf("JobStatus errored after %v, want ~10s per-call budget (not the shared 300s)", elapsed)
+	}
+}
+
+func TestJobResultTimesOutAtConfiguredBudget(t *testing.T) {
+	// W7: the resultBudget wiring must actually be pinned to
+	// Options.ResultTimeout, not a constant. Handler parks on done so
+	// cleanup does not wait out the fake hang.
+	done := make(chan struct{})
+	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(60 * time.Second):
+		case <-done:
+		}
+	}))
+	t.Cleanup(func() { close(done); hang.Close() })
+	client, err := processor.New(processor.Options{BaseURL: hang.URL, ResultTimeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, jerr := client.JobResult(context.Background(), "j1")
+	elapsed := time.Since(start)
+	if jerr == nil {
+		t.Fatal("hanging result endpoint must error")
+	}
+	if elapsed < 1500*time.Millisecond || elapsed > 3500*time.Millisecond {
+		t.Fatalf("JobResult errored after %v, want ~2s configured budget", elapsed)
 	}
 }

@@ -79,8 +79,8 @@ func main() {
 		// negotiation, not silently stalling claims.
 		if cfg.DispatcherEnabled {
 			pclient, perr := processor.New(processor.Options{
-				BaseURL:        cfg.ProcessorURL,
-				RequestTimeout: cfg.ProcessorRequestTimeout,
+				BaseURL:       cfg.ProcessorURL,
+				ResultTimeout: cfg.ProcessorRequestTimeout,
 			})
 			if perr != nil {
 				logger.Fatalf("processor client: %v", perr)

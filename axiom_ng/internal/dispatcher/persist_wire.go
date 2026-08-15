@@ -86,6 +86,22 @@ func (d *Dispatcher) stageArtifacts(ctx context.Context, jobID string, resultByt
 		return nil, fmt.Errorf("create artifact root: %w", err)
 	}
 
+	// Upfront serial validation (W1/W2): sanitize refs and reject duplicates
+	// BEFORE any goroutine starts — an early return mid-group would leak
+	// running writers past this function, and duplicate refs would race two
+	// concurrent staging-writes onto the same final path. Malformed results
+	// fail closed with zero fetches.
+	seen := make(map[string]bool, len(res.Artifacts))
+	for _, a := range res.Artifacts {
+		if !safeArtifactRef(a.Ref) {
+			return nil, fmt.Errorf("artifact ref %q is not a safe filename (contains '/', '..', or is empty)", a.Ref)
+		}
+		if seen[a.Ref] {
+			return nil, fmt.Errorf("duplicate artifact ref %q in result", a.Ref)
+		}
+		seen[a.Ref] = true
+	}
+
 	out := make([]repo.ArtifactRecord, len(res.Artifacts))
 	// Bounded-parallel transport (L8 fix): extract_images produces 100–260+
 	// artifacts per book; serial single fetches burned minutes between jobs.
@@ -98,12 +114,6 @@ func (d *Dispatcher) stageArtifacts(ctx context.Context, jobID string, resultByt
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(6)
 	for i, a := range res.Artifacts {
-		// W2: the ref is processor-controlled and hostile. Sanitize before using
-		// it in a path (§18): reject path separators, traversal, empty.
-		if !safeArtifactRef(a.Ref) {
-			return nil, fmt.Errorf("artifact ref %q is not a safe filename (contains '/', '..', or is empty)", a.Ref)
-		}
-		i, a := i, a
 		g.Go(func() error {
 			rec, err := d.stageOneArtifact(gctx, jobID, a)
 			if err != nil {

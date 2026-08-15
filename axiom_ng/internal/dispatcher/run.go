@@ -104,10 +104,23 @@ func (ph *jobPhases) line() string {
 		ph.jobID, f(ph.claim), f(ph.submit), f(ph.complete), f(ph.result), ph.arts, f(ph.staged), f(ph.persist), f(ph.ack))
 }
 
+// logPhases emits the phases-so-far line with a terminal/retry note; no-op on
+// nil (W6: failed and error paths log too — the next anomaly must be readable
+// from the dispatcher log alone, not just the happy path).
+func (d *Dispatcher) logPhases(ph *jobPhases, note string) {
+	if ph == nil {
+		return
+	}
+	d.logger.Printf("phases[%s]: %s", note, ph.line())
+}
+
 // pollAndFinish drives a job from 'processing' to a terminal state: polls the
 // processor status while renewing the lease, handles cancellation, then on
 // completion fetches + minimally validates the result and marks completed.
 func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob, ph *jobPhases) {
+	if ph == nil {
+		ph = &jobPhases{jobID: claimed.LeaseRef.JobID}
+	}
 	ref := claimed.LeaseRef
 	fields := []any{ref.JobID, claimed.AttachmentID, claimed.DocumentID, claimed.Attempt}
 	consecutive := 0
@@ -185,16 +198,14 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 		consecutive = 0
 		switch st.Status {
 		case "completed":
-			if ph != nil {
-				ph.complete = time.Now()
-			}
+			ph.complete = time.Now()
 			d.onCompleted(ctx, claimed, ph)
 			return
 		case "failed":
 			if st.Error != nil {
-				d.onFailed(ctx, claimed, st.Error)
+				d.onFailed(ctx, claimed, st.Error, ph)
 			} else {
-				d.onFailed(ctx, claimed, &processor.JobError{Code: "PROCESS_FAILED", Message: "processor reported failure without error details", Retryable: true})
+				d.onFailed(ctx, claimed, &processor.JobError{Code: "PROCESS_FAILED", Message: "processor reported failure without error details", Retryable: true}, ph)
 			}
 			return
 		case "cancelled":
@@ -208,8 +219,9 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 	}
 }
 
-func (d *Dispatcher) onFailed(ctx context.Context, claimed *repo.ClaimedJob, jobErr *processor.JobError) {
+func (d *Dispatcher) onFailed(ctx context.Context, claimed *repo.ClaimedJob, jobErr *processor.JobError, ph *jobPhases) {
 	ref := claimed.LeaseRef
+	d.logPhases(ph, jobErr.Code)
 	if jobErr.Retryable {
 		d.scheduleRetry(ctx, ref, claimed.Attempt, jobErr.Code, jobErr.Message)
 		return
@@ -238,11 +250,10 @@ func (d *Dispatcher) onCancelled(ctx context.Context, ref repo.LeaseRef) {
 func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob, ph *jobPhases) {
 	ref := claimed.LeaseRef
 	resultBytes, err := d.client.JobResult(ctx, ref.JobID)
-	if ph != nil {
-		ph.result = time.Now()
-	}
+	ph.result = time.Now()
 	if err != nil {
 		// We cannot complete without the result.
+		d.logPhases(ph, "RESULT_FETCH_FAILED")
 		d.markTerminal(ctx, ref, "RESULT_FETCH_FAILED", err.Error())
 		return
 	}
@@ -252,6 +263,7 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob, 
 		JobID string `json:"job_id"`
 	}
 	if err := json.Unmarshal(resultBytes, &resMeta); err != nil || resMeta.JobID != ref.JobID {
+		d.logPhases(ph, "RESULT_INVALID")
 		d.markTerminal(ctx, ref, "RESULT_INVALID", "processor result does not echo job_id")
 		return
 	}
@@ -261,11 +273,10 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob, 
 	// atomic rename under ArtifactRoot. A digest/size mismatch makes the job
 	// terminal (validation failure) before any snapshot row is inserted.
 	arts, aerr := d.stageArtifacts(ctx, ref.JobID, resultBytes)
-	if ph != nil {
-		ph.staged = time.Now()
-		ph.arts = len(arts)
-	}
+	ph.staged = time.Now()
+	ph.arts = len(arts)
 	if aerr != nil {
+		d.logPhases(ph, "RESULT_INVALID")
 		d.markTerminal(ctx, ref, "RESULT_INVALID", aerr.Error())
 		return
 	}
@@ -280,10 +291,9 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob, 
 		CapDim:    d.capDim(),
 		Artifacts: arts,
 	})
-	if ph != nil {
-		ph.persist = time.Now()
-	}
+	ph.persist = time.Now()
 	if err != nil {
+		d.logPhases(ph, "RESULT_PERSIST_FAILED")
 		d.markTerminal(ctx, ref, "RESULT_PERSIST_FAILED", err.Error())
 		return
 	}
@@ -296,11 +306,13 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob, 
 		if merr := d.rep.MarkAckFailed(ctx, ref.JobID); merr != nil {
 			d.logger.Printf("%v: mark ack-pending: %v", []any{ref.JobID}, merr)
 		}
+		// W5: ph.ack stays unset — the line honestly reports '-' instead of
+		// stamping a moment where no ack succeeded.
+		d.logPhases(ph, "ack_pending")
+		return
 	}
-	if ph != nil {
-		ph.ack = time.Now()
-		d.logger.Printf("phases: %s", ph.line())
-	}
+	ph.ack = time.Now()
+	d.logPhases(ph, "ok")
 }
 
 // renewLoop renews the job's lease on RenewalInterval until ctx is done —

@@ -39,10 +39,11 @@ type Config struct {
 
 	// ProcessorURL is the base URL of the document processor sidecar.
 	ProcessorURL string
-	// ProcessorRequestTimeout bounds each HTTP request to the processor
-	// (AXIOMNG_PROCESSOR_TIMEOUT, Go duration). With remote source delivery
-	// POST /v1/process also downloads the source synchronously — remote
-	// deployments raise this to cover the runner's download budget.
+	// ProcessorRequestTimeout bounds the RESULT fetch and (as the submit
+	// floor) the synchronous remote source download inside POST /v1/process
+	// (AXIOMNG_PROCESSOR_TIMEOUT, Go duration). Remote deployments raise it
+	// to cover the runner's download budget. All other call types have
+	// fixed per-type budgets in the processor client.
 	ProcessorRequestTimeout time.Duration
 
 	// DispatcherEnabled gates the claim/process dispatcher loop. It never runs
@@ -93,7 +94,7 @@ func Load() Config {
 		ProcessorSourceSecret:   env("AXIOMNG_PROCESSOR_SOURCE_SECRET", ""),
 		ProcessorSourceBaseURL:  env("AXIOMNG_PROCESSOR_SOURCE_BASE_URL", ""),
 		ProcessorURL:            env("AXIOMNG_PROCESSOR_URL", "http://localhost:8012"),
-		ProcessorRequestTimeout: envDur("AXIOMNG_PROCESSOR_TIMEOUT", 30*time.Second),
+		ProcessorRequestTimeout: envDur("AXIOMNG_PROCESSOR_TIMEOUT", 300*time.Second),
 		DispatcherEnabled:       envBool("AXIOMNG_DISPATCHER_ENABLED"),
 		DispatcherWorkerID:      env("AXIOMNG_DISPATCHER_WORKER_ID", "axiom-ng"),
 		DispatcherConcurrency:   envInt("AXIOMNG_DISPATCHER_CONCURRENCY", 1),

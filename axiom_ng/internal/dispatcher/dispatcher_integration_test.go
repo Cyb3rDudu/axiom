@@ -353,7 +353,7 @@ func newDispatcher(t *testing.T, h *dispatchHarness, fp *fakeProcessor, cfg Conf
 
 func mustClient(t *testing.T, base string) *processor.Client {
 	t.Helper()
-	cl, err := processor.New(processor.Options{BaseURL: base, RequestTimeout: 5 * time.Second})
+	cl, err := processor.New(processor.Options{BaseURL: base, ResultTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatalf("processor client: %v", err)
 	}

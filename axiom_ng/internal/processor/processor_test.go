@@ -21,7 +21,7 @@ func clientFor(t *testing.T, h http.Handler) *Client {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	c, err := New(Options{BaseURL: srv.URL, MaxBody: 1 << 20, RequestTimeout: 5 * time.Second})
+	c, err := New(Options{BaseURL: srv.URL, MaxBody: 1 << 20, ResultTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
