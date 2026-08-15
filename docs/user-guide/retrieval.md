@@ -1,13 +1,41 @@
 # Retrieval
 
-!!! warning "In progress"
-    This chapter grows with Epic
-    [#130](https://github.com/Cyb3rDudu/axiom/issues/130) — the page exists in
-    the structure so that every nav point targets a real destination.
+!!! note "Status"
+    The retrieval feature (semantic search + the ability to ask questions over
+    your indexed library) is being built as part of Epic
+    [#130](https://github.com/Cyb3rDudu/axiom/issues/130). This page describes
+    the intended shape; the concrete search API and UI arrive with that epic.
 
-## Search
+## What retrieval will do
 
-The retrieval section will be written out once the corresponding capabilities
-(retrieval epic #130) exist.
+Once a library is processed (see [Ingest](ingest.md)), it's searchable. The
+retrieval surface is meant to let you:
 
-Continue: [Ingest](ingest.md) · [Welcome](../index.md)
+- **Search by meaning.** Ask a question or describe what you're looking for, and
+  get the right passages from the right books — not just keyword matches.
+- **See where the answer lives.** Every result carries its source locator
+  (physical page, logical page label, section), so you can open the original and
+  cite it confidently.
+- **Use the knowledge graph.** Entity and relationship results are evidence-
+  backed — each relation points at the exact passage that supports it.
+
+The processing pipeline already produces everything retrieval needs: chunks with
+exact locators, dense embeddings for semantic search, and an entity/relationship
+graph. What's still coming is the polished query + result surface on top
+(Epic #130).
+
+## Current state
+
+- The pipeline reliably produces processed, locator-precise, indexed chunks.
+  This was demonstrated end-to-end in the [measurement reports](../references/benchmarks/).
+- The full retrieval *API/UI* for end users is not released yet.
+
+## What you can do today
+
+Until the retrieval surface ships, you can:
+
+- Confirm your documents finished processing and are indexed (see
+  [Ingest](ingest.md)).
+- Follow Epic #130 for the retrieval release.
+
+Next: [Welcome](../index.md) · [Ingest](ingest.md)
