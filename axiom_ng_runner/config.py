@@ -25,6 +25,7 @@ class Settings:
     # Query endpoints (epic #130): hard server caps; /v1/embed max_texts may
     # only lower these, never raise them.
     max_query_texts: int = 16
+    rerank_max_texts: int = 64
 
     @property
     def bind(self) -> tuple[str, int]:
@@ -68,6 +69,7 @@ def load_settings() -> Settings:
             "AXIOM_PROCESSOR_SOURCE_TIMEOUT", 120.0
         ),
         max_query_texts=max(1, _env_int("AXIOM_PROCESSOR_MAX_QUERY_TEXTS", 16)),
+        rerank_max_texts=max(1, _env_int("AXIOM_PROCESSOR_RERANK_MAX_TEXTS", 64)),
     )
 
 

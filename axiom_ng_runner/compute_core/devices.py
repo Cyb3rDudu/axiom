@@ -3,11 +3,12 @@ Hardware detection module for automatic GPU/CPU selection.
 Supports NVIDIA CUDA, AMD ROCm, Apple Metal, and CPU fallback.
 """
 
+import logging
 import os
 import platform
 import subprocess
-import logging
-from typing import Optional, Tuple, Dict, Any
+from typing import Any
+
 import torch
 
 logger = logging.getLogger(__name__)
@@ -21,19 +22,20 @@ _MODEL_DEVICE_ENV = {
     "marker": ("DEVICE_MARKER", "auto"),
     "mrebel": ("DEVICE_MREBEL", "auto"),
     "gliner": ("DEVICE_GLINER", "cpu"),
+    "reranker": ("DEVICE_RERANKER", "auto"),
 }
 
 
 class HardwareDetector:
     """Centralized hardware detection and device management."""
-    
+
     def __init__(self):
         self.system = platform.system()
         self.force_cpu = os.getenv("FORCE_CPU_MODE", "false").lower() == "true"
         self.preferred_device = os.getenv("PREFERRED_DEVICE_TYPE", "auto").lower()
         self._device_info = None
-        
-    def detect_hardware(self) -> Dict[str, Any]:
+
+    def detect_hardware(self) -> dict[str, Any]:
         """
         Detect available hardware and return device information.
         
@@ -47,7 +49,7 @@ class HardwareDetector:
         """
         if self._device_info is not None:
             return self._device_info
-            
+
         if self.force_cpu:
             logger.info("CPU mode forced via FORCE_CPU_MODE environment variable")
             self._device_info = {
@@ -58,21 +60,21 @@ class HardwareDetector:
                 "forced": True
             }
             return self._device_info
-            
+
         # Check for NVIDIA CUDA
         if self._check_nvidia_cuda():
             device_info = self._get_nvidia_info()
             if device_info:
                 self._device_info = device_info
                 return self._device_info
-                
+
         # Check for AMD ROCm
         if self._check_amd_rocm():
             device_info = self._get_amd_info()
             if device_info:
                 self._device_info = device_info
                 return self._device_info
-                
+
         # Check for Apple Metal (MPS)
         if self._check_apple_metal():
             self._device_info = {
@@ -83,7 +85,7 @@ class HardwareDetector:
                 "forced": False
             }
             return self._device_info
-            
+
         # Fallback to CPU
         logger.info("No GPU detected, falling back to CPU mode")
         self._device_info = {
@@ -94,7 +96,7 @@ class HardwareDetector:
             "forced": False
         }
         return self._device_info
-        
+
     def _check_nvidia_cuda(self) -> bool:
         """Check if NVIDIA CUDA is available."""
         try:
@@ -114,7 +116,7 @@ class HardwareDetector:
             # OSError catches "Exec format error" when a cross-arch nvidia-smi
             # binary is present in the container but unusable on the host.
             return False
-            
+
     def _check_amd_rocm(self) -> bool:
         """Check if AMD ROCm is available."""
         try:
@@ -123,7 +125,7 @@ class HardwareDetector:
                 # Check if PyTorch has ROCm support
                 if hasattr(torch.version, 'hip') and torch.version.hip is not None:
                     return True
-                    
+
             # Check rocm-smi as fallback
             result = subprocess.run(
                 ["rocm-smi", "--showid"],
@@ -134,32 +136,32 @@ class HardwareDetector:
             return result.returncode == 0
         except (subprocess.SubprocessError, FileNotFoundError):
             return False
-            
+
     def _check_apple_metal(self) -> bool:
         """Check if Apple Metal is available."""
         if self.system != "Darwin":
             return False
-            
+
         try:
             # Check PyTorch MPS availability
             if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                 return True
         except:
             pass
-            
+
         return False
-        
-    def _get_nvidia_info(self) -> Optional[Dict[str, Any]]:
+
+    def _get_nvidia_info(self) -> dict[str, Any] | None:
         """Get NVIDIA GPU information."""
         try:
             device_count = torch.cuda.device_count()
             if device_count == 0:
                 return None
-                
+
             # Get first GPU info
             props = torch.cuda.get_device_properties(0)
             memory_gb = props.total_memory / (1024**3)
-            
+
             return {
                 "device_type": "cuda",
                 "device_name": props.name,
@@ -170,8 +172,8 @@ class HardwareDetector:
         except Exception as e:
             logger.warning(f"Failed to get NVIDIA GPU info: {e}")
             return None
-            
-    def _get_amd_info(self) -> Optional[Dict[str, Any]]:
+
+    def _get_amd_info(self) -> dict[str, Any] | None:
         """Get AMD GPU information."""
         try:
             # Try to get info via rocm-smi
@@ -181,15 +183,15 @@ class HardwareDetector:
                 text=True,
                 timeout=5
             )
-            
+
             if result.returncode != 0:
                 return None
-                
+
             # Parse output to get memory info
             lines = result.stdout.strip().split('\n')
             if len(lines) < 2:
                 return None
-                
+
             # Get device name
             name_result = subprocess.run(
                 ["rocm-smi", "--showproductname"],
@@ -197,7 +199,7 @@ class HardwareDetector:
                 text=True,
                 timeout=5
             )
-            
+
             device_name = "AMD GPU"
             if name_result.returncode == 0:
                 # Parse device name from output
@@ -205,7 +207,7 @@ class HardwareDetector:
                     if 'Card series:' in line:
                         device_name = line.split(':')[1].strip()
                         break
-                        
+
             return {
                 "device_type": "rocm",
                 "device_name": device_name,
@@ -216,7 +218,7 @@ class HardwareDetector:
         except Exception as e:
             logger.warning(f"Failed to get AMD GPU info: {e}")
             return None
-            
+
     def _get_cpu_memory(self) -> float:
         """Get available system memory in GB."""
         try:
@@ -226,8 +228,8 @@ class HardwareDetector:
         except ImportError:
             # Fallback if psutil not available
             return 8.0  # Conservative default
-            
-    def get_torch_device(self, device_id: Optional[int] = None) -> torch.device:
+
+    def get_torch_device(self, device_id: int | None = None) -> torch.device:
         """
         Get PyTorch device based on hardware detection.
         
@@ -239,7 +241,7 @@ class HardwareDetector:
         """
         info = self.detect_hardware()
         device_type = info["device_type"]
-        
+
         if device_type == "cuda":
             if device_id is not None and device_id < info["device_count"]:
                 return torch.device(f"cuda:{device_id}")
@@ -253,7 +255,7 @@ class HardwareDetector:
             return torch.device("mps")
         else:
             return torch.device("cpu")
-            
+
     def get_optimal_batch_size(self, base_batch_size: int = 32) -> int:
         """
         Get optimal batch size based on available hardware.
@@ -266,7 +268,7 @@ class HardwareDetector:
         """
         info = self.detect_hardware()
         device_type = info["device_type"]
-        
+
         if device_type == "cpu":
             # Reduce batch size for CPU processing
             import multiprocessing
@@ -284,7 +286,7 @@ class HardwareDetector:
                 return base_batch_size
             else:
                 return base_batch_size * 2
-                
+
     def get_num_workers(self) -> int:
         """
         Get optimal number of workers for data loading.
@@ -294,17 +296,17 @@ class HardwareDetector:
         """
         info = self.detect_hardware()
         device_type = info["device_type"]
-        
+
         import multiprocessing
         cpu_count = multiprocessing.cpu_count()
-        
+
         if device_type == "cpu":
             # Use most CPUs for processing
             return max(1, cpu_count - 2)
         else:
             # GPU processing, use fewer workers
             return min(4, cpu_count // 2)
-            
+
     def empty_cache(self):
         """Device-agnostic GPU cache clearing."""
         info = self.detect_hardware()
@@ -405,13 +407,13 @@ class HardwareDetector:
     def log_device_info(self):
         """Log detected hardware information."""
         info = self.detect_hardware()
-        logger.info(f"Hardware Detection Results:")
+        logger.info("Hardware Detection Results:")
         logger.info(f"  Device Type: {info['device_type']}")
         logger.info(f"  Device Name: {info['device_name']}")
         logger.info(f"  Device Count: {info['device_count']}")
         logger.info(f"  Memory: {info['memory_gb']} GB")
         if info.get('forced'):
-            logger.info(f"  Mode: Forced CPU")
+            logger.info("  Mode: Forced CPU")
 
 
 # Global instance for easy access
@@ -423,7 +425,7 @@ def get_device() -> torch.device:
     return hardware_detector.get_torch_device()
 
 
-def get_device_info() -> Dict[str, Any]:
+def get_device_info() -> dict[str, Any]:
     """Convenience function to get device information."""
     return hardware_detector.detect_hardware()
 

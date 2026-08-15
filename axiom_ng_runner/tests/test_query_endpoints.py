@@ -143,7 +143,8 @@ def test_embed_guard_unknown_field_and_types(client):
 
 def test_embed_warm_keep_single_load(client):
     """Two requests, exactly one model load: the warm-keep contract."""
-    assert query_service.stats() == {"embedder_loads": 0, "embedder_warm": False}
+    st = query_service.stats()
+    assert st["embedder_loads"] == 0 and st["embedder_warm"] is False
     client.post("/v1/embed", json=_embed_payload(["erstes"]))
     mid = query_service.stats()
     client.post("/v1/embed", json=_embed_payload(["zweites", "drittes"]))
@@ -198,3 +199,150 @@ def test_capabilities_report_query_embedding(client):
         "dimensions": DENSE_EMBEDDING_DIM,
     }
     assert caps["limits"]["max_query_texts"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# 5. R2 (#132): rerank endpoint — shape, ordering, guards, warm-keep
+# ---------------------------------------------------------------------------
+
+from axiom_ng_runner import RERANKER_MODEL
+
+
+def _rerank_payload(query, texts, top_n=10, **over):
+    p = {"contract_version": CONTRACT_VERSION, "query": query, "texts": texts, "top_n": top_n}
+    p.update(over)
+    return p
+
+
+def test_rerank_shape_and_ordering(client):
+    texts = [
+        "ganz anderes thema geldpolitik",
+        "kapitel eins über nachhaltigkeit und csr",
+        "noch etwas anderes",
+        "kapitel eins wiederholung des inhalts",
+    ]
+    r = client.post(
+        "/v1/rerank", json=_rerank_payload("kapitel eins inhalt", texts, top_n=3)
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["contract_version"] == CONTRACT_VERSION
+    assert body["model"] == RERANKER_MODEL
+    scores = body["scores"]
+    assert len(scores) == 3  # top_n respected
+    idx = [e["index"] for e in scores]
+    assert len(set(idx)) == 3 and all(0 <= i < len(texts) for i in idx)
+    vals = [e["score"] for e in scores]
+    assert vals == sorted(vals, reverse=True)  # descending
+    # Reference semantics sanity: lexical-overlap candidates beat distractors.
+    assert set(idx) == {1, 3, 0}
+    assert idx[0] in (1, 3)
+
+
+def test_rerank_determinism_and_tie_stability(client):
+    texts = ["alpha beta", "alpha gamma", "delta epsilon"]
+    r1 = client.post("/v1/rerank", json=_rerank_payload("alpha", texts, top_n=3)).json()
+    r2 = client.post("/v1/rerank", json=_rerank_payload("alpha", texts, top_n=3)).json()
+    assert r1 == r2
+    # Ties (identical overlap) keep input order: 0 before 1.
+    assert r1["scores"][0]["index"] == 0
+    assert r1["scores"][1]["index"] == 1
+
+
+def test_rerank_default_top_n_is_10(client):
+    texts = [f"text nummer {i}" for i in range(6)]
+    body = client.post("/v1/rerank", json=_rerank_payload("text nummer", texts)).json()
+    assert len(body["scores"]) == 6  # top_n=10 > len -> clamped to len (archive slicing)
+
+
+def test_rerank_top_n_above_len_clamps(client):
+    r = client.post("/v1/rerank", json=_rerank_payload("q", ["a", "b"], top_n=99))
+    assert r.status_code == 200
+    assert len(r.json()["scores"]) == 2
+
+
+def test_rerank_guard_query(client):
+    r = client.post("/v1/rerank", json=_rerank_payload("  ", ["x"]))
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "RERANK_QUERY_EMPTY"
+
+
+def test_rerank_guard_texts(client):
+    r = client.post("/v1/rerank", json=_rerank_payload("q", []))
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "RERANK_TEXTS_EMPTY"
+    r2 = client.post("/v1/rerank", json=_rerank_payload("q", ["ok", " "]))
+    assert r2.status_code == 422
+    assert r2.json()["detail"]["code"] == "RERANK_TEXT_BLANK"
+
+
+def test_rerank_guard_too_many_texts(client):
+    texts = [f"t{i}" for i in range(65)]  # cap is 64
+    r = client.post("/v1/rerank", json=_rerank_payload("q", texts, top_n=10))
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "RERANK_TEXTS_TOO_MANY"
+
+
+def test_rerank_guard_top_n(client):
+    texts = ["a", "b"]
+    r = client.post("/v1/rerank", json=_rerank_payload("q", texts, top_n=0))
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "RERANK_TOP_N_INVALID"
+    r2 = client.post("/v1/rerank", json=_rerank_payload("q", texts, top_n=-3))
+    assert r2.status_code == 422
+    assert r2.json()["detail"]["code"] == "RERANK_TOP_N_INVALID"
+
+
+def test_rerank_guard_contract_version(client):
+    r = client.post("/v1/rerank", json=_rerank_payload("q", ["a"], contract_version="0.9"))
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "CONTRACT_VERSION_UNSUPPORTED"
+
+
+def test_rerank_warm_keep_single_load(client):
+    assert query_service.stats()["reranker_loads"] == 0
+    client.post("/v1/rerank", json=_rerank_payload("q", ["a", "b"], top_n=2))
+    mid = query_service.stats()
+    client.post("/v1/rerank", json=_rerank_payload("q2", ["c"], top_n=1))
+    end = query_service.stats()
+    assert mid["reranker_loads"] == 1
+    assert end["reranker_loads"] == 1  # no reload between requests
+    assert end["reranker_warm"] is True
+    # Independence: embed endpoint load does not touch the reranker and vice versa.
+    assert end["embedder_loads"] == 0
+
+
+def test_rerank_lazy_no_heavy_imports(client):
+    import axiom_ng_runner.app  # noqa: F401 — baseline
+
+    before = set(sys.modules)
+    client.post("/v1/rerank", json=_rerank_payload("q", ["a"], top_n=1))
+    heavy = sorted(
+        m
+        for m in (set(sys.modules) - before)
+        if m.split(".")[0] in ("torch", "FlagEmbedding", "transformers", "numpy")
+        or m.startswith("axiom_ng_runner.compute_core")
+    )
+    assert not heavy, f"heavy imports leaked into reference rerank: {heavy}"
+
+
+def test_rerank_shape_mismatch_surfaces_as_500(client, monkeypatch):
+    """Mutation probe: a broken model layer (wrong count / bad indices / dupes)
+    must surface as 500 instead of a silently wrong ranking."""
+    import axiom_ng_runner.query_service as qs
+
+    class _Broken:
+        def rerank(self, query, texts, top_n=None):
+            return [{"index": 0, "score": 1.0}, {"index": 0, "score": 0.5}][:top_n]
+
+    monkeypatch.setattr(qs, "get_query_reranker", lambda: _Broken())
+    r = client.post("/v1/rerank", json=_rerank_payload("q", ["a", "b"], top_n=2))
+    assert r.status_code == 500
+    assert r.json()["detail"]["code"] == "RERANK_SHAPE_MISMATCH"
+
+
+def test_capabilities_report_reranking(client):
+    caps = client.get("/v1/capabilities").json()
+    assert caps["features"]["reranking"] is True
+    assert caps["models"]["reranking"] == {"name": RERANKER_MODEL}
+    assert caps["limits"]["rerank_max_texts"] >= 1

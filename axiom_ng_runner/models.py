@@ -150,6 +150,32 @@ class EmbedResponse(BaseModel):
     embeddings: list[list[float]]
 
 
+# --- Rerank (POST /v1/rerank, contract §7a additive, #132) -----------------
+
+
+class RerankRequest(BaseModel):
+    """Contract §7a. ``top_n`` must satisfy 1 <= top_n <= len(texts)."""
+
+    model_config = _no_extra()
+    contract_version: str
+    query: str
+    texts: list[str]
+    top_n: int = 10
+
+
+class RerankScore(BaseModel):
+    model_config = _no_extra()
+    index: int
+    score: float
+
+
+class RerankResponse(BaseModel):
+    model_config = _no_extra()
+    contract_version: str
+    model: str
+    scores: list[RerankScore]
+
+
 # --- Ack (POST /v1/jobs/{id}/ack, contract §15) ----------------------------
 
 

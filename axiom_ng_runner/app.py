@@ -24,6 +24,7 @@ from . import (
     CONTRACT_VERSION,
     DENSE_EMBEDDING_DIM,
     DENSE_EMBEDDING_MODEL,
+    RERANKER_MODEL,
     __version__,
     query_service,
 )
@@ -38,6 +39,8 @@ from .models import (
     JobStatus,
     ProcessAccept,
     ProcessRequest,
+    RerankRequest,
+    RerankResponse,
 )
 from .validation import (
     SourceError,
@@ -107,17 +110,20 @@ def _capabilities() -> Capabilities:
             "entities": True,
             "entity_relationships": True,
             "query_embedding": True,
+            "reranking": True,
         },
         models={
             "dense_embedding": {"name": DENSE_EMBEDDING_MODEL, "dimensions": DENSE_EMBEDDING_DIM},
             "entity_extraction": {"name": "reference-gliner"},
             "relationship_extraction": {"name": "reference-mrebel"},
             "query_embedding": {"name": DENSE_EMBEDDING_MODEL, "dimensions": DENSE_EMBEDDING_DIM},
+            "reranking": {"name": RERANKER_MODEL},
         },
         limits={
             "max_concurrent_jobs": s.max_concurrent_jobs,
             "max_source_bytes": 2_147_483_648,
             "max_query_texts": s.max_query_texts,
+            "rerank_max_texts": s.rerank_max_texts,
         },
     )
 
@@ -632,4 +638,55 @@ def embed_queries(body: EmbedRequest) -> EmbedResponse:
         model=DENSE_EMBEDDING_MODEL,
         dimensions=DENSE_EMBEDDING_DIM,
         embeddings=vectors,
+    )
+
+
+@app.post("/v1/rerank")
+def rerank_texts(body: RerankRequest) -> RerankResponse:
+    """Cross-encoder rerank endpoint (#132): sigmoid scores for
+    (query, candidate) pairs, sorted descending, truncated to top_n.
+
+    Same warm-singleton discipline as /v1/embed (query_service). Plain def:
+    the model call is compute-bound and runs in the threadpool.
+    """
+    _contract_guard(body.contract_version)
+    s = settings.get()
+    if not body.query.strip():
+        raise _query_reject("RERANK_QUERY_EMPTY", "query must not be blank")
+    if not body.texts:
+        raise _query_reject("RERANK_TEXTS_EMPTY", "texts must not be empty")
+    if any(not t.strip() for t in body.texts):
+        raise _query_reject("RERANK_TEXT_BLANK", "texts must not contain blank strings")
+    if len(body.texts) > s.rerank_max_texts:
+        raise _query_reject(
+            "RERANK_TEXTS_TOO_MANY",
+            f"{len(body.texts)} texts exceed the server cap {s.rerank_max_texts}",
+        )
+    if body.top_n < 1:
+        raise _query_reject("RERANK_TOP_N_INVALID", "top_n must be >= 1")
+
+    # Archive semantics: top_n slices the ranking (results[:top_n]) — a
+    # top_n above len(texts) returns everything instead of 422ing the
+    # default top_n=10 for small candidate sets.
+    ranked = query_service.get_query_reranker().rerank(
+        body.query, body.texts, top_n=min(body.top_n, len(body.texts))
+    )
+    # Self-check mirrors /v1/embed: the model layer must return one score per
+    # input text in the wrapper's contract shape, or the endpoint fails loudly.
+    if (
+        len(ranked) != min(body.top_n, len(body.texts))
+        or len({e["index"] for e in ranked}) != len(ranked)
+        or any(e["index"] < 0 or e["index"] >= len(body.texts) for e in ranked)
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "RERANK_SHAPE_MISMATCH",
+                "message": "reranker returned an invalid ranking shape",
+            },
+        )
+    return RerankResponse(
+        contract_version=CONTRACT_VERSION,
+        model=RERANKER_MODEL,
+        scores=ranked,
     )
