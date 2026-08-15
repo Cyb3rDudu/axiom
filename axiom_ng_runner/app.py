@@ -313,6 +313,25 @@ def capabilities() -> Capabilities:
     return _capabilities()
 
 
+def _artifacts_expired() -> HTTPException:
+    """#126 replay-after-ack: terminal refusal for a resubmit that dedups onto
+    an ACKed job — the stored result is still dedupable (§19.2), but its
+    artifacts died with the ACK (§15/§19.10). Handing the result back would
+    send the dispatcher into an artifact-404 retry wall."""
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "ARTIFACTS_EXPIRED",
+            "message": (
+                "job was acknowledged; result artifacts are gone "
+                "(contract §15/§19.10). Re-enqueue with a fresh "
+                "idempotency key (force_rebuild) to recompute."
+            ),
+            "retryable": False,
+        },
+    )
+
+
 @app.post("/v1/process", status_code=202)
 def process(body: ProcessRequest) -> dict[str, Any]:
     # Plain def (not async): source validation may download tens of MB
@@ -339,22 +358,7 @@ def process(body: ProcessRequest) -> dict[str, Any]:
             )
         job, _ = store.get_or_create(candidate)  # returns the existing job
         if job.acked:
-            # #126 replay-after-ack: the stored result is still dedupable
-            # (§19.2), but its artifacts died with the ACK (§15/§19.12) —
-            # handing the result back would send the dispatcher into an
-            # artifact-404 retry wall. Terminal, parseable, non-retryable.
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "ARTIFACTS_EXPIRED",
-                    "message": (
-                        "job was acknowledged; result artifacts are gone "
-                        "(contract §19.12). Re-enqueue with a fresh "
-                        "idempotency key (force_rebuild) to recompute."
-                    ),
-                    "retryable": False,
-                },
-            )
+            raise _artifacts_expired()
         _relaunch_if_needed(job)
         return ProcessAccept(
             contract_version=CONTRACT_VERSION,
@@ -388,6 +392,10 @@ def process(body: ProcessRequest) -> dict[str, Any]:
         ) from exc
 
     if deduplicated:
+        if job.acked:
+            # Same seam as the short-circuit above: this POST lost the
+            # find-by-key race but still deduped onto an ACKed job.
+            raise _artifacts_expired()
         # Dedup (W1 liveness): if the matched job recovered to `accepted`
         # after a restart and has no live compute thread, relaunch it so a
         # restart does not permanently strand accepted work (invariant #10).

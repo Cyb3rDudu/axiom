@@ -905,3 +905,123 @@ func TestOneActivePerAttachmentEnforcedByDB(t *testing.T) {
 		t.Fatalf("second active row for the same attachment must hit the 0011 unique index, got: %v", err)
 	}
 }
+
+// TestHealOutboxRowToIndex pins the #127 TOCTOU self-heal primitive: a
+// tombstone whose snapshot was reactivated mid-materialization re-arms as a
+// pending index op (attempts reset) so convergence to the active generation
+// is guaranteed. The status='pending' guard mirrors FailOutboxAttempt — a
+// done row is left untouched.
+func TestHealOutboxRowToIndex(t *testing.T) {
+	h := newPersistHarness(t, "heal")
+	snapID, err := h.persist(t, h.validResultBytes(t, 3), 3, markdownArtifact())
+	if err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	ctx := context.Background()
+
+	// The persist left one index row; flip it into a claimed tombstone shape.
+	var rowID string
+	if err := h.pool.QueryRow(ctx, `
+		UPDATE opensearch_outbox SET operation='delete', attempts=2
+		WHERE snapshot_id=$1 AND operation='index'
+		RETURNING id::text`, snapID).Scan(&rowID); err != nil {
+		t.Fatalf("flip row: %v", err)
+	}
+	if err := h.rep.HealOutboxRowToIndex(ctx, rowID); err != nil {
+		t.Fatalf("heal: %v", err)
+	}
+	var op, status string
+	var attempts int
+	if err := h.pool.QueryRow(ctx,
+		`SELECT operation, status, attempts FROM opensearch_outbox WHERE id=$1`, rowID,
+	).Scan(&op, &status, &attempts); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if op != OutboxOpIndex || status != "pending" || attempts != 0 {
+		t.Fatalf("after heal: op=%s status=%s attempts=%d, want index/pending/0", op, status, attempts)
+	}
+
+	// Guard: a done row must not be resurrected by a stale heal.
+	if _, err := h.pool.Exec(ctx,
+		`UPDATE opensearch_outbox SET status='done' WHERE id=$1`, rowID); err != nil {
+		t.Fatalf("done row: %v", err)
+	}
+	if err := h.rep.HealOutboxRowToIndex(ctx, rowID); err == nil {
+		t.Fatal("heal of a done row must fail (stale heal must not flip it back)")
+	}
+	var st string
+	_ = h.pool.QueryRow(ctx, `SELECT status FROM opensearch_outbox WHERE id=$1`, rowID).Scan(&st)
+	if st != "done" {
+		t.Fatalf("done row flipped to %s by stale heal", st)
+	}
+}
+
+// TestPersistLateFailureRollsBackTombstones pins #127 atomicity: a persist
+// that fails AFTER the sibling-deactivation + tombstone enqueue (the fenced
+// MarkCompletedTx is the last step — cancel_requested_at breaks its fence)
+// must roll the WHOLE transaction back: generation A stays the only active
+// snapshot and ZERO delete outbox rows survive.
+func TestPersistLateFailureRollsBackTombstones(t *testing.T) {
+	h := newPersistHarness(t, "atomictomb")
+	s1, err := h.persist(t, h.validResultBytes(t, 3), 3, markdownArtifact())
+	if err != nil {
+		t.Fatalf("first persist: %v", err)
+	}
+
+	ctx := context.Background()
+	var srcID, docID string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT source_id::text, document_id::text FROM ingest_jobs WHERE id=$1`, h.jobID,
+	).Scan(&srcID, &docID); err != nil {
+		t.Fatalf("load job refs: %v", err)
+	}
+	if _, err := h.pool.Exec(ctx, `
+		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
+		VALUES ($1,$2,$3,$4,'pending',true)`,
+		srcID, docID, h.attachmentID, h.contentHash); err != nil {
+		t.Fatalf("seed force job: %v", err)
+	}
+	cj2, err := h.rep.ClaimNextJob(ctx, defaultClaim("worker-atomictomb"))
+	if err != nil || cj2 == nil {
+		t.Fatalf("claim force job: %v %v", cj2, err)
+	}
+	if err := h.rep.MarkProcessing(ctx, cj2.LeaseRef); err != nil {
+		t.Fatalf("mark processing: %v", err)
+	}
+	// Break the completion fence so the failure lands LATE: steps 2–5
+	// (insert, deactivate sibling A, enqueue its tombstone, outbox index)
+	// already ran inside the tx when MarkCompletedTx's fence sees the cancel
+	// request and aborts — the rollback must undo the deactivation AND the
+	// tombstone planning atomically.
+	if _, err := h.pool.Exec(ctx,
+		`UPDATE ingest_jobs SET cancel_requested_at=now() WHERE id=$1`, cj2.LeaseRef.JobID); err != nil {
+		t.Fatalf("break fence: %v", err)
+	}
+
+	_, err = h.rep.PersistResult(ctx, cj2.LeaseRef.JobID, h.validResultBytes(t, 3), PersistOptions{CapDim: 3, Artifacts: markdownArtifact()})
+	if err == nil {
+		t.Fatal("expected fenced completion to fail (cancel_requested_at set), got nil")
+	}
+
+	// A must remain the ONLY active snapshot (deactivation rolled back)...
+	if got := h.activeSnapshotID(t); got != s1 {
+		t.Fatalf("active snapshot = %q, want rolled-back %q", got, s1)
+	}
+	var nSnap int
+	if err := h.pool.QueryRow(ctx,
+		`SELECT count(*) FROM processing_snapshots WHERE attachment_id=$1`, h.attachmentID).Scan(&nSnap); err != nil {
+		t.Fatalf("count snapshots: %v", err)
+	}
+	if nSnap != 1 {
+		t.Fatalf("late failure must not leave generation B; found %d snapshots", nSnap)
+	}
+	// ...and NO tombstone may survive (enqueue rolled back in the same tx).
+	var nDel int
+	if err := h.pool.QueryRow(ctx,
+		`SELECT count(*) FROM opensearch_outbox WHERE operation='delete'`).Scan(&nDel); err != nil {
+		t.Fatalf("count tombstones: %v", err)
+	}
+	if nDel != 0 {
+		t.Fatalf("late failure must roll back tombstone planning; found %d delete rows", nDel)
+	}
+}

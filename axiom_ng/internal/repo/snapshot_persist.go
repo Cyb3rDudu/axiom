@@ -179,7 +179,7 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 				return "", fmt.Errorf("replay deactivate other: %w", err)
 			}
 			for _, sib := range siblings {
-				if err := enqueueOutboxTx(ctx, tx, sib, "delete", ident); err != nil {
+				if err := enqueueOutboxTx(ctx, tx, sib, OutboxOpDelete, ident); err != nil {
 					return "", fmt.Errorf("replay tombstone: %w", err)
 				}
 			}
@@ -187,7 +187,7 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 				UPDATE processing_snapshots SET active=true, updated_at=now() WHERE id=$1`, existingID); err != nil {
 				return "", fmt.Errorf("replay reactivate: %w", err)
 			}
-			if err := enqueueOutboxTx(ctx, tx, existingID, "index", ident); err != nil {
+			if err := enqueueOutboxTx(ctx, tx, existingID, OutboxOpIndex, ident); err != nil {
 				return "", fmt.Errorf("replay reindex: %w", err)
 			}
 		}
@@ -360,7 +360,7 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 		return "", fmt.Errorf("deactivate previous snapshot: %w", err)
 	}
 	for _, sib := range siblings {
-		if err := enqueueOutboxTx(ctx, tx, sib, "delete", ident); err != nil {
+		if err := enqueueOutboxTx(ctx, tx, sib, OutboxOpDelete, ident); err != nil {
 			return "", fmt.Errorf("tombstone superseded snapshot: %w", err)
 		}
 	}
@@ -370,15 +370,7 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 	}
 
 	// 5. OpenSearch outbox entry (§10.3) — no OpenSearch call in this tx.
-	payload, _ := json.Marshal(map[string]any{
-		"snapshot_id":   snapshotID,
-		"document_id":   ident.documentID,
-		"attachment_id": ident.attachmentID,
-		"operation":     "index",
-	})
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO opensearch_outbox (snapshot_id, operation, payload)
-		VALUES ($1,'index',$2)`, snapshotID, payload); err != nil {
+	if err := enqueueOutboxTx(ctx, tx, snapshotID, OutboxOpIndex, ident); err != nil {
 		return "", fmt.Errorf("insert outbox: %w", err)
 	}
 

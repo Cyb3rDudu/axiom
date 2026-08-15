@@ -795,6 +795,55 @@ def test_resubmit_after_ack_returns_artifacts_expired(client, fixture_dirs):
     assert detail["retryable"] is False
 
 
+def test_resubmit_after_ack_survives_runner_restart(fixture_dirs):
+    """#126 restart durability (the production-incident shape): the acked
+    flag lives in the durable manifest, so a runner restart (store rebuilt
+    from disk) must keep answering ARTIFACTS_EXPIRED — a restart must never
+    resurrect a dedup path that hands back the dead result."""
+    import axiom_ng_runner.app as appmod
+
+    work = fixture_dirs["work"] / "ackexp_restart"
+    work.mkdir(parents=True, exist_ok=True)
+    src = fixture_dirs["pdf"]
+    payload = _process_payload(src, "job-ackexp-restart", "key-ackexp-restart")
+
+    old = settings.get()
+    settings.set(
+        Settings(work_root=work, allowed_source_roots=(str(fixture_dirs["sources"]),))
+    )
+    try:
+        with TestClient(app) as c:
+            r1 = c.post("/v1/process", json=payload, timeout=10)
+            assert r1.status_code == 202, r1.text
+            job_id = r1.json()["job_id"]
+            _wait_completed(c, job_id, timeout=30)
+            ack = c.post(
+                f"/v1/jobs/{job_id}/ack",
+                json={"persisted": True, "snapshot_id": "snap-ackexp-restart"},
+                timeout=10,
+            )
+            assert ack.status_code == 200, ack.text
+
+        # Simulate a fresh process start over the same work root (the
+        # test_restart_recovers_without_fake_success pattern): the store
+        # rebuilds from the durable manifests — the acked flag must survive.
+        appmod._store = None
+        with TestClient(app) as c:
+            store = appmod._store_impl()  # rebuild from disk
+            recovered = store.get(job_id)
+            assert recovered is not None and recovered.acked, (
+                "acked flag must survive the store rebuild from disk"
+            )
+            r2 = c.post("/v1/process", json=payload, timeout=10)
+            assert r2.status_code == 409, r2.text
+            detail = r2.json()["detail"]
+            assert detail["code"] == "ARTIFACTS_EXPIRED"
+            assert detail["retryable"] is False
+    finally:
+        appmod._store = None  # reset for other tests
+        settings.set(old)
+
+
 def test_resubmit_before_ack_still_deduplicates(client, fixture_dirs):
     """The un-acked dedup path is unchanged: 202 + deduplicated=true (§19.2)."""
     src = fixture_dirs["pdf"]

@@ -16,6 +16,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// Outbox operations: 'index' materializes a snapshot's chunk docs, 'delete'
+// tombstones a superseded generation's (#127).
+const (
+	OutboxOpIndex  = "index"
+	OutboxOpDelete = "delete"
+)
+
 // OutboxRow is a claimed opensearch_outbox item.
 type OutboxRow struct {
 	ID         string
@@ -211,6 +218,26 @@ func parseVector(s string) ([]float64, error) {
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// HealOutboxRowToIndex self-heals a tombstone that lost a race against a
+// reactivation (#127 TOCTOU): the delete already materialized while the
+// snapshot flipped back to active, so the row re-arms as a pending index op
+// (attempts reset) to guarantee convergence to the active generation. The
+// status='pending' guard mirrors FailOutboxAttempt — a stale heal must never
+// flip a done/failed row back.
+func (r *Repo) HealOutboxRowToIndex(ctx context.Context, id string) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE opensearch_outbox
+		SET operation='index', status='pending', attempts=0, next_attempt_at=now()
+		WHERE id=$1 AND status='pending'`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 // SnapshotActive reports whether the snapshot is currently the active

@@ -19,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -577,8 +578,14 @@ func TestOutboxTombstoneRoundtrip(t *testing.T) {
 		t.Fatalf("drain B: %v", err)
 	}
 	del := rec.deletedIDs()
-	if len(del) != len(chunkIDs(snapA)) {
-		t.Fatalf("after B: deletes = %v, want A's %d chunk ids (got %d)", del, len(chunkIDs(snapA)), len(del))
+	want := chunkIDs(snapA)
+	asSet := func(in []string) string {
+		out := slices.Clone(in)
+		slices.Sort(out)
+		return strings.Join(out, ",")
+	}
+	if asSet(del) != asSet(want) {
+		t.Fatalf("after B: deletes = %v, want exactly A's chunk ids %v", del, want)
 	}
 
 	// Reactivation of A: replay-persist identity A once more (duplicate-persist
@@ -682,5 +689,43 @@ func TestOutboxObsoleteDeleteSkipped(t *testing.T) {
 	}
 	if done != 1 || pending != 0 {
 		t.Fatalf("delete row done=%d pending=%d, want 1/0", done, pending)
+	}
+}
+
+// TestOutboxObsoleteIndexSkipped pins the OTHER #127 order-insensitivity
+// guard: an index op whose snapshot was superseded before it drained (e.g.
+// backoff reordering left it behind a newer generation's tombstone) must be
+// marked done WITHOUT resurrecting the stale generation's docs. Together
+// with TestOutboxObsoleteDeleteSkipped this makes draining order-insensitive
+// in both directions.
+func TestOutboxObsoleteIndexSkipped(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	ctx := context.Background()
+	_, snapID := h.seedOutboxSnapshot(t, "obs-idx", 2, 0)
+	// Supersede it before the drain: the pending index row is now obsolete.
+	if _, err := h.pool.Exec(ctx,
+		`UPDATE processing_snapshots SET active=false WHERE id=$1`, snapID); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+
+	srv, rec := fakeOS(t, false)
+	d := newOutboxDispatcher(h)
+	osc := newOpenSearchClient(srv.URL, "", "", nil)
+	if err := drainOutboxOnce(ctx, d, osc); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	if got := rec.count(); got != 0 {
+		t.Fatalf("indexed %d docs, want 0 (snapshot superseded — obsolete op must not resurrect it)", got)
+	}
+	var done, pending int
+	if err := h.pool.QueryRow(ctx,
+		`SELECT count(*) FILTER (WHERE status='done'), count(*) FILTER (WHERE status='pending')
+		 FROM opensearch_outbox WHERE operation='index' AND snapshot_id=$1`, snapID).Scan(&done, &pending); err != nil {
+		t.Fatalf("row states: %v", err)
+	}
+	if done != 1 || pending != 0 {
+		t.Fatalf("index row done=%d pending=%d, want 1/0", done, pending)
 	}
 }

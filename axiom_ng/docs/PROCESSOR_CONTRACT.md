@@ -575,9 +575,9 @@ Acknowledgement is idempotent.
 ### Replay after acknowledgement (additive v1 extension, #126)
 
 A resubmit that dedups onto an **acknowledged** job hits the seam between
-§19.2-style dedup (return the existing result) and §15 (artifacts died with
-the ACK). The processor answers with a terminal, parseable refusal instead of
-a result whose artifacts can no longer be fetched:
+§19.2-style dedup (return the existing result) and §15/§19.10 (artifacts died
+with the ACK). The processor answers with a terminal, parseable refusal
+instead of a result whose artifacts can no longer be fetched:
 
 ```http
 POST /v1/process  (same idempotency_key as an acked job)
@@ -585,7 +585,7 @@ POST /v1/process  (same idempotency_key as an acked job)
 {
   "detail": {
     "code": "ARTIFACTS_EXPIRED",
-    "message": "job was acknowledged; result artifacts are gone (contract §19.12). Re-enqueue with a fresh idempotency key (force_rebuild) to recompute.",
+    "message": "job was acknowledged; result artifacts are gone (contract §15/§19.10). Re-enqueue with a fresh idempotency key (force_rebuild) to recompute.",
     "retryable": false
   }
 }

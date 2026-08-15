@@ -278,13 +278,13 @@ func drainOutboxRow(ctx context.Context, d *Dispatcher, osc *openSearchClient, r
 	if err != nil {
 		return d.failOutboxRow(ctx, row, fmt.Errorf("snapshot active check: %w", err))
 	}
-	if row.Operation == "delete" && active {
+	if row.Operation == repo.OutboxOpDelete && active {
 		return d.rep.MarkOutboxDone(ctx, row.ID)
 	}
-	if row.Operation == "index" && !active {
+	if row.Operation == repo.OutboxOpIndex && !active {
 		return d.rep.MarkOutboxDone(ctx, row.ID)
 	}
-	if row.Operation == "delete" {
+	if row.Operation == repo.OutboxOpDelete {
 		return drainOutboxDelete(ctx, d, osc, row)
 	}
 
@@ -324,6 +324,18 @@ func drainOutboxDelete(ctx context.Context, d *Dispatcher, osc *openSearchClient
 		if err := osc.deleteDoc(ctx, id); err != nil {
 			return d.failOutboxRow(ctx, row, err)
 		}
+	}
+	// TOCTOU self-heal (#127 review): a reactivation may have committed while
+	// this tombstone materialized (the guard-read above is long past). The
+	// reactivation tx enqueued its own index op, but ours already deleted
+	// docs — re-enqueue ours as index so convergence to the active generation
+	// is guaranteed instead of depending on drain order.
+	active, err := d.rep.SnapshotActive(ctx, row.SnapshotID)
+	if err != nil {
+		return d.failOutboxRow(ctx, row, fmt.Errorf("snapshot active recheck: %w", err))
+	}
+	if active {
+		return d.rep.HealOutboxRowToIndex(ctx, row.ID)
 	}
 	return d.rep.MarkOutboxDone(ctx, row.ID)
 }

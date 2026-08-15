@@ -52,12 +52,15 @@ func (d *Dispatcher) handleSubmitFailure(ctx context.Context, claimed *repo.Clai
 	}
 	// #126 replay-after-ack: the runner reports ARTIFACTS_EXPIRED (409) when
 	// a resubmit dedups onto an acknowledged job — its artifacts died with
-	// the ACK. Retrying hits the same wall, so this is terminal with its
-	// own code, not PROCESS_SUBMIT_FAILED.
+	// the ACK (§15/§19.10). Retrying hits the same wall, so this is terminal
+	// with its own code, not PROCESS_SUBMIT_FAILED.
 	var se *processor.StatusError
+	// Bounded fallback: if the body match ever misses (formatting change),
+	// the error degrades to terminal PROCESS_SUBMIT_FAILED (409 is not
+	// submit-retryable) — never a retry loop.
 	if errors.As(cause, &se) && se.Code == 409 && strings.Contains(se.Body, "ARTIFACTS_EXPIRED") {
 		d.markTerminal(ctx, ref, "ARTIFACTS_EXPIRED",
-			"runner acknowledged this job; artifacts expired with ACK (contract §19.12) — re-enqueue with force_rebuild to recompute")
+			"runner acknowledged this job; artifacts expired with ACK (contract §15/§19.10) — re-enqueue with force_rebuild to recompute")
 		return
 	}
 	if submitRetryable(cause) {
