@@ -145,6 +145,26 @@ result-fetch timeouts under the load).
 LAN-only hosts — the runner has no authentication (by design, work order
 §18: loopback or trusted network only).
 
+## 3b. Mac/MPS operation (validated #128, 2026-08-15)
+
+The full real pipeline runs natively on the Mac (mothership, Apple MPS,
+in the heavy venv) — no Carrier required:
+
+```bash
+DEVICE_GLINER=mps PYTORCH_ENABLE_MPS_FALLBACK=1 \
+  AXIOM_PROCESSOR_COMPUTE=real .venv/bin/python <runner>
+```
+
+Validated on a 302-page PDF: contract-valid outputs (381 chunks, all
+1024-dim dense, entities+relations, image artifacts), 67 min total
+(~13 s/page vs ~0.7-1.2 s/page on a 3090 — complete, not fast).
+Device resolution needs NO env for marker/embedder/mrebel (auto→mps via
+compute_core/devices.py); GLiNER defaults to cpu and wants
+`DEVICE_GLINER=mps`. Known MPS limitation: surya's table-recognition
+model (`TableRecEncoderDecoderModel`) is not MPS-compatible and falls
+back to CPU with a warning — table-heavy PDFs pay extra. MPS matmul
+bench: 3.3x over the Mac's own CPU (4096², synchronized).
+
 ## 4. Verify
 
 ```bash
