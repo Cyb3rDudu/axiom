@@ -115,6 +115,8 @@ GET    /v1/jobs/{job_id}/result
 GET    /v1/jobs/{job_id}/artifacts/{artifact_ref}
 POST   /v1/jobs/{job_id}/cancel
 POST   /v1/jobs/{job_id}/ack
+POST   /v1/embed        (additive v1, §7a, #131)
+POST   /v1/rerank       (additive v1, §7a, #132)
 ```
 
 Processing is asynchronous. `POST /v1/process` accepts or deduplicates a job
@@ -145,7 +147,9 @@ features available on the current host.
     "dense_embeddings": true,
     "sparse_embeddings": true,
     "entities": true,
-    "entity_relationships": true
+    "entity_relationships": true,
+    "query_embedding": true,
+    "reranking": true
   },
   "models": {
     "dense_embedding": {
@@ -157,11 +161,20 @@ features available on the current host.
     },
     "relationship_extraction": {
       "name": "mrebel"
+    },
+    "query_embedding": {
+      "name": "BAAI/bge-m3",
+      "dimensions": 1024
+    },
+    "reranking": {
+      "name": "BAAI/bge-reranker-v2-m3"
     }
   },
   "limits": {
     "max_concurrent_jobs": 1,
-    "max_source_bytes": 2147483648
+    "max_source_bytes": 2147483648,
+    "max_query_texts": 16,
+    "rerank_max_texts": 64
   }
 }
 ```
@@ -241,6 +254,86 @@ the running processor and must not assume them from this document.
   `content_hash` before producing a successful result.
 - Processing feature flags request computation only. They do not authorize the
   processor to write to a durable store.
+
+## 7a. Query Endpoints (additive v1 extension, #131/#132)
+
+Synchronous query-side compute. Unlike `POST /v1/process` these answer in the
+request (no job lifecycle): the models are process-wide singletons — lazy-
+loaded on first use, kept warm for the process lifetime (low latency is the
+point). The processor still owns no durable state; retrieval against the OS
+index is axiom-ng's job.
+
+### POST /v1/embed (#131)
+
+Request:
+
+```json
+{
+  "contract_version": "1.0",
+  "texts": ["Suchanfrage ..."],
+  "max_texts": 3
+}
+```
+
+- `texts`: 1..N non-blank query texts (N = `limits.max_query_texts`, 16).
+- `max_texts`: optional per-request cap; may only lower the server cap.
+
+Response:
+
+```json
+{
+  "contract_version": "1.0",
+  "model": "BAAI/bge-m3",
+  "dimensions": 1024,
+  "embeddings": [[0.012, -0.034, ...]]
+}
+```
+
+`model`/`dimensions` always agree with `models.query_embedding` in the
+capability report. BGE-M3 is a symmetric encoder: queries and passages use
+the same model and pooling, so these vectors are cosine-comparable with the
+chunk embeddings from `POST /v1/process` (verified by the OS roundtrip
+test). 4xx error codes (detail `{code, message}`): `QUERY_TEXTS_EMPTY`,
+`QUERY_TEXT_BLANK`, `QUERY_TEXTS_TOO_MANY`, `MAX_TEXTS_INVALID`,
+`CONTRACT_VERSION_UNSUPPORTED`. A model/capability shape disagreement is a
+500 `EMBEDDING_SHAPE_MISMATCH` (never silent zeros).
+
+### POST /v1/rerank (#132)
+
+Request:
+
+```json
+{
+  "contract_version": "1.0",
+  "query": "Suchanfrage",
+  "texts": ["Kandidat 1", "Kandidat 2"],
+  "top_n": 10
+}
+```
+
+- `texts`: 1..64 non-blank candidates (`limits.rerank_max_texts`).
+- `top_n`: >= 1; values above `len(texts)` return all texts (archive slicing
+  semantics), values below 1 are rejected.
+
+Response:
+
+```json
+{
+  "contract_version": "1.0",
+  "model": "BAAI/bge-reranker-v2-m3",
+  "scores": [
+    {"index": 0, "score": 0.987},
+    {"index": 2, "score": 0.512}
+  ]
+}
+```
+
+`scores` is sorted descending, sigmoid-normalized (0..1); `index` refers to
+the request's `texts` position; ties keep input order. 4xx error codes:
+`RERANK_QUERY_EMPTY`, `RERANK_TEXTS_EMPTY`, `RERANK_TEXT_BLANK`,
+`RERANK_TEXTS_TOO_MANY`, `RERANK_TOP_N_INVALID`,
+`CONTRACT_VERSION_UNSUPPORTED`; shape disagreements are 500
+`RERANK_SHAPE_MISMATCH`.
 
 ## 8. Process Acceptance
 
