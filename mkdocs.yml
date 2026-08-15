@@ -1,0 +1,84 @@
+# Site: https://cyb3rdudu.github.io/axiom
+# Build with MkDocs Material. Rendered from docs/; source of truth for CI is
+# .github/workflows/docs.yml. Triggered on docs(...) commits (paths: docs/**).
+
+site_name: axiom-ng
+site_description: Zotero-gestütztes Wissenssystem — Go-Orchestrierung,
+  Python-Compute, durchsuchbare Wissensbasis
+site_url: https://cyb3rdudu.github.io/axiom/
+repo_url: https://github.com/Cyb3rDudu/axiom
+edit_uri: blob/main/docs/
+
+theme:
+  name: material
+  # Dark is the operating default; logo and favicon come from the axiom
+  # original-era icon (see About/Logo).
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  logo: assets/icon_dark.png
+  favicon: assets/icon_original.png
+  language: de
+  features:
+    - navigation.sections
+    - navigation.tracking
+    - navigation.top
+    - toc.follow
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.tabs.link
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - toc:
+      permalink: true
+
+nav:
+  - Willkommen: index.md
+  - Get Started:
+      - Konzept-Tour: get-started/concept-tour.md
+      - Quickstart: get-started/quickstart.md
+  - User Guide:
+      - Zotero-Sync: user-guide/zotero-sync.md
+      - Ingest: user-guide/ingest.md
+      - Retrieval: user-guide/retrieval.md
+  - Developer Guide:
+      - Architektur-Übersicht: developer-guide/architecture.md
+      - "axiom_ng (Go)": developer-guide/axiom-ng-go.md
+      - "axiom_ng_runner (Python)": developer-guide/axiom-ng-runner.md
+      - "PROCESSOR_CONTRACT v1": developer-guide/processor-contract.md
+      - Konfiguration: developer-guide/configuration.md
+      - Testing: developer-guide/testing.md
+  - Operations:
+      - Deployment: operations/deployment.md
+      - Monitoring: operations/monitoring.md
+      - Troubleshooting: operations/troubleshooting.md
+  - Referenzen:
+      - Datenmodell: references/data-model.md
+      - Benchmarks & Analysen: references/benchmarks.md
+      - FAQ: references/faq.md
+  - About: about/index.md

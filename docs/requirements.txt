@@ -1,0 +1,4 @@
+# Python deps for building the axiom-ng documentation site.
+# Pinned to the versions validated locally (Python 3.9).
+mkdocs==1.6.1
+mkdocs-material==9.*
