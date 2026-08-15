@@ -338,6 +338,23 @@ def process(body: ProcessRequest) -> dict[str, Any]:
                 detail=f"job {body.job_id} already exists with a different idempotency key",
             )
         job, _ = store.get_or_create(candidate)  # returns the existing job
+        if job.acked:
+            # #126 replay-after-ack: the stored result is still dedupable
+            # (§19.2), but its artifacts died with the ACK (§15/§19.12) —
+            # handing the result back would send the dispatcher into an
+            # artifact-404 retry wall. Terminal, parseable, non-retryable.
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "ARTIFACTS_EXPIRED",
+                    "message": (
+                        "job was acknowledged; result artifacts are gone "
+                        "(contract §19.12). Re-enqueue with a fresh "
+                        "idempotency key (force_rebuild) to recompute."
+                    ),
+                    "retryable": False,
+                },
+            )
         _relaunch_if_needed(job)
         return ProcessAccept(
             contract_version=CONTRACT_VERSION,

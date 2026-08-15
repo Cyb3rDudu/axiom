@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
@@ -47,6 +48,16 @@ func submitRetryable(err error) bool {
 func (d *Dispatcher) handleSubmitFailure(ctx context.Context, claimed *repo.ClaimedJob, cause error) {
 	ref := claimed.LeaseRef
 	if isLost(cause) {
+		return
+	}
+	// #126 replay-after-ack: the runner reports ARTIFACTS_EXPIRED (409) when
+	// a resubmit dedups onto an acknowledged job — its artifacts died with
+	// the ACK. Retrying hits the same wall, so this is terminal with its
+	// own code, not PROCESS_SUBMIT_FAILED.
+	var se *processor.StatusError
+	if errors.As(cause, &se) && se.Code == 409 && strings.Contains(se.Body, "ARTIFACTS_EXPIRED") {
+		d.markTerminal(ctx, ref, "ARTIFACTS_EXPIRED",
+			"runner acknowledged this job; artifacts expired with ACK (contract §19.12) — re-enqueue with force_rebuild to recompute")
 		return
 	}
 	if submitRetryable(cause) {

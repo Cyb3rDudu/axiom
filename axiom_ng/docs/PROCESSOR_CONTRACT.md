@@ -572,6 +572,30 @@ recover from a restart.
 
 Acknowledgement is idempotent.
 
+### Replay after acknowledgement (additive v1 extension, #126)
+
+A resubmit that dedups onto an **acknowledged** job hits the seam between
+§19.2-style dedup (return the existing result) and §15 (artifacts died with
+the ACK). The processor answers with a terminal, parseable refusal instead of
+a result whose artifacts can no longer be fetched:
+
+```http
+POST /v1/process  (same idempotency_key as an acked job)
+→ 409 Conflict
+{
+  "detail": {
+    "code": "ARTIFACTS_EXPIRED",
+    "message": "job was acknowledged; result artifacts are gone (contract §19.12). Re-enqueue with a fresh idempotency key (force_rebuild) to recompute.",
+    "retryable": false
+  }
+}
+```
+
+The dispatcher maps this to a terminal `ARTIFACTS_EXPIRED` job error (no
+retry — re-submitting hits the same wall); recompute requires a new
+idempotency key (force_rebuild). Un-acked dedup keeps returning
+202 + `deduplicated: true`.
+
 ## 16. Errors
 
 Terminal failures use a stable machine-readable code.
@@ -661,6 +685,10 @@ Every processor implementation must pass the same black-box test suite:
     source_url; non-http(s) schemes are rejected; the hash gate rejects
     downloaded bytes that do not match content_hash (without echoing the
     actual hash); the downloaded temp file dies with acknowledgement.
+
+14. Replay-after-ACK: a resubmit of an acknowledged job answers 409 with
+    `code: ARTIFACTS_EXPIRED` (terminal, non-retryable) — never a result whose
+    artifacts were already removed.
 
 axiom-ng integration tests must additionally prove that an invalid or partial
 processor result cannot replace the last valid processing snapshot.

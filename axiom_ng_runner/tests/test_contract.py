@@ -761,3 +761,46 @@ def test_real_pipeline_calls_image_path_normalization():
 
     src = Path(runner_mod.__file__).read_text(encoding="utf-8")
     assert "_normalize_epub_image_paths(markdown)" in src
+
+
+# ---------------------------------------------------------------------------
+# 12. Replay-after-ACK: resubmit of an acknowledged job is terminal (#126)
+# ---------------------------------------------------------------------------
+
+
+def test_resubmit_after_ack_returns_artifacts_expired(client, fixture_dirs):
+    """Issue #126: the dedup resubmit of an ACKed job must NOT hand back the
+    stored result (its artifacts died with the ACK, §19.12) — that sent the
+    dispatcher into an artifact-404 retry wall in production. Terminal 409
+    with a parseable code instead."""
+    src = fixture_dirs["pdf"]
+    payload = _process_payload(src, "job-ackexp", "key-ackexp")
+
+    r1 = client.post("/v1/process", json=payload, timeout=10)
+    assert r1.status_code == 202, r1.text
+    job_id = r1.json()["job_id"]
+    _wait_completed(client, job_id, timeout=30)
+
+    ack = client.post(
+        f"/v1/jobs/{job_id}/ack",
+        json={"persisted": True, "snapshot_id": "snap-ackexp"},
+        timeout=10,
+    )
+    assert ack.status_code == 200, ack.text
+
+    r2 = client.post("/v1/process", json=payload, timeout=10)
+    assert r2.status_code == 409, r2.text
+    detail = r2.json()["detail"]
+    assert detail["code"] == "ARTIFACTS_EXPIRED"
+    assert detail["retryable"] is False
+
+
+def test_resubmit_before_ack_still_deduplicates(client, fixture_dirs):
+    """The un-acked dedup path is unchanged: 202 + deduplicated=true (§19.2)."""
+    src = fixture_dirs["pdf"]
+    payload = _process_payload(src, "job-acklive", "key-acklive")
+    r1 = client.post("/v1/process", json=payload, timeout=10)
+    assert r1.status_code == 202
+    r2 = client.post("/v1/process", json=payload, timeout=10)
+    assert r2.status_code == 202
+    assert r2.json()["deduplicated"] is True

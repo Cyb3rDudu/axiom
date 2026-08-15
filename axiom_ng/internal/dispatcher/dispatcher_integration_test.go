@@ -178,6 +178,10 @@ type fakeProcessor struct {
 
 	processBody []byte
 	processHits int
+	// #126: when non-zero, POST /v1/process answers with this status+body
+	// (e.g. 409 ARTIFACTS_EXPIRED) instead of the 202 echo.
+	processFailStatus int
+	processFailBody   string
 
 	// script holds one handler per probe. index is consumed by the switch in serve.
 	statuses      []string // sequence of statuses returned by GET /v1/jobs/{id}
@@ -224,6 +228,11 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		fp.processBody = b
 		fp.processHits++
+		if fp.processFailStatus != 0 {
+			w.WriteHeader(fp.processFailStatus)
+			io.WriteString(w, fp.processFailBody)
+			return
+		}
 		// Echo the job id back.
 		var body struct {
 			JobID string `json:"job_id"`
@@ -967,4 +976,35 @@ func (h *dispatchHarness) ackPendingAtIsNull(t *testing.T, jobID string) bool {
 		t.Fatalf("read ack_pending_at: %v", err)
 	}
 	return v == nil
+}
+
+// TestArtifactsExpiredSubmitIsTerminal pins #126: a resubmit that dedups onto
+// an acknowledged runner job answers 409 ARTIFACTS_EXPIRED — the stored
+// result's artifacts died with the ACK. The dispatcher must terminalize with
+// the distinct code (not PROCESS_SUBMIT_FAILED) and NOT retry into the same
+// wall (exactly one submit attempt).
+func TestArtifactsExpiredSubmitIsTerminal(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "AE", 3)
+	fp := newFakeProcessor(t)
+	fp.processFailStatus = 409
+	fp.processFailBody = `{"detail":{"code":"ARTIFACTS_EXPIRED","message":"job was acknowledged; result artifacts are gone (contract §19.12)","retryable":false}}`
+
+	d := newDispatcher(t, h, fp, Config{})
+	runFor(t, d, context.Background(), 6*time.Second)
+
+	if got := h.jobStatus(t, jobID); got != "failed" {
+		t.Fatalf("status = %q, want failed (terminal)", got)
+	}
+	code, _ := h.jobError(t, jobID)
+	if code != "ARTIFACTS_EXPIRED" {
+		t.Fatalf("error code = %q, want ARTIFACTS_EXPIRED", code)
+	}
+	if !h.nextAttemptAtIsNull(t, jobID) {
+		t.Fatal("next_attempt_at set; ARTIFACTS_EXPIRED must not schedule a retry")
+	}
+	if fp.processHits != 1 {
+		t.Fatalf("process hits = %d, want exactly 1 (terminal, no retry hammering)", fp.processHits)
+	}
 }
