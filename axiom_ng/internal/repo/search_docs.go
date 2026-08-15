@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 // documentMetaRow is the search source-hydration query shape (R3 #133):
@@ -61,7 +62,7 @@ func (r *Repo) DocumentMetaByIDs(ctx context.Context, ids []string) (map[string]
 			case c.Name != "":
 				authors = append(authors, c.Name)
 			case c.FirstName != "" || c.LastName != "":
-				authors = append(authors, c.FirstName+" "+c.LastName)
+				authors = append(authors, strings.TrimSpace(c.FirstName+" "+c.LastName))
 			}
 		}
 		out[row.ID] = DocumentMeta{Title: row.Title, Authors: authors, Year: row.Year, Publisher: row.Publisher}

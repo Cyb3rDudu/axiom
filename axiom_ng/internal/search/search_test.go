@@ -118,7 +118,6 @@ func hitsList(hits []osHit) []map[string]any {
 	for _, h := range hits {
 		out = append(out, map[string]any{
 			"_id":     h.ID,
-			"_score":  h.Score,
 			"_source": h,
 		})
 	}
@@ -150,8 +149,9 @@ func TestRRFMerge_BothArmsBeatSingleArm(t *testing.T) {
 	if merged[1].ID != "a" && merged[1].ID != "b" {
 		t.Fatalf("second candidate must come from both arms, got %q", merged[1].ID)
 	}
-	// Exact RRF math: a = 1/61 + 1/62.
-	wantA := 1.0/(rrfK+1) + 1.0/(rrfK+3)
+	// Exact RRF math, pinned literally (k=60 is the spec value):
+	// a = 1/(60+1) + 1/(60+3) — knn rank 1, bm25 rank 3.
+	wantA := 1.0/61.0 + 1.0/63.0
 	for _, c := range merged {
 		if c.ID == "a" && c.RRFScore != wantA {
 			t.Fatalf("rrf(a) = %v, want %v", c.RRFScore, wantA)
@@ -256,18 +256,62 @@ func TestSearch_RerankFallbackServesRRFOrder(t *testing.T) {
 }
 
 func TestSearch_RerankShapeGuardFallsBack(t *testing.T) {
+	// Malformed rerank responses (wrong count, duplicate index, index out
+	// of range) must fall back to RRF order instead of trusting garbage.
+	cases := []struct {
+		name   string
+		scores []processor.RerankScore
+	}{
+		{"wrong count", []processor.RerankScore{{Index: 0, Score: 1}}},
+		{"duplicate index", []processor.RerankScore{{Index: 0, Score: 1}, {Index: 0, Score: 0.5}}},
+		{"index out of range", []processor.RerankScore{{Index: 0, Score: 1}, {Index: 99, Score: 0.5}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			os := newOSServer(t)
+			os.knnHits = []osHit{hit("a", "d", "x")}
+			os.bm25Hits = []osHit{hit("b", "d", "y")}
+			fp := &fakeProcessor{embedVec: []float32{0.1}, rerankRes: tc.scores}
+			svc := newService(os.URL, fp, fakeDocs{})
+			res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Reranked {
+				t.Fatalf("%s: shape-invalid scores must fall back to RRF", tc.name)
+			}
+			// RRF tie (both rank 1) keeps dense-first order.
+			if orderOf(res) != "a,b" {
+				t.Fatalf("%s: fallback must serve RRF order, got %s", tc.name, orderOf(res))
+			}
+		})
+	}
+}
+
+func TestSearch_RerankTiesKeepRRFOrder(t *testing.T) {
+	// Equal rerank scores are a valid ranking but must not reshuffle the
+	// candidates: ties keep RRF order (stable sort). The b/c tie under a
+	// later-starting higher score (d=2.0) is the case an unstable
+	// selection sort inverts.
 	os := newOSServer(t)
-	os.knnHits = []osHit{hit("a", "d", "x")}
-	os.bm25Hits = []osHit{hit("b", "d", "y")}
-	fp := &fakeProcessor{embedVec: []float32{0.1}}
-	fp.rerankRes = []processor.RerankScore{{Index: 0, Score: 1}} // wrong count (1 for 2)
+	os.knnHits = []osHit{hit("a", "d", "x"), hit("b", "d", "y"), hit("c", "d", "z"), hit("d", "d", "w")}
+	fp := &fakeProcessor{embedVec: []float32{1}}
+	fp.rerankRes = []processor.RerankScore{
+		{Index: 0, Score: 1.0}, // a
+		{Index: 1, Score: 0.5}, // b (tied with c)
+		{Index: 2, Score: 0.5}, // c
+		{Index: 3, Score: 2.0}, // d
+	}
 	svc := newService(os.URL, fp, fakeDocs{})
-	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 2})
+	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Reranked {
-		t.Fatal("shape-invalid rerank scores must fall back to RRF")
+	if !res.Reranked {
+		t.Fatal("valid scores must set reranked=true")
+	}
+	if orderOf(res) != "d,a,b,c" {
+		t.Fatalf("ties must keep RRF order (want d,a,b,c), got %s", orderOf(res))
 	}
 }
 
@@ -298,12 +342,21 @@ func TestSearch_AllArmsDownIsError(t *testing.T) {
 }
 
 func TestSearch_Guards(t *testing.T) {
-	svc := newService("http://127.0.0.1:1", &fakeProcessor{}, fakeDocs{})
-	if _, err := svc.Search(context.Background(), Request{Query: "  "}); err == nil {
-		t.Fatal("blank query must be rejected")
+	// The service is healthy (both arms answer) so the guard assertions
+	// discriminate: without the guards these requests would succeed.
+	os := newOSServer(t)
+	os.knnHits = []osHit{hit("a", "d1", "x")}
+	os.bm25Hits = []osHit{hit("b", "d1", "y")}
+	svc := newService(os.URL, &fakeProcessor{embedVec: []float32{1}}, fakeDocs{})
+	if _, err := svc.Search(context.Background(), Request{Query: "q", TopN: 2}); err != nil {
+		t.Fatalf("valid request must succeed (control): %v", err)
 	}
-	if _, err := svc.Search(context.Background(), Request{Query: "q", TopN: 65}); err == nil {
-		t.Fatal("top_n above the rerank cap must be rejected")
+	var ebr ErrBadRequest
+	if _, err := svc.Search(context.Background(), Request{Query: "  "}); !errors.As(err, &ebr) {
+		t.Fatalf("blank query must be ErrBadRequest, got %v", err)
+	}
+	if _, err := svc.Search(context.Background(), Request{Query: "q", TopN: maxCandidates + 1}); !errors.As(err, &ebr) {
+		t.Fatalf("top_n above the rerank cap must be ErrBadRequest, got %v", err)
 	}
 }
 
@@ -355,6 +408,30 @@ func TestSearch_SourceHydration(t *testing.T) {
 	}
 }
 
+func TestSearch_SourceHydrationErrorDegrades(t *testing.T) {
+	// DB down during hydration must degrade the source block, not the hits.
+	os := newOSServer(t)
+	os.knnHits = []osHit{hit("a", "doc-1", "x")}
+	os.bm25Hits = []osHit{hit("b", "doc-2", "y")}
+	svc := newService(os.URL, &fakeProcessor{embedVec: []float32{1}},
+		fakeDocs{err: errors.New("db down")})
+	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hits) != 2 {
+		t.Fatalf("hits must survive hydration failure, got %d", len(res.Hits))
+	}
+	for _, h := range res.Hits {
+		if h.Source.Book != "" {
+			t.Fatalf("no metadata expected on hydration failure: %+v", h.Source)
+		}
+		if h.Source.DocID == "" {
+			t.Fatal("document provenance must survive hydration failure")
+		}
+	}
+}
+
 func orderOf(res *Response) string {
 	ids := make([]string, len(res.Hits))
 	for i, h := range res.Hits {
@@ -378,6 +455,15 @@ func TestLocatorViewPhysicalFallbackAndRange(t *testing.T) {
 	v := locatorView(json.RawMessage(fmt.Sprintf(`{"type":"page_span","physical_page_start":%d,"page_label_end":"48"}`, p)), nil)
 	if v.Label != "S. 47-48" {
 		t.Fatalf("physical fallback/range wrong: %+v", v)
+	}
+}
+
+func TestLocatorViewPageSpanWithoutPageInfo(t *testing.T) {
+	// Neither page_label nor physical page: the label degrades to the bare
+	// chapter, never a dangling "S. ".
+	v := locatorView(json.RawMessage(`{"type":"page_span"}`), []string{"Kapitel 3"})
+	if v.Kind != "page" || v.Label != "Kapitel 3" {
+		t.Fatalf("page_span without page info wrong: %+v", v)
 	}
 }
 
@@ -407,5 +493,10 @@ func TestTruncateChars(t *testing.T) {
 	}
 	if got := truncateChars("ab", 3); got != "ab" {
 		t.Fatalf("truncate noop: %q", got)
+	}
+	// Rune-safe: cutting at n bytes inside a multibyte char backs off to
+	// the last full rune instead of emitting broken UTF-8.
+	if got := truncateChars("aäbc", 2); got != "a" {
+		t.Fatalf("truncate must never split a rune: %q", got)
 	}
 }

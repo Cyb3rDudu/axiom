@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
@@ -66,6 +67,9 @@ type DocSource interface {
 
 // New builds a Service.
 func New(osURL, osUser, osPass string, p Processor, docs DocSource, lg *log.Logger) *Service {
+	if lg == nil {
+		lg = log.Default()
+	}
 	return &Service{
 		os:        newOSClient(osURL, osUser, osPass),
 		processor: p,
@@ -89,13 +93,12 @@ type Filters struct {
 
 // Hit is one ranked answer with its provenance.
 type Hit struct {
-	ChunkID  string      `json:"chunk_id"`
-	Text     string      `json:"text"`
-	Score    float64     `json:"score"`
-	Reranked bool        `json:"-"` // folded into Response.Reranked
-	Source   Source      `json:"source"`
-	Locator  LocatorView `json:"locator"`
-	Section  []string    `json:"section"`
+	ChunkID string      `json:"chunk_id"`
+	Text    string      `json:"text"`
+	Score   float64     `json:"score"` // RRF score, or rerank score when Response.Reranked
+	Source  Source      `json:"source"`
+	Locator LocatorView `json:"locator"`
+	Section []string    `json:"section"`
 }
 
 // Source is the bibliographic provenance of a hit.
@@ -227,10 +230,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 
 	// Rerank over the merged candidates; failure degrades to RRF order
 	// (issue Ziel 3: retrieval must not hard-depend on the reranker).
-	candidates := merged
-	if len(candidates) > maxCandidates {
-		candidates = candidates[:maxCandidates]
-	}
+	candidates := merged // already capped at fetchN <= maxCandidates by rrfMerge
 	texts := make([]string, len(candidates))
 	for i, c := range candidates {
 		texts[i] = truncateChars(c.Text, maxRerankTextChars)
@@ -281,13 +281,9 @@ func applyRerank(candidates []osCandidate, scores []processor.RerankScore) bool 
 		candidates[sc.Index].RerankScore = sc.Score
 	}
 	// Stable sort by rerank score descending; ties keep RRF order.
-	for i := 0; i < len(candidates); i++ {
-		for j := i + 1; j < len(candidates); j++ {
-			if candidates[j].RerankScore > candidates[i].RerankScore {
-				candidates[i], candidates[j] = candidates[j], candidates[i]
-			}
-		}
-	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].RerankScore > candidates[j].RerankScore
+	})
 	return true
 }
 
@@ -342,7 +338,6 @@ func newOSClient(base, user, pass string) *osClient {
 // osHit is one hit from an OS query.
 type osHit struct {
 	ID            string          `json:"-"`
-	Score         float64         `json:"-"`
 	Text          string          `json:"text"`
 	DocumentID    string          `json:"document_id"`
 	Locator       json.RawMessage `json:"locator"`
@@ -426,9 +421,8 @@ func (c *osClient) search(ctx context.Context, size int, query map[string]any) (
 	var parsed struct {
 		Hits struct {
 			Hits []struct {
-				ID     string  `json:"_id"`
-				Score  float64 `json:"_score"`
-				Source osHit   `json:"_source"`
+				ID     string `json:"_id"`
+				Source osHit  `json:"_source"`
 			} `json:"hits"`
 		} `json:"hits"`
 	}
@@ -438,7 +432,6 @@ func (c *osClient) search(ctx context.Context, size int, query map[string]any) (
 	hits := make([]osHit, 0, len(parsed.Hits.Hits))
 	for _, h := range parsed.Hits.Hits {
 		h.Source.ID = h.ID
-		h.Source.Score = h.Score
 		hits = append(hits, h.Source)
 	}
 	return hits, nil
@@ -457,7 +450,13 @@ func truncateChars(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n]
+	// Rune-safe: back off to the last rune boundary <= n bytes so a
+	// multibyte char is never split mid-sequence.
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // sourceFor builds the Source block; missing metadata degrades to doc ID only.
@@ -504,10 +503,13 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 		if loc.PageLabelEnd != "" && loc.PageLabelEnd != loc.PageLabelStart {
 			label += "-" + loc.PageLabelEnd
 		}
-		if chapter != "" {
+		switch {
+		case label != "" && chapter != "":
 			label = chapter + " · S. " + label
-		} else if label != "" {
+		case label != "":
 			label = "S. " + label
+		default:
+			label = chapter // no page info: bare chapter, never a dangling "S. "
 		}
 		return LocatorView{Kind: "page", Label: label, Chapter: chapter}
 	default:

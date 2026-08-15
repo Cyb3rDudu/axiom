@@ -69,7 +69,8 @@ func (c *Client) EmbedQueries(ctx context.Context, texts []string) ([][]float32,
 	return out.Embeddings, nil
 }
 
-// Rerank returns cross-encoder scores for (query, texts) pairs, descending.
+// Rerank returns cross-encoder scores for the (query, texts) pairs;
+// scores[i].index refers to texts[i]. Ordering is the caller's concern.
 func (c *Client) Rerank(ctx context.Context, query string, texts []string, topN int) ([]RerankScore, error) {
 	var out RerankResponse
 	if err := c.do(ctx, budgetRerank, http.MethodPost, "/v1/rerank", &RerankRequest{

@@ -186,13 +186,6 @@ func dumpHits(hits []Hit) string {
 	return b.String()
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func envOr(v, def string) string {
 	if v == "" {
 		return def
