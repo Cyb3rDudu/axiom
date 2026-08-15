@@ -716,3 +716,33 @@ def test_stage_progression_without_callback(fixture_dirs):
     result = compute(payload, work_dir)
     assert result["status"] == "completed"
     assert "stage_timings" in result["manifest"]
+
+
+# ---------------------------------------------------------------------------
+# 11. EPUB image-path normalization (#124): no machine paths in chunk texts
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_epub_image_paths_strips_machine_paths():
+    """Issue #124: the epub worker's temp dir carries a random suffix; both
+    markdown image links AND raw HTML <img src> must lose the machine path
+    before chunking, or chunk texts differ on every re-run (TC2: Sonko)."""
+    from axiom_ng_runner.runner import _normalize_epub_image_paths
+
+    md = (
+        '# Kapitel\n\n'
+        '<img src="/tmp/epub_media_k97091zv/images/532180_1_En_1_Chapter/'
+        '532180_1_En_1_Fig1_HTML.png" style="width:31.9em" aria-describedby="d65e473" />\n\n'
+        'Text davor ![Fig 2](/tmp/epub_media_pg911a7r/images/ch2/fig2.png) Text danach\n'
+    )
+    out = _normalize_epub_image_paths(md)
+    # Keine Maschinenpfade, keine Zufallssuffixe — in keiner Form.
+    assert "/tmp/" not in out
+    assert "epub_media" not in out
+    # Beide Formen tragen den stabilen Basename…
+    assert 'src="532180_1_En_1_Fig1_HTML.png"' in out
+    assert "![Fig 2](fig2.png)" in out
+    # …und alle anderen Attribute/Inhalte bleiben unberührt.
+    assert 'style="width:31.9em"' in out
+    assert "aria-describedby" in out
+    assert out.startswith("# Kapitel")

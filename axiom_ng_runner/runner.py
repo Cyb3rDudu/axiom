@@ -801,6 +801,33 @@ def _compute_real(
         return None
 
 
+def _normalize_epub_image_paths(markdown: str) -> str:
+    """#124: strip machine-specific temp paths from EPUB image references.
+
+    The epub worker converts into a temp dir whose name carries a random
+    suffix (``/tmp/epub_media_<random>/images/…``). Pandoc emits that
+    absolute path both as markdown image links ``![alt](path)`` and as raw
+    HTML ``<img src="path" …>`` — the latter survived into chunk texts
+    (TC2: Sonko/Demystifying, 27 chunks) and made every re-run
+    byte-different. Both forms are rewritten to the file basename, which is
+    stable across runs; the artifact/ref mapping later resolves the actual
+    image via basename keys.
+    """
+    import re as _re
+
+    markdown = _re.sub(
+        r"!\[([^\]]*)\]\(([^)]+)\)",
+        lambda m: f"![{m.group(1)}]({Path(m.group(2)).name})",
+        markdown,
+    )
+    markdown = _re.sub(
+        r'(<img\b[^>]*\bsrc=")([^"]+)(")',
+        lambda m: m.group(1) + Path(m.group(2)).name + m.group(3),
+        markdown,
+    )
+    return markdown
+
+
 def _real_pipeline(
     request: dict[str, Any],
     work_dir: Path,
@@ -864,14 +891,12 @@ def _real_pipeline(
         from .epub_cfi import build_cfi_map
 
         cfi_entries = build_cfi_map(str(source_path))
-        # Rewrite absolute temp-path image references in the markdown to
-        # basename-only (temp-path-leak fix). The image_mapping below
-        # handles the final Contract-ref rewriting.
-        import re as _re
-
-        markdown = _re.sub(r"!\[([^\]]*)\]\(([^)]+)\)",
-                           lambda m: f"![{m.group(1)}]({Path(m.group(2)).name})",
-                           markdown)
+        # Rewrite machine-specific image paths to stable basenames BEFORE
+        # chunking (#124): the epub worker's temp dir carries a random
+        # suffix that would otherwise land verbatim in chunk texts and
+        # break byte-determinism across runs. Covers both markdown image
+        # links and raw HTML <img src> attributes (pandoc emits both).
+        markdown = _normalize_epub_image_paths(markdown)
         out_md.write_text(markdown, encoding="utf-8")
 
     enter("chunk")
