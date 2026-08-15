@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -89,17 +88,11 @@ func main() {
 			// Gate 4: wire the REAL persistence boundary (repo.PersistResult
 			// fence-completes the job atomically in its single TX). The
 			// errPersister default would fail every completion.
-			// Runner identity (#122): explicit name beats the URL host — the
-			// TC2 scale proof needs "which runner ran which book" in log+SQL.
-			runnerName := cfg.ProcessorRunnerName
-			if runnerName == "" {
-				if u, perr := url.Parse(cfg.ProcessorURL); perr == nil && u.Host != "" {
-					runnerName = u.Host
-				}
-			}
+			// Runner identity comes pre-derived from config (#122: explicit
+			// name, else the processor URL host).
 			disp := dispatcher.NewWithPersister(rep, pclient, rep, dispatcher.Config{
 				WorkerID:               cfg.DispatcherWorkerID,
-				RunnerName:             runnerName,
+				RunnerName:             cfg.ProcessorRunnerName,
 				Concurrency:            cfg.DispatcherConcurrency,
 				Profile:                json.RawMessage(cfg.DispatcherProfile),
 				LeaseDuration:          cfg.DispatcherLeaseDuration,

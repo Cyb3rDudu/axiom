@@ -286,6 +286,10 @@ accepted -> running -> completed
 Progress is advisory. axiom-ng uses the terminal state and result validation as
 the source of truth.
 
+The `stage` vocabulary (in progression order, single source:
+`axiom_ng_runner.PIPELINE_STAGES`): `validate_source` → `convert` → `chunk` →
+`embed` → `entities` → `relationships` → `assemble`.
+
 ## 10. Processor Result
 
 `GET /v1/jobs/{job_id}/result` is available only for a completed processor job.

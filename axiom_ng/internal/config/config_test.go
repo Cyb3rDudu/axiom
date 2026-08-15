@@ -140,10 +140,17 @@ func TestProcessorRunnerName(t *testing.T) {
 	if got := Load().ProcessorRunnerName; got != "carrier-gpu0" {
 		t.Fatalf("explicit runner name = %q, want carrier-gpu0", got)
 	}
-	// Unset stays empty: main falls back to the processor URL host so a bare
-	// single-runner deployment still gets a usable identity.
+	// Unset derives from the processor URL host (G4: fallback lives in
+	// Load, testable) so a bare single-runner deployment still gets a
+	// usable identity; an explicit env always wins.
 	t.Setenv("AXIOMNG_PROCESSOR_RUNNER_NAME", "")
+	t.Setenv("AXIOMNG_PROCESSOR_URL", "http://192.168.1.2:19542")
+	if got := Load().ProcessorRunnerName; got != "192.168.1.2:19542" {
+		t.Fatalf("URL-host fallback = %q, want 192.168.1.2:19542", got)
+	}
+	// Unparseable URL keeps the name empty (no invented identity).
+	t.Setenv("AXIOMNG_PROCESSOR_URL", "://bad")
 	if got := Load().ProcessorRunnerName; got != "" {
-		t.Fatalf("default runner name = %q, want empty (URL-host fallback in main)", got)
+		t.Fatalf("bad URL fallback = %q, want empty", got)
 	}
 }

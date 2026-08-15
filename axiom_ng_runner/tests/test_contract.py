@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from axiom_ng_runner import CONTRACT_VERSION
+from axiom_ng_runner import CONTRACT_VERSION, PIPELINE_STAGES
 from axiom_ng_runner.app import app
 from axiom_ng_runner.config import Settings, settings
 from axiom_ng_runner.job_store import Job, JobStore
@@ -140,7 +140,10 @@ def test_pdf_produces_markdown_and_chunks(client, fixture_dirs):
     )
     assert r.status_code == 202, r.text
     job_id = r.json()["job_id"]
-    _wait_completed(client, job_id)
+    body = _wait_completed(client, job_id)
+    # G2: the API surface (not just the compute callback) exposes the live
+    # stage; a completed job carries the last compute stage.
+    assert body["stage"] == "assemble", body.get("stage")
 
     res = client.get(f"/v1/jobs/{job_id}/result", timeout=10)
     assert res.status_code == 200, res.text
@@ -685,16 +688,10 @@ def test_stage_progression_and_manifest_timings(fixture_dirs):
     seen: list[str] = []
     result = compute(payload, work_dir, set_stage=seen.append)
 
-    # Live progression covers every contract stage in order (reference
-    # backend reports the same stage shape as the real backend).
-    assert seen == [
-        "convert",
-        "chunk",
-        "embed",
-        "entities",
-        "relationships",
-        "assemble",
-    ]
+    # Live progression covers every contract stage in order, derived from
+    # the single source of truth (PIPELINE_STAGES minus app.py's
+    # validate_source, which fires before compute starts).
+    assert seen == list(PIPELINE_STAGES)[1:]
 
     # Manifest carries parseable UTC timestamps for each stage.
     from datetime import datetime

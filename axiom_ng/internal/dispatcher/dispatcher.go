@@ -24,7 +24,7 @@ type Config struct {
 	WorkerID string
 	// RunnerName is the human identity of the processor this dispatcher
 	// drives (#122): goes into the phases log line (runner=...) and into
-	// ingest_jobs.processor_name at claim time. Empty falls back to the
+	// ingest_jobs.runner_name at claim time. Empty falls back to the
 	// processor URL host (wired in main).
 	RunnerName string
 	// Concurrency is the number of parallel claim/process worker slots, bounded

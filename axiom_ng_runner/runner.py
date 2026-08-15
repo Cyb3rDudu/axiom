@@ -1,9 +1,12 @@
 """Pure compute boundary (contract §5.5).
 
-``compute(request, work_dir) -> ProcessorResult`` is the single entry point
-used by the HTTP layer. It performs no database, OpenSearch, graph or Zotero
-writes — it only reads the supplied source, converts, chunks and assembles a
-contract-shaped result plus temporary artifact files.
+``compute(request, work_dir, set_stage=None) -> ProcessorResult`` is the
+single entry point used by the HTTP layer. It performs no database,
+OpenSearch, graph or Zotero writes — it only reads the supplied source,
+converts, chunks and assembles a contract-shaped result plus temporary
+artifact files. ``set_stage`` advances the live job stage (§9, issue #122)
+while compute runs; the per-stage UTC timestamps land in
+``manifest.stage_timings``.
 
 Two backends are selectable via ``AXIOM_PROCESSOR_COMPUTE``:
 

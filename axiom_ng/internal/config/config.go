@@ -5,6 +5,7 @@
 package config
 
 import (
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -48,7 +49,7 @@ type Config struct {
 
 	// ProcessorRunnerName is the human identity of the processor this
 	// dispatcher drives (AXIOMNG_PROCESSOR_RUNNER_NAME, e.g. "carrier-gpu0").
-	// It lands in the phases log line and in ingest_jobs.processor_name at
+	// It lands in the phases log line and in ingest_jobs.runner_name at
 	// claim time — the TC2 scale proof needs "which runner ran which book"
 	// answerable from SQL. Empty defaults to the ProcessorURL host.
 	ProcessorRunnerName string
@@ -116,6 +117,14 @@ func Load() Config {
 	// runners); remote deployments override with their Tailnet/LAN address.
 	if cfg.ProcessorSourceBaseURL == "" {
 		cfg.ProcessorSourceBaseURL = "http://127.0.0.1:" + strconv.Itoa(cfg.APIPort)
+	}
+	// Runner identity fallback (#122): an unset name derives from the
+	// processor URL host so a bare single-runner deployment still gets a
+	// usable identity in log+SQL. Explicit env always wins.
+	if cfg.ProcessorRunnerName == "" {
+		if u, err := url.Parse(cfg.ProcessorURL); err == nil && u.Host != "" {
+			cfg.ProcessorRunnerName = u.Host
+		}
 	}
 	return cfg
 }
