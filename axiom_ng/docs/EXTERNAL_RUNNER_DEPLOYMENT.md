@@ -87,23 +87,56 @@ CMD ["python", "-m", "axiom_ng_runner"]
 
 ## 3. Build and run with GPU
 
+**Use `--network=host` — this is the critical setting.** The measured
+breakthrough (2026-08-15, L8 mass-chunking):
+
+| Path | Result-fetch throughput (17 MB result) |
+|---|---|
+| Port-mapped (`-p 19542:8012`, rootless Podman via **passt**) | **~123 KB/s** — bulk collapses while loopback inside the container serves 122 MB/s |
+| **`--network=host`** | **full LAN speed (~40 MB/s)** — result transfers ~0.5 s instead of 2+ min |
+
+Rootless Podman's userspace port forwarder (passt) exhibits the same
+small-packets-fine/bulk-collapses signature as a bad VPN tunnel. Polls and
+health checks look healthy (ms latency) while multi-MB result JSONs and
+artifact bodies crawl. If you see "GPU idle + no errors + jobs stuck in
+post-compute", check the serving path first — loopback-fast ≠
+mapped-port-fast.
+
 ```bash
 podman build -t runner-poc ~/Code/runner-poc/
 
-# CDI device injection — mounts driver libs automatically,
-# no manual /dev/nvidia* device mapping needed:
+# Host network + CDI device injection — mounts driver libs automatically,
+# no manual /dev/nvidia* device mapping needed. No -p mapping required:
+# the runner binds the host port directly.
 podman run -d --name runner-poc \
+  --network=host \
   --device nvidia.com/gpu=all \
   -e AXIOM_PROCESSOR_COMPUTE=real \
   -e AXIOM_PROCESSOR_BIND_ADDR=0.0.0.0 \
-  -e AXIOM_PROCESSOR_PORT=8012 \
-  -p 8012:8012 \
-  runner-poc
+  -e AXIOM_PROCESSOR_PORT=19542 \
+  -e AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=/nonexistent \
+  -e DEVICE_GLINER=cuda \
+  localhost/runner-poc
 ```
 
 `--device nvidia.com/gpu=all` exposes all host GPUs. To pin to one GPU, use
 the CDI device name for that index instead of `all` (see
-`/var/run/cdi/nvidia-container-toolkit.json` for available names).
+`/var/run/cdi/nvidia-container-toolkit.json` for available names). For
+per-GPU parallel runners (one runner per GPU), set
+`CUDA_VISIBLE_DEVICES=<n>` per container — torch's `cuda:0` then maps to
+that physical GPU (see the L8 parallel test case).
+
+**Port choice:** pick a dedicated high port (e.g. 19542) and open it in the
+host firewall (NixOS: `networking.firewall.allowedTCPPorts`). The dispatcher
+points at `http://<host-ip>:<port>`. Both directions must be directly
+reachable — source downloads (runner pulls from axiom-ng) and
+result/artifact fetches (axiom-ng pulls from runner) are both multi-MB bulk
+flows that need real LAN throughput.
+
+**GLiNER device:** `DEVICE_GLINER=cuda` must be set explicitly — the default
+in `ai_researcher/config.py` is `cpu` and a CPU GLiNER eats ~1 h per book
+that takes ~5 min on GPU (measured: 12/14 cores saturated, 3 jobs died of
+result-fetch timeouts under the load).
 
 **Bind address:** `0.0.0.0` is required for remote access. Only do this on
 LAN-only hosts — the runner has no authentication (by design, work order
@@ -123,12 +156,30 @@ m = GLiNER.from_pretrained('urchade/gliner_multi-v2.1')
 print(m.predict_entities('Steve Jobs founded Apple.', ['PERSON']))"
 
 # Health endpoint:
-curl http://<gpu-host>:8012/v1/health
-curl http://<gpu-host>:8012/v1/capabilities
+curl http://<gpu-host>:19542/v1/health
+curl http://<gpu-host>:19542/v1/capabilities
 ```
 
 First run downloads ~3 GB of model weights (Marker surya + GLiNER + mREBEL);
 subsequent runs are warm-cache.
+
+## Transport rule (learned the hard way, 2026-08-15)
+
+Three layered transport traps were debugged during L8, each masking the next:
+
+1. **Serial artifact fetches** (fixed in code: bounded-parallel staging, per-call timeouts) — hundreds of round-trips per book.
+2. **Tailscale utun10 bulk collapse** (~35-83 KB/s on multi-MB flows, ms-latency on small packets, despite "direct" connection) — see issue #121 for the full analysis. Tailscale stays fine for control-plane (health, source uploads of small files) but is NOT for bulk.
+3. **Rootless Podman passt port-mapping** — the same collapse signature ON THE CONTAINER LAYER: loopback inside the container served 122 MB/s while the `-p`-mapped port crawled at ~123 KB/s. Fixed by `--network=host`.
+
+**Operating rule:** dispatcher↔runner bulk flows (result JSON, artifact
+bodies) require **direct LAN reachability on both directions** —
+`AXIOM_PROCESSOR_URL` to the runner's host port, and the runner's
+`source_url` base pointing at axiom-ng's LAN address. Tailscale works for
+control-plane and is the fallback when no direct path exists (accept the
+throughput penalty or wait for #121 resolution). Symptom signature of a
+transport trap: GPU idle, no dispatcher errors, jobs stuck between
+compute-done and persisted for minutes — check the serving path (loopback
+vs mapped port vs tunnel) before blaming compute.
 
 ## 5. Wire the dispatcher to it
 
@@ -136,7 +187,7 @@ On the axiom-ng host (Mac):
 
 ```bash
 export AXIOMNG_DISPATCHER_ENABLED=true
-export AXIOMNG_PROCESSOR_URL=http://<gpu-host>:8012
+export AXIOM_PROCESSOR_URL=http://<gpu-host>:19542   # direct LAN — see transport note
 ```
 
 The dispatcher performs capability negotiation against the remote runner on
@@ -182,7 +233,7 @@ OpenSearch indexed, work dir (incl. the downloaded source) empty after ACK.
 | Env var | Default | Meaning |
 | --- | --- | --- |
 | `AXIOM_PROCESSOR_BIND_ADDR` | `127.0.0.1` | `0.0.0.0` for remote access |
-| `AXIOM_PROCESSOR_PORT` | `8537` | HTTP port (8012 in our setups) |
+| `AXIOM_PROCESSOR_PORT` | `8537` | HTTP port (19542 with host-network on carrier) |
 | `AXIOM_PROCESSOR_COMPUTE` | `reference` | `real` for GPU pipeline |
 | `AXIOM_PROCESSOR_MAX_CONCURRENT_JOBS` | `1` | Marker+models are VRAM-heavy; keep 1 per GPU |
 | `AXIOM_PROCESSOR_WORK_ROOT` | `/tmp/axiom_processor_work` | Temp job state |
