@@ -53,11 +53,17 @@ jobs:
           fi
 
       - name: Naming gate (product name 'axiom', not 'axiom-ng')
-        # Product name is 'axiom'. The single allowed occurrence is the historical
-        # reference in About (formerly known as axiom-ng during development).
+        # Product name is 'axiom'. Allowed occurrences in published pages:
+        # 1) the single historical reference in About (formerly known as
+        #    axiom-ng during development);
+        # 2) literal code-path commands, e.g. the binary run as
+        #    `go run ./axiom_ng/cmd/axiom-ng` (module paths are technical facts).
         # docs/_inventory.md is an internal meta file and is exempt.
         run: |
-          if grep -ri 'axiom-ng' docs/ --include='*.md' | grep -v '_inventory.md' | grep -v 'about/index.md'; then
+          if grep -ri 'axiom-ng' docs/ --include='*.md' \
+            | grep -v '_inventory.md' \
+            | grep -v 'about/index.md' \
+            | grep -v 'axiom_ng/cmd/axiom-ng'; then
             echo "legacy product name 'axiom-ng' found in published pages"
             exit 1
           fi
