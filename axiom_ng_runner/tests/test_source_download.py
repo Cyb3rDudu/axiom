@@ -18,11 +18,10 @@ import time
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-
 from axiom_ng_runner import app as app_mod
 from axiom_ng_runner.config import Settings, settings
 from axiom_ng_runner.validation import compute_sha256
+from fastapi.testclient import TestClient
 
 
 class _SourceServer:
