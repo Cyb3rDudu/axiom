@@ -30,6 +30,10 @@ PIPELINE_STAGES = (
 if os.getenv("AXIOM_PROCESSOR_COMPUTE", "reference") == "real":
     DENSE_EMBEDDING_DIM = 1024
     DENSE_EMBEDDING_MODEL = "BAAI/bge-m3"
+    RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 else:
     DENSE_EMBEDDING_DIM = 3
     DENSE_EMBEDDING_MODEL = "reference-bge-m3"
+    RERANKER_MODEL = "reference-bge-reranker-v2-m3"
+# R2 (#132): the reranker is query-side-only and always capability-declared;
+# the same env switch keeps the hermetic suite free of heavy imports.

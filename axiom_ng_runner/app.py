@@ -20,16 +20,27 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Response
 
-from . import CONTRACT_VERSION, DENSE_EMBEDDING_DIM, DENSE_EMBEDDING_MODEL, __version__
+from . import (
+    CONTRACT_VERSION,
+    DENSE_EMBEDDING_DIM,
+    DENSE_EMBEDDING_MODEL,
+    RERANKER_MODEL,
+    __version__,
+    query_service,
+)
 from .config import settings
 from .job_store import Job, JobIdCollision, JobStore
 from .models import (
     AckPayload,
     AckResponse,
     Capabilities,
+    EmbedRequest,
+    EmbedResponse,
     JobStatus,
     ProcessAccept,
     ProcessRequest,
+    RerankRequest,
+    RerankResponse,
 )
 from .validation import (
     SourceError,
@@ -98,15 +109,21 @@ def _capabilities() -> Capabilities:
             "sparse_embeddings": True,
             "entities": True,
             "entity_relationships": True,
+            "query_embedding": True,
+            "reranking": True,
         },
         models={
             "dense_embedding": {"name": DENSE_EMBEDDING_MODEL, "dimensions": DENSE_EMBEDDING_DIM},
             "entity_extraction": {"name": "reference-gliner"},
             "relationship_extraction": {"name": "reference-mrebel"},
+            "query_embedding": {"name": DENSE_EMBEDDING_MODEL, "dimensions": DENSE_EMBEDDING_DIM},
+            "reranking": {"name": RERANKER_MODEL},
         },
         limits={
             "max_concurrent_jobs": s.max_concurrent_jobs,
             "max_source_bytes": 2_147_483_648,
+            "max_query_texts": s.max_query_texts,
+            "rerank_max_texts": s.rerank_max_texts,
         },
     )
 
@@ -136,6 +153,21 @@ def _status_payload(job: Job) -> dict[str, Any]:
 def _raise_source(exc: SourceError) -> HTTPException:
     log.warning("source rejected: %s (%s)", exc.message, exc.code)
     return HTTPException(status_code=422, detail=exc.message)
+
+
+def _query_reject(code: str, message: str) -> HTTPException:
+    """Uniform 422 for query-endpoint guard violations (#131/#132)."""
+    log.warning("query rejected: %s (%s)", message, code)
+    return HTTPException(status_code=422, detail={"code": code, "message": message})
+
+
+def _contract_guard(version: str) -> None:
+    if version != CONTRACT_VERSION:
+        raise _query_reject(
+            "CONTRACT_VERSION_UNSUPPORTED",
+            f"contract_version {version!r} is not supported "
+            f"(expected {CONTRACT_VERSION!r})",
+        )
 
 
 def _validate_request(req: ProcessRequest) -> Path:
@@ -551,3 +583,110 @@ def job_ack(job_id: str, body: AckPayload) -> AckResponse:
         store.mark_acked(job)
         store.remove_work(job_id)  # temp compute output + artifacts, not the record
     return AckResponse(contract_version=CONTRACT_VERSION, job_id=job_id, status="acked")
+
+
+# --- query endpoints (epic #130, contract §7a additive v1) -----------------
+
+
+@app.post("/v1/embed")
+def embed_queries(body: EmbedRequest) -> EmbedResponse:
+    """Query-embedding endpoint (#131): dense BGE-M3 vectors for query texts.
+
+    Plain def (not async): the model call is compute-bound and runs in the
+    threadpool, same rationale as POST /v1/process. The embedder is the
+    process-wide warm singleton (query_service): lazy-load on first request,
+    warm-keep afterwards — the whole point of the low-latency budget.
+    """
+    _contract_guard(body.contract_version)
+    s = settings.get()
+    cap = s.max_query_texts
+    limit = cap if body.max_texts is None else body.max_texts
+    if not 1 <= limit <= cap:
+        raise _query_reject(
+            "MAX_TEXTS_INVALID",
+            f"max_texts must be between 1 and the server cap {cap}",
+        )
+    if not body.texts:
+        raise _query_reject("QUERY_TEXTS_EMPTY", "texts must not be empty")
+    if any(not t.strip() for t in body.texts):
+        raise _query_reject("QUERY_TEXT_BLANK", "texts must not contain blank strings")
+    if len(body.texts) > limit:
+        raise _query_reject(
+            "QUERY_TEXTS_TOO_MANY",
+            f"{len(body.texts)} texts exceed the limit {limit}",
+        )
+
+    vectors = query_service.get_query_embedder().embed_queries_dense(body.texts)
+    # Model output must agree with the declared capability (contract §6):
+    # drift surfaces loudly here instead of poisoning the vector space the
+    # OS index lives in (silent zeros would break cosine search subtly).
+    if len(vectors) != len(body.texts) or any(
+        len(v) != DENSE_EMBEDDING_DIM for v in vectors
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "EMBEDDING_SHAPE_MISMATCH",
+                "message": (
+                    "embedding model returned a shape that disagrees with "
+                    f"the declared capability (expected {DENSE_EMBEDDING_DIM} dims)"
+                ),
+            },
+        )
+    return EmbedResponse(
+        contract_version=CONTRACT_VERSION,
+        model=DENSE_EMBEDDING_MODEL,
+        dimensions=DENSE_EMBEDDING_DIM,
+        embeddings=vectors,
+    )
+
+
+@app.post("/v1/rerank")
+def rerank_texts(body: RerankRequest) -> RerankResponse:
+    """Cross-encoder rerank endpoint (#132): sigmoid scores for
+    (query, candidate) pairs, sorted descending, truncated to top_n.
+
+    Same warm-singleton discipline as /v1/embed (query_service). Plain def:
+    the model call is compute-bound and runs in the threadpool.
+    """
+    _contract_guard(body.contract_version)
+    s = settings.get()
+    if not body.query.strip():
+        raise _query_reject("RERANK_QUERY_EMPTY", "query must not be blank")
+    if not body.texts:
+        raise _query_reject("RERANK_TEXTS_EMPTY", "texts must not be empty")
+    if any(not t.strip() for t in body.texts):
+        raise _query_reject("RERANK_TEXT_BLANK", "texts must not contain blank strings")
+    if len(body.texts) > s.rerank_max_texts:
+        raise _query_reject(
+            "RERANK_TEXTS_TOO_MANY",
+            f"{len(body.texts)} texts exceed the server cap {s.rerank_max_texts}",
+        )
+    if body.top_n < 1:
+        raise _query_reject("RERANK_TOP_N_INVALID", "top_n must be >= 1")
+
+    # Archive semantics: top_n slices the ranking (results[:top_n]) — a
+    # top_n above len(texts) returns everything instead of 422ing the
+    # default top_n=10 for small candidate sets.
+    ranked = query_service.get_query_reranker().rerank(
+        body.query, body.texts, top_n=min(body.top_n, len(body.texts))
+    )
+    # Self-check mirrors /v1/embed: the model layer must return one score per
+    # input text in the wrapper's contract shape, or the endpoint fails loudly.
+    if (
+        len(ranked) != min(body.top_n, len(body.texts))
+        or len({e["index"] for e in ranked}) != len(ranked)
+        or any(e["index"] < 0 or e["index"] >= len(body.texts) for e in ranked)
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "RERANK_SHAPE_MISMATCH",
+                "message": "reranker returned an invalid ranking shape",
+            },
+        )
+    return RerankResponse(
+        contract_version=CONTRACT_VERSION,
+        model=RERANKER_MODEL,
+        scores=ranked,
+    )
