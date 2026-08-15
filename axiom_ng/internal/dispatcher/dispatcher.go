@@ -240,6 +240,7 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 	}
 	fields := []any{ref.JobID, claimed.AttachmentID, claimed.DocumentID, claimed.Attempt, tokenPrefix}
 
+	ph := &jobPhases{jobID: ref.JobID, claim: time.Now()}
 	req, err := buildRequest(claimed.InputSnapshot, SourceURLOptions{
 		BaseURL:    d.cfg.ProcessorSourceBaseURL,
 		Secret:     d.cfg.ProcessorSourceSecret,
@@ -262,6 +263,7 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 		d.handleSubmitFailure(ctx, claimed, err)
 		return
 	}
+	ph.submit = time.Now()
 
 	// Fenced claimed -> processing after acceptance.
 	if err := d.rep.MarkProcessing(ctx, ref); err != nil {
@@ -274,7 +276,7 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 	}
 
 	// Poll the processor while renewing the lease.
-	d.pollAndFinish(ctx, claimed)
+	d.pollAndFinish(ctx, claimed, ph)
 }
 
 // trimCapabilityReason returns a non-empty reason if the negotiated capability

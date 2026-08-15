@@ -109,7 +109,7 @@ func TestRenewalContinuesDuringSlowStatusPoll(t *testing.T) {
 	// sleeping) and verify the lease was renewed DURING that poll.
 	runCtx, cancel := context.WithCancel(context.Background())
 	go func() {
-		d.pollAndFinish(runCtx, claimed)
+		d.pollAndFinish(runCtx, claimed, nil)
 	}()
 
 	// Wait past the poll's first renewal window AND past the original 2s

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand"
 	"time"
 
@@ -78,10 +79,35 @@ func (d *Dispatcher) markTerminal(ctx context.Context, ref repo.LeaseRef, code, 
 // forever against a dead/unsupported processor).
 const maxConsecutiveStatusErrors = 5
 
+// jobPhases records per-phase timestamps for the one-line phase log (L8 fix:
+// the next anomaly should be readable from the dispatcher log alone).
+type jobPhases struct {
+	jobID    string
+	claim    time.Time
+	submit   time.Time
+	complete time.Time // processor reported completed
+	result   time.Time // result fetched
+	staged   time.Time // artifacts verified + committed
+	arts     int
+	persist  time.Time
+	ack      time.Time
+}
+
+func (ph *jobPhases) line() string {
+	f := func(t time.Time) string {
+		if t.IsZero() {
+			return "-"
+		}
+		return t.Format("15:04:05")
+	}
+	return fmt.Sprintf("job=%s claim=%s submit=%s completed=%s resultFetched=%s artifacts=%d staged=%s persisted=%s acked=%s",
+		ph.jobID, f(ph.claim), f(ph.submit), f(ph.complete), f(ph.result), ph.arts, f(ph.staged), f(ph.persist), f(ph.ack))
+}
+
 // pollAndFinish drives a job from 'processing' to a terminal state: polls the
 // processor status while renewing the lease, handles cancellation, then on
 // completion fetches + minimally validates the result and marks completed.
-func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob) {
+func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob, ph *jobPhases) {
 	ref := claimed.LeaseRef
 	fields := []any{ref.JobID, claimed.AttachmentID, claimed.DocumentID, claimed.Attempt}
 	consecutive := 0
@@ -159,7 +185,10 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 		consecutive = 0
 		switch st.Status {
 		case "completed":
-			d.onCompleted(ctx, claimed)
+			if ph != nil {
+				ph.complete = time.Now()
+			}
+			d.onCompleted(ctx, claimed, ph)
 			return
 		case "failed":
 			if st.Error != nil {
@@ -206,9 +235,12 @@ func (d *Dispatcher) onCancelled(ctx context.Context, ref repo.LeaseRef) {
 // 'processing'), returns ErrLostLease, and onCompleted would then skip the ACK
 // without setting ack_pending — breaking F3 in production. ACK directly after a
 // successful PersistResult.
-func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) {
+func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob, ph *jobPhases) {
 	ref := claimed.LeaseRef
 	resultBytes, err := d.client.JobResult(ctx, ref.JobID)
+	if ph != nil {
+		ph.result = time.Now()
+	}
 	if err != nil {
 		// We cannot complete without the result.
 		d.markTerminal(ctx, ref, "RESULT_FETCH_FAILED", err.Error())
@@ -229,6 +261,10 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) 
 	// atomic rename under ArtifactRoot. A digest/size mismatch makes the job
 	// terminal (validation failure) before any snapshot row is inserted.
 	arts, aerr := d.stageArtifacts(ctx, ref.JobID, resultBytes)
+	if ph != nil {
+		ph.staged = time.Now()
+		ph.arts = len(arts)
+	}
 	if aerr != nil {
 		d.markTerminal(ctx, ref, "RESULT_INVALID", aerr.Error())
 		return
@@ -244,6 +280,9 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) 
 		CapDim:    d.capDim(),
 		Artifacts: arts,
 	})
+	if ph != nil {
+		ph.persist = time.Now()
+	}
 	if err != nil {
 		d.markTerminal(ctx, ref, "RESULT_PERSIST_FAILED", err.Error())
 		return
@@ -257,6 +296,10 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob) 
 		if merr := d.rep.MarkAckFailed(ctx, ref.JobID); merr != nil {
 			d.logger.Printf("%v: mark ack-pending: %v", []any{ref.JobID}, merr)
 		}
+	}
+	if ph != nil {
+		ph.ack = time.Now()
+		d.logger.Printf("phases: %s", ph.line())
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"golang.org/x/sync/errgroup"
 )
 
 // capDim returns the int dense-embedding dimension the processor declared in
@@ -85,49 +86,77 @@ func (d *Dispatcher) stageArtifacts(ctx context.Context, jobID string, resultByt
 		return nil, fmt.Errorf("create artifact root: %w", err)
 	}
 
-	out := make([]repo.ArtifactRecord, 0, len(res.Artifacts))
-	for _, a := range res.Artifacts {
+	out := make([]repo.ArtifactRecord, len(res.Artifacts))
+	// Bounded-parallel transport (L8 fix): extract_images produces 100–260+
+	// artifacts per book; serial single fetches burned minutes between jobs.
+	// ONLY the transport is parallelized — every fetch still verifies size,
+	// digest and media facts BEFORE its staging write, the atomic
+	// staging→rename discipline is per file, and any failure aborts the whole
+	// job (RESULT_INVALID) exactly as before: no partial commit ever reaches
+	// the snapshot. Results land at their original index so the declared
+	// order (and thus artifact records + verifyCounts) stays deterministic.
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(6)
+	for i, a := range res.Artifacts {
 		// W2: the ref is processor-controlled and hostile. Sanitize before using
 		// it in a path (§18): reject path separators, traversal, empty.
 		if !safeArtifactRef(a.Ref) {
 			return nil, fmt.Errorf("artifact ref %q is not a safe filename (contains '/', '..', or is empty)", a.Ref)
 		}
-		bytes, err := d.client.Artifact(ctx, jobID, a.Ref)
-		if err != nil {
-			return nil, fmt.Errorf("fetch artifact %q: %w", a.Ref, err)
-		}
-		if int64(len(bytes)) != a.SizeBytes {
-			return nil, fmt.Errorf("artifact %q size mismatch: got %d, result declared %d", a.Ref, len(bytes), a.SizeBytes)
-		}
-		sum := sha256.Sum256(bytes)
-		got := hex.EncodeToString(sum[:])
-		// Normalize: the processor may declare the sha256 with or without the
-		// "sha256:" prefix (contract §10 example shows bare hex). Compare on the
-		// bare hex to avoid a false mismatch on identical hashes.
-		declared := a.SHA256
-		declared = strings.TrimPrefix(declared, "sha256:")
-		if got != declared {
-			return nil, fmt.Errorf("artifact %q digest mismatch: got sha256:%s, result declared %s", a.Ref, got, a.SHA256)
-		}
-		finalPath := filepath.Join(d.cfg.ArtifactRoot, jobID, a.Ref)
-		if err := os.MkdirAll(filepath.Dir(finalPath), 0o755); err != nil {
-			return nil, fmt.Errorf("create artifact dir: %w", err)
-		}
-		staging := finalPath + ".staging"
-		if err := os.WriteFile(staging, bytes, 0o644); err != nil {
-			return nil, fmt.Errorf("stage artifact %q: %w", a.Ref, err)
-		}
-		if err := os.Rename(staging, finalPath); err != nil {
-			_ = os.Remove(staging)
-			return nil, fmt.Errorf("commit artifact %q: %w", a.Ref, err)
-		}
-		out = append(out, repo.ArtifactRecord{
-			Ref: a.Ref, Kind: a.Kind, MediaType: a.MediaType,
-			SHA256: a.SHA256, SizeBytes: a.SizeBytes, Retention: a.Retention,
-			StoragePath: finalPath,
+		i, a := i, a
+		g.Go(func() error {
+			rec, err := d.stageOneArtifact(gctx, jobID, a)
+			if err != nil {
+				return fmt.Errorf("fetch artifact %q: %w", a.Ref, err)
+			}
+			out[i] = rec
+			return nil
 		})
 	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// stageOneArtifact fetches, verifies and commits ONE artifact: fetch →
+// size+digest check → staging write → atomic rename. Unchanged semantics
+// from the former serial loop body; safe to run concurrently across refs.
+func (d *Dispatcher) stageOneArtifact(ctx context.Context, jobID string, a processor.Artifact) (repo.ArtifactRecord, error) {
+	bytes, err := d.client.Artifact(ctx, jobID, a.Ref)
+	if err != nil {
+		return repo.ArtifactRecord{}, err
+	}
+	if int64(len(bytes)) != a.SizeBytes {
+		return repo.ArtifactRecord{}, fmt.Errorf("artifact %q size mismatch: got %d, result declared %d", a.Ref, len(bytes), a.SizeBytes)
+	}
+	sum := sha256.Sum256(bytes)
+	got := hex.EncodeToString(sum[:])
+	// Normalize: the processor may declare the sha256 with or without the
+	// "sha256:" prefix (contract §10 example shows bare hex). Compare on the
+	// bare hex to avoid a false mismatch on identical hashes.
+	declared := a.SHA256
+	declared = strings.TrimPrefix(declared, "sha256:")
+	if got != declared {
+		return repo.ArtifactRecord{}, fmt.Errorf("artifact %q digest mismatch: got sha256:%s, result declared %s", a.Ref, got, a.SHA256)
+	}
+	finalPath := filepath.Join(d.cfg.ArtifactRoot, jobID, a.Ref)
+	if err := os.MkdirAll(filepath.Dir(finalPath), 0o755); err != nil {
+		return repo.ArtifactRecord{}, fmt.Errorf("create artifact dir: %w", err)
+	}
+	staging := finalPath + ".staging"
+	if err := os.WriteFile(staging, bytes, 0o644); err != nil {
+		return repo.ArtifactRecord{}, fmt.Errorf("stage artifact %q: %w", a.Ref, err)
+	}
+	if err := os.Rename(staging, finalPath); err != nil {
+		_ = os.Remove(staging)
+		return repo.ArtifactRecord{}, fmt.Errorf("commit artifact %q: %w", a.Ref, err)
+	}
+	return repo.ArtifactRecord{
+		Ref: a.Ref, Kind: a.Kind, MediaType: a.MediaType,
+		SHA256: a.SHA256, SizeBytes: a.SizeBytes, Retention: a.Retention,
+		StoragePath: finalPath,
+	}, nil
 }
 
 // safeArtifactRef returns true iff ref is a bare filename safe for joining

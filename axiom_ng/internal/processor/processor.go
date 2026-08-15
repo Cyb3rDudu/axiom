@@ -122,6 +122,8 @@ type Client struct {
 	baseURL string
 	hc      *http.Client
 	maxBody int64
+	// resultBudget bounds JobResult only (opts.RequestTimeout).
+	resultBudget time.Duration
 }
 
 // Options configure a Client.
@@ -130,7 +132,11 @@ type Options struct {
 	BaseURL string
 	// ConnectTimeout bounds connection establishment.
 	ConnectTimeout time.Duration
-	// RequestTimeout bounds each single HTTP request/response.
+	// RequestTimeout bounds the RESULT fetch (large JSON payloads under
+	// load); every other call type has a fixed per-type budget (see
+	// budget* constants) sized for small payloads. Keeping the result
+	// budget separate prevents a shared 300s window from starving polls,
+	// submits and artifact fetches (L8 finding).
 	RequestTimeout time.Duration
 	// MaxBody bounds the largest accepted response body in bytes.
 	MaxBody int64
@@ -139,8 +145,18 @@ type Options struct {
 const (
 	defaultMaxBody      = 512 << 20 // 512 MiB, enough for a full result payload
 	defaultConnect      = 5 * time.Second
-	defaultRequest      = 30 * time.Second
+	defaultRequest      = 300 * time.Second // result-fetch budget default
 	defaultLoopbackBase = "http://127.0.0.1:8012"
+
+	// Per-call-type budgets (L8 fix): one shared http.Client.Timeout let a
+	// slow/loaded processor consume the full window on EVERY call type.
+	// Poll MUST stay well under the dispatcher's RenewalInterval (default
+	// ~LeaseDuration/3 ≈ 100s) so a hung poll cannot delay lost-lease
+	// reaction (the renewLoop itself is decoupled — this bounds damage).
+	budgetStatusPoll = 10 * time.Second // JobStatus: tiny payload
+	budgetSmall      = 15 * time.Second // Health/Capabilities/Cancel/Ack
+	budgetSubmit     = 30 * time.Second // POST /v1/process (small request)
+	budgetArtifact   = 30 * time.Second // single artifact (~100KB images)
 )
 
 // New returns a processor Client. BaseURL defaults to the loopback processor.
@@ -169,9 +185,10 @@ func New(opts Options) (*Client, error) {
 		IdleConnTimeout:     60 * time.Second,
 	}
 	return &Client{
-		baseURL: strings.TrimRight(base, "/"),
-		hc:      &http.Client{Transport: tr, Timeout: rq},
-		maxBody: maxBody,
+		baseURL:      strings.TrimRight(base, "/"),
+		hc:           &http.Client{Transport: tr}, // no global Timeout: per-call budgets
+		maxBody:      maxBody,
+		resultBudget: rq,
 	}, nil
 }
 
@@ -190,7 +207,9 @@ func (e *StatusError) Error() string {
 // do performs a request, decoding into out on 2xx. On non-2xx it returns a
 // *StatusError with a bounded body excerpt. Bodies are size-bounded and always
 // closed. This client never auto-retries; callers decide retry safety per route.
-func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+func (c *Client) do(ctx context.Context, budget time.Duration, method, path string, in, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -264,13 +283,13 @@ type Capabilities struct {
 // Health returns the processor health endpoint result (empty on 2xx).
 func (c *Client) Health(ctx context.Context) error {
 	var out map[string]any
-	return c.do(ctx, http.MethodGet, "/v1/health", nil, &out)
+	return c.do(ctx, budgetSmall, http.MethodGet, "/v1/health", nil, &out)
 }
 
 // Capabilities retrieves the processor's declared capabilities.
 func (c *Client) Capabilities(ctx context.Context) (*Capabilities, error) {
 	var caps Capabilities
-	if err := c.do(ctx, http.MethodGet, "/v1/capabilities", nil, &caps); err != nil {
+	if err := c.do(ctx, budgetSmall, http.MethodGet, "/v1/capabilities", nil, &caps); err != nil {
 		return nil, err
 	}
 	return &caps, nil
@@ -281,7 +300,7 @@ func (c *Client) Capabilities(ctx context.Context) (*Capabilities, error) {
 // version, echo the submitted job_id, a known status, and the deduplicated flag.
 func (c *Client) SubmitProcess(ctx context.Context, req *ProcessRequest) (*ProcessAccepted, error) {
 	var acc ProcessAccepted
-	if err := c.do(ctx, http.MethodPost, "/v1/process", req, &acc); err != nil {
+	if err := c.do(ctx, budgetSubmit, http.MethodPost, "/v1/process", req, &acc); err != nil {
 		return nil, err
 	}
 	if !contractVersionOk(acc.ContractVersion) {
@@ -314,7 +333,7 @@ func contractVersionOk(v string) bool {
 // JobStatus fetches the current advisory status of a processor job.
 func (c *Client) JobStatus(ctx context.Context, jobID string) (*JobStatus, error) {
 	var st JobStatus
-	if err := c.do(ctx, http.MethodGet, "/v1/jobs/"+jobID, nil, &st); err != nil {
+	if err := c.do(ctx, budgetStatusPoll, http.MethodGet, "/v1/jobs/"+jobID, nil, &st); err != nil {
 		return nil, err
 	}
 	if !contractVersionOk(st.ContractVersion) {
@@ -333,7 +352,7 @@ func (c *Client) JobStatus(ctx context.Context, jobID string) (*JobStatus, error
 // object for a full result, or a validator). Returns the raw body bounded.
 func (c *Client) JobResult(ctx context.Context, jobID string) ([]byte, error) {
 	var buf bytes.Buffer
-	if err := c.doRaw(ctx, http.MethodGet, "/v1/jobs/"+jobID+"/result", &buf); err != nil {
+	if err := c.doRaw(ctx, c.resultBudget, http.MethodGet, "/v1/jobs/"+jobID+"/result", &buf); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
@@ -342,7 +361,7 @@ func (c *Client) JobResult(ctx context.Context, jobID string) ([]byte, error) {
 // Artifact fetches one artifact's bytes.
 func (c *Client) Artifact(ctx context.Context, jobID, ref string) ([]byte, error) {
 	var buf bytes.Buffer
-	if err := c.doRaw(ctx, http.MethodGet, "/v1/jobs/"+jobID+"/artifacts/"+ref, &buf); err != nil {
+	if err := c.doRaw(ctx, budgetArtifact, http.MethodGet, "/v1/jobs/"+jobID+"/artifacts/"+ref, &buf); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
@@ -351,18 +370,20 @@ func (c *Client) Artifact(ctx context.Context, jobID, ref string) ([]byte, error
 // Cancel requests cooperative cancellation of a running job (idempotent).
 func (c *Client) Cancel(ctx context.Context, jobID string) error {
 	var out map[string]any
-	return c.do(ctx, http.MethodPost, "/v1/jobs/"+jobID+"/cancel", nil, &out)
+	return c.do(ctx, budgetSmall, http.MethodPost, "/v1/jobs/"+jobID+"/cancel", nil, &out)
 }
 
 // Ack notifies the processor that its result was durably persisted (idempotent).
 func (c *Client) Ack(ctx context.Context, jobID string, ack Ack) error {
 	var out map[string]any
-	return c.do(ctx, http.MethodPost, "/v1/jobs/"+jobID+"/ack", ack, &out)
+	return c.do(ctx, budgetSmall, http.MethodPost, "/v1/jobs/"+jobID+"/ack", ack, &out)
 }
 
 // doRaw performs a request and writes the response body (bounded) into buf for
 // arbitrary byte payloads (result, artifacts).
-func (c *Client) doRaw(ctx context.Context, method, path string, buf *bytes.Buffer) error {
+func (c *Client) doRaw(ctx context.Context, budget time.Duration, method, path string, buf *bytes.Buffer) error {
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
 	if err != nil {
 		return err
