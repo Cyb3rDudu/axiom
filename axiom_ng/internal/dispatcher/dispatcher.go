@@ -46,7 +46,7 @@ type Config struct {
 	AckRetryInterval time.Duration
 	// Profile is the processing profile to freeze at claim time.
 	Profile json.RawMessage
-	// ArtifactRoot is the durable derived-artifact root (AXIOMNG_ARTIFACT_ROOT).
+	// ArtifactRoot is the durable derived-artifact root (AXIOM_ARTIFACT_ROOT).
 	// Verified processor artifacts are staged here then atomically renamed on the
 	// same filesystem (work-order §7). Empty disables artifact commit (jobs whose
 	// result declares durable artifacts then fail validation).
@@ -66,7 +66,7 @@ type Config struct {
 	// signed source_url to every process request — remote source delivery.
 	ProcessorSourceBaseURL string
 	// ProcessorSourceSecret is the shared HMAC secret for source URLs; must
-	// match the server's AXIOMNG_PROCESSOR_SOURCE_SECRET.
+	// match the server's AXIOM_PROCESSOR_SOURCE_SECRET.
 	ProcessorSourceSecret string
 }
 
@@ -141,7 +141,7 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 		go outboxWorker(ctx, d, osc)
 		d.logger.Printf("outbox drainer enabled: index=%s url=%s", outboxIndexName, d.cfg.OpenSearchURL)
 	} else {
-		d.logger.Printf("outbox drainer disabled (AXIOMNG_OPENSEARCH_URL empty); outbox rows stay pending")
+		d.logger.Printf("outbox drainer disabled (AXIOM_OPENSEARCH_URL empty); outbox rows stay pending")
 	}
 	caps, err := d.client.Capabilities(ctx)
 	if err != nil {

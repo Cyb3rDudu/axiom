@@ -9,13 +9,13 @@ import (
 // testDSN returns the integration-test Postgres DSN, or "" if not configured.
 // Tests skip when no DSN is available so `go test ./...` works without a DB.
 func testDSN() string {
-	return os.Getenv("AXIOMNG_TEST_DATABASE_URL")
+	return os.Getenv("AXIOM_TEST_DATABASE_URL")
 }
 
 func TestMigrateCreatesIngestJobs(t *testing.T) {
 	dsn := testDSN()
 	if dsn == "" {
-		t.Skip("AXIOMNG_TEST_DATABASE_URL not set; skipping integration test")
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping integration test")
 	}
 	ctx := context.Background()
 	d, err := Open(ctx, dsn)
@@ -57,7 +57,7 @@ func TestMigrateCreatesIngestJobs(t *testing.T) {
 func TestMigrateIdempotent(t *testing.T) {
 	dsn := testDSN()
 	if dsn == "" {
-		t.Skip("AXIOMNG_TEST_DATABASE_URL not set; skipping integration test")
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping integration test")
 	}
 	ctx := context.Background()
 	d, err := Open(ctx, dsn)

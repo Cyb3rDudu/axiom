@@ -1,5 +1,10 @@
 # Mass-Chunking Benchmark — 2026-08-14
 
+> **Env-Rename-Hinweis (#119, 2026-08-15):** Zur Laufzeit dieses Benchmarks
+> hießen die Dispatcher-Variablen noch `AXIOMNG_*` — seit dem Rename sind es
+> `AXIOM_*` (z. B. `AXIOMNG_PROCESSOR_URL` → `AXIOM_PROCESSOR_URL`). Die
+> historischen Befehle in diesem Dokument sind bewusst nicht umgeschrieben.
+
 Produktions-DB-Aufbau: komplette Zotero-Lib (16 Dokumente) durch den
 Carrier-Runner (RTX 3090, CUDA-Container), Dispatcher auf dem Mac,
 Concurrency=1, Lease 5m (Defaults unverändert).

@@ -38,7 +38,7 @@ func main() {
 
 	var database *db.DB
 	if cfg.DatabaseURL == "" {
-		logger.Printf("WARNING: AXIOMNG_DATABASE_URL not set; running without Postgres")
+		logger.Printf("WARNING: AXIOM_DATABASE_URL not set; running without Postgres")
 	} else {
 		var err error
 		database, err = db.Open(ctx, cfg.DatabaseURL)

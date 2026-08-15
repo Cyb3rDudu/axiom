@@ -4,7 +4,7 @@
 · **Setup:** 3 Runner-Container (rootless Podman, `--network=host`) auf
 Carrier-GPUs: GPU0+GPU1 = RTX 3090 (24 GB), GPU2 = RTX A3000 Laptop (12 GB)
 · **Dispatcher:** 3 unabhängige Instanzen (disp-gpu0/1/2), je
-`AXIOMNG_PROCESSOR_RUNNER_NAME=carrier-gpuN`, Concurrency 1, gleiche DB
+`AXIOM_PROCESSOR_RUNNER_NAME=carrier-gpuN`, Concurrency 1, gleiche DB
 (Claim-Exklusivität über SKIP LOCKED + Claim-Fencing)
 · **Datenbasis:** kompletter Neu-Lauf der 16 Bücher nach Clean Slate;
 Referenz = TC1-Backup (`backups/axiom_db_tc1_backup_20260815.sql`, 134 MB,

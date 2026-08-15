@@ -71,9 +71,9 @@ func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 // a job only for it (never for notes/annotations).
 func TestRunCanonicalLosslessAndNoAnnotateEnqueue(t *testing.T) {
 	ctx := context.Background()
-	dsn := os.Getenv("AXIOMNG_TEST_DATABASE_URL")
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("AXIOMNG_TEST_DATABASE_URL not set; skipping integration test")
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping integration test")
 	}
 	d, err := db.Open(ctx, dsn)
 	if err != nil {
@@ -167,9 +167,9 @@ func TestRunCanonicalLosslessAndNoAnnotateEnqueue(t *testing.T) {
 // overwrite the stored raw_data or projection of a newer one.
 func TestCanonicalVersionGuard(t *testing.T) {
 	ctx := context.Background()
-	dsn := os.Getenv("AXIOMNG_TEST_DATABASE_URL")
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("AXIOMNG_TEST_DATABASE_URL not set; skipping integration test")
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping integration test")
 	}
 	d, err := db.Open(ctx, dsn)
 	if err != nil {
@@ -233,9 +233,9 @@ func TestCanonicalVersionGuard(t *testing.T) {
 // snapshot (all items present).
 func TestCanonicalBootstrapOldCursor(t *testing.T) {
 	ctx := context.Background()
-	dsn := os.Getenv("AXIOMNG_TEST_DATABASE_URL")
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("AXIOMNG_TEST_DATABASE_URL not set; skipping integration test")
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping integration test")
 	}
 	d, err := db.Open(ctx, dsn)
 	if err != nil {

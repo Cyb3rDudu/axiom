@@ -8,10 +8,10 @@ import (
 )
 
 func TestLoadDefaults(t *testing.T) {
-	os.Unsetenv("AXIOMNG_OPENSEARCH_URL") // pin the unset branch, not the developer shell
-	t.Setenv("AXIOMNG_ZOTERO_BASE", "")
-	t.Setenv("AXIOMNG_ZOTERO_LIBRARY", "")
-	t.Setenv("AXIOMNG_API_PORT", "")
+	os.Unsetenv("AXIOM_OPENSEARCH_URL") // pin the unset branch, not the developer shell
+	t.Setenv("AXIOM_ZOTERO_BASE", "")
+	t.Setenv("AXIOM_ZOTERO_LIBRARY", "")
+	t.Setenv("AXIOM_API_PORT", "")
 
 	c := Load()
 	if c.ZoteroBaseURL != defaultZoteroBase {
@@ -29,8 +29,8 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadOverrides(t *testing.T) {
-	t.Setenv("AXIOMNG_ZOTERO_BASE", "http://remote:23119/api")
-	t.Setenv("AXIOMNG_API_PORT", "9999")
+	t.Setenv("AXIOM_ZOTERO_BASE", "http://remote:23119/api")
+	t.Setenv("AXIOM_API_PORT", "9999")
 
 	c := Load()
 	if c.ZoteroBaseURL != "http://remote:23119/api" {
@@ -44,7 +44,7 @@ func TestLoadOverrides(t *testing.T) {
 func TestOpenSearchURLSetEmptyDisables(t *testing.T) {
 	// Explicitly SET to empty string = intentional disable (the L5 outbox
 	// drainer never starts; rows stay pending, no error).
-	t.Setenv("AXIOMNG_OPENSEARCH_URL", "")
+	t.Setenv("AXIOM_OPENSEARCH_URL", "")
 	if c := Load(); c.OpenSearchURL != "" {
 		t.Errorf("OpenSearchURL = %q, want empty (explicitly disabled)", c.OpenSearchURL)
 	}
@@ -52,10 +52,10 @@ func TestOpenSearchURLSetEmptyDisables(t *testing.T) {
 
 func TestOpenSearchURLUnsetGoesDefault(t *testing.T) {
 	// UNSET (as opposed to set-empty) falls back to the local mothership.
-	old, had := os.LookupEnv("AXIOMNG_OPENSEARCH_URL")
-	os.Unsetenv("AXIOMNG_OPENSEARCH_URL")
+	old, had := os.LookupEnv("AXIOM_OPENSEARCH_URL")
+	os.Unsetenv("AXIOM_OPENSEARCH_URL")
 	if had {
-		defer os.Setenv("AXIOMNG_OPENSEARCH_URL", old)
+		defer os.Setenv("AXIOM_OPENSEARCH_URL", old)
 	}
 	if c := Load(); c.OpenSearchURL != "http://127.0.0.1:9200" {
 		t.Errorf("OpenSearchURL = %q, want default http://127.0.0.1:9200", c.OpenSearchURL)
@@ -65,9 +65,9 @@ func TestOpenSearchURLUnsetGoesDefault(t *testing.T) {
 func TestProcessorSourceDefaults(t *testing.T) {
 	// Source delivery off by default: empty secret disables the endpoint and
 	// the dispatcher signs nothing; the base falls back to the local API port.
-	os.Unsetenv("AXIOMNG_PROCESSOR_SOURCE_BASE_URL")
-	os.Unsetenv("AXIOMNG_PROCESSOR_SOURCE_SECRET")
-	os.Unsetenv("AXIOMNG_API_PORT")
+	os.Unsetenv("AXIOM_PROCESSOR_SOURCE_BASE_URL")
+	os.Unsetenv("AXIOM_PROCESSOR_SOURCE_SECRET")
+	os.Unsetenv("AXIOM_API_PORT")
 	if c := Load(); c.ProcessorSourceSecret != "" {
 		t.Errorf("ProcessorSourceSecret = %q, want empty default", c.ProcessorSourceSecret)
 	} else if c.ProcessorSourceBaseURL != "http://127.0.0.1:8011" {
@@ -76,8 +76,8 @@ func TestProcessorSourceDefaults(t *testing.T) {
 }
 
 func TestProcessorSourceOverrides(t *testing.T) {
-	t.Setenv("AXIOMNG_PROCESSOR_SOURCE_BASE_URL", "http://100.79.104.120:8011")
-	t.Setenv("AXIOMNG_PROCESSOR_SOURCE_SECRET", "shared-secret")
+	t.Setenv("AXIOM_PROCESSOR_SOURCE_BASE_URL", "http://100.79.104.120:8011")
+	t.Setenv("AXIOM_PROCESSOR_SOURCE_SECRET", "shared-secret")
 	c := Load()
 	if c.ProcessorSourceBaseURL != "http://100.79.104.120:8011" {
 		t.Errorf("ProcessorSourceBaseURL = %q, want tailnet override", c.ProcessorSourceBaseURL)
@@ -88,12 +88,12 @@ func TestProcessorSourceOverrides(t *testing.T) {
 }
 
 func TestProcessorRequestTimeoutOverride(t *testing.T) {
-	t.Setenv("AXIOMNG_PROCESSOR_TIMEOUT", "300s")
+	t.Setenv("AXIOM_PROCESSOR_TIMEOUT", "300s")
 	if c := Load(); c.ProcessorRequestTimeout != 5*time.Minute {
 		t.Errorf("ProcessorRequestTimeout = %v, want 5m", c.ProcessorRequestTimeout)
 	}
 	// Default matches the result-budget table (300s) when unset.
-	os.Unsetenv("AXIOMNG_PROCESSOR_TIMEOUT")
+	os.Unsetenv("AXIOM_PROCESSOR_TIMEOUT")
 	if c := Load(); c.ProcessorRequestTimeout != 300*time.Second {
 		t.Errorf("ProcessorRequestTimeout = %v, want default 300s", c.ProcessorRequestTimeout)
 	}
@@ -103,7 +103,7 @@ func TestDefaultProfileEnablesAllFeatures(t *testing.T) {
 	// Benchmark finding 2026-08-14: the bare profile name does NOT enable
 	// features (runner reads explicit booleans, defaults false) — the
 	// default must materialize every full-rag-v1 feature as true.
-	t.Setenv("AXIOMNG_DISPATCHER_PROFILE", "")
+	t.Setenv("AXIOM_DISPATCHER_PROFILE", "")
 	c := Load()
 	var p struct {
 		Profile                 string `json:"profile"`
@@ -136,20 +136,20 @@ func TestDefaultProfileEnablesAllFeatures(t *testing.T) {
 }
 
 func TestProcessorRunnerName(t *testing.T) {
-	t.Setenv("AXIOMNG_PROCESSOR_RUNNER_NAME", "carrier-gpu0")
+	t.Setenv("AXIOM_PROCESSOR_RUNNER_NAME", "carrier-gpu0")
 	if got := Load().ProcessorRunnerName; got != "carrier-gpu0" {
 		t.Fatalf("explicit runner name = %q, want carrier-gpu0", got)
 	}
 	// Unset derives from the processor URL host (G4: fallback lives in
 	// Load, testable) so a bare single-runner deployment still gets a
 	// usable identity; an explicit env always wins.
-	t.Setenv("AXIOMNG_PROCESSOR_RUNNER_NAME", "")
-	t.Setenv("AXIOMNG_PROCESSOR_URL", "http://192.168.1.2:19542")
+	t.Setenv("AXIOM_PROCESSOR_RUNNER_NAME", "")
+	t.Setenv("AXIOM_PROCESSOR_URL", "http://192.168.1.2:19542")
 	if got := Load().ProcessorRunnerName; got != "192.168.1.2:19542" {
 		t.Fatalf("URL-host fallback = %q, want 192.168.1.2:19542", got)
 	}
 	// Unparseable URL keeps the name empty (no invented identity).
-	t.Setenv("AXIOMNG_PROCESSOR_URL", "://bad")
+	t.Setenv("AXIOM_PROCESSOR_URL", "://bad")
 	if got := Load().ProcessorRunnerName; got != "" {
 		t.Fatalf("bad URL fallback = %q, want empty", got)
 	}

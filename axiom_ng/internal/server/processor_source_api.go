@@ -2,7 +2,7 @@ package server
 
 // /api/processor/source/{job_id} — HMAC-signed source download for remote
 // processors (contract §3 remote transport). The dispatcher signs
-// jobID|leaseUnix with AXIOMNG_PROCESSOR_SOURCE_SECRET; this endpoint
+// jobID|leaseUnix with AXIOM_PROCESSOR_SOURCE_SECRET; this endpoint
 // verifies signature, expiry, job status (claimed/processing) and lease
 // freshness before streaming the attachment bytes in place (read-only;
 // Zotero stays the source of truth). Every failure is a 404 — the endpoint

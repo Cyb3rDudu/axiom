@@ -42,7 +42,7 @@ type ArtifactRecord struct {
 	SHA256    string
 	SizeBytes int64
 	Retention string
-	// StoragePath is the final durable path under AXIOMNG_ARTIFACT_ROOT.
+	// StoragePath is the final durable path under AXIOM_ARTIFACT_ROOT.
 	StoragePath string
 }
 

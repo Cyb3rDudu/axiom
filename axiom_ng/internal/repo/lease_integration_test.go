@@ -1,5 +1,5 @@
 // Lease protocol integration tests (Gate 1, sections 14.1 + user corrections).
-// Run only against a DEDICATED test database: AXIOMNG_TEST_DATABASE_URL must
+// Run only against a DEDICATED test database: AXIOM_TEST_DATABASE_URL must
 // point at a database whose name ends in "_test", and every test asserts that
 // before any TRUNCATE, so the application database can never be truncated.
 // Tests skip (not fail) when no DSN is configured.
@@ -20,7 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func leaseTestDSN() string { return os.Getenv("AXIOMNG_TEST_DATABASE_URL") }
+func leaseTestDSN() string { return os.Getenv("AXIOM_TEST_DATABASE_URL") }
 
 // requireTestDB returns the database name from the DSN and fails unless it
 // clearly denotes a dedicated test database (suffix "_test"). This is the hard
@@ -73,7 +73,7 @@ func ensureRepoDatabase(t *testing.T) string {
 	t.Helper()
 	base := leaseTestDSN()
 	if base == "" {
-		t.Skip("AXIOMNG_TEST_DATABASE_URL not set; skipping lease integration test")
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping lease integration test")
 	}
 	requireTestDB(t, base)
 

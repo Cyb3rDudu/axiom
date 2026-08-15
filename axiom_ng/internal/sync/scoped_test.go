@@ -27,9 +27,9 @@ func makePdf(t *testing.T, text string) string {
 
 // openTestDB opens and migrates the integration-test database.
 func openTestDB(t *testing.T, ctx context.Context) *db.DB {
-	dsn := os.Getenv("AXIOMNG_TEST_DATABASE_URL")
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("AXIOMNG_TEST_DATABASE_URL not set; skipping integration test")
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping integration test")
 	}
 	d, err := db.Open(ctx, dsn)
 	if err != nil {

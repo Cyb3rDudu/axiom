@@ -179,7 +179,7 @@ vs mapped port vs tunnel) before blaming compute.
 On the axiom-ng host (Mac):
 
 ```bash
-export AXIOMNG_DISPATCHER_ENABLED=true
+export AXIOM_DISPATCHER_ENABLED=true
 export AXIOM_PROCESSOR_URL=http://<gpu-host>:19542   # direct LAN — see transport note
 ```
 
@@ -197,15 +197,21 @@ additive v1 extension). Configure on the axiom-ng host:
 ```bash
 # Shared HMAC secret (dispatcher signs, /api/processor/source verifies).
 # Empty = feature off on BOTH sides.
-export AXIOMNG_PROCESSOR_SOURCE_SECRET='<random-hex>'
+export AXIOM_PROCESSOR_SOURCE_SECRET='<random-hex>'
 # The base URL the runner can use to reach axiom-ng — the Tailnet address,
 # NOT 127.0.0.1 (the runner resolves it on its own host):
-export AXIOMNG_PROCESSOR_SOURCE_BASE_URL=http://<mac-tailnet-ip>:8011
+export AXIOM_PROCESSOR_SOURCE_BASE_URL=http://<mac-tailnet-ip>:8011
 # axiom-ng must listen on an interface the runner can reach:
-export AXIOMNG_BIND_ADDR=0.0.0.0
+export AXIOM_BIND_ADDR=0.0.0.0
 # POST /v1/process waits for the synchronous download; the dispatcher's result
 # budget also floors the submit call to cover it (default 300s):
-export AXIOMNG_PROCESSOR_TIMEOUT=180s
+export AXIOM_PROCESSOR_TIMEOUT=180s
+# NOTE the near-miss pair (same prefix, different scope):
+#   AXIOM_PROCESSOR_TIMEOUT       — DISPATCHER-side result-fetch budget
+#                                   (also floors the submit call for the
+#                                   synchronous source download)
+#   AXIOM_PROCESSOR_SOURCE_TIMEOUT — RUNNER-side source download budget
+#                                   (default 120s; not set in this block)
 ```
 
 Runner side: keep `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` unset or pointing
@@ -245,7 +251,7 @@ runner produced it. Two pieces (issue #122):
 ```bash
 # Dispatcher side: name each runner explicitly (empty = processor URL host,
 # e.g. "192.168.1.2:19542" — usable, but a name is readable).
-export AXIOMNG_PROCESSOR_RUNNER_NAME=carrier-gpu0
+export AXIOM_PROCESSOR_RUNNER_NAME=carrier-gpu0
 ```
 
 This lands in the phases log line (`phases[ok]: runner=carrier-gpu0 job=…`)

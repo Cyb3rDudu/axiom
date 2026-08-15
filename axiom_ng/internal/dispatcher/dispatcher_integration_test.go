@@ -24,7 +24,7 @@ import (
 // concurrent review/test sessions corrupted each other's shared DB, so
 // default to a per-PID database unless a name is pinned via env.
 var dispatchTestDatabaseName = func() string {
-	if n := os.Getenv("AXIOMNG_DISPATCH_TEST_DB_NAME"); n != "" {
+	if n := os.Getenv("AXIOM_DISPATCH_TEST_DB_NAME"); n != "" {
 		return n
 	}
 	return fmt.Sprintf("axiom_ng_dispatch_%d_test", os.Getpid())
@@ -39,9 +39,9 @@ type dispatchHarness struct {
 
 func openDispatchDB(t *testing.T) *dispatchHarness {
 	t.Helper()
-	base := os.Getenv("AXIOMNG_TEST_DATABASE_URL")
+	base := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	if base == "" {
-		t.Skip("AXIOMNG_TEST_DATABASE_URL not set; skipping dispatcher integration test")
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping dispatcher integration test")
 	}
 	u, err := url.Parse(base)
 	if err != nil {

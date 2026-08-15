@@ -87,7 +87,7 @@ Processor removes temporary files
 
 Source files are read in place in local v1. As an ADDITIVE v1 extension,
 `attachment.source_url` may carry an HMAC-signed download URL (dispatcher
-signs `job_id|lease_unix` with the shared `AXIOMNG_PROCESSOR_SOURCE_SECRET`;
+signs `job_id|lease_unix` with the shared `AXIOM_PROCESSOR_SOURCE_SECRET`;
 the axiom-ng endpoint `/api/processor/source/{job_id}` verifies signature,
 expiry, job status and lease before streaming the bytes). The pulled bytes
 are temporary and are deleted after the job is acknowledged or expires;
