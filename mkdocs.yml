@@ -42,6 +42,12 @@ theme:
 plugins:
   - search
 
+# Working/auxiliary docs not published to the site (D2 inventory artifact +
+# the Python dependency pin used by CI).
+exclude_docs: |
+  _inventory.md
+  requirements.txt
+
 markdown_extensions:
   - admonition
   - attr_list
@@ -79,6 +85,11 @@ nav:
       - Troubleshooting: operations/troubleshooting.md
   - Referenzen:
       - Datenmodell: references/data-model.md
-      - Benchmarks & Analysen: references/benchmarks.md
+      - Benchmarks & Analysen:
+          - Überblick: references/benchmarks.md
+          - L8-Durchstich: references/benchmarks/l8-durchstich.md
+          - TC2-Parallel & Determinismus: references/benchmarks/tc2-parallel.md
+          - Mass-Chunking: references/benchmarks/mass-chunking.md
+          - Chunk-Qualität: references/benchmarks/chunk-quality.md
       - FAQ: references/faq.md
   - About: about/index.md
