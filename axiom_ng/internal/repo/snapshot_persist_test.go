@@ -715,3 +715,84 @@ func TestValidateEPUBAcceptsRealCFI(t *testing.T) {
 		t.Fatalf("expected valid EPUB CFI to pass, got %v", verr)
 	}
 }
+
+// TestPersistForceRebuildDifferentProfileLeavesSingleActive pins the TC2
+// finding (#125): a force_rebuild job carries the force flag inside the
+// canonical block, so its profile_hash DIFFERS from the prior run's. The
+// active-switch must deactivate the old-profile generation too — readers
+// count actives per ATTACHMENT (quality queries, outbox), and the partial
+// unique index only scopes per (document, attachment, profile), so the old
+// switch left two actives (TC2 backup: ESGBS 68 = 34+34 chunks double-counted).
+func TestPersistForceRebuildDifferentProfileLeavesSingleActive(t *testing.T) {
+	h := newPersistHarness(t, "forcedbl")
+
+	// First persist: snapshot S1 becomes active under the claim's profile hash.
+	s1, err := h.persist(t, h.validResultBytes(t, 3), 3, markdownArtifact())
+	if err != nil {
+		t.Fatalf("first persist: %v", err)
+	}
+
+	// Simulate the REAL force path (#122 smoke did exactly this): a new
+	// ingest_jobs row with force_rebuild=true (ops-INSERT), claimed fresh —
+	// the claim's canonical block carries the force flag, so the frozen
+	// profile_hash DIFFERS from the first run's without any hand-editing.
+	ctx := context.Background()
+	var srcID, docID string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT source_id::text, document_id::text FROM ingest_jobs WHERE id=$1`, h.jobID,
+	).Scan(&srcID, &docID); err != nil {
+		t.Fatalf("load job refs: %v", err)
+	}
+	if _, err := h.pool.Exec(ctx, `
+		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
+		VALUES ($1,$2,$3,$4,'pending',true)`,
+		srcID, docID, h.attachmentID, h.contentHash); err != nil {
+		t.Fatalf("seed force job: %v", err)
+	}
+	cj2, err := h.rep.ClaimNextJob(ctx, defaultClaim("worker-force"))
+	if err != nil {
+		t.Fatalf("claim force job: %v", err)
+	}
+	if cj2 == nil || cj2.LeaseRef.JobID == h.jobID {
+		t.Fatal("expected the fresh force job to be claimed")
+	}
+	var forceHash string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT COALESCE(profile_hash,'') FROM ingest_jobs WHERE id=$1`, cj2.LeaseRef.JobID,
+	).Scan(&forceHash); err != nil {
+		t.Fatalf("read force hash: %v", err)
+	}
+	if forceHash == h.profileHash {
+		t.Fatalf("force claim must freeze a DIFFERENT profile hash, got %q both", forceHash)
+	}
+	if err := h.rep.MarkProcessing(ctx, cj2.LeaseRef); err != nil {
+		t.Fatalf("mark processing: %v", err)
+	}
+
+	s2, err := h.rep.PersistResult(ctx, cj2.LeaseRef.JobID, h.validResultBytes(t, 3), PersistOptions{CapDim: 3, Artifacts: markdownArtifact()})
+	if err != nil {
+		t.Fatalf("force persist: %v", err)
+	}
+	if s1 == s2 {
+		t.Fatalf("force run must create a NEW snapshot, got same id %s", s1)
+	}
+
+	var actives []string
+	rows, err := h.pool.Query(ctx, `
+		SELECT id::text FROM processing_snapshots
+		WHERE attachment_id=$1 AND active=true`, h.attachmentID)
+	if err != nil {
+		t.Fatalf("query actives: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		actives = append(actives, id)
+	}
+	if len(actives) != 1 || actives[0] != s2 {
+		t.Fatalf("exactly ONE active snapshot (the latest, %s) must remain per attachment; got %v", s2, actives)
+	}
+}

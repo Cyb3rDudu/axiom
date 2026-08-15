@@ -125,10 +125,13 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 		// first to preserve the <=1 active invariant). Its content is identical
 		// (same identity => same bytes), so no row re-insert is needed.
 		if !existingActive {
+			// #125: deactivate across profiles — readers count actives per
+			// ATTACHMENT; a profile-hash change (force_rebuild flag lives in the
+			// canonical block) must still supersede the old active snapshot.
 			if _, err := tx.Exec(ctx, `
 				UPDATE processing_snapshots SET active=false, updated_at=now()
-				WHERE document_id=$1 AND attachment_id=$2 AND profile_hash=$3 AND active=true AND id<>$4`,
-				ident.documentID, ident.attachmentID, ident.profileHash, existingID); err != nil {
+				WHERE document_id=$1 AND attachment_id=$2 AND active=true AND id<>$3`,
+				ident.documentID, ident.attachmentID, existingID); err != nil {
 				return "", fmt.Errorf("replay deactivate other: %w", err)
 			}
 			if _, err := tx.Exec(ctx, `
@@ -292,13 +295,15 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 	}
 
 	// 4. Atomic active-snapshot switch: deactivate previous, activate new (§10.2).
-	// The partial unique index processing_snapshots_active_scope_uq guarantees at
-	// most one active per (document_id, attachment_id, profile_hash); do the flip
-	// in the right order so the index never sees two active rows.
+	// #125: the deactivation is scoped per ATTACHMENT, not per profile_hash —
+	// force_rebuild (and any profile change) freezes a different profile_hash,
+	// and the old per-profile scope left the previous generation active next
+	// to the new one (TC2: ESGBS counted 68 = 34+34 chunks). Latest persist
+	// wins; superseded generations stay queryable, just inactive.
 	if _, err := tx.Exec(ctx, `
 		UPDATE processing_snapshots SET active=false, updated_at=now()
-		WHERE document_id=$1 AND attachment_id=$2 AND profile_hash=$3 AND active=true AND id<>$4`,
-		ident.documentID, ident.attachmentID, ident.profileHash, snapshotID); err != nil {
+		WHERE document_id=$1 AND attachment_id=$2 AND active=true AND id<>$3`,
+		ident.documentID, ident.attachmentID, snapshotID); err != nil {
 		return "", fmt.Errorf("deactivate previous snapshot: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
