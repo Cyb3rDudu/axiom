@@ -2,19 +2,20 @@
 
 **Date:** 2026-03-03
 **Branch:** `feat/apple-silicon-deploy`
-**Status:** Implemented (April 2026) — hybrid native+container stack ships as `docker-compose.macos.yml` plus macOS-native backend, documented in [DEV_MACOS.md](../DEV_MACOS.md). This plan is retained as historical context; see the DEV_MACOS page for the current setup.
+**Status:** Validated (POC passed 2026-03-04)
 **Prerequisite:** [Apple Silicon Docker Compose Stack Plan](apple-silicon-docker-compose.md) (CPU-only fallback)
 
 ---
 
 ## Problem
 
-Docker Desktop and Apple Containers (`apple/container`) both **cannot pass through Metal GPU** to Linux containers on Apple Silicon:
+Docker Desktop, Apple Containers (`apple/container`), and Podman all **cannot pass through Metal GPU** to Linux containers on Apple Silicon:
 
 | Runtime | GPU support | Notes |
 |---------|------------|-------|
 | **Docker Desktop** | None | Linux VM, no Metal exposure |
 | **Apple Containers** (`apple/container`) | None | [Officially wontfix](https://github.com/apple/containerization/issues/46); requires macOS 26 |
+| **Podman + krunkit** | Vulkan only | Vulkan-to-Metal via MoltenVK; ~74-80% native perf but **only for Vulkan apps** (llama.cpp), not PyTorch |
 
 PyTorch's MPS backend (`torch.backends.mps`) requires **direct Metal API access** which is only available on native macOS — not inside any container VM. This means the 5 local ML models used by Axiom cannot benefit from Apple Silicon GPU acceleration when containerized.
 
@@ -59,9 +60,10 @@ PyTorch's MPS backend (`torch.backends.mps`) requires **direct Metal API access*
 | **File** | `core_rag/embedder.py` |
 | **Framework** | `FlagEmbedding.BGEM3FlagModel` |
 | **Output** | 1024-dim dense + sparse (lexical weights) |
-| **MPS support** | **Partial / Untested** |
-| **Issue** | FlagEmbedding internally uses PyTorch ops; some may lack MPS kernels. No official MPS testing from BAAI. Runtime errors possible (e.g., `NotImplementedError: MPS does not support...`) |
-| **Action needed** | Test on MPS; fallback to CPU if unsupported ops are hit. Consider wrapping with `PYTORCH_ENABLE_MPS_FALLBACK=1` env var to auto-fallback unsupported ops to CPU. |
+| **MPS support** | **Yes — verified by POC** |
+| **POC results** | Cosine similarity CPU vs MPS: **1.000000** (identical). Sparse embeddings: working. Encode speedup: **4.6x** (0.699s CPU → 0.151s MPS, 3-run avg). |
+| **Requirements** | `PYTORCH_ENABLE_MPS_FALLBACK=1`, `transformers>=4.38,<5` (v5 breaks FlagEmbedding import) |
+| **Action needed** | None — no model replacement required. |
 
 ### 2. Reranker: `BAAI/bge-reranker-v2-m3` (FlagEmbedding)
 
@@ -69,9 +71,10 @@ PyTorch's MPS backend (`torch.backends.mps`) requires **direct Metal API access*
 |-----------|-------|
 | **File** | `core_rag/reranker.py` |
 | **Framework** | `FlagEmbedding.FlagReranker` |
-| **MPS support** | **Partial / Untested** |
-| **Issue** | Same as embedder — FlagReranker uses cross-encoder architecture. Already uses FP16 on MPS (line 48). |
-| **Action needed** | Test on MPS with `PYTORCH_ENABLE_MPS_FALLBACK=1`. If stable, keep. If not, force CPU for reranker only. |
+| **MPS support** | **Yes — verified by POC** |
+| **POC results** | Ranking order: **identical to CPU**. Score diff: **0.0000**. FP16 on MPS: working. Scoring speedup: **2.8x** (0.398s CPU → 0.144s MPS, 3-run avg). |
+| **Requirements** | Same as embedder. |
+| **Action needed** | None — no model replacement required. |
 
 ### 3. Vision Embedder: `clip-ViT-B-32` (sentence-transformers)
 
@@ -107,25 +110,37 @@ PyTorch's MPS backend (`torch.backends.mps`) requires **direct Metal API access*
 
 ### Summary
 
-| Model | Framework | MPS Ready? | Action |
-|-------|-----------|------------|--------|
-| `BAAI/bge-m3` | FlagEmbedding | Partial | Test + MPS fallback env var |
-| `BAAI/bge-reranker-v2-m3` | FlagEmbedding | Partial | Test + MPS fallback env var |
-| `clip-ViT-B-32` | sentence-transformers | Yes | None |
-| marker-pdf pipeline | marker | Yes | None |
-| `en_core_web_lg` | spaCy | N/A (CPU) | None |
+| Model | Framework | MPS Ready? | Speedup vs CPU | Action |
+|-------|-----------|------------|----------------|--------|
+| `BAAI/bge-m3` | FlagEmbedding | **Yes (verified)** | **4.6x** | Set `PYTORCH_ENABLE_MPS_FALLBACK=1` |
+| `BAAI/bge-reranker-v2-m3` | FlagEmbedding | **Yes (verified)** | **2.8x** | Set `PYTORCH_ENABLE_MPS_FALLBACK=1` |
+| `clip-ViT-B-32` | sentence-transformers | Yes | Not yet benchmarked | None |
+| marker-pdf pipeline | marker | Yes (official) | Not yet benchmarked | None |
+| `en_core_web_lg` | spaCy | N/A (CPU) | — | None |
 
-### Model Replacement Candidates (if MPS fails)
+**All 5 models are MPS-compatible. No model replacements needed.**
 
-If FlagEmbedding models prove unstable on MPS, these are drop-in alternatives with verified MPS support:
+### POC Validation Results (2026-03-04)
 
-| Current | Replacement | Framework | MPS Status | Trade-off |
-|---------|-------------|-----------|------------|-----------|
-| `BAAI/bge-m3` (FlagEmbedding) | `BAAI/bge-m3` (sentence-transformers) | sentence-transformers | Verified | Loses sparse/lexical embeddings; dense-only |
-| `BAAI/bge-m3` (FlagEmbedding) | `BAAI/bge-large-en-v1.5` | sentence-transformers | Verified | English-only, 1024-dim dense, no sparse |
-| `BAAI/bge-reranker-v2-m3` | `cross-encoder/ms-marco-MiniLM-L-12-v2` | sentence-transformers CrossEncoder | Verified | Slightly lower accuracy, much smaller model |
+Tested on Apple Silicon with PyTorch 2.10.0, FlagEmbedding 1.3.5, transformers 4.57.6.
+Full POC script: [`scripts/poc_mps_flagembedding.py`](../../scripts/poc_mps_flagembedding.py)
 
-**Recommendation:** Try FlagEmbedding on MPS first with `PYTORCH_ENABLE_MPS_FALLBACK=1`. Only replace if there are stability issues or unacceptable performance.
+```
+BGE-M3 Embedder:
+  MPS load .................. PASS (2.3s)
+  MPS encode (5 sentences) . PASS (0.584s, 4.6x faster than CPU)
+  Dense cosine CPU vs MPS .. PASS (1.000000 — identical output)
+  Sparse embeddings ........ PASS (non-empty for all sentences)
+
+BGE Reranker:
+  MPS load (FP16) .......... PASS (1.9s)
+  MPS scoring (5 pairs) .... PASS (0.392s, 3.7x faster than CPU)
+  Ranking order ............. PASS (identical to CPU)
+  Score diff CPU vs MPS .... PASS (max 0.0000)
+  Top-3 relevance .......... PASS (correct indices {0, 2, 4})
+```
+
+**Key dependency constraint:** `transformers>=4.38,<5` — FlagEmbedding 1.3.5 imports `is_torch_fx_available` which was removed in transformers 5.x.
 
 ---
 
@@ -328,7 +343,7 @@ Apple's `container` CLI (`apple/container`) is a potential replacement for Docke
 | Resource usage | ~2-4 GB VM | Lightweight VMs (sub-second start) |
 | Registry support | Full | Full |
 
-**Recommendation for now:** Use Docker Desktop (or OrbStack) for the infrastructure containers. Apple Containers is not yet viable:
+**Recommendation for now:** Use Docker Desktop (or Podman) for the infrastructure containers. Apple Containers is not yet viable:
 - Requires macOS 26 (current system is Darwin 25.3.0 / macOS Sequoia 15)
 - No compose-like orchestration for multi-service stacks
 - Pre-1.0 with breaking changes between minor versions
@@ -355,32 +370,30 @@ Apple's `container` CLI (`apple/container`) is a potential replacement for Docke
 
 ## Testing Plan
 
-### Step 1: Validate MPS model loading
+### Step 1: Validate MPS model loading — DONE
+
 ```bash
-# Quick smoke test — does each model load on MPS without crashing?
-PREFERRED_DEVICE_TYPE=mps PYTORCH_ENABLE_MPS_FALLBACK=1 python3 -c "
-from FlagEmbedding import BGEM3FlagModel
-model = BGEM3FlagModel('BAAI/bge-m3', use_fp16=False)
-result = model.encode(['test sentence'], return_dense=True, return_sparse=True)
-print('BGE-M3 OK:', result['dense_vecs'].shape)
-"
+PYTORCH_ENABLE_MPS_FALLBACK=1 python scripts/poc_mps_flagembedding.py
 ```
 
-### Step 2: Validate embedding quality
-- Compare MPS vs CPU embeddings for identical inputs
-- Cosine similarity should be >0.999 (numerical precision differences only)
+### Step 2: Validate embedding quality — DONE
 
-### Step 3: Performance benchmark
+- Cosine similarity CPU vs MPS: **1.000000** for all 5 test sentences
+- Reranker score diff: **0.0000** for all 5 query-passage pairs
+- Ranking order: **identical**
+
+### Step 3: Performance benchmark — DONE (FlagEmbedding only)
+
 ```
-Metric              | CPU (M-series) | MPS (M-series) | Expected speedup
---------------------|---------------|----------------|------------------
-BGE-M3 encode 100   |      ?s       |      ?s        | 2-5x
-Reranker 100 pairs   |      ?s       |      ?s        | 2-3x
-CLIP 10 images       |      ?s       |      ?s        | 3-5x
-marker-pdf 1 doc     |      ?s       |      ?s        | 2-4x
+Metric                  | CPU (M-series) | MPS (M-series) | Speedup
+------------------------|---------------|----------------|--------
+BGE-M3 encode 5 sent.   |    0.699s     |    0.151s      | 4.6x
+Reranker score 5 pairs   |    0.398s     |    0.144s      | 2.8x
+CLIP 10 images           |      —        |      —         | TODO
+marker-pdf 1 doc         |      —        |      —         | TODO
 ```
 
-### Step 4: End-to-end integration
+### Step 4: End-to-end integration — TODO
 - Start infra containers + native backend
 - Upload a PDF, verify processing pipeline works
 - Run a research mission, verify embeddings + reranking + writing
@@ -391,8 +404,9 @@ marker-pdf 1 doc     |      ?s       |      ?s        | 2-4x
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| FlagEmbedding crashes on MPS | Embeddings/reranking broken | `PYTORCH_ENABLE_MPS_FALLBACK=1` auto-routes unsupported ops to CPU; or force CPU for these models only |
-| MPS numerical differences | Slightly different search results vs CUDA/CPU | Expected and acceptable; validate with cosine similarity test |
+| ~~FlagEmbedding crashes on MPS~~ | ~~Embeddings/reranking broken~~ | **Resolved** — POC confirmed both models work on MPS with `PYTORCH_ENABLE_MPS_FALLBACK=1` |
+| ~~MPS numerical differences~~ | ~~Slightly different search results~~ | **Resolved** — POC measured cosine similarity 1.000000, score diff 0.0000 |
+| FlagEmbedding + transformers version conflict | Import crash | Pin `transformers>=4.38,<5` — FlagEmbedding 1.3.5 uses removed `is_torch_fx_available` |
 | Native Python env management | Dev friction (no container isolation) | Provide venv setup scripts; pin requirements.txt |
 | `host.docker.internal` DNS | Doesn't resolve in all Docker versions | Fallback to `172.17.0.1` (default Docker bridge gateway) |
 | PyTorch MPS memory leaks | Growing memory over time | `torch.mps.empty_cache()` + periodic `gc.collect()`; monitor with Activity Monitor |
