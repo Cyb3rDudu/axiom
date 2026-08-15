@@ -99,11 +99,18 @@ gedifft und klassifiziert. Join über `zotero_attachments.zotero_key`
 
 | Dokument | Ergebnis |
 | --- | --- |
-| 12 Bücher (inkl. beide Springer-PDFs, beide EPUB-Weg-B-Bücher) | **byte-identisch** (Anzahl+Text+Locator) |
-| ESGBS (SKAP2JAE, EPUB) | **34/34 Chunks identisch** |
-| Demystifying (CDX5EBM3, EPUB) | 252/252 **identisch nach Pfad-Normalisierung** |
+| 12 Bücher (inkl. beide Springer-PDFs) | **byte-identisch** (Anzahl+Text+Locator) |
+| ESGBS (Heaton, SKAP2JAE, EPUB) | **34/34 Chunks identisch** — das scheinbare 68/34-Delta war die force_rebuild-Doppelaktivierung (#125), kein Inhaltsunterschied |
+| Demystifying (Sonko, CDX5EBM3, EPUB) | 27/252 Chunks mit `/tmp/epub_media_<random>`-Leak → **nach Fix #124: 252/252 byte-identisch** (pfad-normalisiert über TC1-Ref und Re-Process) |
 | Perspektiven (EE8QHQIL, PDF) | 52/300 Chunk-Texte weichen ab |
 | Nachhaltiges Management (RWA5PT4J, PDF) | 615/754 weichen ab, 754→757 Chunks |
+
+> **Korrigierte Bilanz (Post-#124/#125):** 13/16 strikt byte-identisch,
+> 14/16 nach Pfad-Normalisierung (Sonko-Re-Process liefert leak-freie
+> Chunks, pfad-normalisiert 252/252 == TC1-Referenz), 2/16 Marker-Grenzfälle.
+> Nur EIN Buch war vom Tempdir-Leak betroffen (Sonko); Heatons ESGBS war
+> nachweislich sauber — die „zweite Abweichung" war das #125-Doppelaktivierungs-
+> Artefakt. Fixes: `a65be86` (#124), `a63b5eb` (#125).
 
 ### Klassifizierung der Abweichungen
 
