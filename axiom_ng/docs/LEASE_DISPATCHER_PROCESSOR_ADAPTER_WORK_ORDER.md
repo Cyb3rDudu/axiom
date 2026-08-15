@@ -4,7 +4,7 @@
 **Target branch:** `feat/axiom-ng-zotero-rag`  
 **Baseline:** Part 2 Zotero mirror and metadata synchronization are considered complete  
 **Binding contract:** [`PROCESSOR_CONTRACT.md`](./PROCESSOR_CONTRACT.md)  
-**Architecture plan:** [`../../docs/plans/AXIOM_NG_ZOTERO_DESKTOP.md`](../../docs/plans/AXIOM_NG_ZOTERO_DESKTOP.md)
+**Architecture plan:** [`plans/AXIOM_NG_ZOTERO_DESKTOP.md`](plans/AXIOM_NG_ZOTERO_DESKTOP.md)
 
 ## 1. Purpose
 
@@ -926,7 +926,7 @@ Then read:
 ```text
 axiom_ng/docs/LEASE_DISPATCHER_PROCESSOR_ADAPTER_WORK_ORDER.md
 axiom_ng/docs/PROCESSOR_CONTRACT.md
-docs/plans/AXIOM_NG_ZOTERO_DESKTOP.md
+axiom_ng/docs/plans/AXIOM_NG_ZOTERO_DESKTOP.md
 ```
 
 Before changing queue code, inspect:
