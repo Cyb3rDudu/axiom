@@ -131,6 +131,16 @@ CPU GLiNER eats ~1 h per book
 that takes ~5 min on GPU (measured: 12/14 cores saturated, 3 jobs died of
 result-fetch timeouts under the load).
 
+**Per-model device knobs** (source of truth: `compute_core/devices.py`,
+`_MODEL_DEVICE_ENV`):
+
+| Env var         | Model    | Default |
+|-----------------|----------|---------|
+| `DEVICE_EMBEDDER` | BGE-M3 | `auto`  |
+| `DEVICE_MARKER`   | Marker  | `auto`  |
+| `DEVICE_MREBEL`   | mREBEL  | `auto`  |
+| `DEVICE_GLINER`   | GLiNER  | `cpu`   |
+
 **Bind address:** `0.0.0.0` is required for remote access. Only do this on
 LAN-only hosts — the runner has no authentication (by design, work order
 §18: loopback or trusted network only).

@@ -651,8 +651,10 @@ AXIOM_PROCESSOR_MAX_CONCURRENT_JOBS=1
 AXIOM_PROCESSOR_RESULT_RETENTION=<safe recovery duration>
 ```
 
-Validate relationships such as heartbeat interval being shorter than lease
-duration. Invalid production configuration must fail startup clearly.
+Validate `AXIOM_DISPATCHER_LEASE` against the real end-to-end runtime of a
+book (it must comfortably exceed claim-to-persist; an expired lease hands
+the job to the re-claim loop). Invalid production configuration must fail
+startup clearly.
 
 ## 12. API Scope
 

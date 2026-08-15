@@ -277,12 +277,17 @@ func TestPersistDuplicateIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first persist: %v", err)
 	}
-	// Re-persist the SAME identity (same job still processing? It was completed
-	// by the first persist via MarkCompletedTx, so re-claim is needed for a second
-	// fenced completion. Instead, prove idempotency at the snapshot layer: the
-	// identity row already exists, a second identical insert path would replay.)
-	// Directly call persistTx-equivalent via a second harness sharing the scope is
-	// awkward; the cleaner proof is the §10.1 identity lookup itself.
+	// §10.1: persisting the SAME result again (job row already completed by the
+	// first call — empty lease token, tolerated no-op) must return the SAME
+	// snapshot without error.
+	second, err := h.persist(t, h.validResultBytes(t, dims), dims, markdownArtifact())
+	if err != nil {
+		t.Fatalf("second persist: %v", err)
+	}
+	if first != second {
+		t.Fatalf("duplicate persist returned %s, want existing snapshot %s", second, first)
+	}
+	// And the identity layer stays single-row (no duplicate snapshot insert).
 	var n int
 	if err := h.pool.QueryRow(context.Background(),
 		`SELECT count(*) FROM processing_snapshots
@@ -295,7 +300,6 @@ func TestPersistDuplicateIsIdempotent(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("expected exactly 1 identity row after duplicate, got %d (idempotency violated)", n)
 	}
-	_ = first
 }
 
 // --- 3. Invalid refs roll back all new rows --------------------------------
@@ -1103,5 +1107,96 @@ func TestReplayPersistCompletesJobRow(t *testing.T) {
 	}
 	if status != "completed" {
 		t.Fatalf("job 2 status after replay persist = %q, want completed (replay must fence-complete)", status)
+	}
+}
+
+// TestReplayToleratesExpiredLease pins the residual case of the replay fence:
+// a replay whose lease token is non-empty but ALREADY EXPIRED (the runner
+// finished after the lease lapsed). MarkCompletedTx returns ErrLostLease —
+// the replay must tolerate it (the snapshot data is already durable and
+// identity-consistent) and still return the existing snapshot; the job row
+// legitimately stays 'processing' for the re-claim loop to re-drive it.
+func TestReplayToleratesExpiredLease(t *testing.T) {
+	h := newPersistHarness(t, "replaylost")
+	ctx := context.Background()
+
+	// Harness job off the claim path, as in TestReplayPersistCompletesJobRow.
+	if _, err := h.pool.Exec(ctx,
+		`UPDATE ingest_jobs SET status='cancelled', updated_at=now() WHERE id=$1`, h.jobID); err != nil {
+		t.Fatalf("cancel harness job: %v", err)
+	}
+	forceJob := func() (jobID string) {
+		t.Helper()
+		var srcID, docID string
+		if err := h.pool.QueryRow(ctx,
+			`SELECT source_id::text, document_id::text FROM ingest_jobs WHERE id=$1`, h.jobID,
+		).Scan(&srcID, &docID); err != nil {
+			t.Fatalf("job refs: %v", err)
+		}
+		if err := h.pool.QueryRow(ctx, `
+			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
+			VALUES ($1,$2,$3,$4,'pending',true) RETURNING id::text`,
+			srcID, docID, h.attachmentID, h.contentHash).Scan(&jobID); err != nil {
+			t.Fatalf("seed force job: %v", err)
+		}
+		return jobID
+	}
+
+	// Force job 1: creates the identity, completes its row.
+	j1 := forceJob()
+	cj1, err := h.rep.ClaimNextJob(ctx, defaultClaim("worker-lost-1"))
+	if err != nil || cj1 == nil || cj1.LeaseRef.JobID != j1 {
+		t.Fatalf("claim 1: %v %v", cj1, err)
+	}
+	if err := h.rep.MarkProcessing(ctx, cj1.LeaseRef); err != nil {
+		t.Fatalf("mark processing 1: %v", err)
+	}
+	raw1 := h.validResultRaw(3)
+	raw1.JobID = j1
+	b1, err := json.Marshal(raw1)
+	if err != nil {
+		t.Fatalf("marshal 1: %v", err)
+	}
+	s1, err := h.rep.PersistResult(ctx, j1, b1, PersistOptions{CapDim: 3, Artifacts: markdownArtifact()})
+	if err != nil {
+		t.Fatalf("force persist 1: %v", err)
+	}
+
+	// Force job 2, same identity — claim + processing, then break the fence:
+	// expire the lease while the token stays non-empty.
+	j2 := forceJob()
+	cj2, err := h.rep.ClaimNextJob(ctx, defaultClaim("worker-lost-2"))
+	if err != nil || cj2 == nil || cj2.LeaseRef.JobID != j2 {
+		t.Fatalf("claim 2: %v %v", cj2, err)
+	}
+	if err := h.rep.MarkProcessing(ctx, cj2.LeaseRef); err != nil {
+		t.Fatalf("mark processing 2: %v", err)
+	}
+	if _, err := h.pool.Exec(ctx,
+		`UPDATE ingest_jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1`, j2); err != nil {
+		t.Fatalf("expire lease: %v", err)
+	}
+	raw2 := h.validResultRaw(3)
+	raw2.JobID = j2
+	b2, err := json.Marshal(raw2)
+	if err != nil {
+		t.Fatalf("marshal 2: %v", err)
+	}
+	s2, err := h.rep.PersistResult(ctx, j2, b2, PersistOptions{CapDim: 3, Artifacts: markdownArtifact()})
+	if err != nil {
+		t.Fatalf("replay persist with expired lease must be tolerated, got %v", err)
+	}
+	if s1 != s2 {
+		t.Fatalf("expired-lease replay must return the existing snapshot %s, got %s", s1, s2)
+	}
+	// The fence was lost: the job row stays 'processing' for the re-claim
+	// loop — that is the correct end state, NOT a failure.
+	var status string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT status::text FROM ingest_jobs WHERE id=$1`, j2).Scan(&status); err != nil {
+		t.Fatalf("read job 2 status: %v", err)
+	}
+	if status != "processing" {
+		t.Fatalf("job 2 status = %q, want processing (lost fence handed to re-claim)", status)
 	}
 }
