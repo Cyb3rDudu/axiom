@@ -83,6 +83,7 @@ nav:
       - "PROCESSOR_CONTRACT v1": developer-guide/processor-contract.md
       - Configuration: developer-guide/configuration.md
       - Testing: developer-guide/testing.md
+      - "Doc-Agent Profile (concept)": developer-guide/doc-agent.md
   - Operations:
       - Deployment: operations/deployment.md
       - Monitoring: operations/monitoring.md
