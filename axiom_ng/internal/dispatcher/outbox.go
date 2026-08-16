@@ -108,6 +108,13 @@ func (c *openSearchClient) ensureIndex(ctx context.Context, dim int) error {
 	if code, _, err := c.do(ctx, http.MethodHead, "/"+c.index, nil); err != nil {
 		return err
 	} else if code == http.StatusOK {
+		// R5: an index created before sparse existed lacks the rank_features
+		// mapping; the first sparse-carrying doc would then hit dynamic mapping
+		// (wrong type, silent). Add the field additively — idempotent PUT.
+		// ensured flips only on success so a failed mapping PUT retries.
+		if err := c.ensureSparseMapping(ctx); err != nil {
+			return err
+		}
 		c.ensured = true
 		c.warnIfStrandedKnn(ctx)
 		return nil
@@ -118,6 +125,8 @@ func (c *openSearchClient) ensureIndex(ctx context.Context, dim int) error {
 			"properties": map[string]any{
 				"embedding": map[string]any{"type": "knn_vector", "dimension": dim},
 				"text":      map[string]any{"type": "text"},
+				// Learned lexical weights {token: weight} (R5 #135).
+				"sparse": map[string]any{"type": "rank_features"},
 			},
 		},
 	}
@@ -344,7 +353,7 @@ func drainOutboxDelete(ctx context.Context, d *Dispatcher, osc *openSearchClient
 // durable chunk UUID (passed separately — OpenSearch metadata field, never
 // in the body), so re-indexing overwrites instead of duplicating.
 func outboxDocument(row repo.OutboxRow, doc repo.OutboxDoc) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"chunk_id":       doc.ChunkID,
 		"chunk_ref":      doc.ChunkRef,
 		"snapshot_id":    row.SnapshotID,
@@ -357,6 +366,12 @@ func outboxDocument(row repo.OutboxRow, doc repo.OutboxDoc) map[string]any {
 		"token_count":    doc.Tokens,
 		"embedding":      doc.Embedding, // nil → JSON null when absent
 	}
+	// Sparse joins the doc only when present: a null would fight the
+	// rank_features mapping on doc parse (OS rejects null rank_feature values).
+	if doc.Sparse != nil {
+		out["sparse"] = doc.Sparse
+	}
+	return out
 }
 
 // failOutboxRow records the failure with capped exponential backoff.
@@ -371,4 +386,26 @@ func (d *Dispatcher) failOutboxRow(ctx context.Context, row repo.OutboxRow, caus
 		return fmt.Errorf("record failure: %v (cause: %w)", err, cause)
 	}
 	return cause
+}
+
+// ensureSparseMapping adds the sparse rank_features field to an existing
+// index (idempotent additive PUT; R5 #135). Errors surface — a silently
+// missing mapping would degrade every sparse query to nothing.
+func (c *openSearchClient) ensureSparseMapping(ctx context.Context) error {
+	body, err := json.Marshal(map[string]any{
+		"properties": map[string]any{
+			"sparse": map[string]any{"type": "rank_features"},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	code, respBody, err := c.do(ctx, http.MethodPut, "/"+c.index+"/_mapping", body)
+	if err != nil {
+		return err
+	}
+	if code >= 200 && code < 300 {
+		return nil
+	}
+	return fmt.Errorf("put sparse mapping: HTTP %d: %s", code, truncate(respBody, 200))
 }

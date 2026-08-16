@@ -428,6 +428,10 @@ func TestOutboxWarnsWhenExistingIndexStrandsKnn(t *testing.T) {
 			// Real OpenSearch response shape: wrapped under the index name.
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte(`{"axiom-ng-chunks-v1":{"mappings":{"properties":{"embedding":{"type":"float"}}}}}`))
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/_mapping"):
+			// R5: additive sparse rank_features mapping (idempotent).
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"acknowledged":true}`))
 		default:
 			w.WriteHeader(400)
 		}

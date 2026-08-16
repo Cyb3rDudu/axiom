@@ -7,8 +7,10 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +44,9 @@ type OutboxDoc struct {
 	Sections  []string
 	Tokens    int
 	Embedding []float64 // nil when the snapshot has no dense embedding
+	// Sparse is the learned lexical-weights map {token: weight} from
+	// processing_chunk_sparse_embeddings (R5 #135); nil when absent.
+	Sparse map[string]float64
 }
 
 // ClaimOutboxBatch atomically claims up to limit due pending rows
@@ -85,9 +90,11 @@ func (r *Repo) OutboxDocs(ctx context.Context, snapshotID string) ([]OutboxDoc, 
 	rows, err := r.pool.Query(ctx, `
 	SELECT c.id::text, c.chunk_index, c.text, c.locator,
 		       c.section_titles, c.token_count,
-		       CASE WHEN e.vector IS NULL THEN NULL ELSE e.vector::text END
+		       CASE WHEN e.vector IS NULL THEN NULL ELSE e.vector::text END,
+		       CASE WHEN s.values IS NULL THEN NULL ELSE s.values::text END
 	FROM processing_chunks c
 	LEFT JOIN processing_chunk_dense_embeddings e ON e.chunk_id = c.id
+	LEFT JOIN processing_chunk_sparse_embeddings s ON s.chunk_id = c.id
 	WHERE c.snapshot_id = $1
 	ORDER BY c.chunk_index
 	`, snapshotID)
@@ -98,9 +105,9 @@ func (r *Repo) OutboxDocs(ctx context.Context, snapshotID string) ([]OutboxDoc, 
 	var out []OutboxDoc
 	for rows.Next() {
 		var d OutboxDoc
-		var vec *string
+		var vec, sp *string
 		if err := rows.Scan(&d.ChunkID, &d.Index, &d.Text, &d.Locator,
-			&d.Sections, &d.Tokens, &vec); err != nil {
+			&d.Sections, &d.Tokens, &vec, &sp); err != nil {
 			return nil, err
 		}
 		// Contract ref is not persisted (durable identity is id+index); derive
@@ -112,6 +119,13 @@ func (r *Repo) OutboxDocs(ctx context.Context, snapshotID string) ([]OutboxDoc, 
 				return nil, fmt.Errorf("snapshot %s chunk %s vector: %w", snapshotID, d.ChunkID, err)
 			}
 			d.Embedding = emb
+		}
+		if sp != nil {
+			sparsed, err := parseSparse(*sp)
+			if err != nil {
+				return nil, fmt.Errorf("snapshot %s chunk %s sparse: %w", snapshotID, d.ChunkID, err)
+			}
+			d.Sparse = sparsed
 		}
 		out = append(out, d)
 	}
@@ -275,4 +289,37 @@ func (r *Repo) OutboxChunkIDs(ctx context.Context, snapshotID string) ([]string,
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// parseSparse decodes the sparse-embedding JSONB text {token: weight}.
+// Non-finite or non-numeric weights are rejected: rank_features indexes
+// positive floats and a poison value would silently drop the token.
+func parseSparse(s string) (map[string]float64, error) {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil, err
+	}
+	out := make(map[string]float64, len(m))
+	for k, v := range m {
+		// The runner persists weights as JSON strings (contract §10 string
+		// values); accept both the string and native number forms.
+		var f float64
+		switch w := v.(type) {
+		case float64:
+			f = w
+		case string:
+			pf, err := strconv.ParseFloat(w, 64)
+			if err != nil {
+				return nil, fmt.Errorf("token %q: weight %q is not a number", k, w)
+			}
+			f = pf
+		default:
+			return nil, fmt.Errorf("token %q: weight %v is neither number nor string", k, v)
+		}
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return nil, fmt.Errorf("token %q: weight %v is not finite", k, v)
+		}
+		out[k] = f
+	}
+	return out, nil
 }
