@@ -100,8 +100,13 @@ podman build -t runner-poc ~/Code/runner-poc/
 # Host network + CDI device injection — mounts driver libs automatically,
 # no manual /dev/nvidia* device mapping needed. No -p mapping required:
 # the runner binds the host port directly.
+# --shm-size is NOT optional: rootless Podman defaults /dev/shm to 64 MB and
+# torch's model loading dies with "unable to allocate shared memory ... No
+# space left on device" (BGE-M3 fp32 alone needs >2 GB; verified 2026-08-15
+# when the first §7a embed call 500ed at exactly 2 GiB shm).
 podman run -d --name runner-poc \
   --network=host \
+  --shm-size=8g \
   --device nvidia.com/gpu=all \
   -e AXIOM_PROCESSOR_COMPUTE=real \
   -e AXIOM_PROCESSOR_BIND_ADDR=0.0.0.0 \
