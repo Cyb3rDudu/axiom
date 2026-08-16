@@ -146,8 +146,10 @@ DEVICE_GLINER=mps PYTORCH_ENABLE_MPS_FALLBACK=1 \
 - Known MPS limitation: surya's table recognition
   (`TableRecEncoderDecoderModel`) is not MPS-compatible and falls back to CPU
   with a warning — table-heavy PDFs pay extra.
-- MPS is **complete but slow** (measured ~13 s/page vs. ~0.7–1.2 s/page on an
-  RTX-3090-class card). For production mass processing use external GPUs.
+- MPS is **complete but slow** — roughly an order of magnitude slower than an
+  external GPU per page (the measured figures are in
+  [Troubleshooting → sizing/performance](troubleshooting.md)). For production
+  mass processing use external GPUs.
 
 ## 4. Verify
 
@@ -234,7 +236,12 @@ the ACK (contract §18/§19 test 13).
 ## 6. Runner identity + GPU sampler labels
 
 With multiple runners, every log line and every job row must say which runner
-produced it:
+produced it.
+
+**Where the label is set:** `AXIOM_PROCESSOR_RUNNER_NAME` is read by the
+**dispatcher** (the Go side), not by the runner — the Python runner never
+consumes it, so exporting it on the GPU host is a silent no-op. You run one
+dispatcher instance per runner, and each dispatcher names its runner:
 
 ```bash
 export AXIOM_PROCESSOR_RUNNER_NAME=<runner-label>
@@ -252,7 +259,8 @@ FROM ingest_jobs WHERE status = 'completed' GROUP BY 1;
 > processor software identity written at completion and must not be clobbered).
 
 GPU sampler per runner (30-s cadence), label first so lines stay attributable
-after log merge:
+after log merge. This sampler runs **on the runner host** and is pure
+attribution — it does not read `AXIOM_PROCESSOR_RUNNER_NAME`:
 
 ```bash
 nohup sh -c 'while true; do echo "<runner-label> $(date +%s) $(nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader)"; sleep 30; done' \
@@ -278,8 +286,9 @@ the runner unambiguously.
 
 1. Keep dispatcher `Concurrency=1` (the runner enforces
    `MAX_CONCURRENT_JOBS=1` anyway; parallel jobs would contend for VRAM).
-2. Expect ~30 s per small document on a warm cache on a 3090-class card; large
-   scanned books scale with the OCR load.
+2. Per-document cost varies with size and OCR load; measured orders of
+   magnitude are in
+   [Troubleshooting → sizing/performance](troubleshooting.md).
 3. The runner holds results until ACK; the dispatcher's ack-retry pass recovers
    if the dispatcher restarts mid-batch.
 
@@ -288,9 +297,30 @@ the runner unambiguously.
 - `capabilities.models.dense_embedding.name` reports `reference-bge-m3` even in
   real mode (cosmetic; the vectors themselves are genuine 1024-dim BGE-M3).
   Deferred.
-- The runner loads all three model families per process; the VRAM footprint is
-  ~2.8 GB — fits a 12 GB card, leaves room on 24 GB cards for a second pinned
-  runner per card.
+- The runner loads all three model families per process; the VRAM footprint
+  and what card sizes it fits are in
+  [Troubleshooting → sizing/performance](troubleshooting.md).
+
+## Operating rules — and why
+
+Every row above is a requirement. This table restates each with its **reason**
+in one line, so an operator on an unfamiliar machine can decide when (and why
+not) to relax it — except the last row, which is a device choice, not a rule.
+
+| Rule | Why (one line) |
+| --- | --- |
+| Use `--network=host` (no port mapping) | The rootless container's userspace port forward collapses MB-scale bulk flows to a crawl; host networking gives result/artifact transfers real LAN throughput. |
+| Direct LAN reachability for both directions | Result JSON and artifact bodies are MB-sized; routing them through a tunnel collapses throughput, so each side must reach the other's LAN address directly. |
+| `RUN touch /.dockerenv` in the image | Container-detection must positively identify the container; otherwise the config overwrites `CUDA_VISIBLE_DEVICES` and every runner stacks on one GPU. |
+| Set `DEVICE_GLINER=cuda`/`mps` explicitly | The entity extractor defaults to CPU (unique among the models), so leaving it unset silently costs ~hours per book instead of minutes on the accelerator. |
+| Pin 1 concurrent job per GPU | Marker + models are VRAM-heavy; parallel jobs on one card contend for VRAM and make results unpredictable. |
+| Pin Runner to one GPU with `CUDA_VISIBLE_DEVICES=<n>` | With multiple runners you must know which physical card each addresses; pinning makes `cuda:0` map to the intended card and keeps attribution clean. |
+| ACL `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` or leave it unset with `source_url` | The runner must not read arbitrary host paths; limiting the roots (or using signed URLs) makes local delivery impossible by construction. |
+| Bind `0.0.0.0` only on trusted/LAN hosts | The runner has no authentication by design (loopback or trusted network only per contract §18); exposing it wider is unsafe. |
+| Device choice — prefer MPS only when external GPUs are out of reach | MPS is a complete, supported alternative but ~10× slower than an external GPU — fine for occasional runs, not for mass processing. |
+
+> **Sizing guidance:** for hardware pick-up, see the measured orders of
+> magnitude in [Troubleshooting → sizing/performance](troubleshooting.md).
 
 Continue: [Monitoring](monitoring.md) · [Troubleshooting](troubleshooting.md) ·
 [PROCESSOR_CONTRACT v1](../developer-guide/processor-contract.md)
