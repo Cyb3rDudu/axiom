@@ -1,7 +1,7 @@
 # L8 Throughput Analysis
 
 **Report type:** Measurement report (dated) · **Date:** 2026-08-15 · **Context:**
-Epic #109 closure gate · **Data basis:** production DBs (`axiom_db`, TC2 state;
+closure-gate analysis · **Data basis:** production DBs (`axiom_db`, TC2 state;
 TC1 backup), reproducible. Original: `axiom_ng/docs/benchmarks/L8_DURCHSTICHS_ANALYSE.md`.
 
 > This report documents the **system state as of 2026-08-15**. The figures are

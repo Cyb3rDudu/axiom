@@ -2,9 +2,9 @@
 
 !!! note "Status"
     The retrieval feature (semantic search + the ability to ask questions over
-    your indexed library) is being built as part of Epic
-    [#130](https://github.com/Cyb3rDudu/axiom/issues/130). This page describes
-    the intended shape; the concrete search API and UI arrive with that epic.
+    your indexed library) is still in development. This page describes
+    the intended shape; the concrete search API and UI arrive when the
+    feature ships.
 
 ## What retrieval will do
 
@@ -21,8 +21,7 @@ retrieval surface is meant to let you:
 
 The processing pipeline already produces everything retrieval needs: chunks with
 exact locators, dense embeddings for semantic search, and an entity/relationship
-graph. What's still coming is the polished query + result surface on top
-(Epic #130).
+graph. What's still coming is the polished query + result surface on top.
 
 ## Current state
 
@@ -36,6 +35,6 @@ Until the retrieval surface ships, you can:
 
 - Confirm your documents finished processing and are indexed (see
   [Ingest](ingest.md)).
-- Follow Epic #130 for the retrieval release.
+- Watch this page for the retrieval release.
 
 Next: [Welcome](../index.md) · [Ingest](ingest.md)

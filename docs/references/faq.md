@@ -1,8 +1,7 @@
 # FAQ
 
 !!! warning "In progress"
-    This section will be filled as the need arises (Epic
-    [#138](https://github.com/Cyb3rDudu/axiom/issues/138)). The page exists in
+    This section will be filled as the need arises. The page exists in
     the structure so that every nav point targets a real destination.
 
 ## Frequently asked questions

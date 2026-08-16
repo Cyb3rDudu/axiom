@@ -93,13 +93,12 @@ Confusing them is the most common config error:
 
 ## Machine-maintainability note
 
-This table is deliberately shaped to be **recomputed from code**: a tool (the
-planned doc-agent, D7) can diff `config.go`'s `Load()` and the runner package's
+This table is deliberately shaped to be **recomputed from code**: a tool or a
+CI step can diff `config.go`'s `Load()` and the runner package's
 `load_settings()` — across the files that read them, e.g.
 `config.py` **and** `axiom_ng_runner/__init__.py` (where
 `AXIOM_PROCESSOR_COMPUTE` is re-read) — against this table and flag (a) a code
 variable missing here, or (b) a table row without a code backing. The grep
-targets the package(s), not a single file. It is the pilot candidate for
-automating the config-reference documentation.
+targets the package(s), not a single file.
 
 Next: [Testing](testing.md) · [Architecture Overview](architecture.md)

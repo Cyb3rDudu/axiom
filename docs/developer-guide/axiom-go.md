@@ -1,4 +1,4 @@
-# axiom_ng (Go)
+# axiom dispatcher
 
 `axiom_ng` is the Go orchestrator of the system. It owns all durable
 application state: Zotero synchronization, ingest jobs, leases, retries,
@@ -11,7 +11,7 @@ The Python runner computes; `axiom_ng` orchestrates, validates, and persists.
 > This chapter summarizes `PROCESSOR_CONTRACT` and the resolved work order
 > (`LEASE_DISPATCHER_PROCESSOR_ADAPTER_WORK_ORDER.md`, kept in git as a
 > historical source). The contract structures are specified exactly in
-> [PROCESSOR_CONTRACT v1](processor-contract.md).
+> [Processor Contract](processor-contract.md).
 
 ## Core components
 
@@ -161,6 +161,6 @@ variables at startup (see the [complete table](configuration.md)). The
 `DispatcherProfile` is frozen into each job's input snapshot at claim time;
 changing it affects only newly claimed jobs, not in-flight ones.
 
-Continue: [PROCESSOR_CONTRACT v1](processor-contract.md) ·
-[axiom_ng_runner (Python)](axiom-runner.md) ·
+Continue: [Processor Contract](processor-contract.md) ·
+[axiom runner](axiom-runner.md) ·
 [References → Data Model](../references/data-model.md)

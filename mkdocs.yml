@@ -86,12 +86,11 @@ nav:
       - Retrieval: user-guide/retrieval.md
   - Developer Guide:
       - Architecture Overview: developer-guide/architecture.md
-      - "axiom_ng (Go)": developer-guide/axiom-go.md
-      - "axiom_ng_runner (Python)": developer-guide/axiom-runner.md
-      - "PROCESSOR_CONTRACT v1": developer-guide/processor-contract.md
+      - "axiom dispatcher": developer-guide/axiom-go.md
+      - "axiom runner": developer-guide/axiom-runner.md
+      - "Processor Contract": developer-guide/processor-contract.md
       - Configuration: developer-guide/configuration.md
       - Testing: developer-guide/testing.md
-      - "Doc-Agent Profile (concept)": developer-guide/doc-agent.md
   - Operations:
       - Deployment: operations/deployment.md
       - Monitoring: operations/monitoring.md
