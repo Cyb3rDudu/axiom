@@ -34,9 +34,9 @@ type NormalizedMetadata struct {
 type rawItemData struct {
 	ItemType     string `json:"itemType"`
 	Title        string `json:"title"`
-	NameOfAct    string `json:"nameOfAct,omitempty"`    // statute (methodology §2)
-	DateEnacted  string `json:"dateEnacted,omitempty"`  // statute
-	Institution  string `json:"institution,omitempty"`  // report (methodology §4)
+	NameOfAct    string `json:"nameOfAct,omitempty"`   // statute (methodology §2)
+	DateEnacted  string `json:"dateEnacted,omitempty"` // statute
+	Institution  string `json:"institution,omitempty"` // report (methodology §4)
 	Date         string `json:"date,omitempty"`
 	Publisher    string `json:"publisher,omitempty"`
 	Edition      string `json:"edition,omitempty"`

@@ -42,9 +42,9 @@ func (r *Repo) DocumentMetaByIDs(ctx context.Context, ids []string) (map[string]
 		return out, nil
 	}
 	rows, err := r.pool.Query(ctx, `
-	SELECT id::text, title, creators, publication_year, COALESCE(publisher, '')
-	FROM zotero_documents
-		WHERE id = ANY($1::uuid[]) AND NOT deleted`, ids)
+				SELECT id::text, title, creators, publication_year, COALESCE(publisher, '')
+				FROM zotero_documents
+				WHERE id = ANY($1::uuid[]) AND NOT deleted`, ids)
 	if err != nil {
 		return nil, err
 	}

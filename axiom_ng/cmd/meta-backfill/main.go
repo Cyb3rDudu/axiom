@@ -80,17 +80,21 @@ func main() {
 		if nm.ItemType != "statute" && nm.ItemType != "report" {
 			continue
 		}
+		// title is NOT NULL: COALESCE keeps the existing value when Normalize
+		// yields none, so a dirty title-less item can neither crash the backfill
+		// nor count as a change. publisher/publication_date are nullable — NULL
+		// is a legal target there.
 		title, year, date, publisher := nullIfEmpty(nm.Title), yearArg(nm.PublicationYear), nullIfEmpty(nm.Date), nullIfEmpty(nm.Publisher)
 		if *dry {
-			var exists bool
+			var wouldChange bool
 			if err := d.Pool().QueryRow(ctx, `
-				SELECT (title IS DISTINCT FROM $3 OR publication_year IS DISTINCT FROM $4
+				SELECT (title IS DISTINCT FROM COALESCE($3, title) OR publication_year IS DISTINCT FROM $4
 				     OR publication_date IS DISTINCT FROM $5 OR publisher IS DISTINCT FROM $6)
 				FROM zotero_documents WHERE source_id=$1 AND zotero_key=$2`,
-				it.src, it.key, title, year, date, publisher).Scan(&exists); err != nil {
+				it.src, it.key, title, year, date, publisher).Scan(&wouldChange); err != nil {
 				fatal("dry check %s: %v", it.key, err)
 			}
-			if exists {
+			if wouldChange {
 				changed++
 				fmt.Printf("WOULD UPDATE %-10s %s -> title=%v year=%v date=%v publisher=%v\n", nm.ItemType, it.key, title, year, date, publisher)
 			}
@@ -98,9 +102,9 @@ func main() {
 		}
 		tag, err := d.Pool().Exec(ctx, `
 			UPDATE zotero_documents SET
-				title=$3, publication_year=$4, publication_date=$5, publisher=$6, updated_at=now()
+				title=COALESCE($3, title), publication_year=$4, publication_date=$5, publisher=$6, updated_at=now()
 			WHERE source_id=$1 AND zotero_key=$2
-			  AND (title IS DISTINCT FROM $3 OR publication_year IS DISTINCT FROM $4
+			  AND (title IS DISTINCT FROM COALESCE($3, title) OR publication_year IS DISTINCT FROM $4
 			   OR publication_date IS DISTINCT FROM $5 OR publisher IS DISTINCT FROM $6)`,
 			it.src, it.key, title, year, date, publisher)
 		if err != nil {
