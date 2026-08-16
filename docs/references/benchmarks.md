@@ -19,9 +19,10 @@ and they remain valid as measurements.
 | [TC2: 3-Runner Parallel Test & Determinism](benchmarks/tc2-parallel.md) | 2026-08-15 | Work-conserving distribution, single-snapshot exclusivity, determinism around Marker |
 | [Mass Chunking](benchmarks/mass-chunking.md) | 2026-08-14 | 16/16 complete, 0 failures, throughput/cold-warm, profile finding |
 | [Chunk Quality (Quality Gate)](benchmarks/chunk-quality.md) | 2026-08-15 | Chunk/locator/entity/relation quality, kNN search test, GO for TC2 |
+| [Retrieval Quality](benchmarks/retrieval-quality.md) | 2026-08-16 | Retrieval arm selection (dense/hybrid/rerank/sparse/graph); gold set provisional |
 
-The **canonical originals** live in `axiom_ng/docs/benchmarks/`; these pages are
-the site-facing view.
+The **canonical originals** live in `axiom_ng/docs/` (benchmark reports under
+`axiom_ng/docs/benchmarks/`); these pages are the site-facing view.
 
 ## Related
 

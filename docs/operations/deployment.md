@@ -1,7 +1,7 @@
 # Deployment: Running a Runner (GPU Compute Offload)
 
-This chapter explains how to run the `axiom_ng_runner` (the Python processor)
-on an external GPU host and how to point the `axiom_ng` dispatcher at it. The
+This chapter explains how to run the **axiom runner** on an external GPU host
+and how to point the **axiom dispatcher** at it. The
 purpose: run heavy document processing (Marker conversion, BGE-M3 embeddings,
 GLiNER entities, mREBEL relationships) on NVIDIA GPUs instead of on the
 dispatcher host.
@@ -14,19 +14,21 @@ dispatcher host.
 
 ## Architecture
 
-```text
-Dispatcher host (axiom)                Runner host (GPU)
-┌──────────────────────────┐  HTTP/JSON ┌──────────────────────────────┐
-│ Go dispatcher             │ ──────────▶ │ axiom_ng_runner (Python)      │
-│ POST /v1/process          │   Port     │ conversion + embeddings +    │
-│ polls status/result       │ ◀───────── │ entity/relation extraction    │
-│ persists to Postgres      │            └──────────────────────────────┘
-└──────────────────────────┘
+```mermaid
+flowchart LR
+    D["axiom dispatcher"] ---|HTTP/JSON /v1/process| R["axiom runner"]
+    D ---|pulls results + artifacts| R
+    R -.->|POST /v1/ack after durable commit| D
 ```
+
+Both run on their own host: the **axiom dispatcher** (owns all state, leases,
+durability, and the search index) and the **axiom runner** (pure compute —
+conversion, chunking, embeddings, entity/relation extraction, and query
+embed/rerank). More detail on roles in the [Developer Guide → axiom runner](../developer-guide/axiom-runner.md).
 
 The runner is **pure compute**: it never touches Postgres, OpenSearch, or
 Zotero. All durable state stays with the dispatcher. Only the HTTP contract
-(`PROCESSOR_CONTRACT v1`) crosses the wire.
+(`Processor Contract`) crosses the wire.
 
 ## Prerequisites on the GPU host
 
@@ -54,16 +56,16 @@ Build checks (derived from operating experience, stated as requirements):
 
 1. **Self-contained runner:** The image copies **only** `axiom_ng_runner/`
    (including `compute_core`). No DB adapter, no legacy module — the DB-driver
-   import chain is no longer in the runner since the compute-core vendor split
-   (#118).
+   import chain is no longer in the runner since the compute-core vendor split.
 2. **Triton JIT needs a compiler + libc:** install `gcc` and `libc6-dev`
    explicitly (otherwise the first dense-embedding run fails on a missing
    `crti.o`). Do not use `--no-install-recommends` without these packages.
 3. **Pin versions identical to the reference venv** (see
    `axiom_ng_runner/requirements-heavy.txt`), above all
    `marker-pdf==1.10.2`. Divergent versions produce divergent output.
-4. **`RUN touch /.dockerenv`** — see Trap 10 in the
-   [L8 Throughput Analysis](../references/benchmarks/l8-durchstich.md).
+4. **`RUN touch /.dockerenv`** — the runner must positively detect it is in a
+   container; without this marker file, the tooling treats it as bare metal and
+   overwrites the GPU-pinning env vars, which stacks every runner onto GPU 0.
 
 ```dockerfile
 FROM python:3.11-slim
@@ -134,7 +136,7 @@ design only on loopback or a trusted network, see contract §18).
 ### Alternative: run on the dispatcher host (Apple MPS)
 
 A GPU run is not necessarily external. On an Apple Mac with MPS the complete
-`real` pipeline can run (validation #128):
+`real` pipeline can run:
 
 ```bash
 DEVICE_GLINER=mps PYTORCH_ENABLE_MPS_FALLBACK=1 \
@@ -327,4 +329,4 @@ not) to relax it — except the last row, which is a device choice, not a rule.
 > magnitude in [Troubleshooting → sizing/performance](troubleshooting.md).
 
 Continue: [Monitoring](monitoring.md) · [Troubleshooting](troubleshooting.md) ·
-[PROCESSOR_CONTRACT v1](../developer-guide/processor-contract.md)
+[Processor Contract](../developer-guide/processor-contract.md)

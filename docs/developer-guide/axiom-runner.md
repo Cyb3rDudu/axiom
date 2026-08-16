@@ -1,4 +1,4 @@
-# axiom_ng_runner (Python)
+# axiom runner
 
 The **Python processor runner** is a loopback HTTP service that implements
 `PROCESSOR_CONTRACT` (transport contract v1) for document processing **and**
@@ -21,15 +21,15 @@ GET  /v1/jobs/{job_id}/result
 GET  /v1/jobs/{job_id}/artifacts/{artifact_ref}
 POST /v1/jobs/{job_id}/cancel
 POST /v1/jobs/{job_id}/ack
-POST /v1/embed             (R1 #131)     query-embedding (query role)
-POST /v1/rerank            (R2 #132)     cross-encoder rerank (query role)
+POST /v1/embed             (R1)        query-embedding (query role)
+POST /v1/rerank            (R2)        cross-encoder rerank (query role)
 ```
 
 Processing is asynchronous: `POST /v1/process` validates the source, accepts
 with `202`, and enqueues compute into a background worker. The client polls
 `GET /v1/jobs/{id}` until a terminal state, then fetches the result.
 
-## Roles (R4, #134)
+## Roles
 
 The runner plays two roles; the dispatcher wires which URL is which:
 
@@ -39,7 +39,7 @@ The runner plays two roles; the dispatcher wires which URL is which:
 - **Ingest role** (`/v1/process`) — document processing, with a primary
   (`AXIOM_PROCESSOR_URL`) and a fallback (`AXIOM_INGEST_FALLBACK_URL`) forming a
   failover chain. The fallback defaults to a local runner (complete, ~11×
-  slower — the #128 proof figure).
+  slower).
 
 The dispatcher probes capabilities at startup and logs the resolved role wiring.
 A missing **required ingest** capability fails the negotiation fast; a missing
@@ -60,7 +60,7 @@ afterward) so the low-latency budget is met.
 | `GET /v1/jobs/{job_id}/artifacts/{artifact_ref}` | Artifact bytes | |
 | `POST /v1/jobs/{job_id}/cancel` | Cooperative cancel | |
 | `POST /v1/jobs/{job_id}/ack` | Durability ack (idempotent) | Authorizes temp-file deletion. |
-| `POST /v1/embed` (R1) | Dense BGE-M3 vectors for query texts | `AXIOM_PROCESSOR_MAX_QUERY_TEXTS` caps the batch. |
+| `POST /v1/embed` (R1) | Dense BGE-M3 vectors for query texts | `AXIOM_PROCESSOR_MAX_QUERY_TEXTS` caps the batch. Sparse vectors are returned only when explicitly requested. |
 | `POST /v1/rerank` (R2) | Cross-encoder scores for (query, candidate) pairs, sorted desc | `AXIOM_PROCESSOR_RERANK_MAX_TEXTS` caps candidates. |
 
 ### Stage progression
@@ -156,5 +156,5 @@ lost:
 - **No request-queue cap:** every accepted POST starts an unbounded daemon
   thread; the semaphore gates only concurrency, not queue length.
 
-Continue: [PROCESSOR_CONTRACT v1](processor-contract.md) ·
+Continue: [Processor Contract](processor-contract.md) ·
 [Architecture Overview](architecture.md) · [Configuration](configuration.md)

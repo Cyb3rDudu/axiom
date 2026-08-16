@@ -1,11 +1,9 @@
-# PROCESSOR_CONTRACT v1
+# Processor Contract
 
-!!! note "Canonical source"
-    The canonical source of the contract is the file
-    **`axiom_ng/docs/PROCESSOR_CONTRACT.md`** in the repository — it is not
-    moved or rewritten. This site page is a summary + reference; all
-    implementation-binding detail rules live in the canonical file. When in
-    doubt, the canonical text wins over this overview.
+!!! note "Version"
+    This page summarizes the **v1** contract. The canonical, implementation-
+    binding detail rules live in `axiom_ng/docs/PROCESSOR_CONTRACT.md`; the
+    version below is implied by that canonical file.
 
 The Processor Contract separates durable data ownership from hardware- and
 library-specific document processing:
@@ -103,5 +101,5 @@ You can read the binding, complete contract text in the canonical file:
 - Repo path: `axiom_ng/docs/PROCESSOR_CONTRACT.md`
 - GitHub: [PROCESSOR_CONTRACT.md](https://github.com/Cyb3rDudu/axiom/blob/main/axiom_ng/docs/PROCESSOR_CONTRACT.md)
 
-Continue: [axiom_ng_runner (Python)](axiom-runner.md) ·
-[axiom_ng (Go)](axiom-go.md) · [Architecture Overview](architecture.md)
+Continue: [axiom runner](axiom-runner.md) ·
+[axiom dispatcher](axiom-go.md) · [Architecture Overview](architecture.md)

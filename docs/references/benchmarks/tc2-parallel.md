@@ -76,7 +76,7 @@ classified.
 | --- | --- |
 | 12 books (incl. both Springer PDFs) | **byte-identical** (count+text+locator) |
 | ESGBS (Heaton, EPUB) | **34/34 chunks identical** — the apparent delta was a force_rebuild double activation, not content |
-| Demystifying (Sonko, EPUB) | tempdir leak → **after fix #124: 252/252 byte-identical** |
+| Demystifying (Sonko, EPUB) | tempdir leak → **after the tempdir fix: 252/252 byte-identical** |
 | Perspektiven (PDF) | 52/300 chunk texts differ |
 | Nachhaltiges Management (PDF) | 615/754 differ, 754→757 chunks |
 

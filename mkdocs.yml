@@ -7,8 +7,8 @@
 # axiom_ng_runner/) and AXIOM_* env names are technical facts and stay as is.
 
 site_name: axiom
-site_description: Zotero-powered research knowledge system — Go orchestration,
-  Python compute, searchable knowledge base
+site_description: A research knowledge engine for your Zotero library — search
+  your literature by meaning and cite with exact source locators
 site_url: https://cyb3rdudu.github.io/axiom/
 repo_url: https://github.com/Cyb3rDudu/axiom
 edit_uri: blob/main/docs/
@@ -86,12 +86,11 @@ nav:
       - Retrieval: user-guide/retrieval.md
   - Developer Guide:
       - Architecture Overview: developer-guide/architecture.md
-      - "axiom_ng (Go)": developer-guide/axiom-go.md
-      - "axiom_ng_runner (Python)": developer-guide/axiom-runner.md
-      - "PROCESSOR_CONTRACT v1": developer-guide/processor-contract.md
+      - "axiom dispatcher": developer-guide/axiom-go.md
+      - "axiom runner": developer-guide/axiom-runner.md
+      - "Processor Contract": developer-guide/processor-contract.md
       - Configuration: developer-guide/configuration.md
       - Testing: developer-guide/testing.md
-      - "Doc-Agent Profile (concept)": developer-guide/doc-agent.md
   - Operations:
       - Deployment: operations/deployment.md
       - Monitoring: operations/monitoring.md
@@ -104,5 +103,6 @@ nav:
           - TC2 Parallel & Determinism: references/benchmarks/tc2-parallel.md
           - Mass Chunking: references/benchmarks/mass-chunking.md
           - Chunk Quality: references/benchmarks/chunk-quality.md
+          - Retrieval Quality: references/benchmarks/retrieval-quality.md
       - FAQ: references/faq.md
   - About: about/index.md

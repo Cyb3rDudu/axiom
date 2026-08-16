@@ -1,136 +1,79 @@
 # Quickstart
 
-Get a minimal **axiom** setup running and process your first document — all with
-local, generic defaults and placeholders where your environment differs. No
-private infrastructure knowledge is required to follow this guide.
+Get a minimal **axiom** setup running and process your first document — local,
+with generic defaults, no private infrastructure knowledge required. For
+production/multi-machine depth, follow the links to [Developer
+Guide](../developer-guide/architecture.md) and [Operations](../operations/deployment.md).
 
-## What you need before you start
+## What you need
 
-- **A local Zotero desktop instance** with the Local API enabled (Settings →
-  Advanced → "Allow other applications on this computer to communicate with
-  Zotero"). axiom talks to Zotero over `http://localhost:23119/api`.
-- **PostgreSQL with pgvector** — axiom persists its durable state, chunks, and
-  embeddings here. Any PostgreSQL 15+ with the `vector` extension works.
-- **OpenSearch** — the searchable index. The pipeline writes its index through
-  an outbox, so a temporary outage never forces a re-run.
-- **A Go toolchain** (to build the dispatcher) and a **Python 3.11+ runtime** (to run the processor).
-- **A GPU is optional.** Everything runs on CPU or Apple MPS for a first test;
-  a GPU host comes in later for mass processing (see Operations → Deployment).
+- **Zotero desktop** with the Local API enabled (Settings → Advanced →
+  "Allow other applications on this computer to communicate with Zotero").
+- **PostgreSQL with pgvector** and **OpenSearch** — persisted state + the
+  search index.
+- **A Go toolchain and a Python 3.11+ runtime** to run the two processes below.
 
-> If any requirement is daunting, start minimal: only the Go dispatcher and the
-> Python `reference` processor on one host, all on loopback. A single small PDF
-> end-to-end is enough to prove the pipeline.
+A GPU is optional for the first test — everything runs on CPU/Apple MPS. Full
+setup details (env vars, firewall, GPU) are in
+[Operations → Deployment](../operations/deployment.md).
 
 ## Layout
 
-Two processes work together:
-
 ```text
-axiom (Go dispatcher)  ──HTTP/contract──▶  axiom_ng_runner (Python processor)
-owns all state, leases,                does conversion, chunking, ML
-durability, search index
+axiom dispatcher  ──HTTP contract──▶  axiom runner
+owns state, queue, search index        does conversion, chunking, ML
 ```
 
-Both are configured with `AXIOM_*` environment variables. The values below are
-the **local defaults** — safe to start from.
+Both run on loopback for a first test. To spread compute across machines (e.g.
+retrieval on a local runner, heavy processing on a remote GPU), see the
+[split-role setup — Operations → Deployment](../operations/deployment.md): a
+setup path for that scenario.
 
-## 1. Configure the runner (Python processor)
-
-Create a venv and run the processor in `reference` mode (no GPU, self-contained):
+## 1. Run the axiom runner
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r axiom_ng_runner/requirements.txt
-
-export AXIOM_PROCESSOR_BIND_ADDR=127.0.0.1
-export AXIOM_PROCESSOR_PORT=8537
-export AXIOM_PROCESSOR_COMPUTE=reference          # or "real" for GPU
-export AXIOM_PROCESSOR_WORK_ROOT=/tmp/axiom_processor_work
-export AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=<path-to-zotero-storage>
-export AXIOM_PROCESSOR_MAX_CONCURRENT_JOBS=1
-
+export AXIOM_PROCESSOR_COMPUTE=reference
+export AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=<path-to-zotero-storage>  # the `storage` folder of your Zotero data dir
 .venv/bin/python -m axiom_ng_runner
 ```
 
-Wait for a message like `Uvicorn running on http://127.0.0.1:8537`.
+Wait for `Uvicorn running on http://127.0.0.1:8537`.
 
-> `<path-to-zotero-storage>` is the `storage` folder of your local Zotero data
-> directory. The processor only reads the files a job points it at; it never
-> owns anything.
->
-> Need notes instead of a blanket allow-any-root? The contract §18 allows
-> configuring a strict list. For a first run, pointing at the storage folder is
-> fine.
-
-## 2. Configure the dispatcher (Go)
-
-Build and run the Go sidecar that owns the sync, jobs, and index:
+## 2. Run the axiom dispatcher
 
 ```bash
 export AXIOM_ZOTERO_BASE=http://localhost:23119/api
-export AXIOM_ZOTERO_LIBRARY=users/0              # your Zotero library id
 export AXIOM_DATABASE_URL=postgres://<user>:<pass>@localhost:5432/<db>
 export AXIOM_OPENSEARCH_URL=http://localhost:9200
-export AXIOM_OPENSEARCH_USERNAME=<your-user>      # or leave unset for none
-export AXIOM_OPENSEARCH_PASSWORD=<your-pass>      # or leave unset for none
-export AXIOM_API_PORT=8011
-export AXIOM_BIND_ADDR=127.0.0.1
 export AXIOM_PROCESSOR_URL=http://127.0.0.1:8537
 export AXIOM_DISPATCHER_ENABLED=true
-export AXIOM_DISPATCHER_CONCURRENCY=1
 
-go run ./axiom_ng/cmd/axiom-ng
+cd axiom_ng && go run ./cmd/axiom-ng
 ```
 
-The dispatcher checks that Zotero is reachable and the runner is
-contract-compatible; it fails fast if not.
+The dispatcher checks Zotero is reachable and the runner is contract-compatible.
 
-## 3. Sync your library
-
-Ask axiom to mirror Zotero:
+## 3. Sync, then watch the pipeline
 
 ```bash
-curl -X POST http://127.0.0.1:8011/api/zotero/sync
+curl -X POST http://127.0.0.1:8011/api/zotero/sync   # mirror Zotero → ingest jobs
+curl     http://127.0.0.1:8011/api/ingest/jobs       # watch pending → completed
 ```
 
-This creates one *ingest job* per preferred processable attachment. Confirm with:
+A document that finishes shows `completed`; its chunks land in the searchable
+index.
 
-```bash
-curl http://127.0.0.1:8011/api/ingest/jobs
-```
-
-You should see jobs in status `pending`.
-
-## 4. Let the pipeline run
-
-The dispatcher (enabled above) claims jobs, sends them to the runner, validates
-and persists each result, and writes to the search index. Give it a few seconds
-per small document, then check status:
-
-```bash
-curl http://127.0.0.1:8011/api/ingest/jobs
-```
-
-A document that finished will show `completed`. If any are `failed`, see the
-Troubleshooting section — the top causes are a missing Zotero storage path, a
-mismatched runner computation backend, or the index not being reachable.
-
-## 5. Confirm the index
-
-The chunks that end up in OpenSearch are your searchable data. The pipeline
-drives it through an outbox, so the count updates shortly after jobs complete.
-
-> That's it for retrieval-as-feature — the full search/retrieval surface is
-> still rolling out (Epic #130). This quickstart proves the pipeline: Zotero in,
-> processed, citable chunks out, indexed.
-
-## Troubleshooting the common three
+## If something fails
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
-| `Zotero local API not reachable` at startup | Local API disabled or Zotero not running | Enable Settings → Advanced → Local API; ensure Zotero is open on `localhost:23119`. |
-| Jobs stuck or `failed` with a source error | `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` doesn't include the attachment path | Point `ALLOWED_SOURCE_ROOTS` at the real Zotero storage folder and restart the runner. |
-| Runner never picks up work / contract error | `AXIOM_PROCESSOR_URL` or `COMPUTE` mismatch between dispatcher and runner | Both sides must use the same URL and a runner the dispatcher can reach (loopback same host is simplest). |
+| `Zotero local API not reachable` | Local API disabled or Zotero closed | Enable Settings → Advanced → Local API; keep Zotero running. |
+| Jobs stuck or fail on a source error | Runner cannot read the Zotero storage path | Point `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` at the real Zotero storage folder and restart the runner. |
+| Runner never picks up work | URL/compute mismatch between dispatcher and runner | Use the same `AXIOM_PROCESSOR_URL` on both sides (loopback same host is simplest). |
+
+More patterns: [Troubleshooting](../operations/troubleshooting.md).
 
 Continue: [Concept Tour](concept-tour.md) · [Welcome](../index.md) ·
 [Architecture Overview](../developer-guide/architecture.md)
