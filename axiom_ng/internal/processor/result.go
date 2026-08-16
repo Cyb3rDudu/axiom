@@ -10,6 +10,12 @@ package processor
 // All refs are job-local (the processor's own ids); axiom-ng maps them to
 // durable ids while persisting.
 
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+)
+
 // Result is the top-level processor result payload.
 type Result struct {
 	ContractVersion     string               `json:"contract_version"`
@@ -99,11 +105,45 @@ type DenseEmbedding struct {
 	Values     []float32 `json:"values"`
 }
 
-// SparseEmbedding maps bucketed string keys to numeric weights (as strings to
-// match the JSON shape; validated numeric).
+// SparseEmbedding maps bucketed string keys to numeric weights. §10
+// serializes the weights as strings; the in-memory shape stays string
+// (validate + persist operate on strings).
 type SparseEmbedding struct {
-	Model  string            `json:"model"`
-	Values map[string]string `json:"values"`
+	Model  string       `json:"model"`
+	Values SparseValues `json:"values"`
+}
+
+// SparseValues accepts BOTH §10 string weights and native JSON numbers —
+// the reference backend emits numbers (its fill path bypasses the
+// stringification), and map[string]string alone made those results
+// terminally fail persist (R5 review, verified live). Marshal keeps the
+// §10 string form, so the wire shape is unchanged for conforming runners.
+type SparseValues map[string]string
+
+func (v *SparseValues) UnmarshalJSON(b []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	out := make(SparseValues, len(raw))
+	for k, r := range raw {
+		if string(r) == "null" {
+			return fmt.Errorf("sparse token %q: weight is null", k)
+		}
+		var s string
+		if err := json.Unmarshal(r, &s); err == nil {
+			out[k] = s
+			continue
+		}
+		var f float64
+		if err := json.Unmarshal(r, &f); err == nil {
+			out[k] = strconv.FormatFloat(f, 'g', -1, 64)
+			continue
+		}
+		return fmt.Errorf("sparse token %q: weight is neither string nor number", k)
+	}
+	*v = out
+	return nil
 }
 
 // Entity is an extracted entity with its chunk mentions.

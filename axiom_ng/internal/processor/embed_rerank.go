@@ -23,6 +23,8 @@ const (
 type EmbedRequest struct {
 	ContractVersion string   `json:"contract_version"`
 	Texts           []string `json:"texts"`
+	// IncludeSparse (R5 #135) additionally returns learned lexical weights.
+	IncludeSparse bool `json:"include_sparse,omitempty"`
 }
 
 // EmbedResponse is POST /v1/embed (contract §7a).
@@ -31,6 +33,9 @@ type EmbedResponse struct {
 	Model           string      `json:"model"`
 	Dimensions      int         `json:"dimensions"`
 	Embeddings      [][]float32 `json:"embeddings"`
+	// Sparse is present iff the request set include_sparse: one
+	// {token: weight} map per text (R5 #135).
+	Sparse []map[string]float64 `json:"sparse,omitempty"`
 }
 
 // RerankRequest is POST /v1/rerank (contract §7a).
@@ -67,6 +72,26 @@ func (c *Client) EmbedQueries(ctx context.Context, texts []string) ([][]float32,
 		return nil, fmt.Errorf("embed: got %d embeddings for %d texts", len(out.Embeddings), len(texts))
 	}
 	return out.Embeddings, nil
+}
+
+// EmbedQueriesSparse returns dense embeddings AND learned lexical weights
+// for the query texts in one runner call (R5 #135 sparse arm).
+func (c *Client) EmbedQueriesSparse(ctx context.Context, texts []string) ([][]float32, []map[string]float64, error) {
+	var out EmbedResponse
+	if err := c.do(ctx, budgetEmbed, http.MethodPost, "/v1/embed", &EmbedRequest{
+		ContractVersion: ContractVersion,
+		Texts:           texts,
+		IncludeSparse:   true,
+	}, &out); err != nil {
+		return nil, nil, fmt.Errorf("embed sparse: %w", err)
+	}
+	if len(out.Embeddings) != len(texts) {
+		return nil, nil, fmt.Errorf("embed sparse: got %d embeddings for %d texts", len(out.Embeddings), len(texts))
+	}
+	if len(out.Sparse) != len(texts) {
+		return nil, nil, fmt.Errorf("embed sparse: got %d sparse maps for %d texts", len(out.Sparse), len(texts))
+	}
+	return out.Embeddings, out.Sparse, nil
 }
 
 // Rerank returns cross-encoder scores for the (query, texts) pairs;

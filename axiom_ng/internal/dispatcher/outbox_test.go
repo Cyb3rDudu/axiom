@@ -428,6 +428,10 @@ func TestOutboxWarnsWhenExistingIndexStrandsKnn(t *testing.T) {
 			// Real OpenSearch response shape: wrapped under the index name.
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte(`{"axiom-ng-chunks-v1":{"mappings":{"properties":{"embedding":{"type":"float"}}}}}`))
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/_mapping"):
+			// R5: additive sparse rank_features mapping (idempotent).
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"acknowledged":true}`))
 		default:
 			w.WriteHeader(400)
 		}
@@ -727,5 +731,64 @@ func TestOutboxObsoleteIndexSkipped(t *testing.T) {
 	}
 	if done != 1 || pending != 0 {
 		t.Fatalf("index row done=%d pending=%d, want 1/0", done, pending)
+	}
+}
+
+// R5 review pins: the sparse field joins a doc only when present, and a
+// failed additive mapping PUT leaves ensured=false so the next ensureIndex
+// retries it (a mixed-version create race must not strand the index without
+// rank_features).
+func TestOutboxDocumentSparseOnlyWhenPresent(t *testing.T) {
+	row := repo.OutboxRow{SnapshotID: "s", Payload: map[string]any{"document_id": "d"}}
+	doc := repo.OutboxDoc{ChunkID: "c", Text: "t"}
+	if d := outboxDocument(row, doc); d["sparse"] != nil {
+		t.Fatalf("nil sparse must stay absent (null fights rank_features): %v", d["sparse"])
+	}
+	doc.Sparse = map[string]float64{"12": 0.5}
+	d := outboxDocument(row, doc)
+	got, ok := d["sparse"].(map[string]float64)
+	if !ok || got["12"] != 0.5 {
+		t.Fatalf("present sparse must map through exactly: %v", d["sparse"])
+	}
+}
+
+func TestOutboxEnsureSparseMappingRetriedAfterFailure(t *testing.T) {
+	var puts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead:
+			w.WriteHeader(200) // index already exists
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/_mapping"):
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"axiom-ng-chunks-v1":{"mappings":{"properties":{"embedding":{"type":"knn_vector"}}}}}`))
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/_mapping"):
+			puts++
+			if puts == 1 {
+				w.WriteHeader(500) // transient mapping failure
+				return
+			}
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"acknowledged":true}`))
+		default:
+			w.WriteHeader(400)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	osc := newOpenSearchClient(srv.URL, "", "", log.New(io.Discard, "", 0))
+	if err := osc.ensureIndex(context.Background(), 3); err == nil {
+		t.Fatal("first ensure must fail (mapping PUT 500)")
+	}
+	if osc.ensured {
+		t.Fatal("ensured must stay false after a failed mapping PUT")
+	}
+	if err := osc.ensureIndex(context.Background(), 3); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if !osc.ensured {
+		t.Fatal("ensured must flip after the retried mapping PUT")
+	}
+	if puts != 2 {
+		t.Fatalf("mapping PUT must retry exactly once more, got %d", puts)
 	}
 }

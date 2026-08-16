@@ -277,6 +277,9 @@ Request:
 
 - `texts`: 1..N non-blank query texts (N = `limits.max_query_texts`, 16).
 - `max_texts`: optional per-request cap; may only lower the server cap.
+- `include_sparse` (additive, R5 #135, default false): additionally returns
+  the learned lexical weights per text — the query side of the OpenSearch
+  `rank_features` arm. Same encode pass; weights are JSON numbers.
 
 Response:
 
@@ -285,11 +288,14 @@ Response:
   "contract_version": "1.0",
   "model": "BAAI/bge-m3",
   "dimensions": 1024,
-  "embeddings": [[0.012, -0.034, ...]]
+  "embeddings": [[0.012, -0.034, ...]],
+  "sparse": [{"130629": 0.28, ...}]
 }
 ```
 
-`model`/`dimensions` always agree with `models.query_embedding` in the
+`sparse` is present only when `include_sparse` was set (one map per input
+text, aligned with `embeddings`). `model`/`dimensions` always agree with
+`models.query_embedding` in the
 capability report. BGE-M3 is a symmetric encoder: queries and passages use
 the same model and pooling, so these vectors are cosine-comparable with the
 chunk embeddings from `POST /v1/process` (verified by the OS roundtrip

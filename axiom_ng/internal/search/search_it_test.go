@@ -107,6 +107,11 @@ func TestIT_SearchEndToEnd(t *testing.T) {
 		if !res.Arms.Dense || !res.Arms.BM25 {
 			t.Fatalf("query %q arms degraded: %+v", q, res.Arms)
 		}
+		// R5 (#135): the learned-lexical arm must contribute live against
+		// the backfilled rank_features index.
+		if !res.Arms.Sparse {
+			t.Fatalf("query %q sparse arm did not fire: %+v", q, res.Arms)
+		}
 		// On-topic smoke against the query's explicit topic anchors.
 		if !onTopic(qc.anchors, res.Hits[:min(3, len(res.Hits))]) {
 			t.Fatalf("query %q off-topic top-3:\n%s", q, dumpHits(res.Hits[:min(3, len(res.Hits))]))
@@ -191,4 +196,30 @@ func envOr(v, def string) string {
 		return def
 	}
 	return v
+}
+
+// TestIT_SearchGraphArmOn proves the R6 (#136) graph arm runs live:
+// same correct answers, graph candidates may join the pool. Quality-lift
+// measurement is R7's job (flag stays default-off in prod).
+func TestIT_SearchGraphArmOn(t *testing.T) {
+	osURL, procURL, dbURL := itEnv(t)
+	svc := itService(t, osURL, procURL, dbURL)
+	database, _ := db.Open(context.Background(), dbURL)
+	defer database.Close()
+	svc.GraphArm = true
+	svc.SetGraphSource(repo.New(database.Pool()))
+	res, err := svc.Search(context.Background(), Request{
+		Query: "Sustainable Development Goals der Vereinten Nationen", TopN: 5,
+	})
+	if err != nil {
+		t.Fatalf("graph-arm search failed: %v", err)
+	}
+	if len(res.Hits) == 0 || !res.Arms.Dense || !res.Arms.BM25 || !res.Arms.Sparse {
+		t.Fatalf("arms degraded under graph expansion: %+v", res.Arms)
+	}
+	if !onTopic("sdg sustainable development vereinten nationen", res.Hits[:min(3, len(res.Hits))]) {
+		t.Fatalf("graph-arm run off-topic:\n%s", dumpHits(res.Hits[:min(3, len(res.Hits))]))
+	}
+	t.Logf("[IT] graph arm ON: top=%q | %s | %.3f (pool %d candidates, hybrid quality held)",
+		truncateChars(res.Hits[0].Text, 50), res.Hits[0].Source.Book, res.Hits[0].Score, len(res.Hits))
 }

@@ -50,12 +50,39 @@ type Service struct {
 	processor Processor // runner embed/rerank
 	docs      DocSource // source metadata hydration
 	log       *log.Logger
+	// SparseArm enables the third recall arm (learned lexical weights via
+	// the OS rank_features field, R5 #135). Default true; R7 flips it for
+	// A/B measurement (AXIOM_SEARCH_SPARSE_ARM).
+	SparseArm bool
+	// GraphArm enables the fourth candidate source (R6 #136): entities in
+	// the hybrid top hits expand to neighbor chunks through the L6 graph
+	// (mention-stability filtered). Default OFF — R7 measures whether it
+	// helps (AXIOM_SEARCH_GRAPH_ARM). Requires SetGraphSource.
+	GraphArm bool
+	graph    GraphSource
 }
+
+// GraphSource expands seed chunks through stable entities into neighbor
+// chunks (implemented by repo.Repo.GraphCandidates).
+type GraphSource interface {
+	GraphCandidates(ctx context.Context, seedChunkIDs []string, minMentions, limit int) ([]repo.KGChunkCandidate, error)
+}
+
+// SetGraphSource wires the graph expansion source (nil keeps the arm off
+// even when GraphArm is set).
+func (s *Service) SetGraphSource(g GraphSource) { s.graph = g }
+
+// graphMinMentions is the stability floor for graph expansion (same L8-§6
+// rationale as the KG API default).
+const graphMinMentions = 2
 
 // Processor is the runner query-side surface the pipeline needs
 // (implemented by processor.Client).
 type Processor interface {
 	EmbedQueries(ctx context.Context, texts []string) ([][]float32, error)
+	// EmbedQueriesSparse is the R5 (#135) combined call: dense vectors plus
+	// learned lexical weights for the sparse rank_features arm.
+	EmbedQueriesSparse(ctx context.Context, texts []string) ([][]float32, []map[string]float64, error)
 	Rerank(ctx context.Context, query string, texts []string, topN int) ([]processor.RerankScore, error)
 }
 
@@ -75,6 +102,7 @@ func New(osURL, osUser, osPass string, p Processor, docs DocSource, lg *log.Logg
 		processor: p,
 		docs:      docs,
 		log:       lg,
+		SparseArm: true,
 	}
 }
 
@@ -131,8 +159,9 @@ type Response struct {
 
 // Arms records recall-arm health for this request.
 type Arms struct {
-	Dense bool `json:"dense"`
-	BM25  bool `json:"bm25"`
+	Dense  bool `json:"dense"`
+	BM25   bool `json:"bm25"`
+	Sparse bool `json:"sparse,omitempty"`
 }
 
 // Search runs the full pipeline. Errors from single arms degrade the result
@@ -159,12 +188,20 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 
 	// Dense arm: query embedding via the runner. Failure (runner down,
 	// model not loadable) degrades to BM25-only instead of failing search.
+	// With the sparse arm enabled the same call carries the learned lexical
+	// weights (one encode pass, R5 #135).
 	var vec []float32
-	if emb, err := s.processor.EmbedQueries(ctx, []string{req.Query}); err != nil {
-		s.log.Printf("search: dense arm skipped (embed failed): %v", err)
+	var querySparse map[string]float64
+	if s.SparseArm {
+		if emb, sp, err := s.processor.EmbedQueriesSparse(ctx, []string{req.Query}); err != nil {
+			s.log.Printf("search: dense+sparse embed failed, trying dense-only: %v", err)
+			s.embedDenseOnly(ctx, req.Query, &vec, &resp.Arms.Dense)
+		} else {
+			vec, querySparse = emb[0], sp[0]
+			resp.Arms.Dense = vec != nil
+		}
 	} else {
-		vec = emb[0]
-		resp.Arms.Dense = vec != nil
+		s.embedDenseOnly(ctx, req.Query, &vec, &resp.Arms.Dense)
 	}
 
 	// Recall arms in parallel; each returns rank-ordered chunk IDs.
@@ -174,6 +211,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	}
 	denseCh := make(chan armResult, 1)
 	bm25Ch := make(chan armResult, 1)
+	sparseCh := make(chan armResult, 1)
 	go func() {
 		if vec == nil {
 			denseCh <- armResult{}
@@ -186,8 +224,19 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		hits, err := s.os.bm25(ctx, req.Query, fetchN, req.Filters)
 		bm25Ch <- armResult{hits, err}
 	}()
+	go func() {
+		// Empty-but-non-nil weights must not fire a query (nor claim the
+		// arm): a fully pruned query vector means no lexical signal.
+		if len(querySparse) == 0 {
+			sparseCh <- armResult{}
+			return
+		}
+		hits, err := s.os.sparse(ctx, querySparse, fetchN, req.Filters)
+		sparseCh <- armResult{hits, err}
+	}()
 	dense := <-denseCh
 	bm25 := <-bm25Ch
+	sparse := <-sparseCh
 	if dense.err != nil {
 		s.log.Printf("search: dense arm failed: %v", dense.err)
 		resp.Arms.Dense = false
@@ -198,12 +247,46 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	} else {
 		resp.Arms.BM25 = true
 	}
+	if sparse.err != nil {
+		s.log.Printf("search: sparse arm failed (degrading to 2-arm hybrid): %v", sparse.err)
+	} else if len(querySparse) > 0 {
+		resp.Arms.Sparse = true
+	}
 	if !resp.Arms.Dense && !resp.Arms.BM25 {
 		return nil, fmt.Errorf("search: no recall arm succeeded")
 	}
 
-	// RRF merge over the arms (rank 1-based per arm).
-	merged := rrfMerge([]([]osHit){dense.hits, bm25.hits}, fetchN)
+	// RRF merge over the arms (rank 1-based per arm). Arm order fixes tie
+	// order: dense first, then BM25, then sparse (graph appends as 4th).
+	recallArms := []([]osHit){dense.hits, bm25.hits, sparse.hits}
+	merged := rrfMerge(recallArms, fetchN)
+
+	// Graph arm (R6 #136, default off): expand the hybrid top through the
+	// L6 graph and re-fuse — neighbor chunks enter the candidate pool with
+	// their own RRF ranks, never displacing hybrid hits outright.
+	if s.GraphArm && s.graph != nil && len(merged) > 0 {
+		seed := make([]string, 0, min(req.TopN, len(merged)))
+		for _, c := range merged {
+			if len(seed) == req.TopN {
+				break
+			}
+			seed = append(seed, c.ID)
+		}
+		cands, gerr := s.graph.GraphCandidates(ctx, seed, graphMinMentions, fetchN)
+		if gerr != nil {
+			s.log.Printf("search: graph arm failed (continuing without): %v", gerr)
+		} else if len(cands) > 0 {
+			graphHits := make([]osHit, 0, len(cands))
+			for _, c := range cands {
+				loc, _ := json.Marshal(c.Locator)
+				graphHits = append(graphHits, osHit{
+					ID: c.ChunkID, Text: c.Text, DocumentID: c.DocumentID,
+					Locator: loc, SectionTitles: c.SectionTitles,
+				})
+			}
+			merged = rrfMerge(append(recallArms, graphHits), fetchN)
+		}
+	}
 	if len(merged) == 0 {
 		resp.Hits = []Hit{}
 		resp.TookMS = msSince(t0)
@@ -263,6 +346,16 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	}
 	resp.TookMS = msSince(t0)
 	return resp, nil
+}
+
+// embedDenseOnly is the degraded embed path when the combined call fails.
+func (s *Service) embedDenseOnly(ctx context.Context, query string, vec *[]float32, denseOK *bool) {
+	if emb, err := s.processor.EmbedQueries(ctx, []string{query}); err != nil {
+		s.log.Printf("search: dense arm skipped (embed failed): %v", err)
+	} else {
+		*vec = emb[0]
+		*denseOK = *vec != nil
+	}
 }
 
 // applyRerank reorders candidates by the reranker scores (index refers to the
@@ -370,6 +463,56 @@ func (c *osClient) knn(ctx context.Context, vec []float32, k int, f *Filters) ([
 		}
 	}
 	return c.search(ctx, k, query)
+}
+
+// sparseTopK bounds how many query tokens feed the rank_feature bool-should:
+// rank_feature queries carry no per-term weight, so query-side importance is
+// expressed by picking the strongest tokens (BGE-M3 lexical weights are heavy
+// -tailed). R7 tunes this.
+const sparseTopK = 64
+
+// sparse queries the learned-lexical arm (R5 #135): bool-should of
+// rank_feature queries, one per top-K query token; each term's score is the
+// saturation of the DOC's stored weight (the learned importance).
+func (c *osClient) sparse(ctx context.Context, weights map[string]float64, size int, f *Filters) ([]osHit, error) {
+	type tw struct {
+		t string
+		w float64
+	}
+	toks := make([]tw, 0, len(weights))
+	for t, w := range weights {
+		if w > 0 {
+			toks = append(toks, tw{t, w})
+		}
+	}
+	sort.Slice(toks, func(i, j int) bool {
+		if toks[i].w != toks[j].w {
+			return toks[i].w > toks[j].w
+		}
+		return toks[i].t < toks[j].t // deterministic order for ties
+	})
+	if len(toks) > sparseTopK {
+		toks = toks[:sparseTopK]
+	}
+	should := make([]any, 0, len(toks))
+	for _, t := range toks {
+		should = append(should, map[string]any{
+			"rank_feature": map[string]any{"field": "sparse." + t.t},
+		})
+	}
+	if len(should) == 0 {
+		return nil, nil
+	}
+	query := map[string]any{"bool": map[string]any{"should": should}}
+	if f != nil && len(f.DocumentIDs) > 0 {
+		query = map[string]any{
+			"bool": map[string]any{
+				"should": should,
+				"filter": []any{map[string]any{"terms": map[string]any{"document_id": f.DocumentIDs}}},
+			},
+		}
+	}
+	return c.search(ctx, size, query)
 }
 
 func (c *osClient) bm25(ctx context.Context, q string, size int, f *Filters) ([]osHit, error) {

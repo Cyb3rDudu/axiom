@@ -412,6 +412,30 @@ class TextEmbedder:
             )
         return np.asarray(outputs["dense_vecs"], dtype=np.float32).tolist()
 
+    def embed_queries_with_sparse(
+        self, texts: list[str]
+    ) -> tuple[list[list[float]], list[dict[str, float]]]:
+        """Dense + learned-lexical query embeddings for the R5 sparse arm.
+
+        Same encode pass, return_sparse on: one call, one lock, one budget.
+        Sparse weights are floats (the OS rank_features side wants numbers;
+        the stringified ingest format is a contract-§10 storage detail).
+        """
+        with self._model_lock:
+            outputs = self.model.encode(
+                texts,
+                batch_size=len(texts),
+                max_length=512,
+                return_dense=True,
+                return_sparse=True,
+                return_colbert_vecs=False,
+            )
+        dense = np.asarray(outputs["dense_vecs"], dtype=np.float32).tolist()
+        sparse: list[dict[str, float]] = []
+        for lw in outputs["lexical_weights"]:
+            sparse.append({str(k): float(v) for k, v in lw.items()})
+        return dense, sparse
+
     async def embed_query_async(self, query_text: str) -> dict[str, Any] | None:
         """
         Async wrapper for embed_query that uses a semaphore to limit concurrent operations.

@@ -1,0 +1,235 @@
+// Package repo — knowledge-graph read layer (R6, #136). The graph is
+// read-only, derived from active snapshots (L6): entities, mentions,
+// evidenzbelegte relations. The mention-stability filter (>=2 distinct
+// chunks per entity, L8-Analyse §6) is a mandatory default everywhere —
+// 71% of entities are one-hit noise.
+package repo
+
+import (
+	"context"
+	"encoding/json"
+
+	"github.com/jackc/pgx/v5"
+)
+
+// KGEntity is a graph entity with its mention footprint.
+type KGEntity struct {
+	ID            string `json:"id"`
+	CanonicalForm string `json:"canonical_form"`
+	Text          string `json:"text"`
+	Type          string `json:"type,omitempty"`
+	Mentions      int    `json:"mentions"` // distinct chunks mentioning it
+}
+
+// activeEntityCounts CTE: mention counts per entity, only active snapshots.
+const activeEntityCounts = `
+	WITH em AS (
+		SELECT e.id AS entity_id, count(DISTINCT m.chunk_id) AS chunks
+		FROM processing_entities e
+		JOIN processing_snapshots s ON s.id = e.snapshot_id AND s.active
+		JOIN processing_entity_mentions m ON m.entity_id = e.id
+		GROUP BY e.id
+	)`
+
+// SearchKGEntities prefix/substring-matches canonical forms (falling back
+// to raw text) over ACTIVE snapshots, mention-stability filter applied,
+// ordered by mentions desc. Empty q returns the top hubs.
+func (r *Repo) SearchKGEntities(ctx context.Context, q string, minMentions, limit int) ([]KGEntity, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := r.pool.Query(ctx, activeEntityCounts+`
+		SELECT e.id::text, coalesce(e.canonical_form, e.text), e.text,
+		       coalesce(e.type, ''), em.chunks
+		FROM em
+		JOIN processing_entities e ON e.id = em.entity_id
+		WHERE em.chunks >= $1
+		  AND ($2 = '' OR coalesce(e.canonical_form, e.text) ILIKE '%' || $2 || '%' OR e.text ILIKE '%' || $2 || '%')
+		ORDER BY em.chunks DESC, e.id
+		LIMIT $3`, minMentions, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanKGEntities(rows) // takes ownership of closing
+}
+
+// KGNeighbor is one 1-hop edge with both endpoints' stability.
+type KGNeighbor struct {
+	OtherID        string   `json:"other_id"`
+	OtherForm      string   `json:"other_form"`
+	OtherType      string   `json:"other_type,omitempty"`
+	Direction      string   `json:"direction"` // "out" | "in"
+	Type           string   `json:"type"`
+	Strength       *float32 `json:"strength,omitempty"`
+	EvidenceChunks []string `json:"evidence_chunks,omitempty"`
+	OtherMentions  int      `json:"other_mentions"`
+}
+
+// KGNeighbors returns 1-hop edges of an entity where BOTH endpoints have
+// >= minMentions distinct chunks (the stability filter is the point —
+// 71% of entities are one-hit noise, L8: 71.6%).
+func (r *Repo) KGNeighbors(ctx context.Context, entityID string, minMentions, limit int) ([]KGNeighbor, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := r.pool.Query(ctx, activeEntityCounts+`
+		SELECT o.id::text, coalesce(o.canonical_form, o.text), coalesce(o.type, ''),
+		       CASE WHEN r.source_entity_id = $1::uuid THEN 'out' ELSE 'in' END,
+		       r.type, r.strength, r.evidence_chunk_ids::text, om.chunks
+		FROM processing_entity_relationships r
+		JOIN processing_snapshots s ON s.id = r.snapshot_id AND s.active
+		JOIN em src ON src.entity_id = r.source_entity_id
+		JOIN em tgt ON tgt.entity_id = r.target_entity_id
+		JOIN processing_entities o
+		  ON o.id = CASE WHEN r.source_entity_id = $1::uuid THEN r.target_entity_id ELSE r.source_entity_id END
+		JOIN em om ON om.entity_id = o.id
+		WHERE (r.source_entity_id = $1::uuid OR r.target_entity_id = $1::uuid)
+		  AND src.chunks >= $2 AND tgt.chunks >= $2
+		ORDER BY om.chunks DESC, o.id
+		LIMIT $3`, entityID, minMentions, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KGNeighbor
+	for rows.Next() {
+		var n KGNeighbor
+		var ev string
+		var strength *float32
+		if err := rows.Scan(&n.OtherID, &n.OtherForm, &n.OtherType, &n.Direction,
+			&n.Type, &strength, &ev, &n.OtherMentions); err != nil {
+			return nil, err
+		}
+		n.Strength = strength
+		n.EvidenceChunks = parseUUIDArray(ev)
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// KGRelationView is a relation with resolved endpoint forms.
+type KGRelationView struct {
+	ID             string   `json:"id"`
+	Type           string   `json:"type"`
+	SourceID       string   `json:"source_id"`
+	SourceForm     string   `json:"source_form"`
+	TargetID       string   `json:"target_id"`
+	TargetForm     string   `json:"target_form"`
+	Strength       *float32 `json:"strength,omitempty"`
+	EvidenceChunks []string `json:"evidence_chunks,omitempty"`
+}
+
+// KGRelations browses relations (optional type and entity filter), active
+// snapshots, stability filter on both endpoints.
+func (r *Repo) KGRelations(ctx context.Context, relType, entityID string, minMentions, limit int) ([]KGRelationView, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := r.pool.Query(ctx, activeEntityCounts+`
+		SELECT r.id::text, r.type,
+		       r.source_entity_id::text, coalesce(se.canonical_form, se.text),
+		       r.target_entity_id::text, coalesce(te.canonical_form, te.text),
+		       r.strength, r.evidence_chunk_ids::text
+		FROM processing_entity_relationships r
+		JOIN processing_snapshots s ON s.id = r.snapshot_id AND s.active
+		JOIN em src ON src.entity_id = r.source_entity_id
+		JOIN em tgt ON tgt.entity_id = r.target_entity_id
+		JOIN processing_entities se ON se.id = r.source_entity_id
+		JOIN processing_entities te ON te.id = r.target_entity_id
+		WHERE ($1 = '' OR r.type = $1)
+		  AND ($2 = '' OR r.source_entity_id = $2::uuid OR r.target_entity_id = $2::uuid)
+		  AND src.chunks >= $3 AND tgt.chunks >= $3
+		ORDER BY src.chunks + tgt.chunks DESC, r.id
+		LIMIT $4`, relType, entityID, minMentions, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KGRelationView
+	for rows.Next() {
+		var v KGRelationView
+		var ev string
+		var strength *float32
+		if err := rows.Scan(&v.ID, &v.Type, &v.SourceID, &v.SourceForm,
+			&v.TargetID, &v.TargetForm, &strength, &ev); err != nil {
+			return nil, err
+		}
+		v.Strength = strength
+		v.EvidenceChunks = parseUUIDArray(ev)
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// KGChunkCandidate is a graph-arm candidate with the fields the search hit
+// needs (text/locator/section/document for hydration + rendering).
+type KGChunkCandidate struct {
+	ChunkID       string
+	DocumentID    string
+	Text          string
+	Locator       map[string]any
+	SectionTitles []string
+	EntityLinks   int // distinct stable entities shared with the seed chunks
+}
+
+// GraphCandidates expands seed chunk ids through their stable entities into
+// NEIGHBOR chunks (other chunks mentioning the same stable entities),
+// ranked by distinct entity links. Excludes the seeds themselves.
+func (r *Repo) GraphCandidates(ctx context.Context, seedChunkIDs []string, minMentions, limit int) ([]KGChunkCandidate, error) {
+	if len(seedChunkIDs) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 30
+	}
+	rows, err := r.pool.Query(ctx, activeEntityCounts+`
+		SELECT c.id::text, sn.document_id::text, c.text, c.locator,
+		       c.section_titles, count(DISTINCT e.id) AS links
+		FROM processing_entity_mentions sm
+		JOIN em ON em.entity_id = sm.entity_id AND em.chunks >= $2
+		JOIN processing_entities e ON e.id = sm.entity_id
+		JOIN processing_entity_mentions m ON m.entity_id = e.id
+		JOIN processing_chunks c ON c.id = m.chunk_id
+		JOIN processing_snapshots sn ON sn.id = c.snapshot_id AND sn.active
+		WHERE sm.chunk_id = ANY($1::uuid[])
+		  AND NOT (m.chunk_id = ANY($1::uuid[]))
+		GROUP BY c.id, sn.document_id, c.text, c.locator, c.section_titles
+		ORDER BY links DESC, c.id
+		LIMIT $3`, seedChunkIDs, minMentions, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KGChunkCandidate
+	for rows.Next() {
+		var c KGChunkCandidate
+		if err := rows.Scan(&c.ChunkID, &c.DocumentID, &c.Text, &c.Locator, &c.SectionTitles, &c.EntityLinks); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func scanKGEntities(rows pgx.Rows) ([]KGEntity, error) {
+	defer rows.Close()
+	var out []KGEntity
+	for rows.Next() {
+		var e KGEntity
+		if err := rows.Scan(&e.ID, &e.CanonicalForm, &e.Text, &e.Type, &e.Mentions); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// parseUUIDArray decodes a JSONB uuid-array text ("[\"a\",\"b\"]");
+// "null" and "[]" decode to nil (json.Unmarshal into a slice accepts both).
+func parseUUIDArray(s string) []string {
+	var out []string
+	if err := json.Unmarshal([]byte(s), &out); err != nil || len(out) == 0 {
+		return nil
+	}
+	return out
+}
