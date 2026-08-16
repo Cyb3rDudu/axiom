@@ -67,12 +67,21 @@ type Config struct {
 	IngestFallbackURL string
 
 	// SearchSparseArm enables the learned-lexical (rank_features) recall
-	// arm on POST /api/search (R5 #135). Default on; R7 A/B flips it.
+	// arm on POST /api/search (R5 #135). Default OFF per the R7 benchmark:
+	// no quality gain on the gold suite (MRR -0.027) at +~1.3s p95 on the
+	// committed run (RETRIEVAL_BENCHMARK.md: 7.18s -> 8.49s; the 64-clause
+	// rank_feature bool-should is expensive on this index; tuning lever:
+	// sparseTopK, index shards). Re-enable for rare-token workloads
+	// (Normnummern, Akronym-Queries) after tuning.
 	SearchSparseArm bool
 
 	// SearchGraphArm enables the graph-expansion candidate source on
 	// POST /api/search (R6 #136). Default OFF — R7 measures first.
 	SearchGraphArm bool
+
+	// SearchRerank runs the cross-encoder on /api/search (default true;
+	// AXIOM_SEARCH_RERANK=false is the latency-only profile, R7 matrix).
+	SearchRerank bool
 
 	// DispatcherEnabled gates the claim/process dispatcher loop. It never runs
 	// unless explicitly turned on; tests construct the dispatcher directly.
@@ -127,8 +136,9 @@ func Load() Config {
 		ProcessorURL:            env("AXIOM_PROCESSOR_URL", defaultLocalRunner),
 		QueryRunnerURL:          env("AXIOM_QUERY_RUNNER_URL", defaultLocalRunner),
 		IngestFallbackURL:       env("AXIOM_INGEST_FALLBACK_URL", defaultLocalRunner),
-		SearchSparseArm:         envBoolDefault("AXIOM_SEARCH_SPARSE_ARM", true),
+		SearchSparseArm:         envBoolDefault("AXIOM_SEARCH_SPARSE_ARM", false),
 		SearchGraphArm:          envBoolDefault("AXIOM_SEARCH_GRAPH_ARM", false),
+		SearchRerank:            envBoolDefault("AXIOM_SEARCH_RERANK", true),
 		ProcessorRequestTimeout: envDur("AXIOM_PROCESSOR_TIMEOUT", 300*time.Second),
 		ProcessorRunnerName:     env("AXIOM_PROCESSOR_RUNNER_NAME", ""),
 		DispatcherEnabled:       envBool("AXIOM_DISPATCHER_ENABLED"),

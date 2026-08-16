@@ -58,7 +58,11 @@ func itService(t *testing.T, osURL, procURL, dbURL string) *Service {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(osURL, "", "", pc, repo.New(database.Pool()), log.New(os.Stderr, "it-search: ", 0))
+	svc := New(osURL, "", "", pc, repo.New(database.Pool()), log.New(os.Stderr, "it-search: ", 0))
+	// The R5 capability proof asserts arms.sparse per query — independent
+	// of the production default (benchmark-driven off since R7).
+	svc.SparseArm = true
+	return svc
 }
 
 // itQueries are realistic library questions (DE/EN mix, quality-assessment
