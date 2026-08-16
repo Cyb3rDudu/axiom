@@ -35,8 +35,10 @@ flowchart LR
     ARMS --> D[dense]
     ARMS --> B[bm25 / hybrid]
     ARMS -.->|rerank by default| RK[rerank]
-    ARMS -.->|opt-in: AXIOM_SEARCH_SPARSE_ARM| SP[sparse \n rank_features]
-    ARMS -.->|opt-in: AXIOM_SEARCH_GRAPH_ARM| GR[graph \n expansion]
+    ARMS -.->|opt-in: AXIOM_SEARCH_SPARSE_ARM| SP["sparse
+rank_features"]
+    ARMS -.->|opt-in: AXIOM_SEARCH_GRAPH_ARM| GR["graph
+expansion"]
 ```
 
 The central property: **axiom orchestrates, the runner computes, and only
@@ -105,8 +107,8 @@ source locators:
 - **dense** (semantic embeddings) and **bm25** (exact-term) form the **hybrid**
   baseline — the best measured balance of quality and latency.
 - **rerank** (cross-encoder) re-orders the hybrid candidates; on by default.
-- **sparse** (`rank_feature` clauses, the third recall arm, R5) and
-  **graph** (knowledge-graph expansion, R6) are **opt-in** behind
+- **sparse** (`rank_feature` clauses, the third recall arm) and
+  **graph** (knowledge-graph expansion) are **opt-in** behind
   `AXIOM_SEARCH_SPARSE_ARM` and `AXIOM_SEARCH_GRAPH_ARM` — both default off
   after the quality benchmark measured no gain for their cost.
 

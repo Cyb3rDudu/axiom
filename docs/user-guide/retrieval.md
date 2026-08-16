@@ -58,6 +58,8 @@ The parts that matter for a researcher:
   which source a hit came from.
 - **`hits[].score`** — a relevance score; higher is a better match.
 - **`arms`** — which recall mechanisms contributed to this result (see below).
+  Reports the `dense`/`bm25`/`sparse` flags; the graph arm contributes
+  candidates but is not echoed.
 
 ## The recall arms (in plain terms)
 
@@ -68,8 +70,8 @@ the defaults; the table explains what each one does and when it helps:
 | --- | --- | --- | --- |
 | **dense** | on | Semantic search over chunk embeddings — matches *meaning*, cross-lingually. | Everyday questions; the primary arm. |
 | **bm25 (hybrid)** | on | Keyword search over the same chunks — matches exact terms. | Finds passages dense might miss because they're worded exactly. Adds recall. |
-| **rerank** | on | A cross-encoder re-scores the hybrid candidates to fine-order them. | Improves ordering quality; costs extra latency (steerable via a remote runner). |
-| **sparse** | off | A sparse token-signal arm for rare tokens (norm numbers, acronyms across languages). | Rare-token queries; off by default because it was measured as no quality gain for high latency. |
+| **rerank** | on | A cross-encoder re-scores the hybrid candidates to fine-order them. | Marginally improves ordering quality (measured marginal but consistent); costs extra latency (steerable via a remote runner). |
+| **sparse** | off | A sparse token-signal arm for rare tokens. | Expected: rare-token queries (norm numbers, acronyms across languages) — not yet isolated in the benchmark suite. |
 | **graph** | off | Expands results through the knowledge graph (entities/relationships). | Off by default (measured as slightly negative on the provisional suite); for tuned deployment later. |
 
 `dense` + `bm25` together is the **hybrid** baseline; `rerank` on top re-orders

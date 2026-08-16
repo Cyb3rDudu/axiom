@@ -21,8 +21,8 @@ and they remain valid as measurements.
 | [Chunk Quality (Quality Gate)](benchmarks/chunk-quality.md) | 2026-08-15 | Chunk/locator/entity/relation quality, kNN search test, GO for TC2 |
 | [Retrieval Quality](benchmarks/retrieval-quality.md) | 2026-08-16 | Retrieval arm selection (dense/hybrid/rerank/sparse/graph); gold set provisional |
 
-The **canonical originals** live in `axiom_ng/docs/benchmarks/`; these pages are
-the site-facing view.
+The **canonical originals** live in `axiom_ng/docs/` (benchmark reports under
+`axiom_ng/docs/benchmarks/`); these pages are the site-facing view.
 
 ## Related
 
