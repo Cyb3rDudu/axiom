@@ -1,5 +1,5 @@
 {
-  "note": "R7 (#137) retrieval gold suite. Queries DE+EN: concept/fact/norm/author. Gold = zotero_documents titles (normalized matching). PROVISIONAL: gold sets derived from the corpus by the implementor; dudu confirms/corrects (confirmed flag per query). origin semantics: \"quality-assessment\" = carried over from the Quality-Assessment start stock (the 5 seed queries); origin absent = implementor-derived from the 16 library titles.",
+  "note": "R7 (#137) retrieval gold suite. Queries DE+EN: concept/fact/norm/author. Gold = zotero_documents titles (normalized matching). Gold confirmed by dudu 2026-08-16 ('alles grün'). origin semantics: \"quality-assessment\" = carried over from the Quality-Assessment start stock (the 5 seed queries); origin absent = implementor-derived from the 16 library titles.",
   "queries": [
     {
       "id": "qa1",
@@ -9,7 +9,7 @@
         "CSR und Reporting",
         "CSR und Finance"
       ],
-      "confirmed": false,
+      "confirmed": true,
       "origin": "quality-assessment"
     },
     {
@@ -19,7 +19,7 @@
       "gold": [
         "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen"
       ],
-      "confirmed": false,
+      "confirmed": true,
       "origin": "quality-assessment"
     },
     {
@@ -29,7 +29,7 @@
       "gold": [
         "Corporate Social Responsibility – Mythen und Maßnahmen"
       ],
-      "confirmed": false,
+      "confirmed": true,
       "origin": "quality-assessment"
     },
     {
@@ -40,7 +40,7 @@
         "Environmental, Social and Governance (ESG) Investing: A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio",
         "Demystifying Environmental, Social and Governance (ESG)"
       ],
-      "confirmed": false,
+      "confirmed": true,
       "origin": "quality-assessment"
     },
     {
@@ -51,7 +51,7 @@
         "CSR und Finance",
         "Corporate Social Responsibility – Mythen und Maßnahmen"
       ],
-      "confirmed": false,
+      "confirmed": true,
       "origin": "quality-assessment"
     },
     {
@@ -60,7 +60,8 @@
       "q": "Nachhaltigkeit als Managementansatz in Unternehmen etablieren",
       "gold": [
         "Nachhaltiges Management: Nachhaltigkeit als exzellenten Managementansatz entwickeln"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "c7",
@@ -68,7 +69,8 @@
       "q": "institutionelle Anleger und nachhaltige Kapitalanlagen",
       "gold": [
         "Institutionelle Anleger und nachhaltige Kapitalanlagen"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "c8",
@@ -76,7 +78,8 @@
       "q": "Corporate Social Responsibility in der Wertschöpfungskette",
       "gold": [
         "CSR und Value Chain Management"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "c9",
@@ -84,7 +87,8 @@
       "q": "Nachhaltigkeit als Treiber von Innovation",
       "gold": [
         "CSR und Innovationsmanagement"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "c10",
@@ -92,7 +96,8 @@
       "q": "warum die ökologische Transformation nicht stattfindet",
       "gold": [
         "Nachhaltige Nicht-Nachhaltigkeit: Warum die ökologische Transformation der Gesellschaft nicht stattfindet"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "c11",
@@ -100,7 +105,8 @@
       "q": "ESG investing theory and practice balanced view",
       "gold": [
         "Environmental, Social and Governance (ESG) Investing: A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "c12",
@@ -108,7 +114,8 @@
       "q": "demystifying ESG common misconceptions",
       "gold": [
         "Demystifying Environmental, Social and Governance (ESG)"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "c13",
@@ -116,7 +123,8 @@
       "q": "sustainable performance beyond ESG compliance leadership",
       "gold": [
         "The Adventure of Sustainable Performance: Beyond ESG Compliance to Leadership in the New Era"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "c14",
@@ -124,7 +132,8 @@
       "q": "ESG and sustainable development in healthcare",
       "gold": [
         "Environmental, Social and Governance and Sustainable Development in Healthcare"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "c15",
@@ -132,7 +141,8 @@
       "q": "perspektiven der wirtschaftswissenschaften",
       "gold": [
         "Perspektiven der Wirtschaftswissenschaften"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "f16",
@@ -140,7 +150,8 @@
       "q": "stakeholder salience model power legitimacy urgency",
       "gold": [
         "Stakeholder-Management und Nachhaltigkeits-Reporting"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "f17",
@@ -148,7 +159,8 @@
       "q": "Zieldefinition und Systemabgrenzung einer Ökobilanz",
       "gold": [
         "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "n18",
@@ -156,7 +168,8 @@
       "q": "Nachhaltigkeitsberichterstattung GRI Standards",
       "gold": [
         "CSR und Reporting"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "n19",
@@ -165,7 +178,8 @@
       "gold": [
         "CSR und Reporting",
         "CSR und Finance"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "n20",
@@ -174,7 +188,8 @@
       "gold": [
         "CSR und Reporting",
         "Institutionelle Anleger und nachhaltige Kapitalanlagen"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "n21",
@@ -182,7 +197,8 @@
       "q": "false narrative of ESG investing critique",
       "gold": [
         "ESGBS – The False Narrative of Environmental, Social & Governance Investing"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "a22",
@@ -191,7 +207,8 @@
       "gold": [
         "Demystifying Environmental, Social and Governance (ESG)",
         "Environmental, Social and Governance and Sustainable Development in Healthcare"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "a23",
@@ -201,7 +218,8 @@
         "Corporate Social Responsibility – Mythen und Maßnahmen",
         "CSR und Value Chain Management",
         "CSR und Innovationsmanagement"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "a24",
@@ -209,7 +227,8 @@
       "q": "Matthias S. Fifka Corporate Social Responsibility",
       "gold": [
         "Corporate Social Responsibility – Mythen und Maßnahmen"
-      ]
+      ],
+      "confirmed": true
     },
     {
       "id": "f25",
@@ -217,7 +236,8 @@
       "q": "CSR aus Sicht der Finanzberichterstattung",
       "gold": [
         "CSR und Finance"
-      ]
+      ],
+      "confirmed": true
     }
   ]
 }
