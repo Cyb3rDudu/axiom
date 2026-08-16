@@ -412,8 +412,12 @@ func TestSearch_FiltersPassedToBothArms(t *testing.T) {
 			t.Fatalf("%s arm never queried", name)
 		}
 		raw, _ := json.Marshal(body)
-		if !strings.Contains(string(raw), `"terms"`) || !strings.Contains(string(raw), "d1") {
-			t.Fatalf("%s arm query missing document filter: %s", name, raw)
+		// The filter MUST target the keyword subfield: the mapped
+		// document_id is a text field whose analyzer splits UUIDs at
+		// hyphens — a terms clause on the plain field matches nothing.
+		const want = `"terms":{"document_id.keyword":["d1"]}`
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("%s arm query missing exact document filter %s: %s", name, want, raw)
 		}
 	}
 }
@@ -604,8 +608,8 @@ func TestSearch_SparseArmTopKAndFilter(t *testing.T) {
 	if !strings.Contains(string(raw), `"sparse.t99"`) || !strings.Contains(string(raw), `"sparse.t36"`) || strings.Contains(string(raw), `"sparse.t35"`) {
 		t.Fatalf("top-K selection by weight wrong (want sparse.t99..sparse.t36): %s", raw)
 	}
-	if !strings.Contains(string(raw), `"terms"`) {
-		t.Fatalf("document filter must wrap the sparse arm: %s", raw)
+	if !strings.Contains(string(raw), `"terms":{"document_id.keyword":["doc"]}`) {
+		t.Fatalf("document filter must wrap the sparse arm via the keyword subfield: %s", raw)
 	}
 }
 

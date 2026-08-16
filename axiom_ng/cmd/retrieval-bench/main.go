@@ -34,16 +34,17 @@ type goldQuery struct {
 	Q    string `json:"q"`
 	// Gold = zotero titles of the books a correct retrieval must surface.
 	Gold []string `json:"gold"`
-	// Confirmed: dudu has reviewed/approved this query's gold (0 in the
-	// provisional suite; flip per query after review).
+	// Confirmed: dudu has reviewed/approved this query's gold — all 25
+	// confirmed since Schritt 0 (2026-08-16, „alles grün").
 	Confirmed bool `json:"confirmed"`
 	// Origin: "quality-assessment" = carried over from the QA start stock;
 	// absent = implementor-derived from the library's titles.
 	Origin string `json:"origin"`
 	// v2 (#155): Scope = document ids dudu works against (his chosen books,
 	// 1-3 per query); GoldChunks = the expected passages inside the scope.
-	// When GoldChunks is set, the harness scores PASSAGE-level (P@1/P@5/
-	// MRR over chunk ids) with the query scoped via filters.document_ids.
+	// Entries with GoldChunks are scored PASSAGE-level — P@1/hit@5/hit@10 =
+	// 1 iff a gold chunk sits within the top-k, MRR = 1/rank of the first
+	// gold chunk — with the query scoped via filters.document_ids.
 	Scope      []string `json:"scope_document_ids,omitempty"`
 	GoldChunks []string `json:"gold_chunk_ids,omitempty"`
 }
@@ -61,10 +62,11 @@ type config struct {
 
 type result struct {
 	name     string
-	p5, mrr  float64
-	r10      float64
+	p1, p5   float64
+	mrr, r10 float64
 	p50, p95 time.Duration
 	qerr     int
+	scoped   int // queries actually run with filters.document_ids
 }
 
 func main() {
@@ -85,31 +87,21 @@ func main() {
 	fmt.Printf("gold suite: %d queries (%d confirmed by dudu)\n\n",
 		len(suite.Queries), countConfirmed(suite))
 
+	// A suite mixing book-level and passage-level entries would silently
+	// blend two metric semantics into one row — refuse it outright.
+	passageMode, bookN, chunkN := suiteMode(suite)
+	if passageMode && bookN > 0 {
+		fatal("suite mixes %d book-level and %d passage-level entries — one suite, one mode", bookN, chunkN)
+	}
+
 	if *propose {
-		runPropose(ctxFromFlags(), suite, *suitePath)
+		runPropose(context.Background(), suite, *suitePath)
 		return
 	}
 
-	osURL := envOr("AXIOM_OPENSEARCH_URL", "http://127.0.0.1:9200")
-	procURL := envOr("AXIOM_PROCESSOR_URL", "http://127.0.0.1:8012")
-	dbURL := os.Getenv("AXIOM_TEST_DATABASE_URL")
-	if dbURL == "" {
-		fatal("AXIOM_TEST_DATABASE_URL required (hydration + graph arm)")
-	}
 	ctx := context.Background()
-	database, err := db.Open(ctx, dbURL)
-	if err != nil {
-		fatal("postgres: %v", err)
-	}
+	base, database := openStack(ctx, lg)
 	defer database.Close()
-	pc, err := processor.New(processor.Options{BaseURL: procURL})
-	if err != nil {
-		fatal("runner client: %v", err)
-	}
-	rep := repo.New(database.Pool())
-
-	base := search.New(osURL, "", "", pc, rep, lg)
-	base.SetGraphSource(rep) // available; per-config toggle decides use
 
 	matrix := []config{
 		{name: "dense-only", dense: true},
@@ -129,20 +121,73 @@ func main() {
 	for _, cfg := range matrix {
 		results = append(results, runConfig(ctx, base, cfg, suite))
 	}
-	printTable(results)
+	printTable(results, passageMode)
+	if len(results) > 0 && results[0].scoped > 0 {
+		mode := "book"
+		if passageMode {
+			mode = "passage"
+		}
+		fmt.Printf("\n%d/%d queries scoped via filters.document_ids (%s-level metrics)\n",
+			results[0].scoped, len(suite.Queries), mode)
+	}
 	if *mdPath != "" {
-		if err := writeMD(*mdPath, suite, results); err != nil {
+		if err := writeMD(*mdPath, suite, results, passageMode); err != nil {
 			fatal("md: %v", err)
 		}
 		fmt.Printf("\nmarkdown report written to %s\n", *mdPath)
 	}
 }
 
+// openStack wires the shared benchmark stack (env → Postgres → runner
+// client → search service); the caller owns closing the database.
+func openStack(ctx context.Context, lg *log.Logger) (*search.Service, *db.DB) {
+	dbURL := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if dbURL == "" {
+		fatal("AXIOM_TEST_DATABASE_URL required (hydration + graph arm)")
+	}
+	database, err := db.Open(ctx, dbURL)
+	if err != nil {
+		fatal("postgres: %v", err)
+	}
+	pc, err := processor.New(processor.Options{BaseURL: envOr("AXIOM_PROCESSOR_URL", "http://127.0.0.1:8012")})
+	if err != nil {
+		fatal("runner client: %v", err)
+	}
+	rep := repo.New(database.Pool())
+	svc := search.New(envOr("AXIOM_OPENSEARCH_URL", "http://127.0.0.1:9200"), "", "", pc, rep, lg)
+	svc.SetGraphSource(rep) // available; per-config toggle decides use
+	return svc, database
+}
+
+// suiteMode: a suite is passage-level iff any entry carries gold chunks.
+// Callers refuse mixes (blended semantics); a Scope-only entry stays
+// book-level — scoping and passage scoring are independent.
+func suiteMode(s goldSuite) (passage bool, bookOnly, withChunks int) {
+	for _, q := range s.Queries {
+		if len(q.GoldChunks) > 0 {
+			withChunks++
+		} else {
+			bookOnly++
+		}
+	}
+	return withChunks > 0, bookOnly, withChunks
+}
+
+func countScoped(s goldSuite) int {
+	n := 0
+	for _, q := range s.Queries {
+		if len(q.Scope) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
 func runConfig(ctx context.Context, base *search.Service, cfg config, suite goldSuite) result {
 	base.DenseArm, base.BM25Arm, base.SparseArm = cfg.dense, cfg.bm25, cfg.sparse
 	base.Rerank, base.GraphArm = cfg.rerank, cfg.graph
 
-	var p5s, mrrs, r10s []float64
+	var p1s, p5s, mrrs, r10s []float64
 	var lat []time.Duration
 	qerr, scoped := 0, 0
 	for _, gq := range suite.Queries {
@@ -156,26 +201,25 @@ func runConfig(ctx context.Context, base *search.Service, cfg config, suite gold
 		lat = append(lat, time.Since(t0))
 		if err != nil {
 			qerr++
-			p5s, mrrs, r10s = append(p5s, 0), append(mrrs, 0), append(r10s, 0)
+			p1s, p5s, mrrs, r10s = append(p1s, 0), append(p5s, 0), append(mrrs, 0), append(r10s, 0)
 			continue
 		}
 		if len(gq.GoldChunks) > 0 {
 			// v2: passage-level scoring (the real-workflow criterion).
+			p1s = append(p1s, passageAt(1, res.Hits, gq.GoldChunks))
 			p5s = append(p5s, passageAt(5, res.Hits, gq.GoldChunks))
 			mrrs = append(mrrs, passageMRR(res.Hits, gq.GoldChunks))
 			r10s = append(r10s, passageAt(10, res.Hits, gq.GoldChunks))
 			continue
 		}
+		p1s = append(p1s, precisionAt(1, res.Hits, gq.Gold))
 		p5s = append(p5s, precisionAt(5, res.Hits, gq.Gold))
 		mrrs = append(mrrs, mrr(res.Hits, gq.Gold))
 		r10s = append(r10s, recallAt(10, res.Hits, gq.Gold))
 	}
-	if scoped > 0 {
-		fmt.Printf("  (v2: %d/%d queries scoped, passage-level metrics)\n", scoped, len(suite.Queries))
-	}
 	return result{
-		name: cfg.name, p5: mean(p5s), mrr: mean(mrrs), r10: mean(r10s),
-		p50: percentile(lat, 50), p95: percentile(lat, 95), qerr: qerr,
+		name: cfg.name, p1: mean(p1s), p5: mean(p5s), mrr: mean(mrrs), r10: mean(r10s),
+		p50: percentile(lat, 50), p95: percentile(lat, 95), qerr: qerr, scoped: scoped,
 	}
 }
 
@@ -296,28 +340,47 @@ func percentile(xs []time.Duration, p int) time.Duration {
 
 // --- output ----------------------------------------------------------------
 
-func printTable(rs []result) {
-	fmt.Printf("%-32s %8s %8s %8s %10s %10s %5s\n", "configuration", "P@5", "MRR", "R@10", "p50", "p95", "errs")
+func printTable(rs []result, passageMode bool) {
+	p5l, r10l := "P@5", "R@10"
+	if passageMode {
+		p5l, r10l = "hit@5", "hit@10"
+	}
+	fmt.Printf("%-32s %8s %8s %8s %8s %10s %10s %5s\n", "configuration", "P@1", p5l, "MRR", r10l, "p50", "p95", "errs")
 	for _, r := range rs {
-		fmt.Printf("%-32s %8.3f %8.3f %8.3f %10s %10s %5d\n",
-			r.name, r.p5, r.mrr, r.r10, r.p50.Round(time.Millisecond), r.p95.Round(time.Millisecond), r.qerr)
+		fmt.Printf("%-32s %8.3f %8.3f %8.3f %8.3f %10s %10s %5d\n",
+			r.name, r.p1, r.p5, r.mrr, r.r10, r.p50.Round(time.Millisecond), r.p95.Round(time.Millisecond), r.qerr)
 	}
 }
 
-func writeMD(path string, suite goldSuite, rs []result) error {
+func writeMD(path string, suite goldSuite, rs []result, passageMode bool) error {
 	var b strings.Builder
 	b.WriteString("# Retrieval Benchmark (R7, #137)\n\n")
 	if countConfirmed(suite) == 0 {
 		fmt.Fprintf(&b, "> **PROVISIONAL GOLD** — 0 of %d queries confirmed by dudu; verdicts may change after confirmation.\n\n", len(suite.Queries))
 	}
-	b.WriteString(fmt.Sprintf("Gold suite: %d queries (DE+EN; concept/fact/norm/author), %d confirmed by dudu.\n\n",
-		len(suite.Queries), countConfirmed(suite)))
-	b.WriteString("| configuration | P@5 | MRR | R@10 | p50 | p95 | errors |\n|---|---|---|---|---|---|---|\n")
-	for _, r := range rs {
-		fmt.Fprintf(&b, "| %s | %.3f | %.3f | %.3f | %s | %s | %d |\n",
-			r.name, r.p5, r.mrr, r.r10, r.p50.Round(time.Millisecond), r.p95.Round(time.Millisecond), r.qerr)
+	mode := "book-level (gold titles)"
+	if passageMode {
+		mode = "passage-level (gold chunks, scoped)"
 	}
-	b.WriteString("\nDefinitions: P@5 = gold-book hits / top-5; MRR = 1/rank of first gold hit; R@10 = distinct gold books found / |gold|.\n")
+	b.WriteString(fmt.Sprintf("Gold suite: %d queries (DE+EN; concept/fact/norm/author), %d confirmed by dudu. Metrics: %s.\n\n",
+		len(suite.Queries), countConfirmed(suite), mode))
+	p5l, r10l := "P@5", "R@10"
+	if passageMode {
+		p5l, r10l = "hit@5", "hit@10"
+	}
+	fmt.Fprintf(&b, "| configuration | P@1 | %s | MRR | %s | p50 | p95 | errors |\n|---|---|---|---|---|---|---|---|\n", p5l, r10l)
+	for _, r := range rs {
+		fmt.Fprintf(&b, "| %s | %.3f | %.3f | %.3f | %.3f | %s | %s | %d |\n",
+			r.name, r.p1, r.p5, r.mrr, r.r10, r.p50.Round(time.Millisecond), r.p95.Round(time.Millisecond), r.qerr)
+	}
+	if n := countScoped(suite); n > 0 {
+		fmt.Fprintf(&b, "\n%d of %d queries scoped via filters.document_ids.\n", n, len(suite.Queries))
+	}
+	if passageMode {
+		b.WriteString("\nDefinitions: P@1/hit@5 = 1 iff a gold chunk sits within the top-k; MRR = 1/rank of the first gold chunk; hit@10 = 1 iff a gold chunk sits within the top-10.\n")
+	} else {
+		b.WriteString("\nDefinitions: P@1/P@5 = gold-book hits / top-k; MRR = 1/rank of first gold hit; R@10 = distinct gold books found / |gold|.\n")
+	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
@@ -342,143 +405,3 @@ func fatal(f string, args ...any) {
 	fmt.Fprintf(os.Stderr, "retrieval-bench: "+f+"\n", args...)
 	os.Exit(1)
 }
-
-// --- v2 proposal mode (#155) -----------------------------------------------
-//
-// For every confirmed v1 query: scope = dudu's confirmed gold books
-// (resolved to document ids), then scoped retrieval with the production
-// config (hybrid+rerank) proposes gold-passage candidates from the actual
-// chunks. Output: a proposals JSON (machine) + a compact yes/no list
-// (human, printed to stdout) — dudu nods through, no book reading.
-
-type proposal struct {
-	QueryID    string    `json:"query_id"`
-	Q          string    `json:"q"`
-	ScopeBooks []string  `json:"scope_books"`
-	ScopeIDs   []string  `json:"scope_document_ids"`
-	Best       propHit   `json:"best"`
-	Alt        []propHit `json:"alternatives"`
-}
-
-type propHit struct {
-	ChunkID string `json:"chunk_id"`
-	Book    string `json:"book"`
-	Locator string `json:"locator"`
-	Excerpt string `json:"excerpt"`
-}
-
-func runPropose(ctx context.Context, suite goldSuite, suitePath string) {
-	osURL := envOr("AXIOM_OPENSEARCH_URL", "http://127.0.0.1:9200")
-	procURL := envOr("AXIOM_PROCESSOR_URL", "http://127.0.0.1:8012")
-	dbURL := os.Getenv("AXIOM_TEST_DATABASE_URL")
-	if dbURL == "" {
-		fatal("AXIOM_TEST_DATABASE_URL required (scope resolution)")
-	}
-	database, err := db.Open(ctx, dbURL)
-	if err != nil {
-		fatal("postgres: %v", err)
-	}
-	defer database.Close()
-	pc, err := processor.New(processor.Options{BaseURL: procURL})
-	if err != nil {
-		fatal("runner client: %v", err)
-	}
-	svc := search.New(osURL, "", "", pc, repo.New(database.Pool()), log.New(os.Stderr, "propose: ", 0))
-
-	titleToID, err := documentIDByTitle(ctx, database)
-	if err != nil {
-		fatal("title map: %v", err)
-	}
-
-	// Warm models once (hybrid+rerank is the proposal config).
-	if _, err := svc.Search(ctx, search.Request{Query: "Nachhaltigkeit", TopN: 3}); err != nil {
-		log.Printf("warmup: %v", err)
-	}
-
-	var props []proposal
-	for _, gq := range suite.Queries {
-		if !gq.Confirmed {
-			continue
-		}
-		ids := make([]string, 0, len(gq.Gold))
-		for _, t := range gq.Gold {
-			id, ok := titleToID[norm(t)]
-			if !ok {
-				fatal("query %s: no document id for gold title %q", gq.ID, t)
-			}
-			ids = append(ids, id)
-		}
-		res, err := svc.Search(ctx, search.Request{
-			Query: gq.Q, TopN: 5,
-			Filters: &search.Filters{DocumentIDs: ids},
-		})
-		if err != nil {
-			fatal("query %s: %v", gq.ID, err)
-		}
-		pr := proposal{QueryID: gq.ID, Q: gq.Q, ScopeBooks: gq.Gold, ScopeIDs: ids}
-		for i, h := range res.Hits {
-			ph := propHit{
-				ChunkID: h.ChunkID, Book: h.Source.Book,
-				Locator: h.Locator.Label,
-				Excerpt: excerptOf(h.Text),
-			}
-			if i == 0 {
-				pr.Best = ph
-			} else {
-				pr.Alt = append(pr.Alt, ph)
-			}
-		}
-		if pr.Best.ChunkID == "" {
-			fatal("query %s: no scoped hits", gq.ID)
-		}
-		props = append(props, pr)
-	}
-
-	out, _ := json.MarshalIndent(map[string]any{"proposals": props}, "", "  ")
-	propPath := "cmd/retrieval-bench/gold_suite_v2_proposals.json"
-	if err := os.WriteFile(propPath, out, 0o644); err != nil {
-		fatal("write proposals: %v", err)
-	}
-
-	// The compact yes/no list for dudu (max 5 minutes, no book reading).
-	fmt.Println("=== V2 GOLD-PASSAGE VORSCHLÄGE (Ja/Nein/Korrektur pro Nummer) ===")
-	for i, pr := range props {
-		fmt.Printf("%2d. [%s] %q\n    Scope: %s\n    → %s | %s | %s\n       „%s“\n",
-			i+1, pr.QueryID, pr.Q, strings.Join(pr.ScopeBooks, " + "),
-			pr.Best.ChunkID[:8], pr.Best.Book, pr.Best.Locator, pr.Best.Excerpt)
-		if len(pr.Alt) > 0 {
-			fmt.Printf("       Alt: %s („%s“)\n", pr.Alt[0].ChunkID[:8], pr.Alt[0].Excerpt)
-		}
-	}
-	fmt.Printf("\n%d proposals -> %s\nNach dudus Ja/Nein wird gold_suite_v2.json daraus materialisiert.\n", len(props), propPath)
-}
-
-func documentIDByTitle(ctx context.Context, database *db.DB) (map[string]string, error) {
-	rows, err := database.Pool().Query(ctx, `
-		SELECT DISTINCT z.title, z.id::text
-		FROM zotero_documents z
-		JOIN processing_snapshots s ON s.document_id = z.id AND s.active`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]string{}
-	for rows.Next() {
-		var t, id string
-		if err := rows.Scan(&t, &id); err != nil {
-			return nil, err
-		}
-		out[norm(t)] = id
-	}
-	return out, rows.Err()
-}
-
-func excerptOf(text string) string {
-	s := strings.TrimSpace(text)
-	if len(s) > 140 {
-		s = s[:140] + "…"
-	}
-	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", " "), "  ", " ")
-}
-
-func ctxFromFlags() context.Context { return context.Background() }

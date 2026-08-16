@@ -1,6 +1,6 @@
 # Retrieval Benchmark (R7, #137)
 
-Gold suite: 25 Queries (DE+EN; Konzept/Fakt/Norm/Autor), **0 von dudu bestätigt — PROVISORISCH** (Implementor-abgeleitet aus den 16 Buchtiteln der Bibliothek; die 5 Quality-Assessment-Queries sind der Startbestand). Suite: `cmd/retrieval-bench/gold_suite.json` (`confirmed`-Flag pro Query).
+Gold suite: 25 Queries (DE+EN; Konzept/Fakt/Norm/Autor), **25/25 von dudu bestätigt (2026-08-16, „alles grün“)** (implementor-abgeleitet aus den 16 Buchtiteln der Bibliothek; die 5 Quality-Assessment-Queries sind der Startbestand — die Herleitung bleibt als Kontext, der PROVISORISCH-Vermerk ist seit Schritt 0 überholt). Suite: `cmd/retrieval-bench/gold_suite.json` (`confirmed`-Flag pro Query).
 
 Lauf: 2026-08-16, lokal (Mac, MPS fp32), echter OS-Index (4.813 Chunks), echter Query-Runner (R1/R2 warm), echte DB. Reproduzierbar:
 `AXIOM_TEST_DATABASE_URL=… AXIOM_PROCESSOR_URL=http://127.0.0.1:8012 go run ./cmd/retrieval-bench -md out.md`
@@ -38,8 +38,11 @@ Definitionen: P@5 = Gold-Buch-Treffer / Top-5 (teilt per Query durch min(5, geli
 
 Defaults sind in R3 gesetzt (`config.go`), Sparse-Default mit diesem Benchmark von an→aus gedreht (Fähigkeits-Tests beweisen den Arm unabhängig davon weiter).
 
+## Schritt 0 (2026-08-16)
+
+dudu hat alle 25 Gold-Einträge bestätigt („alles grün“; `confirmed`-Flip ohne Annotation — Schritt 0 von #155). Neulauf der Matrix: **Metriken byte-identisch zum gepinnten Lauf** (alle fünf Konfigurationen unverändert; Latenzen in der bekannten Warm-Streuung). Die Lesart-Punkte 1–5 gelten unverändert. V2-Hinweis für die kommende Passagen-Matrix: der Graph-Arm ignoriert den Dokument-Scope (ungetunte Expansion ist produktionsgetreu) — die Graph-Zeile misst dort Scope-Pollution, nicht In-Scope-Graphqualität.
+
 ## Offen
 
-- **dudu: Gold-Bestätigung** (25 × `confirmed`-Flip oder Korrektur in `gold_suite.json`) — dann Neulauf; erst danach ist die Reranker-These final beantwortet.
 - Rare-Token-Sub-Suite (Normnummern/Akronyme) für das Sparse-Profil.
 - GraphCandidates-SQL-Tuning, falls der Arm produktiv werden soll.

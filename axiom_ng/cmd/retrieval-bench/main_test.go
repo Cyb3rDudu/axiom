@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -10,6 +11,84 @@ import (
 )
 
 func hitBook(b string) search.Hit { return search.Hit{Source: search.Source{Book: b}} }
+
+func hitChunk(c string) search.Hit { return search.Hit{ChunkID: c} }
+
+func chunks(n int) []search.Hit {
+	hs := make([]search.Hit, n)
+	for i := range hs {
+		hs[i] = hitChunk(fmt.Sprintf("c%d", i+1))
+	}
+	return hs
+}
+
+func TestPassageAt(t *testing.T) {
+	ten := chunks(10)
+	for _, tc := range []struct {
+		name string
+		k    int
+		gold []string
+		want float64
+	}{
+		{"P@1 gold at rank 1", 1, []string{"c1"}, 1},
+		{"P@1 gold at rank 2", 1, []string{"c2"}, 0},
+		{"hit@5 gold at rank 5 (boundary)", 5, []string{"c5"}, 1},
+		{"hit@5 gold at rank 6 misses", 5, []string{"c6"}, 0},
+		{"any of multiple gold chunks counts", 5, []string{"zz", "c3"}, 1},
+		{"k beyond hits", 10, []string{"c2"}, 1},
+	} {
+		if got := passageAt(tc.k, ten, tc.gold); got != tc.want {
+			t.Fatalf("%s: passageAt(%d) = %v, want %v", tc.name, tc.k, got, tc.want)
+		}
+	}
+	// k beyond hits with gold outside the shorter slice must not panic
+	// or match.
+	if got := passageAt(10, chunks(2), []string{"c3"}); got != 0 {
+		t.Fatalf("passageAt(10, 2 hits, gold c3) = %v, want 0", got)
+	}
+}
+
+func TestPassageMRR(t *testing.T) {
+	ten := chunks(10)
+	for _, tc := range []struct {
+		name string
+		gold []string
+		want float64
+	}{
+		{"rank 1", []string{"c1"}, 1},
+		{"rank 3", []string{"c3"}, 1.0 / 3.0},
+		{"absent", []string{"zz"}, 0},
+		{"first-hit rule: gold at 2 and 4 → 1/2", []string{"c4", "c2"}, 0.5},
+	} {
+		if got := passageMRR(ten, tc.gold); got != tc.want {
+			t.Fatalf("%s: passageMRR = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestSuiteMode(t *testing.T) {
+	// Book-only suite: not passage, all counted book-level.
+	p, bookN, chunkN := suiteMode(goldSuite{Queries: []goldQuery{
+		{ID: "a", Gold: []string{"x"}}, {ID: "b", Gold: []string{"y"}},
+	}})
+	if p || bookN != 2 || chunkN != 0 {
+		t.Fatalf("book-only suite: passage=%v book=%d chunks=%d", p, bookN, chunkN)
+	}
+	// Mixed suite must be visible to main's guard (both counts > 0).
+	p, bookN, chunkN = suiteMode(goldSuite{Queries: []goldQuery{
+		{ID: "a", Gold: []string{"x"}}, {ID: "b", GoldChunks: []string{"c"}},
+	}})
+	if !p || bookN != 1 || chunkN != 1 {
+		t.Fatalf("mixed suite: passage=%v book=%d chunks=%d", p, bookN, chunkN)
+	}
+	// Scope-only entries stay book-level: scoping ≠ passage scoring.
+	p, bookN, chunkN = suiteMode(goldSuite{Queries: []goldQuery{
+		{ID: "a", Gold: []string{"x"}, Scope: []string{"d1"}},
+	}})
+	if p || bookN != 1 || chunkN != 0 {
+		t.Fatalf("scope-only suite: passage=%v book=%d chunks=%d", p, bookN, chunkN)
+	}
+}
 
 func TestPrecisionAt(t *testing.T) {
 	hits := []search.Hit{hitBook("CSR und Reporting"), hitBook("Anderes Buch"), hitBook("CSR und Finance"), hitBook("X"), hitBook("Y")}
