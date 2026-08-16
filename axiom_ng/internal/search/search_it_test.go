@@ -107,6 +107,11 @@ func TestIT_SearchEndToEnd(t *testing.T) {
 		if !res.Arms.Dense || !res.Arms.BM25 {
 			t.Fatalf("query %q arms degraded: %+v", q, res.Arms)
 		}
+		// R5 (#135): the learned-lexical arm must contribute live against
+		// the backfilled rank_features index.
+		if !res.Arms.Sparse {
+			t.Fatalf("query %q sparse arm did not fire: %+v", q, res.Arms)
+		}
 		// On-topic smoke against the query's explicit topic anchors.
 		if !onTopic(qc.anchors, res.Hits[:min(3, len(res.Hits))]) {
 			t.Fatalf("query %q off-topic top-3:\n%s", q, dumpHits(res.Hits[:min(3, len(res.Hits))]))
