@@ -34,6 +34,9 @@ type NormalizedMetadata struct {
 type rawItemData struct {
 	ItemType     string `json:"itemType"`
 	Title        string `json:"title"`
+	NameOfAct    string `json:"nameOfAct,omitempty"`    // statute (methodology §2)
+	DateEnacted  string `json:"dateEnacted,omitempty"`  // statute
+	Institution  string `json:"institution,omitempty"`  // report (methodology §4)
 	Date         string `json:"date,omitempty"`
 	Publisher    string `json:"publisher,omitempty"`
 	Edition      string `json:"edition,omitempty"`
@@ -117,5 +120,20 @@ func Normalize(data json.RawMessage) NormalizedMetadata {
 		}
 	}
 	nm.PublicationYear = ParseYear(raw.Date)
+	// Methodology-aware fallbacks (dudu's Zotero guide): statutes carry
+	// nameOfAct/dateEnacted instead of title/date, reports carry institution
+	// instead of publisher. Fills only — never overwrites a present field.
+	if raw.ItemType == "statute" {
+		if nm.Title == "" && raw.NameOfAct != "" {
+			nm.Title = raw.NameOfAct
+		}
+		if nm.Date == "" && raw.DateEnacted != "" {
+			nm.Date = raw.DateEnacted
+			nm.PublicationYear = ParseYear(raw.DateEnacted)
+		}
+	}
+	if raw.ItemType == "report" && nm.Publisher == "" && raw.Institution != "" {
+		nm.Publisher = raw.Institution
+	}
 	return nm
 }
