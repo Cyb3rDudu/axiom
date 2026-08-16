@@ -1,0 +1,741 @@
+{
+  "note": "v2.1 (#155): v2 (32 dudu-confirmed scoped entries) + VWL/ORG_HA verified entries from dudu's trace files (quality-gated anchors, globally resolved, scope = resolved document).",
+  "queries": [
+    {
+      "id": "qa1",
+      "type": "proposal",
+      "q": "Was ist CSR-Reporting und welche Standards gibt es?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "29649729-03a0-40d6-b4f5-18cc82149aa2",
+        "4c49b3e9-c874-417b-b0a8-d9ba5b913ac7"
+      ],
+      "gold_chunk_ids": [
+        "a512e313-7f58-49d0-84d7-3469d34a55d8"
+      ]
+    },
+    {
+      "id": "qa2",
+      "type": "proposal",
+      "q": "Wie funktioniert eine Ökobilanz Life Cycle Assessment?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "d61cb3eb-69d4-4782-b761-0ad6c4c67e90"
+      ],
+      "gold_chunk_ids": [
+        "e2ef47b2-86f7-47ff-8c97-0ffed5d05675"
+      ]
+    },
+    {
+      "id": "qa3",
+      "type": "proposal",
+      "q": "Lieferkettensorgfaltspflichtengesetz Anforderungen Unternehmen",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "4bbaa98d-16e3-47f9-b638-db59a89fd0d0"
+      ],
+      "gold_chunk_ids": [
+        "22badf90-d754-4ddc-aabd-6f10b8067db2"
+      ]
+    },
+    {
+      "id": "qa4",
+      "type": "proposal",
+      "q": "ESG rating agencies influence on corporate sustainability reporting",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "6ddca1d1-a79f-40e5-a17d-c12c67e9100b",
+        "bcbedf40-f904-46db-b738-dd7f168a3cb1"
+      ],
+      "gold_chunk_ids": [
+        "eb8dfab6-3c76-4982-aaec-edf6d7acd9f5"
+      ]
+    },
+    {
+      "id": "qa5",
+      "type": "proposal",
+      "q": "Was ist Corporate Social Responsibility und welche Dimensionen hat es?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "4c49b3e9-c874-417b-b0a8-d9ba5b913ac7",
+        "4bbaa98d-16e3-47f9-b638-db59a89fd0d0"
+      ],
+      "gold_chunk_ids": [
+        "4510f9c0-d940-4a0d-970a-878af7a623b9"
+      ]
+    },
+    {
+      "id": "c6",
+      "type": "proposal",
+      "q": "Nachhaltigkeit als Managementansatz in Unternehmen etablieren",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "ead40ca0-aeb1-40f6-a028-206307d13c6d"
+      ],
+      "gold_chunk_ids": [
+        "396a61f5-92b5-46c4-a6c0-ed1fd913f5a2"
+      ]
+    },
+    {
+      "id": "c7",
+      "type": "proposal",
+      "q": "institutionelle Anleger und nachhaltige Kapitalanlagen",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "88039f1b-db41-4c7b-949c-dc60662b61a3"
+      ],
+      "gold_chunk_ids": [
+        "ebeab287-aa36-4acb-bb96-33c3c5c1f967"
+      ]
+    },
+    {
+      "id": "c8",
+      "type": "proposal",
+      "q": "Corporate Social Responsibility in der Wertschöpfungskette",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "4ad69286-e9c3-42b2-8f8e-94b79514dcf1"
+      ],
+      "gold_chunk_ids": [
+        "ade86c3b-8bab-4fd9-9da3-0b7280ec9e20"
+      ]
+    },
+    {
+      "id": "c9",
+      "type": "proposal",
+      "q": "Nachhaltigkeit als Treiber von Innovation",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "5d8422e3-1d76-48c7-baf9-3c389be15738"
+      ],
+      "gold_chunk_ids": [
+        "e326774c-d7e1-4cb9-b3ac-9fcc01d02cd1"
+      ]
+    },
+    {
+      "id": "c10",
+      "type": "proposal",
+      "q": "warum die ökologische Transformation nicht stattfindet",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:alt:0",
+      "scope_document_ids": [
+        "f9041687-3020-4fcc-809e-1aea5f3bbde3"
+      ],
+      "gold_chunk_ids": [
+        "fcca7261-e6a9-4b84-b79e-3fc1143d1154"
+      ]
+    },
+    {
+      "id": "c11",
+      "type": "proposal",
+      "q": "ESG investing theory and practice balanced view",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "6ddca1d1-a79f-40e5-a17d-c12c67e9100b"
+      ],
+      "gold_chunk_ids": [
+        "b9b6ab73-75f8-4461-a012-449a86a8531b"
+      ]
+    },
+    {
+      "id": "c12",
+      "type": "proposal",
+      "q": "demystifying ESG common misconceptions",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "bcbedf40-f904-46db-b738-dd7f168a3cb1"
+      ],
+      "gold_chunk_ids": [
+        "e581cc19-1946-45b2-809c-a76a550322a5"
+      ]
+    },
+    {
+      "id": "c13",
+      "type": "proposal",
+      "q": "sustainable performance beyond ESG compliance leadership",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "d032750b-a052-424f-ac02-8e3f373bf045"
+      ],
+      "gold_chunk_ids": [
+        "f1f69ee7-1ade-4bc0-a8ee-9d989d92c381"
+      ]
+    },
+    {
+      "id": "c14",
+      "type": "proposal",
+      "q": "ESG and sustainable development in healthcare",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "ed413eb8-bafb-4f68-bdac-9cf8cd73ee0f"
+      ],
+      "gold_chunk_ids": [
+        "7d334cff-60ac-459f-ab9e-3643e5968b9a"
+      ]
+    },
+    {
+      "id": "c15",
+      "type": "proposal",
+      "q": "perspektiven der wirtschaftswissenschaften",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "2575a5c0-191f-48d7-adc3-dbfe51d18f70"
+      ],
+      "gold_chunk_ids": [
+        "6594a6c2-2092-499a-9806-e14ecbade472"
+      ]
+    },
+    {
+      "id": "f16",
+      "type": "proposal",
+      "q": "stakeholder salience model power legitimacy urgency",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "d77e32f2-f5e4-4ab0-98be-b635338db4b8"
+      ],
+      "gold_chunk_ids": [
+        "a33427e8-0b81-47d3-9c77-251b57cc8f3d"
+      ]
+    },
+    {
+      "id": "f17",
+      "type": "proposal",
+      "q": "Zieldefinition und Systemabgrenzung einer Ökobilanz",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "d61cb3eb-69d4-4782-b761-0ad6c4c67e90"
+      ],
+      "gold_chunk_ids": [
+        "1e325209-6985-4cf9-8548-663b18735924"
+      ]
+    },
+    {
+      "id": "n18",
+      "type": "proposal",
+      "q": "Nachhaltigkeitsberichterstattung GRI Standards",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:alt:0",
+      "scope_document_ids": [
+        "29649729-03a0-40d6-b4f5-18cc82149aa2"
+      ],
+      "gold_chunk_ids": [
+        "eb7358e4-f025-4853-a0c3-3815034d190a"
+      ]
+    },
+    {
+      "id": "n19",
+      "type": "proposal",
+      "q": "CSRD European Sustainability Reporting Standard Anforderungen",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "29649729-03a0-40d6-b4f5-18cc82149aa2",
+        "4c49b3e9-c874-417b-b0a8-d9ba5b913ac7"
+      ],
+      "gold_chunk_ids": [
+        "9d294c63-16a3-467b-bae0-635e9745687c"
+      ]
+    },
+    {
+      "id": "n20",
+      "type": "proposal",
+      "q": "IDW PS 821 Prüfungsnachweis",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:alt:0",
+      "scope_document_ids": [
+        "29649729-03a0-40d6-b4f5-18cc82149aa2",
+        "88039f1b-db41-4c7b-949c-dc60662b61a3"
+      ],
+      "gold_chunk_ids": [
+        "847b5307-12a7-4157-85ff-52ff091fad00"
+      ]
+    },
+    {
+      "id": "n21",
+      "type": "proposal",
+      "q": "false narrative of ESG investing critique",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "0fe55902-2eef-48fa-bb94-8fb44145c91f"
+      ],
+      "gold_chunk_ids": [
+        "9357e61f-3ba0-483d-95c4-6cf252a59973"
+      ]
+    },
+    {
+      "id": "a22",
+      "type": "proposal",
+      "q": "Alexandra Hildebrandt ESG",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "bcbedf40-f904-46db-b738-dd7f168a3cb1",
+        "ed413eb8-bafb-4f68-bdac-9cf8cd73ee0f"
+      ],
+      "gold_chunk_ids": [
+        "d4e65330-7f5c-497d-97d0-d7f0f27c60e1"
+      ]
+    },
+    {
+      "id": "a23",
+      "type": "proposal",
+      "q": "René Schmidpeter CSR Management-Reihe",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "4bbaa98d-16e3-47f9-b638-db59a89fd0d0",
+        "4ad69286-e9c3-42b2-8f8e-94b79514dcf1",
+        "5d8422e3-1d76-48c7-baf9-3c389be15738"
+      ],
+      "gold_chunk_ids": [
+        "7106b71a-7c60-4b40-8188-b45ca7d9e4d8"
+      ]
+    },
+    {
+      "id": "a24",
+      "type": "proposal",
+      "q": "Matthias S. Fifka Corporate Social Responsibility",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "4bbaa98d-16e3-47f9-b638-db59a89fd0d0"
+      ],
+      "gold_chunk_ids": [
+        "c8136033-89fc-46e6-a085-c858a6dbe843"
+      ]
+    },
+    {
+      "id": "f25",
+      "type": "proposal",
+      "q": "CSR aus Sicht der Finanzberichterstattung",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-durchnick:yes",
+      "scope_document_ids": [
+        "4c49b3e9-c874-417b-b0a8-d9ba5b913ac7"
+      ],
+      "gold_chunk_ids": [
+        "eb4acbc5-c7fc-46fb-a06b-e5d6944cfa9a"
+      ]
+    },
+    {
+      "id": "z1",
+      "type": "verified",
+      "q": "Was umfasst ESG über die Triple Bottom Line hinaus?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-zitatnotizen",
+      "scope_document_ids": [
+        "29649729-03a0-40d6-b4f5-18cc82149aa2"
+      ],
+      "gold_chunk_ids": [
+        "0a133f0d-070f-4fd7-bbbb-9f6b4c893612"
+      ]
+    },
+    {
+      "id": "z2",
+      "type": "verified",
+      "q": "Wozu dient Nachhaltigkeitsreporting intern?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-zitatnotizen",
+      "scope_document_ids": [
+        "29649729-03a0-40d6-b4f5-18cc82149aa2"
+      ],
+      "gold_chunk_ids": [
+        "83194537-3c26-4c9c-99cb-88f19e8f698e"
+      ]
+    },
+    {
+      "id": "z3",
+      "type": "verified",
+      "q": "Welchen Zweck haben Stakeholder-Beziehungen für Unternehmen?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-zitatnotizen",
+      "scope_document_ids": [
+        "d77e32f2-f5e4-4ab0-98be-b635338db4b8"
+      ],
+      "gold_chunk_ids": [
+        "12767671-5e04-458d-99d8-3bc3b1cfe9f5"
+      ]
+    },
+    {
+      "id": "z4",
+      "type": "verified",
+      "q": "Wie ist strategisches Nachhaltigkeitsmanagement aufgebaut?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-zitatnotizen",
+      "scope_document_ids": [
+        "ead40ca0-aeb1-40f6-a028-206307d13c6d"
+      ],
+      "gold_chunk_ids": [
+        "da9baf54-54ee-4904-be56-dab96f17a631"
+      ]
+    },
+    {
+      "id": "z5",
+      "type": "verified",
+      "q": "Führt gesellschaftliche Verantwortung zu Kosten oder zu Marktchancen?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-zitatnotizen",
+      "scope_document_ids": [
+        "5d8422e3-1d76-48c7-baf9-3c389be15738"
+      ],
+      "gold_chunk_ids": [
+        "fe953907-dd2e-41b1-9404-71444479073e"
+      ]
+    },
+    {
+      "id": "z6",
+      "type": "verified",
+      "q": "Warum muss Nachhaltigkeit über die eigenen vier Wände hinaus in der Wertschöpfungskette liegen?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-zitatnotizen",
+      "scope_document_ids": [
+        "4ad69286-e9c3-42b2-8f8e-94b79514dcf1"
+      ],
+      "gold_chunk_ids": [
+        "2d6dff9b-c5e5-420d-9193-144fe9a0b66f"
+      ]
+    },
+    {
+      "id": "z7",
+      "type": "verified",
+      "q": "Wie hat Henkel Nachhaltigkeit messbar gemacht?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "dudu-zitatnotizen",
+      "scope_document_ids": [
+        "4ad69286-e9c3-42b2-8f8e-94b79514dcf1"
+      ],
+      "gold_chunk_ids": [
+        "abc699e5-a9e3-4be5-9267-301eb08d5527"
+      ]
+    },
+    {
+      "id": "w1",
+      "type": "verified",
+      "q": "Was ist das Ziel des Freihandels?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Heine/Herr",
+      "scope_document_ids": [
+        "d5171e42-3596-425f-8e07-6a2b9424f3e5"
+      ],
+      "gold_chunk_ids": [
+        "4a85807e-9de9-4dd3-a82e-3b6a96ecb404"
+      ]
+    },
+    {
+      "id": "w3",
+      "type": "verified",
+      "q": "Warum entsteht internationaler Handel durch Arbeitsteilung?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Eisenhut/Sturm",
+      "scope_document_ids": [
+        "5d5e482b-8b49-4ce8-ba4f-dae6f3648dd6"
+      ],
+      "gold_chunk_ids": [
+        "bc961acc-b9ef-420d-ba6a-b09972562ca0"
+      ]
+    },
+    {
+      "id": "w4",
+      "type": "verified",
+      "q": "Was sind absolute Kostenvorteile nach Adam Smith?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Engelkamp/Sell",
+      "scope_document_ids": [
+        "a64defc4-e1bc-4f8b-bf97-be4a716cb039"
+      ],
+      "gold_chunk_ids": [
+        "35016bbe-996d-49c8-8af0-73bceca8e8a6"
+      ]
+    },
+    {
+      "id": "w5",
+      "type": "verified",
+      "q": "Worin besteht der komparative Kostenvorteil nach Ricardo?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Bofinger",
+      "scope_document_ids": [
+        "c4dc0951-262d-4db5-98c7-e7061c94a6dc"
+      ],
+      "gold_chunk_ids": [
+        "2d7bf985-4f09-4d3b-b2b8-21880e9f6e09"
+      ]
+    },
+    {
+      "id": "w7",
+      "type": "verified",
+      "q": "Wie entstehen Produktionsmöglichkeiten durch Spezialisierung?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Premer",
+      "scope_document_ids": [
+        "0a182cd3-2c61-410e-9725-25f98ed6fea2"
+      ],
+      "gold_chunk_ids": [
+        "5e8a55ad-03af-4c11-9e74-3fb3f2feb9c7"
+      ]
+    },
+    {
+      "id": "w8",
+      "type": "verified",
+      "q": "Wie entstehen Wohlfahrtsgewinne durch Freihandel?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Eisenhut/Sturm",
+      "scope_document_ids": [
+        "5d5e482b-8b49-4ce8-ba4f-dae6f3648dd6"
+      ],
+      "gold_chunk_ids": [
+        "16d9f833-54f4-4272-bac4-5c6706309904"
+      ]
+    },
+    {
+      "id": "w9",
+      "type": "verified",
+      "q": "Wie wirken Konsumenten- und Produzentenrente im Außenhandel?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Premer",
+      "scope_document_ids": [
+        "0a182cd3-2c61-410e-9725-25f98ed6fea2"
+      ],
+      "gold_chunk_ids": [
+        "d29e9597-47bf-4a75-92db-a2c8f65ed01e"
+      ]
+    },
+    {
+      "id": "w11",
+      "type": "verified",
+      "q": "Was besagt das Heckscher-Ohlin-Theorem?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Mankiw/Taylor",
+      "scope_document_ids": [
+        "1af168c9-bac8-4aa9-b201-d0b7bbc84fbd"
+      ],
+      "gold_chunk_ids": [
+        "976a3675-248c-46b1-a63b-e60f40953e8b"
+      ]
+    },
+    {
+      "id": "w14",
+      "type": "verified",
+      "q": "Was besagt die Prebisch-Singer-These zu den Terms of Trade?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Mankiw/Taylor",
+      "scope_document_ids": [
+        "a3a025f3-93a4-40d2-8828-b905f1ba22b5"
+      ],
+      "gold_chunk_ids": [
+        "143af9dc-7143-42ad-b654-1032897a654d"
+      ]
+    },
+    {
+      "id": "w15",
+      "type": "verified",
+      "q": "Was sind Wechselkurse im Außenhandel?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Mankiw/Taylor",
+      "scope_document_ids": [
+        "1af168c9-bac8-4aa9-b201-d0b7bbc84fbd"
+      ],
+      "gold_chunk_ids": [
+        "a36b48d8-c048-4328-b894-aeabf5bd97c1"
+      ]
+    },
+    {
+      "id": "w18",
+      "type": "verified",
+      "q": "Wie wirken Zölle und Importabgaben?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Engelkamp/Sell",
+      "scope_document_ids": [
+        "a64defc4-e1bc-4f8b-bf97-be4a716cb039"
+      ],
+      "gold_chunk_ids": [
+        "0d113d13-de44-475c-997c-5422f560e27c"
+      ]
+    },
+    {
+      "id": "w24",
+      "type": "verified",
+      "q": "Warum ist die WTO in Handelsverhandlungen blockiert?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Eisenhut/Sturm",
+      "scope_document_ids": [
+        "5d5e482b-8b49-4ce8-ba4f-dae6f3648dd6"
+      ],
+      "gold_chunk_ids": [
+        "04e1542a-cdc5-4b00-aa32-c35603815816"
+      ]
+    },
+    {
+      "id": "o1",
+      "type": "verified",
+      "q": "Wie sind die Integrationsdimensionen industrieller Software und KI strukturiert?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Kett",
+      "scope_document_ids": [
+        "34754197-4fb0-4332-ac7f-b2651774d1eb"
+      ],
+      "gold_chunk_ids": [
+        "d7a33150-138b-4ca5-9ad6-9e521920cd86"
+      ]
+    },
+    {
+      "id": "o2",
+      "type": "verified",
+      "q": "Welche Folgekosten hat die Reduktion von Abhängigkeiten?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Schreyögg",
+      "scope_document_ids": [
+        "5fcf9d8c-99fe-434e-9412-d22c98ea8b70"
+      ],
+      "gold_chunk_ids": [
+        "0c897d22-7663-4260-8931-aaad182f7a02"
+      ]
+    },
+    {
+      "id": "o3",
+      "type": "verified",
+      "q": "Welchen Nutzen hat Predictive Maintenance?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:VDMA",
+      "scope_document_ids": [
+        "9129d22a-4349-40d1-a87c-c32d121ec010"
+      ],
+      "gold_chunk_ids": [
+        "927c1476-dc6a-478b-9baa-74dc41d240f8"
+      ]
+    },
+    {
+      "id": "o4",
+      "type": "verified",
+      "q": "Wie wirkt NIS2 vertraglich auf Lieferketten?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:NIS2",
+      "scope_document_ids": [
+        "8e3825d5-8003-4f40-b6ea-ef48c2119e07"
+      ],
+      "gold_chunk_ids": [
+        "81cc46ee-9705-424b-b941-30fb6d48e152"
+      ]
+    },
+    {
+      "id": "o5",
+      "type": "verified",
+      "q": "Welche ökonomischen Wechselkosten entstehen?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Hungenberg",
+      "scope_document_ids": [
+        "692d9cd0-a7c9-46cf-858b-a8d3c765622a"
+      ],
+      "gold_chunk_ids": [
+        "061735ad-21ba-4f69-86aa-2323af5c300e"
+      ]
+    },
+    {
+      "id": "o6",
+      "type": "verified",
+      "q": "Wie wird KI-gestützte Softwareentwicklung governiert?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:DORA",
+      "scope_document_ids": [
+        "02e560ac-07a2-43fd-aa13-27259c0d4328"
+      ],
+      "gold_chunk_ids": [
+        "3e71f461-0238-4eff-acd9-39050e07cacb"
+      ]
+    },
+    {
+      "id": "o7",
+      "type": "verified",
+      "q": "Wie sind Prozesse mit Input und Output definiert?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Prozess",
+      "scope_document_ids": [
+        "4bba62c6-cbc6-4f78-bc3d-c6585bcba80c"
+      ],
+      "gold_chunk_ids": [
+        "fe765dc8-80cc-4a3e-84da-485b9015ab7f"
+      ]
+    },
+    {
+      "id": "o8",
+      "type": "verified",
+      "q": "Was ist ein soziotechnisches System?",
+      "gold": null,
+      "confirmed": true,
+      "origin": "v21-trace:Soziotechnik",
+      "scope_document_ids": [
+        "4bba62c6-cbc6-4f78-bc3d-c6585bcba80c"
+      ],
+      "gold_chunk_ids": [
+        "4862ecb1-22ae-403b-845b-e84623ccc8e3"
+      ]
+    }
+  ]
+}

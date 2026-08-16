@@ -83,3 +83,33 @@ Metriken: P@1/hit@5/MRR/hit@10 auf Chunk-Ebene. 2 Läufe: **identisch auf 3 Dezi
 
 Reproduzieren: `AXIOM_TEST_DATABASE_URL=… AXIOM_PROCESSOR_URL=http://127.0.0.1:8012 go
 run ./cmd/retrieval-bench -suite cmd/retrieval-bench/gold_suite_v2.json -md out.md`
+
+## v2.1 — Vollbibliothek + VWL/ORG_HA-Traces (#155, 2026-08-16, nach Flutgate)
+
+Suite: `gold_suite_v21.json` — **52 Entries** (v2: 32 + **20 neue verified** aus dudus
+Trace-Dateien: 12 VWL aus `quellen_freihandel.txt` — Topic-Keyword-Qualitätsgate über die
+alten OpenSearch-Snippets, §17 als thematisch schief verworfen — und 8 ORG_HA aus
+`quellennachweise_originalstellen_iteration3.md` — literale verifizierte Blockquotes.
+Anker global aufgelöst, Scope = aufgelöstes Dokument; Citation-Familien bestätigt
+(Heine/Herr→Paradigmenorientierte, Bofinger→Eine Einführung, Hungenberg→Strategisches
+Management, Mankiw/Taylor→Grundzüge …); o9 (Umweltsphären) ehrlich übersprungen (Anker
+nicht im Korpus). 2 Läufe: identisch auf 3 Dezimalstellen.
+
+| Konfiguration | P@1 | hit@5 | MRR | hit@10 | p50 | p95 |
+|---|---|---|---|---|---|---|
+| dense-only | 0.173 | 0.558 | 0.339 | 0.692 | 64 ms | 90 ms |
+| hybrid | 0.308 | 0.692 | 0.469 | 0.827 | 71 ms | 150 ms |
+| **hybrid+rerank** | **0.615** | **0.808** | **0.702** | **0.865** | 4.0–4.5 s | 4.4–4.8 s |
+| +sparse | 0.615 | 0.808 | 0.697 | 0.846 | +1.3 s | +3.9 s |
+| +sparse+graph | 0.596 | 0.788 | 0.677 | 0.827 | +0.7 s | +0.9 s |
+
+### Lesart
+- **Reranker-Urteil bestätigt sich auf der härteren Vollbibliothek**: P@1 verdoppelt
+  gegen Hybrid (0.308→0.615), verdreifacht gegen dense-only; MRR 0.469→0.702. Die
+  Absolutwerte liegen unter v2 (0.750) — erwartbar: VWL/Technik-Texte mit teils
+  Fuzzy-Ankern aus dem alten System sind die härtere Messlatte.
+- **Finale Konfiguration (unverändert bestätigt)**: hybrid+rerank, top_n 5–10,
+  2× Overfetch, Remote-CUDA für Latenz; Sparse/Graph OFF.
+- Die Produktions-Entscheidung aus v2 trägt unverändert.
+
+Reproduzieren: `go run ./cmd/retrieval-bench -suite cmd/retrieval-bench/gold_suite_v21.json -md out.md`

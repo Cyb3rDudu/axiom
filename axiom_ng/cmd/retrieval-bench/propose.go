@@ -251,3 +251,92 @@ func materializeV2(ctx context.Context, database *db.DB, suiteDir string) error 
 	buf, _ := json.MarshalIndent(out, "", "  ")
 	return os.WriteFile(filepath.Join(suiteDir, "gold_suite_v2.json"), buf, 0o644)
 }
+
+// --- v2.1 (#155): VWL + ORG_HA verified entries from dudu's traces --------
+//
+// VWL anchors: quellen_freihandel.txt (old-axiom OpenSearch snippets, quality-
+// gated by topic-keyword scoring — only on-topic quotes kept; section 17
+// dropped as topically off). ORG_HA anchors: quellennachweise_originalstellen
+// _iteration3.md — literal verified blockquotes. Anchors resolve GLOBALLY;
+// the scope becomes the resolved chunk's document (citation family checked).
+
+var v21Specs = []verifiedSpec{
+	// VWL trace
+	{"w1", "Was ist das Ziel des Freihandels?", "Heine/Herr", "Im Zwei-Länder-Fall ist ein Wohlfahrtsgewinn in der Form der Arbeitszeitersparnis"},
+	{"w3", "Warum entsteht internationaler Handel durch Arbeitsteilung?", "Eisenhut/Sturm", "Arbeitsteilung, Tausch und Geld"},
+	{"w4", "Was sind absolute Kostenvorteile nach Adam Smith?", "Engelkamp/Sell", "Während Adam Smith die Bedeutung der absoluten Kostenvorteil"},
+	{"w5", "Worin besteht der komparative Kostenvorteil nach Ricardo?", "Bofinger", "absolute Kostenvorteile"},
+	{"w7", "Wie entstehen Produktionsmöglichkeiten durch Spezialisierung?", "Premer", "Die folgende Tabelle 1.2 zeigt das Produktions- und Speziali"},
+	{"w8", "Wie entstehen Wohlfahrtsgewinne durch Freihandel?", "Eisenhut/Sturm", "die weitere Wohlfahrtsgewinne ermöglichen. Das GATT"},
+	{"w9", "Wie wirken Konsumenten- und Produzentenrente im Außenhandel?", "Premer", "Oder diese Mengeneinheit würde zu einem Preis von"},
+	{"w11", "Was besagt das Heckscher-Ohlin-Theorem?", "Mankiw/Taylor", "Die Verfügbarkeit von Produktionsfaktoren: Das Heckscher"},
+	{"w14", "Was besagt die Prebisch-Singer-These zu den Terms of Trade?", "Mankiw/Taylor", "Prebisch-Singer-These"},
+	{"w15", "Was sind Wechselkurse im Außenhandel?", "Mankiw/Taylor", "kann man mit einer Einheit einer Währung, z. B. eines Euro"},
+	{"w18", "Wie wirken Zölle und Importabgaben?", "Engelkamp/Sell", "Importabgaben (an die EU abzuführend"},
+	{"w24", "Warum ist die WTO in Handelsverhandlungen blockiert?", "Eisenhut/Sturm", "sind die Verhandlungen oftmals so gut wie blockiert"},
+	// ORG_HA trace (literal verified quotes)
+	{"o1", "Wie sind die Integrationsdimensionen industrieller Software und KI strukturiert?", "Kett", "The model comprises five hierarchical levels"},
+	{"o2", "Welche Folgekosten hat die Reduktion von Abhängigkeiten?", "Schreyögg", "Jeder Entkopplung der Subsysteme drohen kostspielige Reibung"},
+	{"o3", "Welchen Nutzen hat Predictive Maintenance?", "VDMA", "Der Lebenszyklus der Anlagen kann verlängert"},
+	{"o4", "Wie wirkt NIS2 vertraglich auf Lieferketten?", "NIS2", "die Cybersicherheitsverfahren ih"},
+	{"o5", "Welche ökonomischen Wechselkosten entstehen?", "Hungenberg", "Diese können ökonomischer Natur sein"},
+	{"o6", "Wie wird KI-gestützte Softwareentwicklung governiert?", "DORA", "Are downstream systems"},
+	{"o7", "Wie sind Prozesse mit Input und Output definiert?", "Prozess", "Processes can be defined as a sequence of activities"},
+	{"o8", "Was ist ein soziotechnisches System?", "Soziotechnik", "Management is an action-oriented science"},
+	{"o9", "Was bedeutet die Überlappung von Umweltsphären?", "Umweltsphären", "Auch die Umweltsphäre Technologie ist"},
+}
+
+// materializeV21 extends gold_suite_v2.json with the v2.1 verified entries
+// (anchor-resolved globally; scope = resolved document) -> gold_suite_v21.json.
+func materializeV21(ctx context.Context, database *db.DB, suiteDir string) error {
+	raw, err := os.ReadFile(filepath.Join(suiteDir, "gold_suite_v2.json"))
+	if err != nil {
+		return err
+	}
+	var suite goldSuite
+	if err := json.Unmarshal(raw, &suite); err != nil {
+		return err
+	}
+	added := 0
+	for _, z := range v21Specs {
+		var chunkID, title string
+		if err := database.Pool().QueryRow(ctx, `
+			SELECT c.id::text, zd.title
+			FROM processing_chunks c
+			JOIN processing_snapshots s ON s.id = c.snapshot_id AND s.active
+			JOIN zotero_documents zd ON zd.id = s.document_id
+			WHERE c.text ILIKE '%' || $1 || '%'
+			ORDER BY c.chunk_index LIMIT 1`, z.Anchor).Scan(&chunkID, &title); err != nil {
+			fmt.Printf("  %s: anchor NOT found (%s %q) — skipped\n", z.ID, z.Book, truncate(z.Anchor, 40))
+			continue
+		}
+		var docID string
+		if err := database.Pool().QueryRow(ctx, `
+			SELECT s.document_id::text FROM processing_chunks c
+			JOIN processing_snapshots s ON s.id = c.snapshot_id AND s.active
+			WHERE c.id = $1::uuid`, chunkID).Scan(&docID); err != nil {
+			return fmt.Errorf("v21 %s doc: %w", z.ID, err)
+		}
+		suite.Queries = append(suite.Queries, goldQuery{
+			ID: z.ID, Type: "verified", Q: z.Q,
+			Scope: []string{docID}, GoldChunks: []string{chunkID},
+			Confirmed: true, Origin: "v21-trace:" + z.Book,
+		})
+		fmt.Printf("  %s: %s -> chunk %s | %q\n", z.ID, z.Book, chunkID[:8], truncate(title, 44))
+		added++
+	}
+	suite.Note = "v2.1 (#155): v2 (32 dudu-confirmed scoped entries) + VWL/ORG_HA verified entries from dudu's trace files (quality-gated anchors, globally resolved, scope = resolved document)."
+	buf, _ := json.MarshalIndent(suite, "", "  ")
+	if err := os.WriteFile(filepath.Join(suiteDir, "gold_suite_v21.json"), buf, 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("gold_suite_v21.json: %d v2 + %d neue = %d Eintraege\n", len(suite.Queries)-added, added, len(suite.Queries))
+	return nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
