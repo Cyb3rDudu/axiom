@@ -172,10 +172,10 @@ func envEmptyDisables(key, fallback string) string {
 	return fallback
 }
 
-func envBool(key string) bool {
-	v := os.Getenv(key)
-	return v == "1" || v == "true" || v == "yes"
-}
+// envBool reads a bool env defaulting to off — case-insensitive everywhere
+// (envBool used to accept only lowercase "true"/"yes", so
+// AXIOM_DISPATCHER_ENABLED=TRUE silently meant off).
+func envBool(key string) bool { return envBoolDefault(key, false) }
 
 func envInt(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {

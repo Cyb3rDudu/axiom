@@ -121,7 +121,7 @@ func (r *Repo) OutboxDocs(ctx context.Context, snapshotID string) ([]OutboxDoc, 
 			d.Embedding = emb
 		}
 		if sp != nil {
-			sparsed, err := parseSparse(*sp)
+			sparsed, err := ParseSparse(*sp)
 			if err != nil {
 				return nil, fmt.Errorf("snapshot %s chunk %s sparse: %w", snapshotID, d.ChunkID, err)
 			}
@@ -291,18 +291,19 @@ func (r *Repo) OutboxChunkIDs(ctx context.Context, snapshotID string) ([]string,
 	return out, rows.Err()
 }
 
-// parseSparse decodes the sparse-embedding JSONB text {token: weight}.
-// Non-finite or non-numeric weights are rejected: rank_features indexes
-// positive floats and a poison value would silently drop the token.
-func parseSparse(s string) (map[string]float64, error) {
+// ParseSparse decodes the sparse-embedding JSONB text {token: weight}
+// (exported for one-shot tooling — sparse-backfill reads the same column).
+// Weights must be finite AND positive: rank_features indexes positive
+// floats, so a zero/negative/NaN value would fail the bulk item or silently
+// drop the token. The runner persists §10 string values; native numbers are
+// accepted too (the reference backend bypasses the stringification).
+func ParseSparse(s string) (map[string]float64, error) {
 	var m map[string]any
 	if err := json.Unmarshal([]byte(s), &m); err != nil {
 		return nil, err
 	}
 	out := make(map[string]float64, len(m))
 	for k, v := range m {
-		// The runner persists weights as JSON strings (contract §10 string
-		// values); accept both the string and native number forms.
 		var f float64
 		switch w := v.(type) {
 		case float64:
@@ -316,8 +317,8 @@ func parseSparse(s string) (map[string]float64, error) {
 		default:
 			return nil, fmt.Errorf("token %q: weight %v is neither number nor string", k, v)
 		}
-		if math.IsNaN(f) || math.IsInf(f, 0) {
-			return nil, fmt.Errorf("token %q: weight %v is not finite", k, v)
+		if math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 {
+			return nil, fmt.Errorf("token %q: weight %v is not a positive finite number", k, v)
 		}
 		out[k] = f
 	}

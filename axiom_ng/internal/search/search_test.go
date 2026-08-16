@@ -539,8 +539,10 @@ func TestSearch_SparseArmContributesAndWinsRRF(t *testing.T) {
 	os.knnHits = []osHit{hit("d", "doc", "dense")}
 	os.bm25Hits = []osHit{hit("b", "doc", "bm25")}
 	os.sparseHits = []osHit{hit("d", "doc", "dense"), hit("s", "doc", "sparse-only")}
+	// Zero/negative query weights must never reach the OS query — only w>0
+	// tokens become rank_feature clauses.
 	svc := newService(os.URL, &fakeProcessor{embedVec: []float32{1},
-		embedSparse: map[string]float64{"12": 0.5, "7": 0.2}}, fakeDocs{})
+		embedSparse: map[string]float64{"12": 0.5, "7": 0.2, "neg": -0.3, "zero": 0}}, fakeDocs{})
 	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 3})
 	if err != nil {
 		t.Fatal(err)
@@ -555,6 +557,9 @@ func TestSearch_SparseArmContributesAndWinsRRF(t *testing.T) {
 	raw, _ := json.Marshal(os.lastSparseBody)
 	if !strings.Contains(string(raw), `"sparse.12"`) || strings.Count(string(raw), "rank_feature") != 2 {
 		t.Fatalf("sparse query shape wrong: %s", raw)
+	}
+	if strings.Contains(string(raw), "sparse.neg") || strings.Contains(string(raw), "sparse.zero") {
+		t.Fatalf("non-positive weights must not reach the query: %s", raw)
 	}
 	// "d" appears in dense+sparse (2 arms) and must outrank the 1-arm hits.
 	if res.Hits[0].ChunkID != "d" {
@@ -699,7 +704,9 @@ func TestSearch_GraphArmOffByDefault(t *testing.T) {
 func TestSearch_GraphArmExpandsCandidates(t *testing.T) {
 	os := newOSServer(t)
 	os.knnHits = []osHit{hit("d", "doc", "dense")}
-	os.bm25Hits = []osHit{hit("b", "doc", "bm25")}
+	// "d" in TWO hybrid arms so it strictly outranks any graph-only
+	// candidate — the RRF pin below must hold by score, not tie order.
+	os.bm25Hits = []osHit{hit("d", "doc", "bm25"), hit("b", "doc", "bm25")}
 	fg := &fakeGraph{cands: []repo.KGChunkCandidate{kgCand("g", "doc", "graph neighbor")}}
 	svc := newService(os.URL, &fakeProcessor{embedVec: []float32{1}}, fakeDocs{})
 	svc.GraphArm = true
@@ -721,6 +728,12 @@ func TestSearch_GraphArmExpandsCandidates(t *testing.T) {
 	}
 	if !ids["g"] {
 		t.Fatalf("graph candidate must surface in the pool, hits: %v", ids)
+	}
+	// RRF pin: the 2-arm hybrid top hit stays rank 1; a graph-ONLY
+	// candidate (1 arm) must never outrank it — graph expansion joins the
+	// pool, it does not take it over.
+	if res.Hits[0].ChunkID != "d" {
+		t.Fatalf("hybrid top hit must remain rank 1 over the graph-only candidate, got %q", res.Hits[0].ChunkID)
 	}
 	// The graph candidate carries its locator into the hit view.
 	for _, h := range res.Hits {

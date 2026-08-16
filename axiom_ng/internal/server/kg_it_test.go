@@ -19,9 +19,10 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func kgITServer(t *testing.T) *Server {
+func kgITServer(t *testing.T) (*Server, *pgxpool.Pool) {
 	if os.Getenv("AXIOM_KG_IT") != "1" {
 		t.Skip("AXIOM_KG_IT=1 required (real graph data)")
 	}
@@ -35,7 +36,7 @@ func kgITServer(t *testing.T) *Server {
 	t.Cleanup(d.Close)
 	s := New(":0", nil)
 	s.SetKGService(repo.New(d.Pool()))
-	return s
+	return s, d.Pool()
 }
 
 func getJSON(t *testing.T, s *Server, path string) (int, []byte) {
@@ -46,7 +47,7 @@ func getJSON(t *testing.T, s *Server, path string) (int, []byte) {
 }
 
 func TestIT_KGEntitySearchUnitedNations(t *testing.T) {
-	s := kgITServer(t)
+	s, _ := kgITServer(t)
 	code, body := getJSON(t, s, "/api/kg/entities?q=united%20nations&limit=5")
 	if code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", code, body)
@@ -63,7 +64,7 @@ func TestIT_KGEntitySearchUnitedNations(t *testing.T) {
 }
 
 func TestIT_KGUnitedNationsNeighborhoodHasSDG(t *testing.T) {
-	s := kgITServer(t)
+	s, pool := kgITServer(t)
 	_, body := getJSON(t, s, "/api/kg/entities?q=united%20nations&limit=5")
 	var ents []repo.KGEntity
 	if err := json.Unmarshal(body, &ents); err != nil || len(ents) == 0 {
@@ -92,12 +93,29 @@ func TestIT_KGUnitedNationsNeighborhoodHasSDG(t *testing.T) {
 	for _, n := range stable {
 		if hasSDG(n.OtherForm) && len(n.EvidenceChunks) > 0 {
 			t.Logf("[IT] SDG relation found: UN --%s--> %q, evidence chunks %v",
-				n.Type, n.OtherForm, n.EvidenceChunks[:minInt(3, len(n.EvidenceChunks))])
-			// Evidence chain end-to-end: relation -> evidence chunk -> book/page.
+				n.Type, n.OtherForm, n.EvidenceChunks[:min(3, len(n.EvidenceChunks))])
+			// Evidence chain end-to-end IN TEST: relation -> evidence chunk
+			// -> book + page/CFI locator (the chain a citation must resolve).
+			var book, label, cfi string
+			if err := pool.QueryRow(t.Context(), `
+				SELECT z.title,
+				       coalesce(c.locator->>'page_label_start', ''),
+				       coalesce(c.locator->>'cfi_start', '')
+				FROM processing_chunks c
+				JOIN processing_snapshots sn ON sn.id = c.snapshot_id
+				JOIN zotero_documents z ON z.id = sn.document_id
+				WHERE c.id = $1`, n.EvidenceChunks[0]).Scan(&book, &label, &cfi); err != nil {
+				t.Fatalf("evidence chunk %s does not resolve: %v", n.EvidenceChunks[0], err)
+			}
+			if book == "" || (label == "" && cfi == "") {
+				t.Fatalf("broken evidence chain: book=%q page_label=%q cfi=%q", book, label, cfi)
+			}
+			t.Logf("[IT] evidence chain complete: %s -> %q, Seite %q cfi %q",
+				n.EvidenceChunks[0], book, label, cfi)
+			// Relation browsing over the same entity works too.
 			code, rels := getJSON(t, s, "/api/kg/relations?entity="+un.ID+"&limit=200")
 			if code == http.StatusOK && len(rels) > 0 {
-				t.Logf("[IT] relation browsing OK (%d bytes); chain verified via evidence chunk %s",
-					len(rels), n.EvidenceChunks[0])
+				t.Logf("[IT] relation browsing OK (%d bytes)", len(rels))
 			}
 			return
 		}
@@ -106,7 +124,7 @@ func TestIT_KGUnitedNationsNeighborhoodHasSDG(t *testing.T) {
 }
 
 func TestIT_KGStabilityFilterReducesNoise(t *testing.T) {
-	s := kgITServer(t)
+	s, _ := kgITServer(t)
 	// A hub entity's neighborhood must shrink when the floor rises —
 	// the filter has observable effect on real data.
 	_, body := getJSON(t, s, "/api/kg/entities?q=united%20nations&limit=1")
@@ -121,6 +139,9 @@ func TestIT_KGStabilityFilterReducesNoise(t *testing.T) {
 	_ = json.Unmarshal(nbLow, &low)
 	_ = json.Unmarshal(nbHigh, &high)
 	t.Logf("[IT] stability effect: >=1 -> %d neighbors, >=3 -> %d", len(low), len(high))
+	if len(low) > 0 && len(high) >= len(low) {
+		t.Fatalf("stability filter is a no-op on a real hub: >=1 -> %d, >=3 -> %d", len(low), len(high))
+	}
 	if len(high) == 0 && len(low) > 0 {
 		t.Fatal("floor 3 must not empty a real hub neighborhood")
 	}
@@ -143,11 +164,4 @@ func forms(ns []repo.KGNeighbor, n int) string {
 func hasSDG(s string) bool {
 	l := strings.ToLower(s)
 	return strings.Contains(l, "sdg") || strings.Contains(l, "sustainable development")
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

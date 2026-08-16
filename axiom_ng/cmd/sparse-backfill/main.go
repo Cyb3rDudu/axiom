@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
 
 const indexName = "axiom-ng-chunks-v1"
@@ -69,12 +70,17 @@ func main() {
 	}
 	var buf bytes.Buffer
 	updated := 0
+	pending := 0 // actions queued in buf since the last flush
+	// Sample rows are collected DURING the scan (no second full query):
+	// every 50th row plus the last, a bounded deterministic spread.
+	var sampleIDs, sampleVals []string
+	var lastID, lastVals string
 	for rows.Next() {
 		var id, vals string
 		if err := rows.Scan(&id, &vals); err != nil {
 			fatal("scan: %v", err)
 		}
-		sparse, err := parseSparse(vals)
+		sparse, err := repo.ParseSparse(vals)
 		if err != nil {
 			fatal("chunk %s: %v", id, err)
 		}
@@ -84,19 +90,28 @@ func main() {
 		buf.WriteByte('\n')
 		buf.Write(doc)
 		buf.WriteByte('\n')
+		if updated%50 == 0 {
+			sampleIDs, sampleVals = append(sampleIDs, id), append(sampleVals, vals)
+		}
+		lastID, lastVals = id, vals
 		updated++
+		pending++
 		if buf.Len() > 4<<20 { // flush every ~4 MB
-			if err := flushBulk(ctx, osURL, user, pass, &buf); err != nil {
+			if err := flushBulk(ctx, osURL, user, pass, buf.Bytes(), pending); err != nil {
 				fatal("bulk: %v", err)
 			}
 			buf.Reset()
+			pending = 0
 		}
 	}
 	if err := rows.Err(); err != nil {
 		fatal("rows: %v", err)
 	}
+	if lastID != "" && (len(sampleIDs) == 0 || sampleIDs[len(sampleIDs)-1] != lastID) {
+		sampleIDs, sampleVals = append(sampleIDs, lastID), append(sampleVals, lastVals)
+	}
 	if buf.Len() > 0 {
-		if err := flushBulk(ctx, osURL, user, pass, &buf); err != nil {
+		if err := flushBulk(ctx, osURL, user, pass, buf.Bytes(), pending); err != nil {
 			fatal("bulk: %v", err)
 		}
 	}
@@ -127,31 +142,14 @@ func main() {
 	if totalAfter != pgActiveChunks {
 		fatal("INVARIANT VIOLATION: OS docs %d != PG active chunks %d", totalAfter, pgActiveChunks)
 	}
-	sampleSparse(ctx, osURL, user, pass, database)
+	sampleSparse(ctx, osURL, user, pass, sampleIDs, sampleVals)
 	fmt.Println("OK: invariant OS == active chunks holds; sparse verified by bulk receipt + sampled doc weights")
 }
 
-// sampleSparse verifies 25 deterministic chunk docs carry exactly the PG
-// sparse weights (sorted-by-id first/mid/last spread).
-func sampleSparse(ctx context.Context, base, user, pass string, database *db.DB) {
-	rows, err := database.Pool().Query(ctx, `
-		SELECT c.id::text, s.values::text
-		FROM processing_chunks c
-		JOIN processing_snapshots sn ON sn.id = c.snapshot_id AND sn.active
-		JOIN processing_chunk_sparse_embeddings s ON s.chunk_id = c.id
-		ORDER BY c.id`)
-	if err != nil {
-		fatal("sample select: %v", err)
-	}
-	defer rows.Close()
-	var ids, vals []string
-	for rows.Next() {
-		var id, v string
-		if err := rows.Scan(&id, &v); err != nil {
-			fatal("sample scan: %v", err)
-		}
-		ids, vals = append(ids, id), append(vals, v)
-	}
+// sampleSparse verifies sampled chunk docs — collected DURING the main
+// scan (every 50th row + last), no second full query — carry exactly the
+// PG sparse weights.
+func sampleSparse(ctx context.Context, base, user, pass string, ids, vals []string) {
 	if len(ids) == 0 {
 		fatal("no sparse rows to sample")
 	}
@@ -164,7 +162,7 @@ func sampleSparse(ctx context.Context, base, user, pass string, database *db.DB)
 		if !pick[i] {
 			continue
 		}
-		want, err := parseSparse(vals[i])
+		want, err := repo.ParseSparse(vals[i])
 		if err != nil {
 			fatal("sample %s: %v", ids[i], err)
 		}
@@ -219,8 +217,12 @@ func putMapping(ctx context.Context, base, user, pass string) error {
 	return nil
 }
 
-func flushBulk(ctx context.Context, base, user, pass string, buf *bytes.Buffer) error {
-	_, rb, err := doOS(ctx, base, user, pass, http.MethodPost, "/_bulk", buf.Bytes())
+// flushBulk posts one NDJSON bulk batch and ENFORCES the receipt: an errors
+// flag is fatal unconditionally (first parseable item error included — a
+// truncated/unparseable body must not read as success), and the item count
+// must match the actions actually sent in this batch.
+func flushBulk(ctx context.Context, base, user, pass string, body []byte, expected int) error {
+	_, rb, err := doOS(ctx, base, user, pass, http.MethodPost, "/_bulk", body)
 	if err != nil {
 		return err
 	}
@@ -235,12 +237,16 @@ func flushBulk(ctx context.Context, base, user, pass string, buf *bytes.Buffer) 
 	if err := json.Unmarshal(rb, &resp); err != nil {
 		return fmt.Errorf("decode bulk response: %w", err)
 	}
+	if len(resp.Items) != expected {
+		return fmt.Errorf("bulk receipt: %d items for %d actions sent", len(resp.Items), expected)
+	}
 	if resp.Errors {
 		for _, it := range resp.Items {
 			if it.Update.Error != nil {
 				return fmt.Errorf("bulk item error: %v", it.Update.Error)
 			}
 		}
+		return fmt.Errorf("bulk reported errors but no item error was parseable (%d items)", len(resp.Items))
 	}
 	return nil
 }
@@ -285,37 +291,6 @@ func doOS(ctx context.Context, base, user, pass, method, path string, body []byt
 		return resp.StatusCode, rb, fmt.Errorf("opensearch %s %s: HTTP %d: %.300s", method, path, resp.StatusCode, rb)
 	}
 	return resp.StatusCode, rb, nil
-}
-
-// parseSparse mirrors repo.parseSparse (finite-float guard).
-func parseSparse(s string) (map[string]float64, error) {
-	var m map[string]any
-	if err := json.Unmarshal([]byte(s), &m); err != nil {
-		return nil, err
-	}
-	out := make(map[string]float64, len(m))
-	for k, v := range m {
-		// The runner persists weights as JSON strings (contract §10 string
-		// values); accept both the string and native number forms.
-		var f float64
-		switch w := v.(type) {
-		case float64:
-			f = w
-		case string:
-			pf, err := strconv.ParseFloat(w, 64)
-			if err != nil {
-				return nil, fmt.Errorf("token %q: weight %q is not a number", k, w)
-			}
-			f = pf
-		default:
-			return nil, fmt.Errorf("token %q: weight %v is neither number nor string", k, v)
-		}
-		if math.IsNaN(f) || math.IsInf(f, 0) {
-			return nil, fmt.Errorf("token %q: weight %v is not finite", k, v)
-		}
-		out[k] = f
-	}
-	return out, nil
 }
 
 func fatal(f string, args ...any) {

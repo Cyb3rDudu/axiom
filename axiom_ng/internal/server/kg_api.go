@@ -32,7 +32,13 @@ func kgQueryInt(r *http.Request, key string, def, min, max int) int {
 		return def
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil || n < min {
+	if err != nil {
+		// A malformed value falls back to the DEFAULT — never the floor,
+		// which would silently weaken the stability filter below it
+		// (min_mentions=abc must not read as min_mentions=1).
+		return def
+	}
+	if n < min {
 		return min
 	}
 	if n > max {

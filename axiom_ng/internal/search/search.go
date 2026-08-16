@@ -225,7 +225,9 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		bm25Ch <- armResult{hits, err}
 	}()
 	go func() {
-		if querySparse == nil {
+		// Empty-but-non-nil weights must not fire a query (nor claim the
+		// arm): a fully pruned query vector means no lexical signal.
+		if len(querySparse) == 0 {
 			sparseCh <- armResult{}
 			return
 		}
@@ -247,7 +249,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	}
 	if sparse.err != nil {
 		s.log.Printf("search: sparse arm failed (degrading to 2-arm hybrid): %v", sparse.err)
-	} else if querySparse != nil {
+	} else if len(querySparse) > 0 {
 		resp.Arms.Sparse = true
 	}
 	if !resp.Arms.Dense && !resp.Arms.BM25 {
@@ -255,8 +257,9 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	}
 
 	// RRF merge over the arms (rank 1-based per arm). Arm order fixes tie
-	// order: dense first, then BM25, then sparse.
-	merged := rrfMerge([]([]osHit){dense.hits, bm25.hits, sparse.hits}, fetchN)
+	// order: dense first, then BM25, then sparse (graph appends as 4th).
+	recallArms := []([]osHit){dense.hits, bm25.hits, sparse.hits}
+	merged := rrfMerge(recallArms, fetchN)
 
 	// Graph arm (R6 #136, default off): expand the hybrid top through the
 	// L6 graph and re-fuse — neighbor chunks enter the candidate pool with
@@ -281,7 +284,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 					Locator: loc, SectionTitles: c.SectionTitles,
 				})
 			}
-			merged = rrfMerge([]([]osHit){dense.hits, bm25.hits, sparse.hits, graphHits}, fetchN)
+			merged = rrfMerge(append(recallArms, graphHits), fetchN)
 		}
 	}
 	if len(merged) == 0 {

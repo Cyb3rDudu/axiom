@@ -142,8 +142,13 @@ func (c *openSearchClient) ensureIndex(ctx context.Context, dim int) error {
 		c.ensured = true
 		return nil
 	}
-	// Lost a create race or index already exists.
+	// Lost a create race or index already exists. The winner may predate
+	// sparse (R5): the additive rank_features mapping is required here too,
+	// and ensured flips only on success so a failed mapping PUT retries.
 	if code == http.StatusBadRequest && bytes.Contains(respBody, []byte("already exists")) {
+		if err := c.ensureSparseMapping(ctx); err != nil {
+			return err
+		}
 		c.ensured = true
 		return nil
 	}

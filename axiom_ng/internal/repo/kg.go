@@ -7,6 +7,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -66,7 +67,7 @@ type KGNeighbor struct {
 
 // KGNeighbors returns 1-hop edges of an entity where BOTH endpoints have
 // >= minMentions distinct chunks (the stability filter is the point —
-// L8 showed unfiltered neighborhoods are 69% one-hit noise).
+// 71% of entities are one-hit noise, L8: 71.6%).
 func (r *Repo) KGNeighbors(ctx context.Context, entityID string, minMentions, limit int) ([]KGNeighbor, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -191,7 +192,7 @@ func (r *Repo) GraphCandidates(ctx context.Context, seedChunkIDs []string, minMe
 		JOIN processing_chunks c ON c.id = m.chunk_id
 		JOIN processing_snapshots sn ON sn.id = c.snapshot_id AND sn.active
 		WHERE sm.chunk_id = ANY($1::uuid[])
-		  AND m.chunk_id <> sm.chunk_id
+		  AND NOT (m.chunk_id = ANY($1::uuid[]))
 		GROUP BY c.id, sn.document_id, c.text, c.locator, c.section_titles
 		ORDER BY links DESC, c.id
 		LIMIT $3`, seedChunkIDs, minMentions, limit)
@@ -223,25 +224,12 @@ func scanKGEntities(rows pgx.Rows) ([]KGEntity, error) {
 	return out, rows.Err()
 }
 
-// parseUUIDArray decodes a JSONB uuid array text ("[\"a\",\"b\"]").
+// parseUUIDArray decodes a JSONB uuid-array text ("[\"a\",\"b\"]");
+// "null" and "[]" decode to nil (json.Unmarshal into a slice accepts both).
 func parseUUIDArray(s string) []string {
-	if s == "" || s == "null" || s == "[]" {
+	var out []string
+	if err := json.Unmarshal([]byte(s), &out); err != nil || len(out) == 0 {
 		return nil
-	}
-	out := []string{}
-	buf := make([]byte, 0, 36)
-	for i := 0; i < len(s); i++ {
-		switch c := s[i]; c {
-		case '"':
-			if len(buf) > 0 {
-				out = append(out, string(buf))
-				buf = buf[:0]
-			}
-		default:
-			if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || c == '-' {
-				buf = append(buf, c)
-			}
-		}
 	}
 	return out
 }
