@@ -445,14 +445,16 @@ Korrekt: `NOT (x LIKE ANY(arr))`. Restore der gehaltenen Jobs siehe
 
 ## Split-Role Quickstart (#152): Retrieval lokal, Chunking extern
 
-Ein durchspielbarer Startpfad für das R4-Rollenmodell — in Abhängigkeits-
-reihenfolge. Platzhalter in `<>`; Ports sind Beispielwerte.
+Ein durchspielbarer Startpfad für das R4-Rollenmodell — in
+Abhängigkeitsreihenfolge. Platzhalter in `<>`; Ports sind Beispielwerte.
 
 ### Schritt 1 — lokale Dienste (Postgres+pgvector, OpenSearch)
 
 Beide müssen laufen und erreichbar sein (`pg_isready`, `curl
 http://localhost:9200`). Der Mac-Betrieb nutzt den lokalen Nix-Postgres
-mit pgvector; OpenSearch lokal auf 9200.
+mit pgvector; OpenSearch lokal auf 9200. Für den Test-Ingest in Schritt 5
+zusätzlich nötig: Zotero Desktop mit lokaler API
+(`http://localhost:23119/api`).
 
 ### Schritt 2 — lokaler Runner (Query-Rolle + Ingest-Fallback, MPS)
 
@@ -464,6 +466,8 @@ AXIOM_PROCESSOR_COMPUTE=real AXIOM_PROCESSOR_PORT=8012 \
 
 Aus dem Repo-ROOT starten (`python -m axiom_ng_runner` braucht den
 Parent auf dem Pfad). Kalt lädt BGE-M3 + Reranker (~30 s), danach warm.
+Das venv wird aus `axiom_ng_runner/requirements.txt` +
+`requirements-heavy.txt` gebaut (§2).
 
 ### Schritt 3 — externer GPU-Runner (Ingest primär)
 
@@ -491,9 +495,16 @@ Kapitel „Source-URL-Transport" (Secret + `AXIOM_BIND_ADDR=0.0.0.0` +
 | `AXIOM_PROCESSOR_URL` | `http://localhost:8012` | Ingest-primär (best-available; externer GPU-Runner) |
 | `AXIOM_INGEST_FALLBACK_URL` | `http://localhost:8012` | Notfall-Ingest lokal (#128: komplett, ~11× langsamer) |
 
+Details/Semantik: Kapitel „Runner-Rollen-Topologie“ (R4, #134) — Quelle
+der Wahrheit; die Tabelle wiederholt sie bewusst für Copy-Paste.
+
 Dazu fürs Chunking mit Bildern **Pflicht**: `AXIOM_ARTIFACT_ROOT=<dir>`
 (ohne es terminieren Bilder-Bücher mit `RESULT_INVALID`) und — für
-Remote-Runner — das Source-URL-Env-Paar aus Schritt 3.
+Remote-Runner — die Source-URL-Konfiguration aus Schritt 3 (Secret +
+Bind-Adresse + Base-URL).
+
+Binary bauen (aus `axiom_ng/`): `go build -o <bin> ./cmd/axiom-ng/` —
+die folgende `axiom-ng`-Invokation setzt es voraus.
 
 ```bash
 AXIOM_DATABASE_URL=<db-url> \
@@ -510,17 +521,19 @@ axiom-ng
 ```bash
 # Rollen-Zeile im axiom-ng-Startup-Log:
 #   runner roles: query=http://localhost:8012 ingest=http://<gpu-runner-host>:19542 (fallback=http://localhost:8012)
-curl -s http://localhost:8012/v1/capabilities | grep -o '"query_embedding": true'   # → true
-curl -s http://localhost:8012/v1/capabilities | grep -o '"reranking": true'         # → true
-curl -s http://<gpu-runner-host>:19542/v1/health                                    # → {"status":"ok"}
-curl -s http://localhost:8011/api/health | grep -o '"ok": true'                     # → "ok": true
+curl -s http://localhost:8012/v1/capabilities | grep -o '"query_embedding":true' # → "query_embedding":true
+curl -s http://localhost:8012/v1/capabilities | grep -o '"reranking":true'       # → "reranking":true
+curl -s http://<gpu-runner-host>:19542/v1/health                                  # → {"status":"ok"}
+curl -s http://localhost:8011/api/health | grep -o '"ok":true'                   # → "ok":true
 curl -s -X POST http://localhost:8011/api/search -H 'Content-Type: application/json' \
-     -d '{"query":"Nachhaltigkeit","top_n":3}' | grep -o '"reranked": true'          # → "reranked": true
+     -d '{"query":"Nachhaltigkeit","top_n":3}' | grep -o '"reranked":true'        # → "reranked":true
 ```
 
 Test-Ingest: Zotero-Sync anstoßen (`POST /api/zotero/sync`) und in
 `ingest_jobs` Status + `runner_name` verfolgen (soll auf den GPU-Runner
-zeigen).
+zeigen). `runner_name` wird aus der Konfiguration gestempelt (Default:
+Host aus `AXIOM_PROCESSOR_URL`) — während eines Failovers auf lokal
+steht dort weiterhin der GPU-Host; erwartbar, kein Bug.
 
 ### Degradations-Erwartungen
 
