@@ -158,7 +158,12 @@ func hit(id, doc, text string) osHit {
 }
 
 func newService(osURL string, p Processor, d DocSource) *Service {
-	return New(osURL, "", "", p, d, log.New(io.Discard, "", 0))
+	svc := New(osURL, "", "", p, d, log.New(io.Discard, "", 0))
+	// Capability tests run the full arm set; the production default for
+	// SparseArm is benchmark-driven OFF (R7) — tests that verify the
+	// off-switch override this explicitly.
+	svc.SparseArm = true
+	return svc
 }
 
 // --- RRF -------------------------------------------------------------------

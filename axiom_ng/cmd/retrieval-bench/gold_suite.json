@@ -1,0 +1,30 @@
+{
+  "note": "R7 (#137) retrieval gold suite. Queries DE+EN: concept/fact/norm/author. Gold = zotero_documents titles (normalized matching). PROVISIONAL: gold sets derived from the corpus by the implementor; dudu confirms/corrects (confirmed flag per query). The 5 quality-assessment queries are the start stock (marked).",
+  "queries": [
+    {"id": "qa1", "type": "concept", "q": "Was ist CSR-Reporting und welche Standards gibt es?", "gold": ["CSR und Reporting", "CSR und Finance"], "confirmed": false, "origin": "quality-assessment"},
+    {"id": "qa2", "type": "concept", "q": "Wie funktioniert eine Ökobilanz Life Cycle Assessment?", "gold": ["Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen"], "confirmed": false, "origin": "quality-assessment"},
+    {"id": "qa3", "type": "norm", "q": "Lieferkettensorgfaltspflichtengesetz Anforderungen Unternehmen", "gold": ["Corporate Social Responsibility – Mythen und Maßnahmen"], "confirmed": false, "origin": "quality-assessment"},
+    {"id": "qa4", "type": "concept", "q": "ESG rating agencies influence on corporate sustainability reporting", "gold": ["Environmental, Social and Governance (ESG) Investing: A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio", "Demystifying Environmental, Social and Governance (ESG)"], "confirmed": false, "origin": "quality-assessment"},
+    {"id": "qa5", "type": "concept", "q": "Was ist Corporate Social Responsibility und welche Dimensionen hat es?", "gold": ["CSR und Finance", "Corporate Social Responsibility – Mythen und Maßnahmen"], "confirmed": false, "origin": "quality-assessment"},
+    {"id": "c6", "type": "concept", "q": "Nachhaltigkeit als Managementansatz in Unternehmen etablieren", "gold": ["Nachhaltiges Management: Nachhaltigkeit als exzellenten Managementansatz entwickeln"]},
+    {"id": "c7", "type": "concept", "q": "institutionelle Anleger und nachhaltige Kapitalanlagen", "gold": ["Institutionelle Anleger und nachhaltige Kapitalanlagen"]},
+    {"id": "c8", "type": "concept", "q": "Corporate Social Responsibility in der Wertschöpfungskette", "gold": ["CSR und Value Chain Management"]},
+    {"id": "c9", "type": "concept", "q": "Nachhaltigkeit als Treiber von Innovation", "gold": ["CSR und Innovationsmanagement"]},
+    {"id": "c10", "type": "concept", "q": "warum die ökologische Transformation nicht stattfindet", "gold": ["Nachhaltige Nicht-Nachhaltigkeit: Warum die ökologische Transformation der Gesellschaft nicht stattfindet"]},
+    {"id": "c11", "type": "concept", "q": "ESG investing theory and practice balanced view", "gold": ["Environmental, Social and Governance (ESG) Investing: A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio"]},
+    {"id": "c12", "type": "concept", "q": "demystifying ESG common misconceptions", "gold": ["Demystifying Environmental, Social and Governance (ESG)"]},
+    {"id": "c13", "type": "concept", "q": "sustainable performance beyond ESG compliance leadership", "gold": ["The Adventure of Sustainable Performance: Beyond ESG Compliance to Leadership in the New Era"]},
+    {"id": "c14", "type": "concept", "q": "ESG and sustainable development in healthcare", "gold": ["Environmental, Social and Governance and Sustainable Development in Healthcare"]},
+    {"id": "c15", "type": "concept", "q": "perspektiven der wirtschaftswissenschaften", "gold": ["Perspektiven der Wirtschaftswissenschaften"]},
+    {"id": "f16", "type": "fact", "q": "stakeholder salience model power legitimacy urgency", "gold": ["Stakeholder-Management und Nachhaltigkeits-Reporting"]},
+    {"id": "f17", "type": "fact", "q": "Zieldefinition und Systemabgrenzung einer Ökobilanz", "gold": ["Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen"]},
+    {"id": "n18", "type": "norm", "q": "Nachhaltigkeitsberichterstattung GRI Standards", "gold": ["CSR und Reporting"]},
+    {"id": "n19", "type": "norm", "q": "CSRD European Sustainability Reporting Standard Anforderungen", "gold": ["CSR und Reporting", "CSR und Finance"]},
+    {"id": "n20", "type": "norm", "q": "IDW PS 821 Prüfungsnachweis", "gold": ["CSR und Reporting", "Institutionelle Anleger und nachhaltige Kapitalanlagen"]},
+    {"id": "n21", "type": "norm", "q": "false narrative of ESG investing critique", "gold": ["ESGBS – The False Narrative of Environmental, Social & Governance Investing"]},
+    {"id": "a22", "type": "author", "q": "Alexandra Hildebrandt ESG", "gold": ["Demystifying Environmental, Social and Governance (ESG)", "Environmental, Social and Governance and Sustainable Development in Healthcare"]},
+    {"id": "a23", "type": "author", "q": "René Schmidpeter CSR Management-Reihe", "gold": ["Corporate Social Responsibility – Mythen und Maßnahmen", "CSR und Value Chain Management", "CSR und Innovationsmanagement"]},
+    {"id": "a24", "type": "author", "q": "Matthias S. Fifka Corporate Social Responsibility", "gold": ["Corporate Social Responsibility – Mythen und Maßnahmen"]},
+    {"id": "f25", "type": "fact", "q": "CSR aus Sicht der Finanzberichterstattung", "gold": ["CSR und Finance"]}
+  ]
+}
