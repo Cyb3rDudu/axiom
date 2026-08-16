@@ -51,14 +51,26 @@ type Service struct {
 	docs      DocSource // source metadata hydration
 	log       *log.Logger
 	// SparseArm enables the third recall arm (learned lexical weights via
-	// the OS rank_features field, R5 #135). Default true; R7 flips it for
-	// A/B measurement (AXIOM_SEARCH_SPARSE_ARM).
+	// the OS rank_features field, R5 #135). Default false per the R7
+	// benchmark (no quality gain, heavy query cost); enable per deployment
+	// or benchmark (AXIOM_SEARCH_SPARSE_ARM). Requires DenseArm: the sparse
+	// query weights ride the dense embed call (SparseArm with DenseArm=false
+	// is silently inert).
 	SparseArm bool
 	// GraphArm enables the fourth candidate source (R6 #136): entities in
 	// the hybrid top hits expand to neighbor chunks through the L6 graph
 	// (mention-stability filtered). Default OFF — R7 measures whether it
 	// helps (AXIOM_SEARCH_GRAPH_ARM). Requires SetGraphSource.
 	GraphArm bool
+	// Rerank runs the cross-encoder over the fused candidates (default
+	// true). R7's matrix measures what it buys; ops can disable it for a
+	// latency-only profile (AXIOM_SEARCH_RERANK).
+	Rerank bool
+	// DenseArm / BM25Arm gate the base recall arms (default true).
+	// Benchmark levers (retrieval-bench matrix); no env wiring by design.
+	// A disabled arm is treated like a failed one (flags reflect it).
+	DenseArm bool
+	BM25Arm  bool
 	graph    GraphSource
 }
 
@@ -102,7 +114,10 @@ func New(osURL, osUser, osPass string, p Processor, docs DocSource, lg *log.Logg
 		processor: p,
 		docs:      docs,
 		log:       lg,
-		SparseArm: true,
+		SparseArm: false,
+		Rerank:    true,
+		DenseArm:  true,
+		BM25Arm:   true,
 	}
 }
 
@@ -192,7 +207,12 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	// weights (one encode pass, R5 #135).
 	var vec []float32
 	var querySparse map[string]float64
-	if s.SparseArm {
+	switch {
+	case !s.DenseArm:
+		// Dense arm disabled (retrieval-bench matrix lever): no embed call,
+		// Arms.Dense stays false. SparseArm is inert here — its query
+		// weights ride the dense embed call (see the SparseArm field doc).
+	case s.SparseArm:
 		if emb, sp, err := s.processor.EmbedQueriesSparse(ctx, []string{req.Query}); err != nil {
 			s.log.Printf("search: dense+sparse embed failed, trying dense-only: %v", err)
 			s.embedDenseOnly(ctx, req.Query, &vec, &resp.Arms.Dense)
@@ -200,7 +220,7 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 			vec, querySparse = emb[0], sp[0]
 			resp.Arms.Dense = vec != nil
 		}
-	} else {
+	default:
 		s.embedDenseOnly(ctx, req.Query, &vec, &resp.Arms.Dense)
 	}
 
@@ -221,6 +241,10 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		denseCh <- armResult{hits, err}
 	}()
 	go func() {
+		if !s.BM25Arm {
+			bm25Ch <- armResult{}
+			return
+		}
 		hits, err := s.os.bm25(ctx, req.Query, fetchN, req.Filters)
 		bm25Ch <- armResult{hits, err}
 	}()
@@ -241,7 +265,9 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		s.log.Printf("search: dense arm failed: %v", dense.err)
 		resp.Arms.Dense = false
 	}
-	if bm25.err != nil {
+	if !s.BM25Arm {
+		resp.Arms.BM25 = false
+	} else if bm25.err != nil {
 		s.log.Printf("search: bm25 arm failed: %v", bm25.err)
 		resp.Arms.BM25 = false
 	} else {
@@ -314,16 +340,22 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	// Rerank over the merged candidates; failure degrades to RRF order
 	// (issue Ziel 3: retrieval must not hard-depend on the reranker).
 	candidates := merged // already capped at fetchN <= maxCandidates by rrfMerge
-	texts := make([]string, len(candidates))
-	for i, c := range candidates {
-		texts[i] = truncateChars(c.Text, maxRerankTextChars)
-	}
-	scores, err := s.processor.Rerank(ctx, req.Query, texts, len(texts))
-	if err != nil {
-		s.log.Printf("search: rerank failed, serving RRF order: %v", err)
+	if !s.Rerank {
+		// Rerank disabled by configuration (R7 matrix / latency profile):
+		// RRF order is the answer, flagged as unreranked.
 		resp.Reranked = false
 	} else {
-		resp.Reranked = applyRerank(candidates, scores)
+		texts := make([]string, len(candidates))
+		for i, c := range candidates {
+			texts[i] = truncateChars(c.Text, maxRerankTextChars)
+		}
+		scores, err := s.processor.Rerank(ctx, req.Query, texts, len(texts))
+		if err != nil {
+			s.log.Printf("search: rerank failed, serving RRF order: %v", err)
+			resp.Reranked = false
+		} else {
+			resp.Reranked = applyRerank(candidates, scores)
+		}
 	}
 	if len(candidates) > req.TopN {
 		candidates = candidates[:req.TopN]

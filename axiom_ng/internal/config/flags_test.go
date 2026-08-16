@@ -6,11 +6,14 @@ import "testing"
 // env overrides (all case-insensitive), plus the unified envBool behavior.
 func TestSearchArmFlagDefaults(t *testing.T) {
 	c := Load()
-	if !c.SearchSparseArm {
-		t.Fatal("AXIOM_SEARCH_SPARSE_ARM must default ON")
+	if c.SearchSparseArm {
+		t.Fatal("AXIOM_SEARCH_SPARSE_ARM must default OFF (R7 benchmark: no quality gain, ~3.3s p95 cost)")
 	}
 	if c.SearchGraphArm {
-		t.Fatal("AXIOM_SEARCH_GRAPH_ARM must default OFF (R7 measures first)")
+		t.Fatal("AXIOM_SEARCH_GRAPH_ARM must default OFF (R7: slight quality loss, slow expansion)")
+	}
+	if !c.SearchRerank {
+		t.Fatal("AXIOM_SEARCH_RERANK must default ON (R7: small consistent gain over hybrid)")
 	}
 }
 
@@ -35,6 +38,19 @@ func TestSearchArmFlagOverrides(t *testing.T) {
 	t.Setenv("AXIOM_SEARCH_GRAPH_ARM", "0")
 	if Load().SearchGraphArm {
 		t.Fatal("AXIOM_SEARCH_GRAPH_ARM=0 must disable")
+	}
+
+	for _, off := range []string{"0", "false", "FALSE", "no"} {
+		t.Setenv("AXIOM_SEARCH_RERANK", off)
+		if Load().SearchRerank {
+			t.Fatalf("AXIOM_SEARCH_RERANK=%q must disable", off)
+		}
+	}
+	for _, on := range []string{"1", "true", "TRUE"} {
+		t.Setenv("AXIOM_SEARCH_RERANK", on)
+		if !Load().SearchRerank {
+			t.Fatalf("AXIOM_SEARCH_RERANK=%q must enable (case-insensitive)", on)
+		}
 	}
 }
 
