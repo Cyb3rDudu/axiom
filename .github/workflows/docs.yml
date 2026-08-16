@@ -57,14 +57,19 @@ jobs:
         # 1) the single historical note in About ("was known as *axiom-ng*") —
         #    exempted at phrase level, not whole-file;
         # 2) go run/go build command lines referencing the module path
-        #    `axiom_ng/cmd/axiom-ng` (code paths are technical facts).
+        #    `axiom_ng/cmd/axiom-ng` (code paths are technical facts);
+        # 3) the literal config-default cell in the configuration reference —
+        #    AXIOM_DISPATCHER_WORKER_ID ships the default string `axiom-ng`
+        #    (config.go), and the table must quote code defaults verbatim.
+        #    Exempt ONLY the standalone table cell `| `axiom-ng` |`.
         # mkdocs.yml is checked as well, so a `site_name: axiom-ng`
         # regression fails CI. docs/_inventory.md is internal meta and exempt.
         run: |
           if { grep -ri 'axiom-ng' docs/ --include='*.md'; grep -i 'axiom-ng' mkdocs.yml; } \
             | grep -v '_inventory.md' \
             | grep -vF 'was known as *axiom-ng*' \
-            | grep -vE ':[[:space:]]*(go run|go build) .*axiom_ng/cmd/axiom-ng'; then
+            | grep -vE ':[[:space:]]*(go run|go build) .*axiom_ng/cmd/axiom-ng' \
+            | grep -vE '\| `axiom-ng` \|'; then
             echo "legacy product name 'axiom-ng' found in site content"
             exit 1
           fi

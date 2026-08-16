@@ -59,13 +59,21 @@ markdown_extensions:
   - md_in_html
   - tables
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight
   - pymdownx.inlinehilite
   - pymdownx.tasklist:
       custom_checkbox: true
   - toc:
       permalink: true
+
+# Client-side chart rendering for mermaid architecture diagrams.
+extra_javascript:
+  - https://unpkg.com/mermaid@10.9.8/dist/mermaid.min.js
 
 nav:
   - Welcome: index.md
