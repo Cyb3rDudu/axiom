@@ -53,7 +53,9 @@ type Service struct {
 	// SparseArm enables the third recall arm (learned lexical weights via
 	// the OS rank_features field, R5 #135). Default false per the R7
 	// benchmark (no quality gain, heavy query cost); enable per deployment
-	// or benchmark (AXIOM_SEARCH_SPARSE_ARM).
+	// or benchmark (AXIOM_SEARCH_SPARSE_ARM). Requires DenseArm: the sparse
+	// query weights ride the dense embed call (SparseArm with DenseArm=false
+	// is silently inert).
 	SparseArm bool
 	// GraphArm enables the fourth candidate source (R6 #136): entities in
 	// the hybrid top hits expand to neighbor chunks through the L6 graph
@@ -64,9 +66,9 @@ type Service struct {
 	// true). R7's matrix measures what it buys; ops can disable it for a
 	// latency-only profile (AXIOM_SEARCH_RERANK).
 	Rerank bool
-	// DenseArm / BM25Arm gate the base recall arms (default true). Primarily
-	// benchmark/ops levers (R7 matrix); a disabled arm is treated like a
-	// failed one (flags reflect it).
+	// DenseArm / BM25Arm gate the base recall arms (default true).
+	// Benchmark levers (retrieval-bench matrix); no env wiring by design.
+	// A disabled arm is treated like a failed one (flags reflect it).
 	DenseArm bool
 	BM25Arm  bool
 	graph    GraphSource
@@ -205,10 +207,12 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	// weights (one encode pass, R5 #135).
 	var vec []float32
 	var querySparse map[string]float64
-	if !s.DenseArm {
-		// Explicitly disabled dense arm (R7 matrix / ops profile).
-		s.log.Printf("search: dense arm disabled by configuration")
-	} else if s.SparseArm {
+	switch {
+	case !s.DenseArm:
+		// Dense arm disabled (retrieval-bench matrix lever): no embed call,
+		// Arms.Dense stays false. SparseArm is inert here — its query
+		// weights ride the dense embed call (see the SparseArm field doc).
+	case s.SparseArm:
 		if emb, sp, err := s.processor.EmbedQueriesSparse(ctx, []string{req.Query}); err != nil {
 			s.log.Printf("search: dense+sparse embed failed, trying dense-only: %v", err)
 			s.embedDenseOnly(ctx, req.Query, &vec, &resp.Arms.Dense)
@@ -216,11 +220,8 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 			vec, querySparse = emb[0], sp[0]
 			resp.Arms.Dense = vec != nil
 		}
-	} else {
+	default:
 		s.embedDenseOnly(ctx, req.Query, &vec, &resp.Arms.Dense)
-	}
-	if !s.DenseArm {
-		resp.Arms.Dense = false
 	}
 
 	// Recall arms in parallel; each returns rank-ordered chunk IDs.

@@ -26,6 +26,7 @@ type fakeProcessor struct {
 	rerankErr      error
 	rerankRes      []processor.RerankScore
 	lastRerank     *RerankCapture
+	embedCalls     int // any embed path (dense or dense+sparse)
 }
 
 // RerankCapture records what the pipeline sent to the reranker.
@@ -36,6 +37,7 @@ type RerankCapture struct {
 }
 
 func (f *fakeProcessor) EmbedQueries(ctx context.Context, texts []string) ([][]float32, error) {
+	f.embedCalls++
 	if f.embedErr != nil {
 		return nil, f.embedErr
 	}
@@ -47,6 +49,7 @@ func (f *fakeProcessor) EmbedQueries(ctx context.Context, texts []string) ([][]f
 }
 
 func (f *fakeProcessor) EmbedQueriesSparse(ctx context.Context, texts []string) ([][]float32, []map[string]float64, error) {
+	f.embedCalls++
 	if f.embedErr != nil {
 		return nil, nil, f.embedErr
 	}
@@ -664,6 +667,101 @@ func TestSearch_SparseArmOffSwitch(t *testing.T) {
 	}
 	if ids["s"] {
 		t.Fatal("sparse-only hit must not surface when the arm is off")
+	}
+}
+
+// The DenseArm/BM25Arm/Rerank off-switches mirror the sparse one: each pins
+// all three faces of its honor-point — no downstream call, honest Arms/
+// Reranked flag, and results still served by the remaining arm(s).
+func TestSearch_DenseArmOff(t *testing.T) {
+	os := newOSServer(t)
+	os.knnHits = []osHit{hit("d", "doc", "dense")}
+	os.bm25Hits = []osHit{hit("b", "doc", "bm25")}
+	fp := &fakeProcessor{embedVec: []float32{1}, embedSparse: map[string]float64{"1": 1}}
+	svc := newService(os.URL, fp, fakeDocs{})
+	svc.DenseArm = false
+	// SparseArm stays true (newService default): it rides the dense embed
+	// call, so a disabled DenseArm must leave it inert — no embed at all.
+	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp.embedCalls != 0 {
+		t.Fatalf("disabled dense arm must not embed, got %d embed calls", fp.embedCalls)
+	}
+	if res.Arms.Dense {
+		t.Fatal("disabled dense arm must not report")
+	}
+	if os.lastKnnBody != nil {
+		t.Fatal("disabled dense arm must not query OS (kNN)")
+	}
+	if os.lastSparseBody != nil {
+		t.Fatal("sparse arm must be inert when DenseArm is off")
+	}
+	ids := map[string]bool{}
+	for _, h := range res.Hits {
+		ids[h.ChunkID] = true
+	}
+	if !ids["b"] {
+		t.Fatal("bm25 must still serve results with the dense arm off")
+	}
+	if ids["d"] {
+		t.Fatal("dense-only hit must not surface when the arm is off")
+	}
+}
+
+func TestSearch_BM25ArmOff(t *testing.T) {
+	os := newOSServer(t)
+	os.knnHits = []osHit{hit("d", "doc", "dense")}
+	os.bm25Hits = []osHit{hit("b", "doc", "bm25")}
+	fp := &fakeProcessor{embedVec: []float32{1}}
+	svc := newService(os.URL, fp, fakeDocs{})
+	svc.BM25Arm = false
+	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Arms.BM25 {
+		t.Fatal("disabled bm25 arm must not report")
+	}
+	if os.lastBM25Body != nil {
+		t.Fatal("disabled bm25 arm must not query OS")
+	}
+	ids := map[string]bool{}
+	for _, h := range res.Hits {
+		ids[h.ChunkID] = true
+	}
+	if !ids["d"] {
+		t.Fatal("dense must still serve results with the bm25 arm off")
+	}
+	if ids["b"] {
+		t.Fatal("bm25-only hit must not surface when the arm is off")
+	}
+}
+
+func TestSearch_RerankOffSwitch(t *testing.T) {
+	os := newOSServer(t)
+	os.knnHits = []osHit{hit("a", "d1", "x"), hit("b", "d1", "y")}
+	os.bm25Hits = []osHit{hit("c", "d2", "z")}
+	// rerankRes would flip the order if rerank ran — proves it cannot have.
+	fp := &fakeProcessor{embedVec: []float32{0.1},
+		rerankRes: []processor.RerankScore{{Index: 2, Score: 9}}}
+	svc := newService(os.URL, fp, fakeDocs{})
+	svc.Rerank = false
+	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp.lastRerank != nil {
+		t.Fatal("disabled rerank must not invoke the runner")
+	}
+	if res.Reranked {
+		t.Fatal("disabled rerank must be reported as reranked=false")
+	}
+	// RRF order (same as the fallback test): "a" dense rank 1, "c" bm25
+	// rank 1 (both 1/61, dense-first), "b" 1/62.
+	if res.Hits[0].ChunkID != "a" || res.Hits[2].ChunkID != "b" {
+		t.Fatalf("rerank-off must serve RRF order, got %s", orderOf(res))
 	}
 }
 

@@ -48,6 +48,13 @@ func TestNormStripsPunctuationAndCase(t *testing.T) {
 	if norm("Environmental, Social and Governance (ESG)") != norm("environmental social and governance esg") {
 		t.Fatal("parens/comma normalization broken")
 	}
+	// Long titles differing only after char 12 must stay distinct: pins
+	// that norm neither truncates nor over-collapses prefixes.
+	a := norm("CSR und Reporting: Standards")
+	b := norm("CSR und Reporting: Mythen")
+	if a == b {
+		t.Fatalf("norm collided distinct titles: %q", a)
+	}
 }
 
 func TestPercentileNearestRank(t *testing.T) {
@@ -62,6 +69,18 @@ func TestPercentileNearestRank(t *testing.T) {
 	}
 	if p := percentile(xs, 50); p != 49*time.Millisecond {
 		t.Fatalf("p50 = %v, want 49ms", p)
+	}
+	// Same multiset, reversed: pins that percentile sorts rather than
+	// trusting input order (index 94 of the raw reversed slice is 5ms).
+	rev := make([]time.Duration, len(xs))
+	for i, v := range xs {
+		rev[len(xs)-1-i] = v
+	}
+	if p := percentile(rev, 95); p != 94*time.Millisecond {
+		t.Fatalf("p95(unsorted) = %v, want 94ms (sort is pinned)", p)
+	}
+	if p := percentile(rev, 50); p != 49*time.Millisecond {
+		t.Fatalf("p50(unsorted) = %v, want 49ms (sort is pinned)", p)
 	}
 }
 

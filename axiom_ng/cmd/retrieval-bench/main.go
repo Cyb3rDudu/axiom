@@ -29,12 +29,17 @@ import (
 )
 
 type goldQuery struct {
-	ID        string   `json:"id"`
-	Type      string   `json:"type"`
-	Q         string   `json:"q"`
-	Gold      []string `json:"gold"`
-	Confirmed bool     `json:"confirmed"`
-	Origin    string   `json:"origin"`
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	Q    string `json:"q"`
+	// Gold = zotero titles of the books a correct retrieval must surface.
+	Gold []string `json:"gold"`
+	// Confirmed: dudu has reviewed/approved this query's gold (0 in the
+	// provisional suite; flip per query after review).
+	Confirmed bool `json:"confirmed"`
+	// Origin: "quality-assessment" = carried over from the QA start stock;
+	// absent = implementor-derived from the library's titles.
+	Origin string `json:"origin"`
 }
 
 type goldSuite struct {
@@ -95,11 +100,11 @@ func main() {
 	base.SetGraphSource(rep) // available; per-config toggle decides use
 
 	matrix := []config{
-		{"dense-only", true, false, false, false, false},
-		{"hybrid (dense+bm25)", true, true, false, false, false},
-		{"hybrid+rerank", true, true, false, true, false},
-		{"hybrid+rerank+sparse", true, true, true, true, false},
-		{"hybrid+rerank+sparse+graph", true, true, true, true, true},
+		{name: "dense-only", dense: true},
+		{name: "hybrid (dense+bm25)", dense: true, bm25: true},
+		{name: "hybrid+rerank", dense: true, bm25: true, rerank: true},
+		{name: "hybrid+rerank+sparse", dense: true, bm25: true, sparse: true, rerank: true},
+		{name: "hybrid+rerank+sparse+graph", dense: true, bm25: true, sparse: true, rerank: true, graph: true},
 	}
 
 	// Warm the runner models once (cold loads would poison the first
@@ -250,6 +255,9 @@ func printTable(rs []result) {
 func writeMD(path string, suite goldSuite, rs []result) error {
 	var b strings.Builder
 	b.WriteString("# Retrieval Benchmark (R7, #137)\n\n")
+	if countConfirmed(suite) == 0 {
+		fmt.Fprintf(&b, "> **PROVISIONAL GOLD** — 0 of %d queries confirmed by dudu; verdicts may change after confirmation.\n\n", len(suite.Queries))
+	}
 	b.WriteString(fmt.Sprintf("Gold suite: %d queries (DE+EN; concept/fact/norm/author), %d confirmed by dudu.\n\n",
 		len(suite.Queries), countConfirmed(suite)))
 	b.WriteString("| configuration | P@5 | MRR | R@10 | p50 | p95 | errors |\n|---|---|---|---|---|---|---|\n")

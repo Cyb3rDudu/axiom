@@ -68,10 +68,11 @@ type Config struct {
 
 	// SearchSparseArm enables the learned-lexical (rank_features) recall
 	// arm on POST /api/search (R5 #135). Default OFF per the R7 benchmark:
-	// no quality gain on the gold suite (MRR -0.027) at ~3.3s added p95
-	// (the 64-clause rank_feature bool-should is expensive on this index;
-	// tuning lever: sparseTopK, index shards). Re-enable for rare-token
-	// workloads (Normnummern, Akronym-Queries) after tuning.
+	// no quality gain on the gold suite (MRR -0.027) at +~1.3s p95 on the
+	// committed run (RETRIEVAL_BENCHMARK.md: 7.18s -> 8.49s; the 64-clause
+	// rank_feature bool-should is expensive on this index; tuning lever:
+	// sparseTopK, index shards). Re-enable for rare-token workloads
+	// (Normnummern, Akronym-Queries) after tuning.
 	SearchSparseArm bool
 
 	// SearchGraphArm enables the graph-expansion candidate source on

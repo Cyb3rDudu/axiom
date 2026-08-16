@@ -39,6 +39,19 @@ func TestSearchArmFlagOverrides(t *testing.T) {
 	if Load().SearchGraphArm {
 		t.Fatal("AXIOM_SEARCH_GRAPH_ARM=0 must disable")
 	}
+
+	for _, off := range []string{"0", "false", "FALSE", "no"} {
+		t.Setenv("AXIOM_SEARCH_RERANK", off)
+		if Load().SearchRerank {
+			t.Fatalf("AXIOM_SEARCH_RERANK=%q must disable", off)
+		}
+	}
+	for _, on := range []string{"1", "true", "TRUE"} {
+		t.Setenv("AXIOM_SEARCH_RERANK", on)
+		if !Load().SearchRerank {
+			t.Fatalf("AXIOM_SEARCH_RERANK=%q must enable (case-insensitive)", on)
+		}
+	}
 }
 
 func TestEnvBoolCaseInsensitive(t *testing.T) {
