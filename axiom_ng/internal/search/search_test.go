@@ -19,11 +19,13 @@ import (
 // --- fakes -----------------------------------------------------------------
 
 type fakeProcessor struct {
-	embedErr   error
-	embedVec   []float32
-	rerankErr  error
-	rerankRes  []processor.RerankScore
-	lastRerank *RerankCapture
+	embedErr       error
+	embedVec       []float32
+	embedSparse    map[string]float64
+	embedSparseErr error // fails only the combined sparse call (dense fallback path)
+	rerankErr      error
+	rerankRes      []processor.RerankScore
+	lastRerank     *RerankCapture
 }
 
 // RerankCapture records what the pipeline sent to the reranker.
@@ -42,6 +44,22 @@ func (f *fakeProcessor) EmbedQueries(ctx context.Context, texts []string) ([][]f
 		out[i] = f.embedVec
 	}
 	return out, nil
+}
+
+func (f *fakeProcessor) EmbedQueriesSparse(ctx context.Context, texts []string) ([][]float32, []map[string]float64, error) {
+	if f.embedErr != nil {
+		return nil, nil, f.embedErr
+	}
+	if f.embedSparseErr != nil {
+		return nil, nil, f.embedSparseErr
+	}
+	out := make([][]float32, len(texts))
+	sp := make([]map[string]float64, len(texts))
+	for i := range out {
+		out[i] = f.embedVec
+		sp[i] = f.embedSparse
+	}
+	return out, sp, nil
 }
 
 func (f *fakeProcessor) Rerank(ctx context.Context, query string, texts []string, topN int) ([]processor.RerankScore, error) {
@@ -68,12 +86,15 @@ func (f fakeDocs) DocumentMetaByIDs(ctx context.Context, ids []string) (map[stri
 // the query body (knn vs match) so both arms can return distinct lists.
 type osServer struct {
 	*httptest.Server
-	knnHits      []osHit
-	bm25Hits     []osHit
-	failKnn      bool
-	failBM25     bool
-	lastKnnBody  map[string]any
-	lastBM25Body map[string]any
+	knnHits        []osHit
+	bm25Hits       []osHit
+	sparseHits     []osHit
+	failKnn        bool
+	failBM25       bool
+	failSparse     bool
+	lastKnnBody    map[string]any
+	lastBM25Body   map[string]any
+	lastSparseBody map[string]any
 }
 
 func newOSServer(t *testing.T) *osServer {
@@ -89,8 +110,16 @@ func newOSServer(t *testing.T) *osServer {
 		q, _ := body["query"].(map[string]any)
 		raw, _ := json.Marshal(q)
 		isKnn := strings.Contains(string(raw), `"knn"`)
+		isSparse := strings.Contains(string(raw), `"rank_feature"`)
 		var hits []osHit
-		if isKnn {
+		if isSparse {
+			s.lastSparseBody = body
+			if s.failSparse {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			hits = s.sparseHits
+		} else if isKnn {
 			s.lastKnnBody = body
 			if s.failKnn {
 				w.WriteHeader(http.StatusBadGateway)
@@ -498,5 +527,132 @@ func TestTruncateChars(t *testing.T) {
 	// the last full rune instead of emitting broken UTF-8.
 	if got := truncateChars("aäbc", 2); got != "a" {
 		t.Fatalf("truncate must never split a rune: %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 7. R5 (#135): the sparse rank_features arm
+// ---------------------------------------------------------------------------
+
+func TestSearch_SparseArmContributesAndWinsRRF(t *testing.T) {
+	os := newOSServer(t)
+	os.knnHits = []osHit{hit("d", "doc", "dense")}
+	os.bm25Hits = []osHit{hit("b", "doc", "bm25")}
+	os.sparseHits = []osHit{hit("d", "doc", "dense"), hit("s", "doc", "sparse-only")}
+	svc := newService(os.URL, &fakeProcessor{embedVec: []float32{1},
+		embedSparse: map[string]float64{"12": 0.5, "7": 0.2}}, fakeDocs{})
+	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Arms.Sparse {
+		t.Fatalf("sparse arm must contribute: %+v", res.Arms)
+	}
+	// The query weights reached the OS as bool-should rank_feature queries.
+	if os.lastSparseBody == nil {
+		t.Fatal("sparse arm never queried OS")
+	}
+	raw, _ := json.Marshal(os.lastSparseBody)
+	if !strings.Contains(string(raw), `"sparse.12"`) || strings.Count(string(raw), "rank_feature") != 2 {
+		t.Fatalf("sparse query shape wrong: %s", raw)
+	}
+	// "d" appears in dense+sparse (2 arms) and must outrank the 1-arm hits.
+	if res.Hits[0].ChunkID != "d" {
+		t.Fatalf("2-arm candidate must win, got %q", res.Hits[0].ChunkID)
+	}
+	ids := map[string]bool{}
+	for _, h := range res.Hits {
+		ids[h.ChunkID] = true
+	}
+	if !ids["s"] {
+		t.Fatal("sparse-only hit must surface through the third arm")
+	}
+}
+
+func TestSearch_SparseArmTopKAndFilter(t *testing.T) {
+	os := newOSServer(t)
+	os.sparseHits = []osHit{hit("s", "doc", "sparse")}
+	w := map[string]float64{}
+	for i := 0; i < 100; i++ {
+		w[fmt.Sprintf("t%d", i)] = float64(i) // weight == rank order
+	}
+	svc := newService(os.URL, &fakeProcessor{embedVec: []float32{1}, embedSparse: w}, fakeDocs{})
+	if _, err := svc.Search(context.Background(), Request{Query: "q", TopN: 1,
+		Filters: &Filters{DocumentIDs: []string{"doc"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if os.lastSparseBody == nil {
+		t.Fatal("sparse never queried")
+	}
+	raw, _ := json.Marshal(os.lastSparseBody["query"])
+	if strings.Count(string(raw), "rank_feature") != sparseTopK {
+		t.Fatalf("want exactly %d rank_feature clauses, got %s", sparseTopK, raw)
+	}
+	if !strings.Contains(string(raw), `"sparse.t99"`) || !strings.Contains(string(raw), `"sparse.t36"`) || strings.Contains(string(raw), `"sparse.t35"`) {
+		t.Fatalf("top-K selection by weight wrong (want sparse.t99..sparse.t36): %s", raw)
+	}
+	if !strings.Contains(string(raw), `"terms"`) {
+		t.Fatalf("document filter must wrap the sparse arm: %s", raw)
+	}
+}
+
+func TestSearch_SparseArmQueryFailureDegrades(t *testing.T) {
+	os := newOSServer(t)
+	os.knnHits = []osHit{hit("d", "doc", "dense")}
+	os.bm25Hits = []osHit{hit("b", "doc", "bm25")}
+	os.failSparse = true
+	svc := newService(os.URL, &fakeProcessor{embedVec: []float32{1},
+		embedSparse: map[string]float64{"1": 1}}, fakeDocs{})
+	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Arms.Sparse {
+		t.Fatal("failed sparse query must clear the sparse arm")
+	}
+	if !res.Arms.Dense || !res.Arms.BM25 || len(res.Hits) != 2 {
+		t.Fatalf("2-arm hybrid must survive: %+v", res)
+	}
+}
+
+func TestSearch_SparseEmbedFailureFallsBackToDenseOnly(t *testing.T) {
+	// Combined call fails, plain dense embed still works: 2-arm hybrid.
+	os := newOSServer(t)
+	os.knnHits = []osHit{hit("d", "doc", "dense")}
+	os.bm25Hits = []osHit{hit("b", "doc", "bm25")}
+	svc := newService(os.URL, &fakeProcessor{embedVec: []float32{1},
+		embedSparseErr: errors.New("runner old, no include_sparse")}, fakeDocs{})
+	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Arms.Sparse || !res.Arms.Dense || !res.Arms.BM25 {
+		t.Fatalf("dense-only fallback broken: %+v", res.Arms)
+	}
+}
+
+func TestSearch_SparseArmOffSwitch(t *testing.T) {
+	os := newOSServer(t)
+	os.knnHits = []osHit{hit("d", "doc", "dense")}
+	os.sparseHits = []osHit{hit("s", "doc", "sparse")}
+	fp := &fakeProcessor{embedVec: []float32{1}, embedSparse: map[string]float64{"1": 1}}
+	svc := newService(os.URL, fp, fakeDocs{})
+	svc.SparseArm = false
+	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Arms.Sparse {
+		t.Fatal("disabled sparse arm must not report")
+	}
+	if os.lastSparseBody != nil {
+		t.Fatal("disabled sparse arm must not query OS")
+	}
+	ids := map[string]bool{}
+	for _, h := range res.Hits {
+		ids[h.ChunkID] = true
+	}
+	if ids["s"] {
+		t.Fatal("sparse-only hit must not surface when the arm is off")
 	}
 }

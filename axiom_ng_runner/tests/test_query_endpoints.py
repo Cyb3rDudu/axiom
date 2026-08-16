@@ -415,3 +415,47 @@ def test_capabilities_report_reranking(client):
     assert caps["features"]["reranking"] is True
     assert caps["models"]["reranking"] == {"name": RERANKER_MODEL}
     assert caps["limits"]["rerank_max_texts"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# 6. R5 (#135): include_sparse — learned lexical weights on the query side
+# ---------------------------------------------------------------------------
+
+
+def test_embed_include_sparse_shape(client):
+    r = client.post(
+        "/v1/embed",
+        json={"contract_version": CONTRACT_VERSION, "texts": ["kapitel eins", "zwei"], "include_sparse": True},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["sparse"]) == 2
+    assert all(isinstance(v, float) for m in body["sparse"] for v in m.values())
+    # Deterministic + distinct per text.
+    r2 = client.post(
+        "/v1/embed", json={"contract_version": CONTRACT_VERSION, "texts": ["kapitel eins"], "include_sparse": True}
+    )
+    assert r2.json()["sparse"][0] == body["sparse"][0]
+    assert body["sparse"][0] != body["sparse"][1]
+
+
+def test_embed_sparse_shares_ingest_reference_space(client):
+    from axiom_ng_runner.runner import _sparse_embedding
+
+    text = "The quick brown fox jumps over the lazy dog."
+    r = client.post(
+        "/v1/embed", json={"contract_version": CONTRACT_VERSION, "texts": [text], "include_sparse": True}
+    )
+    ingest_sparse = _sparse_embedding(text)["values"]
+    # Reference ingest sparse weights are strings (contract §10); query side
+    # returns floats — same token keys, same magnitudes.
+    got = r.json()["sparse"][0]
+    assert set(got) == set(ingest_sparse)
+    for k, v in got.items():
+        assert abs(v - float(ingest_sparse[k])) < 1e-9
+
+
+def test_embed_default_has_no_sparse(client):
+    r = client.post("/v1/embed", json=_embed_payload(["x"]))
+    assert r.status_code == 200
+    assert r.json().get("sparse") is None  # additive: absent unless asked

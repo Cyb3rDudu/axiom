@@ -134,12 +134,15 @@ class JobStatus(BaseModel):
 
 class EmbedRequest(BaseModel):
     """Contract §7a. ``max_texts`` is an optional per-request cap; the
-    server-side limit (capabilities.limits.max_query_texts) always wins."""
+    server-side limit (capabilities.limits.max_query_texts) always wins.
+    ``include_sparse`` (R5 #135) additionally returns the learned lexical
+    weights per text — the query side of the OS rank_features arm."""
 
     model_config = _no_extra()
     contract_version: str
     texts: list[str]
     max_texts: int | None = None
+    include_sparse: bool = False
 
 
 class EmbedResponse(BaseModel):
@@ -148,6 +151,9 @@ class EmbedResponse(BaseModel):
     model: str
     dimensions: int
     embeddings: list[list[float]]
+    # Present only when the request asked include_sparse (R5 #135): one
+    # {token: weight} map per input text, aligned with ``embeddings``.
+    sparse: list[dict[str, float]] | None = None
 
 
 # --- Rerank (POST /v1/rerank, contract §7a additive, #132) -----------------

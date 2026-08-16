@@ -86,7 +86,9 @@ func main() {
 		if qerr != nil {
 			logger.Fatalf("processor client (search): %v", qerr)
 		}
-		srv.SetSearchService(search.New(cfg.OpenSearchURL, cfg.OpenSearchUsername, cfg.OpenSearchPassword, queryClient, rep, logger))
+		searchSvc := search.New(cfg.OpenSearchURL, cfg.OpenSearchUsername, cfg.OpenSearchPassword, queryClient, rep, logger)
+		searchSvc.SparseArm = cfg.SearchSparseArm
+		srv.SetSearchService(searchSvc)
 		// Role probe (R4 Ziel 1/3): capability check of the query runner at
 		// start — verifies query_embedding/reranking and logs the role map.
 		// Best-effort: an unreachable query runner keeps search degraded-but-

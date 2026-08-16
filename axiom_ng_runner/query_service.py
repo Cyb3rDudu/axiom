@@ -32,6 +32,10 @@ _reranker_loads = 0
 class QueryEmbedder(Protocol):
     def embed_queries_dense(self, texts: list[str]) -> list[list[float]]: ...
 
+    def embed_queries_with_sparse(
+        self, texts: list[str]
+    ) -> tuple[list[list[float]], list[dict[str, float]]]: ...
+
 
 class QueryRerankerLike(Protocol):
     def rerank(
@@ -51,6 +55,18 @@ class _ReferenceQueryEmbedder:
         from .runner import _dense_embedding
 
         return [_dense_embedding({"text": t})["values"] for t in texts]
+
+    def embed_queries_with_sparse(
+        self, texts: list[str]
+    ) -> tuple[list[list[float]], list[dict[str, float]]]:
+        # Deterministic stub sparse: the ingest reference sparse
+        # (_sparse_embedding buckets text tokens) — query and chunk stub
+        # share the same meaningless-but-consistent space.
+        from .runner import _sparse_embedding
+
+        dense = self.embed_queries_dense(texts)
+        sparse = [_sparse_embedding(t)["values"] for t in texts]
+        return dense, sparse
 
 
 def _build_embedder() -> QueryEmbedder:

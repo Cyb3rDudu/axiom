@@ -616,7 +616,21 @@ def embed_queries(body: EmbedRequest) -> EmbedResponse:
             f"{len(body.texts)} texts exceed the limit {limit}",
         )
 
-    vectors = query_service.get_query_embedder().embed_queries_dense(body.texts)
+    sparse_maps = None
+    if body.include_sparse:
+        vectors, sparse_maps = query_service.get_query_embedder().embed_queries_with_sparse(
+            body.texts
+        )
+        if len(sparse_maps) != len(body.texts):
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "EMBEDDING_SHAPE_MISMATCH",
+                    "message": "sparse count disagrees with the input text count",
+                },
+            )
+    else:
+        vectors = query_service.get_query_embedder().embed_queries_dense(body.texts)
     # Model output must agree with the declared capability (contract §6):
     # drift surfaces loudly here instead of poisoning the vector space the
     # OS index lives in (silent zeros would break cosine search subtly).
@@ -638,6 +652,7 @@ def embed_queries(body: EmbedRequest) -> EmbedResponse:
         model=DENSE_EMBEDDING_MODEL,
         dimensions=DENSE_EMBEDDING_DIM,
         embeddings=vectors,
+        sparse=sparse_maps,
     )
 
 

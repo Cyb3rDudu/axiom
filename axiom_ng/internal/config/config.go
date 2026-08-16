@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -65,6 +66,10 @@ type Config struct {
 	// local runner (#128 proof: complete, ~11x slower). Failover is logged.
 	IngestFallbackURL string
 
+	// SearchSparseArm enables the learned-lexical (rank_features) recall
+	// arm on POST /api/search (R5 #135). Default on; R7 A/B flips it.
+	SearchSparseArm bool
+
 	// DispatcherEnabled gates the claim/process dispatcher loop. It never runs
 	// unless explicitly turned on; tests construct the dispatcher directly.
 	DispatcherEnabled bool
@@ -118,6 +123,7 @@ func Load() Config {
 		ProcessorURL:            env("AXIOM_PROCESSOR_URL", defaultLocalRunner),
 		QueryRunnerURL:          env("AXIOM_QUERY_RUNNER_URL", defaultLocalRunner),
 		IngestFallbackURL:       env("AXIOM_INGEST_FALLBACK_URL", defaultLocalRunner),
+		SearchSparseArm:         envBoolDefault("AXIOM_SEARCH_SPARSE_ARM", true),
 		ProcessorRequestTimeout: envDur("AXIOM_PROCESSOR_TIMEOUT", 300*time.Second),
 		ProcessorRunnerName:     env("AXIOM_PROCESSOR_RUNNER_NAME", ""),
 		DispatcherEnabled:       envBool("AXIOM_DISPATCHER_ENABLED"),
@@ -182,4 +188,14 @@ func envDur(key string, fallback time.Duration) time.Duration {
 		}
 	}
 	return fallback
+}
+
+// envBoolDefault reads a bool env with an explicit default (for flags that
+// default ON — envBool's zero default reads as "off").
+func envBoolDefault(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
 }
