@@ -490,7 +490,7 @@ func (c *osClient) knn(ctx context.Context, vec []float32, k int, f *Filters) ([
 		query = map[string]any{
 			"bool": map[string]any{
 				"must":   []any{query},
-				"filter": []any{map[string]any{"terms": map[string]any{"document_id": f.DocumentIDs}}},
+				"filter": []any{map[string]any{"terms": map[string]any{"document_id.keyword": f.DocumentIDs}}},
 			},
 		}
 	}
@@ -540,7 +540,7 @@ func (c *osClient) sparse(ctx context.Context, weights map[string]float64, size 
 		query = map[string]any{
 			"bool": map[string]any{
 				"should": should,
-				"filter": []any{map[string]any{"terms": map[string]any{"document_id": f.DocumentIDs}}},
+				"filter": []any{map[string]any{"terms": map[string]any{"document_id.keyword": f.DocumentIDs}}},
 			},
 		}
 	}
@@ -555,7 +555,7 @@ func (c *osClient) bm25(ctx context.Context, q string, size int, f *Filters) ([]
 		query = map[string]any{
 			"bool": map[string]any{
 				"must":   []any{query},
-				"filter": []any{map[string]any{"terms": map[string]any{"document_id": f.DocumentIDs}}},
+				"filter": []any{map[string]any{"terms": map[string]any{"document_id.keyword": f.DocumentIDs}}},
 			},
 		}
 	}

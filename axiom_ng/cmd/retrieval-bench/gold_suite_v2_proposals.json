@@ -1,0 +1,1070 @@
+{
+  "proposals": [
+    {
+      "query_id": "qa1",
+      "q": "Was ist CSR-Reporting und welche Standards gibt es?",
+      "scope_books": [
+        "CSR und Reporting",
+        "CSR und Finance"
+      ],
+      "scope_document_ids": [
+        "29649729-03a0-40d6-b4f5-18cc82149aa2",
+        "4c49b3e9-c874-417b-b0a8-d9ba5b913ac7"
+      ],
+      "best": {
+        "chunk_id": "a512e313-7f58-49d0-84d7-3469d34a55d8",
+        "book": "CSR und Reporting",
+        "locator": "**Vorwort** · S. V-VI",
+        "excerpt": "## **Vorwort des Reihenherausgebers: CSR-Reporting – Sein oder Schein?** Das Thema der gesellschaftlichen Verantwortung – Corporate Soc…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "847b5307-12a7-4157-85ff-52ff091fad00",
+          "book": "CSR und Reporting",
+          "locator": "**3.1.3 Social-Media-Aktivitäten** · S. 99-101",
+          "excerpt": "für Nachhaltigkeitsberichte eine Prüfung an (IDW PS 821). Wie von Geschäftsberichten ist auch von Nachhaltigkeitsberichten zu erwarten, d…"
+        },
+        {
+          "chunk_id": "9d294c63-16a3-467b-bae0-635e9745687c",
+          "book": "CSR und Reporting",
+          "locator": "**4 Vor- und Nachteile des freiwilligen Nachhaltigkeitsreportings** · S. 162",
+          "excerpt": "#### **3 Internationale Standards zum CSR-Reporting** Die EU-Mitgliedsstaaten unterliegen, abgesehen von den jeweiligen nationalen Bestimmu…"
+        },
+        {
+          "chunk_id": "521facc3-83ba-4ef1-a1f6-2cbccace0403",
+          "book": "CSR und Reporting",
+          "locator": "**3.1.2 Richtlinien der Global Reporting Initiative (GRI) als zentraler Standard für CSR-Reporting** · S. 99",
+          "excerpt": "#### **3.1.1 Nachhaltigkeitsberichterstattung** Ein Nachhaltigkeitsbericht enthält im Regelfall Aussagen zu der Nachhaltigkeitsstrategie e…"
+        },
+        {
+          "chunk_id": "783f1971-d91d-48b3-85b1-8b4242d7defb",
+          "book": "CSR und Reporting",
+          "locator": "**Literatur** · S. 169-170",
+          "excerpt": "al. [2009](#page-184-12), S. 94–107). Die Interessengruppen italienischer Reporting unterscheiden sich laut Secchi ([2005](#page-184-6)), …"
+        }
+      ]
+    },
+    {
+      "query_id": "qa2",
+      "q": "Wie funktioniert eine Ökobilanz Life Cycle Assessment?",
+      "scope_books": [
+        "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen"
+      ],
+      "scope_document_ids": [
+        "d61cb3eb-69d4-4782-b761-0ad6c4c67e90"
+      ],
+      "best": {
+        "chunk_id": "e2ef47b2-86f7-47ff-8c97-0ffed5d05675",
+        "book": "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen",
+        "locator": "**5.1.2.3 Zieldefinition** · S. 148-150",
+        "excerpt": "#### **5.1.2.2 Vorgehensweise** In diesem Abschnitt wird die methodische Vorgehensweise für die Durchführung einer Lebenszyklusanalyse (L…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "f75afe1f-3375-4972-9162-1d97e40f44c8",
+          "book": "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen",
+          "locator": "**5.1.2.2 Vorgehensweise** · S. 148",
+          "excerpt": "#### **5.1.2.1 Grundlagen** Der methodische Grundstein für Produktlebenswegbilanzen wurde Ende der 60er Jahre in den USA mit einer so gena…"
+        },
+        {
+          "chunk_id": "f9bb08ff-f939-4e41-9ef4-213a2c3bffb1",
+          "book": "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen",
+          "locator": "**5.1.2.1 Grundlagen** · S. 146-147",
+          "excerpt": "### 5.1.2 Ökologische Lebensweganalyse Der Lebensweg technischer Produkte von Rohstoffgewinnung, Produktion, Distribution, Nutzung bis hin…"
+        },
+        {
+          "chunk_id": "262e8326-5675-4e2d-b63a-c1833a0b3ac8",
+          "book": "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen",
+          "locator": "*5.1.3 Soziale Lebensweganalyse* · S. 161-162",
+          "excerpt": "zur Bestimmung von unsicheren Daten- oder Wirkungsgrößen als auch zur Einbindung von qualitativen Wirkungsfaktoren (z.B. Geruchsbelastung)…"
+        },
+        {
+          "chunk_id": "f982923d-1444-49c9-8064-85f1bda9db4f",
+          "book": "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen",
+          "locator": "Arbeitnehmer (Auswahl) · S. 162-164",
+          "excerpt": "die Bewertung komplexer technischer Produkte erfordert i.d.R. umfangreiche Daten. Aus diesem Grund wurden verschiedene Datenbanken und Stand…"
+        }
+      ]
+    },
+    {
+      "query_id": "qa3",
+      "q": "Lieferkettensorgfaltspflichtengesetz Anforderungen Unternehmen",
+      "scope_books": [
+        "Corporate Social Responsibility – Mythen und Maßnahmen"
+      ],
+      "scope_document_ids": [
+        "4bbaa98d-16e3-47f9-b638-db59a89fd0d0"
+      ],
+      "best": {
+        "chunk_id": "22badf90-d754-4ddc-aabd-6f10b8067db2",
+        "book": "Corporate Social Responsibility – Mythen und Maßnahmen",
+        "locator": "**43.2 Mangelnde Politikkohärenz zwischen Investitionsschutz und Menschenrechten** · S. 209-210",
+        "excerpt": "#### **43.1.1 Forderungen** - • Einführung direkter Haftung des Mutterunternehmens für schuldhafte Verstöße der Tochterunternehmen ge…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "532f8e61-e281-4934-bdee-6e0f26682e9c",
+          "book": "Corporate Social Responsibility – Mythen und Maßnahmen",
+          "locator": "**7.2 Ausgestaltung der menschenrechtlichen Schutzpflicht in Europa** · S. 37-38",
+          "excerpt": "einem Gebiet erhält, das zuvor vom Staat zwangsgeräumt worden ist, liegt ein Eingriff in das Menschenrecht auf Wohnen vor. Und wenn ein be…"
+        },
+        {
+          "chunk_id": "307eb59b-5d7a-4650-9b25-205f1ec3164e",
+          "book": "Corporate Social Responsibility – Mythen und Maßnahmen",
+          "locator": "**17.2 Verantwortung für Menschenrechte, Zahlung angemessener Löhne** · S. 82",
+          "excerpt": "#### **17.1 Sorgfaltspflicht als Kern der Unternehmensverantwortung** Die wohl wichtigste Änderung der Revision stellt die Verankerung des…"
+        },
+        {
+          "chunk_id": "15fd3652-649e-4bfd-a37e-1e4213de09cd",
+          "book": "Corporate Social Responsibility – Mythen und Maßnahmen",
+          "locator": "**1.2.3 Nachhaltige Entwicklung und CSR** · S. 4-5",
+          "excerpt": "#### **1.2.2 Die deutsche CSR Definition** Die Bundesregierung hat im Oktober 2010 den Aktionsplan CSR5 beschlossen. Dabei legte sie allerd…"
+        },
+        {
+          "chunk_id": "bffb7459-a04c-4109-b610-91cae24f51bc",
+          "book": "Corporate Social Responsibility – Mythen und Maßnahmen",
+          "locator": "**17.3 Transparenzanforderungen für die Kontaktstellen** · S. 82",
+          "excerpt": "Die Sorgfaltspflicht bezieht sich dabei nicht nur auf das Kerngeschäft der Unternehmen, sondern auch auf die Beziehungen zu Dritten. Dies i…"
+        }
+      ]
+    },
+    {
+      "query_id": "qa4",
+      "q": "ESG rating agencies influence on corporate sustainability reporting",
+      "scope_books": [
+        "Environmental, Social and Governance (ESG) Investing: A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio",
+        "Demystifying Environmental, Social and Governance (ESG)"
+      ],
+      "scope_document_ids": [
+        "6ddca1d1-a79f-40e5-a17d-c12c67e9100b",
+        "bcbedf40-f904-46db-b738-dd7f168a3cb1"
+      ],
+      "best": {
+        "chunk_id": "eb8dfab6-3c76-4982-aaec-edf6d7acd9f5",
+        "book": "Demystifying Environmental, Social and Governance (ESG)",
+        "locator": "5.1.7 Sustainalytics ESG Risk Ratings",
+        "excerpt": "different activities, sectors, and jurisdictions. The recommendations fall into four areas in order to capture the main features of function…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "f16c410d-907d-4e8b-83d4-42c235647e4a",
+          "book": "Demystifying Environmental, Social and Governance (ESG)",
+          "locator": "5.2 Summary of the Process of Designing an ESG Reporting Framework",
+          "excerpt": "connected with climate change, water security, and deforestation. Climetrics rates almost 20,000 funds and publish them freely. The CDP ESG …"
+        },
+        {
+          "chunk_id": "40ace1ff-95c3-4789-b051-e358666585fc",
+          "book": "Demystifying Environmental, Social and Governance (ESG)",
+          "locator": "5.1 What to Take Into Consideration",
+          "excerpt": "to take into account when designing ESG Reporting.\u003csup\u003e[^177]\u003c/sup\u003e We take some of these priorities and include additional ones of our own,…"
+        },
+        {
+          "chunk_id": "4f92a5a8-668e-4761-8d5f-2b1d78d2c67f",
+          "book": "Environmental, Social and Governance (ESG) Investing: A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio",
+          "locator": "Services providing an assessment of corporate ESG · S. 183-184",
+          "excerpt": "pollution issues may yet have higher emissions than a company with half that level of inputs. - Analysis—given all the uncertainties in th…"
+        },
+        {
+          "chunk_id": "af1be745-df0a-454d-b01d-943ee3a5011d",
+          "book": "Demystifying Environmental, Social and Governance (ESG)",
+          "locator": "5.1 What to Take Into Consideration",
+          "excerpt": "## Abstract In this chapter, we take the reader through the practical design and application of ESG reporting. We explain concepts that are…"
+        }
+      ]
+    },
+    {
+      "query_id": "qa5",
+      "q": "Was ist Corporate Social Responsibility und welche Dimensionen hat es?",
+      "scope_books": [
+        "CSR und Finance",
+        "Corporate Social Responsibility – Mythen und Maßnahmen"
+      ],
+      "scope_document_ids": [
+        "4c49b3e9-c874-417b-b0a8-d9ba5b913ac7",
+        "4bbaa98d-16e3-47f9-b638-db59a89fd0d0"
+      ],
+      "best": {
+        "chunk_id": "4510f9c0-d940-4a0d-970a-878af7a623b9",
+        "book": "CSR und Finance",
+        "locator": "**Inhaltsverzeichnis** · S. XIII-XIV",
+        "excerpt": "#### **CSR und Finance – ein Oxymoron?** Liebe Leserinnen und Leser, die gesellschaftliche Verantwortung wurde lange Zeit als reiner Kos…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "ad63a5c8-e6f9-41af-982f-32abd1d7fbc6",
+          "book": "CSR und Finance",
+          "locator": "**1.2 Corporate Social Responsibility und Green Leases** · S. 312",
+          "excerpt": "#### **1.1 Corporate Social Responsibility in der Immobilienwirtschaft** Corporate Social Responsibility (CSR) betrifft alle Bereiche unter…"
+        },
+        {
+          "chunk_id": "c8136033-89fc-46e6-a085-c858a6dbe843",
+          "book": "Corporate Social Responsibility – Mythen und Maßnahmen",
+          "locator": "**1.1 Ziel des Buches** · S. 1-2",
+          "excerpt": "is to increase its profits*\" würde heute wohl kaum ein Unternehmer noch äußern. Der Druck auf Unternehmen steigt, sich den weltweiten Aus…"
+        },
+        {
+          "chunk_id": "02eff1b6-9dfd-4ee8-869f-cd72de57e0d9",
+          "book": "CSR und Finance",
+          "locator": "**3.2 Studienergebnisse** · S. 174-175",
+          "excerpt": "#### **3.1 Studienaufbau und Messung** Den Folgenden Ausführungen liegt eine Studie der HHL Leipzig Graduate School of Management mit dem …"
+        },
+        {
+          "chunk_id": "8074cbc9-103c-4030-8458-6da0d1a665c1",
+          "book": "CSR und Finance",
+          "locator": "**2 Das bilanzpolitische Instrumentarium der Unternehmen** · S. 168-169",
+          "excerpt": "#### **1 Einleitung: CSR aus Sicht der Finanzberichterstattung** Die Einschätzung nachhaltiger Unternehmensführung hat sich in den letzte…"
+        }
+      ]
+    },
+    {
+      "query_id": "c6",
+      "q": "Nachhaltigkeit als Managementansatz in Unternehmen etablieren",
+      "scope_books": [
+        "Nachhaltiges Management: Nachhaltigkeit als exzellenten Managementansatz entwickeln"
+      ],
+      "scope_document_ids": [
+        "ead40ca0-aeb1-40f6-a028-206307d13c6d"
+      ],
+      "best": {
+        "chunk_id": "396a61f5-92b5-46c4-a6c0-ed1fd913f5a2",
+        "book": "Nachhaltiges Management: Nachhaltigkeit als exzellenten Managementansatz entwickeln",
+        "locator": "**1.2 Defnition und Einführung in die Thematik des Sustainable Management** · S. 3-4",
+        "excerpt": "#### **1.1 Einleitung** Die Herausforderungen, denen sich Unternehmen stellen müssen, sind vielfältiger Art. Dabei zeigt sich, dass gerad…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "26d6bdb2-ca38-45dd-93ed-4e6a769d9f6a",
+          "book": "Nachhaltiges Management: Nachhaltigkeit als exzellenten Managementansatz entwickeln",
+          "locator": "**1.3.3 Integriertes Nachhaltigkeitsmanagement: Management by Sustainability und bereichsübergreifender Beitrag zur Wertschöpfung** · S. 8-10",
+          "excerpt": "#### **1.3.3 Integriertes Nachhaltigkeitsmanagement: Management by Sustainability und bereichsübergreifender Beitrag zur Wertschöpfung** …"
+        },
+        {
+          "chunk_id": "7c13106e-beca-4175-9351-a7987db935d9",
+          "book": "Nachhaltiges Management: Nachhaltigkeit als exzellenten Managementansatz entwickeln",
+          "locator": "Nachhaltiges Management · S. C1",
+          "excerpt": "# Nachhaltiges Management Nachhaltigkeit als exzellenten Managementansatz entwickeln ![](_page_0_Picture_3.jpeg)"
+        },
+        {
+          "chunk_id": "e56ef5fb-6337-4355-bbd7-80f916dd19b3",
+          "book": "Nachhaltiges Management: Nachhaltigkeit als exzellenten Managementansatz entwickeln",
+          "locator": "**40.1 Vom limitierenden Faktor zum Wachstumstreiber** · S. 749-750",
+          "excerpt": "### \u003cspan id=\"page-762-0\"\u003e\u003c/span\u003e**Perspektivwechsel Nachhaltigkeit** **40** Stefan Haver In jedem Unternehmen sind geschäftliche Entsch…"
+        },
+        {
+          "chunk_id": "b41460c2-50dc-4ec0-9a42-a63c8e772e48",
+          "book": "Nachhaltiges Management: Nachhaltigkeit als exzellenten Managementansatz entwickeln",
+          "locator": "**1.3 Konzepte des Sustainable Management** · S. 4-5",
+          "excerpt": "Gesichtspunkten zu sehen als noch vor der Jahrtausendwende. Hinzuweisen ist dabei auf neue Organisationsformen und Herausforderungen, die ge…"
+        }
+      ]
+    },
+    {
+      "query_id": "c7",
+      "q": "institutionelle Anleger und nachhaltige Kapitalanlagen",
+      "scope_books": [
+        "Institutionelle Anleger und nachhaltige Kapitalanlagen"
+      ],
+      "scope_document_ids": [
+        "88039f1b-db41-4c7b-949c-dc60662b61a3"
+      ],
+      "best": {
+        "chunk_id": "ebeab287-aa36-4acb-bb96-33c3c5c1f967",
+        "book": "Institutionelle Anleger und nachhaltige Kapitalanlagen",
+        "locator": "**1.4 Gründe für nachhaltige Kapitalanlagen auf Seiten der institutionellen Anleger** · S. 8-10",
+        "excerpt": "#### **1.4 Gründe für nachhaltige Kapitalanlagen auf Seiten der institutionellen Anleger** Nachhaltige Kapitalanlagen sind grundsätzlich…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "a143dc63-3eaa-4f6a-800a-5a99fef73724",
+          "book": "Institutionelle Anleger und nachhaltige Kapitalanlagen",
+          "locator": "**2.1 Nachhaltige Kapitalanlagen – Anlegerstrukturen aus statistischer Sicht** · S. 21-22",
+          "excerpt": "# **Institutionelle Anleger und nachhaltige Kapitalanlagen – Marktsituation und Marktstimmung** Henry Schäfer und Volker Weber Deutsche…"
+        },
+        {
+          "chunk_id": "c8fe0cd2-25d6-40b9-b271-cf82976bf0fc",
+          "book": "Institutionelle Anleger und nachhaltige Kapitalanlagen",
+          "locator": "**2.2 Die Statistiken von Eurosif /FNG und der SRI-Stimmungsindex – worin liegt der Unterschied?** · S. 22-24",
+          "excerpt": "#### **2.1 Nachhaltige Kapitalanlagen – Anlegerstrukturen aus statistischer Sicht** Die derzeit verfügbaren Statistiken zu nachhaltigen …"
+        },
+        {
+          "chunk_id": "aa3a84af-ba8d-4f0f-b004-dc4fab4839c9",
+          "book": "Institutionelle Anleger und nachhaltige Kapitalanlagen",
+          "locator": "**1.5 Inhaltlicher Aufbau des Buchs** · S. 10",
+          "excerpt": "- Diejenigen Anleger, die bisher dem Thema noch skeptisch oder ablehnend gegenüberstehen, werden Berichte über die Praxis nachhaltiger Kap…"
+        },
+        {
+          "chunk_id": "013263c3-2214-4d65-b06c-2dee8fd61329",
+          "book": "Institutionelle Anleger und nachhaltige Kapitalanlagen",
+          "locator": "**5.1 Selbsteinordnung des institutionellen Anlegers** · S. 59-60",
+          "excerpt": "### **Nachhaltige Kapitalanlagen umsetzen – ein Fahrplan** Henry Schäfer Der Einbau von Grundsätzen, Strategien und Anlagestilen nach …"
+        }
+      ]
+    },
+    {
+      "query_id": "c8",
+      "q": "Corporate Social Responsibility in der Wertschöpfungskette",
+      "scope_books": [
+        "CSR und Value Chain Management"
+      ],
+      "scope_document_ids": [
+        "4ad69286-e9c3-42b2-8f8e-94b79514dcf1"
+      ],
+      "best": {
+        "chunk_id": "ade86c3b-8bab-4fd9-9da3-0b7280ec9e20",
+        "book": "CSR und Value Chain Management",
+        "locator": "**Inhaltsverzeichnis** · S. XI-XII",
+        "excerpt": "# **Vorwort des Reihenherausgebers: CSR gehört in die Wertschöpfungs-DNA** Die Themen Nachhaltigkeit und Corporate Social Responsibility …"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "7106b71a-7c60-4b40-8188-b45ca7d9e4d8",
+          "book": "CSR und Value Chain Management",
+          "locator": "**BASF** · S. 291",
+          "excerpt": "#### \u003cspan id=\"page-301-0\"\u003e\u003c/span\u003e**Herausgeber und Reihenherausgeber** ![](_page_301_Picture_2.jpeg) **Michael D'heur** ist Gründer und …"
+        },
+        {
+          "chunk_id": "397dd93a-3328-4f3c-b7a8-00d3f36112ee",
+          "book": "CSR und Value Chain Management",
+          "locator": "**1.1 Definition nachhaltiger Anlagen und Anlagestrategien** · S. 197-198",
+          "excerpt": "#### **1 Bedeutung nachhaltiger Wertschöpfung als Investmentkriterium** Die Unternehmensstrategie auf Nachhaltigkeit auszurichten, ist ein…"
+        },
+        {
+          "chunk_id": "a60bc5d4-b390-4fbe-8670-f6f9de1aa971",
+          "book": "CSR und Value Chain Management",
+          "locator": "**1.1 Der Begriff 'Nachhaltigkeit'** · S. 1",
+          "excerpt": "#### **1 Begriffsbestimmung und Kontext** Dieser Artikel beschäftigt sich mit der Fragestellung, wie die Verantwortung eines Unternehmens …"
+        },
+        {
+          "chunk_id": "411d7d20-c848-4055-8dae-4526a640b935",
+          "book": "CSR und Value Chain Management",
+          "locator": "**2.3 Die wachsende Bedeutung von Wertschöpfungsketten** · S. 25-27",
+          "excerpt": "Social Responsibility nicht aus. Wie im Standardwerk 'Corporate Social Responsibility' von Schneider und Schmidpeter beschrieben, (Vgl. Schn…"
+        }
+      ]
+    },
+    {
+      "query_id": "c9",
+      "q": "Nachhaltigkeit als Treiber von Innovation",
+      "scope_books": [
+        "CSR und Innovationsmanagement"
+      ],
+      "scope_document_ids": [
+        "5d8422e3-1d76-48c7-baf9-3c389be15738"
+      ],
+      "best": {
+        "chunk_id": "e326774c-d7e1-4cb9-b3ac-9fcc01d02cd1",
+        "book": "CSR und Innovationsmanagement",
+        "locator": "**2.1 Nachhaltigkeitsinnovationen durch Bewertung der Wertschöpfungskette** · S. 135",
+        "excerpt": "#### **2 Nachhaltigkeit als Treiber von Innovationen**"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "6f418384-ea48-40d1-91ff-e898bc5f1d5f",
+          "book": "CSR und Innovationsmanagement",
+          "locator": "**3 Nachhaltiges Unternehmertum als Innovation des Wertschöpfungsprozesses** · S. C1",
+          "excerpt": "#### **2 Innovation durch nachhaltiges Unternehmertum: nachhaltig kreieren zerstört kreativ** Sich seit Jahrzehnten verändernde gesellsch…"
+        },
+        {
+          "chunk_id": "bd12651b-7311-45ab-af98-66a1a11a283e",
+          "book": "CSR und Innovationsmanagement",
+          "locator": "**6.1 Warum Innovation?** · S. 175-176",
+          "excerpt": "und -maßnahmen definiert und zu einem Nachhaltigkeitsprogramm verdichtet. Darüber hinaus wurden die Aspekte einer effektiven CSR-Kommunika…"
+        },
+        {
+          "chunk_id": "a0be892f-41ca-4e48-ad85-bd6840e5d99e",
+          "book": "CSR und Innovationsmanagement",
+          "locator": "\u003cspan id=\"page-87-0\"\u003e\u003c/span\u003e**3 Nachhaltigere SAP – Die eigenen operativen Prozesse und Aktivitäten** · S. 81-82",
+          "excerpt": "erlaubt, die mit diesem Thema für Unternehmen verbunden sind (also dem \"Business Case\" für Nachhaltigkeit[2](#page-86-1)), während die Re…"
+        },
+        {
+          "chunk_id": "4ec24d98-3ef0-4656-a682-7a20ea17ac26",
+          "book": "CSR und Innovationsmanagement",
+          "locator": "\u003cspan id=\"page-147-1\"\u003e\u003c/span\u003e\u003cspan id=\"page-147-0\"\u003e\u003c/span\u003e**Literatur** · S. 144",
+          "excerpt": "#### **4 Nachhaltigkeit in Unternehmensstrategie und Innovation: Wohin geht der Trend?** Nachhaltigkeit in der Unternehmensstrategie und In…"
+        }
+      ]
+    },
+    {
+      "query_id": "c10",
+      "q": "warum die ökologische Transformation nicht stattfindet",
+      "scope_books": [
+        "Nachhaltige Nicht-Nachhaltigkeit: Warum die ökologische Transformation der Gesellschaft nicht stattfindet"
+      ],
+      "scope_document_ids": [
+        "f9041687-3020-4fcc-809e-1aea5f3bbde3"
+      ],
+      "best": {
+        "chunk_id": "e03fe886-45ab-42a9-9192-58f1b4edfd04",
+        "book": "Nachhaltige Nicht-Nachhaltigkeit: Warum die ökologische Transformation der Gesellschaft nicht stattfindet",
+        "locator": "**Literatur** · S. 238-240",
+        "excerpt": "das gemeinschaftliche Gärtnern es leichter, den Urlaubsf lug nach Georgien zu buchen? Ist es Teil des aufwändigen Projekts einer verallgem…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "fcca7261-e6a9-4b84-b79e-3fc1143d1154",
+          "book": "Nachhaltige Nicht-Nachhaltigkeit: Warum die ökologische Transformation der Gesellschaft nicht stattfindet",
+          "locator": "**Grüne Konsument\\*innen – die** *schlafenden Riesen***?** · S. 245-247",
+          "excerpt": "### Die (Un-)Haltbarkeit der Erzählung von der Konsument\\*innenverantwortung *Mirijam Mock* Warum findet eine ökologische Transformation…"
+        },
+        {
+          "chunk_id": "77e89db0-d8c9-43e8-be5f-390e13b1a73b",
+          "book": "Nachhaltige Nicht-Nachhaltigkeit: Warum die ökologische Transformation der Gesellschaft nicht stattfindet",
+          "locator": "**Literatur** · S. 264-266",
+          "excerpt": "#### **Gesellschaftstheoretische Annahmen ernst nehmen** Warum also findet die ökologische Transformation nicht statt? Liegt dies daran, d…"
+        },
+        {
+          "chunk_id": "5c58befe-b8dd-4879-9daf-3225e31a0d66",
+          "book": "Nachhaltige Nicht-Nachhaltigkeit: Warum die ökologische Transformation der Gesellschaft nicht stattfindet",
+          "locator": "**Repolitisierung** · S. 12",
+          "excerpt": "Corona-Notstand denormalisiert sehr vieles und stellt es neu zur Diskussion. Damit schafft er eine vielleicht einmalig günstige Gelegenheit…"
+        },
+        {
+          "chunk_id": "7f2232b3-3a62-4cb9-bc8d-faf16e2438f0",
+          "book": "Nachhaltige Nicht-Nachhaltigkeit: Warum die ökologische Transformation der Gesellschaft nicht stattfindet",
+          "locator": "*Gekaufte Zeit II* · S. 110-112",
+          "excerpt": "noch eine Minimalsicherung der *wirklich Bedürf tigen* öffentlich zu finanzieren. Und je mehr modernen Gesellschaften die normativen Krite…"
+        }
+      ]
+    },
+    {
+      "query_id": "c11",
+      "q": "ESG investing theory and practice balanced view",
+      "scope_books": [
+        "Environmental, Social and Governance (ESG) Investing: A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio"
+      ],
+      "scope_document_ids": [
+        "6ddca1d1-a79f-40e5-a17d-c12c67e9100b"
+      ],
+      "best": {
+        "chunk_id": "b9b6ab73-75f8-4461-a012-449a86a8531b",
+        "book": "Environmental, Social and Governance (ESG) Investing: A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio",
+        "locator": "Environmental, Social, and Governance (ESG) Investing · S. 2",
+        "excerpt": "### Environmental, Social, and Governance (ESG) Investing A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "81b1a2af-07e4-4586-b93f-bb7453baaade",
+          "book": "Environmental, Social and Governance (ESG) Investing: A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio",
+          "locator": "John Hill · S. 3",
+          "excerpt": "## Environmental, Social, and Governance (ESG) Investing A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio"
+        },
+        {
+          "chunk_id": "bea25ddd-9848-487c-99b9-2046a48d1490",
+          "book": "Environmental, Social and Governance (ESG) Investing: A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio",
+          "locator": "Environmental, Social, and Governance (ESG) Investing · S. 1",
+          "excerpt": "# Environmental, Social, and Governance (ESG) Investing A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio ![](_pag…"
+        },
+        {
+          "chunk_id": "1c6eb7a1-4f68-4dad-8174-97ca7388034f",
+          "book": "Environmental, Social and Governance (ESG) Investing: A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio",
+          "locator": "Fiduciary obligations · S. 58",
+          "excerpt": "both legal and ethical responsibilities required of fiduciaries and these have an important impact on ESG investing. Historically, investmen…"
+        },
+        {
+          "chunk_id": "e75b58fb-549f-453f-ad06-ccd862595fe8",
+          "book": "Environmental, Social and Governance (ESG) Investing: A Balanced Analysis of the Theory and Practice of a Sustainable Portfolio",
+          "locator": "Empirical studies · S. 187-188",
+          "excerpt": "believe that one can construct an investment portfolio using ESG criteria that has reasonable prospects of equaling the financial performanc…"
+        }
+      ]
+    },
+    {
+      "query_id": "c12",
+      "q": "demystifying ESG common misconceptions",
+      "scope_books": [
+        "Demystifying Environmental, Social and Governance (ESG)"
+      ],
+      "scope_document_ids": [
+        "bcbedf40-f904-46db-b738-dd7f168a3cb1"
+      ],
+      "best": {
+        "chunk_id": "e581cc19-1946-45b2-809c-a76a550322a5",
+        "book": "Demystifying Environmental, Social and Governance (ESG)",
+        "locator": "1.1 Introduction",
+        "excerpt": "## Abstract This chapter introduces ESG, defines it, outlines its evolution, and clarifies misunderstandings with regard to the topic. It r…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "ef3a3065-aa62-4dd7-962b-0d7e18b2c8dd",
+          "book": "Demystifying Environmental, Social and Governance (ESG)",
+          "locator": "1.2 Definition, Measurement, and Importance",
+          "excerpt": "54 per cent of globally surveyed investors planning to increase their allocations of these assets in 2020.*\u003csup\u003e[^3]\u003c/sup\u003e *These aren’t t…"
+        },
+        {
+          "chunk_id": "34fd0256-6362-488a-9127-a7cbcb570f3c",
+          "book": "Demystifying Environmental, Social and Governance (ESG)",
+          "locator": "2.2 Environmental",
+          "excerpt": "## 2.1 Introduction The ultimate objective of ESG is sustainability. According to the United Nations, despite its importance and the potent…"
+        },
+        {
+          "chunk_id": "d8d67eda-e638-4155-91e7-f7ef367728b6",
+          "book": "Demystifying Environmental, Social and Governance (ESG)",
+          "locator": "8.1 Summary",
+          "excerpt": "## Abstract In this chapter, we first summarize the seven earlier ones of this book**.** Then we make very important additions to the conte…"
+        },
+        {
+          "chunk_id": "7225ac25-1324-4951-bc02-6855f308d7ae",
+          "book": "Demystifying Environmental, Social and Governance (ESG)",
+          "locator": "5.4.2 The Gambian Special Needs Entrepreneurial Fund (GSNEF): An ESG Framework",
+          "excerpt": "but “ESG reports” are also used. This is because ESG is a specific enabler of sustainability, particularly as it is known today in the b…"
+        }
+      ]
+    },
+    {
+      "query_id": "c13",
+      "q": "sustainable performance beyond ESG compliance leadership",
+      "scope_books": [
+        "The Adventure of Sustainable Performance: Beyond ESG Compliance to Leadership in the New Era"
+      ],
+      "scope_document_ids": [
+        "d032750b-a052-424f-ac02-8e3f373bf045"
+      ],
+      "best": {
+        "chunk_id": "f1f69ee7-1ade-4bc0-a8ee-9d989d92c381",
+        "book": "The Adventure of Sustainable Performance: Beyond ESG Compliance to Leadership in the New Era",
+        "locator": "**'The wisdom contained in this brilliant book will become seminal, and its impact, transformational'** · S. C1-ii",
+        "excerpt": "# SUSTAINABLE PERFORMANCE BEYOND ESG COMPLIANCE TO LEADERSHIP IN THE NEW ERA STUART MCLACHLAN DEAN SANDERS ![](_page_0_Picture_8.jpeg) *…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "09b64cfa-437f-488c-a3e0-bcdb7b750287",
+          "book": "The Adventure of Sustainable Performance: Beyond ESG Compliance to Leadership in the New Era",
+          "locator": "*To Albert Freese. Without his entrepreneurship, conviction and belief, none of this would have been possible. Danke.* · S. iv-v",
+          "excerpt": "#### *Limit of Liability/Disclaimer of Warranty* While the publisher and authors have used their best efforts in preparing this work, they …"
+        },
+        {
+          "chunk_id": "e3771415-4248-440e-a3e3-bf2ccf70410f",
+          "book": "The Adventure of Sustainable Performance: Beyond ESG Compliance to Leadership in the New Era",
+          "locator": "Leading Beyond Compliance · S. 133-136",
+          "excerpt": "on managing and shoring up the stronghold versus those leading away from the Charge through the transition into Day 2. We will also see the …"
+        },
+        {
+          "chunk_id": "0e5a2b55-c141-4b91-8806-bff3bc3aefbc",
+          "book": "The Adventure of Sustainable Performance: Beyond ESG Compliance to Leadership in the New Era",
+          "locator": "References · S. xl-xli",
+          "excerpt": "### **Sustainable Performance** We hope to take you to a place that is beyond compliance, that will call on the free market attributes of c…"
+        },
+        {
+          "chunk_id": "6e9f584e-22d9-49bd-973b-b6f9e6c48529",
+          "book": "The Adventure of Sustainable Performance: Beyond ESG Compliance to Leadership in the New Era",
+          "locator": "Leading Beyond Compliance · S. 133-136",
+          "excerpt": "Inspired by some of the 'Blue Ocean', 'Infinite Games' 'Competing for the Future' type strategies, they might see other category drivers as …"
+        }
+      ]
+    },
+    {
+      "query_id": "c14",
+      "q": "ESG and sustainable development in healthcare",
+      "scope_books": [
+        "Environmental, Social and Governance and Sustainable Development in Healthcare"
+      ],
+      "scope_document_ids": [
+        "ed413eb8-bafb-4f68-bdac-9cf8cd73ee0f"
+      ],
+      "best": {
+        "chunk_id": "7d334cff-60ac-459f-ab9e-3643e5968b9a",
+        "book": "Environmental, Social and Governance and Sustainable Development in Healthcare",
+        "locator": "Keywords · S. 1",
+        "excerpt": "#### Abstract This chapter briefly introduces the contents of the book. The United Nations developed 17 Sustainable Development Goals (SDGs…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "ae0fcf64-965c-4177-9355-8d19a36dd225",
+          "book": "Environmental, Social and Governance and Sustainable Development in Healthcare",
+          "locator": "Keywords · S. 1-2",
+          "excerpt": "in the business industry, (ii) the realisation of SDG 3, (iii) value creation of ESG in the healthcare industry, (iv) contemporary developme…"
+        },
+        {
+          "chunk_id": "6d72b8cb-b643-425d-bf91-2d11fffd4a78",
+          "book": "Environmental, Social and Governance and Sustainable Development in Healthcare",
+          "locator": "\u003cspan id=\"page-121-0\"\u003e\u003c/span\u003e8 SDG 3 and ESG—Linkage and the Way Forward · S. 113",
+          "excerpt": "# \u003cspan id=\"page-121-0\"\u003e\u003c/span\u003e8 SDG 3 and ESG—Linkage and the Way Forward This book has focused on the relationship between environmenta…"
+        },
+        {
+          "chunk_id": "5ba9f5f3-4e1f-4f84-be50-4c9d02ac5c40",
+          "book": "Environmental, Social and Governance and Sustainable Development in Healthcare",
+          "locator": "Keywords · S. 65",
+          "excerpt": "#### Abstract The healthcare business is growing fast in most countries, particularly the new economic achievers where private medical grou…"
+        },
+        {
+          "chunk_id": "3192e23a-ea0d-4b03-9746-e906a7344f60",
+          "book": "Environmental, Social and Governance and Sustainable Development in Healthcare",
+          "locator": "4.1 Introduction · S. 47",
+          "excerpt": "organisations could transform the risks into opportunities by integrating ESG considerations and embedding ESG into corporate business strat…"
+        }
+      ]
+    },
+    {
+      "query_id": "c15",
+      "q": "perspektiven der wirtschaftswissenschaften",
+      "scope_books": [
+        "Perspektiven der Wirtschaftswissenschaften"
+      ],
+      "scope_document_ids": [
+        "2575a5c0-191f-48d7-adc3-dbfe51d18f70"
+      ],
+      "best": {
+        "chunk_id": "6594a6c2-2092-499a-9806-e14ecbade472",
+        "book": "Perspektiven der Wirtschaftswissenschaften",
+        "locator": "**Zu den Beiträgen** · S. 5-6",
+        "excerpt": "# **Vorwort** Am 15. November 2013 fand an der Technischen Universität Chemnitz der Festakt anlässlich des 20-jährigen Bestehens der Fak…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "7d096780-7aa0-4809-80f9-5b0094c558f8",
+          "book": "Perspektiven der Wirtschaftswissenschaften",
+          "locator": "Perspektiven der Wirtschaftswissenschaften · S. C1-3",
+          "excerpt": "# Perspektiven der Wirtschaftswissenschaften ![](_page_0_Picture_2.jpeg) Perspektiven der Wirtschaftswissenschaften Dagmar Gesmann-Nuissl…"
+        },
+        {
+          "chunk_id": "6c37ee6e-530b-4e2a-ba59-8aac46d2e15e",
+          "book": "Perspektiven der Wirtschaftswissenschaften",
+          "locator": "Springer Gabler · S. 3-4",
+          "excerpt": "# Perspektiven der Wirtschaftswissenschaften ![](_page_2_Picture_2.jpeg) Herausgeber Dagmar Gesmann-Nuissl Ronald Hartz Marcus Dittrich F…"
+        },
+        {
+          "chunk_id": "7453feec-db1e-4f00-b82b-a9f45b8bfb09",
+          "book": "Perspektiven der Wirtschaftswissenschaften",
+          "locator": "**3.1 Einleitung** · S. 62-64",
+          "excerpt": "qualitative Ergebnisse 69 | | | 3.4.1 | Partizipation als Fest der Gemeinschaft (Winzergenossenschaft 1) 69 | | | 3.4.2 | Bürokratisierte P…"
+        },
+        {
+          "chunk_id": "877b0c25-ccc6-4593-8354-355ed545f614",
+          "book": "Perspektiven der Wirtschaftswissenschaften",
+          "locator": "**Zu den Beiträgen** · S. 6-8",
+          "excerpt": "#### **Zu den Beiträgen** Den ersten Bereich \"Ökonomie der Arbeit\" eröffnet der Beitrag von **Gertraude Krell**. Unter dem Titel \"Chance…"
+        }
+      ]
+    },
+    {
+      "query_id": "f16",
+      "q": "stakeholder salience model power legitimacy urgency",
+      "scope_books": [
+        "Stakeholder-Management und Nachhaltigkeits-Reporting"
+      ],
+      "scope_document_ids": [
+        "d77e32f2-f5e4-4ab0-98be-b635338db4b8"
+      ],
+      "best": {
+        "chunk_id": "a33427e8-0b81-47d3-9c77-251b57cc8f3d",
+        "book": "Stakeholder-Management und Nachhaltigkeits-Reporting",
+        "locator": "**2.6 Einordnung und Ausblick zum Stakeholder-Konzept** · S. 23-26",
+        "excerpt": "#### **2.5.2 Formen und Voraussetzungen der Einbeziehung** Standards zur Nachhaltigkeitsberichterstattung enthalten zumeist keine Vorgaben …"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "9befbd83-a817-4bdd-a608-dff7a559d6c8",
+          "book": "Stakeholder-Management und Nachhaltigkeits-Reporting",
+          "locator": "**3.1 Gegenstand und Problemstellung** · S. 29",
+          "excerpt": "den verschiedenen mit ihnen verbundenen Erwartungen (organisationales Lernen, Risikomanagement, Schaffung von Legitimität) entsprechen zu k…"
+        },
+        {
+          "chunk_id": "177d1cd9-d722-4217-a609-f1b787a3c166",
+          "book": "Stakeholder-Management und Nachhaltigkeits-Reporting",
+          "locator": "**2.5.2 Formen und Voraussetzungen der Einbeziehung** · S. 21-23",
+          "excerpt": "#### **2.5.1 Stakeholder-Dialoge** Eine Festlegung auf bestimmte Kommunikationsformen und -medien oder persönliche Gespräche von Angesich…"
+        },
+        {
+          "chunk_id": "e994ff33-2ee1-4117-ab2b-d1adc076190f",
+          "book": "Stakeholder-Management und Nachhaltigkeits-Reporting",
+          "locator": "**Korruptionsbekämpfung** · S. 46-50",
+          "excerpt": "#### **Korruptionsbekämpfung** Prinzip 10 | Unternehmen sollen gegen alle Arten der Korruption eintreten, einschließlich Erpressung und B…"
+        },
+        {
+          "chunk_id": "f4d2cf07-c06c-4dec-a9fa-a3def2ece3cd",
+          "book": "Stakeholder-Management und Nachhaltigkeits-Reporting",
+          "locator": "**Nachhaltigkeitsberichterstattung als Steuerungsinstrument** · S. 26-27",
+          "excerpt": "des Austauschs und die anschließende Information über Konsequenzen aus dem Prozess. Auch heikle, aber wichtige Themen wie die Kompensation…"
+        }
+      ]
+    },
+    {
+      "query_id": "f17",
+      "q": "Zieldefinition und Systemabgrenzung einer Ökobilanz",
+      "scope_books": [
+        "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen"
+      ],
+      "scope_document_ids": [
+        "d61cb3eb-69d4-4782-b761-0ad6c4c67e90"
+      ],
+      "best": {
+        "chunk_id": "1e325209-6985-4cf9-8548-663b18735924",
+        "book": "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen",
+        "locator": "**5.1.2.4 Sachbilanz** · S. 150",
+        "excerpt": "#### **5.1.2.3 Zieldefinition** Im ersten Schritt der Zieldefinition werden die wesentlichen Inhalte der Bilanzierung festgelegt und erläu…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "e2ef47b2-86f7-47ff-8c97-0ffed5d05675",
+          "book": "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen",
+          "locator": "**5.1.2.3 Zieldefinition** · S. 148-150",
+          "excerpt": "#### **5.1.2.2 Vorgehensweise** In diesem Abschnitt wird die methodische Vorgehensweise für die Durchführung einer Lebenszyklusanalyse (L…"
+        },
+        {
+          "chunk_id": "f75afe1f-3375-4972-9162-1d97e40f44c8",
+          "book": "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen",
+          "locator": "**5.1.2.2 Vorgehensweise** · S. 148",
+          "excerpt": "#### **5.1.2.1 Grundlagen** Der methodische Grundstein für Produktlebenswegbilanzen wurde Ende der 60er Jahre in den USA mit einer so gena…"
+        },
+        {
+          "chunk_id": "cb03085c-a152-482f-bccf-0edd9cc27cc2",
+          "book": "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen",
+          "locator": "**5.1.2.16 Werkzeuge und Datenbanken zur Durchführung von Ökobilanzen** · S. 161",
+          "excerpt": "### **5.1.2.15 Umgang mit Ungenauigkeiten und Unsicherheiten in Ökobilanzen** In Ökobilanzen werden die negativen Folgen für die Umwelt …"
+        },
+        {
+          "chunk_id": "262e8326-5675-4e2d-b63a-c1833a0b3ac8",
+          "book": "Ganzheitliches Life Cycle Management: Nachhaltigkeit und Lebenszyklusorientierung in Unternehmen",
+          "locator": "*5.1.3 Soziale Lebensweganalyse* · S. 161-162",
+          "excerpt": "zur Bestimmung von unsicheren Daten- oder Wirkungsgrößen als auch zur Einbindung von qualitativen Wirkungsfaktoren (z.B. Geruchsbelastung)…"
+        }
+      ]
+    },
+    {
+      "query_id": "n18",
+      "q": "Nachhaltigkeitsberichterstattung GRI Standards",
+      "scope_books": [
+        "CSR und Reporting"
+      ],
+      "scope_document_ids": [
+        "29649729-03a0-40d6-b4f5-18cc82149aa2"
+      ],
+      "best": {
+        "chunk_id": "847b5307-12a7-4157-85ff-52ff091fad00",
+        "book": "CSR und Reporting",
+        "locator": "**3.1.3 Social-Media-Aktivitäten** · S. 99-101",
+        "excerpt": "für Nachhaltigkeitsberichte eine Prüfung an (IDW PS 821). Wie von Geschäftsberichten ist auch von Nachhaltigkeitsberichten zu erwarten, d…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "eb7358e4-f025-4853-a0c3-3815034d190a",
+          "book": "CSR und Reporting",
+          "locator": "**6 Fazit** · S. 55-56",
+          "excerpt": "#### **4. Basis: Internationale und nationale Kriterien der Nachhaltigkeitsberichterstattung** Die vierte Basis eines Nachhaltigkeitsberich…"
+        },
+        {
+          "chunk_id": "521facc3-83ba-4ef1-a1f6-2cbccace0403",
+          "book": "CSR und Reporting",
+          "locator": "**3.1.2 Richtlinien der Global Reporting Initiative (GRI) als zentraler Standard für CSR-Reporting** · S. 99",
+          "excerpt": "#### **3.1.1 Nachhaltigkeitsberichterstattung** Ein Nachhaltigkeitsbericht enthält im Regelfall Aussagen zu der Nachhaltigkeitsstrategie e…"
+        },
+        {
+          "chunk_id": "1b626a39-2a40-44d3-9bf0-d5851b4d5a9a",
+          "book": "CSR und Reporting",
+          "locator": "**Literatur** · S. 72-73",
+          "excerpt": "#### **4 Zusammenfassung und Schlussfolgerungen** Um eine Antwort auf die Frage zu geben, ob die Erstellung von CSER-Berichten freiwillig o…"
+        },
+        {
+          "chunk_id": "9d294c63-16a3-467b-bae0-635e9745687c",
+          "book": "CSR und Reporting",
+          "locator": "**4 Vor- und Nachteile des freiwilligen Nachhaltigkeitsreportings** · S. 162",
+          "excerpt": "#### **3 Internationale Standards zum CSR-Reporting** Die EU-Mitgliedsstaaten unterliegen, abgesehen von den jeweiligen nationalen Bestimmu…"
+        }
+      ]
+    },
+    {
+      "query_id": "n19",
+      "q": "CSRD European Sustainability Reporting Standard Anforderungen",
+      "scope_books": [
+        "CSR und Reporting",
+        "CSR und Finance"
+      ],
+      "scope_document_ids": [
+        "29649729-03a0-40d6-b4f5-18cc82149aa2",
+        "4c49b3e9-c874-417b-b0a8-d9ba5b913ac7"
+      ],
+      "best": {
+        "chunk_id": "9d294c63-16a3-467b-bae0-635e9745687c",
+        "book": "CSR und Reporting",
+        "locator": "**4 Vor- und Nachteile des freiwilligen Nachhaltigkeitsreportings** · S. 162",
+        "excerpt": "#### **3 Internationale Standards zum CSR-Reporting** Die EU-Mitgliedsstaaten unterliegen, abgesehen von den jeweiligen nationalen Bestimmu…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "402fc3fe-442f-465e-814f-41c9faa914cd",
+          "book": "CSR und Reporting",
+          "locator": "**4 Zusammenfassung und Schlussfolgerungen** · S. 71-72",
+          "excerpt": "#### **3.2.2.4 Verständlichkeit –** *understandability* **(IASB [2010](#page-89-13), QC 30–32)** Die Verständlichkeit (*understandabi…"
+        },
+        {
+          "chunk_id": "847b5307-12a7-4157-85ff-52ff091fad00",
+          "book": "CSR und Reporting",
+          "locator": "**3.1.3 Social-Media-Aktivitäten** · S. 99-101",
+          "excerpt": "für Nachhaltigkeitsberichte eine Prüfung an (IDW PS 821). Wie von Geschäftsberichten ist auch von Nachhaltigkeitsberichten zu erwarten, d…"
+        },
+        {
+          "chunk_id": "521facc3-83ba-4ef1-a1f6-2cbccace0403",
+          "book": "CSR und Reporting",
+          "locator": "**3.1.2 Richtlinien der Global Reporting Initiative (GRI) als zentraler Standard für CSR-Reporting** · S. 99",
+          "excerpt": "#### **3.1.1 Nachhaltigkeitsberichterstattung** Ein Nachhaltigkeitsbericht enthält im Regelfall Aussagen zu der Nachhaltigkeitsstrategie e…"
+        },
+        {
+          "chunk_id": "9320661f-539a-4aec-ae4a-46733f27ea67",
+          "book": "CSR und Finance",
+          "locator": "\u003cspan id=\"page-250-0\"\u003e\u003c/span\u003e**6 Ausblick** · S. 231-232",
+          "excerpt": "große Organisationen auch einer für kleine und mittlere Organisationen (vgl. www.ranking-nachhaltigkeitsberichte.de, 22. März 2013 und Kr…"
+        }
+      ]
+    },
+    {
+      "query_id": "n20",
+      "q": "IDW PS 821 Prüfungsnachweis",
+      "scope_books": [
+        "CSR und Reporting",
+        "Institutionelle Anleger und nachhaltige Kapitalanlagen"
+      ],
+      "scope_document_ids": [
+        "29649729-03a0-40d6-b4f5-18cc82149aa2",
+        "88039f1b-db41-4c7b-949c-dc60662b61a3"
+      ],
+      "best": {
+        "chunk_id": "521facc3-83ba-4ef1-a1f6-2cbccace0403",
+        "book": "CSR und Reporting",
+        "locator": "**3.1.2 Richtlinien der Global Reporting Initiative (GRI) als zentraler Standard für CSR-Reporting** · S. 99",
+        "excerpt": "#### **3.1.1 Nachhaltigkeitsberichterstattung** Ein Nachhaltigkeitsbericht enthält im Regelfall Aussagen zu der Nachhaltigkeitsstrategie e…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "847b5307-12a7-4157-85ff-52ff091fad00",
+          "book": "CSR und Reporting",
+          "locator": "**3.1.3 Social-Media-Aktivitäten** · S. 99-101",
+          "excerpt": "für Nachhaltigkeitsberichte eine Prüfung an (IDW PS 821). Wie von Geschäftsberichten ist auch von Nachhaltigkeitsberichten zu erwarten, d…"
+        },
+        {
+          "chunk_id": "a6c23fd1-2083-4c25-b818-d10103263ee5",
+          "book": "Institutionelle Anleger und nachhaltige Kapitalanlagen",
+          "locator": "**Autorenverzeichnis** · S. V-VIII",
+          "excerpt": "#### **Teil I Einführung** | 1 | Fördern, fordern, fernhalten – die Vielfalt der Umsetzungen nachhaltiger\u003cbr\u003eKapitalanlagen bei institu…"
+        },
+        {
+          "chunk_id": "52137f30-aa9a-41b6-9824-ab0afe394964",
+          "book": "Institutionelle Anleger und nachhaltige Kapitalanlagen",
+          "locator": "**Sachverzeichnis** · S. 371-373",
+          "excerpt": "# **Sachverzeichnis** | A                      | C                        | |----------------…"
+        },
+        {
+          "chunk_id": "ce7d6479-8f1b-4829-b1df-daca03e92e4c",
+          "book": "Institutionelle Anleger und nachhaltige Kapitalanlagen",
+          "locator": "**27.2.3.2 Zweite Analyse nach Einführung von BONUS21** · S. 356-357",
+          "excerpt": "#### **27.2.3.1 Erstanalyse nach Einführung von BONUS21** Die *Erstanalyse* des Spezialmandats nach Einführung von BONUS\u003csup\u003e21\u003c/sup\u003e erf…"
+        }
+      ]
+    },
+    {
+      "query_id": "n21",
+      "q": "false narrative of ESG investing critique",
+      "scope_books": [
+        "ESGBS – The False Narrative of Environmental, Social \u0026 Governance Investing"
+      ],
+      "scope_document_ids": [
+        "0fe55902-2eef-48fa-bb94-8fb44145c91f"
+      ],
+      "best": {
+        "chunk_id": "9357e61f-3ba0-483d-95c4-6cf252a59973",
+        "book": "ESGBS – The False Narrative of Environmental, Social \u0026 Governance Investing",
+        "locator": "",
+        "excerpt": "ESG strategies can exploit it is never adequately explained in the rhetoric of ESG sellers. This omission is unsurprising, as there is overw…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "85da50ea-1306-4040-9959-027e7257705a",
+          "book": "ESGBS – The False Narrative of Environmental, Social \u0026 Governance Investing",
+          "locator": "",
+          "excerpt": "![](cover.jpeg) \u003csvg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" version=\"1.1\" width=\"100%\" height=\"100%\"…"
+        },
+        {
+          "chunk_id": "6b2a2add-2248-43e2-b67c-8b9132783595",
+          "book": "ESGBS – The False Narrative of Environmental, Social \u0026 Governance Investing",
+          "locator": "",
+          "excerpt": "changing societal norms and a growing consciousness around climate change and sustainability, ESG investing has become the latest entrant to…"
+        },
+        {
+          "chunk_id": "95c522ce-d853-4ba5-9032-f231e4aa1d74",
+          "book": "ESGBS – The False Narrative of Environmental, Social \u0026 Governance Investing",
+          "locator": "",
+          "excerpt": "the assertion that market prices do not accurately reflect the true value of securities, thereby leaving room for skilled managers to exploi…"
+        },
+        {
+          "chunk_id": "8403256b-c315-420c-b6ea-80a7ca4542b9",
+          "book": "ESGBS – The False Narrative of Environmental, Social \u0026 Governance Investing",
+          "locator": "",
+          "excerpt": "fruit seller has various fruits available but has no idea which fruit will sell the most tomorrow. Based on the PME, she should assign an eq…"
+        }
+      ]
+    },
+    {
+      "query_id": "a22",
+      "q": "Alexandra Hildebrandt ESG",
+      "scope_books": [
+        "Demystifying Environmental, Social and Governance (ESG)",
+        "Environmental, Social and Governance and Sustainable Development in Healthcare"
+      ],
+      "scope_document_ids": [
+        "bcbedf40-f904-46db-b738-dd7f168a3cb1",
+        "ed413eb8-bafb-4f68-bdac-9cf8cd73ee0f"
+      ],
+      "best": {
+        "chunk_id": "d4e65330-7f5c-497d-97d0-d7f0f27c60e1",
+        "book": "Environmental, Social and Governance and Sustainable Development in Healthcare",
+        "locator": "6.3.2 ESG Assurance · S. 82",
+        "excerpt": "#### 6.3.1 Third-Party ESG Rating Socially responsible investing (SRI) has experienced rapid growth in the last decade, and investors are i…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "e5d2373c-ad3f-4556-9e0c-093dc4ae8751",
+          "book": "Environmental, Social and Governance and Sustainable Development in Healthcare",
+          "locator": "Keywords · S. 79",
+          "excerpt": "#### Abstract It is increasingly important to promote ESG to different stakeholder groups, including healthcare service providers, the heal…"
+        },
+        {
+          "chunk_id": "97a96f61-933a-4e97-a7d0-cca6bf76d35c",
+          "book": "Environmental, Social and Governance and Sustainable Development in Healthcare",
+          "locator": "6.2 Healthcare Services · S. 79-80",
+          "excerpt": "#### 6.1 Introduction The realisation of long-term sustainability requires partnerships made up of different stakeholder groups (United Nat…"
+        },
+        {
+          "chunk_id": "a2424d6c-71ab-4f34-b2f6-d8b44dc679e9",
+          "book": "Environmental, Social and Governance and Sustainable Development in Healthcare",
+          "locator": "2.4.4 Australia · S. 17-18",
+          "excerpt": "would amend Directive 2014/95/EU. The CSRD proposal enlarges the number of target companies, including all large and listed companies except…"
+        },
+        {
+          "chunk_id": "22d34f42-e323-4c0f-9cd7-d083d27b8a1c",
+          "book": "Demystifying Environmental, Social and Governance (ESG)",
+          "locator": "8.2.4 Eco-Economic Decoupling: The Desirable Divorce",
+          "excerpt": "### 8.2.3 Thou Shall not Simply Copy and Paste Thirdly, and related to the preceding point, is that there must be originality in adopting E…"
+        }
+      ]
+    },
+    {
+      "query_id": "a23",
+      "q": "René Schmidpeter CSR Management-Reihe",
+      "scope_books": [
+        "Corporate Social Responsibility – Mythen und Maßnahmen",
+        "CSR und Value Chain Management",
+        "CSR und Innovationsmanagement"
+      ],
+      "scope_document_ids": [
+        "4bbaa98d-16e3-47f9-b638-db59a89fd0d0",
+        "4ad69286-e9c3-42b2-8f8e-94b79514dcf1",
+        "5d8422e3-1d76-48c7-baf9-3c389be15738"
+      ],
+      "best": {
+        "chunk_id": "7106b71a-7c60-4b40-8188-b45ca7d9e4d8",
+        "book": "CSR und Value Chain Management",
+        "locator": "**BASF** · S. 291",
+        "excerpt": "#### \u003cspan id=\"page-301-0\"\u003e\u003c/span\u003e**Herausgeber und Reihenherausgeber** ![](_page_301_Picture_2.jpeg) **Michael D'heur** ist Gründer und …"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "9983b3d0-f17b-4e43-bc42-4b98e4c724e8",
+          "book": "CSR und Innovationsmanagement",
+          "locator": "\u003cspan id=\"page-8-0\"\u003e\u003c/span\u003e**Gesellschaftliche Verantwortung als Innovationsquelle** · S. vii-viii",
+          "excerpt": "# **Inhaltsverzeichnis** | Gesellschaftliche Verantwortung als Innovationsquelle\u003cbr\u003eReinhard Altenburger                  …"
+        },
+        {
+          "chunk_id": "6eba6fca-4f94-467c-96dc-3f7ebcd8d9c7",
+          "book": "CSR und Innovationsmanagement",
+          "locator": "CSR und Innovations-management · S. C1",
+          "excerpt": "Management-Reihe Corporate Social Responsibility René Schmidpeter Hrsg. Reinhard Altenburger Hrsg."
+        },
+        {
+          "chunk_id": "0d5672c9-efc2-4a33-bc41-0dc930a43dd2",
+          "book": "CSR und Value Chain Management",
+          "locator": "CSR und Value Chain Management · S. C1",
+          "excerpt": "**Management-Reihe Corporate Social Responsibility** René Schmidpeter Hrsg. Michael D'heur Hrsg."
+        },
+        {
+          "chunk_id": "53600bb9-b16c-4773-99cf-86dfae64214c",
+          "book": "CSR und Value Chain Management",
+          "locator": "CSR und Value Chain Management · S. I-III",
+          "excerpt": "# **Management-Reihe Corporate Social Responsibility** **Reihenherausgeber** René Schmidpeter Ingolstadt, Deutschland Michael D'heur Hera…"
+        }
+      ]
+    },
+    {
+      "query_id": "a24",
+      "q": "Matthias S. Fifka Corporate Social Responsibility",
+      "scope_books": [
+        "Corporate Social Responsibility – Mythen und Maßnahmen"
+      ],
+      "scope_document_ids": [
+        "4bbaa98d-16e3-47f9-b638-db59a89fd0d0"
+      ],
+      "best": {
+        "chunk_id": "c8136033-89fc-46e6-a085-c858a6dbe843",
+        "book": "Corporate Social Responsibility – Mythen und Maßnahmen",
+        "locator": "**1.1 Ziel des Buches** · S. 1-2",
+        "excerpt": "is to increase its profits*\" würde heute wohl kaum ein Unternehmer noch äußern. Der Druck auf Unternehmen steigt, sich den weltweiten Aus…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "05562fc1-7873-4367-bf87-b351e92e3e71",
+          "book": "Corporate Social Responsibility – Mythen und Maßnahmen",
+          "locator": "**Einführung und Teil I: Unternehmensverantwortung zwischen Freiwilligkeit und Regulierung** · S. 217-219",
+          "excerpt": "#### **Einführung und Teil I: Unternehmensverantwortung zwischen Freiwilligkeit und Regulierung** - 1. **Augenstein, Daniel (2010)** Study…"
+        },
+        {
+          "chunk_id": "209b061e-d069-49f5-b04d-344365288d42",
+          "book": "Corporate Social Responsibility – Mythen und Maßnahmen",
+          "locator": "\u003cspan id=\"page-1-0\"\u003e\u003c/span\u003eCorporate Social Responsibility – Mythen und Maßnahmen · S. C1",
+          "excerpt": "# Corporate Social Responsibility - Mythen und Maßnahmen Unternehmen verantwortungsvoll führen, Regulierungslücken schließen ![](_page…"
+        },
+        {
+          "chunk_id": "edceba47-7c7e-4b57-b51b-824809e8b1ff",
+          "book": "Corporate Social Responsibility – Mythen und Maßnahmen",
+          "locator": "**Teil V: CSR-Maßnahmen von Unternehmen und ihre Wirkungen Beispiele aus den Branchen Bekleidung, Spielzeug, Elektronik, Social Business** · S. 221-222",
+          "excerpt": "Work Discussion Paper Series: No. 3. http://www.betterwork.org - 85. **Scherrer Christoph (Hg) (2011)** China's Labor Question. München - 8…"
+        },
+        {
+          "chunk_id": "d0f310fb-0ca8-4f80-86e5-760bcdcd22fc",
+          "book": "Corporate Social Responsibility – Mythen und Maßnahmen",
+          "locator": "**9.1 Instrumente zur Förderung von Exportkrediten ohne ausreichenden Menschenrechtsschutz** · S. 45-46",
+          "excerpt": "## \u003cspan id=\"page-65-0\"\u003e\u003c/span\u003e**Kohärenter Menschenrechtsschutz? Zur Verankerung der staatlichen Schutzpflicht in der Außenwirtschaftsfö…"
+        }
+      ]
+    },
+    {
+      "query_id": "f25",
+      "q": "CSR aus Sicht der Finanzberichterstattung",
+      "scope_books": [
+        "CSR und Finance"
+      ],
+      "scope_document_ids": [
+        "4c49b3e9-c874-417b-b0a8-d9ba5b913ac7"
+      ],
+      "best": {
+        "chunk_id": "eb4acbc5-c7fc-46fb-a06b-e5d6944cfa9a",
+        "book": "CSR und Finance",
+        "locator": "**1 Einleitung: CSR aus Sicht der Finanzberichterstattung** · S. 167",
+        "excerpt": "#### **Zusammenfassung** Das CSR-Profil eines Unternehmens wird aus einer kontinuierlich steigenden Zahl an Perspektiven betrachtet. So auc…"
+      },
+      "alternatives": [
+        {
+          "chunk_id": "b36ac240-7532-4d1b-980e-b5b956dec7b7",
+          "book": "CSR und Finance",
+          "locator": "**Berechnung externer Umweltkosten: Die Ökologische Gewinn- und Verlustrechnung von PUMA** · S. 177",
+          "excerpt": "im Bereich der wachsenden Nachhaltigkeitsorientierung besteht künftig darin, das eigene Unternehmen glaubwürdig zu positionieren und abzug…"
+        },
+        {
+          "chunk_id": "7e5eb740-c984-4b1c-bc7d-1a115a9acc45",
+          "book": "CSR und Finance",
+          "locator": "**2.1 Bilanzpolitische Motive und Maßnahmen** · S. 169",
+          "excerpt": "unter anderem auf die Ergebnisse des Good Company Rankings der Kirchhoff Consult AG zurückgreift (Kap. 3). Das Ziel dieses Aufsatzes ist es…"
+        },
+        {
+          "chunk_id": "02eff1b6-9dfd-4ee8-869f-cd72de57e0d9",
+          "book": "CSR und Finance",
+          "locator": "**3.2 Studienergebnisse** · S. 174-175",
+          "excerpt": "#### **3.1 Studienaufbau und Messung** Den Folgenden Ausführungen liegt eine Studie der HHL Leipzig Graduate School of Management mit dem …"
+        },
+        {
+          "chunk_id": "32f066f7-181f-425d-a0bf-6a84ed0ff6f2",
+          "book": "CSR und Finance",
+          "locator": "\u003cspan id=\"page-197-0\"\u003e\u003c/span\u003e**Literatur** · S. 176",
+          "excerpt": "#### **4 Implikationen für das Management** Die Bedeutung nachhaltiger Unternehmensführung und damit verbundener Corporate Social Respons…"
+        }
+      ]
+    }
+  ]
+}
