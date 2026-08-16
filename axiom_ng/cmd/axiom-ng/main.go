@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -79,19 +80,19 @@ func main() {
 		// local always-on runner (AXIOM_QUERY_RUNNER_URL overrides). Query
 		// failure degrades search per R3 (BM25-only/unreranked), never fails
 		// over to another runner.
-		searchPClient, sperr := processor.New(processor.Options{
+		queryClient, qerr := processor.New(processor.Options{
 			BaseURL: cfg.QueryRunnerURL,
 		})
-		if sperr != nil {
-			logger.Fatalf("processor client (search): %v", sperr)
+		if qerr != nil {
+			logger.Fatalf("processor client (search): %v", qerr)
 		}
-		srv.SetSearchService(search.New(cfg.OpenSearchURL, cfg.OpenSearchUsername, cfg.OpenSearchPassword, searchPClient, rep, logger))
+		srv.SetSearchService(search.New(cfg.OpenSearchURL, cfg.OpenSearchUsername, cfg.OpenSearchPassword, queryClient, rep, logger))
 		// Role probe (R4 Ziel 1/3): capability check of the query runner at
 		// start — verifies query_embedding/reranking and logs the role map.
 		// Best-effort: an unreachable query runner keeps search degraded-but-
 		// up (R3 fallback), it must not kill the sidecar.
-		go probeQueryRunnerRole(sigCtx, searchPClient, cfg.QueryRunnerURL, logger)
-		srv.RegisterCheck("query-runner", runnerCheck(searchPClient))
+		go probeQueryRunnerRole(sigCtx, queryClient, cfg.QueryRunnerURL, logger)
+		srv.RegisterCheck("query-runner", runnerCheck(queryClient))
 
 		// Ingest chain (R4 #134): primary = AXIOM_PROCESSOR_URL (best
 		// available), fallback = AXIOM_INGEST_FALLBACK_URL (default local).
@@ -105,7 +106,10 @@ func main() {
 			if err != nil {
 				return nil, err
 			}
-			if cfg.IngestFallbackURL == "" || cfg.IngestFallbackURL == cfg.ProcessorURL {
+			// Normalize trailing slashes so "http://host:8012/" does not build
+			// a failover chain onto the same URL as "http://host:8012".
+			sameURL := strings.TrimRight(cfg.IngestFallbackURL, "/") == strings.TrimRight(cfg.ProcessorURL, "/")
+			if cfg.IngestFallbackURL == "" || sameURL {
 				return processor.NewFailover(primary, nil, logger), nil
 			}
 			fb, err := processor.New(processor.Options{

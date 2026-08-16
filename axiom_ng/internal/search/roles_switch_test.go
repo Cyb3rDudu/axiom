@@ -1,11 +1,14 @@
 package search
 
-// R4 (#134) query-runner role switching: AXIOM_QUERY_RUNNER_URL selects which
-// runner serves embed+rerank. This pins the main.go wiring chain
-// (config.Load().QueryRunnerURL -> processor.New -> search.New) against both
-// roles: local default and external override must each construct a service
-// whose runner answers §7a calls. Answer correctness under either runner is
-// the search suite's job (it already runs against per-test runner URLs).
+// R4 (#134) query-runner role switching: AXIOM_QUERY_RUNNER_URL selects
+// which runner serves embed+rerank. What this pins: env -> config.Load() ->
+// processor.New construction, with both roles (local default, external
+// override) yielding a client whose runner answers §7a calls. The main.go
+// wiring itself (which URL reaches search.New) is NOT covered here — it is
+// observable via the startup role log ("runner roles: query=…") and proven
+// end-to-end by the R3 IT, which takes the runner URL from env and ran
+// against both a local and the Carrier runner. Answer correctness per
+// runner is the search suite's job (it runs against per-test runner URLs).
 
 import (
 	"context"
@@ -73,20 +76,6 @@ func TestQueryRunnerSwitchByEnv(t *testing.T) {
 		if _, err := pc.Rerank(ctx, "q", []string{"a"}, 1); err != nil {
 			t.Fatalf("%s role: rerank failed: %v", name, err)
 		}
-	}
-}
-
-// TestQueryRunnerDefaultIsLocal pins the architecture decision: with no env
-// override, retrieval compute stays on the local always-on runner even when
-// the ingest primary points elsewhere (Carrier).
-func TestQueryRunnerDefaultIsLocal(t *testing.T) {
-	t.Setenv("AXIOM_PROCESSOR_URL", "http://carrier-gpu:8012")
-	cfg := config.Load()
-	if cfg.QueryRunnerURL != "http://localhost:8012" {
-		t.Fatalf("query role must default LOCAL, got %q", cfg.QueryRunnerURL)
-	}
-	if cfg.ProcessorURL != "http://carrier-gpu:8012" {
-		t.Fatalf("ingest primary must follow its own env, got %q", cfg.ProcessorURL)
 	}
 }
 

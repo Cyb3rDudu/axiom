@@ -14,6 +14,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 )
@@ -25,11 +26,21 @@ func FailoverClass(err error) bool {
 	if err == nil {
 		return false
 	}
-	if se, ok := err.(*StatusError); ok { //nolint:errorlint // concrete transport type
+	// Caller cancellation is not a runner problem — a fallback attempt
+	// would be doomed by the same context.
+	if errors.Is(err, ErrCancelled) {
+		return false
+	}
+	var se *StatusError
+	if errors.As(err, &se) {
 		return se.Code >= 500
 	}
 	// Everything else from do() is transport: connection refused, timeout,
 	// canceled, EOF, decode of a broken response.
+	// Known ceiling: a 2xx whose body fails SubmitProcess's validation is a
+	// plain error too and lands here — an at-least-once double submit (job
+	// dedup is per-runner). Classifying validation errors explicitly is the
+	// upgrade path.
 	return true
 }
 
@@ -43,8 +54,14 @@ type FailoverClient struct {
 	fallback *Client
 	log      *log.Logger
 
-	mu     sync.Mutex
-	routes map[string]*Client // jobID -> accepting client
+	mu sync.Mutex
+	// routes maps jobID -> accepting client for fallback-owned jobs. Only
+	// fallback accepts create an entry (primary is the routed() default).
+	// Ceiling: jobs that end without a successful ack/cancel (onFailed,
+	// RESULT_INVALID/RESULT_FETCH_FAILED) keep their entry for the process
+	// lifetime — bounded by one entry per fallback-accepted job. Cleared on
+	// successful ack/cancel AND on primary re-accept of the same jobID.
+	routes map[string]*Client
 	// primaryDown remembers the last failover state so the transition is
 	// logged once per outage, not once per request.
 	primaryDown bool
@@ -66,7 +83,8 @@ func (f *FailoverClient) routed(jobID string) *Client {
 	return f.primary
 }
 
-// done forgets a finished job's routing.
+// done forgets a finished job's routing (callers keep it on error — see
+// Ack).
 func (f *FailoverClient) done(jobID string) {
 	f.mu.Lock()
 	delete(f.routes, jobID)
@@ -95,6 +113,10 @@ func (f *FailoverClient) SubmitProcess(ctx context.Context, req *ProcessRequest)
 	acc, err := f.primary.SubmitProcess(ctx, req)
 	if err == nil {
 		f.markState(false)
+		// The dispatcher may resubmit a job whose earlier attempt the
+		// fallback accepted (e.g. lease lost during the outage, recovered
+		// after primary returned). Primary re-accept overwrites ownership.
+		f.done(req.JobID)
 		return acc, nil
 	}
 	if f.fallback == nil || !FailoverClass(err) {
@@ -157,9 +179,14 @@ func (f *FailoverClient) Cancel(ctx context.Context, jobID string) error {
 	return err
 }
 
-// Ack targets the owning runner and forgets the routing (job terminal).
+// Ack targets the owning runner; the routing is forgotten only on success.
+// The dispatcher retries failed acks (retryAcks/MarkAckFailed) — those
+// retries must hit the OWNING runner again, not the primary default. Ack
+// is idempotent on the runner side, so re-acking is safe.
 func (f *FailoverClient) Ack(ctx context.Context, jobID string, ack Ack) error {
 	err := f.routed(jobID).Ack(ctx, jobID, ack)
-	f.done(jobID)
+	if err == nil {
+		f.done(jobID)
+	}
 	return err
 }

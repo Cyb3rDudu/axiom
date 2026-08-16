@@ -358,29 +358,31 @@ haben; die Rollen verteilen sich allein über axiom-ng-Konfiguration:
 Standardbild (ein Mac + ein Carrier):
 
 ```
-Mac (immer an)          Carrier (best-available)
-┌─────────────────┐     ┌──────────────────┐
-│ axiom-ng        │     │ runner (GPU)     │
-│  ├ /api/search ─┼──►  │  Ingest primär   │◄── AXIOM_PROCESSOR_URL
-│  │  Query ──────┼──►  │                  │
-│  └ Dispatcher ──┼─┐   └──────────────────┘
-└─────────────────┘ │        │ Ausfall (transport/5xx)
-       ▲            │ failover
-       └────────────┴──► Mac-Runner:8012 (Query + Ingest-Fallback)
+Mac (immer an)                     Carrier (best-available)
+┌────────────────────────┐         ┌──────────────────┐
+│ axiom-ng               │         │ runner (GPU)     │
+│  ├ /api/search (Query)─┼─┐   Ingest primär            │
+│  └ Dispatcher (Ingest)─┼─┼──────►│  Ingest primär   │
+└────────────────────────┘ │       └────────┬─────────┘
+                           │   AXIOM_PROCESSOR_URL
+                           ▼                │ Ausfall (transport/5xx)
+                  Mac-Runner:8012 ◄─────────┘ failover
+                  (Query via AXIOM_QUERY_RUNNER_URL
+                   + Ingest-Fallback)
 ```
 
 Verhalten:
 
 - **Failover ist Submit-zeitlich**: ein angenommenes Job bleibt beim
   annehmenden Runner (Poll/Result/Artifact/Ack routen per Job-Map mit).
-  Verlorene Leases eines toen Primärunners werden über die
+  Verlorene Leases eines toten Primärunners werden über die
   Lease-Recovery neu geclaimt und landen dann im Fallback — keine
   Mid-Job-Migration. Übergänge werden je Flanke einmal geloggt
   (`ingest failover: primary runner … unavailable/back`).
 - **Query hat bewusst KEIN Failover**: fällt der Query-Runner aus, degradiert
   `/api/search` wie in R3 definiert (BM25-only/unrerankt,
   `reranked:false`) statt stumm einen anderen Runner zu nutzen —
-  Latenz- und Modell-Konsistenz geht vor Verfügbarkeit второго Arms.
+  Latenz- und Modell-Konsistenz geht vor Verfügbarkeit des zweiten Arms.
 - **Rollenprüfung beim Start**: axiom-ng loggt die Rollenkette
   (`runner roles: query=… ingest=… (fallback=…)`) und prüft die
   Query-Fähigkeiten (`query_embedding`/`reranking`) via

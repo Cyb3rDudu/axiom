@@ -115,7 +115,7 @@ func Load() Config {
 		OpenSearchPassword:      env("AXIOM_OPENSEARCH_PASSWORD", ""),
 		ProcessorSourceSecret:   env("AXIOM_PROCESSOR_SOURCE_SECRET", ""),
 		ProcessorSourceBaseURL:  env("AXIOM_PROCESSOR_SOURCE_BASE_URL", ""),
-		ProcessorURL:            env("AXIOM_PROCESSOR_URL", "http://localhost:8012"),
+		ProcessorURL:            env("AXIOM_PROCESSOR_URL", defaultLocalRunner),
 		QueryRunnerURL:          env("AXIOM_QUERY_RUNNER_URL", defaultLocalRunner),
 		IngestFallbackURL:       env("AXIOM_INGEST_FALLBACK_URL", defaultLocalRunner),
 		ProcessorRequestTimeout: envDur("AXIOM_PROCESSOR_TIMEOUT", 300*time.Second),

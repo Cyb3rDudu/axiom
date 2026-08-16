@@ -83,8 +83,8 @@ func TestIT_LiveFailoverRealRunner(t *testing.T) {
 	deadURL := fmt.Sprintf("http://127.0.0.1:%d", dead)
 
 	var logBuf bytes.Buffer
-	primary, _ := New(Options{BaseURL: deadURL})
-	fb, _ := New(Options{BaseURL: fallbackURL})
+	primary := newClientT(t, deadURL)
+	fb := newClientT(t, fallbackURL)
 	fc := NewFailover(primary, fb, log.New(&logBuf, "", 0))
 
 	req := &ProcessRequest{
