@@ -391,3 +391,54 @@ Verhalten:
   `ingest-runner` als Checks (Ingest grün, wenn Primär ODER Fallback lebt).
 - **4xx triggert KEIN Failover** — ein vom Runner abgelehnter Request wäre
   auch beim Fallback falsch; nur Transportfehler und 5xx.
+## Source-URL-Transport: Mac → Carrier-Runner (#157/#153 Runbook)
+
+Ohne Konfiguration schickt der Dispatcher lokale Pfade — ein Runner auf dem
+Carrier antwortet dann `422 source not found: /Users/dudu/Zotero/storage/…`.
+Source-URL-Transport (Contract §3 remote delivery) braucht BEIDE Seiten:
+
+**Mac (axiom-ng):**
+
+```bash
+# Secret einmalig erzeugen, NICHT ins Repo (z.B. ~/.axiom-ng/source-secret):
+mkdir -p ~/.axiom-ng && openssl rand -hex 24 > ~/.axiom-ng/source-secret && chmod 600 ~/.axiom-ng/source-secret
+
+export AXIOM_PROCESSOR_SOURCE_SECRET="$(cat ~/.axiom-ng/source-secret)"
+# Für axiom-ng unter der LAN-IP erreichbar (Carrier zieht die Quellen von hier):
+export AXIOM_BIND_ADDR=0.0.0.0
+# Die dem Runner mitgeteilte Basis (Mac-LAN-IP, NICHT localhost/Tailscale —
+# Bulk-Downloads brauchen LAN-Durchsatz):
+export AXIOM_PROCESSOR_SOURCE_BASE_URL="http://192.168.1.141:8011"
+```
+
+**Carrier-Runner:** `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=/nonexistent` (sie
+ziehen per source_url, keine Pfade) — Secret wird NICHT auf dem Runner
+benötigt (HMAC steckt in der signierten URL).
+
+**Zwei-Dispatcher-Muster (Parallel-Betrieb, ein Runner pro GPU):**
+
+```bash
+# Instanz A: API 8011 (0.0.0.0, source-endpoint) + Dispatcher -> 3090 #0
+AXIOM_DISPATCHER_ENABLED=1 AXIOM_DISPATCHER_WORKER_ID=smoke-a \
+  AXIOM_PROCESSOR_URL=http://192.168.1.2:19542 axiom-ng …
+# Instanz B: Dispatcher-only -> 3090 #1
+AXIOM_BIND_ADDR=127.0.0.1 AXIOM_API_PORT=8013 \
+  AXIOM_DISPATCHER_ENABLED=1 AXIOM_DISPATCHER_WORKER_ID=smoke-b \
+  AXIOM_PROCESSOR_URL=http://192.168.1.2:19543 axiom-ng …
+```
+
+**GPU-Pinning (Pflicht seit #157):** jeder Runner-Container braucht
+`CUDA_VISIBLE_DEVICES=<n>` — ohne Pin verteilt sich der Prozessbaum (Parent +
+torch-multiprocessing-Kinder) über ALLE GPUs inklusive der Laptop-A3000.
+Dazu `DEVICE_MARKER=cuda` (Marker auf GPU, nicht der CPU-Last-Überlassung)
+und `--shm-size=8g`. Beweis-Check: `nvidia-smi --query-compute-apps=…` —
+Prozess auf GPU-UUID n gehört zu `CUDA_VISIBLE_DEVICES=n`, A3000 bleibt leer.
+
+**Lastprofil (beobachtet, #157):** Marker-Parsing bleibt auch auf GPU ein
+CPU-starkes Stadium (Load ~11 auf dem Carrier während zweier Bücher) —
+erwartet, kein Bug; Retrieval-unter-Last bleibt stabil (p95 2,14 s gemessen).
+
+**SQL-Fußfalle Hold/Restore (Ops-Wissen):** `x NOT LIKE ANY(arr)` heißt
+„matcht MINDESTENS EIN Element nicht" — fast immer wahr, löscht zu viel.
+Korrekt: `NOT (x LIKE ANY(arr))`. Restore der gehaltenen Jobs siehe
+#153-Kommentar (Ausführung nur nach dudus Go).
