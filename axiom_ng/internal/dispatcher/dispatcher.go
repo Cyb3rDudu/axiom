@@ -70,11 +70,24 @@ type Config struct {
 	ProcessorSourceSecret string
 }
 
+// processorClient is the runner surface the dispatcher drives. The concrete
+// *processor.Client satisfies it; processor.FailoverClient (R4 #134) wraps
+// primary + local fallback behind the same shape.
+type processorClient interface {
+	Capabilities(ctx context.Context) (*processor.Capabilities, error)
+	SubmitProcess(ctx context.Context, req *processor.ProcessRequest) (*processor.ProcessAccepted, error)
+	JobStatus(ctx context.Context, jobID string) (*processor.JobStatus, error)
+	JobResult(ctx context.Context, jobID string) ([]byte, error)
+	Artifact(ctx context.Context, jobID, ref string) ([]byte, error)
+	Cancel(ctx context.Context, jobID string) error
+	Ack(ctx context.Context, jobID string, ack processor.Ack) error
+}
+
 // Dispatcher owns the worker pool and the lease/processor plumbing.
 type Dispatcher struct {
 	cfg    Config
 	rep    *repo.Repo
-	client *processor.Client
+	client processorClient
 	logger *log.Logger
 	// persist is the durability boundary for completed results; nil means jobs
 	// that reach completion FAIL rather than being completed+acked without a
@@ -88,13 +101,13 @@ type Dispatcher struct {
 // New builds a Dispatcher. It starts no goroutines; call Run to process. It uses
 // an error persister by default (no durable storage until Gate 4), so no job can
 // be completed/acked without a real persistence boundary.
-func New(rep *repo.Repo, client *processor.Client, cfg Config, logger *log.Logger) *Dispatcher {
+func New(rep *repo.Repo, client processorClient, cfg Config, logger *log.Logger) *Dispatcher {
 	return NewWithPersister(rep, client, &errPersister{msg: "no result persister configured (Gate 2: persistence arrives in Gate 4)"}, cfg, logger)
 }
 
 // NewWithPersister builds a Dispatcher with an explicit result-persistence
 // boundary (tests supply a recording fake; Gate 4 will supply the real one).
-func NewWithPersister(rep *repo.Repo, client *processor.Client, persist ResultPersister, cfg Config, logger *log.Logger) *Dispatcher {
+func NewWithPersister(rep *repo.Repo, client processorClient, persist ResultPersister, cfg Config, logger *log.Logger) *Dispatcher {
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 1
 	}

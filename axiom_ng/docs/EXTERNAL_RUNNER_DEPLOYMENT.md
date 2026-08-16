@@ -338,3 +338,49 @@ the runner unambiguously.
 
 *POC reference: Carrier (`dudu@192.168.1.2`), rootless Podman 5.8.4, CDI
 device injection, verified 2026-08-14. Container `runner-poc`, port 8012.*
+
+## Runner-Rollen-Topologie (R4, #134)
+
+Drei Rollen, eine Prozessform — jeder `axiom_ng_runner` kann jede Rolle
+haben; die Rollen verteilen sich allein über axiom-ng-Konfiguration:
+
+| Rolle | Env in axiom-ng | Default | Betriebbild |
+|---|---|---|---|
+| Query-Runner | `AXIOM_QUERY_RUNNER_URL` | `http://localhost:8012` (lokal, always-on) | Der Mac-Runner — Retrieval überlebt jeden Carrier-Ausfall |
+| Ingest-Runner (primär) | `AXIOM_PROCESSOR_URL` (bestehend) | `http://localhost:8012` | Carrier-GPU-Runner (best-available) |
+| Ingest-Fallback | `AXIOM_INGEST_FALLBACK_URL` | `http://localhost:8012` | Der Mac-Runner — Notfall-Chunking (#128: komplett, ~11× langsamer) |
+
+Standardbild (ein Mac + ein Carrier):
+
+```
+Mac (immer an)          Carrier (best-available)
+┌─────────────────┐     ┌──────────────────┐
+│ axiom-ng        │     │ runner (GPU)     │
+│  ├ /api/search ─┼──►  │  Ingest primär   │◄── AXIOM_PROCESSOR_URL
+│  │  Query ──────┼──►  │                  │
+│  └ Dispatcher ──┼─┐   └──────────────────┘
+└─────────────────┘ │        │ Ausfall (transport/5xx)
+       ▲            │ failover
+       └────────────┴──► Mac-Runner:8012 (Query + Ingest-Fallback)
+```
+
+Verhalten:
+
+- **Failover ist Submit-zeitlich**: ein angenommenes Job bleibt beim
+  annehmenden Runner (Poll/Result/Artifact/Ack routen per Job-Map mit).
+  Verlorene Leases eines toen Primärunners werden über die
+  Lease-Recovery neu geclaimt und landen dann im Fallback — keine
+  Mid-Job-Migration. Übergänge werden je Flanke einmal geloggt
+  (`ingest failover: primary runner … unavailable/back`).
+- **Query hat bewusst KEIN Failover**: fällt der Query-Runner aus, degradiert
+  `/api/search` wie in R3 definiert (BM25-only/unrerankt,
+  `reranked:false`) statt stumm einen anderen Runner zu nutzen —
+  Latenz- und Modell-Konsistenz geht vor Verfügbarkeit второго Arms.
+- **Rollenprüfung beim Start**: axiom-ng loggt die Rollenkette
+  (`runner roles: query=… ingest=… (fallback=…)`) und prüft die
+  Query-Fähigkeiten (`query_embedding`/`reranking`) via
+  `/v1/capabilities`; ein §7a-fähiger Carrier-Runner ist auch als
+  Query-Runner wählbar. `/api/health` meldet `query-runner` und
+  `ingest-runner` als Checks (Ingest grün, wenn Primär ODER Fallback lebt).
+- **4xx triggert KEIN Failover** — ein vom Runner abgelehnter Request wäre
+  auch beim Fallback falsch; nur Transportfehler und 5xx.
