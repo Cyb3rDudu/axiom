@@ -70,4 +70,4 @@ The processing pipeline's durable shape is three coordinated concerns:
   snapshot/chunk identifiers that resolve back to the durable store.
 
 Next: [Benchmarks & Analyses](benchmarks.md) · [FAQ](faq.md) ·
-[Developer Guide → data-model summary](../developer-guide/architecture.md)
+[Developer Guide → Architecture Overview](../developer-guide/architecture.md)

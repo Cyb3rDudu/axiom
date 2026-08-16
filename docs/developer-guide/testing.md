@@ -27,23 +27,26 @@ The Go integration tests that exercise the dispatcher, leases, persistence, and
 outbox against a **real** database are gated behind the `AXIOM_TEST_DATABASE_URL`
 environment variable:
 
-- If it is **set**, the test connects to that Postgres and **clones a
-  throwaway test database** (a `CREATE DATABASE <test-db>` derived from the
-  DSN), so shared state can never be mutated.
-- If it is **unset**, those integration tests **skip** (they do not fail, so
-  the unit-only path stays green for someone without a database).
+- If it is **set**, the dispatcher/lease/persistence suites connect to that
+  Postgres and **clone a throwaway test database** (a `CREATE DATABASE <test-db>`
+  derived from the DSN), so their runs cannot disturb the DSN database.
+- If it is **unset**, those integration tests **skip** (they do not fail, so the
+  unit-only path stays green for someone without a database).
 
 ```text
 # Run Go unit tests without a database
 go test ./...
 
-# Run the full Go suite including DB integration (isolated test DB)
-AXIOM_TEST_DATABASE_URL=postgresql://axiom_user@127.0.0.1:5444/axiom_ng_test?sslmode=disable go test ./...
+# Run the full Go suite including DB integration (point at a THROWAWAY db —
+# the db/sync/search integration tests write to the DSN database directly)
+AXIOM_TEST_DATABASE_URL=postgresql://axiom_user@127.0.0.1:5444/axiom_ng_test_scratch?sslmode=disable go test ./...
 ```
 
-The isolation contract: tests only ever touch a database **they** cloned from
-`AXIOM_TEST_DATABASE_URL`; they never run against the application database or
-shared state.
+The isolation split, honestly: the **dispatcher/lease/persistence/failover**
+suites clone a throwaway test database from `AXIOM_TEST_DATABASE_URL` and never
+touch the DSN database itself; the remaining integration tests (db, Zotero
+sync, search) open the DSN database directly and **write** to it. So point the
+variable at a scratch database — never a production or shared-development DSN.
 
 ## Mutation-testing culture (the "probe")
 

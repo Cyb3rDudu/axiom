@@ -78,18 +78,17 @@ contract-incompatible.
 ## Runner roles (R4, #134)
 
 Since the R4 role model, compute has two roles, both defaulting to a local
-always-on runner (`localhost:8012`):
+always-on runner (`localhost:8012`): a **query role** (embed/rerank for the
+search API) and an **ingest role** (`POST /v1/process`) with a primary +
+fallback failover chain. The full role model — the env vars, the failover
+chain, the ~11× local-runner trade-off — lives in
+[axiom_ng_runner → Roles](axiom-runner.md#roles-r4-134).
 
-- **Query role** — serves `/v1/embed` and `/v1/rerank` for the search API.
-  Defaults to the local runner so retrieval survives a remote-runner outage.
-  Override with `AXIOM_QUERY_RUNNER_URL`.
-- **Ingest role** — serves `POST /v1/process` for document processing. A primary
-  (`AXIOM_PROCESSOR_URL`) and a fallback (`AXIOM_INGEST_FALLBACK_URL`) form a
-  failover chain; the fallback defaults to the local runner (complete, slower).
-
-At startup the dispatcher performs a capability probe of its processors and
-fails fast if a required capability is missing; the role wiring (which URL plays
-query vs. ingest) is logged so a misconfigured deployment is visible.
+At startup the dispatcher probes capabilities and logs the resolved role wiring
+(which URL plays query vs. ingest) so a misconfigured deployment is visible. A
+missing **required ingest** capability fails the negotiation fast; a missing
+**query** capability only degrades search with a warning — by design, so a
+partial runner outage never takes retrieval down hard.
 
 ## Invariants (from the resolved work order)
 

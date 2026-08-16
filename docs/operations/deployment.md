@@ -272,6 +272,10 @@ the runner unambiguously.
 
 ## Runner env variables (reference)
 
+> The authoritative, complete env-var reference is the
+> [Configuration table](../developer-guide/configuration.md); the rows below
+> are the runner subset for deployment quick lookup.
+
 | Env var | Default | Meaning |
 | --- | --- | --- |
 | `AXIOM_PROCESSOR_BIND_ADDR` | `127.0.0.1` | `0.0.0.0` for remote access |

@@ -33,16 +33,16 @@ organized by *where the variable is consumed* (`set by`).
 | `AXIOM_OPENSEARCH_USERNAME` | — | Optional basic-auth user for the outbox drainer; empty = anonymous. |
 | `AXIOM_OPENSEARCH_PASSWORD` | — | Optional basic-auth password. |
 | `AXIOM_PROCESSOR_SOURCE_SECRET` | — | Shared HMAC secret for remote source delivery (dispatcher signs, `/api/processor/source` verifies). Empty disables the feature on both sides. |
-| `AXIOM_PROCESSOR_SOURCE_BASE_URL` | `http://127.0.0.1:<APIPort>` | Externally reachable base URL remote processors use to pull sources. Defaults to loopback (co-located runners). |
+| `AXIOM_PROCESSOR_SOURCE_BASE_URL` | `http://127.0.0.1:<APIPort>` | Externally reachable base URL remote processors use to pull sources. `<APIPort>` resolves to the configured `AXIOM_API_PORT` (8011 by default); the URL defaults to loopback (co-located runners). |
 | `AXIOM_PROCESSOR_URL` | `http://localhost:8012` | Primary ingest-role processor URL. |
 | `AXIOM_INGEST_FALLBACK_URL` | `http://localhost:8012` | Emergency ingest runner when `AXIOM_PROCESSOR_URL` is unreachable (failover chain). |
 | `AXIOM_QUERY_RUNNER_URL` | `http://localhost:8012` | Query-role runner for `/v1/embed` + `/v1/rerank` (R4). Defaults to the local runner so retrieval survives a remote outage. |
 | `AXIOM_PROCESSOR_TIMEOUT` | `300s` | Bounds the **result** fetch and (as the submit floor) the synchronous remote source download inside `POST /v1/process`. Remote deployments raise it to cover the runner's download budget. |
 | `AXIOM_PROCESSOR_RUNNER_NAME` | processor-URL host | Human identity of the processor this dispatcher drives; lands in the phase log line and `ingest_jobs.runner_name` at claim time. |
 | `AXIOM_DISPATCHER_ENABLED` | off | Gates the claim/process dispatcher loop; it never runs unless explicitly `1|true|yes`. |
-| `AXIOM_DISPATCHER_WORKER_ID` | process name (config.go) | This process's stable worker identity for leases. |
+| `AXIOM_DISPATCHER_WORKER_ID` | `axiom-ng` | This process's stable worker identity for leases (literal code default). Left at default, two dispatchers share one identity — set it per process when running multiple. |
 | `AXIOM_DISPATCHER_CONCURRENCY` | `1` | Parallel claim/process slots. |
-| `AXIOM_DISPATCHER_PROFILE` | `full-rag-v1` (all feature booleans true) | Processing profile JSON frozen at claim time. The profile *name* alone does not toggle features — the explicit booleans do. |
+| `AXIOM_DISPATCHER_PROFILE` | `full-rag-v1` | Processing profile JSON frozen at claim time; the `full-rag-v1` default materializes **every** feature boolean as `true` (entities, relationships, dense + sparse embeddings, images). The profile *name* alone does not toggle features — the explicit booleans do. |
 | `AXIOM_DISPATCHER_LEASE` | `5m` | Per-claim lease length. |
 | `AXIOM_ARTIFACT_ROOT` | — | Durable derived-artifact root. |
 | `AXIOM_API_PORT` | `8011` | Port the `axiom_ng` REST API listens on. |
@@ -84,13 +84,22 @@ Confusing them is the most common config error:
 > `AXIOM_PROCESSOR_URL` / `AXIOM_QUERY_RUNNER_URL` / `AXIOM_INGEST_FALLBACK_URL`
 > all default to `http://localhost:8012` (the local always-on runner). The
 > *role* they fill is what differs, not the address.
+>
+> **Why 8012 and not 8537?** The Go-side URLs point at the conventional
+> **always-on** local sidecar port (`8012`), while the runner's own
+> `AXIOM_PROCESSOR_PORT` defaults to `8537` — the dev/direct-start port. A
+> dispatcher-driven deployment keeps a runner pinned on 8012; a
+> manually-started runner listens on 8537 unless told otherwise.
 
 ## Machine-maintainability note
 
 This table is deliberately shaped to be **recomputed from code**: a tool (the
-planned doc-agent, D7) can diff `config.go`'s `Load()`/`config.py`'s
-`load_settings()` against this table and flag (a) a code variable missing here,
-or (b) a table row without a code backing. It is the pilot candidate for
+planned doc-agent, D7) can diff `config.go`'s `Load()` and the runner package's
+`load_settings()` — across the files that read them, e.g.
+`config.py` **and** `axiom_ng_runner/__init__.py` (where
+`AXIOM_PROCESSOR_COMPUTE` is re-read) — against this table and flag (a) a code
+variable missing here, or (b) a table row without a code backing. The grep
+targets the package(s), not a single file. It is the pilot candidate for
 automating the config-reference documentation.
 
 Next: [Testing](testing.md) · [Architecture Overview](architecture.md)

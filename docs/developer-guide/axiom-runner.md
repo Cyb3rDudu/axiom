@@ -38,11 +38,13 @@ The runner plays two roles; the dispatcher wires which URL is which:
   remote-runner outage. Override with `AXIOM_QUERY_RUNNER_URL`.
 - **Ingest role** (`/v1/process`) — document processing, with a primary
   (`AXIOM_PROCESSOR_URL`) and a fallback (`AXIOM_INGEST_FALLBACK_URL`) forming a
-  failover chain. The fallback defaults to a local runner (complete, ~10×
-  slower).
+  failover chain. The fallback defaults to a local runner (complete, ~11×
+  slower — the #128 proof figure).
 
-The dispatcher probes capabilities at startup and logs the resolved role wiring;
-a missing required capability fails the deployment fast. Both query endpoints
+The dispatcher probes capabilities at startup and logs the resolved role wiring.
+A missing **required ingest** capability fails the negotiation fast; a missing
+**query** capability only degrades search with a warning (by design — retrieval
+survives a partial runner outage). Both query endpoints
 use a process-wide warm model singleton (lazy-load on first request, keep warm
 afterward) so the low-latency budget is met.
 
