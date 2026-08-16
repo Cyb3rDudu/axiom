@@ -1,18 +1,19 @@
 # axiom_ng_runner (Python)
 
-The **Python processor runner** is a loopback HTTP document processor that
-implements `PROCESSOR_CONTRACT` (transport contract v1). It owns **only
-computation and temporary job output**; all durable application state lives in
-`axiom_ng`.
+The **Python processor runner** is a loopback HTTP service that implements
+`PROCESSOR_CONTRACT` (transport contract v1) for document processing **and**
+serves the query compute (`embed`, `rerank`) for search. In both roles it owns
+**only computation and temporary job output**; all durable application state
+lives in `axiom_ng`.
 
 > **Canonical sources** for this chapter are the files in the package:
-> `README.md`, `config.py`, and `PROCESSOR_CONTRACT` (contract v1). This page is
-> their universal summary for the site.
+> `README.md`, `config.py`, `app.py`, and `PROCESSOR_CONTRACT` (contract v1).
+> This page is their universal summary for the site.
 
-## What it does
+## What it is
 
 ```text
-POST /v1/process  (202, async)
+POST /v1/process           (202, async)  document processing (ingest role)
 GET  /v1/health
 GET  /v1/capabilities
 GET  /v1/jobs/{job_id}
@@ -20,11 +21,58 @@ GET  /v1/jobs/{job_id}/result
 GET  /v1/jobs/{job_id}/artifacts/{artifact_ref}
 POST /v1/jobs/{job_id}/cancel
 POST /v1/jobs/{job_id}/ack
+POST /v1/embed             (R1 #131)     query-embedding (query role)
+POST /v1/rerank            (R2 #132)     cross-encoder rerank (query role)
 ```
 
 Processing is asynchronous: `POST /v1/process` validates the source, accepts
 with `202`, and enqueues compute into a background worker. The client polls
 `GET /v1/jobs/{id}` until a terminal state, then fetches the result.
+
+## Roles (R4, #134)
+
+The runner plays two roles; the dispatcher wires which URL is which:
+
+- **Query role** (`/v1/embed`, `/v1/rerank`) — low-latency compute for the
+  search API. Defaults to the **local** always-on runner so retrieval survives a
+  remote-runner outage. Override with `AXIOM_QUERY_RUNNER_URL`.
+- **Ingest role** (`/v1/process`) — document processing, with a primary
+  (`AXIOM_PROCESSOR_URL`) and a fallback (`AXIOM_INGEST_FALLBACK_URL`) forming a
+  failover chain. The fallback defaults to a local runner (complete, ~10×
+  slower).
+
+The dispatcher probes capabilities at startup and logs the resolved role wiring;
+a missing required capability fails the deployment fast. Both query endpoints
+use a process-wide warm model singleton (lazy-load on first request, keep warm
+afterward) so the low-latency budget is met.
+
+## Endpoint reference
+
+| Endpoint | Purpose | Notes |
+| --- | --- | --- |
+| `GET /v1/health` | Liveness | |
+| `GET /v1/capabilities` | Contract version, formats, models, limits | Single source the dispatcher negotiates against. |
+| `POST /v1/process` | Accepts (or dedups) a processing job | Asynchronous, 202. |
+| `GET /v1/jobs/{job_id}` | Live status + stage | |
+| `GET /v1/jobs/{job_id}/result` | Completed result | |
+| `GET /v1/jobs/{job_id}/artifacts/{artifact_ref}` | Artifact bytes | |
+| `POST /v1/jobs/{job_id}/cancel` | Cooperative cancel | |
+| `POST /v1/jobs/{job_id}/ack` | Durability ack (idempotent) | Authorizes temp-file deletion. |
+| `POST /v1/embed` (R1) | Dense BGE-M3 vectors for query texts | `AXIOM_PROCESSOR_MAX_QUERY_TEXTS` caps the batch. |
+| `POST /v1/rerank` (R2) | Cross-encoder scores for (query, candidate) pairs, sorted desc | `AXIOM_PROCESSOR_RERANK_MAX_TEXTS` caps candidates. |
+
+### Stage progression
+
+Each ingest job moves through a fixed stage vocabulary (single source:
+`axiom_ng_runner.PIPELINE_STAGES`):
+
+```text
+validate_source → convert → chunk → embed → entities → relationships → assemble
+```
+
+The live stage is exposed by `GET /v1/jobs/{job_id}`; after completion the same
+stages are reconstructible from `manifest.stage_timings`. Query endpoints
+(`/v1/embed`, `/v1/rerank`) are synchronous single-stage calls.
 
 ## Compute backends
 
@@ -37,6 +85,17 @@ The `reference` backend converts PDF via PyMuPDF and EPUB via zipfile, reuses a
 hermetic deterministic chunker, and emits contract-shaped results with honest
 page/section provenance. It never touches a database, OpenSearch, graph, or
 Zotero store.
+
+## compute_core (vendored, and why)
+
+`compute_core/` is the **vendored compute layer** — the converter workers,
+chunker, embedder, entity/relation extractors, and (from R2) the reranker. It
+is bundled **inside** `axiom_ng_runner/` so that shipping one tree ships all the
+compute it needs; the DB-driver import chain that previously entangled these
+modules stayed behind with the old codebase, which is what makes a self-contained
+runner (and a container) possible. The boundary is strict: `compute_core` performs
+computation and returns structured results — it never imports or writes to a
+database, OpenSearch, graph, or Zotero store.
 
 ## Start
 
@@ -54,11 +113,12 @@ AXIOM_PROCESSOR_PORT=8537
 AXIOM_PROCESSOR_WORK_ROOT=/tmp/axiom_processor_work
 AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=/path/to/zotero/storage
 AXIOM_PROCESSOR_MAX_CONCURRENT_JOBS=1
-AXIOM_PROCESSOR_COMPUTE=reference   # or "real"
+AXIOM_PROCESSOR_COMPUTE=reference          # or "real"
+AXIOM_PROCESSOR_MAX_QUERY_TEXTS=16         # /v1/embed batch cap
+AXIOM_PROCESSOR_RERANK_MAX_TEXTS=64        # /v1/rerank candidate cap
 ```
 
-Details for all variables: [Operations → Deployment](../operations/deployment.md)
-and its env reference table.
+Details for all variables: [Configuration](configuration.md) (single table).
 
 ## Tests
 
@@ -95,4 +155,4 @@ lost:
   thread; the semaphore gates only concurrency, not queue length.
 
 Continue: [PROCESSOR_CONTRACT v1](processor-contract.md) ·
-[Architecture Overview](architecture.md) · [Operations → Deployment](../operations/deployment.md)
+[Architecture Overview](architecture.md) · [Configuration](configuration.md)
