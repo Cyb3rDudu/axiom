@@ -35,7 +35,7 @@ and *which must stay human*. The judgment questions are:
 | --- | --- | --- | --- |
 | Configuration reference (env-var tables) | The `AXIOM_*` env set in code + defaults | **Yes** | Mechanical: var name, default, one-line meaning. The doc-agent can diff the code's config surface against the published table. |
 | Endpoint list | The route table in `axiom_ng`/the contract | **Yes** | Mechanical: method + path + purpose. Changes on contract/route additions. |
-| Changelog fragment per merge | The merge's commit messages + issue context | **Yes (fragment)** | Generate a *draft* fragment, but a human decides what is user-visible. |
+| Changelog fragment per merge | The merge's commit messages + issue context | **Yes (fragment)** | A *draft* fragment; a human decides what is user-visible, and a changelog page must already exist on the site — until one does, fragments stay in the PR body. |
 | Data-model cheat-sheet on a migration | The new migration's schema | **Yes** | Additive column/table changes map directly; semantic meaning stays human. |
 | Data-model **relationships/semantics** (why a column exists, invariants) | Reasoning, not code | **No** | Human. The schema tells you *what*, not *why*. |
 | Architecture overview / design decisions | Intent and trade-offs | **No** | Explicitly out of scope (epic non-goal). |
@@ -73,6 +73,9 @@ Proposed trigger:
   (e.g. the config/env loader, the HTTP router, a DB migration),
 - OR an endpoint/config/data-model change referenced in an issue/review.
 
+Triggering is per qualifying commit; output batching is per merge — several
+qualifying commits in one merge yield a single consolidated doc PR.
+
 It does **not** trigger on docs-only commits, chore-only commits, or research
 merges that carry no doc-relevant code surface.
 
@@ -91,14 +94,14 @@ merges that carry no doc-relevant code surface.
 
 ## Site-build as the CI check
 
-The generated pull request runs the documentation CI (the same `mkdocs build
---clean --strict` that the site uses, plus the naming and generalizability
+The generated pull request will run the documentation CI (the same `mkdocs
+build --clean --strict` that the site uses, plus the naming and generalizability
 gates). A doc-agent PR cannot merge if it introduces a dead link, a naming
 violation, or private-infra residue. The gates that were built into the docs
 pipeline become the agent's own acceptance tests — that's the payoff of having
 the foundation first.
 
-## Interface to the Hivemind workflow
+## Interface to the Hivemind (human review) workflow
 
 The doc-agent consumes review context as a **secondary source**:
 
@@ -136,5 +139,5 @@ judgment is asked of it.
 - [ ] Pilot on a real change — **deferred until the D1–D6 foundation is merged
   and live**, per the epic's ordering (D7 is the last layer).
 
-Continue: [Developer Guide](architecture.md) ·
+Continue: [Architecture Overview](architecture.md) ·
 [Testing](testing.md)
