@@ -7,8 +7,8 @@
 # axiom_ng_runner/) and AXIOM_* env names are technical facts and stay as is.
 
 site_name: axiom
-site_description: Zotero-powered research knowledge system — Go orchestration,
-  Python compute, searchable knowledge base
+site_description: A research knowledge engine for your Zotero library — search
+  your literature by meaning and cite with exact source locators
 site_url: https://cyb3rdudu.github.io/axiom/
 repo_url: https://github.com/Cyb3rDudu/axiom
 edit_uri: blob/main/docs/

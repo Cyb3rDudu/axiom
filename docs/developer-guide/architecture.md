@@ -81,7 +81,7 @@ runner (`localhost:8012`): a **query role** (embed/rerank for the search API)
 and an **ingest role** (`POST /v1/process`) with a primary + fallback failover
 chain. The full role model — the env vars, the failover chain, the ~11×
 local-runner trade-off — lives in
-[axiom runner → Roles](axiom-runner.md#roles-r4-134).
+[axiom runner → Roles](axiom-runner.md#roles).
 
 At startup the dispatcher probes capabilities and logs the resolved role wiring
 (which URL plays query vs. ingest) so a misconfigured deployment is visible. A

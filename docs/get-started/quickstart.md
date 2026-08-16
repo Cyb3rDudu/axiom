@@ -26,7 +26,8 @@ owns state, queue, search index        does conversion, chunking, ML
 
 Both run on loopback for a first test. To spread compute across machines (e.g.
 retrieval on a local runner, heavy processing on a remote GPU), see the
-**[split-role quickstart]** — a dedicated setup path for that scenario.
+[split-role setup — Operations → Deployment](../operations/deployment.md): a
+setup path for that scenario.
 
 ## 1. Run the axiom runner
 
@@ -34,6 +35,7 @@ retrieval on a local runner, heavy processing on a remote GPU), see the
 python3 -m venv .venv
 .venv/bin/pip install -r axiom_ng_runner/requirements.txt
 export AXIOM_PROCESSOR_COMPUTE=reference
+export AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=<path-to-zotero-storage>  # the `storage` folder of your Zotero data dir
 .venv/bin/python -m axiom_ng_runner
 ```
 
@@ -48,7 +50,7 @@ export AXIOM_OPENSEARCH_URL=http://localhost:9200
 export AXIOM_PROCESSOR_URL=http://127.0.0.1:8537
 export AXIOM_DISPATCHER_ENABLED=true
 
-go run ./axiom_ng/cmd/axiom-ng
+cd axiom_ng && go run ./cmd/axiom-ng
 ```
 
 The dispatcher checks Zotero is reachable and the runner is contract-compatible.
@@ -68,12 +70,10 @@ index.
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | `Zotero local API not reachable` | Local API disabled or Zotero closed | Enable Settings → Advanced → Local API; keep Zotero running. |
-| Jobs stuck or fail on a source error | Runner cannot read the Zotero storage path | Point the runner at the real Zotero storage folder and restart it. |
+| Jobs stuck or fail on a source error | Runner cannot read the Zotero storage path | Point `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` at the real Zotero storage folder and restart the runner. |
 | Runner never picks up work | URL/compute mismatch between dispatcher and runner | Use the same `AXIOM_PROCESSOR_URL` on both sides (loopback same host is simplest). |
 
 More patterns: [Troubleshooting](../operations/troubleshooting.md).
 
 Continue: [Concept Tour](concept-tour.md) · [Welcome](../index.md) ·
 [Architecture Overview](../developer-guide/architecture.md)
-
-[split-role quickstart]: ../operations/deployment.md

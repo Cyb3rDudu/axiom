@@ -1,7 +1,7 @@
 # Deployment: Running a Runner (GPU Compute Offload)
 
-This chapter explains how to run the `axiom_ng_runner` (the Python processor)
-on an external GPU host and how to point the `axiom_ng` dispatcher at it. The
+This chapter explains how to run the **axiom runner** on an external GPU host
+and how to point the **axiom dispatcher** at it. The
 purpose: run heavy document processing (Marker conversion, BGE-M3 embeddings,
 GLiNER entities, mREBEL relationships) on NVIDIA GPUs instead of on the
 dispatcher host.
@@ -14,15 +14,17 @@ dispatcher host.
 
 ## Architecture
 
-```text
-Dispatcher host (axiom)                Runner host (GPU)
-┌──────────────────────────┐  HTTP/JSON ┌──────────────────────────────┐
-│ axiom dispatcher         │ ──────────▶ │ axiom runner                │
-│ POST /v1/process          │   Port     │ conversion + embeddings +    │
-│ polls status/result       │ ◀───────── │ entity/relation extraction    │
-│ persists to Postgres      │            └──────────────────────────────┘
-└──────────────────────────┘
+```mermaid
+flowchart LR
+    D["axiom dispatcher"] ---|HTTP/JSON /v1/process| R["axiom runner"]
+    D ---|pulls results + artifacts| R
+    R -.->|POST /v1/ack after durable commit| D
 ```
+
+Both run on their own host: the **axiom dispatcher** (owns all state, leases,
+durability, and the search index) and the **axiom runner** (pure compute —
+conversion, chunking, embeddings, entity/relation extraction, and query
+embed/rerank). More detail on roles in the [Developer Guide → axiom runner](../developer-guide/axiom-runner.md).
 
 The runner is **pure compute**: it never touches Postgres, OpenSearch, or
 Zotero. All durable state stays with the dispatcher. Only the HTTP contract
