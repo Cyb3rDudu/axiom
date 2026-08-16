@@ -29,9 +29,17 @@ flowchart LR
     S[Search API] --- GO
     GO -->|outbox drain| OS
     GO --> |persist snapshots| PG
+
+    %% Retrieval arms on POST /api/search
+    GO --> ARMS[retrieval arms]
+    ARMS --> D[dense]
+    ARMS --> B[bm25 / hybrid]
+    ARMS -.->|rerank by default| RK[rerank]
+    ARMS -.->|opt-in: AXIOM_SEARCH_SPARSE_ARM| SP[sparse \n rank_features]
+    ARMS -.->|opt-in: AXIOM_SEARCH_GRAPH_ARM| GR[graph \n expansion]
 ```
 
-The central property: **axiom orchestrates, the Python runner computes, and only
+The central property: **axiom orchestrates, the runner computes, and only
 axiom owns durable state.** Every box that writes to a store is axiom; the
 runner never does.
 
@@ -88,6 +96,23 @@ At startup the dispatcher probes capabilities and logs the resolved role wiring
 missing **required ingest** capability fails the negotiation fast; a missing
 **query** capability only degrades search with a warning — by design, so a
 partial runner outage never takes retrieval down hard.
+
+## Retrieval flow and the recall arms
+
+`POST /api/search` composes up to five recall arms and returns ranked hits with
+source locators:
+
+- **dense** (semantic embeddings) and **bm25** (exact-term) form the **hybrid**
+  baseline — the best measured balance of quality and latency.
+- **rerank** (cross-encoder) re-orders the hybrid candidates; on by default.
+- **sparse** (`rank_feature` clauses, the third recall arm, R5) and
+  **graph** (knowledge-graph expansion, R6) are **opt-in** behind
+  `AXIOM_SEARCH_SPARSE_ARM` and `AXIOM_SEARCH_GRAPH_ARM` — both default off
+  after the quality benchmark measured no gain for their cost.
+
+The [User Guide → Retrieval](../user-guide/retrieval.md) explains each arm in
+plain terms; the [Retrieval quality benchmark](../references/benchmarks/retrieval-quality.md)
+carries the numbers.
 
 ## Invariants (from the resolved work order)
 

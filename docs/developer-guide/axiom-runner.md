@@ -60,7 +60,7 @@ afterward) so the low-latency budget is met.
 | `GET /v1/jobs/{job_id}/artifacts/{artifact_ref}` | Artifact bytes | |
 | `POST /v1/jobs/{job_id}/cancel` | Cooperative cancel | |
 | `POST /v1/jobs/{job_id}/ack` | Durability ack (idempotent) | Authorizes temp-file deletion. |
-| `POST /v1/embed` (R1) | Dense BGE-M3 vectors for query texts | `AXIOM_PROCESSOR_MAX_QUERY_TEXTS` caps the batch. |
+| `POST /v1/embed` (R1) | Dense BGE-M3 vectors for query texts | `AXIOM_PROCESSOR_MAX_QUERY_TEXTS` caps the batch. Sparse vectors are returned only when explicitly requested. |
 | `POST /v1/rerank` (R2) | Cross-encoder scores for (query, candidate) pairs, sorted desc | `AXIOM_PROCESSOR_RERANK_MAX_TEXTS` caps candidates. |
 
 ### Stage progression

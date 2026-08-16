@@ -103,5 +103,6 @@ nav:
           - TC2 Parallel & Determinism: references/benchmarks/tc2-parallel.md
           - Mass Chunking: references/benchmarks/mass-chunking.md
           - Chunk Quality: references/benchmarks/chunk-quality.md
+          - Retrieval Quality: references/benchmarks/retrieval-quality.md
       - FAQ: references/faq.md
   - About: about/index.md

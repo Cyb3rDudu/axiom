@@ -47,6 +47,9 @@ organized by *where the variable is consumed* (`set by`).
 | `AXIOM_ARTIFACT_ROOT` | — | Durable derived-artifact root. |
 | `AXIOM_API_PORT` | `8011` | Port the `axiom_ng` REST API listens on. |
 | `AXIOM_BIND_ADDR` | `127.0.0.1` | Interface the API binds to. Loopback default keeps the unauthenticated sync/job endpoints off the LAN. |
+| `AXIOM_SEARCH_SPARSE_ARM` | off | Enables the **sparse** recall arm (`rank_feature` clauses) on `POST /api/search`. Default off per the R7 quality benchmark (no quality gain, +~1.3 s p95 local). |
+| `AXIOM_SEARCH_GRAPH_ARM` | off | Enables the knowledge-**graph** expansion arm on `POST /api/search`. Default off — the R7 benchmark measured it first. |
+| `AXIOM_SEARCH_RERANK` | on | Runs the cross-encoder **reranker** on `POST /api/search`. Set `false` for the latency-only profile; rerank latency is steerable via a remote runner / overfetch. |
 
 ## Runner — the processor (`axiom_ng_runner`)
 
@@ -64,9 +67,8 @@ organized by *where the variable is consumed* (`set by`).
 | `AXIOM_PROCESSOR_MAX_QUERY_TEXTS` | `16` | Hard cap for `/v1/embed` batch size. |
 | `AXIOM_PROCESSOR_RERANK_MAX_TEXTS` | `64` | Hard cap for `/v1/rerank` candidate count. |
 
-> `AXIOM_PROCESSOR_` is the shared prefix of the runner's variables (not an
-> env var itself); it appears only as a prefix token in `config.py`. The
-> completeness check treats the explicit names above as the runner set.
+> The runner reads its variables under a shared processor prefix in
+> `config.py`; each is listed above by its full name.
 
 ## Near-miss pairs
 
