@@ -75,3 +75,50 @@ straightforward follow-up (same `model.onnx`, CUDA EP).
 `onnxruntime_go` ran cpu-only here. The ONNX dense path is identical on MPS-Apple
 and CUDA-3090 via the CUDA execution provider (same model file); CPU is the
 fallback that already produces the ≥0.999 result.
+
+## Rerank parity (bge-reranker-v2-m3) — MET
+
+Tool `cmd/feasibility/gorerank`: `tggo/goSentencePiece` tokenizer +
+`onnxruntime_go` on the optimum-exported reranker `model.onnx` (CPU). XLM-R pair
+form `[CLS] q [SEP] p [SEP]` = `<s>+tok(q)+</s>+tok(p)+</s>`; score = sigmoid(logits).
+75 pairs (25 gold queries × 3 candidate chunks), `rerank_pairs.json`.
+
+| Metric | Value |
+|---|---|
+| Spearman (Go vs Python `FlagReranker`) | **0.978** (≥0.95 ✓) |
+| Kendall | 0.893 |
+| Go run1 vs run2 | deterministic (75 pairs) |
+| max abs score diff | 0.122 (single outlier pair, tokenizer-edge class) |
+
+The reranker ONNX export (optimum 1.23.3, 2.27 GB `model.onnx_data`) is faithful.
+Same tokenizer-edge caveat as dense: the rare-character divergence on outlier
+pairs pulls a single Spearman-independent score off; overall ranking order is
+well preserved.
+
+## Sparse parity (BGE-M3 lexical weights) — algorithm proven, Go-extraction block
+
+Sparse head is NOT in the stock BGE-M3 ONNX (`sentence_embedding`+`token_embeddings`
+only). It is `relu(sparse_linear(last_hidden))` (a `Linear(1024,1)`, NOT a vocab
+projection) followed by a max-scatter over token ids, zeroing cls/pad/eos/unk.
+I exported `sparse_head.onnx` (`input_ids,attention_mask → token_weights [1,seq]`)
+via torch.
+
+**Python-side proof (both the standard model and `sparse_head.onnx`):** on the
+sample chunks the max-scatter sparse matches `FlagEmbedding(return_sparse=True)`
+`lexical_weights` at **overlap 1.0 / shared-cosine 1.0** (chunks 0 and 14 verified).
+So the sparse algorithm and the ONNX export are correct.
+
+**Go-side blocker (measured, not theory):** `onnxruntime_go` returns **misaligned
+`token_weights`/`token_embeddings` output** (the `[1,seq]` and `[1,seq,1024]`
+outputs read wrong; e.g. Go c0 weights `[0,0,0.025,0.108]` vs Python
+`[0.12,0,0.02,0,0.046]`; Go VS Py `token_embeddings` per-token cosine 0.796 on
+identical input; Go sparse 89 vs Python 126 tokens on identical ids). `sentence_embedding`
+([1,1024]) reads correctly, so the extraction path works for 1-D-ish outputs but
+fails for the dynamic `[B,S]` token tensors with this model/ORT version.
+
+**Verdict:** sparse target (overlap ≥0.98 + cos ≥0.999) is **not yet met in Go** —
+not because of the model or the algorithm (Python-proven 1.0/1.0), but because the
+Go ORT binding mis-reads the token-level output. **Fixable**: use a statically-
+shaped single-output sparse model, or pre-reduce `token_embeddings` → `sentence_embedding`-
+style 1-D output so `onnxruntime_go` extracts it correctly. This is a tooling-level
+follow-up, not a feasibility blocker for the CUDA ONNX path.

@@ -1,0 +1,6 @@
+github.com/tggo/goSentencePiece v1.1.0 h1:h13/8iLtIUXR03DLZ7BTa4dQhs7fWfpsHTzNF/Q/OwI=
+github.com/tggo/goSentencePiece v1.1.0/go.mod h1:aOKu1b2zno+8ZyH3c1en/voIAVnujend/wvxb3EZAew=
+github.com/yalue/onnxruntime_go v1.33.0 h1:QP+hMVtjC/PTEoCcJ+od8HfvHf2Yabpp96bifrhP0Sk=
+github.com/yalue/onnxruntime_go v1.33.0/go.mod h1:b4X26A8pekNb1ACJ58wAXgNKeUCGEAQ9dmACut9Sm/4=
+google.golang.org/protobuf v1.36.11 h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBNVE=
+google.golang.org/protobuf v1.36.11/go.mod h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=
