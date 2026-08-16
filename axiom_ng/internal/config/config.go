@@ -54,6 +54,17 @@ type Config struct {
 	// answerable from SQL. Empty defaults to the ProcessorURL host.
 	ProcessorRunnerName string
 
+	// QueryRunnerURL is the query-side runner (R4 #134): embedding + rerank
+	// for POST /api/search. Defaults to the LOCAL always-on runner — the
+	// role model guarantees retrieval survives a Carrier outage. Override
+	// (AXIOM_QUERY_RUNNER_URL) points retrieval compute at a dedicated
+	// runner without code changes.
+	QueryRunnerURL string
+	// IngestFallbackURL is the emergency ingest runner used when
+	// ProcessorURL is unreachable (transport error or 5xx). Defaults to the
+	// local runner (#128 proof: complete, ~11x slower). Failover is logged.
+	IngestFallbackURL string
+
 	// DispatcherEnabled gates the claim/process dispatcher loop. It never runs
 	// unless explicitly turned on; tests construct the dispatcher directly.
 	DispatcherEnabled bool
@@ -80,9 +91,12 @@ type Config struct {
 // defaults for a local sidecar setup.
 const (
 	defaultZoteroBase = "http://localhost:23119/api"
-	defaultLibraryID  = "users/0"
-	defaultAPIPort    = 8011
-	defaultBindAddr   = "127.0.0.1"
+	// defaultLocalRunner is the local always-on processor port (R4 roles:
+	// query default AND ingest fallback).
+	defaultLocalRunner = "http://localhost:8012"
+	defaultLibraryID   = "users/0"
+	defaultAPIPort     = 8011
+	defaultBindAddr    = "127.0.0.1"
 	// The profile NAME alone does not enable features — the runner reads the
 	// explicit booleans (ProcessingOptions defaults are all false; benchmark
 	// finding 2026-08-14). full-rag-v1 therefore materializes every feature.
@@ -101,7 +115,9 @@ func Load() Config {
 		OpenSearchPassword:      env("AXIOM_OPENSEARCH_PASSWORD", ""),
 		ProcessorSourceSecret:   env("AXIOM_PROCESSOR_SOURCE_SECRET", ""),
 		ProcessorSourceBaseURL:  env("AXIOM_PROCESSOR_SOURCE_BASE_URL", ""),
-		ProcessorURL:            env("AXIOM_PROCESSOR_URL", "http://localhost:8012"),
+		ProcessorURL:            env("AXIOM_PROCESSOR_URL", defaultLocalRunner),
+		QueryRunnerURL:          env("AXIOM_QUERY_RUNNER_URL", defaultLocalRunner),
+		IngestFallbackURL:       env("AXIOM_INGEST_FALLBACK_URL", defaultLocalRunner),
 		ProcessorRequestTimeout: envDur("AXIOM_PROCESSOR_TIMEOUT", 300*time.Second),
 		ProcessorRunnerName:     env("AXIOM_PROCESSOR_RUNNER_NAME", ""),
 		DispatcherEnabled:       envBool("AXIOM_DISPATCHER_ENABLED"),
