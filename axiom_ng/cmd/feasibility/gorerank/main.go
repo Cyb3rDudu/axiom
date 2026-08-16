@@ -1,8 +1,11 @@
 // Block 3 rerank-parity tool: bge-reranker-v2-m3 cross-encoder scores in Go
 // via onnxruntime_go (CPU) on the pinned tggo/goSentencePiece tokenizer.
 //
-// XLM-R pair form (matches HF / FlagReranker): [CLS] q [SEP] p [SEP]
-//   = <s>(0) [tok(q)] </s>(2) [tok(p)] </s>(2), with the HF +1 reindex.
+// XLM-R pair form (matches HF XLMRobertaTokenizer pair encoding):
+//   <s>(0) [tok(q)] </s>(2) </s>(2) [tok(p)] </s>(2)  — TWO consecutive </s>
+//   between the segments, with the HF +1 reindex on piece ids.
+//   NOTE: the Block-3 measurement (Spearman 0.978) ran with the single-</s>
+//   form; re-run before citing final parity (see 03-dense-parity.md).
 // Score = sigmoid(logits[0]) (the runner's compute_score(normalize=True)).
 //
 // Usage: gorerank <dylib> <reranker.model.onnx> <sp.model> <pairs.json> <out.json>
@@ -14,7 +17,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"time"
 
 	"github.com/tggo/goSentencePiece"
 	ort "github.com/yalue/onnxruntime_go"
@@ -76,7 +78,7 @@ func main() {
 		if bitsEq(run1[i], run2[i]) { /* byte-equal f64 via bits */ } else { det = false }
 	}
 	fmt.Printf("DETERMINISM (run1 vs run2): %v (n=%d)\n", det, len(run1))
-	if !det { /* still write */ }
+	if !det { os.Exit(3) }
 
 	out := make([]map[string]any, len(pairs))
 	for i, p := range pairs {
@@ -85,7 +87,6 @@ func main() {
 	b, _ := json.MarshalIndent(out, "", " ")
 	if err := os.WriteFile(outPath, b, 0o644); err != nil { fatal("%v", err) }
 	fmt.Printf("wrote %d rerank scores to %s\n", len(out), outPath)
-	_ = time.Now
 }
 
 func encodeNoSpecials(tok *sentencepiece.Tokenizer, text string) []int {
@@ -96,7 +97,7 @@ func encodeNoSpecials(tok *sentencepiece.Tokenizer, text string) []int {
 func buildPair(q, p []int) []int {
 	ids := []int{0} // <s>
 	for _, id := range q { ids = append(ids, shifttok(id)) }
-	ids = append(ids, 2)
+	ids = append(ids, 2, 2) // </s></s> — HF XLM-R pair separator
 	for _, id := range p { ids = append(ids, shifttok(id)) }
 	ids = append(ids, 2)
 	return ids

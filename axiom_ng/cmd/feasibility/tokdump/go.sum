@@ -1,3 +1,5 @@
+github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/tggo/goSentencePiece v1.1.0 h1:h13/8iLtIUXR03DLZ7BTa4dQhs7fWfpsHTzNF/Q/OwI=
 github.com/tggo/goSentencePiece v1.1.0/go.mod h1:aOKu1b2zno+8ZyH3c1en/voIAVnujend/wvxb3EZAew=
 google.golang.org/protobuf v1.36.11 h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBNVE=

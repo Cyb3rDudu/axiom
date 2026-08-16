@@ -180,7 +180,7 @@ func (r *runner) rerankPair(query, passage string) (float32, error) {
 	p := r.tok.EncodeWithOptions(passage, false).IDs
 	ids := []int{0}
 	for _, id := range q { ids = append(ids, shifttok(id)) }
-	ids = append(ids, 2)
+	ids = append(ids, 2, 2) // </s></s> — HF XLM-R pair separator
 	for _, id := range p { ids = append(ids, shifttok(id)) }
 	ids = append(ids, 2)
 	if len(ids) > 512 { ids = ids[:512] }

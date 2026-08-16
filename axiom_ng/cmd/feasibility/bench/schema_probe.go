@@ -27,4 +27,9 @@ func main() {
 	var c int
 	conn.QueryRow(ctx, "select count(*) from processing_chunks").Scan(&c)
 	fmt.Println("processing_chunks count:", c)
+	// Block-5 gold-delta sync numbers (#171): DB source-metadata vs OS index.
+	conn.QueryRow(ctx, "select count(*) from zotero_documents").Scan(&c)
+	fmt.Println("zotero_documents count:", c)
+	fmt.Println("OS doc count (separate store, run manually):")
+	fmt.Println(`  curl -s $OS_URL/axiom-ng-chunks-v1/_count | jq .count`)
 }

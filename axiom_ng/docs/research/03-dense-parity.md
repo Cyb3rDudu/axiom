@@ -56,8 +56,8 @@ were all clean; these are real-corpus rare characters):
 | 66 | `▁contin` (102548) | `▁cont` (22832) | subword segmentation divergence on a morpheme |
 | 108 | `----` (106115) | `----------` (195626) | punctuation-run grouping differs |
 
-Impact: these 3 pull avg from (216 clean) 0.99987 to 0.99964; the 216 converged
-chunks are exact (214 at cos==1.0, 2 at ~0.9999). The tokenizer pin must be
+Impact: these 3 pull avg from (216 clean) 0.99987 to 0.99964; of the 216 converged
+chunks 214 sit at cos==1.0 and 2 at ~0.9999 (≈, not exact). The tokenizer pin must be
 **extended to real-corpus rare characters** (`Ȭ`-class, hyphen-runs) before a Go
 runner replaces the Python one bit-for-bit.
 
@@ -80,12 +80,15 @@ fallback that already produces the ≥0.999 result.
 
 Tool `cmd/feasibility/gorerank`: `tggo/goSentencePiece` tokenizer +
 `onnxruntime_go` on the optimum-exported reranker `model.onnx` (CPU). XLM-R pair
-form `[CLS] q [SEP] p [SEP]` = `<s>+tok(q)+</s>+tok(p)+</s>`; score = sigmoid(logits).
+form `<s>+tok(q)+</s></s>+tok(p)+</s>` (HF `XLMRobertaTokenizer` pair encoding,
+two consecutive `</s>` between segments — **fixed in auto-review**; the 0.978
+below was measured with the earlier single-`</s>` form); score = sigmoid(logits).
 75 pairs (25 gold queries × 3 candidate chunks), `rerank_pairs.json`.
+Reference command: `pyrerank_ref.py rerank_pairs.json gorerank_out.json <outdir>`.
 
 | Metric | Value |
 |---|---|
-| Spearman (Go vs Python `FlagReranker`) | **0.978** (≥0.95 ✓) |
+| Spearman (Go vs Python `FlagReranker`) | **0.978** (≥0.95 ✓) — *pre-pair-form-fix; re-run required before citing as final parity* |
 | Kendall | 0.893 |
 | Go run1 vs run2 | deterministic (75 pairs) |
 | max abs score diff | 0.122 (single outlier pair, tokenizer-edge class) |
@@ -108,17 +111,30 @@ sample chunks the max-scatter sparse matches `FlagEmbedding(return_sparse=True)`
 `lexical_weights` at **overlap 1.0 / shared-cosine 1.0** (chunks 0 and 14 verified).
 So the sparse algorithm and the ONNX export are correct.
 
-**Go-side blocker (measured, not theory):** `onnxruntime_go` returns **misaligned
-`token_weights`/`token_embeddings` output** (the `[1,seq]` and `[1,seq,1024]`
-outputs read wrong; e.g. Go c0 weights `[0,0,0.025,0.108]` vs Python
-`[0.12,0,0.02,0,0.046]`; Go VS Py `token_embeddings` per-token cosine 0.796 on
-identical input; Go sparse 89 vs Python 126 tokens on identical ids). `sentence_embedding`
-([1,1024]) reads correctly, so the extraction path works for 1-D-ish outputs but
-fails for the dynamic `[B,S]` token tensors with this model/ORT version.
+**Go-side blocker (measured, not theory):** Go sparse diverges from the Python
+reference — Go c0 weights `[0,0,0.025,0.108]` vs Python `[0.12,0,0.02,0,0.046]`;
+`token_embeddings` per-token cosine 0.796; Go sparse 89 vs Python 126 tokens.
+`sentence_embedding` ([1,1024]) reads correctly.
 
-**Verdict:** sparse target (overlap ≥0.98 + cos ≥0.999) is **not yet met in Go** —
-not because of the model or the algorithm (Python-proven 1.0/1.0), but because the
-Go ORT binding mis-reads the token-level output. **Fixable**: use a statically-
-shaped single-output sparse model, or pre-reduce `token_embeddings` → `sentence_embedding`-
-style 1-D output so `onnxruntime_go` extracts it correctly. This is a tooling-level
-follow-up, not a feasibility blocker for the CUDA ONNX path.
+**Primary suspected cause (post auto-review): a truncation mismatch, NOT a
+binding bug.** `gosparse` truncates ids at 512 (`main.go:54`) while the Python
+reference encoded with `max_length=8192` — 67 of the 219 chunks exceed 512
+sentencepiece tokens. That is the same bug class the dense first pass hit
+(avg 0.966 → fixed by aligning both sides at 8192), and the observed signature
+fits it exactly: different token counts (89 vs 126) and shifted per-token
+embeddings (each token attends to a different context window) are what
+truncation produces; a true output-buffer misalignment would not change the
+scatter's token count on otherwise identical ids.
+
+**Required before acting on the old binding hypothesis:** re-run gosparse with
+the truncation matched (8192 both sides, mirroring the godense fix). If the
+divergence persists on identical ids, THEN the secondary hypothesis — an
+`onnxruntime_go` mis-read of dynamic `[B,S]`/`[B,S,1024]` token outputs — is
+back on the table, with the same fix as before: a statically-shaped
+single-output sparse model, or pre-reduced 1-D outputs.
+
+**Verdict:** sparse target (overlap ≥0.98 + cos ≥0.999) is **not yet met in
+Go** — the algorithm and ONNX export are Python-proven (1.0/1.0); the measured
+Go divergence is most parsimoniously explained by the harness truncation
+mismatch above and needs one matched re-run to resolve. Either resolution is a
+tooling-level follow-up, not a feasibility blocker for the CUDA ONNX path.

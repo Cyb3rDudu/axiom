@@ -62,10 +62,11 @@ func main() {
 	encodeOne := func(text string) ([]float32, error) {
 		enc := tok.EncodeWithOptions(text, true)
 		ids := shift(enc.IDs)
-		// Truncate to the SAME max_length the Python reference uses (512 for query/
-		// passage encode), so parity is measured on identical token windows — the
-		// root cause of the 0.966 avg in the first pass was a truncation mismatch
-		// (Go encoded full length, Python truncated at 512). #171 Ziel 4.
+		// Truncate to the SAME max_length the Python reference uses. The final
+		// parity pass ran at maxLen=8192 (ingest regime — no truncation for the
+		// realistic study chunks, all < 8k sentencepiece tokens). The first pass's 0.966 avg was caused by a truncation mismatch (Go full length vs Python
+		// 512) — any future comparison must keep both sides at the same max_length.
+		// #171 Ziel 4.
 		const maxLen = 8192
 		if len(ids) > maxLen {
 			ids = ids[:maxLen]

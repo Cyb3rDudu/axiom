@@ -21,8 +21,11 @@ ONNX     → identical entity set, max |score diff| = 1e-05
 (entity set identical, scores ≤1e-5 apart). Because GLiNER is now ONNX-runnable, the
 entity extraction can move to `onnxruntime` — either as the Python runner's own
 `load_onnx_model=True` path (drop torch for this component) or, in a Go runner, via
-`onnxruntime_go` on the exported `model.onnx` (same engine as dense/rerank). The
-DeBERTa tokenizer is the same XLM-R-family family already pinned in Block 2.
+`onnxruntime_go` on the exported `model.onnx` (same engine as dense/rerank) —
+note that parity so far is proven PyTorch↔ONNX **in Python**; the Go
+`onnxruntime_go` run itself is still pending. The DeBERTa tokenizer is
+XLM-R-family (SPM unigram + reindex, same mechanism) but **NOT the same vocab**
+as the Block-2 BGE-M3 XLM-R pin — a Go GLiNER port needs its own tokenizer pin.
 
 **Device note:** DeBERTa backbone is `microsoft/deberta-v3-base` — ONNX CPU/GPU
 portable. On the 3090 farm, GLiNER-ONNX via onnxruntime CUDA-EP is the natural
@@ -37,7 +40,7 @@ It is the runner's heaviest-to-port component (autoregressive decode). Three opt
 |---|---|---|---|
 | **1. Sidecar (keep Python mREBEL service)** | Low — reuse `relation_extractor.py` over an HTTP sidecar | CUDA-farm / MPS; Python stays for this one component | **Recommended for a Go runner** — isolates the ONLY non-Go port |
 | **2. ONNX-Decoding-Loop** | High — BART encoder + autoregressive decoder ONNX; attention-cache/beam handling in Go; triple-parser; ~1.5GB model | CPU slow; CUDA needed; ONNX BART decode is notoriously fiddly | Not worth it: high effort, fragile decode, marginal gain |
-| **3. Triple-Mining replacement** | Mod-erate — rule/co-occurrence relation miner in Go | portable (pure compute) | Loses relationship quality / multi-hop expressiveness; only if mREBEL value is low in practice |
+| **3. Triple-Mining replacement** | Moderate — rule/co-occurrence relation miner in Go | portable (pure compute) | Loses relationship quality / multi-hop expressiveness; only if mREBEL value is low in practice |
 
 **Recommendation:** **Sidecar** (option 1). mREBEL is the single weak corner; a Go
 runner keeps it as a Python HTTP sidecar on the farm (exactly how the current
@@ -45,7 +48,7 @@ runner already separates it), and Go handles everything else natively. Do NOT
 attempt BART ONNX decode in Go (option 2) — high effort, fragile. Option 3 only if
 a follow-up shows mREBEL's contribution is marginal for the KGs this library needs.
 
-(Other Nerseen: LLM-side triple extraction — ollama/localai — is out of scope
+(Other options seen: LLM-side triple extraction — ollama/localai — is out of scope
 per Nicht-Ziele #4, only named here as a possible future replacement.)
 
 ## Device matrix addendum (Block 7)

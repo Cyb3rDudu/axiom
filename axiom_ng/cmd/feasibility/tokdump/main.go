@@ -1,6 +1,8 @@
-// tokdump: write Go's truncated token IDs (the exact encoder input) for each
-// chunk, to verify token-window parity vs Python independently of the ONNX
-// numerics. Usage: tokdump <sp.model> <chunks.json> <out.json5>
+// tokdump: write Go's 512-truncated token IDs (the token-window used for the
+// Block-2 pin vs Python) for each chunk. NOTE: this is the 512-truncation
+// window, NOT the 8192 max_length the final dense-parity pass encoded with
+// (see godense) — kept as-is because it pins the original Block-2 window.
+// Usage: tokdump <sp.model> <chunks.json> <out.json5>
 package main
 
 import (
