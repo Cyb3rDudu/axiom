@@ -7,6 +7,7 @@
 package search
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -56,6 +57,8 @@ func TestIsFrontmatterHeadingChunks(t *testing.T) {
 		"### **Vorwort**",
 		"## Preface",
 		"# **LITERATURVERZEICHNIS-**",
+		"## _Vorwort_",
+		"> Vorwort",
 	} {
 		if !IsFrontmatter(h) {
 			t.Errorf("heading chunk %q must flag", h)
@@ -134,6 +137,38 @@ dass die Systeme die Anforderungen nach Artikel 8 erfüllen.
 	if IsFrontmatter(law) {
 		t.Error("numbered legal text must NOT flag")
 	}
+
+	// A stats table inside prose: the table rows are a MINORITY of the
+	// chunk's lines, so the majority rule must not fire.
+	proseWithTable := `Die empirischen Befunde der Jahre 1998 bis 2007 fassen wir
+zunächst nach Clustergruppen zusammen. Auffällig ist der stabile Trend
+in der zweiten Beobachtungsperiode, der sich auch nach Kontrolle der
+Kovariaten hält.
+
+| Cluster | Umsatzwachstum | Jahr |
+|---|---|---|
+| A | 4,2 % | 1998 |
+| B | 6,9 % | 2003 |
+| C | 9,1 % | 2007 |
+
+Die Differenzen sind auf dem 5%-Niveau signifikant; die Robustheit
+der Schätzung prüfen wir im folgenden Abschnitt mit einem
+Panel-Ansatz.`
+	if IsFrontmatter(proseWithTable) {
+		t.Error("a stats table embedded in prose (minority of lines) must NOT flag")
+	}
+
+	// A bare year-column table: even as the chunk majority, a YEAR column is
+	// not a page column — lastCellIsPage excludes 1900-2099 on purpose
+	// (pins the year-exclusion hardening).
+	yearTable := `| Cluster | Umsatzwachstum | Jahr |
+|---|---|---|
+| A | 4,2 % | 1998 |
+| B | 6,9 % | 2003 |
+| C | 9,1 % | 2007 |`
+	if IsFrontmatter(yearTable) {
+		t.Error("a year-column data table must NOT flag as TOC (years are not page numbers)")
+	}
 }
 
 func TestFilterFrontmatterDropsTOCKeepsBody(t *testing.T) {
@@ -148,16 +183,47 @@ func TestFilterFrontmatterDropsTOCKeepsBody(t *testing.T) {
 	}
 }
 
-// Flip-list probe K1 (flag lever): filter OFF (or detection disabled) lets the
-// TOC chunk back into the candidate pool — this is the v2.1 "before" state.
-func TestFlipListK1FilterOffLetsTOCBack(t *testing.T) {
-	cands := []osCandidate{
-		{ID: "toc1", Text: tocChunk()},
-		{ID: "body1", Text: "Fachtext."},
+// Flip-list probe K1 (flag lever) — the honest version, through the real
+// Search path: with FrontmatterFilter=false the TOC chunk competes and
+// surfaces in the hits; flipping the lever on removes it while the body hit
+// stays. (RRF order, rerank off: the pool order is the fixture order.)
+func TestFlipListK1SearchPathLeverFlip(t *testing.T) {
+	osrv := newOSServer(t)
+	osrv.knnHits = []osHit{
+		hit("toc-chunk", "docA", tocChunk()),
+		hit("body-chunk", "docB", "Stakeholder-Beziehungen sichern die Legitimation des Unternehmens gegenüber seiner Umgebung und verringern Abhängigkeitsrisiken."),
 	}
-	// lever flipped off: the unfiltered list keeps the TOC chunk
-	if len(cands) != 2 || cands[0].ID != "toc1" {
-		t.Fatal("sanity: unfiltered pool contains the TOC chunk")
+	osrv.bm25Hits = osrv.knnHits
+	svc := newService(osrv.URL, &fakeProcessor{embedVec: []float32{0.1}}, fakeDocs{})
+	svc.Rerank = false
+
+	svc.FrontmatterFilter = false
+	res, err := svc.Search(context.Background(), Request{Query: "Stakeholder", TopN: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, h := range res.Hits {
+		ids[h.ChunkID] = true
+	}
+	if !ids["toc-chunk"] {
+		t.Fatalf("lever OFF: the TOC chunk must be back in the hits, got %v", ids)
+	}
+
+	svc.FrontmatterFilter = true
+	res, err = svc.Search(context.Background(), Request{Query: "Stakeholder", TopN: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids = map[string]bool{}
+	for _, h := range res.Hits {
+		ids[h.ChunkID] = true
+	}
+	if ids["toc-chunk"] {
+		t.Fatalf("lever ON: the TOC chunk must be gone, got %v", ids)
+	}
+	if !ids["body-chunk"] {
+		t.Fatalf("lever ON: the body hit must survive, got %v", ids)
 	}
 }
 

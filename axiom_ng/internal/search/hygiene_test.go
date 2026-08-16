@@ -23,8 +23,8 @@ func TestHygieneDistinctBodySurvives(t *testing.T) {
 }
 
 // K3 (collapse lever): near-identical twins of the same document fold into
-// the higher-ranked hit with a count; flipping collapse off (trivially: not
-// calling it) keeps the duplicate flood — asserted as the contrast case.
+// their higher-ranked hit with a count; the raw input list below still carries
+// both twins — the collapse under test is what removes them.
 func TestCollapseNearDuplicates(t *testing.T) {
 	tocish := "5.1.2 Zieldefinition" + strings.Repeat(".", 20) + " 148\nDie Zieldefinition leitet die Untersuchung."
 	twin := "5.1.2  Zieldefinition" + strings.Repeat(".", 18) + " 148\nDie Zieldefinition leitet die Untersuchung."
@@ -47,10 +47,6 @@ func TestCollapseNearDuplicates(t *testing.T) {
 		if c.ID == "toc-twin2" {
 			t.Fatalf("folded duplicate must be gone: %+v", got)
 		}
-	}
-	// Contrast (lever off): the raw list still carries the flood.
-	if len(cands) != 4 {
-		t.Fatal("sanity")
 	}
 }
 

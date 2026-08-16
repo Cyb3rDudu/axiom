@@ -28,10 +28,9 @@ var (
 	// Frontmatter heading, standalone first line. Markdown decoration
 	// (####, **) and OCR trailing dashes tolerated.
 	fmHeadingRe = regexp.MustCompile(`(?i)^(inhaltsverzeichnis|table of contents|contents|vorwort|preface|geleitwort|foreword|literaturverzeichnis|bibliografie|bibliographie|bibliography|references|quellenverzeichnis|literatur)-*\s*:?\s*$`)
-	// Markdown table row whose LAST cell is a bare 1-4 digit page number
-	// ("| 1 | Road to Excellence … | 3   |").
-	tocTableRowRe = regexp.MustCompile(`^\s*\|.*\|\s*\d{1,4}\s*\|?\s*$`)
-	tableRowRe    = regexp.MustCompile(`^\s*\|.*\|\s*$`)
+	// Any markdown table row; TOC detection then requires the last cell to
+	// be a page number (lastCellIsPage).
+	tableRowRe = regexp.MustCompile(`^\s*\|.*\|\s*$`)
 	// Classic dot-leader TOC line ("5.1.2 Zieldefinition …… 148").
 	dotLeaderRe = regexp.MustCompile(`\.{4,}(…|\s)*\d{1,4}\s*$`)
 	// Numbered heading → page number line.
@@ -50,7 +49,9 @@ func normalizeHeading(l string) string {
 }
 
 // looksLikePageNumber reports whether the last |-separated cell of a table row
-// is a bare small integer (a page number cell).
+// is a bare small integer (a page number cell). Years are excluded on
+// purpose: a data table with a year column must not look like a TOC, and TOC
+// pages above 1900 are vanishingly rare.
 func lastCellIsPage(row string) bool {
 	cells := strings.Split(row, "|")
 	if len(cells) < 2 {
@@ -61,7 +62,7 @@ func lastCellIsPage(row string) bool {
 		last = strings.TrimSpace(cells[len(cells)-3])
 	}
 	n, err := strconv.Atoi(strings.TrimSuffix(last, "."))
-	return err == nil && n >= 0 && n <= 3000
+	return err == nil && n >= 0 && n <= 3000 && !(n >= 1900 && n <= 2099)
 }
 
 // IsFrontmatter reports whether a chunk is TOC / references / titled-preface

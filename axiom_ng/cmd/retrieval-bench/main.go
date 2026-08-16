@@ -271,7 +271,6 @@ func runConfig(ctx context.Context, base *search.Service, cfg config, suite gold
 			p1s, p5s, mrrs, r10s = append(p1s, 0), append(p5s, 0), append(mrrs, 0), append(r10s, 0)
 			continue
 		}
-		pq.P1 = len(res.Hits) > 0 && hitIsGold(res.Hits[0], gq)
 		for i, h := range res.Hits {
 			if i < 10 {
 				pq.Top10 = append(pq.Top10, h.ChunkID)
@@ -280,19 +279,23 @@ func runConfig(ctx context.Context, base *search.Service, cfg config, suite gold
 				pq.FrontmatterInTop5 = true
 			}
 		}
-		perq = append(perq, pq)
 		if len(gq.GoldChunks) > 0 {
 			// v2: passage-level scoring (the real-workflow criterion).
 			p1s = append(p1s, passageAt(1, res.Hits, gq.GoldChunks))
 			p5s = append(p5s, passageAt(5, res.Hits, gq.GoldChunks))
 			mrrs = append(mrrs, passageMRR(res.Hits, gq.GoldChunks))
 			r10s = append(r10s, passageAt(10, res.Hits, gq.GoldChunks))
-			continue
+		} else {
+			p1s = append(p1s, precisionAt(1, res.Hits, gq.Gold))
+			p5s = append(p5s, precisionAt(5, res.Hits, gq.Gold))
+			mrrs = append(mrrs, mrr(res.Hits, gq.Gold))
+			r10s = append(r10s, recallAt(10, res.Hits, gq.Gold))
 		}
-		p1s = append(p1s, precisionAt(1, res.Hits, gq.Gold))
-		p5s = append(p5s, precisionAt(5, res.Hits, gq.Gold))
-		mrrs = append(mrrs, mrr(res.Hits, gq.Gold))
-		r10s = append(r10s, recallAt(10, res.Hits, gq.Gold))
+		// Desync-proof: the per-query P@1 mirrors exactly what the metric
+		// aggregation above recorded for this query (gq.Gold holds book
+		// titles, not chunk ids — deriving P@1 from hits again would diverge).
+		pq.P1 = p1s[len(p1s)-1] > 0
+		perq = append(perq, pq)
 	}
 	return result{
 		name: cfg.name, p1: mean(p1s), p5: mean(p5s), mrr: mean(mrrs), r10: mean(r10s),
@@ -311,20 +314,6 @@ type perQueryRecord struct {
 	FrontmatterInTop5 bool     `json:"frontmatter_in_top5"`
 	Error             bool     `json:"error"`
 	Top10             []string `json:"top10"`
-}
-
-func hitIsGold(h search.Hit, gq goldQuery) bool {
-	for _, g := range gq.GoldChunks {
-		if h.ChunkID == g {
-			return true
-		}
-	}
-	for _, g := range gq.Gold {
-		if h.ChunkID == g {
-			return true
-		}
-	}
-	return false
 }
 
 // passageAt: 1 iff a gold chunk sits within the top-k (P@1 via k=1).

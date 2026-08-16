@@ -7,8 +7,13 @@ import (
 	"strings"
 )
 
-const nearDuplicateJaccard = 0.8
+// nearDuplicateThreshold is the Jaccard cutoff above which two same-document
+// chunks count as near-duplicates.
+const nearDuplicateThreshold = 0.8
 
+// ponytail: O(n²) pairwise jaccard, tokenSet rebuilt per pair — memoize per
+// chunk if fetchN ever grows past 64.
+//
 // collapseNearDuplicates folds near-identical chunks of the SAME document into
 // their higher-ranked twin (ranked list order is authoritative — rerank score
 // descending, RRF order as tiebreak). Returns the pruned list and, per kept
@@ -20,7 +25,7 @@ func collapseNearDuplicates(cands []osCandidate) ([]osCandidate, map[string]int)
 	for _, c := range cands {
 		dup := false
 		for i, k := range kept {
-			if k.DocumentID == c.DocumentID && jaccard(k.Text, c.Text) > nearDuplicateJaccard {
+			if k.DocumentID == c.DocumentID && jaccard(k.Text, c.Text) > nearDuplicateThreshold {
 				keptID := kept[i].ID
 				folded[keptID]++
 				dup = true

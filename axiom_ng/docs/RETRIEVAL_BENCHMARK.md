@@ -141,6 +141,11 @@ Drei Hebel, Retrieval-seitig (kein Rechunking, keine Reranker-/RRF-Änderung):
 | hybrid+rerank (Vorher) | 0.615 | 0.808 | 0.702 | 0.865 | **3 Queries** (inkl. z7) |
 | hybrid+rerank+hygiene | 0.596 | 0.788 | 0.683 | 0.846 | **0 Queries** |
 
+Offenlegung zur FM-Spalte: der Nachher-Wert wird mit demselben Detektor
+berechnet, den der Filter benutzt (selbstreferentiell — ein Detektor-Fehler
+würde beide Seiten gleich verzerren). Die belastbare Evidenz ist der
+Vorher-Wert (3 Lecks, mit Filter aus gemessen) plus der P@1-Kosten-Nachweis.
+
 z-Suite: 5/7 P@1 vor wie nach. Lesart:
 
 - **DoD „kein Vorwort/TOC-Chunk in irgendeiner Top-5": erfüllt** (3→0, z7-Leck zu).
@@ -156,9 +161,12 @@ z-Suite: 5/7 P@1 vor wie nach. Lesart:
 
 | Sonde | Kippen beweist |
 |---|---|
-| K1 Filter aus | TOC-Chunk kehrt in den Kandidatenpool zurück |
+| K1 Filter aus | TOC-Chunk kehrt über den echten Search-Pfad in die Hits zurück (`TestFlipListK1SearchPathLeverFlip`: Hebel aus → Treffer, Hebel an → weg, Fachtext bleibt) |
 | K2 Präzision (Prosa/Formeln/Chronologien) | Fachtext fällt NIE durch den Detektor |
 | K3 Collapse aus | Duplikats-Zwillinge fluten die Rangliste |
 | K4 Diversität aus (K=0) | Buch-Flut kehrt zurück (5× dasselbe Kapitel) |
 | K5 Diversität zu eng (K=1-Verhalten) | zweiter Distinkt-Hit eines Buchs überlebt K=2 |
 | K6 All-Frontmatter-Pool | Filter weicht aus, statt Retrieval zu nullen |
+
+Reproduzieren: `go run ./cmd/retrieval-bench -suite cmd/retrieval-bench/gold_suite_v21.json -md out.md -perq perq.jsonl`
+z-Teilmenge: `jq -c 'select(.id|startswith("z"))' perq.jsonl`
