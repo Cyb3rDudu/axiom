@@ -241,9 +241,12 @@ func TestSearch_HybridUsesBothArms(t *testing.T) {
 
 func TestSearch_OverfetchAndTopN(t *testing.T) {
 	os := newOSServer(t)
+	// distinct text + document per hit: this test pins overfetch/TopN
+	// mechanics; #160 hygiene (collapse/diversity) has its own tests and
+	// would legitimately fold identical-text same-doc fixtures to one.
 	for i := 0; i < 20; i++ {
-		os.knnHits = append(os.knnHits, hit(fmt.Sprintf("k%d", i), "d", "t"))
-		os.bm25Hits = append(os.bm25Hits, hit(fmt.Sprintf("b%d", i), "d", "t"))
+		os.knnHits = append(os.knnHits, hit(fmt.Sprintf("k%d", i), fmt.Sprintf("d%d", i), fmt.Sprintf("text k%d distinct", i)))
+		os.bm25Hits = append(os.bm25Hits, hit(fmt.Sprintf("b%d", i), fmt.Sprintf("e%d", i), fmt.Sprintf("text b%d distinct", i)))
 	}
 	fp := &fakeProcessor{embedVec: []float32{0.1}}
 	fp.rerankRes = make([]processor.RerankScore, 30) // 3x top_n = 30 candidates

@@ -89,6 +89,8 @@ func main() {
 		searchSvc := search.New(cfg.OpenSearchURL, cfg.OpenSearchUsername, cfg.OpenSearchPassword, queryClient, rep, logger)
 		searchSvc.SparseArm = cfg.SearchSparseArm
 		searchSvc.Rerank = cfg.SearchRerank
+		searchSvc.FrontmatterFilter = cfg.SearchFrontmatterFilter
+		searchSvc.MaxPerBook = cfg.SearchMaxPerBook
 		if cfg.SearchGraphArm {
 			searchSvc.GraphArm = true
 			searchSvc.SetGraphSource(rep)

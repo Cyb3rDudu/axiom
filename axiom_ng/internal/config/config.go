@@ -82,6 +82,14 @@ type Config struct {
 	// SearchRerank runs the cross-encoder on /api/search (default true;
 	// AXIOM_SEARCH_RERANK=false is the latency-only profile, R7 matrix).
 	SearchRerank bool
+	// SearchFrontmatterFilter drops detected TOC/preface/references chunks
+	// from the candidate pool before rerank (#160; default true — the
+	// benchmark verdict wants them gone; false is the matrix/degradation
+	// lever).
+	SearchFrontmatterFilter bool
+	// SearchMaxPerBook caps chunks per document in the final ranking with
+	// rank-order refill (#160; default 2, 0 disables).
+	SearchMaxPerBook int
 
 	// DispatcherEnabled gates the claim/process dispatcher loop. It never runs
 	// unless explicitly turned on; tests construct the dispatcher directly.
@@ -139,6 +147,8 @@ func Load() Config {
 		SearchSparseArm:         envBoolDefault("AXIOM_SEARCH_SPARSE_ARM", false),
 		SearchGraphArm:          envBoolDefault("AXIOM_SEARCH_GRAPH_ARM", false),
 		SearchRerank:            envBoolDefault("AXIOM_SEARCH_RERANK", true),
+		SearchFrontmatterFilter: envBoolDefault("AXIOM_SEARCH_FRONTMATTER_FILTER", true),
+		SearchMaxPerBook:        envInt("AXIOM_SEARCH_MAX_PER_BOOK", 2),
 		ProcessorRequestTimeout: envDur("AXIOM_PROCESSOR_TIMEOUT", 300*time.Second),
 		ProcessorRunnerName:     env("AXIOM_PROCESSOR_RUNNER_NAME", ""),
 		DispatcherEnabled:       envBool("AXIOM_DISPATCHER_ENABLED"),
