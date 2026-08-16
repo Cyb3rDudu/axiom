@@ -46,3 +46,40 @@ dudu hat alle 25 Gold-Einträge bestätigt („alles grün“; `confirmed`-Flip 
 
 - Rare-Token-Sub-Suite (Normnummern/Akronyme) für das Sparse-Profil.
 - GraphCandidates-SQL-Tuning, falls der Arm produktiv werden soll.
+
+## v2 — Scoped Gold, Passagen-Ebene (#155, 2026-08-16)
+
+Suite: `gold_suite_v2.json` — **32 Queries, alle gescopet** (filters.document_ids): 25
+dudu-entschiedene Proposals (21× yes, 3× alt:0) + **7 verified** Einträge (z1–z7, aus
+ESG_Quellen_und_Zitatnotizen: menschen-verifizierte Stellen, Gold-Chunk per Suchanker-SQL
+aufgelöst). Status: **CONFIRMED — kein Titel-Zirkel, kein Maschinen-Schätzgold.**
+Metriken: P@1/hit@5/MRR/hit@10 auf Chunk-Ebene. 2 Läufe: **identisch auf 3 Dezimalstellen**
+(deterministisch).
+
+| Konfiguration | P@1 | hit@5 | MRR | hit@10 | p50 | p95 |
+|---|---|---|---|---|---|---|
+| dense-only | 0.188 | 0.656 | 0.390 | 0.844 | 73 ms | 102 ms |
+| hybrid | 0.219 | 0.781 | 0.461 | 0.875 | 66 ms | 86 ms |
+| **hybrid+rerank** | **0.750** | **0.938** | **0.842** | **0.969** | 6.3–6.9 s | 6.3–7.3 s |
+| +sparse | 0.750 | 0.938 | 0.834 | 0.969 | 6.2 s | 6.3–7.1 s |
+| +sparse+graph | 0.719 | 0.938 | 0.818 | 0.969 | 6.2 s | 6.4 s |
+
+### Reranker-Urteil (Passagen-Ebene, Realfall) — **JA, deutlich**
+
+- **P@1 verdreifacht** (0.219 → 0.750 vs. hybrid; 0.188 → 0.750 vs. dense-only), MRR
+  verdoppelt (0.461 → 0.842), hit@10 0.969. Die v1-Überraschung (dense-only vorn) war
+  tatsächlich das Titel-Zirkel-Artefakt — am echten Arbeitsfluss (Buch vorgegeben, beste
+  Stelle finden) gewinnt der Cross-Encoder exakt dort, wo seine Kernaufgabe liegt:
+  Chunk-Ranking im bekannten Buch.
+- **Verified-Teilmenge (z1–z7, n=7, härteste Messlatte):** P@1 0.571 / MRR 0.659 mit
+  Rerank (vs. 0.429/0.583 dense, 0.286/0.548 hybrid) — aber hit@5 0.714 vs. 0.857: ein
+  Fall, wo Rerank den Gold-Chunk aus den Top-5 drängte. Kleines n, ehrlich notiert.
+- Sparse: im Scope gleichauf (leicht MRR-drunter) — Default OFF bleibt. Graph: minimal
+  drunter (und im Scope prinzipbedingt ungetunt/unscoped) — Default OFF bleibt.
+- **Latenz:** Rerank kostet lokal (MPS) 6–7 s bei top_n=10/Overfetch 3× (30 Kandidaten à
+  ~210 ms). Hebel: 2× Overfetch (~4 s), Remote-CUDA (R4-Referenz: 0.95 s p95 bei
+  top_n=5), top_n=5. Für dudus Agenten-Fluss (zitiert Stellen): **hybrid+rerank,
+  top_n 5–10, Overfetch 2×** ist die empfohlene Produktionsform; Remote-Runner empfohlen.
+
+Reproduzieren: `AXIOM_TEST_DATABASE_URL=… AXIOM_PROCESSOR_URL=http://127.0.0.1:8012 go
+run ./cmd/retrieval-bench -suite cmd/retrieval-bench/gold_suite_v2.json -md out.md`

@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
@@ -151,3 +152,102 @@ func excerptOf(text string) string {
 }
 
 func shortID(id string) string { return id[:min(8, len(id))] }
+
+// --- v2 materialization (#155 execution order, 2026-08-16) -----------------
+//
+// Applies dudu's Durchnick (issue comment, 21x yes, 3x alt:0) to the
+// committed proposals and adds the seven verified entries z1-z7 whose gold
+// chunks resolve via search-anchor SQL against the books (dudu's
+// ESG_Quellen_und_Zitatnotizen — human-verified passages, the hardest bar).
+
+var v2Decisions = map[string]string{
+	"qa1": "yes", "qa2": "yes", "qa3": "yes", "qa4": "yes", "qa5": "yes",
+	"c6": "yes", "c7": "yes", "c8": "yes", "c9": "yes",
+	"c10": "alt:0", // Konsument*innenverantwortung-Kritik statt Georgien-Anekdote
+	"c11": "yes", "c12": "yes", "c13": "yes", "c14": "yes", "c15": "yes",
+	"f16": "yes", "f17": "yes",
+	"n18": "alt:0", // GRI-Überblick (4. Basis) statt IDW-Abschnitt
+	"n19": "yes",
+	"n20": "alt:0", // ALT nennt IDW PS 821 explizit
+	"n21": "yes", "a22": "yes", "a23": "yes", "a24": "yes", "f25": "yes",
+}
+
+type verifiedSpec struct {
+	ID, Q, Book, Anchor string
+}
+
+// z1-z7: dudu-curated passages from ESG_Quellen_und_Zitatnotizen.md.
+var verifiedSpecs = []verifiedSpec{
+	{"z1", "Was umfasst ESG über die Triple Bottom Line hinaus?", "CSR und Reporting", "Neben diesen drei Dimensionen sind heute"},
+	{"z2", "Wozu dient Nachhaltigkeitsreporting intern?", "CSR und Reporting", "bildet auch intern eine Grundlage für bessere Entscheidungen"},
+	{"z3", "Welchen Zweck haben Stakeholder-Beziehungen für Unternehmen?", "Stakeholder-Management und Nachhaltigkeits-Reporting", "Stakeholder-Beziehungen sollen dem Unternehmen dienen"},
+	{"z4", "Wie ist strategisches Nachhaltigkeitsmanagement aufgebaut?", "Nachhaltiges Management: Nachhaltigkeit als exzellenten Managementansatz entwickeln", "Es mündet in einer Roadmap mit Zielen"},
+	{"z5", "Führt gesellschaftliche Verantwortung zu Kosten oder zu Marktchancen?", "CSR und Innovationsmanagement", "gesteigerter Produktivität und einer Ausweitung der Märkte"},
+	{"z6", "Warum muss Nachhaltigkeit über die eigenen vier Wände hinaus in der Wertschöpfungskette liegen?", "CSR und Value Chain Management", "nicht nur in den 'eigenen 4 Wänden'"},
+	{"z7", "Wie hat Henkel Nachhaltigkeit messbar gemacht?", "CSR und Value Chain Management", "innerhalb von 20 Jahren das Verhältnis zwischen den geschaffenen Werten"},
+}
+
+// materializeV2 writes gold_suite_v2.json: the 25 decided proposals plus the
+// z1-z7 verified entries. Pure bookkeeping on the proposals plus anchor SQL.
+func materializeV2(ctx context.Context, database *db.DB, suiteDir string) error {
+	raw, err := os.ReadFile(filepath.Join(suiteDir, "gold_suite_v2_proposals.json"))
+	if err != nil {
+		return err
+	}
+	var props struct {
+		Proposals []proposal `json:"proposals"`
+	}
+	if err := json.Unmarshal(raw, &props); err != nil {
+		return err
+	}
+	titleToID, err := documentIDByTitle(ctx, database)
+	if err != nil {
+		return err
+	}
+	out := goldSuite{Note: "v2 (#155): 25 dudu-decided proposals (21 yes / 3 alt:0) + 7 verified entries from ESG_Quellen_und_Zitatnotizen (human-verified gold passages, anchor-resolved). Passage-level scoring: P@1/hit@5/MRR on gold chunk ids, scoped per query."}
+	for _, pr := range props.Proposals {
+		dec, ok := v2Decisions[pr.QueryID]
+		if !ok {
+			return fmt.Errorf("no decision for %s", pr.QueryID)
+		}
+		gold := pr.Best.ChunkID
+		if dec != "yes" { // alt:N — zero-based alternative index
+			idx := 0
+			if len(dec) > 5 {
+				idx, _ = strconv.Atoi(dec[4:])
+			}
+			if idx >= len(pr.Alt) {
+				return fmt.Errorf("%s: alt index %d out of range (%d alts)", pr.QueryID, idx, len(pr.Alt))
+			}
+			gold = pr.Alt[idx].ChunkID
+		}
+		out.Queries = append(out.Queries, goldQuery{
+			ID: pr.QueryID, Type: "proposal", Q: pr.Q,
+			Scope: pr.ScopeIDs, GoldChunks: []string{gold},
+			Confirmed: true, Origin: "dudu-durchnick:" + dec,
+		})
+	}
+	for _, z := range verifiedSpecs {
+		docID, ok := titleToID[norm(z.Book)]
+		if !ok {
+			return fmt.Errorf("z %s: book %q not found", z.ID, z.Book)
+		}
+		var chunkID string
+		if err := database.Pool().QueryRow(ctx, `
+			SELECT c.id::text
+			FROM processing_chunks c
+			JOIN processing_snapshots s ON s.id = c.snapshot_id AND s.active
+			WHERE s.document_id = $1::uuid AND c.text ILIKE '%' || $2 || '%'
+			ORDER BY c.chunk_index LIMIT 1`, docID, z.Anchor).Scan(&chunkID); err != nil {
+			return fmt.Errorf("z %s anchor %q: %w", z.ID, z.Anchor, err)
+		}
+		out.Queries = append(out.Queries, goldQuery{
+			ID: z.ID, Type: "verified", Q: z.Q,
+			Scope: []string{docID}, GoldChunks: []string{chunkID},
+			Confirmed: true, Origin: "dudu-zitatnotizen",
+		})
+		fmt.Printf("  %s: anchor -> chunk %s (%s)\n", z.ID, chunkID[:8], z.Book)
+	}
+	buf, _ := json.MarshalIndent(out, "", "  ")
+	return os.WriteFile(filepath.Join(suiteDir, "gold_suite_v2.json"), buf, 0o644)
+}
