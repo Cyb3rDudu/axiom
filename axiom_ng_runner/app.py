@@ -588,9 +588,13 @@ def job_ack(job_id: str, body: AckPayload) -> AckResponse:
 # --- query endpoints (epic #130, contract §7a additive v1) -----------------
 
 
-@app.post("/v1/embed")
+@app.post("/v1/embed", response_model_exclude_none=True)
 def embed_queries(body: EmbedRequest) -> EmbedResponse:
     """Query-embedding endpoint (#131): dense BGE-M3 vectors for query texts.
+
+    response_model_exclude_none keeps the response §7a-clean on the dense-only
+    path: "sparse" is present ONLY when the request asked include_sparse
+    (no "sparse": null).
 
     Plain def (not async): the model call is compute-bound and runs in the
     threadpool, same rationale as POST /v1/process. The embedder is the

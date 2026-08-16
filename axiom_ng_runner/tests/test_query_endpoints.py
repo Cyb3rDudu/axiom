@@ -458,4 +458,6 @@ def test_embed_sparse_shares_ingest_reference_space(client):
 def test_embed_default_has_no_sparse(client):
     r = client.post("/v1/embed", json=_embed_payload(["x"]))
     assert r.status_code == 200
-    assert r.json().get("sparse") is None  # additive: absent unless asked
+    # §7a additive: "sparse" must be ABSENT from the body (not JSON null)
+    # when the request did not ask for it.
+    assert "sparse" not in r.json()
