@@ -54,7 +54,27 @@ type Service struct {
 	// the OS rank_features field, R5 #135). Default true; R7 flips it for
 	// A/B measurement (AXIOM_SEARCH_SPARSE_ARM).
 	SparseArm bool
+	// GraphArm enables the fourth candidate source (R6 #136): entities in
+	// the hybrid top hits expand to neighbor chunks through the L6 graph
+	// (mention-stability filtered). Default OFF — R7 measures whether it
+	// helps (AXIOM_SEARCH_GRAPH_ARM). Requires SetGraphSource.
+	GraphArm bool
+	graph    GraphSource
 }
+
+// GraphSource expands seed chunks through stable entities into neighbor
+// chunks (implemented by repo.Repo.GraphCandidates).
+type GraphSource interface {
+	GraphCandidates(ctx context.Context, seedChunkIDs []string, minMentions, limit int) ([]repo.KGChunkCandidate, error)
+}
+
+// SetGraphSource wires the graph expansion source (nil keeps the arm off
+// even when GraphArm is set).
+func (s *Service) SetGraphSource(g GraphSource) { s.graph = g }
+
+// graphMinMentions is the stability floor for graph expansion (same L8-§6
+// rationale as the KG API default).
+const graphMinMentions = 2
 
 // Processor is the runner query-side surface the pipeline needs
 // (implemented by processor.Client).
@@ -237,6 +257,33 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 	// RRF merge over the arms (rank 1-based per arm). Arm order fixes tie
 	// order: dense first, then BM25, then sparse.
 	merged := rrfMerge([]([]osHit){dense.hits, bm25.hits, sparse.hits}, fetchN)
+
+	// Graph arm (R6 #136, default off): expand the hybrid top through the
+	// L6 graph and re-fuse — neighbor chunks enter the candidate pool with
+	// their own RRF ranks, never displacing hybrid hits outright.
+	if s.GraphArm && s.graph != nil && len(merged) > 0 {
+		seed := make([]string, 0, min(req.TopN, len(merged)))
+		for _, c := range merged {
+			if len(seed) == req.TopN {
+				break
+			}
+			seed = append(seed, c.ID)
+		}
+		cands, gerr := s.graph.GraphCandidates(ctx, seed, graphMinMentions, fetchN)
+		if gerr != nil {
+			s.log.Printf("search: graph arm failed (continuing without): %v", gerr)
+		} else if len(cands) > 0 {
+			graphHits := make([]osHit, 0, len(cands))
+			for _, c := range cands {
+				loc, _ := json.Marshal(c.Locator)
+				graphHits = append(graphHits, osHit{
+					ID: c.ChunkID, Text: c.Text, DocumentID: c.DocumentID,
+					Locator: loc, SectionTitles: c.SectionTitles,
+				})
+			}
+			merged = rrfMerge([]([]osHit){dense.hits, bm25.hits, sparse.hits, graphHits}, fetchN)
+		}
+	}
 	if len(merged) == 0 {
 		resp.Hits = []Hit{}
 		resp.TookMS = msSince(t0)

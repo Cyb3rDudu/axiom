@@ -88,7 +88,13 @@ func main() {
 		}
 		searchSvc := search.New(cfg.OpenSearchURL, cfg.OpenSearchUsername, cfg.OpenSearchPassword, queryClient, rep, logger)
 		searchSvc.SparseArm = cfg.SearchSparseArm
+		if cfg.SearchGraphArm {
+			searchSvc.GraphArm = true
+			searchSvc.SetGraphSource(rep)
+		}
 		srv.SetSearchService(searchSvc)
+		// R6 (#136): knowledge-graph read API over the L6 data.
+		srv.SetKGService(rep)
 		// Role probe (R4 Ziel 1/3): capability check of the query runner at
 		// start — verifies query_embedding/reranking and logs the role map.
 		// Best-effort: an unreachable query runner keeps search degraded-but-

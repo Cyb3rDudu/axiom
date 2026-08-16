@@ -70,6 +70,10 @@ type Config struct {
 	// arm on POST /api/search (R5 #135). Default on; R7 A/B flips it.
 	SearchSparseArm bool
 
+	// SearchGraphArm enables the graph-expansion candidate source on
+	// POST /api/search (R6 #136). Default OFF — R7 measures first.
+	SearchGraphArm bool
+
 	// DispatcherEnabled gates the claim/process dispatcher loop. It never runs
 	// unless explicitly turned on; tests construct the dispatcher directly.
 	DispatcherEnabled bool
@@ -124,6 +128,7 @@ func Load() Config {
 		QueryRunnerURL:          env("AXIOM_QUERY_RUNNER_URL", defaultLocalRunner),
 		IngestFallbackURL:       env("AXIOM_INGEST_FALLBACK_URL", defaultLocalRunner),
 		SearchSparseArm:         envBoolDefault("AXIOM_SEARCH_SPARSE_ARM", true),
+		SearchGraphArm:          envBoolDefault("AXIOM_SEARCH_GRAPH_ARM", false),
 		ProcessorRequestTimeout: envDur("AXIOM_PROCESSOR_TIMEOUT", 300*time.Second),
 		ProcessorRunnerName:     env("AXIOM_PROCESSOR_RUNNER_NAME", ""),
 		DispatcherEnabled:       envBool("AXIOM_DISPATCHER_ENABLED"),

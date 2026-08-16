@@ -656,3 +656,92 @@ func TestSearch_SparseArmOffSwitch(t *testing.T) {
 		t.Fatal("sparse-only hit must not surface when the arm is off")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 8. R6 (#136): the graph expansion arm (behind GraphArm, default off)
+// ---------------------------------------------------------------------------
+
+type fakeGraph struct {
+	cands []repo.KGChunkCandidate
+	err   error
+	seeds []string
+	minM  int
+}
+
+func (f *fakeGraph) GraphCandidates(ctx context.Context, seedChunkIDs []string, minMentions, limit int) ([]repo.KGChunkCandidate, error) {
+	f.seeds, f.minM = seedChunkIDs, minMentions
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.cands, nil
+}
+
+func kgCand(id, doc, text string) repo.KGChunkCandidate {
+	return repo.KGChunkCandidate{ChunkID: id, DocumentID: doc, Text: text,
+		Locator: map[string]any{"type": "page_span", "page_label_start": "9"}, EntityLinks: 3}
+}
+
+func TestSearch_GraphArmOffByDefault(t *testing.T) {
+	os := newOSServer(t)
+	os.knnHits = []osHit{hit("d", "doc", "dense")}
+	fg := &fakeGraph{}
+	svc := newService(os.URL, &fakeProcessor{embedVec: []float32{1}}, fakeDocs{})
+	svc.SetGraphSource(fg)
+	// GraphArm deliberately NOT set (default false).
+	if _, err := svc.Search(context.Background(), Request{Query: "q", TopN: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if fg.seeds != nil {
+		t.Fatal("graph must not expand when the arm is off")
+	}
+}
+
+func TestSearch_GraphArmExpandsCandidates(t *testing.T) {
+	os := newOSServer(t)
+	os.knnHits = []osHit{hit("d", "doc", "dense")}
+	os.bm25Hits = []osHit{hit("b", "doc", "bm25")}
+	fg := &fakeGraph{cands: []repo.KGChunkCandidate{kgCand("g", "doc", "graph neighbor")}}
+	svc := newService(os.URL, &fakeProcessor{embedVec: []float32{1}}, fakeDocs{})
+	svc.GraphArm = true
+	svc.SetGraphSource(fg)
+	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seeds are the hybrid top hits (up to top_n of them, RRF-ordered).
+	if len(fg.seeds) != 2 || fg.seeds[0] != "d" {
+		t.Fatalf("seeds must be the RRF-ordered hybrid hits, got %v", fg.seeds)
+	}
+	if fg.minM != graphMinMentions {
+		t.Fatalf("stability floor must apply, got %d", fg.minM)
+	}
+	ids := map[string]bool{}
+	for _, h := range res.Hits {
+		ids[h.ChunkID] = true
+	}
+	if !ids["g"] {
+		t.Fatalf("graph candidate must surface in the pool, hits: %v", ids)
+	}
+	// The graph candidate carries its locator into the hit view.
+	for _, h := range res.Hits {
+		if h.ChunkID == "g" && h.Locator.Kind != "page" {
+			t.Fatalf("graph hit locator lost: %+v", h.Locator)
+		}
+	}
+}
+
+func TestSearch_GraphArmFailureDegrades(t *testing.T) {
+	os := newOSServer(t)
+	os.knnHits = []osHit{hit("d", "doc", "dense")}
+	fg := &fakeGraph{err: errors.New("db down")}
+	svc := newService(os.URL, &fakeProcessor{embedVec: []float32{1}}, fakeDocs{})
+	svc.GraphArm = true
+	svc.SetGraphSource(fg)
+	res, err := svc.Search(context.Background(), Request{Query: "q", TopN: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hits) != 1 || res.Hits[0].ChunkID != "d" {
+		t.Fatalf("graph failure must not break search: %+v", res.Hits)
+	}
+}
