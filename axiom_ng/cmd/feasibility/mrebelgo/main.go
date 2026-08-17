@@ -252,6 +252,16 @@ func constDecBatch(encMask []int64, encHidden []float32, batch int) *constDec {
 	return cd
 }
 
+// iobState holds an IoBinding whose CONSTANT inputs (enc_mask, enc_hidden) stay bound
+// across calls; only input_ids + output rebind per call (shapes change with L).
+type iobState struct {
+	b        *ort.IoBinding
+	boundKey string // "B<batch>" of the currently bound constants
+	outName  string
+}
+
+var iob iobState
+
 // decodeStepB runs B equal-length beam sequences in ONE batched decoder call and returns
 // the last-position logits row per beam (Opt-3: [3, L] batching, Python's structure).
 func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, oneOutput bool) ([][]float32, error) {
@@ -283,6 +293,39 @@ func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, 
 			if strings.Contains(outs[i], "decoder") { Lp = []int64{B, 16, L, headDim} } else { Lp = []int64{B, 16, encLen, headDim} }
 			t, _ := ort.NewEmptyTensor[float32](ort.NewShape(Lp...))
 			outsV[i] = t
+		}
+	}
+	if os.Getenv("MRBEL_IOB") == "1" {
+		// IOBinding attempt (dudu directive: exhaust before delimiting): constants stay
+		// bound across calls; ids + output rebind per call.
+		if iob.b == nil {
+			nb, err := dec.CreateIoBinding()
+			if err == nil {
+				iob.b = nb
+				iob.outName = "logits_last"
+				if !lastOut { iob.outName = "logits" }
+			}
+		}
+		if iob.b != nil {
+			key := fmt.Sprintf("B%d", B)
+			if iob.boundKey != key {
+				iob.b.ClearBoundInputs()
+				if err := iob.b.BindInput("encoder_attention_mask", cd.tm); err != nil { return nil, err }
+				if err := iob.b.BindInput("encoder_hidden_states", cd.th); err != nil { return nil, err }
+				iob.boundKey = key
+			}
+			iob.b.ClearBoundOutputs()
+			if err := iob.b.BindOutput(iob.outName, logits); err != nil { return nil, err }
+			if err := iob.b.BindInput("input_ids", tid); err != nil { return nil, err }
+			if err := dec.RunWithBinding(iob.b); err != nil { return nil, err }
+			base := logits.GetData()
+			rows := make([][]float32, B)
+			for b := int64(0); b < B; b++ {
+				var start int64
+				if lastOut { start = b * vocab } else { start = b*L*vocab + (L-1)*vocab }
+				rows[b] = base[start : start+vocab]
+			}
+			return rows, nil
 		}
 	}
 	if err := dec.Run([]ort.Value{cd.tm, tid, cd.th}, outsV); err != nil { return nil, err }
