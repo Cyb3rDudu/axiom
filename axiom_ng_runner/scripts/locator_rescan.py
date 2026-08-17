@@ -14,11 +14,17 @@ embeddings, structure stay byte-identical).
 Modes: default = dry scan (statistics + symptom list only);
 --apply writes DB (processing_chunks.locator) + OpenSearch bulk updates;
 --apply-epub-only writes ONLY the unambiguous epub_cfi -> none stamps
-(the 286 chunks) and leaves every PDF locator untouched until slice 4
-(dudu's Versatz-Tabelle) validates folio-run alignment — the z5 spot
-check showed the run can be misaligned against the printed truth, and a
-false folio heal would be silent-wrong under the HIGHEST trust mark.
-Idempotent by construction: a second run reports 0 changes.
+and leaves every PDF locator untouched until slice 4 (dudu's
+Versatz-Tabelle) validates the heal set. NOTE (review-corrected): the
+z5 spot check heals CORRECTLY (Altenburger: PDF page 12 -> folio '4',
+folio_verified, 227/250 pages) — an earlier draft claimed a
+misalignment based on a cross-book mix-up (Hentze is z3, not z5). The
+real open question for the Tabelle: whether CHAPTER-RELATIVE folios
+(World Bank class — front-section restarts the folio verifier
+correctly resolves) are the citable page form dudu wants, and whether
+all 3,735 heal candidates match the 41 verified references.
+Idempotent by construction: a second run reports 0 changes (see the
+DB/OS retry note at the bulk loop for the partial-failure caveat).
 """
 from __future__ import annotations
 
@@ -70,6 +76,8 @@ def main() -> int:
     ap.add_argument("--apply-epub-only", action="store_true",
                     help="write ONLY epub_cfi -> none stamps (safe half; PDF locators wait for the slice-4 counter-proof)")
     args = ap.parse_args()
+    if args.apply and args.apply_epub_only:
+        ap.error("--apply and --apply-epub-only are mutually exclusive (scope vs full write)")
     args.apply = args.apply or args.apply_epub_only
 
     conn = psycopg2.connect(DSN)
@@ -92,6 +100,8 @@ def main() -> int:
     updates: list[tuple[str, dict]] = []
     dist: Counter[str] = Counter()
     label_heals = 0
+    heals_by_doc: Counter[str] = Counter()
+    reasons: Counter[str] = Counter()
     symptoms: list[str] = []
     for chunk_id, locator, path in rows:
         loc = locator if isinstance(locator, dict) else json.loads(locator or "{}")
@@ -111,6 +121,7 @@ def main() -> int:
                     folio = label_map.get(int(phys), old)
                     if folio != old:
                         label_heals += 1
+                        heals_by_doc[os.path.basename(norm_path(path) or "?")[:44]] += 1
                         if len(symptoms) < 12:
                             symptoms.append(f"{os.path.basename(norm_path(path) or '?')[:40]}: Label {old!r} -> Folio {folio!r}")
                     new_loc["page_label_start"] = str(folio)
@@ -122,7 +133,10 @@ def main() -> int:
         else:
             continue
         dist[new_loc["page_source"]] += 1
-        if new_loc != loc and (not args.apply_epub_only or new_loc.get("page_source") == pt.NONE and loc.get("type") == "epub_cfi"):
+        if new_loc != loc and (
+            not args.apply_epub_only
+            or (new_loc.get("page_source") == pt.NONE and loc.get("type") == "epub_cfi")
+        ):
             updates.append((chunk_id, new_loc))
 
     total = sum(dist.values())
@@ -133,6 +147,9 @@ def main() -> int:
     print(f"\nLabel-Heilungen (Label != Folio): {label_heals}")
     for s in symptoms:
         print(f"  · {s}")
+    print("\nHeilungen je Dokument (Top 10):")
+    for doc, n in heals_by_doc.most_common(10):
+        print(f"  {n:5d}  {doc}")
     print(f"zu aktualisierende Chunks: {len(updates)}")
 
     if not args.apply:
@@ -153,6 +170,7 @@ def main() -> int:
     # OS: bulk partial updates of the locator field
     sess = requests.Session()
     done = 0
+    os_exit_code = 0
     for i in range(0, len(updates), 500):
         batch = updates[i : i + 500]
         body = ""
@@ -164,12 +182,27 @@ def main() -> int:
             headers={"Content-Type": "application/x-ndjson"}, timeout=120,
         )
         r.raise_for_status()
-        failed = sum(1 for it in r.json().get("items", []) if "error" in it.get("update", {}))
-        if failed:
-            print(f"  OS-Batch {i}: {failed} fehlgeschlagen")
-        done += len(batch) - failed
+        failed_ids = [cid for cid, it in zip((c for c, _ in batch), r.json().get("items", []))
+                      if "error" in it.get("update", {})]
+        if failed_ids:
+            print(f"  OS-Batch {i}: {len(failed_ids)} fehlgeschlagen — ein Retry")
+            locs = {c: l for c, l in batch}
+            body = "".join(
+                json.dumps({"update": {"_id": cid}}) + "\n" + json.dumps({"doc": {"locator": locs[cid]}}) + "\n"
+                for cid in failed_ids
+            )
+            r2 = sess.post(f"{OS_URL}/{OS_INDEX}/_bulk", data=body.encode("utf-8"),
+                           headers={"Content-Type": "application/x-ndjson"}, timeout=120)
+            r2.raise_for_status()
+            still = sum(1 for it in r2.json().get("items", []) if "error" in it.get("update", {}))
+            done += len(failed_ids) - still
+            if still:
+                print(f"  OS-Batch {i}: {still} BLEIBEN fehlgeschlagen — DB ist vor OS; Konvergenz-Kontrolle nötig")
+                os_exit_code = 1
+        else:
+            done += len(batch)
     print(f"OS aktualisiert: {done} Chunks")
-    return 0
+    return os_exit_code
 
 
 if __name__ == "__main__":
