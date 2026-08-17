@@ -43,14 +43,15 @@ func decodeSeq(tok *sentencepiece.Tokenizer, ids []int64) string {
 	}
 	for i, id := range ids {
 		if id == eosID && i > 0 { continue } // skip internal </s> (matches caller truncating at first eos)
+		if id == 1 { continue }              // <pad>
 		if str, ok := addedTokens[int32(id)]; ok {
-			if id == 1 || id == 2 { continue } // <pad>, </s>
 			flush()
 			sb.WriteString(str)
 			continue
 		}
 		if id < 0 || id >= vocab { continue }
-		baseRun = append(baseRun, int(id))
+		// HF-vocab ids are raw-sentencepiece id + 1 (HF reserves <pad>=1); reverse for Go decode.
+		baseRun = append(baseRun, int(id)-1)
 	}
 	flush()
 	return normalizeHF(sb.String())
