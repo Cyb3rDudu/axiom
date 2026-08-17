@@ -982,3 +982,29 @@ func TestSearch_GraphArmFailureDegrades(t *testing.T) {
 		t.Fatalf("graph failure must not break search: %+v", res.Hits)
 	}
 }
+
+// #173: rendering by trust level — physical_only NEVER renders as a printed
+// page ("PDF-S." prefix), folio_verified/pdf_label_sane keep "S.", the
+// page_source field rides along for client-side citation gating.
+func TestLocatorViewTrustLevels(t *testing.T) {
+	ch := []string{"2 Grundlagen", "2.5 Stakeholder"}
+	folio := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"47","page_source":"folio_verified"}`), ch)
+	if folio.PageSource != "folio_verified" || !strings.Contains(folio.Label, "S. 47") || strings.Contains(folio.Label, "PDF-S.") {
+		t.Fatalf("folio_verified renders as print page: %+v", folio)
+	}
+	phys := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"5","physical_page_start":4,"page_source":"physical_only"}`), ch)
+	if !strings.Contains(phys.Label, "PDF-S.") || strings.Contains(phys.Label, "· S. ") {
+		t.Fatalf("physical_only must render PDF-S. with the physical index: %+v", phys)
+	}
+	if phys.PageSource != "physical_only" {
+		t.Fatalf("page_source must ride along: %+v", phys)
+	}
+	epub := locatorView(json.RawMessage(`{"type":"epub_cfi","cfi_start":"/6/4!/x"}`), ch)
+	if epub.PageSource != "none" || epub.Kind != "epub_cfi" {
+		t.Fatalf("epub_cfi carries none: %+v", epub)
+	}
+	legacy := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"12"}`), ch)
+	if legacy.PageSource != "pdf_label_sane" || !strings.Contains(legacy.Label, "S. 12") {
+		t.Fatalf("legacy locators default honestly: %+v", legacy)
+	}
+}

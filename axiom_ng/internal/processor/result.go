@@ -73,7 +73,10 @@ type Chunk struct {
 }
 
 // Locator is the source position (§11). page_span for PDFs (physical+logical),
-// epub_cfi for pageless EPUBs.
+// epub_cfi for pageless EPUBs. PageSource (#173) is the trust level of the
+// page reference — folio_verified | pdf_label_sane | physical_only | none:
+// only folio_verified may be cited as a printed page; the contract is
+// "never guess — every page reference carries its level".
 type Locator struct {
 	Type              string `json:"type"`
 	PhysicalPageStart *int   `json:"physical_page_start,omitempty"`
@@ -81,6 +84,7 @@ type Locator struct {
 	PageLabelStart    string `json:"page_label_start,omitempty"`
 	PageLabelEnd      string `json:"page_label_end,omitempty"`
 	Source            string `json:"source"`
+	PageSource        string `json:"page_source,omitempty"`
 	CFIStart          string `json:"cfi_start,omitempty"`
 	CFIEnd            string `json:"cfi_end,omitempty"`
 }
