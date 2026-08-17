@@ -64,8 +64,10 @@ func main() {
 	logits, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, 1, 250071))
 	outsV := []ort.Value{logits}
 	for l := 0; l < 12; l++ {
-		t, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, 16, 2, 64))
-		outsV = append(outsV, t)
+		for k := 0; k < 2; k++ {
+			t, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, 16, 2, 64))
+			outsV = append(outsV, t)
+		}
 	}
 	fmt.Println("running with_past graph with rank-4 past tensors...")
 	if err := sess.Run(feeds, outsV); err != nil {
