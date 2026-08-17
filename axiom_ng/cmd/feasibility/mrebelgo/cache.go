@@ -57,9 +57,9 @@ func step1Cached(dec1 *ort.DynamicAdvancedSession, encHidden []float32, encMask 
 }
 
 // stepNCached runs decoder_with_past_model.onnx for one new token.
+// tm and encCache are pre-created (constant across steps); only tid is new per call.
 func stepNCached(decK *ort.DynamicAdvancedSession, tokID int64,
-	decCache, encCache []*ort.Tensor[float32], encMask []int64, encLen, decLen int64) ([]float32, []*ort.Tensor[float32]) {
-	tm, _ := ort.NewTensor(ort.NewShape(1, encLen), encMask)
+	decCache, encCache []*ort.Tensor[float32], tm *ort.Tensor[int64], encLen, decLen int64) ([]float32, []*ort.Tensor[float32]) {
 	tid, _ := ort.NewTensor(ort.NewShape(1, 1), []int64{tokID})
 	feeds := []ort.Value{tm, tid}
 	for l := 0; l < nLayers; l++ {
@@ -74,7 +74,7 @@ func stepNCached(decK *ort.DynamicAdvancedSession, tokID int64,
 		outs[i] = t
 	}
 	if err := decK.Run(feeds, outs); err != nil { fatal("stepNCached: %v", err) }
-	tm.Destroy(); tid.Destroy()
+	tid.Destroy()
 	newDec := make([]*ort.Tensor[float32], 0, 24)
 	for l := 0; l < nLayers; l++ {
 		newDec = append(newDec, outs[1+2*l].(*ort.Tensor[float32]), outs[2+2*l].(*ort.Tensor[float32]))
@@ -99,6 +99,8 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 	encHidden []float32, encMask []int64) []seq {
 	encLen := int64(len(encMask))
 	logits1, decCache0, encCache := step1Cached(dec1, encHidden, encMask, encLen)
+	tm, _ := ort.NewTensor(ort.NewShape(1, encLen), encMask) // constant across steps
+	defer tm.Destroy()
 	logP1 := logSoftmax(logits1)
 	beams := []hypC{}
 	for _, c := range topKIndices(logP1, 2*numBeams) {
@@ -110,7 +112,7 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 		all := make([]hypC, 0, len(beams)*(2*numBeams))
 		for _, b := range beams {
 			lastTok := b.ids[len(b.ids)-1]
-			rawLog, newCache := stepNCached(decK, lastTok, b.past, encCache, encMask, encLen, decLen)
+			rawLog, newCache := stepNCached(decK, lastTok, b.past, encCache, tm, encLen, decLen)
 			logP := logSoftmax(rawLog)
 			for _, c := range topKIndices(logP, 2*numBeams) {
 				all = append(all, hypC{
