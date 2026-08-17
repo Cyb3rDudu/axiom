@@ -224,7 +224,7 @@ func stepN(s *ort.DynamicAdvancedSession, tokID int64,
 	tid, _ := ort.NewTensor(sh, []int64{tokID})
 
 	feeds := make([]ort.Value, 0, 50)
-	feeds = append(feeds, tid, tm) // PROBE: input_ids first
+	feeds = append(feeds, tm, tid)
 	// per layer: dec.k,dec.v,enc.k,enc.v
 	for l := 0; l < nLayers; l++ {
 		feeds = append(feeds, pastDec[2*l], pastDec[2*l+1])
