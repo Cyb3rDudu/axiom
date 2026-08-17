@@ -1,45 +1,56 @@
-// mrtok — verify tggo/goSentencePiece reproduces the MBart50TokenizerFast
-// input_ids for mREBEL (en_XX prefix + </s> suffix + subword ids), Restpunkt 6.
+// mrtok — verify the mREBEL input-encoding rule reproduces MBart50TokenizerFast.
+//
+// Python (runner oracle): tok(text, max_length=512, padding, truncation) yields
+//   [250004(en_XX), <token ids...>, </s>=2]
+// with every content token id = raw-sentencepiece_id + 1 (HF reserves <pad>=1 in
+// the mbart vocab, off-by-one vs the raw piece id). tggo/goSentencePiece gives the
+// RAW piece ids (no prefix, no +1). Rule to reproduce Python ids from Go:
+//   input_ids = [250004] + [go_id + 1 for go_id in go_ids] + [2]
+// (go_ids already includes the trailing <unk>/`.`. There is NO <s>=0 prefix and NO
+// </s> appended by Go — the <s> does not appear; </s> is added manually as 2.)
+// This tool asserts the built-up ids equal the hard-coded Python reference for a
+// few short German sentences.
 package main
 
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/tggo/goSentencePiece"
 )
 
 func main() {
 	sp := "/models/mrebel_onnx/sentencepiece.bpe.model"
-	var texts = []string{
-		"Virchow entdeckte 1821 die Zelle und ihre Teilung.",
-		"CSR-Bericht umfasst die Offenlegung nichtfinanzieller Informationen.",
+	tk, err := sentencepiece.NewTokenizer(sp)
+	if err != nil { fatal("tok: %v", err) }
+
+	refs := map[string][]int{
+		"Teilung.": {250004, 16046, 1619, 5, 2},
+		"Zelle.":   {250004, 567, 2118, 5, 2},
+		"A.":       {250004, 62, 5, 2},
 	}
-	for _, t := range texts {
-		for _, wrap := range []string{"none", "mbart"} {
-			tk, err := sentencepiece.NewTokenizer(sp)
-			if err != nil { fatal("tok: %v", err) }
-			var ids []int
-			if wrap == "mbart" {
-				// mbart: prepend language token en_XX id 250004, append </s> id 2? 
-				// We must discover the actual en_XX id. Try "▁en_XX" encode then wrap.
-				ids, _ = tk.Encode(t)
-				// append </s>=2 (mbart eos), and the lang token handled separately
-			} else {
-				ids, _ = tk.Encode(t)
-			}
-			fmt.Printf("wrap=%s text=%q\n  ids=%v\n  first5=%v len=%d\n",
-				wrap, t, ids, idsHeader(ids), len(ids))
-		}
+	allOK := true
+	for text, want := range refs {
+		got, _ := tk.Encode(text)            // raw Go ids
+		built := []int{250004}               // en_XX language prefix (mbart default)
+		for _, id := range got { built = append(built, id+1) }
+		built = append(built, 2)             // </s>
+		ok := equal(built, want)
+		if !ok { allOK = false }
+		fmt.Printf("%-12q\n  got   =%v\n  built =%v\n  want  =%v  MATCH=%v\n",
+			text, got, built, want, ok)
 	}
-	// does the vocab contain en_XX as a piece?
-	tk, _ := sentencepiece.NewTokenizer(sp)
-	pieces := []string{"▁en_XX", "en_XX", "<s>", "<pad>", "</s>", "<unk>", "▁Vir", "chow"}
-	for _, p := range pieces {
-		e, _ := tk.Encode(strings.ReplaceAll(p, "▁", ""))
-		fmt.Printf("encode %-12q -> %v\n", p, e[:3])
+	if allOK {
+		fmt.Println("MREBEL_INPUT_ENCODING_MATCH: ALL OK")
+	} else {
+		fmt.Println("MREBEL_INPUT_ENCODING_MATCH: MISMATCH")
+		os.Exit(1)
 	}
 }
-func idsHeader(ids []int) []int { if len(ids) > 5 { return ids[:5] }; return ids }
+
+func equal(a, b []int) bool {
+	if len(a) != len(b) { return false }
+	for i := range a { if a[i] != b[i] { return false } }
+	return true
+}
 func fatal(f string, a ...any) { fmt.Fprintf(os.Stderr, "FATAL: "+f+"\n", a...); os.Exit(1) }
