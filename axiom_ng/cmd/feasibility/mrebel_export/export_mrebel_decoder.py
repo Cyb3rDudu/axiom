@@ -105,7 +105,7 @@ def export_decoders():
             w, (dec_ids, enc_hidden, enc_mask),
             os.path.join(OUT, "decoder_model.onnx"),
             input_names=["decoder_input_ids", "encoder_hidden_states", "encoder_attention_mask"],
-            output_names=[*past_names, "logits"],
+            output_names=[("o_" + n) for n in past_names] + ["logits"],
             dynamic_axes={
                 "decoder_input_ids": {0: "batch", 1: "decoder_seq"},
                 "encoder_hidden_states": {0: "batch", 1: "enc_seq"},
@@ -140,7 +140,7 @@ def export_decoders():
             os.path.join(OUT, "decoder_with_past_model.onnx"),
             input_names=["decoder_input_ids", *past_names,
                          "encoder_hidden_states", "encoder_attention_mask"],
-            output_names=[*past_names, "logits"],
+            output_names=[("o_" + n) for n in past_names] + ["logits"],
             dynamic_axes={
                 "decoder_input_ids": {0: "batch", 1: "decoder_seq"},
                 "logits": {0: "batch", 1: "decoder_seq"},
