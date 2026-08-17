@@ -97,9 +97,12 @@ func main() {
 	for i := range mask { mask[i] = 1 }
 	encHidden := runEncoder(encSess, encIDs, mask)
 
-	ids, text := greedyDecode(dec1Sess, decKSess, encHidden, mask, tok)
-	fmt.Printf("chunk %d ids=%v\n%s\n", ci, ids, text)
-	os.WriteFile(outPath, []byte(text+"\n"), 0o644)
+	ids, seqs := beamSearchOutput(tok, dec1Sess, decKSess, encHidden, mask)
+	_ = ids
+	for i, s := range seqs {
+		fmt.Printf("chunk %d seq[%d] ids=%v\n%s\n", ci, i, ids[i], s)
+	}
+	os.WriteFile(outPath, []byte(strings.Join(seqs, "\n========================\n")+"\n"), 0o644)
 }
 
 // --- graph name lists (exact ONNX order, verified) ---
@@ -242,41 +245,4 @@ func stepN(s *ort.DynamicAdvancedSession, tokID int64,
 	if err := s.Run(feeds, outs); err != nil { fatal("stepN: %v", err) }
 	tm.Destroy(); tid.Destroy()
 	return logits.GetData(), outT
-}
-
-func argmax(logits []float32) (int64, float64) {
-	best := int64(0); bestv := logits[0]
-	for i := 1; i < len(logits); i++ { if logits[i] > bestv { bestv, best = logits[i], int64(i) } }
-	return best, float64(bestv)
-}
-
-func greedyDecode(dec1, decK *ort.DynamicAdvancedSession, encHidden []float32, encMask []int64, tok *sentencepiece.Tokenizer) ([]int64, string) {
-	encLen := int64(len(encMask))
-	logits, present := step1(dec1, encHidden, encMask, encLen)
-	// split present into decoder (24) + encoder (24) caches from dec1Outputs order
-	pastDec := make([]*ort.Tensor[float32], 0, 24)
-	pastEnc := make([]*ort.Tensor[float32], 0, 24)
-	for l := 0; l < nLayers; l++ {
-		base := 1 + 4*l // dec.k,dec.v,enc.k,enc.v
-		pastDec = append(pastDec, present[base], present[base+1])
-		pastEnc = append(pastEnc, present[base+2], present[base+3])
-	}
-	cur, _ := argmax(logits)
-	ids := []int64{cur}
-	// step1 cached decoder length = 1 (only tp_XX); subsequent steps append one token each.
-	decLen := int64(1)
-	for step := 0; step < maxDec-1 && cur != eosID; step++ {
-		newLog, newDec := stepN(decK, cur, pastDec, pastEnc, encMask, encLen, decLen)
-		cur, _ = argmax(newLog)
-		ids = append(ids, cur)
-		// rotate decoder cache
-		newPastDec := make([]*ort.Tensor[float32], 0, 24)
-		for l := 0; l < nLayers; l++ {
-			newPastDec = append(newPastDec, newDec[1+2*l], newDec[2+2*l])
-		}
-		for i := range pastDec { pastDec[i].Destroy() } // old cache no longer needed
-		pastDec = newPastDec
-		decLen++
-	}
-	return ids, decodeSeq(tok, ids)
 }
