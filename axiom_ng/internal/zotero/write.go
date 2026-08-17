@@ -109,7 +109,9 @@ func IsVersionConflict(err error) bool {
 // ItemVersion fetches an item's current version (If-Unmodified-Since-Version
 // source for deletes).
 func (w *WriteClient) ItemVersion(key string) (string, error) {
-	_, hdr, err := w.do(http.MethodHead, "/api/users/0/items/"+key, nil, nil)
+	// GET carries Last-Modified-Version on the local API; HEAD does not
+	// (probed live: HEAD returns no version header).
+	_, hdr, err := w.do(http.MethodGet, "/api/users/0/items/"+key, nil, nil)
 	if err != nil {
 		return "", err
 	}
