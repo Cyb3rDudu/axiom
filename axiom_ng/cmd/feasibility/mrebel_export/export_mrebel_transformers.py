@@ -24,8 +24,6 @@ import sys
 
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-from transformers.onnx import ONNX_EXPORT_FORMATS
-from transformers.onnx.utils import validate_model_outputs
 
 
 def gen(model_id, out_dir, opset=14):
@@ -34,7 +32,6 @@ def gen(model_id, out_dir, opset=14):
     model = AutoModelForSeq2SeqLM.from_pretrained(model_id, torch_dtype=torch.float32).to(dev).eval()
     tok = AutoTokenizer.from_pretrained(model_id)
     # default pt seq2seq config for BART
-    from transformers.onnx import OnnxConfig
     from transformers.onnx.features import FeaturesManager
     model_kind, model_onnx_config = FeaturesManager.check_supported_model_or_raise(model, "pt")
     onnx_config = model_onnx_config(model.config, has_dynamic_axes=True)
