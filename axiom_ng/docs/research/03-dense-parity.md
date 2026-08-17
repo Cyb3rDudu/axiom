@@ -158,3 +158,21 @@ Note: on CUDA both sides are fp32 kernels with different reduction orders, so
 bit-exact 1.0 is rarer than on CPU-vs-MPS (2/219 here) — but avg ≥0.999 holds.
 Only chunk 48 (rare `Ȭ` unknown-char tokenization) drops below 0.999; chunks 66
 (0.99989) and 108 (0.999992) are ≥0.999. This **proves the CUDA column for dense**.\n
+## Rerank CUDA (carrier) — same-device, corrected pair form
+
+Carrier measurement (2026-08-17): Go `onnxruntime_go` **CUDA-EP** vs Python
+`FlagReranker` **torch CUDA**, same RTX 3090, **corrected XLM-R pair form**
+`<s> q </s></s> p </s>`, 75 pairs (25 gold queries × 3 candidates). Artifacts:
+`carrier_results/rerank_go_cuda.json` + `rerank_py_cuda.json`.
+
+| Metric (CUDA, corrected pair form) | Value |
+|---|---|
+| Spearman | **1.0000** (≥0.95 ✓, was 0.978 pre-fix) |
+| Kendall | 0.9993 |
+| avg \|score diff\| | 0.000008 |
+| max \|score diff\| | 0.000271 |
+| Go run1 vs run2 deterministic | true (75 pairs) |
+
+**Vindicates the auto-review finding**: the earlier 0.978 Spearman was dominated
+by the wrong single-`</s>` pair form. With the HF XLM-R pair form `<s> q </s></s> p </s>`,
+Go-CUDA and Py-torch-CUDA rank the 75 pairs **identically** (Spearman 1.0, |score| ~1e-5).
