@@ -1,6 +1,6 @@
 """#173 slice 4 — Versatz-Tabelle counter-check (read-only).
 
-dudu's physical verification (VERIFIKATION_ERGEBNIS.md, 51 gold refs across
+dudu's physical verification (VERIFIKATION_ERGEBNIS.md, 45 gold refs across
 29 books) is the Golden Reference for folio-run alignment. For every entry
 with a numeric PDF↔print pair we check: does build_page_trust's folio map
 reproduce dudu's MEASURED printed page at his PDF page?
@@ -12,9 +12,8 @@ The resulting evidence file (basenames) feeds locator_rescan.py --evidence-file.
 """
 from __future__ import annotations
 
-import os
-import pathlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -84,11 +83,11 @@ def main() -> int:
         if not cid:
             per_book.setdefault(book, []).append((gid, status, "KEIN-MAPPING"))
             continue
-        pdf = chunk2pdf.get(cid[:8])
-        idx = int(pdf_page) - 1
+        pdf = chunk2pdf.get(cid)
         if pdf is None:
             per_book.setdefault(book, []).append((gid, status, "KEIN-CHUNK"))
             continue
+        idx = int(pdf_page) - 1
         if not os.path.exists(pdf):
             per_book.setdefault(book, []).append((gid, status, "PDF-FEHLT"))
             continue
@@ -110,16 +109,21 @@ def main() -> int:
         print(f"{book[:52]:52s} {hits}/{len(rows):>2d}      {tag}  {form}")
         for r in rows:
             if r[-1] != "TREFF":
-                print(f"     · {r[0]} ({r[1]}): PDF {r[2] if len(r) > 2 else '?'} — dudu {r[3] if len(r) > 3 else '?'} vs meine {r[4] if len(r) > 4 else '?'} [{r[5] if len(r) > 5 else '?'}]")
+                detail = (
+                    f"PDF {r[2]} — dudu {r[3]} vs meine {r[4]} [{r[5]}]"
+                    if len(r) > 4
+                    else r[2]  # short row: the reason (KEIN-MAPPING/KEIN-CHUNK/PDF-FEHLT), not a page
+                )
+                print(f"     · {r[0]} ({r[1]}): {detail}")
         (aligned if tag == "ALIGNS" else misaligned).append(book)
         if tag == "ALIGNS" and rows:
-            b = chunk2pdf.get(id2chunk.get(rows[0][0], "")[:8])
+            b = chunk2pdf.get(id2chunk.get(rows[0][0], ""))
             if b and os.path.exists(b):
                 out_books.append(os.path.basename(b))
     print(f"\nALIGNS: {len(aligned)} Bücher · nicht voll: {len(misaligned)}")
     ev = {"heal_books": sorted(out_books),
           "skip_books": ["EU+-+2022+-+NIS-2-Richtlinie+(2022-2555).pdf"]}
-    out = pathlib.Path(__file__).parent / "evidence_books.json"
+    out = Path(__file__).parent / "evidence_books.json"
     with out.open("w") as f:
         json.dump(ev, f, ensure_ascii=False, indent=1)
     print(f"Evidenz-Datei: {out} ({len(out_books)} Bücher + NIS2-Skip)")

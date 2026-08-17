@@ -72,6 +72,15 @@ type Chunk struct {
 	Metadata   map[string]any  `json:"metadata"`
 }
 
+// #173 page_source trust levels — stamped by the runner's page_trust
+// pipeline (never guessed); validation and rendering compare against these.
+const (
+	PageSourceFolioVerified = "folio_verified"
+	PageSourcePDFLabelSane  = "pdf_label_sane"
+	PageSourcePhysicalOnly  = "physical_only"
+	PageSourceNone          = "none"
+)
+
 // Locator is the source position (§11). page_span for PDFs (physical+logical),
 // epub_cfi for pageless EPUBs. PageSource (#173) is the trust level of the
 // page reference — folio_verified | pdf_label_sane | physical_only | none:

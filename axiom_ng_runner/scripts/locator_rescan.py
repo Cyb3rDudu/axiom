@@ -23,8 +23,12 @@ real open question for the Tabelle: whether CHAPTER-RELATIVE folios
 (World Bank class — front-section restarts the folio verifier
 correctly resolves) are the citable page form dudu wants, and whether
 all 3,735 heal candidates match the 41 verified references.
-Idempotent by construction: a second run reports 0 changes (see the
-DB/OS retry note at the bulk loop for the partial-failure caveat).
+Idempotent & convergent: DB updates are diff-based and transactional
+(one atomic commit — no partial DB state); the OS push is the FULL
+planned stamp set (idempotent partial updates) on EVERY --apply run, so
+a crash between DB commit and the OS bulk heals on the next run — OS
+always reconciles to the planned state. Per-item OS failures stay loud
+(nonzero exit) for manual follow-up.
 """
 from __future__ import annotations
 
@@ -70,6 +74,87 @@ def load_active_chunks(cur):
     return cur.fetchall()
 
 
+def plan_updates(
+    rows,
+    trust_cache: dict[str, tuple[dict, dict] | None],
+    heal_books: set[str],
+    skip_books: set[str],
+    apply_epub_only: bool = False,
+):
+    """Pure planning core of the re-trust pass — no DB, no OS, no network
+    (W7 test seam): decides per chunk which locator the corpus SHOULD carry.
+
+    rows: (chunk_id, locator dict, attachment path) as load_active_chunks
+    returns them. Returns (updates, stamps, dist, held, label_heals,
+    heals_by_doc, symptoms):
+      updates — diff vs the CURRENT DB locator (what needs a DB write)
+      stamps  — the full planned stamp set, diff or not (what OS must end
+                up carrying — the convergence set; same scope filter as
+                updates, i.e. epub-only mode plans only epub_cfi -> none)
+    """
+    held: Counter[str] = Counter()
+    updates: list[tuple[str, dict]] = []
+    stamps: list[tuple[str, dict]] = []
+    dist: Counter[str] = Counter()
+    label_heals = 0
+    heals_by_doc: Counter[str] = Counter()
+    symptoms: list[str] = []
+    for chunk_id, locator, path in rows:
+        loc = locator if isinstance(locator, dict) else json.loads(locator or "{}")
+        new_loc = dict(loc)
+        base = os.path.basename(norm_path(path) or "")
+        if loc.get("type") != "epub_cfi" and base in skip_books:
+            held["skip_book"] += 1
+            continue  # held books: legacy locators stay untouched
+        evidenced = base in heal_books
+        if loc.get("type") == "epub_cfi":
+            new_loc["page_source"] = pt.NONE
+        elif loc.get("type") == "page_span":
+            trust = trust_cache.get(norm_path(path) or "")
+            phys = loc.get("physical_page_start")
+            if trust and phys is not None:
+                label_map, source_map = trust
+                lvl = source_map.get(int(phys), pt.PHYSICAL_ONLY)
+                if lvl == pt.FOLIO_VERIFIED and not evidenced:
+                    # no counter-check evidence for this book: make no
+                    # print-verified claim — leave legacy (renders sane)
+                    held["no_evidence_folio"] += 1
+                    continue
+                new_loc["page_source"] = lvl
+                if lvl == pt.FOLIO_VERIFIED:
+                    # heal the labels to the printed folios
+                    old = loc.get("page_label_start", "")
+                    folio = label_map.get(int(phys), old)
+                    if folio != old:
+                        label_heals += 1
+                        heals_by_doc[os.path.basename(norm_path(path) or "?")[:44]] += 1
+                        if len(symptoms) < 12:
+                            symptoms.append(f"{os.path.basename(norm_path(path) or '?')[:40]}: Label {old!r} -> Folio {folio!r}")
+                    new_loc["page_label_start"] = str(folio)
+                    pe = loc.get("physical_page_end")
+                    if pe is not None:
+                        if source_map.get(int(pe)) == pt.FOLIO_VERIFIED:
+                            new_loc["page_label_end"] = str(label_map.get(int(pe), folio))
+                        else:
+                            # #173: end page outside the verified run — its
+                            # label belongs to a different numbering space;
+                            # drop it instead of rendering a mixed span.
+                            new_loc.pop("page_label_end", None)
+            else:
+                new_loc["page_source"] = pt.PHYSICAL_ONLY
+        else:
+            continue  # unknown locator type
+        dist[new_loc["page_source"]] += 1
+        in_scope = not apply_epub_only or (
+            new_loc.get("page_source") == pt.NONE and loc.get("type") == "epub_cfi"
+        )
+        if in_scope:
+            stamps.append((chunk_id, new_loc))
+            if new_loc != loc:
+                updates.append((chunk_id, new_loc))
+    return updates, stamps, dist, held, label_heals, heals_by_doc, symptoms
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="write DB + OS (default: dry)")
@@ -111,57 +196,9 @@ def main() -> int:
                 print(f"  ! trust-Fehler {os.path.basename(key)[:50]}: {exc}")
                 trust_cache[key] = None
 
-    held: Counter[str] = Counter()
-    updates: list[tuple[str, dict]] = []
-    dist: Counter[str] = Counter()
-    label_heals = 0
-    heals_by_doc: Counter[str] = Counter()
-    symptoms: list[str] = []
-    for chunk_id, locator, path in rows:
-        loc = locator if isinstance(locator, dict) else json.loads(locator or "{}")
-        new_loc = dict(loc)
-        base = os.path.basename(norm_path(path) or "")
-        if loc.get("type") != "epub_cfi" and base in skip_books:
-            held["skip_book"] += 1
-            continue  # held books: legacy locators stay untouched
-        evidenced = base in heal_books
-        if loc.get("type") == "epub_cfi":
-            new_loc["page_source"] = pt.NONE
-        elif loc.get("type") == "page_span":
-            trust = trust_cache.get(norm_path(path) or "")
-            phys = loc.get("physical_page_start")
-            if trust and phys is not None:
-                label_map, source_map = trust
-                lvl = source_map.get(int(phys), pt.PHYSICAL_ONLY)
-                if lvl == pt.FOLIO_VERIFIED and not evidenced:
-                    # no counter-check evidence for this book: make no
-                    # print-verified claim — leave legacy (renders sane)
-                    held["no_evidence_folio"] += 1
-                    continue
-                new_loc["page_source"] = lvl
-                if lvl == pt.FOLIO_VERIFIED:
-                    # heal the labels to the printed folios
-                    old = loc.get("page_label_start", "")
-                    folio = label_map.get(int(phys), old)
-                    if folio != old:
-                        label_heals += 1
-                        heals_by_doc[os.path.basename(norm_path(path) or "?")[:44]] += 1
-                        if len(symptoms) < 12:
-                            symptoms.append(f"{os.path.basename(norm_path(path) or '?')[:40]}: Label {old!r} -> Folio {folio!r}")
-                    new_loc["page_label_start"] = str(folio)
-                    pe = loc.get("physical_page_end")
-                    if pe is not None:
-                        new_loc["page_label_end"] = str(label_map.get(int(pe), folio))
-            else:
-                new_loc["page_source"] = pt.PHYSICAL_ONLY
-        else:
-            continue  # unknown locator type
-        dist[new_loc["page_source"]] += 1
-        if new_loc != loc and (
-            not args.apply_epub_only
-            or (new_loc.get("page_source") == pt.NONE and loc.get("type") == "epub_cfi")
-        ):
-            updates.append((chunk_id, new_loc))
+    updates, stamps, dist, held, label_heals, heals_by_doc, symptoms = plan_updates(
+        rows, trust_cache, heal_books, skip_books, args.apply_epub_only
+    )
 
     total = sum(dist.values())
     print("\nStufenverteilung (nach Re-Trust):")
@@ -174,7 +211,8 @@ def main() -> int:
     print("\nHeilungen je Dokument (Top 10):")
     for doc, n in heals_by_doc.most_common(10):
         print(f"  {n:5d}  {doc}")
-    print(f"zu aktualisierende Chunks: {len(updates)}")
+    print(f"zu aktualisierende Chunks (DB-Diff): {len(updates)}")
+    print(f"OS-Stempel gesamt (Planmenge, idempotent): {len(stamps)}")
     print(f"bewusst gehalten (legacy): {dict(held) or 'keine'}")
     if fehlende_pdfs:
         print(f"! {len(fehlende_pdfs)} PDF(s) fehlen auf Platte (deren Chunks -> physical_only):")
@@ -196,12 +234,15 @@ def main() -> int:
     conn.commit()
     print(f"DB aktualisiert: {len(updates)} Chunks")
 
-    # OS: bulk partial updates of the locator field
+    # OS: bulk partial updates of the locator field — the FULL planned stamp
+    # set, NOT the DB diff: after a crash between conn.commit() and this loop
+    # a rerun computes zero DB updates but still pushes every planned stamp,
+    # so OS always converges to the planned state (idempotent writes).
     sess = requests.Session()
     done = 0
     os_exit_code = 0
-    for i in range(0, len(updates), 500):
-        batch = updates[i : i + 500]
+    for i in range(0, len(stamps), 500):
+        batch = stamps[i : i + 500]
         body = ""
         for cid, loc in batch:
             body += json.dumps({"update": {"_id": cid}}) + "\n"
@@ -211,11 +252,11 @@ def main() -> int:
             headers={"Content-Type": "application/x-ndjson"}, timeout=120,
         )
         r.raise_for_status()
-        failed_ids = [cid for cid, it in zip((c for c, _ in batch), r.json().get("items", []))
+        failed_ids = [cid for cid, it in zip((c for c, _ in batch), r.json().get("items", []), strict=True)
                       if "error" in it.get("update", {})]
         if failed_ids:
             print(f"  OS-Batch {i}: {len(failed_ids)} fehlgeschlagen — ein Retry")
-            locs = {c: l for c, l in batch}
+            locs = dict(batch)
             body = "".join(
                 json.dumps({"update": {"_id": cid}}) + "\n" + json.dumps({"doc": {"locator": locs[cid]}}) + "\n"
                 for cid in failed_ids
@@ -226,7 +267,7 @@ def main() -> int:
             still = sum(1 for it in r2.json().get("items", []) if "error" in it.get("update", {}))
             done += len(failed_ids) - still
             if still:
-                print(f"  OS-Batch {i}: {still} BLEIBEN fehlgeschlagen — DB ist vor OS; Konvergenz-Kontrolle nötig")
+                print(f"  OS-Batch {i}: {still} BLEIBEN fehlgeschlagen — Rerun von --apply stellt den Sollzustand her (OS-Push = volle Planmenge)")
                 os_exit_code = 1
         else:
             done += len(batch)

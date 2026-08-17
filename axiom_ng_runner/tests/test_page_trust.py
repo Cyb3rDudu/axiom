@@ -15,11 +15,13 @@ import pymupdf
 from axiom_ng_runner.compute_core import page_trust as pt
 
 
-def make_pdf(top_lines, repeat_labels=None, single_labels=False, firstpagenum=None):
+def make_pdf(top_lines, repeat_labels=None, single_labels=False, firstpagenum=None, half_labels=False):
     """top_lines: per page the TOP line (folio candidate) or None for prose.
 
     firstpagenum: single label range starting there — the TRUE offset fault
-    (unique, monotone, covering labels lagging behind the printed folios).
+        (unique, monotone, covering labels lagging behind the printed folios).
+    half_labels: label range covering EXACTLY the first half of the pages —
+        the tier1*2 == n boundary fixture (S1).
     """
     doc = pymupdf.open()
     for i, top in enumerate(top_lines):
@@ -32,13 +34,19 @@ def make_pdf(top_lines, repeat_labels=None, single_labels=False, firstpagenum=No
     f = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
     doc.save(f.name)
     doc.close()
-    if repeat_labels or single_labels or firstpagenum:
+    if repeat_labels or single_labels or firstpagenum or half_labels:
         d2 = pymupdf.open(f.name)
         if repeat_labels:
             half = max(1, len(top_lines) // 2)
             d2.set_page_labels([
                 {"startpage": 0, "prefix": repeat_labels, "style": "D", "firstpagenum": 1},
                 {"startpage": half, "prefix": repeat_labels, "style": "D", "firstpagenum": 1},
+            ])
+        elif half_labels:
+            half = max(1, len(top_lines) // 2)
+            d2.set_page_labels([
+                {"startpage": 0, "prefix": "", "style": "D", "firstpagenum": 1},
+                {"startpage": half, "prefix": "", "style": "none"},
             ])
         elif firstpagenum:
             d2.set_page_labels(
@@ -110,6 +118,16 @@ class PageTrustTests(unittest.TestCase):
         self.assertEqual(sources[0], pt.PDF_LABEL_SANE)
         self.assertEqual(sources[5], pt.PDF_LABEL_SANE)
 
+    def test_tier_boundary_exactly_half_is_physical(self):
+        # S1: tier1*2 == n — at EXACTLY 50% label coverage the 3-tier
+        # extractor has already fallen back to tier 2/3; the boundary clause
+        # must route to physical_only, never stamp fabricated labels as
+        # pdf_label_sane (boundary drift, review finding).
+        labels, sources = pt.build_page_trust(self._pdf([None] * 4, half_labels=True))
+        self.assertEqual(labels, {0: "1", 1: "2", 2: "3", 3: "4"})
+        for i in range(4):
+            self.assertEqual(sources[i], pt.PHYSICAL_ONLY, f"page {i}")
+
     def test_no_labels_no_folio_physical(self):
         labels, sources = pt.build_page_trust(self._pdf([None] * 4))
         self.assertEqual(sources[0], pt.PHYSICAL_ONLY)
@@ -168,6 +186,24 @@ class StampWitnessTests(unittest.TestCase):
         # reference mode (no map): honest physical_only, never a claim
         ch2 = runner._adapt_chunk(dict(old_style), 0, {4: "5"}, None)
         self.assertEqual(ch2["locator"]["page_source"], "physical_only")
+
+    def test_stamp_drops_end_label_outside_start_level(self):
+        # W5: a span starting on a folio_verified page but ENDING outside the
+        # verified run must not carry the end label — two numbering spaces
+        # must never render as one span.
+        from axiom_ng_runner import runner
+
+        old_style = {"text": "Fachtext", "metadata": {"page_start": "6", "page_end": "7",
+                                                  "section_titles": [], "token_count": 2}}
+        ch = runner._adapt_chunk(dict(old_style), 0, {5: "6", 6: "7"},
+                                 {5: "folio_verified"})
+        self.assertEqual(ch["locator"]["page_source"], "folio_verified")
+        self.assertNotIn("page_label_end", ch["locator"])
+
+        # same trust level on the end page: the end label survives
+        ch2 = runner._adapt_chunk(dict(old_style), 0, {5: "6", 6: "7"},
+                                  {5: "folio_verified", 6: "folio_verified"})
+        self.assertEqual(ch2["locator"]["page_label_end"], "7")
 
     def test_pass_through_epub_gets_none(self):
         from axiom_ng_runner import runner

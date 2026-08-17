@@ -457,6 +457,7 @@ maps them to durable IDs while persisting the processing snapshot.
         "physical_page_end": 35,
         "page_label_start": "23",
         "page_label_end": "24",
+        "page_source": "pdf_label_sane",
         "source": "marker_paginate"
       },
       "structure": {
@@ -560,7 +561,33 @@ label map and Marker pagination markers. Its existing fields map as follows:
 
 For EPUB, the processor may use `locator.type = "epub_cfi"` and provide CFI
 start/end fields. Page labels MUST NOT be fabricated for sources without stable
-pages.
+pages. An `epub_cfi` locator MUST carry `page_source: "none"`.
+
+### Page source trust level (#173)
+
+Every page locator carries its trust level in `page_source` — the contract is
+"never guess": a page reference is always attributed, and only
+`folio_verified` may be cited as a printed page. Values:
+
+| Value | Meaning |
+| --- | --- |
+| `folio_verified` | printed folio read from the text layer AND verified as a consistent ascending sequence — the only citable print-page form |
+| `pdf_label_sane` | PDF label, sanity-checked (unique, monotone, plausible) — presentable only with a marker |
+| `physical_only` | bare PDF page index — never renderable as a printed page |
+| `none` | EPUB CFI / pageless source — chapter and CFI, no page number |
+
+Rules:
+
+- `page_span` locators MUST carry `page_source` with one of
+  `folio_verified | pdf_label_sane | physical_only` (stamped by the runner's
+  page-trust pipeline from the start page's trust level; `page_label_end` is
+  dropped when the end page carries a different level — numbering spaces are
+  never mixed).
+- `epub_cfi` locators carry `page_source: "none"`.
+- axiom-ng rejects (terminal, §14): a blank `page_source` with
+  `LOCATOR_PAGE_SOURCE_MISSING`, an unknown value with
+  `LOCATOR_PAGE_SOURCE_UNKNOWN`, and `epub_cfi` carrying a page level with
+  `LOCATOR_PAGE_SOURCE_INCONSISTENT`.
 
 ## 12. Relationships
 

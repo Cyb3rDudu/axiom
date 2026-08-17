@@ -121,7 +121,15 @@ def _stamp_page_source(
         return  # already stamped by a previous _stamp_page_source pass
     phys = locator.get("physical_page_start")
     if page_source_map and phys is not None:
-        locator["page_source"] = page_source_map.get(int(phys), pt.PHYSICAL_ONLY)
+        lvl = page_source_map.get(int(phys), pt.PHYSICAL_ONLY)
+        locator["page_source"] = lvl
+        pe = locator.get("physical_page_end")
+        if pe is not None and page_source_map.get(int(pe)) != lvl:
+            # #173: never mix numbering spaces — when the END page lies
+            # outside the start page's trust level (e.g. a verified folio run
+            # ending in unpaginated front matter), the end label belongs to a
+            # different space and is dropped, not displayed as one span.
+            locator.pop("page_label_end", None)
     else:
         locator["page_source"] = pt.PHYSICAL_ONLY
 

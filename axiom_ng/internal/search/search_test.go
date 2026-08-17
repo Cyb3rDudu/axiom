@@ -1004,7 +1004,16 @@ func TestLocatorViewTrustLevels(t *testing.T) {
 		t.Fatalf("epub_cfi carries none: %+v", epub)
 	}
 	legacy := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"12"}`), ch)
-	if legacy.PageSource != "pdf_label_sane" || !strings.Contains(legacy.Label, "S. 12") {
-		t.Fatalf("legacy locators default honestly: %+v", legacy)
+	if legacy.PageSource != "" || !strings.Contains(legacy.Label, "S. 12") {
+		t.Fatalf("legacy locators carry NO guessed trust level (blank stays blank): %+v", legacy)
+	}
+	// physical_only with NO physical index: there is nothing trustworthy to
+	// display — bare chapter, never the untrusted label as "PDF-S. 99".
+	nophys := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"99","page_source":"physical_only"}`), ch)
+	if strings.Contains(nophys.Label, "99") || strings.Contains(nophys.Label, "PDF-S.") {
+		t.Fatalf("physical_only without a physical index must suppress the untrusted label: %+v", nophys)
+	}
+	if nophys.Label != "2.5 Stakeholder" || nophys.PageSource != "physical_only" {
+		t.Fatalf("bare chapter is the only honest rendering: %+v", nophys)
 	}
 }

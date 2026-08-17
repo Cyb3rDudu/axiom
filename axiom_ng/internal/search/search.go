@@ -699,7 +699,7 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 			Label:      chapter,
 			Chapter:    chapter,
 			CFI:        cfiShort(loc.CFIStart),
-			PageSource: "none",
+			PageSource: processor.PageSourceNone,
 		}
 	case "page_span":
 		label := loc.PageLabelStart
@@ -708,17 +708,20 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 		// printed page — "PDF-S." makes the difference visible; folio_verified
 		// and pdf_label_sane render as page references (the page_source field
 		// lets clients gate citation on folio_verified only).
-		if loc.PageSource == "physical_only" {
+		if loc.PageSource == processor.PageSourcePhysicalOnly {
 			// Untrusted labels never display: the physical index is the ONLY
-			// thing a physical_only locator may show.
+			// thing a physical_only locator may show. Without a physical index
+			// there is nothing trustworthy at all — bare chapter, no label.
 			pagePrefix = "PDF-S. "
 			if loc.PhysicalPageStart != nil {
 				label = fmt.Sprintf("%d", *loc.PhysicalPageStart+1)
+			} else {
+				label = ""
 			}
 		} else if label == "" && loc.PhysicalPageStart != nil {
 			label = fmt.Sprintf("%d", *loc.PhysicalPageStart+1) // physical is 0-based
 		}
-		if loc.PageLabelEnd != "" && loc.PageLabelEnd != loc.PageLabelStart && loc.PageSource != "physical_only" {
+		if loc.PageLabelEnd != "" && loc.PageLabelEnd != loc.PageLabelStart && loc.PageSource != processor.PageSourcePhysicalOnly {
 			label += "-" + loc.PageLabelEnd
 		}
 		switch {
@@ -729,11 +732,10 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 		default:
 			label = chapter // no page info: bare chapter, never a dangling "S. "
 		}
-		src := loc.PageSource
-		if src == "" {
-			src = "pdf_label_sane" // legacy locators pre-#173: label existed, trust unattributed
-		}
-		return LocatorView{Kind: "page", Label: label, Chapter: chapter, PageSource: src}
+		// #173: a blank page_source stays blank — legacy locators carry NO
+		// guessed trust level (a tier-2/3 fabricated label must never render
+		// as pdf_label_sane); clients gate on the explicit levels only.
+		return LocatorView{Kind: "page", Label: label, Chapter: chapter, PageSource: loc.PageSource}
 	default:
 		if chapter != "" {
 			return LocatorView{Kind: "none", Label: chapter, Chapter: chapter}

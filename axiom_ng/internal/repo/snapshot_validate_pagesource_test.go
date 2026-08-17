@@ -4,7 +4,6 @@
 package repo
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -30,7 +29,11 @@ func trustResult(pageSource string) *processor.Result {
 
 func TestValidatePageSourceGate(t *testing.T) {
 	// positive: all three page levels pass
-	for _, lvl := range []string{"folio_verified", "pdf_label_sane", "physical_only"} {
+	for _, lvl := range []string{
+		processor.PageSourceFolioVerified,
+		processor.PageSourcePDFLabelSane,
+		processor.PageSourcePhysicalOnly,
+	} {
 		if err := validateLocatorsAndRelationships(trustResult(lvl), trustFrozen()); err != nil {
 			t.Errorf("level %q must pass, got %v", lvl, err)
 		}
@@ -58,14 +61,15 @@ func TestValidatePageSourceGate(t *testing.T) {
 	if err := validateLocatorsAndRelationships(ok, frozen); err != nil {
 		t.Fatalf("epub_cfi with none must pass: %v", err)
 	}
-	bad := ok
-	bad.Chunks[0].Locator.PageSource = "folio_verified"
+	bad := &processor.Result{Chunks: []processor.Chunk{{
+		Ref: "chunk-0000", Index: 0, Text: "x",
+		Locator: &processor.Locator{
+			Type: "epub_cfi", CFIStart: "/6/4", CFIEnd: "/6/8", Source: "epub",
+			PageSource: processor.PageSourceFolioVerified,
+		},
+	}}}
 	err = validateLocatorsAndRelationships(bad, frozen)
 	if err == nil || !strings.Contains(err.Error(), "LOCATOR_PAGE_SOURCE_INCONSISTENT") {
-		var ve *ValidationError
-		if errors.As(err, &ve) || strings.Contains(err.Error(), "INCONSISTENT") {
-			return
-		}
 		t.Fatalf("epub_cfi with folio_verified must fail with INCONSISTENT, got %v", err)
 	}
 }
