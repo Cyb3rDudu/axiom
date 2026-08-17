@@ -113,3 +113,60 @@ nicht im Korpus). 2 Läufe: identisch auf 3 Dezimalstellen.
 - Die Produktions-Entscheidung aus v2 trägt unverändert.
 
 Reproduzieren: `go run ./cmd/retrieval-bench -suite cmd/retrieval-bench/gold_suite_v21.json -md out.md`
+
+## #160 Frontmatter/TOC-Hygiene — Vorher/Nachher auf v2.1 (2026-08-17)
+
+Drei Hebel, Retrieval-seitig (kein Rechunking, keine Reranker-/RRF-Änderung):
+
+1. **Frontmatter-Filter** (`AXIOM_SEARCH_FRONTMATTER_FILTER`, Default ON): Detektion
+   auf den Kandidaten-Texten VOR dem Rerank — retroaktiv über den ganzen Bestand
+   per Konstruktion (kein Backfill nötig). Korpus-validiert gegen
+   axiom-ng-chunks-v1: Markdown-Wirklichkeit (Heading-Mini-Chunks `### **Inhaltsverzeichnis**`,
+   TOC als Markdown-TABELLE `| n | Titel<br>Autor | S |`, Literatur als Dash-Listen
+   mit Jahres-Dichte + Zitations-Markern). `section_titles`-Trails sind BEIDSEITIG
+   unzuverlässig (lag auf echten TOC-Seiten, klebte über ganzen Büchern — 654
+   Prosa-Fehltreffer im Scan) und fließen NICHT ein. Korpus-Scan: 6,36 % der
+   Chunks flaggiert (plausibel für 126 Bücher). Degradations-Wächter: ein
+   All-Frontmatter-Pool wird unverändert ausgeliefert.
+2. **Near-Duplicate-Collapse** (immer an, ~kostenlos): gleiche Dokument + Jaccard
+   > 0,8 falten in den höher rankenden Zwilling (`collapsed_near_duplicates`-Hinweis
+   auf dem Hit).
+3. **Diversitäts-Regel** (`AXIOM_SEARCH_MAX_PER_BOOK`, Default 2, 0=aus): max K
+   Chunks pro Buch, Rangordnung-Refill — Top-N bleibt voll.
+
+### Messung (gold_suite_v21, 52 Entries, 2 Läufe identisch)
+
+| Konfiguration | P@1 | hit@5 | MRR | hit@10 | FM-in-Top-5 |
+|---|---|---|---|---|---|
+| hybrid+rerank (Vorher) | 0.615 | 0.808 | 0.702 | 0.865 | **3 Queries** (inkl. z7) |
+| hybrid+rerank+hygiene | 0.596 | 0.788 | 0.683 | 0.846 | **0 Queries** |
+
+Offenlegung zur FM-Spalte: der Nachher-Wert wird mit demselben Detektor
+berechnet, den der Filter benutzt (selbstreferentiell — ein Detektor-Fehler
+würde beide Seiten gleich verzerren). Die belastbare Evidenz ist der
+Vorher-Wert (3 Lecks, mit Filter aus gemessen) plus der P@1-Kosten-Nachweis.
+
+z-Suite: 5/7 P@1 vor wie nach. Lesart:
+
+- **DoD „kein Vorwort/TOC-Chunk in irgendeiner Top-5": erfüllt** (3→0, z7-Leck zu).
+- Die zwei z-Verfehlungen sind ORTHOGONAL zu Frontmatter: z2-Gold auf Rang 9 (vor
+  wie nach), z7-Gold gar nicht in Top-10 (auch mit Filter aus) — Reranker-Recall,
+  nicht Hebelraum von #160.
+- c15 (einziger P@1-Verlust): die bestätigte Gold IST der Vorwort-Chunk des
+  Titel-Buches („Perspektiven der Wirtschaftswissenschaften" — titel-zirkuläre
+  v1-Ära-Gold). Der Filter tut exakt das, wofür #160 beauftragt ist; die Gold
+  bleibt unangetastet (dudus Eigentum) — Neu-Entscheidung bei dudu.
+
+### Erweiterte Kipp-Liste (Mutationssonden, alle als Tests grün)
+
+| Sonde | Kippen beweist |
+|---|---|
+| K1 Filter aus | TOC-Chunk kehrt über den echten Search-Pfad in die Hits zurück (`TestFlipListK1SearchPathLeverFlip`: Hebel aus → Treffer, Hebel an → weg, Fachtext bleibt) |
+| K2 Präzision (Prosa/Formeln/Chronologien) | Fachtext fällt NIE durch den Detektor |
+| K3 Collapse aus | Duplikats-Zwillinge fluten die Rangliste |
+| K4 Diversität aus (K=0) | Buch-Flut kehrt zurück (5× dasselbe Kapitel) |
+| K5 Diversität zu eng (K=1-Verhalten) | zweiter Distinkt-Hit eines Buchs überlebt K=2 |
+| K6 All-Frontmatter-Pool | Filter weicht aus, statt Retrieval zu nullen |
+
+Reproduzieren: `go run ./cmd/retrieval-bench -suite cmd/retrieval-bench/gold_suite_v21.json -md out.md -perq perq.jsonl`
+z-Teilmenge: `jq -c 'select(.id|startswith("z"))' perq.jsonl`

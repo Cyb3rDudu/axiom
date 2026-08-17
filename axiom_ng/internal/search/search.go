@@ -66,6 +66,16 @@ type Service struct {
 	// true). R7's matrix measures what it buys; ops can disable it for a
 	// latency-only profile (AXIOM_SEARCH_RERANK).
 	Rerank bool
+	// FrontmatterFilter drops detected TOC/preface/references chunks from
+	// the candidate pool BEFORE rerank (#160) — retroactive over the whole
+	// index by construction (detection runs on the candidate texts; no
+	// backfill, no reingest). Default on via New;
+	// AXIOM_SEARCH_FRONTMATTER_FILTER=false is the matrix lever.
+	FrontmatterFilter bool
+	// MaxPerBook caps chunks per document in the final ranking with rank-
+	// order refill (#160); 0 disables (matrix lever). Default 2 via New
+	// (AXIOM_SEARCH_MAX_PER_BOOK).
+	MaxPerBook int
 	// DenseArm / BM25Arm gate the base recall arms (default true).
 	// Benchmark levers (retrieval-bench matrix); no env wiring by design.
 	// A disabled arm is treated like a failed one (flags reflect it).
@@ -110,14 +120,16 @@ func New(osURL, osUser, osPass string, p Processor, docs DocSource, lg *log.Logg
 		lg = log.Default()
 	}
 	return &Service{
-		os:        newOSClient(osURL, osUser, osPass),
-		processor: p,
-		docs:      docs,
-		log:       lg,
-		SparseArm: false,
-		Rerank:    true,
-		DenseArm:  true,
-		BM25Arm:   true,
+		os:                newOSClient(osURL, osUser, osPass),
+		processor:         p,
+		docs:              docs,
+		log:               lg,
+		SparseArm:         false,
+		Rerank:            true,
+		DenseArm:          true,
+		BM25Arm:           true,
+		FrontmatterFilter: true,
+		MaxPerBook:        2,
 	}
 }
 
@@ -142,6 +154,9 @@ type Hit struct {
 	Source  Source      `json:"source"`
 	Locator LocatorView `json:"locator"`
 	Section []string    `json:"section"`
+	// CollapsedNearDuplicates counts same-document near-duplicate chunks
+	// folded into this hit by #160 hygiene (0 = none; the collapse hint).
+	CollapsedNearDuplicates int `json:"collapsed_near_duplicates,omitempty"`
 }
 
 // Source is the bibliographic provenance of a hit.
@@ -319,6 +334,13 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		return resp, nil
 	}
 
+	// #160 frontmatter hygiene: drop TOC/preface/references chunks BEFORE
+	// hydration and rerank so their slots go to body text. Degradation
+	// guard inside: an all-frontmatter pool is served unchanged.
+	if s.FrontmatterFilter {
+		merged = filterFrontmatter(merged)
+	}
+
 	// Hydrate source metadata (document titles/authors) for the candidates.
 	byDoc := map[string]struct{}{}
 	for _, c := range merged {
@@ -357,6 +379,15 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 			resp.Reranked = applyRerank(candidates, scores)
 		}
 	}
+	// #160 ranking hygiene: fold near-duplicates of the same document into
+	// their higher-ranked twin, then cap per-book chunks with rank-order
+	// refill — both operate on the reranked order (RRF order when rerank is
+	// off/failed), before the TopN cut. Collapse is unconditional (no knob:
+	// near-zero cost, no reason to want duplicate twins ranked); diversity
+	// has the matrix lever (MaxPerBook=0 off).
+	var folded map[string]int
+	candidates, folded = collapseNearDuplicates(candidates)
+	candidates = diversify(candidates, s.MaxPerBook)
 	if len(candidates) > req.TopN {
 		candidates = candidates[:req.TopN]
 	}
@@ -370,6 +401,9 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 			Source:  sourceFor(meta[c.DocumentID], c.DocumentID),
 			Locator: locatorView(c.Locator, c.SectionTitles),
 			Section: c.SectionTitles,
+		}
+		if n := folded[c.ID]; n > 0 {
+			h.CollapsedNearDuplicates = n
 		}
 		if resp.Reranked {
 			h.Score = c.RerankScore

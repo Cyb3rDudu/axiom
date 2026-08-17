@@ -74,3 +74,49 @@ func TestNormalizeUnknownFieldsRoundtripViaRaw(t *testing.T) {
 	}
 	_ = nm
 }
+
+// #159: methodology-aware mapping — statutes carry nameOfAct/dateEnacted
+// instead of title/date, reports carry institution instead of publisher.
+func TestNormalizeStatuteNameOfAct(t *testing.T) {
+	nm := Normalize([]byte(`{"itemType":"statute","nameOfAct":"Verordnung (EU) 2024/1689","dateEnacted":"2024-06-13","creators":[]}`))
+	if nm.Title != "Verordnung (EU) 2024/1689" {
+		t.Errorf("statute title from nameOfAct = %q", nm.Title)
+	}
+	if nm.Date != "2024-06-13" {
+		t.Errorf("statute date from dateEnacted = %q", nm.Date)
+	}
+	if nm.PublicationYear == nil || *nm.PublicationYear != 2024 {
+		t.Errorf("statute year from dateEnacted = %v", nm.PublicationYear)
+	}
+}
+
+func TestNormalizeStatuteNeverOverwritesTitle(t *testing.T) {
+	nm := Normalize([]byte(`{"itemType":"statute","title":"Eigener Titel","nameOfAct":"Nicht dieser","dateEnacted":"2020-01-01"}`))
+	if nm.Title != "Eigener Titel" {
+		t.Errorf("existing statute title must survive, got %q", nm.Title)
+	}
+	if nm.Date != "2020-01-01" {
+		t.Errorf("empty statute date should fall back to dateEnacted, got %q", nm.Date)
+	}
+}
+
+func TestNormalizeReportInstitution(t *testing.T) {
+	nm := Normalize([]byte(`{"itemType":"report","title":"Economic Outlook","institution":"OECD Publishing","date":"2024-05"}`))
+	if nm.Publisher != "OECD Publishing" {
+		t.Errorf("report publisher from institution = %q", nm.Publisher)
+	}
+}
+
+func TestNormalizeReportNeverOverwritesPublisher(t *testing.T) {
+	nm := Normalize([]byte(`{"itemType":"report","title":"X","publisher":"Eigener Verlag","institution":"OECD Publishing"}`))
+	if nm.Publisher != "Eigener Verlag" {
+		t.Errorf("existing report publisher must survive, got %q", nm.Publisher)
+	}
+}
+
+func TestNormalizeInstitutionIgnoredForNonReports(t *testing.T) {
+	nm := Normalize([]byte(`{"itemType":"thesis","title":"Diss","institution":"TU Berlin"}`))
+	if nm.Publisher != "" {
+		t.Errorf("institution must not leak into non-report publisher, got %q", nm.Publisher)
+	}
+}
