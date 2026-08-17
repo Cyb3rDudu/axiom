@@ -4,11 +4,14 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
@@ -37,7 +40,16 @@ func (s *stubSelection) SelectionModes(ctx context.Context) (map[string]string, 
 }
 
 func (s *stubSelection) ListZoteroDocuments(ctx context.Context, syncState string) ([]repo.ZoteroDocumentState, error) {
-	return s.docs, s.err
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := []repo.ZoteroDocumentState{}
+	for _, d := range s.docs {
+		if syncState == "" || syncState == d.SyncState {
+			out = append(out, d)
+		}
+	}
+	return out, nil
 }
 
 func selReq(t *testing.T, method, path, body string) (*httptest.ResponseRecorder, *stubSelection) {
@@ -100,6 +112,27 @@ func TestSelectionNotConfigured(t *testing.T) {
 	}
 }
 
+func TestSelectionFKMaps422(t *testing.T) {
+	s := New(":0", nil)
+	stub := &stubSelection{mode: map[string]string{},
+		err: fmt.Errorf("upsert selection: %w", &pgconn.PgError{Code: "23503", Message: "insert or update on table \"zotero_selections\" violates foreign key"})}
+	s.SetSelectionRepo(stub)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/zotero/selection",
+		strings.NewReader(`{"selection":[{"document_id":"00000000-0000-4000-8000-000000000001","mode":"excluded"}]}`)))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "unknown document") {
+		t.Fatalf("fk violation must 422 with hint, got %d %s", rec.Code, rec.Body.String())
+	}
+	// other errors stay 500
+	stub.err = fmt.Errorf("boom")
+	rec = httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/zotero/selection",
+		strings.NewReader(`{"selection":[{"document_id":"00000000-0000-4000-8000-000000000001","mode":"excluded"}]}`)))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("non-fk error must stay 500, got %d", rec.Code)
+	}
+}
+
 func TestDocumentsListing(t *testing.T) {
 	s := New(":0", nil)
 	stub := &stubSelection{mode: map[string]string{}, docs: []repo.ZoteroDocumentState{
@@ -111,6 +144,10 @@ func TestDocumentsListing(t *testing.T) {
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/zotero/documents?sync_state=held", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"sync_state":"held"`) {
 		t.Fatalf("listing: %d %s", rec.Code, rec.Body.String())
+	}
+	// the filter is honored server-side: the synced doc must NOT be in it
+	if strings.Contains(rec.Body.String(), "Synced") {
+		t.Fatalf("sync_state filter not honored: %s", rec.Body.String())
 	}
 }
 

@@ -5,7 +5,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
@@ -64,6 +67,13 @@ func (s *Server) handlePutSelection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.selectionRepo.SetSelections(r.Context(), body.Selection); err != nil {
+		var fk *pgconn.PgError
+		if errors.As(err, &fk) && fk.Code == "23503" {
+			// A selection entry names a document that does not exist — the
+			// client's mistake, not a server fault.
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "unknown document id in selection"})
+			return
+		}
 		s.log.Printf("selection put: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "selection write failed"})
 		return

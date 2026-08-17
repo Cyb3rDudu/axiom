@@ -45,13 +45,23 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	// would silently gate nothing.
 	var body SyncOverrideBody
 	if r.Body != nil {
-		raw, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+		raw, rerr := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+		if rerr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync override body too large or unreadable"})
+			return
+		}
 		if len(raw) > 0 {
 			if err := json.Unmarshal(raw, &body); err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid sync override body"})
 				return
 			}
-			for _, id := range append(append([]string{}, body.Include...), body.Exclude...) {
+			for _, id := range body.Include {
+				if !isUUID(id) {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "override ids must be document UUIDs"})
+					return
+				}
+			}
+			for _, id := range body.Exclude {
 				if !isUUID(id) {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "override ids must be document UUIDs"})
 					return

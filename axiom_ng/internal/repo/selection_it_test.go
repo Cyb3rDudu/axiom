@@ -46,9 +46,6 @@ func TestSelectiveSyncAcceptanceIT(t *testing.T) {
 
 	// The harness seed creates no canonical zotero_items row for the
 	// ATTACHMENT — the derivation would see no processable child and
-	// deactivate the document. Seed it like a real Zotero sync would.
-	// The harness seed creates no canonical zotero_items row for the
-	// ATTACHMENT — the derivation would see no processable child and
 	// deactivate the document (seed like a real Zotero sync would).
 	if _, err := lr.pool.Exec(ctx, `
 		INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data)
@@ -95,19 +92,68 @@ func TestSelectiveSyncAcceptanceIT(t *testing.T) {
 	if _, err := lr.pool.Exec(ctx, `UPDATE ingest_jobs SET status='completed', updated_at=now() WHERE attachment_id=$1`, attID); err != nil {
 		t.Fatal(err)
 	}
+
+	// A document WITHOUT any attachment row must not break the listing
+	// (NULL scan) — it lists as held with attachment=nil.
+	if _, err := lr.pool.Exec(ctx, `
+		INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
+		VALUES ($1, 'SELD2', 1, 'book', 'No Attachment Doc')`, srcID); err != nil {
+		t.Fatal(err)
+	}
+
+	stateOf := func(filter, docID string) (string, *AttachmentState) {
+		t.Helper()
+		docs, err := lr.rep.ListZoteroDocuments(ctx, filter)
+		if err != nil {
+			t.Fatalf("list %q: %v", filter, err)
+		}
+		for _, d := range docs {
+			if d.DocumentID == docID {
+				return d.SyncState, d.Attachment
+			}
+		}
+		return "", nil
+	}
+
+	state, att := stateOf("", docID)
+	if state != "synced" || att == nil {
+		t.Fatalf("completed job must list synced with attachment, got %q %+v", state, att)
+	}
+	// locate the no-attachment doc by its key via the full listing
 	docs, err := lr.rep.ListZoteroDocuments(ctx, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var state string
+	var noAttID string
 	for _, d := range docs {
-		if d.DocumentID == docID {
-			state = d.SyncState
+		if d.ZoteroKey == "SELD2" {
+			noAttID = d.DocumentID
+			if d.SyncState != "held" || d.Attachment != nil {
+				t.Fatalf("no-attachment doc must list held with nil attachment, got %q %+v", d.SyncState, d.Attachment)
+			}
 		}
 	}
-	if state != "synced" {
-		t.Fatalf("completed job must list synced, got %q", state)
+	if noAttID == "" {
+		t.Fatal("no-attachment doc missing from listing")
 	}
+
+	// processing/pending are driven through the newest-job mapping too.
+	if _, err := lr.pool.Exec(ctx, `UPDATE ingest_jobs SET status='claimed', updated_at=now() WHERE attachment_id=$1`, attID); err != nil {
+		t.Fatal(err)
+	}
+	if state, _ = stateOf("processing", docID); state != "processing" {
+		t.Fatalf("claimed job must list processing, got %q", state)
+	}
+	if _, err := lr.pool.Exec(ctx, `UPDATE ingest_jobs SET status='pending', updated_at=now() WHERE attachment_id=$1`, attID); err != nil {
+		t.Fatal(err)
+	}
+	if state, _ = stateOf("pending", docID); state != "pending" {
+		t.Fatalf("pending job must list pending, got %q", state)
+	}
+	if _, err := lr.pool.Exec(ctx, `UPDATE ingest_jobs SET status='completed', updated_at=now() WHERE attachment_id=$1`, attID); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := lr.rep.SetSelections(ctx, []SelectionInput{{DocumentID: docID, Mode: "excluded"}}); err != nil {
 		t.Fatal(err)
 	}

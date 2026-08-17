@@ -90,6 +90,18 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 		return Result{}, err
 	}
 
+	// Selection read BEFORE the apply tx: fail without a transaction, and
+	// don't hold a second pool connection during the apply.
+	persisted, err := s.repo.SelectionModes(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("loading selections: %w", err)
+	}
+	var ovInclude, ovExclude []string
+	if override != nil {
+		ovInclude, ovExclude = override.Include, override.Exclude
+	}
+	selection := repo.EffectiveSelection(persisted, ovInclude, ovExclude)
+
 	// One atomic transaction: canonical rows + deletions + projections +
 	// memberships + pending/failed jobs + cursor.
 	tx, err := s.repo.Pool().Begin(ctx)
@@ -98,15 +110,6 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	}
 	defer tx.Rollback(ctx)
 
-	persisted, err := s.repo.SelectionModes(ctx)
-	if err != nil {
-		return Result{}, err
-	}
-	var ovInclude, ovExclude []string
-	if override != nil {
-		ovInclude, ovExclude = override.Include, override.Exclude
-	}
-	selection := repo.EffectiveSelection(persisted, ovInclude, ovExclude)
 	applyRes, err := s.repo.ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files, selection)
 	if err != nil {
 		return Result{}, err

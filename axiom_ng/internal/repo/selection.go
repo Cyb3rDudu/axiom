@@ -88,22 +88,26 @@ func JobGated(selection map[string]string, documentID string) bool {
 	return selection != nil && selection[documentID] == "excluded"
 }
 
+// AttachmentState is the preferred attachment's client-facing info in the
+// sync-state listing (nil when the document has no attachment).
+type AttachmentState struct {
+	ZoteroKey   string `json:"zotero_key"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	ContentHash string `json:"content_hash,omitempty"`
+}
+
 // ZoteroDocumentState is one row of the client's sync-state listing (#166
 // Ziel 4): Zotero bestand + ingest status + preferred attachment info.
 type ZoteroDocumentState struct {
-	DocumentID string `json:"document_id"`
-	ZoteroKey  string `json:"zotero_key"`
-	Title      string `json:"title"`
-	ItemType   string `json:"item_type"`
-	SyncState  string `json:"sync_state"` // synced | held | processing | pending | none
-	JobStatus  string `json:"job_status,omitempty"`
-	Attachment *struct {
-		ZoteroKey   string `json:"zotero_key"`
-		Filename    string `json:"filename"`
-		ContentType string `json:"content_type"`
-		ContentHash string `json:"content_hash,omitempty"`
-	} `json:"attachment,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	DocumentID string           `json:"document_id"`
+	ZoteroKey  string           `json:"zotero_key"`
+	Title      string           `json:"title"`
+	ItemType   string           `json:"item_type"`
+	SyncState  string           `json:"sync_state"` // synced | held | processing | pending
+	JobStatus  string           `json:"job_status,omitempty"`
+	Attachment *AttachmentState `json:"attachment,omitempty"`
+	UpdatedAt  time.Time        `json:"updated_at"`
 }
 
 // ListZoteroDocuments returns the full non-deleted Zotero projection with
@@ -113,14 +117,14 @@ type ZoteroDocumentState struct {
 func (r *Repo) ListZoteroDocuments(ctx context.Context, syncState string) ([]ZoteroDocumentState, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT d.id::text, d.zotero_key, COALESCE(d.title,''), COALESCE(d.item_type,''), d.updated_at,
-		       a.zotero_key, COALESCE(a.filename,''), COALESCE(a.content_type,''), COALESCE(a.content_hash,''),
-		       j.status,
+		       COALESCE(a.zotero_key,''), COALESCE(a.filename,''), COALESCE(a.content_type,''), COALESCE(a.content_hash,''),
+		       COALESCE(j.status::text,''),
 		       COALESCE(s.mode,'')
 		FROM zotero_documents d
 		LEFT JOIN zotero_attachments a ON a.document_id=d.id AND a.preferred AND NOT a.deleted
 		LEFT JOIN LATERAL (
 			SELECT status FROM ingest_jobs j WHERE j.attachment_id=a.id
-			ORDER BY j.updated_at DESC LIMIT 1
+			ORDER BY j.updated_at DESC, j.id DESC LIMIT 1
 		) j ON true
 		LEFT JOIN zotero_selections s ON s.document_id=d.id
 		WHERE NOT d.deleted
@@ -153,12 +157,7 @@ func (r *Repo) ListZoteroDocuments(ctx context.Context, syncState string) ([]Zot
 		}
 		z.JobStatus = jobStatus
 		if attKey != "" {
-			z.Attachment = &struct {
-				ZoteroKey   string `json:"zotero_key"`
-				Filename    string `json:"filename"`
-				ContentType string `json:"content_type"`
-				ContentHash string `json:"content_hash,omitempty"`
-			}{ZoteroKey: attKey, Filename: attName, ContentType: attType, ContentHash: attHash}
+			z.Attachment = &AttachmentState{ZoteroKey: attKey, Filename: attName, ContentType: attType, ContentHash: attHash}
 		}
 		if syncState == "" || syncState == z.SyncState {
 			out = append(out, z)
