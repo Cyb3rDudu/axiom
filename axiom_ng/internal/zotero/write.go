@@ -152,19 +152,25 @@ func (w *WriteClient) DeleteAttachmentItem(key string) error {
 // come from the schema builder — callers cannot patch filenames because no
 // such mutation exists. Returns the new attachment item key.
 func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf []byte) (string, error) {
-	// Phase 0 — the attachment item.
-	item := map[string]any{
-		"itemType":    "attachment",
-		"linkMode":    "imported_file",
-		"title":       filename,
-		"contentType": "application/pdf",
-		"filename":    filename,
-		"tags":        []map[string]string{{"tag": "axiom-repair"}},
+	// Phase 0 — the attachment item. ORDERED struct, never a map: Go maps
+	// marshal alphabetically, putting contentType/filename BEFORE linkMode —
+	// Zotero's fromJSON then rejects with "Link mode must be set before
+	// setting attachment path" (live bug, Controlling apply).
+	type attachmentItem struct {
+		ItemType    string            `json:"itemType"`
+		LinkMode    string            `json:"linkMode"`
+		ParentItem  string            `json:"parentItem,omitempty"`
+		Title       string            `json:"title"`
+		ContentType string            `json:"contentType"`
+		Filename    string            `json:"filename"`
+		Tags        []map[string]string `json:"tags"`
 	}
-	if parentKey != "" {
-		item["parentItem"] = parentKey
+	item := attachmentItem{
+		ItemType: "attachment", LinkMode: "imported_file", ParentItem: parentKey,
+		Title: filename, ContentType: "application/pdf", Filename: filename,
+		Tags: []map[string]string{{"tag": "axiom-repair"}},
 	}
-	itemJSON, _ := json.Marshal([]any{item})
+	itemJSON, _ := json.Marshal([]attachmentItem{item})
 	raw, _, err := w.do(http.MethodPost, "/api/users/0/items",
 		map[string]string{"Content-Type": "application/json"}, bytes.NewReader(itemJSON))
 	if err != nil {

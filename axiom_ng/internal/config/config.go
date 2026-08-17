@@ -106,6 +106,13 @@ type Config struct {
 	// ArtifactRoot is the durable derived-artifact root (AXIOM_ARTIFACT_ROOT).
 	ArtifactRoot string
 
+	// ZoteroWriteKeyFile holds the local-API write key (#184). The key NEVER
+	// lives in the repo; missing file = repair API disabled.
+	ZoteroWriteKeyFile string
+	// QuarantineRoot is the RAG-managed quarantine folder for broken
+	// originals (#184 design nail).
+	QuarantineRoot string
+
 	// APIPort is the port the axiom-ng REST API listens on.
 	APIPort int
 	// BindAddr is the interface the API binds to. Defaults to loopback so a
@@ -157,6 +164,8 @@ func Load() Config {
 		DispatcherProfile:       env("AXIOM_DISPATCHER_PROFILE", defaultProfile),
 		DispatcherLeaseDuration: envDur("AXIOM_DISPATCHER_LEASE", 5*time.Minute),
 		ArtifactRoot:            env("AXIOM_ARTIFACT_ROOT", ""),
+		ZoteroWriteKeyFile:      env("AXIOM_ZOTERO_WRITE_KEY_FILE", os.Getenv("HOME")+"/.axiom-ng/write-api-key"),
+		QuarantineRoot:          env("AXIOM_QUARANTINE_ROOT", "/tmp/axiom_quarantine"),
 		APIPort:                 envInt("AXIOM_API_PORT", defaultAPIPort),
 		BindAddr:                env("AXIOM_BIND_ADDR", defaultBindAddr),
 	}

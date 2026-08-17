@@ -3,6 +3,8 @@
 package server
 
 import (
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 	"log"
 	"net/http"
 
@@ -32,6 +34,10 @@ type Server struct {
 	// shared with the dispatcher). sourceRepo is the job lookup for it.
 	sourceSecret string
 	sourceRepo   processorSourceRepo
+	// #184 fix-service surface (nil = endpoints stay unwired/404).
+	repairRepo     *repo.Repo
+	zoteroWrite    *zotero.WriteClient
+	quarantineRoot string
 }
 
 // New builds a Server with no backing-dependency checkers yet. Register them
@@ -63,6 +69,14 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/api/kg/relations", s.handleKGRelations)
 	// Disabled (404 on everything) until SetProcessorSourceSecret wires it.
 	r.Get("/api/processor/source/{jobID}", s.handleProcessorSource)
+	// #184: repair surface only exists when SetRepairAPI wired it.
+	if s.repairRepo != nil {
+		r.Get("/api/repair/queue", s.handleRepairQueue)
+		r.Get("/api/repair/cases", s.handleRepairCases)
+		r.Post("/api/repair/cases/{id}/claim", s.handleRepairClaim)
+		r.Post("/api/repair/cases/{id}/verdict", s.handleRepairVerdict)
+		r.Get("/api/repair/docs/{documentKey}/locator-stats", s.handleLocatorStats)
+	}
 
 	return r
 }
