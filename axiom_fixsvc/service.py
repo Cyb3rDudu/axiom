@@ -19,6 +19,7 @@ sections describe the TARGET label map (1-based inclusive; arabic +1/page);
 gaps document real print jumps between sections. The LLM never writes
 bytes: the healed PDF is generated mechanically from the VERIFIED plan.
 """
+
 from __future__ import annotations
 
 import io
@@ -39,7 +40,10 @@ from axiom_ng_runner.compute_core.pdf_health import preflight
 
 RAG = os.environ.get("AXIOM_RAG_URL", "http://127.0.0.1:8011")
 DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com") + "/chat/completions"
+DEEPSEEK_URL = (
+    os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    + "/chat/completions"
+)
 MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
 ARABIC = re.compile(r"^\d{1,4}$")
@@ -78,23 +82,41 @@ def judge(buch: str, analyse: dict, candidates: dict[int, str]) -> dict:
     # candidates arrive 0-BASED (extract_folio_candidates keys) — the plan
     # world is 1-BASED pages. Convert HERE or the judge builds every section
     # one page early (live bug, Controlling: 573/575 contradictions).
-    cand = {int(k) + 1: str(v).strip() for k, v in candidates.items() if ARABIC.match(str(v).strip())}
+    cand = {
+        int(k) + 1: str(v).strip()
+        for k, v in candidates.items()
+        if ARABIC.match(str(v).strip())
+    }
     body = {
         "model": MODEL,
-        "messages": [{"role": "user", "content": JUDGE_PROMPT.format(
-            analyse=json.dumps(analyse, ensure_ascii=False),
-            candidates=json.dumps(cand, ensure_ascii=False))}],
+        "messages": [
+            {
+                "role": "user",
+                "content": JUDGE_PROMPT.format(
+                    analyse=json.dumps(analyse, ensure_ascii=False),
+                    candidates=json.dumps(cand, ensure_ascii=False),
+                ),
+            }
+        ],
         "response_format": {"type": "json_object"},
         "temperature": 0,
     }
-    r = requests.post(DEEPSEEK_URL, json=body, timeout=120,
-                      headers={"Authorization": f"Bearer {DEEPSEEK_KEY}"})
+    r = requests.post(
+        DEEPSEEK_URL,
+        json=body,
+        timeout=120,
+        headers={"Authorization": f"Bearer {DEEPSEEK_KEY}"},
+    )
     r.raise_for_status()
     plan = json.loads(r.json()["choices"][0]["message"]["content"])
     plan = validate_plan(plan)
-    log(buch, "JUDGE", f"Plan v1: {len(plan['sections'])} Sektionen "
+    log(
+        buch,
+        "JUDGE",
+        f"Plan v1: {len(plan['sections'])} Sektionen "
         f"({plan['sections'][0]['from_page']}–{plan['sections'][-1]['to_page']}), "
-        f"{len(plan['gaps'])} Lücken, confidence={plan.get('confidence')}")
+        f"{len(plan['gaps'])} Lücken, confidence={plan.get('confidence')}",
+    )
     return plan
 
 
@@ -107,7 +129,11 @@ def validate_plan(plan: dict) -> dict:
         for k in ("from_page", "to_page", "start_label"):
             if not isinstance(s.get(k), int):
                 raise ValueError(f"Sektion {s}: {k} fehlt/kein int")
-        if s["from_page"] < 1 or s["to_page"] < s["from_page"] or s["from_page"] <= last:
+        if (
+            s["from_page"] < 1
+            or s["to_page"] < s["from_page"]
+            or s["from_page"] <= last
+        ):
             raise ValueError(f"Sektionen überlappen/nicht aufsteigend: {s}")
         last = s["to_page"]
     plan["sections"] = secs
@@ -124,6 +150,7 @@ def label_at(plan: dict, page_1b: int) -> int | None:
 
 
 # ── mechanical footer verification ───────────────────────────────────────
+
 
 def verify(plan: dict, pdf_path: str) -> tuple[float, int, dict]:
     """Coverage/contradictions of the plan against the FOOTER truth.
@@ -153,13 +180,18 @@ def verify(plan: dict, pdf_path: str) -> tuple[float, int, dict]:
                 mismatches.append({"seite": page0 + 1, "plan": want, "druck": int(val)})
     observable = covered + contra + outside
     coverage = covered / observable if observable else 0.0
-    stats = {"observable": observable, "covered": covered,
-             "contradictions": contra, "outside_sections": outside,
-             "beispiel_mismatches": mismatches}
+    stats = {
+        "observable": observable,
+        "covered": covered,
+        "contradictions": contra,
+        "outside_sections": outside,
+        "beispiel_mismatches": mismatches,
+    }
     return coverage, contra, stats
 
 
 # ── healed PDF (mechanical, from the verified plan) ─────────────────────
+
 
 def build_healed_pdf(plan: dict, pdf_path: str) -> bytes:
     """Healed PDF from the VERIFIED plan (mechanical — the LLM never writes bytes).
@@ -176,10 +208,18 @@ def build_healed_pdf(plan: dict, pdf_path: str) -> bytes:
     try:
         spec = []
         if plan["sections"][0]["from_page"] > 1:
-            spec.append({"startpage": 0, "prefix": "C", "style": "D", "firstpagenum": 1})
+            spec.append(
+                {"startpage": 0, "prefix": "C", "style": "D", "firstpagenum": 1}
+            )
         for s in plan["sections"]:
-            spec.append({"startpage": s["from_page"] - 1, "prefix": "", "style": "D",
-                         "firstpagenum": s["start_label"]})
+            spec.append(
+                {
+                    "startpage": s["from_page"] - 1,
+                    "prefix": "",
+                    "style": "D",
+                    "firstpagenum": s["start_label"],
+                }
+            )
         doc.set_page_labels(spec)
         out = io.BytesIO()
         doc.save(out, deflate=True)
@@ -190,17 +230,26 @@ def build_healed_pdf(plan: dict, pdf_path: str) -> bytes:
 
 # ── the loop ─────────────────────────────────────────────────────────────
 
+
 def run_case(case: dict) -> None:
     buch = case["title"]
     pdf = case["local_path"].replace("file://", "")
     cid = case["id"]
 
     pf = preflight(pdf)
-    log(buch, "PREFLIGHT", pf.line()[len("[x] "):])
+    log(buch, "PREFLIGHT", pf.line()[len("[x] ") :])
     if pf.ok:
-        requests.post(f"{RAG}/api/repair/cases/{cid}/verdict", timeout=60, data={
-            "verdict": "failed", "score": 0, "contradictions": 0,
-            "blocked_reason": f"preflight nicht rot: {pf.verdacht}", "plan": "{}"})
+        requests.post(
+            f"{RAG}/api/repair/cases/{cid}/verdict",
+            timeout=60,
+            data={
+                "verdict": "failed",
+                "score": 0,
+                "contradictions": 0,
+                "blocked_reason": f"preflight nicht rot: {pf.verdacht}",
+                "plan": "{}",
+            },
+        )
         return
 
     doc = pymupdf.open(pdf)
@@ -211,43 +260,78 @@ def run_case(case: dict) -> None:
     plan = judge(buch, pf.details, cands)
 
     coverage, contra, stats = verify(plan, pdf)
-    log(buch, "VERIFY", f"fußzeilen-deckung {coverage:.1%} · {contra} widersprüche · {stats}")
+    log(
+        buch,
+        "VERIFY",
+        f"fußzeilen-deckung {coverage:.1%} · {contra} widersprüche · {stats}",
+    )
 
     if coverage >= 0.95 and contra == 0:
         pdf_bytes = build_healed_pdf(plan, pdf)
         with open("/tmp/healed.pdf", "wb") as f:
             f.write(pdf_bytes)
-        r = requests.post(f"{RAG}/api/repair/cases/{cid}/verdict", timeout=300,
-                          data={"verdict": "auto_apply", "score": coverage,
-                                "contradictions": contra, "plan": json.dumps(plan, ensure_ascii=False),
-                                "plan_version": 1},
-                          files={"healed_pdf": ("healed.pdf", pdf_bytes, "application/pdf")})
+        r = requests.post(
+            f"{RAG}/api/repair/cases/{cid}/verdict",
+            timeout=300,
+            data={
+                "verdict": "auto_apply",
+                "score": coverage,
+                "contradictions": contra,
+                "plan": json.dumps(plan, ensure_ascii=False),
+                "plan_version": 1,
+            },
+            files={"healed_pdf": ("healed.pdf", pdf_bytes, "application/pdf")},
+        )
         r.raise_for_status()
         erg = r.json()
-        log(buch, "AUTO-APPLY", f"angewendet: {erg.get('filename')} · neu {erg.get('new_attachment_key')} · quarantäne {erg.get('quarantine')}")
+        log(
+            buch,
+            "AUTO-APPLY",
+            f"angewendet: {erg.get('filename')} · neu {erg.get('new_attachment_key')} · quarantäne {erg.get('quarantine')}",
+        )
     else:
-        r = requests.post(f"{RAG}/api/repair/cases/{cid}/verdict", timeout=60, data={
-            "verdict": "blocked", "score": coverage, "contradictions": contra,
-            "blocked_reason": f"deckung {coverage:.1%} / {contra} widersprüche unter schwelle",
-            "plan": json.dumps(plan, ensure_ascii=False)})
+        r = requests.post(
+            f"{RAG}/api/repair/cases/{cid}/verdict",
+            timeout=60,
+            data={
+                "verdict": "blocked",
+                "score": coverage,
+                "contradictions": contra,
+                "blocked_reason": f"deckung {coverage:.1%} / {contra} widersprüche unter schwelle",
+                "plan": json.dumps(plan, ensure_ascii=False),
+            },
+        )
         r.raise_for_status()
-        log(buch, "GATE", f"blocked_for_dudu (deckung {coverage:.1%}, {contra} widersprüche)")
+        log(
+            buch,
+            "GATE",
+            f"blocked_for_dudu (deckung {coverage:.1%}, {contra} widersprüche)",
+        )
         return
 
     # sync → rechunk → proof
-    n_jobs = requests.post(f"{RAG}/api/zotero/sync", timeout=300).json().get("enqueued_jobs")
+    n_jobs = (
+        requests.post(f"{RAG}/api/zotero/sync", timeout=300).json().get("enqueued_jobs")
+    )
     log(buch, "SYNC", f"{n_jobs} Jobs enqueued")
     for _ in range(90):
         time.sleep(20)
         jobs = requests.get(f"{RAG}/api/ingest/jobs?limit=20", timeout=30).json()
         items = jobs.get("jobs", jobs) if isinstance(jobs, dict) else jobs
         # the endpoint reports Capitalized keys (Status) — accept both
-        offen = [j for j in items if isinstance(j, dict) and
-                 (j.get("status") or j.get("Status")) in ("pending", "processing", "claimed")]
+        offen = [
+            j
+            for j in items
+            if isinstance(j, dict)
+            and (j.get("status") or j.get("Status"))
+            in ("pending", "processing", "claimed")
+        ]
         if not offen:
             break
         log(buch, "RECHUNK", f"{len(offen)} job(s) offen …")
-    stats = requests.get(f"{RAG}/api/repair/docs/{case['document_zotero_key']}/locator-stats", timeout=30).json()
+    stats = requests.get(
+        f"{RAG}/api/repair/docs/{case['document_zotero_key']}/locator-stats", timeout=30
+    ).json()
     log(buch, "BEWEIS", json.dumps(stats, ensure_ascii=False)[:600])
 
 
@@ -268,9 +352,17 @@ def main() -> int:
             run_case(case)
         except Exception as exc:  # noqa: BLE001 — the case must not die silently
             log(case["title"], "FEHLER", str(exc)[:200])
-            requests.post(f"{RAG}/api/repair/cases/{cid}/verdict", timeout=60, data={
-                "verdict": "failed", "score": 0, "contradictions": 0,
-                "blocked_reason": f"service-fehler: {exc}"[:300], "plan": "{}"})
+            requests.post(
+                f"{RAG}/api/repair/cases/{cid}/verdict",
+                timeout=60,
+                data={
+                    "verdict": "failed",
+                    "score": 0,
+                    "contradictions": 0,
+                    "blocked_reason": f"service-fehler: {exc}"[:300],
+                    "plan": "{}",
+                },
+            )
     return 0
 
 

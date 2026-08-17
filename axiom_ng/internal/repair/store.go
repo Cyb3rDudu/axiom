@@ -85,7 +85,7 @@ func SchemaFilename(creators []Creator, year int, title, publisher string) strin
 	if year > 0 {
 		y = fmt.Sprintf("%d", year)
 	}
-	return sanitize(head + " - " + y + " - " + shorten(title, 80)) + ".pdf"
+	return sanitize(head+" - "+y+" - "+shorten(title, 80)) + ".pdf"
 }
 
 // shorten trims to n runes at a word boundary.
