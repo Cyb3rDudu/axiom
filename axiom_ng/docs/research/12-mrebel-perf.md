@@ -74,6 +74,51 @@ früheren stabilen Sort (strenger `>`, niedrigerer Index gewinnt).
 
 0,5-s-Meilenstein erreicht; Zwischenziel p50 ≤ 0,2 s offen.
 
+## Schritt 4 — Cached-Pfad-Parität GEKLÄRT (Hivemind-Zusatz b; zwei Logik-Bugs, kein FP)
+
+Neu-Messung nach Opt-2 bestätigte 86 % mit GROSSEN Abweichungen (Chunk 2: 10 Zusatz-
+Triples) — kein Near-Tie-Rauschen. First-Divergence-Diff (`cmp_steps.py`): Cached lief
+**255 Runden** und expandierte **`[tp_XX, EOS]` als lebenden Beam** (Generierung an EOS
+vorbei → Halluzinations-Ketten). Zwei Fixes:
+1. **Eviction nicht portiert** beim Cached-Loop-Re-Write (plain `append` statt `addHyp`)
+   → 43→47/50.
+2. **Loop-Init leitete Schritt-1-Top-6 ungefiltert in `beams`** (EOS-Kandidat wurde
+   expandiert) → Init spiegelt Loop-Semantik (EOS→done+Eviction, numBeams-Cap) → **96,0 %**.
+
+**Cached jetzt: GATE PASS (96,0 %, byte-deterministisch, p50 0,583 s)** — kein Tempo-
+vorteil unbatched (Per-Call-dominiert), aber korrekt. Die Hivemind-Verdachtsrichtung
+„echter Cache-Ordering-Fehler" war richtig (in Go-Semantik: EOS/Beam-Lifecycle, nicht
+KV-Reihenfolge — die war korrekt).
+
+## Schritt 5 — Opt-3: Beam-Batching [B, L]
+
+Ein Decoder-Call pro Runde für alle 3 Beams (B∈{1,3}; Encoder-Tensoren batch-
+materialisiert) — exakt Pythons generate()-Struktur.
+
+| Metrik | Opt-2 | Opt-3 |
+|---|---|---|
+| p50 | 0,543 s | **0,364 s** (−33 %) |
+| p95 | 1,340 s | 1,037 s |
+| ORT-Calls/Chunk | 68 | **24** |
+| ORT-ms/Chunk | 456 | 269 (11,2 ms/call) |
+| Gate | PASS | **PASS** (96 %, byte-gleich) |
+
+## Schritt 6 — Opt-4: `logits_last`-Graph-Trim
+
+ONNX-Chirurgie auf `decoder_logits.onnx`: Slice-Knoten (Achse 1, starts=−1, ends=INT64_MAX)
+→ Output `logits_last` **[B, 1, 250071]**; validiert (max|d| 0.0 vs `logits[:, -1, :]`).
+Kills den L-skalierten Logit-Download (~48 MB → 3 MB pro Call bei L=16).
+
+| Metrik | Opt-3 | Opt-4 |
+|---|---|---|
+| p50 | 0,364 s | **0,249 s** (−32 %) |
+| p95 | 1,037 s | 0,582 s |
+| ORT-ms/Chunk | 269 | 171 (**7,1 ms/call**) |
+| Gate | PASS | **PASS** (96 %, byte-gleich) |
+
+**Kampagnen-Stand:** Baseline 4,459 s → 0,249 s = **17,9×**; Ziel ≤ 0,2 s offen
+(Rest: ~78 ms Go-Overhead [72 TopK/LSE-Scans à 250k] + 171 ms ORT à 24 Calls).
+
 ## Artefakte & Befehle
 
 - `mrebelgo/analyze_trace.py`, `cmp_steps.py`, `parity_gate.py`, `repeat0.json`;
