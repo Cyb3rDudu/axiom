@@ -37,9 +37,9 @@ Apple-only parity (GoMLX) does not earn a CUDA column — documented, not hidden
 | EPUB→CFI | **Go: yes** | CPU (algorithmic) | n/a | Block 1/4: pure HTMLParser walk → Go `net/html` |
 | Chunking + locator assembly | **Go: yes** | CPU (algorithmic) | n/a | Block 1: contract §11 mapping |
 | Dense BGE-M3 (query + passage) | **Go: yes** (ONNX) | **CUDA (RTX 3090, same-device)** | **onnxruntime CUDA-EP — PROVEN** | Block 2/3 + Nachzug: cosine avg **0.999639** on 219 chunks, **both Go-CUDA-EP and Py-torch-CUDA on the same 3090**; 217/219 ≥0.999; 2× byte-equal |
-| Sparse BGE-M3 | **Go: algorithm proven, Go-read unresolved** | CPU/CUDA | CUDA (same model) | Block 3 + Nachzug (matched 8192): formula overlap **1.0 / cos 1.0** in Python; Go divergence persists (overlap 0.938) — truncation disproven; root cause open, leading hypothesis = Go harness input discrepancy (missing BertStyle post-processor), binding-read misalignment unproven |
+| Sparse BGE-M3 | **Go: yes (proven)** | **CUDA (RTX 3090, same-device)** | **onnxruntime CUDA-EP — PROVEN** | Restpunkt 2: overlap **0.998 avg / cos 0.999**, 217/219 ≥0.98 & 216/219 ≥0.999, fixed `<s></s>` same-device CUDA; outliers = 2 rare-non-Latin tokenizer chunks only (see 09) |
 | Rerank bge-reranker-v2-m3 | **Go: yes** (ONNX) | **CUDA (RTX 3090, same-device)** | **onnxruntime CUDA-EP — PROVEN** | Block 3/5 + Nachzug: **Spearman 1.0000** (corrected pair form, Go-CUDA vs Py-torch-CUDA same 3090); avg \|score\| 8e-6 |
-| GLiNER zero-shot NER | **Go: yes** (ONNX) | **CUDA (RTX 3090, model forward)** | **GLiNER ONNX + CUDA-EP — forward proven** | Block 7 + Nachzug: Go-CPU logits == Py-CPU (0.0, one-shot Mac run); Go-CUDA executes on 3090 (cuDNN, diff 0.042 recomputable from committed bins); entity-set parity ≤1e-5 is the Block-7 CPU result |
+| GLiNER zero-shot NER | **Go: yes** (ONNX) | **CUDA (RTX 3090, model forward)** | **GLiNER ONNX + CUDA-EP — forward proven** | Block 7 + Nachzug: Go-CPU logits == Py-CPU (**0.0**); carrier CPU entity reference reproducible (`gliner_entities_py_cpu.json`); Go-CUDA executes on 3090 (cuDNN diff 0.042, **entity set unchanged**); **Go ok (CUDA-forward, entity-parity CPU-proven)** |
 | mREBEL relationships | **No-Go native** → **Hybrid/sidecar** | Python service (farm) | see Sidecar | Block 7: BART-ONNX decode loop rejected |
 | PDF→Markdown (digital) | **Go: yes** (Xberg binding) | CPU | CUDA for OCR models | Block 4: digital PDF 5 pages extracted, umlauts OK |
 | PDF→Markdown (scans) | **No-Go native** → Xberg/Marker sidecar + OCR | farm (CUDA OCR) | yes (via sidecar) | Block 4: scanned book → empty without OCR; Marker 1895 s |
@@ -52,6 +52,8 @@ Apple-only parity (GoMLX) does not earn a CUDA column — documented, not hidden
 | dense 219 chunks | **byte-equal (897,024 B)** | Block 3 |
 | rerank 75 pairs | deterministic (exit 3 on mismatch) | Block 3 |
 | mini-runner embed/rerank | inherited — same engines as godense/gorerank; own 2× run not added | Block 5 |
+| sparse 219 chunks | **byte-equal** (gosparse 2× run, Restpunkt 2) | 09 / Nachzug |
+| gogliner GLiNER forward | deterministic (fixed input) | Restpunkt 3 |
 
 ## Migration path (Strangler)
 
@@ -109,6 +111,30 @@ Apple-only parity (GoMLX) does not earn a CUDA column — documented, not hidden
 - BGE-M3 sparse head is `Linear(1024,1)` + max-scatter (NOT a vocab projection) →
   **verified** (Block 3; formula overlap 1.0).
 
+## Four proof pillars (Restpunkte 1–3 all measured, artifacts committed)
+
+| Pillar | Go-vs-Python (same-device CUDA unless noted) | Artifact reference |
+|---|---|---|
+| **Dense** | cosine avg **0.999639** (219 chunks, 217/219 ≥0.999), 2× byte-equal | `carrier_results/dense_cosine_cuda.csv` |
+| **Rerank** | **Spearman 1.0000** (75 pairs, corrected `<s>q</s></s>p</s>`), avg \|score\| 8e-6 | `carrier_results/rerank_{go,py}_cuda.json` |
+| **Sparse** | overlap **0.998 avg / cos 0.999** (217/219 ≥0.98, 216/219 ≥0.999, fixed `<s></s>`) | `carrier_results/sparse_{cuda_go,py_ref_cuda}.json` |
+| **GLiNER** | Go-CPU logits == Py-CPU (**0.0**); entity-set parity holds (carrier CPU reference); Go-CUDA forward on 3090 (0.042 logits, entity set unchanged) | `carrier_results/gliner_entities_py_cpu.json`, `gogliner` |
+
+The **complete query-side model stack (dense / rerank / sparse) works in Go on CUDA
+at parity**; GLiNER is proof-loaded too. Remaining sparse divergence is confined to
+2 rare-non-Latin tokenizer chunks (Restpunkt 4, `09-tokenizer-edge-cases.md`).
+
+## Mac column (Restpunkt 5 — pending the backend decision + dudu-coordinated window)
+
+The Mac is the always-on query-runner; a Go replacement must hold at least the
+current MPS-Python level (rerank p95 ~5.3 s MPS). Two Go GPU paths are candidates:
+(a) **onnxruntime CoreML-EP** via `yalue/onnxruntime_go` (same codepath as the CUDA-EP,
+preferred), or (b) **GoMLX** (MLX-native on Metal; second backend = Epic cost).
+A backend decision + measured Mac-GPU-vs-MPS-Python parity + latency compare is the
+final proof; the window is coordinated with dudu via the issue before measuring. The
+three pillars above were proven on CUDA; the Mac cell in the component table fills
+after this.
+
 ## Bottom line
 
 Go-native runner is **Go: feasible** for contract/chunking/epub, dense, rerank,
@@ -145,3 +171,13 @@ container on the same 3090. Every number committed as CSV/JSON in
 Environment facts: ORT must be the `gpu_cuda13` build (CPU x64 build has no CUDA-EP)
 + `LD_LIBRARY_PATH` to torch-bundled CUDA-13 runtime; cuDNN path needed for
 DeBERTa-style models (GLiNER). Containerfile: `axiom_ng/cmd/feasibility/Containerfile.study`.
+
+## Feasibility answer (one sentence)
+
+**Ein reiner Go-Runner ist funktional umsetzbar für den gesamten Query-seitigen
+Modellstack (Dense/Rerank/Sparse/GLiNER — auf CUDA paritätisch bewiesen) und die
+algorithmischen Komponenten (Contract/Chunking/EPUB-CFI), mit Xberg/Marker-OCR für
+Scan-PDF und einem mREBEL-Sidecar als den beiden einzigen Nicht-Go-Bausteinen —
+sofern der Mac-Query-Pfad (Restpunkt 5) auf mindestens MPS-Python-Niveau bestätigt
+wird; die Folge-Epic-Kostenpunkte sind der Xberg-Locator-Bau, der mREBEL-Decoder und
+die cuDNN-FP-Varianz.**
