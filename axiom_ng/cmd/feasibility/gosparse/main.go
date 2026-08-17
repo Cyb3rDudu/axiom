@@ -37,6 +37,12 @@ func main() {
 
 	tok, err := sentencepiece.NewTokenizer(spm)
 	if err != nil { fatal("tok: %v", err) }
+	// Auto-review fix: godense applies the BertStyle post-processor (adds <s></s>,
+	// XLM-R specials) but gosparse did NOT — so every chunk fed sparse_head.onnx
+	// ids WITHOUT specials while the Python reference used add_special_tokens=True.
+	// Required for the next matched Go-vs-Python sparse re-run; the committed
+	// sparse_go8192_cuda.json was produced WITHOUT this line (see 03-dense-parity.md).
+	tok.WithPostProcessor(sentencepiece.BertStylePostProcessor(0, 2))
 
 	ort.SetSharedLibraryPath(lib)
 	if err := ort.InitializeEnvironment(); err != nil { fatal("env: %v", err) }

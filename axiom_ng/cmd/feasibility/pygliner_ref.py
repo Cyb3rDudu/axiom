@@ -8,9 +8,13 @@ saves:
     span_idx, span_mask)
   - gliner_logits_py.cpu bin (big-endian f32 logits flatten) for the Python
     reference.
-The Go side (gogliner) reads gliner_inputs.npz, runs the same model via
-onnxruntime_go (CUDA), and writes gliner_logits_go.bin; a compare step reports
-max-abs-logits diff (Go vs Python model-execution parity on GLiNER-ONNX-CUDA).
+The Go side (gogliner) does NOT read the npz directly — it reads
+  gliner_inputs.json (shapes/dtypes/offsets) + gliner_inputs.bin (raw tensor
+  bytes). The npz→(json+bin) split was done ad-hoc and the converter is not
+  committed; the converted inputs ARE committed as
+  carrier_results/gliner_inputs.{json,bin}, and gogliner writes
+  gliner_logits_go.bin (big-endian f32); the committed compare step is
+  gliner_compare.py (Go vs Python model-execution parity on GLiNER-ONNX-CUDA).
 """
 import json, sys, os, struct
 import numpy as np

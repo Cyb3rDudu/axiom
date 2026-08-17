@@ -9,7 +9,8 @@ pre-auto-review pair form (<s> q </s> p </s> — single </s>); gorerank now
 emits the HF XLM-R pair form (<s> q </s> </s> p </s>). Re-run both sides
 before citing final parity. (see docs/research/03-dense-parity.md)
 
-Usage: pyrerank_ref.py <pairs.json> <gorerank_out.json> <outdir>
+Usage: pyrerank_ref_cuda.py <pairs.json> <gorerank_out.json> <outdir> [device]
+(device defaults to cuda; e.g. 'cuda' or 'cuda:0')
 Writes <outdir>/py_rerank.json = [{"query","doc","score"}, ...].
 """
 import json, sys, os

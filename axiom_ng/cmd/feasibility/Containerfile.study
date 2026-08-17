@@ -10,8 +10,8 @@ RUN cd /tmp \
     && curl -sL -o ort.tgz https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-linux-x64-gpu_cuda13-1.29.0.tgz \
     && mkdir -p /opt/onnxruntime/lib \
     && tar xzf ort.tgz \
-    && cp -L onnxruntime-linux-x64-gpu_cuda13-1.29.0/lib/libonnxruntime.so.1.29.0 /opt/onnxruntime/lib/ && cp -L onnxruntime-linux-x64-gpu_cuda13-1.29.0/lib/libonnxruntime_providers*.so* /opt/onnxruntime/lib/ && mkdir -p /opt/onnxruntime/lib/onnxruntime/capi && cp onnxruntime-linux-x64-gpu_cuda13-1.29.0/lib/libonnxruntime.so.1.29.0 /opt/onnxruntime/lib/libonnxruntime.so \
-    && rm -rf /tmp/onnxruntime-linux-x64-1.29.0 /tmp/ort.tgz
+    && cp -L onnxruntime-linux-x64-gpu_cuda13-1.29.0/lib/libonnxruntime.so.1.29.0 /opt/onnxruntime/lib/ && cp -L onnxruntime-linux-x64-gpu_cuda13-1.29.0/lib/libonnxruntime_providers*.so* /opt/onnxruntime/lib/ && cp onnxruntime-linux-x64-gpu_cuda13-1.29.0/lib/libonnxruntime.so.1.29.0 /opt/onnxruntime/lib/libonnxruntime.so \
+    && rm -rf /tmp/onnxruntime-linux-x64-gpu_cuda13-1.29.0 /tmp/ort.tgz
 
 # scipy for the Spearman/Kendall reference.
 RUN pip install --no-cache-dir scipy
@@ -22,12 +22,12 @@ COPY axiom_ng/docs/research/ /study/docs/research/
 ENV ORT_DYLIB=/opt/onnxruntime/lib/libonnxruntime.so.1.29.0
 ENV PATH=/usr/local/go/bin:$PATH
 ENV CGO_ENABLED=1
-RUN ldconfig -p >/dev/null 2>&1 || true; ln -sf /usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn.so.9 /usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn.so
+RUN ln -sf /usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn.so.9 /usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn.so
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cu13/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib:/opt/onnxruntime/lib
 WORKDIR /study/cmd/feasibility
 
 # Build every Go PoC except xberg (needs its own prebuilt FFI cgo shim).
-RUN for d in godense gorerank gosparse minirunner ortprobe tokdump gogliner; do \
+RUN for d in godense gorerank gosparse minirunner ortprobe tokdump gogliner cuda_ep_check; do \
         if [ -f "$d/go.mod" ]; then \
             (cd "$d" && go mod tidy >/dev/null 2>&1 && go build -o /study/bin/"$d" .) \
             && echo "built $d" || echo "FAILED $d"; \

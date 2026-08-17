@@ -31,7 +31,7 @@ gliner 0.2.28, transformers 4.57.6) and adds:
 - `scipy` (Spearman/Kendall reference).
 - Copies `axiom_ng/cmd/` + `axiom_ng/docs/research/` (feasibility tooling only).
 - Builds the Go PoCs (godense, gorerank, gosparse, minirunner, ortprobe,
-  tokdump) into `/study/bin/`.
+  tokdump, gogliner, cuda_ep_check) into `/study/bin/`.
 
 ## Verification (in-container, GPU 0)
 
@@ -42,7 +42,7 @@ $ CUDA_VISIBLE_DEVICES=0 podman run --rm --device nvidia.com/gpu=all \
 True NVIDIA GeForce RTX 3090
 ```
 ```
-$ cd /study/cmd/feasibility/minirunner && go run cuda_ep_check.go
+$ cd /study/cmd/feasibility/cuda_ep_check && go run .
 CUDA EP appended OK        # onnxruntime_go CUDA execution provider initializes
 ```
 
@@ -51,9 +51,17 @@ via CDI; the two 3090s are free so no prod interference.
 
 ## Reproducibility for Hivemind
 
-- Containerfile committed: `axiom_ng/cmd/feasibility/Containerfile.study`.
-- CUDA EP smoke test: `axiom_ng/cmd/feasibility/cuda_ep_check.go`.
-- On carrier: clone at `~/Code/axiom-study` (head `6bd4c1a`, matches the study
-  branch evidence hashes). Build: `podman build -t localhost/study-axiom-cuda -f Containerfile.study .`.
+- Containerfile committed: `axiom_ng/cmd/feasibility/Containerfile.study` (build
+  context = the repo root, since it COPYs `axiom_ng/cmd/` + `axiom_ng/docs/`):
+  `podman build -t localhost/study-axiom-cuda -f axiom_ng/cmd/feasibility/Containerfile.study .`
+- CUDA EP smoke test: `axiom_ng/cmd/feasibility/cuda_ep_check/` (own Go module).
+- On carrier: clone at `~/Code/axiom-study` tracking the study branch
+  `research/go-runner-feasibility` (kept at the evidence-head during Hivemind
+  verification; `git log -1` there = the commit these docs ship in).
+- **Not in the repo:** the base image `localhost/runner-poc:latest` and the
+  models (`~/models/` on the carrier: bge-m3, reranker, sparse_head.onnx,
+  gliner ONNX, tokenizers, sample/pair corpora). Same-device reconstruction
+  from the tree alone is therefore partial — the carrier copy is the full
+  environment while it stays up.
 - Every parity / R7 run uses this container on the same GPU → clean
   same-device Go-vs-Python parity.
