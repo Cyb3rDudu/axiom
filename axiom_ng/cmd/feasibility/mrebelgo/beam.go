@@ -25,13 +25,12 @@ func beamSearchFull(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvance
 	encHidden []float32, encMask []int64) ([][]int64, []string) {
 
 	encLen := int64(len(encMask))
-	_, present := step1(dec1, encHidden, encMask, encLen)
+	// SKIP step1 (zero-present) to test whether the decoder_model Run corrupts the decK session
 	pastDec0 := make([]*ort.Tensor[float32], 0, 24)
 	pastEnc := make([]*ort.Tensor[float32], 0, 24)
 	for l := 0; l < nLayers; l++ {
-		base := 1 + 4*l
-		pastDec0 = append(pastDec0, present[base], present[base+1])
-		pastEnc = append(pastEnc, present[base+2], present[base+3])
+		pastDec0 = append(pastDec0, nil, nil)
+		pastEnc = append(pastEnc, nil, nil)
 	}
 	// first-step expansion: step1 already decoded tp_XX; the cache holds tp_XX (len 1).
 	// We need the first generated token: run the tp_XX logits from step1? step1 returned logits
