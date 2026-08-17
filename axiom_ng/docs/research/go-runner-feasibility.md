@@ -11,9 +11,10 @@ mini-runner inherits those engines and has no own 2× run.
 ## Executive summary
 
 A Go-native flip of the Python runner is **feasible for the query side and the
-algorithmic components, and for the ML encoders via ONNX** — but **not** for the
-ingest-side PDF→Markdown of scanned books (Markers Xberg-OCR) and **not** for a
-raw BART-ONNX mREBEL. The decisive constraint is the **CUDA column**: GoMLX is
+algorithmic components, and for the ML encoders via ONNX** — and (after Restpunkt 6)
+**for the mREBEL triple extraction natively in Go** (96 % parity) — but **not** for the
+ingest-side PDF→Markdown of scanned books (Markers Xberg-OCR). The decisive constraint
+is the **CUDA column**: GoMLX is
 Apple-only; the 3090 farm needs the **onnxruntime CUDA execution provider** (and,
 for GLiNER, the GLiNER own ONNX export). All query-path encoders are proven at
 parity on CPU through `onnxruntime_go`; CUDA is a drop-through (same ONNX files).
@@ -23,7 +24,7 @@ parity on CPU through `onnxruntime_go`; CUDA is a drop-through (same ONNX files)
 | Role | Device | What the Go runner replaces / keeps |
 |---|---|---|
 | Query-Runner (Mac, always-on) | MPS/CPU | Dense + rerank via onnxruntime_go — **proven** (dense cosine ≥0.999; rerank Spearman 1.0000 on CUDA after the pair-form fix — was 0.978 with the wrong single-`</s>` form) |
-| Ingest-Runner (3090 farm, primary) | **CUDA** | Dense/sparse/rerank/GLiNER via ONNX CUDA-EP; PDF→MD via Xberg/Marker sidecar; mREBEL sidecar |
+| Ingest-Runner (3090 farm, primary) | **CUDA** | Dense/sparse/rerank/GLiNER via ONNX CUDA-EP; PDF→MD via Xberg/Marker sidecar; mREBEL Go-native (Restpunkt 6 — parity proven, latency = epic cost point G2 #179) |
 | Ingest-Fallback (Mac) | CPU/MPS | same query-side engines; scanned-PDF OCR only in fallback |
 
 Mac is the **query** compute + fallback; the 3090s are the **ingest** workhorses.
@@ -40,7 +41,7 @@ Apple-only parity (GoMLX) does not earn a CUDA column — documented, not hidden
 | Sparse BGE-M3 | **Go: yes (proven)** | **CUDA (RTX 3090, same-device)** | **onnxruntime CUDA-EP — PROVEN** | Restpunkt 2: overlap **0.998 avg / cos 0.999**, 217/219 ≥0.98 & 216/219 ≥0.999, fixed `<s></s>` same-device CUDA; outliers = 2 rare-non-Latin tokenizer chunks only (see 09) |
 | Rerank bge-reranker-v2-m3 | **Go: yes** (ONNX) | **CUDA (RTX 3090, same-device)** | **onnxruntime CUDA-EP — PROVEN** | Block 3/5 + Nachzug: **Spearman 1.0000** (corrected pair form, Go-CUDA vs Py-torch-CUDA same 3090); avg \|score\| 8e-6 |
 | GLiNER zero-shot NER | **Go: yes** (ONNX) | **CUDA (RTX 3090, model forward)** | **GLiNER ONNX + CUDA-EP — forward proven** | Block 7 + Nachzug: Go-CPU logits == Py-CPU (**0.0**); carrier CPU entity reference reproducible (`gliner_entities_py_cpu.json`); Go-CUDA executes on 3090 (cuDNN diff 0.042, **entity set unchanged**); **Go ok (CUDA-forward, entity-parity CPU-proven)** |
-| mREBEL relationships | **No-Go native** → **Hybrid/sidecar** | Python service (farm) | see Sidecar | Block 7: BART-ONNX decode loop rejected |
+| mREBEL relationships | **Go: yes** (decoder ONNX + beam loop) | **CUDA (RTX 3090, same-device)** | **onnxruntime CUDA-EP — Go-native PROVEN** | Restpunkt 6: decoder ONNX exported + validated (optimum 1.21 legacy stack + `--no-post-process`); Go beam loop (3/3/256/lp0/tp_XX) triple-set parity **96.0 %** (n=50, threshold ≥95 %), 2× byte-deterministic, parser 1:1 + fixtures; **latency p50 4.45 s vs Py 0.14 s (~31×)** — tensor-reuse / shape-cached sessions = G2 #179 epic cost point (11-mrebel-decoder-go.md) |
 | PDF→Markdown (digital) | **Go: yes** (Xberg binding) | CPU | CUDA for OCR models | Block 4: digital PDF 5 pages extracted, umlauts OK |
 | PDF→Markdown (scans) | **No-Go native** → Xberg/Marker sidecar + OCR | farm (CUDA OCR) | yes (via sidecar) | Block 4: scanned book → empty without OCR; Marker 1895 s |
 | R7 end-to-end (Mini runner) | **Go: yes (pipeline)** | **CUDA (carrier)** | CUDA — proven | Nachzug: swap into bench; **dense/hybrid retrieval identical to Python**, rerank parity; earlier 0.080 was a mini-runner `<s></s>` query-embed bug (fixed) |
@@ -69,7 +70,9 @@ Apple-only parity (GoMLX) does not earn a CUDA column — documented, not hidden
 3. **EPUB + chunking** in Go (algorithmic, no ML).
 4. **Ingest ML (dense/sparse/rerank) on the farm** via onnxruntime CUDA-EP.
 5. **PDF (digital)** via the Xberg Go binding; **scans** via Xberg/Marker sidecar
-   with OCR on the farm; **mREBEL** stays a Python sidecar.
+   with OCR on the farm; **mREBEL** Go-native (Restpunkt 6 — parity proven), but
+   budget the latency gap (p50 4.45 s vs Py 0.14 s, ~31×) or the
+   tensor-reuse/shape-caching work (G2 #179) before replacing the Python service.
 6. **Final strangle:** remove Python runner only after all components have a Go
    or sidecar path and a full gold-suite delta is green (data fixed).
 
@@ -145,7 +148,9 @@ Go-native runner is **Go: feasible** for contract/chunking/epub, dense, rerank,
 GLiNER (all via ONNX — CUDA-EP proven on the farm for dense/rerank; GLiNER's
 Go forward runs on CUDA, the full span-NER Go port is still pending, see the
 table), and a Mini-runner proving the R7-E2E
-pipeline. **No-Go or sidecar:** scanned-PDF conversion and mREBEL. The Mac-only
+pipeline. **No-Go or sidecar:** scanned-PDF conversion only — mREBEL is Go-native proven
+(Restpunkt 6, 96 % parity) with the latency caveat (~31× vs Python, G2 #179 epic
+cost point). The Mac-only
 (GoMLX) trap is avoided by routing CUDA through onnxruntime_go + GLiNER/ONNX.
 Blocked numbers (tokenizer edge cases, sparse Go divergence) are
 environmental/tooling, each with a concrete fix — not conceptual blockers.
@@ -183,5 +188,5 @@ Modellstack (Dense/Rerank/Sparse/GLiNER — auf CUDA paritätisch bewiesen), die
 algorithmischen Komponenten (Contract/Chunking/EPUB-CFI) UND die mREBEL-
 Triple-Extraktion (96 % Triple-Set-Parität, nativ in Go) — mit Xberg/Marker-OCR für
 Scan-PDF als einzigem Nicht-Go-Baustein. Kostenpunkte für ein Folge-Epic: der
-Xberg-Locator-Bau, die mREBEL-Cache-Performance (Go p50 4.45 s vs Python 0.14 s,
-Tensor-Reuse/Shape-Caching nötig) und die cuDNN-FP-Varianz.**
+Xberg-Locator-Bau, die mREBEL-Latenz (Go p50 4.45 s vs Python 0.14 s ≈ 31× —
+Tensor-Reuse / Shape-gecachte Sessions = G2 #179) und die cuDNN-FP-Varianz.**
