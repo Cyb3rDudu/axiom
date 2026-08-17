@@ -34,7 +34,7 @@ def gen(model_id, out_dir, opset=14):
     # default pt seq2seq config for BART
     from transformers.onnx.features import FeaturesManager
     model_kind, model_onnx_config = FeaturesManager.check_supported_model_or_raise(model, "seq2seq-lm")
-    onnx_config = model_onnx_config()
+    onnx_config = model_onnx_config(model.config)
     # generate a tiny dummy batch for shape inference
     dummy = tok(["Virchow entdeckte die Zelle."], return_tensors="pt").to(dev)
     from transformers.onnx import export as t_export
