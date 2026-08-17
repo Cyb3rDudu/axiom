@@ -105,6 +105,11 @@ func main() {
 	mask := make([]int64, len(encIDs))
 	for i := range mask { mask[i] = 1 }
 	encHidden := runEncoder(encSess, encIDs, mask)
+	if os.Getenv("MRBEL_DUMP")=="1" {
+		d, _ := json.Marshal(map[string]any{"enc_len": len(encIDs), "enc_ids": encIDs, "enc_hidden": encHidden})
+		os.WriteFile("/tmp/go_enc.json", d, 0o644)
+		fmt.Fprintln(os.Stderr, "dumped /tmp/go_enc.json")
+	}
 
 	// beam search + decode + parse
 	seqs := beamSearch(tok, decSess, encHidden, mask)
