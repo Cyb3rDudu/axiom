@@ -26,7 +26,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cu13/lib:/opt
 WORKDIR /study/cmd/feasibility
 
 # Build every Go PoC except xberg (needs its own prebuilt FFI cgo shim).
-RUN for d in godense gorerank gosparse minirunner ortprobe tokdump; do \
+RUN for d in godense gorerank gosparse minirunner ortprobe tokdump gogliner; do \
         if [ -f "$d/go.mod" ]; then \
             (cd "$d" && go mod tidy >/dev/null 2>&1 && go build -o /study/bin/"$d" .) \
             && echo "built $d" || echo "FAILED $d"; \
