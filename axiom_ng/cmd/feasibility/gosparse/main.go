@@ -53,19 +53,27 @@ func main() {
 	if err != nil { fatal("session: %v", err) }
 	defer sess.Destroy()
 
-	results := make([]map[string]any, 0, len(chunks))
-	for i, c := range chunks {
-		enc := tok.EncodeWithOptions(c.Text, true)
-		ids := shift(enc.IDs)
-		if len(ids) > 8192 { ids = ids[:8192] }
-		weights, err := tokenWeights(sess, ids)
-		if err != nil { fatal("run #%d: %v", i, err) }
-		sp := scatter(ids, weights)
-		results = append(results, map[string]any{"i": i, "doc": c.Doc, "n_tok": len(sp), "sparse": sp})
+	run := func() []map[string]any {
+		results := make([]map[string]any, 0, len(chunks))
+		for i, c := range chunks {
+			enc := tok.EncodeWithOptions(c.Text, true)
+			ids := shift(enc.IDs)
+			if len(ids) > 8192 { ids = ids[:8192] }
+			weights, err := tokenWeights(sess, ids)
+			if err != nil { fatal("run #%d: %v", i, err) }
+			sp := scatter(ids, weights)
+			results = append(results, map[string]any{"i": i, "doc": c.Doc, "n_tok": len(sp), "sparse": sp})
+		}
+		return results
 	}
-	b, _ := json.Marshal(results)
-	if err := os.WriteFile(outPath, b, 0o644); err != nil { fatal("%v", err) }
-	fmt.Printf("wrote sparse for %d chunks -> %s\n", len(results), outPath)
+	a := run()
+	b2 := run()
+	ja, _ := json.Marshal(a)
+	jb, _ := json.Marshal(b2)
+	det := string(ja) == string(jb)
+	fmt.Printf("DETERMINISM (run1 vs run2 byte-equal): %v\n", det)
+	if err := os.WriteFile(outPath, ja, 0o644); err != nil { fatal("%v", err) }
+	fmt.Printf("wrote sparse for %d chunks -> %s\n", len(a), outPath)
 }
 
 func tokenWeights(sess *ort.DynamicAdvancedSession, ids []int) ([]float32, error) {
