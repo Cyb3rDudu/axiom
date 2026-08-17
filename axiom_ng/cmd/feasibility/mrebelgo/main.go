@@ -159,7 +159,7 @@ func main() {
 		}
 		cr.Triples = dedupTriples(cr.Triples)
 		results = append(results, cr)
-		fmt.Fprintf(os.Stderr, "chunk %d: %d seqs, %d triples, %s\n", ci, len(cr.RawSequences), len(cr.Triples), time.Since(start).Round(time.Millisecond))
+		fmt.Fprintf(os.Stderr, "chunk %d: %d seqs, %d triples, TIME_MS %.3f\n", ci, len(cr.RawSequences), len(cr.Triples), float64(time.Since(start).Microseconds())/1000.0)
 	}
 	b, _ := json.MarshalIndent(results, "", " ")
 	os.WriteFile(outPath, b, 0o644)
