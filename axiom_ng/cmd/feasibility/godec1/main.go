@@ -35,6 +35,16 @@ func main() {
 		outs = append(outs, fmt.Sprintf("present.%d.decoder.key", l))
 		outs = append(outs, fmt.Sprintf("present.%d.decoder.value", l))
 	}
+	// mirror mrebelgo: also open encoder + decoder_model sessions first
+	encSess, err := ort.NewDynamicAdvancedSession(mdir+"/encoder_model.onnx",
+		[]string{"input_ids", "attention_mask"}, []string{"last_hidden_state"}, opts)
+	if err != nil { fatal("enc session: %v", err) }
+	defer encSess.Destroy()
+	dec1Sess, err := ort.NewDynamicAdvancedSession(mdir+"/decoder_model.onnx",
+		[]string{"encoder_attention_mask", "input_ids", "encoder_hidden_states"},
+		[]string{"logits"}, opts) // NOTE: only logits here
+	if err != nil { fatal("dec1 session: %v", err) }
+	defer dec1Sess.Destroy()
 	sess, err := ort.NewDynamicAdvancedSession(mdir+"/decoder_with_past_model.onnx", ins, outs, opts)
 	if err != nil { fatal("session: %v", err) }
 	defer sess.Destroy()
