@@ -95,8 +95,7 @@ func main() {
 
 	// encode chunk
 	c := chunks[ci]
-	inputText := c.Text
-	if len(inputText) > 1500 { inputText = inputText[:1500] }
+	inputText := truncateRunes(c.Text, 1500) // Python slices by code points, NOT bytes
 	goIDs, _ := tok.Encode(inputText)
 	encIDs := []int64{enXX}
 	for _, g := range goIDs { encIDs = append(encIDs, int64(g)+1) }
@@ -194,4 +193,11 @@ func decodeStep(dec *ort.DynamicAdvancedSession, ids []int64, encHidden []float3
 	base := logits.GetData()
 	last := base[(L-1)*vocab : L*vocab]
 	return logSoftmax(last), nil
+}
+
+// truncateRunes keeps the first n UTF-8 runes (matches Python text[:n] code-point slicing).
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n { return s }
+	return string(r[:n])
 }
