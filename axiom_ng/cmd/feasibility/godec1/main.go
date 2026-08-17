@@ -45,6 +45,33 @@ func main() {
 		[]string{"logits"}, opts) // NOTE: only logits here
 	if err != nil { fatal("dec1 session: %v", err) }
 	defer dec1Sess.Destroy()
+	// === actually run encoder + decoder_model (step1) first, mirroring mrebelgo ===
+	_ = encLen
+	encMask := ones(encLen)
+	tem, _ := ort.NewTensor(ort.NewShape(1, encLen), encMask)
+	defer tem.Destroy()
+	tin, _ := ort.NewTensor(ort.NewShape(1, 1), []int64{250058})
+	defer tin.Destroy()
+	eh, err := ort.NewEmptyTensor[float32](ort.NewShape(1, encLen, 1024))
+	if err != nil { fatal("eh: %v", err) }
+	defer eh.Destroy()
+	// encoder needs input_ids (not 250058, that's just a token) — use a fixed small id array
+	tids, _ := ort.NewTensor(ort.NewShape(1, encLen), ones(encLen))
+	defer tids.Destroy()
+	if err := encSess.Run([]ort.Value{tids, tem}, []ort.Value{eh}); err != nil { fatal("enc run: %v", err) }
+	// step1 decoder_model
+	d1s := dec1Sess
+	d1in0, _ := ort.NewTensor(ort.NewShape(1, encLen), encMask) // enc_mask
+	defer d1in0.Destroy()
+	d1in1, _ := ort.NewTensor(ort.NewShape(1, 1), []int64{250058}) // input_ids
+	defer d1in1.Destroy()
+	d1in2 := eh // enc_hidden
+	logits1, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, 1, 250071))
+	// decoder_model (step1) in THIS export outputs only logits, but the assembly might differ; try logits-only
+	if err := dec1Sess.Run([]ort.Value{d1in0, d1in1, d1in2}, []ort.Value{logits1}); err != nil {
+		fmt.Println("dec1 note (logits-only) err:", err)
+	}
+	_ = d1s
 	sess, err := ort.NewDynamicAdvancedSession(mdir+"/decoder_with_past_model.onnx", ins, outs, opts)
 	if err != nil { fatal("session: %v", err) }
 	defer sess.Destroy()
