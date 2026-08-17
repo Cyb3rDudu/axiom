@@ -16,7 +16,7 @@ import numpy as np
 import onnxruntime as ort
 import os
 
-chunks_path, sp_head, spm_path, go_out_path, outdir = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+chunks_path, sp_head, tok_dir, go_out_path, outdir = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 
 with open(chunks_path) as f:
     chunks = json.load(f)
