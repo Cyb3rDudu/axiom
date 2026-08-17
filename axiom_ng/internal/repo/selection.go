@@ -165,3 +165,63 @@ func (r *Repo) ListZoteroDocuments(ctx context.Context, syncState string) ([]Zot
 	}
 	return out, rows.Err()
 }
+
+// SetSelectionBatch writes document AND collection selections in ONE
+// transaction (#166): a failure mid-batch rolls both back — a half-applied
+// selection would silently flip sync semantics for the other layer.
+func (r *Repo) SetSelectionBatch(ctx context.Context, docs []SelectionInput, colls []CollectionSelectionInput) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	applyDocs := func(in []SelectionInput) error {
+		for _, s := range in {
+			switch s.Mode {
+			case "included", "excluded":
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO zotero_selections (document_id, mode, updated_at)
+					VALUES ($1::uuid, $2, now())
+					ON CONFLICT (document_id) DO UPDATE SET mode=EXCLUDED.mode, updated_at=now()`,
+					s.DocumentID, s.Mode); err != nil {
+					return err
+				}
+			case "default", "":
+				if _, err := tx.Exec(ctx, `DELETE FROM zotero_selections WHERE document_id=$1::uuid`, s.DocumentID); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("invalid selection mode %q", s.Mode)
+			}
+		}
+		return nil
+	}
+	applyColls := func(in []CollectionSelectionInput) error {
+		for _, s := range in {
+			switch s.Mode {
+			case "included", "excluded":
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO zotero_collection_selections (collection_key, mode, updated_at)
+					VALUES ($1, $2, now())
+					ON CONFLICT (collection_key) DO UPDATE SET mode=EXCLUDED.mode, updated_at=now()`,
+					s.CollectionKey, s.Mode); err != nil {
+					return err
+				}
+			case "default", "":
+				if _, err := tx.Exec(ctx, `DELETE FROM zotero_collection_selections WHERE collection_key=$1`, s.CollectionKey); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("invalid collection selection mode %q", s.Mode)
+			}
+		}
+		return nil
+	}
+	if err := applyDocs(docs); err != nil {
+		return err
+	}
+	if err := applyColls(colls); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

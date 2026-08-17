@@ -16,6 +16,7 @@ import (
 
 // SelectionRepo is what the selection + documents routes need (repo.Repo).
 type SelectionRepo interface {
+	SetSelectionBatch(ctx context.Context, docs []repo.SelectionInput, colls []repo.CollectionSelectionInput) error
 	SetSelections(ctx context.Context, in []repo.SelectionInput) error
 	SelectionModes(ctx context.Context) (map[string]string, error)
 	SetCollectionSelections(ctx context.Context, in []repo.CollectionSelectionInput) error
@@ -92,7 +93,11 @@ func (s *Server) handlePutSelection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.selectionRepo.SetSelections(r.Context(), body.Selection); err != nil {
+	// BOTH layers in one transaction (#166): a half-applied selection would
+	// silently flip sync semantics for the other layer. (The wiring-gap
+	// lesson: this handler once validated the collections and dropped them —
+	// caught by Hivemind's live probe, not by the repo-direct ITs.)
+	if err := s.selectionRepo.SetSelectionBatch(r.Context(), body.Selection, body.Collections); err != nil {
 		var fk *pgconn.PgError
 		if errors.As(err, &fk) && fk.Code == "23503" {
 			// A selection entry names a document that does not exist — the

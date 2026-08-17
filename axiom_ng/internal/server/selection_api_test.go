@@ -25,6 +25,26 @@ type stubSelection struct {
 	err      error
 }
 
+func (s *stubSelection) SetSelectionBatch(ctx context.Context, docs []repo.SelectionInput, colls []repo.CollectionSelectionInput) error {
+	s.put = docs
+	s.collsPut = colls
+	for _, e := range docs {
+		if e.Mode == "default" || e.Mode == "" {
+			delete(s.mode, e.DocumentID)
+		} else {
+			s.mode[e.DocumentID] = e.Mode
+		}
+	}
+	for _, e := range colls {
+		if e.Mode == "default" || e.Mode == "" {
+			delete(s.colls, e.CollectionKey)
+		} else {
+			s.colls[e.CollectionKey] = e.Mode
+		}
+	}
+	return s.err
+}
+
 func (s *stubSelection) SetSelections(ctx context.Context, in []repo.SelectionInput) error {
 	s.put = in
 	for _, e := range in {
@@ -97,6 +117,37 @@ func TestSelectionRoundTrip(t *testing.T) {
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/zotero/selection", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"excluded"`) {
 		t.Fatalf("get: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// #166 wiring witness (Hivemind Fix-Auftrag 2): the FULL route path —
+// PUT with a collection entry -> GET shows it -> resolved expands it. The
+// original bug validated collections in the handler and dropped them;
+// repo-direct tests stayed green. Route-level witnesses are mandatory for
+// this API's acceptance from here on.
+func TestSelectionRouteWitness_CollectionsThroughHTTP(t *testing.T) {
+	s := New(":0", nil)
+	stub := &stubSelection{mode: map[string]string{}, colls: map[string]string{}}
+	s.SetSelectionRepo(stub)
+
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/zotero/selection",
+		strings.NewReader(`{"selection":[{"document_id":"00000000-0000-4000-8000-000000000001","mode":"excluded"}],"collections":[{"collection_key":"VWLPRAXY","mode":"included"}]}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(stub.collsPut) != 1 || stub.collsPut[0].CollectionKey != "VWLPRAXY" {
+		t.Fatalf("collection entry must reach the batch write: %+v", stub.collsPut)
+	}
+	rec = httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/zotero/selection", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"VWLPRAXY":"included"`) {
+		t.Fatalf("get must show the collection selection: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/zotero/selection/resolved", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resolved: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
