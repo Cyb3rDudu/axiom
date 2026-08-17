@@ -69,7 +69,7 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 	}
 	// 3b. Deleted attachments must stop serving: retire their active
 	// snapshots (+ OS tombstones) in the same sync transaction.
-	if err := retireDeletedAttachmentsTx(ctx, tx); err != nil {
+	if err := reconcileAttachmentSnapshotsTx(ctx, tx); err != nil {
 		return res, fmt.Errorf("retire deleted attachments: %w", err)
 	}
 
@@ -131,7 +131,8 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 	return res, nil
 }
 
-// retireDeletedAttachmentsTx deactivates active snapshots whose Zotero
+// reconcileAttachmentSnapshotsTx (formerly retireDeletedAttachmentsTx — it
+// RETIRES and RESTORES) deactivates active snapshots whose Zotero
 // attachment is deleted (source-heal swaps delete the old storage key and
 // create a NEW attachment row; the old row's snapshot used to keep serving
 // zombie chunks next to the healed rechunk — #176 delta, 2× live snapshots
@@ -150,7 +151,7 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 // AFTER this step and reactivates/activates its snapshot; the NEXT sync's
 // pass here re-retires it. Bounded by one sync interval, drainer guards
 // keep OpenSearch convergent.
-func retireDeletedAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
+func reconcileAttachmentSnapshotsTx(ctx context.Context, tx pgx.Tx) error {
 	rows, err := tx.Query(ctx, `
 		UPDATE processing_snapshots s SET active=false, updated_at=now()
 		FROM zotero_attachments a

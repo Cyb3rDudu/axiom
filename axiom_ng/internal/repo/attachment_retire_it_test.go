@@ -39,7 +39,7 @@ func TestAttachmentRetireAndRestoreIT(t *testing.T) {
 	if _, err := tx.Exec(ctx, `UPDATE zotero_attachments SET deleted=true WHERE id=$1`, attID); err != nil {
 		t.Fatal(err)
 	}
-	if err := retireDeletedAttachmentsTx(ctx, tx); err != nil {
+	if err := reconcileAttachmentSnapshotsTx(ctx, tx); err != nil {
 		t.Fatalf("retire: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -75,7 +75,7 @@ func TestAttachmentRetireAndRestoreIT(t *testing.T) {
 	if _, err := tx.Exec(ctx, `UPDATE zotero_attachments SET deleted=false WHERE id=$1`, attID); err != nil {
 		t.Fatal(err)
 	}
-	if err := retireDeletedAttachmentsTx(ctx, tx); err != nil {
+	if err := reconcileAttachmentSnapshotsTx(ctx, tx); err != nil {
 		t.Fatalf("reconcile after restore: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -29,9 +29,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import pymupdf
-from axiom_ng_runner.compute_core import page_trust as pt
-from axiom_ng_runner.compute_core.pdf_processing import extract_page_labels
+# Heavy imports (pymupdf, compute_core) stay INSIDE the functions: the pure
+# plan checker check_plan_against_folio is importable and testable without a
+# PDF stack (tests/test_pdf_analyze_verify.py).
 
 DSN = os.environ.get(
     "AXIOM_DATABASE_URL",
@@ -40,6 +40,10 @@ DSN = os.environ.get(
 
 
 def analyze_pdf(pdf_path: str) -> dict:
+    import pymupdf  # type: ignore[import-not-found]
+    from axiom_ng_runner.compute_core import page_trust as pt
+    from axiom_ng_runner.compute_core.pdf_processing import extract_page_labels
+
     doc = pymupdf.open(pdf_path)
     try:
         n = doc.page_count
@@ -98,26 +102,46 @@ def analyze_pdf(pdf_path: str) -> dict:
         doc.close()
 
 
-def verify_plan(pdf_path: str, plan: dict[str, str]) -> dict:
-    """Kill a relabel plan that contradicts folio-verified pages. Never writes.
+def check_plan_against_folio(plan: dict[str, str], verified: dict[int, str]) -> dict:
+    """Pure decision core of verify_plan — no PDF stack needed.
 
-    Plan keys are 1-BASED PDF pages — the same convention analyze reports
-    ("start": run[0][0] + 1), so a plan built from analyze output checks the
-    page it names (review W1: 0-based keys off-by-one-killed correct plans).
+    Plan keys are 1-BASED PDF pages (the same convention analyze reports:
+    "start": run[0][0] + 1). A key that is not a folio-verified page is a
+    PLAN MISMATCH, not a vacuous pass: a plan naming pages we cannot prove
+    must go to dudu, not slip through unchecked (review E1 — the old code
+    skipped unknown keys, so the off-by-one witness {12:'4'} and every
+    0-based key passed without being checked at all).
     """
+    killed: list[dict] = []
+    for page_s, new_label in plan.items():
+        try:
+            page = int(str(page_s))
+        except (TypeError, ValueError):
+            killed.append({"page": page_s, "plan": new_label, "folio_wahrheit": None,
+                           "grund": "plan-key ist keine Seitenzahl"})
+            continue
+        if page < 1 or page - 1 not in verified:
+            killed.append({"page": page, "plan": new_label, "folio_wahrheit": None,
+                           "grund": "seite nicht folio-verifiziert"})
+            continue
+        if str(new_label).strip() != str(verified[page - 1]).strip():
+            killed.append({"page": page, "plan": new_label, "folio_wahrheit": verified[page - 1],
+                           "grund": "widerspricht folio"})
+    # killed[].page uses the SAME 1-based convention as the plan keys.
+    return {"accepted": not killed, "killed": killed, "geprueft_gegen": len(verified)}
+
+
+def verify_plan(pdf_path: str, plan: dict[str, str]) -> dict:
+    """Kill a relabel plan that contradicts folio-verified pages. Never writes."""
+    import pymupdf  # type: ignore[import-not-found]
+    from axiom_ng_runner.compute_core import page_trust as pt
+
     doc = pymupdf.open(pdf_path)
     try:
         verified = pt.verify_folio_sequence(pt.extract_folio_candidates(doc))
     finally:
         doc.close()
-    killed: list[dict] = []
-    for page_s, new_label in plan.items():
-        page = int(page_s) - 1  # plan is 1-based, verified keys are 0-based
-        if page not in verified:
-            continue
-        if str(new_label).strip() != str(verified[page]).strip():
-            killed.append({"page": page, "plan": new_label, "folio_wahrheit": verified[page]})
-    return {"accepted": not killed, "killed": killed, "geprueft_gegen": len(verified)}
+    return check_plan_against_folio(plan, verified)
 
 
 def cmd_sweep(out_path: str, kandidaten_path: str | None) -> None:
@@ -216,7 +240,7 @@ def cmd_sweep(out_path: str, kandidaten_path: str | None) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description=(__doc__ or "pdf_analyze").splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("analyze"); a.add_argument("pdf")
     v = sub.add_parser("verify"); v.add_argument("pdf"); v.add_argument("--plan", required=True, help="JSON {page: label}")
