@@ -10,6 +10,12 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 )
 
+// hyp is one beam hypothesis (token sequence + cumulative log-prob score).
+type hyp struct {
+	ids   []int64
+	score float64
+}
+
 // textSeq holds one decoded beam.
 type seq struct {
 	ids  []int64
@@ -22,16 +28,10 @@ type seq struct {
 // re-decode path. Each hypothesis is its own growing token sequence; a hypothesis
 // finishing with EOS moves to `done`. Returns the top-3 complete sequences.
 func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, encHidden []float32, encMask []int64) []seq {
-	// initial hypothesis starts with tp_XX (score 0)
-	type hyp struct {
-		ids   []int64
-		score float64
-	}
 	beams := []hyp{{ids: []int64{tpXX}, score: 0}}
-	done := []hyp{}
-	decLen := 0 // number of generation steps taken
+	done := []hyp{} // finished hypotheses, capped at numBeams, best-by-score retained (BeamHypotheses semantics)
+	decLen := 0
 	for len(done) < numBeams && len(beams) > 0 && decLen < maxDec {
-		// expand every live beam
 		all := make([]hyp, 0, len(beams)*(2*numBeams))
 		for _, b := range beams {
 			logP, err := decodeStep(dec, b.ids, encHidden, encMask)
@@ -43,14 +43,14 @@ func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, e
 				})
 			}
 		}
-		// sort by score desc
 		sort.SliceStable(all, func(i, j int) bool { return all[i].score > all[j].score })
-		// select numBeams; EOS -> done
+		// select the top numBeams candidates; EOS candidates -> done (with eviction),
+		// non-EOS -> open beams for the next round.
 		next := []hyp{}
 		for _, h := range all {
-			if len(next)+len(done) >= numBeams { break }
+			if len(next) >= numBeams { break } // only numBeams open beams survive
 			if h.ids[len(h.ids)-1] == eosID {
-				done = append(done, h)
+				addHyp(&done, h)
 				continue
 			}
 			next = append(next, h)
@@ -58,10 +58,10 @@ func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, e
 		beams = next
 		decLen++
 	}
-	// promote truncated beams if needed
+	// promote truncated (never-finished) best beams if fewer than numReturn finished
 	for _, b := range beams {
 		if len(done) >= numReturn { break }
-		done = append(done, b)
+		addHyp(&done, b)
 	}
 	sort.SliceStable(done, func(i, j int) bool { return done[i].score > done[j].score })
 	if len(done) > numReturn { done = done[:numReturn] }
@@ -101,4 +101,10 @@ func topKIndices(logP []float64, k int) []cand {
 	return out
 }
 
-
+// addHyp inserts h into *done keeping at most numBeams entries, always retaining the
+// best-by-score (transformers BeamHypotheses semantics: worse finished hyps are evicted).
+func addHyp(done *[]hyp, h hyp) {
+	*done = append(*done, h)
+	sort.SliceStable(*done, func(i, j int) bool { return (*done)[i].score > (*done)[j].score })
+	if len(*done) > numBeams { *done = (*done)[:numBeams] }
+}
