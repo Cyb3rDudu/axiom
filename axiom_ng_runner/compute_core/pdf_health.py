@@ -3,8 +3,9 @@
 ONE code path decides both directions of the self-healing loop: the same
 function that REJECTS a broken book before queueing must return GREEN
 after the heal — otherwise the repair counts as failed (no blind waving
-through). The runner preflight endpoint (#175) and the fix-service both
-call THIS module; the sweep CLI mirrors its classification.
+through). The fix-service calls THIS module for both directions; the #175
+runner preflight endpoint will wrap this same function (planned, not yet
+wired).
 """
 from __future__ import annotations
 

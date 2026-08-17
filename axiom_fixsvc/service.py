@@ -34,7 +34,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pymupdf
 import requests
-
 from axiom_ng_runner.compute_core import page_trust as pt
 from axiom_ng_runner.compute_core.pdf_health import preflight
 
@@ -128,7 +127,7 @@ def validate_plan(plan: dict) -> dict:
     for s in secs:
         for k in ("from_page", "to_page", "start_label"):
             if not isinstance(s.get(k), int):
-                raise ValueError(f"Sektion {s}: {k} fehlt/kein int")
+                raise ValueError(f"Sektion {s}: {k} fehlt/kein int")  # noqa: TRY004 — untrusted plan data, not a type misuse
         if (
             s["from_page"] < 1
             or s["to_page"] < s["from_page"]

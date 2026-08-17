@@ -7,6 +7,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"strings"
@@ -173,17 +174,21 @@ func (s *Server) handleRepairVerdict(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	pdf := make([]byte, 0)
-	buf := make([]byte, 1<<20)
-	for {
-		n, err := file.Read(buf)
-		pdf = append(pdf, buf[:n]...)
-		if err != nil {
-			break
-		}
+	pdf, readErr := io.ReadAll(file) // stdlib: a mid-read error SURFACES instead
+	// of silently uploading a truncated PDF (review: manual loop swallowed it)
+	if readErr != nil {
+		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, "healed_pdf lesen: "+readErr.Error())
+		http.Error(w, "healed_pdf: "+readErr.Error(), http.StatusBadRequest)
+		return
 	}
 
-	item, err := s.repairItemFor(r, &repo.RepairCase{AttachmentID: mustQueryAttachmentID(r, s, caseID)})
+	attID, attErr := attachmentIDForCase(r, s, caseID)
+	if attErr != nil {
+		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, "case-attachment unlesbar: "+attErr.Error())
+		http.Error(w, attErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	item, err := s.repairItemFor(r, &repo.RepairCase{AttachmentID: attID})
 	if err != nil {
 		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, "attachment weg: "+err.Error())
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -198,8 +203,13 @@ func (s *Server) handleRepairVerdict(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = s.repairRepo.AuditWrite(r.Context(), caseID, item.AttachmentID, "quarantine",
-		map[string]any{"path": qpath, "original": path.Base(srcPath)})
+	if err := s.repairRepo.AuditWrite(r.Context(), caseID, item.AttachmentID, "quarantine",
+		map[string]any{"path": qpath, "original": path.Base(srcPath)}); err != nil {
+		// custody nail: no UNAUDITED mutation — fail closed BEFORE the delete
+		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, "quarantine-audit: "+err.Error())
+		http.Error(w, "quarantine-audit: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	// 2. delete the broken attachment item
 	if err := s.zoteroWrite.DeleteAttachmentItem(item.AttachmentKey); err != nil {
@@ -231,13 +241,13 @@ func (s *Server) handleRepairVerdict(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func mustQueryAttachmentID(r *http.Request, s *Server, caseID string) string {
+func attachmentIDForCase(r *http.Request, s *Server, caseID string) (string, error) {
 	var attID string
 	if err := s.repairRepo.Pool().QueryRow(r.Context(),
 		`SELECT attachment_id::text FROM repair_cases WHERE id=$1`, caseID).Scan(&attID); err != nil {
-		return ""
+		return "", err
 	}
-	return attID
+	return attID, nil
 }
 
 // handleLocatorStats is the final proof endpoint of the loop: for a
@@ -248,7 +258,7 @@ func (s *Server) handleLocatorStats(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.repairRepo.Pool().Query(r.Context(), `
 		SELECT COALESCE(c.locator->>'page_source', 'legacy'), count(*),
 		       (array_agg(c.id::text ORDER BY c.chunk_index))[1:3],
-		       (array_agg(c.locator->>'page_label_start' ORDER BY c.chunk_index))[1:3]
+		       (array_agg(COALESCE(c.locator->>'page_label_start','') ORDER BY c.chunk_index))[1:3]
 		FROM processing_chunks c
 		JOIN processing_snapshots sn ON sn.id = c.snapshot_id AND sn.active
 		JOIN zotero_attachments a ON a.id = sn.attachment_id AND a.deleted = false

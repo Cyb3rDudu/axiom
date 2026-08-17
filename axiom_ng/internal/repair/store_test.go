@@ -3,6 +3,7 @@ package repair
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -17,12 +18,13 @@ func TestSchemaFilenameAuthor(t *testing.T) {
 func TestSchemaFilenameInstitutional(t *testing.T) {
 	got := SchemaFilename([]Creator{{Name: "World Bank", CreatorType: "author"}}, 2026,
 		"Global Economic Prospects, January 2026: Expand, Invest, Protect", "")
-	if got != "World Bank - 2026 - Global Economic Prospects, January 2026- Expand, Invest, Protect.pdf" {
-		// word-boundary shorten at 80 runes — assert the invariant, not the
-		// exact cut position
-		if len([]rune(got)) > 100 || !filepath.IsLocal(got) {
-			t.Fatalf("got %q", got)
-		}
+	if got != "World Bank - 2026 - Global Economic Prospects, January 2026: Expand, Invest, Protect.pdf" {
+		t.Fatalf("got %q", got)
+	}
+	long := SchemaFilename([]Creator{{LastName: "Müller", CreatorType: "author"}}, 2020,
+		strings.Repeat("Sehr langer Buchtitel ", 8), "")
+	if !filepath.IsLocal(long) || !strings.HasSuffix(long, "….pdf") {
+		t.Fatalf("Kürzung: %q", long)
 	}
 }
 

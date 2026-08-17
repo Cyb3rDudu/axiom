@@ -157,12 +157,12 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf [
 	// Zotero's fromJSON then rejects with "Link mode must be set before
 	// setting attachment path" (live bug, Controlling apply).
 	type attachmentItem struct {
-		ItemType    string            `json:"itemType"`
-		LinkMode    string            `json:"linkMode"`
-		ParentItem  string            `json:"parentItem,omitempty"`
-		Title       string            `json:"title"`
-		ContentType string            `json:"contentType"`
-		Filename    string            `json:"filename"`
+		ItemType    string              `json:"itemType"`
+		LinkMode    string              `json:"linkMode"`
+		ParentItem  string              `json:"parentItem,omitempty"`
+		Title       string              `json:"title"`
+		ContentType string              `json:"contentType"`
+		Filename    string              `json:"filename"`
 		Tags        []map[string]string `json:"tags"`
 	}
 	item := attachmentItem{
