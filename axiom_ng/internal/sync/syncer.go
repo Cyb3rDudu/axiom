@@ -45,7 +45,15 @@ type Result struct {
 // preferred processable attachments (never for notes/annotations or
 // non-bibliographic parents). A metadata-only change with an identical
 // attachment hash does not create a new job.
-func (s *Service) Run(ctx context.Context) (Result, error) {
+// SyncOverride is the one-run selection override from the sync request body
+// (#166): include/exclude document-id lists applied ON TOP of the persisted
+// selection for THIS run only (never persisted).
+type SyncOverride struct {
+	Include []string
+	Exclude []string
+}
+
+func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, error) {
 	serverID := s.src.ServerID()
 	if serverID == "" {
 		return Result{}, errors.New("zotero source unreachable")
@@ -82,6 +90,19 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 
+	// Selection resolution BEFORE the apply tx: fail without a transaction,
+	// don't hold a second pool connection during the apply. Two-stage cascade
+	// (#166 NACHSCHÄRFUNG): collections primary, document rows fine control,
+	// the one-run override on top. nil = no gate (everything selected).
+	var ovInclude, ovExclude []string
+	if override != nil {
+		ovInclude, ovExclude = override.Include, override.Exclude
+	}
+	selection, err := s.repo.ResolveEffectiveSelection(ctx, ovInclude, ovExclude)
+	if err != nil {
+		return Result{}, fmt.Errorf("loading selections: %w", err)
+	}
+
 	// One atomic transaction: canonical rows + deletions + projections +
 	// memberships + pending/failed jobs + cursor.
 	tx, err := s.repo.Pool().Begin(ctx)
@@ -90,7 +111,7 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 	defer tx.Rollback(ctx)
 
-	applyRes, err := s.repo.ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files)
+	applyRes, err := s.repo.ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files, selection)
 	if err != nil {
 		return Result{}, err
 	}

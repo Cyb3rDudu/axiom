@@ -42,7 +42,10 @@ type CanonicalApplyResult struct {
 // attachments. Projections are derived from the complete active state of
 // zotero_items (not the delta). Pending and failed jobs plus the cursor are
 // written in the same transaction via the caller-provided tx.
-func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID string, batch zotero.CanonicalBatch, collections []zotero.CanonicalCollection, files map[string]AttachmentFileInfo) (CanonicalApplyResult, error) {
+// The selection map gates job creation (#166): entries "excluded" suppress
+// both pending and failed jobs for that document; nil = no gate (everything
+// is selected — today's behavior). Projections stay a FULL mirror regardless.
+func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID string, batch zotero.CanonicalBatch, collections []zotero.CanonicalCollection, files map[string]AttachmentFileInfo, selection map[string]string) (CanonicalApplyResult, error) {
 	var res CanonicalApplyResult
 
 	// 1. Upsert canonical items (version guarded).
@@ -92,7 +95,27 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 	res.Flags = proj.flags
 	res.DocumentProjections = len(proj.flags)
 
-	// 7. Pending + failed jobs in the same transaction.
+	// 7. Pending + failed jobs in the same transaction, gated by the
+	// selection (#166): excluded documents get no jobs; everything else
+	// keeps the ON CONFLICT (attachment_id, content_hash) dedup — a
+	// re-selected document with no existing job row gets one WITHOUT any
+	// Zotero-side change (the acceptance case: the full derivation offers
+	// every doc on every sync; only the gate held it back).
+	if selection != nil {
+		gatedPending := make([]PendingJob, 0, len(proj.pending))
+		for _, p := range proj.pending {
+			if !JobGated(selection, p.DocumentID) {
+				gatedPending = append(gatedPending, p)
+			}
+		}
+		gatedFailed := make([]FailedJob, 0, len(proj.failed))
+		for _, f := range proj.failed {
+			if !JobGated(selection, f.DocumentID) {
+				gatedFailed = append(gatedFailed, f)
+			}
+		}
+		proj.pending, proj.failed = gatedPending, gatedFailed
+	}
 	enqueued, failed, err := r.writeJobsTx(ctx, tx, sourceID, proj.pending, proj.failed)
 	if err != nil {
 		return res, err

@@ -116,7 +116,7 @@ func TestRunCanonicalLosslessAndNoAnnotateEnqueue(t *testing.T) {
 
 	repoObj := repo.New(d.Pool())
 	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
-	res, err := svc.Run(ctx)
+	res, err := svc.Run(ctx, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestCanonicalVersionGuard(t *testing.T) {
 	src.items = []zotero.CanonicalItem{itemV2, att}
 
 	svc := New(src, repo.New(d.Pool()), src.baseURL, "users/0", log.Default())
-	res1, err := svc.Run(ctx)
+	res1, err := svc.Run(ctx, nil)
 	if err != nil {
 		t.Fatalf("first canonical: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestCanonicalVersionGuard(t *testing.T) {
 	itemV1.Version = 1
 	src.items = []zotero.CanonicalItem{itemV1, att}
 	src.version = 2
-	if _, err := svc.Run(ctx); err != nil {
+	if _, err := svc.Run(ctx, nil); err != nil {
 		t.Fatalf("second canonical: %v", err)
 	}
 
@@ -261,7 +261,7 @@ func TestCanonicalBootstrapOldCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
-	res, err := svc.Run(ctx)
+	res, err := svc.Run(ctx, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

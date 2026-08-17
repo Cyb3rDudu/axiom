@@ -80,11 +80,13 @@ func TestHealthChecksAllRegistered(t *testing.T) {
 }
 
 type stubSync struct {
-	called bool
-	res    sync.Result
+	lastOverride *sync.SyncOverride
+	called       bool
+	res          sync.Result
 }
 
-func (s *stubSync) Run(ctx context.Context) (sync.Result, error) {
+func (s *stubSync) Run(ctx context.Context, ov *sync.SyncOverride) (sync.Result, error) {
+	s.lastOverride = ov
 	s.called = true
 	return s.res, nil
 }

@@ -30,7 +30,7 @@ func runCanon(t *testing.T, src zotero.Source, d *db.DB) (Result, error) {
 		}
 		_, _ = d.Pool().Exec(context.Background(), `DELETE FROM zotero_sources WHERE id=$1`, sourceID)
 	})
-	res, err := svc.Run(ctx)
+	res, err := svc.Run(ctx, nil)
 	return res, err
 }
 
