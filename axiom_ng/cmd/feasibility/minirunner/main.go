@@ -73,6 +73,11 @@ func main() {
 
 	tok, err := sentencepiece.NewTokenizer(spm)
 	if err != nil { fatal("tok: %v", err) }
+	// CRITICAL: must match godense — without the BertStyle post-processor,
+	// EncodeWithOptions(..., true) adds NO <s></s>, so query ids lack the
+	// special-token wrapper Python uses -> query embeddings diverge (cos~0.5)
+	// and R7 dense retrieval collapses (Go P@5 0.080 vs Python 0.536).
+	tok.WithPostProcessor(sentencepiece.BertStylePostProcessor(0, 2))
 
 	so := sessionOpts()
 	denseS, err := ort.NewDynamicAdvancedSession(denseModel,
