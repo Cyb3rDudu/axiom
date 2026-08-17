@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"os"
 	"sort"
 
 	"github.com/tggo/goSentencePiece"
@@ -38,6 +39,10 @@ func beamSearchFull(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvance
 	// once on tp_XX with the empty-ish decoder cache? Simpler: decLen starts at 1 and we treat
 	// the beam's "last token" as tp_XX for the very first stepN. So initialize beams from [tp_XX]
 	// with cache pastDec0 (len 1) and score 0; then expand tp_XX -> next token via stepN.
+	if os.Getenv("MRBEL_DEBUG") == "1" {
+		for i := 0; i < 4; i++ { fmt.Fprintf(os.Stderr, "  pastDec0[%d] shape=%v\n", i, pastDec0[i].GetShape()) }
+		for i := 0; i < 4; i++ { fmt.Fprintf(os.Stderr, "  pastEnc[%d]  shape=%v\n", i, pastEnc[i].GetShape()) }
+	}
 	beams := []*beam{{ids: []int64{tpXX}, score: 0, past: pastDec0}}
 
 	finished := make([]*beam, 0, numReturn)
