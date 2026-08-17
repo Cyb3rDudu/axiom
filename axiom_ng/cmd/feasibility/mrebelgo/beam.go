@@ -35,9 +35,9 @@ func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, c
 		all := make([]hyp, 0, len(beams)*(2*numBeams))
 		db := []dumpBeam{}
 		for _, b := range beams {
-			logP, err := decodeStep(dec, cd, b.ids, oneOut)
+			rawLogits, err := decodeStep(dec, cd, b.ids, oneOut)
 			if err != nil { fatal("decodeStep: %v", err) }
-			t6 := topKIndices(logP, 2*numBeams)
+			t6 := topKLogSoftmax(rawLogits, 2*numBeams)
 			de := dumpBeam{Ids: append([]int64{}, b.ids...), Score: b.score}
 			for _, c := range t6 { de.Top6 = append(de.Top6, [2]any{c.tok, c.logp}) }
 			db = append(db, de)
@@ -84,26 +84,46 @@ func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, c
 	return seqs
 }
 
-func logSoftmax(logits []float32) []float64 {
+type cand struct{ tok int64; logp float64 }
+
+// topKLogSoftmax returns the k highest-probability candidates with exact log-softmax
+// scores — O(n) single scan for selection (raw logits are monotone in logprob, no sort!)
+// plus one O(n) pass for the log-sum-exp. Replaces the old full sort of 250k indices,
+// which was the actual per-chunk bottleneck (44 calls x ~60ms sort = ~2.6s/chunk).
+// Ties keep the lower token index (strict > comparisons) — same order the previous
+// stable sort produced.
+func topKLogSoftmax(logits []float32, k int) []cand {
+	const maxK = 8
+	if k > maxK { k = maxK }
+	var toks [maxK]int64
+	var vals [maxK]float32
+	n := 0
 	mx := logits[0]
-	for _, v := range logits { if v > mx { mx = v } }
+	for i, v := range logits {
+		if v > mx { mx = v }
+		if n < k {
+			// insertion into descending buffer position i
+			j := n
+			for j > 0 && vals[j-1] < v {
+				toks[j], vals[j] = toks[j-1], vals[j-1]
+				j--
+			}
+			toks[j], vals[j] = int64(i), v
+			n++
+		} else if v > vals[k-1] {
+			j := k - 1
+			for j > 0 && vals[j-1] < v {
+				toks[j], vals[j] = toks[j-1], vals[j-1]
+				j--
+			}
+			toks[j], vals[j] = int64(i), v
+		}
+	}
 	sum := 0.0
 	for _, v := range logits { sum += math.Exp(float64(v) - float64(mx)) }
 	lse := float64(mx) + math.Log(sum)
-	out := make([]float64, len(logits))
-	for i, v := range logits { out[i] = float64(v) - lse }
-	return out
-}
-
-type cand struct{ tok int64; logp float64 }
-
-func topKIndices(logP []float64, k int) []cand {
-	if k > len(logP) { k = len(logP) }
-	idx := make([]int, len(logP))
-	for i := range idx { idx[i] = i }
-	sort.SliceStable(idx, func(i, j int) bool { return logP[idx[i]] > logP[idx[j]] })
-	out := make([]cand, k)
-	for i := 0; i < k; i++ { out[i] = cand{tok: int64(idx[i]), logp: logP[idx[i]]} }
+	out := make([]cand, n)
+	for i := 0; i < n; i++ { out[i] = cand{tok: toks[i], logp: float64(vals[i]) - lse} }
 	return out
 }
 

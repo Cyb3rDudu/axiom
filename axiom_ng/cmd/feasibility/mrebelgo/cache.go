@@ -106,9 +106,9 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 	logits1, decCache0, encCache := step1Cached(dec1, encHidden, encMask, encLen)
 	tm, _ := ort.NewTensor(ort.NewShape(1, encLen), encMask) // constant across steps
 	defer tm.Destroy()
-	logP1 := logSoftmax(logits1)
+	t6 := topKLogSoftmax(logits1, 2*numBeams)
 	beams := []hypC{}
-	for _, c := range topKIndices(logP1, 2*numBeams) {
+	for _, c := range t6 {
 		beams = append(beams, hypC{ids: []int64{tpXX, c.tok}, score: c.logp, past: decCache0})
 	}
 	done := []hyp{}
@@ -119,8 +119,7 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 		for _, b := range beams {
 			lastTok := b.ids[len(b.ids)-1]
 			rawLog, newCache := stepNCached(decK, lastTok, b.past, encCache, tm, encLen, decLen)
-			logP := logSoftmax(rawLog)
-			t6 := topKIndices(logP, 2*numBeams)
+			t6 := topKLogSoftmax(rawLog, 2*numBeams)
 			de := dumpBeam{Ids: append([]int64{}, b.ids...), Score: b.score}
 			for _, c := range t6 { de.Top6 = append(de.Top6, [2]any{c.tok, c.logp}) }
 			db = append(db, de)

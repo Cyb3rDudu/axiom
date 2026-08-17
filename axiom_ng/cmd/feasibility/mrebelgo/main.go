@@ -234,7 +234,7 @@ func (c *constDec) Destroy() {
 // decodeStep feeds the full decoder token sequence to the (logits-only) decoder graph and
 // returns the log-probs at the LAST position. Only tid + the logits output are allocated
 // per call (enc_mask/enc_hidden tensors are reused via constDec).
-func decodeStep(dec *ort.DynamicAdvancedSession, cd *constDec, ids []int64, oneOutput bool) ([]float64, error) {
+func decodeStep(dec *ort.DynamicAdvancedSession, cd *constDec, ids []int64, oneOutput bool) ([]float32, error) {
 	t0 := time.Now()
 	L := int64(len(ids))
 	tid, _ := ort.NewTensor(ort.NewShape(1, L), ids)
@@ -259,7 +259,7 @@ func decodeStep(dec *ort.DynamicAdvancedSession, cd *constDec, ids []int64, oneO
 	traceT("dec", fmt.Sprintf("L%d", L), time.Since(t0))
 	base := logits.GetData()
 	last := base[(L-1)*vocab : L*vocab]
-	return logSoftmax(last), nil
+	return last, nil // raw logits; caller does fused topK-log-softmax
 }
 
 // truncateRunes keeps the first n UTF-8 runes (matches Python text[:n] code-point slicing).
