@@ -176,3 +176,33 @@ Carrier measurement (2026-08-17): Go `onnxruntime_go` **CUDA-EP** vs Python
 **Vindicates the auto-review finding**: the earlier 0.978 Spearman was dominated
 by the wrong single-`</s>` pair form. With the HF XLM-R pair form `<s> q </s></s> p </s>`,
 Go-CUDA and Py-torch-CUDA rank the 75 pairs **identically** (Spearman 1.0, |score| ~1e-5).
+
+## Sparse matched re-run (carrier, Nachzug) — Go binding misread CONFIRMED
+
+Carrier re-run (2026-08-17) after the auto-review hypothesized the sparse Go
+blocker was a **512/8192 truncation mismatch**. gosparse now truncates at 8192
+(matched with the reference); both sides run `sparse_head.onnx` (Go via
+onnxruntime_go CUDA, Python via onnxruntime CPU — sparse_head.onnx has no CUDA
+graph, CPU is fine for the read). Artifact:
+`carrier_results/sparse_go8192_cuda.json`.
+
+Result (219 chunks, matched 8192):
+
+| Metric | Value |
+|---|---|
+| token-overlap avg | 0.938 (target ≥0.98) — **NOT met** |
+| shared-cos avg | 0.912 (target ≥0.999) — **NOT met** |
+| overlap ≥ 0.98 | 115 / 219 |
+| cos ≥ 0.999 | 0 / 219 |
+| Go n_tok distribution | erratic (53, 79, 185, 440, 491… same length) → read misalignment |
+
+**The truncation-mismatch hypothesis is DISPROVEN.** Matching at 8192 did not fix
+sparse parity. The cause is the **onnxruntime_go `[1,seq]` output-tensor read
+misalignment** (same class as the token_embeddings cosine 0.796 vs Python ONNX):
+Go's `GetData()` for the `[1,seq]` token_weights buffer returns inconsistent data
+across chunks (counts swing wildly), while Python's onnxruntime reads it correctly.
+The sparse ALGORITHM is unaffected (Python-proven overlap 1.0 / cos 1.0 on the same
+model+ids). A Go runner cannot yet read sparse token weights reliably through this
+onnxruntime_go version — the fix is a correct `[1,seq]`/`[seq,1024]` buffer read
+(or a 1-D pre-reduced output), confirmed as a binding bug now backed by the
+matched-run evidence.
