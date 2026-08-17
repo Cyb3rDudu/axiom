@@ -36,7 +36,13 @@ func decodeSeq(tok *sentencepiece.Tokenizer, ids []int64) string {
 		if len(baseRun) == 0 { return }
 		txt, err := tok.Decode(baseRun)
 		if err == nil {
-			sb.WriteString(cleanText(txt, sb.Len() > 0))
+			// tggo SPM strips the run-leading ▁-space (sequence-start semantics); restore it
+			// when there is already decoded content before this run (runs always follow a
+			// special token in mREBEL output).
+			if sb.Len() > 0 && !strings.HasPrefix(txt, " ") {
+				sb.WriteByte(' ')
+			}
+			sb.WriteString(txt)
 		}
 		baseRun = baseRun[:0]
 		lastSpecial = false
