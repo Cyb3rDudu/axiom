@@ -63,15 +63,13 @@ class DecoderWrapper(torch.nn.Module):
                        past_key_values=legacy,
                        use_cache=True)
         logits = self.lm(out[0])
-        cache = out[1]  # EncoderDecoderCache
-        # emit present tensors in the SAME flat legacy order: per layer self_k,self_v,cross_k,cross_v
-        dk = cache.self_attention_cache.key_cache
-        dv = cache.self_attention_cache.value_cache
-        ek = cache.cross_attention_cache.key_cache
-        ev = cache.cross_attention_cache.value_cache
+        cache = out[1]  # EncoderDecoderCache with self/cross DynamicCache (transformers 4.57)
+        # present tensors: per layer self_k,self_v,cross_k,cross_v (legacy-layer order)
+        dk = cache.self_attention_cache.layers
+        ek = cache.cross_attention_cache.layers
         flat_present = []
         for i in range(self.n_layers):
-            flat_present += [dk[i], dv[i], ek[i], ev[i]]
+            flat_present += [dk[i].keys, dk[i].values, ek[i].keys, ek[i].values]
         return tuple(flat_present), logits
 
 
@@ -128,13 +126,12 @@ def export_decoders():
                                    encoder_attention_mask=enc_mask,
                                    use_cache=True)
         cache = dec2[1]
-        dk = cache.self_attention_cache.key_cache
-        dv = cache.self_attention_cache.value_cache
-        ek = cache.cross_attention_cache.key_cache
-        ev = cache.cross_attention_cache.value_cache
+        dk = cache.self_attention_cache.layers
+        ek = cache.cross_attention_cache.layers
         flat_past = []
         for i in range(n_layers):
-            flat_past += [dk[i].detach(), dv[i].detach(), ek[i].detach(), ev[i].detach()]
+            flat_past += [dk[i].keys.detach(), dk[i].values.detach(),
+                          ek[i].keys.detach(), ek[i].values.detach()]
     last_ids = dec2_ids[:, -1:]
     wp = DecoderWrapper(model, True).to(dev).eval()
     with torch.no_grad():
