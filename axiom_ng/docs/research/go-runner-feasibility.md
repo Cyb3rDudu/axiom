@@ -136,7 +136,7 @@ container on the same 3090. Every number committed as CSV/JSON in
 |---|---|
 | C dense | **avg cosine 0.999639** (219 chunks, 217/219 ≥0.999), 2× byte-equal — CUDA column PROVEN |
 | 2 rerank | **Spearman 1.0000** (75 pairs, corrected pair form `<s>q</s></s>p</s>`), avg \|score\| 8e-6 — from 0.978 pre-fix |
-| 3 sparse | truncation hypothesis **disproven** (matched 8192); root cause open — leading hypothesis: Go harness input discrepancy (missing post-processor), binding-read unproven; algorithm Python-proven 1.0/1.0 |
+| 3 sparse | **SPARSE PARITY — 4th pillar PROVEN** (fixed `<s></s>`, same-device CUDA): overlap 0.998 avg / cos 0.999, 217/219 ≥0.98; outliers = tokenizer edge-cases only |
 | 4 GLiNER | Go-CPU logits == Py-CPU (**0.0**, one-shot Mac run); Go-CUDA forward executes on 3090 (cuDNN, diff 0.042 recomputable via `gliner_compare.py` on committed bins); entity-set parity ≤1e-5 = Block-7 CPU |
 | 6 R7-delta | **Retrieval PARITY** (corrected DB `axiom_db` + fixed mini-runner <s></s>): dense + hybrid metrics IDENTICAL to Python (0.536/0.693/0.707), rerank within noise; rerank p50 706 ms vs Python 3.547 s (≈5×) |
 | 7 mREBEL | encoder ONNX-exportable, **decoder loop = hard item**; sidecar stands; tokenizer round-trip OK |

@@ -225,3 +225,32 @@ with the post-processor fix (now committed in `main.go`) + Python reference on
 the SAME provider (both CPU, or both CUDA) + a 2× Go determinism pass + identical
 ids dumped and diffed. Until then the sparse Go verdict stays **not met in Go**;
 the algorithm and ONNX export are Python-proven (1.0/1.0) and unaffected.
+
+## Sparse CUDA final (same-device, confirmed — Restpunkt 2)
+
+Go `gosparse` (onnxruntime_go CUDA-EP) vs Python `pysparse_ref` (onnxruntime CUDA-EP,
+`onnxruntime-gpu`, same `sparse_head.onnx` on the same RTX 3090). Both sides run the
+fixed `<s></s>` post-processor (gosparse got it). Determinism: Go gosparse 2× run
+**byte-equal**. Artifacts: `carrier_results/sparse_cuda_go.json` + `sparse_py_ref_cuda.json`.
+
+| Metric (CUDA, both sides, fixed `<s></s>`) | Value | Target |
+|---|---|---|
+| token-overlap avg | **0.99776** | ≥0.98 → MET |
+| shared-cos avg | **0.99946** | ≥0.999 → MET |
+| overlap ≥ 0.98 | 217 / 219 | — |
+| cos ≥ 0.999 | 216 / 219 | — |
+
+**This confirms the final open hypothesis (Restpunkt 2).** The earlier sparse divergence
+(overlap 0.938, 115/219) was the missing `<s></s>` wrapper in gosparse — with it fixed,
+sparse reaches 0.998/0.999. The remaining outliers are the KNOWN tokenizer edge-cases,
+isolated and real (not GPU/noise):
+
+| chunk | overlap | cos | cause |
+|---|---|---|---|
+| 48 | 0.707 | 0.941 | `Ȭ` (U+022C) → Go `<s>`(0) vs Py `<unk>`(3) — real divergence |
+| 195 | 0.810 | 0.944 | hyphen-run / rare-token grouping — real divergence |
+| 66 | 0.994 | 0.998 | morpheme `contin` subword split — near-threshold |
+
+**Sparse = the FOURTH proven parity pillar.** The complete query-side model stack
+(dense 0.9996, rerank Spearman 1.0, sparse 0.998/0.999) now works in Go on CUDA.
+The remaining sparse divergence is confined to the tokenizer edge-cases (Restpunkt 4).
