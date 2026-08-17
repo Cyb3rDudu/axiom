@@ -5,14 +5,15 @@ dudu's physical verification (VERIFIKATION_ERGEBNIS.md, 51 gold refs across
 with a numeric PDF↔print pair we check: does build_page_trust's folio map
 reproduce dudu's MEASURED printed page at his PDF page?
 
-Output per book: ALIGNS (my folios = his measurements), MISALIGNED, or
-NO-FOLIO (no verified run there). Books classified constant-offset vs
+Output per book: ALIGNS (my folios = his measurements at EVERY measured
+entry) or ABWEICHEND (any miss / no resolvable PDF). Books classified constant-offset vs
 chapter-relative (his offsets vary per entry within one book = restarts).
-The resulting evidence file (basenames) feeds locator_rescan.py --books-file.
+The resulting evidence file (basenames) feeds locator_rescan.py --evidence-file.
 """
 from __future__ import annotations
 
 import os
+import pathlib
 import json
 import re
 import sys
@@ -50,7 +51,8 @@ VERSATZ = {
 
 
 def main() -> int:
-    gold_txt = open("/Users/dudu/Desktop/GOLDSTELLEN_ZUR_VERIFIKATION.md").read()
+    with open(os.environ.get("AXIOM_GOLDSTELLEN", "/Users/dudu/Desktop/GOLDSTELLEN_ZUR_VERIFIKATION.md")) as f:
+        gold_txt = f.read()
     id2book = dict(
         re.findall(r"### (\w+\d+) — .*?\n> \*\*Buch:\*\* (.*?) · \*\*S\.\*\*", gold_txt)
     )
@@ -59,10 +61,6 @@ def main() -> int:
     conn = psycopg2.connect(DSN)
     conn.set_session(readonly=True)
     cur = conn.cursor()
-    cur.execute(
-        "SELECT d.title, a.local_path FROM zotero_documents d "
-        "JOIN zotero_attachments a ON a.document_id = d.id AND a.preferred AND NOT a.deleted"
-    )
     # unambiguous anchor: dudu's chunk short-ids -> snapshot -> attachment PDF
     cur.execute(
         "SELECT left(c.id::text, 8), a.local_path FROM processing_chunks c "
@@ -82,10 +80,17 @@ def main() -> int:
         if not book:
             print(f"?? {gid}: kein Buch in Gold-Mapping")
             continue
-        pdf = chunk2pdf.get(id2chunk.get(gid, "")[:8])
+        cid = id2chunk.get(gid)
+        if not cid:
+            per_book.setdefault(book, []).append((gid, status, "KEIN-MAPPING"))
+            continue
+        pdf = chunk2pdf.get(cid[:8])
         idx = int(pdf_page) - 1
-        if pdf is None or not os.path.exists(pdf):
-            per_book.setdefault(book, []).append((gid, status, "KEIN-PDF"))
+        if pdf is None:
+            per_book.setdefault(book, []).append((gid, status, "KEIN-CHUNK"))
+            continue
+        if not os.path.exists(pdf):
+            per_book.setdefault(book, []).append((gid, status, "PDF-FEHLT"))
             continue
         labels, sources = pt.build_page_trust(pdf)
         mine = labels.get(idx)
@@ -112,10 +117,12 @@ def main() -> int:
             if b and os.path.exists(b):
                 out_books.append(os.path.basename(b))
     print(f"\nALIGNS: {len(aligned)} Bücher · nicht voll: {len(misaligned)}")
-    json.dump({"heal_books": out_books,
-               "skip_books": ["EU+-+2022+-+NIS-2-Richtlinie+(2022-2555).pdf"]},
-              open("/tmp/evidence_books.json", "w"), ensure_ascii=False, indent=1)
-    print(f"Evidenz-Datei: /tmp/evidence_books.json ({len(out_books)} Bücher + NIS2-Skip)")
+    ev = {"heal_books": sorted(out_books),
+          "skip_books": ["EU+-+2022+-+NIS-2-Richtlinie+(2022-2555).pdf"]}
+    out = pathlib.Path(__file__).parent / "evidence_books.json"
+    with out.open("w") as f:
+        json.dump(ev, f, ensure_ascii=False, indent=1)
+    print(f"Evidenz-Datei: {out} ({len(out_books)} Bücher + NIS2-Skip)")
     return 0
 
 

@@ -1,0 +1,30 @@
+{
+ "heal_books": [
+  "Blühdorn - 2020 - Nachhaltige Nicht-Nachhaltigkeit - Warum die ökologische Transformation der Gese.pdf",
+  "Bofinger+-+2011+-+Grundzüge+der+Volkswirtschaftslehre.pdf",
+  "Burckhardt - 2014 - Corporate Social Responsibility – Mythen und Maßnahmen.pdf",
+  "D'heur - 2013 - CSR und Value Chain Management.pdf",
+  "DORA+-+2025+-+State+of+AI-assisted+Software+Development+2025.pdf",
+  "Eisenhut+-+2022+-+Aktuelle+Volkswirtschaftslehre+2022-2023.pdf",
+  "Engelkamp+-+2013+-+Einführung+in+die+Volkswirtschaftslehre.pdf",
+  "Englert - 2019 - Nachhaltiges Management - Nachhaltigkeit als exzellenten Managementansatz entwickeln.pdf",
+  "Fifka - 2014 - CSR und Reporting.pdf",
+  "Heine+-+2012+-+Volkswirtschaftslehre.pdf",
+  "Hentze - 2014 - Stakeholder-Management und Nachhaltigkeits-Reporting.pdf",
+  "Herrmann - 2010 - Ganzheitliches Life Cycle Management - Nachhaltigkeit und Lebenszyklusorientieru.pdf",
+  "Hungenberg+-+2014+-+Strategisches+Management+in+Unternehmen.pdf",
+  "Kett+-+2025+-+Layer+Model+for+the+Design+of+Data-driven+Business+Models.pdf",
+  "Leung - 2023 - Environmental, Social and Governance and Sustainable Development in Healthcare.pdf",
+  "Mankiw+-+2021+-+Grundzüge+der+Volkswirtschaftslehre.pdf",
+  "Premer+-+2011+-+Grundzüge+der+Volkswirtschaftslehre.pdf",
+  "Sanders - 2023 - The Adventure of Sustainable Performance - Beyond ESG Compliance to Leadership i.pdf",
+  "Schreyögg+-+2024+-+Organisation.pdf",
+  "Schulz - 2014 - CSR und Finance.pdf",
+  "Schäfer - 2014 - Institutionelle Anleger und nachhaltige Kapitalanlagen.pdf",
+  "Springer+Fachmedien+Wiesbaden+-+2013+-+Kompakt-Lexikon+Internationale+Wirtschaft.pdf",
+  "VDMA+-+Herausforderungen+und+Potenziale+des+EU+Data+Acts.pdf"
+ ],
+ "skip_books": [
+  "EU+-+2022+-+NIS-2-Richtlinie+(2022-2555).pdf"
+ ]
+}

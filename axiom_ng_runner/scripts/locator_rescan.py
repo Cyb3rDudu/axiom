@@ -78,8 +78,9 @@ def main() -> int:
     ap.add_argument("--evidence-file", type=argparse.FileType("r"),
                     help="JSON from locator_countercheck.py: {heal_books, skip_books}. "
                          "heal_books = counter-check-verified (full stamping incl. folio heals); "
-                         "skip_books = stamp NOTHING (Amtsblatt etc.); other books get safe levels only "
-                         "(no folio_verified claim, no label change) — silent-wrong stays impossible")
+                         "skip_books = no page_span stamps (Amtsblatt etc.; epub_cfi->none still applies); "
+                         "other books get NO folio_verified claim and no label change "
+                         "— folio-claiming pages stay legacy")
     args = ap.parse_args()
     if args.apply and args.apply_epub_only:
         ap.error("--apply and --apply-epub-only are mutually exclusive (scope vs full write)")
@@ -96,8 +97,13 @@ def main() -> int:
 
     # Trust map per distinct PDF path (one build_page_trust pass per book).
     trust_cache: dict[str, tuple[dict, dict] | None] = {}
+    fehlende_pdfs: list[str] = []
     for _, _, p in rows:
         key = norm_path(p)
+        if key and key.lower().endswith(".pdf") and not os.path.exists(key):
+            b = os.path.basename(key)
+            if b not in fehlende_pdfs:
+                fehlende_pdfs.append(b)
         if key and key not in trust_cache and key.lower().endswith(".pdf") and os.path.exists(key):
             try:
                 trust_cache[key] = pt.build_page_trust(key)
@@ -105,17 +111,18 @@ def main() -> int:
                 print(f"  ! trust-Fehler {os.path.basename(key)[:50]}: {exc}")
                 trust_cache[key] = None
 
+    held: Counter[str] = Counter()
     updates: list[tuple[str, dict]] = []
     dist: Counter[str] = Counter()
     label_heals = 0
     heals_by_doc: Counter[str] = Counter()
-    reasons: Counter[str] = Counter()
     symptoms: list[str] = []
     for chunk_id, locator, path in rows:
         loc = locator if isinstance(locator, dict) else json.loads(locator or "{}")
         new_loc = dict(loc)
         base = os.path.basename(norm_path(path) or "")
         if loc.get("type") != "epub_cfi" and base in skip_books:
+            held["skip_book"] += 1
             continue  # held books: legacy locators stay untouched
         evidenced = base in heal_books
         if loc.get("type") == "epub_cfi":
@@ -129,6 +136,7 @@ def main() -> int:
                 if lvl == pt.FOLIO_VERIFIED and not evidenced:
                     # no counter-check evidence for this book: make no
                     # print-verified claim — leave legacy (renders sane)
+                    held["no_evidence_folio"] += 1
                     continue
                 new_loc["page_source"] = lvl
                 if lvl == pt.FOLIO_VERIFIED:
@@ -147,7 +155,7 @@ def main() -> int:
             else:
                 new_loc["page_source"] = pt.PHYSICAL_ONLY
         else:
-            continue
+            continue  # unknown locator type
         dist[new_loc["page_source"]] += 1
         if new_loc != loc and (
             not args.apply_epub_only
@@ -167,6 +175,11 @@ def main() -> int:
     for doc, n in heals_by_doc.most_common(10):
         print(f"  {n:5d}  {doc}")
     print(f"zu aktualisierende Chunks: {len(updates)}")
+    print(f"bewusst gehalten (legacy): {dict(held) or 'keine'}")
+    if fehlende_pdfs:
+        print(f"! {len(fehlende_pdfs)} PDF(s) fehlen auf Platte (deren Chunks -> physical_only):")
+        for b in fehlende_pdfs:
+            print(f"    {b}")
 
     if not args.apply:
         print("DRY — nichts geschrieben (--apply schreibt DB + OS)")
