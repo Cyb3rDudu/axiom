@@ -43,7 +43,7 @@ Apple-only parity (GoMLX) does not earn a CUDA column — documented, not hidden
 | mREBEL relationships | **No-Go native** → **Hybrid/sidecar** | Python service (farm) | see Sidecar | Block 7: BART-ONNX decode loop rejected |
 | PDF→Markdown (digital) | **Go: yes** (Xberg binding) | CPU | CUDA for OCR models | Block 4: digital PDF 5 pages extracted, umlauts OK |
 | PDF→Markdown (scans) | **No-Go native** → Xberg/Marker sidecar + OCR | farm (CUDA OCR) | yes (via sidecar) | Block 4: scanned book → empty without OCR; Marker 1895 s |
-| R7 end-to-end (Mini runner) | **Go: yes (pipeline)** | CPU | CUDA for ingest | Block 5: `/v1/embed`+`/v1/rerank` swapped into bench, correct |
+| R7 end-to-end (Mini runner) | **Go: yes (pipeline)** | **CUDA (carrier)** | CUDA — proven | Nachzug: swap into bench; **dense/hybrid retrieval identical to Python**, rerank parity; earlier 0.080 was a mini-runner `<s></s>` query-embed bug (fixed) |
 
 ## Determinism (every Go PoC ran twice)
 
@@ -132,7 +132,7 @@ container on the same 3090. Every number committed as CSV/JSON in
 | 2 rerank | **Spearman 1.0000** (75 pairs, corrected pair form `<s>q</s></s>p</s>`), avg \|score\| 8e-6 — from 0.978 pre-fix |
 | 3 sparse | truncation hypothesis **disproven** (matched 8192); root cause open — leading hypothesis: Go harness input discrepancy (missing post-processor), binding-read unproven; algorithm Python-proven 1.0/1.0 |
 | 4 GLiNER | Go-CPU logits == Py-CPU (**0.0**, one-shot Mac run); Go-CUDA forward executes on 3090 (cuDNN, diff 0.042 recomputable via `gliner_compare.py` on committed bins); entity-set parity ≤1e-5 = Block-7 CPU |
-| 6 R7-delta | **AXIOM_PROCESSOR_URL swap PROVEN** (bench local → carrier mini-runner CUDA); rerank 736 ms vs CPU 18.9 s (≈25×); gold 0 due to DB provisioning gap |
+| 6 R7-delta | **Retrieval PARITY** (corrected DB `axiom_db` + fixed mini-runner <s></s>): dense + hybrid metrics IDENTICAL to Python (0.536/0.693/0.707), rerank within noise; rerank 736 ms vs Python-MPS ~4.5 s (≈6×) |
 | 7 mREBEL | encoder ONNX-exportable, **decoder loop = hard item**; sidecar stands; tokenizer round-trip OK |
 | 8 Xberg | **locator gap device-independent**; scan OCR needs candle-cuda + explicit locator map |
 

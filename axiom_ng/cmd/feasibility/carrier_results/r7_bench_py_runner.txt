@@ -1,0 +1,48 @@
+gold suite: 25 queries (0 confirmed by dudu)
+
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+configuration                         P@5      MRR     R@10        p50        p95  errs
+dense-only                          0.536    0.693    0.707       73ms      100ms     0
+hybrid (dense+bm25)                 0.464    0.580    0.567       79ms       97ms     0
+hybrid+rerank                       0.480    0.530    0.587     3.547s     3.605s     0
+hybrid+rerank+sparse                0.480    0.566    0.647     3.636s     3.702s     0
+hybrid+rerank+sparse+graph          0.576    0.693    0.727     4.214s     4.549s     0
