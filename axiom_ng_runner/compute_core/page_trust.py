@@ -89,7 +89,7 @@ def extract_folio_candidates(doc: pymupdf.Document) -> dict[int, str]:
     return out
 
 
-def _folio_runs(candidates: dict[int, str]) -> list[tuple[list[int], list[int]]]:
+def folio_runs(candidates: dict[int, str]) -> list[tuple[list[int], list[int]]]:
     """Consecutive-page runs whose folios ascend by +1 (>= 3 members).
 
     Shared by verify_folio_sequence and the #176 analyze CLI (read-only
@@ -156,7 +156,7 @@ def verify_folio_sequence(candidates: dict[int, str]) -> dict[int, str]:
     # shorter claimants; a length TIE is ambiguous — the value verifies
     # NOWHERE (never guess). A citation must not silently resolve to the
     # earliest chapter's page under the highest trust mark.
-    runs = _folio_runs(candidates)
+    runs = folio_runs(candidates)
     value_runs: dict[int, list[int]] = {}  # folio value -> run indices claiming it
     for idx, (_, rv) in enumerate(runs):
         for v in rv:

@@ -137,6 +137,19 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 // zombie chunks next to the healed rechunk — #176 delta, 2× live snapshots
 // on one document). Mirrors deactivateSiblingsTx + outbox tombstones (#127)
 // so OpenSearch stops serving them in the same transaction.
+//
+// Restore mirror (review C1): a deleted-then-RESTORED attachment whose
+// completed snapshot was retired has no other reactivation path — the
+// pending-job insert dedups against the completed job (idempotency index
+// has no status predicate), so persistTx never runs again and the document
+// would silently stay unserved. Reactivate its latest completed snapshot
+// (one per attachment — the partial unique index is respected by picking a
+// single winner) and re-materialize it via an index outbox op.
+//
+// Known window: a job mid-flight on an attachment that gets deleted commits
+// AFTER this step and reactivates/activates its snapshot; the NEXT sync's
+// pass here re-retires it. Bounded by one sync interval, drainer guards
+// keep OpenSearch convergent.
 func retireDeletedAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
 	rows, err := tx.Query(ctx, `
 		UPDATE processing_snapshots s SET active=false, updated_at=now()
@@ -163,6 +176,50 @@ func retireDeletedAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
 		if err := enqueueOutboxTx(ctx, tx, h.snap, OutboxOpDelete,
 			jobIdentity{documentID: h.doc, attachmentID: h.att}); err != nil {
 			return fmt.Errorf("tombstone deleted-attachment snapshot %s: %w", h.snap, err)
+		}
+	}
+	return reactivateRestoredAttachmentsTx(ctx, tx)
+}
+
+func reactivateRestoredAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
+	// Latest completed snapshot of a LIVE attachment that currently serves
+	// nothing. "Latest" = highest created_at (tie: max id) — deterministic.
+	rows, err := tx.Query(ctx, `
+		SELECT DISTINCT ON (s.attachment_id)
+			s.id::text, s.document_id::text, s.attachment_id::text
+		FROM processing_snapshots s
+		JOIN zotero_attachments a ON a.id = s.attachment_id
+		WHERE a.deleted = false
+		  AND s.active = false
+		  AND NOT EXISTS (
+			SELECT 1 FROM processing_snapshots x
+			WHERE x.attachment_id = s.attachment_id AND x.active
+		  )
+		ORDER BY s.attachment_id, s.created_at DESC, s.id DESC`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type back struct{ snap, doc, att string }
+	var revives []back
+	for rows.Next() {
+		var b back
+		if err := rows.Scan(&b.snap, &b.doc, &b.att); err != nil {
+			return err
+		}
+		revives = append(revives, b)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, b := range revives {
+		if _, err := tx.Exec(ctx, `
+			UPDATE processing_snapshots SET active=true, updated_at=now() WHERE id=$1`, b.snap); err != nil {
+			return fmt.Errorf("reactivate restored-attachment snapshot %s: %w", b.snap, err)
+		}
+		if err := enqueueOutboxTx(ctx, tx, b.snap, OutboxOpIndex,
+			jobIdentity{documentID: b.doc, attachmentID: b.att}); err != nil {
+			return fmt.Errorf("reindex restored-attachment snapshot %s: %w", b.snap, err)
 		}
 	}
 	return nil

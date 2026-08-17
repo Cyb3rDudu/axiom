@@ -20,6 +20,7 @@ Verdachtsklassen:
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import os
 import re
@@ -53,7 +54,7 @@ def analyze_pdf(pdf_path: str) -> dict:
                 pt.PHYSICAL_ONLY: f"KAPUTT: {label_reason}",
             }[trust]
         cands = pt.extract_folio_candidates(doc)
-        runs = pt._folio_runs(cands)
+        runs = pt.folio_runs(cands)
         verified = pt.verify_folio_sequence(cands)
 
         # Versatz: an folio-bewiesenen Seiten mit numeric Label vergleichen
@@ -65,7 +66,7 @@ def analyze_pdf(pdf_path: str) -> dict:
         offset = max(set(offs), key=offs.count) if offs else None
         offset_consistent = offs and len([o for o in offs if o == offset]) >= len(offs) * 0.8
 
-        labels_broken = label_verdict.startswith("KAPUTT") or label_verdict.startswith("kein Tier-1")
+        labels_broken = label_verdict.startswith(("KAPUTT", "kein Tier-1"))
         folio_found = len(verified) >= 3
         if labels_broken and folio_found:
             suspicion = "🔴 reparierbar"
@@ -78,9 +79,7 @@ def analyze_pdf(pdf_path: str) -> dict:
         else:
             suspicion = "🟢 gesund"
 
-        gaps = []
-        for a, b in zip(runs, runs[1:]):
-            gaps.append(b[0][0] - a[0][-1] - 1)
+        gaps = [b[0][0] - a[0][-1] - 1 for a, b in itertools.pairwise(runs)]
         return {
             "pages": n,
             "label_befund": label_verdict,
@@ -91,6 +90,7 @@ def analyze_pdf(pdf_path: str) -> dict:
                 for r in runs
             ],
             "folio_verifiziert": len(verified),
+            "luecken_zwischen_laeufen": gaps,
             "versatz": offset if offset_consistent else None,
             "verdacht": suspicion,
         }
@@ -99,7 +99,12 @@ def analyze_pdf(pdf_path: str) -> dict:
 
 
 def verify_plan(pdf_path: str, plan: dict[str, str]) -> dict:
-    """Kill a relabel plan that contradicts folio-verified pages. Never writes."""
+    """Kill a relabel plan that contradicts folio-verified pages. Never writes.
+
+    Plan keys are 1-BASED PDF pages — the same convention analyze reports
+    ("start": run[0][0] + 1), so a plan built from analyze output checks the
+    page it names (review W1: 0-based keys off-by-one-killed correct plans).
+    """
     doc = pymupdf.open(pdf_path)
     try:
         verified = pt.verify_folio_sequence(pt.extract_folio_candidates(doc))
@@ -107,7 +112,7 @@ def verify_plan(pdf_path: str, plan: dict[str, str]) -> dict:
         doc.close()
     killed: list[dict] = []
     for page_s, new_label in plan.items():
-        page = int(page_s)
+        page = int(page_s) - 1  # plan is 1-based, verified keys are 0-based
         if page not in verified:
             continue
         if str(new_label).strip() != str(verified[page]).strip():
@@ -169,23 +174,30 @@ def cmd_sweep(out_path: str, kandidaten_path: str | None) -> None:
                     f"{r.get('label_befund', r.get('detail', ''))[:46]} | {laufe[:52]} | {vers} |\n")
 
         if kandidaten_path and os.path.exists(kandidaten_path):
-            kt = open(kandidaten_path).read()
-            stufe1 = re.findall(r"^- \*\*(.+?)\*\*", kt.split("STUFE 2")[0], re.M)
+            with open(kandidaten_path) as kf:
+                kt = kf.read()
+            stufe1 = re.findall(r"^- \*\*(.+?)\*\*", kt.split("STUFE 2")[0], re.MULTILINE)
             f.write(f"\n## Abgleich REPATUR_KANDIDATEN — Stufe 1 ({len(stufe1)} Bücher)\n\n")
             confirmed, exonerated, ungeprueft = [], [], []
-            def _norm(t: str) -> str:
-                return " ".join(re.findall(r"[a-zäöüß]{3,}", t.lower()))
+            def _tokens(t: str) -> set[str]:
+                return set(re.findall(r"[a-zäöüß]{3,}", t.lower()))
+            seen = set()
             for k in stufe1:
-                kt = _norm(k)
+                if k in seen:
+                    continue
+                seen.add(k)
+                ktok = _tokens(k)
                 hit = None
+                best = 0
                 for r in reports:
-                    rt = _norm(r["titel"])
-                    # substring in BOTH directions with long anchors — short
-                    # generic prefixes ("environmental, social and") must not
-                    # cross-match different books of the same series family
-                    if len(kt) >= 12 and (kt[:40] in rt or rt[:40] in kt) and (kt[:12] == rt[:12] or kt[:40] in rt):
-                        hit = r
-                        break
+                    rt = _tokens(r["titel"])
+                    # token-set subset match in either direction; exact short
+                    # titles ("Controlling") and long ones both work, while
+                    # series families (Demystifying vs Hill ESG) stay apart
+                    if ktok and rt and (ktok <= rt or rt <= kt):
+                        ov = len(ktok & rt)
+                        if ov > best:
+                            best, hit = ov, r
                 if hit is None:
                     ungeprueft.append(k)
                 elif hit["verdacht"].startswith("🔴"):
