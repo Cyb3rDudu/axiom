@@ -90,17 +90,18 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 		return Result{}, err
 	}
 
-	// Selection read BEFORE the apply tx: fail without a transaction, and
-	// don't hold a second pool connection during the apply.
-	persisted, err := s.repo.SelectionModes(ctx)
-	if err != nil {
-		return Result{}, fmt.Errorf("loading selections: %w", err)
-	}
+	// Selection resolution BEFORE the apply tx: fail without a transaction,
+	// don't hold a second pool connection during the apply. Two-stage cascade
+	// (#166 NACHSCHÄRFUNG): collections primary, document rows fine control,
+	// the one-run override on top. nil = no gate (everything selected).
 	var ovInclude, ovExclude []string
 	if override != nil {
 		ovInclude, ovExclude = override.Include, override.Exclude
 	}
-	selection := repo.EffectiveSelection(persisted, ovInclude, ovExclude)
+	selection, err := s.repo.ResolveEffectiveSelection(ctx, ovInclude, ovExclude)
+	if err != nil {
+		return Result{}, fmt.Errorf("loading selections: %w", err)
+	}
 
 	// One atomic transaction: canonical rows + deletions + projections +
 	// memberships + pending/failed jobs + cursor.

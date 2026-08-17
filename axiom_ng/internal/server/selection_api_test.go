@@ -17,10 +17,12 @@ import (
 )
 
 type stubSelection struct {
-	put  []repo.SelectionInput
-	mode map[string]string
-	docs []repo.ZoteroDocumentState
-	err  error
+	put      []repo.SelectionInput
+	collsPut []repo.CollectionSelectionInput
+	colls    map[string]string
+	mode     map[string]string
+	docs     []repo.ZoteroDocumentState
+	err      error
 }
 
 func (s *stubSelection) SetSelections(ctx context.Context, in []repo.SelectionInput) error {
@@ -37,6 +39,19 @@ func (s *stubSelection) SetSelections(ctx context.Context, in []repo.SelectionIn
 
 func (s *stubSelection) SelectionModes(ctx context.Context) (map[string]string, error) {
 	return s.mode, s.err
+}
+
+func (s *stubSelection) SetCollectionSelections(ctx context.Context, in []repo.CollectionSelectionInput) error {
+	s.collsPut = in
+	return s.err
+}
+
+func (s *stubSelection) CollectionSelectionModes(ctx context.Context) (map[string]string, error) {
+	return s.colls, s.err
+}
+
+func (s *stubSelection) ResolveSelectionView(ctx context.Context) (*repo.ResolvedSelection, error) {
+	return &repo.ResolvedSelection{Documents: s.mode, Collections: []repo.ResolvedCollection{}}, s.err
 }
 
 func (s *stubSelection) ListZoteroDocuments(ctx context.Context, syncState string) ([]repo.ZoteroDocumentState, error) {

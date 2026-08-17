@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -17,8 +18,14 @@ import (
 type SelectionRepo interface {
 	SetSelections(ctx context.Context, in []repo.SelectionInput) error
 	SelectionModes(ctx context.Context) (map[string]string, error)
+	SetCollectionSelections(ctx context.Context, in []repo.CollectionSelectionInput) error
+	CollectionSelectionModes(ctx context.Context) (map[string]string, error)
+	ResolveSelectionView(ctx context.Context) (*repo.ResolvedSelection, error)
 	ListZoteroDocuments(ctx context.Context, syncState string) ([]repo.ZoteroDocumentState, error)
 }
+
+// collectionKeyPattern: Zotero collection keys are 8-char alphanumerics.
+var collectionKeyRe = regexp.MustCompile(`^[A-Z0-9]{8}$`)
 
 // SetSelectionRepo wires the selection routes (nil keeps them 503ing).
 func (s *Server) SetSelectionRepo(r SelectionRepo) { s.selectionRepo = r }
@@ -35,7 +42,13 @@ func (s *Server) handleGetSelection(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "selection unavailable"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"selection": m})
+	colls, err := s.selectionRepo.CollectionSelectionModes(r.Context())
+	if err != nil {
+		s.log.Printf("selection get: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "selection unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"selection": m, "collections": colls})
 }
 
 // handlePutSelection applies a selection batch: entries
@@ -48,7 +61,8 @@ func (s *Server) handlePutSelection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Selection []repo.SelectionInput `json:"selection"`
+		Selection   []repo.SelectionInput           `json:"selection"`
+		Collections []repo.CollectionSelectionInput `json:"collections"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid selection body"})
@@ -57,6 +71,18 @@ func (s *Server) handlePutSelection(w http.ResponseWriter, r *http.Request) {
 	for _, e := range body.Selection {
 		if !isUUID(e.DocumentID) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "document_id must be a UUID"})
+			return
+		}
+		switch e.Mode {
+		case "included", "excluded", "default", "":
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be included|excluded|default"})
+			return
+		}
+	}
+	for _, e := range body.Collections {
+		if !collectionKeyRe.MatchString(e.CollectionKey) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "collection_key must be a Zotero key (8 alphanumerics)"})
 			return
 		}
 		switch e.Mode {
@@ -101,4 +127,21 @@ func (s *Server) handleZoteroDocuments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"documents": docs})
+}
+
+// handleSelectionResolved shows the client WHAT it chose: per selected
+// collection the resolved document ids, plus the document rows
+// (#166 NACHSCHÄRFUNG Ziel 3).
+func (s *Server) handleSelectionResolved(w http.ResponseWriter, r *http.Request) {
+	if s.selectionRepo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "selection not configured"})
+		return
+	}
+	v, err := s.selectionRepo.ResolveSelectionView(r.Context())
+	if err != nil {
+		s.log.Printf("selection resolved: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "selection unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }

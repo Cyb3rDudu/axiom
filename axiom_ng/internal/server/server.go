@@ -53,6 +53,7 @@ func (s *Server) Handler() http.Handler {
 	r.Post("/api/zotero/sync", s.handleSync)
 	r.Get("/api/ingest/jobs", s.handleJobs)
 	r.Get("/api/zotero/selection", s.handleGetSelection)
+	r.Get("/api/zotero/selection/resolved", s.handleSelectionResolved)
 	r.Put("/api/zotero/selection", s.handlePutSelection)
 	r.Get("/api/zotero/documents", s.handleZoteroDocuments)
 	r.Post("/api/search", s.handleSearch)
