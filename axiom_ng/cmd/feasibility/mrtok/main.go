@@ -29,6 +29,11 @@ func main() {
 		"Zelle.":   {250004, 567, 2118, 5, 2},
 		"A.":       {250004, 62, 5, 2},
 	}
+	if t := os.Getenv("MRTOK_TEXT"); t != "" {
+		ids, _ := tk.Encode(t)
+		fmt.Printf("MRTOK_TEXT %q -> %v\n", t, ids)
+		os.Exit(0)
+	}
 	allOK := true
 	for text, want := range refs {
 		got, _ := tk.Encode(text)            // raw Go ids
