@@ -75,10 +75,18 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true", help="write DB + OS (default: dry)")
     ap.add_argument("--apply-epub-only", action="store_true",
                     help="write ONLY epub_cfi -> none stamps (safe half; PDF locators wait for the slice-4 counter-proof)")
+    ap.add_argument("--evidence-file", type=argparse.FileType("r"),
+                    help="JSON from locator_countercheck.py: {heal_books, skip_books}. "
+                         "heal_books = counter-check-verified (full stamping incl. folio heals); "
+                         "skip_books = stamp NOTHING (Amtsblatt etc.); other books get safe levels only "
+                         "(no folio_verified claim, no label change) — silent-wrong stays impossible")
     args = ap.parse_args()
     if args.apply and args.apply_epub_only:
         ap.error("--apply and --apply-epub-only are mutually exclusive (scope vs full write)")
     args.apply = args.apply or args.apply_epub_only
+    evidence = json.load(args.evidence_file) if args.evidence_file else None
+    heal_books = set(evidence["heal_books"]) if evidence else set()
+    skip_books = set(evidence["skip_books"]) if evidence else set()
 
     conn = psycopg2.connect(DSN)
     conn.set_session(readonly=not args.apply, autocommit=False)
@@ -106,6 +114,10 @@ def main() -> int:
     for chunk_id, locator, path in rows:
         loc = locator if isinstance(locator, dict) else json.loads(locator or "{}")
         new_loc = dict(loc)
+        base = os.path.basename(norm_path(path) or "")
+        if loc.get("type") != "epub_cfi" and base in skip_books:
+            continue  # held books: legacy locators stay untouched
+        evidenced = base in heal_books
         if loc.get("type") == "epub_cfi":
             new_loc["page_source"] = pt.NONE
         elif loc.get("type") == "page_span":
@@ -114,6 +126,10 @@ def main() -> int:
             if trust and phys is not None:
                 label_map, source_map = trust
                 lvl = source_map.get(int(phys), pt.PHYSICAL_ONLY)
+                if lvl == pt.FOLIO_VERIFIED and not evidenced:
+                    # no counter-check evidence for this book: make no
+                    # print-verified claim — leave legacy (renders sane)
+                    continue
                 new_loc["page_source"] = lvl
                 if lvl == pt.FOLIO_VERIFIED:
                     # heal the labels to the printed folios
