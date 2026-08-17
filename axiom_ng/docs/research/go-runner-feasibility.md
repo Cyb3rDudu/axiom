@@ -169,7 +169,7 @@ container on the same 3090. Every number committed as CSV/JSON in
 | 3 sparse | **SPARSE PARITY — 4th pillar PROVEN** (fixed `<s></s>`, same-device CUDA): overlap 0.998 avg / cos 0.999, 217/219 ≥0.98; outliers = tokenizer edge-cases only |
 | 4 GLiNER | Go-CPU logits == Py-CPU (**0.0**, one-shot Mac run); Go-CUDA forward executes on 3090 (cuDNN, diff 0.042 recomputable via `gliner_compare.py` on committed bins); entity-set parity ≤1e-5 = Block-7 CPU |
 | 6 R7-delta | **Retrieval PARITY** (corrected DB `axiom_db` + fixed mini-runner <s></s>): dense + hybrid metrics IDENTICAL to Python (0.536/0.693/0.707), rerank within noise; rerank p50 706 ms vs Python 3.547 s (≈5×) |
-| 7 mREBEL | encoder ONNX-exportable, **decoder loop = hard item**; sidecar stands; tokenizer round-trip OK |
+| 7 mREBEL | **Go-nativ PROVEN (Restpunkt 6)**: decoder ONNX exported + validated (optimum 1.21 legacy stack + `--no-post-process`); Go beam loop (3/3/256/lp0/tp_XX) triple-set parity **96.0 %** (n=50, threshold ≥95 %), 2× byte-deterministic; parser 1:1 + fixtures; latency p50 4.45 s vs Py 0.14 s (no-cache re-decode; with_past cached path functional but per-call overhead = epic cost point) — see 11-mrebel-decoder-go.md |
 | 8 Xberg | **locator gap device-independent**; scan OCR needs candle-cuda + explicit locator map |
 
 Environment facts: ORT must be the `gpu_cuda13` build (CPU x64 build has no CUDA-EP)
@@ -179,9 +179,9 @@ DeBERTa-style models (GLiNER). Containerfile: `axiom_ng/cmd/feasibility/Containe
 ## Feasibility answer (one sentence)
 
 **Ein reiner Go-Runner ist funktional umsetzbar für den gesamten Query-seitigen
-Modellstack (Dense/Rerank/Sparse/GLiNER — auf CUDA paritätisch bewiesen) und die
-algorithmischen Komponenten (Contract/Chunking/EPUB-CFI), mit Xberg/Marker-OCR für
-Scan-PDF und einem mREBEL-Sidecar als den beiden einzigen Nicht-Go-Bausteinen —
-sofern der Mac-Query-Pfad (Restpunkt 5) auf mindestens MPS-Python-Niveau bestätigt
-wird; die Folge-Epic-Kostenpunkte sind der Xberg-Locator-Bau, der mREBEL-Decoder und
-die cuDNN-FP-Varianz.**
+Modellstack (Dense/Rerank/Sparse/GLiNER — auf CUDA paritätisch bewiesen), die
+algorithmischen Komponenten (Contract/Chunking/EPUB-CFI) UND die mREBEL-
+Triple-Extraktion (96 % Triple-Set-Parität, nativ in Go) — mit Xberg/Marker-OCR für
+Scan-PDF als einzigem Nicht-Go-Baustein. Kostenpunkte für ein Folge-Epic: der
+Xberg-Locator-Bau, die mREBEL-Cache-Performance (Go p50 4.45 s vs Python 0.14 s,
+Tensor-Reuse/Shape-Caching nötig) und die cuDNN-FP-Varianz.**
