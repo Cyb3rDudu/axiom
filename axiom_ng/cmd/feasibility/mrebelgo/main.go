@@ -189,8 +189,16 @@ func decodeStep(dec *ort.DynamicAdvancedSession, ids []int64, encHidden []float3
 		outsV[i] = t
 	}
 	if err := dec.Run([]ort.Value{tm, tid, th}, outsV); err != nil { return nil, err }
-	// last position logits -> log-softmax
 	base := logits.GetData()
+	if os.Getenv("MRBEL_DUMP_STEP") == "1" {
+		// dump this step's raw last-position logits (first 6 + argmax) to a JSONL
+		f, _ := os.OpenFile("/tmp/go_step_logits.jsonl", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		last := base[(L-1)*vocab : L*vocab]
+		am := 0
+		for i, v := range last { if v > last[am] { am = i } }
+		fmt.Fprintf(f, "{\"L\":%d,\"argmax\":%d,\"head\":[%v,%v,%v,%v]}\n", L, am, last[0], last[1], last[2], last[3])
+		f.Close()
+	}
 	last := base[(L-1)*vocab : L*vocab]
 	return logSoftmax(last), nil
 }
