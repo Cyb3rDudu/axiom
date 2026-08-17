@@ -14,8 +14,10 @@ RUN cd /tmp \
     && rm -rf /tmp/onnxruntime-linux-x64-gpu_cuda13-1.29.0 /tmp/ort.tgz
 
 # scipy for the Spearman/Kendall reference.
-RUN pip install --no-cache-dir scipy onnxruntime-gpu==1.29.0 2>&1 | tail -2
-# onnxruntime-gpu so the PYTHON reference side also uses the CUDA EP (same-device sparse; cu13 per the ORT gpu_cuda13 build + torch cu13 runtime)
+RUN pip uninstall -y onnxruntime 2>&1 | tail -1 && pip install --no-cache-dir onnxruntime-gpu==1.29.0 2>&1 | tail -3
+# onnxruntime-gpu (replaces the runner-poc CPU wheel) so the PYTHON reference side
+# also uses the CUDA EP for the same-device sparse/GLiNER comparisons on the 3090.
+RUN python -c "import onnxruntime as ort; assert 'CUDAExecutionProvider' in ort.get_available_providers(), ort.get_available_providers()" || (echo 'CUDA EP MISSING' && exit 1)
 
 # Copy the study PoC harnesses (feasibility tooling only; NOT product code).
 COPY axiom_ng/cmd/ /study/cmd/
