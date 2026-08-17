@@ -106,8 +106,13 @@ func main() {
 		decOut = decOutputs()
 	}
 	decSess := newDyn(decModel, decIn, decOut, opts)
-	var decKSess *ort.DynamicAdvancedSession
+	var decKSess, dec1Sess *ort.DynamicAdvancedSession
 	if os.Getenv("MRBEL_CACHE") == "1" {
+		// step1 needs the FULL graph (logits + 48 present) — the logits-only trim is
+		// incompatible with cache extraction, so the cached path gets its own session.
+		dec1Sess = newDyn(mdir+"/decoder_model.onnx",
+			[]string{"encoder_attention_mask", "input_ids", "encoder_hidden_states"},
+			decOutputs(), opts)
 		decKSess = newDyn(mdir+"/decoder_with_past_model.onnx",
 			[]string{"encoder_attention_mask", "input_ids",
 				"past_key_values.0.decoder.key", "past_key_values.0.decoder.value", "past_key_values.0.encoder.key", "past_key_values.0.encoder.value",
@@ -147,7 +152,7 @@ func main() {
 
 		var seqs []seq
 		if os.Getenv("MRBEL_CACHE") == "1" {
-			seqs = beamSearchCached(tok, decSess, decKSess, encHidden, mask)
+			seqs = beamSearchCached(tok, dec1Sess, decKSess, encHidden, mask)
 		} else {
 			seqs = beamSearch(tok, decSess, cd, encHidden, mask, oneOut)
 		}
