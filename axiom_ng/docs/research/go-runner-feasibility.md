@@ -87,9 +87,10 @@ Apple-only parity (GoMLX) does not earn a CUDA column — documented, not hidden
 - **Tokenizer edge cases** (real corpus): 3/219 chunks diverge (rare `Ȭ`,
   hyphen-runs, a morpheme `contin`). Extend the Block-2 pin to these; map offset
   (Go `<s>` vs `<unk>` on uncommon chars).
-- **R7 metric delta needs DB source-metadata sync** (Block 5): `zotero_documents`
-  currently 3 rows, `processing_chunks` 0, while OS has 35k docs → gold hydration
-  returns nothing for any runner. Sync the Postgres side before a final delta.
+- **R7 metric delta — RESOLVED**: the populated DB is `axiom_db` (126 docs /
+  35,880 chunks), not the empty `axiom_ng_test` the bench had pointed at;
+  with the fixed mini-runner `<s></s>` query encoding the gold delta is measured —
+  Go dense/hybrid **identical** to Python (see 05-r7-e2e.md "R7 gold run").
 - **CUDA-column provings (3090 farm):** dense/rerank/GLiNER are PROVEN (see the
   component table + Nachzug section). Remaining: Xberg OCR models on the farm
   (candle-cuda, scan path — see 08-xberg-carrier.md).
@@ -116,12 +117,17 @@ Go forward runs on CUDA, the full span-NER Go port is still pending, see the
 table), and a Mini-runner proving the R7-E2E
 pipeline. **No-Go or sidecar:** scanned-PDF conversion and mREBEL. The Mac-only
 (GoMLX) trap is avoided by routing CUDA through onnxruntime_go + GLiNER/ONNX.
-Blocked numbers (tokenizer edge cases, sparse Go divergence, R7 metric delta)
-are environmental/tooling, each with a concrete fix — not conceptual blockers.
+Blocked numbers (tokenizer edge cases, sparse Go divergence) are
+environmental/tooling, each with a concrete fix — not conceptual blockers.
 
 ## Nachzug CUDA measurements (carrier 192.168.1.2, same-device)
 
 All ML runs moved to the carrier (RTX 3090s), not local — dudu needs the local MPS.
+Course change (post-R7, dudu): ALL model-load on GPU, CPU only for tokenizer/eval
+scripts; anything that seems CPU-only gets flagged in the issue first. The one
+intentional exception is the R7 Python baseline itself, which ran on the local MPS
+Mac runner (the incumbent product, measured as-is) while the Go side ran on the
+carrier GPU — per-component same-device, documented in 05-r7-e2e.md.
 Same-device parity: Go `onnxruntime_go` CUDA-EP AND Python `torch` run in the SAME
 container on the same 3090. Every number committed as CSV/JSON in
 `axiom_ng/cmd/feasibility/carrier_results/` (Hivemind recomputes from it).
@@ -132,7 +138,7 @@ container on the same 3090. Every number committed as CSV/JSON in
 | 2 rerank | **Spearman 1.0000** (75 pairs, corrected pair form `<s>q</s></s>p</s>`), avg \|score\| 8e-6 — from 0.978 pre-fix |
 | 3 sparse | truncation hypothesis **disproven** (matched 8192); root cause open — leading hypothesis: Go harness input discrepancy (missing post-processor), binding-read unproven; algorithm Python-proven 1.0/1.0 |
 | 4 GLiNER | Go-CPU logits == Py-CPU (**0.0**, one-shot Mac run); Go-CUDA forward executes on 3090 (cuDNN, diff 0.042 recomputable via `gliner_compare.py` on committed bins); entity-set parity ≤1e-5 = Block-7 CPU |
-| 6 R7-delta | **Retrieval PARITY** (corrected DB `axiom_db` + fixed mini-runner <s></s>): dense + hybrid metrics IDENTICAL to Python (0.536/0.693/0.707), rerank within noise; rerank 736 ms vs Python-MPS ~4.5 s (≈6×) |
+| 6 R7-delta | **Retrieval PARITY** (corrected DB `axiom_db` + fixed mini-runner <s></s>): dense + hybrid metrics IDENTICAL to Python (0.536/0.693/0.707), rerank within noise; rerank p50 706 ms vs Python 3.547 s (≈5×) |
 | 7 mREBEL | encoder ONNX-exportable, **decoder loop = hard item**; sidecar stands; tokenizer round-trip OK |
 | 8 Xberg | **locator gap device-independent**; scan OCR needs candle-cuda + explicit locator map |
 
