@@ -124,16 +124,20 @@ The **complete query-side model stack (dense / rerank / sparse) works in Go on C
 at parity**; GLiNER is proof-loaded too. Remaining sparse divergence is confined to
 2 rare-non-Latin tokenizer chunks (Restpunkt 4, `09-tokenizer-edge-cases.md`).
 
-## Mac column (Restpunkt 5 — pending the backend decision + dudu-coordinated window)
+## Mac column (Restpunkt 5 — measured, see 10-mac-coreml-proof.md)
 
-The Mac is the always-on query-runner; a Go replacement must hold at least the
-current MPS-Python level (rerank p95 ~5.3 s MPS). Two Go GPU paths are candidates:
-(a) **onnxruntime CoreML-EP** via `yalue/onnxruntime_go` (same codepath as the CUDA-EP,
-preferred), or (b) **GoMLX** (MLX-native on Metal; second backend = Epic cost).
-A backend decision + measured Mac-GPU-vs-MPS-Python parity + latency compare is the
-final proof; the window is coordinated with dudu via the issue before measuring. The
-three pillars above were proven on CUDA; the Mac cell in the component table fills
-after this.
+Backend decision: **onnxruntime CoreML-EP** was tested first (preferred, single
+backend). dudu released the Mac window; measured same-device (Go CoreML vs
+Python-MPS on the Mac):
+- **Correctness PARITY**: Go CoreML dense cosine **1.0**, rerank **Spearman 0.99998**
+  vs the local MPS-Python runner (deterministic 2×).
+- **Performance REGRESSION**: CoreML is ~2× slower on `/v1/embed` (79 vs 40.5 ms)
+  and ~5.5× slower on `/v1/rerank` (695 vs 126 ms/pair) than the status-quo
+  MPS-Python runner.
+
+The Mac Go backend is *correct* via CoreML-EP but would **regress 2-5× vs MPS** unless
+batched/tuned, or **GoMLX/MLX** (Metal-native) is adopted as a second backend. This is
+the remaining Epic decision-input, not a blocker for the CUDA-farm feasibility.
 
 ## Bottom line
 
