@@ -225,10 +225,61 @@ func runEncoder(s *ort.DynamicAdvancedSession, ids, mask []int64) []float32 {
 }
 
 // constDec holds the per-chunk constant decoder inputs (enc_mask, enc_hidden tensors)
-// so the no-cache loop reuses them instead of re-allocating per step.
+// so the no-cache loop reuses them instead of re-allocating per step. A batch-B run
+// needs the encoder tensors materialized B times ([B, encLen, ...]).
 type constDec struct {
 	tm *ort.Tensor[int64]
 	th *ort.Tensor[float32]
+}
+
+// constDecBatch builds the enc_mask/enc_hidden tensors replicated to batch rows.
+func constDecBatch(encMask []int64, encHidden []float32, batch int) *constDec {
+	encLen := int64(len(encMask))
+	cd := &constDec{}
+	m := make([]int64, 0, batch*len(encMask))
+	for i := 0; i < batch; i++ { m = append(m, encMask...) }
+	cd.tm, _ = ort.NewTensor(ort.NewShape(int64(batch), encLen), m)
+	h := make([]float32, 0, batch*len(encHidden))
+	for i := 0; i < batch; i++ { h = append(h, encHidden...) }
+	cd.th, _ = ort.NewTensor(ort.NewShape(int64(batch), encLen, 1024), h)
+	return cd
+}
+
+// decodeStepB runs B equal-length beam sequences in ONE batched decoder call and returns
+// the last-position logits row per beam (Opt-3: [3, L] batching, Python's structure).
+func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, oneOutput bool) ([][]float32, error) {
+	B := int64(len(seqs))
+	if B == 0 { return nil, nil }
+	L := int64(len(seqs[0]))
+	flat := make([]int64, 0, int(B*L))
+	for _, s := range seqs { flat = append(flat, s...) }
+	tid, _ := ort.NewTensor(ort.NewShape(B, L), flat)
+	defer tid.Destroy()
+	logits, _ := ort.NewEmptyTensor[float32](ort.NewShape(B, L, vocab))
+	defer logits.Destroy()
+	var outsV []ort.Value
+	if oneOutput {
+		outsV = []ort.Value{logits}
+	} else {
+		outs := decOutputs()
+		outsV = make([]ort.Value, len(outs))
+		outsV[0] = logits
+		encLen := int64(len(cd.tm.GetData())) / B
+		for i := 1; i < len(outs); i++ {
+			var Lp []int64
+			if strings.Contains(outs[i], "decoder") { Lp = []int64{B, 16, L, headDim} } else { Lp = []int64{B, 16, encLen, headDim} }
+			t, _ := ort.NewEmptyTensor[float32](ort.NewShape(Lp...))
+			outsV[i] = t
+		}
+	}
+	if err := dec.Run([]ort.Value{cd.tm, tid, cd.th}, outsV); err != nil { return nil, err }
+	base := logits.GetData()
+	rows := make([][]float32, B)
+	for b := int64(0); b < B; b++ {
+		start := b*L*vocab + (L-1)*vocab
+		rows[b] = base[start : start+vocab]
+	}
+	return rows, nil
 }
 
 func (c *constDec) Destroy() {

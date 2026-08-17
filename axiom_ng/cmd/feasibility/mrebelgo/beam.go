@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/tggo/goSentencePiece"
 	ort "github.com/yalue/onnxruntime_go"
@@ -28,24 +29,45 @@ type seq struct {
 // re-decode path. Each hypothesis is its own growing token sequence; a hypothesis
 // finishing with EOS moves to `done`. Returns the top-3 complete sequences.
 func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, cd *constDec, encHidden []float32, encMask []int64, oneOut bool) []seq {
+	// Batched beam expansion (Opt-3): all live beams share the same length per round,
+	// so ONE decoder call [B, L] covers them all — Python generate()'s structure.
+	// cdBatch3/1 hold the encoder tensors replicated to the batch rows.
+	cd1 := cd
+	cd3 := constDecBatch(encMask, encHidden, 3)
+	defer cd3.Destroy()
 	beams := []hyp{{ids: []int64{tpXX}, score: 0}}
 	done := []hyp{} // finished hypotheses, capped at numBeams, best-by-score retained (BeamHypotheses semantics)
 	decLen := 0
 	for !beamDone(done, beams) && len(beams) > 0 && decLen < maxDec {
 		all := make([]hyp, 0, len(beams)*(2*numBeams))
 		db := []dumpBeam{}
-		for _, b := range beams {
-			rawLogits, err := decodeStep(dec, cd, b.ids, oneOut)
-			if err != nil { fatal("decodeStep: %v", err) }
-			t6 := topKLogSoftmax(rawLogits, 2*numBeams)
-			de := dumpBeam{Ids: append([]int64{}, b.ids...), Score: b.score}
-			for _, c := range t6 { de.Top6 = append(de.Top6, [2]any{c.tok, c.logp}) }
-			db = append(db, de)
-			for _, c := range t6 {
-				all = append(all, hyp{
-					ids:   append(append([]int64{}, b.ids...), c.tok),
-					score: b.score + c.logp,
-				})
+		{
+			seqs := make([][]int64, len(beams))
+			for i, b := range beams { seqs[i] = b.ids }
+			var useCD *constDec
+			switch len(beams) {
+			case 1:
+				useCD = cd1
+			case 3:
+				useCD = cd3
+			default: // defensive: rebuild for odd batch sizes
+				useCD = constDecBatch(encMask, encHidden, len(beams))
+			}
+			t0 := time.Now()
+			rows, err := decodeStepB(dec, useCD, seqs, oneOut)
+			if err != nil { fatal("decodeStepB: %v", err) }
+			traceT("dec", fmt.Sprintf("B%dL%d", len(beams), len(seqs[0])), time.Since(t0))
+			for i, b := range beams {
+				t6 := topKLogSoftmax(rows[i], 2*numBeams)
+				de := dumpBeam{Ids: append([]int64{}, b.ids...), Score: b.score}
+				for _, c := range t6 { de.Top6 = append(de.Top6, [2]any{c.tok, c.logp}) }
+				db = append(db, de)
+				for _, c := range t6 {
+					all = append(all, hyp{
+						ids:   append(append([]int64{}, b.ids...), c.tok),
+						score: b.score + c.logp,
+					})
+				}
 			}
 		}
 		dumpStep("nocache", decLen, db)
