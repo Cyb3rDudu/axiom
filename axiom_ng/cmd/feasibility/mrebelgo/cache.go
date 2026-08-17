@@ -137,7 +137,7 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 		for _, h := range all {
 			if len(next) >= numBeams { break }
 			if h.ids[len(h.ids)-1] == eosID {
-				done = append(done, hyp{ids: h.ids, score: h.score})
+				addHyp(&done, hyp{ids: h.ids, score: h.score}) // BeamHypotheses eviction, wie no-cache
 				continue
 			}
 			next = append(next, h)
@@ -147,7 +147,7 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 	}
 	for _, b := range beams {
 		if len(done) >= numReturn { break }
-		done = append(done, hyp{ids: b.ids, score: b.score})
+		addHyp(&done, hyp{ids: b.ids, score: b.score})
 	}
 	sort.SliceStable(done, func(i, j int) bool { return done[i].score > done[j].score })
 	if len(done) > numReturn { done = done[:numReturn] }
