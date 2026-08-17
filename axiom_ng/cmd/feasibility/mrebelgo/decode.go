@@ -30,9 +30,8 @@ func loadAddedTokens(mdir string) {
 // rendered as their literal strings inline (e.g. <triplet>, tp_XX, en_XX); <pad>(1) and </s>(2) omitted.
 func decodeSeq(tok *sentencepiece.Tokenizer, ids []int64) string {
 	var sb strings.Builder
-	build := func() {}
-	_ = build
 	var baseRun []int
+	lastSpecial := false // whether the previous emitted token was a special (no space between specials)
 	flush := func() {
 		if len(baseRun) == 0 { return }
 		txt, err := tok.Decode(baseRun)
@@ -40,13 +39,17 @@ func decodeSeq(tok *sentencepiece.Tokenizer, ids []int64) string {
 			sb.WriteString(cleanText(txt, sb.Len() > 0))
 		}
 		baseRun = baseRun[:0]
+		lastSpecial = false
 	}
 	for i, id := range ids {
 		if id == eosID && i > 0 { continue } // skip internal </s> (matches caller truncating at first eos)
 		if id == 1 { continue }              // <pad>
 		if str, ok := addedTokens[int32(id)]; ok {
 			flush()
+			// HF puts a space before a special unless it directly follows another special.
+			if sb.Len() > 0 && !lastSpecial { sb.WriteByte(' ') }
 			sb.WriteString(str)
+			lastSpecial = true
 			continue
 		}
 		if id < 0 || id >= vocab { continue }
