@@ -218,45 +218,28 @@ func step1(s *ort.DynamicAdvancedSession, encHidden []float32, encMask []int64, 
 func stepN(s *ort.DynamicAdvancedSession, tokID int64,
 	pastDec []*ort.Tensor[float32], pastEnc []*ort.Tensor[float32],
 	encMask []int64, encLen, decLen int64) ([]float32, []*ort.Tensor[float32]) {
-	msh := ort.NewShape(1, encLen)
-	tm, _ := ort.NewTensor(msh, encMask)
-	sh := ort.NewShape(1, 1)
-	tid, _ := ort.NewTensor(sh, []int64{tokID})
-
-	feeds := make([]ort.Value, 0, 50)
-	feeds = append(feeds, tm, tid)
-	if os.Getenv("MRBEL_DEBUG") == "1" && tokID == tpXX {
-		fmt.Fprintf(os.Stderr, "   stepN RECEIVED pastDec len=%d pastEnc len=%d pastDec[0] shape=%v pastEnc[0] shape=%v\n",
-			len(pastDec), len(pastEnc), pastDec[0].GetShape(), pastEnc[0].GetShape())
+	// ---- godec1-identical implementation ----
+	tm, _ := ort.NewTensor(ort.NewShape(1, encLen), encMask)
+	tid, _ := ort.NewTensor(ort.NewShape(1, 1), []int64{tokID})
+	feeds := []ort.Value{tm, tid}
+	for l := 0; l < 12; l++ {
+		feeds = append(feeds, pastDec[2*l], pastDec[2*l+1], pastEnc[2*l], pastEnc[2*l+1])
 	}
-	// per layer: dec.k,dec.v,enc.k,enc.v
-	for l := 0; l < nLayers; l++ {
-		feeds = append(feeds, pastDec[2*l], pastDec[2*l+1])
-		feeds = append(feeds, pastEnc[2*l], pastEnc[2*l+1])
-	}
-
-	outNames := decKOutputs()
-	outT := make([]*ort.Tensor[float32], len(outNames))
-	outs := make([]ort.Value, len(outNames))
-	logits, err := ort.NewEmptyTensor[float32](ort.NewShape(1, 1, vocab))
-	if err != nil { fatal("stepN logits: %v", err) }
-	outT[0] = logits; outs[0] = logits
-	for i := 1; i < len(outNames); i++ {
-		t, err := ort.NewEmptyTensor[float32](ort.NewShape(1, heads, decLen+1, headDim))
-		if err != nil { fatal("stepN out: %v", err) }
-		outT[i] = t; outs[i] = t
-	}
-	names := decKInputs()
-	if os.Getenv("MRBEL_DEBUG") == "1" && tokID == tpXX {
-		for i, fv := range feeds {
-			if t, ok := fv.(*ort.Tensor[float32]); ok {
-				fmt.Fprintf(os.Stderr, "   stepN feed[%d] name=%s shape=%v\n", i, names[i], t.GetShape())
-			} else {
-				fmt.Fprintf(os.Stderr, "   stepN feed[%d] name=%s non-tensor\n", i, names[i])
-			}
+	logits, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, 1, 250071))
+	outsV := []ort.Value{logits}
+	for l := 0; l < 12; l++ {
+		for k := 0; k < 2; k++ {
+			t, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, 16, int64(decLen)+1, 64))
+			outsV = append(outsV, t)
 		}
 	}
-	if err := s.Run(feeds, outs); err != nil { fatal("stepN: %v", err) }
+	if err := s.Run(feeds, outsV); err != nil { fatal("stepN: %v", err) }
 	tm.Destroy(); tid.Destroy()
+	// repack outputs: logits + 24 present (per layer dec.k, dec.v)
+	outT := make([]*ort.Tensor[float32], 0, 25)
+	outT = append(outT, logits)
+	for l := 0; l < 12; l++ {
+		outT = append(outT, outsV[1+2*l].(*ort.Tensor[float32]), outsV[2+2*l].(*ort.Tensor[float32]))
+	}
 	return logits.GetData(), outT
 }
