@@ -96,7 +96,9 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"status":"ok"}`)
 	})
-	addr := "127.0.0.1:" + port
+	bind := os.Getenv("MINI_RUNNER_BIND")
+	if bind == "" { bind = "127.0.0.1" }
+	addr := bind + ":" + port
 	log.Printf("mini-go-runner listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
