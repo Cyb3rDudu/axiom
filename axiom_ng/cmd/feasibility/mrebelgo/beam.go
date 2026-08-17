@@ -43,6 +43,9 @@ func beamSearchFull(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvance
 		for i := 0; i < 4; i++ { fmt.Fprintf(os.Stderr, "  pastDec0[%d] shape=%v\n", i, pastDec0[i].GetShape()) }
 		for i := 0; i < 4; i++ { fmt.Fprintf(os.Stderr, "  pastEnc[%d]  shape=%v\n", i, pastEnc[i].GetShape()) }
 	}
+	// fresh copies as stepN inputs (avoids reusing step1 output OrtValues directly)
+	pastDec0 = deepCloneCache(pastDec0)
+	pastEnc = deepCloneCache(pastEnc)
 	beams := []*beam{{ids: []int64{tpXX}, score: 0, past: pastDec0}}
 
 	finished := make([]*beam, 0, numReturn)
