@@ -33,16 +33,22 @@ func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, c
 	decLen := 0
 	for !beamDone(done, beams) && len(beams) > 0 && decLen < maxDec {
 		all := make([]hyp, 0, len(beams)*(2*numBeams))
+		db := []dumpBeam{}
 		for _, b := range beams {
 			logP, err := decodeStep(dec, cd, b.ids, oneOut)
 			if err != nil { fatal("decodeStep: %v", err) }
-			for _, c := range topKIndices(logP, 2*numBeams) {
+			t6 := topKIndices(logP, 2*numBeams)
+			de := dumpBeam{Ids: append([]int64{}, b.ids...), Score: b.score}
+			for _, c := range t6 { de.Top6 = append(de.Top6, [2]any{c.tok, c.logp}) }
+			db = append(db, de)
+			for _, c := range t6 {
 				all = append(all, hyp{
 					ids:   append(append([]int64{}, b.ids...), c.tok),
 					score: b.score + c.logp,
 				})
 			}
 		}
+		dumpStep("nocache", decLen, db)
 		sort.SliceStable(all, func(i, j int) bool { return all[i].score > all[j].score })
 		// select the top numBeams candidates; EOS candidates -> done (with eviction),
 		// non-EOS -> open beams for the next round.

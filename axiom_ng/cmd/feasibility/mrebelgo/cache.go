@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/tggo/goSentencePiece"
 	ort "github.com/yalue/onnxruntime_go"
@@ -28,6 +29,7 @@ type hypC struct {
 // step1Cached runs decoder_model.onnx for the first decoder token (tp_XX).
 // Returns logits [1,1,vocab], 24 decoder-cache tensors, 24 constant encoder-cache tensors.
 func step1Cached(dec1 *ort.DynamicAdvancedSession, encHidden []float32, encMask []int64, encLen int64) ([]float32, []*ort.Tensor[float32], []*ort.Tensor[float32]) {
+	t0 := time.Now()
 	tm, _ := ort.NewTensor(ort.NewShape(1, encLen), encMask)
 	defer tm.Destroy()
 	tid, _ := ort.NewTensor(ort.NewShape(1, 1), []int64{tpXX})
@@ -46,6 +48,7 @@ func step1Cached(dec1 *ort.DynamicAdvancedSession, encHidden []float32, encMask 
 		outs[i] = t
 	}
 	if err := dec1.Run([]ort.Value{tm, tid, th}, outs); err != nil { fatal("step1Cached: %v", err) }
+	traceT("step1", fmt.Sprintf("e%d", encLen), time.Since(t0))
 	decCache := make([]*ort.Tensor[float32], 0, 24)
 	encCache := make([]*ort.Tensor[float32], 0, 24)
 	for l := 0; l < nLayers; l++ {
@@ -60,6 +63,7 @@ func step1Cached(dec1 *ort.DynamicAdvancedSession, encHidden []float32, encMask 
 // tm and encCache are pre-created (constant across steps); only tid is new per call.
 func stepNCached(decK *ort.DynamicAdvancedSession, tokID int64,
 	decCache, encCache []*ort.Tensor[float32], tm *ort.Tensor[int64], encLen, decLen int64) ([]float32, []*ort.Tensor[float32]) {
+	t0 := time.Now()
 	tid, _ := ort.NewTensor(ort.NewShape(1, 1), []int64{tokID})
 	feeds := []ort.Value{tm, tid}
 	for l := 0; l < nLayers; l++ {
@@ -74,6 +78,7 @@ func stepNCached(decK *ort.DynamicAdvancedSession, tokID int64,
 		outs[i] = t
 	}
 	if err := decK.Run(feeds, outs); err != nil { fatal("stepNCached: %v", err) }
+	traceT("stepN", fmt.Sprintf("d%de%d", decLen, encLen), time.Since(t0))
 	tid.Destroy()
 	newDec := make([]*ort.Tensor[float32], 0, 24)
 	for l := 0; l < nLayers; l++ {
@@ -110,11 +115,16 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 	decLen := int64(1) // cache length after step1 (KV of tp_XX)
 	for !beamDoneC(done, beamToHypC(beams)) && len(beams) > 0 && decLen < int64(maxDec) {
 		all := make([]hypC, 0, len(beams)*(2*numBeams))
+		db := []dumpBeam{}
 		for _, b := range beams {
 			lastTok := b.ids[len(b.ids)-1]
 			rawLog, newCache := stepNCached(decK, lastTok, b.past, encCache, tm, encLen, decLen)
 			logP := logSoftmax(rawLog)
-			for _, c := range topKIndices(logP, 2*numBeams) {
+			t6 := topKIndices(logP, 2*numBeams)
+			de := dumpBeam{Ids: append([]int64{}, b.ids...), Score: b.score}
+			for _, c := range t6 { de.Top6 = append(de.Top6, [2]any{c.tok, c.logp}) }
+			db = append(db, de)
+			for _, c := range t6 {
 				all = append(all, hypC{
 					ids:   append(append([]int64{}, b.ids...), c.tok),
 					score: b.score + c.logp,
@@ -122,6 +132,7 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 				})
 			}
 		}
+		dumpStep("cached", int(decLen), db)
 		sort.SliceStable(all, func(i, j int) bool { return all[i].score > all[j].score })
 		next := []hypC{}
 		for _, h := range all {

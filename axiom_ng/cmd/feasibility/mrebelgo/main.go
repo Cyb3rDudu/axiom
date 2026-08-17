@@ -85,6 +85,7 @@ func main() {
 	tok, err := sentencepiece.NewTokenizer(mdir + "/sentencepiece.bpe.model")
 	if err != nil { fatal("tok: %v", err) }
 	loadAddedTokens(mdir)
+	traceInit()
 
 	ort.SetSharedLibraryPath(lib)
 	if err := ort.InitializeEnvironment(); err != nil { fatal("ort: %v", err) }
@@ -128,6 +129,7 @@ func main() {
 	for _, ci := range idxs {
 		c := chunks[ci]
 		if len(truncateRunes(c.Text, 1)) == 0 { continue }
+		curChunk = ci
 		start := time.Now()
 		inputText := truncateRunes(c.Text, 1500) // Python slices by code points, NOT bytes
 		goIDs, _ := tok.Encode(inputText)
@@ -204,6 +206,7 @@ func newDyn(path string, in, out []string, opts *ort.SessionOptions) *ort.Dynami
 }
 
 func runEncoder(s *ort.DynamicAdvancedSession, ids, mask []int64) []float32 {
+	t0 := time.Now()
 	n := int64(len(ids))
 	tids, _ := ort.NewTensor(ort.NewShape(1, n), ids)
 	defer tids.Destroy()
@@ -212,6 +215,7 @@ func runEncoder(s *ort.DynamicAdvancedSession, ids, mask []int64) []float32 {
 	o, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, n, 1024))
 	defer o.Destroy()
 	if err := s.Run([]ort.Value{tids, tmask}, []ort.Value{o}); err != nil { fatal("enc: %v", err) }
+	traceT("enc", fmt.Sprintf("e%d", n), time.Since(t0))
 	return o.GetData()
 }
 
@@ -231,6 +235,7 @@ func (c *constDec) Destroy() {
 // returns the log-probs at the LAST position. Only tid + the logits output are allocated
 // per call (enc_mask/enc_hidden tensors are reused via constDec).
 func decodeStep(dec *ort.DynamicAdvancedSession, cd *constDec, ids []int64, oneOutput bool) ([]float64, error) {
+	t0 := time.Now()
 	L := int64(len(ids))
 	tid, _ := ort.NewTensor(ort.NewShape(1, L), ids)
 	defer tid.Destroy()
@@ -251,6 +256,7 @@ func decodeStep(dec *ort.DynamicAdvancedSession, cd *constDec, ids []int64, oneO
 		}
 	}
 	if err := dec.Run([]ort.Value{cd.tm, tid, cd.th}, outsV); err != nil { return nil, err }
+	traceT("dec", fmt.Sprintf("L%d", L), time.Since(t0))
 	base := logits.GetData()
 	last := base[(L-1)*vocab : L*vocab]
 	return logSoftmax(last), nil
