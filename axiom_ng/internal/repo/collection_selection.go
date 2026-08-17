@@ -10,6 +10,9 @@
 //  3. Document rows adjust the base: 'excluded' ALWAYS removes (beats
 //     collection-include); 'included' never adds (collection-exclude beats
 //     doc-include) — a doc-include is bookkeeping, not resurrection.
+//  4. The one-run document override INCLUDE is a no-op whenever collection
+//     selections exist (it must not resurrect outside the base); the
+//     override EXCLUDE always applies.
 package repo
 
 import (
@@ -26,32 +29,10 @@ type CollectionSelectionInput struct {
 }
 
 // SetCollectionSelections applies a collection-selection batch (same
-// semantics as the document selection).
+// semantics as the document selection). Delegates to SetSelectionBatch —
+// one transaction, one code path.
 func (r *Repo) SetCollectionSelections(ctx context.Context, in []CollectionSelectionInput) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	for _, s := range in {
-		switch s.Mode {
-		case "included", "excluded":
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO zotero_collection_selections (collection_key, mode, updated_at)
-				VALUES ($1, $2, now())
-				ON CONFLICT (collection_key) DO UPDATE SET mode=EXCLUDED.mode, updated_at=now()`,
-				s.CollectionKey, s.Mode); err != nil {
-				return err
-			}
-		case "default", "":
-			if _, err := tx.Exec(ctx, `DELETE FROM zotero_collection_selections WHERE collection_key=$1`, s.CollectionKey); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("invalid collection selection mode %q", s.Mode)
-		}
-	}
-	return tx.Commit(ctx)
+	return r.SetSelectionBatch(ctx, nil, in)
 }
 
 // CollectionSelectionModes returns the persisted collection selection map.
@@ -240,8 +221,10 @@ func (r *Repo) ResolveSelectionView(ctx context.Context) (*ResolvedSelection, er
 	sort.Slice(out.Collections, func(i, j int) bool {
 		return out.Collections[i].CollectionKey < out.Collections[j].CollectionKey
 	})
-	if gate, err := r.ResolveEffectiveSelection(ctx, nil, nil); err == nil {
-		out.Suppressed = len(gate)
+	gate, err := r.ResolveEffectiveSelection(ctx, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("resolving effective selection: %w", err)
 	}
+	out.Suppressed = len(gate)
 	return out, nil
 }

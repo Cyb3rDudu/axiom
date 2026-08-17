@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -45,25 +46,8 @@ func (s *stubSelection) SetSelectionBatch(ctx context.Context, docs []repo.Selec
 	return s.err
 }
 
-func (s *stubSelection) SetSelections(ctx context.Context, in []repo.SelectionInput) error {
-	s.put = in
-	for _, e := range in {
-		if e.Mode == "default" || e.Mode == "" {
-			delete(s.mode, e.DocumentID)
-		} else {
-			s.mode[e.DocumentID] = e.Mode
-		}
-	}
-	return s.err
-}
-
 func (s *stubSelection) SelectionModes(ctx context.Context) (map[string]string, error) {
 	return s.mode, s.err
-}
-
-func (s *stubSelection) SetCollectionSelections(ctx context.Context, in []repo.CollectionSelectionInput) error {
-	s.collsPut = in
-	return s.err
 }
 
 func (s *stubSelection) CollectionSelectionModes(ctx context.Context) (map[string]string, error) {
@@ -71,7 +55,14 @@ func (s *stubSelection) CollectionSelectionModes(ctx context.Context) (map[strin
 }
 
 func (s *stubSelection) ResolveSelectionView(ctx context.Context) (*repo.ResolvedSelection, error) {
-	return &repo.ResolvedSelection{Documents: s.mode, Collections: []repo.ResolvedCollection{}}, s.err
+	// Mirrors the real repo: the resolved view EXPANDS the stub's own
+	// collection state — a hardcoded empty list once hollowed out the
+	// witness's resolved leg (the exact wiring-gap class this feature ships).
+	out := &repo.ResolvedSelection{Documents: s.mode, Collections: []repo.ResolvedCollection{}}
+	for k, m := range s.colls {
+		out.Collections = append(out.Collections, repo.ResolvedCollection{CollectionKey: k, Mode: m, DocumentIDs: []string{}})
+	}
+	return out, s.err
 }
 
 func (s *stubSelection) ListZoteroDocuments(ctx context.Context, syncState string) ([]repo.ZoteroDocumentState, error) {
@@ -148,6 +139,20 @@ func TestSelectionRouteWitness_CollectionsThroughHTTP(t *testing.T) {
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/zotero/selection/resolved", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("resolved: %d %s", rec.Code, rec.Body.String())
+	}
+	var resolved struct {
+		Collections []struct {
+			CollectionKey string   `json:"collection_key"`
+			Mode          string   `json:"mode"`
+			DocumentIDs   []string `json:"document_ids"`
+		} `json:"collections"`
+		Documents map[string]string `json:"documents"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resolved); err != nil {
+		t.Fatalf("resolved body: %v (%s)", err, rec.Body.String())
+	}
+	if len(resolved.Collections) != 1 || resolved.Collections[0].CollectionKey != "VWLPRAXY" || resolved.Collections[0].Mode != "included" {
+		t.Fatalf("resolved must expand the persisted collection selection, got %+v", resolved.Collections)
 	}
 }
 

@@ -14,6 +14,8 @@ import (
 // SyncService is what the server needs to trigger a Zotero sync.
 // SyncOverrideBody is the optional POST /api/zotero/sync body (#166):
 // one-run include/exclude document lists on top of the persisted selection.
+// With collection selections active, an INCLUDE never resurrects a document
+// outside the collection base; an EXCLUDE always applies.
 type SyncOverrideBody struct {
 	Include []string `json:"include"`
 	Exclude []string `json:"exclude"`

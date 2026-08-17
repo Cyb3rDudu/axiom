@@ -17,9 +17,7 @@ import (
 // SelectionRepo is what the selection + documents routes need (repo.Repo).
 type SelectionRepo interface {
 	SetSelectionBatch(ctx context.Context, docs []repo.SelectionInput, colls []repo.CollectionSelectionInput) error
-	SetSelections(ctx context.Context, in []repo.SelectionInput) error
 	SelectionModes(ctx context.Context) (map[string]string, error)
-	SetCollectionSelections(ctx context.Context, in []repo.CollectionSelectionInput) error
 	CollectionSelectionModes(ctx context.Context) (map[string]string, error)
 	ResolveSelectionView(ctx context.Context) (*repo.ResolvedSelection, error)
 	ListZoteroDocuments(ctx context.Context, syncState string) ([]repo.ZoteroDocumentState, error)

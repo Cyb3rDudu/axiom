@@ -7,7 +7,10 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
@@ -205,5 +208,64 @@ func TestEffectiveSelection(t *testing.T) {
 	}
 	if JobGated(nil, "any") {
 		t.Fatal("nil selection never gates")
+	}
+}
+
+// Hivemind Fix-Auftrag 1 (#166): SetSelectionBatch is ALL-OR-NOTHING. A
+// bogus document id (FK 23503) mid-batch must roll back the whole write —
+// a half-applied selection would silently flip the other layer's sync
+// semantics. The valid-batch control first proves the empty end state is
+// not vacuous.
+func TestSetSelectionBatchAtomicityIT(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	ch := "hash-atomic"
+	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.atomic", libraryID: "lib-1",
+		docKey: "ATOM1", attKey: "ATOMATT1", contentHash: &ch}, "completed", 1)
+	var docID string
+	if err := lr.pool.QueryRow(ctx, `SELECT document_id::text FROM zotero_attachments WHERE id=$1`, attID).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Control: a valid batch persists BOTH layers.
+	if err := lr.rep.SetSelectionBatch(ctx,
+		[]SelectionInput{{DocumentID: docID, Mode: "included"}},
+		[]CollectionSelectionInput{{CollectionKey: "ATOMIC01", Mode: "included"}}); err != nil {
+		t.Fatalf("valid batch: %v", err)
+	}
+	if m, _ := lr.rep.SelectionModes(ctx); m[docID] != "included" {
+		t.Fatalf("control: document row must persist, got %v", m)
+	}
+	if m, _ := lr.rep.CollectionSelectionModes(ctx); m["ATOMIC01"] != "included" {
+		t.Fatalf("control: collection row must persist, got %v", m)
+	}
+
+	// Reset both to default, then the probe: valid doc entry + valid
+	// collection entry + BOGUS document id in ONE batch.
+	if err := lr.rep.SetSelectionBatch(ctx,
+		[]SelectionInput{{DocumentID: docID, Mode: "default"}},
+		[]CollectionSelectionInput{{CollectionKey: "ATOMIC01", Mode: "default"}}); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	err := lr.rep.SetSelectionBatch(ctx,
+		[]SelectionInput{
+			{DocumentID: docID, Mode: "included"},
+			{DocumentID: "00000000-0000-4000-8000-00000000dead", Mode: "included"},
+		},
+		[]CollectionSelectionInput{{CollectionKey: "ATOMIC01", Mode: "included"}})
+	if err == nil {
+		t.Fatal("bogus document id must fail the batch")
+	}
+	var fk *pgconn.PgError
+	if !errors.As(err, &fk) || fk.Code != "23503" {
+		t.Fatalf("want FK 23503, got %v", err)
+	}
+	if m, _ := lr.rep.SelectionModes(ctx); len(m) != 0 {
+		t.Fatalf("document rows must NOT persist after the failed batch: %v", m)
+	}
+	if m, _ := lr.rep.CollectionSelectionModes(ctx); len(m) != 0 {
+		t.Fatalf("collection rows must NOT persist after the failed batch: %v", m)
 	}
 }

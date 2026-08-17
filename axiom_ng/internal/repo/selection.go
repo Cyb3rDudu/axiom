@@ -15,34 +15,12 @@ type SelectionInput struct {
 	Mode       string `json:"mode"`
 }
 
-// SetSelections applies a selection batch in one transaction: upserts for
-// included/excluded, row deletion for default. Unknown document ids error
-// (FK) — a client naming a nonexistent document should hear about it.
+// SetSelections applies a document-only selection batch (the IT helper).
+// Unknown document ids error (FK) — a client naming a nonexistent document
+// should hear about it. Delegates to SetSelectionBatch: one code path, one
+// transaction, no SQL drift between the singles and the combined write.
 func (r *Repo) SetSelections(ctx context.Context, in []SelectionInput) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	for _, s := range in {
-		switch s.Mode {
-		case "included", "excluded":
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO zotero_selections (document_id, mode, updated_at)
-				VALUES ($1::uuid, $2, now())
-				ON CONFLICT (document_id) DO UPDATE SET mode=EXCLUDED.mode, updated_at=now()`,
-				s.DocumentID, s.Mode); err != nil {
-				return err
-			}
-		case "default", "":
-			if _, err := tx.Exec(ctx, `DELETE FROM zotero_selections WHERE document_id=$1::uuid`, s.DocumentID); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("invalid selection mode %q", s.Mode)
-		}
-	}
-	return tx.Commit(ctx)
+	return r.SetSelectionBatch(ctx, in, nil)
 }
 
 // SelectionModes returns the persisted selection map (absent = default).
