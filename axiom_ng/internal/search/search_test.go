@@ -159,10 +159,19 @@ func newOSServer(t *testing.T) *osServer {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if rawQ, _ := json.Marshal(body["query"]); strings.Contains(string(rawQ), "attachment_id") {
-			// neighbor query: attachment term filter + chunk_index range filter
+			// neighbor query: attachment term filter + chunk_index range filter,
+			// modeled with OS semantics — size truncates BEFORE the caller can
+			// filter, and must_not excludes its term — so window bugs in the
+			// query can't hide behind stub leniency again (auto-review C1).
 			var att string
 			lo, hi := -1, -1
-			if filters, ok := body["query"].(map[string]any)["bool"].(map[string]any)["filter"].([]any); ok {
+			size := 10 // OpenSearch default
+			var excluded string
+			if v, ok := body["size"].(float64); ok {
+				size = int(v)
+			}
+			b, _ := body["query"].(map[string]any)["bool"].(map[string]any)
+			if filters, ok := b["filter"].([]any); ok {
 				for _, f := range filters {
 					fm, _ := f.(map[string]any)
 					if term, ok := fm["term"].(map[string]any); ok {
@@ -185,13 +194,29 @@ func newOSServer(t *testing.T) *osServer {
 					}
 				}
 			}
+			if mustNots, ok := b["must_not"].([]any); ok {
+				for _, m := range mustNots {
+					fm, _ := m.(map[string]any)
+					if term, ok := fm["term"].(map[string]any); ok {
+						switch inner := term["chunk_id.keyword"].(type) {
+						case string:
+							excluded = inner
+						case map[string]any:
+							excluded, _ = inner["term"].(string)
+						}
+					}
+				}
+			}
 			fxs := make([]chunkFixture, 0, 2)
 			for _, fx := range s.docChunks {
-				if fx.AttachmentID == att && fx.ChunkIndex >= lo && fx.ChunkIndex <= hi {
+				if fx.AttachmentID == att && fx.ChunkIndex >= lo && fx.ChunkIndex <= hi && fx.ChunkID != excluded {
 					fxs = append(fxs, fx)
 				}
 			}
 			sort.Slice(fxs, func(i, j int) bool { return fxs[i].ChunkIndex < fxs[j].ChunkIndex })
+			if len(fxs) > size {
+				fxs = fxs[:size]
+			}
 			hits := make([]map[string]any, 0, len(fxs))
 			for _, fx := range fxs {
 				hits = append(hits, map[string]any{"_id": fx.ChunkID, "_source": fx})

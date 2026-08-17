@@ -109,7 +109,20 @@ func (c *osClient) osGet(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if hres.StatusCode != http.StatusOK && hres.StatusCode != http.StatusNotFound {
+	if hres.StatusCode != http.StatusOK {
+		// A 404 is "not found" ONLY for a doc-shaped body ({"found":false});
+		// a missing/unavailable index answers 404 with an "error" root —
+		// that is an outage and must surface as an error (→ route 503),
+		// not as found:false.
+		if hres.StatusCode == http.StatusNotFound {
+			var probe struct {
+				Error json.RawMessage `json:"error"`
+			}
+			if jerr := json.Unmarshal(rb, &probe); jerr == nil && len(probe.Error) > 0 && string(probe.Error) != "null" {
+				return nil, fmt.Errorf("opensearch %s: status %d: %s", url, hres.StatusCode, truncateChars(string(rb), 300))
+			}
+			return rb, nil
+		}
 		return nil, fmt.Errorf("opensearch %s: status %d: %s", url, hres.StatusCode, truncateChars(string(rb), 300))
 	}
 	return rb, nil
@@ -171,19 +184,28 @@ func (s *Service) GetPassage(ctx context.Context, chunkID string) (*Passage, err
 
 // fetchNeighbors pulls chunk_index ± 1 within the SAME attachment (attachment
 // = book file: the boundary is respected structurally — the first/last chunk
-// of a book yields at most one neighbor), excluding the center chunk itself.
-// Failures degrade to none (logged).
+// of a book yields at most one neighbor). The center chunk is excluded IN THE
+// QUERY (must_not) so size:2 never wastes a slot on it; the residual
+// client-side check is defense in depth. Failures degrade to none (logged).
 func (s *Service) fetchNeighbors(ctx context.Context, attachmentID string, idx int, centerChunkID string) []PassageNeighbor {
 	lo, hi := idx-1, idx+1
 	if lo < 0 {
 		lo = 0
 	}
 	body := map[string]any{
+		// The window [idx-1, idx+1] matches the CENTER chunk too — without the
+		// must_not, OpenSearch truncates to size BEFORE the client-side
+		// exclusion, so a middle chunk loses its +1 neighbor to its own entry.
 		"size": 2,
-		"query": map[string]any{"bool": map[string]any{"filter": []any{
-			map[string]any{"term": map[string]any{"attachment_id.keyword": attachmentID}},
-			map[string]any{"range": map[string]any{"chunk_index": map[string]any{"gte": lo, "lte": hi}}},
-		}}},
+		"query": map[string]any{"bool": map[string]any{
+			"filter": []any{
+				map[string]any{"term": map[string]any{"attachment_id.keyword": attachmentID}},
+				map[string]any{"range": map[string]any{"chunk_index": map[string]any{"gte": lo, "lte": hi}}},
+			},
+			"must_not": []any{
+				map[string]any{"term": map[string]any{"chunk_id.keyword": centerChunkID}},
+			},
+		}},
 		"_source": []string{"chunk_id", "chunk_index", "text", "section_titles", "locator"},
 		"sort":    []map[string]any{{"chunk_index": "asc"}},
 	}

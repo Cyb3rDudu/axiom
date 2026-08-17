@@ -127,17 +127,19 @@ func writeKGResult(w http.ResponseWriter, res any, err error) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// kgSources collects evidence chunk ids from any KG result shape and
-// hydrates them via the search service; returns nil when nothing to do.
-func (s *Server) kgSources(r *http.Request, res any) map[string]repo.SourceView {
+// kgSources collects evidence chunk ids from the KG result and hydrates
+// them via the search service. The second return says whether the result
+// shape is envelope-eligible AT ALL (neighbors/relations carry evidence ids;
+// entities don't) — the envelope decision is per-configuration, so an empty
+// or failed hydration still yields {"sources":{}}, keeping the top-level
+// shape deterministic instead of flapping with request health.
+func (s *Server) kgSources(r *http.Request, res any) (map[string]repo.SourceView, bool) {
 	h, ok := s.searchSvc.(KGSourceHydrator)
 	if !ok || h == nil {
-		return nil
+		return nil, false
 	}
 	var ids []string
 	switch v := res.(type) {
-	// KGEntity carries no evidence chunk ids (mention counts only);
-	// hydration applies to neighbors and relations.
 	case []repo.KGNeighbor:
 		for _, e := range v {
 			ids = append(ids, e.EvidenceChunks...)
@@ -146,28 +148,32 @@ func (s *Server) kgSources(r *http.Request, res any) map[string]repo.SourceView 
 		for _, e := range v {
 			ids = append(ids, e.EvidenceChunks...)
 		}
-	}
-	if len(ids) == 0 {
-		return nil
+	default:
+		return nil, false
 	}
 	src, err := h.KGSources(r.Context(), ids)
 	if err != nil {
 		s.log.Printf("kg: source hydration failed (serving without): %v", err)
-		return nil
+		src = map[string]repo.SourceView{} // degrade to empty envelope, not a shape flip
 	}
-	return src
+	return src, true
 }
 
-// writeKG writes a KG result, enriched with the unified SourceView map
-// (A1 #165) when the search service provides hydration: the response becomes
-// {"sources": {chunk_id: SourceView}, "<kind>": <raw list>} — additive; the
-// raw-list shape is kept untouched when no sources hydrate.
+// writeKG writes a KG result. When the search service provides hydration and
+// the shape carries evidence ids (neighbors/relations), the response is
+// ALWAYS the envelope {"<kind>": <raw list>, "sources": {chunk_id:
+// SourceView}} — even when sources is empty, so the top-level shape is a
+// property of the configuration, not of request health. Without a hydrator
+// the response stays the bare raw list.
 func (s *Server) writeKG(w http.ResponseWriter, r *http.Request, kind string, res any, err error) {
 	if err != nil {
 		writeKGResult(w, res, err)
 		return
 	}
-	if src := s.kgSources(r, res); len(src) > 0 {
+	if src, envelope := s.kgSources(r, res); envelope {
+		if src == nil {
+			src = map[string]repo.SourceView{}
+		}
 		writeJSON(w, http.StatusOK, map[string]any{kind: res, "sources": src})
 		return
 	}

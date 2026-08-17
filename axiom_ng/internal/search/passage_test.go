@@ -7,6 +7,8 @@ package search
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
@@ -21,13 +23,6 @@ func (l *livenessDocs) ChunkLiveness(ctx context.Context, chunkID string) (*repo
 	return l.liveness[chunkID], nil
 }
 
-func passageFixture() (*osServer, chunkFixture) {
-	os := newOSServer(nil) // replaced by caller with t
-	_ = os
-	cf := chunkFixture{}
-	return nil, cf
-}
-
 func seedPassageChunks(t *testing.T) *osServer {
 	t.Helper()
 	os := newOSServer(t)
@@ -38,7 +33,7 @@ func seedPassageChunks(t *testing.T) *osServer {
 			AttachmentID: att, ChunkIndex: i,
 			Text:     textFor(i),
 			Sections: []string{"2 Grundlagen", "2.1 Stakeholder"},
-			Locator:  json.RawMessage(`{"type":"page_span","page_label_start":"2` + jsonInt(i) + `","physical_page_start":` + jsonInt(i+28) + `}`),
+			Locator:  json.RawMessage(`{"type":"page_span","page_label_start":"2` + strconv.Itoa(i) + `","physical_page_start":` + strconv.Itoa(i+28) + `}`),
 		}
 		os.docChunks[fx.ChunkID] = fx
 	}
@@ -50,15 +45,10 @@ func seedPassageChunks(t *testing.T) *osServer {
 }
 
 func chunkIDFor(i int) string {
-	return "00000000-0000-4000-8000-00000000000" + jsonInt(i)
+	return "00000000-0000-4000-8000-00000000000" + strconv.Itoa(i)
 }
 
-func textFor(i int) string { return "Fachtext Chunk " + jsonInt(i) }
-
-func jsonInt(i int) string {
-	b, _ := json.Marshal(i)
-	return string(b)
-}
+func textFor(i int) string { return "Fachtext Chunk " + strconv.Itoa(i) }
 
 func richMeta() fakeDocs {
 	y := 2020
@@ -95,7 +85,12 @@ func TestGetPassage_FullEvidence(t *testing.T) {
 	if p.Neighbors[0].ChunkIndex != 0 || p.Neighbors[1].ChunkIndex != 2 {
 		t.Fatalf("neighbor order wrong: %+v", p.Neighbors)
 	}
+	// payload pin: a neighbor is a citation surface of its own — empty text,
+	// section or locator would marshal as such and stay green unnoticed.
 	for _, n := range p.Neighbors {
+		if n.Text == "" || len(n.Section) == 0 || n.Locator.Label == "" {
+			t.Fatalf("neighbor payload incomplete: %+v", n)
+		}
 		if n.ChunkID == "99999999-9999-4999-8999-999999999999" {
 			t.Fatalf("cross-attachment leak: %+v", n)
 		}
@@ -112,6 +107,19 @@ func TestGetPassage_FirstChunkOneNeighbor(t *testing.T) {
 	}
 	if len(p.Neighbors) != 1 || p.Neighbors[0].ChunkIndex != 1 {
 		t.Fatalf("first chunk must have exactly the +1 neighbor: %+v", p.Neighbors)
+	}
+}
+
+// Edge: LAST chunk of a book has exactly ONE neighbor (−1).
+func TestGetPassage_LastChunkOneNeighbor(t *testing.T) {
+	os := seedPassageChunks(t)
+	svc := newService(os.URL, &fakeProcessor{}, richMeta())
+	p, err := svc.GetPassage(context.Background(), chunkIDFor(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Neighbors) != 1 || p.Neighbors[0].ChunkIndex != 1 {
+		t.Fatalf("last chunk must have exactly the −1 neighbor: %+v", p.Neighbors)
 	}
 }
 
@@ -140,20 +148,12 @@ func TestGetPassage_InactiveSnapshotHint(t *testing.T) {
 	svc := newService(os.URL, &fakeProcessor{}, docs)
 	_, err := svc.GetPassage(context.Background(), "aaaaaaaa-0000-4000-8000-000000000001")
 	var inactive *InactiveSnapshotError
-	if err == nil || !asInactive(err, &inactive) {
+	if err == nil || !errors.As(err, &inactive) {
 		t.Fatalf("want InactiveSnapshotError, got %v", err)
 	}
 	if inactive.SnapshotID != "snap-old" || inactive.AttachmentID != "att-A" {
 		t.Fatalf("hint payload wrong: %+v", inactive)
 	}
-}
-
-func asInactive(err error, target **InactiveSnapshotError) bool {
-	if e, ok := err.(*InactiveSnapshotError); ok {
-		*target = e
-		return true
-	}
-	return false
 }
 
 // Plain unknown chunk: 404 without hint.
