@@ -13,7 +13,7 @@
 #   podman build -t localhost/study-mrebel-export -f axiom_ng/cmd/feasibility/Containerfile.mrebel-export .
 FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
 
-RUN pip install --no-cache-dir "transformers==4.42.4" "optimum==1.21.0" onnx 2>&1 | tail -2
+RUN pip install --no-cache-dir "transformers==4.42.4" "optimum==1.21.0" onnx onnxruntime 2>&1 | tail -2
 
 # export script + harness are copied at build time from the repo
 COPY axiom_ng/cmd/feasibility/mrebel_export/ /study/cmd/feasibility/mrebel_export/
