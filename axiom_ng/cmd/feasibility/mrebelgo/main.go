@@ -55,6 +55,9 @@ type chunk struct {
 	Doc  string `json:"doc"`
 	Text string `json:"text"`
 }
+
+// lastOut is true when the decoder session emits only "logits_last" ([B,1,vocab]).
+var lastOut bool
 type triple struct {
 	Head     string `json:"head"`
 	HeadType string `json:"head_type"`
@@ -99,12 +102,16 @@ func main() {
 	decModel := mdir + "/decoder_model.onnx"
 	decIn := []string{"encoder_attention_mask", "input_ids", "encoder_hidden_states"}
 	var decOut []string
-	if fileExists(mdir + "/decoder_logits.onnx") {
+	if fileExists(mdir + "/decoder_logits_last.onnx") {
+		decModel = mdir + "/decoder_logits_last.onnx" // Opt-4: [B,1,vocab] output — no L-sized logit download
+		decOut = []string{"logits_last"}
+	} else if fileExists(mdir + "/decoder_logits.onnx") {
 		decModel = mdir + "/decoder_logits.onnx"
 		decOut = []string{"logits"}
 	} else {
 		decOut = decOutputs()
 	}
+	lastOut = len(decOut) == 1 && decOut[0] == "logits_last"
 	decSess := newDyn(decModel, decIn, decOut, opts)
 	var decKSess, dec1Sess *ort.DynamicAdvancedSession
 	if os.Getenv("MRBEL_CACHE") == "1" {
@@ -255,7 +262,13 @@ func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, 
 	for _, s := range seqs { flat = append(flat, s...) }
 	tid, _ := ort.NewTensor(ort.NewShape(B, L), flat)
 	defer tid.Destroy()
-	logits, _ := ort.NewEmptyTensor[float32](ort.NewShape(B, L, vocab))
+	lastOnly := lastOut // "logits_last" graph outputs only the final position [B,1,vocab]
+	var logits *ort.Tensor[float32]
+	if lastOnly {
+		logits, _ = ort.NewEmptyTensor[float32](ort.NewShape(B, 1, vocab))
+	} else {
+		logits, _ = ort.NewEmptyTensor[float32](ort.NewShape(B, L, vocab))
+	}
 	defer logits.Destroy()
 	var outsV []ort.Value
 	if oneOutput {
@@ -276,7 +289,12 @@ func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, 
 	base := logits.GetData()
 	rows := make([][]float32, B)
 	for b := int64(0); b < B; b++ {
-		start := b*L*vocab + (L-1)*vocab
+		var start int64
+		if lastOnly {
+			start = b * vocab // [B,1,vocab]: row b starts at b*vocab
+		} else {
+			start = b*L*vocab + (L-1)*vocab
+		}
 		rows[b] = base[start : start+vocab]
 	}
 	return rows, nil
