@@ -92,14 +92,21 @@ func contains(s, sub string) bool {
 }
 
 // beamSearchCached: same beam semantics as beamSearch but using the KV-cache path.
+// Cache invariant: a beam's `past` holds the decoder KV-cache for ids[:len-1] (all but the
+// newest token); the newest token is the next stepN input. The first expansion uses step1's
+// logits directly (the cache after step1 = KV of tp_XX, which is ids[:0] of the candidates).
 func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvancedSession,
 	encHidden []float32, encMask []int64) []seq {
 	encLen := int64(len(encMask))
-	_, decCache0, encCache := step1Cached(dec1, encHidden, encMask, encLen)
-	beams := []hypC{{ids: []int64{tpXX}, score: 0, past: decCache0}}
+	logits1, decCache0, encCache := step1Cached(dec1, encHidden, encMask, encLen)
+	logP1 := logSoftmax(logits1)
+	beams := []hypC{}
+	for _, c := range topKIndices(logP1, 2*numBeams) {
+		beams = append(beams, hypC{ids: []int64{tpXX, c.tok}, score: c.logp, past: decCache0})
+	}
 	done := []hyp{}
-	decLen := int64(1)
-	for !beamDoneC(beamToHyp(done), beamToHypC(beams)) && len(beams) > 0 && decLen < int64(maxDec) {
+	decLen := int64(1) // cache length after step1 (KV of tp_XX)
+	for !beamDoneC(done, beamToHypC(beams)) && len(beams) > 0 && decLen < int64(maxDec) {
 		all := make([]hypC, 0, len(beams)*(2*numBeams))
 		for _, b := range beams {
 			lastTok := b.ids[len(b.ids)-1]
@@ -109,25 +116,20 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 				all = append(all, hypC{
 					ids:   append(append([]int64{}, b.ids...), c.tok),
 					score: b.score + c.logp,
-					past:  newCache, // shared within this beam's expansions; survivors keep it
+					past:  newCache, // KV for all tokens of this beam now (incl. lastTok)
 				})
 			}
 		}
 		sort.SliceStable(all, func(i, j int) bool { return all[i].score > all[j].score })
 		next := []hypC{}
-		kept := map[*ort.Tensor[float32]]bool{} // caches referenced by survivors
 		for _, h := range all {
 			if len(next) >= numBeams { break }
 			if h.ids[len(h.ids)-1] == eosID {
 				done = append(done, hyp{ids: h.ids, score: h.score})
-				kept[h.past[0]] = true
 				continue
 			}
 			next = append(next, h)
-			if h.past != nil { kept[h.past[0]] = true }
 		}
-		// free caches not referenced by survivors (PoC: keep it simple, leak-bounded)
-		_ = kept
 		beams = next
 		decLen++
 	}
