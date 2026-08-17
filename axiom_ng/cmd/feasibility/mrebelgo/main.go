@@ -19,7 +19,9 @@
 // Input tokenization (verified): goSentencePiece raw ids +1, prefix en_XX(250004),
 // suffix </s>(2), truncate to 512 — byte-identical to MBart50TokenizerFast.
 //
-// Usage: mrebelgo <dylib> <modeldir> <chunks.json> <chunk_idx> <out.json>
+// Usage: mrebelgo <dylib> <modeldir> <chunks.json> <chunks.idx.json> <out.json>
+//   chunks.idx.json = JSON array of chunk indices to process (matching pymrebel_ref schema:
+//   each result has idx, raw_sequences, triples, deduped first-seen across beams).
 package main
 
 import (
@@ -27,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/tggo/goSentencePiece"
 	ort "github.com/yalue/onnxruntime_go"
@@ -60,23 +63,25 @@ type triple struct {
 	Relation string `json:"relation"`
 }
 type chunkResult struct {
+	Idx          int      `json:"idx"`
 	RawSequences []string `json:"raw_sequences"`
 	Triples      []triple `json:"triples"`
 }
 
 func main() {
 	if len(os.Args) != 6 {
-		fmt.Fprintln(os.Stderr, "usage: mrebelgo <dylib> <modeldir> <chunks.json> <chunk_idx> <out.json>")
+		fmt.Fprintln(os.Stderr, "usage: mrebelgo <dylib> <modeldir> <chunks.json> <chunks.idx.json> <out.json>")
 		os.Exit(2)
 	}
 	lib, mdir, chunksPath := os.Args[1], os.Args[2], os.Args[3]
-	var ci int
-	fmt.Sscanf(os.Args[4], "%d", &ci)
-	outPath := os.Args[5]
+	idxPath, outPath := os.Args[4], os.Args[5]
 
 	raw, _ := os.ReadFile(chunksPath)
 	var chunks []chunk
 	json.Unmarshal(raw, &chunks)
+	idxRaw, _ := os.ReadFile(idxPath)
+	var idxs []int
+	json.Unmarshal(idxRaw, &idxs)
 	tok, err := sentencepiece.NewTokenizer(mdir + "/sentencepiece.bpe.model")
 	if err != nil { fatal("tok: %v", err) }
 	loadAddedTokens(mdir)
@@ -88,40 +93,38 @@ func main() {
 
 	encSess := newDyn(mdir+"/encoder_model.onnx",
 		[]string{"input_ids", "attention_mask"}, []string{"last_hidden_state"}, opts)
-	// decoder_model (with-past-task graph): enc_mask, input_ids, enc_hidden -> logits + present
 	decSess := newDyn(mdir+"/decoder_model.onnx",
 		[]string{"encoder_attention_mask", "input_ids", "encoder_hidden_states"},
 		decOutputs(), opts)
 
-	// encode chunk
-	c := chunks[ci]
-	inputText := truncateRunes(c.Text, 1500) // Python slices by code points, NOT bytes
-	goIDs, _ := tok.Encode(inputText)
-	encIDs := []int64{enXX}
-	for _, g := range goIDs { encIDs = append(encIDs, int64(g)+1) }
-	encIDs = append(encIDs, eosID)
-	if len(encIDs) > maxEnc { encIDs = encIDs[:maxEnc] }
-	mask := make([]int64, len(encIDs))
-	for i := range mask { mask[i] = 1 }
-	encHidden := runEncoder(encSess, encIDs, mask)
-	if os.Getenv("MRBEL_DUMP")=="1" {
-		d, _ := json.Marshal(map[string]any{"enc_len": len(encIDs), "enc_ids": encIDs, "enc_hidden": encHidden, "text": inputText, "go_ids_n": len(goIDs)})
-		os.WriteFile("/tmp/go_enc.json", d, 0o644)
-		fmt.Fprintln(os.Stderr, "dumped /tmp/go_enc.json")
-	}
+	results := make([]chunkResult, 0, len(idxs))
+	for _, ci := range idxs {
+		c := chunks[ci]
+		if len(truncateRunes(c.Text, 1)) == 0 { continue }
+		start := time.Now()
+		inputText := truncateRunes(c.Text, 1500) // Python slices by code points, NOT bytes
+		goIDs, _ := tok.Encode(inputText)
+		encIDs := []int64{enXX}
+		for _, g := range goIDs { encIDs = append(encIDs, int64(g)+1) }
+		encIDs = append(encIDs, eosID)
+		if len(encIDs) > maxEnc { encIDs = encIDs[:maxEnc] }
+		mask := make([]int64, len(encIDs))
+		for i := range mask { mask[i] = 1 }
+		encHidden := runEncoder(encSess, encIDs, mask)
 
-	// beam search + decode + parse
-	seqs := beamSearch(tok, decSess, encHidden, mask)
-	cr := chunkResult{}
-	for _, s := range seqs {
-		cr.RawSequences = append(cr.RawSequences, s.text)
-		for _, t := range parseTriples(s.text) { cr.Triples = append(cr.Triples, t) }
+		seqs := beamSearch(tok, decSess, encHidden, mask)
+		cr := chunkResult{Idx: ci}
+		for _, s := range seqs {
+			cr.RawSequences = append(cr.RawSequences, s.text)
+			for _, t := range parseTriples(s.text) { cr.Triples = append(cr.Triples, t) }
+		}
+		cr.Triples = dedupTriples(cr.Triples)
+		results = append(results, cr)
+		fmt.Fprintf(os.Stderr, "chunk %d: %d seqs, %d triples, %s\n", ci, len(cr.RawSequences), len(cr.Triples), time.Since(start).Round(time.Millisecond))
 	}
-	cr.Triples = dedupTriples(cr.Triples)
-	b, _ := json.MarshalIndent(cr, "", " ")
+	b, _ := json.MarshalIndent(results, "", " ")
 	os.WriteFile(outPath, b, 0o644)
-	fmt.Printf("chunk %d -> %d raw seqs, %d triples\n", ci, len(cr.RawSequences), len(cr.Triples))
-	for _, s := range cr.RawSequences { fmt.Println("SEQ:", s) }
+	fmt.Printf("wrote %d chunk results -> %s\n", len(results), outPath)
 }
 
 func decOutputs() []string { // logits + per-layer dec.k,dec.v,enc.k,enc.v (we only read logits)
