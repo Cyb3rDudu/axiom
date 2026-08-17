@@ -119,6 +119,55 @@ Kills den L-skalierten Logit-Download (~48 MB → 3 MB pro Call bei L=16).
 **Kampagnen-Stand:** Baseline 4,459 s → 0,249 s = **17,9×**; Ziel ≤ 0,2 s offen
 (Rest: ~78 ms Go-Overhead [72 TopK/LSE-Scans à 250k] + 171 ms ORT à 24 Calls).
 
+## Schritt 7 — Opt-5a/5b/6: die letzten Hebel, gemessen
+
+- **Opt-5a (parallele Beam-Scans):** die 3 TopK/LSE-Scans pro Call parallel (Goroutines,
+  indizierte Schreiber — Arithmetik identisch). **p50 0,209 s**, Gate PASS.
+- **Opt-5b (Cached+Batched):** with_past-Beam-Search gebatcht ([B,1]-Schritt + Batch-Cache
+  [B,16,L,64] inkl. Zeilen-Re-Parenting bei der Selektion). Korrekt (Gate PASS 96 %), aber
+  **p50 0,375 s — SCHLECHTER** als no-cache: das 49-Tensor-Interface des with_past-Graphen
+  (48 Einzel-KV-Inputs) kostet mehr als die gesparte Präfix-Rechnung einbringt. Lehre: die
+  Schnittstelle, nicht die Mathematik, ist der with_past-Flaschenhals in onnxruntime_go.
+- **Opt-6 (IOBinding, dudu-Auftrag „erst ausreizen"):** Konstant-Eingänge über Calls gebunden
+  (`CreateIoBinding`/`BindInput`/`RunWithBinding`). **p50 0,208 s ≈ kein Gewinn** —
+  onnxruntime_go-Tensoren liegen im HOST; ORT kopiert trotzdem pro Run host→device.
+  Gemessen, nicht behauptet: IOBinding ist im Host-Tensor-Modell ausgereizt.
+
+## Schritt 8 — Opt-7: In-Graph LogSoftmax+TopK-Fusion (ENDZIEL)
+
+Graph-Chirurgie auf `decoder_logits_last.onnx`: `LogSoftmax(axis=-1)` + `TopK(K=6)`
+angehängt, Outputs nur noch `ftk_topk_ids/ftk_topk_logps` **[B,1,6]** → pro Call verlassen
+**6×2 Werte** die GPU statt 3 MB Logits; die 250k-Host-Scans entfallen vollständig
+(decodeStepB liefert direkt Kandidaten). TopK-IDs gegen numpy exakt validiert.
+
+| Metrik | Opt-5a | Opt-7 |
+|---|---|---|
+| p50 | 0,209 s | **0,195 s** ✓ ≤ 0,2 s |
+| p95 | 0,496 s | 0,473 s |
+| mean | 0,252 s | 0,233 s |
+| Gate | PASS | **PASS** (96,0 %, byte-gleich; Outlier 23/48 unverändert) |
+
+## Endstand & Einordnung (alles GPU-exklusiv, n=50)
+
+| | Baseline (c174716) | Opt-2 Scan | Opt-3 Batch | Opt-4 last | **Opt-7 fused** | Python (full-chunk) |
+|---|---|---|---|---|---|---|
+| **p50** | 4,459 s | 0,543 s | 0,364 s | 0,249 s | **0,195 s** | 0,141 s |
+| p95 | 9,531 s | 1,340 s | 1,037 s | 0,582 s | 0,473 s | 0,314 s |
+| Faktor | 1× | 8,2× | 12,3× | 17,9× | **22,9×** | (Referenz) |
+
+- **Endbar p50 ≤ 0,2 s ERRICHT** (0,195 s) bei durchgehendem Gate (96 % Triple-Parität,
+  2×-Determinismus). Go liegt bei **1,38× Python** (0,195 vs 0,141 s).
+- Verbleibende Strukturkosten (datenbasiert): ~24 Calls × ~7 ms — Per-Call-Fixkosten des
+  Host-Tensor-Modells (Encoder-Hidden [3,317,1024] ≈ 3,9 MB Upload pro Call; ORT-Run-
+  Overhead über 3 Inputs/2 Outputs) + Rest-Go (~20 ms: Tokenizer/Decode/Parse). Pythons
+  Vorsprung = durchgängige Device-Residenz (KV + logits + topk bleiben auf GPU).
+  onnxruntime_go bietet keine Device-Tensor-API; IOBinding gemessen ohne Gewinn. Das
+  letzte Drittel (0,195→0,14) wäre cgo/C-API-Device-Buffer-Arbeit — benannter Epic-Punkt,
+  nicht mehr Vorforschung.
+- **Epic-Empfehlung (G2 #179):** Go-nativ mit Opt-7-Stack (logits-only-Trim + Batch +
+  in-Graph-TopK) ist produktionsreif vorqualifiziert: 96 % Parität, deterministisch,
+  0,195 s/Chunk auf einer 3090. Sidecar bleibt die Reserve, nicht der Plan.
+
 ## Artefakte & Befehle
 
 - `mrebelgo/analyze_trace.py`, `cmp_steps.py`, `parity_gate.py`, `repeat0.json`;

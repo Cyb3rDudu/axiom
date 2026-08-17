@@ -41,7 +41,7 @@ Apple-only parity (GoMLX) does not earn a CUDA column — documented, not hidden
 | Sparse BGE-M3 | **Go: yes (proven)** | **CUDA (RTX 3090, same-device)** | **onnxruntime CUDA-EP — PROVEN** | Restpunkt 2: overlap **0.998 avg / cos 0.999**, 217/219 ≥0.98 & 216/219 ≥0.999, fixed `<s></s>` same-device CUDA; outliers = 2 rare-non-Latin tokenizer chunks only (see 09) |
 | Rerank bge-reranker-v2-m3 | **Go: yes** (ONNX) | **CUDA (RTX 3090, same-device)** | **onnxruntime CUDA-EP — PROVEN** | Block 3/5 + Nachzug: **Spearman 1.0000** (corrected pair form, Go-CUDA vs Py-torch-CUDA same 3090); avg \|score\| 8e-6 |
 | GLiNER zero-shot NER | **Go: yes** (ONNX) | **CUDA (RTX 3090, model forward)** | **GLiNER ONNX + CUDA-EP — forward proven** | Block 7 + Nachzug: Go-CPU logits == Py-CPU (**0.0**); carrier CPU entity reference reproducible (`gliner_entities_py_cpu.json`); Go-CUDA executes on 3090 (cuDNN diff 0.042, **entity set unchanged**); **Go ok (CUDA-forward, entity-parity CPU-proven)** |
-| mREBEL relationships | **Go: yes** (decoder ONNX + beam loop) | **CUDA (RTX 3090, same-device)** | **onnxruntime CUDA-EP — Go-native PROVEN** | Restpunkt 6: decoder ONNX exported + validated (optimum 1.21 legacy stack + `--no-post-process`); Go beam loop (3/3/256/lp0/tp_XX) triple-set parity **96.0 %** (n=50, threshold ≥95 %), 2× byte-deterministic, parser 1:1 + fixtures; **latency p50 4.45 s vs Py 0.14 s (~31×)** — tensor-reuse / shape-cached sessions = G2 #179 epic cost point (11-mrebel-decoder-go.md) |
+| mREBEL relationships | **Go: yes** (decoder ONNX + beam loop) | **CUDA (RTX 3090, same-device)** | **onnxruntime CUDA-EP — Go-native PROVEN** | Restpunkt 6: decoder ONNX exported + validated (optimum 1.21 legacy stack + `--no-post-process`); Go beam loop (3/3/256/lp0/tp_XX) triple-set parity **96.0 %** (n=50, threshold ≥95 %), 2× byte-deterministic, parser 1:1 + fixtures; **latency p50 0,195 s (22,9× kampagne, GPU-exklusiv; 1,38× Python full-chunk)** — Opt-Stack: fused topK-Scan + Beam-Batch + in-Graph TopK; Rest = Host-Tensor-Modell (12-mrebel-perf.md) |
 | PDF→Markdown (digital) | **Go: yes** (Xberg binding) | CPU | CUDA for OCR models | Block 4: digital PDF 5 pages extracted, umlauts OK |
 | PDF→Markdown (scans) | **No-Go native** → Xberg/Marker sidecar + OCR | farm (CUDA OCR) | yes (via sidecar) | Block 4: scanned book → empty without OCR; Marker 1895 s |
 | R7 end-to-end (Mini runner) | **Go: yes (pipeline)** | **CUDA (carrier)** | CUDA — proven | Nachzug: swap into bench; **dense/hybrid retrieval identical to Python**, rerank parity; earlier 0.080 was a mini-runner `<s></s>` query-embed bug (fixed) |
@@ -174,7 +174,7 @@ container on the same 3090. Every number committed as CSV/JSON in
 | 3 sparse | **SPARSE PARITY — 4th pillar PROVEN** (fixed `<s></s>`, same-device CUDA): overlap 0.998 avg / cos 0.999, 217/219 ≥0.98; outliers = tokenizer edge-cases only |
 | 4 GLiNER | Go-CPU logits == Py-CPU (**0.0**, one-shot Mac run); Go-CUDA forward executes on 3090 (cuDNN, diff 0.042 recomputable via `gliner_compare.py` on committed bins); entity-set parity ≤1e-5 = Block-7 CPU |
 | 6 R7-delta | **Retrieval PARITY** (corrected DB `axiom_db` + fixed mini-runner <s></s>): dense + hybrid metrics IDENTICAL to Python (0.536/0.693/0.707), rerank within noise; rerank p50 706 ms vs Python 3.547 s (≈5×) |
-| 7 mREBEL | **Go-nativ PROVEN (Restpunkt 6)**: decoder ONNX exported + validated (optimum 1.21 legacy stack + `--no-post-process`); Go beam loop (3/3/256/lp0/tp_XX) triple-set parity **96.0 %** (n=50, threshold ≥95 %), 2× byte-deterministic; parser 1:1 + fixtures; latency p50 4.45 s vs Py 0.14 s (no-cache re-decode; with_past cached path functional but per-call overhead = epic cost point) — see 11-mrebel-decoder-go.md |
+| 7 mREBEL | **Go-nativ PROVEN + PERF-VORQUALIFIZIERT (Restpunkt 6 + G2-Vorforschung)**: decoder ONNX exported + validated (optimum 1.21 legacy stack + `--no-post-process`); Go beam loop (3/3/256/lp0/tp_XX) triple-set parity **96.0 %** (n=50), 2× byte-deterministic; parser 1:1 + fixtures; **Perf-Kampagne (12-mrebel-perf.md): p50 4,46 s → 0,195 s (22,9×, GPU-exklusiv) via fused topK-Scan + Beam-Batch [3,L] + in-Graph LogSoftmax/TopK** — Endbar ≤0,2 s ERRICHT (Python full-chunk 0,141 s = 1,38×; Rest = Host-Tensor-Modell, IOBinding ausgereizt); mit_past-Pfad korrekt (2 Logik-Bugs gefixt) aber interface-bedingt langsamer |
 | 8 Xberg | **locator gap device-independent**; scan OCR needs candle-cuda + explicit locator map |
 
 Environment facts: ORT must be the `gpu_cuda13` build (CPU x64 build has no CUDA-EP)
@@ -188,5 +188,6 @@ Modellstack (Dense/Rerank/Sparse/GLiNER — auf CUDA paritätisch bewiesen), die
 algorithmischen Komponenten (Contract/Chunking/EPUB-CFI) UND die mREBEL-
 Triple-Extraktion (96 % Triple-Set-Parität, nativ in Go) — mit Xberg/Marker-OCR für
 Scan-PDF als einzigem Nicht-Go-Baustein. Kostenpunkte für ein Folge-Epic: der
-Xberg-Locator-Bau, die mREBEL-Latenz (Go p50 4.45 s vs Python 0.14 s ≈ 31× —
-Tensor-Reuse / Shape-gecachte Sessions = G2 #179) und die cuDNN-FP-Varianz.**
+Xberg-Locator-Bau, die mREBEL-Device-Residenz (Go p50 0,195 s vs Python 0,141 s =
+1,38× — cgo/C-API-Device-Buffer für das letzte Drittel = G2 #179) und die
+cuDNN-FP-Varianz.**
