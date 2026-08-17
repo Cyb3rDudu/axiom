@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"sort"
 
@@ -63,6 +64,9 @@ func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, e
 	}
 	sort.SliceStable(done, func(i, j int) bool { return done[i].score > done[j].score })
 	if len(done) > numReturn { done = done[:numReturn] }
+	if os.Getenv("MRBEL_DEBUG") == "1" {
+		for i, d := range done { fmt.Printf("DONE[%d] len=%d ids=%v\n", i, len(d.ids), d.ids) }
+	}
 
 	seqs := make([]seq, 0, len(done))
 	for _, d := range done {
