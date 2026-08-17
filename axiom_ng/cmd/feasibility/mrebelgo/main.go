@@ -96,6 +96,24 @@ func main() {
 	decSess := newDyn(mdir+"/decoder_model.onnx",
 		[]string{"encoder_attention_mask", "input_ids", "encoder_hidden_states"},
 		decOutputs(), opts)
+	var decKSess *ort.DynamicAdvancedSession
+	if os.Getenv("MRBEL_CACHE") == "1" {
+		decKSess = newDyn(mdir+"/decoder_with_past_model.onnx",
+			[]string{"encoder_attention_mask", "input_ids",
+				"past_key_values.0.decoder.key", "past_key_values.0.decoder.value", "past_key_values.0.encoder.key", "past_key_values.0.encoder.value",
+				"past_key_values.1.decoder.key", "past_key_values.1.decoder.value", "past_key_values.1.encoder.key", "past_key_values.1.encoder.value",
+				"past_key_values.2.decoder.key", "past_key_values.2.decoder.value", "past_key_values.2.encoder.key", "past_key_values.2.encoder.value",
+				"past_key_values.3.decoder.key", "past_key_values.3.decoder.value", "past_key_values.3.encoder.key", "past_key_values.3.encoder.value",
+				"past_key_values.4.decoder.key", "past_key_values.4.decoder.value", "past_key_values.4.encoder.key", "past_key_values.4.encoder.value",
+				"past_key_values.5.decoder.key", "past_key_values.5.decoder.value", "past_key_values.5.encoder.key", "past_key_values.5.encoder.value",
+				"past_key_values.6.decoder.key", "past_key_values.6.decoder.value", "past_key_values.6.encoder.key", "past_key_values.6.encoder.value",
+				"past_key_values.7.decoder.key", "past_key_values.7.decoder.value", "past_key_values.7.encoder.key", "past_key_values.7.encoder.value",
+				"past_key_values.8.decoder.key", "past_key_values.8.decoder.value", "past_key_values.8.encoder.key", "past_key_values.8.encoder.value",
+				"past_key_values.9.decoder.key", "past_key_values.9.decoder.value", "past_key_values.9.encoder.key", "past_key_values.9.encoder.value",
+				"past_key_values.10.decoder.key", "past_key_values.10.decoder.value", "past_key_values.10.encoder.key", "past_key_values.10.encoder.value",
+				"past_key_values.11.decoder.key", "past_key_values.11.decoder.value", "past_key_values.11.encoder.key", "past_key_values.11.encoder.value"},
+			decKOutputs(), opts)
+	}
 
 	results := make([]chunkResult, 0, len(idxs))
 	for _, ci := range idxs {
@@ -112,7 +130,12 @@ func main() {
 		for i := range mask { mask[i] = 1 }
 		encHidden := runEncoder(encSess, encIDs, mask)
 
-		seqs := beamSearch(tok, decSess, encHidden, mask)
+		var seqs []seq
+		if os.Getenv("MRBEL_CACHE") == "1" {
+			seqs = beamSearchCached(tok, decSess, decKSess, encHidden, mask)
+		} else {
+			seqs = beamSearch(tok, decSess, encHidden, mask)
+		}
 		cr := chunkResult{Idx: ci}
 		for _, s := range seqs {
 			cr.RawSequences = append(cr.RawSequences, s.text)
@@ -132,6 +155,15 @@ func decOutputs() []string { // logits + per-layer dec.k,dec.v,enc.k,enc.v (we o
 	for l := 0; l < nLayers; l++ {
 		n = append(n, fmt.Sprintf("present.%d.decoder.key", l), fmt.Sprintf("present.%d.decoder.value", l))
 		n = append(n, fmt.Sprintf("present.%d.encoder.key", l), fmt.Sprintf("present.%d.encoder.value", l))
+	}
+	return n
+}
+
+// decKOutputs: decoder_with_past outputs = logits + 24 present.decoder (per layer key,value).
+func decKOutputs() []string {
+	n := []string{"logits"}
+	for l := 0; l < nLayers; l++ {
+		n = append(n, fmt.Sprintf("present.%d.decoder.key", l), fmt.Sprintf("present.%d.decoder.value", l))
 	}
 	return n
 }
