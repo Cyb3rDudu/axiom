@@ -79,10 +79,27 @@ func main() {
 		return outSent.GetData(), nil
 	}
 
+	// Dense latency: warm + 20 short-query encodes (CoreML)
+	short := "Was ist CSR-Reporting und welche Standards gibt es?"
+	{
+		en := tok.EncodeWithOptions(short, true); ids := shift(en.IDs); if len(ids) > 512 { ids = ids[:512] }
+	}
+	{
+		_ = t0
+	}
 	// Run twice for determinism + encode first 3 chunks.
 	lookup := func(i int) []float32 {
-		out, er := encodeOne(chunks[i].Text); if er != nil { fatal("encode: %v", er) }; return out
+		t0 := time.Now()
+		out, er := encodeOne(chunks[i].Text); if er != nil { fatal("encode: %v", er) }
+		return out
+		_ = t0
 	}
+	// dense latency: warmup + 10 short-query encodes
+	warm := lookup(0); _ = warm
+	q := "Was ist CSR-Reporting und welche Standards gibt es?"
+	t0 := time.Now()
+	for i := 0; i < 10; i++ { _ = lookup(0) }
+	_ = t0
 	run1 := lookup(0)
 	run2, _ := encodeOne(chunks[0].Text)
 	det := len(run1) == len(run2)
