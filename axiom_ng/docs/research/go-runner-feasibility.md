@@ -112,3 +112,24 @@ pipeline. **No-Go or sidecar:** scanned-PDF conversion and mREBEL. The Mac-only
 (GoMLX) trap is avoided by routing CUDA through onnxruntime_go + GLiNER/ONNX.
 Blocked numbers (tokenizer edge cases, sparse Go divergence, R7 metric delta)
 are environmental/tooling, each with a concrete fix — not conceptual blockers.
+
+## Nachzug CUDA measurements (carrier 192.168.1.2, same-device)
+
+All ML runs moved to the carrier (RTX 3090s), not local — dudu needs the local MPS.
+Same-device parity: Go `onnxruntime_go` CUDA-EP AND Python `torch` run in the SAME
+container on the same 3090. Every number committed as CSV/JSON in
+`axiom_ng/cmd/feasibility/carrier_results/` (Hivemind recomputes from it).
+
+| Nachzug point | Result (CUDA, same-device) |
+|---|---|
+| C dense | **avg cosine 0.999639** (219 chunks, 217/219 ≥0.999), 2× byte-equal — CUDA column PROVEN |
+| 2 rerank | **Spearman 1.0000** (75 pairs, corrected pair form `<s>q</s></s>p</s>`), avg \|score\| 8e-6 — from 0.978 pre-fix |
+| 3 sparse | **onnxruntime_go `[1,seq]` read misalignment CONFIRMED** (matched 8192; truncation hypothesis disproven); algorithm Python-proven 1.0/1.0 |
+| 4 GLiNER | Go-CPU logits == Py-CPU (**0.0**); Go-CUDA forward executes on 3090 (cuDNN); entity-set parity ≤1e-5 |
+| 6 R7-delta | **AXIOM_PROCESSOR_URL swap PROVEN** (bench local → carrier mini-runner CUDA); rerank 736 ms vs CPU 18.9 s (≈25×); gold 0 due to DB provisioning gap |
+| 7 mREBEL | encoder ONNX-exportable, **decoder loop = hard item**; sidecar stands; tokenizer round-trip OK |
+| 8 Xberg | **locator gap device-independent**; scan OCR needs candle-cuda + explicit locator map |
+
+Environment facts: ORT must be the `gpu_cuda13` build (CPU x64 build has no CUDA-EP)
++ `LD_LIBRARY_PATH` to torch-bundled CUDA-13 runtime; cuDNN path needed for
+DeBERTa-style models (GLiNER). Containerfile: `axiom_ng/cmd/feasibility/Containerfile.study`.
