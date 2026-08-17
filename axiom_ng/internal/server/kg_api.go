@@ -74,7 +74,7 @@ func (s *Server) handleKGEntities(w http.ResponseWriter, r *http.Request) {
 		r.URL.Query().Get("q"),
 		kgQueryInt(r, "min_mentions", minMentionsDefault, 1, 100),
 		kgQueryInt(r, "limit", 50, 1, 200))
-	writeKGResult(w, res, err)
+	s.writeKG(w, r, "entities", res, err)
 }
 
 func (s *Server) handleKGNeighbors(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +90,7 @@ func (s *Server) handleKGNeighbors(w http.ResponseWriter, r *http.Request) {
 	res, err := s.kgSvc.KGNeighbors(r.Context(), id,
 		kgQueryInt(r, "min_mentions", minMentionsDefault, 1, 100),
 		kgQueryInt(r, "limit", 50, 1, 200))
-	writeKGResult(w, res, err)
+	s.writeKG(w, r, "neighbors", res, err)
 }
 
 func (s *Server) handleKGRelations(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +108,15 @@ func (s *Server) handleKGRelations(w http.ResponseWriter, r *http.Request) {
 		entity,
 		kgQueryInt(r, "min_mentions", minMentionsDefault, 1, 100),
 		kgQueryInt(r, "limit", 50, 1, 200))
-	writeKGResult(w, res, err)
+	s.writeKG(w, r, "relations", res, err)
+}
+
+// KGSourceHydrator is the optional search-service capability that enriches
+// KG evidence with unified SourceView blocks (A1 #165): a top-level
+// "sources" map keyed by evidence chunk id. Absent capability (nil or
+// unwired search service) keeps KG responses as they were.
+type KGSourceHydrator interface {
+	KGSources(ctx context.Context, chunkIDs []string) (map[string]repo.SourceView, error)
 }
 
 func writeKGResult(w http.ResponseWriter, res any, err error) {
@@ -117,4 +125,51 @@ func writeKGResult(w http.ResponseWriter, res any, err error) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// kgSources collects evidence chunk ids from any KG result shape and
+// hydrates them via the search service; returns nil when nothing to do.
+func (s *Server) kgSources(r *http.Request, res any) map[string]repo.SourceView {
+	h, ok := s.searchSvc.(KGSourceHydrator)
+	if !ok || h == nil {
+		return nil
+	}
+	var ids []string
+	switch v := res.(type) {
+	// KGEntity carries no evidence chunk ids (mention counts only);
+	// hydration applies to neighbors and relations.
+	case []repo.KGNeighbor:
+		for _, e := range v {
+			ids = append(ids, e.EvidenceChunks...)
+		}
+	case []repo.KGRelationView:
+		for _, e := range v {
+			ids = append(ids, e.EvidenceChunks...)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	src, err := h.KGSources(r.Context(), ids)
+	if err != nil {
+		s.log.Printf("kg: source hydration failed (serving without): %v", err)
+		return nil
+	}
+	return src
+}
+
+// writeKG writes a KG result, enriched with the unified SourceView map
+// (A1 #165) when the search service provides hydration: the response becomes
+// {"sources": {chunk_id: SourceView}, "<kind>": <raw list>} — additive; the
+// raw-list shape is kept untouched when no sources hydrate.
+func (s *Server) writeKG(w http.ResponseWriter, r *http.Request, kind string, res any, err error) {
+	if err != nil {
+		writeKGResult(w, res, err)
+		return
+	}
+	if src := s.kgSources(r, res); len(src) > 0 {
+		writeJSON(w, http.StatusOK, map[string]any{kind: res, "sources": src})
+		return
+	}
+	writeKGResult(w, res, err)
 }
