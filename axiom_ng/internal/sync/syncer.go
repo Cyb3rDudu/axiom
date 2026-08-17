@@ -45,7 +45,15 @@ type Result struct {
 // preferred processable attachments (never for notes/annotations or
 // non-bibliographic parents). A metadata-only change with an identical
 // attachment hash does not create a new job.
-func (s *Service) Run(ctx context.Context) (Result, error) {
+// SyncOverride is the one-run selection override from the sync request body
+// (#166): include/exclude document-id lists applied ON TOP of the persisted
+// selection for THIS run only (never persisted).
+type SyncOverride struct {
+	Include []string
+	Exclude []string
+}
+
+func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, error) {
 	serverID := s.src.ServerID()
 	if serverID == "" {
 		return Result{}, errors.New("zotero source unreachable")
@@ -90,7 +98,16 @@ func (s *Service) Run(ctx context.Context) (Result, error) {
 	}
 	defer tx.Rollback(ctx)
 
-	applyRes, err := s.repo.ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files)
+	persisted, err := s.repo.SelectionModes(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	var ovInclude, ovExclude []string
+	if override != nil {
+		ovInclude, ovExclude = override.Include, override.Exclude
+	}
+	selection := repo.EffectiveSelection(persisted, ovInclude, ovExclude)
+	applyRes, err := s.repo.ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files, selection)
 	if err != nil {
 		return Result{}, err
 	}
