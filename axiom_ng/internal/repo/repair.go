@@ -6,16 +6,30 @@
 // EVERY claim per attachment; the third attempt is impossible by check —
 // the case goes blocked_for_dudu('loop-guard') and never enters the loop.
 // 'unpaginiert' originals never enter at all (CreateCase rejects them).
+//
+// Foundation limitation (B3): in_repair has NO reaper/timeout yet — a
+// fix-service crash mid-case burns that attempt and leaves the case stuck
+// in in_repair until wiring adds a reaper; the status-guarded transitions
+// below already refuse double-closing, so nothing corrupts, it just waits.
 package repo
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 const RepairMaxAttempts = 2
+
+// RepairAutoApplyMinScore is the RAG-side auto-apply threshold (#184 gate
+// hierarchy): footer-verification coverage must reach it with ZERO
+// contradictions, else the case goes to dudu.
+const RepairAutoApplyMinScore = 0.95
 
 type RepairStatus string
 
@@ -47,50 +61,71 @@ type RepairCase struct {
 	UpdatedAt           time.Time       `json:"updated_at"`
 }
 
-// CreateRepairCase opens a case for a preflight-rejected attachment.
-// Idempotent per attachment: an existing OPEN case is returned unchanged.
-func (r *Repo) CreateRepairCase(ctx context.Context, attachmentID, documentID, suspicionClass string, analysis json.RawMessage) (*RepairCase, error) {
-	row := r.pool.QueryRow(ctx, `
-		INSERT INTO repair_cases (attachment_id, document_id, suspicion_class, analysis, status)
-		VALUES ($1, $2, $3, $4, 'rejected')
-		ON CONFLICT (attachment_id) WHERE status IN ('rejected','queued','in_repair') DO NOTHING
-		RETURNING id::text, attachment_id::text, document_id::text, status::text, attempts, suspicion_class, analysis, plan_version, verify_score, verify_contradictions, created_at, updated_at`,
-		attachmentID, documentID, suspicionClass, analysis)
-	var c RepairCase
-	err := row.Scan(&c.ID, &c.AttachmentID, &c.DocumentID, &c.Status, &c.Attempts, &c.SuspicionClass, &c.Analysis, &c.PlanVersion, &c.VerifyScore, &c.VerifyContradiction, &c.CreatedAt, &c.UpdatedAt)
-	if err == nil {
-		return &c, nil
-	}
-	if isNoRows(err) {
-		return r.OpenRepairCase(ctx, attachmentID)
-	}
-	return nil, err
-}
+// repairCaseCols is the canonical column list for repair_cases reads — ONE
+// definition so the four read paths can never drift apart (B4).
+const repairCaseCols = `id::text, attachment_id::text, COALESCE(document_id::text,''), status::text, attempts,
+	suspicion_class, analysis, plan_version, verify_score, verify_contradictions,
+	verdict, blocked_reason, created_at, updated_at`
 
-func isNoRows(err error) bool {
-	return err != nil && err.Error() == "no rows in result set"
-}
-
-// OpenRepairCase fetches the open case of an attachment (nil if none).
-func (r *Repo) OpenRepairCase(ctx context.Context, attachmentID string) (*RepairCase, error) {
-	row := r.pool.QueryRow(ctx, `
-		SELECT id::text, attachment_id::text, document_id::text, status::text, attempts, suspicion_class, analysis, plan_version, verify_score, verify_contradictions, created_at, updated_at
-		FROM repair_cases WHERE attachment_id=$1 AND status IN ('rejected','queued','in_repair')`,
-		attachmentID)
+// scanRepairCase fills a RepairCase from any row-like (QueryRow or Rows),
+// mirroring scanKGEntities in kg.go.
+func scanRepairCase(sc interface{ Scan(dest ...any) error }) (*RepairCase, error) {
 	var c RepairCase
-	err := row.Scan(&c.ID, &c.AttachmentID, &c.DocumentID, &c.Status, &c.Attempts, &c.SuspicionClass, &c.Analysis, &c.PlanVersion, &c.VerifyScore, &c.VerifyContradiction, &c.CreatedAt, &c.UpdatedAt)
-	if isNoRows(err) {
-		return nil, nil
-	}
-	if err != nil {
+	if err := sc.Scan(&c.ID, &c.AttachmentID, &c.DocumentID, &c.Status, &c.Attempts,
+		&c.SuspicionClass, &c.Analysis, &c.PlanVersion, &c.VerifyScore, &c.VerifyContradiction,
+		&c.Verdict, &c.BlockedReason, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &c, nil
 }
 
+// CreateRepairCase opens a case for a preflight-rejected attachment.
+// Idempotent per attachment: an existing OPEN case is returned unchanged.
+//
+// Contract: returns (nil, nil) when the insert conflicted AND the competing
+// case is already closed (closed between the ON CONFLICT and the re-read) —
+// callers MUST nil-check the case before use.
+func (r *Repo) CreateRepairCase(ctx context.Context, attachmentID, documentID, suspicionClass string, analysis json.RawMessage) (*RepairCase, error) {
+	row := r.pool.QueryRow(ctx, `
+		INSERT INTO repair_cases (attachment_id, document_id, suspicion_class, analysis, status)
+		VALUES ($1::uuid, NULLIF($2,'')::uuid, $3, $4, 'rejected')
+		ON CONFLICT (attachment_id) WHERE status IN ('rejected','queued','in_repair') DO NOTHING
+		RETURNING `+repairCaseCols,
+		attachmentID, documentID, suspicionClass, analysis)
+	c, err := scanRepairCase(row)
+	if err == nil {
+		return c, nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return r.OpenRepairCase(ctx, attachmentID)
+	}
+	return nil, err
+}
+
+// OpenRepairCase fetches the open case of an attachment (nil if none).
+func (r *Repo) OpenRepairCase(ctx context.Context, attachmentID string) (*RepairCase, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT `+repairCaseCols+`
+		FROM repair_cases WHERE attachment_id=$1 AND status IN ('rejected','queued','in_repair')`,
+		attachmentID)
+	c, err := scanRepairCase(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
 // QueueRepairCase attaches the fix-service input (analysis) and flips
-// rejected → queued. Unpaginiert originals never queue (design nail 1).
+// rejected → queued. Unpaginiert originals NEVER queue (design nail 1:
+// "Klasse unreparierbar → nie in der Schleife") — enforced here, not in
+// comments.
 func (r *Repo) QueueRepairCase(ctx context.Context, caseID, suspicionClass string, analysis json.RawMessage) error {
+	if strings.Contains(suspicionClass, "unpaginiert") {
+		return fmt.Errorf("unpaginierte Originale gehen nie in die Reparatur-Schleife (case %s)", caseID)
+	}
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE repair_cases SET status='queued', suspicion_class=$2, analysis=$3, updated_at=now()
 		WHERE id=$1 AND status='rejected'`, caseID, suspicionClass, analysis)
@@ -106,7 +141,7 @@ func (r *Repo) QueueRepairCase(ctx context.Context, caseID, suspicionClass strin
 // ListRepairQueue returns queued cases for the fix-service poll.
 func (r *Repo) ListRepairQueue(ctx context.Context) ([]RepairCase, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id::text, attachment_id::text, document_id::text, status::text, attempts, suspicion_class, analysis, plan_version, verify_score, verify_contradictions, created_at, updated_at
+		SELECT `+repairCaseCols+`
 		FROM repair_cases WHERE status='queued' ORDER BY created_at`)
 	if err != nil {
 		return nil, err
@@ -114,11 +149,11 @@ func (r *Repo) ListRepairQueue(ctx context.Context) ([]RepairCase, error) {
 	defer rows.Close()
 	var out []RepairCase
 	for rows.Next() {
-		var c RepairCase
-		if err := rows.Scan(&c.ID, &c.AttachmentID, &c.DocumentID, &c.Status, &c.Attempts, &c.SuspicionClass, &c.Analysis, &c.PlanVersion, &c.VerifyScore, &c.VerifyContradiction, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		c, err := scanRepairCase(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, c)
+		out = append(out, *c)
 	}
 	return out, rows.Err()
 }
@@ -171,36 +206,37 @@ func (r *Repo) ClaimRepairCase(ctx context.Context, caseID string) (*RepairCase,
 
 func (r *Repo) getRepairCase(ctx context.Context, caseID string) (*RepairCase, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id::text, attachment_id::text, document_id::text, status::text, attempts, suspicion_class, analysis, plan_version, verify_score, verify_contradictions, created_at, updated_at
+		SELECT `+repairCaseCols+`
 		FROM repair_cases WHERE id=$1`, caseID)
-	var c RepairCase
-	if err := row.Scan(&c.ID, &c.AttachmentID, &c.DocumentID, &c.Status, &c.Attempts, &c.SuspicionClass, &c.Analysis, &c.PlanVersion, &c.VerifyScore, &c.VerifyContradiction, &c.CreatedAt, &c.UpdatedAt); err != nil {
-		return nil, err
-	}
-	return &c, nil
+	return scanRepairCase(row)
 }
 
 // SubmitRepairVerdict stores the judge result. The AUTO-APPLY gate is
 // enforced HERE (RAG side), not trusted from the service: score >= 0.95 AND
 // zero contradictions AND verdict == auto_apply. Everything else blocks.
 // Returns the effective status so the caller knows whether to apply writes.
+//
+// TRUST BOUNDARY (documented, accepted by #184's design): score and
+// contradictions are SERVICE-ATTESTED — the mechanical footer verification
+// runs in the fix-service, not here. Blast radius of a lying service is
+// bounded: loop guard (max 2), quarantine keeps the original, healed needs
+// the next preflight GREEN, every mutation audited. Re-verification RAG-side
+// is a possible later hardening, not part of the nail.
 func (r *Repo) SubmitRepairVerdict(ctx context.Context, caseID string, plan json.RawMessage, planVersion int, score float64, contradictions int, verdict, blockedReason string) (RepairStatus, error) {
 	effective := RepairBlocked
-	if verdict == "auto_apply" && score >= 0.95 && contradictions == 0 {
+	if verdict == "auto_apply" && score >= RepairAutoApplyMinScore && contradictions == 0 {
 		effective = RepairInRepair // stays in_repair; the caller now applies writes, then MarkHealed
 	} else if verdict == "failed" {
 		effective = RepairFailed
 	}
 	reason := blockedReason
 	if verdict == "auto_apply" && effective == RepairBlocked {
-		reason = fmt.Sprintf("auto-apply-gate: score=%.3f widersprüche=%d", score, contradictions)
+		reason = fmt.Sprintf("auto-apply-gate: score=%.3f widersprüche=%d (Schwelle %.2f/0)", score, contradictions, RepairAutoApplyMinScore)
 	}
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE repair_cases SET plan=$2, plan_version=$3, verify_score=$4, verify_contradictions=$5,
 			verdict=$6, blocked_reason=$7,
-			status = CASE WHEN $8='failed' THEN 'failed'::repair_status
-			              WHEN $8='blocked' THEN 'blocked_for_dudu'::repair_status
-			              ELSE status END,
+			status = $8::repair_status,
 			updated_at=now()
 		WHERE id=$1 AND status='in_repair'`,
 		caseID, plan, planVersion, score, contradictions, verdict, reason, string(effective))

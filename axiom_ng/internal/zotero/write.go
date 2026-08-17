@@ -1,8 +1,8 @@
 // Package zotero — write client for the #184 fix-service loop.
 //
 // The RAG is the ONLY gateway to Zotero: the fix-service never sees
-// credentials. Writes go through the Zotero 7.1+ LOCAL API write surface
-// (same semantics as the web API, keyed by local authorization).
+// credentials. Writes go through the Zotero local API write surface
+// (verified live against Zotero 10.0-beta: server_localAPI.js semantics).
 //
 // Exactly TWO mutations exist (#184 design nail 3):
 //
@@ -10,28 +10,40 @@
 //	CreateAttachmentWithFile — 3-phase upload of the healed PDF under a
 //	  SCHEMA filename ({Autor|Institution} - {Jahr} - {Titel}); there is
 //	  deliberately NO filename patch.
+//
+// Live-probed protocol facts (do not "fix" without re-probing):
+//   - writes need Zotero-Server-ID (428 without) + local API key
+//     (Zotero-API-Key header or Authorization: Bearer; 401 without)
+//   - GET carries Last-Modified-Version; HEAD does not
+//   - file upload = authorize (form: md5 hex32, filename, filesize,
+//     mtime in MILLISECONDS, If-None-Match: *) -> {url, uploadKey} |
+//     {exists:1}; then multipart POST to url (field "file", 201); then
+//     register (form: upload=<key>, If-None-Match: *, 204)
+//   - local API keys are SINGLE-USE unless the operator picked
+//     "Always Allow" in the authorize dialog (remember:true)
 package zotero
 
 import (
 	"bytes"
 	"crypto/md5"
-	"crypto/sha1"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"errors"
 )
 
 // WriteClient talks to the Zotero local API with write authorization.
 type WriteClient struct {
 	BaseURL  string // http://localhost:23119
 	ServerID string // Zotero-Server-ID header (same value the sync reader uses)
-	APIKey   string // from POST /api/local/authorize (Key-Flow), env-injected
+	APIKey   string // from POST /api/local/authorize; single-use unless remember
 	HTTP     *http.Client
 }
 
@@ -40,31 +52,44 @@ func NewWriteClient(baseURL, serverID, apiKey string) *WriteClient {
 		HTTP: &http.Client{Timeout: 120 * time.Second}}
 }
 
-// Authorize performs the local Key-Flow once: Zotero shows an approval
-// dialog for appName; on approval the response carries the api key. Ops
-// runs this interactively and puts the key into ZOTERO_WRITE_API_KEY —
-// normal operation never calls this.
-func (w *WriteClient) Authorize(appName string) (string, error) {
-	body, _ := json.Marshal(map[string]any{"appName": appName, "auth": []string{"allow_library_metadata", "allow_file_upload"}})
+// Authorize performs the local Key-Flow once: Zotero shows a dialog with
+// Allow / Always Allow / Deny; on allow the response is
+// {"key": ..., "remember": <bool>}. A non-remembered key is consumed by the
+// FIRST successful write — ops should pick "Always Allow" for the loop and
+// put the key into ZOTERO_WRITE_API_KEY; normal operation never calls this.
+func (w *WriteClient) Authorize(appName string) (key string, remember bool, err error) {
+	body, _ := json.Marshal(map[string]any{"appName": appName})
 	req, _ := http.NewRequest(http.MethodPost, w.BaseURL+"/api/local/authorize", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Zotero-Server-ID", w.ServerID)
 	resp, err := w.HTTP.Do(req)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("authorize: %d %s", resp.StatusCode, string(raw))
+		return "", false, fmt.Errorf("authorize: %d %s", resp.StatusCode, string(raw))
 	}
 	var out struct {
-		APIKey string `json:"apiKey"`
+		Key      string `json:"key"`
+		Remember bool   `json:"remember"`
 	}
-	if err := json.Unmarshal(raw, &out); err != nil || out.APIKey == "" {
-		return "", fmt.Errorf("authorize: keine apiKey in Antwort: %s", string(raw))
+	if err := json.Unmarshal(raw, &out); err != nil || out.Key == "" {
+		return "", false, fmt.Errorf("authorize: keine key in Antwort: %s", string(raw))
 	}
-	return out.APIKey, nil
+	return out.Key, out.Remember, nil
+}
+
+// localAuthHeaders stamps the shared local-API auth surface onto a request.
+// It is the ONE auth path for write.go (the phase-2 upload request also goes
+// through here, after its host check).
+func (w *WriteClient) localAuthHeaders(req *http.Request) {
+	req.Header.Set("Zotero-Server-ID", w.ServerID)
+	req.Header.Set("Zotero-API-Version", "3")
+	if w.APIKey != "" {
+		req.Header.Set("Zotero-API-Key", w.APIKey)
+	}
 }
 
 func (w *WriteClient) do(method, path string, headers map[string]string, body io.Reader) ([]byte, http.Header, error) {
@@ -72,10 +97,7 @@ func (w *WriteClient) do(method, path string, headers map[string]string, body io
 	if err != nil {
 		return nil, nil, err
 	}
-	req.Header.Set("Zotero-Server-ID", w.ServerID)
-	if w.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+w.APIKey)
-	}
+	w.localAuthHeaders(req)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -86,31 +108,22 @@ func (w *WriteClient) do(method, path string, headers map[string]string, body io
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return raw, resp.Header, &httpError{method: method, path: path, status: resp.StatusCode, body: string(raw)}
+		return raw, resp.Header, &StatusError{Status: resp.StatusCode, Body: string(raw)}
 	}
 	return raw, resp.Header, nil
 }
 
-type httpError struct {
-	method, path string
-	status       int
-	body         string
-}
-
-func (e *httpError) Error() string {
-	return fmt.Sprintf("zotero write %s %s: %d %s", e.method, e.path, e.status, e.body)
-}
-
+// IsVersionConflict reports a 412 from an If-Unmodified-Since-Version guard
+// (concurrent modification — the caller may re-read and retry). errors.As so
+// wrapped StatusErrors (fmt.Errorf %w) are still detected.
 func IsVersionConflict(err error) bool {
-	he, ok := err.(*httpError)
-	return ok && he.status == http.StatusPreconditionFailed
+	var se *StatusError
+	return errors.As(err, &se) && se.Status == http.StatusPreconditionFailed
 }
 
-// ItemVersion fetches an item's current version (If-Unmodified-Since-Version
-// source for deletes).
+// ItemVersion fetches an item's current version. GET carries
+// Last-Modified-Version; HEAD does not (live-probed).
 func (w *WriteClient) ItemVersion(key string) (string, error) {
-	// GET carries Last-Modified-Version on the local API; HEAD does not
-	// (probed live: HEAD returns no version header).
 	_, hdr, err := w.do(http.MethodGet, "/api/users/0/items/"+key, nil, nil)
 	if err != nil {
 		return "", err
@@ -134,137 +147,146 @@ func (w *WriteClient) DeleteAttachmentItem(key string) error {
 	return err
 }
 
-// Mutation 2: create an attachment item WITH a file (3-phase upload,
-// web-API semantics against the local endpoint):
-//  1. register the upload (md5/sha1/mtime/filename) → upload key
-//  2. upload the bytes to the returned URL (local API: same host)
-//  3. commit with the parent item JSON → the attachment exists
-//
-// parentKey is the document item the new attachment belongs to (empty =
-// standalone). filename MUST come from the schema builder — callers cannot
-// patch filenames because no such mutation exists.
+// Mutation 2: create an attachment item WITH a file, live-probed 3-phase
+// flow. parentKey is the document item ("" = standalone). filename MUST
+// come from the schema builder — callers cannot patch filenames because no
+// such mutation exists. Returns the new attachment item key.
 func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf []byte) (string, error) {
-	md5sum := fmt.Sprintf("%x", md5.Sum(pdf))
-	sha1sum := fmt.Sprintf("%x", sha1.Sum(pdf))
-	mtime := strconv.FormatInt(time.Now().UnixMilli(), 10)
-
-	// Phase 1 — register.
-	regHdr := map[string]string{
-		"Content-Type":       "application/x-www-form-urlencoded",
-		"If-None-Match":      "*",
-		"X-Zotero-FileName":  filename,
-		"X-Zotero-FileMD5":   base64.StdEncoding.EncodeToString([]byte(md5sum)),
-		"X-Zotero-FileSHA1":  base64.StdEncoding.EncodeToString([]byte(sha1sum)),
-		"X-Zotero-FileMtime": mtime,
-	}
-	raw, _, err := w.do(http.MethodPost, "/api/users/0/items/new", regHdr, strings.NewReader(""))
-	if err != nil {
-		return "", fmt.Errorf("register upload: %w", err)
-	}
-	var reg struct {
-		UploadKey string `json:"uploadKey"`
-		URL       string `json:"url"`
-		Exists    int    `json:"exists"`
-	}
-	if err := json.Unmarshal(raw, &reg); err != nil {
-		return "", fmt.Errorf("register upload decode: %w (%s)", err, string(raw))
-	}
-	if reg.Exists == 1 {
-		// File already known server-side — go straight to commit with that key.
-		reg.URL = ""
-		reg.UploadKey = strings.TrimSpace(strings.Trim(string(raw), `"`))
-	}
-
-	// Phase 2 — upload bytes (multipart like the web API's S3 form; the
-	// local API accepts the same shape on its own host).
-	if reg.URL != "" {
-		if err := w.uploadBytes(reg.URL, filename, md5sum, pdf); err != nil {
-			return "", fmt.Errorf("upload bytes: %w", err)
-		}
-	}
-
-	// Phase 3 — commit: register the attachment item tied to the upload.
+	// Phase 0 — the attachment item.
 	item := map[string]any{
 		"itemType":    "attachment",
-		"parentItem":  parentKey,
 		"linkMode":    "imported_file",
 		"title":       filename,
 		"contentType": "application/pdf",
 		"filename":    filename,
 		"tags":        []map[string]string{{"tag": "axiom-repair"}},
 	}
+	if parentKey != "" {
+		item["parentItem"] = parentKey
+	}
 	itemJSON, _ := json.Marshal([]any{item})
-	q := url.Values{"uploadKey": []string{reg.UploadKey}}
-	_, _, err = w.do(http.MethodPost, "/api/users/0/items/new/commit?"+q.Encode(),
+	raw, _, err := w.do(http.MethodPost, "/api/users/0/items",
 		map[string]string{"Content-Type": "application/json"}, bytes.NewReader(itemJSON))
 	if err != nil {
-		return "", fmt.Errorf("commit: %w", err)
+		return "", fmt.Errorf("create attachment item: %w", err)
 	}
-	return reg.UploadKey, nil
-}
+	var created struct {
+		Successful map[string]struct {
+			Key string `json:"key"`
+		} `json:"successful"`
+	}
+	if err := json.Unmarshal(raw, &created); err != nil || len(created.Successful) == 0 {
+		return "", fmt.Errorf("create attachment item: unerwartete Antwort %s", string(raw))
+	}
+	attKey := created.Successful["0"].Key
 
-func (w *WriteClient) uploadBytes(uploadURL, filename, md5sum string, pdf []byte) error {
-	if !strings.HasPrefix(uploadURL, "http") {
-		uploadURL = w.BaseURL + uploadURL
+	// Phase 1 — authorize the upload (form-urlencoded; mtime in MILLISECONDS).
+	// md5 is PLAIN HEX here AND nowhere else is a digest sent — one encoding,
+	// no base64 variant.
+	// TODO(#184): live-probe digest acceptance (hex vs base64) once more on a
+	// Zotero 10.0-beta point release; contentType is NOT in the probed fact
+	// list above and may be ignored or rejected by the local API.
+	md5hex := fmt.Sprintf("%x", md5.Sum(pdf))
+	form := strings.NewReader(strings.Join([]string{
+		"md5=" + md5hex,
+		"&filename=" + filename,
+		"&filesize=" + strconv.Itoa(len(pdf)),
+		"&mtime=" + strconv.FormatInt(time.Now().UnixMilli(), 10),
+		"&contentType=application/pdf",
+	}, ""))
+	raw, _, err = w.do(http.MethodPost, "/api/users/0/items/"+attKey+"/file",
+		map[string]string{
+			"Content-Type":  "application/x-www-form-urlencoded",
+			"If-None-Match": "*",
+		}, form)
+	if err != nil {
+		return attKey, fmt.Errorf("authorize upload: %w", err)
 	}
+	var auth struct {
+		Exists    int               `json:"exists"`
+		URL       string            `json:"url"`
+		UploadKey string            `json:"uploadKey"`
+		Params    map[string]string `json:"params"` // web-API S3 fields; forwarded into the multipart form below
+	}
+	if err := json.Unmarshal(raw, &auth); err != nil {
+		// Some local-API builds answer the authorize call with the upload key
+		// as a BARE quoted JSON string — accept exactly that shape and nothing
+		// else; never silently post a garbage body as the key.
+		var bare string
+		if berr := json.Unmarshal(raw, &bare); berr != nil || bare == "" {
+			return attKey, fmt.Errorf("authorize upload: unerwartete Antwortform (will {url,uploadKey}|{exists:1}|\"key\"): %s", string(raw))
+		}
+		auth.UploadKey = bare
+	}
+	if auth.Exists == 1 {
+		return attKey, nil // identical file already staged/synced — done
+	}
+	if auth.UploadKey == "" || auth.URL == "" {
+		return attKey, fmt.Errorf("authorize upload: keine uploadKey/url: %s", string(raw))
+	}
+
+	// Phase 2 — transmit the bytes (multipart, field "file"; 201). Register-
+	// response upload params are forwarded as leading form fields (web-API S3
+	// contract; empty on the local API).
 	var buf bytes.Buffer
-	fw := newMultipartWriter(&buf)
-	fw.writeField("md5", md5sum)
-	fw.writeFile("file", filename, "application/pdf", pdf)
-	fw.close()
-	req, err := http.NewRequest(http.MethodPost, uploadURL, &buf)
+	mw := multipart.NewWriter(&buf)
+	for k, v := range auth.Params {
+		if err := mw.WriteField(k, v); err != nil {
+			return attKey, err
+		}
+	}
+	fw, err := mw.CreateFormFile("file", filename)
 	if err != nil {
-		return err
+		return attKey, err
 	}
-	req.Header.Set("Content-Type", fw.contentType())
-	req.Header.Set("Zotero-Server-ID", w.ServerID)
-	if w.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+w.APIKey)
+	if _, err := fw.Write(pdf); err != nil {
+		return attKey, err
 	}
-	resp, err := w.HTTP.Do(req)
+	if err := mw.Close(); err != nil {
+		return attKey, err
+	}
+	upReq, err := http.NewRequest(http.MethodPost, auth.URL, &buf)
 	if err != nil {
-		return err
+		return attKey, err
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("upload: %d %s", resp.StatusCode, string(raw))
+	upReq.Header.Set("Content-Type", mw.FormDataContentType())
+	// Credentials only travel to the LOCAL API host: an authorize response
+	// pointing elsewhere (pre-signed S3-style URL) must not receive our key.
+	if sameHost(w.BaseURL, auth.URL) {
+		w.localAuthHeaders(upReq)
 	}
-	return nil
-}
-
-// tiny multipart writer (avoids importing mime/multipart writer helpers
-// twice for one call site)
-type mpWriter struct {
-	boundary string
-	w        *bytes.Buffer
-}
-
-func newMultipartWriter(buf *bytes.Buffer) *mpWriter {
-	return &mpWriter{boundary: "axiomNg" + strconv.FormatInt(time.Now().UnixNano(), 36), w: buf}
-}
-
-func (m *mpWriter) contentType() string { return "multipart/form-data; boundary=" + m.boundary }
-
-func (m *mpWriter) partHeader(name, filename, ctype string) {
-	m.w.WriteString("--" + m.boundary + "\r\n")
-	if filename == "" {
-		m.w.WriteString("Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n")
-	} else {
-		m.w.WriteString("Content-Disposition: form-data; name=\"" + name + "\"; filename=\"" + filename + "\"\r\n")
-		m.w.WriteString("Content-Type: " + ctype + "\r\n\r\n")
+	upResp, err := w.HTTP.Do(upReq)
+	if err != nil {
+		return attKey, fmt.Errorf("upload bytes: %w", err)
 	}
+	defer upResp.Body.Close()
+	upBody, _ := io.ReadAll(upResp.Body)
+	if upResp.StatusCode >= 300 {
+		return attKey, fmt.Errorf("upload bytes: %d %s", upResp.StatusCode, string(upBody))
+	}
+
+	// Phase 3 — register the upload against the item (204).
+	reg := strings.NewReader("upload=" + auth.UploadKey)
+	_, _, err = w.do(http.MethodPost, "/api/users/0/items/"+attKey+"/file",
+		map[string]string{
+			"Content-Type":  "application/x-www-form-urlencoded",
+			"If-None-Match": "*",
+		}, reg)
+	if err != nil {
+		return attKey, fmt.Errorf("register upload: %w", err)
+	}
+	return attKey, nil
 }
 
-func (m *mpWriter) writeField(name, value string) {
-	m.partHeader(name, "", "")
-	m.w.WriteString(value + "\r\n")
+// sameHost reports whether two URL strings share scheme-insensitive host:port.
+func sameHost(a, b string) bool {
+	pa, err := url.Parse(a)
+	if err != nil {
+		return false
+	}
+	pb, err := url.Parse(b)
+	if err != nil {
+		return false
+	}
+	return pa.Host == pb.Host
 }
-
-func (m *mpWriter) writeFile(field, filename, ctype string, data []byte) {
-	m.partHeader(field, filename, ctype)
-	m.w.Write(data)
-	m.w.WriteString("\r\n")
-}
-
-func (m *mpWriter) close() { m.w.WriteString("--" + m.boundary + "--\r\n") }
