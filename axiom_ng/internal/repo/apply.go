@@ -67,6 +67,11 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 	if err := r.applyCanonicalDeleteEvents(ctx, tx, sourceID, batch.DeleteEvents); err != nil {
 		return res, err
 	}
+	// 3b. Deleted attachments must stop serving: retire their active
+	// snapshots (+ OS tombstones) in the same sync transaction.
+	if err := retireDeletedAttachmentsTx(ctx, tx); err != nil {
+		return res, fmt.Errorf("retire deleted attachments: %w", err)
+	}
 
 	// 4. Collections. ListCanonicalCollections always returns a complete
 	// snapshot, so missing collections are reconciled (marked deleted) on every
@@ -124,6 +129,43 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 	res.FailedJobs = failed
 
 	return res, nil
+}
+
+// retireDeletedAttachmentsTx deactivates active snapshots whose Zotero
+// attachment is deleted (source-heal swaps delete the old storage key and
+// create a NEW attachment row; the old row's snapshot used to keep serving
+// zombie chunks next to the healed rechunk — #176 delta, 2× live snapshots
+// on one document). Mirrors deactivateSiblingsTx + outbox tombstones (#127)
+// so OpenSearch stops serving them in the same transaction.
+func retireDeletedAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
+	rows, err := tx.Query(ctx, `
+		UPDATE processing_snapshots s SET active=false, updated_at=now()
+		FROM zotero_attachments a
+		WHERE a.id = s.attachment_id AND a.deleted = true AND s.active = true
+		RETURNING s.id::text, s.document_id::text, s.attachment_id::text`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type retired struct{ snap, doc, att string }
+	var hits []retired
+	for rows.Next() {
+		var h retired
+		if err := rows.Scan(&h.snap, &h.doc, &h.att); err != nil {
+			return err
+		}
+		hits = append(hits, h)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, h := range hits {
+		if err := enqueueOutboxTx(ctx, tx, h.snap, OutboxOpDelete,
+			jobIdentity{documentID: h.doc, attachmentID: h.att}); err != nil {
+			return fmt.Errorf("tombstone deleted-attachment snapshot %s: %w", h.snap, err)
+		}
+	}
+	return nil
 }
 
 // applyCanonicalDeleteEvents resolves each deleted key against documents or

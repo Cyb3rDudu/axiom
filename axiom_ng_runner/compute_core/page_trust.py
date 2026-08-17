@@ -89,27 +89,12 @@ def extract_folio_candidates(doc: pymupdf.Document) -> dict[int, str]:
     return out
 
 
-def verify_folio_sequence(candidates: dict[int, str]) -> dict[int, str]:
-    """The strong proof: keep only members of consistent ascending runs.
+def _folio_runs(candidates: dict[int, str]) -> list[tuple[list[int], list[int]]]:
+    """Consecutive-page runs whose folios ascend by +1 (>= 3 members).
 
-    A run (page i..j) is consistent when each consecutive page's folio equals
-    the previous + 1 (arabic). Roman-numeral candidates are deliberately NOT
-    verified (no arabic parse) — roman front matter stays physical_only,
-    honest rather than guessed. Every member of a validated run is
-    folio_verified; pages outside any run are NOT verified.
-
-    Chapter-restart folios (per-chapter 1,2,3 numbering) can form SEVERAL
-    valid short runs with clashing values — several pages would claim "3"
-    under the highest trust. The longest run per VALUE wins; clashing
-    shorter runs are dropped entirely (a citation must not silently resolve
-    to the earliest chapter's page).
+    Shared by verify_folio_sequence and the #176 analyze CLI (read-only
+    diagnostics: run start, length, value range, gaps between runs).
     """
-    def _arabic(v: str | None) -> int | None:
-        if v is None:
-            return None
-        m = _FOLIO_LINE.match(v)
-        return int(m.group(1)) if m else None
-
     pages = sorted(candidates)
     runs: list[tuple[list[int], list[int]]] = []  # (page indices, folio values)
     run: list[int] = []
@@ -142,13 +127,38 @@ def verify_folio_sequence(candidates: dict[int, str]) -> dict[int, str]:
             run_vals.append(v)
         prev_page, prev_val = p, v
     _flush()
+    return runs
 
-    # Per folio VALUE: unique winner keeps it; a strictly longest run beats
+
+def _arabic(v: str | None) -> int | None:
+    if v is None:
+        return None
+    m = _FOLIO_LINE.match(v)
+    return int(m.group(1)) if m else None
+
+
+def verify_folio_sequence(candidates: dict[int, str]) -> dict[int, str]:
+    """The strong proof: keep only members of consistent ascending runs.
+
+    A run (page i..j) is consistent when each consecutive page's folio equals
+    the previous + 1 (arabic). Roman-numeral candidates are deliberately NOT
+    verified (no arabic parse) — roman front matter stays physical_only,
+    honest rather than guessed. Every member of a validated run is
+    folio_verified; pages outside any run are NOT verified.
+
+    Chapter-restart folios (per-chapter 1,2,3 numbering) can form SEVERAL
+    valid short runs with clashing values — several pages would claim "3"
+    under the highest trust. The longest run per VALUE wins; clashing
+    shorter runs are dropped entirely (a citation must not silently resolve
+    to the earliest chapter's page).
+    """
+    # Per folio VALUE
     # shorter claimants; a length TIE is ambiguous — the value verifies
     # NOWHERE (never guess). A citation must not silently resolve to the
     # earliest chapter's page under the highest trust mark.
+    runs = _folio_runs(candidates)
     value_runs: dict[int, list[int]] = {}  # folio value -> run indices claiming it
-    for idx, (rp, rv) in enumerate(runs):
+    for idx, (_, rv) in enumerate(runs):
         for v in rv:
             value_runs.setdefault(v, []).append(idx)
     verified: dict[int, str] = {}
