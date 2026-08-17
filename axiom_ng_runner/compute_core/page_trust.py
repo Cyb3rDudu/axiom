@@ -93,9 +93,16 @@ def verify_folio_sequence(candidates: dict[int, str]) -> dict[int, str]:
     """The strong proof: keep only members of consistent ascending runs.
 
     A run (page i..j) is consistent when each consecutive page's folio equals
-    the previous + 1 (arabic) — roman numerals validate only within a roman
-    run by position, and mixed runs break. Every member of a validated run is
+    the previous + 1 (arabic). Roman-numeral candidates are deliberately NOT
+    verified (no arabic parse) — roman front matter stays physical_only,
+    honest rather than guessed. Every member of a validated run is
     folio_verified; pages outside any run are NOT verified.
+
+    Chapter-restart folios (per-chapter 1,2,3 numbering) can form SEVERAL
+    valid short runs with clashing values — several pages would claim "3"
+    under the highest trust. The longest run per VALUE wins; clashing
+    shorter runs are dropped entirely (a citation must not silently resolve
+    to the earliest chapter's page).
     """
     def _arabic(v: str | None) -> int | None:
         if v is None:
@@ -104,17 +111,17 @@ def verify_folio_sequence(candidates: dict[int, str]) -> dict[int, str]:
         return int(m.group(1)) if m else None
 
     pages = sorted(candidates)
-    verified: dict[int, str] = {}
-    run: list[int] = []  # page indices of the current arabic run
+    runs: list[tuple[list[int], list[int]]] = []  # (page indices, folio values)
+    run: list[int] = []
     run_vals: list[int] = []
 
     def _flush() -> None:
-        # A run of >= 3 consecutive pages with +1 folios validates its members
+        nonlocal run, run_vals
+        # A run of >= 3 consecutive pages with +1 folios is a valid proof
         if len(run) >= 3:
-            for p, v in zip(run, run_vals):
-                verified[p] = str(v)
-        run.clear()
-        run_vals.clear()
+            runs.append((run, run_vals))
+        run = []
+        run_vals = []
 
     prev_page: int | None = None
     prev_val: int | None = None
@@ -135,6 +142,27 @@ def verify_folio_sequence(candidates: dict[int, str]) -> dict[int, str]:
             run_vals.append(v)
         prev_page, prev_val = p, v
     _flush()
+
+    # Per folio VALUE: unique winner keeps it; a strictly longest run beats
+    # shorter claimants; a length TIE is ambiguous — the value verifies
+    # NOWHERE (never guess). A citation must not silently resolve to the
+    # earliest chapter's page under the highest trust mark.
+    value_runs: dict[int, list[int]] = {}  # folio value -> run indices claiming it
+    for idx, (rp, rv) in enumerate(runs):
+        for v in rv:
+            value_runs.setdefault(v, []).append(idx)
+    verified: dict[int, str] = {}
+    for v, idxs in value_runs.items():
+        if len(idxs) == 1:
+            winner = idxs[0]
+        else:
+            lengths = [len(runs[i][0]) for i in idxs]
+            mx = max(lengths)
+            if lengths.count(mx) > 1:
+                continue  # ambiguous tie
+            winner = idxs[lengths.index(mx)]
+        rp, rv = runs[winner]
+        verified[rp[rv.index(v)]] = str(v)
     return verified
 
 
@@ -159,16 +187,22 @@ def build_page_trust(pdf_path: str) -> tuple[dict[int, str], dict[int, str]]:
         tier1 = sum(
             1 for i in range(n) if doc[i].get_label() and doc[i].get_label().strip()
         )
-        if tier1 < n * 0.5:
+        if tier1 < n * 0.5 or (n > 0 and tier1 * 2 == n):
+            # <= semantics: at EXACTLY 50% the extractor itself has already
+            # fallen back to tier 2/3 (its gate is empty_count < n*0.5) —
+            # routing those labels into assess_labels would stamp fabricated
+            # physical+1 as pdf_label_sane (boundary drift, review finding).
             trust, reason = PHYSICAL_ONLY, "no publisher labels (tier 2/3 fallback)"
         else:
             trust, reason = assess_labels(labels, n)
-        folio: dict[int, str] = {}
-        if trust != PDF_LABEL_SANE:
-            # Labels are suspect — the folio sequence is the way out.
-            folio = verify_folio_sequence(extract_folio_candidates(doc))
-            if folio:
-                logger.info("page_trust: %d/%d pages folio-verified (labels suspect: %s)", len(folio), n, reason)
+        # The folio sequence is consulted ALWAYS, not only for suspect
+        # labels: the offset fault (qa2/f17 — unique, monotone labels
+        # LAGGING behind the printed folios) is undetectable by sanity
+        # alone; a verified folio run wins over a sane label run because
+        # it is the printed truth. (One clipped text-layer pass per book.)
+        folio: dict[int, str] = verify_folio_sequence(extract_folio_candidates(doc))
+        if folio:
+            logger.info("page_trust: %d/%d pages folio-verified (labels: %s — %s)", len(folio), n, trust, reason)
         page_label_map: dict[int, str] = {}
         page_source_map: dict[int, str] = {}
         for i in range(n):
@@ -181,7 +215,7 @@ def build_page_trust(pdf_path: str) -> tuple[dict[int, str], dict[int, str]]:
             else:
                 page_label_map[i] = str(i + 1)
                 page_source_map[i] = PHYSICAL_ONLY
-        if trust != PDF_LABEL_SANE and not folio:
+        if not folio and trust != PDF_LABEL_SANE:
             logger.info("page_trust: labels suspect (%s) and no folio sequence — physical_only", reason)
         return page_label_map, page_source_map
     finally:

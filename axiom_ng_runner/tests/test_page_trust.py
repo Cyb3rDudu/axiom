@@ -15,8 +15,12 @@ import pymupdf
 from axiom_ng_runner.compute_core import page_trust as pt
 
 
-def make_pdf(top_lines, repeat_labels=None, single_labels=False):
-    """top_lines: per page the TOP line (folio candidate) or None for prose."""
+def make_pdf(top_lines, repeat_labels=None, single_labels=False, firstpagenum=None):
+    """top_lines: per page the TOP line (folio candidate) or None for prose.
+
+    firstpagenum: single label range starting there — the TRUE offset fault
+    (unique, monotone, covering labels lagging behind the printed folios).
+    """
     doc = pymupdf.open()
     for i, top in enumerate(top_lines):
         page = doc.new_page()
@@ -28,7 +32,7 @@ def make_pdf(top_lines, repeat_labels=None, single_labels=False):
     f = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
     doc.save(f.name)
     doc.close()
-    if repeat_labels or single_labels:
+    if repeat_labels or single_labels or firstpagenum:
         d2 = pymupdf.open(f.name)
         if repeat_labels:
             half = max(1, len(top_lines) // 2)
@@ -36,6 +40,9 @@ def make_pdf(top_lines, repeat_labels=None, single_labels=False):
                 {"startpage": 0, "prefix": repeat_labels, "style": "D", "firstpagenum": 1},
                 {"startpage": half, "prefix": repeat_labels, "style": "D", "firstpagenum": 1},
             ])
+        elif firstpagenum:
+            d2.set_page_labels(
+                [{"startpage": 0, "prefix": "", "style": "D", "firstpagenum": firstpagenum}])
         else:
             d2.set_page_labels([{"startpage": 0, "prefix": "", "style": "D", "firstpagenum": 1}])
         out = f.name + ".l.pdf"
@@ -73,12 +80,29 @@ class PageTrustTests(unittest.TestCase):
             self.assertEqual(sources[i], pt.PHYSICAL_ONLY, f"page {i}")
 
     def test_offset_labels_folio_wins(self):
-        # qa2/f17 shape: labels repeat/lag, printed folios 152..155
+        # qa2/f17 TRUE shape: unique, monotone, covering labels starting at
+        # 148 (lagging 4 behind the printed folios 152..155) — sanity CANNOT
+        # see this; only the always-consulted folio sequence can (review C1:
+        # the original delivery gated folio behind suspect labels and this
+        # fault sailed through as pdf_label_sane).
         labels, sources = pt.build_page_trust(
-            self._pdf(["152", "153", "154", "155"], repeat_labels="1"))
+            self._pdf(["152", "153", "154", "155"], firstpagenum=148))
         self.assertEqual([labels[i] for i in range(4)], ["152", "153", "154", "155"])
         for i in range(4):
             self.assertEqual(sources[i], pt.FOLIO_VERIFIED)
+
+    def test_rot_vorher_old_pipeline_is_wrong(self):
+        # DoD: rot-vorher demonstrated IN CODE — the old label-blind pipeline
+        # (extract_page_labels alone) produces the wrong labels for the
+        # fault fixtures the trust pipeline fixes.
+        from axiom_ng_runner.compute_core.pdf_processing import extract_page_labels
+
+        z5 = extract_page_labels(self._pdf(["4", "5", "6", None, None], repeat_labels="C1"))
+        self.assertNotEqual([z5.get(i) for i in range(3)], ["4", "5", "6"],
+                            "z5 fixture must be red under the old pipeline")
+        off = extract_page_labels(self._pdf(["152", "153", "154", "155"], firstpagenum=148))
+        self.assertNotEqual([off.get(i) for i in range(4)], ["152", "153", "154", "155"],
+                            "offset fixture must be red under the old pipeline")
 
     def test_sane_labels_stay_sane(self):
         labels, sources = pt.build_page_trust(
@@ -107,6 +131,20 @@ class PageTrustTests(unittest.TestCase):
         # a consistent 3-run verifies exactly its members
         verified = pt.verify_folio_sequence({0: "10", 1: "11", 2: "12", 5: "40"})
         self.assertEqual(verified, {0: "10", 1: "11", 2: "12"})
+        # the 3-page minimum is load-bearing: a 2-run must NOT verify
+        # (a bare year plus one successor is not a folio sequence)
+        self.assertEqual(pt.verify_folio_sequence({0: "7", 1: "8"}), {})
+
+    def test_chapter_restart_clash_drops_shorter_runs(self):
+        # per-chapter numbering: a 4-page chapter run (1..4) and a 3-page
+        # one (1..3) — the LONGEST run wins per value, the shorter drops
+        # (a citation must not silently resolve to the earliest chapter)
+        verified = pt.verify_folio_sequence(
+            {0: "1", 1: "2", 2: "3", 3: "4", 5: "1", 6: "2", 7: "3"})
+        self.assertEqual(verified, {0: "1", 1: "2", 2: "3", 3: "4"})
+        # length ties are ambiguous — both drop (never guess)
+        self.assertEqual(
+            pt.verify_folio_sequence({0: "1", 1: "2", 2: "3", 10: "1", 11: "2", 12: "3"}), {})
 
 
 if __name__ == "__main__":
