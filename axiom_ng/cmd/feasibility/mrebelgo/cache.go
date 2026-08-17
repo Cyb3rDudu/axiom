@@ -106,12 +106,21 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 	logits1, decCache0, encCache := step1Cached(dec1, encHidden, encMask, encLen)
 	tm, _ := ort.NewTensor(ort.NewShape(1, encLen), encMask) // constant across steps
 	defer tm.Destroy()
+	// First expansion mirrors the loop semantics exactly: EOS candidates go to done
+	// (with eviction), only the top numBeams NON-EOS candidates become live beams.
+	// The old code seeded all 2*numBeams candidates unfiltered — including [tp_XX, EOS],
+	// which then GENERATED PAST EOS (hallucinated chains, 255-round runs, 86% parity).
 	t6 := topKLogSoftmax(logits1, 2*numBeams)
 	beams := []hypC{}
+	done := []hyp{}
 	for _, c := range t6 {
+		if c.tok == eosID {
+			addHyp(&done, hyp{ids: []int64{tpXX, eosID}, score: c.logp})
+			continue
+		}
+		if len(beams) >= numBeams { break }
 		beams = append(beams, hypC{ids: []int64{tpXX, c.tok}, score: c.logp, past: decCache0})
 	}
-	done := []hyp{}
 	decLen := int64(1) // cache length after step1 (KV of tp_XX)
 	for !beamDoneC(done, beamToHypC(beams)) && len(beams) > 0 && decLen < int64(maxDec) {
 		all := make([]hypC, 0, len(beams)*(2*numBeams))
