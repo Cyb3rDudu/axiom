@@ -51,7 +51,7 @@ func main() {
 	for i, c := range chunks {
 		enc := tok.EncodeWithOptions(c.Text, true)
 		ids := shift(enc.IDs)
-		if len(ids) > 512 { ids = ids[:512] }
+		if len(ids) > 8192 { ids = ids[:8192] }
 		weights, err := tokenWeights(sess, ids)
 		if err != nil { fatal("run #%d: %v", i, err) }
 		sp := scatter(ids, weights)
