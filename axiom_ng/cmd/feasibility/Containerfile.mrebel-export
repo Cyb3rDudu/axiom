@@ -1,0 +1,21 @@
+# Study container for Restpunkt 6 decoder ONNX export with PINNED older
+# optimum/transformers/torch — the stable legacy onnx export path (option a).
+#
+# The study image has torch 2.13 + transformers 4.57.6, where:
+#   - torch.onnx delegates to the fragile dynamo exporter (EncoderDecoderCache failure),
+#   - optimum-cli 2.3.0 no longer registers the `onnx` subcommand.
+# Older optimum 1.21 + transformers 4.44 + torch 2.5 use the stable torchscript
+# exporter and the canonical optimum-cli export onnx seq2seq path.
+#
+# CPU-only is fine: decoder trace is a one-time step, no model forward is measured
+# here (measurement runs on the study-axiom-cuda GPU container).
+#
+#   podman build -t localhost/study-mrebel-export -f axiom_ng/cmd/feasibility/Containerfile.mrebel-export .
+FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
+
+RUN pip install --no-cache-dir "transformers==4.44.2" "optimum==1.21.0" onnx 2>&1 | tail -2
+
+# export script + harness are copied at build time from the repo
+COPY axiom_ng/cmd/feasibility/mrebel_export/ /study/cmd/feasibility/mrebel_export/
+
+WORKDIR /study/cmd/feasibility/mrebel_export
