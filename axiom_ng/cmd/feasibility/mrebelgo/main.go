@@ -233,6 +233,14 @@ func stepN(s *ort.DynamicAdvancedSession, tokID int64,
 			outsV = append(outsV, t)
 		}
 	}
+	if os.Getenv("MRBEL_DEBUG")=="1" {
+		for i,fv := range feeds {
+			sh := ort.Shape{}
+			if t,ok := fv.(*ort.Tensor[float32]); ok { sh = t.GetShape() }
+			if t,ok := fv.(*ort.Tensor[int64]); ok { sh = t.GetShape() }
+			fmt.Fprintf(os.Stderr, "  feed[%d] rank=%d shape=%v\n", i, len(sh), sh)
+		}
+	}
 	if err := s.Run(feeds, outsV); err != nil { fatal("stepN: %v", err) }
 	tm.Destroy(); tid.Destroy()
 	// repack outputs: logits + 24 present (per layer dec.k, dec.v)
