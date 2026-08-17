@@ -225,6 +225,10 @@ func stepN(s *ort.DynamicAdvancedSession, tokID int64,
 
 	feeds := make([]ort.Value, 0, 50)
 	feeds = append(feeds, tm, tid)
+	if os.Getenv("MRBEL_DEBUG") == "1" && tokID == tpXX {
+		fmt.Fprintf(os.Stderr, "   stepN RECEIVED pastDec len=%d pastEnc len=%d pastDec[0] shape=%v pastEnc[0] shape=%v\n",
+			len(pastDec), len(pastEnc), pastDec[0].GetShape(), pastEnc[0].GetShape())
+	}
 	// per layer: dec.k,dec.v,enc.k,enc.v
 	for l := 0; l < nLayers; l++ {
 		feeds = append(feeds, pastDec[2*l], pastDec[2*l+1])
