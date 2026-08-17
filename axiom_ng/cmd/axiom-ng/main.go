@@ -99,6 +99,7 @@ func main() {
 		srv.SetPassageService(searchSvc) // A1 #165: same service, passage surface
 		// R6 (#136): knowledge-graph read API over the L6 data.
 		srv.SetKGService(rep)
+		srv.SetSelectionRepo(rep) // A2 #166: selection + documents listing
 		// Role probe (R4 Ziel 1/3): capability check of the query runner at
 		// start — verifies query_embedding/reranking and logs the role map.
 		// Best-effort: an unreachable query runner keeps search degraded-but-

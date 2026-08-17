@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -10,8 +12,15 @@ import (
 )
 
 // SyncService is what the server needs to trigger a Zotero sync.
+// SyncOverrideBody is the optional POST /api/zotero/sync body (#166):
+// one-run include/exclude document lists on top of the persisted selection.
+type SyncOverrideBody struct {
+	Include []string `json:"include"`
+	Exclude []string `json:"exclude"`
+}
+
 type SyncService interface {
-	Run(ctx context.Context) (sync.Result, error)
+	Run(ctx context.Context, override *sync.SyncOverride) (sync.Result, error)
 }
 
 // JobRepo is what the server needs to list ingest jobs.
@@ -31,7 +40,30 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "sync not configured"})
 		return
 	}
-	res, err := s.jobsSvc.Run(r.Context())
+	// Optional one-run selection override (#166). An empty or absent body is
+	// a plain sync (persisted selection only). UUID-validated: a typo'd id
+	// would silently gate nothing.
+	var body SyncOverrideBody
+	if r.Body != nil {
+		raw, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &body); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid sync override body"})
+				return
+			}
+			for _, id := range append(append([]string{}, body.Include...), body.Exclude...) {
+				if !isUUID(id) {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "override ids must be document UUIDs"})
+					return
+				}
+			}
+		}
+	}
+	var override *sync.SyncOverride
+	if len(body.Include) > 0 || len(body.Exclude) > 0 {
+		override = &sync.SyncOverride{Include: body.Include, Exclude: body.Exclude}
+	}
+	res, err := s.jobsSvc.Run(r.Context(), override)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
