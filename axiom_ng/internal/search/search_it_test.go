@@ -131,7 +131,7 @@ func TestIT_SearchEndToEnd(t *testing.T) {
 		}
 		top := res.Hits[0]
 		t.Logf("[IT] %0.1fs q=%q -> %q | %s | %s | %.3f", dt.Seconds(), q[:min(40, len(q))],
-			truncateChars(top.Text, 60), top.Source.Book, top.Locator.Label, top.Score)
+			truncateChars(top.Text, 60), top.Source.Title, top.Locator.Label, top.Score)
 	}
 	sort.Float64s(lat)
 	p95 := lat[int(math.Ceil(0.95*float64(len(lat))))-1]
@@ -173,7 +173,7 @@ func onTopic(anchors string, hits []Hit) bool {
 	// Substring containment over the hit's text + section + book title:
 	// German compounds make substring the honest lexical signal.
 	for _, h := range hits {
-		lt := strings.ToLower(h.Text + " " + strings.Join(h.Section, " ") + " " + h.Source.Book)
+		lt := strings.ToLower(h.Text + " " + strings.Join(h.Section, " ") + " " + h.Source.Title)
 		ov := 0
 		for _, a := range strings.Fields(anchors) {
 			if strings.Contains(lt, a) {
@@ -190,7 +190,7 @@ func onTopic(anchors string, hits []Hit) bool {
 func dumpHits(hits []Hit) string {
 	var b strings.Builder
 	for _, h := range hits {
-		fmt.Fprintf(&b, "  - %q loc=%s src=%q\n", truncateChars(h.Text, 80), h.Locator.Label, h.Source.Book)
+		fmt.Fprintf(&b, "  - %q loc=%s src=%q\n", truncateChars(h.Text, 80), h.Locator.Label, h.Source.Title)
 	}
 	return b.String()
 }
@@ -225,5 +225,5 @@ func TestIT_SearchGraphArmOn(t *testing.T) {
 		t.Fatalf("graph-arm run off-topic:\n%s", dumpHits(res.Hits[:min(3, len(res.Hits))]))
 	}
 	t.Logf("[IT] graph arm ON: top=%q | %s | %.3f (pool %d candidates, hybrid quality held)",
-		truncateChars(res.Hits[0].Text, 50), res.Hits[0].Source.Book, res.Hits[0].Score, len(res.Hits))
+		truncateChars(res.Hits[0].Text, 50), res.Hits[0].Source.Title, res.Hits[0].Score, len(res.Hits))
 }

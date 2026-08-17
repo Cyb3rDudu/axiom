@@ -374,7 +374,7 @@ func precisionAt(k int, hits []search.Hit, gold []string) float64 {
 	n := min(k, len(hits))
 	good := 0
 	for _, h := range hits[:n] {
-		if isGold(h.Source.Book, gold) {
+		if isGold(h.Source.Title, gold) {
 			good++
 		}
 	}
@@ -384,7 +384,7 @@ func precisionAt(k int, hits []search.Hit, gold []string) float64 {
 // mrr: reciprocal rank of the first gold hit.
 func mrr(hits []search.Hit, gold []string) float64 {
 	for i, h := range hits {
-		if isGold(h.Source.Book, gold) {
+		if isGold(h.Source.Title, gold) {
 			return 1.0 / float64(i+1)
 		}
 	}
@@ -400,7 +400,7 @@ func recallAt(k int, hits []search.Hit, gold []string) float64 {
 	found := map[string]bool{}
 	for _, h := range hits[:n] {
 		for _, g := range gold {
-			if norm(h.Source.Book) == norm(g) {
+			if norm(h.Source.Title) == norm(g) {
 				found[g] = true
 			}
 		}

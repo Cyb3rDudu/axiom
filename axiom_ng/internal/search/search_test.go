@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
@@ -87,8 +88,21 @@ func (f fakeDocs) DocumentMetaByIDs(ctx context.Context, ids []string) (map[stri
 
 // osServer is a scripted OpenSearch stub: it answers _search by inspecting
 // the query body (knn vs match) so both arms can return distinct lists.
+// chunkFixture is a passage-shaped indexed chunk for the stub.
+type chunkFixture struct {
+	ChunkID      string          `json:"chunk_id"`
+	DocumentID   string          `json:"document_id"`
+	SnapshotID   string          `json:"snapshot_id"`
+	AttachmentID string          `json:"attachment_id"`
+	ChunkIndex   int             `json:"chunk_index"`
+	Text         string          `json:"text"`
+	Sections     []string        `json:"section_titles"`
+	Locator      json.RawMessage `json:"locator"`
+}
+
 type osServer struct {
 	*httptest.Server
+	docChunks      map[string]chunkFixture
 	knnHits        []osHit
 	bm25Hits       []osHit
 	sparseHits     []osHit
@@ -102,14 +116,89 @@ type osServer struct {
 
 func newOSServer(t *testing.T) *osServer {
 	t.Helper()
-	s := &osServer{}
+	s := &osServer{docChunks: map[string]chunkFixture{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A1 #165 passage surfaces: _doc/{id}, _mget, and the neighbor
+		// _search (identified by its attachment_id filter).
+		if strings.Contains(r.URL.Path, "/_doc/") {
+			id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+			if fx, ok := s.docChunks[id]; ok {
+				_ = json.NewEncoder(w).Encode(map[string]any{"found": true, "_source": fx})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"found": false})
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/_mget") {
+			var body struct {
+				IDs  []string `json:"ids"`
+				Docs []struct {
+					ID string `json:"_id"`
+				} `json:"docs"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			ids := body.IDs
+			for _, d := range body.Docs {
+				ids = append(ids, d.ID)
+			}
+			docs := make([]map[string]any, 0, len(ids))
+			for _, id := range ids {
+				if fx, ok := s.docChunks[id]; ok {
+					docs = append(docs, map[string]any{"found": true, "_source": fx})
+				} else {
+					docs = append(docs, map[string]any{"found": false})
+				}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"docs": docs})
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/_search") {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		if rawQ, _ := json.Marshal(body["query"]); strings.Contains(string(rawQ), "attachment_id") {
+			// neighbor query: attachment term filter + chunk_index range filter
+			var att string
+			lo, hi := -1, -1
+			if filters, ok := body["query"].(map[string]any)["bool"].(map[string]any)["filter"].([]any); ok {
+				for _, f := range filters {
+					fm, _ := f.(map[string]any)
+					if term, ok := fm["term"].(map[string]any); ok {
+						switch inner := term["attachment_id.keyword"].(type) {
+						case string: // canonical shorthand {"term": {"field": "value"}}
+							att = inner
+						case map[string]any: // explicit {"term": {"field": {"term": "value"}}}
+							att, _ = inner["term"].(string)
+						}
+					}
+					if rng, ok := fm["range"].(map[string]any); ok {
+						if idx, ok := rng["chunk_index"].(map[string]any); ok {
+							if v, ok := idx["gte"].(float64); ok {
+								lo = int(v)
+							}
+							if v, ok := idx["lte"].(float64); ok {
+								hi = int(v)
+							}
+						}
+					}
+				}
+			}
+			fxs := make([]chunkFixture, 0, 2)
+			for _, fx := range s.docChunks {
+				if fx.AttachmentID == att && fx.ChunkIndex >= lo && fx.ChunkIndex <= hi {
+					fxs = append(fxs, fx)
+				}
+			}
+			sort.Slice(fxs, func(i, j int) bool { return fxs[i].ChunkIndex < fxs[j].ChunkIndex })
+			hits := make([]map[string]any, 0, len(fxs))
+			for _, fx := range fxs {
+				hits = append(hits, map[string]any{"_id": fx.ChunkID, "_source": fx})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"hits": map[string]any{"hits": hits}})
+			return
+		}
 		q, _ := body["query"].(map[string]any)
 		raw, _ := json.Marshal(q)
 		isKnn := strings.Contains(string(raw), `"knn"`)
@@ -442,7 +531,7 @@ func TestSearch_SourceHydration(t *testing.T) {
 	for _, h := range res.Hits {
 		if h.ChunkID == "a" {
 			found = true
-			if h.Source.Book != "CSR Handbuch" || h.Source.Authors[0] != "Rene Schmidpeter" || *h.Source.Year != 2020 {
+			if h.Source.Title != "CSR Handbuch" || h.Source.Authors[0] != "Rene Schmidpeter" || *h.Source.Year != 2020 {
 				t.Fatalf("source hydration broken: %+v", h.Source)
 			}
 		}
@@ -467,7 +556,7 @@ func TestSearch_SourceHydrationErrorDegrades(t *testing.T) {
 		t.Fatalf("hits must survive hydration failure, got %d", len(res.Hits))
 	}
 	for _, h := range res.Hits {
-		if h.Source.Book != "" {
+		if h.Source.Title != "" {
 			t.Fatalf("no metadata expected on hydration failure: %+v", h.Source)
 		}
 		if h.Source.DocID == "" {

@@ -7,10 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 )
 
-func hitBook(b string) search.Hit { return search.Hit{Source: search.Source{Book: b}} }
+func hitBook(b string) search.Hit { return search.Hit{Source: repo.SourceView{Title: b}} }
 
 func hitChunk(c string) search.Hit { return search.Hit{ChunkID: c} }
 
