@@ -242,6 +242,16 @@ func stepN(s *ort.DynamicAdvancedSession, tokID int64,
 		if err != nil { fatal("stepN out: %v", err) }
 		outT[i] = t; outs[i] = t
 	}
+	names := decKInputs()
+	if os.Getenv("MRBEL_DEBUG") == "1" && tokID == tpXX {
+		for i, fv := range feeds {
+			if t, ok := fv.(*ort.Tensor[float32]); ok {
+				fmt.Fprintf(os.Stderr, "   stepN feed[%d] name=%s shape=%v\n", i, names[i], t.GetShape())
+			} else {
+				fmt.Fprintf(os.Stderr, "   stepN feed[%d] name=%s non-tensor\n", i, names[i])
+			}
+		}
+	}
 	if err := s.Run(feeds, outs); err != nil { fatal("stepN: %v", err) }
 	tm.Destroy(); tid.Destroy()
 	return logits.GetData(), outT
