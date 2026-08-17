@@ -22,7 +22,8 @@ COPY axiom_ng/docs/research/ /study/docs/research/
 ENV ORT_DYLIB=/opt/onnxruntime/lib/libonnxruntime.so.1.29.0
 ENV PATH=/usr/local/go/bin:$PATH
 ENV CGO_ENABLED=1
-ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cu13/lib:/opt/onnxruntime/lib
+RUN ldconfig -p >/dev/null 2>&1 || true; ln -sf /usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn.so.9 /usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn.so
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cu13/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib:/opt/onnxruntime/lib
 WORKDIR /study/cmd/feasibility
 
 # Build every Go PoC except xberg (needs its own prebuilt FFI cgo shim).
