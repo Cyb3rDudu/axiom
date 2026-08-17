@@ -31,7 +31,7 @@ func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, e
 	beams := []hyp{{ids: []int64{tpXX}, score: 0}}
 	done := []hyp{} // finished hypotheses, capped at numBeams, best-by-score retained (BeamHypotheses semantics)
 	decLen := 0
-	for len(done) < numBeams && len(beams) > 0 && decLen < maxDec {
+	for !beamDone(done, beams) && len(beams) > 0 && decLen < maxDec {
 		all := make([]hyp, 0, len(beams)*(2*numBeams))
 		for _, b := range beams {
 			logP, err := decodeStep(dec, b.ids, encHidden, encMask)
@@ -107,4 +107,15 @@ func addHyp(done *[]hyp, h hyp) {
 	*done = append(*done, h)
 	sort.SliceStable(*done, func(i, j int) bool { return (*done)[i].score > (*done)[j].score })
 	if len(*done) > numBeams { *done = (*done)[:numBeams] }
+}
+
+// beamDone mirrors transformers BeamHypotheses.is_done (early_stopping=False):
+// generation is done once >= numBeams hypotheses are finished AND the best open beam
+// score cannot beat the worst finished hypothesis.
+func beamDone(done, beams []hyp) bool {
+	if len(done) < numBeams { return false }
+	worst := done[len(done)-1].score // done sorted desc, so last = worst
+	bestOpen := math.Inf(-1)
+	for _, b := range beams { if b.score > bestOpen { bestOpen = b.score } }
+	return worst >= bestOpen
 }
