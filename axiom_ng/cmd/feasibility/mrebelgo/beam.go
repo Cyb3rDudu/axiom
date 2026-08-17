@@ -43,9 +43,14 @@ func beamSearchFull(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvance
 		for i := 0; i < 4; i++ { fmt.Fprintf(os.Stderr, "  pastDec0[%d] shape=%v\n", i, pastDec0[i].GetShape()) }
 		for i := 0; i < 4; i++ { fmt.Fprintf(os.Stderr, "  pastEnc[%d]  shape=%v\n", i, pastEnc[i].GetShape()) }
 	}
-	// fresh copies as stepN inputs (avoids reusing step1 output OrtValues directly)
-	pastDec0 = deepCloneCache(pastDec0)
-	pastEnc = deepCloneCache(pastEnc)
+	// EXPERIMENT: fresh zero tensors for initial cache (godec1-style) to isolate rank error
+	zdec := func(L int64) []*ort.Tensor[float32] {
+		out := make([]*ort.Tensor[float32], 24)
+		for i := range out { out[i], _ = ort.NewTensor(ort.NewShape(1, heads, L, headDim), make([]float32, heads*int(L)*headDim)) }
+		return out
+	}
+	pastDec0 = zdec(1)
+	pastEnc = zdec(encLen)
 	beams := []*beam{{ids: []int64{tpXX}, score: 0, past: pastDec0}}
 
 	finished := make([]*beam, 0, numReturn)
