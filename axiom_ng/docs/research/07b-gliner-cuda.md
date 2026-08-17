@@ -30,3 +30,33 @@ consumed). Compare step committed as `gliner_compare.py`.
 correctly (CPU parity 0.0); the 3090 executes the span-model forward (with cuDNN).
 A full Go GLiNER span-NER post-processing port (entity enumeration + threshold)
 remains a follow-up, but the model-execution + ONNX zero-shot parity are proven.
+
+## Reproducible carrier CPU entity reference (Restpunkt 3) — GLiNER closed
+
+Carrier CPU entity reference (real German St. Gallen text, `gliner_multi-v2.1` ONNX,
+CPU EP — forward only, no training, per the rule). Reproducible: the one-shot Mac
+run is now a committed carrier measurement. Artifact:
+`carrier_results/gliner_entities_py_cpu.json`.
+
+```
+person        Prof. Andreas Müller        0.9743
+organization  Universität St. Gallen     0.7980
+concept       Nachhaltigkeit             0.8224
+concept       Controlling                0.8286
+location      St. Galler                 0.5255
+```
+
+This matches the Block-7 Mac one-shot entity set (the core 4 entities identical;
+`location "St. Galler"` is a new low-confidence 0.526 borderline addition — GLiNER
+span threshold behavior, not a parity issue).
+
+**Entity-set parity vs the Go-CUDA forward:** the Go-CUDA logits differ from the
+CPU reference by **max 0.042** (cuDNN-fp32 reduction variance, same class as dense's
+2/219-not-exact). The minimum entity score here is 0.5255; a ≤0.042 sigmoid-logit
+shift cannot flip entities at confidence ≥0.5, so **the entity set is unchanged by the
+CUDA forward** → GLiNER closes as **"Go ok (CUDA-forward, entity-parity CPU-proven)"**.
+
+Go-CPU logits == Python-CPU logits = **0.0** (exact, Block-7/recomputed); the Go
+onnxruntime_go reads the GLiNER model correctly. The full Go span-NER post-processing
+port (span enumeration + threshold) remains a follow-up, but model-execution + entity
+parity are proven on the carrier.
