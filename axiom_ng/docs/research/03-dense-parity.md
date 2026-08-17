@@ -138,3 +138,23 @@ Go** — the algorithm and ONNX export are Python-proven (1.0/1.0); the measured
 Go divergence is most parsimoniously explained by the harness truncation
 mismatch above and needs one matched re-run to resolve. Either resolution is a
 tooling-level follow-up, not a feasibility blocker for the CUDA ONNX path.
+
+## CUDA (carrier, Nachzug) — same-device dense parity
+
+Carrier measurement (2026-08-17): Go `onnxruntime_go` with **CUDA-EP** vs
+Python `torch` **both on the same RTX 3090** (GPU 0), same container, corpus
+unchanged (219 chunks). Artifact: `carrier_results/dense_cosine_cuda.csv`
+(Hivemind recomputes every number from it).
+
+| Metric (CUDA same-device) | Value |
+|---|---|
+| avg cosine | **0.999639** (≥0.999 ✓) |
+| min cosine | 0.948862 (chunk 48 — the `Ȭ` tokenizer outlier) |
+| cos ≥ 0.999 | 217 / 219 |
+| Go run1 vs run2 byte-equal | true (897,024 B) |
+| max abs diff (normalized) | 3.6e-02 |
+
+Note: on CUDA both sides are fp32 kernels with different reduction orders, so
+bit-exact 1.0 is rarer than on CPU-vs-MPS (2/219 here) — but avg ≥0.999 holds.
+Only chunk 48 (rare `Ȭ` unknown-char tokenization) drops below 0.999; chunks 66
+(0.99989) and 108 (0.999992) are ≥0.999. This **proves the CUDA column for dense**.\n

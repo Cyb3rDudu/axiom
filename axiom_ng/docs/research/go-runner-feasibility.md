@@ -36,7 +36,7 @@ Apple-only parity (GoMLX) does not earn a CUDA column — documented, not hidden
 | Contract API surface (§5/§7a) | **Go: yes** | CPU | n/a | Block 1: all 10 endpoints match app.py |
 | EPUB→CFI | **Go: yes** | CPU (algorithmic) | n/a | Block 1/4: pure HTMLParser walk → Go `net/html` |
 | Chunking + locator assembly | **Go: yes** | CPU (algorithmic) | n/a | Block 1: contract §11 mapping |
-| Dense BGE-M3 (query + passage) | **Go: yes** (ONNX) | CPU (→CUDA) | **onnxruntime CUDA-EP** | Block 2/3: cosine avg **0.99964** on 219 real chunks; 2× byte-equal |
+| Dense BGE-M3 (query + passage) | **Go: yes** (ONNX) | **CUDA (RTX 3090, same-device)** | **onnxruntime CUDA-EP — PROVEN** | Block 2/3 + Nachzug: cosine avg **0.999639** on 219 chunks, **both Go-CUDA-EP and Py-torch-CUDA on the same 3090**; 217/219 ≥0.999; 2× byte-equal |
 | Sparse BGE-M3 | **Go: yes (algorithm proven)** — Go harness divergence, likely truncation | CPU | CUDA (same model) | Block 3: formula overlap **1.0 / cos 1.0** in Python (chunks 0 and 14 spot-check); Go divergence reframed — primary suspicion is gosparse 512-truncation vs reference 8192 (same class as the dense bug), binding hypothesis secondary until a matched re-run |
 | Rerank bge-reranker-v2-m3 | **Go: yes** (ONNX) | CPU (→CUDA) | **onnxruntime CUDA-EP** | Block 3/5: Spearman **0.978** (≥0.95) — *measured pre-pair-form-fix; re-run pending* (see 03); E2E `+rerank` correct |
 | GLiNER zero-shot NER | **Go: inferred** (ONNX export proven in Python; Go onnxruntime_go run pending) | CPU (→CUDA) | **GLiNER own ONNX + CUDA-EP** | Block 7: **parity ≤1e-5** PyTorch↔ONNX in Python (entity set identical); Go run still to do |
