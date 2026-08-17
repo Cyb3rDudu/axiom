@@ -149,3 +149,30 @@ class PageTrustTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StampWitnessTests(unittest.TestCase):
+    """#173 contract witness: EVERY adapted locator leaves stamped — the
+    adapted branch is the REAL production path (the review critical: it once
+    returned unstamped and the §11 gate would have terminal-failed every
+    real PDF job)."""
+
+    def test_adapted_chunk_gets_stamped(self):
+        from axiom_ng_runner import runner
+
+        old_style = {"text": "Fachtext", "metadata": {"page_start": "5", "page_end": "5",
+                                                      "section_titles": [], "token_count": 2}}
+        ch = runner._adapt_chunk(old_style, 0, {4: "5"}, {4: "folio_verified"})
+        self.assertEqual(ch["locator"]["page_source"], "folio_verified")
+
+        # reference mode (no map): honest physical_only, never a claim
+        ch2 = runner._adapt_chunk(dict(old_style), 0, {4: "5"}, None)
+        self.assertEqual(ch2["locator"]["page_source"], "physical_only")
+
+    def test_pass_through_epub_gets_none(self):
+        from axiom_ng_runner import runner
+
+        contract = {"ref": "chunk-0000", "index": 0, "text": "x",
+                    "locator": {"type": "epub_cfi", "cfi_start": "/6/4", "cfi_end": "/6/8", "source": "epub"}}
+        ch = runner._adapt_chunk(contract, 0, {})
+        self.assertEqual(ch["locator"]["page_source"], "none")

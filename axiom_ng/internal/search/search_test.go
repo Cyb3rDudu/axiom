@@ -992,9 +992,9 @@ func TestLocatorViewTrustLevels(t *testing.T) {
 	if folio.PageSource != "folio_verified" || !strings.Contains(folio.Label, "S. 47") || strings.Contains(folio.Label, "PDF-S.") {
 		t.Fatalf("folio_verified renders as print page: %+v", folio)
 	}
-	phys := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"5","physical_page_start":4,"page_source":"physical_only"}`), ch)
-	if !strings.Contains(phys.Label, "PDF-S.") || strings.Contains(phys.Label, "· S. ") {
-		t.Fatalf("physical_only must render PDF-S. with the physical index: %+v", phys)
+	phys := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"99","physical_page_start":4,"page_source":"physical_only"}`), ch)
+	if !strings.Contains(phys.Label, "PDF-S. 5") || strings.Contains(phys.Label, "99") {
+		t.Fatalf("physical_only must show the physical index, never the untrusted label: %+v", phys)
 	}
 	if phys.PageSource != "physical_only" {
 		t.Fatalf("page_source must ride along: %+v", phys)

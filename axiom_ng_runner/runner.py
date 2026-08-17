@@ -118,7 +118,7 @@ def _stamp_page_source(
         locator["page_source"] = pt.NONE
         return
     if locator.get("page_source"):
-        return  # already stamped (e.g. chunking.py reference path)
+        return  # already stamped by a previous _stamp_page_source pass
     phys = locator.get("physical_page_start")
     if page_source_map and phys is not None:
         locator["page_source"] = page_source_map.get(int(phys), pt.PHYSICAL_ONLY)
@@ -182,7 +182,7 @@ def _adapt_chunk(
             "source": meta.get("locator_source", "marker_paginate"),
         }
 
-    return {
+    out = {
         "ref": f"chunk-{chunk_index:04d}",
         "index": chunk_index,
         "text": c.get("text", ""),
@@ -200,6 +200,11 @@ def _adapt_chunk(
         "embeddings": _adapt_embeddings(c.get("embeddings")),
         "metadata": {},
     }
+    # #173: EVERY locator leaves stamped — the adapted branch is the REAL
+    # production path (compute_core.Chunker old-style dicts); an unstamped
+    # locator here would trip the §11 gate and terminal-fail the job.
+    _stamp_page_source(out["locator"], page_source_map)
+    return out
 
 
 def _dense_embedding(chunk: dict[str, Any]) -> dict[str, Any]:

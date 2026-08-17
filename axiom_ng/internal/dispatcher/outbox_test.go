@@ -648,7 +648,7 @@ func rtResult(jobID, attID, contentHash string, n int) string {
 		}
 		chunks += `{"ref":"chunk-000` + string(rune('0'+i)) + `","index":` + string(rune('0'+i)) +
 			`,"text":"roundtrip chunk ` + string(rune('0'+i)) + `",` +
-			`"locator":{"type":"page_span","physical_page_start":0,"physical_page_end":0,"page_label_start":"1","page_label_end":"1","source":"marker_paginate"},` +
+			`"locator":{"type":"page_span","physical_page_start":0,"physical_page_end":0,"page_label_start":"1","page_label_end":"1","source":"marker_paginate","page_source":"pdf_label_sane"},` +
 			`"structure":{"section_titles":["RT"],"start_paragraph_index":0,"end_paragraph_index":0},"token_count":3,` +
 			`"embeddings":{"dense":{"model":"fake-bge","dimensions":3,"values":[0.1,0.2,0.3]}}}`
 	}

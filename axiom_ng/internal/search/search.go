@@ -709,10 +709,10 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 		// and pdf_label_sane render as page references (the page_source field
 		// lets clients gate citation on folio_verified only).
 		if loc.PageSource == "physical_only" {
+			// Untrusted labels never display: the physical index is the ONLY
+			// thing a physical_only locator may show.
 			pagePrefix = "PDF-S. "
-			if label == "" && loc.PhysicalPageStart != nil {
-				label = fmt.Sprintf("%d", *loc.PhysicalPageStart+1)
-			} else if label != "" && loc.PhysicalPageStart != nil {
+			if loc.PhysicalPageStart != nil {
 				label = fmt.Sprintf("%d", *loc.PhysicalPageStart+1)
 			}
 		} else if label == "" && loc.PhysicalPageStart != nil {

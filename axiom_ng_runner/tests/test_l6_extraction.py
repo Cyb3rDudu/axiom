@@ -507,6 +507,19 @@ class TestPipelineWiring:
             sys.modules, "axiom_ng_runner.compute_core.pdf_processing", proc_mod
         )
 
+        # page_trust stub (#173): the real path imports build_page_trust —
+        # under the stubbed core it cannot resolve (no __path__), so provide
+        # the trust tuple the runner expects (labels + honest levels).
+        trust_mod = types.ModuleType("axiom_ng_runner.compute_core.page_trust")
+        trust_mod.__dict__.update({
+            "build_page_trust": lambda _p: ({1: "1"}, {1: "pdf_label_sane"}),
+            "PHYSICAL_ONLY": "physical_only",
+            "NONE": "none",
+        })
+        monkeypatch.setitem(
+            sys.modules, "axiom_ng_runner.compute_core.page_trust", trust_mod
+        )
+
         # Chunker stub emitting REAL Chunker-shaped dicts (chunk_id in the
         # {doc_id}_chunk_{i:04d} format that _assign_contract_chunk_ids
         # must replace before mREBEL reads it).
