@@ -148,25 +148,21 @@ type Filters struct {
 
 // Hit is one ranked answer with its provenance.
 type Hit struct {
-	ChunkID string      `json:"chunk_id"`
-	Text    string      `json:"text"`
-	Score   float64     `json:"score"` // RRF score, or rerank score when Response.Reranked
-	Source  Source      `json:"source"`
-	Locator LocatorView `json:"locator"`
-	Section []string    `json:"section"`
+	ChunkID string          `json:"chunk_id"`
+	Text    string          `json:"text"`
+	Score   float64         `json:"score"` // RRF score, or rerank score when Response.Reranked
+	Source  repo.SourceView `json:"source"`
+	Locator LocatorView     `json:"locator"`
+	Section []string        `json:"section"`
 	// CollapsedNearDuplicates counts same-document near-duplicate chunks
 	// folded into this hit by #160 hygiene (0 = none; the collapse hint).
 	CollapsedNearDuplicates int `json:"collapsed_near_duplicates,omitempty"`
 }
 
-// Source is the bibliographic provenance of a hit.
-type Source struct {
-	Book      string   `json:"book"`
-	Authors   []string `json:"authors"`
-	Year      *int     `json:"year,omitempty"`
-	Publisher string   `json:"publisher,omitempty"`
-	DocID     string   `json:"document_id"`
-}
+// The bibliographic provenance of a hit is repo.SourceView — the unified
+// A1 client contract (#165): identical shape on search hits, KG evidence
+// sources, and /api/passage. (Replaces the pre-contract Source{book…} shape
+// BEFORE any client exists; from here field-adds only, breaks need a version.)
 
 // LocatorView is the human-usable locator (issue Ziel 5: page_span → "S. 47",
 // epub_cfi → chapter/CFI short form).
@@ -668,15 +664,10 @@ func truncateChars(s string, n int) string {
 	return s[:cut]
 }
 
-// sourceFor builds the Source block; missing metadata degrades to doc ID only.
-func sourceFor(m repo.DocumentMeta, docID string) Source {
-	return Source{
-		Book:      m.Title,
-		Authors:   m.Authors,
-		Year:      m.Year,
-		Publisher: m.Publisher,
-		DocID:     docID,
-	}
+// sourceFor builds the SourceView block; missing metadata degrades to the
+// doc id plus empty fields (#158 lesson: never an error).
+func sourceFor(m repo.DocumentMeta, docID string) repo.SourceView {
+	return m.View(docID)
 }
 
 // locatorView renders the stored locator into the human form (issue Ziel 5).

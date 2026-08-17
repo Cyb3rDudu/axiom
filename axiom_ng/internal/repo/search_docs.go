@@ -15,6 +15,8 @@ type documentMetaRow struct {
 	Creators  json.RawMessage `json:"creators"`
 	Year      *int            `json:"publication_year"`
 	Publisher string          `json:"publisher"`
+	Language  string          `json:"language"`
+	Tags      json.RawMessage `json:"tags"`
 }
 
 // zoteroCreator matches zotero.Creator's persisted JSONB shape.
@@ -31,6 +33,8 @@ type DocumentMeta struct {
 	Authors   []string
 	Year      *int
 	Publisher string
+	Language  string
+	Tags      []string
 }
 
 // DocumentMetaByIDs returns metadata for the given zotero_documents ids.
@@ -42,8 +46,9 @@ func (r *Repo) DocumentMetaByIDs(ctx context.Context, ids []string) (map[string]
 		return out, nil
 	}
 	rows, err := r.pool.Query(ctx, `
-				SELECT id::text, title, creators, publication_year, COALESCE(publisher, '')
-				FROM zotero_documents
+			SELECT id::text, title, creators, publication_year, COALESCE(publisher, ''),
+			       COALESCE(language, ''), COALESCE(tags, '[]'::jsonb)
+			FROM zotero_documents
 				WHERE id = ANY($1::uuid[]) AND NOT deleted`, ids)
 	if err != nil {
 		return nil, err
@@ -51,7 +56,7 @@ func (r *Repo) DocumentMetaByIDs(ctx context.Context, ids []string) (map[string]
 	defer rows.Close()
 	for rows.Next() {
 		var row documentMetaRow
-		if err := rows.Scan(&row.ID, &row.Title, &row.Creators, &row.Year, &row.Publisher); err != nil {
+		if err := rows.Scan(&row.ID, &row.Title, &row.Creators, &row.Year, &row.Publisher, &row.Language, &row.Tags); err != nil {
 			return nil, err
 		}
 		var cs []zoteroCreator
@@ -65,7 +70,17 @@ func (r *Repo) DocumentMetaByIDs(ctx context.Context, ids []string) (map[string]
 				authors = append(authors, strings.TrimSpace(c.FirstName+" "+c.LastName))
 			}
 		}
-		out[row.ID] = DocumentMeta{Title: row.Title, Authors: authors, Year: row.Year, Publisher: row.Publisher}
+		var ts []struct {
+			Tag string `json:"tag"`
+		}
+		_ = json.Unmarshal(row.Tags, &ts)
+		tags := make([]string, 0, len(ts))
+		for _, t := range ts {
+			if t.Tag != "" {
+				tags = append(tags, t.Tag)
+			}
+		}
+		out[row.ID] = DocumentMeta{Title: row.Title, Authors: authors, Year: row.Year, Publisher: row.Publisher, Language: row.Language, Tags: tags}
 	}
 	return out, rows.Err()
 }

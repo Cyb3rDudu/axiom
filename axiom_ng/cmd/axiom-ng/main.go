@@ -96,6 +96,7 @@ func main() {
 			searchSvc.SetGraphSource(rep)
 		}
 		srv.SetSearchService(searchSvc)
+		srv.SetPassageService(searchSvc) // A1 #165: same service, passage surface
 		// R6 (#136): knowledge-graph read API over the L6 data.
 		srv.SetKGService(rep)
 		// Role probe (R4 Ziel 1/3): capability check of the query runner at

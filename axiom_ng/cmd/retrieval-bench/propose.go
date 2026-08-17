@@ -80,7 +80,7 @@ func runPropose(ctx context.Context, suite goldSuite, suitePath string) {
 		pr := proposal{QueryID: gq.ID, Q: gq.Q, ScopeBooks: gq.Gold, ScopeIDs: ids}
 		for i, h := range res.Hits {
 			ph := propHit{
-				ChunkID: h.ChunkID, Book: h.Source.Book,
+				ChunkID: h.ChunkID, Book: h.Source.Title,
 				Locator: h.Locator.Label,
 				Excerpt: excerptOf(h.Text),
 			}

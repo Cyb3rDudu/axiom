@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 )
 
@@ -61,7 +62,7 @@ func TestSearchRouteOK(t *testing.T) {
 		Query: "csr", TopN: 1, Reranked: true,
 		Arms: search.Arms{Dense: true, BM25: true},
 		Hits: []search.Hit{{ChunkID: "c1", Text: "treffer", Score: 0.9,
-			Source:  search.Source{Book: "B", Authors: []string{"A"}},
+			Source:  repo.SourceView{Title: "B", Authors: []string{"A"}},
 			Locator: search.LocatorView{Kind: "page", Label: "S. 47"}}},
 	}})
 	rec := httptest.NewRecorder()
@@ -75,7 +76,7 @@ func TestSearchRouteOK(t *testing.T) {
 		Hits     []struct {
 			ChunkID string `json:"chunk_id"`
 			Source  struct {
-				Book string `json:"book"`
+				Title string `json:"title"`
 			} `json:"source"`
 			Locator struct {
 				Label string `json:"label"`
@@ -85,7 +86,7 @@ func TestSearchRouteOK(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if !body.Reranked || len(body.Hits) != 1 || body.Hits[0].Source.Book != "B" || body.Hits[0].Locator.Label != "S. 47" {
+	if !body.Reranked || len(body.Hits) != 1 || body.Hits[0].Source.Title != "B" || body.Hits[0].Locator.Label != "S. 47" {
 		t.Fatalf("response shape wrong: %s", rec.Body.String())
 	}
 }

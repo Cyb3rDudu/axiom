@@ -39,7 +39,7 @@ Each result looks like this:
       "chunk_id": "..",
       "text": "The GRI standards have been criticized for …",
       "score": 0.82,
-      "source": { "book": "Nachhaltiges Management", "authors": ["…"], "document_id": ".." },
+      "source": { "title": "Nachhaltiges Management", "authors": ["…"], "document_id": ".." },
       "locator": { "kind": "page", "label": "S. 221", "chapter": "Transparenz" },
       "section": ["Nachhaltiges Management", "Transparenz"]
     }
