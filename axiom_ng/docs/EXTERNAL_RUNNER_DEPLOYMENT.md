@@ -350,7 +350,7 @@ Drei Rollen, eine Prozessform — jeder `axiom_ng_runner` kann jede Rolle
 haben; die Rollen verteilen sich allein über axiom-ng-Konfiguration:
 
 | Rolle | Env in axiom-ng | Default | Betriebbild |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Query-Runner | `AXIOM_QUERY_RUNNER_URL` | `http://localhost:8012` (lokal, always-on) | Der Mac-Runner — Retrieval überlebt jeden Carrier-Ausfall |
 | Ingest-Runner (primär) | `AXIOM_PROCESSOR_URL` (bestehend) | `http://localhost:8012` | Carrier-GPU-Runner (best-available) |
 | Ingest-Fallback | `AXIOM_INGEST_FALLBACK_URL` | `http://localhost:8012` | Der Mac-Runner — Notfall-Chunking (#128: komplett, ~11× langsamer) |
