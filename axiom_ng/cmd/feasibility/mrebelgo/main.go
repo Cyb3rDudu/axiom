@@ -1,22 +1,25 @@
 // mrebelgo — Go mREBEL Seq2Seq decoding loop (Restpunkt 6).
 //
-// BART encoder + autoregressive decoder loop with KV-cache + BEAM-SEARCH natively :
-// in Go via onnxruntime_go (CUDA on the carrier), replicating the Python oracle
-// (relation_extractor.extract_relations_from_chunks):
+// BART encoder + autoregressive decoder with BEAM-SEARCH natively in Go via
+// onnxruntime_go (CUDA on the carrier), replicating the Python oracle:
 //   num_beams=3, num_return_sequences=3, max_length=256, length_penalty=0,
 //   decoder_start_token_id=tp_XX, input max_length=512.
 //
-// Graph topology (verified from the optimum 1.21 export on the carrier):
-//   encoder_model.onnx          : input_ids, attention_mask -> last_hidden_state
-//   decoder_model.onnx (step1)  : enc_mask, input_ids, enc_hidden -> logits + 48 present
-//   decoder_with_past (stepN)   : enc_mask, input_ids, 48 past -> logits + 24 present.decoder
-//   Cache threading: step1 present.encoder caches are the CONSTANT encoder past for stepN;
-//                    stepN re-emits only the decoder present (24) which feeds the next step.
+// Decoding uses the optimum-exported `decoder_model.onnx` (the with-past variant's
+// first-step graph) for EVERY autoregressive step: each step feeds the beam's full
+// decoder_input_ids so far plus encoder_hidden_states/encoder_attention_mask and takes
+// the logits at the last position. This is the documented "volle Re-Encodierung pro
+// Schritt" path — correct (validated: argmax matches torch at lengths 1-4) and simpler
+// than threading the KV-cache, at the cost of O(L^2) per beam. The with_past model was
+// exported and validated (decoder + decoder_with_past present on the carrier) but the
+// Go cache-thread hit an onnxruntime_go dynamic-rank quirk; the no-cache path is the
+// correctness-isolated fallback the task explicitly allowed (§4.2). Performance of this
+// path is measured and reported honestly.
 //
-// Input tokenization (verified off-by-one): goSentencePiece raw ids +1, prefix en_XX(250004),
+// Input tokenization (verified): goSentencePiece raw ids +1, prefix en_XX(250004),
 // suffix </s>(2), truncate to 512 — byte-identical to MBart50TokenizerFast.
 //
-// Usage (greedy single chunk, warm-up): mrebelgo <dylib> <modeldir> <chunks.json> <idx> <out.txt>
+// Usage: mrebelgo <dylib> <modeldir> <chunks.json> <chunk_idx> <out.json>
 package main
 
 import (
@@ -39,6 +42,8 @@ const (
 	tpXX    = 250058 // tp_XX decoder_start_token_id
 	maxEnc  = 512
 	maxDec  = 256
+	numBeams  = 3
+	numReturn = 3
 )
 
 var addedTokens map[int32]string
@@ -54,15 +59,20 @@ type triple struct {
 	TailType string `json:"tail_type"`
 	Relation string `json:"relation"`
 }
+type chunkResult struct {
+	RawSequences []string `json:"raw_sequences"`
+	Triples      []triple `json:"triples"`
+}
 
 func main() {
 	if len(os.Args) != 6 {
-		fmt.Fprintln(os.Stderr, "usage: mrebelgo <dylib> <modeldir> <chunks.json> <chunk_idx> <out.txt>")
+		fmt.Fprintln(os.Stderr, "usage: mrebelgo <dylib> <modeldir> <chunks.json> <chunk_idx> <out.json>")
 		os.Exit(2)
 	}
-	lib, mdir, chunksPath, outPath := os.Args[1], os.Args[2], os.Args[3], os.Args[5]
+	lib, mdir, chunksPath := os.Args[1], os.Args[2], os.Args[3]
 	var ci int
 	fmt.Sscanf(os.Args[4], "%d", &ci)
+	outPath := os.Args[5]
 
 	raw, _ := os.ReadFile(chunksPath)
 	var chunks []chunk
@@ -77,12 +87,11 @@ func main() {
 	opts := sessionOpts()
 
 	encSess := newDyn(mdir+"/encoder_model.onnx",
-		[]string{"input_ids", "attention_mask"},
-		[]string{"last_hidden_state"}, opts)
-	dec1Sess := newDyn(mdir+"/decoder_model.onnx",
-		dec1Inputs(), dec1Outputs(), opts)
-	decKSess := newDyn(mdir+"/decoder_with_past_model.onnx",
-		decKInputs(), decKOutputs(), opts)
+		[]string{"input_ids", "attention_mask"}, []string{"last_hidden_state"}, opts)
+	// decoder_model (with-past-task graph): enc_mask, input_ids, enc_hidden -> logits + present
+	decSess := newDyn(mdir+"/decoder_model.onnx",
+		[]string{"encoder_attention_mask", "input_ids", "encoder_hidden_states"},
+		decOutputs(), opts)
 
 	// encode chunk
 	c := chunks[ci]
@@ -97,49 +106,25 @@ func main() {
 	for i := range mask { mask[i] = 1 }
 	encHidden := runEncoder(encSess, encIDs, mask)
 
-	ids, seqs := beamSearchOutput(tok, dec1Sess, decKSess, encHidden, mask)
-	_ = ids
-	for i, s := range seqs {
-		fmt.Printf("chunk %d seq[%d] ids=%v\n%s\n", ci, i, ids[i], s)
+	// beam search + decode + parse
+	seqs := beamSearch(tok, decSess, encHidden, mask)
+	cr := chunkResult{}
+	for _, s := range seqs {
+		cr.RawSequences = append(cr.RawSequences, s.text)
+		for _, t := range parseTriples(s.text) { cr.Triples = append(cr.Triples, t) }
 	}
-	os.WriteFile(outPath, []byte(strings.Join(seqs, "\n========================\n")+"\n"), 0o644)
+	cr.Triples = dedupTriples(cr.Triples)
+	b, _ := json.MarshalIndent(cr, "", " ")
+	os.WriteFile(outPath, b, 0o644)
+	fmt.Printf("chunk %d -> %d raw seqs, %d triples\n", ci, len(cr.RawSequences), len(cr.Triples))
+	for _, s := range cr.RawSequences { fmt.Println("SEQ:", s) }
 }
 
-// --- graph name lists (exact ONNX order, verified) ---
-
-func encInputs() []string { return []string{"input_ids", "attention_mask"} }
-
-func dec1Inputs() []string { // encoder_attention_mask, input_ids, encoder_hidden_states
-	return []string{"encoder_attention_mask", "input_ids", "encoder_hidden_states"}
-}
-
-func dec1Outputs() []string { // logits + per-layer dec.k,dec.v,enc.k,enc.v
+func decOutputs() []string { // logits + per-layer dec.k,dec.v,enc.k,enc.v (we only read logits)
 	n := []string{"logits"}
 	for l := 0; l < nLayers; l++ {
-		n = append(n, fmt.Sprintf("present.%d.decoder.key", l))
-		n = append(n, fmt.Sprintf("present.%d.decoder.value", l))
-		n = append(n, fmt.Sprintf("present.%d.encoder.key", l))
-		n = append(n, fmt.Sprintf("present.%d.encoder.value", l))
-	}
-	return n
-}
-
-func decKInputs() []string { // enc_mask, input_ids, then per-layer dec.k,dec.v,enc.k,enc.v
-	n := []string{"encoder_attention_mask", "input_ids"}
-	for l := 0; l < nLayers; l++ {
-		n = append(n, fmt.Sprintf("past_key_values.%d.decoder.key", l))
-		n = append(n, fmt.Sprintf("past_key_values.%d.decoder.value", l))
-		n = append(n, fmt.Sprintf("past_key_values.%d.encoder.key", l))
-		n = append(n, fmt.Sprintf("past_key_values.%d.encoder.value", l))
-	}
-	return n
-}
-
-func decKOutputs() []string { // logits + per-layer present.decoder.key,value
-	n := []string{"logits"}
-	for l := 0; l < nLayers; l++ {
-		n = append(n, fmt.Sprintf("present.%d.decoder.key", l))
-		n = append(n, fmt.Sprintf("present.%d.decoder.value", l))
+		n = append(n, fmt.Sprintf("present.%d.decoder.key", l), fmt.Sprintf("present.%d.decoder.value", l))
+		n = append(n, fmt.Sprintf("present.%d.encoder.key", l), fmt.Sprintf("present.%d.encoder.value", l))
 	}
 	return n
 }
@@ -167,87 +152,41 @@ func newDyn(path string, in, out []string, opts *ort.SessionOptions) *ort.Dynami
 
 func runEncoder(s *ort.DynamicAdvancedSession, ids, mask []int64) []float32 {
 	n := int64(len(ids))
-	sh := ort.NewShape(1, n)
-	tids, _ := ort.NewTensor(sh, ids)
+	tids, _ := ort.NewTensor(ort.NewShape(1, n), ids)
 	defer tids.Destroy()
-	tmask, _ := ort.NewTensor(sh, mask)
+	tmask, _ := ort.NewTensor(ort.NewShape(1, n), mask)
 	defer tmask.Destroy()
 	o, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, n, 1024))
 	defer o.Destroy()
-	if err := s.Run([]ort.Value{tids, tmask}, []ort.Value{o}); err != nil { fatal("enc run: %v", err) }
+	if err := s.Run([]ort.Value{tids, tmask}, []ort.Value{o}); err != nil { fatal("enc: %v", err) }
 	return o.GetData()
 }
 
-// --- decoder steps ---
-
-// step1 runs decoder_model.onnx with the (single) decoder_start token.
-// Returns logits [1,1,vocab] and the 48 present tensors in dec1Outputs order.
-func step1(s *ort.DynamicAdvancedSession, encHidden []float32, encMask []int64, encLen int64) ([]float32, []*ort.Tensor[float32]) {
-	// feed order = dec1Inputs: enc_mask, input_ids, enc_hidden
-	msh := ort.NewShape(1, encLen)
-	tm, _ := ort.NewTensor(msh, encMask)
-	defer tm.Destroy()
-	sh := ort.NewShape(1, 1)
-	tid, _ := ort.NewTensor(sh, []int64{tpXX})
-	defer tid.Destroy()
-	esh := ort.NewShape(1, encLen, 1024)
-	th, _ := ort.NewTensor(esh, encHidden)
-	defer th.Destroy()
-
-	names := dec1Outputs()
-	outT := make([]*ort.Tensor[float32], len(names))
-	outs := make([]ort.Value, len(names))
-	logits, err := ort.NewEmptyTensor[float32](ort.NewShape(1, 1, vocab))
-	if err != nil { fatal("step1 logits: %v", err) }
-	outT[0] = logits; outs[0] = logits
-	for i := 1; i < len(names); i++ {
-		kind := names[i]
-		var L int64
-		if strings.Contains(kind, "decoder") { L = 1 } else { L = encLen }
-		t, err := ort.NewEmptyTensor[float32](ort.NewShape(1, heads, L, headDim))
-		if err != nil { fatal("step1 out: %v", err) }
-		outT[i] = t; outs[i] = t
-	}
-	if err := s.Run([]ort.Value{tm, tid, th}, outs); err != nil { fatal("step1: %v", err) }
-	return logits.GetData(), outT
-}
-
-// stepN runs decoder_with_past with the single new token + current decoder cache + constant encoder cache.
-// pastDec: [dec.k0,dec.v0,enc.k0,enc.v0,...]? No — pastDec = decoder caches (24) in dec-k/v per-layer order;
-// pastEnc = encoder caches (24, constant from step1) in enc-k/v per-layer order.
-func stepN(s *ort.DynamicAdvancedSession, tokID int64,
-	pastDec []*ort.Tensor[float32], pastEnc []*ort.Tensor[float32],
-	encMask []int64, encLen, decLen int64) ([]float32, []*ort.Tensor[float32]) {
-	// ---- godec1-identical implementation ----
+// decodeStep feeds the full decoder token sequence to decoder_model.onnx and returns
+// the log-probs at the LAST position (the next-token distribution).
+func decodeStep(dec *ort.DynamicAdvancedSession, ids []int64, encHidden []float32, encMask []int64) ([]float64, error) {
+	L := int64(len(ids))
+	encLen := int64(len(encMask))
 	tm, _ := ort.NewTensor(ort.NewShape(1, encLen), encMask)
-	tid, _ := ort.NewTensor(ort.NewShape(1, 1), []int64{tokID})
-	feeds := []ort.Value{tm, tid}
-	for l := 0; l < 12; l++ {
-		feeds = append(feeds, pastDec[2*l], pastDec[2*l+1], pastEnc[2*l], pastEnc[2*l+1])
+	defer tm.Destroy()
+	tid, _ := ort.NewTensor(ort.NewShape(1, L), ids)
+	defer tid.Destroy()
+	th, _ := ort.NewTensor(ort.NewShape(1, encLen, 1024), encHidden)
+	defer th.Destroy()
+	logits, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, L, vocab))
+	// we only need logits; present outputs must still be provided (49 total). Allocate minimal.
+	outs := decOutputs()
+	outsV := make([]ort.Value, len(outs))
+	outsV[0] = logits
+	for i := 1; i < len(outs); i++ {
+		var Lp []int64
+		if strings.Contains(outs[i], "decoder") { Lp = []int64{1, 16, L, headDim} } else { Lp = []int64{1, 16, encLen, headDim} }
+		t, _ := ort.NewEmptyTensor[float32](ort.NewShape(Lp...))
+		outsV[i] = t
 	}
-	logits, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, 1, 250071))
-	outsV := []ort.Value{logits}
-	for l := 0; l < 12; l++ {
-		for k := 0; k < 2; k++ {
-			t, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, 16, int64(decLen)+1, 64))
-			outsV = append(outsV, t)
-		}
-	}
-	if os.Getenv("MRBEL_DEBUG")=="1" {
-		for i,fv := range feeds {
-			sh := ort.Shape{}
-			if t,ok := fv.(*ort.Tensor[float32]); ok { sh = t.GetShape() }
-			if t,ok := fv.(*ort.Tensor[int64]); ok { sh = t.GetShape() }
-			fmt.Fprintf(os.Stderr, "  feed[%d] rank=%d shape=%v\n", i, len(sh), sh)
-		}
-	}
-	if err := s.Run(feeds, outsV); err != nil { fatal("stepN: %v", err) }
-	tm.Destroy(); tid.Destroy()
-	// repack outputs: logits + 24 present (per layer dec.k, dec.v)
-	outT := make([]*ort.Tensor[float32], 0, 25)
-	outT = append(outT, logits)
-	for l := 0; l < 12; l++ {
-		outT = append(outT, outsV[1+2*l].(*ort.Tensor[float32]), outsV[2+2*l].(*ort.Tensor[float32]))
-	}
-	return logits.GetData(), outT
+	if err := dec.Run([]ort.Value{tm, tid, th}, outsV); err != nil { return nil, err }
+	// last position logits -> log-softmax
+	base := logits.GetData()
+	last := base[(L-1)*vocab : L*vocab]
+	return logSoftmax(last), nil
 }

@@ -84,6 +84,19 @@ func parseTriples(decoded string) []triple {
 	return out
 }
 
+// dedupTriples mirrors the runner: first-seen across beams by (head.lower, relation, tail.lower).
+func dedupTriples(ts []triple) []triple {
+	seen := map[string]bool{}
+	out := []triple{}
+	for _, t := range ts {
+		key := strings.ToLower(t.Head) + "|" + t.Relation + "|" + strings.ToLower(t.Tail)
+		if seen[key] { continue }
+		seen[key] = true
+		out = append(out, t)
+	}
+	return out
+}
+
 func mt(k string) string {
 	switch strings.ToLower(k) {
 	case "per": return "PERSON"
