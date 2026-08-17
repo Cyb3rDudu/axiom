@@ -28,7 +28,7 @@ from transformers import AutoTokenizer
 tok = AutoTokenizer.from_pretrained(tok_dir)
 print("tokenizer-class", type(tok).__name__)
 
-sess = ort.InferenceSession(sp_head, providers=['CPUExecutionProvider']  # clean same-provider CPU re-run (Restpunkt 2))
+sess = ort.InferenceSession(sp_head, providers=['CUDAExecutionProvider','CPUExecutionProvider']  # GPU same-device (dudu: alles auf GPU))
 print("providers", sess.get_providers())
 
 def max_scatter(ids, weights):
