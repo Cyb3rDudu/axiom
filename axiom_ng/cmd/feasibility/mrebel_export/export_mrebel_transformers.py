@@ -21,6 +21,7 @@ Aufruf (Carrier, study-mrebel container with torch+transformers+onnx+GPU):
 import json
 import os
 import sys
+from pathlib import Path
 
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
@@ -43,7 +44,7 @@ def gen(model_id, out_dir, opset=14):
         model=model,
         config=onnx_config,
         opset=opset,
-        output=os.fspath(out_dir),
+        output=Path(out_dir),
         device=dev,
     )
     print("exported models:", inputs, "->", outputs)
