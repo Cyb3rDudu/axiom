@@ -3,7 +3,9 @@ package db
 import (
 	"context"
 	"os"
+	"strconv"
 	"testing"
+	"time"
 )
 
 // testDSN returns the integration-test Postgres DSN, or "" if not configured.
@@ -95,21 +97,24 @@ func TestRepairCasesOneOpenConstraint(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	// Minimal attachment fixture (source → document → attachment).
+	// Minimal attachment fixture (source → document → attachment). Run-unique
+	// keys: this test is idempotent across runs against the same test DB
+	// (review W — fixed keys collided on every second run).
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
 	var attID string
 	err = d.pool.QueryRow(ctx, `
 		WITH src AS (
 			INSERT INTO zotero_sources (base_url, library_id, server_id)
-			VALUES ('https://dbit.example', 'lib-constraint', 'srv') RETURNING id
+			VALUES ('https://dbit.example', 'lib-c-' || $1, 'srv') RETURNING id
 		), doc AS (
 			INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
-			SELECT id, 'CONSTDOC', 1, 'book', 'Constraint Doc' FROM src RETURNING id
+			SELECT id, 'DOCC' || $1, 1, 'book', 'Constraint Doc' FROM src RETURNING id
 		)
 		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
 			parent_zotero_key, link_mode, content_type, filename, local_path, preferred, deleted)
-		SELECT src.id, doc.id, 'CONSTATT', 1, 'CONSTDOC', 'imported_file',
+		SELECT src.id, doc.id, 'ATTC' || $1, 1, 'DOCC' || $1, 'imported_file',
 			'application/pdf', 'c.pdf', '/tmp/c.pdf', false, false
-		FROM src, doc RETURNING id`).Scan(&attID)
+		FROM src, doc RETURNING id`, suffix).Scan(&attID)
 	if err != nil {
 		t.Fatalf("seed attachment: %v", err)
 	}

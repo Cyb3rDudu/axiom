@@ -187,13 +187,16 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf [
 	// Zotero 10.0-beta point release; contentType is NOT in the probed fact
 	// list above and may be ignored or rejected by the local API.
 	md5hex := fmt.Sprintf("%x", md5.Sum(pdf))
-	form := strings.NewReader(strings.Join([]string{
-		"md5=" + md5hex,
-		"&filename=" + filename,
-		"&filesize=" + strconv.Itoa(len(pdf)),
-		"&mtime=" + strconv.FormatInt(time.Now().UnixMilli(), 10),
-		"&contentType=application/pdf",
-	}, ""))
+	// url.Values.Encode() — schema filenames carry spaces, umlauts, &, %, +
+	// ({Autor} - {Jahr} - {Titel}); hand-joined forms silently truncate at
+	// '&' and corrupt at '+'/'%' (review C3, empirically demonstrated).
+	form := strings.NewReader((url.Values{
+		"md5":         {md5hex},
+		"filename":    {filename},
+		"filesize":    {strconv.Itoa(len(pdf))},
+		"mtime":       {strconv.FormatInt(time.Now().UnixMilli(), 10)},
+		"contentType": {"application/pdf"},
+	}).Encode())
 	raw, _, err = w.do(http.MethodPost, "/api/users/0/items/"+attKey+"/file",
 		map[string]string{
 			"Content-Type":  "application/x-www-form-urlencoded",
@@ -266,7 +269,7 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf [
 	}
 
 	// Phase 3 — register the upload against the item (204).
-	reg := strings.NewReader("upload=" + auth.UploadKey)
+	reg := strings.NewReader(url.Values{"upload": {auth.UploadKey}}.Encode())
 	_, _, err = w.do(http.MethodPost, "/api/users/0/items/"+attKey+"/file",
 		map[string]string{
 			"Content-Type":  "application/x-www-form-urlencoded",

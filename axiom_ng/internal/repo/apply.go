@@ -70,7 +70,7 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 	// 3b. Deleted attachments must stop serving: retire their active
 	// snapshots (+ OS tombstones) in the same sync transaction.
 	if err := reconcileAttachmentSnapshotsTx(ctx, tx); err != nil {
-		return res, fmt.Errorf("retire deleted attachments: %w", err)
+		return res, fmt.Errorf("reconcile attachment snapshots: %w", err)
 	}
 
 	// 4. Collections. ListCanonicalCollections always returns a complete

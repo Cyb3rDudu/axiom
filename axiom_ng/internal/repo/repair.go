@@ -5,7 +5,8 @@
 // Loop guard (design nail 1): zotero_attachments.repair_attempts counts
 // EVERY claim per attachment; the third attempt is impossible by check —
 // the case goes blocked_for_dudu('loop-guard') and never enters the loop.
-// 'unpaginiert' originals never enter at all (CreateCase rejects them).
+// 'unpaginiert' originals never enter the loop: QueueRepairCase refuses
+// them (their rejected case stays as a dudu-visible tombstone).
 //
 // Foundation limitation (B3): in_repair has NO reaper/timeout yet — a
 // fix-service crash mid-case burns that attempt and leaves the case stuck
@@ -123,7 +124,7 @@ func (r *Repo) OpenRepairCase(ctx context.Context, attachmentID string) (*Repair
 // "Klasse unreparierbar → nie in der Schleife") — enforced here, not in
 // comments.
 func (r *Repo) QueueRepairCase(ctx context.Context, caseID, suspicionClass string, analysis json.RawMessage) error {
-	if strings.Contains(suspicionClass, "unpaginiert") {
+	if strings.Contains(strings.ToLower(suspicionClass), "unpaginiert") {
 		return fmt.Errorf("unpaginierte Originale gehen nie in die Reparatur-Schleife (case %s)", caseID)
 	}
 	tag, err := r.pool.Exec(ctx, `
@@ -230,8 +231,14 @@ func (r *Repo) SubmitRepairVerdict(ctx context.Context, caseID string, plan json
 		effective = RepairFailed
 	}
 	reason := blockedReason
-	if verdict == "auto_apply" && effective == RepairBlocked {
-		reason = fmt.Sprintf("auto-apply-gate: score=%.3f widersprüche=%d (Schwelle %.2f/0)", score, contradictions, RepairAutoApplyMinScore)
+	if effective == RepairBlocked && reason == "" {
+		// every blocked case carries a reason — dudu reads WHY (review C2:
+		// unknown verdicts used to land blocked with an empty reason)
+		if verdict == "auto_apply" {
+			reason = fmt.Sprintf("auto-apply-gate: score=%.3f widersprüche=%d (Schwelle %.2f/0)", score, contradictions, RepairAutoApplyMinScore)
+		} else {
+			reason = fmt.Sprintf("verdict %q unterhalb des auto-apply-gates: score=%.3f widersprüche=%d", verdict, score, contradictions)
+		}
 	}
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE repair_cases SET plan=$2, plan_version=$3, verify_score=$4, verify_contradictions=$5,

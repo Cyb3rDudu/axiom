@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -41,20 +43,31 @@ func newUploadServer(t *testing.T, authorizeBody string, foreign *httptest.Serve
 			b, _ := io.ReadAll(r.Body)
 			body := string(b)
 			if strings.HasPrefix(body, "upload=") {
-				for _, kv := range strings.Split(body, "&") {
-					p := strings.SplitN(kv, "=", 2)
-					if len(p) == 2 {
-						s.regForm[p[0]] = p[1]
+				// DECODED parse (url.ParseQuery): a hand-joined client form
+				// silently truncates at '&' and mangles '+'/'%' — the fake
+				// must see what the SERVER sees (review C3)
+				if q, err := url.ParseQuery(body); err != nil {
+					t.Errorf("register form ist nicht wohlgeformt: %v (%q)", err, body)
+				} else {
+					for k := range q {
+						s.regForm[k] = q.Get(k)
 					}
+				}
+				if v := r.Header.Get("If-None-Match"); v != "*" {
+					t.Errorf("register muss If-None-Match: * senden, got %q", v)
 				}
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
-			for _, kv := range strings.Split(body, "&") {
-				p := strings.SplitN(kv, "=", 2)
-				if len(p) == 2 {
-					s.authForm[p[0]] = p[1]
+			if q, err := url.ParseQuery(body); err != nil {
+				t.Errorf("authorize form ist nicht wohlgeformt: %v (%q)", err, body)
+			} else {
+				for k := range q {
+					s.authForm[k] = q.Get(k)
 				}
+			}
+			if v := r.Header.Get("If-None-Match"); v != "*" {
+				t.Errorf("authorize muss If-None-Match: * senden, got %q", v)
 			}
 			if authorizeBody != "" {
 				w.Header().Set("Content-Type", "application/json")
@@ -122,7 +135,10 @@ func newTestWriteClient(srv *httptest.Server) *WriteClient {
 // upload=<key> with If-None-Match, and the CREATED ITEM KEY is returned.
 func TestCreateAttachmentHappyPath(t *testing.T) {
 	s, srv := newUploadServer(t, "", nil)
-	key, err := newTestWriteClient(srv).CreateAttachmentWithFile("", `he"ck.pdf`, []byte("PDFBYTES"))
+	// realistic schema filename (spaces, umlauts, &, +, %) — the authorize
+	// form must round-trip it EXACTLY through url-encoding (review C3)
+	const fname = `Müller & Höfe 100% – 2020 – Der Frühling +Mehr.pdf`
+	key, err := newTestWriteClient(srv).CreateAttachmentWithFile("", fname, []byte("PDFBYTES"))
 	if err != nil {
 		t.Fatalf("CreateAttachmentWithFile: %v", err)
 	}
@@ -139,8 +155,11 @@ func TestCreateAttachmentHappyPath(t *testing.T) {
 	if s.authForm["filesize"] != "8" {
 		t.Errorf("authorize filesize = %q, want 8", s.authForm["filesize"])
 	}
-	if s.authForm["filename"] == "" {
-		t.Error("authorize form must carry the (urlencoded) filename")
+	if s.authForm["filename"] != fname {
+		t.Errorf("authorize filename round-trip: got %q, want %q", s.authForm["filename"], fname)
+	}
+	if mtime, err := strconv.ParseInt(s.authForm["mtime"], 10, 64); err != nil || mtime < 1_000_000_000_000 {
+		t.Errorf("mtime muss Millisekunden sein (13 Stellen), got %q", s.authForm["mtime"])
 	}
 	if s.regForm["upload"] != "UK1" {
 		t.Errorf("register must post upload=UK1, got %v", s.regForm)
@@ -148,8 +167,8 @@ func TestCreateAttachmentHappyPath(t *testing.T) {
 	if s.upParams["x-min-part-size"] != "1" {
 		t.Errorf("register-response params must be forwarded as form fields, got %v", s.upParams)
 	}
-	if s.upFile != `he"ck.pdf` {
-		t.Errorf("multipart filename round-trip failed: got %q, want %q", s.upFile, `he"ck.pdf`)
+	if s.upFile != fname {
+		t.Errorf("multipart filename round-trip failed: got %q, want %q", s.upFile, fname)
 	}
 }
 

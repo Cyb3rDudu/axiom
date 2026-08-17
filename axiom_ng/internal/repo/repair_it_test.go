@@ -12,8 +12,11 @@ import (
 func seedRepairCase(t *testing.T, lr *leaseRepo, attKey string, attempts int, claim bool) string {
 	t.Helper()
 	ctx := context.Background()
-	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: "lib-1",
-		docKey: "DOCREP", attKey: attKey}, "completed", 1)
+	// unique (base_url, library_id) per fixture — the sources table has a
+	// unique constraint and seed() plain-INSERTs (review B1)
+	lib := "lib-" + attKey
+	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: lib,
+		docKey: "DOC-" + attKey, attKey: attKey}, "completed", 1)
 	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_attachments SET repair_attempts=$2 WHERE id=$1`, attID, attempts); err != nil {
 		t.Fatalf("set repair_attempts: %v", err)
 	}
@@ -137,7 +140,7 @@ func TestRepairOneOpenCaseIT(t *testing.T) {
 	lr.truncateFixtures(t)
 	ctx := context.Background()
 
-	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: "lib-1",
+	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: "lib-guardcheck",
 		docKey: "DOCREP", attKey: "ATT-ONE"}, "completed", 1)
 	first, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
 	if err != nil || first == nil {
