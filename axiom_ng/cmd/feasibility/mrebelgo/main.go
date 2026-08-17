@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tggo/goSentencePiece"
@@ -57,7 +58,8 @@ type chunk struct {
 }
 
 // lastOut is true when the decoder session emits only "logits_last" ([B,1,vocab]).
-var lastOut bool
+// fusedTopK is true when the session emits in-graph TopK results ([B,1,6] ids+logps).
+var lastOut, fusedTopK bool
 type triple struct {
 	Head     string `json:"head"`
 	HeadType string `json:"head_type"`
@@ -102,7 +104,10 @@ func main() {
 	decModel := mdir + "/decoder_model.onnx"
 	decIn := []string{"encoder_attention_mask", "input_ids", "encoder_hidden_states"}
 	var decOut []string
-	if fileExists(mdir + "/decoder_logits_last.onnx") {
+	if fileExists(mdir + "/decoder_topk.onnx") {
+		decModel = mdir + "/decoder_topk.onnx" // Opt-7: LogSoftmax+TopK fused in-graph — only 6x2 values leave the GPU
+		decOut = []string{"ftk_topk_ids", "ftk_topk_logps"}
+	} else if fileExists(mdir + "/decoder_logits_last.onnx") {
 		decModel = mdir + "/decoder_logits_last.onnx" // Opt-4: [B,1,vocab] output — no L-sized logit download
 		decOut = []string{"logits_last"}
 	} else if fileExists(mdir + "/decoder_logits.onnx") {
@@ -112,6 +117,7 @@ func main() {
 		decOut = decOutputs()
 	}
 	lastOut = len(decOut) == 1 && decOut[0] == "logits_last"
+	fusedTopK = decOut[0] == "ftk_topk_ids"
 	decSess := newDyn(decModel, decIn, decOut, opts)
 	var decKSess, dec1Sess *ort.DynamicAdvancedSession
 	if os.Getenv("MRBEL_CACHE") == "1" {
@@ -264,7 +270,7 @@ var iob iobState
 
 // decodeStepB runs B equal-length beam sequences in ONE batched decoder call and returns
 // the last-position logits row per beam (Opt-3: [3, L] batching, Python's structure).
-func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, oneOutput bool) ([][]float32, error) {
+func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, oneOutput bool) ([][]cand, error) {
 	B := int64(len(seqs))
 	if B == 0 { return nil, nil }
 	L := int64(len(seqs[0]))
@@ -272,6 +278,26 @@ func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, 
 	for _, s := range seqs { flat = append(flat, s...) }
 	tid, _ := ort.NewTensor(ort.NewShape(B, L), flat)
 	defer tid.Destroy()
+	if fusedTopK {
+		// Opt-7: in-graph LogSoftmax+TopK — outputs are [B,1,6] ids (int64) + logps (fp32).
+		tids, _ := ort.NewEmptyTensor[int64](ort.NewShape(B, 1, 6))
+		defer tids.Destroy()
+		tlps, _ := ort.NewEmptyTensor[float32](ort.NewShape(B, 1, 6))
+		defer tlps.Destroy()
+		if err := dec.Run([]ort.Value{cd.tm, tid, cd.th}, []ort.Value{tids, tlps}); err != nil { return nil, err }
+		idData := tids.GetData()
+		lpData := tlps.GetData()
+		out := make([][]cand, B)
+		for b := int64(0); b < B; b++ {
+			row := make([]cand, 6)
+			for j := int64(0); j < 6; j++ {
+				idx := b*6 + j
+				row[j] = cand{tok: idData[idx], logp: float64(lpData[idx])}
+			}
+			out[b] = row
+		}
+		return out, nil
+	}
 	lastOnly := lastOut // "logits_last" graph outputs only the final position [B,1,vocab]
 	var logits *ort.Tensor[float32]
 	if lastOnly {
@@ -325,7 +351,14 @@ func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, 
 				if lastOut { start = b * vocab } else { start = b*L*vocab + (L-1)*vocab }
 				rows[b] = base[start : start+vocab]
 			}
-			return rows, nil
+			out := make([][]cand, B)
+			var wgp sync.WaitGroup
+			for i := range rows {
+				wgp.Add(1)
+				go func(i int) { defer wgp.Done(); out[i] = topKLogSoftmax(rows[i], 2*numBeams) }(i)
+			}
+			wgp.Wait()
+			return out, nil
 		}
 	}
 	if err := dec.Run([]ort.Value{cd.tm, tid, cd.th}, outsV); err != nil { return nil, err }
@@ -340,7 +373,14 @@ func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, 
 		}
 		rows[b] = base[start : start+vocab]
 	}
-	return rows, nil
+	out := make([][]cand, B)
+	var wg sync.WaitGroup
+	for i := range rows {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); out[i] = topKLogSoftmax(rows[i], 2*numBeams) }(i)
+	}
+	wg.Wait()
+	return out, nil
 }
 
 func (c *constDec) Destroy() {

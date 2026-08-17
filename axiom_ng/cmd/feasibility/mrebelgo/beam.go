@@ -5,7 +5,6 @@ import (
 	"math"
 	"os"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/tggo/goSentencePiece"
@@ -55,18 +54,9 @@ func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, c
 				useCD = constDecBatch(encMask, encHidden, len(beams))
 			}
 			t0 := time.Now()
-			rows, err := decodeStepB(dec, useCD, seqs, oneOut)
+			cands, err := decodeStepB(dec, useCD, seqs, oneOut)
 			if err != nil { fatal("decodeStepB: %v", err) }
 			traceT("dec", fmt.Sprintf("B%dL%d", len(beams), len(seqs[0])), time.Since(t0))
-			// Opt-5a: the 3 per-beam 250k scans run in parallel (indexed writes -> deterministic,
-			// identical arithmetic to the serial version).
-			cands := make([][]cand, len(beams))
-			var wg sync.WaitGroup
-			for i := range beams {
-				wg.Add(1)
-				go func(i int) { defer wg.Done(); cands[i] = topKLogSoftmax(rows[i], 2*numBeams) }(i)
-			}
-			wg.Wait()
 			for i, b := range beams {
 				t6 := cands[i]
 				de := dumpBeam{Ids: append([]int64{}, b.ids...), Score: b.score}
