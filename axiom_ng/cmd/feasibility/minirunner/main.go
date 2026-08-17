@@ -74,15 +74,16 @@ func main() {
 	tok, err := sentencepiece.NewTokenizer(spm)
 	if err != nil { fatal("tok: %v", err) }
 
+	so := sessionOpts()
 	denseS, err := ort.NewDynamicAdvancedSession(denseModel,
 		[]string{"input_ids", "attention_mask"},
-		[]string{"token_embeddings", "sentence_embedding"}, nil)
+		[]string{"token_embeddings", "sentence_embedding"}, so)
 	if err != nil { fatal("dense session: %v", err) }
 	defer denseS.Destroy()
 
 	rrkS, err := ort.NewDynamicAdvancedSession(rrkModel,
 		[]string{"input_ids", "attention_mask"},
-		[]string{"logits"}, nil)
+		[]string{"logits"}, so)
 	if err != nil { fatal("rerank session: %v", err) }
 	defer rrkS.Destroy()
 
@@ -206,6 +207,23 @@ func shift(ids []int) []int {
 	return out
 }
 func shifttok(id int) int { if id <= 2 { return id }; return id + 1 }
+
+// sessionOpts: CUDA EP when ORT_CUDA=1 (device ORT_CUDA_DEVICE), else CPU.
+func sessionOpts() *ort.SessionOptions {
+	opts, err := ort.NewSessionOptions()
+	if err != nil { fatal("session opts: %v", err) }
+	if os.Getenv("ORT_CUDA") != "1" { return opts }
+	cuda, err := ort.NewCUDAProviderOptions()
+	if err != nil { fatal("cuda opts: %v", err) }
+	dev := os.Getenv("ORT_CUDA_DEVICE")
+	if dev == "" { dev = "0" }
+	if err := cuda.Update(map[string]string{"device_id": dev}); err != nil { fatal("cuda update: %v", err) }
+	defer cuda.Destroy()
+	if err := opts.AppendExecutionProviderCUDA(cuda); err != nil { fatal("cuda ep: %v", err) }
+	log.Printf("mini-runner using CUDA EP device %s", dev)
+	return opts
+}
+
 
 func fatal(format string, a ...any) {
 	log.Printf("FATAL: "+format, a...); os.Exit(1)

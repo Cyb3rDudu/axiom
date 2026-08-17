@@ -50,7 +50,7 @@ func main() {
 
 	sess, err := ort.NewDynamicAdvancedSession(model,
 		[]string{"input_ids", "attention_mask"},
-		[]string{"logits"}, nil)
+		[]string{"logits"}, sessionOpts())
 	if err != nil { fatal("session: %v", err) }
 	defer sess.Destroy()
 
@@ -131,6 +131,23 @@ func runLogits(sess *ort.DynamicAdvancedSession, ids []int) (float32, error) {
 func sigmoid(x float32) float64 { return 1.0 / (1.0 + math.Exp(float64(-x))) }
 
 func bitsEq(a, b float64) bool { return math.Float64bits(a) == math.Float64bits(b) }
+
+// sessionOpts: CUDA EP when ORT_CUDA=1 (device ORT_CUDA_DEVICE), else CPU.
+func sessionOpts() *ort.SessionOptions {
+	opts, err := ort.NewSessionOptions()
+	if err != nil { fatal("session opts: %v", err) }
+	if os.Getenv("ORT_CUDA") != "1" { return opts }
+	cuda, err := ort.NewCUDAProviderOptions()
+	if err != nil { fatal("cuda opts: %v", err) }
+	dev := os.Getenv("ORT_CUDA_DEVICE")
+	if dev == "" { dev = "0" }
+	if err := cuda.Update(map[string]string{"device_id": dev}); err != nil { fatal("cuda update: %v", err) }
+	defer cuda.Destroy()
+	if err := opts.AppendExecutionProviderCUDA(cuda); err != nil { fatal("cuda ep: %v", err) }
+	fmt.Fprintf(os.Stderr, "[gorerank] using CUDA EP device %s\n", dev)
+	return opts
+}
+
 
 func fatal(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "FATAL: "+format+"\n", a...); os.Exit(1)

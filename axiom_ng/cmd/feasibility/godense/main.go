@@ -55,7 +55,7 @@ func main() {
 
 	sess, err := ort.NewDynamicAdvancedSession(model,
 		[]string{"input_ids", "attention_mask"},
-		[]string{"token_embeddings", "sentence_embedding"}, nil)
+		[]string{"token_embeddings", "sentence_embedding"}, sessionOpts())
 	if err != nil { fatal("session: %v", err) }
 	defer sess.Destroy()
 
@@ -165,4 +165,22 @@ func writeFile(path string, b []byte) {
 func fatal(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "FATAL: "+format+"\n", a...)
 	os.Exit(1)
+}
+
+// sessionOpts returns SessionOptions with the CUDA EP appended when ORT_CUDA=1
+// (device from ORT_CUDA_DEVICE, default 0); CPU otherwise. Carrier parity runs
+// set ORT_CUDA=1 so Go uses the same 3090 as the Python reference.
+func sessionOpts() *ort.SessionOptions {
+	opts, err := ort.NewSessionOptions()
+	if err != nil { fatal("session opts: %v", err) }
+	if os.Getenv("ORT_CUDA") != "1" { return opts }
+	cuda, err := ort.NewCUDAProviderOptions()
+	if err != nil { fatal("cuda opts: %v", err) }
+	dev := os.Getenv("ORT_CUDA_DEVICE")
+	if dev == "" { dev = "0" }
+	if err := cuda.Update(map[string]string{"device_id": dev}); err != nil { fatal("cuda update: %v", err) }
+	defer cuda.Destroy()
+	if err := opts.AppendExecutionProviderCUDA(cuda); err != nil { fatal("cuda ep: %v", err) }
+	fmt.Fprintf(os.Stderr, "[godense] using CUDA EP device %s\n", dev)
+	return opts
 }
