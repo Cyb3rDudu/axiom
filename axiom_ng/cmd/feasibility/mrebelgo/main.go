@@ -93,9 +93,18 @@ func main() {
 
 	encSess := newDyn(mdir+"/encoder_model.onnx",
 		[]string{"input_ids", "attention_mask"}, []string{"last_hidden_state"}, opts)
-	decSess := newDyn(mdir+"/decoder_model.onnx",
-		[]string{"encoder_attention_mask", "input_ids", "encoder_hidden_states"},
-		decOutputs(), opts)
+	// Prefer the logits-only graph (onnx.utils trim: drops 48 unused present outputs,
+	// which cost per-step tensor allocs + memory bandwidth in the no-cache loop).
+	decModel := mdir + "/decoder_model.onnx"
+	decIn := []string{"encoder_attention_mask", "input_ids", "encoder_hidden_states"}
+	var decOut []string
+	if fileExists(mdir + "/decoder_logits.onnx") {
+		decModel = mdir + "/decoder_logits.onnx"
+		decOut = []string{"logits"}
+	} else {
+		decOut = decOutputs()
+	}
+	decSess := newDyn(decModel, decIn, decOut, opts)
 	var decKSess *ort.DynamicAdvancedSession
 	if os.Getenv("MRBEL_CACHE") == "1" {
 		decKSess = newDyn(mdir+"/decoder_with_past_model.onnx",
@@ -129,13 +138,18 @@ func main() {
 		mask := make([]int64, len(encIDs))
 		for i := range mask { mask[i] = 1 }
 		encHidden := runEncoder(encSess, encIDs, mask)
+		cd := &constDec{}
+		cd.tm, _ = ort.NewTensor(ort.NewShape(1, int64(len(mask))), mask)
+		cd.th, _ = ort.NewTensor(ort.NewShape(1, int64(len(mask)), 1024), encHidden)
+		oneOut := len(decOut) == 1
 
 		var seqs []seq
 		if os.Getenv("MRBEL_CACHE") == "1" {
 			seqs = beamSearchCached(tok, decSess, decKSess, encHidden, mask)
 		} else {
-			seqs = beamSearch(tok, decSess, encHidden, mask)
+			seqs = beamSearch(tok, decSess, cd, encHidden, mask, oneOut)
 		}
+		cd.Destroy()
 		cr := chunkResult{Idx: ci}
 		for _, s := range seqs {
 			cr.RawSequences = append(cr.RawSequences, s.text)
@@ -201,39 +215,43 @@ func runEncoder(s *ort.DynamicAdvancedSession, ids, mask []int64) []float32 {
 	return o.GetData()
 }
 
-// decodeStep feeds the full decoder token sequence to decoder_model.onnx and returns
-// the log-probs at the LAST position (the next-token distribution).
-func decodeStep(dec *ort.DynamicAdvancedSession, ids []int64, encHidden []float32, encMask []int64) ([]float64, error) {
+// constDec holds the per-chunk constant decoder inputs (enc_mask, enc_hidden tensors)
+// so the no-cache loop reuses them instead of re-allocating per step.
+type constDec struct {
+	tm *ort.Tensor[int64]
+	th *ort.Tensor[float32]
+}
+
+func (c *constDec) Destroy() {
+	if c.tm != nil { c.tm.Destroy() }
+	if c.th != nil { c.th.Destroy() }
+}
+
+// decodeStep feeds the full decoder token sequence to the (logits-only) decoder graph and
+// returns the log-probs at the LAST position. Only tid + the logits output are allocated
+// per call (enc_mask/enc_hidden tensors are reused via constDec).
+func decodeStep(dec *ort.DynamicAdvancedSession, cd *constDec, ids []int64, oneOutput bool) ([]float64, error) {
 	L := int64(len(ids))
-	encLen := int64(len(encMask))
-	tm, _ := ort.NewTensor(ort.NewShape(1, encLen), encMask)
-	defer tm.Destroy()
 	tid, _ := ort.NewTensor(ort.NewShape(1, L), ids)
 	defer tid.Destroy()
-	th, _ := ort.NewTensor(ort.NewShape(1, encLen, 1024), encHidden)
-	defer th.Destroy()
 	logits, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, L, vocab))
-	// we only need logits; present outputs must still be provided (49 total). Allocate minimal.
-	outs := decOutputs()
-	outsV := make([]ort.Value, len(outs))
-	outsV[0] = logits
-	for i := 1; i < len(outs); i++ {
-		var Lp []int64
-		if strings.Contains(outs[i], "decoder") { Lp = []int64{1, 16, L, headDim} } else { Lp = []int64{1, 16, encLen, headDim} }
-		t, _ := ort.NewEmptyTensor[float32](ort.NewShape(Lp...))
-		outsV[i] = t
+	var outsV []ort.Value
+	if oneOutput {
+		outsV = []ort.Value{logits}
+	} else {
+		outs := decOutputs()
+		outsV = make([]ort.Value, len(outs))
+		outsV[0] = logits
+		encLen := int64(len(cd.tm.GetData()))
+		for i := 1; i < len(outs); i++ {
+			var Lp []int64
+			if strings.Contains(outs[i], "decoder") { Lp = []int64{1, 16, L, headDim} } else { Lp = []int64{1, 16, encLen, headDim} }
+			t, _ := ort.NewEmptyTensor[float32](ort.NewShape(Lp...))
+			outsV[i] = t
+		}
 	}
-	if err := dec.Run([]ort.Value{tm, tid, th}, outsV); err != nil { return nil, err }
+	if err := dec.Run([]ort.Value{cd.tm, tid, cd.th}, outsV); err != nil { return nil, err }
 	base := logits.GetData()
-	if os.Getenv("MRBEL_DUMP_STEP") == "1" {
-		// dump this step's raw last-position logits (first 6 + argmax) to a JSONL
-		f, _ := os.OpenFile("/tmp/go_step_logits.jsonl", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		last := base[(L-1)*vocab : L*vocab]
-		am := 0
-		for i, v := range last { if v > last[am] { am = i } }
-		fmt.Fprintf(f, "{\"L\":%d,\"argmax\":%d,\"head\":[%v,%v,%v,%v]}\n", L, am, last[0], last[1], last[2], last[3])
-		f.Close()
-	}
 	last := base[(L-1)*vocab : L*vocab]
 	return logSoftmax(last), nil
 }
@@ -243,4 +261,9 @@ func truncateRunes(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n { return s }
 	return string(r[:n])
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }

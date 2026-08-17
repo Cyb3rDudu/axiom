@@ -27,14 +27,14 @@ type seq struct {
 // length_penalty=0, do_sample=false, decoder_start=tp_XX) using the no-cache
 // re-decode path. Each hypothesis is its own growing token sequence; a hypothesis
 // finishing with EOS moves to `done`. Returns the top-3 complete sequences.
-func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, encHidden []float32, encMask []int64) []seq {
+func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, cd *constDec, encHidden []float32, encMask []int64, oneOut bool) []seq {
 	beams := []hyp{{ids: []int64{tpXX}, score: 0}}
 	done := []hyp{} // finished hypotheses, capped at numBeams, best-by-score retained (BeamHypotheses semantics)
 	decLen := 0
 	for !beamDone(done, beams) && len(beams) > 0 && decLen < maxDec {
 		all := make([]hyp, 0, len(beams)*(2*numBeams))
 		for _, b := range beams {
-			logP, err := decodeStep(dec, b.ids, encHidden, encMask)
+			logP, err := decodeStep(dec, cd, b.ids, oneOut)
 			if err != nil { fatal("decodeStep: %v", err) }
 			for _, c := range topKIndices(logP, 2*numBeams) {
 				all = append(all, hyp{
