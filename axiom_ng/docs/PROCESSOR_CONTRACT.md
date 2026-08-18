@@ -532,7 +532,12 @@ Required chunk fields:
 - `index`: zero-based order within this processing snapshot.
 - `text`: exact text embedded and indexed.
 - `locator`: source position information.
-- `structure.section_titles`: ordered heading hierarchy.
+- `structure.section_titles`: ordered heading hierarchy. The deepest entry is
+  the heading under which the chunk's first content sits — the section-trail
+  state at chunk start, never the state after the closing boundary (#186;
+  enforced by `axiom_ng_runner/tests/test_chunker_section_trail.py`). For a
+  chunk that opens with recycled overlap text from the previous chunk, the
+  first NON-overlap content decides.
 - `structure.start_paragraph_index` and `end_paragraph_index`.
 - `token_count`.
 - Embeddings requested by the processing profile.

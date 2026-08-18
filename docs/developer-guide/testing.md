@@ -85,6 +85,12 @@ The strongest system invariants each have a test (or a named mutation barrier):
   every failure mode.
 - **Contract conformance:** Python §19 black-box suite is the single
   acceptance bar for any processor implementation.
+- **Section-trail invariant (#186):** a chunk's deepest
+  `structure.section_titles` entry is the heading under which its first
+  content sits — first NON-overlap content for chunks that open with
+  recycled overlap text (trail state at chunk start, not after the closing
+  boundary); pinned by `axiom_ng_runner/tests/test_chunker_section_trail.py`,
+  which is red under the pre-fix chunker.
 - **No durable-side writes:** the Python suite asserts the runner never touches
   Postgres/OpenSearch/graph/Zotero.
 
