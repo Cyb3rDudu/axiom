@@ -33,7 +33,15 @@ LEFT_OFFSET = 56  # left = 2·spread + LEFT_OFFSET
 
 
 def detect_gutter(page: pymupdf.Page, dpi: int = 40) -> float:
-    """Fractional x of the gutter: darkest-light (whitest) vertical band."""
+    """Fractional x of the gutter (binding shadow = DARKEST vertical band).
+
+    The binding shadow in a 2-up scan shows as a local dark maximum near
+    the horizontal center (measured 0.48-0.49 on the Dubs scans). The old
+    minimum-of-darkness heuristic latched onto the white margin strip at
+    ~0.42 (or the search-window edges at 0.30/0.70), producing shredded or
+    unsplit leaves. Window is kept tight (0.42-0.58) and both resulting
+    leaf widths are validated downstream.
+    """
     pix = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csGRAY)
     w, h, sp = pix.width, pix.height, pix.stride
     samples = pix.samples
@@ -46,8 +54,8 @@ def detect_gutter(page: pymupdf.Page, dpi: int = 40) -> float:
         cols.append(dark)
     win = 4
     smooth = [sum(cols[max(0, i - win): i + win]) for i in range(w)]
-    lo, hi = int(w * 0.30), int(w * 0.70)
-    g = lo + smooth[lo:hi].index(min(smooth[lo:hi]))
+    lo, hi = int(w * 0.42), int(w * 0.58)
+    g = lo + smooth[lo:hi].index(max(smooth[lo:hi]))
     return g / w
 
 
@@ -75,6 +83,10 @@ def rebuild(src_pdf: str, dst_pdf: str) -> dict:
         page = src[i]
         w, h = page.rect.width, page.rect.height
         g = detect_gutter(page)
+        # split sanity: both leaves must span a plausible page width
+        if not (0.35 <= g <= 0.62):
+            stats.setdefault("gutter_fallbacks", []).append(i + 1)
+            g = 0.5
         stats["gutters"].append(round(g, 3))
         for side, (x0, x1), lab in (
             ("L", (0, g * w), 2 * (i + 1) + LEFT_OFFSET),
