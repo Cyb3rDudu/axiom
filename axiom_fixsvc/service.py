@@ -4,7 +4,7 @@ Standalone by design: DeepSeek credentials live HERE (service env), the RAG
 never sees them; Zotero credentials live in the RAG, this service never
 sees them. One direction of traffic: this service CALLS the RAG repair API.
 
-Loop per case (every phase logs one line, dudu watches):
+Loop per case (every phase logs one line for live observation):
   preflight REJECT (same code path as the final GREEN check — pdf_health)
   → judge (DeepSeek: assessment + Zielzustands-plan in Anker-Form)
   → verify (mechanical footer truth; coverage/contradictions)
@@ -12,7 +12,7 @@ Loop per case (every phase logs one line, dudu watches):
     schema filename) or blocked_for_dudu
   → sync → wait for the rechunk → preflight GREEN + folio_verified proof
 
-Plan format (dudu's W4 pre-decision): Zielzustands-Pläne in Anker-Form —
+Plan format (pre-decision from the #184 design round): Zielzustands-Pläne in Anker-Form —
   {"sections": [{"from_page": 11, "to_page": 67, "start_label": 2}, ...],
    "gaps": [68], "confidence": 0.9}
 sections describe the TARGET label map (1-based inclusive; arabic +1/page);
@@ -97,7 +97,7 @@ def judge(buch: str, analyse: dict, candidates: dict[int, str]) -> dict:
     import requests  # lazy: pure-logic tests must not need network deps
 
     if not DEEPSEEK_KEY:
-        raise RuntimeError("DEEPSEEK_API_KEY fehlt (Service-Env)")
+        raise RuntimeError("DEEPSEEK_API_KEY fehlt (Service-Env)")  # gefangen vom Fall-try in main()
     cand = candidates_1based(candidates)
     body = {
         "model": MODEL,
@@ -179,7 +179,7 @@ def verify(plan: dict, pdf_path: str) -> tuple[float, int, dict]:
     label matching the printed number = covered; a mismatch = contradiction;
     an observable page outside all sections counts against coverage.
     """
-    import pymupdf  # lazy (review W5)
+    import pymupdf  # type: ignore[import-not-found] — lazy, venv-only (review W5)
 
     from axiom_ng_runner.compute_core import page_trust as pt
 
@@ -228,7 +228,7 @@ def build_healed_pdf(plan: dict, pdf_path: str) -> bytes:
       - save WITHOUT garbage=3: the aggressive xref rewrite corrupted the heap
         in marker's C layer (free(): chunks in smallbin corrupted, live)
     """
-    import pymupdf  # lazy (review W5)
+    import pymupdf  # type: ignore[import-not-found] — lazy, venv-only (review W5)
 
     doc = pymupdf.open(pdf_path)
     try:
@@ -258,7 +258,7 @@ def build_healed_pdf(plan: dict, pdf_path: str) -> bytes:
 
 
 def run_case(case: dict) -> None:
-    import pymupdf  # lazy (review W5)
+    import pymupdf  # type: ignore[import-not-found] — lazy, venv-only (review W5)
     import requests
 
     from axiom_ng_runner.compute_core import page_trust as pt
@@ -303,7 +303,7 @@ def run_case(case: dict) -> None:
         # debug dump is OPT-IN (default off): /tmp is world-readable and the
         # healed bytes are proprietary book content (review W5)
         if os.environ.get("AXIOM_FIXSVC_DUMP_HEALED"):
-            with open("/tmp/healed.pdf", "wb") as f:
+            with open(os.path.join(tempfile.gettempdir(), f"healed_{case['attachment_zotero_key']}.pdf"), "wb") as f:
                 f.write(pdf_bytes)
         r = requests.post(
             f"{RAG}/api/repair/cases/{cid}/verdict",
