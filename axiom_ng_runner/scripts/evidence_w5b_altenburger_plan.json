@@ -1,0 +1,28 @@
+{
+  "_meta": {
+    "what": "W5b wave-rider: opener-anchored re-heal plan for Altenburger (CSR und Innovationsmanagement, 2013)",
+    "why": "W5 (case 596b7721, attachment 8GFRDGI4) anchored sections one page AFTER the chapter openers; broader print extraction found folios printed ON the opener pages, making those 8 labels -1 vs print. This plan anchors every section start AT its opener with the printed folio.",
+    "supersedes_plan_of_case": "596b7721-715a-4f9f-a903-8889a6452c73",
+    "evidence": {
+      "footer_observables": "227/227 match (standard extract_folio_candidates)",
+      "opener_observables": "14/14 match (printed folios on the gap pages 27/39/63/78/85/105/122/135/151/168/189/208/228/243 — first standalone number per page, broader extraction; chapter identity pinned via DOI suffixes _1.._14)",
+      "jump_pages": "sections restart at 78/85/122/135/168/189/208/243 (8 jumps, = dudu's D1 print truth)"
+    },
+    "wave_sequence": "wave sync projects the attachment chain -> queue fresh repair case on 8GFRDGI4 (suspicion: opener-anchored precision) -> heal with THIS plan via the RAG verdict endpoint (full audit chain, quarantine) -> wave rechunk stamps the final file",
+    "verification_gate": "service verify 100%/0 expected (observables unchanged); rerun the opener cross-check (first standalone number on the 14 gap pages) before apply",
+    "generated": "2026-08-18"
+  },
+  "sections": [
+    {"from_page": 9,   "to_page": 77,  "start_label": 1},
+    {"from_page": 78,  "to_page": 84,  "start_label": 71},
+    {"from_page": 85,  "to_page": 121, "start_label": 79},
+    {"from_page": 122, "to_page": 134, "start_label": 117},
+    {"from_page": 135, "to_page": 167, "start_label": 131},
+    {"from_page": 168, "to_page": 188, "start_label": 165},
+    {"from_page": 189, "to_page": 207, "start_label": 187},
+    {"from_page": 208, "to_page": 242, "start_label": 207},
+    {"from_page": 243, "to_page": 250, "start_label": 243}
+  ],
+  "gaps": [],
+  "confidence": 1.0
+}
