@@ -180,6 +180,7 @@ def verify(plan: dict, pdf_path: str) -> tuple[float, int, dict]:
     an observable page outside all sections counts against coverage.
     """
     import pymupdf  # type: ignore[import-not-found] — lazy, venv-only (review W5)
+
     from axiom_ng_runner.compute_core import page_trust as pt
 
     doc = pymupdf.open(pdf_path)
@@ -259,6 +260,7 @@ def build_healed_pdf(plan: dict, pdf_path: str) -> bytes:
 def run_case(case: dict) -> None:
     import pymupdf  # type: ignore[import-not-found] — lazy, venv-only (review W5)
     import requests
+
     from axiom_ng_runner.compute_core import page_trust as pt
     from axiom_ng_runner.compute_core.pdf_health import preflight
 
@@ -368,7 +370,13 @@ def run_case(case: dict) -> None:
         )
         return
 
-    # sync → rechunk → proof
+    # sync → rechunk → proof. AXIOM_FIXSVC_NO_SYNC=1 skips sync AND the
+    # rechunk wait (W7 wave mode: sources become truth first, generation
+    # runs in the dedicated wave with the fixed chunker — jobs enqueue
+    # there, never here).
+    if os.environ.get("AXIOM_FIXSVC_NO_SYNC"):
+        log(buch, "SYNC", "übersprungen (AXIOM_FIXSVC_NO_SYNC — Welle heilt nur Quellen)")
+        return
     n_jobs = (
         requests.post(f"{RAG}/api/zotero/sync", timeout=300).json().get("enqueued_jobs")
     )
