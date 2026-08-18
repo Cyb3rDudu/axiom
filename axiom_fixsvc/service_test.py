@@ -72,9 +72,7 @@ def test_validate_plan_rejects_bools() -> None:
             service.validate_plan({"sections": [bad]})
         except ValueError:
             continue
-        raise AssertionError(
-            f"boolean-feld muss abgelehnt werden: {bad}"
-        )
+        raise AssertionError(f"boolean-feld muss abgelehnt werden: {bad}")
 
 
 def test_validate_plan_normalizes_and_defaults() -> None:
