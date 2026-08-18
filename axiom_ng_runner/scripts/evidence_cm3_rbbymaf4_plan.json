@@ -1,0 +1,54 @@
+{
+ "_meta": {
+  "what": "CM-family Book 3: CM in Organisationen (RBBYMAF4) prescribed plan — 6 segments",
+  "status": "READY-TO-QUEUE, APPLY HELD for owner family verdict (expected: heal)",
+  "derivation": "greedy minimal sections on v2-extractor verified folios (323/355 pages); 6 segments match the satellite's staged count exactly; offsets drift -21..-16 monotonically (6 inserted leaves)",
+  "junk_zone_note": "the satellite's offsetmap logged ascending-looking bottom numbers on pages 49-80 (55,57,60,...,123) — they form NO +1 runs and correctly verify nowhere; the extractor's strict proof refused them (W10 discipline)",
+  "unverified_zones": [
+   "PDF 12-22 front matter",
+   "PDF 348-351 tail"
+  ],
+  "heal_time_anchors": {
+   "23": 2,
+   "42": 22,
+   "169": 150,
+   "274": 256,
+   "319": 302,
+   "352": 336
+  }
+ },
+ "sections": [
+  {
+   "from_page": 23,
+   "to_page": 41,
+   "start_label": 2
+  },
+  {
+   "from_page": 42,
+   "to_page": 168,
+   "start_label": 22
+  },
+  {
+   "from_page": 169,
+   "to_page": 273,
+   "start_label": 150
+  },
+  {
+   "from_page": 274,
+   "to_page": 318,
+   "start_label": 256
+  },
+  {
+   "from_page": 319,
+   "to_page": 351,
+   "start_label": 302
+  },
+  {
+   "from_page": 352,
+   "to_page": 356,
+   "start_label": 336
+  }
+ ],
+ "gaps": [],
+ "confidence": 1.0
+}
