@@ -1,7 +1,7 @@
 # Carrier-Setup — CUDA measurement container (#171 Nachzug)
 
 Reproducible carrier setup for the CUDA parity re-runs. All ML runs happen on
-the carrier (192.168.1.2, RTX 3090s), NOT locally — dudu needs the local GPU.
+the carrier (192.168.1.2, RTX 3090s), NOT locally — the local GPU is reserved for other work.
 
 ## Host survey (2026-08-17)
 
@@ -49,14 +49,14 @@ CUDA EP appended OK        # onnxruntime_go CUDA execution provider initializes
 Container name prefix: `study-...` (here image `study-axiom-cuda`). Runs on GPU 0
 via CDI; the two 3090s are free so no prod interference.
 
-## Reproducibility for Hivemind
+## Reproducibility for independent verification
 
 - Containerfile committed: `axiom_ng/cmd/feasibility/Containerfile.study` (build
   context = the repo root, since it COPYs `axiom_ng/cmd/` + `axiom_ng/docs/`):
   `podman build -t localhost/study-axiom-cuda -f axiom_ng/cmd/feasibility/Containerfile.study .`
 - CUDA EP smoke test: `axiom_ng/cmd/feasibility/cuda_ep_check/` (own Go module).
 - On carrier: clone at `~/Code/axiom-study` tracking the study branch
-  `research/go-runner-feasibility` (kept at the evidence-head during Hivemind
+  `research/go-runner-feasibility` (kept at the evidence-head during the
   verification; `git log -1` there = the commit these docs ship in).
 - **Not in the repo:** the base image `localhost/runner-poc:latest` and the
   models (`~/models/` on the carrier: bge-m3, reranker, sparse_head.onnx,

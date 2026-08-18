@@ -144,7 +144,7 @@ tooling-level follow-up, not a feasibility blocker for the CUDA ONNX path.
 Carrier measurement (2026-08-17): Go `onnxruntime_go` with **CUDA-EP** vs
 Python `torch` **both on the same RTX 3090** (GPU 0), same container, corpus
 unchanged (219 chunks). Artifact: `carrier_results/dense_cosine_cuda.csv`
-(Hivemind recomputes every number from it).
+(Independent verification recomputes every number from it).
 
 | Metric (CUDA same-device) | Value |
 |---|---|

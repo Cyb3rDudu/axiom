@@ -1,6 +1,6 @@
 # 12 — mREBEL Decoder Performance (G2 #179 pre-research, #171 continuation)
 
-dudu's target hierarchy: **p50 ≤ 0.2 s per chunk = "no regression" (end-goal threshold)**;
+The target hierarchy: **p50 ≤ 0.2 s per chunk = "no regression" (end-goal threshold)**;
 0.5 s was only a milestone. Sidecar = the very last data-backed reserve. Regression gate
 after EVERY step: triple-set parity ≥ 95% against `mrebel_ref_50.json` (n=50) + 2×
 determinism (byte-equal). Measurement environment: carrier 192.168.1.2, RTX 3090 GPU 0,
@@ -39,7 +39,7 @@ hypothesis is thereby definitively refuted** — no first-occurrence effect per 
 (~50–100 ms × 44–68 calls) plus the `logSoftmax` double pass (250k float64). My earlier
 "90 ms fixed ORT per-call overhead" interpretation was an artifact (calls miscounted).
 
-**Python study ("study the blueprint", dudu's directive):** transformers 4.57.6 default
+**Python study ("study the blueprint", the directive):** transformers 4.57.6 default
 `generate()` for MBART = **DynamicCache with `torch.cat(key, dim=-2)` per step**
 (`DynamicLayer.update`), eager — the pre-allocated StaticCache is opt-in
 (`cache_implementation`, default `None`). Conclusion for Go: static max buffers are NOT
@@ -75,7 +75,7 @@ sort (strict `>`, lower index wins).
 
 0.5 s milestone reached; intermediate target p50 ≤ 0.2 s still open.
 
-## Step 4 — Cached-path parity CLARIFIED (Hivemind addition b; two logic bugs, not FP)
+## Step 4 — Cached-path parity CLARIFIED (an additional review point; two logic bugs, not FP)
 
 Re-measurement after Opt-2 confirmed 86% with LARGE deviations (chunk 2: 10 extra
 triples) — not near-tie noise. First-divergence diff (`cmp_steps.py`): the cached path
@@ -87,7 +87,7 @@ hallucination chains). Two fixes:
    expanded) → init mirrors loop semantics (EOS→done+eviction, numBeams cap) → **96.0%**.
 
 **Cached now: GATE PASS (96.0%, byte-deterministic, p50 0.583 s)** — no speed advantage
-unbatched (per-call dominated), but correct. Hivemind's suspicion of a "real cache
+unbatched (per-call dominated), but correct. The reviewer's suspicion of a "real cache
 ordering bug" was right (in Go semantics: EOS/beam lifecycle, not KV ordering — that was
 correct).
 
@@ -130,7 +130,7 @@ calls).
   **p50 0.375 s — WORSE** than no-cache: the with_past graph's 49-tensor interface (48
   individual KV inputs) costs more than the saved prefix computation brings in. Lesson:
   the interface, not the mathematics, is the with_past bottleneck in onnxruntime_go.
-- **Opt-6 (IOBinding, dudu's directive "exhaust it first"):** constant inputs bound across
+- **Opt-6 (IOBinding, the directive "exhaust it first"):** constant inputs bound across
   calls (`CreateIoBinding`/`BindInput`/`RunWithBinding`). **p50 0.208 s ≈ no gain** —
   onnxruntime_go tensors live in HOST memory; ORT still copies host→device per run.
   Measured, not asserted: IOBinding is exhausted in the host-tensor model.
@@ -183,7 +183,7 @@ numpy.
 
 ## Next steps
 
-1. **Cached-path parity (86%) as its own item** (Hivemind addition b): first-divergence
+1. **Cached-path parity (86%) as its own item** (an additional review point): first-divergence
    diff `nocache` vs `cached` steps dump — note: the old 86% measurement still contained
    the sort tie-breaks; re-measure after Opt-2, then diff.
 2. **Opt-3: beam batching [3, L]** — one ORT call per decoding step for all 3 beams

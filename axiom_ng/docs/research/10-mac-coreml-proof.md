@@ -3,7 +3,7 @@
 Backend decision (posted to #171, before measuring): **onnxruntime CoreML-EP via
 `yalue/onnxruntime_go`** — the preferred single-backend path (same codepath as the
 proven CUDA-EP, just a different ExecutionProvider), vs GoMLX (MLX-native) as the
-alternative requiring a second backend. dudu released the Mac GPU window. Measured
+alternative requiring a second backend. the Mac GPU window was opened. Measured
 on the Mac (Apple Silicon, MPS), same-device: Go CoreML-EP vs Python-MPS.
 
 ## Correctness — at PARITY (proven)
@@ -24,7 +24,7 @@ Python-MPS runner. Correctness is not the blocker.
 
 ## Performance — REGRESSION vs the status quo (the decisive finding)
 
-dudu's bar: the Mac Go backend must hold **at least the current MPS-Python level**
+The bar: the Mac Go backend must hold **at least the current MPS-Python level**
 (rerank p95 ~5.3 s MPS). Measured:
 
 | Endpoint | Go CoreML (Mac GPU) | Python-MPS (current runner) | CoreML ratio |
