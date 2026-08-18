@@ -636,6 +636,48 @@ func TestLocatorViewEpubCFI(t *testing.T) {
 	}
 }
 
+// W4: chapter-relative pagination (folios restart per chapter — World Bank
+// report style). The chapter ordinal disambiguates "S. 5" as page 5 OF THAT
+// CHAPTER per APA7 (German citation form "Kap. 3, S. 5"; clients compose the
+// English "ch. 3, p. 5" from chapter_number + the page part).
+func TestLocatorViewChapterRelative(t *testing.T) {
+	v := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"5","page_label_end":"7","page_source":"folio_verified","chapter":3}`),
+		[]string{"Handlungsempfehlungen", "3.2 Umsetzung"})
+	if v.Kind != "page" || v.Label != "Kap. 3, S. 5-7" {
+		t.Fatalf("chapter-relative range wrong: %+v", v)
+	}
+	if v.ChapterNumber == nil || *v.ChapterNumber != 3 {
+		t.Fatalf("chapter_number must expose the ordinal: %+v", v)
+	}
+	if v.PageSource != "folio_verified" || v.Chapter != "3.2 Umsetzung" {
+		t.Fatalf("chapter-relative fields wrong: %+v", v)
+	}
+}
+
+func TestLocatorViewChapterRelativeSingleAndPhysical(t *testing.T) {
+	v := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"5","page_source":"folio_verified","chapter":12}`),
+		[]string{"Chapter Twelve: Outlook"})
+	if v.Label != "Kap. 12, S. 5" {
+		t.Fatalf("chapter-relative single page wrong: %+v", v)
+	}
+	// physical_only keeps its PDF-index semantics under a chapter ordinal.
+	p := 11
+	v = locatorView(json.RawMessage(fmt.Sprintf(`{"type":"page_span","physical_page_start":%d,"page_source":"physical_only","chapter":2}`, p)),
+		[]string{"Methods"})
+	if v.Label != "Kap. 2, PDF-S. 12" {
+		t.Fatalf("chapter-relative physical_only wrong: %+v", v)
+	}
+}
+
+func TestLocatorViewChapterOrdinalWithoutPage(t *testing.T) {
+	// Ordinal but no page info at all: "Kap. 3", not the section title —
+	// the ordinal is the citation anchor when no page exists.
+	v := locatorView(json.RawMessage(`{"type":"page_span","chapter":3}`), []string{"Kapitel 3"})
+	if v.Label != "Kap. 3" || v.ChapterNumber == nil || *v.ChapterNumber != 3 {
+		t.Fatalf("chapter ordinal without page wrong: %+v", v)
+	}
+}
+
 func TestCfiShort(t *testing.T) {
 	if got := cfiShort("epubcfi(/6/10!/4/28)"); got != "/6/10!/4/28" {
 		t.Fatalf("cfiShort plain: %q", got)

@@ -75,7 +75,9 @@ class DecoderWrapper(torch.nn.Module):
 
 def export_decoders():
     os.makedirs(OUT, exist_ok=True)
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))
+    from _device import pick_device as _pd
+    dev = _pd("auto", no_fp16=True, label="mrebel-export")[0]
     print(f"[mrebel-export] device={dev}")
     model = AutoModelForSeq2SeqLM.from_pretrained("Babelscape/mrebel-large",
                                                   torch_dtype=torch.float32).to(dev).eval()

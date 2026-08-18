@@ -16,11 +16,21 @@ The Go side (gogliner) does NOT read the npz directly — it reads
   gliner_logits_go.bin (big-endian f32); the committed compare step is
   gliner_compare.py (Go vs Python model-execution parity on GLiNER-ONNX-CUDA).
 """
-import json, sys, os, struct
-import numpy as np
-import onnxruntime as ort
+import argparse
+import os
+import struct
+import sys
 
-outdir = sys.argv[1]
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _device import add_device_args, ort_providers, pick_device
+
+p = argparse.ArgumentParser(description="GLiNER-ONNX logits parity harness (carrier)")
+p.add_argument("outdir")
+add_device_args(p)
+args = p.parse_args()
+outdir = args.outdir
 os.makedirs(outdir, exist_ok=True)
 MODEL = "/models/model.onnx"   # gliner onnx on the carrier
 
@@ -31,7 +41,6 @@ LABELS = ["person", "organization", "location", "concept", "book or journal", "r
 
 # Monkeypatch gliner's onnx session to harvest inputs. Load gliner with the onnx model dir.
 from gliner import GLiNER
-import numpy as np
 
 orig_run = None
 captured = {}
@@ -59,12 +68,14 @@ print("captured input keys:", list(captured.keys()))
 for k in names:
     print("  ", k, captured.get(k).shape if k in captured else "MISSING")
 
-# Forward via GPU onnxruntime (CUDA) for a same-input reference independent of gliner
-sess = ort.InferenceSession(MODEL, providers=['CUDAExecutionProvider','CPUExecutionProvider'])
+# Forward via onnxruntime for a same-input reference independent of gliner
+import onnxruntime as ort
+
+dev, _fp16 = pick_device(args.device, no_fp16=True, label="gliner")  # fp16 n/a for ONNX EPs
+sess = ort.InferenceSession(MODEL, providers=ort_providers(dev))
 feed = {k: captured[k] for k in names if k in captured}
 logits = sess.run(['logits'], feed)[0]
 print("logits shape:", logits.shape, "providers:", sess.get_providers())
 with open(f"{outdir}/gliner_logits_py.bin", "wb") as f:
-    for v in logits.ravel().astype(np.float32):
-        f.write(struct.pack(">f", float(v)))
+    f.writelines(struct.pack(">f", float(v)) for v in logits.ravel().astype(np.float32))
 print(f"wrote logits_py ({logits.size} floats)")

@@ -14,7 +14,8 @@ Recomputes the 07b-gliner-cuda.md number from the committed carrier artifacts:
 
 Usage: gliner_compare.py <a.bin> <b.bin> [-le1] [-le2]
 """
-import struct, sys
+import struct
+import sys
 
 args = sys.argv[1:]
 if len(args) < 2:

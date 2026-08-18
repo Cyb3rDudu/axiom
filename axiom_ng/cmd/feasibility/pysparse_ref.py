@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Block-3 sparse parity reference, CUDA (carrier Nachzug).
+"""Block-3 sparse parity reference (carrier Nachzug).
 
 Both Go and Python run the SAME BGE-M3 sparse head (`sparse_head.onnx`) through
 onnxruntime, then apply the same max-scatter by token id (specials 0-3 zeroed),
@@ -10,13 +10,31 @@ Input: sample_chunks.json (corpus), sparse_head.onnx, the tokenizer spiece model
        Go's sparse output (gosparse out.json: [{"i","doc","sparse"}]) and the
        token ids Go used (from a json dump to align max-scatter).
 Compares each chunk's sparse (token-overlap + shared-weight cosine) vs Go.
-"""
-import json, sys, math, struct
-import numpy as np
-import onnxruntime as ort
-import os
 
-chunks_path, sp_head, tok_dir, go_out_path, outdir = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+Usage: pysparse_ref.py <chunks.json> <sparse_head.onnx> <tok_dir> <go_out.json> <outdir>
+       [--device auto|cuda|cpu]
+Device policy: auto = CUDA > CPU (onnxruntime has no MPS EP — MPS hosts
+run the CPU EP). Historical runs were CUDA — reproduce with --device cuda.
+"""
+import argparse
+import json
+import math
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _device import add_device_args, ort_providers, pick_device
+
+p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+p.add_argument("chunks_path")
+p.add_argument("sp_head")
+p.add_argument("tok_dir")
+p.add_argument("go_out_path")
+p.add_argument("outdir")
+add_device_args(p)
+args = p.parse_args()
+chunks_path, sp_head, tok_dir, go_out_path, outdir = (
+    args.chunks_path, args.sp_head, args.tok_dir, args.go_out_path, args.outdir)
 
 with open(chunks_path) as f:
     chunks = json.load(f)
@@ -24,11 +42,15 @@ with open(go_out_path) as f:
     go = json.load(f)
 assert len(chunks) == len(go), f"{len(chunks)} vs {len(go)}"
 
+import numpy as np
+import onnxruntime as ort
 from transformers import AutoTokenizer
+
 tok = AutoTokenizer.from_pretrained(tok_dir)
 print("tokenizer-class", type(tok).__name__)
 
-sess = ort.InferenceSession(sp_head, providers=['CUDAExecutionProvider','CPUExecutionProvider'])  # GPU same-device (dudu: alles auf GPU)
+dev, _fp16 = pick_device(args.device, no_fp16=True, label="sparse")  # fp16 n/a for ONNX EPs
+sess = ort.InferenceSession(sp_head, providers=ort_providers(dev))
 print("providers", sess.get_providers())
 
 def max_scatter(ids, weights):

@@ -11,8 +11,11 @@ runs `logits` on CPU and CUDA, prints max-abs-diff + providers.
 
 Usage: pygliner_cuda.py <gliner_dir> <outdir>
 """
-import sys, os, math
+import os
+import sys
+
 import numpy as np
+
 gliner_dir, outdir = sys.argv[1], sys.argv[2]
 sys.path.insert(0, gliner_dir)
 

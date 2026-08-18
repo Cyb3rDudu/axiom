@@ -10,11 +10,26 @@ emits the HF XLM-R pair form (<s> q </s> </s> p </s>). Re-run both sides
 before citing final parity. (see docs/research/03-dense-parity.md)
 
 Usage: pyrerank_ref.py <pairs.json> <gorerank_out.json> <outdir>
+       [--device auto|cuda|mps|cpu|...] [--no-fp16]
 Writes <outdir>/py_rerank.json = [{"query","doc","score"}, ...].
+Device policy: auto = CUDA (fp16) > MPS > CPU; the pre-#174 runs were
+MPS/CUDA fp32 — reproduce with --device mps --no-fp16 (or cuda --no-fp16).
 """
-import json, sys, os
+import argparse
+import json
+import os
+import sys
 
-pairs_path, go_out_path, outdir = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _device import add_device_args, pick_device
+
+p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+p.add_argument("pairs_path")
+p.add_argument("go_out_path")
+p.add_argument("outdir")
+add_device_args(p)
+args = p.parse_args()
+pairs_path, go_out_path, outdir = args.pairs_path, args.go_out_path, args.outdir
 os.makedirs(outdir, exist_ok=True)
 
 with open(pairs_path) as f:
@@ -24,7 +39,9 @@ with open(go_out_path) as f:
 assert len(pairs) == len(go), f"pair count mismatch: {len(pairs)} vs {len(go)}"
 
 from FlagEmbedding import FlagReranker
-rrk = FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=False, devices="mps")
+
+dev, fp16 = pick_device(args.device, no_fp16=args.no_fp16, label="rerank")
+rrk = FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=fp16, devices=dev.split(","))
 
 texts = [[p["query"], p["passage"]] for p in pairs]
 scores = rrk.compute_score(texts, normalize=True)  # sigmoid, matches Go
@@ -41,6 +58,7 @@ mad = sum(abs(a - b) for a, b in zip(go_scores, py_scores)) / n
 mx = max(abs(a - b) for a, b in zip(go_scores, py_scores))
 print(f"n={n} |score| avg={mad:.6f} max={mx:.6f}")
 
-from scipy.stats import spearmanr, kendalltau
+from scipy.stats import kendalltau, spearmanr
+
 print(f"Spearman={spearmanr(go_scores, py_scores).statistic:.4f} "
       f"Kendall={kendalltau(go_scores, py_scores).statistic:.4f}")

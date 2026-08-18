@@ -16,6 +16,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -117,7 +118,8 @@ func (s *Server) repairItemFor(r *http.Request, c *repo.RepairCase) (*repairQueu
 func (s *Server) handleRepairCases(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.repairRepo.Pool().Query(r.Context(), `
 		SELECT c.id::text, c.status::text, c.attempts, c.suspicion_class,
-		       c.verify_score, c.verify_contradictions, c.verdict, c.blocked_reason,
+		       COALESCE(c.verify_score, 0), COALESCE(c.verify_contradictions, 0),
+		       COALESCE(c.verdict, ''), COALESCE(c.blocked_reason, ''),
 		       d.title, c.updated_at
 		FROM repair_cases c
 		JOIN zotero_attachments a ON a.id = c.attachment_id
@@ -129,21 +131,22 @@ func (s *Server) handleRepairCases(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	type row struct {
-		ID             string  `json:"id"`
-		Status         string  `json:"status"`
-		Attempts       int     `json:"attempts"`
-		SuspicionClass string  `json:"suspicion_class"`
-		VerifyScore    float64 `json:"verify_score"`
-		Contradictions int     `json:"verify_contradictions"`
-		Verdict        string  `json:"verdict,omitempty"`
-		BlockedReason  string  `json:"blocked_reason,omitempty"`
-		Title          string  `json:"title"`
+		ID             string    `json:"id"`
+		Status         string    `json:"status"`
+		Attempts       int       `json:"attempts"`
+		SuspicionClass string    `json:"suspicion_class"`
+		VerifyScore    float64   `json:"verify_score"`
+		Contradictions int       `json:"verify_contradictions"`
+		Verdict        string    `json:"verdict,omitempty"`
+		BlockedReason  string    `json:"blocked_reason,omitempty"`
+		Title          string    `json:"title"`
+		UpdatedAt      time.Time `json:"updated_at"`
 	}
 	out := []row{}
 	for rows.Next() {
 		var x row
 		if err := rows.Scan(&x.ID, &x.Status, &x.Attempts, &x.SuspicionClass, &x.VerifyScore,
-			&x.Contradictions, &x.Verdict, &x.BlockedReason, &x.Title); err != nil {
+			&x.Contradictions, &x.Verdict, &x.BlockedReason, &x.Title, &x.UpdatedAt); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

@@ -171,6 +171,12 @@ type LocatorView struct {
 	Label   string `json:"label"`             // e.g. "S. 47", "PDF-S. 12" or "Kap. 3"
 	Chapter string `json:"chapter,omitempty"` // deepest section title
 	CFI     string `json:"cfi,omitempty"`     // epub CFI short form
+	// ChapterNumber (W4, APA7 chapter-relative pagination): set when the
+	// book's folios restart per chapter — the label is then a page WITHIN
+	// the chapter and "S. 5" alone is ambiguous. Renderer composes
+	// "Kap. 3, S. 5"; clients may compose the English APA7 form
+	// ("ch. 3, p. 5") from chapter_number + the page part. Additive.
+	ChapterNumber *int `json:"chapter_number,omitempty"`
 	// PageSource (#173 trust level): folio_verified is the ONLY level a
 	// client may cite as a printed page; physical_only renders as "PDF-S.";
 	// none means no stable pages at all. Additive contract field.
@@ -684,6 +690,7 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 		PhysicalPageEnd   *int   `json:"physical_page_end"`
 		CFIStart          string `json:"cfi_start"`
 		PageSource        string `json:"page_source"`
+		Chapter           *int   `json:"chapter"` // W4: chapter-relative folios (restart-per-chapter books)
 	}
 	_ = json.Unmarshal(raw, &loc)
 
@@ -724,18 +731,31 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 		if loc.PageLabelEnd != "" && loc.PageLabelEnd != loc.PageLabelStart && loc.PageSource != processor.PageSourcePhysicalOnly {
 			label += "-" + loc.PageLabelEnd
 		}
-		switch {
-		case label != "" && chapter != "":
-			label = chapter + " · " + pagePrefix + label
-		case label != "":
-			label = pagePrefix + label
-		default:
-			label = chapter // no page info: bare chapter, never a dangling "S. "
+		// W4: chapter-relative pagination (folios restart per chapter, e.g.
+		// the World Bank reports). A chapter ordinal makes "S. 5" unambiguous
+		// as page 5 OF THAT CHAPTER (APA7 chapter + page-within-chapter):
+		// "Kap. 3, S. 5". The number replaces the section title in the label
+		// (the title stays in the chapter field); without an ordinal the
+		// historical title-composition applies byte-for-byte.
+		if loc.Chapter != nil && label != "" {
+			label = fmt.Sprintf("Kap. %d, %s%s", *loc.Chapter, pagePrefix, label)
+		} else {
+			switch {
+			case label != "" && chapter != "":
+				label = chapter + " · " + pagePrefix + label
+			case label != "":
+				label = pagePrefix + label
+			default:
+				label = chapter // no page info: bare chapter, never a dangling "S. "
+			}
+			if loc.Chapter != nil { // ordinal but no page: "Kap. 3", not a title
+				label = fmt.Sprintf("Kap. %d", *loc.Chapter)
+			}
 		}
 		// #173: a blank page_source stays blank — legacy locators carry NO
 		// guessed trust level (a tier-2/3 fabricated label must never render
 		// as pdf_label_sane); clients gate on the explicit levels only.
-		return LocatorView{Kind: "page", Label: label, Chapter: chapter, PageSource: loc.PageSource}
+		return LocatorView{Kind: "page", Label: label, Chapter: chapter, ChapterNumber: loc.Chapter, PageSource: loc.PageSource}
 	default:
 		if chapter != "" {
 			return LocatorView{Kind: "none", Label: chapter, Chapter: chapter}
