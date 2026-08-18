@@ -5,10 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
 
 func TestSchemaFilenameAuthor(t *testing.T) {
-	got := SchemaFilename([]Creator{{LastName: "Horváth", FirstName: "Péter", CreatorType: "author"},
+	got := SchemaFilename([]zotero.Creator{{LastName: "Horváth", FirstName: "Péter", CreatorType: "author"},
 		{LastName: "Gleich", CreatorType: "author"}}, 2025, "Controlling", "")
 	if got != "Horváth - 2025 - Controlling.pdf" {
 		t.Fatalf("got %q", got)
@@ -16,12 +18,12 @@ func TestSchemaFilenameAuthor(t *testing.T) {
 }
 
 func TestSchemaFilenameInstitutional(t *testing.T) {
-	got := SchemaFilename([]Creator{{Name: "World Bank", CreatorType: "author"}}, 2026,
+	got := SchemaFilename([]zotero.Creator{{Name: "World Bank", CreatorType: "author"}}, 2026,
 		"Global Economic Prospects, January 2026: Expand, Invest, Protect", "")
 	if got != "World Bank - 2026 - Global Economic Prospects, January 2026: Expand, Invest, Protect.pdf" {
 		t.Fatalf("got %q", got)
 	}
-	long := SchemaFilename([]Creator{{LastName: "Müller", CreatorType: "author"}}, 2020,
+	long := SchemaFilename([]zotero.Creator{{LastName: "Müller", CreatorType: "author"}}, 2020,
 		strings.Repeat("Sehr langer Buchtitel ", 8), "")
 	if !filepath.IsLocal(long) || !strings.HasSuffix(long, "….pdf") {
 		t.Fatalf("Kürzung: %q", long)
@@ -29,7 +31,7 @@ func TestSchemaFilenameInstitutional(t *testing.T) {
 }
 
 func TestSchemaFilenameSanitizesSeparators(t *testing.T) {
-	got := SchemaFilename([]Creator{{LastName: "Müller & Höfe 100%", CreatorType: "author"}}, 2020,
+	got := SchemaFilename([]zotero.Creator{{LastName: "Müller & Höfe 100%", CreatorType: "author"}}, 2020,
 		"Der Frühling +Mehr: Ein/Fall", "")
 	if filepath.IsLocal(got) == false {
 		t.Fatalf("not local: %q", got)

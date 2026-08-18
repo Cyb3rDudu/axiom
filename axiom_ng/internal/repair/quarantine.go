@@ -1,4 +1,4 @@
-// Package repair — #184 fix-service support: quarantine store + schema
+// Package repair — #184 fix-service support: quarantine + schema
 // filenames. Both are RAG-side: the fix-service never writes.
 package repair
 
@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
 
 // Quarantine copies the ORIGINAL pdf of an attachment into the
@@ -44,23 +46,15 @@ func Quarantine(root, zoteroKey, sourcePath string) (string, error) {
 	return dst, nil
 }
 
-// Creator is the projection shape of zotero_documents.creators.
-type Creator struct {
-	LastName    string `json:"lastName"`
-	FirstName   string `json:"firstName"`
-	CreatorType string `json:"creatorType"`
-	FieldMode   int    `json:"fieldMode,omitempty"`
-	Name        string `json:"name"` // institutional authors (single-field)
-}
-
 // SchemaFilename builds the dudu schema name:
 //
 //	{Autor|Institution} - {Jahr} - {Titel}.pdf
 //
 // First author's lastName (or institutional name), publication year, short
 // title. There is NO filename patch mutation anywhere — this builder is the
-// ONLY source of attachment filenames for repairs.
-func SchemaFilename(creators []Creator, year int, title, publisher string) string {
+// ONLY source of attachment filenames for repairs. Creators reuse the
+// zotero projection shape (single definition, review W6).
+func SchemaFilename(creators []zotero.Creator, year int, title, publisher string) string {
 	head := ""
 	for _, c := range creators {
 		if c.CreatorType != "author" {

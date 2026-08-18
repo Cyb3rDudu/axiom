@@ -24,6 +24,7 @@ type uploadServer struct {
 	upParams map[string]string // leading (register-params) form fields on the upload
 	authed   []string          // auth headers seen by the foreign upload target
 	nUploads int
+	nDeletes int // DELETEs of the created item (orphan cleanup, review W1)
 }
 
 // phase switch: items POST -> authorize POST -> upload POST -> register POST.
@@ -35,6 +36,16 @@ func newUploadServer(t *testing.T, authorizeBody string, foreign *httptest.Serve
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/users/0/items/ATT1":
+			// ItemVersion probe of the orphan cleanup (GET carries the version)
+			w.Header().Set("Last-Modified-Version", "7")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/users/0/items/ATT1":
+			if v := r.Header.Get("If-Unmodified-Since-Version"); v != "7" {
+				t.Errorf("delete muss version-guarded sein, got %q", v)
+			}
+			s.nDeletes++
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/users/0/items":
 			w.Write([]byte(`{"successful":{"0":{"key":"ATT1"}},"unchanged":{},"failed":{}}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/users/0/items/ATT1/file":
@@ -206,6 +217,27 @@ func TestCreateAttachmentGarbageAuthorize(t *testing.T) {
 			t.Fatalf("non-object authorize must hit the shape error, got err=%v", err)
 		}
 		_ = s
+	}
+}
+
+// TestCreateAttachmentOrphanCleanup (review W1): a failure AFTER the item
+// creation must delete the empty imported_file item again — the caller has
+// already quarantined + deleted the ORIGINAL, an orphaned husk would be a
+// NEW broken attachment with no file behind it.
+func TestCreateAttachmentOrphanCleanup(t *testing.T) {
+	s, srv := newUploadServer(t, `{"quota":0}`, nil) // authorize fails: no usable key
+	key, err := newTestWriteClient(srv).CreateAttachmentWithFile("", "ok.pdf", []byte("X"))
+	if err == nil {
+		t.Fatal("authorize-fehler muss sich als fehler äußern")
+	}
+	if key != "" {
+		t.Errorf("aufgeräumter fehlweg darf den husk-key nicht liefern, got %q", key)
+	}
+	if s.nDeletes != 1 {
+		t.Fatalf("orphan-cleanup muss das angelegte item exakt einmal löschen, got %d", s.nDeletes)
+	}
+	if s.nUploads != 0 {
+		t.Errorf("nach authorize-fehler darf kein upload stattfinden, got %d", s.nUploads)
 	}
 }
 

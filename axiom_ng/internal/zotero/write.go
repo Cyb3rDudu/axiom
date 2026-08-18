@@ -186,6 +186,18 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf [
 	}
 	attKey := created.Successful["0"].Key
 
+	// Orphan guard (review W1): the caller has already quarantined and
+	// deleted the ORIGINAL — a failure after this point must not leave the
+	// freshly created EMPTY imported_file item behind. Best-effort delete
+	// (version-guarded like every mutation); if even that fails the key is
+	// surfaced in the error so an operator can finish manually.
+	cleanup := func(err error) (string, error) {
+		if delErr := w.DeleteAttachmentItem(attKey); delErr != nil {
+			return attKey, fmt.Errorf("%w (aufräumen fehlgeschlagen: leerer Anhang %s manuell löschen)", err, attKey)
+		}
+		return "", err
+	}
+
 	// Phase 1 — authorize the upload (form-urlencoded; mtime in MILLISECONDS).
 	// md5 is PLAIN HEX here AND nowhere else is a digest sent — one encoding,
 	// no base64 variant.
@@ -209,7 +221,7 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf [
 			"If-None-Match": "*",
 		}, form)
 	if err != nil {
-		return attKey, fmt.Errorf("authorize upload: %w", err)
+		return cleanup(fmt.Errorf("authorize upload: %w", err))
 	}
 	var auth struct {
 		Exists    int               `json:"exists"`
@@ -223,7 +235,7 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf [
 		// else; never silently post a garbage body as the key.
 		var bare string
 		if berr := json.Unmarshal(raw, &bare); berr != nil || bare == "" {
-			return attKey, fmt.Errorf("authorize upload: unerwartete Antwortform (will {url,uploadKey}|{exists:1}|\"key\"): %s", string(raw))
+			return cleanup(fmt.Errorf("authorize upload: unerwartete Antwortform (will {url,uploadKey}|{exists:1}|\"key\")): %s", string(raw)))
 		}
 		auth.UploadKey = bare
 	}
@@ -231,7 +243,7 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf [
 		return attKey, nil // identical file already staged/synced — done
 	}
 	if auth.UploadKey == "" || auth.URL == "" {
-		return attKey, fmt.Errorf("authorize upload: keine uploadKey/url: %s", string(raw))
+		return cleanup(fmt.Errorf("authorize upload: keine uploadKey/url: %s", string(raw)))
 	}
 
 	// Phase 2 — transmit the bytes (multipart, field "file"; 201). Register-
@@ -241,22 +253,22 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf [
 	mw := multipart.NewWriter(&buf)
 	for k, v := range auth.Params {
 		if err := mw.WriteField(k, v); err != nil {
-			return attKey, err
+			return cleanup(err)
 		}
 	}
 	fw, err := mw.CreateFormFile("file", filename)
 	if err != nil {
-		return attKey, err
+		return cleanup(err)
 	}
 	if _, err := fw.Write(pdf); err != nil {
-		return attKey, err
+		return cleanup(err)
 	}
 	if err := mw.Close(); err != nil {
-		return attKey, err
+		return cleanup(err)
 	}
 	upReq, err := http.NewRequest(http.MethodPost, auth.URL, &buf)
 	if err != nil {
-		return attKey, err
+		return cleanup(err)
 	}
 	upReq.Header.Set("Content-Type", mw.FormDataContentType())
 	// Credentials only travel to the LOCAL API host: an authorize response
@@ -266,12 +278,12 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf [
 	}
 	upResp, err := w.HTTP.Do(upReq)
 	if err != nil {
-		return attKey, fmt.Errorf("upload bytes: %w", err)
+		return cleanup(fmt.Errorf("upload bytes: %w", err))
 	}
 	defer upResp.Body.Close()
 	upBody, _ := io.ReadAll(upResp.Body)
 	if upResp.StatusCode >= 300 {
-		return attKey, fmt.Errorf("upload bytes: %d %s", upResp.StatusCode, string(upBody))
+		return cleanup(fmt.Errorf("upload bytes: %d %s", upResp.StatusCode, string(upBody)))
 	}
 
 	// Phase 3 — register the upload against the item (204).
@@ -282,7 +294,7 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf [
 			"If-None-Match": "*",
 		}, reg)
 	if err != nil {
-		return attKey, fmt.Errorf("register upload: %w", err)
+		return cleanup(fmt.Errorf("register upload: %w", err))
 	}
 	return attKey, nil
 }

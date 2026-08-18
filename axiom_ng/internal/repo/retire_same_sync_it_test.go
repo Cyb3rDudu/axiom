@@ -54,10 +54,10 @@ func TestSyncRetiresDeletedAttachmentSameTxIT(t *testing.T) {
 		t.Fatal(err)
 	}
 	if active {
-		t.Fatal("SAME-SYNC-RETORE verletzt: Snapshot des gelöschten Anhangs ist noch aktiv (Mullins-Zombie-Klasse)")
+		t.Fatal("SAME-SYNC-RETIRE verletzt: Snapshot des gelöschten Anhangs ist noch aktiv (Mullins-Zombie-Klasse)")
 	}
 	var ops []string
-	rows, err := lr.pool.Query(ctx, `SELECT operation FROM opensearch_outbox WHERE snapshot_id=$1`, snapID)
+	rows, err := lr.pool.Query(ctx, `SELECT operation FROM opensearch_outbox WHERE snapshot_id=$1 ORDER BY created_at, id`, snapID)
 	if err != nil {
 		t.Fatal(err)
 	}

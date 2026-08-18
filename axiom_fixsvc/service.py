@@ -27,15 +27,15 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import pymupdf
-import requests
-from axiom_ng_runner.compute_core import page_trust as pt
-from axiom_ng_runner.compute_core.pdf_health import preflight
+# pymupdf/requests/compute_core stay FUNCTION-LOCAL (lazy): the pure plan
+# logic (validate_plan/label_at/candidates_1based) must be importable and
+# testable without the PDF stack or network deps (review W5).
 
 RAG = os.environ.get("AXIOM_RAG_URL", "http://127.0.0.1:8011")
 DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -46,6 +46,12 @@ DEEPSEEK_URL = (
 MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
 ARABIC = re.compile(r"^\d{1,4}$")
+
+# Mirror of the AUTHORITATIVE auto-apply gate: repo.RepairAutoApplyMinScore
+# in axiom_ng/internal/repo/repair.go (0.95). The RAG re-enforces it
+# server-side (SubmitRepairVerdict); this constant only decides whether the
+# service uploads a healed PDF at all — keep both in sync.
+AUTO_APPLY_MIN_COVERAGE = 0.95
 
 
 def log(buch: str, phase: str, erg: str) -> None:
@@ -74,18 +80,25 @@ Analyse: {analyse}
 Gelesene Seitenzahlen (physisch 1-basiert → gedruckt): {candidates}"""
 
 
-def judge(buch: str, analyse: dict, candidates: dict[int, str]) -> dict:
-    """DeepSeek assessment → Zielzustands-plan (validated). LLM never writes bytes."""
-    if not DEEPSEEK_KEY:
-        raise RuntimeError("DEEPSEEK_API_KEY fehlt (Service-Env)")
-    # candidates arrive 0-BASED (extract_folio_candidates keys) — the plan
-    # world is 1-BASED pages. Convert HERE or the judge builds every section
-    # one page early (live bug, Controlling: 573/575 contradictions).
-    cand = {
+def candidates_1based(candidates: dict) -> dict[int, str]:
+    """Convert 0-BASED extract_folio_candidates keys into the plan world's
+    1-BASED pages, dropping non-arabic readings. Without this the judge
+    builds every section one page early (live bug, Controlling:
+    573/575 contradictions)."""
+    return {
         int(k) + 1: str(v).strip()
         for k, v in candidates.items()
         if ARABIC.match(str(v).strip())
     }
+
+
+def judge(buch: str, analyse: dict, candidates: dict[int, str]) -> dict:
+    """DeepSeek assessment → Zielzustands-plan (validated). LLM never writes bytes."""
+    import requests  # lazy: pure-logic tests must not need network deps
+
+    if not DEEPSEEK_KEY:
+        raise RuntimeError("DEEPSEEK_API_KEY fehlt (Service-Env)")
+    cand = candidates_1based(candidates)
     body = {
         "model": MODEL,
         "messages": [
@@ -120,14 +133,19 @@ def judge(buch: str, analyse: dict, candidates: dict[int, str]) -> dict:
 
 
 def validate_plan(plan: dict) -> dict:
-    secs = sorted(plan.get("sections", []), key=lambda s: s["from_page"])
+    secs = plan.get("sections", [])
     if not secs:
         raise ValueError("Plan ohne Sektionen")
-    last = 0
+    # int-check BEFORE the sort: a section missing from_page used to crash
+    # the sort lambda with a raw KeyError instead of the contract ValueError
+    # (untrusted judge output — found by service_test.py, review W5)
     for s in secs:
         for k in ("from_page", "to_page", "start_label"):
             if not isinstance(s.get(k), int):
                 raise ValueError(f"Sektion {s}: {k} fehlt/kein int")  # noqa: TRY004 — untrusted plan data, not a type misuse
+    secs = sorted(secs, key=lambda s: s["from_page"])
+    last = 0
+    for s in secs:
         if (
             s["from_page"] < 1
             or s["to_page"] < s["from_page"]
@@ -158,6 +176,10 @@ def verify(plan: dict, pdf_path: str) -> tuple[float, int, dict]:
     label matching the printed number = covered; a mismatch = contradiction;
     an observable page outside all sections counts against coverage.
     """
+    import pymupdf  # lazy (review W5)
+
+    from axiom_ng_runner.compute_core import page_trust as pt
+
     doc = pymupdf.open(pdf_path)
     try:
         cands = pt.extract_folio_candidates(doc)
@@ -203,6 +225,8 @@ def build_healed_pdf(plan: dict, pdf_path: str) -> bytes:
       - save WITHOUT garbage=3: the aggressive xref rewrite corrupted the heap
         in marker's C layer (free(): chunks in smallbin corrupted, live)
     """
+    import pymupdf  # lazy (review W5)
+
     doc = pymupdf.open(pdf_path)
     try:
         spec = []
@@ -231,6 +255,12 @@ def build_healed_pdf(plan: dict, pdf_path: str) -> bytes:
 
 
 def run_case(case: dict) -> None:
+    import pymupdf  # lazy (review W5)
+    import requests
+
+    from axiom_ng_runner.compute_core import page_trust as pt
+    from axiom_ng_runner.compute_core.pdf_health import preflight
+
     buch = case["title"]
     pdf = case["local_path"].replace("file://", "")
     cid = case["id"]
@@ -265,10 +295,13 @@ def run_case(case: dict) -> None:
         f"fußzeilen-deckung {coverage:.1%} · {contra} widersprüche · {stats}",
     )
 
-    if coverage >= 0.95 and contra == 0:
+    if coverage >= AUTO_APPLY_MIN_COVERAGE and contra == 0:
         pdf_bytes = build_healed_pdf(plan, pdf)
-        with open("/tmp/healed.pdf", "wb") as f:
-            f.write(pdf_bytes)
+        # debug dump is OPT-IN (default off): /tmp is world-readable and the
+        # healed bytes are proprietary book content (review W5)
+        if os.environ.get("AXIOM_FIXSVC_DUMP_HEALED"):
+            with open("/tmp/healed.pdf", "wb") as f:
+                f.write(pdf_bytes)
         r = requests.post(
             f"{RAG}/api/repair/cases/{cid}/verdict",
             timeout=300,
@@ -288,6 +321,32 @@ def run_case(case: dict) -> None:
             "AUTO-APPLY",
             f"angewendet: {erg.get('filename')} · neu {erg.get('new_attachment_key')} · quarantäne {erg.get('quarantine')}",
         )
+
+        # final GREEN check (docstring promise, review W5): the APPLIED
+        # bytes re-run through the SAME preflight that rejected the broken
+        # original — a healed PDF that still smells rotten must fail loudly
+        # instead of counting as a success. Best-effort failed verdict: the
+        # case may already be 'healed' RAG-side; the log line is the
+        # operative signal dudu watches.
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp:
+            tmp.write(pdf_bytes)
+            tmp.flush()
+            pf_heiled = preflight(tmp.name)
+        if not pf_heiled.ok:
+            requests.post(
+                f"{RAG}/api/repair/cases/{cid}/verdict",
+                timeout=60,
+                data={
+                    "verdict": "failed",
+                    "score": coverage,
+                    "contradictions": contra,
+                    "blocked_reason": f"healed-not-green: {pf_heiled.verdacht}"[:300],
+                    "plan": json.dumps(plan, ensure_ascii=False),
+                },
+            )
+            log(buch, "GREEN-CHECK", f"GEHEILTE PDF NICHT GRÜN: {pf_heiled.verdacht}")
+            return
+        log(buch, "GREEN-CHECK", f"geheilte PDF grün ({pf_heiled.line()[len('[x] '):]})")
     else:
         r = requests.post(
             f"{RAG}/api/repair/cases/{cid}/verdict",
@@ -335,6 +394,8 @@ def run_case(case: dict) -> None:
 
 
 def main() -> int:
+    import requests  # lazy (review W5)
+
     if not DEEPSEEK_KEY:
         print("DEEPSEEK_API_KEY fehlt", file=sys.stderr)
         return 2

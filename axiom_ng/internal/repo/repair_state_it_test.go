@@ -33,6 +33,9 @@ func TestRepairStateMachineIT(t *testing.T) {
 	if err := lr.rep.QueueRepairCase(ctx, c.ID, "🔴 unpaginiert", json.RawMessage(`{}`)); err == nil {
 		t.Fatal("unpaginiert muss QueueRepairCase verweigern")
 	}
+	if err := lr.rep.QueueRepairCase(ctx, c.ID, "🔴 Unpaginiert (Mixed-Case)", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("unpaginiert (mixed case) muss QueueRepairCase verweigern — ToLower-Guard")
+	}
 	if err := lr.rep.QueueRepairCase(ctx, c.ID, "🔴 reparierbar", json.RawMessage(`{"folio":true}`)); err != nil {
 		t.Fatalf("queue: %v", err)
 	}
