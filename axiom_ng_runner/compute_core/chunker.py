@@ -294,6 +294,7 @@ class Chunker:
         current_chunk_headings: List[str] = paragraph_to_headings.get(0, [])
         current_chunk_page_start = paragraph_to_page.get(0, "1")
         current_chunk_page_end = current_chunk_page_start
+
         for i, para in enumerate(paragraphs):
             para_tokens = self._count_tokens(para)
             para_headings = paragraph_to_headings.get(i, [])
@@ -363,8 +364,10 @@ class Chunker:
 
                 current_start_idx = i
                 # #186: snapshot the trail at the moment the new chunk opens —
-                # para i is its first content; a heading para's own trail
-                # already includes itself.
+                # para i is its first non-overlap content; a heading para's own
+                # trail already includes itself. (With overlap, the recycled
+                # fragment from the previous chunk becomes its own tiny chunk
+                # carrying the PREVIOUS section's trail — first content wins.)
                 current_chunk_headings = para_headings
 
             # Add paragraph to current chunk
@@ -466,7 +469,7 @@ class Chunker:
             "chunk_index": chunk_index,
             "start_paragraph_index": start_para,
             "end_paragraph_index": end_para,
-            "section_titles": section_titles,
+            "section_titles": list(section_titles),
             "token_count": self._count_tokens(text),
             "image_refs": image_refs,
             "page_start": page_start,

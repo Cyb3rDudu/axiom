@@ -9,11 +9,13 @@ Mutation barriers (each test names the defect it must survive):
         updated the heading stack BEFORE emitting the closing chunk, so a
         chunk beginning with "## 1 ..." reported section "## 2 ..." as its
         deepest section (3,762 chunks / 82 books / 19.1% of heading-first
-        chunks corpus-wide).
+        chunks at issue-filing census; corpus-state dependent).
 
   size_split_mid_section_keeps_own_deepest
-        the fix must not overcorrect: a chunk closed by the token budget
-        mid-section keeps the section active at its own start.
+        the fix must not overcorrect: chunks closed by the token budget
+        mid-section keep the section active at their own start. The
+        fixture's LAST body chunk additionally closes at the next heading
+        (fencepost path) — both must report their own section.
 
   deeper_heading_inside_chunk_does_not_hijack_trail
         a deeper heading (### x.y) landing INSIDE a chunk via the final-chunk
@@ -27,6 +29,7 @@ Mutation barriers (each test names the defect it must survive):
 Run: python3 -m pytest axiom_ng_runner/tests/test_chunker_section_trail.py
 """
 
+import os
 import unittest
 
 from axiom_ng_runner.compute_core.chunker import Chunker
@@ -68,6 +71,9 @@ Inhalt unter Sektion drei. Kurzer Absatz.
 
 class SectionTrailFencepost(unittest.TestCase):
     def setUp(self):
+        # CHUNKER_MODE=paragraph in a dev shell would silently bypass the
+        # token chunker under test — force the default.
+        os.environ.pop("CHUNKER_MODE", None)
         # Small budget so every heading forces a chunk boundary; no overlap
         # so chunk boundaries are exactly the heading positions.
         self.chunker = Chunker(max_chunk_tokens=64, overlap_tokens=0, min_chunk_tokens=1)
@@ -92,8 +98,9 @@ class SectionTrailFencepost(unittest.TestCase):
         )
 
     def test_size_split_mid_section_keeps_own_deepest(self):
-        # Long section body -> the token budget, not a heading, closes the
-        # chunk; deepest stays the section active at the chunk's start.
+        # Long section body -> budget splits inside the section, and the
+        # last body chunk closes at the '## 5' heading boundary (fencepost
+        # path); deepest stays the section active at each chunk's own start.
         body = "\n\n".join(
             f"Absatz {i} mit eigenem Text und mehreren Woertern zum Fuellen." for i in range(12)
         )
@@ -129,6 +136,36 @@ class SectionTrailFencepost(unittest.TestCase):
         ]
         self.assertTrue(inside, "fixture must merge the tiny '### 2.1' tail into the section-2 chunk")
         self.assertEqual(_deepest(inside[0]), "2. Zweite Sektion")
+
+    def test_overlap_path_first_non_overlap_content_decides(self):
+        # Production default overlap_tokens=64: at a heading boundary the
+        # closing chunk's last paragraph is recycled as an overlap fragment,
+        # and the fragment opens the NEW chunk TOGETHER with the heading
+        # (the heading split has already fired). The chunk's first TEXT is
+        # previous-section fragment, but its first NON-overlap content is
+        # the new heading — that decides the trail (contract wording).
+        para = " ".join(f"Wort{i}" for i in range(70))  # > 64 words -> trimmed fragment
+        doc = (
+            "# Buchtitel\n\n## 1. Erste Sektion\n\n" + para + "\n\n"
+            "## 2. Zweite Sektion\n\n" + para + "\n"
+        )
+        chunker = Chunker(max_chunk_tokens=512, overlap_tokens=64, min_chunk_tokens=1)
+        chunks = chunker.chunk(doc)
+        overlap_chunks = [
+            c for c in chunks
+            if c["text"].startswith("Wort") and "Wort69" in c["text"]
+        ]
+        self.assertTrue(overlap_chunks, "fixture must produce an overlap-carrying chunk")
+        oc = overlap_chunks[0]
+        self.assertIn(
+            "## 2. Zweite Sektion", oc["text"],
+            "fixture shape: fragment + heading open the new chunk together",
+        )
+        self.assertEqual(
+            _deepest(oc),
+            "2. Zweite Sektion",
+            "first NON-overlap content (the opening heading) decides the trail",
+        )
 
 
 if __name__ == "__main__":
