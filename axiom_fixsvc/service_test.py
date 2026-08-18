@@ -60,6 +60,23 @@ def test_validate_plan_rejects_missing_int() -> None:
         )
 
 
+def test_validate_plan_rejects_bools() -> None:
+    # isinstance(True, int) is True in Python — a boolean plan value must
+    # not pass the int check and compute labels from True == 1 (follow-up S2)
+    for bad in (
+        {"from_page": True, "to_page": 67, "start_label": 2},
+        {"from_page": 11, "to_page": False, "start_label": 2},
+        {"from_page": 11, "to_page": 67, "start_label": True},
+    ):
+        try:
+            service.validate_plan({"sections": [bad]})
+        except ValueError:
+            continue
+        raise AssertionError(
+            f"boolean-feld muss abgelehnt werden: {bad}"
+        )
+
+
 def test_validate_plan_normalizes_and_defaults() -> None:
     plan = {
         "sections": [

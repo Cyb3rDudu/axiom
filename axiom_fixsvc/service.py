@@ -141,8 +141,11 @@ def validate_plan(plan: dict) -> dict:
     # (untrusted judge output — found by service_test.py, review W5)
     for s in secs:
         for k in ("from_page", "to_page", "start_label"):
-            if not isinstance(s.get(k), int):
-                raise ValueError(f"Sektion {s}: {k} fehlt/kein int")  # noqa: TRY004 — untrusted plan data, not a type misuse
+            # type() not isinstance(): isinstance(True, int) is True in
+            # Python, so a boolean plan value would compute labels from
+            # True==1 (follow-up S2)
+            if type(s.get(k)) is not int:
+                raise ValueError(f"Sektion {s}: {k} fehlt/kein int")
     secs = sorted(secs, key=lambda s: s["from_page"])
     last = 0
     for s in secs:
@@ -266,7 +269,7 @@ def run_case(case: dict) -> None:
     cid = case["id"]
 
     pf = preflight(pdf)
-    log(buch, "PREFLIGHT", pf.line()[len("[x] ") :])
+    log(buch, "PREFLIGHT", pf.line())
     if pf.ok:
         requests.post(
             f"{RAG}/api/repair/cases/{cid}/verdict",
@@ -346,7 +349,7 @@ def run_case(case: dict) -> None:
             )
             log(buch, "GREEN-CHECK", f"GEHEILTE PDF NICHT GRÜN: {pf_heiled.verdacht}")
             return
-        log(buch, "GREEN-CHECK", f"geheilte PDF grün ({pf_heiled.line()[len('[x] '):]})")
+        log(buch, "GREEN-CHECK", f"geheilte PDF grün ({pf_heiled.line()})")
     else:
         r = requests.post(
             f"{RAG}/api/repair/cases/{cid}/verdict",

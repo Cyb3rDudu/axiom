@@ -181,6 +181,12 @@ func TestCreateAttachmentHappyPath(t *testing.T) {
 	if s.upFile != fname {
 		t.Errorf("multipart filename round-trip failed: got %q, want %q", s.upFile, fname)
 	}
+	// follow-up W2: SUCCESS must not delete the created item — the orphan
+	// cleanup is failure-only; a defer-style cleanup would delete every
+	// healthy attachment. Pin: zero deletes on the happy path.
+	if s.nDeletes != 0 {
+		t.Errorf("happy path darf nichts löschen (cleanup nur im fehlerfall), got %d deletes", s.nDeletes)
+	}
 }
 
 // TestCreateAttachmentExistsObject: {"exists":1} ends the flow — no upload,
@@ -199,6 +205,11 @@ func TestCreateAttachmentExistsObject(t *testing.T) {
 	}
 	if len(s.regForm) != 0 {
 		t.Errorf("exists must skip the register, got %v", s.regForm)
+	}
+	// follow-up W2: exists==1 ends the flow successfully — no orphan
+	// cleanup may fire (the item already existed and is healthy).
+	if s.nDeletes != 0 {
+		t.Errorf("exists-short-circuit darf nichts löschen, got %d deletes", s.nDeletes)
 	}
 }
 

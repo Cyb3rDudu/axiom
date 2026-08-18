@@ -10,12 +10,14 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
@@ -148,7 +150,10 @@ func TestApplyRepairDeleteFailureStopsCreate(t *testing.T) {
 
 // (ii) boundary validation: a malformed score must 400 BEFORE any repo
 // interaction — the handler runs on a zero Server (nil repairRepo); if the
-// guard were missing this would nil-panic or reach the DB.
+// guard were missing this would nil-panic or reach the DB. Follow-up W3:
+// STRICT ParseFloat — trailing junk ("0.9abc"), comma decimals ("0,9") and
+// non-finite values ("NaN", "Inf") all 400 instead of silently degrading
+// to 0.0 or a NaN that compares false against the gate.
 func TestRepairVerdictMalformedScoreRejected(t *testing.T) {
 	s := &Server{} // zero value: nothing may be touched before the 400
 	r := chi.NewRouter()
@@ -156,9 +161,13 @@ func TestRepairVerdictMalformedScoreRejected(t *testing.T) {
 
 	for _, form := range []string{
 		"verdict=blocked&score=abc&plan=%7B%7D",
-		"verdict=blocked&plan=%7B%7D",             // score missing entirely
-		"verdict=blocked&score=0.9&plan=",         // plan missing
-		"verdict=blocked&score=0.9&plan=not-json", // plan garbage
+		"verdict=blocked&plan=%7B%7D",              // score missing entirely
+		"verdict=blocked&score=0%2C9&plan=%7B%7D",  // comma decimal: 400, not 0.0
+		"verdict=blocked&score=0.9abc&plan=%7B%7D", // trailing junk: 400
+		"verdict=blocked&score=NaN&plan=%7B%7D",    // non-finite: 400
+		"verdict=blocked&score=Inf&plan=%7B%7D",    // non-finite: 400
+		"verdict=blocked&score=0.9&plan=",          // plan missing
+		"verdict=blocked&score=0.9&plan=not-json",  // plan garbage
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/api/repair/cases/x/verdict", strings.NewReader(form))
@@ -170,13 +179,75 @@ func TestRepairVerdictMalformedScoreRejected(t *testing.T) {
 	}
 }
 
-// (i-lt) an EMPTY healed_pdf must 400 and mark the case failed BEFORE any
-// custody mutation. SubmitRepairVerdict needs the real DB (in_repair), so
-// this pins only the guard itself: the zero-length check runs before the
-// attachment lookup. Full HTTP path stays IT-covered.
-func TestRepairVerdictEmptyPdfGuard(t *testing.T) {
-	// exercised at the applyRepair level: a zero-byte pdf never reaches
-	// quarantine — pinned by construction in handleRepairVerdict (the
-	// len(pdf)==0 branch); the DB-backed seam requires the IT DSN.
-	t.Skip("HTTP-seam guard needs in_repair state — IT-covered with DSN proviso")
+// multipart request helper: a healed_pdf part with the given content (or
+// no part at all when hasFile is false).
+func healedPDFRequest(t *testing.T, hasFile bool, content string) *http.Request {
+	t.Helper()
+	var b strings.Builder
+	fmt.Fprintf(&b, "--BOUND\r\n")
+	if hasFile {
+		b.WriteString("Content-Disposition: form-data; name=\"healed_pdf\"; filename=\"h.pdf\"\r\n")
+		b.WriteString("Content-Type: application/pdf\r\n\r\n")
+		b.WriteString(content)
+		b.WriteString("\r\n")
+	}
+	b.WriteString("--BOUND--\r\n")
+	req := httptest.NewRequest(http.MethodPost, "/api/repair/cases/x/verdict", strings.NewReader(b.String()))
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=BOUND")
+	return req
+}
+
+// (i-lt) follow-up W1: the healed-PDF guards are pinned DIRECTLY on
+// readHealedPDF — missing part fails, content round-trips, and an EMPTY
+// part fails with 'healed_pdf ist leer' so a zero-byte husk can never
+// reach quarantine/delete/create. The in_repair→MarkRepairFailed HTTP
+// flow around it needs the IT DSN (DSN proviso).
+func TestReadHealedPDFEmptyGuard(t *testing.T) {
+	if _, err := readHealedPDF(healedPDFRequest(t, false, "")); err == nil {
+		t.Fatal("fehlender healed_pdf-part muss fehlschlagen")
+	} else if !strings.Contains(err.Error(), "ohne geheilte PDF") {
+		t.Fatalf("fehlender part: unerwarteter fehler %v", err)
+	}
+	pdf, err := readHealedPDF(healedPDFRequest(t, true, "PDFBYTES"))
+	if err != nil || string(pdf) != "PDFBYTES" {
+		t.Fatalf("content: pdf=%q err=%v", pdf, err)
+	}
+	if _, err := readHealedPDF(healedPDFRequest(t, true, "")); err == nil || !strings.Contains(err.Error(), "ist leer") {
+		t.Fatalf("leere pdf muss mit 'ist leer' fehlschlagen, got %v", err)
+	}
+}
+
+// follow-up W1c: buildQueue parks a GONE-source case (ErrNoRows from
+// repairItemFor — attachment OR document row missing) via BlockRepairCase
+// ("attachment-gone") and OMITS it; a transient read error omits WITHOUT
+// blocking (the case stays queued for the next poll); readable cases are
+// served. This is the anti-infinite-reserve policy of review W3a.
+func TestBuildQueueParksGoneAttachments(t *testing.T) {
+	gone := repo.RepairCase{ID: "gone-1"}
+	transient := repo.RepairCase{ID: "db-1"}
+	ok := repo.RepairCase{ID: "ok-1"}
+	var blocked []string
+	out := buildQueue([]repo.RepairCase{gone, transient, ok},
+		func(c *repo.RepairCase) (*repairQueueItem, error) {
+			switch c.ID {
+			case "gone-1":
+				return nil, pgx.ErrNoRows
+			case "db-1":
+				return nil, errors.New("conn reset")
+			}
+			return &repairQueueItem{RepairCase: *c, Title: "Buch"}, nil
+		},
+		func(id, reason string) error {
+			if reason != "attachment-gone" {
+				t.Errorf("block reason = %q, want attachment-gone", reason)
+			}
+			blocked = append(blocked, id)
+			return nil
+		})
+	if len(blocked) != 1 || blocked[0] != "gone-1" {
+		t.Fatalf("nur der gone-case darf geblockt werden, got %v", blocked)
+	}
+	if len(out) != 1 || out[0].ID != "ok-1" || out[0].Title != "Buch" {
+		t.Fatalf("nur der lesbare case wird geliefert, got %+v", out)
+	}
 }

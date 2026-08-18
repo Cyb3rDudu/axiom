@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -51,19 +53,32 @@ func (s *Server) handleRepairQueue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	out := buildQueue(cases,
+		func(c *repo.RepairCase) (*repairQueueItem, error) { return s.repairItemFor(r, c) },
+		func(id, reason string) error { return s.repairRepo.BlockRepairCase(r.Context(), id, reason) })
+	writeJSON(w, http.StatusOK, map[string]any{"cases": out})
+}
+
+// buildQueue assembles the listing, PARKING unreadable cases instead of
+// silently skipping them: ErrNoRows from repairItemFor means the attachment
+// OR document row is gone at the source (the JOIN makes both ErrNoRows) —
+// the fix-service loop iterates exactly this listing, so a silent skip is
+// an infinite re-serve (review W3a). Such a case is parked
+// blocked_for_dudu('attachment-gone'); other read errors (transient DB)
+// keep the skip but log loudly. The DB reason string stays the stable
+// 'attachment-gone' prefix.
+func buildQueue(cases []repo.RepairCase,
+	itemFor func(*repo.RepairCase) (*repairQueueItem, error),
+	block func(id, reason string) error) []repairQueueItem {
 	out := make([]repairQueueItem, 0, len(cases))
 	for _, c := range cases {
-		item, err := s.repairItemFor(r, &c)
+		item, err := itemFor(&c)
 		if err != nil {
-			// A case whose attachment is GONE must not stay queued forever —
-			// the loop iterates exactly this listing, so a silent skip is an
-			// infinite re-serve (review W3a). Park it blocked_for_dudu.
-			// Other errors (transient DB) keep the skip but log loudly.
 			if errors.Is(err, pgx.ErrNoRows) {
-				if berr := s.repairRepo.BlockRepairCase(r.Context(), c.ID, "attachment-gone"); berr != nil {
+				if berr := block(c.ID, "attachment-gone"); berr != nil {
 					log.Printf("repair %s: attachment-gone block fehlgeschlagen: %v", c.ID, berr)
 				} else {
-					log.Printf("repair %s: attachment-gone — case parked blocked_for_dudu", c.ID)
+					log.Printf("repair %s: attachment-gone (attachment oder dokument weg) — case parked blocked_for_dudu", c.ID)
 				}
 			} else {
 				log.Printf("repair %s: queue-item unlesbar: %v", c.ID, err)
@@ -72,7 +87,7 @@ func (s *Server) handleRepairQueue(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, *item)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"cases": out})
+	return out
 }
 
 func (s *Server) repairItemFor(r *http.Request, c *repo.RepairCase) (*repairQueueItem, error) {
@@ -171,14 +186,23 @@ func (s *Server) handleRepairVerdict(w http.ResponseWriter, r *http.Request) {
 	// Boundary validation BEFORE any state change (review W3b): a malformed
 	// score used to degrade to 0.0 silently and a missing plan surfaced as a
 	// raw pgx 409. 400 + clear message instead; 409 stays for genuine state
-	// conflicts only.
+	// conflicts only. STRICT parsing (follow-up W3): ParseFloat rejects
+	// trailing junk ("0.9abc") and comma decimals ("0,9") that Sscanf
+	// silently truncated; NaN/Inf parse fine, so they are rejected here —
+	// a NaN compares false against every gate threshold and would block the
+	// case with a misleading reason instead of a 400.
 	var score float64
-	if raw := r.FormValue("score"); raw == "" {
+	if raw := strings.TrimSpace(r.FormValue("score")); raw == "" {
 		http.Error(w, "score fehlt", http.StatusBadRequest)
 		return
-	} else if _, err := fmt.Sscanf(raw, "%f", &score); err != nil {
+	} else if v, err := strconv.ParseFloat(raw, 64); err != nil {
 		http.Error(w, "score unlesbar: "+raw, http.StatusBadRequest)
 		return
+	} else if math.IsNaN(v) || math.IsInf(v, 0) {
+		http.Error(w, "score ist nicht endlich: "+raw, http.StatusBadRequest)
+		return
+	} else {
+		score = v
 	}
 	plan := json.RawMessage(r.FormValue("plan"))
 	if len(plan) == 0 || !json.Valid(plan) {
@@ -200,25 +224,10 @@ func (s *Server) handleRepairVerdict(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// AUTO-APPLY — the only write path. healed PDF required.
-	file, _, err := r.FormFile("healed_pdf")
-	if err != nil {
-		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, "auto-apply ohne geheilte PDF")
-		http.Error(w, "healed_pdf fehlt: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-	pdf, readErr := io.ReadAll(file) // stdlib: a mid-read error SURFACES instead
-	// of silently uploading a truncated PDF (review: manual loop swallowed it)
-	if readErr != nil {
-		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, "healed_pdf lesen: "+readErr.Error())
-		http.Error(w, "healed_pdf: "+readErr.Error(), http.StatusBadRequest)
-		return
-	}
-	if len(pdf) == 0 {
-		// an EMPTY healed file must not reach quarantine/delete/create — it
-		// would replace the original with a zero-byte husk (review W3b)
-		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, "healed_pdf ist leer")
-		http.Error(w, "healed_pdf ist leer", http.StatusBadRequest)
+	pdf, pdfErr := readHealedPDF(r)
+	if pdfErr != nil {
+		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, pdfErr.Error())
+		http.Error(w, pdfErr.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -244,6 +253,30 @@ func (s *Server) handleRepairVerdict(w http.ResponseWriter, r *http.Request) {
 	}
 	body["effective"] = eff
 	writeJSON(w, http.StatusOK, body)
+}
+
+// readHealedPDF extracts and validates the healed PDF from the multipart
+// form (follow-up W1: extracted so the guards are unit-testable without
+// the in_repair state the handler needs). Three guards: the file part must
+// EXIST, be FULLY read (stdlib: a mid-read error SURFACES instead of
+// silently uploading a truncated PDF — a manual loop swallowed it), and be
+// NON-EMPTY — an empty healed file must not reach quarantine/delete/create,
+// it would replace the original with a zero-byte husk (review W3b). The
+// error text doubles as the blocked_reason for MarkRepairFailed.
+func readHealedPDF(r *http.Request) ([]byte, error) {
+	file, _, err := r.FormFile("healed_pdf")
+	if err != nil {
+		return nil, fmt.Errorf("auto-apply ohne geheilte PDF: %w", err)
+	}
+	defer file.Close()
+	pdf, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("healed_pdf lesen: %w", err)
+	}
+	if len(pdf) == 0 {
+		return nil, errors.New("healed_pdf ist leer")
+	}
+	return pdf, nil
 }
 
 // repairApplyDeps bundles every mutation of the auto-apply custody sequence

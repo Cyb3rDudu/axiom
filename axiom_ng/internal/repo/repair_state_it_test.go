@@ -109,3 +109,69 @@ func TestRepairStateMachineIT(t *testing.T) {
 		t.Fatalf("loop-guard muss blocked_for_dudu setzen, got %s/%q", got4.Status, got4.BlockedReason)
 	}
 }
+
+// TestBlockRepairCaseIT (follow-up W1b): BlockRepairCase parks
+// queued AND rejected cases as blocked_for_dudu with the given reason
+// (queue listing uses it for gone attachments — a silent skip would
+// re-serve the case forever), while in_repair refuses the block so a
+// mid-flight case can never be parked out from under the fix-service.
+func TestBlockRepairCaseIT(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	seed := func(tag string) (string, *RepairCase) {
+		ch := "block-" + tag
+		attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: "lib-" + tag,
+			docKey: "BD" + tag, attKey: "BA" + tag, contentHash: &ch}, "completed", 1)
+		c, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", json.RawMessage(`{}`))
+		if err != nil || c == nil {
+			t.Fatalf("CreateRepairCase %s: %v %v", tag, c, err)
+		}
+		return attID, c
+	}
+
+	// queued → blocked
+	_, c1 := seed("q")
+	if err := lr.rep.QueueRepairCase(ctx, c1.ID, "reparierbar", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := lr.rep.BlockRepairCase(ctx, c1.ID, "attachment-gone"); err != nil {
+		t.Fatalf("BlockRepairCase (queued): %v", err)
+	}
+	got, _ := lr.rep.getRepairCase(ctx, c1.ID)
+	if got.Status != RepairBlocked || got.BlockedReason != "attachment-gone" {
+		t.Fatalf("queued muss blocked_for_dudu('attachment-gone') werden, got %s/%q", got.Status, got.BlockedReason)
+	}
+
+	// rejected → blocked (a never-queued case can be parked too)
+	_, c2 := seed("r")
+	if err := lr.rep.BlockRepairCase(ctx, c2.ID, "attachment-gone"); err != nil {
+		t.Fatalf("BlockRepairCase (rejected): %v", err)
+	}
+
+	// in_repair refuses the block (guard holds — mid-flight case untouched)
+	_, c3 := seed("i")
+	_ = lr.rep.QueueRepairCase(ctx, c3.ID, "reparierbar", json.RawMessage(`{}`))
+	if _, err := lr.rep.ClaimRepairCase(ctx, c3.ID); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := lr.rep.BlockRepairCase(ctx, c3.ID, "attachment-gone"); err == nil {
+		t.Fatal("in_repair darf nicht geblockt werden")
+	}
+	got3, _ := lr.rep.getRepairCase(ctx, c3.ID)
+	if got3.Status != RepairInRepair {
+		t.Fatalf("in_repair muss bleiben, got %s", got3.Status)
+	}
+
+	// blocked cases leave the queue listing (the anti-re-serve nail)
+	q, err := lr.rep.ListRepairQueue(ctx)
+	if err != nil {
+		t.Fatalf("ListRepairQueue: %v", err)
+	}
+	for _, c := range q {
+		if c.ID == c1.ID || c.ID == c2.ID {
+			t.Fatalf("geblockter case %s darf nicht mehr gelistet werden", c.ID)
+		}
+	}
+}
