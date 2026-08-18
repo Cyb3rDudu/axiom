@@ -301,7 +301,7 @@ teardown plan.
 | 4.1 | Merge train on carrier clone | `ssh … 'cd ~/Code/axiom && git log --oneline -1'` | ≥ `78558d5` |
 | 4.2 | New-chunker proof in image | §1.5 container feature probe | both W2+W12 assertions pass |
 | 4.3 | Runners healthy | `curl :19542/19543(45)/19544 /v1/health` ×3 | `{"status":"ok"}` |
-| 4.4 | Queue empty | `SELECT count(*) FROM ingest_jobs WHERE status='pending'` | `0` |
+| 4.4 | Queue state | `SELECT status, count(*) FROM ingest_jobs WHERE status IN ('pending','processing') GROUP BY 1` | EITHER `0`, OR exactly the known heal-projections (8 pending on new content hashes, live-verified 2026-08-18: 0 leases, held since 09:15) — held for the wave; anything `processing` = a dispatcher is draining on OLD code: STOP it before cutover. The §2.3 wave INSERT force-rows make the 8 pendings redundant (same attachments, force generation) — resolve them via the wave, not a pre-wave drain |
 | 4.5 | W7 terminal | `SELECT status, count(*) FROM repair_cases GROUP BY 1` | no `queued`/`in_repair`; healed+blocked+closed only. W7 ran with `AXIOM_FIXSVC_NO_SYNC` set (truthy check — any non-empty value incl. `0` enables, same pattern as `AXIOM_FIXSVC_DUMP_HEALED`) |
 | 4.6 | Zotero quiesce | no sync scheduled; sync API idle | no new `zotero_*` writes during wave (manual discipline + checklist at firing) |
 | 4.7 | OS cluster health | `curl localhost:9200/_cluster/health` | `green`, no unassigned shards |
