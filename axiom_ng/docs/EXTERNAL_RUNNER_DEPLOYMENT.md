@@ -442,3 +442,110 @@ erwartet, kein Bug; Retrieval-unter-Last bleibt stabil (p95 2,14 s gemessen).
 „matcht MINDESTENS EIN Element nicht" — fast immer wahr, löscht zu viel.
 Korrekt: `NOT (x LIKE ANY(arr))`. Restore der gehaltenen Jobs siehe
 #153-Kommentar (Ausführung nur nach dudus Go).
+
+## Split-Role Quickstart (#152): Retrieval lokal, Chunking extern
+
+Ein durchspielbarer Startpfad für das R4-Rollenmodell — in
+Abhängigkeitsreihenfolge. Platzhalter in `<>`; Ports sind Beispielwerte.
+
+### Schritt 1 — lokale Dienste (Postgres+pgvector, OpenSearch)
+
+Beide müssen laufen und erreichbar sein (`pg_isready`, `curl
+http://localhost:9200`). Der Mac-Betrieb nutzt den lokalen Nix-Postgres
+mit pgvector; OpenSearch lokal auf 9200. Für den Test-Ingest in Schritt 5
+zusätzlich nötig: Zotero Desktop mit lokaler API
+(`http://localhost:23119/api`).
+
+### Schritt 2 — lokaler Runner (Query-Rolle + Ingest-Fallback, MPS)
+
+```bash
+cd <repo>
+AXIOM_PROCESSOR_COMPUTE=real AXIOM_PROCESSOR_PORT=8012 \
+  axiom_ng_runner/.venv/bin/python -m axiom_ng_runner
+```
+
+Aus dem Repo-ROOT starten (`python -m axiom_ng_runner` braucht den
+Parent auf dem Pfad). Kalt lädt BGE-M3 + Reranker (~30 s), danach warm.
+Das venv wird aus `axiom_ng_runner/requirements.txt` +
+`requirements-heavy.txt` gebaut (§2).
+
+### Schritt 3 — externer GPU-Runner (Ingest primär)
+
+Nach §2/§3 bauen und mit **zwingend** `--shm-size=8g` (torch-Shm) und
+GPU-Pinning starten; Beispiel-Port 19542, Host als Platzhalter:
+
+```bash
+podman run -d --name runner-gpu --network=host --shm-size=8g \
+  --device nvidia.com/gpu=all \
+  -e CUDA_VISIBLE_DEVICES=0 -e DEVICE_MARKER=cuda -e DEVICE_GLINER=cuda \
+  -e AXIOM_PROCESSOR_COMPUTE=real -e AXIOM_PROCESSOR_BIND_ADDR=0.0.0.0 \
+  -e AXIOM_PROCESSOR_PORT=19542 \
+  -e AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=/nonexistent localhost/runner-poc
+```
+
+Für Source-URL-Transport (Runner zieht PDFs vom Mac): das Rezept im
+Kapitel „Source-URL-Transport" (Secret + `AXIOM_BIND_ADDR=0.0.0.0` +
+`AXIOM_PROCESSOR_SOURCE_BASE_URL=http://<mac-lan-ip>:8011`).
+
+### Schritt 4 — axiom-ng mit den drei Rollen-Env-Vars
+
+| Env | Default | Wirkung |
+|---|---|---|
+| `AXIOM_QUERY_RUNNER_URL` | `http://localhost:8012` | Query-Runner für `/api/search` (Embed+Rerank). Immer lokal — Retrieval überlebt einen GPU-Ausfall |
+| `AXIOM_PROCESSOR_URL` | `http://localhost:8012` | Ingest-primär (best-available; externer GPU-Runner) |
+| `AXIOM_INGEST_FALLBACK_URL` | `http://localhost:8012` | Notfall-Ingest lokal (#128: komplett, ~11× langsamer) |
+
+Details/Semantik: Kapitel „Runner-Rollen-Topologie“ (R4, #134) — Quelle
+der Wahrheit; die Tabelle wiederholt sie bewusst für Copy-Paste.
+
+Dazu fürs Chunking mit Bildern **Pflicht**: `AXIOM_ARTIFACT_ROOT=<dir>`
+(ohne es terminieren Bilder-Bücher mit `RESULT_INVALID`) und — für
+Remote-Runner — die Source-URL-Konfiguration aus Schritt 3 (Secret +
+Bind-Adresse + Base-URL).
+
+Binary bauen (aus `axiom_ng/`): `go build -o <bin> ./cmd/axiom-ng/` —
+die folgende `axiom-ng`-Invokation setzt es voraus.
+
+```bash
+AXIOM_DATABASE_URL=<db-url> \
+AXIOM_QUERY_RUNNER_URL=http://localhost:8012 \
+AXIOM_PROCESSOR_URL=http://<gpu-runner-host>:19542 \
+AXIOM_INGEST_FALLBACK_URL=http://localhost:8012 \
+AXIOM_ARTIFACT_ROOT=<dir> \
+AXIOM_DISPATCHER_ENABLED=1 AXIOM_DISPATCHER_WORKER_ID=<id> \
+axiom-ng
+```
+
+### Schritt 5 — Verifikations-Checkliste (je 1 Zeile erwartet)
+
+```bash
+# Rollen-Zeile im axiom-ng-Startup-Log:
+#   runner roles: query=http://localhost:8012 ingest=http://<gpu-runner-host>:19542 (fallback=http://localhost:8012)
+curl -s http://localhost:8012/v1/capabilities | grep -o '"query_embedding":true' # → "query_embedding":true
+curl -s http://localhost:8012/v1/capabilities | grep -o '"reranking":true'       # → "reranking":true
+curl -s http://<gpu-runner-host>:19542/v1/health                                  # → {"status":"ok"}
+curl -s http://localhost:8011/api/health | grep -o '"ok":true'                   # → "ok":true
+curl -s -X POST http://localhost:8011/api/search -H 'Content-Type: application/json' \
+     -d '{"query":"Nachhaltigkeit","top_n":3}' | grep -o '"reranked":true'        # → "reranked":true
+```
+
+Test-Ingest: Zotero-Sync anstoßen (`POST /api/zotero/sync`) und in
+`ingest_jobs` Status + `runner_name` verfolgen (soll auf den GPU-Runner
+zeigen). `runner_name` wird aus der Konfiguration gestempelt (Default:
+Host aus `AXIOM_PROCESSOR_URL`) — während eines Failovers auf lokal
+steht dort weiterhin der GPU-Host; erwartbar, kein Bug.
+
+### Degradations-Erwartungen
+
+| Ausfall | Verhalten |
+|---|---|
+| Query-Runner | Suche degradiert per R3: BM25-only, `reranked:false` — nie Totalausfall |
+| GPU-Runner | Ingest-Failover auf lokal (Submit-Zeit; langsamer, geloggt `ingest failover: primary … unavailable`) |
+| beide Runner | Suche läuft BM25-only weiter; Ingest wartet bis ein Runner zurück ist |
+
+### Retrieval-Konfiguration (Stand nach R7-Benchmark)
+
+`/api/search` läuft produktiv als hybrid+rerank; Sparse- und Graph-Arm
+sind per Benchmark messwertgetrieben **default OFF**
+(`AXIOM_SEARCH_SPARSE_ARM=1` bzw. `AXIOM_SEARCH_GRAPH_ARM=1` schalten
+sie für Sonderprofile zu; Messbasis: `RETRIEVAL_BENCHMARK.md`).
