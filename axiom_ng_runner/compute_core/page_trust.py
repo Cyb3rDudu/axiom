@@ -33,6 +33,14 @@ NONE = "none"
 
 _FOLIO_LINE = re.compile(r"^\s*(\d{1,4})\s*$")
 _ROMAN_LINE = re.compile(r"^\s*([ivxlcdm]{1,7})\s*$", re.IGNORECASE)
+_LSERIES = re.compile(r"\bL\s*\d{1,4}\s*/\s*(\d{1,4})\b")  # Amtsblatt: folio = page after the slash
+_NUM_IN_LINE = re.compile(r"(?<![\d./(])(\d{1,4})(?![\d./)])")
+_YEAR_RANGE = lambda v: 1900 <= v <= 2030
+_HEAD_LINE_MAX = 90  # running heads are short; body prose in a band is not a head
+
+
+def _is_year(v: int) -> bool:
+    return 1900 <= v <= 2030
 
 
 def assess_labels(labels: dict[int, str], page_count: int) -> tuple[str, str]:
@@ -66,27 +74,193 @@ def assess_labels(labels: dict[int, str], page_count: int) -> tuple[str, str]:
     return PDF_LABEL_SANE, "unique, monotone, covering"
 
 
-def extract_folio_candidates(doc: pymupdf.Document) -> dict[int, str]:
-    """Leading bare-number lines from the TOP of each page's text layer.
+def harvest_folio_candidates(doc: pymupdf.Document) -> dict[int, list[tuple[str, str, str]]]:
+    """Zone-based multi-form folio harvest (W10 extractor v2).
 
-    Only the top ~12% of the page counts (that is where printed folios live);
-    footer numbers are deliberately NOT mixed in to avoid double counting.
+    Every family from the zone-dump ground truth gets eyes:
+      bare      whole line is a number (top OR bottom band) — strongest
+      roman     whole line is a roman numeral; trailing roman on a short
+                head line (WEO copyright pages) counts as medium
+      lseries   'L 333/80' Amtsblatt form — folio is the after-slash page
+      lead/mid/trail  numbers inside SHORT band lines (journal running
+                heads with issue constants, DORA bottom strips, verso/recto
+                heads, IMF bands) — medium: the picker and the sequence
+                proof sort them out
+
+    Returns per 0-based page a list of (form, value, zone) in encounter
+    order. Nothing here decides trust — verify_folio_sequence remains the
+    only path to folio_verified.
     """
-    out: dict[int, str] = {}
+    out: dict[int, list[tuple[str, str, str]]] = {}
     for i in range(doc.page_count):
         page = doc[i]
         rect = page.rect
-        head = page.get_text("text", clip=pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y1 * 0.12))
-        for line in (l.strip() for l in head.splitlines()):
-            if not line:
-                continue
-            if _FOLIO_LINE.match(line):
-                out[i] = line
-                break
-            if _ROMAN_LINE.match(line):
-                out[i] = line.lower()
-                break
+        cands: list[tuple[str, str, str]] = []
+        for zone, clip in (
+            ("top", pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y1 * 0.12)),
+            ("bot", pymupdf.Rect(rect.x0, rect.y1 * 0.88, rect.x1, rect.y1)),
+        ):
+            text = page.get_text("text", clip=clip)
+            for line in (l.strip() for l in text.splitlines()):
+                if not line:
+                    continue
+                if _FOLIO_LINE.match(line):
+                    v = int(line)
+                    if _is_year(v):
+                        cands.append(("weak", line, zone))
+                    else:
+                        cands.append(("bare", line, zone))
+                    continue
+                if _ROMAN_LINE.match(line):
+                    cands.append(("roman", line.lower(), zone))
+                    continue
+                if len(line) > _HEAD_LINE_MAX:
+                    continue  # body prose bleeding into the band: not a head
+                m = _LSERIES.search(line)
+                if m:
+                    cands.append(("lseries", m.group(1), zone))
+                    continue
+                # roman trailing a short head line ('October 2025 iii')
+                mr = re.search(r"\s([ivxlcdm]{1,7})\s*$", line, re.IGNORECASE)
+                if mr and len(line.split()) >= 2:
+                    cands.append(("roman", mr.group(1).lower(), zone))
+                    continue
+                nums = _NUM_IN_LINE.findall(line)
+                if not nums:
+                    continue
+                # spread guard: a line that is essentially ONLY numbers
+                # (two book pages photographed onto one PDF page) is
+                # ambiguous — the zone contributes nothing for it
+                if len(nums) >= 2 and len(re.sub(r"[\d\s.,/–-]", "", line)) < 4:
+                    continue
+                # prose guard: running heads never end in sentence
+                # punctuation; body prose bleeding into the band does
+                if line[-1] in ".!;:":
+                    continue
+                stripped = line.lstrip()
+                for v in nums:
+                    vi = int(v)
+                    if _is_year(vi):
+                        form = "weak"
+                    elif stripped.startswith(v):
+                        form = "lead" if v == nums[0] else "mid"
+                    elif stripped.endswith(v):
+                        form = "trail" if v == nums[-1] else "mid"
+                    else:
+                        form = "mid"
+                    cands.append((form, v, zone))
+        if cands:
+            out[i] = cands
     return out
+
+
+def _drop_constants(harvest: dict[int, list[tuple[str, str, str]]], page_count: int) -> None:
+    """Running-head constants (issue numbers, article ids, reg fragments)
+    repeat on a large share of pages; real folios advance. Only MEDIUM/WEAK
+    forms (numbers inside head/text lines) can be constants — a BARE number
+    line is a printed folio even when a restart book repeats its values
+    ('1' per chapter); those never drop. A medium/weak value on >= 1/3 of
+    the pages (min 2) is a constant and drops from medium/weak slots
+    everywhere (the Data Act '22' x75 and journal 'VOL. 103 NO. 6' classes)."""
+    if page_count < 4:
+        return
+    limit = max(2, (page_count + 2) // 3)
+    seen: dict[str, int] = {}
+    for cands in harvest.values():
+        for form, v, _ in cands:
+            if form in ("lead", "mid", "trail", "weak"):
+                seen[v] = seen.get(v, 0) + 1
+    consts = {v for v, k in seen.items() if k >= limit}
+    if not consts:
+        return
+    for p in list(harvest):
+        kept = [c for c in harvest[p] if not (c[0] in ("lead", "mid", "trail", "weak") and c[1] in consts)]
+        if kept:
+            harvest[p] = kept
+        else:
+            del harvest[p]
+
+
+def _pick_candidates(harvest: dict[int, list[tuple[str, str, str]]]) -> dict[int, str]:
+    """One candidate per page: strength first, chain continuation second.
+
+    Strength: bare (top) > bare (bot) > lseries > lead/trail/mid > roman >
+    weak (years) — the pre-W10 behavior for top-bare books is preserved
+    exactly (first bare top line wins). A medium/weak/roman candidate may
+    only win via CHAIN CONTINUATION against the last STRONG pick (bare or
+    lseries): journal alternating heads and verso/recto books resolve this
+    way, while ascending junk (footnote numbers, ordinals) can never seed a
+    chain because it is never strong. Spread pages (two book pages on one
+    PDF page) are guarded at LINE level in the harvest (a numbers-only line
+    contributes nothing); two separate bare LINES in one zone resolve by
+    chain continuation, else first-encounter order (old behavior).
+    """
+    _STRENGTH = {"bare": 0, "lseries": 1, "lead": 2, "trail": 2, "mid": 3, "roman": 4, "weak": 5}
+    picked: dict[int, str] = {}
+    last_strong: tuple[int, int] | None = None  # (page, value) of last bare/lseries pick
+    for p in sorted(harvest):
+        cands = harvest[p]
+        prev_v = last_strong[1] if last_strong and last_strong[0] == p - 1 else None
+        best = None
+        best_key = None
+        for form, v, zone in cands:
+            vi = _arabic(v)
+            cont = False
+            if vi is not None and prev_v is not None and vi == prev_v + 1:
+                cont = True
+            key = (0 if cont else 1, _STRENGTH.get(form, 9), 0 if zone == "top" else 1)
+            if best_key is None or key < best_key:
+                best, best_key = (form, v, zone), key
+        if best is None:
+            continue
+        picked[p] = best[1]
+        if best[0] in ("bare", "lseries"):
+            vi = _arabic(best[1])
+            last_strong = (p, vi) if vi is not None else None
+    return picked
+
+
+def extract_folio_candidates(doc: pymupdf.Document) -> dict[int, str]:
+    """Folio candidates per page — W10 zone harvester (better eyes).
+
+    Same contract as before (0-based page -> candidate string; roman lower,
+    arabic bare): the harvest now reads BOTH bands in every printed form
+    (bare, L-series, running-head numbers, embedded first lines, roman
+    trailing), drops running constants, and picks per page by strength +
+    chain continuation. verify_folio_sequence is still the only proof.
+    """
+    harvest = harvest_folio_candidates(doc)
+    _drop_constants(harvest, doc.page_count)
+    return _pick_candidates(harvest)
+
+
+def offset_map(labels: dict[int, str], verified: dict[int, str]) -> dict:
+    """Label↔folio relation for wave stamping (W10).
+
+    Emitted where folios and labels diverge, so the wave operator sees the
+    per-book relation without re-deriving it: identity (labels are the
+    print), shift (labels lag/lead print by a constant — the z5 class:
+    label 149, print 151 -> offset +2, offset = folio - label), divergent
+    (no single constant: chapter restarts, mixed sections), none (no
+    verified folios — nothing to relate). No new trust semantics: purely
+    descriptive.
+    """
+    pairs: list[tuple[int, int]] = []
+    for p, fv in verified.items():
+        lv = labels.get(p, "")
+        if str(lv).isdigit() and str(fv).isdigit():
+            pairs.append((int(str(fv)), int(str(lv))))
+    if not pairs:
+        return {"type": "none", "samples": 0}
+    offsets: dict[int, int] = {}
+    for f, l in pairs:
+        offsets[f - l] = offsets.get(f - l, 0) + 1
+    dom = max(offsets, key=lambda k: offsets[k])
+    if offsets[dom] >= len(pairs) * 0.9:
+        return {"type": "identity" if dom == 0 else "shift", "offset": dom,
+                "samples": len(pairs)}
+    return {"type": "divergent", "samples": len(pairs),
+            "offsets": {str(k): v for k, v in sorted(offsets.items())}}
 
 
 def folio_runs(candidates: dict[int, str]) -> list[tuple[list[int], list[int]]]:
