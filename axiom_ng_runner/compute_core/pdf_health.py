@@ -54,7 +54,11 @@ def analyze_pdf(pdf_path: str) -> dict:
             }[trust]
         cands = pt.extract_folio_candidates(doc)
         runs = pt.folio_runs(cands)
-        verified = pt.verify_folio_sequence(cands)
+        # W12: chapter-relative books (healed anchor sections corroborated by
+        # the folio runs) verify per chapter; the per-chapter restart labels
+        # are then the healed truth, not breakage.
+        chapters = pt.chapter_restarts(doc, cands)
+        verified = pt.verify_folio_sequence(cands, chapters)
 
         # Versatz: an folio-bewiesenen Seiten mit numeric Label vergleichen
         offs: list[int] = []
@@ -65,7 +69,7 @@ def analyze_pdf(pdf_path: str) -> dict:
         offset = max(set(offs), key=offs.count) if offs else None
         offset_consistent = offs and len([o for o in offs if o == offset]) >= len(offs) * 0.8
 
-        labels_broken = label_verdict.startswith(("KAPUTT", "kein Tier-1"))
+        labels_broken = label_verdict.startswith(("KAPUTT", "kein Tier-1")) and chapters is None
         folio_found = len(verified) >= 3
         if labels_broken and folio_found:
             suspicion = "🔴 reparierbar"

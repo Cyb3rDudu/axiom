@@ -91,7 +91,7 @@ def main() -> int:
         if not os.path.exists(pdf):
             per_book.setdefault(book, []).append((gid, status, "PDF-FEHLT"))
             continue
-        labels, sources = pt.build_page_trust(pdf)
+        labels, sources, _chapters = pt.build_page_trust(pdf)
         mine = labels.get(idx)
         lvl = sources.get(idx)
         want = printed.upper() if not printed[0].isdigit() else str(int(printed)) if printed.isdigit() else printed

@@ -134,11 +134,35 @@ def _stamp_page_source(
         locator["page_source"] = pt.PHYSICAL_ONLY
 
 
+def _stamp_chapter(
+    locator: dict[str, Any],
+    page_chapter_map: dict[int, int] | None,
+    chapter_meta: Any = None,
+) -> None:
+    """W12 chapter-ordinal stamp (W4 renders "Kap. N, S. X"). Only for
+    corroborated chapter-relative books (page_chapter_map non-empty) —
+    otherwise the locator stays exactly as before. The chunker's exact
+    ordinal (chapter_meta, from the physical page of the chunk's first
+    content) wins; pre-shaped reference locators fall back to their own
+    physical_page_start lookup. Never overwrites an existing stamp."""
+    if locator.get("type") != "page_span" or locator.get("chapter") is not None:
+        return
+    if chapter_meta is not None:
+        locator["chapter"] = int(chapter_meta)
+        return
+    if page_chapter_map:
+        phys = locator.get("physical_page_start")
+        ch = page_chapter_map.get(int(phys)) if phys is not None else None
+        if ch is not None:
+            locator["chapter"] = ch
+
+
 def _adapt_chunk(
     c: dict[str, Any],
     chunk_index: int,
     page_label_map: dict[int, str],
     page_source_map: dict[int, str] | None = None,
+    page_chapter_map: dict[int, int] | None = None,
 ) -> dict[str, Any]:
     """Map the existing pipeline's chunk dict (chunker._create_chunk) to the
     contract chunk shape (contract §11 mapping table).
@@ -150,6 +174,7 @@ def _adapt_chunk(
     """
     if c.get("ref") and c.get("locator") and c.get("index") is not None:
         _stamp_page_source(c["locator"], page_source_map)
+        _stamp_chapter(c["locator"], page_chapter_map)
         return c
 
     meta = c.get("metadata", {}) or {}
@@ -212,6 +237,7 @@ def _adapt_chunk(
     # production path (compute_core.Chunker old-style dicts); an unstamped
     # locator here would trip the §11 gate and terminal-fail the job.
     _stamp_page_source(out["locator"], page_source_map)
+    _stamp_chapter(out["locator"], page_chapter_map, meta.get("chapter"))
     return out
 
 
@@ -533,6 +559,7 @@ def _build_reference_result(
     real_relationships: list[dict[str, Any]] | None = None,
     stage_timings: dict[str, str] | None = None,
     page_source_map: dict[int, str] | None = None,
+    page_chapter_map: dict[int, int] | None = None,
 ) -> dict[str, Any]:
     proc = request.get("processing", {}) or {}
     processor_name = "axiom-python-marker"
@@ -555,7 +582,7 @@ def _build_reference_result(
 
     chunks: list[dict[str, Any]] = []
     for idx, c in enumerate(chunk_dicts):
-        ch = _adapt_chunk(c, idx, page_label_map, page_source_map)
+        ch = _adapt_chunk(c, idx, page_label_map, page_source_map, page_chapter_map)
         # Bedingte Fill-Logik (b): nur mit Reference-Stub füllen, wenn keine
         # echten Embeddings aus _adapt_embeddings durchgereicht wurden. Der
         # Real-Backend (TextEmbedder.embed_chunks) setzt echte BGE-M3-Vektoren
@@ -914,6 +941,7 @@ def _real_pipeline(
     markdown = out_md.read_text(encoding="utf-8")
     page_label_map: dict[int, str] = {}
     page_source_map: dict[int, str] = {}
+    page_chapter_map: dict[int, int] = {}
     cfi_entries: list[dict[str, Any]] = []
     if content_type == "application/pdf":
         # #173: the trust pipeline replaces the bare 3-tier extract — labels
@@ -922,7 +950,7 @@ def _real_pipeline(
         # its level never leaves the runner.
         from axiom_ng_runner.compute_core.page_trust import build_page_trust
 
-        page_label_map, page_source_map = build_page_trust(str(source_path))
+        page_label_map, page_source_map, page_chapter_map = build_page_trust(str(source_path))
     elif content_type == "application/epub+zip":
         # EPUB CFI extraction (§11 Weg A): build text→CFI mapping from the
         # original XHTML DOM so chunks carry real epub_cfi locators instead
@@ -943,7 +971,8 @@ def _real_pipeline(
 
     chunk_dicts = Chunker(max_chunk_tokens=1200).chunk(
         markdown,
-        doc_metadata={"doc_id": request["job_id"], "page_label_map": page_label_map},
+        doc_metadata={"doc_id": request["job_id"], "page_label_map": page_label_map,
+                     "page_chapter_map": page_chapter_map},
     )
 
     # Dense embeddings via the existing heavy core if requested.
@@ -1028,6 +1057,7 @@ def _real_pipeline(
         real_relationships=real_relationships,
         stage_timings=stage_timings,
         page_source_map=page_source_map,
+        page_chapter_map=page_chapter_map,
     )
 
 

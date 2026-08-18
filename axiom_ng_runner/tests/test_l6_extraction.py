@@ -512,7 +512,7 @@ class TestPipelineWiring:
         # the trust tuple the runner expects (labels + honest levels).
         trust_mod = types.ModuleType("axiom_ng_runner.compute_core.page_trust")
         trust_mod.__dict__.update({
-            "build_page_trust": lambda _p: ({1: "1"}, {1: "pdf_label_sane"}),
+            "build_page_trust": lambda _p: ({1: "1"}, {1: "pdf_label_sane"}, {}),
             "PHYSICAL_ONLY": "physical_only",
             "NONE": "none",
         })

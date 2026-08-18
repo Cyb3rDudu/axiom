@@ -15,8 +15,11 @@ import pymupdf
 from axiom_ng_runner.compute_core import page_trust as pt
 
 
-def make_pdf(top_lines, repeat_labels=None, single_labels=False, firstpagenum=None, half_labels=False):
+def make_pdf(top_lines, repeat_labels=None, single_labels=False, firstpagenum=None, half_labels=False, sections_spec=None):
     """top_lines: per page the TOP line (folio candidate) or None for prose.
+
+    sections_spec (W12): raw set_page_labels list passthrough — healed
+        anchor-plan shape (front-matter prefix section + arabic restarts).
 
     firstpagenum: single label range starting there — the TRUE offset fault
         (unique, monotone, covering labels lagging behind the printed folios).
@@ -34,9 +37,11 @@ def make_pdf(top_lines, repeat_labels=None, single_labels=False, firstpagenum=No
     f = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
     doc.save(f.name)
     doc.close()
-    if repeat_labels or single_labels or firstpagenum or half_labels:
+    if sections_spec or repeat_labels or single_labels or firstpagenum or half_labels:
         d2 = pymupdf.open(f.name)
-        if repeat_labels:
+        if sections_spec:
+            d2.set_page_labels(sections_spec)
+        elif repeat_labels:
             half = max(1, len(top_lines) // 2)
             d2.set_page_labels([
                 {"startpage": 0, "prefix": repeat_labels, "style": "D", "firstpagenum": 1},
@@ -78,7 +83,7 @@ class PageTrustTests(unittest.TestCase):
         return f
 
     def test_z5_repeated_labels_folio_rescues(self):
-        labels, sources = pt.build_page_trust(
+        labels, sources, _ch = pt.build_page_trust(
             self._pdf(["4", "5", "6", None, None], repeat_labels="C1"))
         self.assertEqual([labels[i] for i in range(3)], ["4", "5", "6"])
         for i in range(3):
@@ -93,7 +98,7 @@ class PageTrustTests(unittest.TestCase):
         # see this; only the always-consulted folio sequence can (review C1:
         # the original delivery gated folio behind suspect labels and this
         # fault sailed through as pdf_label_sane).
-        labels, sources = pt.build_page_trust(
+        labels, sources, _ch = pt.build_page_trust(
             self._pdf(["152", "153", "154", "155"], firstpagenum=148))
         self.assertEqual([labels[i] for i in range(4)], ["152", "153", "154", "155"])
         for i in range(4):
@@ -113,7 +118,7 @@ class PageTrustTests(unittest.TestCase):
                             "offset fixture must be red under the old pipeline")
 
     def test_sane_labels_stay_sane(self):
-        labels, sources = pt.build_page_trust(
+        labels, sources, _ch = pt.build_page_trust(
             self._pdf([None] * 6, single_labels=True))
         self.assertEqual(sources[0], pt.PDF_LABEL_SANE)
         self.assertEqual(sources[5], pt.PDF_LABEL_SANE)
@@ -123,13 +128,13 @@ class PageTrustTests(unittest.TestCase):
         # extractor has already fallen back to tier 2/3; the boundary clause
         # must route to physical_only, never stamp fabricated labels as
         # pdf_label_sane (boundary drift, review finding).
-        labels, sources = pt.build_page_trust(self._pdf([None] * 4, half_labels=True))
+        labels, sources, _ch = pt.build_page_trust(self._pdf([None] * 4, half_labels=True))
         self.assertEqual(labels, {0: "1", 1: "2", 2: "3", 3: "4"})
         for i in range(4):
             self.assertEqual(sources[i], pt.PHYSICAL_ONLY, f"page {i}")
 
     def test_no_labels_no_folio_physical(self):
-        labels, sources = pt.build_page_trust(self._pdf([None] * 4))
+        labels, sources, _ch = pt.build_page_trust(self._pdf([None] * 4))
         self.assertEqual(sources[0], pt.PHYSICAL_ONLY)
         self.assertEqual(labels[2], "3")
 
@@ -212,3 +217,110 @@ class StampWitnessTests(unittest.TestCase):
                     "locator": {"type": "epub_cfi", "cfi_start": "/6/4", "cfi_end": "/6/8", "source": "epub"}}
         ch = runner._adapt_chunk(contract, 0, {})
         self.assertEqual(ch["locator"]["page_source"], "none")
+
+
+# ── W12: chapter-ordinal stamping (#188) ──────────────────────────────────
+# Chapter-relative books (folios restart per chapter, healed anchor label
+# sections) must reach folio_verified PER CHAPTER with a chapter ordinal per
+# page — the pre-W12 code dropped the shorter clashing runs entirely, so
+# chapter 2+ never verified. Mutually red-before: at 9443ff5 pages 8-11 came
+# back physical_only (this class is the behavioral pin).
+
+HEALED_SECTIONS = [
+    {"startpage": 0, "prefix": "C", "style": "D", "firstpagenum": 1},   # front matter
+    {"startpage": 2, "prefix": "", "style": "D", "firstpagenum": 1},    # Kap. 1
+    {"startpage": 8, "prefix": "", "style": "D", "firstpagenum": 1},    # Kap. 2 (restart)
+]
+
+CH_BOOK_TOPLINES = [None, None, "1", "2", "3", "4", "5", "6", "1", "2", "3", "4"]
+
+
+class ChapterOrdinalTests(unittest.TestCase):
+    def test_chapter_restart_book_verifies_per_chapter(self):
+        pdf = make_pdf(CH_BOOK_TOPLINES, sections_spec=HEALED_SECTIONS)
+        labels, sources, chapters = pt.build_page_trust(pdf)
+        # BOTH chapters verify — the restart values are no longer clashes.
+        for i in range(2, 12):
+            self.assertEqual(sources[i], pt.FOLIO_VERIFIED, f"page {i}")
+        self.assertEqual({i: chapters[i] for i in range(2, 8)}, {i: 1 for i in range(2, 8)})
+        self.assertEqual({i: chapters[i] for i in range(8, 12)}, {i: 2 for i in range(8, 12)})
+        self.assertNotIn(0, chapters)
+        self.assertNotIn(1, chapters)  # front matter carries no ordinal
+        self.assertEqual(labels[9], "2")  # Kap. 2, Seite 2
+
+    def test_continuous_labels_stay_legacy(self):
+        # Same folios but ONE continuous label section: no restarts to
+        # corroborate — byte-identical legacy behavior (restart runs clash,
+        # chapter 2 loses, no chapter map).
+        spec = [{"startpage": 0, "prefix": "", "style": "D", "firstpagenum": 1}]
+        pdf = make_pdf(CH_BOOK_TOPLINES, sections_spec=spec)
+        labels, sources, chapters = pt.build_page_trust(pdf)
+        self.assertEqual(sources[6], pt.FOLIO_VERIFIED)   # chapter-1 run wins
+        self.assertNotEqual(sources[9], pt.FOLIO_VERIFIED)  # clash loser: no folio claim
+        self.assertEqual(sources[9], pt.PDF_LABEL_SANE)     # sane single-section labels fill in
+        self.assertEqual(chapters, {})
+
+    def test_folio_contradiction_rejects_chapter_mode(self):
+        # Label sections claim a restart at page 8 with value 1, but the
+        # printed folios run 1..10 CONTINUOUSLY across the boundary — the
+        # runs contradict the section math: never guess, legacy fallback.
+        top = [None, None, "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+        pdf = make_pdf(top, sections_spec=HEALED_SECTIONS)
+        labels, sources, chapters = pt.build_page_trust(pdf)
+        # The continuous run verifies as ONE run (no clash), but no chapter
+        # ordinals are stamped.
+        self.assertEqual(sources[11], pt.FOLIO_VERIFIED)
+        self.assertEqual(chapters, {})
+
+    def test_verify_key_is_chapter_plus_value(self):
+        cands = {2: "1", 3: "2", 4: "3", 10: "1", 11: "2", 12: "3"}
+        chapters = [(2, 1), (10, 2)]
+        v = pt.verify_folio_sequence(cands, chapters)
+        self.assertEqual(v, {2: "1", 3: "2", 4: "3", 10: "1", 11: "2", 12: "3"})
+        # Tie WITHIN one chapter still drops (never guess): two 3-runs in
+        # the SAME chapter claiming the same values.
+        cands2 = {2: "1", 3: "2", 4: "3", 20: "1", 21: "2", 22: "3"}
+        v2 = pt.verify_folio_sequence(cands2, [(2, 1), (30, 2)])  # both runs sit in chapter 1 (2..29)
+        self.assertEqual(v2, {})  # 1,2,3 tied in chapter 1 -> all dropped
+
+    def test_chapter_restarts_requires_two_arabic_sections(self):
+        pdf = make_pdf([None, "1", "2", "3"])  # single section, no restart
+        labels, sources, chapters = pt.build_page_trust(pdf)
+        self.assertEqual(chapters, {})
+        self.assertEqual(sources[3], pt.FOLIO_VERIFIED)
+
+
+class ChapterStampWitnessTests(unittest.TestCase):
+    """W12 locator stamping through _adapt_chunk: the chunker's exact
+    ordinal (metadata['chapter']) wins; reference locators fall back to
+    their physical page; empty map = locator untouched."""
+
+    def test_metadata_chapter_stamps_locator(self):
+        from axiom_ng_runner import runner
+
+        old_style = {"text": "Fachtext", "metadata": {
+            "page_start": "3", "page_end": "3", "section_titles": [],
+            "token_count": 2, "chapter": 2}}
+        ch = runner._adapt_chunk(old_style, 0, {9: "3"}, {9: "folio_verified"}, {9: 2})
+        self.assertEqual(ch["locator"]["chapter"], 2)
+
+    def test_reference_locator_falls_back_to_physical(self):
+        from axiom_ng_runner import runner
+
+        contract = {"ref": "chunk-0000", "index": 0, "text": "x",
+                    "locator": {"type": "page_span", "physical_page_start": 9,
+                                "physical_page_end": 9, "page_label_start": "3",
+                                "page_label_end": "3", "source": "marker_paginate"}}
+        runner._stamp_page_source(contract["locator"], {9: "folio_verified"})
+        runner._stamp_chapter(contract["locator"], {9: 2})
+        self.assertEqual(contract["locator"]["chapter"], 2)
+
+    def test_no_map_leaves_locator_untouched(self):
+        from axiom_ng_runner import runner
+
+        locator = {"type": "page_span", "physical_page_start": 9,
+                   "page_label_start": "3", "source": "marker_paginate"}
+        before = dict(locator)
+        runner._stamp_chapter(locator, None)
+        runner._stamp_chapter(locator, {})
+        self.assertEqual(locator, before)
