@@ -243,7 +243,9 @@ class Chunker:
         # Uses page_label_map from doc_metadata to convert physical index → logical label.
         page_label_map = doc_metadata.get("page_label_map", {}) if doc_metadata else {}
         paragraph_to_page = {}
+        paragraph_to_phys: dict[int, int] = {}  # W12: physical marker index per para
         current_page = "1"
+        current_phys: int | None = None
         clean_paragraphs = []
         for i, para in enumerate(paragraphs):
             page_match = _PAGE_MARKER_RE.match(para.strip())
@@ -251,8 +253,11 @@ class Chunker:
                 physical_idx = int(page_match.group(1))
                 # Map to logical label, fallback to physical + 1
                 current_page = page_label_map.get(physical_idx, str(physical_idx + 1))
+                current_phys = physical_idx
                 continue  # Skip the marker paragraph itself
             paragraph_to_page[len(clean_paragraphs)] = current_page
+            if current_phys is not None:
+                paragraph_to_phys[len(clean_paragraphs)] = current_phys
             clean_paragraphs.append(para)
 
         if not clean_paragraphs:
@@ -266,7 +271,7 @@ class Chunker:
 
         # Choose chunking mode
         if self._use_token_chunking:
-            return self._chunk_token_based(paragraphs, paragraph_to_headings, doc_metadata, paragraph_to_page)
+            return self._chunk_token_based(paragraphs, paragraph_to_headings, doc_metadata, paragraph_to_page, paragraph_to_phys)
         else:
             return self._chunk_paragraph_based(paragraphs, doc_metadata)
 
@@ -276,12 +281,20 @@ class Chunker:
         paragraph_to_headings: Dict[int, List[str]],
         doc_metadata: Optional[Dict[str, Any]],
         paragraph_to_page: Optional[Dict[int, int]] = None,
+        paragraph_to_phys: Optional[Dict[int, int]] = None,
     ) -> List[Dict[str, Any]]:
         """Token-based structure-aware chunking with page number tracking."""
         chunks = []
         doc_id = doc_metadata.get("doc_id", "unknown_doc") if doc_metadata else "unknown_doc"
         chunk_id_counter = 0
         paragraph_to_page = paragraph_to_page or {}
+        paragraph_to_phys = paragraph_to_phys or {}
+        # W12: corroborated chapter-relative books carry a physical→ordinal
+        # map (page_trust.chapter_restarts); the chunk stamps the ordinal of
+        # the page its FIRST content sits on (snapshot-at-open, like the
+        # section trail #186). Keys may arrive as strings (JSON) — coerce.
+        raw_chmap = doc_metadata.get("page_chapter_map") if doc_metadata else None
+        chapter_map = {int(k): v for k, v in (raw_chmap or {}).items()}
 
         current_chunk_paras = []
         current_chunk_tokens = 0
@@ -294,6 +307,8 @@ class Chunker:
         current_chunk_headings: List[str] = paragraph_to_headings.get(0, [])
         current_chunk_page_start = paragraph_to_page.get(0, "1")
         current_chunk_page_end = current_chunk_page_start
+        current_chunk_phys_start = paragraph_to_phys.get(0)
+        current_chunk_phys_end = current_chunk_phys_start
 
         for i, para in enumerate(paragraphs):
             para_tokens = self._count_tokens(para)
@@ -330,6 +345,9 @@ class Chunker:
                             sub_text, doc_id, chunk_id_counter,
                             current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
                             current_chunk_headings, doc_metadata,
+                            chapter=chapter_map.get(current_chunk_phys_start),
+                            physical_page_start=current_chunk_phys_start,
+                            physical_page_end=current_chunk_phys_end,
                             page_start=current_chunk_page_start, page_end=current_chunk_page_end,
                         ))
                         chunk_id_counter += 1
@@ -338,6 +356,9 @@ class Chunker:
                         chunk_text, doc_id, chunk_id_counter,
                         current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
                         current_chunk_headings, doc_metadata,
+                        chapter=chapter_map.get(current_chunk_phys_start),
+                        physical_page_start=current_chunk_phys_start,
+                        physical_page_end=current_chunk_phys_end,
                         page_start=current_chunk_page_start, page_end=current_chunk_page_end,
                     ))
                     chunk_id_counter += 1
@@ -369,6 +390,8 @@ class Chunker:
                 # fragment from the previous chunk becomes its own tiny chunk
                 # carrying the PREVIOUS section's trail — first content wins.)
                 current_chunk_headings = para_headings
+                current_chunk_phys_start = paragraph_to_phys.get(i)
+                current_chunk_phys_end = current_chunk_phys_start
 
             # Add paragraph to current chunk
             current_chunk_paras.append(para)
@@ -379,6 +402,9 @@ class Chunker:
             if not current_chunk_paras or len(current_chunk_paras) == 1:
                 current_chunk_page_start = para_page
             current_chunk_page_end = para_page
+            p_phys = paragraph_to_phys.get(i)
+            if p_phys is not None:
+                current_chunk_phys_end = p_phys
 
         # Emit final chunk
         if current_chunk_paras:
@@ -404,6 +430,9 @@ class Chunker:
                             sub_text, doc_id, chunk_id_counter,
                             current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
                             current_chunk_headings, doc_metadata,
+                            chapter=chapter_map.get(current_chunk_phys_start),
+                            physical_page_start=current_chunk_phys_start,
+                            physical_page_end=current_chunk_phys_end,
                             page_start=current_chunk_page_start, page_end=current_chunk_page_end,
                         ))
                         chunk_id_counter += 1
@@ -412,6 +441,9 @@ class Chunker:
                         chunk_text, doc_id, chunk_id_counter,
                         current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
                         current_chunk_headings, doc_metadata,
+                        chapter=chapter_map.get(current_chunk_phys_start),
+                        physical_page_start=current_chunk_phys_start,
+                        physical_page_end=current_chunk_phys_end,
                         page_start=current_chunk_page_start, page_end=current_chunk_page_end,
                     ))
 
@@ -459,6 +491,9 @@ class Chunker:
         doc_metadata: Optional[Dict[str, Any]],
         page_start: str = "",
         page_end: str = "",
+        chapter: Optional[int] = None,
+        physical_page_start: Optional[int] = None,
+        physical_page_end: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Create a chunk dictionary with all metadata."""
         image_refs = self._extract_images_from_text(text)
@@ -475,10 +510,23 @@ class Chunker:
             "page_start": page_start,
             "page_end": page_end,
         }
+        # W12: chapter ordinal of the page the chunk's first content sits
+        # on (corroborated chapter-relative books only; None otherwise).
+        if chapter is not None:
+            chunk_meta["chapter"] = chapter
+        # W12 review C1: exact physical anchors from the Marker page markers.
+        # Chapter-relative books carry DUPLICATE labels across chapters, so
+        # the runner's label reverse-mapping (min of hits) would resolve to
+        # the EARLIEST chapter's page — the chunker's own physical tracking
+        # is the ground truth the locator must store.
+        if physical_page_start is not None:
+            chunk_meta["physical_page_start"] = physical_page_start
+        if physical_page_end is not None:
+            chunk_meta["physical_page_end"] = physical_page_end
 
         if doc_metadata:
             # Exclude large internal fields that shouldn't be stored per-chunk
-            _EXCLUDE_KEYS = {"doc_id", "page_label_map"}
+            _EXCLUDE_KEYS = {"doc_id", "page_label_map", "page_chapter_map"}
             chunk_meta.update({k: v for k, v in doc_metadata.items() if k not in _EXCLUDE_KEYS})
 
         return {

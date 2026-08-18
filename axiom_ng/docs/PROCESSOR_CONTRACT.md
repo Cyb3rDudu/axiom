@@ -460,6 +460,13 @@ maps them to durable IDs while persisting the processing snapshot.
         "page_source": "pdf_label_sane",
         "source": "marker_paginate"
       },
+      // chapter (optional, W12): 1-based chapter ordinal, present ONLY on
+      // corroborated chapter-relative books (folios restart per chapter;
+      // healed anchor label sections whose math the folio runs confirm).
+      // The label is then a page WITHIN the chapter — clients render the
+      // APA7 form "Kap. N, S. X" (renderer side, W4). Absent = ordinary
+      // continuous pagination; never fabricated.
+      // "chapter": 3,
       "structure": {
         "section_titles": [
           "Environmental analysis",

@@ -191,7 +191,7 @@ def main() -> int:
                 fehlende_pdfs.append(b)
         if key and key not in trust_cache and key.lower().endswith(".pdf") and os.path.exists(key):
             try:
-                trust_cache[key] = pt.build_page_trust(key)
+                trust_cache[key] = pt.build_page_trust(key)[:2]
             except Exception as exc:  # noqa: BLE001 — one broken PDF must not stop the corpus
                 print(f"  ! trust-Fehler {os.path.basename(key)[:50]}: {exc}")
                 trust_cache[key] = None

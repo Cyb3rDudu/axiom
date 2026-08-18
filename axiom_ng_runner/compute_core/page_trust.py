@@ -137,7 +137,106 @@ def _arabic(v: str | None) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def verify_folio_sequence(candidates: dict[int, str]) -> dict[int, str]:
+def label_section_starts(doc: pymupdf.Document) -> list[tuple[int, int]]:
+    """Arabic label sections from the PDF label tree (W12 anchor form).
+
+    The fix service bakes verified anchor plans into the healed PDF as
+    label sections (set_page_labels facts pinned there: startpage 0-based,
+    firstpagenum, empty prefix + decimal style for the numbered sections —
+    a leading front-matter section carries a non-empty prefix like "C").
+    Only the empty-prefix decimal sections count: they are the chapter
+    restarts. Returns [(start_page0, start_value)] sorted by page.
+    """
+    try:
+        spec = doc.get_page_labels()
+    except Exception:
+        return []
+    out: list[tuple[int, int]] = []
+    for s in spec or []:
+        if not isinstance(s, dict):
+            continue
+        if s.get("prefix") or s.get("style", "D") != "D":
+            continue
+        try:
+            out.append((int(s["startpage"]), int(s.get("firstpagenum", 1))))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return sorted(out)
+
+
+def chapter_of(page: int, chapters: list[tuple[int, int]]) -> int:
+    """1-based chapter ordinal of a physical page (0 = before the first
+    arabic section, i.e. front matter)."""
+    ch = 0
+    for start, ordinal in chapters:
+        if start <= page:
+            ch = ordinal
+    return ch
+
+
+def chapter_restarts(
+    doc: pymupdf.Document, candidates: dict[int, str]
+) -> list[tuple[int, int]] | None:
+    """Chapter-relative hypothesis, corroborated by the folio runs (W12).
+
+    A book is chapter-relative when the label tree carries >= 2 arabic
+    sections AND every folio run corroborates the section math: a run must
+    sit inside ONE section and its values must equal start_value +
+    (page - section_start). Any contradiction -> None, and the caller
+    falls back to the legacy global mode (byte-identical to pre-W12 —
+    never guess). Returns [(section_start_page0, ordinal_1based)].
+    """
+    sections = label_section_starts(doc)
+    if len(sections) < 2:
+        return None
+    first_start = sections[0][0]
+    corroborated = 0
+    for pages, vals in folio_runs(candidates):
+        if pages[0] < first_start:
+            if pages[-1] >= first_start:
+                return None  # crosses out of front matter into section 1
+            continue  # front matter: not a chapter claim, no contradiction
+        idx = 0
+        for i, (start, _) in enumerate(sections):
+            if start <= pages[0]:
+                idx = i
+        start_page, start_val = sections[idx]
+        next_start = sections[idx + 1][0] if idx + 1 < len(sections) else pages[-1] + 1
+        if pages[-1] >= next_start:
+            return None  # run crosses a restart the folios do not show
+        if vals[0] != start_val + (pages[0] - start_page):
+            return None  # folio contradicts the label-section math
+        corroborated += 1
+    if corroborated == 0:
+        return None  # zero folio evidence: never guess from the tree alone
+    return [(p, i + 1) for i, (p, _) in enumerate(sections)]
+
+
+def _resolve_value_clashes(
+    runs: list[tuple[list[int], list[int]]],
+    claims: dict,
+) -> dict[int, str]:
+    """Longest run per key wins; a length tie is ambiguous — the value
+    verifies NOWHERE (never guess)."""
+    verified: dict[int, str] = {}
+    for key, idxs in claims.items():
+        if len(idxs) == 1:
+            winner = idxs[0]
+        else:
+            lengths = [len(runs[i][0]) for i in idxs]
+            mx = max(lengths)
+            if lengths.count(mx) > 1:
+                continue
+            winner = idxs[lengths.index(mx)]
+        rp, rv = runs[winner]
+        v = key[1]
+        verified[rp[rv.index(v)]] = str(v)
+    return verified
+
+
+def verify_folio_sequence(
+    candidates: dict[int, str], chapters: list[tuple[int, int]] | None = None
+) -> dict[int, str]:
     """The strong proof: keep only members of consistent ascending runs.
 
     A run (page i..j) is consistent when each consecutive page's folio equals
@@ -151,37 +250,37 @@ def verify_folio_sequence(candidates: dict[int, str]) -> dict[int, str]:
     under the highest trust. The longest run per VALUE wins; clashing
     shorter runs are dropped entirely (a citation must not silently resolve
     to the earliest chapter's page).
+
+    W12 chapter mode (``chapters`` = corroborated section starts, see
+    chapter_restarts): the citation key becomes (chapter ordinal, value) —
+    "Kap. 2, S. 3" and "Kap. 5, S. 3" are different pages, so restart
+    values no longer clash ACROSS chapters. Within one chapter the
+    longest-run/tie-drop rule is unchanged.
     """
-    # Per folio VALUE
-    # shorter claimants; a length TIE is ambiguous — the value verifies
-    # NOWHERE (never guess). A citation must not silently resolve to the
-    # earliest chapter's page under the highest trust mark.
     runs = folio_runs(candidates)
-    value_runs: dict[int, list[int]] = {}  # folio value -> run indices claiming it
-    for idx, (_, rv) in enumerate(runs):
+    if chapters is None:
+        value_runs: dict[tuple[int, int], list[int]] = {}
+        for idx, (_, rv) in enumerate(runs):
+            for v in rv:
+                value_runs.setdefault((0, v), []).append(idx)
+        return _resolve_value_clashes(runs, value_runs)
+    key_runs: dict[tuple[int, int], list[int]] = {}
+    for idx, (rp, rv) in enumerate(runs):
+        ch = chapter_of(rp[0], chapters)
         for v in rv:
-            value_runs.setdefault(v, []).append(idx)
-    verified: dict[int, str] = {}
-    for v, idxs in value_runs.items():
-        if len(idxs) == 1:
-            winner = idxs[0]
-        else:
-            lengths = [len(runs[i][0]) for i in idxs]
-            mx = max(lengths)
-            if lengths.count(mx) > 1:
-                continue  # ambiguous tie
-            winner = idxs[lengths.index(mx)]
-        rp, rv = runs[winner]
-        verified[rp[rv.index(v)]] = str(v)
-    return verified
+            key_runs.setdefault((ch, v), []).append(idx)
+    return _resolve_value_clashes(runs, key_runs)
 
 
-def build_page_trust(pdf_path: str) -> tuple[dict[int, str], dict[int, str]]:
+def build_page_trust(pdf_path: str) -> tuple[dict[int, str], dict[int, str], dict[int, int]]:
     """Orchestrate: labels (3-tier extract) + sanity + folio sequence.
 
-    Returns (page_label_map, page_source_map) keyed by 0-based physical page.
-    Label precedence per page: verified folio > sane PDF label > physical+1.
-    Trust precedence: folio_verified > pdf_label_sane > physical_only.
+    Returns (page_label_map, page_source_map, page_chapter_map) keyed by
+    0-based physical page. Label precedence per page: verified folio > sane
+    PDF label > physical+1. Trust precedence: folio_verified >
+    pdf_label_sane > physical_only. page_chapter_map is non-empty only for
+    corroborated chapter-relative books (W12): 1-based chapter ordinal per
+    page, the runner stamps it into chunk locators ("Kap. N, S. X", W4).
     """
     from axiom_ng_runner.compute_core.pdf_processing import extract_page_labels
 
@@ -210,9 +309,21 @@ def build_page_trust(pdf_path: str) -> tuple[dict[int, str], dict[int, str]]:
         # LAGGING behind the printed folios) is undetectable by sanity
         # alone; a verified folio run wins over a sane label run because
         # it is the printed truth. (One clipped text-layer pass per book.)
-        folio: dict[int, str] = verify_folio_sequence(extract_folio_candidates(doc))
+        folio_candidates = extract_folio_candidates(doc)
+        # W12: chapter-relative books (healed anchor sections) verify per
+        # chapter; without corroboration this is None and everything below
+        # behaves exactly as before.
+        chapters = chapter_restarts(doc, folio_candidates)
+        folio: dict[int, str] = verify_folio_sequence(folio_candidates, chapters)
+        page_chapter_map: dict[int, int] = {}
+        if chapters:
+            for i in range(n):
+                ch = chapter_of(i, chapters)
+                if ch:
+                    page_chapter_map[i] = ch
         if folio:
-            logger.info("page_trust: %d/%d pages folio-verified (labels: %s — %s)", len(folio), n, trust, reason)
+            logger.info("page_trust: %d/%d pages folio-verified (labels: %s — %s; chapters: %s)",
+                        len(folio), n, trust, reason, len(chapters or []))
         page_label_map: dict[int, str] = {}
         page_source_map: dict[int, str] = {}
         for i in range(n):
@@ -227,6 +338,6 @@ def build_page_trust(pdf_path: str) -> tuple[dict[int, str], dict[int, str]]:
                 page_source_map[i] = PHYSICAL_ONLY
         if not folio and trust != PDF_LABEL_SANE:
             logger.info("page_trust: labels suspect (%s) and no folio sequence — physical_only", reason)
-        return page_label_map, page_source_map
+        return page_label_map, page_source_map, page_chapter_map
     finally:
         doc.close()
