@@ -286,10 +286,14 @@ class Chunker:
         current_chunk_paras = []
         current_chunk_tokens = 0
         current_start_idx = 0
-        heading_stack = []
+        # #186 section-trail invariant: a chunk's deepest section is the heading
+        # under which its FIRST content sits. Snapshot the trail ONCE when the
+        # chunk opens and emit that snapshot — never the live trail at the
+        # closing boundary (which, on a split landing exactly on a heading, is
+        # already one section ahead of the chunk's content).
+        current_chunk_headings: List[str] = paragraph_to_headings.get(0, [])
         current_chunk_page_start = paragraph_to_page.get(0, "1")
         current_chunk_page_end = current_chunk_page_start
-
         for i, para in enumerate(paragraphs):
             para_tokens = self._count_tokens(para)
             para_headings = paragraph_to_headings.get(i, [])
@@ -305,8 +309,6 @@ class Chunker:
                 # New section - emit current chunk if not empty
                 if current_chunk_paras:
                     should_start_new = True
-                # Update heading stack for new section
-                heading_stack = para_headings
             elif current_chunk_tokens + para_tokens > self.max_chunk_tokens:
                 # Would exceed budget - emit current chunk
                 if current_chunk_paras:
@@ -326,7 +328,7 @@ class Chunker:
                         chunks.append(self._create_chunk(
                             sub_text, doc_id, chunk_id_counter,
                             current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
-                            heading_stack, doc_metadata,
+                            current_chunk_headings, doc_metadata,
                             page_start=current_chunk_page_start, page_end=current_chunk_page_end,
                         ))
                         chunk_id_counter += 1
@@ -334,7 +336,7 @@ class Chunker:
                     chunks.append(self._create_chunk(
                         chunk_text, doc_id, chunk_id_counter,
                         current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
-                        heading_stack, doc_metadata,
+                        current_chunk_headings, doc_metadata,
                         page_start=current_chunk_page_start, page_end=current_chunk_page_end,
                     ))
                     chunk_id_counter += 1
@@ -360,6 +362,10 @@ class Chunker:
                     current_chunk_tokens = 0
 
                 current_start_idx = i
+                # #186: snapshot the trail at the moment the new chunk opens —
+                # para i is its first content; a heading para's own trail
+                # already includes itself.
+                current_chunk_headings = para_headings
 
             # Add paragraph to current chunk
             current_chunk_paras.append(para)
@@ -370,10 +376,6 @@ class Chunker:
             if not current_chunk_paras or len(current_chunk_paras) == 1:
                 current_chunk_page_start = para_page
             current_chunk_page_end = para_page
-
-            # Update heading stack if not a heading itself
-            if not is_heading:
-                heading_stack = para_headings
 
         # Emit final chunk
         if current_chunk_paras:
@@ -398,7 +400,7 @@ class Chunker:
                         chunks.append(self._create_chunk(
                             sub_text, doc_id, chunk_id_counter,
                             current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
-                            heading_stack, doc_metadata,
+                            current_chunk_headings, doc_metadata,
                             page_start=current_chunk_page_start, page_end=current_chunk_page_end,
                         ))
                         chunk_id_counter += 1
@@ -406,7 +408,7 @@ class Chunker:
                     chunks.append(self._create_chunk(
                         chunk_text, doc_id, chunk_id_counter,
                         current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
-                        heading_stack, doc_metadata,
+                        current_chunk_headings, doc_metadata,
                         page_start=current_chunk_page_start, page_end=current_chunk_page_end,
                     ))
 
