@@ -1,0 +1,3054 @@
+[
+ {
+  "idx": 0,
+  "raw_sequences": [
+   "tp_XX<triplet> Lieferanten <concept> Einkauf <concept> part of</s><pad><pad><pad><pad>",
+   "tp_XX<triplet> Verantwortung in allen Köpfen <concept> Verantwortung <concept> subclass of</s>",
+   "tp_XX<triplet> Verantwortung in allen Köpfen <concept> Verantwortung <concept> instance of</s><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Lieferanten",
+      "head_type": "CONCEPT",
+      "tail": "Einkauf",
+      "tail_type": "CONCEPT",
+      "relation": "part of"
+     }
+    ],
+    [
+     {
+      "head": "Verantwortung in allen Köpfen",
+      "head_type": "CONCEPT",
+      "tail": "Verantwortung",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Verantwortung in allen Köpfen",
+      "head_type": "CONCEPT",
+      "tail": "Verantwortung",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Lieferanten",
+    "head_type": "CONCEPT",
+    "tail": "Einkauf",
+    "tail_type": "CONCEPT",
+    "relation": "part of"
+   },
+   {
+    "head": "Verantwortung in allen Köpfen",
+    "head_type": "CONCEPT",
+    "tail": "Verantwortung",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Verantwortung in allen Köpfen",
+    "head_type": "CONCEPT",
+    "tail": "Verantwortung",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   }
+  ]
+ },
+ {
+  "idx": 1,
+  "raw_sequences": [
+   "tp_XX<triplet> nachhaltig gemeinsamer Wertschöpfung <concept> Global Reporting Initiative <media> part of</s><pad><pad><pad>",
+   "tp_XX<triplet> nachhaltig gemeinsamer Wertschöpfung <concept> Global Reporting Initiative <media> facet of</s><pad><pad>",
+   "tp_XX<triplet> 5 Nutzen von nachhaltig gemeinsamer Wertschöpfung <concept> Global Reporting Initiative <media> part of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "nachhaltig gemeinsamer Wertschöpfung",
+      "head_type": "CONCEPT",
+      "tail": "Global Reporting Initiative",
+      "tail_type": "WORK",
+      "relation": "part of"
+     }
+    ],
+    [
+     {
+      "head": "nachhaltig gemeinsamer Wertschöpfung",
+      "head_type": "CONCEPT",
+      "tail": "Global Reporting Initiative",
+      "tail_type": "WORK",
+      "relation": "facet of"
+     }
+    ],
+    [
+     {
+      "head": "5 Nutzen von nachhaltig gemeinsamer Wertschöpfung",
+      "head_type": "CONCEPT",
+      "tail": "Global Reporting Initiative",
+      "tail_type": "WORK",
+      "relation": "part of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "nachhaltig gemeinsamer Wertschöpfung",
+    "head_type": "CONCEPT",
+    "tail": "Global Reporting Initiative",
+    "tail_type": "WORK",
+    "relation": "part of"
+   },
+   {
+    "head": "nachhaltig gemeinsamer Wertschöpfung",
+    "head_type": "CONCEPT",
+    "tail": "Global Reporting Initiative",
+    "tail_type": "WORK",
+    "relation": "facet of"
+   },
+   {
+    "head": "5 Nutzen von nachhaltig gemeinsamer Wertschöpfung",
+    "head_type": "CONCEPT",
+    "tail": "Global Reporting Initiative",
+    "tail_type": "WORK",
+    "relation": "part of"
+   }
+  ]
+ },
+ {
+  "idx": 2,
+  "raw_sequences": [
+   "tp_XX<triplet> Hague Protocol, 1955 <media> 1955 <date> point in time</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Hague Protocol, 1955 <media> 1955 <date> point in time <triplet> Hague Protocol, 1963 <media> 1963 <date> point in time</s>",
+   "tp_XX</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Hague Protocol, 1955",
+      "head_type": "WORK",
+      "tail": "1955",
+      "tail_type": "CONCEPT",
+      "relation": "point in time"
+     }
+    ],
+    [
+     {
+      "head": "Hague Protocol, 1955",
+      "head_type": "WORK",
+      "tail": "1955",
+      "tail_type": "CONCEPT",
+      "relation": "point in time"
+     },
+     {
+      "head": "Hague Protocol, 1963",
+      "head_type": "WORK",
+      "tail": "1963",
+      "tail_type": "CONCEPT",
+      "relation": "point in time"
+     }
+    ],
+    []
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Hague Protocol, 1955",
+    "head_type": "WORK",
+    "tail": "1955",
+    "tail_type": "CONCEPT",
+    "relation": "point in time"
+   },
+   {
+    "head": "Hague Protocol, 1963",
+    "head_type": "WORK",
+    "tail": "1963",
+    "tail_type": "CONCEPT",
+    "relation": "point in time"
+   }
+  ]
+ },
+ {
+  "idx": 3,
+  "raw_sequences": [
+   "tp_XX<triplet> Nachhaltigkeit 'inside-out' <concept> Nachhaltigkeit <concept> subclass of</s><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Nachhaltigkeit <concept> Wertschöpfungskette <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Nachhaltigkeit 'inside-out' <concept> Nachhaltigkeit 'inside-out' <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Nachhaltigkeit 'inside-out'",
+      "head_type": "CONCEPT",
+      "tail": "Nachhaltigkeit",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Nachhaltigkeit",
+      "head_type": "CONCEPT",
+      "tail": "Wertschöpfungskette",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Nachhaltigkeit 'inside-out'",
+      "head_type": "CONCEPT",
+      "tail": "Nachhaltigkeit 'inside-out'",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Nachhaltigkeit 'inside-out'",
+    "head_type": "CONCEPT",
+    "tail": "Nachhaltigkeit",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Nachhaltigkeit",
+    "head_type": "CONCEPT",
+    "tail": "Wertschöpfungskette",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Nachhaltigkeit 'inside-out'",
+    "head_type": "CONCEPT",
+    "tail": "Nachhaltigkeit 'inside-out'",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 4,
+  "raw_sequences": [
+   "tp_XX<triplet> Nachhaltigkeit <concept> CSR <concept> part of</s><pad><pad><pad>",
+   "tp_XX<triplet> Nachhaltigkeit <concept> CSR <concept> subclass of</s><pad><pad>",
+   "tp_XX<triplet> Nachhaltigkeitsbericht <concept> CSR <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Nachhaltigkeit",
+      "head_type": "CONCEPT",
+      "tail": "CSR",
+      "tail_type": "CONCEPT",
+      "relation": "part of"
+     }
+    ],
+    [
+     {
+      "head": "Nachhaltigkeit",
+      "head_type": "CONCEPT",
+      "tail": "CSR",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Nachhaltigkeitsbericht",
+      "head_type": "CONCEPT",
+      "tail": "CSR",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Nachhaltigkeit",
+    "head_type": "CONCEPT",
+    "tail": "CSR",
+    "tail_type": "CONCEPT",
+    "relation": "part of"
+   },
+   {
+    "head": "Nachhaltigkeit",
+    "head_type": "CONCEPT",
+    "tail": "CSR",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Nachhaltigkeitsbericht",
+    "head_type": "CONCEPT",
+    "tail": "CSR",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 5,
+  "raw_sequences": [
+   "tp_XX<triplet> Weleda-Heilpfanzengarten <loc> Schwäbisch Gmünd <loc> located in the administrative territorial entity</s><pad><pad>",
+   "tp_XX<relation>### **Gemeinsam Gärtnern** <unk> Schwäbisch Gmünd <loc> located in the administrative territorial entity</s>",
+   "tp_XX<relation>### **Gemeinsam Gärtnern <unk> Schwäbisch Gmünd <loc> located in the administrative territorial entity</s><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Weleda-Heilpfanzengarten",
+      "head_type": "LOCATION",
+      "tail": "Schwäbisch Gmünd",
+      "tail_type": "LOCATION",
+      "relation": "located in the administrative territorial entity"
+     }
+    ],
+    [],
+    []
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Weleda-Heilpfanzengarten",
+    "head_type": "LOCATION",
+    "tail": "Schwäbisch Gmünd",
+    "tail_type": "LOCATION",
+    "relation": "located in the administrative territorial entity"
+   }
+  ]
+ },
+ {
+  "idx": 6,
+  "skipped_reason": "short"
+ },
+ {
+  "idx": 7,
+  "raw_sequences": [
+   "tp_XX<triplet> Fair Wear Foundation <org> Gewerkschaft <concept> instance of</s><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Fair Wear Foundation <org> Multi-Stakeholder-Einrichtung <concept> instance of</s>",
+   "tp_XX<triplet> Mindestlohn <concept> Lohn <concept> subclass of</s><pad><pad><pad><pad><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Fair Wear Foundation",
+      "head_type": "ORGANIZATION",
+      "tail": "Gewerkschaft",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "Fair Wear Foundation",
+      "head_type": "ORGANIZATION",
+      "tail": "Multi-Stakeholder-Einrichtung",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "Mindestlohn",
+      "head_type": "CONCEPT",
+      "tail": "Lohn",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Fair Wear Foundation",
+    "head_type": "ORGANIZATION",
+    "tail": "Gewerkschaft",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   },
+   {
+    "head": "Fair Wear Foundation",
+    "head_type": "ORGANIZATION",
+    "tail": "Multi-Stakeholder-Einrichtung",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   },
+   {
+    "head": "Mindestlohn",
+    "head_type": "CONCEPT",
+    "tail": "Lohn",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 8,
+  "raw_sequences": [
+   "tp_XX<triplet> Muntagna <loc> planetary system <concept> instance of</s><pad>",
+   "tp_XX<triplet> Muntagna <loc> planetary systems <concept> instance of</s><pad>",
+   "tp_XX<triplet> Muntagna <concept> planetary system <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Muntagna",
+      "head_type": "LOCATION",
+      "tail": "planetary system",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "Muntagna",
+      "head_type": "LOCATION",
+      "tail": "planetary systems",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "Muntagna",
+      "head_type": "CONCEPT",
+      "tail": "planetary system",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Muntagna",
+    "head_type": "LOCATION",
+    "tail": "planetary system",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   },
+   {
+    "head": "Muntagna",
+    "head_type": "LOCATION",
+    "tail": "planetary systems",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   },
+   {
+    "head": "Muntagna",
+    "head_type": "CONCEPT",
+    "tail": "planetary system",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 9,
+  "raw_sequences": [
+   "tp_XX<triplet> Begriffserläuterungen von CSR und Nachhaltiger Entwicklung <concept> CSR <concept> main subject</s><pad>",
+   "tp_XX<triplet> CSR <concept> Begriff <concept> instance of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Begriffserläuterungen von CSR und Nachhaltiger Entwicklung <concept> CSR <concept> facet of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Begriffserläuterungen von CSR und Nachhaltiger Entwicklung",
+      "head_type": "CONCEPT",
+      "tail": "CSR",
+      "tail_type": "CONCEPT",
+      "relation": "main subject"
+     }
+    ],
+    [
+     {
+      "head": "CSR",
+      "head_type": "CONCEPT",
+      "tail": "Begriff",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "Begriffserläuterungen von CSR und Nachhaltiger Entwicklung",
+      "head_type": "CONCEPT",
+      "tail": "CSR",
+      "tail_type": "CONCEPT",
+      "relation": "facet of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Begriffserläuterungen von CSR und Nachhaltiger Entwicklung",
+    "head_type": "CONCEPT",
+    "tail": "CSR",
+    "tail_type": "CONCEPT",
+    "relation": "main subject"
+   },
+   {
+    "head": "CSR",
+    "head_type": "CONCEPT",
+    "tail": "Begriff",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   },
+   {
+    "head": "Begriffserläuterungen von CSR und Nachhaltiger Entwicklung",
+    "head_type": "CONCEPT",
+    "tail": "CSR",
+    "tail_type": "CONCEPT",
+    "relation": "facet of"
+   }
+  ]
+ },
+ {
+  "idx": 10,
+  "raw_sequences": [
+   "tp_XX<triplet> Helmut-Schmidt Universität <org> Hamburg <loc> located in the administrative territorial entity</s>",
+   "tp_XX<triplet> Helmut-Schmidt Universität <org> Hamburg <loc> headquarters location</s><pad><pad><pad>",
+   "tp_XX<triplet> Helmut-Schmidt Universität <org> Hamburg <loc> location</s><pad><pad><pad><pad><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Helmut-Schmidt Universität",
+      "head_type": "ORGANIZATION",
+      "tail": "Hamburg",
+      "tail_type": "LOCATION",
+      "relation": "located in the administrative territorial entity"
+     }
+    ],
+    [
+     {
+      "head": "Helmut-Schmidt Universität",
+      "head_type": "ORGANIZATION",
+      "tail": "Hamburg",
+      "tail_type": "LOCATION",
+      "relation": "headquarters location"
+     }
+    ],
+    [
+     {
+      "head": "Helmut-Schmidt Universität",
+      "head_type": "ORGANIZATION",
+      "tail": "Hamburg",
+      "tail_type": "LOCATION",
+      "relation": "location"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Helmut-Schmidt Universität",
+    "head_type": "ORGANIZATION",
+    "tail": "Hamburg",
+    "tail_type": "LOCATION",
+    "relation": "located in the administrative territorial entity"
+   },
+   {
+    "head": "Helmut-Schmidt Universität",
+    "head_type": "ORGANIZATION",
+    "tail": "Hamburg",
+    "tail_type": "LOCATION",
+    "relation": "headquarters location"
+   },
+   {
+    "head": "Helmut-Schmidt Universität",
+    "head_type": "ORGANIZATION",
+    "tail": "Hamburg",
+    "tail_type": "LOCATION",
+    "relation": "location"
+   }
+  ]
+ },
+ {
+  "idx": 11,
+  "raw_sequences": [
+   "tp_XX<triplet> Nachhaltigkeitskriterien <concept> Nachhaltigkeit <concept> facet of</s><pad><pad><pad>",
+   "tp_XX<triplet> Anlageprozess <concept> Vermögensverwaltung <concept> part of</s><pad><pad><pad><pad>",
+   "tp_XX<triplet> Nachhaltigkeitskriterien <concept> Nachhaltigkeitsverständnisses <concept> facet of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Nachhaltigkeitskriterien",
+      "head_type": "CONCEPT",
+      "tail": "Nachhaltigkeit",
+      "tail_type": "CONCEPT",
+      "relation": "facet of"
+     }
+    ],
+    [
+     {
+      "head": "Anlageprozess",
+      "head_type": "CONCEPT",
+      "tail": "Vermögensverwaltung",
+      "tail_type": "CONCEPT",
+      "relation": "part of"
+     }
+    ],
+    [
+     {
+      "head": "Nachhaltigkeitskriterien",
+      "head_type": "CONCEPT",
+      "tail": "Nachhaltigkeitsverständnisses",
+      "tail_type": "CONCEPT",
+      "relation": "facet of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Nachhaltigkeitskriterien",
+    "head_type": "CONCEPT",
+    "tail": "Nachhaltigkeit",
+    "tail_type": "CONCEPT",
+    "relation": "facet of"
+   },
+   {
+    "head": "Anlageprozess",
+    "head_type": "CONCEPT",
+    "tail": "Vermögensverwaltung",
+    "tail_type": "CONCEPT",
+    "relation": "part of"
+   },
+   {
+    "head": "Nachhaltigkeitskriterien",
+    "head_type": "CONCEPT",
+    "tail": "Nachhaltigkeitsverständnisses",
+    "tail_type": "CONCEPT",
+    "relation": "facet of"
+   }
+  ]
+ },
+ {
+  "idx": 12,
+  "raw_sequences": [
+   "tp_XX<triplet> Börsengang <concept> Austritts-Strategie <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Börsengang <concept> Austritts-Strategie <concept> subclass of <triplet> Börsengang <concept> Austritts-Strategie <concept> subclass of</s>",
+   "tp_XX<triplet> Börsengang <concept> Austritts <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Börsengang",
+      "head_type": "CONCEPT",
+      "tail": "Austritts-Strategie",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Börsengang",
+      "head_type": "CONCEPT",
+      "tail": "Austritts-Strategie",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     },
+     {
+      "head": "Börsengang",
+      "head_type": "CONCEPT",
+      "tail": "Austritts-Strategie",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Börsengang",
+      "head_type": "CONCEPT",
+      "tail": "Austritts",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Börsengang",
+    "head_type": "CONCEPT",
+    "tail": "Austritts-Strategie",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Börsengang",
+    "head_type": "CONCEPT",
+    "tail": "Austritts",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 13,
+  "raw_sequences": [
+   "tp_XX<triplet> Nachhaltigkeitsberichterstattung <concept> Nachhaltigkeit <concept> main subject</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Nachhaltigkeitsberichterstattung <concept> Nachhaltigkeit <concept> facet of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Nachhaltigkeitsberichterstattung <concept> Nachhaltigkeit <concept> main subject <triplet> Nachhaltigkeitsberichterstattung <concept> Nachhaltigkeit <concept> main subject</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Nachhaltigkeitsberichterstattung",
+      "head_type": "CONCEPT",
+      "tail": "Nachhaltigkeit",
+      "tail_type": "CONCEPT",
+      "relation": "main subject"
+     }
+    ],
+    [
+     {
+      "head": "Nachhaltigkeitsberichterstattung",
+      "head_type": "CONCEPT",
+      "tail": "Nachhaltigkeit",
+      "tail_type": "CONCEPT",
+      "relation": "facet of"
+     }
+    ],
+    [
+     {
+      "head": "Nachhaltigkeitsberichterstattung",
+      "head_type": "CONCEPT",
+      "tail": "Nachhaltigkeit",
+      "tail_type": "CONCEPT",
+      "relation": "main subject"
+     },
+     {
+      "head": "Nachhaltigkeitsberichterstattung",
+      "head_type": "CONCEPT",
+      "tail": "Nachhaltigkeit",
+      "tail_type": "CONCEPT",
+      "relation": "main subject"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Nachhaltigkeitsberichterstattung",
+    "head_type": "CONCEPT",
+    "tail": "Nachhaltigkeit",
+    "tail_type": "CONCEPT",
+    "relation": "main subject"
+   },
+   {
+    "head": "Nachhaltigkeitsberichterstattung",
+    "head_type": "CONCEPT",
+    "tail": "Nachhaltigkeit",
+    "tail_type": "CONCEPT",
+    "relation": "facet of"
+   }
+  ]
+ },
+ {
+  "idx": 14,
+  "raw_sequences": [
+   "tp_XX<triplet> Investmentfonds <concept> Wertpapier <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Bank für Kirche und Diakonie <concept> Bank <concept> instance of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Investmentfonds <concept> Wertpapier <concept> subclass of <triplet> Termingelder <concept> Wertpapier <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Investmentfonds",
+      "head_type": "CONCEPT",
+      "tail": "Wertpapier",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Bank für Kirche und Diakonie",
+      "head_type": "CONCEPT",
+      "tail": "Bank",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "Investmentfonds",
+      "head_type": "CONCEPT",
+      "tail": "Wertpapier",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     },
+     {
+      "head": "Termingelder",
+      "head_type": "CONCEPT",
+      "tail": "Wertpapier",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Investmentfonds",
+    "head_type": "CONCEPT",
+    "tail": "Wertpapier",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Bank für Kirche und Diakonie",
+    "head_type": "CONCEPT",
+    "tail": "Bank",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   },
+   {
+    "head": "Termingelder",
+    "head_type": "CONCEPT",
+    "tail": "Wertpapier",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 15,
+  "raw_sequences": [
+   "tp_XX<triplet> Vergleichbarkeit <concept> IFRS <media> main regulatory text</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Vergleichbarkeit <concept> IFRS <media> part of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Vergleichbarkeit <concept> IFRS <media> main regulatory text <triplet> Vergleichbarkeit <concept> IFRS <media> main regulatory text</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Vergleichbarkeit",
+      "head_type": "CONCEPT",
+      "tail": "IFRS",
+      "tail_type": "WORK",
+      "relation": "main regulatory text"
+     }
+    ],
+    [
+     {
+      "head": "Vergleichbarkeit",
+      "head_type": "CONCEPT",
+      "tail": "IFRS",
+      "tail_type": "WORK",
+      "relation": "part of"
+     }
+    ],
+    [
+     {
+      "head": "Vergleichbarkeit",
+      "head_type": "CONCEPT",
+      "tail": "IFRS",
+      "tail_type": "WORK",
+      "relation": "main regulatory text"
+     },
+     {
+      "head": "Vergleichbarkeit",
+      "head_type": "CONCEPT",
+      "tail": "IFRS",
+      "tail_type": "WORK",
+      "relation": "main regulatory text"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Vergleichbarkeit",
+    "head_type": "CONCEPT",
+    "tail": "IFRS",
+    "tail_type": "WORK",
+    "relation": "main regulatory text"
+   },
+   {
+    "head": "Vergleichbarkeit",
+    "head_type": "CONCEPT",
+    "tail": "IFRS",
+    "tail_type": "WORK",
+    "relation": "part of"
+   }
+  ]
+ },
+ {
+  "idx": 16,
+  "raw_sequences": [
+   "tp_XX<triplet> Arthur D. Little International Inc. <org> 1987 <date> inception</s><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Arthur D. Little International Inc. <org> 1987 <date> inception <org> 1987 <date> inception</s>",
+   "tp_XX<triplet> Projektgebundenen Verlauf <concept> Verständnisebene <concept> instance of</s><pad><pad><pad><pad><pad><pad><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Arthur D. Little International Inc.",
+      "head_type": "ORGANIZATION",
+      "tail": "1987",
+      "tail_type": "CONCEPT",
+      "relation": "inception"
+     }
+    ],
+    [
+     {
+      "head": "Arthur D. Little International Inc.",
+      "head_type": "ORGANIZATION",
+      "tail": "1987",
+      "tail_type": "CONCEPT",
+      "relation": "inception"
+     }
+    ],
+    [
+     {
+      "head": "Projektgebundenen Verlauf",
+      "head_type": "CONCEPT",
+      "tail": "Verständnisebene",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Arthur D. Little International Inc.",
+    "head_type": "ORGANIZATION",
+    "tail": "1987",
+    "tail_type": "CONCEPT",
+    "relation": "inception"
+   },
+   {
+    "head": "Projektgebundenen Verlauf",
+    "head_type": "CONCEPT",
+    "tail": "Verständnisebene",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   }
+  ]
+ },
+ {
+  "idx": 17,
+  "raw_sequences": [
+   "tp_XX<triplet> Klimawandel <concept> Änderungen <concept> subclass of</s><pad><pad>",
+   "tp_XX<triplet> Resilienz <concept> Nachhaltigkeit <concept> different from</s><pad><pad>",
+   "tp_XX<triplet> Klimaschutz <concept> klimapolitischen <concept> facet of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Klimawandel",
+      "head_type": "CONCEPT",
+      "tail": "Änderungen",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Resilienz",
+      "head_type": "CONCEPT",
+      "tail": "Nachhaltigkeit",
+      "tail_type": "CONCEPT",
+      "relation": "different from"
+     }
+    ],
+    [
+     {
+      "head": "Klimaschutz",
+      "head_type": "CONCEPT",
+      "tail": "klimapolitischen",
+      "tail_type": "CONCEPT",
+      "relation": "facet of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Klimawandel",
+    "head_type": "CONCEPT",
+    "tail": "Änderungen",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Resilienz",
+    "head_type": "CONCEPT",
+    "tail": "Nachhaltigkeit",
+    "tail_type": "CONCEPT",
+    "relation": "different from"
+   },
+   {
+    "head": "Klimaschutz",
+    "head_type": "CONCEPT",
+    "tail": "klimapolitischen",
+    "tail_type": "CONCEPT",
+    "relation": "facet of"
+   }
+  ]
+ },
+ {
+  "idx": 18,
+  "raw_sequences": [
+   "tp_XX<triplet> Board Chair <concept> Directors (re)elections <concept> subclass of</s>",
+   "tp_XX<triplet> Board Chair <concept> Directors (re)elections <concept> part of</s><pad>",
+   "tp_XX<triplet> Board Chair <concept> Directors(re)elections <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Board Chair",
+      "head_type": "CONCEPT",
+      "tail": "Directors (re)elections",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Board Chair",
+      "head_type": "CONCEPT",
+      "tail": "Directors (re)elections",
+      "tail_type": "CONCEPT",
+      "relation": "part of"
+     }
+    ],
+    [
+     {
+      "head": "Board Chair",
+      "head_type": "CONCEPT",
+      "tail": "Directors(re)elections",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Board Chair",
+    "head_type": "CONCEPT",
+    "tail": "Directors (re)elections",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Board Chair",
+    "head_type": "CONCEPT",
+    "tail": "Directors (re)elections",
+    "tail_type": "CONCEPT",
+    "relation": "part of"
+   },
+   {
+    "head": "Board Chair",
+    "head_type": "CONCEPT",
+    "tail": "Directors(re)elections",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 19,
+  "raw_sequences": [
+   "tp_XX<triplet> Bier <concept> Getränke <concept> subclass of</s><pad>",
+   "tp_XX<triplet> Bier <concept> Brauerei <concept> manufacturer</s>",
+   "tp_XX<triplet> Bier <concept> Brauereien <concept> manufacturer</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Bier",
+      "head_type": "CONCEPT",
+      "tail": "Getränke",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Bier",
+      "head_type": "CONCEPT",
+      "tail": "Brauerei",
+      "tail_type": "CONCEPT",
+      "relation": "manufacturer"
+     }
+    ],
+    [
+     {
+      "head": "Bier",
+      "head_type": "CONCEPT",
+      "tail": "Brauereien",
+      "tail_type": "CONCEPT",
+      "relation": "manufacturer"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Bier",
+    "head_type": "CONCEPT",
+    "tail": "Getränke",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Bier",
+    "head_type": "CONCEPT",
+    "tail": "Brauerei",
+    "tail_type": "CONCEPT",
+    "relation": "manufacturer"
+   },
+   {
+    "head": "Bier",
+    "head_type": "CONCEPT",
+    "tail": "Brauereien",
+    "tail_type": "CONCEPT",
+    "relation": "manufacturer"
+   }
+  ]
+ },
+ {
+  "idx": 20,
+  "raw_sequences": [
+   "tp_XX<triplet> Festverzinsliche Wertpapiere <concept> Wertpapier <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Schuldverschreibung <concept> Wertpapier <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Festverzinsliche Wertpapiere <concept> Wertpapier <concept> subclass of <triplet> Schuldverschreibung <concept> Wertpapier <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Festverzinsliche Wertpapiere",
+      "head_type": "CONCEPT",
+      "tail": "Wertpapier",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Schuldverschreibung",
+      "head_type": "CONCEPT",
+      "tail": "Wertpapier",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Festverzinsliche Wertpapiere",
+      "head_type": "CONCEPT",
+      "tail": "Wertpapier",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     },
+     {
+      "head": "Schuldverschreibung",
+      "head_type": "CONCEPT",
+      "tail": "Wertpapier",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Festverzinsliche Wertpapiere",
+    "head_type": "CONCEPT",
+    "tail": "Wertpapier",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Schuldverschreibung",
+    "head_type": "CONCEPT",
+    "tail": "Wertpapier",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 21,
+  "raw_sequences": [
+   "tp_XX<triplet> integrierter Berichterstattung <concept> Reporting <concept> subclass of</s><pad>",
+   "tp_XX<triplet> Performance-Management <concept> Controlling <concept> subclass of</s><pad><pad><pad>",
+   "tp_XX<triplet> integrierter Berichterstattung <concept> Berichterstattung <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "integrierter Berichterstattung",
+      "head_type": "CONCEPT",
+      "tail": "Reporting",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Performance-Management",
+      "head_type": "CONCEPT",
+      "tail": "Controlling",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "integrierter Berichterstattung",
+      "head_type": "CONCEPT",
+      "tail": "Berichterstattung",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "integrierter Berichterstattung",
+    "head_type": "CONCEPT",
+    "tail": "Reporting",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Performance-Management",
+    "head_type": "CONCEPT",
+    "tail": "Controlling",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "integrierter Berichterstattung",
+    "head_type": "CONCEPT",
+    "tail": "Berichterstattung",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 22,
+  "raw_sequences": [
+   "tp_XX<triplet> Nachhaltigkeitsrating <concept> Rating <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Nachhaltigkeitsratings <concept> Rating <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> ESG-Integration im Anlageprozess <concept> Nachhaltigkeitsrating <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Nachhaltigkeitsrating",
+      "head_type": "CONCEPT",
+      "tail": "Rating",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Nachhaltigkeitsratings",
+      "head_type": "CONCEPT",
+      "tail": "Rating",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "ESG-Integration im Anlageprozess",
+      "head_type": "CONCEPT",
+      "tail": "Nachhaltigkeitsrating",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Nachhaltigkeitsrating",
+    "head_type": "CONCEPT",
+    "tail": "Rating",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Nachhaltigkeitsratings",
+    "head_type": "CONCEPT",
+    "tail": "Rating",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "ESG-Integration im Anlageprozess",
+    "head_type": "CONCEPT",
+    "tail": "Nachhaltigkeitsrating",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 23,
+  "raw_sequences": [
+   "tp_XX<triplet> Buy and Hold <concept> Musterportfolio <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Buy and Hold <concept> Musterportfolio <concept> instance of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Buy and Hold <concept> Musterportfolio <concept> instance of <triplet> Constant Mix <concept> Musterportfolio <concept> instance of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Buy and Hold",
+      "head_type": "CONCEPT",
+      "tail": "Musterportfolio",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Buy and Hold",
+      "head_type": "CONCEPT",
+      "tail": "Musterportfolio",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "Buy and Hold",
+      "head_type": "CONCEPT",
+      "tail": "Musterportfolio",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     },
+     {
+      "head": "Constant Mix",
+      "head_type": "CONCEPT",
+      "tail": "Musterportfolio",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Buy and Hold",
+    "head_type": "CONCEPT",
+    "tail": "Musterportfolio",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Buy and Hold",
+    "head_type": "CONCEPT",
+    "tail": "Musterportfolio",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   },
+   {
+    "head": "Constant Mix",
+    "head_type": "CONCEPT",
+    "tail": "Musterportfolio",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   }
+  ]
+ },
+ {
+  "idx": 24,
+  "raw_sequences": [
+   "tp_XX<triplet> Corporate Citizenship <concept> Gesellschaftliches Umfeld <concept> part of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Corporate Citizenship <concept> Gesellschaftliches Umfeld <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> A.8 Corporate Citizenship-Konzepte <media> A.8 Gesellschaftliches Umfeld <media> part of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Corporate Citizenship",
+      "head_type": "CONCEPT",
+      "tail": "Gesellschaftliches Umfeld",
+      "tail_type": "CONCEPT",
+      "relation": "part of"
+     }
+    ],
+    [
+     {
+      "head": "Corporate Citizenship",
+      "head_type": "CONCEPT",
+      "tail": "Gesellschaftliches Umfeld",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "A.8 Corporate Citizenship-Konzepte",
+      "head_type": "WORK",
+      "tail": "A.8 Gesellschaftliches Umfeld",
+      "tail_type": "WORK",
+      "relation": "part of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Corporate Citizenship",
+    "head_type": "CONCEPT",
+    "tail": "Gesellschaftliches Umfeld",
+    "tail_type": "CONCEPT",
+    "relation": "part of"
+   },
+   {
+    "head": "Corporate Citizenship",
+    "head_type": "CONCEPT",
+    "tail": "Gesellschaftliches Umfeld",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "A.8 Corporate Citizenship-Konzepte",
+    "head_type": "WORK",
+    "tail": "A.8 Gesellschaftliches Umfeld",
+    "tail_type": "WORK",
+    "relation": "part of"
+   }
+  ]
+ },
+ {
+  "idx": 25,
+  "raw_sequences": [
+   "tp_XX<triplet> Schadstoff <concept> Wertstoff <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Sieben Stolpersteine für die Rückgewinnung von Ressourcen aus Abfällen <concept> Abfallmenge <concept> subclass of</s>",
+   "tp_XX<triplet> Sieben Stolpersteine für die Rückgewinnung von Ressourcen aus Abfällen <concept> Abfallmenge <concept> instance of</s><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Schadstoff",
+      "head_type": "CONCEPT",
+      "tail": "Wertstoff",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Sieben Stolpersteine für die Rückgewinnung von Ressourcen aus Abfällen",
+      "head_type": "CONCEPT",
+      "tail": "Abfallmenge",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Sieben Stolpersteine für die Rückgewinnung von Ressourcen aus Abfällen",
+      "head_type": "CONCEPT",
+      "tail": "Abfallmenge",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Schadstoff",
+    "head_type": "CONCEPT",
+    "tail": "Wertstoff",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Sieben Stolpersteine für die Rückgewinnung von Ressourcen aus Abfällen",
+    "head_type": "CONCEPT",
+    "tail": "Abfallmenge",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Sieben Stolpersteine für die Rückgewinnung von Ressourcen aus Abfällen",
+    "head_type": "CONCEPT",
+    "tail": "Abfallmenge",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   }
+  ]
+ },
+ {
+  "idx": 26,
+  "raw_sequences": [
+   "tp_XX<triplet> Motivation <concept> Emotionen <concept> subclass of</s><pad>",
+   "tp_XX<triplet> positive <concept> Emotionen <concept> subclass of</s><pad>",
+   "tp_XX<triplet> positive Emotionen <concept> Motivation <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Motivation",
+      "head_type": "CONCEPT",
+      "tail": "Emotionen",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "positive",
+      "head_type": "CONCEPT",
+      "tail": "Emotionen",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "positive Emotionen",
+      "head_type": "CONCEPT",
+      "tail": "Motivation",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Motivation",
+    "head_type": "CONCEPT",
+    "tail": "Emotionen",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "positive",
+    "head_type": "CONCEPT",
+    "tail": "Emotionen",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "positive Emotionen",
+    "head_type": "CONCEPT",
+    "tail": "Motivation",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 27,
+  "raw_sequences": [
+   "tp_XX<triplet> Henry Schäfer <per> Universität Stuttgart <loc> employer</s><pad><pad><pad><pad>",
+   "tp_XX<triplet> nachhaltigen Kapitalanlage <concept> Vermögensverwaltung <concept> subclass of</s>",
+   "tp_XX<triplet> nachhaltigen Kapitalanlage <concept> Vermögensverwaltung <concept> facet of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Henry Schäfer",
+      "head_type": "PERSON",
+      "tail": "Universität Stuttgart",
+      "tail_type": "LOCATION",
+      "relation": "employer"
+     }
+    ],
+    [
+     {
+      "head": "nachhaltigen Kapitalanlage",
+      "head_type": "CONCEPT",
+      "tail": "Vermögensverwaltung",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "nachhaltigen Kapitalanlage",
+      "head_type": "CONCEPT",
+      "tail": "Vermögensverwaltung",
+      "tail_type": "CONCEPT",
+      "relation": "facet of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Henry Schäfer",
+    "head_type": "PERSON",
+    "tail": "Universität Stuttgart",
+    "tail_type": "LOCATION",
+    "relation": "employer"
+   },
+   {
+    "head": "nachhaltigen Kapitalanlage",
+    "head_type": "CONCEPT",
+    "tail": "Vermögensverwaltung",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "nachhaltigen Kapitalanlage",
+    "head_type": "CONCEPT",
+    "tail": "Vermögensverwaltung",
+    "tail_type": "CONCEPT",
+    "relation": "facet of"
+   }
+  ]
+ },
+ {
+  "idx": 28,
+  "raw_sequences": [
+   "tp_XX<triplet> Environmental social and governance <concept> ESG <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Environmental social and governance (ESG) Sustainability Materiality Task force on climate-related financial disclosures <concept> Global reporting initiatives <concept> instance of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Environmental social and governance (ESG) Sustainability Materiality Task force on climate-related financial disclosures (TCFD) Global reporting initiatives (GRI) <media> ESG <concept> main subject</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Environmental social and governance",
+      "head_type": "CONCEPT",
+      "tail": "ESG",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Environmental social and governance (ESG) Sustainability Materiality Task force on climate-related financial disclosures",
+      "head_type": "CONCEPT",
+      "tail": "Global reporting initiatives",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "Environmental social and governance (ESG) Sustainability Materiality Task force on climate-related financial disclosures (TCFD) Global reporting initiatives (GRI)",
+      "head_type": "WORK",
+      "tail": "ESG",
+      "tail_type": "CONCEPT",
+      "relation": "main subject"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Environmental social and governance",
+    "head_type": "CONCEPT",
+    "tail": "ESG",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Environmental social and governance (ESG) Sustainability Materiality Task force on climate-related financial disclosures",
+    "head_type": "CONCEPT",
+    "tail": "Global reporting initiatives",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   },
+   {
+    "head": "Environmental social and governance (ESG) Sustainability Materiality Task force on climate-related financial disclosures (TCFD) Global reporting initiatives (GRI)",
+    "head_type": "WORK",
+    "tail": "ESG",
+    "tail_type": "CONCEPT",
+    "relation": "main subject"
+   }
+  ]
+ },
+ {
+  "idx": 29,
+  "raw_sequences": [
+   "tp_XX<triplet> Ecotoxicity <concept> Emissions <concept> subclass of</s><pad>",
+   "tp_XX<triplet> Ecotoxicity Potential <concept> Emissions <concept> subclass of</s>",
+   "tp_XX<triplet> Ecotoxicity Potential <concept> Environmental <concept> facet of</s><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Ecotoxicity",
+      "head_type": "CONCEPT",
+      "tail": "Emissions",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Ecotoxicity Potential",
+      "head_type": "CONCEPT",
+      "tail": "Emissions",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Ecotoxicity Potential",
+      "head_type": "CONCEPT",
+      "tail": "Environmental",
+      "tail_type": "CONCEPT",
+      "relation": "facet of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Ecotoxicity",
+    "head_type": "CONCEPT",
+    "tail": "Emissions",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Ecotoxicity Potential",
+    "head_type": "CONCEPT",
+    "tail": "Emissions",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Ecotoxicity Potential",
+    "head_type": "CONCEPT",
+    "tail": "Environmental",
+    "tail_type": "CONCEPT",
+    "relation": "facet of"
+   }
+  ]
+ },
+ {
+  "idx": 30,
+  "raw_sequences": [
+   "tp_XX<triplet> Smartphone <concept> Endgerät <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Smartphone <concept> Endgerät <concept> subclass of <triplet> Tablet <concept> Endgerät <concept> subclass of</s>",
+   "tp_XX<triplet> Mobile BI <media> Business Intelligence <concept> facet of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Smartphone",
+      "head_type": "CONCEPT",
+      "tail": "Endgerät",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Smartphone",
+      "head_type": "CONCEPT",
+      "tail": "Endgerät",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     },
+     {
+      "head": "Tablet",
+      "head_type": "CONCEPT",
+      "tail": "Endgerät",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Mobile BI",
+      "head_type": "WORK",
+      "tail": "Business Intelligence",
+      "tail_type": "CONCEPT",
+      "relation": "facet of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Smartphone",
+    "head_type": "CONCEPT",
+    "tail": "Endgerät",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Tablet",
+    "head_type": "CONCEPT",
+    "tail": "Endgerät",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Mobile BI",
+    "head_type": "WORK",
+    "tail": "Business Intelligence",
+    "tail_type": "CONCEPT",
+    "relation": "facet of"
+   }
+  ]
+ },
+ {
+  "idx": 31,
+  "raw_sequences": [
+   "tp_XX<triplet> WBGU 2011 <media> 2011 <date> point in time</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> *8-Tonnen-Gesellschaf t* <concept> große Transformation <concept> instance of</s><pad>",
+   "tp_XX<triplet> *8-Tonnen-Gesellschaf t* <concept> große Transformation <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "WBGU 2011",
+      "head_type": "WORK",
+      "tail": "2011",
+      "tail_type": "CONCEPT",
+      "relation": "point in time"
+     }
+    ],
+    [
+     {
+      "head": "*8-Tonnen-Gesellschaf t*",
+      "head_type": "CONCEPT",
+      "tail": "große Transformation",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "*8-Tonnen-Gesellschaf t*",
+      "head_type": "CONCEPT",
+      "tail": "große Transformation",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "WBGU 2011",
+    "head_type": "WORK",
+    "tail": "2011",
+    "tail_type": "CONCEPT",
+    "relation": "point in time"
+   },
+   {
+    "head": "*8-Tonnen-Gesellschaf t*",
+    "head_type": "CONCEPT",
+    "tail": "große Transformation",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   },
+   {
+    "head": "*8-Tonnen-Gesellschaf t*",
+    "head_type": "CONCEPT",
+    "tail": "große Transformation",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 32,
+  "raw_sequences": [
+   "tp_XX<triplet> Bürgerliche und politische Rechte <concept> Menschenrechte <concept> subclass of</s><pad><pad>",
+   "tp_XX<triplet> Menschenrechte <concept> Recht <concept> subclass of</s><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Menschenrechte in kritischen Situationen <concept> Menschenrechte <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Bürgerliche und politische Rechte",
+      "head_type": "CONCEPT",
+      "tail": "Menschenrechte",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Menschenrechte",
+      "head_type": "CONCEPT",
+      "tail": "Recht",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Menschenrechte in kritischen Situationen",
+      "head_type": "CONCEPT",
+      "tail": "Menschenrechte",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Bürgerliche und politische Rechte",
+    "head_type": "CONCEPT",
+    "tail": "Menschenrechte",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Menschenrechte",
+    "head_type": "CONCEPT",
+    "tail": "Recht",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Menschenrechte in kritischen Situationen",
+    "head_type": "CONCEPT",
+    "tail": "Menschenrechte",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 33,
+  "raw_sequences": [
+   "tp_XX<triplet> Leitfaden G4 <media> Leitfaden <concept> instance of</s><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Leitfaden G4 <media> GRI-Leitfaden <media> edition or translation of</s>",
+   "tp_XX<triplet> Leitfaden G4 <media> Leitfaden <media> instance of</s><pad><pad><pad><pad><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Leitfaden G4",
+      "head_type": "WORK",
+      "tail": "Leitfaden",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "Leitfaden G4",
+      "head_type": "WORK",
+      "tail": "GRI-Leitfaden",
+      "tail_type": "WORK",
+      "relation": "edition or translation of"
+     }
+    ],
+    [
+     {
+      "head": "Leitfaden G4",
+      "head_type": "WORK",
+      "tail": "Leitfaden",
+      "tail_type": "WORK",
+      "relation": "instance of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Leitfaden G4",
+    "head_type": "WORK",
+    "tail": "Leitfaden",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   },
+   {
+    "head": "Leitfaden G4",
+    "head_type": "WORK",
+    "tail": "GRI-Leitfaden",
+    "tail_type": "WORK",
+    "relation": "edition or translation of"
+   }
+  ]
+ },
+ {
+  "idx": 34,
+  "raw_sequences": [
+   "tp_XX<triplet> OECD – Organisation für wirtschaftliche Zusammenarbeit und Entwicklung <org> 1999 <date> inception</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> OECD – Organisation für wirtschaftliche Zusammenarbeit und Entwicklung <org> Paris <loc> headquarters location</s><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Small business champions for responsibility? <concept> J Bus Ethics <org> published in <concept> J Bus Ethics <org> published in</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "OECD – Organisation für wirtschaftliche Zusammenarbeit und Entwicklung",
+      "head_type": "ORGANIZATION",
+      "tail": "1999",
+      "tail_type": "CONCEPT",
+      "relation": "inception"
+     }
+    ],
+    [
+     {
+      "head": "OECD – Organisation für wirtschaftliche Zusammenarbeit und Entwicklung",
+      "head_type": "ORGANIZATION",
+      "tail": "Paris",
+      "tail_type": "LOCATION",
+      "relation": "headquarters location"
+     }
+    ],
+    [
+     {
+      "head": "Small business champions for responsibility?",
+      "head_type": "CONCEPT",
+      "tail": "J Bus Ethics",
+      "tail_type": "ORGANIZATION",
+      "relation": "published in"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "OECD – Organisation für wirtschaftliche Zusammenarbeit und Entwicklung",
+    "head_type": "ORGANIZATION",
+    "tail": "1999",
+    "tail_type": "CONCEPT",
+    "relation": "inception"
+   },
+   {
+    "head": "OECD – Organisation für wirtschaftliche Zusammenarbeit und Entwicklung",
+    "head_type": "ORGANIZATION",
+    "tail": "Paris",
+    "tail_type": "LOCATION",
+    "relation": "headquarters location"
+   },
+   {
+    "head": "Small business champions for responsibility?",
+    "head_type": "CONCEPT",
+    "tail": "J Bus Ethics",
+    "tail_type": "ORGANIZATION",
+    "relation": "published in"
+   }
+  ]
+ },
+ {
+  "idx": 35,
+  "raw_sequences": [
+   "tp_XX<triplet> Dirk Holbach <per> Technischen Universität Kaiserslautern <org> educated at</s><pad><pad>",
+   "tp_XX<triplet> Dirk Holbach <per> Universität Göttingen <loc> educated at</s><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Frank Roland Schröder <per> Technischen Universität Kaiserslautern <org> educated at</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Dirk Holbach",
+      "head_type": "PERSON",
+      "tail": "Technischen Universität Kaiserslautern",
+      "tail_type": "ORGANIZATION",
+      "relation": "educated at"
+     }
+    ],
+    [
+     {
+      "head": "Dirk Holbach",
+      "head_type": "PERSON",
+      "tail": "Universität Göttingen",
+      "tail_type": "LOCATION",
+      "relation": "educated at"
+     }
+    ],
+    [
+     {
+      "head": "Frank Roland Schröder",
+      "head_type": "PERSON",
+      "tail": "Technischen Universität Kaiserslautern",
+      "tail_type": "ORGANIZATION",
+      "relation": "educated at"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Dirk Holbach",
+    "head_type": "PERSON",
+    "tail": "Technischen Universität Kaiserslautern",
+    "tail_type": "ORGANIZATION",
+    "relation": "educated at"
+   },
+   {
+    "head": "Dirk Holbach",
+    "head_type": "PERSON",
+    "tail": "Universität Göttingen",
+    "tail_type": "LOCATION",
+    "relation": "educated at"
+   },
+   {
+    "head": "Frank Roland Schröder",
+    "head_type": "PERSON",
+    "tail": "Technischen Universität Kaiserslautern",
+    "tail_type": "ORGANIZATION",
+    "relation": "educated at"
+   }
+  ]
+ },
+ {
+  "idx": 36,
+  "raw_sequences": [
+   "tp_XX<triplet> Qualitätsmerkmal <concept> Kriterien <concept> subclass of</s>",
+   "tp_XX<triplet> Dienstleistungen <concept> Qualitätsmerkmal <concept> has quality</s><pad>",
+   "tp_XX<triplet> DATEV <org> Umweltmanagementsystem <concept> industry</s><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Qualitätsmerkmal",
+      "head_type": "CONCEPT",
+      "tail": "Kriterien",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Dienstleistungen",
+      "head_type": "CONCEPT",
+      "tail": "Qualitätsmerkmal",
+      "tail_type": "CONCEPT",
+      "relation": "has quality"
+     }
+    ],
+    [
+     {
+      "head": "DATEV",
+      "head_type": "ORGANIZATION",
+      "tail": "Umweltmanagementsystem",
+      "tail_type": "CONCEPT",
+      "relation": "industry"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Qualitätsmerkmal",
+    "head_type": "CONCEPT",
+    "tail": "Kriterien",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Dienstleistungen",
+    "head_type": "CONCEPT",
+    "tail": "Qualitätsmerkmal",
+    "tail_type": "CONCEPT",
+    "relation": "has quality"
+   },
+   {
+    "head": "DATEV",
+    "head_type": "ORGANIZATION",
+    "tail": "Umweltmanagementsystem",
+    "tail_type": "CONCEPT",
+    "relation": "industry"
+   }
+  ]
+ },
+ {
+  "idx": 37,
+  "raw_sequences": [
+   "tp_XX<triplet> Walter Riester <per> sozialdemokratischen <org> member of political party</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Walter Riester <per> sozialdemokratischen <org> member of political party <triplet> Riester-Rente <media> Walter Riester <per> named after</s>",
+   "tp_XX<triplet> Walter Riester <per> Arbeitsminister <per> position held</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Walter Riester",
+      "head_type": "PERSON",
+      "tail": "sozialdemokratischen",
+      "tail_type": "ORGANIZATION",
+      "relation": "member of political party"
+     }
+    ],
+    [
+     {
+      "head": "Walter Riester",
+      "head_type": "PERSON",
+      "tail": "sozialdemokratischen",
+      "tail_type": "ORGANIZATION",
+      "relation": "member of political party"
+     },
+     {
+      "head": "Riester-Rente",
+      "head_type": "WORK",
+      "tail": "Walter Riester",
+      "tail_type": "PERSON",
+      "relation": "named after"
+     }
+    ],
+    [
+     {
+      "head": "Walter Riester",
+      "head_type": "PERSON",
+      "tail": "Arbeitsminister",
+      "tail_type": "PERSON",
+      "relation": "position held"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Walter Riester",
+    "head_type": "PERSON",
+    "tail": "sozialdemokratischen",
+    "tail_type": "ORGANIZATION",
+    "relation": "member of political party"
+   },
+   {
+    "head": "Riester-Rente",
+    "head_type": "WORK",
+    "tail": "Walter Riester",
+    "tail_type": "PERSON",
+    "relation": "named after"
+   },
+   {
+    "head": "Walter Riester",
+    "head_type": "PERSON",
+    "tail": "Arbeitsminister",
+    "tail_type": "PERSON",
+    "relation": "position held"
+   }
+  ]
+ },
+ {
+  "idx": 38,
+  "raw_sequences": [
+   "tp_XX<triplet> GRI-Leitfaden <media> GRI <org> publisher</s><pad><pad><pad>",
+   "tp_XX<triplet> GRI-Leitfaden G4 <media> GRI <org> publisher</s><pad>",
+   "tp_XX<triplet> GRI-Leitfaden G4 <media> GRI <org> standards body</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "GRI-Leitfaden",
+      "head_type": "WORK",
+      "tail": "GRI",
+      "tail_type": "ORGANIZATION",
+      "relation": "publisher"
+     }
+    ],
+    [
+     {
+      "head": "GRI-Leitfaden G4",
+      "head_type": "WORK",
+      "tail": "GRI",
+      "tail_type": "ORGANIZATION",
+      "relation": "publisher"
+     }
+    ],
+    [
+     {
+      "head": "GRI-Leitfaden G4",
+      "head_type": "WORK",
+      "tail": "GRI",
+      "tail_type": "ORGANIZATION",
+      "relation": "standards body"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "GRI-Leitfaden",
+    "head_type": "WORK",
+    "tail": "GRI",
+    "tail_type": "ORGANIZATION",
+    "relation": "publisher"
+   },
+   {
+    "head": "GRI-Leitfaden G4",
+    "head_type": "WORK",
+    "tail": "GRI",
+    "tail_type": "ORGANIZATION",
+    "relation": "publisher"
+   },
+   {
+    "head": "GRI-Leitfaden G4",
+    "head_type": "WORK",
+    "tail": "GRI",
+    "tail_type": "ORGANIZATION",
+    "relation": "standards body"
+   }
+  ]
+ },
+ {
+  "idx": 39,
+  "raw_sequences": [
+   "tp_XX<triplet> Moderne Organisationstheorie <concept> Organisationstheorie <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Moderne Organisationstheorie <concept> Organisationstheorie <concept> instance of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Moderne Organisationstheorie <concept> Organisationstheorie <concept> subclass of <concept> Organisationstheorie <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Moderne Organisationstheorie",
+      "head_type": "CONCEPT",
+      "tail": "Organisationstheorie",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Moderne Organisationstheorie",
+      "head_type": "CONCEPT",
+      "tail": "Organisationstheorie",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "Moderne Organisationstheorie",
+      "head_type": "CONCEPT",
+      "tail": "Organisationstheorie",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Moderne Organisationstheorie",
+    "head_type": "CONCEPT",
+    "tail": "Organisationstheorie",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Moderne Organisationstheorie",
+    "head_type": "CONCEPT",
+    "tail": "Organisationstheorie",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   }
+  ]
+ },
+ {
+  "idx": 40,
+  "raw_sequences": [
+   "tp_XX<triplet> Meta-Studie <media> Deutschen Bank <org> author</s><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Meta-Studie der Deutschen Bank <concept> Meta-Studie <concept> instance of</s>",
+   "tp_XX<triplet> Meta-Studie der Deutschen Bank <concept> Deutschen Bank <org> author</s><pad><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Meta-Studie",
+      "head_type": "WORK",
+      "tail": "Deutschen Bank",
+      "tail_type": "ORGANIZATION",
+      "relation": "author"
+     }
+    ],
+    [
+     {
+      "head": "Meta-Studie der Deutschen Bank",
+      "head_type": "CONCEPT",
+      "tail": "Meta-Studie",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "Meta-Studie der Deutschen Bank",
+      "head_type": "CONCEPT",
+      "tail": "Deutschen Bank",
+      "tail_type": "ORGANIZATION",
+      "relation": "author"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Meta-Studie",
+    "head_type": "WORK",
+    "tail": "Deutschen Bank",
+    "tail_type": "ORGANIZATION",
+    "relation": "author"
+   },
+   {
+    "head": "Meta-Studie der Deutschen Bank",
+    "head_type": "CONCEPT",
+    "tail": "Meta-Studie",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   },
+   {
+    "head": "Meta-Studie der Deutschen Bank",
+    "head_type": "CONCEPT",
+    "tail": "Deutschen Bank",
+    "tail_type": "ORGANIZATION",
+    "relation": "author"
+   }
+  ]
+ },
+ {
+  "idx": 41,
+  "raw_sequences": [
+   "tp_XX<triplet> Phasenübergreifende und phasenbezogene Disziplinen im Ganzheitlichen Life Cycle Management <concept> Ganzheitlichen Life Cycle Management <concept> part of</s><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Phasenübergreifende und phasenbezogene Disziplinen im Ganzheitlichen Life Cycle Management <concept> Ganzheitlichen Life Cycle Management <concept> facet of</s><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Phasenübergreifende und phasenbezogene Disziplinen im Ganzheitlichen Life Cycle Management <concept> Disziplinen im Ganzheitlichen Life Cycle Management <concept> subclass of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Phasenübergreifende und phasenbezogene Disziplinen im Ganzheitlichen Life Cycle Management",
+      "head_type": "CONCEPT",
+      "tail": "Ganzheitlichen Life Cycle Management",
+      "tail_type": "CONCEPT",
+      "relation": "part of"
+     }
+    ],
+    [
+     {
+      "head": "Phasenübergreifende und phasenbezogene Disziplinen im Ganzheitlichen Life Cycle Management",
+      "head_type": "CONCEPT",
+      "tail": "Ganzheitlichen Life Cycle Management",
+      "tail_type": "CONCEPT",
+      "relation": "facet of"
+     }
+    ],
+    [
+     {
+      "head": "Phasenübergreifende und phasenbezogene Disziplinen im Ganzheitlichen Life Cycle Management",
+      "head_type": "CONCEPT",
+      "tail": "Disziplinen im Ganzheitlichen Life Cycle Management",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Phasenübergreifende und phasenbezogene Disziplinen im Ganzheitlichen Life Cycle Management",
+    "head_type": "CONCEPT",
+    "tail": "Ganzheitlichen Life Cycle Management",
+    "tail_type": "CONCEPT",
+    "relation": "part of"
+   },
+   {
+    "head": "Phasenübergreifende und phasenbezogene Disziplinen im Ganzheitlichen Life Cycle Management",
+    "head_type": "CONCEPT",
+    "tail": "Ganzheitlichen Life Cycle Management",
+    "tail_type": "CONCEPT",
+    "relation": "facet of"
+   },
+   {
+    "head": "Phasenübergreifende und phasenbezogene Disziplinen im Ganzheitlichen Life Cycle Management",
+    "head_type": "CONCEPT",
+    "tail": "Disziplinen im Ganzheitlichen Life Cycle Management",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 42,
+  "raw_sequences": [
+   "tp_XX<triplet> TU Braunschweig <org> Essen <loc> located in the administrative territorial entity</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Instituts für Werkzeugmaschinen und Fertigungstechnik der TU Braunschweig <concept> Essen <loc> located in the administrative territorial entity</s>",
+   "tp_XX<triplet> Instituts für Werkzeugmaschinen und Fertigungstechnik der TU Braunschweig <concept> Essen <loc> headquarters location</s><pad><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "TU Braunschweig",
+      "head_type": "ORGANIZATION",
+      "tail": "Essen",
+      "tail_type": "LOCATION",
+      "relation": "located in the administrative territorial entity"
+     }
+    ],
+    [
+     {
+      "head": "Instituts für Werkzeugmaschinen und Fertigungstechnik der TU Braunschweig",
+      "head_type": "CONCEPT",
+      "tail": "Essen",
+      "tail_type": "LOCATION",
+      "relation": "located in the administrative territorial entity"
+     }
+    ],
+    [
+     {
+      "head": "Instituts für Werkzeugmaschinen und Fertigungstechnik der TU Braunschweig",
+      "head_type": "CONCEPT",
+      "tail": "Essen",
+      "tail_type": "LOCATION",
+      "relation": "headquarters location"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "TU Braunschweig",
+    "head_type": "ORGANIZATION",
+    "tail": "Essen",
+    "tail_type": "LOCATION",
+    "relation": "located in the administrative territorial entity"
+   },
+   {
+    "head": "Instituts für Werkzeugmaschinen und Fertigungstechnik der TU Braunschweig",
+    "head_type": "CONCEPT",
+    "tail": "Essen",
+    "tail_type": "LOCATION",
+    "relation": "located in the administrative territorial entity"
+   },
+   {
+    "head": "Instituts für Werkzeugmaschinen und Fertigungstechnik der TU Braunschweig",
+    "head_type": "CONCEPT",
+    "tail": "Essen",
+    "tail_type": "LOCATION",
+    "relation": "headquarters location"
+   }
+  ]
+ },
+ {
+  "idx": 43,
+  "raw_sequences": [
+   "tp_XX<triplet> Aachen <loc> Deutschland <loc> country</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> UN-Menschenrechtskommission <org> UN-Generalsekretär <per> office held by head of the organization</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> UN-Menschenrechtskommission <org> UN-Generalsekretär <per> office held by head of the organization <triplet> Aachen <loc> Deutschland <loc> country</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Aachen",
+      "head_type": "LOCATION",
+      "tail": "Deutschland",
+      "tail_type": "LOCATION",
+      "relation": "country"
+     }
+    ],
+    [
+     {
+      "head": "UN-Menschenrechtskommission",
+      "head_type": "ORGANIZATION",
+      "tail": "UN-Generalsekretär",
+      "tail_type": "PERSON",
+      "relation": "office held by head of the organization"
+     }
+    ],
+    [
+     {
+      "head": "UN-Menschenrechtskommission",
+      "head_type": "ORGANIZATION",
+      "tail": "UN-Generalsekretär",
+      "tail_type": "PERSON",
+      "relation": "office held by head of the organization"
+     },
+     {
+      "head": "Aachen",
+      "head_type": "LOCATION",
+      "tail": "Deutschland",
+      "tail_type": "LOCATION",
+      "relation": "country"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Aachen",
+    "head_type": "LOCATION",
+    "tail": "Deutschland",
+    "tail_type": "LOCATION",
+    "relation": "country"
+   },
+   {
+    "head": "UN-Menschenrechtskommission",
+    "head_type": "ORGANIZATION",
+    "tail": "UN-Generalsekretär",
+    "tail_type": "PERSON",
+    "relation": "office held by head of the organization"
+   }
+  ]
+ },
+ {
+  "idx": 44,
+  "raw_sequences": [
+   "tp_XX<triplet> Forum Nachhaltige Entwicklung der Deutschen Wirtschaft <concept> im Juli 2000 <date> inception</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Forum Nachhaltige Entwicklung der Deutschen Wirtschaft <concept> im Juli 2000 <date> inception <concept> Bundesverbandes der Deutschen Industrie <concept> founded by</s>",
+   "tp_XX<triplet> Forum Nachhaltige Entwicklung der Deutschen Wirtschaft <concept> im Juli 2000 <date> inception <concept> Bundesverbandes der Deutschen Industrie <org> founded by</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Forum Nachhaltige Entwicklung der Deutschen Wirtschaft",
+      "head_type": "CONCEPT",
+      "tail": "im Juli 2000",
+      "tail_type": "CONCEPT",
+      "relation": "inception"
+     }
+    ],
+    [
+     {
+      "head": "Forum Nachhaltige Entwicklung der Deutschen Wirtschaft",
+      "head_type": "CONCEPT",
+      "tail": "im Juli 2000",
+      "tail_type": "CONCEPT",
+      "relation": "inception"
+     }
+    ],
+    [
+     {
+      "head": "Forum Nachhaltige Entwicklung der Deutschen Wirtschaft",
+      "head_type": "CONCEPT",
+      "tail": "im Juli 2000",
+      "tail_type": "CONCEPT",
+      "relation": "inception"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Forum Nachhaltige Entwicklung der Deutschen Wirtschaft",
+    "head_type": "CONCEPT",
+    "tail": "im Juli 2000",
+    "tail_type": "CONCEPT",
+    "relation": "inception"
+   }
+  ]
+ },
+ {
+  "idx": 45,
+  "raw_sequences": [
+   "tp_XX<triplet> Evangelische Johannesstift <loc> Stiftung <concept> instance of</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Evangelische Johannesstift <loc> TBLI ESG Leaders Award <media> award received</s><pad><pad><pad><pad>",
+   "tp_XX<triplet> TBLI ESG Leaders Award <media> 2012 <date> inception <media> 2012 <date> inception</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Evangelische Johannesstift",
+      "head_type": "LOCATION",
+      "tail": "Stiftung",
+      "tail_type": "CONCEPT",
+      "relation": "instance of"
+     }
+    ],
+    [
+     {
+      "head": "Evangelische Johannesstift",
+      "head_type": "LOCATION",
+      "tail": "TBLI ESG Leaders Award",
+      "tail_type": "WORK",
+      "relation": "award received"
+     }
+    ],
+    [
+     {
+      "head": "TBLI ESG Leaders Award",
+      "head_type": "WORK",
+      "tail": "2012",
+      "tail_type": "CONCEPT",
+      "relation": "inception"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Evangelische Johannesstift",
+    "head_type": "LOCATION",
+    "tail": "Stiftung",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   },
+   {
+    "head": "Evangelische Johannesstift",
+    "head_type": "LOCATION",
+    "tail": "TBLI ESG Leaders Award",
+    "tail_type": "WORK",
+    "relation": "award received"
+   },
+   {
+    "head": "TBLI ESG Leaders Award",
+    "head_type": "WORK",
+    "tail": "2012",
+    "tail_type": "CONCEPT",
+    "relation": "inception"
+   }
+  ]
+ },
+ {
+  "idx": 46,
+  "raw_sequences": [
+   "tp_XX<triplet> Evangelischen Johannesstift <loc> Jens Güldner <per> director / manager</s>",
+   "tp_XX<triplet> Jens Güldner <per> Evangelischen Johannesstift <loc> employer</s><pad><pad>",
+   "tp_XX<triplet> Evangelischen Johannesstift <loc> Jens Güldner <per> chairperson</s><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Evangelischen Johannesstift",
+      "head_type": "LOCATION",
+      "tail": "Jens Güldner",
+      "tail_type": "PERSON",
+      "relation": "director / manager"
+     }
+    ],
+    [
+     {
+      "head": "Jens Güldner",
+      "head_type": "PERSON",
+      "tail": "Evangelischen Johannesstift",
+      "tail_type": "LOCATION",
+      "relation": "employer"
+     }
+    ],
+    [
+     {
+      "head": "Evangelischen Johannesstift",
+      "head_type": "LOCATION",
+      "tail": "Jens Güldner",
+      "tail_type": "PERSON",
+      "relation": "chairperson"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Evangelischen Johannesstift",
+    "head_type": "LOCATION",
+    "tail": "Jens Güldner",
+    "tail_type": "PERSON",
+    "relation": "director / manager"
+   },
+   {
+    "head": "Jens Güldner",
+    "head_type": "PERSON",
+    "tail": "Evangelischen Johannesstift",
+    "tail_type": "LOCATION",
+    "relation": "employer"
+   },
+   {
+    "head": "Evangelischen Johannesstift",
+    "head_type": "LOCATION",
+    "tail": "Jens Güldner",
+    "tail_type": "PERSON",
+    "relation": "chairperson"
+   }
+  ]
+ },
+ {
+  "idx": 47,
+  "raw_sequences": [
+   "tp_XX<triplet> ESG definition <media> sustainability <concept> main subject</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Is There Really a Choice? <media> sustainability <concept> main subject</s><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Is There Really a Choice? <media> Reapproach towards a living world <concept> facet of</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "ESG definition",
+      "head_type": "WORK",
+      "tail": "sustainability",
+      "tail_type": "CONCEPT",
+      "relation": "main subject"
+     }
+    ],
+    [
+     {
+      "head": "Is There Really a Choice?",
+      "head_type": "WORK",
+      "tail": "sustainability",
+      "tail_type": "CONCEPT",
+      "relation": "main subject"
+     }
+    ],
+    [
+     {
+      "head": "Is There Really a Choice?",
+      "head_type": "WORK",
+      "tail": "Reapproach towards a living world",
+      "tail_type": "CONCEPT",
+      "relation": "facet of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "ESG definition",
+    "head_type": "WORK",
+    "tail": "sustainability",
+    "tail_type": "CONCEPT",
+    "relation": "main subject"
+   },
+   {
+    "head": "Is There Really a Choice?",
+    "head_type": "WORK",
+    "tail": "sustainability",
+    "tail_type": "CONCEPT",
+    "relation": "main subject"
+   },
+   {
+    "head": "Is There Really a Choice?",
+    "head_type": "WORK",
+    "tail": "Reapproach towards a living world",
+    "tail_type": "CONCEPT",
+    "relation": "facet of"
+   }
+  ]
+ },
+ {
+  "idx": 48,
+  "raw_sequences": [
+   "tp_XX<triplet> Wissenschaftliches Arbeiten <concept> wissenschaftlichen Arbeit <concept> subclass of</s>",
+   "tp_XX<triplet> Datenträger <concept> Daten <concept> subclass of</s><pad><pad><pad><pad>",
+   "tp_XX<triplet> Datenträger <concept> Datenquel <concept> subclass of</s><pad><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Wissenschaftliches Arbeiten",
+      "head_type": "CONCEPT",
+      "tail": "wissenschaftlichen Arbeit",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Datenträger",
+      "head_type": "CONCEPT",
+      "tail": "Daten",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ],
+    [
+     {
+      "head": "Datenträger",
+      "head_type": "CONCEPT",
+      "tail": "Datenquel",
+      "tail_type": "CONCEPT",
+      "relation": "subclass of"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Wissenschaftliches Arbeiten",
+    "head_type": "CONCEPT",
+    "tail": "wissenschaftlichen Arbeit",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Datenträger",
+    "head_type": "CONCEPT",
+    "tail": "Daten",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Datenträger",
+    "head_type": "CONCEPT",
+    "tail": "Datenquel",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ {
+  "idx": 49,
+  "raw_sequences": [
+   "tp_XX<triplet> 8.6 Fazit <concept> Deutschland <loc> applies to jurisdiction</s>",
+   "tp_XX<triplet> 8.6 Fazit <concept> Deutschland <loc> country</s><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> 8.6 Fazit <media> Deutschland <loc> country</s><pad><pad><pad><pad><pad>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "8.6 Fazit",
+      "head_type": "CONCEPT",
+      "tail": "Deutschland",
+      "tail_type": "LOCATION",
+      "relation": "applies to jurisdiction"
+     }
+    ],
+    [
+     {
+      "head": "8.6 Fazit",
+      "head_type": "CONCEPT",
+      "tail": "Deutschland",
+      "tail_type": "LOCATION",
+      "relation": "country"
+     }
+    ],
+    [
+     {
+      "head": "8.6 Fazit",
+      "head_type": "WORK",
+      "tail": "Deutschland",
+      "tail_type": "LOCATION",
+      "relation": "country"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "8.6 Fazit",
+    "head_type": "CONCEPT",
+    "tail": "Deutschland",
+    "tail_type": "LOCATION",
+    "relation": "applies to jurisdiction"
+   },
+   {
+    "head": "8.6 Fazit",
+    "head_type": "CONCEPT",
+    "tail": "Deutschland",
+    "tail_type": "LOCATION",
+    "relation": "country"
+   }
+  ]
+ },
+ {
+  "idx": 50,
+  "raw_sequences": [
+   "tp_XX<triplet> Das an Nachhaltigkeit ausgerichtete Anlagenmanagement der Bewegungsstiftung <concept> Kirsten Paul <per> author</s><pad><pad>",
+   "tp_XX<triplet> Das an Nachhaltigkeit ausgerichtete Anlagenmanagement der Bewegungsstiftung <concept> Kirsten Paul <per> developer</s><pad><pad>",
+   "tp_XX<triplet> Das an Nachhaltigkeit ausgerichtete Anlagenmanagement der Bewegungsstiftung <concept> Kirsten Paul <per> director / manager</s>"
+  ],
+  "parsed": [
+   [
+    [
+     {
+      "head": "Das an Nachhaltigkeit ausgerichtete Anlagenmanagement der Bewegungsstiftung",
+      "head_type": "CONCEPT",
+      "tail": "Kirsten Paul",
+      "tail_type": "PERSON",
+      "relation": "author"
+     }
+    ],
+    [
+     {
+      "head": "Das an Nachhaltigkeit ausgerichtete Anlagenmanagement der Bewegungsstiftung",
+      "head_type": "CONCEPT",
+      "tail": "Kirsten Paul",
+      "tail_type": "PERSON",
+      "relation": "developer"
+     }
+    ],
+    [
+     {
+      "head": "Das an Nachhaltigkeit ausgerichtete Anlagenmanagement der Bewegungsstiftung",
+      "head_type": "CONCEPT",
+      "tail": "Kirsten Paul",
+      "tail_type": "PERSON",
+      "relation": "director / manager"
+     }
+    ]
+   ]
+  ],
+  "triples": [
+   {
+    "head": "Das an Nachhaltigkeit ausgerichtete Anlagenmanagement der Bewegungsstiftung",
+    "head_type": "CONCEPT",
+    "tail": "Kirsten Paul",
+    "tail_type": "PERSON",
+    "relation": "author"
+   },
+   {
+    "head": "Das an Nachhaltigkeit ausgerichtete Anlagenmanagement der Bewegungsstiftung",
+    "head_type": "CONCEPT",
+    "tail": "Kirsten Paul",
+    "tail_type": "PERSON",
+    "relation": "developer"
+   },
+   {
+    "head": "Das an Nachhaltigkeit ausgerichtete Anlagenmanagement der Bewegungsstiftung",
+    "head_type": "CONCEPT",
+    "tail": "Kirsten Paul",
+    "tail_type": "PERSON",
+    "relation": "director / manager"
+   }
+  ]
+ }
+]

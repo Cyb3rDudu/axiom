@@ -1,0 +1,27 @@
+[
+ {
+  "label": "location",
+  "text": "St. Galler",
+  "score": 0.52551
+ },
+ {
+  "label": "person",
+  "text": "Prof. Andreas Müller",
+  "score": 0.9743
+ },
+ {
+  "label": "organization",
+  "text": "Universität St. Gallen",
+  "score": 0.79796
+ },
+ {
+  "label": "concept",
+  "text": "Nachhaltigkeit",
+  "score": 0.82242
+ },
+ {
+  "label": "concept",
+  "text": "Controlling",
+  "score": 0.82861
+ }
+]

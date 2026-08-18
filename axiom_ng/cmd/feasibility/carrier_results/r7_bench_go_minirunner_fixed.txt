@@ -1,0 +1,103 @@
+gold suite: 25 queries (0 confirmed by dudu)
+
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+bench: search: source hydration failed: can't scan into dest[4] (col: publisher): cannot scan NULL into *string
+bench: search: dense+sparse embed failed, trying dense-only: embed sparse: processor POST /v1/embed: status 422: {"code":"SPARSE_UNSUPPORTED","message":"mini runner has no sparse arm"}
+configuration                         P@5      MRR     R@10        p50        p95  errs
+dense-only                          0.536    0.693    0.707       29ms       38ms     0
+hybrid (dense+bm25)                 0.464    0.580    0.567       32ms       58ms     0
+hybrid+rerank                       0.480    0.523    0.587      706ms      829ms     0
+hybrid+rerank+sparse                0.480    0.523    0.587      682ms      834ms     0
+hybrid+rerank+sparse+graph          0.496    0.575    0.647      880ms      1.04s     0

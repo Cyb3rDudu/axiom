@@ -1,0 +1,161 @@
+{
+ "0": {
+  "raw": [
+   "tp_XX<triplet> Lieferanten <concept> Einkauf <concept> part of</s><pad><pad><pad><pad>",
+   "tp_XX<triplet> Verantwortung in allen Köpfen <concept> Verantwortung <concept> subclass of</s>",
+   "tp_XX<triplet> Verantwortung in allen Köpfen <concept> Verantwortung <concept> instance of</s><pad>"
+  ],
+  "triples": [
+   {
+    "head": "Lieferanten",
+    "head_type": "CONCEPT",
+    "tail": "Einkauf",
+    "tail_type": "CONCEPT",
+    "relation": "part of"
+   },
+   {
+    "head": "Verantwortung in allen Köpfen",
+    "head_type": "CONCEPT",
+    "tail": "Verantwortung",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Verantwortung in allen Köpfen",
+    "head_type": "CONCEPT",
+    "tail": "Verantwortung",
+    "tail_type": "CONCEPT",
+    "relation": "instance of"
+   }
+  ]
+ },
+ "1": {
+  "raw": [
+   "tp_XX<triplet> nachhaltig gemeinsamer Wertschöpfung <concept> Global Reporting Initiative <media> part of</s><pad><pad><pad>",
+   "tp_XX<triplet> nachhaltig gemeinsamer Wertschöpfung <concept> Global Reporting Initiative <media> facet of</s><pad><pad>",
+   "tp_XX<triplet> 5 Nutzen von nachhaltig gemeinsamer Wertschöpfung <concept> Global Reporting Initiative <media> part of</s>"
+  ],
+  "triples": [
+   {
+    "head": "nachhaltig gemeinsamer Wertschöpfung",
+    "head_type": "CONCEPT",
+    "tail": "Global Reporting Initiative",
+    "tail_type": "WORK",
+    "relation": "part of"
+   },
+   {
+    "head": "nachhaltig gemeinsamer Wertschöpfung",
+    "head_type": "CONCEPT",
+    "tail": "Global Reporting Initiative",
+    "tail_type": "WORK",
+    "relation": "facet of"
+   },
+   {
+    "head": "5 Nutzen von nachhaltig gemeinsamer Wertschöpfung",
+    "head_type": "CONCEPT",
+    "tail": "Global Reporting Initiative",
+    "tail_type": "WORK",
+    "relation": "part of"
+   }
+  ]
+ },
+ "2": {
+  "raw": [
+   "tp_XX<triplet> Hague Protocol, 1955 <media> 1955 <date> point in time</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Hague Protocol, 1955 <media> 1955 <date> point in time <triplet> Hague Protocol, 1963 <media> 1963 <date> point in time</s>",
+   "tp_XX</s><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad><pad>"
+  ],
+  "triples": [
+   {
+    "head": "Hague Protocol, 1955",
+    "head_type": "WORK",
+    "tail": "1955",
+    "tail_type": "CONCEPT",
+    "relation": "point in time"
+   },
+   {
+    "head": "Hague Protocol, 1963",
+    "head_type": "WORK",
+    "tail": "1963",
+    "tail_type": "CONCEPT",
+    "relation": "point in time"
+   }
+  ]
+ },
+ "3": {
+  "raw": [
+   "tp_XX<triplet> Nachhaltigkeit 'inside-out' <concept> Nachhaltigkeit <concept> subclass of</s><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Nachhaltigkeit <concept> Wertschöpfungskette <concept> subclass of</s><pad><pad><pad><pad><pad><pad><pad>",
+   "tp_XX<triplet> Nachhaltigkeit 'inside-out' <concept> Nachhaltigkeit 'inside-out' <concept> subclass of</s>"
+  ],
+  "triples": [
+   {
+    "head": "Nachhaltigkeit 'inside-out'",
+    "head_type": "CONCEPT",
+    "tail": "Nachhaltigkeit",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Nachhaltigkeit",
+    "head_type": "CONCEPT",
+    "tail": "Wertschöpfungskette",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Nachhaltigkeit 'inside-out'",
+    "head_type": "CONCEPT",
+    "tail": "Nachhaltigkeit 'inside-out'",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ "4": {
+  "raw": [
+   "tp_XX<triplet> Nachhaltigkeit <concept> CSR <concept> part of</s><pad><pad><pad>",
+   "tp_XX<triplet> Nachhaltigkeit <concept> CSR <concept> subclass of</s><pad><pad>",
+   "tp_XX<triplet> Nachhaltigkeitsbericht <concept> CSR <concept> subclass of</s>"
+  ],
+  "triples": [
+   {
+    "head": "Nachhaltigkeit",
+    "head_type": "CONCEPT",
+    "tail": "CSR",
+    "tail_type": "CONCEPT",
+    "relation": "part of"
+   },
+   {
+    "head": "Nachhaltigkeit",
+    "head_type": "CONCEPT",
+    "tail": "CSR",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   },
+   {
+    "head": "Nachhaltigkeitsbericht",
+    "head_type": "CONCEPT",
+    "tail": "CSR",
+    "tail_type": "CONCEPT",
+    "relation": "subclass of"
+   }
+  ]
+ },
+ "5": {
+  "raw": [
+   "tp_XX<triplet> Weleda-Heilpfanzengarten <loc> Schwäbisch Gmünd <loc> located in the administrative territorial entity</s><pad><pad>",
+   "tp_XX<relation>### **Gemeinsam Gärtnern** <unk> Schwäbisch Gmünd <loc> located in the administrative territorial entity</s>",
+   "tp_XX<relation>### **Gemeinsam Gärtnern <unk> Schwäbisch Gmünd <loc> located in the administrative territorial entity</s><pad>"
+  ],
+  "triples": [
+   {
+    "head": "Weleda-Heilpfanzengarten",
+    "head_type": "LOCATION",
+    "tail": "Schwäbisch Gmünd",
+    "tail_type": "LOCATION",
+    "relation": "located in the administrative territorial entity"
+   }
+  ]
+ }
+}

@@ -1,0 +1,18 @@
+# Study image for Restpunkt 6: mREBEL decoder export + Go decoding loop.
+# Extends the proven CUDA study image and adds `onnx` (+ `optimum` for the CLI path
+# if needed) so torch.onnx.export can trace the BART decoder. GPU from the base.
+#
+# Build (context = repo root, like Containerfile.study; MUST be run where the
+# runner-poc base + study-axiom-cuda images already exist):
+#   podman build -t localhost/study-mrebel -f axiom_ng/cmd/feasibility/Containerfile.mrebel .
+FROM localhost/study-axiom-cuda:latest
+
+# onnx + onnxscript for torch.onnx (torch>=2.13 dynamo exporter needs onnxscript);
+# optimum purely as optional convenience.
+RUN pip install --no-cache-dir onnx onnxscript optimum 2>&1 | tail -2
+
+# Re-copy feasibility tooling (incl. the new mrebel_export/ + mrebelgo/ when present).
+COPY axiom_ng/cmd/ /study/cmd/
+COPY axiom_ng/docs/research/ /study/docs/research/
+
+WORKDIR /study
