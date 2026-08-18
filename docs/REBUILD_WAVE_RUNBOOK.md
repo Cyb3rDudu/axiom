@@ -74,9 +74,11 @@ Notes:
   Either stop the old container first (§3.3 cutover) or move w9-gpu1 to
   19545 until cutover — the dispatcher only switches at firing time anyway.
 - `DEVICE_GLINER=cuda` is load-bearing (CPU GLiNER ≈ 1 h/book, measured).
-- No Zotero mounts: production runners fetch sources from axiom-ng
-  (`ALLOWED_SOURCE_ROOTS=/data` is the download root — same pattern the
-  running GPU1 container proves).
+- No Zotero mounts: production runners PULL sources from axiom-ng via the
+  job's `source_url` (dispatcher-built from `AXIOM_PROCESSOR_SOURCE_BASE_URL`);
+  downloads land in `work_root/.incoming` (`app.py`). `ALLOWED_SOURCE_ROOTS`
+  only gates local-path delivery (reference mode) — same pattern the running
+  GPU1 container proves.
 - PID-file convention: containers are named, `podman ps` is the registry;
   Mac-side dispatcher processes keep `/tmp/axiom_runs/*.pid` per convention.
 
@@ -159,6 +161,13 @@ AXIOM_DISPATCHER_WORKER_ID=axiom-ng-w9-<n>
 AXIOM_DISPATCHER_CONCURRENCY=1                    # per-GPU serial, TC2 shape
 AXIOM_DISPATCHER_LEASE=5m                         # default, proven
 AXIOM_DISPATCHER_PROFILE=full-rag-v1              # see profile note below
+# Source-pull path (review W1 — without these the runner gets Mac local_paths,
+# rejects them (not under /data) and every job dies 422 SOURCE_NOT_FOUND):
+AXIOM_PROCESSOR_SOURCE_BASE_URL=http://192.168.1.47:8011   # live production value
+AXIOM_PROCESSOR_SOURCE_SECRET=<from the running axiom-ng env — never in docs>
+# Standalone dispatcher processes also need (no defaults):
+AXIOM_DATABASE_URL=<Mac Postgres DSN>
+AXIOM_ARTIFACT_ROOT=<artifact dir — full-rag-v1 extracts images; validation fails without it>
 ```
 
 Profile note (Flutgate lesson, MASS_CHUNKING_BENCHMARK §Profile Finding):

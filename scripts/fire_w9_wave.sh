@@ -1,65 +1,89 @@
 #!/usr/bin/env bash
 # W9 WAVE FIRING — single-command cold execution (runbook §2.1a→§3.1→§2.3).
-# AUTHORIZATION: #188 wave authority via hivemind-68752, conditions =
-# both W7 heals terminal (69865 report) + checklist green. This script
-# ENFORCES those conditions — it aborts on any failed checkpoint.
-# Every mutating step echoes [MUTATES] before running.
+# AUTHORIZATION: #188 wave authority via hivemind-68752, gated on:
+# both W7 heals terminal + checklist green + Hivemind re-check of THIS
+# script. Enforces its own conditions — aborts on any failed checkpoint.
+# Abort-state guarantee: before the enqueue, every abort leaves the system
+# untouched (at worst: old runner stopped + new runners up + no dispatchers
+# = inert; runners are passive HTTP servers, nothing drains).
 set -euo pipefail
 
-CARRIER="dudu@192.168.1.2"
-DSN_DB="axiom_db"
-RUNBOOK_SHA_TARGET="78558d5"   # merge train minimum
+SSH="ssh -o BatchMode=yes -o ConnectTimeout=8"
+CARRIER="dudu@192.168.1.2"     # ssh target
+CARRIER_HOST="192.168.1.2"     # URL host (never user@ in URLs — review W2)
+TRAIN_SHA="78558d5"            # merge-train minimum (ancestry-checked)
 LOG(){ printf '\n=== %s ===\n' "$*"; }
-DIE(){ echo "ABORT: $*" >&2; exit 1; }
+DIE(){ echo "ABORT: $*" >&2
+  echo "Abort state: pre-enqueue = untouched or inert (old runner may be stopped," >&2
+  echo "new runners up, no dispatchers, queue unchanged). Resume via runbook §1.3/§3.1." >&2
+  exit 1; }
+DB(){ podman exec axiom-postgres psql -U axiom_user -d axiom_db -tAq -v ON_ERROR_STOP=1 -c "$1"; }
 
-DB(){ podman exec axiom-postgres psql -U axiom_user -d "$DSN_DB" -tAc "$1"; }
+# ── 4.0/§2.1a: W7 terminal + projection sync (idempotent)
+LOG "4.0 W7 terminal + projection sync"
+OPEN=$(DB "SELECT count(*) FROM repair_cases WHERE status IN ('queued','in_repair','rejected')")
+[ "$OPEN" = "0" ] || DIE "4.5 W7 not terminal ($OPEN open cases incl. rejected) — NO FIRE"
+DB "SELECT status||'='||count(*) FROM repair_cases GROUP BY status ORDER BY 1"
+echo "[MUTATES] POST /api/zotero/sync (idempotent projection; -f: HTTP 500 aborts)"
+SYNC_JSON=$(curl -sf --max-time 300 -X POST http://127.0.0.1:8011/api/zotero/sync) \
+  || DIE "4.0 projection sync FAILED — old attachments would be enqueued instead of healed bytes"
+echo "sync: $SYNC_JSON" | head -c 300; echo
 
-# ── 4.0/§2.1a projection sync (idempotent; heals may have projected already)
-LOG "4.0 projection sync"
-HEALED=$(DB "SELECT count(*) FROM repair_cases WHERE status='healed'")
-BLOCKED=$(DB "SELECT count(*) FROM repair_cases WHERE status='blocked_for_dudu'")
-OPEN=$(DB "SELECT count(*) FROM repair_cases WHERE status IN ('queued','in_repair')")
-[ "$OPEN" = "0" ] || DIE "4.5 W7 not terminal ($OPEN open cases) — NO FIRE"
-echo "repair_cases: healed=$HEALED blocked=$BLOCKED open=$OPEN"
-echo "[MUTATES] POST /api/zotero/sync (projection; idempotent if current)"
-SYNC_JSON=$(curl -s --max-time 300 -X POST http://127.0.0.1:8011/api/zotero/sync)
-echo "sync: $SYNC_JSON"
+# ── 4.1 carrier clone: REAL ancestry check (SHAs do not order lexicographically)
+LOG "4.1 carrier clone ancestry >= $TRAIN_SHA"
+$SSH "$CARRIER" "git -C ~/Code/axiom merge-base --is-ancestor $TRAIN_SHA HEAD" \
+  || DIE "4.1 carrier clone lacks the merge train ($TRAIN_SHA not an ancestor)"
 
-# ── 4.1–4.13 checkpoints
-LOG "4.1 carrier clone SHA"
-SHA=$(ssh -o ConnectTimeout=8 "$CARRIER" 'git -C ~/Code/axiom rev-parse --short HEAD')
-echo "carrier at $SHA (target >= $RUNBOOK_SHA_TARGET)"
-
-LOG "4.2/4.3 runner health + symbol proof (w9-gpu0 dry-run evidence; others at cutover)"
-for p in 19542; do
-  curl -s --max-time 10 "http://$CARRIER:$p/v1/health" | grep -q '"ok"' || DIE "4.3 :$p unhealthy"
-done
-
+# ── 4.4 queue: nothing PROCESSING (old-code drain); pendings = known heal set
 LOG "4.4 queue state"
-Q=$(DB "SELECT count(*) FROM ingest_jobs WHERE status='processing'")
-[ "$Q" = "0" ] || DIE "4.4 $Q jobs PROCESSING (old-code drain!) — stop dispatcher first"
+PROC=$(DB "SELECT count(*) FROM ingest_jobs WHERE status='processing'")
+[ "$PROC" = "0" ] || DIE "4.4 $PROC jobs PROCESSING (old-code dispatcher drain!) — stop it first"
 PEND=$(DB "SELECT count(*) FROM ingest_jobs WHERE status='pending'")
-echo "pending=$PEND (heal-projections ride the wave)"
+HEALNEW=$(DB "SELECT count(*) FROM ingest_jobs j JOIN zotero_attachments a ON a.id=j.attachment_id
+              WHERE j.status='pending' AND j.content_hash = a.content_hash AND NOT j.force_rebuild")
+echo "pending=$PEND (of which current-hash heal-projections: $HEALNEW)"
+[ "$PEND" = "$HEALNEW" ] || DIE "4.4 $PEND pending but only $HEALNEW are heal-projections — unexpected queue content, eyeball first"
 
-LOG "4.7 OpenSearch health"
-curl -s --max-time 10 localhost:9200/_cluster/health | grep -q '"status":"green"' \
-  || DIE "4.7 OS not green"
+# ── 4.7 OS health (bounded)
+curl -sf --max-time 10 localhost:9200/_cluster/health | grep -q '"status":"green"' \
+  || DIE "4.7 OpenSearch not green"
 
+# ── 4.9/4.10 disk thresholds
 LOG "4.9/4.10 disk"
 DF_MAC=$(df -k / | awk 'NR==2{print int($4/1024/1024)}')
-echo "Mac free GB: $DF_MAC"
+[ "$DF_MAC" -ge 50 ] || DIE "4.9 Mac free ${DF_MAC}G < 50G (new generation transiently doubles chunk tables)"
+DF_CARRIER=$($SSH "$CARRIER" "df -k / | awk 'NR==2{print int(\$4/1024/1024)}'") \
+  || DIE "4.10 carrier df failed"
+[ "$DF_CARRIER" -ge 100 ] || DIE "4.10 carrier free ${DF_CARRIER}G < 100G"
+echo "Mac ${DF_MAC}G / carrier ${DF_CARRIER}G free"
 
-LOG "4.12 dry SELECT — expected book list"
-COUNT=$(DB "SELECT count(*) FROM zotero_attachments a WHERE NOT a.deleted
-  AND EXISTS (SELECT 1 FROM processing_snapshots s WHERE s.attachment_id=a.id AND s.active)")
-echo "active books: $COUNT (surveyed 121 at runbook time; heals shift it)"
+# ── 4.12 dry SELECT with the BOOK LIST (eyeball before enqueue — runbook §2.3)
+LOG "4.12 expected book list (eyeball: every healed book under its NEW key)"
+DB "SELECT left(d.title,60), a.zotero_key, a.content_hash
+    FROM zotero_attachments a JOIN zotero_documents d ON d.id=a.document_id
+    WHERE NOT a.deleted
+      AND EXISTS (SELECT 1 FROM processing_snapshots s WHERE s.attachment_id=a.id AND s.active)
+    ORDER BY d.title" | tee /tmp/w9_wave_books.txt
+COUNT=$(wc -l < /tmp/w9_wave_books.txt | tr -d ' ')
 [ "$COUNT" -ge 100 ] || DIE "4.12 suspiciously few active books ($COUNT)"
+echo "active books: $COUNT (list in /tmp/w9_wave_books.txt — VERIFY healed books present)"
+
+# ── 4.2/4.3 symbol proof on the UP gpu0 BEFORE any mutation (review W4:
+#    full assert set incl. page_trust + runner, and before cutover)
+LOG "4.2 pre-cutover symbol proof (w9-gpu0)"
+$SSH "$CARRIER" "podman exec runner-carrier-w9-gpu0 python -c \"
+import inspect, axiom_ng_runner.compute_core.chunker as c
+import axiom_ng_runner.compute_core.page_trust as pt, axiom_ng_runner.runner as r
+s=inspect.getsource
+assert 'current_chunk_headings' in s(c) and 'page_chapter_map' in s(c)
+assert 'page_chapter_map' in s(pt) and '_stamp_chapter' in s(r)
+print('gpu0 PROOF OK')\"" || DIE "4.2 gpu0 symbol proof failed"
 
 # ── §3.1 cutover
 LOG "cutover: stop old GPU1 runner [MUTATES]"
-ssh -o ConnectTimeout=8 "$CARRIER" 'podman stop runner-carrier-gpu1'
+$SSH "$CARRIER" 'podman stop runner-carrier-gpu1' || DIE "cutover: cannot stop old runner"
 LOG "cutover: start w9-gpu1 + w9-a3000 [MUTATES]"
-ssh -o ConnectTimeout=8 "$CARRIER" 'set -e
+$SSH "$CARRIER" 'set -e
 for spec in "1 19543 w9-gpu1" "2 19544 w9-a3000"; do
   set -- $spec
   podman run -d --name runner-carrier-$3 \
@@ -73,47 +97,48 @@ for spec in "1 19543 w9-gpu1" "2 19544 w9-a3000"; do
   podman inspect runner-carrier-$3 --format "{{.State.Pid}}" > /tmp/axiom_runs/$3.pid
 done
 for p in 19542 19543 19544; do
-  for i in 1 2 3 4 5; do curl -s --max-time 5 http://127.0.0.1:$p/v1/health | grep -q ok && break || sleep 3; done
-  curl -s --max-time 5 http://127.0.0.1:$p/v1/health | grep -q ok || { echo "runner :$p not healthy"; exit 1; }
+  ok=0; for i in 1 2 3 4 5 6 7 8 9 10; do
+    curl -s --max-time 5 http://127.0.0.1:$p/v1/health | grep -q ok && ok=1 && break || sleep 3
+  done
+  [ $ok = 1 ] || { echo "runner :$p not healthy"; exit 1; }
 done
 echo "3 runners healthy"'
-LOG "symbol proof on all three"
-for n in w9-gpu0 w9-gpu1 w9-a3000; do
-  ssh -o ConnectTimeout=8 "$CARRIER" "podman exec runner-carrier-$n python -c \"
+LOG "cutover: symbol proof gpu1 + a3000"
+for n in w9-gpu1 w9-a3000; do
+  $SSH "$CARRIER" "podman exec runner-carrier-$n python -c \"
 import inspect, axiom_ng_runner.compute_core.chunker as c
 assert 'current_chunk_headings' in inspect.getsource(c) and 'page_chapter_map' in inspect.getsource(c)
-print('$n PROOF OK')\"" || DIE "4.2 $n symbol proof failed"
+print('$n PROOF OK')\"" || DIE "4.2 $n symbol proof failed (post-cutover abort: see state note)"
 done
 
-# ── dispatchers (Mac): TODO slot — 3 dispatcher processes per §2.2 env set;
-# staged interactively at fire time against the live Mac service layout.
-LOG "DISPATCHER TOPOLOGY — MANUAL STEP, see runbook §2.2"
-echo "Start 3 dispatchers (TC2 shape) with AXIOM_PROCESSOR_RUNNER_NAME"
-echo "w9-gpu0/w9-gpu1/w9-a3000 -> 19542/19543/19544, WORKER_ID distinct,"
-echo "CONCURRENCY=1, then continue with the enqueue below."
+# ── dispatchers: MANUAL step with the FULL env set (review W1) + operator gate
+LOG "DISPATCHERS — manual step, full env per runbook §2.2 (incl. SOURCE_BASE_URL,"
+echo "SOURCE_SECRET, DATABASE_URL, ARTIFACT_ROOT, PROFILE=full-rag-v1 — the Flutgate"
+echo "empty-profile trap). Start 3 (runner w9-gpu0/w9-gpu1/w9-a3000 -> 19542/43/44)."
+read -r -p "Confirm: 3 dispatcher processes running with the reviewed env (y/N) " ANS
+[ "$ANS" = "y" ] || DIE "dispatchers not confirmed — nothing enqueued (safe abort)"
 
-LOG "4.13 confirm dispatchers claiming (waiting for first claims)"
-echo "watch: DB 'SELECT runner_name, count(*) FROM ingest_jobs WHERE status=\"processing\" GROUP BY 1'"
-
-# ── §2.3 enqueue [MUTATES] — transactional, count-asserted
+# ── §2.3 enqueue [MUTATES]: atomic insert, count asserted in a SECOND call
 LOG "fire: force_rebuild enqueue [MUTATES]"
-EXPECTED="$COUNT"
-INSERTED=$(podman exec axiom-postgres psql -U axiom_user -d "$DSN_DB" -v ON_ERROR_STOP=1 -tAc "
-BEGIN;
-INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-SELECT a.source_id, a.document_id, a.id, a.content_hash, 'pending', true
-FROM zotero_attachments a
-WHERE NOT a.deleted
-  AND EXISTS (SELECT 1 FROM processing_snapshots s WHERE s.attachment_id=a.id AND s.active);
-SELECT count(*) FROM ingest_jobs WHERE force_rebuild AND status='pending';
-COMMIT;")
-echo "enqueued=$INSERTED expected~$EXPECTED"
-[ "$INSERTED" -ge "$EXPECTED" ] || DIE "enqueue count mismatch ($INSERTED < $EXPECTED)"
+DB "INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
+    SELECT a.source_id, a.document_id, a.id, a.content_hash, 'pending', true
+    FROM zotero_attachments a
+    WHERE NOT a.deleted
+      AND EXISTS (SELECT 1 FROM processing_snapshots s WHERE s.attachment_id=a.id AND s.active)" \
+  || DIE "enqueue INSERT failed — transaction rolled back atomically, nothing fired"
+INSERTED=$(DB "SELECT count(*) FROM ingest_jobs WHERE force_rebuild AND status='pending'")
+echo "force jobs pending: $INSERTED (expected >= $COUNT from the eyeballed list)"
+case "$INSERTED" in (*[!0-9]*|"") DIE "enqueue count capture corrupted: '$INSERTED'";; esac
+[ "$INSERTED" -ge "$COUNT" ] || DIE "enqueue count mismatch ($INSERTED < $COUNT) — jobs ARE live; check state before any re-run (a re-run would double-enqueue: force rows bypass the idempotency index)"
 
 # ── initial telemetry
-LOG "INITIAL TELEMETRY"
+LOG "INITIAL TELEMETRY (30s in)"
 sleep 30
-DB "SELECT status, coalesce(runner_name,'—') AS card, count(*) FROM ingest_jobs
-    WHERE force_rebuild OR status='pending' GROUP BY 1,2 ORDER BY 1;"
-ssh -o ConnectTimeout=8 "$CARRIER" 'nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader'
-echo "WAVE FIRED — monitor per runbook §2.6"
+DB "SELECT status, coalesce(runner_name,'—') AS card, count(*)
+    FROM ingest_jobs WHERE force_rebuild OR status='pending' GROUP BY 1,2 ORDER BY 1,2"
+DB "SELECT count(*) AS first_claims FROM ingest_jobs
+    WHERE status IN ('claimed','processing') AND runner_name IS NOT NULL"
+$SSH "$CARRIER" 'nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader'
+echo "WAVE FIRED — monitor per runbook §2.6; watch query:"
+echo "  SELECT status, coalesce(runner_name,'—'), count(*) FROM ingest_jobs"
+echo "  WHERE force_rebuild OR status='pending' GROUP BY 1,2;"   # single quotes = SQL literal (review W3)
