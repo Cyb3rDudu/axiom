@@ -67,11 +67,6 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 	if err := r.applyCanonicalDeleteEvents(ctx, tx, sourceID, batch.DeleteEvents); err != nil {
 		return res, err
 	}
-	// 3b. Deleted attachments must stop serving: retire their active
-	// snapshots (+ OS tombstones) in the same sync transaction.
-	if err := reconcileAttachmentSnapshotsTx(ctx, tx); err != nil {
-		return res, fmt.Errorf("reconcile attachment snapshots: %w", err)
-	}
 
 	// 4. Collections. ListCanonicalCollections always returns a complete
 	// snapshot, so missing collections are reconciled (marked deleted) on every
@@ -99,6 +94,17 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 	}
 	res.Flags = proj.flags
 	res.DocumentProjections = len(proj.flags)
+
+	// 6b. Deleted attachments must stop serving: retire their active
+	// snapshots (+ OS tombstones) in the same sync transaction. This runs
+	// AFTER the projections — THEY write zotero_attachments.deleted, and a
+	// retire placed earlier sees only the PREVIOUS sync's flag (the Mullins
+	// zombie: the one sync that projected the fix-service deletion retired
+	// nothing; every earlier heal survived only because follow-up syncs
+	// ran). Same-tx same-sync is the contract the Durchpfad IT pins.
+	if err := reconcileAttachmentSnapshotsTx(ctx, tx); err != nil {
+		return res, fmt.Errorf("reconcile attachment snapshots: %w", err)
+	}
 
 	// 7. Pending + failed jobs in the same transaction, gated by the
 	// selection (#166): excluded documents get no jobs; everything else

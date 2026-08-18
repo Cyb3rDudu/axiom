@@ -20,7 +20,6 @@ Verdachtsklassen:
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import os
 import re
@@ -33,73 +32,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 # plan checker check_plan_against_folio is importable and testable without a
 # PDF stack (tests/test_pdf_analyze_verify.py).
 
+from axiom_ng_runner.compute_core.pdf_health import (
+    analyze_pdf,
+)
+
 DSN = os.environ.get(
     "AXIOM_DATABASE_URL",
     "postgresql://axiom_user:axiom_password@127.0.0.1:5432/axiom_db?sslmode=disable",
 )
 
-
-def analyze_pdf(pdf_path: str) -> dict:
-    import pymupdf  # type: ignore[import-not-found]
-    from axiom_ng_runner.compute_core import page_trust as pt
-    from axiom_ng_runner.compute_core.pdf_processing import extract_page_labels
-
-    doc = pymupdf.open(pdf_path)
-    try:
-        n = doc.page_count
-        labels = extract_page_labels(pdf_path)
-        tier1 = sum(1 for i in range(n) if (doc[i].get_label() or "").strip())
-        if tier1 < n * 0.5 or (n > 0 and tier1 * 2 == n):
-            label_verdict, label_reason = "kein Tier-1 (nur Footer/physisch)", "tier-2/3-fallback"
-        else:
-            trust, label_reason = pt.assess_labels(labels, n)
-            label_verdict = {
-                pt.PDF_LABEL_SANE: "gesund (unique, monoton, deckend)",
-                pt.PHYSICAL_ONLY: f"KAPUTT: {label_reason}",
-            }[trust]
-        cands = pt.extract_folio_candidates(doc)
-        runs = pt.folio_runs(cands)
-        verified = pt.verify_folio_sequence(cands)
-
-        # Versatz: an folio-bewiesenen Seiten mit numeric Label vergleichen
-        offs: list[int] = []
-        for page, folio in verified.items():
-            m = re.search(r"(\d{1,4})", labels.get(page, ""))
-            if m:
-                offs.append(int(folio) - int(m.group(1)))
-        offset = max(set(offs), key=offs.count) if offs else None
-        offset_consistent = offs and len([o for o in offs if o == offset]) >= len(offs) * 0.8
-
-        labels_broken = label_verdict.startswith(("KAPUTT", "kein Tier-1"))
-        folio_found = len(verified) >= 3
-        if labels_broken and folio_found:
-            suspicion = "🔴 reparierbar"
-        elif labels_broken:
-            suspicion = "🔴 unpaginiert"
-        elif offset_consistent and offset not in (0, None):
-            suspicion = "🟡 Versatz-Verdacht"
-        elif offs and not offset_consistent:
-            suspicion = "🟡 unklar (Label↔Folio uneinheitlich)"
-        else:
-            suspicion = "🟢 gesund"
-
-        gaps = [b[0][0] - a[0][-1] - 1 for a, b in itertools.pairwise(runs)]
-        return {
-            "pages": n,
-            "label_befund": label_verdict,
-            "label_reason": label_reason,
-            "tier1_anteil": round(tier1 / n, 2) if n else 0,
-            "folio_laeufe": [
-                {"start": r[0][0] + 1, "laenge": len(r[0]), "folio_von": r[1][0], "folio_bis": r[1][-1]}
-                for r in runs
-            ],
-            "folio_verifiziert": len(verified),
-            "luecken_zwischen_laeufen": gaps,
-            "versatz": offset if offset_consistent else None,
-            "verdacht": suspicion,
-        }
-    finally:
-        doc.close()
 
 
 def check_plan_against_folio(plan: dict[str, str], verified: dict[int, str]) -> dict:
