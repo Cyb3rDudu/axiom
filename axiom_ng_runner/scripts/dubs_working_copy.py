@@ -19,11 +19,19 @@ def norm(s):
     return re.sub(r"\s+", " ", s).strip()
 
 # --- total stream with word positions -> (chunk_idx, word) ---
+# v3.1: strip legacy image refs (markdown forms and bare filenames);
+# images live in the archival scan, the working copy is citation text
+IMG_PAT = re.compile(r"_page_\d+_[^\s]*\.(?:jpe?g|png|gif)|!\[[^\]]*\]\([^)]*\)|^!?\[?\]?$")
+stripped = 0
 stream_words = []  # (ci, word)
 for c in CHUNKS:
     for w in re.findall(r"\S+", norm(c["t"])):
+        if IMG_PAT.search(w):
+            stripped += 1
+            continue
         stream_words.append((c["i"], w))
 total_words = len(stream_words)
+print(f"image-refs entfernt: {stripped}")
 
 # expected word-share per print page from chunk spread-ranges
 # spread s (1-based) -> print pages 2s+56, 2s+57
@@ -146,26 +154,16 @@ out.close()
 # --- verification ---
 built = pymupdf.open("/tmp/dubs_working_copy.pdf")
 stream_norm = norm(" ".join(w for _, w in stream_words))
+def strip_norm(t):
+    return norm(" ".join(w for w in re.findall(r"\S+", norm(t)) if not IMG_PAT.search(w)))
 missing = []
 for c in CHUNKS:
-    t = norm(c["t"])
+    t = strip_norm(c["t"])
     if t and t not in stream_norm:
         missing.append(c["i"])
-cover = len([c for c in CHUNKS if norm(c["t"]) in stream_norm])
+cover = len([c for c in CHUNKS if not strip_norm(c["t"]) or strip_norm(c["t"]) in stream_norm])
 print(f"pages: {len(built)} (soll {N_PAGES}) | labels: {built[0].get_label()}..{built[-1].get_label()}")
 print(f"chunk-coverage: {cover}/{len(CHUNKS)} | fehlend: {missing}")
 print(f"ankerseite 94 endet: …{' '.join(pages_text[94].split()[-6:])}")
 print(f"ankerseite 95 endet: …{' '.join(pages_text[95].split()[-6:])}")
 print(f"gesamt-zeichen strom: {len(stream_norm)} (quelle: {sum(len(norm(c['t'])) for c in CHUNKS)})")
-
-# ---------------------------------------------------------------------------
-# Construction record (v3, owner pivot away from OCR):
-# - input : 57 legacy chunks (active snapshot, processing_chunks) with
-#           spread pair-ranges + section titles; last-word anchors per
-#           print page harvested from the quarantined scan's bottom bands
-#           (tesseract deu, lower 22% of each v2-gutter leaf crop)
-# - split : global monotone anchor assignment (phrase 3->2->1, fuzzy word
-#           match incl. hyphenation), linear interpolation for anchor-less
-#           pages, monotonicity enforced
-# - verify: 57/57 chunk coverage, anchors 94/95 end exactly on their
-#           scan last-words, labels print 58..135 by construction
