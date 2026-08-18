@@ -138,8 +138,10 @@ func (r *Repo) KGRelations(ctx context.Context, relType, entityID, documentID st
 		limit = 50
 	}
 	// ponytail: cor is a group-by over all active relations (~75k rows at
-	// current corpus, single-digit ms). Materialize as a table if the graph
-	// grows two orders of magnitude.
+	// current corpus; the CTE itself is cheap, but the full ranked browse
+	// measured ~1.5s on the live graph with parallelism off — plan for the
+	// WHOLE query, not just the CTE). Materialize as a table if the graph
+	// grows or the endpoint becomes latency-sensitive.
 	rows, err := r.pool.Query(ctx, activeEntityCounts+`,
 	cor AS (
 		SELECT r.type, coalesce(se.canonical_form, se.text) AS sf,

@@ -108,6 +108,26 @@ func kgSeedRelation(t *testing.T, lr *leaseRepo, snapID, srcID, tgtID, relType s
 	return relID
 }
 
+func kgSeedInactiveSnapshot(t *testing.T, lr *leaseRepo, attKey, docID string) string {
+	t.Helper()
+	ctx := context.Background()
+	var attID, snapID string
+	if err := lr.pool.QueryRow(ctx,
+		`SELECT id FROM zotero_attachments WHERE zotero_key = $1`, attKey).Scan(&attID); err != nil {
+		t.Fatalf("lookup attachment %s: %v", attKey, err)
+	}
+	// Same (attachment, hash, processor, version, profile) identity would
+	// collide with the active snapshot — bump the processor version.
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name,
+			processor_version, profile_hash, document_id, profile, active)
+		VALUES ($1::uuid, 'superseded', 'test', '2', 'p1', $2::uuid, '{}', false)
+		RETURNING id::text`, attID, docID).Scan(&snapID); err != nil {
+		t.Fatalf("seed inactive snapshot: %v", err)
+	}
+	return snapID
+}
+
 func TestIT_KGRelationsCorroborationRankingAndScope(t *testing.T) {
 	lr := openLeaseDB(t)
 	lr.truncateFixtures(t)
@@ -133,6 +153,15 @@ func TestIT_KGRelationsCorroborationRankingAndScope(t *testing.T) {
 	entNaB, chNaB := kgSeedEntity(t, lr, snapB, "nachhaltigkeit", 2)
 	entCsrB, _ := kgSeedEntity(t, lr, snapB, "csr", 2)
 	kgSeedRelation(t, lr, snapB, entNaB, entCsrB, "facet_of", chNaB)
+
+	// Inactive-snapshot evidence: a SUPERSEDED snapshot of doc A carries a
+	// chunk that an active doc-A relation cites as evidence. The scope must
+	// NOT count evidence from inactive snapshots (mutation c in review:
+	// dropping esn.active stayed green before this fixture).
+	snapA2Inactive := kgSeedInactiveSnapshot(t, lr, "KGATT_A", docA)
+	_, chGri := kgSeedEntity(t, lr, snapA2Inactive, "gri", 2)
+	entStdA, _ := kgSeedEntity(t, lr, snapA, "reporting_standard", 2)
+	kgSeedRelation(t, lr, snapA, entStdA, entStdA, "same_as", chGri[:1])
 
 	// 1. Ranking: corroborated triple FIRST despite lower endpoint
 	// popularity (weleda 8 + nachhaltigkeit 2 > nachhaltigkeit 2 + csr 2 —
@@ -176,5 +205,13 @@ func TestIT_KGRelationsCorroborationRankingAndScope(t *testing.T) {
 	typed, err := lr.rep.KGRelations(ctx, "owned_by", entNaA, "", 2, 50)
 	if err != nil || len(typed) != 1 || typed[0].SourceForm != "weleda" {
 		t.Fatalf("type filter broken: %d err=%v", len(typed), err)
+	}
+
+	// 5. Evidence resolving only into an INACTIVE snapshot of the scoped
+	// document does not satisfy the scope (len(scopedA) stays 2 — the
+	// reporting_standard relation would leak in as a third without the
+	// esn.active check).
+	if len(scopedA) != 2 { // re-assert after the extra fixture rows
+		t.Fatalf("inactive-snapshot evidence leaked into the doc-A scope: %d", len(scopedA))
 	}
 }
