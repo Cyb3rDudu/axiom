@@ -368,7 +368,13 @@ def run_case(case: dict) -> None:
         )
         return
 
-    # sync → rechunk → proof
+    # sync → rechunk → proof. AXIOM_FIXSVC_NO_SYNC=1 skips sync AND the
+    # rechunk wait (W7 wave mode: sources become truth first, generation
+    # runs in the dedicated wave with the fixed chunker — jobs enqueue
+    # there, never here).
+    if os.environ.get("AXIOM_FIXSVC_NO_SYNC"):
+        log(buch, "SYNC", "übersprungen (AXIOM_FIXSVC_NO_SYNC — Welle heilt nur Quellen)")
+        return
     n_jobs = (
         requests.post(f"{RAG}/api/zotero/sync", timeout=300).json().get("enqueued_jobs")
     )
