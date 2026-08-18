@@ -5,6 +5,7 @@ turns a judge plan into healed bytes; these tests run WITHOUT pymupdf,
 requests or compute_core (service.py keeps those imports function-local).
 Run: python3 service_test.py  (or pytest service_test.py)
 """
+
 from __future__ import annotations
 
 import sys
@@ -16,10 +17,12 @@ import service  # path shim above
 
 
 def test_validate_plan_rejects_overlap() -> None:
-    plan = {"sections": [
-        {"from_page": 11, "to_page": 67, "start_label": 2},
-        {"from_page": 60, "to_page": 90, "start_label": 51},  # overlap
-    ]}
+    plan = {
+        "sections": [
+            {"from_page": 11, "to_page": 67, "start_label": 2},
+            {"from_page": 60, "to_page": 90, "start_label": 51},  # overlap
+        ]
+    }
     try:
         service.validate_plan(plan)
     except ValueError:
@@ -30,9 +33,11 @@ def test_validate_plan_rejects_overlap() -> None:
 def test_validate_plan_rejects_inverted_range() -> None:
     # descending from_page across sections is NORMALIZED by sorting (pinned
     # below); the reject case is an inverted section: to_page < from_page
-    plan = {"sections": [
-        {"from_page": 50, "to_page": 40, "start_label": 1},
-    ]}
+    plan = {
+        "sections": [
+            {"from_page": 50, "to_page": 40, "start_label": 1},
+        ]
+    }
     try:
         service.validate_plan(plan)
     except ValueError:
@@ -41,31 +46,39 @@ def test_validate_plan_rejects_inverted_range() -> None:
 
 
 def test_validate_plan_rejects_missing_int() -> None:
-    for bad in ({"from_page": "11", "to_page": 67, "start_label": 2},
-                {"from_page": 11, "to_page": 67},
-                {"to_page": 67, "start_label": 2}):
+    for bad in (
+        {"from_page": "11", "to_page": 67, "start_label": 2},
+        {"from_page": 11, "to_page": 67},
+        {"to_page": 67, "start_label": 2},
+    ):
         try:
             service.validate_plan({"sections": [bad]})
         except ValueError:
             continue
-        raise AssertionError(f"fehlerhafter sektions-eintrag muss abgelehnt werden: {bad}")
+        raise AssertionError(
+            f"fehlerhafter sektions-eintrag muss abgelehnt werden: {bad}"
+        )
 
 
 def test_validate_plan_normalizes_and_defaults() -> None:
-    plan = {"sections": [
-        {"from_page": 40, "to_page": 50, "start_label": 9},
-        {"from_page": 11, "to_page": 20, "start_label": 1},  # unsorted input
-    ]}
+    plan = {
+        "sections": [
+            {"from_page": 40, "to_page": 50, "start_label": 9},
+            {"from_page": 11, "to_page": 20, "start_label": 1},  # unsorted input
+        ]
+    }
     out = service.validate_plan(plan)
     assert [s["from_page"] for s in out["sections"]] == [11, 40]  # sorted
     assert out["gaps"] == [] and out["confidence"] == 0  # defaults
 
 
 def test_label_at_boundaries() -> None:
-    plan = {"sections": [
-        {"from_page": 11, "to_page": 13, "start_label": 2},
-        {"from_page": 20, "to_page": 22, "start_label": 30},
-    ]}
+    plan = {
+        "sections": [
+            {"from_page": 11, "to_page": 13, "start_label": 2},
+            {"from_page": 20, "to_page": 22, "start_label": 30},
+        ]
+    }
     assert service.label_at(plan, 11) == 2  # section start
     assert service.label_at(plan, 12) == 3  # +1/page
     assert service.label_at(plan, 13) == 4  # section end
