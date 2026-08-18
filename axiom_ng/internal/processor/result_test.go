@@ -60,3 +60,46 @@ func TestSparseValuesRejectBadWeights(t *testing.T) {
 		}
 	}
 }
+
+// TestLocatorChapterRoundTrip (#188 W12 fix window): the runner stamps
+// locator.chapter (1-based ordinal, corroborated chapter-relative books);
+// the persistence boundary re-marshals the Go Locator struct, so a field
+// missing from the struct is silently DROPPED between contract and DB —
+// exactly how the W9 wave lost every chapter stamp while both test tiers
+// stayed green (Go ignores unknown JSON fields on unmarshal). This is the
+// witness class for unknown-field drops at persistence boundaries.
+func TestLocatorChapterRoundTrip(t *testing.T) {
+	in := `{"type":"page_span","physical_page_start":33,"physical_page_end":33,
+	        "page_label_start":"3","source":"marker_paginate",
+	        "page_source":"folio_verified","chapter":2}`
+	var loc Locator
+	if err := json.Unmarshal([]byte(in), &loc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	out, err := json.Marshal(loc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back map[string]any
+	if err := json.Unmarshal(out, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back["chapter"] != float64(2) {
+		t.Fatalf("locator.chapter did not survive the round-trip (got %v) — "+
+			"the persist boundary drops it and the DB never sees the stamp", back["chapter"])
+	}
+	// The chunk-level path too: a full contract chunk round-trips its locator.
+	var ch Chunk
+	chunkJSON := `{"ref":"chunk-0000","index":0,"text":"x","token_count":1,
+	               "locator":` + in + `,
+	               "structure":{"section_titles":[]}}`
+	if err := json.Unmarshal([]byte(chunkJSON), &ch); err != nil {
+		t.Fatal(err)
+	}
+	out2, _ := json.Marshal(ch.Locator)
+	var back2 map[string]any
+	_ = json.Unmarshal(out2, &back2)
+	if back2["chapter"] != float64(2) {
+		t.Fatalf("chunk locator round-trip lost chapter (got %v)", back2["chapter"])
+	}
+}

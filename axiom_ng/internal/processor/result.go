@@ -94,8 +94,15 @@ type Locator struct {
 	PageLabelEnd      string `json:"page_label_end,omitempty"`
 	Source            string `json:"source"`
 	PageSource        string `json:"page_source,omitempty"`
-	CFIStart          string `json:"cfi_start,omitempty"`
-	CFIEnd            string `json:"cfi_end,omitempty"`
+	// Chapter (W12): 1-based chapter ordinal on corroborated chapter-
+	// relative books (folios restart per chapter; healed anchor label
+	// sections corroborated by the folio runs). The runner stamps it;
+	// rendering composes "Kap. N, S. X" (W4). MUST stay in the struct: the
+	// persist boundary re-marshals the Locator, and an unknown JSON field
+	// is silently dropped there — the W9 wave lost every stamp this way.
+	Chapter  *int   `json:"chapter,omitempty"`
+	CFIStart string `json:"cfi_start,omitempty"`
+	CFIEnd   string `json:"cfi_end,omitempty"`
 }
 
 // ChunkStructure carries the ordered heading hierarchy and paragraph range.
