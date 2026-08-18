@@ -117,30 +117,65 @@ type KGRelationView struct {
 	TargetForm     string   `json:"target_form"`
 	Strength       *float32 `json:"strength,omitempty"`
 	EvidenceChunks []string `json:"evidence_chunks,omitempty"`
+	// Documents is the number of distinct library documents corroborating
+	// this (source_form, type, target_form) triple across ACTIVE snapshots —
+	// the #185 thematic signal: a triple found in several books is thematically
+	// real, a single-document triple is one extractor pass (often junk-typed:
+	// "nachhaltigkeit owned_by weleda"). 1 = single-document evidence.
+	Documents int `json:"documents"`
 }
 
-// KGRelations browses relations (optional type and entity filter), active
-// snapshots, stability filter on both endpoints.
-func (r *Repo) KGRelations(ctx context.Context, relType, entityID string, minMentions, limit int) ([]KGRelationView, error) {
+// KGRelations browses relations (optional type, entity and document scope),
+// active snapshots, stability filter on both endpoints. Ranking (#185):
+// cross-document corroboration of the (source_form, type, target_form)
+// triple FIRST — endpoint popularity (the old ranking) surfaced hub-junk
+// like 6 weleda relations ahead of every thematic candidate —, popularity
+// only as tiebreak. document_id scopes the result to relations with at
+// least one evidence chunk in that document's active snapshot; the
+// corroboration count stays global (it weights the triple, not the scope).
+func (r *Repo) KGRelations(ctx context.Context, relType, entityID, documentID string, minMentions, limit int) ([]KGRelationView, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := r.pool.Query(ctx, activeEntityCounts+`
-		SELECT r.id::text, r.type,
-		       r.source_entity_id::text, coalesce(se.canonical_form, se.text),
-		       r.target_entity_id::text, coalesce(te.canonical_form, te.text),
-		       r.strength, r.evidence_chunk_ids::text
+	// ponytail: cor is a group-by over all active relations (~75k rows at
+	// current corpus; the CTE itself is cheap, but the full ranked browse
+	// measured ~1.5s on the live graph with parallelism off — plan for the
+	// WHOLE query, not just the CTE). Materialize as a table if the graph
+	// grows or the endpoint becomes latency-sensitive.
+	rows, err := r.pool.Query(ctx, activeEntityCounts+`,
+	cor AS (
+		SELECT r.type, coalesce(se.canonical_form, se.text) AS sf,
+		       coalesce(te.canonical_form, te.text) AS tf,
+		       count(DISTINCT sn.document_id) AS docs
 		FROM processing_entity_relationships r
-		JOIN processing_snapshots s ON s.id = r.snapshot_id AND s.active
-		JOIN em src ON src.entity_id = r.source_entity_id
-		JOIN em tgt ON tgt.entity_id = r.target_entity_id
+		JOIN processing_snapshots sn ON sn.id = r.snapshot_id AND sn.active
 		JOIN processing_entities se ON se.id = r.source_entity_id
 		JOIN processing_entities te ON te.id = r.target_entity_id
-		WHERE ($1 = '' OR r.type = $1)
-		  AND ($2 = '' OR r.source_entity_id = $2::uuid OR r.target_entity_id = $2::uuid)
-		  AND src.chunks >= $3 AND tgt.chunks >= $3
-		ORDER BY src.chunks + tgt.chunks DESC, r.id
-		LIMIT $4`, relType, entityID, minMentions, limit)
+		GROUP BY 1, 2, 3
+	)
+	SELECT r.id::text, r.type,
+	       r.source_entity_id::text, coalesce(se.canonical_form, se.text),
+	       r.target_entity_id::text, coalesce(te.canonical_form, te.text),
+	       r.strength, r.evidence_chunk_ids::text, coalesce(cor.docs, 1)
+	FROM processing_entity_relationships r
+	JOIN processing_snapshots s ON s.id = r.snapshot_id AND s.active
+	JOIN em src ON src.entity_id = r.source_entity_id
+	JOIN em tgt ON tgt.entity_id = r.target_entity_id
+	JOIN processing_entities se ON se.id = r.source_entity_id
+	JOIN processing_entities te ON te.id = r.target_entity_id
+	LEFT JOIN cor ON cor.type = r.type
+	             AND cor.sf = coalesce(se.canonical_form, se.text)
+	             AND cor.tf = coalesce(te.canonical_form, te.text)
+	WHERE ($1 = '' OR r.type = $1)
+	  AND ($2 = '' OR r.source_entity_id = $2::uuid OR r.target_entity_id = $2::uuid)
+	  AND ($5 = '' OR EXISTS (
+		      SELECT 1 FROM processing_chunks ec
+		      JOIN processing_snapshots esn ON esn.id = ec.snapshot_id AND esn.active
+		      WHERE ec.id IN (SELECT jsonb_array_elements_text(r.evidence_chunk_ids)::uuid)
+		        AND esn.document_id = $5::uuid))
+	  AND src.chunks >= $3 AND tgt.chunks >= $3
+	ORDER BY cor.docs DESC NULLS LAST, src.chunks + tgt.chunks DESC, r.id
+	LIMIT $4`, relType, entityID, minMentions, limit, documentID)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +186,7 @@ func (r *Repo) KGRelations(ctx context.Context, relType, entityID string, minMen
 		var ev string
 		var strength *float32
 		if err := rows.Scan(&v.ID, &v.Type, &v.SourceID, &v.SourceForm,
-			&v.TargetID, &v.TargetForm, &strength, &ev); err != nil {
+			&v.TargetID, &v.TargetForm, &strength, &ev, &v.Documents); err != nil {
 			return nil, err
 		}
 		v.Strength = strength

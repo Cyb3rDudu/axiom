@@ -16,7 +16,7 @@ import (
 type KGService interface {
 	SearchKGEntities(ctx context.Context, q string, minMentions, limit int) ([]repo.KGEntity, error)
 	KGNeighbors(ctx context.Context, entityID string, minMentions, limit int) ([]repo.KGNeighbor, error)
-	KGRelations(ctx context.Context, relType, entityID string, minMentions, limit int) ([]repo.KGRelationView, error)
+	KGRelations(ctx context.Context, relType, entityID, documentID string, minMentions, limit int) ([]repo.KGRelationView, error)
 }
 
 // SetKGService wires the /api/kg routes (nil keeps them 503ing).
@@ -103,9 +103,17 @@ func (s *Server) handleKGRelations(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "entity filter must be a uuid"})
 		return
 	}
+	// document_id (#185): optional scope — only relations with evidence in
+	// this document's active snapshot. Same validation strictness as entity.
+	document := r.URL.Query().Get("document_id")
+	if document != "" && !isUUID(document) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "document_id filter must be a uuid"})
+		return
+	}
 	res, err := s.kgSvc.KGRelations(r.Context(),
 		r.URL.Query().Get("type"),
 		entity,
+		document,
 		kgQueryInt(r, "min_mentions", minMentionsDefault, 1, 100),
 		kgQueryInt(r, "limit", 50, 1, 200))
 	s.writeKG(w, r, "relations", res, err)

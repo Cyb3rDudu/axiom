@@ -18,6 +18,7 @@ type fakeKG struct {
 	lastQ     string
 	lastMin   int
 	lastEnt   string
+	lastDoc   string
 }
 
 func (f *fakeKG) SearchKGEntities(ctx context.Context, q string, minMentions, limit int) ([]repo.KGEntity, error) {
@@ -30,8 +31,9 @@ func (f *fakeKG) KGNeighbors(ctx context.Context, id string, minMentions, limit 
 	return f.neighbors, nil
 }
 
-func (f *fakeKG) KGRelations(ctx context.Context, relType, entityID string, minMentions, limit int) ([]repo.KGRelationView, error) {
+func (f *fakeKG) KGRelations(ctx context.Context, relType, entityID, documentID string, minMentions, limit int) ([]repo.KGRelationView, error) {
 	f.lastEnt = entityID + "|" + relType
+	f.lastDoc = documentID
 	return f.relations, nil
 }
 
@@ -95,20 +97,43 @@ func TestKGRelationsFilters(t *testing.T) {
 	st := float32(0.8)
 	kg := &fakeKG{relations: []repo.KGRelationView{{
 		ID: "r1", Type: "supports", SourceID: "a", SourceForm: "UN",
-		TargetID: "b", TargetForm: "SDG", Strength: &st, EvidenceChunks: []string{"c1"},
+		TargetID: "b", TargetForm: "SDG", Strength: &st, EvidenceChunks: []string{"c1"}, Documents: 3,
 	}}}
 	s := kgServer(t, kg)
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/api/kg/relations?type=supports&entity=00000000-0000-0000-0000-00000000000b", nil))
+		"/api/kg/relations?type=supports&entity=00000000-0000-0000-0000-00000000000b&document_id=00000000-0000-0000-0000-00000000000d", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	if !strings.Contains(rec.Body.String(), `"SDG"`) || !strings.Contains(rec.Body.String(), `"evidence_chunks":["c1"]`) {
 		t.Fatalf("relation shape wrong: %s", rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `"documents":3`) {
+		t.Fatalf("documents (#185 corroboration count) must be part of the relation shape: %s", rec.Body.String())
+	}
 	if kg.lastEnt != "00000000-0000-0000-0000-00000000000b|supports" {
 		t.Fatalf("filters not passed: %q", kg.lastEnt)
+	}
+	if kg.lastDoc != "00000000-0000-0000-0000-00000000000d" {
+		t.Fatalf("document_id scope not passed: %q", kg.lastDoc)
+	}
+}
+
+func TestKGRelationsDocumentScopeGuard(t *testing.T) {
+	kg := &fakeKG{}
+	s := kgServer(t, kg)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/kg/relations?document_id=not-a-uuid", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed document_id must 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// No document_id: empty scope passes through (browse mode).
+	rec2 := httptest.NewRecorder()
+	s.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/api/kg/relations", nil))
+	if rec2.Code != http.StatusOK || kg.lastDoc != "" {
+		t.Fatalf("absent document_id must pass empty scope, got %d lastDoc=%q", rec2.Code, kg.lastDoc)
 	}
 }
 
