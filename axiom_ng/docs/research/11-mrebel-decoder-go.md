@@ -1,150 +1,160 @@
-# Restpunkt 6 — mREBEL-Decoder nativ in Go: Decoder-ONNX, Beam-Search-Loop, Parität
+# Restpunkt 6 — mREBEL decoder natively in Go: decoder ONNX, beam-search loop, parity
 
-**Fazit vorweg:** Die mREBEL-Zeile im Entscheidungsdokument wechselt von „Sidecar (Option 1)"
-auf **„Go-nativ möglich"** — der komplette Seq2Seq-Decoding-Stack (Encoder + autoregressiver
-Beam-Search-Decoder + Triple-Parser) läuft nativ in Go auf dem Carrier (3090), mit
-**96 % Chunk-Level-Triple-Set-Parität** gegen das Python-Orakel (n=50, Schwelle ≥95 %).
-Stolpersteine, genaue Zahlen und die ehrliche Performance-Diskussion unten.
+**Conclusion up front:** the mREBEL line in the decision document switches from
+"sidecar (option 1)" to **"Go-native possible"** — the complete seq2seq decoding stack
+(encoder + autoregressive beam-search decoder + triple parser) runs natively in Go on the
+carrier (3090), with **96% chunk-level triple-set parity** against the Python oracle
+(n=50, threshold ≥95%). Pitfalls, exact numbers, and the honest performance discussion
+below.
 
-Branch `research/go-runner-feasibility`, Worktree `axiom-research`. Alle Artefakte committet.
-Modell-Binaries NICHT committet (Regel). Test-DB unangetastet (kein Zugriff nötig — reine
-Modell-Studie auf `sample_chunks.json`).
+Branch `research/go-runner-feasibility`, worktree `axiom-research`. All artifacts
+committed. Model binaries NOT committed (rule). Test DB untouched (no access needed —
+pure model study on `sample_chunks.json`).
 
 ---
 
-## 1. Ziel 1 — Decoder-ONNX-Export (FIX des optimum-Bugs)
+## 1. Goal 1 — Decoder ONNX export (FIX of the optimum bug)
 
-**Befund:** optimum 2.3.0 scheitert beim BART-Decoder an `os.remove(decoder_model.onnx.data)`
-→ `FileNotFoundError` (external-data-Cleanup-Bug) — der in 07c dokumentierte Blocker.
-Zusätzlich ist das `onnx`-Subcommand in optimum 2.3.0 nicht registriert; und `torch.onnx`
-(delegiert an den Dynamo-Exporter in torch 2.13) scheitert an transformers 4.57
-`EncoderDecoderCache` (nicht pytree-registriert).
+**Finding:** optimum 2.3.0 fails on the BART decoder at `os.remove(decoder_model.onnx.data)`
+→ `FileNotFoundError` (external-data cleanup bug) — the blocker documented in 07c.
+Additionally the `onnx` subcommand is not registered in optimum 2.3.0; and `torch.onnx`
+(delegates to the Dynamo exporter in torch 2.13) fails on transformers 4.57
+`EncoderDecoderCache` (not pytree-registered).
 
-**Lösung (reproduzierbar committet):**
-- Eigenes Export-Image `Containerfile.mrebel-export` mit **gepinntem Legacy-Stack**:
-  `optimum==1.21.0` + `transformers==4.42.4` (optimum 1.21 braucht `<4.43`) + `torch 2.5.1`
-  (pytorch/pytorch-Basis) + `onnx` + `onnxruntime`.
+**Solution (committed reproducibly):**
+- Dedicated export image `Containerfile.mrebel-export` with a **pinned legacy stack**:
+  `optimum==1.21.0` + `transformers==4.42.4` (optimum 1.21 needs `<4.43`) + `torch 2.5.1`
+  (pytorch/pytorch base) + `onnx` + `onnxruntime`.
 - `optimum-cli export onnx --model Babelscape/mrebel-large --task text2text-generation --no-post-process`
-  → `encoder_model.onnx` + `decoder_model.onnx` (ohne present-Outputs, korrekt).
+  → `encoder_model.onnx` + `decoder_model.onnx` (without present outputs, correct).
 - `optimum-cli export onnx --model Babelscape/mrebel-large --task text2text-generation-with-past --no-post-process`
-  → `decoder_with_past_model.onnx` (KV-Cache-Variante) — **Validierung: presente KV matcht
-  Referenz (2,16,17,64), logits max-diff 4.6e-5**.
-- `--no-post-process` überspringt nur den decoder_model_merged-Schritt (scheitert an
-  serialize) und behält die Einzelgraphen.
+  → `decoder_with_past_model.onnx` (KV-cache variant) — **validation: present KV matches
+  the reference (2,16,17,64), logits max-diff 4.6e-5**.
+- `--no-post-process` only skips the decoder_model_merged step (fails at serialize) and
+  keeps the individual graphs.
 
-**Artefakte auf dem Carrier (`~/models/mrebel_onnx/`):**
-| Datei | Größe |
+**Artifacts on the carrier (`~/models/mrebel_onnx/`):**
+| File | Size |
 |---|---|
 | `encoder_model.onnx` (+data) | 1.63 GB |
 | `decoder_model.onnx` (+data) | 679 KB / 2.86 GB |
 | `decoder_with_past_model.onnx` (+data) | 579 KB / 2.76 GB |
 
-**Korrektheits-Beweis der Graphen (ORT vs torch, 3090):**
-- `decoder_model.onnx`: argmax identisch bei Längen 1–4 (`<triplet>`,`Z`,`Z`,`part`), max|d| 1.6e-3 (L=1) bis 2.4e-1 (L=4, FP-Drift durch Fehlen des KV-Cache im Referenzvergleich).
-- `decoder_with_past_model.onnx`: 2-Schritt-Loop (step1 + with_past) logits max|d| 2.8e-3 vs torch-Full-Forward — **der KV-Cache-Loop ist numerisch korrekt**.
+**Correctness proof of the graphs (ORT vs torch, 3090):**
+- `decoder_model.onnx`: argmax identical at lengths 1–4 (`<triplet>`,`Z`,`Z`,`part`),
+  max|d| 1.6e-3 (L=1) to 2.4e-1 (L=4, FP drift from the missing KV cache in the reference
+  comparison).
+- `decoder_with_past_model.onnx`: 2-step loop (step1 + with_past) logits max|d| 2.8e-3 vs
+  torch full forward — **the KV-cache loop is numerically correct**.
 
-**Export-Skripte committet:** `mrebel_export/export_decoder_onnx.sh` (Rezept),
-`Containerfile.mrebel-export`, `mrebel_export/export_mrebel_decoder.py` (verworfener
-manueller Trace — dokumentiert, warum: Dynamo-Exporter-Failure + korrupte Logits).
+**Export scripts committed:** `mrebel_export/export_decoder_onnx.sh` (recipe),
+`Containerfile.mrebel-export`, `mrebel_export/export_mrebel_decoder.py` (discarded
+manual trace — documents why: Dynamo exporter failure + corrupt logits).
 
-## 2. Ziel 2 — Go-Decoding-Loop (`cmd/feasibility/mrebelgo/`)
+## 2. Goal 2 — Go decoding loop (`cmd/feasibility/mrebelgo/`)
 
-Struktur (eigenes go.mod, wie die anderen PoCs): `yalue/onnxruntime_go` + `tggo/goSentencePiece`.
+Structure (own go.mod, like the other PoCs): `yalue/onnxruntime_go` +
+`tggo/goSentencePiece`.
 
 - **Encoder:** `encoder_model.onnx` (input_ids, attention_mask → last_hidden_state).
-  Go-Encoder-Output == torch-Encoder-Output: **cosine 1.0, max-abs-diff 0.0** (byte-identisch).
-- **Decoder (Standard-Pfad):** `decoder_model.onnx` pro Schritt mit voller Re-Encodierung
-  („volle Re-Encodierung pro Schritt"-Fallback aus der Aufgabe, §4.2) — jede Hypothese hat
-  ihre wachsende Token-Sequenz, logits am letzten Token.
-- **Beam-Search:** width 3, return 3, max_length 256, length_penalty 0, do_sample false,
-  decoder_start `tp_XX` (250058). **BeamHypotheses-Semantik repliziert** (best-numBeams
-  finished behalten, schlechtere verdrängen; Stopp via `worst_finished >= best_open`).
-- **KV-Cache-Pfad (experimentell, `MRBEL_CACHE=1`):** `decoder_with_past_model.onnx` mit
-  Cache-Threading (step1 present.encoder = konstante Encoder-KV; stepN re-emittiert nur
-  Decoder-KV). Läuft, aber **kein Speed-Gewinn** im Harness (siehe §4) und FP-empfindlicher.
-- **2×-Determinismus:** byte-gleich (sha256 `1934fcde…`), beide Läufe identisch.
+  Go encoder output == torch encoder output: **cosine 1.0, max-abs-diff 0.0**
+  (byte-identical).
+- **Decoder (standard path):** `decoder_model.onnx` per step with full re-encoding
+  (the task's "full re-encoding per step" fallback, §4.2) — every hypothesis has its own
+  growing token sequence, logits at the last token.
+- **Beam search:** width 3, return 3, max_length 256, length_penalty 0, do_sample false,
+  decoder_start `tp_XX` (250058). **BeamHypotheses semantics replicated** (keep the best
+  numBeams finished, evict worse ones; stop via `worst_finished >= best_open`).
+- **KV-cache path (experimental, `MRBEL_CACHE=1`):** `decoder_with_past_model.onnx` with
+  cache threading (step1 present.encoder = constant encoder KV; stepN re-emits only the
+  decoder KV). Runs, but **no speed gain** in the harness (see §4) and more FP-sensitive.
+- **2× determinism:** byte-equal (sha256 `1934fcde…`), both runs identical.
 
-## 3. Ziele 3+4 — Parser-Port + Parität (n=50)
+## 3. Goals 3+4 — Parser port + parity (n=50)
 
-**Parser** (`decode.go`): `_parse_mrebel_output`-Regex 1:1 nach Go, Typ-Mapping
-(per→PERSON, org→ORGANIZATION, loc→LOCATION, media→WORK, sonst CONCEPT), Dedup
-first-seen über die 3 Beams. **Unit-Test grün gegen 6 reale Python-Fixtures**
+**Parser** (`decode.go`): `_parse_mrebel_output` regex ported 1:1 to Go, type mapping
+(per→PERSON, org→ORGANIZATION, loc→LOCATION, media→WORK, else CONCEPT), dedup first-seen
+across the 3 beams. **Unit test green against 6 real Python fixtures**
 (`parser_fixtures.json`).
 
-**Paritätsmessung (50 Chunks, sample_chunks.json, Carrier 3090, same-device):**
-| Metrik | Ergebnis |
+**Parity measurement (50 chunks, sample_chunks.json, carrier 3090, same-device):**
+| Metric | Result |
 |---|---|
-| **Chunk-Level-Triple-Set-Gleichheit** (Union über 3 Beams, dedupliziert) | **48/50 = 96.0 %** (Schwelle ≥95 % ✓) |
-| String-Gleichheit (roh) | 0/50 — Python hängt `</s><pad>`-Padding an; Go liefert nackte Sequenzen |
-| String-Gleichheit (normalisiert: `</s>`/`<pad>` gestrippt, Whitespace kollabiert) | **47/50 = 94 %** |
-| Gesamt-Triples | Go 137 vs Python 136 |
+| **Chunk-level triple-set equality** (union over 3 beams, deduplicated) | **48/50 = 96.0%** (threshold ≥95% ✓) |
+| String equality (raw) | 0/50 — Python appends `</s><pad>` padding; Go returns bare sequences |
+| String equality (normalized: `</s>`/`<pad>` stripped, whitespace collapsed) | **47/50 = 94%** |
+| Total triples | Go 137 vs Python 136 |
 
-**Divergenz-Charakterisierung (identisch zur Sparse-Outlier-Methodik):**
-- Chunk 23: Go generiert eine Zusatz-Triple („constant mix subclass of musterportfolio") —
-  Python hat sie nicht (Beam-FP-Ordung bei nahezu gleichen Scores).
-- Chunk 48: Token-Boundary-Divergenz an seltenem Kompositum (Python spaltet
-  „datenquel"/„daten" statt „datenquelle") — **der bekannte seltene-Nicht-Latin/
-  Kompositum-Grenztoken-Fall**, der auch die Sparse-Outlier (Chunks 48/195) trieb.
-- 1 weiterer String-only-Diff ohne Triple-Auswirkung.
+**Divergence characterization (identical to the sparse-outlier methodology):**
+- Chunk 23: Go generates one extra triple ("constant mix subclass of musterportfolio") —
+  Python does not have it (beam FP ordering at nearly equal scores).
+- Chunk 48: token-boundary divergence on a rare compound (Python splits
+  "datenquel"/"daten" instead of "datenquelle") — **the known rare-non-Latin/compound
+  boundary-token case** that also drove the sparse outliers (chunks 48/195).
+- 1 further string-only diff without triple impact.
 
-**Kritische Stolpersteine (im Bericht + Code dokumentiert):**
-1. **Byte- vs. Rune-Truncation:** Python `text[:1500]` schneidet Zeichen, Go `text[:1500]`
-   Bytes → mit Umlauten 21 Zeichen Verlust → völlig anderes Encoder-Input → Müll-Generierung.
-   Fix: `truncateRunes`.
-2. **HF-Vocab-Offset:** Decoder-Output-ids sind HF-space = raw-sentencepiece + 1; Go-Decode
-   muss `id-1` rechnen (sonst dekodiert id 130629 als Oriya-Schrift statt „Verantwortung").
-3. **SPM-Run-Lead-Space:** `tggo` Decode strippt das führende `▁`-Leerzeichen eines Runs;
-   nach Spezial-Tokens muss es re-addiert werden (HF-Spacing: `Köpfen <concept>`).
-4. **Beam-Eviction:** naive „top-3 fertig"-Auswahl behält `[tp_XX, eos]` (Score −8.78);
-   transformers' `BeamHypotheses` verdrängt es, sobald 3 echte Beams fertig sind (−3.67,
-   −5.64, −6.13). Stopp-Kondition `worst_finished >= best_open` ist Pflicht.
+**Critical pitfalls (documented in the report + code):**
+1. **Byte- vs. rune truncation:** Python `text[:1500]` cuts characters, Go `text[:1500]`
+   cut bytes → with umlauts 21 characters lost → completely different encoder input →
+   garbage generation. Fix: `truncateRunes`.
+2. **HF vocab offset:** decoder output ids are HF-space = raw-sentencepiece + 1; Go decode
+   must compute `id-1` (otherwise id 130629 decodes as Oriya script instead of
+   "Verantwortung").
+3. **SPM run leading space:** `tggo` decode strips a run's leading `▁` space; after
+   special tokens it must be re-added (HF spacing: `Köpfen <concept>`).
+4. **Beam eviction:** a naive "top-3 finished" selection keeps `[tp_XX, eos]`
+   (score −8.78); transformers' `BeamHypotheses` evicts it as soon as 3 real beams are
+   finished (−3.67, −5.64, −6.13). The stop condition
+   `worst_finished >= best_open` is mandatory.
 
-## 4. Ziel 5 — Performance auf der 3090 (ehrlich)
+## 4. Goal 5 — Performance on the 3090 (honest)
 
-| Pfad | p50 pro Chunk | p95 | mean |
+| Path | p50 per chunk | p95 | mean |
 |---|---|---|---|
-| **Go no-cache Beam** (Standard) | **4.45 s** | 9.53 s | 5.10 s |
+| **Go no-cache beam** (standard) | **4.45 s** | 9.53 s | 5.10 s |
 | Go cached (with_past, `MRBEL_CACHE=1`) | 4.38 s | 8.76 s | 5.63 s |
-| **Python-Orakel** (torch generate, mit KV-Cache) | **0.14 s** | 0.31 s | 0.16 s |
+| **Python oracle** (torch generate, with KV cache) | **0.14 s** | 0.31 s | 0.16 s |
 
-Erkenntnisse:
-- Der **no-cache-Pfad** ist ~30× langsamer als Python (O(L²)-Re-Encodierung: ~136
-  Decoder-Forwards pro Beam vs. ~16 KV-Cache-Schritte).
-- Der **KV-Cache-Pfad in Go wird NICHT schneller** — die per-call-Kosten dominieren:
-  (a) onnxruntime_go legt pro Schritt ~50 Input-/25 Output-Tensoren über cgo an;
-  (b) die with_past-Graphen haben dynamische Shapes → ORT re-plannt pro Schritt.
-  Beides zusammen frisst den algorithmischen Gewinn. Ein Produktions-Runner müsste
-  Tensoren wiederverwenden + Shape-gecachte Sessions nutzen, um an Python heranzukommen.
-- Der KV-Cache-Pfad ist zudem FP-empfindlicher (86 % vs 96 % — Score-Akkumulation über
-  Cache-Konkatenation vs. Recompute; gleiche Art von cuDNN-Streuung wie bei GLiNER).
+Findings:
+- The **no-cache path** is ~30× slower than Python (O(L²) re-encoding: ~136 decoder
+  forwards per beam vs. ~16 KV-cache steps).
+- The **KV-cache path in Go does NOT get faster** — per-call costs dominate:
+  (a) onnxruntime_go allocates ~50 input/25 output tensors via cgo per step;
+  (b) the with_past graphs have dynamic shapes → ORT re-plans per step.
+  Together both eat the algorithmic gain. A production runner would have to reuse
+  tensors + use shape-cached sessions to approach Python.
+- The KV-cache path is also more FP-sensitive (86% vs 96% — score accumulation over
+  cache concatenation vs. recompute; same kind of cuDNN scatter as with GLiNER).
 
-**Messwert fürs Epic:** Go-mREBEL ist *funktional* paritätisch (96 % Triple-Set), aber die
-Latenz ist der Preis des no-cache-Pfads; die Cache-Pfad-Optimierung (Tensor-Reuse,
-Shape-Caching) ist der benannte Epic-Kostenpunkt. Für die Query-Pfade (dense/rerank) ist
-das irrelevant — die sind bereits CUDA-paritätisch und schnell.
+**Measurement for the epic:** Go mREBEL is *functionally* at parity (96% triple set),
+but latency is the price of the no-cache path; the cache-path optimization (tensor
+reuse, shape caching) is the named epic cost item. For the query paths (dense/rerank)
+this is irrelevant — they are already CUDA-parity and fast.
 
-## 5. Definition of Done — Status
+## 5. Definition of done — status
 
-- [x] Decoder-ONNX-Dateien auf dem Carrier (Größen oben; Export-Skript committet, reproduzierbar)
-- [x] `mrebelgo` baut (eigenes go.mod), läuft 2× byte-gleich
-- [x] Parser-Unit-Test grün gegen 6 committete Python-Fixtures
-- [x] Paritätsmessung n=50: **Triple-Set 96.0 % ≥ 95 %** (Zahl + Artefakt committed), String gemessen und berichtet
-- [x] Latenzen p50/p95 vs Python auf derselben 3090 im Bericht
-- [x] `11-mrebel-decoder-go.md` existiert; Entscheidungsdok-Zeile aktualisiert
-- [x] Keine Modell-Binaries committet; Test-DB nicht verändert; kein Merge
+- [x] Decoder ONNX files on the carrier (sizes above; export script committed,
+  reproducible)
+- [x] `mrebelgo` builds (own go.mod), runs 2× byte-equal
+- [x] Parser unit test green against 6 committed Python fixtures
+- [x] Parity measurement n=50: **triple set 96.0% ≥ 95%** (number + artifact committed),
+  string measured and reported
+- [x] Latencies p50/p95 vs Python on the same 3090 in the report
+- [x] `11-mrebel-decoder-go.md` exists; decision-document line updated
+- [x] No model binaries committed; test DB unchanged; no merge
 
-**Artefakte:** `carrier_results/go_mrebel_parity.json` (+r2), `go_mrebel_cache.json`,
-`mrebel_ref_50.json` (Python-Orakel), `cache_timings2.txt`, `go_timings_r2.txt`,
+**Artifacts:** `carrier_results/go_mrebel_parity.json` (+r2), `go_mrebel_cache.json`,
+`mrebel_ref_50.json` (Python oracle), `cache_timings2.txt`, `go_timings_r2.txt`,
 `parser_fixtures.json`.
 
-**Reproduzierbare Befehle (Carrier):**
+**Reproducible commands (carrier):**
 ```
-# Export (einmalig, Image ist committet):
+# Export (one-time, image is committed):
 podman run --rm -e HF_HOME=/hf -v ~/.cache/huggingface:/hf:rw -v ~/models:/models:rw \
   -v $PWD/axiom_ng/cmd/feasibility/mrebel_export/export_decoder_onnx.sh:/run.sh:ro \
   localhost/study-mrebel-export:latest bash /run.sh
 
-# Go-Parität (50 Chunks):
+# Go parity (50 chunks):
 podman run --rm --device nvidia.com/gpu=all -e CUDA_VISIBLE_DEVICES=0 -e ORT_CUDA=1 -e ORT_CUDA_DEVICE=0 \
   -v ~/models:/models:ro localhost/study-mrebel:latest bash -c \
   "cd /study/cmd/feasibility/mrebelgo && go build -o /tmp/mg . && /tmp/mg \
@@ -152,7 +162,7 @@ podman run --rm --device nvidia.com/gpu=all -e CUDA_VISIBLE_DEVICES=0 -e ORT_CUD
    /study/cmd/feasibility/mrebelgo/parity_idxs.json /tmp/go_mrebel_parity.json"
 ```
 
-**Entscheidungsdok-Update:** `go-runner-feasibility.md` — mREBEL-Zeile von
-„Sidecar (Option 1)" auf „**Go-nativ möglich** (Decoder-ONNX exportiert + validiert;
-Go-Beam 96 % Triple-Set-Parität; Parser 1:1; Latenz 4.45 s vs 0.14 s Python — Cache-
-Optimierung = Epic-Punkt)"; Fazit-Zeile entsprechend angepasst.
+**Decision-document update:** `go-runner-feasibility.md` — mREBEL line from
+"sidecar (option 1)" to "**Go-native possible** (decoder ONNX exported + validated;
+Go beam 96% triple-set parity; parser 1:1; latency 4.45 s vs 0.14 s Python — cache
+optimization = epic item)"; conclusion line adjusted accordingly.

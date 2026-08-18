@@ -1,4 +1,4 @@
-# Feasibility Study — Block 3 · Dense-Parität BGE-M3 (#171)
+# Feasibility Study — Block 3 · Dense Parity BGE-M3 (#171)
 
 Status: **avg cosine ≥0.999 MET** on 219 real chunks (OpenSearch index
 `axiom-ng-chunks-v1`), Go determinism (2× byte-equal) **proven**, with 3/219

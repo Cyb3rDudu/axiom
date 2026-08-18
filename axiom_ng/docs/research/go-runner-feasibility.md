@@ -183,11 +183,10 @@ DeBERTa-style models (GLiNER). Containerfile: `axiom_ng/cmd/feasibility/Containe
 
 ## Feasibility answer (one sentence)
 
-**Ein reiner Go-Runner ist funktional umsetzbar für den gesamten Query-seitigen
-Modellstack (Dense/Rerank/Sparse/GLiNER — auf CUDA paritätisch bewiesen), die
-algorithmischen Komponenten (Contract/Chunking/EPUB-CFI) UND die mREBEL-
-Triple-Extraktion (96 % Triple-Set-Parität, nativ in Go) — mit Xberg/Marker-OCR für
-Scan-PDF als einzigem Nicht-Go-Baustein. Kostenpunkte für ein Folge-Epic: der
-Xberg-Locator-Bau, die mREBEL-Device-Residenz (Go p50 0,195 s vs Python 0,141 s =
-1,38× — cgo/C-API-Device-Buffer für das letzte Drittel = G2 #179) und die
-cuDNN-FP-Varianz.**
+**A pure Go runner is functionally feasible for the entire query-side model stack
+(dense/rerank/sparse/GLiNER — proven at parity on CUDA), the algorithmic components
+(contract/chunking/EPUB-CFI) AND mREBEL triple extraction (96% triple-set parity,
+natively in Go) — with Xberg/Marker-OCR for scanned PDFs as the only non-Go building
+block. Cost items for a follow-up epic: the Xberg locator build, mREBEL device
+residency (Go p50 0.195 s vs Python 0.141 s = 1.38× — cgo/C-API device buffers for
+the last third = G2 #179), and the cuDNN FP variance.**
