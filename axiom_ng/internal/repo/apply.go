@@ -95,6 +95,17 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 	res.Flags = proj.flags
 	res.DocumentProjections = len(proj.flags)
 
+	// 6b. Deleted attachments must stop serving: retire their active
+	// snapshots (+ OS tombstones) in the same sync transaction. This runs
+	// AFTER the projections — THEY write zotero_attachments.deleted, and a
+	// retire placed earlier sees only the PREVIOUS sync's flag (the Mullins
+	// zombie: the one sync that projected the fix-service deletion retired
+	// nothing; every earlier heal survived only because follow-up syncs
+	// ran). Same-tx same-sync is the contract the Durchpfad IT pins.
+	if err := reconcileAttachmentSnapshotsTx(ctx, tx); err != nil {
+		return res, fmt.Errorf("reconcile attachment snapshots: %w", err)
+	}
+
 	// 7. Pending + failed jobs in the same transaction, gated by the
 	// selection (#166): excluded documents get no jobs; everything else
 	// keeps the ON CONFLICT (attachment_id, content_hash) dedup — a
@@ -124,6 +135,101 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 	res.FailedJobs = failed
 
 	return res, nil
+}
+
+// reconcileAttachmentSnapshotsTx (formerly retireDeletedAttachmentsTx — it
+// RETIRES and RESTORES) deactivates active snapshots whose Zotero
+// attachment is deleted (source-heal swaps delete the old storage key and
+// create a NEW attachment row; the old row's snapshot used to keep serving
+// zombie chunks next to the healed rechunk — #176 delta, 2× live snapshots
+// on one document). Mirrors deactivateSiblingsTx + outbox tombstones (#127)
+// so OpenSearch stops serving them in the same transaction.
+//
+// Restore mirror (review C1): a deleted-then-RESTORED attachment whose
+// completed snapshot was retired has no other reactivation path — the
+// pending-job insert dedups against the completed job (idempotency index
+// has no status predicate), so persistTx never runs again and the document
+// would silently stay unserved. Reactivate its latest completed snapshot
+// (one per attachment — the partial unique index is respected by picking a
+// single winner) and re-materialize it via an index outbox op.
+//
+// Known window: a job mid-flight on an attachment that gets deleted commits
+// AFTER this step and reactivates/activates its snapshot; the NEXT sync's
+// pass here re-retires it. Bounded by one sync interval, drainer guards
+// keep OpenSearch convergent.
+func reconcileAttachmentSnapshotsTx(ctx context.Context, tx pgx.Tx) error {
+	rows, err := tx.Query(ctx, `
+		UPDATE processing_snapshots s SET active=false, updated_at=now()
+		FROM zotero_attachments a
+		WHERE a.id = s.attachment_id AND a.deleted = true AND s.active = true
+		RETURNING s.id::text, s.document_id::text, s.attachment_id::text`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type retired struct{ snap, doc, att string }
+	var hits []retired
+	for rows.Next() {
+		var h retired
+		if err := rows.Scan(&h.snap, &h.doc, &h.att); err != nil {
+			return err
+		}
+		hits = append(hits, h)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, h := range hits {
+		if err := enqueueOutboxTx(ctx, tx, h.snap, OutboxOpDelete,
+			jobIdentity{documentID: h.doc, attachmentID: h.att}); err != nil {
+			return fmt.Errorf("tombstone deleted-attachment snapshot %s: %w", h.snap, err)
+		}
+	}
+	return reactivateRestoredAttachmentsTx(ctx, tx)
+}
+
+func reactivateRestoredAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
+	// Latest completed snapshot of a LIVE attachment that currently serves
+	// nothing. "Latest" = highest created_at (tie: max id) — deterministic.
+	rows, err := tx.Query(ctx, `
+		SELECT DISTINCT ON (s.attachment_id)
+			s.id::text, s.document_id::text, s.attachment_id::text
+		FROM processing_snapshots s
+		JOIN zotero_attachments a ON a.id = s.attachment_id
+		WHERE a.deleted = false
+		  AND s.active = false
+		  AND NOT EXISTS (
+			SELECT 1 FROM processing_snapshots x
+			WHERE x.attachment_id = s.attachment_id AND x.active
+		  )
+		ORDER BY s.attachment_id, s.created_at DESC, s.id DESC`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type back struct{ snap, doc, att string }
+	var revives []back
+	for rows.Next() {
+		var b back
+		if err := rows.Scan(&b.snap, &b.doc, &b.att); err != nil {
+			return err
+		}
+		revives = append(revives, b)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, b := range revives {
+		if _, err := tx.Exec(ctx, `
+			UPDATE processing_snapshots SET active=true, updated_at=now() WHERE id=$1`, b.snap); err != nil {
+			return fmt.Errorf("reactivate restored-attachment snapshot %s: %w", b.snap, err)
+		}
+		if err := enqueueOutboxTx(ctx, tx, b.snap, OutboxOpIndex,
+			jobIdentity{documentID: b.doc, attachmentID: b.att}); err != nil {
+			return fmt.Errorf("reindex restored-attachment snapshot %s: %w", b.snap, err)
+		}
+	}
+	return nil
 }
 
 // applyCanonicalDeleteEvents resolves each deleted key against documents or

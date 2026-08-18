@@ -11,6 +11,7 @@ import pytest
 LIGHT_MODULES = [
     "chunker",
     "entity_extractor",
+    "pdf_health",
     "pdf_processing",
     "pdf_worker",
     "epub_worker",

@@ -75,6 +75,20 @@ func main() {
 		srv.SetProcessorSourceSecret(cfg.ProcessorSourceSecret)
 		srv.SetProcessorSourceRepo(rep)
 
+		// #184 fix-service surface: the RAG is the ONLY Zotero write
+		// gateway. The write key lives outside the repo
+		// (AXIOM_ZOTERO_WRITE_KEY_FILE, default ~/.axiom-ng/write-api-key);
+		// the DeepSeek key NEVER enters this process — it is fix-service
+		// env by design.
+		if keyBytes, kerr := os.ReadFile(cfg.ZoteroWriteKeyFile); kerr == nil && len(keyBytes) > 8 {
+			writeBase := strings.TrimSuffix(strings.TrimSuffix(cfg.ZoteroBaseURL, "/api"), "/")
+			srv.SetRepairAPI(rep, zotero.NewWriteClient(writeBase, src.ServerID(), strings.TrimSpace(string(keyBytes))),
+				cfg.QuarantineRoot)
+			logger.Printf("repair API enabled (zotero write gateway, quarantine under %s)", cfg.QuarantineRoot)
+		} else {
+			logger.Printf("repair API disabled (kein zotero write key unter %s)", cfg.ZoteroWriteKeyFile)
+		}
+
 		// R3 (#133) + R4 (#134): retrieval API. Hybrid recall + rerank over the
 		// QUERY runner's endpoints (R1/R2) — its own client, defaulting to the
 		// local always-on runner (AXIOM_QUERY_RUNNER_URL overrides). Query

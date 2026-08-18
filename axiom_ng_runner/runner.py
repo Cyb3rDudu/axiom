@@ -105,8 +105,40 @@ def _adapt_embeddings(raw: Any) -> dict[str, Any]:
     return out
 
 
+def _stamp_page_source(
+    locator: dict[str, Any], page_source_map: dict[int, str] | None
+) -> None:
+    """#173 trust stamp on every locator: never guess — every page reference
+    carries its level. epub_cfi is 'none' (no stable pages); page_span takes
+    the trust level of its START physical page, defaulting honestly to
+    physical_only when no map was computed (reference mode)."""
+    from axiom_ng_runner.compute_core import page_trust as pt
+
+    if locator.get("type") == "epub_cfi":
+        locator["page_source"] = pt.NONE
+        return
+    if locator.get("page_source"):
+        return  # already stamped by a previous _stamp_page_source pass
+    phys = locator.get("physical_page_start")
+    if page_source_map and phys is not None:
+        lvl = page_source_map.get(int(phys), pt.PHYSICAL_ONLY)
+        locator["page_source"] = lvl
+        pe = locator.get("physical_page_end")
+        if pe is not None and page_source_map.get(int(pe)) != lvl:
+            # #173: never mix numbering spaces — when the END page lies
+            # outside the start page's trust level (e.g. a verified folio run
+            # ending in unpaginated front matter), the end label belongs to a
+            # different space and is dropped, not displayed as one span.
+            locator.pop("page_label_end", None)
+    else:
+        locator["page_source"] = pt.PHYSICAL_ONLY
+
+
 def _adapt_chunk(
-    c: dict[str, Any], chunk_index: int, page_label_map: dict[int, str]
+    c: dict[str, Any],
+    chunk_index: int,
+    page_label_map: dict[int, str],
+    page_source_map: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     """Map the existing pipeline's chunk dict (chunker._create_chunk) to the
     contract chunk shape (contract §11 mapping table).
@@ -117,6 +149,7 @@ def _adapt_chunk(
     reverse-mapping through ``page_label_map``.
     """
     if c.get("ref") and c.get("locator") and c.get("index") is not None:
+        _stamp_page_source(c["locator"], page_source_map)
         return c
 
     meta = c.get("metadata", {}) or {}
@@ -157,7 +190,7 @@ def _adapt_chunk(
             "source": meta.get("locator_source", "marker_paginate"),
         }
 
-    return {
+    out = {
         "ref": f"chunk-{chunk_index:04d}",
         "index": chunk_index,
         "text": c.get("text", ""),
@@ -175,6 +208,11 @@ def _adapt_chunk(
         "embeddings": _adapt_embeddings(c.get("embeddings")),
         "metadata": {},
     }
+    # #173: EVERY locator leaves stamped — the adapted branch is the REAL
+    # production path (compute_core.Chunker old-style dicts); an unstamped
+    # locator here would trip the §11 gate and terminal-fail the job.
+    _stamp_page_source(out["locator"], page_source_map)
+    return out
 
 
 def _dense_embedding(chunk: dict[str, Any]) -> dict[str, Any]:
@@ -494,6 +532,7 @@ def _build_reference_result(
     real_entities: list[dict[str, Any]] | None = None,
     real_relationships: list[dict[str, Any]] | None = None,
     stage_timings: dict[str, str] | None = None,
+    page_source_map: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     proc = request.get("processing", {}) or {}
     processor_name = "axiom-python-marker"
@@ -516,7 +555,7 @@ def _build_reference_result(
 
     chunks: list[dict[str, Any]] = []
     for idx, c in enumerate(chunk_dicts):
-        ch = _adapt_chunk(c, idx, page_label_map)
+        ch = _adapt_chunk(c, idx, page_label_map, page_source_map)
         # Bedingte Fill-Logik (b): nur mit Reference-Stub füllen, wenn keine
         # echten Embeddings aus _adapt_embeddings durchgereicht wurden. Der
         # Real-Backend (TextEmbedder.embed_chunks) setzt echte BGE-M3-Vektoren
@@ -831,7 +870,6 @@ def _real_pipeline(
 ) -> dict[str, Any]:
     import json as _json
     import subprocess
-    import sys
 
     enter, stage_timings = _stage_tracker(set_stage)
     attach = request["attachment"]
@@ -875,11 +913,16 @@ def _real_pipeline(
 
     markdown = out_md.read_text(encoding="utf-8")
     page_label_map: dict[int, str] = {}
+    page_source_map: dict[int, str] = {}
     cfi_entries: list[dict[str, Any]] = []
     if content_type == "application/pdf":
-        from axiom_ng_runner.compute_core.pdf_processing import extract_page_labels
+        # #173: the trust pipeline replaces the bare 3-tier extract — labels
+        # AND per-page trust levels (folio_verified / pdf_label_sane /
+        # physical_only) in one pass. Never guess: a page reference without
+        # its level never leaves the runner.
+        from axiom_ng_runner.compute_core.page_trust import build_page_trust
 
-        page_label_map = extract_page_labels(str(source_path))
+        page_label_map, page_source_map = build_page_trust(str(source_path))
     elif content_type == "application/epub+zip":
         # EPUB CFI extraction (§11 Weg A): build text→CFI mapping from the
         # original XHTML DOM so chunks carry real epub_cfi locators instead
@@ -984,6 +1027,7 @@ def _real_pipeline(
         real_entities=real_entities,
         real_relationships=real_relationships,
         stage_timings=stage_timings,
+        page_source_map=page_source_map,
     )
 
 

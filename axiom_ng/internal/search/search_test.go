@@ -982,3 +982,38 @@ func TestSearch_GraphArmFailureDegrades(t *testing.T) {
 		t.Fatalf("graph failure must not break search: %+v", res.Hits)
 	}
 }
+
+// #173: rendering by trust level — physical_only NEVER renders as a printed
+// page ("PDF-S." prefix), folio_verified/pdf_label_sane keep "S.", the
+// page_source field rides along for client-side citation gating.
+func TestLocatorViewTrustLevels(t *testing.T) {
+	ch := []string{"2 Grundlagen", "2.5 Stakeholder"}
+	folio := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"47","page_source":"folio_verified"}`), ch)
+	if folio.PageSource != "folio_verified" || !strings.Contains(folio.Label, "S. 47") || strings.Contains(folio.Label, "PDF-S.") {
+		t.Fatalf("folio_verified renders as print page: %+v", folio)
+	}
+	phys := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"99","physical_page_start":4,"page_source":"physical_only"}`), ch)
+	if !strings.Contains(phys.Label, "PDF-S. 5") || strings.Contains(phys.Label, "99") {
+		t.Fatalf("physical_only must show the physical index, never the untrusted label: %+v", phys)
+	}
+	if phys.PageSource != "physical_only" {
+		t.Fatalf("page_source must ride along: %+v", phys)
+	}
+	epub := locatorView(json.RawMessage(`{"type":"epub_cfi","cfi_start":"/6/4!/x"}`), ch)
+	if epub.PageSource != "none" || epub.Kind != "epub_cfi" {
+		t.Fatalf("epub_cfi carries none: %+v", epub)
+	}
+	legacy := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"12"}`), ch)
+	if legacy.PageSource != "" || !strings.Contains(legacy.Label, "S. 12") {
+		t.Fatalf("legacy locators carry NO guessed trust level (blank stays blank): %+v", legacy)
+	}
+	// physical_only with NO physical index: there is nothing trustworthy to
+	// display — bare chapter, never the untrusted label as "PDF-S. 99".
+	nophys := locatorView(json.RawMessage(`{"type":"page_span","page_label_start":"99","page_source":"physical_only"}`), ch)
+	if strings.Contains(nophys.Label, "99") || strings.Contains(nophys.Label, "PDF-S.") {
+		t.Fatalf("physical_only without a physical index must suppress the untrusted label: %+v", nophys)
+	}
+	if nophys.Label != "2.5 Stakeholder" || nophys.PageSource != "physical_only" {
+		t.Fatalf("bare chapter is the only honest rendering: %+v", nophys)
+	}
+}

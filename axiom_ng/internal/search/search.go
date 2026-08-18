@@ -168,9 +168,13 @@ type Hit struct {
 // epub_cfi → chapter/CFI short form).
 type LocatorView struct {
 	Kind    string `json:"kind"`              // "page" | "epub_cfi"
-	Label   string `json:"label"`             // e.g. "S. 47" or "Kap. 3 · S. 12"
+	Label   string `json:"label"`             // e.g. "S. 47", "PDF-S. 12" or "Kap. 3"
 	Chapter string `json:"chapter,omitempty"` // deepest section title
 	CFI     string `json:"cfi,omitempty"`     // epub CFI short form
+	// PageSource (#173 trust level): folio_verified is the ONLY level a
+	// client may cite as a printed page; physical_only renders as "PDF-S.";
+	// none means no stable pages at all. Additive contract field.
+	PageSource string `json:"page_source,omitempty"`
 }
 
 // Response is POST /api/search.
@@ -679,6 +683,7 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 		PhysicalPageStart *int   `json:"physical_page_start"`
 		PhysicalPageEnd   *int   `json:"physical_page_end"`
 		CFIStart          string `json:"cfi_start"`
+		PageSource        string `json:"page_source"`
 	}
 	_ = json.Unmarshal(raw, &loc)
 
@@ -690,28 +695,47 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 	switch loc.Type {
 	case "epub_cfi":
 		return LocatorView{
-			Kind:    "epub_cfi",
-			Label:   chapter,
-			Chapter: chapter,
-			CFI:     cfiShort(loc.CFIStart),
+			Kind:       "epub_cfi",
+			Label:      chapter,
+			Chapter:    chapter,
+			CFI:        cfiShort(loc.CFIStart),
+			PageSource: processor.PageSourceNone,
 		}
 	case "page_span":
 		label := loc.PageLabelStart
-		if label == "" && loc.PhysicalPageStart != nil {
+		pagePrefix := "S. "
+		// #173 rendering by trust: physical_only is a PDF index, never a
+		// printed page — "PDF-S." makes the difference visible; folio_verified
+		// and pdf_label_sane render as page references (the page_source field
+		// lets clients gate citation on folio_verified only).
+		if loc.PageSource == processor.PageSourcePhysicalOnly {
+			// Untrusted labels never display: the physical index is the ONLY
+			// thing a physical_only locator may show. Without a physical index
+			// there is nothing trustworthy at all — bare chapter, no label.
+			pagePrefix = "PDF-S. "
+			if loc.PhysicalPageStart != nil {
+				label = fmt.Sprintf("%d", *loc.PhysicalPageStart+1)
+			} else {
+				label = ""
+			}
+		} else if label == "" && loc.PhysicalPageStart != nil {
 			label = fmt.Sprintf("%d", *loc.PhysicalPageStart+1) // physical is 0-based
 		}
-		if loc.PageLabelEnd != "" && loc.PageLabelEnd != loc.PageLabelStart {
+		if loc.PageLabelEnd != "" && loc.PageLabelEnd != loc.PageLabelStart && loc.PageSource != processor.PageSourcePhysicalOnly {
 			label += "-" + loc.PageLabelEnd
 		}
 		switch {
 		case label != "" && chapter != "":
-			label = chapter + " · S. " + label
+			label = chapter + " · " + pagePrefix + label
 		case label != "":
-			label = "S. " + label
+			label = pagePrefix + label
 		default:
 			label = chapter // no page info: bare chapter, never a dangling "S. "
 		}
-		return LocatorView{Kind: "page", Label: label, Chapter: chapter}
+		// #173: a blank page_source stays blank — legacy locators carry NO
+		// guessed trust level (a tier-2/3 fabricated label must never render
+		// as pdf_label_sane); clients gate on the explicit levels only.
+		return LocatorView{Kind: "page", Label: label, Chapter: chapter, PageSource: loc.PageSource}
 	default:
 		if chapter != "" {
 			return LocatorView{Kind: "none", Label: chapter, Chapter: chapter}

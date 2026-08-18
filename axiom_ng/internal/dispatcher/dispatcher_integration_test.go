@@ -923,7 +923,7 @@ func TestRealPersisterCompletesAndAcks(t *testing.T) {
 		`"processor":{"name":"fake","version":"0.1.0","profile":"full-rag-v1","profile_hash":"unused-fallback","models":{"dense_embedding":"fake-bge"}},` +
 		`"artifacts":[],` +
 		`"chunks":[{"ref":"chunk-0000","index":0,"text":"the quick brown fox",` +
-		`"locator":{"type":"page_span","physical_page_start":0,"physical_page_end":0,"page_label_start":"1","page_label_end":"1","source":"marker_paginate"},` +
+		`"locator":{"type":"page_span","physical_page_start":0,"physical_page_end":0,"page_label_start":"1","page_label_end":"1","source":"marker_paginate","page_source":"pdf_label_sane"},` +
 		`"structure":{"section_titles":["Intro"],"start_paragraph_index":0,"end_paragraph_index":0},` +
 		`"token_count":4,` +
 		`"embeddings":{"dense":{"model":"fake-bge","dimensions":3,"values":[0.1,0.2,0.3]}}}],` +

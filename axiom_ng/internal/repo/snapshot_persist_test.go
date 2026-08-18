@@ -157,7 +157,7 @@ func (h *persistHarness) validResultRaw(densDims int) *processor.Result {
 		Manifest: map[string]any{"source_page_count": 1},
 		Chunks: []processor.Chunk{{
 			Ref: "chunk-0000", Index: 0, Text: "the quick brown fox",
-			Locator:    &processor.Locator{Type: "page_span", PhysicalPageStart: ptrInt(0), PhysicalPageEnd: ptrInt(0), PageLabelStart: "1", PageLabelEnd: "1", Source: "marker_paginate"},
+			Locator:    &processor.Locator{Type: "page_span", PhysicalPageStart: ptrInt(0), PhysicalPageEnd: ptrInt(0), PageLabelStart: "1", PageLabelEnd: "1", Source: "marker_paginate", PageSource: "pdf_label_sane"},
 			Structure:  processor.ChunkStructure{SectionTitles: []string{"Intro"}, StartParagraphIndex: ptrInt(0), EndParagraphIndex: ptrInt(0)},
 			TokenCount: 4,
 			Embeddings: processor.ChunkEmbeddings{Dense: &processor.DenseEmbedding{Model: "reference-bge-m3", Dimensions: densDims, Values: denseVals}},
@@ -715,6 +715,7 @@ func TestValidateEPUBAcceptsRealCFI(t *testing.T) {
 		r.Chunks[i].Locator.Type = "epub_cfi"
 		r.Chunks[i].Locator.CFIStart = "epubcfi(/6/2!/4/2)"
 		r.Chunks[i].Locator.CFIEnd = "epubcfi(/6/2!/4/4)"
+		r.Chunks[i].Locator.PageSource = "none" // #173: epub_cfi carries none
 	}
 	if verr := ValidateProcessorResult(r, h.frozen, dims); verr != nil {
 		t.Fatalf("expected valid EPUB CFI to pass, got %v", verr)
