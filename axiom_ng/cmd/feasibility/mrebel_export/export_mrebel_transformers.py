@@ -29,7 +29,9 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 def gen(model_id, out_dir, opset=14):
     os.makedirs(out_dir, exist_ok=True)
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))
+    from _device import pick_device as _pd
+    dev = _pd("auto", no_fp16=True, label="mrebel-export")[0]
     model = AutoModelForSeq2SeqLM.from_pretrained(model_id, torch_dtype=torch.float32).to(dev).eval()
     tok = AutoTokenizer.from_pretrained(model_id)
     # default pt seq2seq config for BART
