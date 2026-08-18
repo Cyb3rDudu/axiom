@@ -159,7 +159,7 @@ def cmd_sweep(out_path: str, kandidaten_path: str | None) -> None:
                     # token-set subset match in either direction; exact short
                     # titles ("Controlling") and long ones both work, while
                     # series families (Demystifying vs Hill ESG) stay apart
-                    if ktok and rt and (ktok <= rt or rt <= kt):
+                    if ktok and rt and (ktok <= rt or rt <= ktok):
                         ov = len(ktok & rt)
                         if ov > best:
                             best, hit = ov, r
