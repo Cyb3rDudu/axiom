@@ -180,7 +180,6 @@ def verify(plan: dict, pdf_path: str) -> tuple[float, int, dict]:
     an observable page outside all sections counts against coverage.
     """
     import pymupdf  # type: ignore[import-not-found] — lazy, venv-only (review W5)
-
     from axiom_ng_runner.compute_core import page_trust as pt
 
     doc = pymupdf.open(pdf_path)
@@ -260,7 +259,6 @@ def build_healed_pdf(plan: dict, pdf_path: str) -> bytes:
 def run_case(case: dict) -> None:
     import pymupdf  # type: ignore[import-not-found] — lazy, venv-only (review W5)
     import requests
-
     from axiom_ng_runner.compute_core import page_trust as pt
     from axiom_ng_runner.compute_core.pdf_health import preflight
 
