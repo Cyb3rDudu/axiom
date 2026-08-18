@@ -29,6 +29,17 @@ SYNC_JSON=$(curl -sf --max-time 300 -X POST http://127.0.0.1:8011/api/zotero/syn
   || DIE "4.0 projection sync FAILED — old attachments would be enqueued instead of healed bytes"
 echo "sync: $SYNC_JSON" | head -c 300; echo
 
+# ── 4.0b stale attachments retired/re-pointed (satellite finding: ghost rows
+#     DUJQJ2RN→DNC73IVL, NU8SS6HG→PC9U5YEX — live-verified pre-fix: old keys
+#     undeleted WITH active snapshots, new keys unprojected)
+LOG "4.0b stale-attachment re-point (satellite ghosts)"
+STALE=$(DB "SELECT count(*) FROM zotero_attachments a WHERE a.zotero_key IN ('DUJQJ2RN','NU8SS6HG')
+            AND (NOT a.deleted OR EXISTS(SELECT 1 FROM processing_snapshots s
+                                         WHERE s.attachment_id=a.id AND s.active))")
+[ "$STALE" = "0" ] || DIE "4.0b ghost rows still live (DUJQJ2RN/NU8SS6HG undeleted or active-snapshotted) — sync did NOT retire; no fire"
+NEWKEYS=$(DB "SELECT count(*) FROM zotero_attachments WHERE zotero_key IN ('DNC73IVL','PC9U5YEX') AND NOT deleted")
+[ "$NEWKEYS" = "2" ] || DIE "4.0b re-pointed keys missing (DNC73IVL/PC9U5YEX present=$NEWKEYS of 2) — heals not projected; no fire"
+
 # ── 4.1 carrier clone: REAL ancestry check (SHAs do not order lexicographically)
 LOG "4.1 carrier clone ancestry >= $TRAIN_SHA"
 $SSH "$CARRIER" "git -C ~/Code/axiom merge-base --is-ancestor $TRAIN_SHA HEAD" \

@@ -307,6 +307,7 @@ teardown plan.
 | # | Check | Command | Expected |
 | --- | --- | --- | --- |
 | 4.0 | Post-W7 projection sync done | §2.1a executed once; healed books show NEW attachment keys | old snapshots retired; new attachments active-eligible |
+| 4.0b | Stale-attachment re-point (satellite finding) | script asserts: DUJQJ2RN/NU8SS6HG deleted + no active snapshot; DNC73IVL/PC9U5YEX present, not deleted | both old keys retired, both new keys projected (live pre-fix state: exactly the violation) |
 | 4.1 | Merge train on carrier clone | `ssh … 'cd ~/Code/axiom && git log --oneline -1'` | ≥ `78558d5` |
 | 4.2 | New-chunker proof in image | §1.5 container feature probe | both W2+W12 assertions pass |
 | 4.3 | Runners healthy | `curl :19542/19543(45)/19544 /v1/health` ×3 | `{"status":"ok"}` |
