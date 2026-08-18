@@ -190,8 +190,11 @@ def chapter_restarts(
     if len(sections) < 2:
         return None
     first_start = sections[0][0]
+    corroborated = 0
     for pages, vals in folio_runs(candidates):
         if pages[0] < first_start:
+            if pages[-1] >= first_start:
+                return None  # crosses out of front matter into section 1
             continue  # front matter: not a chapter claim, no contradiction
         idx = 0
         for i, (start, _) in enumerate(sections):
@@ -203,6 +206,9 @@ def chapter_restarts(
             return None  # run crosses a restart the folios do not show
         if vals[0] != start_val + (pages[0] - start_page):
             return None  # folio contradicts the label-section math
+        corroborated += 1
+    if corroborated == 0:
+        return None  # zero folio evidence: never guess from the tree alone
     return [(p, i + 1) for i, (p, _) in enumerate(sections)]
 
 
@@ -223,7 +229,7 @@ def _resolve_value_clashes(
                 continue
             winner = idxs[lengths.index(mx)]
         rp, rv = runs[winner]
-        v = key if isinstance(key, int) else key[1]
+        v = key[1]
         verified[rp[rv.index(v)]] = str(v)
     return verified
 
@@ -253,10 +259,10 @@ def verify_folio_sequence(
     """
     runs = folio_runs(candidates)
     if chapters is None:
-        value_runs: dict[int, list[int]] = {}
+        value_runs: dict[tuple[int, int], list[int]] = {}
         for idx, (_, rv) in enumerate(runs):
             for v in rv:
-                value_runs.setdefault(v, []).append(idx)
+                value_runs.setdefault((0, v), []).append(idx)
         return _resolve_value_clashes(runs, value_runs)
     key_runs: dict[tuple[int, int], list[int]] = {}
     for idx, (rp, rv) in enumerate(runs):

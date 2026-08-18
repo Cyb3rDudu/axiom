@@ -170,9 +170,6 @@ class PageTrustTests(unittest.TestCase):
             pt.verify_folio_sequence({0: "1", 1: "2", 2: "3", 10: "1", 11: "2", 12: "3"}), {})
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class StampWitnessTests(unittest.TestCase):
     """#173 contract witness: EVERY adapted locator leaves stamped — the
@@ -324,3 +321,82 @@ class ChapterStampWitnessTests(unittest.TestCase):
         runner._stamp_chapter(locator, None)
         runner._stamp_chapter(locator, {})
         self.assertEqual(locator, before)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class ChapterReviewHardeningTests(unittest.TestCase):
+    """W12 auto-review round: the mutation classes that survived the first
+    delivery, each now with its failing regression."""
+
+    def test_value_math_corroboration_is_pinned(self):
+        # Section 1 claims firstpagenum 5 but the printed folios start at 1:
+        # the run contradicts the section math -> chapters rejected.
+        spec = [
+            {"startpage": 0, "prefix": "C", "style": "D", "firstpagenum": 1},
+            {"startpage": 2, "prefix": "", "style": "D", "firstpagenum": 5},
+            {"startpage": 8, "prefix": "", "style": "D", "firstpagenum": 1},
+        ]
+        pdf = make_pdf(CH_BOOK_TOPLINES, sections_spec=spec)
+        _, _, chapters = pt.build_page_trust(pdf)
+        self.assertEqual(chapters, {})
+
+    def test_zero_folio_evidence_rejects_chapter_mode(self):
+        # >= 2 arabic sections but NO printed folios anywhere: accepting the
+        # tree alone would guess part ordinals as chapters (vacuous
+        # corroboration) — rejected.
+        pdf = make_pdf([None] * 12, sections_spec=HEALED_SECTIONS)
+        _, _, chapters = pt.build_page_trust(pdf)
+        self.assertEqual(chapters, {})
+
+    def test_front_matter_run_crossing_into_section_rejects(self):
+        # A front-matter-rooted run whose tail reaches into section 1
+        # contradicts the section math on those pages — rejected, not skipped.
+        top = ["5", "6", "7", "8", None, None, None, None, "1", "2", "3", "4"]
+        pdf = make_pdf(top, sections_spec=HEALED_SECTIONS)
+        _, _, chapters = pt.build_page_trust(pdf)
+        self.assertEqual(chapters, {})
+
+    def test_preflight_healed_chapter_book_reads_green(self):
+        # The W7-loop guard: pre-heal the restart book reads reparierbar
+        # (broken restart labels + folio evidence), post-heal (anchor
+        # sections corroborated) it reads gesund — a healed chapter book
+        # must never re-enter the repair queue.
+        from axiom_ng_runner.compute_core import pdf_health
+
+        # pre-heal: chapter-wise repeated labels (broken) + restart folios
+        pre = pdf_health.analyze_pdf(make_pdf(CH_BOOK_TOPLINES, repeat_labels="C1"))
+        self.assertIn("reparierbar", pre["verdacht"])
+        post = pdf_health.analyze_pdf(make_pdf(CH_BOOK_TOPLINES, sections_spec=HEALED_SECTIONS))
+        self.assertEqual(post["verdacht"], "🟢 gesund")
+
+    def test_stamp_chapter_never_overwrites(self):
+        from axiom_ng_runner import runner
+
+        locator = {"type": "page_span", "physical_page_start": 9,
+                   "page_label_start": "3", "source": "marker_paginate", "chapter": 7}
+        runner._stamp_chapter(locator, {9: 2})
+        self.assertEqual(locator["chapter"], 7)
+
+    def test_physical_anchor_uses_chunker_marker_truth(self):
+        # Review C1: chapter-relative books carry duplicate labels across
+        # chapters; the label reverse-mapping (min of hits) resolved a
+        # chapter-2 "3" chunk to chapter 1's page 4. The chunker's Marker
+        # physical anchors must win end-to-end.
+        from axiom_ng_runner.compute_core.chunker import Chunker
+        from axiom_ng_runner import runner as R
+
+        pdf = make_pdf(CH_BOOK_TOPLINES, sections_spec=HEALED_SECTIONS)
+        labels, sources, chmap = pt.build_page_trust(pdf)
+        md = "\n\n".join(
+            f"{{{i}}}" + "-" * 10 + f"\n\nFachtext Seite {i} des Kapitels." for i in range(12)
+        )
+        chunks = Chunker(max_chunk_tokens=15, overlap_tokens=0, min_chunk_tokens=1).chunk(
+            md, doc_metadata={"doc_id": "t", "page_label_map": labels, "page_chapter_map": chmap}
+        )
+        out = [R._adapt_chunk(c, i, labels, sources, chmap) for i, c in enumerate(chunks)]
+        c10 = next(c for c in out if "Seite 10" in c["text"])  # chapter 2, label "3"
+        self.assertEqual(c10["locator"]["physical_page_start"], 10)  # NOT chapter 1's page 4
+        self.assertEqual(c10["locator"]["chapter"], 2)

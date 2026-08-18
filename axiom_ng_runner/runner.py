@@ -206,10 +206,13 @@ def _adapt_chunk(
     else:
         page_start = meta.get("page_start")
         page_end = meta.get("page_end")
+        # W12 review C1: prefer the chunker's exact Marker-page anchors —
+        # chapter-relative books carry duplicate labels across chapters and
+        # the label reverse-mapping resolves to the EARLIEST chapter's page.
         locator = {
             "type": "page_span",
-            "physical_page_start": _physical(page_start),
-            "physical_page_end": _physical(page_end),
+            "physical_page_start": meta.get("physical_page_start", _physical(page_start)),
+            "physical_page_end": meta.get("physical_page_end", _physical(page_end)),
             "page_label_start": str(page_start) if page_start is not None else "",
             "page_label_end": str(page_end) if page_end is not None else "",
             "source": meta.get("locator_source", "marker_paginate"),

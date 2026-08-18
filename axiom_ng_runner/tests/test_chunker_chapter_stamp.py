@@ -41,7 +41,7 @@ class ChapterStampTests(unittest.TestCase):
         self.assertEqual(first["metadata"]["chapter"], 1)
         second = _first_heading_chunk(chunks, "# Zweiter Abschnitt")
         self.assertEqual(second["metadata"]["chapter"], 2)
-        # a chunk opened BEFORE the first mapped page (front matter) stays unstamped
+        # every chunk's first content sits on a mapped page in this fixture
         for c in chunks:
             self.assertIn("chapter", c["metadata"], "all fixture content is on mapped pages")
 
