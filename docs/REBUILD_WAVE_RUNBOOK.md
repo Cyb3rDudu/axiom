@@ -122,6 +122,29 @@ job) or `podman stop` them until firing. If stopped, re-run §1.3 at firing.
 
 ### 2.1 Preconditions — see §4 checklist, all boxes green.
 
+### 2.1a MANDATORY post-W7 projection sync **[MUTATES]**
+
+W7 heals with `AXIOM_FIXSVC_NO_SYNC=1` (wave mode): the heal writes Zotero
+(delete + create/upload) but skips the RAG sync. Until one sync runs, the
+RAG DB still shows the OLD attachments as live with their ACTIVE old
+snapshots — and the NEW healed attachments do not exist in the DB at all.
+The §2.3 wave INSERT reads those RAG rows: fired without this sync it
+would enqueue force_rebuild for the OLD, broken attachments (their
+quarantined local_path files survive — quarantine copies, never moves)
+and never chunk the healed bytes.
+
+After W7 reaches terminal states (checklist 4.5) and BEFORE §2.3:
+
+```bash
+curl -s -X POST http://localhost:8011/api/zotero/sync | jq .   # ONE sync
+```
+
+The same-tx reconcile (retire-in-same-sync, #184) deactivates the old
+snapshots and projects the new attachments — both sides of the stale
+projection resolve in this one call. Then re-run the §2.3 dry SELECT and
+verify the healed books appear under their NEW attachment keys (4.12).
+Sync discipline resumes (quiesce) from that moment until the wave ends.
+
 ### 2.2 Dispatcher topology (TC2-proven 3-dispatcher pattern)
 
 One dispatcher per runner (Mac side), so `ingest_jobs.runner_name` cleanly
@@ -274,11 +297,12 @@ teardown plan.
 
 | # | Check | Command | Expected |
 | --- | --- | --- | --- |
+| 4.0 | Post-W7 projection sync done | §2.1a executed once; healed books show NEW attachment keys | old snapshots retired; new attachments active-eligible |
 | 4.1 | Merge train on carrier clone | `ssh … 'cd ~/Code/axiom && git log --oneline -1'` | ≥ `78558d5` |
 | 4.2 | New-chunker proof in image | §1.5 container feature probe | both W2+W12 assertions pass |
 | 4.3 | Runners healthy | `curl :19542/19543(45)/19544 /v1/health` ×3 | `{"status":"ok"}` |
 | 4.4 | Queue empty | `SELECT count(*) FROM ingest_jobs WHERE status='pending'` | `0` |
-| 4.5 | W7 terminal | `SELECT status, count(*) FROM repair_cases GROUP BY 1` | no `queued`/`in_repair`; healed+blocked+closed only |
+| 4.5 | W7 terminal | `SELECT status, count(*) FROM repair_cases GROUP BY 1` | no `queued`/`in_repair`; healed+blocked+closed only. W7 ran with `AXIOM_FIXSVC_NO_SYNC` set (truthy check — any non-empty value incl. `0` enables, same pattern as `AXIOM_FIXSVC_DUMP_HEALED`) |
 | 4.6 | Zotero quiesce | no sync scheduled; sync API idle | no new `zotero_*` writes during wave (manual discipline + checklist at firing) |
 | 4.7 | OS cluster health | `curl localhost:9200/_cluster/health` | `green`, no unassigned shards |
 | 4.8 | Full-feature profile | staged `AXIOM_DISPATCHER_PROFILE` env resolves to dense+entities+relations; after first book: `SELECT profile_hash FROM processing_snapshots ORDER BY created_at DESC LIMIT 1` + dense-embeddings row count > 0 | full-feature hash; embeddings grow |
