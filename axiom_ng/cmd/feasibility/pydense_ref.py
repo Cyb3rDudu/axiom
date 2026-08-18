@@ -6,17 +6,36 @@ Writes py_dense.bin (big-endian f32, 1024 per chunk) and prints cosine stats
 avg/max (and cosine==1.0 hit rate) Go vs Python.
 
 Usage: pydense_ref.py <chunks.json> <go_run.bin> <outdir>
+       [--device auto|cuda|mps|cpu] [--no-fp16]
+Device policy: auto = CUDA (fp16) > MPS > CPU; the historical parity runs
+were MPS fp32 — reproduce with --device mps --no-fp16.
 """
-import json, sys, struct, math
-import numpy as np
+import argparse
+import json
+import os
+import struct
+import sys
 
-chunks_path, go_bin, outdir = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _device import add_device_args, pick_device
+
+p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+p.add_argument("chunks_path")
+p.add_argument("go_bin")
+p.add_argument("outdir")
+add_device_args(p)
+args = p.parse_args()
+chunks_path, go_bin, outdir = args.chunks_path, args.go_bin, args.outdir
+
+import numpy as np
 
 with open(chunks_path) as f:
     chunks = json.load(f)
 
 from FlagEmbedding import BGEM3FlagModel
-md = BGEM3FlagModel("BAAI/bge-m3", use_fp16=False, device="mps")
+
+dev, fp16 = pick_device(args.device, no_fp16=args.no_fp16, label="dense")
+md = BGEM3FlagModel("BAAI/bge-m3", use_fp16=fp16, device=dev)
 
 dense = []
 for i, c in enumerate(chunks):
@@ -26,8 +45,7 @@ for i, c in enumerate(chunks):
 arr = np.stack(dense)                       # (N,1024) f32
 # write py_dense.bin big-endian
 with open(f"{outdir}/py_dense.bin", "wb") as f:
-    for v in arr.ravel():
-        f.write(struct.pack(">f", float(v)))
+    f.writelines(struct.pack(">f", float(v)) for v in arr.ravel())
 
 # load Go
 with open(go_bin, "rb") as f:

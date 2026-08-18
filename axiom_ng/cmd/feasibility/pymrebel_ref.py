@@ -9,14 +9,21 @@ decoder_start_token_id=tp_XX), then dumps per chunk:
 so Go (mrebelgo) can be compared on triple-set equality AND raw-string equality.
 
 Usage: pymrebel_ref.py <chunks.json> <out.json> [max_chunks]
+       [--device auto|cuda|mps|cpu]
 Runs on the study GPU container (torch+transformers matching the runner 4.57.6).
+Device policy: auto = CUDA > MPS > CPU (mrebel runs fp32 on every device).
 """
+import argparse
 import json
+import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+from _device import add_device_args, pick_device
 
 _MREBEL_TYPE_MAP = {
     "per": "PERSON", "org": "ORGANIZATION", "loc": "LOCATION",
@@ -40,9 +47,14 @@ def parse_mrebel_output(decoded):
 
 
 def main():
-    chunks_path, out_path = sys.argv[1], sys.argv[2]
-    maxc = int(sys.argv[3]) if len(sys.argv) > 3 else 10**9
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("chunks_path")
+    p.add_argument("out_path")
+    p.add_argument("max_chunks", nargs="?", type=int, default=10**9)
+    add_device_args(p)
+    args = p.parse_args()
+    chunks_path, out_path, maxc = args.chunks_path, args.out_path, args.max_chunks
+    dev, _fp16 = pick_device(args.device, no_fp16=True, label="mrebel")  # mrebel: fp32 everywhere
     print(f"device={dev}", flush=True)
     model = AutoModelForSeq2SeqLM.from_pretrained("Babelscape/mrebel-large").to(dev).eval()
     tok = AutoTokenizer.from_pretrained("Babelscape/mrebel-large")

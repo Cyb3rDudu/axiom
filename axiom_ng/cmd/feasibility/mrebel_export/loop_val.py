@@ -1,6 +1,8 @@
 import numpy as np, torch, onnxruntime as ort
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-dev="cuda"
+import sys as _sys, os as _os; _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from _device import pick_device as _pd
+dev = _pd("auto", no_fp16=True, label="mrebel-export")[0]
 m=AutoModelForSeq2SeqLM.from_pretrained("Babelscape/mrebel-large").to(dev).eval()
 tok=AutoTokenizer.from_pretrained("Babelscape/mrebel-large")
 enc=tok(["Teilung."],return_tensors="pt").to(dev)

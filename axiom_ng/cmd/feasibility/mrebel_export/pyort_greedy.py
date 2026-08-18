@@ -3,7 +3,9 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import json
 chunks=json.load(open('/models/sample_chunks.json'))
 text=chunks[0]["text"][:1500]
-dev="cuda"
+import sys as _sys, os as _os; _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from _device import pick_device as _pd
+dev = _pd("auto", no_fp16=True, label="mrebel-export")[0]
 tok=AutoTokenizer.from_pretrained("Babelscape/mrebel-large")
 
 tp=tok.convert_tokens_to_ids("tp_XX")

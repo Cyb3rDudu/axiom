@@ -4,7 +4,9 @@ d=json.load(open('/go_enc.json'))
 ids=np.array(d['enc_ids'],dtype=np.int64)
 go_hidden=np.array(d['enc_hidden'],dtype=np.float32)
 print("go enc_len",len(ids),"hidden shape",go_hidden.shape)
-dev="cuda"
+import sys as _sys, os as _os; _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from _device import pick_device as _pd
+dev = _pd("auto", no_fp16=True, label="mrebel-export")[0]
 m=AutoModelForSeq2SeqLM.from_pretrained("Babelscape/mrebel-large").to(dev).eval()
 with torch.no_grad():
     o=m.model.encoder(input_ids=torch.tensor([ids],device=dev),attention_mask=torch.ones(1,len(ids),device=dev))
