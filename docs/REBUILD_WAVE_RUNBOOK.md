@@ -324,6 +324,19 @@ teardown plan.
 
 ---
 
+### 2.8 Standard epilogue — entity consolidation (#193)
+
+After the drain and the OS==PG parity check, every wave runs the
+generation-time entity consolidation (owner decision: merging, no
+migration, no read-layer workaround; exact canonical-form match only):
+
+```bash
+AXIOM_DATABASE_URL=<dsn> ./axiom-ng -consolidate-entities
+# epilogue: entity consolidation complete: N entities merged
+```
+
+Idempotent by construction; pinned by the seeded IT TestIT_ConsolidateEntities.
+
 ## 5. Sources
 
 - `axiom_ng/docs/benchmarks/MASS_CHUNKING_BENCHMARK.md` — Flutgate-class
