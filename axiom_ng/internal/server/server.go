@@ -64,6 +64,7 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/api/zotero/documents", s.handleZoteroDocuments)
 	r.Post("/api/search", s.handleSearch)
 	r.Get("/api/passage/{id}", s.handlePassage)
+	r.Get("/api/passage/{id}/page", s.handlePassageAt)
 	r.Get("/api/kg/entities", s.handleKGEntities)
 	r.Get("/api/kg/entities/{id}/neighbors", s.handleKGNeighbors)
 	r.Get("/api/kg/relations", s.handleKGRelations)
