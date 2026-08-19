@@ -98,7 +98,14 @@ func (s *Server) handleKGRelations(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "kg not configured"})
 		return
 	}
-	entity := r.URL.Query().Get("entity")
+	// #193 P1: consumers send entity_id; the legacy `entity` name stays as
+	// an alias so old callers keep working. Either way the value reaches
+	// the repo call (the pre-fix handler dropped entity_id entirely, so a
+	// nonexistent id silently returned the unfiltered list).
+	entity := r.URL.Query().Get("entity_id")
+	if entity == "" {
+		entity = r.URL.Query().Get("entity")
+	}
 	if entity != "" && !isUUID(entity) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "entity filter must be a uuid"})
 		return
@@ -131,6 +138,23 @@ func writeKGResult(w http.ResponseWriter, res any, err error) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	// #193 P2: an empty KG answer is [] on the wire, never null — normalize
+	// nil slices at the API boundary (the repo initializes slices; this
+	// guards nil from any service implementation, including fakes).
+	switch v := res.(type) {
+	case []repo.KGEntity:
+		if v == nil {
+			res = []repo.KGEntity{}
+		}
+	case []repo.KGNeighbor:
+		if v == nil {
+			res = []repo.KGNeighbor{}
+		}
+	case []repo.KGRelationView:
+		if v == nil {
+			res = []repo.KGRelationView{}
+		}
 	}
 	writeJSON(w, http.StatusOK, res)
 }

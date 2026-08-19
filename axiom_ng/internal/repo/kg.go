@@ -8,6 +8,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -38,6 +39,11 @@ func (r *Repo) SearchKGEntities(ctx context.Context, q string, minMentions, limi
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	// #193 P3: a caller-supplied % or _ would otherwise act as a wildcard
+	// inside the ILIKE pattern (and \\ un-escapes). Escape with the
+	// Postgres default escape char so the term matches literally.
+	esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	q = esc.Replace(q)
 	rows, err := r.pool.Query(ctx, activeEntityCounts+`
 		SELECT e.id::text, coalesce(e.canonical_form, e.text), e.text,
 		       coalesce(e.type, ''), em.chunks
@@ -91,7 +97,7 @@ func (r *Repo) KGNeighbors(ctx context.Context, entityID string, minMentions, li
 		return nil, err
 	}
 	defer rows.Close()
-	var out []KGNeighbor
+	out := []KGNeighbor{} // #193 P2: empty slice marshals as [], never null
 	for rows.Next() {
 		var n KGNeighbor
 		var ev string
@@ -180,7 +186,7 @@ func (r *Repo) KGRelations(ctx context.Context, relType, entityID, documentID st
 		return nil, err
 	}
 	defer rows.Close()
-	var out []KGRelationView
+	out := []KGRelationView{} // #193 P2: empty slice marshals as [], never null
 	for rows.Next() {
 		var v KGRelationView
 		var ev string
@@ -248,7 +254,7 @@ func (r *Repo) GraphCandidates(ctx context.Context, seedChunkIDs []string, minMe
 
 func scanKGEntities(rows pgx.Rows) ([]KGEntity, error) {
 	defer rows.Close()
-	var out []KGEntity
+	out := []KGEntity{} // #193 P2: empty slice marshals as [], never null
 	for rows.Next() {
 		var e KGEntity
 		if err := rows.Scan(&e.ID, &e.CanonicalForm, &e.Text, &e.Type, &e.Mentions); err != nil {

@@ -204,3 +204,64 @@ func TestKGEnvelopeDeterminism(t *testing.T) {
 		t.Fatalf("without hydrator the bare list is the contract, got: %s", rec.Body.String())
 	}
 }
+
+// #193 P1: consumers send entity_id (the legacy `entity` name stays as an
+// alias). The pre-fix handler dropped entity_id entirely — a nonexistent id
+// silently returned the unfiltered list. Red-first at 0e481f8: the fake
+// received an empty filter for entity_id requests.
+func TestKGRelationsEntityIDWiring(t *testing.T) {
+	kg := &fakeKG{}
+	s := kgServer(t, kg)
+
+	// entity_id passes through as the entity filter (new canonical name).
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/kg/relations?entity_id=00000000-0000-0000-0000-00000000000b", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if kg.lastEnt != "00000000-0000-0000-0000-00000000000b|" {
+		t.Fatalf("entity_id must reach the service as the entity filter, got %q", kg.lastEnt)
+	}
+
+	// legacy `entity` alias keeps working (existing callers).
+	rec2 := httptest.NewRecorder()
+	s.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet,
+		"/api/kg/relations?entity=00000000-0000-0000-0000-00000000000c", nil))
+	if rec2.Code != http.StatusOK || kg.lastEnt != "00000000-0000-0000-0000-00000000000c|" {
+		t.Fatalf("legacy entity alias broken: %d %q", rec2.Code, kg.lastEnt)
+	}
+
+	// entity_id wins when both are present (deterministic precedence).
+	rec3 := httptest.NewRecorder()
+	s.ServeHTTP(rec3, httptest.NewRequest(http.MethodGet,
+		"/api/kg/relations?entity=00000000-0000-0000-0000-00000000000c&entity_id=00000000-0000-0000-0000-00000000000b", nil))
+	if kg.lastEnt != "00000000-0000-0000-0000-00000000000b|" {
+		t.Fatalf("entity_id must take precedence, got %q", kg.lastEnt)
+	}
+
+	// malformed entity_id hits the (now effective) uuid guard.
+	rec4 := httptest.NewRecorder()
+	s.ServeHTTP(rec4, httptest.NewRequest(http.MethodGet,
+		"/api/kg/relations?entity_id=not-a-uuid", nil))
+	if rec4.Code != http.StatusBadRequest {
+		t.Fatalf("malformed entity_id must 400, got %d", rec4.Code)
+	}
+}
+
+// #193 P2: empty KG answers serialize as [] — never null. The repo now
+// initializes the slices; this pins the wire shape at the handler level.
+func TestKGEmptyAnswersAreArrays(t *testing.T) {
+	kg := &fakeKG{} // returns nil relations
+	s := kgServer(t, kg)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/kg/relations", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	// the fake returns nil — the WIRE contract for empty is handled repo-side;
+	// here we pin that a nil service answer still renders as [], not null.
+	if body := strings.TrimSpace(rec.Body.String()); body == "null" {
+		t.Fatalf("empty relations must never serialize as null")
+	}
+}
