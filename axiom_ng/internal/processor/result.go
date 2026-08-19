@@ -103,6 +103,12 @@ type Locator struct {
 	Chapter  *int   `json:"chapter,omitempty"`
 	CFIStart string `json:"cfi_start,omitempty"`
 	CFIEnd   string `json:"cfi_end,omitempty"`
+	// ParagraphPages (#194): per-paragraph page map [[charOffset, label], …]
+	// — boundaries where the chunk's print page changes (first entry always
+	// (0, first page)). Consumers derive the exact page of a hit position;
+	// the span stays the honest envelope. MUST stay in the struct for the
+	// same re-marshal reason as Chapter (the W9 lesson above).
+	ParagraphPages [][]any `json:"paragraph_pages,omitempty"`
 }
 
 // ChunkStructure carries the ordered heading hierarchy and paragraph range.

@@ -103,3 +103,30 @@ func TestLocatorChapterRoundTrip(t *testing.T) {
 		t.Fatalf("chunk locator round-trip lost chapter (got %v)", back2["chapter"])
 	}
 }
+
+// #194: the persist boundary re-marshals the Locator — an unknown field is
+// silently dropped there (the W9 chapter-stamp lesson, pinned as a test).
+func TestLocatorParagraphPagesRoundTrip(t *testing.T) {
+	raw := []byte(`{"type":"page_span","page_label_start":"8","page_label_end":"11",
+		"source":"marker_paginate","page_source":"folio_verified",
+		"paragraph_pages":[[0,"8"],[185,"9"],[426,"10"]]}`)
+	var loc Locator
+	if err := json.Unmarshal(raw, &loc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(loc.ParagraphPages) != 3 {
+		t.Fatalf("paragraph_pages dropped at unmarshal: %+v", loc)
+	}
+	out, err := json.Marshal(&loc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back map[string]any
+	if err := json.Unmarshal(out, &back); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	pp, ok := back["paragraph_pages"].([]any)
+	if !ok || len(pp) != 3 {
+		t.Fatalf("paragraph_pages dropped at re-marshal: %s", out)
+	}
+}
