@@ -11,7 +11,9 @@ set -euo pipefail
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=8"
 CARRIER="dudu@192.168.1.2"     # ssh target
 CARRIER_HOST="192.168.1.2"     # URL host (never user@ in URLs — review W2)
-TRAIN_SHA="78558d5"            # merge-train minimum (ancestry-checked)
+TRAIN_SHA="28a3fc4"            # THE wave SHA: ancestry-checked AND the cutover
+                            # image tag — one source of truth, zero drift
+                            # (the two-image bug: cutover hardcoded an old tag)
 LOG(){ printf '\n=== %s ===\n' "$*"; }
 DIE(){ echo "ABORT: $*" >&2
   echo "Abort state: pre-enqueue = untouched or inert (old runner may be stopped," >&2
@@ -113,7 +115,7 @@ for spec in "1 19543 w9-gpu1" "2 19544 w9-a3000"; do
     -e AXIOM_PROCESSOR_BIND_ADDR=0.0.0.0 -e AXIOM_PROCESSOR_PORT=$2 \
     -e AXIOM_PROCESSOR_WORK_ROOT=/work \
     -e AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=/data \
-    -e DEVICE_GLINER=cuda runner-poc:78558d5 >/dev/null
+    -e DEVICE_GLINER=cuda runner-poc:"$TRAIN_SHA" >/dev/null
   mkdir -p /tmp/axiom_runs
   podman inspect runner-carrier-$3 --format "{{.State.Pid}}" > /tmp/axiom_runs/$3.pid
 done
