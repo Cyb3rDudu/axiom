@@ -87,7 +87,7 @@ class ParagraphPageMapTests(unittest.TestCase):
         chunks = self._chunker().chunk(md, doc_metadata=doc)
         withmap = [c for c in chunks if c["metadata"].get("paragraph_pages")]
         for c in withmap:
-            self.assertEqual(c["metadata"]["paragraph_pages"], [[0, "4"]])
+            self.assertEqual(c["metadata"]["paragraph_pages"], [["0", "4"]])
 
     def test_recursive_split_shifts_bounds(self):
         # one huge paragraph pair crossing pages forces _recursive_split
