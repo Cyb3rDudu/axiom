@@ -15,7 +15,7 @@ import pymupdf
 from axiom_ng_runner.compute_core import page_trust as pt
 
 
-def make_pdf(top_lines, repeat_labels=None, single_labels=False, firstpagenum=None, half_labels=False, sections_spec=None):
+def make_pdf(top_lines, repeat_labels=None, single_labels=False, firstpagenum=None, half_labels=False, sections_spec=None, bottom_lines=None, blind_pages=()):
     """top_lines: per page the TOP line (folio candidate) or None for prose.
 
     sections_spec (W12): raw set_page_labels list passthrough — healed
@@ -29,11 +29,15 @@ def make_pdf(top_lines, repeat_labels=None, single_labels=False, firstpagenum=No
     doc = pymupdf.open()
     for i, top in enumerate(top_lines):
         page = doc.new_page()
+        if i in blind_pages:
+            continue  # no text layer at all — the BLIND classification case
         y = 20
         if top:
             page.insert_text((72, y), top, fontsize=10)
             y = 40
         page.insert_text((72, y), f"Fachtext Seite {i} des Kapitels.", fontsize=10)
+        if bottom_lines and i < len(bottom_lines) and bottom_lines[i]:
+            page.insert_text((72, page.rect.y1 * 0.975), bottom_lines[i], fontsize=9)
     f = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
     doc.save(f.name)
     doc.close()
@@ -400,3 +404,59 @@ class ChapterReviewHardeningTests(unittest.TestCase):
         c10 = next(c for c in out if "Seite 10" in c["text"])  # chapter 2, label "3"
         self.assertEqual(c10["locator"]["physical_page_start"], 10)  # NOT chapter 1's page 4
         self.assertEqual(c10["locator"]["chapter"], 2)
+
+
+# ── v2.1: ELI N/M family + BLIND classification ─────────────────────────
+# Red-first: on v2 the bare N/M line was eaten by the spread guard and the
+# ELI URL line's trailing TOTAL was picked (then dropped as a constant) —
+# the AI-Act family verified NOTHING (0/144, 0/71 live before the fix).
+
+ELI_URL = "ELI: http://data.europa.eu/eli/reg/2024/1689/oj"
+
+
+class ExtractorV21Tests(unittest.TestCase):
+    def _run(self, bottom):
+        pdf = make_pdf([None] * 8, bottom_lines=bottom)
+        labels, sources, _ch = pt.build_page_trust(pdf)
+        return labels, sources
+
+    def test_eli_bare_nm_line_verifies(self):
+        # '16/144' standalone bottom lines (berichtigte shape): the spread
+        # guard ate this form on v2 — two numbers, no letters.
+        labels, sources = self._run([f"{i + 13}/{144}" if i >= 2 else None for i in range(8)])
+        for i in range(2, 7):
+            self.assertEqual(sources[i], pt.FOLIO_VERIFIED, f"page {i}")
+        self.assertEqual(labels[5], "18")  # 5 -> '18/144' numerator
+
+    def test_eli_url_line_trailing_nm_verifies(self):
+        # 'ELI: … 51/71' (2023-act shape): the trailing TOTAL was trail-form
+        # on v2 and died as a constant; the NUMERATOR is the folio.
+        labels, sources = self._run([f"{ELI_URL} {i + 48}/71" if i >= 2 else None for i in range(8)])
+        for i in range(2, 7):
+            self.assertEqual(sources[i], pt.FOLIO_VERIFIED, f"page {i}")
+        self.assertEqual(labels[5], "53")
+
+    def test_eli_url_line_leading_nm_verifies(self):
+        # '16/144 ELI: …' — N/M at the line START.
+        labels, sources = self._run([f"{i + 13}/144 {ELI_URL}" if i >= 2 else None for i in range(8)])
+        self.assertEqual(sources[5], pt.FOLIO_VERIFIED)
+        self.assertEqual(labels[5], "18")
+
+    def test_blind_pages_classify_as_blind(self):
+        # Pages with NO text layer are scans needing OCR — not evidence-free
+        # physical: the honest classification is BLIND, and it must not leak
+        # onto text-bearing pages.
+        pdf = make_pdf(["1", "2", "3", None, None, "6", "7", "8"], blind_pages=(3, 4))
+        labels, sources, _ch = pt.build_page_trust(pdf)
+        self.assertEqual(sources[3], pt.BLIND)
+        self.assertEqual(sources[4], pt.BLIND)
+        self.assertEqual(sources[0], pt.FOLIO_VERIFIED)  # text pages unaffected
+        self.assertEqual(sources[7], pt.FOLIO_VERIFIED)
+
+    def test_blind_page_not_counted_as_folio_evidence(self):
+        # A blind page contributes no candidate (no text -> no line), so it
+        # can never verify — only the text pages form the run.
+        labels, sources, _ch = pt.build_page_trust(
+            make_pdf(["1", "2", None, "4", "5", None] * 2, blind_pages=(2, 5, 8, 11)))
+        for i in (2, 5, 8, 11):
+            self.assertEqual(sources[i], pt.BLIND)

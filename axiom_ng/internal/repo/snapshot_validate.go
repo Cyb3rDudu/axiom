@@ -282,7 +282,7 @@ func validateLocatorsAndRelationships(res *processor.Result, frozen *FrozenInput
 				return verrf("LOCATOR_FABRICATED_PAGES", "chunk %d has page_span locator for an EPUB source (§11: page labels MUST NOT be fabricated for sources without stable pages; use epub_cfi)", c.Index)
 			}
 			switch loc.PageSource {
-			case processor.PageSourceFolioVerified, processor.PageSourcePDFLabelSane, processor.PageSourcePhysicalOnly:
+			case processor.PageSourceFolioVerified, processor.PageSourcePDFLabelSane, processor.PageSourcePhysicalOnly, processor.PageSourceBlind:
 			case "":
 				// #173: every page reference carries its trust level — a blank
 				// page_source is an unversioned runner; reject loudly so the
