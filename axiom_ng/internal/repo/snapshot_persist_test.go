@@ -1201,3 +1201,105 @@ func TestReplayToleratesExpiredLease(t *testing.T) {
 		t.Fatalf("job 2 status = %q, want processing (lost fence handed to re-claim)", status)
 	}
 }
+
+// TestForceRerunReplacesSnapshotContent (W9 void, #194-class): a force
+// re-run with UNCHANGED identity must REPLACE the snapshot's content in
+// place. The pre-fix identity-replay returned the existing (stale)
+// snapshot and silently discarded the fresh result — the 45-book chapter
+// re-run lost every stamp exactly this way (44 completed, 0 stamps).
+func TestForceRerunReplacesSnapshotContent(t *testing.T) {
+	h := newPersistHarness(t, "forcerepl")
+	ctx := context.Background()
+
+	// Harness job off the claim path; two force jobs drive the test.
+	if _, err := h.pool.Exec(ctx,
+		`UPDATE ingest_jobs SET status='cancelled', updated_at=now() WHERE id=$1`, h.jobID); err != nil {
+		t.Fatalf("cancel harness job: %v", err)
+	}
+	var srcID, docID string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT source_id::text, document_id::text FROM ingest_jobs WHERE id=$1`, h.jobID,
+	).Scan(&srcID, &docID); err != nil {
+		t.Fatalf("job refs: %v", err)
+	}
+	newForceJob := func() (jobID string) {
+		t.Helper()
+		if err := h.pool.QueryRow(ctx, `
+			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
+			VALUES ($1,$2,$3,$4,'pending',true) RETURNING id::text`,
+			srcID, docID, h.attachmentID, h.contentHash).Scan(&jobID); err != nil {
+			t.Fatalf("seed force job: %v", err)
+		}
+		return jobID
+	}
+	drive := func(jobID string, marker string) (snapID string, err error) {
+		cj, cerr := h.rep.ClaimNextJob(ctx, defaultClaim("worker-frep-"+jobID[:8]))
+		if cerr != nil || cj == nil || cj.LeaseRef.JobID != jobID {
+			return "", fmt.Errorf("claim %s: %v %v", jobID, cj, cerr)
+		}
+		if err := h.rep.MarkProcessing(ctx, cj.LeaseRef); err != nil {
+			return "", err
+		}
+		raw := h.validResultRaw(3)
+		raw.JobID = cj.LeaseRef.JobID
+		// Marker text in chunk 0: run 2 must REPLACE it, not replay around it.
+		raw.Chunks[0].Text = marker
+		b, merr := json.Marshal(raw)
+		if merr != nil {
+			return "", merr
+		}
+		return h.rep.PersistResult(ctx, cj.LeaseRef.JobID, b, PersistOptions{CapDim: 3, Artifacts: markdownArtifact()})
+	}
+
+	j1 := newForceJob()
+	s1, err := drive(j1, "run-one-content")
+	if err != nil {
+		t.Fatalf("force persist 1: %v", err)
+	}
+
+	j2 := newForceJob()
+	s2, err := drive(j2, "run-two-content")
+	if err != nil {
+		t.Fatalf("force persist 2: %v", err)
+	}
+	if s1 != s2 {
+		t.Fatalf("replace-in-place must keep the snapshot id (identity row), got %s then %s", s1, s2)
+	}
+	var markerCount int
+	if err := h.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_chunks WHERE snapshot_id=$1 AND text='run-two-content'`,
+		s2).Scan(&markerCount); err != nil {
+		t.Fatalf("count new marker: %v", err)
+	}
+	if markerCount != 1 {
+		t.Fatalf("force re-run must REPLACE content: new marker present %d times (want 1)", markerCount)
+	}
+	var oldCount int
+	if err := h.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_chunks WHERE snapshot_id=$1 AND text='run-one-content'`,
+		s2).Scan(&oldCount); err != nil {
+		t.Fatalf("count old marker: %v", err)
+	}
+	if oldCount != 0 {
+		t.Fatalf("old content must be gone after a force replace, found %d rows", oldCount)
+	}
+	var generation int
+	if err := h.pool.QueryRow(ctx,
+		`SELECT generation FROM processing_snapshots WHERE id=$1`, s2).Scan(&generation); err != nil {
+		t.Fatalf("generation: %v", err)
+	}
+	if generation < 2 {
+		t.Fatalf("force replace must bump the generation, got %d", generation)
+	}
+	// Outbox: the old chunk docs die (delete), the new ones index — the OS
+	// mirror must never serve the replaced content.
+	var ops string
+	if err := h.pool.QueryRow(ctx, `
+		SELECT string_agg(operation, ',' ORDER BY id) FROM opensearch_outbox WHERE snapshot_id=$1`,
+		s2).Scan(&ops); err != nil {
+		t.Fatalf("outbox: %v", err)
+	}
+	if !strings.Contains(ops, "delete") || !strings.Contains(ops, "index") {
+		t.Fatalf("replace must plan delete+index outbox ops, got %q", ops)
+	}
+}
