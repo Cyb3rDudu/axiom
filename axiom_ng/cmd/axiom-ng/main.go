@@ -27,6 +27,25 @@ import (
 )
 
 func main() {
+	// Wave epilogue mode (#193): consolidation of same-canonical-form
+	// entities across active snapshots. Runs ONCE and exits — the wave
+	// runbook calls it after the drain (peer of the OS==PG parity check).
+	if len(os.Args) > 1 && os.Args[1] == "-consolidate-entities" {
+		cfg := config.Load()
+		logger := log.New(os.Stderr, "epilogue: ", log.LstdFlags)
+		d, err := db.Open(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			logger.Fatalf("postgres: %v", err)
+		}
+		defer d.Close()
+		merged, err := repo.New(d.Pool()).ConsolidateEntities(context.Background())
+		if err != nil {
+			logger.Fatalf("consolidate: %v", err)
+		}
+		logger.Printf("entity consolidation complete: %d entities merged into their same-form survivors", merged)
+		return
+	}
+
 	ctx := context.Background()
 	cfg := config.Load()
 	logger := log.New(os.Stderr, "axiom-ng: ", log.LstdFlags)
