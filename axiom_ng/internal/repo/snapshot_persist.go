@@ -80,7 +80,7 @@ func (r *Repo) PersistResult(ctx context.Context, jobID string, raw []byte, opts
 		return "", err
 	}
 
-	snapshotID, err := r.persistTx(ctx, jobID, ident, res, opts.Artifacts)
+	snapshotID, err := r.persistTx(ctx, jobID, ident, res, opts.Artifacts, frozen.Processing.ForceRebuild)
 	if err != nil {
 		return "", err
 	}
@@ -131,8 +131,12 @@ func enqueueOutboxTx(ctx context.Context, tx pgx.Tx, snapshotID, operation strin
 	return err
 }
 
-// persistTx runs the single fenced transaction.
-func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, res *processor.Result, arts []ArtifactRecord) (string, error) {
+// persistTx runs the single fenced transaction. force = the claim-time
+// force_rebuild flag: a force re-run with UNCHANGED identity REPLACES the
+// snapshot content in place (identity uniqueness forbids a second row) —
+// the pre-fix replay silently discarded fresh results (the W9 chapter
+// re-run void: 44 completed, 0 stamps).
+func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, res *processor.Result, arts []ArtifactRecord, force bool) (string, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return "", fmt.Errorf("begin tx: %w", err)
@@ -155,6 +159,7 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 	// snapshot in the same scope first so the partial unique index is never violated.
 	var existingID string
 	var existingActive bool
+	replacing := false
 	err = tx.QueryRow(ctx, `
 		SELECT id::text, active FROM processing_snapshots
 		WHERE attachment_id=$1 AND content_hash=$2
@@ -164,6 +169,54 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 	).Scan(&existingID, &existingActive)
 	switch {
 	case err == nil:
+		if force {
+			// Force replace-in-place (#194-class, W9 void): tombstone the old
+			// chunk docs, CASCADE-clear the children (entities/chunks take
+			// embeddings, mentions, relationships, chunk-relationships with
+			// them; artifacts are cleared separately), bump the generation and
+			// refresh the provenance columns — then the shared child-insert +
+			// activation path below runs against the SAME row.
+			sib, serr := deactivateSiblingsTx(ctx, tx, ident, existingID)
+			if serr != nil {
+				return "", fmt.Errorf("force replace deactivate siblings: %w", serr)
+			}
+			for _, s := range sib {
+				if oerr := enqueueOutboxTx(ctx, tx, s, OutboxOpDelete, ident); oerr != nil {
+					return "", fmt.Errorf("force replace sibling tombstone: %w", oerr)
+				}
+			}
+			if oerr := enqueueOutboxTx(ctx, tx, existingID, OutboxOpDelete, ident); oerr != nil {
+				return "", fmt.Errorf("force replace tombstone old docs: %w", oerr)
+			}
+			if _, derr := tx.Exec(ctx, `
+				DELETE FROM processing_artifacts WHERE snapshot_id=$1`, existingID); derr != nil {
+				return "", fmt.Errorf("force replace clear artifacts: %w", derr)
+			}
+			if _, derr := tx.Exec(ctx, `
+				DELETE FROM processing_entities WHERE snapshot_id=$1`, existingID); derr != nil {
+				return "", fmt.Errorf("force replace clear entities: %w", derr)
+			}
+			if _, derr := tx.Exec(ctx, `
+				DELETE FROM processing_chunks WHERE snapshot_id=$1`, existingID); derr != nil {
+				return "", fmt.Errorf("force replace clear chunks: %w", derr)
+			}
+			manifestJSON, _ := json.Marshal(res.Manifest)
+			modelsJSON, _ := json.Marshal(res.Processor.Models)
+			warningsJSON, _ := json.Marshal(res.Warnings)
+			if _, uerr := tx.Exec(ctx, `
+				UPDATE processing_snapshots SET
+				  generation = generation + 1, active = true, updated_at = now(),
+				  profile = $2, models = $3, manifest = $4, warnings = $5,
+				  source_verified = $6, ingest_job_id = $7
+				WHERE id = $1`,
+				existingID, res.Processor.Profile, modelsJSON, manifestJSON, warningsJSON,
+				res.Source.Verified, jobID); uerr != nil {
+				return "", fmt.Errorf("force replace refresh row: %w", uerr)
+			}
+			// Fall through to the shared child-insert path with the SAME row.
+			replacing = true
+			break
+		}
 		// Idempotent replay of the SAME completed result. If the existing snapshot
 		// is inactive, reactivate it (deactivating any other active one in scope
 		// first to preserve the <=1 active invariant). Its content is identical
@@ -214,23 +267,28 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 		return "", fmt.Errorf("lookup existing snapshot: %w", err)
 	}
 
-	// 1. Insert the new immutable snapshot row (inactive until step 4).
+	// 1. Insert the new immutable snapshot row (inactive until step 4) —
+	// unless the force path above is replacing an existing identity row.
 	var snapshotID string
-	manifestJSON, _ := json.Marshal(res.Manifest)
-	modelsJSON, _ := json.Marshal(res.Processor.Models)
-	warningsJSON, _ := json.Marshal(res.Warnings)
-	err = tx.QueryRow(ctx, `
-		INSERT INTO processing_snapshots
-		  (attachment_id, content_hash, processor_name, processor_version, profile_hash,
-		   document_id, profile, models, manifest, warnings, source_verified, ingest_job_id, active)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,false)
-		RETURNING id::text`,
-		ident.attachmentID, ident.contentHash, res.Processor.Name, res.Processor.Version, ident.profileHash,
-		ident.documentID, res.Processor.Profile, modelsJSON, manifestJSON, warningsJSON,
-		res.Source.Verified, jobID,
-	).Scan(&snapshotID)
-	if err != nil {
-		return "", fmt.Errorf("insert snapshot: %w", err)
+	if replacing {
+		snapshotID = existingID
+	} else {
+		manifestJSON, _ := json.Marshal(res.Manifest)
+		modelsJSON, _ := json.Marshal(res.Processor.Models)
+		warningsJSON, _ := json.Marshal(res.Warnings)
+		err = tx.QueryRow(ctx, `
+			INSERT INTO processing_snapshots
+			  (attachment_id, content_hash, processor_name, processor_version, profile_hash,
+			   document_id, profile, models, manifest, warnings, source_verified, ingest_job_id, active)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,false)
+			RETURNING id::text`,
+			ident.attachmentID, ident.contentHash, res.Processor.Name, res.Processor.Version, ident.profileHash,
+			ident.documentID, res.Processor.Profile, modelsJSON, manifestJSON, warningsJSON,
+			res.Source.Verified, jobID,
+		).Scan(&snapshotID)
+		if err != nil {
+			return "", fmt.Errorf("insert snapshot: %w", err)
+		}
 	}
 
 	// 2a. Chunks + dense/sparse embeddings. Build job-local->durable id maps.
@@ -388,8 +446,12 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 	}
 
 	// 6. Fenced completion in the SAME transaction (lease predicate + source
-	// advisory lock handled by MarkCompletedTx).
-	if err := r.MarkCompletedTx(ctx, tx, ident.leaseRef, res.Processor.Name, res.Processor.Version, snapshotID); err != nil {
+	// advisory lock handled by MarkCompletedTx). The replace path shares the
+	// replay's fence-loss tolerance (#118-smoke class): a force re-drive whose
+	// lease expired mid-run still replaces durably; the job row legitimately
+	// stays 'processing' for the re-claim loop.
+	if err := r.MarkCompletedTx(ctx, tx, ident.leaseRef, res.Processor.Name, res.Processor.Version, snapshotID); err != nil &&
+		!(replacing && errors.Is(err, ErrLostLease)) {
 		return "", fmt.Errorf("mark completed: %w", err)
 	}
 

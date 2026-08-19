@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import sys
 import zipfile
 from collections.abc import Callable
@@ -53,20 +54,30 @@ def _sha256_hex(path: Path) -> str:
     return h.hexdigest()
 
 
+_MD_ESCAPE_RE = re.compile(r"\\(.)")
+
+
 def _normalize_image_refs(refs: Any) -> list[str]:
     """Normalize the existing chunker's image_refs (list of dicts with
-    'path'/'alt_text'/'position') to plain string refs (contract §11)."""
+    'path'/'alt_text'/'position') to plain string refs (contract §11).
+
+    #192: Marker emits markdown image paths with ESCAPED specials
+    (``\\_page\\_6\\_Figure\\_5.jpeg``) while artifacts are stored
+    UNESCAPED — the raw capture fails the artifact-ref persist gate
+    (CHUNK_IMAGE_REF_UNRESOLVED). Markdown backslash escapes are
+    collapsed to their literal character."""
     if not refs:
         return []
     out: list[str] = []
     for r in refs:
         if isinstance(r, str):
-            out.append(r)
+            raw = r
         elif isinstance(r, dict):
             # Use the path/filename as the ref string.
-            out.append(str(r.get("path", r.get("alt_text", ""))))
+            raw = str(r.get("path", r.get("alt_text", "")))
         else:
-            out.append(str(r))
+            raw = str(r)
+        out.append(_MD_ESCAPE_RE.sub(r"\1", raw))
     return out
 
 
