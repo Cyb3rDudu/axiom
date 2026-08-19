@@ -77,7 +77,7 @@ class ParagraphPageMapTests(unittest.TestCase):
         self.assertGreaterEqual(pos, 0)
         page = None
         for off, lab in chunk["metadata"]["paragraph_pages"]:
-            if off <= pos:
+            if int(off) <= pos:
                 page = lab
         self.assertEqual(page, "9", "the S.9 sentence must resolve to page 9")
 
