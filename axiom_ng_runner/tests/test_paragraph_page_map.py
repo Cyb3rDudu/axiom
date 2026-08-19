@@ -48,7 +48,7 @@ class ParagraphPageMapTests(unittest.TestCase):
         pages = [b[1] for b in bounds]
         self.assertIn("9", pages)
         # offsets strictly increase, pages change at each boundary
-        offs = [b[0] for b in bounds]
+        offs = [int(b[0]) for b in bounds]
         self.assertEqual(offs, sorted(set(offs)))
         self.assertEqual(len(pages), len(set(pages)), "each boundary must change the page")
 

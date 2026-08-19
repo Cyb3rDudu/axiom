@@ -203,12 +203,23 @@ func parseParagraphPages(raw json.RawMessage) [][]string {
 		if len(b) != 2 {
 			continue
 		}
-		off, ok1 := b[0].(float64)
-		lab, ok2 := b[1].(string)
-		if !ok1 || !ok2 {
+		// Offsets arrive as numbers (early #194 pilots) OR strings (the
+		// OpenSearch-mapping-stable form — mixed int/str arrays conflict in
+		// dynamic mappings). Both parse; anything else drops the boundary.
+		var off string
+		switch v := b[0].(type) {
+		case float64:
+			off = strconv.Itoa(int(v))
+		case string:
+			off = v
+		default:
 			continue
 		}
-		out = append(out, []string{strconv.Itoa(int(off)), lab})
+		lab, ok := b[1].(string)
+		if !ok {
+			continue
+		}
+		out = append(out, []string{off, lab})
 	}
 	if len(out) == 0 {
 		return nil

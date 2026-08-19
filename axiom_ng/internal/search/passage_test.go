@@ -213,3 +213,24 @@ func TestSourceViewWireKeys(t *testing.T) {
 	var _ repo.SourceView = Hit{}.Source
 	var _ repo.SourceView = Passage{}.Source
 }
+
+// #194: offsets arrive as numbers (early pilots) OR strings (the
+// OS-mapping-stable form) — parseParagraphPages must accept BOTH (the
+// review round caught the one-sided contract change).
+func TestParseParagraphPagesBothForms(t *testing.T) {
+	str := parseParagraphPages(json.RawMessage(
+		`{"paragraph_pages":[["0","8"],["185","9"],["426","10"]]}`))
+	if len(str) != 3 || str[1][0] != "185" || str[1][1] != "9" {
+		t.Fatalf("string form: %+v", str)
+	}
+	num := parseParagraphPages(json.RawMessage(
+		`{"paragraph_pages":[[0,"8"],[185,"9"]]}`))
+	if len(num) != 2 || num[1][0] != "185" || num[1][1] != "9" {
+		t.Fatalf("numeric form: %+v", num)
+	}
+	mixed := parseParagraphPages(json.RawMessage(
+		`{"paragraph_pages":[["0","8"],[true,"x"]]}`))
+	if len(mixed) != 1 {
+		t.Fatalf("bad entries must drop, good stay: %+v", mixed)
+	}
+}
