@@ -274,6 +274,16 @@ ssh dudu@192.168.1.2 'podman logs -f --tail 50 runner-carrier-w9-gpu0'
 - OS docs == active chunks; embeddings bit-exact across cards (L8 evidence).
 - KG: entity/relation counts re-extracted; #185 corroboration ranking live.
 
+### 2.7a Precision-wave generation (SHA discipline)
+
+The precision wave runs ONE consistent generation: carrier image, Mac
+server and all three dispatchers baked from the SAME main SHA. Current
+wave SHA: **e7344db** (v2.1 extractor + #194 chunker/paragraph_pages +
+Go epilogue + citation offset parsing). Symbol probes at startup:
+page_trust `_ELI_BARE`/`BLIND` (v2.1), chunker `paragraph_pages`,
+`axiom-ng -consolidate-entities` mode present. Never fire on mixed
+builds — the first wave proved silent version skew is real.
+
 ### 2.8 Standard epilogue — entity consolidation (#193)
 
 After the drain and the OS==PG parity check, every wave runs the
