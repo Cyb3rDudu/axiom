@@ -29,16 +29,26 @@ SYNC_JSON=$(curl -sf --max-time 300 -X POST http://127.0.0.1:8011/api/zotero/syn
   || DIE "4.0 projection sync FAILED — old attachments would be enqueued instead of healed bytes"
 echo "sync: $SYNC_JSON" | head -c 300; echo
 
-# ── 4.0b stale attachments retired/re-pointed (satellite finding: ghost rows
-#     DUJQJ2RN→DNC73IVL, NU8SS6HG→PC9U5YEX — live-verified pre-fix: old keys
-#     undeleted WITH active snapshots, new keys unprojected)
-LOG "4.0b stale-attachment re-point (satellite ghosts)"
-STALE=$(DB "SELECT count(*) FROM zotero_attachments a WHERE a.zotero_key IN ('DUJQJ2RN','NU8SS6HG')
+# ── 4.0b stale attachments retired/re-pointed (CURRENT heal set, preflight
+#     order item 4: YLPUI8AM/RBBYMAF4/AFGC84BL ghosts → EGTTJ3AF/28RBZD3L/
+#     LWY53EWV live; legacy DNC73IVL/PC9U5YEX stay valid. SUB-CASE
+#     Datenbasierte: AFGC84BL carries preferred+active in the DB while
+#     Zotero has LWY53EWV live — the projection's setPreferredWithStats +
+#     clearSiblingPreferred flip preferred to the live attachment BY
+#     CONSTRUCTION once the sync runs; these asserts make it a gate.)
+LOG "4.0b stale-attachment re-point (current heal set)"
+STALE=$(DB "SELECT count(*) FROM zotero_attachments a WHERE a.zotero_key IN ('YLPUI8AM','RBBYMAF4','AFGC84BL')
             AND (NOT a.deleted OR EXISTS(SELECT 1 FROM processing_snapshots s
                                          WHERE s.attachment_id=a.id AND s.active))")
-[ "$STALE" = "0" ] || DIE "4.0b ghost rows still live (DUJQJ2RN/NU8SS6HG undeleted or active-snapshotted) — sync did NOT retire; no fire"
-NEWKEYS=$(DB "SELECT count(*) FROM zotero_attachments WHERE zotero_key IN ('DNC73IVL','PC9U5YEX') AND NOT deleted")
-[ "$NEWKEYS" = "2" ] || DIE "4.0b re-pointed keys missing (DNC73IVL/PC9U5YEX present=$NEWKEYS of 2) — heals not projected; no fire"
+[ "$STALE" = "0" ] || DIE "4.0b ghost rows still live (YLPUI8AM/RBBYMAF4/AFGC84BL undeleted or active-snapshotted) — sync did NOT retire; no fire"
+NEWKEYS=$(DB "SELECT count(*) FROM zotero_attachments WHERE zotero_key IN ('EGTTJ3AF','28RBZD3L','LWY53EWV') AND NOT deleted")
+[ "$NEWKEYS" = "3" ] || DIE "4.0b re-pointed keys missing (EGTTJ3AF/28RBZD3L/LWY53EWV present=$NEWKEYS of 3) — heals not projected; no fire"
+PREFLW=$(DB "SELECT count(*) FROM zotero_attachments WHERE zotero_key='LWY53EWV' AND preferred AND NOT deleted")
+PREFAF=$(DB "SELECT count(*) FROM zotero_attachments WHERE zotero_key='AFGC84BL' AND preferred")
+[ "$PREFLW" = "1" ] && [ "$PREFAF" = "0" ] || DIE "4.0b Datenbasierte preferred flip failed (LWY53EWV preferred=$PREFLW want 1, AFGC84BL preferred=$PREFAF want 0) — audit-chain attachment must win; re-point explicitly per runbook before fire"
+LEGACY=$(DB "SELECT count(*) FROM zotero_attachments WHERE zotero_key IN ('DNC73IVL','PC9U5YEX') AND NOT deleted
+             AND EXISTS(SELECT 1 FROM processing_snapshots s WHERE s.attachment_id=zotero_attachments.id AND s.active)")
+[ "$LEGACY" = "2" ] || DIE "4.0b legacy healed keys (DNC73IVL/PC9U5YEX) no longer valid — investigate before fire"
 
 # ── 4.1 carrier clone: REAL ancestry check (SHAs do not order lexicographically)
 LOG "4.1 carrier clone ancestry >= $TRAIN_SHA"
