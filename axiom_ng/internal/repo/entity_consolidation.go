@@ -12,8 +12,10 @@ package repo
 //     explicitly out.
 //   - Survivor: most distinct chunks (mentions), tie -> smallest id —
 //     deterministic, re-run stable.
-//   - Mentions MOVE to the survivor (their chunk ids are globally unique,
-//     so the (entity, chunk, span) unique key can never collide).
+//   - Mentions MOVE to the survivor; a verbatim duplicate (same chunk +
+//     span) already on the survivor is SKIPPED — same-snapshot same-form
+//     duplicates with identical spans exist live (GLiNER multi-label: same
+//     text, two types), and the redundant copy dies with the loser.
 //   - Relations re-point on BOTH endpoints; evidence chunk ids unchanged.
 //     A relation whose two endpoints merge into one survivor becomes a
 //     self-relation — kept (harmless, honest provenance).
@@ -48,59 +50,84 @@ func (r *Repo) ConsolidateEntities(ctx context.Context) (int, error) {
 			GROUP BY 1, 2
 		),
 		ranked AS (
-			SELECT form, id,
-			       row_number() OVER (PARTITION BY form ORDER BY chunks DESC, id) AS rn,
-			       count(*) OVER (PARTITION BY form) AS n
+			SELECT id,
+			       first_value(id) OVER (PARTITION BY form ORDER BY chunks DESC, id)::text AS survivor,
+			       row_number() OVER (PARTITION BY form ORDER BY chunks DESC, id) AS rn
 			FROM forms
 		)
-		SELECT (SELECT l2.id FROM ranked l2
-		        WHERE l2.form = loser.form AND l2.rn = 1)::text AS survivor,
-		       loser.id::text AS loser
-		FROM ranked loser
-		WHERE loser.rn > 1 AND loser.n >= 2
+		SELECT survivor, id::text AS loser
+		FROM ranked
+		WHERE rn > 1
 		ORDER BY 1, 2`)
 	if err != nil {
 		return 0, fmt.Errorf("consolidate pairs: %w", err)
 	}
-	type pair struct{ survivor, loser string }
-	var pairs []pair
+	var survivors, losers []string
 	for rows.Next() {
-		var p pair
-		if err := rows.Scan(&p.survivor, &p.loser); err != nil {
+		var sv, lo string
+		if err := rows.Scan(&sv, &lo); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("consolidate scan: %w", err)
 		}
-		pairs = append(pairs, p)
+		survivors = append(survivors, sv)
+		losers = append(losers, lo)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
+	if len(losers) == 0 {
+		if err := tx.Commit(ctx); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
 
-	for _, p := range pairs {
+	// Mentions move per-pair (the unique key's leading column indexes the
+	// lookup): a verbatim duplicate (same chunk+span) already on the
+	// survivor — from a PRIOR pair of this run or from same-snapshot
+	// same-form duplicates (3.5k live collisions) — is skipped; the
+	// redundant loser copy dies with the loser.
+	for i := range losers {
 		if _, err := tx.Exec(ctx, `
-			UPDATE processing_entity_mentions SET entity_id=$1::uuid WHERE entity_id=$2::uuid`,
-			p.survivor, p.loser); err != nil {
-			return 0, fmt.Errorf("consolidate move mentions %s: %w", p.loser, err)
+			UPDATE processing_entity_mentions m SET entity_id = $1::uuid
+			WHERE m.entity_id = $2::uuid
+			  AND NOT EXISTS (
+			    SELECT 1 FROM processing_entity_mentions ex
+			    WHERE ex.entity_id = $1::uuid
+			      AND ex.chunk_id = m.chunk_id
+			      AND ex.start_char = m.start_char
+			      AND ex.end_char = m.end_char)`,
+			survivors[i], losers[i]); err != nil {
+			return 0, fmt.Errorf("consolidate move mentions %s: %w", losers[i], err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE processing_entity_relationships SET source_entity_id=$1::uuid WHERE source_entity_id=$2::uuid`,
-			p.survivor, p.loser); err != nil {
-			return 0, fmt.Errorf("consolidate repoint source %s: %w", p.loser, err)
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE processing_entity_relationships SET target_entity_id=$1::uuid WHERE target_entity_id=$2::uuid`,
-			p.survivor, p.loser); err != nil {
-			return 0, fmt.Errorf("consolidate repoint target %s: %w", p.loser, err)
-		}
-		if _, err := tx.Exec(ctx, `
-			DELETE FROM processing_entities WHERE id=$1::uuid`, p.loser); err != nil {
-			return 0, fmt.Errorf("consolidate delete loser %s: %w", p.loser, err)
-		}
+	}
+	// Relations re-point on both endpoints (set-based; the table has no
+	// endpoint indexes, per-pair loops would seq-scan per loser).
+	if _, err := tx.Exec(ctx, `
+		UPDATE processing_entity_relationships r SET source_entity_id = v.surv
+		FROM (SELECT unnest($1::uuid[]) AS surv, unnest($2::uuid[]) AS lose) v
+		WHERE r.source_entity_id = v.lose`,
+		survivors, losers); err != nil {
+		return 0, fmt.Errorf("consolidate repoint source: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE processing_entity_relationships r SET target_entity_id = v.surv
+		FROM (SELECT unnest($1::uuid[]) AS surv, unnest($2::uuid[]) AS lose) v
+		WHERE r.target_entity_id = v.lose`,
+		survivors, losers); err != nil {
+		return 0, fmt.Errorf("consolidate repoint target: %w", err)
+	}
+	// Losers die AFTER their rows moved (the entities CASCADE would
+	// otherwise destroy still-referenced mentions/relations).
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM processing_entities e
+		WHERE e.id = ANY($1::uuid[])`, losers); err != nil {
+		return 0, fmt.Errorf("consolidate delete losers: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("consolidate commit: %w", err)
 	}
-	return len(pairs), nil
+	return len(losers), nil
 }
