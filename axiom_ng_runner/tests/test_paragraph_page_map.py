@@ -101,7 +101,7 @@ class ParagraphPageMapTests(unittest.TestCase):
         for c in subs:
             bounds = c["metadata"].get("paragraph_pages")
             if bounds:
-                self.assertEqual(bounds[0][0], 0)
+                self.assertEqual(bounds[0][0], "0")
                 offs = [b[0] for b in bounds]
                 self.assertEqual(offs, sorted(offs))
                 # every page reachable in the parent span
