@@ -78,7 +78,11 @@ const (
 	PageSourceFolioVerified = "folio_verified"
 	PageSourcePDFLabelSane  = "pdf_label_sane"
 	PageSourcePhysicalOnly  = "physical_only"
-	PageSourceNone          = "none"
+	// PageSourceBlind (v2.1): the page has NO text layer at all — a scan
+	// needing an OCR rebuild. Not a print-page claim of any kind; the
+	// runner classifies, it never executes OCR.
+	PageSourceBlind = "blind"
+	PageSourceNone  = "none"
 )
 
 // Locator is the source position (§11). page_span for PDFs (physical+logical),

@@ -27,11 +27,18 @@ logger = logging.getLogger(__name__)
 
 # Trust levels (wire values — contract, Epic C clients switch on these).
 FOLIO_VERIFIED = "folio_verified"
+BLIND = "blind"  # v2.1: no text layer at all — a scan needing OCR rebuild
 PDF_LABEL_SANE = "pdf_label_sane"
 PHYSICAL_ONLY = "physical_only"
 NONE = "none"
 
 _FOLIO_LINE = re.compile(r"^\s*(\d{1,4})\s*$")
+# v2.1: ELI 'N/M' page-of-total markers (EU official journals: the AI Act
+# family paginates '16/144', '51/71' — bare standalone lines, and the ELI
+# URL line carrying the N/M at either edge). The numerator is the printed
+# folio; the spread guard would otherwise eat the bare form.
+_ELI_BARE = re.compile(r"^(\d{1,4})/(\d{1,4})$")
+_ELI_TAIL = re.compile(r"(?:^|\s)(\d{1,4})/(\d{1,4})(?:\s|$)")
 _ROMAN_LINE = re.compile(r"^\s*([ivxlcdm]{1,7})\s*$", re.IGNORECASE)
 _LSERIES = re.compile(r"\bL\s*\d{1,4}\s*/\s*(\d{1,4})\b")  # Amtsblatt: folio = page after the slash
 _NUM_IN_LINE = re.compile(r"(?<![\d./(])(\d{1,4})(?![\d./)])")
@@ -120,6 +127,20 @@ def harvest_folio_candidates(doc: pymupdf.Document) -> dict[int, list[tuple[str,
                 if m:
                     cands.append(("lseries", m.group(1), zone))
                     continue
+                # v2.1 ELI family: bare '16/144' line (would be eaten by the
+                # spread guard below — two numbers, no letters), or the ELI
+                # URL line with N/M at either edge. Numerator = folio.
+                mb = _ELI_BARE.match(line)
+                if mb and not (len(mb.group(1)) > 1 and mb.group(1)[0] == "0"):
+                    # leading-zero numerators are issue/artifact numbers
+                    # ("0431/2001"), never printed folios
+                    cands.append(("eli", mb.group(1), zone))
+                    continue
+                if "eli" in line.lower():
+                    mt = _ELI_TAIL.search(line)
+                    if mt and not (len(mt.group(1)) > 1 and mt.group(1)[0] == "0"):
+                        cands.append(("eli", mt.group(1), zone))
+                        continue
                 # roman trailing a short head line ('October 2025 iii')
                 mr = re.search(r"\s([ivxlcdm]{1,7})\s*$", line, re.IGNORECASE)
                 if mr and len(line.split()) >= 2:
@@ -195,7 +216,11 @@ def _pick_candidates(harvest: dict[int, list[tuple[str, str, str]]]) -> dict[int
     contributes nothing); two separate bare LINES in one zone resolve by
     chain continuation, else first-encounter order (old behavior).
     """
-    _STRENGTH = {"bare": 0, "lseries": 1, "lead": 2, "trail": 2, "mid": 3, "roman": 4, "weak": 5}
+    # eli sits BELOW bare: an N/M marker is strong evidence, but when a page
+    # carries BOTH, the classic bare line wins (dry-run regression: junk
+    # N/M lines like issue numbers "0431/2001" displaced true bare folios
+    # on encounter order when both were strength 0).
+    _STRENGTH = {"bare": 0, "eli": 1, "lseries": 1, "lead": 2, "trail": 2, "mid": 3, "roman": 4, "weak": 5}
     picked: dict[int, str] = {}
     last_strong: tuple[int, int] | None = None  # (page, value) of last bare/lseries pick
     for p in sorted(harvest):
@@ -214,7 +239,7 @@ def _pick_candidates(harvest: dict[int, list[tuple[str, str, str]]]) -> dict[int
         if best is None:
             continue
         picked[p] = best[1]
-        if best[0] in ("bare", "lseries"):
+        if best[0] in ("bare", "eli", "lseries"):
             vi = _arabic(best[1])
             last_strong = (p, vi) if vi is not None else None
     return picked
@@ -498,9 +523,21 @@ def build_page_trust(pdf_path: str) -> tuple[dict[int, str], dict[int, str], dic
         if folio:
             logger.info("page_trust: %d/%d pages folio-verified (labels: %s — %s; chapters: %s)",
                         len(folio), n, trust, reason, len(chapters or []))
+        # v2.1 BLIND: a page with NO text layer at all is a scan — it is
+        # not "evidence-free physical", it needs an OCR rebuild. Pure
+        # classification (the runner never executes OCR); feeds the honest
+        # "scan — needs OCR rebuild" marker downstream.
+        blind = {
+            i for i in range(n)
+            if i not in folio and not doc[i].get_text("text").strip()
+        }
         page_label_map: dict[int, str] = {}
         page_source_map: dict[int, str] = {}
         for i in range(n):
+            if i in blind:
+                page_label_map[i] = str(i + 1)
+                page_source_map[i] = BLIND
+                continue
             if i in folio:
                 page_label_map[i] = folio[i]
                 page_source_map[i] = FOLIO_VERIFIED
