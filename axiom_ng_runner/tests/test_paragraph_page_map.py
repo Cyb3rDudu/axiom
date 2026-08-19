@@ -44,7 +44,7 @@ class ParagraphPageMapTests(unittest.TestCase):
         meta = spans[0]["metadata"]
         bounds = meta.get("paragraph_pages")
         self.assertIsNotNone(bounds, "span chunk must carry paragraph_pages")
-        self.assertEqual(bounds[0], [0, "8"])
+        self.assertEqual(bounds[0], ["0", "8"])
         pages = [b[1] for b in bounds]
         self.assertIn("9", pages)
         # offsets strictly increase, pages change at each boundary

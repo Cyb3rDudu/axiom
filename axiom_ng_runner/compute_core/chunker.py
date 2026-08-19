@@ -24,12 +24,12 @@ def _slice_page_bounds(parent_text: str, subs: list, parent_bounds: list) -> lis
         if pos < 0:
             pos = cursor  # degraded trust in findability; offsets stay monotone
         end = pos + len(sub)
-        bounds = [[off - pos, lab] for off, lab in parent_bounds if pos < off < end]
+        bounds = [[str(off - pos), str(lab)] for off, lab in parent_bounds if pos < off < end]
         page_at_start = "1"
         for off, lab in parent_bounds:
             if off <= pos:
-                page_at_start = lab
-        out.append([(0, page_at_start)] + bounds)
+                page_at_start = str(lab)
+        out.append([("0", page_at_start)] + bounds)
         cursor = pos + 1
     return out
 
@@ -577,7 +577,7 @@ class Chunker:
         # (0, first page)). Consumers derive the exact page of any position;
         # the span stays as the honest envelope.
         if paragraph_pages:
-            chunk_meta["paragraph_pages"] = [[off, str(lab)] for off, lab in paragraph_pages]
+            chunk_meta["paragraph_pages"] = [[str(off), str(lab)] for off, lab in paragraph_pages]
 
         if doc_metadata:
             # Exclude large internal fields that shouldn't be stored per-chunk

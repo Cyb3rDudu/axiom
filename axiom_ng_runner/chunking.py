@@ -190,12 +190,15 @@ def _emit(
         # chunk's print page changes (first entry always (0, first page)) —
         # consumers derive the exact page of a hit position instead of
         # citing the whole span envelope.
-        bounds: list[list[object]] = [[0, page_start]]
+        # offsets as STRINGS: uniform [[str, str], ...] arrays keep the
+        # OpenSearch dynamic mapping stable (mixed int/str arrays conflict:
+        # "cannot be changed from type [long] to [text]" — live pilot lesson)
+        bounds: list[list[str]] = [["0", str(page_start)]]
         off = 0
         prev = page_start
         for i in indices:
             if para_page_label[i] != prev:
-                bounds.append([off, para_page_label[i]])
+                bounds.append([str(off), str(para_page_label[i])])
                 prev = para_page_label[i]
             off += len(clean_paras[i]) + 2  # "\n\n" join
         locator["paragraph_pages"] = bounds
