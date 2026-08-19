@@ -107,7 +107,7 @@ LOG "cutover: start w9-gpu1 + w9-a3000 [MUTATES]"
 $SSH "$CARRIER" 'set -e
 for spec in "1 19543 w9-gpu1" "2 19544 w9-a3000"; do
   set -- $spec
-  podman run -d --name runner-carrier-$3 \
+  podman run -d --replace --name runner-carrier-$3 \
     --network=host --shm-size=8g --device nvidia.com/gpu=all \
     -e CUDA_VISIBLE_DEVICES=$1 -e AXIOM_PROCESSOR_COMPUTE=real \
     -e AXIOM_PROCESSOR_BIND_ADDR=0.0.0.0 -e AXIOM_PROCESSOR_PORT=$2 \
