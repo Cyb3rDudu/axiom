@@ -215,3 +215,39 @@ func TestIT_KGRelationsCorroborationRankingAndScope(t *testing.T) {
 		t.Fatalf("inactive-snapshot evidence leaked into the doc-A scope: %d", len(scopedA))
 	}
 }
+
+// #193 P1 repo-level pin: the entity filter scopes to exactly that entity's
+// relations — a NONEXISTENT uuid returns EMPTY (pre-fix the HTTP layer never
+// sent the filter, so any id returned the unfiltered list).
+func TestIT_KGRelationsNonexistentEntityIsEmpty(t *testing.T) {
+	lr := openLeaseDB(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, snapA := kgSeedSnapshot(t, lr, "Klein", "KGATT_P1")
+	entX, chX := kgSeedEntity(t, lr, snapA, "konzept_x", 2)
+	kgSeedEntity(t, lr, snapA, "konzept_y", 2)
+	kgSeedRelation(t, lr, snapA, entX, entX, "same_as", chX[:1]) // self-relation so it exists
+
+	// a real id returns exactly its relations (scoped-only).
+	rels, err := lr.rep.KGRelations(ctx, "", entX, "", 2, 50)
+	if err != nil {
+		t.Fatalf("KGRelations: %v", err)
+	}
+	if len(rels) != 1 || rels[0].SourceForm != "konzept_x" {
+		t.Fatalf("real entity must scope to its own relations, got %+v", rels)
+	}
+
+	// a nonexistent id returns the EMPTY slice ([] on the wire, not null).
+	rels2, err := lr.rep.KGRelations(ctx, "", "00000000-0000-0000-0000-00000000dead", "", 2, 50)
+	if err != nil {
+		t.Fatalf("nonexistent entity: %v", err)
+	}
+	if rels2 == nil || len(rels2) != 0 {
+		t.Fatalf("nonexistent entity must return an EMPTY non-nil slice, got %#v", rels2)
+	}
+}
