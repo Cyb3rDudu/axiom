@@ -186,6 +186,19 @@ def _emit(
             "page_label_end": page_end,
             "source": "marker_paginate",
         }
+        # #194 per-paragraph page map: char-offset boundaries where the
+        # chunk's print page changes (first entry always (0, first page)) —
+        # consumers derive the exact page of a hit position instead of
+        # citing the whole span envelope.
+        bounds: list[list[object]] = [[0, page_start]]
+        off = 0
+        prev = page_start
+        for i in indices:
+            if para_page_label[i] != prev:
+                bounds.append([off, para_page_label[i]])
+                prev = para_page_label[i]
+            off += len(clean_paras[i]) + 2  # "\n\n" join
+        locator["paragraph_pages"] = bounds
     else:
         locator = {
             "type": "epub_cfi",
