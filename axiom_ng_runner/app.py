@@ -173,19 +173,23 @@ def _contract_guard(version: str) -> None:
 def _validate_request(req: ProcessRequest) -> Path:
     """Validate source policy; returns the readable path or raises.
 
-    Precedence (contract §3 remote delivery):
-      1. local_path present, under ALLOWED_SOURCE_ROOTS, readable, hash ok —
-         unchanged local mode.
-      2. else source_url set — stream-download into a temp dir under the
-         work root and run the SAME integrity gates on the downloaded bytes
-         (regular file, readable, hash). The temp file is finalized into the
-         job's work dir on accept (dies with remove_work on ACK) and dropped
-         on dedup/collision.
-      3. else SOURCE_NOT_FOUND as before.
+    HTTP-ONLY precedence (owner ruling, precision-wave post-mortem):
+      1. source_url set — stream-download into a temp dir under the work
+         root and run the SAME integrity gates on the downloaded bytes.
+         Remote delivery is the contract path; a Mac storage path is never
+         filesystem-probed inside a carrier container.
+      2. else local_path under ALLOWED_SOURCE_ROOTS (fixture/co-located
+         deliveries only), readable, hash ok — local mode.
+      3. else SOURCE_URL_MISSING — the loud policy death: remote delivery
+         is not configured for this runner, and the local path is outside
+         its allowed roots. Never the confusing SOURCE_NOT_FOUND shape
+         that cost the precision wave 130 jobs in minutes.
     """
     s = settings.get()
     cf = req.attachment.content_type
     validate_content_type(cf, ("application/pdf", "application/epub+zip"))
+    if req.attachment.source_url:
+        return _download_source(req)
     try:
         return validate_source(
             req.attachment.local_path,
@@ -195,9 +199,13 @@ def _validate_request(req: ProcessRequest) -> Path:
             ("application/pdf", "application/epub+zip"),
         )
     except SourceError:
-        if not req.attachment.source_url:
-            raise
-    return _download_source(req)
+        raise SourceError(
+            "SOURCE_URL_MISSING",
+            f"remote delivery not configured: source_url is empty and local "
+            f"path {req.attachment.local_path!r} is not under this runner's "
+            f"allowed roots — configure AXIOM_PROCESSOR_SOURCE_BASE_URL/"
+            f"SOURCE_SECRET on the dispatcher (runbook §2.2)",
+        ) from None
 
 
 def _download_source(req: ProcessRequest) -> Path:

@@ -203,9 +203,12 @@ class TestSourceDownload:
             leftovers = list(incoming.glob("*/*"))
             assert not leftovers, f"dedup must drop the temp download, found {leftovers}"
 
-    def test_local_mode_still_first_choice(self, fixture_dirs):
-        """local_path valid + source_url set → local wins (no download)."""
-        work = fixture_dirs["work"] / "local-first"
+    def test_http_only_source_url_wins(self, fixture_dirs):
+        """Owner ruling (HTTP-only precedence): source_url set → download,
+        even when a locally valid path exists. The download fails against
+        the unreachable sentinel host → the job errors loudly instead of
+        silently reading the local file."""
+        work = fixture_dirs["work"] / "http-first"
         work.mkdir(parents=True, exist_ok=True)
         src = _pdf(fixture_dirs["sources"])
         old = settings.get()
@@ -213,14 +216,13 @@ class TestSourceDownload:
         try:
             with TestClient(app_mod.app) as c:
                 p = _payload(
-                    "http://127.0.0.1:1/must-not-be-fetched", src, "job-local-1",
-                    local_path=str(src),  # valid local file
+                    "http://127.0.0.1:1/must-not-be-fetched", src, "job-http-1",
+                    local_path=str(src),  # valid local file — must NOT be used
                 )
                 r = c.post("/v1/process", json=p)
-                assert r.status_code == 202, r.text
-                incoming = work / ".incoming"
-                assert not incoming.exists() or not any(incoming.glob("*/*")), \
-                    "valid local_path must never trigger a download"
+                assert r.status_code == 422, r.text
+                assert "source_url download failed" in r.text, \
+                    "unreachable source_url must fail LOUDLY at intake, never fall back to local_path"
         finally:
             settings.set(old)
 
