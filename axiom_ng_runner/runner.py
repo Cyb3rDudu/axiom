@@ -228,6 +228,12 @@ def _adapt_chunk(
             "page_label_end": str(page_end) if page_end is not None else "",
             "source": meta.get("locator_source", "marker_paginate"),
         }
+        # #194: per-paragraph page map — char-offset boundaries where the
+        # print page changes. Additive contract field; absent on pre-#194
+        # generations (consumers fall back to the span envelope).
+        paragraph_pages = meta.get("paragraph_pages")
+        if paragraph_pages:
+            locator["paragraph_pages"] = paragraph_pages
 
     out = {
         "ref": f"chunk-{chunk_index:04d}",

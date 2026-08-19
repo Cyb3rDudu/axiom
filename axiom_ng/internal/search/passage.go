@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
@@ -56,6 +57,9 @@ type Passage struct {
 	Locator      LocatorView       `json:"locator"`
 	Source       repo.SourceView   `json:"source"`
 	Neighbors    []PassageNeighbor `json:"neighbors"`
+	// ParagraphPages: raw per-paragraph page map [[charOffset, label], ...]
+	// (#194) — derived from the locator; nil on pre-#194 generations.
+	ParagraphPages [][]string `json:"paragraph_pages,omitempty"`
 }
 
 // osPost is the shared request path for passage queries (house style of
@@ -171,6 +175,7 @@ func (s *Service) GetPassage(ctx context.Context, chunkID string) (*Passage, err
 	}
 
 	neighbors := s.fetchNeighbors(ctx, c.AttachmentID, c.ChunkIndex, c.ChunkID)
+	pp := parseParagraphPages(c.Locator)
 
 	return &Passage{
 		ChunkID: c.ChunkID, DocumentID: c.DocumentID, SnapshotID: c.SnapshotID,
@@ -179,7 +184,36 @@ func (s *Service) GetPassage(ctx context.Context, chunkID string) (*Passage, err
 		Locator:   locatorView(c.Locator, c.Sections),
 		Source:    meta.View(c.DocumentID),
 		Neighbors: neighbors,
+
+		ParagraphPages: pp,
 	}, nil
+}
+
+// parseParagraphPages extracts the #194 per-paragraph page map from the raw
+// locator JSON: [[charOffset, label], ...] with numeric offsets.
+func parseParagraphPages(raw json.RawMessage) [][]string {
+	var loc struct {
+		ParagraphPages []([]interface{}) `json:"paragraph_pages"`
+	}
+	if err := json.Unmarshal(raw, &loc); err != nil || len(loc.ParagraphPages) == 0 {
+		return nil
+	}
+	out := make([][]string, 0, len(loc.ParagraphPages))
+	for _, b := range loc.ParagraphPages {
+		if len(b) != 2 {
+			continue
+		}
+		off, ok1 := b[0].(float64)
+		lab, ok2 := b[1].(string)
+		if !ok1 || !ok2 {
+			continue
+		}
+		out = append(out, []string{strconv.Itoa(int(off)), lab})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // fetchNeighbors pulls chunk_index ± 1 within the SAME attachment (attachment

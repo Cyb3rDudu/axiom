@@ -8,6 +8,32 @@ logger = logging.getLogger(__name__)
 # Marker page marker pattern: {0}------------------------------------------------
 _PAGE_MARKER_RE = re.compile(r'^\{(\d+)\}-{10,}$')
 
+
+def _slice_page_bounds(parent_text: str, subs: list, parent_bounds: list) -> list:
+    """#194: per-sub-chunk page bounds from the parent's map.
+
+    Locates each sub-slice inside the parent text (slices may overlap;
+    the search cursor advances past each hit's start), shifts the
+    parent boundaries that fall inside the slice, and guarantees a
+    leading (0, page) entry — the page in force at the slice start.
+    """
+    out: list = []
+    cursor = 0
+    for sub in subs:
+        pos = parent_text.find(sub, cursor)
+        if pos < 0:
+            pos = cursor  # degraded trust in findability; offsets stay monotone
+        end = pos + len(sub)
+        bounds = [[off - pos, lab] for off, lab in parent_bounds if pos < off < end]
+        page_at_start = "1"
+        for off, lab in parent_bounds:
+            if off <= pos:
+                page_at_start = lab
+        out.append([(0, page_at_start)] + bounds)
+        cursor = pos + 1
+    return out
+
+
 class Chunker:
     """
     Splits Markdown text into overlapping chunks based on section boundaries and token budget.
@@ -299,6 +325,11 @@ class Chunker:
         current_chunk_paras = []
         current_chunk_tokens = 0
         current_start_idx = 0
+        # #194 per-paragraph page map: char-offset boundaries where the
+        # chunk's print page CHANGES — [(offset, label), ...], first entry
+        # always (0, first page). Lets any consumer derive the exact page
+        # of a hit position instead of citing the whole span.
+        current_chunk_page_bounds: list[tuple[int, str]] = []
         # #186 section-trail invariant: a chunk's deepest section is the heading
         # under which its FIRST content sits. Snapshot the trail ONCE when the
         # chunk opens and emit that snapshot — never the live trail at the
@@ -340,7 +371,8 @@ class Chunker:
                     sub_chunks = self._recursive_split(
                         chunk_text, self.max_chunk_tokens, self.overlap_tokens
                     )
-                    for sub_text in sub_chunks:
+                    sub_pages = _slice_page_bounds(chunk_text, sub_chunks, current_chunk_page_bounds)
+                    for sub_text, sub_bounds in zip(sub_chunks, sub_pages):
                         chunks.append(self._create_chunk(
                             sub_text, doc_id, chunk_id_counter,
                             current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
@@ -349,6 +381,7 @@ class Chunker:
                             physical_page_start=current_chunk_phys_start,
                             physical_page_end=current_chunk_phys_end,
                             page_start=current_chunk_page_start, page_end=current_chunk_page_end,
+                            paragraph_pages=sub_bounds,
                         ))
                         chunk_id_counter += 1
                 else:
@@ -360,12 +393,18 @@ class Chunker:
                         physical_page_start=current_chunk_phys_start,
                         physical_page_end=current_chunk_phys_end,
                         page_start=current_chunk_page_start, page_end=current_chunk_page_end,
+                        paragraph_pages=current_chunk_page_bounds,
                     ))
                     chunk_id_counter += 1
 
                 # Reset page tracking for new chunk
+                prev_chunk_last_page = current_chunk_page_end
                 current_chunk_page_start = paragraph_to_page.get(i, current_chunk_page_end)
                 current_chunk_page_end = current_chunk_page_start
+                # #194: reset the page bounds; if a recycled overlap fragment
+                # opens the chunk, it sits on the PREVIOUS chunk's last page
+                # — seed (0, prev_page) so the map stays truthful.
+                current_chunk_page_bounds = []
 
                 # Start new chunk with overlap
                 if self.overlap_tokens > 0 and current_chunk_paras:
@@ -376,6 +415,7 @@ class Chunker:
                         overlap_para = " ".join(overlap_words[-self.overlap_tokens:])
                         current_chunk_paras = [overlap_para]
                         current_chunk_tokens = self._count_tokens(overlap_para)
+                        current_chunk_page_bounds = [(0, str(prev_chunk_last_page))]
                     else:
                         current_chunk_paras = []
                         current_chunk_tokens = 0
@@ -394,6 +434,7 @@ class Chunker:
                 current_chunk_phys_end = current_chunk_phys_start
 
             # Add paragraph to current chunk
+            para_offset = sum(len(p) for p in current_chunk_paras) + 2 * max(0, len(current_chunk_paras) - 1)
             current_chunk_paras.append(para)
             current_chunk_tokens += para_tokens
 
@@ -401,7 +442,11 @@ class Chunker:
             para_page = paragraph_to_page.get(i, current_chunk_page_end)
             if not current_chunk_paras or len(current_chunk_paras) == 1:
                 current_chunk_page_start = para_page
+                if not current_chunk_page_bounds:
+                    current_chunk_page_bounds = [(0, str(para_page))]
             current_chunk_page_end = para_page
+            if current_chunk_page_bounds and str(para_page) != current_chunk_page_bounds[-1][1]:
+                current_chunk_page_bounds.append((para_offset, str(para_page)))
             p_phys = paragraph_to_phys.get(i)
             if p_phys is not None:
                 current_chunk_phys_end = p_phys
@@ -425,7 +470,8 @@ class Chunker:
                     sub_chunks = self._recursive_split(
                         chunk_text, self.max_chunk_tokens, self.overlap_tokens
                     )
-                    for sub_text in sub_chunks:
+                    sub_pages = _slice_page_bounds(chunk_text, sub_chunks, current_chunk_page_bounds)
+                    for sub_text, sub_bounds in zip(sub_chunks, sub_pages):
                         chunks.append(self._create_chunk(
                             sub_text, doc_id, chunk_id_counter,
                             current_start_idx, current_start_idx + len(current_chunk_paras) - 1,
@@ -434,6 +480,7 @@ class Chunker:
                             physical_page_start=current_chunk_phys_start,
                             physical_page_end=current_chunk_phys_end,
                             page_start=current_chunk_page_start, page_end=current_chunk_page_end,
+                            paragraph_pages=sub_bounds,
                         ))
                         chunk_id_counter += 1
                 else:
@@ -445,6 +492,7 @@ class Chunker:
                         physical_page_start=current_chunk_phys_start,
                         physical_page_end=current_chunk_phys_end,
                         page_start=current_chunk_page_start, page_end=current_chunk_page_end,
+                        paragraph_pages=current_chunk_page_bounds,
                     ))
 
         return chunks
@@ -494,6 +542,7 @@ class Chunker:
         chapter: Optional[int] = None,
         physical_page_start: Optional[int] = None,
         physical_page_end: Optional[int] = None,
+        paragraph_pages: Optional[List[tuple]] = None,
     ) -> Dict[str, Any]:
         """Create a chunk dictionary with all metadata."""
         image_refs = self._extract_images_from_text(text)
@@ -523,6 +572,12 @@ class Chunker:
             chunk_meta["physical_page_start"] = physical_page_start
         if physical_page_end is not None:
             chunk_meta["physical_page_end"] = physical_page_end
+        # #194 per-paragraph page map: [[char_offset, page_label], ...] —
+        # boundaries where the chunk's print page changes (first entry always
+        # (0, first page)). Consumers derive the exact page of any position;
+        # the span stays as the honest envelope.
+        if paragraph_pages:
+            chunk_meta["paragraph_pages"] = [[off, str(lab)] for off, lab in paragraph_pages]
 
         if doc_metadata:
             # Exclude large internal fields that shouldn't be stored per-chunk
