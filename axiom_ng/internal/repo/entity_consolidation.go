@@ -103,17 +103,15 @@ func (r *Repo) consolidateForm(ctx context.Context, survivor string, losers []st
 		}
 	}
 	if _, err := tx.Exec(bctx, `
-		UPDATE processing_entity_relationships r SET source_entity_id = v.surv
-		FROM (SELECT unnest($1::uuid[]) AS surv, unnest($2::uuid[]) AS lose) v
-		WHERE r.source_entity_id = v.lose`,
-		[]string{survivor}, losers); err != nil {
+		UPDATE processing_entity_relationships SET source_entity_id = $1::uuid
+		WHERE source_entity_id = ANY($2::uuid[])`,
+		survivor, losers); err != nil {
 		return fmt.Errorf("consolidate repoint source: %w", err)
 	}
 	if _, err := tx.Exec(bctx, `
-		UPDATE processing_entity_relationships r SET target_entity_id = v.surv
-		FROM (SELECT unnest($1::uuid[]) AS surv, unnest($2::uuid[]) AS lose) v
-		WHERE r.target_entity_id = v.lose`,
-		[]string{survivor}, losers); err != nil {
+		UPDATE processing_entity_relationships SET target_entity_id = $1::uuid
+		WHERE target_entity_id = ANY($2::uuid[])`,
+		survivor, losers); err != nil {
 		return fmt.Errorf("consolidate repoint target: %w", err)
 	}
 	if _, err := tx.Exec(bctx, `

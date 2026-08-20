@@ -330,9 +330,23 @@ func drainOutboxRow(ctx context.Context, d *Dispatcher, osc *openSearchClient, r
 // drainOutboxDelete materializes a tombstone (#127): every chunk doc of the
 // (deactivated) snapshot leaves the index. Deleting an absent doc is fine.
 func drainOutboxDelete(ctx context.Context, d *Dispatcher, osc *openSearchClient, row repo.OutboxRow) error {
-	ids, err := d.rep.OutboxChunkIDs(ctx, row.SnapshotID)
-	if err != nil {
-		return d.failOutboxRow(ctx, row, fmt.Errorf("load chunk ids: %w", err))
+	// Frozen chunk ids (force-replace tombstones): the ids were frozen in the
+	// replace transaction BEFORE the rows were deleted — they are provably
+	// the superseded generation's, and the active-guard above must NOT skip
+	// them (the snapshot row is reactivated, but these docs are dead).
+	var ids []string
+	if raw, ok := row.Payload["chunk_ids"].([]any); ok && len(raw) > 0 {
+		for _, v := range raw {
+			if sv, ok := v.(string); ok {
+				ids = append(ids, sv)
+			}
+		}
+	} else {
+		var err error
+		ids, err = d.rep.OutboxChunkIDs(ctx, row.SnapshotID)
+		if err != nil {
+			return d.failOutboxRow(ctx, row, fmt.Errorf("load chunk ids: %w", err))
+		}
 	}
 	for _, id := range ids {
 		if err := osc.deleteDoc(ctx, id); err != nil {
