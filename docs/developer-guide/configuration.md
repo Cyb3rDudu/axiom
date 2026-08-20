@@ -50,6 +50,10 @@ organized by *where the variable is consumed* (`set by`).
 | `AXIOM_SEARCH_SPARSE_ARM` | off | Enables the **sparse** recall arm (`rank_feature` clauses) on `POST /api/search`. Default off per the retrieval quality benchmark (no quality gain, +~1.3 s p95 local). |
 | `AXIOM_SEARCH_GRAPH_ARM` | off | Enables the knowledge-**graph** expansion arm on `POST /api/search`. Default off — the quality benchmark measured it as slightly negative (+ high latency). |
 | `AXIOM_SEARCH_RERANK` | on | Runs the cross-encoder **reranker** on `POST /api/search`. Set `false` for the latency-only profile; rerank latency is steerable via a remote runner / overfetch. |
+| `AXIOM_SEARCH_FRONTMATTER_FILTER` | on | Removes detected TOC, preface, and reference chunks from search candidates before reranking. |
+| `AXIOM_SEARCH_MAX_PER_BOOK` | `2` | Caps final hits per document with rank-order refill; `0` disables the cap. |
+| `AXIOM_ZOTERO_WRITE_KEY_FILE` | `~/.axiom-ng/write-api-key` | Local Zotero write-key file. A missing or too-short key keeps the repair API unregistered. |
+| `AXIOM_QUARANTINE_ROOT` | `~/.axiom-ng/quarantine` | Durable quarantine root for originals before repair mutations; falls back to `/tmp/axiom_quarantine` when no home directory resolves. |
 
 ## Runner — the processor (`axiom_ng_runner`)
 

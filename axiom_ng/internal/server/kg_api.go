@@ -1,6 +1,11 @@
 // Package server — knowledge-graph API (R6, #136). Read-only routes over
 // the L6 graph data; the mention-stability filter (>=2) is the documented
 // default, configurable per request via min_mentions.
+//
+// Consumer guidance (#198, externally validated): relations are best
+// consumed with a default filter of confidence >= 0.65 AND
+// corroborating_documents >= 2 — below that band the edges are dominated
+// by single-extractor-pass triples.
 package server
 
 import (

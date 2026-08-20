@@ -14,13 +14,12 @@ pending → claimed → processing → completed
                                  ↘ cancelled
 ```
 
-- **pending** — waiting in line. It will be picked up as the pipeline has
-  capacity.
+- **pending** — waiting in line until the pipeline has capacity.
 - **processing** — actively being worked on: converted, chunked, embedded,
-  extracted. The chapter was "claimed" by a worker, so no other worker touches
-  it.
-- **completed** — done and durably stored. The document's chunks are in the
-  store and the search index is updated.
+  extracted. The job was claimed by a worker, so no other worker touches it.
+- **completed** — done and durably stored. The document's chunks and index
+  outbox operation are committed; the asynchronous drainer applies that
+  operation to the search index.
 - **failed** — hit a problem (usually visible in the error). Most failures have
   a clear cause; see the troubleshooting note below.
 - **cancelled / skipped** — you (or the system) asked it to stop, or it became
@@ -38,13 +37,15 @@ The simplest way to observe the lifecycle is a status query:
 curl http://127.0.0.1:8011/api/ingest/jobs
 ```
 
-You'll see each job with its document, current status, and timing. A freshly
-synced library shows a run of `pending` jobs that turn `processing` and, for
-small documents, `completed` within seconds-to-a-minute; larger scanned books
-take longer (they're compute-heavy).
+The endpoint returns recent jobs, newest first. Each row includes job, source,
+document, and attachment IDs; status; content hash; attempt counters; optional
+error data; resolution time; and enqueue time. Use `?limit=N` to request `1`–
+`500` rows. There is no per-job route and no server-side job-ID filter on this
+surface; inspect the returned array or query PostgreSQL when one-job detail is
+required.
 
-For a quick per-job detail, look at the same endpoint filtered to one job you
-care about — it includes the stage it's in.
+The exact field names and nullable values are documented in the
+[HTTP API reference](../references/api.md#get-apiingestjobs).
 
 > **Do I have to watch SQL to use axiom?** No. The status query above is enough
 > for normal use. The SQL below is only for the curious or for operators.
@@ -74,13 +75,14 @@ this view is the *truth*, not a hopeful status.
 A *processing profile* decides how much of the pipeline a job runs. The default
 in the reference setup is `full-rag-v1`, which turns on the full flow:
 conversion, chunking, **dense + sparse embeddings**, **entity extraction**, and
-**relationship extraction** (plus images).
+**relationship extraction** (plus images). Before graph rows persist, axiom
+removes frontmatter-backed mentions and any entities or relations left without
+body evidence. The chunks themselves remain available to retrieval.
 
-For a first test you can start with the same profile and it "just works" on the
-default compute. When you later wire a real GPU runner, the same profile drives
-the heavier models. Profiles are applied per job from the job's stored options;
-the profile **name alone doesn't toggle features** — the concrete options do, so
-two "full-rag" runs are explicit about what they computed.
+The same profile works with the configured local or remote runner. Profiles are
+applied per job from the job's stored options. The profile **name alone doesn't
+toggle features** — the concrete options do, so two `full-rag` runs are
+explicit about what they computed.
 
 ## Does a job survive a restart? Yes.
 
@@ -89,10 +91,12 @@ If axiom or the runner restarts mid-run, you keep your place:
 - A **pending/claimed** job gets picked up again by a healthy worker.
 - A **processing** job is not lied about — if it didn't finish + commit, it does
   not show `completed`. It is reassigned and redone as the contract permits.
-- A **completed** job is already durable; nothing needs re-running.
+- A **completed** job is already durable; its snapshot, activation switch,
+  OpenSearch outbox work, and completed state committed atomically. Processor
+  acknowledgement occurs afterward and has its own durable retry marker.
 
-In short: restarting services is safe. That's the reassurance-demo part of the
-design — no silent data loss, no phantom "done".
+Restarting services does not create silent data loss or a phantom `completed`
+state.
 
 ## Troubleshooting (common three)
 
@@ -100,7 +104,7 @@ design — no silent data loss, no phantom "done".
 | --- | --- | --- |
 | Job stuck in `pending` | No worker enabled, or dispatcher off | Ensure the runner is up and `AXIOM_DISPATCHER_ENABLED=true`; see Quickstart. |
 | Job `failed` with a source error | Attachment path not allowed, or file missing | Confirm `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` covers your Zotero storage; resync to re-create the job. |
-| Job `failed` after a long run | Model/compute backend mismatch or OOM | Match the compute backend between runner and profile; for the reference config nothing heavy is needed. |
+| Job `failed` after a long run | Model/compute backend mismatch or OOM | Match the compute backend and available device memory to the processing profile. |
 
 > A `failed` job can usually be retried by triggering a fresh sync/process for
 > that attachment — reprocessing is not blind: the hash gate means only changed

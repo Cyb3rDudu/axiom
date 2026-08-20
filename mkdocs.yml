@@ -96,6 +96,7 @@ nav:
       - Monitoring: operations/monitoring.md
       - Troubleshooting: operations/troubleshooting.md
   - References:
+      - HTTP API: references/api.md
       - Data Model: references/data-model.md
       - Benchmarks & Analyses:
           - Overview: references/benchmarks.md

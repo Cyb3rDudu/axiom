@@ -8,10 +8,9 @@ and knowledge-graph write paths, and OpenSearch outbox/index synchronization.
 
 The Python runner computes; `axiom_ng` orchestrates, validates, and persists.
 
-> This chapter summarizes `PROCESSOR_CONTRACT` and the resolved work order
-> (`LEASE_DISPATCHER_PROCESSOR_ADAPTER_WORK_ORDER.md`, kept in git as a
-> historical source). The contract structures are specified exactly in
-> [Processor Contract](processor-contract.md).
+The runner contract structures are specified in
+[Processor Contract](processor-contract.md). The client-facing Go routes are
+specified in the [HTTP API reference](../references/api.md).
 
 ## Core components
 
@@ -27,6 +26,12 @@ The Python runner computes; `axiom_ng` orchestrates, validates, and persists.
 - **Outbox** — OpenSearch indexing is outbox-driven: an outbox entry is written
   in the same PostgreSQL transaction as the snapshot; a separate retryable
   outbox worker syncs it. An OpenSearch outage never forces Marker to rerun.
+- **HTTP API** — owns Zotero sync and selection, ingest visibility, search and
+  passage retrieval, knowledge-graph reads and consolidation, signed processor
+  source delivery, and the conditionally wired repair surface.
+- **Graph hygiene** — filters frontmatter-backed entities and relationships
+  before persistence, then consolidates exact canonical-form duplicates after
+  successful sync bursts or on an explicit administrative call.
 
 ## Lease state machine
 
@@ -83,8 +88,8 @@ claim  → submit  → validate+fetch → persist (atomic) → ack
 3. **Validate + fetch** — while renewing the lease, the dispatcher polls the
    runner, then fetches and validates the result and each artifact. Everything
    the runner returns is untrusted until validated.
-4. **Persist (atomic)** — one transaction inserts the immutable snapshot,
-   marks the new generation active and the previous one inactive, inserts
+4. **Persist (atomic)** — one transaction inserts or force-refreshes the
+   versioned snapshot, marks it active and other identities inactive, inserts
    OpenSearch outbox work, and marks the job `completed`. Any failure rolls
    back and keeps the previous active snapshot.
 5. **Ack** — only after the durable commit, the dispatcher POSTs the
@@ -101,8 +106,8 @@ who no longer owns it.
 
 ## Persistence and replacement semantics
 
-A successful result is persisted as **one** immutable processing snapshot,
-identified by at least:
+A successful result is persisted under one versioned processing-snapshot
+identity, defined by:
 
 ```text
 attachment_id
@@ -111,11 +116,12 @@ processor name and version
 processing profile hash
 ```
 
-Only **one** snapshot is active per document/attachment/profile. The activation
-switch happens in the same transaction as the replacement insert. The
+Only **one** snapshot is active per attachment, across profiles. The activation
+switch happens in the same transaction as the insert or force replacement. The
 persistence transaction:
 
-1. Insert the new snapshot + dependent rows.
+1. Insert a new snapshot identity, or refresh the existing identity for a
+   forced rebuild, plus dependent rows.
 2. Verify row counts and references.
 3. Mark the new snapshot active, the previous one inactive.
 4. Insert OpenSearch outbox work.
@@ -127,24 +133,28 @@ untouched. A partial/invalid result never replaces the last valid snapshot.
 
 ### Snapshot generations, superseded generations, and the tombstone outbox
 
-Snapshots are **generations**, not rows to update in place:
+Snapshot identities carry a generation counter:
 
-- **Activation rule:** only one snapshot is `active` per attachment. On a
-  replace (e.g. a `force_rebuild`), the new snapshot becomes active in the same
-  transaction that deactivates the old one (enforced by migration `0011` →
-  `one active per attachment` at the DB level, not just in app logic).
-- **Superseded generations:** an old snapshot stays immutable in the store for
-  audit/recovery; it is only ever marked inactive — never deleted or overwritten.
-  The search index must therefore **forget** the superseded snapshot's chunks.
+- **Activation rule:** only one snapshot is `active` per attachment. A new
+  identity inserts a new row and deactivates the previous active row in the
+  same transaction (enforced by migration `0011` at the DB level).
+- **Force replacement:** `force_rebuild` with the same identity reuses the
+  snapshot ID, removes its child rows, writes the fresh result, and increments
+  `generation` atomically. This is the deliberate exception to append-only
+  snapshot rows.
+- **Superseded identities:** a row superseded by a different identity remains
+  stored and inactive. The search index must therefore **forget** its chunks.
 - **Tombstone outbox:** forgetting is handled by the outbox. The same
   transaction that deactivates a generation inserts an outbox **delete-ops**
-  record, so the OpenSearch drainer removes the superseded chunks atomically
-  with the DB switch. Without this, a `force_rebuild` would leave orphaned docs
-  in the index.
+  record. The record commits atomically with the DB switch; the asynchronous
+  drainer then removes the superseded chunks. Without this, a `force_rebuild`
+  would leave orphaned docs in the index.
 
-**Invariant:** at any moment, the OpenSearch doc-count equals the active
-snapshots' chunk-count. A divergence between index and active snapshot is the
-symptom of a missed tombstone/obsolete step (see Operations → Troubleshooting).
+**Convergence invariant:** after pending outbox work drains, the OpenSearch
+doc-count equals the active snapshots' chunk-count. Temporary divergence is
+expected while index/delete operations are pending; persistent divergence after
+the drain indicates a missed or obsolete operation (see Operations →
+Troubleshooting).
 
 ### Failure semantics
 
@@ -153,6 +163,38 @@ processor happens only after the durable commit and is idempotent. Outbox work
 (a DRY operation) is created in the same transaction as the snapshot, so an
 OpenSearch outage never re-runs Marker — the drainer retries until the index
 catches up.
+
+## Zotero sync and standing consolidation
+
+The sync service reads the canonical Zotero delta, computes attachment file
+facts before opening the apply transaction, and commits the canonical mirror,
+normalized document/attachment projections, collection memberships, selected
+ingest jobs, and library cursor together. The attachment content hash is the
+work gate: metadata-only changes do not enqueue duplicate processing.
+
+A successful sync schedules exact-form entity consolidation on a 10-second
+debounce. Consecutive successful syncs reset the timer and collapse into one
+run. Consolidation uses a detached 30-minute context because the HTTP request
+has already completed; failures are logged and do not retroactively fail the
+sync. Shutdown cancels a pending timer. The operation is also exposed as
+`POST /api/kg/consolidate` and the one-shot `-consolidate-entities` command.
+
+## Persistence gates
+
+Processor output crosses three boundaries before it becomes active product
+state:
+
+1. Contract validation checks source identity, contiguous chunk indexes,
+   unique and resolvable refs, embedding dimensions and values, locator trust,
+   relation evidence, statistics, and artifact declarations.
+2. Verified artifact records must match the fetched bytes' digest, length,
+   media type, and ref.
+3. The graph frontmatter gate removes gated mentions and unsupported entities
+   and relations before insert. It does not remove the underlying chunks from
+   retrieval.
+
+Only then does one fenced transaction persist the snapshot, switch activation,
+write OpenSearch index/delete outbox operations, and mark the job completed.
 
 ## Configuration wiring
 
