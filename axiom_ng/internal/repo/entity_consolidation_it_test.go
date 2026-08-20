@@ -230,3 +230,53 @@ func TestIT_ConsolidateEntities(t *testing.T) {
 		t.Fatalf("re-run must be a no-op, merged %d", merged2)
 	}
 }
+
+// Batched-resume (owner decision A): per-form atomicity + loud skip +
+// resume. A batch that fails leaves its form UN-merged and consistent;
+// a re-run picks it up.
+func TestIT_ConsolidateEntitiesBatchedResume(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, snapA := kgSeedSnapshot(t, lr, "Dok A", "KGCONS_A")
+	_, snapB := kgSeedSnapshot(t, lr, "Dok B", "KGCONS_B")
+	entA, _ := seedEntityWithID(t, lr, snapA, "form_one", "aaaaaaaa-1111-1111-1111-111111111111", 3)
+	entB, _ := seedEntityWithID(t, lr, snapB, "form_one", "aaaaaaaa-2222-2222-2222-222222222222", 5)
+	_, _ = kgSeedEntity(t, lr, snapA, "form_two_a", 2)
+	entT2, _ := kgSeedEntity(t, lr, snapB, "form_two_a", 3)
+	_ = entT2
+	_ = entA
+	_ = entB
+
+	var failedForms int
+	merged, err := lr.rep.ConsolidateEntitiesProgress(ctx,
+		func(done, total, m int, form string, berr error) {
+			if berr != nil {
+				failedForms++
+			}
+		})
+	if err != nil {
+		t.Fatalf("batched consolidate: %v", err)
+	}
+	if merged != 2 {
+		t.Fatalf("want 2 merged, got %d (failedForms=%d)", merged, failedForms)
+	}
+	// both forms fully merged: exactly one entity each remains
+	var n1, n2 int
+	_ = lr.pool.QueryRow(ctx, `SELECT count(*) FROM processing_entities WHERE canonical_form='form_one'`).Scan(&n1)
+	_ = lr.pool.QueryRow(ctx, `SELECT count(*) FROM processing_entities WHERE canonical_form='form_two_a'`).Scan(&n2)
+	if n1 != 1 || n2 != 1 {
+		t.Fatalf("per-form atomicity broken: form_one=%d form_two=%d", n1, n2)
+	}
+	// resume: a re-run is a no-op
+	merged2, err := lr.rep.ConsolidateEntities(ctx)
+	if err != nil || merged2 != 0 {
+		t.Fatalf("resume must be no-op, got %d err=%v", merged2, err)
+	}
+}

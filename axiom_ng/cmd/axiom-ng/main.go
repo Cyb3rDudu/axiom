@@ -38,7 +38,25 @@ func main() {
 			logger.Fatalf("postgres: %v", err)
 		}
 		defer d.Close()
-		merged, err := repo.New(d.Pool()).ConsolidateEntities(context.Background())
+		rep := repo.New(d.Pool())
+		if len(os.Args) > 2 && os.Args[2] == "--dry-run" {
+			forms, losers, err := rep.ConsolidateEntitiesDryRun(context.Background())
+			if err != nil {
+				logger.Fatalf("dry-run: %v", err)
+			}
+			logger.Printf("dry-run: %d duplicate forms, %d loser entities to merge", forms, losers)
+			return
+		}
+		merged, err := rep.ConsolidateEntitiesProgress(context.Background(),
+			func(done, total, m int, form string, err error) {
+				if err != nil {
+					logger.Printf("BATCH FAILED (skipped, resumable): form-survivor %s: %v", form, err)
+					return
+				}
+				if done%500 == 0 || done == total {
+					logger.Printf("progress: %d/%d forms, %d entities merged", done, total, m)
+				}
+			})
 		if err != nil {
 			logger.Fatalf("consolidate: %v", err)
 		}
