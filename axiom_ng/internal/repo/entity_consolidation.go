@@ -1,11 +1,12 @@
 package repo
 
-// Entity consolidation — the wave's standard epilogue (#193, owner
-// decision: generation-time merging, no migration, no read-layer
-// workaround). Per-document extraction never merges cross-document, so the
-// same concept accumulates N entities (live W9 finding: deutschland ×194).
-// After a wave drains, same-canonical-form entities across ACTIVE snapshots
-// merge into ONE survivor:
+// Entity consolidation — originally the wave's standard epilogue (#193,
+// owner decision: generation-time merging, no migration, no read-layer
+// workaround); since #197 a STANDING mechanism (REST endpoint + post-sync
+// hook) around the SAME proven merge. Per-document extraction never merges
+// cross-document, so the same concept accumulates N entities (live W9
+// finding: deutschland ×194). Same-canonical-form entities across ACTIVE
+// snapshots merge into ONE survivor:
 //
 //   - EXACT form match only (coalesce(canonical_form, text) — the same
 //     expression the KG corroboration ranking joins on); fuzzy aliasing is
@@ -31,9 +32,66 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// ConsolidationReport is the before/after accounting of one consolidation
+// run (#197): entities merged, and the standing duplicate mass — distinct
+// canonical forms carried by MORE than one entity across active snapshots
+// — counted immediately before and immediately after the merge. A healthy
+// run ends at duplicate_forms_after=0; merged=0 with 0/0 is the no-op
+// re-run (idempotency pin).
+type ConsolidationReport struct {
+	Merged               int `json:"merged"`
+	DuplicateFormsBefore int `json:"duplicate_forms_before"`
+	DuplicateFormsAfter  int `json:"duplicate_forms_after"`
+}
+
+// ConsolidateEntitiesReport runs the consolidation and returns the full
+// accounting — the surface behind POST /api/kg/consolidate and the
+// post-sync standing hook (#197).
+func (r *Repo) ConsolidateEntitiesReport(ctx context.Context) (ConsolidationReport, error) {
+	before, err := r.duplicateActiveForms(ctx)
+	if err != nil {
+		return ConsolidationReport{}, fmt.Errorf("consolidate count before: %w", err)
+	}
+	merged, err := r.consolidateActiveEntities(ctx)
+	if err != nil {
+		return ConsolidationReport{}, err
+	}
+	after, err := r.duplicateActiveForms(ctx)
+	if err != nil {
+		return ConsolidationReport{}, fmt.Errorf("consolidate count after: %w", err)
+	}
+	return ConsolidationReport{Merged: merged, DuplicateFormsBefore: before, DuplicateFormsAfter: after}, nil
+}
+
+// duplicateActiveForms counts distinct canonical forms carried by more
+// than one entity across ACTIVE snapshots (same form expression as the
+// merge itself).
+func (r *Repo) duplicateActiveForms(ctx context.Context) (int, error) {
+	var n int
+	if err := r.pool.QueryRow(ctx, `
+		SELECT count(*) FROM (
+			SELECT coalesce(e.canonical_form, e.text) AS form
+			FROM processing_entities e
+			JOIN processing_snapshots s ON s.id = e.snapshot_id AND s.active
+			GROUP BY 1 HAVING count(*) > 1
+		) d`).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // ConsolidateEntities merges same-canonical-form entities across active
 // snapshots and returns the number of merged (deleted) entity rows.
+// Thin wrapper over ConsolidateEntitiesReport for the CLI epilogue
+// (-consolidate-entities) and existing callers.
 func (r *Repo) ConsolidateEntities(ctx context.Context) (int, error) {
+	rep, err := r.ConsolidateEntitiesReport(ctx)
+	return rep.Merged, err
+}
+
+// consolidateActiveEntities is the proven merge (#193, c1e0e82 — per-form
+// atomic batches, set-based re-points, deterministic survivor).
+func (r *Repo) consolidateActiveEntities(ctx context.Context) (int, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return 0, fmt.Errorf("consolidate begin: %w", err)

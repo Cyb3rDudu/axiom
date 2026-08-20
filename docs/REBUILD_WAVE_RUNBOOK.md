@@ -274,20 +274,32 @@ ssh dudu@192.168.1.2 'podman logs -f --tail 50 runner-carrier-w9-gpu0'
 - OS docs == active chunks; embeddings bit-exact across cards (L8 evidence).
 - KG: entity/relation counts re-extracted; #185 corroboration ranking live.
 
-### 2.8 Standard epilogue — entity consolidation (#193)
+### 2.8 Standard epilogue — entity consolidation (#193, standing since #197)
 
 After the drain and the OS==PG parity check, every wave runs the
 generation-time entity consolidation (owner decision: merging, no
-migration, no read-layer workaround; exact canonical-form match only):
+migration, no read-layer workaround; exact canonical-form match only).
+Since #197 consolidation is a STANDING mechanism, reachable three ways:
 
 ```bash
+# 1) CLI epilogue (unchanged — runbook calls this after the drain):
 AXIOM_DATABASE_URL=<dsn> ./axiom-ng -consolidate-entities
-# epilogue: entity consolidation complete: N entities merged
+# epilogue: entity consolidation complete: N entities merged, duplicate forms M->0
+
+# 2) REST (loopback-bound write route, admin surface like the other writes):
+curl -X POST http://127.0.0.1:8011/api/kg/consolidate
+# {"merged":N,"duplicate_forms_before":M,"duplicate_forms_after":0}
+
+# 3) Automatic: every SUCCESSFUL Zotero sync completion hooks a debounced
+#    run (one run per sync burst) — logged as
+#    "consolidation (#197 hook): merged=N duplicate_forms M->0".
 ```
 
-Idempotent by construction; pinned by the seeded IT TestIT_ConsolidateEntities.
-Re-run after any post-epilogue straggler persist — a late book re-creates
-its per-doc duplicate entities by design (drains lie; §2.5). Moved
+Idempotent by construction; pinned by the seeded IT TestIT_ConsolidateEntities
+(repo), the endpoint IT (second POST = zero report) and the sync-hook IT
+(sync completion -> real merge). Re-run after any post-epilogue straggler
+persist — a late book re-creates its per-doc duplicate entities by design
+(drains lie; §2.5). Moved
 mentions keep counting toward the survivor even if their source snapshot
 later turns inactive — generation-time merging keeps dead-snapshot
 evidence until retention removes the old snapshots (owner decision).
