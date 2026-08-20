@@ -44,11 +44,15 @@ func step1CachedB(dec1 *ort.DynamicAdvancedSession, encHidden []float32, encMask
 	outs[0] = logits
 	for i := 1; i < len(names); i++ {
 		var L int64 = 1
-		if contains(names[i], "encoder") { L = encLen }
+		if contains(names[i], "encoder") {
+			L = encLen
+		}
 		t, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, heads, L, headDim))
 		outs[i] = t
 	}
-	if err := dec1.Run([]ort.Value{tm, tid, th}, outs); err != nil { fatal("step1CachedB: %v", err) }
+	if err := dec1.Run([]ort.Value{tm, tid, th}, outs); err != nil {
+		fatal("step1CachedB: %v", err)
+	}
 	traceT("step1", fmt.Sprintf("e%d", encLen), time.Since(t0))
 	dec := make([]*ort.Tensor[float32], 0, 24)
 	enc := make([]*ort.Tensor[float32], 0, 24)
@@ -62,7 +66,7 @@ func step1CachedB(dec1 *ort.DynamicAdvancedSession, encHidden []float32, encMask
 
 // replicateBatch builds a [B,...] tensor whose rows all copy row 0 of src (B=1 tensor).
 func replicateBatch(src *ort.Tensor[float32], B int64) *ort.Tensor[float32] {
-	sh := src.GetShape()          // [1, d1, d2, ...]
+	sh := src.GetShape() // [1, d1, d2, ...]
 	rowLen := sh[1] * sh[2] * sh[3]
 	out, _ := ort.NewEmptyTensor[float32](ort.NewShape(B, sh[1], sh[2], sh[3]))
 	data := out.GetData()
@@ -99,40 +103,63 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 			addHyp(&done, hyp{ids: []int64{tpXX, eosID}, score: c.logp})
 			continue
 		}
-		if len(beams) >= numBeams { break }
+		if len(beams) >= numBeams {
+			break
+		}
 		beams = append(beams, hypB{ids: []int64{tpXX, c.tok}, score: c.logp, parentSlot: 0})
 	}
-	if len(beams) == 0 { return finishSeqs(tok, done) }
+	if len(beams) == 0 {
+		return finishSeqs(tok, done)
+	}
 
 	// Batch-3 constant encoder cache + mask (rebuilt if B changes).
 	tmB := func(B int) *ort.Tensor[int64] {
 		m := make([]int64, 0, B*len(encMask))
-		for i := 0; i < B; i++ { m = append(m, encMask...) }
+		for i := 0; i < B; i++ {
+			m = append(m, encMask...)
+		}
 		t, _ := ort.NewTensor(ort.NewShape(int64(B), encLen), m)
 		return t
 	}
 	encCacheB := func(B int) []*ort.Tensor[float32] {
 		out := make([]*ort.Tensor[float32], len(encCache1))
-		for i, t := range encCache1 { out[i] = replicateBatch(t, int64(B)) }
+		for i, t := range encCache1 {
+			out[i] = replicateBatch(t, int64(B))
+		}
 		return out
 	}
 
 	// prevCache: the previous round's present tensors [B_prev,16,decLen,64]; parents index into it.
 	B0 := len(beams)
 	prevCache := make([]*ort.Tensor[float32], 24)
-	for i := range prevCache { prevCache[i] = replicateBatch(decCache0[i], int64(B0)) }
+	for i := range prevCache {
+		prevCache[i] = replicateBatch(decCache0[i], int64(B0))
+	}
 	var curTm *ort.Tensor[int64]
 	var curEnc []*ort.Tensor[float32]
 	curB := -1
 	setB := func(B int) {
-		if B == curB { return }
-		if curTm != nil { curTm.Destroy() }
-		for _, t := range curEnc { if t != nil { t.Destroy() } }
+		if B == curB {
+			return
+		}
+		if curTm != nil {
+			curTm.Destroy()
+		}
+		for _, t := range curEnc {
+			if t != nil {
+				t.Destroy()
+			}
+		}
 		curTm = tmB(B)
 		curEnc = encCacheB(B)
 		curB = B
 	}
-	defer func() { curTm.Destroy(); for _, t := range curEnc { t.Destroy() } }()
+	defer func() {
+		curTm.Destroy()
+		for _, t := range curEnc {
+			t.Destroy()
+		}
+	}()
 
 	decLen := int64(1)
 	outNames := decKOutputs()
@@ -142,7 +169,9 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 
 		// gather parent rows -> batch dec cache [B,16,decLen,64]
 		parents := make([]int, B)
-		for i, b := range beams { parents[i] = b.parentSlot }
+		for i, b := range beams {
+			parents[i] = b.parentSlot
+		}
 		decBatch := make([]*ort.Tensor[float32], 24)
 		for i := 0; i < 24; i++ {
 			t, _ := ort.NewEmptyTensor[float32](ort.NewShape(int64(B), heads, decLen, headDim))
@@ -152,7 +181,9 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 
 		// run with_past: enc_mask, ids, 24 dec, 24 enc (per-layer interleaved)
 		ids := make([]int64, B)
-		for i, b := range beams { ids[i] = b.ids[len(b.ids)-1] }
+		for i, b := range beams {
+			ids[i] = b.ids[len(b.ids)-1]
+		}
 		tid, _ := ort.NewTensor(ort.NewShape(int64(B), 1), ids)
 		t0 := time.Now()
 		feeds := []ort.Value{curTm, tid}
@@ -166,10 +197,14 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 			t, _ := ort.NewEmptyTensor[float32](ort.NewShape(int64(B), heads, decLen+1, headDim))
 			outs[i] = t
 		}
-		if err := decK.Run(feeds, outs); err != nil { fatal("cachedB run: %v", err) }
+		if err := decK.Run(feeds, outs); err != nil {
+			fatal("cachedB run: %v", err)
+		}
 		traceT("stepN", fmt.Sprintf("B%dd%d", B, decLen), time.Since(t0))
 		tid.Destroy()
-		for _, t := range decBatch { t.Destroy() }
+		for _, t := range decBatch {
+			t.Destroy()
+		}
 
 		// per-beam topK in parallel
 		base := logits.GetData()
@@ -185,7 +220,10 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 		wg.Wait()
 
 		// collect + select (BeamHypotheses semantics)
-		type candH struct { h hyp; parent int }
+		type candH struct {
+			h      hyp
+			parent int
+		}
 		all := make([]candH, 0, B*(2*numBeams))
 		for i, b := range beams {
 			for _, c := range cands[i] {
@@ -195,7 +233,9 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 		sort.SliceStable(all, func(i, j int) bool { return all[i].h.score > all[j].h.score })
 		next := []hypB{}
 		for _, ch := range all {
-			if len(next) >= numBeams { break }
+			if len(next) >= numBeams {
+				break
+			}
 			if ch.h.ids[len(ch.h.ids)-1] == eosID {
 				addHyp(&done, ch.h)
 				continue
@@ -204,8 +244,12 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 		}
 		beams = next
 		// rotate cache: present rows ARE the current beams' rows (index i)
-		for _, t := range prevCache { t.Destroy() }
-		for i := 0; i < 24; i++ { prevCache[i] = outs[1+i].(*ort.Tensor[float32]) }
+		for _, t := range prevCache {
+			t.Destroy()
+		}
+		for i := 0; i < 24; i++ {
+			prevCache[i] = outs[1+i].(*ort.Tensor[float32])
+		}
 		decLen++
 	}
 	return finishSeqs(tok, done, beamToHypB(beams))
@@ -214,16 +258,25 @@ func beamSearchCached(tok *sentencepiece.Tokenizer, dec1, decK *ort.DynamicAdvan
 func finishSeqs(tok *sentencepiece.Tokenizer, done []hyp, beams ...[]hyp) []seq {
 	for _, bs := range beams {
 		for _, b := range bs {
-			if len(done) >= numReturn { break }
+			if len(done) >= numReturn {
+				break
+			}
 			addHyp(&done, hyp{ids: b.ids, score: b.score})
 		}
 	}
 	sort.SliceStable(done, func(i, j int) bool { return done[i].score > done[j].score })
-	if len(done) > numReturn { done = done[:numReturn] }
+	if len(done) > numReturn {
+		done = done[:numReturn]
+	}
 	seqs := make([]seq, 0, len(done))
 	for _, d := range done {
 		cut := d.ids
-		for i, id := range cut { if id == eosID { cut = cut[:i+1]; break } }
+		for i, id := range cut {
+			if id == eosID {
+				cut = cut[:i+1]
+				break
+			}
+		}
 		seqs = append(seqs, seq{ids: cut, text: decodeSeq(tok, cut)})
 	}
 	return seqs
@@ -231,22 +284,32 @@ func finishSeqs(tok *sentencepiece.Tokenizer, done []hyp, beams ...[]hyp) []seq 
 
 func beamToHypB(beams []hypB) []hyp {
 	out := make([]hyp, len(beams))
-	for i, b := range beams { out[i] = hyp{ids: b.ids, score: b.score} }
+	for i, b := range beams {
+		out[i] = hyp{ids: b.ids, score: b.score}
+	}
 	return out
 }
 
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub { return true }
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
 	}
 	return false
 }
 
 func beamDoneC(done, beams []hyp) bool {
-	if len(done) < numBeams { return false }
+	if len(done) < numBeams {
+		return false
+	}
 	worst := done[len(done)-1].score
 	bestOpen := math.Inf(-1)
-	for _, b := range beams { if b.score > bestOpen { bestOpen = b.score } }
+	for _, b := range beams {
+		if b.score > bestOpen {
+			bestOpen = b.score
+		}
+	}
 	return worst >= bestOpen
 }
 

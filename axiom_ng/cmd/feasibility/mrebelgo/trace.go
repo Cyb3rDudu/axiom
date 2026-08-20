@@ -46,9 +46,9 @@ func traceT(kind, shape string, d time.Duration) {
 // ---- step dump ----
 
 type dumpBeam struct {
-	Ids   []int64   `json:"ids"`
-	Score float64   `json:"score"`
-	Top6  [][2]any  `json:"top6,omitempty"` // [token, logp] of the candidates this beam expanded to
+	Ids   []int64  `json:"ids"`
+	Score float64  `json:"score"`
+	Top6  [][2]any `json:"top6,omitempty"` // [token, logp] of the candidates this beam expanded to
 }
 
 func dumpStepsOn() bool { return os.Getenv("MRBEL_DUMP_STEPS") == "1" }

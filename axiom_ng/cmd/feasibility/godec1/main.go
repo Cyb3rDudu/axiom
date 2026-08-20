@@ -16,9 +16,13 @@ import (
 func main() {
 	lib, mdir := os.Args[1], os.Args[2]
 	var encLen int64 = 10
-	if len(os.Args) > 3 { fmt.Sscanf(os.Args[3], "%d", &encLen) }
+	if len(os.Args) > 3 {
+		fmt.Sscanf(os.Args[3], "%d", &encLen)
+	}
 	ort.SetSharedLibraryPath(lib)
-	if err := ort.InitializeEnvironment(); err != nil { fatal("ort: %v", err) }
+	if err := ort.InitializeEnvironment(); err != nil {
+		fatal("ort: %v", err)
+	}
 	defer ort.DestroyEnvironment()
 	opts, _ := ort.NewSessionOptions()
 
@@ -38,12 +42,16 @@ func main() {
 	// mirror mrebelgo: also open encoder + decoder_model sessions first
 	encSess, err := ort.NewDynamicAdvancedSession(mdir+"/encoder_model.onnx",
 		[]string{"input_ids", "attention_mask"}, []string{"last_hidden_state"}, opts)
-	if err != nil { fatal("enc session: %v", err) }
+	if err != nil {
+		fatal("enc session: %v", err)
+	}
 	defer encSess.Destroy()
 	dec1Sess, err := ort.NewDynamicAdvancedSession(mdir+"/decoder_model.onnx",
 		[]string{"encoder_attention_mask", "input_ids", "encoder_hidden_states"},
 		[]string{"logits"}, opts) // NOTE: only logits here
-	if err != nil { fatal("dec1 session: %v", err) }
+	if err != nil {
+		fatal("dec1 session: %v", err)
+	}
 	defer dec1Sess.Destroy()
 	// === actually run encoder + decoder_model (step1) first, mirroring mrebelgo ===
 	_ = encLen
@@ -53,12 +61,16 @@ func main() {
 	tin, _ := ort.NewTensor(ort.NewShape(1, 1), []int64{250058})
 	defer tin.Destroy()
 	eh, err := ort.NewEmptyTensor[float32](ort.NewShape(1, encLen, 1024))
-	if err != nil { fatal("eh: %v", err) }
+	if err != nil {
+		fatal("eh: %v", err)
+	}
 	defer eh.Destroy()
 	// encoder needs input_ids (not 250058, that's just a token) — use a fixed small id array
 	tids, _ := ort.NewTensor(ort.NewShape(1, encLen), ones(encLen))
 	defer tids.Destroy()
-	if err := encSess.Run([]ort.Value{tids, tem}, []ort.Value{eh}); err != nil { fatal("enc run: %v", err) }
+	if err := encSess.Run([]ort.Value{tids, tem}, []ort.Value{eh}); err != nil {
+		fatal("enc run: %v", err)
+	}
 	// step1 decoder_model
 	d1s := dec1Sess
 	d1in0, _ := ort.NewTensor(ort.NewShape(1, encLen), encMask) // enc_mask
@@ -73,7 +85,9 @@ func main() {
 	}
 	_ = d1s
 	sess, err := ort.NewDynamicAdvancedSession(mdir+"/decoder_with_past_model.onnx", ins, outs, opts)
-	if err != nil { fatal("session: %v", err) }
+	if err != nil {
+		fatal("session: %v", err)
+	}
 	defer sess.Destroy()
 
 	// feeds: enc_mask [1,encLen] int64 ones; input_ids [1,1] int64 {123};
@@ -112,5 +126,11 @@ func main() {
 	}
 	fmt.Println("RUN OK; logits[:3]=", logits.GetData()[:3])
 }
-func ones(n int64) []int64 { o := make([]int64, n); for i := range o { o[i] = 1 }; return o }
+func ones(n int64) []int64 {
+	o := make([]int64, n)
+	for i := range o {
+		o[i] = 1
+	}
+	return o
+}
 func fatal(f string, a ...any) { fmt.Fprintf(os.Stderr, "FATAL: "+f+"\n", a...); os.Exit(1) }

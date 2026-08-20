@@ -761,6 +761,21 @@ func TestCancellationDuringProcessing(t *testing.T) {
 	if got := h.jobStatus(t, jobID); got != "cancelled" {
 		t.Fatalf("status = %q, want cancelled", got)
 	}
+	// #190 Z2: cancellation during processing must leave NO half-finished
+	// snapshot or outbox artifact — the guard stops the loop before the
+	// result fetch/persist ever runs.
+	var snaps, outbox int
+	if err := h.pool.QueryRow(context.Background(),
+		"SELECT count(*) FROM processing_snapshots").Scan(&snaps); err != nil {
+		t.Fatalf("count snapshots: %v", err)
+	}
+	if err := h.pool.QueryRow(context.Background(),
+		"SELECT count(*) FROM opensearch_outbox").Scan(&outbox); err != nil {
+		t.Fatalf("count outbox: %v", err)
+	}
+	if snaps != 0 || outbox != 0 {
+		t.Fatalf("cancelled job left artifacts: %d snapshots, %d outbox rows", snaps, outbox)
+	}
 }
 
 // TestAckFailureIsRetried (F8/F3): a failed ACK leaves the job completed but
