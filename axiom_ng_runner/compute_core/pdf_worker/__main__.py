@@ -34,6 +34,158 @@ def _stderr_err(payload: Dict[str, Any]) -> None:
     print(json.dumps(payload), file=sys.stderr, flush=True)
 
 
+# Runner-Härtung Z1: Raster-Scan-Erkennung + Batch-Planung.
+# Bewiesene Klasse (S6A3QW89/RSXUHT34 Bartscher 658 S. Vollseitenraster
+# ≈7,4 GB RGB dekodiert, 0 Textzeichen; Bofinger ec03b267 gleiche Klasse):
+# Marker stirbt am Speicher (cgroup oom_kill bewiesen), der Subprocess-
+# Wrapper verwirft den Returncode (SIGKILL unsichtbar).
+
+# Schwellen: unterhalb gilt ein Buch als harmlos (Normalpfad), oberhalb
+# als Scan (Batch-Pfad). Konservativ gewählt: 1,5 GB dekodiertes RGB
+# hat Marker auf der 24-GB-Karte nachweislich überlebt; 7,4 GB nachweis-
+# lich nicht (oom_kill).
+SCAN_DECODED_BYTES_LIMIT = 1_500_000_000
+SCAN_TEXT_CHARS_PER_PAGE = 20
+SCAN_BATCH_BYTES = 1_200_000_000  # Batch-Budget:_limit etwas unter dem Gate
+
+
+class _ScanProfile(dict):
+    """dict mit Attributzugriff für die Test-Oberfläche."""
+    __getattr__ = dict.get
+
+
+def _scan_profile(doc) -> _ScanProfile:
+    """Textabdeckung/Seitenzahl/dekodierte Rastergröße einer PDF messen.
+
+    ``doc`` ist alles, was page_count, [i].get_text() und [i].get_images()
+    bereitstellt (echtes pymupdf.Document im Worker, Fake im Test).
+    """
+    n = doc.page_count
+    total_chars = 0
+    raster_pages = 0
+    decoded = 0
+    for i in range(n):
+        page = doc[i]
+        tlen = len((page.get_text() or "").strip())
+        total_chars += tlen
+        imgs = page.get_images(full=True)
+        page_px = 0
+        for im in imgs:
+            xref = im[0]
+            try:
+                pix_info = doc.extract_image(xref)
+                w, h = pix_info.get("width", 0), pix_info.get("height", 0)
+            except Exception:
+                continue
+            page_px += int(w) * int(h)
+        if page_px * 3 > 2_000_000:  # >2 MPix RGB gilt als Rasterseite
+            raster_pages += 1
+            decoded += page_px * 3
+    return _ScanProfile(
+        pages=n,
+        text_chars=total_chars,
+        chars_per_page=(total_chars / n) if n else 0.0,
+        raster_pages=raster_pages,
+        decoded_bytes=decoded,
+    )
+
+
+def _is_raster_scan(profile: _ScanProfile) -> bool:
+    """Scan-Klasse: kaum Text + überwiegend Rasterseiten + Volumen über Limit."""
+    if profile.pages < 8:
+        return False
+    if profile.chars_per_page >= SCAN_TEXT_CHARS_PER_PAGE:
+        return False
+    if profile.pages and profile.raster_pages / profile.pages < 0.8:
+        return False
+    return profile.decoded_bytes > SCAN_DECODED_BYTES_LIMIT
+
+
+def _batch_bounds(profile: _ScanProfile, budget: int = SCAN_BATCH_BYTES) -> list[tuple[int, int]]:
+    """Seiten-Batches so planen, dass jedes Batch im Dekodier-Budget bleibt.
+
+    Rückgabe 0-basierte [start, end)-Intervalle; eine Rasterseite wiegt
+    pagesgerecht decoded/pages Bytes (konservativ gleichverteilt — echte
+    Scans sind uniform).
+    """
+    n = profile.pages
+    if n == 0:
+        return []
+    per_page = max(1, profile.decoded_bytes // n)
+    batch_pages = max(1, budget // per_page)
+    out = []
+    start = 0
+    while start < n:
+        end = min(n, start + batch_pages)
+        out.append((start, end))
+        start = end
+    return out
+
+
+def _classify_child_failure(returncode: int, stderr: str = "") -> str:
+    """Z1c: Returncode/SIGKILL/OOM als eigene Fehlerklasse.
+
+    Der alte Wrapper warf 'failed: <leerer stderr>' — ein oom_killtes
+    Kind (SIGKILL, returncode -9) war unsichtbar. Jetzt: Signale werden
+    benannt, SIGKILL bekommt die OOM-Klasse.
+    """
+    if returncode == 0:
+        return ""
+    if returncode < 0:
+        sig = -returncode
+        if sig == 9:
+            return (
+                "CHILD_OOM_SIGKILL: worker von SIGKILL getroffen "
+                "(cgroup oom_kill wahrscheinlich) — Quelle ist ein "
+                "Raster-Scan-Kandidat (Z1)"
+            )
+        return f"CHILD_SIGNAL_{sig}: worker von Signal {sig} beendet"
+    return ""
+
+
+def _convert_scan_batched(processor, pdf_path: Path, profile, logger) -> tuple[str, Dict[str, Any]]:
+    """Z1b: Raster-Scans in begrenzten Batches durch Marker.
+
+    Jedes Batch wird als eigenes Seiten-PDF (pymupdf insert_pdf) materialiert
+    und durch dasselbe DocumentProcessor-Objekt geschickt — die Marker-Modelle
+    laden EINMAL, das Dekodier-Volumen bleibt pro Batch im Budget. Die
+    Marker-Paginierungsmarker ({N}----) jedes Batches werden auf die
+    Original-Seitennummern verschoben zusammengeführt.
+    """
+    import re as _re
+    import tempfile
+
+    bounds = _batch_bounds(profile)
+    logger.info(f"scan batch mode: {profile.pages} pages, "
+                f"{profile.decoded_bytes / 1e9:.1f} GB decoded -> {len(bounds)} batches")
+    src = None
+    parts: list[str] = []
+    images: Dict[str, Any] = {}
+    import pymupdf  # lazy: erst im Batch-Pfad nötig
+    src = pymupdf.open(str(pdf_path))
+    try:
+        for b_i, (start, end) in enumerate(bounds):
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+                batch_path = Path(tf.name)
+            batch_doc = pymupdf.open()
+            batch_doc.insert_pdf(src, from_page=start, to_page=end - 1)
+            batch_doc.save(str(batch_path))
+            batch_doc.close()
+            try:
+                md, batch_imgs = processor._convert_pdf_with_table_handling(batch_path)
+            finally:
+                batch_path.unlink(missing_ok=True)
+            # Paginierungsmarker dieses Batches auf Original-Seiten schieben
+            offset = start
+            md = _re.sub(r"\{(\d+)\}-{10,}", lambda m: "{" + str(int(m.group(1)) + offset) + "}" + "-" * 48, md)
+            parts.append(md)
+            for k, v in (batch_imgs or {}).items():
+                images[f"b{b_i}_{k}"] = v
+    finally:
+        src.close()
+    return "\n\n".join(parts), images
+
+
 def _save_images(marker_images: Dict[str, Any], out_dir: Path) -> Dict[str, str]:
     """Persist each PIL image / bytes blob under a stable name.
 
@@ -94,6 +246,15 @@ def main() -> int:
     out_md.parent.mkdir(parents=True, exist_ok=True)
 
     try:
+        # Z1: Pre-Marker-Gate — Scan-Profil messen, BEVOR die Modelle laden.
+        import pymupdf as _pm
+        _doc = _pm.open(str(pdf_path))
+        try:
+            _prof = _scan_profile(_doc)
+        finally:
+            _doc.close()
+        logger.info(f"scan profile: {dict(_prof)}")
+
         # Construct a minimal DocumentProcessor whose only job is Marker
         # conversion. It owns no embedder, no vector store, no DB — just
         # the Marker models. When this process exits, all that state is
@@ -112,7 +273,10 @@ def main() -> int:
         )
 
         logger.info(f"Converting {pdf_path.name} via Marker...")
-        markdown, marker_images = processor._convert_pdf_with_table_handling(pdf_path)
+        if _is_raster_scan(_prof):
+            markdown, marker_images = _convert_scan_batched(processor, pdf_path, _prof, logger)
+        else:
+            markdown, marker_images = processor._convert_pdf_with_table_handling(pdf_path)
         if not markdown:
             _stderr_err({"ok": False, "error": "Marker returned empty markdown"})
             return 1
