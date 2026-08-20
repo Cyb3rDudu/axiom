@@ -63,6 +63,101 @@ func main() {
 	// Wave epilogue mode (#193): consolidation of same-canonical-form
 	// entities across active snapshots. Runs ONCE and exits — the wave
 	// runbook calls it after the drain (peer of the OS==PG parity check).
+	if len(os.Args) > 1 && os.Args[1] == "-consolidate-relations" {
+		// #198-2: one aggregated edge per (source,target) pair among active
+		// snapshots. Dry-run by default; --apply mutates.
+		cfg := config.Load()
+		logger := log.New(os.Stderr, "relations: ", log.LstdFlags)
+		apply := false
+		for _, a := range os.Args[2:] {
+			if a == "--apply" {
+				apply = true
+			}
+		}
+		d, err := db.Open(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			logger.Fatalf("postgres: %v", err)
+		}
+		defer d.Close()
+		rep := repo.New(d.Pool())
+		if !apply {
+			_, pairs, err := rep.RelationsConsolidationDryRun(context.Background())
+			if err != nil {
+				logger.Fatalf("dry-run: %v", err)
+			}
+			logger.Printf("dry-run: %d multi-edge pairs would collapse (use --apply)", pairs)
+			return
+		}
+		rep2, err := rep.ConsolidateRelationsReport(context.Background())
+		if err != nil {
+			logger.Fatalf("consolidate: %v", err)
+		}
+		logger.Printf("relations consolidation complete: %+v", rep2)
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "-normalize-entity-types" {
+		// #198-3: deterministic typing rules over active entities.
+		// Dry-run by default; --apply mutates.
+		cfg := config.Load()
+		logger := log.New(os.Stderr, "typing: ", log.LstdFlags)
+		apply := false
+		for _, a := range os.Args[2:] {
+			if a == "--apply" {
+				apply = true
+			}
+		}
+		d, err := db.Open(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			logger.Fatalf("postgres: %v", err)
+		}
+		defer d.Close()
+		rp := repo.New(d.Pool())
+		if !apply {
+			c, err := rp.EntityTypingCounts(context.Background())
+			if err != nil {
+				logger.Fatalf("dry-run: %v", err)
+			}
+			logger.Printf("dry-run: %+v (use --apply)", c)
+			return
+		}
+		tr, err := rp.NormalizeEntityTypes(context.Background())
+		if err != nil {
+			logger.Fatalf("normalize: %v", err)
+		}
+		logger.Printf("entity typing complete: %+v", tr)
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "-bind-flexion-aliases" {
+		// #198-3: flexion family alias links.
+		cfg := config.Load()
+		logger := log.New(os.Stderr, "aliases: ", log.LstdFlags)
+		apply := false
+		for _, a := range os.Args[2:] {
+			if a == "--apply" {
+				apply = true
+			}
+		}
+		d, err := db.Open(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			logger.Fatalf("postgres: %v", err)
+		}
+		defer d.Close()
+		rp := repo.New(d.Pool())
+		if !apply {
+			c, err := rp.EntityAliasCounts(context.Background())
+			if err != nil {
+				logger.Fatalf("dry-run: %v", err)
+			}
+			logger.Printf("dry-run: %+v (use --apply)", c)
+			return
+		}
+		ar, err := rp.BindFlexionAliases(context.Background())
+		if err != nil {
+			logger.Fatalf("bind: %v", err)
+		}
+		logger.Printf("flexion aliases complete: %+v", ar)
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "-consolidate-entities" {
 		cfg := config.Load()
 		logger := log.New(os.Stderr, "epilogue: ", log.LstdFlags)

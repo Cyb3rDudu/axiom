@@ -150,11 +150,15 @@ func (r *Repo) KGNeighbors(ctx context.Context, entityID string, minMentions, li
 	cor AS (
 		SELECT r.type, coalesce(se.canonical_form, se.text) AS sf,
 		       coalesce(te.canonical_form, te.text) AS tf,
-		       count(DISTINCT sn.document_id) AS docs, count(*) AS triprows
+		       count(DISTINCT es.document_id) AS docs,
+		       count(DISTINCT r.id) AS triprows
 		FROM processing_entity_relationships r
 		JOIN processing_snapshots sn ON sn.id = r.snapshot_id AND sn.active
 		JOIN processing_entities se ON se.id = r.source_entity_id
 		JOIN processing_entities te ON te.id = r.target_entity_id
+		CROSS JOIN LATERAL jsonb_array_elements_text(r.evidence_chunk_ids) ev
+		JOIN processing_chunks c ON c.id = ev.value::uuid
+		JOIN processing_snapshots es ON es.id = c.snapshot_id AND es.active
 		GROUP BY 1, 2, 3
 	)
 	SELECT o.id::text, coalesce(o.canonical_form, o.text), coalesce(o.type, ''),
@@ -263,20 +267,25 @@ func (r *Repo) KGRelations(ctx context.Context, relType, entityID, documentID st
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	// ponytail: cor is a group-by over all active relations (~75k rows at
-	// current corpus; the CTE itself is cheap, but the full ranked browse
-	// measured ~1.5s on the live graph with parallelism off — plan for the
-	// WHOLE query, not just the CTE). Materialize as a table if the graph
-	// grows or the endpoint becomes latency-sensitive.
+	// ponytail: cor is a group-by over all active relations (~71k edges,
+	// LATERAL-unfolded to ~74k evidence elements at current corpus). The
+	// full ranked browse measured ~3.3s on the live graph (EXPLAIN ANALYZE,
+	// JIT included ~1.2s; the pre-LATERAL shape was ~2.0s — the +62% is the
+	// price of evidence-true corroboration). Materialize the corroboration
+	// as a table if the endpoint becomes latency-sensitive.
 	rows, err := r.pool.Query(ctx, activeEntityCounts+`,
 	cor AS (
 		SELECT r.type, coalesce(se.canonical_form, se.text) AS sf,
 		       coalesce(te.canonical_form, te.text) AS tf,
-		       count(DISTINCT sn.document_id) AS docs, count(*) AS triprows
+		       count(DISTINCT es.document_id) AS docs,
+		       count(DISTINCT r.id) AS triprows
 		FROM processing_entity_relationships r
 		JOIN processing_snapshots sn ON sn.id = r.snapshot_id AND sn.active
 		JOIN processing_entities se ON se.id = r.source_entity_id
 		JOIN processing_entities te ON te.id = r.target_entity_id
+		CROSS JOIN LATERAL jsonb_array_elements_text(r.evidence_chunk_ids) ev
+		JOIN processing_chunks c ON c.id = ev.value::uuid
+		JOIN processing_snapshots es ON es.id = c.snapshot_id AND es.active
 		GROUP BY 1, 2, 3
 	)
 	SELECT r.id::text, r.type,
