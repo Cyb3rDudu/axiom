@@ -225,32 +225,50 @@ func (r *Repo) consolidateActiveRelations(ctx context.Context) (RelationConsolid
 		}
 		sort.Strings(union)
 
-		// Archive: merge existing superseded_types with the new losers.
+		// Archive: merge existing superseded_types with the new losers —
+		// from ALL group members (W1 fix): a re-elected survivor must
+		// inherit the previous survivor's archive, or the evidence trail
+		// dies with the deleted old survivor on re-run after sync.
 		arch := map[[2]string]*archEntry{}
-		if raw, ok := surv.existingMetadata["superseded_types"]; ok {
-			if arr, ok := raw.([]any); ok {
-				for _, it := range arr {
-					m, _ := it.(map[string]any)
-					if m == nil {
-						continue
-					}
-					t, _ := m["type"].(string)
-					d, _ := m["direction"].(string)
-					if t == "" {
-						continue
-					}
-					e := &archEntry{Type: t, Direction: d, Evidence: []string{}}
-					if evs, ok := m["evidence_chunk_ids"].([]any); ok {
-						for _, c := range evs {
-							if s, ok := c.(string); ok {
-								e.Evidence = append(e.Evidence, s)
-							}
+		for _, member := range edges {
+			raw, ok := member.existingMetadata["superseded_types"]
+			if !ok {
+				continue
+			}
+			arr, ok := raw.([]any)
+			if !ok {
+				continue
+			}
+			for _, it := range arr {
+				m, _ := it.(map[string]any)
+				if m == nil {
+					continue
+				}
+				t, _ := m["type"].(string)
+				d, _ := m["direction"].(string)
+				if t == "" {
+					continue
+				}
+				key := [2]string{t, d}
+				e := arch[key]
+				if e == nil {
+					e = &archEntry{Type: t, Direction: d, Evidence: []string{}}
+					arch[key] = e
+				}
+				seen := map[string]bool{}
+				for _, c := range e.Evidence {
+					seen[c] = true
+				}
+				if evs, ok := m["evidence_chunk_ids"].([]any); ok {
+					for _, c := range evs {
+						if s, ok := c.(string); ok && !seen[s] {
+							e.Evidence = append(e.Evidence, s)
+							seen[s] = true
 						}
 					}
-					if n, ok := m["edges"].(float64); ok {
-						e.Edges = int(n)
-					}
-					arch[[2]string{t, d}] = e
+				}
+				if n, ok := m["edges"].(float64); ok {
+					e.Edges += int(n)
 				}
 			}
 		}

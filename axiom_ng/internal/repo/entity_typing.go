@@ -72,7 +72,7 @@ const typingMatchSQL = `
 	),
 	m AS (
 		SELECT id, coalesce(type, '(null)') AS type,
-		       CASE WHEN form = ANY($1::text[]) THEN 'bare_form'
+		       CASE WHEN form = ANY($1::text[]) AND type IS DISTINCT FROM 'CONCEPT' THEN 'bare_form'
 		            WHEN form ~ $2 AND type IN ('PERSON', 'ORGANIZATION') THEN 'plural_head'
 		       END AS rule
 		FROM act

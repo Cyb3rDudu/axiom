@@ -36,7 +36,7 @@ SELECT count(*) FROM (
 ```
 
 ```bash
-axiom-ng -normalize-entity-types  # expect MatchedRows:0
+axiom-ng -normalize-entity-types  # expect MatchedRows:0 (non-CONCEPT generic forms exhausted)
 axiom-ng -bind-flexion-aliases    # expect Families:0 VariantsLinked:0
 ```
 

@@ -97,6 +97,7 @@ func (r *Repo) entityAlias(ctx context.Context, apply bool) (EntityAliasReport, 
 
 	type binding struct{ variant, survivor string }
 	var todo []binding
+	var survivorIDs []string
 	for _, members := range families {
 		if len(members) < 2 {
 			continue
@@ -130,6 +131,7 @@ func (r *Repo) entityAlias(ctx context.Context, apply bool) (EntityAliasReport, 
 			}
 		}
 		rep.Families++
+		survivorIDs = append(survivorIDs, surv.id)
 		for _, m := range members {
 			if m.id == surv.id || m.aliasOf == surv.id {
 				continue
@@ -149,6 +151,14 @@ func (r *Repo) entityAlias(ctx context.Context, apply bool) (EntityAliasReport, 
 			b.variant, b.survivor); err != nil {
 			return rep, fmt.Errorf("alias bind %s: %w", b.variant, err)
 		}
+	}
+	// W3: a re-elected survivor must not keep its own stale alias_of from
+	// a previous run — the family lead node cannot be an alias of anything.
+	if _, err := r.pool.Exec(ctx, `
+		UPDATE processing_entities SET alias_of = NULL
+		WHERE id = ANY($1::uuid[]) AND alias_of IS NOT NULL`,
+		survivorIDs); err != nil {
+		return rep, fmt.Errorf("alias clear survivor: %w", err)
 	}
 	return rep, nil
 }

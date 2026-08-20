@@ -267,11 +267,12 @@ func (r *Repo) KGRelations(ctx context.Context, relType, entityID, documentID st
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	// ponytail: cor is a group-by over all active relations (~75k rows at
-	// current corpus; the CTE itself is cheap, but the full ranked browse
-	// measured ~1.5s on the live graph with parallelism off — plan for the
-	// WHOLE query, not just the CTE). Materialize as a table if the graph
-	// grows or the endpoint becomes latency-sensitive.
+	// ponytail: cor is a group-by over all active relations (~71k edges,
+	// LATERAL-unfolded to ~74k evidence elements at current corpus). The
+	// full ranked browse measured ~3.3s on the live graph (EXPLAIN ANALYZE,
+	// JIT included ~1.2s; the pre-LATERAL shape was ~2.0s — the +62% is the
+	// price of evidence-true corroboration). Materialize the corroboration
+	// as a table if the endpoint becomes latency-sensitive.
 	rows, err := r.pool.Query(ctx, activeEntityCounts+`,
 	cor AS (
 		SELECT r.type, coalesce(se.canonical_form, se.text) AS sf,
