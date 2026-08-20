@@ -30,6 +30,9 @@ type Server struct {
 	passageSvc    PassageService
 	kgSvc         KGService
 	selectionRepo SelectionRepo
+	// #197 standing consolidation write surface (nil = route unregistered,
+	// the write-route gate like repairRepo).
+	consolidateSvc ConsolidateService
 	// sourceSecret enables /api/processor/source when non-empty (HMAC,
 	// shared with the dispatcher). sourceRepo is the job lookup for it.
 	sourceSecret string
@@ -68,6 +71,11 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/api/kg/entities", s.handleKGEntities)
 	r.Get("/api/kg/entities/{id}/neighbors", s.handleKGNeighbors)
 	r.Get("/api/kg/relations", s.handleKGRelations)
+	// #197: consolidation write route exists only when wired (repair-API
+	// pattern — unwired answers 404, the admin gate alongside loopback bind).
+	if s.consolidateSvc != nil {
+		r.Post("/api/kg/consolidate", s.handleKGConsolidate)
+	}
 	// Disabled (404 on everything) until SetProcessorSourceSecret wires it.
 	r.Get("/api/processor/source/{jobID}", s.handleProcessorSource)
 	// #184: repair surface only exists when SetRepairAPI wired it.

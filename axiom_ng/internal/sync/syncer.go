@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
@@ -22,6 +24,81 @@ type Service struct {
 	baseURL string
 	libID   string
 	log     *log.Logger
+
+	// #197 standing consolidation hook: every SUCCESSFUL sync schedules a
+	// debounced run; a burst of syncs collapses into one. consolidator is
+	// nil until SetConsolidator wires it (then every completion hooks).
+	consolidator        Consolidator
+	consolidateDebounce time.Duration // <=0 falls back to the default
+	consMu              sync.Mutex
+	consTimer           *time.Timer
+}
+
+// Consolidator is the post-sync consolidation surface (#197) — satisfied
+// by *repo.Repo.
+type Consolidator interface {
+	ConsolidateEntitiesReport(ctx context.Context) (repo.ConsolidationReport, error)
+}
+
+// consolidateDebounceDefault is the window in which consecutive sync
+// completions collapse into ONE consolidation run.
+const consolidateDebounceDefault = 10 * time.Second
+
+// consolidateTimeout bounds one hook-run merge (own context: the sync
+// request that scheduled it is long gone when the debounce elapses).
+const consolidateTimeout = 30 * time.Minute
+
+// SetConsolidator wires the standing post-sync consolidation hook (#197).
+func (s *Service) SetConsolidator(c Consolidator) { s.consolidator = c }
+
+// scheduleConsolidation arms the debounced run (each completion inside the
+// window re-arms it — one run after the burst settles).
+func (s *Service) scheduleConsolidation() {
+	if s.consolidator == nil {
+		return
+	}
+	s.consMu.Lock()
+	defer s.consMu.Unlock()
+	d := s.consolidateDebounce
+	if d <= 0 {
+		d = consolidateDebounceDefault
+	}
+	if s.consTimer != nil {
+		s.consTimer.Stop()
+	}
+	s.consTimer = time.AfterFunc(d, s.consolidateNow)
+}
+
+// consolidateNow runs one consolidation on its own bounded context and
+// logs the before/after accounting. Errors are logged, never propagated —
+// the triggering sync already succeeded.
+func (s *Service) consolidateNow() {
+	s.consMu.Lock()
+	s.consTimer = nil
+	c := s.consolidator
+	s.consMu.Unlock()
+	if c == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), consolidateTimeout)
+	defer cancel()
+	rep, err := c.ConsolidateEntitiesReport(ctx)
+	if err != nil {
+		s.log.Printf("consolidation (#197 hook): %v", err)
+		return
+	}
+	s.log.Printf("consolidation (#197 hook): merged=%d duplicate_forms %d->%d",
+		rep.Merged, rep.DuplicateFormsBefore, rep.DuplicateFormsAfter)
+}
+
+// StopConsolidation cancels a pending debounced run (shutdown path).
+func (s *Service) StopConsolidation() {
+	s.consMu.Lock()
+	defer s.consMu.Unlock()
+	if s.consTimer != nil {
+		s.consTimer.Stop()
+		s.consTimer = nil
+	}
 }
 
 // New builds a sync service for one Zotero source and the ingest queue.
@@ -121,6 +198,11 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	if err := tx.Commit(ctx); err != nil {
 		return Result{}, err
 	}
+
+	// #197: the sync itself is complete (canonical rows + projections +
+	// jobs committed) — hook the standing consolidation, debounced so a
+	// burst of syncs collapses into ONE run.
+	s.scheduleConsolidation()
 
 	return Result{
 		SourceID:    sourceID,

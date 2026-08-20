@@ -103,7 +103,12 @@ func (s *Server) handlePutSelection(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "unknown document id in selection"})
 			return
 		}
-		s.log.Printf("selection put: %v", err)
+		// Nil-logger guard (rider on #197): tests construct New(":0", nil) —
+		// an unguarded Printf here panicked on the error path and only chi's
+		// Recoverer turned it into the expected 500.
+		if s.log != nil {
+			s.log.Printf("selection put: %v", err)
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "selection write failed"})
 		return
 	}

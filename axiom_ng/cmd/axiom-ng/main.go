@@ -38,11 +38,12 @@ func main() {
 			logger.Fatalf("postgres: %v", err)
 		}
 		defer d.Close()
-		merged, err := repo.New(d.Pool()).ConsolidateEntities(context.Background())
+		report, err := repo.New(d.Pool()).ConsolidateEntitiesReport(context.Background())
 		if err != nil {
 			logger.Fatalf("consolidate: %v", err)
 		}
-		logger.Printf("entity consolidation complete: %d entities merged into their same-form survivors", merged)
+		logger.Printf("entity consolidation complete: %d entities merged, duplicate forms %d->%d",
+			report.Merged, report.DuplicateFormsBefore, report.DuplicateFormsAfter)
 		return
 	}
 
@@ -58,6 +59,7 @@ func main() {
 	}
 
 	var database *db.DB
+	var syncSvc *sync.Service
 	if cfg.DatabaseURL == "" {
 		logger.Printf("WARNING: AXIOM_DATABASE_URL not set; running without Postgres")
 	} else {
@@ -86,9 +88,12 @@ func main() {
 		srv.RegisterCheck("postgres", server.CheckDB(database.Pool()))
 		// Wire the sync service and ingest-job listing into the API.
 		rep := repo.New(database.Pool())
-		syncSvc := sync.New(src, rep, cfg.ZoteroBaseURL, cfg.ZoteroLibraryID, logger)
+		syncSvc = sync.New(src, rep, cfg.ZoteroBaseURL, cfg.ZoteroLibraryID, logger)
 		srv.SetSyncAPI(syncSvc)
 		srv.SetJobRepo(rep)
+		// #197 standing entity consolidation: every successful sync hooks a
+		// debounced consolidation run (one run per sync burst).
+		syncSvc.SetConsolidator(rep)
 		// Remote source delivery: same secret on both sides (endpoint verify,
 		// dispatcher sign). Empty secret disables the endpoint (404 on all).
 		srv.SetProcessorSourceSecret(cfg.ProcessorSourceSecret)
@@ -132,6 +137,8 @@ func main() {
 		srv.SetPassageService(searchSvc) // A1 #165: same service, passage surface
 		// R6 (#136): knowledge-graph read API over the L6 data.
 		srv.SetKGService(rep)
+		// #197: standing consolidation write route (POST /api/kg/consolidate).
+		srv.SetConsolidateService(rep)
 		srv.SetSelectionRepo(rep) // A2 #166: selection + documents listing
 		// Role probe (R4 Ziel 1/3): capability check of the query runner at
 		// start — verifies query_embedding/reranking and logs the role map.
@@ -226,6 +233,11 @@ func main() {
 		}
 	}
 
+	// Cancel a still-debounced consolidation hook BEFORE the drain — the
+	// pool closes with the process, a late hook run would only log an error.
+	if syncSvc != nil {
+		syncSvc.StopConsolidation() // #197
+	}
 	// Gracefully stop the HTTP server within a bounded window; the dispatcher's
 	// own context is the same sigCtx, so it drains and releases its leases in
 	// parallel.
