@@ -7,6 +7,7 @@ package repo
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -116,9 +117,15 @@ func TestIT_AliasVariantEdgesRepointToSurvivor(t *testing.T) {
 	_ = eVar
 	eCsr, _ := kgSeedEntity(t, lr, snapA, "csr", 2)
 
-	// Edge at the VARIANT + edge at the SURVIVOR (same pair, same type).
+	// Edge at the VARIANT (source) + edge at the SURVIVOR (same pair, same type).
 	kgSeedRelation(t, lr, snapA, eVar, eCsr, "facet_of", chV[:1])
 	kgSeedRelation(t, lr, snapA, eSurv, eCsr, "facet_of", chS[:1])
+	// Edge with the variant as TARGET (the bigger half in production).
+	_, chE := kgSeedEntity(t, lr, snapA, "esg", 2)
+	kgSeedRelation(t, lr, snapA, eCsr, eVar, "facet_of", chE[:1])
+	// Intra-family edge (variant→survivor) — must become a self-loop and
+	// be DELETED, not served as source_form=target_form noise.
+	kgSeedRelation(t, lr, snapA, eVar, eSurv, "facet_of", chV[1:2])
 
 	// Bind aliases first (variant → survivor).
 	if _, err := lr.rep.BindFlexionAliases(ctx); err != nil {
@@ -152,11 +159,28 @@ func TestIT_AliasVariantEdgesRepointToSurvivor(t *testing.T) {
 
 	// Evidence union: both original chunks on the single survivor edge.
 	var evJSON string
-	_ = lr.pool.QueryRow(ctx, `
+	if err := lr.pool.QueryRow(ctx, `
 		SELECT evidence_chunk_ids::text FROM processing_entity_relationships
-		WHERE source_entity_id = $1::uuid`, eSurv).Scan(&evJSON)
-	if evJSON == "" || chV[0] != "" && evJSON == "" {
-		t.Fatal("no edge at survivor")
+		WHERE source_entity_id = $1::uuid AND target_entity_id = $2::uuid`,
+		eSurv, eCsr).Scan(&evJSON); err != nil {
+		t.Fatalf("no edge at survivor→csr: %v", err)
+	}
+	// Evidence union: BOTH the survivor's and the variant's chunks.
+	if chS[0] == "" || chV[0] == "" {
+		t.Fatal("fixture sanity: chunk ids empty")
+	}
+	if !strings.Contains(evJSON, chS[0]) || !strings.Contains(evJSON, chV[0]) {
+		t.Fatalf("evidence union: want both %s and %s in %s", chS[0], chV[0], evJSON)
+	}
+	// Self-loop: the intra-family edge must be gone.
+	var nSelf int
+	if err := lr.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_entity_relationships
+		WHERE source_entity_id = target_entity_id`).Scan(&nSelf); err != nil {
+		t.Fatal(err)
+	}
+	if nSelf != 0 {
+		t.Fatalf("self-loops after repoint: want 0, got %d", nSelf)
 	}
 	// The pair must be exactly 1 edge (no name-level duplicate).
 	var pairEdges int

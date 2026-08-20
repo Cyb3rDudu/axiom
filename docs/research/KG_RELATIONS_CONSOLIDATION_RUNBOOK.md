@@ -15,6 +15,11 @@ axiom-ng -consolidate-relations --apply
 #    or migrate; the column is additive + nullable, reads unchanged)
 axiom-ng -bind-flexion-aliases              # dry-run
 axiom-ng -bind-flexion-aliases --apply
+
+# 3b. re-point variant edges to survivors + delete self-loops (MUST run
+#     after alias binding, BEFORE the next consolidation)
+axiom-ng -repoint-alias-edges
+axiom-ng -consolidate-relations --apply     # resolves resulting pair duplicates
 ```
 
 ## Blast radius (production dry-runs, 2026-08-20)
@@ -42,6 +47,10 @@ axiom-ng -bind-flexion-aliases    # expect Families:0 VariantsLinked:0
 
 ## Idempotency + re-sync
 
-All three are idempotent re-runs. New syncs re-create per-document
+All steps are idempotent re-runs. New syncs re-create per-document
 entities/edges — re-run after each sync (same discipline as
 -consolidate-entities, which the post-sync hook already triggers).
+Full post-sync sequence: -consolidate-entities → -normalize-entity-types
+→ -bind-flexion-aliases → -repoint-alias-edges → -consolidate-relations
+--apply. The repoint step is REQUIRED: new sync edges land on freshly
+bound variants and would resurface as name-level duplicates without it.

@@ -208,5 +208,13 @@ func (r *Repo) RepointAliasEdges(ctx context.Context) error {
 		WHERE r.target_entity_id = v.id`); err != nil {
 		return fmt.Errorf("repoint target: %w", err)
 	}
+	// W1 (review): intra-family edges (variant→survivor) become self-loops
+	// (survivor→survivor) after the re-points. No schema constraint forbids
+	// them and they serve as API noise (source_form = target_form). Delete.
+	if _, err := r.pool.Exec(ctx, `
+		DELETE FROM processing_entity_relationships
+		WHERE source_entity_id = target_entity_id`); err != nil {
+		return fmt.Errorf("repoint self-loop cleanup: %w", err)
+	}
 	return nil
 }
