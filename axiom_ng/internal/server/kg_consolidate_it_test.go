@@ -14,12 +14,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -31,10 +33,13 @@ func consolidateITServer(t *testing.T) (*Server, *pgxpool.Pool) {
 	}
 	// Hard guard (same convention as the repo package): this test
 	// TRUNCATES processing tables — only a *_test database is acceptable.
-	name := consDSNDatabase(dsn)
-	if !strings.HasSuffix(name, "_test") {
+	if name := consDSNDatabase(dsn); !strings.HasSuffix(name, "_test") {
 		t.Fatalf("refusing to run against non-test database %q (must end in _test)", name)
 	}
+	// Package-private database (repo-package convention): the server ITs
+	// MUTATE processing tables, and parallel `go test ./...` package runs
+	// would collide with the sync package on the shared DSN.
+	dsn = consEnsureDatabase(t, dsn)
 	d, err := db.Open(t.Context(), dsn)
 	if err != nil {
 		t.Fatalf("postgres: %v", err)
@@ -46,6 +51,42 @@ func consolidateITServer(t *testing.T) (*Server, *pgxpool.Pool) {
 	s := New(":0", nil)
 	s.SetConsolidateService(repo.New(d.Pool()))
 	return s, d.Pool()
+}
+
+// consServerTestDB is the server package's private test database.
+const consServerTestDB = "axiom_ng_server_test"
+
+// consEnsureDatabase creates the package-private test database if missing
+// (maintenance-connection create, mirroring the repo package's harness).
+func consEnsureDatabase(t *testing.T, dsn string) string {
+	t.Helper()
+	target := consSwapDB(dsn, consServerTestDB)
+	maint := consSwapDB(dsn, "postgres")
+	ctx := t.Context()
+	c, err := pgx.Connect(ctx, maint)
+	if err != nil {
+		t.Fatalf("open maintenance db: %v", err)
+	}
+	defer c.Close(ctx)
+	var exists bool
+	if err := c.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname=$1)`, consServerTestDB).Scan(&exists); err != nil {
+		t.Fatalf("check db: %v", err)
+	}
+	if !exists {
+		if _, err := c.Exec(ctx, `CREATE DATABASE `+consServerTestDB); err != nil {
+			t.Fatalf("create db: %v", err)
+		}
+	}
+	return target
+}
+
+func consSwapDB(dsn, name string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return dsn
+	}
+	u.Path = "/" + name
+	return u.String()
 }
 
 // consDSNDatabase extracts the database name from a DSN (local copy of

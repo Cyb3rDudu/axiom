@@ -143,6 +143,13 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 	}
 	defer tx.Rollback(ctx)
 
+	// #198 item 1 — KG frontmatter gate: entities/relationships whose
+	// evidence sits in gated frontmatter section classes never persist.
+	// Runs BEFORE any insert so verifyCounts and the insert loops see the
+	// filtered arrays (idempotent on identity replays: a replay returns
+	// early below without inserting, and a filtered res re-gates clean).
+	gateKgFrontmatter(res)
+
 	// Identity replay (§10.1): "replaying the same completed result must return the
 	// existing snapshot and remain safe." Identity is the tuple
 	// (attachment_id, content_hash, processor_name, processor_version, profile_hash)

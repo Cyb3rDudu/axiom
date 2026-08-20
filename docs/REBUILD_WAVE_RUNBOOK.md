@@ -306,6 +306,34 @@ evidence until retention removes the old snapshots (owner decision).
 
 ---
 
+### 2.9 Frontmatter-KG-Bereinigung (#198 Ziel 1)
+
+KG-Kanten/-Entitäten, deren Evidenz in gegateten Frontmatter-Sektionen
+liegt (TOC / Autorenverzeichnis / Vorwort / Literatur / Index /
+Kapitel-Byline-Titelzeilen — der kalibrierte Klassifikator in
+`internal/frontmatter`, identisch für Retrieval-Filter und KG-Gate),
+werden aus der AKTIVEN Generation entfernt. Persist-Gate (kg_frontmatter_gate.go)
+hält zukünftige Ingests sauber — jede natürliche Neuverarbeitung eines
+Buchs trägt das Gate automatisch, kein Rebuild nötig:
+
+```bash
+# Kandidaten-Report (löscht NICHTS) — vor jedem produktiven Drop ansehen:
+AXIOM_DATABASE_URL=<dsn> ./axiom-ng -cleanup-frontmatter-kg
+# fmgate: frontmatter cleanup DRY RUN: {chunks:.. relations:.. entities:.. mentions:..}
+
+# Ausführen (einmalig, idempotent; Backup vorher, Konvention s. backups/):
+AXIOM_DATABASE_URL=<dsn> ./axiom-ng -cleanup-frontmatter-kg --apply
+```
+
+Regeln (deckungsgleich mit dem Persist-Gate): Relation stirbt, wenn ALLE
+Evidenz-Chunks gegatet ODER ein Endpunkt-Entity stirbt; Entity stirbt,
+wenn ALLE Mentions in gegateten Chunks liegen; überlebende Relationen
+verlieren gegatete Evidenz-Refs. Chunks selbst BLEIBEN (Retrieval).
+Zweiter Lauf = Null-Report. Gepinnt durch TestIT_FrontmatterCleanup +
+TestPersistFrontmatterGateEndToEnd.
+
+---
+
 ## 3. Cutover + rollback
 
 ### 3.1 Cutover order at firing time **[MUTATES]**

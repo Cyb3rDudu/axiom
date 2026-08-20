@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -27,6 +28,38 @@ import (
 )
 
 func main() {
+	// #198 item 1 — frontmatter cleanup pass: KG relations/entities whose
+	// evidence sits in gated frontmatter sections (TOC / author lists /
+	// preface / bibliography / index / title lines) leave the active graph.
+	// Dry-run by default (candidate report); --apply executes the drop.
+	if len(os.Args) > 1 && os.Args[1] == "-cleanup-frontmatter-kg" {
+		apply := false
+		for _, a := range os.Args[2:] {
+			if a == "--apply" {
+				apply = true
+			}
+		}
+		cfg := config.Load()
+		logger := log.New(os.Stderr, "fmgate: ", log.LstdFlags)
+		d, err := db.Open(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			logger.Fatalf("postgres: %v", err)
+		}
+		defer d.Close()
+		rep, err := repo.New(d.Pool()).CleanupFrontmatterKG(context.Background(), apply)
+		if err != nil {
+			logger.Fatalf("cleanup: %v", err)
+		}
+		out, _ := json.MarshalIndent(rep, "", "  ")
+		if apply {
+			logger.Printf("frontmatter cleanup APPLIED: %+v", rep.Totals)
+		} else {
+			logger.Printf("frontmatter cleanup DRY RUN (pass --apply to execute): %+v", rep.Totals)
+		}
+		fmt.Println(string(out))
+		return
+	}
+
 	// Wave epilogue mode (#193): consolidation of same-canonical-form
 	// entities across active snapshots. Runs ONCE and exits — the wave
 	// runbook calls it after the drain (peer of the OS==PG parity check).
