@@ -158,6 +158,22 @@ func main() {
 		logger.Printf("flexion aliases complete: %+v", ar)
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "-repoint-alias-edges" {
+		// #198-3 Nachzug: re-point variant edges to family survivors,
+		// delete intra-family self-loops, then run -consolidate-relations.
+		cfg := config.Load()
+		logger := log.New(os.Stderr, "repoint: ", log.LstdFlags)
+		d, err := db.Open(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			logger.Fatalf("postgres: %v", err)
+		}
+		defer d.Close()
+		if err := repo.New(d.Pool()).RepointAliasEdges(context.Background()); err != nil {
+			logger.Fatalf("repoint: %v", err)
+		}
+		logger.Printf("alias-variant edges re-pointed to survivors; intra-family self-loops deleted")
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "-consolidate-entities" {
 		cfg := config.Load()
 		logger := log.New(os.Stderr, "epilogue: ", log.LstdFlags)
