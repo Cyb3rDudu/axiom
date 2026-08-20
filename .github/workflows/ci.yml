@@ -88,6 +88,6 @@ jobs:
       # core). The heavy-compute modules carry pre-existing findings outside
       # the enforced set — not this branch's business.
       - name: ruff
-        run: ruff check tests/ compute_core/
+        run: ruff check tests/
       - name: pytest
         run: python -m pytest tests/

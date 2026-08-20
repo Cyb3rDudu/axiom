@@ -37,7 +37,7 @@ class PlanUpdatesTests(unittest.TestCase):
                        "physical_page_end": 1, "page_label_start": "I-1",
                        "page_label_end": "I-2", "source": "marker_paginate"},
                  "/books/Folio Buch.pdf")]
-        updates, stamps, dist, held, heals, by_doc, _ = rescan.plan_updates(
+        updates, stamps, dist, held, heals, _by_doc, _ = rescan.plan_updates(
             rows, {"/books/Folio Buch.pdf": TRUST_FOLIO},
             heal_books={"Folio Buch.pdf"}, skip_books=set())
         self.assertEqual(len(updates), 1)
