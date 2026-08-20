@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/frontmatter"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -32,27 +33,72 @@ const activeEntityCounts = `
 		GROUP BY e.id
 	)`
 
-// SearchKGEntities prefix/substring-matches canonical forms (falling back
-// to raw text) over ACTIVE snapshots, mention-stability filter applied,
-// ordered by mentions desc. Empty q returns the top hubs.
+// normalizeKGTerm is the Go half of the #198 item-5 German query
+// normalization. The SQL half (kgNormalizedForm, below) applies the SAME
+// spec to stored canonical forms — pinned equivalent by the IT. Steps, in
+// order: lowercase; ß->ss; strip everything outside [a-z0-9äöü] (hyphens,
+// spaces, punctuation — and LIKE wildcards %/_, so the normalized term
+// needs no escaping); bilingual families theory->theorie and
+// sustainability->nachhaltigkeit; light plural stem (strip ONE trailing
+// suffix from en/er/e/s when the form has >= 6 chars).
+func normalizeKGTerm(s string) string {
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, "ß", "ss")
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == 'ä' || r == 'ö' || r == 'ü' {
+			b.WriteRune(r)
+		}
+	}
+	s = b.String()
+	s = strings.ReplaceAll(s, "theory", "theorie")
+	s = strings.ReplaceAll(s, "sustainability", "nachhaltigkeit")
+	if len(s) >= 6 {
+		for _, suf := range []string{"en", "er", "e", "s"} {
+			if strings.HasSuffix(s, suf) {
+				s = s[:len(s)-len(suf)]
+				break
+			}
+		}
+	}
+	return s
+}
+
+// kgNormalizedForm is the SQL half of the normalization spec — a lateral
+// chain producing nf from a stored canonical form. Splices into the FROM
+// clause AFTER the processing_entities alias e. Must stay byte-equivalent
+// to normalizeKGTerm (the IT pins the pair end-to-end).
+const kgNormalizedForm = `JOIN processing_entities e ON e.id = em.entity_id
+	CROSS JOIN LATERAL (SELECT replace(lower(coalesce(e.canonical_form, e.text)), 'ß', 'ss') AS s0) l0
+	CROSS JOIN LATERAL (SELECT regexp_replace(l0.s0, '[^a-z0-9äöü]', '', 'g') AS s1) l1
+	CROSS JOIN LATERAL (SELECT replace(replace(l1.s1, 'theory', 'theorie'), 'sustainability', 'nachhaltigkeit') AS s2) l2
+	CROSS JOIN LATERAL (SELECT CASE WHEN length(l2.s2) >= 6 THEN regexp_replace(l2.s2, '(en|er|e|s)$', '') ELSE l2.s2 END AS nf) l3`
+
+// SearchKGEntities matches canonical forms (falling back to raw text) over
+// ACTIVE snapshots, mention-stability filter applied, ordered by mentions
+// desc. Empty q returns the top hubs. Since #198 item 5 the match is
+// NORMALIZED German/bilingual: lower, hyphen/space-stripped, plural-
+// stemmed, theory<->theorie family — plus reverse containment (stored form
+// inside the query term), which de-compounds "doppelte Wesentlichkeit"
+// down to "wesentlichkeit".
 func (r *Repo) SearchKGEntities(ctx context.Context, q string, minMentions, limit int) ([]KGEntity, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	// #193 P3: a caller-supplied % or _ would otherwise act as a wildcard
-	// inside the ILIKE pattern (and \\ un-escapes). Escape with the
-	// Postgres default escape char so the term matches literally.
-	esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	q = esc.Replace(q)
+	// #193 P3 escape is unnecessary now: the normalized term keeps only
+	// [a-z0-9äöü] — % and _ cannot survive normalization.
+	nq := normalizeKGTerm(q)
 	rows, err := r.pool.Query(ctx, activeEntityCounts+`
 		SELECT e.id::text, coalesce(e.canonical_form, e.text), e.text,
 		       coalesce(e.type, ''), em.chunks
 		FROM em
-		JOIN processing_entities e ON e.id = em.entity_id
+		`+kgNormalizedForm+`
 		WHERE em.chunks >= $1
-		  AND ($2 = '' OR coalesce(e.canonical_form, e.text) ILIKE '%' || $2 || '%' OR e.text ILIKE '%' || $2 || '%')
+		  AND ($2 = '' OR l3.nf LIKE '%' || $2 || '%'
+		       OR ($2 LIKE '%' || l3.nf || '%' AND length(l3.nf) >= 4))
 		ORDER BY em.chunks DESC, e.id
-		LIMIT $3`, minMentions, q, limit)
+		LIMIT $3`, minMentions, nq, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -67,6 +113,7 @@ type KGNeighbor struct {
 	Direction      string   `json:"direction"` // "out" | "in"
 	Type           string   `json:"type"`
 	Strength       *float32 `json:"strength,omitempty"`
+	Confidence     float32  `json:"confidence"` // #198 item 4 (computed read-side)
 	EvidenceChunks []string `json:"evidence_chunks,omitempty"`
 	OtherMentions  int      `json:"other_mentions"`
 }
@@ -78,57 +125,109 @@ func (r *Repo) KGNeighbors(ctx context.Context, entityID string, minMentions, li
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := r.pool.Query(ctx, activeEntityCounts+`
-		SELECT o.id::text, coalesce(o.canonical_form, o.text), coalesce(o.type, ''),
-		       CASE WHEN r.source_entity_id = $1::uuid THEN 'out' ELSE 'in' END,
-		       r.type, r.strength, r.evidence_chunk_ids::text, om.chunks
+	rows, err := r.pool.Query(ctx, activeEntityCounts+`,
+	cor AS (
+		SELECT r.type, coalesce(se.canonical_form, se.text) AS sf,
+		       coalesce(te.canonical_form, te.text) AS tf,
+		       count(DISTINCT sn.document_id) AS docs, count(*) AS triprows
 		FROM processing_entity_relationships r
-		JOIN processing_snapshots s ON s.id = r.snapshot_id AND s.active
-		JOIN em src ON src.entity_id = r.source_entity_id
-		JOIN em tgt ON tgt.entity_id = r.target_entity_id
-		JOIN processing_entities o
-		  ON o.id = CASE WHEN r.source_entity_id = $1::uuid THEN r.target_entity_id ELSE r.source_entity_id END
-		JOIN em om ON om.entity_id = o.id
-		WHERE (r.source_entity_id = $1::uuid OR r.target_entity_id = $1::uuid)
-		  AND src.chunks >= $2 AND tgt.chunks >= $2
-		ORDER BY om.chunks DESC, o.id
-		LIMIT $3`, entityID, minMentions, limit)
+		JOIN processing_snapshots sn ON sn.id = r.snapshot_id AND sn.active
+		JOIN processing_entities se ON se.id = r.source_entity_id
+		JOIN processing_entities te ON te.id = r.target_entity_id
+		GROUP BY 1, 2, 3
+	)
+	SELECT o.id::text, coalesce(o.canonical_form, o.text), coalesce(o.type, ''),
+	       CASE WHEN r.source_entity_id = $1::uuid THEN 'out' ELSE 'in' END,
+	       r.type, r.strength, r.evidence_chunk_ids::text, om.chunks,
+	       coalesce(cor.docs, 1), coalesce(cor.triprows, 1), jsonb_array_length(r.evidence_chunk_ids)
+	FROM processing_entity_relationships r
+	JOIN processing_snapshots s ON s.id = r.snapshot_id AND s.active
+	JOIN em src ON src.entity_id = r.source_entity_id
+	JOIN em tgt ON tgt.entity_id = r.target_entity_id
+	JOIN processing_entities o
+	  ON o.id = CASE WHEN r.source_entity_id = $1::uuid THEN r.target_entity_id ELSE r.source_entity_id END
+	JOIN em om ON om.entity_id = o.id
+	JOIN processing_entities se2 ON se2.id = r.source_entity_id
+	JOIN processing_entities te2 ON te2.id = r.target_entity_id
+	LEFT JOIN cor ON cor.type = r.type
+	             AND cor.sf = coalesce(se2.canonical_form, se2.text)
+	             AND cor.tf = coalesce(te2.canonical_form, te2.text)
+	WHERE (r.source_entity_id = $1::uuid OR r.target_entity_id = $1::uuid)
+	  AND src.chunks >= $2 AND tgt.chunks >= $2
+	ORDER BY om.chunks DESC, o.id
+	LIMIT $3`, entityID, minMentions, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []KGNeighbor{} // #193 P2: empty slice marshals as [], never null
+	type neighborRaw struct {
+		n     KGNeighbor
+		docs  int
+		rows  int
+		evLen int
+	}
+	var edges []neighborRaw
 	for rows.Next() {
-		var n KGNeighbor
+		var e neighborRaw
 		var ev string
 		var strength *float32
-		if err := rows.Scan(&n.OtherID, &n.OtherForm, &n.OtherType, &n.Direction,
-			&n.Type, &strength, &ev, &n.OtherMentions); err != nil {
+		if err := rows.Scan(&e.n.OtherID, &e.n.OtherForm, &e.n.OtherType, &e.n.Direction,
+			&e.n.Type, &strength, &ev, &e.n.OtherMentions, &e.docs, &e.rows, &e.evLen); err != nil {
 			return nil, err
 		}
-		n.Strength = strength
-		n.EvidenceChunks = parseUUIDArray(ev)
-		out = append(out, n)
+		e.n.Strength = strength
+		e.n.EvidenceChunks = parseUUIDArray(ev)
+		edges = append(edges, e)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// #198 item 4: section quality of the PAGE's evidence (one batched
+	// chunk-text fetch; frontmatter classes are corpus-absent since item 1,
+	// the term defends against leakage).
+	var evs [][]string
+	for _, e := range edges {
+		evs = append(evs, e.n.EvidenceChunks)
+	}
+	sec, err := r.kgEvidenceSectionQuality(ctx, evs)
+	if err != nil {
+		return nil, err
+	}
+	out := []KGNeighbor{} // #193 P2: empty slice marshals as [], never null
+	for _, e := range edges {
+		e.n.Confidence = kgConfidence(e.docs, e.rows, e.evLen, sec[evKey(e.n.EvidenceChunks)])
+		out = append(out, e.n)
+	}
+	return out, nil
 }
 
 // KGRelationView is a relation with resolved endpoint forms.
 type KGRelationView struct {
-	ID             string   `json:"id"`
-	Type           string   `json:"type"`
-	SourceID       string   `json:"source_id"`
-	SourceForm     string   `json:"source_form"`
-	TargetID       string   `json:"target_id"`
-	TargetForm     string   `json:"target_form"`
-	Strength       *float32 `json:"strength,omitempty"`
+	ID         string   `json:"id"`
+	Type       string   `json:"type"`
+	SourceID   string   `json:"source_id"`
+	SourceForm string   `json:"source_form"`
+	TargetID   string   `json:"target_id"`
+	TargetForm string   `json:"target_form"`
+	Strength   *float32 `json:"strength,omitempty"` // persisted extractor strength (uniform 0.7 today)
+	// Confidence is the #198 item-4 computed read-side quality of the edge:
+	// 0.6 * document support + 0.3 * repetition + 0.1 * evidence section
+	// quality, each term in [0,1) — see kgConfidence. Persisted strength is
+	// untouched; consumers migrate at their pace.
+	Confidence     float32  `json:"confidence"`
 	EvidenceChunks []string `json:"evidence_chunks,omitempty"`
 	// Documents is the number of distinct library documents corroborating
 	// this (source_form, type, target_form) triple across ACTIVE snapshots —
 	// the #185 thematic signal: a triple found in several books is thematically
 	// real, a single-document triple is one extractor pass (often junk-typed:
 	// "nachhaltigkeit owned_by weleda"). 1 = single-document evidence.
+	// DEPRECATED NAME (#198 item 6): corroborating_documents is the same
+	// value under its honest name; kept so consumers migrate safely.
 	Documents int `json:"documents"`
+	// CorroboratingDocuments mirrors Documents under its honest name
+	// (#198 item 6): the count of distinct documents corroborating the
+	// triple — NOT the number of evidence chunks and NOT per-edge rows.
+	CorroboratingDocuments int `json:"corroborating_documents"`
 }
 
 // KGRelations browses relations (optional type, entity and document scope),
@@ -152,7 +251,7 @@ func (r *Repo) KGRelations(ctx context.Context, relType, entityID, documentID st
 	cor AS (
 		SELECT r.type, coalesce(se.canonical_form, se.text) AS sf,
 		       coalesce(te.canonical_form, te.text) AS tf,
-		       count(DISTINCT sn.document_id) AS docs
+		       count(DISTINCT sn.document_id) AS docs, count(*) AS triprows
 		FROM processing_entity_relationships r
 		JOIN processing_snapshots sn ON sn.id = r.snapshot_id AND sn.active
 		JOIN processing_entities se ON se.id = r.source_entity_id
@@ -162,7 +261,8 @@ func (r *Repo) KGRelations(ctx context.Context, relType, entityID, documentID st
 	SELECT r.id::text, r.type,
 	       r.source_entity_id::text, coalesce(se.canonical_form, se.text),
 	       r.target_entity_id::text, coalesce(te.canonical_form, te.text),
-	       r.strength, r.evidence_chunk_ids::text, coalesce(cor.docs, 1)
+	       r.strength, r.evidence_chunk_ids::text, coalesce(cor.docs, 1),
+	       coalesce(cor.triprows, 1), jsonb_array_length(r.evidence_chunk_ids)
 	FROM processing_entity_relationships r
 	JOIN processing_snapshots s ON s.id = r.snapshot_id AND s.active
 	JOIN em src ON src.entity_id = r.source_entity_id
@@ -187,19 +287,126 @@ func (r *Repo) KGRelations(ctx context.Context, relType, entityID, documentID st
 	}
 	defer rows.Close()
 	out := []KGRelationView{} // #193 P2: empty slice marshals as [], never null
+	type relRaw struct {
+		v     KGRelationView
+		docs  int
+		rows  int
+		evLen int
+	}
+	var rels []relRaw
 	for rows.Next() {
-		var v KGRelationView
+		var x relRaw
 		var ev string
 		var strength *float32
-		if err := rows.Scan(&v.ID, &v.Type, &v.SourceID, &v.SourceForm,
-			&v.TargetID, &v.TargetForm, &strength, &ev, &v.Documents); err != nil {
+		if err := rows.Scan(&x.v.ID, &x.v.Type, &x.v.SourceID, &x.v.SourceForm,
+			&x.v.TargetID, &x.v.TargetForm, &strength, &ev, &x.docs, &x.rows, &x.evLen); err != nil {
 			return nil, err
 		}
-		v.Strength = strength
-		v.EvidenceChunks = parseUUIDArray(ev)
-		out = append(out, v)
+		x.v.Strength = strength
+		x.v.EvidenceChunks = parseUUIDArray(ev)
+		x.v.Documents = x.docs
+		x.v.CorroboratingDocuments = x.docs
+		rels = append(rels, x)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// #198 item 4: section quality of the page's evidence (batched).
+	var evs [][]string
+	for _, x := range rels {
+		evs = append(evs, x.v.EvidenceChunks)
+	}
+	sec, err := r.kgEvidenceSectionQuality(ctx, evs)
+	if err != nil {
+		return nil, err
+	}
+	for _, x := range rels {
+		x.v.Confidence = kgConfidence(x.docs, x.rows, x.evLen, sec[evKey(x.v.EvidenceChunks)])
+		out = append(out, x.v)
+	}
+	return out, nil
+}
+
+// kgConfidence is the #198 item-4 read-side quality formula:
+//
+//	confidence = 0.6 * (1 - 1/(1+docs))    document support (corroboration)
+//	           + 0.3 * (1 - 1/rep)        repetition (evidence chunks + triple rows)
+//	           + 0.1 * sec                evidence section quality
+//
+// Every term is monotone and bounded; a single-doc single-evidence
+// all-body edge scores 0.4, a 5-doc edge approaches 1. sec is the fraction
+// of evidence chunks that are NOT frontmatter-class (1.0 on the item-1-
+// cleaned corpus; the frontmatter classes are gated at persist). The
+// typing-consistency term lands when #198 item 3 (implementor-69865)
+// ships — the weights already reserve room for it (rebalance then).
+func kgConfidence(docs, tripRows, evidenceLen int, sec float64) float32 {
+	if docs < 1 {
+		docs = 1
+	}
+	if sec < 0 {
+		sec = 0
+	} else if sec > 1 {
+		sec = 1
+	}
+	rep := evidenceLen + tripRows - 1
+	if rep < 1 {
+		rep = 1
+	}
+	c := 0.6*(1-1/float64(1+docs)) + 0.3*(1-1/float64(rep)) + 0.1*sec
+	return float32(c)
+}
+
+// evKey canonicalizes an evidence-id slice into a comparable map key.
+func evKey(ev []string) string { return strings.Join(ev, ",") }
+
+// kgEvidenceSectionQuality classifies the evidence chunks of the returned
+// page (one batched text fetch) and reports, per evidence-id-slice, the
+// fraction of chunks that are body (non-frontmatter). Empty evidence
+// arrays are neutral (1.0) — sequential-type relations carry none.
+func (r *Repo) kgEvidenceSectionQuality(ctx context.Context, evidence [][]string) (map[string]float64, error) {
+	out := make(map[string]float64, len(evidence))
+	ids := make([]string, 0)
+	for _, ev := range evidence {
+		if len(ev) == 0 {
+			out[evKey(ev)] = 1
+			continue
+		}
+		ids = append(ids, ev...)
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	text := map[string]string{}
+	rows, err := r.pool.Query(ctx,
+		`SELECT id::text, text FROM processing_chunks WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id, t string
+		if err := rows.Scan(&id, &t); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		text[id] = t
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, ev := range evidence {
+		if len(ev) == 0 {
+			continue
+		}
+		body := 0
+		for _, id := range ev {
+			if frontmatter.Classify(text[id]) == frontmatter.ClassNone {
+				body++
+			}
+		}
+		out[evKey(ev)] = float64(body) / float64(len(ev))
+	}
+	return out, nil
 }
 
 // KGChunkCandidate is a graph-arm candidate with the fields the search hit
