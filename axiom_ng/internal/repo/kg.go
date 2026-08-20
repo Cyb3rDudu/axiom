@@ -41,7 +41,7 @@ const activeEntityCounts = `
 // needs no escaping); bilingual families theory->theorie and
 // sustainability->nachhaltigkeit; light plural stem (strip ONE trailing
 // suffix from en/er/e/s when the form has >= 6 chars).
-func normalizeKGTerm(s string) string {
+func normalizeKGSteps(s string, families bool) string {
 	s = strings.ToLower(s)
 	s = strings.ReplaceAll(s, "ß", "ss")
 	var b strings.Builder
@@ -52,8 +52,10 @@ func normalizeKGTerm(s string) string {
 		}
 	}
 	s = b.String()
-	s = strings.ReplaceAll(s, "theory", "theorie")
-	s = strings.ReplaceAll(s, "sustainability", "nachhaltigkeit")
+	if families {
+		s = strings.ReplaceAll(s, "theory", "theorie")
+		s = strings.ReplaceAll(s, "sustainability", "nachhaltigkeit")
+	}
 	if len(s) >= 6 {
 		for _, suf := range []string{"en", "er", "e", "s"} {
 			if strings.HasSuffix(s, suf) {
@@ -65,23 +67,33 @@ func normalizeKGTerm(s string) string {
 	return s
 }
 
+func normalizeKGTerm(s string) string      { return normalizeKGSteps(s, true) }
+func normalizeKGTermNoFam(s string) string { return normalizeKGSteps(s, false) }
+
 // kgNormalizedForm is the SQL half of the normalization spec — a lateral
-// chain producing nf from a stored canonical form. Splices into the FROM
-// clause AFTER the processing_entities alias e. Must stay byte-equivalent
-// to normalizeKGTerm (the IT pins the pair end-to-end).
+// chain over a stored canonical form, spliced into the FROM clause AFTER
+// the processing_entities alias e. nf keeps the full spec (strip → family
+// → stem); nf_nofam is the same chain WITHOUT the bilingual families (the
+// tier-2 basis — a form that only matches THROUGH a family is tier 3).
+// Must stay byte-equivalent to normalizeKGTerm / normalizeKGTermNoFam.
 const kgNormalizedForm = `JOIN processing_entities e ON e.id = em.entity_id
 	CROSS JOIN LATERAL (SELECT replace(lower(coalesce(e.canonical_form, e.text)), 'ß', 'ss') AS s0) l0
 	CROSS JOIN LATERAL (SELECT regexp_replace(l0.s0, '[^a-z0-9äöü]', '', 'g') AS s1) l1
+	CROSS JOIN LATERAL (SELECT CASE WHEN length(l1.s1) >= 6 THEN regexp_replace(l1.s1, '(en|er|e|s)$', '') ELSE l1.s1 END AS nf_nofam) l2a
 	CROSS JOIN LATERAL (SELECT replace(replace(l1.s1, 'theory', 'theorie'), 'sustainability', 'nachhaltigkeit') AS s2) l2
 	CROSS JOIN LATERAL (SELECT CASE WHEN length(l2.s2) >= 6 THEN regexp_replace(l2.s2, '(en|er|e|s)$', '') ELSE l2.s2 END AS nf) l3`
 
 // SearchKGEntities matches canonical forms (falling back to raw text) over
-// ACTIVE snapshots, mention-stability filter applied, ordered by mentions
-// desc. Empty q returns the top hubs. Since #198 item 5 the match is
-// NORMALIZED German/bilingual: lower, hyphen/space-stripped, plural-
-// stemmed, theory<->theorie family — plus reverse containment (stored form
-// inside the query term), which de-compounds "doppelte Wesentlichkeit"
-// down to "wesentlichkeit".
+// ACTIVE snapshots, mention-stability filter applied. Empty q returns the
+// top hubs. Since #198 item 5 the match is NORMALIZED German/bilingual:
+// lower, hyphen/space-stripped, plural-stemmed, theory<->theorie family —
+// plus reverse containment (stored form inside the query term), which
+// de-compounds "doppelte Wesentlichkeit" down to "wesentlichkeit".
+// Ranking is TIERED (#198 rider): (1) exact form, (2) normalized-
+// equivalent (flexion / compound-full), (3) bilingual synonym family,
+// (4) substring/decomposition fragments — mentions DESC only within a
+// tier, so a 220-mention fragment never precedes a 2-mention exact
+// plural match.
 func (r *Repo) SearchKGEntities(ctx context.Context, q string, minMentions, limit int) ([]KGEntity, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -89,6 +101,8 @@ func (r *Repo) SearchKGEntities(ctx context.Context, q string, minMentions, limi
 	// #193 P3 escape is unnecessary now: the normalized term keeps only
 	// [a-z0-9äöü] — % and _ cannot survive normalization.
 	nq := normalizeKGTerm(q)
+	nqNoFam := normalizeKGTermNoFam(q)
+	qRaw := strings.ToLower(strings.TrimSpace(q))
 	rows, err := r.pool.Query(ctx, activeEntityCounts+`
 		SELECT e.id::text, coalesce(e.canonical_form, e.text), e.text,
 		       coalesce(e.type, ''), em.chunks
@@ -97,8 +111,15 @@ func (r *Repo) SearchKGEntities(ctx context.Context, q string, minMentions, limi
 		WHERE em.chunks >= $1
 		  AND ($2 = '' OR l3.nf LIKE '%' || $2 || '%'
 		       OR ($2 LIKE '%' || l3.nf || '%' AND length(l3.nf) >= 4))
-		ORDER BY em.chunks DESC, e.id
-		LIMIT $3`, minMentions, nq, limit)
+		ORDER BY CASE
+		           WHEN $2 = '' THEN 4
+		           WHEN $4 = lower(coalesce(e.canonical_form, e.text)) THEN 1 -- exact form
+		           WHEN l2a.nf_nofam = $3 THEN 2 -- normalized-equivalent (flexion, compound-full)
+		           WHEN l3.nf = $2 THEN 3        -- bilingual synonym family
+		           ELSE 4                        -- substring / decomposition fragments
+		         END,
+		         em.chunks DESC, e.id
+		LIMIT $5`, minMentions, nq, nqNoFam, qRaw, limit)
 	if err != nil {
 		return nil, err
 	}

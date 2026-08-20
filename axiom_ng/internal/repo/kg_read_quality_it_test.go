@@ -25,6 +25,7 @@ package repo
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 )
@@ -150,6 +151,92 @@ func TestIT_KGConfidence(t *testing.T) {
 	if !sawConf {
 		t.Fatal("KGNeighbor edges must carry confidence > 0")
 	}
+}
+
+func TestIT_KGTieredRanking(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	snap := kgqSeedSnapshot(t, lr, "KGQT")
+
+	// Regression 1 (external re-test): the EXACT form must rank 1 even when
+	// decomposition fragments carry far MORE mentions.
+	kgSeedEntity(t, lr, snap, "nachhaltigkeitsberichterstattung", 3) // the exact hit
+	kgSeedEntity(t, lr, snap, "richter", 9)                          // fragment, more mentions
+	kgSeedEntity(t, lr, snap, "erich", 8)
+	kgSeedEntity(t, lr, snap, "halter", 7)
+	kgSeedEntity(t, lr, snap, "rich", 6)
+
+	res, err := lr.rep.SearchKGEntities(ctx, "Nachhaltigkeitsberichterstattung", 2, 50)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(res) == 0 || res[0].CanonicalForm != "nachhaltigkeitsberichterstattung" {
+		t.Fatalf("exact form must rank FIRST, got %v", formsOfKG(res))
+	}
+	// fragments (with MORE mentions than the exact hit) may appear — but
+	// only AFTER every full-form match, never before it.
+	exactIdx := 0
+	for i, e := range res {
+		if e.CanonicalForm == "nachhaltigkeitsberichterstattung" {
+			if i < exactIdx {
+				t.Fatalf("exact form at %d after a fragment", i)
+			}
+			exactIdx = i
+		}
+	}
+
+	// Regression 2 (external re-test): 'ESG-Managementsystem' — the exact
+	// plural match (tier 2, normalized-equivalent) must outrank the generic
+	// high-mention substring fragments Manager/Management.
+	kgSeedEntity(t, lr, snap, "esg-managementsystemen", 2)
+	kgSeedEntity(t, lr, snap, "manager", 220)
+	kgSeedEntity(t, lr, snap, "management", 193)
+	res, err = lr.rep.SearchKGEntities(ctx, "ESG-Managementsystem", 2, 50)
+	if err != nil {
+		t.Fatalf("search 2: %v", err)
+	}
+	if len(res) == 0 || res[0].CanonicalForm != "esg-managementsystemen" {
+		t.Fatalf("exact plural match must rank FIRST, got %v", formsOfKG(res))
+	}
+
+	// Bilingual tier: a DE query ranks the DE-hyphenated full form (tier 2)
+	// above the EN family form (tier 3), and both above fragments.
+	kgSeedEntity(t, lr, snap, "stakeholder-theorie", 3)
+	kgSeedEntity(t, lr, snap, "stakeholder theory", 180)
+	kgSeedEntity(t, lr, snap, "stakeholder", 34) // fragment (reverse containment)
+	res, err = lr.rep.SearchKGEntities(ctx, "Stakeholdertheorie", 2, 50)
+	if err != nil {
+		t.Fatalf("search 3: %v", err)
+	}
+	if len(res) < 3 {
+		t.Fatalf("want 3 hits, got %v", formsOfKG(res))
+	}
+	if res[0].CanonicalForm != "stakeholder-theorie" {
+		t.Fatalf("tier-2 normalized-equivalent (DE hyphenated) must rank first, got %v", formsOfKG(res))
+	}
+	if res[1].CanonicalForm != "stakeholder theory" {
+		t.Fatalf("tier-3 bilingual family (EN) must rank second, got %v", formsOfKG(res))
+	}
+	for i, e := range res[:2] {
+		if e.CanonicalForm == "stakeholder" {
+			t.Fatalf("fragment ranked above a full-form match at %d: %v", i, formsOfKG(res))
+		}
+	}
+}
+
+func formsOfKG(res []KGEntity) []string {
+	out := make([]string, 0, len(res))
+	for _, e := range res {
+		out = append(out, e.CanonicalForm+fmt.Sprintf("(%d)", e.Mentions))
+	}
+	return out
 }
 
 func TestIT_KGGermanQueryNormalization(t *testing.T) {
