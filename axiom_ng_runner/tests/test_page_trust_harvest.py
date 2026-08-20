@@ -54,7 +54,7 @@ def make_pdf(pages, labels_spec=None):
         for ln in spec.get("bot") or []:
             page.insert_text((72, y), ln, fontsize=9)
             y += 12
-    f = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    f = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)  # noqa: SIM115 — delete=False ist das Muster hier
     doc.save(f.name)
     doc.close()
     if labels_spec:

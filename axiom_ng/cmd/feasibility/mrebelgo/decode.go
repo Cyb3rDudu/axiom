@@ -15,9 +15,13 @@ import (
 func loadAddedTokens(mdir string) {
 	addedTokens = map[int32]string{}
 	b, err := os.ReadFile(mdir + "/added_tokens_map.json")
-	if err != nil { fatal("added map: %v", err) }
+	if err != nil {
+		fatal("added map: %v", err)
+	}
 	var m map[string]string
-	if err := json.Unmarshal(b, &m); err != nil { fatal("added map json: %v", err) }
+	if err := json.Unmarshal(b, &m); err != nil {
+		fatal("added map json: %v", err)
+	}
 	for id, s := range m {
 		var i int
 		fmt.Sscanf(id, "%d", &i)
@@ -33,7 +37,9 @@ func decodeSeq(tok *sentencepiece.Tokenizer, ids []int64) string {
 	var baseRun []int
 	lastSpecial := false // whether the previous emitted token was a special (no space between specials)
 	flush := func() {
-		if len(baseRun) == 0 { return }
+		if len(baseRun) == 0 {
+			return
+		}
 		txt, err := tok.Decode(baseRun)
 		if err == nil {
 			// tggo SPM strips the run-leading ▁-space (sequence-start semantics); restore it
@@ -48,17 +54,25 @@ func decodeSeq(tok *sentencepiece.Tokenizer, ids []int64) string {
 		lastSpecial = false
 	}
 	for i, id := range ids {
-		if id == eosID && i > 0 { continue } // skip internal </s> (matches caller truncating at first eos)
-		if id == 1 { continue }              // <pad>
+		if id == eosID && i > 0 {
+			continue
+		} // skip internal </s> (matches caller truncating at first eos)
+		if id == 1 {
+			continue
+		} // <pad>
 		if str, ok := addedTokens[int32(id)]; ok {
 			flush()
 			// HF puts a space before a special unless it directly follows another special.
-			if sb.Len() > 0 && !lastSpecial { sb.WriteByte(' ') }
+			if sb.Len() > 0 && !lastSpecial {
+				sb.WriteByte(' ')
+			}
 			sb.WriteString(str)
 			lastSpecial = true
 			continue
 		}
-		if id < 0 || id >= vocab { continue }
+		if id < 0 || id >= vocab {
+			continue
+		}
 		// HF-vocab ids are raw-sentencepiece id + 1 (HF reserves <pad>=1); reverse for Go decode.
 		baseRun = append(baseRun, int(id)-1)
 	}
@@ -100,7 +114,9 @@ func dedupTriples(ts []triple) []triple {
 	out := []triple{}
 	for _, t := range ts {
 		key := strings.ToLower(t.Head) + "|" + t.Relation + "|" + strings.ToLower(t.Tail)
-		if seen[key] { continue }
+		if seen[key] {
+			continue
+		}
 		seen[key] = true
 		out = append(out, t)
 	}
@@ -109,11 +125,16 @@ func dedupTriples(ts []triple) []triple {
 
 func mt(k string) string {
 	switch strings.ToLower(k) {
-	case "per": return "PERSON"
-	case "org": return "ORGANIZATION"
-	case "loc": return "LOCATION"
-	case "media": return "WORK"
-	default: return "CONCEPT"
+	case "per":
+		return "PERSON"
+	case "org":
+		return "ORGANIZATION"
+	case "loc":
+		return "LOCATION"
+	case "media":
+		return "WORK"
+	default:
+		return "CONCEPT"
 	}
 }
 

@@ -10,8 +10,18 @@ import sys
 import unittest
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
+
+# The rescan script needs psycopg2 (ops DB access) — outside the light
+# CI stack (requirements.txt is the processor contract surface). Skip
+# cleanly where absent instead of erroring at collection.
+try:
+    import psycopg2  # noqa: F401
+except ImportError:
+    pytest.skip("psycopg2 not installed (light CI stack) — rescan plan tests need the ops DB driver", allow_module_level=True)
 
 _spec = importlib.util.spec_from_file_location(
     "locator_rescan", Path(__file__).resolve().parent.parent / "scripts" / "locator_rescan.py"
@@ -37,7 +47,7 @@ class PlanUpdatesTests(unittest.TestCase):
                        "physical_page_end": 1, "page_label_start": "I-1",
                        "page_label_end": "I-2", "source": "marker_paginate"},
                  "/books/Folio Buch.pdf")]
-        updates, stamps, dist, held, heals, by_doc, _ = rescan.plan_updates(
+        updates, stamps, dist, held, heals, _by_doc, _ = rescan.plan_updates(
             rows, {"/books/Folio Buch.pdf": TRUST_FOLIO},
             heal_books={"Folio Buch.pdf"}, skip_books=set())
         self.assertEqual(len(updates), 1)

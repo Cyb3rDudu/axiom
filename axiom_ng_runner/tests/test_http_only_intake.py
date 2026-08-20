@@ -29,9 +29,9 @@ class HttpOnlyIntakeTests(unittest.TestCase):
         # carrier shape: Mac storage path, /data-only roots, no source_url
         s = mock.Mock(allowed_source_roots=("/data",))
         with mock.patch.object(app.settings, "get", return_value=s), \
-             mock.patch.object(app, "validate_content_type"):
-            with self.assertRaises(validation.SourceError) as ctx:
-                app._validate_request(_req(source_url=""))
+             mock.patch.object(app, "validate_content_type"), \
+             self.assertRaises(validation.SourceError) as ctx:
+            app._validate_request(_req(source_url=""))
         self.assertEqual(ctx.exception.code, "SOURCE_URL_MISSING")
         self.assertIn("SOURCE_BASE_URL", ctx.exception.message)
 
@@ -49,7 +49,8 @@ class HttpOnlyIntakeTests(unittest.TestCase):
 
     def test_local_fixture_delivery_still_works(self):
         # fixture/co-located shape: no source_url, path under allowed roots
-        import tempfile, os
+        import os
+        import tempfile
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(b"%PDF-1.4 fixture")
             path = f.name

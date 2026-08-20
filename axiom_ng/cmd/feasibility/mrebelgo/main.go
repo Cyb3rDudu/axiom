@@ -2,8 +2,9 @@
 //
 // BART encoder + autoregressive decoder with BEAM-SEARCH natively in Go via
 // onnxruntime_go (CUDA on the carrier), replicating the Python oracle:
-//   num_beams=3, num_return_sequences=3, max_length=256, length_penalty=0,
-//   decoder_start_token_id=tp_XX, input max_length=512.
+//
+//	num_beams=3, num_return_sequences=3, max_length=256, length_penalty=0,
+//	decoder_start_token_id=tp_XX, input max_length=512.
 //
 // Decoding uses the optimum-exported `decoder_model.onnx` (the with-past variant's
 // first-step graph) for EVERY autoregressive step: each step feeds the beam's full
@@ -20,8 +21,9 @@
 // suffix </s>(2), truncate to 512 — byte-identical to MBart50TokenizerFast.
 //
 // Usage: mrebelgo <dylib> <modeldir> <chunks.json> <chunks.idx.json> <out.json>
-//   chunks.idx.json = JSON array of chunk indices to process (matching pymrebel_ref schema:
-//   each result has idx, raw_sequences, triples, deduped first-seen across beams).
+//
+//	chunks.idx.json = JSON array of chunk indices to process (matching pymrebel_ref schema:
+//	each result has idx, raw_sequences, triples, deduped first-seen across beams).
 package main
 
 import (
@@ -37,15 +39,15 @@ import (
 )
 
 const (
-	vocab   = 250071
-	heads   = 16
-	headDim = 64
-	nLayers = 12
-	eosID   = 2
-	enXX    = 250004 // en_XX language prefix (mbart default src_lang)
-	tpXX    = 250058 // tp_XX decoder_start_token_id
-	maxEnc  = 512
-	maxDec  = 256
+	vocab     = 250071
+	heads     = 16
+	headDim   = 64
+	nLayers   = 12
+	eosID     = 2
+	enXX      = 250004 // en_XX language prefix (mbart default src_lang)
+	tpXX      = 250058 // tp_XX decoder_start_token_id
+	maxEnc    = 512
+	maxDec    = 256
 	numBeams  = 3
 	numReturn = 3
 )
@@ -60,6 +62,7 @@ type chunk struct {
 // lastOut is true when the decoder session emits only "logits_last" ([B,1,vocab]).
 // fusedTopK is true when the session emits in-graph TopK results ([B,1,6] ids+logps).
 var lastOut, fusedTopK bool
+
 type triple struct {
 	Head     string `json:"head"`
 	HeadType string `json:"head_type"`
@@ -88,12 +91,16 @@ func main() {
 	var idxs []int
 	json.Unmarshal(idxRaw, &idxs)
 	tok, err := sentencepiece.NewTokenizer(mdir + "/sentencepiece.bpe.model")
-	if err != nil { fatal("tok: %v", err) }
+	if err != nil {
+		fatal("tok: %v", err)
+	}
 	loadAddedTokens(mdir)
 	traceInit()
 
 	ort.SetSharedLibraryPath(lib)
-	if err := ort.InitializeEnvironment(); err != nil { fatal("ort: %v", err) }
+	if err := ort.InitializeEnvironment(); err != nil {
+		fatal("ort: %v", err)
+	}
 	defer ort.DestroyEnvironment()
 	opts := sessionOpts()
 
@@ -146,17 +153,25 @@ func main() {
 	results := make([]chunkResult, 0, len(idxs))
 	for _, ci := range idxs {
 		c := chunks[ci]
-		if len(truncateRunes(c.Text, 1)) == 0 { continue }
+		if len(truncateRunes(c.Text, 1)) == 0 {
+			continue
+		}
 		curChunk = ci
 		start := time.Now()
 		inputText := truncateRunes(c.Text, 1500) // Python slices by code points, NOT bytes
 		goIDs, _ := tok.Encode(inputText)
 		encIDs := []int64{enXX}
-		for _, g := range goIDs { encIDs = append(encIDs, int64(g)+1) }
+		for _, g := range goIDs {
+			encIDs = append(encIDs, int64(g)+1)
+		}
 		encIDs = append(encIDs, eosID)
-		if len(encIDs) > maxEnc { encIDs = encIDs[:maxEnc] }
+		if len(encIDs) > maxEnc {
+			encIDs = encIDs[:maxEnc]
+		}
 		mask := make([]int64, len(encIDs))
-		for i := range mask { mask[i] = 1 }
+		for i := range mask {
+			mask[i] = 1
+		}
 		encHidden := runEncoder(encSess, encIDs, mask)
 		cd := &constDec{}
 		cd.tm, _ = ort.NewTensor(ort.NewShape(1, int64(len(mask))), mask)
@@ -173,7 +188,9 @@ func main() {
 		cr := chunkResult{Idx: ci}
 		for _, s := range seqs {
 			cr.RawSequences = append(cr.RawSequences, s.text)
-			for _, t := range parseTriples(s.text) { cr.Triples = append(cr.Triples, t) }
+			for _, t := range parseTriples(s.text) {
+				cr.Triples = append(cr.Triples, t)
+			}
 		}
 		cr.Triples = dedupTriples(cr.Triples)
 		results = append(results, cr)
@@ -204,22 +221,36 @@ func decKOutputs() []string {
 
 func sessionOpts() *ort.SessionOptions {
 	opts, err := ort.NewSessionOptions()
-	if err != nil { fatal("opts: %v", err) }
-	if os.Getenv("ORT_CUDA") != "1" { return opts }
+	if err != nil {
+		fatal("opts: %v", err)
+	}
+	if os.Getenv("ORT_CUDA") != "1" {
+		return opts
+	}
 	cuda, err := ort.NewCUDAProviderOptions()
-	if err != nil { fatal("cuda: %v", err) }
+	if err != nil {
+		fatal("cuda: %v", err)
+	}
 	dev := os.Getenv("ORT_CUDA_DEVICE")
-	if dev == "" { dev = "0" }
-	if err := cuda.Update(map[string]string{"device_id": dev}); err != nil { fatal("cuda upd: %v", err) }
+	if dev == "" {
+		dev = "0"
+	}
+	if err := cuda.Update(map[string]string{"device_id": dev}); err != nil {
+		fatal("cuda upd: %v", err)
+	}
 	defer cuda.Destroy()
-	if err := opts.AppendExecutionProviderCUDA(cuda); err != nil { fatal("cuda ep: %v", err) }
+	if err := opts.AppendExecutionProviderCUDA(cuda); err != nil {
+		fatal("cuda ep: %v", err)
+	}
 	fmt.Fprintln(os.Stderr, "[mrebelgo] CUDA EP device", dev)
 	return opts
 }
 
 func newDyn(path string, in, out []string, opts *ort.SessionOptions) *ort.DynamicAdvancedSession {
 	s, err := ort.NewDynamicAdvancedSession(path, in, out, opts)
-	if err != nil { fatal("session %s: %v", path, err) }
+	if err != nil {
+		fatal("session %s: %v", path, err)
+	}
 	return s
 }
 
@@ -232,7 +263,9 @@ func runEncoder(s *ort.DynamicAdvancedSession, ids, mask []int64) []float32 {
 	defer tmask.Destroy()
 	o, _ := ort.NewEmptyTensor[float32](ort.NewShape(1, n, 1024))
 	defer o.Destroy()
-	if err := s.Run([]ort.Value{tids, tmask}, []ort.Value{o}); err != nil { fatal("enc: %v", err) }
+	if err := s.Run([]ort.Value{tids, tmask}, []ort.Value{o}); err != nil {
+		fatal("enc: %v", err)
+	}
 	traceT("enc", fmt.Sprintf("e%d", n), time.Since(t0))
 	return o.GetData()
 }
@@ -250,10 +283,14 @@ func constDecBatch(encMask []int64, encHidden []float32, batch int) *constDec {
 	encLen := int64(len(encMask))
 	cd := &constDec{}
 	m := make([]int64, 0, batch*len(encMask))
-	for i := 0; i < batch; i++ { m = append(m, encMask...) }
+	for i := 0; i < batch; i++ {
+		m = append(m, encMask...)
+	}
 	cd.tm, _ = ort.NewTensor(ort.NewShape(int64(batch), encLen), m)
 	h := make([]float32, 0, batch*len(encHidden))
-	for i := 0; i < batch; i++ { h = append(h, encHidden...) }
+	for i := 0; i < batch; i++ {
+		h = append(h, encHidden...)
+	}
 	cd.th, _ = ort.NewTensor(ort.NewShape(int64(batch), encLen, 1024), h)
 	return cd
 }
@@ -272,10 +309,14 @@ var iob iobState
 // the last-position logits row per beam (Opt-3: [3, L] batching, Python's structure).
 func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, oneOutput bool) ([][]cand, error) {
 	B := int64(len(seqs))
-	if B == 0 { return nil, nil }
+	if B == 0 {
+		return nil, nil
+	}
 	L := int64(len(seqs[0]))
 	flat := make([]int64, 0, int(B*L))
-	for _, s := range seqs { flat = append(flat, s...) }
+	for _, s := range seqs {
+		flat = append(flat, s...)
+	}
 	tid, _ := ort.NewTensor(ort.NewShape(B, L), flat)
 	defer tid.Destroy()
 	if fusedTopK {
@@ -284,7 +325,9 @@ func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, 
 		defer tids.Destroy()
 		tlps, _ := ort.NewEmptyTensor[float32](ort.NewShape(B, 1, 6))
 		defer tlps.Destroy()
-		if err := dec.Run([]ort.Value{cd.tm, tid, cd.th}, []ort.Value{tids, tlps}); err != nil { return nil, err }
+		if err := dec.Run([]ort.Value{cd.tm, tid, cd.th}, []ort.Value{tids, tlps}); err != nil {
+			return nil, err
+		}
 		idData := tids.GetData()
 		lpData := tlps.GetData()
 		out := make([][]cand, B)
@@ -316,7 +359,11 @@ func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, 
 		encLen := int64(len(cd.tm.GetData())) / B
 		for i := 1; i < len(outs); i++ {
 			var Lp []int64
-			if strings.Contains(outs[i], "decoder") { Lp = []int64{B, 16, L, headDim} } else { Lp = []int64{B, 16, encLen, headDim} }
+			if strings.Contains(outs[i], "decoder") {
+				Lp = []int64{B, 16, L, headDim}
+			} else {
+				Lp = []int64{B, 16, encLen, headDim}
+			}
 			t, _ := ort.NewEmptyTensor[float32](ort.NewShape(Lp...))
 			outsV[i] = t
 		}
@@ -329,26 +376,42 @@ func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, 
 			if err == nil {
 				iob.b = nb
 				iob.outName = "logits_last"
-				if !lastOut { iob.outName = "logits" }
+				if !lastOut {
+					iob.outName = "logits"
+				}
 			}
 		}
 		if iob.b != nil {
 			key := fmt.Sprintf("B%d", B)
 			if iob.boundKey != key {
 				iob.b.ClearBoundInputs()
-				if err := iob.b.BindInput("encoder_attention_mask", cd.tm); err != nil { return nil, err }
-				if err := iob.b.BindInput("encoder_hidden_states", cd.th); err != nil { return nil, err }
+				if err := iob.b.BindInput("encoder_attention_mask", cd.tm); err != nil {
+					return nil, err
+				}
+				if err := iob.b.BindInput("encoder_hidden_states", cd.th); err != nil {
+					return nil, err
+				}
 				iob.boundKey = key
 			}
 			iob.b.ClearBoundOutputs()
-			if err := iob.b.BindOutput(iob.outName, logits); err != nil { return nil, err }
-			if err := iob.b.BindInput("input_ids", tid); err != nil { return nil, err }
-			if err := dec.RunWithBinding(iob.b); err != nil { return nil, err }
+			if err := iob.b.BindOutput(iob.outName, logits); err != nil {
+				return nil, err
+			}
+			if err := iob.b.BindInput("input_ids", tid); err != nil {
+				return nil, err
+			}
+			if err := dec.RunWithBinding(iob.b); err != nil {
+				return nil, err
+			}
 			base := logits.GetData()
 			rows := make([][]float32, B)
 			for b := int64(0); b < B; b++ {
 				var start int64
-				if lastOut { start = b * vocab } else { start = b*L*vocab + (L-1)*vocab }
+				if lastOut {
+					start = b * vocab
+				} else {
+					start = b*L*vocab + (L-1)*vocab
+				}
 				rows[b] = base[start : start+vocab]
 			}
 			out := make([][]cand, B)
@@ -361,7 +424,9 @@ func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, 
 			return out, nil
 		}
 	}
-	if err := dec.Run([]ort.Value{cd.tm, tid, cd.th}, outsV); err != nil { return nil, err }
+	if err := dec.Run([]ort.Value{cd.tm, tid, cd.th}, outsV); err != nil {
+		return nil, err
+	}
 	base := logits.GetData()
 	rows := make([][]float32, B)
 	for b := int64(0); b < B; b++ {
@@ -384,8 +449,12 @@ func decodeStepB(dec *ort.DynamicAdvancedSession, cd *constDec, seqs [][]int64, 
 }
 
 func (c *constDec) Destroy() {
-	if c.tm != nil { c.tm.Destroy() }
-	if c.th != nil { c.th.Destroy() }
+	if c.tm != nil {
+		c.tm.Destroy()
+	}
+	if c.th != nil {
+		c.th.Destroy()
+	}
 }
 
 // decodeStep feeds the full decoder token sequence to the (logits-only) decoder graph and
@@ -407,12 +476,18 @@ func decodeStep(dec *ort.DynamicAdvancedSession, cd *constDec, ids []int64, oneO
 		encLen := int64(len(cd.tm.GetData()))
 		for i := 1; i < len(outs); i++ {
 			var Lp []int64
-			if strings.Contains(outs[i], "decoder") { Lp = []int64{1, 16, L, headDim} } else { Lp = []int64{1, 16, encLen, headDim} }
+			if strings.Contains(outs[i], "decoder") {
+				Lp = []int64{1, 16, L, headDim}
+			} else {
+				Lp = []int64{1, 16, encLen, headDim}
+			}
 			t, _ := ort.NewEmptyTensor[float32](ort.NewShape(Lp...))
 			outsV[i] = t
 		}
 	}
-	if err := dec.Run([]ort.Value{cd.tm, tid, cd.th}, outsV); err != nil { return nil, err }
+	if err := dec.Run([]ort.Value{cd.tm, tid, cd.th}, outsV); err != nil {
+		return nil, err
+	}
 	traceT("dec", fmt.Sprintf("L%d", L), time.Since(t0))
 	base := logits.GetData()
 	last := base[(L-1)*vocab : L*vocab]
@@ -422,7 +497,9 @@ func decodeStep(dec *ort.DynamicAdvancedSession, cd *constDec, ids []int64, oneO
 // truncateRunes keeps the first n UTF-8 runes (matches Python text[:n] code-point slicing).
 func truncateRunes(s string, n int) string {
 	r := []rune(s)
-	if len(r) <= n { return s }
+	if len(r) <= n {
+		return s
+	}
 	return string(r[:n])
 }
 

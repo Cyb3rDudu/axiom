@@ -10,8 +10,9 @@
 //     chunk, in input order) for the Python-parity cosine step.
 //
 // Usage:
-//   godense <libonnxruntime.dylib> <model.onnx> <sentencepiece.model> \
-//           <chunks.json> <outdir>
+//
+//	godense <libonnxruntime.dylib> <model.onnx> <sentencepiece.model> \
+//	        <chunks.json> <outdir>
 package main
 
 import (
@@ -38,25 +39,37 @@ func main() {
 	}
 	lib, model, spModel := os.Args[1], os.Args[2], os.Args[3]
 	chunksPath, outdir := os.Args[4], os.Args[5]
-	if err := os.MkdirAll(outdir, 0o755); err != nil { fatal("%v", err) }
+	if err := os.MkdirAll(outdir, 0o755); err != nil {
+		fatal("%v", err)
+	}
 
 	raw, err := os.ReadFile(chunksPath)
-	if err != nil { fatal("read chunks: %v", err) }
+	if err != nil {
+		fatal("read chunks: %v", err)
+	}
 	var chunks []chunk
-	if err := json.Unmarshal(raw, &chunks); err != nil { fatal("json chunks: %v", err) }
+	if err := json.Unmarshal(raw, &chunks); err != nil {
+		fatal("json chunks: %v", err)
+	}
 
 	tok, err := sentencepiece.NewTokenizer(spModel)
-	if err != nil { fatal("tokenizer: %v", err) }
+	if err != nil {
+		fatal("tokenizer: %v", err)
+	}
 	tok.WithPostProcessor(sentencepiece.BertStylePostProcessor(0, 2))
 
 	ort.SetSharedLibraryPath(lib)
-	if err := ort.InitializeEnvironment(); err != nil { fatal("ort env: %v", err) }
+	if err := ort.InitializeEnvironment(); err != nil {
+		fatal("ort env: %v", err)
+	}
 	defer ort.DestroyEnvironment()
 
 	sess, err := ort.NewDynamicAdvancedSession(model,
 		[]string{"input_ids", "attention_mask"},
 		[]string{"token_embeddings", "sentence_embedding"}, sessionOpts())
-	if err != nil { fatal("session: %v", err) }
+	if err != nil {
+		fatal("session: %v", err)
+	}
 	defer sess.Destroy()
 
 	encodeOne := func(text string) ([]float32, error) {
@@ -75,21 +88,33 @@ func main() {
 		shape := ort.NewShape(1, n)
 
 		ids64 := make([]int64, n)
-		for i, id := range ids { ids64[i] = int64(id) }
+		for i, id := range ids {
+			ids64[i] = int64(id)
+		}
 		inIDs, err := ort.NewTensor(shape, ids64)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		defer inIDs.Destroy()
 		mask := make([]int64, n)
-		for i := range mask { mask[i] = 1 }
+		for i := range mask {
+			mask[i] = 1
+		}
 		inMask, err := ort.NewTensor(shape, mask)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		defer inMask.Destroy()
 
 		outTok, err := ort.NewEmptyTensor[float32](ort.NewShape(1, n, 1024))
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		defer outTok.Destroy()
 		outSent, err := ort.NewEmptyTensor[float32](ort.NewShape(1, 1024))
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		defer outSent.Destroy()
 
 		if err := sess.Run([]ort.Value{inIDs, inMask}, []ort.Value{outTok, outSent}); err != nil {
@@ -102,7 +127,9 @@ func main() {
 		res := make([][]float32, 0, len(chunks))
 		for i, c := range chunks {
 			emb, err := encodeOne(c.Text)
-			if err != nil { return nil, fmt.Errorf("encode #%d: %w", i, err) }
+			if err != nil {
+				return nil, fmt.Errorf("encode #%d: %w", i, err)
+			}
 			res = append(res, emb)
 		}
 		fmt.Printf("%s: encoded %d chunks\n", label, len(res))
@@ -110,9 +137,13 @@ func main() {
 	}
 
 	run1, err := run("run1")
-	if err != nil { fatal("%v", err) }
+	if err != nil {
+		fatal("%v", err)
+	}
 	run2, err := run("run2")
-	if err != nil { fatal("%v", err) }
+	if err != nil {
+		fatal("%v", err)
+	}
 
 	b1 := pack(run1)
 	b2 := pack(run2)
@@ -132,14 +163,18 @@ func main() {
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(run1)))
 	writeFile(outdir+"/count.bin", hdr[:])
 	fmt.Printf("wrote go_run1/2.bin (%d chunks x 1024 f32 = %d bytes)\n", len(run1), len(b1))
-	if !identical { os.Exit(3) }
+	if !identical {
+		os.Exit(3)
+	}
 }
 
 // HF <pad>@1 reindex: every normal piece id +1; <s>=0 </s>=2 unchanged.
 func shift(ids []int) []int {
 	out := append([]int(nil), ids...)
 	for i, id := range out {
-		if id <= 2 { continue }
+		if id <= 2 {
+			continue
+		}
 		out[i] = id + 1
 	}
 	return out
@@ -159,7 +194,9 @@ func pack(rows [][]float32) []byte {
 }
 
 func writeFile(path string, b []byte) {
-	if err := os.WriteFile(path, b, 0o644); err != nil { fatal("write %s: %v", path, err) }
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		fatal("write %s: %v", path, err)
+	}
 }
 
 func fatal(format string, a ...any) {
@@ -172,15 +209,27 @@ func fatal(format string, a ...any) {
 // set ORT_CUDA=1 so Go uses the same 3090 as the Python reference.
 func sessionOpts() *ort.SessionOptions {
 	opts, err := ort.NewSessionOptions()
-	if err != nil { fatal("session opts: %v", err) }
-	if os.Getenv("ORT_CUDA") != "1" { return opts }
+	if err != nil {
+		fatal("session opts: %v", err)
+	}
+	if os.Getenv("ORT_CUDA") != "1" {
+		return opts
+	}
 	cuda, err := ort.NewCUDAProviderOptions()
-	if err != nil { fatal("cuda opts: %v", err) }
+	if err != nil {
+		fatal("cuda opts: %v", err)
+	}
 	dev := os.Getenv("ORT_CUDA_DEVICE")
-	if dev == "" { dev = "0" }
-	if err := cuda.Update(map[string]string{"device_id": dev}); err != nil { fatal("cuda update: %v", err) }
+	if dev == "" {
+		dev = "0"
+	}
+	if err := cuda.Update(map[string]string{"device_id": dev}); err != nil {
+		fatal("cuda update: %v", err)
+	}
 	defer cuda.Destroy()
-	if err := opts.AppendExecutionProviderCUDA(cuda); err != nil { fatal("cuda ep: %v", err) }
+	if err := opts.AppendExecutionProviderCUDA(cuda); err != nil {
+		fatal("cuda ep: %v", err)
+	}
 	fmt.Fprintf(os.Stderr, "[godense] using CUDA EP device %s\n", dev)
 	return opts
 }

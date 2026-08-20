@@ -43,7 +43,9 @@ func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, c
 		db := []dumpBeam{}
 		{
 			seqs := make([][]int64, len(beams))
-			for i, b := range beams { seqs[i] = b.ids }
+			for i, b := range beams {
+				seqs[i] = b.ids
+			}
 			var useCD *constDec
 			switch len(beams) {
 			case 1:
@@ -55,12 +57,16 @@ func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, c
 			}
 			t0 := time.Now()
 			cands, err := decodeStepB(dec, useCD, seqs, oneOut)
-			if err != nil { fatal("decodeStepB: %v", err) }
+			if err != nil {
+				fatal("decodeStepB: %v", err)
+			}
 			traceT("dec", fmt.Sprintf("B%dL%d", len(beams), len(seqs[0])), time.Since(t0))
 			for i, b := range beams {
 				t6 := cands[i]
 				de := dumpBeam{Ids: append([]int64{}, b.ids...), Score: b.score}
-				for _, c := range t6 { de.Top6 = append(de.Top6, [2]any{c.tok, c.logp}) }
+				for _, c := range t6 {
+					de.Top6 = append(de.Top6, [2]any{c.tok, c.logp})
+				}
 				db = append(db, de)
 				for _, c := range t6 {
 					all = append(all, hyp{
@@ -76,7 +82,9 @@ func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, c
 		// non-EOS -> open beams for the next round.
 		next := []hyp{}
 		for _, h := range all {
-			if len(next) >= numBeams { break } // only numBeams open beams survive
+			if len(next) >= numBeams {
+				break
+			} // only numBeams open beams survive
 			if h.ids[len(h.ids)-1] == eosID {
 				addHyp(&done, h)
 				continue
@@ -88,25 +96,39 @@ func beamSearch(tok *sentencepiece.Tokenizer, dec *ort.DynamicAdvancedSession, c
 	}
 	// promote truncated (never-finished) best beams if fewer than numReturn finished
 	for _, b := range beams {
-		if len(done) >= numReturn { break }
+		if len(done) >= numReturn {
+			break
+		}
 		addHyp(&done, b)
 	}
 	sort.SliceStable(done, func(i, j int) bool { return done[i].score > done[j].score })
-	if len(done) > numReturn { done = done[:numReturn] }
+	if len(done) > numReturn {
+		done = done[:numReturn]
+	}
 	if os.Getenv("MRBEL_DEBUG") == "1" {
-		for i, d := range done { fmt.Printf("DONE[%d] len=%d ids=%v\n", i, len(d.ids), d.ids) }
+		for i, d := range done {
+			fmt.Printf("DONE[%d] len=%d ids=%v\n", i, len(d.ids), d.ids)
+		}
 	}
 
 	seqs := make([]seq, 0, len(done))
 	for _, d := range done {
 		cut := d.ids
-		for i, id := range cut { if id == eosID { cut = cut[:i+1]; break } }
+		for i, id := range cut {
+			if id == eosID {
+				cut = cut[:i+1]
+				break
+			}
+		}
 		seqs = append(seqs, seq{ids: cut, text: decodeSeq(tok, cut)})
 	}
 	return seqs
 }
 
-type cand struct{ tok int64; logp float64 }
+type cand struct {
+	tok  int64
+	logp float64
+}
 
 // topKLogSoftmax returns the k highest-probability candidates with exact log-softmax
 // scores — O(n) single scan for selection (raw logits are monotone in logprob, no sort!)
@@ -116,13 +138,17 @@ type cand struct{ tok int64; logp float64 }
 // stable sort produced.
 func topKLogSoftmax(logits []float32, k int) []cand {
 	const maxK = 8
-	if k > maxK { k = maxK }
+	if k > maxK {
+		k = maxK
+	}
 	var toks [maxK]int64
 	var vals [maxK]float32
 	n := 0
 	mx := logits[0]
 	for i, v := range logits {
-		if v > mx { mx = v }
+		if v > mx {
+			mx = v
+		}
 		if n < k {
 			// insertion into descending buffer position i
 			j := n
@@ -142,10 +168,14 @@ func topKLogSoftmax(logits []float32, k int) []cand {
 		}
 	}
 	sum := 0.0
-	for _, v := range logits { sum += math.Exp(float64(v) - float64(mx)) }
+	for _, v := range logits {
+		sum += math.Exp(float64(v) - float64(mx))
+	}
 	lse := float64(mx) + math.Log(sum)
 	out := make([]cand, n)
-	for i := 0; i < n; i++ { out[i] = cand{tok: toks[i], logp: float64(vals[i]) - lse} }
+	for i := 0; i < n; i++ {
+		out[i] = cand{tok: toks[i], logp: float64(vals[i]) - lse}
+	}
 	return out
 }
 
@@ -154,16 +184,24 @@ func topKLogSoftmax(logits []float32, k int) []cand {
 func addHyp(done *[]hyp, h hyp) {
 	*done = append(*done, h)
 	sort.SliceStable(*done, func(i, j int) bool { return (*done)[i].score > (*done)[j].score })
-	if len(*done) > numBeams { *done = (*done)[:numBeams] }
+	if len(*done) > numBeams {
+		*done = (*done)[:numBeams]
+	}
 }
 
 // beamDone mirrors transformers BeamHypotheses.is_done (early_stopping=False):
 // generation is done once >= numBeams hypotheses are finished AND the best open beam
 // score cannot beat the worst finished hypothesis.
 func beamDone(done, beams []hyp) bool {
-	if len(done) < numBeams { return false }
+	if len(done) < numBeams {
+		return false
+	}
 	worst := done[len(done)-1].score // done sorted desc, so last = worst
 	bestOpen := math.Inf(-1)
-	for _, b := range beams { if b.score > bestOpen { bestOpen = b.score } }
+	for _, b := range beams {
+		if b.score > bestOpen {
+			bestOpen = b.score
+		}
+	}
 	return worst >= bestOpen
 }

@@ -38,7 +38,7 @@ def make_pdf(top_lines, repeat_labels=None, single_labels=False, firstpagenum=No
         page.insert_text((72, y), f"Fachtext Seite {i} des Kapitels.", fontsize=10)
         if bottom_lines and i < len(bottom_lines) and bottom_lines[i]:
             page.insert_text((72, page.rect.y1 * 0.975), bottom_lines[i], fontsize=9)
-    f = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    f = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)  # noqa: SIM115 — delete=False ist das Muster hier
     doc.save(f.name)
     doc.close()
     if sections_spec or repeat_labels or single_labels or firstpagenum or half_labels:
@@ -122,7 +122,7 @@ class PageTrustTests(unittest.TestCase):
                             "offset fixture must be red under the old pipeline")
 
     def test_sane_labels_stay_sane(self):
-        labels, sources, _ch = pt.build_page_trust(
+        _labels, sources, _ch = pt.build_page_trust(
             self._pdf([None] * 6, single_labels=True))
         self.assertEqual(sources[0], pt.PDF_LABEL_SANE)
         self.assertEqual(sources[5], pt.PDF_LABEL_SANE)
@@ -255,7 +255,7 @@ class ChapterOrdinalTests(unittest.TestCase):
         # chapter 2 loses, no chapter map).
         spec = [{"startpage": 0, "prefix": "", "style": "D", "firstpagenum": 1}]
         pdf = make_pdf(CH_BOOK_TOPLINES, sections_spec=spec)
-        labels, sources, chapters = pt.build_page_trust(pdf)
+        _labels, sources, chapters = pt.build_page_trust(pdf)
         self.assertEqual(sources[6], pt.FOLIO_VERIFIED)   # chapter-1 run wins
         self.assertNotEqual(sources[9], pt.FOLIO_VERIFIED)  # clash loser: no folio claim
         self.assertEqual(sources[9], pt.PDF_LABEL_SANE)     # sane single-section labels fill in
@@ -267,7 +267,7 @@ class ChapterOrdinalTests(unittest.TestCase):
         # runs contradict the section math: never guess, legacy fallback.
         top = [None, None, "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
         pdf = make_pdf(top, sections_spec=HEALED_SECTIONS)
-        labels, sources, chapters = pt.build_page_trust(pdf)
+        _labels, sources, chapters = pt.build_page_trust(pdf)
         # The continuous run verifies as ONE run (no clash), but no chapter
         # ordinals are stamped.
         self.assertEqual(sources[11], pt.FOLIO_VERIFIED)
@@ -286,7 +286,7 @@ class ChapterOrdinalTests(unittest.TestCase):
 
     def test_chapter_restarts_requires_two_arabic_sections(self):
         pdf = make_pdf([None, "1", "2", "3"])  # single section, no restart
-        labels, sources, chapters = pt.build_page_trust(pdf)
+        _labels, sources, chapters = pt.build_page_trust(pdf)
         self.assertEqual(chapters, {})
         self.assertEqual(sources[3], pt.FOLIO_VERIFIED)
 
@@ -389,8 +389,8 @@ class ChapterReviewHardeningTests(unittest.TestCase):
         # chapters; the label reverse-mapping (min of hits) resolved a
         # chapter-2 "3" chunk to chapter 1's page 4. The chunker's Marker
         # physical anchors must win end-to-end.
-        from axiom_ng_runner.compute_core.chunker import Chunker
         from axiom_ng_runner import runner as R
+        from axiom_ng_runner.compute_core.chunker import Chunker
 
         pdf = make_pdf(CH_BOOK_TOPLINES, sections_spec=HEALED_SECTIONS)
         labels, sources, chmap = pt.build_page_trust(pdf)
@@ -447,7 +447,7 @@ class ExtractorV21Tests(unittest.TestCase):
         # physical: the honest classification is BLIND, and it must not leak
         # onto text-bearing pages.
         pdf = make_pdf(["1", "2", "3", None, None, "6", "7", "8"], blind_pages=(3, 4))
-        labels, sources, _ch = pt.build_page_trust(pdf)
+        _labels, sources, _ch = pt.build_page_trust(pdf)
         self.assertEqual(sources[3], pt.BLIND)
         self.assertEqual(sources[4], pt.BLIND)
         self.assertEqual(sources[0], pt.FOLIO_VERIFIED)  # text pages unaffected
@@ -456,7 +456,7 @@ class ExtractorV21Tests(unittest.TestCase):
     def test_blind_page_not_counted_as_folio_evidence(self):
         # A blind page contributes no candidate (no text -> no line), so it
         # can never verify — only the text pages form the run.
-        labels, sources, _ch = pt.build_page_trust(
+        _labels, sources, _ch = pt.build_page_trust(
             make_pdf(["1", "2", None, "4", "5", None] * 2, blind_pages=(2, 5, 8, 11)))
         for i in (2, 5, 8, 11):
             self.assertEqual(sources[i], pt.BLIND)

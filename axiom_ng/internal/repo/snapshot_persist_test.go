@@ -1291,6 +1291,27 @@ func TestForceRerunReplacesSnapshotContent(t *testing.T) {
 	if generation < 2 {
 		t.Fatalf("force replace must bump the generation, got %d", generation)
 	}
+	// #190 Z1: the replaced state must be the ACTIVE one — exactly one
+	// active snapshot for the attachment, and it is the identity row the
+	// replace wrote into. (Content assertions above; this pins the serving
+	// state — the pre-fix class also left stale actives behind.)
+	var activeCount int
+	if err := h.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_snapshots WHERE attachment_id=$1 AND active`,
+		h.attachmentID).Scan(&activeCount); err != nil {
+		t.Fatalf("active count: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("exactly one active snapshot after force replace, got %d", activeCount)
+	}
+	var s2active bool
+	if err := h.pool.QueryRow(ctx,
+		`SELECT active FROM processing_snapshots WHERE id=$1`, s2).Scan(&s2active); err != nil {
+		t.Fatalf("s2 active: %v", err)
+	}
+	if !s2active {
+		t.Fatalf("the replaced snapshot must be the active one")
+	}
 	// Outbox: the old chunk docs die (delete), the new ones index — the OS
 	// mirror must never serve the replaced content.
 	var ops string
@@ -1301,5 +1322,52 @@ func TestForceRerunReplacesSnapshotContent(t *testing.T) {
 	}
 	if !strings.Contains(ops, "delete") || !strings.Contains(ops, "index") {
 		t.Fatalf("replace must plan delete+index outbox ops, got %q", ops)
+	}
+}
+
+// TestPersistLocatorRoundTripToDB (#190 Z3): the dispatch→persist boundary
+// re-marshals the Locator through the typed struct — an unknown field is
+// silently dropped there (two documented cases: Locator.Chapter lost every
+// W12 stamp in the W9 void; paragraph_pages lost the #194 pilot's maps).
+// The witness persists a payload carrying BOTH and asserts the DB locator
+// JSON retains them.
+func TestPersistLocatorRoundTripToDB(t *testing.T) {
+	h := newPersistHarness(t, "locrt")
+	ctx := context.Background()
+
+	// Der Harness-Konstruktor claimed + markiert den Job bereits processing
+	// und hält den LeaseRef — kein zweiter Claim nötig.
+	raw := h.validResultRaw(3)
+	raw.JobID = h.jobID
+	raw.Chunks[0].Locator.Chapter = ptrInt(7)
+	raw.Chunks[0].Locator.ParagraphPages = [][]any{
+		{"0", "8"}, {"185", "9"},
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	snapID, err := h.rep.PersistResult(ctx, h.jobID, b, PersistOptions{CapDim: 3, Artifacts: markdownArtifact()})
+	if err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	var locJSON []byte
+	if err := h.pool.QueryRow(ctx,
+		`SELECT locator FROM processing_chunks WHERE snapshot_id=$1 AND chunk_index=0`, snapID,
+	).Scan(&locJSON); err != nil {
+		t.Fatalf("read DB locator: %v", err)
+	}
+	var back struct {
+		Chapter        *int    `json:"chapter"`
+		ParagraphPages [][]any `json:"paragraph_pages"`
+	}
+	if err := json.Unmarshal(locJSON, &back); err != nil {
+		t.Fatalf("unmarshal DB locator: %v", err)
+	}
+	if back.Chapter == nil || *back.Chapter != 7 {
+		t.Fatalf("locator.chapter lost in the DB after dispatch→persist (got %v) — the persist boundary drops it", back.Chapter)
+	}
+	if len(back.ParagraphPages) != 2 || back.ParagraphPages[1][0] != "185" {
+		t.Fatalf("locator.paragraph_pages lost in the DB after dispatch→persist (got %v)", back.ParagraphPages)
 	}
 }

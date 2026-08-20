@@ -1,0 +1,93 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+defaults:
+  run:
+    working-directory: axiom_ng
+
+jobs:
+  go-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: axiom_ng/go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt found unformatted files"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+
+  go-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: axiom_ng/go.mod
+      # No AXIOM_TEST_DATABASE_URL: the DB-gated integration tests skip by
+      # design; everything else must pass.
+      - name: unit suites (DB tests skip)
+        run: go test -count=1 ./...
+
+  go-db-it:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: axiom_user
+          POSTGRES_PASSWORD: axiom_password
+          POSTGRES_DB: axiom_ng_ci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U axiom_user"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AXIOM_TEST_DATABASE_URL: postgresql://axiom_user:axiom_password@localhost:5432/axiom_ng_ci_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: axiom_ng/go.mod
+      # No manual schema application: db.Migrate() owns the schema (tracks
+      # applied files itself — pre-applying via psql desyncs its ledger and
+      # 42710s on CREATE TYPE). The IT harnesses call Migrate on fresh DBs.
+      - name: full suites incl. DB ITs
+        run: go test -p 1 -count=1 ./...
+
+  runner-pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: axiom_ng_runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # requirements.txt is the light/reference stack (fastapi, pydantic,
+      # pymupdf, pytest) — heavy GPU deps are NOT needed by the test suite
+      # (no test module imports them at collection time; live-GPU ITs skip).
+      - name: install
+        run: pip install -r requirements.txt
+      # Scope: the surface the project has been linting (tests + compute
+      # core). The heavy-compute modules carry pre-existing findings outside
+      # the enforced set — not this branch's business.
+      - name: ruff
+        run: ruff check tests/
+      - name: pytest
+        run: python -m pytest tests/
