@@ -97,7 +97,7 @@ func TestKGRelationsFilters(t *testing.T) {
 	st := float32(0.8)
 	kg := &fakeKG{relations: []repo.KGRelationView{{
 		ID: "r1", Type: "supports", SourceID: "a", SourceForm: "UN",
-		TargetID: "b", TargetForm: "SDG", Strength: &st, EvidenceChunks: []string{"c1"}, Documents: 3,
+		TargetID: "b", TargetForm: "SDG", Strength: &st, EvidenceChunks: []string{"c1"}, Documents: 3, CorroboratingDocuments: 3,
 	}}}
 	s := kgServer(t, kg)
 	rec := httptest.NewRecorder()
@@ -110,7 +110,13 @@ func TestKGRelationsFilters(t *testing.T) {
 		t.Fatalf("relation shape wrong: %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"documents":3`) {
-		t.Fatalf("documents (#185 corroboration count) must be part of the relation shape: %s", rec.Body.String())
+		t.Fatalf("documents (deprecated alias, #198 item 6) must stay on the wire: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"corroborating_documents":3`) {
+		t.Fatalf("corroborating_documents (#198 item 6) must be on the wire: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"confidence":`) {
+		t.Fatalf("confidence (#198 item 4) must be on every relation: %s", rec.Body.String())
 	}
 	if kg.lastEnt != "00000000-0000-0000-0000-00000000000b|supports" {
 		t.Fatalf("filters not passed: %q", kg.lastEnt)

@@ -235,6 +235,11 @@ func TestConsolidationHookMergesRealDuplicatesIT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run 1: %v", err)
 	}
+	// Wait out run-1's debounced hook BEFORE seeding: firing mid-seed it
+	// would merge the fresh duplicates and break the seed pin (observed
+	// flake: "seed must produce 2 ... got 1"). Debounce is 20ms; the
+	// no-op merge is ~ms — 200ms is a safe deterministic margin.
+	time.Sleep(200 * time.Millisecond)
 	// Seed the duplicate mass under the syncer's own source (cascade-clean).
 	hookSeedSnapshot(t, svc, "deutschland")
 	// Scoped to THIS source: the shared test DB carries other suites'
