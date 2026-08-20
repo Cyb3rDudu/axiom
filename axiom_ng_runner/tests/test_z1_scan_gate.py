@@ -28,7 +28,8 @@ class _FakePage:
         return self._text
 
     def get_images(self, full=False):
-        return [("xref", None, None, None, None, None, None, self._imgs.w, self._imgs.h)]
+        # echtes pymupdf-Tupel: (xref, smask, width, height, bpc, cs, alt, ...)
+        return [("xref", 0, self._imgs.w, self._imgs.h, 8, "DeviceRGB", None, "")]
 
 
 class _FakePixInfo(dict):

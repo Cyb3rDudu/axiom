@@ -68,17 +68,13 @@ def _scan_profile(doc) -> _ScanProfile:
         page = doc[i]
         tlen = len((page.get_text() or "").strip())
         total_chars += tlen
-        imgs = page.get_images(full=True)
+        # get_images(full=True) liefert (xref, smask, width, height, ...) —
+        # Maße ohne Dekompression direkt aus dem Tuple (Review-S6: kein
+        # extract_image, kein Undercount bei kaputten Streams)
         page_px = 0
-        for im in imgs:
-            xref = im[0]
-            try:
-                pix_info = doc.extract_image(xref)
-                w, h = pix_info.get("width", 0), pix_info.get("height", 0)
-            except Exception:
-                continue
-            page_px += int(w) * int(h)
-        if page_px * 3 > 2_000_000:  # >2 MPix RGB gilt als Rasterseite
+        for im in page.get_images(full=True):
+            page_px += int(im[2] or 0) * int(im[3] or 0)
+        if page_px * 3 > 2_000_000:  # >2 MB dekodiertes RGB (~0,7 MPix) gilt als Rasterseite
             raster_pages += 1
             decoded += page_px * 3
     return _ScanProfile(
@@ -158,26 +154,35 @@ def _convert_scan_batched(processor, pdf_path: Path, profile, logger) -> tuple[s
     bounds = _batch_bounds(profile)
     logger.info(f"scan batch mode: {profile.pages} pages, "
                 f"{profile.decoded_bytes / 1e9:.1f} GB decoded -> {len(bounds)} batches")
-    src = None
     parts: list[str] = []
     images: Dict[str, Any] = {}
     import pymupdf  # lazy: erst im Batch-Pfad nötig
     src = pymupdf.open(str(pdf_path))
     try:
         for b_i, (start, end) in enumerate(bounds):
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
-                batch_path = Path(tf.name)
-            batch_doc = pymupdf.open()
-            batch_doc.insert_pdf(src, from_page=start, to_page=end - 1)
-            batch_doc.save(str(batch_path))
-            batch_doc.close()
+            import os as _os
+            fd, tmp_name = _os.mkstemp(suffix=".pdf")
+            _os.close(fd)
+            batch_path = Path(tmp_name)
             try:
+                batch_doc = pymupdf.open()
+                try:
+                    batch_doc.insert_pdf(src, from_page=start, to_page=end - 1)
+                    batch_doc.save(str(batch_path))
+                finally:
+                    batch_doc.close()
                 md, batch_imgs = processor._convert_pdf_with_table_handling(batch_path)
             finally:
                 batch_path.unlink(missing_ok=True)
             # Paginierungsmarker dieses Batches auf Original-Seiten schieben
             offset = start
-            md = _re.sub(r"\{(\d+)\}-{10,}", lambda m: "{" + str(int(m.group(1)) + offset) + "}" + "-" * 48, md)
+            md = _re.sub(r"\{(\d+)\}-{10,}", lambda m, offset=offset: "{" + str(int(m.group(1)) + offset) + "}" + "-" * 48, md)
+            # Review-Critical: die Bild-Dikt-Keys werden geprefixt (Kollisions-
+            # freiheit über Batches) — die Markdown-Referenzen MÜSSEN mit-
+            # geschrieben werden, sonst sterben die Refs am Persist-Gate
+            # (CHUNK_IMAGE_REF_UNRESOLVED) obwohl die Bilder existieren.
+            for k in (batch_imgs or {}):
+                md = md.replace(f"]({k})", f"](b{b_i}_{k})")
             parts.append(md)
             for k, v in (batch_imgs or {}).items():
                 images[f"b{b_i}_{k}"] = v

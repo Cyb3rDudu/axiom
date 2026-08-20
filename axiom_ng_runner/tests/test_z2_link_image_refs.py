@@ -17,9 +17,13 @@ from axiom_ng_runner.runner import _drop_link_refs
 
 WIRTSCHA = ("- y Wirtscha!spsychologie aktuell (http://www.wirtscha![spsychologie-aktuell.de\\)]"
             "(http://www.wirtschaftspsychologie-aktuell.de),")
-WELT = ("**Krenz, H. P.** (2016): Wann Arbeitnehmern eine Vertragsstrafe droht. In: Die Weilt, Teil "
-        "Wirtscha!/Karriere, v. 27.04.2016. Online: https://www.welt.de/wirtscha![/karriere](https://www.welt.de/karriere),")
-FAZ = "**o.V.** (2008): Fachkrä!emangel kann 4,6 Billionen Euro kosten. ![emangel](http://example.com/faz.jpg) abgerufen."
+WELT = (
+    "**Krenz, H. P.** (2016): Wann Arbeitnehmern eine Vertragsstrafe droht. In: Die Weilt, Teil "
+    "Wirtscha!/Karriere, v. 27.04.2016. Online: https://www.welt.de/wirtscha![/karriere](https://www.welt.de/karriere),")
+FAZ = (
+    "**o.V.** (2008): Fachkrä!emangel kann 4,6 Billionen Euro kosten. In: Frankfurter Allgemeine "
+    "Zeitung (FAZ) v. 8.10.2008, Nr. 235, S. 13. Online: ![emangel](http://example.com/faz.jpg),"
+    " abgerufen.")
 
 
 class LinkRefClassificationTests(unittest.TestCase):

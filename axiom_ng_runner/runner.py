@@ -58,7 +58,7 @@ _MD_ESCAPE_RE = re.compile(r"\\(.)")
 
 
 def _drop_link_refs(refs: list[Any]) -> list[Any]:
-    """Runner-Härtung Z2: http(s)-Refs sind LINKS, keine Bild-Artefakte.
+    r"""Runner-Härtung Z2: http(s)-Refs sind LINKS, keine Bild-Artefakte.
 
     Bewiesene Klasse (Job 81d39c05, drei Chunks): die Marker-Ligatur-
     Fehllesung 'ft'->'!' macht aus Inline-Links Markdown-Bild-Syntax
