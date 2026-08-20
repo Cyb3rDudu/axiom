@@ -39,7 +39,7 @@ Each result looks like this:
       "chunk_id": "..",
       "text": "The GRI standards have been criticized for …",
       "score": 0.82,
-      "source": { "title": "Nachhaltiges Management", "authors": ["…"], "document_id": ".." },
+      "source": { "title": "Nachhaltiges Management", "authors": ["…"], "doc_id": ".." },
       "locator": { "kind": "page", "label": "S. 221", "chapter": "Transparenz" },
       "section": ["Nachhaltiges Management", "Transparenz"]
     }
@@ -71,20 +71,82 @@ the defaults; the table explains what each one does and when it helps:
 | **dense** | on | Semantic search over chunk embeddings — matches *meaning*, cross-lingually. | Everyday questions; the primary arm. |
 | **bm25 (hybrid)** | on | Keyword search over the same chunks — matches exact terms. | Finds passages dense might miss because they're worded exactly. Adds recall. |
 | **rerank** | on | A cross-encoder re-scores the hybrid candidates to fine-order them. | Marginally improves ordering quality (measured marginal but consistent); costs extra latency (steerable via a remote runner). |
-| **sparse** | off | A sparse token-signal arm for rare tokens. | Expected: rare-token queries (norm numbers, acronyms across languages) — not yet isolated in the benchmark suite. |
-| **graph** | off | Expands results through the knowledge graph (entities/relationships). | Off by default (measured as slightly negative on the provisional suite); for tuned deployment later. |
+| **sparse** | off | A sparse token-signal arm for rare tokens. | Available for rare-token queries; disabled because the measured suite showed no quality gain for its latency cost. |
+| **graph** | off | Expands results through the knowledge graph (entities/relationships). | Available for explicitly graph-assisted deployments; disabled because the measured suite showed a slight quality loss and high latency. |
 
 `dense` + `bm25` together is the **hybrid** baseline; `rerank` on top re-orders
 it. `sparse` and `graph` are opt-in arms behind `AXIOM_SEARCH_SPARSE_ARM` and
 `AXIOM_SEARCH_GRAPH_ARM` (see [Configuration](../developer-guide/configuration.md)).
 
+## Expand a hit into a passage
+
+Use the returned `chunk_id` to retrieve the full citation context:
+
+```bash
+curl http://127.0.0.1:8011/api/passage/<chunk-id>
+```
+
+The passage response contains the chunk, its source and locator, and the
+adjacent chunks from the same attachment. It also exposes `paragraph_pages` on
+current generations. This is a sequence of `[character offset, page label]`
+boundaries, for example:
+
+```json
+{"paragraph_pages":[["0","95"],["775","96"]]}
+```
+
+Resolve a character position inside a multi-page passage to one exact print
+page:
+
+```bash
+curl 'http://127.0.0.1:8011/api/passage/<chunk-id>/page?at=1000'
+```
+
+```json
+{"at":1000,"chunk_id":"<chunk-id>","page":"96"}
+```
+
+A pre-map generation returns the honest page span instead of inventing an exact
+page.
+
+## Read the knowledge graph
+
+The graph API exposes entities, one-hop neighbors, and evidence-backed
+relations:
+
+```bash
+curl 'http://127.0.0.1:8011/api/kg/entities?q=doppelte%20Wesentlichkeit'
+curl 'http://127.0.0.1:8011/api/kg/entities/<entity-id>/neighbors?limit=20'
+curl 'http://127.0.0.1:8011/api/kg/relations?document_id=<document-uuid>'
+```
+
+Entity search ranks four match classes in order: exact form,
+normalized-equivalent form, bilingual-family equivalent, then substring or
+compound decomposition. This prevents a popular fragment from outranking an
+exact but less frequent form.
+
+Relations expose two read-quality signals:
+
+- `confidence` combines distinct-document support (60%), repeated extraction
+  evidence (30%), and body-section evidence quality (10%).
+- `corroborating_documents` counts distinct library documents supporting the
+  same canonical source/type/target triple. The compatibility field `documents`
+  has the same value.
+
+A practical relation filter is `confidence >= 0.65` and
+`corroborating_documents >= 2`. Evidence chunk IDs resolve through the response's
+`sources` map and the passage API. The full normalization chain, parameters,
+conditional response envelopes, and error behavior are in the
+[HTTP API reference](../references/api.md#knowledge-graph).
+
 ## Why this works
 
-Retrieval runs over the chunks your processing pipeline produced — each with
-exact locators and embeddings. The search API composes the enabled arms, merges
-their candidates, and returns deduplicated, ranked hits with their sources and
-locators. (For the numbers behind arm choices, see the
-[Retrieval quality benchmark](../references/benchmarks/retrieval-quality.md).)
+Retrieval runs over active-snapshot chunks with locators and embeddings. The
+search API composes the enabled arms, merges their candidates, and returns
+deduplicated, ranked hits with their sources and locators. The graph read path
+aggregates only active evidence and computes confidence without changing the
+persisted extractor strength. For the measured arm choices, see the
+[Retrieval quality benchmark](../references/benchmarks/retrieval-quality.md).
 
 ## If nothing matches
 
@@ -95,5 +157,7 @@ locators. (For the numbers behind arm choices, see the
 - If you need a very specific rare term (a norm number, an acronym), consider
   enabling the sparse arm — otherwise the defaults are the best measured
   balance.
+
+Exact request and response fields: [HTTP API](../references/api.md)
 
 Next: [Welcome](../index.md) · [Ingest](ingest.md)
