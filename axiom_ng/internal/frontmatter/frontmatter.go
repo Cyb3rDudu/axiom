@@ -46,7 +46,7 @@ var (
 	// Standalone frontmatter/back-matter heading, first line. Markdown
 	// decoration (####, **, <span>-anchors) and OCR trailing dashes
 	// tolerated (normalizeHeading strips them).
-	headingRe    = regexp.MustCompile(`(?i)^(inhaltsverzeichnis|table of contents|contents|vorwort|preface|geleitwort|foreword|literaturverzeichnis|bibliografie|bibliographie|bibliography|references|quellenverzeichnis|literatur|autorenverzeichnis|autoren|autorinnen und autoren|über die autoren|über die autorinnen|die autorinnen und autoren|mitarbeiterverzeichnis|beitragsverzeichnis|herausgeber und autoren|authors|about the authors|the authors|register|sachregister|stichwortverzeichnis|namensverzeichnis|personenregister|ortsregister|ortregister|index)-*\s*:?\s*$`)
+	headingRe    = regexp.MustCompile(`(?i)^(inhaltsverzeichnis|table of contents|contents|vorwort|preface|geleitwort|foreword|literaturverzeichnis|bibliografie|bibliographie|bibliography|references|quellenverzeichnis|literatur|autorenverzeichnis|autoren|autorinnen und autoren|über die autoren|über die autorinnen|die autorinnen und autoren|über die herausgeber|mitarbeiterverzeichnis|beitragsverzeichnis|herausgeber und autoren|authors|about the authors|the authors|register|sachregister|stichwortverzeichnis|namensverzeichnis|personenregister|ortsregister|ortregister|index)-*\s*:?\s*$`)
 	headingClass = map[string]Class{
 		"inhaltsverzeichnis": ClassTOC, "table of contents": ClassTOC, "contents": ClassTOC,
 		"vorwort": ClassPreface, "preface": ClassPreface, "geleitwort": ClassPreface, "foreword": ClassPreface,
@@ -54,6 +54,7 @@ var (
 		"bibliography": ClassBibliography, "references": ClassBibliography, "quellenverzeichnis": ClassBibliography, "literatur": ClassBibliography,
 		"autorenverzeichnis": ClassAuthors, "autoren": ClassAuthors, "autorinnen und autoren": ClassAuthors,
 		"über die autoren": ClassAuthors, "über die autorinnen": ClassAuthors, "die autorinnen und autoren": ClassAuthors,
+		"über die herausgeber":   ClassAuthors,
 		"mitarbeiterverzeichnis": ClassAuthors, "beitragsverzeichnis": ClassAuthors, "herausgeber und autoren": ClassAuthors,
 		"authors": ClassAuthors, "about the authors": ClassAuthors, "the authors": ClassAuthors,
 		"register": ClassIndex, "sachregister": ClassIndex, "stichwortverzeichnis": ClassIndex,
@@ -76,8 +77,13 @@ var (
 	// Chapter byline: a BOLD bare number line ("**24**") — the contributed-
 	// chapter card number. Prose never bolds a standalone number.
 	boldBareNumRe = regexp.MustCompile(`^\*\*\d{1,3}\.?\*\*$`)
-	yearRe        = regexp.MustCompile(`\b(19|20)\d{2}\b`)
-	citeMarkerRe  = regexp.MustCompile(`(?i)(\bin:|, vol\.\s|, no\.\s|\bpp?\.\s*\d|\bS\.\s?\d|\bNr\.\s?\d|\bVerlag\b|\bAufl\.|\bISBN|https?://|\[\d+\]|©)`)
+	// Title-page editor line: ONE short line of names ending in the italic
+	// *Hrsg.* role marker — title-page typography; prose citations use a
+	// plain "(Hrsg.)" and full sentences (#198 rider, observed shape
+	// "Marco Englert Anabel Ternès *Hrsg.*").
+	editorLineRe = regexp.MustCompile(`^.{0,90}\*Hrsg\.\*$`)
+	yearRe       = regexp.MustCompile(`\b(19|20)\d{2}\b`)
+	citeMarkerRe = regexp.MustCompile(`(?i)(\bin:|, vol\.\s|, no\.\s|\bpp?\.\s*\d|\bS\.\s?\d|\bNr\.\s?\d|\bVerlag\b|\bAufl\.|\bISBN|https?://|\[\d+\]|©)`)
 )
 
 // normalizeHeading strips markdown decoration from a heading line.
@@ -133,6 +139,12 @@ func Classify(text string) Class {
 	// 1) Heading chunk: standalone frontmatter/back-matter heading.
 	if class, ok := headingClass[strings.ToLower(strings.TrimRight(normalizeHeading(lines[0]), ": -"))]; ok {
 		return class
+	}
+
+	// 1b) Title-page editor line (#198 rider): a single short line of
+	// names ending in the italic *Hrsg.* marker — heading-less frontmatter.
+	if len(lines) == 1 && len(lines[0]) <= 100 && editorLineRe.MatchString(strings.TrimSpace(lines[0])) {
+		return ClassAuthors
 	}
 
 	// 2) TOC shapes.

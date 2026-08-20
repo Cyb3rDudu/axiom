@@ -72,11 +72,24 @@ func TestClassifyAuthors(t *testing.T) {
 		{"verzeichnis", "# **Autorenverzeichnis**\n\nProfessor Dr. **Oliver Budzinski**, Technische Universität Ilmenau, Ilmenau\n\nSachgebiet: Geldpolitik und –theorie\n\nDr. **Peter Haric**, Leitbetriebe Austria Institut, Wien"},
 		{"about the authors", "## About the Authors\n\nDr. Tiffany Cheng Han Leung is Assistant Professor in the Faulty of Business at the City University of Macau, China."},
 		{"ünter die", "### Über die Autoren\n\nProf. Dr. Max Bergmann ist als Berater tätig."},
+		// #198 rider: observed production shape keeping bio entities alive.
+		{"über die herausgeber", "#### **Über die Herausgeber**\n\nProf. Dr. René Schmidpeter ist Professor für nachhaltige Entwicklung."},
+		// #198 rider: heading-less title-page editor line — names + italic
+		// trailing *Hrsg.* marker (title-page typography; prose never does this).
+		{"hrsg title page", "Marco Englert Anabel Ternès *Hrsg.*"},
 	}
 	for _, c := range cases {
 		if got := Classify(c.text); got != ClassAuthors {
 			t.Errorf("%s: want authors, got %q", c.name, got)
 		}
+	}
+	// Precision: a citation line with a PLAIN (Hrsg.) — bibliography prose,
+	// not a title page — must stay ungated.
+	if got := Classify("Müller, H. (Hrsg.): Handbuch Organisation, 2. Aufl., Wiesbaden 2001. Das Standardwerk der Organisationstheorie."); got != ClassNone {
+		t.Errorf("citation (Hrsg.) must stay ungated, got %q", got)
+	}
+	if got := Classify("Marco Englert Anabel Ternès (Hrsg.) hat das Buch gemeinsam mit anderen herausgegeben und dabei viele Beiträge geschrieben."); got != ClassNone {
+		t.Errorf("prose (Hrsg.) must stay ungated, got %q", got)
 	}
 }
 
