@@ -186,3 +186,27 @@ func (r *Repo) KGEntityFamilyForms(ctx context.Context, entityID string) ([]stri
 	}
 	return out, rows.Err()
 }
+
+// RepointAliasEdges (#198-3 NACHZUG): edges whose source or target is an
+// alias VARIANT re-point to the family survivor. The resulting pair
+// duplicates are then resolved by -consolidate-relations (idempotent —
+// this must run BEFORE the consolidation apply).
+func (r *Repo) RepointAliasEdges(ctx context.Context) error {
+	if _, err := r.pool.Exec(ctx, `
+		UPDATE processing_entity_relationships r
+		SET source_entity_id = s.id
+		FROM processing_entities v
+		JOIN processing_entities s ON s.id = v.alias_of
+		WHERE r.source_entity_id = v.id`); err != nil {
+		return fmt.Errorf("repoint source: %w", err)
+	}
+	if _, err := r.pool.Exec(ctx, `
+		UPDATE processing_entity_relationships r
+		SET target_entity_id = s.id
+		FROM processing_entities v
+		JOIN processing_entities s ON s.id = v.alias_of
+		WHERE r.target_entity_id = v.id`); err != nil {
+		return fmt.Errorf("repoint target: %w", err)
+	}
+	return nil
+}
