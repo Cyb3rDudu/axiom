@@ -150,11 +150,15 @@ func (r *Repo) KGNeighbors(ctx context.Context, entityID string, minMentions, li
 	cor AS (
 		SELECT r.type, coalesce(se.canonical_form, se.text) AS sf,
 		       coalesce(te.canonical_form, te.text) AS tf,
-		       count(DISTINCT sn.document_id) AS docs, count(*) AS triprows
+		       count(DISTINCT es.document_id) AS docs,
+		       count(DISTINCT r.id) AS triprows
 		FROM processing_entity_relationships r
 		JOIN processing_snapshots sn ON sn.id = r.snapshot_id AND sn.active
 		JOIN processing_entities se ON se.id = r.source_entity_id
 		JOIN processing_entities te ON te.id = r.target_entity_id
+		CROSS JOIN LATERAL jsonb_array_elements_text(r.evidence_chunk_ids) ev
+		JOIN processing_chunks c ON c.id = ev.value::uuid
+		JOIN processing_snapshots es ON es.id = c.snapshot_id AND es.active
 		GROUP BY 1, 2, 3
 	)
 	SELECT o.id::text, coalesce(o.canonical_form, o.text), coalesce(o.type, ''),
@@ -272,11 +276,15 @@ func (r *Repo) KGRelations(ctx context.Context, relType, entityID, documentID st
 	cor AS (
 		SELECT r.type, coalesce(se.canonical_form, se.text) AS sf,
 		       coalesce(te.canonical_form, te.text) AS tf,
-		       count(DISTINCT sn.document_id) AS docs, count(*) AS triprows
+		       count(DISTINCT es.document_id) AS docs,
+		       count(DISTINCT r.id) AS triprows
 		FROM processing_entity_relationships r
 		JOIN processing_snapshots sn ON sn.id = r.snapshot_id AND sn.active
 		JOIN processing_entities se ON se.id = r.source_entity_id
 		JOIN processing_entities te ON te.id = r.target_entity_id
+		CROSS JOIN LATERAL jsonb_array_elements_text(r.evidence_chunk_ids) ev
+		JOIN processing_chunks c ON c.id = ev.value::uuid
+		JOIN processing_snapshots es ON es.id = c.snapshot_id AND es.active
 		GROUP BY 1, 2, 3
 	)
 	SELECT r.id::text, r.type,
