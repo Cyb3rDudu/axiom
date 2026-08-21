@@ -127,6 +127,42 @@ func main() {
 		logger.Printf("entity typing complete: %+v", tr)
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "-bind-all-aliases" {
+		// #199 W6: guarded exact+flexion binding in one pass (W3 guards).
+		cfg := config.Load()
+		logger := log.New(os.Stderr, "aliases: ", log.LstdFlags)
+		apply := false
+		for _, a := range os.Args[2:] {
+			if a == "--apply" {
+				apply = true
+			}
+		}
+		d, err := db.Open(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			logger.Fatalf("postgres: %v", err)
+		}
+		defer d.Close()
+		rp := repo.New(d.Pool())
+		if !apply {
+			c, err := rp.BindExactFormAliasesDryRun(context.Background())
+			if err != nil {
+				logger.Fatalf("dry-run exact: %v", err)
+			}
+			n, err := rp.EntityAliasCounts(context.Background())
+			if err != nil {
+				logger.Fatalf("dry-run counts: %v", err)
+			}
+			logger.Printf("dry-run: exact=%+v counts=%+v (use --apply)", c, n)
+			return
+		}
+		ar, err := rp.BindAllAliases(context.Background())
+		if err != nil {
+			logger.Fatalf("bind-all: %v", err)
+		}
+		logger.Printf("all aliases complete: %+v", ar)
+		return
+	}
+
 	if len(os.Args) > 1 && os.Args[1] == "-bind-flexion-aliases" {
 		// #198-3: flexion family alias links.
 		cfg := config.Load()
