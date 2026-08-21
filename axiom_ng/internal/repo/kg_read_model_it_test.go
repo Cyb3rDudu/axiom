@@ -194,3 +194,60 @@ func TestIT_KGReadModelRelationsBrowseP95Under300msOn10xSeed(t *testing.T) {
 func testUUID(n int) string {
 	return fmt.Sprintf("00000000-0000-0000-0000-%012d", n)
 }
+
+// Family-forms tier ranking witness: a root whose primary_form is
+// "stakeholders" but whose forms list contains "stakeholder" must rank
+// the query "stakeholder" at Tier 1 (exact form match on a family
+// member), not Tier 4 (substring on the primary). The query
+// "stakeholders" (primary exact) stays Tier 1 too.
+func TestIT_KGFormsTierRanking(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE kg_relation_evidence_docs, kg_relation_triples, kg_entity_roots,
+		         processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, snap := kgSeedSnapshot(t, lr, "Tier Buch", "TIER_A")
+
+	// Family root: "stakeholders" (3 chunks) + variant "stakeholder" (2).
+	ePlural, _ := kgSeedEntity(t, lr, snap, "stakeholders", 3)
+	eSingular, _ := kgSeedEntity(t, lr, snap, "stakeholder", 2)
+	_ = eSingular
+	// Substring competitor: "Stakeholder-Theorie" (20 chunks — far more
+	// mentions than the family root (5) to prove tier beats mention_count).
+	_, _ = kgSeedEntity(t, lr, snap, "Stakeholder-Theorie", 20)
+
+	// Bind the family FIRST (so the read model has one root with both forms).
+	if _, err := lr.rep.BindFlexionAliases(ctx); err != nil {
+		t.Fatalf("BindFlexionAliases: %v", err)
+	}
+
+	if err := lr.rep.RefreshKGReadModel(ctx); err != nil {
+		t.Fatalf("RefreshKGReadModel: %v", err)
+	}
+
+	// Query "stakeholder" (singular): must find the family root at rank 1.
+	ents, err := lr.rep.SearchKGEntities(ctx, "stakeholder", 1, 10)
+	if err != nil {
+		t.Fatalf("search stakeholder: %v", err)
+	}
+	if len(ents) == 0 {
+		t.Fatal("no results for stakeholder")
+	}
+	if ents[0].ID != ePlural {
+		t.Fatalf("query 'stakeholder': family root must rank 1, got %s (forms=%v)", ents[0].ID, ents[0].Forms)
+	}
+
+	// Query "stakeholders" (plural = primary): also rank 1.
+	ents2, err := lr.rep.SearchKGEntities(ctx, "stakeholders", 1, 10)
+	if err != nil {
+		t.Fatalf("search stakeholders: %v", err)
+	}
+	if len(ents2) == 0 || ents2[0].ID != ePlural {
+		t.Fatalf("query 'stakeholders': family root must rank 1, got %+v", ents2)
+	}
+}

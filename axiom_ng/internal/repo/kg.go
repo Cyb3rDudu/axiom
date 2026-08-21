@@ -8,6 +8,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/frontmatter"
@@ -108,20 +109,66 @@ func (r *Repo) SearchKGEntities(ctx context.Context, q string, minMentions, limi
 		FROM kg_entity_roots
 		WHERE mention_count >= $1
 		  AND ($2 = '' OR normalized_form LIKE '%' || $2 || '%'
-		       OR ($2 LIKE '%' || normalized_form || '%' AND length(normalized_form) >= 4))
-		ORDER BY CASE
-		           WHEN $2 = '' THEN 4
-		           WHEN $4 = lower(primary_form) THEN 1
-		           WHEN normalized_form_nofam = $3 THEN 2
-		           WHEN normalized_form = $2 THEN 3
-		           ELSE 4
-		         END,
-		         mention_count DESC, root_entity_id
-		LIMIT $5`, minMentions, nq, nqNoFam, qRaw, limit)
+		       OR ($2 LIKE '%' || normalized_form || '%' AND length(normalized_form) >= 4)
+		       OR forms::text LIKE '%' || $3 || '%')
+		ORDER BY mention_count DESC, root_entity_id
+		LIMIT $4 * 3`, minMentions, nq, qRaw, limit)
 	if err != nil {
 		return nil, err
 	}
-	return scanKGEntities(rows)
+
+	// Family-forms tier ranking (#199 KG search quality): the best tier
+	// across ALL family forms (not just the primary) determines the root's
+	// rank. The Go normalizer is the single source of truth — the same
+	// chain the SQL columns use for the primary form, applied per family
+	// form here. SQL can't do this without duplicating the normalization
+	// chain; Go does it once per candidate root (limit*3), not per row×form.
+	results, err := scanKGEntities(rows)
+	if err != nil {
+		return nil, err
+	}
+	type tiered struct {
+		e    KGEntity
+		tier int
+	}
+	scored := make([]tiered, 0, len(results))
+	for _, e := range results {
+		best := 4
+		allForms := append([]string{e.CanonicalForm, e.Text}, e.Forms...)
+		for _, f := range allForms {
+			fNorm := normalizeKGTerm(f)
+			fNoFam := normalizeKGTermNoFam(f)
+			switch {
+			case qRaw == strings.ToLower(strings.TrimSpace(f)):
+				if 1 < best {
+					best = 1
+				}
+			case fNoFam == nqNoFam && nqNoFam != "":
+				if 2 < best {
+					best = 2
+				}
+			case fNorm == nq && nq != "":
+				if 3 < best {
+					best = 3
+				}
+			}
+			if best == 1 {
+				break
+			}
+		}
+		scored = append(scored, tiered{e, best})
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		return scored[i].tier < scored[j].tier
+	})
+	out := make([]KGEntity, 0, len(scored))
+	for _, t := range scored {
+		out = append(out, t.e)
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 // KGNeighbor is one 1-hop edge with both endpoints' stability.
