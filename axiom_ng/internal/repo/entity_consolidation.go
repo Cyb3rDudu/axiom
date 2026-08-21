@@ -133,6 +133,10 @@ func (r *Repo) consolidateActiveEntities(ctx context.Context) (int, error) {
 		if len(losers) == 0 {
 			return nil
 		}
+		if err := archiveSupersededEntitiesTx(ctx, tx, survivors, losers); err != nil {
+			return fmt.Errorf("consolidate archive losers: %w", err)
+		}
+		kgHook("kg_consolidate_entities:after_archive")
 
 		// Mentions move per-pair (the unique key's leading column indexes the
 		// lookup): a verbatim duplicate (same chunk+span) already on the

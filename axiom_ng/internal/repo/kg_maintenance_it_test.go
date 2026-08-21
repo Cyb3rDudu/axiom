@@ -294,4 +294,11 @@ func TestIT_KGMaintenanceCrashRollbackEntityConsolidation(t *testing.T) {
 	if aMentions != 2 || bMentions != 3 {
 		t.Fatalf("crash rollback: mentions must remain unmoved, got A=%d B=%d", aMentions, bMentions)
 	}
+	var archived int
+	if err := lr.pool.QueryRow(ctx, `SELECT count(*) FROM kg_superseded_entities`).Scan(&archived); err != nil {
+		t.Fatal(err)
+	}
+	if archived != 0 {
+		t.Fatalf("crash rollback: entity archive must not be partially written, got %d", archived)
+	}
 }

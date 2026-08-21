@@ -138,7 +138,8 @@ func (lr *leaseRepo) truncateFixtures(t *testing.T) {
 		t.Fatalf("REFUSING to truncate: current_database %q does not end in _test", dbName)
 	}
 	if _, err := lr.pool.Exec(ctx, `
-		TRUNCATE ingest_jobs, zotero_attachments, zotero_documents, zotero_items,
+		TRUNCATE kg_superseded_entities,
+		         ingest_jobs, zotero_attachments, zotero_documents, zotero_items,
 		         zotero_item_collections, zotero_collections, zotero_sources,
 		         zotero_selections, zotero_collection_selections
 		CASCADE`); err != nil {
