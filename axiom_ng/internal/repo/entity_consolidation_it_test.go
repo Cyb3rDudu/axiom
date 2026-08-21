@@ -77,6 +77,9 @@ func TestIT_ConsolidateEntities(t *testing.T) {
 	// Controlled ids: gen_random_uuid would make the ranking pin a coin
 	// flip (review V-W2) — deterministic ids pin survivor + tie-break.
 	entA, chA := seedEntityWithID(t, lr, snapA, "deutschland", "11111111-1111-1111-1111-111111111111", 3)
+	if _, err := lr.pool.Exec(ctx, `UPDATE processing_entities SET type='LOCATION', description='country evidence' WHERE id=$1::uuid`, entA); err != nil {
+		t.Fatalf("seed loser type history: %v", err)
+	}
 	entB, chB := seedEntityWithID(t, lr, snapB, "deutschland", "22222222-2222-2222-2222-222222222222", 5)
 	// Distinct form stays untouched.
 	entC, chC := kgSeedEntity(t, lr, snapA, "nachhaltigkeit", 2)
@@ -88,8 +91,8 @@ func TestIT_ConsolidateEntities(t *testing.T) {
 	// skip the redundant copy, not die.
 	var entDup string
 	if err := lr.pool.QueryRow(ctx, `
-		INSERT INTO processing_entities (snapshot_id, ref, text, canonical_form)
-		VALUES ($1::uuid, 'de-dup', 'deutschland', 'deutschland') RETURNING id::text`,
+		INSERT INTO processing_entities (snapshot_id, ref, text, canonical_form, type, description)
+		VALUES ($1::uuid, 'de-dup', 'deutschland', 'deutschland', 'WORK', 'duplicate work label') RETURNING id::text`,
 		snapA).Scan(&entDup); err != nil {
 		t.Fatalf("seed same-snapshot duplicate: %v", err)
 	}
@@ -184,6 +187,32 @@ func TestIT_ConsolidateEntities(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatal("the loser entity row must be deleted")
+	}
+	var archived int
+	if err := lr.pool.QueryRow(ctx, `
+		SELECT count(*) FROM kg_superseded_entities
+		WHERE survivor_entity_id=$1::uuid AND loser_entity_id IN ($2::uuid,$3::uuid)`, survivor, entA, entDup).Scan(&archived); err != nil {
+		t.Fatalf("read superseded entity archive: %v", err)
+	}
+	if archived != 2 {
+		t.Fatalf("both deleted entity rows must be archived, got %d", archived)
+	}
+	var loserType, loserDesc string
+	var mentionCount int
+	if err := lr.pool.QueryRow(ctx, `
+		SELECT loser_type, loser_description, mention_count
+		FROM kg_superseded_entities WHERE loser_entity_id=$1::uuid`, entA).Scan(&loserType, &loserDesc, &mentionCount); err != nil {
+		t.Fatalf("read entA archive: %v", err)
+	}
+	if loserType != "LOCATION" || loserDesc != "country evidence" || mentionCount != 3 {
+		t.Fatalf("archive evidence wrong: type=%q desc=%q mentions=%d", loserType, loserDesc, mentionCount)
+	}
+	history, err := lr.rep.SupersededEntityHistory(ctx, survivor)
+	if err != nil {
+		t.Fatalf("SupersededEntityHistory: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("type history must expose both deleted entities, got %+v", history)
 	}
 	// Active scope: exactly TWO deutschland entities consumed (entA + the
 	// same-snapshot duplicate); the inactive-snapshot one survives untouched.

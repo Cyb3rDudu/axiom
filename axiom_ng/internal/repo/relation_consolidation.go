@@ -97,7 +97,8 @@ func (r *Repo) activeEdgeStats(ctx context.Context) (edges, multiPairs int, err 
 
 func (r *Repo) consolidateActiveRelations(ctx context.Context) (RelationConsolidationReport, error) {
 	rep := RelationConsolidationReport{BySupersededType: map[string]int{}}
-	rows, err := r.pool.Query(ctx, `
+	err := r.withKGMaintenanceTx(ctx, "kg_consolidate_relations", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
 		SELECT least(r.source_entity_id, r.target_entity_id)::text,
 		       greatest(r.source_entity_id, r.target_entity_id)::text,
 		       r.source_entity_id::text, r.target_entity_id::text,
@@ -106,261 +107,261 @@ func (r *Repo) consolidateActiveRelations(ctx context.Context) (RelationConsolid
 		FROM processing_entity_relationships r
 		JOIN processing_snapshots s ON s.id = r.snapshot_id AND s.active
 		ORDER BY 1, 2, 6`)
-	if err != nil {
-		return rep, fmt.Errorf("relations load: %w", err)
-	}
-	groups := map[[2]string][]relEdgeRow{}
-	for rows.Next() {
-		var e relEdgeRow
-		var ev, meta string
-		if err := rows.Scan(&e.lo, &e.hi, &e.src, &e.tgt, &e.typ, &e.id, &ev, &e.strength, &meta); err != nil {
-			rows.Close()
-			return rep, fmt.Errorf("relations scan: %w", err)
+		if err != nil {
+			return fmt.Errorf("relations load: %w", err)
 		}
-		_ = json.Unmarshal([]byte(ev), &e.evidence)
-		if meta != "" && meta != "{}" {
-			_ = json.Unmarshal([]byte(meta), &e.existingMetadata)
-		}
-		if e.existingMetadata == nil {
-			e.existingMetadata = map[string]any{}
-		}
-		k := [2]string{e.lo, e.hi}
-		groups[k] = append(groups[k], e)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return rep, err
-	}
-
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return rep, fmt.Errorf("relations consolidate begin: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	type archEntry struct {
-		Type      string   `json:"type"`
-		Direction string   `json:"direction"`
-		Evidence  []string `json:"evidence_chunk_ids"`
-		Edges     int      `json:"edges"`
-	}
-	for k, edges := range groups {
-		if len(edges) < 2 {
-			continue // single-edge pair: untouched (idempotency)
-		}
-		rep.PairsTouched++
-
-		forward, reversed := []relEdgeRow{}, []relEdgeRow{}
-		for _, e := range edges {
-			if e.src == k[0] && e.tgt == k[1] {
-				forward = append(forward, e)
-			} else {
-				reversed = append(reversed, e)
+		groups := map[[2]string][]relEdgeRow{}
+		for rows.Next() {
+			var e relEdgeRow
+			var ev, meta string
+			if err := rows.Scan(&e.lo, &e.hi, &e.src, &e.tgt, &e.typ, &e.id, &ev, &e.strength, &meta); err != nil {
+				rows.Close()
+				return fmt.Errorf("relations scan: %w", err)
 			}
-		}
-		// Direction arbitration: corroboration = (edge count, evidence
-		// union size); tie keeps the canonical least->greatest orientation.
-		// After a swap, `forward` holds the majority-direction edges and
-		// the survivor keeps that stored direction.
-		if len(reversed) > len(forward) ||
-			(len(reversed) == len(forward) && unionSize(reversed) > unionSize(forward)) {
-			forward, reversed = reversed, forward
-		}
-		// Winning type within the winning direction.
-		byType := map[string][]relEdgeRow{}
-		for _, e := range forward {
-			byType[e.typ] = append(byType[e.typ], e)
-		}
-		types := make([]string, 0, len(byType))
-		for t := range byType {
-			types = append(types, t)
-		}
-		sort.Slice(types, func(i, j int) bool { // corroboration, then name
-			a, b := byType[types[i]], byType[types[j]]
-			if len(a) != len(b) {
-				return len(a) > len(b)
+			_ = json.Unmarshal([]byte(ev), &e.evidence)
+			if meta != "" && meta != "{}" {
+				_ = json.Unmarshal([]byte(meta), &e.existingMetadata)
 			}
-			ua, ub := unionSize(a), unionSize(b)
-			if ua != ub {
-				return ua > ub
+			if e.existingMetadata == nil {
+				e.existingMetadata = map[string]any{}
 			}
-			return types[i] < types[j]
-		})
-		winner := byType[types[0]]
-
-		// Survivor: smallest id of the winning group (rows are id-sorted,
-		// but the flip above may have reordered — compare explicitly).
-		surv := winner[0]
-		for _, e := range winner[1:] {
-			if e.id < surv.id {
-				surv = e
-			}
+			k := [2]string{e.lo, e.hi}
+			groups[k] = append(groups[k], e)
 		}
-		// One aggregated edge per pair: same-type same-direction duplicates
-		// fold INTO the survivor (evidence unioned); only losing types and
-		// losing directions get archive entries — their evidence trail
-		// stays in metadata, so nothing is silently deleted.
-		losers := make([]string, 0, len(edges))
-		for _, e := range edges {
-			if e.id != surv.id {
-				losers = append(losers, e.id)
-			}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
 		}
 
-		// Aggregated values.
-		evSet := map[string]bool{}
-		var maxStrength *float64
-		for _, e := range winner {
-			for _, c := range e.evidence {
-				evSet[c] = true
-			}
-			if e.strength != nil && (maxStrength == nil || *e.strength > *maxStrength) {
-				s := *e.strength
-				maxStrength = &s
-			}
+		type archEntry struct {
+			Type      string   `json:"type"`
+			Direction string   `json:"direction"`
+			Evidence  []string `json:"evidence_chunk_ids"`
+			Edges     int      `json:"edges"`
 		}
-		union := make([]string, 0, len(evSet))
-		for c := range evSet {
-			union = append(union, c)
-		}
-		sort.Strings(union)
+		for k, edges := range groups {
+			if len(edges) < 2 {
+				continue // single-edge pair: untouched (idempotency)
+			}
+			rep.PairsTouched++
 
-		// Archive: merge existing superseded_types with the new losers —
-		// from ALL group members (W1 fix): a re-elected survivor must
-		// inherit the previous survivor's archive, or the evidence trail
-		// dies with the deleted old survivor on re-run after sync.
-		arch := map[[2]string]*archEntry{}
-		for _, member := range edges {
-			raw, ok := member.existingMetadata["superseded_types"]
-			if !ok {
-				continue
+			forward, reversed := []relEdgeRow{}, []relEdgeRow{}
+			for _, e := range edges {
+				if e.src == k[0] && e.tgt == k[1] {
+					forward = append(forward, e)
+				} else {
+					reversed = append(reversed, e)
+				}
 			}
-			arr, ok := raw.([]any)
-			if !ok {
-				continue
+			// Direction arbitration: corroboration = (edge count, evidence
+			// union size); tie keeps the canonical least->greatest orientation.
+			// After a swap, `forward` holds the majority-direction edges and
+			// the survivor keeps that stored direction.
+			if len(reversed) > len(forward) ||
+				(len(reversed) == len(forward) && unionSize(reversed) > unionSize(forward)) {
+				forward, reversed = reversed, forward
 			}
-			for _, it := range arr {
-				m, _ := it.(map[string]any)
-				if m == nil {
+			// Winning type within the winning direction.
+			byType := map[string][]relEdgeRow{}
+			for _, e := range forward {
+				byType[e.typ] = append(byType[e.typ], e)
+			}
+			types := make([]string, 0, len(byType))
+			for t := range byType {
+				types = append(types, t)
+			}
+			sort.Slice(types, func(i, j int) bool { // corroboration, then name
+				a, b := byType[types[i]], byType[types[j]]
+				if len(a) != len(b) {
+					return len(a) > len(b)
+				}
+				ua, ub := unionSize(a), unionSize(b)
+				if ua != ub {
+					return ua > ub
+				}
+				return types[i] < types[j]
+			})
+			winner := byType[types[0]]
+
+			// Survivor: smallest id of the winning group (rows are id-sorted,
+			// but the flip above may have reordered — compare explicitly).
+			surv := winner[0]
+			for _, e := range winner[1:] {
+				if e.id < surv.id {
+					surv = e
+				}
+			}
+			// One aggregated edge per pair: same-type same-direction duplicates
+			// fold INTO the survivor (evidence unioned); only losing types and
+			// losing directions get archive entries — their evidence trail
+			// stays in metadata, so nothing is silently deleted.
+			losers := make([]string, 0, len(edges))
+			for _, e := range edges {
+				if e.id != surv.id {
+					losers = append(losers, e.id)
+				}
+			}
+
+			// Aggregated values.
+			evSet := map[string]bool{}
+			var maxStrength *float64
+			for _, e := range winner {
+				for _, c := range e.evidence {
+					evSet[c] = true
+				}
+				if e.strength != nil && (maxStrength == nil || *e.strength > *maxStrength) {
+					s := *e.strength
+					maxStrength = &s
+				}
+			}
+			union := make([]string, 0, len(evSet))
+			for c := range evSet {
+				union = append(union, c)
+			}
+			sort.Strings(union)
+
+			// Archive: merge existing superseded_types with the new losers —
+			// from ALL group members (W1 fix): a re-elected survivor must
+			// inherit the previous survivor's archive, or the evidence trail
+			// dies with the deleted old survivor on re-run after sync.
+			arch := map[[2]string]*archEntry{}
+			for _, member := range edges {
+				raw, ok := member.existingMetadata["superseded_types"]
+				if !ok {
 					continue
 				}
-				t, _ := m["type"].(string)
-				d, _ := m["direction"].(string)
-				if t == "" {
+				arr, ok := raw.([]any)
+				if !ok {
 					continue
 				}
-				key := [2]string{t, d}
-				e := arch[key]
-				if e == nil {
-					e = &archEntry{Type: t, Direction: d, Evidence: []string{}}
-					arch[key] = e
-				}
-				seen := map[string]bool{}
-				for _, c := range e.Evidence {
-					seen[c] = true
-				}
-				if evs, ok := m["evidence_chunk_ids"].([]any); ok {
-					for _, c := range evs {
-						if s, ok := c.(string); ok && !seen[s] {
-							e.Evidence = append(e.Evidence, s)
-							seen[s] = true
+				for _, it := range arr {
+					m, _ := it.(map[string]any)
+					if m == nil {
+						continue
+					}
+					t, _ := m["type"].(string)
+					d, _ := m["direction"].(string)
+					if t == "" {
+						continue
+					}
+					key := [2]string{t, d}
+					e := arch[key]
+					if e == nil {
+						e = &archEntry{Type: t, Direction: d, Evidence: []string{}}
+						arch[key] = e
+					}
+					seen := map[string]bool{}
+					for _, c := range e.Evidence {
+						seen[c] = true
+					}
+					if evs, ok := m["evidence_chunk_ids"].([]any); ok {
+						for _, c := range evs {
+							if s, ok := c.(string); ok && !seen[s] {
+								e.Evidence = append(e.Evidence, s)
+								seen[s] = true
+							}
 						}
 					}
-				}
-				if n, ok := m["edges"].(float64); ok {
-					e.Edges += int(n)
-				}
-			}
-		}
-		addArch := func(group []relEdgeRow, direction string) {
-			byT := map[string][]relEdgeRow{}
-			for _, e := range group {
-				byT[e.typ] = append(byT[e.typ], e)
-			}
-			ts := make([]string, 0, len(byT))
-			for t := range byT {
-				ts = append(ts, t)
-			}
-			sort.Strings(ts)
-			for _, t := range ts {
-				g := byT[t]
-				key := [2]string{t, direction}
-				e := arch[key]
-				if e == nil {
-					e = &archEntry{Type: t, Direction: direction, Evidence: []string{}}
-					arch[key] = e
-				}
-				seen := map[string]bool{}
-				for _, c := range e.Evidence {
-					seen[c] = true
-				}
-				for _, ed := range g {
-					for _, c := range ed.evidence {
-						if !seen[c] {
-							seen[c] = true
-							e.Evidence = append(e.Evidence, c)
-						}
+					if n, ok := m["edges"].(float64); ok {
+						e.Edges += int(n)
 					}
 				}
-				e.Edges += len(g)
-				sort.Strings(e.Evidence)
 			}
-		}
-		for _, t := range types[1:] {
-			addArch(byType[t], "as_is")
-		}
-		addArch(reversed, "reversed")
-		if len(reversed) > 0 {
-			rep.DirectionFlips++
-		}
-
-		archList := make([]archEntry, 0, len(arch))
-		for _, e := range arch {
-			archList = append(archList, *e)
-		}
-		sort.Slice(archList, func(i, j int) bool {
-			if archList[i].Type != archList[j].Type {
-				return archList[i].Type < archList[j].Type
+			addArch := func(group []relEdgeRow, direction string) {
+				byT := map[string][]relEdgeRow{}
+				for _, e := range group {
+					byT[e.typ] = append(byT[e.typ], e)
+				}
+				ts := make([]string, 0, len(byT))
+				for t := range byT {
+					ts = append(ts, t)
+				}
+				sort.Strings(ts)
+				for _, t := range ts {
+					g := byT[t]
+					key := [2]string{t, direction}
+					e := arch[key]
+					if e == nil {
+						e = &archEntry{Type: t, Direction: direction, Evidence: []string{}}
+						arch[key] = e
+					}
+					seen := map[string]bool{}
+					for _, c := range e.Evidence {
+						seen[c] = true
+					}
+					for _, ed := range g {
+						for _, c := range ed.evidence {
+							if !seen[c] {
+								seen[c] = true
+								e.Evidence = append(e.Evidence, c)
+							}
+						}
+					}
+					e.Edges += len(g)
+					sort.Strings(e.Evidence)
+				}
 			}
-			return archList[i].Direction < archList[j].Direction
-		})
-		for _, e := range archList {
-			rep.SupersededTypeEntries++
-			rep.BySupersededType[e.Type+"/"+e.Direction]++
-		}
-		archJSON, err := json.Marshal(archList)
-		if err != nil {
-			return rep, err
-		}
-		survMeta := map[string]any{}
-		for k, v := range surv.existingMetadata {
-			survMeta[k] = v
-		}
-		var archAny any
-		_ = json.Unmarshal(archJSON, &archAny)
-		survMeta["superseded_types"] = archAny
-		metaJSON, err := json.Marshal(survMeta)
-		if err != nil {
-			return rep, err
-		}
+			for _, t := range types[1:] {
+				addArch(byType[t], "as_is")
+			}
+			addArch(reversed, "reversed")
+			if len(reversed) > 0 {
+				rep.DirectionFlips++
+			}
 
-		if _, err := tx.Exec(ctx, `
-			UPDATE processing_entity_relationships
+			archList := make([]archEntry, 0, len(arch))
+			for _, e := range arch {
+				archList = append(archList, *e)
+			}
+			sort.Slice(archList, func(i, j int) bool {
+				if archList[i].Type != archList[j].Type {
+					return archList[i].Type < archList[j].Type
+				}
+				return archList[i].Direction < archList[j].Direction
+			})
+			for _, e := range archList {
+				rep.SupersededTypeEntries++
+				rep.BySupersededType[e.Type+"/"+e.Direction]++
+			}
+			archJSON, err := json.Marshal(archList)
+			if err != nil {
+				return err
+			}
+			survMeta := map[string]any{}
+			for k, v := range surv.existingMetadata {
+				survMeta[k] = v
+			}
+			var archAny any
+			_ = json.Unmarshal(archJSON, &archAny)
+			survMeta["superseded_types"] = archAny
+			metaJSON, err := json.Marshal(survMeta)
+			if err != nil {
+				return err
+			}
+
+			if _, err := tx.Exec(ctx, `
+			UPDATE processing_entity_relationships r
 			SET evidence_chunk_ids = $2::jsonb, strength = $3, metadata = $4::jsonb
-			WHERE id = $1::uuid`,
-			surv.id, "["+joinQuoted(union)+"]", maxStrength, string(metaJSON)); err != nil {
-			return rep, fmt.Errorf("relations survivor %s: %w", surv.id, err)
+			FROM processing_snapshots s
+			WHERE r.snapshot_id = s.id AND s.active AND r.id = $1::uuid`,
+				surv.id, "["+joinQuoted(union)+"]", maxStrength, string(metaJSON)); err != nil {
+				return fmt.Errorf("relations survivor %s: %w", surv.id, err)
+			}
+			kgHook("kg_consolidate_relations:after_survivor_update")
+
+			if _, err := tx.Exec(ctx, `
+			DELETE FROM processing_entity_relationships r
+			USING processing_snapshots s
+			WHERE r.snapshot_id = s.id AND s.active AND r.id = ANY($1::uuid[])`,
+				losers); err != nil {
+				return fmt.Errorf("relations losers: %w", err)
+			}
 		}
 
-		if _, err := tx.Exec(ctx, `
-			DELETE FROM processing_entity_relationships WHERE id = ANY($1::uuid[])`,
-			losers); err != nil {
-			return rep, fmt.Errorf("relations losers: %w", err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return rep, fmt.Errorf("relations consolidate commit: %w", err)
+		return nil
+	})
+	if err != nil {
+		return rep, err
 	}
 	return rep, nil
 }

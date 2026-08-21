@@ -24,6 +24,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // EntityAliasReport is the accounting of one alias-binding run.
@@ -59,9 +62,27 @@ func (r *Repo) BindFlexionAliases(ctx context.Context) (EntityAliasReport, error
 	return r.entityAlias(ctx, true)
 }
 
+type kgSQLRunner interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
 func (r *Repo) entityAlias(ctx context.Context, apply bool) (EntityAliasReport, error) {
+	if apply {
+		var out EntityAliasReport
+		err := r.withKGMaintenanceTx(ctx, "kg_bind_flexion_aliases", func(tx pgx.Tx) error {
+			var err error
+			out, err = entityAliasOn(ctx, tx, true)
+			return err
+		})
+		return out, err
+	}
+	return entityAliasOn(ctx, r.pool, false)
+}
+
+func entityAliasOn(ctx context.Context, db kgSQLRunner, apply bool) (EntityAliasReport, error) {
 	rep := EntityAliasReport{}
-	rows, err := r.pool.Query(ctx, `
+	rows, err := db.Query(ctx, `
 		SELECT e.id::text, coalesce(e.canonical_form, e.text),
 		       count(DISTINCT m.chunk_id) AS chunks, e.alias_of::text
 		FROM processing_entities e
@@ -145,18 +166,25 @@ func (r *Repo) entityAlias(ctx context.Context, apply bool) (EntityAliasReport, 
 	if !apply || len(todo) == 0 {
 		return rep, nil
 	}
-	for _, b := range todo {
-		if _, err := r.pool.Exec(ctx, `
-			UPDATE processing_entities SET alias_of = $2::uuid WHERE id = $1::uuid`,
+	for i, b := range todo {
+		if _, err := db.Exec(ctx, `
+			UPDATE processing_entities e SET alias_of = $2::uuid
+			FROM processing_snapshots s
+			WHERE e.snapshot_id = s.id AND s.active AND e.id = $1::uuid`,
 			b.variant, b.survivor); err != nil {
 			return rep, fmt.Errorf("alias bind %s: %w", b.variant, err)
+		}
+		if i == 0 {
+			kgHook("kg_bind_flexion_aliases:after_first_binding")
 		}
 	}
 	// W3: a re-elected survivor must not keep its own stale alias_of from
 	// a previous run — the family lead node cannot be an alias of anything.
-	if _, err := r.pool.Exec(ctx, `
-		UPDATE processing_entities SET alias_of = NULL
-		WHERE id = ANY($1::uuid[]) AND alias_of IS NOT NULL`,
+	if _, err := db.Exec(ctx, `
+		UPDATE processing_entities e SET alias_of = NULL
+		FROM processing_snapshots s
+		WHERE e.snapshot_id = s.id AND s.active
+		  AND e.id = ANY($1::uuid[]) AND e.alias_of IS NOT NULL`,
 		survivorIDs); err != nil {
 		return rep, fmt.Errorf("alias clear survivor: %w", err)
 	}
@@ -192,29 +220,37 @@ func (r *Repo) KGEntityFamilyForms(ctx context.Context, entityID string) ([]stri
 // duplicates are then resolved by -consolidate-relations (idempotent —
 // this must run BEFORE the consolidation apply).
 func (r *Repo) RepointAliasEdges(ctx context.Context) error {
-	if _, err := r.pool.Exec(ctx, `
-		UPDATE processing_entity_relationships r
-		SET source_entity_id = s.id
-		FROM processing_entities v
-		JOIN processing_entities s ON s.id = v.alias_of
-		WHERE r.source_entity_id = v.id`); err != nil {
-		return fmt.Errorf("repoint source: %w", err)
-	}
-	if _, err := r.pool.Exec(ctx, `
-		UPDATE processing_entity_relationships r
-		SET target_entity_id = s.id
-		FROM processing_entities v
-		JOIN processing_entities s ON s.id = v.alias_of
-		WHERE r.target_entity_id = v.id`); err != nil {
-		return fmt.Errorf("repoint target: %w", err)
-	}
-	// W1 (review): intra-family edges (variant→survivor) become self-loops
-	// (survivor→survivor) after the re-points. No schema constraint forbids
-	// them and they serve as API noise (source_form = target_form). Delete.
-	if _, err := r.pool.Exec(ctx, `
-		DELETE FROM processing_entity_relationships
-		WHERE source_entity_id = target_entity_id`); err != nil {
-		return fmt.Errorf("repoint self-loop cleanup: %w", err)
-	}
-	return nil
+	return r.withKGMaintenanceTx(ctx, "kg_repoint_alias_edges", func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			UPDATE processing_entity_relationships r
+			SET source_entity_id = s.id
+			FROM processing_entities v
+			JOIN processing_entities s ON s.id = v.alias_of
+			WHERE r.source_entity_id = v.id
+			  AND EXISTS (SELECT 1 FROM processing_snapshots sn WHERE sn.id = r.snapshot_id AND sn.active)`); err != nil {
+			return fmt.Errorf("repoint source: %w", err)
+		}
+		kgHook("kg_repoint_alias_edges:after_source")
+		if _, err := tx.Exec(ctx, `
+			UPDATE processing_entity_relationships r
+			SET target_entity_id = s.id
+			FROM processing_entities v
+			JOIN processing_entities s ON s.id = v.alias_of
+			WHERE r.target_entity_id = v.id
+			  AND EXISTS (SELECT 1 FROM processing_snapshots sn WHERE sn.id = r.snapshot_id AND sn.active)`); err != nil {
+			return fmt.Errorf("repoint target: %w", err)
+		}
+		kgHook("kg_repoint_alias_edges:after_target")
+		// W1 (review): intra-family edges (variant→survivor) become self-loops
+		// (survivor→survivor) after the re-points. No schema constraint forbids
+		// them and they serve as API noise (source_form = target_form). Delete.
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM processing_entity_relationships r
+			USING processing_snapshots s
+			WHERE r.snapshot_id = s.id AND s.active
+			  AND r.source_entity_id = r.target_entity_id`); err != nil {
+			return fmt.Errorf("repoint self-loop cleanup: %w", err)
+		}
+		return nil
+	})
 }

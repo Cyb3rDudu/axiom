@@ -92,13 +92,9 @@ func (r *Repo) ConsolidateEntities(ctx context.Context) (int, error) {
 // consolidateActiveEntities is the proven merge (#193, c1e0e82 — per-form
 // atomic batches, set-based re-points, deterministic survivor).
 func (r *Repo) consolidateActiveEntities(ctx context.Context) (int, error) {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return 0, fmt.Errorf("consolidate begin: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	rows, err := tx.Query(ctx, `
+	merged := 0
+	err := r.withKGMaintenanceTx(ctx, "kg_consolidate_entities", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
 		WITH forms AS (
 			SELECT coalesce(e.canonical_form, e.text) AS form, e.id,
 			       count(DISTINCT m.chunk_id) AS chunks
@@ -117,75 +113,87 @@ func (r *Repo) consolidateActiveEntities(ctx context.Context) (int, error) {
 		FROM ranked
 		WHERE rn > 1
 		ORDER BY 1, 2`)
-	if err != nil {
-		return 0, fmt.Errorf("consolidate pairs: %w", err)
-	}
-	var survivors, losers []string
-	for rows.Next() {
-		var sv, lo string
-		if err := rows.Scan(&sv, &lo); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("consolidate scan: %w", err)
+		if err != nil {
+			return fmt.Errorf("consolidate pairs: %w", err)
 		}
-		survivors = append(survivors, sv)
-		losers = append(losers, lo)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-	if len(losers) == 0 {
-		if err := tx.Commit(ctx); err != nil {
-			return 0, err
+		var survivors, losers []string
+		for rows.Next() {
+			var sv, lo string
+			if err := rows.Scan(&sv, &lo); err != nil {
+				rows.Close()
+				return fmt.Errorf("consolidate scan: %w", err)
+			}
+			survivors = append(survivors, sv)
+			losers = append(losers, lo)
 		}
-		return 0, nil
-	}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if len(losers) == 0 {
+			return nil
+		}
+		if err := archiveSupersededEntitiesTx(ctx, tx, survivors, losers); err != nil {
+			return fmt.Errorf("consolidate archive losers: %w", err)
+		}
+		kgHook("kg_consolidate_entities:after_archive")
 
-	// Mentions move per-pair (the unique key's leading column indexes the
-	// lookup): a verbatim duplicate (same chunk+span) already on the
-	// survivor — from a PRIOR pair of this run or from same-snapshot
-	// same-form duplicates (3.5k live collisions) — is skipped; the
-	// redundant loser copy dies with the loser.
-	for i := range losers {
-		if _, err := tx.Exec(ctx, `
+		// Mentions move per-pair (the unique key's leading column indexes the
+		// lookup): a verbatim duplicate (same chunk+span) already on the
+		// survivor — from a PRIOR pair of this run or from same-snapshot
+		// same-form duplicates (3.5k live collisions) — is skipped; the
+		// redundant loser copy dies with the loser.
+		for i := range losers {
+			if _, err := tx.Exec(ctx, `
 			UPDATE processing_entity_mentions m SET entity_id = $1::uuid
 			WHERE m.entity_id = $2::uuid
+			  AND EXISTS (
+			    SELECT 1 FROM processing_entities e
+			    JOIN processing_snapshots s ON s.id = e.snapshot_id AND s.active
+			    WHERE e.id = m.entity_id)
 			  AND NOT EXISTS (
 			    SELECT 1 FROM processing_entity_mentions ex
 			    WHERE ex.entity_id = $1::uuid
 			      AND ex.chunk_id = m.chunk_id
 			      AND ex.start_char = m.start_char
 			      AND ex.end_char = m.end_char)`,
-			survivors[i], losers[i]); err != nil {
-			return 0, fmt.Errorf("consolidate move mentions %s: %w", losers[i], err)
+				survivors[i], losers[i]); err != nil {
+				return fmt.Errorf("consolidate move mentions %s: %w", losers[i], err)
+			}
 		}
-	}
-	// Relations re-point on both endpoints (set-based; the table has no
-	// endpoint indexes, per-pair loops would seq-scan per loser).
-	if _, err := tx.Exec(ctx, `
+		// Relations re-point on both endpoints (set-based; the table has no
+		// endpoint indexes, per-pair loops would seq-scan per loser).
+		kgHook("kg_consolidate_entities:after_mentions")
+		if _, err := tx.Exec(ctx, `
 		UPDATE processing_entity_relationships r SET source_entity_id = v.surv
 		FROM (SELECT unnest($1::uuid[]) AS surv, unnest($2::uuid[]) AS lose) v
-		WHERE r.source_entity_id = v.lose`,
-		survivors, losers); err != nil {
-		return 0, fmt.Errorf("consolidate repoint source: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
+		WHERE r.source_entity_id = v.lose
+		  AND EXISTS (SELECT 1 FROM processing_snapshots s WHERE s.id = r.snapshot_id AND s.active)`,
+			survivors, losers); err != nil {
+			return fmt.Errorf("consolidate repoint source: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
 		UPDATE processing_entity_relationships r SET target_entity_id = v.surv
 		FROM (SELECT unnest($1::uuid[]) AS surv, unnest($2::uuid[]) AS lose) v
-		WHERE r.target_entity_id = v.lose`,
-		survivors, losers); err != nil {
-		return 0, fmt.Errorf("consolidate repoint target: %w", err)
-	}
-	// Losers die AFTER their rows moved (the entities CASCADE would
-	// otherwise destroy still-referenced mentions/relations).
-	if _, err := tx.Exec(ctx, `
+		WHERE r.target_entity_id = v.lose
+		  AND EXISTS (SELECT 1 FROM processing_snapshots s WHERE s.id = r.snapshot_id AND s.active)`,
+			survivors, losers); err != nil {
+			return fmt.Errorf("consolidate repoint target: %w", err)
+		}
+		// Losers die AFTER their rows moved (the entities CASCADE would
+		// otherwise destroy still-referenced mentions/relations).
+		kgHook("kg_consolidate_entities:before_delete")
+		if _, err := tx.Exec(ctx, `
 		DELETE FROM processing_entities e
-		WHERE e.id = ANY($1::uuid[])`, losers); err != nil {
-		return 0, fmt.Errorf("consolidate delete losers: %w", err)
+		USING processing_snapshots s
+		WHERE e.snapshot_id = s.id AND s.active AND e.id = ANY($1::uuid[])`, losers); err != nil {
+			return fmt.Errorf("consolidate delete losers: %w", err)
+		}
+		merged = len(losers)
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("consolidate commit: %w", err)
-	}
-	return len(losers), nil
+	return merged, nil
 }
