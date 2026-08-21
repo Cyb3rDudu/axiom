@@ -54,12 +54,19 @@ func aliasStem(form string) string {
 
 // EntityAliasCounts reports the blast radius without mutating.
 func (r *Repo) EntityAliasCounts(ctx context.Context) (EntityAliasReport, error) {
-	return r.bindByGrouper(ctx, aliasStem, false)
+	// Pool-based dry-run (no lock needed — no mutation).
+	return r.bindByGrouperPool(ctx, aliasStem, false)
 }
 
 // BindFlexionAliases applies the alias links.
 func (r *Repo) BindFlexionAliases(ctx context.Context) (EntityAliasReport, error) {
-	return r.bindByGrouper(ctx, aliasStem, true)
+	rep := EntityAliasReport{}
+	err := r.withKGMaintenanceTx(ctx, "kg_bind_flexion_aliases", func(tx pgx.Tx) error {
+		var e error
+		rep, e = r.bindByGrouperOn(ctx, tx, aliasStem, true)
+		return e
+	})
+	return rep, err
 }
 
 type kgSQLRunner interface {
@@ -266,16 +273,28 @@ func (r *Repo) RepointAliasEdges(ctx context.Context) error {
 // but new syncs re-create them, and between the auto-trigger and the
 // alias binding, identical forms sit unbound. Idempotent.
 func (r *Repo) BindExactFormAliases(ctx context.Context) (EntityAliasReport, error) {
-	return r.bindByGrouper(ctx, func(form string) string {
-		return form // exact: group key IS the form
-	}, true)
+	rep := EntityAliasReport{}
+	err := r.withKGMaintenanceTx(ctx, "kg_bind_exact_form_aliases", func(tx pgx.Tx) error {
+		var e error
+		rep, e = r.bindByGrouperOn(ctx, tx, func(form string) string {
+			return form
+		}, true)
+		return e
+	})
+	return rep, err
 }
 
 // BindExactFormAliasesDryRun counts without mutating.
 func (r *Repo) BindExactFormAliasesDryRun(ctx context.Context) (EntityAliasReport, error) {
-	return r.bindByGrouper(ctx, func(form string) string {
+	// Dry-run: pool reads (no lock needed — no mutation).
+	return r.bindByGrouperPool(ctx, func(form string) string {
 		return form
 	}, false)
+}
+
+// bindByGrouperPool is the pool-based wrapper for dry-run paths.
+func (r *Repo) bindByGrouperPool(ctx context.Context, key func(string) string, apply bool) (EntityAliasReport, error) {
+	return r.bindByGrouperOn(ctx, r.pool, key, apply)
 }
 
 // bindByGrouper is the shared binding engine: group entities by a key
@@ -295,9 +314,9 @@ func (r *Repo) BindExactFormAliasesDryRun(ctx context.Context) (EntityAliasRepor
 //     typing pass promotes generics to CONCEPT, so a CONCEPT survivor
 //     can absorb an already-CONCEPT variant, and a null-type variant
 //     can join any family — the extractor leaves type empty often).
-func (r *Repo) bindByGrouper(ctx context.Context, key func(string) string, apply bool) (EntityAliasReport, error) {
+func (r *Repo) bindByGrouperOn(ctx context.Context, db kgSQLRunner, key func(string) string, apply bool) (EntityAliasReport, error) {
 	rep := EntityAliasReport{}
-	rows, err := r.pool.Query(ctx, `
+	rows, err := db.Query(ctx, `
 		SELECT e.id::text, coalesce(e.canonical_form, e.text),
 		       count(DISTINCT m.chunk_id) AS chunks, e.alias_of::text,
 		       coalesce(e.type, ''), e.snapshot_id::text
@@ -380,15 +399,21 @@ func (r *Repo) bindByGrouper(ctx context.Context, key func(string) string, apply
 	if !apply {
 		return rep, nil
 	}
-	for _, b := range todo {
-		if _, err := r.pool.Exec(ctx, `
-			UPDATE processing_entities SET alias_of = $2::uuid WHERE id = $1::uuid`,
+	for i, b := range todo {
+		if _, err := db.Exec(ctx, `
+			UPDATE processing_entities e SET alias_of = $2::uuid
+			FROM processing_snapshots s
+			WHERE e.snapshot_id = s.id AND s.active AND e.id = $1::uuid`,
 			b.variant, b.survivor); err != nil {
 			return rep, fmt.Errorf("alias bind %s: %w", b.variant, err)
 		}
+		if i == 0 {
+			kgHook("kg_bind_flexion_aliases:after_first_binding")
+		}
 	}
+	// W3: re-elected survivor clears its own stale alias_of.
 	if len(survivorIDs) > 0 {
-		if _, err := r.pool.Exec(ctx, `
+		if _, err := db.Exec(ctx, `
 			UPDATE processing_entities SET alias_of = NULL
 			WHERE id = ANY($1::uuid[]) AND alias_of IS NOT NULL`,
 			survivorIDs); err != nil {

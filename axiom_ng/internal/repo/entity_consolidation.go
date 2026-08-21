@@ -70,7 +70,7 @@ func (r *Repo) duplicateActiveForms(ctx context.Context) (int, error) {
 	var n int
 	if err := r.pool.QueryRow(ctx, `
 		SELECT count(*) FROM (
-			SELECT coalesce(e.canonical_form, e.text) AS form
+			SELECT lower(coalesce(e.canonical_form, e.text)) AS form
 			FROM processing_entities e
 			JOIN processing_snapshots s ON s.id = e.snapshot_id AND s.active
 			GROUP BY 1 HAVING count(*) > 1
@@ -96,7 +96,7 @@ func (r *Repo) consolidateActiveEntities(ctx context.Context) (int, error) {
 	err := r.withKGMaintenanceTx(ctx, "kg_consolidate_entities", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 		WITH forms AS (
-			SELECT coalesce(e.canonical_form, e.text) AS form, e.id,
+			SELECT lower(coalesce(e.canonical_form, e.text)) AS form, e.id,
 			       count(DISTINCT m.chunk_id) AS chunks
 			FROM processing_entities e
 			JOIN processing_snapshots s ON s.id = e.snapshot_id AND s.active
@@ -198,20 +198,6 @@ func (r *Repo) consolidateActiveEntities(ctx context.Context) (int, error) {
 	return merged, nil
 }
 
-// MergeExactDuplicates (#199 W3 directive): merges EXACT same-form entities
-// among active snapshots using the #197 merge semantics (mentions move,
-// relations re-point, losers DELETED with archive trail) — NOT the alias
-// binding path. This runs in the W6 rebuild sequence BEFORE the guarded
-// alias binding. 11,817 exact-duplicate groups in production.
-//
-// The merge is the #197 entity consolidation restricted to EXACT same-form
-// groups (no fuzzy, no flexion). Survivor by #197 discipline: most distinct
-// chunks, tie -> smallest id. Mentions move to survivor (verbatim dedup
-// via NOT EXISTS guard — same-snapshot duplicates with identical spans
-// exist). Relations re-point on both endpoints. Losers deleted AFTER
-// their data moved (CASCADE would destroy it).
-//
-// Idempotent: after merge, no same-form groups remain among actives.
 func (r *Repo) MergeExactDuplicates(ctx context.Context) (RelationConsolidationReport, error) {
 	rep := RelationConsolidationReport{}
 	rows, err := r.pool.Query(ctx, `
