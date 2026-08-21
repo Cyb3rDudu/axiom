@@ -136,6 +136,54 @@ def _save_extracted_images(media_dir: Path, out_dir: Path) -> Dict[str, str]:
     return mapping
 
 
+def _normalized_epub_copy(epub_path: Path, out_dir: Path) -> Path:
+    """Runner-Härtung Z3: pandoc-sichere Paketansicht (OPF an der Wurzel).
+
+    Bewiesene Klasse (Jobs CVM26KLA/FFMTJA3S, pandoc-Fehler wörtlich:
+    'No entry on path: OEBPS/../NL$…/OEBPS/Text/Cover.xhtml'): pandoc löst
+    OPF-hrefs korrekt OPF-relativ auf, normalisiert die Pfadsegmente aber
+    NICHT — der literal gejointe Pfad mit '..' existiert im Zip nie, obwohl
+    alle 105 Manifest-Ziele nach POSIX-Normalisierung existieren (bewiesen).
+    Die Kopie legt das OPF an die ARCHIV-WURZEL ('axiom_content.opf',
+    container.xml zeigt dorthin) und rewritet href/src auf die literalen
+    Archiv-Namen — Wurzel + Name braucht kein '..'. Fast-Path: ohne '..'
+    im OPF wird der Original-Pfad zurückgegeben."""
+    import posixpath
+    import zipfile
+
+    with zipfile.ZipFile(epub_path) as z:
+        names = set(z.namelist())
+        opf = next((n for n in names if n.lower().endswith(".opf")), None)
+        if opf is None:
+            return epub_path
+        src = z.read(opf).decode("utf-8", "replace")
+        if "../" not in src:
+            return epub_path
+        opf_dir = posixpath.dirname(opf)
+
+        def _norm_attr(m: "re.Match[str]") -> str:
+            raw = m.group(2)
+            fixed = posixpath.normpath(posixpath.join(opf_dir, raw))
+            if fixed == raw or fixed not in names:
+                return m.group(0)  # nie Kaputtes erfinden — nur reale Ziele
+            return f'{m.group(1)}="{fixed}"'
+
+        fixed_src = re.sub(r'(href|src)="([^"]+)"', _norm_attr, src)
+        out = out_dir / ("normalized_" + epub_path.name)
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in z.infolist():
+                if item.filename == opf:
+                    continue  # OPF wandert an die Wurzel (neuer Name)
+                data = z.read(item.filename)
+                if item.filename == "META-INF/container.xml":
+                    data = ('<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">' 
+                            '<rootfiles><rootfile full-path="axiom_content.opf" ' 
+                            'media-type="application/oebps-package+xml"/></rootfiles></container>').encode()
+                zout.writestr(item, data)
+            zout.writestr("axiom_content.opf", fixed_src.encode("utf-8"))
+        return out
+
+
 def _convert_via_pandoc(epub_path: Path, out_md: Path, media_dir: Path) -> None:
     """Shell out to the ``pandoc`` binary: EPUB -> GFM, images into media_dir.
 
@@ -204,8 +252,12 @@ def main() -> int:
     # (not rename), so a cross-filesystem tmp doesn't matter.
     media_tmp = Path(tempfile.mkdtemp(prefix="epub_media_"))
     try:
+        # Z3: normalisierte Paketansicht — pandoc stirbt an '..'-OPF-Referenzen
+        norm = _normalized_epub_copy(epub_path, media_tmp)
+        if norm != epub_path:
+            logger.info(f"OPF hrefs normalized for pandoc: {epub_path.name}")
         logger.info(f"Converting {epub_path.name} via pandoc...")
-        _convert_via_pandoc(epub_path, out_md, media_tmp)
+        _convert_via_pandoc(norm, out_md, media_tmp)
 
         markdown = out_md.read_text(encoding="utf-8")
         # Convert EPUB pagebreak landmarks -> {N} markers FIRST (the landmarks

@@ -57,6 +57,20 @@ def _sha256_hex(path: Path) -> str:
 _MD_ESCAPE_RE = re.compile(r"\\(.)")
 
 
+def _drop_link_refs(refs: list[Any]) -> list[Any]:
+    r"""Runner-Härtung Z2: http(s)-Refs sind LINKS, keine Bild-Artefakte.
+
+    Bewiesene Klasse (Job 81d39c05, drei Chunks): die Marker-Ligatur-
+    Fehllesung 'ft'->'!' macht aus Inline-Links Markdown-Bild-Syntax
+    ('Wirtscha!spsychologie … ![spsychologie-aktuell.de\)](http://…)')
+    und der Chunker-Regex übernimmt die externe URL als image_ref — der
+    Persist-Gate blockiert zu Recht (CHUNK_IMAGE_REF_UNRESOLVED). Externe
+    URLs können nie lokale Artefakte sein; sie fallen HIER aus den Refs.
+    Lokale Refs bleiben unberührt — das Gate bleibt strikt."""
+    return [r for r in (refs or [])
+            if not str(r.get("path", r) if isinstance(r, dict) else r).startswith(("http://", "https://"))]
+
+
 def _normalize_image_refs(refs: Any) -> list[str]:
     """Normalize the existing chunker's image_refs (list of dicts with
     'path'/'alt_text'/'position') to plain string refs (contract §11).
@@ -943,7 +957,10 @@ def _real_pipeline(
         cmd, cwd=str(Path(__file__).resolve().parent.parent), capture_output=True, text=True, check=False
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"{convert} failed: {proc.stderr[-500:]}")
+        from axiom_ng_runner.compute_core.pdf_worker.__main__ import _classify_child_failure
+        klass = _classify_child_failure(proc.returncode)
+        detail = (klass + " | ") if klass else ""
+        raise RuntimeError(f"{convert} failed: {detail}{proc.stderr[-500:]}")
 
     # Parse the pdf_worker JSON result for the image_mapping
     # ({original_marker_filename → saved_filename}).
@@ -1014,7 +1031,7 @@ def _real_pipeline(
     # path (e.g. 'media/cover.png'), but image_mapping keys are basenames.
     for c in chunk_dicts:
         meta = c.get("metadata", {}) or {}
-        raw_refs = meta.get("image_refs", []) or []
+        raw_refs = _drop_link_refs(meta.get("image_refs", []) or [])
         normalized: list[str] = []
         for r in raw_refs:
             if isinstance(r, dict):
