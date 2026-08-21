@@ -259,3 +259,56 @@ func TestIT_ConsolidateEntities(t *testing.T) {
 		t.Fatalf("re-run must be a no-op, merged %d", merged2)
 	}
 }
+
+// C1 fix witness (#199 W3 rebase): the forms CTE now groups by
+// lower(coalesce(canonical_form, text)) — case variants of the same
+// form merge into ONE survivor. Pre-fix: "Management" and "management"
+// were separate groups and stayed separate entities.
+func TestIT_ConsolidateEntitiesCaseVariant(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, snapA := kgSeedSnapshot(t, lr, "Case Buch A", "CVATT_A")
+	_, snapB := kgSeedSnapshot(t, lr, "Case Buch B", "CVATT_B")
+
+	// Same concept, different casing across documents.
+	entUpper, _ := kgSeedEntity(t, lr, snapA, "Management", 3)
+	entLower, _ := kgSeedEntity(t, lr, snapB, "management", 2)
+
+	if _, err := lr.rep.ConsolidateEntities(ctx); err != nil {
+		t.Fatalf("ConsolidateEntities: %v", err)
+	}
+
+	// ONE survivor remains.
+	var n int
+	_ = lr.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_entities e
+		JOIN processing_snapshots s ON s.id=e.snapshot_id AND s.active
+		WHERE lower(coalesce(e.canonical_form, e.text)) = 'management'`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("case variants must merge to 1 survivor, got %d", n)
+	}
+	// The survivor is the one with more chunks (entUpper, 3 > 2).
+	var survivor string
+	_ = lr.pool.QueryRow(ctx, `
+		SELECT id::text FROM processing_entities WHERE id = $1::uuid OR id = $2::uuid
+		ORDER BY (SELECT count(DISTINCT chunk_id) FROM processing_entity_mentions WHERE entity_id = processing_entities.id) DESC
+		LIMIT 1`, entUpper, entLower).Scan(&survivor)
+	if survivor != entUpper {
+		t.Fatalf("survivor must be entUpper (3 chunks), got %s", survivor)
+	}
+	// The loser was archived.
+	var archived int
+	_ = lr.pool.QueryRow(ctx,
+		`SELECT count(*) FROM kg_superseded_entities WHERE loser_entity_id = $1::uuid`,
+		entLower).Scan(&archived)
+	if archived != 1 {
+		t.Fatalf("loser must be archived, got %d", archived)
+	}
+}

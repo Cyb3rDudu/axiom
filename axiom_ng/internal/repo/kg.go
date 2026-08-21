@@ -16,11 +16,12 @@ import (
 
 // KGEntity is a graph entity with its mention footprint.
 type KGEntity struct {
-	ID            string `json:"id"`
-	CanonicalForm string `json:"canonical_form"`
-	Text          string `json:"text"`
-	Type          string `json:"type,omitempty"`
-	Mentions      int    `json:"mentions"` // distinct chunks mentioning it
+	ID            string   `json:"id"`
+	CanonicalForm string   `json:"canonical_form"`
+	Text          string   `json:"text"`
+	Type          string   `json:"type,omitempty"`
+	Mentions      int      `json:"mentions"`        // distinct chunks mentioning it
+	Forms         []string `json:"forms,omitempty"` // family forms (W3: survivor + variants)
 }
 
 // activeEntityCounts CTE: mention counts per entity, only active snapshots.
@@ -103,7 +104,7 @@ func (r *Repo) SearchKGEntities(ctx context.Context, q string, minMentions, limi
 	qRaw := strings.ToLower(strings.TrimSpace(q))
 	rows, err := r.pool.Query(ctx, `
 		SELECT root_entity_id::text, primary_form, primary_text,
-		       coalesce(primary_type, ''), mention_count
+		       coalesce(primary_type, ''), mention_count, forms::text
 		FROM kg_entity_roots
 		WHERE mention_count >= $1
 		  AND ($2 = '' OR normalized_form LIKE '%' || $2 || '%'
@@ -398,9 +399,11 @@ func scanKGEntities(rows pgx.Rows) ([]KGEntity, error) {
 	out := []KGEntity{} // #193 P2: empty slice marshals as [], never null
 	for rows.Next() {
 		var e KGEntity
-		if err := rows.Scan(&e.ID, &e.CanonicalForm, &e.Text, &e.Type, &e.Mentions); err != nil {
+		var formsJSON string
+		if err := rows.Scan(&e.ID, &e.CanonicalForm, &e.Text, &e.Type, &e.Mentions, &formsJSON); err != nil {
 			return nil, err
 		}
+		_ = json.Unmarshal([]byte(formsJSON), &e.Forms)
 		out = append(out, e)
 	}
 	return out, rows.Err()

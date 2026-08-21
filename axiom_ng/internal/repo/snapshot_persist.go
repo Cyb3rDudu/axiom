@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/jackc/pgx/v5"
@@ -341,15 +342,20 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 	}
 
 	// 2b. Entities + mentions.
+	// W5 (#199 S3b): the role/group-noun gate corrects the type AT INGEST —
+	// new books arrive with generic role nouns typed CONCEPT instead of
+	// PERSON/ORGANIZATION. The post-hoc -normalize-entity-types remains as
+	// a migration for existing stock only.
 	entityIDs := make(map[string]string, len(res.Entities))
 	for _, e := range res.Entities {
 		var eid string
+		et := gateEntityType(e.CanonicalForm, e.Text, e.Type)
 		err = tx.QueryRow(ctx, `
 			INSERT INTO processing_entities
 			  (snapshot_id, ref, text, canonical_form, type, description)
 			VALUES ($1,$2,$3,$4,$5,$6)
 			RETURNING id::text`,
-			snapshotID, e.Ref, e.Text, e.CanonicalForm, e.Type, e.Description,
+			snapshotID, e.Ref, e.Text, e.CanonicalForm, et, e.Description,
 		).Scan(&eid)
 		if err != nil {
 			return "", fmt.Errorf("insert entity %s: %w", e.Ref, err)
@@ -578,4 +584,33 @@ func ptrToInt(p *int) any {
 		return nil
 	}
 	return *p
+}
+
+// gateEntityType (#199 W5/S3b): the ingest-side typing gate. Generic
+// role/group nouns (the typing rule lexicon) arrive as CONCEPT regardless
+// of what the extractor claimed — the external tester found stakeholders
+// typed PERSON from the extractor. This is a persistTx gate, not a
+// post-hoc migration: new books are correct from the start.
+func gateEntityType(canonicalForm, text, claimedType string) string {
+	form := canonicalForm
+	if form == "" {
+		form = text
+	}
+	if form == "" {
+		return claimedType
+	}
+	norm := strings.ToLower(strings.Join(strings.Fields(form), " "))
+	for _, role := range typingBareForms {
+		if norm == role {
+			return "CONCEPT"
+		}
+	}
+	// Plural-head check (short forms ending in a role-plural head)
+	for _, head := range typingPluralHeads {
+		if strings.HasSuffix(norm, " "+head) &&
+			(claimedType == "PERSON" || claimedType == "ORGANIZATION") {
+			return "CONCEPT"
+		}
+	}
+	return claimedType
 }

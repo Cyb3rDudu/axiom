@@ -54,12 +54,22 @@ func aliasStem(form string) string {
 
 // EntityAliasCounts reports the blast radius without mutating.
 func (r *Repo) EntityAliasCounts(ctx context.Context) (EntityAliasReport, error) {
-	return r.entityAlias(ctx, false)
+	// Pool-based dry-run (no lock needed — no mutation).
+	return r.bindByGrouperPool(ctx, aliasStem, false)
 }
 
 // BindFlexionAliases applies the alias links.
 func (r *Repo) BindFlexionAliases(ctx context.Context) (EntityAliasReport, error) {
-	return r.entityAlias(ctx, true)
+	rep := EntityAliasReport{}
+	err := r.withKGMaintenanceTx(ctx, "kg_bind_flexion_aliases", func(tx pgx.Tx) error {
+		var e error
+		rep, e = r.bindByGrouperOn(ctx, tx, aliasStem, true)
+		if e != nil {
+			return e
+		}
+		return r.refreshKGReadModelTx(ctx, tx)
+	})
+	return rep, err
 }
 
 type kgSQLRunner interface {
@@ -256,4 +266,252 @@ func (r *Repo) RepointAliasEdges(ctx context.Context) error {
 		}
 		return r.refreshKGReadModelTx(ctx, tx)
 	})
+}
+
+// BindExactFormAliases (#198-3/3b goal 1): groups of IDENTICAL
+// canonical_form among active snapshots bind like flexion families —
+// survivor by #197 discipline (most chunks, tie smallest id), variants
+// get alias_of. This covers the gap the stem-folding cannot: after the
+// #197 entity consolidation, same-form entities should already be one —
+// but new syncs re-create them, and between the auto-trigger and the
+// alias binding, identical forms sit unbound. Idempotent.
+func (r *Repo) BindExactFormAliases(ctx context.Context) (EntityAliasReport, error) {
+	rep := EntityAliasReport{}
+	err := r.withKGMaintenanceTx(ctx, "kg_bind_exact_form_aliases", func(tx pgx.Tx) error {
+		var e error
+		rep, e = r.bindByGrouperOn(ctx, tx, func(form string) string {
+			return form
+		}, true)
+		if e != nil {
+			return e
+		}
+		return r.refreshKGReadModelTx(ctx, tx)
+	})
+	return rep, err
+}
+
+// BindExactFormAliasesDryRun counts without mutating.
+func (r *Repo) BindExactFormAliasesDryRun(ctx context.Context) (EntityAliasReport, error) {
+	// Dry-run: pool reads (no lock needed — no mutation).
+	return r.bindByGrouperPool(ctx, func(form string) string {
+		return form
+	}, false)
+}
+
+// bindByGrouperPool is the pool-based wrapper for dry-run paths.
+func (r *Repo) bindByGrouperPool(ctx context.Context, key func(string) string, apply bool) (EntityAliasReport, error) {
+	return r.bindByGrouperOn(ctx, r.pool, key, apply)
+}
+
+// bindByGrouper is the shared binding engine: group entities by a key
+// function, pick the survivor, bind variants. Used by both the flexion
+// pass (stem key) and the exact-form pass (identity key).
+//
+// #198-3/3b GUARDS (owner directive after satellite deep review):
+//   - PERSON homonym guard: entities typed PERSON bind ONLY within the
+//     same document OR when all family members share the identical full
+//     canonical form AND type PERSON. Cross-document surname-only
+//     PERSONs (schmidt/müller/martin) NEVER bind — they are different
+//     people who happen to share a name.
+//   - Type compatibility: families with incompatible types (CONCEPT +
+//     ORGANIZATION, PERSON + CONCEPT, etc.) stay unbound — the typing
+//     normalization pass resolves types FIRST, then binding revisits.
+//     The only compatible pairs are same-type or type-to-CONCEPT (the
+//     typing pass promotes generics to CONCEPT, so a CONCEPT survivor
+//     can absorb an already-CONCEPT variant, and a null-type variant
+//     can join any family — the extractor leaves type empty often).
+func (r *Repo) bindByGrouperOn(ctx context.Context, db kgSQLRunner, key func(string) string, apply bool) (EntityAliasReport, error) {
+	rep := EntityAliasReport{}
+	rows, err := db.Query(ctx, `
+		SELECT e.id::text, coalesce(e.canonical_form, e.text),
+		       count(DISTINCT m.chunk_id) AS chunks, e.alias_of::text,
+		       coalesce(e.type, ''), e.snapshot_id::text
+		FROM processing_entities e
+		JOIN processing_snapshots s ON s.id = e.snapshot_id AND s.active
+		LEFT JOIN processing_entity_mentions m ON m.entity_id = e.id
+		GROUP BY 1, 2, 4, 5, 6
+		ORDER BY 2`)
+	if err != nil {
+		return rep, fmt.Errorf("alias load: %w", err)
+	}
+	type ent = aliasEnt
+	groups := map[string][]ent{}
+	for rows.Next() {
+		var e ent
+		var ao *string
+		if err := rows.Scan(&e.id, &e.form, &e.chunks, &ao, &e.eType, &e.snapID); err != nil {
+			rows.Close()
+			return rep, fmt.Errorf("alias scan: %w", err)
+		}
+		if ao != nil {
+			e.aliasOf = *ao
+		}
+		k := key(e.form)
+		groups[k] = append(groups[k], e)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return rep, err
+	}
+
+	type binding struct{ variant, survivor string }
+	var todo []binding
+	var survivorIDs []string
+	for _, members := range groups {
+		if len(members) < 2 {
+			continue
+		}
+		// TYPE COMPATIBILITY GUARD: skip families with incompatible types.
+		if !familyTypesCompatible(members) {
+			continue
+		}
+		// PERSON HOMONYM GUARD: cross-document PERSONs never bind unless
+		// they share the identical full canonical form (same person, not
+		// just same surname). We check this AFTER type compatibility.
+		if !familyPersonsBindable(members) {
+			continue
+		}
+		sorted := append([]ent(nil), members...)
+		sort.Slice(sorted, func(i, j int) bool {
+			if sorted[i].chunks != sorted[j].chunks {
+				return sorted[i].chunks > sorted[j].chunks
+			}
+			return sorted[i].id < sorted[j].id
+		})
+		surv := sorted[0]
+		// Skip if every non-survivor member already points at surv.
+		allBound := true
+		for _, m := range members {
+			if m.id != surv.id && m.aliasOf != surv.id {
+				allBound = false
+				break
+			}
+		}
+		if allBound && surv.aliasOf == "" {
+			rep.AlreadyBound++
+			continue
+		}
+		rep.Families++
+		survivorIDs = append(survivorIDs, surv.id)
+		for _, m := range members {
+			if m.id == surv.id || m.aliasOf == surv.id {
+				continue
+			}
+			todo = append(todo, binding{m.id, surv.id})
+		}
+	}
+	rep.VariantsLinked = len(todo)
+
+	if !apply {
+		return rep, nil
+	}
+	for i, b := range todo {
+		if _, err := db.Exec(ctx, `
+			UPDATE processing_entities e SET alias_of = $2::uuid
+			FROM processing_snapshots s
+			WHERE e.snapshot_id = s.id AND s.active AND e.id = $1::uuid`,
+			b.variant, b.survivor); err != nil {
+			return rep, fmt.Errorf("alias bind %s: %w", b.variant, err)
+		}
+		if i == 0 {
+			kgHook("kg_bind_flexion_aliases:after_first_binding")
+		}
+	}
+	// W3: re-elected survivor clears its own stale alias_of.
+	if len(survivorIDs) > 0 {
+		if _, err := db.Exec(ctx, `
+			UPDATE processing_entities SET alias_of = NULL
+			WHERE id = ANY($1::uuid[]) AND alias_of IS NOT NULL`,
+			survivorIDs); err != nil {
+			return rep, fmt.Errorf("alias clear survivor: %w", err)
+		}
+	}
+	return rep, nil
+}
+
+// BindAllAliases runs exact-form binding THEN flexion binding (the
+// flexion pass may connect families the exact pass created). Runbook:
+// -bind-all-aliases → -normalize-entity-types → -repoint-alias-edges →
+// -consolidate-relations --apply.
+func (r *Repo) BindAllAliases(ctx context.Context) (EntityAliasReport, error) {
+	rep1, err := r.BindExactFormAliases(ctx)
+	if err != nil {
+		return rep1, err
+	}
+	rep2, err := r.BindFlexionAliases(ctx)
+	if err != nil {
+		return rep2, err
+	}
+	return EntityAliasReport{
+		Families:       rep1.Families + rep2.Families,
+		VariantsLinked: rep1.VariantsLinked + rep2.VariantsLinked,
+		AlreadyBound:   rep1.AlreadyBound + rep2.AlreadyBound,
+	}, nil
+}
+
+// aliasEnt is the shared member shape for the guard functions.
+type aliasEnt struct {
+	id, form, aliasOf, eType, snapID string
+	chunks                           int
+}
+
+// familyTypesCompatible: a family binds only when all non-null types are
+// the same, or when the only non-null type is CONCEPT (typing pass promotes
+// generics to CONCEPT; null-type entities join any family — the extractor
+// leaves type empty often).
+func familyTypesCompatible(members []aliasEnt) bool {
+	// ALL non-null types must be the same. CONCEPT is compatible only
+	// with CONCEPT and null — CONCEPT + ORGANIZATION is a mixed family
+	// (the satellite review's root e763… class) and stays unbound until
+	// the typing pass resolves all members to the same type.
+	seen := map[string]bool{}
+	for _, m := range members {
+		if m.eType != "" {
+			seen[m.eType] = true
+		}
+	}
+	// Collect distinct non-null types; if more than one distinct value
+	// exists AND any of them is not CONCEPT, the family is mixed.
+	// (all-CONCEPT or all-null or all-same-type = compatible)
+	var first string
+	for t := range seen {
+		if first == "" {
+			first = t
+		} else if t != first {
+			return false // two different concrete types
+		}
+	}
+	return true // zero or one distinct non-null type
+}
+
+// familyPersonsBindable: PERSON-typed entities bind ONLY when the shared
+// form is a MULTI-PART name (contains whitespace). Naked surnames
+// ("schmidt" == "schmidt") NEVER bind — 12,297 active naked-surname PERSONs
+// are overwhelmingly different people who share a name; the satellite
+// production probe showed the identical-form guard alone let Schmidt go
+// from 9 to 10 bindings (same surname, same type = same "person" to the
+// old rule, but a different human).
+func familyPersonsBindable(members []aliasEnt) bool {
+	hasPerson := false
+	for _, m := range members {
+		if m.eType == "PERSON" {
+			hasPerson = true
+			break
+		}
+	}
+	if !hasPerson {
+		return true // no PERSONs → no guard needed
+	}
+	// ALL members must share the same form AND that form must be
+	// multi-part (given name + surname = a specific identifiable person).
+	firstForm := members[0].form
+	if !strings.Contains(strings.TrimSpace(firstForm), " ") {
+		return false // naked surname → never bind PERSONs
+	}
+	for _, m := range members {
+		if m.form != firstForm {
+			return false // different forms in a PERSON family → homonym risk
+		}
+	}
+	return true
 }

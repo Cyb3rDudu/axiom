@@ -81,6 +81,9 @@ func TestIT_EntityTypingNormalization(t *testing.T) {
 	seed("Industry Stakeholders", "ORGANIZATION")
 	seed("Academy of Management", "ORGANIZATION")
 	seed("Stakeholder-Theorie", "CONCEPT")
+	seed("Stakeholdern", "PERSON")
+	seed("Top Managements", "ORGANIZATION")
+	seed("Top-Managements", "PERSON")
 
 	// An INACTIVE-snapshot mis-typed entity must stay untouched.
 	snapInact := kgSeedInactiveSnapshot(t, lr, "TYATT_A", docA)
@@ -98,10 +101,10 @@ func TestIT_EntityTypingNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EntityTypingCounts: %v", err)
 	}
-	if counts.MatchedRows != 7 {
+	if counts.MatchedRows != 10 {
 		t.Fatalf("dry-run matched_rows: want 7, got %+v", counts)
 	}
-	if counts.ByRule["bare_form"] != 6 {
+	if counts.ByRule["bare_form"] != 9 {
 		t.Fatalf("dry-run bare_form: want 6 (incl. 'Externe Stakeholder' from the bare list), got %+v", counts.ByRule)
 	}
 	if counts.ByRule["plural_head"] != 1 {
@@ -116,12 +119,13 @@ func TestIT_EntityTypingNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NormalizeEntityTypes: %v", err)
 	}
-	if rep.UpdatedRows != 7 {
+	if rep.UpdatedRows != 10 {
 		t.Fatalf("apply updated_rows: want 7, got %+v", rep)
 	}
 
 	for _, form := range []string{"Stakeholders", "Primäre Stakeholder", "stakeholder",
-		"Top-Management", "Management", "Externe Stakeholder", "Industry Stakeholders"} {
+		"Top-Management", "Management", "Externe Stakeholder", "Industry Stakeholders",
+		"Stakeholdern", "Top Managements", "Top-Managements"} {
 		if got := typingTypeOf(t, lr, form); got != "CONCEPT" {
 			t.Fatalf("%q: want CONCEPT after normalize, got %q", form, got)
 		}

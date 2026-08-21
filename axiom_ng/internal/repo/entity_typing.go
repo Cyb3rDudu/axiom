@@ -33,17 +33,20 @@ import (
 // typingBareForms: exact normalized forms (lower-case, single spaces).
 var typingBareForms = []string{
 	// generic role nouns and plurals (DE + EN)
-	"stakeholder", "stakeholders",
+	"stakeholder", "stakeholders", "stakeholdern",
 	"primäre stakeholder", "sekundäre stakeholder",
+	"primären stakeholdern", "sekundären stakeholdern",
 	"key stakeholders", "interne stakeholder", "externe stakeholder",
-	"shareholder", "shareholders",
-	"anteilseigner", "anspruchsgruppe", "anspruchsgruppen",
+	"internen stakeholdern", "externen stakeholdern",
+	"shareholder", "shareholders", "shareholdern",
+	"anteilseigner", "anteilseignern", "anspruchsgruppe", "anspruchsgruppen",
 	// generic management terms (role groups, never PERSON/ORGANIZATION)
 	"management", "das management", "managements",
 	"top-management", "top management", "topmanagement",
-	"mittleres management", "middle management",
+	"top managements", "top-managements", "topmanagements",
+	"mittleres management", "middle management", "mittleres managements",
 	"oberes management", "upper management", "lower management",
-	"managementebene",
+	"managementebene", "managementebenen",
 }
 
 // typingPluralHeads: head nouns that make a short form a generic role
@@ -51,10 +54,12 @@ var typingBareForms = []string{
 // stakeholder) are handled by the bare list where the whole form must
 // match exactly.
 var typingPluralHeads = []string{
+	// plural + dative plural (-n) + genitive plural (-s)
 	"stakeholders", "stakeholdern",
-	"shareholders",
-	"anteilseignern",
+	"shareholders", "shareholdern",
+	"anteilseignern", "anteilseigners",
 	"anspruchsgruppen",
+	"managements", // plural of management (genitive/dative)
 }
 
 // EntityTypingReport is the accounting of one normalization run (the
