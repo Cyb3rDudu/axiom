@@ -118,21 +118,20 @@ flowchart LR
     DISP["Dispatcher<br/>claim / renew / fence"]
     SRC["Signed source_url<br/>HMAC + expiry + live lease"]
     RUN["Runner<br/>convert / chunk / embed / extract"]
-    GPU["Carrier GPU<br/>ingest compute"]
     VALIDATE["Result validation<br/>refs / dimensions / locators / artifacts"]
-    FM["KG frontmatter gate"]
-    PG[("PostgreSQL<br/>versioned snapshot")]
+    FM["KG frontmatter + type gates"]
+    PG[("PostgreSQL<br/>active snapshot + raw KG")]
     OUTBOX[("OpenSearch outbox")]
     OS[(OpenSearch)]
-    CONS["Entity consolidation<br/>exact canonical form"]
+    MAINT["KG maintenance<br/>identity + aliases + triples"]
+    RO[("materialized KG read model")]
 
     Z --> SYNC --> HASH --> JOBS
     JOBS --> DISP --> SRC --> RUN
-    RUN --- GPU
     RUN --> VALIDATE --> FM --> PG
     PG --> OUTBOX --> OS
-    SYNC -. "successful commit<br/>10 s debounce" .-> CONS
-    PG -. "reads active graph" .-> CONS
+    SYNC -. "successful commit<br/>10 s debounce" .-> MAINT
+    PG --> MAINT --> RO
 ```
 
 The dispatcher selects an ingest runner through the configured primary/fallback
@@ -143,51 +142,92 @@ statistics, and artifact digests and lengths.
 
 The persist-time frontmatter gate removes entity mentions from TOCs, author
 lists, prefaces, bibliographies, indexes, and title/byline sections before graph
-rows are inserted. An entity without surviving mentions and a relation without
-surviving evidence are dropped. The text chunks remain available to retrieval.
-Snapshot activation, job completion, and OpenSearch index/delete outbox records
-share one fenced transaction.
+rows are inserted. The role/type gate then normalizes known generic role and
+group nouns to `CONCEPT`; the same closed lexicon is used by the
+`-normalize-entity-types` maintenance command. An entity without surviving
+mentions and a relation without surviving evidence are dropped. The text chunks
+remain available to retrieval. Snapshot activation, job completion, and
+OpenSearch index/delete outbox records share one fenced transaction.
 
-Every successful sync schedules entity consolidation after the response. A
-10-second debounce collapses a sync burst into one run. Consolidation merges
-active entities only when `coalesce(canonical_form, text)` is exactly equal;
-mentions and relation endpoints move to the deterministic survivor. The same
-idempotent operation is available through `POST /api/kg/consolidate` and the
+Every successful sync schedules guarded entity consolidation after the response.
+A 10-second debounce collapses a sync burst into one run. The same idempotent
+operation is available through `POST /api/kg/consolidate` and the
 `-consolidate-entities` one-shot command.
 
-## Knowledge-graph write and read paths
+## KG maintenance and identity
+
+KG maintenance covers the mutation paths that change entity identity or graph
+topology: entity type normalization, exact-form entity consolidation, exact and
+flexion alias binding, alias-edge repointing, relation consolidation, and
+read-model refresh. These paths use a single transaction-scoped PostgreSQL
+advisory lock. The lock serializes cross-document graph mutations; if the
+process dies, PostgreSQL rolls the transaction back and releases the lock.
+
+```mermaid
+flowchart TD
+    RAW[("active snapshots<br/>entities / mentions / relations")]
+    TYPE["role/type normalization<br/>generic roles → CONCEPT"]
+    MERGE["guarded exact-form consolidation<br/>archive losers, move evidence"]
+    ALIAS["exact + flexion alias binding<br/>alias_of → family survivor"]
+    REPOINT["repoint variant relation endpoints"]
+    REL["relation consolidation<br/>one triple per root pair + type"]
+    RM["refresh read model<br/>roots + triples + evidence docs"]
+    API["KG API"]
+
+    RAW --> TYPE --> MERGE --> ALIAS --> REPOINT --> REL --> RM --> API
+```
+
+Entity consolidation merges active entities only when the guarded plan permits
+it. The survivor is deterministic: most distinct mention chunks, then smallest
+UUID. Mentions move to the survivor; relation endpoints are repointed; duplicate
+mention spans are skipped; loser rows are deleted only after their semantic
+evidence has been archived in `kg_superseded_entities`.
+
+The identity guards protect homonyms and incompatible types. Naked `PERSON`
+surnames never bind or merge across documents. A `PERSON` family is bindable
+only when all members share the same multi-part form. Mixed families use
+mention-weighted majority type arbitration for non-`PERSON` types; a `PERSON`
+majority stays strict, and a `PERSON` minority blocks absorption into a
+non-`PERSON` family. Null or already-generic `CONCEPT` variants can join a
+compatible family.
+
+Alias families keep variant rows instead of deleting them. A variant points to
+its family survivor through `processing_entities.alias_of`; the read model
+resolves roots with `coalesce(alias_of, id)` and exposes all family forms on the
+root.
+
+## Knowledge-graph read model
+
+The KG API reads the materialized tables `kg_entity_roots`,
+`kg_relation_triples`, and `kg_relation_evidence_docs`. Raw extractor rows stay
+the source of truth; the read model is a deterministic projection over active
+snapshots and can be fully refreshed under the maintenance lock.
 
 ```mermaid
 flowchart LR
-    subgraph WRITE[Write path]
-        EX["Runner extraction<br/>entities + relations + evidence refs"]
-        VG["Contract validation<br/>all refs resolve"]
-        FG["Frontmatter persist gate"]
-        SNAP["Atomic snapshot persist"]
-        CON["Exact-form consolidation<br/>sync-debounced or explicit"]
-        EX --> VG --> FG --> SNAP
-        SNAP -.-> CON
-    end
+    RAW["active raw KG rows"]
+    ROOTS[("kg_entity_roots<br/>root, forms, type votes, mentions")]
+    TRIPLES[("kg_relation_triples<br/>root pair + type, evidence union")]
+    DOCS[("kg_relation_evidence_docs<br/>triple-document support")]
+    API["KG API<br/>entities / neighbors / relations"]
 
-    subgraph READ[Read path]
-        ACTIVE["Active snapshots only"]
-        AGG["Aggregate triples<br/>documents + repetition"]
-        SEC["Evidence-section quality"]
-        CONF["confidence =<br/>0.6·document support<br/>+ 0.3·repetition<br/>+ 0.1·section quality"]
-        NORM["Entity query normalization<br/>lower → ß:ss → strip separators<br/>→ bilingual families → light suffix stem"]
-        TIERS["Strict match tiers<br/>1 exact<br/>2 normalized-equivalent<br/>3 bilingual family<br/>4 substring / decomposition"]
-        API["KG API<br/>entities / neighbors / relations"]
-        ACTIVE --> AGG --> CONF
-        ACTIVE --> SEC --> CONF
-        NORM --> TIERS --> API
-        CONF --> API
-    end
-
-    CON --> ACTIVE
+    RAW --> ROOTS
+    RAW --> TRIPLES --> DOCS
+    ROOTS --> API
+    TRIPLES --> API
+    DOCS --> API
 ```
 
+Root materialization groups each family by `coalesce(alias_of, id)`. It stores
+the survivor form, the complete sorted `forms` list, mention totals, member
+count, and mention-weighted type votes. Relation materialization resolves both
+endpoints to roots, drops intra-family self-loops, groups unordered root pairs
+by relation type, unions evidence chunks, and chooses one direction by raw edge
+count, then evidence support, then deterministic UUID order.
+
 KG reads never mutate persisted extractor `strength`. Neighbors and relations
-compute `confidence` from three bounded terms:
+serve materialized triples and compute `confidence` from bounded document
+support, repetition, and section-quality terms:
 
 ```text
 confidence = 0.6 × (1 - 1/(1 + documents))
@@ -197,12 +237,11 @@ confidence = 0.6 × (1 - 1/(1 + documents))
 repetition = evidence_chunk_count + matching_triple_row_count - 1
 ```
 
-`corroborating_documents` is the distinct-document support of a canonical
-`(source_form, type, target_form)` triple across active snapshots. The legacy
-`documents` field carries the same value. Entity search ranks exact and
-normalized matches before popular fragments; mention count breaks ties only
-inside a match tier. The complete parameters and response envelopes are in the
-[HTTP API reference](../references/api.md#knowledge-graph).
+Entity search matches root normalized forms and family `forms`. Ranking is
+tiered across all forms in the family: exact form, normalized equivalent,
+bilingual synonym family, then substring/decomposition. Mention count breaks
+ties only inside a tier. The complete parameters and response envelopes are in
+the [HTTP API reference](../references/api.md#knowledge-graph).
 
 ## Page-label truth chain
 

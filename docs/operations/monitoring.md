@@ -127,4 +127,28 @@ LIMIT <N>;
   runner is active (see [Deployment → runner identity](deployment.md)). Labeled
   samples let you attribute utilization to a specific runner after a batch.
 
+## Citation integrity probe
+
+`scripts/integrity_probe.py` is an operator measurement tool for PDF citation
+integrity. It selects deterministic front/middle/back anchors, optionally writes
+Zotero highlight+note artifacts through the local Zotero API, and compares
+three readings: Zotero annotation page label, axiom passage page resolution,
+and the embedded PDF label.
+
+Run it with the runner virtualenv so `pymupdf` and `requests` are available:
+
+```bash
+axiom_ng_runner/.venv/bin/python scripts/integrity_probe.py --list
+axiom_ng_runner/.venv/bin/python scripts/integrity_probe.py --dry KEY...
+axiom_ng_runner/.venv/bin/python scripts/integrity_probe.py --write KEY
+axiom_ng_runner/.venv/bin/python scripts/integrity_probe.py --report /tmp/integrity_probe_results.json
+```
+
+It expects local Zotero at `http://localhost:23119`, axiom at
+`http://localhost:8011`, Zotero storage under `~/Zotero/storage`, and the
+write key at `~/.axiom-ng/write-api-key`. Set `INTRESULTS` to change the
+default results file. The probe is measurement-only for axiom: it does not
+heal, rechunk, or delete documents. `--write` does create tagged Zotero
+annotations and notes.
+
 Next: [Troubleshooting](troubleshooting.md) — symptom → cause → fix.

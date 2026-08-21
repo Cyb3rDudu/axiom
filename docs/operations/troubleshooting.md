@@ -20,6 +20,8 @@ and fix the cause (not the symptom).
 | **Every runner stacked on GPU 0 (VRAM pileup, one OOM)** | GPU pinning was trampled (container-detection mis-read the environment and overwrote `CUDA_VISIBLE_DEVICES`) | Confirm each container sees exactly the intended single device (`torch.cuda.device_count()==1` and the expected device name) | Make the image emit the container-detection marker (`RUN touch /.dockerenv`) and add a start gate that asserts per-card device count/name before a parallel run. |
 | **Entity extraction is ~10× slower than expected (CPU-bound)** | GLiNER fell back to its CPU default instead of the chosen accelerator | Check the device env for the entity extractor; watch cores saturate on one book for an hour that should take minutes on GPU | Set `DEVICE_GLINER=<cuda|mps>` explicitly (the default is CPU; the accelerator is not auto-selected for this model). |
 | **Jobs vanish to `failed` without an obvious file problem** | `SOURCE_NOT_FOUND`/hash mismatch (allowed roots too narrow, or file moved); a deterministic conversion failure | Look at the terminal error code on the job; check whether the attachment path is inside the runner's allowed roots | Widen `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` to the real storage root; confirm the attachment still exists and its hash matches. |
+| **A scan-heavy PDF dies with `CHILD_OOM_SIGKILL`** | The conversion child was killed by memory pressure while processing raster pages | Inspect the scan profile and decoded-byte volume in worker logs | Use the batched scan path on an updated runner; treat this as runner/resource pressure before declaring the source broken. |
+| **Persist rejects `CHUNK_IMAGE_REF_UNRESOLVED` for an external URL** | Markdown link syntax was misread as an image reference | Check whether the unresolved ref starts with `http://` or `https://` | Rerun on a runner that drops external URL refs before artifact validation; local image refs must still resolve strictly. |
 | **A re-run of a document produces different bytes** (nondeterminism) | A temp-path leak wobbles the output (e.g. EPUB extraction tempdir suffix lands in chunk text), or a Marker layout edge case | Compare two independent runs; diff to classify (path leak vs. heading/table-classification flip) | Normalize temp/media paths before chunking; for pure Marker classification variance, decide whether deterministic output is a requirement (it is not for retrieval). |
 | **The search index shows stale or duplicated content after a rebuild** | The index served a superseded generation (no tombstone/obsolete handling), or a force-rebuild double-activated a snapshot | Compare OpenSearch doc count to the active snapshot count; look for orphaned/duplicated chunks | Ensure outbox delete/obsolete operations run in the same persist transaction; rely on latest-persist-wins per attachment. |
 | **Parallel workers clash on a fresh database (one crashes at startup)** | Concurrent schema migration racing (a `pg_type`-style conflict among same-kind objects) | See which instance failed and whether a restart succeeds | On a clean slate, bring up **one** instance to migrate first, then the others (fail-fast + restart is safe; no corruption). |
@@ -37,6 +39,9 @@ and fix the cause (not the symptom).
 4. **Verify the index against the active snapshot count.** Index divergence is
    a symptom of a missed tombstone/obsolete step, visible only by comparing
    counts.
+5. **Separate source quality from runner resource classes.** A scan-only PDF
+   that OOMs is not automatically corrupt; an EPUB with normalized OPF paths is
+   not automatically invalid because pandoc rejected literal `..` references.
 
 ## Recovery rules
 

@@ -85,6 +85,31 @@ acknowledgement.
   credentials to the processor; no full document text/embeddings/secrets in logs
   by default.
 
+## Hardened conversion behavior
+
+The reference runner isolates PDF and EPUB conversion in short-lived child
+processes. A child terminated by a signal is reported as a child-failure class;
+`SIGKILL` is surfaced as `CHILD_OOM_SIGKILL` so operators can distinguish a
+resource-killed raster scan from a corrupt source file.
+
+Large raster-only PDFs are profiled before Marker conversion. A PDF is treated
+as a scan candidate when it has at least eight pages, very little text per page,
+at least 80% raster pages, and decoded RGB image volume above the configured
+worker threshold. Scan candidates are split into page batches under the worker's
+decoded-byte budget; each batch goes through the same conversion path, and page
+markers and image references are shifted back to original-page coordinates.
+
+Markdown image references are strict: every local image ref that survives into
+a chunk must resolve to a declared artifact. External `http://` and `https://`
+refs are treated as links, not image artifacts, before the persist gate sees
+them.
+
+EPUB conversion uses pandoc through the EPUB worker. If the package manifest
+contains `..` references that are valid only after POSIX normalization, the
+worker creates a temporary normalized copy with the OPF at the archive root and
+rewritten manifest refs. EPUB chunks carry EPUB CFI locators; axiom does not
+fabricate physical page spans for EPUB sources.
+
 ## Contract tests (§19)
 
 Every processor implementation must pass the same black-box suite:

@@ -93,6 +93,7 @@ nav:
       - Testing: developer-guide/testing.md
   - Operations:
       - Deployment: operations/deployment.md
+      - KG Maintenance: operations/kg-maintenance.md
       - Monitoring: operations/monitoring.md
       - Troubleshooting: operations/troubleshooting.md
   - References:
