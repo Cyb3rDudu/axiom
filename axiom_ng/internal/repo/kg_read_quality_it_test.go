@@ -92,6 +92,16 @@ func TestIT_KGConfidence(t *testing.T) {
 	}
 	kgSeedRelation(t, lr, snapA, ents[snapA+nachh], ents[snapA+ctrl], "supports", []string{tocChunk})
 	kgSeedRelation(t, lr, snapA, ents[snapA+nachh], ents[snapA+ctrl], "contrasts", []string{bodyChunk})
+	if _, err := lr.rep.ConsolidateEntities(ctx); err != nil {
+		t.Fatalf("ConsolidateEntities: %v", err)
+	}
+	var nachhRoot string
+	if err := lr.pool.QueryRow(ctx, `
+		SELECT e.id::text FROM processing_entities e
+		JOIN processing_snapshots s ON s.id=e.snapshot_id AND s.active
+		WHERE e.canonical_form=$1`, nachh).Scan(&nachhRoot); err != nil {
+		t.Fatalf("read nachhaltigkeit root: %v", err)
+	}
 
 	rels, err := lr.rep.KGRelations(ctx, "", "", "", 2, 50)
 	if err != nil {
@@ -138,7 +148,7 @@ func TestIT_KGConfidence(t *testing.T) {
 	}
 
 	// Neighbors carry confidence too (1-hop surface, same formula).
-	nb, err := lr.rep.KGNeighbors(ctx, ents[snapA+nachh], 2, 50)
+	nb, err := lr.rep.KGNeighbors(ctx, nachhRoot, 2, 50)
 	if err != nil {
 		t.Fatalf("KGNeighbors: %v", err)
 	}
@@ -172,6 +182,9 @@ func TestIT_KGTieredRanking(t *testing.T) {
 	kgSeedEntity(t, lr, snap, "erich", 8)
 	kgSeedEntity(t, lr, snap, "halter", 7)
 	kgSeedEntity(t, lr, snap, "rich", 6)
+	if err := lr.rep.RefreshKGReadModel(ctx); err != nil {
+		t.Fatalf("RefreshKGReadModel: %v", err)
+	}
 
 	res, err := lr.rep.SearchKGEntities(ctx, "Nachhaltigkeitsberichterstattung", 2, 50)
 	if err != nil {
@@ -198,6 +211,9 @@ func TestIT_KGTieredRanking(t *testing.T) {
 	kgSeedEntity(t, lr, snap, "esg-managementsystemen", 2)
 	kgSeedEntity(t, lr, snap, "manager", 220)
 	kgSeedEntity(t, lr, snap, "management", 193)
+	if err := lr.rep.RefreshKGReadModel(ctx); err != nil {
+		t.Fatalf("RefreshKGReadModel 2: %v", err)
+	}
 	res, err = lr.rep.SearchKGEntities(ctx, "ESG-Managementsystem", 2, 50)
 	if err != nil {
 		t.Fatalf("search 2: %v", err)
@@ -211,6 +227,9 @@ func TestIT_KGTieredRanking(t *testing.T) {
 	kgSeedEntity(t, lr, snap, "stakeholder-theorie", 3)
 	kgSeedEntity(t, lr, snap, "stakeholder theory", 180)
 	kgSeedEntity(t, lr, snap, "stakeholder", 34) // fragment (reverse containment)
+	if err := lr.rep.RefreshKGReadModel(ctx); err != nil {
+		t.Fatalf("RefreshKGReadModel 3: %v", err)
+	}
 	res, err = lr.rep.SearchKGEntities(ctx, "Stakeholdertheorie", 2, 50)
 	if err != nil {
 		t.Fatalf("search 3: %v", err)
@@ -259,6 +278,9 @@ func TestIT_KGGermanQueryNormalization(t *testing.T) {
 		if id != "" {
 			seeded[f] = true
 		}
+	}
+	if err := lr.rep.RefreshKGReadModel(ctx); err != nil {
+		t.Fatalf("RefreshKGReadModel: %v", err)
 	}
 
 	search := func(q string) []KGEntity {

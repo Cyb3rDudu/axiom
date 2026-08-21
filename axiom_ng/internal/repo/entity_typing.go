@@ -147,7 +147,7 @@ func (r *Repo) entityTyping(ctx context.Context, apply bool) (EntityTypingReport
 		}
 		rep.UpdatedRows = int(ct.RowsAffected())
 		kgHook("kg_normalize_entity_types:after_update")
-		return nil
+		return r.refreshKGReadModelTx(ctx, tx)
 	})
 	if err != nil {
 		return rep, err

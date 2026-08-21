@@ -73,7 +73,10 @@ func (r *Repo) entityAlias(ctx context.Context, apply bool) (EntityAliasReport, 
 		err := r.withKGMaintenanceTx(ctx, "kg_bind_flexion_aliases", func(tx pgx.Tx) error {
 			var err error
 			out, err = entityAliasOn(ctx, tx, true)
-			return err
+			if err != nil {
+				return err
+			}
+			return r.refreshKGReadModelTx(ctx, tx)
 		})
 		return out, err
 	}
@@ -251,6 +254,6 @@ func (r *Repo) RepointAliasEdges(ctx context.Context) error {
 			  AND r.source_entity_id = r.target_entity_id`); err != nil {
 			return fmt.Errorf("repoint self-loop cleanup: %w", err)
 		}
-		return nil
+		return r.refreshKGReadModelTx(ctx, tx)
 	})
 }
