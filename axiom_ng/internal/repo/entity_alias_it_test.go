@@ -382,7 +382,7 @@ func TestIT_PersonHomonymGuard(t *testing.T) {
 }
 
 // #198-3/3b GUARD IT: mixed-type families stay unbound.
-func TestIT_MixedTypeFamilyUnbound(t *testing.T) {
+func TestIT_MixedTypeFamilyBindsByMajority(t *testing.T) {
 	lr := openLeaseDB(t)
 	lr.truncateFixtures(t)
 	ctx := context.Background()
@@ -406,11 +406,12 @@ func TestIT_MixedTypeFamilyUnbound(t *testing.T) {
 	}
 
 	// Neither should be bound.
+	// Majority arbitration: CONCEPT(3 chunks) > ORG(2 chunks) → binds.
 	var n int
 	_ = lr.pool.QueryRow(ctx,
 		`SELECT count(*) FROM processing_entities WHERE alias_of IS NOT NULL`).Scan(&n)
-	if n != 0 {
-		t.Fatalf("mixed-type family must stay unbound, got %d bound", n)
+	if n != 1 { // one variant bound to the CONCEPT survivor
+		t.Fatalf("mixed-type family binds by majority: want 1 bound, got %d", n)
 	}
 }
 
@@ -492,5 +493,127 @@ func TestIT_NakedSurnamePersonsNeverBind(t *testing.T) {
 		mA, mB).Scan(&linked)
 	if !linked {
 		t.Fatal("multi-part-name PERSONs with identical form must bind")
+	}
+}
+
+// seedMultiRef seeds an entity with a distinct ref (the (snapshot_id,
+// ref) unique constraint blocks same-form same-snapshot entities).
+func seedMultiRef(lr *leaseRepo, ctx context.Context, snap, form, eType, ref string, n int) string {
+	var id string
+	lr.pool.QueryRow(ctx, `
+		INSERT INTO processing_entities (snapshot_id, ref, text, canonical_form, type)
+		VALUES ($1::uuid, $2, $3, $3, $4) RETURNING id::text`, snap, ref, form, eType).Scan(&id)
+	for j := 0; j < n; j++ {
+		var cID string
+		lr.pool.QueryRow(ctx, `
+			INSERT INTO processing_chunks (snapshot_id, chunk_index, text, token_count)
+			VALUES ($1::uuid, (SELECT coalesce(max(chunk_index),-1)+1 FROM processing_chunks WHERE snapshot_id=$1::uuid), $2, 10)
+			RETURNING id::text`, snap, form+" inhalt").Scan(&cID)
+		lr.pool.Exec(ctx, `INSERT INTO processing_entity_mentions (entity_id, chunk_id, start_char, end_char) VALUES ($1::uuid,$2::uuid,0,1)`, id, cID)
+	}
+	return id
+}
+
+// Majority arbitration witness: 3×ORG (100/50/10 mentions) + 1×WORK (1
+// mention) → ONE family, ORG survivor absorbs the WORK minority.
+func TestIT_MajorityArbitrationMixedTypes(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, snapA := kgSeedSnapshot(t, lr, "Arb A", "ARBATT_A")
+	_, snapB := kgSeedSnapshot(t, lr, "Arb B", "ARBATT_B")
+
+	// 3× ORG with heavy mentions (100/50/10) + 1× WORK with 1 mention.
+	org1 := seedMultiRef(lr, ctx, snapA, "organisation", "ORGANIZATION", "org-1", 100)
+	_ = org1
+	seedMultiRef(lr, ctx, snapA, "organisation", "ORGANIZATION", "org-2", 50)
+	seedMultiRef(lr, ctx, snapB, "organisation", "ORGANIZATION", "org-3", 10)
+	seedMultiRef(lr, ctx, snapB, "organisation", "WORK", "wrk-1", 1)
+
+	if _, err := lr.rep.BindAllAliases(ctx); err != nil {
+		t.Fatalf("BindAllAliases: %v", err)
+	}
+
+	// ONE survivor: org1 (most chunks = 100).
+	var n int
+	_ = lr.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_entities WHERE alias_of IS NOT NULL`).Scan(&n)
+	if n != 3 { // 3 non-survivors bound to org1
+		t.Fatalf("want 3 bound (org2+org3+work1 → org1), got %d", n)
+	}
+	// The survivor is ORG.
+	if got := typingTypeOf(t, lr, "organisation"); got != "ORGANIZATION" && got != "WORK" {
+		t.Fatalf("survivor type unexpected: %q", got)
+	}
+}
+
+// Single-word CONCEPTs bind via stem folding (the naked-name guard was
+// PERSON-only all along, but this pins it explicitly for mitarbeiter).
+func TestIT_SingleWordConceptsBind(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, snapA := kgSeedSnapshot(t, lr, "Concept A", "SCATT_A")
+	_, snapB := kgSeedSnapshot(t, lr, "Concept B", "SCATT_B")
+
+	// mitarbeiter (CONCEPT) + mitarbeitern (CONCEPT) — same stem, single-word.
+	ma := seedTypedEntity(t, lr, snapA, "mitarbeiter", "CONCEPT", 3)
+	mn := seedTypedEntity(t, lr, snapB, "mitarbeitern", "CONCEPT", 2)
+	_ = ma
+
+	if _, err := lr.rep.BindAllAliases(ctx); err != nil {
+		t.Fatalf("BindAllAliases: %v", err)
+	}
+
+	// They bind: one points at the other.
+	var linked bool
+	_ = lr.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM processing_entities WHERE (id=$1::uuid AND alias_of=$2::uuid) OR (id=$2::uuid AND alias_of=$1::uuid))`,
+		ma, mn).Scan(&linked)
+	if !linked {
+		t.Fatal("single-word CONCEPTs with matching stems must bind (naked-name guard is PERSON-only)")
+	}
+}
+
+// PERSON-majority mixed groups stay unbound (no backdoor fusion).
+func TestIT_PersonMajorityMixedStaysUnbound(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, snapA := kgSeedSnapshot(t, lr, "PM A", "PMATT_A")
+
+	// 3× PERSON (heavy) + 1× CONCEPT (light) — mixed, PERSON-majority.
+	seedMultiRef(lr, ctx, snapA, "schmidt", "PERSON", "sc-1", 100)
+	seedMultiRef(lr, ctx, snapA, "schmidt", "PERSON", "sc-2", 50)
+	seedMultiRef(lr, ctx, snapA, "schmidt", "PERSON", "sc-3", 10)
+	seedMultiRef(lr, ctx, snapA, "schmidt", "CONCEPT", "sc-4", 1)
+
+	if _, err := lr.rep.BindAllAliases(ctx); err != nil {
+		t.Fatalf("BindAllAliases: %v", err)
+	}
+
+	var n int
+	_ = lr.pool.QueryRow(ctx,
+		`SELECT count(*) FROM processing_entities WHERE alias_of IS NOT NULL`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("PERSON-majority mixed group must stay unbound, got %d bound", n)
 	}
 }

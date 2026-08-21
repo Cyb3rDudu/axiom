@@ -455,33 +455,45 @@ type aliasEnt struct {
 	chunks                           int
 }
 
-// familyTypesCompatible: a family binds only when all non-null types are
-// the same, or when the only non-null type is CONCEPT (typing pass promotes
-// generics to CONCEPT; null-type entities join any family — the extractor
-// leaves type empty often).
+// familyTypesCompatible with majority arbitration (#199 Chattys final):
+// mixed groups (organisation 15×ORG+8×CONCEPT, unternehmen 35×ORG+1×WORK)
+// merge by mention-weighted majority — the outlier no longer blocks the
+// whole group. PERSON-majority groups keep the old strict guard (no
+// PERSON-fusion through the back door). Only non-PERSON minorities
+// may be absorbed.
 func familyTypesCompatible(members []aliasEnt) bool {
-	// ALL non-null types must be the same. CONCEPT is compatible only
-	// with CONCEPT and null — CONCEPT + ORGANIZATION is a mixed family
-	// (the satellite review's root e763… class) and stays unbound until
-	// the typing pass resolves all members to the same type.
-	seen := map[string]bool{}
+	// Weighted type census by mention count.
+	weights := map[string]int{}
 	for _, m := range members {
-		if m.eType != "" {
-			seen[m.eType] = true
+		if m.eType != "" && m.eType != "CONCEPT" {
+			weights[m.eType] += m.chunks
 		}
 	}
-	// Collect distinct non-null types; if more than one distinct value
-	// exists AND any of them is not CONCEPT, the family is mixed.
-	// (all-CONCEPT or all-null or all-same-type = compatible)
-	var first string
-	for t := range seen {
-		if first == "" {
-			first = t
-		} else if t != first {
-			return false // two different concrete types
+	if len(weights) <= 1 {
+		return true // uniform or empty → compatible
+	}
+	// Find the majority type (highest mention-weighted count).
+	majority, maxW := "", 0
+	for t, w := range weights {
+		if w > maxW {
+			majority, maxW = t, w
 		}
 	}
-	return true // zero or one distinct non-null type
+	// PERSON-majority: strict guard — no PERSON fusion via arbitration.
+	if majority == "PERSON" {
+		return false
+	}
+	// Non-PERSON majority: minority non-PERSON types may be absorbed.
+	// But PERSON minorities are NEVER absorbed into non-PERSON.
+	for _, m := range members {
+		if m.eType == "PERSON" && majority != "PERSON" {
+			// A PERSON entity in a non-PERSON-majority group: this is a
+			// genuine type conflict (a person named "organisation") —
+			// block the whole group to avoid mis-typing a real person.
+			return false
+		}
+	}
+	return true
 }
 
 // familyPersonsBindable: PERSON-typed entities bind ONLY when the shared
@@ -500,7 +512,7 @@ func familyPersonsBindable(members []aliasEnt) bool {
 		}
 	}
 	if !hasPerson {
-		return true // no PERSONs → no guard needed
+		return true // no PERSONs → no naked-name guard (single-word CONCEPTs bind normally)
 	}
 	// ALL members must share the same form AND that form must be
 	// multi-part (given name + surname = a specific identifiable person).
