@@ -40,16 +40,20 @@ axiom_ng_runner/.venv/bin/python scripts/pdf_label_surgery.py <KEY> --apply   # 
 
 ## RAG/Sync — das Wichtigste
 
-**Label-Heilung braucht NIEMALS einen Rechunk.** Der Hash-Sync verhindert den
-ungewollten Re-Harvest: der nächste Sync sieht content_hash/mtime passend zur
-geheilten Datei und tut nichts. Die Chunks (mit ihrer bereits richtigen
-Chunk-Seiten-Wahrheit) bleiben in Kraft — Heilung und Korpus fallen dabei in
-eins, weil der RAG bei der Label-Klasse schon richtig lag.
+**Hash-Sync hält `zotero_attachments` konsistent:** sha256/file_size/mtime_ms
+passen zur geheilten Datei — Hash-Checks, Claim und `ensure_hash_matches`
+bleiben grün, es gibt keinen unkontrollierten Re-Harvest.
 
-**Sync wird nur noch bewusst ausgelöst** — nämlich wenn sich der *Inhalt*
-eines PDFs ändert (neue Auflage, OCR-Rebuild, echte Korrektur). Dann
-gewollt: Sync läuft, Hash-Delta erzeugt den Rechunk-Job, die neuen Labels
-landen im nächsten Snapshot.
+**Heilung ändert die Datei-Bytes.** Der nächste Sync misst jeden Anhang neu
+(`prepareAttachmentFiles`) und bietet Ingest-Jobs nach dem gemessenen Hash an
+— für das geheilte Buch entsteht daraus **genau ein Rechunk-Job** (gewollt:
+so fließen die geheilten Labels in den Korpus; `ingest_jobs` dedupliziert
+über `ON CONFLICT (attachment_id, content_hash)`, Wiederholungen entstehen
+nicht).
+
+**Bewusst synchronisieren** bleibt für echte Inhaltsänderungen (neue Auflage,
+OCR-Rebuild, echte Korrektur): Sync läuft, Hash-Delta erzeugt den Rechunk-Job,
+die neuen Labels landen im nächsten Snapshot.
 
 ## Grenzfälle
 

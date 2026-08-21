@@ -14,16 +14,20 @@ import hashlib
 import importlib.util
 import io
 import json
+import shutil
+import subprocess
 import sys
+import types
 from pathlib import Path
 
-import pymupdf
+import pymupdf  # type: ignore[import-not-found]
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "pdf_label_surgery.py"
 
 _spec = importlib.util.spec_from_file_location("pdf_label_surgery", SCRIPT)
+assert _spec is not None and _spec.loader is not None   # Typ-Narrowing + Ladelast
 pls = importlib.util.module_from_spec(_spec)
 sys.modules["pdf_label_surgery"] = pls
 _spec.loader.exec_module(pls)
@@ -89,13 +93,61 @@ def run_cli(key: str, pdf: Path, anchors: list[dict], *extra: str) -> int:
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(anchors, f)
         anchor_file = f.name
-    rc, out = call_main([str(SCRIPT), key, "--pdf", str(pdf),
-                         "--anchors", anchor_file, *extra])
-    # evidence on stdout is part of the contract (Befehl + Output)
-    assert "KLASSIFIKATION" in out, out
-    print(out)
-    Path(anchor_file).unlink(missing_ok=True)
-    return rc
+    try:
+        rc, out = call_main([str(SCRIPT), key, "--pdf", str(pdf),
+                             "--anchors", anchor_file, *extra])
+        # evidence on stdout is part of the contract (Befehl + Output)
+        assert "KLASSIFIKATION" in out, out
+        print(out)
+        return rc
+    finally:   # auch bei scheiterndem main() keinen Anker tempfile leaken
+        Path(anchor_file).unlink(missing_ok=True)
+
+
+def mock_probe(anchors: list[dict]):
+    """run_probe-Stand-in: Probe-JSON im echten integrity_probe-Format."""
+    return lambda probe, key: {
+        "verdict": "ABWEICHUNG", "_cmd": "mocked-probe --dry", "_rc": 0,
+        "anchors": [{"position": pos, "page_index": a["page"],
+                     "pdf_label": a["N"], "chunk": {"page": a["M"]},
+                     "verdict": "ABWEICHUNG"}
+                    for pos, a in zip(("front", "middle", "back"), anchors,
+                                      strict=True)]}
+
+
+def fake_psycopg2(monkeypatch, select_rows, update_rowcount=1, calls=None):
+    """psycopg2-fake: SELECT → fetchall(select_rows), UPDATE → rowcount.
+    Erkennt mehrfache Rows via len(rows) genau wie das echte db_row."""
+
+    class _Cur:
+        def __init__(self):
+            self.rowcount = update_rowcount
+            self._select = False
+
+        def execute(self, sql, params):
+            if calls is not None:
+                calls["sql"], calls["params"] = sql, params
+            self._select = sql.startswith("SELECT")
+
+        def fetchall(self):
+            return list(select_rows) if self._select else []
+
+    class _Conn:
+        def cursor(self):
+            return _Cur()
+
+        def set_session(self, **kw):
+            pass
+
+        def commit(self):
+            if calls is not None:
+                calls["commit"] = True
+
+        def close(self):
+            pass
+
+    monkeypatch.setitem(sys.modules, "psycopg2",
+                        types.SimpleNamespace(connect=lambda dsn: _Conn()))
 
 
 # ------------------------------------------------- classification classes --
@@ -107,7 +159,7 @@ def test_constant_offset_roundtrip(tmp_path):
     build_fixture(pdf, truth, tree=[{"startpage": 0, "prefix": "", "style": "D",
                                      "firstpagenum": 4}])           # labels = p+4
     anchors = probe_like(pdf, truth, [4, 15, 26])
-    klas = pls.classify(anchors, pls.read_spec(pdf), 30)
+    klas = pls.classify(anchors, pls.read_spec(pdf))
     assert klas["klasse"] == "constant-offset"
     assert klas["deltas"] == [-3]
     assert run_cli("TESTCO", pdf, anchors, "--apply") == pls.EXIT_OK
@@ -122,7 +174,7 @@ def test_reprint_start_roundtrip(tmp_path):
     build_fixture(pdf, truth, tree=[{"startpage": 0, "prefix": "", "style": "D",
                                      "firstpagenum": 1}])
     anchors = probe_like(pdf, truth, [6, 15, 26])
-    klas = pls.classify(anchors, pls.read_spec(pdf), 30)
+    klas = pls.classify(anchors, pls.read_spec(pdf))
     assert klas["klasse"] == "reprint-start"
     assert run_cli("TESTRS", pdf, anchors, "--apply") == pls.EXIT_OK
     assert current_labels(pdf) == [truth.get(i, "") for i in range(30)]
@@ -139,7 +191,7 @@ def test_two_range_roundtrip(tmp_path):
             {"startpage": 8, "prefix": "", "style": "D", "firstpagenum": 1}]
     build_fixture(pdf, truth, tree)
     anchors = probe_like(pdf, truth, [3, 14, 24])   # front roman + 2 arabic
-    klas = pls.classify(anchors, pls.read_spec(pdf), 30)
+    klas = pls.classify(anchors, pls.read_spec(pdf))
     assert klas["klasse"] == "two-range"
     assert klas["deltas"] == [0, 2]
     assert run_cli("TESTTR", pdf, anchors, "--apply") == pls.EXIT_OK
@@ -158,10 +210,10 @@ def test_injection_labelless_adopts_roman_truth(tmp_path):
         truth[i] = str(1 + (i - 8))
     build_fixture(pdf, truth, tree=None)
     anchors = probe_like(pdf, truth, [3, 12, 24])                  # M='ii','5','17'
-    klas = pls.classify(anchors, pls.read_spec(pdf), 30)
+    klas = pls.classify(anchors, pls.read_spec(pdf))
     assert klas["klasse"] == "injection"
     folio, runs = pls.folio_evidence(pdf)
-    plan = pls.build_plan(klas, pls.read_spec(pdf), 30, folio, runs, None)
+    plan = pls.build_plan(klas, pls.read_spec(pdf), folio, runs, None)
     assert plan["open_decision"] is None and "Chunk-Wahrheit" in plan["style_note"]
     assert run_cli("TESTIN", pdf, anchors, "--apply") == pls.EXIT_OK
     labels = current_labels(pdf)
@@ -179,7 +231,7 @@ def test_injection_c1_block(tmp_path):
     build_fixture(pdf, truth, tree=[{"startpage": 0, "prefix": "C", "style": "D",
                                      "firstpagenum": 1}])
     anchors = probe_like(pdf, truth, [5, 15, 25])
-    klas = pls.classify(anchors, pls.read_spec(pdf), 30)
+    klas = pls.classify(anchors, pls.read_spec(pdf))
     assert klas["klasse"] == "injection"       # N='C…' is non-numeric → Case B
     assert run_cli("TESTC1", pdf, anchors, "--apply") == pls.EXIT_OK
     assert current_labels(pdf) == [truth.get(i, "") for i in range(30)]
@@ -192,10 +244,10 @@ def test_injection_style_vacuum_open_decision(tmp_path):
     truth = {i: str(1 + (i - 6)) for i in range(6, 30)}            # body ab S.7
     build_fixture(pdf, truth, tree=None)
     anchors = probe_like(pdf, truth, [9, 18, 27])
-    klas = pls.classify(anchors, pls.read_spec(pdf), 30)
+    klas = pls.classify(anchors, pls.read_spec(pdf))
     assert klas["klasse"] == "injection"
     folio, runs = pls.folio_evidence(pdf)
-    plan = pls.build_plan(klas, pls.read_spec(pdf), 30, folio, runs, None)
+    plan = pls.build_plan(klas, pls.read_spec(pdf), folio, runs, None)
     assert plan["open_decision"] and "NICHT entscheidbar" in plan["open_decision"]
     assert run_cli("TESTVAC", pdf, anchors, "--apply",
                    "--style-override", "prefix:C") == pls.EXIT_OK
@@ -205,6 +257,59 @@ def test_injection_style_vacuum_open_decision(tmp_path):
 
 
 # ---------------------------------------------------- refuse + dry-run -----
+
+def test_two_range_ambiguous_boundary_refuses(tmp_path):
+    """Two qualifying 1+jump folio steps in the bracket: pinning the first
+    would be the only silent-wrong vector past all gates → REFUSE with the
+    ambiguity named, file frozen (nie raten)."""
+    pdf = tmp_path / "amb.pdf"
+    truth = {i: pls.to_roman(i + 1) for i in range(8)}
+    for i in range(8, 30):
+        truth[i] = str(1 + (i - 8) + (2 if i >= 18 else 0))
+    truth[15] = "10"   # spurious second jump: S.15 (7→10) und S.18 (10→13)
+    tree = [{"startpage": 0, "prefix": "", "style": "r", "firstpagenum": 1},
+            {"startpage": 8, "prefix": "", "style": "D", "firstpagenum": 1}]
+    build_fixture(pdf, truth, tree)
+    anchors = probe_like(pdf, truth, [3, 14, 24])
+    before = sha(pdf)
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(anchors, f)
+    try:
+        rc, out = call_main([str(SCRIPT), "TESTAMB", "--pdf", str(pdf),
+                             "--anchors", f.name])
+    finally:
+        Path(f.name).unlink(missing_ok=True)
+    assert rc == pls.EXIT_REFUSE
+    assert "mehrdeutig" in out                      # Ambiguität wird BENANNT
+    assert sha(pdf) == before
+
+
+def test_apply_rollback_when_tree_starts_late(tmp_path):
+    """Tree whose first range starts at page>0: pymupdf get_label() raises
+    IndexError on pre-range pages — read-back must count that as mismatch
+    (auto-rollback, exit 2), never crash AFTER os.replace with no rollback."""
+    pdf = tmp_path / "late.pdf"
+    truth = {i: str(i + 1) for i in range(30)}
+    build_fixture(pdf, truth, tree=[{"startpage": 3, "prefix": "", "style": "D",
+                                     "firstpagenum": 7}])   # Labels = S.+4 ab S.4
+    # Anker von Hand: current_labels() kann Seiten vor der ersten Range
+    # nicht lesen (derselbe IndexError, den der Fix behandelt)
+    anchors = [{"page": p, "N": str(p + 4), "M": truth[p]} for p in (4, 15, 26)]
+    before = sha(pdf)
+    assert run_cli("TESTLATE", pdf, anchors, "--apply") == pls.EXIT_ABORT
+    assert sha(pdf) == before                    # AUTO-ROLLBACK, byte-identisch
+
+
+def test_validate_anchor_truths_pre_range_page_is_mismatch(tmp_path):
+    """Rot-Gate auf einer Seite vor der ersten Range: IndexError zählt als
+    Missstand-Eintrag, nicht als Crash."""
+    pdf = tmp_path / "pre.pdf"
+    truth = {i: str(i + 1) for i in range(30)}
+    build_fixture(pdf, truth, tree=[{"startpage": 3, "prefix": "", "style": "D",
+                                     "firstpagenum": 1}])
+    bad = pls.validate_anchor_truths(pdf, [{"page": 1, "N": "x", "M": "1"}])
+    assert bad and "S.2" in bad[0] and "M='1'" in bad[0]
 
 def test_unclassifiable_refuses_and_touches_nothing(tmp_path):
     """Variable deltas = the reportable refusal case; exit 3, file frozen."""
@@ -217,7 +322,7 @@ def test_unclassifiable_refuses_and_touches_nothing(tmp_path):
     # drei verschiedene Deltas — weder konstant noch ein einziger Sprung
     anchors[0]["M"], anchors[1]["M"], anchors[2]["M"] = "3", "11", "16"
     before = sha(pdf)
-    klas = pls.classify(anchors, pls.read_spec(pdf), 30)
+    klas = pls.classify(anchors, pls.read_spec(pdf))
     assert klas["klasse"] == "unclassifiable"
     assert run_cli("TESTVAR", pdf, anchors) == pls.EXIT_REFUSE
     assert sha(pdf) == before
@@ -236,8 +341,12 @@ def test_dry_run_touches_nothing(tmp_path):
     st1 = pdf.stat()
     assert sha(pdf) == before
     assert (st0.st_mtime_ns, st0.st_size) == (st1.st_mtime_ns, st1.st_size)
-    assert not pls.BACKUP_DIR.joinpath("dry.pdf").exists()
-    assert not pls.BACKUP_DIR.joinpath("dry.bak.pdf").exists()
+    # die echten Dry-run-Temp-Pfade (nicht Backup-Pfade, die kein Code baut):
+    # /tmp/axiom_runs/surgery_dryrun_TESTDRY.pdf + .bak — abgeleitet aus der
+    # selben Konstante, mit der der Code den Pfad baut (kein Drift möglich)
+    for p in (pls.RUNS_DIR / "surgery_dryrun_TESTDRY.pdf",
+              pls.RUNS_DIR / "surgery_dryrun_TESTDRY.bak"):
+        assert not p.exists()
 
 
 # ------------------------------------------------------------ rot-sonde ----
@@ -257,8 +366,8 @@ def test_rot_sonde_crippled_classifier_witness_red(tmp_path, monkeypatch):
 
     real_classify = pls.classify
 
-    def lying_classify(anchors_, spec_, n_):
-        klas = real_classify(anchors_, spec_, n_)
+    def lying_classify(anchors_, spec_):
+        klas = real_classify(anchors_, spec_)
         if klas["klasse"] == "two-range":        # pretend the gap doesn't exist:
             arabic = [(p, m, n) for p, m, n in klas["arabic"]]  # claim ONE constant
             d = klas["deltas"][-1]                # delta (the back anchor's view)
@@ -288,6 +397,7 @@ def test_reproduced_real_case(tmp_path):
     src = tmp_path / "already_healed.pdf"
     build_fixture(src, truth, tree=healthy)
     assert current_labels(src) == [truth.get(i, "") for i in range(30)]  # gesund
+    before_src = sha(src)
 
     broken = tmp_path / "copy_rebroken.pdf"                        # Kopie ins Temp
     broken.write_bytes(src.read_bytes())
@@ -303,55 +413,30 @@ def test_reproduced_real_case(tmp_path):
     # jedes gemessene M == Label UND vollständige Baumgleichheit mit der Wahrheit
     for a in anchors:
         assert current_labels(broken)[a["page"]] == a["M"]
-    assert sha(src) == sha(tmp_path / "already_healed.pdf")        # Quelle unberührt
+    assert sha(src) == before_src                   # Quelle unberührt (echt gemessen)
 
 
 # ----------------------------------------------------------- DB + probe ----
 
 def test_db_hash_sync_rowcount_guard(tmp_path, monkeypatch):
-    """Hash-Sync ist Pflicht: rowcount != 1 (keine Row) → Apply bricht ab,
-    kein stiller Zustand."""
+    """Hash-Sync ist Pflicht: der UPDATE trifft keine Row (rowcount 0) →
+    Apply bricht ab, kein stiller Zustand (Pre-Check war grün)."""
     pdf = tmp_path / "db.pdf"
     truth = {i: str(i + 1) for i in range(30)}
     build_fixture(pdf, truth, tree=[{"startpage": 0, "prefix": "", "style": "D",
                                      "firstpagenum": 4}])
     calls = {}
-
-    class _Cur:
-        rowcount = 0
-
-        def execute(self, sql, params):
-            calls["sql"], calls["params"] = sql, params
-
-    class _Conn:
-        def cursor(self):
-            return _Cur()
-
-        def commit(self):
-            calls["commit"] = True
-
-        def close(self):
-            pass
-
-    import types
-
-    fake_psycopg2 = types.SimpleNamespace(connect=lambda dsn: _Conn())
-    monkeypatch.setitem(sys.modules, "psycopg2", fake_psycopg2)
+    # Pre-Check (db_row) sieht genau eine Row; der UPDATE trifft dann keine
+    # (Broken-DB) — der Hash-Sync-Guard muss das alleine abfangen
+    fake_psycopg2(monkeypatch, [("a" * 64, 1, 1)], update_rowcount=0, calls=calls)
 
     anchors = probe_like(pdf, truth, [4, 15, 26])
     # key mode: storage/<KEY>/*.pdf resolves to our fixture; probe mocked
     monkeypatch.setattr(pls, "STORAGE", tmp_path)
     key_dir = tmp_path / "DBKEY2"
     key_dir.mkdir(exist_ok=True)
-    import shutil
     shutil.copy2(pdf, key_dir / "db.pdf")
-    monkeypatch.setattr(pls, "run_probe",
-                        lambda probe, key: {"verdict": "ABWEICHUNG", "_cmd": "mocked-probe --dry", "_rc": 0, "anchors": [
-                            {"position": pos, "page_index": a["page"],
-                             "pdf_label": a["N"],
-                             "chunk": {"page": a["M"]}, "verdict": "ABWEICHUNG"}
-                            for pos, a in zip(("front", "middle", "back"), anchors)
-                        ]})
+    monkeypatch.setattr(pls, "run_probe", mock_probe(anchors))
     rc, _ = call_main([str(SCRIPT), "DBKEY2", "--apply"])
     assert rc == pls.EXIT_ERROR                    # rowcount 0 → Abbruch
     assert "UPDATE zotero_attachments" in calls["sql"]
@@ -388,12 +473,14 @@ def test_healthy_book_needs_no_surgery(tmp_path, monkeypatch):
     monkeypatch.setattr(pls, "run_probe", lambda probe, key: {"verdict": "MATCH",
                                                               "_cmd": "mocked-probe --dry", "_rc": 0,
                                                               "anchors": []})
-
+    target = tmp_path / "OKKEY" / "ok.pdf"
+    monkeypatch.setattr(pls, "db_row",
+                        lambda dsn, key: ((pls.sha256_hex(target), 0, 0), 1))
+    before = sha(target)
     rc, out = call_main([str(SCRIPT), "OKKEY"])
-    before_check = sha(tmp_path / "OKKEY" / "ok.pdf")
     assert rc == pls.EXIT_OK
     assert "kein Eingriff" in out
-    assert sha(tmp_path / "OKKEY" / "ok.pdf") == before_check
+    assert sha(target) == before
 
 
 # ------------------------------------ real storage PDF (skip when absent) --
@@ -414,13 +501,14 @@ def test_reproduced_case_on_real_pdf(tmp_path):
             labels = current_labels(pdfs[0])
         except Exception:  # noqa: BLE001, S112 — kaputte Fremd-PDFs übergehen
             continue
-        if sum(1 for l in labels if l.strip()) >= len(labels) * 0.9 and \
+        if sum(1 for lbl in labels if lbl.strip()) >= len(labels) * 0.9 and \
                 len(set(labels)) >= len(labels) * 0.9:
             victim = pdfs[0]
             break
     if victim is None:
         pytest.skip("kein gesundes PDF im Storage gefunden")
-    truth = {i: l for i, l in enumerate(current_labels(victim)) if l.strip()}
+    truth = {i: lbl for i, lbl in enumerate(current_labels(victim)) if lbl.strip()}
+    before_victim = sha(victim)
     broken = tmp_path / "real_rebroken.pdf"
     broken.write_bytes(victim.read_bytes())
     doc = pymupdf.open(str(broken))
@@ -433,4 +521,103 @@ def test_reproduced_case_on_real_pdf(tmp_path):
     assert run_cli("REALREPRO", broken, anchors, "--apply") == pls.EXIT_OK
     for p, label in truth.items():
         assert current_labels(broken)[p] == label, f"S.{p + 1} weicht ab"
-    assert sha(victim) == sha(victim)  # Quelle unberührt (trivial, aber Vertrag)
+    assert sha(victim) == before_victim            # Quelle unberührt (echt gemessen)
+
+
+# ------------------------------------------------- apply pre-check (DB) ----
+
+def test_apply_missing_db_row_leaves_file_untouched(tmp_path, monkeypatch):
+    """Pre-Check VOR jedem Schreiben: KEY ohne DB-Row → EXIT_ERROR, Datei
+    unverändert (nie heilen und dann Hash-Sync verlassen — stale DB)."""
+    pdf = tmp_path / "dbmiss.pdf"
+    truth = {i: str(i + 1) for i in range(30)}
+    build_fixture(pdf, truth, tree=[{"startpage": 0, "prefix": "", "style": "D",
+                                     "firstpagenum": 4}])
+    anchors = probe_like(pdf, truth, [4, 15, 26])
+    monkeypatch.setattr(pls, "STORAGE", tmp_path)
+    key_dir = tmp_path / "DBMISS"
+    key_dir.mkdir(exist_ok=True)
+    shutil.copy2(pdf, key_dir / "dbmiss.pdf")
+    monkeypatch.setattr(pls, "run_probe", mock_probe(anchors))
+    calls = {}
+    fake_psycopg2(monkeypatch, [], calls=calls)   # SELECT: keine Row
+    target = key_dir / "dbmiss.pdf"
+    before = sha(target)
+    rc, out = call_main([str(SCRIPT), "DBMISS", "--apply"])
+    assert rc == pls.EXIT_ERROR
+    assert "rowcount=0" in out
+    assert calls["sql"].startswith("SELECT")      # nie geschrieben, nie gesynct
+    assert sha(target) == before
+
+
+def test_match_path_repairs_stale_db_hash(tmp_path, monkeypatch):
+    """Rerun nach fehlgeschlagenem Hash-Sync: Probe MATCH + stale Row →
+    Sync wird nachgeholt (nicht still exit 0), dann EXIT_OK."""
+    pdf = tmp_path / "stale.pdf"
+    truth = {i: str(i + 1) for i in range(30)}
+    build_fixture(pdf, truth, tree=[{"startpage": 0, "prefix": "", "style": "D",
+                                     "firstpagenum": 1}])
+    monkeypatch.setattr(pls, "STORAGE", tmp_path)
+    key_dir = tmp_path / "STALEKEY"
+    key_dir.mkdir(exist_ok=True)
+    shutil.copy2(pdf, key_dir / "stale.pdf")
+    monkeypatch.setattr(pls, "run_probe", lambda probe, key: {
+        "verdict": "MATCH", "_cmd": "mocked-probe --dry", "_rc": 0, "anchors": []})
+    calls = {}
+    fake_psycopg2(monkeypatch, [("0" * 64, 0, 0)], update_rowcount=1, calls=calls)
+    target = key_dir / "stale.pdf"
+    before = sha(target)
+    rc, out = call_main([str(SCRIPT), "STALEKEY"])
+    assert rc == pls.EXIT_OK
+    assert "hash-sync nachholen" in out
+    assert "UPDATE zotero_attachments" in calls["sql"]
+    assert sha(target) == before                   # nur DB repariert, Datei unberührt
+
+
+# --------------------------------------------- CLI surface (subprocess) ----
+
+def test_cli_subprocess_smoke(tmp_path):
+    """The argparse/__main__ surface as a real subprocess: heal + exit 0."""
+    pdf = tmp_path / "smoke.pdf"
+    truth = {i: str(i + 1) for i in range(30)}
+    build_fixture(pdf, truth, tree=[{"startpage": 0, "prefix": "", "style": "D",
+                                     "firstpagenum": 4}])
+    anchors = probe_like(pdf, truth, [4, 15, 26])
+    anchor_file = tmp_path / "anchors.json"
+    anchor_file.write_text(json.dumps(anchors))
+    proc = subprocess.run([sys.executable, str(SCRIPT), "SMOKE", "--pdf", str(pdf),
+                           "--anchors", str(anchor_file), "--apply"],
+                          capture_output=True, text=True, check=False)
+    assert proc.returncode == pls.EXIT_OK, proc.stdout + proc.stderr
+    assert current_labels(pdf) == [truth.get(i, "") for i in range(30)]
+
+
+def test_argparse_surface_errors_exit_1_not_abort_2():
+    """Vertrag: Exit 2 heißt ABORT (zurückgerollt) — ein Typo-Flag muss
+    Exit 1 (ERROR) sein, nie 2."""
+    proc = subprocess.run([sys.executable, str(SCRIPT), "--nonsense-flag"],
+                          capture_output=True, text=True, check=False)
+    assert proc.returncode == pls.EXIT_ERROR
+    assert "usage:" in proc.stderr
+
+
+# --------------------------------------------- probe field-name contract ---
+
+def test_anchors_from_probe_pins_field_names():
+    """Eingefrorener integrity_probe-Vertrag: Feldnamen (page_index,
+    pdf_label, chunk.page, verdict) — ein Upstream-Rename bricht HIER laut."""
+    probe_out = {
+        "verdict": "ABWEICHUNG",
+        "anchors": [
+            {"position": "front", "page_index": 2, "pdf_label": "C3",
+             "chunk": {"page": "iii"}, "verdict": "MATCH"},
+            {"position": "middle", "page_index": 12, "pdf_label": "5",
+             "chunk": {"page": "7"}, "verdict": "ABWEICHUNG"},
+            {"position": "back", "page_index": 27, "pdf_label": "x",
+             "chunk": {"page": "y"}, "verdict": "BLOCKER"},
+        ],
+    }
+    assert pls.anchors_from_probe(probe_out) == [
+        {"page": 2, "N": "C3", "M": "iii"},
+        {"page": 12, "N": "5", "M": "7"},
+    ]
