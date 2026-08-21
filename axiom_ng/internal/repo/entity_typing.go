@@ -59,8 +59,15 @@ var typingBareForms = []string{
 	"geschäftsführer", "geschäftsführerin",
 	"beschäftigte", "arbeitnehmer", "arbeitnehmerin",
 	"arbeitgeber", "arbeitgebern",
+	// Genitive/casus forms of the audited stems (korpus-vermessen):
+	// mitarbeiters 9×PERSON, arbeitgebers 7×, vorstands 7×, arbeitnehmers 5×,
+	// unternehmers 5×, geschäftsführers 2× — the Genitiv gap blocked the
+	// mitarbeiter family (PERSON-majority via 8 genitive stragglers).
+	"mitarbeiters", "arbeitgebers", "vorstands", "arbeitnehmers",
+	"unternehmers", "geschäftsführers",
 	// deliberately NOT here: manager (tester accepted PERSON class),
 	// sie/pronouns (extraction noise, future filter — not a type fix)
+	// NOT here (korpus-abwesend): kundes, beschäftigters
 }
 
 // typingPluralHeads: head nouns that make a short form a generic role
