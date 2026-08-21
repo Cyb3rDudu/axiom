@@ -182,6 +182,14 @@ func TestIT_RoleNounLexiconExpansion(t *testing.T) {
 	for _, f := range forms {
 		seedTypedEntity(t, lr, snap, f, "PERSON", 2)
 	}
+	// Genitive forms (korpus-vermessen): the gap that blocked mitarbeiter.
+	seedTypedEntity(t, lr, snap, "mitarbeiters", "PERSON", 2)
+	seedTypedEntity(t, lr, snap, "vorstands", "PERSON", 2)
+	seedTypedEntity(t, lr, snap, "arbeitgebers", "PERSON", 2)
+	seedTypedEntity(t, lr, snap, "arbeitnehmers", "PERSON", 2)
+	seedTypedEntity(t, lr, snap, "unternehmers", "PERSON", 2)
+	seedTypedEntity(t, lr, snap, "geschäftsführers", "PERSON", 2)
+
 	// Control: "manager" stays PERSON (tester's explicit decision).
 	seedTypedEntity(t, lr, snap, "Matthias S. Fifka", "PERSON", 2)
 
@@ -189,7 +197,8 @@ func TestIT_RoleNounLexiconExpansion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
-	if dr.MatchedRows != len(forms) {
+	wantTotal := len(forms) + 6 // + genitive forms
+	if dr.MatchedRows != wantTotal {
 		t.Fatalf("dry-run: want %d matches, got %d (%+v)", len(forms), dr.MatchedRows, dr)
 	}
 
@@ -200,6 +209,11 @@ func TestIT_RoleNounLexiconExpansion(t *testing.T) {
 		typ := typingTypeOf(t, lr, f)
 		if typ != "CONCEPT" {
 			t.Fatalf("%q: want CONCEPT after normalize, got %q", f, typ)
+		}
+	}
+	for _, f := range []string{"mitarbeiters", "vorstands", "arbeitgebers", "arbeitnehmers", "unternehmers", "geschäftsführers"} {
+		if got := typingTypeOf(t, lr, f); got != "CONCEPT" {
+			t.Fatalf("genitive %q: want CONCEPT, got %q", f, got)
 		}
 	}
 	// Control stays PERSON.
