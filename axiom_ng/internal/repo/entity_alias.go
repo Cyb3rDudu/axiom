@@ -64,7 +64,10 @@ func (r *Repo) BindFlexionAliases(ctx context.Context) (EntityAliasReport, error
 	err := r.withKGMaintenanceTx(ctx, "kg_bind_flexion_aliases", func(tx pgx.Tx) error {
 		var e error
 		rep, e = r.bindByGrouperOn(ctx, tx, aliasStem, true)
-		return e
+		if e != nil {
+			return e
+		}
+		return r.refreshKGReadModelTx(ctx, tx)
 	})
 	return rep, err
 }
@@ -279,7 +282,10 @@ func (r *Repo) BindExactFormAliases(ctx context.Context) (EntityAliasReport, err
 		rep, e = r.bindByGrouperOn(ctx, tx, func(form string) string {
 			return form
 		}, true)
-		return e
+		if e != nil {
+			return e
+		}
+		return r.refreshKGReadModelTx(ctx, tx)
 	})
 	return rep, err
 }
