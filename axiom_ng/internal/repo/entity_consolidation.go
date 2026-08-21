@@ -28,6 +28,7 @@ package repo
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -42,6 +43,17 @@ type ConsolidationReport struct {
 	Merged               int `json:"merged"`
 	DuplicateFormsBefore int `json:"duplicate_forms_before"`
 	DuplicateFormsAfter  int `json:"duplicate_forms_after"`
+}
+
+// EntityConsolidationDryRun reports the guarded merge blast radius without
+// mutating rows. DuplicateForms counts only groups eligible under the same
+// guards the apply path uses.
+func (r *Repo) EntityConsolidationDryRun(ctx context.Context) (ConsolidationReport, error) {
+	groups, losers, err := r.entityConsolidationPlan(ctx, r.pool)
+	if err != nil {
+		return ConsolidationReport{}, err
+	}
+	return ConsolidationReport{Merged: losers, DuplicateFormsBefore: groups, DuplicateFormsAfter: groups}, nil
 }
 
 // ConsolidateEntitiesReport runs the consolidation and returns the full
@@ -63,21 +75,11 @@ func (r *Repo) ConsolidateEntitiesReport(ctx context.Context) (ConsolidationRepo
 	return ConsolidationReport{Merged: merged, DuplicateFormsBefore: before, DuplicateFormsAfter: after}, nil
 }
 
-// duplicateActiveForms counts distinct canonical forms carried by more
-// than one entity across ACTIVE snapshots (same form expression as the
-// merge itself).
+// duplicateActiveForms counts guarded merge-eligible duplicate forms across
+// ACTIVE snapshots (same form expression and guards as the merge itself).
 func (r *Repo) duplicateActiveForms(ctx context.Context) (int, error) {
-	var n int
-	if err := r.pool.QueryRow(ctx, `
-		SELECT count(*) FROM (
-			SELECT lower(coalesce(e.canonical_form, e.text)) AS form
-			FROM processing_entities e
-			JOIN processing_snapshots s ON s.id = e.snapshot_id AND s.active
-			GROUP BY 1 HAVING count(*) > 1
-		) d`).Scan(&n); err != nil {
-		return 0, err
-	}
-	return n, nil
+	groups, _, err := r.entityConsolidationPlan(ctx, r.pool)
+	return groups, err
 }
 
 // ConsolidateEntities merges same-canonical-form entities across active
@@ -89,45 +91,84 @@ func (r *Repo) ConsolidateEntities(ctx context.Context) (int, error) {
 	return rep.Merged, err
 }
 
+// entityConsolidationPlan returns guarded eligible group/loser counts.
+func (r *Repo) entityConsolidationPlan(ctx context.Context, db kgSQLRunner) (int, int, error) {
+	groups, losers, _, _, err := r.entityConsolidationPairs(ctx, db)
+	return groups, losers, err
+}
+
+// entityConsolidationPairs builds the exact mutation plan used by both dry-run
+// and apply. It ports the W3 binding guards into the destructive merge layer:
+// mixed concrete types do not merge; PERSON naked surnames do not merge;
+// multi-part identical PERSON names and non-PERSON exact forms still merge.
+func (r *Repo) entityConsolidationPairs(ctx context.Context, db kgSQLRunner) (int, int, []string, []string, error) {
+	rows, err := db.Query(ctx, `
+		SELECT lower(coalesce(e.canonical_form, e.text)) AS form,
+		       e.id::text, coalesce(e.canonical_form, e.text),
+		       count(DISTINCT m.chunk_id) AS chunks, coalesce(e.type, ''),
+		       e.snapshot_id::text
+		FROM processing_entities e
+		JOIN processing_snapshots s ON s.id = e.snapshot_id AND s.active
+		LEFT JOIN processing_entity_mentions m ON m.entity_id = e.id
+		GROUP BY 1, 2, 3, 5, 6
+		ORDER BY 1, 2`)
+	if err != nil {
+		return 0, 0, nil, nil, fmt.Errorf("consolidate load: %w", err)
+	}
+	groups := map[string][]aliasEnt{}
+	for rows.Next() {
+		var k string
+		var e aliasEnt
+		if err := rows.Scan(&k, &e.id, &e.form, &e.chunks, &e.eType, &e.snapID); err != nil {
+			rows.Close()
+			return 0, 0, nil, nil, fmt.Errorf("consolidate scan: %w", err)
+		}
+		groups[k] = append(groups[k], e)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, 0, nil, nil, err
+	}
+
+	eligibleGroups := 0
+	var survivors, losers []string
+	keys := make([]string, 0, len(groups))
+	for k := range groups {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		members := groups[k]
+		if len(members) < 2 {
+			continue
+		}
+		if !familyTypesCompatible(members) || !familyPersonsBindable(members) {
+			continue
+		}
+		sorted := append([]aliasEnt(nil), members...)
+		sort.Slice(sorted, func(i, j int) bool {
+			if sorted[i].chunks != sorted[j].chunks {
+				return sorted[i].chunks > sorted[j].chunks
+			}
+			return sorted[i].id < sorted[j].id
+		})
+		surv := sorted[0].id
+		eligibleGroups++
+		for _, m := range sorted[1:] {
+			survivors = append(survivors, surv)
+			losers = append(losers, m.id)
+		}
+	}
+	return eligibleGroups, len(losers), survivors, losers, nil
+}
+
 // consolidateActiveEntities is the proven merge (#193, c1e0e82 — per-form
 // atomic batches, set-based re-points, deterministic survivor).
 func (r *Repo) consolidateActiveEntities(ctx context.Context) (int, error) {
 	merged := 0
 	err := r.withKGMaintenanceTx(ctx, "kg_consolidate_entities", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `
-		WITH forms AS (
-			SELECT lower(coalesce(e.canonical_form, e.text)) AS form, e.id,
-			       count(DISTINCT m.chunk_id) AS chunks
-			FROM processing_entities e
-			JOIN processing_snapshots s ON s.id = e.snapshot_id AND s.active
-			LEFT JOIN processing_entity_mentions m ON m.entity_id = e.id
-			GROUP BY 1, 2
-		),
-		ranked AS (
-			SELECT id,
-			       first_value(id) OVER (PARTITION BY form ORDER BY chunks DESC, id)::text AS survivor,
-			       row_number() OVER (PARTITION BY form ORDER BY chunks DESC, id) AS rn
-			FROM forms
-		)
-		SELECT survivor, id::text AS loser
-		FROM ranked
-		WHERE rn > 1
-		ORDER BY 1, 2`)
+		_, _, survivors, losers, err := r.entityConsolidationPairs(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("consolidate pairs: %w", err)
-		}
-		var survivors, losers []string
-		for rows.Next() {
-			var sv, lo string
-			if err := rows.Scan(&sv, &lo); err != nil {
-				rows.Close()
-				return fmt.Errorf("consolidate scan: %w", err)
-			}
-			survivors = append(survivors, sv)
-			losers = append(losers, lo)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
 			return err
 		}
 		if len(losers) == 0 {
