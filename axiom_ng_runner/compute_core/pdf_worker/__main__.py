@@ -160,9 +160,9 @@ def _convert_scan_batched(processor, pdf_path: Path, profile, logger) -> tuple[s
     src = pymupdf.open(str(pdf_path))
     try:
         for b_i, (start, end) in enumerate(bounds):
-            import os as _os
-            fd, tmp_name = _os.mkstemp(suffix=".pdf")
-            _os.close(fd)
+            import tempfile as _tmp
+            fd, tmp_name = _tmp.mkstemp(suffix=".pdf")
+            os.close(fd)
             batch_path = Path(tmp_name)
             try:
                 batch_doc = pymupdf.open()
