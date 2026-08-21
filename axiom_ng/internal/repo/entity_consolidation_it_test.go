@@ -345,7 +345,7 @@ func TestIT_ConsolidateEntitiesAllowsMultipartPerson(t *testing.T) {
 	}
 }
 
-func TestIT_ConsolidateEntitiesSkipsMixedTypeGroups(t *testing.T) {
+func TestIT_ConsolidateEntitiesMixedTypeGroupsMergeByMajority(t *testing.T) {
 	lr := openLeaseDB(t)
 	lr.truncateFixtures(t)
 	ctx := context.Background()
@@ -365,8 +365,8 @@ func TestIT_ConsolidateEntitiesSkipsMixedTypeGroups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConsolidateEntities: %v", err)
 	}
-	if merged != 0 {
-		t.Fatalf("mixed-type exact-form group must not merge, merged %d", merged)
+	if merged < 1 {
+		t.Fatalf("mixed-type exact-form group merges by majority (CONCEPT 3 > ORG 2), merged %d", merged)
 	}
 	var n int
 	if err := lr.pool.QueryRow(ctx, `
@@ -375,8 +375,8 @@ func TestIT_ConsolidateEntitiesSkipsMixedTypeGroups(t *testing.T) {
 		WHERE lower(coalesce(e.canonical_form,e.text))='management'`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 {
-		t.Fatalf("mixed-type management entities must survive, got %d", n)
+	if n != 1 {
+		t.Fatalf("majority merge: want 1 management survivor, got %d", n)
 	}
 }
 
