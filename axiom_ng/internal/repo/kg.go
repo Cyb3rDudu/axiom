@@ -16,11 +16,12 @@ import (
 
 // KGEntity is a graph entity with its mention footprint.
 type KGEntity struct {
-	ID            string `json:"id"`
-	CanonicalForm string `json:"canonical_form"`
-	Text          string `json:"text"`
-	Type          string `json:"type,omitempty"`
-	Mentions      int    `json:"mentions"` // distinct chunks mentioning it
+	ID            string   `json:"id"`
+	CanonicalForm string   `json:"canonical_form"`
+	Text          string   `json:"text"`
+	Type          string   `json:"type,omitempty"`
+	Mentions      int      `json:"mentions"`        // distinct chunks mentioning it
+	Forms         []string `json:"forms,omitempty"` // #198-3: family forms (survivor + variants)
 }
 
 // activeEntityCounts CTE: mention counts per entity, only active snapshots.
@@ -98,29 +99,70 @@ func (r *Repo) SearchKGEntities(ctx context.Context, q string, minMentions, limi
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	// #198-3: family resolution — variants resolve to their survivor; the
+	// forms list carries the full family (survivor form + variant forms).
+	// Tier ranking preserved: a variant hit carries the tier of its
+	// matched form, but the NODE is the survivor.
+	// #193 P3 escape is unnecessary now: the normalized term keeps only
+	// [a-z0-9äöü] — % and _ cannot survive normalization.
 	nq := normalizeKGTerm(q)
 	nqNoFam := normalizeKGTermNoFam(q)
 	qRaw := strings.ToLower(strings.TrimSpace(q))
-	rows, err := r.pool.Query(ctx, `
-		SELECT root_entity_id::text, primary_form, primary_text,
-		       coalesce(primary_type, ''), mention_count
-		FROM kg_entity_roots
-		WHERE mention_count >= $1
-		  AND ($2 = '' OR normalized_form LIKE '%' || $2 || '%'
-		       OR ($2 LIKE '%' || normalized_form || '%' AND length(normalized_form) >= 4))
-		ORDER BY CASE
-		           WHEN $2 = '' THEN 4
-		           WHEN $4 = lower(primary_form) THEN 1
-		           WHEN normalized_form_nofam = $3 THEN 2
-		           WHEN normalized_form = $2 THEN 3
-		           ELSE 4
-		         END,
-		         mention_count DESC, root_entity_id
-		LIMIT $5`, minMentions, nq, nqNoFam, qRaw, limit)
+	rows, err := r.pool.Query(ctx, activeEntityCounts+`,
+	matched AS (
+		SELECT e.id, e.alias_of,
+		       CASE
+		            WHEN $2 = '' THEN 4
+		            WHEN $4 = lower(coalesce(e.canonical_form, e.text)) THEN 1
+		            WHEN l2a.nf_nofam = $3 THEN 2
+		            WHEN l3.nf = $2 THEN 3
+		            ELSE 4
+		       END AS tier,
+		       em.chunks
+		FROM em
+		`+kgNormalizedForm+`
+		WHERE em.chunks >= $1
+		  AND ($2 = '' OR l3.nf LIKE '%' || $2 || '%'
+		       OR ($2 LIKE '%' || l3.nf || '%' AND length(l3.nf) >= 4))
+	),
+	resolved AS (
+		SELECT DISTINCT ON (coalesce(m.alias_of, m.id))
+		       coalesce(m.alias_of, m.id) AS node_id, m.tier, m.chunks
+		FROM matched m
+		ORDER BY coalesce(m.alias_of, m.id), m.tier, m.chunks DESC
+	)
+	SELECT e.id::text, coalesce(e.canonical_form, e.text), e.text,
+	       coalesce(e.type, ''),
+	       (SELECT count(DISTINCT m2.chunk_id) FROM processing_entity_mentions m2
+	        WHERE m2.entity_id IN (
+	          SELECT e2.id FROM processing_entities e2
+	          WHERE e2.id = e.id OR e2.alias_of = e.id)),
+	       COALESCE(
+	         (SELECT json_agg(DISTINCT coalesce(v.canonical_form, v.text) ORDER BY coalesce(v.canonical_form, v.text))
+	          FROM processing_entities v
+	          WHERE v.id = e.id OR v.alias_of = e.id),
+	         'null'
+	       )::text
+	FROM resolved r
+	JOIN processing_entities e ON e.id = r.node_id
+	JOIN processing_snapshots s ON s.id = e.snapshot_id AND s.active
+	ORDER BY r.tier, r.chunks DESC, e.id
+	LIMIT $5`, minMentions, nq, nqNoFam, qRaw, limit)
 	if err != nil {
 		return nil, err
 	}
-	return scanKGEntities(rows)
+	defer rows.Close()
+	out := []KGEntity{}
+	for rows.Next() {
+		var e KGEntity
+		var formsJSON string
+		if err := rows.Scan(&e.ID, &e.CanonicalForm, &e.Text, &e.Type, &e.Mentions, &formsJSON); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(formsJSON), &e.Forms)
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // KGNeighbor is one 1-hop edge with both endpoints' stability.
@@ -143,39 +185,84 @@ func (r *Repo) KGNeighbors(ctx context.Context, entityID string, minMentions, li
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rootID, err := r.resolveKGRootID(ctx, entityID)
-	if err != nil || rootID == "" {
-		return []KGNeighbor{}, err
-	}
-	rows, err := r.pool.Query(ctx, `
-		SELECT CASE WHEN source_root_id = $1::uuid THEN target_root_id::text ELSE source_root_id::text END AS other_id,
-		       CASE WHEN source_root_id = $1::uuid THEN target_form ELSE source_form END AS other_form,
-		       coalesce(CASE WHEN source_root_id = $1::uuid THEN target_type ELSE source_type END, '') AS other_type,
-		       CASE WHEN source_root_id = $1::uuid THEN 'out' ELSE 'in' END AS direction,
-		       type, strength, evidence_chunk_ids::text,
-		       CASE WHEN source_root_id = $1::uuid THEN target_mentions ELSE source_mentions END AS other_mentions,
-		       confidence
-		FROM kg_relation_triples
-		WHERE (source_root_id = $1::uuid OR target_root_id = $1::uuid)
-		  AND source_mentions >= $2 AND target_mentions >= $2
-		ORDER BY other_mentions DESC, other_id
-		LIMIT $3`, rootID, minMentions, limit)
+	rows, err := r.pool.Query(ctx, activeEntityCounts+`,
+	cor AS (
+		SELECT r.type, coalesce(se.canonical_form, se.text) AS sf,
+		       coalesce(te.canonical_form, te.text) AS tf,
+		       count(DISTINCT es.document_id) AS docs,
+		       count(DISTINCT r.id) AS triprows
+		FROM processing_entity_relationships r
+		JOIN processing_snapshots sn ON sn.id = r.snapshot_id AND sn.active
+		JOIN processing_entities se ON se.id = r.source_entity_id
+		JOIN processing_entities te ON te.id = r.target_entity_id
+		CROSS JOIN LATERAL jsonb_array_elements_text(r.evidence_chunk_ids) ev
+		JOIN processing_chunks c ON c.id = ev.value::uuid
+		JOIN processing_snapshots es ON es.id = c.snapshot_id AND es.active
+		GROUP BY 1, 2, 3
+	)
+	SELECT o.id::text, coalesce(o.canonical_form, o.text), coalesce(o.type, ''),
+	       CASE WHEN r.source_entity_id = $1::uuid THEN 'out' ELSE 'in' END,
+	       r.type, r.strength, r.evidence_chunk_ids::text, om.chunks,
+	       coalesce(cor.docs, 1), coalesce(cor.triprows, 1), jsonb_array_length(r.evidence_chunk_ids)
+	FROM processing_entity_relationships r
+	JOIN processing_snapshots s ON s.id = r.snapshot_id AND s.active
+	JOIN em src ON src.entity_id = r.source_entity_id
+	JOIN em tgt ON tgt.entity_id = r.target_entity_id
+	JOIN processing_entities o
+	  ON o.id = CASE WHEN r.source_entity_id = $1::uuid THEN r.target_entity_id ELSE r.source_entity_id END
+	JOIN em om ON om.entity_id = o.id
+	JOIN processing_entities se2 ON se2.id = r.source_entity_id
+	JOIN processing_entities te2 ON te2.id = r.target_entity_id
+	LEFT JOIN cor ON cor.type = r.type
+	             AND cor.sf = coalesce(se2.canonical_form, se2.text)
+	             AND cor.tf = coalesce(te2.canonical_form, te2.text)
+	WHERE (r.source_entity_id = $1::uuid OR r.target_entity_id = $1::uuid)
+	  AND src.chunks >= $2 AND tgt.chunks >= $2
+	ORDER BY om.chunks DESC, o.id
+	LIMIT $3`, entityID, minMentions, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []KGNeighbor{}
+	type neighborRaw struct {
+		n     KGNeighbor
+		docs  int
+		rows  int
+		evLen int
+	}
+	var edges []neighborRaw
 	for rows.Next() {
-		var e KGNeighbor
+		var e neighborRaw
 		var ev string
-		if err := rows.Scan(&e.OtherID, &e.OtherForm, &e.OtherType, &e.Direction,
-			&e.Type, &e.Strength, &ev, &e.OtherMentions, &e.Confidence); err != nil {
+		var strength *float32
+		if err := rows.Scan(&e.n.OtherID, &e.n.OtherForm, &e.n.OtherType, &e.n.Direction,
+			&e.n.Type, &strength, &ev, &e.n.OtherMentions, &e.docs, &e.rows, &e.evLen); err != nil {
 			return nil, err
 		}
-		e.EvidenceChunks = parseUUIDArray(ev)
-		out = append(out, e)
+		e.n.Strength = strength
+		e.n.EvidenceChunks = parseUUIDArray(ev)
+		edges = append(edges, e)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// #198 item 4: section quality of the PAGE's evidence (one batched
+	// chunk-text fetch; frontmatter classes are corpus-absent since item 1,
+	// the term defends against leakage).
+	var evs [][]string
+	for _, e := range edges {
+		evs = append(evs, e.n.EvidenceChunks)
+	}
+	sec, err := r.kgEvidenceSectionQuality(ctx, evs)
+	if err != nil {
+		return nil, err
+	}
+	out := []KGNeighbor{} // #193 P2: empty slice marshals as [], never null
+	for _, e := range edges {
+		e.n.Confidence = kgConfidence(e.docs, e.rows, e.evLen, sec[evKey(e.n.EvidenceChunks)])
+		out = append(out, e.n)
+	}
+	return out, nil
 }
 
 // KGRelationView is a relation with resolved endpoint forms.
@@ -219,46 +306,94 @@ func (r *Repo) KGRelations(ctx context.Context, relType, entityID, documentID st
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rootID := ""
-	var err error
-	if entityID != "" {
-		rootID, err = r.resolveKGRootID(ctx, entityID)
-		if err != nil || rootID == "" {
-			return []KGRelationView{}, err
-		}
-	}
-	rows, err := r.pool.Query(ctx, `
-		SELECT t.id::text, t.type,
-		       t.source_root_id::text, t.source_form,
-		       t.target_root_id::text, t.target_form,
-		       t.strength, t.evidence_chunk_ids::text, t.corroborating_documents,
-		       t.confidence
-		FROM kg_relation_triples t
-		WHERE ($1 = '' OR t.type = $1)
-		  AND ($2 = '' OR t.source_root_id = $2::uuid OR t.target_root_id = $2::uuid)
-		  AND ($5 = '' OR EXISTS (
-		      SELECT 1 FROM kg_relation_evidence_docs d
-		      WHERE d.triple_id = t.id AND d.document_id = $5::uuid))
-		  AND t.source_mentions >= $3 AND t.target_mentions >= $3
-		ORDER BY t.corroborating_documents DESC, t.source_mentions + t.target_mentions DESC, t.confidence DESC, t.id
-		LIMIT $4`, relType, rootID, minMentions, limit, documentID)
+	// ponytail: cor is a group-by over all active relations (~71k edges,
+	// LATERAL-unfolded to ~74k evidence elements at current corpus). The
+	// full ranked browse measured ~3.3s on the live graph (EXPLAIN ANALYZE,
+	// JIT included ~1.2s; the pre-LATERAL shape was ~2.0s — the +62% is the
+	// price of evidence-true corroboration). Materialize the corroboration
+	// as a table if the endpoint becomes latency-sensitive.
+	rows, err := r.pool.Query(ctx, activeEntityCounts+`,
+	cor AS (
+		SELECT r.type, coalesce(se.canonical_form, se.text) AS sf,
+		       coalesce(te.canonical_form, te.text) AS tf,
+		       count(DISTINCT es.document_id) AS docs,
+		       count(DISTINCT r.id) AS triprows
+		FROM processing_entity_relationships r
+		JOIN processing_snapshots sn ON sn.id = r.snapshot_id AND sn.active
+		JOIN processing_entities se ON se.id = r.source_entity_id
+		JOIN processing_entities te ON te.id = r.target_entity_id
+		CROSS JOIN LATERAL jsonb_array_elements_text(r.evidence_chunk_ids) ev
+		JOIN processing_chunks c ON c.id = ev.value::uuid
+		JOIN processing_snapshots es ON es.id = c.snapshot_id AND es.active
+		GROUP BY 1, 2, 3
+	)
+	SELECT r.id::text, r.type,
+	       r.source_entity_id::text, coalesce(se.canonical_form, se.text),
+	       r.target_entity_id::text, coalesce(te.canonical_form, te.text),
+	       r.strength, r.evidence_chunk_ids::text, coalesce(cor.docs, 1),
+	       coalesce(cor.triprows, 1), jsonb_array_length(r.evidence_chunk_ids)
+	FROM processing_entity_relationships r
+	JOIN processing_snapshots s ON s.id = r.snapshot_id AND s.active
+	JOIN em src ON src.entity_id = r.source_entity_id
+	JOIN em tgt ON tgt.entity_id = r.target_entity_id
+	JOIN processing_entities se ON se.id = r.source_entity_id
+	JOIN processing_entities te ON te.id = r.target_entity_id
+	LEFT JOIN cor ON cor.type = r.type
+	             AND cor.sf = coalesce(se.canonical_form, se.text)
+	             AND cor.tf = coalesce(te.canonical_form, te.text)
+	WHERE ($1 = '' OR r.type = $1)
+	  AND ($2 = '' OR r.source_entity_id = $2::uuid OR r.target_entity_id = $2::uuid)
+	  AND ($5 = '' OR EXISTS (
+		      SELECT 1 FROM processing_chunks ec
+		      JOIN processing_snapshots esn ON esn.id = ec.snapshot_id AND esn.active
+		      WHERE ec.id IN (SELECT jsonb_array_elements_text(r.evidence_chunk_ids)::uuid)
+		        AND esn.document_id = $5::uuid))
+	  AND src.chunks >= $3 AND tgt.chunks >= $3
+	ORDER BY cor.docs DESC NULLS LAST, src.chunks + tgt.chunks DESC, r.id
+	LIMIT $4`, relType, entityID, minMentions, limit, documentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []KGRelationView{}
+	out := []KGRelationView{} // #193 P2: empty slice marshals as [], never null
+	type relRaw struct {
+		v     KGRelationView
+		docs  int
+		rows  int
+		evLen int
+	}
+	var rels []relRaw
 	for rows.Next() {
-		var x KGRelationView
+		var x relRaw
 		var ev string
-		if err := rows.Scan(&x.ID, &x.Type, &x.SourceID, &x.SourceForm,
-			&x.TargetID, &x.TargetForm, &x.Strength, &ev, &x.Documents, &x.Confidence); err != nil {
+		var strength *float32
+		if err := rows.Scan(&x.v.ID, &x.v.Type, &x.v.SourceID, &x.v.SourceForm,
+			&x.v.TargetID, &x.v.TargetForm, &strength, &ev, &x.docs, &x.rows, &x.evLen); err != nil {
 			return nil, err
 		}
-		x.EvidenceChunks = parseUUIDArray(ev)
-		x.CorroboratingDocuments = x.Documents
-		out = append(out, x)
+		x.v.Strength = strength
+		x.v.EvidenceChunks = parseUUIDArray(ev)
+		x.v.Documents = x.docs
+		x.v.CorroboratingDocuments = x.docs
+		rels = append(rels, x)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// #198 item 4: section quality of the page's evidence (batched).
+	var evs [][]string
+	for _, x := range rels {
+		evs = append(evs, x.v.EvidenceChunks)
+	}
+	sec, err := r.kgEvidenceSectionQuality(ctx, evs)
+	if err != nil {
+		return nil, err
+	}
+	for _, x := range rels {
+		x.v.Confidence = kgConfidence(x.docs, x.rows, x.evLen, sec[evKey(x.v.EvidenceChunks)])
+		out = append(out, x.v)
+	}
+	return out, nil
 }
 
 // kgConfidence is the #198 item-4 read-side quality formula:
