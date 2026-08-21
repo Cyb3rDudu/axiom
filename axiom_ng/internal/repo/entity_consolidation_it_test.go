@@ -81,6 +81,9 @@ func TestIT_ConsolidateEntities(t *testing.T) {
 		t.Fatalf("seed loser type history: %v", err)
 	}
 	entB, chB := seedEntityWithID(t, lr, snapB, "deutschland", "22222222-2222-2222-2222-222222222222", 5)
+	if _, err := lr.pool.Exec(ctx, `UPDATE processing_entities SET type='LOCATION', description='country survivor evidence' WHERE id=$1::uuid`, entB); err != nil {
+		t.Fatalf("seed survivor type history: %v", err)
+	}
 	// Distinct form stays untouched.
 	entC, chC := kgSeedEntity(t, lr, snapA, "nachhaltigkeit", 2)
 
@@ -92,7 +95,7 @@ func TestIT_ConsolidateEntities(t *testing.T) {
 	var entDup string
 	if err := lr.pool.QueryRow(ctx, `
 		INSERT INTO processing_entities (snapshot_id, ref, text, canonical_form, type, description)
-		VALUES ($1::uuid, 'de-dup', 'deutschland', 'deutschland', 'WORK', 'duplicate work label') RETURNING id::text`,
+		VALUES ($1::uuid, 'de-dup', 'deutschland', 'deutschland', 'LOCATION', 'duplicate location label') RETURNING id::text`,
 		snapA).Scan(&entDup); err != nil {
 		t.Fatalf("seed same-snapshot duplicate: %v", err)
 	}
@@ -257,6 +260,173 @@ func TestIT_ConsolidateEntities(t *testing.T) {
 	}
 	if merged2 != 0 {
 		t.Fatalf("re-run must be a no-op, merged %d", merged2)
+	}
+}
+
+// W6 hardening: the destructive merge must share the W3 homonym/type
+// guards. Naked-surname PERSON homonyms stay separate; identity resolution
+// can still bind safe families later.
+func TestIT_ConsolidateEntitiesGuardsHomonymPersonSurnames(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, snapA := kgSeedSnapshot(t, lr, "Schmidt A", "SCHMIDT_A")
+	_, snapB := kgSeedSnapshot(t, lr, "Schmidt B", "SCHMIDT_B")
+	_, snapC := kgSeedSnapshot(t, lr, "Schmidt C", "SCHMIDT_C")
+
+	seedTypedEntity(t, lr, snapA, "schmidt", "PERSON", 3)
+	seedTypedEntity(t, lr, snapB, "schmidt", "PERSON", 2)
+	seedTypedEntity(t, lr, snapC, "schmidt", "PERSON", 1)
+
+	merged, err := lr.rep.ConsolidateEntities(ctx)
+	if err != nil {
+		t.Fatalf("ConsolidateEntities: %v", err)
+	}
+	if merged != 0 {
+		t.Fatalf("naked-surname PERSON entities must not merge, merged %d", merged)
+	}
+	var n int
+	if err := lr.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_entities e
+		JOIN processing_snapshots s ON s.id=e.snapshot_id AND s.active
+		WHERE lower(coalesce(e.canonical_form,e.text))='schmidt' AND e.type='PERSON'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("three schmidt PERSON entities must survive, got %d", n)
+	}
+}
+
+func TestIT_ConsolidateEntitiesAllowsMultipartPerson(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, snapA := kgSeedSnapshot(t, lr, "Michael Schmidt A", "MSCHMIDT_A")
+	_, snapB := kgSeedSnapshot(t, lr, "Michael Schmidt B", "MSCHMIDT_B")
+
+	loser := seedTypedEntity(t, lr, snapA, "Michael Schmidt", "PERSON", 2)
+	seedTypedEntity(t, lr, snapB, "Michael Schmidt", "PERSON", 3)
+
+	merged, err := lr.rep.ConsolidateEntities(ctx)
+	if err != nil {
+		t.Fatalf("ConsolidateEntities: %v", err)
+	}
+	if merged != 1 {
+		t.Fatalf("multipart identical PERSON name must merge one loser, got %d", merged)
+	}
+	var n int
+	if err := lr.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_entities e
+		JOIN processing_snapshots s ON s.id=e.snapshot_id AND s.active
+		WHERE coalesce(e.canonical_form,e.text)='Michael Schmidt' AND e.type='PERSON'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("one Michael Schmidt survivor must remain, got %d", n)
+	}
+	var archived int
+	if err := lr.pool.QueryRow(ctx, `SELECT count(*) FROM kg_superseded_entities WHERE loser_entity_id=$1::uuid`, loser).Scan(&archived); err != nil {
+		t.Fatal(err)
+	}
+	if archived != 1 {
+		t.Fatalf("multipart PERSON loser must be archived, got %d", archived)
+	}
+}
+
+func TestIT_ConsolidateEntitiesSkipsMixedTypeGroups(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, snapA := kgSeedSnapshot(t, lr, "Mixed A", "MIXED_A")
+	_, snapB := kgSeedSnapshot(t, lr, "Mixed B", "MIXED_B")
+
+	seedTypedEntity(t, lr, snapA, "management", "CONCEPT", 3)
+	seedTypedEntity(t, lr, snapB, "management", "ORGANIZATION", 2)
+
+	merged, err := lr.rep.ConsolidateEntities(ctx)
+	if err != nil {
+		t.Fatalf("ConsolidateEntities: %v", err)
+	}
+	if merged != 0 {
+		t.Fatalf("mixed-type exact-form group must not merge, merged %d", merged)
+	}
+	var n int
+	if err := lr.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_entities e
+		JOIN processing_snapshots s ON s.id=e.snapshot_id AND s.active
+		WHERE lower(coalesce(e.canonical_form,e.text))='management'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("mixed-type management entities must survive, got %d", n)
+	}
+}
+
+func TestIT_EntityConsolidationDryRunDoesNotMutate(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, snapA := kgSeedSnapshot(t, lr, "Dry A", "DRY_A")
+	_, snapB := kgSeedSnapshot(t, lr, "Dry B", "DRY_B")
+	seedTypedEntity(t, lr, snapA, "nachhaltigkeit", "CONCEPT", 3)
+	seedTypedEntity(t, lr, snapB, "nachhaltigkeit", "CONCEPT", 2)
+
+	var beforeEntities, beforeArchive, beforeRoots int
+	if err := lr.pool.QueryRow(ctx, `SELECT count(*) FROM processing_entities`).Scan(&beforeEntities); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `SELECT count(*) FROM kg_superseded_entities`).Scan(&beforeArchive); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `SELECT count(*) FROM kg_entity_roots`).Scan(&beforeRoots); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := lr.rep.EntityConsolidationDryRun(ctx)
+	if err != nil {
+		t.Fatalf("EntityConsolidationDryRun: %v", err)
+	}
+	if rep.DuplicateFormsBefore != 1 || rep.Merged != 1 {
+		t.Fatalf("dry-run blast radius wrong: %+v", rep)
+	}
+
+	var afterEntities, afterArchive, afterRoots int
+	if err := lr.pool.QueryRow(ctx, `SELECT count(*) FROM processing_entities`).Scan(&afterEntities); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `SELECT count(*) FROM kg_superseded_entities`).Scan(&afterArchive); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `SELECT count(*) FROM kg_entity_roots`).Scan(&afterRoots); err != nil {
+		t.Fatal(err)
+	}
+	if beforeEntities != afterEntities || beforeArchive != afterArchive || beforeRoots != afterRoots {
+		t.Fatalf("dry-run mutated rows: entities %d->%d archive %d->%d roots %d->%d",
+			beforeEntities, afterEntities, beforeArchive, afterArchive, beforeRoots, afterRoots)
 	}
 }
 

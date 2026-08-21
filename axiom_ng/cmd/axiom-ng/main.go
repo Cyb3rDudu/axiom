@@ -175,14 +175,33 @@ func main() {
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "-consolidate-entities" {
+		// #199 W6 hardening: dry-run by default; --apply mutates. This flag
+		// shares the same operator discipline as relation consolidation,
+		// typing normalization, and alias binding.
 		cfg := config.Load()
 		logger := log.New(os.Stderr, "epilogue: ", log.LstdFlags)
+		apply := false
+		for _, a := range os.Args[2:] {
+			if a == "--apply" {
+				apply = true
+			}
+		}
 		d, err := db.Open(context.Background(), cfg.DatabaseURL)
 		if err != nil {
 			logger.Fatalf("postgres: %v", err)
 		}
 		defer d.Close()
-		report, err := repo.New(d.Pool()).ConsolidateEntitiesReport(context.Background())
+		rp := repo.New(d.Pool())
+		if !apply {
+			report, err := rp.EntityConsolidationDryRun(context.Background())
+			if err != nil {
+				logger.Fatalf("dry-run: %v", err)
+			}
+			logger.Printf("dry-run: %d guarded groups / %d entities would merge (use --apply)",
+				report.DuplicateFormsBefore, report.Merged)
+			return
+		}
+		report, err := rp.ConsolidateEntitiesReport(context.Background())
 		if err != nil {
 			logger.Fatalf("consolidate: %v", err)
 		}
