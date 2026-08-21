@@ -163,10 +163,21 @@ func TestIT_KGRelationsCorroborationRankingAndScope(t *testing.T) {
 	entStdA, _ := kgSeedEntity(t, lr, snapA, "reporting_standard", 2)
 	kgSeedRelation(t, lr, snapA, entStdA, entStdA, "same_as", chGri[:1])
 
+	if _, err := lr.rep.ConsolidateEntities(ctx); err != nil {
+		t.Fatalf("ConsolidateEntities: %v", err)
+	}
+	var entNa string
+	if err := lr.pool.QueryRow(ctx, `
+		SELECT e.id::text FROM processing_entities e
+		JOIN processing_snapshots s ON s.id=e.snapshot_id AND s.active
+		WHERE e.canonical_form='nachhaltigkeit'`).Scan(&entNa); err != nil {
+		t.Fatalf("read nachhaltigkeit survivor: %v", err)
+	}
+
 	// 1. Ranking: corroborated triple FIRST despite lower endpoint
 	// popularity (weleda 8 + nachhaltigkeit 2 > nachhaltigkeit 2 + csr 2 —
 	// the old ranking served the junk first).
-	rels, err := lr.rep.KGRelations(ctx, "", entNaA, "", 2, 50)
+	rels, err := lr.rep.KGRelations(ctx, "", entNa, "", 2, 50)
 	if err != nil {
 		t.Fatalf("KGRelations: %v", err)
 	}
@@ -196,13 +207,13 @@ func TestIT_KGRelationsCorroborationRankingAndScope(t *testing.T) {
 	}
 
 	// 3. Entity + scope agree (both doc-A relations qualify).
-	entScoped, err := lr.rep.KGRelations(ctx, "", entNaA, docA, 2, 50)
+	entScoped, err := lr.rep.KGRelations(ctx, "", entNa, docA, 2, 50)
 	if err != nil || len(entScoped) != 2 {
 		t.Fatalf("entity-from-A + scope A must return its 2 relations, got %d err=%v", len(entScoped), err)
 	}
 
 	// 4. Type filter still narrows within the ranking.
-	typed, err := lr.rep.KGRelations(ctx, "owned_by", entNaA, "", 2, 50)
+	typed, err := lr.rep.KGRelations(ctx, "owned_by", entNa, "", 2, 50)
 	if err != nil || len(typed) != 1 || typed[0].SourceForm != "weleda" {
 		t.Fatalf("type filter broken: %d err=%v", len(typed), err)
 	}
@@ -230,8 +241,11 @@ func TestIT_KGRelationsNonexistentEntityIsEmpty(t *testing.T) {
 	}
 	_, snapA := kgSeedSnapshot(t, lr, "Klein", "KGATT_P1")
 	entX, chX := kgSeedEntity(t, lr, snapA, "konzept_x", 2)
-	kgSeedEntity(t, lr, snapA, "konzept_y", 2)
-	kgSeedRelation(t, lr, snapA, entX, entX, "same_as", chX[:1]) // self-relation so it exists
+	entY, _ := kgSeedEntity(t, lr, snapA, "konzept_y", 2)
+	kgSeedRelation(t, lr, snapA, entX, entY, "same_as", chX[:1])
+	if err := lr.rep.RefreshKGReadModel(ctx); err != nil {
+		t.Fatalf("RefreshKGReadModel: %v", err)
+	}
 
 	// a real id returns exactly its relations (scoped-only).
 	rels, err := lr.rep.KGRelations(ctx, "", entX, "", 2, 50)

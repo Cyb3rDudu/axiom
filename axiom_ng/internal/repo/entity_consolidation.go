@@ -131,7 +131,7 @@ func (r *Repo) consolidateActiveEntities(ctx context.Context) (int, error) {
 			return err
 		}
 		if len(losers) == 0 {
-			return nil
+			return r.refreshKGReadModelTx(ctx, tx)
 		}
 		if err := archiveSupersededEntitiesTx(ctx, tx, survivors, losers); err != nil {
 			return fmt.Errorf("consolidate archive losers: %w", err)
@@ -190,7 +190,7 @@ func (r *Repo) consolidateActiveEntities(ctx context.Context) (int, error) {
 			return fmt.Errorf("consolidate delete losers: %w", err)
 		}
 		merged = len(losers)
-		return nil
+		return r.refreshKGReadModelTx(ctx, tx)
 	})
 	if err != nil {
 		return 0, err

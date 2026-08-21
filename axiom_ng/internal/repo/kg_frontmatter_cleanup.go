@@ -311,6 +311,9 @@ func (r *Repo) CleanupFrontmatterKG(ctx context.Context, apply bool) (Frontmatte
 			return rep, fmt.Errorf("cleanup delete entities: %w", err)
 		}
 	}
+	if err := r.refreshKGReadModelTx(ctx, tx); err != nil {
+		return rep, fmt.Errorf("cleanup refresh read model: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return rep, fmt.Errorf("cleanup commit: %w", err)
 	}

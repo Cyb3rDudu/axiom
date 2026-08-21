@@ -358,7 +358,7 @@ func (r *Repo) consolidateActiveRelations(ctx context.Context) (RelationConsolid
 			}
 		}
 
-		return nil
+		return r.refreshKGReadModelTx(ctx, tx)
 	})
 	if err != nil {
 		return rep, err
