@@ -81,6 +81,10 @@ func (r *Repo) CleanupFrontmatterKG(ctx context.Context, apply bool) (Frontmatte
 			return rep, fmt.Errorf("cleanup begin: %w", err)
 		}
 		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, kgMaintenanceLockKey); err != nil {
+			return rep, fmt.Errorf("cleanup lock: %w", err)
+		}
+		kgHook("kg_cleanup_frontmatter:after_lock")
 	}
 	q := func(sql string, args ...any) (pgx.Rows, error) {
 		if tx != nil {
@@ -279,10 +283,11 @@ func (r *Repo) CleanupFrontmatterKG(ctx context.Context, apply bool) (Frontmatte
 
 	// 4. Apply: relations -> survivor evidence strip -> mentions -> entities.
 	if len(relDelete) > 0 {
-		if _, err := tx.Exec(ctx, `DELETE FROM processing_entity_relationships WHERE id = ANY($1::uuid[])`, relDelete); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM processing_entity_relationships r USING processing_snapshots s WHERE r.snapshot_id = s.id AND s.active AND r.id = ANY($1::uuid[])`, relDelete); err != nil {
 			return rep, fmt.Errorf("cleanup delete relations: %w", err)
 		}
 	}
+	kgHook("kg_cleanup_frontmatter:after_delete_relations")
 	if len(relStrip) > 0 {
 		if _, err := tx.Exec(ctx, `
 			UPDATE processing_entity_relationships r
@@ -290,18 +295,19 @@ func (r *Repo) CleanupFrontmatterKG(ctx context.Context, apply bool) (Frontmatte
 			  SELECT jsonb_agg(v) FROM jsonb_array_elements_text(r.evidence_chunk_ids) v
 			  WHERE NOT (v = ANY($1::text[]))
 			), '[]'::jsonb)
-			WHERE r.id = ANY($2::uuid[])`, textSet(gated), relStrip); err != nil {
+			FROM processing_snapshots s
+			WHERE r.snapshot_id = s.id AND s.active AND r.id = ANY($2::uuid[])`, textSet(gated), relStrip); err != nil {
 			return rep, fmt.Errorf("cleanup strip evidence: %w", err)
 		}
 	}
 	// Mentions of SURVIVING entities (deleted entities' mentions cascade).
 	if survivorMentions := gatedMentionsOfSurvivors(gatedMentions, entDelete); len(survivorMentions) > 0 {
-		if _, err := tx.Exec(ctx, `DELETE FROM processing_entity_mentions WHERE id = ANY($1::uuid[])`, survivorMentions); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM processing_entity_mentions m USING processing_entities e, processing_snapshots s WHERE m.entity_id = e.id AND e.snapshot_id = s.id AND s.active AND m.id = ANY($1::uuid[])`, survivorMentions); err != nil {
 			return rep, fmt.Errorf("cleanup delete mentions: %w", err)
 		}
 	}
 	if len(entDelete) > 0 {
-		if _, err := tx.Exec(ctx, `DELETE FROM processing_entities WHERE id = ANY($1::uuid[])`, entDelete); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM processing_entities e USING processing_snapshots s WHERE e.snapshot_id = s.id AND s.active AND e.id = ANY($1::uuid[])`, entDelete); err != nil {
 			return rep, fmt.Errorf("cleanup delete entities: %w", err)
 		}
 	}

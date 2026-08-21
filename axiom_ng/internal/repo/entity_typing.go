@@ -26,6 +26,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // typingBareForms: exact normalized forms (lower-case, single spaces).
@@ -124,25 +126,32 @@ func (r *Repo) entityTyping(ctx context.Context, apply bool) (EntityTypingReport
 		rep.MatchedRows = total
 		return rep, nil
 	}
-	ct, err := r.pool.Exec(ctx, `
-		WITH act AS (
-			SELECT e.id, e.type,
-			       lower(regexp_replace(btrim(coalesce(e.canonical_form, e.text)), '\s+', ' ', 'g')) AS form
-			FROM processing_entities e
-			JOIN processing_snapshots s ON s.id = e.snapshot_id AND s.active
-		)
-		UPDATE processing_entities e
-		SET type = 'CONCEPT'
-		FROM act
-		WHERE e.id = act.id
-		  AND act.type IS DISTINCT FROM 'CONCEPT'
-		  AND (act.form = ANY($1::text[])
-		       OR (act.form ~ $2 AND act.type IN ('PERSON', 'ORGANIZATION')))`,
-		typingBareForms, typingPluralHeadPattern())
+	err = r.withKGMaintenanceTx(ctx, "kg_normalize_entity_types", func(tx pgx.Tx) error {
+		ct, err := tx.Exec(ctx, `
+			WITH act AS (
+				SELECT e.id, e.type,
+				       lower(regexp_replace(btrim(coalesce(e.canonical_form, e.text)), '\s+', ' ', 'g')) AS form
+				FROM processing_entities e
+				JOIN processing_snapshots s ON s.id = e.snapshot_id AND s.active
+			)
+			UPDATE processing_entities e
+			SET type = 'CONCEPT'
+			FROM act
+			WHERE e.id = act.id
+			  AND act.type IS DISTINCT FROM 'CONCEPT'
+			  AND (act.form = ANY($1::text[])
+			       OR (act.form ~ $2 AND act.type IN ('PERSON', 'ORGANIZATION')))`,
+			typingBareForms, typingPluralHeadPattern())
+		if err != nil {
+			return fmt.Errorf("typing apply: %w", err)
+		}
+		rep.UpdatedRows = int(ct.RowsAffected())
+		kgHook("kg_normalize_entity_types:after_update")
+		return nil
+	})
 	if err != nil {
-		return rep, fmt.Errorf("typing apply: %w", err)
+		return rep, err
 	}
-	rep.UpdatedRows = int(ct.RowsAffected())
 	rep.MatchedRows = rep.UpdatedRows
 	return rep, nil
 }
