@@ -47,6 +47,20 @@ var typingBareForms = []string{
 	"mittleres management", "middle management", "mittleres managements",
 	"oberes management", "upper management", "lower management",
 	"managementebene", "managementebenen",
+	// audited generic role/group nouns (#199 Chattys final finding):
+	// mitarbeiter 27 entities, 2 with edges (791/171 mentions) — the last
+	// real name collision in the graph; the homonym guard keeps single-word
+	// PERSONs separate, so these need CONCEPT typing to merge.
+	"mitarbeiter", "mitarbeitern", "mitarbeiterinnen",
+	"kunden", "kunde",
+	"vorstand",
+	"führungskräfte", "führungskräften", "führungskraft",
+	"unternehmer", "unternehmern",
+	"geschäftsführer", "geschäftsführerin",
+	"beschäftigte", "arbeitnehmer", "arbeitnehmerin",
+	"arbeitgeber", "arbeitgebern",
+	// deliberately NOT here: manager (tester accepted PERSON class),
+	// sie/pronouns (extraction noise, future filter — not a type fix)
 }
 
 // typingPluralHeads: head nouns that make a short form a generic role
@@ -60,6 +74,10 @@ var typingPluralHeads = []string{
 	"anteilseignern", "anteilseigners",
 	"anspruchsgruppen",
 	"managements", // plural of management (genitive/dative)
+	"mitarbeitern", "mitarbeiterinnen",
+	"kunden",
+	"führungskräften",
+	"arbeitgebern", "arbeitnehmerinnen",
 }
 
 // EntityTypingReport is the accounting of one normalization run (the

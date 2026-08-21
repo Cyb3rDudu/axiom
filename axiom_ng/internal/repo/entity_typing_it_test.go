@@ -154,3 +154,56 @@ func TestIT_EntityTypingNormalization(t *testing.T) {
 		t.Fatalf("re-run must update nothing, got %+v", rep2)
 	}
 }
+
+// Chattys final-finding witness: audited role/group nouns → CONCEPT.
+// mitarbeiter was PERSON (27 entities, 2 with edges) — the last real
+// name collision. After typing: CONCEPT, mergeable.
+func TestIT_RoleNounLexiconExpansion(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	_, snap := kgSeedSnapshot(t, lr, "Lexicon", "LXATT_A")
+
+	// All audited forms seeded as PERSON (the wrong type).
+	forms := []string{
+		"mitarbeiter", "mitarbeitern", "mitarbeiterinnen",
+		"kunden", "kunde", "vorstand",
+		"führungskräfte", "führungskräften", "führungskraft",
+		"unternehmer", "unternehmern",
+		"geschäftsführer", "geschäftsführerin",
+		"beschäftigte", "arbeitnehmer", "arbeitgeber",
+	}
+	for _, f := range forms {
+		seedTypedEntity(t, lr, snap, f, "PERSON", 2)
+	}
+	// Control: "manager" stays PERSON (tester's explicit decision).
+	seedTypedEntity(t, lr, snap, "Matthias S. Fifka", "PERSON", 2)
+
+	dr, err := lr.rep.EntityTypingCounts(ctx)
+	if err != nil {
+		t.Fatalf("dry-run: %v", err)
+	}
+	if dr.MatchedRows != len(forms) {
+		t.Fatalf("dry-run: want %d matches, got %d (%+v)", len(forms), dr.MatchedRows, dr)
+	}
+
+	if _, err := lr.rep.NormalizeEntityTypes(ctx); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	for _, f := range forms {
+		typ := typingTypeOf(t, lr, f)
+		if typ != "CONCEPT" {
+			t.Fatalf("%q: want CONCEPT after normalize, got %q", f, typ)
+		}
+	}
+	// Control stays PERSON.
+	if got := typingTypeOf(t, lr, "Matthias S. Fifka"); got != "PERSON" {
+		t.Fatalf("Fifka must stay PERSON, got %q", got)
+	}
+}
