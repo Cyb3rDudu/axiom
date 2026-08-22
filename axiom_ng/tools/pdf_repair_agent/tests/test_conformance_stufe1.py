@@ -15,6 +15,10 @@ Zeugen:
      NICHT darstellbar und werden dokumentiert — nie still behauptet.
      Verweigert Stufe-1 (unclassifiable), muss auch unser Kernel
      unangetastet lassen (Conformance in der Verweigerung).
+  3. Reproduced-Case-Zeuge   difficult-Bücher (Dubs/folk): reale Fenster-
+     kopie des numerischen Körpers, deterministischer +15er Spec-Schaden
+     → echte Mismatch-Anker → Stufe-1 heilt die VOLLSTÄNDIGE Wahrheit,
+     der Kernel schreibt denselben Fenster-Baum.
 """
 
 from __future__ import annotations
@@ -118,13 +122,15 @@ def _trailing_monotone_run(labels: list[str]) -> tuple[int, list[str]] | None:
     """Längster numerischer +1-Lauf, der an der LETZTEN numerischen Seite
     endet (nicht-digitale Nachspann-Seiten danach bleiben außerhalb des
     Fensters). Das ist die Kernel-darstellbare Wahrheitszone."""
-    last = max((i for i, lab in enumerate(labels) if lab.isdigit()),
-               default=-1)
+    last = max((i for i, lab in enumerate(labels) if lab.isdigit()), default=-1)
     if last < 0:
         return None
     start = last
-    while start > 0 and labels[start - 1].isdigit() \
-            and int(labels[start - 1]) == int(labels[start]) - 1:
+    while (
+        start > 0
+        and labels[start - 1].isdigit()
+        and int(labels[start - 1]) == int(labels[start]) - 1
+    ):
         start -= 1
     if last - start + 1 < 5:  # zu kurz für ein Körperzeugnis
         return None
@@ -132,8 +138,8 @@ def _trailing_monotone_run(labels: list[str]) -> tuple[int, list[str]] | None:
 
 
 def _damage_spec_offset(pdf: Path, delta: int = 15) -> None:
-    """Deterministischer Schaden (Reproduced-Case): JEDER numerischen Range
-    der Baums um +delta verschieben; Struktur/Stil/Präfixe bleiben exakt —
+    """Deterministischer Schaden (Reproduced-Case): JEDE numerische Range
+    des Baums um +delta verschieben; Struktur/Stil/Präfixe bleiben exakt —
     damit ist der Schaden exakt die Stufe-1-Prämisse „kaputt sind die
     Starts, nicht die Stile" (PRESERVE)."""
     import pymupdf  # type: ignore[reportMissingImports]
@@ -141,7 +147,7 @@ def _damage_spec_offset(pdf: Path, delta: int = 15) -> None:
     doc = pymupdf.open(str(pdf))
     spec = [dict(r) for r in (doc.get_page_labels() or [])]
     for r in spec:
-        # Nur echte numerische Ranges (style D) verschieben; einträge ohne
+        # Nur echte numerische Ranges (style D) verschieben; Einträge ohne
         # style sind KONSTANTE Präfix-Label (z. B. 'C1') — unangetastet.
         if r.get("style") in ("D", "d"):
             r["firstpagenum"] = r.get("firstpagenum", 1) + delta
@@ -169,14 +175,49 @@ def _trim_to_body_window(src: Path, dst: Path) -> list[str] | None:
     last = start + len(run) - 1
     doc = pymupdf.open(str(src))
     doc.select(list(range(start, last + 1)))
-    doc.set_page_labels([{"startpage": 0, "prefix": "", "style": "D",
-                          "firstpagenum": int(run[0])}])
+    doc.set_page_labels(
+        [{"startpage": 0, "prefix": "", "style": "D", "firstpagenum": int(run[0])}]
+    )
     doc.save(str(dst))
     doc.close()
     trimmed = pdf_kernel.read_page_labels(str(dst))
     if trimmed != run:
         return None  # Fenster-Trim verfälschte Labels — kein Zeugenfundament
     return trimmed
+
+
+def test_trailing_monotone_run_fensterwahl():
+    """Unit-Zeuge für die Fensterwahl des Körperlaufs (reine Funktion,
+    ohne Subprocess/Fixture): Auswahl-, Kurzlauf- und Nachspann-Fälle."""
+    f = _trailing_monotone_run
+    # Komplett numerisch: Fenster ab 0.
+    assert f(["1", "2", "3", "4", "5"]) == (0, ["1", "2", "3", "4", "5"])
+    # Zu kurzer Lauf (<5) → kein Körperzeugnis — auch mit Präfix-Rand.
+    assert f(["1", "2", "3"]) is None
+    assert f(["C1", "1", "2", "3", "C4"]) is None
+    # Gar keine Ziffern → None.
+    assert f(["C1", "", "C4"]) is None
+    assert f([]) is None
+    # Doppelwert bricht den Lauf — das Duplikat bleibt VOR dem Fenster.
+    assert f(["1", "2", "2", "3", "4", "5", "6"]) == (
+        2,
+        ["2", "3", "4", "5", "6"],
+    )
+    # Innen-Sprung: der ABSCHLIESSENDE Lauf gewinnt.
+    assert f(["1", "2", "3", "4", "5", "9", "10", "11", "12", "13"]) == (
+        5,
+        ["9", "10", "11", "12", "13"],
+    )
+    # Nicht-digitaler Nachspann (auch >1 Seite) bleibt außerhalb.
+    assert f(["1", "2", "3", "4", "5", "6", "C1", "", "C4"]) == (
+        0,
+        ["1", "2", "3", "4", "5", "6"],
+    )
+    # Dubs-artiger Vorspann (C-Präfix + Sprung): Fenster ab '64'.
+    assert f(["C1", "4", "5", "6", "7", "64", "65", "66", "67", "68"]) == (
+        5,
+        ["64", "65", "66", "67", "68"],
+    )
 
 
 @needs_stufe1
@@ -282,8 +323,8 @@ def test_conformance_difficult_buecher(tmp_path):
 # bereits Label-Bäume, die im Körper label≡folio gesund sind (Stufe-1
 # verweigert sie zurecht). Positive Real-Zeugen entstehen deshalb als
 # Reproduced-Case nach G3-DoD: reale Buchkopie gesund → deterministischer
-# +15er Spec-Schaden (_damage_spec_offset) → echte Label-vs-Wahrheits-
-# Mismatch-Anker → BEIDE Engines müssen dieselbe numerische Wahrheit
+# +15er Spec-Schaden (+15 = der historisch zitierte Versatz;
+# _damage_spec_offset) → echte Label-vs-Wahrheits-Mismatch-Anker → BEIDE Engines müssen dieselbe numerische Wahrheit
 # wiederherstellen. Controlling bleibt außen vor (OCR-Kronfall, 0 Folios).
 
 
@@ -295,18 +336,21 @@ def test_conformance_reproduced_offset_echte_buecher(tmp_path):
     if not DIFFICULT.is_dir():
         pytest.skip("fixtures/difficult/ nicht vorhanden (lokales Testset)")
     frag_oder = ("Dubs", "folk")
-    books = [b for b in sorted(DIFFICULT.glob("*.pdf"))
-             if any(f in b.name for f in frag_oder)]
+    books = [
+        b
+        for b in sorted(DIFFICULT.glob("*.pdf"))
+        if any(f in b.name for f in frag_oder)
+    ]
     if not books:
         pytest.skip("keine Reproduced-Case-Bücher (Dubs/folk) anwesend")
+    witnessed = 0
     for book in books:
         c1 = tmp_path / (book.stem[:24] + "_s1.pdf")
         c2 = tmp_path / (book.stem[:24] + "_k.pdf")
         truth = _trim_to_body_window(book, c1)
         if truth is None:
-            pytest.skip(f"{book.name}: kein kernel-darstellbarer Körperlauf")
+            continue  # kein kernel-darstellbarer Körperlauf
         shutil.copy2(c1, c2)
-        start, run = 0, truth
         _damage_spec_offset(c1, delta=15)
         _damage_spec_offset(c2, delta=15)
         damaged = pdf_kernel.read_page_labels(str(c1))
@@ -314,25 +358,29 @@ def test_conformance_reproduced_offset_echte_buecher(tmp_path):
 
         # Echte Mismatch-Anker: N = beschädigtes Label, M = gemessene
         # Wahrheit (nur numerische Seiten; der Körperlauf genügt).
-        anchors = [{"page": i, "N": damaged[i], "M": truth[i]}
-                   for i in range(start, len(truth))
-                   if damaged[i].isdigit() and truth[i].isdigit()]
+        anchors = [
+            {"page": i, "N": damaged[i], "M": truth[i]}
+            for i in range(len(truth))
+            if damaged[i].isdigit() and truth[i].isdigit()
+        ]
         assert len(anchors) >= 2
 
         rc, out = _stufe1_heal(c1, anchors)
-        assert rc == 0, (f"{book.name}: Stufe-1 verweigerte den konstant-"
-                         f"Offset-Reproduced-Case (rc={rc}):\n{out[-400:]}")
+        assert rc == 0, (
+            f"{book.name}: Stufe-1 verweigerte den konstant-"
+            f"Offset-Reproduced-Case (rc={rc}):\n{out[-400:]}"
+        )
         l1 = pdf_kernel.read_page_labels(str(c1))
-        assert l1 == truth, (f"{book.name}: Stufe-1 stellte die Wahrheit "
-                             f"nicht vollständig wieder her")
+        assert l1 == truth, (
+            f"{book.name}: Stufe-1 stellte die Wahrheit nicht vollständig wieder her"
+        )
 
-        # Kernel-Heilung aus derselben Wahrheit: Körperlauf schreiben.
-        pdf_kernel.write_page_labels(c2, [""] * start + run)
+        # Kernel-Heilung aus derselben Wahrheit: das Fenster IST die
+        # vollständige Wahrheit (kein Vorspann mehr) — direkter Baum.
+        pdf_kernel.write_page_labels(c2, truth)
         l2 = pdf_kernel.read_page_labels(str(c2))
-        assert l2[start:] == truth[start:], (
-            f"{book.name}: Kernel-Körper weicht von der Wahrheit ab")
-        assert l1[start:] == l2[start:], (
-            f"{book.name}: Engines weichen im Körper ab")
-        # Kernel bleibt außerhalb des Körpers leer (dokumentierte Grenze,
-        # kein heimliches Schreiben in Präfix-/Vorspannzonen).
-        assert all(not l2[i] for i in range(start))
+        assert l2 == truth, f"{book.name}: Kernel weicht von der Wahrheit ab"
+        witnessed += 1
+    # Vakuoses Passieren verboten: ohne Zeugen kein stiller Grün.
+    if witnessed == 0:
+        pytest.skip("kein Buch lief ein Reproduced-Case-Fenster")
