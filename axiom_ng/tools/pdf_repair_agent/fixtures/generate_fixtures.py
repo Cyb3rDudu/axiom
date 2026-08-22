@@ -17,7 +17,6 @@ Nutzen:  <paket>/.venv/bin/python fixtures/generate_fixtures.py
 
 from __future__ import annotations
 
-import io
 import sys
 from pathlib import Path
 
@@ -76,20 +75,28 @@ def main() -> None:
         _fill(d, i + 1, str(i + 1))
     _label(d, here / "falsche_labels.pdf", [str(i + 3) for i in range(10)])
 
-    # 3) ohne_textschicht.pdf — 8 Seiten OHNE Text-Layer (nur Rasterbild),
-    #    keine Labels. Der T2-OCR-Fall: get_text liefert leere Zeichen.
-    from PIL import Image as PILImage  # nur hier: Fixture-Generierung
-
+    # 3) ohne_textschicht.pdf — 8 Seiten OHNE Text-Layer (nur Rasterbild
+    #    MIT lesbaren Text-Pixeln): Textseite rendern → rastern → als Bild
+    #    einbetten. get_text bleibt leer (kein Text-Span), OCR findet Wörter.
     d = _new_doc()
-    for _ in range(8):
+    for i in range(8):
+        src = _new_doc()
+        sp = src.new_page(width=W, height=H)
+        sp.insert_text((60, 120), f"Kapitel {i + 1}", fontsize=24)
+        sp.insert_textbox(
+            (60, 160, W - 60, H - 80),
+            "Dies ist ein synthetischer Scan mit gedrucktem Text, den die "
+            "optische Zeichenerkennung wiederfinden muss. Jede Seite trägt "
+            "mehrere Zeilen gut lesbarer Schrift, damit das Qualitätstor "
+            "der Textschicht-Heilung genügend Zeichen je Seite vorfindet. "
+            f"Die vorliegende Seite {i + 1} endet mit einem Satzzeichen.",
+            fontsize=14,
+        )
+        pix = sp.get_pixmap(dpi=150)
+        src.close()
         page = d.new_page(width=W, height=H)
-        # Rasterbild (grauer Balken) einbetten — KEINE Text-Spans, nur Pixel.
-        # Moderate Auflösung hält das Fixture kompakt (insert_image skaliert).
-        img = PILImage.new("RGB", (150, 212), (220, 220, 220))
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        pix = pymupdf.Pixmap(buf.getvalue())
-        page.insert_image(page.rect, pixmap=pix)
+        # JPEG statt PNG: gleiche Lesbarkeit, ein Bruchteil der Größe.
+        page.insert_image(page.rect, stream=pix.tobytes("jpg"))
     d.save(here / "ohne_textschicht.pdf")
     d.close()
 

@@ -6,21 +6,22 @@ ist unabhängig von den Binaries testbar."""
 
 from __future__ import annotations
 
-import shutil
 import sys
 from pathlib import Path
+
+import pymupdf  # type: ignore[reportMissingImports]
+import pytest
 
 HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
 sys.path.insert(0, str(PKG))
 
-import pymupdf  # noqa: E402  # type: ignore[reportMissingImports]
-import pytest  # noqa: E402
-
 from tools import ocr_tool  # noqa: E402  # type: ignore[reportAttributeAccessIssue]
 
 FIX = PKG / "fixtures"
-HAS_OCR_BINS = all(shutil.which(b) for b in ("tesseract", "gs", "ocrmypdf"))
+# Verfügbarkeits-Sonde über das WERKZEUG selbst (venv-bewusste Auflösung —
+# shutil.which allein wäre der alte Binary-Bug).
+HAS_OCR_BINS = all(ocr_tool._bins_available().values())
 
 
 def _ensure():
@@ -88,3 +89,27 @@ def test_apply_ohne_binaries_luegt_nicht():
     assert res["applied"] is False
     assert "nicht baubar" in res["cause"]
     assert not dst.exists()
+
+
+@pytest.mark.skipif(
+    not HAS_OCR_BINS,
+    reason="OCR-Binaries fehlen → Unfähigkeitszweig hat eigenen Test",
+)
+def test_ocr_live_lauf_und_qualitaetstor():
+    """Echter ocrmypdf-Lauf auf der Text-Pixel-Fixture: Textschicht wird
+    gebaut, das per-seite-Tor besteht, die Ausgabedatei trägt Text."""
+    _ensure()
+    dst = FIX.parent / "runs" / "ocr_live_test.pdf"
+    res = ocr_tool.run_ocr(FIX / "ohne_textschicht.pdf", dst, "deu")
+    assert res["applied"] is True, res.get("cause")
+    assert res["quality"]["quality_gate_pass"] is True
+    assert res["quality"]["pages_below_min"] == []
+    counts = pdf_kernel_page_chars(dst)
+    assert all(c >= ocr_tool.MIN_TEXT_CHARS for c in counts), counts
+    dst.unlink(missing_ok=True)
+
+
+def pdf_kernel_page_chars(p):
+    from tools import pdf_kernel  # noqa: E402
+
+    return pdf_kernel.page_char_count(p)

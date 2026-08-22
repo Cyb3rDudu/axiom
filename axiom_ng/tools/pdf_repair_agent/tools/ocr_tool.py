@@ -46,12 +46,24 @@ OCR_LANG_DEFAULT = "deu"
 OCRMYPDF_TIMEOUT = 900  # s — harte Deckelung statt 1-h-Hang
 
 
+def ocrmypdf_bin() -> str | None:
+    """ocrmypdf-Auflösung: ZUERST im eigenen Venv (sys.prefix/bin — die
+    Venv-bin liegt NICHT im PATH, wenn man `.venv/bin/python` direkt
+    aufruft; sys.executable.resolve() wäre FALSCH, denn es folgt dem
+    Interpreter-Symlink in den nix-Store), dann PATH-Fallback."""
+    cand = Path(sys.prefix) / "bin" / "ocrmypdf"
+    if cand.is_file():
+        return str(cand)
+    return shutil.which("ocrmypdf")
+
+
 def _bins_available() -> dict:
-    """Ehrliche Binär-Bilanz: ALLE drei nötigen Werkzeuge, kein Raten."""
+    """Ehrliche Binär-Bilanz: ALLE drei nötigen Werkzeuge, kein Raten.
+    ocrmypdf wird venv-bewusst aufgelöst (siehe ocrmypdf_bin)."""
     return {
         "tesseract": shutil.which("tesseract") is not None,
         "gs": shutil.which("gs") is not None,
-        "ocrmypdf": shutil.which("ocrmypdf") is not None,
+        "ocrmypdf": ocrmypdf_bin() is not None,
     }
 
 
@@ -109,8 +121,13 @@ def run_ocr(pdf: str | Path, dst: Path, lang: str = OCR_LANG_DEFAULT) -> dict:
         }
     dst = Path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
+    ocr_bin = ocrmypdf_bin()
+    if ocr_bin is None:  # Doppelte Sicherung — oben schon über bins geprüft
+        return {"applied": False,
+                "cause": "ocrmypdf-Binär nicht auflösbar (venv-bin/PATH)",
+                "ocr_binaries": bins}
     r = subprocess.run(
-        ["ocrmypdf", "--language", lang, "--redo-ocr", "-q", str(pdf), str(dst)],
+        [ocr_bin, "--language", lang, "--redo-ocr", "-q", str(pdf), str(dst)],
         capture_output=True,
         text=True,
         timeout=OCRMYPDF_TIMEOUT,
@@ -150,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         dst = Path(a.output) if a.output else HERE.parent / "runs" / "ocr_out.pdf"
         res = run_ocr(a.pdf, dst, a.lang)
         print(json.dumps(res, ensure_ascii=False, indent=1))
-        if res.get("applied") is not True:
+        if res.get("applied") != True:  # noqa: E712
             return 1  # ehrliche Ablehnung/Fehlschlag = Tool-Misserfolg
     return 0
 
