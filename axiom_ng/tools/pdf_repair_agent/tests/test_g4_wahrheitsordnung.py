@@ -1,0 +1,190 @@
+"""G4 — Wahrheits-Ordnung (Owner-Ruling 23.08.) + Beweis-Zeugen.
+
+  · RAUSCH-ZEUGE:    Jahreszahl/vereinzelter Zahl als „Folio“ wird NICHT
+                     als Anker akzeptiert (Qualitäts-Tor, Verweigerung).
+  · DUBS-G4:        vollautonome Heilung des reproduzierten +15-Offsets auf
+                     einer Dubs-Fenster-Kopie — Plan → Surgery → Read-back →
+                     Folio-Anker grün, ohne menschlichen Schritt.
+  · 3-STELLEN:      truth_source im Bericht dokumentiert genutzte/offene
+                     Stellen (Lab: Stelle 1, 2+3 ehrlich offen).
+  · OCR-BINARY:     ocrmypdf wird venv-bewusst gefunden (Regression Fix a).
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pymupdf  # type: ignore[reportMissingImports]
+
+HERE = Path(__file__).resolve().parent
+PKG = HERE.parent
+sys.path.insert(0, str(PKG))
+
+from config import load_config  # noqa: E402
+from deepseek_client import MockClient  # noqa: E402
+from repair_agent import run_agent  # noqa: E402
+from tools.forensics_tool import anchor_folio_run, build_map  # noqa: E402
+from tools.ocr_tool import _bins_available, ocrmypdf_bin, plan  # noqa: E402
+from tools.pdf_kernel import read_page_labels  # noqa: E402
+
+FIX = PKG / "fixtures"
+DIFFICULT = FIX / "difficult"
+
+
+# ----------------------------------------------------------- Rausch-Zeuge ----
+
+
+def _pdf_mit_kopfzahlen(tmp: Path, name: str, zahlen: list[str]) -> Path:
+    d = pymupdf.open()
+    w, h = pymupdf.paper_size("a4")
+    for z in zahlen:
+        p = d.new_page(width=w, height=h)
+        p.insert_text((40, 60), z, fontsize=12)  # Kopfzone, „gedruckte Zahl“
+        p.insert_textbox((40, 130, w - 40, h - 60),
+                         "Fließtext der Seite, der keine Folio-Rolle spielt "
+                         "und auch bei langer Betrachtung keine wird.",
+                         fontsize=11)
+    out = tmp / name
+    d.save(str(out))
+    d.close()
+    return out
+
+
+def test_rausch_zeuge_jahr_ist_kein_ankер(tmp_path):
+    """Eine Jahreszahl in der Kopfzeile ist KEIN Folio-Anker: kein +1-Lauf,
+    kein Anker — Verweigerung bleibt Pflicht (kein Raten)."""
+    p = _pdf_mit_kopfzahlen(tmp_path, "jahr.pdf",
+                            ["2024"] * 8)  # 8× dieselbe „Zahl“
+    m = build_map(p)
+    assert anchor_folio_run(m) == [], "Jahreszahl darf nie Anker werden"
+
+
+def test_rausch_zeuge_vereinzelte_zahlen_kein_lauf(tmp_path):
+    """Vereinzelte, nicht aufeinanderfolgende Zahlen (Tabellen-/Abschnitts-
+    zahl-Rauschen) bilden keinen messbaren Lauf."""
+    p = _pdf_mit_kopfzahlen(
+        tmp_path, "rausch.pdf", ["7", "19", "3", "42", "8", "100", "5", "23"])
+    m = build_map(p)
+    assert anchor_folio_run(m) == []
+
+
+def test_ankerlauf_nur_bei_echtem_druckfoliolauf(tmp_path):
+    """Positiver Gegencheck: ein echter +1-Druckfoliolauf (>= 5) wird als
+    Stelle-1-Quelle akzeptiert — Rauschseiten davor stören nicht."""
+    zahlen = ["99", "2024"] + [str(i) for i in range(11, 19)]  # Rauschen + Lauf
+    p = _pdf_mit_kopfzahlen(tmp_path, "echt.pdf", zahlen)
+    m = build_map(p)
+    run = anchor_folio_run(m)
+    assert run and len(run) == 8, run
+    assert [a["folio"] for a in run] == [str(i) for i in range(11, 19)]
+
+
+# --------------------------------------------------------------- OCR-Fix a --
+
+
+def test_ocrmypdf_venv_aufloesung():
+    """Regression Fix a: ocrmypdf wird im eigenen Venv gefunden (sys.prefix),
+    nicht nur über PATH — und der Plan meldet alle drei Binaries ehrlich."""
+    bin_path = ocrmypdf_bin()
+    if (Path(sys.prefix) / "bin" / "ocrmypdf").is_file():
+        assert bin_path == str(Path(sys.prefix) / "bin" / "ocrmypdf")
+    bins = _bins_available()
+    assert bins["ocrmypdf"] is (bin_path is not None)
+
+
+def test_ocr_dryrun_liefert_evidenz():
+    """DoD: OCR-Dry-Run auf textloser Seite liefert Evidenz (Lage + Binaries)."""
+    src = FIX / "ohne_textschicht.pdf"
+    if not src.exists():
+        from fixtures.generate_fixtures import main as gen
+        gen()
+    pl = plan(src)
+    assert pl["text_layer_missing_pages"], "textlose Seiten müssen benannt sein"
+    assert pl["ocr_binaries"] == {
+        "tesseract": True, "gs": True, "ocrmypdf": True}, pl["ocr_binaries"]
+    assert pl["ocr_verdict"] == "possible"
+
+
+# ------------------------------------------------- DUBS-G4 Vollautonomie ----
+
+
+def _dubs_fenster_kopie(tmp: Path) -> tuple[Path, list[str]]:
+    """Dubs-Fenster (num. Körperlauf) als Lab-Attachment MIT +15-Schaden."""
+    from tests.test_conformance_stufe1 import (  # noqa: E402
+        _damage_spec_offset,
+        _trim_to_body_window,
+    )
+
+    book = next(DIFFICULT.glob("Dubs*.pdf"))
+    storage = tmp / "storage" / "G4DUBS"
+    storage.mkdir(parents=True)
+    att = storage / "dubs.pdf"
+    truth = _trim_to_body_window(book, att)
+    assert truth is not None, "Dubs-Fenster nicht darstellbar"
+    _damage_spec_offset(att, delta=15)
+    return att, truth
+
+
+def test_dubs_g4_vollautonome_heilung(tmp_path):
+    """DoD-Kronzeuge: reproduzierter +15-Offset auf Dubs-Kopie. Der Agent
+    (Mock-Planner, echte Werkzeuge) heilt VOLLAUTONOM: forensische M-Quelle
+    (Stelle 1) → Plan → Surgery → Read-back → Folio-Anker grün. Kein
+    menschlicher Schritt, keine Produktionsschreibzugriffe (Lab-Storage)."""
+    if not DIFFICULT.is_dir():
+        import pytest
+
+        pytest.skip("fixtures/difficult/ nicht vorhanden (lokales Testset)")
+    att, truth = _dubs_fenster_kopie(tmp_path)
+
+    # Planner-Rolle (Modell): Diagnose aus Stelle-1-M-Quelle. Die Anker
+    # kommen aus forensics_tool — dem Standardweg — NICHT aus der Sonde.
+    m = build_map(att)
+    run = anchor_folio_run(m)
+    assert run, "Stelle-1-Ankerlauf fehlt — Diagnose müsste verweigern"
+    # Plan aus Anker-Arithmetik (wie Stufe-1): Label[p] = f0 + (p - p0),
+    # fortgeführt bis Dokumentende (PDF-Range-Semantik); führende Seiten
+    # vor dem Ankerlauf bleiben unbenannt — kernel-darstellbar.
+    n = len(read_page_labels(str(att)))
+    p0, f0 = run[0]["page"], int(run[0]["folio"])
+    labels = [""] * p0 + [str(f0 + i) for i in range(n - p0)]
+
+    cfg = load_config({
+        "ZOTERO_STORAGE_ROOT": str(tmp_path / "storage"),
+        "PDF_REPAIR_WORK_ROOT": str(tmp_path / "work"),
+        "PDF_REPAIR_BACKUP_ROOT": str(tmp_path / "backup"),
+    })
+    cfg.ensure_dirs()
+    steps = [
+        '{"action":"probe"}',  # Stellen 2/3 → offen (kein Eskalationsgrund)
+        '{"action":"forensics"}',
+        json.dumps({"action": "surgery", "apply": True,
+                    "plan_class": "constant-offset",
+                    "operations": [{"labels": labels}]}),
+        '{"action":"report","reason":"Stelle-1-Heilung; Folio-Anker grün; '
+        'Stellen 2/3 im Lab offen"}',
+    ]
+    rep = run_agent("G4DUBS", apply=True, client=MockClient(steps), cfg=cfg)
+
+    assert rep["verdict"] == "halt", rep["verdict"]
+    # Surgery muss ERFOLGREICH gewesen sein (kein stiller Teilerfolg):
+    surg = [r for r in rep["evidence"] if r.get("action") == "surgery"]
+    assert surg and surg[0].get("ok") is True, surg
+    work = cfg.work_root / "G4DUBS" / "work.pdf"
+    # Read-back: geheilte Labels == Folio-Wahrheit (Stelle 1).
+    healed = read_page_labels(work)
+    assert healed == labels
+    assert healed[p0:] == [a["folio"] for a in run] + [
+        str(f0 + i) for i in range(len(run), n - p0)]
+    # Folio-Anker NACHHER grün: Ankerseiten zeigen Label == Druckfolio.
+    m2 = build_map(work)
+    folios = {p: q["folio"] for p, q in enumerate(m2["pages"])}
+    for a in run:
+        assert healed[a["page"]] == folios[a["page"]], a
+    # 3-Stellen-Transparenz: Stelle 1 genutzt, 2+3 ehrlich offen (Lab).
+    ts = rep["truth_source"]
+    assert ts["stufe1_druckseite"].startswith("forensics_tool")
+    assert "stufe2_chunk" in ts["offene_stellen"]
+    assert "stelle3_zitat" in ts["offene_stellen"]
+    # Backup-Pflicht erfüllt (surgery_exec schrieb es):
+    assert (work.parent / "backup.pdf").exists()

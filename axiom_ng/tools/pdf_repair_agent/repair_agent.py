@@ -76,6 +76,10 @@ def h_probe(step: dict, ctx: dict) -> dict:
 
     cfg = ctx["cfg"]
     base = cfg.rag_api_base
+    # Wahrheits-Ordnung (Owner-Ruling 23.08.): fehlende Stellen 2/3 sind
+    # OFFEN, kein Misserfolg — „unvollständige Sonde" ist KEIN Eskalations-
+    # grund; nur UNMESSBARES Signal (Stelle 1) eskaliert. Der Lauf kann
+    # deshalb mit forensischer M-Quelle (Stelle 1) weiterarbeiten.
     try:
         r = httpx.get(f"{base}/api/zotero/documents", timeout=5.0)
         reachable = r.status_code == 200
@@ -83,32 +87,40 @@ def h_probe(step: dict, ctx: dict) -> dict:
     except Exception as exc:  # noqa: BLE001 — Beweis, kein Crash
         return {
             "action": "probe",
-            "ok": False,
-            "cause": f"RAG nicht erreichbar "
-            f"({base}: {type(exc).__name__}) — Sonde UNBELEGT (Sandbox/toter "
-            f"Port ist der Normalfall ohne Config)",
+            "ok": True,
             "base": base,
+            "measured": [],
+            "offen": [
+                "stelle2_chunk: RAG nicht erreichbar "
+                f"({type(exc).__name__}) — offene Stelle, heilbar über "
+                "Stelle 1 (Druckseite)",
+                "stelle3_zitat: ohne Zotero-Annotation nicht prüfbar "
+                "(nachgelagerter Produktiv-Beweis)",
+            ],
+            "unproven": ["annotation-label", "chunk-page-exakt"],
         }
-    return (
-        {
+    if not reachable:
+        return {
             "action": "probe",
             "ok": True,
             "base": base,
-            "detail": detail,
-            "measured": ["rag-reachability"],
-            "unproven": [
-                "annotation-label",
-                "chunk-page-exakt (benötigt Zotero-"
-                "Annotationen + chunk-id; nur mit Produktiv-Config)",
-            ],
+            "measured": [],
+            "offen": [f"stelle2_chunk: RAG antwortet nicht 200 ({detail})",
+                      "stelle3_zitat: ohne Zotero-Annotation nicht prüfbar"],
+            "unproven": ["annotation-label", "chunk-page-exakt"],
         }
-        if reachable
-        else {
-            "action": "probe",
-            "ok": False,
-            "cause": f"RAG antwortet nicht 200 ({detail}) — Sonde unbelegt",
-        }
-    )
+    return {
+        "action": "probe",
+        "ok": True,
+        "base": base,
+        "detail": detail,
+        "measured": ["rag-reachability"],
+        "unproven": [
+            "annotation-label",
+            "chunk-page-exakt (benötigt Zotero-"
+            "Annotationen + chunk-id; nur mit Produktiv-Config)",
+        ],
+    }
 
 
 def h_forensics(step: dict, ctx: dict) -> dict:
@@ -283,6 +295,7 @@ def run_agent(
         "ops_used": res.ops_used,
         "steps": res.history,
         "evidence": res.results,
+        "truth_source": _truth_source(res.results, status),
         "unproven": _unproven_collect(res.results),
         "config": status,
         "apply": apply,
@@ -293,6 +306,31 @@ def run_agent(
         json.dumps(report, ensure_ascii=False, indent=1, default=str)
     )
     return report
+
+
+def _truth_source(results: list, status: dict) -> dict:
+    """Wahrheits-Ordnung (Owner-Ruling 23.08.): Transparenz über die
+    genutzten Stellen. Stelle 1 (Druckseite) ist der Standardweg; Stelle 2
+    (Chunk) und Stelle 3 (Zitat) werden nur als BEWIESEN geführt, wenn ihre
+    Messung tatsächlich in der Evidenz liegt. Offene Stellen werden
+    benannt — Information, keine Warnung."""
+    used: dict[str, str | list[str] | None] = {
+        "stufe1_druckseite": None, "stufe2_chunk": None,
+        "stelle3_zitat": None}
+    for r in results or []:
+        if not isinstance(r, dict):
+            continue
+        act = r.get("action")
+        if act == "forensics" and r.get("ok"):
+            used["stufe1_druckseite"] = "forensics_tool (Druckstruktur-Karte)"
+        if act == "probe" and "rag-reachability" in (r.get("measured") or []):
+            used["stufe2_chunk"] = "RAG erreichbar (rag-reachability gemessen)"
+            used["stelle3_zitat"] = "Zotero-Annotation — nachgelagerter Produktiv-Beweis"
+    if used["stufe1_druckseite"] is None:
+        used["stufe1_druckseite"] = "nicht gemessen"
+    offene = [k for k, v in used.items() if v is None]
+    used["offene_stellen"] = offene
+    return used
 
 
 def _unproven_collect(results: list) -> list[str]:

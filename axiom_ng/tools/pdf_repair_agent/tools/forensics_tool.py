@@ -159,6 +159,39 @@ def _collect_toc_lines(doc: pymupdf.Document) -> list[str]:
     return lines
 
 
+# Mindestlänge eines Folio-Ankerlaufs (Qualitäts-Tor): Jahreszahlen,
+# Tabellen- und Abschnittszahlen bilden KEINE seitengenauen +1-Läufe
+# dieser Länge — kurze „Läufe" sind Rauschen und dürfen nie Anker werden.
+ANCHOR_RUN_MIN_LEN = 5
+
+
+def anchor_folio_run(m: dict, min_len: int = ANCHOR_RUN_MIN_LEN) -> list[dict]:
+    """STELLE-1-Quelle (Owner-Ruling 23.08.): beweisbare Folio-Anker aus
+    der Druckstruktur-Karte — der längste seitengenaue +1-Lauf
+    (Rausch-gefiltert durch min_len). Jahreszahlen o. Ä. überleben das Tor
+    nicht (kein +1-Lauf). Rückgabe: [{page, folio}] des längsten Laufs;
+    [] = NICHT messbar → Diagnose muss verweigern (kein Raten)."""
+    folio = {}
+    for i, p in enumerate(m["pages"]):
+        v = pdf_kernel.to_int_or_none(p["folio"] or "")
+        if v is not None:
+            folio[i] = v
+    if not folio:
+        return []
+    best: list[tuple[int, int]] = []
+    cur: list[tuple[int, int]] = []
+    for i in sorted(folio):
+        if cur and i == cur[-1][0] + 1 and folio[i] == cur[-1][1] + 1:
+            cur.append((i, folio[i]))
+        else:
+            cur = [(i, folio[i])]
+        if len(cur) > len(best):
+            best = list(cur)
+    if len(best) < min_len:
+        return []  # nur Rauschen — kein messbarer Ankerlauf
+    return [{"page": i, "folio": str(v)} for i, v in best]
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="forensics_tool")
     p.add_argument("pdf")
