@@ -145,6 +145,22 @@ def test_empty_result_dict_is_failure():
     assert res.reason == "abort-same-class"
 
 
+def test_handler_crash_is_failure_not_traceback():
+    # G3-Review A: Handler-Crash (z. B. pymupdf auf korruptem PDF) wird
+    # Fehlversuch MIT Roh-Evidenz — nie ein Traceback ohne Audit-Spur.
+    def boom(step, cfg):
+        raise RuntimeError("kaputtes pdf")
+
+    client = MockClient(['{"action": "forensics"}'] * 2)
+    res = _run(client, registry=ToolRegistry(handlers={"forensics": boom}))
+    assert res.reason in ("abort-same-class", "budget")
+    assert res.final_step["action"] in ("escalate", "stop")
+    joined = "".join(
+        r.get("error", "") for r in res.results if isinstance(r, dict)
+    )
+    assert "RuntimeError" in joined and "kaputtes pdf" in joined
+
+
 # ------------------------------------------------ Budget / history ----
 
 

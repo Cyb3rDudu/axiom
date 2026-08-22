@@ -15,6 +15,7 @@ Disziplin:
   · Der Endbericht (inkl. „was unbewiesen blieb") landet als Audit-Spur
     unter WORK_ROOT/<key>/report.json.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,7 +32,6 @@ from agent_loop import ToolRegistry, run_loop, system_header  # noqa: E402
 from config import config_status, load_config_envfile  # noqa: E402
 from deepseek_client import DeepSeekClient  # noqa: E402
 
-
 # ------------------------------------------------------------- Arbeitskopie --
 
 
@@ -44,18 +44,22 @@ def pdf_for_key(storage_root: Path, key: str) -> Path | None:
     return pdfs[0] if pdfs else None
 
 
-def ensure_work_copy(cfg, key: str) -> Path | None:
+def ensure_work_copy(cfg, key: str) -> tuple[Path, bool] | None:
     """Arbeitskopie unter WORK_ROOT/<key>/work.pdf — Schreibzugriffe gehen
-    NUR hierher, das Storage-Original bleibt unberührt."""
+    NUR hierher, das Storage-Original bleibt unberührt. Rückgabe
+    (Pfad, work_reused): work_reused=True heißt, die Kopie stammt aus einem
+    FRÜHEREN Lauf (evtl. bereits repariert) — niemals als Storage-Zustand
+    deuten."""
     src = pdf_for_key(cfg.zotero_storage_root, key)
     if src is None:
         return None
     run_dir = cfg.work_root / key
     run_dir.mkdir(parents=True, exist_ok=True)
     work = run_dir / "work.pdf"
-    if not work.exists():
+    reused = work.exists()
+    if not reused:
         shutil.copy2(src, work)
-    return work
+    return work, reused
 
 
 # ----------------------------------------------------------------- Handler --
@@ -78,69 +82,107 @@ def h_probe(step: dict, ctx: dict) -> dict:
         detail = f"HTTP {r.status_code}"
     except Exception as exc:  # noqa: BLE001 — Beweis, kein Crash
         return {
-            "action": "probe", "ok": False, "cause": f"RAG nicht erreichbar "
+            "action": "probe",
+            "ok": False,
+            "cause": f"RAG nicht erreichbar "
             f"({base}: {type(exc).__name__}) — Sonde UNBELEGT (Sandbox/toter "
             f"Port ist der Normalfall ohne Config)",
             "base": base,
         }
-    return {
-        "action": "probe", "ok": True, "base": base, "detail": detail,
-        "measured": ["rag-reachability"],
-        "unproven": ["annotation-label", "chunk-page-exakt (benötigt Zotero-"
-                     "Annotationen + chunk-id; nur mit Produktiv-Config)"],
-    } if reachable else {
-        "action": "probe", "ok": False,
-        "cause": f"RAG antwortet nicht 200 ({detail}) — Sonde unbelegt",
-    }
+    return (
+        {
+            "action": "probe",
+            "ok": True,
+            "base": base,
+            "detail": detail,
+            "measured": ["rag-reachability"],
+            "unproven": [
+                "annotation-label",
+                "chunk-page-exakt (benötigt Zotero-"
+                "Annotationen + chunk-id; nur mit Produktiv-Config)",
+            ],
+        }
+        if reachable
+        else {
+            "action": "probe",
+            "ok": False,
+            "cause": f"RAG antwortet nicht 200 ({detail}) — Sonde unbelegt",
+        }
+    )
 
 
 def h_forensics(step: dict, ctx: dict) -> dict:
     from tools import forensics_tool  # type: ignore[reportAttributeAccessIssue]
 
-    work = ensure_work_copy(ctx["cfg"], ctx["key"])
-    if work is None:
-        return {"action": "forensics", "ok": False,
-                "cause": f"kein PDF für Key '{ctx['key']}' im Storage"}
+    wc = ensure_work_copy(ctx["cfg"], ctx["key"])
+    if wc is None:
+        return {
+            "action": "forensics",
+            "ok": False,
+            "cause": f"kein PDF für Key '{ctx['key']}' im Storage",
+        }
+    work, reused = wc
     m = forensics_tool.build_map(work)
-    return {"action": "forensics", "ok": True, "pdf": str(work), "map": m}
+    return {
+        "action": "forensics",
+        "ok": True,
+        "pdf": str(work),
+        "work_reused": reused,
+        "map": m,
+    }
 
 
 def h_spread(step: dict, ctx: dict) -> dict:
     from tools import spread_tool  # type: ignore[reportAttributeAccessIssue]
 
-    work = ensure_work_copy(ctx["cfg"], ctx["key"])
-    if work is None:
+    wc = ensure_work_copy(ctx["cfg"], ctx["key"])
+    if wc is None:
         return {"action": "spread", "ok": False, "cause": "kein PDF"}
+    work, _ = wc
     want_apply = bool(step.get("apply") and ctx["allow_apply"])
     if not want_apply:
-        return {"action": "spread", "ok": True, "applied": False,
-                "plan": spread_tool._plan(work, spread_tool.DEFAULT_OFFSET)}
+        return {
+            "action": "spread",
+            "ok": True,
+            "applied": False,
+            "plan": spread_tool._plan(work, spread_tool.DEFAULT_OFFSET),
+        }
     dst = work.parent / "spread_split.pdf"
-    return {"action": "spread", "ok": True, "applied": True,
-            "result": spread_tool.split_and_write(work, dst,
-                                                  spread_tool.DEFAULT_OFFSET)}
+    return {
+        "action": "spread",
+        "ok": True,
+        "applied": True,
+        "result": spread_tool.split_and_write(work, dst, spread_tool.DEFAULT_OFFSET),
+    }
 
 
 def h_ocr(step: dict, ctx: dict) -> dict:
     from tools import ocr_tool  # type: ignore[reportAttributeAccessIssue]
 
-    work = ensure_work_copy(ctx["cfg"], ctx["key"])
-    if work is None:
+    wc = ensure_work_copy(ctx["cfg"], ctx["key"])
+    if wc is None:
         return {"action": "ocr", "ok": False, "cause": "kein PDF"}
+    work, _ = wc
     pl = ocr_tool.plan(work)
     if not (step.get("apply") and ctx["allow_apply"]):
         return {"action": "ocr", "ok": True, "applied": False, "plan": pl}
     dst = work.parent / "ocr.pdf"
-    return {"action": "ocr", "ok": True, "applied": True,
-            "plan": pl, "result": ocr_tool.run_ocr(work, dst)}
+    return {
+        "action": "ocr",
+        "ok": True,
+        "applied": True,
+        "plan": pl,
+        "result": ocr_tool.run_ocr(work, dst),
+    }
 
 
 def h_surgery(step: dict, ctx: dict) -> dict:
     from tools import surgery_exec  # type: ignore[reportAttributeAccessIssue]
 
-    work = ensure_work_copy(ctx["cfg"], ctx["key"])
-    if work is None:
+    wc = ensure_work_copy(ctx["cfg"], ctx["key"])
+    if wc is None:
         return {"action": "surgery", "ok": False, "cause": "kein PDF"}
+    work, _ = wc
     plan_doc = {
         "operations": [
             {
@@ -160,18 +202,24 @@ def h_surgery(step: dict, ctx: dict) -> dict:
         o.get("rolled_back") or o.get("applied") == False  # noqa: E712
         for o in res.get("operations", [])
     )
-    return {"action": "surgery", "ok": bool(ok), "plan_class":
-            step.get("plan_class"), "result": res}
+    return {
+        "action": "surgery",
+        "ok": bool(ok),
+        "plan_class": step.get("plan_class"),
+        "result": res,
+    }
 
 
 def build_registry() -> ToolRegistry:
-    return ToolRegistry(handlers={
-        "probe": h_probe,
-        "forensics": h_forensics,
-        "spread": h_spread,
-        "ocr": h_ocr,
-        "surgery": h_surgery,
-    })
+    return ToolRegistry(
+        handlers={
+            "probe": h_probe,
+            "forensics": h_forensics,
+            "spread": h_spread,
+            "ocr": h_ocr,
+            "surgery": h_surgery,
+        }
+    )
 
 
 # -------------------------------------------------------------------- main --
@@ -180,12 +228,12 @@ def build_registry() -> ToolRegistry:
 def make_client(cfg):
     if not cfg.deepseek_api_key:
         return None
-    return DeepSeekClient(cfg.deepseek_api_key, cfg.deepseek_base_url,
-                          cfg.model)
+    return DeepSeekClient(cfg.deepseek_api_key, cfg.deepseek_base_url, cfg.model)
 
 
-def run_agent(key: str, *, apply: bool = False, client=None,
-              cfg=None, task_extra: str = "") -> dict:
+def run_agent(
+    key: str, *, apply: bool = False, client=None, cfg=None, task_extra: str = ""
+) -> dict:
     """Vollständiger Agenten-Lauf für einen Key. Liefert den Endbericht als
     dict (identisch zur Audit-Spur unter WORK_ROOT/<key>/report.json)."""
     cfg = cfg or load_config_envfile(HERE / "config.env")
@@ -194,15 +242,24 @@ def run_agent(key: str, *, apply: bool = False, client=None,
     if client is None:
         client = make_client(cfg)
     if client is None:
-        return {
-            "key": key, "verdict": "NO-MODEL",
+        report = {
+            "key": key,
+            "verdict": "NO-MODEL",
             "cause": "DEEPSEEK_API_KEY nicht gesetzt — kein agentischer Lauf. "
-                     "Config setzen (config.env) und erneut starten.",
+            "Config setzen (config.env) und erneut starten.",
             "config": status,
         }
+        # Auch der Abbruch schreibt die Audit-Spur — ein STALER Bericht
+        # eines früheren Laufs darf nie vom Rückgabewert abweichen.
+        run_dir = cfg.work_root / key
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=1, default=str)
+        )
+        return report
 
     system_prompt = (HERE / "prompts" / "system.txt").read_text() + system_header()
-    freigabe = ("erteilt (--apply)" if apply else "NICHT erteilt (nur Dry-Run)")
+    freigabe = "erteilt (--apply)" if apply else "NICHT erteilt (nur Dry-Run)"
     task = (
         f"Repariere das PDF des Zotero-Keys '{key}'.\n"
         f"Konfigurationslage: {json.dumps(status, ensure_ascii=False)}\n"
@@ -212,8 +269,11 @@ def run_agent(key: str, *, apply: bool = False, client=None,
         f"{task_extra}"
     )
     res = run_loop(
-        client=client, system_prompt=system_prompt, task=task,
-        registry=build_registry(), cfg=_ctx(cfg, key, allow_apply=apply),
+        client=client,
+        system_prompt=system_prompt,
+        task=task,
+        registry=build_registry(),
+        cfg=_ctx(cfg, key, allow_apply=apply),
         budget_max_ops=cfg.budget_max_ops,
     )
     report = {
@@ -230,7 +290,8 @@ def run_agent(key: str, *, apply: bool = False, client=None,
     run_dir = cfg.work_root / key
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=1, default=str))
+        json.dumps(report, ensure_ascii=False, indent=1, default=str)
+    )
     return report
 
 
@@ -250,12 +311,15 @@ def _unproven_collect(results: list) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="repair_agent",
-        description="agentischer PDF-Repair-Service (Stufe 2, #203)")
+        description="agentischer PDF-Repair-Service (Stufe 2, #203)",
+    )
     p.add_argument("--key", required=True, help="Zotero attachment KEY")
-    p.add_argument("--apply", action="store_true",
-                   help="Schreibfreigabe (Default: Dry-Run)")
-    p.add_argument("--config", default=str(HERE / "config.env"),
-                   help="Pfad zur config.env")
+    p.add_argument(
+        "--apply", action="store_true", help="Schreibfreigabe (Default: Dry-Run)"
+    )
+    p.add_argument(
+        "--config", default=str(HERE / "config.env"), help="Pfad zur config.env"
+    )
     a = p.parse_args(argv)
     cfg = load_config_envfile(a.config)
     report = run_agent(a.key, apply=a.apply, cfg=cfg)

@@ -16,6 +16,7 @@ Zeugen:
      Verweigert Stufe-1 (unclassifiable), muss auch unser Kernel
      unangetastet lassen (Conformance in der Verweigerung).
 """
+
 from __future__ import annotations
 
 import json
@@ -58,9 +59,20 @@ def _stufe1_heal(pdf: Path, anchors: list[dict]) -> tuple[int, str]:
         anchors_file = Path(f.name)
     try:
         r = subprocess.run(
-            [str(RUNNER_PY), str(STUFE1), pdf.stem[:24], "--pdf", str(pdf),
-             "--anchors", str(anchors_file), "--apply"],
-            capture_output=True, text=True, timeout=900, check=False,
+            [
+                str(RUNNER_PY),
+                str(STUFE1),
+                pdf.stem[:24],
+                "--pdf",
+                str(pdf),
+                "--anchors",
+                str(anchors_file),
+                "--apply",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=900,
+            check=False,
         )
         return r.returncode, r.stdout + r.stderr
     finally:
@@ -70,8 +82,7 @@ def _stufe1_heal(pdf: Path, anchors: list[dict]) -> tuple[int, str]:
 def _longest_monotone_folio_run(m: dict) -> list[dict]:
     """Längster Folio-+1-Lauf aus der Beweiskarte → konsistente Ankermenge
     ({page, N, M}). Beweis-Auswahl (kein Raten): nur gemessene Folios."""
-    folio = {i: p["folio"] for i, p in enumerate(m["pages"])
-             if p["folio"] is not None}
+    folio = {i: p["folio"] for i, p in enumerate(m["pages"]) if p["folio"] is not None}
     best: list[tuple[int, str]] = []
     cur: list[tuple[int, str]] = []
     for i in sorted(folio):
@@ -96,7 +107,7 @@ def _numeric_body_run(labels: list[str]) -> tuple[int, list[str]] | None:
     if start is None:
         return None
     run = [labels[start]]
-    for lab in labels[start + 1:]:
+    for lab in labels[start + 1 :]:
         if not lab.isdigit() or int(lab) != int(run[-1]) + 1:
             return None
         run.append(lab)
@@ -110,6 +121,7 @@ def test_conformance_constant_offset_vollidentisch(tmp_path):
     src = FIX / "falsche_labels.pdf"
     if not src.exists():
         from fixtures.generate_fixtures import main as gen
+
         gen()
     m = forensics_tool.build_map(src)
     anchors = _longest_monotone_folio_run(m)
@@ -146,11 +158,13 @@ def test_conformance_difficult_buecher(tmp_path):
         pytest.skip("keine difficult-Bücher")
     witnessed = 0
     refusals = 0
+    anchored = 0  # Bücher mit >=2 Beweis-ankern (Zeugen-Kandidaten)
     for book in books:
         m = forensics_tool.build_map(book)
         anchors = _longest_monotone_folio_run(m)
         if len(anchors) < 2:
             continue  # kein Kronfall-Labelzeugnis (z. B. Scan ohne Textschicht)
+        anchored += 1
         c1 = tmp_path / (book.stem[:24] + "_s1.pdf")
         c2 = tmp_path / (book.stem[:24] + "_k.pdf")
         shutil.copy2(book, c1)
@@ -159,9 +173,16 @@ def test_conformance_difficult_buecher(tmp_path):
         rc, out = _stufe1_heal(c1, anchors)
         after = pdf_kernel.read_page_labels(str(c1))
         if rc != 0:
-            # Conformance in der Verweigerung: Stufe-1 heilt nicht => der
-            # Kernel darf nichts geschrieben haben (tut er nicht — Beweis).
-            assert after == before, f"{book.name}: Stufe-1 rc={rc}, aber Datei verändert"
+            # Conformance in der Verweigerung — bewiesen ist hier NUR
+            # Stufe-1s eigene Rollback-Disziplin auf c1 (Datei unverändert)
+            # plus dass der Kernel-Zweig nie an write_page_labels kommt (c2
+            # ebenfalls unverändert); KEIN positives Kernel-Zeugnis.
+            assert after == before, (
+                f"{book.name}: Stufe-1 rc={rc}, aber Datei verändert"
+            )
+            assert pdf_kernel.read_page_labels(str(c2)) == before, (
+                f"{book.name}: Kernel-Zweig hat trotz Verweigerung geschrieben"
+            )
             refusals += 1
             continue
         body = _numeric_body_run(after)
@@ -173,12 +194,19 @@ def test_conformance_difficult_buecher(tmp_path):
         # Numerischer Körper (ab Body-Start bis Ende) muss identisch sein.
         assert l1[start:] == l2[start:], (
             f"{book.name}: Körper weicht ab\nStufe1={l1[start:][:8]}…\n"
-            f"Kernel={l2[start:][:8]}…")
+            f"Kernel={l2[start:][:8]}…"
+        )
         # Vorspann-Differenz ist dokumentierte Kernel-Grenze (römisch/Cover-
         # Präfix nur durch Stufe-1 darstellbar) — der numerische Körper trägt
         # die Conformance; hier wird die Grenze BEHAUPTENSFREI gemeldet.
         front_diff = [i for i in range(start) if l1[i] != l2[i]]
         assert all(not l2[i] for i in front_diff), (
-            f"{book.name}: Kernel schrieb unerlaubt in den Vorspann")
+            f"{book.name}: Kernel schrieb unerlaubt in den Vorspann"
+        )
         witnessed += 1
+    # Vakuoses Passieren verboten: gab es Zeugen-Kandidaten, ABER nur
+    # Verweigerungen, ist das KEIN positives Kernel-Zeugnis → skip statt
+    # stiller Grün.
+    if anchored and witnessed == 0:
+        pytest.skip("nur Verweigerungen — kein positives Kernel-Zeugnis")
     assert witnessed + refusals >= 1, "kein Buch lief Beweis-anker"

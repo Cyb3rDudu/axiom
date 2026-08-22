@@ -306,7 +306,19 @@ def run_loop(
 
         # Ausführung — history/results NUR für wirklich dispatchte steps
         # (kein Budget-Abbruch landet in der Audit-Spur).
-        result = registry.dispatch(action, step, cfg)
+        # Handler-Crash (z. B. pymupdf auf korruptem PDF) ist Beweis, kein
+        # Traceback: einfangen, als Fehlversuch durch DIE _fail-Pforte —
+        # der Lauf endet kontrolliert (Budget/Eskalation) und die Audit-
+        # Spur wird immer geschrieben.
+        try:
+            result = registry.dispatch(action, step, cfg)
+        except Exception as exc:  # noqa: BLE001 — Beweis, kein Crash
+            result = {
+                "action": action,
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "handled": True,
+            }
         if history is not None:
             history.append(step)
         if results is not None:
