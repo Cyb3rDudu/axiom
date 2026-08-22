@@ -108,14 +108,19 @@ Kein Prosa davor oder danach; nur das Objekt. Beispiele:
     (spread/ocr/clean sind Werkzeuge, keine plan_class-Werte) — plus
     `operations` (Liste; leer = reine PLAN-Validierung).
   · `operations`-EINTRAG = der EXECUTOR-Vertrag (surgery_exec): `source` ·
-    `backup` · `labels` · `expected_after`. Der Dispatcher bindet source/
-    backup an die Arbeitskopie (deine Angabe dient der Transparenz und
-    der PLAN-Validierung). `labels` ist die KOMPLETTE Label-Liste mit
-    LÄNGE == page_count (im Beispiel 10; ein 78-Seiten-Buch braucht 78
-    Einträge) — '' = Seite unbenannt. C-Präfixe und römische Vorspann-
-    Teile nimmst du WÖRTLICH aus dem Bestand in die Liste (PRESERVE);
-    nicht darstellbare Bäume verweigert der Executor laut — dann Klasse
-    oder Plan überdenken, nie Felder umbenennen.
+    `backup` · `labels` · `expected_after`. Die Felder source/backup dienen
+    der Transparenz; der Dispatcher bindet beide selbst an die Arbeits-
+    kopie (h_surgery überschreibt sie). `labels` ist die KOMPLETTE
+    Label-Liste mit LÄNGE == page_count (im Beispiel 10; ein 78-Seiten-
+    Buch braucht 78 Einträge) — '' = Seite unbenannt. C-Präfixe und
+    römische Vorspann-Teile nimmst du WÖRTLICH aus dem Bestand in die
+    Liste (PRESERVE). Darstellbar ist genau: unbenannte führende Seiten
+    ('') plus EIN geschlossener +1-Zahlenlauf bis Dokumentende — römische/
+    C-Teile sind strukturell NICHT darstellbar: solche Seiten als ''
+    planen und offen benennen (Teilerfolg), oder direkt eskalieren statt
+    zwei Versuche zu verbrennen. Nicht darstellbare Bäume verweigert der
+    Executor laut — dann Klasse oder Plan überdenken, nie Felder
+    umbenennen.
   · `report`, `stop`, `escalate` schließen den Fall (Endbericht bzw.
     Eskalation) — sie kosten kein Budget und beenden die Schleife.
   · Der Dispatcher antwortet mit Roh-Evidenz (JSON); misslungene oder
