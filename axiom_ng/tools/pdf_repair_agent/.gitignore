@@ -1,0 +1,24 @@
+# Eigene Venv + Caches — NIEMALS committen (Isolation: eigenes Venv pro
+# System, siehe bootstrap.sh).
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Laufzeit-Artefakte: Backups, Pläne, Logs, temporäre Label-Writes.
+backup/
+runs/
+*-labels.pdf
+
+# Sandbox-Storage-Kopien (regenerierbar: fixtures/generate_fixtures.py).
+fixtures/storage/
+
+# Lokale Konfiguration kann DEEPSEEK_API_KEY tragen — nie committen.
+config.env
+
+# Reale Eichmaßstab-Bücher (dudu-Testset 2026-08-22): lokal bleiben,
+# nie committen (Urheberrecht + Repo-Ballast) — GANZES Verzeichnis inkl.
+# MANIFEST.md, damit nichts daraus je committet wird (Nutzung nur nach
+# ausdrücklicher Freigabe von dudu).
+fixtures/difficult/

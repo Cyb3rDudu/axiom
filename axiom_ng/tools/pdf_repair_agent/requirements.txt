@@ -1,0 +1,15 @@
+# pdf_repair_agent — eigenes, gepinntes Venv. NIEMALS das Projekt-Venv,
+# NIEMALS site-packages teilen: der Service ist ein autarker Kasten.
+# Basis: python3 + Netz; ocrmypdf zieht tesseract + ghostscript (nur für
+# den T2-OCR-Pfad nötig; bootstrap.sh meldet, wenn beide fehlen).
+#
+# Pins (zum Zeitpunkt des Builds bekannte stabile Kombinationen):
+httpx==0.28.1
+pymupdf==1.28.2
+pikepdf==10.12.0
+Pillow==10.4.0
+psycopg2-binary==2.9.12
+ocrmypdf==17.10.0
+
+# Test-/Werkzeug-Laufzeit (eigene Tests, Mock-Läufe).
+pytest==9.1.1

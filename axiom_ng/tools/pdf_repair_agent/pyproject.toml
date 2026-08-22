@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.pyright]
+# Der Service ist ein autarker Kasten mit EIGENEM Venv (bootstrap.sh).
+# Pyright löst das Paket + seine gepinnten Reqs gegen dieses Venv auf —
+# NIEMALS gegen das System-Python (3.9) oder Projekt-Venvs.
+pythonVersion = "3.11"
+pythonPlatform = "Darwin"
+venvPath = "."
+venv = ".venv"
