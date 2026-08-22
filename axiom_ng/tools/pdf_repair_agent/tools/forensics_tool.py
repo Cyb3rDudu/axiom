@@ -159,18 +159,22 @@ def _collect_toc_lines(doc: pymupdf.Document) -> list[str]:
     return lines
 
 
-# Mindestlänge eines Folio-Ankerlaufs (Qualitäts-Tor): Jahreszahlen,
-# Tabellen- und Abschnittszahlen bilden KEINE seitengenauen +1-Läufe
-# dieser Länge — kurze „Läufe" sind Rauschen und dürfen nie Anker werden.
+# Mindestlänge eines Folio-Ankerlaufs (Qualitäts-Tor): strenge
+# seitengenaue +1-Läufe ab dieser Länge; vereinzelte Werte und Konstanten
+# (z. B. Jahreszahlen) überleben das Tor nicht. Dokumentierte Grenze: ein
+# DURCHGEHENDER +1-Zähler anderer Herkunft täuscht einen Lauf vor —
+# Upgrade-Pfad wäre eine Zonen-/Typografie-Kreuzprüfung der Folio-Zellen.
 ANCHOR_RUN_MIN_LEN = 5
 
 
 def anchor_folio_run(m: dict, min_len: int = ANCHOR_RUN_MIN_LEN) -> list[dict]:
     """STELLE-1-Quelle (Owner-Ruling 23.08.): beweisbare Folio-Anker aus
-    der Druckstruktur-Karte — der längste seitengenaue +1-Lauf
-    (Rausch-gefiltert durch min_len). Jahreszahlen o. Ä. überleben das Tor
-    nicht (kein +1-Lauf). Rückgabe: [{page, folio}] des längsten Laufs;
-    [] = NICHT messbar → Diagnose muss verweigern (kein Raten)."""
+    der Druckstruktur-Karte — der längste strenge seitengenaue +1-Lauf
+    (min_len als Rausch-Filter). Vereinzelte Werte und Konstanten wie
+    Jahreszahlen überleben das Tor nicht; dokumentierte Grenze: ein
+    durchgehender +1-Zähler anderer Herkunft besteht das Tor. Rückgabe:
+    [{page, folio}] des längsten Laufs; [] = NICHT messbar → Diagnose
+    muss verweigern (kein Raten)."""
     folio = {}
     for i, p in enumerate(m["pages"]):
         v = pdf_kernel.to_int_or_none(p["folio"] or "")

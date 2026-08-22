@@ -123,9 +123,11 @@ def run_ocr(pdf: str | Path, dst: Path, lang: str = OCR_LANG_DEFAULT) -> dict:
     dst.parent.mkdir(parents=True, exist_ok=True)
     ocr_bin = ocrmypdf_bin()
     if ocr_bin is None:  # Doppelte Sicherung — oben schon über bins geprüft
-        return {"applied": False,
-                "cause": "ocrmypdf-Binär nicht auflösbar (venv-bin/PATH)",
-                "ocr_binaries": bins}
+        return {
+            "applied": False,
+            "cause": "ocrmypdf-Binär nicht auflösbar (venv-bin/PATH)",
+            "ocr_binaries": bins,
+        }
     r = subprocess.run(
         [ocr_bin, "--language", lang, "--redo-ocr", "-q", str(pdf), str(dst)],
         capture_output=True,

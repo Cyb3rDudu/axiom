@@ -16,7 +16,10 @@ HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
 sys.path.insert(0, str(PKG))
 
-from tools import ocr_tool  # noqa: E402  # type: ignore[reportAttributeAccessIssue]
+from tools import (  # noqa: E402  # type: ignore[reportAttributeAccessIssue]
+    ocr_tool,
+    pdf_kernel,
+)
 
 FIX = PKG / "fixtures"
 # Verfügbarkeits-Sonde über das WERKZEUG selbst (venv-bewusste Auflösung —
@@ -104,12 +107,6 @@ def test_ocr_live_lauf_und_qualitaetstor():
     assert res["applied"] is True, res.get("cause")
     assert res["quality"]["quality_gate_pass"] is True
     assert res["quality"]["pages_below_min"] == []
-    counts = pdf_kernel_page_chars(dst)
+    counts = pdf_kernel.page_char_count(dst)
     assert all(c >= ocr_tool.MIN_TEXT_CHARS for c in counts), counts
     dst.unlink(missing_ok=True)
-
-
-def pdf_kernel_page_chars(p):
-    from tools import pdf_kernel  # noqa: E402
-
-    return pdf_kernel.page_char_count(p)

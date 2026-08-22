@@ -70,8 +70,9 @@ def _ctx(cfg, key: str, allow_apply: bool) -> dict:
 
 
 def h_probe(step: dict, ctx: dict) -> dict:
-    """Dreifach-Sonde: misst hier die RAG-Erreichbarkeit (Chunk-Wahrheit).
-    Was NICHT gemessen wurde, steht unter `unproven` — nie still behauptet."""
+    """Stellen-Sonde (3-Stellen-Beweis): misst hier die RAG-Erreichbarkeit
+    (Vorbedingung von Stelle 2). Was NICHT gemessen wurde, steht unter
+    `unproven`; fehlende Stellen unter `offen` — nie still behauptet."""
     import httpx  # type: ignore[reportMissingImports]
 
     cfg = ctx["cfg"]
@@ -105,8 +106,10 @@ def h_probe(step: dict, ctx: dict) -> dict:
             "ok": True,
             "base": base,
             "measured": [],
-            "offen": [f"stelle2_chunk: RAG antwortet nicht 200 ({detail})",
-                      "stelle3_zitat: ohne Zotero-Annotation nicht prüfbar"],
+            "offen": [
+                f"stelle2_chunk: RAG antwortet nicht 200 ({detail})",
+                "stelle3_zitat: ohne Zotero-Annotation nicht prüfbar",
+            ],
             "unproven": ["annotation-label", "chunk-page-exakt"],
         }
     return {
@@ -115,6 +118,10 @@ def h_probe(step: dict, ctx: dict) -> dict:
         "base": base,
         "detail": detail,
         "measured": ["rag-reachability"],
+        "offen": [
+            "stelle3_zitat: ohne Zotero-Annotation nicht prüfbar "
+            "(nachgelagerter Produktiv-Beweis)"
+        ],
         "unproven": [
             "annotation-label",
             "chunk-page-exakt (benötigt Zotero-"
@@ -141,6 +148,9 @@ def h_forensics(step: dict, ctx: dict) -> dict:
         "pdf": str(work),
         "work_reused": reused,
         "map": m,
+        # Qualitäts-Tor als CODE-Evidenz (nicht nur Prompt-Regel): die
+        # rauschgefilterten Stelle-1-Anker stehen direkt im Bericht.
+        "anchors": forensics_tool.anchor_folio_run(m),
     }
 
 
@@ -295,7 +305,7 @@ def run_agent(
         "ops_used": res.ops_used,
         "steps": res.history,
         "evidence": res.results,
-        "truth_source": _truth_source(res.results, status),
+        "truth_source": _truth_source(res.results),
         "unproven": _unproven_collect(res.results),
         "config": status,
         "apply": apply,
@@ -308,28 +318,39 @@ def run_agent(
     return report
 
 
-def _truth_source(results: list, status: dict) -> dict:
+def _truth_source(results: list) -> dict:
     """Wahrheits-Ordnung (Owner-Ruling 23.08.): Transparenz über die
     genutzten Stellen. Stelle 1 (Druckseite) ist der Standardweg; Stelle 2
-    (Chunk) und Stelle 3 (Zitat) werden nur als BEWIESEN geführt, wenn ihre
-    Messung tatsächlich in der Evidenz liegt. Offene Stellen werden
-    benannt — Information, keine Warnung."""
+    (Chunk) und Stelle 3 (Zitat) gelten nur als GEMESSEN, wenn ein
+    Chunk-Seiten-Vergleich bzw. Annotation-Check in der Evidenz liegt —
+    beides existiert (noch) auf keinem Codepfad, beide bleiben daher
+    offen; RAG-Erreichbarkeit ist eine Notiz, kein Beweis. Offene Stellen
+    werden benannt — Information, keine Warnung."""
     used: dict[str, str | list[str] | None] = {
-        "stufe1_druckseite": None, "stufe2_chunk": None,
-        "stelle3_zitat": None}
+        "stelle1_druckseite": None,
+        "stelle2_chunk": None,
+        "stelle3_zitat": None,
+    }
+    notizen: list[str] = []
     for r in results or []:
         if not isinstance(r, dict):
             continue
-        act = r.get("action")
-        if act == "forensics" and r.get("ok"):
-            used["stufe1_druckseite"] = "forensics_tool (Druckstruktur-Karte)"
-        if act == "probe" and "rag-reachability" in (r.get("measured") or []):
-            used["stufe2_chunk"] = "RAG erreichbar (rag-reachability gemessen)"
-            used["stelle3_zitat"] = "Zotero-Annotation — nachgelagerter Produktiv-Beweis"
-    if used["stufe1_druckseite"] is None:
-        used["stufe1_druckseite"] = "nicht gemessen"
+        if r.get("action") == "forensics" and r.get("ok"):
+            used["stelle1_druckseite"] = "forensics_tool (Druckstruktur-Karte)"
+        if (
+            r.get("action") == "probe"
+            and "rag-reachability" in (r.get("measured") or [])
+        ):
+            notizen.append(
+                "rag_erreichbar (reachability gemessen, kein "
+                "Chunk-Seiten-Vergleich)"
+            )
+    if used["stelle1_druckseite"] is None:
+        used["stelle1_druckseite"] = "nicht gemessen"
     offene = [k for k, v in used.items() if v is None]
     used["offene_stellen"] = offene
+    if notizen:
+        used["notizen"] = notizen
     return used
 
 
@@ -341,6 +362,7 @@ def _unproven_collect(results: list) -> list[str]:
         if not isinstance(r, dict):
             continue
         out.extend(r.get("unproven") or [])
+        out.extend(r.get("offen") or [])
         if r.get("ok") == False and r.get("cause"):  # noqa: E712
             out.append(f"{r.get('action', '?')}: {r['cause']}")
     return out
