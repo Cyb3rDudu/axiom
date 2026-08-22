@@ -90,8 +90,13 @@ Schreibe JSON-`step`-Objekte; der Dispatcher führt sie aus:
 Kein Prosa davor oder danach; nur das Objekt. Beispiele:
 
     {"action": "probe", "reason": "Stellen 2/3 erkunden, soweit vorhanden"}
-    {"action": "surgery", "apply": true, "plan_class": "two-range",
-     "operations": [{"seite": 1, "label": "I"}]}
+    {"action": "surgery", "apply": true, "plan_class": "constant-offset",
+     "operations": [{
+        "source": "fixtures/falsche_labels.pdf",
+        "backup": "runs/bak.pdf",
+        "labels": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
+        "expected_after": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+     }]}
     {"action": "stop", "reason": "geheilt — NACHHER-Messung grün, offene Stellen benannt"}
 
   · `action` ∈ {probe, forensics, spread, ocr, surgery, report,
@@ -102,6 +107,15 @@ Kein Prosa davor oder danach; nur das Objekt. Beispiele:
   · `surgery` VERLANGT `plan_class` — EINE der 5 Schadensklassen oben
     (spread/ocr/clean sind Werkzeuge, keine plan_class-Werte) — plus
     `operations` (Liste; leer = reine PLAN-Validierung).
+  · `operations`-EINTRAG = der EXECUTOR-Vertrag (surgery_exec): `source` ·
+    `backup` · `labels` · `expected_after`. Der Dispatcher bindet source/
+    backup an die Arbeitskopie (deine Angabe dient der Transparenz und
+    der PLAN-Validierung). `labels` ist die KOMPLETTE Label-Liste mit
+    LÄNGE == page_count (im Beispiel 10; ein 78-Seiten-Buch braucht 78
+    Einträge) — '' = Seite unbenannt. C-Präfixe und römische Vorspann-
+    Teile nimmst du WÖRTLICH aus dem Bestand in die Liste (PRESERVE);
+    nicht darstellbare Bäume verweigert der Executor laut — dann Klasse
+    oder Plan überdenken, nie Felder umbenennen.
   · `report`, `stop`, `escalate` schließen den Fall (Endbericht bzw.
     Eskalation) — sie kosten kein Budget und beenden die Schleife.
   · Der Dispatcher antwortet mit Roh-Evidenz (JSON); misslungene oder
