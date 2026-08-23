@@ -8,6 +8,7 @@ COMMIT  ?= $(shell git rev-parse --short HEAD)
 DIST    := dist
 OS_ARCH := $(shell uname -s | tr '[:upper:]' '[:lower:]')-$(shell uname -m)
 RAG_BIN := $(DIST)/axiom-ng-$(VERSION)-$(OS_ARCH)
+ZSTD_BIN := $(dir $(firstword $(wildcard /nix/store/*-zstd-*-bin/bin/zstd)))
 
 LDFLAGS := -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.Version=$(VERSION) -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.Commit=$(COMMIT) -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.BuildType=release
 
@@ -24,11 +25,11 @@ $(RAG_BIN): $(GO_SOURCES)
 	cd axiom_ng && CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o '../$(RAG_BIN)' ./cmd/axiom-ng
 	shasum -a 256 '$(RAG_BIN)' > '$(RAG_BIN).sha256'
 
-runner:
-	@echo "runner packaging: pending G2 (#205)"
+runner: ## conda-pack style artifact (micromamba env, relocatable) -> dist/
+	PATH="$(ZSTD_BIN):$$PATH" ./scripts/build_runner_artifact.sh $(VERSION)
 
-fixer:
-	@echo "fixer packaging: pending G2 (#205)"
+fixer: ## autarkic env/+app/ artifact (own venv) -> dist/
+	PATH="$(ZSTD_BIN):$$PATH" ./scripts/build_fixer_artifact.sh $(VERSION)
 
 checksums: ## shasum -a 256 sidecar for every dist/ artifact missing one
 	@[ -d "$(DIST)" ] || exit 0; find "$(DIST)" -type f -name '*.sha256' -prune -o -type f -exec sh -c 'for f do [ -f "$$f.sha256" ] || shasum -a 256 "$$f" > "$$f.sha256"; done' sh {} +

@@ -1,3 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "axiom-ng-runner"
+version = "0.1.0"
+description = "axiom-ng RAG processor service (query embed/rerank + ingest)"
+requires-python = ">=3.11"
+
+[project.scripts]
+# #204 goal 3: clean entry point, no PYTHONPATH coupling after install.
+axiom-runner = "axiom_ng_runner.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["axiom_ng_runner*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

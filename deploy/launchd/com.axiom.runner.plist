@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- com.axiom.runner — query/ingest runner (#205 §3).
+     Template: copy to ~/Library/LaunchAgents/ after install.
+     Secrets/env live in ~/.config/axiom/runner.env (0700) — never in /tmp.
+     Expected env vars (runner.env): AXIOM_PROCESSOR_COMPUTE=real,
+     AXIOM_PROCESSOR_PORT=8012, plus any AXIOM_PROCESSOR_* auth settings. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.axiom.runner</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>. "$HOME/.config/axiom/runner.env" &amp;&amp; exec /opt/axiom/runner/current/env/bin/axiom-runner</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ProcessType</key><string>Background</string>
+    <key>StandardOutPath</key><string>$HOME/.local/state/axiom/logs/runner.log</string>
+    <key>StandardErrorPath</key><string>$HOME/.local/state/axiom/logs/runner.log</string>
+</dict>
+</plist>
