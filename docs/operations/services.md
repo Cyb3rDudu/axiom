@@ -130,10 +130,10 @@ on wake. After a long sleep, restart the VM/containers before trusting
 dispatcher state (observed 2026-08-22/23 night). If dispatchers report lease
 404s out of nowhere, check VM clock first: `podman machine ssh date`.
 
-## Nix exception (mothership)
+## Nix exception (nix-darwin host)
 
 Standard path = launchctl + `/opt` + release artifacts (above). On the
-nix-darwin mothership the same services map to home-manager
+nix-darwin host the same services map to home-manager
 `launchd.agents.<name>` (pattern: `launchd.agents.llama-swap` in the owner's
 nix-conf): stable config under `~/.config/axiom/`, state under
 `~/.local/state/axiom`. Host deps via nix: `pkgs.tesseract5`
