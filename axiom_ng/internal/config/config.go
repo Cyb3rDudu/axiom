@@ -69,10 +69,11 @@ type Config struct {
 
 	// ProcessorURLs is the ORDERED ingest-runner candidate list (#207):
 	// AXIOM_PROCESSOR_URLS, comma-separated, preference order. Precedence:
-	// the plural list wins when set; otherwise the singular ProcessorURL
-	// becomes the one-entry list. The legacy IngestFallbackURL is appended
-	// as last candidate when set and distinct (backward compatibility —
-	// single-entry setups behave exactly as before).
+	// the plural list wins and defines the COMPLETE chain when set (operator
+	// spelled out their runners); otherwise the singular ProcessorURL becomes
+	// the list head and the legacy IngestFallbackURL is appended as last
+	// candidate when set and distinct (backward compatibility — single-entry
+	// setups behave exactly as before). See IngestCandidates.
 	ProcessorURLs []string
 	// RunnerHealthInterval bounds the periodic candidate health probe that
 	// keeps dead runners out of the submit path (AXIOM_RUNNER_HEALTH_INTERVAL,
