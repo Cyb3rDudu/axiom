@@ -99,6 +99,26 @@ wiped /tmp and took the secret with it), never inline in plists.
   `AXIOM_DISPATCHER_PROFILE` (the empty-profile trap: assert non-empty!)
 - `runner.env` — `AXIOM_PROCESSOR_COMPUTE=real`, `AXIOM_PROCESSOR_PORT=8012`
 
+Two operational traps with env files (both hit during the v0.1.11
+production install, 2026-08-23):
+
+1. **`AXIOM_BIND_ADDR` decides what answers locally.** With
+   `AXIOM_BIND_ADDR=<lan-ip>` (the host LAN address, needed when remote
+   runners pull source artifacts from this host's API), the RAG does NOT
+   answer on `127.0.0.1`/`localhost` — a health call against
+   `localhost:<port>` goes nowhere. Local scripting on the host must use
+   the LAN IP (or hostname). `0.0.0.0` would answer everywhere but exposes
+   the API on all interfaces — deliberate trade-off, documented here so it
+   does not bite the next person. Known install findings: #210.
+2. **Port changes can span multiple env files.** The API port appears not
+   only in `rag-api.env` (`AXIOM_API_PORT`) but also — if the source-pull
+   path is active — in `rag.env`
+   (`AXIOM_PROCESSOR_SOURCE_BASE_URL=http://<host>:<api-port>`). Changing
+   only the former silently breaks remote-runner source fetches (404 on
+   every dispatcher job). After any port change:
+   `grep -rn <old-port> ~/.config/axiom/` must come back empty (comments
+   aside), then `launchctl kickstart -k gui/$(id -u)/com.axiom.rag`.
+
 The fixer has NO env file in this scheme: its package-local `config.env`
 (via its own `load_config_envfile`, inside the artifact) carries the
 non-secret settings, and `--key` stays a per-event argument.
