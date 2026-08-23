@@ -1,0 +1,40 @@
+# Release pipeline (#205 §4): tag -> make all -> artifacts -> GitHub Release.
+# darwin arm64 only — the Carrier runner path stays containerized (non-goal
+# per #205), so no linux artifacts are produced here.
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  darwin-arm64:
+    runs-on: macos-14 # arm64
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: axiom_ng/go.mod
+      - name: Version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+      - name: Build rag (release, version-stamped)
+        run: make rag
+      - name: Build runner + fixer artifacts
+        run: |
+          brew install zstd
+          make runner fixer
+      - name: Checksums
+        run: |
+          ls -lh dist/
+          for f in dist/*.sha256; do shasum -a 256 -c "$f"; done
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          args=(--generate-notes --verify-tag)
+          gh release create "$GITHUB_REF_NAME" "${args[@]}" dist/* || \
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber

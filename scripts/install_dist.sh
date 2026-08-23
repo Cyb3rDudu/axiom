@@ -127,7 +127,7 @@ EOF
     chmod +x "$ROOT/bin/axiom-fixer"
     ln -sfn "$version" "$ROOT/fixer/current"
     echo "installed: $ROOT/bin/axiom-fixer ($version)"
-    echo "rollback:  ln -sfn <prev-version> $ROOT/fixer/current && launchctl kickstart -k gui/\$(id -u)/com.axiom.fixer"
+    echo "rollback:  ln -sfn <prev-version> $ROOT/fixer/current (fixer is event-driven: scripts/fix.sh picks up current on next invocation)"
     ;;
 *)
     echo "unknown component '$component' (rag|runner|fixer)"

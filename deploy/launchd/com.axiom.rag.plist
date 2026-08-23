@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- com.axiom.rag — axiom-ng API instance :8011 (#205 §3).
+     Shared env (DB, OpenSearch, source secret) lives in
+     ~/.config/axiom/rag.env (0700); instance overrides in
+     ~/.config/axiom/rag-api.env. NEVER /tmp.
+     Standard*Path: __HOME__ is substituted by scripts/install_services.sh
+     (launchd does not expand $HOME). -->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.axiom.rag</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>. "$HOME/.config/axiom/rag.env" &amp;&amp; . "$HOME/.config/axiom/rag-api.env" &amp;&amp; exec /opt/axiom/bin/axiom-ng</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ProcessType</key><string>Background</string>
+    <key>StandardOutPath</key><string>__HOME__/.local/state/axiom/logs/rag.log</string>
+    <key>StandardErrorPath</key><string>__HOME__/.local/state/axiom/logs/rag.log</string>
+</dict>
+</plist>

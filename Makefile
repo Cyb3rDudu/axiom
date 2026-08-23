@@ -40,7 +40,8 @@ clean:
 install: ## Operator-gated: dist/ artifacts -> /opt/axiom (asks first)
 	./scripts/install_dist.sh rag $(VERSION)
 
-test: ## All suites: Go (vet+test), runner, fixer isolation+
+test: ## All suites: fix-convention, Go (vet+test), runner, fixer isolation+
+	./scripts/test_fix_convention.sh
 	cd axiom_ng && go vet ./... && go test ./...
 	@[ -x axiom_ng_runner/.venv/bin/python ] || { echo "runner: venv missing — bootstrap first (axiom_ng_runner/.venv)"; exit 1; }
 	cd axiom_ng_runner && .venv/bin/python -m pytest -q

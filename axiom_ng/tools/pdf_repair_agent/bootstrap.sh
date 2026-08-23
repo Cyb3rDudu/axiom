@@ -15,7 +15,10 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$HERE/.venv"
+# Reproducibility (#205 G3): the lock pins transitives; direct pins live in
+# requirements.txt. Lock wins when present (regenerate: env pip freeze).
 REQS="$HERE/requirements.txt"
+[ -f "$HERE/requirements.lock.txt" ] && REQS="$HERE/requirements.lock.txt"
 MARKER="$VENV/.pip-installed-$(cksum <"$REQS" | awk '{print $1}')"
 
 # --- 1) Vernunft-Interpreter finden ---------------------------------------

@@ -12,9 +12,11 @@ G3's install script copies these and substitutes placeholders.
   never in `/tmp`, never inline in the plist (reboot survival + no secret in
   launchd-visible config).
 - **Logs** go to `~/.local/state/axiom/logs/<service>.log`.
-- **KeepAlive policy:** `com.axiom.runner` runs standing (KeepAlive true);
-  `com.axiom.fixer` is on-demand by default (KeepAlive false — enable per
-  runbook decision in G3).
+- **KeepAlive policy:** `com.axiom.runner` runs standing (KeepAlive true).
+  The fixer has NO plist at all — it is an event runner (owner decision):
+  one process per Zotero attachment key, invoked via `scripts/fix.sh <key>`
+  (per-key lock + 30-min timeout). Two concurrent runs on the same key
+  would corrupt the agent's working directory; the wrapper serializes.
 - **`$HOME` is NOT expanded by launchd.** `$HOME` works inside the
   `sh -c` ProgramArguments string (the shell expands it), but NOT in
   `StandardOutPath`/`StandardErrorPath` — the G3 installer substitutes the
