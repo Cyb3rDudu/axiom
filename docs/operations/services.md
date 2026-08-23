@@ -7,7 +7,7 @@ not the reference path. `make` is a dev surface only.
 
 | Name | What | Artifact | Install |
 | --- | --- | --- | --- |
-| `rag` | axiom-ng Go binary (API + dispatcher are modes of one binary) | `axiom-ng-<version>-darwin-arm64` | `/opt/axiom/rag/<version>/` |
+| `rag` | Go binary (API + dispatcher are modes of one binary) | `axiom-ng-<version>-darwin-arm64` | `/opt/axiom/rag/<version>/` |
 | `runner` | axiom_ng_runner (query embed/rerank + ingest, MPS) | `axiom-runner-<version>-macos-arm64.tar.zst` (conda-pack) | `/opt/axiom/runner/<version>/{env,app}` |
 | `fixer` | pdf_repair_agent (autarkic, event runner) | `axiom-fixer-<version>-macos-arm64.tar.zst` | `/opt/axiom/fixer/<version>/{env,app}` |
 

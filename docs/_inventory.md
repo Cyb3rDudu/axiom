@@ -40,3 +40,23 @@ Repositories hat hier ein dokumentiertes Schicksal: **migriert + überarbeitet**
 Jeder Nav-Punkt von `mkdocs.yml` zeigt auf eine existierende Seite; der
 `mkdocs build --strict` ist der obligatorische Link-Check. Seiten, die D3–D6
 vertiefen, existieren mit „In Arbeit"-Hinweis.
+
+## Umgebungsspezifische Referenzwerte (nicht publizieren)
+
+Veröffentlichungs-Gate: docs/ darf keine privaten Infra-Angaben enthalten
+(192.168.x, /Users/-Pfade, Rechner-Codenamen, CGNAT-Range). Diese Datei ist
+die einzige Ausnahme und hält die konkreten Produktionswerte fest, auf die
+publizierte Seiten per Platzhalter verweisen.
+
+### W9-Rebuild-Wave (`docs/REBUILD_WAVE_RUNBOOK.md`)
+
+| Platzhalter im Runbook | Konkreter Wert (Survey 2026-08-18) |
+| --- | --- |
+| `<user>@<runner-host>` (Runner-Host) | `dudu@192.168.1.2` („carrier": GPU-Host, host-network Podman-Runner) |
+| `<admin-host>:<port>` (axiom API für `AXIOM_PROCESSOR_SOURCE_BASE_URL`) | `192.168.1.47:8011` |
+| Wave-Runner-Ports (`<port1>–<port3>`, aufsteigend) | `19542–19544` (19543 kollidiert bis Cutover mit dem alten Runner) |
+| Merge-Train-Mindeststand | `78558d5` (W2+W3+W4+W12) |
+| Surveyed Buchzahl | `121` aktiv (Firing-SELECT ist autoritativ; Planungsfigur war 126) |
+| Runner-Host-Disk (Preflight 4.10) | ≥ 898 GiB frei auf `/` |
+| GPU-Layout | GPU0/GPU1 RTX 3090, GPU2 RTX A3000 (Straggler-Kritischer Pfad) |
+| OpenSearch-Index (technische Konstante, `dispatcher/outbox.go`) | `axiom-ng-chunks-v1` |

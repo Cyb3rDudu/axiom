@@ -6,6 +6,11 @@
 Nothing in this document mutates production by itself. Every command that
 changes state is marked **[MUTATES]** and belongs to the firing sequence.
 
+Host-neutral form: hosts, users, and concrete port numbers are placeholders
+(`<user>@<runner-host>`, `<admin-host>`, `<port>`). The environment-specific
+reference values of the surveyed wave (real host IPs, wave port scheme, merge
+SHA, surveyed counts) live in `docs/_inventory.md` (internal, not published).
+
 ---
 
 ## 1. Deploy plan — carrier runners on the new train
@@ -26,7 +31,7 @@ changes state is marked **[MUTATES]** and belongs to the firing sequence.
 ### 1.2 Refresh + build (on the carrier)
 
 ```bash
-ssh dudu@192.168.1.2
+ssh <user>@<runner-host>
 cd ~/Code/axiom
 git fetch origin && git checkout main && git pull --ff-only
 git log --oneline -1          # MUST be >= 78558d5 (merge train: W2+W3+W4+W12)
@@ -52,8 +57,11 @@ Per-runner: host network (measured 300× throughput vs passt port-mapping),
 injection + `CUDA_VISIBLE_DEVICES` pinning (torch `cuda:0` maps to the
 pinned card), distinct ports.
 
+One runner per GPU, each on its own port (one ascending port per runner —
+see `_inventory.md` for the concrete wave values):
+
 ```bash
-for spec in "0 19542 w9-gpu0" "1 19543 w9-gpu1" "2 19544 w9-a3000"; do
+for spec in "0 <port> w9-gpu0" "1 <port> w9-gpu1" "2 <port> w9-a3000"; do
   set -- $spec
   podman run -d --name runner-carrier-$3 \
     --network=host --shm-size=8g \
@@ -70,12 +78,13 @@ done
 ```
 
 Notes:
-- Port 19543 collides with the OLD `runner-carrier-gpu1` (still serving).
-  Either stop the old container first (§3.3 cutover) or move w9-gpu1 to
-  19545 until cutover — the dispatcher only switches at firing time anyway.
+- The middle runner's port may collide with the OLD standing runner (still
+  serving). Either stop the old container first (§3.3 cutover) or give the
+  new runner the next free port until cutover — the dispatcher only switches
+  at firing time anyway.
 - `DEVICE_GLINER=cuda` is load-bearing (CPU GLiNER ≈ 1 h/book, measured).
-- No Zotero mounts: production runners PULL sources from axiom-ng via the
-  job's `source_url` (dispatcher-built from `AXIOM_PROCESSOR_SOURCE_BASE_URL`);
+- No Zotero mounts: production runners PULL sources from the axiom dispatcher
+  via the job's `source_url` (dispatcher-built from `AXIOM_PROCESSOR_SOURCE_BASE_URL`);
   downloads land in `work_root/.incoming` (`app.py`). `ALLOWED_SOURCE_ROOTS`
   only gates local-path delivery (reference mode) — same pattern the running
   GPU1 container proves.
@@ -95,9 +104,10 @@ holds before the firing sequence — that IS the isolation.
 ### 1.5 Sanctioned dry-run (once, safe)
 
 ```bash
-# on the carrier, after §1.2/§1.3 (use 19542 — nothing points at it yet):
-curl -s http://127.0.0.1:19542/v1/health          # {"status":"ok"}
-curl -s http://127.0.0.1:19542/v1/capabilities | head -c 400
+# on the runner host, after §1.2/§1.3 (use the first wave port — nothing
+# points at it yet):
+curl -s http://127.0.0.1:<port>/v1/health          # {"status":"ok"}
+curl -s http://127.0.0.1:<port>/v1/capabilities | head -c 400
 
 # NEW-CHUNKER PROOF (the honest version marker — __version__ is a static
 # "0.1.0" and proves nothing): probe the baked source for the W2/W12
@@ -155,16 +165,16 @@ attributes books and SKIP LOCKED + claim fencing keep the split exclusive
 
 ```text
 AXIOM_DISPATCHER_ENABLED=true
-AXIOM_PROCESSOR_URL=http://192.168.1.2:<port>     # 19542 / 19543 / 19544
+AXIOM_PROCESSOR_URL=http://<runner-host>:<port>      # one port per dispatcher/runner pair
 AXIOM_PROCESSOR_RUNNER_NAME=carrier-w9-gpu0|w9-gpu1|w9-a3000
-AXIOM_DISPATCHER_WORKER_ID=axiom-ng-w9-<n>
+AXIOM_DISPATCHER_WORKER_ID=axiom-w9-<n>
 AXIOM_DISPATCHER_CONCURRENCY=1                    # per-GPU serial, TC2 shape
 AXIOM_DISPATCHER_LEASE=5m                         # default, proven
 AXIOM_DISPATCHER_PROFILE=full-rag-v1              # see profile note below
 # Source-pull path (review W1 — without these the runner gets Mac local_paths,
 # rejects them (not under /data) and every job dies 422 SOURCE_NOT_FOUND):
-AXIOM_PROCESSOR_SOURCE_BASE_URL=http://192.168.1.47:8011   # live production value
-AXIOM_PROCESSOR_SOURCE_SECRET=<from the running axiom-ng env — never in docs>
+AXIOM_PROCESSOR_SOURCE_BASE_URL=http://<admin-host>:<port>   # the axiom API host serving /api/processor/source/<jobID>
+AXIOM_PROCESSOR_SOURCE_SECRET=<from the running dispatcher env — never in docs>
 # Standalone dispatcher processes also need (no defaults):
 AXIOM_DATABASE_URL=<Mac Postgres DSN>
 AXIOM_ARTIFACT_ROOT=<artifact dir — full-rag-v1 extracts images; validation fails without it>
@@ -243,7 +253,7 @@ WHERE force_rebuild GROUP BY 1,2 ORDER BY 1;
 -- live book-level stage visibility (runner-side job store — the runner
 -- reports per-stage progress on GET /v1/jobs/{id}, L8 §2; there is no
 -- phases column in ingest_jobs):
-ssh dudu@192.168.1.2 'for p in 19542 19543 19544; do
+ssh <user>@<runner-host> 'for p in <port1> <port2> <port3>; do
   curl -s http://127.0.0.1:$p/v1/jobs | head -c 300; echo; done'
 ```
 
@@ -256,10 +266,10 @@ PG=$(psql axiom_db -tAc "SELECT count(*) FROM processing_chunks c
 echo "OS=$OS PG=$PG"
 
 # carrier GPUs (straggler watch — A3000 was the TC2 critical path):
-watch -n 30 'ssh dudu@192.168.1.2 nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader'
+watch -n 30 'ssh <user>@<runner-host> nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader'
 
 # runner logs (one per card):
-ssh dudu@192.168.1.2 'podman logs -f --tail 50 runner-carrier-w9-gpu0'
+ssh <user>@<runner-host> 'podman logs -f --tail 50 runner-carrier-w9-gpu0'
 ```
 
 ### 2.7 Expected end-state (verification targets for W10)
@@ -338,8 +348,8 @@ TestPersistFrontmatterGateEndToEnd.
 
 ### 3.1 Cutover order at firing time **[MUTATES]**
 1. Preflight §4 all green.
-2. Stop old `runner-carrier-gpu1` (pre-train code; frees GPU1 + 19543):
-   `ssh dudu@192.168.1.2 podman stop runner-carrier-gpu1`.
+2. Stop the old standing runner (pre-train code; frees its GPU + port):
+   `ssh <user>@<runner-host> podman stop <old-runner-container>`.
 3. Start/confirm the three w9 runners (§1.3).
 4. Start the three dispatchers (Mac, §2.2, PID files per convention).
 5. Enqueue the wave (§2.3) with count assertion.
@@ -368,7 +378,7 @@ teardown plan.
 | 4.0b | Stale-attachment re-point (satellite finding) | script asserts: DUJQJ2RN/NU8SS6HG deleted + no active snapshot; DNC73IVL/PC9U5YEX present, not deleted | both old keys retired, both new keys projected (live pre-fix state: exactly the violation) |
 | 4.1 | Merge train on carrier clone | `ssh … 'cd ~/Code/axiom && git log --oneline -1'` | ≥ `78558d5` |
 | 4.2 | New-chunker proof in image | §1.5 container feature probe | both W2+W12 assertions pass |
-| 4.3 | Runners healthy | `curl :19542/19543(45)/19544 /v1/health` ×3 | `{"status":"ok"}` |
+| 4.3 | Runners healthy | `curl :<port> /v1/health` ×3 (one per wave runner) | `{"status":"ok"}` |
 | 4.4 | Queue state | `SELECT status, count(*) FROM ingest_jobs WHERE status IN ('pending','processing') GROUP BY 1` | EITHER `0`, OR exactly the known heal-projections (8 pending on new content hashes, live-verified 2026-08-18: 0 leases, held since 09:15) — held for the wave; anything `processing` = a dispatcher is draining on OLD code: STOP it before cutover. The §2.3 wave INSERT force-rows make the 8 pendings redundant (same attachments, force generation) — resolve them via the wave, not a pre-wave drain |
 | 4.5 | W7 terminal | `SELECT status, count(*) FROM repair_cases GROUP BY 1` | no `queued`/`in_repair`; healed+blocked+closed only. W7 ran with `AXIOM_FIXSVC_NO_SYNC` set (truthy check — any non-empty value incl. `0` enables, same pattern as `AXIOM_FIXSVC_DUMP_HEALED`) |
 | 4.6 | Zotero quiesce | no sync scheduled; sync API idle | no new `zotero_*` writes during wave (manual discipline + checklist at firing) |

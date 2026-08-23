@@ -63,7 +63,13 @@ jobs:
         # 3) the literal config-default cell in the configuration reference —
         #    AXIOM_DISPATCHER_WORKER_ID ships the default string `axiom-ng`
         #    (config.go), and the table must quote code defaults verbatim.
-        #    Exempt ONLY the standalone table cell `| `axiom-ng` |`.
+        #    Exempt ONLY the standalone table cell `| `axiom-ng` |`;
+        # 4) CLI invocations of the binary (`./axiom-ng -flag …`,
+        #    `axiom-ng --version`) — the binary's name is a technical fact;
+        # 5) the OpenSearch index constant `axiom-ng-chunks-v1`
+        #    (dispatcher/outbox.go) — quoted verbatim in operational commands;
+        # 6) config default paths under `~/.axiom-ng/` (config.go) and the
+        #    release artifact/shim names (`axiom-ng-<version>…`, shim list).
         # mkdocs.yml is checked as well, so a `site_name: axiom-ng`
         # regression fails CI. docs/_inventory.md is internal meta and exempt.
         run: |
@@ -71,6 +77,11 @@ jobs:
             | grep -v '_inventory.md' \
             | grep -vF 'was known as *axiom-ng*' \
             | grep -vE '(go run|go build).*(cmd/axiom-ng|axiom_ng/cmd/axiom-ng)' \
+            | grep -vE '(\./)?axiom-ng +-' \
+            | grep -vF 'axiom-ng-chunks-v1' \
+            | grep -vF '~/.axiom-ng/' \
+            | grep -vF 'axiom-ng-<version>' \
+            | grep -vF 'axiom-ng, axiom-runner' \
             | grep -vE '\| `axiom-ng` \|'; then
             echo "legacy product name 'axiom-ng' found in site content"
             exit 1
