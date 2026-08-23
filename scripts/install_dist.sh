@@ -3,7 +3,6 @@
 # Stages dist/ artifacts into /opt/axiom/<component>/<version>/ with an
 # atomically-switched `current` symlink. Operator-confirmed before any
 # mutation of /opt; checksum verified BEFORE the prompt.
-# G1: rag. G2: runner (conda-pack), fixer (own venv).
 set -eu
 
 DIST="dist"
@@ -11,7 +10,10 @@ ROOT="/opt/axiom"
 component="${1:-}"
 version="${2:-}"
 
-usage() { echo "usage: make install   # or: scripts/install_dist.sh <rag|runner|fixer> <version>"; exit 2; }
+usage() {
+    echo "usage: make install   # or: scripts/install_dist.sh <rag|runner|fixer> <version>"
+    exit 2
+}
 [ -n "$component" ] && [ -n "$version" ] || usage
 
 # newest artifact matching a pattern (empty -> exit 1)
@@ -27,19 +29,41 @@ find_artifact() {
     printf '%s\n' "$best"
 }
 
-case "$component" in
-rag)
-    bin=$(find_artifact "axiom-ng-$version-*") || { echo "no rag artifact for $version in $DIST/ — run: make rag"; exit 1; }
-    shasum -a 256 -c "$bin.sha256" 2>/dev/null || { echo "checksum FAILED for $bin"; exit 1; }
-    target="$ROOT/rag/$version"
-    echo "component: rag"
-    echo "  artifact: $bin ($(cat "$bin.sha256"))"
-    echo "  target:   $target/axiom-ng"
-    echo "  current:  $ROOT/rag/current -> $version"
-    echo "  shim:     $ROOT/bin/axiom-ng"
+# confirm_install <component> <artifact> [plan lines...]
+# Verifies the checksum FIRST, prints the install plan, then requires an
+# explicit operator "yes" before anything under $ROOT is touched.
+confirm_install() {
+    comp="$1"
+    art="$2"
+    shift 2
+    shasum -a 256 -c "$art.sha256" 2>/dev/null || {
+        echo "checksum FAILED for $art"
+        exit 1
+    }
+    echo "component: $comp"
+    echo "  artifact: $art ($(cat "$art.sha256"))"
+    for line in "$@"; do
+        echo "  $line"
+    done
     echo "This will create directories under $ROOT. Proceed? [yes/No]"
     read -r answer
-    [ "$answer" = "yes" ] || { echo "aborted"; exit 1; }
+    [ "$answer" = "yes" ] || {
+        echo "aborted"
+        exit 1
+    }
+}
+
+case "$component" in
+rag)
+    bin=$(find_artifact "axiom-ng-$version-*") || {
+        echo "no rag artifact for $version in $DIST/ — run: make rag"
+        exit 1
+    }
+    target="$ROOT/rag/$version"
+    confirm_install rag "$bin" \
+        "target:   $target/axiom-ng" \
+        "current:  $ROOT/rag/current -> $version" \
+        "shim:     $ROOT/bin/axiom-ng"
     mkdir -p "$target" "$ROOT/bin"
     cp "$bin" "$target/axiom-ng"
     chmod 0755 "$target/axiom-ng"
@@ -48,42 +72,46 @@ rag)
     echo "installed: $ROOT/bin/axiom-ng ($version)"
     ;;
 runner)
-    art=$(find_artifact "axiom-runner-$version-*.tar.zst") || { echo "no runner artifact for $version in $DIST/ — run: make runner"; exit 1; }
-    shasum -a 256 -c "$art.sha256" 2>/dev/null || { echo "checksum FAILED for $art"; exit 1; }
+    art=$(find_artifact "axiom-runner-$version-*.tar.zst") || {
+        echo "no runner artifact for $version in $DIST/ — run: make runner"
+        exit 1
+    }
     target="$ROOT/runner/$version"
-    echo "component: runner"
-    echo "  artifact: $art ($(cat "$art.sha256"))"
-    echo "  target:   $target/{env,app}"
-    echo "  current:  $ROOT/runner/current -> $version"
-    echo "  shim:     $ROOT/bin/axiom-runner"
-    echo "  post-install fixup: env/bin/conda-unpack (once)"
-    echo "This will create directories under $ROOT. Proceed? [yes/No]"
-    read -r answer
-    [ "$answer" = "yes" ] || { echo "aborted"; exit 1; }
+    confirm_install runner "$art" \
+        "target:   $target/{env,app}" \
+        "current:  $ROOT/runner/current -> $version" \
+        "shim:     $ROOT/bin/axiom-runner" \
+        "post-install fixup: env/bin/conda-unpack (once)"
     mkdir -p "$ROOT/runner" "$ROOT/bin"
     rm -rf "$target"
     mkdir -p "$target"
     tar --zstd -xf "$art" -C "$target" --strip-components 1
-    "$target/env/bin/conda-unpack"
+    # conda-unpack invoked via the env's own python — PATH-independent
+    "$target/env/bin/python" "$target/env/bin/conda-unpack"
+    # smoke: import surface must resolve in the FINAL location before the
+    # current symlink switches over
+    "$target/env/bin/python" -c 'import axiom_ng_runner, torch'
+    cat >"$ROOT/bin/axiom-runner" <<EOF
+#!/bin/sh
+exec "$ROOT/runner/current/env/bin/python" -m axiom_ng_runner "\$@"
+EOF
+    chmod +x "$ROOT/bin/axiom-runner"
     ln -sfn "$version" "$ROOT/runner/current"
-    ln -sfn "$ROOT/runner/current/env/bin/axiom-runner" "$ROOT/bin/axiom-runner"
     echo "installed: $ROOT/bin/axiom-runner ($version)"
+    echo "rollback:  ln -sfn <prev-version> $ROOT/runner/current && launchctl kickstart -k gui/\$(id -u)/com.axiom.runner"
     ;;
 fixer)
-    art=$(find_artifact "axiom-fixer-$version-*.tar.zst") || { echo "no fixer artifact for $version in $DIST/ — run: make fixer"; exit 1; }
-    shasum -a 256 -c "$art.sha256" 2>/dev/null || { echo "checksum FAILED for $art"; exit 1; }
-    buildprefix=$(tar --zstd -tf "$art" "fixer-$version/env/bin/fix-env" >/dev/null 2>&1 && sed -n 's/^usage: fix-env //p' /dev/null; true)
+    art=$(find_artifact "axiom-fixer-$version-*.tar.zst") || {
+        echo "no fixer artifact for $version in $DIST/ — run: make fixer"
+        exit 1
+    }
     target="$ROOT/fixer/$version"
-    echo "component: fixer"
-    echo "  artifact: $art ($(cat "$art.sha256"))"
-    echo "  target:   $target/{env,app}"
-    echo "  current:  $ROOT/fixer/current -> $version"
-    echo "  shim:     $ROOT/bin/axiom-fixer"
-    echo "  post-install fixup: env/bin/fix-env <build-prefix> (once)"
-    echo "  host deps (NOT bundled): tesseract5 +deu, ghostscript on PATH"
-    echo "This will create directories under $ROOT. Proceed? [yes/No]"
-    read -r answer
-    [ "$answer" = "yes" ] || { echo "aborted"; exit 1; }
+    confirm_install fixer "$art" \
+        "target:   $target/{env,app}" \
+        "current:  $ROOT/fixer/current -> $version" \
+        "shim:     $ROOT/bin/axiom-fixer" \
+        "post-install fixup: env/bin/fix-env <build-prefix> (once)" \
+        "host deps (NOT bundled): tesseract5 +deu, ghostscript on PATH"
     mkdir -p "$ROOT/fixer" "$ROOT/bin"
     rm -rf "$target"
     mkdir -p "$target"
@@ -91,17 +119,18 @@ fixer)
     # one-time venv relocation fixup, build prefix recorded by the build script
     bp=$(cat "$target/env/.build-prefix")
     "$target/env/bin/fix-env" "$bp"
-    cat > "$ROOT/bin/axiom-fixer" <<EOF
+    "$target/env/bin/python" -c 'import pymupdf'
+    cat >"$ROOT/bin/axiom-fixer" <<EOF
 #!/bin/sh
 exec "$ROOT/fixer/current/env/bin/python" "$ROOT/fixer/current/app/repair_agent.py" "\$@"
 EOF
     chmod +x "$ROOT/bin/axiom-fixer"
     ln -sfn "$version" "$ROOT/fixer/current"
     echo "installed: $ROOT/bin/axiom-fixer ($version)"
+    echo "rollback:  ln -sfn <prev-version> $ROOT/fixer/current && launchctl kickstart -k gui/\$(id -u)/com.axiom.fixer"
     ;;
 *)
     echo "unknown component '$component' (rag|runner|fixer)"
     exit 1
     ;;
 esac
-echo "rollback:  ln -sfn <prev-version> $ROOT/$component/current && launchctl kickstart -k gui/\$(id -u)/com.axiom.$component"

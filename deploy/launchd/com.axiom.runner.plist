@@ -4,7 +4,11 @@
      Template: copy to ~/Library/LaunchAgents/ after install.
      Secrets/env live in ~/.config/axiom/runner.env (0700) — never in /tmp.
      Expected env vars (runner.env): AXIOM_PROCESSOR_COMPUTE=real,
-     AXIOM_PROCESSOR_PORT=8012, plus any AXIOM_PROCESSOR_* auth settings. -->
+     AXIOM_PROCESSOR_PORT=8012, plus any AXIOM_PROCESSOR_* auth settings.
+     NOTE: exec via `env/bin/python -m axiom_ng_runner`, NOT the
+     env/bin/axiom-runner console script — conda-unpack does not rewrite pip
+     console-script shebangs (#!/usr/bin/env python), and launchd's PATH has
+     no python. See deploy/launchd/README.md. -->
 <plist version="1.0">
 <dict>
     <key>Label</key><string>com.axiom.runner</string>
@@ -12,7 +16,7 @@
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>. "$HOME/.config/axiom/runner.env" &amp;&amp; exec /opt/axiom/runner/current/env/bin/axiom-runner</string>
+        <string>. "$HOME/.config/axiom/runner.env" &amp;&amp; exec /opt/axiom/runner/current/env/bin/python -m axiom_ng_runner</string>
     </array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>

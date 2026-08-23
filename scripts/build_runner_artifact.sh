@@ -28,7 +28,8 @@ if [ ! -x "$MM" ]; then
     tar -xjf "$DIST/tooling/mm.tar.bz2" -C "$DIST/tooling" bin/micromamba
     rm -f "$DIST/tooling/mm.tar.bz2"
 fi
-MAMBA_ROOT_PREFIX="$DIST/tooling/mamba-root" ; export MAMBA_ROOT_PREFIX
+MAMBA_ROOT_PREFIX="$DIST/tooling/mamba-root"
+export MAMBA_ROOT_PREFIX
 
 # --- conda env with python 3.11 --------------------------------------------
 if [ ! -x "$PREFIX/bin/python" ]; then
@@ -49,6 +50,7 @@ mkdir -p "$STAGE"
 rsync -a --delete \
     --exclude '.venv' --exclude '__pycache__' --exclude 'tests' \
     --exclude 'scripts' --exclude 'shell.nix' \
+    --exclude 'build' --exclude '*.egg-info' \
     axiom_ng_runner/ "$STAGE/app/"
 
 # --- pack env (relocatable; conda-unpack fixes prefixes at install) ---------
@@ -64,6 +66,6 @@ rm -f "$BUILD/env.tar.gz"
 
 # --- artifact -----------------------------------------------------------------
 tar --zstd -C "$BUILD" -cf "$ARTIFACT" "runner-$VERSION"
-shasum -a 256 "$ARTIFACT" > "$ARTIFACT.sha256"
+shasum -a 256 "$ARTIFACT" >"$ARTIFACT.sha256"
 echo "runner-artifact: $ARTIFACT"
 echo "install: extract to /opt/axiom/runner/$VERSION, then run env/bin/conda-unpack once"
