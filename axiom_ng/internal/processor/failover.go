@@ -119,10 +119,22 @@ func (f *FailoverClient) StartHealthMonitor(ctx context.Context, interval time.D
 	}()
 }
 
+// probeBudget bounds one candidate's /v1/health call inside a probe cycle.
+// It is deliberately short so a slow-but-alive runner does not stall the
+// whole probe (which also stretches one cycle to ~n*budget for n candidates).
+const probeBudget = 3 * time.Second
+
 // probeAll pings each candidate once with a short budget.
 func (f *FailoverClient) probeAll(ctx context.Context) {
 	for _, c := range f.clients {
-		pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		// During shutdown the cancel fires while a cycle is in flight: health
+		// fails fast for every candidate and would mark the whole chain down
+		// (and log an "unavailable" line per runner) for the exit path. Skip
+		// the rest of the cycle once the context is gone.
+		if ctx.Err() != nil {
+			return
+		}
+		pctx, cancel := context.WithTimeout(ctx, probeBudget)
 		err := c.Health(pctx)
 		cancel()
 		f.setLiveness(c, err != nil, "health")
