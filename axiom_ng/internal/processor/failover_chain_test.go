@@ -8,6 +8,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"strings"
 	"testing"
 	"time"
 )
@@ -144,5 +145,29 @@ func TestChain_HeadAcceptedFollowUpStaysOnHead(t *testing.T) {
 	}
 	if local.ackHits.Load() != 0 {
 		t.Fatalf("fallback must NOT receive the head-owned job's follow-up: local acks=%d", local.ackHits.Load())
+	}
+}
+
+// TestChain_EmptyChainFailsExplicitly pins a #207-review hardening (W4):
+// NewFailoverChain with an all-nil member set builds an empty chain. Instead
+// of returning (nil, nil) — a silent "success" that nil-derefs downstream —
+// SubmitProcess must surface an explicit "no ingest candidates" error, and
+// the getter paths must not panic on the empty chain default.
+func TestChain_EmptyChainFailsExplicitly(t *testing.T) {
+	fc := NewFailoverChain([]*Client{nil}, log.New(io.Discard, "", 0))
+
+	_, err := fc.SubmitProcess(context.Background(), &ProcessRequest{JobID: "a"})
+	if err == nil {
+		t.Fatal("SubmitProcess on an empty chain must return an error, not (nil, nil)")
+	}
+	if !strings.Contains(err.Error(), "no ingest candidates") {
+		t.Fatalf("empty-chain SubmitProcess error = %v, want a description of the missing candidates", err)
+	}
+
+	if _, err := fc.Capabilities(context.Background()); err == nil {
+		t.Fatal("Capabilities on an empty chain must fail")
+	}
+	if err := fc.Health(context.Background()); err == nil {
+		t.Fatal("Health on an empty chain must fail")
 	}
 }

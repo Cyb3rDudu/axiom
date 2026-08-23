@@ -217,6 +217,13 @@ func (f *FailoverClient) SubmitProcess(ctx context.Context, req *ProcessRequest)
 		}
 		f.setLiveness(c, true, "submit")
 	}
+	if lastErr == nil {
+		// Empty candidate chain (NewFailoverChain with all-nil members): the
+		// loop never ran. Return an explicit error instead of a nil/nil
+		// "success" that would nil-deref far from the cause (matches the
+		// Capabilities/Health guards).
+		lastErr = errors.New("no ingest candidates")
+	}
 	return nil, lastErr
 }
 
