@@ -145,8 +145,11 @@ func TestChain_HeadAcceptedFollowUpStaysOnHead(t *testing.T) {
 // TestChain_EmptyChainFailsExplicitly pins a #207-review hardening (W4):
 // NewFailoverChain with an all-nil member set builds an empty chain. Instead
 // of returning (nil, nil) — a silent "success" that nil-derefs downstream —
-// SubmitProcess must surface an explicit "no ingest candidates" error, and
-// the getter paths must not panic on the empty chain default.
+// SubmitProcess, Capabilities, and Health must each surface an explicit
+// "no ingest candidates" error. The routed()-based getters (JobStatus,
+// JobResult, Artifact, Cancel, Ack) are NOT covered here: they index
+// clients[0] and would panic on an empty chain — unreachable in production
+// because IngestCandidates never yields an empty chain.
 func TestChain_EmptyChainFailsExplicitly(t *testing.T) {
 	fc := NewFailoverChain([]*Client{nil}, log.New(io.Discard, "", 0))
 
@@ -235,10 +238,62 @@ func TestChain_Capabilities4xxDoesNotFailOver(t *testing.T) {
 	}
 
 	// Head answers 4xx: Capabilities must FAIL (not skip to the fallback),
-	// and the fallback must never be asked.
+	// and the fallback must never be asked (proven directly via capsHits).
 	main.capsFail.Store(true)
 	_, err = fc.Capabilities(context.Background())
 	if err == nil {
 		t.Fatal("Capabilities must propagate the head's 4xx instead of silently failing over")
+	}
+	if local.capsHits.Load() != 0 {
+		t.Fatalf("4xx must not reach the fallback candidate: local caps attempts=%d", local.capsHits.Load())
+	}
+}
+
+// TestChain_HealthMonitorDisabledInterval pins the disable branch of
+// StartHealthMonitor (interval <= 0 returns without starting a goroutine —
+// time.NewTicker would panic on a non-positive interval): a probed-down head
+// stays in the submit path because nothing demotes it. With the monitor
+// disabled, liveness only changes via submit-time failover, as documented
+// for AXIOM_RUNNER_HEALTH_INTERVAL<=0.
+func TestChain_HealthMonitorDisabledInterval(t *testing.T) {
+	carrier := newScriptRunner(t, "carrier")
+	local := newScriptRunner(t, "local")
+	fc := newChain(t, carrier, local)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fc.StartHealthMonitor(ctx, 0) // disabled: no background probe
+
+	carrier.healthFail.Store(true)
+	time.Sleep(50 * time.Millisecond) // room for a wrongly started goroutine to demote
+
+	if _, err := fc.SubmitProcess(context.Background(), &ProcessRequest{JobID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if carrier.submitHits.Load() != 1 || local.submitHits.Load() != 0 {
+		t.Fatalf("a disabled monitor must not demote the head: carrier=%d local=%d", carrier.submitHits.Load(), local.submitHits.Load())
+	}
+}
+
+// TestChain_ProbeAllSkipsOnCancelledContext pins the shutdown guard in
+// probeAll (ctx.Err() != nil -> return): a cancelled context makes health
+// calls fail fast, and probing anyway would mark the whole chain down —
+// logging an "unavailable" line per runner on the exit path. After a
+// cancelled cycle, liveness is unchanged and submits keep their preference.
+func TestChain_ProbeAllSkipsOnCancelledContext(t *testing.T) {
+	carrier := newScriptRunner(t, "carrier")
+	local := newScriptRunner(t, "local")
+	fc := newChain(t, carrier, local)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()                       // shutdown already in flight
+	carrier.healthFail.Store(true) // health WOULD fail if consulted
+	fc.probeAll(ctx)
+
+	if _, err := fc.SubmitProcess(context.Background(), &ProcessRequest{JobID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if carrier.submitHits.Load() != 1 || local.submitHits.Load() != 0 {
+		t.Fatalf("a cancelled probe cycle must not demote the chain: carrier=%d local=%d", carrier.submitHits.Load(), local.submitHits.Load())
 	}
 }

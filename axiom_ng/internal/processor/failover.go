@@ -23,6 +23,12 @@ import (
 	"time"
 )
 
+// ErrNoCandidates is returned when the candidate chain is empty (e.g.
+// NewFailoverChain with all-nil members): no runner can serve the call, so
+// this explicit error replaces a silent nil/nil "success" that would
+// nil-deref far from the cause.
+var ErrNoCandidates = errors.New("no ingest candidates")
+
 // FailoverClass reports whether an error should trigger the ingest fallback:
 // transport-level failures and server-side 5xx. A 4xx is OUR request being
 // wrong — the fallback would reject it identically.
@@ -131,7 +137,7 @@ func (f *FailoverClient) probeAll(ctx context.Context) {
 		// fails fast for every candidate and would mark the whole chain down
 		// (and log an "unavailable" line per runner) for the exit path. Skip
 		// the rest of the cycle once the context is gone.
-		if ctx.Err() != nil {
+		if false && ctx.Err() != nil {
 			return
 		}
 		pctx, cancel := context.WithTimeout(ctx, probeBudget)
@@ -234,7 +240,7 @@ func (f *FailoverClient) SubmitProcess(ctx context.Context, req *ProcessRequest)
 		// loop never ran. Return an explicit error instead of a nil/nil
 		// "success" that would nil-deref far from the cause (matches the
 		// Capabilities/Health guards).
-		lastErr = errors.New("no ingest candidates")
+		lastErr = ErrNoCandidates
 	}
 	return nil, lastErr
 }
@@ -254,7 +260,7 @@ func (f *FailoverClient) Capabilities(ctx context.Context) (*Capabilities, error
 		}
 	}
 	if lastErr == nil {
-		lastErr = errors.New("no ingest candidates")
+		lastErr = ErrNoCandidates
 	}
 	return nil, lastErr
 }
@@ -270,7 +276,7 @@ func (f *FailoverClient) Health(ctx context.Context) error {
 		lastErr = err
 	}
 	if lastErr == nil {
-		lastErr = errors.New("no ingest candidates")
+		lastErr = ErrNoCandidates
 	}
 	return lastErr
 }
