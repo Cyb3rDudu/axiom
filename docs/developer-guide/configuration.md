@@ -41,7 +41,7 @@ organized by *where the variable is consumed* (`set by`).
 | `AXIOM_QUERY_RUNNER_URL` | `http://localhost:8012` | Query-role runner for `/v1/embed` + `/v1/rerank` (R4). Defaults to the local runner so retrieval survives a remote outage. |
 | `AXIOM_PROCESSOR_TIMEOUT` | `300s` | Bounds the **result** fetch and (as the submit floor) the synchronous remote source download inside `POST /v1/process`. Remote deployments raise it to cover the runner's download budget. |
 | `AXIOM_PROCESSOR_RUNNER_NAME` | processor-URL host | Human identity of the processor this dispatcher drives; lands in the phase log line and `ingest_jobs.runner_name` at claim time. |
-| `AXIOM_DISPATCHER_ENABLED` | off | Gates the claim/process dispatcher loop; it never runs unless explicitly `1 | true | yes`. |
+| `AXIOM_DISPATCHER_ENABLED` | off | Gates the claim/process dispatcher loop; it never runs unless explicitly `1|true|yes`. |
 | `AXIOM_DISPATCHER_WORKER_ID` | `axiom-ng` | This process's stable worker identity for leases (literal code default). Left at default, two dispatchers share one identity — set it per process when running multiple. |
 | `AXIOM_DISPATCHER_CONCURRENCY` | `1` | Parallel claim/process slots. |
 | `AXIOM_DISPATCHER_PROFILE` | `full-rag-v1` | Processing profile JSON frozen at claim time; the `full-rag-v1` default materializes **every** feature boolean as `true` (entities, relationships, dense + sparse embeddings, images). The profile *name* alone does not toggle features — the explicit booleans do. |
