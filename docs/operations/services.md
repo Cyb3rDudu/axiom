@@ -79,6 +79,11 @@ and a 30-minute hard timeout. Two simultaneous repair instances on the same
 PDF would destroy the working directory; the wrapper serializes. The
 `--key` contract stays per-invocation — no env file, no static key.
 
+If a run is SIGKILLed or the host loses power, the lockdir may survive with
+a dead pid — the wrapper detects that and recovers automatically. Manual
+recovery (only if the pid file is unreadable):
+`rmdir ~/.local/state/axiom/runs/fix-<key>.lock`.
+
 ## Env files & secrets
 
 One file per service in `~/.config/axiom/`, mode 0700. Secrets (DSN, HMAC
@@ -93,7 +98,10 @@ wiped /tmp and took the secret with it), never inline in plists.
   `AXIOM_DISPATCHER_ENABLED=1`, worker id, `AXIOM_PROCESSOR_URL`,
   `AXIOM_DISPATCHER_PROFILE` (the empty-profile trap: assert non-empty!)
 - `runner.env` — `AXIOM_PROCESSOR_COMPUTE=real`, `AXIOM_PROCESSOR_PORT=8012`
-- `fixer.env` — only non-secret fixer settings (no key; `--key` is per event)
+
+The fixer has NO env file in this scheme: its package-local `config.env`
+(via its own `load_config_envfile`, inside the artifact) carries the
+non-secret settings, and `--key` stays a per-event argument.
 
 ## Debug vs production (DoD core, #205 §5)
 

@@ -36,7 +36,9 @@ confirm_install() {
     comp="$1"
     art="$2"
     shift 2
-    shasum -a 256 -c "$art.sha256" 2>/dev/null || {
+    # basename-only sidecars: verify from the artifact's own directory so
+    # the check works regardless of the caller's cwd (#205 G3 review).
+    (cd "$(dirname "$art")" && shasum -a 256 -c "$(basename "$art").sha256") 2>/dev/null || {
         echo "checksum FAILED for $art"
         exit 1
     }

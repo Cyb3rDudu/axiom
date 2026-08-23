@@ -23,7 +23,7 @@ rag: $(RAG_BIN) ## Release build of the Go binary with version stamp
 $(RAG_BIN): $(GO_SOURCES)
 	@mkdir -p "$(DIST)"
 	cd axiom_ng && CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o '../$(RAG_BIN)' ./cmd/axiom-ng
-	shasum -a 256 '$(RAG_BIN)' > '$(RAG_BIN).sha256'
+	(cd "$(DIST)" && shasum -a 256 '$(notdir $(RAG_BIN))' > '$(notdir $(RAG_BIN)).sha256')
 
 runner: ## conda-pack style artifact (micromamba env, relocatable) -> dist/
 	PATH="$(ZSTD_BIN):$$PATH" ./scripts/build_runner_artifact.sh $(VERSION)
@@ -32,7 +32,7 @@ fixer: ## autarkic env/+app/ artifact (own venv) -> dist/
 	PATH="$(ZSTD_BIN):$$PATH" ./scripts/build_fixer_artifact.sh $(VERSION)
 
 checksums: ## shasum -a 256 sidecar for every dist/ artifact missing one
-	@[ -d "$(DIST)" ] || exit 0; find "$(DIST)" -type f -name '*.sha256' -prune -o -type f -exec sh -c 'for f do [ -f "$$f.sha256" ] || shasum -a 256 "$$f" > "$$f.sha256"; done' sh {} +
+	@[ -d "$(DIST)" ] || exit 0; cd "$(DIST)" && find . -type f -name '*.sha256' -prune -o -type f -exec sh -c 'for f do f=$${f#./}; [ -f "$$f.sha256" ] || shasum -a 256 "$$f" > "$$f.sha256"; done' sh {} +
 
 clean:
 	rm -rf "$(DIST)"

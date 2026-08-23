@@ -66,6 +66,6 @@ rm -f "$BUILD/env.tar.gz"
 
 # --- artifact -----------------------------------------------------------------
 tar --zstd -C "$BUILD" -cf "$ARTIFACT" "runner-$VERSION"
-shasum -a 256 "$ARTIFACT" >"$ARTIFACT.sha256"
+(cd "$DIST" && shasum -a 256 "${ARTIFACT##*/}" >"${ARTIFACT##*/}.sha256")
 echo "runner-artifact: $ARTIFACT"
 echo "install: extract to /opt/axiom/runner/$VERSION, then run env/bin/conda-unpack once"

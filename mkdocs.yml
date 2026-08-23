@@ -1,5 +1,5 @@
 # Site: https://cyb3rdudu.github.io/axiom
-# Built with MkDocs Material. Source of truth for CI is .github/workflows/docs.yml.
+# Built with MkDocs Material. CI source of truth: .github/workflows/docs.yml.
 # Triggered on docs(...) commits (paths: docs/**).
 #
 # Mandatory rules (dudu, 2026-08-15): English content only; product name
@@ -8,102 +8,103 @@
 
 site_name: axiom
 site_description: A research knowledge engine for your Zotero library — search
-  your literature by meaning and cite with exact source locators
+    your literature by meaning and cite with exact source locators
 site_url: https://cyb3rdudu.github.io/axiom/
 repo_url: https://github.com/Cyb3rDudu/axiom
 edit_uri: blob/main/docs/
 
 theme:
-  name: material
-  # Dark is the operating default; logo and favicon come from the axiom
-  # original-era icon (see About/Logo).
-  palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: indigo
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: indigo
-      toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
-  logo: assets/icon_original.png
-  favicon: assets/icon_original.png
-  language: en
-  features:
-    - navigation.sections
-    - navigation.tracking
-    - navigation.top
-    - toc.follow
-    - search.highlight
-    - search.share
-    - content.code.copy
-    - content.tabs.link
-    - content.action.edit
+    name: material
+    # Dark is the operating default; logo and favicon come from the axiom
+    # original-era icon (see About/Logo).
+    palette:
+        - media: "(prefers-color-scheme: light)"
+          scheme: default
+          primary: indigo
+          toggle:
+              icon: material/brightness-7
+              name: Switch to dark mode
+        - media: "(prefers-color-scheme: dark)"
+          scheme: slate
+          primary: indigo
+          toggle:
+              icon: material/brightness-4
+              name: Switch to light mode
+    logo: assets/icon_original.png
+    favicon: assets/icon_original.png
+    language: en
+    features:
+        - navigation.sections
+        - navigation.tracking
+        - navigation.top
+        - toc.follow
+        - search.highlight
+        - search.share
+        - content.code.copy
+        - content.tabs.link
+        - content.action.edit
 
 plugins:
-  - search
+    - search
 
 # Working/auxiliary docs not published to the site (D2b inventory artifact +
 # the Python dependency pin used by CI).
 exclude_docs: |
-  _inventory.md
-  requirements.txt
+    _inventory.md
+    requirements.txt
 
 markdown_extensions:
-  - admonition
-  - attr_list
-  - md_in_html
-  - tables
-  - pymdownx.details
-  - pymdownx.superfences:
-      custom_fences:
-        - name: mermaid
-          class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
-  - pymdownx.highlight
-  - pymdownx.inlinehilite
-  - pymdownx.tasklist:
-      custom_checkbox: true
-  - toc:
-      permalink: true
+    - admonition
+    - attr_list
+    - md_in_html
+    - tables
+    - pymdownx.details
+    - pymdownx.superfences:
+          custom_fences:
+              - name: mermaid
+                class: mermaid
+                format: !!python/name:pymdownx.superfences.fence_code_format
+    - pymdownx.highlight
+    - pymdownx.inlinehilite
+    - pymdownx.tasklist:
+          custom_checkbox: true
+    - toc:
+          permalink: true
 
 # Client-side chart rendering for mermaid architecture diagrams.
 extra_javascript:
-  - https://unpkg.com/mermaid@10.9.8/dist/mermaid.min.js
+    - https://unpkg.com/mermaid@10.9.8/dist/mermaid.min.js
 
 nav:
-  - Welcome: index.md
-  - Get Started:
-      - Concept Tour: get-started/concept-tour.md
-      - Quickstart: get-started/quickstart.md
-  - User Guide:
-      - Zotero Sync: user-guide/zotero-sync.md
-      - Ingest: user-guide/ingest.md
-      - Retrieval: user-guide/retrieval.md
-  - Developer Guide:
-      - Architecture Overview: developer-guide/architecture.md
-      - "axiom dispatcher": developer-guide/axiom-go.md
-      - "axiom runner": developer-guide/axiom-runner.md
-      - "Processor Contract": developer-guide/processor-contract.md
-      - Configuration: developer-guide/configuration.md
-      - Testing: developer-guide/testing.md
-  - Operations:
-      - Deployment: operations/deployment.md
-      - Monitoring: operations/monitoring.md
-      - Troubleshooting: operations/troubleshooting.md
-  - References:
-      - HTTP API: references/api.md
-      - Data Model: references/data-model.md
-      - Benchmarks & Analyses:
-          - Overview: references/benchmarks.md
-          - L8 Throughput Analysis: references/benchmarks/l8-durchstich.md
-          - TC2 Parallel & Determinism: references/benchmarks/tc2-parallel.md
-          - Mass Chunking: references/benchmarks/mass-chunking.md
-          - Chunk Quality: references/benchmarks/chunk-quality.md
-          - Retrieval Quality: references/benchmarks/retrieval-quality.md
-      - FAQ: references/faq.md
-  - About: about/index.md
+    - Welcome: index.md
+    - Get Started:
+          - Concept Tour: get-started/concept-tour.md
+          - Quickstart: get-started/quickstart.md
+    - User Guide:
+          - Zotero Sync: user-guide/zotero-sync.md
+          - Ingest: user-guide/ingest.md
+          - Retrieval: user-guide/retrieval.md
+    - Developer Guide:
+          - Architecture Overview: developer-guide/architecture.md
+          - "axiom dispatcher": developer-guide/axiom-go.md
+          - "axiom runner": developer-guide/axiom-runner.md
+          - "Processor Contract": developer-guide/processor-contract.md
+          - Configuration: developer-guide/configuration.md
+          - Testing: developer-guide/testing.md
+    - Operations:
+          - Services & Releases: operations/services.md
+          - Deployment: operations/deployment.md
+          - Monitoring: operations/monitoring.md
+          - Troubleshooting: operations/troubleshooting.md
+    - References:
+          - HTTP API: references/api.md
+          - Data Model: references/data-model.md
+          - Benchmarks & Analyses:
+                - Overview: references/benchmarks.md
+                - L8 Throughput Analysis: references/benchmarks/l8-durchstich.md
+                - TC2 Parallel & Determinism: references/benchmarks/tc2-parallel.md
+                - Mass Chunking: references/benchmarks/mass-chunking.md
+                - Chunk Quality: references/benchmarks/chunk-quality.md
+                - Retrieval Quality: references/benchmarks/retrieval-quality.md
+          - FAQ: references/faq.md
+    - About: about/index.md

@@ -5,7 +5,8 @@ name: release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
+# (no workflow_dispatch: GITHUB_REF_NAME would be a branch on manual runs
+#  and gh release --verify-tag would fail)
 
 permissions:
   contents: write
@@ -36,5 +37,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           args=(--generate-notes --verify-tag)
-          gh release create "$GITHUB_REF_NAME" "${args[@]}" dist/* || \
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          assets=(dist/axiom-ng-* dist/*.tar.zst dist/*.sha256)
+          gh release create "$GITHUB_REF_NAME" "${args[@]}" "${assets[@]}" || \
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber

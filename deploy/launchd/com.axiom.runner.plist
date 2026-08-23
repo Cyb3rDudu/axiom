@@ -21,7 +21,7 @@
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ProcessType</key><string>Background</string>
-    <key>StandardOutPath</key><string>$HOME/.local/state/axiom/logs/runner.log</string>
-    <key>StandardErrorPath</key><string>$HOME/.local/state/axiom/logs/runner.log</string>
+    <key>StandardOutPath</key><string>__HOME__/.local/state/axiom/logs/runner.log</string>
+    <key>StandardErrorPath</key><string>__HOME__/.local/state/axiom/logs/runner.log</string>
 </dict>
 </plist>

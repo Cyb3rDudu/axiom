@@ -16,13 +16,17 @@ component="${1:?usage: install_release.sh <rag|runner|fixer> <version> [--skip-p
 version="${2:?usage: install_release.sh <rag|runner|fixer> <version> [--skip-pull]}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$HERE/dist"
+cd "$HERE" # install_dist.sh works relative to the repo root — run from any cwd
 REPO="${AXIOM_RELEASE_REPO:-Cyb3rDudu/axiom}"
 
 case "$component" in
-    rag) pattern="axiom-ng-$version-*" ;;
-    runner) pattern="axiom-runner-$version-*.tar.zst" ;;
-    fixer) pattern="axiom-fixer-$version-*.tar.zst" ;;
-    *) echo "unknown component '$component' (rag|runner|fixer)"; exit 2 ;;
+rag) pattern="axiom-ng-$version-*" ;;
+runner) pattern="axiom-runner-$version-*.tar.zst" ;;
+fixer) pattern="axiom-fixer-$version-*.tar.zst" ;;
+*)
+    echo "unknown component '$component' (rag|runner|fixer)"
+    exit 2
+    ;;
 esac
 
 if [ "${3:-}" != "--skip-pull" ]; then
@@ -37,8 +41,14 @@ for f in "$DIST"/$pattern; do
     [ -f "$f" ] || continue
     case "$f" in *.sha256) continue ;; esac
     found="$f"
-    shasum -a 256 -c "$f.sha256" || { echo "checksum FAILED for $f — refusing to install"; exit 1; }
+    (cd "$(dirname "$f")" && shasum -a 256 -c "$(basename "$f").sha256") || {
+        echo "checksum FAILED for $f — refusing to install"
+        exit 1
+    }
 done
-[ -n "$found" ] || { echo "no artifact matching $pattern in $DIST/"; exit 1; }
+[ -n "$found" ] || {
+    echo "no artifact matching $pattern in $DIST/"
+    exit 1
+}
 
 exec "$HERE/scripts/install_dist.sh" "$component" "$version"

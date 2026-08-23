@@ -69,6 +69,6 @@ EOF
 
 # --- artifact --------------------------------------------------------------------
 tar --zstd -C "$BUILD" -cf "$ARTIFACT" "fixer-$VERSION"
-shasum -a 256 "$ARTIFACT" >"$ARTIFACT.sha256"
+(cd "$DIST" && shasum -a 256 "${ARTIFACT##*/}" >"${ARTIFACT##*/}.sha256")
 echo "fixer-artifact: $ARTIFACT"
 echo "install: extract to /opt/axiom/fixer/$VERSION — install_dist.sh runs env/bin/fix-env automatically (build prefix in env/.build-prefix)"
