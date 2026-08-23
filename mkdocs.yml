@@ -95,6 +95,8 @@ nav:
           - Services & Releases: operations/services.md
           - Deployment: operations/deployment.md
           - KG Maintenance: operations/kg-maintenance.md
+          - KG Relations Consolidation Runbook: operations/kg-relations-consolidation-runbook.md
+          - Rebuild Wave Runbook: operations/rebuild-wave-runbook.md
           - PDF Label Surgery: operations/pdf-label-surgery.md
           - Monitoring: operations/monitoring.md
           - Troubleshooting: operations/troubleshooting.md

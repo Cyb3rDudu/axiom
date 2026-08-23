@@ -48,7 +48,7 @@ Veröffentlichungs-Gate: docs/ darf keine privaten Infra-Angaben enthalten
 die einzige Ausnahme und hält die konkreten Produktionswerte fest, auf die
 publizierte Seiten per Platzhalter verweisen.
 
-### W9-Rebuild-Wave (`docs/REBUILD_WAVE_RUNBOOK.md`)
+### W9-Rebuild-Wave (`docs/operations/rebuild-wave-runbook.md`)
 
 | Platzhalter im Runbook | Konkreter Wert (Survey 2026-08-18) |
 | --- | --- |

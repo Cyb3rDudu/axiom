@@ -1,7 +1,7 @@
 # W9 Rebuild-Wave Runbook — full-corpus re-chunk on the Carrier (#188)
 
-**Status:** planning artifact (W9 preparation) · **Firing authority:** Hivemind + dudu, after W7 terminal states and the pre-flight checklist pass · **Branch:** `feat/w9-runbook`
-**Scope:** the full active corpus — **121 documents as surveyed** (the Hivemind planning figure was 126; the firing SELECT is authoritative and the W7 outcome may shift the count) — `force_rebuild` wave, new chunker (W2 section-trail fix + W12 chapter ordinals + W4-ready locators) on carrier main @78558d5+.
+**Status:** operational runbook (full-corpus re-chunk waves) · **Firing authority:** operator, after the pre-flight checklist passes
+**Scope:** the full active corpus — **121 documents as surveyed** (an earlier planning figure was 126; the firing SELECT is authoritative and prior heal outcomes may shift the count) — `force_rebuild` wave, new chunker (W2 section-trail fix + W12 chapter ordinals + W4-ready locators) on the then-current merge train.
 
 Nothing in this document mutates production by itself. Every command that
 changes state is marked **[MUTATES]** and belongs to the firing sequence.
@@ -212,7 +212,7 @@ WHERE NOT a.deleted
 
 Run the SELECT alone first, eyeball the list against the W7 outcome (every
 healed attachment present, every blocked book consciously included or
-excluded per Hivemind decision), then INSERT inside a transaction with the
+excluded per operator decision), then INSERT inside a transaction with the
 count asserted.
 
 ### 2.4 Throughput estimate (from TC2 / L8 / Flutgate measurements)
@@ -316,31 +316,30 @@ evidence until retention removes the old snapshots (owner decision).
 
 ---
 
-### 2.9 Frontmatter-KG-Bereinigung (#198 Ziel 1)
+### 2.9 Frontmatter KG cleanup (#198 goal 1)
 
-KG-Kanten/-Entitäten, deren Evidenz in gegateten Frontmatter-Sektionen
-liegt (TOC / Autorenverzeichnis / Vorwort / Literatur / Index /
-Kapitel-Byline-Titelzeilen — der kalibrierte Klassifikator in
-`internal/frontmatter`, identisch für Retrieval-Filter und KG-Gate),
-werden aus der AKTIVEN Generation entfernt. Persist-Gate (kg_frontmatter_gate.go)
-hält zukünftige Ingests sauber — jede natürliche Neuverarbeitung eines
-Buchs trägt das Gate automatisch, kein Rebuild nötig:
+KG edges/entities whose evidence lies in gated frontmatter sections
+(TOC / author lists / preface / bibliography / index /
+chapter-byline title lines — the calibrated classifier in
+`internal/frontmatter`, shared by the retrieval filter and the KG gate)
+are removed from the ACTIVE generation. The persist gate
+(kg_frontmatter_gate.go) keeps future ingests clean — every natural
+reprocessing of a book carries the gate automatically; no rebuild needed:
 
 ```bash
-# Kandidaten-Report (löscht NICHTS) — vor jedem produktiven Drop ansehen:
+# Candidate report (deletes NOTHING) — review before every productive drop:
 AXIOM_DATABASE_URL=<dsn> ./axiom-ng -cleanup-frontmatter-kg
 # fmgate: frontmatter cleanup DRY RUN: {chunks:.. relations:.. entities:.. mentions:..}
 
-# Ausführen (einmalig, idempotent; Backup vorher, Konvention s. backups/):
+# Execute (once, idempotent; backup first, see backups/ convention):
 AXIOM_DATABASE_URL=<dsn> ./axiom-ng -cleanup-frontmatter-kg --apply
 ```
 
-Regeln (deckungsgleich mit dem Persist-Gate): Relation stirbt, wenn ALLE
-Evidenz-Chunks gegatet ODER ein Endpunkt-Entity stirbt; Entity stirbt,
-wenn ALLE Mentions in gegateten Chunks liegen; überlebende Relationen
-verlieren gegatete Evidenz-Refs. Chunks selbst BLEIBEN (Retrieval).
-Zweiter Lauf = Null-Report. Gepinnt durch TestIT_FrontmatterCleanup +
-TestPersistFrontmatterGateEndToEnd.
+Rules (identical to the persist gate): a relation dies when ALL its evidence
+chunks are gated OR one endpoint entity dies; an entity dies when ALL its
+mentions lie in gated chunks; surviving relations lose gated evidence refs.
+The chunks themselves REMAIN (retrieval). Second run = zero report. Pinned
+by TestIT_FrontmatterCleanup + TestPersistFrontmatterGateEndToEnd.
 
 ---
 
@@ -357,7 +356,7 @@ TestPersistFrontmatterGateEndToEnd.
 ### 3.2 Rollback honesty
 Snapshots are immutable and the active flag flips per attachment at
 completion — there is no in-place "un-wave". Rollback = another force wave
-from the old image (rollback-of-last-resort, needs a Hivemind decision).
+from the old image (rollback-of-last-resort, needs an operator decision).
 Cheap safety instead: mid-wave abort (§2.5) leaves completed books better
 and pending books untouched.
 

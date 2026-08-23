@@ -1,6 +1,6 @@
 # KG relations consolidation + typing + aliases — runbook (#198 targets 2+3)
 
-## Order (blast-radius first, apply only after Hivemind approval)
+## Order (blast-radius first, apply only after operator approval)
 
 ```bash
 # 1. typing (smallest, no schema change)
