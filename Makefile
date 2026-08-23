@@ -3,7 +3,7 @@
 # scripts/install_release.sh. Nothing here mutates /opt without
 # `make install` (operator-confirmed, see scripts/install_dist.sh).
 
-VERSION ?= $(shell git describe --tags --always --dirty)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD)
 DIST    := dist
 OS_ARCH := $(shell uname -s | tr '[:upper:]' '[:lower:]')-$(shell uname -m)
@@ -11,7 +11,7 @@ RAG_BIN := $(DIST)/axiom-ng-$(VERSION)-$(OS_ARCH)
 
 LDFLAGS := -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.Version=$(VERSION) -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.Commit=$(COMMIT) -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.BuildType=release
 
-GO_SOURCES := $(wildcard axiom_ng/cmd/axiom-ng/*.go) $(wildcard axiom_ng/internal/*/*.go)
+GO_SOURCES := $(wildcard axiom_ng/cmd/axiom-ng/*.go) $(wildcard axiom_ng/internal/*/*.go) $(wildcard axiom_ng/internal/db/schema/*.sql) axiom_ng/go.mod axiom_ng/go.sum
 
 .PHONY: all build rag runner fixer clean install test checksums
 
@@ -31,15 +31,17 @@ fixer:
 	@echo "fixer packaging: pending G2 (#205)"
 
 checksums: ## shasum -a 256 sidecar for every dist/ artifact missing one
-	@find "$(DIST)" -type f -name '*.sha256' -prune -o -type f -print0 | xargs -0 -I{} sh -c 'shasum -a 256 "$1" > "$1.sha256"' _ {}
+	@[ -d "$(DIST)" ] || exit 0; find "$(DIST)" -type f -name '*.sha256' -prune -o -type f -exec sh -c 'for f do [ -f "$$f.sha256" ] || shasum -a 256 "$$f" > "$$f.sha256"; done' sh {} +
 
 clean:
 	rm -rf "$(DIST)"
 
 install: ## Operator-gated: dist/ artifacts -> /opt/axiom (asks first)
-	./scripts/install_dist.sh
+	./scripts/install_dist.sh rag $(VERSION)
 
 test: ## All suites: Go (vet+test), runner, fixer isolation+
 	cd axiom_ng && go vet ./... && go test ./...
+	@[ -x axiom_ng_runner/.venv/bin/python ] || { echo "runner: venv missing — bootstrap first (axiom_ng_runner/.venv)"; exit 1; }
 	cd axiom_ng_runner && .venv/bin/python -m pytest -q
+	@[ -x axiom_ng/tools/pdf_repair_agent/.venv/bin/python ] || { echo "fixer: venv missing — bootstrap first (axiom_ng/tools/pdf_repair_agent: ./bootstrap.sh)"; exit 1; }
 	cd axiom_ng/tools/pdf_repair_agent && .venv/bin/python -m pytest -q

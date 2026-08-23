@@ -10,36 +10,48 @@ ROOT="/opt/axiom"
 component="${1:-}"
 
 usage() {
-    echo "usage: make install   # or: scripts/install_dist.sh <rag|runner|fixer>"
+    echo "usage: make install   # or: scripts/install_dist.sh rag <version>"
     exit 2
 }
 
-# discover artifacts for a component in dist/
+# discover artifacts for a component in dist/; prints the newest (version-
+# sorted) non-checksum candidate, or fails when none exists. The [ -f ]
+# guard matters: POSIX sh leaves an unmatched glob literal, which would
+# otherwise prompt to install a phantom path.
 find_artifact() {
+    list=""
     for f in "$DIST"/axiom-ng-*; do
-        case "$f" in *.sha256) ;; *)
-            printf '%s\n' "$f"
-            return 0
-            ;;
-        esac
+        [ -f "$f" ] || continue
+        case "$f" in *.sha256) continue ;; esac
+        list="$list$f
+"
     done
-    return 1
+    [ -n "$list" ] || return 1
+    printf '%s' "$list" | sort | tail -n 1
 }
 
 [ -n "$component" ] || usage
 
 if [ "$component" = "rag" ]; then
-    bin=$(find_artifact)
-    [ -n "$bin" ] || {
+    version="${2:-}"
+    [ -n "$version" ] || {
+        echo "rag: version argument required (make install passes it)"
+        usage
+    }
+    if ! bin=$(find_artifact); then
         echo "no rag artifact in $DIST/ — run: make rag"
         exit 1
-    }
-    name=$(basename "$bin")
-    version=$(printf '%s' "$name" | sed -e 's/^axiom-ng-//' -e 's/-darwin-arm64$//' -e 's/-[a-z]*-[a-z0-9]*$//')
+    fi
     target="$ROOT/rag/$version"
+    # fail fast: verify the checksum sidecar BEFORE prompting the operator
+    if [ ! -f "$bin.sha256" ]; then
+        echo "checksum sidecar missing: $bin.sha256"
+        exit 1
+    fi
+    shasum -a 256 -c "$bin.sha256"
     echo "component: rag"
     echo "  artifact: $bin"
-    echo "  checksum: $bin.sha256 ($(cat "$bin.sha256" 2>/dev/null || echo MISSING))"
+    echo "  checksum: $(cat "$bin.sha256")"
     echo "  target:   $target/axiom-ng"
     echo "  current:  $ROOT/rag/current -> $version"
     echo "  shim:     $ROOT/bin/axiom-ng"
@@ -49,7 +61,6 @@ if [ "$component" = "rag" ]; then
         echo "aborted"
         exit 1
     }
-    shasum -a 256 -c "$bin.sha256"
     mkdir -p "$target" "$ROOT/bin"
     cp "$bin" "$target/axiom-ng"
     chmod 0755 "$target/axiom-ng"

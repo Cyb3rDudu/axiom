@@ -14,6 +14,18 @@ var (
 	BuildType = "debug"
 )
 
+// BuildTypeRelease is the BuildType stamped by `make rag` (ldflags).
+const BuildTypeRelease = "release"
+
+// DebugBindRefused reports whether a non-release build must refuse to bind
+// a production port (#205 §5). Production ports: 8011 (API) and 8013–8015
+// (dispatcher instances). Opt out for local dev with
+// AXIOM_ALLOW_DEBUG_BIND=1.
+func DebugBindRefused(buildType string, port int, allowEnv func(string) string) bool {
+	return buildType != BuildTypeRelease && port >= 8011 && port <= 8015 &&
+		allowEnv("AXIOM_ALLOW_DEBUG_BIND") != "1"
+}
+
 // Banner is the single identity line used by `axiom-ng --version` and
 // /api/health so both always agree (#205 DoD).
 func Banner() string {
