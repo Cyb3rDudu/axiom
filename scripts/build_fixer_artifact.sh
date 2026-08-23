@@ -2,9 +2,17 @@
 # build_fixer_artifact.sh — G2 of #205.
 # Builds the autarkic pdf_repair_agent artifact:
 #   dist/axiom-fixer-<version>-macos-arm64.tar.zst
-# Layout: fixer-<version>/{env/,app/} — env/ is the package's OWN venv
-# (built from its bootstrap.sh, pinned reqs), app/ is the package source.
-# Isolation is proven AGAINST THE ARTIFACT: the import_audit guard runs
+# Layout: fixer-<version>/{env/,app/}
+#   env/  conda-forge python 3.11 + pinned reqs — BUNDLED INTERPRETER via
+#         conda-pack (same approach as build_runner_artifact.sh). Fixes the
+#         "not autarkic" finding from the v0.1.11 install (issue #208):
+#         the previous venv layout symlinked to the build-host python
+#         (/Library/Frameworks/...) and broke on every other host.
+#   app/  package sources.
+# Install-time fixup: run env/bin/conda-unpack ONCE after extracting
+# (install_dist.sh does this automatically). The old venv fix-env/
+# .build-prefix mechanism is gone with the venv.
+# Isolation is proven AGAINST the ARTIFACT: the import_audit guard runs
 # with the staged env before tarring.
 #
 # Host dependencies NOT bundled (documented in docs/operations/services.md):
@@ -17,6 +25,7 @@ BUILD="$DIST/build/fixer"
 VERSION="${1:?usage: build_fixer_artifact.sh <version>}"
 ARTIFACT="$DIST/axiom-fixer-$VERSION-macos-arm64.tar.zst"
 STAGE="$BUILD/fixer-$VERSION"
+PREFIX="$BUILD/env"
 
 cd "$ROOT"
 rm -rf "$STAGE"
@@ -27,35 +36,57 @@ rsync -a \
     --exclude '.venv' --exclude '__pycache__' --exclude 'runs' \
     axiom_ng/tools/pdf_repair_agent/ "$STAGE/app/"
 
-# --- env/: build the package's own venv inside the STAGE (not the repo tree) --
-/bin/bash "$STAGE/app/bootstrap.sh"
-mv "$STAGE/app/.venv" "$STAGE/env"
+# --- micromamba (single static binary, cached under dist/tooling) -----------
+# Shared cache with build_runner_artifact.sh — second build reuses the binary.
+MM="$DIST/tooling/bin/micromamba"
+if [ ! -x "$MM" ]; then
+    mkdir -p "$DIST/tooling"
+    echo "fixer-artifact: downloading micromamba"
+    curl -Ls https://micro.mamba.pm/api/micromamba/darwin-arm64/latest -o "$DIST/tooling/mm.tar.bz2"
+    tar -xjf "$DIST/tooling/mm.tar.bz2" -C "$DIST/tooling" bin/micromamba
+    rm -f "$DIST/tooling/mm.tar.bz2"
+fi
+MAMBA_ROOT_PREFIX="$DIST/tooling/mamba-root"
+export MAMBA_ROOT_PREFIX
 
-# --- venv relocation fixup (one-time at install): shebangs ------------------
-# The venv is BUILT at $STAGE/app/.venv (pip writes that prefix into every
-# shebang) and then moved to $STAGE/env; .build-prefix records the BUILD-time
-# path so fix-env can rewrite it at the install location.
-cat >"$STAGE/env/bin/fix-env" <<'EOF'
-#!/bin/sh
-# One-time relocation fixup after extracting the fixer artifact (#204/#205).
-# Rewrites venv shebangs to the current prefix.
-set -eu
-export LC_ALL=C # byte-wise sed: venv shebang rewrites must not trip on binary matches
-HERE="$(cd "$(dirname "$0")/.." && pwd)"
-OLD="${1:?usage: fix-env <build-time prefix>}"
-[ "$OLD" != "$HERE" ] || exit 0
-grep -rl "$OLD" "$HERE/bin" 2>/dev/null | while read -r f; do
-    sed -i '' "s|$OLD|$HERE|g" "$f"
-done
-echo "fix-env: relocated $OLD -> $HERE"
-EOF
-chmod +x "$STAGE/env/bin/fix-env"
-printf '%s\n' "$STAGE/app/.venv" >"$STAGE/env/.build-prefix"
-BUILD_PREFIX="$STAGE/env"
+# --- conda env with python 3.11 (lockfile was frozen on 3.11) ----------------
+rm -rf "$PREFIX"
+"$MM" create -y -p "$PREFIX" -c conda-forge 'python=3.11' pip
+PY="$PREFIX/bin/python"
+
+# --- pinned deps (lock wins when present — same rule as bootstrap.sh) -------
+REQS="axiom_ng/tools/pdf_repair_agent/requirements.txt"
+[ -f axiom_ng/tools/pdf_repair_agent/requirements.lock.txt ] && \
+    REQS="axiom_ng/tools/pdf_repair_agent/requirements.lock.txt"
+"$PY" -m pip install -q --disable-pip-version-check -r "$REQS"
+"$PY" -m pip install -q --disable-pip-version-check conda-pack
+
+# --- pack env (relocatable; conda-unpack fixes prefixes at install) ---------
+rm -rf "$STAGE/env"
+"$PREFIX/bin/conda-pack" -p "$PREFIX" --n-threads -1 -o "$BUILD/env.tar.gz"
+mkdir -p "$STAGE/env"
+tar -xzf "$BUILD/env.tar.gz" -C "$STAGE/env"
+rm -f "$BUILD/env.tar.gz"
+
+# --- interpreter autarky proof (#208): NO symlink may leave the artifact ----
+if find "$STAGE/env/bin" -name 'python*' -type l | while read -r l; do
+    tgt=$(readlink "$l")
+    case "$tgt" in
+        /*) case "$tgt" in "$STAGE"/*) ;; *) echo "non-bundled interpreter link: $l -> $tgt"; exit 1 ;; esac ;;
+        *) : ;; # relative link inside env/ (python -> python3.11) is fine
+    esac
+done; then :; else
+    echo "fixer-artifact: interpreter is not bundled — refusing to ship" >&2
+    exit 1
+fi
+[ -x "$STAGE/env/bin/python3.11" ] && ! [ -L "$STAGE/env/bin/python3.11" ] || {
+    echo "fixer-artifact: env/bin/python3.11 must be a real binary (conda-pack), not a symlink" >&2
+    exit 1
+}
 
 # --- isolation proof against the ARTIFACT --------------------------------------
 (
-    cd "$STAGE/app" && "$BUILD_PREFIX/bin/python" - <<'EOF'
+    cd "$STAGE/app" && "$STAGE/env/bin/python" - <<'EOF'
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(".").resolve()))
@@ -65,10 +96,15 @@ assert r["clean"], f"isolation violated in artifact: {r['violations']}"
 print("fixer-artifact: import_audit clean against artifact env")
 EOF
 )
-(cd "$STAGE/app" && "$BUILD_PREFIX/bin/python" -m pytest tests/test_import_guard.py -q)
+# Smoke from a NEUTRAL cwd so we test the env, not the source tree (#209
+# lesson: a smoke run from a source dir masks missing installs).
+(
+    cd / && "$STAGE/env/bin/python" -c 'import pymupdf; print("fixer-artifact: staged pymupdf", pymupdf.__version__)'
+)
+(cd "$STAGE/app" && "$STAGE/env/bin/python" -m pytest tests/test_import_guard.py -q)
 
 # --- artifact --------------------------------------------------------------------
 tar --zstd -C "$BUILD" -cf "$ARTIFACT" "fixer-$VERSION"
 (cd "$DIST" && shasum -a 256 "${ARTIFACT##*/}" >"${ARTIFACT##*/}.sha256")
 echo "fixer-artifact: $ARTIFACT"
-echo "install: extract to /opt/axiom/fixer/$VERSION — install_dist.sh runs env/bin/fix-env automatically (build prefix in env/.build-prefix)"
+echo "install: extract to /opt/axiom/fixer/$VERSION — install_dist.sh runs env/bin/conda-unpack automatically"

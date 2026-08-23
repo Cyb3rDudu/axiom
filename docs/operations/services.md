@@ -40,7 +40,7 @@ from GitHub releases, never from a developer's /tmp.** Old artifacts in
 ```sh
 scripts/install_release.sh rag <tag>        # download + checksum + gated /opt install
 scripts/install_release.sh runner <tag>     # includes one-time conda-unpack
-scripts/install_release.sh fixer <tag>      # includes one-time fix-env fixup
+scripts/install_release.sh fixer <tag>      # includes one-time conda-unpack fixup (bundled interpreter, #208)
 ```
 
 Both paths verify the sha256 sidecar BEFORE the operator prompt and before
