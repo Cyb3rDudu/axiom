@@ -117,18 +117,36 @@ func deactivateSiblingsTx(ctx context.Context, tx pgx.Tx, ident jobIdentity, kee
 // generation's chunk docs, 'index' re-materializes a reactivated one. The
 // drainer's obsolete-op guards make execution order-insensitive.
 func enqueueOutboxTx(ctx context.Context, tx pgx.Tx, snapshotID, operation string, ident jobIdentity) error {
-	payload, err := json.Marshal(map[string]any{
+	return enqueueOutboxTxWithChunks(ctx, tx, snapshotID, operation, ident, nil)
+}
+
+// enqueueOutboxTxWithChunks carries FROZEN chunk ids in the payload — used
+// by force-replace only: after the force replace the drainer cannot read the
+// old generation's chunk ids from PG (they are CASCADE-deleted in the same
+// tx, so OutboxChunkIDs would return nothing — or worse, the reactivated
+// row's NEW ids), so the tombstone must freeze them or the superseded
+// generation's OpenSearch docs leak forever (the precision-wave #127-class
+// leak: 102,957 OS docs vs 35,286 active chunks). These frozen ids are
+// provably the dead generation's because force-replace deletes the old chunk
+// ROWS and the re-insert in the same tx receives brand-new fresh UUIDs — the
+// canonical invariant the drainer's frozen-id bypass leans on.
+func enqueueOutboxTxWithChunks(ctx context.Context, tx pgx.Tx, snapshotID, operation string, ident jobIdentity, chunkIDs []string) error {
+	payload := map[string]any{
 		"snapshot_id":   snapshotID,
 		"document_id":   ident.documentID,
 		"attachment_id": ident.attachmentID,
 		"operation":     operation,
-	})
+	}
+	if len(chunkIDs) > 0 {
+		payload["chunk_ids"] = chunkIDs
+	}
+	pl, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO opensearch_outbox (snapshot_id, operation, payload)
-		VALUES ($1, $2, $3::jsonb)`, snapshotID, operation, payload)
+		VALUES ($1, $2, $3::jsonb)`, snapshotID, operation, pl)
 	return err
 }
 
@@ -193,7 +211,32 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 					return "", fmt.Errorf("force replace sibling tombstone: %w", oerr)
 				}
 			}
-			if oerr := enqueueOutboxTx(ctx, tx, existingID, OutboxOpDelete, ident); oerr != nil {
+			// Freeze the OLD chunk ids into the delete tombstone BEFORE the rows
+			// are CASCADE-deleted below: after this tx the drainer can no longer
+			// read them (processing_chunks rows are gone, and the reactivated
+			// row's NEW chunks carry fresh UUIDs — OutboxChunkIDs would return
+			// the wrong, live generation's ids). #212: this is the structural
+			// fix for the precision-wave OS leak (57.7k superseded docs served).
+			oldRows, oerr := tx.Query(ctx, `
+				SELECT id::text FROM processing_chunks WHERE snapshot_id=$1`, existingID)
+			if oerr != nil {
+				return "", fmt.Errorf("force replace freeze old chunk ids: %w", oerr)
+			}
+			var oldIDs []string
+			for oldRows.Next() {
+				var oid string
+				if err := oldRows.Scan(&oid); err != nil {
+					oldRows.Close()
+					return "", fmt.Errorf("force replace scan old ids: %w", err)
+				}
+				oldIDs = append(oldIDs, oid)
+			}
+			if rerr := oldRows.Err(); rerr != nil {
+				oldRows.Close()
+				return "", fmt.Errorf("force replace read old ids: %w", rerr)
+			}
+			oldRows.Close()
+			if oerr := enqueueOutboxTxWithChunks(ctx, tx, existingID, OutboxOpDelete, ident, oldIDs); oerr != nil {
 				return "", fmt.Errorf("force replace tombstone old docs: %w", oerr)
 			}
 			if _, derr := tx.Exec(ctx, `

@@ -293,6 +293,16 @@ func drainOutboxRow(ctx context.Context, d *Dispatcher, osc *openSearchClient, r
 		return d.failOutboxRow(ctx, row, fmt.Errorf("snapshot active check: %w", err))
 	}
 	if row.Operation == repo.OutboxOpDelete && active {
+		// #212: an active snapshot's DELETE tombstone is normally obsolete
+		// (#127). This must NOT apply to force-replace tombstones carrying
+		// frozen chunk ids: those chunks are the superseded generation's —
+		// force-replace CASCADE-deletes their ROWS and re-inserts brand-new
+		// fresh UUIDs in the same tx, so a frozen id can never belong to the
+		// live generation (the canonical invariant this bypass leans on).
+		// Deleting them unconditionally cannot wipe an active generation.
+		if _, frozen := row.Payload["chunk_ids"]; frozen {
+			return drainOutboxDelete(ctx, d, osc, row)
+		}
 		return d.rep.MarkOutboxDone(ctx, row.ID)
 	}
 	if row.Operation == repo.OutboxOpIndex && !active {
@@ -327,12 +337,32 @@ func drainOutboxRow(ctx context.Context, d *Dispatcher, osc *openSearchClient, r
 	return d.rep.MarkOutboxDone(ctx, row.ID)
 }
 
-// drainOutboxDelete materializes a tombstone (#127): every chunk doc of the
-// (deactivated) snapshot leaves the index. Deleting an absent doc is fine.
+// drainOutboxDelete materializes a tombstone (#127/#212): every chunk doc of
+// the (deactivated, or force-replaced) snapshot leaves the index. Deleting an
+// absent doc is fine.
 func drainOutboxDelete(ctx context.Context, d *Dispatcher, osc *openSearchClient, row repo.OutboxRow) error {
-	ids, err := d.rep.OutboxChunkIDs(ctx, row.SnapshotID)
-	if err != nil {
-		return d.failOutboxRow(ctx, row, fmt.Errorf("load chunk ids: %w", err))
+	// Frozen chunk ids (force-replace tombstones, #212): the ids were frozen
+	// in the replace transaction BEFORE the rows were deleted — they are
+	// provably the superseded generation's (the live generation re-inserted
+	// fresh UUIDs), so they are deleted unconditionally. Regular deactivate
+	// tombstones carry no payload and fall through to the current-row read.
+	var ids []string
+	if raw, ok := row.Payload["chunk_ids"]; ok {
+		// pgx decodes a nested JSONB array into []any; chunk_ids was frozen as a
+		// []string, so each element is a string.
+		if arr, ok := raw.([]any); ok {
+			for _, e := range arr {
+				if sv, ok := e.(string); ok {
+					ids = append(ids, sv)
+				}
+			}
+		}
+	} else {
+		var err error
+		ids, err = d.rep.OutboxChunkIDs(ctx, row.SnapshotID)
+		if err != nil {
+			return d.failOutboxRow(ctx, row, fmt.Errorf("load chunk ids: %w", err))
+		}
 	}
 	for _, id := range ids {
 		if err := osc.deleteDoc(ctx, id); err != nil {
