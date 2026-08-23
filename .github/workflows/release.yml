@@ -36,7 +36,8 @@ jobs:
       - name: Checksums
         run: |
           ls -lh dist/
-          for f in dist/*.sha256; do shasum -a 256 -c "$f"; done
+          # sidecars are basename-only (portable) — verify from within dist/
+          cd dist && for f in *.sha256; do shasum -a 256 -c "$f"; done
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
