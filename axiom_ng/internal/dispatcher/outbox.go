@@ -341,11 +341,10 @@ func drainOutboxRow(ctx context.Context, d *Dispatcher, osc *openSearchClient, r
 // the (deactivated, or force-replaced) snapshot leaves the index. Deleting an
 // absent doc is fine.
 func drainOutboxDelete(ctx context.Context, d *Dispatcher, osc *openSearchClient, row repo.OutboxRow) error {
-	// Frozen chunk ids (force-replace tombstones, #212): the ids were frozen
-	// in the replace transaction BEFORE the rows were deleted — they are
-	// provably the superseded generation's (the live generation re-inserted
-	// fresh UUIDs), so they are deleted unconditionally. Regular deactivate
-	// tombstones carry no payload and fall through to the current-row read.
+	// Frozen chunk ids (force-replace tombstones, #212): deleted
+	// unconditionally — the payload-freshness invariant is documented at the
+	// guard bypass and the writer. Regular deactivate tombstones carry no
+	// payload and fall through to the current-row read.
 	var ids []string
 	if raw, ok := row.Payload["chunk_ids"]; ok {
 		// pgx decodes a nested JSONB array into []any; chunk_ids was frozen as a

@@ -150,6 +150,28 @@ func enqueueOutboxTxWithChunks(ctx context.Context, tx pgx.Tx, snapshotID, opera
 	return err
 }
 
+// freezeChunkIDsTx reads a snapshot's CURRENT chunk ids inside the replace
+// tx, strictly before the force-replace branch deletes the rows — after the
+// tx the drainer can no longer read them (rows gone; the re-inserted
+// generation carries fresh UUIDs). #212.
+func freezeChunkIDsTx(ctx context.Context, tx pgx.Tx, snapshotID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id::text FROM processing_chunks WHERE snapshot_id=$1`, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // persistTx runs the single fenced transaction. force = the claim-time
 // force_rebuild flag: a force re-run with UNCHANGED identity REPLACES the
 // snapshot content in place (identity uniqueness forbids a second row) —
@@ -212,30 +234,13 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 				}
 			}
 			// Freeze the OLD chunk ids into the delete tombstone BEFORE the rows
-			// are CASCADE-deleted below: after this tx the drainer can no longer
-			// read them (processing_chunks rows are gone, and the reactivated
-			// row's NEW chunks carry fresh UUIDs — OutboxChunkIDs would return
-			// the wrong, live generation's ids). #212: this is the structural
-			// fix for the precision-wave OS leak (57.7k superseded docs served).
-			oldRows, oerr := tx.Query(ctx, `
-				SELECT id::text FROM processing_chunks WHERE snapshot_id=$1`, existingID)
-			if oerr != nil {
-				return "", fmt.Errorf("force replace freeze old chunk ids: %w", oerr)
+			// are deleted below — the structural #212 fix (the precision-wave
+			// leak: 102,957 OS docs vs 35,286 active chunks, ~57.7k stale docs
+			// were serving).
+			oldIDs, ferr := freezeChunkIDsTx(ctx, tx, existingID)
+			if ferr != nil {
+				return "", fmt.Errorf("force replace freeze old chunk ids: %w", ferr)
 			}
-			var oldIDs []string
-			for oldRows.Next() {
-				var oid string
-				if err := oldRows.Scan(&oid); err != nil {
-					oldRows.Close()
-					return "", fmt.Errorf("force replace scan old ids: %w", err)
-				}
-				oldIDs = append(oldIDs, oid)
-			}
-			if rerr := oldRows.Err(); rerr != nil {
-				oldRows.Close()
-				return "", fmt.Errorf("force replace read old ids: %w", rerr)
-			}
-			oldRows.Close()
 			if oerr := enqueueOutboxTxWithChunks(ctx, tx, existingID, OutboxOpDelete, ident, oldIDs); oerr != nil {
 				return "", fmt.Errorf("force replace tombstone old docs: %w", oerr)
 			}

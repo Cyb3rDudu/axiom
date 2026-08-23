@@ -877,9 +877,18 @@ func TestForceReplaceFrozenTombstoneDeletesOldChunks(t *testing.T) {
 	seedForce()
 	claimPersist("wF1", 2)
 	snapF1 := lastSnap
+	// F1's chunk ids BEFORE the replace deletes their rows — the exact set the
+	// frozen tombstone must delete later. (The first drain also tombstones the
+	// superseded normal generation's chunks via the regular sibling path, so
+	// only the DELTA after this drain can prove the frozen bypass fired.)
+	oldF1 := chunkIDsOf(snapF1)
 	if err := drainOutboxOnce(ctx, d, osc); err != nil {
 		t.Fatalf("drain F1: %v", err)
 	}
+	// Baseline AFTER the F1 drain: everything deleted past this point must be
+	// the frozen tombstone's doing (the sibling deletes of the superseded
+	// normal generation happened inside the drain above).
+	delAfterF1 := len(rec.deletedIDs())
 
 	// F2: second force, SAME identity, 3 chunks → replaces row F1 in place
 	// (same snapshot id, generation bumped). Old F1 chunk ids must now be
@@ -906,25 +915,23 @@ func TestForceReplaceFrozenTombstoneDeletesOldChunks(t *testing.T) {
 		t.Fatalf("replaced row chunks = %v, want 3", newChunks)
 	}
 
-	// Drain: old F1 ids deleted (they were frozen before the CASCADE delete),
-	// and the NEW ids are NOT deleted.
+	// Drain: the frozen bypass must delete EXACTLY F1's old ids (the delta
+	// over the deletes the first drain already recorded), and the NEW ids are
+	// NOT deleted.
 	if err := drainOutboxOnce(ctx, d, osc); err != nil {
 		t.Fatalf("drain F2: %v", err)
 	}
-	// oldIds = what was frozen: derive by deleting new ids from deletes.
 	deleted := rec.deletedIDs()
+	if delAfterF1 > len(deleted) {
+		t.Fatalf("deletes shrank: %d -> %d", delAfterF1, len(deleted))
+	}
+	newDeletes := deleted[delAfterF1:]
+	if sorted(newDeletes) != sorted(oldF1) {
+		t.Fatalf("drain F2 must delete exactly the frozen F1 ids %v, got %v", sorted(oldF1), sorted(newDeletes))
+	}
 	deletedSet := map[string]bool{}
 	for _, id := range deleted {
 		deletedSet[id] = true
-	}
-	var oldIDs []string
-	for id := range deletedSet {
-		if !slices.Contains(newChunks, id) {
-			oldIDs = append(oldIDs, id)
-		}
-	}
-	if len(oldIDs) == 0 {
-		t.Fatalf("no frozen old-ids deleted; deletes = %v, new chunks = %v", sorted(deleted), sorted(newChunks))
 	}
 	// The retained (new) chunks must NOT have been deleted by the frozen tombstone.
 	for _, id := range newChunks {
