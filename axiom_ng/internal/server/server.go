@@ -4,6 +4,7 @@ package server
 
 import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/version"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 	"log"
 	"net/http"
@@ -97,6 +98,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // healthResponse is returned by /api/health.
 type healthResponse struct {
 	OK     bool           `json:"ok"`
+	Build  string         `json:"build"` // version banner — must match `axiom-ng --version` (#205 DoD)
 	Checks map[string]any `json:"checks"`
 }
 
@@ -118,5 +120,5 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		checks[name] = "ok"
 	}
 
-	writeJSON(w, http.StatusOK, healthResponse{OK: ok, Checks: checks})
+	writeJSON(w, http.StatusOK, healthResponse{OK: ok, Build: version.Banner(), Checks: checks})
 }

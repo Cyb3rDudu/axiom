@@ -27,3 +27,6 @@ docker-logs.txt
 .vscode/
 .DS_Store
 sessions/
+
+# Deployment staging (#205)
+dist/

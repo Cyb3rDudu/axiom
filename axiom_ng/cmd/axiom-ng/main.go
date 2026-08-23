@@ -24,10 +24,18 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/version"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
 
 func main() {
+	// #205 §5: version stamp. Release builds inject Version/Commit/BuildType
+	// via -ldflags; a bare `go build` reports the debug default.
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Println(version.Banner())
+		return
+	}
+
 	// #198 item 1 — frontmatter cleanup pass: KG relations/entities whose
 	// evidence sits in gated frontmatter sections (TOC / author lists /
 	// preface / bibliography / index / title lines) leave the active graph.
@@ -249,6 +257,16 @@ func main() {
 	ctx := context.Background()
 	cfg := config.Load()
 	logger := log.New(os.Stderr, "axiom-ng: ", log.LstdFlags)
+	logger.Printf("starting %s", version.Banner())
+
+	// #205 §5: a debug build must never serve production ports. Production is
+	// 8011 (API) and 8013–8015 (dispatchers). Opt out explicitly for local
+	// dev with AXIOM_ALLOW_DEBUG_BIND=1.
+	if version.BuildType != "release" && cfg.APIPort >= 8011 && cfg.APIPort <= 8015 &&
+		os.Getenv("AXIOM_ALLOW_DEBUG_BIND") != "1" {
+		logger.Fatalf("refusing to bind production port %d with %s — build a release artifact (make rag) or set AXIOM_ALLOW_DEBUG_BIND=1 for local dev",
+			cfg.APIPort, version.Banner())
+	}
 
 	src := zotero.NewLocalAPI(cfg.ZoteroBaseURL, cfg.ZoteroLibraryID)
 	if id := src.ServerID(); id == "" {
