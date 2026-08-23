@@ -7,6 +7,7 @@ package config
 import (
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -235,20 +236,13 @@ func parseURLList(s string) []string {
 // appended when set and distinct. Never returns empty — the local-runner
 // default is the floor.
 func (c Config) IngestCandidates() []string {
-	list := parseURLList(strings.Join(c.ProcessorURLs, ","))
+	// list is already normalized (trailing slashes stripped) by the load-time
+	// parseURLList; a fresh copy avoids mutating the source slice.
+	list := slices.Clone(c.ProcessorURLs)
 	if len(list) == 0 {
 		list = parseURLList(c.ProcessorURL)
-		if fb := strings.TrimRight(strings.TrimSpace(c.IngestFallbackURL), "/"); fb != "" {
-			seen := false
-			for _, u := range list {
-				if u == fb {
-					seen = true
-					break
-				}
-			}
-			if !seen {
-				list = append(list, fb)
-			}
+		if fb := strings.TrimRight(strings.TrimSpace(c.IngestFallbackURL), "/"); fb != "" && !slices.Contains(list, fb) {
+			list = append(list, fb)
 		}
 	}
 	if len(list) == 0 {
