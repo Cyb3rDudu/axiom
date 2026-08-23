@@ -146,7 +146,13 @@ func (f *FailoverClient) ordered() []*Client {
 	return append(alive, dead...)
 }
 
-// routed returns the client that owns jobID (default: first alive).
+// routed returns the client that owns jobID (default: the preferred head,
+// clients[0]). A head accept deliberately leaves no route entry (SubmitProcess
+// deletes it), so the default MUST be the immutable preferred head — NOT
+// ordered()[0] (first ALIVE): if the head accepted a job and is later marked
+// down by a probe or an unrelated submit, follow-ups must still hit the head,
+// which is processing the job. ordered()[0] would route them to a runner that
+// never saw the job, producing 404s and a spurious resubmit.
 func (f *FailoverClient) routed(jobID string) *Client {
 	f.mu.Lock()
 	c, ok := f.routes[jobID]
@@ -154,7 +160,7 @@ func (f *FailoverClient) routed(jobID string) *Client {
 	if ok {
 		return c
 	}
-	return f.ordered()[0]
+	return f.clients[0]
 }
 
 // done forgets a finished job's routing (callers keep it on error — see

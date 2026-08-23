@@ -105,3 +105,44 @@ func TestChain_MiddleCandidateDownSkipsToTail(t *testing.T) {
 		t.Fatalf("ack must route to the accepting candidate: local acks=%d", local.ackHits.Load())
 	}
 }
+
+// TestChain_HeadAcceptedFollowUpStaysOnHead pins the #207 routed() default
+// invariant (auto-review C1): a job accepted by the HEAD leaves no route entry
+// (SubmitProcess deletes it; clients[0] is the routed default). If the head is
+// then marked DOWN by a health probe, follow-ups (job status/result/ack) for
+// that head-owned job must STILL route to the head — which is processing it —
+// NOT to the first ALIVE candidate (ordered()[0]), where the job is unknown and
+// would 404 into a spurious dispatcher resubmit.
+func TestChain_HeadAcceptedFollowUpStaysOnHead(t *testing.T) {
+	carrier := newScriptRunner(t, "carrier")
+	local := newScriptRunner(t, "local")
+	fc := newChain(t, carrier, local)
+
+	// Head accepts job "a": no route entry is created (head-accept overwrites
+	// ownership, so follow-ups rely on the head default).
+	if _, err := fc.SubmitProcess(context.Background(), &ProcessRequest{JobID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if carrier.submitHits.Load() != 1 || local.submitHits.Load() != 0 {
+		t.Fatalf("healthy head must accept: carrier=%d local=%d", carrier.submitHits.Load(), local.submitHits.Load())
+	}
+	if _, owned := fc.routes["a"]; owned {
+		t.Fatalf("head-accept must NOT create a route entry for the head-owned job")
+	}
+
+	// Health probe demotes the head (carrier still processing job "a").
+	carrier.healthFail.Store(true)
+	fc.probeAll(context.Background())
+
+	// Follow-up (ack) for the head-owned job must route to the HEAD, not the
+	// now-first-alive local candidate.
+	if err := fc.Ack(context.Background(), "a", Ack{Persisted: true}); err != nil {
+		t.Fatal(err)
+	}
+	if carrier.ackHits.Load() != 1 {
+		t.Fatalf("head-owned job's follow-up must route to the head even after probe-demotion: carrier acks=%d (got routed to the alive fallback)", carrier.ackHits.Load())
+	}
+	if local.ackHits.Load() != 0 {
+		t.Fatalf("fallback must NOT receive the head-owned job's follow-up: local acks=%d", local.ackHits.Load())
+	}
+}
