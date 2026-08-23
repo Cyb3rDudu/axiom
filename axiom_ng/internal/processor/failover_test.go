@@ -24,6 +24,7 @@ type scriptRunner struct {
 	submitCode   int         // 0 = accept; otherwise reply with this status
 	ackFail      atomic.Bool // ack endpoint replies 500 while set (read-only per test phase)
 	healthFail   atomic.Bool // health endpoint replies 503 while set (#207 probes)
+	capsFail     atomic.Bool // capabilities endpoint replies 422 while set (#207 review)
 	name         string
 }
 
@@ -39,6 +40,11 @@ func newScriptRunner(t *testing.T, name string) *scriptRunner {
 			}
 			writeJSONT(w, 200, map[string]any{"status": "ok"})
 		case r.URL.Path == "/v1/capabilities":
+			if sr.capsFail.Load() {
+				w.WriteHeader(422)
+				_, _ = w.Write([]byte(`{"detail":"boom"}`))
+				return
+			}
 			writeJSONT(w, 200, map[string]any{
 				"contract_versions": []string{"1.0"},
 				"processor":         map[string]any{"name": name, "version": "0.1"},

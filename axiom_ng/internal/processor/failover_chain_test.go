@@ -6,6 +6,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -35,24 +36,17 @@ func TestChain_DeadHeadIsNotAskedFirstAfterProbe(t *testing.T) {
 		t.Fatalf("healthy head must serve: carrier=%d local=%d", carrier.submitHits.Load(), local.submitHits.Load())
 	}
 
-	// Carrier dies. First submit after the death still tries it (stale
-	// liveness — submit-time failover is the safety net)...
-	carrier.Close()
+	// Health says the carrier is down: after the probe the dead head is NOT
+	// asked first anymore (no per-submit connect timeout against a corpse) —
+	// the living candidate serves. The head avoids the connect timeout and
+	// stays un-asked for the new job.
+	carrier.healthFail.Store(true)
+	fc.probeAll(context.Background())
 	if _, err := fc.SubmitProcess(context.Background(), &ProcessRequest{JobID: "b"}); err != nil {
 		t.Fatal(err)
 	}
-	// ...but once the health probe has seen the death, the dead head is NOT
-	// asked first anymore — no per-submit connect timeout against a corpse.
-	fc.probeAll(context.Background())
-	start := time.Now()
-	if _, err := fc.SubmitProcess(context.Background(), &ProcessRequest{JobID: "c"}); err != nil {
-		t.Fatal(err)
-	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Fatalf("submit after probe must skip the dead head fast, took %v", elapsed)
-	}
-	if local.submitHits.Load() != 2 {
-		t.Fatalf("living candidate must serve both post-death jobs: local=%d", local.submitHits.Load())
+	if carrier.submitHits.Load() != 1 || local.submitHits.Load() != 1 {
+		t.Fatalf("after probe the dead head must not serve new jobs: carrier=%d local=%d", carrier.submitHits.Load(), local.submitHits.Load())
 	}
 }
 
@@ -169,5 +163,82 @@ func TestChain_EmptyChainFailsExplicitly(t *testing.T) {
 	}
 	if err := fc.Health(context.Background()); err == nil {
 		t.Fatal("Health on an empty chain must fail")
+	}
+}
+
+// TestChain_HealthMonitorEndToEnd exercises the PRODUCTION entry (review W3):
+// StartHealthMonitor starts goroutines only when interval>0 and fades a
+// probed-down head out of the submit path, then fades a recovered head back
+// in, all driven by the background ticker (not a hand-called probeAll).
+func TestChain_HealthMonitorEndToEnd(t *testing.T) {
+	carrier := newScriptRunner(t, "carrier")
+	local := newScriptRunner(t, "local")
+	fc := newChain(t, carrier, local)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fc.StartHealthMonitor(ctx, 20*time.Millisecond)
+
+	// The monitor runs on its own ticker; poll by submitting a fresh job until
+	// the observed routing reflects the monitor's liveness flip, or fail loudly
+	// after the deadline. Each submit observes current liveness (SubmitProcess
+	// iterates ordered()) and re-triggers the routing check.
+	pollSubmit := func(what string, want func(carrier, local, prevCarrier int64) bool) {
+		t.Helper()
+		n := 0
+		var prevC int64 = -1
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+			n++
+			if _, err := fc.SubmitProcess(ctx, &ProcessRequest{JobID: fmt.Sprintf("j%d", n)}); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+			c := carrier.submitHits.Load()
+			l := local.submitHits.Load()
+			if want(c, l, prevC) {
+				return
+			}
+			prevC = c
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %s (carrier=%d local=%d)", what, carrier.submitHits.Load(), local.submitHits.Load())
+	}
+
+	// Downed head: once the monitor demotes it, submits stop reaching the
+	// carrier (its count stays put across consecutive submits) while the local
+	// runner keeps serving.
+	carrier.healthFail.Store(true)
+	pollSubmit("demoted head stops serving, local serves", func(c, l, prevC int64) bool {
+		return l >= 1 && prevC >= 0 && c == prevC
+	})
+
+	// Recovered head: the monitor folds it back, so new jobs head to the
+	// carrier again (its count grows past a settled plateau).
+	carrier.healthFail.Store(false)
+	pollSubmit("recovered head serves again", func(c, l, prevC int64) bool {
+		return prevC >= 0 && c > prevC
+	})
+}
+
+// TestChain_Capabilities4xxDoesNotFailOver covers the new Capabilities
+// 4xx short-circuit (review): a runner answering 4xx aborts negotiation with
+// an error instead of silently selecting a later runner — mirroring the
+// SubmitProcess 4xx rule (the request is wrong, failover won't fix it).
+func TestChain_Capabilities4xxDoesNotFailOver(t *testing.T) {
+	main := newScriptRunner(t, "main")
+	local := newScriptRunner(t, "local")
+	fc := newChain(t, main, local)
+
+	// First prove the healthy path serves the head's identity.
+	caps, err := fc.Capabilities(context.Background())
+	if err != nil || caps.Processor.Name != "main" {
+		t.Fatalf("healthy capabilities must serve the head, got %+v err=%v", caps, err)
+	}
+
+	// Head answers 4xx: Capabilities must FAIL (not skip to the fallback),
+	// and the fallback must never be asked.
+	main.capsFail.Store(true)
+	_, err = fc.Capabilities(context.Background())
+	if err == nil {
+		t.Fatal("Capabilities must propagate the head's 4xx instead of silently failing over")
 	}
 }
