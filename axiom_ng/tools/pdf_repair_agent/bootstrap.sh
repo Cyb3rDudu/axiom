@@ -24,8 +24,11 @@ MARKER="$VENV/.pip-installed-$(cksum <"$REQS" | awk '{print $1}')"
 # --- 1) Vernunft-Interpreter finden ---------------------------------------
 # Neuere pymupdf-Pins verlangen Python 3.10+; bevorzugt wird ≥3.11.
 PY=""
+PY_ANY=""
 for cand in \
     "$HERE/.venv/bin/python" \
+    "$(command -v python3.11 || true)" \
+    "$(command -v python3.12 || true)" \
     "$(command -v python3 || true)" \
     /usr/local/bin/python3 \
     /opt/homebrew/bin/python3 \
@@ -36,13 +39,18 @@ for cand in \
     [ -n "$v" ] || continue
     major="${v%.*}"
     minor="${v##*.}"
-    if [ "$major" -ge 3 ] && [ "$minor" -ge 10 ]; then
-        PY="$cand"
-        echo "bootstrap: Interpreter $PY (Python $v)"
-        break
+    [ "$major" -eq 3 ] || continue
+    if [ "$minor" -ge 10 ]; then
+        # Prefer the interpreter family the lockfile was frozen on (3.11/3.12);
+        # bleeding-edge pythons (3.14+) hit wheel gaps (pi_heif et al).
+        case "$minor" in 11|12) PY="$cand"; echo "bootstrap: Interpreter $PY (Python $v)"; break ;; esac
+        PY_ANY="${PY_ANY:-$cand}"
+        PY_ANY_V="${PY_ANY_V:-$v}"
+    else
+        PY39="${PY39:-$cand}" # letzte Wahl: 3.9 (nur mit älteren Pins)
     fi
-    PY39="${PY39:-$cand}" # letzte Wahl: 3.9 (nur mit älteren Pins)
 done
+[ -z "$PY" ] && [ -n "$PY_ANY" ] && PY="$PY_ANY" && echo "bootstrap: kein 3.11/3.12 gefunden — Interpreter $PY (Python $PY_ANY_V, Wheel-Risiko)"
 if [ -z "$PY" ]; then
     echo "bootstrap: KEIN python3 >=3.10 gefunden (sah 3.9: ${PY39:-n/a})." >&2
     echo "bootstrap: Neuere pymupdf-Pins verlangen 3.10+. Abbruch." >&2

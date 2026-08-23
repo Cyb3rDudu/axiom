@@ -20,6 +20,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: axiom_ng/go.mod
+      - uses: actions/setup-python@v5
+        with:
+          # fixer requirements.lock.txt is a python 3.11 freeze — newer
+          # system pythons (3.14 on hosted runners) hit wheel gaps (pi_heif)
+          python-version: "3.11"
       - name: Version
         run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
       - name: Build rag (release, version-stamped)
