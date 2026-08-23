@@ -66,6 +66,19 @@ type Config struct {
 	// local runner (#128 proof: complete, ~11x slower). Failover is logged.
 	IngestFallbackURL string
 
+	// ProcessorURLs is the ORDERED ingest-runner candidate list (#207):
+	// AXIOM_PROCESSOR_URLS, comma-separated, preference order. Precedence:
+	// the plural list wins when set; otherwise the singular ProcessorURL
+	// becomes the one-entry list. The legacy IngestFallbackURL is appended
+	// as last candidate when set and distinct (backward compatibility —
+	// single-entry setups behave exactly as before).
+	ProcessorURLs []string
+	// RunnerHealthInterval bounds the periodic candidate health probe that
+	// keeps dead runners out of the submit path (AXIOM_RUNNER_HEALTH_INTERVAL,
+	// Go duration; default 60s, <=0 disables the background probe). Startup
+	// probing is best-effort and never blocks the RAG.
+	RunnerHealthInterval time.Duration
+
 	// SearchSparseArm enables the learned-lexical (rank_features) recall
 	// arm on POST /api/search (R5 #135). Default OFF per the R7 benchmark:
 	// no quality gain on the gold suite (MRR -0.027) at +~1.3s p95 on the
@@ -158,6 +171,8 @@ func Load() Config {
 		ProcessorURL:            env("AXIOM_PROCESSOR_URL", defaultLocalRunner),
 		QueryRunnerURL:          env("AXIOM_QUERY_RUNNER_URL", defaultLocalRunner),
 		IngestFallbackURL:       env("AXIOM_INGEST_FALLBACK_URL", defaultLocalRunner),
+		ProcessorURLs:           parseURLList(env("AXIOM_PROCESSOR_URLS", "")),
+		RunnerHealthInterval:    envDur("AXIOM_RUNNER_HEALTH_INTERVAL", 60*time.Second),
 		SearchSparseArm:         envBoolDefault("AXIOM_SEARCH_SPARSE_ARM", false),
 		SearchGraphArm:          envBoolDefault("AXIOM_SEARCH_GRAPH_ARM", false),
 		SearchRerank:            envBoolDefault("AXIOM_SEARCH_RERANK", true),
@@ -197,6 +212,49 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseURLList splits a comma-separated URL list, trimming whitespace and
+// trailing slashes per entry (#207). Empty entries are dropped.
+func parseURLList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimRight(strings.TrimSpace(part), "/")
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// IngestCandidates returns the ordered ingest-runner candidate list
+// (#207): if the plural AXIOM_PROCESSOR_URLS list is set it defines the
+// COMPLETE chain (plural wins over both legacy variables — the operator
+// spelling out a list knows their runners); otherwise the singular
+// ProcessorURL becomes the list head and the legacy IngestFallbackURL is
+// appended when set and distinct. Never returns empty — the local-runner
+// default is the floor.
+func (c Config) IngestCandidates() []string {
+	list := parseURLList(strings.Join(c.ProcessorURLs, ","))
+	if len(list) == 0 {
+		list = parseURLList(c.ProcessorURL)
+		if fb := strings.TrimRight(strings.TrimSpace(c.IngestFallbackURL), "/"); fb != "" {
+			seen := false
+			for _, u := range list {
+				if u == fb {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				list = append(list, fb)
+			}
+		}
+	}
+	if len(list) == 0 {
+		list = []string{strings.TrimRight(defaultLocalRunner, "/")}
+	}
+	return list
 }
 
 // envEmptyDisables treats an explicitly SET-but-empty value as intentional

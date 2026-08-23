@@ -363,39 +363,36 @@ func main() {
 		go probeQueryRunnerRole(sigCtx, queryClient, cfg.QueryRunnerURL, logger)
 		srv.RegisterCheck("query-runner", runnerCheck(queryClient))
 
-		// Ingest chain (R4 #134): primary = AXIOM_PROCESSOR_URL (best
-		// available), fallback = AXIOM_INGEST_FALLBACK_URL (default local).
-		// The failover client satisfies the same dispatcher interface; without
-		// a distinct fallback URL it is a plain primary client.
+		// Ingest chain (#207 generalizes R4 #134): an ORDERED candidate list
+		// from AXIOM_PROCESSOR_URLS (plural wins) or the legacy singular pair
+		// (AXIOM_PROCESSOR_URL + AXIOM_INGEST_FALLBACK_URL). A periodic health
+		// probe keeps dead candidates out of the submit path; submit-time
+		// failover stays as the safety net.
 		newIngestClient := func() (*processor.FailoverClient, error) {
-			primary, err := processor.New(processor.Options{
-				BaseURL:       cfg.ProcessorURL,
-				ResultTimeout: cfg.ProcessorRequestTimeout,
-			})
-			if err != nil {
-				return nil, err
+			var clients []*processor.Client
+			for _, url := range cfg.IngestCandidates() {
+				c, err := processor.New(processor.Options{
+					BaseURL:       url,
+					ResultTimeout: cfg.ProcessorRequestTimeout,
+				})
+				if err != nil {
+					return nil, err
+				}
+				clients = append(clients, c)
 			}
-			// Normalize trailing slashes so "http://host:8012/" does not build
-			// a failover chain onto the same URL as "http://host:8012".
-			sameURL := strings.TrimRight(cfg.IngestFallbackURL, "/") == strings.TrimRight(cfg.ProcessorURL, "/")
-			if cfg.IngestFallbackURL == "" || sameURL {
-				return processor.NewFailover(primary, nil, logger), nil
-			}
-			fb, err := processor.New(processor.Options{
-				BaseURL: cfg.IngestFallbackURL,
-			})
-			if err != nil {
-				return nil, err
-			}
-			return processor.NewFailover(primary, fb, logger), nil
+			return processor.NewFailoverChain(clients, logger), nil
 		}
 		ingestClient, ierr := newIngestClient()
 		if ierr != nil {
 			logger.Fatalf("ingest client: %v", ierr)
 		}
 		srv.RegisterCheck("ingest-runner", runnerCheck(ingestClient))
-		logger.Printf("runner roles: query=%s ingest=%s (fallback=%s)",
-			cfg.QueryRunnerURL, cfg.ProcessorURL, cfg.IngestFallbackURL)
+		// Health-based candidate selection (#207): periodic probe keeps dead
+		// candidates out of the submit path front - a briefly dead Carrier is
+		// not asked first, so the per-submit connect timeout disappears.
+		ingestClient.StartHealthMonitor(sigCtx, cfg.RunnerHealthInterval)
+		logger.Printf("runner roles: query=%s ingest=%v (health probe every %s)",
+			cfg.QueryRunnerURL, cfg.IngestCandidates(), cfg.RunnerHealthInterval)
 
 		// The dispatcher is opt-in and runs only when explicitly enabled. It
 		// claims jobs, drives them through the processor and back to a terminal

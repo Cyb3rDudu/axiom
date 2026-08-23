@@ -23,6 +23,7 @@ type scriptRunner struct {
 	artifactHits atomic.Int64
 	submitCode   int         // 0 = accept; otherwise reply with this status
 	ackFail      atomic.Bool // ack endpoint replies 500 while set (read-only per test phase)
+	healthFail   atomic.Bool // health endpoint replies 503 while set (#207 probes)
 	name         string
 }
 
@@ -32,6 +33,10 @@ func newScriptRunner(t *testing.T, name string) *scriptRunner {
 	sr.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v1/health":
+			if sr.healthFail.Load() {
+				writeJSONT(w, 503, map[string]any{"status": "unavailable"})
+				return
+			}
 			writeJSONT(w, 200, map[string]any{"status": "ok"})
 		case r.URL.Path == "/v1/capabilities":
 			writeJSONT(w, 200, map[string]any{
@@ -111,7 +116,7 @@ func TestFailover_SubmitFallsBackWhenPrimaryDown(t *testing.T) {
 		t.Fatalf("submit must land on the fallback: acc=%+v hits=%d", acc, fallback.submitHits.Load())
 	}
 	// Transition logged exactly once per outage edge.
-	if got := strings.Count(buf.String(), "ingest failover: primary runner"); got != 1 {
+	if got := strings.Count(buf.String(), "ingest failover: candidate"); got != 1 {
 		t.Fatalf("want 1 failover log line, got %d: %q", got, buf.String())
 	}
 	if !strings.Contains(buf.String(), "unavailable") {
@@ -150,6 +155,9 @@ func TestFailover_RecoveryLogsReturnToPrimary(t *testing.T) {
 		t.Fatal(err)
 	}
 	primary.submitCode = 0
+	// #207: the 503 marked the head candidate down; a health probe
+	// notices the recovery (log edge "back") before the next submit.
+	fc.probeAll(context.Background())
 	if _, err := fc.SubmitProcess(context.Background(), &ProcessRequest{JobID: "b"}); err != nil {
 		t.Fatal(err)
 	}
@@ -289,6 +297,9 @@ func TestFailover_PrimaryReacceptClearsStaleRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	primary.submitCode = 0
+	// #207: the 503 marked the head candidate down; a health probe notices
+	// the recovery and restores chain-head priority BEFORE the resubmit.
+	fc.probeAll(context.Background())
 	if _, err := fc.SubmitProcess(context.Background(), &ProcessRequest{JobID: "j"}); err != nil {
 		t.Fatal(err)
 	}

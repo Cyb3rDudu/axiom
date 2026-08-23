@@ -1,15 +1,18 @@
-// Package processor — ingest failover chain (epic #130 R4, #134).
+// Package processor — ingest failover chain (epic #130 R4, #134; generalized
+// to an ordered candidate list in #207).
 //
-// Role model: AXIOM_PROCESSOR_URL is the BEST-AVAILABLE ingest runner
-// (Carrier GPU when present); when it is unreachable (transport error or
-// 5xx), ingest falls back to AXIOM_INGEST_FALLBACK_URL (default: the local
-// always-on runner — #128 proved local chunking is complete, just slower).
-// Failover happens at SUBMIT time: a job accepted by a runner stays that
-// runner's job (job state lives in the accepting process); polling, result
-// fetch, artifacts and acks are routed through a per-job map. Jobs lost with
-// a dead primary are re-claimed by the dispatcher's lease recovery and then
-// submit to the fallback — no mid-job migration needed (Nicht-Ziel:
-// orchestration).
+// Role model: AXIOM_PROCESSOR_URLS (or the legacy singular URL plus fallback
+// variable) defines an ORDERED chain of ingest runners — Carrier GPU first
+// when present, the local always-on runner as the every-installation floor.
+// A periodic health probe keeps dead candidates out of the front of the
+// submit path, and submit-time failover (transport error or 5xx on a
+// candidate → next living candidate; 4xx → error everywhere) remains the
+// safety net. Failover happens at SUBMIT time: a job accepted by a runner
+// stays that runner's job (job state lives in the accepting process);
+// polling, result fetch, artifacts and acks are routed through a per-job
+// map. Jobs lost with a dead candidate are re-claimed by the dispatcher's
+// lease recovery and then submit to a living candidate — no mid-job
+// migration needed (Nicht-Ziel: orchestration).
 package processor
 
 import (
@@ -17,6 +20,7 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"time"
 )
 
 // FailoverClass reports whether an error should trigger the ingest fallback:
@@ -44,43 +48,113 @@ func FailoverClass(err error) bool {
 	return true
 }
 
-// FailoverClient routes ingest calls between a primary and a fallback runner.
-// It satisfies the dispatcher's processorClient interface. Query-side calls
+// FailoverClient routes ingest calls across an ordered candidate chain of
+// runners (#207 generalizes the former primary/fallback pair). It satisfies
+// the dispatcher's processorClient interface. Query-side calls
 // (Embed/Rerank) intentionally have NO failover: the query runner is the
 // always-local role, and its failure degrades retrieval per R3 instead of
 // silently switching runners.
 type FailoverClient struct {
-	primary  *Client
-	fallback *Client
-	log      *log.Logger
+	// clients is the ordered candidate chain (clients[0] = preferred).
+	// ordered() re-ranks it by liveness: alive candidates first (configured
+	// order among them), health-wise dead ones last — a dead Carrier is not
+	// asked first, so the per-submit connect timeout disappears (#207).
+	clients []*Client
+	log     *log.Logger
 
 	mu sync.Mutex
-	// routes maps jobID -> accepting client for fallback-owned jobs. Only
-	// fallback accepts create an entry (primary is the routed() default).
-	// Ceiling: jobs that end without a successful ack/cancel (onFailed,
-	// RESULT_INVALID/RESULT_FETCH_FAILED) keep their entry for the process
-	// lifetime — bounded by one entry per fallback-accepted job. Cleared on
-	// successful ack/cancel AND on primary re-accept of the same jobID.
+	// routes maps jobID -> accepting client. Only non-head accepts create
+	// an entry (clients[0] is the routed() default).
+	// Ceiling: jobs that end without a successful ack/cancel keep their
+	// entry for the process lifetime — bounded by one entry per job. Cleared
+	// on successful ack/cancel AND on chain-head re-accept of the jobID.
 	routes map[string]*Client
-	// primaryDown remembers the last failover state so the transition is
-	// logged once per outage, not once per request.
-	primaryDown bool
+	// down remembers the last known liveness per client (submit outcomes +
+	// health probe) so transitions are logged once per outage, not per call.
+	down map[*Client]bool
 }
 
-// NewFailover builds the chain. A nil fallback disables failover (pure
-// primary). A nil logger silences the transition logs.
+// NewFailover builds the legacy two-member chain. A nil fallback disables
+// failover (pure primary). A nil logger silences the transition logs.
 func NewFailover(primary, fallback *Client, lg *log.Logger) *FailoverClient {
-	return &FailoverClient{primary: primary, fallback: fallback, log: lg, routes: map[string]*Client{}}
+	clients := []*Client{primary}
+	if fallback != nil {
+		clients = append(clients, fallback)
+	}
+	return NewFailoverChain(clients, lg)
 }
 
-// routed returns the client that owns jobID (default: primary).
+// NewFailoverChain builds the ordered candidate chain (#207). Nil entries
+// are dropped; the chain must not end up empty.
+func NewFailoverChain(clients []*Client, lg *log.Logger) *FailoverClient {
+	var cs []*Client
+	for _, c := range clients {
+		if c != nil {
+			cs = append(cs, c)
+		}
+	}
+	return &FailoverClient{clients: cs, log: lg, routes: map[string]*Client{}, down: map[*Client]bool{}}
+}
+
+// StartHealthMonitor probes every candidate periodically and keeps the
+// liveness map fresh so dead runners leave the front of the submit path
+// (#207). Best-effort by design: probe errors never block — submit-time
+// failover remains the safety net if health is stale. interval <= 0
+// disables the background probe.
+func (f *FailoverClient) StartHealthMonitor(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			f.probeAll(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+}
+
+// probeAll pings each candidate once with a short budget.
+func (f *FailoverClient) probeAll(ctx context.Context) {
+	for _, c := range f.clients {
+		pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		err := c.Health(pctx)
+		cancel()
+		f.setLiveness(c, err != nil, "health")
+	}
+}
+
+// ordered returns the candidate chain re-ranked by liveness (head first).
+// Caller must not mutate the result; called with f.mu NOT held.
+func (f *FailoverClient) ordered() []*Client {
+	f.mu.Lock()
+	alive := make([]*Client, 0, len(f.clients))
+	var dead []*Client
+	for _, c := range f.clients {
+		if f.down[c] {
+			dead = append(dead, c)
+		} else {
+			alive = append(alive, c)
+		}
+	}
+	f.mu.Unlock()
+	return append(alive, dead...)
+}
+
+// routed returns the client that owns jobID (default: first alive).
 func (f *FailoverClient) routed(jobID string) *Client {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if c, ok := f.routes[jobID]; ok {
+	c, ok := f.routes[jobID]
+	f.mu.Unlock()
+	if ok {
 		return c
 	}
-	return f.primary
+	return f.ordered()[0]
 }
 
 // done forgets a finished job's routing (callers keep it on error — see
@@ -91,70 +165,89 @@ func (f *FailoverClient) done(jobID string) {
 	f.mu.Unlock()
 }
 
-// markState logs primary up/down transitions once per edge.
-func (f *FailoverClient) markState(down bool) {
+// setLiveness records per-candidate up/down and logs the transition once
+// per edge. source names the observer ("submit"/"health") for the log.
+func (f *FailoverClient) setLiveness(c *Client, isDown bool, source string) {
 	f.mu.Lock()
-	changed := down != f.primaryDown
-	f.primaryDown = down
+	prev := f.down[c]
+	f.down[c] = isDown
 	f.mu.Unlock()
-	if changed && f.log != nil {
-		if down {
-			f.log.Printf("ingest failover: primary runner %s unavailable — new jobs go to fallback %s",
-				f.primary.baseURL, f.fallback.baseURL)
-		} else if f.fallback != nil {
-			f.log.Printf("ingest failover: primary runner %s back — new jobs return to primary", f.primary.baseURL)
+	if prev == isDown {
+		return
+	}
+	if f.log != nil {
+		if isDown {
+			f.log.Printf("ingest failover: candidate %s unavailable (%s) — new jobs go to the next living candidate", c.baseURL, source)
+		} else {
+			f.log.Printf("ingest failover: candidate %s back (%s) — eligible for new jobs again", c.baseURL, source)
 		}
 	}
 }
 
-// SubmitProcess tries the primary and fails over on FailoverClass errors.
-// The accepting runner is recorded so follow-up calls route correctly.
+// SubmitProcess tries the candidates in liveness order and fails over on
+// FailoverClass errors. The accepting runner is recorded so follow-up calls
+// route correctly.
 func (f *FailoverClient) SubmitProcess(ctx context.Context, req *ProcessRequest) (*ProcessAccepted, error) {
-	acc, err := f.primary.SubmitProcess(ctx, req)
-	if err == nil {
-		f.markState(false)
-		// The dispatcher may resubmit a job whose earlier attempt the
-		// fallback accepted (e.g. lease lost during the outage, recovered
-		// after primary returned). Primary re-accept overwrites ownership.
-		f.done(req.JobID)
-		return acc, nil
+	var lastErr error
+	for _, c := range f.ordered() {
+		acc, err := c.SubmitProcess(ctx, req)
+		if err == nil {
+			f.setLiveness(c, false, "submit")
+			// The dispatcher may resubmit a job whose earlier attempt another
+			// candidate accepted (e.g. lease lost during an outage, recovered
+			// later). Re-accept by the chain head overwrites ownership.
+			f.mu.Lock()
+			if c == f.clients[0] {
+				delete(f.routes, req.JobID)
+			} else {
+				f.routes[req.JobID] = c
+			}
+			f.mu.Unlock()
+			return acc, nil
+		}
+		lastErr = err
+		if !FailoverClass(err) {
+			return nil, err // 4xx: the request is wrong on every candidate
+		}
+		f.setLiveness(c, true, "submit")
 	}
-	if f.fallback == nil || !FailoverClass(err) {
-		return nil, err
-	}
-	f.markState(true)
-	acc, ferr := f.fallback.SubmitProcess(ctx, req)
-	if ferr != nil {
-		return nil, ferr
-	}
-	f.mu.Lock()
-	f.routes[req.JobID] = f.fallback
-	f.mu.Unlock()
-	return acc, nil
+	return nil, lastErr
 }
 
-// Capabilities negotiates with the primary, falling back when it is down —
-// ingest must be able to start even when only the fallback runner lives.
+// Capabilities negotiates with the first living candidate — ingest must be
+// able to start even when the preferred runner is down.
 func (f *FailoverClient) Capabilities(ctx context.Context) (*Capabilities, error) {
-	caps, err := f.primary.Capabilities(ctx)
-	if err == nil {
-		return caps, nil
+	var lastErr error
+	for _, c := range f.ordered() {
+		caps, err := c.Capabilities(ctx)
+		if err == nil {
+			return caps, nil
+		}
+		lastErr = err
+		if !FailoverClass(err) {
+			return nil, err
+		}
 	}
-	if f.fallback == nil || !FailoverClass(err) {
-		return nil, err
+	if lastErr == nil {
+		lastErr = errors.New("no ingest candidates")
 	}
-	return f.fallback.Capabilities(ctx)
+	return nil, lastErr
 }
 
-// Health is green when EITHER runner can serve ingest.
+// Health is green when ANY candidate can serve ingest.
 func (f *FailoverClient) Health(ctx context.Context) error {
-	if err := f.primary.Health(ctx); err == nil {
-		return nil
+	var lastErr error
+	for _, c := range f.ordered() {
+		err := c.Health(ctx)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
 	}
-	if f.fallback == nil {
-		return f.primary.Health(ctx) // surface the primary error
+	if lastErr == nil {
+		lastErr = errors.New("no ingest candidates")
 	}
-	return f.fallback.Health(ctx)
+	return lastErr
 }
 
 // JobStatus polls the runner that owns the job.
