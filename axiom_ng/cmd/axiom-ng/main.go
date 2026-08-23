@@ -260,8 +260,8 @@ func main() {
 	logger.Printf("starting %s", version.Banner())
 
 	// #205 §5: a debug build must never serve production ports. Production is
-	// 8011 (API) and 8013–8015 (dispatchers). Opt out explicitly for local
-	// dev with AXIOM_ALLOW_DEBUG_BIND=1.
+	// 8011 (API), 8013–8015 (dispatchers), and 26000 (the new production API
+	// port). Opt out explicitly for local dev with AXIOM_ALLOW_DEBUG_BIND=1.
 	if version.DebugBindRefused(version.BuildType, cfg.APIPort, os.Getenv) {
 		logger.Fatalf("refusing to bind production port %d with %s — build a release artifact (make rag) or set AXIOM_ALLOW_DEBUG_BIND=1 for local dev",
 			cfg.APIPort, version.Banner())
