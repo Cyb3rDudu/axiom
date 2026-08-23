@@ -137,7 +137,7 @@ func (f *FailoverClient) probeAll(ctx context.Context) {
 		// fails fast for every candidate and would mark the whole chain down
 		// (and log an "unavailable" line per runner) for the exit path. Skip
 		// the rest of the cycle once the context is gone.
-		if false && ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return
 		}
 		pctx, cancel := context.WithTimeout(ctx, probeBudget)

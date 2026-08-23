@@ -5,6 +5,7 @@ package processor
 // cases stay in failover_test.go.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -16,11 +17,18 @@ import (
 
 func newChain(t *testing.T, members ...*scriptRunner) *FailoverClient {
 	t.Helper()
+	return newChainLog(t, &bytes.Buffer{}, members...)
+}
+
+// newChainLog builds a chain whose transition log lands in buf (io.Discard
+// via newChain by default).
+func newChainLog(t *testing.T, buf *bytes.Buffer, members ...*scriptRunner) *FailoverClient {
+	t.Helper()
 	var clients []*Client
 	for _, m := range members {
 		clients = append(clients, newClientT(t, m.URL))
 	}
-	return NewFailoverChain(clients, log.New(io.Discard, "", 0))
+	return NewFailoverChain(clients, log.New(buf, "", 0))
 }
 
 func TestChain_DeadHeadIsNotAskedFirstAfterProbe(t *testing.T) {
@@ -290,6 +298,17 @@ func TestChain_ProbeAllSkipsOnCancelledContext(t *testing.T) {
 	carrier.healthFail.Store(true) // health WOULD fail if consulted
 	fc.probeAll(ctx)
 
+	// Direct liveness proof: a cancelled cycle must leave the down-map
+	// UNTOUCHED. (A submit-preference assertion alone is too weak — it also
+	// passes when the whole chain got demoted, because ordered() keeps the
+	// configured order among equally-down candidates. Exactly the gap that
+	// let a neutered guard slip through once.)
+	fc.mu.Lock()
+	downEntries := len(fc.down)
+	fc.mu.Unlock()
+	if downEntries != 0 {
+		t.Fatalf("cancelled probe cycle must not record liveness state, down=%d", downEntries)
+	}
 	if _, err := fc.SubmitProcess(context.Background(), &ProcessRequest{JobID: "a"}); err != nil {
 		t.Fatal(err)
 	}
