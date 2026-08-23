@@ -319,9 +319,14 @@ span. Invalid offsets or chunk IDs return `400`.
 
 ## Knowledge graph
 
-All KG reads use active snapshots. `min_mentions` is the number of distinct
-chunks that must mention each endpoint; it defaults to `2` to suppress one-hit
-entities.
+The KG API reads the materialized read model built from active snapshots:
+`kg_entity_roots`, `kg_relation_triples`, and `kg_relation_evidence_docs`. Raw
+extractor rows remain the source of truth; the read model is a rebuildable
+projection. `min_mentions` is the number of distinct chunks that must mention an
+entity root or endpoint; it defaults to `2` to suppress one-hit entities.
+
+Entity IDs in read requests are root-aware. Passing a variant entity ID resolves
+to `coalesce(alias_of, id)` before neighbors or relations are read.
 
 When search source hydration is wired, neighbor and relation responses use an
 envelope with a `sources` map keyed by evidence chunk ID. Without hydration,
@@ -337,7 +342,7 @@ serialized as `[]`, never `null`.
 | `limit` | `50` | Clamped to `1`–`200` |
 
 Malformed numeric values use their defaults. Entity matching applies the same
-normalization to the query and stored canonical form:
+normalization to the query and stored forms:
 
 1. lowercase;
 2. replace `ß` with `ss`;
@@ -347,42 +352,49 @@ normalization to the query and stored canonical form:
 5. for forms of at least six characters, strip one trailing `en`, `er`, `e`, or
    `s` suffix.
 
-Results are ranked in four strict tiers, with mention count used only inside a
-tier:
+Results are KG family roots. `canonical_form` is the survivor/root form.
+`forms` lists the visible family forms: the root plus variants linked by
+`alias_of`. Matching can find a root through any family form. Ranking uses the
+best tier reached by any form in the family, with mention count used only inside
+a tier:
 
-1. exact lowercased canonical form;
+1. exact lowercased form;
 2. normalized-equivalent form without bilingual-family substitution;
 3. bilingual-family equivalent;
 4. substring or reverse-containment decomposition.
 
-Live response:
+Live response shape:
 
 ```json
 [
   {
     "id": "1a34dc2f-661d-4e20-9593-30b21d63e02c",
-    "canonical_form": "wissen",
-    "text": "Wissen",
+    "canonical_form": "stakeholders",
+    "text": "Stakeholders",
     "type": "CONCEPT",
-    "mentions": 104
+    "mentions": 104,
+    "forms": ["stakeholder", "stakeholders"]
   }
 ]
 ```
 
 ### `GET /api/kg/entities/{id}/neighbors`
 
-`id` must be an entity UUID. `min_mentions` and `limit` have the same defaults
-and ranges as entity search. Each edge contains `other_id`, `other_form`,
-optional `other_type`, `direction` (`in` or `out`), relation `type`, optional
-persisted `strength`, computed `confidence`, evidence chunk IDs, and the other
-endpoint's mention count.
+`id` must be an entity UUID; variant IDs resolve to their family root.
+`min_mentions` and `limit` have the same defaults and ranges as entity search.
+Each edge contains `other_id`, `other_form`, optional `other_type`, `direction`
+(`in` or `out`), relation `type`, optional persisted `strength`, computed
+`confidence`, evidence chunk IDs, and the other endpoint's mention count.
+
+Neighbors are read from materialized root-level triples. Intra-family self-loops
+are excluded during read-model refresh.
 
 ### `GET /api/kg/relations`
 
 | Query parameter | Default | Meaning |
 | --- | --- | --- |
 | `type` | empty | Exact relation-type filter |
-| `entity_id` | empty | Source or target entity UUID |
+| `entity_id` | empty | Source or target entity UUID; variants resolve to roots |
 | `entity` | empty | Legacy alias used only when `entity_id` is absent |
 | `document_id` | empty | Require evidence in this document's active snapshot |
 | `min_mentions` | `2` | Endpoint stability floor, clamped to `1`–`100` |
@@ -390,7 +402,9 @@ endpoint's mention count.
 
 Relations are ordered by cross-document corroboration first and endpoint
 popularity second. `document_id` narrows evidence, but corroboration remains the
-global count across active snapshots.
+global count across active snapshots. The `(source_root_id, target_root_id,
+type)` triple is unique in the read model. Direction is deterministic after raw
+edge grouping: majority raw direction wins; evidence support breaks ties.
 
 ```json
 {
@@ -444,12 +458,16 @@ is `confidence >= 0.65` and `corroborating_documents >= 2`.
 
 ### `POST /api/kg/consolidate`
 
-The route takes no parameters. It merges entities with exactly equal
-`coalesce(canonical_form, text)` across active snapshots. The survivor has the
-most distinct mention chunks, with the smallest UUID as deterministic
+The route takes no parameters. It runs guarded exact-form entity consolidation
+under the KG maintenance lock and refreshes the read model. The survivor has
+the most distinct mention chunks, with the smallest UUID as deterministic
 tiebreaker. Mentions move to the survivor, relation endpoints are repointed,
-evidence chunk IDs remain unchanged, and duplicate mention spans are skipped.
-The operation is idempotent.
+evidence chunk IDs remain unchanged, duplicate mention spans are skipped, and
+loser semantic evidence is archived before loser rows are deleted.
+
+Homonym/type guards apply: naked `PERSON` surnames do not merge, incompatible
+type families stay separate, and non-`PERSON` majority arbitration is
+mention-weighted. The operation is idempotent.
 
 ```json
 {"merged":7,"duplicate_forms_before":7,"duplicate_forms_after":0}

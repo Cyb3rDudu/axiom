@@ -11,8 +11,9 @@ axiom's durable state lives in PostgreSQL (+pgvector for embeddings) and
 OpenSearch (search index). The Zotero mirror tables are axiom's read-side copy
 of Zotero; selection tables control job admission without reducing that mirror.
 The `ingest_jobs` + `processing_*` + `opensearch_outbox` tables form the
-processing pipeline. Repair tables record the separate, explicitly configured
-Zotero mutation path and its audit trail.
+processing pipeline. The KG read-model tables materialize entity families and
+relation triples from active raw graph rows. Repair tables record the separate,
+explicitly configured Zotero mutation path and its audit trail.
 
 ## Core tables
 
@@ -26,8 +27,12 @@ Zotero mutation path and its audit trail.
 | `processing_snapshots` | Versioned processing identity, provenance, activation state, and generation counter. |
 | `processing_chunks` | The text chunks of a snapshot, with source locators + section hierarchy. |
 | `processing_chunk_dense_embeddings` / `processing_chunk_sparse_embeddings` | The chunk embeddings (pgvector dense; sparse as key/value). |
-| `processing_entities` / `processing_entity_mentions` | Extracted entities and their chunk/page-backed mentions. |
+| `processing_entities` / `processing_entity_mentions` | Extracted entities and their chunk/page-backed mentions. `processing_entities.alias_of` links a variant to its KG family survivor. |
 | `processing_entity_relationships` / `processing_chunk_relationships` | Relationship graph edges + chunk-to-chunk edges, with evidence refs. |
+| `kg_superseded_entities` | Archived semantic evidence for entity rows deleted by exact-form consolidation. |
+| `kg_entity_roots` | Materialized KG family roots: survivor form, family forms, type votes, mention/member counts, normalized search keys. |
+| `kg_relation_triples` | Materialized root-to-root relation triples, with evidence union, support counts, and confidence inputs. |
+| `kg_relation_evidence_docs` | Per-triple document support counts used for relation filtering and source hydration. |
 | `processing_artifacts` | Durable derived artifacts (e.g. normalized Markdown) with verified digests. |
 | `opensearch_outbox` | The transactionally-created queue of index operations the drainer replays. |
 | `repair_cases` | Repair state machine, analysis/plan, verification result, attempt accounting, and terminal verdict. |
@@ -65,6 +70,9 @@ The processing pipeline's durable shape is three coordinated concerns:
 | Normal ingest makes no durable source copy | Source files are read in place; processing artifacts are derived. The separately configured repair path quarantines an original before any Zotero mutation. |
 | Selection changes do not erase the mirror or existing chunks | `zotero_selections` and `zotero_collection_selections` gate new job creation only. |
 | Repair mutation has a custody record | The original is quarantined and the quarantine audit must commit before the old Zotero attachment is deleted. |
+| KG identity maintenance is serialized | Mutating KG maintenance paths run inside one transaction under a transaction-scoped advisory lock. |
+| Entity consolidation preserves deleted-row evidence | Loser entity evidence is archived in `kg_superseded_entities` before loser rows are deleted. |
+| KG API reads rebuildable projections | `kg_entity_roots`, `kg_relation_triples`, and `kg_relation_evidence_docs` are refreshed from active raw KG rows. |
 
 ## Migration map
 
@@ -87,6 +95,9 @@ are immutable; schema changes use a new numbered migration.
 | `0012_zotero_selections.sql` | Document-level ingest selection. |
 | `0013_zotero_collection_selections.sql` | Collection-level ingest selection keyed independently of mirror row lifecycle. |
 | `0014_repair_cases.sql` | Repair status/cases, per-attachment attempt counter, and Zotero write audit. |
+| `0015_entity_aliases.sql` | Nullable `processing_entities.alias_of` link and partial index for KG family variants. |
+| `0016_superseded_entities.sql` | Superseded entity archive with survivor/loser uniqueness and survivor, loser, and form indexes. |
+| `0017_kg_read_model.sql` | Materialized KG roots, relation triples, evidence-document support, rank/filter indexes, unique `(source_root_id, target_root_id, type)`, and no self-loop check. |
 
 ## Reading the model
 
@@ -99,6 +110,15 @@ are immutable; schema changes use a new numbered migration.
   [Troubleshooting](../operations/troubleshooting.md)).
 - **From the index back to the source:** an outbox/OpenSearch entry points at
   snapshot/chunk identifiers that resolve back to the durable store.
+- **From a KG family to its members:** `kg_entity_roots.root_entity_id` is the
+  survivor/root; `processing_entities.alias_of` points variants at that root,
+  and `kg_entity_roots.forms` lists the visible family forms.
+- **From a materialized relation to its evidence:** `kg_relation_triples` stores
+  the root-level triple and evidence chunk IDs; `kg_relation_evidence_docs`
+  stores per-document support.
+- **From a consolidated entity to its deleted evidence:**
+  `kg_superseded_entities.survivor_entity_id` lists loser form, type,
+  description, source snapshot, document, and mention count.
 - **From a repair to its custody chain:** `repair_cases.attachment_id` resolves
   the affected attachment; `zotero_write_audit` records quarantine and each
   Zotero mutation associated with the case.

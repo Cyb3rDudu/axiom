@@ -94,6 +94,8 @@ nav:
     - Operations:
           - Services & Releases: operations/services.md
           - Deployment: operations/deployment.md
+          - KG Maintenance: operations/kg-maintenance.md
+          - PDF Label Surgery: operations/pdf-label-surgery.md
           - Monitoring: operations/monitoring.md
           - Troubleshooting: operations/troubleshooting.md
     - References:

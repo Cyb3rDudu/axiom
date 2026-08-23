@@ -77,7 +77,9 @@ in the reference setup is `full-rag-v1`, which turns on the full flow:
 conversion, chunking, **dense + sparse embeddings**, **entity extraction**, and
 **relationship extraction** (plus images). Before graph rows persist, axiom
 removes frontmatter-backed mentions and any entities or relations left without
-body evidence. The chunks themselves remain available to retrieval.
+body evidence. Known generic role and group nouns, such as stakeholder and
+management forms, are normalized to `CONCEPT` before graph identity maintenance
+runs. The chunks themselves remain available to retrieval.
 
 The same profile works with the configured local or remote runner. Profiles are
 applied per job from the job's stored options. The profile **name alone doesn't
@@ -105,6 +107,8 @@ state.
 | Job stuck in `pending` | No worker enabled, or dispatcher off | Ensure the runner is up and `AXIOM_DISPATCHER_ENABLED=true`; see Quickstart. |
 | Job `failed` with a source error | Attachment path not allowed, or file missing | Confirm `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` covers your Zotero storage; resync to re-create the job. |
 | Job `failed` after a long run | Model/compute backend mismatch or OOM | Match the compute backend and available device memory to the processing profile. |
+| Job failed with `CHILD_OOM_SIGKILL` | The conversion child was killed, commonly by memory pressure on a scan-heavy PDF | Treat it as a runner/resource class first; inspect raster-scan size before declaring the source broken. |
+| Job failed on unresolved image refs from an external URL | A Markdown link was misread as image syntax | Current runner builds drop `http://` and `https://` refs before artifact validation; rerun on an updated runner. |
 
 > A `failed` job can usually be retried by triggering a fresh sync/process for
 > that attachment — reprocessing is not blind: the hash gate means only changed
