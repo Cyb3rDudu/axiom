@@ -46,6 +46,7 @@ organized by *where the variable is consumed* (`set by`).
 | `AXIOM_DISPATCHER_LEASE` | `5m` | Per-claim lease length. |
 | `AXIOM_ARTIFACT_ROOT` | — | Durable derived-artifact root. |
 | `AXIOM_API_PORT` | `8011` | Port the `axiom_ng` REST API listens on. |
+| `AXIOM_ALLOW_DEBUG_BIND` | off | Explicit opt-out that lets a **debug** build bind a production port (8011, 8013–8015). Release builds always bind; unset/wrong values keep the guard active. |
 | `AXIOM_BIND_ADDR` | `127.0.0.1` | Interface the API binds to. Loopback default keeps the unauthenticated sync/job endpoints off the LAN. |
 | `AXIOM_SEARCH_SPARSE_ARM` | off | Enables the **sparse** recall arm (`rank_feature` clauses) on `POST /api/search`. Default off per the retrieval quality benchmark (no quality gain, +~1.3 s p95 local). |
 | `AXIOM_SEARCH_GRAPH_ARM` | off | Enables the knowledge-**graph** expansion arm on `POST /api/search`. Default off — the quality benchmark measured it as slightly negative (+ high latency). |

@@ -44,12 +44,12 @@ every rejected request.
 The response is always HTTP `200`. `ok` is false when any registered checker
 fails; `checks` contains `ok`, an error string, or `unknown` for each dependency.
 A fully wired process checks Zotero, PostgreSQL, the query runner, and the ingest
-runner.
+runner. `build` carries the version banner and must match `axiom-ng --version`.
 
-Live response from `localhost:8011` on 2026-08-20:
+Live response shape:
 
 ```json
-{"ok":true,"checks":{"ingest-runner":"ok","postgres":"ok","query-runner":"ok","zotero":"ok"}}
+{"ok":true,"build":"axiom-ng v0.1.10-…-gc043bab (commit c043bab, release build)","checks":{"ingest-runner":"ok","postgres":"ok","query-runner":"ok","zotero":"ok"}}
 ```
 
 ### `GET /api/ingest/jobs`

@@ -69,7 +69,10 @@ jobs:
         # 5) the OpenSearch index constant `axiom-ng-chunks-v1`
         #    (dispatcher/outbox.go) — quoted verbatim in operational commands;
         # 6) config default paths under `~/.axiom-ng/` (config.go) and the
-        #    release artifact/shim names (`axiom-ng-<version>…`, shim list).
+        #    release artifact/shim names (`axiom-ng-<version>…`, shim list);
+        # 7) the version banner (`axiom-ng v<semver>…`) — quoted verbatim in
+        #    /api/health examples; the banner string is a technical fact
+        #    (version.go), not product prose.
         # mkdocs.yml is checked as well, so a `site_name: axiom-ng`
         # regression fails CI. docs/_inventory.md is internal meta and exempt.
         run: |
@@ -82,6 +85,7 @@ jobs:
             | grep -vF '~/.axiom-ng/' \
             | grep -vF 'axiom-ng-<version>' \
             | grep -vF 'axiom-ng, axiom-runner' \
+            | grep -vE 'axiom-ng v[0-9]' \
             | grep -vE '\| `axiom-ng` \|'; then
             echo "legacy product name 'axiom-ng' found in site content"
             exit 1
