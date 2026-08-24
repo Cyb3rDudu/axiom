@@ -17,6 +17,10 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          # full history + tags: the changelog generator needs the previous
+          # v*-tag (fetch-depth 1 sees only the tagged commit)
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: axiom_ng/go.mod
