@@ -140,6 +140,55 @@ The fixer has NO env file in this scheme: its package-local `config.env`
 (via its own `load_config_envfile`, inside the artifact) carries the
 non-secret settings, and `--key` stays a per-event argument.
 
+### Stufe-2 — autonomous diagnosis & decision (#203)
+
+Inside that one `fix.sh <key> --apply` invocation, the agent is the
+**Stufe-2 case driver**: it does not only run a single canned repair, it
+*decides* what to do per case within the Stufe-1 toolbelt. Stufe-1 stays
+the machine, Stufe-2 the judgment — there is **no new call path or second
+wrapper**: the fixer invoker's existing wrapper contract is unchanged
+(Key per invocation, per-key lock, 30-min timeout, `--apply`).
+
+**How the agent decides.** Each model turn emits one JSON `step` that the
+dispatcher validates and maps onto the deterministic tools (probe,
+forensics, spread, ocr, surgery). The loop follows:
+
+1. **Diagnose** — forensics (druckseiten truth map, the normal path) or
+   the integrity probe where chunk/zitat evidence is present.
+2. **Werkzeugwahl + Operation** — validates the damage class (one of
+   `constant-offset` / `reprint-start` / `two-range` / `injection`;
+   `unclassifiable` → escalate) and selects the matching Stufe-1 operation
+   (surgery / spread / ocr) — or **nothing**: „nichts tun, weil <Grund>" is
+   a first-class verdict reported honestly via `stop`, never a silent no-op.
+3. **Verifikation** — measure-after (3-Stellen-Beweis where present, else
+   Stelle-1 green + open places named) before any „geheilt" claim.
+4. **Bericht** — `report.json` under `~/.local/state/axiom/runs/<key>/` with
+   `verdict`, `truth_source`, and the mandatory „was unbewiesen blieb"
+   section. A `budget` / `time-budget` / `escalate` verdict is a normal
+   report, not a crash.
+
+**Budgets (abbruch-sicher, no unbounded case).** Both limits live in the
+agent itself, inside the wrapper's external 30-min kill:
+
+- **Operations:** `PDF_REPAIR_BUDGET_MAX_OPS` (default 50) — every non-terminal
+  model round-trip (failed attempts included) counts; exceeding ends the
+  run with verdict `budget`.
+- **Wall-clock (Stufe-2):** `PDF_REPAIR_BUDGET_MAX_SECONDS` (default 900,
+  15 min per case) — a hard time cap independent of the step count, so a
+  slow/hung model endpoint cannot stretch a case past its slot. On expiry
+  the loop terminates with verdict `time-budget`; the agent cannot argue
+  its way past it. `0` disables it (hermetic tests / sandbox only).
+- **Abort-safety:** 2 failed attempts of the same class → escalate; a
+  client error or handler crash is captured as evidence/report, never a
+  bare traceback without an audit record.
+
+**Boundaries.** The agent operates ONLY through the Stufe-1 tools — it never
+writes PDF bytes directly (the single label-write path is surgery_exec) and
+never builds ad-hoc tools. Its freedom is *which* validated Stufe-1
+operation to apply (or none), never *whether to bypass* the toolbelt. That
+keeps Stufe-2 a judgment layer: deterministic, reproducible tooling below;
+autonomous planning on top.
+
 ## Env files & secrets
 
 One file per service in `~/.config/axiom/`, mode 0700. Secrets (DSN, HMAC
