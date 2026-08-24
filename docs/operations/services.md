@@ -95,9 +95,9 @@ recovery (only if the pid file is unreadable):
 ### Fixer caller — the mail-ingest invoker (#206)
 
 The systematic caller of `fix.sh` is the **fixer invoker**, a loop inside
-`axiom-ng` (NOT a launchd service, NOT KeepAlive — the event-runner owner
-decision stands). Enabled with `AXIOM_FIXER_INVOKER_ENABLED=1` in the env
-file of an axiom-ng instance that also carries the Zotero write key
+the axiom binary (NOT a launchd service, NOT KeepAlive — the event-runner
+owner decision stands). Enabled with `AXIOM_FIXER_INVOKER_ENABLED=1` in the
+env file of an axiom instance that also carries the Zotero write key
 (the repair API must be wired — the invoker uploads through it).
 
 - **Who/when:** polls the `repair_cases` queue (status `queued`) every

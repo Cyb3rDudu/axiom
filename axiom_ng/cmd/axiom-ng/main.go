@@ -565,7 +565,7 @@ done/total, current item) so a supervised run can tell working from hung.
 // mode runs multiple sequential passes and earlier passes already committed;
 // every pass is idempotent, so re-running the mode is the documented recovery.
 const (
-	modeSingleTx = true
+	modeSingleTx  = true
 	modeMultiPass = false
 )
 
