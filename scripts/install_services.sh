@@ -17,14 +17,19 @@ SRC="$ROOT/deploy/launchd"
 DEST="$HOME/Library/LaunchAgents"
 LOGS="$HOME/.local/state/axiom/logs"
 SERVICES="com.axiom.rag com.axiom.rag-dispatch-gpu0 com.axiom.rag-dispatch-gpu1 com.axiom.rag-dispatch-gpu2 com.axiom.runner"
+ENV_FILES="rag.env rag-api.env rag-dispatch-gpu0.env rag-dispatch-gpu1.env rag-dispatch-gpu2.env runner.env"
 UID_N="$(id -u)"
 
 with_bridge=0
 [ "${1:-}" = "--with-bridge" ] && with_bridge=1
 
 # --- preflight: everything the services need must exist BEFORE the prompt ---
+# JSON validation runs on the runner env's python (already a required
+# prereq below) — no new host dependency, no macOS CLT python3 stub trap.
+PY3=/opt/axiom/runner/current/env/bin/python
+
 missing=""
-for f in rag.env rag-api.env rag-dispatch-gpu0.env rag-dispatch-gpu1.env rag-dispatch-gpu2.env runner.env; do
+for f in $ENV_FILES; do
     [ -f "$HOME/.config/axiom/$f" ] || missing="$missing\n  ~/.config/axiom/$f (0700, secrets here)"
 done
 [ -x /opt/axiom/bin/axiom-ng ] || missing="$missing\n  /opt/axiom/bin/axiom-ng (make install / install_release.sh)"
@@ -32,6 +37,34 @@ done
 if [ "$with_bridge" = 1 ] && grep -q __BRIDGE_CMD__ "$SRC/com.axiom.carrier-bridge.plist" 2>/dev/null; then
     missing="$missing\n  carrier-bridge template still contains __BRIDGE_CMD__ (edit deploy/launchd/com.axiom.carrier-bridge.plist first!)"
 fi
+
+# env-json preflight: JSON-valued env keys must PARSE as JSON after sourcing.
+# POSIX sh strips double quotes on assignment, so KEY={"a":1} arrives as {a:1}
+# — frozen.go validation then rejects every dispatcher claim and all
+# dispatchers spin forever (v0.1.12 live finding, 2026-08-24). JSON in env
+# files must be SINGLE-quoted. Checked fail-closed BEFORE the confirm prompt,
+# same pattern as the #210 DB guard and the #211 zstd preflight.
+for f in $ENV_FILES; do
+    # subshell: secrets never enter the installer env. set +e +u: a broken
+    # env file must degrade to a NAMED preflight error, not kill the
+    # installer silently (bash-3.2 sh-mode propagates -e into the
+    # substitution — verified live in review).
+    if (set +e +u
+        # shellcheck disable=SC1090
+        . "$HOME/.config/axiom/$f" >/dev/null 2>&1); then
+        profile=$( (set +e +u
+            # shellcheck disable=SC1090
+            . "$HOME/.config/axiom/$f" >/dev/null 2>&1
+            printf '%s' "${AXIOM_DISPATCHER_PROFILE:-}"))
+    else
+        missing="$missing\n  $f: does not source cleanly (syntax/unset-var error)"
+        continue
+    fi
+    [ -n "$profile" ] || continue
+    [ -x "$PY3" ] || continue # runner python missing is already a named prereq error
+    printf '%s' "$profile" | "$PY3" -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null ||
+        missing="$missing\n  $f: AXIOM_DISPATCHER_PROFILE is set but does not parse as JSON — single-quote JSON values: AXIOM_DISPATCHER_PROFILE='{\"jobs\": …}' (sh strips double quotes on assignment)"
+done
 if [ -n "$missing" ]; then
     echo "preflight FAILED — missing prerequisites:$missing" >&2
     exit 1

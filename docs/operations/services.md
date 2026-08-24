@@ -115,7 +115,7 @@ wiped /tmp and took the secret with it), never inline in plists.
   Optional: `AXIOM_RUNNER_HEALTH_INTERVAL` (default 60s).
 - `runner.env` — `AXIOM_PROCESSOR_COMPUTE=real`, `AXIOM_PROCESSOR_PORT=8012`
 
-Two operational traps with env files (both hit during the v0.1.11
+Operational traps with env files (first two hit during the v0.1.11
 production install, 2026-08-23):
 
 1. **`AXIOM_BIND_ADDR` decides what answers locally.** With
@@ -134,6 +134,20 @@ production install, 2026-08-23):
    every dispatcher job). After any port change:
    `grep -rn <old-port> ~/.config/axiom/` must come back empty (comments
    aside), then `launchctl kickstart -k gui/$(id -u)/com.axiom.rag`.
+3. **JSON values in env files must be SINGLE-quoted.** POSIX `sh` strips
+   double quotes on assignment: `AXIOM_DISPATCHER_PROFILE={"jobs": …}`
+   sources to `{jobs: …}` — unquoted JSON keys reach the config, the
+   frozen.go validation rejects every dispatcher claim, and all
+   dispatchers spin in an endless loop with jobs pending forever
+   (v0.1.12 live finding, 2026-08-24; hot-fixed with single quotes +
+   `launchctl kickstart`). A spaced double-quoted variant (`{"jobs": 1}`)
+   word-splits and makes sourcing fail outright — under the #210 guard the
+   service then crash-loops on start. Recipe:
+   `AXIOM_DISPATCHER_PROFILE='{"jobs": …}'`.
+   `scripts/install_services.sh` preflights this: it sources every env file
+   (files that do not source cleanly are named as preflight errors) and refuses to install when a set `AXIOM_DISPATCHER_PROFILE` does not
+   parse as JSON (fail-closed before the confirm prompt, like the #210 DB
+   guard and the #211 zstd check).
 
 The fixer has NO env file in this scheme: its package-local `config.env`
 (via its own `load_config_envfile`, inside the artifact) carries the
