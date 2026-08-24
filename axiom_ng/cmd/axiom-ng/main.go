@@ -57,6 +57,8 @@ func main() {
 		}
 		cfg := config.Load()
 		logger := log.New(os.Stderr, "fmgate: ", log.LstdFlags)
+		// #202: heartbeat for this mode's long passes.
+		repo.SetKGProgressLogger(logger.Printf)
 		d, err := db.Open(context.Background(), cfg.DatabaseURL)
 		if err != nil {
 			logger.Fatalf("postgres: %v", err)
@@ -64,7 +66,7 @@ func main() {
 		defer d.Close()
 		rep, err := repo.New(d.Pool()).CleanupFrontmatterKG(context.Background(), apply)
 		if err != nil {
-			modeFail(logger, true, "cleanup: %v", err)
+			modeFail(logger, modeSingleTx, "cleanup: %v", err)
 		}
 		out, _ := json.MarshalIndent(rep, "", "  ")
 		if apply {
@@ -84,6 +86,7 @@ func main() {
 		// snapshots. Dry-run by default; --apply mutates.
 		cfg := config.Load()
 		logger := log.New(os.Stderr, "relations: ", log.LstdFlags)
+		repo.SetKGProgressLogger(logger.Printf)
 		apply := false
 		for _, a := range os.Args[2:] {
 			if a == "--apply" {
@@ -99,14 +102,14 @@ func main() {
 		if !apply {
 			_, pairs, err := rep.RelationsConsolidationDryRun(context.Background())
 			if err != nil {
-				modeFail(logger, true, "dry-run: %v", err)
+				modeFail(logger, modeSingleTx, "dry-run: %v", err)
 			}
 			logger.Printf("dry-run: %d multi-edge pairs would collapse (use --apply)", pairs)
 			return
 		}
 		rep2, err := rep.ConsolidateRelationsReport(context.Background())
 		if err != nil {
-			modeFail(logger, true, "consolidate: %v", err)
+			modeFail(logger, modeSingleTx, "consolidate: %v", err)
 		}
 		logger.Printf("relations consolidation complete: %+v", rep2)
 		return
@@ -116,6 +119,7 @@ func main() {
 		// Dry-run by default; --apply mutates.
 		cfg := config.Load()
 		logger := log.New(os.Stderr, "typing: ", log.LstdFlags)
+		repo.SetKGProgressLogger(logger.Printf)
 		apply := false
 		for _, a := range os.Args[2:] {
 			if a == "--apply" {
@@ -131,14 +135,14 @@ func main() {
 		if !apply {
 			c, err := rp.EntityTypingCounts(context.Background())
 			if err != nil {
-				modeFail(logger, true, "dry-run: %v", err)
+				modeFail(logger, modeSingleTx, "dry-run: %v", err)
 			}
 			logger.Printf("dry-run: %+v (use --apply)", c)
 			return
 		}
 		tr, err := rp.NormalizeEntityTypes(context.Background())
 		if err != nil {
-			modeFail(logger, true, "normalize: %v", err)
+			modeFail(logger, modeSingleTx, "normalize: %v", err)
 		}
 		logger.Printf("entity typing complete: %+v", tr)
 		return
@@ -147,6 +151,7 @@ func main() {
 		// #199 W6: guarded exact+flexion binding in one pass (W3 guards).
 		cfg := config.Load()
 		logger := log.New(os.Stderr, "aliases: ", log.LstdFlags)
+		repo.SetKGProgressLogger(logger.Printf)
 		apply := false
 		for _, a := range os.Args[2:] {
 			if a == "--apply" {
@@ -162,11 +167,11 @@ func main() {
 		if !apply {
 			c, err := rp.BindExactFormAliasesDryRun(context.Background())
 			if err != nil {
-				modeFail(logger, true, "dry-run exact: %v", err)
+				modeFail(logger, modeSingleTx, "dry-run exact: %v", err)
 			}
 			n, err := rp.EntityAliasCounts(context.Background())
 			if err != nil {
-				modeFail(logger, true, "dry-run counts: %v", err)
+				modeFail(logger, modeSingleTx, "dry-run counts: %v", err)
 			}
 			logger.Printf("dry-run: exact=%+v counts=%+v (use --apply)", c, n)
 			return
@@ -175,7 +180,7 @@ func main() {
 		if err != nil {
 			// Two sequential passes (exact, then flexion), each its own
 			// transaction: a failure after the first leaves it committed.
-			modeFail(logger, false, "bind-all: %v", err)
+			modeFail(logger, modeMultiPass, "bind-all: %v", err)
 		}
 		logger.Printf("all aliases complete: %+v", ar)
 		return
@@ -185,6 +190,7 @@ func main() {
 		// #198-3: flexion family alias links.
 		cfg := config.Load()
 		logger := log.New(os.Stderr, "aliases: ", log.LstdFlags)
+		repo.SetKGProgressLogger(logger.Printf)
 		apply := false
 		for _, a := range os.Args[2:] {
 			if a == "--apply" {
@@ -200,14 +206,14 @@ func main() {
 		if !apply {
 			c, err := rp.EntityAliasCounts(context.Background())
 			if err != nil {
-				modeFail(logger, true, "dry-run: %v", err)
+				modeFail(logger, modeSingleTx, "dry-run: %v", err)
 			}
 			logger.Printf("dry-run: %+v (use --apply)", c)
 			return
 		}
 		ar, err := rp.BindFlexionAliases(context.Background())
 		if err != nil {
-			modeFail(logger, true, "bind: %v", err)
+			modeFail(logger, modeSingleTx, "bind: %v", err)
 		}
 		logger.Printf("flexion aliases complete: %+v", ar)
 		return
@@ -217,13 +223,14 @@ func main() {
 		// delete intra-family self-loops, then run -consolidate-relations.
 		cfg := config.Load()
 		logger := log.New(os.Stderr, "repoint: ", log.LstdFlags)
+		repo.SetKGProgressLogger(logger.Printf)
 		d, err := db.Open(context.Background(), cfg.DatabaseURL)
 		if err != nil {
 			logger.Fatalf("postgres: %v", err)
 		}
 		defer d.Close()
 		if err := repo.New(d.Pool()).RepointAliasEdges(context.Background()); err != nil {
-			modeFail(logger, true, "repoint: %v", err)
+			modeFail(logger, modeSingleTx, "repoint: %v", err)
 		}
 		logger.Printf("alias-variant edges re-pointed to survivors; intra-family self-loops deleted")
 		return
@@ -234,6 +241,7 @@ func main() {
 		// typing normalization, and alias binding.
 		cfg := config.Load()
 		logger := log.New(os.Stderr, "epilogue: ", log.LstdFlags)
+		repo.SetKGProgressLogger(logger.Printf)
 		apply := false
 		for _, a := range os.Args[2:] {
 			if a == "--apply" {
@@ -249,7 +257,7 @@ func main() {
 		if !apply {
 			report, err := rp.EntityConsolidationDryRun(context.Background())
 			if err != nil {
-				modeFail(logger, true, "dry-run: %v", err)
+				modeFail(logger, modeSingleTx, "dry-run: %v", err)
 			}
 			logger.Printf("dry-run: %d guarded groups / %d entities would merge (use --apply)",
 				report.DuplicateFormsBefore, report.Merged)
@@ -257,7 +265,7 @@ func main() {
 		}
 		report, err := rp.ConsolidateEntitiesReport(context.Background())
 		if err != nil {
-			modeFail(logger, true, "consolidate: %v", err)
+			modeFail(logger, modeSingleTx, "consolidate: %v", err)
 		}
 		logger.Printf("entity consolidation complete: %d entities merged, duplicate forms %d->%d",
 			report.Merged, report.DuplicateFormsBefore, report.DuplicateFormsAfter)
@@ -509,7 +517,8 @@ Modes (each runs ONCE and exits; never falls through to the server boot):
   -consolidate-relations          one aggregated edge per (source,target) pair;
                                   dry-run default, --apply mutates
   -normalize-entity-types         deterministic typing rules; --apply mutates
-  -bind-all-aliases               guarded exact+flexion alias binding; --apply
+  -bind-all-aliases               guarded exact+flexion alias binding; dry-run
+                                  default, --apply mutates
   -bind-flexion-aliases           flexion family alias links; --apply mutates
   -repoint-alias-edges            re-point variant edges to survivors, delete
                                   intra-family self-loops (always applies)
@@ -531,16 +540,23 @@ done/total, current item) so a supervised run can tell working from hung.
 `
 
 // modeFail terminates a mutating CLI mode with the documented non-zero exit
-// (#202). consistent=true: the mode is single-transaction — the failure rolled
-// it back, the KG is in its pre-run state. consistent=false: the mode runs
-// multiple sequential passes and earlier passes already committed; every pass
-// is idempotent, so re-running the mode is the documented recovery.
+// (#202). consistent=modeSingleTx: the mode is single-transaction — the failure
+// rolled it back, the KG is in its pre-run state. consistent=modeMultiPass: the
+// mode runs multiple sequential passes and earlier passes already committed;
+// every pass is idempotent, so re-running the mode is the documented recovery.
+const (
+	modeSingleTx = true
+	modeMultiPass = false
+)
+
 func modeFail(logger *log.Logger, consistent bool, format string, args ...any) {
 	state := "state consistent (transaction rolled back, nothing applied)"
 	if !consistent {
 		state = "state partial: earlier passes already committed; all passes are idempotent — re-run the mode"
 	}
-	logger.Printf("MODE FAILED (exit 1): "+format+" — %s", append(args, state)...)
+	// Copy args before appending — the caller's variadic slice may be exactly
+	// sized (append would otherwise share/overwrite backing arrays).
+	logger.Printf("MODE FAILED (exit 1): "+format+" — %s", append(append([]any{}, args...), state)...)
 	os.Exit(1)
 }
 

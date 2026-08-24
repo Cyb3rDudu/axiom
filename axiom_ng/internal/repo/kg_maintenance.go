@@ -24,10 +24,11 @@ func kgHook(k kgMaintenanceHookKey) {
 }
 
 // kgProgressSink is the heartbeat sink for long-running mutating KG passes
-// (#202): the mutating CLIs wire their logger here so a supervised run (screen,
-// launchd agent) emits a one-line liveness signal while it works. nil (the
-// default) disables heartbeats — server/sync paths stay silent as before.
-// Same set-once-at-start discipline as kgMaintenanceTestHook.
+// (#202): the mutating CLI modes and the server's standing post-sync
+// consolidation wire their logger here so a supervised run (screen, launchd
+// agent) emits a one-line liveness signal while it works. nil (only when
+// nobody wired it — bare library use in tests) disables heartbeats. Same
+// set-once-at-start discipline as kgMaintenanceTestHook.
 var kgProgressSink func(format string, args ...any)
 
 // SetKGProgressLogger wires the KG heartbeat sink (CLI main passes its

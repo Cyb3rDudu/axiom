@@ -63,7 +63,7 @@ func (r *Repo) BindFlexionAliases(ctx context.Context) (EntityAliasReport, error
 	rep := EntityAliasReport{}
 	err := r.withKGMaintenanceTx(ctx, "kg_bind_flexion_aliases", func(tx pgx.Tx) error {
 		var e error
-		rep, e = r.bindByGrouperOn(ctx, tx, aliasStem, true)
+		rep, e = r.bindByGrouperOn(ctx, tx, "flexion aliases", aliasStem, true)
 		if e != nil {
 			return e
 		}
@@ -179,9 +179,7 @@ func entityAliasOn(ctx context.Context, db kgSQLRunner, apply bool) (EntityAlias
 	if !apply || len(todo) == 0 {
 		return rep, nil
 	}
-	hb := newKGHeartbeat("alias bindings", len(todo))
 	for i, b := range todo {
-		hb.beat(i+1, b.variant)
 		if _, err := db.Exec(ctx, `
 			UPDATE processing_entities e SET alias_of = $2::uuid
 			FROM processing_snapshots s
@@ -281,7 +279,7 @@ func (r *Repo) BindExactFormAliases(ctx context.Context) (EntityAliasReport, err
 	rep := EntityAliasReport{}
 	err := r.withKGMaintenanceTx(ctx, "kg_bind_exact_form_aliases", func(tx pgx.Tx) error {
 		var e error
-		rep, e = r.bindByGrouperOn(ctx, tx, func(form string) string {
+		rep, e = r.bindByGrouperOn(ctx, tx, "exact aliases", func(form string) string {
 			return form
 		}, true)
 		if e != nil {
@@ -302,7 +300,7 @@ func (r *Repo) BindExactFormAliasesDryRun(ctx context.Context) (EntityAliasRepor
 
 // bindByGrouperPool is the pool-based wrapper for dry-run paths.
 func (r *Repo) bindByGrouperPool(ctx context.Context, key func(string) string, apply bool) (EntityAliasReport, error) {
-	return r.bindByGrouperOn(ctx, r.pool, key, apply)
+	return r.bindByGrouperOn(ctx, r.pool, "alias bindings", key, apply)
 }
 
 // bindByGrouper is the shared binding engine: group entities by a key
@@ -322,7 +320,7 @@ func (r *Repo) bindByGrouperPool(ctx context.Context, key func(string) string, a
 //     typing pass promotes generics to CONCEPT, so a CONCEPT survivor
 //     can absorb an already-CONCEPT variant, and a null-type variant
 //     can join any family — the extractor leaves type empty often).
-func (r *Repo) bindByGrouperOn(ctx context.Context, db kgSQLRunner, key func(string) string, apply bool) (EntityAliasReport, error) {
+func (r *Repo) bindByGrouperOn(ctx context.Context, db kgSQLRunner, unit string, key func(string) string, apply bool) (EntityAliasReport, error) {
 	rep := EntityAliasReport{}
 	rows, err := db.Query(ctx, `
 		SELECT e.id::text, coalesce(e.canonical_form, e.text),
@@ -407,7 +405,7 @@ func (r *Repo) bindByGrouperOn(ctx context.Context, db kgSQLRunner, key func(str
 	if !apply {
 		return rep, nil
 	}
-	hb := newKGHeartbeat("alias bindings", len(todo))
+	hb := newKGHeartbeat(unit, len(todo))
 	for i, b := range todo {
 		hb.beat(i+1, b.variant)
 		if _, err := db.Exec(ctx, `

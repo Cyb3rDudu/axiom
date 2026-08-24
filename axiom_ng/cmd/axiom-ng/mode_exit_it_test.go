@@ -12,9 +12,13 @@ package main
 // a fresh port make the fall-through BIND instead of dying on the debug-port
 // refusal, so the witness catches the class, not the port guard.
 //
+// Run serialized (-p 1): the --apply matrix and the heartbeat seeding MUTATE
+// the shared base *_test DB, so parallel package runs would race each other.
+// CI already runs `go test -p 1 -count=1 ./...`.
+//
 // Run with:
 //   AXIOM_TEST_DATABASE_URL=postgresql://axiom_user:...@.../scratch_test?sslmode=disable \
-//   go test ./cmd/axiom-ng/ -run TestIT_ModeFlags -v
+//   go test -p 1 ./cmd/axiom-ng/ -run TestIT_ModeFlags -v
 import (
 	"context"
 	"fmt"
@@ -28,18 +32,116 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// seedHeartbeatPair inserts a merge-eligible duplicate entity pair (same
+// canonical form, one entity per ACTIVE snapshot; snapshots are unique per
+// attachment — schema 0011 — so the pair spans two attachments) through the
+// same minimal column set the repo ITs use, so the exec'd
+// `-consolidate-entities --apply` has real work and its heartbeat must
+// appear on the binary's stderr — the end-to-end proof that main wires the
+// CLI-mode sink (#202; the unit IT proves the loop beats, this proves the
+// wiring). Fixed keys + pre-clean keep reruns re-seedable on the shared DB.
+func seedHeartbeatPair(t *testing.T, dsn string) {
+	t.Helper()
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+	for _, stmt := range []string{
+		// Pre-clean (rerun-safety): fixed keys identify yesterday's pair.
+		`DELETE FROM processing_entities WHERE snapshot_id IN
+		   (SELECT id FROM processing_snapshots WHERE profile_hash = 'p-hb')`,
+		`DELETE FROM processing_snapshots WHERE profile_hash = 'p-hb'`,
+		`DELETE FROM zotero_attachments WHERE zotero_key IN ('ATTHB1', 'ATTHB2')`,
+		`DELETE FROM zotero_documents WHERE zotero_key = 'DOCHB'
+		   AND source_id IN (SELECT id FROM zotero_sources WHERE base_url = 'https://hb.test')`,
+		`DELETE FROM zotero_sources WHERE base_url = 'https://hb.test'`,
+		// Fixture: one source, one document, two attachments.
+		`INSERT INTO zotero_sources (base_url, library_id, server_id)
+		   VALUES ('https://hb.test', 'lib-hb', 'srv-hb')`,
+		`INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
+		   SELECT s.id, 'DOCHB', 1, 'book', 'HB' FROM zotero_sources s
+		   WHERE s.base_url = 'https://hb.test'`,
+		`INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+		     parent_zotero_key, link_mode, content_type, filename, content_hash, preferred, deleted)
+		   SELECT s.id, d.id, k, 1, k, 'imported_file', 'application/pdf', 'hb.pdf', 'hb-hash', true, false
+		   FROM zotero_sources s
+		   JOIN zotero_documents d ON d.source_id = s.id AND d.zotero_key = 'DOCHB'
+		   CROSS JOIN (SELECT unnest(ARRAY['ATTHB1','ATTHB2']) AS k) x
+		   WHERE s.base_url = 'https://hb.test'`,
+		// One ACTIVE snapshot per attachment (0011 constraint), same profile.
+		`INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name,
+		     processor_version, profile_hash, document_id, profile, active)
+		   SELECT a.id, 'hb-hash', 'hbtest', '1', 'p-hb', a.document_id, '{}', true
+		   FROM zotero_attachments a WHERE a.zotero_key IN ('ATTHB1','ATTHB2')`,
+		// Same canonical form in both snapshots -> one guarded merge group.
+		`INSERT INTO processing_entities (snapshot_id, ref, text, canonical_form, type)
+		   SELECT s.id, 'hb-ent', 'herzschlag', 'herzschlag', 'LOCATION'
+		   FROM processing_snapshots s WHERE s.profile_hash = 'p-hb'`,
+	} {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("seed heartbeat fixture: %v\n%s", err, stmt)
+		}
+	}
+}
+
+// runMode execs the built binary with args and the guarded env; it fails the
+// test on fall-through (deadline + "listening on"), on non-zero exit, and on
+// the server boot's log line, returning the combined output on success.
+func runMode(t *testing.T, bin, dsn string, args ...string) string {
+	t.Helper()
+	// Fresh port: a fall-through binds HERE and blocks instead of failing on
+	// a busy/refused port.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	runCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	c := exec.CommandContext(runCtx, bin, args...)
+	c.Env = append(os.Environ(),
+		"AXIOM_DATABASE_URL="+dsn,
+		"AXIOM_ALLOW_DEBUG_BIND=1",
+		fmt.Sprintf("AXIOM_API_PORT=%d", port),
+	)
+	out, err := c.CombinedOutput()
+	if runCtx.Err() == context.DeadlineExceeded {
+		// Attribute the deadline honestly (#202 review): a fall-through is
+		// provable by output; a merely slow apply otherwise.
+		if strings.Contains(string(out), "listening on") {
+			t.Fatalf("%s fell through to the server boot and was killed at the deadline (#202 incident class)\n%s",
+				strings.Join(args, " "), out)
+		}
+		t.Fatalf("%s did not terminate within 60s (slow apply? no server-boot line in output)\n%s",
+			strings.Join(args, " "), out)
+	}
+	if err != nil {
+		t.Fatalf("%s exited with error: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	if strings.Contains(string(out), "listening on") {
+		t.Fatalf("%s reached the server boot (must run once and exit)\n%s", strings.Join(args, " "), out)
+	}
+	return string(out)
+}
+
 // TestIT_ModeFlagsExitWithoutServerBoot execs the built binary once per mode
-// flag (dry-run where the mode supports it) and asserts: exit code 0, no
-// "listening on" in the output, termination well inside the deadline.
+// flag in BOTH invocation shapes (dry-run and --apply; -repoint-alias-edges
+// has no dry gate) and asserts: exit code 0, no "listening on", termination
+// inside the deadline.
 func TestIT_ModeFlagsExitWithoutServerBoot(t *testing.T) {
 	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping mode-exit integration test")
 	}
 	// Same hard guard as the repo suites: never point this at a non-test DB —
-	// -repoint-alias-edges mutates.
+	// the --apply matrix and the heartbeat seeding mutate.
 	if u, err := url.Parse(dsn); err != nil || !strings.HasSuffix(u.Path, "_test") {
 		t.Fatalf("refusing to run against non-test database %q (must end in _test)", dsn)
 	}
@@ -81,34 +183,125 @@ func TestIT_ModeFlagsExitWithoutServerBoot(t *testing.T) {
 		for _, args := range invocations {
 			name := strings.Join(args, " ")
 			t.Run(name, func(t *testing.T) {
-				// Fresh port: a fall-through binds HERE and blocks instead of
-				// failing on a busy/refused port.
-				ln, err := net.Listen("tcp", "127.0.0.1:0")
-				if err != nil {
-					t.Fatalf("reserve port: %v", err)
-				}
-				port := ln.Addr().(*net.TCPAddr).Port
-				ln.Close()
-
-				runCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-				defer cancel()
-				c := exec.CommandContext(runCtx, bin, args...)
-				c.Env = append(os.Environ(),
-					"AXIOM_DATABASE_URL="+dsn,
-					"AXIOM_ALLOW_DEBUG_BIND=1",
-					fmt.Sprintf("AXIOM_API_PORT=%d", port),
-				)
-				out, err := c.CombinedOutput()
-				if runCtx.Err() == context.DeadlineExceeded {
-					t.Fatalf("%s did not terminate within 60s — it fell through to the server boot (#202 incident class)\n%s", name, out)
-				}
-				if err != nil {
-					t.Fatalf("%s exited with error: %v\n%s", name, err, out)
-				}
-				if strings.Contains(string(out), "listening on") {
-					t.Fatalf("%s reached the server boot (must run once and exit)\n%s", name, out)
-				}
+				runMode(t, bin, dsn, args...)
 			})
+		}
+	}
+}
+
+// TestIT_ModeFlagsHeartbeatOnExec (#202 wiring witness): with a seeded
+// merge-eligible pair, the exec'd `-consolidate-entities --apply` must emit a
+// heartbeat line on its stderr — proving main wires the CLI-mode sink (the
+// server-path wiring alone would leave CLI modes silent, the exact gap the
+// review round found).
+func TestIT_ModeFlagsHeartbeatOnExec(t *testing.T) {
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping mode-exit integration test")
+	}
+	if u, err := url.Parse(dsn); err != nil || !strings.HasSuffix(u.Path, "_test") {
+		t.Fatalf("refusing to run against non-test database %q (must end in _test)", dsn)
+	}
+	ctx := context.Background()
+	d, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	d.Close()
+	seedHeartbeatPair(t, dsn)
+
+	bin := filepath.Join(t.TempDir(), "axiom-ng")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build binary: %v\n%s", err, out)
+	}
+
+	out := runMode(t, bin, dsn, "-consolidate-entities", "--apply")
+	if !strings.Contains(out, "kg heartbeat:") {
+		t.Fatalf("expected a heartbeat line on the exec'd mode's output (sink must be wired in the CLI-mode path)\n%s", out)
+	}
+	// The heartbeat's position marker is the loser entity id prefix — the
+	// seeded pair guarantees exactly one loser.
+	if !strings.Contains(out, "entities 1/1") {
+		t.Fatalf("heartbeat must report the seeded merge (entities 1/1)\n%s", out)
+	}
+}
+
+// TestIT_ModeFailExitCodeAndConsistencyStatement (#202 exit-1 probe): a
+// broken schema (the consolidation target table gone) makes the apply mode
+// exit 1 with the documented MODE FAILED line carrying the
+// state-consistency statement.
+func TestIT_ModeFailExitCodeAndConsistencyStatement(t *testing.T) {
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping mode-exit integration test")
+	}
+	if u, err := url.Parse(dsn); err != nil || !strings.HasSuffix(u.Path, "_test") {
+		t.Fatalf("refusing to run against non-test database %q (must end in _test)", dsn)
+	}
+	ctx := context.Background()
+	d, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	pool := d.Pool()
+	// Break the consolidation plan losslessly restorable: entityConsolidationPairs
+	// selects coalesce(canonical_form, text), so a missing column fails the
+	// apply into modeFail. Dropping the whole table would CASCADE into
+	// dependent tables that the migration ledger (already-applied files are
+	// skipped) would never recreate — a column drop/add is the narrow probe.
+	if _, err := pool.Exec(ctx, `ALTER TABLE processing_entities DROP COLUMN canonical_form`); err != nil {
+		t.Fatalf("break schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(),
+			`ALTER TABLE processing_entities ADD COLUMN IF NOT EXISTS canonical_form TEXT`); err != nil {
+			t.Fatalf("restore schema: %v", err)
+		}
+		d.Close()
+	})
+
+	bin := filepath.Join(t.TempDir(), "axiom-ng")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build binary: %v\n%s", err, out)
+	}
+
+	c := exec.Command(bin, "-consolidate-entities", "--apply")
+	c.Env = append(os.Environ(), "AXIOM_DATABASE_URL="+dsn, "AXIOM_ALLOW_DEBUG_BIND=1", "AXIOM_API_PORT=8099")
+	out, err := c.CombinedOutput()
+	if err == nil {
+		t.Fatalf("mode must exit non-zero on a broken schema; got exit 0\n%s", out)
+	}
+	if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 1 {
+		t.Fatalf("exit code = %v, want 1\n%s", err, out)
+	}
+	for _, want := range []string{"MODE FAILED (exit 1)", "state consistent (transaction rolled back"} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("output missing %q\n%s", want, out)
+		}
+	}
+}
+
+// TestIT_HelpDocumentsExitCodes (#202): -help exits 0 and documents the
+// mode/exit-code contract. No DB work — pure arg handling.
+func TestIT_HelpDocumentsExitCodes(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "axiom-ng")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build binary: %v\n%s", err, out)
+	}
+	c := exec.Command(bin, "-help")
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("-help exited with error: %v\n%s", err, out)
+	}
+	for _, want := range []string{"Exit codes:", "never falls through"} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("-help output missing %q\n%s", want, out)
 		}
 	}
 }
