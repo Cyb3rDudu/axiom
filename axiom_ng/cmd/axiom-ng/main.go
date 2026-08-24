@@ -300,6 +300,13 @@ func main() {
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// #214: carries a fatal dispatcher error (startup capability negotiation
+	// still failing after the retry window) to the main select, which must exit
+	// non-zero so launchd/KeepAlive restarts the process instead of leaving a
+	// living process with a dead claim loop. Buffered: the dispatcher goroutine
+	// never blocks on it.
+	dispErrCh := make(chan error, 1)
+
 	if database != nil {
 		srv.RegisterCheck("postgres", server.CheckDB(database.Pool()))
 		// Wire the sync service and ingest-job listing into the API.
@@ -417,9 +424,17 @@ func main() {
 				ProcessorSourceBaseURL: cfg.ProcessorSourceBaseURL,
 				ProcessorSourceSecret:  cfg.ProcessorSourceSecret,
 			}, logger)
+			// #214: a fatal dispatcher error (capability negotiation still failing
+			// after the startup retry window) must exit the process non-zero so
+			// launchd/KeepAlive restarts it. Before the fix the loop died while
+			// the process stayed "running" (exit 0) — jobs pending forever with
+			// no crash. A graceful shutdown (sigCtx cancelled) returns nil and
+			// never lands here, so the select below treats it as a restorable
+			// process exit.
 			go func() {
 				if err := disp.Run(sigCtx); err != nil {
 					logger.Printf("dispatcher stopped: %v", err)
+					dispErrCh <- err
 				}
 			}()
 		}
@@ -444,6 +459,12 @@ func main() {
 		if err != nil && err != http.ErrServerClosed {
 			logger.Fatalf("http server: %v", err)
 		}
+	case err := <-dispErrCh:
+		// #214: the runner stayed unreachable through MaxStartupWait. Exit
+		// non-zero (FATAL) so the supervisor restarts the process cleanly when
+		// the runner finally boots — before the fix the process survived with a
+		// dead claim loop and enqueued jobs stayed pending forever.
+		logger.Fatalf("dispatcher fatal: process must restart when the runner is available: %v", err)
 	}
 
 	// Cancel a still-debounced consolidation hook BEFORE the drain — the

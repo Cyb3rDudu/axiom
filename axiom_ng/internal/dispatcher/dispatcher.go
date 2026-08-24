@@ -8,6 +8,7 @@ package dispatcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -44,6 +45,15 @@ type Config struct {
 	// AckRetryInterval is how often the separate ack-retry pass looks for
 	// completed jobs with a pending acknowledgement.
 	AckRetryInterval time.Duration
+	// StartupRetryInterval is how long to wait between capability-negotiation
+	// attempts at start while the processor is unreachable (#214). Leaving it
+	// zero defaults it (5s).
+	StartupRetryInterval time.Duration
+	// MaxStartupWait caps how long the dispatcher retries capability
+	// negotiation before giving up. A processor that stays unreachable past
+	// this window is fatal (#214): Run returns the error and main must exit
+	// non-zero so the supervisor restarts the process.
+	MaxStartupWait time.Duration
 	// Profile is the processing profile to freeze at claim time.
 	Profile json.RawMessage
 	// ArtifactRoot is the durable derived-artifact root (AXIOM_ARTIFACT_ROOT).
@@ -132,6 +142,12 @@ func NewWithPersister(rep *repo.Repo, client processorClient, persist ResultPers
 	if cfg.AckRetryInterval <= 0 {
 		cfg.AckRetryInterval = 30 * time.Second
 	}
+	if cfg.StartupRetryInterval <= 0 {
+		cfg.StartupRetryInterval = 5 * time.Second
+	}
+	if cfg.MaxStartupWait <= 0 {
+		cfg.MaxStartupWait = 2 * time.Minute
+	}
 	if logger == nil {
 		logger = log.New(log.Writer(), "axiom-ng: dispatcher: ", log.LstdFlags)
 	}
@@ -156,9 +172,22 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	} else {
 		d.logger.Printf("outbox drainer disabled (AXIOM_OPENSEARCH_URL empty); outbox rows stay pending")
 	}
-	caps, err := d.client.Capabilities(ctx)
+	// #214: capability negotiation MUST NOT be fatal while the processor is
+	// simply not up yet — a rolling restart starts the Dispatcher before the
+	// runner finishes booting, and a one-shot fail left the process alive
+	// (exit 0) with a dead claim loop: jobs pending forever with no crash or
+	// log. Retry with backoff until a candidate is reachable or MaxStartupWait
+	// elapses; only then is the still-unreachable processor fatal (the caller
+	// must surface that as a non-zero process exit so the supervisor restarts
+	// the whole process).
+	caps, err := d.negotiateCapabilities(ctx)
 	if err != nil {
-		d.logger.Printf("capability negotiation failed: %v", err)
+		// A shutdown that lands during the startup retry window is graceful
+		// (exit 0), not a fatal runner outage — the supervisor must not see a
+		// non-zero exit for an operator-initiated stop.
+		if ctx.Err() != nil {
+			return nil
+		}
 		return fmt.Errorf("negotiate capabilities: %w", err)
 	}
 	if !supportsContract(caps) {
@@ -180,6 +209,50 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	}
 	wg.Wait()
 	return nil
+}
+
+// negotiateCapabilities retries capability negotiation with backoff until a
+// candidate is reachable, the context is cancelled, or MaxStartupWait elapses
+// (#214). Transport-level failures (connection refused while a runner boots)
+// are retried; a contract rejection (a candidate answers but does not speak
+// contract v1) is not transient and fails immediately like the negotiation on
+// a reachable-but-wrong processor would.
+func (d *Dispatcher) negotiateCapabilities(ctx context.Context) (*processor.Capabilities, error) {
+	deadline := time.Now().Add(d.cfg.MaxStartupWait)
+	for attempts := 1; ; attempts++ {
+		// Bound each attempt to the retry cadence so a runner that accepts a TCP
+		// connection but never answers cannot hang a single attempt past the
+		// overall window (a bare unstarted socket blocks in the connect handshake
+		// rather than refusing).
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, d.cfg.StartupRetryInterval)
+		caps, err := d.client.Capabilities(attemptCtx)
+		attemptCancel()
+		if err == nil {
+			if attempts > 1 {
+				d.logger.Printf("capability negotiation succeeded after %d attempt(s)", attempts)
+			}
+			return caps, nil
+		}
+		// A shutdown that arrives mid-attempt is graceful, not a runner outage.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		// The per-attempt timeout surfaces as ErrCancelled even though the
+		// processor simply isn't answering yet — that is retryable. Only a hard
+		// error (a reachable candidate rejects the request outright) is
+		// non-transient.
+		if !processor.FailoverClass(err) && !errors.Is(err, processor.ErrCancelled) {
+			return nil, err
+		}
+		if !time.Now().Before(deadline) {
+			d.logger.Printf("capability negotiation failed after %d attempt(s) over %s: %v", attempts, d.cfg.MaxStartupWait, err)
+			return nil, err
+		}
+		d.logger.Printf("capability negotiation attempt %d failed (processor not up yet): %v; retrying in %s", attempts, err, d.cfg.StartupRetryInterval)
+		if !waitFor(ctx, d.cfg.StartupRetryInterval) {
+			return nil, ctx.Err()
+		}
+	}
 }
 
 // supportsContract reports whether any advertised contract version is a v1-minor

@@ -202,7 +202,17 @@ func newFakeProcessor(t *testing.T) *fakeProcessor {
 	return fp
 }
 
-func (fp *fakeProcessor) url() string { return fp.srv.URL }
+// url returns the server's base URL. httptest.NewUnstartedServer leaves URL
+// empty until Start(), but its listener addr is fixed at construction — derive
+// a usable URL from it so a dispatcher can be built against the not-yet-serving
+// port (the #214 startup-retry regression starts the loop while the runner is
+// down and brings it up later).
+func (fp *fakeProcessor) url() string {
+	if fp.srv.URL != "" {
+		return fp.srv.URL
+	}
+	return "http://" + fp.srv.Listener.Addr().String()
+}
 
 func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -1021,5 +1031,119 @@ func TestArtifactsExpiredSubmitIsTerminal(t *testing.T) {
 	}
 	if fp.processHits != 1 {
 		t.Fatalf("process hits = %d, want exactly 1 (terminal, no retry hammering)", fp.processHits)
+	}
+}
+
+// TestStartupRetriesUntilRunnerReachable (#214 regression): the dispatcher
+// starts while the runner is unreachable (connection refused) — a rolling
+// restart boots the dispatcher before the conda-pack runner finishes — and
+// must NOT die. It retries capability negotiation with backoff until the runner
+// comes up, then claims and completes a job. Before the fix the one-shot
+// negotiation failed, Run returned, and the claim loop was dead forever while
+// the process stayed alive with exit 0.
+//
+// The runner is an UNSTARTED httptest server: its port is bound (known) but
+// connections are refused until Start() — the exact "processor not up yet"
+// shape from the incident.
+func TestStartupRetriesUntilRunnerReachable(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "S1", 3)
+
+	fp := &fakeProcessor{statuses: []string{"running", "running", "completed"}}
+	fp.result = `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed"}`
+	// Port is bound but nothing serves until Start() — connections refused.
+	fp.srv = httptest.NewUnstartedServer(http.HandlerFunc(fp.serve))
+	t.Cleanup(fp.srv.Close)
+
+	// Fast retry cadence for the test; defaults (5s / 2min) are the production
+	// values wired by NewWithPersister.
+	d := newDispatcher(t, h, fp, Config{
+		StartupRetryInterval: 50 * time.Millisecond,
+		MaxStartupWait:       10 * time.Second,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	var runErr error
+	go func() { runErr = d.Run(ctx); close(done) }()
+
+	// The first negotiation attempts must fail (runner down) without killing
+	// the loop; give it a couple of retry cycles before bringing the runner up.
+	time.Sleep(200 * time.Millisecond)
+	fp.srv.Start()
+
+	// The dispatcher survives the outage and drives the seeded job to completion.
+	h.waitForStatus(t, jobID, "completed", 10*time.Second)
+	if fp.processHits != 1 {
+		t.Fatalf("process hits = %d, want 1 (job claimed+submitted after runner came up)", fp.processHits)
+	}
+	cancel()
+	<-done
+	if runErr != nil {
+		t.Fatalf("Run returned an error after the runner came up (must keep looping): %v", runErr)
+	}
+}
+
+// TestStartupFailsFatalWhenRunnerStaysDown (#214): if the runner stays
+// unreachable through MaxStartupWait, Run must return a non-nil error so the
+// caller (main) can exit non-zero and let the supervisor restart — never the
+// old silent "process alive, loop dead" state.
+func TestStartupFailsFatalWhenRunnerStaysDown(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "S2", 3)
+	_ = jobID // the job is seeded but must never be reached while the runner is down
+
+	fp := &fakeProcessor{statuses: []string{"running", "completed"}}
+	fp.srv = httptest.NewUnstartedServer(http.HandlerFunc(fp.serve))
+	t.Cleanup(fp.srv.Close)
+
+	d := newDispatcher(t, h, fp, Config{
+		StartupRetryInterval: 10 * time.Millisecond,
+		MaxStartupWait:       150 * time.Millisecond,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := d.Run(ctx) // synchronous: proves Run returns instead of hanging forever
+	if err == nil {
+		t.Fatal("Run returned nil although the runner stayed down through MaxStartupWait; must be a fatal (non-zero) error")
+	}
+	// The seeded job must still be pending — the dispatcher never claimed it.
+	if got := h.jobStatus(t, jobID); got != "pending" {
+		t.Fatalf("status = %q, want pending (no claim while negotiation fatally failed)", got)
+	}
+}
+
+// TestStartupRetryIsGracefulOnShutdown (#214): a shutdown that lands during the
+// startup retry window must exit cleanly (nil) — an operator-initiated stop must
+// never surface as a fatal dispatcher error / non-zero exit.
+func TestStartupRetryIsGracefulOnShutdown(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	_ = h.seedJob(t, "S3", 3)
+
+	fp := &fakeProcessor{}
+	fp.srv = httptest.NewUnstartedServer(http.HandlerFunc(fp.serve))
+	t.Cleanup(fp.srv.Close)
+
+	d := newDispatcher(t, h, fp, Config{
+		StartupRetryInterval: 1 * time.Hour, // never succeeds; simulates a never-booting runner
+		MaxStartupWait:       1 * time.Hour,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var runErr error
+	go func() { runErr = d.Run(ctx); close(done) }()
+
+	// Cancel mid-retry and assert a clean (nil) exit, not a fatal error.
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not exit after cancel during startup retry")
+	}
+	if runErr != nil {
+		t.Fatalf("Run returned %v on graceful shutdown; want nil (clean exit)", runErr)
 	}
 }

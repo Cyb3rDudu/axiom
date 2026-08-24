@@ -70,6 +70,13 @@ Conventions in `deploy/launchd/README.md`: env-file sourcing via `sh -c`
 wrapper, runner exec'd as `env/bin/python -m axiom_ng_runner` (conda-pack
 shebang ceiling).
 
+**Restart order is runner → rag → dispatchers.** A rolling restart must bring
+up the runner (8012) before the dispatchers (8013–8015): a dispatcher that
+starts before the runner boots now retries capability negotiation with backoff
+(#214) and only exits non-zero if the runner stays unreachable past the ~2min
+window — so the wrong order is survivable, but `launchctl kickstart -k` of the
+runner first, then the rag, then the dispatchers is the clean sequence.
+
 ## Fixer: event runner (owner decision)
 
 One process per Zotero attachment key, invoked via the tested wrapper
