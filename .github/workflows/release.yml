@@ -42,7 +42,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          args=(--generate-notes --verify-tag)
+          # Commit-based changelog: this repo merges branches directly (no
+          # PRs), so GitHub's --generate-notes finds nothing to list.
+          PREV=$(git tag -l 'v*' --sort=-v:refname | sed -n '2p')
+          {
+            echo "## What's Changed"
+            echo
+            git log --format='- %s' "$PREV..HEAD" | grep -E '^- (feat|add)' || true
+            git log --format='- %s' "$PREV..HEAD" | grep -E '^- fix' || true
+            git log --format='- %s' "$PREV..HEAD" | grep -vE '^- (feat|fix|add)' || true
+            echo
+            echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${GITHUB_REF_NAME}"
+          } > /tmp/release-notes.md
+          args=(--verify-tag --notes-file /tmp/release-notes.md)
           # dist/axiom-ng-* would double-list the .sha256 sidecars already
           # covered by dist/*.sha256 — gh rejects duplicate asset names (422)
           assets=(dist/*.tar.zst dist/*.sha256)
