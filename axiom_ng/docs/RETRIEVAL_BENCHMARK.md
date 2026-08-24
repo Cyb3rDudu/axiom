@@ -209,7 +209,11 @@ das Problem).
 
 Der Reranker erhält für die oben-RRF-groben Kandidaten statt des Ganz-Chunks
 seine 2 Fenster-Hälften; ein Kandidat wird mit dem **MAX seiner Fenster-Scores**
-bewertet. Begrenzung (Responsiveness): nur die
+bewertet. Der Split der top-4 (RRF) Kandidaten ist von der Kandidatenzahl
+Entkoppelt (gilt auch für fetchN > 32 / top_n ≥ 11 — früher kippte die
+`maxCandidates/n`-Arithmetik den Split lautlos ab); nur das 64-Text-Limit
+(`rerank_max_texts`) kann binden, und dann wird der RRF-Schwanz gekappt
+(loggen im search-Log), nie der top-Split. Begrenzung (Responsiveness): nur die
 **top-4 (RRF) groben** Kandidaten werden gesplittet (`maxSplitCandidates=4`,
 `minRerankSplitChars=1100`, `maxRerankTexts`-Cap = 64 bleibt gültig). Kurze,
 einfach-thematische Chunks bleiben ganz (kein Latenzoverhead für sie).

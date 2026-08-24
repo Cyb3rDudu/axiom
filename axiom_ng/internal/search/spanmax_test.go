@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -73,5 +74,70 @@ func TestSearch_SpanMaxRerankSurfacesCoarseGold(t *testing.T) {
 		// Without span-max the gold's whole-chunk score is 0.1 -> it ranks
 		// below a/c/d. Surfacing to rank 1 is the regression pin.
 		t.Fatalf("span-max must surface the coarse gold to rank 1, got %s", orderOf(res))
+	}
+}
+
+// TestSearch_SpanMaxSplitSurvivesLargeFetchN pins the #200-cliff fix: spanWindow
+// must split the top coarse candidates REGARDLESS of how many candidates there
+// are. The early k = maxCandidates/n arithmetic silently collapsed the split to
+// whole once fetchN exceeded 32 (top_n >= 11), turning the fix off outside the
+// bench config. Now the split is decoupled from n; only the 64-text runner cap
+// may bind, and then by trimming the weakest RRF tail, never the top-split.
+func TestSearch_SpanMaxSplitSurvivesLargeFetchN(t *testing.T) {
+	for _, n := range []int{60, 64} { // fetchN>32: top_n>=20
+		cands := make([]osCandidate, 0, n)
+		for i := 0; i < n; i++ {
+			text := "short whole candidate"
+			if i < maxSplitCandidates { // top-4 coarse: the #200 target shape
+				text = strings.Repeat("gross incoherent chunk viele themen filler satz ", 170)
+			}
+			cands = append(cands, osCandidate{ID: fmt.Sprintf("c%d", i), Text: text})
+		}
+		spans, owners, rep := spanWindow(cands)
+		if len(spans) > maxCandidates {
+			t.Fatalf("n=%d: %d spans exceed rerank cap %d", n, len(spans), maxCandidates)
+		}
+		if len(spans) < maxSplitCandidates*2 {
+			t.Fatalf("n=%d: split vanished (got %d spans); the top-%d coarse candidates must stay split at large fetchN",
+				n, len(spans), maxSplitCandidates)
+		}
+		// Discriminating: with the top-%d coarse split, spans = n + %d (capped
+		// at maxCandidates), and nothing may be trimmed below n=61. A
+		// reintroduced cliff (all whole) would yield n spans and rep=n instead.
+		expSpans := min(n+maxSplitCandidates, maxCandidates)
+		expRep := n
+		if n > maxCandidates-maxSplitCandidates {
+			expRep = maxCandidates - maxSplitCandidates
+		}
+		if len(spans) != expSpans || rep != expRep {
+			t.Fatalf("n=%d: spans=%d rep=%d, want spans=%d rep=%d (fixed allocation must hold)",
+				n, len(spans), rep, expSpans, expRep)
+		}
+		if len(spans) != len(owners) {
+			t.Fatalf("n=%d: spans/owners length mismatch", n)
+		}
+		if n > 60 && rep < maxSplitCandidates {
+			t.Fatalf("n=%d: represented=%d dropped a split candidate", n, rep)
+		}
+	}
+	// Cap enforcement: with n=64 all coarse-top split, the tail (weakest whole
+	// candidates) is trimmed, the split survives, and spans == maxCandidates.
+	cands := make([]osCandidate, 0, 64)
+	for i := 0; i < 64; i++ {
+		text := strings.Repeat("kurz ganzer kandidat ", 3)
+		if i < maxSplitCandidates {
+			text = strings.Repeat("gross incoherent chunk viele themen filler ", 180)
+		}
+		cands = append(cands, osCandidate{ID: fmt.Sprintf("d%d", i), Text: text})
+	}
+	spans, owners, rep := spanWindow(cands)
+	if len(spans) != maxCandidates {
+		t.Fatalf("cap: got %d spans, want exactly %d (split preserved, tail trimmed)", len(spans), maxCandidates)
+	}
+	if rep != maxCandidates-maxSplitCandidates {
+		t.Fatalf("cap: represented=%d, want %d (weakest whole candidates dropped)", rep, maxCandidates-maxSplitCandidates)
+	}
+	if len(spans) != len(owners) {
+		t.Fatalf("cap: spans/owners mismatch")
 	}
 }

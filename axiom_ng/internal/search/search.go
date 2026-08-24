@@ -380,12 +380,22 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		// worst even though the sentence is a direct answer (z2/z7 evidence).
 		// Splitting surfaces the answer sentence; taking the max per candidate
 		// keeps the reranker's precision benefit on clearly-relevant chunks.
-		spans, owners := spanWindow(candidates)
+		spans, owners, represented := spanWindow(candidates)
 		scores, err := s.processor.Rerank(ctx, req.Query, spans, len(spans))
 		if err != nil {
 			s.log.Printf("search: rerank failed, serving RRF order: %v", err)
 			resp.Reranked = false
 		} else {
+			if represented < len(candidates) {
+				// The rerank-text cap (rerank_max_texts) forced the weakest RRF
+				// candidates out entirely. Drop them from the pool so the span-max
+				// ranking still covers every candidate it scores — never sacrifice
+				// the top-split (#200). Say it out loud; a silent shrink is the
+				// next cliff. Only on the rerank-success path: on failure the RRF
+				// fallback keeps the full pool (strict fallback parity).
+				s.log.Printf("search: rerank cap: dropping %d weakest RRF candidates (maxCandidates=%d)", len(candidates)-represented, maxCandidates)
+				candidates = candidates[:represented]
+			}
 			resp.Reranked = applyRerankMax(candidates, scores, owners)
 		}
 	}
@@ -495,39 +505,56 @@ const minRerankSplitChars = 1100
 const maxSplitCandidates = 4
 
 // spanWindow splits each candidate's text into up to two window-spans (the
-// coarse-chunk halves #200 targets) and returns the
-// flattened spans plus, for each span, the index of the candidate it belongs
-// to. Only the highest-RRF, coarse chunks split; everything else goes whole.
-// Total spans never exceed maxCandidates (the runner's hard cap
-// rerank_max_texts, same 64 bound as the fetch window).
-func spanWindow(candidates []osCandidate) (spans []string, owners []int) {
+// coarse-chunk halves #200 targets) and returns the flattened spans plus, for
+// each span, the index of the candidate it belongs to, plus the number of
+// candidates actually represented (represented < len(candidates) iff the
+// rerank-text cap forced the RRF tail out).
+//
+// The top maxSplitCandidates RRF candidates are split when coarse REGARDLESS
+// of how many candidates there are — the earlier k = maxCandidates/n
+// arithmetic silently collapsed the split to whole once fetchN exceeded 32
+// (top_n >= 11), switching the #200 fix off outside the bench config. Splitting
+// is now decoupled from n; only the 64-text runner cap (rerank_max_texts) can
+// bound it, and then by trimming the weakest RRF candidates, never the
+// top-split.
+func spanWindow(candidates []osCandidate) (spans []string, owners []int, represented int) {
 	n := len(candidates)
 	if n == 0 {
-		return nil, nil
+		return nil, nil, 0
 	}
-	k := maxCandidates / n
-	if k < 1 {
-		k = 1
-	}
-	if k > 2 {
-		k = 2 // two windows: the coarse-chunk fix that #200 measured
-	}
-	spans = make([]string, 0, n*k)
-	owners = make([]int, 0, n*k)
-	for i, c := range candidates { // candidates are RRF-ordered at this point
-		per := 1
-		// Only the highest-RRF, coarse candidates split; short chunks and
-		// long-tail candidates stay whole (latency + a single-topic chunk
-		// is already fully scored by the cross-encoder whole).
-		if i < maxSplitCandidates && len(c.Text) > minRerankSplitChars {
-			per = k
+	// Per-candidate span count: top coarse candidates split into two windows
+	// (the #200 fix); everything else is judged whole.
+	spansPerCand := make([]int, n)
+	for i := range candidates {
+		spansPerCand[i] = 1
+		if i < maxSplitCandidates && len(candidates[i].Text) > minRerankSplitChars {
+			spansPerCand[i] = 2
 		}
-		for _, span := range splitSpans(c.Text, per) {
-			spans = append(spans, span)
+	}
+	// Runner cap (rerank_max_texts = maxCandidates = 64): if the total span
+	// count exceeds it, drop the RRF tail (weakest whole candidates, always at
+	// the end — splits live in the front) until it fits. Never drop a split
+	// candidate: the fix must survive large fetchN.
+	nKeep := n
+	for {
+		total := 0
+		for i := 0; i < nKeep; i++ {
+			total += spansPerCand[i]
+		}
+		if total <= maxCandidates {
+			break
+		}
+		nKeep--
+	}
+	spans = make([]string, 0, nKeep*2)
+	owners = make([]int, 0, nKeep*2)
+	for i := 0; i < nKeep; i++ {
+		for _, sp := range splitSpans(candidates[i].Text, spansPerCand[i]) {
+			spans = append(spans, sp)
 			owners = append(owners, i)
 		}
 	}
-	return spans, owners
+	return spans, owners, nKeep
 }
 
 // splitSpans cuts text into k roughly-equal contiguous pieces at whitespace
