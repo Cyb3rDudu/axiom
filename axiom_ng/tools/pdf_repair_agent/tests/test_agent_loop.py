@@ -350,3 +350,88 @@ def test_system_header_lists_all_tools():
     header = system_header()
     for name in TOOL_HELP:
         assert name in header
+
+
+# ------------------------------------------------ Stufe-2 Zeit-Budget (#203) ----
+
+
+def test_time_budget_terminates_mid_run():
+    """Stufe-2 (#203): ein Wall-clock-Zeitbudget beendet den Lauf kontrolliert
+    (reason=time-budget), auch wenn das Operationsbudget nicht erschöpft ist.
+    MockClient mit delay treibt die Echtzeit; die Schleife stoppt deterministisch."""
+    ok = _ok_handler  # reuse the module handler (ruff-clean, no lambda)
+    client = MockClient(['{"action": "probe"}'] * 99, delay=0.05)
+    res = _run(
+        client,
+        registry=ToolRegistry(handlers={"probe": ok}),
+        budget_max_seconds=0.12,
+        budget_max_ops=99,
+    )
+    assert res.reason == "time-budget"
+    assert res.final_step["action"] == "stop"
+    assert "Zeitbudget" in res.final_step["reason"]
+    # ops ist NICHT das auslösende Budget — die while-Schleife hätte länger
+    # gelaufen, wäre es nur ops-begrenzt gewesen.
+    assert res.ops_used < 99
+
+
+def test_time_budget_zero_is_disabled():
+    """budget_max_seconds=0 (Default) deaktiviert das Zeitbudget — der Lauf
+    endet über ops-budget bzw. halt, nie über Zeit."""
+    ok = _ok_handler  # reuse the module handler (ruff-clean, no lambda)
+    # Delay würde das Zeitbudget reißen, aber es ist aus (0): ops-budget greift.
+    client = MockClient(['{"action": "probe"}'] * 30, delay=0.02)
+    res = _run(
+        client,
+        registry=ToolRegistry(handlers={"probe": ok}),
+        budget_max_seconds=0,
+        budget_max_ops=2,
+    )
+    assert res.reason == "budget"
+    assert res.ops_used == 3  # Stopp ein Op nach dem Limit
+
+
+def test_time_budget_hit_after_slow_client_call():
+    """Ein träger Model-Call (delay überschreitet die Restzeit) wird nach dem
+    Call am nächsten _time_up() abgefangen — nie in einem langen offenen Call
+    hängend, sondern als kontrollierter time-budget-Abbruch."""
+    ok = _ok_handler  # reuse the module handler (ruff-clean, no lambda)
+    # 0.1s Delay pro Call; Budget 0.15s → der 2. Call überschreitet schon die
+    # Restzeit; Abbruch passiert gleich, ops bleibt klein.
+    client = MockClient(['{"action": "probe"}'] * 50, delay=0.1)
+    res = _run(
+        client,
+        registry=ToolRegistry(handlers={"probe": ok}),
+        budget_max_seconds=0.15,
+        budget_max_ops=50,
+    )
+    assert res.reason == "time-budget"
+    assert res.ops_used <= 4
+
+
+def test_time_budget_reason_not_written_to_history_of_dispatched_steps():
+    """Abbruch wegen Zeitbudget landet NICHT als dispatchter step in der
+    Audit-Spur (history/results ≈ die wirklich ausgeführten steps, wie beim
+    ops-Budget) — die while-Schleife bricht vor dem nächsten Dispatch ab."""
+    ok = _ok_handler  # reuse the module handler (ruff-clean, no lambda)
+    client = MockClient(['{"action": "probe"}'] * 50, delay=0.05)
+    res = _run(
+        client,
+        registry=ToolRegistry(handlers={"probe": ok}),
+        budget_max_seconds=0.12,
+        budget_max_ops=99,
+    )
+    assert res.reason == "time-budget"
+    assert len(res.history) == len(res.results)
+    assert all(h["action"] == "probe" for h in res.history)
+
+
+def test_time_budget_does_not_break_normal_halt():
+    """Ein gesetztes Zeitbudget stört einen normalen halt nicht: ein
+    schneller Lauf der vor dem Budget endet, bleibt 'halt'."""
+    res = _run(
+        MockClient(['{"action": "stop", "reason": "geheilt"}']),
+        budget_max_seconds=60,
+    )
+    assert res.reason == "halt"
+    assert res.final_step["action"] == "stop"
