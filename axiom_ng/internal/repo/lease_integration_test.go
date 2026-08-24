@@ -116,12 +116,12 @@ func ensureRepoDatabase(t *testing.T) string {
 		// attnums on ingest_jobs (e.g. an old upgrade test dropped+re-added
 		// columns for hundreds of runs), rebuild it rather than let the next ADD
 		// COLUMN fail with SQLSTATE 54011 and take down the whole suite.
-		checkPool, err := pgxpool.New(ctx, repoDSN)
+		dropPool, err := pgxpool.New(ctx, repoDSN)
 		if err != nil {
 			t.Fatalf("open repo db for attnum check: %v", err)
 		}
-		n, err := attnumBurned(ctx, checkPool)
-		checkPool.Close()
+		n, err := attnumBurned(ctx, dropPool)
+		dropPool.Close()
 		if err == nil && n > 1500 {
 			t.Logf("repo test db ingest_jobs attnum=%d > 1500; rebuilding %s (dropped attnum slots past PG's 1600-column limit)", n, repoTestDatabaseName)
 			// Terminate any lingering connections, then drop and recreate.
@@ -145,14 +145,22 @@ func ensureRepoDatabase(t *testing.T) string {
 // throwawaySeq keeps throwaway DB names unique even across many runs of one
 // test binary (e.g. go test -count=200): a per-process counter appended to a
 // per-PID base guarantees every run clones a FRESH database, so DROP+re-ADD
+<<<<<<< HEAD
 // upgrade tests never burn attnums twice in the same table. The
 // unsynchronized increment is safe because no test in this package uses
 // t.Parallel(); it needs a mutex if that ever changes.
+=======
+// upgrade tests never burn attnums twice in the same table.
+>>>>>>> e53ff65 (test(repo): run 0005->0006 upgrade test on a throwaway DB; guard attnum burn (#213))
 var throwawaySeq int
 
 // openThrowawayLeaseDB clones a fresh, uniquely-named *_test database (never
 // the shared repoTestDatabaseName), migrates it, and drops it in cleanup. The
+<<<<<<< HEAD
 // pattern of the dispatcher suites: a throwaway DB that this test runs against
+=======
+// Muster of the dispatcher suites: a throwaway DB that this test runs against
+>>>>>>> e53ff65 (test(repo): run 0005->0006 upgrade test on a throwaway DB; guard attnum burn (#213))
 // and destroys, so its column-mutation side effects cannot poison any
 // persistent shared DB. Used by tests that alter the schema in ways Postgres
 // never fully undoes (dropped columns burn attnums).
