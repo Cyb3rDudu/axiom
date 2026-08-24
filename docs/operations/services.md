@@ -78,6 +78,25 @@ stays unreachable past the ~2min window or proves unusable — so the wrong
 order is survivable, but `launchctl kickstart -k` of the
 runner first, then the rag, then the dispatchers is the clean sequence.
 
+## PDF preflight — quality gate before chunking (#175)
+
+The ingest dispatcher can run a read-only quality gate on each claimed PDF
+BEFORE full processing: with `AXIOM_DISPATCHER_PREFLIGHT=1`, the claimed
+source is POSTed as raw bytes to the runner's `/v1/pdf/preflight`, which
+returns a structured report — text layer present, page count, per-page text
+density, blank-image-only series, and label/folio anomalies (all cheap
+pymupdf metrics, no ML; no repair, no upstream mutation). The verdict lands
+in `ingest_jobs.quality_state` and is readable on the job listing.
+
+Policy: green/yellow (`ok=true`) proceeds to full processing. A red verdict
+(e.g. a textless scan, `🔴 unpaginiert`) is **not** sent into the pipeline —
+the job is archived with a clear status (`skipped`, reason
+`preflight:<verdacht>`) and the attachment is registered as a **repair-case
+candidate**, so the fixer (#206/#203) can later heal it rather than letting
+junk chunks pollute the index. Advisory by design: if the source is not
+locally readable or the preflight call fails, the job proceeds normally —
+preflight never blocks a job it cannot measure.
+
 ## Fixer: event runner (owner decision)
 
 One process per Zotero attachment key, invoked via the tested wrapper

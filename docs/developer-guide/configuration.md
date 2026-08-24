@@ -46,6 +46,7 @@ organized by *where the variable is consumed* (`set by`).
 | `AXIOM_DISPATCHER_CONCURRENCY` | `1` | Parallel claim/process slots. |
 | `AXIOM_DISPATCHER_PROFILE` | `full-rag-v1` | Processing profile JSON frozen at claim time; the `full-rag-v1` default materializes **every** feature boolean as `true` (entities, relationships, dense + sparse embeddings, images). The profile *name* alone does not toggle features — the explicit booleans do. |
 | `AXIOM_DISPATCHER_LEASE` | `5m` | Per-claim lease length. |
+| `AXIOM_DISPATCHER_PREFLIGHT` | off | #175 quality gate at claim: sends the claimed source PDF to the runner's `/v1/pdf/preflight` BEFORE full processing. A red verdict (e.g. textless scan no matter the labels, label-Anomalie) skips the job (`skipped`, reason `preflight:<verdacht>`) and marks the attachment as a repair-case candidate (the #206/#203 fixer can heal it later) instead of producing junk chunks. Default off = jobs process as today. Per-call bound: the processor client's small-call budget (15s). |
 | `AXIOM_ARTIFACT_ROOT` | — | Durable derived-artifact root. |
 | `AXIOM_API_PORT` | `8011` | Port the `axiom_ng` REST API listens on. |
 | `AXIOM_ALLOW_DEBUG_BIND` | off | Explicit opt-out that lets a **debug** build bind a production port (8011, 8013–8015). Release builds always bind; unset/wrong values keep the guard active. |
