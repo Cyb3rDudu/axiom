@@ -29,6 +29,17 @@ find_artifact() {
     printf '%s\n' "$best"
 }
 
+# zstd preflight (#211): the runner/fixer tarballs are zstd-compressed and
+# unpacked with `tar --zstd`. Check BEFORE the confirm prompt so an operator
+# doesn't confirm an install and then hit a cryptic filter error mid-unpack.
+require_zstd() {
+    command -v zstd >/dev/null 2>&1 || {
+        echo "zstd not found on PATH — required to unpack a .tar.zst artifact." >&2
+        echo "install: brew install zstd   (or: apt-get install zstd)" >&2
+        exit 1
+    }
+}
+
 # confirm_install <component> <artifact> [plan lines...]
 # Verifies the checksum FIRST, prints the install plan, then requires an
 # explicit operator "yes" before anything under $ROOT is touched.
@@ -78,6 +89,7 @@ runner)
         echo "no runner artifact for $version in $DIST/ — run: make runner"
         exit 1
     }
+    require_zstd
     target="$ROOT/runner/$version"
     confirm_install runner "$art" \
         "target:   $target/{env,app}" \
@@ -108,6 +120,7 @@ fixer)
         echo "no fixer artifact for $version in $DIST/ — run: make fixer"
         exit 1
     }
+    require_zstd
     target="$ROOT/fixer/$version"
     confirm_install fixer "$art" \
         "target:   $target/{env,app}" \
