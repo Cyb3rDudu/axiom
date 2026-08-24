@@ -12,6 +12,9 @@ package repo
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -480,5 +483,55 @@ func TestIT_ConsolidateEntitiesCaseVariant(t *testing.T) {
 		entLower).Scan(&archived)
 	if archived != 1 {
 		t.Fatalf("loser must be archived, got %d", archived)
+	}
+}
+
+// TestIT_ConsolidateEntitiesHeartbeat (#202 witness): the mutating
+// consolidation pass emits at least one progress line through the KG heartbeat
+// sink while it works — a supervised run can tell "working" from "hung".
+// Red probe: removing the hb.beat call in consolidateActiveEntities makes this
+// red (no line captured) — the witness pins the heartbeat wiring, not the SQL.
+func TestIT_ConsolidateEntitiesHeartbeat(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+	if _, err := lr.pool.Exec(ctx, `
+		TRUNCATE processing_entity_relationships, processing_entity_mentions,
+		         processing_entities, processing_chunks, processing_snapshots
+		CASCADE`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+
+	_, snapA := kgSeedSnapshot(t, lr, "Doku H", "KGHB_A")
+	_, snapB := kgSeedSnapshot(t, lr, "Doku H2", "KGHB_B")
+	// Fewer chunks -> deterministic loser; the loser id is the expected
+	// "current" position marker of the first beat.
+	seedEntityWithID(t, lr, snapA, "herzschlag", "33333333-3333-3333-3333-333333333333", 2)
+	seedEntityWithID(t, lr, snapB, "herzschlag", "44444444-4444-4444-4444-444444444444", 3)
+
+	var mu sync.Mutex
+	var lines []string
+	SetKGProgressLogger(func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	})
+	defer SetKGProgressLogger(nil)
+
+	rep, err := lr.rep.ConsolidateEntitiesReport(ctx)
+	if err != nil {
+		t.Fatalf("consolidate: %v", err)
+	}
+	if rep.Merged != 1 {
+		t.Fatalf("merged=%d, want 1 (fixture must be merge-eligible so the heartbeat loop runs)", rep.Merged)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lines) == 0 {
+		t.Fatal("no heartbeat line captured — the mutating pass must report progress through SetKGProgressLogger")
+	}
+	first := lines[0]
+	if !strings.Contains(first, "entities 1/1") || !strings.Contains(first, "33333333") {
+		t.Fatalf("heartbeat line malformed (want unit counter + loser id as position marker): %q", first)
 	}
 }

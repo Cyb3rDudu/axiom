@@ -17,6 +17,16 @@ Take a database backup before any mutating run. Prefer a quiet window: the
 maintenance paths serialize themselves with a transaction-scoped PostgreSQL
 advisory lock, but a quiet system makes the before/after counts easier to read.
 
+## Exit codes & heartbeats (#202)
+
+Every mutating CLI mode runs ONCE and exits — it never falls through to the
+server boot. Exit codes: `0` = done (applied or nothing to do — the final log
+line carries the counts, zeros mean nothing to do); `1` = failure, and the
+`MODE FAILED` line states whether the KG is consistent (`transaction rolled
+back`) or partial (multi-pass modes: earlier passes committed; every pass is
+idempotent — re-run). Long mutating passes log a heartbeat line every 30s
+(elapsed, items done/total, current item). Full contract: `axiom-ng -help`.
+
 ## Standard chain
 
 Use the same binary and database URL that the server uses.

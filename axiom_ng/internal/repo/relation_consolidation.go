@@ -139,11 +139,21 @@ func (r *Repo) consolidateActiveRelations(ctx context.Context) (RelationConsolid
 			Evidence  []string `json:"evidence_chunk_ids"`
 			Edges     int      `json:"edges"`
 		}
+		// #202 heartbeat: only multi-edge pairs do per-pair DB work; count them
+		// so the progress line's total is the real workload.
+		multiPairs := 0
+		for _, es := range groups {
+			if len(es) >= 2 {
+				multiPairs++
+			}
+		}
+		hb := newKGHeartbeat("relation pairs", multiPairs)
 		for k, edges := range groups {
 			if len(edges) < 2 {
 				continue // single-edge pair: untouched (idempotency)
 			}
 			rep.PairsTouched++
+			hb.beat(rep.PairsTouched, k[0]+".."+k[1])
 
 			forward, reversed := []relEdgeRow{}, []relEdgeRow{}
 			for _, e := range edges {

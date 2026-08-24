@@ -179,7 +179,9 @@ func entityAliasOn(ctx context.Context, db kgSQLRunner, apply bool) (EntityAlias
 	if !apply || len(todo) == 0 {
 		return rep, nil
 	}
+	hb := newKGHeartbeat("alias bindings", len(todo))
 	for i, b := range todo {
+		hb.beat(i+1, b.variant)
 		if _, err := db.Exec(ctx, `
 			UPDATE processing_entities e SET alias_of = $2::uuid
 			FROM processing_snapshots s
@@ -405,7 +407,9 @@ func (r *Repo) bindByGrouperOn(ctx context.Context, db kgSQLRunner, key func(str
 	if !apply {
 		return rep, nil
 	}
+	hb := newKGHeartbeat("alias bindings", len(todo))
 	for i, b := range todo {
+		hb.beat(i+1, b.variant)
 		if _, err := db.Exec(ctx, `
 			UPDATE processing_entities e SET alias_of = $2::uuid
 			FROM processing_snapshots s

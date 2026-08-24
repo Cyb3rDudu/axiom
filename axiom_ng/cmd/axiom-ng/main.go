@@ -36,6 +36,14 @@ func main() {
 		return
 	}
 
+	// #202 mode-exit discipline: documented mode surface + exit-code contract.
+	// Every mode flag runs ONCE and exits — it never falls through to the
+	// server boot (the -bind-all-aliases incident class).
+	if len(os.Args) > 1 && (os.Args[1] == "-help" || os.Args[1] == "--help" || os.Args[1] == "help") {
+		fmt.Print(modeHelp)
+		return
+	}
+
 	// #198 item 1 — frontmatter cleanup pass: KG relations/entities whose
 	// evidence sits in gated frontmatter sections (TOC / author lists /
 	// preface / bibliography / index / title lines) leave the active graph.
@@ -56,7 +64,7 @@ func main() {
 		defer d.Close()
 		rep, err := repo.New(d.Pool()).CleanupFrontmatterKG(context.Background(), apply)
 		if err != nil {
-			logger.Fatalf("cleanup: %v", err)
+			modeFail(logger, true, "cleanup: %v", err)
 		}
 		out, _ := json.MarshalIndent(rep, "", "  ")
 		if apply {
@@ -91,14 +99,14 @@ func main() {
 		if !apply {
 			_, pairs, err := rep.RelationsConsolidationDryRun(context.Background())
 			if err != nil {
-				logger.Fatalf("dry-run: %v", err)
+				modeFail(logger, true, "dry-run: %v", err)
 			}
 			logger.Printf("dry-run: %d multi-edge pairs would collapse (use --apply)", pairs)
 			return
 		}
 		rep2, err := rep.ConsolidateRelationsReport(context.Background())
 		if err != nil {
-			logger.Fatalf("consolidate: %v", err)
+			modeFail(logger, true, "consolidate: %v", err)
 		}
 		logger.Printf("relations consolidation complete: %+v", rep2)
 		return
@@ -123,14 +131,14 @@ func main() {
 		if !apply {
 			c, err := rp.EntityTypingCounts(context.Background())
 			if err != nil {
-				logger.Fatalf("dry-run: %v", err)
+				modeFail(logger, true, "dry-run: %v", err)
 			}
 			logger.Printf("dry-run: %+v (use --apply)", c)
 			return
 		}
 		tr, err := rp.NormalizeEntityTypes(context.Background())
 		if err != nil {
-			logger.Fatalf("normalize: %v", err)
+			modeFail(logger, true, "normalize: %v", err)
 		}
 		logger.Printf("entity typing complete: %+v", tr)
 		return
@@ -154,18 +162,20 @@ func main() {
 		if !apply {
 			c, err := rp.BindExactFormAliasesDryRun(context.Background())
 			if err != nil {
-				logger.Fatalf("dry-run exact: %v", err)
+				modeFail(logger, true, "dry-run exact: %v", err)
 			}
 			n, err := rp.EntityAliasCounts(context.Background())
 			if err != nil {
-				logger.Fatalf("dry-run counts: %v", err)
+				modeFail(logger, true, "dry-run counts: %v", err)
 			}
 			logger.Printf("dry-run: exact=%+v counts=%+v (use --apply)", c, n)
 			return
 		}
 		ar, err := rp.BindAllAliases(context.Background())
 		if err != nil {
-			logger.Fatalf("bind-all: %v", err)
+			// Two sequential passes (exact, then flexion), each its own
+			// transaction: a failure after the first leaves it committed.
+			modeFail(logger, false, "bind-all: %v", err)
 		}
 		logger.Printf("all aliases complete: %+v", ar)
 		return
@@ -190,14 +200,14 @@ func main() {
 		if !apply {
 			c, err := rp.EntityAliasCounts(context.Background())
 			if err != nil {
-				logger.Fatalf("dry-run: %v", err)
+				modeFail(logger, true, "dry-run: %v", err)
 			}
 			logger.Printf("dry-run: %+v (use --apply)", c)
 			return
 		}
 		ar, err := rp.BindFlexionAliases(context.Background())
 		if err != nil {
-			logger.Fatalf("bind: %v", err)
+			modeFail(logger, true, "bind: %v", err)
 		}
 		logger.Printf("flexion aliases complete: %+v", ar)
 		return
@@ -213,7 +223,7 @@ func main() {
 		}
 		defer d.Close()
 		if err := repo.New(d.Pool()).RepointAliasEdges(context.Background()); err != nil {
-			logger.Fatalf("repoint: %v", err)
+			modeFail(logger, true, "repoint: %v", err)
 		}
 		logger.Printf("alias-variant edges re-pointed to survivors; intra-family self-loops deleted")
 		return
@@ -239,7 +249,7 @@ func main() {
 		if !apply {
 			report, err := rp.EntityConsolidationDryRun(context.Background())
 			if err != nil {
-				logger.Fatalf("dry-run: %v", err)
+				modeFail(logger, true, "dry-run: %v", err)
 			}
 			logger.Printf("dry-run: %d guarded groups / %d entities would merge (use --apply)",
 				report.DuplicateFormsBefore, report.Merged)
@@ -247,7 +257,7 @@ func main() {
 		}
 		report, err := rp.ConsolidateEntitiesReport(context.Background())
 		if err != nil {
-			logger.Fatalf("consolidate: %v", err)
+			modeFail(logger, true, "consolidate: %v", err)
 		}
 		logger.Printf("entity consolidation complete: %d entities merged, duplicate forms %d->%d",
 			report.Merged, report.DuplicateFormsBefore, report.DuplicateFormsAfter)
@@ -258,6 +268,10 @@ func main() {
 	cfg := config.Load()
 	logger := log.New(os.Stderr, "axiom-ng: ", log.LstdFlags)
 	logger.Printf("starting %s", version.Banner())
+	// #202: long-running mutating KG passes (CLI modes and the standing
+	// post-sync consolidation) emit a heartbeat line every 30s through this
+	// sink — a supervised run can tell "working" from "hung".
+	repo.SetKGProgressLogger(logger.Printf)
 
 	// #205 §5: a debug build must never serve production ports. Production is
 	// 8011 (API) and 8013–8015 (dispatchers). Opt out explicitly for local
@@ -480,6 +494,54 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Printf("http shutdown: %v", err)
 	}
+}
+
+// modeHelp documents the CLI mode surface and the exit-code contract (#202).
+const modeHelp = `axiom-ng — modes and exit codes (#202)
+
+Usage: axiom-ng [mode] [--apply]
+
+Modes (each runs ONCE and exits; never falls through to the server boot):
+  --version                       print the version banner
+  -help                           this help
+  -cleanup-frontmatter-kg         drop/strip KG evidence from gated frontmatter
+                                  sections; dry-run default, --apply mutates
+  -consolidate-relations          one aggregated edge per (source,target) pair;
+                                  dry-run default, --apply mutates
+  -normalize-entity-types         deterministic typing rules; --apply mutates
+  -bind-all-aliases               guarded exact+flexion alias binding; --apply
+  -bind-flexion-aliases           flexion family alias links; --apply mutates
+  -repoint-alias-edges            re-point variant edges to survivors, delete
+                                  intra-family self-loops (always applies)
+  -consolidate-entities           merge same-form active entities; dry-run
+                                  default, --apply mutates
+  (no mode flag)                  start the API server + optional dispatcher
+
+Exit codes:
+  0   done — either applied or nothing to do; the final log line carries
+      the counts (zeros mean nothing to do), dry runs end with "use --apply"
+  1   failure — the log states whether the KG is consistent:
+      "state consistent (transaction rolled back)" for single-transaction
+      modes, "state partial ... re-run the mode" for multi-pass modes
+      (all passes are idempotent). A DB/connect failure exits 1 before any
+      state is touched.
+
+Long mutating passes emit a heartbeat log line every 30s (elapsed, items
+done/total, current item) so a supervised run can tell working from hung.
+`
+
+// modeFail terminates a mutating CLI mode with the documented non-zero exit
+// (#202). consistent=true: the mode is single-transaction — the failure rolled
+// it back, the KG is in its pre-run state. consistent=false: the mode runs
+// multiple sequential passes and earlier passes already committed; every pass
+// is idempotent, so re-running the mode is the documented recovery.
+func modeFail(logger *log.Logger, consistent bool, format string, args ...any) {
+	state := "state consistent (transaction rolled back, nothing applied)"
+	if !consistent {
+		state = "state partial: earlier passes already committed; all passes are idempotent — re-run the mode"
+	}
+	logger.Printf("MODE FAILED (exit 1): "+format+" — %s", append(args, state)...)
+	os.Exit(1)
 }
 
 // runnerCheck adapts a runner health surface (primary or failover client)

@@ -184,7 +184,9 @@ func (r *Repo) consolidateActiveEntities(ctx context.Context) (int, error) {
 		// survivor — from a PRIOR pair of this run or from same-snapshot
 		// same-form duplicates (3.5k live collisions) — is skipped; the
 		// redundant loser copy dies with the loser.
+		hb := newKGHeartbeat("entities", len(losers))
 		for i := range losers {
+			hb.beat(i+1, losers[i])
 			if _, err := tx.Exec(ctx, `
 			UPDATE processing_entity_mentions m SET entity_id = $1::uuid
 			WHERE m.entity_id = $2::uuid
