@@ -98,7 +98,7 @@ wiped /tmp and took the secret with it), never inline in plists.
   `AXIOM_DISPATCHER_ENABLED=1`, worker id,
   `AXIOM_DISPATCHER_PROFILE` (the empty-profile trap: assert non-empty!)
 - Ingest runner selection (#207): `AXIOM_PROCESSOR_URLS` = ordered candidate
-  list (e.g. `http://192.168.1.2:19542,http://127.0.0.1:8012` — Carrier
+  list (e.g. `http://<carrier-host>:<port>,http://127.0.0.1:8012` — Carrier
   first, local floor last). The SAME env file works at home and on the
   road: without the Carrier, the health probe skips it and ingest runs
   locally — no reconfiguration, no failover timeout per submit.
