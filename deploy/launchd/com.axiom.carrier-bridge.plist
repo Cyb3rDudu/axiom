@@ -15,7 +15,7 @@
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>. "$HOME/.config/axiom/carrier-bridge.env" &amp;&amp; exec __BRIDGE_CMD__</string>
+        <string>set -a; . "$HOME/.config/axiom/carrier-bridge.env" || exit 1; set +a; exec __BRIDGE_CMD__</string>
     </array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>

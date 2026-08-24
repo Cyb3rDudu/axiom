@@ -16,7 +16,7 @@
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>. "$HOME/.config/axiom/runner.env" &amp;&amp; exec /opt/axiom/runner/current/env/bin/python -m axiom_ng_runner</string>
+        <string>set -a; . "$HOME/.config/axiom/runner.env" || exit 1; set +a; exec /opt/axiom/runner/current/env/bin/python -m axiom_ng_runner</string>
     </array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>

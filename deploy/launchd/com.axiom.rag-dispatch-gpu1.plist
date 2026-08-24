@@ -12,7 +12,7 @@
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>. "$HOME/.config/axiom/rag.env" &amp;&amp; . "$HOME/.config/axiom/rag-dispatch-gpu1.env" &amp;&amp; exec /opt/axiom/bin/axiom-ng</string>
+        <string>set -a; . "$HOME/.config/axiom/rag.env" || exit 1; . "$HOME/.config/axiom/rag-dispatch-gpu1.env" || exit 1; set +a; : "${AXIOM_DATABASE_URL:?AXIOM_DATABASE_URL not set in rag.env/rag-dispatch-gpu1.env — DB required, refusing silent default-start (#210)}"; exec /opt/axiom/bin/axiom-ng</string>
     </array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
