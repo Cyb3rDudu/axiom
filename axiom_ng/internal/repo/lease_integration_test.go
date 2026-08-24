@@ -65,10 +65,30 @@ func swapDatabase(dsn, db string) string {
 	return u.String()
 }
 
+// attnumBurned reports the highest attribute number allocated on ingest_jobs
+// (including burned slots from columns that were DROPped and never re-used —
+// Postgres never gives an attnum back). Once it approaches Postgres's 1600-
+// columns-per-table limit every subsequent ADD COLUMN fails with SQLSTATE
+// 54011, breaking the whole migration chain. #213: the persistent repo test DB
+// must not be allowed to rot into that state.
+func attnumBurned(ctx context.Context, pool *pgxpool.Pool) (int, error) {
+	var n int
+	err := pool.QueryRow(ctx, `
+		SELECT COALESCE(MAX(attnum),0)
+		FROM pg_attribute a
+		JOIN pg_class c ON c.oid = a.attrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relname='ingest_jobs' AND n.nspname='public'`).Scan(&n)
+	return n, err
+}
+
 // ensureRepoDatabase creates the package-private test database if needed, using
 // the user-provided *_test DSN as the source of host/credentials and the
 // maintenance "postgres" database as the create target. It is a no-op if the
-// database already exists. Returns the effective repo DSN.
+// database already exists, UNLESS its ingest_jobs attnum footprint has crept past
+// the defensive threshold (#213): then the DB is dropped and rebuilt so a
+// repeated upgrade test can never brick the whole suite at Postgres's 1600-
+// column limit. Returns the effective repo DSN.
 func ensureRepoDatabase(t *testing.T) string {
 	t.Helper()
 	base := leaseTestDSN()
@@ -91,12 +111,107 @@ func ensureRepoDatabase(t *testing.T) string {
 		`SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname=$1)`, repoTestDatabaseName).Scan(&exists); err != nil {
 		t.Fatalf("check db exists: %v", err)
 	}
+	if exists {
+		// #213 defensive check: if the persistent repo DB has burned too many
+		// attnums on ingest_jobs (e.g. an old upgrade test dropped+re-added
+		// columns for hundreds of runs), rebuild it rather than let the next ADD
+		// COLUMN fail with SQLSTATE 54011 and take down the whole suite.
+		checkPool, err := pgxpool.New(ctx, repoDSN)
+		if err != nil {
+			t.Fatalf("open repo db for attnum check: %v", err)
+		}
+		n, err := attnumBurned(ctx, checkPool)
+		checkPool.Close()
+		if err == nil && n > 1500 {
+			t.Logf("repo test db ingest_jobs attnum=%d > 1500; rebuilding %s (dropped attnum slots past PG's 1600-column limit)", n, repoTestDatabaseName)
+			// Terminate any lingering connections, then drop and recreate.
+			if _, err := pool.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1`, repoTestDatabaseName); err != nil {
+				t.Fatalf("terminate repo db connections: %v", err)
+			}
+			if _, err := pool.Exec(ctx, `DROP DATABASE `+repoTestDatabaseName); err != nil {
+				t.Fatalf("drop repo test db: %v", err)
+			}
+			exists = false
+		}
+	}
 	if !exists {
 		if _, err := pool.Exec(ctx, `CREATE DATABASE `+repoTestDatabaseName); err != nil {
 			t.Fatalf("create repo test db: %v", err)
 		}
 	}
 	return repoDSN
+}
+
+// throwawaySeq keeps throwaway DB names unique even across many runs of one
+// test binary (e.g. go test -count=200): a per-process counter appended to a
+// per-PID base guarantees every run clones a FRESH database, so DROP+re-ADD
+// upgrade tests never burn attnums twice in the same table. The
+// unsynchronized increment is safe because no test in this package uses
+// t.Parallel(); it needs a mutex if that ever changes.
+var throwawaySeq int
+
+// openThrowawayLeaseDB clones a fresh, uniquely-named *_test database (never
+// the shared repoTestDatabaseName), migrates it, and drops it in cleanup. The
+// pattern of the dispatcher suites: a throwaway DB that this test runs against
+// and destroys, so its column-mutation side effects cannot poison any
+// persistent shared DB. Used by tests that alter the schema in ways Postgres
+// never fully undoes (dropped columns burn attnums).
+func openThrowawayLeaseDB(t *testing.T) *leaseRepo {
+	t.Helper()
+	base := leaseTestDSN()
+	if base == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping lease integration test")
+	}
+	requireTestDB(t, base)
+
+	throwawaySeq++
+	name := fmt.Sprintf("axiom_ng_repo_throwaway_%d_%d_test", os.Getpid(), throwawaySeq)
+
+	maintainDSN := swapDatabase(base, "postgres")
+	throwawayDSN := swapDatabase(base, name)
+
+	ctx := context.Background()
+	mp, err := pgxpool.New(ctx, maintainDSN)
+	if err != nil {
+		t.Fatalf("open maintenance db: %v", err)
+	}
+	// Drop a leftovers from a crashed prior run so the name is always ours.
+	var exists bool
+	if err := mp.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname=$1)`, name).Scan(&exists); err != nil {
+		mp.Close()
+		t.Fatalf("check throwaway db exists: %v", err)
+	}
+	if exists {
+		if _, err := mp.Exec(ctx, `DROP DATABASE `+name); err != nil {
+			mp.Close()
+			t.Fatalf("drop stale throwaway db: %v", err)
+		}
+	}
+	if _, err := mp.Exec(ctx, `CREATE DATABASE `+name); err != nil {
+		mp.Close()
+		t.Fatalf("create throwaway db: %v", err)
+	}
+	mp.Close()
+
+	d, err := db.Open(ctx, throwawayDSN)
+	if err != nil {
+		t.Fatalf("open throwaway db: %v", err)
+	}
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("migrate throwaway db: %v", err)
+	}
+	t.Cleanup(func() {
+		d.Close()
+		dropPool, perr := pgxpool.New(context.Background(), maintainDSN)
+		if perr == nil {
+			defer dropPool.Close()
+			// Terminate connections, then drop; best-effort (a leftover DB name is
+			// a stale-state cost, not a correctness failure).
+			dropPool.Exec(context.Background(), `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1`, name)
+			dropPool.Exec(context.Background(), `DROP DATABASE IF EXISTS `+name)
+		}
+	})
+	return &leaseRepo{pool: d.Pool(), rep: New(d.Pool()), dsn: throwawayDSN}
 }
 
 // leaseRepo wraps a Repo plus its pool so tests can drive both the repository
@@ -1025,7 +1140,14 @@ func TestFreshSchemaMigrationLeaseColumns(t *testing.T) {
 }
 
 func TestUpgrade0005To0006Additive(t *testing.T) {
-	lr := openLeaseDB(t)
+	// #213: this test DROPs the 0006 lease columns and re-ADDs them via a fresh
+	// migrate. Postgres never reuses a dropped column's attnum, so every run
+	// burns 8 permanent slots on ingest_jobs. Against the persistent
+	// repoTestDatabaseName that accumulates toward PG's 1600-column limit and
+	// bricks the whole repo suite (SQLSTATE 54011 on any later ADD COLUMN). Run
+	// it against a THROWAWAY database instead, dropped when the test ends, so
+	// the shared repo DB is never touched.
+	lr := openThrowawayLeaseDB(t)
 	lr.truncateFixtures(t)
 	ctx := context.Background()
 
@@ -1323,7 +1445,7 @@ func TestForcedRebuildCompletionHashConsistency(t *testing.T) {
 	lr.truncateFixtures(t)
 	ctx := context.Background()
 
-	complete := func(t *testing.T, jobID string, ref LeaseRef) error {
+	complete := func(t *testing.T, _ string, ref LeaseRef) error {
 		t.Helper()
 		tx, err := lr.pool.Begin(ctx)
 		if err != nil {

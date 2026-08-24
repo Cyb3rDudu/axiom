@@ -156,9 +156,11 @@ func NewWithPersister(rep *repo.Repo, client processorClient, persist ResultPers
 
 // Run processes jobs until ctx is cancelled. It returns when all workers have
 // drained their current jobs and shut down gracefully. Capability negotiation
-// is required (work order section 7 step 5): this fails fast on a broken or
-// unsupported processor so claims are never held hostage by one, and it clamps
-// the configured concurrency to the processor's declared maximum.
+// is required (work order section 7 step 5): it fails fast on a broken or
+// unsupported (contract-violating) processor so claims are never held hostage
+// by one, while a merely unreachable processor is retried with backoff up to
+// MaxStartupWait before turning fatal (#214). It clamps the configured
+// concurrency to the processor's declared maximum.
 func (d *Dispatcher) Run(ctx context.Context) error {
 	// L5: OpenSearch outbox drainer — own goroutine, own path; an OpenSearch
 	// outage never touches snapshots or jobs (work order §10.3). Starts BEFORE
