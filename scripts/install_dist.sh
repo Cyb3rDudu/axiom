@@ -112,16 +112,18 @@ fixer)
         "target:   $target/{env,app}" \
         "current:  $ROOT/fixer/current -> $version" \
         "shim:     $ROOT/bin/axiom-fixer" \
-        "post-install fixup: env/bin/fix-env <build-prefix> (once)" \
+        "post-install fixup: env/bin/conda-unpack (once, bundled interpreter)" \
         "host deps (NOT bundled): tesseract5 +deu, ghostscript on PATH"
     mkdir -p "$ROOT/fixer" "$ROOT/bin"
     rm -rf "$target"
     mkdir -p "$target"
     tar --zstd -xf "$art" -C "$target" --strip-components 1
-    # one-time venv relocation fixup, build prefix recorded by the build script
-    bp=$(cat "$target/env/.build-prefix")
-    "$target/env/bin/fix-env" "$bp"
-    "$target/env/bin/python" -c 'import pymupdf'
+    # one-time prefix relocation: the env ships conda-packed with a bundled
+    # interpreter (#208) — conda-unpack rewrites prefixes in place. No host
+    # python required anymore.
+    "$target/env/bin/python" "$target/env/bin/conda-unpack"
+    # smoke from a NEUTRAL cwd (tests the env, not a source tree — #209 lesson)
+    (cd / && "$target/env/bin/python" -c 'import pymupdf; print("pymupdf", __import__("pymupdf").__version__)')
     cat >"$ROOT/bin/axiom-fixer" <<EOF
 #!/bin/sh
 exec "$ROOT/fixer/current/env/bin/python" "$ROOT/fixer/current/app/repair_agent.py" "\$@"
