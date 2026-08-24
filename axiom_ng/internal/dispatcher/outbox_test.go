@@ -792,3 +792,193 @@ func TestOutboxEnsureSparseMappingRetriedAfterFailure(t *testing.T) {
 		t.Fatalf("mapping PUT must retry exactly once more, got %d", puts)
 	}
 }
+
+// TestForceReplaceFrozenTombstoneDeletesOldChunks pins #212 (the Positiv
+// cycle): a second force-rebuild with UNCHANGED identity replaces the prior
+// force snapshot IN PLACE (same row, generation bumped) and must freeze the
+// OLD chunk ids into the delete tombstone — the drainer otherwise cannot read
+// them (rows CASCADE-deleted in the same tx, and OutboxChunkIDs would return
+// the reactivated row's NEW ids). Because the replaced row is active, the
+// regular #127 guard would skip the tombstone and leak the superseded
+// generation's OS docs; the frozen payload must bypass that guard so the old
+// ids are deleted while the new generation's ids stay untouched.
+func TestForceReplaceFrozenTombstoneDeletesOldChunks(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	ctx := context.Background()
+	srv, rec := fakeOS(t, false)
+	osc := newOpenSearchClient(srv.URL, "", "", nil)
+	d := newOutboxDispatcher(h)
+
+	// Seed a normal job to obtain the shared attachment/doc/source/content
+	// identity every force rebuild keeps fixed.
+	jA := h.seedJob(t, "frz-a", 3)
+	var attID, srcID, docID, chRef string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT attachment_id::text, source_id::text, document_id::text, content_hash FROM ingest_jobs WHERE id=$1`, jA,
+	).Scan(&attID, &srcID, &docID, &chRef); err != nil {
+		t.Fatalf("refs: %v", err)
+	}
+	seedForce := func() {
+		if _, err := h.pool.Exec(ctx, `
+			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
+			VALUES ($1,$2,$3,$4,'pending',true)`, srcID, docID, attID, chRef); err != nil {
+			t.Fatalf("force job: %v", err)
+		}
+	}
+	// claimPersist claims the next (force) job with a FIXED profile, persists,
+	// and drains. Second call with unchanged identity hits force-replace-in-place.
+	var lastSnap string
+	claimPersist := func(worker string, n int) {
+		t.Helper()
+		cj, err := h.rep.ClaimNextJob(ctx, repo.ClaimOptions{
+			WorkerID: worker, LeaseDuration: time.Minute,
+			Profile: json.RawMessage(`{"profile":"full-rag-v1"}`),
+		})
+		if err != nil || cj == nil {
+			t.Fatalf("claim %s: %v %v", worker, cj, err)
+		}
+		if err := h.rep.MarkProcessing(ctx, cj.LeaseRef); err != nil {
+			t.Fatalf("mark processing: %v", err)
+		}
+		sid, err := h.rep.PersistResult(ctx, cj.LeaseRef.JobID, []byte(rtResult(cj.LeaseRef.JobID, cj.AttachmentID, *cj.ContentHash, n)), repo.PersistOptions{CapDim: 3})
+		if err != nil {
+			t.Fatalf("persist %s: %v", worker, err)
+		}
+		if _, err := h.pool.Exec(ctx, `UPDATE ingest_jobs SET status='completed' WHERE id=$1`, cj.LeaseRef.JobID); err != nil {
+			t.Fatalf("complete %s: %v", worker, err)
+		}
+		lastSnap = sid
+	}
+	chunkIDsOf := func(snapshotID string) []string {
+		var out []string
+		rows, err := h.pool.Query(ctx, `SELECT id::text FROM processing_chunks WHERE snapshot_id=$1 ORDER BY chunk_index`, snapshotID)
+		if err != nil {
+			t.Fatalf("chunk ids: %v", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			_ = rows.Scan(&id)
+			out = append(out, id)
+		}
+		slices.Sort(out)
+		return out
+	}
+	sorted := func(in []string) string { out := slices.Clone(in); slices.Sort(out); return strings.Join(out, ",") }
+
+	// Consume the initial normal job A so it is no longer claimable, leaving
+	// only the force jobs for the F1/F2 claims below (and establishing the
+	// #127 baseline: the later force supersedes it).
+	claimPersist("wA", 2)
+
+	// F1: first force (2 chunks). Snapshot row is created with the force
+	// profile hash; its chunks get indexed.
+	seedForce()
+	claimPersist("wF1", 2)
+	snapF1 := lastSnap
+	// F1's chunk ids BEFORE the replace deletes their rows — the exact set the
+	// frozen tombstone must delete later. (The first drain also tombstones the
+	// superseded normal generation's chunks via the regular sibling path, so
+	// only the DELTA after this drain can prove the frozen bypass fired.)
+	oldF1 := chunkIDsOf(snapF1)
+	if err := drainOutboxOnce(ctx, d, osc); err != nil {
+		t.Fatalf("drain F1: %v", err)
+	}
+	// Baseline AFTER the F1 drain: everything deleted past this point must be
+	// the frozen tombstone's doing (the sibling deletes of the superseded
+	// normal generation happened inside the drain above).
+	delAfterF1 := len(rec.deletedIDs())
+
+	// F2: second force, SAME identity, 3 chunks → replaces row F1 in place
+	// (same snapshot id, generation bumped). Old F1 chunk ids must now be
+	// frozen into the pending delete tombstone.
+	seedForce()
+	claimPersist("wF2", 3)
+	if lastSnap != snapF1 {
+		t.Fatalf("force replace must reuse row %s, got new row %s", snapF1, lastSnap)
+	}
+
+	// The delete tombstone carries frozen OLD ids (F1's 2 chunks), which no
+	// longer exist as rows (CASCADE-deleted) and differ from the new chunks.
+	var frozenPayload string
+	if err := h.pool.QueryRow(ctx, `
+		SELECT payload::text FROM opensearch_outbox
+		WHERE snapshot_id=$1 AND operation='delete' AND status='pending'`, snapF1).Scan(&frozenPayload); err != nil {
+		t.Fatalf("frozen tombstone: %v", err)
+	}
+	if !strings.Contains(frozenPayload, "chunk_ids") {
+		t.Fatalf("force-replace delete tombstone must carry frozen chunk_ids, got %s", frozenPayload)
+	}
+	newChunks := chunkIDsOf(snapF1)
+	if len(newChunks) != 3 {
+		t.Fatalf("replaced row chunks = %v, want 3", newChunks)
+	}
+
+	// Drain: the frozen bypass must delete EXACTLY F1's old ids (the delta
+	// over the deletes the first drain already recorded), and the NEW ids are
+	// NOT deleted.
+	if err := drainOutboxOnce(ctx, d, osc); err != nil {
+		t.Fatalf("drain F2: %v", err)
+	}
+	deleted := rec.deletedIDs()
+	if delAfterF1 > len(deleted) {
+		t.Fatalf("deletes shrank: %d -> %d", delAfterF1, len(deleted))
+	}
+	newDeletes := deleted[delAfterF1:]
+	if sorted(newDeletes) != sorted(oldF1) {
+		t.Fatalf("drain F2 must delete exactly the frozen F1 ids %v, got %v", sorted(oldF1), sorted(newDeletes))
+	}
+	deletedSet := map[string]bool{}
+	for _, id := range deleted {
+		deletedSet[id] = true
+	}
+	// The retained (new) chunks must NOT have been deleted by the frozen tombstone.
+	for _, id := range newChunks {
+		if deletedSet[id] {
+			t.Fatalf("new chunk id %s was deleted by the force-replace tombstone (must stay untouched)", id)
+		}
+	}
+}
+
+// TestForceReplaceFrozenBypassKeepsRegularGuard pins the #212 Guard-Regression
+// (dudu design point): the frozen-id bypass must be EXACTLY scoped to
+// force-replace tombstones carrying chunk_ids. A regular deactivate tombstone
+// whose payload has NO chunk_ids, for an ACTIVE snapshot, must STILL be skipped
+// by the #127 obsolete-op guard — the bypass leaks nothing.
+func TestForceReplaceFrozenBypassKeepsRegularGuard(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	ctx := context.Background()
+	srv, rec := fakeOS(t, false)
+	osc := newOpenSearchClient(srv.URL, "", "", nil)
+	d := newOutboxDispatcher(h)
+
+	_, snapID := h.seedOutboxSnapshot(t, "guard-key", 2, 0)
+
+	// A plain delete tombstone with NO frozen chunk_ids on the (active)
+	// snapshot: exactly the shape a since-reactivated regular deactivate takes.
+	if _, err := h.pool.Exec(ctx, `
+		INSERT INTO opensearch_outbox (snapshot_id, operation, payload)
+		VALUES ($1, 'delete', '{"operation":"delete"}'::jsonb)`, snapID); err != nil {
+		t.Fatalf("seed delete row: %v", err)
+	}
+
+	if err := drainOutboxOnce(ctx, d, osc); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	if got := len(rec.deletedIDs()); got != 0 {
+		t.Fatalf("deletes = %v, want none (plain active delete is obsolete — guard must still skip it)", rec.deletedIDs())
+	}
+	// Row done without touching OpenSearch.
+	var done, pending int
+	if err := h.pool.QueryRow(ctx,
+		`SELECT count(*) FILTER (WHERE status='done'), count(*) FILTER (WHERE status='pending')
+		 FROM opensearch_outbox WHERE operation='delete'`).Scan(&done, &pending); err != nil {
+		t.Fatalf("row states: %v", err)
+	}
+	if done != 1 || pending != 0 {
+		t.Fatalf("delete row done=%d pending=%d, want 1/0", done, pending)
+	}
+}
