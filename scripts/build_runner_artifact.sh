@@ -60,9 +60,12 @@ mkdir -p "$STAGE/env"
 tar -xzf "$BUILD/env.tar.gz" -C "$STAGE/env"
 rm -f "$BUILD/env.tar.gz"
 
-# --- verify entry point from the STAGED env (prefix not yet final, but
-# import surface + heavy stack must resolve) ----------------------------------
-"$STAGE/env/bin/python" -c 'import axiom_ng_runner, torch; print("staged import ok, torch", torch.__version__, "mps", torch.backends.mps.is_available())'
+# --- verify entry point from the STAGED env, from a NEUTRAL cwd (#209: a
+# source-dir cwd masks a missing install — `import axiom_ng_runner` would hit
+# ../axiom_ng_runner on sys.path even when the env shipped 0 module files). ---
+(
+    cd / && "$STAGE/env/bin/python" -c 'import axiom_ng_runner, torch; print("staged import ok (neutral cwd), torch", torch.__version__, "mps", torch.backends.mps.is_available())'
+)
 
 # --- artifact -----------------------------------------------------------------
 tar --zstd -C "$BUILD" -cf "$ARTIFACT" "runner-$VERSION"

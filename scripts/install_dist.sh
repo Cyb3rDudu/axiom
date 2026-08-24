@@ -92,7 +92,8 @@ runner)
     "$target/env/bin/python" "$target/env/bin/conda-unpack"
     # smoke: import surface must resolve in the FINAL location before the
     # current symlink switches over
-    "$target/env/bin/python" -c 'import axiom_ng_runner, torch'
+    # smoke from a NEUTRAL cwd (tests the env, not a source tree — #209 lesson)
+    (cd / && "$target/env/bin/python" -c 'import axiom_ng_runner, torch')
     cat >"$ROOT/bin/axiom-runner" <<EOF
 #!/bin/sh
 exec "$ROOT/runner/current/env/bin/python" -m axiom_ng_runner "\$@"

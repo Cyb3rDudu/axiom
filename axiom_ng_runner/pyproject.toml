@@ -12,9 +12,21 @@ requires-python = ">=3.11"
 # #204 goal 3: clean entry point, no PYTHONPATH coupling after install.
 axiom-runner = "axiom_ng_runner.__main__:main"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["axiom_ng_runner*"]
+# Flat layout: package dir is the project root. setuptools `find` returns
+# packages relative to `where` and drops the `where` root itself, so
+# `where="."` would never discover `axiom_ng_runner` and pip would install
+# 0 module files (only dist-info + console script). Pin the packages and
+# map the package base onto ".". (#209)
+[tool.setuptools]
+packages = [
+  "axiom_ng_runner",
+  "axiom_ng_runner.compute_core",
+  "axiom_ng_runner.compute_core.epub_worker",
+  "axiom_ng_runner.compute_core.pdf_worker",
+]
+
+[tool.setuptools.package-dir]
+"axiom_ng_runner" = "."
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
