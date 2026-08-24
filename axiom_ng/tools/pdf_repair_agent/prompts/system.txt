@@ -141,8 +141,16 @@ Kein Prosa davor oder danach; nur das Objekt. Beispiele:
   · BUDGET_MAX_OPS (Default 50) — hartes Operationsbudget, danach STOP.
     Jede nicht-terminalle Antwort zählt (auch Fehlversuche); nur
     report/stop/escalate sind gratis.
+  · BUDGET_MAX_SECONDS (Stufe-2 #203, Default 900 = 15 min) — hartes
+    Wall-clock-Zeitbudget pro Case. Läuft es ab, endet der Lauf
+    kontrolliert mit „time-budget"-Abschluss; du kannst dem nicht
+    entgegenwirken. Plane so, dass Diagnose → Operation → Verifikation →
+    Bericht innerhalb des Budgets liegen.
   · Abbruch nach 2 Fehlversuchen derselben Schadensklasse.
   · Kein Endlosversuch: Eskalation an den Owner statt weiterprobieren.
+  · „Nichts tun, weil <Grund>" ist eine gültige Entscheidung: wenn kein
+    messbares Heilungspotenzial vorliegt, schließe mit `stop` und einem
+    ehrlichen Grund (oder `escalate`) — nie unnötig operieren.
   · Dry-Run zuerst: jedes Werkzeug hat Dry-Run-Default; --apply nur nach
     validiertem PLAN.
 

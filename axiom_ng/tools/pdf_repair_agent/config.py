@@ -33,6 +33,11 @@ _CONFIG_SPEC = {
     "WORK_ROOT": ("PDF_REPAIR_WORK_ROOT", PACKAGE / "runs"),
     # Budget: maximale Operationen eines Agenten-Laufs.
     "BUDGET_MAX_OPS": ("PDF_REPAIR_BUDGET_MAX_OPS", "50"),
+    # Budget (Zeit): maximale Laufzeit eines Agenten-Laufs in Sekunden
+    # (Stufe-2 #203). Erzwingt „max M Minuten pro Case" INNERHALB des
+    # Agenten — vor dem externen 30-min-Kill von fix.sh — abbruch-sicher.
+    # 0 = kein Zeitbudget (Sandbox/Hermetik).
+    "BUDGET_MAX_SECONDS": ("PDF_REPAIR_BUDGET_MAX_SECONDS", "900"),
     # Sprachprofile für OCR: kommagetrennte Sprachcodes (z. B. "de", "de,en").
     "LANG_PROFILES": ("PDF_REPAIR_LANG_PROFILES", "de"),
     # Ob Annotation-Sonden geschrieben werden dürfen. Sandbox-Default: nein.
@@ -51,6 +56,7 @@ class Config:
     backup_root: Path
     work_root: Path
     budget_max_ops: int
+    budget_max_seconds: int
     lang_profiles: list[str]
     probe_write: bool
     # Beweis woher die Werte kamen (für Audit-Spur/Roh-Evidenz).
@@ -99,6 +105,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         backup_root=Path(vals["BACKUP_ROOT"]).expanduser(),
         work_root=Path(vals["WORK_ROOT"]).expanduser(),
         budget_max_ops=_env_int(vals["BUDGET_MAX_OPS"], 50),
+        budget_max_seconds=_env_int(vals["BUDGET_MAX_SECONDS"], 0),
         lang_profiles=[
             p.strip() for p in vals["LANG_PROFILES"].split(",") if p.strip()
         ],
@@ -141,6 +148,7 @@ def config_status(cfg: Config) -> dict:
         "backup_root": str(cfg.backup_root),
         "work_root": str(cfg.work_root),
         "budget_max_ops": cfg.budget_max_ops,
+        "budget_max_seconds": cfg.budget_max_seconds,
         "lang_profiles": cfg.lang_profiles,
         "probe_write": cfg.probe_write,
         "sources": sorted(cfg.provenance.keys()),

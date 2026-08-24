@@ -282,12 +282,15 @@ def run_agent(
 
     system_prompt = (HERE / "prompts" / "system.txt").read_text() + system_header()
     freigabe = "erteilt (--apply)" if apply else "NICHT erteilt (nur Dry-Run)"
+    zeit_budget = f"{cfg.budget_max_seconds}s" if cfg.budget_max_seconds > 0 else "keines"
     task = (
         f"Repariere das PDF des Zotero-Keys '{key}'.\n"
         f"Konfigurationslage: {json.dumps(status, ensure_ascii=False)}\n"
         f"Arbeitskopie: {cfg.work_root / key / 'work.pdf'} "
         f"(alle Schreibzugriffe NUR dort).\n"
         f"Schreibfreigabe: {freigabe}\n"
+        f"Zeit-Budget: {zeit_budget} pro Case; "
+        f"Operationen-Budget: {cfg.budget_max_ops}.\n"
         f"{task_extra}"
     )
     res = run_loop(
@@ -297,6 +300,7 @@ def run_agent(
         registry=build_registry(),
         cfg=_ctx(cfg, key, allow_apply=apply),
         budget_max_ops=cfg.budget_max_ops,
+        budget_max_seconds=cfg.budget_max_seconds,
     )
     report = {
         "key": key,

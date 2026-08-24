@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -184,16 +185,20 @@ def run_loop(
     registry: ToolRegistry,
     cfg=None,
     budget_max_ops: int = 50,
+    budget_max_seconds: int = 0,
     max_abort_same_class: int = 2,
     collect_history: bool = True,
 ) -> LoopResult:
     """Führt die Schleife: Modell-Antwort → step → validieren → dispatchen.
 
-    Beendet bei: stop/report/escalate (halt) · Budget (budget) · max_abort
-    Fehlversuchen derselben Klasse (abort-parse/-invalid-step/-unhandled/
-    -same-class) · Client-Fehler (client-error). ops zählt jeden
-    nicht-terminalen Modell-Rundflug inklusive Fehlversuche — das Budget
-    deckt damit JEDE Zählstelle. cfg wird 1:1 an jeden Handler
+    Beendet bei: stop/report/escalate (halt) · Budget ops (budget) ·
+    Budget ZEIT (time-budget) · max_abort Fehlversuchen derselben Klasse
+    (abort-parse/-invalid-step/-unhandled/-same-class) · Client-Fehler
+    (client-error). ops zählt jeden nicht-terminalen Modell-Rundflug
+    inklusive Fehlversuche; budget_max_seconds (Stufe-2 #203) begrenzt die
+    WALL-CLOCK-Laufzeit des Cases von außen (0 = kein Zeitbudget), damit
+    ein hängender/träger Model-Endpoint den Lauf nicht über die externe
+    fix.sh-Frist hinausdehnt. cfg wird 1:1 an jeden Handler
     durchgereicht (repair_agent injiziert die Config)."""
 
     messages = [ChatMessage("system", system_prompt), ChatMessage("user", task)]
@@ -203,6 +208,37 @@ def run_loop(
     results = [] if collect_history else None
     fin = {"action": "stop", "reason": "no-iteration"}
     reason = "no-iteration"
+
+    # Stufe-2 (#203) Zeit-Budget: Wall-clock-Deckel über den gesamten Case.
+    # 0 = deaktiviert (hermetische Tests / Sandbox). Der Loop misst Echtzeit
+    # (time.monotonic); Tests treiben es über MockClient.delay (echte
+    # Sekundenbruchteile) oder eine kleine budget_max_seconds-Schwelle.
+    t_start = time.monotonic()
+
+    def _time_budget_result(elapsed: float) -> LoopResult:
+        """Abbruch-Zeitbudget (Stufe-2 #203): der Lauf endet kontrolliert
+        mit reason=time-budget — identische Audit-Spur-Schreibpfade wie
+        ops-Budget, nie ein stilles Enden."""
+        return LoopResult(
+            final_step={
+                "action": "stop",
+                "reason": f"Zeitbudget überschritten ({elapsed:.0f}s>={budget_max_seconds}s)",
+            },
+            ops_used=ops,
+            reason="time-budget",
+            history=history or [],
+            results=results or [],
+        )
+
+    def _time_up() -> LoopResult | None:
+        """None solange Zeit übrig; sonst das Abbruch-LoopResult. Wird nur
+        bei gesetztem budget_max_seconds aktiv."""
+        if budget_max_seconds <= 0:
+            return None
+        elapsed = time.monotonic() - t_start
+        if elapsed >= budget_max_seconds:
+            return _time_budget_result(elapsed)
+        return None
 
     def _fail(
         cls: str,
@@ -248,6 +284,9 @@ def run_loop(
         return None
 
     while True:
+        done = _time_up()
+        if done is not None:
+            return done
         try:
             raw = client.complete(messages)
         except Exception as exc:  # noqa: BLE001 — Client-Fehler ist Beweis, kein Crash
@@ -258,6 +297,14 @@ def run_loop(
                 history=history or [],
                 results=results or [],
             )
+
+        # Ein träger Model-Call darf das Zeitbudget reißen, ohne dass der
+        # Schritt vorher getrennt nachgemessen würde (die nächste
+        # _time_up() an der Schleifenspitze fängt es ab — der Abbruch
+        # landet trotzdem kontrolliert im LoopResult).
+        done = _time_up()
+        if done is not None:
+            return done
 
         try:
             step = parse_step(raw)
