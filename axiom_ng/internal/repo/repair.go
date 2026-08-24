@@ -273,7 +273,10 @@ func (r *Repo) MarkRepairHealed(ctx context.Context, caseID string) error {
 // BlockRepairCase parks a queued/rejected case as blocked_for_dudu — used
 // by the queue listing when the attachment no longer exists at the source:
 // without this the case stays queued forever and every poll re-serves it
-// (review W3a). Mirrors the loop-guard UPDATE shape.
+// (review W3a). in_repair REFUSES the block (design nail: a mid-flight
+// case is never touched from outside) — callers must resolve the item
+// BEFORE claiming.
+// Mirrors the loop-guard UPDATE shape.
 func (r *Repo) BlockRepairCase(ctx context.Context, caseID, reason string) error {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE repair_cases SET status='blocked_for_dudu', blocked_reason=$2, updated_at=now()

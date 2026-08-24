@@ -36,6 +36,13 @@ rsync -a \
     --exclude '.venv' --exclude '__pycache__' --exclude 'runs' \
     axiom_ng/tools/pdf_repair_agent/ "$STAGE/app/"
 
+# fix.sh ships INTO the artifact (#206): the installed /opt/axiom/bin/axiom-fixer
+# shim execs it, so EVERY caller (invoker, operator) runs through the same
+# per-key lockdir + 30-min timeout — one source of truth, no shim duplicate.
+# fix.sh's defaults (AXIOM_FIXER=/opt/axiom/fixer/current/…) match the installed
+# layout via the `current` symlink.
+install -m 0755 scripts/fix.sh "$STAGE/fix.sh"
+
 # --- micromamba (single static binary, cached under dist/tooling) -----------
 # Shared cache with build_runner_artifact.sh — second build reuses the binary.
 MM="$DIST/tooling/bin/micromamba"

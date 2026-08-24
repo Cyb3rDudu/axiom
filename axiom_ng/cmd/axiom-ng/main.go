@@ -19,6 +19,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/dispatcher"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/fixerinvoker"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
@@ -351,9 +352,28 @@ func main() {
 		// env by design.
 		if keyBytes, kerr := os.ReadFile(cfg.ZoteroWriteKeyFile); kerr == nil && len(keyBytes) > 8 {
 			writeBase := strings.TrimSuffix(strings.TrimSuffix(cfg.ZoteroBaseURL, "/api"), "/")
-			srv.SetRepairAPI(rep, zotero.NewWriteClient(writeBase, src.ServerID(), strings.TrimSpace(string(keyBytes))),
-				cfg.QuarantineRoot)
+			zoteroWrite := zotero.NewWriteClient(writeBase, src.ServerID(), strings.TrimSpace(string(keyBytes)))
+			srv.SetRepairAPI(rep, zoteroWrite, cfg.QuarantineRoot)
 			logger.Printf("repair API enabled (zotero write gateway, quarantine under %s)", cfg.QuarantineRoot)
+			// #206 fixer invoker: the mail-ingest side of the repair queue —
+			// polls queued cases, invokes the fixer wrapper once per key,
+			// drives the case through the #184 state machine (healed via the
+			// custody sequence above). Opt-in, same pattern as the dispatcher.
+			if cfg.FixerInvokerEnabled {
+				inv := fixerinvoker.New(fixerinvoker.Config{
+					Command:     cfg.FixerCommand,
+					Concurrency: cfg.FixerConcurrency,
+				}, fixerinvoker.Deps{
+					Rep:            rep,
+					Apply:          fixerinvoker.LiveApplyDeps(rep, zoteroWrite),
+					QuarantineRoot: cfg.QuarantineRoot,
+				}, logger)
+				go func() {
+					if err := inv.Run(sigCtx); err != nil {
+						logger.Printf("fixer invoker stopped: %v", err)
+					}
+				}()
+			}
 		} else {
 			logger.Printf("repair API disabled (kein zotero write key unter %s)", cfg.ZoteroWriteKeyFile)
 		}

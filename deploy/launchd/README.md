@@ -24,6 +24,10 @@ G3's install script copies these and substitutes placeholders.
   one process per Zotero attachment key, invoked via `scripts/fix.sh <key>`
   (per-key lock + 30-min timeout). Two concurrent runs on the same key
   would corrupt the agent's working directory; the wrapper serializes.
+  Systematic caller is the fixer invoker INSIDE axiom-ng (#206:
+  `AXIOM_FIXER_INVOKER_ENABLED=1`, polls the repair queue, one `--apply`
+  invocation per claimed key) — still no launchd, no KeepAlive; see
+  docs/operations/services.md §Fixer.
 - **`$HOME` is NOT expanded by launchd.** `$HOME` works inside the
   `sh -c` ProgramArguments string (the shell expands it), but NOT in
   `StandardOutPath`/`StandardErrorPath` — the G3 installer substitutes the

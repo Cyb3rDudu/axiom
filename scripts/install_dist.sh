@@ -140,7 +140,10 @@ fixer)
     (cd / && "$target/env/bin/python" -c 'import pymupdf; print("pymupdf", __import__("pymupdf").__version__)')
     cat >"$ROOT/bin/axiom-fixer" <<EOF
 #!/bin/sh
-exec "$ROOT/fixer/current/env/bin/python" "$ROOT/fixer/current/app/repair_agent.py" "\$@"
+# Locking wrapper, not a bare exec (#206): the invoker and manual operator
+# runs must serialize per key — the shipped fix.sh carries the per-key
+# lockdir + 30-min timeout; a bare python exec would bypass both.
+exec "$ROOT/fixer/current/fix.sh" "\$@"
 EOF
     chmod +x "$ROOT/bin/axiom-fixer"
     ln -sfn "$version" "$ROOT/fixer/current"

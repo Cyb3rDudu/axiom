@@ -13,7 +13,6 @@ import (
 	"log"
 	"math"
 	"net/http"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -319,64 +318,37 @@ func (d liveRepairDeps) AuditWrite(ctx context.Context, caseID, attachmentID, ac
 	return d.rep.AuditWrite(ctx, caseID, attachmentID, action, detail)
 }
 
-// applyRepair runs the auto-apply custody sequence — quarantine the ORIGINAL
-// → quarantine audit (fail-closed BEFORE any mutation: no unaudited writes)
-// → delete the broken item → create the healed attachment under a SCHEMA
-// filename → post-mutation audits (logged, never rolled back — the
-// quarantine copy is the manual-recovery basis) → healed. Every failure
-// marks the case failed with the failing step named. Extracted from the HTTP
-// handler so tests can pin the ordering with fake deps (review W4).
+// applyRepair delegates to repair.Apply (#206: the custody sequence moved
+// to internal/repair so the HTTP surface and the fixer invoker run the
+// IDENTICAL ordering — it must never drift between duplicates). Kept as a
+// method so the existing ordering tests (repair_api_test.go, review W4)
+// keep pinning this call path unchanged.
 func (s *Server) applyRepair(ctx context.Context, d repairApplyDeps, caseID string, planVersion int,
 	item *repairQueueItem, srcPath string, pdf []byte) (map[string]any, int, error) {
-
-	// 1. quarantine the ORIGINAL before any mutation (design nail)
-	qpath, err := d.Quarantine(s.quarantineRoot, item.AttachmentKey, srcPath)
+	res, err := repair.Apply(ctx, d, s.quarantineRoot, repair.ApplyCase{
+		CaseID:        caseID,
+		AttachmentID:  item.AttachmentID,
+		AttachmentKey: item.AttachmentKey,
+		DocumentKey:   item.DocumentKey,
+		Title:         item.Title,
+		Creators:      item.Creators,
+		Year:          item.Year,
+		Publisher:     item.Publisher,
+		SrcPath:       srcPath,
+		PlanVersion:   planVersion,
+	}, pdf)
 	if err != nil {
-		_ = d.MarkRepairFailed(ctx, caseID, "quarantine: "+err.Error())
-		return nil, http.StatusInternalServerError, fmt.Errorf("quarantine: %w", err)
-	}
-	if err := d.AuditWrite(ctx, caseID, item.AttachmentID, "quarantine",
-		map[string]any{"path": qpath, "original": path.Base(srcPath)}); err != nil {
-		// custody nail: no UNAUDITED mutation — fail closed BEFORE the delete
-		_ = d.MarkRepairFailed(ctx, caseID, "quarantine-audit: "+err.Error())
-		return nil, http.StatusInternalServerError, fmt.Errorf("quarantine-audit: %w", err)
-	}
-
-	// 2. delete the broken attachment item
-	if err := d.DeleteAttachment(item.AttachmentKey); err != nil {
-		_ = d.MarkRepairFailed(ctx, caseID, "zotero delete: "+err.Error())
-		return nil, http.StatusBadGateway, fmt.Errorf("zotero delete: %w", err)
-	}
-	if err := d.AuditWrite(ctx, caseID, item.AttachmentID, "delete_attachment",
-		map[string]any{"zotero_key": item.AttachmentKey, "quarantine": qpath}); err != nil {
-		// documented residual: the delete already happened — a failed
-		// post-mutation audit row is LOGGED, not rolled back (the quarantine
-		// copy holds the original for manual recovery).
-		log.Printf("repair %s: delete_attachment-audit fehlgeschlagen: %v", caseID, err)
-	}
-
-	// 3. create the healed attachment under a SCHEMA filename (no patch)
-	filename := repair.SchemaFilename(item.Creators, item.Year, item.Title, item.Publisher)
-	newKey, err := d.CreateAttachmentWithFile(item.DocumentKey, filename, pdf)
-	if err != nil {
-		_ = d.MarkRepairFailed(ctx, caseID, "zotero create: "+err.Error())
-		return nil, http.StatusBadGateway, fmt.Errorf("zotero create: %w", err)
-	}
-	if err := d.AuditWrite(ctx, caseID, item.AttachmentID, "create_attachment",
-		map[string]any{"new_zotero_key": newKey, "filename": filename, "plan_version": planVersion}); err != nil {
-		// documented residual (same class as above): logged, not rolled back
-		log.Printf("repair %s: create_attachment-audit fehlgeschlagen: %v", caseID, err)
-	}
-
-	if err := d.MarkRepairHealed(ctx, caseID); err != nil {
-		return nil, http.StatusInternalServerError, err
+		status := http.StatusInternalServerError
+		if errors.Is(err, repair.ErrZoteroWrite) {
+			status = http.StatusBadGateway
+		}
+		return nil, status, err
 	}
 	return map[string]any{
-		"applied": true, "new_attachment_key": newKey,
-		"filename": filename, "quarantine": qpath,
+		"applied": true, "new_attachment_key": res.NewAttachmentKey,
+		"filename": res.Filename, "quarantine": res.Quarantine,
 	}, http.StatusOK, nil
 }
-
 func attachmentIDForCase(r *http.Request, s *Server, caseID string) (string, error) {
 	var attID string
 	if err := s.repairRepo.Pool().QueryRow(r.Context(),

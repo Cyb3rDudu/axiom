@@ -92,6 +92,54 @@ a dead pid — the wrapper detects that and recovers automatically. Manual
 recovery (only if the pid file is unreadable):
 `rmdir ~/.local/state/axiom/runs/fix-<key>.lock`.
 
+### Fixer caller — the mail-ingest invoker (#206)
+
+The systematic caller of `fix.sh` is the **fixer invoker**, a loop inside
+`axiom-ng` (NOT a launchd service, NOT KeepAlive — the event-runner owner
+decision stands). Enabled with `AXIOM_FIXER_INVOKER_ENABLED=1` in the env
+file of an axiom-ng instance that also carries the Zotero write key
+(the repair API must be wired — the invoker uploads through it).
+
+- **Who/when:** polls the `repair_cases` queue (status `queued`) every
+  30 s, resolves each case to its attachment key, claims it
+  (`queued → in_repair`, loop guard included), and invokes
+  `AXIOM_FIXER_CMD <key> --apply` (default `/opt/axiom/bin/axiom-fixer`, the
+  same wrapper contract as `scripts/fix.sh`). One invocation per key per
+  claim — the one-shot `--key` contract is untouched.
+- **Timeout:** fix.sh's own 30-min kill (lockdir + timeout binary) does the
+  primary work; the invoker runs a 35-min context backstop above it, so a
+  wedged wrapper can never hang the invoker.
+- **Concurrency:** `AXIOM_FIXER_CONCURRENCY` (default 1, clamped to 1–2)
+  parallel fixer runs per host — the per-key lockdir additionally
+  serializes against manual operator runs (exit 3 is treated as an
+  ordinary retryable failure).
+- **Success:** fixer exit 0 AND a healed `work.pdf` under
+  `~/.local/state/axiom/runs/<key>/` — exit 0 alone is NOT success (a
+  green exit without the artifact fails). The healed pdf runs through the
+  audited custody sequence (quarantine original → delete → create/upload
+  schema filename → `healed`) and the next sync/preflight GREEN re-ingests
+  it — the normal ingest path, no side door.
+- **Failure & retry:** non-zero exit, timeout, or missing healed pdf → the
+  case goes back to `queued` while attempts remain (max 2 per attachment,
+  the `repair_attempts` loop guard), then parks as `failed` with the
+  fixer's exit reason; the third claim of a still-broken attachment is
+  `blocked_for_dudu` (loop-guard escalation). A case whose attachment
+  vanished at the source parks `blocked_for_dudu('attachment-gone')`.
+- **Crash safety:** the invoker never dies on a case (per-case recover,
+  per-case timeout, process-group kill on the backstop) and a dead invoker
+  loses no case: stale `in_repair` claims older than 40 min are requeued by
+  the per-tick reaper — the dispatcher lease-recovery pattern; the loop
+  guard still caps attempts. The installed `/opt/axiom/bin/axiom-fixer`
+  shim execs the fix.sh shipped INSIDE the artifact, so invoker and manual
+  operator runs share the same per-key lock. Narrow residual: if the
+  attachment disappears between item resolution and claim, the case ends
+  `failed` with a Zotero-404-flavored reason instead of
+  `blocked_for_dudu('attachment-gone')` — bounded and visible.
+
+The fixer has NO env file in this scheme: its package-local `config.env`
+(via its own `load_config_envfile`, inside the artifact) carries the
+non-secret settings, and `--key` stays a per-event argument.
+
 ## Env files & secrets
 
 One file per service in `~/.config/axiom/`, mode 0700. Secrets (DSN, HMAC

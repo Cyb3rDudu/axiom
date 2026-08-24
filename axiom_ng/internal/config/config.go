@@ -118,6 +118,15 @@ type Config struct {
 	// DispatcherLeaseDuration is the per-claim lease length.
 	DispatcherLeaseDuration time.Duration
 
+	// FixerInvokerEnabled gates the mail-ingest fixer caller (#206): polls
+	// the repair queue and invokes the fixer wrapper once per attachment
+	// key. Opt-in like the dispatcher — never runs unless explicitly on.
+	FixerInvokerEnabled bool
+	// FixerCommand is the fixer wrapper (Command <key> --apply).
+	FixerCommand string
+	// FixerConcurrency caps parallel fixer runs per host (owner nail: 1-2).
+	FixerConcurrency int
+
 	// ArtifactRoot is the durable derived-artifact root (AXIOM_ARTIFACT_ROOT).
 	ArtifactRoot string
 
@@ -187,6 +196,9 @@ func Load() Config {
 		DispatcherConcurrency:   envInt("AXIOM_DISPATCHER_CONCURRENCY", 1),
 		DispatcherProfile:       env("AXIOM_DISPATCHER_PROFILE", defaultProfile),
 		DispatcherLeaseDuration: envDur("AXIOM_DISPATCHER_LEASE", 5*time.Minute),
+		FixerInvokerEnabled:    envBool("AXIOM_FIXER_INVOKER_ENABLED"),
+		FixerCommand:           env("AXIOM_FIXER_CMD", "/opt/axiom/bin/axiom-fixer"),
+		FixerConcurrency:       envInt("AXIOM_FIXER_CONCURRENCY", 1),
 		ArtifactRoot:            env("AXIOM_ARTIFACT_ROOT", ""),
 		ZoteroWriteKeyFile:      env("AXIOM_ZOTERO_WRITE_KEY_FILE", os.Getenv("HOME")+"/.axiom-ng/write-api-key"),
 		QuarantineRoot:          env("AXIOM_QUARANTINE_ROOT", quarantineDefault),
