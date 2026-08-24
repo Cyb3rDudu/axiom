@@ -12,7 +12,7 @@ import (
 	"io"
 	"log"
 	"net"
-
+	"strings"
 	"testing"
 	"time"
 
@@ -70,7 +70,10 @@ func TestIngestFailoverJobCompletesViaLocalFallback(t *testing.T) {
 		t.Fatalf("ack must route to the owning fallback, hits = %d", fallback.ackHits)
 	}
 	fails := logBuf.String()
-	if !bytes.Contains([]byte(fails), []byte("ingest failover: primary runner")) {
+	// The failover document line uses the candidate-based wording of the
+	// ordered list feature (#207): a dead primary is "candidate <url>
+	// unavailable" (the old "primary runner" phrasing predates the chain).
+	if !strings.Contains(fails, "ingest failover: candidate ") || !strings.Contains(fails, "unavailable") {
 		t.Fatalf("failover must be documented in the log, got: %q", fails)
 	}
 	t.Logf("[IT] failover log: %s", fails)

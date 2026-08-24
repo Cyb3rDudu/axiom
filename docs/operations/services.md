@@ -95,8 +95,16 @@ wiped /tmp and took the secret with it), never inline in plists.
 - `rag-api.env` — instance: `AXIOM_API_PORT=8011`, `AXIOM_BIND_ADDR`,
   `AXIOM_DISPATCHER_ENABLED=0`
 - `rag-dispatch-gpuN.env` — per dispatcher: port 8013+,
-  `AXIOM_DISPATCHER_ENABLED=1`, worker id, `AXIOM_PROCESSOR_URL`,
+  `AXIOM_DISPATCHER_ENABLED=1`, worker id,
   `AXIOM_DISPATCHER_PROFILE` (the empty-profile trap: assert non-empty!)
+- Ingest runner selection (#207): `AXIOM_PROCESSOR_URLS` = ordered candidate
+  list (e.g. `http://192.168.1.2:19542,http://127.0.0.1:8012` — Carrier
+  first, local floor last). The SAME env file works at home and on the
+  road: without the Carrier, the health probe skips it and ingest runs
+  locally — no reconfiguration, no failover timeout per submit.
+  The legacy pair `AXIOM_PROCESSOR_URL` + `AXIOM_INGEST_FALLBACK_URL` keeps
+  working (folded into a two-entry chain); plural wins when both are set.
+  Optional: `AXIOM_RUNNER_HEALTH_INTERVAL` (default 60s).
 - `runner.env` — `AXIOM_PROCESSOR_COMPUTE=real`, `AXIOM_PROCESSOR_PORT=8012`
 
 Two operational traps with env files (both hit during the v0.1.11
