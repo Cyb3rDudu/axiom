@@ -33,6 +33,67 @@ class PreflightResult:
         return f"{kopf}PREFLIGHT {'GRÜN' if self.ok else 'REJECT'} — {self.verdacht} — {self.grund}"
 
 
+def _text_metrics(doc) -> dict:
+    """#175 text-layer metrics: per-page text presence/density plus the
+    suspicious patterns (blank-series, image-only pages) the preflight report
+    must surface BEFORE chunking. All numbers are cheap pymupdf measures —
+    no ML, exactly the "billig haltbar" contract. Returns a plain dict."""
+    n = doc.page_count
+    per_page: list[dict] = []
+    blank: list[int] = []       # page indices with no extractable text at all
+    image_only: list[int] = []  # pages with images but zero text chars
+    total_chars = 0
+    for i in range(n):
+        page = doc[i]
+        txt = page.get_text("text")
+        chars = len(txt.strip())
+        total_chars += chars
+        has_images = bool(page.get_images(full=True))
+        per_page.append({
+            "page": i + 1,
+            "chars": chars,
+            "density": round(chars / max(1, page.rect.width * page.rect.height), 5),
+        })
+        if chars == 0:
+            blank.append(i + 1)
+            if has_images:
+                image_only.append(i + 1)
+    # Leere-Seiten-Serie: ≥3 aufeinanderfolgende leere Seiten.
+    blank_series: list[list[int]] = []
+    run: list[int] = []
+    for pg in range(1, n + 1):
+        if pg in blank:
+            run.append(pg)
+        else:
+            if len(run) >= 3:
+                blank_series.append(run)
+            run = []
+    if len(run) >= 3:
+        blank_series.append(run)
+    text_layer = total_chars > 0
+    patterns: list[str] = []
+    if text_layer and total_chars < n * 40:  # <40 chars/Seite im Schnitt ≈ fast leer
+        patterns.append("sehr geringe Textdichte")
+    if blank_series:
+        patterns.append(
+            "leere-Seite-Serie: " + ",".join(f"{r[0]}-{r[-1]}" for r in blank_series)
+        )
+    if image_only and len(image_only) >= max(1, n // 2):
+        patterns.append(
+            f"viele reine Bildseiten ohne OCR-Text ({len(image_only)}/{n})"
+        )
+    return {
+        "text_layer": text_layer,
+        "total_chars": total_chars,
+        "mean_chars_per_page": round(total_chars / n, 1) if n else 0,
+        "per_page": per_page,
+        "blank_pages": blank,
+        "image_only_pages": image_only,
+        "blank_series": blank_series,
+        "suspicious_patterns": patterns,
+    }
+
+
 def analyze_pdf(pdf_path: str) -> dict:
     import pymupdf  # type: ignore[import-not-found]
 
@@ -43,6 +104,7 @@ def analyze_pdf(pdf_path: str) -> dict:
     try:
         n = doc.page_count
         labels = extract_page_labels(pdf_path)
+        tm = _text_metrics(doc)
         tier1 = sum(1 for i in range(n) if (doc[i].get_label() or "").strip())
         if tier1 < n * 0.5 or (n > 0 and tier1 * 2 == n):
             label_verdict, label_reason = "kein Tier-1 (nur Footer/physisch)", "tier-2/3-fallback"
@@ -95,6 +157,14 @@ def analyze_pdf(pdf_path: str) -> dict:
             "folio_verifiziert": len(verified),
             "luecken_zwischen_laeufen": gaps,
             "versatz": offset if offset_consistent else None,
+            # #175 text-layer metrics (preflight, billig haltbar: pymupdf).
+            "text_layer": tm["text_layer"],
+            "mean_chars_per_page": tm["mean_chars_per_page"],
+            "per_page_density": tm["per_page"],
+            "blank_pages": tm["blank_pages"],
+            "image_only_pages": tm["image_only_pages"],
+            "blank_series": tm["blank_series"],
+            "suspicious_patterns": tm["suspicious_patterns"],
             "verdacht": suspicion,
         }
     finally:

@@ -183,6 +183,24 @@ class RerankResponse(BaseModel):
     scores: list[RerankScore]
 
 
+# --- Preflight (POST /v1/pdf/preflight, #175) ------------------------------
+
+
+class PreflightReport(BaseModel):
+    """Built from pdf_health.analyze_pdf: a READ-ONLY quality diagnostic of a
+    PDF BEFORE chunking (#175). No repair, no mutation of upstream state.
+    ok=False means the quality gate rejects it (repair-case / skip policy);
+    the nested `details` mirrors analyze_pdf (labels, folio runs, versatz,
+    text-layer metrics)."""
+    model_config = ConfigDict(extra="allow")
+    contract_version: str
+    source_name: str
+    ok: bool
+    verdacht: str
+    grund: str
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
 # --- Ack (POST /v1/jobs/{id}/ack, contract §15) ----------------------------
 
 

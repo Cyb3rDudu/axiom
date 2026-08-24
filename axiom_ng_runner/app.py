@@ -8,6 +8,7 @@ the request connection open.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 import threading
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 
 from . import (
     CONTRACT_VERSION,
@@ -29,6 +30,7 @@ from . import (
     __version__,
     query_service,
 )
+from .compute_core import pdf_health  # type: ignore[reportMissingImports]
 from .config import settings
 from .job_store import Job, JobIdCollision, JobStore
 from .models import (
@@ -38,6 +40,7 @@ from .models import (
     EmbedRequest,
     EmbedResponse,
     JobStatus,
+    PreflightReport,
     ProcessAccept,
     ProcessRequest,
     RerankRequest,
@@ -124,6 +127,7 @@ def _capabilities() -> Capabilities:
             "entity_relationships": True,
             "query_embedding": True,
             "reranking": True,
+            "pdf_preflight": True,  # #175: /v1/pdf/preflight reads PDF bytes → quality gate
         },
         models={
             "dense_embedding": {"name": DENSE_EMBEDDING_MODEL, "dimensions": DENSE_EMBEDDING_DIM},
@@ -756,4 +760,62 @@ def rerank_texts(body: RerankRequest) -> RerankResponse:
         contract_version=CONTRACT_VERSION,
         model=RERANKER_MODEL,
         scores=ranked,
+    )
+
+
+@app.post("/v1/pdf/preflight", response_model=PreflightReport)
+async def pdf_preflight(request: Request):
+    """#175 quality gate BEFORE chunking: takes a PDF as raw bytes
+    (Content-Type: application/pdf), runs the read-only pdf_health.analyze_pdf
+    metrics (text layer, page density, blank/image-only series, label/folio
+    anomalies) and returns the structured report. NO repair, no upstream
+    mutation — diagnosis only. `ok=false` flags a job for the repair/skip
+    policy. Body = the PDF bytes (raw), not a wrapper/envelope.
+    """
+    data = await request.body()
+    if not data:
+        raise _query_reject("PREFLIGHT_EMPTY", "no PDF bytes in request body")
+
+    # #175: pure byte consumer — never touch the source storage; land the
+    # bytes in the runner's own work_root temp space, analyze, delete.
+    s = settings.get()
+    work = s.work_root / "preflight"
+    work.mkdir(parents=True, exist_ok=True)
+    tmp = work / f"preflight-{uuid.uuid4().hex}.pdf"
+    try:
+        tmp.write_bytes(data)
+        d = await asyncio.get_running_loop().run_in_executor(
+            None, pdf_health.analyze_pdf, str(tmp)
+        )
+    except Exception as exc:  # noqa: BLE001 — a broken PDF is evidence, not a traceback
+        # A parse failure (pymupdf.FileDataError / FileNotFoundError) is a
+        # legitimate diagnostic: the caller's policy treats it as un-assessable
+        # and falls back, but never as silent ok. Raise a structured 500.
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "PREFLIGHT_PARSE",
+                "message": f"PDF konnte nicht analysiert werden: {type(exc).__name__}: {exc}",
+            },
+        ) from None
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    v = d.get("verdacht", "")
+    # #175 blocker fix (review): ok must ALSO require a text layer — a
+    # textless scan with sane labels would otherwise report green and the
+    # dispatcher would chunk a PDF that yields junk chunks. The label/folio
+    # verdict alone (🟢/🟡) is not enough; yellow-with-text and red verdicts
+    # behave exactly as before, only textless now fails the gate.
+    ok = (v.startswith(("🟢", "🟡"))) and bool(d.get("text_layer"))
+    return PreflightReport(
+        contract_version=CONTRACT_VERSION,
+        source_name="inline",
+        ok=ok,
+        verdacht=v,
+        grund=d.get("label_befund", ""),
+        details=d,
     )
