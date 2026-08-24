@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -78,6 +80,15 @@ type Config struct {
 	// ProcessorSourceSecret is the shared HMAC secret for source URLs; must
 	// match the server's AXIOM_PROCESSOR_SOURCE_SECRET.
 	ProcessorSourceSecret string
+
+	// PreflightEnabled (#175): when set, a claimed job's source PDF is sent
+	// to the runner's /v1/pdf/preflight BEFORE full processing. A failed
+	// preflight (quality gate red) skips the job (status=skipped, reason =
+	// preflight) and marks the attachment as a repair-case candidate instead
+	// of producing junk chunks. When unset, no preflight runs (jobs process
+	// as today). Each preflight call is bounded by the processor client's
+	// small-call budget (15s).
+	PreflightEnabled bool
 }
 
 // processorClient is the runner surface the dispatcher drives. The concrete
@@ -86,6 +97,7 @@ type Config struct {
 type processorClient interface {
 	Capabilities(ctx context.Context) (*processor.Capabilities, error)
 	SubmitProcess(ctx context.Context, req *processor.ProcessRequest) (*processor.ProcessAccepted, error)
+	Preflight(ctx context.Context, pdf []byte) (*processor.PreflightReport, error) // #175 quality gate
 	JobStatus(ctx context.Context, jobID string) (*processor.JobStatus, error)
 	JobResult(ctx context.Context, jobID string) ([]byte, error)
 	Artifact(ctx context.Context, jobID, ref string) ([]byte, error)
@@ -353,6 +365,17 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 		return
 	}
 
+	// #175 preflight quality gate: BEFORE full processing, a claimed job's
+	// source PDF is sent to the runner's /v1/pdf/preflight. A failed gate
+	// (quality red) skips the job (status=skipped, reason=preflight) and
+	// marks the attachment as a repair-case candidate instead of producing
+	// junk chunks. Advisory by design: an unassessable doc (unreadable local
+	// path, runner preflight error) proceeds normally — preflight never
+	// blocks a job it cannot measure.
+	if d.cfg.PreflightEnabled && d.preflightGate(ctx, claimed, req) {
+		return
+	}
+
 	if _, err := d.client.SubmitProcess(ctx, req); err != nil {
 		d.handleSubmitFailure(ctx, claimed, err)
 		return
@@ -421,4 +444,71 @@ func (d *Dispatcher) markNotProcessable(ctx context.Context, ref repo.LeaseRef, 
 	if err := d.rep.MarkFailed(ctx, ref, "NOT_PROCESSABLE", cause.Error()); err != nil && !isLost(err) {
 		d.logger.Printf("%v: mark failed: %v", fields, err)
 	}
+}
+
+// preflightGate (#175) runs the runner's /v1/pdf/preflight on the claimed job's
+// source PDF and applies the quality policy. Returns true if the job was
+// handled (skipped + repair-cased) and must NOT proceed to SubmitProcess;
+// false means proceed normally. The gate is advisory: it never blocks a job it
+// cannot assess (unreadable local source, runner preflight error).
+func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob, req *processor.ProcessRequest) bool {
+	ref := claimed.LeaseRef
+	fields := []any{ref.JobID, claimed.AttachmentID, claimed.DocumentID, claimed.Attempt}
+
+	if req.Attachment.LocalPath == "" {
+		d.logger.Printf("%v: preflight skipped — no local source path available", fields)
+		return false // proceed: no bytes to assess
+	}
+	// local_path may carry a file:// prefix (Zotero convention) — strip it
+	// before reading, mirroring the fixer invoker's TrimPrefix pattern.
+	local := strings.TrimPrefix(req.Attachment.LocalPath, "file://")
+	pdf, err := os.ReadFile(local)
+	if err != nil {
+		d.logger.Printf("%v: preflight skipped — cannot read source %s: %v", fields, local, err)
+		return false // proceed: advisory only, never block unassessable
+	}
+	report, err := d.client.Preflight(ctx, pdf)
+	if err != nil {
+		d.logger.Printf("%v: preflight skipped — runner preflight error: %v", fields, err)
+		return false // proceed: a broken quality gate must not hold a job hostage
+	}
+
+	qs := map[string]any{
+		"verdict":             boolMap(report.Ok, "pass", "fail"),
+		"verdacht":            report.Verdacht,
+		"grund":               report.Grund,
+		"pages":               report.Details["pages"],
+		"text_layer":          report.Details["text_layer"],
+		"mean_chars_per_page": report.Details["mean_chars_per_page"],
+		"suspicious_patterns": report.Details["suspicious_patterns"],
+	}
+	qsJSON, _ := json.Marshal(qs)
+	if err := d.rep.SetQualityState(ctx, ref, qsJSON); err != nil && !isLost(err) {
+		d.logger.Printf("%v: set quality_state: %v", fields, err)
+	}
+
+	if report.Ok {
+		d.logger.Printf("%v: preflight PASS (%s)", fields, report.Verdacht)
+		return false // quality green → proceed to full processing
+	}
+
+	// Quality red: do not produce junk chunks. Skip the job with a clear
+	// reason and mark the attachment as a repair-case candidate (#206/#203).
+	reason := "preflight:" + report.Verdacht
+	d.logger.Printf("%v: preflight FAIL (%s) — skipping job, marking repair candidate", fields, reason)
+	if _, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Verdacht, qsJSON); err != nil && !isLost(err) {
+		d.logger.Printf("%v: repair-case: %v", fields, err)
+	}
+	if err := d.rep.MarkSkipped(ctx, ref, reason); err != nil && !isLost(err) {
+		d.logger.Printf("%v: mark skipped: %v", fields, err)
+	}
+	return true // handled: skip SubmitProcess
+}
+
+// boolMap renders a two-state verdict into a compact string.
+func boolMap(b bool, t, f string) string {
+	if b {
+		return t
+	}
+	return f
 }

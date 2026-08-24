@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -149,5 +150,66 @@ func TestCapabilitiesDecodesModelsWarmed(t *testing.T) {
 				t.Fatalf("ModelsWarmed = %v, want %v", caps.ModelsWarmed, tc.want)
 			}
 		})
+	}
+}
+
+func TestPreflightDecodesAndSendsBytes(t *testing.T) {
+	var sentBody []byte
+	c := clientFor(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/pdf/preflight" {
+			w.WriteHeader(404)
+			return
+		}
+		if r.Method != http.MethodPost {
+			w.WriteHeader(405)
+			return
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "application/pdf" {
+			t.Errorf("content-type = %q, want application/pdf", ct)
+		}
+		sentBody, _ = io.ReadAll(r.Body)
+		mustJSON(w, 200, map[string]any{
+			"contract_version": "1.0",
+			"source_name":      "inline",
+			"ok":               false,
+			"verdacht":         "🔴 unpaginiert",
+			"grund":            "kein Tier-1",
+			"details": map[string]any{
+				"pages": 8, "text_layer": false,
+				"suspicious_patterns": []any{"leere-Seite-Serie: 1-8"},
+			},
+		})
+	}))
+	rep, err := c.Preflight(context.Background(), []byte("%PDF-test-bytes"))
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	if !strings.HasPrefix(string(sentBody), "%PDF-test-bytes") {
+		t.Fatalf("body sent = %q, want the raw pdf bytes", string(sentBody))
+	}
+	if rep.Ok || rep.Verdacht != "🔴 unpaginiert" {
+		t.Fatalf("report decode wrong: %+v", rep)
+	}
+	if d := rep.Details["pages"]; d == nil || d.(float64) != 8 {
+		t.Fatalf("details.pages wrong: %v", rep.Details)
+	}
+}
+
+func TestPreflightParseErrorSurfacesAsStatusError(t *testing.T) {
+	c := clientFor(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/pdf/preflight" {
+			w.WriteHeader(500)
+			io.WriteString(w, `{"detail":{"code":"PREFLIGHT_PARSE","message":"kaputt"}}`)
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	_, err := c.Preflight(context.Background(), []byte("garbage"))
+	if err == nil {
+		t.Fatal("want error on preflight 500")
+	}
+	se, ok := err.(*StatusError)
+	if !ok || se.Code != 500 {
+		t.Fatalf("want *StatusError 500, got %T (%v)", err, err)
 	}
 }

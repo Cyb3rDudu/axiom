@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
@@ -31,6 +32,9 @@ type Job struct {
 	ErrorMessage *string
 	ResolvedAt   *string
 	EnqueuedAt   string
+	// QualityState (#175): the preflight report JSONB (verdict/verdacht/pages/
+	// text_layer/…), nil when not assessed.
+	QualityState json.RawMessage
 }
 
 // FailedJob describes a file-resolution failure that should be persisted as a
@@ -54,7 +58,7 @@ func (r *Repo) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id::text, source_id, document_id, attachment_id,
 		       status::text, content_hash, attempt, max_attempts, error_code,
-		       error_message, resolved_at::text, enqueued_at::text
+		       error_message, resolved_at::text, enqueued_at::text, quality_state
 		FROM ingest_jobs
 		ORDER BY enqueued_at DESC
 		LIMIT $1
@@ -69,7 +73,8 @@ func (r *Repo) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 		var j Job
 		if err := rows.Scan(&j.ID, &j.SourceID, &j.DocumentID, &j.AttachmentID,
 			&j.Status, &j.ContentHash, &j.Attempt, &j.MaxAttempts,
-			&j.ErrorCode, &j.ErrorMessage, &j.ResolvedAt, &j.EnqueuedAt); err != nil {
+			&j.ErrorCode, &j.ErrorMessage, &j.ResolvedAt, &j.EnqueuedAt,
+			&j.QualityState); err != nil {
 			return nil, fmt.Errorf("scan job: %w", err)
 		}
 		jobs = append(jobs, j)
@@ -82,7 +87,7 @@ func (r *Repo) ListJobsByAttachment(ctx context.Context, attachmentID string) ([
 	rows, err := r.pool.Query(ctx, `
 		SELECT id::text, source_id, document_id, attachment_id,
 		       status::text, content_hash, attempt, max_attempts, error_code,
-		       error_message, resolved_at::text, enqueued_at::text
+		       error_message, resolved_at::text, enqueued_at::text, quality_state
 		FROM ingest_jobs
 		WHERE attachment_id = $1
 		ORDER BY enqueued_at DESC
@@ -96,7 +101,8 @@ func (r *Repo) ListJobsByAttachment(ctx context.Context, attachmentID string) ([
 		var j Job
 		if err := rows.Scan(&j.ID, &j.SourceID, &j.DocumentID, &j.AttachmentID,
 			&j.Status, &j.ContentHash, &j.Attempt, &j.MaxAttempts,
-			&j.ErrorCode, &j.ErrorMessage, &j.ResolvedAt, &j.EnqueuedAt); err != nil {
+			&j.ErrorCode, &j.ErrorMessage, &j.ResolvedAt, &j.EnqueuedAt,
+			&j.QualityState); err != nil {
 			return nil, fmt.Errorf("scan job: %w", err)
 		}
 		jobs = append(jobs, j)

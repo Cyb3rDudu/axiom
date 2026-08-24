@@ -465,6 +465,7 @@ func main() {
 				OpenSearchPassword:     cfg.OpenSearchPassword,
 				ProcessorSourceBaseURL: cfg.ProcessorSourceBaseURL,
 				ProcessorSourceSecret:  cfg.ProcessorSourceSecret,
+				PreflightEnabled:       cfg.DispatcherPreflightEnabled, // #175
 			}, logger)
 			// #214: a fatal dispatcher error (capability negotiation still failing
 			// after the startup retry window) must exit the process non-zero so

@@ -917,6 +917,26 @@ func (r *Repo) MarkSkipped(ctx context.Context, ref LeaseRef, reason string) err
 	return nil
 }
 
+// SetQualityState (#175) records the preflight report on a claimed-job row,
+// fenced by lease ownership — a stale worker that lost the lease cannot clobber
+// a new owner's state. It does not change job status (only mark_* transitions
+// do); the dispatcher calls it right after /v1/pdf/preflight so the quality
+// decision is observable even before/without full processing.
+func (r *Repo) SetQualityState(ctx context.Context, ref LeaseRef, quality json.RawMessage) error {
+	ok, err := r.fencedUpdate(ctx, r.pool, `
+		UPDATE ingest_jobs SET quality_state=$4, updated_at=now()
+		WHERE id=$1 AND claimed_by=$2 AND lease_token=$3
+		  AND lease_until IS NOT NULL AND lease_until > clock_timestamp()
+	`, ref, quality)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("set quality_state: %w", ErrLostLease)
+	}
+	return nil
+}
+
 // RequestCancellation converges a non-terminal job to cancelled. It is
 // idempotent and does not require ownership (an operator may cancel a job any
 // worker holds). A PENDING job is cancelled in the same SQL operation; a

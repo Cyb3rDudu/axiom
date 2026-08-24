@@ -189,6 +189,12 @@ type fakeProcessor struct {
 	processFailStatus int
 	processFailBody   string
 
+	// #175 preflight: when preflightReport is non-nil, POST /v1/pdf/preflight
+	// answers with it; when nil the endpoint 404s (covers the preflight-
+	// disabled shape). preflightHits counts calls.
+	preflightReport *map[string]any
+	preflightHits   int
+
 	// script holds one handler per probe. index is consumed by the switch in serve.
 	statuses      []string // sequence of statuses returned by GET /v1/jobs/{id}
 	statusIdx     int
@@ -234,6 +240,13 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 				"dense_embedding": map[string]any{"name": "fake-bge", "dimensions": 3},
 			},
 		})
+	case r.Method == http.MethodPost && path == "/v1/pdf/preflight":
+		fp.preflightHits++
+		if fp.preflightReport == nil {
+			w.WriteHeader(404)
+			return
+		}
+		writeJSON(w, 200, *fp.preflightReport)
 	case r.Method == http.MethodPost && path == "/v1/process":
 		b, _ := io.ReadAll(r.Body)
 		fp.processBody = b
@@ -1145,5 +1158,100 @@ func TestStartupRetryIsGracefulOnShutdown(t *testing.T) {
 	}
 	if runErr != nil {
 		t.Fatalf("Run returned %v on graceful shutdown; want nil (clean exit)", runErr)
+	}
+}
+
+// testMinimalPDF is a tiny valid one-page PDF (space-saving literal) so the
+// preflight gate has real bytes to read from the seeded attachment's
+// local_path. Yes, it's a hand-rolled PDF with an uncompressed page stream.
+const testMinimalPDF = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R>>endobj\n4 0 obj<</Length 44>>stream\nBT /F1 12 Tf 72 120 Td (ok) Tj ET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \ntrailer<</Root 1 0 R/Size 5>>\nstartxref\n0\n%%EOF\n"
+
+// openRepairCaseCount returns the number of open repair cases for an
+// attachment (a preflight-fail must create exactly one, per the unique-open
+// constraint).
+func (h *dispatchHarness) openRepairCaseCount(t *testing.T, attID string) int {
+	t.Helper()
+	var n int
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM repair_cases WHERE attachment_id=$1 AND status IN ('rejected','queued','in_repair')`,
+		attID).Scan(&n); err != nil {
+		t.Fatalf("count repair cases: %v", err)
+	}
+	return n
+}
+
+// ingestion quality gate policy (#175): a quality-red preflight skips the job
+// (terminal, not failed) and marks the attachment as a repair-case candidate,
+// so no junk chunks are produced and the fixer (#206/#203) can later heal it.
+func TestPreflightFailSkipsJobAndCreatesRepairCase(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "Q1", 3)
+
+	// The seed hardcodes local_path=/tmp/x.pdf; write real bytes so the
+	// preflight gate can read them.
+	if err := os.WriteFile("/tmp/x.pdf", []byte(testMinimalPDF), 0o600); err != nil {
+		t.Fatalf("write source pdf: %v", err)
+	}
+
+	fp := newFakeProcessor(t)
+	fp.preflightReport = &map[string]any{
+		"contract_version": "1.0",
+		"source_name":      "inline",
+		"ok":               false,
+		"verdacht":         "🔴 unpaginiert",
+		"grund":            "kein Tier-1",
+		"details": map[string]any{
+			"pages": 1, "text_layer": false,
+			"suspicious_patterns": []any{"viele reine Bildseiten ohne OCR-Text (1/1)"},
+		},
+	}
+	d := newDispatcher(t, h, fp, Config{PreflightEnabled: true})
+	runFor(t, d, context.Background(), 6*time.Second)
+
+	if got := h.jobStatus(t, jobID); got != "skipped" {
+		t.Fatalf("status = %q, want skipped (preflight-red)", got)
+	}
+	if fp.processHits != 0 {
+		t.Fatalf("process hits = %d, want 0 (junk chunks must not be produced)", fp.processHits)
+	}
+	// The attachment must now be a repair-case candidate.
+	var attID string
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT attachment_id::text FROM ingest_jobs WHERE id=$1`, jobID).Scan(&attID); err != nil {
+		t.Fatalf("read attachment: %v", err)
+	}
+	if n := h.openRepairCaseCount(t, attID); n != 1 {
+		t.Fatalf("open repair cases = %d, want 1", n)
+	}
+	// quality_state was recorded on the job.
+	var qs []byte
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT quality_state FROM ingest_jobs WHERE id=$1`, jobID).Scan(&qs); err != nil {
+		t.Fatalf("read quality_state: %v", err)
+	}
+	if string(qs) == "" || !strings.Contains(string(qs), "unpaginiert") {
+		t.Fatalf("quality_state not recorded: %q", string(qs))
+	}
+}
+
+// Preflight disabled (default) → the job processes normally, no preflight call.
+func TestPreflightDisabledDefaultsToNormalProcessing(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "Q2", 3)
+	fp := newFakeProcessor(t)
+	fp.statuses = []string{"running", "completed"}
+	fp.result = `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed"}`
+	fp.preflightReport = &map[string]any{"ok": false} // even a red preflight must be ignored when disabled
+
+	d := newDispatcher(t, h, fp, Config{PreflightEnabled: false})
+	runFor(t, d, context.Background(), 6*time.Second)
+
+	if got := h.jobStatus(t, jobID); got != "completed" {
+		t.Fatalf("status = %q, want completed (preflight disabled)", got)
+	}
+	if fp.preflightHits != 0 {
+		t.Fatalf("preflight hits = %d, want 0 when disabled", fp.preflightHits)
 	}
 }

@@ -117,6 +117,11 @@ type Config struct {
 	DispatcherProfile string
 	// DispatcherLeaseDuration is the per-claim lease length.
 	DispatcherLeaseDuration time.Duration
+	// DispatcherPreflightEnabled (#175): when set, the dispatcher sends a
+	// claimed job's source PDF to the runner's /v1/pdf/preflight before full
+	// processing; a quality-red gate skips the job and marks the attachment
+	// as a repair-case candidate.
+	DispatcherPreflightEnabled bool
 
 	// FixerInvokerEnabled gates the mail-ingest fixer caller (#206): polls
 	// the repair queue and invokes the fixer wrapper once per attachment
@@ -171,39 +176,40 @@ func Load() Config {
 		quarantineDefault = home + "/.axiom-ng/quarantine"
 	}
 	cfg := Config{
-		ZoteroBaseURL:           env("AXIOM_ZOTERO_BASE", defaultZoteroBase),
-		ZoteroLibraryID:         env("AXIOM_ZOTERO_LIBRARY", defaultLibraryID),
-		DatabaseURL:             env("AXIOM_DATABASE_URL", ""),
-		OpenSearchURL:           envEmptyDisables("AXIOM_OPENSEARCH_URL", "http://127.0.0.1:9200"),
-		OpenSearchUsername:      env("AXIOM_OPENSEARCH_USERNAME", ""),
-		OpenSearchPassword:      env("AXIOM_OPENSEARCH_PASSWORD", ""),
-		ProcessorSourceSecret:   env("AXIOM_PROCESSOR_SOURCE_SECRET", ""),
-		ProcessorSourceBaseURL:  env("AXIOM_PROCESSOR_SOURCE_BASE_URL", ""),
-		ProcessorURL:            env("AXIOM_PROCESSOR_URL", defaultLocalRunner),
-		QueryRunnerURL:          env("AXIOM_QUERY_RUNNER_URL", defaultLocalRunner),
-		IngestFallbackURL:       env("AXIOM_INGEST_FALLBACK_URL", defaultLocalRunner),
-		ProcessorURLs:           parseURLList(env("AXIOM_PROCESSOR_URLS", "")),
-		RunnerHealthInterval:    envDur("AXIOM_RUNNER_HEALTH_INTERVAL", 60*time.Second),
-		SearchSparseArm:         envBoolDefault("AXIOM_SEARCH_SPARSE_ARM", false),
-		SearchGraphArm:          envBoolDefault("AXIOM_SEARCH_GRAPH_ARM", false),
-		SearchRerank:            envBoolDefault("AXIOM_SEARCH_RERANK", true),
-		SearchFrontmatterFilter: envBoolDefault("AXIOM_SEARCH_FRONTMATTER_FILTER", true),
-		SearchMaxPerBook:        envInt("AXIOM_SEARCH_MAX_PER_BOOK", 2),
-		ProcessorRequestTimeout: envDur("AXIOM_PROCESSOR_TIMEOUT", 300*time.Second),
-		ProcessorRunnerName:     env("AXIOM_PROCESSOR_RUNNER_NAME", ""),
-		DispatcherEnabled:       envBool("AXIOM_DISPATCHER_ENABLED"),
-		DispatcherWorkerID:      env("AXIOM_DISPATCHER_WORKER_ID", "axiom-ng"),
-		DispatcherConcurrency:   envInt("AXIOM_DISPATCHER_CONCURRENCY", 1),
-		DispatcherProfile:       env("AXIOM_DISPATCHER_PROFILE", defaultProfile),
-		DispatcherLeaseDuration: envDur("AXIOM_DISPATCHER_LEASE", 5*time.Minute),
-		FixerInvokerEnabled:     envBool("AXIOM_FIXER_INVOKER_ENABLED"),
-		FixerCommand:            env("AXIOM_FIXER_CMD", "/opt/axiom/bin/axiom-fixer"),
-		FixerConcurrency:        envInt("AXIOM_FIXER_CONCURRENCY", 1),
-		ArtifactRoot:            env("AXIOM_ARTIFACT_ROOT", ""),
-		ZoteroWriteKeyFile:      env("AXIOM_ZOTERO_WRITE_KEY_FILE", os.Getenv("HOME")+"/.axiom-ng/write-api-key"),
-		QuarantineRoot:          env("AXIOM_QUARANTINE_ROOT", quarantineDefault),
-		APIPort:                 envInt("AXIOM_API_PORT", defaultAPIPort),
-		BindAddr:                env("AXIOM_BIND_ADDR", defaultBindAddr),
+		ZoteroBaseURL:              env("AXIOM_ZOTERO_BASE", defaultZoteroBase),
+		ZoteroLibraryID:            env("AXIOM_ZOTERO_LIBRARY", defaultLibraryID),
+		DatabaseURL:                env("AXIOM_DATABASE_URL", ""),
+		OpenSearchURL:              envEmptyDisables("AXIOM_OPENSEARCH_URL", "http://127.0.0.1:9200"),
+		OpenSearchUsername:         env("AXIOM_OPENSEARCH_USERNAME", ""),
+		OpenSearchPassword:         env("AXIOM_OPENSEARCH_PASSWORD", ""),
+		ProcessorSourceSecret:      env("AXIOM_PROCESSOR_SOURCE_SECRET", ""),
+		ProcessorSourceBaseURL:     env("AXIOM_PROCESSOR_SOURCE_BASE_URL", ""),
+		ProcessorURL:               env("AXIOM_PROCESSOR_URL", defaultLocalRunner),
+		QueryRunnerURL:             env("AXIOM_QUERY_RUNNER_URL", defaultLocalRunner),
+		IngestFallbackURL:          env("AXIOM_INGEST_FALLBACK_URL", defaultLocalRunner),
+		ProcessorURLs:              parseURLList(env("AXIOM_PROCESSOR_URLS", "")),
+		RunnerHealthInterval:       envDur("AXIOM_RUNNER_HEALTH_INTERVAL", 60*time.Second),
+		SearchSparseArm:            envBoolDefault("AXIOM_SEARCH_SPARSE_ARM", false),
+		SearchGraphArm:             envBoolDefault("AXIOM_SEARCH_GRAPH_ARM", false),
+		SearchRerank:               envBoolDefault("AXIOM_SEARCH_RERANK", true),
+		SearchFrontmatterFilter:    envBoolDefault("AXIOM_SEARCH_FRONTMATTER_FILTER", true),
+		SearchMaxPerBook:           envInt("AXIOM_SEARCH_MAX_PER_BOOK", 2),
+		ProcessorRequestTimeout:    envDur("AXIOM_PROCESSOR_TIMEOUT", 300*time.Second),
+		ProcessorRunnerName:        env("AXIOM_PROCESSOR_RUNNER_NAME", ""),
+		DispatcherEnabled:          envBool("AXIOM_DISPATCHER_ENABLED"),
+		DispatcherWorkerID:         env("AXIOM_DISPATCHER_WORKER_ID", "axiom-ng"),
+		DispatcherConcurrency:      envInt("AXIOM_DISPATCHER_CONCURRENCY", 1),
+		DispatcherProfile:          env("AXIOM_DISPATCHER_PROFILE", defaultProfile),
+		DispatcherLeaseDuration:    envDur("AXIOM_DISPATCHER_LEASE", 5*time.Minute),
+		DispatcherPreflightEnabled: envBool("AXIOM_DISPATCHER_PREFLIGHT"),
+		FixerInvokerEnabled:        envBool("AXIOM_FIXER_INVOKER_ENABLED"),
+		FixerCommand:               env("AXIOM_FIXER_CMD", "/opt/axiom/bin/axiom-fixer"),
+		FixerConcurrency:           envInt("AXIOM_FIXER_CONCURRENCY", 1),
+		ArtifactRoot:               env("AXIOM_ARTIFACT_ROOT", ""),
+		ZoteroWriteKeyFile:         env("AXIOM_ZOTERO_WRITE_KEY_FILE", os.Getenv("HOME")+"/.axiom-ng/write-api-key"),
+		QuarantineRoot:             env("AXIOM_QUARANTINE_ROOT", quarantineDefault),
+		APIPort:                    envInt("AXIOM_API_PORT", defaultAPIPort),
+		BindAddr:                   env("AXIOM_BIND_ADDR", defaultBindAddr),
 	}
 	// The source-endpoint base defaults to the local API port (co-located
 	// runners); remote deployments override with their Tailnet/LAN address.

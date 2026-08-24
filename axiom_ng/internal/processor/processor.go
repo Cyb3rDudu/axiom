@@ -427,3 +427,50 @@ func (c *Client) doRaw(ctx context.Context, budget time.Duration, method, path s
 	}
 	return nil
 }
+
+// PreflightReport is the /v1/pdf/preflight response (#175): a read-only
+// quality diagnostic of a PDF before chunking. ok=false flags the job for the
+// repair/skip policy; details mirrors the runner's analyze_pdf output.
+type PreflightReport struct {
+	ContractVersion string         `json:"contract_version"`
+	SourceName      string         `json:"source_name"`
+	Ok              bool           `json:"ok"`
+	Verdacht        string         `json:"verdacht"`
+	Grund           string         `json:"grund"`
+	Details         map[string]any `json:"details"`
+}
+
+// Preflight POSTs raw PDF bytes to /v1/pdf/preflight and decodes the quality
+// report (#175). The runner treats a broken PDF as a 500 (PREFLIGHT_PARSE);
+// that surfaces as a *StatusError here so a caller can decide (advisory vs
+// blocking) rather than have preflight silently swallow an un-assessable doc.
+func (c *Client) Preflight(ctx context.Context, pdf []byte) (*PreflightReport, error) {
+	pctx, cancel := context.WithTimeout(ctx, budgetSmall)
+	defer cancel()
+	req, err := http.NewRequestWithContext(
+		pctx, http.MethodPost, c.baseURL+"/v1/pdf/preflight", bytes.NewReader(pdf))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/pdf")
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		if pctx.Err() != nil {
+			return nil, fmt.Errorf("processor preflight: %w: %v", ErrCancelled, pctx.Err())
+		}
+		return nil, fmt.Errorf("processor preflight: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if rerr != nil {
+		return nil, fmt.Errorf("processor preflight read: %w", rerr)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &StatusError{Method: http.MethodPost, Path: "/v1/pdf/preflight", Code: resp.StatusCode, Body: excerpts(strings.TrimSpace(string(raw)))}
+	}
+	var out PreflightReport
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("processor preflight decode: %w", err)
+	}
+	return &out, nil
+}
