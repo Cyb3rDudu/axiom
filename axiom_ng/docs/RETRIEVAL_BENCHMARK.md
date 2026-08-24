@@ -170,3 +170,69 @@ z-Suite: 5/7 P@1 vor wie nach. Lesart:
 
 Reproduzieren: `go run ./cmd/retrieval-bench -suite cmd/retrieval-bench/gold_suite_v21.json -md out.md -perq perq.jsonl`
 z-Teilmenge: `jq -c 'select(.id|startswith("z"))' perq.jsonl`
+
+## #200 — Recall-Diagnose z2/z7: Coarse-Chunk Reranker Burial (2026-08-24)
+
+**Fußnote zur Messbasis:** Der nach dem Korpus-Rebuild (#188) neu aufgebaute
+Index trägt 51.943 Chunks (vs. 4.813 im ersten Lauf). Die z-Gold-Chunk-IDs in
+`gold_suite_v2/v21` zeigen auf den ALTEN Korpus und existieren im neuen Index
+NICHT mehr (Chunk-IDs ändern sich bei Rechunking). `gold_suite_z.json` ist die
+#200 **re-anchorte** z-Suite: alle z1-z7 Gold-Chunks per Suchanker-SQL
+(etablierte Konvention aus #155) auf die aktiven aktuellen Chunks aufgelöst
+(die scopes blieben unverändert; die Anker-Resolution ist im Branch-Diff an
+den Folge-Entscheidungen von z2/z7 nachvollziehbar).
+
+### Diagnose (pro Fall)
+
+Beide Fälle sind **Reranker-Ranking, kein Recall**:
+
+| Fall | Frage | hybrid (RRF) | Dense | Rerank (alt) | Befund |
+|---|---|---|---|---|---|
+| z2 | Wozu dient Nachhaltigkeitsreporting intern? | Gold RRF **Rang 1** | 3 | **Rang 9** | Reranker begräbt die Antwort |
+| z7 | Wie hat Henkel Nachhaltigkeit messbar gemacht? | Gold RRF **Rang 2** | 2 | **außerhalb Top-10** | Reranker-Score 0.020 (nahe „sicher falsch") |
+
+Die re-anchorten Gold-Chunks sind **zu grob**: z2 = 946 Token (11 Absätze,
+„4.2 Chancen", Antwort-Satz „bildet auch intern eine Grundlage…" bei ~800
+Token tief), z7 = 783 Token (Antwortsatz „Henkel… um den Faktor drei" in der
+Mitte eines Triple-Bottom-Line-Abschnitts). Der Cross-Encoder (512-Token-
+Fenster) sieht die Antwort nicht oder wird vom Off-Topic-Kontext überschrieben.
+
+**Beweis (direkte Reranker-Aufrufe):**
+- z2 `4.2-Chancen-Chunk` als Ganzes: 0.0009 · Antwort-Satz allein: **0.9977**
+- z7 Gold-Chunk als Ganzes: 0.0001 · Antwortsatz allein: **0.8436**
+
+Hebel zur Granularität des Reranks, nicht zur Corpus-Rebuild-Welle (Admin-
+territorium, #188-Out-of-Scope; weder Recall noch BM25/Dense noch rrfK waren
+das Problem).
+
+### Fix: Span-Max-Reranking (`internal/search`)
+
+Der Reranker erhält für die oben-RRF-groben Kandidaten statt des Ganz-Chunks
+seine 2 Fenster-Hälften; ein Kandidat wird mit dem **MAX seiner Fenster-Scores**
+bewertet. Begrenzung (Responsiveness): nur die
+**top-4 (RRF) groben** Kandidaten werden gesplittet (`maxSplitCandidates=4`,
+`minRerankSplitChars=1100`, `maxRerankTexts`-Cap = 64 bleibt gültig). Kurze,
+einfach-thematische Chunks bleiben ganz (kein Latenzoverhead für sie).
+
+### Messung (re-anchorte z-Suite, 7 Queries, **hybrid+rerank**)
+
+| Konfiguration | P@1 alt→neu | hit@5 | MRR alt→neu | hit@10 | p50 |
+|---|---|---|---|---|---|
+| hybrid+rerank | 0.571 → **0.857** | **1.000** | 0.659 → **0.905** | 0.857 → **1.000** | ~5 s (top_n=10, MPS) |
+| hybrid+rerank+hygiene | 0.571 → **0.857** | **1.000** | 0.659 → **0.905** | 0.857 → **1.000** | ~5.7 s |
+
+Per-Query (hybrid+rerank+hygiene): **z2 9→1**, **z7 >10→3**, z5 2→1; z1/z3/z4/z6
+bleiben Rang 1 (keine Regression). **DoD erfüllt** (z2 Rang 1, z7 in Top-10).
+
+Rerank-Latenz: Span-Max schickt bis zu +4 Paare (die top-4 groben × 1 Extra-
+Hälfte) — deutlich unter dem 2×-Worst-Case; absolut lokal MPS ~5–7 s bei
+top_n=10, per Remote-CUDA wie gehabt ~1 s. Das lokale IT-Latenz-Sanity-Bound
+(2.5 s, top_n=5) lag bereits bei der Baseline am Rand (2.57 s) — lokale MPS-
+Hardwaregrenze (im IT-Kommentar als dokumentationspflichtig vermerkt), kein
+Pipeline-Regress.
+
+Regressionstest: `internal/search/spanmax_test.go` pinnt die coarse-Gold-
+Surfacing-Semantik (Gold-Chunk > Split-Schwelle, Antwort in Hälfte 2 →
+Rang 1; schlägt fehl, wenn das Splitting wegfällt).
+
+Reproduzieren: `AXIOM_TEST_DATABASE_URL=… go run ./cmd/retrieval-bench -suite cmd/retrieval-bench/gold_suite_z.json -perq perq.jsonl`

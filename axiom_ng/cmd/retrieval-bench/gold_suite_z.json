@@ -1,0 +1,12 @@
+{
+  "note": "#200 re-anchored verified z-suite (z1-z7): gold chunk IDs resolved against the CURRENT active chunks (corpus rebuild #188 changed chunk IDs; the old v2/v2.1 gold ids no longer exist in the index). Scoped, passage-level, dudu-verified. Pins the span-max reranking regression: z2 rank 1, z7 in top-10, no regression on z1,z3-z6.",
+  "queries": [
+    { "id": "z1", "type": "verified", "q": "Was umfasst ESG über die Triple Bottom Line hinaus?", "confirmed": true, "origin": "dudu-zitatnotizen", "scope_document_ids": ["29649729-03a0-40d6-b4f5-18cc82149aa2"], "gold_chunk_ids": ["47084fd2-24ba-4e85-9dd2-dc0225fd9a26"] },
+    { "id": "z2", "type": "verified", "q": "Wozu dient Nachhaltigkeitsreporting intern?", "confirmed": true, "origin": "dudu-zitatnotizen", "scope_document_ids": ["29649729-03a0-40d6-b4f5-18cc82149aa2"], "gold_chunk_ids": ["7ec80ea7-1ac0-4086-af83-0139ce3bf166"] },
+    { "id": "z3", "type": "verified", "q": "Welchen Zweck haben Stakeholder-Beziehungen für Unternehmen?", "confirmed": true, "origin": "dudu-zitatnotizen", "scope_document_ids": ["d77e32f2-f5e4-4ab0-98be-b635338db4b8"], "gold_chunk_ids": ["a7f781a3-58d8-455c-bcb4-91f3dbcf703d"] },
+    { "id": "z4", "type": "verified", "q": "Wie ist strategisches Nachhaltigkeitsmanagement aufgebaut?", "confirmed": true, "origin": "dudu-zitatnotizen", "scope_document_ids": ["ead40ca0-aeb1-40f6-a028-206307d13c6d"], "gold_chunk_ids": ["3a5a6559-e47f-488f-952d-b558628b313a"] },
+    { "id": "z5", "type": "verified", "q": "Führt gesellschaftliche Verantwortung zu Kosten oder zu Marktchancen?", "confirmed": true, "origin": "dudu-zitatnotizen", "scope_document_ids": ["5d8422e3-1d76-48c7-baf9-3c389be15738"], "gold_chunk_ids": ["a5188424-13fa-4af3-886d-d46de1f49790"] },
+    { "id": "z6", "type": "verified", "q": "Warum muss Nachhaltigkeit über die eigenen vier Wände hinaus in der Wertschöpfungskette liegen?", "confirmed": true, "origin": "dudu-zitatnotizen", "scope_document_ids": ["4ad69286-e9c3-42b2-8f8e-94b79514dcf1"], "gold_chunk_ids": ["8d4815d7-51b9-448d-856a-a58d9cc18e30"] },
+    { "id": "z7", "type": "verified", "q": "Wie hat Henkel Nachhaltigkeit messbar gemacht?", "confirmed": true, "origin": "dudu-zitatnotizen", "scope_document_ids": ["4ad69286-e9c3-42b2-8f8e-94b79514dcf1"], "gold_chunk_ids": ["70b8df4a-6609-45d8-9d06-8c626f24d1d3"] }
+  ]
+}

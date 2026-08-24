@@ -373,16 +373,20 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		// RRF order is the answer, flagged as unreranked.
 		resp.Reranked = false
 	} else {
-		texts := make([]string, len(candidates))
-		for i, c := range candidates {
-			texts[i] = truncateChars(c.Text, maxRerankTextChars)
-		}
-		scores, err := s.processor.Rerank(ctx, req.Query, texts, len(texts))
+		// Span-max rerank (#200): score each candidate as the MAX over a few
+		// window-spans of its text instead of the whole chunk alone. A coarse
+		// chunk (multiple headings/paragraphs) buries a single answer sentence
+		// under off-topic content — the cross-encoder then scores it near
+		// worst even though the sentence is a direct answer (z2/z7 evidence).
+		// Splitting surfaces the answer sentence; taking the max per candidate
+		// keeps the reranker's precision benefit on clearly-relevant chunks.
+		spans, owners := spanWindow(candidates)
+		scores, err := s.processor.Rerank(ctx, req.Query, spans, len(spans))
 		if err != nil {
 			s.log.Printf("search: rerank failed, serving RRF order: %v", err)
 			resp.Reranked = false
 		} else {
-			resp.Reranked = applyRerank(candidates, scores)
+			resp.Reranked = applyRerankMax(candidates, scores, owners)
 		}
 	}
 	// #160 ranking hygiene: fold near-duplicates of the same document into
@@ -430,26 +434,144 @@ func (s *Service) embedDenseOnly(ctx context.Context, query string, vec *[]float
 	}
 }
 
-// applyRerank reorders candidates by the reranker scores (index refers to the
-// texts slice order). Returns false if the scores are not a usable ranking
-// (wrong count / out of range) — caller then keeps RRF order.
-func applyRerank(candidates []osCandidate, scores []processor.RerankScore) bool {
-	if len(scores) != len(candidates) {
+// applyRerankMax reorders candidates by the reranker scores, where each
+// candidate's score is the MAX over its window-spans' scores (owners maps each
+// span index to its owning candidate). Returns false if the scores are not a
+// usable ranking (wrong count / out of range / duplicate) — caller keeps RRF.
+func applyRerankMax(candidates []osCandidate, scores []processor.RerankScore, owners []int) bool {
+	if len(scores) != len(owners) {
 		return false
+	}
+	maxByCand := make([]float64, len(candidates))
+	for i := range maxByCand {
+		maxByCand[i] = -1
 	}
 	seen := map[int]bool{}
 	for _, sc := range scores {
-		if sc.Index < 0 || sc.Index >= len(candidates) || seen[sc.Index] {
+		if sc.Index < 0 || sc.Index >= len(owners) || seen[sc.Index] {
 			return false
 		}
 		seen[sc.Index] = true
-		candidates[sc.Index].RerankScore = sc.Score
+		owner := owners[sc.Index]
+		if owner < 0 || owner >= len(candidates) {
+			return false
+		}
+		if sc.Score > maxByCand[owner] {
+			maxByCand[owner] = sc.Score
+		}
 	}
-	// Stable sort by rerank score descending; ties keep RRF order.
+	for i := range candidates {
+		if maxByCand[i] < 0 {
+			return false // a candidate got no scored span
+		}
+		candidates[i].RerankScore = maxByCand[i]
+	}
+	// Stable sort by max-span rerank score descending; ties keep RRF order.
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return candidates[i].RerankScore > candidates[j].RerankScore
 	})
 	return true
+}
+
+// minRerankSplitChars is the shortest chunk that gets split into windows for
+// span-max reranking. Chunks below this fit comfortably in the cross-encoder's
+// 512-token window whole; splitting them can't recover a hidden answer (the
+// model sees it all) and only doubles rerank latency. Only genuinely coarse
+// chunks — past the truncation point — pay the span cost (#200).
+const minRerankSplitChars = 1100
+
+// maxSplitCandidates bounds HOW MANY of the highest-RRF candidates may be
+// span-split. The base hybrid already ranks the verified answer high (z2
+// RRF 1, z7 RRF 2), so span-max is a recall-recovery within that trusted
+// prefix; lower-ranked candidates are judged whole. Capping the split to the
+// top-K keeps the extra rerank pairs (2 per coarse chunk) near 1.5x instead
+// of 2x, honoring the Responsiveness budget while still recovering the
+// buried-answer cases #200 targets.
+//
+// ponytail: heuristic ceiling — if a verified answer ever sits below the
+// top-K RRF prefix, span-max won't recover it (whole-chunk rerank still runs
+// for it). The corpus-level fix is re-chunking the coarse passages; revisit
+// these constants only if a measureable new case appears below RRF rank 4.
+const maxSplitCandidates = 4
+
+// spanWindow splits each candidate's text into up to two window-spans (the
+// coarse-chunk halves #200 targets) and returns the
+// flattened spans plus, for each span, the index of the candidate it belongs
+// to. Only the highest-RRF, coarse chunks split; everything else goes whole.
+// Total spans never exceed maxCandidates (the runner's hard cap
+// rerank_max_texts, same 64 bound as the fetch window).
+func spanWindow(candidates []osCandidate) (spans []string, owners []int) {
+	n := len(candidates)
+	if n == 0 {
+		return nil, nil
+	}
+	k := maxCandidates / n
+	if k < 1 {
+		k = 1
+	}
+	if k > 2 {
+		k = 2 // two windows: the coarse-chunk fix that #200 measured
+	}
+	spans = make([]string, 0, n*k)
+	owners = make([]int, 0, n*k)
+	for i, c := range candidates { // candidates are RRF-ordered at this point
+		per := 1
+		// Only the highest-RRF, coarse candidates split; short chunks and
+		// long-tail candidates stay whole (latency + a single-topic chunk
+		// is already fully scored by the cross-encoder whole).
+		if i < maxSplitCandidates && len(c.Text) > minRerankSplitChars {
+			per = k
+		}
+		for _, span := range splitSpans(c.Text, per) {
+			spans = append(spans, span)
+			owners = append(owners, i)
+		}
+	}
+	return spans, owners
+}
+
+// splitSpans cuts text into k roughly-equal contiguous pieces at whitespace
+// boundaries (k=1 returns the single whole text). Each piece is additionally
+// bounded to maxRerankTextChars. Cutting only at a space/newline keeps every
+// piece valid UTF-8 (the split runs on runes); a candidate shorter than the
+// window size stays whole.
+func splitSpans(text string, k int) []string {
+	if k <= 1 {
+		return []string{truncateChars(text, maxRerankTextChars)}
+	}
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return []string{""}
+	}
+	r := []rune(t)
+	size := len(r) / k
+	if size < 1 {
+		size = 1
+	}
+	out := make([]string, 0, k)
+	lo := 0
+	for i := 0; i < k && lo < len(r); i++ {
+		cut := lo + size
+		if cut > len(r) {
+			cut = len(r)
+		}
+		if i < k-1 {
+			// Advance the cut to the next whitespace so no word is split
+			// mid-rune and the boundary is a clean space (or end of string).
+			for cut < len(r) && r[cut] != ' ' && r[cut] != '\n' && r[cut] != '\r' && r[cut] != '\t' {
+				cut++
+			}
+		}
+		segment := strings.TrimSpace(string(r[lo:cut]))
+		if segment != "" {
+			out = append(out, truncateChars(segment, maxRerankTextChars))
+		}
+		lo = cut
+	}
+	if len(out) == 0 {
+		return []string{""}
+	}
+	return out
 }
 
 // rrfMerge fuses rank lists: score(d) = sum over arms 1/(k + rank_arm(d)).
