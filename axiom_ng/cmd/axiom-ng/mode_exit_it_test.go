@@ -12,13 +12,16 @@ package main
 // a fresh port make the fall-through BIND instead of dying on the debug-port
 // refusal, so the witness catches the class, not the port guard.
 //
-// Run serialized (-p 1): the --apply matrix and the heartbeat seeding MUTATE
-// the shared base *_test DB, so parallel package runs would race each other.
-// CI already runs `go test -p 1 -count=1 ./...`.
+// #215: each test execs the built binary against a SESSION-UNIQUE throwaway
+// *_test database (openModeTestDB), so `go test ./...` package parallelism
+// cannot race the repo/sync suites that share the base *_test DB — the cmd-IT
+// --apply matrix and heartbeat seeding never truncate or trample another
+// package's fixtures mid-run. The throwaway schema is migrated from scratch
+// and dropped in cleanup.
 //
 // Run with:
 //   AXIOM_TEST_DATABASE_URL=postgresql://axiom_user:...@.../scratch_test?sslmode=disable \
-//   go test -p 1 ./cmd/axiom-ng/ -run TestIT_ModeFlags -v
+//   go test ./cmd/axiom-ng/ -run TestIT_ModeFlags -v
 import (
 	"context"
 	"fmt"
@@ -35,7 +38,85 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// seedHeartbeatPair inserts a merge-eligible duplicate entity pair (same
+// modeTestDBName is the session-unique throwaway *_test database these ITs run
+// against (#215). It mirrors the repo/dispatcher package-private-DB pattern so
+// `go test ./...` package parallelism never shares a table with another
+// package's suite.
+var modeTestDBName = func() string {
+	if n := os.Getenv("AXIOM_TEST_MODE_DB_NAME"); n != "" {
+		return n
+	}
+	return fmt.Sprintf("axiom_ng_modemode_%d_test", os.Getpid())
+}()
+
+// swapDB returns the DSN with its database name replaced, preserving params.
+func swapDB(dsn, dbname string) (string, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", err
+	}
+	u.Path = "/" + dbname
+	return u.String(), nil
+}
+
+// openModeTestDB validates the base *_test DSN, creates the session-unique
+// throwaway DB (via the maintenance "postgres" DB), migrates it, and returns
+// the effective DSN with cleanup that drops it. Each test gets a clean schema;
+// column-mutating probes (the modeFail test) cannot poison any shared DB.
+func openModeTestDB(t *testing.T) string {
+	t.Helper()
+	base := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if base == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping mode-exit integration test")
+	}
+	// Same hard guard as the repo suites: never point this at a non-test DB.
+	if u, err := url.Parse(base); err != nil || !strings.HasSuffix(u.Path, "_test") {
+		t.Fatalf("refusing to run against non-test database %q (must end in _test)", base)
+	}
+	maintainDSN, err := swapDB(base, "postgres")
+	if err != nil {
+		t.Fatalf("maintenance dsn: %v", err)
+	}
+	modeDSN, err := swapDB(base, modeTestDBName)
+	if err != nil {
+		t.Fatalf("mode db dsn: %v", err)
+	}
+
+	ctx := context.Background()
+	mp, err := pgxpool.New(ctx, maintainDSN)
+	if err != nil {
+		t.Fatalf("open maintenance db: %v", err)
+	}
+	// Drop a leftover from a crashed prior run so the name is always ours.
+	if _, err := mp.Exec(ctx, `DROP DATABASE IF EXISTS `+modeTestDBName+` WITH (FORCE)`); err != nil {
+		t.Fatalf("drop leftover mode db: %v", err)
+	}
+	if _, err := mp.Exec(ctx, `CREATE DATABASE `+modeTestDBName); err != nil {
+		t.Fatalf("create mode test db: %v", err)
+	}
+	mp.Close()
+
+	d, err := db.Open(ctx, modeDSN)
+	if err != nil {
+		t.Fatalf("open mode db: %v", err)
+	}
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("migrate mode db: %v", err)
+	}
+	d.Close()
+
+	t.Cleanup(func() {
+		// Reconnect maintenance pool (the test pool closed above) to drop.
+		mp2, err := pgxpool.New(context.Background(), maintainDSN)
+		if err != nil {
+			return
+		}
+		defer mp2.Close()
+		_, _ = mp2.Exec(context.Background(), `DROP DATABASE `+modeTestDBName+` WITH (FORCE)`)
+	})
+	return modeDSN
+}
+
 // canonical form, one entity per ACTIVE snapshot; snapshots are unique per
 // attachment — schema 0011 — so the pair spans two attachments) through the
 // same minimal column set the repo ITs use, so the exec'd
@@ -136,26 +217,9 @@ func runMode(t *testing.T, bin, dsn string, args ...string) string {
 // has no dry gate) and asserts: exit code 0, no "listening on", termination
 // inside the deadline.
 func TestIT_ModeFlagsExitWithoutServerBoot(t *testing.T) {
-	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping mode-exit integration test")
-	}
-	// Same hard guard as the repo suites: never point this at a non-test DB —
-	// the --apply matrix and the heartbeat seeding mutate.
-	if u, err := url.Parse(dsn); err != nil || !strings.HasSuffix(u.Path, "_test") {
-		t.Fatalf("refusing to run against non-test database %q (must end in _test)", dsn)
-	}
-
-	// The mode flags query KG tables; make sure the schema exists (idempotent).
-	ctx := context.Background()
-	d, err := db.Open(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := d.Migrate(ctx); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
-	d.Close()
+	// #215: dedicated throwaway *_test DB — migrations + the --apply matrix
+	// run against a schema no other package shares.
+	dsn := openModeTestDB(t)
 
 	bin := filepath.Join(t.TempDir(), "axiom-ng")
 	build := exec.Command("go", "build", "-o", bin, ".")
@@ -195,22 +259,9 @@ func TestIT_ModeFlagsExitWithoutServerBoot(t *testing.T) {
 // server-path wiring alone would leave CLI modes silent, the exact gap the
 // review round found).
 func TestIT_ModeFlagsHeartbeatOnExec(t *testing.T) {
-	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping mode-exit integration test")
-	}
-	if u, err := url.Parse(dsn); err != nil || !strings.HasSuffix(u.Path, "_test") {
-		t.Fatalf("refusing to run against non-test database %q (must end in _test)", dsn)
-	}
-	ctx := context.Background()
-	d, err := db.Open(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := d.Migrate(ctx); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
-	d.Close()
+	// #215: dedicated throwaway *_test DB; seeding + exec cannot collide with
+	// another package's suite under `go test ./...`.
+	dsn := openModeTestDB(t)
 	seedHeartbeatPair(t, dsn)
 
 	bin := filepath.Join(t.TempDir(), "axiom-ng")
@@ -234,21 +285,16 @@ func TestIT_ModeFlagsHeartbeatOnExec(t *testing.T) {
 // exit 1 with the documented MODE FAILED line carrying the
 // state-consistency statement.
 func TestIT_ModeFailExitCodeAndConsistencyStatement(t *testing.T) {
-	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping mode-exit integration test")
-	}
-	if u, err := url.Parse(dsn); err != nil || !strings.HasSuffix(u.Path, "_test") {
-		t.Fatalf("refusing to run against non-test database %q (must end in _test)", dsn)
-	}
+	// #215: dedicated throwaway *_test DB — the column drop/restore runs on a
+	// schema this test owns and the DB is dropped in cleanup, so it can never
+	// poison a shared suite.
+	dsn := openModeTestDB(t)
 	ctx := context.Background()
 	d, err := db.Open(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := d.Migrate(ctx); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	t.Cleanup(d.Close)
 	pool := d.Pool()
 	// Break the consolidation plan losslessly restorable: entityConsolidationPairs
 	// selects coalesce(canonical_form, text), so a missing column fails the
@@ -259,11 +305,12 @@ func TestIT_ModeFailExitCodeAndConsistencyStatement(t *testing.T) {
 		t.Fatalf("break schema: %v", err)
 	}
 	t.Cleanup(func() {
+		// Not strictly needed (the throwaway DB is dropped) but keeps the pool
+		// state honest while the connection is still open in this process.
 		if _, err := pool.Exec(context.Background(),
 			`ALTER TABLE processing_entities ADD COLUMN IF NOT EXISTS canonical_form TEXT`); err != nil {
 			t.Fatalf("restore schema: %v", err)
 		}
-		d.Close()
 	})
 
 	bin := filepath.Join(t.TempDir(), "axiom-ng")

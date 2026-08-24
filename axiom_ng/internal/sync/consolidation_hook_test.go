@@ -91,16 +91,23 @@ func TestConsolidationHookFiresOnSyncCompletion(t *testing.T) {
 
 func TestConsolidationHookDebouncesSyncBurst(t *testing.T) {
 	fc := &fakeConsolidator{}
-	svc := newHookService(t, fc, 60*time.Millisecond)
+	// #215: a 500ms window keeps all three completions provably inside one
+	// debounce window even under a cold/slow runner. The historical 60ms
+	// window flaked in CI (0.20s, 1x): when a late sync completion landed
+	// AFTER an earlier completion's timer had already fired, the earlier run
+	// merged and the late timer armed a SECOND consolidation, tripping the
+	// "exactly one" assertion. A window larger than the worst-case sync
+	// spacing collapses the burst into one run deterministically.
+	svc := newHookService(t, fc, 500*time.Millisecond)
 	for i := 0; i < 3; i++ {
 		if _, err := svc.Run(context.Background(), nil); err != nil {
 			t.Fatalf("run %d: %v", i, err)
 		}
 	}
-	// All three completions happened INSIDE the debounce window: exactly
-	// one consolidation may fire — after the burst settles.
+	// All three completions happened INSIDE the 500ms debounce window: exactly
+	// one consolidation fires — after the burst settles.
 	waitForCalls(t, fc, 1)
-	quietWait(120 * time.Millisecond)
+	quietWait(700 * time.Millisecond)
 	if n := fc.count(); n != 1 {
 		t.Fatalf("a sync burst must collapse into ONE consolidation run, got %d", n)
 	}
