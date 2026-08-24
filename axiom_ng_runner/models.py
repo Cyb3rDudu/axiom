@@ -211,3 +211,9 @@ class Capabilities(BaseModel):
     features: dict[str, bool]
     models: dict[str, dict[str, Any]]  # heterogeneous: name:str, dimensions:int
     limits: dict[str, Any]
+    # #216 honest readiness: models_warmed is the ACTUAL preload state of the
+    # query models (False while warming or if not real-loaded); warmup_enabled
+    # reflects AXIOM_PROCESSOR_WARMUP. Additive contract fields — older
+    # consumers ignore them.
+    warmup_enabled: bool = False
+    models_warmed: bool = False

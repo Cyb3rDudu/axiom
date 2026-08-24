@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.request
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -52,7 +53,18 @@ from .validation import (
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="Axiom Processor (contract v1)", version=__version__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: #216 preload the query models (background) so the first real
+    embed/rerank request is warm instead of paying the ~90s cold load. No-op
+    in reference mode or when AXIOM_PROCESSOR_WARMUP=0."""
+    query_service.start_warmup()
+    yield
+    # No shutdown teardown: the warm singletons are process-lifetime by design.
+
+
+app = FastAPI(title="Axiom Processor (contract v1)", version=__version__, lifespan=lifespan)
 
 # Dense-embedding dimension/model are the single source of truth in __init__
 # (shared with the runner) so the capability and every chunk result agree
@@ -96,6 +108,7 @@ def _semaphore() -> threading.BoundedSemaphore:
 
 def _capabilities() -> Capabilities:
     s = settings.get()
+    warm = query_service.warmup_status()
     return Capabilities(
         contract_versions=[CONTRACT_VERSION],
         processor={"name": "axiom-python-marker", "version": __version__},
@@ -125,12 +138,19 @@ def _capabilities() -> Capabilities:
             "max_query_texts": s.max_query_texts,
             "rerank_max_texts": s.rerank_max_texts,
         },
+        # #216 honest readiness: models_warmed is the ACTUAL load state, not
+        # a declared capability. The RAG's runner-roles probe reads it to
+        # distinguish a genuinely-warm runner from one still preloading.
+        warmup_enabled=warm["warmup_enabled"],
+        models_warmed=warm["models_warmed"],
     )
 
 
 def _iso() -> str:
     import datetime
 
+    # Deliberately timezone.utc (not datetime.UTC): the runner targets
+    # Python 3.11, where datetime.UTC does not exist yet.
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
@@ -344,8 +364,22 @@ def _run_compute(job: Job) -> None:
 
 
 @app.get("/v1/health")
-def health() -> dict[str, Any]:
-    return {"status": "ok"}
+def health():
+    """Liveness + honest warmup readiness (#216). While a real-model preload
+    is still in flight the runner reports 503 warming so a #207 health probe
+    treats it as not-yet-available; once the preload finishes (ok or fail) it
+    goes green — a merely-warming runner is never skipped forever. Reference
+    mode (nothing to warm) is always green."""
+    st = query_service.warmup_status()
+    if st["warmup_enabled"] and not st["warmup_finished"] and not st["models_warmed"]:
+        # 503 while the real-model preload is in flight. Plain Response (no
+        # extra import): a JSON body with the warming state.
+        return Response(
+            content="""{"status":"warming","models_warmed":false}""",
+            status_code=503,
+            media_type="application/json",
+        )
+    return {"status": "ok", "models_warmed": st["models_warmed"]}
 
 
 @app.get("/v1/capabilities")
@@ -610,6 +644,9 @@ def embed_queries(body: EmbedRequest) -> EmbedResponse:
     warm-keep afterwards — the whole point of the low-latency budget.
     """
     _contract_guard(body.contract_version)
+    # #216: wait out the startup warmup so the FIRST real request is served
+    # warm (no ~90s cold load in-band). No-op when no warmup is in scope.
+    query_service.await_warmup()
     s = settings.get()
     cap = s.max_query_texts
     limit = cap if body.max_texts is None else body.max_texts
@@ -677,6 +714,9 @@ def rerank_texts(body: RerankRequest) -> RerankResponse:
     the model call is compute-bound and runs in the threadpool.
     """
     _contract_guard(body.contract_version)
+    # #216: same as /v1/embed — block on the background preload so the first
+    # real rerank is warm.
+    query_service.await_warmup()
     s = settings.get()
     if not body.query.strip():
         raise _query_reject("RERANK_QUERY_EMPTY", "query must not be blank")

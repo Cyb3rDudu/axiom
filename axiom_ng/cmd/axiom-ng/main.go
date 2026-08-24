@@ -603,6 +603,9 @@ func runnerCheck(h interface {
 // query_embedding and reranking. A capable-but-different runner (e.g. a
 // Carrier runner with §7a endpoints) is a valid query runner; a runner
 // without them gets a WARNING — search stays up and degrades per R3.
+// #216: the roles line also distinguishes warm from cold, reading the
+// runner's own models_warmed readiness so "capable" never silently covers
+// a runner still preloading its models.
 func probeQueryRunnerRole(ctx context.Context, c *processor.Client, url string, logger *log.Logger) {
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -613,9 +616,13 @@ func probeQueryRunnerRole(ctx context.Context, c *processor.Client, url string, 
 	}
 	feats := caps.Features
 	qe, rk := feats != nil && feats["query_embedding"], feats != nil && feats["reranking"]
+	state := "warm"
+	if !caps.ModelsWarmed {
+		state = "cold (models warmup pending or disabled)"
+	}
 	switch {
 	case qe && rk:
-		logger.Printf("runner roles: query runner %s capable (query_embedding=%v reranking=%v, model=%s)", url, qe, rk, caps.Processor.Name)
+		logger.Printf("runner roles: query runner %s capable (%s, query_embedding=%v reranking=%v, model=%s, models_warmed=%v)", url, state, qe, rk, caps.Processor.Name, caps.ModelsWarmed)
 	case !qe && !rk:
 		logger.Printf("WARNING: runner roles: query runner %s has NEITHER query role (query_embedding/reranking) — retrieval will run degraded (BM25-only, unreranked); point AXIOM_QUERY_RUNNER_URL at a §7a-capable runner", url)
 	default:

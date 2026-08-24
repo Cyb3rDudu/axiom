@@ -26,6 +26,10 @@ class Settings:
     # only lower these, never raise them.
     max_query_texts: int = 16
     rerank_max_texts: int = 64
+    # #216 cold-start warmup: preload the query models (BGE-M3 + reranker) at
+    # server startup so the FIRST real embed/rerank request is already warm
+    # instead of paying the ~90s MPS model load on query one. On by default.
+    warmup: bool = True
 
     @property
     def bind(self) -> tuple[str, int]:
@@ -44,6 +48,13 @@ def _env_float(name: str, default: float) -> float:
         return float(os.getenv(name, default))
     except ValueError:
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 def _env_roots(name: str) -> tuple[str, ...]:
@@ -70,6 +81,7 @@ def load_settings() -> Settings:
         ),
         max_query_texts=max(1, _env_int("AXIOM_PROCESSOR_MAX_QUERY_TEXTS", 16)),
         rerank_max_texts=max(1, _env_int("AXIOM_PROCESSOR_RERANK_MAX_TEXTS", 64)),
+        warmup=_env_bool("AXIOM_PROCESSOR_WARMUP", True),
     )
 
 

@@ -281,6 +281,13 @@ type Capabilities struct {
 		MaxConcurrentJobs int   `json:"max_concurrent_jobs"`
 		MaxSourceBytes    int64 `json:"max_source_bytes"`
 	} `json:"limits"`
+	// #216 runner warmup: models_warmed is the runner's ACTUAL query-model
+	// preload state (False right after a cold start while the real BGE-M3 +
+	// reranker load in), warmup_enabled reflects AXIOM_PROCESSOR_WARMUP.
+	// Additive contract fields: older runners/tests that omit them decode
+	// to false (honest for a pre-warmup runner).
+	ModelsWarmed  bool `json:"models_warmed"`
+	WarmupEnabled bool `json:"warmup_enabled"`
 }
 
 // Health returns the processor health endpoint result (empty on 2xx).
