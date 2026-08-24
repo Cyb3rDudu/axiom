@@ -88,6 +88,14 @@ func TestLocatorChapterRoundTrip(t *testing.T) {
 		t.Fatalf("locator.chapter did not survive the round-trip (got %v) — "+
 			"the persist boundary drops it and the DB never sees the stamp", back["chapter"])
 	}
+	// Byte-identity for unstamped locators: nil *int + omitempty must
+	// OMIT the key entirely (a dropped omitempty would emit "chapter":null).
+	bare, _ := json.Marshal(Locator{Type: "page_span", Source: "marker_paginate"})
+	var bareBack map[string]any
+	_ = json.Unmarshal(bare, &bareBack)
+	if _, present := bareBack["chapter"]; present {
+		t.Fatalf("unstamped locator must not carry a chapter key: %s", bare)
+	}
 	// The chunk-level path too: a full contract chunk round-trips its locator.
 	var ch Chunk
 	chunkJSON := `{"ref":"chunk-0000","index":0,"text":"x","token_count":1,
