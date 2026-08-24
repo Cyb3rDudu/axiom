@@ -25,9 +25,13 @@ owns state, queue, search index        does conversion, chunking, ML
 ```
 
 Both run on loopback for a first test. To spread compute across machines (e.g.
-retrieval on a local runner, heavy processing on a remote GPU), see the
-[split-role setup — Operations → Deployment](../operations/deployment.md): a
-setup path for that scenario.
+retrieval on a local runner, heavy processing on a remote GPU), set
+`AXIOM_PROCESSOR_URLS` to an ordered candidate list — e.g.
+`http://gpu-host:19542,http://127.0.0.1:8012` (remote GPU first, local floor
+last). The health probe skips unreachable candidates automatically, so the
+same env file works at home and on the road. Details:
+[Services → ingest runner selection](../operations/services.md) and the
+[container deployment guide — Operations → Deployment](../operations/deployment.md).
 
 ## 1. Run the axiom runner
 
