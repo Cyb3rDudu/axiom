@@ -13,7 +13,7 @@ Assets: `Databricks Data Intelligence Platform.epub` (406 `doc-pagebreak`, Apres
 |---|---|
 | EPUB anchors | 406 markers harvested (−30 roman … 448 arabic), spine 50, unique; **marker numbers ARE print folios** — verified by content join, not assumption |
 | PDF ground truth | 448 arabic folios in 14 monotone runs; 10 unnumbered pages (title, chapter openers), 0 blanks |
-| Alignment | **382/406 verified joins** (`ok`), 18 non-monotonic = frontmatter spine disorder + one backmatter table marker (PB185 in `Table_01_0008_0005.xhtml`, out of folio order), 5 boundary, 3 openers, 2 residual low-sim |
+| Alignment | **382/406 verified joins** (`ok`); non-`ok`: 13 non-monotonic (6 frontmatter spine disorder, 6 relocation artifacts, 1 backmatter table marker PB185 in `Table_01_0008_0005.xhtml`), 5 boundary, 3 openers, 2 residual low-sim (markers 217, 244 — folio join correct, content sim only 0.37/0.14, likely display-heavy pages; flagged, unexplained) |
 
 Physical↔folio offset drifts 21–28 across the book (part openers insert unnumbered
 pages) — a constant-offset joiner would be wrong; the folio key holds.
@@ -23,10 +23,11 @@ pages) — a constant-offset joiner would be wrong; the folio key holds.
 | Class | Count | Semantics |
 |---|---|---|
 | `ok` | 382 | marker number == PDF folio, content containment ≥ 0.4 |
-| `marker_boundary_next_page` | 5 (+3 further ±1 cases: markers 78, 217, 244, 391) | EPUB marker sits at printed page bottom; following text lives on next folio. Benign, deterministic |
+| `marker_boundary_next_page` | 5 (markers 111, 119, 184, 369, 385 land on folio n+1); further ±1/±2 relocations: markers 78 (→77), 391 (→393) | EPUB marker sits at printed page bottom; following text lives on next folio. Benign, deterministic |
 | `opener_unnumbered_in_pdf` | 3 (folios 10, 126, 156 → phys 38/150/180) | chapter opener pages carry no printed number; joiner locates via content between folio n−1 and n+1 |
 | `folio_without_marker` | 54 | 13 = index (449–461, markers stop at 448); 41 scattered (94–123 cluster = figure/listing pages where Apress drops markers) |
-| `non_monotonic` | 18 rows | roman frontmatter out of spine order (xvii/xviii swap, xxii–xxx block) + backmatter table marker — EPUB spine order ≠ folio order |
+| `non_monotonic` | 13 rows | 6 roman frontmatter out of spine order (xvii/xviii swap, xxii–xxx block); 6 relocation artifacts (boundary relocations hop +2 phys: 112, 120, 370, 386, 393, and marker 78 → folio 77); 1 backmatter table marker (185) — EPUB spine order ≠ folio order |
+| `low_text_sim` (residual) | 2 (markers 217, 244) | folio join itself is correct (217→phys 241, 244→phys 268); content containment below threshold — suspected display-heavy pages; carried as flagged, unexplained |
 | `marker_folio_mismatch` (hard) | 0 | no genuine print-divergence found |
 
 76 unmarked PDF pages (482−406) resolve as: 448 arabic − 406 markers = 42 body folios
