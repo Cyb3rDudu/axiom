@@ -44,13 +44,13 @@ _WORD = re.compile(r"[\w]{2,}", re.UNICODE)
 
 def enumerate_twins(zotero: str) -> list[dict]:
     """Documents with >=1 epub and >=1 pdf attachment."""
-    import urllib.error
-
     atts, start = [], 0
+    if not zotero.startswith(("http://", "https://")):
+        raise SystemExit(f"--zotero must be an http(s) URL, got {zotero!r}")
     while True:
         url = (f"{zotero}/api/users/0/items?itemType=attachment"
                f"&format=json&limit=100&start={start}")
-        batch = json.load(urllib.request.urlopen(url, timeout=10))
+        batch = json.load(urllib.request.urlopen(url, timeout=10))  # noqa: B310 — scheme guarded above
         if not batch:
             break
         atts += batch
@@ -96,7 +96,8 @@ def epub_token_stream(epub: Path) -> tuple[list, list[str], dict]:
         from xml.etree import ElementTree as ET
         NS = {"opf": "http://www.idpf.org/2007/opf"}
         opf_name = next(n for n in z.namelist() if n.endswith(".opf"))
-        opf = ET.fromstring(z.read(opf_name))
+        # local Zotero library, offline pilot — defusedxml not in runner env
+        opf = ET.fromstring(z.read(opf_name))  # noqa: S314 — trusted local EPUB
         base = "/".join(opf_name.split("/")[:-1])
         man = {m.get("id"): (m.get("href"), m.get("media-type") or "")
                for m in opf.findall("opf:manifest/opf:item", NS)}
@@ -211,15 +212,18 @@ def _lis_filter(results):
     for i, v in enumerate(vals):
         j = bisect.bisect_left(tails, v)
         if j == len(tails):
-            tails.append(v); tails_idx.append(i)
+            tails.append(v)
+            tails_idx.append(i)
         else:
-            tails[j] = v; tails_idx[j] = i
+            tails[j] = v
+            tails_idx[j] = i
         prev.append(tails_idx[j-1] if j > 0 else -1)
     # reconstruct
     keep = set()
     k = tails_idx[-1] if tails_idx else -1
     while k >= 0:
-        keep.add(k); k = prev[k]
+        keep.add(k)
+        k = prev[k]
     ki = iter(range(len(vals)))
     for r in idx:
         i = next(ki)
@@ -237,7 +241,7 @@ def inject_pagelist(epub: Path, out_path: Path, anchors: list[dict]) -> dict:
         contents = {n: z.read(n) for n in z.namelist() if n != "mimetype"}
         names = z.namelist()
 
-    by_file: dict[int, list[int]] = {}
+    by_file: dict[int, list[tuple[int, int]]] = {}
     for a in anchors:
         if a["stream_idx"] is None:
             continue
@@ -296,6 +300,10 @@ def inject_pagelist(epub: Path, out_path: Path, anchors: list[dict]) -> dict:
             if n == "mimetype":
                 continue
             z.writestr(n, contents[n], compress_type=zipfile.ZIP_DEFLATED)
+        # page-map.xml is a NEW archive member — not in the original names
+        if pm_name not in names:
+            z.writestr(pm_name, contents[pm_name],
+                       compress_type=zipfile.ZIP_DEFLATED)
     return {"injected": n_injected, "anchors": len(anchors),
             "page_map": pm_name}
 
@@ -335,8 +343,10 @@ def main() -> int:
             ok = sum(1 for r in rows if r["source_flags"] == "ok")
             entry.update({"verified_joins": f"{ok}/{len(rows)}",
                           "divergence_types": _kinds(div)})
-            json.dump(rows, open(tdir / "alignment.json", "w"), indent=1)
-            json.dump(div, open(tdir / "divergences.json", "w"), indent=1)
+            with open(tdir / "alignment.json", "w") as f:
+                json.dump(rows, f, indent=1)
+            with open(tdir / "divergences.json", "w") as f:
+                json.dump(div, f, indent=1)
         elif markers:
             entry["note"] = ("anchored, but PDF sibling has no printed "
                              "folios (e-book PDF) — folio join impossible; "
@@ -349,8 +359,8 @@ def main() -> int:
         report.append(entry)
         print(f"  {slug}: markers={len(markers)} folios={n_ar} "
               f"joins={entry.get('verified_joins', entry.get('note', 'derived'))}")
-    json.dump(report, open(args.out / "sweep_report.json", "w"), indent=1,
-              ensure_ascii=False)
+    with open(args.out / "sweep_report.json", "w") as f:
+        json.dump(report, f, indent=1, ensure_ascii=False)
     print(f"report: {args.out / 'sweep_report.json'}")
     return 0
 
@@ -365,7 +375,7 @@ def _derive(t, pdf_pages, tdir, inject_dir, stop):
     stream, files, _ = epub_token_stream(Path(t["epub"]))
     anchors = anchor_pdf_pages(pdf_pages, stream)
     good = [a for a in anchors if a["matched"]]
-    out = {"anchorable_folios": f"{len(good)}/{len(anchors)}"}
+    out: dict = {"anchorable_folios": f"{len(good)}/{len(anchors)}"}
     if not inject_dir or len(good) < 10:
         return out
     inject_dir.mkdir(parents=True, exist_ok=True)
