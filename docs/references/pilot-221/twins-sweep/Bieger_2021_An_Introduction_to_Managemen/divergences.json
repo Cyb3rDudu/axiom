@@ -1,0 +1,1148 @@
+[
+ {
+  "type": "marker_without_folio",
+  "marker": 7,
+  "located_phys": 152,
+  "sim": 0.5
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 8,
+  "located_phys": null,
+  "sim": 0.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 9,
+  "located_phys": 8,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 10,
+  "located_phys": 9,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 11,
+  "located_phys": 9,
+  "sim": 0.89
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 12,
+  "located_phys": null,
+  "sim": 0.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 13,
+  "located_phys": 11,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 14,
+  "located_phys": 12,
+  "sim": 0.95
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 15,
+  "located_phys": 12,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 16,
+  "located_phys": 13,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 17,
+  "located_phys": 13,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 18,
+  "located_phys": 15,
+  "sim": 0.93
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 19,
+  "located_phys": 15,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 20,
+  "located_phys": 16,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 21,
+  "located_phys": 17,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 22,
+  "located_phys": 18,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 23,
+  "located_phys": 19,
+  "sim": 0.89
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 24,
+  "located_phys": 20,
+  "sim": 0.77
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 25,
+  "located_phys": 21,
+  "sim": 0.74
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 26,
+  "located_phys": 23,
+  "sim": 0.9
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 27,
+  "located_phys": 24,
+  "sim": 0.99
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 28,
+  "located_phys": 25,
+  "sim": 0.93
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 29,
+  "located_phys": 26,
+  "sim": 0.84
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 30,
+  "located_phys": 26,
+  "sim": 0.92
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 31,
+  "located_phys": 28,
+  "sim": 0.95
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 32,
+  "located_phys": 29,
+  "sim": 0.8
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 33,
+  "located_phys": 29,
+  "sim": 0.92
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 34,
+  "located_phys": 30,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 35,
+  "located_phys": 31,
+  "sim": 0.99
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 36,
+  "located_phys": 33,
+  "sim": 0.84
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 37,
+  "located_phys": 33,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 38,
+  "located_phys": 34,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 39,
+  "located_phys": 36,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 40,
+  "located_phys": 37,
+  "sim": 0.95
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 41,
+  "located_phys": 37,
+  "sim": 0.97
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 42,
+  "located_phys": 39,
+  "sim": 0.81
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 43,
+  "located_phys": 39,
+  "sim": 0.77
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 44,
+  "located_phys": 40,
+  "sim": 0.73
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 45,
+  "located_phys": 41,
+  "sim": 0.87
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 46,
+  "located_phys": 42,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 47,
+  "located_phys": 43,
+  "sim": 0.83
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 48,
+  "located_phys": 45,
+  "sim": 0.77
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 49,
+  "located_phys": 45,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 50,
+  "located_phys": 46,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 51,
+  "located_phys": 47,
+  "sim": 0.79
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 52,
+  "located_phys": 47,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 53,
+  "located_phys": 48,
+  "sim": 0.89
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 54,
+  "located_phys": 49,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 55,
+  "located_phys": 50,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 56,
+  "located_phys": 51,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 57,
+  "located_phys": 52,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 58,
+  "located_phys": 53,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 59,
+  "located_phys": 54,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 60,
+  "located_phys": 55,
+  "sim": 0.79
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 61,
+  "located_phys": 56,
+  "sim": 0.76
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 62,
+  "located_phys": 57,
+  "sim": 0.99
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 63,
+  "located_phys": 57,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 64,
+  "located_phys": 58,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 65,
+  "located_phys": 59,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 66,
+  "located_phys": 60,
+  "sim": 0.87
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 67,
+  "located_phys": 61,
+  "sim": 0.96
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 68,
+  "located_phys": 62,
+  "sim": 0.87
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 69,
+  "located_phys": 63,
+  "sim": 0.93
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 70,
+  "located_phys": 65,
+  "sim": 0.85
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 71,
+  "located_phys": 65,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 72,
+  "located_phys": 66,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 73,
+  "located_phys": 67,
+  "sim": 0.99
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 74,
+  "located_phys": 69,
+  "sim": 0.99
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 75,
+  "located_phys": 70,
+  "sim": 0.78
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 76,
+  "located_phys": 70,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 77,
+  "located_phys": 71,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 78,
+  "located_phys": 72,
+  "sim": 0.91
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 79,
+  "located_phys": 73,
+  "sim": 0.87
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 80,
+  "located_phys": 74,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 81,
+  "located_phys": 75,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 82,
+  "located_phys": 76,
+  "sim": 0.9
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 83,
+  "located_phys": 78,
+  "sim": 0.99
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 84,
+  "located_phys": 79,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 85,
+  "located_phys": 80,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 86,
+  "located_phys": 81,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 87,
+  "located_phys": 82,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 88,
+  "located_phys": 83,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 89,
+  "located_phys": 84,
+  "sim": 0.91
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 90,
+  "located_phys": 85,
+  "sim": 0.93
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 91,
+  "located_phys": 85,
+  "sim": 0.84
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 92,
+  "located_phys": 86,
+  "sim": 0.87
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 93,
+  "located_phys": 88,
+  "sim": 0.77
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 94,
+  "located_phys": 88,
+  "sim": 0.89
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 95,
+  "located_phys": 90,
+  "sim": 0.79
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 96,
+  "located_phys": 91,
+  "sim": 0.9
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 97,
+  "located_phys": 92,
+  "sim": 0.86
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 98,
+  "located_phys": 93,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 99,
+  "located_phys": 94,
+  "sim": 0.92
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 100,
+  "located_phys": 94,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 101,
+  "located_phys": 95,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 102,
+  "located_phys": 97,
+  "sim": 0.9
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 103,
+  "located_phys": 97,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 104,
+  "located_phys": 98,
+  "sim": 0.78
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 105,
+  "located_phys": 99,
+  "sim": 0.99
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 106,
+  "located_phys": 100,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 107,
+  "located_phys": 101,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 108,
+  "located_phys": 102,
+  "sim": 0.99
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 109,
+  "located_phys": 103,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 110,
+  "located_phys": 104,
+  "sim": 0.83
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 111,
+  "located_phys": 104,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 112,
+  "located_phys": 105,
+  "sim": 0.88
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 113,
+  "located_phys": 106,
+  "sim": 0.79
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 114,
+  "located_phys": 107,
+  "sim": 0.89
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 115,
+  "located_phys": 108,
+  "sim": 0.97
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 116,
+  "located_phys": 109,
+  "sim": 0.97
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 117,
+  "located_phys": 110,
+  "sim": 0.9
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 118,
+  "located_phys": 111,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 119,
+  "located_phys": 112,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 120,
+  "located_phys": 113,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 121,
+  "located_phys": 114,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 122,
+  "located_phys": 115,
+  "sim": 0.99
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 123,
+  "located_phys": 116,
+  "sim": 0.85
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 124,
+  "located_phys": 117,
+  "sim": 0.84
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 125,
+  "located_phys": 117,
+  "sim": 0.86
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 126,
+  "located_phys": 119,
+  "sim": 0.84
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 127,
+  "located_phys": 120,
+  "sim": 0.86
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 128,
+  "located_phys": 120,
+  "sim": 0.76
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 129,
+  "located_phys": 122,
+  "sim": 0.89
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 130,
+  "located_phys": 123,
+  "sim": 0.87
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 131,
+  "located_phys": 123,
+  "sim": 0.85
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 132,
+  "located_phys": 125,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 133,
+  "located_phys": 125,
+  "sim": 0.89
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 134,
+  "located_phys": 126,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 135,
+  "located_phys": 127,
+  "sim": 0.99
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 136,
+  "located_phys": 128,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 137,
+  "located_phys": 129,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 138,
+  "located_phys": 130,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 139,
+  "located_phys": 131,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 140,
+  "located_phys": 132,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 141,
+  "located_phys": 133,
+  "sim": 0.99
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 142,
+  "located_phys": 134,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 143,
+  "located_phys": 135,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 144,
+  "located_phys": 136,
+  "sim": 0.96
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 145,
+  "located_phys": 137,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 146,
+  "located_phys": 137,
+  "sim": 0.83
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 147,
+  "located_phys": 138,
+  "sim": 0.91
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 148,
+  "located_phys": 139,
+  "sim": 0.85
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 149,
+  "located_phys": 141,
+  "sim": 0.78
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 150,
+  "located_phys": 141,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 151,
+  "located_phys": 142,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 152,
+  "located_phys": 143,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 153,
+  "located_phys": 144,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 154,
+  "located_phys": 145,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 155,
+  "located_phys": 146,
+  "sim": 0.98
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 156,
+  "located_phys": 147,
+  "sim": 0.9
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 157,
+  "located_phys": 149,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 158,
+  "located_phys": 150,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 159,
+  "located_phys": 151,
+  "sim": 0.98
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 160,
+  "located_phys": 152,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 161,
+  "located_phys": 152,
+  "sim": 0.79
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 162,
+  "located_phys": 153,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 163,
+  "located_phys": 154,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 164,
+  "located_phys": 154,
+  "sim": 0.91
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 165,
+  "located_phys": 156,
+  "sim": 0.81
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 166,
+  "located_phys": 156,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 167,
+  "located_phys": 157,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 168,
+  "located_phys": 158,
+  "sim": 0.89
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 169,
+  "located_phys": 158,
+  "sim": 0.92
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 170,
+  "located_phys": 159,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 171,
+  "located_phys": 160,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 172,
+  "located_phys": 161,
+  "sim": 0.98
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 173,
+  "located_phys": 162,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 174,
+  "located_phys": 163,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 175,
+  "located_phys": 164,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 176,
+  "located_phys": 165,
+  "sim": 0.99
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 177,
+  "located_phys": 166,
+  "sim": 0.86
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 178,
+  "located_phys": 166,
+  "sim": 0.75
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 179,
+  "located_phys": 167,
+  "sim": 0.87
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 180,
+  "located_phys": 169,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 181,
+  "located_phys": 169,
+  "sim": 0.91
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 182,
+  "located_phys": 170,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 183,
+  "located_phys": 172,
+  "sim": 0.97
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 184,
+  "located_phys": 173,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 185,
+  "located_phys": 174,
+  "sim": 0.95
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 186,
+  "located_phys": 175,
+  "sim": 0.97
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 187,
+  "located_phys": 176,
+  "sim": 0.98
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 188,
+  "located_phys": 177,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 189,
+  "located_phys": 178,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 190,
+  "located_phys": 179,
+  "sim": 0.96
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 191,
+  "located_phys": 180,
+  "sim": 0.98
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 192,
+  "located_phys": 181,
+  "sim": 0.97
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 193,
+  "located_phys": 182,
+  "sim": 1.0
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 194,
+  "located_phys": 183,
+  "sim": 0.86
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 195,
+  "located_phys": 185,
+  "sim": 0.87
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 196,
+  "located_phys": 186,
+  "sim": 0.65
+ },
+ {
+  "type": "marker_without_folio",
+  "marker": 197,
+  "located_phys": 188,
+  "sim": 1.0
+ }
+]

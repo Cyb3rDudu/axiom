@@ -1,0 +1,1578 @@
+[
+ {
+  "epub_cfi": "epubcfi(/6/4!/4/2[page_1]/1:0)",
+  "epub_marker_page": 1,
+  "epub_spine_idx": 1,
+  "pdf_physical": 11,
+  "pdf_folio": 1,
+  "source_flags": "low_text_sim:0.10"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/4!/4/2[page_2]/1:0)",
+  "epub_marker_page": 2,
+  "epub_spine_idx": 1,
+  "pdf_physical": 46,
+  "pdf_folio": 2,
+  "source_flags": "low_text_sim:0.00"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/6!/4/2[page_3]/1:0)",
+  "epub_marker_page": 3,
+  "epub_spine_idx": 2,
+  "pdf_physical": 69,
+  "pdf_folio": 3,
+  "source_flags": "low_text_sim:0.33"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/8!/4/2[page_4]/1:0)",
+  "epub_marker_page": 4,
+  "epub_spine_idx": 3,
+  "pdf_physical": 103,
+  "pdf_folio": 4,
+  "source_flags": "ok"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/10!/4/2[page_5]/1:0)",
+  "epub_marker_page": 5,
+  "epub_spine_idx": 4,
+  "pdf_physical": 125,
+  "pdf_folio": 5,
+  "source_flags": "ok"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/10!/4/2[page_6]/1:0)",
+  "epub_marker_page": 6,
+  "epub_spine_idx": 4,
+  "pdf_physical": 152,
+  "pdf_folio": 6,
+  "source_flags": "ok"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/10!/4/2[page_7]/1:0)",
+  "epub_marker_page": 7,
+  "epub_spine_idx": 4,
+  "pdf_physical": 152,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/10!/4/2[page_8]/1:0)",
+  "epub_marker_page": 8,
+  "epub_spine_idx": 4,
+  "pdf_physical": "",
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/12!/4/2[page_9]/1:0)",
+  "epub_marker_page": 9,
+  "epub_spine_idx": 5,
+  "pdf_physical": 8,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/12!/4/2[page_10]/1:0)",
+  "epub_marker_page": 10,
+  "epub_spine_idx": 5,
+  "pdf_physical": 9,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/12!/4/2[page_11]/1:0)",
+  "epub_marker_page": 11,
+  "epub_spine_idx": 5,
+  "pdf_physical": 9,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/12!/4/2[page_12]/1:0)",
+  "epub_marker_page": 12,
+  "epub_spine_idx": 5,
+  "pdf_physical": "",
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_13]/1:0)",
+  "epub_marker_page": 13,
+  "epub_spine_idx": 6,
+  "pdf_physical": 11,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_14]/1:0)",
+  "epub_marker_page": 14,
+  "epub_spine_idx": 6,
+  "pdf_physical": 12,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_15]/1:0)",
+  "epub_marker_page": 15,
+  "epub_spine_idx": 6,
+  "pdf_physical": 12,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_16]/1:0)",
+  "epub_marker_page": 16,
+  "epub_spine_idx": 6,
+  "pdf_physical": 13,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_17]/1:0)",
+  "epub_marker_page": 17,
+  "epub_spine_idx": 6,
+  "pdf_physical": 13,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_18]/1:0)",
+  "epub_marker_page": 18,
+  "epub_spine_idx": 6,
+  "pdf_physical": 15,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_19]/1:0)",
+  "epub_marker_page": 19,
+  "epub_spine_idx": 6,
+  "pdf_physical": 15,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_20]/1:0)",
+  "epub_marker_page": 20,
+  "epub_spine_idx": 6,
+  "pdf_physical": 16,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_21]/1:0)",
+  "epub_marker_page": 21,
+  "epub_spine_idx": 6,
+  "pdf_physical": 17,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_22]/1:0)",
+  "epub_marker_page": 22,
+  "epub_spine_idx": 6,
+  "pdf_physical": 18,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_23]/1:0)",
+  "epub_marker_page": 23,
+  "epub_spine_idx": 6,
+  "pdf_physical": 19,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_24]/1:0)",
+  "epub_marker_page": 24,
+  "epub_spine_idx": 6,
+  "pdf_physical": 20,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_25]/1:0)",
+  "epub_marker_page": 25,
+  "epub_spine_idx": 6,
+  "pdf_physical": 21,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_26]/1:0)",
+  "epub_marker_page": 26,
+  "epub_spine_idx": 6,
+  "pdf_physical": 23,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_27]/1:0)",
+  "epub_marker_page": 27,
+  "epub_spine_idx": 6,
+  "pdf_physical": 24,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_28]/1:0)",
+  "epub_marker_page": 28,
+  "epub_spine_idx": 6,
+  "pdf_physical": 25,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_29]/1:0)",
+  "epub_marker_page": 29,
+  "epub_spine_idx": 6,
+  "pdf_physical": 26,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_30]/1:0)",
+  "epub_marker_page": 30,
+  "epub_spine_idx": 6,
+  "pdf_physical": 26,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_31]/1:0)",
+  "epub_marker_page": 31,
+  "epub_spine_idx": 6,
+  "pdf_physical": 28,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_32]/1:0)",
+  "epub_marker_page": 32,
+  "epub_spine_idx": 6,
+  "pdf_physical": 29,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_33]/1:0)",
+  "epub_marker_page": 33,
+  "epub_spine_idx": 6,
+  "pdf_physical": 29,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_34]/1:0)",
+  "epub_marker_page": 34,
+  "epub_spine_idx": 6,
+  "pdf_physical": 30,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_35]/1:0)",
+  "epub_marker_page": 35,
+  "epub_spine_idx": 6,
+  "pdf_physical": 31,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_36]/1:0)",
+  "epub_marker_page": 36,
+  "epub_spine_idx": 6,
+  "pdf_physical": 33,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_37]/1:0)",
+  "epub_marker_page": 37,
+  "epub_spine_idx": 6,
+  "pdf_physical": 33,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_38]/1:0)",
+  "epub_marker_page": 38,
+  "epub_spine_idx": 6,
+  "pdf_physical": 34,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_39]/1:0)",
+  "epub_marker_page": 39,
+  "epub_spine_idx": 6,
+  "pdf_physical": 36,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_40]/1:0)",
+  "epub_marker_page": 40,
+  "epub_spine_idx": 6,
+  "pdf_physical": 37,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_41]/1:0)",
+  "epub_marker_page": 41,
+  "epub_spine_idx": 6,
+  "pdf_physical": 37,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_42]/1:0)",
+  "epub_marker_page": 42,
+  "epub_spine_idx": 6,
+  "pdf_physical": 39,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_43]/1:0)",
+  "epub_marker_page": 43,
+  "epub_spine_idx": 6,
+  "pdf_physical": 39,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_44]/1:0)",
+  "epub_marker_page": 44,
+  "epub_spine_idx": 6,
+  "pdf_physical": 40,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_45]/1:0)",
+  "epub_marker_page": 45,
+  "epub_spine_idx": 6,
+  "pdf_physical": 41,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_46]/1:0)",
+  "epub_marker_page": 46,
+  "epub_spine_idx": 6,
+  "pdf_physical": 42,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_47]/1:0)",
+  "epub_marker_page": 47,
+  "epub_spine_idx": 6,
+  "pdf_physical": 43,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_48]/1:0)",
+  "epub_marker_page": 48,
+  "epub_spine_idx": 6,
+  "pdf_physical": 45,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/14!/4/2[page_49]/1:0)",
+  "epub_marker_page": 49,
+  "epub_spine_idx": 6,
+  "pdf_physical": 45,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_50]/1:0)",
+  "epub_marker_page": 50,
+  "epub_spine_idx": 7,
+  "pdf_physical": 46,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_51]/1:0)",
+  "epub_marker_page": 51,
+  "epub_spine_idx": 7,
+  "pdf_physical": 47,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_52]/1:0)",
+  "epub_marker_page": 52,
+  "epub_spine_idx": 7,
+  "pdf_physical": 47,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_53]/1:0)",
+  "epub_marker_page": 53,
+  "epub_spine_idx": 7,
+  "pdf_physical": 48,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_54]/1:0)",
+  "epub_marker_page": 54,
+  "epub_spine_idx": 7,
+  "pdf_physical": 49,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_55]/1:0)",
+  "epub_marker_page": 55,
+  "epub_spine_idx": 7,
+  "pdf_physical": 50,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_56]/1:0)",
+  "epub_marker_page": 56,
+  "epub_spine_idx": 7,
+  "pdf_physical": 51,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_57]/1:0)",
+  "epub_marker_page": 57,
+  "epub_spine_idx": 7,
+  "pdf_physical": 52,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_58]/1:0)",
+  "epub_marker_page": 58,
+  "epub_spine_idx": 7,
+  "pdf_physical": 53,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_59]/1:0)",
+  "epub_marker_page": 59,
+  "epub_spine_idx": 7,
+  "pdf_physical": 54,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_60]/1:0)",
+  "epub_marker_page": 60,
+  "epub_spine_idx": 7,
+  "pdf_physical": 55,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_61]/1:0)",
+  "epub_marker_page": 61,
+  "epub_spine_idx": 7,
+  "pdf_physical": 56,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_62]/1:0)",
+  "epub_marker_page": 62,
+  "epub_spine_idx": 7,
+  "pdf_physical": 57,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_63]/1:0)",
+  "epub_marker_page": 63,
+  "epub_spine_idx": 7,
+  "pdf_physical": 57,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_64]/1:0)",
+  "epub_marker_page": 64,
+  "epub_spine_idx": 7,
+  "pdf_physical": 58,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_65]/1:0)",
+  "epub_marker_page": 65,
+  "epub_spine_idx": 7,
+  "pdf_physical": 59,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_66]/1:0)",
+  "epub_marker_page": 66,
+  "epub_spine_idx": 7,
+  "pdf_physical": 60,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_67]/1:0)",
+  "epub_marker_page": 67,
+  "epub_spine_idx": 7,
+  "pdf_physical": 61,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_68]/1:0)",
+  "epub_marker_page": 68,
+  "epub_spine_idx": 7,
+  "pdf_physical": 62,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_69]/1:0)",
+  "epub_marker_page": 69,
+  "epub_spine_idx": 7,
+  "pdf_physical": 63,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_70]/1:0)",
+  "epub_marker_page": 70,
+  "epub_spine_idx": 7,
+  "pdf_physical": 65,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_71]/1:0)",
+  "epub_marker_page": 71,
+  "epub_spine_idx": 7,
+  "pdf_physical": 65,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_72]/1:0)",
+  "epub_marker_page": 72,
+  "epub_spine_idx": 7,
+  "pdf_physical": 66,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/16!/4/2[page_73]/1:0)",
+  "epub_marker_page": 73,
+  "epub_spine_idx": 7,
+  "pdf_physical": 67,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_74]/1:0)",
+  "epub_marker_page": 74,
+  "epub_spine_idx": 8,
+  "pdf_physical": 69,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_75]/1:0)",
+  "epub_marker_page": 75,
+  "epub_spine_idx": 8,
+  "pdf_physical": 70,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_76]/1:0)",
+  "epub_marker_page": 76,
+  "epub_spine_idx": 8,
+  "pdf_physical": 70,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_77]/1:0)",
+  "epub_marker_page": 77,
+  "epub_spine_idx": 8,
+  "pdf_physical": 71,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_78]/1:0)",
+  "epub_marker_page": 78,
+  "epub_spine_idx": 8,
+  "pdf_physical": 72,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_79]/1:0)",
+  "epub_marker_page": 79,
+  "epub_spine_idx": 8,
+  "pdf_physical": 73,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_80]/1:0)",
+  "epub_marker_page": 80,
+  "epub_spine_idx": 8,
+  "pdf_physical": 74,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_81]/1:0)",
+  "epub_marker_page": 81,
+  "epub_spine_idx": 8,
+  "pdf_physical": 75,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_82]/1:0)",
+  "epub_marker_page": 82,
+  "epub_spine_idx": 8,
+  "pdf_physical": 76,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_83]/1:0)",
+  "epub_marker_page": 83,
+  "epub_spine_idx": 8,
+  "pdf_physical": 78,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_84]/1:0)",
+  "epub_marker_page": 84,
+  "epub_spine_idx": 8,
+  "pdf_physical": 79,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_85]/1:0)",
+  "epub_marker_page": 85,
+  "epub_spine_idx": 8,
+  "pdf_physical": 80,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_86]/1:0)",
+  "epub_marker_page": 86,
+  "epub_spine_idx": 8,
+  "pdf_physical": 81,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_87]/1:0)",
+  "epub_marker_page": 87,
+  "epub_spine_idx": 8,
+  "pdf_physical": 82,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_88]/1:0)",
+  "epub_marker_page": 88,
+  "epub_spine_idx": 8,
+  "pdf_physical": 83,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_89]/1:0)",
+  "epub_marker_page": 89,
+  "epub_spine_idx": 8,
+  "pdf_physical": 84,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_90]/1:0)",
+  "epub_marker_page": 90,
+  "epub_spine_idx": 8,
+  "pdf_physical": 85,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_91]/1:0)",
+  "epub_marker_page": 91,
+  "epub_spine_idx": 8,
+  "pdf_physical": 85,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_92]/1:0)",
+  "epub_marker_page": 92,
+  "epub_spine_idx": 8,
+  "pdf_physical": 86,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_93]/1:0)",
+  "epub_marker_page": 93,
+  "epub_spine_idx": 8,
+  "pdf_physical": 88,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_94]/1:0)",
+  "epub_marker_page": 94,
+  "epub_spine_idx": 8,
+  "pdf_physical": 88,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_95]/1:0)",
+  "epub_marker_page": 95,
+  "epub_spine_idx": 8,
+  "pdf_physical": 90,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_96]/1:0)",
+  "epub_marker_page": 96,
+  "epub_spine_idx": 8,
+  "pdf_physical": 91,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_97]/1:0)",
+  "epub_marker_page": 97,
+  "epub_spine_idx": 8,
+  "pdf_physical": 92,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_98]/1:0)",
+  "epub_marker_page": 98,
+  "epub_spine_idx": 8,
+  "pdf_physical": 93,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_99]/1:0)",
+  "epub_marker_page": 99,
+  "epub_spine_idx": 8,
+  "pdf_physical": 94,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_100]/1:0)",
+  "epub_marker_page": 100,
+  "epub_spine_idx": 8,
+  "pdf_physical": 94,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_101]/1:0)",
+  "epub_marker_page": 101,
+  "epub_spine_idx": 8,
+  "pdf_physical": 95,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_102]/1:0)",
+  "epub_marker_page": 102,
+  "epub_spine_idx": 8,
+  "pdf_physical": 97,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_103]/1:0)",
+  "epub_marker_page": 103,
+  "epub_spine_idx": 8,
+  "pdf_physical": 97,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_104]/1:0)",
+  "epub_marker_page": 104,
+  "epub_spine_idx": 8,
+  "pdf_physical": 98,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_105]/1:0)",
+  "epub_marker_page": 105,
+  "epub_spine_idx": 8,
+  "pdf_physical": 99,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_106]/1:0)",
+  "epub_marker_page": 106,
+  "epub_spine_idx": 8,
+  "pdf_physical": 100,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_107]/1:0)",
+  "epub_marker_page": 107,
+  "epub_spine_idx": 8,
+  "pdf_physical": 101,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/18!/4/2[page_108]/1:0)",
+  "epub_marker_page": 108,
+  "epub_spine_idx": 8,
+  "pdf_physical": 102,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_109]/1:0)",
+  "epub_marker_page": 109,
+  "epub_spine_idx": 9,
+  "pdf_physical": 103,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_110]/1:0)",
+  "epub_marker_page": 110,
+  "epub_spine_idx": 9,
+  "pdf_physical": 104,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_111]/1:0)",
+  "epub_marker_page": 111,
+  "epub_spine_idx": 9,
+  "pdf_physical": 104,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_112]/1:0)",
+  "epub_marker_page": 112,
+  "epub_spine_idx": 9,
+  "pdf_physical": 105,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_113]/1:0)",
+  "epub_marker_page": 113,
+  "epub_spine_idx": 9,
+  "pdf_physical": 106,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_114]/1:0)",
+  "epub_marker_page": 114,
+  "epub_spine_idx": 9,
+  "pdf_physical": 107,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_115]/1:0)",
+  "epub_marker_page": 115,
+  "epub_spine_idx": 9,
+  "pdf_physical": 108,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_116]/1:0)",
+  "epub_marker_page": 116,
+  "epub_spine_idx": 9,
+  "pdf_physical": 109,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_117]/1:0)",
+  "epub_marker_page": 117,
+  "epub_spine_idx": 9,
+  "pdf_physical": 110,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_118]/1:0)",
+  "epub_marker_page": 118,
+  "epub_spine_idx": 9,
+  "pdf_physical": 111,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_119]/1:0)",
+  "epub_marker_page": 119,
+  "epub_spine_idx": 9,
+  "pdf_physical": 112,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_120]/1:0)",
+  "epub_marker_page": 120,
+  "epub_spine_idx": 9,
+  "pdf_physical": 113,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_121]/1:0)",
+  "epub_marker_page": 121,
+  "epub_spine_idx": 9,
+  "pdf_physical": 114,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_122]/1:0)",
+  "epub_marker_page": 122,
+  "epub_spine_idx": 9,
+  "pdf_physical": 115,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_123]/1:0)",
+  "epub_marker_page": 123,
+  "epub_spine_idx": 9,
+  "pdf_physical": 116,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_124]/1:0)",
+  "epub_marker_page": 124,
+  "epub_spine_idx": 9,
+  "pdf_physical": 117,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_125]/1:0)",
+  "epub_marker_page": 125,
+  "epub_spine_idx": 9,
+  "pdf_physical": 117,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_126]/1:0)",
+  "epub_marker_page": 126,
+  "epub_spine_idx": 9,
+  "pdf_physical": 119,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_127]/1:0)",
+  "epub_marker_page": 127,
+  "epub_spine_idx": 9,
+  "pdf_physical": 120,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_128]/1:0)",
+  "epub_marker_page": 128,
+  "epub_spine_idx": 9,
+  "pdf_physical": 120,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_129]/1:0)",
+  "epub_marker_page": 129,
+  "epub_spine_idx": 9,
+  "pdf_physical": 122,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_130]/1:0)",
+  "epub_marker_page": 130,
+  "epub_spine_idx": 9,
+  "pdf_physical": 123,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/20!/4/2[page_131]/1:0)",
+  "epub_marker_page": 131,
+  "epub_spine_idx": 9,
+  "pdf_physical": 123,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_132]/1:0)",
+  "epub_marker_page": 132,
+  "epub_spine_idx": 10,
+  "pdf_physical": 125,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_133]/1:0)",
+  "epub_marker_page": 133,
+  "epub_spine_idx": 10,
+  "pdf_physical": 125,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_134]/1:0)",
+  "epub_marker_page": 134,
+  "epub_spine_idx": 10,
+  "pdf_physical": 126,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_135]/1:0)",
+  "epub_marker_page": 135,
+  "epub_spine_idx": 10,
+  "pdf_physical": 127,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_136]/1:0)",
+  "epub_marker_page": 136,
+  "epub_spine_idx": 10,
+  "pdf_physical": 128,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_137]/1:0)",
+  "epub_marker_page": 137,
+  "epub_spine_idx": 10,
+  "pdf_physical": 129,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_138]/1:0)",
+  "epub_marker_page": 138,
+  "epub_spine_idx": 10,
+  "pdf_physical": 130,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_139]/1:0)",
+  "epub_marker_page": 139,
+  "epub_spine_idx": 10,
+  "pdf_physical": 131,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_140]/1:0)",
+  "epub_marker_page": 140,
+  "epub_spine_idx": 10,
+  "pdf_physical": 132,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_141]/1:0)",
+  "epub_marker_page": 141,
+  "epub_spine_idx": 10,
+  "pdf_physical": 133,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_142]/1:0)",
+  "epub_marker_page": 142,
+  "epub_spine_idx": 10,
+  "pdf_physical": 134,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_143]/1:0)",
+  "epub_marker_page": 143,
+  "epub_spine_idx": 10,
+  "pdf_physical": 135,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_144]/1:0)",
+  "epub_marker_page": 144,
+  "epub_spine_idx": 10,
+  "pdf_physical": 136,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_145]/1:0)",
+  "epub_marker_page": 145,
+  "epub_spine_idx": 10,
+  "pdf_physical": 137,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_146]/1:0)",
+  "epub_marker_page": 146,
+  "epub_spine_idx": 10,
+  "pdf_physical": 137,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_147]/1:0)",
+  "epub_marker_page": 147,
+  "epub_spine_idx": 10,
+  "pdf_physical": 138,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_148]/1:0)",
+  "epub_marker_page": 148,
+  "epub_spine_idx": 10,
+  "pdf_physical": 139,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_149]/1:0)",
+  "epub_marker_page": 149,
+  "epub_spine_idx": 10,
+  "pdf_physical": 141,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_150]/1:0)",
+  "epub_marker_page": 150,
+  "epub_spine_idx": 10,
+  "pdf_physical": 141,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_151]/1:0)",
+  "epub_marker_page": 151,
+  "epub_spine_idx": 10,
+  "pdf_physical": 142,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_152]/1:0)",
+  "epub_marker_page": 152,
+  "epub_spine_idx": 10,
+  "pdf_physical": 143,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_153]/1:0)",
+  "epub_marker_page": 153,
+  "epub_spine_idx": 10,
+  "pdf_physical": 144,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_154]/1:0)",
+  "epub_marker_page": 154,
+  "epub_spine_idx": 10,
+  "pdf_physical": 145,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_155]/1:0)",
+  "epub_marker_page": 155,
+  "epub_spine_idx": 10,
+  "pdf_physical": 146,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_156]/1:0)",
+  "epub_marker_page": 156,
+  "epub_spine_idx": 10,
+  "pdf_physical": 147,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_157]/1:0)",
+  "epub_marker_page": 157,
+  "epub_spine_idx": 10,
+  "pdf_physical": 149,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_158]/1:0)",
+  "epub_marker_page": 158,
+  "epub_spine_idx": 10,
+  "pdf_physical": 150,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/22!/4/2[page_159]/1:0)",
+  "epub_marker_page": 159,
+  "epub_spine_idx": 10,
+  "pdf_physical": 151,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_160]/1:0)",
+  "epub_marker_page": 160,
+  "epub_spine_idx": 11,
+  "pdf_physical": 152,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_161]/1:0)",
+  "epub_marker_page": 161,
+  "epub_spine_idx": 11,
+  "pdf_physical": 152,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_162]/1:0)",
+  "epub_marker_page": 162,
+  "epub_spine_idx": 11,
+  "pdf_physical": 153,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_163]/1:0)",
+  "epub_marker_page": 163,
+  "epub_spine_idx": 11,
+  "pdf_physical": 154,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_164]/1:0)",
+  "epub_marker_page": 164,
+  "epub_spine_idx": 11,
+  "pdf_physical": 154,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_165]/1:0)",
+  "epub_marker_page": 165,
+  "epub_spine_idx": 11,
+  "pdf_physical": 156,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_166]/1:0)",
+  "epub_marker_page": 166,
+  "epub_spine_idx": 11,
+  "pdf_physical": 156,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_167]/1:0)",
+  "epub_marker_page": 167,
+  "epub_spine_idx": 11,
+  "pdf_physical": 157,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_168]/1:0)",
+  "epub_marker_page": 168,
+  "epub_spine_idx": 11,
+  "pdf_physical": 158,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_169]/1:0)",
+  "epub_marker_page": 169,
+  "epub_spine_idx": 11,
+  "pdf_physical": 158,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_170]/1:0)",
+  "epub_marker_page": 170,
+  "epub_spine_idx": 11,
+  "pdf_physical": 159,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_171]/1:0)",
+  "epub_marker_page": 171,
+  "epub_spine_idx": 11,
+  "pdf_physical": 160,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_172]/1:0)",
+  "epub_marker_page": 172,
+  "epub_spine_idx": 11,
+  "pdf_physical": 161,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_173]/1:0)",
+  "epub_marker_page": 173,
+  "epub_spine_idx": 11,
+  "pdf_physical": 162,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_174]/1:0)",
+  "epub_marker_page": 174,
+  "epub_spine_idx": 11,
+  "pdf_physical": 163,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_175]/1:0)",
+  "epub_marker_page": 175,
+  "epub_spine_idx": 11,
+  "pdf_physical": 164,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_176]/1:0)",
+  "epub_marker_page": 176,
+  "epub_spine_idx": 11,
+  "pdf_physical": 165,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_177]/1:0)",
+  "epub_marker_page": 177,
+  "epub_spine_idx": 11,
+  "pdf_physical": 166,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_178]/1:0)",
+  "epub_marker_page": 178,
+  "epub_spine_idx": 11,
+  "pdf_physical": 166,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/24!/4/2[page_179]/1:0)",
+  "epub_marker_page": 179,
+  "epub_spine_idx": 11,
+  "pdf_physical": 167,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/26!/4/2[page_180]/1:0)",
+  "epub_marker_page": 180,
+  "epub_spine_idx": 12,
+  "pdf_physical": 169,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/26!/4/2[page_181]/1:0)",
+  "epub_marker_page": 181,
+  "epub_spine_idx": 12,
+  "pdf_physical": 169,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/26!/4/2[page_182]/1:0)",
+  "epub_marker_page": 182,
+  "epub_spine_idx": 12,
+  "pdf_physical": 170,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/28!/4/2[page_183]/1:0)",
+  "epub_marker_page": 183,
+  "epub_spine_idx": 13,
+  "pdf_physical": 172,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/28!/4/2[page_184]/1:0)",
+  "epub_marker_page": 184,
+  "epub_spine_idx": 13,
+  "pdf_physical": 173,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/28!/4/2[page_185]/1:0)",
+  "epub_marker_page": 185,
+  "epub_spine_idx": 13,
+  "pdf_physical": 174,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/28!/4/2[page_186]/1:0)",
+  "epub_marker_page": 186,
+  "epub_spine_idx": 13,
+  "pdf_physical": 175,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/28!/4/2[page_187]/1:0)",
+  "epub_marker_page": 187,
+  "epub_spine_idx": 13,
+  "pdf_physical": 176,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/28!/4/2[page_188]/1:0)",
+  "epub_marker_page": 188,
+  "epub_spine_idx": 13,
+  "pdf_physical": 177,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/28!/4/2[page_189]/1:0)",
+  "epub_marker_page": 189,
+  "epub_spine_idx": 13,
+  "pdf_physical": 178,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/28!/4/2[page_190]/1:0)",
+  "epub_marker_page": 190,
+  "epub_spine_idx": 13,
+  "pdf_physical": 179,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/28!/4/2[page_191]/1:0)",
+  "epub_marker_page": 191,
+  "epub_spine_idx": 13,
+  "pdf_physical": 180,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/28!/4/2[page_192]/1:0)",
+  "epub_marker_page": 192,
+  "epub_spine_idx": 13,
+  "pdf_physical": 181,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/28!/4/2[page_193]/1:0)",
+  "epub_marker_page": 193,
+  "epub_spine_idx": 13,
+  "pdf_physical": 182,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/30!/4/2[page_194]/1:0)",
+  "epub_marker_page": 194,
+  "epub_spine_idx": 14,
+  "pdf_physical": 183,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/30!/4/2[page_195]/1:0)",
+  "epub_marker_page": 195,
+  "epub_spine_idx": 14,
+  "pdf_physical": 185,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/30!/4/2[page_196]/1:0)",
+  "epub_marker_page": 196,
+  "epub_spine_idx": 14,
+  "pdf_physical": 186,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ },
+ {
+  "epub_cfi": "epubcfi(/6/30!/4/2[page_197]/1:0)",
+  "epub_marker_page": 197,
+  "epub_spine_idx": 14,
+  "pdf_physical": 188,
+  "pdf_folio": "",
+  "source_flags": "no_pdf_folio;opener_unnumbered_in_pdf"
+ }
+]

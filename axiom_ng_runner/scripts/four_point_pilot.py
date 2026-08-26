@@ -18,6 +18,7 @@ import hashlib
 import json
 import re
 import sys
+import posixpath
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -42,14 +43,27 @@ _HOP = 3               # physical-page radius for relocation search
 _TAG = re.compile(rb"<[^>]+>")
 
 
+def _norm_path(base: str, href: str) -> str:
+    """Manifest hrefs may escape with ../ (Jossé) — normalize zip paths."""
+    return posixpath.normpath(f"{base}/{href}" if base else href)
+
+
 def norm_tokens(s: str, n: int = 10_000) -> list[str]:
     s = s.replace("\u00a0", " ").replace("\u00ad", "")
-    s = re.sub(r"[^A-Za-z0-9]+", " ", s)
+    s = re.sub(r"[^A-Za-z0-9]+", " ", _fold(s))
     return [t.lower() for t in s.split()][:n]
 
 
+def _fold(s: str) -> str:
+    """ASCII-fold umlauts (ü→u, ß→ss) so EPUB and PDF streams share one
+    alphabet (German books: naive non-ASCII stripping splits words)."""
+    import unicodedata
+    s = s.replace("ß", "ss")
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+
+
 def _roman(s: str) -> int:
-    r = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500}
+    r = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500, "m": 1000}
     vals = [r[c] for c in s]
     return sum(-a if a < b else a for a, b in zip(vals, vals[1:])) + vals[-1]
 
@@ -66,6 +80,32 @@ def containment(needles: list[str], page_tokens: list[str], stop: set[str]) -> f
 
 # ---------------------------------------------------------------- EPUB side
 
+def _anchor_number(elem) -> tuple[int, str] | None:
+    """Dialect switch (#222): recognize a page anchor element and return
+    (number, dialect) or None. Number source: aria-label > id > text.
+    Dialects: epub3_pagebreak | id_page_n | class_page."""
+    label = (elem.get("aria-label") or "").strip()
+    ident = elem.get("id") or ""
+    text = "".join(elem.itertext()).strip()
+    dialect = None
+    if elem.get(EPUB_TYPE) == "pagebreak" or elem.get("role") == "doc-pagebreak":
+        dialect = "epub3_pagebreak"
+    m = re.fullmatch(r"[pP][aA]?g?e?[-_](\d+)", ident) or re.fullmatch(r"page[-_]?(\d+)", ident, re.I)
+    if dialect is None and m:
+        dialect = "id_page_n"
+    if dialect is None and "page" in (elem.get("class") or "").split() \
+            and (label or text).isdigit():
+        dialect = "class_page"
+    if dialect is None:
+        return None
+    for cand in (label, (m.group(1) if m else ""), text):
+        if cand.isdigit():
+            return int(cand), dialect
+        if re.fullmatch(r"[ivxlcdm]+", cand, re.I):
+            return -_roman(cand.lower()), dialect
+    return None
+
+
 def harvest_epub(epub_path: Path, stop: set[str]) -> tuple[list[dict], dict]:
     with zipfile.ZipFile(epub_path) as z:
         opf_name = next(n for n in z.namelist() if n.endswith(".opf"))
@@ -78,39 +118,38 @@ def harvest_epub(epub_path: Path, stop: set[str]) -> tuple[list[dict], dict]:
         spine_refs = [it.get("idref") for it in opf.findall("opf:spine/opf:itemref", NS)]
 
         markers: list[dict] = []
+        dialects = set()
         for spine_idx, idref in enumerate(spine_refs):
             href, mtype = manifest.get(idref, (None, ""))
             if not href or "html" not in mtype:
                 continue
-            full = f"{base}/{href}" if base else href
+            full = _norm_path(base, href)
             raw = z.read(full)
             stream = _TAG.sub(b"", raw).decode("utf-8", "replace")
             root = ET.fromstring(raw)
-            for pb in root.iter(f"{XHTML}span"):
-                if pb.get(EPUB_TYPE) != "pagebreak":
+            for elem in root.iter():
+                hit = _anchor_number(elem)
+                if not hit:
                     continue
-                label = pb.get("aria-label") or ""
-                if label.isdigit():
-                    num = int(label)
-                elif re.fullmatch(r"[ivxlcdm]+", label, re.I):
-                    num = -_roman(label.lower())
-                else:
-                    continue
-                pos = raw.find(f'id="{pb.get("id")}"'.encode())
+                num, dialect = hit
+                dialects.add(dialect)
+                pos = raw.find(f'id="{elem.get("id")}"'.encode()) if elem.get("id") else -1
                 off = len(_TAG.sub(b"", raw[:max(pos, 0)]).decode("utf-8", "replace"))
                 window = norm_tokens(stream[off:off + 900], _WINDOW)
                 markers.append({
                     "marker_page": num,
                     "spine_idx": spine_idx,
                     "href": href,
-                    "elem_id": pb.get("id") or "",
-                    "cfi": f"epubcfi(/6/{2*(spine_idx+1)}!/4/2[{pb.get('id')}]/1:0)",
+                    "elem_id": elem.get("id") or "",
+                    "dialect": dialect,
+                    "cfi": f"epubcfi(/6/{2*(spine_idx+1)}!/4/2[{elem.get('id') or ''}]/1:0)",
                     "window": window,
                     "para_hash": hashlib.sha1(" ".join(window[:25]).encode()).hexdigest()[:12],
                 })
         meta = {
             "opf": opf_name,
             "spine_len": len(spine_refs),
+            "dialects": sorted(dialects),
             "title": opf.findtext("opf:metadata/dc:title", namespaces=NS) or "",
         }
     return markers, meta
@@ -118,27 +157,77 @@ def harvest_epub(epub_path: Path, stop: set[str]) -> tuple[list[dict], dict]:
 
 # ----------------------------------------------------------------- PDF side
 
+_ROMAN_RE = re.compile(r"[ivxlcdmIVXLCDM]{1,8}")
+
+
+def _folio_candidates(page, text: str) -> list[int]:
+    """Candidate folios for one page: standalone numbers/romans in the
+    header/footer band, plus leading token of first/last text line
+    (ProQuest-reprint layout)."""
+    cands: list[tuple[int, int]] = []  # (value, rank) — rank 0 line-leading, 1 band
+    h = page.rect.height
+    for w in page.get_text("words"):
+        tok = w[4]
+        if w[1] < h * 0.09 or w[3] > h * 0.91:  # header/footer band
+            v = _folio_token(tok)
+            if v is not None:
+                cands.append((v, 1))
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    for line in (lines[:1] + lines[-1:]):
+        if line:
+            v = _folio_token(line.split()[0])
+            if v is not None:
+                cands.append((v, 0))
+    # dedupe keeping best rank, preserve order
+    seen = {}
+    for v, rank in cands:
+        if v not in seen or rank < seen[v]:
+            seen[v] = rank
+    return [(v, seen[v]) for v in seen]
+
+
+def _folio_token(tok: str) -> int | None:
+    if tok.isdigit() and len(tok) <= 3:
+        return int(tok)
+    if _ROMAN_RE.fullmatch(tok):
+        return -_roman(tok.lower())
+    return None
+
+
 def map_pdf_folios(pdf_path: Path) -> list[dict]:
+    """physical -> folio via band/line candidates + monotone validation:
+    walk pages in order, accept the candidate closest to prev+1 (±3 window);
+    roman sequence tracked separately until the first arabic folio."""
     import fitz  # pymupdf, runner dependency
 
     doc = fitz.open(pdf_path)
-    pages = []
+    raw = []
     for i, page in enumerate(doc):
         text = page.get_text("text")
-        lines = [l.strip() for l in text.splitlines() if l.strip()]
-        folio, cls = None, ("blank" if not lines else "unnumbered")
-        if lines:
-            m = re.fullmatch(r"(\d{1,3}|[ivxlcdm]{1,8})", lines[0], re.I)
-            if m:
-                folio = int(m.group(1)) if m.group(1).isdigit() else -_roman(m.group(1).lower())
-                cls = "arabic" if m.group(1).isdigit() else "roman"
-        pages.append({
+        raw.append({
             "physical": i + 1,
-            "folio": folio,
-            "class": cls,
+            "cands": _folio_candidates(page, text),
             "tokens": norm_tokens(text, 900),
+            "empty": not text.strip(),
         })
     doc.close()
+
+    pages, prev_a, prev_r = [], 0, 0
+    for r in raw:
+        folio, cls = None, ("blank" if r["empty"] else "unnumbered")
+        if r["cands"]:
+            # prefer exact sequence continuation, then line-leading source
+            def key(cr):
+                c, rank = cr
+                d = abs(c - (prev_a + 1)) if c > 0 else abs(c - (prev_r - 1))
+                return (d > 0, d, rank)
+            best, _ = min(r["cands"], key=key)
+            if best > 0 and abs(best - (prev_a + 1)) <= 3:
+                folio, cls, prev_a = best, "arabic", best
+            elif best < 0 and (prev_r == 0 or abs(best - (prev_r - 1)) <= 2):
+                folio, cls, prev_r = best, "roman", best
+        pages.append({"physical": r["physical"], "folio": folio,
+                      "class": cls, "tokens": r["tokens"]})
     return pages
 
 
@@ -243,6 +332,20 @@ def main() -> int:
     stop = set(norm_tokens(BOILERPLATE))
 
     markers, meta = harvest_epub(args.epub, stop)
+    if not markers:
+        print("epub: 0 markers (unanchored) — see twins_sweep.py for the "
+              "derive+inject path")
+        json.dump({"meta": meta, "markers": []},
+                  open(args.out / "epub_markers.json", "w"), indent=1)
+        pdf_pages = map_pdf_folios(args.pdf)
+        runs = monotone_runs(pdf_pages)
+        n_ar = sum(1 for p in pdf_pages if p["class"] == "arabic")
+        print(f"pdf: {len(pdf_pages)} pages, {n_ar} arabic folios, {len(runs)} runs")
+        json.dump({"runs": runs,
+                   "pages": [{k: v for k, v in p.items() if k != "tokens"}
+                             for p in pdf_pages]},
+                  open(args.out / "pdf_folios.json", "w"), indent=1)
+        return 0
     nums = [m["marker_page"] for m in markers]
     mono = nums == sorted(nums) and len(set(nums)) == len(nums)
     print(f"epub: {len(markers)} markers, spine {meta['spine_len']}, "

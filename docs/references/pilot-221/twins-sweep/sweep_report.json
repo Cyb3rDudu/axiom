@@ -1,0 +1,186 @@
+[
+ {
+  "title": "Geursen - 2022 - Nachhaltiges Personalmanagement als Schlüsselfaktor für erfolgreiches Wirtschaft (EPUB)",
+  "dialects": [],
+  "markers": 0,
+  "pdf_pages": 547,
+  "pdf_arabic_folios": 511,
+  "derived": {
+   "anchorable_folios": "380/511",
+   "injected": {
+    "injected": 380,
+    "anchors": 380,
+    "page_map": "OEBPS/page-map.xml"
+   },
+   "verify": {
+    "markers_found": 380,
+    "verified_joins": "378/380"
+   }
+  }
+ },
+ {
+  "title": "Abeln - 2019 - Handbuch für Führungskräfte - Ein Praxisratgeber in Veränderungsprozessen (EPUB)",
+  "dialects": [],
+  "markers": 0,
+  "pdf_pages": 290,
+  "pdf_arabic_folios": 275,
+  "derived": {
+   "anchorable_folios": "250/275",
+   "injected": {
+    "injected": 250,
+    "anchors": 250,
+    "page_map": "OEBPS/page-map.xml"
+   },
+   "verify": {
+    "markers_found": 250,
+    "verified_joins": "247/250"
+   }
+  }
+ },
+ {
+  "title": "Altenburger - 2013 - CSR und Innovationsmanagement",
+  "dialects": [],
+  "markers": 0,
+  "pdf_pages": 250,
+  "pdf_arabic_folios": 242,
+  "derived": {
+   "anchorable_folios": "214/242",
+   "injected": {
+    "injected": 214,
+    "anchors": 214,
+    "page_map": "OEBPS/page-map.xml"
+   },
+   "verify": {
+    "markers_found": 214,
+    "verified_joins": "213/214"
+   }
+  }
+ },
+ {
+  "title": "Bieger+-+2021+-+An+Introduction+to+Management+Studies+(Based+on+the+St.+Gallen+Management+Model)",
+  "dialects": [
+   "id_page_n"
+  ],
+  "markers": 197,
+  "pdf_pages": 188,
+  "pdf_arabic_folios": 7,
+  "verified_joins": "3/197",
+  "divergence_types": {
+   "marker_without_folio": 191
+  }
+ },
+ {
+  "title": "D'heur - 2013 - CSR und Value Chain Management",
+  "dialects": [],
+  "markers": 0,
+  "pdf_pages": 309,
+  "pdf_arabic_folios": 296,
+  "derived": {
+   "anchorable_folios": "279/296",
+   "injected": {
+    "injected": 279,
+    "anchors": 279,
+    "page_map": "OEBPS/page-map.xml"
+   },
+   "verify": {
+    "markers_found": 279,
+    "verified_joins": "276/279"
+   }
+  }
+ },
+ {
+  "title": "Fifka - 2014 - CSR und Reporting",
+  "dialects": [],
+  "markers": 0,
+  "pdf_pages": 259,
+  "pdf_arabic_folios": 239,
+  "derived": {
+   "anchorable_folios": "213/239",
+   "injected": {
+    "injected": 213,
+    "anchors": 213,
+    "page_map": "OEBPS/page-map.xml"
+   },
+   "verify": {
+    "markers_found": 213,
+    "verified_joins": "210/213"
+   }
+  }
+ },
+ {
+  "title": "Schulz - 2014 - CSR und Finance",
+  "dialects": [],
+  "markers": 0,
+  "pdf_pages": 408,
+  "pdf_arabic_folios": 369,
+  "derived": {
+   "anchorable_folios": "306/369",
+   "injected": {
+    "injected": 306,
+    "anchors": 306,
+    "page_map": "OEBPS/page-map.xml"
+   },
+   "verify": {
+    "markers_found": 306,
+    "verified_joins": "302/306"
+   }
+  }
+ },
+ {
+  "title": "Hentze - 2014 - Stakeholder-Management und Nachhaltigkeits-Reporting",
+  "dialects": [],
+  "markers": 0,
+  "pdf_pages": 179,
+  "pdf_arabic_folios": 168,
+  "derived": {
+   "anchorable_folios": "151/168",
+   "injected": {
+    "injected": 151,
+    "anchors": 151,
+    "page_map": "OEBPS/page-map.xml"
+   },
+   "verify": {
+    "markers_found": 151,
+    "verified_joins": "149/151"
+   }
+  }
+ },
+ {
+  "title": "Burckhardt - 2014 - Corporate Social Responsibility – Mythen und Maßnahmen",
+  "dialects": [],
+  "markers": 0,
+  "pdf_pages": 228,
+  "pdf_arabic_folios": 197,
+  "derived": {
+   "anchorable_folios": "160/197",
+   "injected": {
+    "injected": 160,
+    "anchors": 160,
+    "page_map": "OEBPS/page-map.xml"
+   },
+   "verify": {
+    "markers_found": 160,
+    "verified_joins": "160/160"
+   }
+  }
+ },
+ {
+  "title": "Schäfer - 2014 - Institutionelle Anleger und nachhaltige Kapitalanlagen",
+  "dialects": [],
+  "markers": 0,
+  "pdf_pages": 372,
+  "pdf_arabic_folios": 354,
+  "derived": {
+   "anchorable_folios": "309/354",
+   "injected": {
+    "injected": 309,
+    "anchors": 309,
+    "page_map": "OEBPS/page-map.xml"
+   },
+   "verify": {
+    "markers_found": 309,
+    "verified_joins": "308/309"
+   }
+  }
+ }
+]
