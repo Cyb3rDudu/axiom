@@ -176,7 +176,7 @@ def align(markers: list[dict], pdf_pages: list[dict], stop: set[str]):
                 best = max(cand, key=lambda q: containment(m["window"], q["tokens"], stop),
                            default=None)
                 bsim = containment(m["window"], best["tokens"], stop) if best else 0.0
-                if best is not pdf_p and bsim >= _SIM_OK:
+                if best and best is not pdf_p and bsim >= _SIM_OK:
                     # marker at printed page bottom: following text lives on
                     # the next folio — benign boundary, not a mismatch
                     benign = best["folio"] == num + 1
@@ -192,8 +192,6 @@ def align(markers: list[dict], pdf_pages: list[dict], stop: set[str]):
                                  else "folio_mismatch_relocated")
                 else:
                     flags.append(f"low_text_sim:{sim:.2f}")
-            else:
-                folio = num
             if pdf_p["physical"] <= prev_phys:
                 flags.append("non_monotonic")
             prev_phys = pdf_p["physical"]
