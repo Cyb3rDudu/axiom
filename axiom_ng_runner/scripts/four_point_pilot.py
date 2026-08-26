@@ -168,6 +168,7 @@ def align(markers: list[dict], pdf_pages: list[dict], stop: set[str]):
         num, flags = m["marker_page"], []
         pdf_p = folio_index.get(num)
         if pdf_p:
+            folio = num  # default: join by folio number; relocation may override
             sim = containment(m["window"], pdf_p["tokens"], stop)
             if sim < _SIM_OK:
                 cand = [q for q in pdf_pages
