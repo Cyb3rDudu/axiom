@@ -83,6 +83,9 @@ const (
 	// runner classifies, it never executes OCR.
 	PageSourceBlind = "blind"
 	PageSourceNone  = "none"
+	// PageSourceEpubPagelist (#220): EPUB print-page anchors (four
+	// dialects), monotone — between folio_verified and none; never upgraded.
+	PageSourceEpubPagelist = "epub_pagelist"
 )
 
 // Locator is the source position (§11). page_span for PDFs (physical+logical),
@@ -98,6 +101,12 @@ type Locator struct {
 	PageLabelEnd      string `json:"page_label_end,omitempty"`
 	Source            string `json:"source"`
 	PageSource        string `json:"page_source,omitempty"`
+	// PageStart/PageEnd (#220): print pages on epub_cfi locators from a
+	// monotone publisher anchor map (pagebreak/class/id/page-map.xml),
+	// page_source = epub_pagelist. MUST stay in the struct — the persist
+	// boundary re-marshals the Locator and drops unknown fields (W9 lesson).
+	PageStart *int `json:"page_start,omitempty"`
+	PageEnd   *int `json:"page_end,omitempty"`
 	// Chapter (W12): 1-based chapter ordinal on corroborated chapter-
 	// relative books (folios restart per chapter; healed anchor label
 	// sections corroborated by the folio runs). The runner stamps it;

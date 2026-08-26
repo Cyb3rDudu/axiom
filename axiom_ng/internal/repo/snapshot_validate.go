@@ -297,8 +297,9 @@ func validateLocatorsAndRelationships(res *processor.Result, frozen *FrozenInput
 			if isEPUB && (loc.CFIStart == "" || loc.CFIEnd == "") {
 				return verrf("LOCATOR_CFI_EMPTY", "chunk %d has epub_cfi locator with empty cfi_start or cfi_end (§11 requires real CFI positions)", c.Index)
 			}
-			if loc.PageSource != "" && loc.PageSource != processor.PageSourceNone {
-				return verrf("LOCATOR_PAGE_SOURCE_INCONSISTENT", "chunk %d epub_cfi locator must carry page_source none, got %q", c.Index, loc.PageSource)
+			if loc.PageSource != "" && loc.PageSource != processor.PageSourceNone &&
+				loc.PageSource != processor.PageSourceEpubPagelist {
+				return verrf("LOCATOR_PAGE_SOURCE_INCONSISTENT", "chunk %d epub_cfi locator must carry page_source none or epub_pagelist, got %q", c.Index, loc.PageSource)
 			}
 		default:
 			return verrf("LOCATOR_TYPE_UNKNOWN", "chunk %d locator type %q", c.Index, loc.Type)

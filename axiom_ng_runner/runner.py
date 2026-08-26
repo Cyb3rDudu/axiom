@@ -140,7 +140,12 @@ def _stamp_page_source(
     from axiom_ng_runner.compute_core import page_trust as pt
 
     if locator.get("type") == "epub_cfi":
-        locator["page_source"] = pt.NONE
+        # #220: epub_pagelist sits between folio_verified and none — set ONLY
+        # when the locator carries pages from a monotone publisher anchor
+        # map; never silently upgraded.
+        locator["page_source"] = (
+            pt.EPUB_PAGELIST if locator.get("page_start") is not None else pt.NONE
+        )
         return
     if locator.get("page_source"):
         return  # already stamped by a previous _stamp_page_source pass
@@ -228,6 +233,14 @@ def _adapt_chunk(
             "cfi_end": meta.get("cfi_end", ""),
             "source": meta.get("locator_source", "epub"),
         }
+        # #220 citation parity: print pages from the anchor map (only when
+        # present — absent fields keep the honest chapter+CFI display) and
+        # chapter_number parity with PDF locators (1-based spine ordinal).
+        if meta.get("page_start") is not None:
+            locator["page_start"] = int(meta["page_start"])
+            locator["page_end"] = int(meta.get("page_end", meta["page_start"]))
+        if meta.get("chapter") is not None:
+            locator["chapter"] = int(meta["chapter"])
     else:
         page_start = meta.get("page_start")
         page_end = meta.get("page_end")
@@ -995,6 +1008,22 @@ def _real_pipeline(
         from .epub_cfi import build_cfi_map
 
         cfi_entries = build_cfi_map(str(source_path))
+        # #220 citation parity: publisher print-page anchors → entry pages.
+        # Monotone maps only (never guess); a non-monotone map is logged
+        # and dropped — locators stay chapter+CFI with page_source=none.
+        from axiom_ng_runner.compute_core import epub_pagelist
+
+        pagemap = epub_pagelist.parse_page_map(str(source_path))
+        if pagemap["anchors"] and pagemap["monotone"]:
+            annotated = epub_pagelist.annotate_cfi_entries(
+                cfi_entries, pagemap["anchors"]
+            )
+            log.info("epub_pagelist: %d anchors (%s), %d/%d entries annotated",
+                     pagemap["count"], ",".join(pagemap["dialects"]),
+                     annotated, len(cfi_entries))
+        elif pagemap["anchors"]:
+            log.warning("epub_pagelist: %d anchors NOT monotone — refusing "
+                        "enrichment (page_source stays none)", pagemap["count"])
         # Rewrite machine-specific image paths to stable basenames BEFORE
         # chunking (#124): the epub worker's temp dir carries a random
         # suffix that would otherwise land verbatim in chunk texts and
@@ -1051,6 +1080,9 @@ def _real_pipeline(
     if cfi_entries:
         from .epub_cfi import match_text_to_cfi
 
+        pos_by_cfi = {
+            e["cfi"]: (e.get("page"), e.get("spine")) for e in cfi_entries
+        }
         for c in chunk_dicts:
             meta = c.get("metadata", {}) or {}
             meta["locator_type"] = "epub_cfi"
@@ -1058,6 +1090,14 @@ def _real_pipeline(
             cfi_start, cfi_end = match_text_to_cfi(text, cfi_entries)
             meta["cfi_start"] = cfi_start
             meta["cfi_end"] = cfi_end
+            # #220: carry anchor-map pages + spine ordinal through to
+            # _adapt_chunk's locator (absent without a monotone map).
+            ps, sp = pos_by_cfi.get(cfi_start, (None, None))
+            if ps is not None:
+                meta["page_start"] = ps
+                meta["page_end"] = pos_by_cfi.get(cfi_end, (ps, None))[0] or ps
+            if sp is not None:
+                meta["chapter"] = sp + 1  # 1-based spine ordinal (PDF parity)
 
     # L6: real entity (GLiNER) and relationship (mREBEL) extraction.
     # Contract chunk refs are deterministic (chunk-{i:04d} from enumerate),
