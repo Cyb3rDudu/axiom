@@ -27,7 +27,6 @@ NS = {
     "opf": "http://www.idpf.org/2007/opf",
     "dc": "http://purl.org/dc/elements/1.1/",
 }
-XHTML = "{http://www.w3.org/1999/xhtml}"
 EPUB_TYPE = "{http://www.idpf.org/2007/ops}type"
 
 # Apress/Springer credit boilerplate repeated on every chapter opener —
@@ -195,9 +194,8 @@ def _folio_token(tok: str) -> int | None:
 
 
 def map_pdf_folios(pdf_path: Path) -> list[dict]:
-    """physical -> folio via band/line candidates + monotone validation:
-    walk pages in order, accept the candidate closest to prev+1 (±3 window);
-    roman sequence tracked separately until the first arabic folio."""
+    """physical -> folio via band/line candidates + monotone validation
+    (see _assign_folios)."""
     import fitz  # pymupdf, runner dependency
 
     doc = fitz.open(pdf_path)
@@ -211,10 +209,21 @@ def map_pdf_folios(pdf_path: Path) -> list[dict]:
             "empty": not text.strip(),
         })
     doc.close()
+    return _assign_folios(raw)
 
+
+def _assign_folios(raw: list[dict]) -> list[dict]:
+    """Monotone validation over per-page folio candidates: walk pages in
+    order, accept the candidate closest to prev+1 (±3 window); roman tracked
+    separately until the first arabic folio. Roman seeds only in −50..−1
+    (a lone band word like 'M' must not seed a roman sequence). After ≥10
+    consecutive rejected candidate pages, accept the best arabic candidate
+    as a fresh seed (section restart / extraction gap)."""
     pages, prev_a, prev_r = [], 0, 0
+    starved = 0  # candidate-bearing pages rejected since last acceptance
     for r in raw:
         folio, cls = None, ("blank" if r["empty"] else "unnumbered")
+        best = None
         if r["cands"]:
             # prefer exact sequence continuation, then line-leading source
             def key(cr):
@@ -222,10 +231,21 @@ def map_pdf_folios(pdf_path: Path) -> list[dict]:
                 d = abs(c - (prev_a + 1)) if c > 0 else abs(c - (prev_r - 1))
                 return (d > 0, d, rank)
             best, _ = min(r["cands"], key=key)
+        if best is not None:
             if best > 0 and abs(best - (prev_a + 1)) <= 3:
                 folio, cls, prev_a = best, "arabic", best
-            elif best < 0 and (prev_r == 0 or abs(best - (prev_r - 1)) <= 2):
+                starved = 0
+            elif best < 0 and (
+                (prev_r == 0 and -50 <= best <= -1)
+                or (prev_r != 0 and abs(best - (prev_r - 1)) <= 2)
+            ):
                 folio, cls, prev_r = best, "roman", best
+                starved = 0
+            elif best > 0 and starved >= 10:
+                folio, cls, prev_a = best, "arabic", best
+                starved = 0
+            else:
+                starved += 1
         pages.append({"physical": r["physical"], "folio": folio,
                       "class": cls, "tokens": r["tokens"]})
     return pages
