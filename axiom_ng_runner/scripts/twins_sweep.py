@@ -11,7 +11,7 @@ What it does:
               into a WORKING COPY — originals are never modified
               (injection pattern proven in ProQuest crawl, 648/648).
   verify      re-harvest each injected copy and join against the PDF folios:
-              the derivation is only accepted if the round-trip verifies.
+              verified and reported (verify ratio in sweep_report.json).
 
 Usage (needs the runner env for pymupdf):
   /opt/axiom/runner/current/env/bin/python twins_sweep.py \
@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import glob
 import json
-import os
 import re
 import sys
 import urllib.request
@@ -31,8 +30,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from four_point_pilot import (  # noqa: E402
+    BOILERPLATE,
+    _fold,
     _norm_path,
-    BOILERPLATE, align, harvest_epub, map_pdf_folios, monotone_runs,
+    align,
+    harvest_epub,
+    map_pdf_folios,
     norm_tokens,
 )
 
@@ -131,11 +134,12 @@ def _emit(seg: bytes, base_pos: int, fi: int, out: list):
         text = seg.decode("utf-8")
     except UnicodeDecodeError:
         text = seg.decode("utf-8", "replace")
-    from four_point_pilot import _fold
     for m in _WORD.finditer(text):
         tok = re.sub(r"[^A-Za-z0-9]", "", _fold(m.group(0))).lower()
         if tok:
-            out.append((tok, fi, base_pos + m.start()))
+            # byte-accurate offset: m.start() is a char index into text
+            out.append((tok, fi,
+                        base_pos + len(text[:m.start()].encode("utf-8"))))
 
 
 def anchor_pdf_pages(pdf_pages: list[dict], stream: list) -> list[dict]:
@@ -157,12 +161,10 @@ def anchor_pdf_pages(pdf_pages: list[dict], stream: list) -> list[dict]:
     def tok_match(w, t):
         return w == t or (len(w) >= 5 and (t.startswith(w) or w in t))
 
-    def find(toks, cursor):
+    def find(toks):
         for start in range(len(toks)):
             probe = toks[start]
             for p in index.get(probe[:4], []):
-                if p < cursor:
-                    continue
                 # verify toks[start:] as tolerant subsequence from p;
                 # return the position of the FIRST matched token
                 j, first, matched, end = start, None, 0, min(p + 100, len(stream))
@@ -190,7 +192,7 @@ def anchor_pdf_pages(pdf_pages: list[dict], stream: list) -> list[dict]:
         if p["class"] != "arabic":
             continue
         toks = distinctive(p["tokens"], freq)
-        pos = find(toks, 0) if toks else None
+        pos = find(toks) if toks else None
         results.append({"folio": p["folio"], "physical": p["physical"],
                         "stream_idx": pos, "matched": pos is not None})
     # monotonicity by longest increasing subsequence: a wrong early anchor
@@ -241,22 +243,35 @@ def inject_pagelist(epub: Path, out_path: Path, anchors: list[dict]) -> dict:
         contents = {n: z.read(n) for n in z.namelist() if n != "mimetype"}
         names = z.namelist()
 
-    by_file: dict[int, list[tuple[int, int]]] = {}
+    # one anchor per folio number: a duplicate folio would create
+    # duplicate PB{n} ids / page-map entries
+    deduped, seen_folios = [], set()
     for a in anchors:
-        if a["stream_idx"] is None:
+        if a["stream_idx"] is None or a["folio"] in seen_folios:
             continue
+        seen_folios.add(a["folio"])
+        deduped.append(a)
+
+    by_file: dict[int, list[tuple[int, int]]] = {}
+    for a in deduped:
         tok, fi, raw_pos = stream[a["stream_idx"]]
         by_file.setdefault(fi, []).append((raw_pos, a["folio"]))
 
-    n_injected = 0
+    n_injected = n_skipped = 0
     for fi, plist in by_file.items():
         name = files[fi]
         raw = contents[name]
         # insert markers right after the closest preceding '>'
         chunks, last = [], 0
         for raw_pos, folio in plist:
+            # splice only at a boundary between tags: an offset inside a
+            # tag (attribute '>') would corrupt the markup — skip instead
+            if raw.rfind(b"<", 0, raw_pos) > raw.rfind(b">", 0, raw_pos):
+                n_skipped += 1
+                continue
             at = raw.rfind(b">", 0, raw_pos) + 1
             if at <= 0:
+                n_skipped += 1
                 continue
             chunks.append(raw[last:at])
             chunks.append(MARKER.format(n=folio).encode())
@@ -270,9 +285,7 @@ def inject_pagelist(epub: Path, out_path: Path, anchors: list[dict]) -> dict:
     pm = ['<?xml version="1.0" encoding="UTF-8"?>',
           '<page-map xmlns="http://www.idpf.org/2007/ops" name="print">', ""]
     import posixpath
-    for a in anchors:
-        if a["stream_idx"] is None:
-            continue
+    for a in deduped:
         fi = stream[a["stream_idx"]][1]
         rel = posixpath.relpath(files[fi], base) if base else files[fi]
         pm.append(f'  <page name="{a["folio"]}" href="{rel}#PB{a["folio"]}"/>')
@@ -304,8 +317,8 @@ def inject_pagelist(epub: Path, out_path: Path, anchors: list[dict]) -> dict:
         if pm_name not in names:
             z.writestr(pm_name, contents[pm_name],
                        compress_type=zipfile.ZIP_DEFLATED)
-    return {"injected": n_injected, "anchors": len(anchors),
-            "page_map": pm_name}
+    return {"injected": n_injected, "skipped_in_tag": n_skipped,
+            "anchors": len(deduped), "page_map": pm_name}
 
 
 # ------------------------------------------------------------------ main
@@ -323,44 +336,49 @@ def main() -> int:
     twins = enumerate_twins(args.zotero)
     print(f"twins: {len(twins)}")
     report = []
-    for t in twins:
-        slug = re.sub(r"\W+", "_", t["title"])[:40]
-        tdir = args.out / slug
-        tdir.mkdir(exist_ok=True)
-        try:
-            markers, meta = harvest_epub(Path(t["epub"]), stop)
-            pdf_pages = map_pdf_folios(Path(t["pdf"]))
-        except Exception as e:
-            report.append({"title": t["title"], "error": str(e)})
-            print(f"  {slug}: ERROR {e}")
-            continue
-        n_ar = sum(1 for p in pdf_pages if p["class"] == "arabic")
-        entry = {"title": t["title"], "dialects": meta.get("dialects"),
-                 "markers": len(markers), "pdf_pages": len(pdf_pages),
-                 "pdf_arabic_folios": n_ar}
-        if markers and n_ar:
-            rows, div = align(markers, pdf_pages, stop)
-            ok = sum(1 for r in rows if r["source_flags"] == "ok")
-            entry.update({"verified_joins": f"{ok}/{len(rows)}",
-                          "divergence_types": _kinds(div)})
-            with open(tdir / "alignment.json", "w") as f:
-                json.dump(rows, f, indent=1)
-            with open(tdir / "divergences.json", "w") as f:
-                json.dump(div, f, indent=1)
-        elif markers:
-            entry["note"] = ("anchored, but PDF sibling has no printed "
-                             "folios (e-book PDF) — folio join impossible; "
-                             "marker range "
-                             f"{min(m['marker_page'] for m in markers)}.."
-                             f"{max(m['marker_page'] for m in markers)}")
-        else:
-            entry["derived"] = _derive(t, pdf_pages, tdir,
-                                       args.inject_dir, stop)
-        report.append(entry)
-        print(f"  {slug}: markers={len(markers)} folios={n_ar} "
-              f"joins={entry.get('verified_joins', entry.get('note', 'derived'))}")
-    with open(args.out / "sweep_report.json", "w") as f:
-        json.dump(report, f, indent=1, ensure_ascii=False)
+    try:
+        for t in twins:
+            slug = re.sub(r"\W+", "_", t["title"])[:40]
+            tdir = args.out / slug
+            tdir.mkdir(exist_ok=True)
+            try:
+                markers, meta = harvest_epub(Path(t["epub"]), stop)
+                pdf_pages = map_pdf_folios(Path(t["pdf"]))
+                n_ar = sum(1 for p in pdf_pages if p["class"] == "arabic")
+                entry = {"title": t["title"], "dialects": meta.get("dialects"),
+                         "markers": len(markers), "pdf_pages": len(pdf_pages),
+                         "pdf_arabic_folios": n_ar}
+                if markers and n_ar:
+                    rows, div = align(markers, pdf_pages, stop)
+                    ok = sum(1 for r in rows if r["source_flags"] == "ok")
+                    entry.update({"verified_joins": f"{ok}/{len(rows)}",
+                                  "divergence_types": _kinds(div)})
+                    with open(tdir / "alignment.json", "w") as f:
+                        json.dump(rows, f, indent=1)
+                    with open(tdir / "divergences.json", "w") as f:
+                        json.dump(div, f, indent=1)
+                elif markers:
+                    entry["note"] = ("anchored, but PDF sibling has no printed "
+                                     "folios (e-book PDF) — folio join impossible; "
+                                     "marker range "
+                                     f"{min(m['marker_page'] for m in markers)}.."
+                                     f"{max(m['marker_page'] for m in markers)}")
+                else:
+                    entry["derived"] = _derive(t, pdf_pages, tdir,
+                                               args.inject_dir, stop)
+            except Exception as e:
+                # one bad pair must not lose the whole sweep report
+                entry = {"title": t["title"], "error": str(e)}
+                print(f"  {slug}: ERROR {e}")
+            report.append(entry)
+            if "error" not in entry:
+                print(f"  {slug}: markers={entry['markers']} "
+                      f"folios={entry['pdf_arabic_folios']} "
+                      f"joins={entry.get('verified_joins', entry.get('note', 'derived'))}")
+    finally:
+        # partial results survive even if a later pair crashes hard
+        with open(args.out / "sweep_report.json", "w") as f:
+            json.dump(report, f, indent=1, ensure_ascii=False)
     print(f"report: {args.out / 'sweep_report.json'}")
     return 0
 
