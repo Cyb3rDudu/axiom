@@ -2,10 +2,6 @@
  "runs": [
   {
    "first": 1,
-   "last": 9
-  },
-  {
-   "first": 11,
    "last": 35
   },
   {
@@ -245,8 +241,8 @@
   },
   {
    "physical": 38,
-   "folio": null,
-   "class": "unnumbered"
+   "folio": 10,
+   "class": "arabic"
   },
   {
    "physical": 39,

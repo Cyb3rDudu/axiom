@@ -1,11 +1,5 @@
 [
  {
-  "type": "marker_without_folio",
-  "marker": 10,
-  "located_phys": 38,
-  "sim": 0.86
- },
- {
   "type": "marker_folio_mismatch",
   "marker": 78,
   "labeled_phys": 104,
@@ -77,7 +71,7 @@
   "labeled_phys": 412,
   "matched_phys": 414,
   "matched_folio": 393,
-  "sim_labeled": 0.4,
+  "sim_labeled": 0.38,
   "sim_matched": 0.9
  },
  {
