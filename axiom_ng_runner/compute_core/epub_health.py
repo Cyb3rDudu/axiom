@@ -89,13 +89,15 @@ def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
         grund.append("OPF/Spine fehlt oder unlesbar")
 
     # 2) DRM — rights.xml is DRM by definition; encryption.xml is only
-    # legit for IDPF font obfuscation (embedded fonts), anything else is
-    # a lock we must not (and cannot) process around.
+    # legit when EVERY EncryptedData uses the IDPF font-obfuscation
+    # algorithm (embedded fonts). A document that merely mentions the font
+    # URI but also encrypts content with anything else (aes128-cbc …) is a
+    # lock we must not (and cannot) process around.
     drm = "META-INF/rights.xml" in names
-    encrypted = "META-INF/encryption.xml" in names
-    if encrypted:
+    if "META-INF/encryption.xml" in names:
         enc = epub.read("META-INF/encryption.xml").decode("utf-8", "replace")
-        if _FONT_OBFUSCATION not in enc:
+        algs = set(re.findall(r'Algorithm\s*=\s*"([^"]+)"', enc))
+        if not algs or algs != {_FONT_OBFUSCATION}:
             drm = True
     if drm:
         verdict = "🔴"

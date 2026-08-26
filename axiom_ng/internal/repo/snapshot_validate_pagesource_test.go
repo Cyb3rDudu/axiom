@@ -72,4 +72,30 @@ func TestValidatePageSourceGate(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "LOCATOR_PAGE_SOURCE_INCONSISTENT") {
 		t.Fatalf("epub_cfi with folio_verified must fail with INCONSISTENT, got %v", err)
 	}
+	// #220: epub_pagelist claims a print page from an anchor map — the
+	// claim is unfounded without page_start (additive field must be there).
+	pagelist := &processor.Result{Chunks: []processor.Chunk{{
+		Ref: "chunk-0000", Index: 0, Text: "x",
+		Locator: &processor.Locator{
+			Type: "epub_cfi", CFIStart: "/6/4", CFIEnd: "/6/8", Source: "epub",
+			PageSource: processor.PageSourceEpubPagelist,
+		},
+	}}}
+	err = validateLocatorsAndRelationships(pagelist, frozen)
+	if err == nil || !strings.Contains(err.Error(), "LOCATOR_PAGE_SOURCE_INCONSISTENT") ||
+		!strings.Contains(err.Error(), "page_start") {
+		t.Fatalf("epub_pagelist without page_start must fail with INCONSISTENT mentioning page_start, got %v", err)
+	}
+	pageTen := 10
+	pagelistOk := &processor.Result{Chunks: []processor.Chunk{{
+		Ref: "chunk-0000", Index: 0, Text: "x",
+		Locator: &processor.Locator{
+			Type: "epub_cfi", CFIStart: "/6/4", CFIEnd: "/6/8", Source: "epub",
+			PageSource: processor.PageSourceEpubPagelist,
+			PageStart:  &pageTen, PageEnd: &pageTen,
+		},
+	}}}
+	if err := validateLocatorsAndRelationships(pagelistOk, frozen); err != nil {
+		t.Fatalf("epub_pagelist with page_start must pass: %v", err)
+	}
 }

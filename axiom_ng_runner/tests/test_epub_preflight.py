@@ -87,6 +87,28 @@ def test_preflight_drm_epub_rejected(client):
     assert body["details"]["drm"] is True
 
 
+def test_preflight_mixed_encryption_is_drm(client):
+    """W4 regression: font obfuscation PLUS a content encryption (aes128)
+    is DRM — mentioning the IDPF URI must not whitewash the second lock."""
+    r = client.post(
+        "/v1/pdf/preflight",
+        content=_epub_bytes({"META-INF/encryption.xml": (
+            '<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            "<EncryptedData>"
+            '<EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>'
+            "</EncryptedData>"
+            "<EncryptedData>"
+            '<EncryptionMethod Algorithm='
+            '"http://www.w3.org/2001/04/xmlenc#aes128-cbc"/>'
+            "</EncryptedData></encryption>")}),
+        headers={"Content-Type": "application/epub+zip"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["details"]["drm"] is True
+    assert body["ok"] is False
+
+
 def test_preflight_font_obfuscation_is_not_drm(client):
     """encryption.xml with the IDPF font-obfuscation algorithm is legit."""
     r = client.post(

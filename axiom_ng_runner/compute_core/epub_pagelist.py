@@ -48,10 +48,11 @@ def _attr_num(attrs: dict[str, str | None], *names: str) -> int | None:
 
 class _AnchorScanner(HTMLParser):
     """Walks one XHTML doc, counting top-level body children EXACTLY like
-    ``epub_cfi._CFICollector`` (every non-void element at depth 0 increments
-    the index — comments/CDATA are invisible to html.parser, matching the
-    foliate-js element/text-only child-counting rule). Records the
-    (element index, page) position of every page anchor."""
+    ``epub_cfi._CFICollector`` (EVERY element at depth 0 increments the
+    index, void tags included — comments/CDATA are invisible to
+    html.parser, matching the foliate-js element/text-only child-counting
+    rule). Records the (element index, page) position of every page
+    anchor."""
 
     def __init__(self, frag_pages: dict[str, int]) -> None:
         super().__init__(convert_charrefs=True)
@@ -72,16 +73,19 @@ class _AnchorScanner(HTMLParser):
         if tag == "body":
             self._in_body = True
             return
-        if not self._in_body or tag in _VOID_TAGS:
-            if self._pending and self._in_body:
-                self._flush_pending()
+        if not self._in_body:
+            return
+        if tag in _VOID_TAGS:
+            # Void tags never open/close/flush a pending anchor, but a
+            # top-level one is still an element child of <body> and consumes
+            # an element step — exact parity with _CFICollector.
+            if self._depth == 0:
+                self._body_child_idx += 1
             return
         a = {k.lower(): v for k, v in attrs}
         if self._depth == 0:
             self._body_child_idx += 1
-            elem = self._body_child_idx
-        else:
-            elem = self._body_child_idx
+        elem = self._body_child_idx
         self._stack.append(tag)
         self._depth += 1
 
@@ -89,10 +93,10 @@ class _AnchorScanner(HTMLParser):
         if page is not None:
             self._emit(elem, page)
         elif self._is_candidate(tag, a):
-            # anchor without a number in its attrs — collect text to resolve
-            self._pending.append(
-                {"depth": self._depth, "elem": elem, "text": "", "page": None}
-            )
+            # anchor without a number in its attrs — collect the text INSIDE
+            # it to resolve the number (never from unrelated later text)
+            self._pending.append({"depth": self._depth, "elem": elem,
+                                  "text": ""})
 
     def _is_candidate(self, tag: str, a: dict[str, str | None]) -> bool:
         etype = (a.get("epub:type") or a.get("type") or "").split()
@@ -124,19 +128,24 @@ class _AnchorScanner(HTMLParser):
         return None
 
     def handle_data(self, data: str) -> None:
-        if self._pending:
+        # Only text INSIDE the pending anchor's element may resolve its
+        # number — anything after its end tag belongs to other content.
+        if self._pending and self._depth >= self._pending[-1]["depth"]:
             self._pending[-1]["text"] += data
 
+    def _pop_pending(self) -> None:
+        """Resolve the innermost pending anchor from its OWN element text
+        or drop it — an anchor that closes without a resolvable number is
+        never kept for later (no digit scavenging from following text)."""
+        p = self._pending.pop()
+        m = _NUM.search(p["text"])
+        if m:
+            self._emit(p["elem"], int(m.group(1)))
+
     def _flush_pending(self) -> None:
-        """Resolve pending anchors whose number lives in the text (Jossé
-        '<a class="page" id="page_N">N</a>' / Bieger '[N]' followers)."""
-        for p in self._pending:
-            if p.get("page") is not None:
-                continue  # already emitted from attrs at start tag
-            m = _NUM.search(p["text"])
-            if m:
-                self._emit(p["elem"], int(m.group(1)))
-        self._pending = []
+        """Resolve pending anchors still open at document end."""
+        while self._pending:
+            self._pop_pending()
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
@@ -154,20 +163,11 @@ class _AnchorScanner(HTMLParser):
         if tag in self._stack:
             while self._stack and self._stack.pop() != tag:
                 self._depth = max(0, self._depth - 1)
-            self._depth = max(0, self._depth - 1)
-        else:
-            self._depth = max(0, self._depth - 1)
-        if self._pending and self._pending[-1]["depth"] > self._depth:
-            # the innermost pending anchor closed without attrs number —
-            # its text is complete; older pendings keep collecting.
-            p = self._pending[-1]
-            if p.get("page") is None and p["text"].strip():
-                m = _NUM.search(p["text"])
-                if m:
-                    p["page"] = int(m.group(1))
-                    self._emit(p["elem"], p["page"])
-            if p.get("page") is not None:
-                self._pending.pop()
+        self._depth = max(0, self._depth - 1)
+        # Pendings whose element just closed (directly or via an implied
+        # end tag): resolve from their own text or drop them here.
+        while self._pending and self._pending[-1]["depth"] > self._depth:
+            self._pop_pending()
 
     def close(self) -> None:
         super().close()
@@ -286,9 +286,13 @@ def annotate_cfi_entries(
     if not anchors:
         return 0
     queue = sorted(anchors, key=lambda a: (a["spine"], a["elem"]))
+    # Seed ONLY from an anchor at the very first position (spine 0, elem 0):
+    # a page that starts later must not leak backwards into earlier spine
+    # docs (cover/TOC) — those entries carry no page at all.
+    page: int | None = None
     qi = 0
-    page: int | None = queue[0]["page"] if queue[0]["elem"] == 0 else None
-    if queue[0]["elem"] == 0:
+    if (queue[0]["spine"], queue[0]["elem"]) == (0, 0):
+        page = queue[0]["page"]
         qi = 1
     n = 0
     for e in cfi_entries:  # entries are in spine order (build_cfi_map)

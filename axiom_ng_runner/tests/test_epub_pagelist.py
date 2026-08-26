@@ -170,3 +170,52 @@ def test_annotation_without_map_leaves_entries_bare(tmp_path):
     entries = build_cfi_map(str(epub))
     assert annotate_cfi_entries(entries, m["anchors"]) == 0
     assert "page" not in entries[0]
+
+
+def test_annotation_no_backward_leak_into_earlier_spine_docs(tmp_path):
+    """C1 regression: a page-map entry on the SECOND spine doc must not
+    leak its page into the entries of the first doc (cover/TOC)."""
+    epub = tmp_path / "leak.epub"
+    pmap = ('<?xml version="1.0"?>\n<page-map '
+            'xmlns="http://www.idpf.org/2007/ops">\n'
+            '<page-entry page-number="10" href="c2.xhtml"/>\n'
+            "</page-map>\n")
+    _write_epub(epub, {"c1.xhtml": _doc("<p>Titelblatt ohne Anker</p>"),
+                       "c2.xhtml": _doc("<p>Kapiteltext auf Seite zehn</p>")},
+                with_map=pmap)
+    m = parse_page_map(str(epub))
+    assert m["anchors"] == [{"spine": 1, "elem": 0, "page": 10,
+                             "cfi": "epubcfi(/6/4!/4)"}]
+    entries = build_cfi_map(str(epub))
+    n = annotate_cfi_entries(entries, m["anchors"])
+    assert n == 1
+    assert "page" not in entries[0]  # spine doc 0: no page (review C1)
+    assert entries[1]["page"] == 10
+
+
+def test_scanner_counts_top_level_void_elements(tmp_path):
+    """W2 regression: top-level void elements consume an element step
+    (parity with _CFICollector/foliate-js), and a page starting AFTER a
+    block never annotates that earlier block."""
+    epub = tmp_path / "void.epub"
+    body = ("<p>Alpha-Text</p><hr/><p>Beta-Text</p><hr/>"
+            '<p><a class="page" id="page_10">10</a>Gamma-Text</p>')
+    _write_epub(epub, {"c1.xhtml": _doc(body)})
+    m = parse_page_map(str(epub))
+    assert [(a["elem"], a["page"]) for a in m["anchors"]] == [(5, 10)]
+    entries = build_cfi_map(str(epub))
+    annotate_cfi_entries(entries, m["anchors"])
+    assert "page" not in entries[0]  # Alpha (elem 1)
+    assert "page" not in entries[1]  # Beta (elem 3) — before the anchor
+    assert entries[2]["page"] == 10  # Gamma (elem 5)
+
+
+def test_pending_anchor_never_scavenges_later_text(tmp_path):
+    """W3 regression: a numberless class="page" anchor that closes without
+    a digit is DROPPED — following text with digits must not resolve it."""
+    epub = tmp_path / "scavenge.epub"
+    body = ('<p><span class="page"></span>vf</p>'
+            "<p>Section 7 und weiter mit Text</p>")
+    _write_epub(epub, {"c1.xhtml": _doc(body)})
+    m = parse_page_map(str(epub))
+    assert m["anchors"] == [] and m["count"] == 0
