@@ -73,6 +73,7 @@ organized by *where the variable is consumed* (`set by`).
 | `AXIOM_PROCESSOR_LOG_LEVEL` | `INFO` | Runner log level. |
 | `AXIOM_PROCESSOR_SOURCE_TIMEOUT` | `120` | Runner-side source-download budget (seconds) for one `source_url` pull. |
 | `AXIOM_PROCESSOR_MAX_QUERY_TEXTS` | `16` | Hard cap for `/v1/embed` batch size. |
+| `AXIOM_PROCESSOR_EPUBCHECK_CMD` | auto | #220 EPUB preflight: external epubcheck command (BSD-3, JSON mode) for the `/v1/pdf/preflight` EPUB branch. Empty/auto = `epubcheck` on PATH; when absent the gate degrades honestly to the built-in light checks (zip/OPF/spine, DRM, text-layer) and reports `epubcheck: not_available`. Deliberately NOT bundled into the runner artifact — the conda-pack artifact must not gain a Java runtime (#208). |
 | `AXIOM_PROCESSOR_RERANK_MAX_TEXTS` | `64` | Hard cap for `/v1/rerank` candidate count. |
 
 > The runner reads its variables under a shared processor prefix in

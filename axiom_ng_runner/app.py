@@ -774,19 +774,30 @@ async def pdf_preflight(request: Request):
     """
     data = await request.body()
     if not data:
-        raise _query_reject("PREFLIGHT_EMPTY", "no PDF bytes in request body")
+        raise _query_reject("PREFLIGHT_EMPTY", "no document bytes in request body")
 
-    # #175: pure byte consumer — never touch the source storage; land the
-    # bytes in the runner's own work_root temp space, analyze, delete.
     s = settings.get()
     work = s.work_root / "preflight"
     work.mkdir(parents=True, exist_ok=True)
-    tmp = work / f"preflight-{uuid.uuid4().hex}.pdf"
+    # #220: the gate serves BOTH formats — PDF bytes (application/pdf) run
+    # pdf_health, EPUB bytes (application/epub+zip) run epub_health incl.
+    # the external epubcheck conformance stage. Same Rot→Skip→Repair
+    # policy, same report shape (details mirrors the respective analyzer).
+    is_epub = "epub" in (request.headers.get("content-type") or "").lower()
+    suffix = ".epub" if is_epub else ".pdf"
+    tmp = work / f"preflight-{uuid.uuid4().hex}{suffix}"
     try:
         tmp.write_bytes(data)
-        d = await asyncio.get_running_loop().run_in_executor(
-            None, pdf_health.analyze_pdf, str(tmp)
-        )
+        if is_epub:
+            from axiom_ng_runner.compute_core.epub_health import analyze_epub
+
+            d = await asyncio.get_running_loop().run_in_executor(
+                None, analyze_epub, str(tmp), s.epubcheck_cmd
+            )
+        else:
+            d = await asyncio.get_running_loop().run_in_executor(
+                None, pdf_health.analyze_pdf, str(tmp)
+            )
     except Exception as exc:  # noqa: BLE001 — a broken PDF is evidence, not a traceback
         # A parse failure (pymupdf.FileDataError / FileNotFoundError) is a
         # legitimate diagnostic: the caller's policy treats it as un-assessable
@@ -795,7 +806,7 @@ async def pdf_preflight(request: Request):
             status_code=500,
             detail={
                 "code": "PREFLIGHT_PARSE",
-                "message": f"PDF konnte nicht analysiert werden: {type(exc).__name__}: {exc}",
+                "message": f"Dokument konnte nicht analysiert werden: {type(exc).__name__}: {exc}",
             },
         ) from None
     finally:

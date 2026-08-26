@@ -30,6 +30,10 @@ class Settings:
     # server startup so the FIRST real embed/rerank request is already warm
     # instead of paying the ~90s MPS model load on query one. On by default.
     warmup: bool = True
+    # #220: external epubcheck command for the EPUB preflight gate. Empty
+    # = auto-detect `epubcheck` on PATH; the light built-in checks run
+    # regardless (epubcheck reported as not_available when absent).
+    epubcheck_cmd: str = ""
 
     @property
     def bind(self) -> tuple[str, int]:
@@ -82,6 +86,7 @@ def load_settings() -> Settings:
         max_query_texts=max(1, _env_int("AXIOM_PROCESSOR_MAX_QUERY_TEXTS", 16)),
         rerank_max_texts=max(1, _env_int("AXIOM_PROCESSOR_RERANK_MAX_TEXTS", 64)),
         warmup=_env_bool("AXIOM_PROCESSOR_WARMUP", True),
+        epubcheck_cmd=os.getenv("AXIOM_PROCESSOR_EPUBCHECK_CMD", ""),
     )
 
 

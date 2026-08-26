@@ -97,6 +97,30 @@ junk chunks pollute the index. Advisory by design: if the source is not
 locally readable or the preflight call fails, the job proceeds normally —
 preflight never blocks a job it cannot measure.
 
+### EPUB preflight (#220)
+
+The same endpoint serves EPUBs: `Content-Type: application/epub+zip` routes
+to the EPUB analyzer (zip integrity, OPF/spine presence, DRM detection —
+`META-INF/rights.xml` or non-font-obfuscation `encryption.xml` — and a
+text-extraction check), plus the external **epubcheck** conformance stage
+(W3C, BSD-3, JSON mode; `AXIOM_PROCESSOR_EPUBCHECK_CMD`, auto-detected on
+PATH, reported as `not_available` when absent). Identical policy: red →
+skip + repair-case, green/yellow with extractable text → ok. No Java is
+bundled into the runner artifact (conda-pack, #208) — the jar lives in the
+host environment.
+
+### EPUB page anchors → citable print pages (#220)
+
+When an EPUB ships publisher page anchors (`epub:type="pagebreak"`,
+`class="page"` — Jossé/dtv —, `id="page_N"` — Bieger/Springer —, or Adobe
+`page-map.xml`), the runner parses them into a uniform map and enriches
+`epub_cfi` locators with additive `page_start`/`page_end`, a `chapter`
+ordinal (spine parity with PDF locators) and `page_source: "epub_pagelist"`
+(a new trust level between `folio_verified` and `none`). Anchors are only
+trusted when their page numbers form a monotone sequence in spine order —
+a non-monotone map is refused (locators stay chapter+CFI, `page_source:
+"none"`); vendor-crawled pagination is never upgraded to print folio.
+
 ## Fixer: event runner (owner decision)
 
 One process per Zotero attachment key, invoked via the tested wrapper
