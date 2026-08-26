@@ -58,6 +58,7 @@ class _CFICollector(HTMLParser):
         self._current_tag = ""
         self._current_text = ""
         self._current_cfi = ""
+        self._current_elem = 0  # #220: body-child index for page-anchor maps
         self.entries: list[dict[str, Any]] = []
 
     def _flush_entry(self) -> None:
@@ -69,6 +70,10 @@ class _CFICollector(HTMLParser):
                     "cfi": self._current_cfi,
                     "text": text,
                     "tag": self._current_tag,
+                    # #220: position keys shared with compute_core.
+                    # epub_pagelist (body-child element index) —
+                    # annotate_cfi_entries joins on these.
+                    "elem": self._current_elem,
                 })
         self._current_tag = ""
         self._current_text = ""
@@ -84,13 +89,19 @@ class _CFICollector(HTMLParser):
 
         # C2 fix: void elements never have end tags — don't affect depth.
         if tag in _VOID_TAGS:
-            if self._depth >= 1:
+            # #220 foliate-js mirror: a top-level void element is still an
+            # element child of <body> (nodeType 1) and consumes an element
+            # step — skipping it would shift every following sibling.
+            if self._depth == 0:
+                self._body_child_idx += 1
+            elif self._depth >= 1:
                 self._current_text += " "  # placeholder for void content
             return
 
         if self._depth == 0:
             # Top-level child of <body>
             self._body_child_idx += 1
+            self._current_elem = self._body_child_idx
             if tag in self.BLOCK_TAGS:
                 # C2 fix: implied end tag — a new block at depth 0 closes
                 # any previous unclosed block.
@@ -108,6 +119,7 @@ class _CFICollector(HTMLParser):
             # current entry and start a new sibling.
             self._flush_entry()
             self._body_child_idx += 1
+            self._current_elem = self._body_child_idx
             self._current_tag = tag
             self._current_text = ""
             elem_step = self._body_child_idx * 2
@@ -227,6 +239,8 @@ def build_cfi_map(epub_path: str) -> list[dict[str, Any]]:
         collector.feed(raw)
         # Flush any remaining entry at end of feed.
         collector._flush_entry()
+        for e in collector.entries:
+            e["spine"] = spine_idx  # #220: position key for page anchors
         all_entries.extend(collector.entries)
 
     epub.close()
