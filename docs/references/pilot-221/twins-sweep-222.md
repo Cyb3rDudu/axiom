@@ -19,7 +19,8 @@ Enumeration via Zotero local API: documents with ≥1 epub and ≥1 pdf attachme
 
 Dialect coverage: `epub:type="pagebreak"`, `id="page_N"` (covers Bieger **and** Jossé —
 one rule, two publishers), `class="page"` fallback. Manifest hrefs escaping via `../`
-(Jossé) required zip-path normalization.
+(Jossé) required zip-path normalization. The Jossé fixture is regenerable via
+`four_point_pilot.py --epub <Zotero storage FFMTJA3S copy> ...` (no PDF twin, harvest only).
 
 ### Unanchored twins — derived + injected page-lists (`derived_from_sibling`)
 
