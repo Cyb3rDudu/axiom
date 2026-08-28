@@ -287,7 +287,7 @@ func readHealedPDF(r *http.Request) ([]byte, error) {
 type repairApplyDeps interface {
 	Quarantine(root, zoteroKey, sourcePath string) (string, error)
 	DeleteAttachment(key string) error
-	CreateAttachmentWithFile(parentKey, filename string, pdf []byte) (string, error)
+	CreateAttachmentWithFile(parentKey, filename, contentType string, pdf []byte) (string, error)
 	MarkRepairFailed(ctx context.Context, caseID, reason string) error
 	MarkRepairHealed(ctx context.Context, caseID string) error
 	AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error
@@ -305,8 +305,8 @@ func (d liveRepairDeps) Quarantine(root, key, src string) (string, error) {
 func (d liveRepairDeps) DeleteAttachment(key string) error {
 	return d.write.DeleteAttachmentItem(key)
 }
-func (d liveRepairDeps) CreateAttachmentWithFile(parent, filename string, pdf []byte) (string, error) {
-	return d.write.CreateAttachmentWithFile(parent, filename, pdf)
+func (d liveRepairDeps) CreateAttachmentWithFile(parent, filename, contentType string, pdf []byte) (string, error) {
+	return d.write.CreateAttachmentWithFile(parent, filename, contentType, pdf)
 }
 func (d liveRepairDeps) MarkRepairFailed(ctx context.Context, caseID, reason string) error {
 	return d.rep.MarkRepairFailed(ctx, caseID, reason)

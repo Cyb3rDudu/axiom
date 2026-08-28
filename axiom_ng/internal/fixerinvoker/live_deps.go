@@ -28,8 +28,8 @@ func (d liveDeps) Quarantine(root, key, src string) (string, error) {
 func (d liveDeps) DeleteAttachment(key string) error {
 	return d.write.DeleteAttachmentItem(key)
 }
-func (d liveDeps) CreateAttachmentWithFile(parent, filename string, pdf []byte) (string, error) {
-	return d.write.CreateAttachmentWithFile(parent, filename, pdf)
+func (d liveDeps) CreateAttachmentWithFile(parent, filename, contentType string, pdf []byte) (string, error) {
+	return d.write.CreateAttachmentWithFile(parent, filename, contentType, pdf)
 }
 func (d liveDeps) MarkRepairFailed(ctx context.Context, caseID, reason string) error {
 	return d.rep.MarkRepairFailed(ctx, caseID, reason)

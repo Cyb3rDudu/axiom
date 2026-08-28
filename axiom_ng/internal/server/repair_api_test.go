@@ -46,7 +46,7 @@ func (f *fakeApply) DeleteAttachment(key string) error {
 	return f.deleteErr
 }
 
-func (f *fakeApply) CreateAttachmentWithFile(parent, filename string, pdf []byte) (string, error) {
+func (f *fakeApply) CreateAttachmentWithFile(parent, filename, contentType string, pdf []byte) (string, error) {
 	f.calls = append(f.calls, "create")
 	if f.createErr != nil {
 		return "", f.createErr

@@ -33,6 +33,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -n "$EXTRA" ] && set -- $EXTRA
+# (unquoted word-split is fine here: EXTRA only ever carries --apply — the
+# invoker and operator both call fix.sh <key> [--apply] [--format …] [--source …])
 
 RUNS="$HOME/.local/state/axiom/runs"
 LOCK="$RUNS/fix-$KEY.lock"

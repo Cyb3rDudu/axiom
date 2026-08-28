@@ -27,7 +27,7 @@ import (
 type ApplyDeps interface {
 	Quarantine(root, zoteroKey, sourcePath string) (string, error)
 	DeleteAttachment(key string) error
-	CreateAttachmentWithFile(parentKey, filename string, pdf []byte) (string, error)
+	CreateAttachmentWithFile(parentKey, filename, contentType string, pdf []byte) (string, error)
 	MarkRepairFailed(ctx context.Context, caseID, reason string) error
 	MarkRepairHealed(ctx context.Context, caseID string) error
 	AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error
@@ -96,7 +96,7 @@ func Apply(ctx context.Context, d ApplyDeps, quarantineRoot string, c ApplyCase,
 	// 3. create the healed attachment under a SCHEMA filename (no patch)
 	creators, _ := c.Creators.([]zotero.Creator)
 	filename := SchemaFilenameForFormat(creators, c.Year, c.Title, c.Publisher, c.ContentType)
-	newKey, err := d.CreateAttachmentWithFile(c.DocumentKey, filename, pdf)
+	newKey, err := d.CreateAttachmentWithFile(c.DocumentKey, filename, c.ContentType, pdf)
 	if err != nil {
 		_ = d.MarkRepairFailed(ctx, c.CaseID, "zotero create: "+err.Error())
 		return ApplyResult{}, fmt.Errorf("%w: zotero create: %w", ErrZoteroWrite, err)

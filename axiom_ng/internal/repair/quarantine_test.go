@@ -83,6 +83,34 @@ func TestQuarantineCopiesOriginal(t *testing.T) {
 	}
 }
 
+func TestQuarantineExtensionFollowsSource(t *testing.T) {
+	// #220: an EPUB original must quarantine as .epub (not a mislabeled
+	// .pdf corpse); extension-less sources keep the .pdf default.
+	root := t.TempDir()
+	src := filepath.Join(root, "orig.epub")
+	if err := os.WriteFile(src, []byte("EPUB"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Quarantine(root, "KEYE", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasSuffix(p, ".epub") != true || strings.HasSuffix(p, ".pdf") {
+		t.Fatalf("epub quarantine name = %q, want .epub suffix", p)
+	}
+	bare := filepath.Join(root, "noext")
+	if err := os.WriteFile(bare, []byte("X"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pb, err := Quarantine(root, "KEYB", bare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(pb, ".pdf") {
+		t.Fatalf("extension-less quarantine = %q, want .pdf default", pb)
+	}
+}
+
 func TestSchemaFilenamePublisherFallback(t *testing.T) {
 	got := SchemaFilename(nil, 2026, "Global Economic Prospects, January 2026", "World Bank")
 	if got != "World Bank - 2026 - Global Economic Prospects, January 2026.pdf" {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -14,21 +15,28 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
 
-// Quarantine copies the ORIGINAL pdf of an attachment into the
+// Quarantine copies the ORIGINAL of an attachment into the
 // RAG-managed quarantine root BEFORE any mutation (design nail):
-// originals/<attachment-zotero-key>_<unixms>.pdf — audit + rollback basis.
+// originals/<attachment-zotero-key>_<unixns><ext> — audit + rollback basis.
+// The extension follows the SOURCE filename (#220: an EPUB original must
+// not land as a .pdf corpse); extension-less sources default to .pdf
+// (the pre-#220 shape).
 // Returns the quarantine path.
 func Quarantine(root, zoteroKey, sourcePath string) (string, error) {
 	dir := filepath.Join(root, "originals")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	dst := filepath.Join(dir, fmt.Sprintf("%s_%d.pdf", zoteroKey, time.Now().UnixNano()))
+	ext := strings.ToLower(path.Ext(sourcePath))
+	if ext == "" {
+		ext = ".pdf"
+	}
+	dst := filepath.Join(dir, fmt.Sprintf("%s_%d%s", zoteroKey, time.Now().UnixNano(), ext))
 	for i := 2; ; i++ { // same-nanosecond collision guard
 		if _, err := os.Stat(dst); os.IsNotExist(err) {
 			break
 		}
-		dst = filepath.Join(dir, fmt.Sprintf("%s_%d_%d.pdf", zoteroKey, time.Now().UnixNano(), i))
+		dst = filepath.Join(dir, fmt.Sprintf("%s_%d_%d%s", zoteroKey, time.Now().UnixNano(), i, ext))
 	}
 	src, err := os.Open(sourcePath)
 	if err != nil {

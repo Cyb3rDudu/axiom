@@ -7,7 +7,8 @@ in the fixer WorkRoot convention (``<work-root>/<key>/work.epub`` +
 ``epub_repair_report.json``) — the exact analog of the PDF agent's
 work.pdf. Exit codes mirror the wrapper contract:
 
-  0    healed — repair applied AND the preflight analyzer turned green
+  0    dry-run: repairable (ops applicable and the analyzer turns green)
+       --apply: healed — repair applied, preflight green, work.epub written
   3    not repairable — nothing applied, or still red after repair, or
        the source is unreadable (truncated zip): parked honestly instead
        of a retry circus

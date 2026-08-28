@@ -138,7 +138,7 @@ func (f *fakeApply) DeleteAttachment(key string) error {
 	f.record("delete")
 	return nil
 }
-func (f *fakeApply) CreateAttachmentWithFile(parent, filename string, pdf []byte) (string, error) {
+func (f *fakeApply) CreateAttachmentWithFile(parent, filename, contentType string, pdf []byte) (string, error) {
 	f.mu.Lock()
 	f.healedID = append([]byte(nil), pdf...)
 	f.mu.Unlock()

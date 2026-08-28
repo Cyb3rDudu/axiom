@@ -150,8 +150,14 @@ func (w *WriteClient) DeleteAttachmentItem(key string) error {
 // Mutation 2: create an attachment item WITH a file, live-probed 3-phase
 // flow. parentKey is the document item ("" = standalone). filename MUST
 // come from the schema builder — callers cannot patch filenames because no
-// such mutation exists. Returns the new attachment item key.
-func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf []byte) (string, error) {
+// such mutation exists. contentType (#220) is the attachment's MIME type —
+// "" defaults to application/pdf (the pre-#220 shape); EPUB repairs pass
+// application/epub+zip so the item metadata matches the uploaded artifact.
+// Returns the new attachment item key.
+func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename, contentType string, pdf []byte) (string, error) {
+	if contentType == "" {
+		contentType = "application/pdf"
+	}
 	// Phase 0 — the attachment item. ORDERED struct, never a map: Go maps
 	// marshal alphabetically, putting contentType/filename BEFORE linkMode —
 	// Zotero's fromJSON then rejects with "Link mode must be set before
@@ -167,7 +173,7 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf [
 	}
 	item := attachmentItem{
 		ItemType: "attachment", LinkMode: "imported_file", ParentItem: parentKey,
-		Title: filename, ContentType: "application/pdf", Filename: filename,
+		Title: filename, ContentType: contentType, Filename: filename,
 		Tags: []map[string]string{{"tag": "axiom-repair"}},
 	}
 	itemJSON, _ := json.Marshal([]attachmentItem{item})
@@ -213,7 +219,7 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename string, pdf [
 		"filename":    {filename},
 		"filesize":    {strconv.Itoa(len(pdf))},
 		"mtime":       {strconv.FormatInt(time.Now().UnixMilli(), 10)},
-		"contentType": {"application/pdf"},
+		"contentType": {contentType},
 	}).Encode())
 	raw, _, err = w.do(http.MethodPost, "/api/users/0/items/"+attKey+"/file",
 		map[string]string{

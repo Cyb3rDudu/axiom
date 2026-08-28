@@ -1,6 +1,7 @@
 package zotero
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,7 +25,8 @@ type uploadServer struct {
 	upParams map[string]string // leading (register-params) form fields on the upload
 	authed   []string          // auth headers seen by the foreign upload target
 	nUploads int
-	nDeletes int // DELETEs of the created item (orphan cleanup, review W1)
+	nDeletes int    // DELETEs of the created item (orphan cleanup, review W1)
+	itemCT   string // contentType in the created attachment item JSON (#220)
 }
 
 // phase switch: items POST -> authorize POST -> upload POST -> register POST.
@@ -47,6 +49,16 @@ func newUploadServer(t *testing.T, authorizeBody string, foreign *httptest.Serve
 			s.nDeletes++
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/users/0/items":
+			// #220: pin the contentType the ITEM carries (divergence from the
+			// uploaded artifact's type would mislabel the library entry).
+			// the client posts the ORDERED item struct flat (itemType,
+			// linkMode, ... at the top level — the live-probed shape)
+			var items []struct {
+				ContentType string `json:"contentType"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&items); err == nil && len(items) > 0 {
+				s.itemCT = items[0].ContentType
+			}
 			w.Write([]byte(`{"successful":{"0":{"key":"ATT1"}},"unchanged":{},"failed":{}}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/users/0/items/ATT1/file":
 			// authorize and register share path + If-None-Match; the BODY
@@ -149,7 +161,7 @@ func TestCreateAttachmentHappyPath(t *testing.T) {
 	// realistic schema filename (spaces, umlauts, &, +, %) — the authorize
 	// form must round-trip it EXACTLY through url-encoding (review C3)
 	const fname = `Müller & Höfe 100% – 2020 – Der Frühling +Mehr.pdf`
-	key, err := newTestWriteClient(srv).CreateAttachmentWithFile("", fname, []byte("PDFBYTES"))
+	key, err := newTestWriteClient(srv).CreateAttachmentWithFile("", fname, "", []byte("PDFBYTES"))
 	if err != nil {
 		t.Fatalf("CreateAttachmentWithFile: %v", err)
 	}
@@ -181,6 +193,13 @@ func TestCreateAttachmentHappyPath(t *testing.T) {
 	if s.upFile != fname {
 		t.Errorf("multipart filename round-trip failed: got %q, want %q", s.upFile, fname)
 	}
+	// #220: empty contentType defaults to application/pdf everywhere
+	if s.itemCT != "application/pdf" {
+		t.Errorf("item contentType default = %q, want application/pdf", s.itemCT)
+	}
+	if ct := s.authForm["contentType"]; ct != "application/pdf" {
+		t.Errorf("authorize contentType default = %q, want application/pdf", ct)
+	}
 	// follow-up W2: SUCCESS must not delete the created item — the orphan
 	// cleanup is failure-only; a defer-style cleanup would delete every
 	// healthy attachment. Pin: zero deletes on the happy path.
@@ -189,11 +208,37 @@ func TestCreateAttachmentHappyPath(t *testing.T) {
 	}
 }
 
+// TestCreateAttachmentEPUBContentType (#220): an explicitly passed content
+// type (EPUB repair artifacts) must land in BOTH the item JSON and the
+// authorize form — a healed .epub mislabeled application/pdf would poison
+// the Zotero library entry and the downstream preflight loop.
+func TestCreateAttachmentEPUBContentType(t *testing.T) {
+	s, srv := newUploadServer(t, "", nil)
+	key, err := newTestWriteClient(srv).CreateAttachmentWithFile(
+		"", "Bieger - 2021 - Introduction.epub",
+		"application/epub+zip", []byte("EPUBBYTES"))
+	if err != nil {
+		t.Fatalf("CreateAttachmentWithFile: %v", err)
+	}
+	if key != "ATT1" || s.nUploads != 1 {
+		t.Fatalf("key=%q uploads=%d, want ATT1/1", key, s.nUploads)
+	}
+	if s.itemCT != "application/epub+zip" {
+		t.Errorf("item contentType = %q, want application/epub+zip", s.itemCT)
+	}
+	if ct := s.authForm["contentType"]; ct != "application/epub+zip" {
+		t.Errorf("authorize contentType = %q, want application/epub+zip", ct)
+	}
+	if s.upFile != "Bieger - 2021 - Introduction.epub" {
+		t.Errorf("multipart filename = %q, want the .epub schema name", s.upFile)
+	}
+}
+
 // TestCreateAttachmentExistsObject: {"exists":1} ends the flow — no upload,
 // no register, the created item key is returned.
 func TestCreateAttachmentExistsObject(t *testing.T) {
 	s, srv := newUploadServer(t, `{"exists":1}`, nil)
-	key, err := newTestWriteClient(srv).CreateAttachmentWithFile("", "ok.pdf", []byte("X"))
+	key, err := newTestWriteClient(srv).CreateAttachmentWithFile("", "ok.pdf", "", []byte("X"))
 	if err != nil {
 		t.Fatalf("CreateAttachmentWithFile: %v", err)
 	}
@@ -218,12 +263,12 @@ func TestCreateAttachmentExistsObject(t *testing.T) {
 // LOUDLY, quoting the body — never post a garbage string as the upload key.
 func TestCreateAttachmentGarbageAuthorize(t *testing.T) {
 	_, srv := newUploadServer(t, `{"quota":0}`, nil)
-	_, err := newTestWriteClient(srv).CreateAttachmentWithFile("", "ok.pdf", []byte("X"))
+	_, err := newTestWriteClient(srv).CreateAttachmentWithFile("", "ok.pdf", "", []byte("X"))
 	if err == nil || !strings.Contains(err.Error(), `{"quota":0}`) {
 		t.Fatalf("garbage authorize must fail loudly quoting the body, got err=%v", err)
 	}
 	if s, srv2 := newUploadServer(t, `[1,2]`, nil); true {
-		_, err = newTestWriteClient(srv2).CreateAttachmentWithFile("", "ok.pdf", []byte("X"))
+		_, err = newTestWriteClient(srv2).CreateAttachmentWithFile("", "ok.pdf", "", []byte("X"))
 		if err == nil || !strings.Contains(err.Error(), "unerwartete Antwortform") {
 			t.Fatalf("non-object authorize must hit the shape error, got err=%v", err)
 		}
@@ -237,7 +282,7 @@ func TestCreateAttachmentGarbageAuthorize(t *testing.T) {
 // NEW broken attachment with no file behind it.
 func TestCreateAttachmentOrphanCleanup(t *testing.T) {
 	s, srv := newUploadServer(t, `{"quota":0}`, nil) // authorize fails: no usable key
-	key, err := newTestWriteClient(srv).CreateAttachmentWithFile("", "ok.pdf", []byte("X"))
+	key, err := newTestWriteClient(srv).CreateAttachmentWithFile("", "ok.pdf", "", []byte("X"))
 	if err == nil {
 		t.Fatal("authorize-fehler muss sich als fehler äußern")
 	}
@@ -265,7 +310,7 @@ func TestUploadCredentialsStayLocal(t *testing.T) {
 	}))
 	defer foreign.Close()
 	s, srv := newUploadServer(t, "", foreign)
-	if _, err := newTestWriteClient(srv).CreateAttachmentWithFile("", "ok.pdf", []byte("X")); err != nil {
+	if _, err := newTestWriteClient(srv).CreateAttachmentWithFile("", "ok.pdf", "", []byte("X")); err != nil {
 		t.Fatalf("CreateAttachmentWithFile: %v", err)
 	}
 	if s.nUploads != 0 {
