@@ -46,6 +46,7 @@ type ApplyCase struct {
 	Year          int
 	Publisher     string
 	SrcPath       string // original pdf path (quarantine source)
+	ContentType   string // #220: epub repairs upload .epub artifacts
 	PlanVersion   int
 }
 
@@ -94,7 +95,7 @@ func Apply(ctx context.Context, d ApplyDeps, quarantineRoot string, c ApplyCase,
 
 	// 3. create the healed attachment under a SCHEMA filename (no patch)
 	creators, _ := c.Creators.([]zotero.Creator)
-	filename := SchemaFilename(creators, c.Year, c.Title, c.Publisher)
+	filename := SchemaFilenameForFormat(creators, c.Year, c.Title, c.Publisher, c.ContentType)
 	newKey, err := d.CreateAttachmentWithFile(c.DocumentKey, filename, pdf)
 	if err != nil {
 		_ = d.MarkRepairFailed(ctx, c.CaseID, "zotero create: "+err.Error())

@@ -212,7 +212,7 @@ func (inv *Invoker) processCase(ctx context.Context, caseID string) {
 	}
 
 	inv.logger.Printf("case %s: invoking fixer for key %s", caseID, item.AttachmentKey)
-	rc, runErr := inv.runFixer(ctx, item.AttachmentKey)
+	rc, runErr := inv.runFixer(ctx, item)
 
 	if rc == 0 && runErr == nil {
 		inv.handleSuccess(ctx, caseID, item)
@@ -221,15 +221,36 @@ func (inv *Invoker) processCase(ctx context.Context, caseID string) {
 	inv.handleFailure(ctx, caseID, rc, runErr)
 }
 
+// fixerArgs builds the wrapper arguments for one repair item (#220: EPUB
+// cases route through fix.sh's --format epub arm with the local source
+// path; PDF cases stay byte-identical to the pre-#205 shape).
+func fixerArgs(item *repo.RepairItem) []string {
+	args := []string{item.AttachmentKey, "--apply"}
+	if strings.Contains(item.ContentType, "epub") {
+		args = append(args, "--format", "epub",
+			"--source", strings.TrimPrefix(item.LocalPath, "file://"))
+	}
+	return args
+}
+
+// repairArtifactName is the healed file the wrapper must leave under
+// WorkRoot/<key>/ after a successful run — work.epub for EPUB cases.
+func repairArtifactName(item *repo.RepairItem) string {
+	if strings.Contains(item.ContentType, "epub") {
+		return "work.epub"
+	}
+	return "work.pdf"
+}
+
 // runFixer executes Command <key> --apply under the backstop timeout.
 // The fixer runs in its OWN process group and the backstop kills the whole
 // group: a wedged wrapper's python child must not survive as an orphan on
 // the same key (fix.sh's stale-lock recovery would let the immediate retry
 // spawn a SECOND agent on the same working directory).
-func (inv *Invoker) runFixer(ctx context.Context, key string) (int, error) {
+func (inv *Invoker) runFixer(ctx context.Context, item *repo.RepairItem) (int, error) {
 	cctx, cancel := context.WithTimeout(ctx, inv.cfg.Timeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, inv.cfg.Command, key, "--apply")
+	cmd := exec.CommandContext(cctx, inv.cfg.Command, fixerArgs(item)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = 10 * time.Second // insurance: if a child ever double-forked, don't hang cmd.Run past the group kill
 	cmd.Cancel = func() error {
@@ -275,10 +296,10 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 func (b *tailBuffer) String() string { return string(b.buf) }
 
 func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *repo.RepairItem) {
-	pdfPath := filepath.Join(inv.cfg.WorkRoot, item.AttachmentKey, "work.pdf")
-	pdf, err := os.ReadFile(pdfPath)
+	artifact := filepath.Join(inv.cfg.WorkRoot, item.AttachmentKey, repairArtifactName(item))
+	pdf, err := os.ReadFile(artifact)
 	if err != nil || len(pdf) == 0 {
-		inv.failOrRequeue(ctx, caseID, fmt.Sprintf("fixer exit 0 aber keine geheilte pdf unter %s", pdfPath))
+		inv.failOrRequeue(ctx, caseID, fmt.Sprintf("fixer exit 0 aber kein geheiltes Artefakt unter %s", artifact))
 		return
 	}
 	if _, err := repair.Apply(ctx, inv.deps.Apply, inv.deps.QuarantineRoot, repair.ApplyCase{
@@ -291,6 +312,7 @@ func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *repo
 		Year:          item.Year,
 		Publisher:     item.Publisher,
 		SrcPath:       strings.TrimPrefix(item.LocalPath, "file://"),
+		ContentType:   item.ContentType,
 	}, pdf); err != nil {
 		// repair.Apply already marked the case failed with the step named.
 		inv.logger.Printf("case %s: apply: %v", caseID, err)

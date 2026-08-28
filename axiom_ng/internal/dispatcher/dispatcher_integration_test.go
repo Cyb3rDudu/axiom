@@ -1204,7 +1204,7 @@ func TestPreflightFailSkipsJobAndCreatesRepairCase(t *testing.T) {
 		"details": map[string]any{
 			"pages": 1, "text_layer": false,
 			"suspicious_patterns": []any{"viele reine Bildseiten ohne OCR-Text (1/1)"},
-			"drm": true, // present key must pass through (W5)
+			"drm":                 true, // present key must pass through (W5)
 		},
 	}
 	d := newDispatcher(t, h, fp, Config{PreflightEnabled: true})

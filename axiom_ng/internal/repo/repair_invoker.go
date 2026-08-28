@@ -40,6 +40,7 @@ type RepairItem struct {
 	Year          int
 	Publisher     string
 	LocalPath     string
+	ContentType   string
 }
 
 // RepairCaseItem resolves a repair case to its attachment coordinates.
@@ -49,7 +50,7 @@ func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, 
 	row := r.pool.QueryRow(ctx, `
 		SELECT c.id::text, a.id::text, a.zotero_key, d.zotero_key,
 		       d.title, d.creators, d.publication_year, COALESCE(d.publisher, ''),
-		       a.local_path
+		       a.local_path, COALESCE(a.content_type, '')
 		FROM repair_cases c
 		JOIN zotero_attachments a ON a.id = c.attachment_id AND a.deleted = false
 		JOIN zotero_documents d ON d.id = a.document_id
@@ -57,7 +58,8 @@ func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, 
 	var it RepairItem
 	var creators []byte
 	if err := row.Scan(&it.CaseID, &it.AttachmentID, &it.AttachmentKey, &it.DocumentKey,
-		&it.Title, &creators, &it.Year, &it.Publisher, &it.LocalPath); err != nil {
+		&it.Title, &creators, &it.Year, &it.Publisher, &it.LocalPath,
+		&it.ContentType); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal(creators, &it.Creators)

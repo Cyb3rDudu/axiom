@@ -2,6 +2,7 @@ package fixerinvoker
 
 import (
 	"context"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +54,7 @@ func TestConfigClamps(t *testing.T) {
 
 func TestRunFixerExitCodeMapping(t *testing.T) {
 	inv := &Invoker{cfg: unitCfg(t, writeScript(t, "echo boom; exit 7\n"), time.Minute)}
-	rc, err := inv.runFixer(context.Background(), "K1")
+	rc, err := inv.runFixer(context.Background(), &repo.RepairItem{AttachmentKey: "K1"})
 	if rc != 7 || !strings.Contains(err.Error(), "fixer exit 7") || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("exit mapping: rc=%d err=%v", rc, err)
 	}
@@ -62,7 +63,7 @@ func TestRunFixerExitCodeMapping(t *testing.T) {
 func TestRunFixerTimeoutKills(t *testing.T) {
 	inv := &Invoker{cfg: unitCfg(t, writeScript(t, "sleep 30\n"), 150*time.Millisecond)}
 	start := time.Now()
-	rc, err := inv.runFixer(context.Background(), "K1")
+	rc, err := inv.runFixer(context.Background(), &repo.RepairItem{AttachmentKey: "K1"})
 	if rc != -1 || err == nil || !strings.Contains(err.Error(), "timeout") {
 		t.Fatalf("timeout must map to rc=-1 + timeout reason, got rc=%d err=%v", rc, err)
 	}
@@ -73,7 +74,7 @@ func TestRunFixerTimeoutKills(t *testing.T) {
 
 func TestRunFixerSpawnError(t *testing.T) {
 	inv := &Invoker{cfg: unitCfg(t, "/nonexistent/fixer-xyz", time.Minute)}
-	rc, err := inv.runFixer(context.Background(), "K1")
+	rc, err := inv.runFixer(context.Background(), &repo.RepairItem{AttachmentKey: "K1"})
 	if rc != -1 || err == nil || !strings.Contains(err.Error(), "spawn") {
 		t.Fatalf("spawn error: rc=%d err=%v", rc, err)
 	}
@@ -85,5 +86,33 @@ func TestLastLinesBoundsOutput(t *testing.T) {
 	}
 	if got := lastLines([]byte("short")); got != "short" {
 		t.Fatalf("short output mangled: %q", got)
+	}
+}
+
+func TestFixerArgsRouteEPUB(t *testing.T) {
+	// PDF case: byte-identical to the pre-#205 shape.
+	pdf := fixerArgs(&repo.RepairItem{AttachmentKey: "K1", ContentType: "application/pdf"})
+	if len(pdf) != 2 || pdf[0] != "K1" || pdf[1] != "--apply" {
+		t.Fatalf("pdf args must stay [key --apply], got %v", pdf)
+	}
+	// EPUB case: format arm + local source (file:// stripped).
+	epub := fixerArgs(&repo.RepairItem{
+		AttachmentKey: "K2", ContentType: "application/epub+zip",
+		LocalPath: "file:///opt/data/x.epub",
+	})
+	want := []string{"K2", "--apply", "--format", "epub", "--source", "/opt/data/x.epub"}
+	if len(epub) != len(want) {
+		t.Fatalf("epub args = %v, want %v", epub, want)
+	}
+	for i := range want {
+		if epub[i] != want[i] {
+			t.Fatalf("epub args = %v, want %v", epub, want)
+		}
+	}
+	if n := repairArtifactName(&repo.RepairItem{ContentType: "application/epub+zip"}); n != "work.epub" {
+		t.Fatalf("epub artifact = %q, want work.epub", n)
+	}
+	if n := repairArtifactName(&repo.RepairItem{ContentType: "application/pdf"}); n != "work.pdf" {
+		t.Fatalf("pdf artifact = %q, want work.pdf", n)
 	}
 }

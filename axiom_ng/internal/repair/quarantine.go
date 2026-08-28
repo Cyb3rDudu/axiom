@@ -55,6 +55,20 @@ func Quarantine(root, zoteroKey, sourcePath string) (string, error) {
 // ONLY source of attachment filenames for repairs. Creators reuse the
 // zotero projection shape (single definition, review W6).
 func SchemaFilename(creators []zotero.Creator, year int, title, publisher string) string {
+	return schemaFilename(creators, year, title, publisher, ".pdf")
+}
+
+// SchemaFilenameForFormat picks the extension from the attachment's
+// content type (#220: EPUB repairs upload .epub, not .pdf).
+func SchemaFilenameForFormat(creators []zotero.Creator, year int, title, publisher, contentType string) string {
+	ext := ".pdf"
+	if strings.Contains(contentType, "epub") {
+		ext = ".epub"
+	}
+	return schemaFilename(creators, year, title, publisher, ext)
+}
+
+func schemaFilename(creators []zotero.Creator, year int, title, publisher, ext string) string {
 	head := ""
 	for _, c := range creators {
 		if c.CreatorType != "author" {
@@ -79,7 +93,7 @@ func SchemaFilename(creators []zotero.Creator, year int, title, publisher string
 	if year > 0 {
 		y = fmt.Sprintf("%d", year)
 	}
-	return sanitize(head+" - "+y+" - "+shorten(title, 80)) + ".pdf"
+	return sanitize(head+" - "+y+" - "+shorten(title, 80)) + ext
 }
 
 // shorten trims to n runes at a word boundary.
