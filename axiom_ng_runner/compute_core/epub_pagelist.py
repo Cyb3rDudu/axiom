@@ -304,3 +304,231 @@ def annotate_cfi_entries(
             e["page"] = page
             n += 1
     return n
+
+
+# ---------------------------------------------------------------------------
+# #223 — printed-TOC verification: book-internal print-folio proof
+# ---------------------------------------------------------------------------
+
+_TOC_LINE = re.compile(r"^(.{3,200}?)[\s.\u00b7\u2022_\-]*(\d{1,4})$")
+
+
+def _norm_title(t: str) -> str:
+    """Fuzzy TOC-title key: lowercase, digits/dots/space stripped — survives
+    '1.1 Grundlagen' vs 'Grundlagen' and dot-leader remnants."""
+    return re.sub(r"[\d\s.\u00b7:;\-]+", "", t.lower())
+
+
+class _TOCScanner(HTMLParser):
+    """Collects printed-TOC entries from one doc: per block (p/li/div) the
+    flattened text and the first <a href> inside. An entry is a line ending
+    in an arabic number (dot-leader forms included)."""
+
+    _BLOCK = frozenset({"p", "li", "div"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._block = 0
+        self._href: str | None = None
+        self.entries: list[dict[str, Any]] = []  # {title, page, href}
+        self._buf: list[str] = []
+        self._buf_href: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag in self._BLOCK:
+            self._block += 1
+            self._buf = []
+            self._buf_href = None
+        elif tag == "a" and self._block and self._href is None:
+            a = {k.lower(): v for k, v in attrs}
+            self._href = a.get("href")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in self._BLOCK and self._block:
+            self._block -= 1
+            text = re.sub(r"\s+", " ", "".join(self._buf)).strip()
+            if text:
+                m = _TOC_LINE.match(text)
+                if m and _norm_title(m.group(1)):
+                    self.entries.append({
+                        "title": m.group(1).strip(),
+                        "page": int(m.group(2)),
+                        "href": self._buf_href,
+                    })
+            self._href = None
+        elif tag == "a":
+            self._href = None
+
+    def handle_data(self, data: str) -> None:
+        if self._block:
+            self._buf.append(data)
+            if self._buf_href is None:
+                self._buf_href = self._href
+
+
+def _find_nav(epub: zipfile.ZipFile, opf_path: str) -> dict[str, str]:
+    """EPUB3 nav doc (item properties contains 'nav') → {norm_title: href}."""
+    try:
+        opf = epub.read(opf_path).decode("utf-8", "replace")
+    except KeyError:
+        return {}
+    href = None
+    for m in re.finditer(r"<item\b[^>]*>", opf):
+        tag = m.group(0)
+        if re.search(r'properties="[^"]*\bnav\b', tag):
+            hm = re.search(r'href="([^"]+)"', tag)
+            if hm:
+                href = hm.group(1)
+                break
+    if not href:
+        names = epub.namelist()
+        # prefer the real nav doc over a toc.xhtml (name-order independent)
+        for suffix in ("nav.xhtml", "nav.html", "toc.ncx", "toc.xhtml", "toc.html"):
+            hit = next((n for n in names if n.lower().endswith(suffix)), None)
+            if hit:
+                href = hit
+                break
+    if not href:
+        return {}
+    for name in epub.namelist():
+        if name == href or name.endswith("/" + href):
+            try:
+                raw = epub.read(name).decode("utf-8", "replace")
+            except KeyError:
+                continue
+            nav: dict[str, str] = {}
+            for m in re.finditer(r"<a\b[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>",
+                                 raw, re.IGNORECASE | re.DOTALL):
+                title = re.sub(r"<[^>]+>", "", m.group(2))
+                key = _norm_title(title)
+                if key:
+                    nav[key] = m.group(1)
+            return nav
+    return {}
+
+
+def _resolve_spine(href: str, spine_hrefs: list[str]) -> int | None:
+    """Spine index for a (possibly relative) href — matched by suffix."""
+    tail = href.split("#")[0]
+    for i, s in enumerate(spine_hrefs):
+        if s == tail or s.endswith("/" + tail) or tail.endswith(s):
+            return i
+    return None
+
+
+def verify_print_folios(
+    epub_path: str, anchors: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """#223: cross-check the EPUB's own printed TOC against the anchors at
+    chapter starts — book-internal proof that markers are print folios.
+
+    Verdicts: ``verified`` (>= 3 joins, >= 80% exact marker==TOC matches),
+    ``divergent`` (systematic offset or mismatch — likely reader
+    pagination; ``offset`` reports the dominant drift), ``no_toc`` (no
+    printable TOC found or < 3 joins — unverifiable, stays honest)."""
+    empty = {"verdict": "no_toc", "joins": 0, "matched": 0, "offset": None}
+    try:
+        epub = zipfile.ZipFile(epub_path)
+    except (zipfile.BadZipFile, FileNotFoundError):
+        return empty
+    spine_hrefs = _parse_opf_spine(epub)
+    if not spine_hrefs or not anchors:
+        epub.close()
+        return empty
+
+    first_anchor_spine = min(a["spine"] for a in anchors)
+    # candidate printed TOC: a spine doc BEFORE the first anchor doc with
+    # >= 4 number-terminated block lines (chapter docs rarely qualify).
+    toc_entries: list[dict[str, Any]] = []
+    toc_dir = ""
+    raw_names = epub.namelist()
+    opf_path = next((n for n in raw_names if n.lower().endswith(".opf")), "")
+    nav = _find_nav(epub, opf_path)
+    for idx, href in enumerate(spine_hrefs):
+        if idx >= first_anchor_spine:
+            break
+        raw = None
+        for name in raw_names:
+            if name == href or name.endswith("/" + href) or href.endswith(name):
+                try:
+                    raw = epub.read(name).decode("utf-8", "replace")
+                    toc_dir = str(__import__("posixpath").dirname(name))
+                    break
+                except KeyError:
+                    continue
+        if raw is None or "epub:type" in raw and 'toc"' in raw:
+            # the EPUB3 nav doc is navigation, not the PRINTED toc — but
+            # many conversions ship it WITH printed numbers; still scan it.
+            pass
+        if raw is None:
+            continue
+        scanner = _TOCScanner()
+        scanner.feed(raw)
+        # >= 4 number-terminated block lines = a printed TOC; the join
+        # gate (>= 3 joins) does the real deciding.
+        if len(scanner.entries) >= 4:
+            toc_entries = scanner.entries
+            break
+    epub.close()
+    if not toc_entries:
+        return empty
+
+    # join: printed-TOC entry → chapter-start anchor in the target doc
+    first_anchor_in_spine: dict[int, dict[str, Any]] = {}
+    for a in sorted(anchors, key=lambda x: (x["spine"], x["elem"])):
+        first_anchor_in_spine.setdefault(a["spine"], a)
+
+    offsets: list[int] = []
+    joins = 0
+    matched = 0
+    for e in toc_entries:
+        href = e.get("href")
+        if not href:
+            href = nav.get(_norm_title(e["title"]))
+        if not href:
+            continue
+        if toc_dir and not href.startswith(("http", "/")) and "/" in href:
+            href = f"{toc_dir}/{href}"
+        sp = _resolve_spine(href, spine_hrefs)
+        if sp is None:
+            continue
+        anchor = first_anchor_in_spine.get(sp)
+        if anchor is None:
+            continue
+        joins += 1
+        off = anchor["page"] - e["page"]
+        offsets.append(off)
+        if off == 0:
+            matched += 1
+    if joins < 3:
+        return {"verdict": "no_toc", "joins": joins, "matched": matched,
+                "offset": None}
+
+    if joins and matched >= joins * 0.8:
+        return {"verdict": "verified", "joins": joins, "matched": matched,
+                "offset": 0}
+    # dominant non-zero offset = systematic drift (reader pagination)
+    counts: dict[int, int] = {}
+    for o in offsets:
+        counts[o] = counts.get(o, 0) + 1
+    dom_off, dom_n = max(counts.items(), key=lambda kv: kv[1])
+    return {"verdict": "divergent", "joins": joins, "matched": matched,
+            "offset": dom_off if dom_n >= joins * 0.8 else None}
+
+
+def sanity_check(anchors: list[dict[str, Any]]) -> dict[str, Any]:
+    """#223 sanity guards regardless of TOC: monotonicity, plausible
+    numbering start (arabic body starts small; roman frontmatter would not
+    appear as arabic anchors anyway), and folio count/page range plausibility.
+    Returns {ok, reasons} — a False ok must refuse enrichment (never guess)."""
+    reasons: list[str] = []
+    if len(anchors) < 5:
+        reasons.append(f"too few anchors ({len(anchors)})")
+    pages = [a["page"] for a in anchors]
+    if pages and pages[0] > 60:
+        reasons.append(f"implausible numbering start ({pages[0]})")
+    if pages and (max(pages) > 5000 or max(pages) > len(pages) * 8):
+        reasons.append(f"implausible page range (max {max(pages)}, {len(pages)} anchors)")
+    return {"ok": not reasons, "reasons": reasons}

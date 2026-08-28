@@ -140,12 +140,16 @@ def _stamp_page_source(
     from axiom_ng_runner.compute_core import page_trust as pt
 
     if locator.get("type") == "epub_cfi":
-        # #220: epub_pagelist sits between folio_verified and none — set ONLY
-        # when the locator carries pages from a monotone publisher anchor
-        # map; never silently upgraded.
-        locator["page_source"] = (
-            pt.EPUB_PAGELIST if locator.get("page_start") is not None else pt.NONE
-        )
+        # #223: print_verified (TOC-proven) vs print_unverified (monotone
+        # markers, no proof) — set ONLY when the locator carries pages;
+        # never silently upgraded.
+        if locator.get("page_start") is not None:
+            locator["page_source"] = (
+                pt.PRINT_VERIFIED
+                if locator.get("page_verified") else pt.PRINT_UNVERIFIED
+            )
+        else:
+            locator["page_source"] = pt.NONE
         return
     if locator.get("page_source"):
         return  # already stamped by a previous _stamp_page_source pass
@@ -233,12 +237,16 @@ def _adapt_chunk(
             "cfi_end": meta.get("cfi_end", ""),
             "source": meta.get("locator_source", "epub"),
         }
-        # #220 citation parity: print pages from the anchor map (only when
-        # present — absent fields keep the honest chapter+CFI display) and
+        # #220/#223 citation parity: print pages from the anchor map (only
+        # when monotone AND plausible AND TOC-corroborated-or-unproven —
+        # divergent/implausible maps are refused upstream) and
         # chapter_number parity with PDF locators (1-based spine ordinal).
+        # page_verified carries the #223 verdict into the trust stamp.
         if meta.get("page_start") is not None:
             locator["page_start"] = int(meta["page_start"])
             locator["page_end"] = int(meta.get("page_end", meta["page_start"]))
+            if meta.get("page_verified"):
+                locator["page_verified"] = True
         if meta.get("chapter") is not None:
             locator["chapter"] = int(meta["chapter"])
     else:
@@ -1015,12 +1023,32 @@ def _real_pipeline(
 
         pagemap = epub_pagelist.parse_page_map(str(source_path))
         if pagemap["anchors"] and pagemap["monotone"]:
-            annotated = epub_pagelist.annotate_cfi_entries(
-                cfi_entries, pagemap["anchors"]
+            sanity = epub_pagelist.sanity_check(pagemap["anchors"])
+            toc = epub_pagelist.verify_print_folios(
+                str(source_path), pagemap["anchors"]
             )
-            log.info("epub_pagelist: %d anchors (%s), %d/%d entries annotated",
-                     pagemap["count"], ",".join(pagemap["dialects"]),
-                     annotated, len(cfi_entries))
+            if not sanity["ok"]:
+                log.warning("epub_pagelist: implausible map (%s) — refusing "
+                            "enrichment (page_source stays none)",
+                            "; ".join(sanity["reasons"]))
+            elif toc["verdict"] == "divergent":
+                # #223: the book's own TOC contradicts the markers (offset
+                # %s) — likely reader pagination, NOT print folios. Refuse.
+                log.warning("epub_pagelist: printed TOC diverges from markers "
+                            "(%d/%d joins, offset %s) — refusing enrichment",
+                            toc["joins"], toc["matched"], toc["offset"])
+            else:
+                verified = toc["verdict"] == "verified"
+                annotated = epub_pagelist.annotate_cfi_entries(
+                    cfi_entries, pagemap["anchors"]
+                )
+                log.info("epub_pagelist: %d anchors (%s), TOC verdict %s, "
+                         "%d/%d entries annotated, print_verified=%s",
+                         pagemap["count"], ",".join(pagemap["dialects"]),
+                         toc["verdict"], annotated, len(cfi_entries), verified)
+                for e in cfi_entries:
+                    if e.get("page") is not None:
+                        e["page_verified"] = verified
         elif pagemap["anchors"]:
             log.warning("epub_pagelist: %d anchors NOT monotone — refusing "
                         "enrichment (page_source stays none)", pagemap["count"])
@@ -1081,7 +1109,8 @@ def _real_pipeline(
         from .epub_cfi import match_text_to_cfi
 
         pos_by_cfi = {
-            e["cfi"]: (e.get("page"), e.get("spine")) for e in cfi_entries
+            e["cfi"]: (e.get("page"), e.get("spine"), e.get("page_verified", False))
+            for e in cfi_entries
         }
         for c in chunk_dicts:
             meta = c.get("metadata", {}) or {}
@@ -1092,10 +1121,11 @@ def _real_pipeline(
             meta["cfi_end"] = cfi_end
             # #220: carry anchor-map pages + spine ordinal through to
             # _adapt_chunk's locator (absent without a monotone map).
-            ps, sp = pos_by_cfi.get(cfi_start, (None, None))
+            ps, sp, pv = pos_by_cfi.get(cfi_start, (None, None, False))
             if ps is not None:
                 meta["page_start"] = ps
-                meta["page_end"] = pos_by_cfi.get(cfi_end, (ps, None))[0] or ps
+                meta["page_end"] = pos_by_cfi.get(cfi_end, (ps, None, False))[0] or ps
+                meta["page_verified"] = pv
             if sp is not None:
                 meta["chapter"] = sp + 1  # 1-based spine ordinal (PDF parity)
 

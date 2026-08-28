@@ -1,8 +1,9 @@
-"""#220 Stage 1 — epub_cfi locator enrichment through _adapt_chunk.
+"""#220/#223 — epub_cfi locator enrichment through _adapt_chunk.
 
 Pins the additive contract fields: page_start/page_end + page_source =
-epub_pagelist ONLY with a monotone anchor map; chapter parity (1-based
-spine ordinal); without a map the locator stays chapter+CFI with
+print_verified (TOC-proven) or print_unverified (markers, no proof) ONLY
+with a monotone, plausible, non-divergent anchor map; chapter parity
+(1-based spine ordinal); without a map the locator stays chapter+CFI with
 page_source=none. Go client compatibility = additive fields only.
 
 Run: .venv/bin/python -m pytest tests/test_epub_locator_enrichment.py
@@ -24,19 +25,33 @@ def _epub_chunk(meta: dict) -> dict:
     }
 
 
-def test_epub_locator_with_anchor_map():
+def test_epub_locator_verified_map():
     c = _adapt_chunk(_epub_chunk({
         "cfi_start": "epubcfi(/6/2!/4/2)",
         "cfi_end": "epubcfi(/6/2!/4/6)",
         "page_start": 10,
         "page_end": 12,
+        "page_verified": True,
         "chapter": 1,
     }), 0, {}, {}, {})
     loc = c["locator"]
     assert loc["type"] == "epub_cfi"
     assert loc["page_start"] == 10 and loc["page_end"] == 12
     assert loc["chapter"] == 1  # PDF chapter parity
-    assert loc["page_source"] == "epub_pagelist"
+    assert loc["page_source"] == "print_verified"
+
+
+def test_epub_locator_unverified_map():
+    """Markers without TOC proof → print_unverified, never verified."""
+    c = _adapt_chunk(_epub_chunk({
+        "cfi_start": "epubcfi(/6/2!/4/2)",
+        "cfi_end": "epubcfi(/6/2!/4/6)",
+        "page_start": 10,
+        "page_end": 12,
+    }), 0, {}, {}, {})
+    loc = c["locator"]
+    assert loc["page_source"] == "print_unverified"
+    assert "page_verified" not in loc  # honest: no proof, no flag
 
 
 def test_epub_locator_without_map_stays_honest():
@@ -52,11 +67,15 @@ def test_epub_locator_without_map_stays_honest():
 
 def test_contract_shaped_locator_stamp():
     """Pass-through branch: an already-shaped epub_cfi locator gets the
-    epub_pagelist stamp iff it carries pages."""
-    with_pages = {"locator": {"type": "epub_cfi", "cfi_start": "x",
+    print_verified/print_unverified stamp iff it carries pages."""
+    verified = {"locator": {"type": "epub_cfi", "cfi_start": "x",
+                            "page_start": 3, "page_end": 3, "page_verified": True}}
+    unverified = {"locator": {"type": "epub_cfi", "cfi_start": "x",
                               "page_start": 3, "page_end": 3}}
     without = {"locator": {"type": "epub_cfi", "cfi_start": "x"}}
-    _adapt_chunk({**with_pages, "ref": "chunk-0000", "index": 0}, 0, {}, {}, {})
-    _adapt_chunk({**without, "ref": "chunk-0001", "index": 1}, 1, {}, {}, {})
-    assert with_pages["locator"]["page_source"] == "epub_pagelist"
+    _adapt_chunk({**verified, "ref": "chunk-0000", "index": 0}, 0, {}, {}, {})
+    _adapt_chunk({**unverified, "ref": "chunk-0001", "index": 1}, 1, {}, {}, {})
+    _adapt_chunk({**without, "ref": "chunk-0002", "index": 2}, 2, {}, {}, {})
+    assert verified["locator"]["page_source"] == "print_verified"
+    assert unverified["locator"]["page_source"] == "print_unverified"
     assert without["locator"]["page_source"] == "none"

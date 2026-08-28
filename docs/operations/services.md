@@ -115,11 +115,16 @@ When an EPUB ships publisher page anchors (`epub:type="pagebreak"`,
 `class="page"` — Jossé/dtv —, `id="page_N"` — Bieger/Springer —, or Adobe
 `page-map.xml`), the runner parses them into a uniform map and enriches
 `epub_cfi` locators with additive `page_start`/`page_end`, a `chapter`
-ordinal (spine parity with PDF locators) and `page_source: "epub_pagelist"`
-(a new trust level between `folio_verified` and `none`). Anchors are only
-trusted when their page numbers form a monotone sequence in spine order —
-a non-monotone map is refused (locators stay chapter+CFI, `page_source:
-"none"`); vendor-crawled pagination is never upgraded to print folio.
+ordinal (spine parity with PDF locators) and a print-page trust level. The
+book's own printed TOC decides (#223): TOC page numbers matching the
+chapter-start anchors → `page_source: "print_verified"` (citable print
+folios, proven offline); markers without a printable TOC →
+`print_unverified` (present as marker pagination, never as print folio).
+Anchors are only trusted when their page numbers form a monotone, plausible
+sequence in spine order — non-monotone/implausible maps are refused, and a
+TOC that systematically diverges (the vendor reader-pagination class,
+constant per-chapter drift) is DETECTED and refused too (locators stay
+chapter+CFI, `page_source: "none"`). Never silently upgraded.
 
 ## Fixer: event runner (owner decision)
 

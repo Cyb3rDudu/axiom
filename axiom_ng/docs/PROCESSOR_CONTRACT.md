@@ -576,8 +576,9 @@ start/end fields. Page labels MUST NOT be fabricated for sources without stable
 pages. An `epub_cfi` locator carries `page_source: "none"` — or, when the
 book ships a monotone publisher page-anchor map (#220: `epub:type="pagebreak"`,
 `class="page"`, `id="page_N"`, Adobe `page-map.xml`), the additive fields
-`page_start`/`page_end` plus `page_source: "epub_pagelist"` and a `chapter`
-ordinal (1-based spine position, parity with PDF locators).
+`page_start`/`page_end` plus `page_source: "print_verified"` / `"print_unverified"`
+(#223: whether the book's own printed TOC corroborates the markers) and a
+`chapter` ordinal (1-based spine position, parity with PDF locators).
 
 ### Page source trust level (#173)
 
@@ -589,7 +590,8 @@ Every page locator carries its trust level in `page_source` — the contract is
 | --- | --- |
 | `folio_verified` | printed folio read from the text layer AND verified as a consistent ascending sequence — the only citable print-page form |
 | `pdf_label_sane` | PDF label, sanity-checked (unique, monotone, plausible) — presentable only with a marker |
-| `epub_pagelist` | EPUB print-page anchors from a monotone publisher map (#220) — vendor-crawled pagination is NOT print folio and is never upgraded to folio_verified |
+| `print_verified` | EPUB print folios PROVEN book-internally (#223): the printed TOC's page numbers match the chapter-start anchors (or a sibling PDF proved them, #221) |
+| `print_unverified` | monotone publisher page anchors WITHOUT proof (#220) — present as marker pagination, never as print folio; divergent (reader-pagination) maps are refused entirely |
 | `physical_only` | bare PDF page index — never renderable as a printed page |
 | `none` | EPUB CFI / pageless source — chapter and CFI, no page number |
 
@@ -601,8 +603,8 @@ Rules:
   dropped when the end page carries a different level — numbering spaces are
   never mixed).
 - `epub_cfi` locators carry `page_source: "none"` (no anchor map) or
-  `"epub_pagelist"` (monotone anchor map present, `page_start`/`page_end`
-  set) — nothing else.
+  `"print_verified"` / `"print_unverified"` (monotone, plausible anchor map
+  present, `page_start`/`page_end` set) — nothing else.
 - axiom-ng rejects (terminal, §14): a blank `page_source` with
   `LOCATOR_PAGE_SOURCE_MISSING`, an unknown value with
   `LOCATOR_PAGE_SOURCE_UNKNOWN`, and `epub_cfi` carrying any other page

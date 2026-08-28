@@ -83,9 +83,12 @@ const (
 	// runner classifies, it never executes OCR.
 	PageSourceBlind = "blind"
 	PageSourceNone  = "none"
-	// PageSourceEpubPagelist (#220): EPUB print-page anchors (four
-	// dialects), monotone — between folio_verified and none; never upgraded.
-	PageSourceEpubPagelist = "epub_pagelist"
+	// #223: EPUB print-page anchors. print_verified = proven book-
+	// internally (printed TOC matches chapter-start markers; or sibling
+	// PDF, #221). print_unverified = monotone markers without proof —
+	// never silently upgraded; divergent maps are refused entirely.
+	PageSourcePrintVerified   = "print_verified"
+	PageSourcePrintUnverified = "print_unverified"
 )
 
 // Locator is the source position (§11). page_span for PDFs (physical+logical),

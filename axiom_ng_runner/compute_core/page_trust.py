@@ -8,10 +8,14 @@ reference carries its trust level visibly:
                    cited as a printed page
   pdf_label_sane   PDF label, sanity-checked (unique, monotone, plausible) —
                    presentable only WITH a marker
-  epub_pagelist    #220 EPUB print-page anchors (pagebreak/class/id/
-                   page-map.xml), verified monotone — between folio_verified
-                   and none: publisher truth, but vendor-crawled pagination
-                   is NOT print folio (ProQuest drift) and is never upgraded
+  print_verified   #223 EPUB print folios PROVEN book-internally: the
+                   printed TOC's page numbers match the chapter-start
+                   anchors (or a sibling PDF proved them, #221) — citable
+  print_unverified #220/#223 monotone publisher page anchors WITHOUT
+                   proof (no printed TOC, too few joins) — present as
+                   marker pagination, never as print folio; vendor-crawled
+                   pagination (ProQuest drift) lives here or is refused
+                   (divergent); never silently upgraded
   physical_only    bare PDF page index — NEVER as a printed page ("PDF-S. X")
   none             EPUB without page-list / unpaginated — chapter/CFI, no number
 
@@ -33,7 +37,8 @@ logger = logging.getLogger(__name__)
 FOLIO_VERIFIED = "folio_verified"
 BLIND = "blind"  # v2.1: no text layer at all — a scan needing OCR rebuild
 PDF_LABEL_SANE = "pdf_label_sane"
-EPUB_PAGELIST = "epub_pagelist"  # #220: monotone publisher page anchors
+PRINT_VERIFIED = "print_verified"      # #223: TOC-proven print folios
+PRINT_UNVERIFIED = "print_unverified"   # #220: markers without proof
 PHYSICAL_ONLY = "physical_only"
 NONE = "none"
 

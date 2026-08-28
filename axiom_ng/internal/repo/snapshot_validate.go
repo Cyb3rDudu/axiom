@@ -298,13 +298,16 @@ func validateLocatorsAndRelationships(res *processor.Result, frozen *FrozenInput
 				return verrf("LOCATOR_CFI_EMPTY", "chunk %d has epub_cfi locator with empty cfi_start or cfi_end (§11 requires real CFI positions)", c.Index)
 			}
 			if loc.PageSource != "" && loc.PageSource != processor.PageSourceNone &&
-				loc.PageSource != processor.PageSourceEpubPagelist {
-				return verrf("LOCATOR_PAGE_SOURCE_INCONSISTENT", "chunk %d epub_cfi locator must carry page_source none or epub_pagelist, got %q", c.Index, loc.PageSource)
+				loc.PageSource != processor.PageSourcePrintVerified &&
+				loc.PageSource != processor.PageSourcePrintUnverified {
+				return verrf("LOCATOR_PAGE_SOURCE_INCONSISTENT", "chunk %d epub_cfi locator must carry page_source none|print_verified|print_unverified, got %q", c.Index, loc.PageSource)
 			}
-			// #220: epub_pagelist claims pages from a publisher anchor map —
+			// #220/#223: print_verified/print_unverified claim pages from a
+			// publisher anchor map —
 			// without page_start the claim is unfounded and must not pass.
-			if loc.PageSource == processor.PageSourceEpubPagelist && loc.PageStart == nil {
-				return verrf("LOCATOR_PAGE_SOURCE_INCONSISTENT", "chunk %d epub_cfi locator with page_source epub_pagelist has no page_start (#220 anchor map must provide the page)", c.Index)
+			if (loc.PageSource == processor.PageSourcePrintVerified ||
+				loc.PageSource == processor.PageSourcePrintUnverified) && loc.PageStart == nil {
+				return verrf("LOCATOR_PAGE_SOURCE_INCONSISTENT", "chunk %d epub_cfi locator with page_source %q has no page_start (#220 anchor map must provide the page)", c.Index, loc.PageSource)
 			}
 		default:
 			return verrf("LOCATOR_TYPE_UNKNOWN", "chunk %d locator type %q", c.Index, loc.Type)
