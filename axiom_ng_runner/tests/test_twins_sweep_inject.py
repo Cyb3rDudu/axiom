@@ -81,6 +81,10 @@ def test_inject_writes_page_map_and_spares_original(tmp_path: Path) -> None:
         assert '<page name="8" href="text/c1.xhtml#PB8"/>' in pm
         opf = z.read("content.opf").decode()
         assert 'name="page-map"' in opf and 'id="pagemap"' in opf
+        # #226: explicit provenance meta — the runner reads this to stamp
+        # derived_from_sibling (shape detection is impossible: injected
+        # anchors mimic the native publisher format byte-for-byte).
+        assert '<meta name="axiom-page-source" content="derived_from_sibling"/>' in opf
         # 2. spans before their anchor token, inside the same text node
         xhtml = z.read("text/c1.xhtml").decode()
         assert xhtml.index("PB7") < xhtml.index("Größe") < xhtml.index("</p>")
