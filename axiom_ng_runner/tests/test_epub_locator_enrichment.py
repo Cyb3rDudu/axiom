@@ -31,7 +31,7 @@ def test_epub_locator_verified_map():
         "cfi_end": "epubcfi(/6/2!/4/6)",
         "page_start": 10,
         "page_end": 12,
-        "page_verified": True,
+        "page_trust": "print_verified",
         "chapter": 1,
     }), 0, {}, {}, {})
     loc = c["locator"]
@@ -54,7 +54,7 @@ def test_epub_locator_unverified_map():
     }), 0, {}, {}, {})
     loc = c["locator"]
     assert loc["page_source"] == "print_unverified"
-    assert "page_verified" not in loc  # honest: no proof, no flag
+    assert "page_trust" not in loc  # honest: no proof, no flag
 
 
 def test_epub_locator_without_map_stays_honest():
@@ -72,7 +72,7 @@ def test_contract_shaped_locator_stamp():
     """Pass-through branch: an already-shaped epub_cfi locator gets the
     print_verified/print_unverified stamp iff it carries pages."""
     verified = {"locator": {"type": "epub_cfi", "cfi_start": "x",
-                            "page_start": 3, "page_end": 3, "page_verified": True}}
+                            "page_start": 3, "page_end": 3, "page_trust": "print_verified"}}
     unverified = {"locator": {"type": "epub_cfi", "cfi_start": "x",
                               "page_start": 3, "page_end": 3}}
     without = {"locator": {"type": "epub_cfi", "cfi_start": "x"}}

@@ -272,8 +272,22 @@ def parse_page_map(epub_path: str) -> dict[str, Any]:
     anchors.sort(key=lambda a: (a["spine"], a["elem"]))
     pages = [a["page"] for a in anchors]
     monotone = all(b >= a for a, b in itertools.pairwise(pages))
+    trimmed = 0
+    if not monotone:
+        # Publisher reality (#226): an appendix/index can RESTART its own
+        # numbering at the end of the book (Databricks: ...448 -> 185 for
+        # the index). A single trailing restart must not poison the whole
+        # map: keep the longest monotone PREFIX when it covers >= 90% of
+        # the anchors and trim the restarted tail (documented, counted).
+        # Anything earlier/messier stays non-monotone -> refused.
+        cut = next((i for i, (a, b) in enumerate(itertools.pairwise(pages))
+                    if b < a), len(pages))
+        if cut >= len(pages) * 0.9:
+            anchors = anchors[: cut + 1]
+            trimmed = len(pages) - len(anchors)
+            monotone = True
     return {"anchors": anchors, "count": len(anchors), "monotone": monotone,
-            "dialects": sorted(dialects)}
+            "dialects": sorted(dialects), "restart_tail_trimmed": trimmed}
 
 
 def annotate_cfi_entries(
@@ -549,3 +563,29 @@ def sanity_check(anchors: list[dict[str, Any]]) -> dict[str, Any]:
     if pages and (max(pages) > 5000 or max(pages) > len(pages) * 40):
         reasons.append(f"implausible page range (max {max(pages)}, {len(pages)} anchors)")
     return {"ok": not reasons, "reasons": reasons}
+
+
+def detect_derived_from_sibling(epub_path: str) -> bool:
+    """#226/#222: explicit provenance meta for injected page-lists.
+
+    The #222 injector derives page maps from a PDF sibling and injects them
+    mimicking the NATIVE publisher format (id="PBn" role="doc-pagebreak" —
+    byte-shape identical to native Apress), so provenance is undetectable
+    from the anchor shape. The injector therefore declares itself in the
+    OPF: ``<meta name="axiom-page-source" content="derived_from_sibling"/>``.
+    Never guess: without the meta, markers are treated as native."""
+    try:
+        epub = zipfile.ZipFile(epub_path)
+    except (zipfile.BadZipFile, FileNotFoundError):
+        return False
+    for name in epub.namelist():
+        if not name.lower().endswith(".opf"):
+            continue
+        opf = epub.read(name).decode("utf-8", "replace")
+        for m in re.finditer(r"<meta\b[^>]*>", opf):
+            if 'name="axiom-page-source"' in m.group(0) and \
+                    'content="derived_from_sibling"' in m.group(0):
+                epub.close()
+                return True
+    epub.close()
+    return False

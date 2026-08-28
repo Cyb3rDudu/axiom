@@ -82,6 +82,79 @@ _PAGEBREAK_RE = re.compile(
 )
 
 
+# #226 F1: canonicalize ALL four print-page dialects into the landmark form
+# pandoc passes through (and _PAGEBREAK_RE above understands). The old worker
+# only caught native Apress ``…_page_P`` ids by luck; the #222-injected shape
+# (epub:type pagebreak id="PBn" role="doc-pagebreak"), Jossé class="page" and
+# Bieger id="page_N" never became {N} markers. One source of truth: the
+# dialect GRAMMAR mirrors compute_core.epub_pagelist (same number precedence
+# title > aria-label > id > text).
+def _canonicalize_page_anchors(raw: str) -> str:
+    """Rewrite every dialect anchor into ``<span id="axiom_page_N"></span>``."""
+    import re as _re
+
+    def _num_from(attrs: str, text: str = "") -> str | None:
+        for key in ("title", "aria-label", "id"):
+            m = _re.search(rf'\b{key}="([^"]*)"', attrs)
+            if m:
+                d = _re.search(r"\d{1,4}", m.group(1))
+                if d:
+                    return d.group(0)
+        d = _re.search(r"\d{1,4}", text)
+        return d.group(0) if d else None
+
+    def _span(n: str) -> str:
+        return f'<span id="axiom_page_{n}"></span>'
+
+    # 1) epub:type="pagebreak" on any element (native Apress + #222-injected)
+    def _re_pagebreak(m: _re.Match[str]) -> str:
+        n = _num_from(m.group(2))
+        return _span(n) if n else m.group(0)
+
+    raw = _re.sub(
+        r'<(\w+)((?:[^>"]|"[^"]*")*\bepub:type="[^"]*\bpagebreak\b[^"]*"(?:[^>"]|"[^"]*")*)\s*/?>',
+        _re_pagebreak, raw,
+    )
+
+    # 2) Jossé/dtv: <a class="page" id="page_N">N</a> (inline, number in text)
+    def _re_class_page(m: _re.Match[str]) -> str:
+        n = _num_from(m.group(1), m.group(2))
+        return _span(n) if n else m.group(0)
+
+    raw = _re.sub(
+        r'<a\b([^>]*\bclass="[^"]*\bpage\b[^"]*"[^>]*)>\s*(\[?\d{1,4}\]?)\s*</a>',
+        _re_class_page, raw,
+    )
+
+    # 3) Bieger/Springer: <a id="page_N"/> followed by an optional [N] echo
+    def _re_id_page(m: _re.Match[str]) -> str:
+        return _span(m.group(1))
+
+    raw = _re.sub(r'<a\b[^>]*\bid="page[_-]?(\d{1,4})"[^>]*/>\s*(?:\[\d{1,4}\])?',
+                  _re_id_page, raw)
+    return raw
+
+
+def _marker_canonicalized_copy(epub_path: Path, out_dir: Path) -> Path:
+    """Copy with all page anchors canonicalized (fast-path: none found)."""
+    import zipfile
+
+    out = out_dir / ("anchors_" + epub_path.name)
+    changed = False
+    with zipfile.ZipFile(epub_path) as z, \
+            zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in z.infolist():
+            data = z.read(item.filename)
+            if item.filename.lower().endswith((".xhtml", ".html")):
+                raw = data.decode("utf-8", "replace")
+                fixed = _canonicalize_page_anchors(raw)
+                if fixed != raw:
+                    changed = True
+                    data = fixed.encode("utf-8")
+            zout.writestr(item, data)
+    return out if changed else epub_path
+
+
 def _inject_page_markers(markdown: str) -> str:
     """Turn EPUB pagebreak landmarks into Marker-style ``{N}----`` markers.
 
@@ -139,7 +212,7 @@ def _save_extracted_images(media_dir: Path, out_dir: Path) -> Dict[str, str]:
 # #220 Stage 2 promotion: the Z3 normalization lives in the shared repair
 # toolbelt now (compute_core.epub_repair) so the fixer side can import it
 # without the heavy worker. The local name stays for the W9 callers/tests.
-from axiom_ng_runner.compute_core.epub_repair import (  # noqa: E402
+from axiom_ng_runner.compute_core.epub_repair import (
     normalize_entry_paths as _normalized_epub_copy,
 )
 
@@ -215,6 +288,10 @@ def main() -> int:
         norm = _normalized_epub_copy(epub_path, media_tmp)
         if norm != epub_path:
             logger.info(f"OPF hrefs normalized for pandoc: {epub_path.name}")
+        # #226 F1: all four anchor dialects → landmark spans → {N} markers
+        norm = _marker_canonicalized_copy(norm, media_tmp)
+        if norm != epub_path:
+            logger.info(f"page anchors canonicalized: {epub_path.name}")
         logger.info(f"Converting {epub_path.name} via pandoc...")
         _convert_via_pandoc(norm, out_md, media_tmp)
 

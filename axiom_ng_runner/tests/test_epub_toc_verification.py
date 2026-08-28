@@ -238,3 +238,52 @@ def test_sanity_sparse_chapter_anchored_map_passes():
     assert sanity_check([{"page": p} for p in sparse])["ok"]
     assert not sanity_check(
         [{"page": p * 500} for p in range(1, 11)])["ok"]
+
+
+def test_derived_from_sibling_meta_detection(tmp_path):
+    """#226: explicit OPF provenance (the injector mimics the native anchor
+    shape — without the meta, markers are treated as native, never guessed)."""
+    chapters = [_chapter(p) for p in _CHAPTER_PAGES]
+    epub = _write(tmp_path, "derived.epub",
+                  _doc("<p>Vorwort ohne Inhaltsverzeichnis</p>"), chapters)
+    from axiom_ng_runner.compute_core.epub_pagelist import (
+        detect_derived_from_sibling,
+    )
+    assert detect_derived_from_sibling(str(epub)) is False
+    import zipfile as _zf
+
+    with _zf.ZipFile(epub, "a") as z:
+        pass  # rewrite below: OPF meta must be added at write time
+    opf = _OPF.replace(
+        "<metadata/>",
+        '<metadata><meta name="axiom-page-source" '
+        'content="derived_from_sibling"/></metadata>',
+    )
+    epub2 = tmp_path / "derived2.epub"
+    with _zf.ZipFile(epub2, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", _CONTAINER)
+        z.writestr("content.opf", opf)
+        z.writestr("toc.xhtml", _doc("<p>kein TOC</p>"))
+        for i, body in enumerate(chapters, start=1):
+            z.writestr(f"c{i}.xhtml", _doc(body))
+    assert detect_derived_from_sibling(str(epub2)) is True
+
+
+def test_derived_locator_stamp():
+    """The derived trust level flows through _stamp_page_source."""
+    from axiom_ng_runner.runner import _adapt_chunk
+
+    c = _adapt_chunk({
+        "text": "T",
+        "metadata": {
+            "locator_type": "epub_cfi", "section_titles": [], "token_count": 1,
+            "cfi_start": "epubcfi(/6/2!/4/2)", "cfi_end": "epubcfi(/6/2!/4/4)",
+            "page_start": 176, "page_end": 176,
+            "page_trust": "derived_from_sibling", "chapter": 3,
+        },
+    }, 0, {}, {}, {})
+    loc = c["locator"]
+    assert loc["page_source"] == "derived_from_sibling"
+    assert loc["page_start"] == 176 and loc["chapter"] == 3
+    assert "page_trust" not in loc  # runner-internal, never on the wire

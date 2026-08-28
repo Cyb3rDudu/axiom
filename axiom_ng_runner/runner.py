@@ -140,21 +140,18 @@ def _stamp_page_source(
     from axiom_ng_runner.compute_core import page_trust as pt
 
     if locator.get("type") == "epub_cfi":
-        # #223: print_verified (TOC-proven) vs print_unverified (monotone
-        # markers, no proof) — set ONLY when the locator carries pages;
-        # never silently upgraded.
+        # #223/#226: the wire trust set — print_verified / derived_from_
+        # sibling / print_unverified — set ONLY when the locator carries
+        # pages; never silently upgraded.
         if locator.get("page_start") is not None:
-            locator["page_source"] = (
-                pt.PRINT_VERIFIED
-                if locator.get("page_verified") else pt.PRINT_UNVERIFIED
-            )
+            locator["page_source"] = locator.get("page_trust") or pt.PRINT_UNVERIFIED
         else:
             locator["page_source"] = pt.NONE
-        # page_verified is a runner-internal handoff into this stamp — the
+        # page_trust is a runner-internal handoff into this stamp — the
         # trust travels via page_source; the wire locator must not carry
         # an unknown field (the Go persist boundary re-marshals and drops
         # unknowns silently — W9 lesson, kept clean here).
-        locator.pop("page_verified", None)
+        locator.pop("page_trust", None)
         return
     if locator.get("page_source"):
         return  # already stamped by a previous _stamp_page_source pass
@@ -246,12 +243,19 @@ def _adapt_chunk(
         # when monotone AND plausible AND TOC-corroborated-or-unproven —
         # divergent/implausible maps are refused upstream) and
         # chapter_number parity with PDF locators (1-based spine ordinal).
-        # page_verified carries the #223 verdict into the trust stamp.
+        # page_trust carries the #223/#226 verdict into the trust stamp.
         if meta.get("page_start") is not None:
             locator["page_start"] = int(meta["page_start"])
             locator["page_end"] = int(meta.get("page_end", meta["page_start"]))
-            if meta.get("page_verified"):
-                locator["page_verified"] = True
+            if meta.get("page_trust"):
+                locator["page_trust"] = meta["page_trust"]
+            if meta.get("epub_paragraph_pages"):
+                # #194 wire shape: [[charOffset, label], ...] as STRINGS —
+                # per-paragraph page boundaries so a hit position resolves
+                # to its exact print page, not the span envelope.
+                locator["paragraph_pages"] = [
+                    [str(o), str(l)] for o, l in meta["epub_paragraph_pages"]
+                ]
         if meta.get("chapter") is not None:
             locator["chapter"] = int(meta["chapter"])
     else:
@@ -1027,6 +1031,12 @@ def _real_pipeline(
         from axiom_ng_runner.compute_core import epub_pagelist
 
         pagemap = epub_pagelist.parse_page_map(str(source_path))
+        # #226 provenance: the #222 injector declares itself in the OPF
+        # (the anchor shape mimics native format — shape is not evidence).
+        from axiom_ng_runner.compute_core import page_trust as pt
+
+        derived = epub_pagelist.detect_derived_from_sibling(str(source_path))
+        page_level: str | None = None  # None = refuse enrichment entirely
         if pagemap["anchors"] and pagemap["monotone"]:
             sanity = epub_pagelist.sanity_check(pagemap["anchors"])
             toc = epub_pagelist.verify_print_folios(
@@ -1036,24 +1046,39 @@ def _real_pipeline(
                 log.warning("epub_pagelist: implausible map (%s) — refusing "
                             "enrichment (page_source stays none)",
                             "; ".join(sanity["reasons"]))
-            elif toc["verdict"] == "divergent":
+            elif toc["verdict"] == "divergent" and not derived:
                 # #223: the book's own TOC contradicts the markers (offset
                 # %s) — likely reader pagination, NOT print folios. Refuse.
                 log.warning("epub_pagelist: printed TOC diverges from markers "
                             "(%d/%d joins, offset %s) — refusing enrichment",
                             toc["joins"], toc["matched"], toc["offset"])
             else:
-                verified = toc["verdict"] == "verified"
+                # #226 trust ordering: TOC proof > declared sibling
+                # derivation > no proof. A declared derived map overrides a
+                # TOC divergence (the derivation was round-trip-verified
+                # against the PDF sibling's folios; a constant TOC offset
+                # is a join artifact at chapter starts, not marker error).
+                if toc["verdict"] == "verified":
+                    page_level = pt.PRINT_VERIFIED
+                elif derived:
+                    page_level = pt.DERIVED_FROM_SIBLING
+                    if toc["verdict"] == "divergent":
+                        log.info("epub_pagelist: TOC diverges (offset %s) but "
+                                 "the sibling declaration wins: derived map, "
+                                 "round-trip-verified", toc["offset"])
+                else:
+                    page_level = pt.PRINT_UNVERIFIED
                 annotated = epub_pagelist.annotate_cfi_entries(
                     cfi_entries, pagemap["anchors"]
                 )
                 log.info("epub_pagelist: %d anchors (%s), TOC verdict %s, "
-                         "%d/%d entries annotated, print_verified=%s",
+                         "%d/%d entries annotated, page_source=%s",
                          pagemap["count"], ",".join(pagemap["dialects"]),
-                         toc["verdict"], annotated, len(cfi_entries), verified)
-                for e in cfi_entries:
-                    if e.get("page") is not None:
-                        e["page_verified"] = verified
+                         toc["verdict"], annotated, len(cfi_entries), page_level)
+                if page_level is not None:
+                    for e in cfi_entries:
+                        if e.get("page") is not None:
+                            e["page_trust"] = page_level
         elif pagemap["anchors"]:
             log.warning("epub_pagelist: %d anchors NOT monotone — refusing "
                         "enrichment (page_source stays none)", pagemap["count"])
@@ -1114,7 +1139,7 @@ def _real_pipeline(
         from .epub_cfi import match_text_to_cfi
 
         pos_by_cfi = {
-            e["cfi"]: (e.get("page"), e.get("spine"), e.get("page_verified", False))
+            e["cfi"]: (e.get("page"), e.get("spine"), e.get("page_trust"))
             for e in cfi_entries
         }
         for c in chunk_dicts:
@@ -1126,13 +1151,32 @@ def _real_pipeline(
             meta["cfi_end"] = cfi_end
             # #220: carry anchor-map pages + spine ordinal through to
             # _adapt_chunk's locator (absent without a monotone map).
-            ps, sp, pv = pos_by_cfi.get(cfi_start, (None, None, False))
+            ps, sp, ptrust = pos_by_cfi.get(cfi_start, (None, None, None))
             if ps is not None:
                 meta["page_start"] = ps
-                meta["page_end"] = pos_by_cfi.get(cfi_end, (ps, None, False))[0] or ps
-                meta["page_verified"] = pv
+                meta["page_end"] = pos_by_cfi.get(cfi_end, (ps, None, None))[0] or ps
+                meta["page_trust"] = ptrust
+            else:
+                # #226 F2: refused map — the chunker's {N} marker labels are
+                # the same refused anchors; never let them leak as pages.
+                meta.pop("page_start", None)
+                meta.pop("page_end", None)
+                meta.pop("page_trust", None)
             if sp is not None:
                 meta["chapter"] = sp + 1  # 1-based spine ordinal (PDF parity)
+            # #226 F2 merge: the chunker's {N} marker map is the SAME anchor
+            # source — when enrichment is active, its per-paragraph page
+            # boundaries (#194 shape) ride along on the epub_cfi locator so
+            # a hit position resolves to its exact print page. The marker
+            # boundaries are also the SHARPER page envelope (char-exact,
+            # direct from the anchors) — they override the fuzzy cfi
+            # text-match span so envelope and boundaries can never
+            # disagree.
+            if meta.get("page_start") is not None and meta.get("paragraph_pages"):
+                meta["epub_paragraph_pages"] = meta["paragraph_pages"]
+                bounds = meta["paragraph_pages"]
+                meta["page_start"] = int(str(bounds[0][1]))
+                meta["page_end"] = int(str(bounds[-1][1]))
 
     # L6: real entity (GLiNER) and relationship (mREBEL) extraction.
     # Contract chunk refs are deterministic (chunk-{i:04d} from enumerate),

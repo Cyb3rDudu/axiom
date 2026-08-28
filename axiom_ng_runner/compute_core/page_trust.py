@@ -11,6 +11,12 @@ reference carries its trust level visibly:
   print_verified   #223 EPUB print folios PROVEN book-internally: the
                    printed TOC's page numbers match the chapter-start
                    anchors (or a sibling PDF proved them, #221) — citable
+  derived_from_sibling  #222/#226 page map derived from the PDF sibling
+                   via content alignment and INJECTED (declared by the
+                   injector in the OPF axiom-page-source meta — the anchor
+                   shape mimics native format, provenance is explicit).
+                   Round-trip-verified ~99%, but never masquerades as
+                   native publisher anchors; below print_verified
   print_unverified #220/#223 monotone publisher page anchors WITHOUT
                    proof (no printed TOC, too few joins) — present as
                    marker pagination, never as print folio; vendor-crawled
@@ -38,6 +44,7 @@ FOLIO_VERIFIED = "folio_verified"
 BLIND = "blind"  # v2.1: no text layer at all — a scan needing OCR rebuild
 PDF_LABEL_SANE = "pdf_label_sane"
 PRINT_VERIFIED = "print_verified"      # #223: TOC-proven print folios
+DERIVED_FROM_SIBLING = "derived_from_sibling"  # #222: injected sibling map
 PRINT_UNVERIFIED = "print_unverified"   # #220: markers without proof
 PHYSICAL_ONLY = "physical_only"
 NONE = "none"

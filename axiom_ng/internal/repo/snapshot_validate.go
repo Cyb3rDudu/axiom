@@ -299,6 +299,7 @@ func validateLocatorsAndRelationships(res *processor.Result, frozen *FrozenInput
 			}
 			if loc.PageSource != "" && loc.PageSource != processor.PageSourceNone &&
 				loc.PageSource != processor.PageSourcePrintVerified &&
+				loc.PageSource != processor.PageSourceDerivedFromSibling &&
 				loc.PageSource != processor.PageSourcePrintUnverified {
 				return verrf("LOCATOR_PAGE_SOURCE_INCONSISTENT", "chunk %d epub_cfi locator must carry page_source none|print_verified|print_unverified, got %q", c.Index, loc.PageSource)
 			}
@@ -306,6 +307,7 @@ func validateLocatorsAndRelationships(res *processor.Result, frozen *FrozenInput
 			// publisher anchor map —
 			// without page_start the claim is unfounded and must not pass.
 			if (loc.PageSource == processor.PageSourcePrintVerified ||
+				loc.PageSource == processor.PageSourceDerivedFromSibling ||
 				loc.PageSource == processor.PageSourcePrintUnverified) && loc.PageStart == nil {
 				return verrf("LOCATOR_PAGE_SOURCE_INCONSISTENT", "chunk %d epub_cfi locator with page_source %q has no page_start (#220 anchor map must provide the page)", c.Index, loc.PageSource)
 			}

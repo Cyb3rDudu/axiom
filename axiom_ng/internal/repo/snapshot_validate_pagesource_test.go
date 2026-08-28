@@ -98,4 +98,34 @@ func TestValidatePageSourceGate(t *testing.T) {
 	if err := validateLocatorsAndRelationships(pagelistOk, frozen); err != nil {
 		t.Fatalf("print_unverified with page_start must pass: %v", err)
 	}
+
+	// #226: the FULL EPUB trust set — every level with pages passes,
+	// derived_from_sibling without page_start fails like the others.
+	for _, lvl := range []string{
+		processor.PageSourcePrintVerified,
+		processor.PageSourceDerivedFromSibling,
+		processor.PageSourcePrintUnverified,
+	} {
+		okAll := &processor.Result{Chunks: []processor.Chunk{{
+			Ref: "chunk-0000", Index: 0, Text: "x",
+			Locator: &processor.Locator{
+				Type: "epub_cfi", CFIStart: "/6/4", CFIEnd: "/6/8", Source: "epub",
+				PageSource: lvl, PageStart: &pageTen, PageEnd: &pageTen,
+			},
+		}}}
+		if err := validateLocatorsAndRelationships(okAll, frozen); err != nil {
+			t.Fatalf("epub_cfi with %s + page_start must pass: %v", lvl, err)
+		}
+		bare := &processor.Result{Chunks: []processor.Chunk{{
+			Ref: "chunk-0000", Index: 0, Text: "x",
+			Locator: &processor.Locator{
+				Type: "epub_cfi", CFIStart: "/6/4", CFIEnd: "/6/8", Source: "epub",
+				PageSource: lvl,
+			},
+		}}}
+		if err := validateLocatorsAndRelationships(bare, frozen); err == nil ||
+			!strings.Contains(err.Error(), "page_start") {
+			t.Fatalf("epub_cfi with %s but no page_start must fail mentioning page_start, got %v", lvl, err)
+		}
+	}
 }

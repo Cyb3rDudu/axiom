@@ -83,12 +83,16 @@ const (
 	// runner classifies, it never executes OCR.
 	PageSourceBlind = "blind"
 	PageSourceNone  = "none"
-	// #223: EPUB print-page anchors. print_verified = proven book-
-	// internally (printed TOC matches chapter-start markers; or sibling
-	// PDF, #221). print_unverified = monotone markers without proof —
-	// never silently upgraded; divergent maps are refused entirely.
-	PageSourcePrintVerified   = "print_verified"
-	PageSourcePrintUnverified = "print_unverified"
+	// #223/#226: EPUB print-page anchors. print_verified = proven book-
+	// internally (printed TOC matches chapter-start markers). derived_from_
+	// sibling = page map derived from the PDF sibling and INJECTED by the
+	// #222 tool (declared via the OPF axiom-page-source meta — the anchor
+	// shape mimics native format, provenance is explicit). print_unverified
+	// = monotone markers without proof — never silently upgraded; divergent
+	// maps are refused entirely.
+	PageSourcePrintVerified      = "print_verified"
+	PageSourceDerivedFromSibling = "derived_from_sibling"
+	PageSourcePrintUnverified    = "print_unverified"
 )
 
 // Locator is the source position (§11). page_span for PDFs (physical+logical),

@@ -118,8 +118,14 @@ When an EPUB ships publisher page anchors (`epub:type="pagebreak"`,
 ordinal (spine parity with PDF locators) and a print-page trust level. The
 book's own printed TOC decides (#223): TOC page numbers matching the
 chapter-start anchors → `page_source: "print_verified"` (citable print
-folios, proven offline); markers without a printable TOC →
-`print_unverified` (present as marker pagination, never as print folio).
+folios, proven offline). #222-injected books carry the injector's OPF
+provenance meta → `derived_from_sibling` (round-trip-verified against the
+PDF sibling, but never masquerading as native anchors — the injected shape
+is byte-identical to native Apress, so provenance is explicit, never
+guessed from shape). Markers without either proof → `print_unverified`
+(present as marker pagination, never as print folio). The epub worker now
+canonicalizes ALL FOUR dialects into `{N}` markers (#226 F1 — previously
+only native Apress ids matched by luck).
 Anchors are only trusted when their page numbers form a monotone, plausible
 sequence in spine order — non-monotone/implausible maps are refused, and a
 TOC that systematically diverges (the vendor reader-pagination class,

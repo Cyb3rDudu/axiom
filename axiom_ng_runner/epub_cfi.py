@@ -285,10 +285,14 @@ def match_text_to_cfi(text: str, cfi_entries: list[dict[str, Any]]) -> tuple[str
             cfi_start_idx = i
             break
 
-    # Find the last matching entry
+    # Find the last matching entry — bounded to a forward window after the
+    # start (a chunk is at most a few dozen blocks; without the bound the
+    # reverse scan matches generic/boilerplate text far across the book and
+    # produces absurd page spans).
     cfi_end = ""
     if cfi_start_idx >= 0:
-        for i in range(len(cfi_entries) - 1, cfi_start_idx - 1, -1):
+        for i in range(min(len(cfi_entries), cfi_start_idx + 60) - 1,
+                       cfi_start_idx - 1, -1):
             entry_text = _normalize_text(cfi_entries[i]["text"])
             if len(entry_text) < min_entry_len:
                 continue
