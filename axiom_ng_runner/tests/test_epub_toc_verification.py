@@ -18,6 +18,7 @@ import zipfile
 from pathlib import Path
 
 from axiom_ng_runner.compute_core.epub_pagelist import (
+    _TOCScanner,
     parse_page_map,
     sanity_check,
     verify_print_folios,
@@ -148,5 +149,92 @@ def test_sanity_guards():
     # implausible numbering start (arabic body starting at 500)
     assert not sanity_check([{"page": p} for p in range(500, 540)])["ok"]
     # implausible range: 10 anchors spanning 5000 pages
+    assert not sanity_check(
+        [{"page": p * 500} for p in range(1, 11)])["ok"]
+
+
+def _dense_pagebreak_doc(pages: list[int]) -> str:
+    """Chapter doc with dense epub:type="pagebreak" anchors (Databricks
+    shape): one anchor per print page listed."""
+    parts = []
+    for p in pages:
+        parts.append(
+            f'<p><span epub:type="pagebreak" title="{p}"/>Abschnittstext auf '
+            f"Druckseite {p} mit ausreichend Inhalt zum Zitieren</p>")
+    return _doc("".join(parts))
+
+
+def test_hierarchical_toc_joins_intra_chapter_anchors(tmp_path):
+    """Review C1: a hierarchical printed TOC (chapters + subsections) must
+    join each entry against the target doc's FULL anchor set — subsection
+    pages hit intra-chapter markers exactly → verdict verified. The old
+    first-anchor-only join mis-verdicted this fixture as divergent."""
+    chapter_pages = {1: [7, 12, 18], 2: [45, 51], 3: [88, 95], 4: [130, 137]}
+    toc = [
+        ("1 Grundlagen", 7, "c1.xhtml"),
+        ("1.1 Begriffe", 12, "c1.xhtml"),
+        ("1.2 Systematik", 18, "c1.xhtml"),
+        ("2 Verfahren", 45, "c2.xhtml"),
+        ("2.1 Schritte", 51, "c2.xhtml"),
+        ("3 Praxis", 88, "c3.xhtml"),
+        ("3.1 Fälle", 95, "c3.xhtml"),
+        ("4 Ausblick", 130, "c4.xhtml"),
+        ("4.1 Fazit", 137, "c4.xhtml"),
+    ]
+    epub = _write(
+        tmp_path, "hierarchical.epub", _toc_doc(toc),
+        [_dense_pagebreak_doc(chapter_pages[i]) for i in range(1, 5)])
+    m = parse_page_map(str(epub))
+    assert m["monotone"]
+    v = verify_print_folios(str(epub), m["anchors"])
+    assert v["verdict"] == "verified", v
+    assert v["joins"] == 9 and v["matched"] == 9
+
+
+def test_hierarchical_toc_with_chapter_drift_still_divergent(tmp_path):
+    """C1 counterpart: chapter-start drift (reader pagination) must stay
+    detectable — no anchor in the target doc matches, so every entry
+    offsets by the chapter-start drift (+6) → divergent, offset reported."""
+    chapter_pages = {1: [13, 19, 25], 2: [51, 57, 63], 3: [94, 100, 106],
+                     4: [136, 142, 148]}
+    toc = [
+        ("1 Grundlagen", 7, "c1.xhtml"),
+        ("2 Verfahren", 45, "c2.xhtml"),
+        ("3 Praxis", 88, "c3.xhtml"),
+        ("4 Ausblick", 130, "c4.xhtml"),
+    ]
+    epub = _write(
+        tmp_path, "drift.epub", _toc_doc(toc),
+        [_dense_pagebreak_doc(chapter_pages[i]) for i in range(1, 5)])
+    m = parse_page_map(str(epub))
+    v = verify_print_folios(str(epub), m["anchors"])
+    assert v["verdict"] == "divergent", v
+    assert v["matched"] == 0
+    assert v["offset"] == 6
+
+
+def test_wrapped_toc_yields_exact_entries():
+    """Review W2: a TOC wrapped in <div><ol><li>...</li></ol></div> must
+    yield exactly N distinct entries — closing the wrapper div must not
+    re-emit the last li's content (the old scanner duplicated it)."""
+    raw = _doc(
+        "<div><ol>"
+        "<li><a href='c1.xhtml'>1 Erstes Kapitel</a> . . . 5</li>"
+        "<li><a href='c2.xhtml'>2 Zweites Kapitel</a> . . . 9</li>"
+        "<li><a href='c3.xhtml'>3 Drittes Kapitel</a> . . . 14</li>"
+        "</ol></div>")
+    scanner = _TOCScanner()
+    scanner.feed(raw)
+    assert [e["page"] for e in scanner.entries] == [5, 9, 14]
+    assert [e["href"] for e in scanner.entries] == [
+        "c1.xhtml", "c2.xhtml", "c3.xhtml"]
+
+
+def test_sanity_sparse_chapter_anchored_map_passes():
+    """Review W4: a 350-page book with 11 chapter anchors is plausible
+    (old ratio 8 false-refused it); a 10-anchor map spanning 5000 pages
+    still refuses."""
+    sparse = [1, 33, 64, 98, 122, 155, 187, 212, 249, 301, 350]
+    assert sanity_check([{"page": p} for p in sparse])["ok"]
     assert not sanity_check(
         [{"page": p * 500} for p in range(1, 11)])["ok"]

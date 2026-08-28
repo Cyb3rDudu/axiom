@@ -150,6 +150,11 @@ def _stamp_page_source(
             )
         else:
             locator["page_source"] = pt.NONE
+        # page_verified is a runner-internal handoff into this stamp — the
+        # trust travels via page_source; the wire locator must not carry
+        # an unknown field (the Go persist boundary re-marshals and drops
+        # unknowns silently — W9 lesson, kept clean here).
+        locator.pop("page_verified", None)
         return
     if locator.get("page_source"):
         return  # already stamped by a previous _stamp_page_source pass

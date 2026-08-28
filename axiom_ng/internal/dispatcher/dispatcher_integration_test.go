@@ -1204,6 +1204,7 @@ func TestPreflightFailSkipsJobAndCreatesRepairCase(t *testing.T) {
 		"details": map[string]any{
 			"pages": 1, "text_layer": false,
 			"suspicious_patterns": []any{"viele reine Bildseiten ohne OCR-Text (1/1)"},
+			"drm": true, // present key must pass through (W5)
 		},
 	}
 	d := newDispatcher(t, h, fp, Config{PreflightEnabled: true})
@@ -1232,6 +1233,18 @@ func TestPreflightFailSkipsJobAndCreatesRepairCase(t *testing.T) {
 	}
 	if string(qs) == "" || !strings.Contains(string(qs), "unpaginiert") {
 		t.Fatalf("quality_state not recorded: %q", string(qs))
+	}
+	// W5: absent EPUB detail keys must not become literal null entries;
+	// present ones (drm below) pass through for repair-case analysis.
+	var probe map[string]any
+	if err := json.Unmarshal(qs, &probe); err != nil {
+		t.Fatalf("quality_state json: %v", err)
+	}
+	if _, ok := probe["format"]; ok {
+		t.Fatalf("quality_state must not carry absent EPUB keys: %s", string(qs))
+	}
+	if probe["drm"] != true {
+		t.Fatalf("quality_state must pass through present EPUB keys: %s", string(qs))
 	}
 }
 

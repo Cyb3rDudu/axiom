@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import posixpath
 import re
 import zipfile
 from html.parser import HTMLParser
@@ -322,7 +323,12 @@ def _norm_title(t: str) -> str:
 class _TOCScanner(HTMLParser):
     """Collects printed-TOC entries from one doc: per block (p/li/div) the
     flattened text and the first <a href> inside. An entry is a line ending
-    in an arabic number (dot-leader forms included)."""
+    in an arabic number (dot-leader forms included).
+
+    Buffer discipline (review W2): the buffer clears when a block CLOSES
+    (after emitting), so closing an outer wrapper (<div><ol><li>…</li></ol>
+    </div>) re-emits nothing; an inner block OPEN does not wipe the outer
+    buffer (leading wrapper text merges into the first entry)."""
 
     _BLOCK = frozenset({"p", "li", "div"})
 
@@ -337,9 +343,7 @@ class _TOCScanner(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
         if tag in self._BLOCK:
-            self._block += 1
-            self._buf = []
-            self._buf_href = None
+            self._block += 1  # inner opens never wipe the outer buffer
         elif tag == "a" and self._block and self._href is None:
             a = {k.lower(): v for k, v in attrs}
             self._href = a.get("href")
@@ -358,6 +362,8 @@ class _TOCScanner(HTMLParser):
                         "href": self._buf_href,
                     })
             self._href = None
+            self._buf = []  # W2: cleared at close — an outer close emits nothing
+            self._buf_href = None
         elif tag == "a":
             self._href = None
 
@@ -421,8 +427,14 @@ def _resolve_spine(href: str, spine_hrefs: list[str]) -> int | None:
 def verify_print_folios(
     epub_path: str, anchors: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """#223: cross-check the EPUB's own printed TOC against the anchors at
-    chapter starts — book-internal proof that markers are print folios.
+    """#223: cross-check the EPUB's own printed TOC against the page anchors
+    of the target docs — book-internal proof that markers are print folios.
+
+    Join semantics (review C1): a TOC entry page P targeting spine doc S
+    matches when ANY anchor in S carries page P (subsection entries hit
+    intra-chapter markers exactly); otherwise the offset is the chapter-
+    start drift (first anchor of S minus P) — constant chapter drift stays
+    detectable as `divergent`.
 
     Verdicts: ``verified`` (>= 3 joins, >= 80% exact marker==TOC matches),
     ``divergent`` (systematic offset or mismatch — likely reader
@@ -454,14 +466,10 @@ def verify_print_folios(
             if name == href or name.endswith("/" + href) or href.endswith(name):
                 try:
                     raw = epub.read(name).decode("utf-8", "replace")
-                    toc_dir = str(__import__("posixpath").dirname(name))
+                    toc_dir = posixpath.dirname(name)
                     break
                 except KeyError:
                     continue
-        if raw is None or "epub:type" in raw and 'toc"' in raw:
-            # the EPUB3 nav doc is navigation, not the PRINTED toc — but
-            # many conversions ship it WITH printed numbers; still scan it.
-            pass
         if raw is None:
             continue
         scanner = _TOCScanner()
@@ -475,10 +483,12 @@ def verify_print_folios(
     if not toc_entries:
         return empty
 
-    # join: printed-TOC entry → chapter-start anchor in the target doc
-    first_anchor_in_spine: dict[int, dict[str, Any]] = {}
+    # join (review C1): each printed-TOC entry joins against the FULL
+    # anchor set of its target doc — subsection pages hit intra-chapter
+    # markers exactly; only unmatched entries contribute chapter drift.
+    anchors_in_spine: dict[int, list[dict[str, Any]]] = {}
     for a in sorted(anchors, key=lambda x: (x["spine"], x["elem"])):
-        first_anchor_in_spine.setdefault(a["spine"], a)
+        anchors_in_spine.setdefault(a["spine"], []).append(a)
 
     offsets: list[int] = []
     joins = 0
@@ -489,19 +499,20 @@ def verify_print_folios(
             href = nav.get(_norm_title(e["title"]))
         if not href:
             continue
-        if toc_dir and not href.startswith(("http", "/")) and "/" in href:
-            href = f"{toc_dir}/{href}"
+        if toc_dir and not href.startswith(("http", "/")):
+            href = posixpath.normpath(posixpath.join(toc_dir, href))
         sp = _resolve_spine(href, spine_hrefs)
         if sp is None:
             continue
-        anchor = first_anchor_in_spine.get(sp)
-        if anchor is None:
+        doc_anchors = anchors_in_spine.get(sp)
+        if not doc_anchors:
             continue
         joins += 1
-        off = anchor["page"] - e["page"]
-        offsets.append(off)
-        if off == 0:
+        if any(a["page"] == e["page"] for a in doc_anchors):
+            offsets.append(0)
             matched += 1
+        else:
+            offsets.append(doc_anchors[0]["page"] - e["page"])
     if joins < 3:
         return {"verdict": "no_toc", "joins": joins, "matched": matched,
                 "offset": None}
@@ -519,9 +530,10 @@ def verify_print_folios(
 
 
 def sanity_check(anchors: list[dict[str, Any]]) -> dict[str, Any]:
-    """#223 sanity guards regardless of TOC: monotonicity, plausible
-    numbering start (arabic body starts small; roman frontmatter would not
-    appear as arabic anchors anyway), and folio count/page range plausibility.
+    """#223 sanity guards regardless of TOC: plausible numbering start
+    (arabic body starts small; roman frontmatter would not appear as arabic
+    anchors anyway) and folio count/page range plausibility (monotonicity
+    is gated separately by the runner before this runs).
     Returns {ok, reasons} — a False ok must refuse enrichment (never guess)."""
     reasons: list[str] = []
     if len(anchors) < 5:
@@ -529,6 +541,11 @@ def sanity_check(anchors: list[dict[str, Any]]) -> dict[str, Any]:
     pages = [a["page"] for a in anchors]
     if pages and pages[0] > 60:
         reasons.append(f"implausible numbering start ({pages[0]})")
-    if pages and (max(pages) > 5000 or max(pages) > len(pages) * 8):
+    # sparse chapter-anchored maps are legitimate: a 350-page book with
+    # 11 chapter anchors passes, a 10-anchor map spanning 5000 pages still
+    # refuses (review W4; absolute cap stays at 5000). Ratio 40 covers the
+    # review's examples (350/11 ≈ 32 pages per chapter anchor) while the
+    # junk class (5000/10 = 500) stays far above it.
+    if pages and (max(pages) > 5000 or max(pages) > len(pages) * 40):
         reasons.append(f"implausible page range (max {max(pages)}, {len(pages)} anchors)")
     return {"ok": not reasons, "reasons": reasons}

@@ -106,8 +106,9 @@ type Locator struct {
 	PageSource        string `json:"page_source,omitempty"`
 	// PageStart/PageEnd (#220): print pages on epub_cfi locators from a
 	// monotone publisher anchor map (pagebreak/class/id/page-map.xml),
-	// page_source = epub_pagelist. MUST stay in the struct — the persist
-	// boundary re-marshals the Locator and drops unknown fields (W9 lesson).
+	// page_source = print_verified (TOC-proven, #223) or print_unverified.
+	// MUST stay in the struct — the persist boundary re-marshals the
+	// Locator and drops unknown fields (W9 lesson).
 	PageStart *int `json:"page_start,omitempty"`
 	PageEnd   *int `json:"page_end,omitempty"`
 	// Chapter (W12): 1-based chapter ordinal on corroborated chapter-

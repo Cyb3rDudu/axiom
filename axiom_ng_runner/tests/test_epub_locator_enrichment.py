@@ -39,6 +39,9 @@ def test_epub_locator_verified_map():
     assert loc["page_start"] == 10 and loc["page_end"] == 12
     assert loc["chapter"] == 1  # PDF chapter parity
     assert loc["page_source"] == "print_verified"
+    # page_verified is a runner-internal handoff — the wire locator must
+    # not carry the unknown field (trust travels via page_source only).
+    assert "page_verified" not in loc
 
 
 def test_epub_locator_unverified_map():

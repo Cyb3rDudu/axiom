@@ -36,17 +36,6 @@ def _read_opf(z: zipfile.ZipFile) -> tuple[str | None, str]:
     return None, ""
 
 
-def _opf_path_from_container(z: zipfile.ZipFile, names: set[str]) -> str | None:
-    try:
-        container = z.read("META-INF/container.xml").decode("utf-8", "replace")
-    except KeyError:
-        return None
-    m = re.search(r'full-path="([^"]+)"', container)
-    if m and m.group(1) in names:
-        return m.group(1)
-    return None
-
-
 def normalize_entry_paths(epub_path: Path, out_dir: Path) -> Path:
     """W9/Z3 promotion: pandoc-safe package view (OPF at the archive root).
 
@@ -125,9 +114,12 @@ def repair_spine(epub_path: Path, out_dir: Path) -> Path:
 
 def remove_entry_corpses(epub_path: Path, out_dir: Path) -> Path:
     """Drop zip entries nothing references: keep infrastructure (mimetype,
-    META-INF, the OPF), every manifest target and the nav doc; everything
-    else is a corpse (the 'dokumen.pub' junk class). Fast-path: nothing to
-    remove returns the original."""
+    META-INF, the OPF), every manifest target, the nav doc and every *.ncx
+    (spine toc binding), plus — second pass (review W3) — everything the
+    KEPT docs reference via src/href (vendor wraps routinely ship images
+    and stylesheets outside the manifest); everything else is a corpse
+    (the 'dokumen.pub' junk class). Fast-path: nothing to remove returns
+    the original."""
     with zipfile.ZipFile(epub_path) as z:
         names = set(z.namelist())
         opf, src = _read_opf(z)
@@ -144,8 +136,27 @@ def remove_entry_corpses(epub_path: Path, out_dir: Path) -> Path:
                     keep.add(cand)
                 keep.update(n for n in names if n.endswith("/" + cand))
         for n in names:
-            if n.lower().endswith(("nav.xhtml", "nav.html")):
+            if n.lower().endswith(("nav.xhtml", "nav.html", ".ncx")):
                 keep.add(n)
+        # W3: live references from KEPT docs — an <img src="images/pic.png"/>
+        # outside the manifest is live content, not a corpse.
+        for name in sorted(keep):
+            if not name.lower().endswith((".xhtml", ".html")):
+                continue
+            try:
+                doc = z.read(name).decode("utf-8", "replace")
+            except KeyError:
+                continue
+            doc_dir = posixpath.dirname(name)
+            for ref in re.findall(r'(?:src|href)="([^"]+)"', doc):
+                if ref.startswith(("http://", "https://", "mailto:", "#", "data:")):
+                    continue
+                fixed = posixpath.normpath(
+                    posixpath.join(doc_dir, ref) if doc_dir else ref)
+                for cand in (ref, fixed):
+                    if cand in names:
+                        keep.add(cand)
+                    keep.update(n for n in names if n.endswith("/" + cand))
         corpses = names - keep
         if not corpses:
             return epub_path

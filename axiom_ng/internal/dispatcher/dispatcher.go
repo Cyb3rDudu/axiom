@@ -482,13 +482,16 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 		"text_layer":          report.Details["text_layer"],
 		"mean_chars_per_page": report.Details["mean_chars_per_page"],
 		"suspicious_patterns": report.Details["suspicious_patterns"],
-		// #220: the EPUB branch of the same gate — format flag plus the
-		// epubcheck/DRM findings, so repair-case analysis carries the
-		// conformance reasons (epubcheck messages live in details).
-		"format":     report.Details["format"],
-		"drm":        report.Details["drm"],
-		"opf_spine":  report.Details["opf_spine"],
-		"epubcheck":  report.Details["epubcheck"],
+	}
+	// #220: the EPUB branch of the same gate — format flag plus the
+	// epubcheck/DRM findings, so repair-case analysis carries the
+	// conformance reasons (epubcheck messages live in details). Only set
+	// when the report carries them (review W5): a PDF report must not
+	// grow literal null entries.
+	for _, k := range []string{"format", "drm", "opf_spine", "epubcheck"} {
+		if v, ok := report.Details[k]; ok && v != nil {
+			qs[k] = v
+		}
 	}
 	qsJSON, _ := json.Marshal(qs)
 	if err := d.rep.SetQualityState(ctx, ref, qsJSON); err != nil && !isLost(err) {

@@ -133,3 +133,33 @@ def test_apply_repairs_red_to_green(tmp_path):
     assert "repair_spine" in r["applied"] and "remove_entry_corpses" in r["applied"]
     assert r["preflight"]["opf_spine"] is True
     assert r["preflight"]["verdacht"].startswith("🟢")
+
+
+def test_remove_entry_corpses_keeps_referenced_unmanifested_assets(tmp_path):
+    """Review W3: an <img src="images/pic.png"/> inside a KEPT doc is live
+    content even when the manifest does not list it (vendor wraps ship
+    unmanifested assets); the junk entry still drops. .ncx survives too."""
+    src = tmp_path / "img.epub"
+    with zipfile.ZipFile(src, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", _CONTAINER)
+        z.writestr("content.opf",
+                   '<package xmlns="http://www.idpf.org/2007/opf" version="3.0">'
+                   "<metadata/><manifest>"
+                   '<item id="c1" href="Text/c1.xhtml" '
+                   'media-type="application/xhtml+xml"/>'
+                   "</manifest><spine><itemref idref=\"c1\"/></spine></package>")
+        z.writestr("Text/c1.xhtml",
+                   '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
+                   '<p>Kapiteltext mit Inhalt zum Extrahieren.</p>'
+                   '<img src="../images/pic.png"/></body></html>')
+        z.writestr("images/pic.png", b"\x89PNG-fake")
+        z.writestr("toc.ncx", "<ncx/>")
+        z.writestr("junk/trailer.xhtml", "<html/>")
+    out = remove_entry_corpses(src, tmp_path)
+    assert out != src
+    with zipfile.ZipFile(out) as z:
+        names = set(z.namelist())
+    assert "images/pic.png" in names, "referenced unmanifested image is live content"
+    assert "toc.ncx" in names
+    assert "junk/trailer.xhtml" not in names
