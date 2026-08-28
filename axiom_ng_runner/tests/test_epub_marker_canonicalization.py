@@ -144,6 +144,21 @@ def test_restart_tail_trimmed(tmp_path):
     assert m["restart_tail_trimmed"] == 1
 
 
+def test_restart_trim_boundary_exactly_90_percent(tmp_path):
+    """#226 review pin: the trim rule is >= (prefix LENGTH), so a map that
+    is exactly 90% monotone (18 of 20) trims — cut vs cut+1 arithmetic."""
+    epub = tmp_path / "boundary.epub"
+    parts = []
+    for i in range(1, 19):  # 18 ascending
+        parts.append(f'<p><a class="page" id="page_{i}">{i}</a>Text {i} lang genug</p>')
+    for p_ in (5, 6):  # restarted appendix tail (a DROP below 18)
+        parts.append(f'<p><a class="page" id="page_{p_}">{p_}</a>Anhang {p_}</p>')
+    _write_epub(epub, {"c1.xhtml": _doc("".join(parts))})
+    m = parse_page_map(str(epub))
+    assert m["monotone"] is True
+    assert m["count"] == 18
+    assert m["restart_tail_trimmed"] == 2
+
 def test_early_drop_stays_non_monotone(tmp_path):
     """Drop after 3 of 20 anchors (15% prefix) -> refused, nothing trimmed."""
     epub = tmp_path / "early.epub"
