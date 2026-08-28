@@ -268,10 +268,10 @@ func (f *FailoverClient) Capabilities(ctx context.Context) (*Capabilities, error
 // Preflight (#175) runs /v1/pdf/preflight on the first living candidate. A
 // preflight is a cheap diagnostic; a dead/hostile candidate failing over to
 // the next is the same liveness discipline as Capabilities/Health.
-func (f *FailoverClient) Preflight(ctx context.Context, pdf []byte) (*PreflightReport, error) {
+func (f *FailoverClient) Preflight(ctx context.Context, doc []byte, contentType string) (*PreflightReport, error) {
 	var lastErr error
 	for _, c := range f.ordered() {
-		r, err := c.Preflight(ctx, pdf)
+		r, err := c.Preflight(ctx, doc, contentType)
 		if err == nil {
 			return r, nil
 		}

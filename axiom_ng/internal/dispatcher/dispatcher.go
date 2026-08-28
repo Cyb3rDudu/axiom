@@ -97,7 +97,8 @@ type Config struct {
 type processorClient interface {
 	Capabilities(ctx context.Context) (*processor.Capabilities, error)
 	SubmitProcess(ctx context.Context, req *processor.ProcessRequest) (*processor.ProcessAccepted, error)
-	Preflight(ctx context.Context, pdf []byte) (*processor.PreflightReport, error) // #175 quality gate
+	// #175 quality gate; #220: routes EPUB bytes via the content type.
+	Preflight(ctx context.Context, doc []byte, contentType string) (*processor.PreflightReport, error)
 	JobStatus(ctx context.Context, jobID string) (*processor.JobStatus, error)
 	JobResult(ctx context.Context, jobID string) ([]byte, error)
 	Artifact(ctx context.Context, jobID, ref string) ([]byte, error)
@@ -467,7 +468,7 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 		d.logger.Printf("%v: preflight skipped — cannot read source %s: %v", fields, local, err)
 		return false // proceed: advisory only, never block unassessable
 	}
-	report, err := d.client.Preflight(ctx, pdf)
+	report, err := d.client.Preflight(ctx, pdf, req.Attachment.ContentType)
 	if err != nil {
 		d.logger.Printf("%v: preflight skipped — runner preflight error: %v", fields, err)
 		return false // proceed: a broken quality gate must not hold a job hostage
@@ -481,6 +482,13 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 		"text_layer":          report.Details["text_layer"],
 		"mean_chars_per_page": report.Details["mean_chars_per_page"],
 		"suspicious_patterns": report.Details["suspicious_patterns"],
+		// #220: the EPUB branch of the same gate — format flag plus the
+		// epubcheck/DRM findings, so repair-case analysis carries the
+		// conformance reasons (epubcheck messages live in details).
+		"format":     report.Details["format"],
+		"drm":        report.Details["drm"],
+		"opf_spine":  report.Details["opf_spine"],
+		"epubcheck":  report.Details["epubcheck"],
 	}
 	qsJSON, _ := json.Marshal(qs)
 	if err := d.rep.SetQualityState(ctx, ref, qsJSON); err != nil && !isLost(err) {

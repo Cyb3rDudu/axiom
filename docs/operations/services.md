@@ -126,6 +126,21 @@ TOC that systematically diverges (the vendor reader-pagination class,
 constant per-chapter drift) is DETECTED and refused too (locators stay
 chapter+CFI, `page_source: "none"`). Never silently upgraded.
 
+### EPUB repair toolbelt + repair-case wiring (#220 Stage 2)
+
+Mechanical, model-free EPUB repairs live in `compute_core/epub_repair.py`
+(stage-1 capable): `normalize_entry_paths` (the promoted W9/Z3 experiment
+— pandoc-safe package view, OPF at the archive root, no `..` references;
+the epub worker imports it from there now), `repair_spine` (synthesize a
+missing `<spine>` from the manifest) and `remove_entry_corpses` (drop
+unreferenced zip entries). `apply_repairs` chains them and proves the
+result through the same preflight analyzer (red→green discipline as with
+PDF surgery). Dispatcher wiring: preflight bytes now carry the
+attachment's content type, so EPUB claims run the EPUB gate and red
+verdicts (incl. epubcheck FATAL/ERROR findings, which land in the
+quality-state details) create repair cases on the same queue — the #206
+invoker path is format-agnostic and picks them up unchanged.
+
 ## Fixer: event runner (owner decision)
 
 One process per Zotero attachment key, invoked via the tested wrapper

@@ -440,19 +440,24 @@ type PreflightReport struct {
 	Details         map[string]any `json:"details"`
 }
 
-// Preflight POSTs raw PDF bytes to /v1/pdf/preflight and decodes the quality
-// report (#175). The runner treats a broken PDF as a 500 (PREFLIGHT_PARSE);
-// that surfaces as a *StatusError here so a caller can decide (advisory vs
+// Preflight POSTs raw document bytes to /v1/pdf/preflight and decodes the
+// quality report (#175). The runner routes by Content-Type (#220 EPUB
+// branch); empty contentType defaults to application/pdf (the #175 shape).
+// The runner treats a broken document as a 500 (PREFLIGHT_PARSE); that
+// surfaces as a *StatusError here so a caller can decide (advisory vs
 // blocking) rather than have preflight silently swallow an un-assessable doc.
-func (c *Client) Preflight(ctx context.Context, pdf []byte) (*PreflightReport, error) {
+func (c *Client) Preflight(ctx context.Context, doc []byte, contentType string) (*PreflightReport, error) {
+	if contentType == "" {
+		contentType = "application/pdf"
+	}
 	pctx, cancel := context.WithTimeout(ctx, budgetSmall)
 	defer cancel()
 	req, err := http.NewRequestWithContext(
-		pctx, http.MethodPost, c.baseURL+"/v1/pdf/preflight", bytes.NewReader(pdf))
+		pctx, http.MethodPost, c.baseURL+"/v1/pdf/preflight", bytes.NewReader(doc))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/pdf")
+	req.Header.Set("Content-Type", contentType)
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		if pctx.Err() != nil {

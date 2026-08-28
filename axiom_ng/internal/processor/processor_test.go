@@ -180,7 +180,7 @@ func TestPreflightDecodesAndSendsBytes(t *testing.T) {
 			},
 		})
 	}))
-	rep, err := c.Preflight(context.Background(), []byte("%PDF-test-bytes"))
+	rep, err := c.Preflight(context.Background(), []byte("%PDF-test-bytes"), "")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}
@@ -195,6 +195,25 @@ func TestPreflightDecodesAndSendsBytes(t *testing.T) {
 	}
 }
 
+func TestPreflightSendsEPUBContentType(t *testing.T) {
+	// #220: the gate serves EPUB bytes — the content type must reach the
+	// runner so its EPUB branch (epub_health + epubcheck) runs.
+	c := clientFor(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "application/epub+zip" {
+			t.Errorf("content-type = %q, want application/epub+zip", ct)
+		}
+		mustJSON(w, 200, map[string]any{
+			"contract_version": "1.0", "source_name": "inline", "ok": true,
+			"verdacht": "🟢 gesund (epub)", "grund": "",
+			"details": map[string]any{"format": "epub", "text_layer": true},
+		})
+	}))
+	rep, err := c.Preflight(context.Background(), []byte("PK-epub"), "application/epub+zip")
+	if err != nil || !rep.Ok {
+		t.Fatalf("epub preflight: %v %+v", err, rep)
+	}
+}
+
 func TestPreflightParseErrorSurfacesAsStatusError(t *testing.T) {
 	c := clientFor(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/pdf/preflight" {
@@ -204,7 +223,7 @@ func TestPreflightParseErrorSurfacesAsStatusError(t *testing.T) {
 		}
 		w.WriteHeader(404)
 	}))
-	_, err := c.Preflight(context.Background(), []byte("garbage"))
+	_, err := c.Preflight(context.Background(), []byte("garbage"), "application/pdf")
 	if err == nil {
 		t.Fatal("want error on preflight 500")
 	}
