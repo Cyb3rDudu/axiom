@@ -299,6 +299,16 @@ def inject_pagelist(epub: Path, out_path: Path, anchors: list[dict]) -> dict:
         opf_raw = opf_raw.replace(
             "</metadata>",
             f'<meta name="page-map" content="{rel_pm}"/></metadata>', 1)
+    # #226: explicit provenance — the injected anchors mimic the native
+    # publisher format byte-for-byte (id="PBn" role="doc-pagebreak", same
+    # shape as native Apress), so the runner cannot detect derivation from
+    # shape. This OPF meta is the declaration the runner trusts
+    # (page_source = derived_from_sibling); never guess.
+    if 'name="axiom-page-source"' not in opf_raw:
+        opf_raw = opf_raw.replace(
+            "</metadata>",
+            '<meta name="axiom-page-source" content="derived_from_sibling"/>'
+            "</metadata>", 1)
     if 'id="pagemap"' not in opf_raw:
         opf_raw = opf_raw.replace(
             "</manifest>",
