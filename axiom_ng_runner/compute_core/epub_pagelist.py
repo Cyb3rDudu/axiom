@@ -277,12 +277,13 @@ def parse_page_map(epub_path: str) -> dict[str, Any]:
         # Publisher reality (#226): an appendix/index can RESTART its own
         # numbering at the end of the book (Databricks: ...448 -> 185 for
         # the index). A single trailing restart must not poison the whole
-        # map: keep the longest monotone PREFIX when it covers >= 90% of
-        # the anchors and trim the restarted tail (documented, counted).
-        # Anything earlier/messier stays non-monotone -> refused.
+        # map: keep the longest monotone PREFIX (cut + 1 anchors) when it
+        # covers >= 90% of the anchors and trim the restarted tail
+        # (documented, counted). Anything earlier/messier stays
+        # non-monotone -> refused.
         cut = next((i for i, (a, b) in enumerate(itertools.pairwise(pages))
                     if b < a), len(pages))
-        if cut >= len(pages) * 0.9:
+        if cut + 1 >= len(pages) * 0.9:
             anchors = anchors[: cut + 1]
             trimmed = len(pages) - len(anchors)
             monotone = True

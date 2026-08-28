@@ -95,6 +95,31 @@ def _normalize_image_refs(refs: Any) -> list[str]:
     return out
 
 
+def _merge_marker_pages(meta: dict, pagemap_max: int | None) -> None:
+    """#226 F2 merge: when the anchor map is trusted, the chunker's {N}
+    marker boundaries are the SAME anchor source and char-exact — they
+    ride along on the epub_cfi locator (per-hit page resolution, #194
+    shape) and override the fuzzy cfi-text-match envelope so envelope
+    and boundaries can never disagree.
+
+    W2 tail-restart guard: pagemap_max is the trusted map's max page WHEN
+    the map was tail-trimmed (appendix/index numbering restart) — marker
+    labels beyond it live in the restarted numbering space and are
+    dropped (chunk keeps the cfi envelope, no paragraph_pages), never
+    mixed under one trust stamp."""
+    if meta.get("page_start") is None or not meta.get("paragraph_pages"):
+        return
+    bounds = meta["paragraph_pages"]
+    if pagemap_max is not None and (
+        int(str(bounds[0][1])) > pagemap_max
+        or int(str(bounds[-1][1])) > pagemap_max
+    ):
+        return
+    meta["epub_paragraph_pages"] = meta["paragraph_pages"]
+    meta["page_start"] = int(str(bounds[0][1]))
+    meta["page_end"] = int(str(bounds[-1][1]))
+
+
 def _adapt_embeddings(raw: Any) -> dict[str, Any]:
     """Pass through real embeddings from TextEmbedder.embed_chunks() into the
     Contract chunk shape. The real embedder writes
@@ -1031,6 +1056,15 @@ def _real_pipeline(
         from axiom_ng_runner.compute_core import epub_pagelist
 
         pagemap = epub_pagelist.parse_page_map(str(source_path))
+        # #226 W2: when the map was tail-trimmed (appendix/index numbering
+        # restart), the worker still emits {N} markers for the restarted
+        # tail — a DIFFERENT numbering space. Gate the marker-bounds
+        # override on the trusted map's max page so spaces never mix.
+        marker_pagemap_max = (
+            pagemap["anchors"][-1]["page"]
+            if pagemap.get("restart_tail_trimmed") and pagemap["anchors"]
+            else None
+        )
         # #226 provenance: the #222 injector declares itself in the OPF
         # (the anchor shape mimics native format — shape is not evidence).
         from axiom_ng_runner.compute_core import page_trust as pt
@@ -1164,19 +1198,10 @@ def _real_pipeline(
                 meta.pop("page_trust", None)
             if sp is not None:
                 meta["chapter"] = sp + 1  # 1-based spine ordinal (PDF parity)
-            # #226 F2 merge: the chunker's {N} marker map is the SAME anchor
-            # source — when enrichment is active, its per-paragraph page
-            # boundaries (#194 shape) ride along on the epub_cfi locator so
-            # a hit position resolves to its exact print page. The marker
-            # boundaries are also the SHARPER page envelope (char-exact,
-            # direct from the anchors) — they override the fuzzy cfi
-            # text-match span so envelope and boundaries can never
-            # disagree.
-            if meta.get("page_start") is not None and meta.get("paragraph_pages"):
-                meta["epub_paragraph_pages"] = meta["paragraph_pages"]
-                bounds = meta["paragraph_pages"]
-                meta["page_start"] = int(str(bounds[0][1]))
-                meta["page_end"] = int(str(bounds[-1][1]))
+            # #226 F2 merge: marker page boundaries (same anchor source,
+            # char-exact) ride along and sharpen the envelope — unless the
+            # map was tail-trimmed and the labels leave the trusted range.
+            _merge_marker_pages(meta, marker_pagemap_max)
 
     # L6: real entity (GLiNER) and relationship (mREBEL) extraction.
     # Contract chunk refs are deterministic (chunk-{i:04d} from enumerate),

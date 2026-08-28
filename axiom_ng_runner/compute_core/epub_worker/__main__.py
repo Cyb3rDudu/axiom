@@ -112,26 +112,36 @@ def _canonicalize_page_anchors(raw: str) -> str:
         return _span(n) if n else m.group(0)
 
     raw = _re.sub(
-        r'<(\w+)((?:[^>"]|"[^"]*")*\bepub:type="[^"]*\bpagebreak\b[^"]*"(?:[^>"]|"[^"]*")*)\s*/?>',
+        r"<(\w+)((?:[^>\"']|\"[^\"]*\"|'[^']*')*"
+        r"\bepub:type=([\"'])[^\"']*\bpagebreak\b[^\"']*\3"
+        r"(?:[^>\"']|\"[^\"]*\"|'[^']*')*)\s*/?>",
         _re_pagebreak, raw,
     )
 
-    # 2) Jossé/dtv: <a class="page" id="page_N">N</a> (inline, number in text)
+    # 2) Jossé/dtv: <a class="page" id="page_N">N</a> (inline, number in text).
+    # W1: "page" must be a WHITESPACE TOKEN of the class list — mirroring
+    # epub_pagelist._is_candidate's class split — so class="page-num" or
+    # class="page-break" does NOT match.
     def _re_class_page(m: _re.Match[str]) -> str:
-        n = _num_from(m.group(1), m.group(2))
+        n = _num_from(m.group(1), m.group(3))
         return _span(n) if n else m.group(0)
 
     raw = _re.sub(
-        r'<a\b([^>]*\bclass="[^"]*\bpage\b[^"]*"[^>]*)>\s*(\[?\d{1,4}\]?)\s*</a>',
+        r"<a\b([^>]*\bclass=([\"'])(?:[^\"']*\s)?page(?:\s[^\"']*)?\2[^>]*)>"
+        r"\s*(\[?\d{1,4}\]?)\s*</a>",
         _re_class_page, raw,
     )
 
-    # 3) Bieger/Springer: <a id="page_N"/> followed by an optional [N] echo
+    # 3) Bieger/Springer: <a id="page_N"/> — self-closing or paired-empty —
+    # followed by an optional [N] echo
     def _re_id_page(m: _re.Match[str]) -> str:
-        return _span(m.group(1))
+        return _span(m.group(2))
 
-    raw = _re.sub(r'<a\b[^>]*\bid="page[_-]?(\d{1,4})"[^>]*/>\s*(?:\[\d{1,4}\])?',
-                  _re_id_page, raw)
+    raw = _re.sub(
+        r"<a\b[^>]*\bid=([\"'])page[_-]?(\d{1,4})\1[^>]*(?:/>|>\s*</a>)"
+        r"\s*(?:\[\d{1,4}\])?",
+        _re_id_page, raw,
+    )
     return raw
 
 

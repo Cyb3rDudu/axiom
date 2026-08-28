@@ -10,7 +10,7 @@ reference carries its trust level visibly:
                    presentable only WITH a marker
   print_verified   #223 EPUB print folios PROVEN book-internally: the
                    printed TOC's page numbers match the chapter-start
-                   anchors (or a sibling PDF proved them, #221) — citable
+                   anchors — citable
   derived_from_sibling  #222/#226 page map derived from the PDF sibling
                    via content alignment and INJECTED (declared by the
                    injector in the OPF axiom-page-source meta — the anchor
