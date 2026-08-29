@@ -253,7 +253,27 @@ also contain `collapsed_near_duplicates`. Locator fields are:
 | `chapter` | Deepest section heading, when known |
 | `cfi` | EPUB CFI, when applicable |
 | `chapter_number` | Chapter ordinal for chapter-relative pagination |
-| `page_source` | `folio_verified`, `pdf_label_sane`, `physical_only`, or `none` |
+| `page_source` | `folio_verified`, `pdf_label_sane`, `physical_only`, `none`, or the EPUB trust set `print_verified` / `derived_from_sibling` / `print_unverified` (#223/#226) |
+| `page_start` / `page_end` | Print-page span on enriched EPUB locators (#229) — present only when the EPUB carried a trusted anchor map; absent means absent, never fabricated |
+| `paragraph_pages` | Char-exact page boundaries `[[offset, page], …]` on enriched EPUB locators (#194 shape, #229 passthrough) — resolve a hit position to its exact print page |
+
+EPUB hits with a trusted page anchor map render as, e.g.,
+
+```json
+{
+  "locator": {
+    "kind": "epub_cfi",
+    "label": "Kap. 7, S. 175-176",
+    "chapter": "Value Chains",
+    "chapter_number": 7,
+    "cfi": "/6/16!/4/132",
+    "page_source": "derived_from_sibling",
+    "page_start": 175,
+    "page_end": 176,
+    "paragraph_pages": [["0", "175"], ["1603", "176"]]
+  }
+}
+```
 
 A single failed recall arm degrades the result and is reported as false or
 absent in `arms`; total recall failure returns `503`.

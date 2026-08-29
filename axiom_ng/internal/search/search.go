@@ -179,8 +179,19 @@ type LocatorView struct {
 	ChapterNumber *int `json:"chapter_number,omitempty"`
 	// PageSource (#173 trust level): folio_verified is the ONLY level a
 	// client may cite as a printed page; physical_only renders as "PDF-S.";
-	// none means no stable pages at all. Additive contract field.
+	// none means no stable pages at all. EPUB locators carry the #223/#226
+	// set: print_verified | derived_from_sibling | print_unverified | none.
+	// Additive contract field.
 	PageSource string `json:"page_source,omitempty"`
+	// PageStart/PageEnd (#229): the print-page span on epub_cfi locators —
+	// present only when the EPUB carried a trusted anchor map. Absent means
+	// absent (never fabricated). Additive.
+	PageStart *int `json:"page_start,omitempty"`
+	PageEnd   *int `json:"page_end,omitempty"`
+	// ParagraphPages (#229): the char-exact page boundaries (#194 shape)
+	// riding on enriched epub_cfi locators — clients resolve a hit position
+	// to its exact print page. Passthrough of the stored wire form.
+	ParagraphPages [][]string `json:"paragraph_pages,omitempty"`
 }
 
 // Response is POST /api/search.
@@ -832,14 +843,17 @@ func sourceFor(m repo.DocumentMeta, docID string) repo.SourceView {
 // locatorView renders the stored locator into the human form (issue Ziel 5).
 func locatorView(raw json.RawMessage, section []string) LocatorView {
 	var loc struct {
-		Type              string `json:"type"`
-		PageLabelStart    string `json:"page_label_start"`
-		PageLabelEnd      string `json:"page_label_end"`
-		PhysicalPageStart *int   `json:"physical_page_start"`
-		PhysicalPageEnd   *int   `json:"physical_page_end"`
-		CFIStart          string `json:"cfi_start"`
-		PageSource        string `json:"page_source"`
-		Chapter           *int   `json:"chapter"` // W4: chapter-relative folios (restart-per-chapter books)
+		Type              string       `json:"type"`
+		PageLabelStart    string       `json:"page_label_start"`
+		PageLabelEnd      string       `json:"page_label_end"`
+		PhysicalPageStart *int         `json:"physical_page_start"`
+		PhysicalPageEnd   *int         `json:"physical_page_end"`
+		CFIStart          string       `json:"cfi_start"`
+		PageSource        string       `json:"page_source"`
+		Chapter           *int         `json:"chapter"` // W4: chapter-relative folios (restart-per-chapter books)
+		PageStart         *int         `json:"page_start"` // #229: trusted EPUB print pages
+		PageEnd           *int         `json:"page_end"`
+		ParagraphPages    [][]string   `json:"paragraph_pages"`
 	}
 	_ = json.Unmarshal(raw, &loc)
 
@@ -850,12 +864,39 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 
 	switch loc.Type {
 	case "epub_cfi":
+		// #229: DB/OS carry the folio on enriched EPUB locators — render it.
+		// Page presence (not the trust level alone) gates the page label:
+		// print_verified/derived_from_sibling/print_unverified all cite
+		// their pages (the client gates citability on page_source), none
+		// has nothing to cite. Absent fields stay absent — no fabrication.
+		label := chapter
+		pageSource := loc.PageSource
+		if pageSource == "" {
+			pageSource = processor.PageSourceNone
+		}
+		if loc.PageStart != nil {
+			page := fmt.Sprintf("S. %d", *loc.PageStart)
+			if loc.PageEnd != nil && *loc.PageEnd != *loc.PageStart {
+				page = fmt.Sprintf("S. %d-%d", *loc.PageStart, *loc.PageEnd)
+			}
+			if loc.Chapter != nil {
+				label = fmt.Sprintf("Kap. %d, %s", *loc.Chapter, page)
+			} else if chapter != "" {
+				label = chapter + " · " + page
+			} else {
+				label = page
+			}
+		}
 		return LocatorView{
-			Kind:       "epub_cfi",
-			Label:      chapter,
-			Chapter:    chapter,
-			CFI:        cfiShort(loc.CFIStart),
-			PageSource: processor.PageSourceNone,
+			Kind:           "epub_cfi",
+			Label:          label,
+			Chapter:        chapter,
+			ChapterNumber:  loc.Chapter,
+			CFI:            cfiShort(loc.CFIStart),
+			PageSource:     pageSource,
+			PageStart:      loc.PageStart,
+			PageEnd:        loc.PageEnd,
+			ParagraphPages: loc.ParagraphPages,
 		}
 	case "page_span":
 		label := loc.PageLabelStart

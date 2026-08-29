@@ -1059,3 +1059,51 @@ func TestLocatorViewTrustLevels(t *testing.T) {
 		t.Fatalf("bare chapter is the only honest rendering: %+v", nophys)
 	}
 }
+
+func TestLocatorViewEpubCFITrustLevels(t *testing.T) {
+	// #229: enriched epub_cfi locators render their folio — one case per
+	// trust level; absent fields stay absent (none = no pages, no fields).
+	ch := 7
+	span := func(pageSource string, extra string) LocatorView {
+		raw := fmt.Sprintf(`{"type":"epub_cfi","cfi_start":"epubcfi(/6/16!/4/132)","page_source":%q,"page_start":175,"page_end":176,"chapter":%d%s}`,
+			pageSource, ch, extra)
+		return locatorView(json.RawMessage(raw), []string{"Value Chains"})
+	}
+	for _, lvl := range []string{"print_verified", "derived_from_sibling", "print_unverified"} {
+		v := span(lvl, "")
+		if v.Kind != "epub_cfi" || v.PageSource != lvl {
+			t.Fatalf("%s: page_source passthrough wrong: %+v", lvl, v)
+		}
+		if v.Label != "Kap. 7, S. 175-176" {
+			t.Fatalf("%s: label = %q, want Kap. 7, S. 175-176", lvl, v.Label)
+		}
+		if v.PageStart == nil || *v.PageStart != 175 || v.PageEnd == nil || *v.PageEnd != 176 {
+			t.Fatalf("%s: page span fields wrong: %+v", lvl, v)
+		}
+		if v.ChapterNumber == nil || *v.ChapterNumber != 7 {
+			t.Fatalf("%s: chapter_number missing: %+v", lvl, v)
+		}
+	}
+	// paragraph_pages passthrough (char-exact boundaries for hit positions)
+	v := locatorView(json.RawMessage(`{"type":"epub_cfi","cfi_start":"epubcfi(/6/16!/4/132)","page_source":"derived_from_sibling","page_start":175,"page_end":176,"chapter":7,"paragraph_pages":[["0","175"],["1603","176"]]}`),
+		[]string{"Value Chains"})
+	if len(v.ParagraphPages) != 2 || v.ParagraphPages[1][1] != "176" {
+		t.Fatalf("paragraph_pages passthrough wrong: %+v", v.ParagraphPages)
+	}
+	// none: no pages — no page fields, no fabricated label
+	bare := locatorView(json.RawMessage(`{"type":"epub_cfi","cfi_start":"epubcfi(/6/4!/4/2)"}`), []string{"Kapitel 2"})
+	if bare.PageSource != "none" || bare.PageStart != nil || bare.PageEnd != nil ||
+		bare.Label != "Kapitel 2" || bare.ParagraphPages != nil {
+		t.Fatalf("bare epub_cfi must carry none and no page fields: %+v", bare)
+	}
+	// single page (start == end): no range dash
+	single := locatorView(json.RawMessage(`{"type":"epub_cfi","cfi_start":"x","page_source":"print_verified","page_start":176,"page_end":176,"chapter":7}`), nil)
+	if single.Label != "Kap. 7, S. 176" {
+		t.Fatalf("single page label = %q", single.Label)
+	}
+	// pages without chapter ordinal and with section title
+	noCh := locatorView(json.RawMessage(`{"type":"epub_cfi","cfi_start":"x","page_source":"print_unverified","page_start":12}`), []string{"Grundlagen"})
+	if noCh.Label != "Grundlagen · S. 12" {
+		t.Fatalf("no-ordinal label = %q", noCh.Label)
+	}
+}
