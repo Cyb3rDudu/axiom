@@ -147,6 +147,15 @@ verdicts (incl. epubcheck FATAL/ERROR findings, which land in the
 quality-state details) create repair cases on the same queue — the #206
 invoker path is format-agnostic and picks them up unchanged.
 
+Execution + submit are EPUB-capable end to end: the invoker routes by the
+attachment's content type (`--format epub` arm, `work.epub` artifact,
+`.epub` schema filename, content-typed Zotero upload), and the agent
+submit path `POST /api/repair/{case}/verdict` accepts `healed_file` +
+`content_type` (#227; `application/pdf` | `application/epub+zip`, legacy
+`healed_pdf` = application/pdf) — unknown content types are rejected at
+the boundary. `publication_year` is NULL-safe in both case-item scans
+(COALESCE 0).
+
 ## Fixer: event runner (owner decision)
 
 One process per Zotero attachment key, invoked via the tested wrapper
