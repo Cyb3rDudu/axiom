@@ -1283,7 +1283,10 @@ def _real_pipeline(
             result.setdefault("manifest", {})["stage_completion"] = stage_completion
         return result
 
-    result = _finish(None)
+    # [] (not None) suppresses _build_reference_result's heuristic fallback
+    # relationships — the real backend never presents reference stubs, and
+    # a crash-retrieved partial must not carry them either.
+    result = _finish([])
     if commit is not None:
         commit(result)
 
