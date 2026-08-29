@@ -323,8 +323,8 @@ func TestInvokerExit0WithoutHealedPdfFails(t *testing.T) {
 	if status != "queued" {
 		t.Fatalf("exit-0-without-pdf must fail-or-requeue, got %s (%q)", status, reason)
 	}
-	if !contains(reason, "keine geheilte pdf") {
-		t.Fatalf("reason must name the missing pdf: %q", reason)
+	if !contains(reason, "kein geheiltes Artefakt") {
+		t.Fatalf("reason must name the missing artifact: %q", reason)
 	}
 }
 
