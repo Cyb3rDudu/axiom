@@ -1396,14 +1396,19 @@ func (h *persistHarness) seedSecondAttachment(t *testing.T, suffix, contentHash 
 		t.Fatalf("second attachment: %v", err)
 	}
 	if err := h.pool.QueryRow(ctx, `
-		INSERT INTO ingest_jobs (attachment_id, idempotency_key, input_snapshot, status, max_attempts)
-		VALUES ($1, $2, '{}', 'pending', 3) RETURNING id::text`,
-		attID, "idem-switch-"+suffix).Scan(&jobID); err != nil {
+		INSERT INTO ingest_jobs
+		  (source_id, document_id, attachment_id, content_hash, status, max_attempts)
+		SELECT source_id, document_id, id, $2, 'pending', 3
+		FROM zotero_attachments WHERE id=$1
+		RETURNING id::text`, attID, contentHash).Scan(&jobID); err != nil {
 		t.Fatalf("job: %v", err)
 	}
 	cj, err := h.rep.ClaimNextJob(ctx, defaultClaim("worker-switch"))
 	if err != nil {
 		t.Fatalf("claim: %v", err)
+	}
+	if cj == nil {
+		t.Fatal("claim returned no job — the seeded twin job is not claimable")
 	}
 	if err := h.rep.MarkProcessing(ctx, cj.LeaseRef); err != nil {
 		t.Fatalf("mark processing: %v", err)
@@ -1434,6 +1439,13 @@ func TestDocumentOneActiveSnapshotOnFormatSwitch(t *testing.T) {
 	res.Source.AttachmentID = att2
 	res.Source.ContentHash = "sha256:epubswitch"
 	res.Chunks[0].Text = "the epub view of the same book"
+	// epub attachment → epub_cfi locator (the §11 fabricated-pages gate
+	// rejects page_span on EPUB sources — and this exercises the #229 wire
+	// fields end to end)
+	res.Chunks[0].Locator = &processor.Locator{
+		Type: "epub_cfi", CFIStart: "epubcfi(/6/2!/4/2)", CFIEnd: "epubcfi(/6/2!/4/6)",
+		Source: "epub", PageSource: "print_verified", PageStart: ptrInt(174), PageEnd: ptrInt(176),
+	}
 	b, _ := json.Marshal(res)
 	s2, err := h.rep.PersistResult(ctx, job2, b, PersistOptions{CapDim: 3, Artifacts: markdownArtifact()})
 	if err != nil {
@@ -1555,8 +1567,8 @@ func TestDocumentOneActiveSnapshotUniqueIndex(t *testing.T) {
 	_, err := h.pool.Exec(ctx, `
 		INSERT INTO processing_snapshots
 		  (attachment_id, content_hash, processor_name, processor_version, profile_hash,
-		   document_id, active)
-		SELECT $1, 'sha256:rogue', 'rogue', '1', 'rogue', document_id, true
+		   document_id, profile, active)
+		SELECT $1, 'sha256:rogue', 'rogue', '1', 'rogue', document_id, '{}', true
 		FROM zotero_attachments WHERE id=$1`, att2)
 	if err == nil || !strings.Contains(err.Error(), "processing_snapshots_one_active_per_document_uq") {
 		t.Fatalf("rogue second active snapshot must fail on the 0019 index, got: %v", err)
