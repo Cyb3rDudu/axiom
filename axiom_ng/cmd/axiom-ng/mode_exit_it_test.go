@@ -154,10 +154,13 @@ func seedHeartbeatPair(t *testing.T, dsn string) {
 		   JOIN zotero_documents d ON d.source_id = s.id AND d.zotero_key = 'DOCHB'
 		   CROSS JOIN (SELECT unnest(ARRAY['ATTHB1','ATTHB2']) AS k) x
 		   WHERE s.base_url = 'https://hb.test'`,
-		// One ACTIVE snapshot per attachment (0011 constraint), same profile.
+		// One ACTIVE snapshot per attachment (0011) — but the DOCUMENT-scoped
+		// 0019 invariant (#228) allows only ONE active per document: the second
+		// attachment's snapshot is seeded inactive (historical generation).
 		`INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name,
 		     processor_version, profile_hash, document_id, profile, active)
-		   SELECT a.id, 'hb-hash', 'hbtest', '1', 'p-hb', a.document_id, '{}', true
+		   SELECT a.id, 'hb-hash', 'hbtest', '1', 'p-hb', a.document_id, '{}',
+		          a.zotero_key = 'ATTHB1'
 		   FROM zotero_attachments a WHERE a.zotero_key IN ('ATTHB1','ATTHB2')`,
 		// Same canonical form in both snapshots -> one guarded merge group.
 		`INSERT INTO processing_entities (snapshot_id, ref, text, canonical_form, type)

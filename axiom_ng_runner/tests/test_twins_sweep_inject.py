@@ -60,7 +60,7 @@ def test_inject_writes_page_map_and_spares_original(tmp_path: Path) -> None:
     build_epub(src)
     src_bytes = src.read_bytes()
 
-    stream, files, _opf = ts.epub_token_stream(src)
+    stream, _files, _opf = ts.epub_token_stream(src)
     idx_grosse = next(i for i, t in enumerate(stream)
                       if t[0].startswith("gross"))
     idx_komm = next(i for i, t in enumerate(stream) if t[0].startswith("kommun"))

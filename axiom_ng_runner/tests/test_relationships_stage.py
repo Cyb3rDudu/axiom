@@ -22,7 +22,6 @@ from axiom_ng_runner.config import Settings, settings
 from axiom_ng_runner.job_store import Job, JobStore
 from fastapi.testclient import TestClient
 
-
 # --- batch loop: progress + budget ----------------------------------------
 
 
@@ -64,7 +63,7 @@ def test_budget_deadline_stops_between_batches(monkeypatch):
     chunks = [{"text": "x" * 60, "metadata": {"chunk_id": f"chunk-{i:04d}"}}
               for i in range(60)]
     seen: list[tuple[int, int]] = []
-    rels, exceeded = runnermod._extract_real_relationships(
+    _rels, exceeded = runnermod._extract_real_relationships(
         [], chunks, {}, deadline=time.monotonic() + 0.15,
         on_progress=lambda d, t: seen.append((d, t)))
     assert exceeded is True
@@ -78,7 +77,7 @@ def test_budget_zero_disables_deadline(monkeypatch):
         "axiom_ng_runner.compute_core.relation_extractor.extract_relations_from_chunks",
         _fake_extractor(calls, []),
     )
-    rels, exceeded = runnermod._extract_real_relationships(
+    _rels, exceeded = runnermod._extract_real_relationships(
         [], [{"text": "x" * 60, "metadata": {"chunk_id": "c"}}] * 45,
         {}, deadline=None)
     assert exceeded is False and len(calls) == 3

@@ -843,17 +843,17 @@ func sourceFor(m repo.DocumentMeta, docID string) repo.SourceView {
 // locatorView renders the stored locator into the human form (issue Ziel 5).
 func locatorView(raw json.RawMessage, section []string) LocatorView {
 	var loc struct {
-		Type              string       `json:"type"`
-		PageLabelStart    string       `json:"page_label_start"`
-		PageLabelEnd      string       `json:"page_label_end"`
-		PhysicalPageStart *int         `json:"physical_page_start"`
-		PhysicalPageEnd   *int         `json:"physical_page_end"`
-		CFIStart          string       `json:"cfi_start"`
-		PageSource        string       `json:"page_source"`
-		Chapter           *int         `json:"chapter"` // W4: chapter-relative folios (restart-per-chapter books)
-		PageStart         *int         `json:"page_start"` // #229: trusted EPUB print pages
-		PageEnd           *int         `json:"page_end"`
-		ParagraphPages    [][]string   `json:"paragraph_pages"`
+		Type              string     `json:"type"`
+		PageLabelStart    string     `json:"page_label_start"`
+		PageLabelEnd      string     `json:"page_label_end"`
+		PhysicalPageStart *int       `json:"physical_page_start"`
+		PhysicalPageEnd   *int       `json:"physical_page_end"`
+		CFIStart          string     `json:"cfi_start"`
+		PageSource        string     `json:"page_source"`
+		Chapter           *int       `json:"chapter"`    // W4: chapter-relative folios (restart-per-chapter books)
+		PageStart         *int       `json:"page_start"` // #229: trusted EPUB print pages
+		PageEnd           *int       `json:"page_end"`
+		ParagraphPages    [][]string `json:"paragraph_pages"`
 	}
 	_ = json.Unmarshal(raw, &loc)
 
