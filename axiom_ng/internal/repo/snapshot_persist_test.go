@@ -1473,6 +1473,17 @@ func TestDocumentOneActiveSnapshotOnFormatSwitch(t *testing.T) {
 	if deletes != 1 {
 		t.Fatalf("old-format tombstones = %d, want 1", deletes)
 	}
+	// #228 review (W1): the cross-attachment tombstone must carry the RETIRED
+	// snapshot's OWN attachment_id, not the acting epub job's — the drainer's
+	// heal path materializes the payload identity into OpenSearch.
+	var tombAtt string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT payload->>'attachment_id' FROM opensearch_outbox WHERE operation='delete' AND snapshot_id=$1`, s1).Scan(&tombAtt); err != nil {
+		t.Fatal(err)
+	}
+	if tombAtt != h.attachmentID {
+		t.Fatalf("tombstone attachment_id = %q, want the retired format's own attachment %q", tombAtt, h.attachmentID)
+	}
 	var indexes int
 	if err := h.pool.QueryRow(ctx,
 		`SELECT count(*) FROM opensearch_outbox WHERE operation='index' AND snapshot_id=$1`, s2).Scan(&indexes); err != nil {

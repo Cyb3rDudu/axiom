@@ -95,25 +95,45 @@ func (r *Repo) PersistResult(ctx context.Context, jobID string, raw []byte, opts
 // double-counts both extractions) and returns their ids so the caller can
 // plan outbox tombstones (#127) in the same transaction. The 0019 partial
 // unique index makes the invariant structural.
-func deactivateSiblingsTx(ctx context.Context, tx pgx.Tx, ident jobIdentity, keepID string) ([]string, error) {
+//
+// #228 review (W1): returns (id, attachment_id) pairs — a deactivated
+// sibling usually belongs to a DIFFERENT attachment (the retired format of
+// a preferred switch), so each tombstone payload must carry the SIBLING's
+// own attachment_id, not the acting job's (the drainer's heal path
+// materializes the payload identity into OpenSearch; a wrong attachment_id
+// breaks passage-neighbor filtering).
+func deactivateSiblingsTx(ctx context.Context, tx pgx.Tx, ident jobIdentity, keepID string) ([]siblingSnapshot, error) {
 	rows, err := tx.Query(ctx, `
 		UPDATE processing_snapshots SET active=false, updated_at=now()
 		WHERE document_id=$1 AND active=true AND id<>$2
-		RETURNING id::text`,
+		RETURNING id::text, attachment_id::text`,
 		ident.documentID, keepID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var ids []string
+	var sibs []siblingSnapshot
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var s siblingSnapshot
+		if err := rows.Scan(&s.id, &s.attachmentID); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		sibs = append(sibs, s)
 	}
-	return ids, rows.Err()
+	return sibs, rows.Err()
+}
+
+// siblingSnapshot identifies one document-scoped deactivation victim: the
+// snapshot row retired by a newer persist and the attachment it belongs to.
+type siblingSnapshot struct {
+	id           string
+	attachmentID string
+}
+
+// tombstoneIdent builds the outbox identity for a deactivated sibling: the
+// sibling's OWN attachment, the shared document (#228 W1).
+func tombstoneIdent(ident jobIdentity, s siblingSnapshot) jobIdentity {
+	return jobIdentity{documentID: ident.documentID, attachmentID: s.attachmentID}
 }
 
 // enqueueOutboxTx plans an OpenSearch outbox operation for a snapshot inside
@@ -233,7 +253,7 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 				return "", fmt.Errorf("force replace deactivate siblings: %w", serr)
 			}
 			for _, s := range sib {
-				if oerr := enqueueOutboxTx(ctx, tx, s, OutboxOpDelete, ident); oerr != nil {
+				if oerr := enqueueOutboxTx(ctx, tx, s.id, OutboxOpDelete, tombstoneIdent(ident, s)); oerr != nil {
 					return "", fmt.Errorf("force replace sibling tombstone: %w", oerr)
 				}
 			}
@@ -292,7 +312,7 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 				return "", fmt.Errorf("replay deactivate other: %w", err)
 			}
 			for _, sib := range siblings {
-				if err := enqueueOutboxTx(ctx, tx, sib, OutboxOpDelete, ident); err != nil {
+				if err := enqueueOutboxTx(ctx, tx, sib.id, OutboxOpDelete, tombstoneIdent(ident, sib)); err != nil {
 					return "", fmt.Errorf("replay tombstone: %w", err)
 				}
 			}
@@ -496,7 +516,7 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 		return "", fmt.Errorf("deactivate previous snapshot: %w", err)
 	}
 	for _, sib := range siblings {
-		if err := enqueueOutboxTx(ctx, tx, sib, OutboxOpDelete, ident); err != nil {
+		if err := enqueueOutboxTx(ctx, tx, sib.id, OutboxOpDelete, tombstoneIdent(ident, sib)); err != nil {
 			return "", fmt.Errorf("tombstone superseded snapshot: %w", err)
 		}
 	}

@@ -191,8 +191,17 @@ func reconcileAttachmentSnapshotsTx(ctx context.Context, tx pgx.Tx) error {
 func reactivateRestoredAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
 	// Latest completed snapshot of a LIVE attachment that currently serves
 	// nothing. "Latest" = highest created_at (tie: max id) — deterministic.
+	// #228 review (C1): DISTINCT ON (s.document_id) — the 0019 invariant is
+	// one active snapshot per DOCUMENT, so a document whose PDF and EPUB
+	// attachments BOTH hold retired snapshots (restored twins) revives
+	// exactly ONE winner; the previous per-attachment pick selected both,
+	// the second activation hit the 0019 partial unique index and rolled
+	// back the ENTIRE canonical sync transaction — a permanent crash loop
+	// (stuck cursor, ingestion blocked for every document). The winner is
+	// the document's latest snapshot across its live attachments
+	// (created_at DESC, tie: max id — deterministic).
 	rows, err := tx.Query(ctx, `
-		SELECT DISTINCT ON (s.attachment_id)
+		SELECT DISTINCT ON (s.document_id)
 			s.id::text, s.document_id::text, s.attachment_id::text
 		FROM processing_snapshots s
 		JOIN zotero_attachments a ON a.id = s.attachment_id
@@ -205,7 +214,7 @@ func reactivateRestoredAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
 			SELECT 1 FROM processing_snapshots x
 			WHERE x.document_id = s.document_id AND x.active
 		  )
-		ORDER BY s.attachment_id, s.created_at DESC, s.id DESC`)
+		ORDER BY s.document_id, s.created_at DESC, s.id DESC`)
 	if err != nil {
 		return err
 	}
@@ -223,9 +232,22 @@ func reactivateRestoredAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
 		return err
 	}
 	for _, b := range revives {
-		if _, err := tx.Exec(ctx, `
-			UPDATE processing_snapshots SET active=true, updated_at=now() WHERE id=$1`, b.snap); err != nil {
+		// Belt-and-braces: the activation re-checks the document-scoped guard
+		// so a stale candidate picked between the SELECT above and this UPDATE
+		// (or a future regression of the query) can never land a second active
+		// snapshot and fail the whole sync on the 0019 index.
+		tag, err := tx.Exec(ctx, `
+			UPDATE processing_snapshots SET active=true, updated_at=now()
+			WHERE id=$1 AND NOT EXISTS (
+				SELECT 1 FROM processing_snapshots x
+				WHERE x.document_id = (SELECT document_id FROM processing_snapshots WHERE id=$1)
+					AND x.active AND x.id<>$1
+			)`, b.snap)
+		if err != nil {
 			return fmt.Errorf("reactivate restored-attachment snapshot %s: %w", b.snap, err)
+		}
+		if tag.RowsAffected() == 0 {
+			continue // another candidate won the document — nothing to re-index
 		}
 		if err := enqueueOutboxTx(ctx, tx, b.snap, OutboxOpIndex,
 			jobIdentity{documentID: b.doc, attachmentID: b.att}); err != nil {
