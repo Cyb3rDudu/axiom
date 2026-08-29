@@ -1371,3 +1371,183 @@ func TestPersistLocatorRoundTripToDB(t *testing.T) {
 		t.Fatalf("locator.paragraph_pages lost in the DB after dispatch→persist (got %v)", back.ParagraphPages)
 	}
 }
+
+// --- #228: document-level canonical snapshot -------------------------------
+
+// seedSecondAttachment adds ANOTHER attachment (different format) to the
+// harness document plus a pending+claimed+processing job for it — the
+// preferred-format-switch scenario.
+func (h *persistHarness) seedSecondAttachment(t *testing.T, suffix, contentHash string) (attID, jobID string) {
+	t.Helper()
+	ctx := context.Background()
+	var docID string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT document_id FROM zotero_attachments WHERE id=$1`, h.attachmentID).Scan(&docID); err != nil {
+		t.Fatalf("doc lookup: %v", err)
+	}
+	if err := h.pool.QueryRow(ctx, `
+		INSERT INTO zotero_attachments
+		  (source_id, document_id, zotero_key, zotero_version, parent_zotero_key,
+		   link_mode, content_type, filename, local_path, content_hash, preferred)
+		SELECT source_id, document_id, $2, 1, parent_zotero_key,
+		       'linked_file', 'application/epub+zip', 'book.epub', '/tmp/book.epub', $3, true
+		FROM zotero_attachments WHERE id=$1
+		RETURNING id::text`, h.attachmentID, "ATTSWITCH"+suffix, contentHash).Scan(&attID); err != nil {
+		t.Fatalf("second attachment: %v", err)
+	}
+	if err := h.pool.QueryRow(ctx, `
+		INSERT INTO ingest_jobs (attachment_id, idempotency_key, input_snapshot, status, max_attempts)
+		VALUES ($1, $2, '{}', 'pending', 3) RETURNING id::text`,
+		attID, "idem-switch-"+suffix).Scan(&jobID); err != nil {
+		t.Fatalf("job: %v", err)
+	}
+	cj, err := h.rep.ClaimNextJob(ctx, defaultClaim("worker-switch"))
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := h.rep.MarkProcessing(ctx, cj.LeaseRef); err != nil {
+		t.Fatalf("mark processing: %v", err)
+	}
+	_ = docID
+	return attID, jobID
+}
+
+// TestDocumentOneActiveSnapshotOnFormatSwitch (#228 acceptance): persisting
+// the SECOND format's snapshot deactivates the first format's snapshot in
+// the same transaction and tombstones its chunks out of the index — one
+// active snapshot per document, KG counts stable (no double ingestion).
+func TestDocumentOneActiveSnapshotOnFormatSwitch(t *testing.T) {
+	h := newPersistHarness(t, "switch")
+	ctx := context.Background()
+
+	// format 1 (pdf) processes and activates
+	s1, err := h.rep.PersistResult(ctx, h.jobID, h.validResultBytes(t, 3),
+		PersistOptions{CapDim: 3, Artifacts: markdownArtifact()})
+	if err != nil {
+		t.Fatalf("persist 1: %v", err)
+	}
+
+	// preferred switches to the epub twin; its job completes
+	att2, job2 := h.seedSecondAttachment(t, "A", "sha256:epubswitch")
+	res := h.validResultRaw(3)
+	res.JobID = job2
+	res.Source.AttachmentID = att2
+	res.Source.ContentHash = "sha256:epubswitch"
+	res.Chunks[0].Text = "the epub view of the same book"
+	b, _ := json.Marshal(res)
+	s2, err := h.rep.PersistResult(ctx, job2, b, PersistOptions{CapDim: 3, Artifacts: markdownArtifact()})
+	if err != nil {
+		t.Fatalf("persist 2 (format switch): %v", err)
+	}
+
+	// one active snapshot per document — the OLD format is retired
+	var activeSnaps, activeChunks int
+	if err := h.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_snapshots s
+		JOIN zotero_attachments a ON a.id = s.attachment_id
+		WHERE a.document_id = (SELECT document_id FROM zotero_attachments WHERE id=$1)
+		  AND s.active`, att2).Scan(&activeSnaps); err != nil {
+		t.Fatal(err)
+	}
+	if activeSnaps != 1 {
+		t.Fatalf("active snapshots on document = %d, want 1", activeSnaps)
+	}
+	if err := h.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_chunks c
+		JOIN processing_snapshots s ON s.id = c.snapshot_id
+		JOIN zotero_attachments a ON a.id = s.attachment_id
+		WHERE a.document_id = (SELECT document_id FROM zotero_attachments WHERE id=$1)
+		  AND s.active`, att2).Scan(&activeChunks); err != nil {
+		t.Fatal(err)
+	}
+	if activeChunks != 1 {
+		t.Fatalf("active chunks on document = %d, want 1 (no double view)", activeChunks)
+	}
+
+	// the retired snapshot's chunks are tombstoned out of the index (same tx)
+	var deletes int
+	if err := h.pool.QueryRow(ctx,
+		`SELECT count(*) FROM opensearch_outbox WHERE operation='delete' AND snapshot_id=$1`, s1).Scan(&deletes); err != nil {
+		t.Fatal(err)
+	}
+	if deletes != 1 {
+		t.Fatalf("old-format tombstones = %d, want 1", deletes)
+	}
+	var indexes int
+	if err := h.pool.QueryRow(ctx,
+		`SELECT count(*) FROM opensearch_outbox WHERE operation='index' AND snapshot_id=$1`, s2).Scan(&indexes); err != nil {
+		t.Fatal(err)
+	}
+	if indexes != 1 {
+		t.Fatalf("new-format index ops = %d, want 1", indexes)
+	}
+
+	// #228 KG no-double-count: only the ACTIVE snapshot's entities are
+	// visible to consolidation (the retired PDF extraction contributes
+	// nothing — pre-#228 both extractions merged with doubled mentions).
+	var activeEntities int
+	if err := h.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_entities e
+		JOIN processing_snapshots s ON s.id = e.snapshot_id
+		JOIN zotero_attachments a ON a.id = s.attachment_id
+		WHERE a.document_id = (SELECT document_id FROM zotero_attachments WHERE id=$1)
+		  AND s.active`, att2).Scan(&activeEntities); err != nil {
+		t.Fatal(err)
+	}
+	if activeEntities != 1 {
+		t.Fatalf("active entities on document = %d, want 1", activeEntities)
+	}
+
+	// Re-ingest direction: an identity REPLAY of the old PDF job reactivates
+	// its snapshot — and must deactivate the EPUB snapshot in the same tx
+	// (exactly one active per document, no double view after a re-run).
+	if _, err := h.rep.PersistResult(ctx, h.jobID, h.validResultBytes(t, 3),
+		PersistOptions{CapDim: 3, Artifacts: markdownArtifact()}); err != nil {
+		t.Fatalf("replay old format: %v", err)
+	}
+	var activeAfterReplay int
+	if err := h.pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_snapshots s
+		JOIN zotero_attachments a ON a.id = s.attachment_id
+		WHERE a.document_id = (SELECT document_id FROM zotero_attachments WHERE id=$1)
+		  AND s.active`, att2).Scan(&activeAfterReplay); err != nil {
+		t.Fatal(err)
+	}
+	if activeAfterReplay != 1 {
+		t.Fatalf("active snapshots after re-ingest = %d, want 1", activeAfterReplay)
+	}
+	var activeSnap string
+	if err := h.pool.QueryRow(ctx, `
+		SELECT s.id::text FROM processing_snapshots s
+		JOIN zotero_attachments a ON a.id = s.attachment_id
+		WHERE a.document_id = (SELECT document_id FROM zotero_attachments WHERE id=$1)
+		  AND s.active`, att2).Scan(&activeSnap); err != nil {
+		t.Fatal(err)
+	}
+	if activeSnap != s1 {
+		t.Fatalf("replay must reactivate the replayed identity %s, got %s", s1, activeSnap)
+	}
+}
+
+// TestDocumentOneActiveSnapshotUniqueIndex (#228 enforcement): a rogue
+// writer activating a second format's snapshot directly FAILS loudly on
+// the 0019 partial unique index instead of building duplicates.
+func TestDocumentOneActiveSnapshotUniqueIndex(t *testing.T) {
+	h := newPersistHarness(t, "uq")
+	ctx := context.Background()
+	if _, err := h.rep.PersistResult(ctx, h.jobID, h.validResultBytes(t, 3),
+		PersistOptions{CapDim: 3, Artifacts: markdownArtifact()}); err != nil {
+		t.Fatalf("persist 1: %v", err)
+	}
+	att2, _ := h.seedSecondAttachment(t, "B", "sha256:uqswitch")
+	// rogue: insert an ACTIVE snapshot for the second format directly
+	_, err := h.pool.Exec(ctx, `
+		INSERT INTO processing_snapshots
+		  (attachment_id, content_hash, processor_name, processor_version, profile_hash,
+		   document_id, active)
+		SELECT $1, 'sha256:rogue', 'rogue', '1', 'rogue', document_id, true
+		FROM zotero_attachments WHERE id=$1`, att2)
+	if err == nil || !strings.Contains(err.Error(), "processing_snapshots_one_active_per_document_uq") {
+		t.Fatalf("rogue second active snapshot must fail on the 0019 index, got: %v", err)
+	}
+}

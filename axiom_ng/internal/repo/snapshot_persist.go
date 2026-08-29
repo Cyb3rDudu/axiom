@@ -88,15 +88,19 @@ func (r *Repo) PersistResult(ctx context.Context, jobID string, raw []byte, opts
 	return snapshotID, nil
 }
 
-// deactivateSiblingsTx flips every OTHER active snapshot of the attachment to
-// inactive (#125 scope) and returns their ids so the caller can plan outbox
-// tombstones (#127) in the same transaction.
+// deactivateSiblingsTx flips every OTHER active snapshot of the DOCUMENT to
+// inactive (#125 attachment scope, widened to document scope by #228: a
+// preferred-attachment format switch PDF↔EPUB must retire the old format's
+// snapshot too, or retrieval serves the content twice and the KG
+// double-counts both extractions) and returns their ids so the caller can
+// plan outbox tombstones (#127) in the same transaction. The 0019 partial
+// unique index makes the invariant structural.
 func deactivateSiblingsTx(ctx context.Context, tx pgx.Tx, ident jobIdentity, keepID string) ([]string, error) {
 	rows, err := tx.Query(ctx, `
 		UPDATE processing_snapshots SET active=false, updated_at=now()
-		WHERE document_id=$1 AND attachment_id=$2 AND active=true AND id<>$3
+		WHERE document_id=$1 AND active=true AND id<>$2
 		RETURNING id::text`,
-		ident.documentID, ident.attachmentID, keepID)
+		ident.documentID, keepID)
 	if err != nil {
 		return nil, err
 	}

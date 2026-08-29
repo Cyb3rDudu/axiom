@@ -156,6 +156,20 @@ submit path `POST /api/repair/{case}/verdict` accepts `healed_file` +
 the boundary. `publication_year` is NULL-safe in both case-item scans
 (COALESCE 0).
 
+### Document-level canonical snapshot (#228)
+
+A document carries AT MOST ONE active processing snapshot — the 0011
+per-attachment invariant enforced one level up (partial unique index 0019
+on `document_id WHERE active`). When a document's preferred attachment
+changes format (PDF ↔ EPUB twin), the persist transaction deactivates the
+old format's snapshot and tombstones its chunks out of the index in the
+same commit; an identity replay of the old job reactivates its snapshot
+and retires the other the same way. Retrieval serves one content view per
+document and the KG consolidates exactly one extraction (no mention
+double-counts). Rogue/mixed-binary writers fail loudly on the index
+instead of building duplicates. Rollout: production swept clean (0
+documents with >1 active snapshot, 2026-08-31) before the migration.
+
 ### Relationships stage: early-commit, progress, budget (#225)
 
 Chunks + embeddings (+entities) are committed to the job store BEFORE the

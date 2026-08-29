@@ -199,8 +199,11 @@ func reactivateRestoredAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
 		WHERE a.deleted = false
 		  AND s.active = false
 		  AND NOT EXISTS (
+			-- #228: document scope — the 0019 invariant is one active per
+			-- DOCUMENT; reviving a second format's snapshot next to the
+			-- document's current canonical view would violate it.
 			SELECT 1 FROM processing_snapshots x
-			WHERE x.attachment_id = s.attachment_id AND x.active
+			WHERE x.document_id = s.document_id AND x.active
 		  )
 		ORDER BY s.attachment_id, s.created_at DESC, s.id DESC`)
 	if err != nil {
