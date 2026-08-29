@@ -181,3 +181,34 @@ func TestRepairVerdictRequiresInRepairIT(t *testing.T) {
 		t.Fatal("MarkRepairHealed on a queued case must error")
 	}
 }
+
+// TestRepairCaseItemNullYearIT (#227): a document with publication_year
+// NULL must not kill the case item resolution — the scan COALESCEs to 0
+// and the item is served (a NULL year used to crash the queue listing and
+// the invoker's RepairCaseItem).
+func TestRepairCaseItemNullYearIT(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	caseID := seedRepairCase(t, lr, "ATT-NY", 0, true)
+	var attID string
+	if err := lr.pool.QueryRow(ctx,
+		`SELECT attachment_id::text FROM repair_cases WHERE id=$1`, caseID).Scan(&attID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_documents SET publication_year = NULL`); err != nil {
+		t.Fatalf("null year: %v", err)
+	}
+	item, err := lr.rep.RepairCaseItem(ctx, caseID)
+	if err != nil {
+		t.Fatalf("NULL publication_year must degrade to 0, not fail: %v", err)
+	}
+	if item.Year != 0 {
+		t.Fatalf("year = %d, want 0 (COALESCE)", item.Year)
+	}
+	if item.AttachmentKey != "ATT-NY" {
+		t.Fatalf("item key = %q", item.AttachmentKey)
+	}
+	_ = attID
+}

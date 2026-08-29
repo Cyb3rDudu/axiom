@@ -49,7 +49,7 @@ type RepairItem struct {
 func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT c.id::text, a.id::text, a.zotero_key, d.zotero_key,
-		       d.title, d.creators, d.publication_year, COALESCE(d.publisher, ''),
+		       d.title, d.creators, COALESCE(d.publication_year, 0), COALESCE(d.publisher, ''),
 		       a.local_path, COALESCE(a.content_type, '')
 		FROM repair_cases c
 		JOIN zotero_attachments a ON a.id = c.attachment_id AND a.deleted = false

@@ -45,6 +45,7 @@ type repairQueueItem struct {
 	DocumentKey   string           `json:"document_zotero_key"`
 	LocalPath     string           `json:"local_path"`
 	EPUBPath      string           `json:"epub_path,omitempty"`
+	ContentType   string           `json:"content_type"`
 }
 
 func (s *Server) handleRepairQueue(w http.ResponseWriter, r *http.Request) {
@@ -92,8 +93,8 @@ func buildQueue(cases []repo.RepairCase,
 
 func (s *Server) repairItemFor(r *http.Request, c *repo.RepairCase) (*repairQueueItem, error) {
 	row := s.repairRepo.Pool().QueryRow(r.Context(), `
-		SELECT d.title, d.creators, d.publication_year, d.zotero_key, COALESCE(d.publisher, ''),
-		       a.zotero_key, a.local_path,
+		SELECT d.title, d.creators, COALESCE(d.publication_year, 0), d.zotero_key, COALESCE(d.publisher, ''),
+		       a.zotero_key, a.local_path, COALESCE(a.content_type, 'application/pdf'),
 		       (SELECT a2.local_path FROM zotero_attachments a2
 		        WHERE a2.document_id = d.id AND a2.deleted = false
 		          AND a2.content_type = 'application/epub+zip'
@@ -104,7 +105,7 @@ func (s *Server) repairItemFor(r *http.Request, c *repo.RepairCase) (*repairQueu
 	it.RepairCase = *c
 	var creators []byte
 	var epub *string
-	if err := row.Scan(&it.Title, &creators, &it.Year, &it.DocumentKey, &it.Publisher, &it.AttachmentKey, &it.LocalPath, &epub); err != nil {
+	if err := row.Scan(&it.Title, &creators, &it.Year, &it.DocumentKey, &it.Publisher, &it.AttachmentKey, &it.LocalPath, &epub, &it.ContentType); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal(creators, &it.Creators)
@@ -225,11 +226,12 @@ func (s *Server) handleRepairVerdict(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// AUTO-APPLY — the only write path. healed PDF required.
-	pdf, pdfErr := readHealedPDF(r)
-	if pdfErr != nil {
-		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, pdfErr.Error())
-		http.Error(w, pdfErr.Error(), http.StatusBadRequest)
+	// AUTO-APPLY — the only write path. healed artifact required (#227:
+	// healed_file+content_type, legacy healed_pdf = application/pdf).
+	artifact, contentType, artErr := readHealedFile(r)
+	if artErr != nil {
+		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, artErr.Error())
+		http.Error(w, artErr.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -248,7 +250,7 @@ func (s *Server) handleRepairVerdict(w http.ResponseWriter, r *http.Request) {
 	srcPath := strings.TrimPrefix(item.LocalPath, "file://")
 
 	body, status, err := s.applyRepair(r.Context(), liveRepairDeps{rep: s.repairRepo, write: s.zoteroWrite},
-		caseID, planVersion, item, srcPath, pdf)
+		caseID, planVersion, item, srcPath, artifact, contentType)
 	if err != nil {
 		http.Error(w, err.Error(), status)
 		return
@@ -257,28 +259,42 @@ func (s *Server) handleRepairVerdict(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
-// readHealedPDF extracts and validates the healed PDF from the multipart
-// form (follow-up W1: extracted so the guards are unit-testable without
-// the in_repair state the handler needs). Three guards: the file part must
-// EXIST, be FULLY read (stdlib: a mid-read error SURFACES instead of
-// silently uploading a truncated PDF — a manual loop swallowed it), and be
-// NON-EMPTY — an empty healed file must not reach quarantine/delete/create,
-// it would replace the original with a zero-byte husk (review W3b). The
-// error text doubles as the blocked_reason for MarkRepairFailed.
-func readHealedPDF(r *http.Request) ([]byte, error) {
-	file, _, err := r.FormFile("healed_pdf")
+// readHealedFile extracts and validates the healed artifact from the
+// multipart form (#227): the EPUB-capable shape is file field "healed_file"
+// plus "content_type" (application/pdf | application/epub+zip); the legacy
+// "healed_pdf" field maps to application/pdf unchanged. Guards (follow-up
+// W1, unchanged): the part must EXIST, be FULLY read (a mid-read error
+// SURFACES instead of silently uploading a truncated file), and be
+// NON-EMPTY — an empty healed file must not reach quarantine/delete/create
+// (review W3b). An unknown content_type is rejected at this trust boundary
+// instead of flowing into the Zotero upload. The error text doubles as the
+// blocked_reason for MarkRepairFailed.
+func readHealedFile(r *http.Request) ([]byte, string, error) {
+	file, _, err := r.FormFile("healed_file")
 	if err != nil {
-		return nil, fmt.Errorf("auto-apply ohne geheilte PDF: %w", err)
+		file, _, err = r.FormFile("healed_pdf") // legacy shape: PDF
+		if err != nil {
+			return nil, "", fmt.Errorf("auto-apply ohne geheilte Datei: %w", err)
+		}
 	}
 	defer file.Close()
-	pdf, err := io.ReadAll(file)
+	data, err := io.ReadAll(file)
 	if err != nil {
-		return nil, fmt.Errorf("healed_pdf lesen: %w", err)
+		return nil, "", fmt.Errorf("healed Datei lesen: %w", err)
 	}
-	if len(pdf) == 0 {
-		return nil, errors.New("healed_pdf ist leer")
+	if len(data) == 0 {
+		return nil, "", errors.New("geheilte Datei ist leer")
 	}
-	return pdf, nil
+	ct := strings.TrimSpace(r.FormValue("content_type"))
+	if ct == "" {
+		ct = "application/pdf"
+	}
+	switch ct {
+	case "application/pdf", "application/epub+zip":
+	default:
+		return nil, "", fmt.Errorf("content_type nicht erlaubt: %s", ct)
+	}
+	return data, ct, nil
 }
 
 // repairApplyDeps bundles every mutation of the auto-apply custody sequence
@@ -324,7 +340,7 @@ func (d liveRepairDeps) AuditWrite(ctx context.Context, caseID, attachmentID, ac
 // method so the existing ordering tests (repair_api_test.go, review W4)
 // keep pinning this call path unchanged.
 func (s *Server) applyRepair(ctx context.Context, d repairApplyDeps, caseID string, planVersion int,
-	item *repairQueueItem, srcPath string, pdf []byte) (map[string]any, int, error) {
+	item *repairQueueItem, srcPath string, artifact []byte, contentType string) (map[string]any, int, error) {
 	res, err := repair.Apply(ctx, d, s.quarantineRoot, repair.ApplyCase{
 		CaseID:        caseID,
 		AttachmentID:  item.AttachmentID,
@@ -335,8 +351,9 @@ func (s *Server) applyRepair(ctx context.Context, d repairApplyDeps, caseID stri
 		Year:          item.Year,
 		Publisher:     item.Publisher,
 		SrcPath:       srcPath,
+		ContentType:   contentType,
 		PlanVersion:   planVersion,
-	}, pdf)
+	}, artifact)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, repair.ErrZoteroWrite) {

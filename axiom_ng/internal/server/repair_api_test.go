@@ -90,7 +90,7 @@ func applyFixture() (*Server, *fakeApply, *repairQueueItem) {
 func TestApplyRepairAuditFailClosedBeforeDelete(t *testing.T) {
 	s, f, item := applyFixture()
 	f.auditQuarErr = errors.New("db down")
-	_, status, err := s.applyRepair(context.Background(), f, "case-1", 1, item, "/tmp/src.pdf", []byte("PDF"))
+	_, status, err := s.applyRepair(context.Background(), f, "case-1", 1, item, "/tmp/src.pdf", []byte("PDF"), "application/pdf")
 	if err == nil || status != http.StatusInternalServerError {
 		t.Fatalf("audit-fehler muss 500/fail-closed sein, got %d/%v", status, err)
 	}
@@ -109,7 +109,7 @@ func TestApplyRepairAuditFailClosedBeforeDelete(t *testing.T) {
 // the custody contract this test pins.
 func TestApplyRepairCustodyOrder(t *testing.T) {
 	s, f, item := applyFixture()
-	body, status, err := s.applyRepair(context.Background(), f, "case-1", 1, item, "/tmp/src.pdf", []byte("PDF"))
+	body, status, err := s.applyRepair(context.Background(), f, "case-1", 1, item, "/tmp/src.pdf", []byte("PDF"), "application/pdf")
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("apply: %d %v", status, err)
 	}
@@ -134,7 +134,7 @@ func TestApplyRepairCustodyOrder(t *testing.T) {
 func TestApplyRepairDeleteFailureStopsCreate(t *testing.T) {
 	s, f, item := applyFixture()
 	f.deleteErr = errors.New("zotero 502")
-	_, status, err := s.applyRepair(context.Background(), f, "case-1", 1, item, "/tmp/src.pdf", []byte("PDF"))
+	_, status, err := s.applyRepair(context.Background(), f, "case-1", 1, item, "/tmp/src.pdf", []byte("PDF"), "application/pdf")
 	if err == nil || status != http.StatusBadGateway {
 		t.Fatalf("delete-fehler muss 502 sein, got %d/%v", status, err)
 	}
@@ -183,11 +183,22 @@ func TestRepairVerdictMalformedScoreRejected(t *testing.T) {
 // no part at all when hasFile is false).
 func healedPDFRequest(t *testing.T, hasFile bool, content string) *http.Request {
 	t.Helper()
+	return healedFileRequest(t, hasFile, "healed_pdf", "", content)
+}
+
+// #227 shape: healed_file part + content_type form field.
+func healedFileRequest(t *testing.T, hasFile bool, field, contentType, content string) *http.Request {
+	t.Helper()
 	var b strings.Builder
-	fmt.Fprintf(&b, "--BOUND\r\n")
+	b.WriteString("--BOUND\r\n")
+	if contentType != "" {
+		b.WriteString("Content-Disposition: form-data; name=\"content_type\"\r\n\r\n")
+		b.WriteString(contentType)
+		b.WriteString("\r\n--BOUND\r\n")
+	}
 	if hasFile {
-		b.WriteString("Content-Disposition: form-data; name=\"healed_pdf\"; filename=\"h.pdf\"\r\n")
-		b.WriteString("Content-Type: application/pdf\r\n\r\n")
+		fmt.Fprintf(&b, "Content-Disposition: form-data; name=\"%s\"; filename=\"h.bin\"\r\n", field)
+		b.WriteString("Content-Type: application/octet-stream\r\n\r\n")
 		b.WriteString(content)
 		b.WriteString("\r\n")
 	}
@@ -202,18 +213,28 @@ func healedPDFRequest(t *testing.T, hasFile bool, content string) *http.Request 
 // part fails with 'healed_pdf ist leer' so a zero-byte husk can never
 // reach quarantine/delete/create. The in_repair→MarkRepairFailed HTTP
 // flow around it needs the IT DSN (DSN proviso).
-func TestReadHealedPDFEmptyGuard(t *testing.T) {
-	if _, err := readHealedPDF(healedPDFRequest(t, false, "")); err == nil {
-		t.Fatal("fehlender healed_pdf-part muss fehlschlagen")
-	} else if !strings.Contains(err.Error(), "ohne geheilte PDF") {
+func TestReadHealedFileGuards(t *testing.T) {
+	// legacy shape: healed_pdf → application/pdf default
+	if _, _, err := readHealedFile(healedPDFRequest(t, false, "")); err == nil {
+		t.Fatal("fehlender part muss fehlschlagen")
+	} else if !strings.Contains(err.Error(), "ohne geheilte Datei") {
 		t.Fatalf("fehlender part: unerwarteter fehler %v", err)
 	}
-	pdf, err := readHealedPDF(healedPDFRequest(t, true, "PDFBYTES"))
-	if err != nil || string(pdf) != "PDFBYTES" {
-		t.Fatalf("content: pdf=%q err=%v", pdf, err)
+	data, ct, err := readHealedFile(healedPDFRequest(t, true, "PDFBYTES"))
+	if err != nil || string(data) != "PDFBYTES" || ct != "application/pdf" {
+		t.Fatalf("legacy pdf: data=%q ct=%q err=%v", data, ct, err)
 	}
-	if _, err := readHealedPDF(healedPDFRequest(t, true, "")); err == nil || !strings.Contains(err.Error(), "ist leer") {
-		t.Fatalf("leere pdf muss mit 'ist leer' fehlschlagen, got %v", err)
+	if _, _, err := readHealedFile(healedFileRequest(t, true, "healed_pdf", "", "")); err == nil || !strings.Contains(err.Error(), "ist leer") {
+		t.Fatalf("leere Datei muss mit 'ist leer' fehlschlagen, got %v", err)
+	}
+	// #227 EPUB shape: healed_file + content_type
+	data, ct, err = readHealedFile(healedFileRequest(t, true, "healed_file", "application/epub+zip", "PKEPUB"))
+	if err != nil || string(data) != "PKEPUB" || ct != "application/epub+zip" {
+		t.Fatalf("epub: data=%q ct=%q err=%v", data, ct, err)
+	}
+	// trust boundary: unknown content_type rejected
+	if _, _, err := readHealedFile(healedFileRequest(t, true, "healed_file", "text/html", "X")); err == nil || !strings.Contains(err.Error(), "nicht erlaubt") {
+		t.Fatalf("unbekannter content_type muss abgelehnt werden, got %v", err)
 	}
 }
 
