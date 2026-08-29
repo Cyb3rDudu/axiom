@@ -164,6 +164,11 @@ def _status_payload(job: Job) -> dict[str, Any]:
         "job_id": job.job_id,
         "status": job.status,
         "stage": job.stage,
+        "progress": job.progress or {"completed_units": 0, "total_units": 0, "unit": ""},
+        # #225 early-commit visibility: operators and the E2E can see that
+        # a partial result is already committed (chunks/embeddings safe)
+        # even while a late stage is still running or has failed.
+        "partial_result_available": bool(job.partial and job.result),
         "error": job.error,
         "started_at": _iso() if job.created_at else None,
         "updated_at": _iso() if job.updated_at else None,
@@ -348,8 +353,22 @@ def _run_compute(job: Job) -> None:
                 # the store keeps the job visible as running.
                 _store_impl().set_status(job, "running", stage=stage)
 
+            def _progress(completed: int, total: int, unit: str) -> None:
+                # #225: §9 progress for long-running stage loops — throttled
+                # to every 10th unit (or the last) so the disk write per
+                # batch stays cheap even for 400+ chunk books.
+                if completed % 10 == 0 or completed >= total:
+                    _store_impl().set_progress(job, completed, total, unit)
+
+            def _commit(result: dict) -> None:
+                # #225 early-commit: chunks/embeddings/entities persist
+                # BEFORE the relationships stage runs; a late-stage abort
+                # leaves this snapshot retrievable.
+                _store_impl().set_partial(job, result)
+
             _store_impl().set_status(job, "running", stage="validate_source")
-            result = compute(job.request, work_dir, set_stage=_advance)
+            result = compute(job.request, work_dir, set_stage=_advance,
+                             commit=_commit, set_progress=_progress)
             _store_impl().set_result(job, result)
         except SourceError as exc:
             _store_impl().set_error(

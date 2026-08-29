@@ -156,6 +156,24 @@ submit path `POST /api/repair/{case}/verdict` accepts `healed_file` +
 the boundary. `publication_year` is NULL-safe in both case-item scans
 (COALESCE 0).
 
+### Relationships stage: early-commit, progress, budget (#225)
+
+Chunks + embeddings (+entities) are committed to the job store BEFORE the
+relationships stage runs — a late-stage abort (budget, hang, crash) can no
+longer discard the completed work. mREBEL extraction runs in batches of 20
+chunks with §9 progress (`done/total`) reported per batch (the stage never
+shows 0/0 again) and an optional wall-clock budget
+(`AXIOM_PROCESSOR_RELATIONSHIPS_BUDGET_SECONDS`, default 900s): on expiry
+the loop stops between batches and the job completes as an honest partial
+result — retrievable chunks, `manifest.stage_completion` documents
+`relationships: false` with the reason `STAGE_BUDGET_EXCEEDED`, the lease
+ends naturally. `GET /v1/jobs/{id}` shows `partial_result_available` while
+a partial result is committed (also after a hard crash — the result
+endpoint stays completed-only per §9, but the status and the on-disk job
+manifest name the committed work). force_rebuild (§19) reruns the whole
+job: the runner holds no corpus state to resume from — the early commit
+protects RETRIEVABILITY of the work, not cross-job resume.
+
 ## Fixer: event runner (owner decision)
 
 One process per Zotero attachment key, invoked via the tested wrapper

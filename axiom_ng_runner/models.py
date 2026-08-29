@@ -123,6 +123,10 @@ class JobStatus(BaseModel):
     status: str
     stage: str | None = None
     progress: Progress = Field(default_factory=Progress)
+    # #225 early-commit: true once chunks/embeddings are committed and a
+    # late stage (relationships) is still running or has failed — the
+    # partial result exists, the work is not lost.
+    partial_result_available: bool = False
     error: ProcessingError | None = None
     started_at: str | None = None
     updated_at: str | None = None

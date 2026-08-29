@@ -238,7 +238,7 @@ class TestExtractRealRelationships:
             "relation": "acquires", "chunk_id": "chunk-0001",
         }])
         entities = self._entities()
-        rels = runner._extract_real_relationships(
+        rels, _budget = runner._extract_real_relationships(
             entities, [{"metadata": {"chunk_id": "chunk-0001"}}],
             {"chunk-0001": "Beta Corp acquires NewCo today"},
         )
@@ -263,7 +263,7 @@ class TestExtractRealRelationships:
              "tail_type": "org", "relation": "acquires", "chunk_id": "chunk-0002"},
         ])
         entities = self._entities()
-        rels = runner._extract_real_relationships(
+        rels, _budget = runner._extract_real_relationships(
             entities, [],
             {"chunk-0001": "Beta Corp Gamma Ltd", "chunk-0002": "Beta Corp Gamma Ltd"},
         )
@@ -276,7 +276,7 @@ class TestExtractRealRelationships:
             "tail": "Beta Corp", "tail_type": "org",
             "relation": "part of", "chunk_id": "chunk-0001",
         }])
-        rels = runner._extract_real_relationships(self._entities(), [], {})
+        rels, _budget = runner._extract_real_relationships(self._entities(), [], {})
         assert rels == []
 
     def test_no_chunk_id_skipped(self, monkeypatch):
@@ -284,7 +284,7 @@ class TestExtractRealRelationships:
             "head": "Delta AG", "head_type": "org", "tail": "Omega SE",
             "tail_type": "org", "relation": "acquires", "chunk_id": "",
         }])
-        rels = runner._extract_real_relationships(self._entities(), [], {})
+        rels, _budget = runner._extract_real_relationships(self._entities(), [], {})
         assert rels == []
 
     def test_substring_resolution_and_min_length_floor(self, monkeypatch):
@@ -301,7 +301,7 @@ class TestExtractRealRelationships:
              "canonical_form": "european central bank", "type": "ORGANIZATION",
              "description": None, "mentions": []},
         ]
-        rels = runner._extract_real_relationships(
+        rels, _budget = runner._extract_real_relationships(
             entities, [], {"chunk-0001": "The European Central Bank and the UN met"},
         )
         assert rels[0]["source_entity_ref"] == "entity-0001"
@@ -317,7 +317,7 @@ class TestExtractRealRelationships:
             {"head": "Beta Corp", "head_type": "org", "tail": "Gamma Ltd",
              "tail_type": "org", "relation": "acquires\nnow", "chunk_id": "chunk-0001"},
         ])
-        rels = runner._extract_real_relationships(
+        rels, _budget = runner._extract_real_relationships(
             self._entities(), [], {"chunk-0001": "Beta Corp Gamma Ltd"},
         )
         assert len(rels) == 2
@@ -330,7 +330,7 @@ class TestExtractRealRelationships:
             {"head": "Beta Corp", "head_type": "org", "tail": "Gamma Ltd",
              "tail_type": "org", "relation": "acquires", "chunk_id": "chunk-0001"},
         ])
-        rels = runner._extract_real_relationships(
+        rels, _budget = runner._extract_real_relationships(
             self._entities(), [], {"chunk-0001": "Beta Corp Gamma Ltd"},
         )
         assert len(rels) == 1
@@ -348,7 +348,7 @@ class TestExtractRealRelationships:
             "canonical_form": "beta corp", "type": "ORGANIZATION",
             "description": None, "mentions": [],
         }]
-        rels = runner._extract_real_relationships(
+        rels, _budget = runner._extract_real_relationships(
             entities, [], {"chunk-0001": "Beta  Corp buys Omega SE"},
         )
         assert rels[0]["source_entity_ref"] == "entity-0001"

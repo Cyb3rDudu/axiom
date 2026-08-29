@@ -34,6 +34,11 @@ class Settings:
     # = auto-detect `epubcheck` on PATH; the light built-in checks run
     # regardless (epubcheck reported as not_available when absent).
     epubcheck_cmd: str = ""
+    # #225: wall-clock budget for the relationships stage (seconds). mREBEL
+    # over a full book is inherently slow on MPS (#179); exceeding the
+    # budget ends the stage HONESTLY (partial result, named reason) instead
+    # of an eternal lease. 0 disables the budget.
+    relationships_budget_seconds: float = 900.0
 
     @property
     def bind(self) -> tuple[str, int]:
@@ -87,6 +92,9 @@ def load_settings() -> Settings:
         rerank_max_texts=max(1, _env_int("AXIOM_PROCESSOR_RERANK_MAX_TEXTS", 64)),
         warmup=_env_bool("AXIOM_PROCESSOR_WARMUP", True),
         epubcheck_cmd=os.getenv("AXIOM_PROCESSOR_EPUBCHECK_CMD", ""),
+        relationships_budget_seconds=_env_float(
+            "AXIOM_PROCESSOR_RELATIONSHIPS_BUDGET_SECONDS", 900.0
+        ),
     )
 
 

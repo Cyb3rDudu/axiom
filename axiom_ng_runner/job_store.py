@@ -41,6 +41,11 @@ class Job:
     stage: str = ""
     result: dict[str, Any] | None = None  # processor result once complete
     error: dict[str, Any] | None = None  # contract-shaped error
+    # #225 early-commit: chunks/embeddings are committed BEFORE the
+    # relationships stage runs; a late-stage abort leaves the partial
+    # result retrievable (status stays running until the final verdict).
+    partial: bool = False
+    progress: dict[str, Any] | None = None  # §9 progress {completed,total,unit}
     acked: bool = False
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -55,6 +60,8 @@ class Job:
             "stage": self.stage,
             "result": self.result,
             "error": self.error,
+            "partial": self.partial,
+            "progress": self.progress,
             "acked": self.acked,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -83,6 +90,8 @@ class Job:
             stage=data.get("stage", ""),
             result=data.get("result"),
             error=data.get("error"),
+            partial=data.get("partial", False),
+            progress=data.get("progress"),
             acked=data.get("acked", False),
             created_at=data.get("created_at", 0.0),
             updated_at=data.get("updated_at", 0.0),
@@ -197,6 +206,31 @@ class JobStore:
                 return
             job.result = result
             job.status = result.get("status", "completed")
+            job.save()
+
+    def set_partial(self, job: Job, result: dict[str, Any]) -> None:
+        """#225 early-commit: store the so-far-complete result while the job
+        stays running. The dispatcher never sees a terminal state, so no
+        race with the live compute; a later set_result overwrites, and an
+        abort leaves this snapshot retrievable for forensics/E2E."""
+        with self._lock:
+            if job.status == "cancelled":
+                return
+            job.result = result
+            job.partial = True
+            job.save()
+
+    def set_progress(self, job: Job, completed: int, total: int, unit: str) -> None:
+        """#225: §9 progress for the live job status. Throttled by the
+        caller; only meaningful while running."""
+        with self._lock:
+            if job.status != "running":
+                return
+            job.progress = {
+                "completed_units": completed,
+                "total_units": total,
+                "unit": unit,
+            }
             job.save()
 
     def set_error(

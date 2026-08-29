@@ -25,6 +25,7 @@ import hashlib
 import logging
 import re
 import sys
+import time
 import zipfile
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -529,13 +530,22 @@ def _extract_real_relationships(
     entities: list[dict[str, Any]],
     chunk_dicts: list[dict[str, Any]],
     chunk_texts: dict[str, str],
-) -> list[dict[str, Any]]:
+    deadline: float | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
     """mREBEL triples → contract relationships.
+
+    #225: extraction runs in batches with per-batch progress (done/total
+    chunks — the stage counter never shows 0/0 again) and an optional
+    wall-clock deadline; on expiry the loop stops BETWEEN batches and the
+    caller completes the job honestly with the committed partial result
+    (STAGE_BUDGET_EXCEEDED), never an eternal lease.
 
     Triple endpoints are matched against the GLiNER entities (exact, then
     substring); unmatched endpoints become new entities — mREBEL finds
     entities GLiNER misses, and the validator only needs refs to resolve.
     Mutates `entities` (may append). Relationship dedup merges evidence.
+    Returns (relationships, budget_exceeded).
     """
     import re
 
@@ -543,7 +553,19 @@ def _extract_real_relationships(
         extract_relations_from_chunks,
     )
 
-    triples = extract_relations_from_chunks(chunk_dicts)
+    triples: list[dict[str, Any]] = []
+    budget_exceeded = False
+    BATCH = 20
+    if not chunk_dicts:  # pinned behavior: one extractor call even when empty
+        triples = extract_relations_from_chunks([])
+    for i in range(0, len(chunk_dicts), BATCH):
+        if deadline is not None and time.monotonic() > deadline:
+            budget_exceeded = True
+            log.warning("relationships deadline hit before batch at %d/%d", i, len(chunk_dicts))
+            break
+        triples.extend(extract_relations_from_chunks(chunk_dicts[i:i + BATCH]))
+        if on_progress is not None:
+            on_progress(min(i + BATCH, len(chunk_dicts)), len(chunk_dicts))
 
     by_text: dict[str, str] = {}
     for e in entities:
@@ -617,7 +639,7 @@ def _extract_real_relationships(
                 "metadata": {},
             }
         )
-    return rels
+    return rels, budget_exceeded
 
 
 def _assign_contract_chunk_ids(chunk_dicts: list[dict[str, Any]]) -> None:
@@ -854,14 +876,19 @@ def compute(
     request: dict[str, Any],
     work_dir: Path,
     set_stage: Callable[[str], None] | None = None,
+    commit: Callable[[dict[str, Any]], None] | None = None,
+    set_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Run the pure compute pipeline for a validated source. Returns a
     contract processor-result dict (contract §10). Work dir is per-job and
     already validated by the caller. ``set_stage`` advances the live job
-    stage (GET /v1/jobs) while compute runs (§9)."""
+    stage (GET /v1/jobs) while compute runs (§9). ``commit`` (#225
+    early-commit) lets the pipeline persist the so-far-complete result
+    before the relationships stage runs; ``set_progress`` reports §9
+    progress for long-running stage loops."""
     backend = settings.get().compute_backend
     if backend == "real":
-        result = _compute_real(request, work_dir, set_stage)
+        result = _compute_real(request, work_dir, set_stage, commit, set_progress)
         if result is not None:
             return result
         log.warning("real backend unavailable; falling back to reference")
@@ -940,13 +967,15 @@ def _compute_real(
     request: dict[str, Any],
     work_dir: Path,
     set_stage: Callable[[str], None] | None = None,
+    commit: Callable[[dict[str, Any]], None] | None = None,
+    set_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any] | None:
     """Wire the existing heavy pipeline (Marker/pdf_worker, epub_worker,
     embedder, extractors). Returns None if the heavy deps are unavailable so
     the caller can fall back. The contract black-box suite runs against
     ``reference``."""
     try:
-        return _real_pipeline(request, work_dir, set_stage)
+        return _real_pipeline(request, work_dir, set_stage, commit, set_progress)
     except ImportError as err:
         log.warning("real compute deps unavailable: %s", err)
         return None
@@ -983,6 +1012,8 @@ def _real_pipeline(
     request: dict[str, Any],
     work_dir: Path,
     set_stage: Callable[[str], None] | None = None,
+    commit: Callable[[dict[str, Any]], None] | None = None,
+    set_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     import json as _json
     import subprocess
@@ -1213,33 +1244,77 @@ def _real_pipeline(
     if proc_opt.get("extract_entities") or proc_opt.get("extract_relationships"):
         enter("entities")
         real_entities = _extract_real_entities(chunk_items)
-    if proc_opt.get("extract_relationships") and real_entities is not None:
+    # #225 early-commit: everything except relationships is done — build
+    # and commit the result NOW so a late-stage abort (budget, hang, crash)
+    # cannot discard chunks/embeddings/entities. The relationships stage
+    # then patches the same dict; the caller's final set_result overwrites
+    # the stored snapshot. stage_completion documents what is present.
+    want_relationships = bool(
+        proc_opt.get("extract_relationships") and real_entities is not None
+    )
+    stage_completion = {
+        "chunks": True,
+        "embeddings": bool(proc_opt.get("compute_dense_embeddings")),
+        "entities": real_entities is not None,
+        "relationships": False,
+        "relationships_reason": None,
+    }
+
+    def _finish(rels: list[dict[str, Any]] | None) -> dict[str, Any]:
+        result = _build_reference_result(
+            request=request,
+            work_dir=work_dir,
+            chunk_dicts=chunk_dicts or [],
+            page_label_map=page_label_map,
+            markdown_path=out_md,
+            attachment_id=attach["attachment_id"],
+            content_hash="sha256:" + _sha256_hex(source_path),
+            source_page_count=len(page_label_map) if page_label_map else 0,
+            image_artifacts=image_artifacts,
+            real_entities=real_entities,
+            real_relationships=rels,
+            stage_timings=stage_timings,
+            page_source_map=page_source_map,
+            page_chapter_map=page_chapter_map,
+        )
+        if "stage_completion" in (result.get("manifest") or {}):
+            result["manifest"]["stage_completion"] = stage_completion
+        else:
+            result.setdefault("manifest", {})["stage_completion"] = stage_completion
+        return result
+
+    result = _finish(None)
+    if commit is not None:
+        commit(result)
+
+    if want_relationships:
         # mREBEL reads metadata['chunk_id'] as evidence — set the contract
         # ref so evidence_chunk_refs resolve without a second mapping.
         enter("relationships")
         _assign_contract_chunk_ids(chunk_dicts)
         chunk_texts = dict(chunk_items)
-        real_relationships = _extract_real_relationships(
-            real_entities, chunk_dicts, chunk_texts
+        budget = settings.get().relationships_budget_seconds
+        deadline = (time.monotonic() + budget) if budget > 0 else None
+        real_relationships, budget_exceeded = _extract_real_relationships(
+            real_entities, chunk_dicts, chunk_texts,
+            deadline=deadline,
+            on_progress=(lambda d, t: set_progress(d, t, "chunks"))
+            if set_progress is not None else None,
         )
+        if budget_exceeded:
+            # #225: honest partial completion, not an eternal lease — the
+            # committed result stays fetchable; force_rebuild (§19) reruns
+            # the whole job (the runner holds no corpus state to resume
+            # from; the early commit protects retrievability, not resume).
+            stage_completion["relationships_reason"] = "STAGE_BUDGET_EXCEEDED"
+            log.warning("relationships stage budget (%ss) exceeded (%d chunks) — "
+                        "completing without relationships",
+                        budget, len(chunk_dicts))
+        stage_completion["relationships"] = not budget_exceeded
+        result = _finish(real_relationships)
 
     enter("assemble")
-    return _build_reference_result(
-        request=request,
-        work_dir=work_dir,
-        chunk_dicts=chunk_dicts or [],
-        page_label_map=page_label_map,
-        markdown_path=out_md,
-        attachment_id=attach["attachment_id"],
-        content_hash="sha256:" + _sha256_hex(source_path),
-        source_page_count=len(page_label_map) if page_label_map else 0,
-        image_artifacts=image_artifacts,
-        real_entities=real_entities,
-        real_relationships=real_relationships,
-        stage_timings=stage_timings,
-        page_source_map=page_source_map,
-        page_chapter_map=page_chapter_map,
-    )
+    return result
 
 
 def _collect_image_artifacts(
