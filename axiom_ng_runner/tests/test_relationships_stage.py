@@ -16,11 +16,17 @@ from __future__ import annotations
 import time
 
 import pytest
-from axiom_ng_runner import runner as runnermod
-from axiom_ng_runner.app import app
-from axiom_ng_runner.config import Settings, settings
-from axiom_ng_runner.job_store import Job, JobStore
-from fastapi.testclient import TestClient
+
+# CI light stack: runner.py imports compute_core.relation_extractor (mREBEL)
+# at module level, which needs torch — skip collection there instead of
+# failing (the tests themselves run on fakes; the heavy models are not used).
+pytest.importorskip("torch")
+
+from axiom_ng_runner import runner as runnermod  # noqa: E402
+from axiom_ng_runner.app import app  # noqa: E402
+from axiom_ng_runner.config import Settings, settings  # noqa: E402
+from axiom_ng_runner.job_store import Job, JobStore  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
 # --- batch loop: progress + budget ----------------------------------------
 
