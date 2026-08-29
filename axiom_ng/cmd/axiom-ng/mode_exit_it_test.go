@@ -137,31 +137,32 @@ func seedHeartbeatPair(t *testing.T, dsn string) {
 		`DELETE FROM processing_entities WHERE snapshot_id IN
 		   (SELECT id FROM processing_snapshots WHERE profile_hash = 'p-hb')`,
 		`DELETE FROM processing_snapshots WHERE profile_hash = 'p-hb'`,
-		`DELETE FROM zotero_attachments WHERE zotero_key IN ('ATTHB1', 'ATTHB2')`,
-		`DELETE FROM zotero_documents WHERE zotero_key = 'DOCHB'
+		`DELETE FROM zotero_attachments WHERE zotero_key IN ('ATTHB1', 'ATTHB2', 'ATTDOCHB1', 'ATTDOCHB2')`,
+		`DELETE FROM zotero_documents WHERE zotero_key IN ('DOCHB1', 'DOCHB2')
 		   AND source_id IN (SELECT id FROM zotero_sources WHERE base_url = 'https://hb.test')`,
 		`DELETE FROM zotero_sources WHERE base_url = 'https://hb.test'`,
-		// Fixture: one source, one document, two attachments.
+		// Fixture: one source, TWO documents (one attachment each) — the
+		// merge pair must live in different documents; two active snapshots
+		// under ONE document would violate the 0019 document-canonical
+		// invariant (#228).
 		`INSERT INTO zotero_sources (base_url, library_id, server_id)
 		   VALUES ('https://hb.test', 'lib-hb', 'srv-hb')`,
 		`INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
-		   SELECT s.id, 'DOCHB', 1, 'book', 'HB' FROM zotero_sources s
+		   SELECT s.id, dk, 1, 'book', 'HB' FROM zotero_sources s
+		   CROSS JOIN (SELECT unnest(ARRAY['DOCHB1','DOCHB2']) AS dk) x
 		   WHERE s.base_url = 'https://hb.test'`,
 		`INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
 		     parent_zotero_key, link_mode, content_type, filename, content_hash, preferred, deleted)
-		   SELECT s.id, d.id, k, 1, k, 'imported_file', 'application/pdf', 'hb.pdf', 'hb-hash', true, false
+		   SELECT s.id, d.id, 'ATT' || d.zotero_key, 1, d.zotero_key, 'imported_file',
+		          'application/pdf', 'hb.pdf', 'hb-hash', true, false
 		   FROM zotero_sources s
-		   JOIN zotero_documents d ON d.source_id = s.id AND d.zotero_key = 'DOCHB'
-		   CROSS JOIN (SELECT unnest(ARRAY['ATTHB1','ATTHB2']) AS k) x
+		   JOIN zotero_documents d ON d.source_id = s.id AND d.zotero_key IN ('DOCHB1','DOCHB2')
 		   WHERE s.base_url = 'https://hb.test'`,
-		// One ACTIVE snapshot per attachment (0011) — but the DOCUMENT-scoped
-		// 0019 invariant (#228) allows only ONE active per document: the second
-		// attachment's snapshot is seeded inactive (historical generation).
+		// One ACTIVE snapshot per attachment AND per document (0011 + 0019).
 		`INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name,
 		     processor_version, profile_hash, document_id, profile, active)
-		   SELECT a.id, 'hb-hash', 'hbtest', '1', 'p-hb', a.document_id, '{}',
-		          a.zotero_key = 'ATTHB1'
-		   FROM zotero_attachments a WHERE a.zotero_key IN ('ATTHB1','ATTHB2')`,
+		   SELECT a.id, 'hb-hash', 'hbtest', '1', 'p-hb', a.document_id, '{}', true
+		   FROM zotero_attachments a WHERE a.zotero_key IN ('ATTDOCHB1','ATTDOCHB2')`,
 		// Same canonical form in both snapshots -> one guarded merge group.
 		`INSERT INTO processing_entities (snapshot_id, ref, text, canonical_form, type)
 		   SELECT s.id, 'hb-ent', 'herzschlag', 'herzschlag', 'LOCATION'
