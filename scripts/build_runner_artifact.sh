@@ -31,9 +31,14 @@ fi
 MAMBA_ROOT_PREFIX="$DIST/tooling/mamba-root"
 export MAMBA_ROOT_PREFIX
 
-# --- conda env with python 3.11 --------------------------------------------
+# --- conda env with python 3.11 + pandoc (#224) ----------------------------
+# pandoc ships IN the artifact: epub_worker shells out to it for EPUB→Markdown
+# and a host-provided pandoc is a hidden dependency (E2E finding: production
+# runner died with "pandoc binary not found" once the carrier — which had it —
+# went to sleep; mirrors the #211 zstd lesson). conda-forge's pandoc is
+# self-contained next to the bundled interpreter.
 if [ ! -x "$PREFIX/bin/python" ]; then
-    "$MM" create -y -p "$PREFIX" -c conda-forge 'python=3.11' pip
+    "$MM" create -y -p "$PREFIX" -c conda-forge 'python=3.11' 'pandoc' pip
 fi
 PY="$PREFIX/bin/python"
 
@@ -65,6 +70,9 @@ rm -f "$BUILD/env.tar.gz"
 # ../axiom_ng_runner on sys.path even when the env shipped 0 module files). ---
 (
     cd / && "$STAGE/env/bin/python" -c 'import axiom_ng_runner, torch; print("staged import ok (neutral cwd), torch", torch.__version__, "mps", torch.backends.mps.is_available())'
+# #224: the EPUB path needs a bundled pandoc — verify it resolves from the
+# STAGED env with no host PATH contribution.
+"$STAGE/env/bin/pandoc" --version >/dev/null && echo "staged pandoc ok: $($(cd / && "$STAGE/env/bin/python" -c 'import shutil; print(shutil.which("pandoc"))'))"
 )
 
 # --- artifact -----------------------------------------------------------------
