@@ -44,6 +44,27 @@ func submitRetryable(err error) bool {
 	return true
 }
 
+// sourceDownloadRetryable reports whether a /v1/process error body names a
+// source-TRANSPORT cause (#235): the runner could not pull the source_url —
+// typically the HMAC exp (minted from the claim's lease) aged out while the
+// job sat in the runner's single-lane queue. The file itself is intact, so a
+// retry with a fresh claim + freshly minted URL succeeds. A genuine poison
+// 422 (hash-gate mismatch: "downloaded source failed the content hash gate")
+// uses different wording and stays terminal — discrimination is by error
+// detail, never by status code alone.
+func sourceDownloadRetryable(body string) bool {
+	for _, marker := range []string{
+		"source_url download failed",
+		"source_url returned HTTP",
+		"source_url download exceeded",
+	} {
+		if strings.Contains(body, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // handleSubmitFailure maps a failed POST /v1/process onto retry/terminal policy.
 func (d *Dispatcher) handleSubmitFailure(ctx context.Context, claimed *repo.ClaimedJob, cause error) {
 	ref := claimed.LeaseRef
@@ -61,6 +82,11 @@ func (d *Dispatcher) handleSubmitFailure(ctx context.Context, claimed *repo.Clai
 	if errors.As(cause, &se) && se.Code == 409 && strings.Contains(se.Body, "ARTIFACTS_EXPIRED") {
 		d.markTerminal(ctx, ref, "ARTIFACTS_EXPIRED",
 			"runner acknowledged this job; artifacts expired with ACK (contract §15/§19.10) — re-enqueue with force_rebuild to recompute")
+		return
+	}
+	// #235: stale source URL at runner execution — retryable, not poison.
+	if errors.As(cause, &se) && se.Code == 422 && sourceDownloadRetryable(se.Body) {
+		d.scheduleRetry(ctx, ref, claimed.Attempt, "SOURCE_URL_STALE", cause.Error())
 		return
 	}
 	if submitRetryable(cause) {
@@ -238,12 +264,36 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 	}
 }
 
+// repairTrackFailureCodes (#237): runner-reported failure codes that name
+// a DOCUMENT defect (the file itself is unreadable) rather than an
+// infrastructure fault. These go to the repair track: a repair case is
+// created (the attachment row carries content_type, routing the fix.sh
+// EPUB/PDF arm) instead of burning retries against a poison input.
+var repairTrackFailureCodes = map[string]bool{
+	"SOURCE_UNREADABLE": true,
+}
+
 func (d *Dispatcher) onFailed(ctx context.Context, claimed *repo.ClaimedJob, jobErr *processor.JobError, ph *jobPhases) {
 	ref := claimed.LeaseRef
 	d.logPhases(ph, jobErr.Code)
 	if jobErr.Retryable {
 		d.scheduleRetry(ctx, ref, claimed.Attempt, jobErr.Code, jobErr.Message)
 		return
+	}
+	// #237: document failures are repair-track, not infra-track — the
+	// structured runner FAIL (error class, stage, retryable=false, message
+	// excerpt) becomes the repair case's analysis so the fixer starts from
+	// the actual corruption evidence.
+	if repairTrackFailureCodes[jobErr.Code] {
+		analysis, _ := json.Marshal(map[string]any{
+			"error_class": jobErr.Code,
+			"stage":       jobErr.Stage,
+			"retryable":   false,
+			"message":     jobErr.Message,
+		})
+		if _, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, jobErr.Code, analysis); err != nil && !isLost(err) {
+			d.logger.Printf("repair-case for %s: %v", ref.JobID, err)
+		}
 	}
 	d.markTerminal(ctx, ref, jobErr.Code, jobErr.Message)
 }

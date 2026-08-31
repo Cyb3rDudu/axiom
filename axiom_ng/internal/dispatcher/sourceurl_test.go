@@ -146,3 +146,29 @@ func extractQueryParam(t *testing.T, rawURL, key string) string {
 	}
 	return rest
 }
+
+// TestSourceDownloadRetryableDiscrimination (#235): the transport-cause
+// markers are retryable, every poison wording (hash gate, missing config,
+// unsupported scheme) is not.
+func TestSourceDownloadRetryableDiscrimination(t *testing.T) {
+	retryable := []string{
+		`{"detail":"source_url download failed: HTTP Error 404: Not Found"}`,
+		`{"detail":"source_url returned HTTP 403"}`,
+		`{"detail":"source_url download exceeded 120s budget"}`,
+	}
+	for _, b := range retryable {
+		if !sourceDownloadRetryable(b) {
+			t.Errorf("body %q must classify retryable", b)
+		}
+	}
+	poison := []string{
+		`{"detail":"downloaded source failed the content hash gate"}`,
+		`{"detail":"remote delivery not configured: source_url is empty"}`,
+		`{"detail":"unsupported source_url scheme 'file'"}`,
+	}
+	for _, b := range poison {
+		if sourceDownloadRetryable(b) {
+			t.Errorf("body %q must stay terminal poison", b)
+		}
+	}
+}

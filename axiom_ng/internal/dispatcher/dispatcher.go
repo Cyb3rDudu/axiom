@@ -348,10 +348,16 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 	fields := []any{ref.JobID, claimed.AttachmentID, claimed.DocumentID, claimed.Attempt, tokenPrefix}
 
 	ph := &jobPhases{jobID: ref.JobID, claim: time.Now()}
+	// #235 belt-and-braces: mint the source URL exp with one extra lease
+	// window of slack beyond LeaseUntil. The runner pulls the source
+	// synchronously inside POST /v1/process and may sit in its single-lane
+	// queue behind long books; the submit-time renewal below keeps the LEASE
+	// fresh across that wait, and the slack keeps the signed exp valid with
+	// it. The endpoint's own lease-freshness fence is untouched.
 	req, err := buildRequest(claimed.InputSnapshot, SourceURLOptions{
 		BaseURL:    d.cfg.ProcessorSourceBaseURL,
 		Secret:     d.cfg.ProcessorSourceSecret,
-		LeaseUntil: claimed.LeaseUntil,
+		LeaseUntil: claimed.LeaseUntil.Add(d.cfg.LeaseDuration),
 	})
 	if err != nil {
 		d.markNotProcessable(ctx, ref, fields, err)
@@ -377,8 +383,16 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 		return
 	}
 
-	if _, err := d.client.SubmitProcess(ctx, req); err != nil {
-		d.handleSubmitFailure(ctx, claimed, err)
+	// #235: renew the lease for the duration of the submit POST itself —
+	// a queued download at the runner must not age out the lease (and with
+	// the exp slack above, the URL) before the job even starts. Stopped as
+	// soon as the POST returns; pollAndFinish starts its own renewal loop.
+	submitRenewCtx, stopSubmitRenew := context.WithCancel(ctx)
+	go d.renewLoop(submitRenewCtx, ref, fields, make(chan struct{}))
+	_, serr := d.client.SubmitProcess(ctx, req)
+	stopSubmitRenew()
+	if serr != nil {
+		d.handleSubmitFailure(ctx, claimed, serr)
 		return
 	}
 	ph.submit = time.Now()
