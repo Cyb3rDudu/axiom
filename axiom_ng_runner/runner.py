@@ -34,6 +34,7 @@ from typing import Any
 
 from . import CONTRACT_VERSION, DENSE_EMBEDDING_DIM, DENSE_EMBEDDING_MODEL
 from .config import settings
+from .validation import SourceError
 
 log = logging.getLogger(__name__)
 
@@ -453,6 +454,7 @@ def _get_gliner() -> Any:
 
 def _extract_real_entities(
     chunk_items: list[tuple[str, str]],
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     """GLiNER zero-shot NER → contract entities.
 
@@ -460,6 +462,11 @@ def _extract_real_entities(
     (whitespace-normalized text.lower(), type); every occurrence becomes a
     mention with chunk-local char offsets. Reuses the established
     labels/type-map/filters from compute_core.entity_extractor.
+
+    #236: on_progress (done, total) is reported per chunk — pure reporting,
+    no effect on extraction. GLiNER predicts per chunk anyway, so the
+    chunk granularity is the natural batch; the app-level callback
+    throttles the store writes exactly like relationships.
     """
     from axiom_ng_runner.compute_core.entity_extractor import (
         _GENERIC_WORDS,
@@ -472,7 +479,10 @@ def _extract_real_entities(
     entities: list[dict[str, Any]] = []
     seen: dict[tuple[str, str], int] = {}
 
-    for chunk_ref, text in chunk_items:
+    total = len(chunk_items)
+    for i, (chunk_ref, text) in enumerate(chunk_items, start=1):
+        if on_progress is not None:
+            on_progress(i, total)
         if not text.strip():
             continue
         try:
@@ -1045,6 +1055,20 @@ def _real_pipeline(
     if proc.returncode != 0:
         from axiom_ng_runner.compute_core.pdf_worker.__main__ import _classify_child_failure
         klass = _classify_child_failure(proc.returncode)
+        if not klass and proc.returncode == 1 and content_type == "application/epub+zip":
+            # #237: the EPUB worker classified a DOCUMENT defect (corrupt
+            # zip/OPF, pandoc parse failure, DRM) — exit 1 with a JSON error
+            # on stderr. That is a structured terminal FAIL (repair track),
+            # not an infrastructure retry storm. EPUB-only by design: the
+            # pdf_worker's catch-all exit 1 also covers infra faults (model
+            # load, disk) — the PDF side keeps the preflight/repair gate and
+            # this retryable path. Exit 2/3 and signals stay infra.
+            # ponytail: worker exit codes don't separate doc-vs-infra yet;
+            # dedicated exit codes when misroutes actually show up
+            raise SourceError(
+                "SOURCE_UNREADABLE",
+                f"{convert} failed: {proc.stderr[-300:]}",
+            )
         detail = (klass + " | ") if klass else ""
         raise RuntimeError(f"{convert} failed: {detail}{proc.stderr[-500:]}")
 
@@ -1243,7 +1267,11 @@ def _real_pipeline(
                    for i, c in enumerate(chunk_dicts)]
     if proc_opt.get("extract_entities") or proc_opt.get("extract_relationships"):
         enter("entities")
-        real_entities = _extract_real_entities(chunk_items)
+        real_entities = _extract_real_entities(
+            chunk_items,
+            on_progress=(lambda d, t: set_progress(d, t, "chunks"))
+            if set_progress is not None else None,
+        )
     # #225 early-commit: everything except relationships is done — build
     # and commit the result NOW so a late-stage abort (budget, hang, crash)
     # cannot discard chunks/embeddings/entities. The relationships stage
