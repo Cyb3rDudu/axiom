@@ -188,6 +188,9 @@ type fakeProcessor struct {
 	// (e.g. 409 ARTIFACTS_EXPIRED) instead of the 202 echo.
 	processFailStatus int
 	processFailBody   string
+	// #235: when > 0, only the FIRST N /v1/process calls answer with
+	// processFailStatus/Body (stale-URL shape: fail once, then accept).
+	processFailFirst int
 
 	// #175 preflight: when preflightReport is non-nil, POST /v1/pdf/preflight
 	// answers with it; when nil the endpoint 404s (covers the preflight-
@@ -251,7 +254,8 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		fp.processBody = b
 		fp.processHits++
-		if fp.processFailStatus != 0 {
+		if fp.processFailStatus != 0 &&
+			(fp.processFailFirst == 0 || fp.processHits <= fp.processFailFirst) {
 			w.WriteHeader(fp.processFailStatus)
 			io.WriteString(w, fp.processFailBody)
 			return
@@ -1286,5 +1290,148 @@ func TestPreflightDisabledDefaultsToNormalProcessing(t *testing.T) {
 	}
 	if fp.preflightHits != 0 {
 		t.Fatalf("preflight hits = %d, want 0 when disabled", fp.preflightHits)
+	}
+}
+
+// --- #235: stale source URL at runner execution --------------------------
+
+// jobAttempt reads the attempt counter (for the retry assertion).
+func (h *dispatchHarness) jobAttempt(t *testing.T, jobID string) int {
+	t.Helper()
+	var a int
+	if err := h.pool.QueryRow(context.Background(), `SELECT attempt FROM ingest_jobs WHERE id=$1`, jobID).Scan(&a); err != nil {
+		t.Fatalf("read attempt: %v", err)
+	}
+	return a
+}
+
+// TestSubmitStaleSourceURLRetriesAndCompletes (#235): a 422 whose body names
+// a source-transport failure (the stale-URL single-lane race) must reset the
+// job to pending and complete on attempt 2 with a fresh submit — not die
+// terminally on attempt 1 as in the 2026-08-31 production incident.
+func TestSubmitStaleSourceURLRetriesAndCompletes(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "S235", 3)
+	fp := newFakeProcessor(t)
+	fp.processFailFirst = 1
+	fp.processFailStatus = 422
+	fp.processFailBody = `{"detail":"source_url download failed: HTTP Error 404: Not Found"}`
+	fp.statuses = []string{"completed"}
+	fp.result = `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed"}`
+
+	d := newDispatcher(t, h, fp, Config{})
+	runFor(t, d, context.Background(), 10*time.Second)
+
+	if got := h.jobStatus(t, jobID); got != "completed" {
+		code, msg := h.jobError(t, jobID)
+		t.Fatalf("status = %q, want completed after retry (error %s: %s)", got, code, msg)
+	}
+	if fp.processHits != 2 {
+		t.Fatalf("process hits = %d, want 2 (failed submit + retried submit)", fp.processHits)
+	}
+	if got := h.jobAttempt(t, jobID); got != 2 {
+		t.Fatalf("attempt = %d, want 2", got)
+	}
+	if fp.ackHits != 1 {
+		t.Fatalf("ack hits = %d, want 1", fp.ackHits)
+	}
+}
+
+// TestSubmitBrokenFile422StaysTerminal (#235 counter-test): a 422 from a real
+// hash-gate mismatch is poison — terminal on attempt-1 semantics, no retry.
+func TestSubmitBrokenFile422StaysTerminal(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "B235", 3)
+	fp := newFakeProcessor(t)
+	fp.processFailStatus = 422
+	fp.processFailBody = `{"detail":"downloaded source failed the content hash gate"}`
+
+	d := newDispatcher(t, h, fp, Config{})
+	runFor(t, d, context.Background(), 6*time.Second)
+
+	if got := h.jobStatus(t, jobID); got != "failed" {
+		t.Fatalf("status = %q, want failed (broken file is poison)", got)
+	}
+	code, _ := h.jobError(t, jobID)
+	if code != "PROCESS_SUBMIT_FAILED" {
+		t.Fatalf("error code = %q, want PROCESS_SUBMIT_FAILED", code)
+	}
+	if fp.processHits != 1 {
+		t.Fatalf("process hits = %d, want 1 (terminal, no retry)", fp.processHits)
+	}
+}
+
+// --- #237: unreadable source → structured FAIL → repair case -------------
+
+// repairCaseFor reads the open repair case of an attachment (nil if none).
+func (h *dispatchHarness) repairCaseFor(t *testing.T, jobID string) map[string]any {
+	t.Helper()
+	var analysis []byte
+	err := h.pool.QueryRow(context.Background(), `
+		SELECT c.analysis FROM repair_cases c
+		JOIN ingest_jobs j ON j.attachment_id = c.attachment_id
+		WHERE j.id=$1 AND c.status IN ('rejected','queued','in_repair')`, jobID).Scan(&analysis)
+	if err != nil {
+		return nil
+	}
+	var m map[string]any
+	if json.Unmarshal(analysis, &m) != nil {
+		return nil
+	}
+	return m
+}
+
+// TestUnreadableSourceCreatesRepairCase (#237): a runner-reported terminal
+// SOURCE_UNREADABLE failure must land in the repair track — repair case with
+// the structured FAIL analysis — and not burn a single retry.
+func TestUnreadableSourceCreatesRepairCase(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "U237", 3)
+	fp := newFakeProcessor(t)
+	fp.statuses = []string{"failed"}
+	fp.failRetryCode = "SOURCE_UNREADABLE"
+	fp.failRetryable = false
+
+	d := newDispatcher(t, h, fp, Config{})
+	runFor(t, d, context.Background(), 6*time.Second)
+
+	if got := h.jobStatus(t, jobID); got != "failed" {
+		t.Fatalf("status = %q, want failed (terminal document defect)", got)
+	}
+	rc := h.repairCaseFor(t, jobID)
+	if rc == nil {
+		t.Fatal("no repair case created for SOURCE_UNREADABLE failure")
+	}
+	if rc["error_class"] != "SOURCE_UNREADABLE" || rc["retryable"] != false {
+		t.Fatalf("repair case analysis = %v, want structured FAIL shape", rc)
+	}
+	if fp.processHits != 1 {
+		t.Fatalf("process hits = %d, want 1 (no retry storm on document failure)", fp.processHits)
+	}
+}
+
+// TestRetryableFailureStaysInfraTrack (#237 counter-test): a retryable
+// runner failure is infrastructure — scheduled retry, NO repair case.
+func TestRetryableFailureStaysInfraTrack(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "R237", 3)
+	fp := newFakeProcessor(t)
+	fp.statuses = []string{"failed"}
+	fp.failRetryCode = "INTERNAL_ERROR"
+	fp.failRetryable = true
+
+	d := newDispatcher(t, h, fp, Config{})
+	runFor(t, d, context.Background(), 3*time.Second)
+
+	if got := h.jobStatus(t, jobID); got != "pending" && got != "processing" && got != "running" {
+		code, _ := h.jobError(t, jobID)
+		t.Fatalf("status = %q (error %s), want retry pending — infra track", got, code)
+	}
+	if rc := h.repairCaseFor(t, jobID); rc != nil {
+		t.Fatalf("retryable failure must not create a repair case: %v", rc)
 	}
 }
