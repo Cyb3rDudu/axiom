@@ -278,7 +278,7 @@ def run_case(case: dict) -> None:
                 "verdict": "failed",
                 "score": 0,
                 "contradictions": 0,
-                "blocked_reason": f"preflight nicht rot: {pf.verdacht}",
+                "blocked_reason": f"preflight nicht rot: {pf.finding}",
                 "plan": "{}",
             },
         )
@@ -343,11 +343,11 @@ def run_case(case: dict) -> None:
                     "verdict": "failed",
                     "score": coverage,
                     "contradictions": contra,
-                    "blocked_reason": f"healed-not-green: {pf_heiled.verdacht}"[:300],
+                    "blocked_reason": f"healed-not-green: {pf_heiled.finding}"[:300],
                     "plan": json.dumps(plan, ensure_ascii=False),
                 },
             )
-            log(buch, "GREEN-CHECK", f"GEHEILTE PDF NICHT GRÜN: {pf_heiled.verdacht}")
+            log(buch, "GREEN-CHECK", f"GEHEILTE PDF NICHT GRÜN: {pf_heiled.finding}")
             return
         log(buch, "GREEN-CHECK", f"geheilte PDF grün ({pf_heiled.line()})")
     else:

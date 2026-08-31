@@ -435,8 +435,8 @@ type PreflightReport struct {
 	ContractVersion string         `json:"contract_version"`
 	SourceName      string         `json:"source_name"`
 	Ok              bool           `json:"ok"`
-	Verdacht        string         `json:"verdacht"`
-	Grund           string         `json:"grund"`
+	Finding         string         `json:"finding"`
+	Reason          string         `json:"reason"`
 	Details         map[string]any `json:"details"`
 }
 

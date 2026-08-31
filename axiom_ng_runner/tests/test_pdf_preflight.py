@@ -51,7 +51,7 @@ def test_preflight_gesund_passes(client):
     body = r.json()
     assert body["contract_version"] == "1.0"
     assert body["ok"] is True
-    assert "gesund" in body["verdacht"]
+    assert "gesund" in body["finding"]
     # Text-layer metrics surfaced (the #175 contract fields).
     d = body["details"]
     assert d["text_layer"] is True
@@ -71,7 +71,7 @@ def test_preflight_falsche_labels_ok_but_yellow(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["ok"] is True
-    assert "Versatz" in body["verdacht"] or "gesund" in body["verdacht"]
+    assert "Versatz" in body["finding"] or "gesund" in body["finding"]
     assert body["details"]["text_layer"] is True
 
 
@@ -155,3 +155,18 @@ def test_preflight_textless_with_sane_labels_is_red(client):
     )
     assert body["details"]["text_layer"] is False
     assert body["details"]["pages"] == 4
+
+
+def test_preflight_result_field_names_english():
+    """#219 pin: PreflightResult's dataclass fields are finding/reason.
+
+    The HTTP surface is asserted elsewhere via response keys; this pins the
+    internal struct a rename-revert of the dataclass fields (missed by
+    dict-based analyzer tests) would break.
+    """
+    import dataclasses
+
+    from axiom_ng_runner.compute_core import pdf_health
+
+    names = [f.name for f in dataclasses.fields(pdf_health.PreflightResult)]
+    assert names == ["ok", "finding", "reason", "details"]

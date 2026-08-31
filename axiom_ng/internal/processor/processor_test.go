@@ -172,8 +172,8 @@ func TestPreflightDecodesAndSendsBytes(t *testing.T) {
 			"contract_version": "1.0",
 			"source_name":      "inline",
 			"ok":               false,
-			"verdacht":         "🔴 unpaginiert",
-			"grund":            "kein Tier-1",
+			"finding":          "🔴 unpaginiert",
+			"reason":           "kein Tier-1",
 			"details": map[string]any{
 				"pages": 8, "text_layer": false,
 				"suspicious_patterns": []any{"leere-Seite-Serie: 1-8"},
@@ -187,7 +187,7 @@ func TestPreflightDecodesAndSendsBytes(t *testing.T) {
 	if !strings.HasPrefix(string(sentBody), "%PDF-test-bytes") {
 		t.Fatalf("body sent = %q, want the raw pdf bytes", string(sentBody))
 	}
-	if rep.Ok || rep.Verdacht != "🔴 unpaginiert" {
+	if rep.Ok || rep.Finding != "🔴 unpaginiert" {
 		t.Fatalf("report decode wrong: %+v", rep)
 	}
 	if d := rep.Details["pages"]; d == nil || d.(float64) != 8 {
@@ -204,7 +204,7 @@ func TestPreflightSendsEPUBContentType(t *testing.T) {
 		}
 		mustJSON(w, 200, map[string]any{
 			"contract_version": "1.0", "source_name": "inline", "ok": true,
-			"verdacht": "🟢 gesund (epub)", "grund": "",
+			"finding": "🟢 gesund (epub)", "reason": "",
 			"details": map[string]any{"format": "epub", "text_layer": true},
 		})
 	}))

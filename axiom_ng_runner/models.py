@@ -200,8 +200,8 @@ class PreflightReport(BaseModel):
     contract_version: str
     source_name: str
     ok: bool
-    verdacht: str
-    grund: str
+    finding: str
+    reason: str
     details: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -59,15 +59,15 @@ def check_plan_against_folio(plan: dict[str, str], verified: dict[int, str]) -> 
             page = int(str(page_s))
         except (TypeError, ValueError):
             killed.append({"page": page_s, "plan": new_label, "folio_wahrheit": None,
-                           "grund": "plan-key ist keine Seitenzahl"})
+                           "reason": "plan-key ist keine Seitenzahl"})
             continue
         if page < 1 or page - 1 not in verified:
             killed.append({"page": page, "plan": new_label, "folio_wahrheit": None,
-                           "grund": "seite nicht folio-verifiziert"})
+                           "reason": "seite nicht folio-verifiziert"})
             continue
         if str(new_label).strip() != str(verified[page - 1]).strip():
             killed.append({"page": page, "plan": new_label, "folio_wahrheit": verified[page - 1],
-                           "grund": "widerspricht folio"})
+                           "reason": "widerspricht folio"})
     # killed[].page uses the SAME 1-based convention as the plan keys.
     return {"accepted": not killed, "killed": killed, "geprueft_gegen": len(verified)}
 
@@ -109,21 +109,21 @@ def cmd_sweep(out_path: str, kandidaten_path: str | None) -> None:
     for title, path, chunks in rows:
         p = (path or "").replace("file://", "")
         if not os.path.exists(p):
-            reports.append({"titel": title, "chunks": chunks, "verdacht": "⚠️ PDF fehlt", "detail": p})
+            reports.append({"titel": title, "chunks": chunks, "finding": "⚠️ PDF fehlt", "detail": p})
             continue
         try:
             r = analyze_pdf(p)
         except Exception as exc:  # noqa: BLE001 — one broken book must not stop the sweep
-            reports.append({"titel": title, "chunks": chunks, "verdacht": "⚠️ Analysefehler", "detail": str(exc)[:80]})
+            reports.append({"titel": title, "chunks": chunks, "finding": "⚠️ Analysefehler", "detail": str(exc)[:80]})
             continue
         r["titel"] = title
         r["chunks"] = chunks
         reports.append(r)
-        print(f"  {r['verdacht']:>22s}  {chunks:5d}  {title[:52]}", flush=True)
+        print(f"  {r['finding']:>22s}  {chunks:5d}  {title[:52]}", flush=True)
 
     order = {"🔴 reparierbar": 0, "🔴 unpaginiert": 1, "⚠️ PDF fehlt": 2, "⚠️ Analysefehler": 2,
              "🟡 Versatz-Verdacht": 3, "🟡 unklar (Label↔Folio uneinheitlich)": 3, "🟢 gesund": 4}
-    reports.sort(key=lambda r: (order.get(r["verdacht"], 9), -r.get("chunks", 0)))
+    reports.sort(key=lambda r: (order.get(r["finding"], 9), -r.get("chunks", 0)))
 
     with open(out_path, "w") as f:
         f.write(f"# ANALYZE-SWEEP — ganze Bibliothek ({len(reports)} preferred-PDFs)\n\n")
@@ -135,7 +135,7 @@ def cmd_sweep(out_path: str, kandidaten_path: str | None) -> None:
                 for l in r.get("folio_laeufe", [])[:4]
             ) or "—"
             vers = f"{r['versatz']:+d}" if r.get("versatz") is not None else "—"
-            f.write(f"| {r['verdacht']} | {r.get('chunks', 0)} | {r['titel'][:60]} | "
+            f.write(f"| {r['finding']} | {r.get('chunks', 0)} | {r['titel'][:60]} | "
                     f"{r.get('label_befund', r.get('detail', ''))[:46]} | {laufe[:52]} | {vers} |\n")
 
         if kandidaten_path and os.path.exists(kandidaten_path):
@@ -165,10 +165,10 @@ def cmd_sweep(out_path: str, kandidaten_path: str | None) -> None:
                             best, hit = ov, r
                 if hit is None:
                     ungeprueft.append(k)
-                elif hit["verdacht"].startswith("🔴"):
-                    confirmed.append((k, hit["verdacht"]))
+                elif hit["finding"].startswith("🔴"):
+                    confirmed.append((k, hit["finding"]))
                 else:
-                    exonerated.append((k, hit["verdacht"]))
+                    exonerated.append((k, hit["finding"]))
             f.write(f"**Maschinell bestätigt kaputt: {len(confirmed)}** · entlastet (nur ungeprüft): "
                     f"{len(exonerated)} · im Sweep nicht gefunden: {len(ungeprueft)}\n\n")
             for k, v in confirmed:

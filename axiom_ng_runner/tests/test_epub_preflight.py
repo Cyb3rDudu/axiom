@@ -83,7 +83,7 @@ def test_preflight_drm_epub_rejected(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["ok"] is False
-    assert body["verdacht"].startswith("🔴")
+    assert body["finding"].startswith("🔴")
     assert body["details"]["drm"] is True
 
 

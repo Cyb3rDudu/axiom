@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strconv"
 	"testing"
@@ -139,5 +140,110 @@ func TestRepairCasesOneOpenConstraint(t *testing.T) {
 	}
 	if err := open("rejected"); err != nil {
 		t.Fatalf("closed case must not block a fresh open one: %v", err)
+	}
+}
+
+// TestMigrateQualityStateEnglishKeys pins #219 migration 0020: stored
+// quality_state / repair-case analysis rows carrying the German keys
+// (verdacht/grund) are renamed in place to the canonical English names
+// (finding/reason). Idempotent on re-migration; unknown keys and rows
+// without the German keys stay untouched.
+func TestMigrateQualityStateEnglishKeys(t *testing.T) {
+	dsn := testDSN()
+	if dsn == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping integration test")
+	}
+	ctx := context.Background()
+	d, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var jobID string
+	german := `{"verdict":"fail","verdacht":"🔴 unpaginiert","grund":"kein Tier-1","pages":12,"text_layer":true}`
+	if err := d.pool.QueryRow(ctx, `
+		INSERT INTO ingest_jobs (quality_state) VALUES ($1::jsonb) RETURNING id::text`,
+		german).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	var caseID string
+	if err := d.pool.QueryRow(ctx, `
+		INSERT INTO repair_cases (status, analysis) VALUES ('rejected', $1::jsonb) RETURNING id::text`,
+		german).Scan(&caseID); err != nil {
+		t.Fatalf("seed repair case: %v", err)
+	}
+
+	// Re-running Migrate re-executes nothing (already recorded), so exercise
+	// the REAL 0020 artifact from the embedded schema FS — reverting or
+	// gutting the SQL file must fail this test, not a hand-copied string.
+	mig, err := schemaFS.ReadFile("schema/0020_quality_state_english.sql")
+	if err != nil {
+		t.Fatalf("read 0020 artifact: %v", err)
+	}
+	if _, err := d.pool.Exec(ctx, string(mig)); err != nil {
+		t.Fatalf("apply 0020: %v", err)
+	}
+
+	assertRenamed := func(got []byte, where string) {
+		t.Helper()
+		var m map[string]any
+		if err := json.Unmarshal(got, &m); err != nil {
+			t.Fatalf("json %s (%s): %v", got, where, err)
+		}
+		if m["verdacht"] != nil || m["grund"] != nil {
+			t.Fatalf("%s: German keys must be gone: %s", where, got)
+		}
+		if m["finding"] != "🔴 unpaginiert" || m["reason"] != "kein Tier-1" {
+			t.Fatalf("%s: English keys must carry the values: %s", where, got)
+		}
+		// unknown keys preserved
+		if m["pages"] != float64(12) || m["text_layer"] != true {
+			t.Fatalf("%s: unknown keys must be preserved: %s", where, got)
+		}
+	}
+
+	var qs, an []byte
+	if err := d.pool.QueryRow(ctx,
+		`SELECT quality_state FROM ingest_jobs WHERE id=$1`, jobID).Scan(&qs); err != nil {
+		t.Fatalf("read job quality_state: %v", err)
+	}
+	assertRenamed(qs, "ingest_jobs.quality_state")
+	if err := d.pool.QueryRow(ctx,
+		`SELECT analysis FROM repair_cases WHERE id=$1::uuid`, caseID).Scan(&an); err != nil {
+		t.Fatalf("read repair analysis: %v", err)
+	}
+	assertRenamed(an, "repair_cases.analysis")
+
+	// Idempotence: applying the real artifact again changes nothing on
+	// EITHER column.
+	if _, err := d.pool.Exec(ctx, string(mig)); err != nil {
+		t.Fatalf("re-apply 0020: %v", err)
+	}
+	var qs2, an2 []byte
+	if err := d.pool.QueryRow(ctx,
+		`SELECT quality_state FROM ingest_jobs WHERE id=$1`, jobID).Scan(&qs2); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.pool.QueryRow(ctx,
+		`SELECT analysis FROM repair_cases WHERE id=$1::uuid`, caseID).Scan(&an2); err != nil {
+		t.Fatal(err)
+	}
+	var m2 map[string]any
+	if err := json.Unmarshal(qs2, &m2); err != nil {
+		t.Fatal(err)
+	}
+	if m2["finding"] != "🔴 unpaginiert" || m2["reason"] != "kein Tier-1" || len(m2) != 5 {
+		t.Fatalf("second run must be a no-op (ingest_jobs): %s", qs2)
+	}
+	var m3 map[string]any
+	if err := json.Unmarshal(an2, &m3); err != nil {
+		t.Fatal(err)
+	}
+	if m3["finding"] != "🔴 unpaginiert" || m3["reason"] != "kein Tier-1" || len(m3) != 5 {
+		t.Fatalf("second run must be a no-op (repair_cases): %s", an2)
 	}
 }

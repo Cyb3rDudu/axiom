@@ -132,7 +132,7 @@ def test_apply_repairs_red_to_green(tmp_path):
     r = apply_repairs(src, tmp_path)
     assert "repair_spine" in r["applied"] and "remove_entry_corpses" in r["applied"]
     assert r["preflight"]["opf_spine"] is True
-    assert r["preflight"]["verdacht"].startswith("🟢")
+    assert r["preflight"]["finding"].startswith("🟢")
 
 
 def test_remove_entry_corpses_keeps_referenced_unmanifested_assets(tmp_path):

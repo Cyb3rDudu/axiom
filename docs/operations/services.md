@@ -91,7 +91,7 @@ in `ingest_jobs.quality_state` and is readable on the job listing.
 Policy: green/yellow (`ok=true`) proceeds to full processing. A red verdict
 (e.g. a textless scan, `🔴 unpaginiert`) is **not** sent into the pipeline —
 the job is archived with a clear status (`skipped`, reason
-`preflight:<verdacht>`) and the attachment is registered as a **repair-case
+`preflight:<finding>`) and the attachment is registered as a **repair-case
 candidate**, so the fixer (#206/#203) can later heal it rather than letting
 junk chunks pollute the index. Advisory by design: if the source is not
 locally readable or the preflight call fails, the job proceeds normally —

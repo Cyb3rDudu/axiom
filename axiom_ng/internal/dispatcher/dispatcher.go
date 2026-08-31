@@ -476,13 +476,16 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 
 	qs := map[string]any{
 		"verdict":             boolMap(report.Ok, "pass", "fail"),
-		"verdacht":            report.Verdacht,
-		"grund":               report.Grund,
+		"finding":             report.Finding,
+		"reason":              report.Reason,
 		"pages":               report.Details["pages"],
 		"text_layer":          report.Details["text_layer"],
 		"mean_chars_per_page": report.Details["mean_chars_per_page"],
 		"suspicious_patterns": report.Details["suspicious_patterns"],
 	}
+	// #219: only these whitelisted English detail keys are copied — the
+	// analyzer's diagnostic sub-keys (label_befund, folio_laeufe, …) stay
+	// in report.Details and never enter quality_state.
 	// #220: the EPUB branch of the same gate — format flag plus the
 	// epubcheck/DRM findings, so repair-case analysis carries the
 	// conformance reasons (epubcheck messages live in details). Only set
@@ -499,15 +502,15 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 	}
 
 	if report.Ok {
-		d.logger.Printf("%v: preflight PASS (%s)", fields, report.Verdacht)
+		d.logger.Printf("%v: preflight PASS (%s)", fields, report.Finding)
 		return false // quality green → proceed to full processing
 	}
 
 	// Quality red: do not produce junk chunks. Skip the job with a clear
 	// reason and mark the attachment as a repair-case candidate (#206/#203).
-	reason := "preflight:" + report.Verdacht
+	reason := "preflight:" + report.Finding
 	d.logger.Printf("%v: preflight FAIL (%s) — skipping job, marking repair candidate", fields, reason)
-	if _, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Verdacht, qsJSON); err != nil && !isLost(err) {
+	if _, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Finding, qsJSON); err != nil && !isLost(err) {
 		d.logger.Printf("%v: repair-case: %v", fields, err)
 	}
 	if err := d.rep.MarkSkipped(ctx, ref, reason); err != nil && !isLost(err) {

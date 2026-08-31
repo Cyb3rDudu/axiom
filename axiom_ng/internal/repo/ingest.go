@@ -32,7 +32,7 @@ type Job struct {
 	ErrorMessage *string
 	ResolvedAt   *string
 	EnqueuedAt   string
-	// QualityState (#175): the preflight report JSONB (verdict/verdacht/pages/
+	// QualityState (#175): the preflight report JSONB (verdict/finding/
 	// text_layer/…), nil when not assessed.
 	QualityState json.RawMessage
 }

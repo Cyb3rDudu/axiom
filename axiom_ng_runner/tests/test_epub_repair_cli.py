@@ -45,7 +45,7 @@ def test_broken_spine_heals_to_work_epub(tmp_path, capsys):
     assert work.is_file() and work.read_bytes()[:2] == b"PK"
     report = json.loads((tmp_path / "KEY1" / "epub_repair_report.json").read_text())
     assert "repair_spine" in report["applied"]
-    assert report["preflight"]["verdacht"].startswith("🟢")
+    assert report["preflight"]["finding"].startswith("🟢")
     out = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert out["ok"] is True
 

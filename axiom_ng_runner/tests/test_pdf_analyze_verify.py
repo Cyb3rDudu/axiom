@@ -20,14 +20,14 @@ def test_correct_plan_passes():
 def test_contradiction_kills():
     r = check_plan_against_folio({"12": "99"}, TRUTH)
     assert not r["accepted"]
-    assert r["killed"][0]["grund"] == "widerspricht folio"
+    assert r["killed"][0]["reason"] == "widerspricht folio"
     assert r["killed"][0]["folio_wahrheit"] == "4"
 
 
 def test_unknown_page_kills_not_passes():  # E1 — the old code skipped these
     r = check_plan_against_folio({"999": "7"}, TRUTH)
     assert not r["accepted"]
-    assert r["killed"][0]["grund"] == "seite nicht folio-verifiziert"
+    assert r["killed"][0]["reason"] == "seite nicht folio-verifiziert"
 
 
 def test_convention_mismatch_kills():  # author used 0-based keys (folio of
@@ -35,16 +35,16 @@ def test_convention_mismatch_kills():  # author used 0-based keys (folio of
     # mismatch surfaces as a contradiction kill, never a vacuous pass
     r = check_plan_against_folio({"12": "5"}, TRUTH)
     assert not r["accepted"]
-    assert r["killed"][0]["grund"] == "widerspricht folio"
+    assert r["killed"][0]["reason"] == "widerspricht folio"
     assert r["killed"][0]["folio_wahrheit"] == "4"
 
 
 def test_non_numeric_key_kills():
     r = check_plan_against_folio({"xii": "4"}, TRUTH)
     assert not r["accepted"]
-    assert r["killed"][0]["grund"] == "plan-key ist keine Seitenzahl"
+    assert r["killed"][0]["reason"] == "plan-key ist keine Seitenzahl"
 
 
 def test_empty_truth_kills_everything():
     r = check_plan_against_folio({"12": "4"}, {})
-    assert not r["accepted"] and r["killed"][0]["grund"] == "seite nicht folio-verifiziert"
+    assert not r["accepted"] and r["killed"][0]["reason"] == "seite nicht folio-verifiziert"

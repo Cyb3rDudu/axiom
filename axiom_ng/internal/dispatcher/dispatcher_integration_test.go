@@ -1199,8 +1199,8 @@ func TestPreflightFailSkipsJobAndCreatesRepairCase(t *testing.T) {
 		"contract_version": "1.0",
 		"source_name":      "inline",
 		"ok":               false,
-		"verdacht":         "🔴 unpaginiert",
-		"grund":            "kein Tier-1",
+		"finding":          "🔴 unpaginiert",
+		"reason":           "kein Tier-1",
 		"details": map[string]any{
 			"pages": 1, "text_layer": false,
 			"suspicious_patterns": []any{"viele reine Bildseiten ohne OCR-Text (1/1)"},
@@ -1245,6 +1245,26 @@ func TestPreflightFailSkipsJobAndCreatesRepairCase(t *testing.T) {
 	}
 	if probe["drm"] != true {
 		t.Fatalf("quality_state must pass through present EPUB keys: %s", string(qs))
+	}
+	// #219 contract: the quality_state producer emits EXACTLY the canonical
+	// English key set — a German-key producer must never reappear pre-freeze.
+	wantKeys := map[string]bool{
+		"verdict": false, "finding": false, "reason": false, "pages": false,
+		"text_layer": false, "mean_chars_per_page": false,
+		"suspicious_patterns": false, "drm": false,
+	}
+	if len(probe) != len(wantKeys) {
+		t.Fatalf("quality_state key set = %d keys, want %d: %s", len(probe), len(wantKeys), string(qs))
+	}
+	for k := range probe {
+		if _, ok := wantKeys[k]; !ok {
+			t.Fatalf("quality_state carries non-contract key %q: %s", k, string(qs))
+		}
+	}
+	for k := range wantKeys {
+		if _, ok := probe[k]; !ok {
+			t.Fatalf("quality_state missing contract key %q: %s", k, string(qs))
+		}
 	}
 }
 

@@ -233,7 +233,7 @@ def classify(anchors: list[dict], spec: list[dict]) -> dict:
     if len(arabic_m) < 2:
         return {
             "klasse": "unclassifiable",
-            "grund": f"nur {len(arabic_m)} arabische Messpunkte (≥2 nötig)",
+            "reason": f"nur {len(arabic_m)} arabische Messpunkte (≥2 nötig)",
         }
 
     labels_numeric = len(arabic) == len(arabic_m) and bool(spec)
@@ -243,7 +243,7 @@ def classify(anchors: list[dict], spec: list[dict]) -> dict:
         if segs is None:
             return {
                 "klasse": "unclassifiable",
-                "grund": f"Versatz variabel: {sorted({d for _, d in deltas})}",
+                "reason": f"Versatz variabel: {sorted({d for _, d in deltas})}",
             }
         identity = all(n == p + 1 for p, _, n in arabic)  # labels == physical+1
         klasse = (
@@ -265,7 +265,7 @@ def classify(anchors: list[dict], spec: list[dict]) -> dict:
     if segs is None:
         return {
             "klasse": "unclassifiable",
-            "grund": "Chunk-Wahrheit nicht als Bereichs-Arithmetik darstellbar "
+            "reason": "Chunk-Wahrheit nicht als Bereichs-Arithmetik darstellbar "
             f"({sorted({v for _, v in shifted})})",
         }
     return {"klasse": "injection", "segs": segs, "arabic": arabic_m, "roman": roman}
@@ -833,7 +833,7 @@ def main() -> int:
     print(f"Anker-Deltas (M−N): {deltas or '—'}")
     print(f"Klasse: {klas['klasse']}")
     if klas["klasse"] == "unclassifiable":
-        print(f"GRUND: {klas['grund']}")
+        print(f"GRUND: {klas['reason']}")
         print(
             "→ REFUSE. Variabel/unentscheidbar ist meldungspflichtig — Raten ist verboten."
         )

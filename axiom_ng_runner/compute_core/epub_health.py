@@ -59,15 +59,18 @@ def _epubcheck(path: str, cmd: str | None) -> dict:
 
 def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
     """Read-only EPUB diagnostic. Same return contract as pdf_health's
-    analyze_pdf core fields (verdacht/label_befund/text_layer) so the
-    /v1/pdf/preflight endpoint computes ok identically."""
+    analyze_pdf core fields (finding/label_befund/text_layer) so the
+    /v1/pdf/preflight endpoint computes ok identically. Diagnostic
+    sub-keys like label_befund deliberately remain German — internal
+    analyzer payload, not part of the #219/#196 quality_state contract
+    (the dispatcher copies only the English detail keys)."""
     try:
         epub = zipfile.ZipFile(path)
     except (zipfile.BadZipFile, FileNotFoundError) as exc:
         raise ValueError(f"EPUB nicht lesbar: {exc}") from None
 
     names = epub.namelist()
-    grund = []
+    reasons = []
     verdict = "🟢"
 
     # 1) zip/container/OPF/spine — structural presence
@@ -86,7 +89,7 @@ def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
     ]
     if not opf_ok:
         verdict = "🔴"
-        grund.append("OPF/Spine fehlt oder unlesbar")
+        reasons.append("OPF/Spine fehlt oder unlesbar")
 
     # 2) DRM — rights.xml is DRM by definition; encryption.xml is only
     # legit when EVERY EncryptedData uses the IDPF font-obfuscation
@@ -101,7 +104,7 @@ def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
             drm = True
     if drm:
         verdict = "🔴"
-        grund.append("DRM (rights.xml/encryption)")
+        reasons.append("DRM (rights.xml/encryption)")
 
     # 3) text extractable — at least one spine doc with real characters
     total_chars = 0
@@ -114,22 +117,22 @@ def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
     text_layer = total_chars > 500
     if not text_layer:
         verdict = "🔴"
-        grund.append("kein extrahierbarer Text")
+        reasons.append("kein extrahierbarer Text")
     epub.close()
 
     # 4) epubcheck conformance (external, optional by deployment)
     ec = _epubcheck(path, epubcheck_cmd or None)
     if ec.get("status") == "failed":
         verdict = "🔴"
-        grund.append(f"epubcheck: {ec['fatal_or_error']} FATAL/ERROR")
+        reasons.append(f"epubcheck: {ec['fatal_or_error']} FATAL/ERROR")
 
-    verdacht = {
+    finding = {
         "🔴": "🔴 defekt/DRM (epub)",
     }.get(verdict, "🟢 gesund (epub)")
     return {
         "format": "epub",
-        "verdacht": verdacht,
-        "label_befund": "; ".join(grund) if grund else "Struktur ok, Text extrahierbar",
+        "finding": finding,
+        "label_befund": "; ".join(reasons) if reasons else "Struktur ok, Text extrahierbar",
         "text_layer": text_layer,
         "opf_spine": opf_ok,
         "spine_docs": len(spine_docs),

@@ -834,7 +834,7 @@ async def pdf_preflight(request: Request):
         except OSError:
             pass
 
-    v = d.get("verdacht", "")
+    v = d.get("finding", "")
     # #175 blocker fix (review): ok must ALSO require a text layer — a
     # textless scan with sane labels would otherwise report green and the
     # dispatcher would chunk a PDF that yields junk chunks. The label/folio
@@ -845,7 +845,7 @@ async def pdf_preflight(request: Request):
         contract_version=CONTRACT_VERSION,
         source_name="inline",
         ok=ok,
-        verdacht=v,
-        grund=d.get("label_befund", ""),
+        finding=v,
+        reason=d.get("label_befund", ""),
         details=d,
     )

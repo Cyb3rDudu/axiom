@@ -54,13 +54,13 @@ def main(argv: list[str] | None = None) -> int:
 
     preflight = result["preflight"]
     _report_line({
-        "ok": bool(preflight.get("verdacht", "").startswith(("🟢", "🟡"))),
+        "ok": bool(preflight.get("finding", "").startswith(("🟢", "🟡"))),
         "applied": result["applied"],
         "preflight": preflight,
         "out": str(result["out"]) if args.apply else None,
     })
 
-    ok = preflight.get("verdacht", "").startswith(("🟢", "🟡"))
+    ok = preflight.get("finding", "").startswith(("🟢", "🟡"))
     if not result["applied"] or not ok:
         return 3
     if not args.apply:

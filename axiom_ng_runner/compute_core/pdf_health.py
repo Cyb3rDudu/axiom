@@ -24,13 +24,13 @@ from dataclasses import dataclass
 @dataclass
 class PreflightResult:
     ok: bool                      # False = reject (quality_hold / repair case)
-    verdacht: str                 # 🔴/🟡/🟢 class
-    grund: str                    # human-readable reason
+    finding: str                 # 🔴/🟡/🟢 class
+    reason: str                    # human-readable reason
     details: dict                 # analyze payload (labels, folio runs, versatz)
 
     def line(self, buch: str = "") -> str:
         kopf = f"[{buch}] " if buch else ""
-        return f"{kopf}PREFLIGHT {'GRÜN' if self.ok else 'REJECT'} — {self.verdacht} — {self.grund}"
+        return f"{kopf}PREFLIGHT {'GRÜN' if self.ok else 'REJECT'} — {self.finding} — {self.reason}"
 
 
 def _text_metrics(doc) -> dict:
@@ -165,7 +165,7 @@ def analyze_pdf(pdf_path: str) -> dict:
             "image_only_pages": tm["image_only_pages"],
             "blank_series": tm["blank_series"],
             "suspicious_patterns": tm["suspicious_patterns"],
-            "verdacht": suspicion,
+            "finding": suspicion,
         }
     finally:
         doc.close()
@@ -175,10 +175,10 @@ def preflight(pdf_path: str) -> PreflightResult:
     🔴 rejects (kaputt-reparierbar goes to the repair queue, unpaginiert
     never enters the loop)."""
     d = analyze_pdf(pdf_path)
-    v = d["verdacht"]
+    v = d["finding"]
     if v.startswith("🟢"):
         return PreflightResult(True, v, d.get("label_befund", ""), d)
     if v.startswith("🟡"):
         return PreflightResult(True, v, "sanity-ok (Versatz/unklar, kein Reparatur-Fall)", d)
     # 🔴 Klassen: reject — reparierbar geht in die Queue, unpaginiert nie
-    return PreflightResult(False, v, d.get("label_befund", d.get("grund", "")), d)
+    return PreflightResult(False, v, d.get("label_befund", ""), d)

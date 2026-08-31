@@ -243,8 +243,8 @@ class ChapterOrdinalTests(unittest.TestCase):
         # BOTH chapters verify — the restart values are no longer clashes.
         for i in range(2, 12):
             self.assertEqual(sources[i], pt.FOLIO_VERIFIED, f"page {i}")
-        self.assertEqual({i: chapters[i] for i in range(2, 8)}, {i: 1 for i in range(2, 8)})
-        self.assertEqual({i: chapters[i] for i in range(8, 12)}, {i: 2 for i in range(8, 12)})
+        self.assertEqual({i: chapters[i] for i in range(2, 8)}, dict.fromkeys(range(2, 8), 1))
+        self.assertEqual({i: chapters[i] for i in range(8, 12)}, dict.fromkeys(range(8, 12), 2))
         self.assertNotIn(0, chapters)
         self.assertNotIn(1, chapters)  # front matter carries no ordinal
         self.assertEqual(labels[9], "2")  # Kap. 2, Seite 2
@@ -372,9 +372,9 @@ class ChapterReviewHardeningTests(unittest.TestCase):
 
         # pre-heal: chapter-wise repeated labels (broken) + restart folios
         pre = pdf_health.analyze_pdf(make_pdf(CH_BOOK_TOPLINES, repeat_labels="C1"))
-        self.assertIn("reparierbar", pre["verdacht"])
+        self.assertIn("reparierbar", pre["finding"])
         post = pdf_health.analyze_pdf(make_pdf(CH_BOOK_TOPLINES, sections_spec=HEALED_SECTIONS))
-        self.assertEqual(post["verdacht"], "🟢 gesund")
+        self.assertEqual(post["finding"], "🟢 gesund")
 
     def test_stamp_chapter_never_overwrites(self):
         from axiom_ng_runner import runner

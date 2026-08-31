@@ -41,12 +41,12 @@ organized by *where the variable is consumed* (`set by`).
 | `AXIOM_QUERY_RUNNER_URL` | `http://localhost:8012` | Query-role runner for `/v1/embed` + `/v1/rerank` (R4). Defaults to the local runner so retrieval survives a remote outage. |
 | `AXIOM_PROCESSOR_TIMEOUT` | `300s` | Bounds the **result** fetch and (as the submit floor) the synchronous remote source download inside `POST /v1/process`. Remote deployments raise it to cover the runner's download budget. |
 | `AXIOM_PROCESSOR_RUNNER_NAME` | processor-URL host | Human identity of the processor this dispatcher drives; lands in the phase log line and `ingest_jobs.runner_name` at claim time. |
-| `AXIOM_DISPATCHER_ENABLED` | off | Gates the claim/process dispatcher loop; it never runs unless explicitly `1|true|yes`. |
+| `AXIOM_DISPATCHER_ENABLED` | off | Gates the claim/process dispatcher loop; it never runs unless explicitly `1 | true | yes`. |
 | `AXIOM_DISPATCHER_WORKER_ID` | `axiom-ng` | This process's stable worker identity for leases (literal code default). Left at default, two dispatchers share one identity — set it per process when running multiple. |
 | `AXIOM_DISPATCHER_CONCURRENCY` | `1` | Parallel claim/process slots. |
 | `AXIOM_DISPATCHER_PROFILE` | `full-rag-v1` | Processing profile JSON frozen at claim time; the `full-rag-v1` default materializes **every** feature boolean as `true` (entities, relationships, dense + sparse embeddings, images). The profile *name* alone does not toggle features — the explicit booleans do. |
 | `AXIOM_DISPATCHER_LEASE` | `5m` | Per-claim lease length. |
-| `AXIOM_DISPATCHER_PREFLIGHT` | off | #175 quality gate at claim: sends the claimed source PDF to the runner's `/v1/pdf/preflight` BEFORE full processing. A red verdict (e.g. textless scan no matter the labels, label-Anomalie) skips the job (`skipped`, reason `preflight:<verdacht>`) and marks the attachment as a repair-case candidate (the #206/#203 fixer can heal it later) instead of producing junk chunks. Default off = jobs process as today. Per-call bound: the processor client's small-call budget (15s). |
+| `AXIOM_DISPATCHER_PREFLIGHT` | off | #175 quality gate at claim: sends the claimed source PDF to the runner's `/v1/pdf/preflight` BEFORE full processing. A red verdict (e.g. textless scan no matter the labels, label-Anomalie) skips the job (`skipped`, reason `preflight:<finding>`) and marks the attachment as a repair-case candidate (the #206/#203 fixer can heal it later) instead of producing junk chunks. Default off = jobs process as today. Per-call bound: the processor client's small-call budget (15s). |
 | `AXIOM_ARTIFACT_ROOT` | — | Durable derived-artifact root. |
 | `AXIOM_API_PORT` | `8011` | Port the `axiom_ng` REST API listens on. |
 | `AXIOM_ALLOW_DEBUG_BIND` | off | Explicit opt-out that lets a **debug** build bind a production port (8011, 8013–8015). Release builds always bind; unset/wrong values keep the guard active. |
