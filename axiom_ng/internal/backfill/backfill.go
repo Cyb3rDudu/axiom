@@ -117,8 +117,9 @@ func Run(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
 	err := pool.QueryRow(ctx, `
 		SELECT sn.id::text, a.local_path, a.content_type, sn.content_hash
 		FROM zotero_documents d
-		JOIN processing_snapshots sn ON sn.document_id = d.id AND sn.active
-		JOIN zotero_attachments a ON a.id = sn.attachment_id AND NOT a.deleted
+		JOIN zotero_attachments a ON a.document_id = d.id AND NOT a.deleted
+		JOIN processing_snapshots sn ON sn.attachment_id = a.id
+		 AND sn.document_id = d.id AND sn.active
 		WHERE d.zotero_key = $1`, o.DocKey).
 		Scan(&snapID, &attPath, &attCT, &contentHash)
 	if err != nil {
@@ -211,15 +212,16 @@ func Run(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
 			UPDATE processing_chunks SET locator = jsonb_set(jsonb_set(jsonb_set(
 			  CASE WHEN locator->>'type' = 'page_span'
 			       THEN jsonb_set(jsonb_set(locator,
-			            '{page_label_start}', to_jsonb($2::text)),
-			            '{page_label_end}',   to_jsonb($3::text))
+			            '{page_label_start}', to_jsonb($6::text)),
+			            '{page_label_end}',   to_jsonb($7::text))
 			       ELSE locator END,
-			  '{page_start}', to_jsonb($2)),
-			  '{page_end}',   to_jsonb($3)),
+			  '{page_start}', to_jsonb($2::int)),
+			  '{page_end}',   to_jsonb($3::int)),
 			  '{page_source}', to_jsonb($5))
 			WHERE id = $1 AND snapshot_id = $4
 			  AND locator->>'page_source' IS DISTINCT FROM $5`,
-			r.ChunkID, deref(r.PageStart), deref(r.PageEnd), snapID, DerivedFromSibling)
+			r.ChunkID, deref(r.PageStart), deref(r.PageEnd), snapID, DerivedFromSibling,
+			fmt.Sprint(deref(r.PageStart)), fmt.Sprint(deref(r.PageEnd)))
 		if err != nil {
 			return nil, fmt.Errorf("update %s: %w", r.ChunkID, err)
 		}
