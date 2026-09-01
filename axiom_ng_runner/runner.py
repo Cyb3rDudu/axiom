@@ -1063,7 +1063,7 @@ def _real_pipeline(
             # pdf_worker's catch-all exit 1 also covers infra faults (model
             # load, disk) — the PDF side keeps the preflight/repair gate and
             # this retryable path. Exit 2/3 and signals stay infra.
-            # ponytail: worker exit codes don't separate doc-vs-infra yet;
+            # NOTE: worker exit codes don't separate doc-vs-infra yet;
             # dedicated exit codes when misroutes actually show up
             raise SourceError(
                 "SOURCE_UNREADABLE",
