@@ -336,7 +336,16 @@ func RunEngine(ctx context.Context, python, runnerDir, epub, sourceKind, pdfPath
 	cctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, python, args...)
-	cmd.Dir = runnerDir
+	// HERMETIC module resolution (#233 review): `python -m axiom_ng_runner.…`
+	// must import the STRAND's package, never whatever checkout the runner
+	// venv happens to have editable-installed. cwd = the repo root (parent of
+	// runnerDir) puts the strand package at sys.path[0], which strictly beats
+	// any site-packages/editable finder; PYTHONPATH is belt-and-braces for
+	// the same root. (cmd.Dir = runnerDir itself is NOT importable — the
+	// package dir lies one level up.)
+	repoRoot := filepath.Dir(runnerDir)
+	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(), "PYTHONPATH="+repoRoot)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
