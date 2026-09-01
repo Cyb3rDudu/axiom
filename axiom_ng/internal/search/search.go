@@ -737,9 +737,15 @@ func (c *osClient) sparse(ctx context.Context, weights map[string]float64, size 
 	}
 	query := map[string]any{"bool": map[string]any{"should": should}}
 	if f != nil && len(f.DocumentIDs) > 0 {
+		// #239: with a filter sibling, OpenSearch treats bool-should as
+		// OPTIONAL (default minimum_should_match 0) — filtered documents
+		// matching zero sparse tokens would enter the arm and add RRF noise.
+		// Forcing minimum_should_match:1 keeps the should a real constraint.
 		query = map[string]any{
 			"bool": map[string]any{
-				"should": should,
+				"should":               should,
+				"minimum_should_match": 1,
+
 				"filter": []any{map[string]any{"terms": map[string]any{"document_id.keyword": f.DocumentIDs}}},
 			},
 		}

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import sys
 import time
@@ -882,6 +883,12 @@ def _convert_epub_reference(epub_path: Path, md_path: Path):
 # ---------------------------------------------------------------------------
 
 
+class ComputeEnvironmentError(RuntimeError):
+    """compute=real but the heavy compute environment is broken (missing
+    deps/imports). This is an environment/config problem: the job must FAIL
+    RETRYABLY — never silently degrade to the reference stub (#240)."""
+
+
 def compute(
     request: dict[str, Any],
     work_dir: Path,
@@ -901,12 +908,31 @@ def compute(
     cancel can terminate it."""
     backend = settings.get().compute_backend
     if backend == "real":
-        result = _compute_real(
-            request, work_dir, set_stage, commit, set_progress, runtime
-        )
+        try:
+            result = _compute_real(
+                request, work_dir, set_stage, commit, set_progress, runtime
+            )
+        except ComputeEnvironmentError:
+            # #240: a broken real-mode environment is a FAILED, RETRYABLE job —
+            # never a silent reference run (batch compute on a stub is index
+            # poisoning with no signal). Explicit opt-out only, loud + marked.
+            if os.environ.get("ALLOW_REFERENCE_FALLBACK") != "1":
+                raise
+            log.warning(
+                "ALLOW_REFERENCE_FALLBACK=1: compute=real failed; DEGRADING TO "
+                "THE REFERENCE STUB — the result is NOT real compute output"
+            )
+            result = _compute_reference(request, work_dir, set_stage)
+            proc = result.get("processor") or {}
+            proc["reference_fallback"] = True
+            result["processor"] = proc
+            return result
         if result is not None:
             return result
-        log.warning("real backend unavailable; falling back to reference")
+        # _compute_real returning None means the real pipeline declined
+        # (e.g. cancel-before-start) — the caller settles the job; do NOT
+        # silently fall through to the reference stub here (#240 discipline).
+        return None
     return _compute_reference(request, work_dir, set_stage)
 
 
@@ -987,16 +1013,17 @@ def _compute_real(
     runtime: Any | None = None,
 ) -> dict[str, Any] | None:
     """Wire the existing heavy pipeline (Marker/pdf_worker, epub_worker,
-    embedder, extractors). Returns None if the heavy deps are unavailable so
-    the caller can fall back. The contract black-box suite runs against
-    ``reference``."""
+    embedder, extractors). Raises ComputeEnvironmentError if the heavy deps
+    are unavailable — the caller must fail the job (#240), never silently
+    fall back. The contract black-box suite runs against ``reference``."""
     try:
         return _real_pipeline(
             request, work_dir, set_stage, commit, set_progress, runtime
         )
     except ImportError as err:
-        log.warning("real compute deps unavailable: %s", err)
-        return None
+        raise ComputeEnvironmentError(
+            f"compute=real but the real compute pipeline is unavailable: {err}"
+        ) from err
 
 
 def _normalize_epub_image_paths(markdown: str) -> str:

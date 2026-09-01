@@ -228,33 +228,28 @@ class TextEmbedder:
                         hardware_detector.empty_cache()
 
                 except Exception as e:
-                    logger.debug(f"Error embedding batch starting at index {i}: {e}")
-                    # Handle error: skip batch, add placeholders, or re-raise
-                    # Adding placeholders for now to maintain list length alignment
-                    # Attempt to get hidden size safely
-                    hidden_size = getattr(getattr(self.model, 'model', None), 'config', None).hidden_size if hasattr(self.model, 'model') else 1024 # Default fallback size
-                    error_placeholder_dense = [0.0] * hidden_size
-                    error_placeholder_sparse = {}
-                    dense_embeddings.extend([error_placeholder_dense] * len(batch_texts))
-                    sparse_embeddings.extend([error_placeholder_sparse] * len(batch_texts))
+                    # #241 (#225 discipline): a failed embedding batch FAILS the
+                    # stage — placeholder/zero vectors would silently make the
+                    # affected chunks invisible to dense retrieval while
+                    # appearing processed (index poisoning). Retryable by the
+                    # job runner; nothing is persisted for this book.
+                    raise RuntimeError(
+                        f"embedding batch failed at chunk offset {i} "
+                        f"({len(batch_texts)} chunks): {e}"
+                    ) from e
 
             # Final memory cleanup
             if self.enable_memory_management:
                 self._cleanup_gpu_memory()
 
-            # Check if the number of embeddings matches the number of chunks
+            # #241: length mismatches are a hard failure — padding would
+            # persist fake vectors for real chunks.
             if len(dense_embeddings) != num_chunks or len(sparse_embeddings) != num_chunks:
-                 logger.debug(f"Error: Mismatch between number of chunks ({num_chunks}) and generated embeddings ({len(dense_embeddings)} dense, {len(sparse_embeddings)} sparse).")
-                 # Handle this critical error, maybe return None or raise exception
-                 # For now, we'll proceed but this indicates a problem
-                 # Attempt to pad if lengths are mismatched (less ideal)
-                 hidden_size = getattr(getattr(self.model, 'model', None), 'config', None).hidden_size if hasattr(self.model, 'model') else 1024 # Default fallback size
-                 error_placeholder_dense = [0.0] * hidden_size
-                 error_placeholder_sparse = {}
-                 while len(dense_embeddings) < num_chunks: dense_embeddings.append(error_placeholder_dense)
-                 while len(sparse_embeddings) < num_chunks: sparse_embeddings.append(error_placeholder_sparse)
-                 dense_embeddings = dense_embeddings[:num_chunks]
-                 sparse_embeddings = sparse_embeddings[:num_chunks]
+                 raise RuntimeError(
+                     f"embedder length mismatch: {num_chunks} chunks vs "
+                     f"{len(dense_embeddings)} dense / {len(sparse_embeddings)} "
+                     f"sparse vectors — refusing to pad (#241)"
+                 )
 
             # Add embeddings back to the original chunk dictionaries
             for i, chunk in enumerate(chunks):

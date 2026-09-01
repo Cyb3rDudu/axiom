@@ -1107,3 +1107,43 @@ func TestLocatorViewEpubCFITrustLevels(t *testing.T) {
 		t.Fatalf("no-ordinal label = %q", noCh.Label)
 	}
 }
+
+// #239 regression: a filtered sparse arm must carry minimum_should_match:1.
+// OpenSearch treats bool-should as optional when a filter clause exists, so
+// without it a filtered document matching ZERO sparse tokens still enters
+// the arm and pollutes the RRF merge. Unfiltered requests keep the plain
+// bool-should shape (no filter sibling — should is already required there).
+func TestSearch_SparseArmFilterMinimumShouldMatch(t *testing.T) {
+	os := newOSServer(t)
+	os.sparseHits = []osHit{hit("s", "doc", "sparse")}
+	svc := newService(os.URL, &fakeProcessor{embedVec: []float32{1},
+		embedSparse: map[string]float64{"1": 1.0}}, fakeDocs{})
+	if _, err := svc.Search(context.Background(), Request{Query: "q", TopN: 1,
+		Filters: &Filters{DocumentIDs: []string{"doc"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if os.lastSparseBody == nil {
+		t.Fatal("sparse never queried")
+	}
+	raw, _ := json.Marshal(os.lastSparseBody["query"])
+	if !strings.Contains(string(raw), `"minimum_should_match":1`) {
+		t.Fatalf("filtered sparse arm must set minimum_should_match:1 (else zero-token docs ride the filter into RRF): %s", raw)
+	}
+
+	// passenger shape check: the filter must still wrap via the keyword
+	// subfield (the #748 contract), not be replaced by the tightening.
+	if !strings.Contains(string(raw), `"terms":{"document_id.keyword":["doc"]}`) {
+		t.Fatalf("document filter must stay: %s", raw)
+	}
+
+	// unfiltered: no minimum_should_match key is forced (should-only bool
+	// is already mandatory by default).
+	os.lastSparseBody = nil
+	if _, err := svc.Search(context.Background(), Request{Query: "q", TopN: 1}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(os.lastSparseBody["query"])
+	if strings.Contains(string(raw), "minimum_should_match") {
+		t.Fatalf("unfiltered sparse arm must not set minimum_should_match: %s", raw)
+	}
+}
