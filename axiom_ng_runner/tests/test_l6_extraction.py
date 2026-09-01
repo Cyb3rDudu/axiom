@@ -487,18 +487,24 @@ class TestPipelineWiring:
     def _patch_pipeline_heavies(monkeypatch, tmp_path, chunk_text):
         import subprocess as _subprocess
 
-        def fake_run(cmd, **_kwargs):
-            # cmd: [python, -m, pdf_worker, src, out_md, out_images]
-            out_md_path = Path(cmd[4])
-            out_md_path.write_text(f"# T\n\n{chunk_text}", encoding="utf-8")
-            out = types.SimpleNamespace(
-                returncode=0,
-                stdout='{"image_mapping": {}}',
-                stderr="",
-            )
-            return out
+        class _FakePopen:
+            """Stands in for the conversion subprocess (#242: the pipeline
+            now uses Popen + communicate so cancel can reach it)."""
 
-        monkeypatch.setattr(_subprocess, "run", fake_run)
+            def __init__(self, cmd, **_kwargs):
+                # cmd: [python, -m, pdf_worker, src, out_md, out_images]
+                out_md_path = Path(cmd[4])
+                out_md_path.write_text(f"# T\n\n{chunk_text}", encoding="utf-8")
+                self.out = '{"image_mapping": {}}'
+                self.returncode = 0
+
+            def communicate(self) -> tuple:
+                return (self.out, "")
+
+            def poll(self):
+                return None
+
+        monkeypatch.setattr(_subprocess, "Popen", _FakePopen)
 
         # extract_page_labels stub (compute_core.pdf_processing)
         proc_mod = types.ModuleType("axiom_ng_runner.compute_core.pdf_processing")

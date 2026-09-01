@@ -888,6 +888,7 @@ def compute(
     set_stage: Callable[[str], None] | None = None,
     commit: Callable[[dict[str, Any]], None] | None = None,
     set_progress: Callable[[int, int, str], None] | None = None,
+    runtime: Any | None = None,
 ) -> dict[str, Any]:
     """Run the pure compute pipeline for a validated source. Returns a
     contract processor-result dict (contract §10). Work dir is per-job and
@@ -895,10 +896,14 @@ def compute(
     stage (GET /v1/jobs) while compute runs (§9). ``commit`` (#225
     early-commit) lets the pipeline persist the so-far-complete result
     before the relationships stage runs; ``set_progress`` reports §9
-    progress for long-running stage loops."""
+    progress for long-running stage loops. ``runtime`` (#242) is the per-job
+    runtime used to register the real backend's conversion subprocess so
+    cancel can terminate it."""
     backend = settings.get().compute_backend
     if backend == "real":
-        result = _compute_real(request, work_dir, set_stage, commit, set_progress)
+        result = _compute_real(
+            request, work_dir, set_stage, commit, set_progress, runtime
+        )
         if result is not None:
             return result
         log.warning("real backend unavailable; falling back to reference")
@@ -979,13 +984,16 @@ def _compute_real(
     set_stage: Callable[[str], None] | None = None,
     commit: Callable[[dict[str, Any]], None] | None = None,
     set_progress: Callable[[int, int, str], None] | None = None,
+    runtime: Any | None = None,
 ) -> dict[str, Any] | None:
     """Wire the existing heavy pipeline (Marker/pdf_worker, epub_worker,
     embedder, extractors). Returns None if the heavy deps are unavailable so
     the caller can fall back. The contract black-box suite runs against
     ``reference``."""
     try:
-        return _real_pipeline(request, work_dir, set_stage, commit, set_progress)
+        return _real_pipeline(
+            request, work_dir, set_stage, commit, set_progress, runtime
+        )
     except ImportError as err:
         log.warning("real compute deps unavailable: %s", err)
         return None
@@ -1024,9 +1032,11 @@ def _real_pipeline(
     set_stage: Callable[[str], None] | None = None,
     commit: Callable[[dict[str, Any]], None] | None = None,
     set_progress: Callable[[int, int, str], None] | None = None,
+    runtime: Any | None = None,
 ) -> dict[str, Any]:
     import json as _json
     import subprocess
+    from contextlib import suppress
 
     enter, stage_timings = _stage_tracker(set_stage)
     attach = request["attachment"]
@@ -1049,11 +1059,33 @@ def _real_pipeline(
         str(out_md),
         str(out_images),
     ]
-    proc = subprocess.run(
-        cmd, cwd=str(Path(__file__).resolve().parent.parent), capture_output=True, text=True, check=False
+    # #242: launch the conversion via Popen so the handle is registered with
+    # the job runtime; cancel can then terminate the real process tree
+    # (start_new_session -> own process group -> SIGTERM/SIGKILL the group)
+    # instead of only flipping the status while the worker keeps burning.
+    # ``communicate()`` replaces subprocess.run's collect-and-wait.
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(Path(__file__).resolve().parent.parent),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
     )
+    if runtime is not None:
+        runtime.register_child(proc)
+    out_text = ""
+    err_text = ""
+    try:
+        with suppress(Exception):  # a cancelled child may break communicate()
+            out_text, err_text = proc.communicate()
+    finally:
+        if runtime is not None:
+            runtime.unregister_child(proc)
     if proc.returncode != 0:
-        from axiom_ng_runner.compute_core.pdf_worker.__main__ import _classify_child_failure
+        from axiom_ng_runner.compute_core.pdf_worker.__main__ import (
+            _classify_child_failure,
+        )
         klass = _classify_child_failure(proc.returncode)
         if not klass and proc.returncode == 1 and content_type == "application/epub+zip":
             # #237: the EPUB worker classified a DOCUMENT defect (corrupt
@@ -1067,15 +1099,15 @@ def _real_pipeline(
             # dedicated exit codes when misroutes actually show up
             raise SourceError(
                 "SOURCE_UNREADABLE",
-                f"{convert} failed: {proc.stderr[-300:]}",
+                f"{convert} failed: {err_text[-300:]}",
             )
         detail = (klass + " | ") if klass else ""
-        raise RuntimeError(f"{convert} failed: {detail}{proc.stderr[-500:]}")
+        raise RuntimeError(f"{convert} failed: {detail}{err_text[-500:]}")
 
     # Parse the pdf_worker JSON result for the image_mapping
     # ({original_marker_filename → saved_filename}).
     image_mapping: dict[str, str] = {}
-    for line in reversed((proc.stdout or "").splitlines()):
+    for line in reversed((out_text or "").splitlines()):
         line = line.strip()
         if line.startswith("{") and line.endswith("}"):
             try:

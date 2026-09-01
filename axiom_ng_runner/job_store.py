@@ -309,9 +309,3 @@ class JobStore:
                 shutil.rmtree(job.path, ignore_errors=True)
             except OSError:
                 log.warning("failed to remove job dir %s", job.path)
-
-    def active_count(self) -> int:
-        with self._lock:
-            return sum(
-                1 for j in self._jobs.values() if j.status in ("accepted", "running")
-            )

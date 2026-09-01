@@ -45,7 +45,9 @@ from .models import (
     ProcessRequest,
     RerankRequest,
     RerankResponse,
+    RerankScore,
 )
+from .runtime import JobRuntime, Scheduler
 from .validation import (
     SourceError,
     ensure_hash_matches,
@@ -63,6 +65,11 @@ async def lifespan(app: FastAPI):
     embed/rerank request is warm instead of paying the ~90s cold load. No-op
     in reference mode or when AXIOM_PROCESSOR_WARMUP=0."""
     query_service.start_warmup()
+    # #242/#243: start the bounded admission scheduler and the retention
+    # timer. The scheduler's worker pool is process-lifetime; the prune timer
+    # ticks expired results away per AXIOM_PROCESSOR_RESULT_RETENTION.
+    _scheduler().start()
+    _ensure_prune_timer()
     yield
     # No shutdown teardown: the warm singletons are process-lifetime by design.
 
@@ -77,9 +84,52 @@ app = FastAPI(title="Axiom Processor (contract v1)", version=__version__, lifesp
 _store: JobStore | None = None
 _store_root: Path | None = None
 _store_lock = threading.Lock()
-_worker_sem: threading.BoundedSemaphore | None = None
-_sem_concurrency: int | None = None
-_running: dict[str, Any] = {}  # job_id -> {thread, process}
+
+# #242/#243: the single bounded admission scheduler (replaces the old
+# per-job thread + semaphore pair). Created lazily against the active
+# settings so tests can point each suite at its own concurrency/queue.
+_scheduler_instance: Scheduler | None = None
+_scheduler_cfg: tuple[int, int] | None = None
+_scheduler_lock = threading.Lock()
+
+_prune_timer: threading.Timer | None = None
+_prune_lock = threading.Lock()
+
+
+def _scheduler() -> Scheduler:
+    global _scheduler_instance, _scheduler_cfg
+    s = settings.get()
+    key = (s.max_concurrent_jobs, s.admission_queue_capacity)
+    with _scheduler_lock:
+        if _scheduler_instance is None or _scheduler_cfg != key:
+            _scheduler_instance = Scheduler(
+                max_concurrent=s.max_concurrent_jobs,
+                queue_capacity=s.admission_queue_capacity,
+                work=_run_compute,
+            )
+            _scheduler_cfg = key
+        return _scheduler_instance
+
+
+def _ensure_prune_timer() -> None:
+    """#243 retention: one background timer that periodically prunes expired
+    (unacked terminal) job records from the store. Idempotent — callers may
+    invoke it on every lifespan start without stacking timers."""
+    global _prune_timer
+    with _prune_lock:
+        if _prune_timer is not None and _prune_timer.is_alive():
+            return
+        retention = settings.get().result_retention_seconds
+        interval = min(60.0, max(1.0, retention / 4.0))
+
+        def _tick() -> None:
+            store = _store_impl()
+            store.prune_expired(settings.get().result_retention_seconds)
+            _ensure_prune_timer()  # reschedule for the next tick
+
+        _prune_timer = threading.Timer(interval, _tick)
+        _prune_timer.daemon = True
+        _prune_timer.start()
 
 
 def _store_impl() -> JobStore:
@@ -97,16 +147,6 @@ def _store_impl() -> JobStore:
             for j in list(_store._jobs.values()):
                 _relaunch_if_needed(j)
         return _store
-
-
-def _semaphore() -> threading.BoundedSemaphore:
-    global _worker_sem, _sem_concurrency
-    s = settings.get()
-    with _store_lock:
-        if _worker_sem is None or _sem_concurrency != s.max_concurrent_jobs:
-            _worker_sem = threading.BoundedSemaphore(s.max_concurrent_jobs)
-            _sem_concurrency = s.max_concurrent_jobs
-        return _worker_sem
 
 
 def _capabilities() -> Capabilities:
@@ -340,47 +380,57 @@ def _finalize_source(src: Path, job: Job, deduplicated: bool) -> None:
 # --- background compute --------------------------------------------------
 
 
-def _run_compute(job: Job) -> None:
+def _run_compute(runtime: JobRuntime) -> None:
+    """Compute for one job, run inside the job's worker thread by the
+    Scheduler. ``runtime`` carries the job_id and, on the real backend, the
+    live conversion subprocess handle so cancel can reach it (#242)."""
     from .runner import compute
 
-    with _semaphore():
-        try:
-            work_dir = job.path / "work"
-            work_dir.mkdir(parents=True, exist_ok=True)
+    job = _store_impl().get(runtime.job_id)
+    if job is None:
+        log.warning("job %s vanished from store before compute", runtime.job_id)
+        return
+    try:
+        work_dir = job.path / "work"
+        work_dir.mkdir(parents=True, exist_ok=True)
 
-            def _advance(stage: str) -> None:
-                # Live stage for GET /v1/jobs (§9): compute reports progress,
-                # the store keeps the job visible as running.
-                _store_impl().set_status(job, "running", stage=stage)
+        def _advance(stage: str) -> None:
+            # Live stage for GET /v1/jobs (§9): compute reports progress,
+            # the store keeps the job visible as running.
+            _store_impl().set_status(job, "running", stage=stage)
 
-            def _progress(completed: int, total: int, unit: str) -> None:
-                # #225: §9 progress for long-running stage loops — throttled
-                # to every 10th unit (or the last) so the disk write per
-                # batch stays cheap even for 400+ chunk books.
-                if completed % 10 == 0 or completed >= total:
-                    _store_impl().set_progress(job, completed, total, unit)
+        def _progress(completed: int, total: int, unit: str) -> None:
+            # #225: §9 progress for long-running stage loops — throttled
+            # to every 10th unit (or the last) so the disk write per
+            # batch stays cheap even for 400+ chunk books.
+            if completed % 10 == 0 or completed >= total:
+                _store_impl().set_progress(job, completed, total, unit)
 
-            def _commit(result: dict) -> None:
-                # #225 early-commit: chunks/embeddings/entities persist
-                # BEFORE the relationships stage runs; a late-stage abort
-                # leaves this snapshot retrievable.
-                _store_impl().set_partial(job, result)
+        def _commit(result: dict) -> None:
+            # #225 early-commit: chunks/embeddings/entities persist
+            # BEFORE the relationships stage runs; a late-stage abort
+            # leaves this snapshot retrievable.
+            _store_impl().set_partial(job, result)
 
-            _store_impl().set_status(job, "running", stage="validate_source")
-            result = compute(job.request, work_dir, set_stage=_advance,
-                             commit=_commit, set_progress=_progress)
-            _store_impl().set_result(job, result)
-        except SourceError as exc:
-            _store_impl().set_error(
-                job, exc.code, exc.message, retryable=False, stage="convert"
-            )
-        except Exception as exc:
-            log.exception("job %s failed during compute", job.job_id)
-            _store_impl().set_error(
-                job, "INTERNAL_ERROR", str(exc), retryable=True, stage="convert"
-            )
-        finally:
-            _running.pop(job.job_id, None)
+        _store_impl().set_status(job, "running", stage="validate_source")
+        result = compute(
+            job.request,
+            work_dir,
+            set_stage=_advance,
+            commit=_commit,
+            set_progress=_progress,
+            runtime=runtime,
+        )
+        _store_impl().set_result(job, result)
+    except SourceError as exc:
+        _store_impl().set_error(
+            job, exc.code, exc.message, retryable=False, stage="convert"
+        )
+    except Exception as exc:
+        log.exception("job %s failed during compute", job.job_id)
+        _store_impl().set_error(
+            job, "INTERNAL_ERROR", str(exc), retryable=True, stage="convert"
+        )
 
 
 # --- endpoints -----------------------------------------------------------
@@ -429,6 +479,23 @@ def _artifacts_expired() -> HTTPException:
     )
 
 
+def _admission_reject() -> HTTPException:
+    """#243: the bounded admission queue is full. Refuse explicitly (503 with
+    a retry hint) instead of silently spawning unbounded work — the caller
+    retries on backoff when a slot frees."""
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "QUEUE_FULL",
+            "message": (
+                "compute admission queue is full; retry after a compute slot "
+                "frees (Retry-After hint)"
+            ),
+            "retryable": True,
+        },
+    )
+
+
 @app.post("/v1/process", status_code=202)
 def process(body: ProcessRequest) -> dict[str, Any]:
     # Plain def (not async): source validation may download tens of MB
@@ -463,6 +530,13 @@ def process(body: ProcessRequest) -> dict[str, Any]:
             status=job.status,
             deduplicated=True,
         ).model_dump()
+
+    # #243 admission gate: refuse a NEW job before paying for source
+    # validation/download when the bounded compute queue is already full —
+    # an explicit 503, never a silent thread-spawn. (Dedup path above skips
+    # this: a resubmitted job was already admitted.)
+    if not _scheduler().accepting():
+        raise _admission_reject()
 
     # Validate the request and source *before* accepting. For source_url
     # delivery this downloads + hash-gates the bytes into a temp dir.
@@ -504,7 +578,14 @@ def process(body: ProcessRequest) -> dict[str, Any]:
             deduplicated=True,
         ).model_dump()
 
-    _launch_compute(job)
+    # #243: the authoritative admission point (closes the check/put race
+    # with concurrent POSTs). If a concurrent fill beat us to the last slot,
+    # undo the just-staged job and refuse loudly — never leave an accepted
+    # job with no compute owner.
+    if not _launch_compute(job):
+        store.remove(job.job_id)  # drop the stranded accepted record + work dir
+        raise _admission_reject()
+
     return ProcessAccept(
         contract_version=CONTRACT_VERSION,
         job_id=job.job_id,
@@ -513,27 +594,31 @@ def process(body: ProcessRequest) -> dict[str, Any]:
     ).model_dump()
 
 
-def _launch_compute(job: Job) -> None:
-    """Start (or restart) the background compute thread for a non-terminal job."""
-    t = threading.Thread(
-        target=_run_compute, args=(job,), name=f"compute-{job.job_id}", daemon=True
-    )
-    _running[job.job_id] = {"thread": t}
-    t.start()
+def _launch_compute(job: Job) -> bool:
+    """Admit a non-terminal job to the compute scheduler (#243).
+
+    Returns True if the job was enqueued (or is already tracked), False if the
+    bounded admission queue is full — the caller must then refuse the accept
+    with an explicit 429/503 rather than silently spawning work.
+    """
+    sch = _scheduler()
+    if sch.is_relevant(job.job_id):
+        return True  # already queued/running; idempotent accept
+    rt = JobRuntime(job.job_id, work=_run_compute)
+    return sch.submit(rt)
 
 
 def _relaunch_if_needed(job: Job) -> None:
     """Re-enqueue compute for a recovered non-terminal job with no live owner.
 
-    A job recovered from disk after a restart is `accepted` with no running
-    thread; without relaunch it would strand forever (W1). Dedup callers and
+    A job recovered from disk after a restart is `accepted` with no compute
+    owner; without relaunch it would strand forever (W1). Dedup callers and
     startup both route through here so the work is picked up exactly once.
     """
     if job.status not in ("accepted", "running"):
         return
-    entry = _running.get(job.job_id)
-    if entry is not None and entry.get("thread") and entry["thread"].is_alive():
-        return  # already owned by a live compute thread
+    if _scheduler().is_relevant(job.job_id):
+        return  # already queued/running
     if job.status == "running":
         # A prior owner died mid-run; demote to accepted before relaunch so we
         # do not double-count and so set_status transitions stay valid.
@@ -610,14 +695,14 @@ def job_cancel(job_id: str) -> dict[str, Any]:
             "status": job.status,
         }
 
-    # Terminate an owned compute subprocess if we have one.
-    from contextlib import suppress
-
-    entry = _running.get(job_id)
-    proc = (entry or {}).get("process")
-    if proc is not None and proc.poll() is None:
-        with suppress(OSError):
-            proc.terminate()
+    # #242: cancel reaches the REAL subprocess. The job runtime terminates the
+    # registered conversion process tree (SIGTERM -> bounded reap -> SIGKILL)
+    # on a daemon reaper so this endpoint returns immediately while the work
+    # stops within seconds. Reference/in-process compute has no child to kill;
+    # the store status flip below is the cooperative signal it observes.
+    rt = _scheduler().get(job_id)
+    if rt is not None:
+        rt.cancel()
 
     store.set_status(job, "cancelled", stage="")
     return {
@@ -778,7 +863,7 @@ def rerank_texts(body: RerankRequest) -> RerankResponse:
     return RerankResponse(
         contract_version=CONTRACT_VERSION,
         model=RERANKER_MODEL,
-        scores=ranked,
+        scores=[RerankScore(**e) for e in ranked],
     )
 
 

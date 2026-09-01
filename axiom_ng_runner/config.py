@@ -17,6 +17,11 @@ class Settings:
     work_root: Path = Path("/tmp/axiom_processor_work")
     allowed_source_roots: tuple[str, ...] = ()
     max_concurrent_jobs: int = 1
+    # #243: bounded FIFO admission queue — how many jobs may wait for a
+    # compute slot before a new POST is rejected with 429. 0 = accept only up
+    # to max_concurrent_jobs (no waiting). A real bound must exist so the
+    # runner never silently spawns unbounded work.
+    admission_queue_capacity: int = 8
     result_retention_seconds: float = 3600.0  # 1h default for restart recovery
     compute_backend: str = "reference"  # "reference" | "real"
     log_level: str = "INFO"
@@ -82,6 +87,9 @@ def load_settings() -> Settings:
         ),
         allowed_source_roots=_env_roots("AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS"),
         max_concurrent_jobs=max(1, _env_int("AXIOM_PROCESSOR_MAX_CONCURRENT_JOBS", 1)),
+        admission_queue_capacity=max(
+            0, _env_int("AXIOM_PROCESSOR_ADMISSION_QUEUE", 8)
+        ),
         result_retention_seconds=_env_float("AXIOM_PROCESSOR_RESULT_RETENTION", 3600.0),
         compute_backend=os.getenv("AXIOM_PROCESSOR_COMPUTE", "reference"),
         log_level=os.getenv("AXIOM_PROCESSOR_LOG_LEVEL", "INFO"),

@@ -415,7 +415,7 @@ def test_cancellation_terminates_inflight_job(client, fixture_dirs, monkeypatch)
 
     cancel_seen: dict[str, bool] = {"seen": False}
 
-    def slow_cooperative_compute(request, work_dir, set_stage=None, commit=None, set_progress=None):
+    def slow_cooperative_compute(request, work_dir, set_stage=None, commit=None, set_progress=None, runtime=None):
         # Simulate a long compute that cooperatively polls for cancellation.
         # Read status through the app's store singleton so we observe the
         # cancel endpoint's in-memory transition (a fresh JobStore would cache

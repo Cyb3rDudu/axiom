@@ -70,10 +70,18 @@ def test_signal_failure_stays_infra_error(tmp_path, monkeypatch):
 
     class _Proc:
         returncode = -9
-        stdout = ""
-        stderr = ""
 
-    monkeypatch.setattr("subprocess.run", lambda *a, **k: _Proc())
+        def __init__(self, *_a, **kw):
+            self.stdout = None
+            self.stderr = None
+
+        def communicate(self) -> tuple:
+            return (None, "")
+
+        def poll(self):
+            return -9
+
+    monkeypatch.setattr("subprocess.Popen", _Proc)
     with pytest.raises(RuntimeError) as exc_info:
         runnermod._real_pipeline(_epub_request(tmp_path, epub), tmp_path)
     assert "CHILD_OOM_SIGKILL" in str(exc_info.value)

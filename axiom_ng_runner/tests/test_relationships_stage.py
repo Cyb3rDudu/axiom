@@ -174,7 +174,7 @@ def test_early_commit_survives_relationships_abort(client, monkeypatch):
     """#225 DoD: chunks committed BEFORE relationships; a stage abort
     leaves them retrievable with the named reason — never a total loss."""
 
-    def fake_compute(request, work_dir, set_stage=None, commit=None, set_progress=None):
+    def fake_compute(request, work_dir, set_stage=None, commit=None, set_progress=None, runtime=None):
         set_stage("chunk")
         result = {
             "contract_version": "1.0",
@@ -231,7 +231,7 @@ def test_crash_after_commit_leaves_partial_visible(client, monkeypatch):
     result endpoint stays completed-only) but the status names the partial
     result so operators/E2E know the work is not lost."""
 
-    def fake_compute(request, work_dir, set_stage=None, commit=None, set_progress=None):
+    def fake_compute(request, work_dir, set_stage=None, commit=None, set_progress=None, runtime=None):
         commit({"status": "completed", "chunks": [{"ref": "chunk-0000"}]})
         raise RuntimeError("mREBEL worker died")
 
