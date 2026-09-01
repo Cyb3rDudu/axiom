@@ -918,6 +918,11 @@ def compute(
             # poisoning with no signal). Explicit opt-out only, loud + marked.
             if os.environ.get("ALLOW_REFERENCE_FALLBACK") != "1":
                 raise
+            # Ordering property of the opt-out: a real run that dies AFTER
+            # the #225 early-commit (e.g. a relationships-stage import) still
+            # falls back — the reference result then REPLACES the retrievable
+            # real partial via set_result. Loud + marked, but a fallback run
+            # can overwrite a real partial; callers must know this.
             log.warning(
                 "ALLOW_REFERENCE_FALLBACK=1: compute=real failed; DEGRADING TO "
                 "THE REFERENCE STUB — the result is NOT real compute output"

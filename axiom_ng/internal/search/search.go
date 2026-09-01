@@ -745,8 +745,7 @@ func (c *osClient) sparse(ctx context.Context, weights map[string]float64, size 
 			"bool": map[string]any{
 				"should":               should,
 				"minimum_should_match": 1,
-
-				"filter": []any{map[string]any{"terms": map[string]any{"document_id.keyword": f.DocumentIDs}}},
+				"filter":               []any{map[string]any{"terms": map[string]any{"document_id.keyword": f.DocumentIDs}}},
 			},
 		}
 	}

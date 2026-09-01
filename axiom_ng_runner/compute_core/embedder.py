@@ -245,11 +245,11 @@ class TextEmbedder:
             # #241: length mismatches are a hard failure — padding would
             # persist fake vectors for real chunks.
             if len(dense_embeddings) != num_chunks or len(sparse_embeddings) != num_chunks:
-                 raise RuntimeError(
-                     f"embedder length mismatch: {num_chunks} chunks vs "
-                     f"{len(dense_embeddings)} dense / {len(sparse_embeddings)} "
-                     f"sparse vectors — refusing to pad (#241)"
-                 )
+                raise RuntimeError(
+                    f"embedder length mismatch: {num_chunks} chunks vs "
+                    f"{len(dense_embeddings)} dense / {len(sparse_embeddings)} "
+                    f"sparse vectors — refusing to pad (#241)"
+                )
 
             # Add embeddings back to the original chunk dictionaries
             for i, chunk in enumerate(chunks):

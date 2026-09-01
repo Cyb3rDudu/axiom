@@ -50,6 +50,7 @@ AXIOM_PROCESSOR_WORK_ROOT=/tmp/axiom_processor_work
 AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=/path/to/zotero/storage
 AXIOM_PROCESSOR_MAX_CONCURRENT_JOBS=1
 AXIOM_PROCESSOR_COMPUTE=reference   # or "real"
+ALLOW_REFERENCE_FALLBACK=1           # compute=real opt-out: degrade to the reference stub on a broken real environment (WARNING logged, processor metadata marked reference_fallback: true); never set in normal operation
 ```
 
 ## Tests

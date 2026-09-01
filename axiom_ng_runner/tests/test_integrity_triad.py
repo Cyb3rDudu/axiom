@@ -27,7 +27,13 @@ from unittest import mock
 
 import pytest
 from axiom_ng_runner import runner
-from axiom_ng_runner.compute_core.embedder import TextEmbedder
+
+# NOTE: no module-level import of compute_core.embedder here — it pulls
+# numpy/torch/FlagEmbedding at import time, which the light CI env does not
+# have; a module-level import would break COLLECTION of the whole file (and
+# with it the #240 tests). TextEmbedder is imported lazily in _embedder_with
+# with an importorskip so the #241 tests skip cleanly where the heavy deps
+# are absent (convention: tests/test_compute_core_imports.py).
 
 # ---------------------------------------------------------------------------
 # #240: real-mode ImportError -> retryable failure, no reference run
@@ -73,6 +79,25 @@ def test_real_mode_import_error_fails_no_reference(monkeypatch, tmp_path):
         runner.compute(_real_request(tmp_path), tmp_path)
     assert "compute_core.marker" in str(ctx.value)
     assert "compute=real" in str(ctx.value)
+
+
+def test_real_mode_fallback_optout_requires_exact_value(monkeypatch, tmp_path):
+    """Strict gate: only the exact value \"1\" opts out — \"0\", \"true\",
+    \"yes\" or any other value still raises (no accidental fallbacks)."""
+    monkeypatch.setattr(
+        runner, "_real_pipeline",
+        mock.Mock(side_effect=ImportError("No module named 'heavy.dep'")),
+    )
+    monkeypatch.setattr(
+        runner, "_compute_reference",
+        mock.Mock(side_effect=AssertionError(
+            "reference executed with ALLOW_REFERENCE_FALLBACK=0")))
+    _force_real_backend(monkeypatch)
+
+    for bad in ("0", "true", "yes", "on", ""):
+        monkeypatch.setenv("ALLOW_REFERENCE_FALLBACK", bad)
+        with pytest.raises(runner.ComputeEnvironmentError):
+            runner.compute(_real_request(tmp_path), tmp_path)
 
 
 def test_real_mode_fallback_opt_out_is_loud_and_marked(
@@ -132,7 +157,10 @@ def test_compute_environment_error_maps_to_retryable_job(monkeypatch, tmp_path):
 def _embedder_with(fake_model, batch_size=2):
     """TextEmbedder without the heavy __init__ (no BGEM3 load): the fields
     embed_chunks actually touches, plus a fake model whose encode we
-    control per batch."""
+    control per batch. Skips when the heavy deps are absent (light CI)."""
+    pytest.importorskip("FlagEmbedding")
+    from axiom_ng_runner.compute_core.embedder import TextEmbedder
+
     emb = object.__new__(TextEmbedder)
     emb.model = fake_model
     emb.batch_size = batch_size
