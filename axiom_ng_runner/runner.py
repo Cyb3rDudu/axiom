@@ -1121,6 +1121,9 @@ def _real_pipeline(
     page_label_map: dict[int, str] = {}
     page_source_map: dict[int, str] = {}
     page_chapter_map: dict[int, int] = {}
+    # #226 W2: refusable tail-trimmed marker-page ceiling; None for PDFs and
+    # untrimmed EPUBS (declared here so it is unconditionally bound).
+    marker_pagemap_max: int | None = None
     cfi_entries: list[dict[str, Any]] = []
     if content_type == "application/pdf":
         # #173: the trust pipeline replaces the bare 3-tier extract — labels
@@ -1356,6 +1359,10 @@ def _real_pipeline(
         enter("relationships")
         _assign_contract_chunk_ids(chunk_dicts)
         chunk_texts = dict(chunk_items)
+        # want_relationships implies real_entities is not None (the guard above
+        # required it); a bare ``if real_entities is None`` would violate the
+        # invariant, so narrow explicitly for the extractor's non-Optional arg.
+        assert real_entities is not None
         budget = settings.get().relationships_budget_seconds
         deadline = (time.monotonic() + budget) if budget > 0 else None
         real_relationships, budget_exceeded = _extract_real_relationships(

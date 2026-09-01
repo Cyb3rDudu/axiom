@@ -117,7 +117,10 @@ class JobStore:
         self.work_root.mkdir(parents=True, exist_ok=True)
         # .incoming only ever holds downloads of in-flight requests; any
         # residue belongs to a dead process — sweep it at startup.
-        shutil.rmtree(self.work_root / ".incoming", ignore_errors=True)
+        try:
+            shutil.rmtree(self.work_root / ".incoming", ignore_errors=True)
+        except OSError:
+            log.warning("failed to sweep .incoming under %s", self.work_root)
         self._lock = threading.RLock()
         self._jobs: dict[str, Job] = {}
         self._by_idempotency: dict[str, str] = {}

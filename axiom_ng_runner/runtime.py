@@ -171,10 +171,16 @@ class Scheduler:
         if max_concurrent < 1:
             raise ValueError("max_concurrent must be >= 1")
         self._max = max_concurrent
-        self._queue: queue.Queue[JobRuntime] = queue.Queue(maxsize=max(0, queue_capacity))
+        # #243: the admission bound is max_concurrent (running) + the waiting
+        # capacity. An explicit ``_outstanding`` counter enforces it (never the
+        # queue's maxsize, which would be UNBOUNDED for 0 in Python): capacity 0
+        # means no waiting room at all — only max_concurrent_jobs are accepted.
+        self._capacity = max(0, queue_capacity)
+        self._queue: queue.Queue[JobRuntime] = queue.Queue()  # FIFO (bounded by _outstanding)
         self._work = work
         self._running: dict[str, JobRuntime] = {}
         self._running_lock = threading.Lock()
+        self._outstanding = 0  # accepted-but-not-yet-completed jobs
         self._workers: list[threading.Thread] = []
         self._started = False
 
@@ -194,17 +200,21 @@ class Scheduler:
         while True:
             rt: JobRuntime = self._queue.get()
             try:
+                if rt.cancelled:
+                    # #242: cancel survives the queue — a job cancelled while
+                    # waiting must never start. The store already settled it to
+                    # cancelled; silently drop it (no compute, no spawn).
+                    log.info("job %s cancelled while queued; skipping compute", rt.job_id)
+                    continue
                 rt.start()          # run compute in its own per-job thread
                 rt.join()
             finally:
-                self._drop(rt)
+                with self._running_lock:
+                    self._running.pop(rt.job_id, None)
+                    self._outstanding -= 1
                 self._queue.task_done()
 
     # --- registry --------------------------------------------------------
-    def track(self, rt: JobRuntime) -> None:
-        with self._running_lock:
-            self._running[rt.job_id] = rt
-
     def get(self, job_id: str) -> JobRuntime | None:
         with self._running_lock:
             return self._running.get(job_id)
@@ -215,24 +225,25 @@ class Scheduler:
         with self._running_lock:
             return job_id in self._running
 
-    def _drop(self, rt: JobRuntime) -> None:
-        with self._running_lock:
-            self._running.pop(rt.job_id, None)
-
     # --- admission (#243) -------------------------------------------------
     def submit(self, rt: JobRuntime) -> bool:
-        """Enqueue a job for compute. Returns False (queue full) with no
-        thread spawned; the caller maps that to an explicit 429/503."""
-        self.track(rt)
-        try:
-            self._queue.put_nowait(rt)
-            return True
-        except queue.Full:
-            self._drop(rt)
-            return False
+        """Admit a job for compute. Returns False (bounded queue full — i.e.
+        max_concurrent + capacity already accepted) with no thread spawned;
+        the caller maps that to an explicit 429/503.
+
+        The bound check and the insert-into-_running happen under one lock so
+        concurrent POSTs cannot both take the last slot."""
+        with self._running_lock:
+            if self._outstanding >= self._max + self._capacity:
+                return False
+            self._outstanding += 1
+            self._running[rt.job_id] = rt
+            self._queue.put_nowait(rt)  # never Full: internal FIFO is unbounded
+        return True
 
     def accepting(self) -> bool:
-        """True if a new job can be admitted (the bounded FIFO queue has a
-        free slot). Advisory: submit() is the authoritative admission point
-        and re-checks under the queue's lock, closing the check/put race."""
-        return not self._queue.full()
+        """True if a new job can be admitted (fewer than max_concurrent +
+        capacity jobs are outstanding). Advisory: submit() is authoritative
+        and re-checks under the lock, closing the check/put race."""
+        with self._running_lock:
+            return self._outstanding < self._max + self._capacity

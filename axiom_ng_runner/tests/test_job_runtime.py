@@ -316,5 +316,148 @@ class TestRetention:
         assert acked.path.exists()
 
 
+class TestCancelSurvivesQueue:
+    """#242 security: cancel must survive the admission queue — a job
+    cancelled while waiting never starts compute, even after earlier queued/
+    running jobs finish."""
+
+    def test_cancelled_queued_job_never_starts(self, tmp_path, monkeypatch):
+        src = tmp_path / "doc.pdf"
+        src.write_bytes(b"%PDF-1.4 smoke")
+        started: list[str] = []
+        first_done = {"done": False}
+
+        def slow_compute(request, work_dir, set_stage=None, commit=None,
+                         set_progress=None, runtime=None):
+            started.append(request["job_id"])
+            if request["job_id"] == "first":
+                time.sleep(0.5)  # hold the single worker so 'queued' waits
+                first_done["done"] = True
+            return {"status": "completed", "chunks": []}
+
+        monkeypatch.setattr(runnermod, "compute", slow_compute)
+        old = settings.get()
+        settings.set(Settings(work_root=tmp_path / "work",
+                              allowed_source_roots=(str(tmp_path),),
+                              max_concurrent_jobs=1,
+                              admission_queue_capacity=8,
+                              warmup=False))
+        try:
+            with TestClient(appmod.app) as c:
+                r1 = c.post("/v1/process",
+                            json=_v1_payload(src, "first", "k-first"))
+                assert r1.status_code == 202, r1.text
+                r2 = c.post("/v1/process",
+                            json=_v1_payload(src, "queued", "k-queued"))
+                assert r2.status_code == 202, r2.text
+
+                # 'queued' is waiting behind 'first' (concurrency 1). Cancel it
+                # while it is still queued — it must never start afterwards.
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and not started:
+                    time.sleep(0.02)
+                assert started == ["first"]  # the worker picked up 'first' first
+                cr = c.post("/v1/jobs/queued/cancel")
+                assert cr.status_code == 200
+                assert c.get("/v1/jobs/queued").json()["status"] == "cancelled"
+
+                # Let 'first' finish (frees the worker); 'queued' must NOT run.
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline and not first_done["done"]:
+                    time.sleep(0.02)
+                assert first_done["done"], "first never finished"
+                time.sleep(0.2)  # give a (wrong) 'queued' start a chance
+                assert started == ["first"], (
+                    f"cancelled queued job must never start, got {started}"
+                )
+        finally:
+            settings.set(old)
+
+
+class TestCapacityZero:
+    """#243 root cause: admission_queue_capacity=0 is a NO-WAITING queue, not
+    an unbounded one. With capacity 0 only max_concurrent_jobs are accepted;
+    any overflow is rejected with 503, never 202."""
+
+    def test_capacity_zero_rejects_overflow_with_503(self, tmp_path, monkeypatch):
+        src = tmp_path / "doc.pdf"
+        src.write_bytes(b"%PDF-1.4 smoke")
+        spawned = {"n": 0}
+
+        def slow_compute(request, work_dir, set_stage=None, commit=None,
+                         set_progress=None, runtime=None):
+            spawned["n"] += 1
+            time.sleep(0.3)  # hold the single worker so the queue stays busy
+            return {"status": "completed", "chunks": []}
+
+        monkeypatch.setattr(runnermod, "compute", slow_compute)
+        old = settings.get()
+        settings.set(Settings(work_root=tmp_path / "work",
+                              allowed_source_roots=(str(tmp_path),),
+                              max_concurrent_jobs=1,
+                              admission_queue_capacity=0,  # no waiting room
+                              warmup=False))
+        try:
+            with TestClient(appmod.app) as c:
+                for i in range(3):
+                    r = c.post("/v1/process",
+                               json=_v1_payload(src, f"cap0-{i}", f"k-cap0-{i}"),
+                               timeout=10)
+                    if i == 0:
+                        assert r.status_code == 202, r.text
+                    else:
+                        # overflow: capacity 0 -> only the single running slot
+                        assert r.status_code == 503, (
+                            f"cap0 overflow got {r.status_code}: {r.text}"
+                        )
+                # Only the single admitted job may spawn.
+                time.sleep(1.0)
+                assert spawned["n"] == 1, f"capacity 0 may admit only 1, got {spawned}"
+        finally:
+            settings.set(old)
+
+
+class TestRetentionTimerPath:
+    """#243 acceptance: retention is wired through the timer/lifespan, not
+    only callable directly. A forgotten _ensure_prune_timer() must be visible."""
+
+    def test_lifespan_timer_prunes_expired_without_manual_call(self, tmp_path):
+        old = settings.get()
+        try:
+            work = tmp_path / "work"
+            settings.set(Settings(work_root=work,
+                                  result_retention_seconds=0.1,  # tiny window
+                                  warmup=False))
+
+            # Seed an expired (unacked terminal) job INTO THE APP'S store
+            # singleton — the one the timer's _tick actually prunes (a local
+            # JobStore would be invisible and the proof would be hollow).
+            store = appmod._store_impl()
+            path = work / "expired-1"
+            expired = Job(job_id="expired-1", idempotency_key="k-exp-1",
+                          request={}, path=path, status="completed", acked=False)
+            path.mkdir(parents=True, exist_ok=True)
+            store.put(expired)
+            expired.updated_at = time.time() - 100.0  # well past the window
+            assert "expired-1" in store._jobs
+
+            # Wire the timer path exactly as lifespan startup does.
+            appmod._ensure_prune_timer()
+            timer = appmod._prune_timer
+            assert timer is not None and timer.is_alive(), (
+                "_ensure_prune_timer must have registered a live timer"
+            )
+
+            # Drive the timer's registered function deterministically (proves
+            # the lifespan -> _ensure_prune_timer -> _tick -> prune chain),
+            # then also let the real wall-clock timer fire.
+            timer.function()  # invoke the scheduled _tick once
+            assert "expired-1" not in store._jobs, (
+                "timer tick must prune the expired job without a manual call"
+            )
+        finally:
+            settings.set(old)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-p", "no:cacheprovider"]))

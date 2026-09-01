@@ -15,7 +15,7 @@ import threading
 import time
 import urllib.request
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -361,7 +361,10 @@ def _finalize_source(src: Path, job: Job, deduplicated: bool) -> None:
     if src.parent.parent != settings.get().work_root / ".incoming":
         return  # local mode — nothing to finalize
     if deduplicated:
-        shutil.rmtree(src.parent, ignore_errors=True)
+        try:
+            shutil.rmtree(src.parent, ignore_errors=True)
+        except OSError:
+            log.warning("failed to drop dedup temp source %s", src.parent)
         return
     work = job.path / "work"
     work.mkdir(parents=True, exist_ok=True)
@@ -389,6 +392,12 @@ def _run_compute(runtime: JobRuntime) -> None:
     job = _store_impl().get(runtime.job_id)
     if job is None:
         log.warning("job %s vanished from store before compute", runtime.job_id)
+        return
+    # #242: cancel must survive the queue — a job settled to cancelled before
+    # its compute turn must not spend a slot (and create work dirs / spawn a
+    # real subprocess) just to be reverted. Honor the store's terminal state
+    # and the runtime flag; never compute a cancelled job.
+    if runtime.cancelled or (job is not None and job.status == "cancelled"):
         return
     try:
         work_dir = job.path / "work"
@@ -914,10 +923,8 @@ async def pdf_preflight(request: Request):
             },
         ) from None
     finally:
-        try:
+        with suppress(OSError):
             tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
 
     v = d.get("finding", "")
     # #175 blocker fix (review): ok must ALSO require a text layer — a
