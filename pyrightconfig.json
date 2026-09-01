@@ -1,0 +1,7 @@
+{
+  "include": ["axiom_ng_runner"],
+  "exclude": ["**/node_modules", "**/.venv"],
+  "venvPath": "axiom_ng_runner",
+  "venv": ".venv",
+  "extraPaths": ["."]
+}
