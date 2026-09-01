@@ -138,6 +138,19 @@ func contractVersionOf(v string) string {
 	return v
 }
 
+// metadataTitle extracts the document title from the Zotero metadata snapshot
+// (#167, B3 field). Best-effort: an empty or malformed snapshot yields "".
+func metadataTitle(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var m struct {
+		Title string `json:"title"`
+	}
+	_ = json.Unmarshal(raw, &m)
+	return m.Title
+}
+
 func derefString(p *string) string {
 	if p == nil {
 		return ""

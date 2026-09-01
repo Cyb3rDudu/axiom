@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
@@ -119,6 +120,21 @@ type Dispatcher struct {
 	// caps is the negotiated processor capability set; set once in Run before any
 	// claim is dispatched and used to bound concurrency and validate each job.
 	caps *processor.Capabilities
+	// events is the observer-only event bus (#167). Nil (the zero value)
+	// disables all emissions: no dispatcher behavior depends on it.
+	events *events.Broker
+}
+
+// SetEventBroker attaches the observer-only event bus. Nil (the zero value)
+// disables all emissions (workorder #167: the bus is a passenger — no dispatcher
+// behavior depends on it). Subscribe before Run if you need notifications.
+func (d *Dispatcher) SetEventBroker(b *events.Broker) { d.events = b }
+
+// publish delivers e to the attached bus, or no-ops when none is configured.
+func (d *Dispatcher) publish(e events.Event) {
+	if d.events != nil {
+		d.events.Publish(e)
+	}
 }
 
 // New builds a Dispatcher. It starts no goroutines; call Run to process. It uses
@@ -407,6 +423,17 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 		return
 	}
 
+	// #167: publish the claim after the durable fence — the row is durably
+	// this worker's now. Observer-only; extracting the title from the frozen
+	// metadata snapshot is best-effort (empty on a malformed snapshot).
+	d.publish(events.JobClaimed{
+		JobID:              ref.JobID,
+		WorkerID:           d.cfg.WorkerID,
+		RunnerName:         d.cfg.RunnerName,
+		AttachmentFilename: req.Attachment.Filename,
+		DocumentTitle:      metadataTitle(req.Document.MetadataSnapshot),
+	})
+
 	// Poll the processor while renewing the lease.
 	d.pollAndFinish(ctx, claimed, ph)
 }
@@ -459,6 +486,8 @@ func (d *Dispatcher) markNotProcessable(ctx context.Context, ref repo.LeaseRef, 
 	if err := d.rep.MarkFailed(ctx, ref, "NOT_PROCESSABLE", cause.Error()); err != nil && !isLost(err) {
 		d.logger.Printf("%v: mark failed: %v", fields, err)
 	}
+	// #167: the snapshot is unusable — terminal failure, observer-only.
+	d.publish(events.JobFailed{JobID: ref.JobID, ErrorCode: "NOT_PROCESSABLE"})
 }
 
 // preflightGate (#175) runs the runner's /v1/pdf/preflight on the claimed job's

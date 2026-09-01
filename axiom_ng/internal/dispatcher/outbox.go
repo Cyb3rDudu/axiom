@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/jackc/pgx/v5"
 )
@@ -279,6 +280,8 @@ func drainOutboxOnce(ctx context.Context, d *Dispatcher, osc *openSearchClient) 
 			d.logger.Printf("outbox row %s: %v", row.ID, err)
 		}
 	}
+	// #167: observe a drained batch; observer-only noise on the quiet path.
+	d.publish(events.OutboxDrained{Count: len(rows)})
 	return nil
 }
 

@@ -199,8 +199,11 @@ type fakeProcessor struct {
 	preflightHits   int
 
 	// script holds one handler per probe. index is consumed by the switch in serve.
-	statuses      []string // sequence of statuses returned by GET /v1/jobs/{id}
-	statusIdx     int
+	statuses  []string // sequence of statuses returned by GET /v1/jobs/{id}
+	statusIdx int
+	// #167: optional per-poll stage names emitted alongside each in-progress
+	// status, so tests can drive JobStageChanged deltas. Empty => no stage.
+	stages        []string
 	failStatus    int    // HTTP code for status endpoint; 0 => 200
 	failRetryCode string // error code when status=failed
 	failRetryable bool
@@ -292,7 +295,16 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jobID := strings.TrimPrefix(path, "/v1/jobs/")
-		writeJSON(w, 200, map[string]any{"contract_version": "1.0", "job_id": jobID, "status": st})
+		status := map[string]any{"contract_version": "1.0", "job_id": jobID, "status": st}
+		// #167: emit the per-poll stage when configured (stages may be shorter
+		// than statuses — in-progress polls carry stages, the terminal poll may
+		// not). Bounds-guarded so an exhausted script can never panic.
+		if len(fp.stages) > idx {
+			if s := fp.stages[idx]; s != "" {
+				status["stage"] = s
+			}
+		}
+		writeJSON(w, 200, status)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/jobs/") && strings.HasSuffix(path, "/ack"):
 		fp.ackHits++
 		if fp.ackFailures > 0 {

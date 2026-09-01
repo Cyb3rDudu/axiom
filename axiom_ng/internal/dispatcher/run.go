@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
@@ -112,6 +113,9 @@ func (d *Dispatcher) markTerminal(ctx context.Context, ref repo.LeaseRef, code, 
 	if err := d.rep.MarkFailed(ctx, ref, code, msg); err != nil && !isLost(err) {
 		d.logger.Printf("mark failed: %v", err)
 	}
+	// #167: every terminal failure reaches this choke point; publish the
+	// observer-only JobFailed after the fenced mark.
+	d.publish(events.JobFailed{JobID: ref.JobID, ErrorCode: code})
 }
 
 // maxConsecutiveStatusErrors caps how many consecutive processor status failures
@@ -169,6 +173,9 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 	ref := claimed.LeaseRef
 	fields := []any{ref.JobID, claimed.AttachmentID, claimed.DocumentID, claimed.Attempt}
 	consecutive := 0
+	// lastStage tracks the most recently observed poll stage; a change to it
+	// publishes JobStageChanged (#167, poll-delta). Observer-only.
+	lastStage := ""
 	// Renewal decoupled from the poll cadence (L8 fix): one goroutine renews
 	// for the WHOLE job lifetime — poll loop, result fetch, artifact staging
 	// and persist. It stops on ctx or a lost lease; the fenced mutations plus
@@ -257,6 +264,19 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 			d.onCancelled(ctx, ref)
 			return
 		default: // accepted, running, advisory in-progress states
+			// #167: observe a stage transition across polls (poll-delta). The
+			// stage name doubles as a light progress hint; a full progress
+			// contract is the runner's (x236).
+			if st.Stage != lastStage {
+				lastStage = st.Stage
+				if st.Stage != "" {
+					d.publish(events.JobStageChanged{
+						JobID:        ref.JobID,
+						Stage:        st.Stage,
+						ProgressHint: st.Stage,
+					})
+				}
+			}
 			if !waitFor(ctx, jitter(d.cfg.RenewalInterval)) {
 				return
 			}
@@ -366,6 +386,10 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob, 
 		d.markTerminal(ctx, ref, "RESULT_PERSIST_FAILED", err.Error())
 		return
 	}
+
+	// #167: the result is durably persisted and fenced-completed — the job is
+	// done regardless of the ACK below (F3 never reprocesses). Observer-only.
+	d.publish(events.JobCompleted{JobID: ref.JobID, Took: time.Since(ph.claim)})
 
 	// Acknowledge after durable commit. ACK failure keeps the job completed but
 	// marks ack_pending so the separate retry pass re-acknowledges it; it is
