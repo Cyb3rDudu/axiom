@@ -488,8 +488,17 @@ func FindPython(runnerDir string) string {
 }
 
 // FindRunnerDir locates the axiom_ng_runner checkout relative to the CWD.
+// Callers may sit THREE levels below the repo root (e.g. a test binary in
+// internal/backfill: backfill -> internal -> axiom_ng -> root), so the
+// candidate list reaches that far; every candidate is existence-checked
+// (pyproject.toml) — a nonexistent dir is never returned.
 func FindRunnerDir() string {
-	for _, c := range []string{"axiom_ng_runner", "../axiom_ng_runner", "../../axiom_ng_runner"} {
+	for _, c := range []string{
+		"axiom_ng_runner",
+		"../axiom_ng_runner",
+		"../../axiom_ng_runner",
+		"../../../axiom_ng_runner",
+	} {
 		if abs, err := filepath.Abs(c); err == nil {
 			if _, err := os.Stat(filepath.Join(abs, "pyproject.toml")); err == nil {
 				return abs

@@ -208,21 +208,37 @@ func (s *osStub) count() int {
 	return len(s.actions)
 }
 
+// resolvePython finds the runner venv python AND the runner checkout dir.
+// The test binary's CWD is the PACKAGE directory (internal/backfill) — THREE
+// levels up to the repo root (backfill -> internal -> axiom_ng -> root),
+// then into axiom_ng_runner. Every candidate is EXISTENCE-CHECKED before it
+// is returned: a non-existent runner dir must never flow into RunEngine
+// (whose cmd.Dir/PYTHONPATH would then point at a package-less directory
+// and the subprocess would silently fall back to whatever checkout the
+// venv has editable-installed — masking, not hermeticity).
 func resolvePython(t *testing.T) (string, string) {
 	t.Helper()
-	for _, c := range []string{
+	repoRoot, _ := filepath.Abs(filepath.Join("..", "..", ".."))
+	candidates := []string{
 		os.Getenv("AXIOM_RUNNER_PYTHON"),
-		filepath.Join("..", "..", "axiom_ng_runner", ".venv", "bin", "python"),
-	} {
+		filepath.Join(repoRoot, "axiom_ng_runner", ".venv", "bin", "python"),
+	}
+	for _, c := range candidates {
 		if c == "" {
 			continue
 		}
-		if abs, err := filepath.Abs(c); err == nil {
-			if _, err := os.Stat(abs); err == nil {
-				rd, _ := filepath.Abs(filepath.Join("..", "..", "axiom_ng_runner"))
-				return abs, rd
-			}
+		abs, err := filepath.Abs(c)
+		if err != nil {
+			continue
 		}
+		if _, err := os.Stat(abs); err != nil {
+			continue
+		}
+		rd := filepath.Join(repoRoot, "axiom_ng_runner")
+		if _, err := os.Stat(filepath.Join(rd, "pyproject.toml")); err != nil {
+			continue // not a runner checkout — never pass a bogus dir through
+		}
+		return abs, rd
 	}
 	t.Skip("no runner venv python (set AXIOM_RUNNER_PYTHON); skipping engine-backed IT")
 	return "", ""
