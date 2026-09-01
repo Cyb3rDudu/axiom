@@ -483,11 +483,9 @@ func (d *Dispatcher) trimCapabilityReason(req *processor.ProcessRequest) string 
 // is unusable. Such a defect is not transient, so it becomes terminal failed.
 func (d *Dispatcher) markNotProcessable(ctx context.Context, ref repo.LeaseRef, fields []any, cause error) {
 	d.logger.Printf("%v: not processable: %v", fields, cause)
-	if err := d.rep.MarkFailed(ctx, ref, "NOT_PROCESSABLE", cause.Error()); err != nil && !isLost(err) {
-		d.logger.Printf("%v: mark failed: %v", fields, err)
-	}
-	// #167: the snapshot is unusable — terminal failure, observer-only.
-	d.publish(events.JobFailed{JobID: ref.JobID, ErrorCode: "NOT_PROCESSABLE"})
+	// Single terminal-failure choke point: markTerminal marks failed AND
+	// publishes the observer-only JobFailed (#167).
+	d.markTerminal(ctx, ref, "NOT_PROCESSABLE", cause.Error())
 }
 
 // preflightGate (#175) runs the runner's /v1/pdf/preflight on the claimed job's

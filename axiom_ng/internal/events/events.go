@@ -125,12 +125,12 @@ type Subscription struct {
 // events (counting a gap marker) rather than ever blocking the dispatcher.
 type Broker struct {
 	mu   sync.Mutex
-	subs map[*Subscription]int // subscription -> queue capacity
+	subs map[*Subscription]struct{} // live subscriptions (capacity lives in each sub's buffer)
 }
 
 // NewBroker returns a broker that gives each subscription defaultQueueSize.
 func NewBroker() *Broker {
-	return &Broker{subs: make(map[*Subscription]int)}
+	return &Broker{subs: make(map[*Subscription]struct{})}
 }
 
 // NewSubscription returns a subscription not yet attached to any broker.
@@ -154,11 +154,12 @@ func (b *Broker) Subscribe(sub *Subscription, capacity int) {
 	}
 	sub.mu.Unlock()
 	b.mu.Lock()
-	b.subs[sub] = capacity
+	b.subs[sub] = struct{}{}
 	b.mu.Unlock()
 }
 
-// Unsubscribe removes a subscriber; its buffered events are dropped.
+// Unsubscribe removes a subscriber from the broker: no new events are
+// delivered to it. Events already buffered remain readable via Next.
 func (b *Broker) Unsubscribe(sub *Subscription) {
 	if sub == nil {
 		return
@@ -206,14 +207,20 @@ func (s *Subscription) offer(e Event) {
 // Next blocks until an event is available. It returns the event plus the
 // subscription's cumulative dropped count — a subscriber compares it against
 // its last-seen value to SEE how many events were skipped while it was slow
-// (the gap marker). ok is false when ctx is closed or the subscription has no
-// producer and its queue is empty and no gap is pending.
+// (the gap marker). ok is false only when done is closed.
 func (s *Subscription) Next(done <-chan struct{}) (e Event, drops int64, ok bool) {
 	for {
 		s.mu.Lock()
 		if len(s.buf) > 0 {
 			e = s.buf[0]
-			s.buf = s.buf[1:len(s.buf):len(s.buf)]
+			// Dequeue by copy-shift so the buffer KEEPS its Subscribe-time
+			// capacity (a [1:] re-slice would pin cap==len, make the next append
+			// take the drop-oldest branch, and after draining to empty panic in
+			// the overflow copy below — review Critical). Zeroing the popped tail
+			// slot releases the stale Event reference.
+			copy(s.buf, s.buf[1:])
+			s.buf[len(s.buf)-1] = nil
+			s.buf = s.buf[:len(s.buf)-1]
 			drops = s.drops
 			s.mu.Unlock()
 			return e, drops, true

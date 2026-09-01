@@ -114,3 +114,63 @@ func TestBrokerUnsubscribeStopsDelivery(t *testing.T) {
 		t.Fatalf("received %T after unsubscribe", e)
 	}
 }
+
+// TestNextPreservesCapacityAfterDrain is the interleaved-consumer regression
+// (review Critical): a Next that re-slices with [1:len:len] pins cap==len, so a
+// publish after a drain-to-empty takes the overflow branch against a zero
+// buffer and panics. This is the normal B2/B3 consume pattern (drain, then
+// more events arrive), so it must keep working.
+func TestNextPreservesCapacityAfterDrain(t *testing.T) {
+	b := NewBroker()
+	sub := NewSubscription()
+	b.Subscribe(sub, 8)
+
+	b.Publish(JobClaimed{JobID: "j1"})
+	e, _, ok := sub.Next(nil)
+	if !ok || JobID(e) != "j1" {
+		t.Fatalf("first Next: e=%v ok=%v, want j1/true", e, ok)
+	}
+	// Queue is now EMPTY with capacity still 8: the bug pinned cap==0 here
+	// and the next offer panicked on copy(buf, buf[1:]).
+	b.Publish(JobStageChanged{JobID: "j1", Stage: "convert"})
+	e2, drops, ok := sub.Next(nil)
+	if !ok {
+		t.Fatal("second Next: no event after drain")
+	}
+	if st, isStage := e2.(JobStageChanged); !isStage || st.Stage != "convert" {
+		t.Fatalf("second Next: e=%T %v, want JobStageChanged convert", e2, e2)
+	}
+	if drops != 0 {
+		t.Fatalf("false gap after drain: drops=%d, want 0", drops)
+	}
+}
+
+// TestNextKeepsCapacityWhileInterleaving proves no false gap markers for a
+// subscriber that keeps up while publishes interleave with reads (the same
+// cap==len ratchet produced phantom drops before the fix).
+func TestNextKeepsCapacityWhileInterleaving(t *testing.T) {
+	b := NewBroker()
+	sub := NewSubscription()
+	b.Subscribe(sub, 8)
+
+	b.Publish(JobClaimed{JobID: "a"})
+	b.Publish(JobStageChanged{JobID: "a", Stage: "s1"})
+	if e, drops, ok := sub.Next(nil); !ok || drops != 0 || JobID(e) != "a" {
+		t.Fatalf("first read: e=%v drops=%d ok=%v", e, drops, ok)
+	}
+	b.Publish(JobStageChanged{JobID: "a", Stage: "s2"}) // queue: s1,s2
+	if e, drops, ok := sub.Next(nil); !ok || drops != 0 {
+		t.Fatalf("second read: e=%v drops=%d ok=%v", e, drops, ok)
+	} else if st, isStage := e.(JobStageChanged); !isStage || st.Stage != "s1" {
+		t.Fatalf("FIFO broken: e=%T %v, want s1", e, e)
+	}
+	// Remaining queue must be exactly [s2] with zero drops.
+	if e, drops, ok := sub.Next(nil); !ok || drops != 0 {
+		t.Fatalf("third read: e=%v drops=%d ok=%v", e, drops, ok)
+	} else if st, isStage := e.(JobStageChanged); !isStage || st.Stage != "s2" {
+		t.Fatalf("FIFO broken: e=%T %v, want s2", e, e)
+	}
+	if got := sub.Dropped(); got != 0 {
+		t.Fatalf("Dropped()=%d, want 0 for a subscriber that keeps up", got)
+	}
+}
