@@ -145,6 +145,20 @@ func Run(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
 	o.logf("doc %s: active snapshot %s hash %s kind=%s",
 		o.DocKey, shortID(snapID), shortID(contentHash), rep.SourceKind)
 
+	// Direction ruling (corrected #233): the backfill enriches EPUB-active
+	// snapshots from the enriched EPUB sibling — NEVER a PDF-active one. A
+	// PDF's sibling page map is circular (it was DERIVED from that PDF), so
+	// enriching PDF chunks would re-import their own unverifiable pagination
+	// as derived folios. Refuse the whole run, honestly, write nothing —
+	// even if the PDF's chunks carry only physical_only/blind trust.
+	if rep.SourceKind == "pdf" {
+		rep.Refused = true
+		rep.RefusedReason = "active snapshot is a PDF — the backfill direction is EPUB-active only " +
+			"(a PDF sibling's page map is circular: derived from that same PDF); nothing written"
+		o.logf("refused: %s", rep.RefusedReason)
+		return rep, nil
+	}
+
 	// 2. Candidate EPUB: explicit, or auto-discover among the document's
 	//    EPUB attachments (injected copies preferred — derived page map).
 	epub := o.EpubPath
@@ -229,7 +243,8 @@ func Run(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
 			  '{page_end}',   to_jsonb($3::int)),
 			  '{page_source}', to_jsonb($5::text))
 			WHERE id = $1 AND snapshot_id = $4
-			  AND locator->>'page_source' IN ('none','physical_only','blind','')`,
+			  AND locator->>'type' = 'epub_cfi'
+			  AND locator->>'page_source' IN ('none','')`,
 			r.ChunkID, deref(r.PageStart), deref(r.PageEnd), snapID, DerivedFromSibling,
 			fmt.Sprint(deref(r.PageStart)), fmt.Sprint(deref(r.PageEnd)))
 		if err != nil {

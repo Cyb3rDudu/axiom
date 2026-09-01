@@ -8,15 +8,19 @@
 //   - no runner venv python           -> skip (Go-only CI; the alignment
 //     core has its own Python suite in axiom_ng_runner/tests)
 //
-// Proven here (the workorder's evidence items 2-4):
-//   - enrichment: folio-less (page_source=none) chunks of the ACTIVE
-//     snapshot gain derived_from_sibling print pages in ONE transaction,
-//     chapter/physical fields untouched
-//   - refusal: a non-monotone candidate page map refuses the WHOLE backfill
-//     and writes nothing
-//   - idempotency: a second run over the unchanged document is a no-op
-//   - dry-run: writes nothing
-//   - re-index: only update actions, doc id = chunk UUID, no delete/recreate
+// Direction ruling (corrected #233): the backfill enriches EPUB-active
+// snapshots ONLY. A PDF-active document is refused whole — its sibling page
+// map is circular — and PDF chunks (physical_only/blind) are unantastbar.
+// The direction-proof test pins that: a PDF-active doc offered as target
+// enriches NOTHING and names the reason (red under mutation: removing the
+// planner guard makes it enrich and the test fail).
+//
+// Also proven here: enrichment (folio-less epub_cfi chunks of the ACTIVE
+// snapshot gain derived_from_sibling print pages in ONE transaction, type
+// and chapter untouched), whole-backfill refusal on a non-monotone
+// candidate (nothing written), idempotency (second run no-op), dry-run
+// (writes nothing), re-index shape (bulk _update only, doc id = chunk
+// UUID, no delete/recreate).
 package backfill
 
 import (
@@ -84,8 +88,8 @@ func cloneDSN(u *url.URL, dbname string) string {
 	return cp.String()
 }
 
-// testdata book: 10 page-sections, print page == physical page; chunk texts
-// replicate the deterministic folgNwM token scheme.
+// testdata book: 10 page-sections, print page == section ordinal; chunk
+// texts replicate the deterministic folgNwM token scheme.
 func sectionText(n int) string {
 	words := make([]string, 130)
 	for m := range words {
@@ -104,12 +108,17 @@ func testdataPath(t *testing.T, name string) string {
 	return abs
 }
 
-// fixture installs a source/document/pdf attachment/ACTIVE snapshot with
-// folio-less chunks (one per page-section) and returns the doc key + chunk
-// ids in page order.
-func fixture(t *testing.T, pool *pgxpool.Pool, key, pdfPath string) []string {
+// fixture installs a source/document/attachment (kind = "epub"|"pdf") and an
+// ACTIVE snapshot whose chunks are folio-less. EPUB chunks carry epub_cfi
+// locators (page_source=none); PDF chunks page_span physical_only — the
+// contract-real folio-less states of each format.
+func fixture(t *testing.T, pool *pgxpool.Pool, key, kind, filePath string) []string {
 	t.Helper()
 	ctx := context.Background()
+	contentType := "application/epub+zip"
+	if kind == "pdf" {
+		contentType = "application/pdf"
+	}
 	var srcID string
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO zotero_sources (base_url, library_id) VALUES ('https://lb.test/'||$1::text, 'users/0')
@@ -119,7 +128,7 @@ func fixture(t *testing.T, pool *pgxpool.Pool, key, pdfPath string) []string {
 	var docID string
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
-		VALUES ($1, $2, 1, 'book', 'LB Book '||$2::text)
+		VALUES ($1, $2::text, 1, 'book', 'LB Book '||$2::text)
 		RETURNING id::text`, srcID, key).Scan(&docID); err != nil {
 		t.Fatalf("document: %v", err)
 	}
@@ -128,8 +137,8 @@ func fixture(t *testing.T, pool *pgxpool.Pool, key, pdfPath string) []string {
 		INSERT INTO zotero_attachments
 		  (source_id, document_id, zotero_key, zotero_version, parent_zotero_key,
 		   link_mode, content_type, filename, local_path, content_hash)
-		VALUES ($1, $2, $3, 1, $3, 'imported_file', 'application/pdf', 'lb.pdf', $4, $5)
-		RETURNING id::text`, srcID, docID, key, pdfPath, "lbhash"+key).Scan(&attID); err != nil {
+		VALUES ($1, $2, $3::text, 1, $3::text, 'imported_file', $4, 'lb.'||$5::text, $6, $7)
+		RETURNING id::text`, srcID, docID, key, contentType, kind, filePath, "lbhash"+key).Scan(&attID); err != nil {
 		t.Fatalf("attachment: %v", err)
 	}
 	var snapID string
@@ -143,15 +152,13 @@ func fixture(t *testing.T, pool *pgxpool.Pool, key, pdfPath string) []string {
 	}
 	ids := make([]string, 10)
 	for i := 1; i <= 10; i++ {
-		// physical pages are 0-BASED (contract §11 / chunker convention):
-		// section i lives on physical i-1; chunk 1 additionally exercises
-		// the physical_only target class (contract-real folio-less value)
-		src := "none"
-		if i == 1 {
-			src = "physical_only"
+		loc := fmt.Sprintf(`{"type":"epub_cfi","page_source":"none","chapter":3,
+			"cfi_start":"epubcfi(/6/2!/4/%d)"}`, 2*i)
+		if kind == "pdf" {
+			// 0-based physical pages (contract §11): section i on physical i-1
+			loc = fmt.Sprintf(`{"type":"page_span","page_source":"physical_only","chapter":3,
+				"physical_page_start":%d,"physical_page_end":%d}`, i-1, i-1)
 		}
-		loc := fmt.Sprintf(`{"type":"page_span","page_source":%q,"chapter":3,
-			"physical_page_start":%d,"physical_page_end":%d}`, src, i-1, i-1)
 		if err := pool.QueryRow(ctx, `
 			INSERT INTO processing_chunks (snapshot_id, chunk_index, text, locator)
 			VALUES ($1, $2, $3, $4) RETURNING id::text`,
@@ -212,7 +219,7 @@ func resolvePython(t *testing.T) (string, string) {
 		}
 		if abs, err := filepath.Abs(c); err == nil {
 			if _, err := os.Stat(abs); err == nil {
-				rd, _ := filepath.Abs(filepath.Join("..", "..", "..", "axiom_ng_runner"))
+				rd, _ := filepath.Abs(filepath.Join("..", "..", "axiom_ng_runner"))
 				return abs, rd
 			}
 		}
@@ -230,9 +237,8 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 		t.Fatalf("clean: %v", err)
 	}
 
-	pdf := testdataPath(t, "book.pdf")
 	epub := testdataPath(t, "book.epub")
-	chunks := fixture(t, pool, "LB1", pdf)
+	chunks := fixture(t, pool, "LB1", "epub", epub)
 
 	os_ := newOSStub(t)
 	opts := Options{
@@ -242,7 +248,7 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 		Logf:      func(string, ...any) {},
 	}
 
-	// --- 1. enrichment run ---
+	// --- 1. enrichment run (EPUB-active happy path) ---
 	rep, err := Run(ctx, pool, opts)
 	if err != nil {
 		t.Fatalf("run 1: %v", err)
@@ -258,7 +264,7 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 	}
 
 	// DB state: enriched locators carry derived_from_sibling + print pages,
-	// chapter/physical untouched.
+	// type/chapter untouched.
 	for i, id := range chunks {
 		var loc []byte
 		if err := pool.QueryRow(ctx,
@@ -266,29 +272,21 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 			t.Fatalf("chunk %d: %v", i, err)
 		}
 		var l struct {
-			Type           string `json:"type"`
-			PageSource     string `json:"page_source"`
-			PageStart      *int   `json:"page_start"`
-			PageEnd        *int   `json:"page_end"`
-			PageLabelStart string `json:"page_label_start"`
-			Chapter        *int   `json:"chapter"`
-			PhysStart      *int   `json:"physical_page_start"`
+			Type       string `json:"type"`
+			PageSource string `json:"page_source"`
+			PageStart  *int   `json:"page_start"`
+			PageEnd    *int   `json:"page_end"`
+			Chapter    *int   `json:"chapter"`
 		}
 		_ = json.Unmarshal(loc, &l)
-		if l.PageSource == "derived_from_sibling" {
+		if l.PageSource == DerivedFromSibling {
 			if l.PageStart == nil || *l.PageStart != i+1 {
 				t.Fatalf("chunk %d: derived page_start=%v want %d", i, l.PageStart, i+1)
-			}
-			if l.PageLabelStart != fmt.Sprint(i+1) {
-				t.Fatalf("chunk %d: page_label_start=%q (LocatorView renders this)", i, l.PageLabelStart)
 			}
 			if l.Chapter == nil || *l.Chapter != 3 {
 				t.Fatalf("chunk %d: chapter must stay authoritative, got %v", i, l.Chapter)
 			}
-			if l.PhysStart == nil || *l.PhysStart != i {
-				t.Fatalf("chunk %d: physical_page_start (0-based) must be preserved", i)
-			}
-			if l.Type != "page_span" {
+			if l.Type != "epub_cfi" {
 				t.Fatalf("chunk %d: type must be untouched", i)
 			}
 		}
@@ -326,8 +324,7 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 	}
 
 	// --- 3. refusal: non-monotone candidate refuses the whole backfill ---
-	chunksB := fixture(t, pool, "LB2", pdf)
-	_ = chunksB
+	fixture(t, pool, "LB2", "epub", epub)
 	repR, err := Run(ctx, pool, Options{
 		DocKey: "LB2", EpubPath: testdataPath(t, "poisoned.epub"), Budget: 2 * time.Minute,
 		Python: python, RunnerDir: runnerDir, OSBaseURL: os_.srv.URL,
@@ -353,8 +350,7 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 	}
 
 	// --- 4. dry-run writes nothing ---
-	chunksC := fixture(t, pool, "LB3", pdf)
-	_ = chunksC
+	fixture(t, pool, "LB3", "epub", epub)
 	repD, err := Run(ctx, pool, Options{
 		DocKey: "LB3", EpubPath: epub, DryRun: true, Budget: 2 * time.Minute,
 		Python: python, RunnerDir: runnerDir, Logf: func(string, ...any) {},
@@ -376,5 +372,58 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 	}
 	if dried != 0 {
 		t.Fatalf("dry-run must write nothing: %d chunks derived", dried)
+	}
+}
+
+// TestBackfillDirectionPDFRefused is the direction ruling's proof
+// (corrected #233): a PDF-ACTIVE document — even with only
+// physical_only/blind chunks, i.e. maximally enrichment-hungry — is refused
+// whole, with the direction reason, and NOTHING is written. Red under
+// mutation: remove the planner's PDF guard (or the epub_cfi UPDATE
+// predicate) and this test fails because the run would enrich.
+func TestBackfillDirectionPDFRefused(t *testing.T) {
+	pool := openBackfillDB(t)
+	python, runnerDir := resolvePython(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `DELETE FROM zotero_documents WHERE zotero_key LIKE 'LB4%'`); err != nil {
+		t.Fatalf("clean: %v", err)
+	}
+
+	pdf := testdataPath(t, "book.pdf")
+	fixture(t, pool, "LB4", "pdf", pdf)
+
+	os_ := newOSStub(t)
+	rep, err := Run(ctx, pool, Options{
+		DocKey: "LB4", EpubPath: testdataPath(t, "book.epub"), Budget: 2 * time.Minute,
+		Python: python, RunnerDir: runnerDir, OSBaseURL: os_.srv.URL,
+		Logf: func(string, ...any) {},
+	})
+	if err != nil {
+		t.Fatalf("pdf-direction run: %v", err)
+	}
+	if !rep.Refused {
+		t.Fatalf("PDF-active document must be refused whole (direction ruling), got %+v", rep)
+	}
+	if rep.Updated != 0 || rep.Reindexed != 0 {
+		t.Fatalf("PDF-active run must write nothing, got Updated=%d Reindexed=%d", rep.Updated, rep.Reindexed)
+	}
+	if !strings.Contains(rep.RefusedReason, "EPUB-active") {
+		t.Fatalf("refusal must name the direction reason, got %q", rep.RefusedReason)
+	}
+	if os_.count() != 0 {
+		t.Fatalf("PDF-active run must not touch the index, got %d actions", os_.count())
+	}
+	// every physical_only chunk untouched
+	var untouched int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM processing_chunks c
+		JOIN processing_snapshots sn ON sn.id = c.snapshot_id
+		JOIN zotero_documents d ON d.id = sn.document_id
+		WHERE d.zotero_key='LB4' AND c.locator->>'page_source'='physical_only'`).
+		Scan(&untouched); err != nil {
+		t.Fatalf("direction check: %v", err)
+	}
+	if untouched != 10 {
+		t.Fatalf("PDF chunks are unantastbar: %d/10 still physical_only (want 10)", untouched)
 	}
 }
