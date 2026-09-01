@@ -1,8 +1,10 @@
-// Command locator-backfill enriches the ACTIVE snapshot's chunk locators
-// with print pages derived from an enriched EPUB sibling (#233) — no
-// conversion, no re-chunking, no embedding, no new snapshot.
+// Package backfill implements the #233 locator backfill: enriching the
+// ACTIVE snapshot's chunk locators with print pages derived from an
+// enriched EPUB sibling — no conversion, no re-chunking, no embedding, no
+// new snapshot. The folio is metadata on the chunk, not the chunk.
 //
-// Flow (operator one-shot, modeled on meta-backfill/sparse-backfill):
+// Flow (one document per Run):
+//
 //  1. Resolve the document's active snapshot; FREEZE snapshot_id +
 //     content_hash (a changed document aborts honestly — the UPDATE is
 //     fenced by the frozen snapshot id inside one transaction).
@@ -11,7 +13,7 @@
 //     wall-clock budget. The engine refuses the whole backfill on a
 //     non-monotone candidate page map (#226) and refuses per-chunk below
 //     the confidence threshold (never guess).
-//  3. -dry-run: print the plan, write nothing.
+//  3. DryRun: return the plan, write nothing.
 //  4. Real run: ONE transaction per document — jsonb_set page_source=
 //     derived_from_sibling plus the print pages (page_start/page_end, and
 //     page_label_start/page_label_end for page_span locators because that
@@ -21,20 +23,12 @@
 //     existing docs (doc id = chunk UUID — NO delete+recreate, ids stay
 //     stable). Idempotent: re-running on an unchanged document is a no-op
 //     (already-derived chunks are not backfill targets).
-//
-// Env: AXIOM_DATABASE_URL (required), AXIOM_OPENSEARCH_URL (+ optional
-// AXIOM_OPENSEARCH_USERNAME/PASSWORD) required for real runs unless
-// -skip-index, AXIOM_RUNNER_PYTHON (default: <repo>/axiom_ng_runner/.venv/
-// bin/python). Flags: -doc <zotero_key>, -epub <candidate path> (default:
-// auto-discover the document's EPUB attachment, preferring injected ones),
-// -dry-run, -budget (default 15m), -skip-index.
-package main
+package backfill
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,126 +38,161 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const indexName = "axiom-ng-chunks-v1"
+// IndexName must match search.IndexName / the dispatcher's outbox index.
+const IndexName = "axiom-ng-chunks-v1"
 
-const derivedFromSibling = "derived_from_sibling"
+// DerivedFromSibling is the trust level a backfill may stamp — never
+// print_verified (the #233 reservation).
+const DerivedFromSibling = "derived_from_sibling"
 
-func main() {
-	doc := flag.String("doc", "", "document zotero_key (required)")
-	epubFlag := flag.String("epub", "", "candidate EPUB path (default: auto-discover)")
-	dry := flag.Bool("dry-run", false, "print the plan without writing")
-	skipIndex := flag.Bool("skip-index", false, "skip the OpenSearch re-index")
-	budget := flag.Duration("budget", 15*time.Minute, "wall-clock budget for the alignment engine")
-	dsn := flag.String("dsn", os.Getenv("AXIOM_DATABASE_URL"), "database DSN (default AXIOM_DATABASE_URL)")
-	python := flag.String("python", os.Getenv("AXIOM_RUNNER_PYTHON"), "runner venv python (default AXIOM_RUNNER_PYTHON, then repo-relative .venv)")
-	runnerDir := flag.String("runner-dir", "", "axiom_ng_runner checkout (default: ./axiom_ng_runner)")
-	flag.Parse()
-	if *doc == "" || *dsn == "" {
-		fmt.Fprintln(os.Stderr, "locator-backfill: -doc and AXIOM_DATABASE_URL/-dsn are required")
-		os.Exit(2)
+// Options configures one document's backfill run.
+type Options struct {
+	DocKey   string // zotero_key of the document (required)
+	EpubPath string // candidate EPUB path ("" = auto-discover)
+	DryRun   bool
+	Budget   time.Duration // wall-clock budget for the engine (default 15m)
+
+	Python    string // runner venv python ("" = discover)
+	RunnerDir string // axiom_ng_runner checkout ("" = discover)
+
+	// OpenSearch endpoint; empty OSBaseURL skips the re-index (the DB
+	// write is still committed — the update itself is idempotent).
+	OSBaseURL, OSUser, OSPass string
+
+	// Logf receives N/M progress lines (nil = discard).
+	Logf func(format string, a ...any)
+}
+
+// PlanResult mirrors one chunk row of the engine's JSON plan.
+type PlanResult struct {
+	ChunkID    string  `json:"chunk_id"`
+	Enrich     bool    `json:"enrich"`
+	PageStart  *int    `json:"page_start"`
+	PageEnd    *int    `json:"page_end"`
+	Source     string  `json:"source"`
+	Confidence float64 `json:"confidence"`
+	Refused    bool    `json:"refused"`
+	Reason     string  `json:"reason"`
+}
+
+// Plan mirrors the engine's JSON output (locator_backfill_cli.py).
+type Plan struct {
+	Aligned           bool         `json:"aligned"`
+	RefusedReason     string       `json:"refused_reason"`
+	AnchorCount       int          `json:"anchor_count"`
+	EnrichmentTargets int          `json:"enrichment_targets"`
+	PagesEnriched     int          `json:"pages_enriched"`
+	PagesRefused      int          `json:"pages_refused"`
+	Results           []PlanResult `json:"results"`
+}
+
+// Report is Run's outcome.
+type Report struct {
+	SnapshotID, ContentHash, SourceKind string
+	Plan                                *Plan
+	Updated                             int // chunk locators updated (0 on dry-run)
+	Reindexed                           int // OS docs updated
+	Refused                             bool
+	RefusedReason                       string
+}
+
+func (o *Options) logf(format string, a ...any) {
+	if o.Logf != nil {
+		o.Logf(format, a...)
 	}
+}
 
-	ctx := context.Background()
-	database, err := db.Open(ctx, *dsn)
-	if err != nil {
-		fatal("connect: %v", err)
+// Run executes one document's locator backfill end to end.
+func Run(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
+	if o.Budget == 0 {
+		o.Budget = 15 * time.Minute
 	}
-	defer database.Close()
+	rep := &Report{}
 
 	// 1. Active snapshot + attachment (kind + file) — the frozen identity.
-	var snapID, attPath, attCT, contentHash, docTitle string
-	err = database.Pool().QueryRow(ctx, `
-		SELECT sn.id::text, a.local_path, a.content_type, sn.content_hash, d.title
+	var snapID, attPath, attCT, contentHash string
+	err := pool.QueryRow(ctx, `
+		SELECT sn.id::text, a.local_path, a.content_type, sn.content_hash
 		FROM zotero_documents d
-		JOIN zotero_attachments a ON a.id = sn.attachment_id AND NOT a.deleted
 		JOIN processing_snapshots sn ON sn.document_id = d.id AND sn.active
-		WHERE d.zotero_key = $1`, *doc).Scan(&snapID, &attPath, &attCT, &contentHash, &docTitle)
+		JOIN zotero_attachments a ON a.id = sn.attachment_id AND NOT a.deleted
+		WHERE d.zotero_key = $1`, o.DocKey).
+		Scan(&snapID, &attPath, &attCT, &contentHash)
 	if err != nil {
-		fatal("active snapshot for %s: %v (no active snapshot?)", *doc, err)
+		return nil, fmt.Errorf("active snapshot for %s: %w", o.DocKey, err)
 	}
-	sourceKind := "epub"
+	rep.SnapshotID, rep.ContentHash = snapID, contentHash
+	rep.SourceKind = "epub"
 	pdfPath := ""
 	if strings.Contains(attCT, "pdf") {
-		sourceKind = "pdf"
+		rep.SourceKind = "pdf"
 		pdfPath = attPath
 	}
-	fmt.Printf("doc %s (%s): active snapshot %s hash %s kind=%s\n", *doc, docTitle, snapID[:8], contentHash[:12], sourceKind)
+	o.logf("doc %s: active snapshot %s hash %s kind=%s",
+		o.DocKey, shortID(snapID), shortID(contentHash), rep.SourceKind)
 
-	// 2. Candidate EPUB: flag, or auto-discover among the document's EPUB
-	//    attachments (injected copies preferred — they carry the derived map).
-	epub := *epubFlag
+	// 2. Candidate EPUB: explicit, or auto-discover among the document's
+	//    EPUB attachments (injected copies preferred — derived page map).
+	epub := o.EpubPath
 	if epub == "" {
-		epub, err = discoverCandidate(ctx, database.Pool(), *doc)
+		epub, err = DiscoverCandidate(ctx, pool, o.DocKey)
 		if err != nil {
-			fatal("candidate EPUB: %v (pass -epub)", err)
+			return nil, fmt.Errorf("candidate EPUB (pass EpubPath): %w", err)
 		}
 	}
-	fmt.Printf("candidate EPUB: %s\n", epub)
+	o.logf("candidate EPUB: %s", epub)
 
 	// 3. Chunks of the frozen snapshot.
-	rows, err := database.Pool().Query(ctx, `
+	rows, err := pool.Query(ctx, `
 		SELECT json_build_object('id', c.id::text, 'text', c.text, 'locator', c.locator)
 		FROM processing_chunks c
 		WHERE c.snapshot_id = $1
 		ORDER BY c.chunk_index`, snapID)
 	if err != nil {
-		fatal("select chunks: %v", err)
+		return nil, fmt.Errorf("select chunks: %w", err)
 	}
 	defer rows.Close()
 	var chunks []json.RawMessage
 	for rows.Next() {
 		var c json.RawMessage
 		if err := rows.Scan(&c); err != nil {
-			fatal("scan chunk: %v", err)
+			return nil, fmt.Errorf("scan chunk: %w", err)
 		}
 		chunks = append(chunks, c)
 	}
 	if err := rows.Err(); err != nil {
-		fatal("rows: %v", err)
+		return nil, fmt.Errorf("rows: %w", err)
 	}
-	fmt.Printf("chunks: %d\n", len(chunks))
+	o.logf("chunks: %d", len(chunks))
 
 	// 4. Run the Python alignment engine under the wall-clock budget.
-	plan, err := runEngine(ctx, *python, *runnerDir, epub, sourceKind, pdfPath, chunks, *budget)
+	plan, err := RunEngine(ctx, o.Python, o.RunnerDir, epub, rep.SourceKind, pdfPath, chunks, o.Budget)
 	if err != nil {
-		fatal("alignment engine: %v", err)
+		return nil, fmt.Errorf("alignment engine: %w", err)
 	}
+	rep.Plan = plan
 	if !plan.Aligned {
-		fmt.Printf("REFUSED (whole backfill): %s\n", plan.RefusedReason)
-		os.Exit(1)
+		rep.Refused, rep.RefusedReason = true, plan.RefusedReason
+		return rep, nil
 	}
-	fmt.Printf("aligned: %d anchors, %d/%d targets enriched, %d refused\n",
+	o.logf("aligned: %d anchors, %d/%d targets enriched, %d refused",
 		plan.AnchorCount, plan.PagesEnriched, plan.EnrichmentTargets, plan.PagesRefused)
-	for i, r := range plan.Results {
-		if r.Refused {
-			if i < 20 || (i+1)%50 == 0 { // bounded refusal log
-				fmt.Printf("  refused %s: %s\n", shortID(r.ChunkID), r.Reason)
-			}
-		}
-	}
-	if *dry {
-		for _, r := range plan.Results {
-			if r.Enrich {
-				fmt.Printf("  would enrich %s -> S. %d-%d (conf %.2f)\n", shortID(r.ChunkID), deref(r.PageStart), deref(r.PageEnd), r.Confidence)
-			}
-		}
-		fmt.Println("dry-run: nothing written")
-		return
+	if o.DryRun {
+		return rep, nil
 	}
 
 	// 5. ONE transaction: frozen-snapshot-fenced jsonb_set updates.
 	enriched := filterEnriched(plan.Results)
 	if len(enriched) == 0 {
-		fmt.Println("nothing to enrich (idempotent no-op)")
-		return
+		o.logf("nothing to enrich (idempotent no-op)")
+		return rep, nil
 	}
-	tx, err := database.Pool().Begin(ctx)
+	tx, err := pool.Begin(ctx)
 	if err != nil {
-		fatal("begin: %v", err)
+		return nil, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	// Freeze re-check inside the tx: a changed document invalidates the
@@ -173,7 +202,8 @@ func main() {
 		SELECT id::text FROM processing_snapshots
 		WHERE document_id = (SELECT document_id FROM processing_snapshots WHERE id=$1)
 		  AND active`, snapID).Scan(&active); err != nil || active != snapID {
-		fatal("active snapshot changed since the freeze (%v) — aborting without write", err)
+		return nil, fmt.Errorf(
+			"active snapshot changed since the freeze (%v) — aborting without write", err)
 	}
 	done := 0
 	for _, r := range enriched {
@@ -189,60 +219,45 @@ func main() {
 			  '{page_source}', to_jsonb($5))
 			WHERE id = $1 AND snapshot_id = $4
 			  AND locator->>'page_source' IS DISTINCT FROM $5`,
-			r.ChunkID, deref(r.PageStart), deref(r.PageEnd), snapID, derivedFromSibling)
+			r.ChunkID, deref(r.PageStart), deref(r.PageEnd), snapID, DerivedFromSibling)
 		if err != nil {
-			fatal("update %s: %v", r.ChunkID, err)
+			return nil, fmt.Errorf("update %s: %w", r.ChunkID, err)
 		}
 		done += int(tag.RowsAffected())
 		if done%50 == 0 {
-			fmt.Printf("  progress: %d/%d chunks enriched\n", done, len(enriched))
+			o.logf("progress: %d/%d chunks enriched", done, len(enriched))
 		}
 	}
 	if done != len(enriched) {
-		fatal("rows affected %d != planned %d — freezing guard tripped, rolling back", done, len(enriched))
+		return nil, fmt.Errorf(
+			"rows affected %d != planned %d — freeze guard tripped, rolled back", done, len(enriched))
 	}
 	if err := tx.Commit(ctx); err != nil {
-		fatal("commit: %v", err)
+		return nil, fmt.Errorf("commit: %w", err)
 	}
-	fmt.Printf("enriched %d chunk locators (page_source=%s)\n", done, derivedFromSibling)
+	rep.Updated = done
+	o.logf("enriched %d chunk locators (page_source=%s)", done, DerivedFromSibling)
 
 	// 6. Re-index: doc-update (no delete+recreate) on the OS chunk docs.
-	if *skipIndex {
-		fmt.Println("re-index skipped (-skip-index)")
-		return
+	if o.OSBaseURL == "" {
+		o.logf("re-index skipped (no OpenSearch endpoint)")
+		return rep, nil
 	}
-	if err := reindex(ctx, database.Pool(), enriched); err != nil {
-		fatal("re-index: %v (DB write committed; re-run with -skip-index=false, the update is idempotent)", err)
+	n, err := Reindex(ctx, pool, o.OSBaseURL, o.OSUser, o.OSPass, enriched)
+	if err != nil {
+		return rep, fmt.Errorf(
+			"re-index: %w (DB write committed; re-run — the update is idempotent)", err)
 	}
-	fmt.Println("OK: locators enriched + index docs updated")
+	rep.Reindexed = n
+	return rep, nil
 }
 
-// --- alignment-engine plan (mirrors locator_backfill_cli.py output) ---
-
-type planResult struct {
-	ChunkID    string  `json:"chunk_id"`
-	Enrich     bool    `json:"enrich"`
-	PageStart  *int    `json:"page_start"`
-	PageEnd    *int    `json:"page_end"`
-	Source     string  `json:"source"`
-	Confidence float64 `json:"confidence"`
-	Refused    bool    `json:"refused"`
-	Reason     string  `json:"reason"`
-}
-
-type plan struct {
-	Aligned           bool         `json:"aligned"`
-	RefusedReason     string       `json:"refused_reason"`
-	AnchorCount       int          `json:"anchor_count"`
-	EnrichmentTargets int          `json:"enrichment_targets"`
-	PagesEnriched     int          `json:"pages_enriched"`
-	PagesRefused      int          `json:"pages_refused"`
-	Results           []planResult `json:"results"`
-}
-
-func discoverCandidate(ctx context.Context, pool *pgxpool.Pool, doc string) (string, error) {
+// DiscoverCandidate picks the document's EPUB sibling: an injected copy
+// (carrying the derived page map) always wins, otherwise a single
+// unambiguous sibling; multiple non-injected siblings are ambiguous.
+func DiscoverCandidate(ctx context.Context, pool *pgxpool.Pool, doc string) (string, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT a.local_path, a.filename FROM zotero_attachments a
+		SELECT a.local_path FROM zotero_attachments a
 		JOIN zotero_documents d ON d.id = a.document_id
 		WHERE d.zotero_key = $1 AND NOT a.deleted
 		  AND a.content_type = 'application/epub+zip'
@@ -254,8 +269,8 @@ func discoverCandidate(ctx context.Context, pool *pgxpool.Pool, doc string) (str
 	defer rows.Close()
 	var paths []string
 	for rows.Next() {
-		var p, f string
-		if err := rows.Scan(&p, &f); err != nil {
+		var p string
+		if err := rows.Scan(&p); err != nil {
 			return "", err
 		}
 		paths = append(paths, p)
@@ -263,8 +278,6 @@ func discoverCandidate(ctx context.Context, pool *pgxpool.Pool, doc string) (str
 	if len(paths) == 0 {
 		return "", fmt.Errorf("no EPUB attachment with a local path")
 	}
-	// an injected copy (derived page map) always wins; otherwise an
-	// unambiguous single EPUB sibling
 	for _, p := range paths {
 		if strings.Contains(filepath.Base(p), "injected") {
 			return p, nil
@@ -276,13 +289,17 @@ func discoverCandidate(ctx context.Context, pool *pgxpool.Pool, doc string) (str
 	return "", fmt.Errorf("multiple EPUB siblings, none injected — pick one")
 }
 
-func runEngine(ctx context.Context, python, runnerDir, epub, sourceKind, pdfPath string,
-	chunks []json.RawMessage, budget time.Duration) (*plan, error) {
+// RunEngine invokes the Python alignment engine (locator_backfill_cli.py)
+// over the chunks and returns its plan. The wall-clock budget bounds the
+// subprocess; a non-aligned plan is returned, not an error (refusal is an
+// honest outcome).
+func RunEngine(ctx context.Context, python, runnerDir, epub, sourceKind, pdfPath string,
+	chunks []json.RawMessage, budget time.Duration) (*Plan, error) {
 	if python == "" {
-		python = findPython(runnerDir)
+		python = FindPython(runnerDir)
 	}
 	if runnerDir == "" {
-		runnerDir = findRunnerDir()
+		runnerDir = FindRunnerDir()
 	}
 	tmp, err := os.MkdirTemp("", "locator-backfill-*")
 	if err != nil {
@@ -314,25 +331,33 @@ func runEngine(ctx context.Context, python, runnerDir, epub, sourceKind, pdfPath
 		if cctx.Err() == context.DeadlineExceeded {
 			return nil, fmt.Errorf("budget exceeded (%s)", budget)
 		}
+		// exit status 1 = honest whole-backfill refusal (plan on stdout?
+		// no: the CLI writes the plan to --out even when refusing)
+		if raw, rerr := os.ReadFile(outFile); rerr == nil {
+			var p Plan
+			if jerr := json.Unmarshal(raw, &p); jerr == nil && !p.Aligned {
+				return &p, nil
+			}
+		}
 		return nil, fmt.Errorf("%v: %s", err, lastLines(stderr.String(), 5))
 	}
 	raw, err := os.ReadFile(outFile)
 	if err != nil {
 		return nil, fmt.Errorf("engine wrote no plan: %w", err)
 	}
-	var p plan
+	var p Plan
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, fmt.Errorf("parse plan: %w", err)
 	}
 	return &p, nil
 }
 
-func reindex(ctx context.Context, pool *pgxpool.Pool, enriched []planResult) error {
-	osURL := strings.TrimRight(os.Getenv("AXIOM_OPENSEARCH_URL"), "/")
-	if osURL == "" {
-		return fmt.Errorf("AXIOM_OPENSEARCH_URL not set")
-	}
-	user, pass := os.Getenv("AXIOM_OPENSEARCH_USERNAME"), os.Getenv("AXIOM_OPENSEARCH_PASSWORD")
+// Reindex bulk-updates the enriched chunks' OpenSearch docs with their new
+// locator (partial _update on the existing doc, id = chunk UUID — index ids
+// stay stable; no delete+recreate).
+func Reindex(ctx context.Context, pool *pgxpool.Pool, base, user, pass string,
+	enriched []PlanResult) (int, error) {
+	base = strings.TrimRight(base, "/")
 	ids := make([]string, len(enriched))
 	for i, r := range enriched {
 		ids[i] = r.ChunkID
@@ -341,7 +366,7 @@ func reindex(ctx context.Context, pool *pgxpool.Pool, enriched []planResult) err
 		SELECT c.id::text, c.locator::text FROM processing_chunks c
 		WHERE c.id = ANY($1::uuid[])`, ids)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer rows.Close()
 	var buf bytes.Buffer
@@ -349,9 +374,9 @@ func reindex(ctx context.Context, pool *pgxpool.Pool, enriched []planResult) err
 	for rows.Next() {
 		var id, loc string
 		if err := rows.Scan(&id, &loc); err != nil {
-			return err
+			return 0, err
 		}
-		action, _ := json.Marshal(map[string]any{"update": map[string]any{"_index": indexName, "_id": id}})
+		action, _ := json.Marshal(map[string]any{"update": map[string]any{"_index": IndexName, "_id": id}})
 		doc, _ := json.Marshal(map[string]any{"doc": map[string]any{"locator": json.RawMessage(loc)}})
 		buf.Write(action)
 		buf.WriteByte('\n')
@@ -360,26 +385,24 @@ func reindex(ctx context.Context, pool *pgxpool.Pool, enriched []planResult) err
 		n++
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return 0, err
 	}
 	if n != len(enriched) {
-		return fmt.Errorf("read back %d locators for %d enriched chunks", n, len(enriched))
+		return n, fmt.Errorf("read back %d locators for %d enriched chunks", n, len(enriched))
 	}
-	// partial-update bulk: existing docs (id = chunk UUID) get the new
-	// locator — no delete+recreate, index ids stay stable.
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, osURL+"/_bulk", bytes.NewReader(buf.Bytes()))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/_bulk", bytes.NewReader(buf.Bytes()))
 	req.Header.Set("Content-Type", "application/x-ndjson")
 	if user != "" {
 		req.SetBasicAuth(user, pass)
 	}
 	resp, err := (&http.Client{Timeout: 120 * time.Second}).Do(req)
 	if err != nil {
-		return err
+		return n, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("opensearch bulk: HTTP %d: %.300s", resp.StatusCode, body)
+		return n, fmt.Errorf("opensearch bulk: HTTP %d: %.300s", resp.StatusCode, body)
 	}
 	var receipt struct {
 		Errors bool `json:"errors"`
@@ -390,16 +413,17 @@ func reindex(ctx context.Context, pool *pgxpool.Pool, enriched []planResult) err
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(body, &receipt); err != nil {
-		return fmt.Errorf("decode bulk receipt: %w", err)
+		return n, fmt.Errorf("decode bulk receipt: %w", err)
 	}
 	if receipt.Errors || len(receipt.Items) != n {
-		return fmt.Errorf("bulk receipt: errors=%v items=%d for %d actions", receipt.Errors, len(receipt.Items), n)
+		return n, fmt.Errorf("bulk receipt: errors=%v items=%d for %d actions",
+			receipt.Errors, len(receipt.Items), n)
 	}
-	return nil
+	return n, nil
 }
 
-func filterEnriched(rs []planResult) []planResult {
-	var out []planResult
+func filterEnriched(rs []PlanResult) []PlanResult {
+	var out []PlanResult
 	for _, r := range rs {
 		if r.Enrich && r.PageStart != nil {
 			out = append(out, r)
@@ -408,9 +432,11 @@ func filterEnriched(rs []planResult) []planResult {
 	return out
 }
 
-func findPython(runnerDir string) string {
+// FindPython locates the runner venv python (AXIOM_RUNNER_PYTHON-checked by
+// the caller, then runnerDir/.venv, then repo-relative).
+func FindPython(runnerDir string) string {
 	if runnerDir == "" {
-		runnerDir = findRunnerDir()
+		runnerDir = FindRunnerDir()
 	}
 	for _, c := range []string{
 		filepath.Join(runnerDir, ".venv", "bin", "python"),
@@ -425,7 +451,8 @@ func findPython(runnerDir string) string {
 	return "python3"
 }
 
-func findRunnerDir() string {
+// FindRunnerDir locates the axiom_ng_runner checkout relative to the CWD.
+func FindRunnerDir() string {
 	for _, c := range []string{"axiom_ng_runner", "../axiom_ng_runner", "../../axiom_ng_runner"} {
 		if abs, err := filepath.Abs(c); err == nil {
 			if _, err := os.Stat(filepath.Join(abs, "pyproject.toml")); err == nil {
@@ -456,9 +483,4 @@ func lastLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, " | ")
-}
-
-func fatal(f string, a ...any) {
-	fmt.Fprintf(os.Stderr, "locator-backfill: "+f+"\n", a...)
-	os.Exit(1)
 }
