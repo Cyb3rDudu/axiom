@@ -33,6 +33,7 @@ import json
 import sys
 from pathlib import Path
 
+# pi-lens-ignore: reportMissingImports
 from axiom_ng_runner.compute_core import locator_backfill as lb
 
 

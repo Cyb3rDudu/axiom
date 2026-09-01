@@ -31,6 +31,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+# pi-lens-ignore: reportMissingImports
 from axiom_ng_runner.compute_core import epub_pagelist
 from axiom_ng_runner.epub_cfi import build_cfi_map
 from axiom_ng_runner.scripts.four_point_pilot import (

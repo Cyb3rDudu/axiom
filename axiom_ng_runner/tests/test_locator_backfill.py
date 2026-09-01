@@ -91,6 +91,7 @@ def _mk_pdf(path: Path, npages: int = 10, front: int = 0) -> Path:
     prepends unnumbered pages so physical_page_start p's print page is p - front.
     Uses insert_textbox (wrapping) so all ~130 section tokens survive the PDF
     round-trip (a bare insert_text clips to the first line)."""
+    # pi-lens-ignore: reportMissingImports
     import pymupdf
 
     rect = pymupdf.Rect(50, 50, 550, 700)
