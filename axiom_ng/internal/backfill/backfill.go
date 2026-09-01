@@ -38,11 +38,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// IndexName must match search.IndexName / the dispatcher's outbox index.
-const IndexName = "axiom-ng-chunks-v1"
+// IndexName is the shared chunks-index name (search package owns it).
+var IndexName = search.IndexName
 
 // DerivedFromSibling is the trust level a backfill may stamp — never
 // print_verified (the #233 reservation).
@@ -64,6 +65,11 @@ type Options struct {
 
 	// Logf receives N/M progress lines (nil = discard).
 	Logf func(format string, a ...any)
+
+	// ReindexOnly re-indexes every derived_from_sibling chunk of the
+	// document's active snapshot without running the engine — the recovery
+	// path for a committed backfill whose OpenSearch update failed.
+	ReindexOnly bool
 }
 
 // PlanResult mirrors one chunk row of the engine's JSON plan.
@@ -111,6 +117,10 @@ func Run(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
 		o.Budget = 15 * time.Minute
 	}
 	rep := &Report{}
+
+	if o.ReindexOnly {
+		return reindexDerived(ctx, pool, o)
+	}
 
 	// 1. Active snapshot + attachment (kind + file) — the frozen identity.
 	var snapID, attPath, attCT, contentHash string
@@ -217,9 +227,9 @@ func Run(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
 			       ELSE locator END,
 			  '{page_start}', to_jsonb($2::int)),
 			  '{page_end}',   to_jsonb($3::int)),
-			  '{page_source}', to_jsonb($5))
+			  '{page_source}', to_jsonb($5::text))
 			WHERE id = $1 AND snapshot_id = $4
-			  AND locator->>'page_source' IS DISTINCT FROM $5`,
+			  AND locator->>'page_source' IN ('none','physical_only','blind','')`,
 			r.ChunkID, deref(r.PageStart), deref(r.PageEnd), snapID, DerivedFromSibling,
 			fmt.Sprint(deref(r.PageStart)), fmt.Sprint(deref(r.PageEnd)))
 		if err != nil {
@@ -427,7 +437,7 @@ func Reindex(ctx context.Context, pool *pgxpool.Pool, base, user, pass string,
 func filterEnriched(rs []PlanResult) []PlanResult {
 	var out []PlanResult
 	for _, r := range rs {
-		if r.Enrich && r.PageStart != nil {
+		if r.Enrich && r.PageStart != nil && r.PageEnd != nil {
 			out = append(out, r)
 		}
 	}
@@ -485,4 +495,46 @@ func lastLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, " | ")
+}
+
+// reindexDerived is the ReindexOnly recovery path: it re-indexes every
+// derived_from_sibling chunk of the document's active snapshot (bulk
+// _update, stable ids) without running the engine. Covers a committed
+// backfill whose OpenSearch step failed — a plain re-run has zero targets
+// and would skip the index.
+func reindexDerived(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
+	if o.OSBaseURL == "" {
+		return nil, fmt.Errorf("ReindexOnly requires an OpenSearch endpoint")
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT c.id::text FROM processing_chunks c
+		JOIN processing_snapshots sn ON sn.id = c.snapshot_id AND sn.active
+		JOIN zotero_documents d ON d.id = sn.document_id
+		WHERE d.zotero_key = $1
+		  AND c.locator->>'page_source' = $2`, o.DocKey, DerivedFromSibling)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var enriched []PlanResult
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		enriched = append(enriched, PlanResult{ChunkID: id, Enrich: true,
+			PageStart: new(int), PageEnd: new(int), Source: DerivedFromSibling})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	o.logf("reindex-only: %d derived chunks", len(enriched))
+	if len(enriched) == 0 {
+		return &Report{Updated: 0, Reindexed: 0}, nil
+	}
+	n, err := Reindex(ctx, pool, o.OSBaseURL, o.OSUser, o.OSPass, enriched)
+	if err != nil {
+		return nil, err
+	}
+	return &Report{Reindexed: n}, nil
 }

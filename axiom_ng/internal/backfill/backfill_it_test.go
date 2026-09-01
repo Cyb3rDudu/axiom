@@ -143,8 +143,15 @@ func fixture(t *testing.T, pool *pgxpool.Pool, key, pdfPath string) []string {
 	}
 	ids := make([]string, 10)
 	for i := 1; i <= 10; i++ {
-		loc := fmt.Sprintf(`{"type":"page_span","page_source":"none","chapter":3,
-			"physical_page_start":%d,"physical_page_end":%d}`, i, i)
+		// physical pages are 0-BASED (contract §11 / chunker convention):
+		// section i lives on physical i-1; chunk 1 additionally exercises
+		// the physical_only target class (contract-real folio-less value)
+		src := "none"
+		if i == 1 {
+			src = "physical_only"
+		}
+		loc := fmt.Sprintf(`{"type":"page_span","page_source":%q,"chapter":3,
+			"physical_page_start":%d,"physical_page_end":%d}`, src, i-1, i-1)
 		if err := pool.QueryRow(ctx, `
 			INSERT INTO processing_chunks (snapshot_id, chunk_index, text, locator)
 			VALUES ($1, $2, $3, $4) RETURNING id::text`,
@@ -278,8 +285,8 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 			if l.Chapter == nil || *l.Chapter != 3 {
 				t.Fatalf("chunk %d: chapter must stay authoritative, got %v", i, l.Chapter)
 			}
-			if l.PhysStart == nil || *l.PhysStart != i+1 {
-				t.Fatalf("chunk %d: physical_page_start must be preserved", i)
+			if l.PhysStart == nil || *l.PhysStart != i {
+				t.Fatalf("chunk %d: physical_page_start (0-based) must be preserved", i)
 			}
 			if l.Type != "page_span" {
 				t.Fatalf("chunk %d: type must be untouched", i)
@@ -332,17 +339,17 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 	if !repR.Refused {
 		t.Fatalf("poisoned candidate must refuse the whole backfill, got %+v", repR.Plan)
 	}
-	var none int
+	var derived int
 	if err := pool.QueryRow(ctx, `
 		SELECT count(*) FROM processing_chunks c
 		JOIN processing_snapshots sn ON sn.id = c.snapshot_id
 		JOIN zotero_documents d ON d.id = sn.document_id
-		WHERE d.zotero_key='LB2' AND c.locator->>'page_source'='none'`).
-		Scan(&none); err != nil {
+		WHERE d.zotero_key='LB2' AND c.locator->>'page_source'=$1`, DerivedFromSibling).
+		Scan(&derived); err != nil {
 		t.Fatalf("refusal check: %v", err)
 	}
-	if none != 10 {
-		t.Fatalf("refusal must write nothing: %d/10 chunks still none (want 10)", none)
+	if derived != 0 {
+		t.Fatalf("refusal must write nothing: %d chunks derived", derived)
 	}
 
 	// --- 4. dry-run writes nothing ---
@@ -358,16 +365,16 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 	if repD.Updated != 0 || repD.Reindexed != 0 {
 		t.Fatalf("dry-run must not write")
 	}
-	var stillNone int
+	var dried int
 	if err := pool.QueryRow(ctx, `
 		SELECT count(*) FROM processing_chunks c
 		JOIN processing_snapshots sn ON sn.id = c.snapshot_id
 		JOIN zotero_documents d ON d.id = sn.document_id
-		WHERE d.zotero_key='LB3' AND c.locator->>'page_source'='none'`).
-		Scan(&stillNone); err != nil {
+		WHERE d.zotero_key='LB3' AND c.locator->>'page_source'=$1`, DerivedFromSibling).
+		Scan(&dried); err != nil {
 		t.Fatalf("dry check: %v", err)
 	}
-	if stillNone != 10 {
-		t.Fatalf("dry-run must leave all 10 chunks untouched, got %d", stillNone)
+	if dried != 0 {
+		t.Fatalf("dry-run must write nothing: %d chunks derived", dried)
 	}
 }

@@ -161,7 +161,9 @@ def _physical(chunk: dict[str, Any], key: str) -> int | None:
 # ---------------------------------------------------------------------------
 
 def _pdf_physical_tokens(pdf_path: str) -> list[list[str]]:
-    """Normalized per-physical-page tokens (1-based index: tokens[p] is page p+1)."""
+    """Normalized per-physical-page tokens, 0-BASED index (tokens[p] is
+    pymupdf page p) — the same base the stored locator's
+    physical_page_start uses (contract §11; search renders it +1)."""
     import pymupdf
 
     doc = pymupdf.open(pdf_path)
@@ -174,7 +176,7 @@ def _pdf_physical_tokens(pdf_path: str) -> list[list[str]]:
 
 def build_pdf_anchors(candidate_epub: str, phys_tokens: list[list[str]],
                       stop: set[str]) -> list[tuple[int, int, float]]:
-    """Hard anchors ``(physical_page_1based, print_page, similarity)``.
+    """Hard anchors ``(physical_page_0based, print_page, similarity)``.
 
     Harvest the EPUB's page markers, match each ARABIC marker's text window
     against the PDF physical pages by containment, and keep a monotone
@@ -199,7 +201,7 @@ def build_pdf_anchors(candidate_epub: str, phys_tokens: list[list[str]],
                 best_s, best_p = s, p
         if best_p is None or best_s < SIM_ANCHOR:
             continue
-        ph = best_p + 1  # 1-based
+        ph = best_p  # 0-based, matching the stored locator convention
         if ph < prev_phys:
             # a stray regression (marker text matching an earlier page) is
             # dropped, not fatal — same tolerance the #221 assigner uses.
@@ -213,7 +215,7 @@ def build_pdf_anchors(candidate_epub: str, phys_tokens: list[list[str]],
 
 def _interpolate(anchors: list[tuple[int, int, float]], phys: int
                  ) -> tuple[int | None, float, float]:
-    """Linear interpolation of print page at a 1-based physical page.
+    """Linear interpolation of print page at a 0-based physical page.
 
     Returns (print_page, confidence, spread). ``spread`` is the physical
     distance between the bracketing anchors (0 when not bracketed)."""
@@ -224,9 +226,9 @@ def _interpolate(anchors: list[tuple[int, int, float]], phys: int
         else:
             nxt = a
             if prev is None:
-                # before the first anchor: extrapolate from the first (low conf)
-                conf = nxt[2] * 0.5
-                return nxt[1], conf, 0.0
+                # before the first anchor: NO bracketing evidence — refuse
+                # rather than extrapolate (#226 discipline)
+                return None, 0.0, 0.0
             gap = nxt[0] - prev[0]
             if gap == 0:
                 pr = prev[1]
@@ -236,9 +238,7 @@ def _interpolate(anchors: list[tuple[int, int, float]], phys: int
             spread = max(0.0, min(1.0, spread))
             conf = min(prev[2], nxt[2])
             return pr, conf, spread
-    # past the last anchor: extrapolate from the last (low conf)
-    if prev is not None:
-        return prev[1], prev[2] * 0.5, 0.0
+    # past the last anchor: NO bracketing evidence — refuse (see above)
     return None, 0.0, 0.0
 
 
@@ -282,7 +282,7 @@ def align_pdf_chunks(candidate_epub: str, pdf_path: str,
         result.enrichment_targets += 1
         pstart = _physical(chunk, "physical_page_start")
         pend = _physical(chunk, "physical_page_end")
-        if pstart is None or pstart < 1:
+        if pstart is None or pstart < 0:
             result.chunk_results.append(_chunk_refused(chunk, "no physical_page_start"))
             result.pages_refused += 1
             continue
@@ -300,9 +300,8 @@ def align_pdf_chunks(candidate_epub: str, pdf_path: str,
         # text-overlap cross-check: the chunk's own text must actually appear
         # on the predicted physical page (never guess against the evidence).
         chunk_tokens = norm_tokens(chunk.get("text", ""), 500)
-        phys0 = pstart - 1
-        if phys0 < len(phys_tokens):
-            text_conf = containment(chunk_tokens, phys_tokens[phys0], stop)
+        if 0 <= pstart < len(phys_tokens):
+            text_conf = containment(chunk_tokens, phys_tokens[pstart], stop)
         else:
             text_conf = 0.0
         anchor_conf = 0.5 * conf_s + 0.5 * conf_e
@@ -366,8 +365,12 @@ def align_epub_chunks(candidate_epub: str,
         for e in cfi_entries:
             if e.get("page") is None:
                 continue
-            if _normalize_text(e["text"]).split()[:12] and \
-                    _normalize_text(e["text"])[:40] in clean:
+            etext = _normalize_text(e["text"])
+            # C3 guard (as in match_text_to_cfi): ultra-short entries (a
+            # bare page number) substring-match everywhere — poison.
+            if len(etext) < 12:
+                continue
+            if etext[:40] in clean:
                 matched = e
                 break
         if matched is None or matched.get("page") is None:

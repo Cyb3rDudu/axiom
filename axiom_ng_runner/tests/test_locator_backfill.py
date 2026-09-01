@@ -106,12 +106,14 @@ def _mk_pdf(path: Path, npages: int = 10, front: int = 0) -> Path:
 
 
 def _folioless_chunks(n: int, front: int = 0) -> list[dict]:
-    """Active-snapshot chunks with page_source=none, physical_page_start = i+front."""
+    """Active-snapshot chunks with page_source=none. Physical pages are
+    0-BASED (the stored convention: section i lives on physical i-1) —
+    matching what the real pipeline writes (contract §11)."""
     return [
         {"id": f"chunk-{i}", "text": f"body text {_section_tokens(i)}",
          "locator": {"type": "page_span", "page_source": "none",
-                     "physical_page_start": i + front,
-                     "physical_page_end": i + front}}
+                     "physical_page_start": i - 1 + front,
+                     "physical_page_end": i - 1 + front}}
         for i in range(1, n + 1)
     ]
 
@@ -171,7 +173,7 @@ def test_pdf_path_leaves_already_folio_chunks_untouched(pdf_pairs):
     assert d["refused"] is False         # and not a refusal — just untouched
     # its existing physical range is reported through unchanged; the mocked
     # folio label survives untouched
-    assert d["page_start"] == 2          # physical_page_start preserved
+    assert d["page_start"] == 1          # 0-based physical_page_start echoed
     assert chunks[1]["locator"]["page_label_start"] == "99"
     # the other two (folio-less) still enrich
     assert res.chunk_results[0].to_dict()["enrich"] is True

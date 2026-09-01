@@ -25,6 +25,8 @@ func main() {
 	epub := flag.String("epub", "", "candidate EPUB path (default: auto-discover, injected preferred)")
 	dry := flag.Bool("dry-run", false, "print the plan without writing")
 	skipIndex := flag.Bool("skip-index", false, "skip the OpenSearch re-index")
+	reindexOnly := flag.Bool("reindex-only", false,
+		"re-index the document's derived_from_sibling chunks without running the engine (recovery after a committed backfill whose index step failed)")
 	budget := flag.Duration("budget", 15*time.Minute, "wall-clock budget for the alignment engine")
 	dsn := flag.String("dsn", os.Getenv("AXIOM_DATABASE_URL"), "database DSN (default AXIOM_DATABASE_URL)")
 	flag.Parse()
@@ -41,11 +43,12 @@ func main() {
 	defer database.Close()
 
 	rep, err := backfill.Run(ctx, database.Pool(), backfill.Options{
-		DocKey:   *doc,
-		EpubPath: *epub,
-		DryRun:   *dry,
-		Budget:   *budget,
-		Python:   os.Getenv("AXIOM_RUNNER_PYTHON"),
+		DocKey:      *doc,
+		EpubPath:    *epub,
+		DryRun:      *dry,
+		Budget:      *budget,
+		ReindexOnly: *reindexOnly,
+		Python:      os.Getenv("AXIOM_RUNNER_PYTHON"),
 		OSBaseURL: func() string {
 			if *skipIndex {
 				return ""
