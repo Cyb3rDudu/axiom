@@ -1031,6 +1031,67 @@ def _compute_real(
         ) from err
 
 
+def _enrich_epub_cfi_locators(
+    chunk_dicts: list[dict[str, Any]],
+    cfi_entries: list[dict[str, Any]],
+    marker_pagemap_max: int | None = None,
+) -> None:
+    """§11 Weg A: epub_cfi locators for EPUB chunks, with #220/#223/#226
+    anchor-map pages and #234 interior interpolation. In place.
+
+    #234: a publisher chapter wrapped in ONE top-level element yields a
+    single chapter-wide cfi entry — every print anchor of that chapter
+    lands on it. ``annotate_cfi_entries`` exposes the interior anchor
+    run (``anchor_offsets``); here each chunk's position inside the entry
+    resolves its print page from that run. Refused maps (non-monotone,
+    implausible, divergent) never annotate entries at all — no run, no
+    interpolation, page_source stays none (#226 discipline unchanged)."""
+    if not cfi_entries:
+        return
+    from .epub_cfi import match_text_to_cfi
+    from axiom_ng_runner.compute_core import epub_pagelist
+
+    pos_by_cfi = {
+        e["cfi"]: (e.get("page"), e.get("spine"), e.get("page_trust"))
+        for e in cfi_entries
+    }
+    entry_by_cfi = {e["cfi"]: e for e in cfi_entries}
+    for c in chunk_dicts:
+        meta = c.get("metadata", {}) or {}
+        meta["locator_type"] = "epub_cfi"
+        text = c.get("text", "")
+        cfi_start, cfi_end = match_text_to_cfi(text, cfi_entries)
+        meta["cfi_start"] = cfi_start
+        meta["cfi_end"] = cfi_end
+        # #220: carry anchor-map pages + spine ordinal through to
+        # _adapt_chunk's locator (absent without a monotone map).
+        ps, sp, ptrust = pos_by_cfi.get(cfi_start, (None, None, None))
+        if ps is not None:
+            # #234: interior interpolation within the verified anchor run
+            entry = entry_by_cfi.get(cfi_start)
+            ip_start = (epub_pagelist.interior_page(entry, text)
+                        if ptrust and entry else None)
+            meta["page_start"] = ip_start or ps
+            ip_end = (epub_pagelist.interior_page(entry, text, tail=True)
+                      if ptrust and entry else None)
+            meta["page_end"] = max(
+                meta["page_start"],
+                ip_end or pos_by_cfi.get(cfi_end, (ps, None, None))[0] or ps)
+            meta["page_trust"] = ptrust
+        else:
+            # #226 F2: refused map — the chunker's {N} marker labels are
+            # the same refused anchors; never let them leak as pages.
+            meta.pop("page_start", None)
+            meta.pop("page_end", None)
+            meta.pop("page_trust", None)
+        if sp is not None:
+            meta["chapter"] = sp + 1  # 1-based spine ordinal (PDF parity)
+        # #226 F2 merge: marker page boundaries (same anchor source,
+        # char-exact) ride along and sharpen the envelope — unless the
+        # map was tail-trimmed and the labels leave the trusted range.
+        _merge_marker_pages(meta, marker_pagemap_max)
+
+
 def _normalize_epub_image_paths(markdown: str) -> str:
     """#124: strip machine-specific temp paths from EPUB image references.
 
@@ -1291,39 +1352,7 @@ def _real_pipeline(
     # The real Chunker emits page_span with fabricated page labels (it doesn't
     # know about EPUB structure). We replace them with real CFI locators from
     # the original XHTML DOM (§11 Weg A).
-    if cfi_entries:
-        from .epub_cfi import match_text_to_cfi
-
-        pos_by_cfi = {
-            e["cfi"]: (e.get("page"), e.get("spine"), e.get("page_trust"))
-            for e in cfi_entries
-        }
-        for c in chunk_dicts:
-            meta = c.get("metadata", {}) or {}
-            meta["locator_type"] = "epub_cfi"
-            text = c.get("text", "")
-            cfi_start, cfi_end = match_text_to_cfi(text, cfi_entries)
-            meta["cfi_start"] = cfi_start
-            meta["cfi_end"] = cfi_end
-            # #220: carry anchor-map pages + spine ordinal through to
-            # _adapt_chunk's locator (absent without a monotone map).
-            ps, sp, ptrust = pos_by_cfi.get(cfi_start, (None, None, None))
-            if ps is not None:
-                meta["page_start"] = ps
-                meta["page_end"] = pos_by_cfi.get(cfi_end, (ps, None, None))[0] or ps
-                meta["page_trust"] = ptrust
-            else:
-                # #226 F2: refused map — the chunker's {N} marker labels are
-                # the same refused anchors; never let them leak as pages.
-                meta.pop("page_start", None)
-                meta.pop("page_end", None)
-                meta.pop("page_trust", None)
-            if sp is not None:
-                meta["chapter"] = sp + 1  # 1-based spine ordinal (PDF parity)
-            # #226 F2 merge: marker page boundaries (same anchor source,
-            # char-exact) ride along and sharpen the envelope — unless the
-            # map was tail-trimmed and the labels leave the trusted range.
-            _merge_marker_pages(meta, marker_pagemap_max)
+    _enrich_epub_cfi_locators(chunk_dicts, cfi_entries, marker_pagemap_max)
 
     # L6: real entity (GLiNER) and relationship (mREBEL) extraction.
     # Contract chunk refs are deterministic (chunk-{i:04d} from enumerate),

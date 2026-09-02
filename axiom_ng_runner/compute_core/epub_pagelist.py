@@ -64,10 +64,15 @@ class _AnchorScanner(HTMLParser):
         self._stack: list[str] = []
         # pending anchor waiting for its number from text content
         self._pending: list[dict[str, Any]] = []
-        self.anchors: list[dict[str, Any]] = []  # {elem, page}
+        self.anchors: list[dict[str, Any]] = []  # {elem, page, chars}
+        # #234: raw text-char offset stream — both this scanner and
+        # epub_cfi._CFICollector count handle_data chars in document order,
+        # so anchor/entry positions are comparable across the two walks
+        # even when a publisher wraps a whole chapter in one element.
+        self._chars = 0
 
-    def _emit(self, elem: int, page: int) -> None:
-        self.anchors.append({"elem": elem, "page": page})
+    def _emit(self, elem: int, page: int, chars: int) -> None:
+        self.anchors.append({"elem": elem, "page": page, "chars": chars})
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
@@ -92,12 +97,12 @@ class _AnchorScanner(HTMLParser):
 
         page = self._detect(tag, a)
         if page is not None:
-            self._emit(elem, page)
+            self._emit(elem, page, self._chars)
         elif self._is_candidate(tag, a):
             # anchor without a number in its attrs — collect the text INSIDE
             # it to resolve the number (never from unrelated later text)
             self._pending.append({"depth": self._depth, "elem": elem,
-                                  "text": ""})
+                                  "chars": self._chars, "text": ""})
 
     def _is_candidate(self, tag: str, a: dict[str, str | None]) -> bool:
         etype = (a.get("epub:type") or a.get("type") or "").split()
@@ -131,6 +136,9 @@ class _AnchorScanner(HTMLParser):
     def handle_data(self, data: str) -> None:
         # Only text INSIDE the pending anchor's element may resolve its
         # number — anything after its end tag belongs to other content.
+        # #234: unconditional char counting (anchor offsets must see ALL
+        # text, not just pending-anchor interiors)
+        self._chars += len(data)
         if self._pending and self._depth >= self._pending[-1]["depth"]:
             self._pending[-1]["text"] += data
 
@@ -141,7 +149,7 @@ class _AnchorScanner(HTMLParser):
         p = self._pending.pop()
         m = _NUM.search(p["text"])
         if m:
-            self._emit(p["elem"], int(m.group(1)))
+            self._emit(p["elem"], int(m.group(1)), p["chars"])
 
     def _flush_pending(self) -> None:
         """Resolve pending anchors still open at document end."""
@@ -256,6 +264,9 @@ def parse_page_map(epub_path: str) -> dict[str, Any]:
                 "spine": spine_idx,
                 "elem": a["elem"],
                 "page": a["page"],
+                # #234: raw char offset (same stream as epub_cfi entry
+                # starts) — survives the sort for interior-run interpolation
+                "chars": a.get("chars", 0),
                 "cfi": f"epubcfi(/6/{spine_step}!/4/{a['elem'] * 2})",
             })
         # page-map doc-level entries: page starts at the FIRST element of
@@ -301,7 +312,7 @@ def annotate_cfi_entries(
     Returns the number of annotated entries."""
     if not anchors:
         return 0
-    queue = sorted(anchors, key=lambda a: (a["spine"], a["elem"]))
+    queue = sorted(anchors, key=lambda a: (a["spine"], a["elem"], a.get("chars", 0)))
     # Seed ONLY from an anchor at the very first position (spine 0, elem 0):
     # a page that starts later must not leak backwards into earlier spine
     # docs (cover/TOC) — those entries carry no page at all.
@@ -313,13 +324,77 @@ def annotate_cfi_entries(
     n = 0
     for e in cfi_entries:  # entries are in spine order (build_cfi_map)
         pos = (e.get("spine", 0), e.get("elem", 0))
-        while qi < len(queue) and (queue[qi]["spine"], queue[qi]["elem"]) <= pos:
+        # #234: anchors strictly BEFORE this entry's position apply
+        # wholesale (chapter-start carry-forward, unchanged semantics).
+        while qi < len(queue) and (queue[qi]["spine"], queue[qi]["elem"]) < pos:
             page = queue[qi]["page"]
             qi += 1
-        if page is not None:
+        # #234: anchors AT the entry's position (publisher wraps a whole
+        # chapter in one top-level element — every anchor lands on the
+        # single chapter-wide entry). An anchor at/before the entry's
+        # start offset applies to the entry; anchors after it are the
+        # INTERIOR run, exposed for per-chunk interpolation instead of
+        # collapsing the whole run onto its last page.
+        run: list[tuple[int, int]] = []
+        pre: int | None = None
+        while qi < len(queue) and (queue[qi]["spine"], queue[qi]["elem"]) == pos:
+            a = queue[qi]
+            if a.get("chars", 0) <= e.get("start", 0):
+                pre = a["page"]
+            else:
+                run.append((a["chars"] - e.get("start", 0), a["page"]))
+            # carry: the entry's LAST same-position anchor feeds later
+            # entries (the old collapse semantics, but for the carry only)
+            page = a["page"]
+            qi += 1
+        if pre is not None:
+            e["page"] = pre
+        elif run:
+            # #234: no anchor at/before the entry's start (the doc opens
+            # with unpaginated boilerplate inside the same element) but a
+            # verified interior run exists — its FIRST page is the entry's
+            # opening page (bounded: these anchors ARE this entry's
+            # pagination; chunks before the first anchor fall back to it).
+            e["page"] = run[0][1]
+        elif page is not None:
             e["page"] = page
+        if e.get("page") is not None:
             n += 1
+        if run:
+            e["anchor_offsets"] = run
     return n
+
+
+def interior_page(entry: dict[str, Any], chunk_text: str, tail: bool = False) -> int | None:
+    """#234: interpolate a print page for a chunk INSIDE an entry that
+    carries an interior anchor run (``anchor_offsets`` — the verified
+    anchor positions inside one chapter-wide entry). The chunk's probe
+    (first/last 40 normalized chars) locates it within the entry text;
+    the last anchor at/before that position supplies the page. Returns
+    None when the entry has no run or the probe does not resolve — the
+    caller then keeps the entry-level (chapter-start) page. Trust is NOT
+    decided here: the run only exists when the map passed every gate
+    (#226 refusals never reach interpolation)."""
+    run = entry.get("anchor_offsets")
+    if not run:
+        return None
+    from axiom_ng_runner.epub_cfi import _normalize_text
+    etext = _normalize_text(entry.get("text", ""))
+    ctext = _normalize_text(chunk_text)
+    if len(etext) < 40 or len(ctext) < 40:
+        return None
+    probe = ctext[-40:] if tail else ctext[:40]
+    off = etext.find(probe)
+    if off < 0:
+        return None
+    # normalized offset -> raw-char space of the anchor run
+    raw_len = len(entry.get("text", "")) or len(etext)
+    rel = off * (raw_len / len(etext))
+    page: int | None = None
+    for ro, pg in run:
+        if ro <= rel:
+            page = pg
+    return page
 
 
 # ---------------------------------------------------------------------------

@@ -126,6 +126,15 @@ class _CFICollector(HTMLParser):
             self._current_cfi = f"{self._base}!/4/{elem_step})"
             # depth stays at 1
         else:
+            if tag in self.BLOCK_TAGS and self._depth >= 1:
+                # #234: nested block boundary — the flattened entry text
+                # abuts blocks with NO separator ("…Lakehouse?Let's dig…"),
+                # but the markdown-derived chunk text carries the boundary
+                # as whitespace. A single separator space (mirroring the
+                # void-content placeholder above) makes cross-boundary
+                # probes match; _normalize_text collapses it away on both
+                # sides when no boundary is involved.
+                self._current_text += " "
             self._depth += 1
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
