@@ -130,6 +130,17 @@ type Locator struct {
 	// the span stays the honest envelope. MUST stay in the struct for the
 	// same re-marshal reason as Chapter (the W9 lesson above).
 	ParagraphPages [][]any `json:"paragraph_pages,omitempty"`
+	// APA-7 citation fields (#245), frozen at EPUB ingest from the book's
+	// own heading structure: ChapterNumber = ordinal of the level-1
+	// heading, SectionTitle = deepest section at the chunk,
+	// ParagraphInChapter = paragraphs from the chapter heading to the
+	// chunk start (1-based). Absent when the book has no chapter
+	// structure. MUST stay in the struct — the persist boundary re-marshals
+	// the Locator and silently drops unknown fields (W9 lesson; review C1
+	// of this strand proved the drop end-to-end).
+	ChapterNumber      *int   `json:"chapter_number,omitempty"`
+	SectionTitle       string `json:"section_title,omitempty"`
+	ParagraphInChapter *int   `json:"paragraph_in_chapter,omitempty"`
 }
 
 // ChunkStructure carries the ordered heading hierarchy and paragraph range.

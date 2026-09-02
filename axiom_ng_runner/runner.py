@@ -133,8 +133,10 @@ def _freeze_apa_fields(
     structure; no reader/device state). paragraph_in_chapter counts
     paragraphs from the chapter heading to the chunk's START paragraph,
     1-based — the heading itself is not a paragraph. Books with no level-1
-    structure after the front matter leave the fields empty."""
-    if not chapter_starts:
+    structure after the front matter leave the fields empty; a book whose
+    ONLY level-1 heading is the title page likewise (a lone h1 is a title,
+    not a chapter — #245 review W3)."""
+    if len(chapter_starts) < 2:
         return
     spi = meta.get("start_paragraph_index")
     if not isinstance(spi, int):

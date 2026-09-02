@@ -298,6 +298,12 @@ class Chunker:
                 current_page = page_label_map.get(physical_idx, str(physical_idx + 1))
                 current_phys = physical_idx
                 continue  # Skip the marker paragraph itself
+            if not para.strip():
+                # #245 review W1: empty paragraphs must leave the list so
+                # the re-split heading hierarchy and the chunk paragraph
+                # indices share ONE index space (an empty paragraph would
+                # shift chapter_starts relative to start_paragraph_index).
+                continue
             paragraph_to_page[len(clean_paragraphs)] = current_page
             if current_phys is not None:
                 paragraph_to_phys[len(clean_paragraphs)] = current_phys

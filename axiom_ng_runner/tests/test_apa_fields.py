@@ -77,3 +77,24 @@ def test_apa_fields_ride_on_locator():
     assert loc.get("chapter_number") == 3, loc
     assert loc.get("section_title") == "Section B", loc
     assert loc.get("paragraph_in_chapter") == 17, loc
+
+
+def test_apa_fields_title_page_only_h1():
+    """#245 review W3: a lone level-1 heading is the book TITLE, not a
+    chapter — the whole book must not become 'Chapter 1'."""
+    md = _md("# My Book Title", PARA, PARA, PARA)
+    for c in _chunk(md):
+        assert "chapter_number" not in c["metadata"], c["metadata"]
+
+
+def test_apa_fields_index_parity_with_empty_paragraphs():
+    """#245 review W1: whitespace-only paragraphs must not shift the
+    chapter_starts index space relative to start_paragraph_index."""
+    md = "   \n\n" + _md("# Chapter One", PARA, PARA, "# Chapter Two", PARA, PARA)
+    chunks = _chunk(md)
+    assert all(c["metadata"].get("chapter_number") in (1, 2) for c in chunks)
+    ch1 = [c for c in chunks if c["metadata"]["chapter_number"] == 1]
+    ch2 = [c for c in chunks if c["metadata"]["chapter_number"] == 2]
+    assert ch1 and ch2, "both chapters must be represented (an off-by-one from an empty leading paragraph would misattribute boundary chunks)"
+    for c in ch2:
+        assert c["metadata"]["section_title"] == "Chapter Two"

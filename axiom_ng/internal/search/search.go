@@ -898,8 +898,17 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 		// "ignore EPUB pages" rule the contract exists to remove. PDF arms
 		// below are untouched (#173 trust ladder remains the consumer
 		// contract).
+		// Same-origin pairing (#245 review W2): when paragraph_in_chapter
+		// is present it was counted from the APA heading ordinal — prefer
+		// that ordinal so "Kap. N, para. M" never mixes the spine-ordinal
+		// space (which counts cover/title/TOC spine items) with the
+		// heading-ordinal count basis.
 		label := chapter
-		if cn := orInt(loc.Chapter, loc.ChapterNumberAPA); cn != nil {
+		cn := loc.Chapter
+		if loc.ParagraphInChapter != nil {
+			cn = orInt(loc.ChapterNumberAPA, loc.Chapter)
+		}
+		if cn != nil {
 			label = fmt.Sprintf("Kap. %d", *cn)
 		}
 		sectionTitle := ""
@@ -912,7 +921,7 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 			Kind:               "epub_cfi",
 			Label:              label,
 			Chapter:            chapter,
-			ChapterNumber:      orInt(loc.Chapter, loc.ChapterNumberAPA),
+			ChapterNumber:      cn,
 			CFI:                cfiShort(loc.CFIStart),
 			ParagraphInChapter: loc.ParagraphInChapter,
 			SectionTitle:       sectionTitle,
