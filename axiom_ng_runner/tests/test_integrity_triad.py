@@ -135,13 +135,20 @@ def test_compute_environment_error_maps_to_retryable_job(monkeypatch, tmp_path):
     job.job_id = "job-1"
     job.request = _real_request(tmp_path)
 
+    # #242 bundle rider: _run_compute takes a JobRuntime (not the job) since
+    # the JobRuntime strand landed — adapt this #240 witness to that API.
+    rt = mock.Mock()
+    rt.job_id = "job-1"
+    rt.cancelled = False
+
     store = mock.Mock()
+    store.get.return_value = job
     monkeypatch.setattr(app, "_store_impl", mock.Mock(return_value=store))
     monkeypatch.setattr(
         runner, "compute",
         mock.Mock(side_effect=runner.ComputeEnvironmentError(
             "compute=real but the real compute pipeline is unavailable: boom")))
-    app._run_compute(job)
+    app._run_compute(rt)
 
     store.set_error.assert_called_once()
     args, kwargs = store.set_error.call_args
