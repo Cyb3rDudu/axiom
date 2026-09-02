@@ -118,6 +118,12 @@ type Subscription struct {
 	buf   []Event // FIFO queue
 	drops int64   // total events dropped by overflow (the gap marker)
 	sig   chan struct{}
+	// match is an optional publisher-side topic/filter predicate: when
+	// non-nil, only events for which match(e) is true are ever enqueued —
+	// events a subscriber does not want neither occupy its bounded queue nor
+	// count toward drops/gaps. nil (the default) matches everything
+	// (an unfiltered subscriber, exactly as before). #168 review.
+	match func(Event) bool
 }
 
 // Broker is the in-process pub/sub hub. Subscribe before the emitter runs.
@@ -136,6 +142,17 @@ func NewBroker() *Broker {
 // NewSubscription returns a subscription not yet attached to any broker.
 func NewSubscription() *Subscription {
 	return &Subscription{sig: make(chan struct{}, 1)}
+}
+
+// WithMatch narrows this subscription to events for which match returns true.
+// Call it BEFORE Subscribe (a subscription is single-consumer and its filter
+// must be fixed before the broker can deliver). nil match = match everything.
+// #168 review: lets a topic subscriber's bounded queue hold only the events it
+// selects, so gap markers stay honest (irrelevant events cannot displace
+// relevant ones).
+func (s *Subscription) WithMatch(match func(Event) bool) *Subscription {
+	s.match = match
+	return s
 }
 
 // Subscribe registers sub with a bounded queue of the given capacity (0 uses
@@ -183,10 +200,25 @@ func (b *Broker) Publish(e Event) {
 	b.mu.Unlock()
 }
 
-// offer appends e, dropping the oldest event on overflow and bumping the gap
-// counter. Non-blocking: bounded work only, no waiting on the consumer.
+// Subscribers returns the number of live subscriptions. Test/observability
+// aid: lets a caller assert a leaked subscription was not left on the broker.
+func (b *Broker) Subscribers() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.subs)
+}
+
+// offer appends e (when this subscription's optional filter accepts it),
+// dropping the oldest event on overflow and bumping the gap counter. A
+// non-matching event for a filtered subscription is skipped entirely — it
+// neither occupies the bounded queue nor counts as a drop. Non-blocking:
+// bounded work only, no waiting on the consumer.
 func (s *Subscription) offer(e Event) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.match != nil && !s.match(e) {
+		return // filtered out: not this subscriber's business
+	}
 	if len(s.buf) < cap(s.buf) {
 		s.buf = append(s.buf, e)
 	} else {
@@ -201,7 +233,6 @@ func (s *Subscription) offer(e Event) {
 	case s.sig <- struct{}{}:
 	default:
 	}
-	s.mu.Unlock()
 }
 
 // Next blocks until an event is available. It returns the event plus the

@@ -278,6 +278,16 @@ func TestWSUnwiredGives404(t *testing.T) {
 // auth decision is exercised on the wsServer method with a crafted request
 // whose RemoteAddr is non-loopback (an httptest server always binds loopback,
 // so the loopback-trusted path cannot reach the rejection hermetically).
+// TestWSAuthRejectsUnauthorized verifies the token gate on a NON-loopback
+// handshake. Cases:
+//   - no WS secret configured + non-loopback peer -> denied (404, unwired)
+//   - secret configured + wrong/missing token on non-loopback -> denied (403)
+//   - secret configured + correct token (query or bearer) -> allowed
+//   - loopback peer (secret or not) -> always allowed (house rule)
+//
+// The auth decision is exercised on the wsServer method with a crafted request
+// whose RemoteAddr is non-loopback (an httptest server always binds loopback,
+// so the loopback-trusted path cannot reach the rejections hermetically).
 func TestWSAuthRejectsUnauthorized(t *testing.T) {
 	ws := &wsServer{token: "s3cret"}
 	nonLoop := func(path string, hdr http.Header) *http.Request {
@@ -287,51 +297,54 @@ func TestWSAuthRejectsUnauthorized(t *testing.T) {
 		return r
 	}
 
-	// No token on a non-loopback peer -> denied.
-	if got := ws.tokenAllows(nonLoop("example.com/api/ws", nil)); got {
-		t.Fatalf("no token on non-loopback handshake allowed; want denied")
+	// No token/header + non-loopback peer with a configured secret -> 403.
+	r := nonLoop("example.com/api/ws", http.Header{})
+	if got := ws.authorize(r); got != http.StatusForbidden {
+		t.Fatalf("no token on non-loopback = %d, want 403", got)
 	}
 
-	// Wrong token -> denied.
-	hdr := http.Header{}
-	r := nonLoop("example.com/api/ws?token=wrong", hdr)
-	if got := ws.tokenAllows(r); got {
-		t.Fatalf("wrong token on non-loopback allowed; want denied")
+	// Wrong token -> 403.
+	r = nonLoop("example.com/api/ws?token=wrong", http.Header{})
+	if got := ws.authorize(r); got != http.StatusForbidden {
+		t.Fatalf("wrong token = %d, want 403", got)
 	}
 
-	// Correct query-param token -> allowed.
+	// Correct query-param token -> 200.
 	r = nonLoop("example.com/api/ws?token=s3cret", http.Header{})
-	if !ws.tokenAllows(r) {
-		t.Fatalf("correct query token denied; want allowed")
+	if got := ws.authorize(r); got != http.StatusOK {
+		t.Fatalf("correct query token = %d, want 200", got)
 	}
 
-	// Correct Authorization: Bearer token -> allowed.
-	hdr = http.Header{}
+	// Correct Authorization: Bearer token -> 200.
+	hdr := http.Header{}
 	hdr.Set("Authorization", "Bearer s3cret")
 	r = nonLoop("example.com/api/ws", hdr)
-	if !ws.tokenAllows(r) {
-		t.Fatalf("correct bearer token denied; want allowed")
+	if got := ws.authorize(r); got != http.StatusOK {
+		t.Fatalf("correct bearer token = %d, want 200", got)
 	}
 
-	// Empty token config (loopback default) -> always allowed.
-	open := &wsServer{token: ""}
+	// *** Counter-proof for the review finding ***: EMPTY token config + a
+	// non-loopback peer must be DENIED (404, indistinguishable from unwired),
+	// not allowed. The pre-ruling code allowed this.
+	open := &wsServer{token: ""} // no secret: loopback-only
 	r = nonLoop("example.com/api/ws", http.Header{})
-	if !open.tokenAllows(r) {
-		t.Fatalf("empty token config denied a handshake; want allowed")
+	if got := open.authorize(r); got != http.StatusNotFound {
+		t.Fatalf("empty token config + non-loopback = %d, want 404 (denied)", got)
 	}
 
-	// Loopback peer with a configured token -> trusted (house rule).
+	// Loopback peer + a configured secret -> trusted (house rule).
 	loop := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/api/ws", nil)
 	loop.RemoteAddr = "127.0.0.1:1234"
-	if !ws.tokenAllows(loop) {
-		t.Fatalf("loopback peer with token denied; want trusted")
+	if got := ws.authorize(loop); got != http.StatusOK {
+		t.Fatalf("loopback peer = %d, want 200 (trusted)", got)
+	}
+
+	// Loopback peer + empty secret -> trusted too.
+	if got := open.authorize(loop); got != http.StatusOK {
+		t.Fatalf("loopback peer no secret = %d, want 200 (trusted)", got)
 	}
 }
 
-// TestWSGapMarkerFromSlowSubscriber proves B1 backpressure end to end: a
-// subscriber with a tiny queue that cannot keep up sees explicit gap markers,
-// and Broker.Publish stays non-blocking (the "dispatcher" is never slowed by a
-// slow consumer).
 // TestWSGapMarkerFromSlowSubscriber proves B1/B2 backpressure: a slow
 // consumer never slows the dispatcher — the bus's bounded subscription drops
 // the oldest events and later surfaces them as gap markers (the B1 pattern the
@@ -398,5 +411,163 @@ func TestWSGapMarkerFromSlowSubscriber(t *testing.T) {
 	}
 	if gotFrames == 0 {
 		t.Fatalf("no frames delivered under burst; backpressure broke the stream")
+	}
+}
+
+// The following exercise the #168 review fixes.
+
+// TestWSOutboxSubscriberGetsNoSnapshot (fix: snapshot topic semantics). An
+// outbox subscriber must receive NO job snapshot — job state is only
+// meaningful to a jobs-relevant subscription.
+func TestWSOutboxSubscriberGetsNoSnapshot(t *testing.T) {
+	broker := events.NewBroker()
+	// The fake snapshot HAS a job; an outbox subscriber must not see it.
+	snap := fakeSnapshot{jobs: []repo.Job{{ID: "jobsnap-1", Status: "pending"}}}
+	s := New(":0", log.Default())
+	s.SetWSAPI(broker, snap, "")
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	c := dialWS(t, urlFor(ts))
+	sendSubscribe(t, c, "outbox", "")
+	// Only the subscribed ack should arrive — no job-snapshot frames.
+	ack := readFrame(t, c)
+	if ack.Type != frameSubscribed {
+		t.Fatalf("first frame = %+v, want subscribed ack", ack)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+	_, data, err := c.ReadMessage()
+	if err == nil {
+		t.Fatalf("outbox subscriber received an extra frame: %s", data)
+	}
+}
+
+// TestWSAllSubscriberJobSnapshotsAreTopicJobs (fix: snapshot topic). An
+// `all` subscription still gets the job snapshot, but every snapshot frame
+// carries topic "jobs" (not "all").
+func TestWSAllSubscriberJobSnapshotsAreTopicJobs(t *testing.T) {
+	broker := events.NewBroker()
+	snap := fakeSnapshot{jobs: []repo.Job{{ID: "all-snap-1", Status: "processing"}}}
+	s := New(":0", log.Default())
+	s.SetWSAPI(broker, snap, "")
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	c := dialWS(t, urlFor(ts))
+	sendSubscribe(t, c, "all", "")
+	if ack := readFrame(t, c); ack.Type != frameSubscribed {
+		t.Fatalf("want subscribed ack, got %+v", ack)
+	}
+	snapFrame := readFrame(t, c)
+	if snapFrame.Type != frameEvent || !snapFrame.Snapshot {
+		t.Fatalf("want a job snapshot frame, got %+v", snapFrame)
+	}
+	if snapFrame.Topic != "jobs" {
+		t.Fatalf("all-subscriber snapshot topic = %q, want \"jobs\"", snapFrame.Topic)
+	}
+	if p, _ := snapFrame.Payload.(map[string]any); p["job_id"] != "all-snap-1" {
+		t.Fatalf("snapshot payload = %v, want all-snap-1", snapFrame.Payload)
+	}
+}
+
+// TestWSSilentClientCloseReleasesSubscription (fix: subscription leak). A
+// client that connects, subscribes, then goes away SILENTLY (raw socket close,
+// no close frame, no further events) must release its broker subscription: the
+// live loop cancels via the read-pump and Broker.Subscribers returns to the
+// pre-connection baseline.
+func TestWSSilentClientCloseReleasesSubscription(t *testing.T) {
+	broker := events.NewBroker()
+	s := New(":0", log.Default())
+	s.SetWSAPI(broker, fakeSnapshot{}, "")
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	base := broker.Subscribers()
+
+	c, _, err := websocket.DefaultDialer.Dial(urlFor(ts), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if err := c.WriteJSON(map[string]any{"type": "subscribe", "topic": "jobs"}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	// Wait for the handler to register its broker subscription.
+	deadline := time.Now().Add(3 * time.Second)
+	for broker.Subscribers() <= base && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := broker.Subscribers(); got <= base {
+		t.Fatalf("broker sub count after connect = %d, want > base %d", got, base)
+	}
+
+	// Close the TCP connection WITHOUT a WS close frame (silent disconnect).
+	_ = c.UnderlyingConn().SetDeadline(time.Now())
+	_ = c.UnderlyingConn().Close()
+
+	// The read-pump must notice and the deferred Unsubscribe must run.
+	deadline = time.Now().Add(3 * time.Second)
+	for broker.Subscribers() > base && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := broker.Subscribers(); got != base {
+		t.Fatalf("silent client left %d broker subscriptions, want back to base %d", got, base)
+	}
+}
+
+// TestWSOutboxSubscriberNoDropsUnderJobFlood (fix: filter before the broker
+// queue). An outbox subscriber flooded with irrelevant JOB events must suffer
+// ZERO drops/gaps — job events are filtered before the bounded queue, so they
+// cannot displace (or fake-gap) the outbox events it wants.
+func TestWSOutboxSubscriberNoDropsUnderJobFlood(t *testing.T) {
+	broker := events.NewBroker()
+	// Register the pre-existing slow-subscriber count check as well.
+	s := New(":0", log.Default())
+	s.SetWSAPI(broker, fakeSnapshot{}, "")
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	c := dialWS(t, urlFor(ts))
+	sendSubscribe(t, c, "outbox", "")
+	if ack := readFrame(t, c); ack.Type != frameSubscribed {
+		t.Fatalf("want subscribed ack, got %+v", ack)
+	}
+
+	// The consumer drains in lockstep, but flood MANY outbox-irrelevant job
+	// events first — none may occupy/overflow the outbox subscription's queue.
+	for i := 0; i < 500; i++ {
+		broker.Publish(events.JobClaimed{JobID: "job-flood"})
+	}
+	// A single relevant outbox event must get through with zero drops.
+	broker.Publish(events.OutboxDrained{Count: 1})
+
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	sawOutbox := false
+	sawGap := false
+	for {
+		_, data, err := c.ReadMessage()
+		if err != nil {
+			break
+		}
+		var f outFrame
+		if err := json.Unmarshal(data, &f); err != nil {
+			continue
+		}
+		if f.Type == frameGap {
+			sawGap = true
+		}
+		if f.Type == frameEvent {
+			if p, _ := f.Payload.(map[string]any); p["kind"] == "outbox_drained" {
+				sawOutbox = true
+			}
+		}
+		if sawOutbox {
+			break
+		}
+	}
+	if !sawOutbox {
+		t.Fatalf("outbox subscriber never got the outbox event under job flood")
+	}
+	if sawGap {
+		t.Fatalf("outbox subscriber saw a gap from irrelevant job events (filter must precede the queue)")
 	}
 }

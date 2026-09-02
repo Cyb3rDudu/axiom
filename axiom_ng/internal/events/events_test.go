@@ -93,6 +93,44 @@ func TestEventTypesStringAndJobID(t *testing.T) {
 	}
 }
 
+// TestBrokerFilteredSubscriptionIsolation is the #168 backpressure fix on B1:
+// a subscription with a topic filter never enqueues (or drops/gaps on)
+// events it did not ask for, so an irrelevant flood cannot displace the events
+// it wants and cannot fabricate a false gap marker.
+func TestBrokerFilteredSubscriptionIsolation(t *testing.T) {
+	b := NewBroker()
+	// A jobs-only subscription with a tiny queue: outbox events must never
+	// occupy (or overflow) it, even under a heavy outbox flood.
+	jobsOnly := NewSubscription().WithMatch(func(e Event) bool {
+		_, isOutbox := e.(OutboxDrained)
+		return !isOutbox
+	})
+	b.Subscribe(jobsOnly, 2)
+
+	// Flood outbox events first (irrelevant to jobsOnly) — none may be
+	// queued, so none may be dropped.
+	for i := range 10 {
+		b.Publish(OutboxDrained{Count: i})
+	}
+	if got := jobsOnly.Dropped(); got != 0 {
+		t.Fatalf("filtered sub accumulated %d drops from irrelevant events, want 0", got)
+	}
+
+	// A matching job event must arrive with zero drops: no irrelevance was
+	// cached in the queue, so there is nothing to be re-displaced.
+	b.Publish(JobClaimed{JobID: "j"})
+	e, drops, ok := jobsOnly.Next(nil)
+	if !ok {
+		t.Fatal("expected the matching job event")
+	}
+	if JobID(e) != "j" {
+		t.Fatalf("got %v, want job j", JobID(e))
+	}
+	if drops != 0 {
+		t.Fatalf("false gap from irrelevant flood: drops=%d, want 0", drops)
+	}
+}
+
 // TestBrokerUnsubscribeStopsDelivery verifies unsubscribing removes a
 // subscriber (and that a concurrent Publish doesn't race with it).
 func TestBrokerUnsubscribeStopsDelivery(t *testing.T) {

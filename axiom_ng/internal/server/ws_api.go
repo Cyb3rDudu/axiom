@@ -12,17 +12,20 @@
 //	  {"type":"gap","topic":"jobs","seq":2,"drops":3}
 //
 // Ordering is connection-local via a monotonic `seq`. Snapshot frames carry
-// snapshot:true and arrive FIRST (the DB's in-flight jobs); live frames carry
-// snapshot:false. Snapshot and live share the same seq stream, so a client
-// sees gapless, duplicate-free ordering.
+// snapshot:true, always on topic "jobs", and arrive FIRST (the DB's in-flight
+// jobs); live frames carry snapshot:false. Snapshot and live share the same
+// seq stream, so a client sees gapless, duplicate-free ordering.
 //
 // Backpressure follows the B1 pattern end to end:
-//   - the bus subscription is a bounded queue; a consumer that drains slowly
-//     sees its lost events surfaced as `gap` frames (the subscription's drops).
+//   - the subscription is pre-filtered (WithMatch on the B1 bus) and bounded,
+//     so only events this subscriber asked for occupy its queue; a consumer
+//     that drains slowly sees those lost events surfaced as `gap` frames.
 //   - the final hop to the socket is a bounded send queue with a write
-//     deadline; a connection that falls behind (producer beats the TCP socket)
-//     is CLOSED (the reconnect contract), never left to leak memory or block
-//     the bus or the dispatcher.
+//     deadline; a connection that falls behind is CLOSED (the reconnect
+//     contract), never left to leak memory or block the bus or the dispatcher.
+//   - a client that disconnects (silently or not) tears the loop down via a
+//     read-pump that cancels the connection context, releasing the bus
+//     subscription — no leak on a vanished peer.
 package server
 
 import (
@@ -51,23 +54,27 @@ type wsSnapshotSource interface {
 type wsServer struct {
 	broker   *events.Broker
 	snapshot wsSnapshotSource
-	token    string // non-empty => required on the WS handshake (header/query)
+	token    string // non-empty => required on a non-loopback WS handshake
 	log      *log.Logger
 }
 
-// wsConnBound bounds both the per-connection bus subscription and the send
-// queue to the socket. Small enough that a slow client degrades to gap/close
-// instead of unbounded memory.
+// wsQueue bounds the per-connection bus subscription and the send queue to the
+// socket. Small enough that a slow client degrades to gap/close instead of
+// unbounded memory.
 const wsQueue = 64
 
-var wsUpgrader = websocket.Upgrader{
-	// The API is not cross-origin browser-embedded; allow any origin. Auth is
-	// enforced by the token gate below, not by Origin (Co-).
+// Heartbeat / teardown timing for the write/read pumps.
+const (
+	wsWriteWait  = 5 * time.Second  // max time a single socket write may take
+	wsPongWait   = 60 * time.Second // how long we wait for a peer pong before teardown
+	wsPingPeriod = 30 * time.Second // heartbeat to prove the peer is alive
+)
 
+var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// wsEvent is the event frame type-discriminator.
+// frame type discriminators.
 const (
 	frameEvent = "event"
 	frameGap   = "gap"
@@ -79,7 +86,7 @@ const (
 // SetWSAPI wires the /api/ws live endpoint. Calling it with a nil broker (or
 // never calling it) keeps the route answering 404, indistinguishable from no
 // route (the sourceSecret/repair-API pattern). token is the optional shared
-// WS secret: when non-empty it is required on a non-loopback handshake.
+// WS secret required on a non-loopback handshake.
 func (s *Server) SetWSAPI(broker *events.Broker, snapshot wsSnapshotSource, token string) {
 	s.ws = &wsServer{broker: broker, snapshot: snapshot, token: token, log: s.log}
 }
@@ -106,25 +113,29 @@ type outFrame struct {
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	ws := s.ws
 	if ws == nil {
-		// Unwired: 404, indistinguishable from no route (sourceSecret pattern).
-		http.NotFound(w, r)
+		http.NotFound(w, r) // unwired: indistinguishable from no route
 		return
 	}
-	// Auth first (cheap, before the upgrade): a configured token is required
-	// on a non-loopback handshake; on loopback the peer is trusted (house rule).
-	if !ws.tokenAllows(r) {
-		http.Error(w, "unauthorized", http.StatusForbidden)
+	// Auth first (cheap, before upgrading). authorize is 3-valued: 200 =
+	// allowed, 404 = the feature is not enabled for this peer (loopback-only
+	// with no token configured — same disguise as unwired), 403 = a configured
+	// token was wrong or missing.
+	switch st := ws.authorize(r); st {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		http.NotFound(w, r)
+		return
+	default:
+		http.Error(w, "unauthorized", st)
 		return
 	}
 
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		// Upgrade already wrote the HTTP response; nothing more to send.
-		return
+		return // upgrade already wrote the HTTP response
 	}
 
-	// Read the subscribe frame. A client must subscribe exactly once as the
-	// first message.
+	// The connection wants exactly one subscribe frame as its first message.
 	conn.SetReadLimit(4096)
 	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		_ = conn.Close()
@@ -135,74 +146,66 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close()
 		return
 	}
-	if err := conn.SetReadDeadline(time.Time{}); err != nil {
-		_ = conn.Close()
-		return
-	}
 
 	s.serveSubscribed(ws, conn, sub)
 }
 
-// serveSubscribed runs the snapshot-then-live loop for one authenticated,
-// subscribed connection. It blocks for the connection's lifetime.
+// serveSubscribed runs the snapshot-then-live stream for one authenticated,
+// subscribed connection for the connection's lifetime. A client that
+// disconnects (silently or not) cancels the loop via a read-pump, releasing the
+// bus subscription — no leak on a vanished peer (#168 review).
 func (s *Server) serveSubscribed(ws *wsServer, conn *websocket.Conn, sub clientFrame) {
-	// Topic filter: which events this connection wants.
 	topic := sub.Topic
 	switch topic {
 	case "jobs", "outbox", "all":
 	default:
-		topic = "all"
+		topic = "all" // invalid topic -> everything
 	}
 
-	// Subscribe to the bus BEFORE reading the snapshot so no live event that
-	// fires mid-snapshot is lost: it lands in the bounded subscription queue
-	// and is delivered after the snapshot (gapless by construction).
-	subs := events.NewSubscription()
+	// Context tied to both the connection (read-pump detects close) and the
+	// writer (a stalled socket cancels it). When it is cancelled the live loop
+	// returns and the deferred Unsubscribe runs.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// ReadPump: keeps gorilla processing ping/pong/close control frames and
+	// cancels ctx the moment the peer is gone (a read error on a closed or
+	// silent socket). This is the mechanism that reclaims the bus subscription
+	// for a client that vanishes without another message.
+	startReadPump(conn, cancel)
+
+	// Pre-filtered bus subscription: pull the topic + job filter IN FRONT of
+	// the bounded queue so irrelevant events never occupy (or overflow) it and
+	// gap markers stay honest (#168 review).
+	subs := events.NewSubscription().WithMatch(subscribeFilter(topic, sub.JobID))
 	ws.broker.Subscribe(subs, wsQueue)
 	defer ws.broker.Unsubscribe(subs)
 
-	// WriterPump: consume the bounded send queue and write to the socket with a
-	// deadline. A full queue or a timed-out write closes the connection (the
-	// reconnect contract) — the producer never blocks on a slow socket.
+	// WriterPump: writes queued frames and heartbeat pings to the socket. A
+	// write that cannot finish in time closes the connection (reconnect
+	// contract) and cancels the loop; it never blocks the bus or the live loop.
 	out := make(chan []byte, wsQueue)
-	writerDone := make(chan struct{})
-	go func() {
-		defer close(writerDone)
-		for frame := range out {
-			if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
-				_ = conn.Close()
-				return
-			}
-			if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
-				_ = conn.Close()
-				return
-			}
-		}
-		_ = conn.Close()
-	}()
+	startWriterPump(conn, ctx, cancel, out, wsPingPeriod)
 
-	// A single connection-local monotonic seq shared by snapshot and live frames.
-	var seq atomic.Int64
-
-	// send enqueues a frame to the writerPump. Non-blocking: a full send queue
-	// means the socket cannot keep up — close (reconnect contract), never block.
+	// send enqueues a frame to the writer. Non-blocking: a full send queue
+	// means the socket cannot keep up — close (reconnect contract).
 	send := func(f outFrame) bool {
 		b, err := json.Marshal(f)
 		if err != nil {
-			return true // serialization failure of a frame we control: skip
+			return true
 		}
 		select {
 		case out <- b:
 			return true
 		default:
+			cancel() // socket too slow: tear down rather than grow memory
 			return false
 		}
 	}
 
-	// Acknowledge the subscription to the client ONCE the bus subscription is
-	// live: after the ack, any published event the topic/job filter matches is
-	// guaranteed to reach this connection (the client uses it as a barrier).
-	// It carries no seq — a control frame, before the snapshot's first seq.
+	// Acknowledge the subscription once the bus subscription is live: after
+	// the subscribed ack any matching event is guaranteed to reach this
+	// connection. No seq — it precedes the first snapshot seq.
 	if b, err := json.Marshal(outFrame{Type: frameSubscribed, Topic: topic}); err == nil {
 		select {
 		case out <- b:
@@ -210,21 +213,21 @@ func (s *Server) serveSubscribed(ws *wsServer, conn *websocket.Conn, sub clientF
 		}
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	defer close(out) // stop the writerPump
+	// A single connection-local monotonic seq shared by snapshot and live.
+	var seq atomic.Int64
 
-	// --- snapshot: the DB's in-flight jobs -------------------------------
-	if ws.snapshot != nil {
+	// Snapshot: in-flight jobs. Only a jobs-relevant subscription (jobs|all)
+	// gets a job snapshot; snapshot frames always carry topic "jobs".
+	if (topic == "jobs" || topic == "all") && ws.snapshot != nil {
 		jobs, err := ws.snapshot.ActiveJobs(ctx)
 		if err == nil {
 			for _, j := range jobs {
 				if sub.JobID != "" && sub.JobID != j.ID {
-					continue // job-filtered
+					continue
 				}
 				seq.Add(1)
 				if !send(outFrame{
-					Type: frameEvent, Topic: topic, Seq: seq.Load(),
+					Type: frameEvent, Topic: "jobs", Seq: seq.Load(),
 					Snapshot: true, Payload: jobPayload(j),
 				}) {
 					return
@@ -233,16 +236,16 @@ func (s *Server) serveSubscribed(ws *wsServer, conn *websocket.Conn, sub clientF
 		}
 	}
 
-	// --- live: drain the bus subscription --------------------------------
+	// Live: drain the (already filtered) bus subscription.
 	done := ctx.Done()
 	lastDrops := int64(0)
 	for {
 		e, drops, ok := subs.Next(done)
 		if !ok {
-			return // context cancelled / connection gone
+			return
 		}
-		// Gap markers from the bus's bounded subscription (B1 pattern): any
-		// events the slow consumer missed are surfaced as an explicit gap.
+		// Gap markers: drops the slow consumer missed, surfaced explicitly.
+		// The subscription is pre-filtered, so drops count only relevant ones.
 		if drops > lastDrops {
 			seq.Add(int64(drops - lastDrops))
 			if !send(outFrame{
@@ -253,22 +256,89 @@ func (s *Server) serveSubscribed(ws *wsServer, conn *websocket.Conn, sub clientF
 			}
 			lastDrops = drops
 		}
-
-		evTopic := eventTopic(e)
-		if topic != "all" && evTopic != topic {
-			continue // topic filter
-		}
 		if sub.JobID != "" && events.JobID(e) != sub.JobID {
-			continue // job filter
+			continue // defense in depth for the job filter
 		}
 		seq.Add(1)
 		if !send(outFrame{
-			Type: frameEvent, Topic: evTopic, Seq: seq.Load(),
+			Type: frameEvent, Topic: eventTopic(e), Seq: seq.Load(),
 			Snapshot: false, Payload: eventPayload(e),
 		}) {
 			return
 		}
 	}
+}
+
+// startReadPump runs the read loop that (a) keeps gorilla processing control
+// frames and (b) cancels cancel() on the first read error — i.e. as soon as
+// the client is gone or its pong window lapses. It runs until ctx is done.
+func startReadPump(conn *websocket.Conn, cancel context.CancelFunc) {
+	go func() {
+		_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		conn.SetPongHandler(func(string) error {
+			return conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		})
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				cancel() // client closed / silent peer reaped
+				return
+			}
+		}
+	}()
+}
+
+// startWriterPump writes frames from out and heartbeat pings. On the first
+// write it cannot finish in time (or ctx is cancelled) it cancels cancel() and
+// closes the connection. It returns when ctx is done or out is closed.
+func startWriterPump(conn *websocket.Conn, ctx context.Context, cancel context.CancelFunc, out <-chan []byte, pingPeriod time.Duration) {
+	go func() {
+		ping := time.NewTicker(pingPeriod)
+		defer ping.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				_ = conn.Close()
+				return
+			case frame := <-out:
+				if err := conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+					cancel()
+					return
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+					cancel()
+					return
+				}
+			case <-ping.C:
+				if err := conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+					cancel()
+					return
+				}
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+}
+
+// authorize returns the HTTP status for a handshake: 200 = allowed; 404 =
+// the feature is not enabled for this peer (a non-loopback peer with no token
+// configured — same disguise as unwired); 403 = a configured token was wrong
+// or missing. Loopback peers are always allowed (the house rule).
+func (ws *wsServer) authorize(r *http.Request) int {
+	if loopbackPeer(r) {
+		return http.StatusOK // loopback trusted; token not required
+	}
+	if ws.token == "" {
+		// No WS secret configured: WS is loopback-only. A remote peer must not
+		// be able to tell this apart from the route being absent.
+		return http.StatusNotFound
+	}
+	if tokenFrom(r) != ws.token {
+		return http.StatusForbidden
+	}
+	return http.StatusOK
 }
 
 // loopbackPeer reports whether the request's remote address is loopback.
@@ -279,17 +349,6 @@ func loopbackPeer(r *http.Request) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-// tokenAllows reports whether a handshake is authorized: a configured token
-// is required on a non-loopback peer; on loopback the peer is trusted (the
-// house rule — loopback ops are unchanged). Token is read from ?token= or the
-// Authorization: Bearer header.
-func (ws *wsServer) tokenAllows(r *http.Request) bool {
-	if ws.token == "" || loopbackPeer(r) {
-		return true
-	}
-	return tokenFrom(r) == ws.token
 }
 
 // tokenFrom extracts the WS token from the ?token= query param or the
@@ -305,6 +364,25 @@ func tokenFrom(r *http.Request) string {
 		return bearer[len(prefix):]
 	}
 	return ""
+}
+
+// subscribeFilter returns the broker-side predicate narrowing a subscription
+// to the events this connection asked for. nil = everything (unfiltered). The
+// filter runs before enqueueing in the bounded queue, so irrelevant events
+// cannot displace relevant ones (#168 review).
+func subscribeFilter(topic, jobID string) func(events.Event) bool {
+	if topic == "all" && jobID == "" {
+		return nil
+	}
+	return func(e events.Event) bool {
+		if jobID != "" && events.JobID(e) != jobID {
+			return false
+		}
+		if topic == "all" {
+			return true
+		}
+		return eventTopic(e) == topic
+	}
 }
 
 // eventTopic maps a typed bus event to its WS topic.
