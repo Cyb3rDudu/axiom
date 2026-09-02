@@ -73,6 +73,9 @@ class Chunker:
         self._paragraph_split_pattern = re.compile(r'(\n\s*\n+)')
         # Pattern to detect markdown headings
         self._heading_pattern = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
+        # #245: level-1 heading paragraph starts recorded by the last
+        # _extract_heading_hierarchy call (see chapter_starts()).
+        self._level1_starts: List[tuple] = []
         # Pattern to detect markdown images
         self._image_pattern = re.compile(r'!\[([^\]]*)\]\(([^\)]+)\)')
 
@@ -102,6 +105,7 @@ class Chunker:
         Returns:
             Dict mapping paragraph_index -> List[ancestor headings]
         """
+        self._level1_starts = []  # rebuilt on every call — last call wins
         # Split into paragraphs
         parts = self._paragraph_split_pattern.split(markdown_content)
         paragraphs = []
@@ -139,11 +143,24 @@ class Chunker:
 
                 # Add this heading to stack
                 heading_stack.append((level, title))
+                if level == 1:
+                    # #245 APA-7 chapter ordinals: record level-1 heading
+                    # paragraph starts in the SAME index space as chunk
+                    # start_paragraph_index (the last call is the one chunk
+                    # indices refer to — the marker-cleanup re-extract
+                    # overwrites, which is exactly right).
+                    self._level1_starts.append((i, title))
 
             # Store current hierarchy for this paragraph
             paragraph_to_headings[i] = [h[1] for h in heading_stack]
 
         return paragraph_to_headings
+
+    def chapter_starts(self) -> List[tuple]:
+        """[(paragraph_index, title)] of level-1 headings from the last
+        chunk() call — the ingest-frozen chapter boundaries for APA
+        citation fields (#245)."""
+        return list(self._level1_starts)
 
     def _recursive_split(self, text: str, max_tokens: int, overlap_tokens: int) -> List[str]:
         """

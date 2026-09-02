@@ -19,19 +19,27 @@ type SourceView struct {
 	Publisher string   `json:"publisher"`
 	Language  string   `json:"language,omitempty"`
 	Tags      []string `json:"tags,omitempty"`
+	// ContentType (#196/#245): the ACTIVE snapshot's attachment format
+	// ("application/pdf" | "application/epub+zip") — the ONE format factor
+	// of the citation contract: PDF → page by trust level, EPUB → always
+	// APA 7 section citation. Resolved through the active-snapshot chain so
+	// twin attachments report the format the client actually sees. Empty
+	// when unknown (structural NULL-safety, never an error).
+	ContentType string `json:"content_type,omitempty"`
 }
 
 // View projects a hydrated DocumentMeta (plus the owning document id) into
 // the API contract shape.
 func (m DocumentMeta) View(docID string) SourceView {
 	v := SourceView{
-		DocID:     docID,
-		Title:     m.Title,
-		Authors:   m.Authors,
-		Year:      m.Year,
-		Publisher: m.Publisher,
-		Language:  m.Language,
-		Tags:      m.Tags,
+		DocID:       docID,
+		Title:       m.Title,
+		Authors:     m.Authors,
+		Year:        m.Year,
+		Publisher:   m.Publisher,
+		Language:    m.Language,
+		Tags:        m.Tags,
+		ContentType: m.ContentType,
 	}
 	if v.Authors == nil {
 		v.Authors = []string{}

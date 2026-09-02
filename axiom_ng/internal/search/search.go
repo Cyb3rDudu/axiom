@@ -192,6 +192,15 @@ type LocatorView struct {
 	// riding on enriched epub_cfi locators — clients resolve a hit position
 	// to its exact print page. Passthrough of the stored wire form.
 	ParagraphPages [][]string `json:"paragraph_pages,omitempty"`
+	// ParagraphInChapter (#245): the APA-7 paragraph count of the hit's
+	// position from the chapter start (1-based, ingest-frozen). EPUB
+	// citations are ALWAYS the APA section form — clients compose
+	// (Author, year, Chap. N / section "Title" / para. N).
+	ParagraphInChapter *int `json:"paragraph_in_chapter,omitempty"`
+	// SectionTitle (#245): the deepest section title at the hit position —
+	// APA section citation component (redundant with Chapter for hits under
+	// a heading, but set whenever the ingest froze it).
+	SectionTitle string `json:"section_title,omitempty"`
 }
 
 // Response is POST /api/search.
@@ -845,20 +854,31 @@ func sourceFor(m repo.DocumentMeta, docID string) repo.SourceView {
 	return m.View(docID)
 }
 
+// orInt returns the first non-nil int.
+func orInt(a, b *int) *int {
+	if a != nil {
+		return a
+	}
+	return b
+}
+
 // locatorView renders the stored locator into the human form (issue Ziel 5).
 func locatorView(raw json.RawMessage, section []string) LocatorView {
 	var loc struct {
-		Type              string     `json:"type"`
-		PageLabelStart    string     `json:"page_label_start"`
-		PageLabelEnd      string     `json:"page_label_end"`
-		PhysicalPageStart *int       `json:"physical_page_start"`
-		PhysicalPageEnd   *int       `json:"physical_page_end"`
-		CFIStart          string     `json:"cfi_start"`
-		PageSource        string     `json:"page_source"`
-		Chapter           *int       `json:"chapter"`    // W4: chapter-relative folios (restart-per-chapter books)
-		PageStart         *int       `json:"page_start"` // #229: trusted EPUB print pages
-		PageEnd           *int       `json:"page_end"`
-		ParagraphPages    [][]string `json:"paragraph_pages"`
+		Type               string     `json:"type"`
+		PageLabelStart     string     `json:"page_label_start"`
+		PageLabelEnd       string     `json:"page_label_end"`
+		PhysicalPageStart  *int       `json:"physical_page_start"`
+		PhysicalPageEnd    *int       `json:"physical_page_end"`
+		CFIStart           string     `json:"cfi_start"`
+		PageSource         string     `json:"page_source"`
+		Chapter            *int       `json:"chapter"`        // W4: chapter-relative folios (restart-per-chapter books)
+		ChapterNumberAPA   *int       `json:"chapter_number"` // #245 APA ordinal (spine vs heading ordinal may differ)
+		PageStart          *int       `json:"page_start"`     // stored; NOT rendered for EPUBs (#245)
+		PageEnd            *int       `json:"page_end"`
+		ParagraphPages     [][]string `json:"paragraph_pages"`
+		SectionTitle       string     `json:"section_title"`        // #245 APA
+		ParagraphInChapter *int       `json:"paragraph_in_chapter"` // #245 APA
 	}
 	_ = json.Unmarshal(raw, &loc)
 
@@ -869,39 +889,33 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 
 	switch loc.Type {
 	case "epub_cfi":
-		// #229: DB/OS carry the folio on enriched EPUB locators — render it.
-		// Page presence (not the trust level alone) gates the page label:
-		// print_verified/derived_from_sibling/print_unverified all cite
-		// their pages (the client gates citability on page_source), none
-		// has nothing to cite. Absent fields stay absent — no fabrication.
+		// #245 consumer cut: EPUB page fields (page_start/page_end/
+		// paragraph_pages/page_source) are OMITTED from the client contract —
+		// stored but dormant (the page experiment is wound down). For EPUBs
+		// the citation is ALWAYS the APA 7 section form; omitted (not null)
+		// because the #245 decision is unconditional — a nullable field that
+		// is never citable would force every client to re-implement the
+		// "ignore EPUB pages" rule the contract exists to remove. PDF arms
+		// below are untouched (#173 trust ladder remains the consumer
+		// contract).
 		label := chapter
-		pageSource := loc.PageSource
-		if pageSource == "" {
-			pageSource = processor.PageSourceNone
+		if cn := orInt(loc.Chapter, loc.ChapterNumberAPA); cn != nil {
+			label = fmt.Sprintf("Kap. %d", *cn)
 		}
-		if loc.PageStart != nil {
-			page := fmt.Sprintf("S. %d", *loc.PageStart)
-			if loc.PageEnd != nil && *loc.PageEnd != *loc.PageStart {
-				page = fmt.Sprintf("S. %d-%d", *loc.PageStart, *loc.PageEnd)
-			}
-			if loc.Chapter != nil {
-				label = fmt.Sprintf("Kap. %d, %s", *loc.Chapter, page)
-			} else if chapter != "" {
-				label = chapter + " · " + page
-			} else {
-				label = page
-			}
+		sectionTitle := ""
+		if loc.SectionTitle != "" {
+			sectionTitle = loc.SectionTitle
+		} else {
+			sectionTitle = chapter
 		}
 		return LocatorView{
-			Kind:           "epub_cfi",
-			Label:          label,
-			Chapter:        chapter,
-			ChapterNumber:  loc.Chapter,
-			CFI:            cfiShort(loc.CFIStart),
-			PageSource:     pageSource,
-			PageStart:      loc.PageStart,
-			PageEnd:        loc.PageEnd,
-			ParagraphPages: loc.ParagraphPages,
+			Kind:               "epub_cfi",
+			Label:              label,
+			Chapter:            chapter,
+			ChapterNumber:      orInt(loc.Chapter, loc.ChapterNumberAPA),
+			CFI:                cfiShort(loc.CFIStart),
+			ParagraphInChapter: loc.ParagraphInChapter,
+			SectionTitle:       sectionTitle,
 		}
 	case "page_span":
 		label := loc.PageLabelStart

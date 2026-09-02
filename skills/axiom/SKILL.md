@@ -59,18 +59,13 @@ GET /api/kg/entities/{id}/neighbors → entity neighborhood
 4. **Search is text-only**: images extracted from documents ride along as artifacts but are pixel-blind — you cannot search for what a chart *shows*, only for its caption/surrounding text (see issue #230).
 5. **Quotes come from `text`, not from memory**: always re-read the chunk text before quoting. Never paraphrase a hit you did not read.
 
-## The locator trust ladder (citation discipline)
+## The citation ladder (citation discipline, #245)
 
-Every hit carries `locator` with `kind`, `label`, `chapter`, and — decisive — `page_source`. The trust level is a **contract**: it tells you the strongest citation you are allowed to make.
+The ONE format factor is the source's `content_type` (`source` block of every hit/passage): **PDF → page citations by trust level; EPUB → ALWAYS an APA 7 section citation** — EPUB pages are never cited (the page experiment is decommissioned; EPUB locators carry no page fields in the contract). Never cite device/reader positions.
 
-### EPUB sources
+### EPUB sources — always APA 7 sections
 
-| page_source | meaning | citation rule |
-|---|---|---|
-| `print_verified` | Print pages proven **inside the book**: native page anchors verified against the book's own printed TOC | Cite the page: "(Yip et al. 2026, S. 307)" |
-| `print_unverified` | Page anchors exist but nothing proved they are print folios | Cite section + page **with reservation**: "S. 41 (unverifizierte Seitenangabe)" — or the section alone |
-| `derived_from_sibling` | Pages injected by aligning the PDF twin; ~84 % within ±1, known drift cases up to +8 | Cite section first, page as approximation: "Kap. 15 (S. ~184)" |
-| `none` | No trustworthy page data (no anchors, or the monotony guard refused) | Cite **section only**: "(Yip et al. 2026, Abschnitt ‚What Is a Lakehouse?')" — never assert a page, even if the book's index lists one |
+Cite from the APA fields on the locator (`chapter_number`, `section_title`, `paragraph_in_chapter`): "(Yip et al. 2026, Kap. 1, Abschnitt ‚What Is a Lakehouse?', para. 4)" — or the short form "(Yip et al. 2026, para. 17)" inside a chapter already named in prose. Fields are frozen at ingest from the book's own structure; when the book has no chapter structure they are absent — cite the nearest section title and say so. Never assert a page number for an EPUB, not even one the book's index prints.
 
 ### PDF sources
 
@@ -87,6 +82,7 @@ Query for the Lakehouse definition returned the section "What Is a Lakehouse?" w
 
 ## Anti-patterns
 
+- Citing a page number for an EPUB (any page_source — EPUBs cite APA sections only)
 - Citing a page number when `page_source` is `none`/absent
 - Treating `PDF-S. 12` (physical index) as a print page
 - Quoting the query-snippet instead of reading the full `text`

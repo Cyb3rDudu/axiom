@@ -123,6 +123,39 @@ def _merge_marker_pages(meta: dict, pagemap_max: int | None) -> None:
     meta["page_end"] = int(str(bounds[-1][1]))
 
 
+def _freeze_apa_fields(
+    meta: dict, chapter_starts: list[tuple[int, str]]
+) -> None:
+    """#245 APA-7 citation fields, frozen at ingest — always together or
+    not at all, never guessed.
+
+    Chapter = level-1 markdown heading (the deterministic pandoc DOM
+    structure; no reader/device state). paragraph_in_chapter counts
+    paragraphs from the chapter heading to the chunk's START paragraph,
+    1-based — the heading itself is not a paragraph. Books with no level-1
+    structure after the front matter leave the fields empty."""
+    if not chapter_starts:
+        return
+    spi = meta.get("start_paragraph_index")
+    if not isinstance(spi, int):
+        return
+    chapter_no = 0
+    chapter_para = -1
+    for idx, _title in chapter_starts:
+        if idx <= spi:
+            chapter_no += 1
+            chapter_para = idx
+        else:
+            break
+    if chapter_no == 0:
+        return  # before the first chapter (front matter) — no chapter context
+    meta["chapter_number"] = chapter_no
+    sections = meta.get("section_titles") or []
+    if sections:
+        meta["section_title"] = sections[-1]  # deepest section title
+    meta["paragraph_in_chapter"] = max(1, spi - chapter_para)
+
+
 def _adapt_embeddings(raw: Any) -> dict[str, Any]:
     """Pass through real embeddings from TextEmbedder.embed_chunks() into the
     Contract chunk shape. The real embedder writes
@@ -286,6 +319,14 @@ def _adapt_chunk(
                 ]
         if meta.get("chapter") is not None:
             locator["chapter"] = int(meta["chapter"])
+        # #245 APA-7: frozen citation fields ride on the stored locator
+        # (additive; absent when the book has no chapter structure).
+        if meta.get("chapter_number") is not None:
+            locator["chapter_number"] = int(meta["chapter_number"])
+        if meta.get("section_title"):
+            locator["section_title"] = str(meta["section_title"])
+        if meta.get("paragraph_in_chapter") is not None:
+            locator["paragraph_in_chapter"] = int(meta["paragraph_in_chapter"])
     else:
         page_start = meta.get("page_start")
         page_end = meta.get("page_end")
@@ -1313,11 +1354,20 @@ def _real_pipeline(
     enter("chunk")
     from axiom_ng_runner.compute_core.chunker import Chunker
 
-    chunk_dicts = Chunker(max_chunk_tokens=1200).chunk(
+    chunker = Chunker(max_chunk_tokens=1200)
+    chunk_dicts = chunker.chunk(
         markdown,
         doc_metadata={"doc_id": request["job_id"], "page_label_map": page_label_map,
                      "page_chapter_map": page_chapter_map},
     )
+
+    # #245 APA-7: freeze chapter/section/paragraph citation fields at
+    # ingest from the chunker's heading structure (deterministic pandoc
+    # DOM output — stable like the CFI itself; see _freeze_apa_fields).
+    if content_type == "application/epub+zip":
+        chapters = chunker.chapter_starts()
+        for c in chunk_dicts:
+            _freeze_apa_fields(c.setdefault("metadata", {}), chapters)
 
     # Dense embeddings via the existing heavy core if requested.
     proc_opt = request.get("processing", {}) or {}
