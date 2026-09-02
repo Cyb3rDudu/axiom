@@ -9,9 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -271,13 +273,6 @@ func TestWSUnwiredGives404(t *testing.T) {
 	}
 }
 
-// TestWSAuthRejectsUnauthorized verifies the token gate on a non-loopback
-// handshake: a wrong or missing token is refused (403), a correct one passes.
-// TestWSAuthRejectsUnauthorized verifies the token gate on a NON-loopback
-// handshake: a wrong or missing token is refused, a correct one passes. The
-// auth decision is exercised on the wsServer method with a crafted request
-// whose RemoteAddr is non-loopback (an httptest server always binds loopback,
-// so the loopback-trusted path cannot reach the rejection hermetically).
 // TestWSAuthRejectsUnauthorized verifies the token gate on a NON-loopback
 // handshake. Cases:
 //   - no WS secret configured + non-loopback peer -> denied (404, unwired)
@@ -569,5 +564,146 @@ func TestWSOutboxSubscriberNoDropsUnderJobFlood(t *testing.T) {
 	}
 	if sawGap {
 		t.Fatalf("outbox subscriber saw a gap from irrelevant job events (filter must precede the queue)")
+	}
+}
+
+// TestWSCSWSHForeignOriginRejected (#168 r3): a browser context announces
+// itself via the Origin header. A FOREIGN origin with no token configured
+// must be rejected EVEN from a loopback peer — otherwise any website open in
+// a local browser could read job metadata through ws://127.0.0.1 (cross-site
+// WebSocket hijacking). The loopback trust applies to processes (no Origin
+// header), not to browser contexts.
+func TestWSCSWSHForeignOriginRejected(t *testing.T) {
+	// Empty token config (the loopback-only default) — the vulnerable setup.
+	open := &wsServer{token: ""}
+	mk := func(origin string, remote string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8011/api/ws", nil)
+		r.RemoteAddr = remote
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		return r
+	}
+
+	// Counter-proof: foreign Origin + empty token, from a LOOPBACK peer -> 403.
+	if got := open.authorize(mk("https://evil.example", "127.0.0.1:4444")); got != http.StatusForbidden {
+		t.Fatalf("foreign origin + empty token from loopback = %d, want 403 (CSWSH)", got)
+	}
+
+	// Same-origin page (served by this API) still allowed on loopback.
+	if got := open.authorize(mk("http://127.0.0.1:8011", "127.0.0.1:4444")); got != http.StatusOK {
+		t.Fatalf("same-origin loopback = %d, want 200", got)
+	}
+
+	// No Origin header (a process: curl, in-process dialer) keeps the peer
+	// rule: loopback trusted.
+	if got := open.authorize(mk("", "127.0.0.1:4444")); got != http.StatusOK {
+		t.Fatalf("origin-less loopback process = %d, want 200", got)
+	}
+
+	// Foreign origin WITH a valid token is allowed (explicitly authorized).
+	sec := &wsServer{token: "s3cret"}
+	r := mk("https://evil.example", "127.0.0.1:4444")
+	r.URL.RawQuery = "token=s3cret"
+	if got := sec.authorize(r); got != http.StatusOK {
+		t.Fatalf("foreign origin + valid token = %d, want 200", got)
+	}
+
+	// End-to-end: a real dial carrying a foreign Origin header is refused.
+	broker := events.NewBroker()
+	s := New(":0", log.Default())
+	s.SetWSAPI(broker, fakeSnapshot{}, "")
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	hdr := http.Header{}
+	hdr.Set("Origin", "https://evil.example")
+	_, resp, err := websocket.DefaultDialer.Dial(urlFor(ts), hdr)
+	if err == nil {
+		t.Fatalf("foreign-origin dial succeeded; want refusal")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("foreign-origin handshake status = %v, want 403", resp)
+	}
+}
+
+// TestWSWriterClosesSocketOnWriteError (#168 r3): the writer goroutine owns
+// the socket close on every exit path. After a write failure the server-side
+// socket must be CLOSED (previously the error path returned without closing
+// and the ctx.Done() branch never ran).
+func TestWSWriterClosesSocketOnWriteError(t *testing.T) {
+	// Stand up a raw upgraded pair so the test owns the server-side conn.
+	srvConnCh := make(chan *websocket.Conn, 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		srvConnCh <- conn
+	}))
+	defer ts.Close()
+
+	client, _, err := websocket.DefaultDialer.Dial(urlFor(ts), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	srv := <-srvConnCh
+	defer srv.Close()
+
+	// Break the socket so the server's next write fails, then run the writer
+	// pump with one queued frame. cancelCalled observes the error exit.
+	// SO_LINGER(0) forces an RST on Close: a plain FIN leaves the server's
+	// socket writable (data drains into the kernel buffer), so the write
+	// would not fail deterministically.
+	if tcp, ok := client.UnderlyingConn().(*net.TCPConn); ok {
+		_ = tcp.SetLinger(0)
+	}
+	_ = client.UnderlyingConn().Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelCalled := make(chan struct{})
+	var once sync.Once
+	out := make(chan []byte, 1)
+	out <- []byte(`{"type":"event"}`)
+	startWriterPump(srv, ctx, func() { once.Do(func() { cancel(); close(cancelCalled) }) }, out, time.Hour)
+
+	// The write must fail and the writer must exit through cancel().
+	select {
+	case <-cancelCalled:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("writer never exited on write failure")
+	}
+
+	// PROOF: the server-side socket is closed. On a closed conn every
+	// subsequent operation reports "use of closed network connection"; a
+	// merely broken (but open) fd would not.
+	deadline := time.Now().Add(3 * time.Second)
+	closed := false
+	for time.Now().Before(deadline) {
+		if err := srv.UnderlyingConn().SetDeadline(time.Now()); err != nil && strings.Contains(err.Error(), "closed") {
+			closed = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !closed {
+		t.Fatalf("server socket not closed after write error (SetDeadline err=%v)", err)
+	}
+}
+
+// TestWSSetWSAPINilBrokerKeeps404 (#168 r3): SetWSAPI with a nil broker must
+// honor the documented opt-out — the route stays unwired/404 instead of
+// leaving a half-wired wsServer that would nil-deref later.
+func TestWSSetWSAPINilBrokerKeeps404(t *testing.T) {
+	s := New(":0", log.Default())
+	s.SetWSAPI(events.NewBroker(), fakeSnapshot{}, "") // wire it once
+	s.SetWSAPI(nil, nil, "")                           // nil broker unwires again
+	if s.ws != nil {
+		t.Fatalf("SetWSAPI(nil, ...) left s.ws set; want nil (documented opt-out)")
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/ws", nil)
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("after SetWSAPI(nil) /api/ws = %d, want 404", rec.Code)
 	}
 }

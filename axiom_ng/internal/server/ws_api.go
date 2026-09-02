@@ -34,6 +34,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"sync/atomic"
 	"time"
 
@@ -83,11 +84,17 @@ const (
 	frameSubscribed = "subscribed"
 )
 
-// SetWSAPI wires the /api/ws live endpoint. Calling it with a nil broker (or
-// never calling it) keeps the route answering 404, indistinguishable from no
-// route (the sourceSecret/repair-API pattern). token is the optional shared
-// WS secret required on a non-loopback handshake.
+// SetWSAPI wires the /api/ws live endpoint. A nil broker (or never calling
+// this) keeps the route answering 404, indistinguishable from no route (the
+// sourceSecret/repair-API pattern) — the documented opt-out (#168 r3: a nil
+// broker must NOT leave a half-wired wsServer behind). token is the optional
+// shared WS secret required on a non-loopback handshake (and for any
+// cross-origin browser context).
 func (s *Server) SetWSAPI(broker *events.Broker, snapshot wsSnapshotSource, token string) {
+	if broker == nil {
+		s.ws = nil // unwired: keep /api/ws 404ing rather than nil-deref later
+		return
+	}
 	s.ws = &wsServer{broker: broker, snapshot: snapshot, token: token, log: s.log}
 }
 
@@ -292,12 +299,16 @@ func startReadPump(conn *websocket.Conn, cancel context.CancelFunc) {
 // closes the connection. It returns when ctx is done or out is closed.
 func startWriterPump(conn *websocket.Conn, ctx context.Context, cancel context.CancelFunc, out <-chan []byte, pingPeriod time.Duration) {
 	go func() {
+		// The writer owns the socket close on EVERY exit path: a write error
+		// previously returned without closing, and the ctx.Done() branch below
+		// never ran afterwards (the goroutine was already gone), leaving the
+		// socket open after a failed write (#168 r3). Close is idempotent.
+		defer conn.Close()
 		ping := time.NewTicker(pingPeriod)
 		defer ping.Stop()
 		for {
 			select {
 			case <-ctx.Done():
-				_ = conn.Close()
 				return
 			case frame := <-out:
 				if err := conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
@@ -324,9 +335,23 @@ func startWriterPump(conn *websocket.Conn, ctx context.Context, cancel context.C
 
 // authorize returns the HTTP status for a handshake: 200 = allowed; 404 =
 // the feature is not enabled for this peer (a non-loopback peer with no token
-// configured — same disguise as unwired); 403 = a configured token was wrong
-// or missing. Loopback peers are always allowed (the house rule).
+// configured — same disguise as unwired); 403 = forbidden.
+//
+// Two gates run in order:
+//
+//  1. CSWSH gate (#168 r3): a browser context announces itself via the Origin
+//     header. A FOREIGN origin is a cross-site WebSocket hijack attempt — it
+//     must present a valid token even from a loopback peer; with no token
+//     configured it is rejected outright. Same-origin pages (served by this
+//     API) pass. Requests WITHOUT an Origin header are non-browser clients
+//     (curl, in-process dialers) and fall through to the peer rule below —
+//     the loopback trust applies to processes, not to browser contexts.
+//  2. Peer rule: loopback peers are trusted (house rule); a non-loopback peer
+//     needs a configured token (404 when none is configured, 403 on mismatch).
 func (ws *wsServer) authorize(r *http.Request) int {
+	if !ws.originAllowed(r) {
+		return http.StatusForbidden
+	}
 	if loopbackPeer(r) {
 		return http.StatusOK // loopback trusted; token not required
 	}
@@ -339,6 +364,27 @@ func (ws *wsServer) authorize(r *http.Request) int {
 		return http.StatusForbidden
 	}
 	return http.StatusOK
+}
+
+// originAllowed enforces the CSWSH gate for browser-originated handshakes: a
+// foreign Origin must present a valid token (even on loopback); same-origin
+// and non-browser (Origin-less) requests pass to the peer rule.
+func (ws *wsServer) originAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true // non-browser client (curl / in-process dialer): peer rule applies
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false // malformed origin: reject
+	}
+	if u.Host == r.Host {
+		return true // same-origin: a page this API served
+	}
+	// Foreign origin (cross-site WebSocket hijack attempt): token required,
+	// even on loopback. With no token configured there is nothing that could
+	// authorize a browser context, so reject.
+	return ws.token != "" && tokenFrom(r) == ws.token
 }
 
 // loopbackPeer reports whether the request's remote address is loopback.
