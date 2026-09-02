@@ -707,3 +707,65 @@ func TestWSSetWSAPINilBrokerKeeps404(t *testing.T) {
 		t.Fatalf("after SetWSAPI(nil) /api/ws = %d, want 404", rec.Code)
 	}
 }
+
+// TestWSRebindingAliasRejected (#168 r4): both Origin and Host are
+// client-controlled, so a matching pair proves nothing. DNS rebinding —
+// evil.example resolving to 127.0.0.1 — puts a browser at
+// http://evil.example:8011 with Origin/Host matching; that context must NOT
+// get loopback trust. Same-origin applies only to canonical local hosts.
+func TestWSRebindingAliasRejected(t *testing.T) {
+	// Empty token config (loopback-only default) — the vulnerable setup.
+	open := &wsServer{token: ""}
+	// A request whose Host is the attacker's rebinding alias, arriving from a
+	// LOOPBACK peer (evil.example -> 127.0.0.1), Origin matching the Host.
+	mk := func(origin, host string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "http://"+host+"/api/ws", nil)
+		r.Host = host
+		r.RemoteAddr = "127.0.0.1:4444"
+		r.Header.Set("Origin", origin)
+		return r
+	}
+
+	// THE REBINDING REPRO: Origin == Host == evil.example:8011, loopback peer,
+	// no token -> 403. The pre-r4 code treated this as same-origin -> 200.
+	if got := open.authorize(mk("http://evil.example:8011", "evil.example:8011")); got != http.StatusForbidden {
+		t.Fatalf("rebinding alias (Origin==Host=evil.example:8011, loopback, no token) = %d, want 403", got)
+	}
+	// No port spelled either way — still not canonical, still rejected.
+	if got := open.authorize(mk("http://evil.example", "evil.example")); got != http.StatusForbidden {
+		t.Fatalf("rebinding alias without port = %d, want 403", got)
+	}
+	// Non-http(s) scheme on a loopback host is not a browser page origin.
+	if got := open.authorize(mk("ftp://127.0.0.1:8011", "127.0.0.1:8011")); got != http.StatusForbidden {
+		t.Fatalf("ftp-scheme origin on canonical host = %d, want 403", got)
+	}
+
+	// Counter-probes (round-3 semantics unchanged):
+	// Genuine same-origin page on a canonical local host -> 200.
+	if got := open.authorize(mk("http://127.0.0.1:8011", "127.0.0.1:8011")); got != http.StatusOK {
+		t.Fatalf("same-origin 127.0.0.1 = %d, want 200", got)
+	}
+	if got := open.authorize(mk("http://localhost:8011", "localhost:8011")); got != http.StatusOK {
+		t.Fatalf("same-origin localhost = %d, want 200", got)
+	}
+	if got := open.authorize(mk("http://[::1]:8011", "[::1]:8011")); got != http.StatusOK {
+		t.Fatalf("same-origin [::1] = %d, want 200", got)
+	}
+	// TLS-fronted same-origin on a canonical host -> 200.
+	if got := open.authorize(mk("https://localhost:8011", "localhost:8011")); got != http.StatusOK {
+		t.Fatalf("https same-origin localhost = %d, want 200", got)
+	}
+	// Origin-less processes keep the peer rule: loopback -> 200.
+	noOrigin := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8011/api/ws", nil)
+	noOrigin.RemoteAddr = "127.0.0.1:4444"
+	if got := open.authorize(noOrigin); got != http.StatusOK {
+		t.Fatalf("origin-less loopback process = %d, want 200", got)
+	}
+	// Foreign origin WITH a valid token -> 200 (explicitly authorized).
+	sec := &wsServer{token: "s3cret"}
+	r := mk("https://evil.example", "evil.example:8011")
+	r.URL.RawQuery = "token=s3cret"
+	if got := sec.authorize(r); got != http.StatusOK {
+		t.Fatalf("foreign origin + valid token = %d, want 200", got)
+	}
+}

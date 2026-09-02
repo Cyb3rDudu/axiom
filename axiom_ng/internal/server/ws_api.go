@@ -35,6 +35,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -366,9 +367,18 @@ func (ws *wsServer) authorize(r *http.Request) int {
 	return http.StatusOK
 }
 
-// originAllowed enforces the CSWSH gate for browser-originated handshakes: a
-// foreign Origin must present a valid token (even on loopback); same-origin
+// originAllowed enforces the CSWSH gate for browser-originated handshakes:
+// a foreign Origin must present a valid token (even on loopback); same-origin
 // and non-browser (Origin-less) requests pass to the peer rule.
+//
+// DNS-rebinding hardening (#168 r4): both the Origin and the Host header are
+// client-controlled, so u.Host == r.Host alone proves nothing — evil.example
+// can resolve to 127.0.0.1 and a browser at http://evil.example:8011 would
+// present matching Origin/Host from a loopback peer. Same-origin trust is
+// therefore granted ONLY for canonical loopback hosts (localhost, 127.0.0.1,
+// [::1]) — spellings a public DNS record cannot alias onto the loopback
+// interface — and only for browser page schemes (http/https). Everything
+// else, matching Host or not, stays token-required.
 func (ws *wsServer) originAllowed(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
@@ -378,13 +388,30 @@ func (ws *wsServer) originAllowed(r *http.Request) bool {
 	if err != nil {
 		return false // malformed origin: reject
 	}
-	if u.Host == r.Host {
-		return true // same-origin: a page this API served
+	if u.Host == r.Host && canonicalLocalHost(u.Host) && (u.Scheme == "http" || u.Scheme == "https") {
+		return true // same-origin page on a canonical local host
 	}
-	// Foreign origin (cross-site WebSocket hijack attempt): token required,
-	// even on loopback. With no token configured there is nothing that could
-	// authorize a browser context, so reject.
+	// Foreign origin — or a rebinding alias that merely matches the
+	// client-supplied Host: token required, even on loopback. With no token
+	// configured there is nothing that could authorize a browser context.
 	return ws.token != "" && tokenFrom(r) == ws.token
+}
+
+// canonicalLocalHost reports whether hostport (host[:port]) names a canonical
+// loopback interface: localhost, 127.0.0.1 or [::1], with any (or no) port.
+// These spellings cannot be a public-DNS rebinding alias for the loopback
+// address; any other hostname can.
+func canonicalLocalHost(hostport string) bool {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host = hostport // no port given
+	}
+	host = strings.Trim(host, "[]")
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 // loopbackPeer reports whether the request's remote address is loopback.
