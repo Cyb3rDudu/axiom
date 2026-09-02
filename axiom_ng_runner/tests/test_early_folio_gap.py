@@ -263,17 +263,16 @@ def test_mixed_shape_interior_exact(tmp_path):
     assert chunks[1]["metadata"]["page_start"] == 11, "interior must be EXACT (review C1 counterexample)"
     assert chunks[2]["metadata"]["page_start"] == 12
 
-    # resolvable probe BEFORE the first anchor offset -> None (fallback to
-    # the chapter-start page upstream; pins the branch the old docstring
-    # claimed but never tested)
-    head_probe = chap["text"][: len("Chapter One") + 5]
-    assert len(_norm(head_probe)) >= 12
-    assert epub_pagelist.interior_page(chap, head_probe * 4) is None or True
-    # ^ the h1 region precedes the first anchor: any resolvable probe there
-    # resolves before run[0] and must yield None, never a later page
-    assert epub_pagelist.interior_page(chap, "Chapter One " * 5) is None
+    # resolvable probe strictly BEFORE the first anchor offset -> None
+    # (fallback to the chapter-start page upstream; never a later page).
+    # "Chapter One" is the entry's opening text, provably before run[0]
+    # (offset 0 < run[0][0] asserted above), and resolvable via find.
+    probe = "Chapter One " + _PARA_A[:60]  # real entry text, >=40 chars, off 0
+    assert _normalize(probe) in _normalize(chap["text"])
+    assert run[0][0] > 0
+    assert epub_pagelist.interior_page(chap, probe) is None
 
 
-def _norm(t: str) -> str:
+def _normalize(t: str) -> str:
     from axiom_ng_runner.epub_cfi import _normalize_text
     return _normalize_text(t)
