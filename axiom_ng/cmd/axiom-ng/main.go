@@ -340,6 +340,13 @@ func main() {
 		// route stays 404 when there is no database (no snapshot source).
 		wsBroker := events.NewBroker()
 		srv.SetWSAPI(wsBroker, rep, cfg.WSSecret)
+		// #169 (B3): the runner live view. The deriver folds the bus's job
+		// events into per-runner state and re-publishes RunnerStateChanged on
+		// the same bus (through the #168 WS machinery, topic "runners"); the
+		// REST snapshot /api/runners/live serves the same struct.
+		runnerView := server.NewRunnerLive(wsBroker, logger)
+		srv.SetRunnerLive(runnerView)
+		go runnerView.Start(sigCtx.Done())
 		syncSvc = sync.New(src, rep, cfg.ZoteroBaseURL, cfg.ZoteroLibraryID, logger)
 		srv.SetSyncAPI(syncSvc)
 		srv.SetJobRepo(rep)

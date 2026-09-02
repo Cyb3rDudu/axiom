@@ -56,8 +56,16 @@ type wsSnapshotSource interface {
 type wsServer struct {
 	broker   *events.Broker
 	snapshot wsSnapshotSource
-	token    string // non-empty => required on a non-loopback WS handshake
-	log      *log.Logger
+	// runnerSnap serves the runners-topic snapshot (#169) — the derived
+	// per-runner states, structurally identical to the live stream.
+	runnerSnap runnerSnapshot
+	token      string // non-empty => required on a non-loopback WS handshake
+	log        *log.Logger
+}
+
+// runnerSnapshot is the runners-topic snapshot source: the live-view deriver.
+type runnerSnapshot interface {
+	Snapshot() []events.RunnerStateChanged
 }
 
 // wsQueue bounds the per-connection bus subscription and the send queue to the
@@ -165,7 +173,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveSubscribed(ws *wsServer, conn *websocket.Conn, sub clientFrame) {
 	topic := sub.Topic
 	switch topic {
-	case "jobs", "outbox", "all":
+	case "jobs", "outbox", "runners", "all":
 	default:
 		topic = "all" // invalid topic -> everything
 	}
@@ -240,6 +248,22 @@ func (s *Server) serveSubscribed(ws *wsServer, conn *websocket.Conn, sub clientF
 				}) {
 					return
 				}
+			}
+		}
+	}
+
+	// Snapshot: derived runner states (#169). Only a runners-relevant
+	// subscription (runners|all) gets it; snapshot frames always carry topic
+	// "runners" and serialize the same struct as the live stream and the REST
+	// snapshot (/api/runners/live).
+	if (topic == "runners" || topic == "all") && ws.runnerSnap != nil {
+		for _, st := range ws.runnerSnap.Snapshot() {
+			seq.Add(1)
+			if !send(outFrame{
+				Type: frameEvent, Topic: "runners", Seq: seq.Load(),
+				Snapshot: true, Payload: st,
+			}) {
+				return
 			}
 		}
 	}
@@ -448,13 +472,19 @@ func subscribeFilter(topic, jobID string) func(events.Event) bool {
 		return nil
 	}
 	return func(e events.Event) bool {
+		if topic == "runners" {
+			// The runners topic carries only the derived state events (#169).
+			_, isRunner := e.(events.RunnerStateChanged)
+			if !isRunner {
+				return false
+			}
+		} else if topic != "all" && eventTopic(e) != topic {
+			return false
+		}
 		if jobID != "" && events.JobID(e) != jobID {
 			return false
 		}
-		if topic == "all" {
-			return true
-		}
-		return eventTopic(e) == topic
+		return true
 	}
 }
 
@@ -463,14 +493,20 @@ func eventTopic(e events.Event) string {
 	switch e.(type) {
 	case events.OutboxDrained:
 		return "outbox"
+	case events.RunnerStateChanged:
+		return "runners"
 	default:
 		return "jobs"
 	}
 }
 
-// eventPayload renders a typed bus event as the JSON payload dict.
-func eventPayload(e events.Event) map[string]any {
+// eventPayload renders a typed bus event as the JSON payload.
+func eventPayload(e events.Event) any {
 	switch v := e.(type) {
+	case events.RunnerStateChanged:
+		// The derived state serializes ITSELF (json tags): WS payload, live
+		// stream and REST snapshot share the one struct (#169 type identity).
+		return v
 	case events.JobClaimed:
 		return map[string]any{
 			"kind": "job_claimed", "job_id": v.JobID, "worker_id": v.WorkerID,

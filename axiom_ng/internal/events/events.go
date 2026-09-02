@@ -65,6 +65,36 @@ type OutboxDrained struct {
 
 func (e OutboxDrained) event() {}
 
+// RunnerStateChanged is the B3 live-view event: the DERIVED per-runner state
+// (current book/stage/progress, GPU assignment from configuration, session
+// completed counter, idle semantics) re-published by the server-side state
+// deriver whenever a runner's view changes. It carries the FULL state (not a
+// delta) so WS subscribers and the REST snapshot serialize literally the same
+// struct — structural identity by construction (#169).
+type RunnerStateChanged struct {
+	RunnerName string `json:"runner_name"`
+	GPU        string `json:"gpu"` // from the runner_name→config stamp (#5c identity), NOT metrics
+	WorkerID   string `json:"worker_id,omitempty"`
+
+	// State is "busy" while a job is claimed/running, "idle" otherwise.
+	State string `json:"state"`
+
+	// Current job (valid while State == "busy").
+	JobID              string `json:"job_id,omitempty"`
+	DocumentTitle      string `json:"document_title,omitempty"`
+	AttachmentFilename string `json:"attachment_filename,omitempty"`
+	Stage              string `json:"stage,omitempty"`
+	ProgressHint       string `json:"progress_hint,omitempty"` // N/M once #236 lands; stage name for now
+
+	// Session counters and the idle tail (valid after the first finished job).
+	JobsCompleted int64  `json:"jobs_completed"`
+	LastJobID     string `json:"last_job_id,omitempty"`
+	LastTitle     string `json:"last_title,omitempty"`
+	LastEndedAtMs int64  `json:"last_ended_at_ms,omitempty"` // unix ms
+}
+
+func (e RunnerStateChanged) event() {}
+
 // Strings render one line each for debugging / logs.
 func (e JobClaimed) String() string {
 	return fmt.Sprintf("job_claimed job=%s worker=%s runner=%s attachment=%s title=%s",
@@ -87,6 +117,11 @@ func (e OutboxDrained) String() string {
 	return fmt.Sprintf("outbox_drained count=%d", e.Count)
 }
 
+func (e RunnerStateChanged) String() string {
+	return fmt.Sprintf("runner_state_changed runner=%s gpu=%s state=%s job=%s stage=%s done=%d",
+		e.RunnerName, e.GPU, e.State, e.JobID, e.Stage, e.JobsCompleted)
+}
+
 // JobID returns the affected job id ("" for events without one).
 func JobID(e Event) string {
 	switch v := e.(type) {
@@ -97,6 +132,8 @@ func JobID(e Event) string {
 	case JobCompleted:
 		return v.JobID
 	case JobFailed:
+		return v.JobID
+	case RunnerStateChanged:
 		return v.JobID
 	default:
 		return ""

@@ -662,8 +662,19 @@ func TestWSWriterClosesSocketOnWriteError(t *testing.T) {
 	defer cancel()
 	cancelCalled := make(chan struct{})
 	var once sync.Once
-	out := make(chan []byte, 1)
-	out <- []byte(`{"type":"event"}`)
+	// A steady frame stream instead of a single frame: under load the FIRST
+	// write can still drain into the kernel buffer before the RST lands; the
+	// next write then fails deterministically.
+	out := make(chan []byte, 4)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case out <- []byte(`{"type":"event"}`):
+			}
+		}
+	}()
 	startWriterPump(srv, ctx, func() { once.Do(func() { cancel(); close(cancelCalled) }) }, out, time.Hour)
 
 	// The write must fail and the writer must exit through cancel().

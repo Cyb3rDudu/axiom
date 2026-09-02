@@ -40,6 +40,9 @@ type Server struct {
 	sourceRepo   processorSourceRepo
 	// #184 fix-service surface (nil = endpoints stay unwired/404).
 	// #168 (B2) live WebSocket surface (nil = /api/ws unwired/404).
+	// #169 (B3) runner live view: the state deriver feeding the runners WS
+	// topic snapshot and /api/runners/live (nil = REST route unwired/404).
+	runnerLive     *RunnerLive
 	ws             *wsServer
 	repairRepo     *repo.Repo
 	zoteroWrite    *zotero.WriteClient
@@ -78,6 +81,9 @@ func (s *Server) Handler() http.Handler {
 	// 404s when s.ws is nil (sourceSecret/repair-API pattern — unwired is
 	// indistinguishable from absent).
 	r.Get("/api/ws", s.handleWS)
+	// #169 (B3): the runner live-view REST snapshot. Registered always;
+	// 404s when no deriver is wired (same pattern).
+	r.Get("/api/runners/live", s.handleRunnersLive)
 	// #197: consolidation write route exists only when wired (repair-API
 	// pattern — unwired answers 404, the admin gate alongside loopback bind).
 	if s.consolidateSvc != nil {
