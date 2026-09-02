@@ -493,8 +493,20 @@ class Chunker:
             chunk_text = "\n\n".join(current_chunk_paras)
             chunk_tokens = self._count_tokens(chunk_text)
 
-            # Merge into previous if too small
-            if chunk_tokens < self.min_chunk_tokens and chunks:
+            # Merge into previous if too small — but NEVER across a
+            # chapter boundary (#245 correction round 2): back-matter
+            # "chapters" (colophon, about-the-author) are routinely tiny;
+            # merging their text into the previous chapter's chunk would
+            # attribute chapter-N+1 prose to chapter N — the same
+            # citation-grade mismatch the hard chunking edge prevents.
+            opens_on_chapter = any(
+                idx == current_start_idx for idx, _ in self._level1_starts
+            )
+            if (
+                chunk_tokens < self.min_chunk_tokens
+                and chunks
+                and not opens_on_chapter
+            ):
                 # Append to last chunk
                 last_chunk = chunks[-1]
                 last_chunk["text"] = last_chunk["text"] + "\n\n" + chunk_text

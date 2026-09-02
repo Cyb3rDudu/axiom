@@ -135,7 +135,10 @@ def _freeze_apa_fields(
     1-based — the heading itself is not a paragraph. Books with no level-1
     structure after the front matter leave the fields empty; a book whose
     ONLY level-1 heading is the title page likewise (a lone h1 is a title,
-    not a chapter — #245 review W3)."""
+    not a chapter — #245 review W3). Known collision: a heading-ONLY chunk
+    (adjacent headings) also claims pic=1, same as the first real content
+    chunk — a degenerate chunk with no citable prose; consumers prefer the
+    content chunk when both match (#245 review W2, ruled non-blocking)."""
     if len(chapter_starts) < 2:
         return
     spi = meta.get("start_paragraph_index")

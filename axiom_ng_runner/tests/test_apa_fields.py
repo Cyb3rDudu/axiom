@@ -121,3 +121,20 @@ def test_chapter_boundary_no_overlap_recycling():
         if starts_ch2 or "# Chapter Two" in c["text"]:
             assert tail_marker not in c["text"], (
                 "chapter-2 chunk must not open with the chapter-1 overlap tail")
+
+
+def test_tiny_final_chapter_not_merged_across_boundary():
+    """#245 corrections round 2 (review W1): the final-chunk min-size merge
+    must NEVER pull chapter-N+1 text into a chapter-N-attributed chunk —
+    back-matter 'chapters' (colophon) are routinely tiny."""
+    tail_marker = "COLOPHONMARKER"
+    md = _md(
+        "# Chapter One", PARA,
+        "# Chapter Two", PARA, PARA,
+        "# Colophon", f"Tiny tail. {tail_marker}",
+    )
+    for c in _chunk(md):
+        m = c["metadata"]
+        if tail_marker in c["text"]:
+            # the colophon text must never sit in a chapter-2 chunk
+            assert m.get("chapter_number") != 2, (m, c["text"][:60])
