@@ -6,6 +6,8 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -75,5 +77,16 @@ func TestDocumentMetaContentTypeActiveSnapshot(t *testing.T) {
 	}
 	if got := meta2[bareID].ContentType; got != "" {
 		t.Fatalf("no snapshot: content_type = %q, want empty", got)
+	}
+	// #245 correction: the format factor must ALWAYS be on the wire — an
+	// unknown format serializes as content_type:"" (present key), never as
+	// an absent key (omitempty would make it indistinguishable from an
+	// old server).
+	wire, err := json.Marshal(meta2[bareID].View(bareID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"content_type":""`) {
+		t.Fatalf("content_type key must survive an empty value: %s", wire)
 	}
 }

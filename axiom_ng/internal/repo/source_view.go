@@ -24,8 +24,11 @@ type SourceView struct {
 	// of the citation contract: PDF → page by trust level, EPUB → always
 	// APA 7 section citation. Resolved through the active-snapshot chain so
 	// twin attachments report the format the client actually sees. Empty
-	// when unknown (structural NULL-safety, never an error).
-	ContentType string `json:"content_type,omitempty"`
+	// when unknown (structural NULL-safety, never an error). NO omitempty:
+	// a format factor must ALWAYS be present on the wire — an absent key
+	// would be indistinguishable from an old server; empty string is the
+	// honest "unknown".
+	ContentType string `json:"content_type"`
 }
 
 // View projects a hydrated DocumentMeta (plus the owning document id) into

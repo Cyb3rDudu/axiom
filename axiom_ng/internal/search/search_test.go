@@ -1070,11 +1070,14 @@ func TestLocatorViewEpubCFITrustLevels(t *testing.T) {
 	if v.Kind != "epub_cfi" || v.PageSource != "" || v.PageStart != nil || v.PageEnd != nil || v.ParagraphPages != nil {
 		t.Fatalf("stored EPUB pages must NOT reach the contract: %+v", v)
 	}
-	if v.ChapterNumber == nil || *v.ChapterNumber != 7 || v.ParagraphInChapter != nil || v.SectionTitle != "Value Chains" {
+	// #245 correction: the stored "chapter":7 is the W4 SPINE ordinal —
+	// it must NOT surface as chapter_number (only the frozen APA ordinal
+	// does); with no APA fields the label carries the section title alone.
+	if v.ChapterNumber != nil || v.ParagraphInChapter != nil || v.SectionTitle != "Value Chains" {
 		t.Fatalf("APA fields wrong: %+v", v)
 	}
-	if v.Label != "Kap. 7" {
-		t.Fatalf("label = %q, want Kap. 7", v.Label)
+	if v.Label != "Value Chains" {
+		t.Fatalf("label = %q, want the section title (never a spine ordinal)", v.Label)
 	}
 	// bare: no pages — APA fields pass through, deepest section stands in
 	bare := locatorView(json.RawMessage(`{"type":"epub_cfi","cfi_start":"epubcfi(/6/4!/4/2)","chapter_number":3,"section_title":"Grundlagen","paragraph_in_chapter":17}`), []string{"Kapitel 2"})

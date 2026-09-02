@@ -200,7 +200,11 @@ func TestSourceViewWireKeys(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"doc_id", "title", "authors", "year", "publisher", "language", "tags"}
+	want := []string{"doc_id", "title", "authors", "year", "publisher", "language", "tags",
+		// #245: the format factor is ALWAYS on the wire (no omitempty —
+		// empty string = unknown format, a present key distinguishes it
+		// from an old server).
+		"content_type"}
 	if len(m) != len(want) {
 		t.Fatalf("wire keys drifted: %v", m)
 	}

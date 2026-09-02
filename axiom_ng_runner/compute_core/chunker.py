@@ -374,11 +374,21 @@ class Chunker:
 
             # Determine if we should start a new chunk
             should_start_new = False
+            # #245: a level-1 (chapter) boundary is a HARD boundary — no
+            # overlap recycling across it. The recycled tail would open a
+            # chapter-2 chunk with chapter-1 text while every index-
+            # snapshot (start_paragraph_index, heading trail, APA fields)
+            # attributes it to chapter 2 — a citation-grade mismatch.
+            # Text cohesion across chapters is citation-irrelevant.
+            chapter_boundary = False
 
             if is_heading:
                 # New section - emit current chunk if not empty
                 if current_chunk_paras:
                     should_start_new = True
+                    chapter_boundary = bool(
+                        len(is_heading.group(1)) == 1
+                    )
             elif current_chunk_tokens + para_tokens > self.max_chunk_tokens:
                 # Would exceed budget - emit current chunk
                 if current_chunk_paras:
@@ -430,7 +440,11 @@ class Chunker:
                 current_chunk_page_bounds = []
 
                 # Start new chunk with overlap
-                if self.overlap_tokens > 0 and current_chunk_paras:
+                if (
+                    self.overlap_tokens > 0
+                    and current_chunk_paras
+                    and not chapter_boundary  # #245: hard chapter edge
+                ):
                     # Take last portion for overlap
                     overlap_text = current_chunk_paras[-1] if current_chunk_paras else ""
                     overlap_words = overlap_text.split()

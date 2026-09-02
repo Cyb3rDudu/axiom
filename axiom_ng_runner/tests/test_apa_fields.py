@@ -98,3 +98,26 @@ def test_apa_fields_index_parity_with_empty_paragraphs():
     assert ch1 and ch2, "both chapters must be represented (an off-by-one from an empty leading paragraph would misattribute boundary chunks)"
     for c in ch2:
         assert c["metadata"]["section_title"] == "Chapter Two"
+
+
+def test_chapter_boundary_no_overlap_recycling():
+    """#245 correction: a chapter (level-1 heading) boundary is a HARD
+    chunking edge — the recycled overlap tail from chapter 1 must never
+    open a chapter-2 chunk (chapter_number=2 over chapter-1 text)."""
+    # marker sits in the paragraph TAIL: overlap recycling takes the LAST
+    # overlap_tokens (64) words — only tail content proves the leak
+    tail_marker = "UNIQUECHAPTERONEEND"
+    ch1 = [f"Chapter one body paragraph {i} with substantive prose. " * 3
+           for i in range(30)] + ["closing text. " * 40 + f" {tail_marker}"]
+    md = _md("# Chapter One", *ch1, "# Chapter Two", PARA, PARA)
+    chunks = _chunk(md)
+    for c in chunks:
+        m = c["metadata"]
+        has_tail = tail_marker in c["text"]
+        starts_ch2 = c["text"].lstrip().startswith("# Chapter Two")
+        if has_tail:
+            # tail text belongs to chapter 1 — never attribute it to 2
+            assert m.get("chapter_number") == 1, (m, c["text"][:80])
+        if starts_ch2 or "# Chapter Two" in c["text"]:
+            assert tail_marker not in c["text"], (
+                "chapter-2 chunk must not open with the chapter-1 overlap tail")

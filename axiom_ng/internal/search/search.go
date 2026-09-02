@@ -854,14 +854,6 @@ func sourceFor(m repo.DocumentMeta, docID string) repo.SourceView {
 	return m.View(docID)
 }
 
-// orInt returns the first non-nil int.
-func orInt(a, b *int) *int {
-	if a != nil {
-		return a
-	}
-	return b
-}
-
 // locatorView renders the stored locator into the human form (issue Ziel 5).
 func locatorView(raw json.RawMessage, section []string) LocatorView {
 	var loc struct {
@@ -898,16 +890,14 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 		// "ignore EPUB pages" rule the contract exists to remove. PDF arms
 		// below are untouched (#173 trust ladder remains the consumer
 		// contract).
-		// Same-origin pairing (#245 review W2): when paragraph_in_chapter
-		// is present it was counted from the APA heading ordinal — prefer
-		// that ordinal so "Kap. N, para. M" never mixes the spine-ordinal
-		// space (which counts cover/title/TOC spine items) with the
-		// heading-ordinal count basis.
+		// #245 correction: EPUB chapter_number comes ONLY from the frozen
+		// APA heading ordinal. The W4 `chapter` value on epub_cfi locators
+		// is the page-parity SPINE ordinal (counts cover/title/TOC spine
+		// items) — exporting it as chapter_number leaks a number basis the
+		// APA fields never counted from. Absent APA ordinal → label
+		// without an ordinal (the section title carries the citation).
 		label := chapter
-		cn := loc.Chapter
-		if loc.ParagraphInChapter != nil {
-			cn = orInt(loc.ChapterNumberAPA, loc.Chapter)
-		}
+		cn := loc.ChapterNumberAPA
 		if cn != nil {
 			label = fmt.Sprintf("Kap. %d", *cn)
 		}
