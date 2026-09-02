@@ -82,6 +82,38 @@ func (r *Repo) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 	return jobs, rows.Err()
 }
 
+// ActiveJobs returns the in-flight ingest jobs (pending/claimed/processing),
+// newest first. These are the job-state rows a WS snapshot needs: work the
+// dispatcher may yet pick up or is currently driving. Terminal jobs
+// (completed/failed/cancelled/obsolete) are excluded — they are history.
+func (r *Repo) ActiveJobs(ctx context.Context) ([]Job, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id::text, source_id, document_id, attachment_id,
+		       status::text, content_hash, attempt, max_attempts, error_code,
+		       error_message, resolved_at::text, enqueued_at::text, quality_state
+		FROM ingest_jobs
+		WHERE status IN ('pending','claimed','processing')
+		ORDER BY enqueued_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	jobs := []Job{}
+	for rows.Next() {
+		var j Job
+		if err := rows.Scan(&j.ID, &j.SourceID, &j.DocumentID, &j.AttachmentID,
+			&j.Status, &j.ContentHash, &j.Attempt, &j.MaxAttempts,
+			&j.ErrorCode, &j.ErrorMessage, &j.ResolvedAt, &j.EnqueuedAt,
+			&j.QualityState); err != nil {
+			return nil, fmt.Errorf("scan active job: %w", err)
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, rows.Err()
+}
+
 // ListJobsByAttachment returns the jobs for a single attachment, newest first.
 func (r *Repo) ListJobsByAttachment(ctx context.Context, attachmentID string) ([]Job, error) {
 	rows, err := r.pool.Query(ctx, `

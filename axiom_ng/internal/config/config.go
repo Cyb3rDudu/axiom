@@ -40,6 +40,11 @@ type Config struct {
 	// Unset defaults to the loopback API — fine for co-located runners.
 	ProcessorSourceBaseURL string
 
+	// WSSecret (#168 B2) is the optional shared token for the /api/ws live
+	// endpoint. Empty = loopback-only (no cross-network WS), the house rule;
+	// on a non-loopback bind a configured token is required on the handshake.
+	WSSecret string
+
 	// ProcessorURL is the base URL of the document processor sidecar.
 	ProcessorURL string
 	// ProcessorRequestTimeout bounds the RESULT fetch and (as the submit
@@ -183,6 +188,7 @@ func Load() Config {
 		OpenSearchUsername:         env("AXIOM_OPENSEARCH_USERNAME", ""),
 		OpenSearchPassword:         env("AXIOM_OPENSEARCH_PASSWORD", ""),
 		ProcessorSourceSecret:      env("AXIOM_PROCESSOR_SOURCE_SECRET", ""),
+		WSSecret:                   env("AXIOM_WS_SECRET", ""),
 		ProcessorSourceBaseURL:     env("AXIOM_PROCESSOR_SOURCE_BASE_URL", ""),
 		ProcessorURL:               env("AXIOM_PROCESSOR_URL", defaultLocalRunner),
 		QueryRunnerURL:             env("AXIOM_QUERY_RUNNER_URL", defaultLocalRunner),

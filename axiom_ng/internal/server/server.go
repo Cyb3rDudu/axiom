@@ -39,6 +39,8 @@ type Server struct {
 	sourceSecret string
 	sourceRepo   processorSourceRepo
 	// #184 fix-service surface (nil = endpoints stay unwired/404).
+	// #168 (B2) live WebSocket surface (nil = /api/ws unwired/404).
+	ws             *wsServer
 	repairRepo     *repo.Repo
 	zoteroWrite    *zotero.WriteClient
 	quarantineRoot string
@@ -72,6 +74,10 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/api/kg/entities", s.handleKGEntities)
 	r.Get("/api/kg/entities/{id}/neighbors", s.handleKGNeighbors)
 	r.Get("/api/kg/relations", s.handleKGRelations)
+	// #168 (B2): the live event WebSocket. Registered always; the handler
+	// 404s when s.ws is nil (sourceSecret/repair-API pattern — unwired is
+	// indistinguishable from absent).
+	r.Get("/api/ws", s.handleWS)
 	// #197: consolidation write route exists only when wired (repair-API
 	// pattern — unwired answers 404, the admin gate alongside loopback bind).
 	if s.consolidateSvc != nil {

@@ -19,6 +19,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/dispatcher"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/fixerinvoker"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
@@ -334,6 +335,11 @@ func main() {
 		srv.RegisterCheck("postgres", server.CheckDB(database.Pool()))
 		// Wire the sync service and ingest-job listing into the API.
 		rep := repo.New(database.Pool())
+		// #168 (B2): the live event broker. One instance shared by the
+		// dispatcher (emitter) and the /api/ws endpoint (subscriber). The WS
+		// route stays 404 when there is no database (no snapshot source).
+		wsBroker := events.NewBroker()
+		srv.SetWSAPI(wsBroker, rep, cfg.WSSecret)
 		syncSvc = sync.New(src, rep, cfg.ZoteroBaseURL, cfg.ZoteroLibraryID, logger)
 		srv.SetSyncAPI(syncSvc)
 		srv.SetJobRepo(rep)
@@ -467,6 +473,10 @@ func main() {
 				ProcessorSourceSecret:  cfg.ProcessorSourceSecret,
 				PreflightEnabled:       cfg.DispatcherPreflightEnabled, // #175
 			}, logger)
+			// #168 (B2): let the dispatcher EMIT lifecycle events onto the
+			// shared broker (observer-only passenger — no dispatcher behavior
+			// changes; the /api/ws endpoint subscribes to the same broker).
+			disp.SetEventBroker(wsBroker)
 			// #214: a fatal dispatcher error (capability negotiation still failing
 			// after the startup retry window) must exit the process non-zero so
 			// launchd/KeepAlive restarts it. Before the fix the loop died while
