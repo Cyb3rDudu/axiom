@@ -26,7 +26,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-from axiom_ng_runner.epub_cfi import _parse_opf_spine
+from axiom_ng_runner.epub_cfi import _normalize_text, _parse_opf_spine
 
 logger = logging.getLogger(__name__)
 
@@ -350,6 +350,10 @@ def annotate_cfi_entries(
         if pre is not None:
             e["page"] = pre
         elif run:
+            # Deliberate semantics: an entry carrying several anchors OPENS
+            # on its FIRST anchor's page (the opening folio); the later
+            # anchors form the interior run — the old collapse-to-last is
+            # gone (#234).
             # #234: no anchor at/before the entry's start (the doc opens
             # with unpaginated boilerplate inside the same element) but a
             # verified interior run exists — its FIRST page is the entry's
@@ -378,17 +382,18 @@ def interior_page(entry: dict[str, Any], chunk_text: str, tail: bool = False) ->
     run = entry.get("anchor_offsets")
     if not run:
         return None
-    from axiom_ng_runner.epub_cfi import _normalize_text
     etext = _normalize_text(entry.get("text", ""))
     ctext = _normalize_text(chunk_text)
     if len(etext) < 40 or len(ctext) < 40:
         return None
     probe = ctext[-40:] if tail else ctext[:40]
-    off = etext.find(probe)
+    # tail probes resolve to the LAST occurrence (a chunk's end belongs at
+    # its final position — repeated boilerplate must not pull it early)
+    off = etext.rfind(probe) if tail else etext.find(probe)
     if off < 0:
         return None
     # normalized offset -> raw-char space of the anchor run
-    raw_len = len(entry.get("text", "")) or len(etext)
+    raw_len = len(entry.get("text", ""))
     rel = off * (raw_len / len(etext))
     page: int | None = None
     for ro, pg in run:

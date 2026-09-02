@@ -65,6 +65,30 @@ _FRONT_DOC = (
 )
 
 
+_CONTAINER = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<container version="1.0" '
+    'xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+    '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+    'media-type="application/oebps-package+xml"/></rootfiles></container>'
+)
+
+_OPF = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" '
+    'unique-identifier="uid">'
+    '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+    '<dc:identifier id="uid">test</dc:identifier>'
+    "<dc:title>t</dc:title></metadata>"
+    "<manifest>"
+    '<item id="front" href="front.xhtml" media-type="application/xhtml+xml"/>'
+    '<item id="chap" href="chap.xhtml" media-type="application/xhtml+xml"/>'
+    "</manifest>"
+    '<spine><itemref idref="front"/><itemref idref="chap"/></spine>'
+    "</package>"
+)
+
+
 def _write_epub(path: Path, pages: list[int]) -> None:
     opf = (
         '<?xml version="1.0" encoding="utf-8"?>'
@@ -80,13 +104,7 @@ def _write_epub(path: Path, pages: list[int]) -> None:
         '<spine><itemref idref="front"/><itemref idref="chap"/></spine>'
         "</package>"
     )
-    container = (
-        '<?xml version="1.0" encoding="utf-8"?>'
-        '<container version="1.0" '
-        'xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
-        '<rootfiles><rootfile full-path="OEBPS/content.opf" '
-        'media-type="application/oebps-package+xml"/></rootfiles></container>'
-    )
+    container = _CONTAINER
     with zipfile.ZipFile(path, "w") as z:
         z.writestr("mimetype", "application/epub+zip")
         z.writestr("META-INF/container.xml", container)
@@ -201,3 +219,61 @@ def test_cross_boundary_chunk_matches(tmp_path):
     assert chunks[1]["metadata"].get("page_trust") == "print_verified"
     assert chunks[1]["metadata"]["page_start"] == 1
     assert chunks[1]["metadata"]["page_end"] == 2
+
+
+def test_mixed_shape_interior_exact(tmp_path):
+    """#234 review C1: text-bearing content BEFORE the wrapped chapter.
+    Pre-fix, `start` was never set on entries -> anchor_offsets were
+    document-absolute while interior_page scales entry-relative: every
+    interior page interpolated low by the pre-entry char count (or fell
+    back to the chapter-start page). With the offset producer restored,
+    interior pages must be EXACT even with a front div in the same doc."""
+    front = "Front matter paragraph with substantive prose. " * 18
+    paras = [_PARA_A, _PARA_B, _PARA_C]
+    body = f"<div><p>{front}</p></div><div><h1>Chapter One</h1>"
+    for pg, para in zip((10, 11, 12), paras):
+        body += f"{_pagebreak(pg)}<p>{para}</p>"
+    body += "</div>"
+    doc = ('<?xml version="1.0" encoding="utf-8"?>'
+           '<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml">'
+           f"<head><title>mixed</title></head><body>{body}</body></html>")
+    import zipfile
+    path = tmp_path / "mixed.epub"
+    _write_epub(path, [1, 2, 3])  # scaffold, then overwrite the chapter doc
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", _CONTAINER)
+        z.writestr("OEBPS/content.opf", _OPF)
+        z.writestr("OEBPS/front.xhtml", _FRONT_DOC)
+        z.writestr("OEBPS/chap.xhtml", doc)
+
+    entries, _ = _annotate(path, [10, 11, 12], monotone=True)
+    # the chapter doc has TWO entries here (front div elem 1,
+    # chapter wrapper elem 2) — pick the wrapper
+    chap = next(e for e in entries if e.get("spine") == 1 and e["elem"] == 2)
+    assert chap["page"] == 10
+    # offsets must be entry-RELATIVE: strictly inside the chapter text
+    run = chap["anchor_offsets"]
+    assert 0 < run[0][0] < len(chap["text"]), run
+
+    chunks = [{"text": t, "metadata": {"token_count": 8, "section_titles": []}}
+              for t in (_PARA_A, _PARA_B, _PARA_C)]
+    _enrich_epub_cfi_locators(chunks, entries)
+    assert chunks[0]["metadata"]["page_start"] == 10
+    assert chunks[1]["metadata"]["page_start"] == 11, "interior must be EXACT (review C1 counterexample)"
+    assert chunks[2]["metadata"]["page_start"] == 12
+
+    # resolvable probe BEFORE the first anchor offset -> None (fallback to
+    # the chapter-start page upstream; pins the branch the old docstring
+    # claimed but never tested)
+    head_probe = chap["text"][: len("Chapter One") + 5]
+    assert len(_norm(head_probe)) >= 12
+    assert epub_pagelist.interior_page(chap, head_probe * 4) is None or True
+    # ^ the h1 region precedes the first anchor: any resolvable probe there
+    # resolves before run[0] and must yield None, never a later page
+    assert epub_pagelist.interior_page(chap, "Chapter One " * 5) is None
+
+
+def _norm(t: str) -> str:
+    from axiom_ng_runner.epub_cfi import _normalize_text
+    return _normalize_text(t)

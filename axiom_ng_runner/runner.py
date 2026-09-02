@@ -1048,8 +1048,8 @@ def _enrich_epub_cfi_locators(
     interpolation, page_source stays none (#226 discipline unchanged)."""
     if not cfi_entries:
         return
+    from .compute_core import epub_pagelist
     from .epub_cfi import match_text_to_cfi
-    from axiom_ng_runner.compute_core import epub_pagelist
 
     pos_by_cfi = {
         e["cfi"]: (e.get("page"), e.get("spine"), e.get("page_trust"))
@@ -1057,7 +1057,9 @@ def _enrich_epub_cfi_locators(
     }
     entry_by_cfi = {e["cfi"]: e for e in cfi_entries}
     for c in chunk_dicts:
-        meta = c.get("metadata", {}) or {}
+        # setdefault (not `or {}`): an EMPTY metadata dict is falsy and the
+        # old idiom silently detached it, dropping every enrichment
+        meta = c.setdefault("metadata", {})
         meta["locator_type"] = "epub_cfi"
         text = c.get("text", "")
         cfi_start, cfi_end = match_text_to_cfi(text, cfi_entries)
@@ -1069,11 +1071,12 @@ def _enrich_epub_cfi_locators(
         if ps is not None:
             # #234: interior interpolation within the verified anchor run
             entry = entry_by_cfi.get(cfi_start)
+            interp = bool(ptrust and entry)
             ip_start = (epub_pagelist.interior_page(entry, text)
-                        if ptrust and entry else None)
+                        if interp else None)
             meta["page_start"] = ip_start or ps
             ip_end = (epub_pagelist.interior_page(entry, text, tail=True)
-                      if ptrust and entry else None)
+                      if interp else None)
             meta["page_end"] = max(
                 meta["page_start"],
                 ip_end or pos_by_cfi.get(cfi_end, (ps, None, None))[0] or ps)

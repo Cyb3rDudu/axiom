@@ -59,6 +59,15 @@ class _CFICollector(HTMLParser):
         self._current_text = ""
         self._current_cfi = ""
         self._current_elem = 0  # #220: body-child index for page-anchor maps
+        # #234: raw text-char offset stream — parity with
+        # compute_core.epub_pagelist._AnchorScanner (both count handle_data
+        # chars in document order, unconditionally incl. <head> text) so
+        # anchor and entry positions compare in ONE stream. Synthetic
+        # separators (void placeholders, block-boundary spaces) also step
+        # the counter: anchor offsets and entry text lengths then live in
+        # the same space.
+        self._total_chars = 0
+        self._cur_start = 0
         self.entries: list[dict[str, Any]] = []
 
     def _flush_entry(self) -> None:
@@ -74,6 +83,9 @@ class _CFICollector(HTMLParser):
                     # epub_pagelist (body-child element index) —
                     # annotate_cfi_entries joins on these.
                     "elem": self._current_elem,
+                    # #234: raw char offset where this entry's text begins
+                    # (same stream as _AnchorScanner's anchor chars).
+                    "start": self._cur_start,
                 })
         self._current_tag = ""
         self._current_text = ""
@@ -96,6 +108,7 @@ class _CFICollector(HTMLParser):
                 self._body_child_idx += 1
             elif self._depth >= 1:
                 self._current_text += " "  # placeholder for void content
+                self._total_chars += 1  # #234: one stream with anchor chars
             return
 
         if self._depth == 0:
@@ -110,6 +123,7 @@ class _CFICollector(HTMLParser):
                 self._depth = 1
                 self._current_tag = tag
                 self._current_text = ""
+                self._cur_start = self._total_chars  # #234
                 # C1 fix: even element index (1-based element count × 2).
                 elem_step = self._body_child_idx * 2
                 self._current_cfi = f"{self._base}!/4/{elem_step})"
@@ -122,6 +136,7 @@ class _CFICollector(HTMLParser):
             self._current_elem = self._body_child_idx
             self._current_tag = tag
             self._current_text = ""
+            self._cur_start = self._total_chars  # #234
             elem_step = self._body_child_idx * 2
             self._current_cfi = f"{self._base}!/4/{elem_step})"
             # depth stays at 1
@@ -135,6 +150,7 @@ class _CFICollector(HTMLParser):
                 # probes match; _normalize_text collapses it away on both
                 # sides when no boundary is involved.
                 self._current_text += " "
+                self._total_chars += 1  # #234: one stream with anchor chars
             self._depth += 1
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -167,6 +183,7 @@ class _CFICollector(HTMLParser):
             self._depth = 0
 
     def handle_data(self, data: str) -> None:
+        self._total_chars += len(data)  # #234: unconditional offset stream
         if self._depth >= 1:
             self._current_text += data
 
