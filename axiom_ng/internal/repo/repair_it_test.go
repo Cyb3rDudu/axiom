@@ -20,7 +20,7 @@ func seedRepairCase(t *testing.T, lr *leaseRepo, attKey string, attempts int, cl
 	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_attachments SET repair_attempts=$2 WHERE id=$1`, attID, attempts); err != nil {
 		t.Fatalf("set repair_attempts: %v", err)
 	}
-	c, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
+	c, _, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
 	if err != nil || c == nil {
 		t.Fatalf("CreateRepairCase: %v %+v", err, c)
 	}
@@ -142,11 +142,11 @@ func TestRepairOneOpenCaseIT(t *testing.T) {
 
 	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: "lib-guardcheck",
 		docKey: "DOCREP", attKey: "ATT-ONE"}, "completed", 1)
-	first, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
+	first, _, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
 	if err != nil || first == nil {
 		t.Fatalf("first CreateRepairCase: %v %+v", err, first)
 	}
-	second, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
+	second, _, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
 	if err != nil {
 		t.Fatalf("second CreateRepairCase: %v", err)
 	}

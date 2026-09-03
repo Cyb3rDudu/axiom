@@ -83,10 +83,13 @@ func scanRepairCase(sc interface{ Scan(dest ...any) error }) (*RepairCase, error
 // CreateRepairCase opens a case for a preflight-rejected attachment.
 // Idempotent per attachment: an existing OPEN case is returned unchanged.
 //
-// Contract: returns (nil, nil) when the insert conflicted AND the competing
-// case is already closed (closed between the ON CONFLICT and the re-read) —
-// callers MUST nil-check the case before use.
-func (r *Repo) CreateRepairCase(ctx context.Context, attachmentID, documentID, suspicionClass string, analysis json.RawMessage) (*RepairCase, error) {
+// Contract: returns (nil, false, nil) when the insert conflicted AND the
+// competing case is already closed (closed between the ON CONFLICT and the
+// re-read) — callers MUST nil-check the case before use. The created flag
+// distinguishes a FRESH case from a recycled open one; #238 auto-queue
+// relies on it so a stale open case of an auto-queueable class can never
+// be queued by a NEWER verdict of a different class.
+func (r *Repo) CreateRepairCase(ctx context.Context, attachmentID, documentID, suspicionClass string, analysis json.RawMessage) (*RepairCase, bool, error) {
 	row := r.pool.QueryRow(ctx, `
 		INSERT INTO repair_cases (attachment_id, document_id, suspicion_class, analysis, status)
 		VALUES ($1::uuid, NULLIF($2,'')::uuid, $3, $4, 'rejected')
@@ -95,12 +98,13 @@ func (r *Repo) CreateRepairCase(ctx context.Context, attachmentID, documentID, s
 		attachmentID, documentID, suspicionClass, analysis)
 	c, err := scanRepairCase(row)
 	if err == nil {
-		return c, nil
+		return c, true, nil
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		return r.OpenRepairCase(ctx, attachmentID)
+		c, err := r.OpenRepairCase(ctx, attachmentID)
+		return c, false, err
 	}
-	return nil, err
+	return nil, false, err
 }
 
 // OpenRepairCase fetches the open case of an attachment (nil if none).

@@ -89,7 +89,7 @@ func (e *itEnv) seedCase(t *testing.T, attKey string) string {
 		RETURNING id::text`, srcID, docID, attKey, "DOC-"+attKey, srcPDF).Scan(&attID); err != nil {
 		t.Fatal(err)
 	}
-	c, err := e.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
+	c, _, err := e.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
 	if err != nil || c == nil {
 		t.Fatalf("CreateRepairCase: %v %v", err, c)
 	}

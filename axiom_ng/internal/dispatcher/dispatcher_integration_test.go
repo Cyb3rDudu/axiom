@@ -1556,3 +1556,58 @@ func TestUnreadableSourceAutoQueues(t *testing.T) {
 		t.Fatalf("queued case must keep the structured FAIL analysis: %v", rc)
 	}
 }
+
+// TestStaleRepairableCaseNotRecycledIntoQueue (#238 review fix): a stale
+// OPEN case of an auto-queueable class must never be queued by a NEWER
+// verdict of a different class. A rejected 🔴 reparierbar case predating
+// the auto-queue (manual-world leftover) + a current 🔴 unpaginiert
+// preflight for the same attachment: the case must stay rejected — the
+// current evidence says unpaginiert, and unpaginiert NEVER enters the
+// loop. Auto-queue is strictly queue-AT-CREATION (created flag).
+func TestStaleRepairableCaseNotRecycledIntoQueue(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "S238", 3)
+	if err := os.WriteFile("/tmp/x.pdf", []byte(testMinimalPDF), 0o600); err != nil {
+		t.Fatalf("write source pdf: %v", err)
+	}
+
+	// Seed the STALE state directly: a rejected reparierbar case from the
+	// pre-auto-queue world (created manually or by older code).
+	var attID string
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT attachment_id::text FROM ingest_jobs WHERE id=$1`, jobID).Scan(&attID); err != nil {
+		t.Fatalf("read attachment: %v", err)
+	}
+	if _, err := h.pool.Exec(context.Background(), `
+		INSERT INTO repair_cases (attachment_id, suspicion_class, analysis, status)
+		VALUES ($1::uuid, '🔴 reparierbar', '{"stale": true}', 'rejected')`, attID); err != nil {
+		t.Fatalf("seed stale case: %v", err)
+	}
+
+	// Current preflight verdict: unpaginiert — must NOT queue the stale
+	// reparierbar case.
+	fp := newFakeProcessor(t)
+	fp.preflightReport = &map[string]any{
+		"contract_version": "1.0",
+		"source_name":      "inline",
+		"ok":               false,
+		"finding":          "🔴 unpaginiert",
+		"reason":           "kein Tier-1",
+		"details": map[string]any{
+			"pages": 1, "text_layer": false,
+			"suspicious_patterns": []any{"viele reine Bildseiten ohne OCR-Text (1/1)"},
+		},
+	}
+	d := newDispatcher(t, h, fp, Config{PreflightEnabled: true})
+	runFor(t, d, context.Background(), 6*time.Second)
+
+	if got := h.repairCaseStatus(t, jobID); got != "rejected" {
+		t.Fatalf("stale repair case status = %q, want rejected (a newer unpaginiert verdict must never recycle it into the queue)", got)
+	}
+	// And the stale analysis is untouched (no class laundering either).
+	rc := h.repairCaseFor(t, jobID)
+	if rc == nil || rc["stale"] != true {
+		t.Fatalf("stale case analysis must be untouched: %v", rc)
+	}
+}

@@ -15,6 +15,12 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
 
+// closeQuarantine closes the quarantine destination file. It is a seam so
+// tests can force flush/writeback failures — Close-time errors are the one
+// custody failure mode no hermetic unit test can trigger on a healthy disk
+// (write-back of the page cache happens after Copy reports success).
+var closeQuarantine = func(f *os.File) error { return f.Close() }
+
 // Quarantine copies the ORIGINAL of an attachment into the
 // RAG-managed quarantine root BEFORE any mutation (design nail):
 // originals/<attachment-zotero-key>_<unixns><ext> — audit + rollback basis.
@@ -49,10 +55,29 @@ func Quarantine(root, zoteroKey, sourcePath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("quarantine create: %w", err)
 	}
-	defer out.Close()
+	closed := false
+	defer func() {
+		// Error-path close: the copy already failed; log only.
+		if !closed {
+			if cerr := out.Close(); cerr != nil {
+				log.Printf("quarantine close %s: %v", dst, cerr)
+			}
+		}
+	}()
 	if _, err := io.Copy(out, src); err != nil {
 		return "", fmt.Errorf("quarantine copy: %w", err)
 	}
+	// CUSTODY FAIL-CLOSED (#244 review): Close can surface flush/writeback
+	// errors — a failed Close means the quarantine copy may be broken, and
+	// the custody chain (audit → delete of the Zotero original) must NEVER
+	// proceed on it. Return the error so Apply stops before any mutation.
+	// Log too: the operator should see WHY custody refused.
+	if cerr := closeQuarantine(out); cerr != nil {
+		closed = true
+		log.Printf("quarantine close %s: %v", dst, cerr)
+		return "", fmt.Errorf("quarantine close %s: %w", dst, cerr)
+	}
+	closed = true
 	return dst, nil
 }
 

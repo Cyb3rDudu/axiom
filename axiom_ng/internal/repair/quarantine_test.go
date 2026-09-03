@@ -1,6 +1,7 @@
 package repair
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,5 +116,33 @@ func TestSchemaFilenamePublisherFallback(t *testing.T) {
 	got := SchemaFilename(nil, 2026, "Global Economic Prospects, January 2026", "World Bank")
 	if got != "World Bank - 2026 - Global Economic Prospects, January 2026.pdf" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// TestQuarantineCloseFailsClosed (#244 review): a Close-time flush/writeback
+// failure must FAIL the quarantine — the custody chain (audit → delete of
+// the Zotero original) must never proceed on a copy whose close failed.
+// Close failures surface only after the page cache writes back, which no
+// hermetic test can trigger on a healthy disk; the closeQuarantine seam
+// stands in for that physical failure mode.
+func TestQuarantineCloseFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "orig.pdf")
+	if err := os.WriteFile(src, []byte("bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prev := closeQuarantine
+	closeQuarantine = func(f *os.File) error {
+		_ = f.Close()
+		return errors.New("ENOSPC: writeback failed")
+	}
+	defer func() { closeQuarantine = prev }()
+
+	p, err := Quarantine(root, "KEYX", src)
+	if err == nil {
+		t.Fatalf("quarantine must fail when Close fails (got path %q)", p)
+	}
+	if !strings.Contains(err.Error(), "quarantine close") {
+		t.Fatalf("error must name the close step: %v", err)
 	}
 }

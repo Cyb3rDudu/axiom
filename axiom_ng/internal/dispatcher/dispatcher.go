@@ -553,15 +553,14 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 	// reason and mark the attachment as a repair-case candidate (#206/#203).
 	reason := "preflight:" + report.Finding
 	d.logger.Printf("%v: preflight FAIL (%s) — skipping job, marking repair candidate", fields, reason)
-	if c, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Finding, qsJSON); err != nil && !isLost(err) {
+	if c, created, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Finding, qsJSON); err != nil && !isLost(err) {
 		d.logger.Printf("%v: repair-case: %v", fields, err)
-	} else if c != nil && autoQueueRepairClasses[c.SuspicionClass] {
-		// #238: clearly-repairable classes queue THEMSELVES at creation —
-		// the case's own stored class/analysis (not the new finding) is the
-		// queue payload, so an older unpaginiert case can never be laundered
-		// into the loop by a newer repairable verdict. Unpaginiert stays a
-		// rejected tombstone: not in the set here, and refused again by
-		// QueueRepairCase (defense in depth).
+	} else if created && c != nil && autoQueueRepairClasses[c.SuspicionClass] {
+		// #238: only a FRESH case auto-queues. A recycled open case (created
+		// == false) must never be queued by a newer verdict — a stale rejected
+		// 🔴 reparierbar case stays rejected when the current preflight says
+		// unpaginiert (the case's class is old evidence, not the current one).
+		// The queue payload is the case's own stored class/analysis either way.
 		if err := d.rep.QueueRepairCase(ctx, c.ID, c.SuspicionClass, c.Analysis); err != nil && !isLost(err) {
 			d.logger.Printf("%v: auto-queue repair case: %v (stays rejected; manual queue remains)", fields, err)
 		} else if err == nil {

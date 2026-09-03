@@ -26,7 +26,7 @@ func TestRepairStateMachineIT(t *testing.T) {
 		docKey: "SMDOC", attKey: "SMATT", contentHash: &ch}, "completed", 1)
 
 	// open case + unpaginiert gate
-	c, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", json.RawMessage(`{"x":1}`))
+	c, _, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", json.RawMessage(`{"x":1}`))
 	if err != nil || c == nil {
 		t.Fatalf("CreateRepairCase: %v %v", c, err)
 	}
@@ -63,7 +63,7 @@ func TestRepairStateMachineIT(t *testing.T) {
 	ch2 := "repair-sm-hash-2"
 	attID2, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: "lib-2",
 		docKey: "SMDOC2", attKey: "SMATT2", contentHash: &ch2}, "completed", 1)
-	c2, err := lr.rep.CreateRepairCase(ctx, attID2, "", "reparierbar", json.RawMessage(`{}`))
+	c2, _, err := lr.rep.CreateRepairCase(ctx, attID2, "", "reparierbar", json.RawMessage(`{}`))
 	if err != nil || c2 == nil {
 		t.Fatalf("CreateRepairCase 2: %v %v", c2, err)
 	}
@@ -81,7 +81,7 @@ func TestRepairStateMachineIT(t *testing.T) {
 	// gate PASS + heal on the SECOND (last allowed) attempt for attID
 	// (attempt 1 burned by the gate-blocked c1; a failed attempt counts —
 	// partial Zotero mutations are possible, so a free retry is not safe)
-	c3, _ := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", json.RawMessage(`{}`))
+	c3, _, _ := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", json.RawMessage(`{}`))
 	_ = lr.rep.QueueRepairCase(ctx, c3.ID, "reparierbar", json.RawMessage(`{}`))
 	if _, err := lr.rep.ClaimRepairCase(ctx, c3.ID); err != nil {
 		t.Fatalf("claim 2 (letzter erlaubter Versuch): %v", err)
@@ -97,7 +97,7 @@ func TestRepairStateMachineIT(t *testing.T) {
 	// loop guard: attachment already burned both attempts (claim on c1 and
 	// c3 each count — failed attempts too, since partial Zotero mutations
 	// are possible) — a third claim is impossible.
-	c4, _ := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", json.RawMessage(`{}`))
+	c4, _, _ := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", json.RawMessage(`{}`))
 	_ = lr.rep.QueueRepairCase(ctx, c4.ID, "reparierbar", json.RawMessage(`{}`))
 	if _, err := lr.rep.ClaimRepairCase(ctx, c4.ID); err == nil {
 		t.Fatal("3. Versuch muss loop-guard auslösen")
@@ -124,7 +124,7 @@ func TestBlockRepairCaseIT(t *testing.T) {
 		ch := "block-" + tag
 		attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: "lib-" + tag,
 			docKey: "BD" + tag, attKey: "BA" + tag, contentHash: &ch}, "completed", 1)
-		c, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", json.RawMessage(`{}`))
+		c, _, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", json.RawMessage(`{}`))
 		if err != nil || c == nil {
 			t.Fatalf("CreateRepairCase %s: %v %v", tag, c, err)
 		}
