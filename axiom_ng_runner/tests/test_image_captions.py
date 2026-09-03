@@ -94,11 +94,18 @@ def test_captions_land_on_artifact_and_chunk(tmp_path):
     ran, sc = _run(arts, chunks, tmp_path, FakeCaptioner())
     assert ran is True
     assert sc["image_captions"] is True and sc["image_captions_reason"] is None
-    assert arts[0]["caption_model"] == "fake-vision-1"
-    assert arts[0]["caption_path"] == "cloud"
-    assert "machine_caption" in arts[0] and "machine_caption" in arts[1]
+    # C1 (#230 review): the fields MUST nest under "attributes" — the Go
+    # processor reads only that key and silently drops unknown top-level
+    # keys at the persist boundary (W9). Proven end-to-end: this exact
+    # artifact dict JSON-unmarshals into processor.Artifact with the
+    # attributes intact (see the Go round-trip test).
+    a0 = arts[0]["attributes"]
+    assert a0["caption_model"] == "fake-vision-1"
+    assert a0["caption_path"] == "cloud"
+    assert a0["machine_caption"] == arts[0]["attributes"]["machine_caption"]
+    assert "machine_caption" in arts[1]["attributes"]
     assert chunks[0]["metadata"]["image_captions"] == {
-        "image-0000": arts[0]["machine_caption"]}
+        "image-0000": arts[0]["attributes"]["machine_caption"]}
     assert "image_captions" not in chunks[1]["metadata"]
 
 
@@ -114,7 +121,7 @@ def test_hash_gate_second_run_captions_nothing(tmp_path):
     cap2 = FakeCaptioner()
     _run(arts2, chunks2, tmp_path, cap2)
     assert cap2.calls == 0
-    assert arts2[0]["machine_caption"] == arts[0]["machine_caption"]
+    assert arts2[0]["attributes"]["machine_caption"] == arts[0]["attributes"]["machine_caption"]
 
 
 def test_budget_abort_leaves_rest_empty(tmp_path):
@@ -221,3 +228,30 @@ def test_caption_image_cache_roundtrip(tmp_path):
     rec2 = ic.caption_image(None, tmp_path / "img.bin", "image/png",
                             "cc" * 32, tmp_path / "cache", 5.0)
     assert rec2 == rec and cap.calls == 1
+
+
+def test_per_image_timeout_abandons_the_call(monkeypatch):
+    """C2 (#230 review): the deadline must ABANDON the model call, not
+    join it — a 1.0s captioner with a 0.1s timeout must return in ~0.1s
+    (the context-manager shutdown(wait=True) variant blocks for the full
+    call; measured in review)."""
+    import time as _time
+
+    class SlowCaptioner:
+        model = "slow"
+
+        def caption(self, b, m):
+            _time.sleep(1.0)
+            return "late", "local"
+
+    (Path("/tmp") / "c2probe.bin")
+    tmp = Path("/tmp/c2img.bin")
+    tmp.write_bytes(b"x")
+    cap = SlowCaptioner()
+    t0 = _time.monotonic()
+    rec = ic.caption_image(cap, tmp, "image/png", "dd" * 32,
+                           Path("/tmp/c2cache-uw"), 0.1)
+    elapsed = _time.monotonic() - t0
+    assert rec is None, "timed-out call must be an honest miss"
+    assert elapsed < 0.6, f"deadline must abandon, not join ({elapsed:.2f}s)"
+    tmp.unlink()

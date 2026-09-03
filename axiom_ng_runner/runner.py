@@ -525,7 +525,7 @@ def _caption_images_stage(
     stage_completion: dict[str, Any],
     set_progress: Callable[[int, int, str], None] | None,
     reembed: Callable[[list[dict[str, Any]]], None],
-) -> dict[str, Any] | None:
+) -> bool | None:
     """#230 stage: caption every extracted_image artifact under the hash
     gate + budgets; attach machine_caption/caption_model/caption_path to
     the artifact and ref→caption maps to referencing chunks.
@@ -572,8 +572,10 @@ def _caption_images_stage(
                 # Honest partial (#241): what is captioned stays, the rest
                 # stays EMPTY — never placeholders.
                 stage_completion["image_captions_reason"] = "STAGE_BUDGET_EXCEEDED"
-                log.warning("image_captions budget (%ss) exceeded at %d/%d images",
-                            budget, done - 1, len(targets))
+                stage_completion["image_captions_done"] = f"{len(captioned)}/{len(targets)}"
+                log.warning("image_captions budget (%ss) exceeded at %d/%d images "
+                            "(%d captioned)", budget, done - 1, len(targets),
+                            len(captioned))
                 break
             img_path = work_dir / "artifacts" / art["ref"]
             timeout = per_image
@@ -584,9 +586,15 @@ def _caption_images_stage(
                 art["sha256"], cache_dir, timeout,
             )
             if rec is not None:
-                art["machine_caption"] = rec["caption"]
-                art["caption_model"] = rec["model"]
-                art["caption_path"] = rec["path"]
+                # C1 (#230 review): the fields MUST nest under "attributes" —
+                # processor.Artifact reads only that key and the persist
+                # boundary silently drops unknown top-level keys (W9).
+                attrs = art.setdefault("attributes", {})
+                attrs.update({
+                    "machine_caption": rec["caption"],
+                    "caption_model": rec["model"],
+                    "caption_path": rec["path"],
+                })
                 captioned[art["ref"]] = rec
         if stage_completion["image_captions_reason"] is None:
             if captioned:
@@ -601,7 +609,12 @@ def _caption_images_stage(
             hits = {r: captioned[r]["caption"] for r in refs if r in captioned}
             if hits:
                 c.setdefault("metadata", {})["image_captions"] = hits
-        reembed(chunk_dicts)
+        # W2 (#230 review): dense re-embed only for profiles that requested
+        # dense embeddings — otherwise this would load BGE-M3, give ONLY
+        # captioned chunks vectors, and flip the manifest dense model for a
+        # job that asked for none.
+        if proc_opt.get("compute_dense_embeddings"):
+            reembed(chunk_dicts)
     return True  # stage ran (caller rebuilds the result)
 
 
@@ -1656,7 +1669,10 @@ def _real_pipeline(
         # the stage mutated artifacts/chunks/stage_completion in place —
         # rebuild so caption fields reach the result (off-flag → no call,
         # byte-identical result: the passenger proof).
-        result = _finish(real_relationships)
+        # W1 (#230 review): keep the relationships-off manifest identical —
+        # _finish(None) would flip models.relationship_extraction to the
+        # reference stub; [] preserves the early-committed provenance.
+        result = _finish(real_relationships if real_relationships is not None else [])
 
     enter("assemble")
     return result

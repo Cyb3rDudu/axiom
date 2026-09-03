@@ -248,14 +248,20 @@ def caption_image(
             caption, path = captioner.caption(image_path.read_bytes(), media_type)
         else:
             # Per-image timeout: run the model call in a worker thread and
-            # abandon it on deadline (threads are not killable; abandonment
-            # leaks nothing but the call itself — the wall-clock budget is
-            # the hard guarantee, #225 pattern).
+            # ABANDON it on deadline. C2 (#230 review): NO context manager
+            # here — its __exit__ shutdown(wait=True) would join the worker
+            # and the "timeout" would still block for the full model call
+            # (measured: 1.0s call, 0.1s timeout → 1.0s elapsed). One leaked
+            # worker thread per abandoned call is the documented cost; the
+            # deadline is the hard guarantee (#225 pattern).
             import concurrent.futures
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
                 fut = ex.submit(captioner.caption, image_path.read_bytes(), media_type)
                 caption, path = fut.result(timeout=max(_left(), 0.01))
+            finally:
+                ex.shutdown(wait=False)
     except Exception as err:  # noqa: BLE001 — any captioner miss is an honest miss
         log.warning("caption failed for %s: %s", sha256[:12], err)
         return None
