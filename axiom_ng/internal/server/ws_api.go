@@ -264,9 +264,14 @@ func (s *Server) serveSubscribed(ws *wsServer, conn *websocket.Conn, sub clientF
 	// Snapshot: derived runner states (#169). Only a runners-relevant
 	// subscription (runners|all) gets it; snapshot frames always carry topic
 	// "runners" and serialize the same struct as the live stream and the REST
-	// snapshot (/api/runners/live).
+	// snapshot (/api/runners/live). A job-filtered subscriber sees only the
+	// states relevant to its job — same match semantics as the live stream
+	// (#169 r3: JobID OR LastJobID, so the parallel case stays correct).
 	if (topic == "runners" || topic == "all") && ws.runnerSnap != nil {
 		for _, st := range ws.runnerSnap.Snapshot() {
+			if sub.JobID != "" && !runnerStateMatchesJob(st, sub.JobID) {
+				continue // not this subscriber's job
+			}
 			seq.Add(1)
 			if !send(outFrame{
 				Type: frameEvent, Topic: "runners", Seq: seq.Load(),
@@ -297,9 +302,10 @@ func (s *Server) serveSubscribed(ws *wsServer, conn *websocket.Conn, sub clientF
 			}
 			lastDrops = drops
 		}
-		if sub.JobID != "" && wsJobIDOf(e) != sub.JobID {
-			continue // defense in depth for the job filter (wsJobIDOf: the
-			// runner-idle frame carries its job in LastJobID, #169 review)
+		if sub.JobID != "" && !wsMatchesJobFilter(e, sub.JobID) {
+			continue // defense in depth for the job filter — same match
+			// semantics as the pre-filter (JobID OR LastJobID for derived
+			// runner states, #169 r3)
 		}
 		seq.Add(1)
 		if !send(outFrame{
@@ -491,26 +497,32 @@ func subscribeFilter(topic, jobID string) func(events.Event) bool {
 		} else if topic != "all" && eventTopic(e) != topic {
 			return false
 		}
-		if jobID != "" && wsJobIDOf(e) != jobID {
+		if jobID != "" && !wsMatchesJobFilter(e, jobID) {
 			return false
 		}
 		return true
 	}
 }
 
-// wsJobIDOf resolves the job a frame-relevant event belongs to. A derived
-// runner state carries its current job — or, once idle, the job it JUST
-// finished in LastJobID: a job-filtered runner subscriber must keep seeing
-// the terminal transition for its job (#169 review — otherwise the client
-// sees busy but never the idle flip).
-func wsJobIDOf(e events.Event) string {
-	if id := events.JobID(e); id != "" {
-		return id
-	}
+// runnerStateMatchesJob reports whether a derived runner state is relevant
+// to a job-filtered subscriber: the job is running on that runner (JobID) OR
+// has just ended there (LastJobID — the parallel case: p1 completing while
+// p2 stays active leaves the state carrying JobID=p2 AND LastJobID=p1, and
+// p1's subscriber must still see that transition, #169 r3).
+func runnerStateMatchesJob(st events.RunnerStateChanged, jobID string) bool {
+	return st.JobID == jobID || st.LastJobID == jobID
+}
+
+// wsMatchesJobFilter is the single job-filter predicate for the WS path,
+// applied identically by the WithMatch pre-filter and the live loop's
+// defense-in-depth check. Raw job events match on their JobID; derived
+// runner states match when the filtered job runs there OR just ended there
+// (a single-value resolution loses the terminal frame in the parallel case).
+func wsMatchesJobFilter(e events.Event, jobID string) bool {
 	if rs, ok := e.(events.RunnerStateChanged); ok {
-		return rs.LastJobID
+		return runnerStateMatchesJob(rs, jobID)
 	}
-	return ""
+	return events.JobID(e) == jobID
 }
 
 // eventTopic maps a typed bus event to its WS topic.

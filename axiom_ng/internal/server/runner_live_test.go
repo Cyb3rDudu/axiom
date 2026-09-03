@@ -446,3 +446,113 @@ func TestRunnerLiveWiringOrderInverted(t *testing.T) {
 		t.Fatalf("SetWSAPI after SetRunnerLive left the runners snapshot unwired (order inversion)")
 	}
 }
+
+// TestRunnerLiveJobFilterParallelTerminal (#169 r3 F1): a p1-filtered runner
+// subscriber must see p1's terminal transition even while p2 stays active on
+// the SAME runner — the derived state then carries JobID=p2 AND LastJobID=p1,
+// so a single-value match never reaches the tail and loses the frame.
+func TestRunnerLiveJobFilterParallelTerminal(t *testing.T) {
+	_, broker, ts := startRunnerView(t)
+	c := dialWS(t, "ws"+strings.TrimPrefix(ts.URL, "http")+"/api/ws")
+	defer c.Close()
+	if err := c.WriteJSON(map[string]any{"type": "subscribe", "topic": "runners", "job_id": "p1"}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if ack := readFrame(t, c); ack.Type != frameSubscribed {
+		t.Fatalf("want ack, got %+v", ack)
+	}
+
+	// Two parallel jobs on one runner; p1 is the FILTERED one.
+	broker.Publish(events.JobClaimed{JobID: "p1", RunnerName: "carrier-gpu0", DocumentTitle: "P1"})
+	broker.Publish(events.JobClaimed{JobID: "p2", RunnerName: "carrier-gpu0", DocumentTitle: "P2"})
+	// p1 completes while p2 stays active: the state carries JobID=p2,
+	// LastJobID=p1 — p1's subscriber MUST still see this terminal frame.
+	broker.Publish(events.JobCompleted{JobID: "p1"})
+
+	sawBusy, sawTerminal := false, false
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	for {
+		_, data, err := c.ReadMessage()
+		if err != nil {
+			break
+		}
+		var f outFrame
+		if err := json.Unmarshal(data, &f); err != nil || f.Type != frameEvent {
+			continue
+		}
+		var st events.RunnerStateChanged
+		if b, err := json.Marshal(f.Payload); err == nil {
+			_ = json.Unmarshal(b, &st)
+		}
+		if st.RunnerName != "carrier-gpu0" {
+			continue
+		}
+		if st.JobID == "p1" && st.State == "busy" {
+			sawBusy = true
+		}
+		// THE PARALLEL TERMINAL: p1 finished (tail) while p2 runs (current).
+		if st.LastJobID == "p1" && st.JobID == "p2" {
+			sawTerminal = true
+		}
+		if sawBusy && sawTerminal {
+			return // both witnessed through the p1 filter
+		}
+	}
+	if !sawBusy || !sawTerminal {
+		t.Fatalf("p1-filtered subscriber: busy=%v parallel-terminal=%v, want both", sawBusy, sawTerminal)
+	}
+}
+
+// TestRunnerLiveSnapshotRespectsJobFilter (#169 r3 F2): a job-filtered
+// runners subscriber sees ONLY the states relevant to its job in the connect
+// snapshot — same match semantics as the live stream (JobID OR LastJobID).
+func TestRunnerLiveSnapshotRespectsJobFilter(t *testing.T) {
+	_, broker, ts := startRunnerView(t)
+	// Seed two runners: one with the filtered job active, one foreign.
+	broker.Publish(events.JobClaimed{JobID: "mine", RunnerName: "mine-runner", DocumentTitle: "Mine"})
+	broker.Publish(events.JobClaimed{JobID: "theirs", RunnerName: "other-runner", DocumentTitle: "Theirs"})
+	// Wait until the deriver has folded both (REST grows to 2).
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		r, _ := http.Get(ts.URL + "/api/runners/live")
+		var snap []events.RunnerStateChanged
+		_ = json.NewDecoder(r.Body).Decode(&snap)
+		r.Body.Close()
+		if len(snap) == 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	c := dialWS(t, "ws"+strings.TrimPrefix(ts.URL, "http")+"/api/ws")
+	defer c.Close()
+	if err := c.WriteJSON(map[string]any{"type": "subscribe", "topic": "runners", "job_id": "mine"}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if ack := readFrame(t, c); ack.Type != frameSubscribed {
+		t.Fatalf("want ack, got %+v", ack)
+	}
+
+	// Snapshot frames: ONLY the mine-runner state may appear.
+	_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	for {
+		_, data, err := c.ReadMessage()
+		if err != nil {
+			return // idle: snapshot complete, no foreign frame arrived
+		}
+		var f outFrame
+		if err := json.Unmarshal(data, &f); err != nil || !f.Snapshot {
+			continue
+		}
+		var st events.RunnerStateChanged
+		if b, err := json.Marshal(f.Payload); err == nil {
+			_ = json.Unmarshal(b, &st)
+		}
+		if st.RunnerName != "mine-runner" {
+			t.Fatalf("job-filtered snapshot delivered a foreign runner state: %+v", st)
+		}
+		if st.JobID != "mine" {
+			t.Fatalf("snapshot state for the wrong job: %+v", st)
+		}
+	}
+}
