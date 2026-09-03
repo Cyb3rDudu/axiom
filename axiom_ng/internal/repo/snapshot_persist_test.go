@@ -1585,14 +1585,12 @@ func TestPersistImageCaptionsRoundTrip(t *testing.T) {
 	h := newPersistHarness(t, "caps")
 	const dims = 3
 	raw := h.validResultRaw(dims)
+	// The artifact is appended at the JSON level too — the exact
+	// PYTHON-emitted shape (C1 #230 review: top-level caption keys were
+	// silently dropped at this boundary; only "attributes" survives).
 	raw.Artifacts = append(raw.Artifacts, processor.Artifact{
 		Ref: "image-0000", Kind: "extracted_image", MediaType: "image/png",
 		SHA256: "ab12", SizeBytes: 9, Retention: "durable_if_referenced",
-		Attributes: map[string]string{
-			"machine_caption": "A line chart of training loss",
-			"caption_model":   "fake-vision-1",
-			"caption_path":    "cloud",
-		},
 	})
 	raw.Chunks[0].ImageRefs = []string{"image-0000"}
 	raw.Stats.Artifacts = 2
@@ -1600,12 +1598,18 @@ func TestPersistImageCaptionsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Simulate the PYTHON emitter (#230): inject image_captions at the JSON
-	// level, NOT via the typed field — this is the true W9 probe shape (a
-	// tag rename / struct-field drop on the Go side must lose the field and
-	// turn this test red, exactly like a real runner result would).
+	// Simulate the PYTHON emitter (#230): inject image_captions AND the
+	// artifact attributes at the JSON level, NOT via the typed fields —
+	// this is the true W9 probe shape (a tag rename / struct-field drop on
+	// the Go side must lose the field and turn this test red, exactly like
+	// a real runner result would).
 	b = []byte(strings.Replace(string(b), `"token_count":4`,
 		`"token_count":4,"image_captions":{"image-0000":"A line chart of training loss"}`, 1))
+	b = []byte(strings.Replace(string(b), `"ref":"image-0000","kind":"extracted_image","media_type":"image/png","sha256":"ab12","size_bytes":9,"retention":"durable_if_referenced"`,
+		`"ref":"image-0000","kind":"extracted_image","media_type":"image/png","sha256":"ab12","size_bytes":9,"retention":"durable_if_referenced","attributes":{"machine_caption":"A line chart of training loss","caption_model":"fake-vision-1","caption_path":"cloud"}`, 1))
+	if !strings.Contains(string(b), `"caption_model":"fake-vision-1"`) {
+		t.Fatal("attributes injection anchor missing")
+	}
 	if !strings.Contains(string(b), "image_captions") {
 		t.Fatal("injection anchor missing")
 	}
