@@ -175,7 +175,13 @@ func (s *Service) GetPassage(ctx context.Context, chunkID string) (*Passage, err
 	}
 
 	neighbors := s.fetchNeighbors(ctx, c.AttachmentID, c.ChunkIndex, c.ChunkID)
+	// #245 consumer cut: EPUB page data never reaches the client — the
+	// citation form for EPUBs is ALWAYS the APA section. The stored
+	// paragraph_pages stay internal (dormant), exactly like locatorView.
 	pp := parseParagraphPages(c.Locator)
+	if locatorView(c.Locator, c.Sections).Kind == "epub_cfi" {
+		pp = nil
+	}
 
 	return &Passage{
 		ChunkID: c.ChunkID, DocumentID: c.DocumentID, SnapshotID: c.SnapshotID,

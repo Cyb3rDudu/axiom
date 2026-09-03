@@ -144,3 +144,21 @@ func TestPassagePageAt_BadOffset400(t *testing.T) {
 		t.Fatalf("want 400 for non-numeric ?at, got %d", rec.Code)
 	}
 }
+
+// #245: /api/passage/{id}/page?at=N refuses EPUB chunks with an honest
+// 404 — the citation form for EPUBs is ALWAYS the APA section, never a
+// page. PDF behavior is unchanged (proven by the exact-page test above).
+func TestPassagePageAt_EPUB404(t *testing.T) {
+	stub := stubPassage{p: &search.Passage{
+		ChunkID: "04881089-3833-420f-a8a9-5b493e4a7d56",
+		Locator: search.LocatorView{Kind: "epub_cfi", Label: "Kap. 3"},
+	}}
+	s := New(":0", log.Default())
+	s.SetPassageService(stub)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/passage/04881089-3833-420f-a8a9-5b493e4a7d56/page?at=610", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("EPUB page query must 404 (APA section is the citation form), got %d", rec.Code)
+	}
+}

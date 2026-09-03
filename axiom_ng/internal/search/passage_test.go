@@ -238,3 +238,36 @@ func TestParseParagraphPagesBothForms(t *testing.T) {
 		t.Fatalf("bad entries must drop, good stay: %+v", mixed)
 	}
 }
+
+// #245 consumer cut: EPUB page data never reaches the client — an
+// epub_cfi locator with stored paragraph_pages yields a Passage WITHOUT
+// the field (stored, dormant), while a PDF passage keeps it.
+func TestGetPassage_EPUBOmitsParagraphPages(t *testing.T) {
+	os := seedPassageChunks(t)
+	svc := newService(os.URL, &fakeProcessor{}, richMeta())
+	// overwrite one fixture as an EPUB chunk WITH stored paragraph_pages
+	epubID := chunkIDFor(2)
+	os.docChunks[epubID] = chunkFixture{
+		ChunkID: epubID, DocumentID: "doc-1", SnapshotID: "snap-1",
+		AttachmentID: "att-A", ChunkIndex: 2, Text: textFor(2),
+		Sections: []string{"Kapitel 1"},
+		Locator:  json.RawMessage(`{"type":"epub_cfi","cfi_start":"epubcfi(/6/4!/4/2)","page_source":"print_verified","page_start":30,"page_end":31,"paragraph_pages":[["0","30"],["1603","31"]]}`),
+	}
+	pdf, err := svc.GetPassage(context.Background(), chunkIDFor(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pdf.Locator.Kind != "page" {
+		t.Fatalf("PDF control must stay a page locator: %+v", pdf.Locator)
+	}
+	epub, err := svc.GetPassage(context.Background(), epubID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if epub.Locator.Kind != "epub_cfi" || epub.Locator.PageStart != nil {
+		t.Fatalf("EPUB locator must carry no page fields: %+v", epub.Locator)
+	}
+	if epub.ParagraphPages != nil {
+		t.Fatalf("EPUB passage must NOT expose paragraph_pages: %+v", epub.ParagraphPages)
+	}
+}

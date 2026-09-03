@@ -138,3 +138,26 @@ def test_tiny_final_chapter_not_merged_across_boundary():
         if tail_marker in c["text"]:
             # the colophon text must never sit in a chapter-2 chunk
             assert m.get("chapter_number") != 2, (m, c["text"][:60])
+
+
+def test_title_page_h1_not_chapter_one():
+    """#232 round 3: '# Book Title' at paragraph 0 followed by another
+    heading is the TITLE (a title page carries no body text) — chapter
+    ordinals must match the book's TOC, not count the title as Chap. 1."""
+    md = _md("# Book Title", "# Chapter One", PARA, "# Chapter Two", PARA)
+    chunks = _chunk(md)
+    # the title/heading chunk (spi=0, before the first counted chapter)
+    # carries no chapter fields — front matter, correctly
+    assert chunks[0]["metadata"].get("chapter_number") is None
+    # Chapter One's CONTENT chunks are chapter 1 — not shifted to 2 by the
+    # title, and never 3
+    numbered = [c["metadata"]["chapter_number"] for c in chunks
+                if c["metadata"].get("chapter_number")]
+    assert numbered == [1, 2], numbered
+    ch1 = [c for c in chunks if c["metadata"].get("chapter_number") == 1]
+    assert ch1 and all(c["metadata"].get("section_title") == "Chapter One" for c in ch1)
+    # a genuine chapter-1 opening at paragraph 0 WITH prose after it is
+    # NOT excluded (next paragraph is body text, not a heading)
+    md2 = _md("# Chapter One", PARA, "# Chapter Two", PARA)
+    nums = sorted({c["metadata"]["chapter_number"] for c in _chunk(md2)})
+    assert nums == [1, 2], nums

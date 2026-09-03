@@ -171,26 +171,27 @@ type LocatorView struct {
 	Label   string `json:"label"`             // e.g. "S. 47", "PDF-S. 12" or "Kap. 3"
 	Chapter string `json:"chapter,omitempty"` // deepest section title
 	CFI     string `json:"cfi,omitempty"`     // epub CFI short form
-	// ChapterNumber (W4, APA7 chapter-relative pagination): set when the
-	// book's folios restart per chapter — the label is then a page WITHIN
-	// the chapter and "S. 5" alone is ambiguous. Renderer composes
-	// "Kap. 3, S. 5"; clients may compose the English APA7 form
-	// ("ch. 3, p. 5") from chapter_number + the page part. Additive.
+	// ChapterNumber: on PDF arms the W4 chapter-relative pagination ordinal
+	// (folios restart per chapter; renderer composes "Kap. 3, S. 5"). On the
+	// EPUB arm it is ONLY the #245 APA heading ordinal (never the W4 spine
+	// value — see locatorView). Additive.
 	ChapterNumber *int `json:"chapter_number,omitempty"`
 	// PageSource (#173 trust level): folio_verified is the ONLY level a
 	// client may cite as a printed page; physical_only renders as "PDF-S.";
-	// none means no stable pages at all. EPUB locators carry the #223/#226
-	// set: print_verified | derived_from_sibling | print_unverified | none.
-	// Additive contract field.
+	// none means no stable pages at all. PDF arms only — on the EPUB arm
+	// the field is omitted (stored, dormant; consumer cut #245: EPUBs cite
+	// APA sections, never pages).
 	PageSource string `json:"page_source,omitempty"`
 	// PageStart/PageEnd (#229): the print-page span on epub_cfi locators —
-	// present only when the EPUB carried a trusted anchor map. Absent means
-	// absent (never fabricated). Additive.
+	// stored when the EPUB carried a trusted anchor map, but NOT rendered
+	// for EPUBs (dormant, consumer cut #245); absent means absent (never
+	// fabricated). PDF arms render their span as before.
 	PageStart *int `json:"page_start,omitempty"`
 	PageEnd   *int `json:"page_end,omitempty"`
 	// ParagraphPages (#229): the char-exact page boundaries (#194 shape)
-	// riding on enriched epub_cfi locators — clients resolve a hit position
-	// to its exact print page. Passthrough of the stored wire form.
+	// riding on enriched epub_cfi locators — stored, dormant; the EPUB arm
+	// omits them (consumer cut #245). PDF arms pass the stored wire form
+	// through.
 	ParagraphPages [][]string `json:"paragraph_pages,omitempty"`
 	// ParagraphInChapter (#245): the APA-7 paragraph count of the hit's
 	// position from the chapter start (1-based, ingest-frozen). EPUB

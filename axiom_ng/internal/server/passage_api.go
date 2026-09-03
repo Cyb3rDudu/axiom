@@ -82,6 +82,15 @@ func (s *Server) handlePassageAt(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "chunk not found or unavailable"})
 		return
 	}
+	if p.Locator.Kind == "epub_cfi" {
+		// #245: EPUB citations are ALWAYS APA 7 sections — page data is
+		// stored but dormant and never served. Honest 404 beats a page
+		// number the citation contract retired.
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"error": "EPUB passages cite APA 7 sections (chapter/section/paragraph), never pages",
+		})
+		return
+	}
 	if len(p.ParagraphPages) == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]any{
 			"error": "chunk has no paragraph page map (pre-#194 generation); the span is the envelope",

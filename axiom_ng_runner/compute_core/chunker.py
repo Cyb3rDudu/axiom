@@ -149,7 +149,22 @@ class Chunker:
                     # start_paragraph_index (the last call is the one chunk
                     # indices refer to — the marker-cleanup re-extract
                     # overwrites, which is exactly right).
-                    self._level1_starts.append((i, title))
+                    # Title-page exclusion (#232 round 3): an h1 at the very
+                    # first paragraph whose next paragraph is ANOTHER heading
+                    # is the book/cover title — a title page carries no body
+                    # text. Excluded so chapter ordinals match the book's
+                    # TOC (a +1 shift would make every "Chap. N" cite point
+                    # one chapter early).
+                    nxt = ""
+                    if i + 1 < len(paragraphs):
+                        nxt = paragraphs[i + 1].strip().split('\n')[0]
+                    is_title_page = (
+                        i == 0
+                        and bool(nxt)
+                        and self._heading_pattern.match(nxt) is not None
+                    )
+                    if not is_title_page:
+                        self._level1_starts.append((i, title))
 
             # Store current hierarchy for this paragraph
             paragraph_to_headings[i] = [h[1] for h in heading_stack]
