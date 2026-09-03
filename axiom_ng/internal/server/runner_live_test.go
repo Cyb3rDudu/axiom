@@ -556,3 +556,153 @@ func TestRunnerLiveSnapshotRespectsJobFilter(t *testing.T) {
 		}
 	}
 }
+
+// TestRunnerLiveJobFilterNoStaleTailFollowThrough (#169 r4): after p1's
+// terminal frame (while p2 stays active on the same runner), a p2 stage delta
+// must NOT reach the p1 subscriber — the runner state still carries
+// LastJobID=p1, but the frame was caused by p2. Event relevance, not state
+// relevance.
+func TestRunnerLiveJobFilterNoStaleTailFollowThrough(t *testing.T) {
+	_, broker, ts := startRunnerView(t)
+	c := dialWS(t, "ws"+strings.TrimPrefix(ts.URL, "http")+"/api/ws")
+	defer c.Close()
+	if err := c.WriteJSON(map[string]any{"type": "subscribe", "topic": "runners", "job_id": "p1"}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if ack := readFrame(t, c); ack.Type != frameSubscribed {
+		t.Fatalf("want ack, got %+v", ack)
+	}
+
+	broker.Publish(events.JobClaimed{JobID: "p1", RunnerName: "carrier-gpu0", DocumentTitle: "P1"})
+	broker.Publish(events.JobClaimed{JobID: "p2", RunnerName: "carrier-gpu0", DocumentTitle: "P2"})
+	broker.Publish(events.JobCompleted{JobID: "p1"})
+	// THE STALE-TAIL TRAP: p2 keeps running on the shared runner; every p2
+	// stage keeps LastJobID=p1 in the state. The p1 subscriber must get NONE
+	// of these follow-up frames.
+	broker.Publish(events.JobStageChanged{JobID: "p2", Stage: "extract"})
+	broker.Publish(events.JobStageChanged{JobID: "p2", Stage: "embed"})
+
+	sawTerminal := false
+	_ = c.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	for {
+		_, data, err := c.ReadMessage()
+		if err != nil {
+			break // idle: everything that will arrive has arrived
+		}
+		var f outFrame
+		if err := json.Unmarshal(data, &f); err != nil || f.Type != frameEvent {
+			continue
+		}
+		var st events.RunnerStateChanged
+		if b, err := json.Marshal(f.Payload); err == nil {
+			_ = json.Unmarshal(b, &st)
+		}
+		// The terminal frame (caused by complete(p1)) carries the p2 takeover
+		// with an EMPTY stage — completion clears it. Any p2 frame with a STAGE
+		// set is a follow-through of p2's own events leaking through the tail.
+		if st.JobID == "p2" && (st.Stage == "extract" || st.Stage == "embed") {
+			t.Fatalf("p1 subscriber received a p2 stage follow-through: %+v", st)
+		}
+		if st.LastJobID == "p1" && st.JobID == "p2" && st.Stage == "" {
+			sawTerminal = true // the legit terminal frame
+		}
+	}
+	if !sawTerminal {
+		t.Fatalf("p1 subscriber never saw its terminal frame")
+	}
+}
+
+// TestRunnerLiveSnapshotNoStaleTailMatch (#169 r4): a snapshot state that is
+// BUSY on p2 but keeps p1 in the tail must NOT match a job_id=p1 subscriber;
+// the idle case (nothing running, tail=p1) legitimately matches.
+func TestRunnerLiveSnapshotNoStaleTailMatch(t *testing.T) {
+	_, broker, ts := startRunnerView(t)
+	// Seed: runnerA busy with p2, tail=p1 (p1 completed while p2 active).
+	// runnerB idle with tail=q1 (q1 completed, nothing running).
+	broker.Publish(events.JobClaimed{JobID: "p1", RunnerName: "runnerA", DocumentTitle: "P1"})
+	broker.Publish(events.JobClaimed{JobID: "p2", RunnerName: "runnerA", DocumentTitle: "P2"})
+	broker.Publish(events.JobCompleted{JobID: "p1"})
+	broker.Publish(events.JobClaimed{JobID: "q1", RunnerName: "runnerB", DocumentTitle: "Q1"})
+	broker.Publish(events.JobCompleted{JobID: "q1"})
+	// Wait until both runner states are folded: runnerA busy p2, runnerB idle.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		r, _ := http.Get(ts.URL + "/api/runners/live")
+		var snap []events.RunnerStateChanged
+		_ = json.NewDecoder(r.Body).Decode(&snap)
+		r.Body.Close()
+		busyOK, idleOK := false, false
+		for _, st := range snap {
+			if st.RunnerName == "runnerA" && st.JobID == "p2" && st.LastJobID == "p1" {
+				busyOK = true
+			}
+			if st.RunnerName == "runnerB" && st.State == "idle" && st.LastJobID == "q1" {
+				idleOK = true
+			}
+		}
+		if busyOK && idleOK {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// p1 subscriber: runnerA's busy-with-p2 state must NOT match (stale tail),
+	// and runnerB's idle-tail q1 is not p1 either -> an EMPTY snapshot.
+	c := dialWS(t, "ws"+strings.TrimPrefix(ts.URL, "http")+"/api/ws")
+	defer c.Close()
+	if err := c.WriteJSON(map[string]any{"type": "subscribe", "topic": "runners", "job_id": "p1"}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if ack := readFrame(t, c); ack.Type != frameSubscribed {
+		t.Fatalf("want ack, got %+v", ack)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	for {
+		_, data, err := c.ReadMessage()
+		if err != nil {
+			break // snapshot done
+		}
+		var f outFrame
+		if err := json.Unmarshal(data, &f); err != nil || !f.Snapshot {
+			continue
+		}
+		var st events.RunnerStateChanged
+		if b, err := json.Marshal(f.Payload); err == nil {
+			_ = json.Unmarshal(b, &st)
+		}
+		t.Fatalf("p1 subscriber received a snapshot state that is not its job: %+v", st)
+	}
+
+	// q1 subscriber reconnecting: runnerB idle with tail=q1 IS its state
+	// ("is anything still running?" -> no, q1 was the last) -> delivered.
+	c2 := dialWS(t, "ws"+strings.TrimPrefix(ts.URL, "http")+"/api/ws")
+	defer c2.Close()
+	if err := c2.WriteJSON(map[string]any{"type": "subscribe", "topic": "runners", "job_id": "q1"}); err != nil {
+		t.Fatalf("subscribe q1: %v", err)
+	}
+	if ack := readFrame(t, c2); ack.Type != frameSubscribed {
+		t.Fatalf("want ack, got %+v", ack)
+	}
+	gotTail := false
+	_ = c2.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	for {
+		_, data, err := c2.ReadMessage()
+		if err != nil {
+			break
+		}
+		var f outFrame
+		if err := json.Unmarshal(data, &f); err != nil || !f.Snapshot {
+			continue
+		}
+		var st events.RunnerStateChanged
+		if b, err := json.Marshal(f.Payload); err == nil {
+			_ = json.Unmarshal(b, &st)
+		}
+		if st.RunnerName == "runnerB" && st.State == "idle" && st.LastJobID == "q1" {
+			gotTail = true
+		}
+	}
+	if !gotTail {
+		t.Fatalf("q1 subscriber missing the idle-tail snapshot state (the legit idle match)")
+	}
+}

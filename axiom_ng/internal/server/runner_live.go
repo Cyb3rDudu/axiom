@@ -142,6 +142,7 @@ func (v *RunnerLive) derive(e events.Event) *events.RunnerStateChanged {
 		})
 		v.byJob[ev.JobID] = runner
 		st := v.view(runner)
+		st.AffectedJobID = ev.JobID
 		return &st
 
 	case events.JobStageChanged:
@@ -162,6 +163,7 @@ func (v *RunnerLive) derive(e events.Event) *events.RunnerStateChanged {
 			return nil
 		}
 		st := v.view(runner)
+		st.AffectedJobID = ev.JobID
 		return &st
 
 	case events.JobCompleted:
@@ -210,6 +212,7 @@ func (v *RunnerLive) finish(completed bool, jobID string) *events.RunnerStateCha
 	}
 	v.tail[runner] = tailInfo{jobID: j.jobID, title: j.title, atMs: time.Now().UnixMilli()}
 	st := v.view(runner)
+	st.AffectedJobID = jobID
 	return &st
 }
 

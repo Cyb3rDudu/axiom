@@ -269,7 +269,7 @@ func (s *Server) serveSubscribed(ws *wsServer, conn *websocket.Conn, sub clientF
 	// (#169 r3: JobID OR LastJobID, so the parallel case stays correct).
 	if (topic == "runners" || topic == "all") && ws.runnerSnap != nil {
 		for _, st := range ws.runnerSnap.Snapshot() {
-			if sub.JobID != "" && !runnerStateMatchesJob(st, sub.JobID) {
+			if sub.JobID != "" && !runnerSnapshotMatchesJob(st, sub.JobID) {
 				continue // not this subscriber's job
 			}
 			seq.Add(1)
@@ -504,23 +504,26 @@ func subscribeFilter(topic, jobID string) func(events.Event) bool {
 	}
 }
 
-// runnerStateMatchesJob reports whether a derived runner state is relevant
-// to a job-filtered subscriber: the job is running on that runner (JobID) OR
-// has just ended there (LastJobID — the parallel case: p1 completing while
-// p2 stays active leaves the state carrying JobID=p2 AND LastJobID=p1, and
-// p1's subscriber must still see that transition, #169 r3).
-func runnerStateMatchesJob(st events.RunnerStateChanged, jobID string) bool {
-	return st.JobID == jobID || st.LastJobID == jobID
+// runnerSnapshotMatchesJob reports whether a runner SNAPSHOT state is
+// relevant to a job-filtered subscriber: the job currently runs there
+// (JobID), or the runner is IDLE and the job is its last ended one (the
+// "is anything still running?" tail). A BUSY state that merely keeps the
+// job in its persistent LastJobID tail is NOT a match — that stale-tail
+// follow-through delivered foreign follow-up frames (#169 r4).
+func runnerSnapshotMatchesJob(st events.RunnerStateChanged, jobID string) bool {
+	return st.JobID == jobID || (st.State == "idle" && st.LastJobID == jobID)
 }
 
-// wsMatchesJobFilter is the single job-filter predicate for the WS path,
-// applied identically by the WithMatch pre-filter and the live loop's
+// wsMatchesJobFilter is the LIVE-stream job-filter predicate, applied
+// identically by the WithMatch pre-filter and the live loop's
 // defense-in-depth check. Raw job events match on their JobID; derived
-// runner states match when the filtered job runs there OR just ended there
-// (a single-value resolution loses the terminal frame in the parallel case).
+// runner states match on the job whose SOURCE EVENT produced the frame
+// (AffectedJobID) — event relevance, not snapshot-state relevance, so a
+// job's subscriber sees its busy frames and its terminal frame but never
+// the follow-up frames of OTHER jobs sharing the runner (#169 r4).
 func wsMatchesJobFilter(e events.Event, jobID string) bool {
 	if rs, ok := e.(events.RunnerStateChanged); ok {
-		return runnerStateMatchesJob(rs, jobID)
+		return rs.AffectedJobID == jobID
 	}
 	return events.JobID(e) == jobID
 }

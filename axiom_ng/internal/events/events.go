@@ -91,6 +91,14 @@ type RunnerStateChanged struct {
 	LastJobID     string `json:"last_job_id,omitempty"`
 	LastTitle     string `json:"last_title,omitempty"`
 	LastEndedAtMs int64  `json:"last_ended_at_ms,omitempty"` // unix ms
+
+	// AffectedJobID is the job whose SOURCE EVENT produced this state change
+	// (the claim/stage/complete/fail being folded). It is the LIVE-stream job
+	// filter key: a job-filtered subscriber receives exactly the frames its
+	// job caused — never follow-up frames of OTHER jobs that merely share the
+	// runner (whose state keeps a stale LastJobID tail around). Unserialized:
+	// it is a router discriminator, not client data (#169 r4).
+	AffectedJobID string `json:"-"`
 }
 
 func (e RunnerStateChanged) event() {}
