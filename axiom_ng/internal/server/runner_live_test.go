@@ -332,3 +332,117 @@ func TestGPULabel(t *testing.T) {
 		}
 	}
 }
+
+// TestRunnerLiveParallelWorkersPerRunner (#169 review F1): the dispatcher
+// allows multiple parallel workers per runner, so a finished job must NOT
+// flip the view to idle while another job is still active on the same
+// runner — the pre-review single-slot model corrupted exactly this case.
+func TestRunnerLiveParallelWorkersPerRunner(t *testing.T) {
+	_, broker, _ := startRunnerView(t)
+	sub := events.NewSubscription().WithMatch(func(e events.Event) bool {
+		_, ok := e.(events.RunnerStateChanged)
+		return ok
+	})
+	broker.Subscribe(sub, 32)
+	done := make(chan struct{})
+	close(done)
+
+	// Two claims on the SAME runner (two parallel workers).
+	broker.Publish(events.JobClaimed{JobID: "p1", WorkerID: "w1", RunnerName: "carrier-gpu0", DocumentTitle: "First"})
+	broker.Publish(events.JobClaimed{JobID: "p2", WorkerID: "w2", RunnerName: "carrier-gpu0", DocumentTitle: "Second"})
+
+	// Both claims produce views; the display shows the most recent claim.
+	st := nextRunnerState(t, sub)
+	if st.State != "busy" {
+		t.Fatalf("after claim 1: %+v", st)
+	}
+	st = nextRunnerState(t, sub)
+	if st.JobID != "p2" {
+		t.Fatalf("display should be the most recent claim, got %+v", st)
+	}
+
+	// THE REVIEW CASE: job 1 completes while job 2 is still active.
+	broker.Publish(events.JobCompleted{JobID: "p1"})
+	st = nextRunnerState(t, sub)
+	if st.State != "busy" || st.JobID != "p2" {
+		t.Fatalf("job1 done while job2 active: state=%s job=%s, want busy/p2 — the view must NOT flip to idle", st.State, st.JobID)
+	}
+	if st.JobsCompleted != 1 {
+		t.Fatalf("completed counter = %d, want 1 (job1 counted while job2 runs)", st.JobsCompleted)
+	}
+
+	// The last active job ending flips to idle; the tail names job 2.
+	broker.Publish(events.JobCompleted{JobID: "p2"})
+	st = nextRunnerState(t, sub)
+	if st.State != "idle" || st.LastJobID != "p2" || st.JobsCompleted != 2 {
+		t.Fatalf("after the last job: %+v, want idle/last=p2/completed=2", st)
+	}
+}
+
+// TestRunnerLiveJobFilterSeesIdleTransition (#169 review F2): a runner
+// subscriber filtered by job_id must see BOTH the busy frame AND the terminal
+// idle transition — the idle frame carries the job in last_job_id.
+func TestRunnerLiveJobFilterSeesIdleTransition(t *testing.T) {
+	_, broker, ts := startRunnerView(t)
+	c := dialWS(t, "ws"+strings.TrimPrefix(ts.URL, "http")+"/api/ws")
+	defer c.Close()
+	if err := c.WriteJSON(map[string]any{"type": "subscribe", "topic": "runners", "job_id": "jf-1"}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if ack := readFrame(t, c); ack.Type != frameSubscribed {
+		t.Fatalf("want ack, got %+v", ack)
+	}
+
+	// Claim + complete of the FILTERED job; another runner's noise in between.
+	broker.Publish(events.JobClaimed{JobID: "other", RunnerName: "noise", DocumentTitle: "Noise"})
+	broker.Publish(events.JobClaimed{JobID: "jf-1", RunnerName: "carrier-gpu0", DocumentTitle: "Filtered"})
+	broker.Publish(events.JobCompleted{JobID: "other"})
+	broker.Publish(events.JobCompleted{JobID: "jf-1"})
+
+	// Busy frame for jf-1 must arrive (the claim).
+	sawBusy, sawIdle := false, false
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	for {
+		_, data, err := c.ReadMessage()
+		if err != nil {
+			break
+		}
+		var f outFrame
+		if err := json.Unmarshal(data, &f); err != nil || f.Type != frameEvent {
+			continue
+		}
+		var st events.RunnerStateChanged
+		if b, err := json.Marshal(f.Payload); err == nil {
+			_ = json.Unmarshal(b, &st)
+		}
+		if st.RunnerName != "carrier-gpu0" {
+			continue // the noise runner is filtered out
+		}
+		if st.JobID == "jf-1" && st.State == "busy" {
+			sawBusy = true
+		}
+		if st.State == "idle" && st.LastJobID == "jf-1" {
+			sawIdle = true
+		}
+		if sawBusy && sawIdle {
+			return // both transitions witnessed through the job filter
+		}
+	}
+	if !sawBusy || !sawIdle {
+		t.Fatalf("job-filtered runner subscriber saw busy=%v idle=%v, want both", sawBusy, sawIdle)
+	}
+}
+
+// TestRunnerLiveWiringOrderInverted (#169 review F3): SetRunnerLive BEFORE
+// SetWSAPI must still wire the WS runners snapshot — both orders end wired.
+func TestRunnerLiveWiringOrderInverted(t *testing.T) {
+	broker := events.NewBroker()
+	s := New(":0", log.Default())
+	view := NewRunnerLive(broker, log.Default())
+	// INVERTED order: deriver first, WS second.
+	s.SetRunnerLive(view)
+	s.SetWSAPI(broker, fakeSnapshot{}, "")
+	if s.ws == nil || s.ws.runnerSnap == nil {
+		t.Fatalf("SetWSAPI after SetRunnerLive left the runners snapshot unwired (order inversion)")
+	}
+}

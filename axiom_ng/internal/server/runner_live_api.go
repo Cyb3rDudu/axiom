@@ -15,7 +15,7 @@ import (
 // stays 404 until this is called.
 func (s *Server) SetRunnerLive(v *RunnerLive) {
 	s.runnerLive = v
-	if s.ws != nil {
+	if s.ws != nil && v != nil {
 		s.ws.runnerSnap = v
 	}
 }

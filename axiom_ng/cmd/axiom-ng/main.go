@@ -347,6 +347,11 @@ func main() {
 		runnerView := server.NewRunnerLive(wsBroker, logger)
 		srv.SetRunnerLive(runnerView)
 		go runnerView.Start(sigCtx.Done())
+		// #169 review: close the startup race in production too — wait until
+		// the deriver's bus subscription is live BEFORE the dispatcher below
+		// can publish its first event (otherwise the very first claim can be
+		// missed and the view starts wrong).
+		runnerView.WaitReady()
 		syncSvc = sync.New(src, rep, cfg.ZoteroBaseURL, cfg.ZoteroLibraryID, logger)
 		srv.SetSyncAPI(syncSvc)
 		srv.SetJobRepo(rep)

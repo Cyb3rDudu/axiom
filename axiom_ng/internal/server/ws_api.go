@@ -104,7 +104,16 @@ func (s *Server) SetWSAPI(broker *events.Broker, snapshot wsSnapshotSource, toke
 		s.ws = nil // unwired: keep /api/ws 404ing rather than nil-deref later
 		return
 	}
-	s.ws = &wsServer{broker: broker, snapshot: snapshot, token: token, log: s.log}
+	// Carry an already-wired runner deriver into the wsServer: SetWSAPI may be
+	// called BEFORE SetRunnerLive or after — both orders must end up wired
+	// (#169 review). Guarded: a typed-nil *RunnerLive must not become a
+	// non-nil interface (the classic trap) — the snapshot stays unwired then.
+	var runnerSnap runnerSnapshot
+	if s.runnerLive != nil {
+		runnerSnap = s.runnerLive
+	}
+	s.ws = &wsServer{broker: broker, snapshot: snapshot, token: token,
+		runnerSnap: runnerSnap, log: s.log}
 }
 
 // clientFrame is the client->server subscribe frame.
@@ -288,8 +297,9 @@ func (s *Server) serveSubscribed(ws *wsServer, conn *websocket.Conn, sub clientF
 			}
 			lastDrops = drops
 		}
-		if sub.JobID != "" && events.JobID(e) != sub.JobID {
-			continue // defense in depth for the job filter
+		if sub.JobID != "" && wsJobIDOf(e) != sub.JobID {
+			continue // defense in depth for the job filter (wsJobIDOf: the
+			// runner-idle frame carries its job in LastJobID, #169 review)
 		}
 		seq.Add(1)
 		if !send(outFrame{
@@ -481,11 +491,26 @@ func subscribeFilter(topic, jobID string) func(events.Event) bool {
 		} else if topic != "all" && eventTopic(e) != topic {
 			return false
 		}
-		if jobID != "" && events.JobID(e) != jobID {
+		if jobID != "" && wsJobIDOf(e) != jobID {
 			return false
 		}
 		return true
 	}
+}
+
+// wsJobIDOf resolves the job a frame-relevant event belongs to. A derived
+// runner state carries its current job — or, once idle, the job it JUST
+// finished in LastJobID: a job-filtered runner subscriber must keep seeing
+// the terminal transition for its job (#169 review — otherwise the client
+// sees busy but never the idle flip).
+func wsJobIDOf(e events.Event) string {
+	if id := events.JobID(e); id != "" {
+		return id
+	}
+	if rs, ok := e.(events.RunnerStateChanged); ok {
+		return rs.LastJobID
+	}
+	return ""
 }
 
 // eventTopic maps a typed bus event to its WS topic.
