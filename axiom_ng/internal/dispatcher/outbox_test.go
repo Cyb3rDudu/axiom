@@ -982,3 +982,22 @@ func TestForceReplaceFrozenBypassKeepsRegularGuard(t *testing.T) {
 		t.Fatalf("delete row done=%d pending=%d, want 1/0", done, pending)
 	}
 }
+
+// TestOutboxDocumentCaptionText pins the #230 index body: caption_text is
+// present when captions exist and ABSENT (not null) otherwise — null would
+// fight text-field mappings and surface machine captions where none exist.
+func TestOutboxDocumentCaptionText(t *testing.T) {
+	row := repo.OutboxRow{SnapshotID: "s", Payload: map[string]any{
+		"document_id": "d", "attachment_id": "a"}}
+	withCaps := repo.OutboxDoc{ChunkID: "c1", ChunkRef: "chunk-0000", Index: 0,
+		Text: "prose", CaptionText: "A bar chart of revenue by year"}
+	doc := outboxDocument(row, withCaps)
+	if doc["caption_text"] != "A bar chart of revenue by year" {
+		t.Fatalf("caption_text must ride the index body, got %v", doc["caption_text"])
+	}
+	without := repo.OutboxDoc{ChunkID: "c2", ChunkRef: "chunk-0001", Index: 1, Text: "prose"}
+	doc2 := outboxDocument(row, without)
+	if _, ok := doc2["caption_text"]; ok {
+		t.Fatalf("uncaptioned chunk must carry NO caption_text field, got %v", doc2["caption_text"])
+	}
+}

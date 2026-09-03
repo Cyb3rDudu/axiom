@@ -1133,3 +1133,37 @@ func TestSearch_SparseArmFilterMinimumShouldMatch(t *testing.T) {
 		t.Fatalf("unfiltered sparse arm must not set minimum_should_match: %s", raw)
 	}
 }
+
+// TestSearch_BM25MultiMatchIncludesCaptions pins the #230 BM25 shape: the
+// arm queries text AND caption_text (machine image captions join retrieval);
+// mutation — dropping caption_text from the fields — fails this test.
+func TestSearch_BM25MultiMatchIncludesCaptions(t *testing.T) {
+	os := newOSServer(t)
+	os.bm25Hits = []osHit{hit("b", "doc", "bm25")}
+	fp := &fakeProcessor{embedVec: []float32{1}}
+	svc := newService(os.URL, fp, fakeDocs{})
+	svc.BM25Arm = true
+	if _, err := svc.Search(context.Background(), Request{Query: "Säulendiagramm Umsatz", TopN: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if os.lastBM25Body == nil {
+		t.Fatal("bm25 arm must have queried OS")
+	}
+	q, _ := os.lastBM25Body["query"].(map[string]any)
+	mm, ok := q["multi_match"].(map[string]any)
+	if !ok {
+		t.Fatalf("bm25 must be a multi_match over text+caption_text, got %v", q)
+	}
+	fields, _ := mm["fields"].([]any)
+	want := map[string]bool{"text": false, "caption_text": false}
+	for _, f := range fields {
+		if name, _ := f.(string); name != "" {
+			want[name] = true
+		}
+	}
+	for f, seen := range want {
+		if !seen {
+			t.Fatalf("bm25 multi_match must include %q (got fields %v)", f, fields)
+		}
+	}
+}

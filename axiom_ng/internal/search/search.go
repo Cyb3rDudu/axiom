@@ -763,8 +763,14 @@ func (c *osClient) sparse(ctx context.Context, weights map[string]float64, size 
 }
 
 func (c *osClient) bm25(ctx context.Context, q string, size int, f *Filters) ([]osHit, error) {
+	// #230: machine image captions join the BM25 arm — a figure is findable
+	// by its visual content. caption_text is absent on uncaptioned chunks;
+	// multi_match simply scores those on text alone.
 	query := map[string]any{
-		"match": map[string]any{"text": q},
+		"multi_match": map[string]any{
+			"query":  q,
+			"fields": []string{"text", "caption_text"},
+		},
 	}
 	if f != nil && len(f.DocumentIDs) > 0 {
 		query = map[string]any{

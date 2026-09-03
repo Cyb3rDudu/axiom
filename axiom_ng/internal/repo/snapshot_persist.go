@@ -34,6 +34,15 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// orEmpty turns a nil string map into an empty one so json.Marshal yields
+// '{}' (never null) for JSONB NOT NULL columns (#230).
+func orEmpty(m map[string]string) map[string]string {
+	if m == nil {
+		return map[string]string{}
+	}
+	return m
+}
+
 // ArtifactRecord is a verified durable artifact (digest/size/path checked by the
 // dispatcher before persist). PersistResult records these transactionally.
 type ArtifactRecord struct {
@@ -45,6 +54,9 @@ type ArtifactRecord struct {
 	Retention string
 	// StoragePath is the final durable path under AXIOM_ARTIFACT_ROOT.
 	StoragePath string
+	// Attributes (#230): additive artifact metadata copied from the
+	// processor's declaration (machine_caption / caption_model / caption_path).
+	Attributes map[string]string
 }
 
 // PersistOptions carries the verified artifacts and the capability dimension
@@ -378,15 +390,19 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 		locJSON, _ := json.Marshal(c.Locator)
 		secJSON, _ := json.Marshal(c.Structure.SectionTitles)
 		imgJSON, _ := json.Marshal(c.ImageRefs)
+		// #230: machine captions ride as JSONB (nil marshals to null →
+		// use the empty map so the NOT NULL column always gets an object).
+		capJSON, _ := json.Marshal(orEmpty(c.ImageCaptions))
 		err = tx.QueryRow(ctx, `
 			INSERT INTO processing_chunks
 			  (snapshot_id, chunk_index, text, locator, section_titles,
-			   start_paragraph_index, end_paragraph_index, token_count, image_refs)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			   start_paragraph_index, end_paragraph_index, token_count,
+			   image_refs, image_captions)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 			RETURNING id::text`,
 			snapshotID, c.Index, c.Text, locJSON, secJSON,
 			ptrToInt(c.Structure.StartParagraphIndex), ptrToInt(c.Structure.EndParagraphIndex),
-			c.TokenCount, imgJSON,
+			c.TokenCount, imgJSON, capJSON,
 		).Scan(&cid)
 		if err != nil {
 			return "", fmt.Errorf("insert chunk %d: %w", c.Index, err)
@@ -488,11 +504,16 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 
 	// 2d. Verified durable artifacts.
 	for _, a := range arts {
+		// #230: artifact attributes (machine_caption et al.) — additive
+		// JSONB; nil marshals to the empty object like the chunk captions.
+		attrJSON, _ := json.Marshal(orEmpty(a.Attributes))
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO processing_artifacts
-			  (snapshot_id, ref, kind, media_type, sha256, size_bytes, retention, storage_path)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-			snapshotID, a.Ref, a.Kind, a.MediaType, a.SHA256, a.SizeBytes, a.Retention, a.StoragePath); err != nil {
+			  (snapshot_id, ref, kind, media_type, sha256, size_bytes, retention,
+			   storage_path, attributes)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			snapshotID, a.Ref, a.Kind, a.MediaType, a.SHA256, a.SizeBytes, a.Retention,
+			a.StoragePath, attrJSON); err != nil {
 			return "", fmt.Errorf("insert artifact %s: %w", a.Ref, err)
 		}
 	}

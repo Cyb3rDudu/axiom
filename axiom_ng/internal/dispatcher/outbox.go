@@ -116,6 +116,9 @@ func (c *openSearchClient) ensureIndex(ctx context.Context, dim int) error {
 		if err := c.ensureSparseMapping(ctx); err != nil {
 			return err
 		}
+		if err := c.ensureCaptionMapping(ctx); err != nil {
+			return err
+		}
 		c.ensured = true
 		c.warnIfStrandedKnn(ctx)
 		return nil
@@ -148,6 +151,9 @@ func (c *openSearchClient) ensureIndex(ctx context.Context, dim int) error {
 	// and ensured flips only on success so a failed mapping PUT retries.
 	if code == http.StatusBadRequest && bytes.Contains(respBody, []byte("already exists")) {
 		if err := c.ensureSparseMapping(ctx); err != nil {
+			return err
+		}
+		if err := c.ensureCaptionMapping(ctx); err != nil {
 			return err
 		}
 		c.ensured = true
@@ -408,6 +414,11 @@ func outboxDocument(row repo.OutboxRow, doc repo.OutboxDoc) map[string]any {
 	if doc.Sparse != nil {
 		out["sparse"] = doc.Sparse
 	}
+	// #230: machine captions as BM25-only text — absent (not null) when
+	// nothing was captioned; never in _source, never citable.
+	if doc.CaptionText != "" {
+		out["caption_text"] = doc.CaptionText
+	}
 	return out
 }
 
@@ -437,6 +448,24 @@ func (c *openSearchClient) ensureSparseMapping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return c.putMapping(ctx, "sparse", body)
+}
+
+// ensureCaptionMapping adds the #230 caption_text field (plain text —
+// BM25 arm only) to an existing index, same additive pattern as sparse R5.
+func (c *openSearchClient) ensureCaptionMapping(ctx context.Context) error {
+	body, err := json.Marshal(map[string]any{
+		"properties": map[string]any{
+			"caption_text": map[string]any{"type": "text"},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return c.putMapping(ctx, "caption_text", body)
+}
+
+func (c *openSearchClient) putMapping(ctx context.Context, what string, body []byte) error {
 	code, respBody, err := c.do(ctx, http.MethodPut, "/"+c.index+"/_mapping", body)
 	if err != nil {
 		return err
@@ -444,5 +473,5 @@ func (c *openSearchClient) ensureSparseMapping(ctx context.Context) error {
 	if code >= 200 && code < 300 {
 		return nil
 	}
-	return fmt.Errorf("put sparse mapping: HTTP %d: %s", code, truncate(respBody, 200))
+	return fmt.Errorf("put %s mapping: HTTP %d: %s", what, code, truncate(respBody, 200))
 }

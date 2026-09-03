@@ -57,19 +57,30 @@ type Artifact struct {
 	SHA256    string `json:"sha256"`
 	SizeBytes int64  `json:"size_bytes"`
 	Retention string `json:"retention"`
+	// Attributes (#230): additive artifact metadata — machine_caption /
+	// caption_model / caption_path ride here for extracted_image artifacts.
+	// MUST stay in this struct: the persist boundary re-marshals from the
+	// typed struct and silently drops unknown fields (W9 lesson).
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
 // Chunk is an ordered text span with provenance (§11).
 type Chunk struct {
-	Ref        string          `json:"ref"`
-	Index      int             `json:"index"`
-	Text       string          `json:"text"`
-	Locator    *Locator        `json:"locator"`
-	Structure  ChunkStructure  `json:"structure"`
-	TokenCount int             `json:"token_count"`
-	ImageRefs  []string        `json:"image_refs"`
-	Embeddings ChunkEmbeddings `json:"embeddings"`
-	Metadata   map[string]any  `json:"metadata"`
+	Ref        string         `json:"ref"`
+	Index      int            `json:"index"`
+	Text       string         `json:"text"`
+	Locator    *Locator       `json:"locator"`
+	Structure  ChunkStructure `json:"structure"`
+	TokenCount int            `json:"token_count"`
+	ImageRefs  []string       `json:"image_refs"`
+	// ImageCaptions (#230): machine captions of the referenced images
+	// (artifact ref → caption). ADDITIONAL indexable text — never part of
+	// Text (a caption is a machine claim, not citation prose). MUST stay
+	// in this struct: the persist boundary re-marshals from the typed
+	// struct and silently drops unknown fields (W9 lesson).
+	ImageCaptions map[string]string `json:"image_captions,omitempty"`
+	Embeddings    ChunkEmbeddings   `json:"embeddings"`
+	Metadata      map[string]any    `json:"metadata"`
 }
 
 // #173 page_source trust levels — stamped by the runner's page_trust

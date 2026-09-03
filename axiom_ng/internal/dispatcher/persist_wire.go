@@ -162,10 +162,13 @@ func (d *Dispatcher) stageOneArtifact(ctx context.Context, jobID string, a proce
 		_ = os.Remove(staging)
 		return repo.ArtifactRecord{}, fmt.Errorf("commit artifact %q: %w", a.Ref, err)
 	}
+	// #230: additive artifact attributes ride from the declared result —
+	// the stored BYTES are verified above; attributes are metadata, not
+	// part of the digest contract.
 	return repo.ArtifactRecord{
 		Ref: a.Ref, Kind: a.Kind, MediaType: a.MediaType,
 		SHA256: a.SHA256, SizeBytes: a.SizeBytes, Retention: a.Retention,
-		StoragePath: finalPath,
+		StoragePath: finalPath, Attributes: a.Attributes,
 	}, nil
 }
 

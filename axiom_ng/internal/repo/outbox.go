@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -36,14 +37,18 @@ type OutboxRow struct {
 
 // OutboxDoc is one indexable chunk document for a snapshot.
 type OutboxDoc struct {
-	ChunkID   string
-	ChunkRef  string
-	Index     int
-	Text      string
-	Locator   map[string]any
-	Sections  []string
-	Tokens    int
-	Embedding []float64 // nil when the snapshot has no dense embedding
+	ChunkID  string
+	ChunkRef string
+	Index    int
+	Text     string
+	// CaptionText (#230): concatenated machine captions of the chunk's
+	// referenced images — BM25-only field (multi_match text+caption_text),
+	// never in _source, never citable. Empty when nothing captioned.
+	CaptionText string
+	Locator     map[string]any
+	Sections    []string
+	Tokens      int
+	Embedding   []float64 // nil when the snapshot has no dense embedding
 	// Sparse is the learned lexical-weights map {token: weight} from
 	// processing_chunk_sparse_embeddings (R5 #135); nil when absent.
 	Sparse map[string]float64
@@ -90,6 +95,7 @@ func (r *Repo) OutboxDocs(ctx context.Context, snapshotID string) ([]OutboxDoc, 
 	rows, err := r.pool.Query(ctx, `
 	SELECT c.id::text, c.chunk_index, c.text, c.locator,
 		       c.section_titles, c.token_count,
+		       c.image_captions::text,
 		       CASE WHEN e.vector IS NULL THEN NULL ELSE e.vector::text END,
 		       CASE WHEN s.values IS NULL THEN NULL ELSE s.values::text END
 	FROM processing_chunks c
@@ -106,13 +112,27 @@ func (r *Repo) OutboxDocs(ctx context.Context, snapshotID string) ([]OutboxDoc, 
 	for rows.Next() {
 		var d OutboxDoc
 		var vec, sp *string
+		var capsRaw *string
 		if err := rows.Scan(&d.ChunkID, &d.Index, &d.Text, &d.Locator,
-			&d.Sections, &d.Tokens, &vec, &sp); err != nil {
+			&d.Sections, &d.Tokens, &capsRaw, &vec, &sp); err != nil {
 			return nil, err
 		}
 		// Contract ref is not persisted (durable identity is id+index); derive
 		// it with the same 0-based scheme the processor emits.
 		d.ChunkRef = fmt.Sprintf("chunk-%04d", d.Index)
+		// #230: image_captions JSONB {ref: caption} → the BM25 caption_text
+		// field. Malformed JSON degrades to no captions (indexing must not
+		// fail on one odd row); captions are an enhancement, never a gate.
+		if capsRaw != nil && *capsRaw != "" && *capsRaw != "{}" {
+			var caps map[string]string
+			if err := json.Unmarshal([]byte(*capsRaw), &caps); err == nil {
+				var parts []string
+				for _, ref := range sortedStringKeys(caps) {
+					parts = append(parts, caps[ref])
+				}
+				d.CaptionText = strings.Join(parts, " ")
+			}
+		}
 		if vec != nil {
 			emb, err := parseVector(*vec)
 			if err != nil {
@@ -130,6 +150,17 @@ func (r *Repo) OutboxDocs(ctx context.Context, snapshotID string) ([]OutboxDoc, 
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// sortedStringKeys gives deterministic caption_text ordering (map
+// iteration is random; the index body must be stable across re-indexes).
+func sortedStringKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // OutboxDocumentID reads the document_id from a row's payload.

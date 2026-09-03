@@ -1574,3 +1574,83 @@ func TestDocumentOneActiveSnapshotUniqueIndex(t *testing.T) {
 		t.Fatalf("rogue second active snapshot must fail on the 0019 index, got: %v", err)
 	}
 }
+
+// TestPersistImageCaptionsRoundTrip pins the #230 persist boundary: artifact
+// attributes (machine_caption et al.) and chunk image_captions survive the
+// typed-struct re-marshal into their JSONB columns, and OutboxDocs exposes
+// the captions as the BM25 caption_text (deterministic ref order).
+// Mutation: dropping ImageCaptions/Attributes from processor.Chunk/Artifact
+// (or the SQL columns) turns this red — the W9 persist-boundary guard.
+func TestPersistImageCaptionsRoundTrip(t *testing.T) {
+	h := newPersistHarness(t, "caps")
+	const dims = 3
+	raw := h.validResultRaw(dims)
+	raw.Artifacts = append(raw.Artifacts, processor.Artifact{
+		Ref: "image-0000", Kind: "extracted_image", MediaType: "image/png",
+		SHA256: "ab12", SizeBytes: 9, Retention: "durable_if_referenced",
+		Attributes: map[string]string{
+			"machine_caption": "A line chart of training loss",
+			"caption_model":   "fake-vision-1",
+			"caption_path":    "cloud",
+		},
+	})
+	raw.Chunks[0].ImageRefs = []string{"image-0000"}
+	raw.Stats.Artifacts = 2
+	b, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the PYTHON emitter (#230): inject image_captions at the JSON
+	// level, NOT via the typed field — this is the true W9 probe shape (a
+	// tag rename / struct-field drop on the Go side must lose the field and
+	// turn this test red, exactly like a real runner result would).
+	b = []byte(strings.Replace(string(b), `"token_count":4`,
+		`"token_count":4,"image_captions":{"image-0000":"A line chart of training loss"}`, 1))
+	if !strings.Contains(string(b), "image_captions") {
+		t.Fatal("injection anchor missing")
+	}
+	imgRec := ArtifactRecord{
+		Ref: "image-0000", Kind: "extracted_image", MediaType: "image/png",
+		SHA256: "ab12", SizeBytes: 9, Retention: "durable_if_referenced",
+		StoragePath: "/tmp/img.png",
+		Attributes: map[string]string{
+			"machine_caption": "A line chart of training loss",
+			"caption_model":   "fake-vision-1",
+			"caption_path":    "cloud",
+		},
+	}
+	snapID, err := h.persist(t, b, dims, append(markdownArtifact(), imgRec))
+	if err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	ctx := context.Background()
+	// artifact attributes column
+	var attrs string
+	if err := h.pool.QueryRow(ctx, `
+		SELECT attributes::text FROM processing_artifacts
+		WHERE snapshot_id=$1 AND ref='image-0000'`, snapID).Scan(&attrs); err != nil {
+		t.Fatalf("artifact attributes: %v", err)
+	}
+	if !strings.Contains(attrs, "machine_caption") ||
+		!strings.Contains(attrs, "A line chart of training loss") {
+		t.Fatalf("artifact attributes lost: %s", attrs)
+	}
+	// chunk image_captions column
+	var caps string
+	if err := h.pool.QueryRow(ctx, `
+		SELECT image_captions::text FROM processing_chunks
+		WHERE snapshot_id=$1 AND chunk_index=0`, snapID).Scan(&caps); err != nil {
+		t.Fatalf("chunk image_captions: %v", err)
+	}
+	if !strings.Contains(caps, "A line chart of training loss") {
+		t.Fatalf("chunk captions lost: %s", caps)
+	}
+	// OutboxDocs exposes caption_text for the BM25 arm
+	docs, err := h.rep.OutboxDocs(ctx, snapID)
+	if err != nil {
+		t.Fatalf("outbox docs: %v", err)
+	}
+	if len(docs) != 1 || docs[0].CaptionText != "A line chart of training loss" {
+		t.Fatalf("caption_text must ride the outbox doc, got %+v", docs)
+	}
+}
