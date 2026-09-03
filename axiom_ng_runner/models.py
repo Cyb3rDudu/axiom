@@ -69,6 +69,10 @@ class ProcessingOptions(BaseModel):
     compute_sparse_embeddings: bool = False
     extract_entities: bool = False
     extract_relationships: bool = False
+    # #230: machine captions for extracted_image artifacts (default off —
+    # the profile is the admin gate; without the flag behavior is
+    # byte-identical).
+    extract_image_captions: bool = False
 
 
 class ProcessRequest(BaseModel):

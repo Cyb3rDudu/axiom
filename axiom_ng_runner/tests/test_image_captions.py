@@ -1,0 +1,223 @@
+"""#230 image_captions stage: hash gate, budgets, honest partial, profile
+gate (byte-identical off), artifact attributes, chunk image_captions."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from axiom_ng_runner.compute_core import image_captioner as ic
+from axiom_ng_runner.runner import (
+    _adapt_chunk,
+    _caption_augmentation,
+    _caption_images_stage,
+)
+
+
+class FakeCaptioner:
+    model = "fake-vision-1"
+
+    def __init__(self, fail: bool = False):
+        self.calls = 0
+        self.fail = fail
+
+    def caption(self, image_bytes: bytes, media_type: str) -> tuple[str, str]:
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("model exploded")
+        return f"Chart showing revenue for {len(image_bytes)} bytes", "cloud"
+
+
+def _art(ref: str, sha: str) -> dict:
+    return {"ref": ref, "kind": "extracted_image", "media_type": "image/png",
+            "sha256": sha, "size_bytes": 10, "retention": "durable_if_referenced"}
+
+
+def _run(arts, chunks, tmp_path, captioner, budget=900.0, timeout=60.0, cache=None,
+         flag=True):
+    # image files on disk (the stage reads work_dir/artifacts/<ref>)
+    art_dir = tmp_path / "artifacts"
+    art_dir.mkdir(exist_ok=True)
+    for a in arts:
+        (art_dir / a["ref"]).write_bytes(b"x" * 8)
+    stage_completion: dict = {}
+    import axiom_ng_runner.config as cfg
+
+    class _FakeSettingsModule:
+        @staticmethod
+        def get():
+            st = cfg.load_settings()
+            object.__setattr__(st, "image_captions_budget_seconds", budget)
+            object.__setattr__(st, "image_caption_timeout_seconds", timeout)
+            return st
+    import axiom_ng_runner.runner as runner_mod
+    real_settings = runner_mod.settings
+    runner_mod.settings = _FakeSettingsModule  # type: ignore[assignment]
+    try:
+        import os
+        old_cache = os.environ.get("AXIOM_CAPTION_CACHE_DIR")
+        os.environ["AXIOM_CAPTION_CACHE_DIR"] = str(cache or (tmp_path / "cache"))
+        old_resolve = ic.resolve_captioner
+        ic.resolve_captioner = lambda: captioner  # type: ignore[assignment]
+        try:
+            ran = _caption_images_stage(
+                {"extract_image_captions": flag}, arts, chunks, tmp_path,
+                stage_completion, None, lambda cds: None,
+            )
+        finally:
+            ic.resolve_captioner = old_resolve  # type: ignore[assignment]
+            if old_cache is None:
+                del os.environ["AXIOM_CAPTION_CACHE_DIR"]
+            else:
+                os.environ["AXIOM_CAPTION_CACHE_DIR"] = old_cache
+    finally:
+        runner_mod.settings = real_settings  # type: ignore[assignment]
+    return ran, stage_completion
+
+
+def test_profile_off_runs_nothing():
+    arts = [_art("image-0000", "aa" * 32)]
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+    ran, sc = _run(arts, chunks, Path("/tmp"), FakeCaptioner(), flag=False)
+    assert ran is None
+    assert sc == {}
+    assert "machine_caption" not in arts[0]
+
+
+def test_captions_land_on_artifact_and_chunk(tmp_path):
+    arts = [_art("image-0000", "aa" * 32), _art("image-0001", "bb" * 32)]
+    chunks = [
+        {"text": "t1", "metadata": {"image_refs": ["image-0000"]}},
+        {"text": "t2", "metadata": {"image_refs": []}},
+    ]
+    ran, sc = _run(arts, chunks, tmp_path, FakeCaptioner())
+    assert ran is True
+    assert sc["image_captions"] is True and sc["image_captions_reason"] is None
+    assert arts[0]["caption_model"] == "fake-vision-1"
+    assert arts[0]["caption_path"] == "cloud"
+    assert "machine_caption" in arts[0] and "machine_caption" in arts[1]
+    assert chunks[0]["metadata"]["image_captions"] == {
+        "image-0000": arts[0]["machine_caption"]}
+    assert "image_captions" not in chunks[1]["metadata"]
+
+
+def test_hash_gate_second_run_captions_nothing(tmp_path):
+    arts = [_art("image-0000", "aa" * 32)]
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+    cap = FakeCaptioner()
+    _run(arts, chunks, tmp_path, cap)
+    assert cap.calls == 1
+    # second run, fresh captioner instance, same cache dir: cache hit
+    arts2 = [_art("image-0000", "aa" * 32)]
+    chunks2 = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+    cap2 = FakeCaptioner()
+    _run(arts2, chunks2, tmp_path, cap2)
+    assert cap2.calls == 0
+    assert arts2[0]["machine_caption"] == arts[0]["machine_caption"]
+
+
+def test_budget_abort_leaves_rest_empty(tmp_path):
+    # zero budget: deadline passed before image 1 → honest partial
+    arts = [_art("image-0000", "aa" * 32)]
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+    ran, sc = _run(arts, chunks, tmp_path, FakeCaptioner(), budget=0.000001)
+    assert ran is True
+    assert sc["image_captions"] is False
+    assert sc["image_captions_reason"] == "STAGE_BUDGET_EXCEEDED"
+    # no placeholder, no caption — the honest empty
+    assert "machine_caption" not in arts[0]
+    assert "image_captions" not in chunks[0]["metadata"]
+
+
+def test_all_calls_failed_reason(tmp_path):
+    arts = [_art("image-0000", "aa" * 32)]
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+    ran, sc = _run(arts, chunks, tmp_path, FakeCaptioner(fail=True))
+    assert ran is True
+    assert sc["image_captions_reason"] == "CAPTION_CALLS_FAILED"
+    assert "machine_caption" not in arts[0]
+
+
+def test_no_captioner_provisioned_reason(tmp_path):
+    arts = [_art("image-0000", "aa" * 32)]
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+    ran, sc = _run(arts, chunks, tmp_path, None)
+    assert ran is True
+    assert sc["image_captions_reason"] == "CAPTIONER_NOT_PROVISIONED"
+
+
+def test_augmentation_is_machine_marked_never_text():
+    c = {"metadata": {"image_captions": {"image-0000": "A bar chart of sales"}}}
+    aug = _caption_augmentation(c)
+    assert "machine-generated" in aug and "A bar chart of sales" in aug
+    assert _caption_augmentation({"metadata": {}}) == ""
+    # chunk text stays pure: augmentation never touches chunk["text"]
+    assert "text" not in c or c.get("text") is None
+
+
+def test_adapt_chunk_carries_and_omits_captions():
+    base = {"text": "t", "metadata": {"image_refs": ["image-0000"],
+                                      "image_captions": {"image-0000": "cap"}}}
+    out = _adapt_chunk(base, 0, {}, None, None)
+    assert out["image_captions"] == {"image-0000": "cap"}
+    out2 = _adapt_chunk({"text": "t", "metadata": {}}, 0, {}, None, None)
+    assert "image_captions" not in out2
+
+
+def test_cloud_captioner_request_shape(monkeypatch):
+    """The cloud client must send ONE OpenAI-compatible chat request with a
+    base64 data-URL image and the calibrated prompt; the API key rides the
+    Authorization header only."""
+    captured = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "  A line chart.  "}}]}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured.update(url=url, json=json, headers=headers)
+        return FakeResp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", fake_post)
+    cap = ic.CloudCaptioner("http://localhost:9999/v1/", "sk-test", "test-vision")
+    caption, path = cap.caption(b"\x89PNG", "image/png")
+    assert caption == "A line chart." and path == "cloud"
+    assert captured["url"] == "http://localhost:9999/v1/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer sk-test"
+    content = captured["json"]["messages"][0]["content"]
+    assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert content[1]["text"] == ic.CAPTION_PROMPT
+
+
+def test_cloud_captioner_empty_content_raises(monkeypatch):
+    import httpx
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": ""}}]}
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: FakeResp())
+    cap = ic.CloudCaptioner("http://x", "k", "m")
+    with pytest.raises(ValueError):
+        cap.caption(b"x", "image/png")
+
+
+def test_caption_image_cache_roundtrip(tmp_path):
+    (tmp_path / "img.bin").write_bytes(b"imgdata")
+    cap = FakeCaptioner()
+    rec = ic.caption_image(cap, tmp_path / "img.bin", "image/png",
+                           "cc" * 32, tmp_path / "cache", 5.0)
+    assert rec == {"caption": rec["caption"], "model": "fake-vision-1", "path": "cloud"}
+    assert json.loads((tmp_path / "cache" / ("cc" * 32 + ".json")).read_text()) == rec
+    # hash-gated second call: no captioner interaction
+    rec2 = ic.caption_image(None, tmp_path / "img.bin", "image/png",
+                            "cc" * 32, tmp_path / "cache", 5.0)
+    assert rec2 == rec and cap.calls == 1

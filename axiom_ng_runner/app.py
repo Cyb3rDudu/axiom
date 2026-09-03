@@ -165,6 +165,9 @@ def _capabilities() -> Capabilities:
             "sparse_embeddings": True,
             "entities": True,
             "entity_relationships": True,
+            # #230: capability is declared when the flag exists; the
+            # per-job gate stays processing.extract_image_captions.
+            "image_captions": True,
             "query_embedding": True,
             "reranking": True,
             "pdf_preflight": True,  # #175: /v1/pdf/preflight reads PDF bytes → quality gate

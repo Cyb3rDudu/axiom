@@ -365,6 +365,10 @@ def _adapt_chunk(
         },
         "token_count": meta.get("token_count", 0),
         "image_refs": _normalize_image_refs(meta.get("image_refs", [])),
+        # #230: machine captions of referenced images (ref → caption) —
+        # ADDITIONAL indexable text, never part of chunk.text (a caption is
+        # a machine claim, not book prose). Absent when nothing captioned.
+        "image_captions": meta.get("image_captions") or None,
         # Durchreichen echter Embeddings aus dem Original-Chunk (z.B. von
         # TextEmbedder.embed_chunks), damit _build_reference_result sie nicht
         # mit dem Reference-Stub überschreibt.
@@ -376,6 +380,9 @@ def _adapt_chunk(
     # locator here would trip the §11 gate and terminal-fail the job.
     _stamp_page_source(out["locator"], page_source_map)
     _stamp_chapter(out["locator"], page_chapter_map, meta.get("chapter"))
+    # #230: omit instead of null — an uncaptioned chunk carries no field.
+    if not out.get("image_captions"):
+        out.pop("image_captions", None)
     return out
 
 
@@ -468,6 +475,141 @@ def _reference_relationships(
             }
         )
     return rels
+
+
+# ── #230: image captioning stage ──────────────────────────────────────────
+
+
+def _caption_augmentation(chunk: dict[str, Any]) -> str:
+    """The caption block appended to a chunk's EMBEDDING input (never to
+    chunk.text). Machine-marked so downstream debugging never mistakes it
+    for book prose."""
+    caps = chunk.get("metadata", {}).get("image_captions") or {}
+    if not caps:
+        return ""
+    lines = [f"[machine-generated image caption: {c}]" for c in caps.values()]
+    return "\n" + "\n".join(lines)
+
+
+def _reembed_captioned(chunk_dicts: list[dict[str, Any]]) -> None:
+    """Re-embed chunks whose images got captioned so the DENSE arm sees the
+    caption text (#230). The augmented text goes into the embedding input
+    only — chunk text in storage stays pure."""
+    affected = [c for c in chunk_dicts if _caption_augmentation(c)]
+    if not affected:
+        return
+    aug = [
+        {"text": c["text"] + _caption_augmentation(c),
+         "metadata": c.get("metadata", {})}
+        for c in affected
+    ]
+    try:
+        from axiom_ng_runner.compute_core.embedder import TextEmbedder
+
+        TextEmbedder().embed_chunks(aug)
+    except Exception as err:  # noqa: BLE001 — reference backend / no model
+        log.warning("caption re-embed skipped (%s) — dense arm keeps the "
+                    "pre-caption vectors", err)
+        return
+    for c, a in zip(affected, aug):
+        raw = a.get("embeddings")
+        if raw:
+            c["embeddings"] = raw
+
+
+def _caption_images_stage(
+    proc_opt: dict[str, Any],
+    image_artifacts: list[dict[str, Any]] | None,
+    chunk_dicts: list[dict[str, Any]],
+    work_dir: Path,
+    stage_completion: dict[str, Any],
+    set_progress: Callable[[int, int, str], None] | None,
+    reembed: Callable[[list[dict[str, Any]]], None],
+) -> dict[str, Any] | None:
+    """#230 stage: caption every extracted_image artifact under the hash
+    gate + budgets; attach machine_caption/caption_model/caption_path to
+    the artifact and ref→caption maps to referencing chunks.
+
+    Returns True when the stage ran (captioned or honestly documented why
+    not — the caller rebuilds the result); None when the profile flag is
+    off (caller keeps the pre-stage result — byte-identical, the
+    passenger proof).
+    """
+    if not proc_opt.get("extract_image_captions"):
+        return None
+    stage_completion["image_captions"] = False
+    stage_completion["image_captions_reason"] = None
+    from axiom_ng_runner.compute_core.image_captioner import (
+        DEFAULT_CACHE_DIR,
+        caption_image,
+        resolve_captioner,
+    )
+
+    # Chunk image_refs are already normalized to image-XXXX contract refs
+    # (the normalization ran before the entities stage); captioned refs
+    # map onto referencing chunks through them.
+    captioned: dict[str, dict[str, str]] = {}
+    targets = [a for a in (image_artifacts or []) if a.get("kind") == "extracted_image"]
+    captioner = resolve_captioner()
+    if captioner is None:
+        stage_completion["image_captions_reason"] = "CAPTIONER_NOT_PROVISIONED"
+        log.warning("image_captions: no captioner configured "
+                    "(AXIOM_CAPTION_API_BASE/_KEY or AXIOM_CAPTION_LOCAL_MODEL_DIR)")
+    elif not targets:
+        stage_completion["image_captions"] = True  # nothing to caption
+    else:
+        s = settings.get()
+        budget = s.image_captions_budget_seconds
+        per_image = s.image_caption_timeout_seconds
+        deadline = (time.monotonic() + budget) if budget > 0 else None
+        cache_dir = Path(os.getenv("AXIOM_CAPTION_CACHE_DIR", str(DEFAULT_CACHE_DIR)))
+        done = 0
+        for art in targets:
+            done += 1
+            if set_progress is not None:
+                set_progress(done, len(targets), "images")
+            if deadline is not None and time.monotonic() >= deadline:
+                # Honest partial (#241): what is captioned stays, the rest
+                # stays EMPTY — never placeholders.
+                stage_completion["image_captions_reason"] = "STAGE_BUDGET_EXCEEDED"
+                log.warning("image_captions budget (%ss) exceeded at %d/%d images",
+                            budget, done - 1, len(targets))
+                break
+            img_path = work_dir / "artifacts" / art["ref"]
+            timeout = per_image
+            if deadline is not None:
+                timeout = min(per_image, max(deadline - time.monotonic(), 0.0))
+            rec = caption_image(
+                captioner, img_path, art.get("media_type", "image/jpeg"),
+                art["sha256"], cache_dir, timeout,
+            )
+            if rec is not None:
+                art["machine_caption"] = rec["caption"]
+                art["caption_model"] = rec["model"]
+                art["caption_path"] = rec["path"]
+                captioned[art["ref"]] = rec
+        if stage_completion["image_captions_reason"] is None:
+            if captioned:
+                stage_completion["image_captions"] = True
+            else:
+                # every call failed (network/model) — honest named miss
+                stage_completion["image_captions_reason"] = "CAPTION_CALLS_FAILED"
+    if captioned:
+        for c in chunk_dicts:
+            refs = (c.get("metadata", {}) or {}).get("image_refs") or []
+            refs = [_ref_id(r) for r in refs]
+            hits = {r: captioned[r]["caption"] for r in refs if r in captioned}
+            if hits:
+                c.setdefault("metadata", {})["image_captions"] = hits
+        reembed(chunk_dicts)
+    return True  # stage ran (caller rebuilds the result)
+
+
+def _ref_id(r: Any) -> str:
+    """image_refs entries may be plain refs or {path, alt_text} dicts."""
+    if isinstance(r, dict):
+        return str(r.get("path", ""))
+    return str(r)
 
 
 # ── L6: real entity/relationship extraction (GLiNER + mREBEL) ────────────
@@ -1500,6 +1642,20 @@ def _real_pipeline(
                         "completing without relationships",
                         budget, len(chunk_dicts))
         stage_completion["relationships"] = not budget_exceeded
+        result = _finish(real_relationships)
+
+    # #230 image_captions: machine captions for extracted_image artifacts,
+    # LAST stage before assemble (budget-protected, hash-gated, honest
+    # partial). Captions ride as artifact attributes + chunk
+    # image_captions; chunk.text stays pure (machine claims are never
+    # citation prose). Profile-gated — off means byte-identical result.
+    if _caption_images_stage(
+        proc_opt, image_artifacts, chunk_dicts, work_dir,
+        stage_completion, set_progress, _reembed_captioned,
+    ):
+        # the stage mutated artifacts/chunks/stage_completion in place —
+        # rebuild so caption fields reach the result (off-flag → no call,
+        # byte-identical result: the passenger proof).
         result = _finish(real_relationships)
 
     enter("assemble")

@@ -44,6 +44,12 @@ class Settings:
     # budget ends the stage HONESTLY (partial result, named reason) instead
     # of an eternal lease. 0 disables the budget.
     relationships_budget_seconds: float = 900.0
+    # #230: wall-clock budget for the image_captions stage (seconds) and a
+    # per-image timeout. A hung model call costs minutes, never the
+    # pipeline; exceeding the budget ends the stage HONESTLY (uncaptioned
+    # images stay empty — no placeholders, #241 discipline). 0 disables.
+    image_captions_budget_seconds: float = 900.0
+    image_caption_timeout_seconds: float = 60.0
 
     @property
     def bind(self) -> tuple[str, int]:
@@ -102,6 +108,12 @@ def load_settings() -> Settings:
         epubcheck_cmd=os.getenv("AXIOM_PROCESSOR_EPUBCHECK_CMD", ""),
         relationships_budget_seconds=_env_float(
             "AXIOM_PROCESSOR_RELATIONSHIPS_BUDGET_SECONDS", 900.0
+        ),
+        image_captions_budget_seconds=_env_float(
+            "AXIOM_PROCESSOR_IMAGE_CAPTIONS_BUDGET_SECONDS", 900.0
+        ),
+        image_caption_timeout_seconds=_env_float(
+            "AXIOM_PROCESSOR_IMAGE_CAPTION_TIMEOUT_SECONDS", 60.0
         ),
     )
 
