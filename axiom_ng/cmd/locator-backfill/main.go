@@ -4,6 +4,12 @@
 // the safety guarantees (snapshot freeze, one transaction, doc-update
 // re-index, refuse-never-guess) live in internal/backfill.
 //
+// DORMANT since #245 (decision 2026-09-03): EPUB citations are always APA 7
+// sections; EPUB page fields never reach the client contract, and this
+// backfill is not operated. The CLI stays available (dormant, revivable —
+// see #245) for any future experiment; it is deliberately absent from the
+// operations runbooks.
+//
 // Env: AXIOM_DATABASE_URL (required), AXIOM_OPENSEARCH_URL (+ optional
 // AXIOM_OPENSEARCH_USERNAME/PASSWORD) required for real runs, AXIOM_RUNNER_
 // PYTHON (runner venv python; default: repo-relative axiom_ng_runner/.venv).
