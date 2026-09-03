@@ -155,9 +155,13 @@ class Chunker:
                     # text. Excluded so chapter ordinals match the book's
                     # TOC (a +1 shift would make every "Chap. N" cite point
                     # one chapter early).
+                    # mirror the main loop's first-line extraction exactly
+                    # (strip() then line split then strip()) — divergent
+                    # matchers would fire the rule on one and miss on the
+                    # other (review W2)
                     nxt = ""
                     if i + 1 < len(paragraphs):
-                        nxt = paragraphs[i + 1].strip().split('\n')[0]
+                        nxt = paragraphs[i + 1].strip().split('\n')[0].strip()
                     is_title_page = (
                         i == 0
                         and bool(nxt)

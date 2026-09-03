@@ -161,3 +161,16 @@ def test_title_page_h1_not_chapter_one():
     md2 = _md("# Chapter One", PARA, "# Chapter Two", PARA)
     nums = sorted({c["metadata"]["chapter_number"] for c in _chunk(md2)})
     assert nums == [1, 2], nums
+
+
+def test_title_rule_indented_next_heading():
+    """#232 round-3 review W2: the lookahead must match the main loop
+    exactly — an indented next heading ("  # Chapter One", legal markdown)
+    still identifies the paragraph-0 h1 as a title page."""
+    md2 = "# Book Title\n\n  # Chapter One\n\n" + PARA + "\n\n# Chapter Two\n\n" + PARA
+    for c in _chunk(md2):
+        m = c["metadata"]
+        assert m.get("chapter_number") in (1, 2, None), m
+    nums = [c["metadata"]["chapter_number"] for c in _chunk(md2)
+            if c["metadata"].get("chapter_number")]
+    assert nums == [1, 2], nums

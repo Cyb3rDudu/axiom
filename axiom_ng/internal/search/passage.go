@@ -178,8 +178,9 @@ func (s *Service) GetPassage(ctx context.Context, chunkID string) (*Passage, err
 	// #245 consumer cut: EPUB page data never reaches the client — the
 	// citation form for EPUBs is ALWAYS the APA section. The stored
 	// paragraph_pages stay internal (dormant), exactly like locatorView.
+	lv := locatorView(c.Locator, c.Sections)
 	pp := parseParagraphPages(c.Locator)
-	if locatorView(c.Locator, c.Sections).Kind == "epub_cfi" {
+	if lv.Kind == "epub_cfi" {
 		pp = nil
 	}
 
@@ -187,7 +188,7 @@ func (s *Service) GetPassage(ctx context.Context, chunkID string) (*Passage, err
 		ChunkID: c.ChunkID, DocumentID: c.DocumentID, SnapshotID: c.SnapshotID,
 		AttachmentID: c.AttachmentID, ChunkIndex: c.ChunkIndex,
 		Text: c.Text, Section: c.Sections,
-		Locator:   locatorView(c.Locator, c.Sections),
+		Locator:   lv,
 		Source:    meta.View(c.DocumentID),
 		Neighbors: neighbors,
 
