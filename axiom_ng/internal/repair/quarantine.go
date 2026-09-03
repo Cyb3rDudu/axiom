@@ -42,7 +42,9 @@ func Quarantine(root, zoteroKey, sourcePath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("quarantine open source: %w", err)
 	}
-	defer src.Close()
+	// Read-side handle: a failed Close loses nothing (the copy already
+	// happened) — explicitly nulled (#244 errcheck).
+	defer func() { _ = src.Close() }()
 	out, err := os.Create(dst)
 	if err != nil {
 		return "", fmt.Errorf("quarantine create: %w", err)

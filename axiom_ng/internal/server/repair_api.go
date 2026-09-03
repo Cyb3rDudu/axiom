@@ -277,7 +277,9 @@ func readHealedFile(r *http.Request) ([]byte, string, error) {
 			return nil, "", fmt.Errorf("auto-apply ohne geheilte Datei: %w", err)
 		}
 	}
-	defer file.Close()
+	// Read-side handle: ReadAll already consumed the file; a failed Close
+	// loses nothing — explicitly nulled (#244 errcheck).
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(file)
 	if err != nil {
 		return nil, "", fmt.Errorf("healed Datei lesen: %w", err)
