@@ -1447,3 +1447,112 @@ func TestRetryableFailureStaysInfraTrack(t *testing.T) {
 		t.Fatalf("retryable failure must not create a repair case: %v", rc)
 	}
 }
+
+// repairCaseStatus returns the status of the open repair case for a job's
+// attachment ("" when none) — the #238 auto-queue assertions read it.
+func (h *dispatchHarness) repairCaseStatus(t *testing.T, jobID string) string {
+	t.Helper()
+	var status string
+	err := h.pool.QueryRow(context.Background(), `
+		SELECT c.status::text FROM repair_cases c
+		JOIN ingest_jobs j ON j.attachment_id = c.attachment_id
+		WHERE j.id=$1 AND c.status IN ('rejected','queued','in_repair')`, jobID).Scan(&status)
+	if err != nil {
+		return ""
+	}
+	return status
+}
+
+// TestPreflightRepairableAutoQueues (#238): a 🔴 reparierbar preflight
+// rejection auto-queues its repair case at creation — no operator, no
+// manual repair-API call. The queue hop is the missing link from the
+// issue: cases were created but never reached the fixer invoker.
+func TestPreflightRepairableAutoQueues(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "Q238a", 3)
+	if err := os.WriteFile("/tmp/x.pdf", []byte(testMinimalPDF), 0o600); err != nil {
+		t.Fatalf("write source pdf: %v", err)
+	}
+	fp := newFakeProcessor(t)
+	fp.preflightReport = &map[string]any{
+		"contract_version": "1.0",
+		"source_name":      "inline",
+		"ok":               false,
+		"finding":          "🔴 reparierbar",
+		"reason":           "Label-Lücken",
+		"details": map[string]any{
+			"pages": 1, "text_layer": true,
+			"suspicious_patterns": []any{"Label-Serie unterbrochen"},
+		},
+	}
+	d := newDispatcher(t, h, fp, Config{PreflightEnabled: true})
+	runFor(t, d, context.Background(), 6*time.Second)
+
+	if got := h.jobStatus(t, jobID); got != "skipped" {
+		t.Fatalf("status = %q, want skipped (preflight-red)", got)
+	}
+	if got := h.repairCaseStatus(t, jobID); got != "queued" {
+		t.Fatalf("repair case status = %q, want queued (auto-queue, #238)", got)
+	}
+}
+
+// TestPreflightUnpaginatedStaysRejected (#238 counter-test): the design
+// nail — unpaginierte Originale gehen NIE in die Reparatur-Schleife. The
+// auto-queue must not touch them.
+func TestPreflightUnpaginatedStaysRejected(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "Q238b", 3)
+	if err := os.WriteFile("/tmp/x.pdf", []byte(testMinimalPDF), 0o600); err != nil {
+		t.Fatalf("write source pdf: %v", err)
+	}
+	fp := newFakeProcessor(t)
+	fp.preflightReport = &map[string]any{
+		"contract_version": "1.0",
+		"source_name":      "inline",
+		"ok":               false,
+		"finding":          "🔴 unpaginiert",
+		"reason":           "kein Tier-1",
+		"details": map[string]any{
+			"pages": 1, "text_layer": false,
+			"suspicious_patterns": []any{"viele reine Bildseiten ohne OCR-Text (1/1)"},
+		},
+	}
+	d := newDispatcher(t, h, fp, Config{PreflightEnabled: true})
+	runFor(t, d, context.Background(), 6*time.Second)
+
+	if got := h.jobStatus(t, jobID); got != "skipped" {
+		t.Fatalf("status = %q, want skipped (preflight-red)", got)
+	}
+	if got := h.repairCaseStatus(t, jobID); got != "rejected" {
+		t.Fatalf("repair case status = %q, want rejected (unpaginiert NEVER enters the loop)", got)
+	}
+}
+
+// TestUnreadableSourceAutoQueues (#238): the #237 SOURCE_UNREADABLE track
+// also auto-queues — the corrupt-source evidence reaches the fixer without
+// an operator hop.
+func TestUnreadableSourceAutoQueues(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "U238", 3)
+	fp := newFakeProcessor(t)
+	fp.statuses = []string{"failed"}
+	fp.failRetryCode = "SOURCE_UNREADABLE"
+	fp.failRetryable = false
+
+	d := newDispatcher(t, h, fp, Config{})
+	runFor(t, d, context.Background(), 6*time.Second)
+
+	if got := h.jobStatus(t, jobID); got != "failed" {
+		t.Fatalf("status = %q, want failed (terminal document defect)", got)
+	}
+	if got := h.repairCaseStatus(t, jobID); got != "queued" {
+		t.Fatalf("repair case status = %q, want queued (auto-queue, #238)", got)
+	}
+	rc := h.repairCaseFor(t, jobID)
+	if rc == nil || rc["error_class"] != "SOURCE_UNREADABLE" {
+		t.Fatalf("queued case must keep the structured FAIL analysis: %v", rc)
+	}
+}

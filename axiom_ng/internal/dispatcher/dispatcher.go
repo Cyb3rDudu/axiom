@@ -553,8 +553,20 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 	// reason and mark the attachment as a repair-case candidate (#206/#203).
 	reason := "preflight:" + report.Finding
 	d.logger.Printf("%v: preflight FAIL (%s) — skipping job, marking repair candidate", fields, reason)
-	if _, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Finding, qsJSON); err != nil && !isLost(err) {
+	if c, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Finding, qsJSON); err != nil && !isLost(err) {
 		d.logger.Printf("%v: repair-case: %v", fields, err)
+	} else if c != nil && autoQueueRepairClasses[c.SuspicionClass] {
+		// #238: clearly-repairable classes queue THEMSELVES at creation —
+		// the case's own stored class/analysis (not the new finding) is the
+		// queue payload, so an older unpaginiert case can never be laundered
+		// into the loop by a newer repairable verdict. Unpaginiert stays a
+		// rejected tombstone: not in the set here, and refused again by
+		// QueueRepairCase (defense in depth).
+		if err := d.rep.QueueRepairCase(ctx, c.ID, c.SuspicionClass, c.Analysis); err != nil && !isLost(err) {
+			d.logger.Printf("%v: auto-queue repair case: %v (stays rejected; manual queue remains)", fields, err)
+		} else if err == nil {
+			d.logger.Printf("%v: repair case auto-queued (%s)", fields, c.SuspicionClass)
+		}
 	}
 	if err := d.rep.MarkSkipped(ctx, ref, reason); err != nil && !isLost(err) {
 		d.logger.Printf("%v: mark skipped: %v", fields, err)

@@ -293,6 +293,20 @@ var repairTrackFailureCodes = map[string]bool{
 	"SOURCE_UNREADABLE": true,
 }
 
+// autoQueueRepairClasses (#238): suspicion classes whose repair case
+// queues ITSELF at creation — strictly the clearly-repairable, per the
+// design decision on the issue: preflight 🔴 reparierbar and the #237
+// SOURCE_UNREADABLE track. Unpaginiert NEVER auto-queues (the design nail
+// — it is not in this set, and repo.QueueRepairCase refuses it again on
+// its own). EPUB red (defekt/DRM) stays on the manual repair API until
+// the EPUB fixer arm has queue-proven efficacy; extending automation is
+// a one-line addition here. Exact string match — the findings are runner
+// contract values, not prefixes to guess from.
+var autoQueueRepairClasses = map[string]bool{
+	"🔴 reparierbar":     true,
+	"SOURCE_UNREADABLE": true,
+}
+
 func (d *Dispatcher) onFailed(ctx context.Context, claimed *repo.ClaimedJob, jobErr *processor.JobError, ph *jobPhases) {
 	ref := claimed.LeaseRef
 	d.logPhases(ph, jobErr.Code)
@@ -311,8 +325,18 @@ func (d *Dispatcher) onFailed(ctx context.Context, claimed *repo.ClaimedJob, job
 			"retryable":   false,
 			"message":     jobErr.Message,
 		})
-		if _, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, jobErr.Code, analysis); err != nil && !isLost(err) {
+		if c, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, jobErr.Code, analysis); err != nil && !isLost(err) {
 			d.logger.Printf("repair-case for %s: %v", ref.JobID, err)
+		} else if c != nil && autoQueueRepairClasses[c.SuspicionClass] {
+			// #238: the case's own class/analysis is the queue payload (never
+			// a newer foreign verdict — no class laundering). Failure to queue
+			// is logged, not fatal: the case stays rejected, the manual path
+			// remains.
+			if err := d.rep.QueueRepairCase(ctx, c.ID, c.SuspicionClass, c.Analysis); err != nil && !isLost(err) {
+				d.logger.Printf("auto-queue repair case for %s: %v (stays rejected)", ref.JobID, err)
+			} else if err == nil {
+				d.logger.Printf("repair case auto-queued for %s (%s)", ref.JobID, c.SuspicionClass)
+			}
 		}
 	}
 	d.markTerminal(ctx, ref, jobErr.Code, jobErr.Message)
