@@ -788,8 +788,12 @@ func TestOutboxEnsureSparseMappingRetriedAfterFailure(t *testing.T) {
 	if !osc.ensured {
 		t.Fatal("ensured must flip after the retried mapping PUT")
 	}
-	if puts != 2 {
-		t.Fatalf("mapping PUT must retry exactly once more, got %d", puts)
+	// #230: two additive mappings exist (sparse R5 + caption_text); the
+	// retry path PUTs sparse (failed 500 on attempt 1, succeeded on the
+	// retry) and then caption_text once — 3 PUTs total, still exactly ONE
+	// retry of the failed mapping.
+	if puts != 3 {
+		t.Fatalf("mapping PUTs must be 3 (sparse fail+retry, caption once), got %d", puts)
 	}
 }
 
