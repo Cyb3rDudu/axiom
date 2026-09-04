@@ -88,6 +88,18 @@ def _build_ranges(labels: list[str]) -> list[dict]:
     # (Kodex: keine stille Falschheit).
     if j < n or not run:
         return []
+    # (#251 E2E) Deckungs-Entry für führende unbenannte Seiten: ein Baum,
+    # dessen erster Range erst bei Seite >0 beginnt, ist PDF-spec-legal,
+    # stürzt aber pymupdfs get_label-util im Runner-Chunker ab (IndexError
+    # für Seiten vor dem ersten Entry). Ein prefix-loser, nummerierungs-
+    # freier Entry an Seite 0 macht die Seiten ausdrücklich unbenannt —
+    # semantisch identisch, aber für jeden Konsumenten lesbar.
+    if i > 0:
+        return [
+            {"startpage": 0, "prefix": ""},  # Titelei ausdrücklich unbenannt
+            {"startpage": run[0][0], "prefix": "", "style": "D",
+             "firstpagenum": run[0][1]},  # ein Range deckt den ganzen Lauf
+        ]
     start, first = run[0]
     return [{"startpage": start, "prefix": "", "style": "D", "firstpagenum": first}]
 

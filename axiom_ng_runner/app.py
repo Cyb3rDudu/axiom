@@ -338,9 +338,16 @@ def _download_attempt(
     at the deadline edge can block at most until the deadline, never
     budget seconds past it."""
     try:
-        with urllib.request.urlopen(
-            url, timeout=max(1.0, deadline - time.monotonic())
-        ) as r:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SourceError(
+                "SOURCE_NOT_FOUND",
+                f"source_url download exceeded {budget:.0f}s budget",
+            )
+        # Floor 50ms, NOT 1s: with 100ms of budget left the connect must
+        # not run a full second past the deadline (#250 review r3). The
+        # floor only guards settimeout(0) == blocking mode.
+        with urllib.request.urlopen(url, timeout=max(0.05, remaining)) as r:
             if r.status != 200:
                 raise SourceError(
                     "SOURCE_NOT_FOUND",

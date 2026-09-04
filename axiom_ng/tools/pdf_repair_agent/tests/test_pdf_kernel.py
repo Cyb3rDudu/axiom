@@ -120,7 +120,13 @@ def test_alle_leer_loescht_labels(tmp_path):
 
 
 def test_build_ranges_tafel():
-    titled_run = [{"startpage": 1, "prefix": "", "style": "D", "firstpagenum": 3}]
+    # #251: führende unbenannte Seiten bekommen einen Deckungs-Entry an
+    # Seite 0 (prefix-only) — ein Baum ohne Deckung ist spec-legal, aber
+    # pymupdf's get_label-util stürzt im Runner-Chunker ab (E2E-Befund).
+    titled_run = [
+        {"startpage": 0, "prefix": ""},  # Titelei ausdrücklich unbenannt
+        {"startpage": 1, "prefix": "", "style": "D", "firstpagenum": 3},
+    ]
     assert _build_ranges(["", "3", "4"]) == titled_run  # Titelei + Lauf
     assert _build_ranges(["1", "2"]) == [
         {"startpage": 0, "prefix": "", "style": "D", "firstpagenum": 1}

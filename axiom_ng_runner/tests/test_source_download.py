@@ -550,3 +550,121 @@ class TestHardBudgetAndCounter:
             ), "the log must carry the real attempt count too"
         finally:
             settings.set(old)
+
+
+class TestBudgetFloorR3:
+    """#250 review r3: the connect/open timeout floor must be tiny. With
+    ~100ms of budget left, urlopen may run at most ~100ms (+small slack),
+    never a 1s floor past the deadline.
+
+    Mutation-bar: floor restored to 1.0 -> RED (elapsed ~1s for a 0.1s
+    remaining budget)."""
+
+    def test_tiny_remaining_budget_connect_bounded(self, tmp_path):
+        import http.server
+        import threading
+
+        work = tmp_path / "floor-work"
+        work.mkdir(parents=True)
+        src = _pdf(tmp_path)
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                time.sleep(60)  # hanging CONNECT response
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        srv.daemon_threads = True
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        old = settings.get()
+        # 0.1s budget total: EVERYTHING (connect included) must fit in it
+        settings.set(
+            Settings(
+                work_root=work,
+                allowed_source_roots=(),
+                source_download_timeout=0.1,
+            )
+        )
+        try:
+            import axiom_ng_runner.app as app_mod3
+            from axiom_ng_runner.validation import compute_sha256 as _sha
+
+            att = type("A", (), {
+                "source_url": f"http://127.0.0.1:{srv.server_address[1]}/f",
+                "filename": "book.pdf",
+                "size_bytes": 10 ** 9,
+                "content_hash": _sha(src),
+            })()
+            req = type("R", (), {"attachment": att})()
+            t0 = time.monotonic()
+            try:
+                app_mod3._download_source(req)
+                raise AssertionError("must die")
+            except Exception as e:  # noqa: BLE001
+                assert "budget" in str(e).lower() or "attempts" in str(e), e
+            elapsed = time.monotonic() - t0
+            assert elapsed < 0.6, (
+                f"a 0.1s budget must bound the connect too: {elapsed:.1f}s "
+                f"— the timeout floor must be tiny, not 1s"
+            )
+        finally:
+            settings.set(old)
+            srv.shutdown()
+
+
+class TestLabelTreeE2E251:
+    """#251 E2E findings: (a) a spec-legal PageLabels tree whose first
+    entry starts at page > 0 must not crash the chunker (pymupdf's
+    get_label util raises IndexError for uncovered leading pages — found
+    re-ingesting the healed 2LMELTV5); (b) the FIXER's write_page_labels
+    must emit a covering entry for leading unnamed pages so healed files
+    are consumable by every reader.
+
+    Mutation-bars:
+    - chunker guard removed -> uncovered-tree test RED (IndexError)
+    - fixer covering entry removed -> kernel test RED"""
+
+    @staticmethod
+    def _pdf_with_uncovered_tree(path, n=6):
+        import pymupdf
+
+        doc = pymupdf.open()
+        for _ in range(n):
+            doc.new_page()
+        # first entry starts at page 1 (page 0 uncovered) — spec-legal
+        doc.set_page_labels([{"startpage": 1, "prefix": "", "style": "D",
+                              "firstpagenum": 2}])
+        doc.save(path)
+        doc.close()
+
+    def test_chunker_survives_uncovered_label_tree(self, tmp_path):
+        from axiom_ng_runner.chunking import extract_page_labels
+
+        p = tmp_path / "uncovered.pdf"
+        self._pdf_with_uncovered_tree(p)
+        labels = extract_page_labels(str(p))  # must NOT raise
+        assert labels.get(1) == "2", labels  # tier-1 for covered pages
+
+    def test_fixer_kernel_writes_covering_entry(self, tmp_path):
+        """Leading unnamed page + closed run: the written tree must give
+        page 0 an explicit empty label (no crash in ANY consumer)."""
+        import sys
+
+        sys.path.insert(
+            0, "/tmp/axiom-harden/axiom_ng/tools/pdf_repair_agent/tools"
+        )
+        import pdf_kernel
+
+        src = tmp_path / "k.pdf"
+        self._pdf_with_uncovered_tree(src, n=4)
+        labels = ["", "2", "3", "4"]
+        pdf_kernel.write_page_labels(src, labels)
+        import pymupdf
+
+        doc = pymupdf.open(src)
+        got = [doc[i].get_label() for i in range(doc.page_count)]
+        doc.close()
+        assert got == labels, got

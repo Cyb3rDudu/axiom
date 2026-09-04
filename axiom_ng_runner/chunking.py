@@ -32,7 +32,15 @@ def extract_page_labels(pdf_path: str) -> dict[int, str]:
     labels: dict[int, str] = {}
     n = doc.page_count
     for i in range(n):
-        label = doc[i].get_label()
+        try:
+            label = doc[i].get_label()
+        except IndexError:
+            # #251 E2E finding: a spec-legal PageLabels tree whose first
+            # entry starts at a page > 0 (e.g. a repaired PDF with unnamed
+            # front matter) has NO covering entry for the leading pages —
+            # pymupdf's get_label util raises IndexError there. Those pages
+            # are simply unnamed; Tier 2 fills them.
+            continue
         if label and label.strip():
             labels[i] = label.strip()
     doc.close()
