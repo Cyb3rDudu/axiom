@@ -475,6 +475,8 @@ func (d *Dispatcher) trimCapabilityReason(req *processor.ProcessRequest) string 
 		return "entities not supported"
 	case rs.ExtractRelationships && !supported("entity_relationships"):
 		return "entity_relationships not supported"
+	case rs.ExtractImageCaptions && !supported("image_captions"):
+		return "image_captions not supported"
 	}
 	return ""
 }

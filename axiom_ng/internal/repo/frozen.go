@@ -78,6 +78,10 @@ type FrozenProcessing struct {
 	ComputeSparseEmbeddings bool   `json:"compute_sparse_embeddings"`
 	ExtractEntities         bool   `json:"extract_entities"`
 	ExtractRelationships    bool   `json:"extract_relationships"`
+	// ExtractImageCaptions (#230): machine captions for extracted_image
+	// artifacts — additive contract flag; the profile hash only changes
+	// when a profile actually sets it.
+	ExtractImageCaptions bool `json:"extract_image_captions"`
 }
 
 // decodeProcessing strictly decodes a profile JSON object into FrozenProcessing:

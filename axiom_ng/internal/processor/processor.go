@@ -72,6 +72,9 @@ type Processing struct {
 	ComputeSparseEmbeddings bool   `json:"compute_sparse_embeddings"`
 	ExtractEntities         bool   `json:"extract_entities"`
 	ExtractRelationships    bool   `json:"extract_relationships"`
+	// ExtractImageCaptions (#230): additive feature flag (runner stage
+	// image_captions). Default off.
+	ExtractImageCaptions bool `json:"extract_image_captions"`
 }
 
 // ProcessRequest is the POST /v1/process payload. It is the contract schema and

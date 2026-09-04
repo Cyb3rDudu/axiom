@@ -131,6 +131,11 @@ func (c *openSearchClient) ensureIndex(ctx context.Context, dim int) error {
 				"text":      map[string]any{"type": "text"},
 				// Learned lexical weights {token: weight} (R5 #135).
 				"sparse": map[string]any{"type": "rank_features"},
+				// Machine image captions, BM25 arm (#230) — in the CREATE
+				// mapping too: a fresh index must never rely on dynamic
+				// mapping for it (round-2 review; the additive
+				// ensureCaptionMapping covers pre-#230 indexes).
+				"caption_text": map[string]any{"type": "text"},
 			},
 		},
 	}
@@ -455,9 +460,7 @@ func (c *openSearchClient) ensureSparseMapping(ctx context.Context) error {
 // BM25 arm only) to an existing index, same additive pattern as sparse R5.
 func (c *openSearchClient) ensureCaptionMapping(ctx context.Context) error {
 	body, err := json.Marshal(map[string]any{
-		"properties": map[string]any{
-			"caption_text": map[string]any{"type": "text"},
-		},
+		"properties": map[string]any{},
 	})
 	if err != nil {
 		return err

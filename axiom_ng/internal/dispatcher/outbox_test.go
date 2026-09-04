@@ -1005,3 +1005,25 @@ func TestOutboxDocumentCaptionText(t *testing.T) {
 		t.Fatalf("uncaptioned chunk must carry NO caption_text field, got %v", doc2["caption_text"])
 	}
 }
+
+// TestOutboxCreateMappingIncludesCaptions pins the #230 round-2 fix: a NEWLY
+// created index carries caption_text in the initial mapping — never dynamic
+// mapping for a contract field (the additive ensureCaptionMapping exists for
+// pre-#230 indexes only). Mutation — removing the field from the create
+// mapping — turns this red.
+func TestOutboxCreateMappingIncludesCaptions(t *testing.T) {
+	srv, rec := fakeOS(t, false)
+	osc := newOpenSearchClient(srv.URL, "", "", nil)
+	if err := osc.ensureIndex(context.Background(), 3); err != nil {
+		t.Fatal(err)
+	}
+	body := rec.indexCreateBody()
+	if body == nil {
+		t.Fatal("index creation must have been issued")
+	}
+	for _, field := range []string{"embedding", "text", "sparse", "caption_text"} {
+		if !strings.Contains(string(body), `"`+field+`"`) {
+			t.Fatalf("create mapping must declare %q up front, got: %s", field, body)
+		}
+	}
+}

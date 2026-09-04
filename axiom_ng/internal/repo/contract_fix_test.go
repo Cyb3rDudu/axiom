@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 )
 
 // seedWithCanonical is like seed but additionally creates a canonical
@@ -383,5 +385,50 @@ func TestForceRebuildIdempotencyDistinct(t *testing.T) {
 	}
 	if !strings.Contains(*cjF1.IdempotencyKey, "force-") || !strings.Contains(*cjF2.IdempotencyKey, "force-") {
 		t.Fatalf("force-rebuild key lacks force marker: %s / %s", *cjF1.IdempotencyKey, *cjF2.IdempotencyKey)
+	}
+}
+
+// TestProfileAcceptsImageCaptionsFlag pins the #230 contract propagation: a
+// profile carrying extract_image_captions decodes through the strict
+// DisallowUnknownFields gate (frozen.go), survives the canonical-form
+// roundtrip, and re-marshals into the processor request shape with the flag
+// intact. Mutation — dropping the field from FrozenProcessing/Processing —
+// fails the strict decode and this test red.
+func TestProfileAcceptsImageCaptionsFlag(t *testing.T) {
+	profile := []byte(`{"profile":"full-rag-v1","extract_image_captions":true}`)
+	fp, err := decodeProcessing(profile)
+	if err != nil {
+		t.Fatalf("strict decode must accept the additive flag: %v", err)
+	}
+	if !fp.ExtractImageCaptions {
+		t.Fatal("flag must decode true")
+	}
+	canon, hash1, err := canonicalBytes(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// canonical form roundtrips and keeps the flag
+	fp2, err := decodeProcessing(canon)
+	if err != nil || !fp2.ExtractImageCaptions {
+		t.Fatalf("canonical roundtrip lost the flag: %v %+v", err, fp2)
+	}
+	// the frozen processing marshals into the processor request shape
+	var req processor.ProcessRequest
+	b, _ := json.Marshal(fp)
+	if err := json.Unmarshal(b, &req.Processing); err != nil {
+		t.Fatalf("processor.Processing must accept the frozen form: %v", err)
+	}
+	if !req.Processing.ExtractImageCaptions {
+		t.Fatal("processor.Processing lost the flag")
+	}
+	// profile hash sensitivity: the flag changes the canonical bytes
+	fpOff := fp
+	fpOff.ExtractImageCaptions = false
+	canonOff, hashOff, err := canonicalBytes(fpOff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash1 == hashOff || string(canon) == string(canonOff) {
+		t.Fatal("the flag must participate in the profile hash")
 	}
 }

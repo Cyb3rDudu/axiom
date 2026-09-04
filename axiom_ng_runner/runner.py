@@ -29,7 +29,7 @@ import sys
 import time
 import zipfile
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -563,9 +563,7 @@ def _caption_images_stage(
         per_image = s.image_caption_timeout_seconds
         deadline = (time.monotonic() + budget) if budget > 0 else None
         cache_dir = Path(os.getenv("AXIOM_CAPTION_CACHE_DIR", str(DEFAULT_CACHE_DIR)))
-        done = 0
-        for art in targets:
-            done += 1
+        for done, art in enumerate(targets, start=1):
             if set_progress is not None:
                 set_progress(done, len(targets), "images")
             if deadline is not None and time.monotonic() >= deadline:
@@ -1153,7 +1151,7 @@ def _stage_tracker(
     timings: dict[str, str] = {}
 
     def enter(stage: str) -> None:
-        timings[stage] = datetime.now(timezone.utc).isoformat()
+        timings[stage] = datetime.now(UTC).isoformat()
         if set_stage is not None:
             set_stage(stage)
 

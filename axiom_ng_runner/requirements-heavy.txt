@@ -18,5 +18,15 @@ FlagEmbedding==1.4.0
 # Entity extraction (GLiNER).
 gliner==0.2.28
 
+# Image captions (#230), local path only. torch/transformers already come
+# with the entries above. The Moondream 3 model files do NOT pip-install:
+# provision AXIOM_CAPTION_LOCAL_MODEL_DIR as an HF snapshot (hf download
+# moondream/moondream3-preview --local-dir <dir> — the snapshot carries its
+# own moondream.py/text.py/vision.py package code alongside the weights).
+# resolve_captioner() verifies torch + the snapshot files and reports
+# CAPTIONER_NOT_PROVISIONED when either is missing. The cloud path
+# (AXIOM_CAPTION_API_BASE/_KEY) needs NO extra dependency.
+tokenizers>=0.21
+
 # mrebel (relation extraction) loads lazily via transformers AutoModelForSeq2SeqLM
 # at runtime — no explicit package beyond what marker-pdf/transformers pulls.

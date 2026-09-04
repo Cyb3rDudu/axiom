@@ -255,3 +255,38 @@ def test_per_image_timeout_abandons_the_call(monkeypatch):
     assert rec is None, "timed-out call must be an honest miss"
     assert elapsed < 0.6, f"deadline must abandon, not join ({elapsed:.2f}s)"
     tmp.unlink()
+
+
+def test_resolve_incomplete_local_dir_is_not_provisioned(tmp_path, monkeypatch):
+    """HOCH-2 (#230 review round 2): a model dir with config.json but
+    WITHOUT the snapshot's package files must resolve to NOT-PROVISIONED
+    (CAPTIONER_NOT_PROVISIONED), not fail later per-image."""
+    d = tmp_path / "moondream3"
+    d.mkdir()
+    (d / "config.json").write_text("{}")
+    monkeypatch.delenv("AXIOM_CAPTION_API_BASE", raising=False)
+    monkeypatch.delenv("AXIOM_CAPTION_API_KEY", raising=False)
+    monkeypatch.setenv("AXIOM_CAPTION_LOCAL_MODEL_DIR", str(d))
+    assert ic.resolve_captioner() is None
+
+
+def test_resolve_complete_local_dir(monkeypatch, tmp_path):
+    """With the snapshot files present and torch importable, resolve
+    returns the local captioner (constructor is cheap — loads nothing)."""
+    d = tmp_path / "moondream3"
+    d.mkdir()
+    (d / "config.json").write_text("{}")
+    (d / "moondream.py").write_text("")
+    (d / "text.py").write_text("")
+    monkeypatch.delenv("AXIOM_CAPTION_API_BASE", raising=False)
+    monkeypatch.delenv("AXIOM_CAPTION_API_KEY", raising=False)
+    monkeypatch.setenv("AXIOM_CAPTION_LOCAL_MODEL_DIR", str(d))
+    cap = ic.resolve_captioner()
+    assert isinstance(cap, ic.LocalMoondreamCaptioner)
+
+
+def test_resolve_cloud_wins(monkeypatch):
+    monkeypatch.setenv("AXIOM_CAPTION_API_BASE", "http://x/v1")
+    monkeypatch.setenv("AXIOM_CAPTION_API_KEY", "sk")
+    cap = ic.resolve_captioner()
+    assert isinstance(cap, ic.CloudCaptioner)

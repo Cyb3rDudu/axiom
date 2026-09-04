@@ -24,12 +24,12 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Protocol
-
-import logging
+from typing import Any, Protocol
 
 log = logging.getLogger(__name__)
 
@@ -188,12 +188,35 @@ def resolve_captioner() -> Captioner | None:
         )
     local_dir = Path(os.getenv("AXIOM_CAPTION_LOCAL_MODEL_DIR", ""))
     if local_dir and (local_dir / "config.json").exists():
+        # Provisioning is checked HERE, not at first image: an incomplete
+        # local installation must resolve to NOT-PROVISIONED (honest reason
+        # in stage_completion), never surface later as CAPTION_CALLS_FAILED
+        # after the stage already opened. Two hard requirements beyond the
+        # snapshot files: torch (inference) and the moondream package code
+        # inside the snapshot (moondream.py et al. — downloaded with the
+        # model; the runner requirements do NOT pin it, see
+        # requirements-heavy.txt).
+        if not _local_runtime_ready(local_dir):
+            log.warning(
+                "local captioner dir set but incomplete (need torch + the "
+                "snapshot's moondream package files) — no captioner")
+            return None
         try:
             return LocalMoondreamCaptioner(str(local_dir))
         except ImportError:
-            log.warning("local captioner requested but torch missing — no captioner")
+            log.warning("local captioner requested but torch import failed — no captioner")
             return None
     return None
+
+
+def _local_runtime_ready(model_dir: Path) -> bool:
+    """torch importable AND the snapshot carries its own package code."""
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        return False
+    return (model_dir / "moondream.py").exists() and (
+        model_dir / "text.py").exists()
 
 
 def _cache_path(cache_dir: Path, sha256: str) -> Path:
