@@ -258,7 +258,10 @@ def run_agent(
 ) -> dict:
     """Vollständiger Agenten-Lauf für einen Key. Liefert den Endbericht als
     dict (identisch zur Audit-Spur unter WORK_ROOT/<key>/report.json)."""
-    cfg = cfg or load_config_envfile(HERE / "config.env")
+    # #251: Default-Pfad ist der bewegliche Operator-Ort (Env/~/config),
+    # fehlende Datei ist OK (Env-/Sandbox-Betrieb) — nie das read-only
+    # Artifact als hartes Default-Todesurteil.
+    cfg = cfg or load_config_envfile(None)
     cfg.ensure_dirs()
     status = config_status(cfg)
     if client is None:
@@ -382,7 +385,12 @@ def main(argv: list[str] | None = None) -> int:
         "--apply", action="store_true", help="Schreibfreigabe (Default: Dry-Run)"
     )
     p.add_argument(
-        "--config", default=str(HERE / "config.env"), help="Pfad zur config.env"
+        "--config",
+        default=None,
+        help="Pfad zur config.env (Default: AXIOM_FIXER_CONFIG → "
+        "~/.config/axiom/fixer.config.env → Repo-config.env; ein fehlender "
+        "DEFAULT ist Sandbox/Env-Betrieb, ein fehlender EXPLIZITER Pfad "
+        "stirbt laut)",
     )
     a = p.parse_args(argv)
     cfg = load_config_envfile(a.config)

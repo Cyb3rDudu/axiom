@@ -73,6 +73,8 @@ class Config:
         self.work_root.mkdir(parents=True, exist_ok=True)
 
 
+HERE = Path(__file__).resolve().parent
+
 def _env_int(raw: str, default: int) -> int:
     try:
         return int(raw)
@@ -114,23 +116,46 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     )
 
 
+def default_config_path() -> Path:
+    """#251: der Default-Suchpfad für config.env — der Operator-Ort ist
+    BEWEGLICH und beschreibbar, nie das read-only Nix-Artifact (dort kann
+    die Datei niemals liegen; der alte HERE-Default machte JEDE Artifact-
+    Deployment zum Exit-1, siehe die 9 gescheiterten Cases vom 2026-09-04).
+    Reihenfolge: AXIOM_FIXER_CONFIG (Env) → ~/.config/axiom/fixer.config.env
+    → HERE/config.env (Repo-/Dev-Betrieb)."""
+    override = os.environ.get("AXIOM_FIXER_CONFIG")
+    if override:
+        return Path(override)
+    home_cfg = Path.home() / ".config" / "axiom" / "fixer.config.env"
+    if home_cfg.is_file():
+        return home_cfg
+    return HERE / "config.env"
+
+
 def load_config_envfile(
     envfile: str | Path | None = None, env: Mapping[str, str] | None = None
 ) -> Config:
     """Lädt zuerst eine config.env-Datei (KEY=VALUE-Zeilen, #-Kommentare),
     überlagert dann mit echten Umgebungsvariablen. Der DEEPSEEK_API_KEY darf
-    in der Umgebung fehlen und per config.env kommen."""
+    in der Umgebung fehlen und per config.env kommen.
+
+    #251: fehlt der DEFAULT-Pfad, ist das KEIN Fehler — dann greifen die
+    Umgebungsvariablen bzw. der dokumentierte Sandbox-Default (vgl.
+    config.env.example: 'Ohne diese Datei läuft ALLES in der Sandbox').
+    Nur ein EXPLIZIT übergebener Pfad, der nicht existiert, stirbt laut —
+    der Aufrufer hat genau diese Datei verlangt."""
     env = dict(os.environ) if env is None else dict(env)
-    if envfile:
-        p = Path(envfile)
-        if not p.is_file():
-            raise FileNotFoundError(f"config.env nicht gefunden: {p}")
+    explicit = envfile is not None
+    p = Path(envfile) if envfile is not None else default_config_path()
+    if p.is_file():
         for line in p.read_text().splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
             env.setdefault(k.strip(), v.strip())
+    elif explicit:
+        raise FileNotFoundError(f"config.env nicht gefunden: {p}")
     return load_config(env)
 
 
