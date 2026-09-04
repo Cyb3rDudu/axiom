@@ -402,3 +402,151 @@ class TestDownloadRetries250:
         from axiom_ng_runner.config import Settings
 
         assert Settings().source_download_timeout == 600.0
+
+
+class TestHardBudgetAndCounter:
+    """#250 review round 2: hard budget (a hanging read at the deadline
+    edge may block at most until the deadline, never budget seconds past
+    it) and the REAL attempt counter in message and log.
+
+    Mutation-bars:
+    - urlopen timeout fixed to the total budget (instead of the remaining
+      deadline) + no socket re-arm → hanging-read test RED (takes ~2x)
+    - attempts_run replaced with max_attempts → counter test RED
+    """
+
+    def test_hanging_read_at_deadline_edge_bounded(self, tmp_path):
+        """A sender that drips one chunk, then HANGS mid-stream: the total
+        time from start to the honest budget death must be ≈ budget (+small
+        slack), NOT ≈ 2x budget — the socket timeout is re-armed to the
+        remaining deadline before every read."""
+        import http.server
+        import threading
+
+        work = tmp_path / "hb-work"
+        work.mkdir(parents=True)
+        src = _pdf(tmp_path)
+        budget = 3.0
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                # Drip chunks for ~2.5s (ALMOST the whole budget), then
+                # hang mid-stream. A socket timeout opened at connect for
+                # the full budget would let the final hang block ~budget
+                # PAST the deadline; the re-armed timeout must fire at it.
+                self.send_response(200)
+                self.send_header("Content-Length", "100000")
+                self.end_headers()
+                for _ in range(5):
+                    time.sleep(0.5)
+                    self.wfile.write(b"z" * 1024)
+                    self.wfile.flush()
+                time.sleep(60)  # the hang at the deadline edge
+
+            def log_message(self, *a):
+                pass
+
+        # ThreadingHTTPServer: the handler hangs by design; shutdown() of a
+        # single-threaded HTTPServer would block on the hung handler.
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        srv.daemon_threads = True
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        old = settings.get()
+        settings.set(
+            Settings(
+                work_root=work,
+                allowed_source_roots=(),
+                source_download_timeout=budget,
+            )
+        )
+        try:
+            import axiom_ng_runner.app as app_mod2
+            from axiom_ng_runner.validation import compute_sha256 as _sha
+
+            att = type(
+                "A",
+                (),
+                {
+                    "source_url": f"http://127.0.0.1:{srv.server_address[1]}/f",
+                    "filename": "book.pdf",
+                    # cap matches the declared Content-Length (100000) —
+                    # the death under test is the BUDGET, not the size cap
+                    "size_bytes": 100000,
+                    "content_hash": _sha(src),
+                },
+            )()
+            req = type("R", (), {"attachment": att})()
+            t0 = time.monotonic()
+            try:
+                app_mod2._download_source(req)
+                raise AssertionError("must die with the budget reason")
+            except Exception as e:  # noqa: BLE001 — SourceError shape asserted
+                assert "budget" in str(e).lower() or "attempts" in str(e), e
+            elapsed = time.monotonic() - t0
+            assert elapsed < budget + 1.5, (
+                f"hanging read escaped the deadline: {elapsed:.1f}s "
+                f"(budget {budget}s) — socket timeout must track the "
+                f"remaining deadline"
+            )
+        finally:
+            settings.set(old)
+            srv.shutdown()
+
+    def test_attempt_count_is_real_not_max(self, tmp_path, monkeypatch, caplog):
+        """Budget ends the retry ladder after FEWER than max attempts →
+        the death message and the log must carry the REAL count (1), not
+        the max (3)."""
+        import logging
+
+        import axiom_ng_runner.app as app_mod2
+        from axiom_ng_runner.config import Settings
+
+        work = tmp_path / "cnt-work"
+        work.mkdir(parents=True)
+        old = settings.get()
+        settings.set(
+            Settings(
+                work_root=work,
+                allowed_source_roots=(),
+                source_download_timeout=0.2,  # no budget for a 2nd attempt
+            )
+        )
+        ran = {"n": 0}
+
+        def transport_then_no_budget(url, dest, deadline, budget, cap):
+            ran["n"] += 1
+            raise app_mod2._TransportError(
+                ConnectionResetError(104, "Connection reset by peer")
+            )
+
+        monkeypatch.setattr(app_mod2, "_download_attempt", transport_then_no_budget)
+        try:
+            att = type("A", (), {
+                "source_url": "http://127.0.0.1:9/x",
+                "filename": "book.pdf",
+                "size_bytes": 10,
+                "content_hash": "sha256:" + "0" * 64,
+            })()
+            req = type("R", (), {"attachment": att})()
+            import logging
+
+            import pytest as _pytest
+
+            with (
+                caplog.at_level(logging.WARNING, logger="axiom_ng_runner.app"),
+                _pytest.raises(Exception) as ctx,
+            ):
+                app_mod2._download_source(req)
+            detail = str(ctx.value)
+            assert "after 1 attempt:" in detail, detail
+            assert "3 attempts" not in detail, detail
+            assert ran["n"] == 1, (
+                f"budget (0.2s, backoff 1s) must end the ladder early, "
+                f"ran {ran['n']}"
+            )
+            assert any(
+                "after 1 attempt" in rec.message for rec in caplog.records
+            ), "the log must carry the real attempt count too"
+        finally:
+            settings.set(old)

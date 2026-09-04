@@ -314,30 +314,62 @@ def _is_transport_failure(err: BaseException) -> bool:
     )
 
 
+def _socket_of(r: Any):
+    """#250 hard-budget review: encapsulated access to the response's
+    underlying socket — urllib exposes it as r.fp.raw._sock (py3.11 http
+    client), but that is private API. Any AttributeError/lookup miss just
+    returns None and the read loop falls back to its urlopen-time socket
+    timeout (bounded, just coarser)."""
+    try:
+        return r.fp.raw._sock
+    except AttributeError:
+        return None
+
+
 def _download_attempt(
     url: str, dest: Path, deadline: float, budget: float, cap: int
 ) -> None:
     """One streaming download attempt. Raises SourceError for budget /
     size-cap / HTTP-status deaths and _TransportError for the retryable
-    Errno-60 class (#250)."""
+    Errno-60 class (#250).
+
+    Hard budget: the socket timeout is opened at the REMAINING budget and
+    re-armed to the remaining deadline before every read — a hanging read
+    at the deadline edge can block at most until the deadline, never
+    budget seconds past it."""
     try:
-        with urllib.request.urlopen(url, timeout=budget) as r:
+        with urllib.request.urlopen(
+            url, timeout=max(1.0, deadline - time.monotonic())
+        ) as r:
             if r.status != 200:
                 raise SourceError(
                     "SOURCE_NOT_FOUND",
                     f"source_url returned HTTP {r.status}",
                 )
+            sock = _socket_of(r)
+            # read1 (one raw read max) instead of read: a full read(n)
+            # aggregates internally in BufferedReader and would ignore the
+            # per-read socket re-arm below — the hard-budget review caught
+            # exactly that (a hanging read blocked budget seconds PAST the
+            # deadline because the re-arm never ran mid-read).
+            read_chunk = getattr(r, "read1", None) or r.read
             with open(dest, "wb") as f:
                 total = 0
                 next_progress = time.monotonic() + 10.0
                 while True:
-                    if time.monotonic() > deadline:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
                         raise SourceError(
                             "SOURCE_NOT_FOUND",
                             f"source_url download exceeded {budget:.0f}s budget "
                             f"(got {total} bytes of cap {cap})",
                         )
-                    chunk = r.read(65536)
+                    if sock is not None:
+                        try:
+                            sock.settimeout(remaining)
+                        except OSError:
+                            sock = None  # socket closed mid-loop: coarse mode
+                    chunk = read_chunk(65536)
                     if not chunk:
                         break
                     total += len(chunk)
@@ -411,7 +443,9 @@ def _download_source(req: ProcessRequest) -> Path:
     max_attempts = 3
     backoff_s = 1.0
     last_transport_err: Exception | None = None
+    attempts_run = 0  # the REAL count (budget may end the ladder early)
     for attempt in range(1, max_attempts + 1):
+        attempts_run = attempt
         try:
             _download_attempt(att.source_url, dest, deadline, budget, cap)
             last_transport_err = None
@@ -435,9 +469,14 @@ def _download_source(req: ProcessRequest) -> Path:
             break  # out of retries or budget: fall through to the loud death
     if last_transport_err is not None:
         shutil.rmtree(incoming, ignore_errors=True)
+        log.warning(
+            "source download failed after %d attempt%s (%s) — giving up",
+            attempts_run, "" if attempts_run == 1 else "s", last_transport_err,
+        )
         raise SourceError(
             "SOURCE_NOT_FOUND",
-            f"source_url download failed after {max_attempts} attempts: "
+            f"source_url download failed after {attempts_run} "
+            f"attempt{'' if attempts_run == 1 else 's'}: "
             f"{last_transport_err}",
         ) from last_transport_err
     # Same integrity gates as local sources — the hash gate makes no trust
