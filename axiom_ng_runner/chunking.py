@@ -19,6 +19,17 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 _PARAGRAPH_SPLIT = re.compile(r"(\n\s*\n+)")
 
 
+def safe_page_label(page) -> str:
+    """#251 E2E: pymupdf's get_label raises IndexError on a spec-legal
+    PageLabels tree whose first entry starts at page > 0 (leading pages
+    uncovered). Such pages are simply unnamed — one shared guard for
+    EVERY consumer (chunker, preflight, page_trust)."""
+    try:
+        return page.get_label() or ""
+    except IndexError:
+        return ""
+
+
 def extract_page_labels(pdf_path: str) -> dict[int, str]:
     """Logical PDF page labels with a 2-tier fallback (contract §11).
 
@@ -32,15 +43,7 @@ def extract_page_labels(pdf_path: str) -> dict[int, str]:
     labels: dict[int, str] = {}
     n = doc.page_count
     for i in range(n):
-        try:
-            label = doc[i].get_label()
-        except IndexError:
-            # #251 E2E finding: a spec-legal PageLabels tree whose first
-            # entry starts at a page > 0 (e.g. a repaired PDF with unnamed
-            # front matter) has NO covering entry for the leading pages —
-            # pymupdf's get_label util raises IndexError there. Those pages
-            # are simply unnamed; Tier 2 fills them.
-            continue
+        label = safe_page_label(doc[i])
         if label and label.strip():
             labels[i] = label.strip()
     doc.close()

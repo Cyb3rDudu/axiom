@@ -105,7 +105,9 @@ def analyze_pdf(pdf_path: str) -> dict:
         n = doc.page_count
         labels = extract_page_labels(pdf_path)
         tm = _text_metrics(doc)
-        tier1 = sum(1 for i in range(n) if (doc[i].get_label() or "").strip())
+        from axiom_ng_runner.chunking import safe_page_label
+
+        tier1 = sum(1 for i in range(n) if safe_page_label(doc[i]).strip())
         if tier1 < n * 0.5 or (n > 0 and tier1 * 2 == n):
             label_verdict, label_reason = "kein Tier-1 (nur Footer/physisch)", "tier-2/3-fallback"
         else:

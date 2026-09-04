@@ -509,9 +509,9 @@ def build_page_trust(pdf_path: str) -> tuple[dict[int, str], dict[int, str], dic
         # (tier 2, sampled only) or fabricated physical+1 (tier 3) — those
         # are not print-page evidence. Folio verification remains the only
         # path above physical_only for such books.
-        tier1 = sum(
-            1 for i in range(n) if doc[i].get_label() and doc[i].get_label().strip()
-        )
+        from axiom_ng_runner.chunking import safe_page_label
+
+        tier1 = sum(1 for i in range(n) if safe_page_label(doc[i]).strip())
         if tier1 < n * 0.5 or (n > 0 and tier1 * 2 == n):
             # <= semantics: at EXACTLY 50% the extractor itself has already
             # fallen back to tier 2/3 (its gate is empty_count < n*0.5) —

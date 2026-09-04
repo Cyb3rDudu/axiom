@@ -41,8 +41,10 @@ def extract_page_labels(pdf_path: str) -> Dict[int, str]:
     # Tier 1: PDF page labels
     labels = {}
     empty_count = 0
+    from axiom_ng_runner.chunking import safe_page_label
+
     for i in range(n):
-        label = doc[i].get_label()
+        label = safe_page_label(doc[i])
         if label and label.strip():
             labels[i] = label.strip()
         else:
