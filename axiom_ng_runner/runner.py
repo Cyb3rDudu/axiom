@@ -590,60 +590,72 @@ def _caption_images_stage(
         per_image = s.image_caption_timeout_seconds
         deadline = (time.monotonic() + budget) if budget > 0 else None
         cache_dir = Path(os.getenv("AXIOM_CAPTION_CACHE_DIR", str(DEFAULT_CACHE_DIR)))
-        for done, art in enumerate(targets, start=1):
-            if set_progress is not None:
-                set_progress(done, len(targets), "images")
-            if deadline is not None and time.monotonic() >= deadline:
-                # Honest partial (#241): what is captioned stays, the rest
-                # stays EMPTY — never placeholders.
-                stage_completion["image_captions_reason"] = "STAGE_BUDGET_EXCEEDED"
-                stage_completion["image_captions_done"] = f"{len(captioned)}/{len(targets)}"
-                log.warning("image_captions budget (%ss) exceeded at %d/%d images "
-                            "(%d captioned)", budget, done - 1, len(targets),
-                            len(captioned))
-                break
-            img_path = work_dir / "artifacts" / art["ref"]
-            timeout = per_image
-            if deadline is not None:
-                timeout = min(per_image, max(deadline - time.monotonic(), 0.0))
-            # Rule 4: a poisoned LOCAL captioner hands the remaining images
-            # to the cloud path when configured — otherwise the loop below
-            # just writes honest empty captions.
-            if getattr(captioner, "poisoned", False):
-                cloud = _cloud_fallback_captioner()
-                if cloud is not None:
-                    log.warning("image_captions: local captioner poisoned — "
-                                "cloud takes over from image %d/%d",
-                                done, len(targets))
-                    captioner = cloud
-            rec = caption_image(
-                captioner, img_path, art.get("media_type", "image/jpeg"),
-                art["sha256"], cache_dir, timeout,
-            )
-            if rec is not None:
-                # C1 (#230 review): the fields MUST nest under "attributes" —
-                # processor.Artifact reads only that key and the persist
-                # boundary silently drops unknown top-level keys (W9).
-                attrs = art.setdefault("attributes", {})
-                attrs.update({
-                    "machine_caption": rec["caption"],
-                    "caption_model": rec["model"],
-                    "caption_path": rec["path"],
-                })
-                captioned[art["ref"]] = rec
-        if stage_completion["image_captions_reason"] is None:
-            if captioned:
-                stage_completion["image_captions"] = True
-            else:
-                # every call failed (network/model) — honest named miss
-                stage_completion["image_captions_reason"] = "CAPTION_CALLS_FAILED"
-        # Rule 1: unload the INGEST-class captioner — stage over.
-        unload_fn = getattr(captioner, "unload", None)
-        if callable(unload_fn):
-            try:
-                unload_fn()
-            except Exception as err:  # noqa: BLE001
-                log.warning("captioner unload failed: %s", err)
+        # C2 (#230 rider review): the ORIGINAL captioner owns the loaded
+        # model — the poison fallback may rebind `captioner` to a cloud
+        # instance mid-loop, and unloading the cloud one would leak the
+        # local model. Unload ALWAYS goes through this reference, in the
+        # finally below (C1: any mid-loop exception must unload too).
+        loaded_captioner = captioner
+        try:
+            for done, art in enumerate(targets, start=1):
+                if set_progress is not None:
+                    set_progress(done, len(targets), "images")
+                if deadline is not None and time.monotonic() >= deadline:
+                    # Honest partial (#241): what is captioned stays, the
+                    # rest stays EMPTY — never placeholders.
+                    stage_completion["image_captions_reason"] = "STAGE_BUDGET_EXCEEDED"
+                    stage_completion["image_captions_done"] = f"{len(captioned)}/{len(targets)}"
+                    log.warning("image_captions budget (%ss) exceeded at %d/%d "
+                                "images (%d captioned)", budget, done - 1,
+                                len(targets), len(captioned))
+                    break
+                img_path = work_dir / "artifacts" / art["ref"]
+                timeout = per_image
+                if deadline is not None:
+                    timeout = min(per_image, max(deadline - time.monotonic(), 0.0))
+                # Rule 4: a poisoned LOCAL captioner hands the remaining
+                # images to the cloud path when configured — otherwise the
+                # loop below just writes honest empty captions.
+                if getattr(captioner, "poisoned", False):
+                    cloud = _cloud_fallback_captioner()
+                    if cloud is not None:
+                        log.warning("image_captions: local captioner poisoned — "
+                                    "cloud takes over from image %d/%d",
+                                    done, len(targets))
+                        captioner = cloud
+                rec = caption_image(
+                    captioner, img_path, art.get("media_type", "image/jpeg"),
+                    art["sha256"], cache_dir, timeout,
+                )
+                if rec is not None:
+                    # C1 (#230 review): the fields MUST nest under
+                    # "attributes" — processor.Artifact reads only that key
+                    # and the persist boundary silently drops unknown
+                    # top-level keys (W9).
+                    attrs = art.setdefault("attributes", {})
+                    attrs.update({
+                        "machine_caption": rec["caption"],
+                        "caption_model": rec["model"],
+                        "caption_path": rec["path"],
+                    })
+                    captioned[art["ref"]] = rec
+            if stage_completion["image_captions_reason"] is None:
+                if captioned:
+                    stage_completion["image_captions"] = True
+                else:
+                    # every call failed (network/model) — honest named miss
+                    stage_completion["image_captions_reason"] = "CAPTION_CALLS_FAILED"
+        finally:
+            # Rule 1 (C1): the INGEST-class captioner leaves memory on EVERY
+            # exit path — budget break, exception, or normal completion.
+            # C2: always unload the ORIGINAL (loaded) captioner, never the
+            # possibly-rebound cloud fallback.
+            unload_fn = getattr(loaded_captioner, "unload", None)
+            if callable(unload_fn):
+                try:
+                    unload_fn()
+                except Exception as err:  # noqa: BLE001
+                    log.warning("captioner unload failed: %s", err)
     if captioned:
         for c in chunk_dicts:
             refs = (c.get("metadata", {}) or {}).get("image_refs") or []

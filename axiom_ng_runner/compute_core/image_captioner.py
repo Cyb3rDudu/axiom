@@ -142,8 +142,11 @@ class LocalMoondreamCaptioner:
     )
 
     # Rule 5 (#230 rider): refuse to load into a tight machine instead of
-    # OOM-crashing the runner. fp16 weights ≈ 20 GB + activations.
-    MIN_FREE_GB = 24.0
+    # OOM-crashing the runner. fp16 weights ≈ 20 GB + activations. The env
+    # override exists for hosts with a different gauge (e.g. a CUDA box
+    # with ample VRAM but tight host RAM, or a future fp8 snapshot).
+    # ponytail: host-RAM gauge only; a VRAM-aware gate if CUDA hosts trip it.
+    MIN_FREE_GB = float(os.getenv("AXIOM_CAPTION_LOCAL_MIN_FREE_GB", "24"))
 
     def __init__(self, model_dir: str | None = None):
         import torch  # noqa: F401 — fail fast with the honest ImportError
@@ -323,9 +326,12 @@ def load_cached_caption(
     p = _cache_path(cache_dir, sha256)
     try:
         rec = json.loads(p.read_text())
-        if rec.get("caption"):
+        # isinstance guard: a corrupt record (array, string, null) must be
+        # an honest miss, never an AttributeError that unwinds the stage
+        # (review C1 — the guard previously only caught OSError/ValueError).
+        if isinstance(rec, dict) and rec.get("caption"):
             return rec
-    except (OSError, ValueError):
+    except (OSError, ValueError, TypeError):
         pass
     return None
 

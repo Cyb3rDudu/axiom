@@ -230,7 +230,7 @@ def test_caption_image_cache_roundtrip(tmp_path):
     assert rec2 == rec and cap.calls == 1
 
 
-def test_per_image_timeout_abandons_the_call(monkeypatch):
+def test_per_image_timeout_abandons_the_call(monkeypatch, tmp_path):
     """C2 (#230 review): the deadline must ABANDON the model call, not
     join it — a 1.0s captioner with a 0.1s timeout must return in ~0.1s
     (the context-manager shutdown(wait=True) variant blocks for the full
@@ -244,17 +244,15 @@ def test_per_image_timeout_abandons_the_call(monkeypatch):
             _time.sleep(1.0)
             return "late", "local"
 
-    (Path("/tmp") / "c2probe.bin")
-    tmp = Path("/tmp/c2img.bin")
+    tmp = tmp_path / "c2img.bin"
     tmp.write_bytes(b"x")
     cap = SlowCaptioner()
     t0 = _time.monotonic()
     rec = ic.caption_image(cap, tmp, "image/png", "dd" * 32,
-                           Path("/tmp/c2cache-uw"), 0.1)
+                           tmp_path / "c2cache", 0.1)
     elapsed = _time.monotonic() - t0
     assert rec is None, "timed-out call must be an honest miss"
     assert elapsed < 0.6, f"deadline must abandon, not join ({elapsed:.2f}s)"
-    tmp.unlink()
 
 
 def test_resolve_incomplete_local_dir_is_not_provisioned(tmp_path, monkeypatch):
@@ -529,3 +527,123 @@ def test_mrebel_release_is_wired_after_relationships():
     assert "_release_mrebel" in called, (
         "_release_mrebel must be wired (Rule 1: mREBEL unloads after the "
         "relationships stage)")
+
+
+def test_corrupt_cache_record_is_honest_miss(tmp_path):
+    """C1 rider review: a corrupt cache record (JSON array) must be a
+    miss, never an AttributeError that unwinds the stage and leaks the
+    loaded model."""
+    cache = tmp_path / "cc"
+    cache.mkdir()
+    (cache / ("aa" * 32 + ".json")).write_text('["not", "a", "dict"]')
+    assert ic.load_cached_caption(cache, "aa" * 32) is None
+
+
+def test_stage_unloads_on_midloop_exception(tmp_path, monkeypatch):
+    """C1 rider review: load/unload symmetry on EVERY exit path — an
+    exception mid-loop must still unload (try/finally), or the ~19 GB
+    model stays resident: exactly what rule 1 forbids."""
+    d = tmp_path / "artifacts"
+    d.mkdir()
+    arts = [_art("image-0000", "aa" * 32), _art("image-0001", "bb" * 32)]
+    for a in arts:
+        (d / a["ref"]).write_bytes(b"x" * 8)
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+
+    cap = ic.LocalMoondreamCaptioner(str(tmp_path))
+    events: list[str] = []
+    monkeypatch.setattr(cap, "load", lambda: events.append("load"))
+    monkeypatch.setattr(cap, "unload", lambda: events.append("unload"))
+
+    import pytest as _pytest
+
+    def exploding_caption(b, m):
+        raise RuntimeError("mid-loop boom")
+
+    monkeypatch.setattr(cap, "caption", exploding_caption)
+
+    import os
+
+    import axiom_ng_runner.runner as runner_mod
+    real_settings = runner_mod.settings
+
+    class _FS:
+        @staticmethod
+        def get():
+            return real_settings.get()
+
+    runner_mod.settings = _FS  # type: ignore[assignment]
+    old_env = os.environ.get("AXIOM_CAPTION_CACHE_DIR")
+    os.environ["AXIOM_CAPTION_CACHE_DIR"] = str(tmp_path / "cache3")
+    real_resolve = ic.resolve_captioner
+    ic.resolve_captioner = lambda: cap  # type: ignore[assignment]
+    try:
+        # caption_image swallows captioner exceptions (honest miss), so the
+        # mid-loop exception is delivered via the artifact shape instead:
+        del arts[1]["sha256"]  # KeyError mid-loop, after load()
+        with _pytest.raises(KeyError):
+            _caption_images_stage(
+                {"extract_image_captions": True}, arts, chunks, tmp_path,
+                {}, None, lambda cds: None,
+            )
+    finally:
+        ic.resolve_captioner = real_resolve  # type: ignore[assignment]
+        runner_mod.settings = real_settings  # type: ignore[assignment]
+        if old_env is None:
+            del os.environ["AXIOM_CAPTION_CACHE_DIR"]
+        else:
+            os.environ["AXIOM_CAPTION_CACHE_DIR"] = old_env
+    assert events == ["load", "unload"], (
+        f"mid-loop exception must still unload: {events}")
+
+
+def test_cloud_switch_still_unloads_local(tmp_path, monkeypatch):
+    """C2 rider review: the poison→cloud fallback must NOT leak the local
+    model — the stage unloads the ORIGINAL captioner even after the
+    captioner variable was rebound to the cloud fallback."""
+    d = tmp_path / "artifacts"
+    d.mkdir()
+    arts = [_art("image-0000", "aa" * 32)]
+    (d / "image-0000").write_bytes(_png_bytes())
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+
+    cap = ic.LocalMoondreamCaptioner(str(tmp_path))
+    cap._poisoned = True  # already poisoned: first image switches to cloud
+    unloaded: list[bool] = []
+    monkeypatch.setattr(cap, "load", lambda: None)
+    monkeypatch.setattr(cap, "unload", lambda: unloaded.append(True))
+
+    cloud = FakeCaptioner()
+    import axiom_ng_runner.runner as runner_mod
+    monkeypatch.setattr(runner_mod, "_cloud_fallback_captioner", lambda: cloud)
+
+    import os
+    real_settings = runner_mod.settings
+
+    class _FS:
+        @staticmethod
+        def get():
+            return real_settings.get()
+
+    runner_mod.settings = _FS  # type: ignore[assignment]
+    old_env = os.environ.get("AXIOM_CAPTION_CACHE_DIR")
+    os.environ["AXIOM_CAPTION_CACHE_DIR"] = str(tmp_path / "cache4")
+    real_resolve = ic.resolve_captioner
+    ic.resolve_captioner = lambda: cap  # type: ignore[assignment]
+    try:
+        sc: dict = {}
+        ran = _caption_images_stage(
+            {"extract_image_captions": True}, arts, chunks, tmp_path,
+            sc, None, lambda cds: None,
+        )
+    finally:
+        ic.resolve_captioner = real_resolve  # type: ignore[assignment]
+        runner_mod.settings = real_settings  # type: ignore[assignment]
+        if old_env is None:
+            del os.environ["AXIOM_CAPTION_CACHE_DIR"]
+        else:
+            os.environ["AXIOM_CAPTION_CACHE_DIR"] = old_env
+    assert ran is True
+    assert cloud.calls >= 1, "cloud fallback must caption after the poison"
+    assert arts[0]["attributes"]["caption_path"] == "cloud"
+    assert unloaded, "the ORIGINAL (local) captioner must be unloaded, not the cloud one"
