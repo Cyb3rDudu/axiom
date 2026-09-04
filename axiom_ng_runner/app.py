@@ -13,6 +13,7 @@ import logging
 import shutil
 import threading
 import time
+import urllib.error
 import urllib.request
 import uuid
 from contextlib import asynccontextmanager, suppress
@@ -280,6 +281,104 @@ def _validate_request(req: ProcessRequest) -> Path:
         ) from None
 
 
+class _TransportError(Exception):
+    """#250: Errno-60-class transport failure worth an internal retry."""
+
+    def __init__(self, cause: BaseException):
+        super().__init__(str(cause))
+        self.cause = cause
+
+
+def _is_transport_failure(err: BaseException) -> bool:
+    """Classify the narrow Errno-60 class: transport timeouts/resets.
+    URLError reasons are unwrapped; HTTPError and refused connections are
+    deliberately NOT in this class (a 5xx or dead port is not the
+    starvation this retry ladder exists for)."""
+    import errno
+    import socket
+
+    reason = err
+    if isinstance(err, urllib.error.URLError) and err.reason is not None:
+        reason = err.reason
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(reason, ConnectionError) and not isinstance(
+        reason, urllib.error.HTTPError
+    ):
+        return True
+    return isinstance(reason, OSError) and reason.errno in (
+        errno.ETIMEDOUT,
+        errno.ECONNRESET,
+        errno.EPIPE,
+        errno.ECONNABORTED,
+    )
+
+
+def _download_attempt(
+    url: str, dest: Path, deadline: float, budget: float, cap: int
+) -> None:
+    """One streaming download attempt. Raises SourceError for budget /
+    size-cap / HTTP-status deaths and _TransportError for the retryable
+    Errno-60 class (#250)."""
+    try:
+        with urllib.request.urlopen(url, timeout=budget) as r:
+            if r.status != 200:
+                raise SourceError(
+                    "SOURCE_NOT_FOUND",
+                    f"source_url returned HTTP {r.status}",
+                )
+            with open(dest, "wb") as f:
+                total = 0
+                next_progress = time.monotonic() + 10.0
+                while True:
+                    if time.monotonic() > deadline:
+                        raise SourceError(
+                            "SOURCE_NOT_FOUND",
+                            f"source_url download exceeded {budget:.0f}s budget "
+                            f"(got {total} bytes of cap {cap})",
+                        )
+                    chunk = r.read(65536)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > cap:
+                        raise SourceError(
+                            "SOURCE_NOT_FOUND",
+                            f"source_url exceeded size cap {cap}",
+                        )
+                    f.write(chunk)
+                    now = time.monotonic()
+                    if now >= next_progress:
+                        # #250: the next timeout must be diagnosable from the
+                        # runner log — bytes vs budget, not a bare errno.
+                        log.info(
+                            "source download: %d bytes (%.0f%% of cap %d), "
+                            "%.0fs of %.0fs budget left",
+                            total, 100.0 * total / max(cap, 1), cap,
+                            deadline - now, budget,
+                        )
+                        next_progress = now + 10.0
+    except _TransportError:
+        raise
+    except SourceError:
+        raise
+    except Exception as err:  # urllib/socket errors
+        if _is_transport_failure(err) and time.monotonic() < deadline:
+            # A timeout AT/AFTER the deadline is budget exhaustion, not a
+            # retryable transport blip (the socket backstop fires with the
+            # same TimeoutError shape) — #250 acceptance: budget deaths
+            # must carry the budget reason.
+            raise _TransportError(err) from err
+        if _is_transport_failure(err):
+            raise SourceError(
+                "SOURCE_NOT_FOUND",
+                f"source_url download exceeded {budget:.0f}s budget",
+            ) from err
+        raise SourceError(
+            "SOURCE_NOT_FOUND", f"source_url download failed: {err}"
+        ) from err
+
+
 def _download_source(req: ProcessRequest) -> Path:
     """Stream source_url into work_root/.incoming/<uuid>/ and gate it."""
     s = settings.get()
@@ -299,42 +398,48 @@ def _download_source(req: ProcessRequest) -> Path:
     dest = incoming / f"source{suffix}"
     # Total budget (not per-socket-op) and a byte cap: the deadline loop below
     # enforces both against a slow-drip or oversized sender.
+    # #250: the budget spans ALL internal attempts — a retry never buys
+    # extra wall-clock beyond what the operator granted.
     budget = s.source_download_timeout
     cap = att.size_bytes if att.size_bytes > 0 else 2_147_483_648
     deadline = time.monotonic() + budget
-    try:
-        with urllib.request.urlopen(att.source_url, timeout=budget) as r:
-            if r.status != 200:
-                raise SourceError(
-                    "SOURCE_NOT_FOUND",
-                    f"source_url returned HTTP {r.status}",
+    # #250: internal retries with backoff for the Errno-60 class. A transient
+    # starvation under full local compute must not burn a full job attempt
+    # (which reloads the model stacks). Deliberately narrow: only transport
+    # timeouts/resets retry — budget exhaustion, size cap, HTTP status and
+    # the integrity gates stay single-shot and honest.
+    max_attempts = 3
+    backoff_s = 1.0
+    last_transport_err: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            _download_attempt(att.source_url, dest, deadline, budget, cap)
+            last_transport_err = None
+            break
+        except SourceError:
+            # Budget exhaustion / size cap / HTTP status: honest single-shot
+            # death — cleanup, no retry (the operator's budget was spent).
+            shutil.rmtree(incoming, ignore_errors=True)
+            raise
+        except _TransportError as err:
+            last_transport_err = err.cause
+            if attempt < max_attempts and time.monotonic() + backoff_s < deadline:
+                log.warning(
+                    "source download attempt %d/%d failed (%s) — retrying "
+                    "in %.1fs (budget %.0fs)",
+                    attempt, max_attempts, err.cause, backoff_s, budget,
                 )
-            with open(dest, "wb") as f:
-                total = 0
-                while True:
-                    if time.monotonic() > deadline:
-                        raise SourceError(
-                            "SOURCE_NOT_FOUND",
-                            f"source_url download exceeded {budget:.0f}s budget",
-                        )
-                    chunk = r.read(65536)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > cap:
-                        raise SourceError(
-                            "SOURCE_NOT_FOUND",
-                            f"source_url exceeded size cap {cap}",
-                        )
-                    f.write(chunk)
-    except SourceError:
-        shutil.rmtree(incoming, ignore_errors=True)
-        raise
-    except Exception as err:  # urllib errors: timeout, conn refused, HTTPError
+                time.sleep(backoff_s)
+                backoff_s *= 2.0
+                continue
+            break  # out of retries or budget: fall through to the loud death
+    if last_transport_err is not None:
         shutil.rmtree(incoming, ignore_errors=True)
         raise SourceError(
-            "SOURCE_NOT_FOUND", f"source_url download failed: {err}"
-        ) from err
+            "SOURCE_NOT_FOUND",
+            f"source_url download failed after {max_attempts} attempts: "
+            f"{last_transport_err}",
+        ) from last_transport_err
     # Same integrity gates as local sources — the hash gate makes no trust
     # assumption about transport.
     try:

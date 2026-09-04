@@ -281,8 +281,124 @@ class TestSourceDownload:
                     elapsed = time.monotonic() - t0
                 assert r.status_code == 422, r.text
                 assert elapsed < 5.0, f"gave up too slowly: {elapsed:.1f}s"
+                # #250 probe: budget exhaustion must carry the BUDGET
+                # reason — never a transport/retry-exhaustion shape.
+                detail = r.json()["detail"].lower()
+                assert "budget" in detail, detail
+                assert "attempts" not in detail, detail
                 incoming = work / ".incoming"
                 assert not incoming.exists() or not any(incoming.glob("*/*")), \
                     "timeout must clean the temp download"
         finally:
             settings.set(old)
+
+
+class TestDownloadRetries250:
+    """#250: internal retries with backoff for the Errno-60 class — a
+    transient starvation must not burn a full job attempt.
+
+    Mutation-bars:
+    - retry loop kappen (max_attempts=1) → retry test red
+    - budget/cap/HTTP-status must stay single-shot honest deaths
+    """
+
+    def test_single_transport_failure_retried_internally(
+        self, dl_client, fixture_dirs, caplog
+    ):
+        """First GET dies with a transport-class failure (connection
+        reset mid-stream), second GET succeeds → job completes and the
+        intake happens on ONE job attempt (retry lived inside the
+        download, observable in the log)."""
+        import logging
+
+        client, _ = dl_client
+        src = _real_pdf(fixture_dirs["work"], fixture_dirs["pdf"])
+        attempts = {"n": 0}
+
+        # Deterministic: patch _download_attempt to fail ONCE with a
+        # ConnectionResetError (Errno-60 class), then serve normally.
+        real_attempt = app_mod._download_attempt
+
+        def flaky_attempt(url, dest, deadline, budget, cap):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+
+                raise app_mod._TransportError(
+                    ConnectionResetError(104, "Connection reset by peer")
+                )
+            return real_attempt(url, dest, deadline, budget, cap)
+
+        from unittest import mock
+
+        with (
+            mock.patch.object(app_mod, "_download_attempt", flaky_attempt),
+            _SourceServer(fixture_dirs["work"]) as srv,
+            caplog.at_level(logging.WARNING),
+        ):
+            r = client.post(
+                "/v1/process", json=_payload(srv.url, src, "job-retry-1")
+            )
+        assert r.status_code == 202, r.text
+        terminal = _wait_terminal(client, "job-retry-1")
+        assert terminal["status"] == "completed", terminal
+        assert attempts["n"] == 2, "exactly one internal retry must occur"
+        assert any(
+            "attempt 1/3 failed" in rec.message for rec in caplog.records
+        ), "the retry must be observable in the runner log"
+
+    def test_retry_exhaustion_is_loud_after_3(self, dl_client, fixture_dirs):
+        """All three internal attempts fail → ONE 422 carrying the attempt
+        count (the job-retry ladder still exists above this; the internal
+        ladder just must not die on attempt 1)."""
+        client, _ = dl_client
+        src = _pdf(fixture_dirs["sources"])
+        attempts = {"n": 0}
+
+        def always_transport(url, dest, deadline, budget, cap):
+            attempts["n"] += 1
+
+            raise app_mod._TransportError(
+                TimeoutError(60, "Operation timed out")
+            )
+
+        from unittest import mock
+
+        with mock.patch.object(app_mod, "_download_attempt", always_transport):
+            p = _payload("http://127.0.0.1:9/x", src, "job-retry-2")
+            r = client.post("/v1/process", json=p)
+        assert r.status_code == 422, r.text
+        assert "3 attempts" in r.json()["detail"], r.json()["detail"]
+        assert attempts["n"] == 3
+
+    def test_http_status_not_retried(self, dl_client, fixture_dirs):
+        """A 503 source dies on attempt 1 — HTTP status errors are not the
+        Errno-60 class; retrying them would mask a broken source."""
+        client, _ = dl_client
+        src = _pdf(fixture_dirs["sources"])
+        attempts = {"n": 0}
+        real_attempt = app_mod._download_attempt
+
+        def counting(url, dest, deadline, budget, cap):
+            attempts["n"] += 1
+            return real_attempt(url, dest, deadline, budget, cap)
+
+        from unittest import mock
+
+        with (
+            mock.patch.object(app_mod, "_download_attempt", counting),
+            _SourceServer(fixture_dirs["sources"], serve=False) as srv,
+        ):
+            r = client.post(
+                "/v1/process", json=_payload(srv.url, src, "job-retry-3")
+            )
+        assert r.status_code == 422, r.text
+        assert attempts["n"] == 1, "HTTP status deaths must stay single-shot"
+        # urllib raises HTTPError from urlopen (never reaches the status
+        # read); the 503 must surface in the detail either way.
+        assert "503" in r.json()["detail"], r.json()["detail"]
+
+    def test_default_budget_is_600(self):
+        """#250: the default budget is 600s (config), env override intact."""
+        from axiom_ng_runner.config import Settings
+
+        assert Settings().source_download_timeout == 600.0

@@ -26,7 +26,9 @@ class Settings:
     compute_backend: str = "reference"  # "reference" | "real"
     log_level: str = "INFO"
     # Remote source delivery: total download budget for one source_url pull.
-    source_download_timeout: float = 120.0
+    # #250: 600s default — a large book under full local compute must
+    # transfer, not race the clock (the budget spans all internal retries).
+    source_download_timeout: float = 600.0
     # Query endpoints (epic #130): hard server caps; /v1/embed max_texts may
     # only lower these, never raise them.
     max_query_texts: int = 16
