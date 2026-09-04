@@ -652,10 +652,17 @@ class TestLabelTreeE2E251:
         """Leading unnamed page + closed run: the written tree must give
         page 0 an explicit empty label (no crash in ANY consumer)."""
         import sys
+        from pathlib import Path as _P
 
-        sys.path.insert(
-            0, "/tmp/axiom-harden/axiom_ng/tools/pdf_repair_agent/tools"
+        # repo-relative, NEVER a session worktree path (#233 hermeticity):
+        tools = (
+            _P(__file__).resolve().parents[2]
+            / "axiom_ng"
+            / "tools"
+            / "pdf_repair_agent"
+            / "tools"
         )
+        sys.path.insert(0, str(tools))
         import pdf_kernel
 
         src = tmp_path / "k.pdf"
