@@ -7,6 +7,12 @@ import json
 from pathlib import Path
 
 import pytest
+
+# CI light stack: the captioner module imports torch at module level —
+# skip collection there instead of failing (the tests themselves fake the
+# model; the heavy dep is only needed for the import chain).
+pytest.importorskip("torch")
+
 from axiom_ng_runner.compute_core import image_captioner as ic
 from axiom_ng_runner.runner import (
     _adapt_chunk,
