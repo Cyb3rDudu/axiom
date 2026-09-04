@@ -1702,3 +1702,68 @@ func TestClaimWithoutRunnerNameLeavesNull(t *testing.T) {
 		t.Fatalf("runner_name = %v, want NULL", *got)
 	}
 }
+
+// TestClaimBudgetLimitsConcurrentClaims (#248): the DB-side claim budget —
+// total concurrent claims never exceed Σ declared runner capacities,
+// REGARDLESS of how many claimer processes hammer the table. The advisory
+// xact lock inside the claim transaction serializes the check, so N
+// concurrent claimers with budget 1 produce EXACTLY one grant; budget 2
+// produces exactly two. 0 keeps the legacy unlimited contract.
+func TestClaimBudgetLimitsConcurrentClaims(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	// 6 sources (unique key base_url+library_id), each with ONE preferred
+	// attachment and a claimable pending job — the obsolescence rules make
+	// non-preferred attachments' jobs unclaimable, so every claimable job
+	// needs its own source.
+	for i := 0; i < 6; i++ {
+		lr.seed(t, seedSpec{
+			sourceBaseURL: fmt.Sprintf("http://cbudget:%d", i), libraryID: "users/0",
+			docKey: fmt.Sprintf("B%02d", i), attKey: fmt.Sprintf("B%02d", i),
+			contentHash: h(fmt.Sprintf("sha256:b%d", i)), preferred: true,
+		}, "pending", 3)
+	}
+
+	for _, budget := range []int{1, 2} {
+		// Reset to all-pending before each round.
+		if _, err := lr.pool.Exec(context.Background(),
+			`UPDATE ingest_jobs SET status='pending', claimed_by=NULL, lease_token=NULL, lease_until=NULL, attempt=0`); err != nil {
+			t.Fatalf("reset: %v", err)
+		}
+		claimants := 6
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		granted := 0
+		for w := 0; w < claimants; w++ {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				opts := defaultClaim(fmt.Sprintf("budget-w%d", w))
+				opts.MaxActiveLeases = budget
+				cj, err := lr.rep.ClaimNextJob(context.Background(), opts)
+				if err != nil {
+					t.Errorf("claim: %v", err)
+					return
+				}
+				if cj != nil {
+					mu.Lock()
+					granted++
+					mu.Unlock()
+				}
+			}(w)
+		}
+		wg.Wait()
+		if granted != budget {
+			t.Fatalf("budget %d: granted %d claims from %d concurrent claimers, want exactly %d", budget, granted, claimants, budget)
+		}
+		// Belt: the active-lease count in the DB matches the budget.
+		var active int
+		if err := lr.pool.QueryRow(context.Background(),
+			`SELECT count(*) FROM ingest_jobs WHERE status='claimed' AND lease_until > now()`).Scan(&active); err != nil {
+			t.Fatalf("count active: %v", err)
+		}
+		if active != budget {
+			t.Fatalf("budget %d: %d active leases in DB, want exactly %d", budget, active, budget)
+		}
+	}
+}

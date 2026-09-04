@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -201,6 +203,10 @@ type fakeProcessor struct {
 	// script holds one handler per probe. index is consumed by the switch in serve.
 	statuses  []string // sequence of statuses returned by GET /v1/jobs/{id}
 	statusIdx int
+	// mu guards the shared script/hit counters: #248 ITs drive TWO jobs
+	// concurrently against one fake runner, so status polls and submits
+	// overlap (-race).
+	mu sync.Mutex
 	// #167: optional per-poll stage names emitted alongside each in-progress
 	// status, so tests can drive JobStageChanged deltas. Empty => no stage.
 	stages        []string
@@ -247,7 +253,9 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	case r.Method == http.MethodPost && path == "/v1/pdf/preflight":
+		fp.mu.Lock()
 		fp.preflightHits++
+		fp.mu.Unlock()
 		if fp.preflightReport == nil {
 			w.WriteHeader(404)
 			return
@@ -256,7 +264,9 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && path == "/v1/process":
 		b, _ := io.ReadAll(r.Body)
 		fp.processBody = b
+		fp.mu.Lock()
 		fp.processHits++
+		fp.mu.Unlock()
 		if fp.processFailStatus != 0 &&
 			(fp.processFailFirst == 0 || fp.processHits <= fp.processFailFirst) {
 			w.WriteHeader(fp.processFailStatus)
@@ -281,11 +291,13 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(fp.failStatus)
 			return
 		}
+		fp.mu.Lock()
 		idx := fp.statusIdx
 		if idx < len(fp.statuses)-1 {
 			fp.statusIdx++
 		}
 		st := fp.statuses[idx]
+		fp.mu.Unlock()
 		if st == "failed" {
 			writeJSON(w, 200, map[string]any{
 				"contract_version": "1.0", "job_id": strings.TrimPrefix(strings.TrimSuffix(path, ""), "/v1/jobs/"),
@@ -306,7 +318,9 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, status)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/jobs/") && strings.HasSuffix(path, "/ack"):
+		fp.mu.Lock()
 		fp.ackHits++
+		fp.mu.Unlock()
 		if fp.ackFailures > 0 {
 			fp.ackFailures--
 			w.WriteHeader(http.StatusInternalServerError)
@@ -314,7 +328,9 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, map[string]any{"contract_version": "1.0"})
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/jobs/") && strings.HasSuffix(path, "/cancel"):
+		fp.mu.Lock()
 		fp.cancelHits++
+		fp.mu.Unlock()
 		writeJSON(w, 200, map[string]any{"contract_version": "1.0"})
 	default:
 		w.WriteHeader(404)
@@ -1610,4 +1626,154 @@ func TestStaleRepairableCaseNotRecycledIntoQueue(t *testing.T) {
 	if rc == nil || rc["stale"] != true {
 		t.Fatalf("stale case analysis must be untouched: %v", rc)
 	}
+}
+
+// runningScript returns a busy script of n "running" polls before the
+// terminal "completed" — the long-compute phase the #248 lane ITs need so a
+// claimed job holds its lane for the whole observation window.
+func runningScript(n int) []string {
+	s := make([]string, n)
+	for i := range s {
+		s[i] = "running"
+	}
+	return append(s, "completed")
+}
+
+// activeLaneStats samples the live claim lanes: concurrent active leases
+// and the distinct claimers behind them (#248 log proof: SELECT DISTINCT
+// claimed_by).
+func activeLaneStats(t *testing.T, h *dispatchHarness) (active int, claimers []string) {
+	t.Helper()
+	rows, err := h.pool.Query(context.Background(),
+		`SELECT claimed_by FROM ingest_jobs WHERE status IN ('claimed','processing') AND lease_until > now()`)
+	if err != nil {
+		t.Fatalf("lane stats: %v", err)
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	for rows.Next() {
+		var w string
+		if err := rows.Scan(&w); err != nil {
+			t.Fatalf("lane stats scan: %v", err)
+		}
+		active++
+		seen[w] = true
+	}
+	for w := range seen {
+		claimers = append(claimers, w)
+	}
+	sort.Strings(claimers)
+	return active, claimers
+}
+
+// TestSoloRunnerSingleLaneAcrossAgents (#248 solo proof): ONE runner with
+// declared capacity 1, TWO dispatcher agents (the carrier-era topology)
+// hammering the same DB and the same runner with more claimable jobs than
+// lanes. The DB claim budget must hold the system to EXACTLY ONE claim
+// lane: the busy agent keeps its claim, the other agent NEVER claims, and
+// the log proof (SELECT DISTINCT claimed_by over active claims) shows one
+// claimer for the whole window.
+func TestSoloRunnerSingleLaneAcrossAgents(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	j1 := h.seedJob(t, "SOLO1", 3)
+	h.seedJob(t, "SOLO2", 3)
+	h.seedJob(t, "SOLO3", 3)
+
+	// The shared runner (capacity 1) holds job 1 busy for the whole window.
+	fp := newFakeProcessor(t)
+	fp.statuses = runningScript(400)
+	_ = j1
+
+	agentA := newDispatcher(t, h, fp, Config{WorkerID: "solo-agent-a"})
+	agentB := newDispatcher(t, h, fp, Config{WorkerID: "solo-agent-b"})
+	ctxA, cancelA := context.WithCancel(context.Background())
+	defer cancelA()
+	ctxB, cancelB := context.WithCancel(context.Background())
+	defer cancelB()
+	go agentA.Run(ctxA)
+	go agentB.Run(ctxB)
+
+	sawBusy := false
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		active, claimers := activeLaneStats(t, h)
+		if active > 1 {
+			t.Fatalf("solo violation: %d concurrent claims (claimers %v), want exactly 1 lane", active, claimers)
+		}
+		if active == 1 {
+			sawBusy = true
+			if len(claimers) != 1 || claimers[0] != "solo-agent-a" && claimers[0] != "solo-agent-b" {
+				t.Fatalf("unexpected claimer %v", claimers)
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !sawBusy {
+		t.Fatal("no busy phase observed — the lane proof is vacuous")
+	}
+	// Whoever holds the lane, the OTHER agent never claimed concurrently:
+	// end-of-window, still at most one active claim and one claimer.
+	active, claimers := activeLaneStats(t, h)
+	if active != 1 || len(claimers) != 1 {
+		t.Fatalf("end of window: %d active claims by %v, want exactly 1 by 1 claimer", active, claimers)
+	}
+	cancelA()
+	cancelB()
+}
+
+// TestGPURichLanesScaleToSumCapacities (#248 GPU-rich proof): TWO runners,
+// each declaring capacity 1 — the derived lane count (Concurrency unset)
+// must scale to Σ = 2, and the DB budget must hold it there: exactly two
+// concurrent claims while more jobs wait, never a third lane.
+func TestGPURichLanesScaleToSumCapacities(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	h.seedJob(t, "GPU1", 3)
+	h.seedJob(t, "GPU2", 3)
+	h.seedJob(t, "GPU3", 3)
+	h.seedJob(t, "GPU4", 3)
+
+	fp1, fp2 := newFakeProcessor(t), newFakeProcessor(t)
+	fp1.statuses = runningScript(400)
+	fp2.statuses = runningScript(400)
+	chain := processor.NewFailoverChain(
+		[]*processor.Client{mustClient(t, fp1.url()), mustClient(t, fp2.url())},
+		log.New(io.Discard, "", 0))
+
+	// Built directly (not via newDispatcher): the helper would pin
+	// Concurrency=1, but this test PROVES the derivation — Concurrency <= 0
+	// must become Σ(live capacities) = 2.
+	d := NewWithPersister(h.rep, chain, &recordingPersister{rep: h.rep}, Config{
+		WorkerID:         "gpu-rich-agent",
+		LeaseDuration:    5 * time.Minute,
+		RenewalInterval:  25 * time.Millisecond,
+		PollInterval:     15 * time.Millisecond,
+		AckRetryInterval: 100 * time.Millisecond,
+		Profile:          json.RawMessage(`{"profile":"full-rag-v1"}`),
+	}, log.New(io.Discard, "", 0))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx)
+
+	sawTwo := false
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		active, claimers := activeLaneStats(t, h)
+		if active > 2 {
+			t.Fatalf("GPU-rich violation: %d concurrent claims (claimers %v), want at most Σ=2", active, claimers)
+		}
+		if active == 2 {
+			sawTwo = true
+			// One process, two lanes: both claims carry the same worker.
+			if len(claimers) != 1 || claimers[0] != "gpu-rich-agent" {
+				t.Fatalf("lanes held by %v, want the single derived-concurrency agent", claimers)
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !sawTwo {
+		t.Fatal("Σ-capacity scaling not observed — derivation did not produce 2 lanes")
+	}
+	cancel()
 }

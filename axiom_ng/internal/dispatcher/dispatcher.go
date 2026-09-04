@@ -120,6 +120,10 @@ type Dispatcher struct {
 	// caps is the negotiated processor capability set; set once in Run before any
 	// claim is dispatched and used to bound concurrency and validate each job.
 	caps *processor.Capabilities
+	// laneBudget (#248) is the Σ-capacity claim ceiling enforced by the DB
+	// claim budget — total concurrent claims across ALL agents on a host
+	// never exceed it, regardless of how many dispatcher processes run.
+	laneBudget int
 	// events is the observer-only event bus (#167). Nil (the zero value)
 	// disables all emissions: no dispatcher behavior depends on it.
 	events *events.Broker
@@ -147,9 +151,6 @@ func New(rep *repo.Repo, client processorClient, cfg Config, logger *log.Logger)
 // NewWithPersister builds a Dispatcher with an explicit result-persistence
 // boundary (tests supply a recording fake; Gate 4 will supply the real one).
 func NewWithPersister(rep *repo.Repo, client processorClient, persist ResultPersister, cfg Config, logger *log.Logger) *Dispatcher {
-	if cfg.Concurrency <= 0 {
-		cfg.Concurrency = 1
-	}
 	if cfg.WorkerID == "" {
 		cfg.WorkerID = "axiom-ng"
 	}
@@ -225,10 +226,37 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 		d.logger.Printf("processor does not support contract v1 (versions=%v)", caps.ContractVersions)
 		return fmt.Errorf("processor does not support contract v1")
 	}
-	if caps.Limits.MaxConcurrentJobs > 0 && d.cfg.Concurrency > caps.Limits.MaxConcurrentJobs {
-		d.logger.Printf("clamping concurrency %d -> %d (processor max)", d.cfg.Concurrency, caps.Limits.MaxConcurrentJobs)
-		d.cfg.Concurrency = caps.Limits.MaxConcurrentJobs
+	// #248: lanes follow runner reality. The lane budget is Σ declared
+	// max_concurrent_jobs of the living candidates (a chain exposes it via
+	// LaneCapacity; a bare Client falls back to its own negotiated caps, a
+	// missing declaration counts as 1 — local-first default). Concurrency
+	// <= 0 DERIVES the worker count from that budget; an explicit value is
+	// clamped to it (claims never exceed reality).
+	lanes := 0
+	if caps.Limits.MaxConcurrentJobs > 0 {
+		lanes = caps.Limits.MaxConcurrentJobs
+	} else {
+		lanes = 1
 	}
+	if lc, ok := d.client.(interface {
+		LaneCapacity(ctx context.Context) (int, error)
+	}); ok {
+		if n, err := lc.LaneCapacity(ctx); err == nil && n > 0 {
+			lanes = n
+		} else if err != nil {
+			// Best-effort: the negotiated first candidate already answered,
+			// so keep its caps-derived budget rather than refusing to start.
+			d.logger.Printf("lane capacity aggregation failed (%v); using first-candidate caps", err)
+		}
+	}
+	if d.cfg.Concurrency <= 0 {
+		d.logger.Printf("#248: concurrency derived from live runner capacities: %d lane(s)", lanes)
+		d.cfg.Concurrency = lanes
+	} else if d.cfg.Concurrency > lanes {
+		d.logger.Printf("clamping concurrency %d -> %d (Σ live runner capacities, #248)", d.cfg.Concurrency, lanes)
+		d.cfg.Concurrency = lanes
+	}
+	d.laneBudget = lanes
 	d.caps = caps
 	// Separate ack-retry pass: re-acknowledges completed jobs whose ack failed,
 	// never reprocessing them (F3). Runs until ctx is cancelled.
@@ -304,10 +332,11 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 			return
 		}
 		claimed, err := d.rep.ClaimNextJob(ctx, repo.ClaimOptions{
-			WorkerID:      d.cfg.WorkerID,
-			RunnerName:    d.cfg.RunnerName,
-			LeaseDuration: d.cfg.LeaseDuration,
-			Profile:       d.cfg.Profile,
+			WorkerID:        d.cfg.WorkerID,
+			RunnerName:      d.cfg.RunnerName,
+			LeaseDuration:   d.cfg.LeaseDuration,
+			Profile:         d.cfg.Profile,
+			MaxActiveLeases: d.laneBudget, // #248 DB claim budget (0 = unlimited, legacy)
 		})
 		if err != nil {
 			if ctx.Err() != nil {

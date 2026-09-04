@@ -17,7 +17,7 @@ not the reference path. `make` is a dev surface only.
 | --- | --- |
 | 8011 | `com.axiom.rag` API (bind via `rag-api.env`, LAN needs 0.0.0.0) |
 | 8012 | `com.axiom.runner` processor (`AXIOM_PROCESSOR_COMPUTE=real`) |
-| 8013–8015 | `com.axiom.rag-dispatch-gpu0/1/2` dispatcher instances |
+| 8013 | `com.axiom.rag-dispatch` dispatcher agent (single instance; the gpu0/1/2 trio is retired — #248) |
 | 19542–19544 | Carrier runners (or carrier-bridge on 127.0.0.1) |
 
 ## Install layout & staging rule
@@ -53,7 +53,7 @@ Installed by `scripts/install_services.sh` (confirmation prompt; substitutes
 `__HOME__` — launchd does not expand `$HOME` in `Standard*Path`):
 
 - `com.axiom.rag` — RunAtLoad + KeepAlive (reboot survival)
-- `com.axiom.rag-dispatch-gpu0/1/2` — one per Carrier runner
+- `com.axiom.rag-dispatch` — the single dispatcher agent (claim lanes follow runner reality, #248)
 - `com.axiom.runner` — standing service
 - `com.axiom.carrier-bridge` — TEMPLATE (opt-in `--with-bridge`), the
   Apple-python bridge workaround for TCC-blocked unsigned binaries; may
@@ -70,13 +70,40 @@ Conventions in `deploy/launchd/README.md`: env-file sourcing via `sh -c`
 wrapper, runner exec'd as `env/bin/python -m axiom_ng_runner` (conda-pack
 shebang ceiling).
 
-**Restart order is runner → rag → dispatchers.** A rolling restart must bring
-up the runner (8012) before the dispatchers (8013–8015): a dispatcher that
+**Restart order is runner → rag → dispatcher.** A rolling restart must bring
+up the runner (8012) before the dispatcher (8013): a dispatcher that
 starts before the runner boots now retries capability negotiation with backoff
 (#214) and exits non-zero (so launchd/KeepAlive restarts it) if the runner
 stays unreachable past the ~2min window or proves unusable — so the wrong
 order is survivable, but `launchctl kickstart -k` of the
 runner first, then the rag, then the dispatchers is the clean sequence.
+
+### Claim-lane topology (#248 — one agent, lanes follow runner reality)
+
+The carrier-era topology ran THREE dispatcher agents (gpu0/1/2), one per GPU
+box. On the single-box mothership that meant three independent claim streams
+against ONE local runner of capacity 1 — aging source URLs, multiplied
+retries, a box hotter than its real capacity. Retired:
+
+- **One dispatcher agent per host** (`com.axiom.rag-dispatch`, port 8013).
+  Unload and remove the old `rag-dispatch-gpu0/1/2` plists; the surviving
+  agent runs with `AXIOM_DISPATCHER_ENABLED=1`.
+- **`AXIOM_DISPATCHER_CONCURRENCY` is now optional.** Unset (or 0) DERIVES
+  the lane count from the Σ of the live runners' declared
+  `max_concurrent_jobs` at startup negotiation; an explicit value is clamped
+  to that Σ. Leave it unset on solo and GPU-rich hosts alike — the runner
+  declaration is the single source of truth.
+- **The DB claim budget is the safety net.** Whatever the process count on a
+  host, concurrent claims never exceed Σ declared capacities: the claim
+  transaction takes an advisory lock and refuses grants while active leases
+  meet the budget. A stray legacy agent left over from the migration cannot
+  over-claim — it simply idles.
+- **GPU-rich needs no topology change:** list the runners in
+  `AXIOM_PROCESSOR_URLS` and the lanes derive (3 runners × capacity 1 = 3
+  lanes). A runner added mid-run raises the budget on the next restart.
+- **Lane proof during a batch run:**
+  `psql -c "SELECT DISTINCT claimed_by FROM ingest_jobs WHERE status IN ('claimed','processing') AND lease_until > now();"`
+  — exactly as many claimers as live lanes of ONE agent.
 
 ## PDF preflight — quality gate before chunking (#175)
 

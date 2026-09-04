@@ -116,7 +116,10 @@ type Config struct {
 	DispatcherEnabled bool
 	// DispatcherWorkerID is this process's stable worker identity for leases.
 	DispatcherWorkerID string
-	// DispatcherConcurrency caps parallel claim/process slots.
+	// DispatcherConcurrency caps parallel claim/process slots. 0 (or unset)
+	// DERIVES the slot count from the Σ live runner capacities (#248:
+	// local-first default — lanes follow runner reality); an explicit value
+	// is clamped to that Σ.
 	DispatcherConcurrency int
 	// DispatcherProfile is the processing profile JSON frozen at claim time.
 	DispatcherProfile string
@@ -204,7 +207,7 @@ func Load() Config {
 		ProcessorRunnerName:        env("AXIOM_PROCESSOR_RUNNER_NAME", ""),
 		DispatcherEnabled:          envBool("AXIOM_DISPATCHER_ENABLED"),
 		DispatcherWorkerID:         env("AXIOM_DISPATCHER_WORKER_ID", "axiom-ng"),
-		DispatcherConcurrency:      envInt("AXIOM_DISPATCHER_CONCURRENCY", 1),
+		DispatcherConcurrency:      envInt("AXIOM_DISPATCHER_CONCURRENCY", 0), // 0 = derive from Σ live runner capacities (#248)
 		DispatcherProfile:          env("AXIOM_DISPATCHER_PROFILE", defaultProfile),
 		DispatcherLeaseDuration:    envDur("AXIOM_DISPATCHER_LEASE", 5*time.Minute),
 		DispatcherPreflightEnabled: envBool("AXIOM_DISPATCHER_PREFLIGHT"),

@@ -32,6 +32,11 @@ import (
 // the poll loop indefinitely. The next poll continues where the bound left off.
 const maxObsoleteSkips = 100
 
+// claimBudgetLockKey is the fixed advisory-lock key serializing the #248
+// claim budget check across ALL claimers (processes included). Any stable
+// bigint unique to this purpose works; this one is arbitrary but constant.
+const claimBudgetLockKey = 812401
+
 // maxRetryDelaySeconds is the documented upper bound for ScheduleRetry backoff;
 // larger or negative requests are clamped into [0, maxRetryDelaySeconds].
 const maxRetryDelaySeconds = 86400 // 24h
@@ -66,6 +71,14 @@ type ClaimOptions struct {
 	RunnerName    string
 	LeaseDuration time.Duration
 	Profile       json.RawMessage
+	// MaxActiveLeases (#248) is the DB-side claim budget: while the number
+	// of ACTIVE leases (status='claimed' AND lease_until > now()) is at or
+	// above it, ClaimNextJob grants nothing. It is the Σ of the live runner
+	// capacities negotiated by the dispatcher and is enforced across ALL
+	// dispatcher agents on a host — total claims never exceed the runners'
+	// declared capacity, regardless of how many agent processes run. 0 (and
+	// negatives) disable the budget (legacy/unlimited contract).
+	MaxActiveLeases int
 }
 
 // ClaimedJob is the immutable claim payload returned to a dispatcher so it can
@@ -146,6 +159,35 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 				return nil, err
 			}
 			first = false
+		}
+
+		// #248 claim budget: never grant while the active-lease count already
+		// meets the lane budget. Active = claimed OR processing while the
+		// lease is alive (a job stays leased through its whole compute).
+		// The advisory xact lock serializes concurrent
+		// claimers (across processes) so two claimers cannot both observe
+		// headroom and over-grant; it is transaction-scoped and releases at
+		// commit/rollback. Leak-proof by construction: the count only sees
+		// leases that are claimed AND unexpired, and terminalizeStale above
+		// already cleared stale rows in this same transaction.
+		if opts.MaxActiveLeases > 0 {
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, claimBudgetLockKey); err != nil {
+				tx.Rollback(ctx)
+				return nil, fmt.Errorf("claim budget lock: %w", err)
+			}
+			var active int
+			if err := tx.QueryRow(ctx,
+				`SELECT count(*) FROM ingest_jobs WHERE status IN ('claimed','processing') AND lease_until > now()`).Scan(&active); err != nil {
+				tx.Rollback(ctx)
+				return nil, fmt.Errorf("claim budget count: %w", err)
+			}
+			if active >= opts.MaxActiveLeases {
+				// Persist the terminalizations; grant nothing this round.
+				if err := tx.Commit(ctx); err != nil {
+					return nil, err
+				}
+				return nil, nil
+			}
 		}
 
 		cand, err := claimCandidate(ctx, tx)

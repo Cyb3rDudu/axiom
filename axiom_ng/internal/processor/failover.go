@@ -245,6 +245,39 @@ func (f *FailoverClient) SubmitProcess(ctx context.Context, req *ProcessRequest)
 	return nil, lastErr
 }
 
+// LaneCapacity is the #248 claim-lane budget: the SUM of the declared
+// max_concurrent_jobs across the chain's living candidates. A candidate that
+// does not declare a positive max counts as 1 (conservative: local-first is
+// the default case, topology assumptions must not leak into solo mode).
+// Unreachable candidates contribute nothing (their claims cannot land there
+// anyway once failover stops routing to them) — so a dead runner shrinks the
+// budget at the next negotiation. Best-effort: on error from every candidate
+// the caller keeps its previous budget (#248 design: ceiling, not target).
+//
+// The dispatcher consumes this through an optional-interface assertion — a
+// single (non-chain) Client has no LaneCapacity and falls back to its own
+// negotiated caps.
+func (f *FailoverClient) LaneCapacity(ctx context.Context) (int, error) {
+	total := 0
+	probed := 0
+	for _, c := range f.ordered() {
+		caps, err := c.Capabilities(ctx)
+		if err != nil {
+			continue // down candidates add no lanes
+		}
+		probed++
+		if caps.Limits.MaxConcurrentJobs > 0 {
+			total += caps.Limits.MaxConcurrentJobs
+		} else {
+			total++
+		}
+	}
+	if probed == 0 {
+		return 0, ErrNoCandidates
+	}
+	return total, nil
+}
+
 // Capabilities negotiates with the first living candidate — ingest must be
 // able to start even when the preferred runner is down.
 func (f *FailoverClient) Capabilities(ctx context.Context) (*Capabilities, error) {
