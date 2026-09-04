@@ -120,6 +120,15 @@ func main() {
 		// REST snapshot /api/runners/live serves the same struct.
 		runnerView := server.NewRunnerLive(wsBroker, logger)
 		srv.SetRunnerLive(runnerView)
+		if !cfg.DispatcherEnabled {
+			// #249: the event bus is process-local. Without a dispatcher in
+			// THIS process, /api/runners/live and the ws job topics see no
+			// claims at all — the empty-list shape of the 2026-09-04
+			// incident. The complete view lives on the dispatcher agent's
+			// port (#248 single-agent topology: dispatcher + API in one
+			// process).
+			logger.Printf("#249: no dispatcher in this process — /api/runners/live sees no claims (the bus is process-local); serve the dispatcher here or query the agent's port")
+		}
 		go runnerView.Start(sigCtx.Done())
 		// #169 review: close the startup race in production too — wait until
 		// the deriver's bus subscription is live BEFORE the dispatcher below
