@@ -23,9 +23,11 @@ caller stores it marked as machine-generated.
 from __future__ import annotations
 
 import base64
+import gc
 import json
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -111,6 +113,17 @@ class CloudCaptioner:
         return caption, "cloud"
 
 
+# Rule 3 (#230 rider): ONE local caption inference at a time — never two
+# inferences in parallel on the same model.
+_LOCAL_INFERENCE_LOCK = threading.Lock()
+
+
+class CaptionerNotProvisioned(Exception):
+    """Raised by a local captioner's load gate (rule 5): not enough free
+    VRAM/RAM for the model. The caller treats it as NOT_PROVISIONED (cloud
+    fallback or honest empty captions) instead of an OOM crash."""
+
+
 class LocalMoondreamCaptioner:
     """Local Moondream 3 captioner (CPU trickle path, #230).
 
@@ -128,6 +141,10 @@ class LocalMoondreamCaptioner:
         "pin and verify the shard sha256s against the repo manifest."
     )
 
+    # Rule 5 (#230 rider): refuse to load into a tight machine instead of
+    # OOM-crashing the runner. fp16 weights ≈ 20 GB + activations.
+    MIN_FREE_GB = 24.0
+
     def __init__(self, model_dir: str | None = None):
         import torch  # noqa: F401 — fail fast with the honest ImportError
 
@@ -135,36 +152,111 @@ class LocalMoondreamCaptioner:
             model_dir or os.getenv("AXIOM_CAPTION_LOCAL_MODEL_DIR", "")
         )
         self.model = "moondream3-preview"
-        self._moondream: Any | None = None
+        # Rule 1: INGEST class — no persistent model caching; load() on
+        # stage order, unload() after the stage. _model is only non-None
+        # between an explicit load()/unload() pair.
+        self._model: Any | None = None
+        # Rule 4: poison flag — set when an inference blew its timeout.
+        self._poisoned = False
 
-    def _load(self) -> Any:
-        if self._moondream is not None:
-            return self._moondream
+    def _load_gate_ok(self) -> bool:
+        """Rule 5: enough free memory for fp16 weights + activations."""
+        try:
+            import psutil
+        except ImportError:
+            return True  # cannot measure → do not block on a missing gauge
+        free_gb = psutil.virtual_memory().available / (1024 ** 3)
+        if free_gb < self.MIN_FREE_GB:
+            log.warning("local captioner load gate: %.1f GB free < %.1f GB "
+                        "required — NOT_PROVISIONED", free_gb, self.MIN_FREE_GB)
+            return False
+        return True
+
+    def load(self) -> Any:
+        """Explicit load with EXPLICIT device + dtype (rule 2) — no
+        implicit from_pretrained placement."""
+        if self._model is not None:
+            return self._model
         if not self._model_dir or not (self._model_dir / "config.json").exists():
-            raise FileNotFoundError(self.DOWNLOAD_INSTRUCTIONS)
-        # Import mirrors the GLiNER pattern (runner.py): in-process load,
-        # device placement via the hardware detector when available.
+            raise CaptionerNotProvisioned(self.DOWNLOAD_INSTRUCTIONS)
+        if not self._load_gate_ok():
+            raise CaptionerNotProvisioned(
+                f"less than {self.MIN_FREE_GB:.0f} GB free memory for the "
+                "fp16 Moondream weights")
         import sys
+
+        import torch
 
         sys.path.insert(0, str(self._model_dir))
         try:
-            from moondream import Moondream  # type: ignore[import-not-found]
+            from hf_moondream import HfMoondream  # type: ignore[import-not-found]
         except ImportError as err:
-            raise FileNotFoundError(
+            raise CaptionerNotProvisioned(
                 f"{self.DOWNLOAD_INSTRUCTIONS} (snapshot incomplete: {err})"
             ) from err
-        ckpt = str(self._model_dir)
-        self._moondream = Moondream.from_pretrained(ckpt)
-        return self._moondream
+        device = "cpu"
+        try:
+            from axiom_ng_runner.compute_core.devices import hardware_detector
+
+            resolved = hardware_detector.get_torch_device()
+            device = str(resolved)
+        except Exception as err:  # noqa: BLE001 — detector optional
+            log.debug("device detector unavailable, local captioner on CPU: %s", err)
+        model = HfMoondream.from_pretrained(
+            str(self._model_dir), trust_remote_code=True, torch_dtype=torch.float16
+        ).to(device).eval()
+        self._model = model
+        log.info("local captioner loaded: moondream3-preview fp16 on %s", device)
+        return model
+
+    def unload(self) -> None:
+        """Rule 1: INGEST class leaves memory after the stage."""
+        model, self._model = self._model, None
+        del model
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception as err:  # noqa: BLE001 — cache clearing is best-effort
+            log.debug("cache clear after unload failed: %s", err)
+        log.info("local captioner unloaded")
+
+    def poison(self) -> None:
+        """Rule 4: mark after a timed-out inference. All FURTHER images skip
+        local inference; the caller falls back to cloud (when configured) or
+        completes honestly with empty captions — never placeholders.
+
+        Rest truth, documented here per the rider: the hung worker thread
+        itself is NOT handled (Python cannot abort threads) and may still
+        hold _LOCAL_INFERENCE_LOCK forever. Collision is impossible because
+        every subsequent local caption checks _poisoned BEFORE touching the
+        lock and never reaches the inference again.
+        """
+        self._poisoned = True
+        log.warning("local captioner POISONED after a timed-out inference — "
+                    "further local inference disabled for this stage")
+
+    @property
+    def poisoned(self) -> bool:
+        return self._poisoned
 
     def caption(self, image_bytes: bytes, media_type: str) -> tuple[str, str]:
         import io
 
         from PIL import Image
 
-        model = self._load()
+        if self._poisoned:
+            # Rule 4: honest miss — never queue behind a possibly-hung
+            # lock-holding inference.
+            return "", "local"
+        model = self.load()
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        answer = model.caption(img, length="short")["caption"]
+        # Rule 3: serialized inference. The lock is checked only AFTER the
+        # poison gate (see poison() for the rest truth about hung holders).
+        with _LOCAL_INFERENCE_LOCK:
+            answer = model.caption(img, length="short")["caption"]
         caption = " ".join(str(answer).split()).strip()
         if not caption:
             raise ValueError("local captioner returned empty content")
@@ -283,12 +375,23 @@ def caption_image(
             try:
                 fut = ex.submit(captioner.caption, image_path.read_bytes(), media_type)
                 caption, path = fut.result(timeout=max(_left(), 0.01))
+            except concurrent.futures.TimeoutError:
+                # Rule 4 (#230 rider): a LOCAL captioner that blew its
+                # deadline is poisoned — further images never queue behind
+                # the possibly-hung inference (rest truth at poison()).
+                poison = getattr(captioner, "poison", None)
+                if callable(poison):
+                    poison()
+                raise
             finally:
                 ex.shutdown(wait=False)
     except Exception as err:  # noqa: BLE001 — any captioner miss is an honest miss
         log.warning("caption failed for %s: %s", sha256[:12], err)
         return None
 
+    if not caption:
+        # poisoned local captioner: honest miss, no record written
+        return None
     rec = {"caption": caption, "model": captioner.model, "path": path}
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)

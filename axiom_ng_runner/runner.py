@@ -477,6 +477,21 @@ def _reference_relationships(
     return rels
 
 
+# ── #230 rider: model-memory discipline ────────────────────────────────────
+
+
+def _release_mrebel() -> None:
+    """Rule 1: unload mREBEL after the relationships stage — INGEST-class
+    models leave memory on completion; the QUERY class (embedder, reranker)
+    stays resident and is never touched here."""
+    try:
+        from axiom_ng_runner.compute_core import relation_extractor as rx
+
+        rx.unload_mrebel()
+    except Exception as err:  # noqa: BLE001 — unload must never fail the job
+        log.warning("mREBEL unload skipped: %s", err)
+
+
 # ── #230: image captioning stage ──────────────────────────────────────────
 
 
@@ -558,6 +573,18 @@ def _caption_images_stage(
     elif not targets:
         stage_completion["image_captions"] = True  # nothing to caption
     else:
+        # Rule 1: INGEST class — the local captioner loads NOW and unloads
+        # in the finally below; nothing stays cached beyond the stage.
+        load_fn = getattr(captioner, "load", None)
+        if callable(load_fn):
+            try:
+                load_fn()
+            except Exception as err:  # noqa: BLE001
+                stage_completion["image_captions_reason"] = (
+                    "CAPTIONER_NOT_PROVISIONED"
+                )
+                log.warning("image_captions: captioner load failed: %s", err)
+                return True
         s = settings.get()
         budget = s.image_captions_budget_seconds
         per_image = s.image_caption_timeout_seconds
@@ -579,6 +606,16 @@ def _caption_images_stage(
             timeout = per_image
             if deadline is not None:
                 timeout = min(per_image, max(deadline - time.monotonic(), 0.0))
+            # Rule 4: a poisoned LOCAL captioner hands the remaining images
+            # to the cloud path when configured — otherwise the loop below
+            # just writes honest empty captions.
+            if getattr(captioner, "poisoned", False):
+                cloud = _cloud_fallback_captioner()
+                if cloud is not None:
+                    log.warning("image_captions: local captioner poisoned — "
+                                "cloud takes over from image %d/%d",
+                                done, len(targets))
+                    captioner = cloud
             rec = caption_image(
                 captioner, img_path, art.get("media_type", "image/jpeg"),
                 art["sha256"], cache_dir, timeout,
@@ -600,6 +637,13 @@ def _caption_images_stage(
             else:
                 # every call failed (network/model) — honest named miss
                 stage_completion["image_captions_reason"] = "CAPTION_CALLS_FAILED"
+        # Rule 1: unload the INGEST-class captioner — stage over.
+        unload_fn = getattr(captioner, "unload", None)
+        if callable(unload_fn):
+            try:
+                unload_fn()
+            except Exception as err:  # noqa: BLE001
+                log.warning("captioner unload failed: %s", err)
     if captioned:
         for c in chunk_dicts:
             refs = (c.get("metadata", {}) or {}).get("image_refs") or []
@@ -614,6 +658,24 @@ def _caption_images_stage(
         if proc_opt.get("compute_dense_embeddings"):
             reembed(chunk_dicts)
     return True  # stage ran (caller rebuilds the result)
+
+
+def _cloud_fallback_captioner() -> Any | None:
+    """Rule 4: cloud captioner for the poisoned-local case — only when the
+    env actually carries cloud credentials (resolve_captioner's cloud-wins
+    order means a poisoned local implies cloud was NOT configured at stage
+    open; this re-checks in case credentials exist but local was forced)."""
+    import axiom_ng_runner.compute_core.image_captioner as ic
+
+    base = os.getenv("AXIOM_CAPTION_API_BASE", "")
+    key = os.getenv("AXIOM_CAPTION_API_KEY", "")
+    if not (base and key):
+        return None
+    return ic.CloudCaptioner(
+        base=base, api_key=key,
+        model=os.getenv("AXIOM_CAPTION_MODEL", "gpt-4o-mini"),
+        timeout=float(os.getenv("AXIOM_CAPTION_API_TIMEOUT", "60")),
+    )
 
 
 def _ref_id(r: Any) -> str:
@@ -1654,6 +1716,12 @@ def _real_pipeline(
                         budget, len(chunk_dicts))
         stage_completion["relationships"] = not budget_exceeded
         result = _finish(real_relationships)
+
+    # Rule 1 (#230 rider): mREBEL is INGEST class — unload after the
+    # relationships stage, unconditionally (the resident policy is a
+    # memory rule, not a captions-flag feature; query-class models are
+    # untouched). The result bytes are identical either way.
+    _release_mrebel()
 
     # #230 image_captions: machine captions for extracted_image artifacts,
     # LAST stage before assemble (budget-protected, hash-gated, honest

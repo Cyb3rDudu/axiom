@@ -315,3 +315,217 @@ def test_resolve_cloud_wins(monkeypatch):
     monkeypatch.setenv("AXIOM_CAPTION_API_KEY", "sk")
     cap = ic.resolve_captioner()
     assert isinstance(cap, ic.CloudCaptioner)
+
+
+
+
+def _png_bytes() -> bytes:
+    """Valid 1x1 PNG via PIL (hand-crafted hex tends to carry broken
+    chunk CRCs — the caption path opens the image for real)."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1)).save(buf, format="PNG")
+    return buf.getvalue()
+
+# ── #230 rider: model-memory discipline ────────────────────────────────────
+
+
+class _FakeModel:
+    def caption(self, img, length="short"):
+        return {"caption": "A fake chart"}
+
+
+def _fake_local_captioner(tmp_path, monkeypatch):
+    """A LocalMoondreamCaptioner with the heavy load path stubbed out —
+    load() returns a fake model, no torch/HF involved."""
+    cap = ic.LocalMoondreamCaptioner(str(tmp_path))
+    monkeypatch.setattr(cap, "load", lambda: _FakeModel())
+    return cap
+
+
+def test_local_captioner_unloads_after_stage(tmp_path, monkeypatch):
+    """Rule 1: the INGEST-class captioner leaves memory after the stage —
+    model registry (captioner._model via unload) is empty again."""
+    d = tmp_path / "artifacts"
+    d.mkdir(exist_ok=True)
+    arts = [_art("image-0000", "aa" * 32)]
+    (d / "image-0000").write_bytes(b"x" * 8)
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+
+    cap = ic.LocalMoondreamCaptioner(str(tmp_path))
+    unloaded = []
+    monkeypatch.setattr(cap, "load", lambda: _FakeModel())
+    monkeypatch.setattr(cap, "unload", lambda: unloaded.append(True))
+
+    import axiom_ng_runner.runner as runner_mod
+    real_settings = runner_mod.settings
+    class _FS:
+        @staticmethod
+        def get():
+            st = real_settings.get()
+            return st
+    runner_mod.settings = _FS  # type: ignore[assignment]
+    try:
+        import os
+        old = os.environ.get("AXIOM_CAPTION_CACHE_DIR")
+        os.environ["AXIOM_CAPTION_CACHE_DIR"] = str(tmp_path / "cache2")
+        real_resolve = ic.resolve_captioner
+        ic.resolve_captioner = lambda: cap  # type: ignore[assignment]
+        try:
+            _caption_images_stage(
+                {"extract_image_captions": True}, arts, chunks, tmp_path,
+                {}, None, lambda cds: None,
+            )
+        finally:
+            ic.resolve_captioner = real_resolve  # type: ignore[assignment]
+            if old is None:
+                del os.environ["AXIOM_CAPTION_CACHE_DIR"]
+            else:
+                os.environ["AXIOM_CAPTION_CACHE_DIR"] = old
+    finally:
+        runner_mod.settings = real_settings  # type: ignore[assignment]
+    assert unloaded, "captioner.unload() must run after the stage (Rule 1)"
+
+
+def test_mrebel_released_after_relationships(monkeypatch):
+    """Rule 1: mREBEL is INGEST class — _release_mrebel() empties the
+    module registry (the wiring into _compute_real sits right after the
+    relationships block; this asserts the registry effect)."""
+    from axiom_ng_runner.compute_core import relation_extractor as rx
+    from axiom_ng_runner.runner import _release_mrebel
+
+    rx._mrebel_model = object()
+    rx._mrebel_tokenizer = object()
+    _release_mrebel()
+    assert rx._mrebel_model is None and rx._mrebel_tokenizer is None
+
+
+def test_query_class_stays_resident(monkeypatch):
+    """Rule 1 counter-assertion: the QUERY class (embedder, reranker) is
+    untouched by the ingest unload discipline."""
+    from axiom_ng_runner import query_service
+    from axiom_ng_runner.runner import _release_mrebel
+
+    fake_embedder, fake_reranker = object(), object()
+    monkeypatch.setattr(query_service, "_embedder", fake_embedder)
+    monkeypatch.setattr(query_service, "_reranker", fake_reranker)
+    _release_mrebel()
+    assert query_service._embedder is fake_embedder
+    assert query_service._reranker is fake_reranker
+
+
+def test_poison_after_timeout_disables_local(tmp_path, monkeypatch):
+    """Rule 4: a timed-out LOCAL inference poisons the captioner — every
+    further caption returns an honest empty miss without touching the
+    inference lock."""
+    import time as _time
+
+    cap = ic.LocalMoondreamCaptioner(str(tmp_path))
+    state = {"calls": 0}
+
+    class _Slow:
+        def caption(self, img, length="short"):
+            state["calls"] += 1
+            _time.sleep(1.0)
+            return {"caption": "late"}
+
+    monkeypatch.setattr(cap, "load", lambda: _Slow())
+    img = tmp_path / "p.png"
+    img.write_bytes(_png_bytes())
+    t0 = _time.monotonic()
+    rec = ic.caption_image(cap, img, "image/png", "ee" * 32,
+                           tmp_path / "pcache", 0.1)
+    assert rec is None and _time.monotonic() - t0 < 0.6
+    assert cap.poisoned, "timeout must poison the local captioner"
+    # further caption: immediate honest miss, no second inference
+    calls_before = state["calls"]
+    rec2 = ic.caption_image(cap, img, "image/png", "ff" * 32,
+                            tmp_path / "pcache", 5.0)
+    assert rec2 is None and state["calls"] == calls_before
+
+
+def test_inference_lock_serializes(tmp_path, monkeypatch):
+    """Rule 3: never two local caption inferences in parallel — the lock
+    caps observed concurrency at 1."""
+    import threading
+    import time as _time
+
+    cap = ic.LocalMoondreamCaptioner(str(tmp_path))
+    state = {"active": 0, "max_active": 0}
+
+    class _Tracking:
+        def caption(self, img, length="short"):
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            _time.sleep(0.15)
+            state["active"] -= 1
+            return {"caption": "ok"}
+
+    monkeypatch.setattr(cap, "load", lambda: _Tracking())
+    img = tmp_path / "l.png"
+    img.write_bytes(_png_bytes())
+    results = []
+
+    def worker(i):
+        results.append(ic.caption_image(cap, img, "image/png", f"{i:064d}",
+                                        tmp_path / "lcache", 10.0))
+
+    ts = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert all(r is not None for r in results), results
+    assert state["max_active"] == 1, f"parallel inference observed: {state}"
+
+
+def test_cloud_fallback_helper(monkeypatch):
+    from axiom_ng_runner.runner import _cloud_fallback_captioner
+
+    monkeypatch.delenv("AXIOM_CAPTION_API_BASE", raising=False)
+    monkeypatch.delenv("AXIOM_CAPTION_API_KEY", raising=False)
+    assert _cloud_fallback_captioner() is None
+    monkeypatch.setenv("AXIOM_CAPTION_API_BASE", "http://x/v1")
+    monkeypatch.setenv("AXIOM_CAPTION_API_KEY", "sk")
+    assert isinstance(_cloud_fallback_captioner(), ic.CloudCaptioner)
+
+
+def test_load_gate_refuses_tight_memory(tmp_path, monkeypatch):
+    """Rule 5: the load gate refuses when free memory is below the fp16
+    requirement — CaptionerNotProvisioned instead of an OOM adventure."""
+    cap = ic.LocalMoondreamCaptioner(str(tmp_path))
+    cap.MIN_FREE_GB = 24.0
+
+    class _Mem:
+        available = 10 * 1024 ** 3  # 10 GB — far below 24
+
+    import sys
+    import types
+    fake_psutil = types.ModuleType("psutil")
+    fake_psutil.virtual_memory = lambda: _Mem()
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    import pytest as _pytest
+    with _pytest.raises(ic.CaptionerNotProvisioned):
+        cap.load()
+
+
+def test_mrebel_release_is_wired_after_relationships():
+    """Wiring pin for Rule 1: _release_mrebel() must actually be CALLED in
+    the runner module (the registry test alone can't see a dropped call
+    site). Probe: removing the call turns this red."""
+    import ast
+    import inspect
+    import pathlib
+
+    import axiom_ng_runner.runner as runner_mod
+    src = pathlib.Path(inspect.getsourcefile(runner_mod)).read_text()
+    tree = ast.parse(src)
+    called = {
+        n.func.id
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    }
+    assert "_release_mrebel" in called, (
+        "_release_mrebel must be wired (Rule 1: mREBEL unloads after the "
+        "relationships stage)")
