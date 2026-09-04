@@ -668,3 +668,89 @@ class TestLabelTreeE2E251:
         got = [doc[i].get_label() for i in range(doc.page_count)]
         doc.close()
         assert got == labels, got
+
+
+class TestRetryAtDeadlineEdge:
+    """#251 r5 witness test — the review's classic case, now PINNED:
+
+    Attempt 2 starts at deadline-eps (remaining budget far below the
+    total budget). With the hard budget the connect runs at most until
+    the deadline; with the MUTATION (fixed timeout=budget at open, no
+    remaining-deadline open) the second attempt may block a FULL budget
+    past its start — the suite stayed green there, so this witness is
+    the regression pin.
+
+    Mutation-bar: urlopen opened with timeout=budget -> RED."""
+
+    def test_second_attempt_bounded_by_remaining_budget(self, tmp_path):
+        import http.server
+        import threading
+
+        work = tmp_path / "w-work"
+        work.mkdir(parents=True)
+        budget = 2.0
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                time.sleep(60)  # hanging connect response
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        srv.daemon_threads = True
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        old = settings.get()
+        settings.set(
+            Settings(
+                work_root=work,
+                allowed_source_roots=(),
+                source_download_timeout=budget,
+            )
+        )
+        real_attempt = app_mod._download_attempt
+        calls = {"n": 0}
+
+        def fail_first_then_real(url, dest, deadline, budget_, cap):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # instant transport failure: retry ladder starts attempt 2
+                # after the 1s backoff, i.e. at deadline-eps
+                raise app_mod._TransportError(
+                    ConnectionResetError(104, "Connection reset by peer")
+                )
+            return real_attempt(url, dest, deadline, budget_, cap)
+
+        import axiom_ng_runner.app as app_mod2
+
+        orig = app_mod2._download_attempt
+        app_mod2._download_attempt = fail_first_then_real
+        try:
+            att = type("A", (), {
+                "source_url": f"http://127.0.0.1:{srv.server_address[1]}/f",
+                "filename": "book.pdf",
+                "size_bytes": 10 ** 9,
+                "content_hash": "sha256:" + "0" * 64,
+            })()
+            req = type("R", (), {"attachment": att})()
+            t0 = time.monotonic()
+            try:
+                app_mod2._download_source(req)
+                raise AssertionError("must die")
+            except Exception as e:  # noqa: BLE001
+                assert "budget" in str(e).lower() or "attempts" in str(e), e
+            elapsed = time.monotonic() - t0
+            assert calls["n"] == 2
+            # attempt 2 starts at ~1.0s (backoff); remaining ~1.0s << budget
+            # 2.0s. Hard budget: death at ~2.0s total. Mutated open
+            # (timeout=budget): the hanging connect blocks until ~3.0s.
+            assert elapsed < budget + 0.8, (
+                f"retry-at-deadline-edge escaped: {elapsed:.1f}s total for "
+                f"a {budget:.0f}s budget — attempt 2 must open with the "
+                f"REMAINING budget, not the total"
+            )
+        finally:
+            app_mod2._download_attempt = orig
+            settings.set(old)
+            srv.shutdown()
