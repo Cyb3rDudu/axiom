@@ -79,8 +79,12 @@ type FrozenProcessing struct {
 	ExtractEntities         bool   `json:"extract_entities"`
 	ExtractRelationships    bool   `json:"extract_relationships"`
 	// ExtractImageCaptions (#230): machine captions for extracted_image
-	// artifacts — additive contract flag; the profile hash only changes
-	// when a profile actually sets it.
+	// artifacts — additive contract flag. NOTE: like every sibling bool it
+	// marshals unconditionally, so the canonical profile hash changes for
+	// ALL profiles on the deploy that introduces this field. Blast radius
+	// verified small: enqueue is Zotero-change-driven and claim-time
+	// COALESCE freezes hash/idem-key per job, so no corpus-wide re-claim —
+	// only post-deploy re-processing gets the new snapshot identity.
 	ExtractImageCaptions bool `json:"extract_image_captions"`
 }
 

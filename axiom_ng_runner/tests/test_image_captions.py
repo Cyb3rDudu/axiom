@@ -271,8 +271,34 @@ def test_resolve_incomplete_local_dir_is_not_provisioned(tmp_path, monkeypatch):
 
 
 def test_resolve_complete_local_dir(monkeypatch, tmp_path):
-    """With the snapshot files present and torch importable, resolve
-    returns the local captioner (constructor is cheap — loads nothing)."""
+    """With the complete snapshot file set present and torch importable,
+    resolve returns the local captioner. torch is faked via sys.modules so
+    the test also runs on the LIGHT CI stack (requirements.txt only — no
+    heavy deps at collection time, the CI invariant)."""
+    import sys
+    import types
+
+    fake_torch = types.ModuleType("torch")
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    d = tmp_path / "moondream3"
+    d.mkdir()
+    for f in ("config.json", "moondream.py", "text.py", "vision.py"):
+        (d / f).write_text("")
+    monkeypatch.delenv("AXIOM_CAPTION_API_BASE", raising=False)
+    monkeypatch.delenv("AXIOM_CAPTION_API_KEY", raising=False)
+    monkeypatch.setenv("AXIOM_CAPTION_LOCAL_MODEL_DIR", str(d))
+    cap = ic.resolve_captioner()
+    assert isinstance(cap, ic.LocalMoondreamCaptioner)
+
+
+def test_local_runtime_ready_requires_full_file_set(tmp_path, monkeypatch):
+    """W2 (#230 review round 3): a partial snapshot missing vision.py must
+    resolve to NOT-PROVISIONED — the caption path needs it and a per-image
+    CAPTION_CALLS_FAILED after stage open is the forbidden outcome."""
+    import sys
+    import types
+
+    monkeypatch.setitem(sys.modules, "torch", types.ModuleType("torch"))
     d = tmp_path / "moondream3"
     d.mkdir()
     (d / "config.json").write_text("{}")
@@ -281,8 +307,7 @@ def test_resolve_complete_local_dir(monkeypatch, tmp_path):
     monkeypatch.delenv("AXIOM_CAPTION_API_BASE", raising=False)
     monkeypatch.delenv("AXIOM_CAPTION_API_KEY", raising=False)
     monkeypatch.setenv("AXIOM_CAPTION_LOCAL_MODEL_DIR", str(d))
-    cap = ic.resolve_captioner()
-    assert isinstance(cap, ic.LocalMoondreamCaptioner)
+    assert ic.resolve_captioner() is None
 
 
 def test_resolve_cloud_wins(monkeypatch):

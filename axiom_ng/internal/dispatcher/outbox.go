@@ -460,7 +460,9 @@ func (c *openSearchClient) ensureSparseMapping(ctx context.Context) error {
 // BM25 arm only) to an existing index, same additive pattern as sparse R5.
 func (c *openSearchClient) ensureCaptionMapping(ctx context.Context) error {
 	body, err := json.Marshal(map[string]any{
-		"properties": map[string]any{},
+		"properties": map[string]any{
+			"caption_text": map[string]any{"type": "text"},
+		},
 	})
 	if err != nil {
 		return err

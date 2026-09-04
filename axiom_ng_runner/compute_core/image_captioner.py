@@ -215,8 +215,8 @@ def _local_runtime_ready(model_dir: Path) -> bool:
         import torch  # noqa: F401
     except ImportError:
         return False
-    return (model_dir / "moondream.py").exists() and (
-        model_dir / "text.py").exists()
+    files = ("moondream.py", "text.py", "vision.py")
+    return all((model_dir / f).exists() for f in files)
 
 
 def _cache_path(cache_dir: Path, sha256: str) -> Path:

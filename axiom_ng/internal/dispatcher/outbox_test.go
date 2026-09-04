@@ -12,8 +12,11 @@ package dispatcher
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"io"
 	"log"
@@ -754,6 +757,7 @@ func TestOutboxDocumentSparseOnlyWhenPresent(t *testing.T) {
 
 func TestOutboxEnsureSparseMappingRetriedAfterFailure(t *testing.T) {
 	var puts int
+	var lastMappingPut []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodHead:
@@ -763,6 +767,7 @@ func TestOutboxEnsureSparseMappingRetriedAfterFailure(t *testing.T) {
 			_, _ = w.Write([]byte(`{"axiom-ng-chunks-v1":{"mappings":{"properties":{"embedding":{"type":"knn_vector"}}}}}`))
 		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/_mapping"):
 			puts++
+			lastMappingPut, _ = io.ReadAll(r.Body)
 			if puts == 1 {
 				w.WriteHeader(500) // transient mapping failure
 				return
@@ -794,6 +799,12 @@ func TestOutboxEnsureSparseMappingRetriedAfterFailure(t *testing.T) {
 	// retry of the failed mapping.
 	if puts != 3 {
 		t.Fatalf("mapping PUTs must be 3 (sparse fail+retry, caption once), got %d", puts)
+	}
+	// C1 (#230 review round 3): the ADDITIVE caption PUT must carry the
+	// field — a gutted body ({"properties":{}}) is a legal no-op and would
+	// leave pre-#230 indexes on dynamic mapping. Capture PUT bodies.
+	if !strings.Contains(string(lastMappingPut), `"caption_text"`) {
+		t.Fatalf("additive caption PUT must declare caption_text, got: %s", lastMappingPut)
 	}
 }
 
@@ -1026,4 +1037,60 @@ func TestOutboxCreateMappingIncludesCaptions(t *testing.T) {
 			t.Fatalf("create mapping must declare %q up front, got: %s", field, body)
 		}
 	}
+}
+
+// TestStageOneArtifactCopiesAttributes pins the OTHER half of the C1 round-1
+// gap (#230 review round 3, S1): the dispatcher's verified ArtifactRecord
+// must carry the declared attributes into persist. The persist round-trip
+// test feeds the record via the typed struct, so a drop of
+// ArtifactRecord.Attributes / processor.Artifact.Attributes breaks THIS test
+// while that one stays green.
+func TestStageOneArtifactCopiesAttributes(t *testing.T) {
+	// minimal dispatcher: only the artifact fetch is exercised — a stub
+	// client serving 4 bytes whose sha256 matches the declaration.
+	body := []byte("ABCD")
+	sum := sha256.Sum256(body)
+	d := &Dispatcher{client: &artifactStubClient{bytes: body}}
+	a := processor.Artifact{
+		Ref: "image-0000", Kind: "extracted_image", MediaType: "image/png",
+		SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(body)),
+		Retention: "durable_if_referenced",
+		Attributes: map[string]string{
+			"machine_caption": "A bar chart", "caption_model": "m", "caption_path": "cloud",
+		},
+	}
+	d.cfg = Config{ArtifactRoot: t.TempDir()}
+	rec, err := d.stageOneArtifact(context.Background(), "job-x", a)
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	if rec.Attributes["machine_caption"] != "A bar chart" || rec.Attributes["caption_path"] != "cloud" {
+		t.Fatalf("attributes must ride the verified record, got %+v", rec.Attributes)
+	}
+}
+
+// artifactStubClient serves one fixed byte slice for every artifact fetch.
+type artifactStubClient struct{ bytes []byte }
+
+func (c *artifactStubClient) Capabilities(ctx context.Context) (*processor.Capabilities, error) {
+	return &processor.Capabilities{}, nil
+}
+func (c *artifactStubClient) SubmitProcess(ctx context.Context, req *processor.ProcessRequest) (*processor.ProcessAccepted, error) {
+	return &processor.ProcessAccepted{}, nil
+}
+func (c *artifactStubClient) Preflight(ctx context.Context, doc []byte, contentType string) (*processor.PreflightReport, error) {
+	return &processor.PreflightReport{}, nil
+}
+func (c *artifactStubClient) JobStatus(ctx context.Context, jobID string) (*processor.JobStatus, error) {
+	return &processor.JobStatus{}, nil
+}
+func (c *artifactStubClient) JobResult(ctx context.Context, jobID string) ([]byte, error) {
+	return nil, nil
+}
+func (c *artifactStubClient) Artifact(ctx context.Context, jobID, ref string) ([]byte, error) {
+	return c.bytes, nil
+}
+func (c *artifactStubClient) Cancel(ctx context.Context, jobID string) error { return nil }
+func (c *artifactStubClient) Ack(ctx context.Context, jobID string, ack processor.Ack) error {
+	return nil
 }
