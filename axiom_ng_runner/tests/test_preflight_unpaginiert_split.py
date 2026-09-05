@@ -19,8 +19,6 @@ Mutation bars:
 from pathlib import Path
 
 import pymupdf
-import pytest
-
 from axiom_ng_runner.compute_core.pdf_health import analyze_pdf, preflight
 
 PLANTIN = Path(__file__).parent / "testdata" / "plantin_2018_infrastructure_studies.pdf"
