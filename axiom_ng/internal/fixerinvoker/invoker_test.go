@@ -54,7 +54,7 @@ func TestConfigClamps(t *testing.T) {
 
 func TestRunFixerExitCodeMapping(t *testing.T) {
 	inv := &Invoker{cfg: unitCfg(t, writeScript(t, "echo boom; exit 7\n"), time.Minute)}
-	rc, err := inv.runFixer(context.Background(), &repo.RepairItem{AttachmentKey: "K1"})
+	rc, _, err := inv.runFixer(context.Background(), &repo.RepairItem{AttachmentKey: "K1"})
 	if rc != 7 || !strings.Contains(err.Error(), "fixer exit 7") || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("exit mapping: rc=%d err=%v", rc, err)
 	}
@@ -63,7 +63,7 @@ func TestRunFixerExitCodeMapping(t *testing.T) {
 func TestRunFixerTimeoutKills(t *testing.T) {
 	inv := &Invoker{cfg: unitCfg(t, writeScript(t, "sleep 30\n"), 150*time.Millisecond)}
 	start := time.Now()
-	rc, err := inv.runFixer(context.Background(), &repo.RepairItem{AttachmentKey: "K1"})
+	rc, _, err := inv.runFixer(context.Background(), &repo.RepairItem{AttachmentKey: "K1"})
 	if rc != -1 || err == nil || !strings.Contains(err.Error(), "timeout") {
 		t.Fatalf("timeout must map to rc=-1 + timeout reason, got rc=%d err=%v", rc, err)
 	}
@@ -74,7 +74,7 @@ func TestRunFixerTimeoutKills(t *testing.T) {
 
 func TestRunFixerSpawnError(t *testing.T) {
 	inv := &Invoker{cfg: unitCfg(t, "/nonexistent/fixer-xyz", time.Minute)}
-	rc, err := inv.runFixer(context.Background(), &repo.RepairItem{AttachmentKey: "K1"})
+	rc, _, err := inv.runFixer(context.Background(), &repo.RepairItem{AttachmentKey: "K1"})
 	if rc != -1 || err == nil || !strings.Contains(err.Error(), "spawn") {
 		t.Fatalf("spawn error: rc=%d err=%v", rc, err)
 	}
@@ -114,5 +114,35 @@ func TestFixerArgsRouteEPUB(t *testing.T) {
 	}
 	if n := repairArtifactName(&repo.RepairItem{ContentType: "application/pdf"}); n != "work.pdf" {
 		t.Fatalf("pdf artifact = %q, want work.pdf", n)
+	}
+}
+
+// ── #253: HALT verdict classification (pure tier) ─────────────────────────
+
+func TestHaltTerminalReasonClassification(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want string // "" = not terminal
+	}{
+		{"halt plain", `{"verdict": "halt", "unproven": []}`, "no-healable-defect-evidenced"},
+		{"halt needs evidence", `{"verdict": "halt", "unproven": ["stelle2_chunk: RAG nicht erreichbar (ConnectError)"]}`, "needs-evidence"},
+		{"halt evidence 2", `{"verdict": "halt", "unproven": ["stelle3_zitat: ohne Zotero-Annotation nicht prüfbar"]}`, "needs-evidence"},
+		{"report not terminal", `{"verdict": "report", "unproven": []}`, ""},
+		{"healed not terminal", `{"verdict": "healed"}`, ""},
+		{"garbage not terminal", `fixer log line without json`, ""},
+		{"json after logs", "INFO stuff\n{\"verdict\": \"halt\", \"unproven\": []}", "no-healable-defect-evidenced"},
+	}
+	for _, tc := range cases {
+		got, ok := haltTerminalReason(tc.out)
+		if tc.want == "" {
+			if ok {
+				t.Fatalf("%s: must not be terminal, got %q", tc.name, got)
+			}
+			continue
+		}
+		if !ok || !strings.HasPrefix(got, tc.want) {
+			t.Fatalf("%s: want prefix %q, got ok=%v %q", tc.name, tc.want, ok, got)
+		}
 	}
 }

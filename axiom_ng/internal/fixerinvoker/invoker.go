@@ -27,6 +27,7 @@ package fixerinvoker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -212,10 +213,10 @@ func (inv *Invoker) processCase(ctx context.Context, caseID string) {
 	}
 
 	inv.logger.Printf("case %s: invoking fixer for key %s", caseID, item.AttachmentKey)
-	rc, runErr := inv.runFixer(ctx, item)
+	rc, out, runErr := inv.runFixer(ctx, item)
 
 	if rc == 0 && runErr == nil {
-		inv.handleSuccess(ctx, caseID, item)
+		inv.handleSuccess(ctx, caseID, item, out)
 		return
 	}
 	inv.handleFailure(ctx, caseID, rc, runErr)
@@ -243,11 +244,13 @@ func repairArtifactName(item *repo.RepairItem) string {
 }
 
 // runFixer executes Command <key> --apply under the backstop timeout.
+// It returns (exit code, captured output tail, error) — the output feeds
+// the HALT-terminal classification in handleSuccess (#253).
 // The fixer runs in its OWN process group and the backstop kills the whole
 // group: a wedged wrapper's python child must not survive as an orphan on
 // the same key (fix.sh's stale-lock recovery would let the immediate retry
 // spawn a SECOND agent on the same working directory).
-func (inv *Invoker) runFixer(ctx context.Context, item *repo.RepairItem) (int, error) {
+func (inv *Invoker) runFixer(ctx context.Context, item *repo.RepairItem) (int, string, error) {
 	cctx, cancel := context.WithTimeout(ctx, inv.cfg.Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, inv.cfg.Command, fixerArgs(item)...)
@@ -267,16 +270,16 @@ func (inv *Invoker) runFixer(ctx context.Context, item *repo.RepairItem) (int, e
 	err := cmd.Run()
 	out := buf.String()
 	if cctx.Err() == context.DeadlineExceeded {
-		return -1, fmt.Errorf("timeout nach %s (backstop; fix.sh hätte bei 30m töten müssen): %s",
+		return -1, out, fmt.Errorf("timeout nach %s (backstop; fix.sh hätte bei 30m töten müssen): %s",
 			inv.cfg.Timeout, lastLines([]byte(out)))
 	}
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
-			return ee.ExitCode(), fmt.Errorf("fixer exit %d: %s", ee.ExitCode(), lastLines([]byte(out)))
+			return ee.ExitCode(), out, fmt.Errorf("fixer exit %d: %s", ee.ExitCode(), lastLines([]byte(out)))
 		}
-		return -1, fmt.Errorf("fixer spawn: %v: %s", err, lastLines([]byte(out)))
+		return -1, out, fmt.Errorf("fixer spawn: %v: %s", err, lastLines([]byte(out)))
 	}
-	return 0, nil
+	return 0, out, nil
 }
 
 // tailBuffer keeps at most the last max bytes written to it.
@@ -295,10 +298,21 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 
 func (b *tailBuffer) String() string { return string(b.buf) }
 
-func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *repo.RepairItem) {
+func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *repo.RepairItem, out string) {
 	artifact := filepath.Join(inv.cfg.WorkRoot, item.AttachmentKey, repairArtifactName(item))
 	pdf, err := os.ReadFile(artifact)
 	if err != nil || len(pdf) == 0 {
+		// #253: exit 0 without an artifact is the fixer's honest verdict
+		// report. A HALT verdict terminally parks the case (reason
+		// no-healable-defect-evidenced / needs-evidence) — never the old
+		// endless requeue. Anything unparsable keeps the retry policy.
+		if reason, ok := haltTerminalReason(out); ok {
+			if terr := inv.deps.Rep.MarkRepairFailed(ctx, caseID, reason); terr != nil {
+				inv.logger.Printf("case %s: halt-terminal: %v", caseID, terr)
+			}
+			inv.logger.Printf("case %s: HALT terminally parked (%s)", caseID, reason)
+			return
+		}
 		inv.failOrRequeue(ctx, caseID, fmt.Sprintf("fixer exit 0 aber kein geheiltes Artefakt unter %s", artifact))
 		return
 	}
@@ -323,6 +337,50 @@ func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *repo
 
 func (inv *Invoker) handleFailure(ctx context.Context, caseID string, rc int, runErr error) {
 	inv.failOrRequeue(ctx, caseID, fmt.Sprintf("fixer: %v", runErr))
+}
+
+// haltTerminalReason extracts the fixer's report verdict from the captured
+// output (the repair_agent prints its JSON report as the LAST thing on
+// stdout) and classifies a HALT terminally (#253):
+//
+//   - verdict != "halt" (or no parsable report)  → not terminal ("", false)
+//   - halt with missing evidence markers on a
+//     principally repairable class               → needs-evidence: …
+//   - every other halt                           → no-healable-defect-evidenced: …
+//
+// The reason is surfaced verbatim for the outcome API (#252).
+func haltTerminalReason(out string) (string, bool) {
+	// the report is the last JSON object in the output — find the last '{'
+	// whose suffix parses (logs precede it)
+	for i := strings.LastIndex(out, "{"); i >= 0; i = strings.LastIndex(out[:i], "{") {
+		var report struct {
+			Verdict  string   `json:"verdict"`
+			Unproven []string `json:"unproven"`
+		}
+		if err := json.Unmarshal([]byte(out[i:]), &report); err != nil {
+			continue
+		}
+		if report.Verdict != "halt" {
+			return "", false
+		}
+		for _, u := range report.Unproven {
+			lu := strings.ToLower(u)
+			if strings.Contains(lu, "nicht erreichbar") ||
+				strings.Contains(lu, "nicht prüfbar") ||
+				strings.Contains(lu, "offene stelle") {
+				return "needs-evidence: " + firstLine(u), true
+			}
+		}
+		return "no-healable-defect-evidenced: " + report.Verdict, true
+	}
+	return "", false
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func (inv *Invoker) failOrRequeue(ctx context.Context, caseID, reason string) {

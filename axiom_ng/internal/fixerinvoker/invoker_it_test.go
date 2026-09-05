@@ -432,3 +432,33 @@ func TestInvokerLoopGuardEscalation(t *testing.T) {
 		t.Fatalf("2nd claim must escalate via loop guard, got %s (%q)", status, reason)
 	}
 }
+
+// TestInvokerHaltParksTerminallyNoRequeue — #253: a HALT verdict report
+// (exit 0, no artifact) terminally parks the case with the evidence
+// reason; the attempt counter does NOT climb and a second processCase on
+// the parked case is a no-op (no requeue loop).
+func TestInvokerHaltParksTerminallyNoRequeue(t *testing.T) {
+	e := openDB(t)
+	e.truncate(t)
+	haltJSON := `{"verdict": "halt", "unproven": []}`
+	inv, _ := newTestInvoker(t, e, fmt.Sprintf("cat <<'EOF'\n%s\nEOF\nexit 0\n", haltJSON), time.Minute)
+	caseID := e.seedCase(t, "ATT-HALT1")
+	inv.processCase(context.Background(), caseID)
+
+	status, reason, attempts := e.caseStatus(t, caseID)
+	if status != "failed" {
+		t.Fatalf("HALT must park terminally failed, got %s (%q)", status, reason)
+	}
+	if !strings.Contains(reason, "no-healable-defect-evidenced") {
+		t.Fatalf("reason must carry the terminal evidence cause: %q", reason)
+	}
+	if attempts > 1 {
+		t.Fatalf("terminal park must not climb attempts, got %d", attempts)
+	}
+	// parked case is not re-served: processCase again changes nothing
+	inv.processCase(context.Background(), caseID)
+	status2, reason2, attempts2 := e.caseStatus(t, caseID)
+	if status2 != "failed" || attempts2 != attempts || reason2 != reason {
+		t.Fatalf("parked HALT case must stay put: %s/%d vs %s/%d", status2, attempts2, status, attempts)
+	}
+}
