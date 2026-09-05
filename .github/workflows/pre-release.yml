@@ -33,8 +33,16 @@ jobs:
           # mirrors release.yml: fixer requirements.lock.txt is a 3.11 freeze
           python-version: "3.11"
 
-      - name: Build (same targets as the release pipeline)
-        run: make all
+      - name: Build rag (release, version-stamped)
+        run: make rag
+      - name: Build runner + fixer artifacts
+        run: |
+          brew install zstd
+          make runner fixer
+      - name: Checksums
+        run: |
+          ls -lh dist/
+          cd dist && for f in *.sha256; do shasum -a 256 -c "$f"; done
 
       - name: Attach artifacts to this run (no release, no tag)
         uses: actions/upload-artifact@v4
