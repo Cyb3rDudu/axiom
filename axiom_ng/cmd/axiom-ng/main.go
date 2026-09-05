@@ -258,6 +258,7 @@ func main() {
 				WorkerID:               cfg.DispatcherWorkerID,
 				RunnerName:             cfg.ProcessorRunnerName,
 				Concurrency:            cfg.DispatcherConcurrency,
+				APIPort:                cfg.APIPort,
 				Profile:                json.RawMessage(cfg.DispatcherProfile),
 				LeaseDuration:          cfg.DispatcherLeaseDuration,
 				ArtifactRoot:           cfg.ArtifactRoot,

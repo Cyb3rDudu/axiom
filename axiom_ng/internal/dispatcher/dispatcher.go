@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -73,6 +75,9 @@ type Config struct {
 	OpenSearchUsername string
 	OpenSearchPassword string
 
+	// APIPort is the axiom-ng API port — the solo-loopback source
+	// guard mints the loopback base from it when all runners are local.
+	APIPort int
 	// ProcessorSourceBaseURL is the externally reachable base URL of
 	// axiom-ng's /api/processor/source endpoint (e.g. the Tailnet address).
 	// Non-empty (plus ProcessorSourceSecret) makes the dispatcher attach a
@@ -258,6 +263,18 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	}
 	d.laneBudget = lanes
 	d.caps = caps
+	// Solo-loopback guard (production finding 2026-09-05): when EVERY
+	// ingest candidate is loopback-co-located with this process, source
+	// URLs must be minted against loopback — a configured LAN base
+	// (stale after a network change) makes every source download a
+	// zero-byte connect timeout. Loopback is the only address-stable
+	// place on a machine; LAN addresses stay valid for remote runners.
+	if allCandidatesLoopback(d.client) && !loopbackBaseURL(d.cfg.ProcessorSourceBaseURL) {
+		over := "http://127.0.0.1:" + strconv.Itoa(d.cfg.APIPort)
+		d.logger.Printf("source base override: all ingest candidates are loopback — forcing %s (configured %s is not loopback-stable)",
+			over, d.cfg.ProcessorSourceBaseURL)
+		d.cfg.ProcessorSourceBaseURL = over
+	}
 	// Separate ack-retry pass: re-acknowledges completed jobs whose ack failed,
 	// never reprocessing them (F3). Runs until ctx is cancelled.
 	go retryAcks(ctx, d)
@@ -612,4 +629,32 @@ func boolMap(b bool, t, f string) string {
 		return t
 	}
 	return f
+}
+
+// allCandidatesLoopback reports whether every client in the failover
+// chain (and the plain single client) targets a loopback host.
+func allCandidatesLoopback(c any) bool {
+	switch v := c.(type) {
+	case *processor.FailoverClient:
+		for _, cl := range v.Clients() {
+			if !loopbackBaseURL(cl.BaseURL()) {
+				return false
+			}
+		}
+		return true
+	case *processor.Client:
+		return loopbackBaseURL(v.BaseURL())
+	default:
+		return false
+	}
+}
+
+// loopbackBaseURL reports whether the URL's host is a loopback spelling.
+func loopbackBaseURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	return h == "127.0.0.1" || h == "localhost" || h == "::1"
 }

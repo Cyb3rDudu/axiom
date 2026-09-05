@@ -10,6 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# Single source of truth for the source-download budget (#250): the
+# dataclass default AND the env-loader fallback MUST share this value —
+# a diverging pair shipped 120s as the real budget while the diff
+# claimed 600s (found in production 2026-09-05).
+SOURCE_DOWNLOAD_TIMEOUT_DEFAULT = 600.0
+
 @dataclass(frozen=True)
 class Settings:
     bind_addr: str = "127.0.0.1"
@@ -28,7 +34,7 @@ class Settings:
     # Remote source delivery: total download budget for one source_url pull.
     # #250: 600s default — a large book under full local compute must
     # transfer, not race the clock (the budget spans all internal retries).
-    source_download_timeout: float = 600.0
+    source_download_timeout: float = SOURCE_DOWNLOAD_TIMEOUT_DEFAULT
     # Query endpoints (epic #130): hard server caps; /v1/embed max_texts may
     # only lower these, never raise them.
     max_query_texts: int = 16
@@ -102,7 +108,7 @@ def load_settings() -> Settings:
         compute_backend=os.getenv("AXIOM_PROCESSOR_COMPUTE", "reference"),
         log_level=os.getenv("AXIOM_PROCESSOR_LOG_LEVEL", "INFO"),
         source_download_timeout=_env_float(
-            "AXIOM_PROCESSOR_SOURCE_TIMEOUT", 120.0
+            "AXIOM_PROCESSOR_SOURCE_TIMEOUT", SOURCE_DOWNLOAD_TIMEOUT_DEFAULT
         ),
         max_query_texts=max(1, _env_int("AXIOM_PROCESSOR_MAX_QUERY_TEXTS", 16)),
         rerank_max_texts=max(1, _env_int("AXIOM_PROCESSOR_RERANK_MAX_TEXTS", 64)),

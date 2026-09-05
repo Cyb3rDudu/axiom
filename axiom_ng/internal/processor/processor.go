@@ -121,6 +121,11 @@ type Ack struct {
 }
 
 // Client talks to one processor endpoint over loopback HTTP.
+
+// BaseURL exposes the client's base address (dispatcher topology
+// checks: the solo-loopback source guard reads it).
+func (c *Client) BaseURL() string { return c.baseURL }
+
 type Client struct {
 	baseURL string
 	hc      *http.Client

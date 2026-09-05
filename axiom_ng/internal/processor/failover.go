@@ -60,6 +60,11 @@ func FailoverClass(err error) bool {
 // (Embed/Rerank) intentionally have NO failover: the query runner is the
 // always-local role, and its failure degrades retrieval per R3 instead of
 // silently switching runners.
+
+// Clients exposes the candidate chain (topology checks in the
+// dispatcher: the solo-loopback source guard reads every base URL).
+func (f *FailoverClient) Clients() []*Client { return f.clients }
+
 type FailoverClient struct {
 	// clients is the ordered candidate chain (clients[0] = preferred).
 	// ordered() re-ranks it by liveness: alive candidates first (configured
