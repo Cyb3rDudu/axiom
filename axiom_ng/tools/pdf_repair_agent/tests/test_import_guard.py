@@ -119,6 +119,12 @@ def test_config_default_pfad_suche(monkeypatch, tmp_path):
 
     monkeypatch.delenv("AXIOM_FIXER_CONFIG", raising=False)
     monkeypatch.setattr(config_module, "HERE", tmp_path)
+    # Hermetizität (#253): ein realer ~/.config/axiom/fixer.config.env
+    # (Akzeptanzlauf) darf diesen Test nicht umdrehen — home auf tmp_path
+    # zeigen lassen, dort existiert KEINE config.
+    monkeypatch.setattr(
+        config_module.Path, "home", staticmethod(lambda: tmp_path)
+    )
     # kein home-cfg, kein HERE-cfg → HERE-Fallback
     assert config_module.default_config_path() == tmp_path / "config.env"
     # AXIOM_FIXER_CONFIG (Env) gewinnt über alles

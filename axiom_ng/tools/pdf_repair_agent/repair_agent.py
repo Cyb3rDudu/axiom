@@ -264,6 +264,80 @@ def run_agent(
     cfg = cfg or load_config_envfile(None)
     cfg.ensure_dirs()
     status = config_status(cfg)
+
+    # #253: deterministische Stelle-1-Katalog-Regel VOR dem Agentenlauf —
+    # "Label-Tree fehlt/leerer Strunk + Textschicht vorhanden" ist
+    # beweisbar-sicher (write_labels aus den Folios der Textschicht),
+    # braucht kein Modell und keine Stelle-2/3-Vorbedingung. Auch ohne
+    # DEEPSEEK-Key heilbar.
+    wc = ensure_work_copy(cfg, key)
+    if wc is not None:
+        work, _reused = wc  # reuse flag irrelevant here: fast path re-plans
+        from tools import labeltree_heal  # type: ignore[reportAttributeAccessIssue]
+
+        verdict = labeltree_heal.would_heal(work)
+        if verdict.get("would_heal"):
+            labels = verdict["labels"]
+            run_dir = cfg.work_root / key
+            plan = {
+                "class": "labeltree-missing",
+                "operations": [
+                    {
+                        "op": "write_labels",
+                        "source": str(work),
+                        "backup": str(run_dir / "backup.pdf"),
+                        "labels": labels,
+                        "expected_after": labels,
+                    }
+                ],
+            }
+            if not apply:
+                report = {
+                    "key": key,
+                    "verdict": "report",
+                    "catalog_rule": "labeltree-missing+textlayer -> write_labels",
+                    "final_step": {
+                        "action": "report",
+                        "plan_class": "labeltree-missing",
+                        "reason": "Katalog-Regel (#253): Tree fehlt/leerer "
+                                  "Strunk + Textschicht vorhanden — "
+                                  "beweisbar-sichere write_labels-Operation, "
+                                  "Schreibfreigabe nicht erteilt (Dry-Run).",
+                    },
+                    "evidence": [verdict],
+                    "config": status,
+                    "apply": False,
+                }
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "report.json").write_text(
+                    json.dumps(report, ensure_ascii=False, indent=1, default=str)
+                )
+                return report
+            from tools import surgery_exec  # type: ignore[reportAttributeAccessIssue]
+
+            res = surgery_exec.run_plan(plan, apply=True)
+            applied = bool(res.get("applied"))
+            report = {
+                "key": key,
+                "verdict": "healed" if applied else "halt",
+                "catalog_rule": "labeltree-missing+textlayer -> write_labels",
+                "final_step": {
+                    "action": "heal" if applied else "rollback",
+                    "plan_class": "labeltree-missing",
+                    "reason": ("Katalog-Regel (#253): write_labels ausgeführt, "
+                               "Read-Back bestätigt." if applied else
+                               f"write_labels abgelehnt: {res.get('cause')}"),
+                },
+                "evidence": [verdict, res],
+                "config": status,
+                "apply": True,
+            }
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "report.json").write_text(
+                json.dumps(report, ensure_ascii=False, indent=1, default=str)
+            )
+            return report
+
     if client is None:
         client = make_client(cfg)
     if client is None:
