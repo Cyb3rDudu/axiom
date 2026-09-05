@@ -1,0 +1,51 @@
+# Pre-release build pipeline: workflow_dispatch -> make all -> artifacts
+# attached to the workflow run (NO tag, NO GitHub release — the final
+# v*-tag keeps its complete auto-changelog). Deploy-before-tag flow:
+# admin pulls the run artifacts, deploys the commit, production
+# acceptance runs, then the real tag is cut.
+name: pre-release
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit SHA or branch to build (default: main)"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  darwin-arm64:
+    runs-on: macos-14 # arm64
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'main' }}
+          fetch-depth: 0 # version stamping needs tags for the -N-gHASH suffix
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: axiom_ng/go.mod
+      - uses: actions/setup-python@v5
+        with:
+          # mirrors release.yml: fixer requirements.lock.txt is a 3.11 freeze
+          python-version: "3.11"
+
+      - name: Build (same targets as the release pipeline)
+        run: make all
+
+      - name: Attach artifacts to this run (no release, no tag)
+        uses: actions/upload-artifact@v4
+        with:
+          name: axiom-pre-release-${{ github.event.inputs.ref || 'main' }}
+          path: |
+            dist/axiom-*-darwin-arm64
+            dist/axiom-*-darwin-arm64.sha256
+            dist/axiom-fixer-*.tar.zst
+            dist/axiom-fixer-*.tar.zst.sha256
+            dist/axiom-runner-*.tar.zst
+            dist/axiom-runner-*.tar.zst.sha256
+          retention-days: 30
+          if-no-files-found: error
