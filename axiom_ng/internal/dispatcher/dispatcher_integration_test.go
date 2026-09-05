@@ -1391,6 +1391,22 @@ func TestSubmitBrokenFile422StaysTerminal(t *testing.T) {
 	}
 }
 
+// qualityState reads the job's quality_state JSON (nil if unset) — the
+// #254/#252 outcome-facing projection assertions.
+func (h *dispatchHarness) qualityState(t *testing.T, jobID string) map[string]any {
+	t.Helper()
+	var raw []byte
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT quality_state FROM ingest_jobs WHERE id=$1`, jobID).Scan(&raw); err != nil || raw == nil {
+		return nil
+	}
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	return m
+}
+
 // --- #237: unreadable source → structured FAIL → repair case -------------
 
 // repairCaseFor reads the open repair case of an attachment (nil if none).
@@ -1776,4 +1792,51 @@ func TestGPURichLanesScaleToSumCapacities(t *testing.T) {
 		t.Fatal("Σ-capacity scaling not observed — derivation did not produce 2 lanes")
 	}
 	cancel()
+}
+
+// TestPreflightNoPrintPaginationProcesses (#254): the text-layer split —
+// a text-bearing PDF without print pagination (🟡 no_print_pagination,
+// ok=true from the runner) is NOT a reject: the job runs to completion
+// with physical_only locators, no repair case is ever created (nothing is
+// structurally broken), and quality_state carries the English
+// pagination_state marker for the #252 outcome derivation. The textless
+// scan counterpart stays rejected (TestPreflightUnpaginatedStaysRejected).
+func TestPreflightNoPrintPaginationProcesses(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "N254", 3)
+	if err := os.WriteFile("/tmp/x.pdf", []byte(testMinimalPDF), 0o600); err != nil {
+		t.Fatalf("write source pdf: %v", err)
+	}
+	fp := newFakeProcessor(t)
+	fp.result = `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed"}`
+	fp.preflightReport = &map[string]any{
+		"contract_version": "1.0",
+		"source_name":      "inline",
+		"ok":               true, // #254: deliberately NOT a reject
+		"finding":          "🟡 no_print_pagination",
+		"reason":           "text-tragend ohne Druckpaginierung — physical_only",
+		"details": map[string]any{
+			"pages": 1, "text_layer": true, "mean_chars_per_page": 2500.0,
+			"pagination_state":    "physical_only",
+			"suspicious_patterns": []any{},
+		},
+	}
+	d := newDispatcher(t, h, fp, Config{PreflightEnabled: true})
+	runFor(t, d, context.Background(), 8*time.Second)
+
+	if got := h.jobStatus(t, jobID); got != "completed" {
+		t.Fatalf("status = %q, want completed — born-digital no-folio must PROCESS (#254)", got)
+	}
+	if rc := h.repairCaseFor(t, jobID); rc != nil {
+		t.Fatalf("no repair case may exist for a passthrough verdict, got %v", rc)
+	}
+	// #252 alignment: the outcome-facing marker lands in quality_state.
+	qs := h.qualityState(t, jobID)
+	if qs == nil || qs["pagination_state"] != "physical_only" {
+		t.Fatalf("quality_state pagination_state = %v, want physical_only (qs=%v)", qs["pagination_state"], qs)
+	}
+	if qs["finding"] != "🟡 no_print_pagination" {
+		t.Fatalf("quality_state finding = %v", qs["finding"])
+	}
 }
