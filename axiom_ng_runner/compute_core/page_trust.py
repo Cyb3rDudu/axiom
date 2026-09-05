@@ -49,6 +49,11 @@ PRINT_UNVERIFIED = "print_unverified"   # #220: markers without proof
 PHYSICAL_ONLY = "physical_only"
 NONE = "none"
 
+# #254: bottom harvest band reaches up to 75% of the page — the Plantin
+# class of mid-page running heads (folio row at ~75-76%). See
+# harvest_folio_candidates.
+_BOT_BAND = 0.75
+
 _FOLIO_LINE = re.compile(r"^\s*(\d{1,4})\s*$")
 # v2.1: ELI 'N/M' page-of-total markers (EU official journals: the AI Act
 # family paginates '16/144', '51/71' — bare standalone lines, and the ELI
@@ -114,6 +119,13 @@ def harvest_folio_candidates(doc: pymupdf.Document) -> dict[int, list[tuple[str,
     Returns per 0-based page a list of (form, value, zone) in encounter
     order. Nothing here decides trust — verify_folio_sequence remains the
     only path to folio_verified.
+
+    #254: the bottom band reaches up to 75% (was 88%) — the Plantin
+    class: e-book layouts whose running head + folio sit at ~75–76%
+    (mid-page footer row), previously invisible to the harvester. Wider
+    band ⇒ more body-text lines get eyes, but bare-number junk can
+    neither seed a chain (picker strength) nor survive the +1 sequence
+    proof — the same discipline that already governs the band edges.
     """
     out: dict[int, list[tuple[str, str, str]]] = {}
     for i in range(doc.page_count):
@@ -122,7 +134,7 @@ def harvest_folio_candidates(doc: pymupdf.Document) -> dict[int, list[tuple[str,
         cands: list[tuple[str, str, str]] = []
         for zone, clip in (
             ("top", pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y1 * 0.12)),
-            ("bot", pymupdf.Rect(rect.x0, rect.y1 * 0.88, rect.x1, rect.y1)),
+            ("bot", pymupdf.Rect(rect.x0, rect.y1 * _BOT_BAND, rect.x1, rect.y1)),
         ):
             text = page.get_text("text", clip=clip)
             for line in (l.strip() for l in text.splitlines()):

@@ -33,6 +33,14 @@ class PreflightResult:
         return f"{kopf}PREFLIGHT {'GRÜN' if self.ok else 'REJECT'} — {self.finding} — {self.reason}"
 
 
+# #254: outcome-facing pagination state per finding — the #252 derivation
+# reads this instead of parsing the German finding strings.
+_PAGINATION_STATE = {
+    "🟡 no_print_pagination": "physical_only",
+    "🔴 unpaginiert": "needs_ocr",
+}
+
+
 def _text_metrics(doc) -> dict:
     """#175 text-layer metrics: per-page text presence/density plus the
     suspicious patterns (blank-series, image-only pages) the preflight report
@@ -138,7 +146,15 @@ def analyze_pdf(pdf_path: str) -> dict:
         if labels_broken and folio_found:
             suspicion = "🔴 reparierbar"
         elif labels_broken:
-            suspicion = "🔴 unpaginiert"
+            # #254: the skip conflated two different cases. The real gate
+            # is the TEXT LAYER, not pagination: a born-digital PDF without
+            # print pagination still processes honestly with physical_only
+            # locators ("PDF-S. N", #173 rendering); a textless scan cannot
+            # (needs OCR — out of scope, surfaced as needs_ocr for #252).
+            if tm["text_layer"]:
+                suspicion = "🟡 no_print_pagination"
+            else:
+                suspicion = "🔴 unpaginiert"
         elif offset_consistent and offset not in (0, None):
             suspicion = "🟡 Versatz-Verdacht"
         elif offs and not offset_consistent:
@@ -168,19 +184,34 @@ def analyze_pdf(pdf_path: str) -> dict:
             "blank_series": tm["blank_series"],
             "suspicious_patterns": tm["suspicious_patterns"],
             "finding": suspicion,
+            # #254/#252: the outcome-facing pagination state (English key,
+            # #219 discipline): physical_only = processed with PDF-S. N
+            # locators; needs_ocr = textless scan, cannot be text-searched
+            # without an OCR rebuild. Absent for print-paginated findings —
+            # the derivation in #252 only needs the two honest edge states.
+            "pagination_state": _PAGINATION_STATE.get(suspicion),
         }
     finally:
         doc.close()
 
 def preflight(pdf_path: str) -> PreflightResult:
-    """Verdict for one PDF. GREEN = 🟢 gesund or 🟡 (labels sane); everything
-    🔴 rejects (kaputt-reparierbar goes to the repair queue, unpaginiert
+    """Verdict for one PDF. GREEN = 🟢 gesund or 🟡 (labels sane or #254
+    no_print_pagination — text-bearing without print pagination PROCESSES
+    with physical_only locators); everything 🔴 rejects (kaputt-reparierbar
+    goes to the repair queue, unpaginiert — now only the textless scan —
     never enters the loop)."""
     d = analyze_pdf(pdf_path)
     v = d["finding"]
     if v.startswith("🟢"):
         return PreflightResult(True, v, d.get("label_befund", ""), d)
+    if v == "🟡 no_print_pagination":
+        # #254: deliberately NOT a 🔴 — nothing is structurally broken.
+        # Born-digital without print pagination processes honestly: chunks
+        # carry physical_only locators, citable as "PDF-S. N" (APA section
+        # form per #173).
+        return PreflightResult(True, v, "text-tragend ohne Druckpaginierung — Verarbeitung mit physical_only-Locators (PDF-S. N)", d)
     if v.startswith("🟡"):
         return PreflightResult(True, v, "sanity-ok (Versatz/unklar, kein Reparatur-Fall)", d)
-    # 🔴 Klassen: reject — reparierbar geht in die Queue, unpaginiert nie
+    # 🔴 Klassen: reject — reparierbar geht in die Queue, unpaginiert (nur
+    # noch der echte Scan) nie
     return PreflightResult(False, v, d.get("label_befund", ""), d)
