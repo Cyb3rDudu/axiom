@@ -76,21 +76,58 @@ def diagnose(pdf: str | Path) -> dict:
 
 def heal_labels(pdf: str | Path) -> list[str] | None:
     """Labels-Plan aus den gedruckten Folios der Textschicht — None, wenn
-    das Mapping nicht deterministisch darstellbar ist (dann Agent)."""
+    das Mapping nicht deterministisch darstellbar ist (dann Agent).
+
+    Zweistufig (#253-Forensik an den 9 echten Dateien):
+    1. Roh-Zellen: Folio-Kandidat je Seite aus Kopf-/Fußzone.
+    2. Anker-Ketten-Rekonstruktion: Rauschen (Jahreszahlen, Referenz-
+       Nummern in der Footer-Zelle) darf den Lauf nicht zerbrechen.
+       Gesucht ist die (start_page, start_value)-Hypothese mit maximaler
+       Anker-Unterstützung: eine Seite ist Anker, wenn ihre Zelle exakt
+       dem erwarteten Wert entspricht. Beweisbar-sicher durch:
+       - der LETZTE Anker liegt auf der letzten Seite (bewiesenes Ende,
+         kein Extrapolieren), und
+       - zwischen Ankern folgt jedes Label der +1-Interpolation — der
+         Lauf ist durch Anker BEIDSEITIG gepinnt, eine interpolierte
+         Seite kann nicht abweichen, ohne einen Anker zu brechen.
+       Seiten vor dem ersten Anker bleiben unbenannt (Titelei/Verzeichnis).
+    """
     from . import forensics_tool
 
     doc = pymupdf.open(str(pdf))
     try:
-        labels: list[str] = []
+        cells: list[int | None] = []
         for page in doc:
             truth = forensics_tool.page_truth(page, "")
             folio = truth.get("folio")
             v = pdf_kernel.to_int_or_none(folio) if folio else None
-            labels.append("" if v is None else str(v))
+            cells.append(v)
     finally:
         doc.close()
-    if not any(labels):
+    n = len(cells)
+    if not any(c is not None for c in cells) or n == 0:
         return None
+
+    best: tuple[int, int, int] | None = None  # (anchors, start_page, value)
+    named = [(i, c) for i, c in enumerate(cells) if c is not None]
+    for start_page, start_value in named:
+        # Anker zählen: pages whose cell equals the running expectation
+        anchors = 0
+        for i, c in named:
+            expected = start_value + (i - start_page)
+            if c == expected:
+                anchors += 1
+        if best is None or anchors > best[0]:
+            best = (anchors, start_page, start_value)
+    if best is None:
+        return None
+    _, sp, sv = best
+    # Bewiesenes Ende: die letzte Seite muss selbst Anker sein.
+    if cells[n - 1] != sv + (n - 1 - sp):
+        return None
+    labels = [
+        "" if i < sp else str(sv + (i - sp)) for i in range(n)
+    ]
     # Darstellbarkeits-Gate: exakt die Range-Semantik der Chirurgie
     if not pdf_kernel._build_ranges(labels):
         return None

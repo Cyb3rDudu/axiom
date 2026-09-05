@@ -142,3 +142,59 @@ class TestRunAgentFastPath:
         labels = [got[i].get_label() for i in range(got.page_count)]
         got.close()
         assert labels == ["", "1", "2", "3", "4", "5"], labels
+
+
+class TestAnchorChainReconstruction:
+    """#253: Anker-Ketten-Rekonstruktion — Rauschen in der Folio-Zelle
+    (Jahreszahl, Referenz-Nummer) zerbricht den Lauf nicht; interpolierte
+    Seiten sind durch Anker BEIDSEITIG gepinnt. Shapes aus der Forensik
+    der 9 echten Dateien.
+
+    Mutation-bar: End-Anker-Pflicht entfernt -> no-proven-end test rot;
+    Anker-Zählung gekappt -> noise tests rot."""
+
+    def _pdf_with_cells(self, path, cells):
+        doc = pymupdf.open()
+        for i, cell in enumerate(cells):
+            pg = doc.new_page()
+            pg.insert_text((72, 72), f"body {i} " + "lorem ipsum " * 20)
+            if cell is not None:
+                pg.insert_text((72, 800), str(cell))
+        doc.save(path)
+        doc.close()
+        return path
+
+    def test_noise_year_in_footer_does_not_break_run(self, tmp_path):
+        # QWQG4RLP-Shape: echter Lauf 1..12, Rauschen 2023/106/15
+        p = self._pdf_with_cells(
+            tmp_path / "q.pdf",
+            [1, 2023, 3, 106, 15, 6, 7, 8, 9, 10, 11, 12],
+        )
+        labels = labeltree_heal.heal_labels(p)
+        assert labels == [str(i + 1) for i in range(12)], labels
+
+    def test_noise_inside_run_interpolated(self, tmp_path):
+        # 9ZJQLWT4-Shape: Lauf 565..574, Rauschen 3000/300 auf Seiten 7-8
+        cells = [565, 566, 567, 568, 569, 570, 571, 3000, 300, 574]
+        p = self._pdf_with_cells(tmp_path / "n.pdf", cells)
+        labels = labeltree_heal.heal_labels(p)
+        assert labels == [str(565 + i) for i in range(10)], labels
+
+    def test_duplicate_cell_interpolated(self, tmp_path):
+        # DTPDHN58-Shape: Duplikat 3 und Versatz-Rauschen 4
+        cells = [None, 2, 3, 3, 5, 6, 4, 8, 9, 10]
+        p = self._pdf_with_cells(tmp_path / "d.pdf", cells)
+        labels = labeltree_heal.heal_labels(p)
+        assert labels == [""] + [str(i + 2) for i in range(9)], labels
+
+    def test_no_proven_end_no_heal(self, tmp_path):
+        # letzte Seite KEIN Anker -> kein bewiesenes Ende -> kein would-heal
+        cells = [1, 2, 3, None]
+        p = self._pdf_with_cells(tmp_path / "e.pdf", cells)
+        assert labeltree_heal.heal_labels(p) is None
+
+    def test_scattered_cells_no_heal(self, tmp_path):
+        # ECVDEQJR-Shape: 3 verstreute Zellen, Lücken unbezweifelbar
+        cells = [None] * 6 + [7, None, None, None, None, 12, None, 19, None]
+        p = self._pdf_with_cells(tmp_path / "s.pdf", cells)
+        assert labeltree_heal.heal_labels(p) is None
