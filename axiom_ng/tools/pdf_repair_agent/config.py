@@ -28,9 +28,11 @@ _CONFIG_SPEC = {
     "DEEPSEEK_BASE_URL": ("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
     "MODEL": ("PDF_REPAIR_MODEL", "deepseek-chat"),
     # Backup-Ziel für die Kopie vor jeder Operation.
-    "BACKUP_ROOT": ("PDF_REPAIR_BACKUP_ROOT", PACKAGE / "backup"),
+    # Writable-operator defaults (production finding 2026-09-06): a nix
+    # store is read-only — PACKAGE-relative paths crash on first write.
+    "BACKUP_ROOT": ("PDF_REPAIR_BACKUP_ROOT", Path.home() / ".local" / "state" / "axiom" / "fixer-backup"),
     # Arbeitswurzel für Pläne/Logs/Nachher-PDFs.
-    "WORK_ROOT": ("PDF_REPAIR_WORK_ROOT", PACKAGE / "runs"),
+    "WORK_ROOT": ("PDF_REPAIR_WORK_ROOT", Path.home() / ".local" / "state" / "axiom" / "fixer-runs"),
     # Budget: maximale Operationen eines Agenten-Laufs.
     "BUDGET_MAX_OPS": ("PDF_REPAIR_BUDGET_MAX_OPS", "50"),
     # Budget (Zeit): maximale Laufzeit eines Agenten-Laufs in Sekunden

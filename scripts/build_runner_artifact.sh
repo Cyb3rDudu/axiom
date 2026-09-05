@@ -70,6 +70,20 @@ rm -f "$BUILD/env.tar.gz"
 # ../axiom_ng_runner on sys.path even when the env shipped 0 module files). ---
 (
     cd / && "$STAGE/env/bin/python" -c 'import axiom_ng_runner, torch; print("staged import ok (neutral cwd), torch", torch.__version__, "mps", torch.backends.mps.is_available())'
+# marker font (production finding 2026-09-06): marker downloads its GoNoto
+# font into site-packages/static/fonts on FIRST use at runtime — a
+# read-only nix store makes that a PermissionError that kills every PDF
+# conversion. Bake the font into the artifact (#224 pattern): download
+# once at build time, verify presence, and marker's download_font()
+# short-circuits on the existing file.
+FONT_URL="https://models.datalab.to/artifacts/GoNotoCurrent-Regular.ttf"
+FONT_DST="$STAGE/env/lib/python3.11/site-packages/static/fonts/GoNotoCurrent-Regular.ttf"
+mkdir -p "$(dirname "$FONT_DST")"
+curl -fsSL "$FONT_URL" -o "$FONT_DST" || {
+    echo "FATAL: marker font download failed — artifact would crash on first PDF (read-only store)" >&2
+    exit 1
+}
+test -s "$FONT_DST" && echo "staged marker font ok ($(wc -c < "$FONT_DST") bytes)"
 # #224: the EPUB path needs a bundled pandoc — verify it resolves from the
 # STAGED env with no host PATH contribution.
 "$STAGE/env/bin/pandoc" --version >/dev/null && echo "staged pandoc ok: $($(cd / && "$STAGE/env/bin/python" -c 'import shutil; print(shutil.which("pandoc"))'))"
