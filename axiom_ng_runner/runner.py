@@ -511,22 +511,52 @@ _FIGURE_CAPTION_RE = re.compile(
 
 def _extract_figure_captions(chunk_dicts: list[dict[str, Any]]) -> None:
     """#257: pair the figure-caption lines of a chunk's TEXT with its image
-    refs, in order. Deterministic (pure regex, no model); the caption stays
-    in chunk.text — it is document text and remains citable in its locator
-    context. Extra captions beyond the image count are ignored (a caption
-    without an image in THIS chunk belongs to another chunk's figure).
-    ponytail: order-based pairing assumes ≤1 figure caption per image per
-    chunk — fine for real books; revisit only if a multi-figure chunk mispairs.
+    refs POSITIONALLY: each caption line is assigned to the nearest image
+    occurrence at or before it in the text (captions conventionally follow
+    their figure); a caption with no preceding image in the chunk gets the
+    first image (single-image chunk fallback) or none (multi-image: an
+    unplaceable caption is dropped, never guessed onto the wrong figure).
+    Deterministic (pure regex + index math, no model); the caption stays in
+    chunk.text — it is document text and remains citable in its locator
+    context. Each image gets at most one caption (first wins).
     """
     for c in chunk_dicts:
         meta = c.setdefault("metadata", {})
         refs = [_ref_id(r) for r in (meta.get("image_refs") or [])]
         if not refs:
             continue
-        caps = [m.group(0).strip() for m in _FIGURE_CAPTION_RE.finditer(c.get("text", ""))]
+        text = c.get("text", "")
+        caps = list(_FIGURE_CAPTION_RE.finditer(text))
         if not caps:
             continue
-        meta["figure_captions"] = dict(zip(refs, caps))
+        # Occurrence position of every image ref in the text (basename or
+        # ref match; -1 when the ref string never appears).
+        pos: list[int] = []
+        for r in refs:
+            needle = Path(r).name or r
+            i = text.find(needle)
+            if i < 0:
+                i = text.find(r)
+            pos.append(i)
+        pairs: dict[str, str] = {}
+        used: set[int] = set()
+        for m in caps:
+            # nearest image occurrence at or before the caption line
+            best, best_d = -1, None
+            for idx, p in enumerate(pos):
+                if idx in used or p < 0 or p > m.start():
+                    continue
+                d = m.start() - p
+                if best_d is None or d < best_d:
+                    best, best_d = idx, d
+            if best < 0 and len(refs) == 1 and 0 not in used:
+                best = 0  # single-image chunk: the caption belongs to it
+            if best < 0:
+                continue  # unplaceable caption — dropped, never guessed
+            pairs[refs[best]] = m.group(0).strip()
+            used.add(best)
+        if pairs:
+            meta["figure_captions"] = pairs
 
 
 def _caption_augmentation(chunk: dict[str, Any]) -> str:
@@ -573,6 +603,18 @@ def _reembed_captioned(chunk_dicts: list[dict[str, Any]]) -> bool:
         log.warning("caption re-embed FAILED (%s) — dropping the affected "
                     "chunks' stale pre-caption dense vectors (honest "
                     "caption-blind-free state)", err)
+        for c in affected:
+            (c.get("embeddings") or {}).pop("dense", None)
+        return False
+    # Partial output (#257 review): embed_chunks may return without raising
+    # yet leave individual chunks without a dense vector — those keep their
+    # STALE pre-caption vector unless we treat the gap as a failure too.
+    # Fail closed: any missing vector drops ALL affected stale vectors.
+    if any(not (a.get("embeddings") or {}).get("dense") for a in aug):
+        missing = sum(1 for a in aug if not (a.get("embeddings") or {}).get("dense"))
+        log.warning("caption re-embed PARTIAL (%d/%d chunks without dense "
+                    "vector) — dropping the affected chunks' stale "
+                    "pre-caption dense vectors", missing, len(aug))
         for c in affected:
             (c.get("embeddings") or {}).pop("dense", None)
         return False

@@ -8,7 +8,6 @@ import subprocess
 import sys
 
 import pytest
-
 from axiom_ng_runner.compute_core.caption_backfill_cli import build_inputs, run
 
 
@@ -95,12 +94,31 @@ def test_cli_roundtrip(tmp_path):
         env=env,
         check=False,
     )
-    if (
-        proc.returncode != 0
-        and "embed" in proc.stderr.lower()
-        and "model" in proc.stderr.lower()
-    ):
-        pytest.skip("heavy embedder not installed in this environment")
+    if proc.returncode != 0:
+        err = proc.stderr.lower()
+        heavy_model_unavailable = any(
+            k in err
+            for k in (
+                "huggingface",
+                "connection",
+                "offline",
+                "reach",
+                "timed out",
+                "maxretries",
+                "urlerror",
+                "errno",
+                "resolve",
+                "entry point",
+                "httperror",
+                "ssl",
+            )
+        )
+        if heavy_model_unavailable and os.getenv("AXIOM_CAPTION_BACKFILL_IT") != "1":
+            pytest.skip(
+                "heavy BGE-M3 embedder not reachable in this environment "
+                "(set AXIOM_CAPTION_BACKFILL_IT=1 to force)"
+            )
+        # anything else (KeyError / JSONDecodeError / protocol) is a REAL failure
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout)
     assert out and out[0]["chunk_id"] == "uuid-1"
