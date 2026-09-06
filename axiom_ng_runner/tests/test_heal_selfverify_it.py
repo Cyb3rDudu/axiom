@@ -106,7 +106,6 @@ def test_vendored_harvest_stays_in_sync_with_page_trust():
     production fixtures — drift here re-opens the heal-loop (repairable
     by preflight but not healable by the fixer)."""
     import pymupdf
-
     from axiom_ng_runner.compute_core import page_trust
 
     for fx in (PLANTIN, INTOTO):
