@@ -820,3 +820,39 @@ def test_extract_figure_captions_unplaceable_dropped_not_guessed():
     assert "figure_captions" not in chunk["metadata"], (
         "an unplaceable caption in a multi-image chunk is dropped, never guessed"
     )
+
+
+def test_extract_figure_captions_production_naming():
+    """#257 review 2: PRODUCTION shape — chunk.text carries the original
+    marker filenames (chart.png) while image_refs hold Contract refs
+    (image-0001). The reverse normalization map must resolve the needle;
+    with multiple images, blind ref-string search would fail all positions
+    and drop every caption."""
+    from axiom_ng_runner.runner import _extract_figure_captions
+
+    chunk = {
+        "text": (
+            "Intro prose.\n\n"
+            "![chart](media/chart.png)\n\n"
+            "Figure 1. Annual SWIFT Messages in Millions*\n\n"
+            "More prose.\n\n"
+            "![map](media/map.png)\n\n"
+            "Figure 2. Correspondent banking volume\n"
+        ),
+        "metadata": {"image_refs": ["image-0001", "image-0002"]},
+    }
+    ref_to_orig = {"image-0001": "chart.png", "image-0002": "map.png"}
+    _extract_figure_captions([chunk], ref_to_orig)
+    assert chunk["metadata"]["figure_captions"] == {
+        "image-0001": "Figure 1. Annual SWIFT Messages in Millions*",
+        "image-0002": "Figure 2. Correspondent banking volume",
+    }, "original-filename needles must pair each caption with ITS image"
+
+    # without the map, no ref string appears in the text: both captions are
+    # dropped (never guessed onto the wrong multi-image pairing)
+    chunk2 = {
+        "text": chunk["text"],
+        "metadata": {"image_refs": ["image-0001", "image-0002"]},
+    }
+    _extract_figure_captions([chunk2])
+    assert "figure_captions" not in chunk2["metadata"]
