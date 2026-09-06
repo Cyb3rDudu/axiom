@@ -504,8 +504,13 @@ def _release_mrebel() -> None:
 
 # #257: deterministic document-figure captions — a line-initial
 # "Figure N …" / "Fig. N …" inside a chunk that references an image.
+# Leading whitespace is generous on purpose: marker output frequently pads
+# caption lines inside table-layout remains (dozens of spaces before the
+# word "Figure", production finding 2026-09-06 on Weaponized Interdependence).
+# Requiring a caption-like word boundary after the ordinal keeps the broad
+# indent from over-matching.
 _FIGURE_CAPTION_RE = re.compile(
-    r"(?mi)^\s{0,3}(figure|fig\.)\s+\d+\b[^\n]*"
+    r"(?mi)^\s*(figure|fig\.)\s+\d+\b[^\n]*"
 )
 
 
