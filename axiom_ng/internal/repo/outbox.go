@@ -41,9 +41,12 @@ type OutboxDoc struct {
 	ChunkRef string
 	Index    int
 	Text     string
-	// CaptionText (#230): concatenated machine captions of the chunk's
-	// referenced images — BM25-only field (multi_match text+caption_text),
-	// never in _source, never citable. Empty when nothing captioned.
+	// CaptionText (#230/#257): the chunk's captions, SOURCE-LABELED and
+	// concatenated — "[machine image caption: …]" (model claim, never
+	// citable) plus "[document figure caption: …]" (document text,
+	// citable). The label travels with the text everywhere it surfaces
+	// (BM25 field, rerank payload); no consumer can mistake a machine
+	// description for book prose. Empty when the chunk has neither.
 	CaptionText string
 	Locator     map[string]any
 	Sections    []string
@@ -96,6 +99,7 @@ func (r *Repo) OutboxDocs(ctx context.Context, snapshotID string) ([]OutboxDoc, 
 	SELECT c.id::text, c.chunk_index, c.text, c.locator,
 		       c.section_titles, c.token_count,
 		       c.image_captions::text,
+		       c.figure_captions::text,
 		       CASE WHEN e.vector IS NULL THEN NULL ELSE e.vector::text END,
 		       CASE WHEN s.values IS NULL THEN NULL ELSE s.values::text END
 	FROM processing_chunks c
@@ -112,27 +116,19 @@ func (r *Repo) OutboxDocs(ctx context.Context, snapshotID string) ([]OutboxDoc, 
 	for rows.Next() {
 		var d OutboxDoc
 		var vec, sp *string
-		var capsRaw *string
+		var capsRaw, figsRaw *string
 		if err := rows.Scan(&d.ChunkID, &d.Index, &d.Text, &d.Locator,
-			&d.Sections, &d.Tokens, &capsRaw, &vec, &sp); err != nil {
+			&d.Sections, &d.Tokens, &capsRaw, &figsRaw, &vec, &sp); err != nil {
 			return nil, err
 		}
 		// Contract ref is not persisted (durable identity is id+index); derive
 		// it with the same 0-based scheme the processor emits.
 		d.ChunkRef = fmt.Sprintf("chunk-%04d", d.Index)
-		// #230: image_captions JSONB {ref: caption} → the BM25 caption_text
-		// field. Malformed JSON degrades to no captions (indexing must not
-		// fail on one odd row); captions are an enhancement, never a gate.
-		if capsRaw != nil && *capsRaw != "" && *capsRaw != "{}" {
-			var caps map[string]string
-			if err := json.Unmarshal([]byte(*capsRaw), &caps); err == nil {
-				var parts []string
-				for _, ref := range sortedStringKeys(caps) {
-					parts = append(parts, caps[ref])
-				}
-				d.CaptionText = strings.Join(parts, " ")
-			}
-		}
+		// #230/#257: image_captions/figure_captions JSONB {ref: caption} →
+		// the labeled caption_text field. Malformed JSON degrades to no
+		// captions (indexing must not fail on one odd row); captions are an
+		// enhancement, never a gate.
+		d.CaptionText = labeledCaptionText(capsRaw, figsRaw)
 		if vec != nil {
 			emb, err := parseVector(*vec)
 			if err != nil {
@@ -150,6 +146,30 @@ func (r *Repo) OutboxDocs(ctx context.Context, snapshotID string) ([]OutboxDoc, 
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// labeledCaptionText builds the source-labeled caption_text from the two
+// caption maps (#257): machine captions and document figure captions stay
+// distinguishable — "[machine image caption: X] [document figure caption: Y]".
+// Deterministic (sorted refs), empty string when neither map has content.
+func labeledCaptionText(capsRaw, figsRaw *string) string {
+	var parts []string
+	for _, src := range []struct {
+		raw   *string
+		label string
+	}{{capsRaw, "machine image caption"}, {figsRaw, "document figure caption"}} {
+		if src.raw == nil || *src.raw == "" || *src.raw == "{}" {
+			continue
+		}
+		var m map[string]string
+		if err := json.Unmarshal([]byte(*src.raw), &m); err != nil {
+			continue // degrade to no captions — never fail indexing on one odd row
+		}
+		for _, ref := range sortedStringKeys(m) {
+			parts = append(parts, fmt.Sprintf("[%s: %s]", src.label, m[ref]))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // sortedStringKeys gives deterministic caption_text ordering (map

@@ -79,8 +79,15 @@ type Chunk struct {
 	// in this struct: the persist boundary re-marshals from the typed
 	// struct and silently drops unknown fields (W9 lesson).
 	ImageCaptions map[string]string `json:"image_captions,omitempty"`
-	Embeddings    ChunkEmbeddings   `json:"embeddings"`
-	Metadata      map[string]any    `json:"metadata"`
+	// FigureCaptions (#257): document-native figure captions ("Figure N …")
+	// of the referenced images (artifact ref → caption line). This IS
+	// document text (stays in Text and remains citable) — stored separately
+	// from ImageCaptions, never merged. MUST stay in this struct: the
+	// persist boundary re-marshals from the typed struct and silently drops
+	// unknown fields (W9 lesson).
+	FigureCaptions map[string]string `json:"figure_captions,omitempty"`
+	Embeddings     ChunkEmbeddings   `json:"embeddings"`
+	Metadata       map[string]any    `json:"metadata"`
 }
 
 // #173 page_source trust levels — stamped by the runner's page_trust
