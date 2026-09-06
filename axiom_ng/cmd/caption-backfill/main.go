@@ -101,10 +101,21 @@ func main() {
 	}
 	vecByID := map[string]engineVector{}
 	for _, v := range vectors {
+		if _, dup := vecByID[v.ChunkID]; dup {
+			fatal("engine returned duplicate vector for chunk %s — refusing", v.ChunkID)
+		}
+		if v.Model == "" || v.Dimensions <= 0 || len(v.Values) == 0 || v.Dimensions != len(v.Values) {
+			fatal("engine returned unusable vector for chunk %s (model=%q dims=%d values=%d) — refusing", v.ChunkID, v.Model, v.Dimensions, len(v.Values))
+		}
 		vecByID[v.ChunkID] = v
 	}
+	for _, t := range targets {
+		if _, ok := vecByID[t.ID]; !ok {
+			fatal("engine returned no vector for chunk %s — refusing partial application", t.ID)
+		}
+	}
 	if len(vecByID) != len(targets) {
-		fatal("engine returned %d vectors for %d targets — refusing partial application", len(vecByID), len(targets))
+		fatal("engine returned %d vectors for %d targets (unknown ids in plan) — refusing", len(vecByID), len(targets))
 	}
 
 	// 3. OpenSearch bulk _update FIRST, inside the still-open Postgres
@@ -131,7 +142,11 @@ func main() {
 	}
 	if err := flushBulk(ctx, osURL, user, pass, buf.Bytes(), len(targets)); err != nil {
 		_ = tx.Rollback(ctx)
-		fatal("bulk: %v (postgres rolled back — nothing written)", err)
+		// A failed bulk may have written a PREFIX of the items (OS bulk is
+		// per-item, not atomic). The tool is idempotent and always rewrites
+		// every captioned chunk, so a re-run converges both stores; the
+		// error carries the failing doc ids.
+		fatal("bulk: %v (postgres rolled back; OpenSearch may be partially updated — re-run caption-backfill to converge, it is idempotent)", err)
 	}
 
 	// 4. Upsert dense vectors in Postgres, then commit (one transaction).
@@ -244,7 +259,11 @@ func flushBulk(ctx context.Context, base, user, pass string, body []byte, expect
 		Errors bool `json:"errors"`
 		Items  []struct {
 			Update struct {
-				Error any `json:"error"`
+				ID    string `json:"_id"`
+				Error *struct {
+					Type   string `json:"type"`
+					Reason string `json:"reason"`
+				} `json:"error"`
 			} `json:"update"`
 		} `json:"items"`
 	}
@@ -252,6 +271,17 @@ func flushBulk(ctx context.Context, base, user, pass string, body []byte, expect
 		return fmt.Errorf("decode bulk response: %w", err)
 	}
 	if parsed.Errors || len(parsed.Items) != expected {
+		// Per-item failure scan: OS bulk is per-item, a partial prefix may
+		// already be written — name the failing doc ids for the operator.
+		var failed []string
+		for _, it := range parsed.Items {
+			if it.Update.Error != nil {
+				failed = append(failed, it.Update.ID)
+			}
+		}
+		if len(failed) > 0 {
+			return fmt.Errorf("bulk item failures (%d): %s", len(failed), strings.Join(failed, ","))
+		}
 		return fmt.Errorf("bulk: errors=%v items=%d want %d: %s", parsed.Errors, len(parsed.Items), expected, truncate(string(rb), 400))
 	}
 	return nil

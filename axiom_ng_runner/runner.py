@@ -509,13 +509,22 @@ _FIGURE_CAPTION_RE = re.compile(
 )
 
 
-def _extract_figure_captions(chunk_dicts: list[dict[str, Any]]) -> None:
+def _extract_figure_captions(
+    chunk_dicts: list[dict[str, Any]],
+    ref_to_orig: dict[str, str] | None = None,
+) -> None:
     """#257: pair the figure-caption lines of a chunk's TEXT with its image
     refs POSITIONALLY: each caption line is assigned to the nearest image
     occurrence at or before it in the text (captions conventionally follow
     their figure); a caption with no preceding image in the chunk gets the
     first image (single-image chunk fallback) or none (multi-image: an
     unplaceable caption is dropped, never guessed onto the wrong figure).
+
+    After image-ref normalization, chunk.text still carries the ORIGINAL
+    marker filenames (e.g. chart.png) while image_refs hold Contract refs
+    (image-0001) — ref_to_orig (the reverse of the normalization mapping)
+    supplies the per-ref search needle; the ref string itself is the
+    fallback needle for already-normalized texts (tests, EPUB basenames).
     Deterministic (pure regex + index math, no model); the caption stays in
     chunk.text — it is document text and remains citable in its locator
     context. Each image gets at most one caption (first wins).
@@ -529,14 +538,18 @@ def _extract_figure_captions(chunk_dicts: list[dict[str, Any]]) -> None:
         caps = list(_FIGURE_CAPTION_RE.finditer(text))
         if not caps:
             continue
-        # Occurrence position of every image ref in the text (basename or
-        # ref match; -1 when the ref string never appears).
+        # Occurrence position of every image in the text: the original
+        # marker filename first (production), then the Contract ref
+        # (already-normalized text); -1 when neither appears.
         pos: list[int] = []
         for r in refs:
-            needle = Path(r).name or r
-            i = text.find(needle)
-            if i < 0:
-                i = text.find(r)
+            i = -1
+            for needle in (r, (ref_to_orig or {}).get(r, "")):
+                if not needle:
+                    continue
+                i = text.find(needle)
+                if i >= 0:
+                    break
             pos.append(i)
         pairs: dict[str, str] = {}
         used: set[int] = set()
@@ -1727,8 +1740,12 @@ def _real_pipeline(
         meta["image_refs"] = normalized
 
     # #257 C: deterministic document-figure captions — extracted BEFORE the
-    # caption stage so the dense re-embed augmentation sees them too.
-    _extract_figure_captions(chunk_dicts)
+    # caption stage so the dense re-embed augmentation sees them too. The
+    # REVERSE normalization map gives each Contract ref its original marker
+    # filename, which is what the chunk text still contains.
+    _extract_figure_captions(
+        chunk_dicts, {ref: orig for orig, ref in orig_to_ref.items()}
+    )
 
     # EPUB CFI: override page_span locators with epub_cfi for EPUB sources.
     # The real Chunker emits page_span with fabricated page labels (it doesn't
