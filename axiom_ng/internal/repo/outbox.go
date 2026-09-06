@@ -128,7 +128,7 @@ func (r *Repo) OutboxDocs(ctx context.Context, snapshotID string) ([]OutboxDoc, 
 		// the labeled caption_text field. Malformed JSON degrades to no
 		// captions (indexing must not fail on one odd row); captions are an
 		// enhancement, never a gate.
-		d.CaptionText = labeledCaptionText(capsRaw, figsRaw)
+		d.CaptionText = LabeledCaptionText(capsRaw, figsRaw)
 		if vec != nil {
 			emb, err := parseVector(*vec)
 			if err != nil {
@@ -148,11 +148,11 @@ func (r *Repo) OutboxDocs(ctx context.Context, snapshotID string) ([]OutboxDoc, 
 	return out, rows.Err()
 }
 
-// labeledCaptionText builds the source-labeled caption_text from the two
+// LabeledCaptionText builds the source-labeled caption_text from the two
 // caption maps (#257): machine captions and document figure captions stay
 // distinguishable — "[machine image caption: X] [document figure caption: Y]".
 // Deterministic (sorted refs), empty string when neither map has content.
-func labeledCaptionText(capsRaw, figsRaw *string) string {
+func LabeledCaptionText(capsRaw, figsRaw *string) string {
 	var parts []string
 	for _, src := range []struct {
 		raw   *string
