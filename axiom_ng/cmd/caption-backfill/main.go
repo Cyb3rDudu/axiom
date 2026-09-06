@@ -63,11 +63,6 @@ func main() {
 	if err != nil {
 		fatal("select: %v", err)
 	}
-	type target struct {
-		ID          string
-		CaptionText string
-		EngineInput map[string]any
-	}
 	var targets []target
 	for rows.Next() {
 		var id, text, secs, caps, figs string
@@ -96,7 +91,10 @@ func main() {
 
 	// 2. Engine pass (all-or-nothing): recompute every dense vector BEFORE
 	// any write, so a failure leaves the corpus untouched (no mixed state).
-	input, _ := json.Marshal(targets)
+	// The engine protocol is the FLAT per-chunk shape (chunk_id/text/
+	// section_titles/image_captions/figure_captions) — never the Go-side
+	// target struct.
+	input, _ := json.Marshal(engineInputs(targets))
 	vectors, err := runEngine(ctx, input)
 	if err != nil {
 		fatal("engine: %v", err)
@@ -109,31 +107,15 @@ func main() {
 		fatal("engine returned %d vectors for %d targets — refusing partial application", len(vecByID), len(targets))
 	}
 
-	// 3. Upsert dense vectors in Postgres (one transaction — all or nothing).
+	// 3. OpenSearch bulk _update FIRST, inside the still-open Postgres
+	// transaction: embedding + labeled caption_text. A bulk failure rolls
+	// the DB back — no mixed dense state. The only residual window is a PG
+	// commit failure AFTER a successful bulk (OS new, PG old); the run is
+	// idempotent, so a re-run converges — the fatal below says so explicitly.
 	tx, err := database.Pool().Begin(ctx)
 	if err != nil {
 		fatal("tx: %v", err)
 	}
-	for _, t := range targets {
-		v := vecByID[t.ID]
-		vec := make([]string, len(v.Values))
-		for i, f := range v.Values {
-			vec[i] = strconv.FormatFloat(f, 'g', -1, 64)
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO processing_chunk_dense_embeddings (chunk_id, model, dimensions, vector)
-			VALUES ($1,$2,$3,$4::vector)
-			ON CONFLICT (chunk_id) DO UPDATE
-			  SET model = EXCLUDED.model, dimensions = EXCLUDED.dimensions, vector = EXCLUDED.vector`,
-			t.ID, v.Model, v.Dimensions, "["+strings.Join(vec, ",")+"]"); err != nil {
-			fatal("upsert vector %s: %v", t.ID, err)
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		fatal("commit: %v", err)
-	}
-
-	// 4. Bulk _update the OpenSearch docs: embedding + labeled caption_text.
 	var buf bytes.Buffer
 	for _, t := range targets {
 		v := vecByID[t.ID]
@@ -148,12 +130,52 @@ func main() {
 		buf.WriteByte('\n')
 	}
 	if err := flushBulk(ctx, osURL, user, pass, buf.Bytes(), len(targets)); err != nil {
-		fatal("bulk: %v", err)
+		_ = tx.Rollback(ctx)
+		fatal("bulk: %v (postgres rolled back — nothing written)", err)
+	}
+
+	// 4. Upsert dense vectors in Postgres, then commit (one transaction).
+	for _, t := range targets {
+		v := vecByID[t.ID]
+		vec := make([]string, len(v.Values))
+		for i, f := range v.Values {
+			vec[i] = strconv.FormatFloat(f, 'g', -1, 64)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO processing_chunk_dense_embeddings (chunk_id, model, dimensions, vector)
+			VALUES ($1,$2,$3,$4::vector)
+			ON CONFLICT (chunk_id) DO UPDATE
+			  SET model = EXCLUDED.model, dimensions = EXCLUDED.dimensions, vector = EXCLUDED.vector`,
+			t.ID, v.Model, v.Dimensions, "["+strings.Join(vec, ",")+"]"); err != nil {
+			_ = tx.Rollback(ctx)
+			fatal("upsert vector %s: %v (opensearch already updated — re-run caption-backfill to converge)", t.ID, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		fatal("commit: %v (opensearch already updated — re-run caption-backfill to converge, it is idempotent)", err)
 	}
 
 	fmt.Printf("caption-backfill: %d chunks re-embedded + re-indexed in %s\n",
 		len(targets), time.Since(start).Round(time.Second))
 	fmt.Println("OK: dense arm now sees caption text; caption_text is source-labeled")
+}
+
+// target is one captioned chunk to backfill: the durable id, the labeled
+// caption_text for the OS doc, and the flat engine wire input.
+type target struct {
+	ID          string
+	CaptionText string
+	EngineInput map[string]any
+}
+
+// engineInputs flattens the targets into the engine's wire shape (the
+// protocol caption_backfill_cli.py decodes — keep in sync with its build_inputs).
+func engineInputs(targets []target) []map[string]any {
+	out := make([]map[string]any, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, t.EngineInput)
+	}
+	return out
 }
 
 // engineVector is one row of the Python engine's stdout plan.

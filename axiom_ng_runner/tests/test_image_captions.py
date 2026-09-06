@@ -744,3 +744,79 @@ def test_reembed_failure_drops_stale_dense_vector(monkeypatch, tmp_path):
     assert "dense" not in chunks[0]["embeddings"], (
         "stale pre-caption dense vector must be removed on re-embed failure"
     )
+
+
+def test_reembed_partial_output_drops_stale_dense(monkeypatch):
+    """#257 review fail-closed probe: embed_chunks returns WITHOUT raising
+    but leaves a chunk without a dense vector — every affected chunk's stale
+    pre-caption vector must be dropped and the re-embed reported failed."""
+    import axiom_ng_runner.runner as runner_mod
+
+    class PartialEmbedder:
+        def embed_chunks(self, chunks):
+            for c in chunks:  # dense for all but the LAST chunk
+                c["embeddings"] = {"dense": [0.5]}
+            chunks[-1].pop("embeddings", None)
+
+    import sys
+    fake_embedder = sys.modules.get("axiom_ng_runner.compute_core.embedder")
+    import types
+    mod = types.ModuleType("axiom_ng_runner.compute_core.embedder")
+    mod.TextEmbedder = lambda: PartialEmbedder()
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core.embedder", mod)
+    try:
+        chunks = [
+            {"text": "a", "embeddings": {"dense": {"model": "m", "values": [0.1]}},
+             "metadata": {"image_captions": {"image-0000": "cap a"}}},
+            {"text": "b", "embeddings": {"dense": {"model": "m", "values": [0.2]}},
+             "metadata": {"image_captions": {"image-0001": "cap b"}}},
+        ]
+        ok = runner_mod._reembed_captioned(chunks)
+        assert ok is False, "partial embed output must be reported as failure"
+        assert all("dense" not in c["embeddings"] for c in chunks), (
+            "stale pre-caption dense vectors must be dropped on partial output"
+        )
+    finally:
+        if fake_embedder is not None:
+            monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core.embedder", fake_embedder)
+
+
+def test_extract_figure_captions_positional_pairing():
+    """#257 review: pairing is positional (caption → nearest preceding image),
+    not blind zip — a decorative image BEFORE both figures must stay
+    caption-less, and each figure caption lands on ITS image."""
+    from axiom_ng_runner.runner import _extract_figure_captions
+
+    chunk = {
+        "text": (
+            "Intro prose.\n\n"
+            "![decoration](media/image-0000.png)\n\n"
+            "First topic.\n\n"
+            "![fig](media/image-0001.png)\n\n"
+            "Figure 1. Annual SWIFT Messages in Millions*\n\n"
+            "More prose.\n\n"
+            "![fig](media/image-0002.png)\n\n"
+            "Figure 2. Correspondent banking volume\n"
+        ),
+        "metadata": {"image_refs": ["image-0000", "image-0001", "image-0002"]},
+    }
+    _extract_figure_captions([chunk])
+    figs = chunk["metadata"]["figure_captions"]
+    assert figs == {
+        "image-0001": "Figure 1. Annual SWIFT Messages in Millions*",
+        "image-0002": "Figure 2. Correspondent banking volume",
+    }, "decorative image stays caption-less; each caption on ITS figure"
+
+
+def test_extract_figure_captions_unplaceable_dropped_not_guessed():
+    from axiom_ng_runner.runner import _extract_figure_captions
+
+    # two images, caption BEFORE either occurrence, only one image locatable
+    chunk = {
+        "text": "Figure 9. orphan caption\n\n![a](media/a.png)\n\n![b](media/b.png)",
+        "metadata": {"image_refs": ["image-zz", "image-yy"]},  # refs absent from text
+    }
+    _extract_figure_captions([chunk])
+    assert "figure_captions" not in chunk["metadata"], (
+        "an unplaceable caption in a multi-image chunk is dropped, never guessed"
+    )
