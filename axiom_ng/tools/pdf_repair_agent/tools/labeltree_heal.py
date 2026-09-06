@@ -54,6 +54,21 @@ def label_tree_state(pdf: str | Path) -> str:
     return "empty"
 
 
+def readback_proof(pdf: str | Path) -> dict | None:
+    """#258: Readback-Beweis am (ggf. geheilten) Exemplar — Katalog-Tree
+    EXISTIERT und die Labels sind NICHT-leer. Rückgabe None = KEIN
+    Beweis (dann ist eine "Heilung" ein ehrliches FAIL: kein healed-
+    Verdict, kein Upload — der einzige Prädikats-Punkt für surgery_exec
+    UND repair_agent, damit beide Stellen dieselbe Schema sprechen)."""
+    if label_tree_state(pdf) != "present":
+        return None
+    labels = pdf_kernel.read_page_labels(pdf)
+    named = [lab for lab in labels if lab.strip()]
+    if not named:
+        return None
+    return {"tree": True, "named_pages": len(named), "labels_sample": named[:3]}
+
+
 def diagnose(pdf: str | Path) -> dict:
     """Stelle-1-Diagnose der Defektklasse (nur Lesen)."""
     state = label_tree_state(pdf)
@@ -110,7 +125,6 @@ def heal_labels(pdf: str | Path) -> list[str] | None:
         pdf_kernel.to_int_or_none(str(v)) if v is not None else None
         for v in (picked.get(i) for i in range(n))
     ]
-    n = len(cells)
     if not any(c is not None for c in cells) or n == 0:
         return None
 

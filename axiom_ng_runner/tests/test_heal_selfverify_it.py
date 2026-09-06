@@ -28,7 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # repo root
 FIXER_ROOT = REPO_ROOT / "axiom_ng" / "tools" / "pdf_repair_agent"
 sys.path.insert(0, str(FIXER_ROOT))  # fixer tools (pymupdf-only imports)
 
-from tools import labeltree_heal, surgery_exec
+from tools import folio_harvest, labeltree_heal, surgery_exec
 
 TESTDATA = Path(__file__).parent / "testdata"
 PLANTIN = TESTDATA / "plantin_2018_infrastructure_studies.pdf"
@@ -98,3 +98,28 @@ def test_intoto_stump_is_replaced_and_heals(tmp_path):
     op = out["res"]["operations"][0]
     assert op["heal_readback"]["tree"] is True
     _assert_green(out["work"])
+
+
+def test_vendored_harvest_stays_in_sync_with_page_trust():
+    """#258 sync guard: the fixer's vendored harvest mirror must be
+    BEHAVIOR-IDENTICAL to the source of truth (page_trust) on both
+    production fixtures — drift here re-opens the heal-loop (repairable
+    by preflight but not healable by the fixer)."""
+    import pymupdf
+
+    from axiom_ng_runner.compute_core import page_trust
+
+    for fx in (PLANTIN, INTOTO):
+        d1 = pymupdf.open(str(fx))
+        try:
+            src = page_trust.extract_folio_candidates(d1)
+        finally:
+            d1.close()
+        d2 = pymupdf.open(str(fx))
+        try:
+            mirror = folio_harvest.extract_folio_candidates(d2)
+        finally:
+            d2.close()
+        assert src == mirror, (
+            f"vendored folio_harvest drifted from page_trust on {fx.name}"
+        )

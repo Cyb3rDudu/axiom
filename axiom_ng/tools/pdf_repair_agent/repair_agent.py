@@ -75,19 +75,11 @@ def _heal_readback_proof(work: Path) -> dict | None:
     Heilung ein ehrliches FAIL: kein healed-Verdict, kein hochladbares
     Artefakt (Pfad-Enforcement, nicht Konvention — der Invoker lädt nur
     bei Exit 0 + Artefakt hoch, und ein unbewiesenes work.pdf wird als
-    falsches Artefakt ENTFERNT)."""
-    from tools import (  # type: ignore[reportAttributeAccessIssue]
-        labeltree_heal,
-        pdf_kernel,
-    )
+    falsches Artefakt ENTFERNT). Das Prädikat selbst lebt EINMAL in
+    labeltree_heal.readback_proof (geteilt mit surgery_exec)."""
+    from tools import labeltree_heal  # type: ignore[reportAttributeAccessIssue]
 
-    if labeltree_heal.label_tree_state(work) != "present":
-        return None
-    labels = pdf_kernel.read_page_labels(work)
-    named = [l for l in labels if l.strip()]
-    if not named:
-        return None
-    return {"tree": True, "named_pages": len(named), "labels_sample": named[:3]}
+    return labeltree_heal.readback_proof(work)
 
 
 def h_probe(step: dict, ctx: dict) -> dict:
@@ -292,6 +284,7 @@ def run_agent(
     # braucht kein Modell und keine Stelle-2/3-Vorbedingung. Auch ohne
     # DEEPSEEK-Key heilbar.
     wc = ensure_work_copy(cfg, key)
+    work: Path | None = None
     if wc is not None:
         work, _reused = wc  # reuse flag irrelevant here: fast path re-plans
         from tools import labeltree_heal  # type: ignore[reportAttributeAccessIssue]
@@ -341,6 +334,12 @@ def run_agent(
             # #258: healed-Verdict NUR mit Readback-Beweis am geheilten
             # Exemplar — ohne Beweis ehrliches FAIL + Artefakt weg.
             proof = _heal_readback_proof(work)
+            # cause liegt bei Operationsebene (res["cause"] nur bei
+            # Validierungsfehler) — ehrlich lesen, nicht None zeigen.
+            op_cause = res.get("cause") or next(
+                (o.get("cause") for o in res.get("operations", []) if o.get("cause")),
+                None,
+            )
             report = {
                 "key": key,
                 "verdict": "healed" if applied and proof else "halt",
@@ -351,7 +350,7 @@ def run_agent(
                     "plan_class": "labeltree-missing",
                     "reason": ("Katalog-Regel (#253): write_labels ausgeführt, "
                                "Read-Back bestätigt." if applied and proof else
-                               (f"write_labels abgelehnt: {res.get('cause')}" if not applied
+                               (f"write_labels abgelehnt: {op_cause}" if not applied
                                 else "write_labels angewendet, aber KEIN Readback-"
                                      "Beweis (Tree/Labels) — ehrliches FAIL, kein "
                                      "Upload (#258)")),
@@ -427,7 +426,7 @@ def run_agent(
     # Invoker bedeutet Upload — das Artefakt darf NUR mit Readback-Beweis
     # bleiben (Agenten-Heilungen über h_surgery tragen den Beweis in der
     # Op-Evidenz; die Pforte misst ihn unabhängig am Exemplar selbst).
-    if apply and wc is not None:
+    if apply and work is not None:
         proof = _heal_readback_proof(work)
         report["heal_readback"] = proof
         if proof is None:

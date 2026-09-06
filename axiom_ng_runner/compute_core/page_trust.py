@@ -52,6 +52,9 @@ NONE = "none"
 # #254: bottom harvest band reaches up to 75% of the page — the Plantin
 # class of mid-page running heads (folio row at ~75-76%). See
 # harvest_folio_candidates.
+# #258: a code-identical vendored mirror of this harvest lives in the
+# standalone fixer artifact at axiom_ng/tools/pdf_repair_agent/tools/
+# folio_harvest.py — keep both in sync (drift re-opens the heal-loop).
 _BOT_BAND = 0.75
 
 _FOLIO_LINE = re.compile(r"^\s*(\d{1,4})\s*$")

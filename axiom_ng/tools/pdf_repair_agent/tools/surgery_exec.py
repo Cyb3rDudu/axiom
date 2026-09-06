@@ -124,13 +124,9 @@ def _apply_op_plan(op: dict) -> dict:
         # Katalog-Tree EXISTIERT und mindestens eine Seite ist benannt —
         # sonst ist die "Heilung" ein No-Op und wird zurückgerollt. Ein
         # Upload ohne diesen Beweis ist strukturell ausgeschlossen.
-        tree = labeltree_heal.label_tree_state(src) == "present"
-        named = [l for l in got if l.strip()]
-        result["heal_readback"] = {
-            "tree": tree,
-            "labels_sample": named[:3],
-        }
-        proof = tree and bool(named)
+        # Prädikat geteilt mit repair_agent: labeltree_heal.readback_proof.
+        result["heal_readback"] = labeltree_heal.readback_proof(src)
+        proof = result["heal_readback"] is not None
         # None = nichts verglichen (expected_after nicht gesetzt), kein "true".
         result["match_expected"] = None if expected is None else (got == expected)
         if not proof:

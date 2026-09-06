@@ -97,6 +97,7 @@ class TestAgentGate:
     def _cfg(self, tmp_path):
         cfg = load_config({})
         cfg.work_root = tmp_path / "runs"
+        cfg.backup_root = tmp_path / "backup"  # Hermetizität: nie ~/.local
         cfg.zotero_storage_root = tmp_path / "storage"
         cfg.ensure_dirs()
         return cfg
@@ -145,6 +146,32 @@ class TestAgentGate:
         )
         # Storage-Original unberührt (Arbeitskopie-Disziplin bleibt).
         assert (att / "scan.pdf").exists()
+
+    def test_unproven_fast_path_removes_artifact_no_upload_path(self, tmp_path, monkeypatch):
+        """MUTATION-BALKEN (#258) für den FAST-PATH: write_labels crasht
+        nach dem Backup — die Op wird zurückgerollt (applied=False), der
+        Readback-Beweis fehlt. Der Lauf muss halten UND das zurückgerollte
+        work.pdf ENTFERNEN (Exit 0 + Artefakt wäre der Upload-Pfad).
+        Fast-Path-unlink gekappt -> Test ROT."""
+        from tools import pdf_kernel  # type: ignore[reportAttributeAccessIssue]
+
+        def _boom(pdf, labels):
+            raise RuntimeError("kernel write failed")
+
+        monkeypatch.setattr(pdf_kernel, "write_page_labels", _boom)
+        cfg = self._cfg(tmp_path)
+        att = cfg.zotero_storage_root / "KEYFAIL1"
+        att.mkdir(parents=True)
+        _missing_tree_pdf(att / "book.pdf")
+        rep = run_agent("KEYFAIL1", apply=True, client=None, cfg=cfg)
+        assert rep["verdict"] == "halt", json.dumps(rep, default=str)[:400]
+        assert "abgelehnt" in rep["final_step"]["reason"]
+        assert rep["heal_readback"] is None
+        assert not (cfg.work_root / "KEYFAIL1" / "work.pdf").exists(), (
+            "unbewiesenes work.pdf wäre der Upload-Pfad eines No-Op-Heils"
+        )
+        # Storage-Original unberührt (Arbeitskopie-Disziplin bleibt).
+        assert (att / "book.pdf").exists()
 
     def test_dry_run_keeps_artifact(self, tmp_path):
         """Ohne --apply gibt es keinen Upload-Pfad — die Pforte greift

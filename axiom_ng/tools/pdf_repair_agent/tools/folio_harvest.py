@@ -4,7 +4,8 @@ Source of truth: axiom_ng_runner/compute_core/page_trust.py (harvest_
 folio_candidates / _drop_constants / _pick_candidates / extract_folio_
 candidates). The fixer ships as a STANDALONE artifact (own venv, no
 project imports — package discipline), so the harvest is vendored
-byte-discipline-identical instead of imported. What #254 preflight
+code-identical (comments/docstrings differ) instead of imported. What
+#254 preflight
 classifies as repairable-by-folios must be healable by those same
 folios (issue #258): same bands (top 12%, bottom from 75%), same forms
 (bare/eli/lseries/lead/mid/trail/roman/weak), same constants drop, same
