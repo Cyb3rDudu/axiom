@@ -42,7 +42,7 @@ PKG = HERE.parent
 if str(PKG) not in sys.path:
     sys.path.insert(0, str(PKG))  # standalone: `python tools/surgery_exec.py …`
 
-from tools import pdf_kernel  # type: ignore[reportMissingImports]  # noqa: E402
+from tools import labeltree_heal, pdf_kernel  # type: ignore[reportMissingImports]
 
 
 def validate(plan: dict) -> tuple[bool, str]:
@@ -68,6 +68,10 @@ def validate(plan: dict) -> tuple[bool, str]:
         labels = op.get("labels")
         if not isinstance(labels, list):
             return False, f"Op {i}: labels fehlt"
+        # #258: eine Heilung, die KEINE Seite benennt, ist ein No-Op — der
+        # Upload-Pfad für Schein-Heilungen. Strukturell verweigert.
+        if not any(str(l).strip() for l in labels):
+            return False, f"Op {i}: labels komplett leer — No-Op, keine Heilung"
         want = pdf_kernel.doc_page_count(src)
         if len(labels) != want:
             return False, f"Op {i}: labels-Länge {len(labels)} != page_count {want}"
@@ -116,9 +120,25 @@ def _apply_op_plan(op: dict) -> dict:
         pdf_kernel.write_page_labels(src, labels)
         got = pdf_kernel.read_page_labels(src)
         result["readback"] = got
+        # #258 Readback-Beweis (PFLICHT, unabhängig von expected_after): der
+        # Katalog-Tree EXISTIERT und mindestens eine Seite ist benannt —
+        # sonst ist die "Heilung" ein No-Op und wird zurückgerollt. Ein
+        # Upload ohne diesen Beweis ist strukturell ausgeschlossen.
+        tree = labeltree_heal.label_tree_state(src) == "present"
+        named = [l for l in got if l.strip()]
+        result["heal_readback"] = {
+            "tree": tree,
+            "labels_sample": named[:3],
+        }
+        proof = tree and bool(named)
         # None = nichts verglichen (expected_after nicht gesetzt), kein "true".
         result["match_expected"] = None if expected is None else (got == expected)
-        if result["match_expected"] is False:
+        if not proof:
+            shutil.copy2(backup, src)
+            result["rolled_back"] = True
+            result["applied"] = False
+            result["cause"] = "no readback proof: tree fehlt/labels leer (#258)"
+        elif result["match_expected"] is False:
             # Read-Back-Abweichung: Rollback (backup → source).
             shutil.copy2(backup, src)
             result["rolled_back"] = True

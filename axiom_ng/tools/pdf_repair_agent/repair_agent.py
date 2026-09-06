@@ -69,6 +69,27 @@ def _ctx(cfg, key: str, allow_apply: bool) -> dict:
     return {"cfg": cfg, "key": key, "allow_apply": allow_apply}
 
 
+def _heal_readback_proof(work: Path) -> dict | None:
+    """#258: Readback-Beweis am (ggf. geheilten) Exemplar — Katalog-Tree
+    EXISTIERT und die Labels sind NICHT-leer. Ohne diesen Beweis ist eine
+    Heilung ein ehrliches FAIL: kein healed-Verdict, kein hochladbares
+    Artefakt (Pfad-Enforcement, nicht Konvention — der Invoker lädt nur
+    bei Exit 0 + Artefakt hoch, und ein unbewiesenes work.pdf wird als
+    falsches Artefakt ENTFERNT)."""
+    from tools import (  # type: ignore[reportAttributeAccessIssue]
+        labeltree_heal,
+        pdf_kernel,
+    )
+
+    if labeltree_heal.label_tree_state(work) != "present":
+        return None
+    labels = pdf_kernel.read_page_labels(work)
+    named = [l for l in labels if l.strip()]
+    if not named:
+        return None
+    return {"tree": True, "named_pages": len(named), "labels_sample": named[:3]}
+
+
 def h_probe(step: dict, ctx: dict) -> dict:
     """Stellen-Sonde (3-Stellen-Beweis): misst hier die RAG-Erreichbarkeit
     (Vorbedingung von Stelle 2). Was NICHT gemessen wurde, steht unter
@@ -317,21 +338,32 @@ def run_agent(
 
             res = surgery_exec.run_plan(plan, apply=True)
             applied = bool(res.get("applied"))
+            # #258: healed-Verdict NUR mit Readback-Beweis am geheilten
+            # Exemplar — ohne Beweis ehrliches FAIL + Artefakt weg.
+            proof = _heal_readback_proof(work)
             report = {
                 "key": key,
-                "verdict": "healed" if applied else "halt",
+                "verdict": "healed" if applied and proof else "halt",
                 "catalog_rule": "labeltree-missing+textlayer -> write_labels",
+                "heal_readback": proof,
                 "final_step": {
-                    "action": "heal" if applied else "rollback",
+                    "action": "heal" if applied and proof else "rollback",
                     "plan_class": "labeltree-missing",
                     "reason": ("Katalog-Regel (#253): write_labels ausgeführt, "
-                               "Read-Back bestätigt." if applied else
-                               f"write_labels abgelehnt: {res.get('cause')}"),
+                               "Read-Back bestätigt." if applied and proof else
+                               (f"write_labels abgelehnt: {res.get('cause')}" if not applied
+                                else "write_labels angewendet, aber KEIN Readback-"
+                                     "Beweis (Tree/Labels) — ehrliches FAIL, kein "
+                                     "Upload (#258)")),
                 },
                 "evidence": [verdict, res],
                 "config": status,
                 "apply": True,
             }
+            if proof is None:
+                # Unbewiesenes work.pdf ist ein falsches Artefakt: der
+                # Invoker liest genau diesen Pfad nach Exit 0 — weg damit.
+                work.unlink(missing_ok=True)
             run_dir.mkdir(parents=True, exist_ok=True)
             (run_dir / "report.json").write_text(
                 json.dumps(report, ensure_ascii=False, indent=1, default=str)
@@ -391,6 +423,15 @@ def run_agent(
         "config": status,
         "apply": apply,
     }
+    # #258 finale Pforte auch für den Agentenpfad: Exit 0 + work.pdf beim
+    # Invoker bedeutet Upload — das Artefakt darf NUR mit Readback-Beweis
+    # bleiben (Agenten-Heilungen über h_surgery tragen den Beweis in der
+    # Op-Evidenz; die Pforte misst ihn unabhängig am Exemplar selbst).
+    if apply and wc is not None:
+        proof = _heal_readback_proof(work)
+        report["heal_readback"] = proof
+        if proof is None:
+            work.unlink(missing_ok=True)
     run_dir = cfg.work_root / key
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "report.json").write_text(

@@ -91,19 +91,25 @@ def heal_labels(pdf: str | Path) -> list[str] | None:
          Lauf ist durch Anker BEIDSEITIG gepinnt, eine interpolierte
          Seite kann nicht abweichen, ohne einen Anker zu brechen.
        Seiten vor dem ersten Anker bleiben unbenannt (Titelei/Verzeichnis).
+
+    Ernte #258: dieselbe Disziplin wie die #254-Preflight-Klassifikation
+    (folio_harvest — vendored mirror von page_trust): Bänder 12%/75%, alle
+    Formen, Konstanten-Drop, Stärke+Ketten-Picking. Was die Preflight als
+    reparierbar klassifiziert, muss mit denselben Folios auch heilbar
+    sein (Plantin-Laufkopf-Folios bei ~75% Höhe, in-toto-Fließtext-Folios).
     """
-    from . import forensics_tool
+    from . import folio_harvest
 
     doc = pymupdf.open(str(pdf))
     try:
-        cells: list[int | None] = []
-        for page in doc:
-            truth = forensics_tool.page_truth(page, "")
-            folio = truth.get("folio")
-            v = pdf_kernel.to_int_or_none(folio) if folio else None
-            cells.append(v)
+        n = doc.page_count
+        picked = folio_harvest.extract_folio_candidates(doc)
     finally:
         doc.close()
+    cells = [
+        pdf_kernel.to_int_or_none(str(v)) if v is not None else None
+        for v in (picked.get(i) for i in range(n))
+    ]
     n = len(cells)
     if not any(c is not None for c in cells) or n == 0:
         return None
