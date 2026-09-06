@@ -509,8 +509,11 @@ def _release_mrebel() -> None:
 # word "Figure", production finding 2026-09-06 on Weaponized Interdependence).
 # Requiring a caption-like word boundary after the ordinal keeps the broad
 # indent from over-matching.
+# NOTE: [ \t]* (not \s*) — with (?m)^ the pattern is line-anchored; \s*
+# would also consume newlines and could match a caption line MID-PARAGRAPH
+# after blank lines. Reviewer finding 2026-09-06.
 _FIGURE_CAPTION_RE = re.compile(
-    r"(?mi)^\s*(figure|fig\.)\s+\d+\b[^\n]*"
+    r"(?mi)^[ \t]*(figure|fig\.)\s+\d+\b[^\n]*"
 )
 
 

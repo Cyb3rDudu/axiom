@@ -85,10 +85,10 @@ def test_cli_roundtrip(tmp_path):
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         ),
     )
+    # CI light stack: the backfill CLI imports numpy at module level —
+    # skip there instead of failing (v0.1.15 lesson, fourth sighting).
+    pytest.importorskip("numpy")
     proc = subprocess.run(
-        # CI light stack: the backfill CLI imports numpy at module level —
-        # skip there instead of failing (v0.1.15 lesson, third sighting).
-        pytest.importorskip("numpy")
         [sys.executable, "-m", "axiom_ng_runner.compute_core.caption_backfill_cli"],
         input=payload,
         capture_output=True,
