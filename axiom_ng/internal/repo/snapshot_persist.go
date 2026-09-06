@@ -393,16 +393,18 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 		// #230: machine captions ride as JSONB (nil marshals to null →
 		// use the empty map so the NOT NULL column always gets an object).
 		capJSON, _ := json.Marshal(orEmpty(c.ImageCaptions))
+		// #257: figure captions ride the same JSONB pattern (nil → {}).
+		figJSON, _ := json.Marshal(orEmpty(c.FigureCaptions))
 		err = tx.QueryRow(ctx, `
 			INSERT INTO processing_chunks
 			  (snapshot_id, chunk_index, text, locator, section_titles,
 			   start_paragraph_index, end_paragraph_index, token_count,
-			   image_refs, image_captions)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			   image_refs, image_captions, figure_captions)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 			RETURNING id::text`,
 			snapshotID, c.Index, c.Text, locJSON, secJSON,
 			ptrToInt(c.Structure.StartParagraphIndex), ptrToInt(c.Structure.EndParagraphIndex),
-			c.TokenCount, imgJSON, capJSON,
+			c.TokenCount, imgJSON, capJSON, figJSON,
 		).Scan(&cid)
 		if err != nil {
 			return "", fmt.Errorf("insert chunk %d: %w", c.Index, err)

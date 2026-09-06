@@ -369,6 +369,11 @@ def _adapt_chunk(
         # ADDITIONAL indexable text, never part of chunk.text (a caption is
         # a machine claim, not book prose). Absent when nothing captioned.
         "image_captions": meta.get("image_captions") or None,
+        # #257: document-native figure captions ("Figure N …") extracted
+        # deterministically from the chunk's own text (ref → caption).
+        # Unlike image_captions this IS document text and stays citable —
+        # stored separately, never merged with machine captions.
+        "figure_captions": meta.get("figure_captions") or None,
         # Durchreichen echter Embeddings aus dem Original-Chunk (z.B. von
         # TextEmbedder.embed_chunks), damit _build_reference_result sie nicht
         # mit dem Reference-Stub überschreibt.
@@ -383,6 +388,9 @@ def _adapt_chunk(
     # #230: omit instead of null — an uncaptioned chunk carries no field.
     if not out.get("image_captions"):
         out.pop("image_captions", None)
+    # #257: same omit-instead-of-null rule for figure captions.
+    if not out.get("figure_captions"):
+        out.pop("figure_captions", None)
     return out
 
 
@@ -492,27 +500,66 @@ def _release_mrebel() -> None:
         log.warning("mREBEL unload skipped: %s", err)
 
 
-# ── #230: image captioning stage ──────────────────────────────────────────
+# ── #230: image captioning stage ──────────────────────────────────
+
+# #257: deterministic document-figure captions — a line-initial
+# "Figure N …" / "Fig. N …" inside a chunk that references an image.
+_FIGURE_CAPTION_RE = re.compile(
+    r"(?mi)^\s{0,3}(figure|fig\.)\s+\d+\b[^\n]*"
+)
+
+
+def _extract_figure_captions(chunk_dicts: list[dict[str, Any]]) -> None:
+    """#257: pair the figure-caption lines of a chunk's TEXT with its image
+    refs, in order. Deterministic (pure regex, no model); the caption stays
+    in chunk.text — it is document text and remains citable in its locator
+    context. Extra captions beyond the image count are ignored (a caption
+    without an image in THIS chunk belongs to another chunk's figure).
+    ponytail: order-based pairing assumes ≤1 figure caption per image per
+    chunk — fine for real books; revisit only if a multi-figure chunk mispairs.
+    """
+    for c in chunk_dicts:
+        meta = c.setdefault("metadata", {})
+        refs = [_ref_id(r) for r in (meta.get("image_refs") or [])]
+        if not refs:
+            continue
+        caps = [m.group(0).strip() for m in _FIGURE_CAPTION_RE.finditer(c.get("text", ""))]
+        if not caps:
+            continue
+        meta["figure_captions"] = dict(zip(refs, caps))
 
 
 def _caption_augmentation(chunk: dict[str, Any]) -> str:
     """The caption block appended to a chunk's EMBEDDING input (never to
-    chunk.text). Machine-marked so downstream debugging never mistakes it
-    for book prose."""
-    caps = chunk.get("metadata", {}).get("image_captions") or {}
-    if not caps:
+    chunk.text). Source-labeled so downstream debugging never mistakes a
+    machine claim for book prose (#257: figure captions join, labeled as
+    document text)."""
+    meta = chunk.get("metadata", {}) or {}
+    lines = [
+        f"[machine-generated image caption: {c}]"
+        for c in (meta.get("image_captions") or {}).values()
+    ]
+    lines += [
+        f"[document figure caption: {c}]"
+        for c in (meta.get("figure_captions") or {}).values()
+    ]
+    if not lines:
         return ""
-    lines = [f"[machine-generated image caption: {c}]" for c in caps.values()]
     return "\n" + "\n".join(lines)
 
 
-def _reembed_captioned(chunk_dicts: list[dict[str, Any]]) -> None:
+def _reembed_captioned(chunk_dicts: list[dict[str, Any]]) -> bool:
     """Re-embed chunks whose images got captioned so the DENSE arm sees the
-    caption text (#230). The augmented text goes into the embedding input
-    only — chunk text in storage stays pure."""
+    caption text (#230/#257). The augmented text goes into the embedding input
+    only — chunk text in storage stays pure.
+
+    Returns False when the re-embed failed, in which case the affected
+    chunks' dense embeddings are REMOVED (#257 B): a stale pre-caption
+    vector must never silently keep serving — the honest state is "no
+    dense vector for this chunk", not a caption-blind one."""
     affected = [c for c in chunk_dicts if _caption_augmentation(c)]
     if not affected:
-        return
+        return True
     aug = [
         {"text": c["text"] + _caption_augmentation(c),
          "metadata": c.get("metadata", {})}
@@ -523,13 +570,17 @@ def _reembed_captioned(chunk_dicts: list[dict[str, Any]]) -> None:
 
         TextEmbedder().embed_chunks(aug)
     except Exception as err:  # noqa: BLE001 — reference backend / no model
-        log.warning("caption re-embed skipped (%s) — dense arm keeps the "
-                    "pre-caption vectors", err)
-        return
+        log.warning("caption re-embed FAILED (%s) — dropping the affected "
+                    "chunks' stale pre-caption dense vectors (honest "
+                    "caption-blind-free state)", err)
+        for c in affected:
+            (c.get("embeddings") or {}).pop("dense", None)
+        return False
     for c, a in zip(affected, aug):
         raw = a.get("embeddings")
         if raw:
             c["embeddings"] = raw
+    return True
 
 
 def _caption_images_stage(
@@ -1633,6 +1684,10 @@ def _real_pipeline(
             normalized.append(orig_to_ref.get(orig_base, orig_to_ref.get(orig, orig)))
         meta["image_refs"] = normalized
 
+    # #257 C: deterministic document-figure captions — extracted BEFORE the
+    # caption stage so the dense re-embed augmentation sees them too.
+    _extract_figure_captions(chunk_dicts)
+
     # EPUB CFI: override page_span locators with epub_cfi for EPUB sources.
     # The real Chunker emits page_span with fabricated page labels (it doesn't
     # know about EPUB structure). We replace them with real CFI locators from
@@ -1740,10 +1795,37 @@ def _real_pipeline(
     # partial). Captions ride as artifact attributes + chunk
     # image_captions; chunk.text stays pure (machine claims are never
     # citation prose). Profile-gated — off means byte-identical result.
-    if _caption_images_stage(
+    # #257 B: re-embed failures are recorded job-level (never silent stale
+    # vectors — the drop happens inside _reembed_captioned).
+    _reembed_result = {"ok": True, "called": False}
+
+    def _reembed_record(chunks: list[dict[str, Any]]) -> None:
+        _reembed_result["called"] = True
+        if not _reembed_captioned(chunks):
+            _reembed_result["ok"] = False
+
+    caption_stage_ran = _caption_images_stage(
         proc_opt, image_artifacts, chunk_dicts, work_dir,
-        stage_completion, set_progress, _reembed_captioned,
-    ):
+        stage_completion, set_progress, _reembed_record,
+    )
+    figure_captions_present = any(
+        (c.get("metadata", {}) or {}).get("figure_captions")
+        for c in chunk_dicts
+    )
+    if caption_stage_ran or figure_captions_present:
+        # #257 C: figure-only case — the caption stage's internal re-embed
+        # may not have fired (flag off, or nothing captioned while document
+        # figure captions exist); a single catch-up call, no-op without
+        # augmentation.
+        if (
+            proc_opt.get("compute_dense_embeddings")
+            and not _reembed_result["called"]
+        ):
+            _reembed_record(chunk_dicts)
+        if proc_opt.get("compute_dense_embeddings"):
+            stage_completion["dense_reembed"] = _reembed_result["ok"]
+            if not _reembed_result["ok"]:
+                stage_completion["dense_reembed_reason"] = "DENSE_REEMBED_FAILED"
         # the stage mutated artifacts/chunks/stage_completion in place —
         # rebuild so caption fields reach the result (off-flag → no call,
         # byte-identical result: the passenger proof).

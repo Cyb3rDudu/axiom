@@ -653,3 +653,94 @@ def test_cloud_switch_still_unloads_local(tmp_path, monkeypatch):
     assert cloud.calls >= 1, "cloud fallback must caption after the poison"
     assert arts[0]["attributes"]["caption_path"] == "cloud"
     assert unloaded, "the ORIGINAL (local) captioner must be unloaded, not the cloud one"
+
+
+# ── #257: document figure captions + re-embed honesty ─────────────────────
+
+def test_extract_figure_captions_swift():
+    """#257 C (test fixture fixation): the chunk carrying the Weaponized
+    Interdependence figure gets its document caption paired to the image ref.
+    Mutation probe: removing figure captions from the merge goes red."""
+    from axiom_ng_runner.runner import _extract_figure_captions
+
+    chunk = {
+        "text": (
+            "Global communications grew along every dimension.\n\n"
+            "![Figure](media/image-0000.png)\n\n"
+            "Figure 1. Annual SWIFT Messages in Millions*\n\n"
+            "Cross-border interdependence followed."
+        ),
+        "metadata": {"image_refs": ["image-0000"]},
+    }
+    _extract_figure_captions([chunk])
+    assert chunk["metadata"]["figure_captions"]["image-0000"] == (
+        "Figure 1. Annual SWIFT Messages in Millions*"
+    )
+    # the caption stays document text — never removed from the chunk
+    assert "Annual SWIFT Messages" in chunk["text"]
+
+
+def test_extract_figure_captions_fig_abbreviation_and_no_image():
+    from axiom_ng_runner.runner import _extract_figure_captions
+
+    withfig = {
+        "text": "Fig. 3. Trade imbalance over time.",
+        "metadata": {"image_refs": ["image-0002"]},
+    }
+    noimg = {
+        "text": "As Figure 7 shows later, the trend reversed.",
+        "metadata": {"image_refs": []},
+    }
+    _extract_figure_captions([withfig, noimg])
+    assert withfig["metadata"]["figure_captions"] == {
+        "image-0002": "Fig. 3. Trade imbalance over time."
+    }
+    assert "figure_captions" not in noimg["metadata"]
+
+
+def test_caption_augmentation_labels_both_sources():
+    """#257: the dense re-embed input labels machine vs document captions."""
+    from axiom_ng_runner.runner import _caption_augmentation
+
+    chunk = {
+        "metadata": {
+            "image_captions": {"image-0000": "a line chart from 1975 to 2015"},
+            "figure_captions": {
+                "image-0000": "Figure 1. Annual SWIFT Messages in Millions*"
+            },
+        }
+    }
+    aug = _caption_augmentation(chunk)
+    assert "[machine-generated image caption: a line chart" in aug
+    assert "[document figure caption: Figure 1. Annual SWIFT Messages" in aug
+
+
+def test_reembed_failure_drops_stale_dense_vector(monkeypatch, tmp_path):
+    """#257 B: a failed re-embed must NOT leave the pre-caption dense vector
+    silently in circulation — the honest state is no dense vector. Returns
+    False so the job records DENSE_REEMBED_FAILED. Mutation probe: reverting
+    the failure path to 'just log' goes red."""
+    import axiom_ng_runner.runner as runner_mod
+
+    def boom():
+        raise RuntimeError("embed backend down")
+
+    import builtins
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **k):
+        if "embedder" in name:
+            raise RuntimeError("embed backend down")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    chunks = [{
+        "text": "prose",
+        "embeddings": {"dense": {"model": "BAAI/bge-m3", "values": [0.1]}},
+        "metadata": {"image_captions": {"image-0000": "a chart"}},
+    }]
+    ok = runner_mod._reembed_captioned(chunks)
+    assert ok is False
+    assert "dense" not in chunks[0]["embeddings"], (
+        "stale pre-caption dense vector must be removed on re-embed failure"
+    )
