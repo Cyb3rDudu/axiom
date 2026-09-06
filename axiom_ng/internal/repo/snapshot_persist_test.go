@@ -1654,7 +1654,8 @@ func TestPersistImageCaptionsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("outbox docs: %v", err)
 	}
-	if len(docs) != 1 || docs[0].CaptionText != "A line chart of training loss" {
+	want := "[machine image caption: A line chart of training loss]"
+	if len(docs) != 1 || docs[0].CaptionText != want {
 		t.Fatalf("caption_text must ride the outbox doc, got %+v", docs)
 	}
 }
