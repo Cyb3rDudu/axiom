@@ -570,8 +570,21 @@ func spanWindow(candidates []osCandidate) (spans []string, owners []int, represe
 	spans = make([]string, 0, nKeep*2)
 	owners = make([]int, 0, nKeep*2)
 	for i := 0; i < nKeep; i++ {
+		// #257: the marked caption block prefixes EVERY span of its
+		// candidate — window splitting or the rerank char cap can never
+		// cut the caption out of the payload. caption_text is already
+		// source-labeled by the outbox ([machine image caption: …] /
+		// [document figure caption: …]); reranker input only, never Hit.Text.
+		prefix := ""
+		if c := strings.TrimSpace(candidates[i].CaptionText); c != "" {
+			prefix = c + "\n"
+		}
 		for _, sp := range splitSpans(candidates[i].Text, spansPerCand[i]) {
-			spans = append(spans, sp)
+			budget := maxRerankTextChars - len(prefix)
+			if budget < minRerankSplitChars {
+				budget = minRerankSplitChars
+			}
+			spans = append(spans, prefix+truncateChars(sp, budget))
 			owners = append(owners, i)
 		}
 	}
@@ -632,9 +645,15 @@ func rrfMerge(arms [][]osHit, limit int) []osCandidate {
 		for rk, h := range hits {
 			c, ok := byID[h.ID]
 			if !ok {
-				c = &osCandidate{ID: h.ID, Text: h.Text, DocumentID: h.DocumentID, Locator: h.Locator, SectionTitles: h.SectionTitles}
+				c = &osCandidate{ID: h.ID, Text: h.Text, CaptionText: h.CaptionText, DocumentID: h.DocumentID, Locator: h.Locator, SectionTitles: h.SectionTitles}
 				byID[h.ID] = c
 				order = append(order, c)
+			} else if c.CaptionText == "" {
+				// #257 candidate merge: the dense arm may surface the chunk
+				// first (its _source carries no caption_text); a later BM25
+				// hit for the SAME candidate must backfill the caption — not
+				// just on creation.
+				c.CaptionText = h.CaptionText
 			}
 			c.RRFScore += 1.0 / (rrfK + float64(rk+1))
 		}
@@ -674,6 +693,7 @@ func newOSClient(base, user, pass string) *osClient {
 type osHit struct {
 	ID            string          `json:"-"`
 	Text          string          `json:"text"`
+	CaptionText   string          `json:"caption_text"` // #257: marked captions (BM25-only field, never citable prose)
 	DocumentID    string          `json:"document_id"`
 	Locator       json.RawMessage `json:"locator"`
 	SectionTitles []string        `json:"section_titles"`
@@ -683,6 +703,7 @@ type osHit struct {
 type osCandidate struct {
 	ID            string
 	Text          string
+	CaptionText   string // #257: survives to the rerank payload, never Hit.Text
 	DocumentID    string
 	Locator       json.RawMessage
 	SectionTitles []string
@@ -787,7 +808,7 @@ func (c *osClient) search(ctx context.Context, size int, query map[string]any) (
 	body := map[string]any{
 		"size":    size,
 		"query":   query,
-		"_source": []string{"text", "document_id", "locator", "section_titles"},
+		"_source": []string{"text", "caption_text", "document_id", "locator", "section_titles"},
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
