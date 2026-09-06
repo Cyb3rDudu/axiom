@@ -26,6 +26,7 @@ type fakeProcessor struct {
 	embedSparseErr error // fails only the combined sparse call (dense fallback path)
 	rerankErr      error
 	rerankRes      []processor.RerankScore
+	rerankFn       func(texts []string) []processor.RerankScore // #257: term-aware stub
 	lastRerank     *RerankCapture
 	embedCalls     int // any embed path (dense or dense+sparse)
 }
@@ -70,6 +71,9 @@ func (f *fakeProcessor) Rerank(ctx context.Context, query string, texts []string
 	f.lastRerank = &RerankCapture{Query: query, Texts: texts, TopN: topN}
 	if f.rerankErr != nil {
 		return nil, f.rerankErr
+	}
+	if f.rerankFn != nil {
+		return f.rerankFn(texts), nil
 	}
 	return f.rerankRes, nil
 }
@@ -272,6 +276,133 @@ func hitsList(hits []osHit) []map[string]any {
 
 func hit(id, doc, text string) osHit {
 	return osHit{ID: id, DocumentID: doc, Text: text}
+}
+
+func hitCaption(id, doc, text, caption string) osHit {
+	return osHit{ID: id, DocumentID: doc, Text: text, CaptionText: caption}
+}
+
+// TestSearch_CaptionSurvivesRerankIntoTopN is the #257 core probe: a chunk
+// whose ONLY relevance signal is its caption must survive the reranker cut
+// into the visible top-N. The stub reranker scores by query-term presence —
+// if the caption is dropped from the rerank payload (the bug), the
+// caption-only chunk scores flat and sinks. Mutation probe: remove the
+// caption from spanWindow's payload -> this test goes red.
+func TestSearch_CaptionSurvivesRerankIntoTopN(t *testing.T) {
+	srv := newOSServer(t)
+	const caption = "[machine image caption: TREDENCE revenue chart]"
+	// Dense arm returns only prose chunks; BM25 alone knows the caption.
+	srv.knnHits = []osHit{
+		hit("p1", "d1", "Prose about fiscal policy and market structure."),
+		hit("p2", "d1", "Prose about trade finance and sanctions regimes."),
+		hit("p3", "d2", "Prose about central banking history."),
+	}
+	srv.bm25Hits = []osHit{hitCaption("cap", "d1", "Prose about something unrelated entirely.", caption)}
+	fp := &fakeProcessor{
+		embedVec: []float32{0.1},
+		rerankFn: func(texts []string) []processor.RerankScore {
+			out := make([]processor.RerankScore, len(texts))
+			for i, tx := range texts {
+				if strings.Contains(tx, "TREDENCE") {
+					out[i] = processor.RerankScore{Index: i, Score: 1}
+				} else {
+					out[i] = processor.RerankScore{Index: i, Score: 0.1}
+				}
+			}
+			return out
+		},
+	}
+	svc := newService(srv.URL, fp, fakeDocs{meta: map[string]repo.DocumentMeta{}})
+	svc.Rerank = true
+	res, err := svc.Search(context.Background(), Request{Query: "TREDENCE", TopN: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Reranked {
+		t.Fatal("expected reranked result")
+	}
+	if res.Hits[0].ChunkID != "cap" {
+		t.Fatalf("caption-only chunk must top the visible hits, got %s", res.Hits[0].ChunkID)
+	}
+	// Zitier-Schutz: the marked caption never leaks into any served text.
+	for _, h := range res.Hits {
+		if strings.Contains(h.Text, "TREDENCE") || strings.Contains(h.Text, "[machine image caption") {
+			t.Fatalf("caption leaked into Hit.Text: %q", h.Text)
+		}
+	}
+	// Probe the payload: at least one rerank span carries the marked caption.
+	carried := 0
+	for _, tx := range fp.lastRerank.Texts {
+		if strings.Contains(tx, "[machine image caption: TREDENCE") {
+			carried++
+		}
+	}
+	if carried == 0 {
+		t.Fatal("rerank payload must contain the marked caption")
+	}
+}
+
+// TestRRFMerge_BM25BackfillsCaptionOntoDenseCandidate: #257 candidate merge
+// — the dense arm surfaces a chunk first without caption_text; the BM25 hit
+// for the same id must backfill the caption onto the EXISTING candidate.
+func TestRRFMerge_BM25BackfillsCaptionOntoDenseCandidate(t *testing.T) {
+	knn := []osHit{hit("a", "d1", "alpha")}
+	bm25 := []osHit{hitCaption("a", "d1", "alpha", "[machine image caption: chart]")}
+	merged := rrfMerge([][]osHit{knn, bm25}, 0)
+	if len(merged) != 1 || merged[0].CaptionText != "[machine image caption: chart]" {
+		t.Fatalf("caption must be backfilled onto the dense-first candidate, got %+v", merged)
+	}
+}
+
+// TestSpanWindow_CaptionPrefixesEverySpan: the caption block must survive
+// BOTH the two-window split and the rerank char cap — every span of the
+// captioned candidate starts with it (#257 spanWindow guarantee).
+func TestSpanWindow_CaptionPrefixesEverySpan(t *testing.T) {
+	const caption = "[document figure caption: Annual SWIFT Messages in Millions]"
+	long := strings.Repeat("word ", 400) // > minRerankSplitChars → split
+	cands := []osCandidate{
+		{Text: long, CaptionText: caption},
+		{Text: long},
+	}
+	spans, owners, represented := spanWindow(cands)
+	if represented != 2 {
+		t.Fatalf("represented = %d, want 2", represented)
+	}
+	for i, sp := range spans {
+		if owners[i] == 0 && !strings.HasPrefix(sp, caption+"\n") {
+			head := sp
+			if len(head) > 80 {
+				head = head[:80]
+			}
+			t.Fatalf("span %d of the captioned candidate lost the caption prefix: %q", i, head)
+		}
+		if owners[i] == 1 && strings.Contains(sp, "SWIFT") {
+			t.Fatal("uncaptioned candidate must not carry another chunk's caption")
+		}
+	}
+}
+
+// TestSearch_CaptionFetchedFromSource: the _source projection must include
+// caption_text so osHit decode carries it at all.
+func TestSearch_CaptionFetchedFromSource(t *testing.T) {
+	srv := newOSServer(t)
+	srv.bm25Hits = []osHit{hitCaption("a", "d1", "text", "[machine image caption: x]")}
+	fp := &fakeProcessor{embedVec: []float32{0.1}}
+	svc := newService(srv.URL, fp, fakeDocs{meta: map[string]repo.DocumentMeta{}})
+	if _, err := svc.Search(context.Background(), Request{Query: "x", TopN: 1}); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	if src, ok := srv.lastBM25Body["_source"].([]any); ok {
+		for _, f := range src {
+			if f == "caption_text" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("_source projection must request caption_text, got %v", srv.lastBM25Body["_source"])
+	}
 }
 
 func newService(osURL string, p Processor, d DocSource) *Service {
