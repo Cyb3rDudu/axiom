@@ -29,20 +29,33 @@ type SourceView struct {
 	// would be indistinguishable from an old server; empty string is the
 	// honest "unknown".
 	ContentType string `json:"content_type"`
+	// CitationClass (#255): citable | contextual — the two voices of the
+	// corpus. citable: the citation ladder applies. contextual: the source
+	// is searchable at FULL rank but NEVER a citation target — the client
+	// renders a provenance line ("Vorlesung VWL, 12.05." / "Folie 12" for
+	// page-like locators) instead of any citation affordance. NO omitempty:
+	// always present, default "citable" — same rationale as ContentType
+	// (an absent key must be indistinguishable from nothing).
+	CitationClass string `json:"citation_class"`
 }
 
 // View projects a hydrated DocumentMeta (plus the owning document id) into
 // the API contract shape.
 func (m DocumentMeta) View(docID string) SourceView {
+	cc := m.CitationClass
+	if cc == "" {
+		cc = "citable" // legacy/unknown degrades to the default class, never absent
+	}
 	v := SourceView{
-		DocID:       docID,
-		Title:       m.Title,
-		Authors:     m.Authors,
-		Year:        m.Year,
-		Publisher:   m.Publisher,
-		Language:    m.Language,
-		Tags:        m.Tags,
-		ContentType: m.ContentType,
+		DocID:         docID,
+		Title:         m.Title,
+		Authors:       m.Authors,
+		Year:          m.Year,
+		Publisher:     m.Publisher,
+		Language:      m.Language,
+		Tags:          m.Tags,
+		ContentType:   m.ContentType,
+		CitationClass: cc,
 	}
 	if v.Authors == nil {
 		v.Authors = []string{}

@@ -42,7 +42,7 @@ func TestSyncRetiresDeletedAttachmentSameTxIT(t *testing.T) {
 	}
 	if _, err := lr.rep.ApplyCanonicalBatch(ctx, tx, sourceIDFor(t, lr), zotero.CanonicalBatch{
 		FullSnapshot: true, NewVersion: 2,
-	}, nil, map[string]AttachmentFileInfo{}, nil); err != nil {
+	}, nil, map[string]AttachmentFileInfo{}, nil, ContextualRules{}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

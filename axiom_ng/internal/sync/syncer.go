@@ -25,6 +25,12 @@ type Service struct {
 	libID   string
 	log     *log.Logger
 
+	// contextual (#255) holds the boot-resolved contextual-class rules
+	// (collection zotero_keys + tag names). The zero value = no rules =
+	// everything citable. Wired via SetContextualRules at boot after
+	// ResolveContextualRules validated the env inputs loudly.
+	contextual repo.ContextualRules
+
 	// #197 standing consolidation hook: every SUCCESSFUL sync schedules a
 	// debounced run; a burst of syncs collapses into one. consolidator is
 	// nil until SetConsolidator wires it (then every completion hooks).
@@ -50,6 +56,10 @@ const consolidateTimeout = 30 * time.Minute
 
 // SetConsolidator wires the standing post-sync consolidation hook (#197).
 func (s *Service) SetConsolidator(c Consolidator) { s.consolidator = c }
+
+// SetContextualRules wires the resolved #255 contextual-class rules (empty
+// = every document citable; still recomputed on every sync).
+func (s *Service) SetContextualRules(r repo.ContextualRules) { s.contextual = r }
 
 // scheduleConsolidation arms the debounced run (each completion inside the
 // window re-arms it — one run after the burst settles).
@@ -188,7 +198,7 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	}
 	defer tx.Rollback(ctx)
 
-	applyRes, err := s.repo.ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files, selection)
+	applyRes, err := s.repo.ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files, selection, s.contextual)
 	if err != nil {
 		return Result{}, err
 	}

@@ -204,7 +204,11 @@ func TestSourceViewWireKeys(t *testing.T) {
 		// #245: the format factor is ALWAYS on the wire (no omitempty —
 		// empty string = unknown format, a present key distinguishes it
 		// from an old server).
-		"content_type"}
+		"content_type",
+		// #255: the citation class is ALWAYS on the wire, default citable
+		// (same rationale: absent key must be indistinguishable from
+		// nothing).
+		"citation_class"}
 	if len(m) != len(want) {
 		t.Fatalf("wire keys drifted: %v", m)
 	}

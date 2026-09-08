@@ -225,7 +225,8 @@ milliseconds:
         "year": 2016,
         "publisher": "Springer Fachmedien Wiesbaden",
         "language": "de",
-        "tags": ["neutral", "secondary source"]
+        "tags": ["neutral", "secondary source"],
+        "citation_class": "citable"
       },
       "locator": {
         "kind": "page",
@@ -244,7 +245,15 @@ milliseconds:
 ```
 
 The example is a live response with the long passage text abbreviated. A hit may
-also contain `collapsed_near_duplicates`. Locator fields are:
+also contain `collapsed_near_duplicates`. The `source` block always carries
+`content_type` (format factor) and `citation_class` (#255):
+
+| `citation_class` | Meaning |
+| --- | --- |
+| `citable` | Literature — the citation ladder applies (default) |
+| `contextual` | Lecture slides/transcripts — **never a citation target**: fully searchable at equal rank, but the client renders a provenance line instead ("Vorlesung VWL, 12.05."); page-like locators render `Folie N` labels, and the document contributes nothing to the knowledge graph |
+
+Locator fields are:
 
 | Field | Meaning |
 | --- | --- |

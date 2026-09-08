@@ -10,14 +10,15 @@ import (
 // OS hits carry only document_id; title/authors/year/publisher live in
 // zotero_documents.
 type documentMetaRow struct {
-	ID          string          `json:"id"`
-	Title       string          `json:"title"`
-	Creators    json.RawMessage `json:"creators"`
-	Year        *int            `json:"publication_year"`
-	Publisher   string          `json:"publisher"`
-	Language    string          `json:"language"`
-	Tags        json.RawMessage `json:"tags"`
-	ContentType string          `json:"content_type"`
+	ID            string          `json:"id"`
+	Title         string          `json:"title"`
+	Creators      json.RawMessage `json:"creators"`
+	Year          *int            `json:"publication_year"`
+	Publisher     string          `json:"publisher"`
+	Language      string          `json:"language"`
+	Tags          json.RawMessage `json:"tags"`
+	ContentType   string          `json:"content_type"`
+	CitationClass string          `json:"citation_class"`
 }
 
 // zoteroCreator matches zotero.Creator's persisted JSONB shape.
@@ -39,6 +40,10 @@ type DocumentMeta struct {
 	// ContentType: the ACTIVE snapshot's attachment format ("" when
 	// unknown) — feeds SourceView.ContentType (#196/#245).
 	ContentType string
+	// CitationClass (#255): citable | contextual — feeds
+	// SourceView.CitationClass; "citable" when unknown (the column default
+	// and the honest legacy answer).
+	CitationClass string
 }
 
 // DocumentMetaByIDs returns metadata for the given zotero_documents ids.
@@ -50,8 +55,9 @@ func (r *Repo) DocumentMetaByIDs(ctx context.Context, ids []string) (map[string]
 		return out, nil
 	}
 	rows, err := r.pool.Query(ctx, `
-			SELECT d.id::text, d.title, d.creators, d.publication_year, COALESCE(d.publisher, ''),
-			       COALESCE(d.language, ''), COALESCE(d.tags, '[]'::jsonb), COALESCE(act.content_type, '')
+	SELECT d.id::text, d.title, d.creators, d.publication_year, COALESCE(d.publisher, ''),
+	       COALESCE(d.language, ''), COALESCE(d.tags, '[]'::jsonb), COALESCE(act.content_type, ''),
+	       COALESCE(d.citation_class, 'citable')
 			FROM zotero_documents d
 			LEFT JOIN LATERAL (
 				SELECT a.content_type
@@ -67,7 +73,7 @@ func (r *Repo) DocumentMetaByIDs(ctx context.Context, ids []string) (map[string]
 	defer rows.Close()
 	for rows.Next() {
 		var row documentMetaRow
-		if err := rows.Scan(&row.ID, &row.Title, &row.Creators, &row.Year, &row.Publisher, &row.Language, &row.Tags, &row.ContentType); err != nil {
+		if err := rows.Scan(&row.ID, &row.Title, &row.Creators, &row.Year, &row.Publisher, &row.Language, &row.Tags, &row.ContentType, &row.CitationClass); err != nil {
 			return nil, err
 		}
 		var cs []zoteroCreator
@@ -91,7 +97,7 @@ func (r *Repo) DocumentMetaByIDs(ctx context.Context, ids []string) (map[string]
 				tags = append(tags, t.Tag)
 			}
 		}
-		out[row.ID] = DocumentMeta{Title: row.Title, Authors: authors, Year: row.Year, Publisher: row.Publisher, Language: row.Language, Tags: tags, ContentType: row.ContentType}
+		out[row.ID] = DocumentMeta{Title: row.Title, Authors: authors, Year: row.Year, Publisher: row.Publisher, Language: row.Language, Tags: tags, ContentType: row.ContentType, CitationClass: row.CitationClass}
 	}
 	return out, rows.Err()
 }

@@ -238,6 +238,17 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			return nil, err
 		}
 		proc.ForceRebuild = cand.forceRebuild
+		// #255 KG gate (claim-time, profile-level): a contextual document
+		// never contributes entities/relationships — the graph stays
+		// book-truth. The frozen profile clears the extraction flags BEFORE
+		// canonicalBytes, so profile_hash, idempotency key, the stored
+		// processing_profile and the emitted request all reflect the gated
+		// profile. Chunks, embeddings and indexing are untouched (equal
+		// rank by construction — the ranking pipeline never sees the class).
+		if state.document.contextual {
+			proc.ExtractEntities = false
+			proc.ExtractRelationships = false
+		}
 		procCanonical, profileHash, err := canonicalBytes(proc)
 		if err != nil {
 			tx.Rollback(ctx)
@@ -426,9 +437,12 @@ type zoteroDocRow struct {
 	zoteroVersion   int64
 	canonicalItemID *string
 	deleted         bool
-	parentKey       *string
-	linkMode        *string
-	rawData         json.RawMessage
+	// contextual (#255): citation_class='contextual' — the claim-time KG
+	// gate clears the extraction flags for contextual documents.
+	contextual bool
+	parentKey  *string
+	linkMode   *string
+	rawData    json.RawMessage
 }
 
 type zoteroAttachRow struct {
@@ -488,10 +502,11 @@ func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*
 
 	var docParentKey, docLinkMode *string
 	err = tx.QueryRow(ctx, `
-		SELECT id::text, source_id::text, zotero_key, zotero_version, canonical_item_id::text, deleted
+		SELECT id::text, source_id::text, zotero_key, zotero_version, canonical_item_id::text, deleted,
+		       COALESCE(citation_class,'citable') = 'contextual'
 		FROM zotero_documents WHERE id=$1 FOR UPDATE`, c.documentID).Scan(
 		&s.document.id, &s.document.sourceID, &s.document.zoteroKey, &s.document.zoteroVersion,
-		&s.document.canonicalItemID, &s.document.deleted)
+		&s.document.canonicalItemID, &s.document.deleted, &s.document.contextual)
 	if err == pgx.ErrNoRows {
 		return nil, "PARENT_REMOVED", nil
 	}

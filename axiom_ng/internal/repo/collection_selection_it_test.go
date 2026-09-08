@@ -58,7 +58,7 @@ func applySel(t *testing.T, lr *leaseRepo, srcID string, files map[string]Attach
 		{Key: "VWLPRAXY", Name: "VWLPRAXY", Envelope: json.RawMessage(`{"key":"VWLPRAXY"}`)},
 		{Key: "SECOND88", Name: "SECOND88", Envelope: json.RawMessage(`{"key":"SECOND88"}`)},
 	}
-	res, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zotero.CanonicalBatch{NewVersion: 2}, colls, files, selection)
+	res, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zotero.CanonicalBatch{NewVersion: 2}, colls, files, selection, ContextualRules{})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}

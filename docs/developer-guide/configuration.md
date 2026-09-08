@@ -58,6 +58,8 @@ organized by *where the variable is consumed* (`set by`).
 | `AXIOM_SEARCH_MAX_PER_BOOK` | `2` | Caps final hits per document with rank-order refill; `0` disables the cap. |
 | `AXIOM_ZOTERO_WRITE_KEY_FILE` | `~/.axiom-ng/write-api-key` | Local Zotero write-key file. A missing or too-short key keeps the repair API unregistered. |
 | `AXIOM_QUARANTINE_ROOT` | `~/.axiom-ng/quarantine` | Durable quarantine root for originals before repair mutations; falls back to `/tmp/axiom_quarantine` when no home directory resolves. |
+| `AXIOM_CONTEXTUAL_COLLECTIONS` | — | (#255) Comma-separated collection paths (any depth, e.g. `VWL/Lectures,ORG/Lectures`) whose member documents are projected `citation_class: contextual` — searchable at full rank, never citable, KG-excluded. Resolved at boot against the synced collections and stabilized on `zotero_key`; an **unknown path is a loud start error** (sync once so the collection exists, then restart). |
+| `AXIOM_CONTEXTUAL_TAGS` | — | (#255) Comma-separated literal Zotero tag names that force a document contextual (the outlier lever next to the collection rule; a tag never forces citable). Boot-validated like the paths: a tag no active document carries is a loud start error. |
 
 ## Runner — the processor (`axiom_ng_runner`)
 

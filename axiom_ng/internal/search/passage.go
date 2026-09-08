@@ -174,11 +174,11 @@ func (s *Service) GetPassage(ctx context.Context, chunkID string) (*Passage, err
 		}
 	}
 
-	neighbors := s.fetchNeighbors(ctx, c.AttachmentID, c.ChunkIndex, c.ChunkID)
+	neighbors := s.fetchNeighbors(ctx, c.AttachmentID, c.ChunkIndex, c.ChunkID, meta.CitationClass == "contextual")
 	// #245 consumer cut: EPUB page data never reaches the client — the
 	// citation form for EPUBs is ALWAYS the APA section. The stored
 	// paragraph_pages stay internal (dormant), exactly like locatorView.
-	lv := locatorView(c.Locator, c.Sections)
+	lv := renderLocator(c.Locator, c.Sections, meta.CitationClass == "contextual")
 	pp := parseParagraphPages(c.Locator)
 	if lv.Kind == "epub_cfi" {
 		pp = nil
@@ -239,7 +239,9 @@ func parseParagraphPages(raw json.RawMessage) [][]string {
 // of a book yields at most one neighbor). The center chunk is excluded IN THE
 // QUERY (must_not) so size:2 never wastes a slot on it; the residual
 // client-side check is defense in depth. Failures degrade to none (logged).
-func (s *Service) fetchNeighbors(ctx context.Context, attachmentID string, idx int, centerChunkID string) []PassageNeighbor {
+// contextual (#255) is the DOCUMENT's citation class — neighbors share the
+// center chunk's document, so slide neighbors render "Folie N" too.
+func (s *Service) fetchNeighbors(ctx context.Context, attachmentID string, idx int, centerChunkID string, contextual bool) []PassageNeighbor {
 	lo, hi := idx-1, idx+1
 	if lo < 0 {
 		lo = 0
@@ -291,7 +293,7 @@ func (s *Service) fetchNeighbors(ctx context.Context, attachmentID string, idx i
 		}
 		out = append(out, PassageNeighbor{
 			ChunkID: src.ChunkID, ChunkIndex: src.ChunkIndex, Text: src.Text,
-			Section: src.Sections, Locator: locatorView(src.Locator, src.Sections),
+			Section: src.Sections, Locator: renderLocator(src.Locator, src.Sections, contextual),
 		})
 	}
 	return out

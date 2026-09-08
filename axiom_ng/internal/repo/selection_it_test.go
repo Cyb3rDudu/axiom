@@ -37,7 +37,7 @@ func TestSelectiveSyncAcceptanceIT(t *testing.T) {
 		}
 		defer tx.Rollback(ctx)
 		res, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zotero.CanonicalBatch{NewVersion: 2},
-			nil, map[string]AttachmentFileInfo{"SELATT1": {Exists: true, Hash: ch}}, selection)
+			nil, map[string]AttachmentFileInfo{"SELATT1": {Exists: true, Hash: ch}}, selection, ContextualRules{})
 		if err != nil {
 			t.Fatalf("apply: %v", err)
 		}

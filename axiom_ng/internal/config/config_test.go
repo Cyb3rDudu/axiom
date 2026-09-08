@@ -154,3 +154,24 @@ func TestProcessorRunnerName(t *testing.T) {
 		t.Fatalf("bad URL fallback = %q, want empty", got)
 	}
 }
+
+func TestContextualRulesEnv(t *testing.T) {
+	// #255: comma-separated collection paths and tag names, whitespace
+	// tolerated, empties dropped; unset = no rules.
+	t.Setenv("AXIOM_CONTEXTUAL_COLLECTIONS", "VWL/Lectures, ORG/Lectures")
+	t.Setenv("AXIOM_CONTEXTUAL_TAGS", "Vorlesung, kontext,, ")
+	cfg := Load()
+	if len(cfg.ContextualCollectionPaths) != 2 ||
+		cfg.ContextualCollectionPaths[0] != "VWL/Lectures" ||
+		cfg.ContextualCollectionPaths[1] != "ORG/Lectures" {
+		t.Fatalf("paths = %v", cfg.ContextualCollectionPaths)
+	}
+	if len(cfg.ContextualTags) != 2 || cfg.ContextualTags[0] != "Vorlesung" || cfg.ContextualTags[1] != "kontext" {
+		t.Fatalf("tags = %v", cfg.ContextualTags)
+	}
+	// Path segments keep their internal structure (no slash stripping).
+	t.Setenv("AXIOM_CONTEXTUAL_COLLECTIONS", "a//b")
+	if got := Load().ContextualCollectionPaths; len(got) != 1 || got[0] != "a//b" {
+		t.Fatalf("slash-significant paths, got %v", got)
+	}
+}

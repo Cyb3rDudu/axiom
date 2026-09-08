@@ -45,7 +45,9 @@ type CanonicalApplyResult struct {
 // The selection map gates job creation (#166): entries "excluded" suppress
 // both pending and failed jobs for that document; nil = no gate (everything
 // is selected — today's behavior). Projections stay a FULL mirror regardless.
-func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID string, batch zotero.CanonicalBatch, collections []zotero.CanonicalCollection, files map[string]AttachmentFileInfo, selection map[string]string) (CanonicalApplyResult, error) {
+// contextual (#255) is the boot-resolved rule set; citation_class is
+// recomputed from memberships + tags inside this same transaction.
+func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID string, batch zotero.CanonicalBatch, collections []zotero.CanonicalCollection, files map[string]AttachmentFileInfo, selection map[string]string, contextual ContextualRules) (CanonicalApplyResult, error) {
 	var res CanonicalApplyResult
 
 	// 1. Upsert canonical items (version guarded).
@@ -94,6 +96,14 @@ func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 	}
 	res.Flags = proj.flags
 	res.DocumentProjections = len(proj.flags)
+
+	// 6a. #255 contextual class projection: recompute citation_class from
+	// the memberships (step 5) + tags of the JUST-projected documents, in
+	// the same transaction — the class rides every subsequent consumer of
+	// this sync atomically.
+	if err := recomputeCitationClassTx(ctx, tx, sourceID, contextual); err != nil {
+		return res, err
+	}
 
 	// 6b. Deleted attachments must stop serving: retire their active
 	// snapshots (+ OS tombstones) in the same sync transaction. This runs

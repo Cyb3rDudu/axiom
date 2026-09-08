@@ -435,12 +435,13 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 
 	resp.Hits = make([]Hit, len(candidates))
 	for i, c := range candidates {
+		m := meta[c.DocumentID]
 		h := Hit{
 			ChunkID: c.ID,
 			Text:    c.Text,
 			Score:   c.RRFScore,
-			Source:  sourceFor(meta[c.DocumentID], c.DocumentID),
-			Locator: locatorView(c.Locator, c.SectionTitles),
+			Source:  sourceFor(m, c.DocumentID),
+			Locator: renderLocator(c.Locator, c.SectionTitles, m.CitationClass == "contextual"),
 			Section: c.SectionTitles,
 		}
 		if n := folded[c.ID]; n > 0 {
@@ -882,8 +883,15 @@ func sourceFor(m repo.DocumentMeta, docID string) repo.SourceView {
 	return m.View(docID)
 }
 
-// locatorView renders the stored locator into the human form (issue Ziel 5).
+// locatorView renders the stored locator into the human form for a CITABLE
+// document (issue Ziel 5) — the shape every pre-#255 caller and test uses.
 func locatorView(raw json.RawMessage, section []string) LocatorView {
+	return renderLocator(raw, section, false)
+}
+
+// renderLocator is the citation-class-aware core (#255): contextual page
+// locators render slide provenance — "Folie N" — instead of any page form.
+func renderLocator(raw json.RawMessage, section []string, contextual bool) LocatorView {
 	var loc struct {
 		Type               string     `json:"type"`
 		PageLabelStart     string     `json:"page_label_start"`
@@ -947,11 +955,23 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 	case "page_span":
 		label := loc.PageLabelStart
 		pagePrefix := "S. "
-		// #173 rendering by trust: physical_only is a PDF index, never a
-		// printed page — "PDF-S." makes the difference visible; folio_verified
-		// and pdf_label_sane render as page references (the page_source field
-		// lets clients gate citation on folio_verified only).
-		if loc.PageSource == processor.PageSourcePhysicalOnly {
+		if contextual {
+			// #255: a contextual page locator is slide provenance — the
+			// physical PDF page IS the slide. "Folie N" replaces every
+			// trust-ladder form ("S." / "PDF-S."): the class itself already
+			// forbids citation, so the print/PDF distinction carries no
+			// meaning here. A physical span renders "Folie 12-13".
+			pagePrefix = "Folie "
+			switch {
+			case loc.PhysicalPageStart != nil:
+				label = fmt.Sprintf("%d", *loc.PhysicalPageStart+1)
+				if loc.PhysicalPageEnd != nil && *loc.PhysicalPageEnd != *loc.PhysicalPageStart {
+					label += "-" + fmt.Sprintf("%d", *loc.PhysicalPageEnd+1)
+				}
+			case loc.PageSource == processor.PageSourcePhysicalOnly:
+				label = "" // no trustworthy number at all — bare chapter
+			}
+		} else if loc.PageSource == processor.PageSourcePhysicalOnly {
 			// Untrusted labels never display: the physical index is the ONLY
 			// thing a physical_only locator may show. Without a physical index
 			// there is nothing trustworthy at all — bare chapter, no label.
@@ -964,7 +984,7 @@ func locatorView(raw json.RawMessage, section []string) LocatorView {
 		} else if label == "" && loc.PhysicalPageStart != nil {
 			label = fmt.Sprintf("%d", *loc.PhysicalPageStart+1) // physical is 0-based
 		}
-		if loc.PageLabelEnd != "" && loc.PageLabelEnd != loc.PageLabelStart && loc.PageSource != processor.PageSourcePhysicalOnly {
+		if !contextual && loc.PageLabelEnd != "" && loc.PageLabelEnd != loc.PageLabelStart && loc.PageSource != processor.PageSourcePhysicalOnly {
 			label += "-" + loc.PageLabelEnd
 		}
 		// W4: chapter-relative pagination (folios restart per chapter, e.g.

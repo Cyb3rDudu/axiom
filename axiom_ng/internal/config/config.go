@@ -156,6 +156,19 @@ type Config struct {
 	// LAN client cannot reach the unauthenticated sync/job endpoints unless
 	// explicitly overridden.
 	BindAddr string
+
+	// ContextualCollectionPaths (#255) are collection paths (any depth,
+	// e.g. "VWL/Lectures,ORG/Lectures") whose member documents are projected
+	// citation_class='contextual': searchable at full rank, never citable,
+	// KG-excluded. Empty = no collection rule. Paths are resolved against
+	// the synced zotero_collections at boot — an unknown path is a LOUD
+	// start error, never a silent ignore — and stabilized on zotero_key so
+	// a collection rename cannot silently drop the rule mid-lifetime.
+	ContextualCollectionPaths []string
+	// ContextualTags (#255) are literal Zotero tag names that force a
+	// document contextual (the outlier lever next to the collection bulk
+	// rule; a tag NEVER forces citable). Validated at boot like the paths.
+	ContextualTags []string
 }
 
 // defaults for a local sidecar setup.
@@ -219,6 +232,8 @@ func Load() Config {
 		QuarantineRoot:             env("AXIOM_QUARANTINE_ROOT", quarantineDefault),
 		APIPort:                    envInt("AXIOM_API_PORT", defaultAPIPort),
 		BindAddr:                   env("AXIOM_BIND_ADDR", defaultBindAddr),
+		ContextualCollectionPaths:  parseNameList(env("AXIOM_CONTEXTUAL_COLLECTIONS", "")),
+		ContextualTags:             parseNameList(env("AXIOM_CONTEXTUAL_TAGS", "")),
 	}
 	// The source-endpoint base defaults to the local API port (co-located
 	// runners); remote deployments override with their Tailnet/LAN address.
@@ -277,6 +292,19 @@ func (c Config) IngestCandidates() []string {
 		list = []string{strings.TrimRight(defaultLocalRunner, "/")}
 	}
 	return list
+}
+
+// parseNameList splits a comma-separated list of names/paths, trimming
+// whitespace per entry and dropping empties (#255; same shape as
+// parseURLList, minus the slash stripping — a path segment is significant).
+func parseNameList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // envEmptyDisables treats an explicitly SET-but-empty value as intentional

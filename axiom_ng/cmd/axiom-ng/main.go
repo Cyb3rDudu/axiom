@@ -136,6 +136,20 @@ func main() {
 		// missed and the view starts wrong).
 		runnerView.WaitReady()
 		syncSvc = sync.New(src, rep, cfg.ZoteroBaseURL, cfg.ZoteroLibraryID, logger)
+		// #255 contextual source class: resolve + validate the configured
+		// rule inputs against the SYNCED canonical state BEFORE serving —
+		// an unknown collection path or tag is a loud start error, never a
+		// silent ignore (fatalf: launchd restarts visibly, nothing runs
+		// half-configured). Resolution stabilizes on zotero_key.
+		if len(cfg.ContextualCollectionPaths) > 0 || len(cfg.ContextualTags) > 0 {
+			rules, rerr := rep.ResolveContextualRules(ctx, cfg.ContextualCollectionPaths, cfg.ContextualTags)
+			if rerr != nil {
+				logger.Fatalf("contextual rules: %v", rerr)
+			}
+			syncSvc.SetContextualRules(rules)
+			logger.Printf("contextual class (#255): collections=%v tags=%v",
+				rules.CollectionKeys, rules.Tags)
+		}
 		srv.SetSyncAPI(syncSvc)
 		srv.SetJobRepo(rep)
 		// #197 standing entity consolidation: every successful sync hooks a

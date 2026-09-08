@@ -227,6 +227,17 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 	// early below without inserting, and a filtered res re-gates clean).
 	gateKgFrontmatter(res)
 
+	// #255 KG gate (persist-side guard): a contextual document contributes
+	// ZERO entities/relationships — the graph stays book-truth. The claim
+	// already cleared the extraction flags (the runner never extracts); this
+	// guard is the belt-and-braces for a stale/misbehaving runner result and
+	// for a document re-classed contextual between claim and persist. Chunks,
+	// embeddings and indexing are NEVER touched (equal rank by construction).
+	if ident.contextual {
+		res.Entities = nil
+		res.EntityRelationships = nil
+	}
+
 	// Identity replay (§10.1): "replaying the same completed result must return the
 	// existing snapshot and remain safe." Identity is the tuple
 	// (attachment_id, content_hash, processor_name, processor_version, profile_hash)
@@ -576,6 +587,11 @@ type jobIdentity struct {
 	contentHash  string
 	profileHash  string
 	leaseRef     LeaseRef
+	// contextual (#255): the document's CURRENT citation_class — the
+	// persist-side KG guard (see persistTx). Read in loadJobForPersist
+	// so the guard reflects the store, not the frozen snapshot (a doc
+	// re-classed between claim and persist is gated at the latest gate).
+	contextual bool
 }
 
 // loadJobForPersist reads the frozen input (for validation) and the durable
@@ -587,14 +603,18 @@ func (r *Repo) loadJobForPersist(ctx context.Context, jobID string) (*FrozenInpu
 		attachmentID, documentID string
 		contentHash              *string
 		claimedBy, leaseToken    string
+		contextual               bool
 	)
 	err := r.pool.QueryRow(ctx, `
-		SELECT input_snapshot, COALESCE(profile_hash,''),
-		       attachment_id::text, document_id::text,
-		       (input_snapshot->'attachment'->>'content_hash')::text,
-		       COALESCE(claimed_by,''), COALESCE(lease_token::text,'')
-		FROM ingest_jobs WHERE id=$1`, jobID).Scan(
-		&inputSnap, &profileHash, &attachmentID, &documentID, &contentHash, &claimedBy, &leaseToken)
+		SELECT j.input_snapshot, COALESCE(j.profile_hash,''),
+		       j.attachment_id::text, j.document_id::text,
+		       (j.input_snapshot->'attachment'->>'content_hash')::text,
+		       COALESCE(j.claimed_by,''), COALESCE(j.lease_token::text,''),
+		       COALESCE(d.citation_class,'citable') = 'contextual'
+		FROM ingest_jobs j
+		LEFT JOIN zotero_documents d ON d.id = j.document_id
+		WHERE j.id=$1`, jobID).Scan(
+		&inputSnap, &profileHash, &attachmentID, &documentID, &contentHash, &claimedBy, &leaseToken, &contextual)
 	if err != nil {
 		return nil, jobIdentity{}, err
 	}
@@ -612,6 +632,7 @@ func (r *Repo) loadJobForPersist(ctx context.Context, jobID string) (*FrozenInpu
 		contentHash:  ch,
 		profileHash:  profileHash,
 		leaseRef:     LeaseRef{JobID: jobID, WorkerID: claimedBy, LeaseToken: leaseToken},
+		contextual:   contextual,
 	}
 	return &frozen, ident, nil
 }

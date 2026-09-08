@@ -20,7 +20,7 @@ explicitly configured Zotero mutation path and its audit trail.
 | Table | Role |
 | --- | --- |
 | `zotero_items` / `zotero_collections` / `zotero_item_collections` | Lossless mirror of the Zotero library (items, collections, memberships). |
-| `zotero_documents` / `zotero_attachments` / `zotero_sources` | Normalized document projections + preference; one preferred attachment per document. |
+| `zotero_documents` / `zotero_attachments` / `zotero_sources` | Normalized document projections + preference; one preferred attachment per document. `zotero_documents.citation_class` (`citable` \| `contextual`, #255) is recomputed on every sync from the boot-validated contextual rules (collection paths + tag override) — contextual documents are searchable at full rank but never citable and contribute nothing to the KG. |
 | `zotero_selections` | Persisted document-level `included`/`excluded` job-admission choices; absence means default behavior. |
 | `zotero_collection_selections` | Persisted collection-level choices keyed by stable Zotero collection key; intentionally has no collection foreign key. |
 | `ingest_jobs` | A pending/claimed/processing/completed/failed/cancelled/skipped row per processable attachment; the claim/lease/fencing fields live here. |

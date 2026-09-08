@@ -51,6 +51,17 @@ GET /api/kg/relations               → extracted relations
 GET /api/kg/entities/{id}/neighbors → entity neighborhood
 ```
 
+## The two voices (source classes, #255)
+
+Every `source` block carries `citation_class`:
+
+| class | meaning | how to use it |
+|---|---|---|
+| `citable` | Literature (the default) | The citation ladder below applies |
+| `contextual` | Lecture slides / transcripts | **Never cite.** Render a provenance line instead: "Vorlesung VWL, 12.05." or "Folie 12" — page-like locators on contextual sources already carry `Folie N` labels |
+
+Contextual sources are fully searchable and rank EQUAL to books — use them freely to understand "what does the lecturer think about X", "how is this assignment meant". But they carry no citation authority: never put them in a footnote, never cite a slide as literature. They also contribute nothing to the knowledge graph (book-truth only) — so KG neighbors never trace back into lectures. Transcript paragraphs carry `[MM:SS]` markers in their own text; quote those timestamps in the provenance line, not as page numbers.
+
 ## Practical rules
 
 1. **Latency is real**: dense+rerank on CPU takes 10–25 s per query. Batch your questions; do not fire queries in a loop when one well-formed query answers all.
@@ -83,6 +94,7 @@ Query for the Lakehouse definition returned the section "What Is a Lakehouse?" w
 ## Anti-patterns
 
 - Citing a page number for an EPUB (any page_source — EPUBs cite APA sections only)
+- Citing a `contextual` source (lecture slides/transcripts) as literature — provenance line only
 - Citing a page number when `page_source` is `none`/absent
 - Treating `PDF-S. 12` (physical index) as a print page
 - Quoting the query-snippet instead of reading the full `text`
