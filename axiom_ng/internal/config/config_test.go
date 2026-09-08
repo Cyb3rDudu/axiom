@@ -176,6 +176,13 @@ func TestContextualRulesEnv(t *testing.T) {
 	if got := Load().ContextualCollectionPaths; len(got) != 1 || got[0] != "a//b" {
 		t.Fatalf("slash-significant paths, got %v", got)
 	}
+	// A TRAILING slash must also reach the resolver unstripped — if it
+	// were normalized away, "VWL/Lectures/" would silently resolve as
+	// "VWL/Lectures" instead of failing loudly as an unknown path.
+	t.Setenv("AXIOM_CONTEXTUAL_COLLECTIONS", "VWL/Lectures/")
+	if got := Load().ContextualCollectionPaths; len(got) != 1 || got[0] != "VWL/Lectures/" {
+		t.Fatalf("trailing slash must stay in the value, got %v", got)
+	}
 	// Deliberate semantics (#255 review): an empty CSV FIELD is formatting
 	// slack that contributes no rule ("VWL/Lectures,,ORG/Lectures" == the
 	// same two rules — nothing is masked, nothing lost) and is ignored,
