@@ -142,6 +142,18 @@ func TestContextualProjectionIT(t *testing.T) {
 	if n == 0 {
 		t.Fatal("contextual document must be enqueued (searchable) like any other")
 	}
+	// Hit hydration: the search/passage source block query carries the
+	// class — a contextual hit reports contextual, the passenger citable.
+	meta, err := lr.rep.DocumentMetaByIDs(ctx, []string{lect, passenger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cc := meta[lect].CitationClass; cc != "contextual" {
+		t.Fatalf("hydrated contextual hit must report contextual, got %q", cc)
+	}
+	if cc := meta[passenger].CitationClass; cc != "citable" {
+		t.Fatalf("hydrated passenger must report citable, got %q", cc)
+	}
 
 	// Reversibility: the doc leaves the Lectures collection (raw_data no
 	// longer references it; the memberships rebuild drops it) → the next
