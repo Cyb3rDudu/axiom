@@ -169,9 +169,20 @@ func TestContextualRulesEnv(t *testing.T) {
 	if len(cfg.ContextualTags) != 2 || cfg.ContextualTags[0] != "Vorlesung" || cfg.ContextualTags[1] != "kontext" {
 		t.Fatalf("tags = %v", cfg.ContextualTags)
 	}
-	// Path segments keep their internal structure (no slash stripping).
+	// Path segments keep their internal structure (no slash stripping);
+	// an empty SEGMENT stays in the value so the boot resolver rejects it
+	// loudly ("VWL//X" must never become "VWL/X").
 	t.Setenv("AXIOM_CONTEXTUAL_COLLECTIONS", "a//b")
 	if got := Load().ContextualCollectionPaths; len(got) != 1 || got[0] != "a//b" {
 		t.Fatalf("slash-significant paths, got %v", got)
+	}
+	// Deliberate semantics (#255 review): an empty CSV FIELD is formatting
+	// slack that contributes no rule ("VWL/Lectures,,ORG/Lectures" == the
+	// same two rules — nothing is masked, nothing lost) and is ignored,
+	// exactly like the URL-list precedent. The dangerous class — a mistyped
+	// rule NAME — fails loudly at boot resolution, pinned in the resolver IT.
+	t.Setenv("AXIOM_CONTEXTUAL_COLLECTIONS", "VWL/Lectures,,ORG/Lectures,")
+	if got := Load().ContextualCollectionPaths; len(got) != 2 || got[0] != "VWL/Lectures" || got[1] != "ORG/Lectures" {
+		t.Fatalf("empty CSV fields are slack and drop out, got %v", got)
 	}
 }

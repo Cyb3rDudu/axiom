@@ -297,6 +297,11 @@ func (c Config) IngestCandidates() []string {
 // parseNameList splits a comma-separated list of names/paths, trimming
 // whitespace per entry and dropping empties (#255; same shape as
 // parseURLList, minus the slash stripping — a path segment is significant).
+// Deliberate semantics (#255 review): an empty CSV field is formatting
+// slack that contributes NO rule ("VWL/Lectures,,ORG/Lectures" == the same
+// two rules) and is ignored, exactly like the URL-list precedent. A
+// mistyped rule NAME is not slack — it fails loudly at boot resolution.
+// An empty PATH SEGMENT ("VWL//X") is likewise rejected by the resolver.
 func parseNameList(s string) []string {
 	var out []string
 	for _, part := range strings.Split(s, ",") {
