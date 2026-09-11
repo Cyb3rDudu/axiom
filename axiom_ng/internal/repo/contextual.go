@@ -42,15 +42,21 @@ func (r ContextualRules) Empty() bool {
 }
 
 // HasSyncState reports whether any canonical sync has ever landed (#262):
-// collections exist or a source carries a sync cursor. Boot uses it to tell
-// the chicken-and-egg "never synced" case (degrade, rules inactive) from a
-// real misconfiguration (fatal, exactly as before).
+// collections exist or a source carries a canonical sync cursor
+// (canonical_last_modified_version — the column the single sync path
+// maintains; the legacy last_sync_at/last_modified_version terms stay for
+// pre-0003 migrated deployments). Boot uses it to tell the
+// chicken-and-egg "never synced" case (degrade, rules inactive) from a
+// real misconfiguration (fatal, exactly as before) — a synced library
+// with zero collections must count as synced or a typo'd path would
+// degrade forever instead of fataling.
 func (r *Repo) HasSyncState(ctx context.Context) (bool, error) {
 	var has bool
 	err := r.pool.QueryRow(ctx, `
 		SELECT EXISTS(SELECT 1 FROM zotero_collections)
 		    OR EXISTS(SELECT 1 FROM zotero_sources
-		              WHERE last_sync_at IS NOT NULL OR last_modified_version > 0)`).
+		              WHERE canonical_last_modified_version > 0
+		                 OR last_sync_at IS NOT NULL OR last_modified_version > 0)`).
 		Scan(&has)
 	return has, err
 }
