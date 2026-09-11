@@ -41,6 +41,20 @@ func (r ContextualRules) Empty() bool {
 	return len(r.CollectionKeys) == 0 && len(r.Tags) == 0
 }
 
+// HasSyncState reports whether any canonical sync has ever landed (#262):
+// collections exist or a source carries a sync cursor. Boot uses it to tell
+// the chicken-and-egg "never synced" case (degrade, rules inactive) from a
+// real misconfiguration (fatal, exactly as before).
+func (r *Repo) HasSyncState(ctx context.Context) (bool, error) {
+	var has bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM zotero_collections)
+		    OR EXISTS(SELECT 1 FROM zotero_sources
+		              WHERE last_sync_at IS NOT NULL OR last_modified_version > 0)`).
+		Scan(&has)
+	return has, err
+}
+
 // ResolveContextualRules validates the configured rule inputs against the
 // synced canonical state and returns the resolved rule set. It is the boot
 // gate: every configured collection path must resolve to an existing
@@ -148,6 +162,22 @@ func (r *Repo) ResolveContextualRules(ctx context.Context, paths, tags []string)
 		out.Tags = append(out.Tags, tag)
 	}
 	return out, nil
+}
+
+// RecomputeCitationClass applies the citation_class projection outside a
+// sync transaction (#262): called when a degraded rule set ACTIVATES after a
+// sync, so convergence completes on the activating sync itself instead of
+// waiting for the next one.
+func (r *Repo) RecomputeCitationClass(ctx context.Context, sourceID string, rules ContextualRules) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := recomputeCitationClassTx(ctx, tx, sourceID, rules); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // recomputeCitationClassTx re-derives zotero_documents.citation_class for

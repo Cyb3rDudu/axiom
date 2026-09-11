@@ -45,6 +45,10 @@ The response is always HTTP `200`. `ok` is false when any registered checker
 fails; `checks` contains `ok`, an error string, or `unknown` for each dependency.
 A fully wired process checks Zotero, PostgreSQL, the query runner, and the ingest
 runner. `build` carries the version banner and must match `axiom-ng --version`.
+`contextual` (#262) is `active` or `degraded_no_sync` while contextual rules
+are configured (omitted otherwise): `degraded_no_sync` means the DB had no
+sync state at boot — the rules are inactive (everything citable) and will
+self-activate after the first successful sync.
 
 Live response shape:
 
