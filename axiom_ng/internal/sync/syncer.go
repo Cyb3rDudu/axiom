@@ -25,11 +25,16 @@ type Service struct {
 	libID   string
 	log     *log.Logger
 
-	// contextual (#255) holds the boot-resolved contextual-class rules
-	// (collection zotero_keys + tag names). The zero value = no rules =
-	// everything citable. Wired via SetContextualRules at boot after
-	// ResolveContextualRules validated the env inputs loudly.
-	contextual repo.ContextualRules
+	// contextual (#255/#262): the resolved rules (collection zotero_keys +
+	// tag names). Zero value = no rules = everything citable. ctxPaths/ctxTags
+	// are the configured env INPUTS kept for the post-sync re-resolve;
+	// ctxDegraded is the #262 boot-order state: DB never synced → rules
+	// inactive until the first sync converges (boot always succeeds).
+	contextual  repo.ContextualRules
+	ctxPaths    []string
+	ctxTags     []string
+	ctxDegraded bool
+	ctxMu       sync.Mutex
 
 	// #197 standing consolidation hook: every SUCCESSFUL sync schedules a
 	// debounced run; a burst of syncs collapses into one. consolidator is
@@ -57,9 +62,88 @@ const consolidateTimeout = 30 * time.Minute
 // SetConsolidator wires the standing post-sync consolidation hook (#197).
 func (s *Service) SetConsolidator(c Consolidator) { s.consolidator = c }
 
-// SetContextualRules wires the resolved #255 contextual-class rules (empty
-// = every document citable; still recomputed on every sync).
-func (s *Service) SetContextualRules(r repo.ContextualRules) { s.contextual = r }
+// InitContextual wires the configured #255 contextual-class rule inputs and
+// resolves them against the synced canonical state — the #262 boot gate:
+// boot ALWAYS succeeds. On a never-synced DB (HasSyncState false) a resolve
+// failure degrades (rules inactive, banner logged, health degraded_no_sync)
+// instead of fataling; the first sync re-resolves and activates. With sync
+// state present, an unknown path/tag is a loud error and the caller fatals —
+// the genuine misconfiguration case keeps today's sharpness.
+func (s *Service) InitContextual(ctx context.Context, paths, tags []string) error {
+	s.ctxMu.Lock()
+	s.ctxPaths, s.ctxTags = paths, tags
+	s.ctxMu.Unlock()
+	if len(paths) == 0 && len(tags) == 0 {
+		return nil
+	}
+	rules, err := s.repo.ResolveContextualRules(ctx, paths, tags)
+	if err != nil {
+		synced, serr := s.repo.HasSyncState(ctx)
+		if serr == nil && !synced {
+			s.ctxMu.Lock()
+			s.ctxDegraded = true
+			s.ctxMu.Unlock()
+			s.log.Printf("contextual (#262): DEGRADED — rules configured but no sync state; rules inactive until first sync, everything stays citable (unresolved: %v)", err)
+			return nil
+		}
+		return err
+	}
+	s.ctxMu.Lock()
+	s.contextual = rules
+	s.ctxMu.Unlock()
+	s.log.Printf("contextual class (#255): collections=%v tags=%v", rules.CollectionKeys, rules.Tags)
+	return nil
+}
+
+// ContextualState feeds /api/health (#262): "" when no rules are configured,
+// "degraded_no_sync" while the rule set waits for the first sync, "active"
+// once the rules are in effect. A permanently degraded deployment is
+// observable, not silent.
+func (s *Service) ContextualState() string {
+	s.ctxMu.Lock()
+	defer s.ctxMu.Unlock()
+	if len(s.ctxPaths) == 0 && len(s.ctxTags) == 0 {
+		return ""
+	}
+	if s.ctxDegraded {
+		return "degraded_no_sync"
+	}
+	return "active"
+}
+
+// maybeActivateContextual is the #262 convergence hook: after every
+// successful sync, a DEGRADED rule set (booted before the first sync) is
+// re-resolved against the now-synced state. Success activates the rules,
+// recomputes the projection (so the activating sync itself converges) and
+// logs the transition; failure stays degraded, loudly logged — the sync
+// succeeded and must not fail over a rule set. An already-active set is NOT
+// re-resolved: rules ride stable zotero_keys, and reversibility (collection
+// deleted later) is the projection's job (#255).
+func (s *Service) maybeActivateContextual(sourceID string) {
+	s.ctxMu.Lock()
+	degraded := s.ctxDegraded
+	paths, tags := s.ctxPaths, s.ctxTags
+	s.ctxMu.Unlock()
+	if !degraded {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	rules, err := s.repo.ResolveContextualRules(ctx, paths, tags)
+	if err != nil {
+		s.log.Printf("contextual (#262): rules STILL unresolved after sync — staying degraded, all documents citable: %v", err)
+		return
+	}
+	if err := s.repo.RecomputeCitationClass(ctx, sourceID, rules); err != nil {
+		s.log.Printf("contextual (#262): activation recompute failed (projection applies on the next sync): %v", err)
+	}
+	s.ctxMu.Lock()
+	s.contextual = rules
+	s.ctxDegraded = false
+	s.ctxMu.Unlock()
+	s.log.Printf("contextual (#262): DEGRADED->ACTIVE after sync — collections=%v tags=%v (rules in effect)",
+		rules.CollectionKeys, rules.Tags)
+}
 
 // scheduleConsolidation arms the debounced run (each completion inside the
 // window re-arms it — one run after the burst settles).
@@ -198,7 +282,12 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	}
 	defer tx.Rollback(ctx)
 
-	applyRes, err := s.repo.ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files, selection, s.contextual)
+	applyRules := func() repo.ContextualRules {
+		s.ctxMu.Lock()
+		defer s.ctxMu.Unlock()
+		return s.contextual
+	}()
+	applyRes, err := s.repo.ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files, selection, applyRules)
 	if err != nil {
 		return Result{}, err
 	}
@@ -213,6 +302,10 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	// jobs committed) — hook the standing consolidation, debounced so a
 	// burst of syncs collapses into ONE run.
 	s.scheduleConsolidation()
+
+	// #262: converge a degraded contextual rule set now that this sync has
+	// landed the state it resolves against.
+	s.maybeActivateContextual(sourceID)
 
 	return Result{
 		SourceID:    sourceID,

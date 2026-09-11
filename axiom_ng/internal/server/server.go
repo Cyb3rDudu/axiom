@@ -47,6 +47,9 @@ type Server struct {
 	repairRepo     *repo.Repo
 	zoteroWrite    *zotero.WriteClient
 	quarantineRoot string
+	// #262 contextual health state: returns "active",
+	// "degraded_no_sync" or "" (no rules configured). nil = omitted.
+	contextualState func() string
 }
 
 // New builds a Server with no backing-dependency checkers yet. Register them
@@ -57,6 +60,11 @@ func New(addr string, log *log.Logger) *Server {
 
 // RegisterCheck adds a named dependency checker reported by /api/health.
 func (s *Server) RegisterCheck(name string, c Checker) { s.checkers[name] = c }
+
+// SetContextualState wires the #262 /api/health contextual field: "active"
+// or "degraded_no_sync" while rules are configured (omitted otherwise) — a
+// permanently degraded deployment must be observable, not silent.
+func (s *Server) SetContextualState(f func() string) { s.contextualState = f }
 
 // Handler returns the chi router.
 func (s *Server) Handler() http.Handler {
@@ -112,6 +120,9 @@ type healthResponse struct {
 	OK     bool           `json:"ok"`
 	Build  string         `json:"build"` // version banner — must match `axiom-ng --version` (#205 DoD)
 	Checks map[string]any `json:"checks"`
+	// #262: "active" | "degraded_no_sync" (omitted when no contextual
+	// rules are configured).
+	Contextual string `json:"contextual,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -132,5 +143,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		checks[name] = "ok"
 	}
 
-	writeJSON(w, http.StatusOK, healthResponse{OK: ok, Build: version.Banner(), Checks: checks})
+	hr := healthResponse{OK: ok, Build: version.Banner(), Checks: checks}
+	if s.contextualState != nil {
+		hr.Contextual = s.contextualState()
+	}
+	writeJSON(w, http.StatusOK, hr)
 }
