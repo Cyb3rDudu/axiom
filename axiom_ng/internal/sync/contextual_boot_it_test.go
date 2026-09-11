@@ -261,10 +261,12 @@ func TestContextualBootSyncedUnknownStillFatalIT(t *testing.T) {
 // (deleted collection has no members), the rule set itself keeps riding
 // the stable zotero_key — no re-resolve, no fatal.
 //
-// Mutation: re-resolving the ACTIVE rule set on every sync fails the
-// state assert (deleted-only path match is a resolve error → degraded or
-// fatal). Dropping the NOT c.deleted membership guard fails the citable
-// assert.
+// Mutation: re-resolving the ACTIVE rule set on every sync goes red via
+// the log assert — with that mutation the second sync's resolve hits the
+// deleted-only path match and logs "STILL unresolved" (state itself stays
+// "active" because ctxDegraded is already false, which is exactly why the
+// log assert exists). Dropping the NOT c.deleted membership guard fails
+// the citable assert.
 func TestContextualBootActiveSurvivesCollectionDeletionIT(t *testing.T) {
 	ctx := context.Background()
 	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
