@@ -516,8 +516,12 @@ def _release_mrebel() -> None:
 # ESG-Investing (English) got 24 figure-caption chunks, the German books
 # zero despite captioned figures): Abbildung 5.3 / Abb. 3 / Bild 2 —
 # decimal ordinals ride the trailing [^\n]*; case-insensitive via (?i).
+# Corpus-measured caption lead-words (2026-09-12, whole-library scan):
+# Abb 1137x, Abbildung 993x, Fig/Figure 493x, Tabelle 121x, Table 82x,
+# Tab. 49x, Exhibit 33x (management literature), Schaubild 27x, Bild 18x.
+# Tables pair too: 43 chunks carry "Tabelle N" lines next to image refs.
 _FIGURE_CAPTION_RE = re.compile(
-    r"(?mi)^[ \t]*(figure|fig\.|abbildung|abb\.|bild)\s+\d+\b[^\n]*"
+    r"(?mi)^[ \t]*(figure|fig\.|abbildung|abb\.|bild|schaubild|exhibit|tabelle|tab\.|table)\s+\d+\b[^\n]*"
 )
 
 

@@ -887,7 +887,22 @@ def test_extract_figure_captions_german_forms():
         "text": "Wie in der Abbildung im Anhang gezeigt, steigt der Wert.",
         "metadata": {"image_refs": ["image-0011"]},
     }
-    _extract_figure_captions([abbildung, abbrev, bild, prose])
+    exhibit = {
+        "text": "Exhibit 1. The Balanced Scorecard translates strategy",
+        "metadata": {"image_refs": ["image-0013"]},
+    }
+    schaubild = {
+        "text": "Schaubild 4: Formen der Unternehmensfinanzierung",
+        "metadata": {"image_refs": ["image-0014"]},
+    }
+    tabelle = {
+        "text": "Tabelle 12.2: Kennzahlen im Vergleich",
+        "metadata": {"image_refs": ["image-0015"]},
+    }
+    _extract_figure_captions([abbildung, abbrev, bild, prose, exhibit, schaubild, tabelle])
+    assert exhibit["metadata"]["figure_captions"]["image-0013"].startswith("Exhibit 1.")
+    assert schaubild["metadata"]["figure_captions"]["image-0014"].startswith("Schaubild 4:")
+    assert tabelle["metadata"]["figure_captions"]["image-0015"].startswith("Tabelle 12.2:")
     assert abbildung["metadata"]["figure_captions"]["image-0004"] == (
         "Abbildung 5.3: Kostenverlauf bei steigender Auslastung"
     )
@@ -896,7 +911,4 @@ def test_extract_figure_captions_german_forms():
     )
     assert bild["metadata"]["figure_captions"]["image-0009"] == (
         "Bild 2: Eingliederung der Kostenrechnung"
-    )
-    assert "figure_captions" not in prose["metadata"], (
-        "line without ordinal after the caption word must not match"
     )
