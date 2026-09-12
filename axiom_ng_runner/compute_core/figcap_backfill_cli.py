@@ -33,7 +33,9 @@ DENSE_MODEL = "BAAI/bge-m3"
 
 def plan(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Re-extract figure_captions for every chunk and mark the affected ones
-    (old ≠ new). Pure — the caller decides what to write."""
+    (old ≠ new). Pure — the caller decides what to write. Each row carries
+    the input chunk under "chunk" for the re-embed pass; main() strips it
+    before emitting (it is internal plumbing, not protocol)."""
     out: list[dict[str, Any]] = []
     for c in chunks:
         old = c.get("figure_captions") or {}
@@ -43,6 +45,11 @@ def plan(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "metadata": {"image_refs": c.get("image_refs") or []},
             }
         )
+        if new is None:
+            # positions not reliably reconstructible (multi-image count
+            # mismatch) — leave the stored captions alone, never purge
+            # captions that may still be correct.
+            new = old
         out.append(
             {
                 "chunk_id": c["chunk_id"],

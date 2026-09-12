@@ -16,10 +16,16 @@
 // BGE-M3) computes every new caption and vector BEFORE a single write, so a
 // failure leaves the corpus untouched.
 //
-// Env: AXIOM_DATABASE_URL, AXIOM_OPENSEARCH_URL (both required unless
-// -dry-run without -index); AXIOM_OPENSEARCH_USERNAME/PASSWORD optional;
-// AXIOM_PYTHON / AXIOM_RUNNER_DIR override the runner venv / checkout
-// discovery.
+// The SPARSE (learned lexical) arm is NOT rewritten here: a purged caption's
+// tokens survive in the sparse vector until cmd/sparse-backfill re-runs — the
+// same seam the #257 caption-backfill leaves. The dense arm and the indexed
+// caption_text are repaired; run sparse-backfill after a purge-heavy pass if
+// the sparse arm matters.
+//
+// Env: AXIOM_DATABASE_URL (always required); AXIOM_OPENSEARCH_URL required
+// for an applied run unless -no-index; AXIOM_OPENSEARCH_USERNAME/PASSWORD
+// optional; AXIOM_PYTHON / AXIOM_RUNNER_DIR override the runner venv /
+// checkout discovery.
 //
 // Usage:
 //

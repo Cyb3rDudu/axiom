@@ -563,21 +563,17 @@ def _strip_caption_deco(line: str) -> str:
     s = s.replace("**", "").replace("__", "")
     s = s.strip()
     # A caption inside a table cell keeps a trailing cell border; drop it.
-    s = s.rstrip("| \t")
-    # A whole-line single-mark wrapper ("*Figure 1-1. …*", "`Fig. 1`").
-    wrapped = _CAPTION_EMPHASIS_RE.match(s)
-    if wrapped:
-        s = wrapped.group(2).strip()
-    return s
+    return s.rstrip("| \t")
 
 
 # Verbs that mark a line as PROSE (a reference to a figure, not its caption).
 _CAPTION_VERB = (
     r"(?:zeigt|zeigen|zeigte|zeigten|fasst|erfasst|shows?|shown|summariz\w*|"
-    r"illustrat\w*|presents?|depicts?|describ\w*|indicates?|verdeutlicht|"
-    r"veranschaulicht|erläutert|erklärt|beschreibt|beschreiben|vergleicht|"
-    r"vergleichen|gibt|geben|liefert|liefern|stellt|stellen|wird|werden|"
-    r"ist|sind|führt|diskutiert|behandelt|nennt|enthält)"
+    r"summaris\w*|illustrat\w*|presents?|depicts?|describ\w*|indicates?|"
+    r"provides?|compared?|compares?|contains?|lists?|outlines?|reports?|"
+    r"verdeutlicht|veranschaulicht|erläutert|erklärt|beschreibt|beschreiben|"
+    r"vergleicht|vergleichen|gibt|geben|liefert|liefern|stellt|stellen|"
+    r"wird|werden|ist|sind|führt|diskutiert|behandelt|nennt|enthält)"
 )
 # A short connector may sit between the ordinal and the verb: a subfigure
 # letter (Fig. 1-b shows) or a conjunction/adverb (Figure 2 also illustrates,
@@ -692,9 +688,10 @@ def _extract_figure_captions(
 _MD_IMAGE_OCCURRENCE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
 
-def reextract_figure_captions(chunk: dict[str, Any]) -> dict[str, str]:
+def reextract_figure_captions(chunk: dict[str, Any]) -> dict[str, str] | None:
     """#268 figcap backfill: re-run the caption extraction over a STORED
-    chunk and return its new figure_captions map (never mutating the input).
+    chunk and return its new figure_captions map (never mutating the input),
+    or None when the positions are NOT reliably reconstructible.
 
     The ingest `ref_to_orig` (contract ref → original marker filename) is
     NOT persisted, but the chunk text still carries the marker filenames in
@@ -702,8 +699,15 @@ def reextract_figure_captions(chunk: dict[str, Any]) -> dict[str, str]:
     is reconstructed POSITIONALLY: the i-th markdown image occurrence in the
     text belongs to image_refs[i]. Verified against every stored captioned
     multi-image chunk (the reconstructed pairing reproduces the ingest-time
-    pairing exactly); when the counts disagree the mapping is refused and the
-    single-image fallback / drop rule applies unchanged.
+    pairing exactly).
+
+    When this chunk has MULTIPLE refs and the occurrence count disagrees
+    (e.g. a Z2 ligature misread leaves an http image in the text that
+    _drop_link_refs removed from the refs), the mapping cannot be trusted:
+    the safe degradation is None — the caller leaves the stored captions
+    alone rather than purging captions that may still be correct. A
+    single-image chunk keeps the ingest fallback (the caption belongs to
+    the one image) and is always safe.
     """
     meta = chunk.get("metadata", {}) or {}
     refs = [_ref_id(r) for r in (meta.get("image_refs") or [])]
@@ -712,6 +716,8 @@ def reextract_figure_captions(chunk: dict[str, Any]) -> dict[str, str]:
     occurrences = _MD_IMAGE_OCCURRENCE_RE.findall(text)
     if len(occurrences) == len(refs):
         ref_to_orig = dict(zip(refs, (Path(o).name for o in occurrences)))
+    elif len(refs) > 1:
+        return None
     probe = {"text": text, "metadata": {"image_refs": refs}}
     _extract_figure_captions([probe], ref_to_orig)
     return probe["metadata"].get("figure_captions", {})

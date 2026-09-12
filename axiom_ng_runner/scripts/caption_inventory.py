@@ -37,7 +37,7 @@ def load() -> list[dict[str, str]]:
 
 
 def matched(form: str) -> bool:
-    return any(True for _ in _iter_figure_captions(form))
+    return next(_iter_figure_captions(form), None) is not None
 
 
 def main() -> int:
