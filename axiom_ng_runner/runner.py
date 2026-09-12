@@ -512,8 +512,12 @@ def _release_mrebel() -> None:
 # NOTE: [ \t]* (not \s*) — with (?m)^ the pattern is line-anchored; \s*
 # would also consume newlines and could match a caption line MID-PARAGRAPH
 # after blank lines. Reviewer finding 2026-09-06.
+# German caption forms (production finding 2026-09-12, FIN caption wave:
+# ESG-Investing (English) got 24 figure-caption chunks, the German books
+# zero despite captioned figures): Abbildung 5.3 / Abb. 3 / Bild 2 —
+# decimal ordinals ride the trailing [^\n]*; case-insensitive via (?i).
 _FIGURE_CAPTION_RE = re.compile(
-    r"(?mi)^[ \t]*(figure|fig\.)\s+\d+\b[^\n]*"
+    r"(?mi)^[ \t]*(figure|fig\.|abbildung|abb\.|bild)\s+\d+\b[^\n]*"
 )
 
 

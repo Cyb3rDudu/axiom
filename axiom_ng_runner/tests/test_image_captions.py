@@ -856,3 +856,47 @@ def test_extract_figure_captions_production_naming():
     }
     _extract_figure_captions([chunk2])
     assert "figure_captions" not in chunk2["metadata"]
+
+
+def test_extract_figure_captions_german_forms():
+    """German caption forms (production finding 2026-09-12: the FIN books
+    got zero figure captions — the pattern was English-only). Abbildung,
+    Abb. and Bild, including decimal ordinals (Abbildung 5.3). Mutation pin:
+    the pre-fix pattern (figure|fig\\.) leaves figure_captions empty here."""
+    from axiom_ng_runner.runner import _extract_figure_captions
+
+    abbildung = {
+        "text": (
+            "Die Kostenentwicklung im Zeitablauf.\n\n"
+            "![Abb](media/image-0004.png)\n\n"
+            "Abbildung 5.3: Kostenverlauf bei steigender Auslastung\n\n"
+            "Vgl. hierzu die Ausführungen in Kapitel 4."
+        ),
+        "metadata": {"image_refs": ["image-0004"]},
+    }
+    abbrev = {
+        "text": "Abb. 3 – Übersicht der Finanzierungsformen",
+        "metadata": {"image_refs": ["image-0007"]},
+    }
+    bild = {
+        "text": "Bild 2: Eingliederung der Kostenrechnung",
+        "metadata": {"image_refs": ["image-0009"]},
+    }
+    # German prose that must NOT become a caption (no line-initial ordinal form)
+    prose = {
+        "text": "Wie in der Abbildung im Anhang gezeigt, steigt der Wert.",
+        "metadata": {"image_refs": ["image-0011"]},
+    }
+    _extract_figure_captions([abbildung, abbrev, bild, prose])
+    assert abbildung["metadata"]["figure_captions"]["image-0004"] == (
+        "Abbildung 5.3: Kostenverlauf bei steigender Auslastung"
+    )
+    assert abbrev["metadata"]["figure_captions"]["image-0007"] == (
+        "Abb. 3 – Übersicht der Finanzierungsformen"
+    )
+    assert bild["metadata"]["figure_captions"]["image-0009"] == (
+        "Bild 2: Eingliederung der Kostenrechnung"
+    )
+    assert "figure_captions" not in prose["metadata"], (
+        "line without ordinal after the caption word must not match"
+    )
