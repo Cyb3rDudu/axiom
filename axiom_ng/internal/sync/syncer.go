@@ -35,6 +35,9 @@ type Service struct {
 	ctxTags     []string
 	ctxDegraded bool
 	ctxMu       sync.Mutex
+	// ctxResolve (#262) is the contextual repo seam: nil → s.repo. ITs
+	// swap it to inject a failing recompute without touching the sync tx.
+	ctxResolve contextualAPI
 
 	// #197 standing consolidation hook: every SUCCESSFUL sync schedules a
 	// debounced run; a burst of syncs collapses into one. consolidator is
@@ -61,6 +64,22 @@ const consolidateTimeout = 30 * time.Minute
 
 // SetConsolidator wires the standing post-sync consolidation hook (#197).
 func (s *Service) SetConsolidator(c Consolidator) { s.consolidator = c }
+
+// contextualAPI is the repo surface the #262 activation path needs. A
+// seam so ITs can inject a failing recompute without touching the sync
+// transaction or any product-global trick.
+type contextualAPI interface {
+	ResolveContextualRules(ctx context.Context, paths, tags []string) (repo.ContextualRules, error)
+	RecomputeCitationClass(ctx context.Context, sourceID string, rules repo.ContextualRules) error
+}
+
+// SetContextualResolver overrides the contextual repo seam (#262 IT hook —
+// production never calls it).
+func (s *Service) SetContextualResolver(a contextualAPI) {
+	s.ctxMu.Lock()
+	defer s.ctxMu.Unlock()
+	s.ctxResolve = a
+}
 
 // InitContextual wires the configured #255 contextual-class rule inputs and
 // resolves them against the synced canonical state — the #262 boot gate:
@@ -113,29 +132,39 @@ func (s *Service) ContextualState() string {
 
 // maybeActivateContextual is the #262 convergence hook: after every
 // successful sync, a DEGRADED rule set (booted before the first sync) is
-// re-resolved against the now-synced state. Success activates the rules,
-// recomputes the projection (so the activating sync itself converges) and
-// logs the transition; failure stays degraded, loudly logged — the sync
-// succeeded and must not fail over a rule set. An already-active set is NOT
-// re-resolved: rules ride stable zotero_keys, and reversibility (collection
-// deleted later) is the projection's job (#255).
+// re-resolved against the now-synced state. Activation is FAIL-CLOSED: the
+// state flip (ctxDegraded=false, rules set) happens only after the
+// projection recompute SUCCEEDED — health must never claim active while
+// the DB can still read citable, and the !degraded guard must never lock a
+// half-activated state in (a failed recompute stays degraded; the next
+// sync retries). An already-active set is NOT re-resolved: rules ride
+// stable zotero_keys, and reversibility (collection deleted later) is the
+// projection's job (#255).
 func (s *Service) maybeActivateContextual(sourceID string) {
 	s.ctxMu.Lock()
 	degraded := s.ctxDegraded
 	paths, tags := s.ctxPaths, s.ctxTags
+	api := s.ctxResolve
 	s.ctxMu.Unlock()
+	if api == nil {
+		api = contextualAPI(s.repo)
+	}
 	if !degraded {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	rules, err := s.repo.ResolveContextualRules(ctx, paths, tags)
+	rules, err := api.ResolveContextualRules(ctx, paths, tags)
 	if err != nil {
 		s.log.Printf("contextual (#262): rules STILL unresolved after sync — staying degraded, all documents citable: %v", err)
 		return
 	}
-	if err := s.repo.RecomputeCitationClass(ctx, sourceID, rules); err != nil {
-		s.log.Printf("contextual (#262): activation recompute failed (projection applies on the next sync): %v", err)
+	if err := api.RecomputeCitationClass(ctx, sourceID, rules); err != nil {
+		// Fail-closed: stay degraded (rules inactive, everything citable)
+		// so /api/health cannot report active over a possibly-stale
+		// projection. The next sync retries the activation.
+		s.log.Printf("contextual (#262): activation recompute FAILED — staying degraded (fail-closed), next sync retries: %v", err)
+		return
 	}
 	s.ctxMu.Lock()
 	s.contextual = rules
