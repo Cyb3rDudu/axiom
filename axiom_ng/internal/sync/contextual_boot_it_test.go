@@ -19,6 +19,7 @@ package sync
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log"
 	"os"
 	"strings"
@@ -311,5 +312,96 @@ func TestContextualBootActiveSurvivesCollectionDeletionIT(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "STILL unresolved") {
 		t.Fatalf("active rules must not re-resolve on sync, log: %q", buf.String())
+	}
+}
+
+// failingCtxAPI wraps the real repo for the #262 fail-closed rider: while
+// armed, RecomputeCitationClass errors without touching the sync
+// transaction — the injected-failure seam the DoD demands (no
+// product-global tricks). Everything else delegates 1:1.
+type failingCtxAPI struct {
+	*repo.Repo
+	failRecompute bool
+}
+
+func (f *failingCtxAPI) RecomputeCitationClass(ctx context.Context, sourceID string, rules repo.ContextualRules) error {
+	if f.failRecompute {
+		return errors.New("injected recompute failure")
+	}
+	return f.Repo.RecomputeCitationClass(ctx, sourceID, rules)
+}
+
+// IT 5 (#262 rider, fail-closed): an injected RecomputeCitationClass error
+// must NOT activate — health stays degraded_no_sync, rules stay inactive,
+// every document fail-safe citable, and the log says the next sync retries
+// (it no longer claims the projection applies on the next sync while
+// reporting active).
+//
+// Mutation: the pre-rider pattern (log the error, then flip the state
+// anyway — `s.contextual = rules; s.ctxDegraded = false` after the failed
+// recompute) goes RED on the state assert right below: health would lie
+// "active" over a citable projection, and the !degraded guard would then
+// skip every future activation attempt.
+func TestContextualActivationFailClosedIT(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping integration test")
+	}
+	d, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+	ctxBootTruncate(t, d)
+
+	src := ctxBootWorld("ctxboot5", true)
+	svc, buf := ctxBootSvc(t, src)
+	rep := repo.New(d.Pool())
+	svc.repo = rep
+	if err := svc.InitContextual(ctx, []string{"VWL/Lectures"}, []string{"Vorlesung"}); err != nil {
+		t.Fatalf("degraded boot: %v", err)
+	}
+
+	// Arm the injected recompute failure for the FIRST sync's activation.
+	seam := &failingCtxAPI{Repo: rep, failRecompute: true}
+	svc.SetContextualResolver(seam)
+
+	res, err := svc.Run(ctx, nil)
+	if err != nil {
+		t.Fatalf("sync with failing activation recompute must not fail the sync: %v", err)
+	}
+	if st := svc.ContextualState(); st != "degraded_no_sync" {
+		t.Fatalf("failed recompute must keep the state degraded (fail-closed), got %q", st)
+	}
+	if strings.Contains(buf.String(), "DEGRADED->ACTIVE") {
+		t.Fatalf("no activation transition may be logged on a failed recompute, log: %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "fail-closed") {
+		t.Fatalf("the failed activation must log the fail-closed reason, log: %q", buf.String())
+	}
+	for _, k := range []string{"CTX1", "PAX1"} {
+		if cls := ctxDocClass(t, d, res.SourceID, k); cls != "citable" {
+			t.Fatalf("doc %s must stay fail-safe citable while degraded, got %q", k, cls)
+		}
+	}
+
+	// IT 6 (rider DoD): the NEXT sync — recompute now succeeds — activates
+	// correctly: state active, transition logged, projection updated.
+	seam.failRecompute = false
+	if _, err := svc.Run(ctx, nil); err != nil {
+		t.Fatalf("follow-up sync: %v", err)
+	}
+	if st := svc.ContextualState(); st != "active" {
+		t.Fatalf("rules must activate on the retrying sync, got %q", st)
+	}
+	if !strings.Contains(buf.String(), "DEGRADED->ACTIVE") {
+		t.Fatalf("activation transition must be logged on retry, log: %q", buf.String())
+	}
+	if cls := ctxDocClass(t, d, res.SourceID, "CTX1"); cls != "contextual" {
+		t.Fatalf("ruled doc must be contextual after the successful retry, got %q", cls)
+	}
+	if cls := ctxDocClass(t, d, res.SourceID, "PAX1"); cls != "citable" {
+		t.Fatalf("passenger doc must stay citable after the successful retry, got %q", cls)
 	}
 }
