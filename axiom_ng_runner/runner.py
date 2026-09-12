@@ -502,27 +502,126 @@ def _release_mrebel() -> None:
 
 # ── #230: image captioning stage ──────────────────────────────────
 
-# #257: deterministic document-figure captions — a line-initial
+# #257/#268: deterministic document-figure captions — a line-initial
 # "Figure N …" / "Fig. N …" inside a chunk that references an image.
-# Leading whitespace is generous on purpose: marker output frequently pads
-# caption lines inside table-layout remains (dozens of spaces before the
-# word "Figure", production finding 2026-09-06 on Weaponized Interdependence).
-# Requiring a caption-like word boundary after the ordinal keeps the broad
-# indent from over-matching.
-# NOTE: [ \t]* (not \s*) — with (?m)^ the pattern is line-anchored; \s*
-# would also consume newlines and could match a caption line MID-PARAGRAPH
-# after blank lines. Reviewer finding 2026-09-06.
-# German caption forms (production finding 2026-09-12, FIN caption wave:
-# ESG-Investing (English) got 24 figure-caption chunks, the German books
-# zero despite captioned figures): Abbildung 5.3 / Abb. 3 / Bild 2 —
-# decimal ordinals ride the trailing [^\n]*; case-insensitive via (?i).
-# Corpus-measured caption lead-words (2026-09-12, whole-library scan):
-# Abb 1137x, Abbildung 993x, Fig/Figure 493x, Tabelle 121x, Table 82x,
-# Tab. 49x, Exhibit 33x (management literature), Schaubild 27x, Bild 18x.
-# Tables pair too: 43 chunks carry "Tabelle N" lines next to image refs.
-_FIGURE_CAPTION_RE = re.compile(
-    r"(?mi)^[ \t]*(figure|fig\.|abbildung|abb\.|bild|schaubild|exhibit|tabelle|tab\.|table)\s+\d+\b[^\n]*"
+#
+# An exhaustive inventory of the production corpus (103,420 chunks; 18,883
+# with image_refs) found the pre-#268 pattern matched 4,481/16,543 real
+# caption forms (27.1%) while actively pairing 428-class PROSE references
+# ("Abb. 6.4 zeigt …" is a verb continuation, not a caption). #268 rewrites
+# the matcher along the axes the inventory exposed instead of widening the
+# lead-word list further:
+#   1. decoration anchor/hash/table-cell: <span…></span>Figure 7,
+#      #### Exhibit 14.11, | Fig. 7.1 | … |  → strip before matching.
+#   2. ordinal token: arabic (incl. decimals), ranges (Table 8-1, Abb. 3-5),
+#      roman (Abbildung II.10, TABLE III), alnum-prefixed (FIGURE B1.2.1).
+#   3. negative prose guard: a verb directly after the ordinal (possibly one
+#      short connector later — "1-b shows", "2 also illustrates") marks the
+#      line as a reference, not a caption.
+# Precedent for the decoration strip: normalizeHeading in frontmatter.go.
+#
+# Decision rules from the inventory distribution (not single cases):
+#   (i)  certainly caption = line start (after deco) + lead word + ordinal,
+#        followed by a title/colon/dash/citation suffix, NOT a verb.
+#   (ii) certainly prose = verb after the ordinal, or an ordinal as a link
+#        anchor ("Figure [2-1](#page-44-0)"), or not line-initial.
+#   (iii) ambiguous (verb + later citation suffix) ⇒ prose; the positional
+#        pairing layer resolves true captions without guessing.
+_CAPTION_DECO_RE = re.compile(
+    r"^\s*(?:(?:<span[^>]*>\s*</span>|[*_`#>~=]+|\d+[.)]\s+|[-–—•]\s*|\|)\s*)*"
 )
+
+
+# A balanced markdown emphasis wrapper around a whole line: **bold**,
+# *italic*, __bold__, _italic_, `code`. The wrapper is removed from the
+# caption text; a LONE trailing asterisk (footnote marker, production
+# "Figure 1. … in Millions*") is NOT a wrapper and stays.
+_CAPTION_EMPHASIS_RE = re.compile(r"^(\*\*|__|\*|_|`)(.+)\1$")
+
+
+def _strip_caption_deco(line: str) -> str:
+    """#268: remove the decoration around a caption line so the matcher sees
+    the bare lead word. Handles the production shapes the inventory surfaced:
+    <span id="page-7-1"></span> anchors, markdown heading/quote/code/emphasis
+    markers, table-cell borders, numbered-list and bullet prefixes — and
+    normalizes heading prefixes (#, >). Mirrors normalizeHeading
+    (frontmatter.go): strip the prefix run, then a BALANCED closing emphasis
+    run. A lone trailing asterisk is a footnote marker, not emphasis, and
+    stays (production: "Figure 1. … in Millions*")."""
+    s = line.strip()
+    # A whole-line emphasis wrapper first (before the generic prefix strip
+    # would eat only the opening marker and orphan the closing one).
+    wrapped = _CAPTION_EMPHASIS_RE.match(s)
+    if wrapped:
+        s = wrapped.group(2).strip()
+    s = _CAPTION_DECO_RE.sub("", s)
+    s = re.sub(r"<span[^>]*>\s*</span>", "", s)
+    # Bold markers (paired or orphaned) are never caption content; drop them
+    # wherever they sit (production: "**Abb. 19.1** Titel" — the lead span is
+    # bold, not the whole line). Single * / _ stay: they are italics or a
+    # footnote marker.
+    s = s.replace("**", "").replace("__", "")
+    s = s.strip()
+    # A caption inside a table cell keeps a trailing cell border; drop it.
+    s = s.rstrip("| \t")
+    # A whole-line single-mark wrapper ("*Figure 1-1. …*", "`Fig. 1`").
+    wrapped = _CAPTION_EMPHASIS_RE.match(s)
+    if wrapped:
+        s = wrapped.group(2).strip()
+    return s
+
+
+# Verbs that mark a line as PROSE (a reference to a figure, not its caption).
+_CAPTION_VERB = (
+    r"(?:zeigt|zeigen|zeigte|zeigten|fasst|erfasst|shows?|shown|summariz\w*|"
+    r"illustrat\w*|presents?|depicts?|describ\w*|indicates?|verdeutlicht|"
+    r"veranschaulicht|erläutert|erklärt|beschreibt|beschreiben|vergleicht|"
+    r"vergleichen|gibt|geben|liefert|liefern|stellt|stellen|wird|werden|"
+    r"ist|sind|führt|diskutiert|behandelt|nennt|enthält)"
+)
+# A short connector may sit between the ordinal and the verb: a subfigure
+# letter (Fig. 1-b shows) or a conjunction/adverb (Figure 2 also illustrates,
+# Abbildung 2 zeigt hier) — both still mark prose.
+_CAPTION_CONNECTOR = (
+    r"(?:[-–—]?[a-z]|also|auch|hier|zudem|außerdem|weiterhin|ferner|"
+    r"additionally|further|furthermore|moreover|again)"
+)
+# Ordinal token (#268): arabic (incl. decimals), ranges, roman, alnum-prefixed.
+# Atomic group so the engine cannot backtrack to a shorter ordinal and slip
+# past the prose guard (the pre-fix bug: "Figure 1-3 shows" matched as
+# "Figure 1" with "-3 shows" left over). Python >= 3.11 (pyproject floor).
+_CAPTION_ORDINAL = (
+    r"(?>\d+(?:[.,]\d+)*(?:\s*[-–—]\s*\d+(?:[.,]\d+)*)?"
+    r"|[IVXLC]+(?:\.\d+)*|[A-Z]\d+(?:\.\d+)*)"
+)
+_CAPTION_LEAD = (
+    r"(?:figure|fig\.?|abbildung|abb\.?|bild|schaubild|exhibit|tabelle|"
+    r"tab\.?|table)"
+)
+# Applied to the DECORATION-STRIPPED line; anchored at its start.
+_FIGURE_CAPTION_RE = re.compile(
+    rf"(?i)^{_CAPTION_LEAD}\.?\s*{_CAPTION_ORDINAL}\b"
+    rf"(?![\s\-–—]{{0,3}}(?:{_CAPTION_CONNECTOR}\s+)?(?:{_CAPTION_VERB})\b)"
+)
+
+
+# A table-of-contents entry, not a caption: a caption lead + ordinal whose
+# line ends in a dot-leader page number ("Abb. 6.1 Aufbau der Bilanz ……… 133").
+# Precedent: dotLeaderRe in frontmatter.go.
+_CAPTION_TOC_RE = re.compile(r"(?:\.{4,}|…+)\s*\d{1,4}\s*$")
+
+
+def _iter_figure_captions(text: str):
+    """#268: yield (line_start_offset, stripped_caption) for every
+    caption-looking line of `text`. The offset is the LINE start (not the
+    post-deco position) so the positional image pairing keeps working with
+    the caption's place in the original chunk text."""
+    for m in re.finditer(r"[^\n]*", text):
+        stripped = _strip_caption_deco(m.group(0))
+        if _CAPTION_TOC_RE.search(stripped):
+            continue  # TOC dot-leader line — a contents entry, not a caption
+        if _FIGURE_CAPTION_RE.match(stripped):
+            yield m.start(), stripped
 
 
 def _extract_figure_captions(
@@ -551,7 +650,7 @@ def _extract_figure_captions(
         if not refs:
             continue
         text = c.get("text", "")
-        caps = list(_FIGURE_CAPTION_RE.finditer(text))
+        caps = list(_iter_figure_captions(text))
         if not caps:
             continue
         # Occurrence position of every image in the text: the original
@@ -569,23 +668,53 @@ def _extract_figure_captions(
             pos.append(i)
         pairs: dict[str, str] = {}
         used: set[int] = set()
-        for m in caps:
+        for start, caption in caps:
             # nearest image occurrence at or before the caption line
             best, best_d = -1, None
             for idx, p in enumerate(pos):
-                if idx in used or p < 0 or p > m.start():
+                if idx in used or p < 0 or p > start:
                     continue
-                d = m.start() - p
+                d = start - p
                 if best_d is None or d < best_d:
                     best, best_d = idx, d
             if best < 0 and len(refs) == 1 and 0 not in used:
                 best = 0  # single-image chunk: the caption belongs to it
             if best < 0:
                 continue  # unplaceable caption — dropped, never guessed
-            pairs[refs[best]] = m.group(0).strip()
+            pairs[refs[best]] = caption
             used.add(best)
         if pairs:
             meta["figure_captions"] = pairs
+
+
+# A markdown image occurrence (`![alt](path)`) — the shape the chunker
+# leaves in chunk text for every extracted image, in document order.
+_MD_IMAGE_OCCURRENCE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+
+
+def reextract_figure_captions(chunk: dict[str, Any]) -> dict[str, str]:
+    """#268 figcap backfill: re-run the caption extraction over a STORED
+    chunk and return its new figure_captions map (never mutating the input).
+
+    The ingest `ref_to_orig` (contract ref → original marker filename) is
+    NOT persisted, but the chunk text still carries the marker filenames in
+    order and `image_refs` is the chunker's text-order list. So the mapping
+    is reconstructed POSITIONALLY: the i-th markdown image occurrence in the
+    text belongs to image_refs[i]. Verified against every stored captioned
+    multi-image chunk (the reconstructed pairing reproduces the ingest-time
+    pairing exactly); when the counts disagree the mapping is refused and the
+    single-image fallback / drop rule applies unchanged.
+    """
+    meta = chunk.get("metadata", {}) or {}
+    refs = [_ref_id(r) for r in (meta.get("image_refs") or [])]
+    text = chunk.get("text", "")
+    ref_to_orig: dict[str, str] = {}
+    occurrences = _MD_IMAGE_OCCURRENCE_RE.findall(text)
+    if len(occurrences) == len(refs):
+        ref_to_orig = dict(zip(refs, (Path(o).name for o in occurrences)))
+    probe = {"text": text, "metadata": {"image_refs": refs}}
+    _extract_figure_captions([probe], ref_to_orig)
+    return probe["metadata"].get("figure_captions", {})
 
 
 def _caption_augmentation(chunk: dict[str, Any]) -> str:
