@@ -3,10 +3,17 @@ package server
 // /api/processor/source/{job_id} — HMAC-signed source download for remote
 // processors (contract §3 remote transport). The dispatcher signs
 // jobID|leaseUnix with AXIOM_PROCESSOR_SOURCE_SECRET; this endpoint
-// verifies signature, expiry, job status (claimed/processing) and lease
+// verifies signature, job status (claimed/processing) and lease
 // freshness before streaming the attachment bytes in place (read-only;
 // Zotero stays the source of truth). Every failure is a 404 — the endpoint
 // must not act as an existence oracle for jobs, secrets or files.
+//
+// #264 freshness model: the signed exp is an AUTHENTICITY input (covered by
+// the HMAC), not the freshness clock. Freshness is the DB lease fence below —
+// renewal (running from claim since #264) keeps that lease alive while the
+// runner works, so a runner whose single-lane queue wait exceeds one lease
+// window still downloads successfully. The pre-#264 wall-clock exp rejection
+// killed healthy jobs whose only fault was queueing behind model warmup.
 
 import (
 	"context"
@@ -41,9 +48,11 @@ func (s *Server) handleProcessorSource(w http.ResponseWriter, r *http.Request) {
 	}
 	jobID := chi.URLParam(r, "jobID")
 
-	// Signature + expiry first (cheap, no DB): wrong or stale => 404.
+	// Signature first (cheap, no DB): wrong => 404. The exp value is part of
+	// the signed material; freshness is enforced by the lease fence below
+	// (#264 — see the freshness note above).
 	exp, err := strconv.ParseInt(r.URL.Query().Get("exp"), 10, 64)
-	if err != nil || time.Now().After(time.Unix(exp, 0)) {
+	if err != nil {
 		http.NotFound(w, r)
 		return
 	}

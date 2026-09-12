@@ -184,6 +184,11 @@ type fakeProcessor struct {
 	// survive. Atomic because tests flip it mid-run while serve() reads it.
 	capsDown atomic.Bool
 
+	// #264 readiness gate: while true, capabilities answer warmup_enabled
+	// with models_warmed=false — the "runner still loading models" shape
+	// the dispatcher must not claim against.
+	warming atomic.Bool
+
 	processBody []byte
 	processHits int
 	// #126: when non-zero, POST /v1/process answers with this status+body
@@ -251,6 +256,8 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 			"models": map[string]any{
 				"dense_embedding": map[string]any{"name": "fake-bge", "dimensions": 3},
 			},
+			"warmup_enabled": true,
+			"models_warmed":  !fp.warming.Load(),
 		})
 	case r.Method == http.MethodPost && path == "/v1/pdf/preflight":
 		fp.mu.Lock()
@@ -1838,5 +1845,42 @@ func TestPreflightNoPrintPaginationProcesses(t *testing.T) {
 	}
 	if qs["finding"] != "🟡 no_print_pagination" {
 		t.Fatalf("quality_state finding = %v", qs["finding"])
+	}
+}
+
+// TestReadinessGateSkipsWarmingRunner (#264 Fix 1): a runner reporting
+// models_warmed=false (warmup enabled) is skipped, not fed — no claim, no
+// submit while warming; the moment it reports warm, the same pending job
+// flows normally. Mutation pin: with the readiness gate removed from the
+// worker loop this test is red in the FIRST phase (the job is claimed and
+// submitted into the half-warm runner) — that mutation is exactly the
+// production behavior of the 97-job 404 storm.
+func TestReadinessGateSkipsWarmingRunner(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "R1", 3)
+	fp := newFakeProcessor(t)
+	fp.statuses = []string{"completed"}
+	fp.result = `{"contract_version":"1.0","job_id":"` + jobID + `","status":"completed"}`
+
+	// Phase 1: runner warming — the gate must defer claiming entirely.
+	fp.warming.Store(true)
+	d := newDispatcher(t, h, fp, Config{})
+	runFor(t, d, context.Background(), 750*time.Millisecond)
+	if fp.processHits != 0 {
+		t.Fatalf("process hits while warming = %d, want 0 (gate must skip the runner)", fp.processHits)
+	}
+	if got := h.jobStatus(t, jobID); got != "pending" {
+		t.Fatalf("status while runner warming = %q, want pending (no claim)", got)
+	}
+
+	// Phase 2: runner reports warm — the same job flows to completion.
+	fp.warming.Store(false)
+	runFor(t, d, context.Background(), 6*time.Second)
+	if got := h.jobStatus(t, jobID); got != "completed" {
+		t.Fatalf("status after warmup = %q, want completed", got)
+	}
+	if fp.processHits != 1 {
+		t.Fatalf("process hits after warmup = %d, want 1", fp.processHits)
 	}
 }
