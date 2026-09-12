@@ -348,6 +348,21 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 		if ctx.Err() != nil {
 			return
 		}
+		// #264 Fix 1 — readiness gate: claim only against a runner that is
+		// actually warm. A warming runner (models_warmed=false while warmup is
+		// enabled) is skipped, not fed: a claim handed to a half-warm runner
+		// burns its lease window on model loads before the source download
+		// (the 97-job 404 storm of 2026-09-11/12). Legacy runners without
+		// warmup (warmup_enabled=false) are always claimable — their models
+		// load lazily by design and they have no readiness signal to honor.
+		if !d.runnerReady(ctx) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(jitter(d.cfg.PollInterval)):
+			}
+			continue
+		}
 		claimed, err := d.rep.ClaimNextJob(ctx, repo.ClaimOptions{
 			WorkerID:        d.cfg.WorkerID,
 			RunnerName:      d.cfg.RunnerName,
@@ -399,6 +414,29 @@ func (d *Dispatcher) releaseLease(claimed *repo.ClaimedJob) {
 	}
 }
 
+// runnerReady (#264 Fix 1) reports whether the target runner is warm enough
+// to be fed a claim. The runner's own readiness signal (capabilities'
+// models_warmed, additive since #216) is the gate; a runner that cannot be
+// asked is treated as not ready — a claim against an unanswerable runner
+// would burn its lease on an unknown state. Observer-only: this never marks
+// jobs, it only defers claiming.
+func (d *Dispatcher) runnerReady(ctx context.Context) bool {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	caps, err := d.client.Capabilities(cctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			d.logger.Printf("readiness gate: cannot ask runner (%v); claim deferred", err)
+		}
+		return false
+	}
+	if caps.WarmupEnabled && !caps.ModelsWarmed {
+		d.logger.Printf("readiness gate: runner warming (models_warmed=false); claim deferred")
+		return false
+	}
+	return true
+}
+
 // driveJob takes a claimed job through the full lifecycle. On ErrLostLease it
 // stops immediately and never acknowledges, leaving recovery to the claim scan.
 func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
@@ -410,12 +448,19 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 	fields := []any{ref.JobID, claimed.AttachmentID, claimed.DocumentID, claimed.Attempt, tokenPrefix}
 
 	ph := &jobPhases{jobID: ref.JobID, claim: time.Now()}
-	// #235 belt-and-braces: mint the source URL exp with one extra lease
-	// window of slack beyond LeaseUntil. The runner pulls the source
-	// synchronously inside POST /v1/process and may sit in its single-lane
-	// queue behind long books; the submit-time renewal below keeps the LEASE
-	// fresh across that wait, and the slack keeps the signed exp valid with
-	// it. The endpoint's own lease-freshness fence is untouched.
+	// #264 Fix 2: renewal starts at CLAIM, not at submit. The capability
+	// check, preflight and the submit POST itself all run against the
+	// original lease; under model-thrash warmup that window exceeded the
+	// lease before the runner ever pulled the source. One renewal loop now
+	// spans claim → submit; pollAndFinish starts its own for the poll phase.
+	submitRenewCtx, stopSubmitRenew := context.WithCancel(ctx)
+	defer stopSubmitRenew()
+	go d.renewLoop(submitRenewCtx, ref, fields, make(chan struct{}))
+	// #235/#264: mint the source URL exp with one extra lease window of
+	// slack beyond LeaseUntil (belt-and-braces for older endpoints that still
+	// enforce a wall-clock exp). Since #264 the endpoint trusts the renewed
+	// lease for freshness, so a single-lane queue wait longer than one lease
+	// window no longer kills the download.
 	req, err := buildRequest(claimed.InputSnapshot, SourceURLOptions{
 		BaseURL:    d.cfg.ProcessorSourceBaseURL,
 		Secret:     d.cfg.ProcessorSourceSecret,
@@ -445,12 +490,9 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 		return
 	}
 
-	// #235: renew the lease for the duration of the submit POST itself —
-	// a queued download at the runner must not age out the lease (and with
-	// the exp slack above, the URL) before the job even starts. Stopped as
-	// soon as the POST returns; pollAndFinish starts its own renewal loop.
-	submitRenewCtx, stopSubmitRenew := context.WithCancel(ctx)
-	go d.renewLoop(submitRenewCtx, ref, fields, make(chan struct{}))
+	// #235/#264: the claim-renewal loop above keeps the lease (and with the
+	// endpoint's trust-the-lease freshness, the source download) valid across
+	// the submit POST and any single-lane queueing at the runner.
 	_, serr := d.client.SubmitProcess(ctx, req)
 	stopSubmitRenew()
 	if serr != nil {

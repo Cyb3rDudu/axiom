@@ -1767,3 +1767,53 @@ func TestClaimBudgetLimitsConcurrentClaims(t *testing.T) {
 		}
 	}
 }
+
+// TestReclaimNeverInheritsStaleLease (#264 finding-B pin): a job re-claimed
+// after its lease expired must proceed on a FRESH lease — the claim update
+// mints lease_until = now()+duration unconditionally and must never COALESCE
+// the prior attempt's expired lease (or snapshot-frozen) values back in. The
+// production 404 storm showed ~10 s claim→404 deaths consistent with a stale
+// lease surviving re-claim; this pin goes red the moment the claim UPDATE
+// regresses to preserving lease_until.
+func TestReclaimNeverInheritsStaleLease(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	_, jobID := lr.seed(t, seedSpec{
+		sourceBaseURL: "http://localhost:64", libraryID: "users/0",
+		docKey: "RC1", attKey: "RC1", contentHash: h("sha256:rc"), preferred: true,
+	}, "pending", 3)
+
+	cj := lr.claim(t, defaultClaim("worker-a"))
+	if cj == nil || cj.JobID != jobID {
+		t.Fatalf("expected claim of %s, got %v", jobID, cj)
+	}
+	staleUntil := cj.LeaseUntil
+	staleToken := cj.LeaseToken
+
+	// Expire the lease on the row, then wait past the stale value on the wall
+	// clock so a re-claim that somehow COALESCEd the old lease_until would be
+	// provably dead (already in the past at claim time).
+	lr.expire(t, jobID)
+	time.Sleep(1100 * time.Millisecond)
+
+	before := time.Now()
+	cj2 := lr.claim(t, defaultClaim("worker-b"))
+	if cj2 == nil || cj2.JobID != jobID {
+		t.Fatalf("expired job not re-claimed: %v", cj2)
+	}
+	if !cj2.LeaseUntil.After(before) {
+		t.Fatalf("re-claim lease_until %v is not fresh (claim at %v) — stale lease inherited", cj2.LeaseUntil, before)
+	}
+	if !cj2.LeaseUntil.After(staleUntil) {
+		t.Fatalf("re-claim lease_until %v does not beat the expired %v", cj2.LeaseUntil, staleUntil)
+	}
+	if cj2.LeaseToken == staleToken {
+		t.Fatal("re-claim reused the prior attempt's lease token")
+	}
+	// The row itself carries the fresh lease (what the source endpoint's
+	// freshness fence reads), not just the returned struct.
+	r := lr.rowOf(t, jobID)
+	if r.leaseUntil == nil || !r.leaseUntil.After(before) {
+		t.Fatalf("row lease_until = %v, want fresh (after %v)", r.leaseUntil, before)
+	}
+}

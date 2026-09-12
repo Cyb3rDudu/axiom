@@ -98,19 +98,36 @@ func TestProcessorSourceWrongSignature404(t *testing.T) {
 	}
 }
 
-func TestProcessorSourceExpiredExp404(t *testing.T) {
-	fr := &fakeSourceRepo{src: repo.ProcessorSource{Status: "processing", LeaseUntil: time.Now().Add(time.Minute)}}
+// #264 exp-freshness pin: the signed exp is authenticity material, not the
+// freshness clock. A runner whose single-lane queue wait exceeded one lease
+// window arrives with a long-expired exp but a still-renewed lease — the
+// download must succeed. Pre-#264 (wall-clock exp rejection) this test is
+// red: that behavior is the 404 storm of 2026-09-11/12.
+func TestProcessorSourceStaleExpWithRenewedLeaseStreams(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "book.pdf")
+	content := []byte("%PDF-1.4 waited-past-exp")
+	if err := os.WriteFile(file, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// exp minted one lease window past the ORIGINAL claim, long since past;
+	// the lease in the DB is the renewal's fresh value.
+	fr := &fakeSourceRepo{src: repo.ProcessorSource{
+		LocalPath:   file,
+		ContentType: "application/pdf",
+		Status:      "processing",
+		LeaseUntil:  time.Now().Add(5 * time.Minute),
+	}}
 	s, secret := newSourceTestServer(t, "topsecret", fr)
 
-	exp := time.Now().Add(-time.Second).Unix()
+	exp := time.Now().Add(-10 * time.Minute).Unix()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, sourceURL(t, secret, "job-1", exp, ""), nil)
 	s.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (stale exp + valid sig + renewed lease must stream)", rec.Code)
 	}
-	if fr.asked != 0 {
-		t.Fatal("expired exp must fail BEFORE the DB lookup")
+	if got := rec.Body.Bytes(); string(got) != string(content) {
+		t.Fatalf("body = %q, want %q", got, content)
 	}
 }
 

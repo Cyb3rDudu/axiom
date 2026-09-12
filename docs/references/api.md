@@ -518,7 +518,8 @@ ASCII string `jobID|exp` with HMAC-SHA256 using
 The server verifies, in order:
 
 1. source delivery is configured;
-2. `exp` parses and has not expired;
+2. `exp` parses (an integer; authenticity material covered by the signature —
+   since #264 it is NOT a wall-clock freshness gate, the renewed lease is);
 3. the signature matches in constant time;
 4. the job and local source exist;
 5. the job is `claimed` or `processing`;
