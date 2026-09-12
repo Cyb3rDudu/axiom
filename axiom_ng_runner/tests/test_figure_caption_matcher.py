@@ -263,6 +263,7 @@ def test_caption_inventory_coverage_claim():
 
     script = Path(__file__).resolve().parent.parent / "scripts" / "caption_inventory.py"
     spec = importlib.util.spec_from_file_location("caption_inventory", script)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
