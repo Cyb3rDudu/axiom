@@ -417,9 +417,9 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 // #271 P2: `accepted` says whether this worker observed a 202 for the job. A
 // release at the attempt ceiling would mark an accepted, still-computing job
 // RETRY_EXHAUSTED — a fabricated retry terminal for work that did not fail.
-// Skip that release: the row keeps its true 'processing' state so a runner
-// that finishes within this process's lifetime is still acknowledged, and so
-// the row is never mislabeled a failed retry.
+// Skip that release: the row keeps its true 'processing' state and is never
+// mislabeled a failed retry. This process no longer polls or acknowledges
+// the job after ctx cancel — recovery belongs to the claim scan.
 //
 // Ceiling caveat (documented, not hidden): the claim predicate only claims
 // attempt < max_attempts, so an expired row at the ceiling is NOT resumable by
@@ -430,8 +430,8 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 func (d *Dispatcher) releaseLease(claimed *repo.ClaimedJob, accepted bool) {
 	if accepted && claimed.Attempt >= claimed.MaxAttempts {
 		d.logger.Printf(
-			"%v: shutdown after 202 at attempt ceiling — not releasing/terminalizing; "+
-				"lease left for idempotent takeover on expiry",
+			"%v: shutdown after 202 at attempt ceiling — not releasing; "+
+				"row stays 'processing', claim scan closes it LEASE_EXHAUSTED on expiry",
 			claimed.LeaseRef.JobID,
 		)
 		return

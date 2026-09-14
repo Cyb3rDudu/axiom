@@ -173,6 +173,13 @@ class JobStore:
                 if existing_same_jid.idempotency_key != job.idempotency_key:
                     raise JobIdCollision(job.job_id)
                 return existing_same_jid, True
+            # #271: a rekeyed entry keeps its original directory (the manifest's
+            # job_id is authoritative), so work_root/<old_id> is still owned by
+            # a tracked job. A NEW job reusing that id must be refused, not
+            # silently clobber the rekeyed entry's manifest on save.
+            for existing in self._jobs.values():
+                if existing is not job and existing.path == job.path:
+                    raise JobIdCollision(job.job_id)
             self._jobs[job.job_id] = job
             self._by_idempotency[job.idempotency_key] = job.job_id
             job.save()
@@ -237,6 +244,10 @@ class JobStore:
             # completed by a late-arriving compute result (cancellation wins).
             if job.status == "cancelled":
                 return
+            # #271: a compute thread that started before a dedup rekey built its
+            # result echo against the old id — the store's current id wins.
+            if isinstance(result, dict) and result.get("job_id") != job.job_id:
+                result["job_id"] = job.job_id
             job.result = result
             job.status = result.get("status", "completed")
             job.save()

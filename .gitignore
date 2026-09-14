@@ -31,3 +31,4 @@ sessions/
 # Deployment staging (#205)
 dist/
 axiom_ng_runner.egg-info/
+axiom_ng_runner/build/
