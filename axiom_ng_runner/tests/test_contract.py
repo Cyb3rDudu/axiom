@@ -853,3 +853,76 @@ def test_resubmit_before_ack_still_deduplicates(client, fixture_dirs):
     r2 = client.post("/v1/process", json=payload, timeout=10)
     assert r2.status_code == 202
     assert r2.json()["deduplicated"] is True
+
+
+# ---------------------------------------------------------------------------
+# 13. Dedup-echo contract: a re-submit under a NEW job_id must not burn
+#     (#271 P1, the job 822784a8 / orphan 4e72df81 trap)
+# ---------------------------------------------------------------------------
+
+
+def test_dedup_foreign_id_adopts_requested_job_id(client, fixture_dirs):
+    """Requeue of a job whose idempotency key exists in the runner store must
+    succeed, including the completed-but-unacked orphan case.
+
+    The dispatcher lost its DB row for the old id and re-submits the same
+    frozen input under a NEW id. Pre-fix the runner echoed the ORPHAN id, the
+    Go client rejected the 202 (id mismatch) and the job could never be
+    requeued. Post-fix the runner adopts the requested id and reports the old
+    one in `deduplicated_job_id` for observability.
+    """
+    src = fixture_dirs["pdf"]
+    key = "key-foreign-dedup"
+    orphan_payload = _process_payload(src, "job-orphan", key)
+    r1 = client.post("/v1/process", json=orphan_payload, timeout=10)
+    assert r1.status_code == 202, r1.text
+    assert r1.json()["job_id"] == "job-orphan"
+    _wait_completed(client, "job-orphan", timeout=30)
+    # Deliberately NOT acked: this is the completed-but-unacked orphan.
+
+    # Requeue the same frozen input under a different job_id.
+    requeue_payload = _process_payload(src, "job-requeue", key)
+    r2 = client.post("/v1/process", json=requeue_payload, timeout=10)
+    assert r2.status_code == 202, r2.text
+    body = r2.json()
+    assert body["deduplicated"] is True
+    # Contract: the runner must NOT echo the foreign id.
+    assert body["job_id"] == "job-requeue"
+    assert body.get("deduplicated_job_id") == "job-orphan"
+
+    # The requested id now resolves for status/result/ack; the old id does not.
+    st = client.get("/v1/jobs/job-requeue", timeout=10)
+    assert st.status_code == 200, st.text
+    assert st.json()["job_id"] == "job-requeue"
+    assert st.json()["status"] == "completed"
+
+    res = client.get("/v1/jobs/job-requeue/result", timeout=10)
+    assert res.status_code == 200, res.text
+    assert res.json()["job_id"] == "job-requeue", (
+        "the stored result must echo the requested job_id after adoption"
+    )
+
+    assert client.get("/v1/jobs/job-orphan", timeout=10).status_code == 404
+
+    ack = client.post(
+        "/v1/jobs/job-requeue/ack",
+        json={"persisted": True, "snapshot_id": "snap-foreign-dedup"},
+        timeout=10,
+    )
+    assert ack.status_code == 200, ack.text
+    assert ack.json()["job_id"] == "job-requeue"
+
+
+def test_dedup_same_id_omits_deduplicated_job_id(client, fixture_dirs):
+    """The ordinary same-id dedup path is unchanged and does not invent a
+    `deduplicated_job_id` (nothing was re-keyed)."""
+    src = fixture_dirs["pdf"]
+    payload = _process_payload(src, "job-same-id", "key-same-id")
+    r1 = client.post("/v1/process", json=payload, timeout=10)
+    assert r1.status_code == 202
+    r2 = client.post("/v1/process", json=payload, timeout=10)
+    assert r2.status_code == 202
+    body = r2.json()
+    assert body["deduplicated"] is True
+    assert body["job_id"] == "job-same-id"
+    assert body.get("deduplicated_job_id") is None

@@ -97,6 +97,11 @@ class ProcessAccept(BaseModel):
     job_id: str
     status: str
     deduplicated: bool = False
+    # #271 P1 dedup-echo contract: when a dedup matched a pre-existing store
+    # entry under a DIFFERENT id, the runner adopts the requested job_id and
+    # reports the previous id here (observability only). `job_id` is always the
+    # requested id, so the Go client's echo check holds.
+    deduplicated_job_id: str | None = None
 
 
 # --- Job status (GET /v1/jobs/{id}, contract §9) --------------------------

@@ -179,6 +179,36 @@ class JobStore:
             return job, False
 
     # --- mutations ------------------------------------------------------
+    def rekey(self, job: Job, new_id: str) -> None:
+        """Adopt a newly requested job_id for an existing store entry (#271 P1).
+
+        The idempotency key — not the job_id — identifies the work. A
+        dispatcher whose DB row for the old id is gone re-submits the same
+        frozen input under a NEW id; the runner must answer under that
+        requested id, or the Go client rejects the dedup 202 as an id mismatch
+        and burns attempts (the job 822784a8 trap).
+
+        The directory is deliberately NOT moved: a live compute thread holds
+        ``job.path`` and the on-disk name is an arbitrary key (the manifest's
+        ``job_id`` is authoritative on recovery). The stored request/result
+        echo is rewritten so status/result/ack all speak the requested id.
+        """
+        with self._lock:
+            if job.job_id == new_id:
+                return
+            occupant = self._jobs.get(new_id)
+            if occupant is not None and occupant is not job:
+                raise JobIdCollision(new_id)
+            self._jobs.pop(job.job_id, None)
+            job.job_id = new_id
+            if job.request.get("job_id") != new_id:
+                job.request["job_id"] = new_id
+            if isinstance(job.result, dict) and job.result.get("job_id") != new_id:
+                job.result["job_id"] = new_id
+            self._jobs[new_id] = job
+            self._by_idempotency[job.idempotency_key] = new_id
+            job.save()
+
     def put(self, job: Job) -> None:
         with self._lock:
             self._jobs[job.job_id] = job

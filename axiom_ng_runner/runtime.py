@@ -225,6 +225,20 @@ class Scheduler:
         with self._running_lock:
             return job_id in self._running
 
+    def rekey(self, old_id: str, new_id: str) -> None:
+        """Re-key a tracked runtime after a dedup id adoption (#271 P1).
+
+        Keeps ``_running`` consistent with the store when a job's identity is
+        rewritten mid-flight, so ``get``/``is_relevant`` and the completion pop
+        in ``_loop`` (which reads ``rt.job_id``) still resolve. A no-op when the
+        runtime is not tracked."""
+        with self._running_lock:
+            rt = self._running.pop(old_id, None)
+            if rt is None:
+                return
+            rt.job_id = new_id
+            self._running[new_id] = rt
+
     # --- admission (#243) -------------------------------------------------
     def submit(self, rt: JobRuntime) -> bool:
         """Admit a job for compute. Returns False (bounded queue full — i.e.

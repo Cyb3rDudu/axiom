@@ -659,6 +659,24 @@ def _admission_reject() -> HTTPException:
     )
 
 
+def _adopt_requested_job_id(job: Job, requested_id: str) -> str | None:
+    """Re-key a dedup match onto the requested job_id (#271 P1).
+
+    Returns the previous id when it differed, else None. See
+    ``JobStore.rekey`` for why the directory is not moved and why the runner
+    must answer under the requested id.
+    """
+    if job.job_id == requested_id:
+        return None
+    previous = job.job_id
+    _store_impl().rekey(job, requested_id)
+    _scheduler().rekey(previous, requested_id)
+    log.info(
+        "dedup: adopted requested job_id %s (was %s)", requested_id, previous
+    )
+    return previous
+
+
 @app.post("/v1/process", status_code=202)
 def process(body: ProcessRequest) -> dict[str, Any]:
     # Plain def (not async): source validation may download tens of MB
@@ -684,14 +702,16 @@ def process(body: ProcessRequest) -> dict[str, Any]:
                 detail=f"job {body.job_id} already exists with a different idempotency key",
             )
         job, _ = store.get_or_create(candidate)  # returns the existing job
+        previous = _adopt_requested_job_id(job, body.job_id)
         if job.acked:
             raise _artifacts_expired()
         _relaunch_if_needed(job)
         return ProcessAccept(
             contract_version=CONTRACT_VERSION,
-            job_id=job.job_id,
+            job_id=body.job_id,
             status=job.status,
             deduplicated=True,
+            deduplicated_job_id=previous,
         ).model_dump()
 
     # #243 admission gate: refuse a NEW job before paying for source
@@ -726,6 +746,7 @@ def process(body: ProcessRequest) -> dict[str, Any]:
         ) from exc
 
     if deduplicated:
+        previous = _adopt_requested_job_id(job, body.job_id)
         if job.acked:
             # Same seam as the short-circuit above: this POST lost the
             # find-by-key race but still deduped onto an ACKed job.
@@ -736,9 +757,10 @@ def process(body: ProcessRequest) -> dict[str, Any]:
         _relaunch_if_needed(job)
         return ProcessAccept(
             contract_version=CONTRACT_VERSION,
-            job_id=job.job_id,
+            job_id=body.job_id,
             status=job.status,
             deduplicated=True,
+            deduplicated_job_id=previous,
         ).model_dump()
 
     # #243: the authoritative admission point (closes the check/put race
