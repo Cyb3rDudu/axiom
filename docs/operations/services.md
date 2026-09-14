@@ -105,6 +105,24 @@ retries, a box hotter than its real capacity. Retired:
   `psql -c "SELECT DISTINCT claimed_by FROM ingest_jobs WHERE status IN ('claimed','processing') AND lease_until > now();"`
   — exactly as many claimers as live lanes of ONE agent.
 
+### Dispatcher hygiene: one dispatcher per DB (#271)
+
+Run **exactly one dispatcher per database**. The DB claim budget (#248) keeps a
+stray second agent from *over-claiming*, but two agents still share the same
+retry stream, both renew leases against the same rows and make the phases log
+ambiguous — the 2026-09-14 wave-1 incident ran the production dispatcher
+(:8011) alongside a stray three-day-old pre-#264 one-off (:9011) and could not
+cheaply attribute the 404 storm.
+
+- Before starting a one-off dispatcher (debug, migration, wave): confirm no
+  standing `com.axiom.rag-dispatch` is running against the same
+  `AXIOM_DATABASE_URL`.
+- Never point two launchd services at the same `AXIOM_DATABASE_URL`. If you
+  need more lanes, raise the runner's declared `max_concurrent_jobs` (the lane
+  budget derives) instead of starting a second process.
+- The safety net is the DB claim budget, not a substitute for this policy: it
+  bounds *claims*, not duplicated retries or attribution.
+
 ## PDF preflight — quality gate before chunking (#175)
 
 The ingest dispatcher can run a read-only quality gate on each claimed PDF
