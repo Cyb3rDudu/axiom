@@ -14,12 +14,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
+
 from axiom_ng_runner import CONTRACT_VERSION, PIPELINE_STAGES
 from axiom_ng_runner.app import app
 from axiom_ng_runner.config import Settings, settings
 from axiom_ng_runner.job_store import Job, JobStore
 from axiom_ng_runner.validation import compute_sha256
-from fastapi.testclient import TestClient
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -738,7 +739,7 @@ def test_normalize_epub_image_paths_strips_machine_paths():
     )
     out = _normalize_epub_image_paths(md)
     # Keine Maschinenpfade, keine Zufallssuffixe — in keiner Form.
-    assert "/tmp/" not in out
+    assert "/tmp/" not in out  # noqa: S108 — substring assertion, not temp-file use
     assert "epub_media" not in out
     # Beide Formen tragen den stabilen Basename…
     assert 'src="532180_1_En_1_Fig1_HTML.png"' in out

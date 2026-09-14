@@ -97,8 +97,8 @@ type ProcessAccepted struct {
 	Deduplicated    bool   `json:"deduplicated"`
 	// DeduplicatedJobID (#271) is the pre-existing runner-store id a dedup
 	// matched under a different requested id. `job_id` is always the requested
-	// id; this field is observability (what the runner knew the work as before
-	// adopting the request).
+	// id (the runner adopts it); this field is observability — the dispatcher
+	// logs it, and it lets an operator see which runner entry was reused.
 	DeduplicatedJobID string `json:"deduplicated_job_id,omitempty"`
 }
 
@@ -338,18 +338,7 @@ func (c *Client) SubmitProcess(ctx context.Context, req *ProcessRequest) (*Proce
 		return nil, fmt.Errorf("processor /v1/process: unsupported contract_version %q", acc.ContractVersion)
 	}
 	if acc.JobID != req.JobID {
-		// #271 P1 dedup-echo contract: a dedup may resolve to a runner-side
-		// entry whose canonical id the runner re-keyed to the requested id. The
-		// runner normally echoes the requested id (job_id == req.JobID). If it
-		// instead reports a foreign id together with an explicit mapping
-		// (`deduplicated_job_id == req.JobID`), accept and normalize the id to
-		// the requested one. Anything else stays a rejection: the dispatcher
-		// fences on req.JobID and would 404 polling a foreign id.
-		if acc.Deduplicated && acc.DeduplicatedJobID == req.JobID {
-			acc.JobID = req.JobID
-		} else {
-			return nil, fmt.Errorf("processor /v1/process: acceptance echoes job_id %q, want %q", acc.JobID, req.JobID)
-		}
+		return nil, fmt.Errorf("processor /v1/process: acceptance echoes job_id %q, want %q", acc.JobID, req.JobID)
 	}
 	if !validJobStatus(acc.Status) {
 		return nil, fmt.Errorf("processor /v1/process: unknown acceptance status %q", acc.Status)

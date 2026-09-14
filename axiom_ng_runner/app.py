@@ -665,11 +665,18 @@ def _adopt_requested_job_id(job: Job, requested_id: str) -> str | None:
     Returns the previous id when it differed, else None. See
     ``JobStore.rekey`` for why the directory is not moved and why the runner
     must answer under the requested id.
+
+    A concurrent POST that took the requested id with a different key is the
+    same collision ``get_or_create`` already refuses; surface it as a 409
+    rather than an uncaught 500.
     """
     if job.job_id == requested_id:
         return None
     previous = job.job_id
-    _store_impl().rekey(job, requested_id)
+    try:
+        _store_impl().rekey(job, requested_id)
+    except JobIdCollision as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     _scheduler().rekey(previous, requested_id)
     log.info(
         "dedup: adopted requested job_id %s (was %s)", requested_id, previous
@@ -702,9 +709,9 @@ def process(body: ProcessRequest) -> dict[str, Any]:
                 detail=f"job {body.job_id} already exists with a different idempotency key",
             )
         job, _ = store.get_or_create(candidate)  # returns the existing job
-        previous = _adopt_requested_job_id(job, body.job_id)
         if job.acked:
             raise _artifacts_expired()
+        previous = _adopt_requested_job_id(job, body.job_id)
         _relaunch_if_needed(job)
         return ProcessAccept(
             contract_version=CONTRACT_VERSION,
@@ -746,11 +753,11 @@ def process(body: ProcessRequest) -> dict[str, Any]:
         ) from exc
 
     if deduplicated:
-        previous = _adopt_requested_job_id(job, body.job_id)
         if job.acked:
             # Same seam as the short-circuit above: this POST lost the
             # find-by-key race but still deduped onto an ACKed job.
             raise _artifacts_expired()
+        previous = _adopt_requested_job_id(job, body.job_id)
         # Dedup (W1 liveness): if the matched job recovered to `accepted`
         # after a restart and has no live compute thread, relaunch it so a
         # restart does not permanently strand accepted work (invariant #10).

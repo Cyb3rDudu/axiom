@@ -416,12 +416,22 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 //
 // #271 P2: `accepted` says whether this worker observed a 202 for the job. A
 // release at the attempt ceiling would mark an accepted, still-computing job
-// RETRY_EXHAUSTED; instead the lease is left to expire and recovery re-submits
-// idempotently (the runner dedups and reports its real status).
+// RETRY_EXHAUSTED — a fabricated retry terminal for work that did not fail.
+// Skip that release: the row keeps its true 'processing' state so a runner
+// that finishes within this process's lifetime is still acknowledged, and so
+// the row is never mislabeled a failed retry.
+//
+// Ceiling caveat (documented, not hidden): the claim predicate only claims
+// attempt < max_attempts, so an expired row at the ceiling is NOT resumable by
+// the normal takeover path; once the lease expires the claim scan's
+// terminalizeStale closes it as LEASE_EXHAUSTED. A true resume-at-ceiling pass
+// is a separate follow-up; this guard removes the wrongful immediate
+// RETRY_EXHAUSTED without pretending the ceiling retry policy is different.
 func (d *Dispatcher) releaseLease(claimed *repo.ClaimedJob, accepted bool) {
 	if accepted && claimed.Attempt >= claimed.MaxAttempts {
 		d.logger.Printf(
-			"%v: shutdown after 202 at attempt ceiling — leaving lease to expire for idempotent recovery (not terminalizing)",
+			"%v: shutdown after 202 at attempt ceiling — not releasing/terminalizing; "+
+				"lease left for idempotent takeover on expiry",
 			claimed.LeaseRef.JobID,
 		)
 		return
@@ -514,13 +524,20 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) (ac
 	// #235/#264: the claim-renewal loop above keeps the lease (and with the
 	// endpoint's trust-the-lease freshness, the source download) valid across
 	// the submit POST and any single-lane queueing at the runner.
-	_, serr := d.client.SubmitProcess(ctx, req)
+	acc, serr := d.client.SubmitProcess(ctx, req)
 	stopSubmitRenew()
 	if serr != nil {
 		d.handleSubmitFailure(ctx, claimed, serr)
 		return
 	}
 	accepted = true
+	if acc != nil && acc.DeduplicatedJobID != "" {
+		// #271 P1: the runner reused a pre-existing store entry under a
+		// different id and adopted the requested id. Observable for operators
+		// (the dispatcher itself fences on ref.JobID, which is the requested id).
+		d.logger.Printf("%v: processor dedup adopted job_id=%s (deduplicated_job_id=%s)",
+			ref.JobID, acc.JobID, acc.DeduplicatedJobID)
+	}
 	ph.submit = time.Now()
 
 	// Fenced claimed -> processing after acceptance.
