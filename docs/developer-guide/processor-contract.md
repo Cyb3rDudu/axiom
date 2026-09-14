@@ -63,7 +63,11 @@ acknowledgement.
   must not prevent axiom restart recovery.
 - **Idempotency:** the `idempotency_key` identifies equivalent processor work;
   the same accepted request returns the existing processor job instead of
-  duplicate work. Replay after an acked job answers `409/ARTIFACTS_EXPIRED`
+  duplicate work. The 202 acceptance MUST echo the **requested** `job_id` (the
+  processor adopts it as the job's identity, so status/result/ack all resolve
+  under it); when a dedup matched a pre-existing entry under a different id,
+  the additive `deduplicated_job_id` field reports the previous id for
+  observability. Replay after an acked job answers `409/ARTIFACTS_EXPIRED`
   (terminal, non-retryable); recompute needs a fresh idempotency key
   (`force_rebuild`).
 - **Provenance:** chunk provenance (ref, index, text, locator, section
