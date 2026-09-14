@@ -232,3 +232,49 @@ func TestPreflightParseErrorSurfacesAsStatusError(t *testing.T) {
 		t.Fatalf("want *StatusError 500, got %T (%v)", err, err)
 	}
 }
+
+// #271 P1: the runner echoes the REQUESTED id on dedup and reports the
+// pre-existing store entry in deduplicated_job_id. The client must accept it
+// and surface the mapping (the pre-fix runner echoed the foreign id and the
+// client burned the submit).
+func TestSubmitProcessAcceptsDedupWithRequestedId(t *testing.T) {
+	c := clientFor(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mustJSON(w, 202, ProcessAccepted{
+			ContractVersion:   "1.0",
+			JobID:             "job-requeue",
+			Status:            "completed",
+			Deduplicated:      true,
+			DeduplicatedJobID: "job-orphan",
+		})
+	}))
+	acc, err := c.SubmitProcess(context.Background(), &ProcessRequest{ContractVersion: "1.0", JobID: "job-requeue", IdempotencyKey: "k"})
+	if err != nil {
+		t.Fatalf("dedup 202 echoing the requested id must be accepted, got %v", err)
+	}
+	if acc.JobID != "job-requeue" || !acc.Deduplicated || acc.DeduplicatedJobID != "job-orphan" {
+		t.Fatalf("unexpected acceptance: %+v", acc)
+	}
+}
+
+// A runner that reports a foreign canonical id but explicitly maps the
+// requested job (deduplicated_job_id == requested) is accepted and normalized
+// to the requested id. Without the mapping, the echo check stays strict (see
+// TestSubmitProcessRejectsWrongJobIDEcho).
+func TestSubmitProcessAcceptsDedupExplicitMapping(t *testing.T) {
+	c := clientFor(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mustJSON(w, 202, ProcessAccepted{
+			ContractVersion:   "1.0",
+			JobID:             "job-orphan",
+			Status:            "completed",
+			Deduplicated:      true,
+			DeduplicatedJobID: "job-requeue",
+		})
+	}))
+	acc, err := c.SubmitProcess(context.Background(), &ProcessRequest{ContractVersion: "1.0", JobID: "job-requeue", IdempotencyKey: "k"})
+	if err != nil {
+		t.Fatalf("explicit dedup mapping must be accepted, got %v", err)
+	}
+	if acc.JobID != "job-requeue" {
+		t.Fatalf("client must normalize to the requested id, got %q", acc.JobID)
+	}
+}

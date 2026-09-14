@@ -209,6 +209,9 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	} else {
 		d.logger.Printf("outbox drainer disabled (AXIOM_OPENSEARCH_URL empty); outbox rows stay pending")
 	}
+	// #271 P0 hardening: make host/DB clock divergence observable before it
+	// becomes an outage. Observer-only, own goroutine.
+	go d.skewWatch(ctx)
 	// #214: capability negotiation MUST NOT be fatal while the processor is
 	// simply not up yet — a rolling restart starts the Dispatcher before the
 	// runner finishes booting, and a one-shot fail left the process alive
@@ -391,13 +394,17 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 			}
 			continue
 		}
-		d.driveJob(ctx, claimed)
+		accepted := d.driveJob(ctx, claimed)
 		// On graceful shutdown the driveJob may have aborted mid-flight (ctx
 		// cancelled) leaving the lease held; return the job to pending so another
 		// dispatcher or this one on restart can reclaim it. Releasing is safe even
-		// if the job already reached a terminal state (the fence no-ops).
+		// if the job already reached a terminal state (the fence no-ops). But when
+		// the runner has ALREADY accepted the work (202 observed) and the job is
+		// at its attempt ceiling, releasing would terminalize it RETRY_EXHAUSTED
+		// while the runner keeps computing (#271 P2) — leave the lease for
+		// idempotent recovery instead.
 		if ctx.Err() != nil {
-			d.releaseLease(claimed)
+			d.releaseLease(claimed, accepted)
 		}
 	}
 }
@@ -406,7 +413,19 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 // attempt ceiling) so in-flight work is not stranded by a shutdown. It builds a
 // fresh bounded context because the shutdown ctx is already cancelled and would
 // abort the DB update.
-func (d *Dispatcher) releaseLease(claimed *repo.ClaimedJob) {
+//
+// #271 P2: `accepted` says whether this worker observed a 202 for the job. A
+// release at the attempt ceiling would mark an accepted, still-computing job
+// RETRY_EXHAUSTED; instead the lease is left to expire and recovery re-submits
+// idempotently (the runner dedups and reports its real status).
+func (d *Dispatcher) releaseLease(claimed *repo.ClaimedJob, accepted bool) {
+	if accepted && claimed.Attempt >= claimed.MaxAttempts {
+		d.logger.Printf(
+			"%v: shutdown after 202 at attempt ceiling — leaving lease to expire for idempotent recovery (not terminalizing)",
+			claimed.LeaseRef.JobID,
+		)
+		return
+	}
 	rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := d.rep.ReleaseOrExpireLease(rctx, claimed.LeaseRef); err != nil && !isLost(err) {
@@ -439,7 +458,9 @@ func (d *Dispatcher) runnerReady(ctx context.Context) bool {
 
 // driveJob takes a claimed job through the full lifecycle. On ErrLostLease it
 // stops immediately and never acknowledges, leaving recovery to the claim scan.
-func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
+// The returned `accepted` is true once the processor has answered 202 for this
+// job — the shutdown path uses it to avoid terminalizing in-flight work (#271 P2).
+func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) (accepted bool) {
 	ref := claimed.LeaseRef
 	tokenPrefix := ref.LeaseToken
 	if len(tokenPrefix) > 8 {
@@ -499,6 +520,7 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 		d.handleSubmitFailure(ctx, claimed, serr)
 		return
 	}
+	accepted = true
 	ph.submit = time.Now()
 
 	// Fenced claimed -> processing after acceptance.
@@ -524,6 +546,7 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) {
 
 	// Poll the processor while renewing the lease.
 	d.pollAndFinish(ctx, claimed, ph)
+	return
 }
 
 // trimCapabilityReason returns a non-empty reason if the negotiated capability

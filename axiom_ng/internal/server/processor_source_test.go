@@ -5,18 +5,22 @@ package server
 // handler + real sourceurl HMAC.
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/sourceurl"
+	"github.com/jackc/pgx/v5"
 )
 
 type fakeSourceRepo struct {
@@ -42,6 +46,21 @@ func newSourceTestServer(t *testing.T, secret string, fr *fakeSourceRepo) (*Serv
 	return s, secret
 }
 
+// newLoggingSourceServer is the reason-logging variant: the Server's logger is
+// captured so a test can assert WHICH internal 404 branch fired.
+func newLoggingSourceServer(t *testing.T, secret string, fr *fakeSourceRepo) (*Server, *bytes.Buffer) {
+	t.Helper()
+	var buf bytes.Buffer
+	s := New(":0", log.New(&buf, "", 0))
+	if secret != "" {
+		s.SetProcessorSourceSecret(secret)
+	}
+	if fr != nil {
+		s.SetProcessorSourceRepo(fr)
+	}
+	return s, &buf
+}
+
 func sourceURL(t *testing.T, secret, jobID string, exp int64, sigOverride string) string {
 	t.Helper()
 	sig := sourceurl.Sign(secret, jobID, exp)
@@ -62,7 +81,7 @@ func TestProcessorSourceValidTokenStreams(t *testing.T) {
 		LocalPath:   file,
 		ContentType: "application/pdf",
 		Status:      "processing",
-		LeaseUntil:  time.Now().Add(5 * time.Minute),
+		LeaseFresh:  true,
 	}}
 	s, secret := newSourceTestServer(t, "topsecret", fr)
 
@@ -83,7 +102,7 @@ func TestProcessorSourceValidTokenStreams(t *testing.T) {
 }
 
 func TestProcessorSourceWrongSignature404(t *testing.T) {
-	fr := &fakeSourceRepo{src: repo.ProcessorSource{Status: "processing", LeaseUntil: time.Now().Add(time.Minute)}}
+	fr := &fakeSourceRepo{src: repo.ProcessorSource{Status: "processing", LeaseFresh: true}}
 	s, secret := newSourceTestServer(t, "topsecret", fr)
 	exp := time.Now().Add(time.Minute).Unix()
 
@@ -98,12 +117,14 @@ func TestProcessorSourceWrongSignature404(t *testing.T) {
 	}
 }
 
-// #264 exp-freshness pin: the signed exp is authenticity material, not the
-// freshness clock. A runner whose single-lane queue wait exceeded one lease
-// window arrives with a long-expired exp but a still-renewed lease — the
-// download must succeed. Pre-#264 (wall-clock exp rejection) this test is
-// red: that behavior is the 404 storm of 2026-09-11/12.
-func TestProcessorSourceStaleExpWithRenewedLeaseStreams(t *testing.T) {
+// #271 P0 clock-domain / #264 exp-freshness pin: the signed exp is
+// authenticity material, not the freshness clock. This test represents the
+// incident shape where a HOST-side signal (the exp minted against the host
+// clock) says "expired" while the DB lease is fresh — the download must
+// stream. The handler has no host clock to compare: freshness is the
+// DB-evaluated LeaseFresh boolean. If a regression reintroduces
+// `time.Now().After(leaseUntil)`, this test is red.
+func TestProcessorSourceStaleHostSignalWithFreshDBLeaseStreams(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "book.pdf")
 	content := []byte("%PDF-1.4 waited-past-exp")
 	if err := os.WriteFile(file, content, 0o644); err != nil {
@@ -115,7 +136,7 @@ func TestProcessorSourceStaleExpWithRenewedLeaseStreams(t *testing.T) {
 		LocalPath:   file,
 		ContentType: "application/pdf",
 		Status:      "processing",
-		LeaseUntil:  time.Now().Add(5 * time.Minute),
+		LeaseFresh:  true, // DB clock: still leased
 	}}
 	s, secret := newSourceTestServer(t, "topsecret", fr)
 
@@ -124,10 +145,25 @@ func TestProcessorSourceStaleExpWithRenewedLeaseStreams(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, sourceURL(t, secret, "job-1", exp, ""), nil)
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (stale exp + valid sig + renewed lease must stream)", rec.Code)
+		t.Fatalf("status = %d, want 200 (stale exp + valid sig + fresh DB lease must stream)", rec.Code)
 	}
 	if got := rec.Body.Bytes(); string(got) != string(content) {
 		t.Fatalf("body = %q, want %q", got, content)
+	}
+}
+
+// TestProcessorSourceHandlerHasNoHostClock is the structural mutation guard
+// for #271 P0: the handler must not consult the host wall clock for freshness.
+// Removing the DB-domain predicate and reintroducing time.Now() in the handler
+// makes this red.
+func TestProcessorSourceHandlerHasNoHostClock(t *testing.T) {
+	src, err := os.ReadFile("processor_source_api.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), "time.Now(") {
+		t.Fatal("processor_source_api.go reads the host clock (time.Now); " +
+			"#271 P0 requires freshness exclusively from the DB (`lease_until > now()`)")
 	}
 }
 
@@ -141,7 +177,7 @@ func TestProcessorSourceCompletedJob404(t *testing.T) {
 	fr := &fakeSourceRepo{src: repo.ProcessorSource{
 		LocalPath:  file,
 		Status:     "completed",
-		LeaseUntil: time.Now().Add(time.Minute),
+		LeaseFresh: true,
 	}}
 	s, secret := newSourceTestServer(t, "topsecret", fr)
 	exp := time.Now().Add(time.Minute).Unix()
@@ -155,7 +191,8 @@ func TestProcessorSourceCompletedJob404(t *testing.T) {
 }
 
 func TestProcessorSourceExpiredLease404(t *testing.T) {
-	// Real file + claimable status: only the LEASE check can 404 here.
+	// Real file + claimable status: only the LEASE (DB-domain) check can 404
+	// here. Removing the `if !src.LeaseFresh` guard makes this test red.
 	file := filepath.Join(t.TempDir(), "book.pdf")
 	if err := os.WriteFile(file, []byte("%PDF-1.4"), 0o644); err != nil {
 		t.Fatal(err)
@@ -163,7 +200,7 @@ func TestProcessorSourceExpiredLease404(t *testing.T) {
 	fr := &fakeSourceRepo{src: repo.ProcessorSource{
 		LocalPath:  file,
 		Status:     "processing",
-		LeaseUntil: time.Now().Add(-time.Minute),
+		LeaseFresh: false, // DB clock: lease has expired
 	}}
 	s, secret := newSourceTestServer(t, "topsecret", fr)
 	exp := time.Now().Add(time.Minute).Unix()
@@ -172,7 +209,7 @@ func TestProcessorSourceExpiredLease404(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, sourceURL(t, secret, "job-1", exp, ""), nil)
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 (lease expired)", rec.Code)
+		t.Fatalf("status = %d, want 404 (DB lease expired)", rec.Code)
 	}
 }
 
@@ -182,7 +219,7 @@ func TestProcessorSourceDisabledWithoutSecret(t *testing.T) {
 	fr := &fakeSourceRepo{src: repo.ProcessorSource{
 		LocalPath:  filepath.Join(t.TempDir(), "book.pdf"), // real-ish; never reached
 		Status:     "processing",
-		LeaseUntil: time.Now().Add(time.Minute),
+		LeaseFresh: true,
 	}}
 	s, _ := newSourceTestServer(t, "", fr)
 	exp := time.Now().Add(time.Minute).Unix()
@@ -197,5 +234,87 @@ func TestProcessorSourceDisabledWithoutSecret(t *testing.T) {
 	}
 	if fr.asked != 0 {
 		t.Fatal("disabled endpoint must never touch the repo")
+	}
+}
+
+// --- #271 P1: internal rejection-reason logging --------------------------
+//
+// The wire response stays a uniform 404; only the internal log names the
+// branch. Each test asserts the exact reason token, so removing a branch's
+// sourceReject call (or folding branches back into one) turns the test red.
+
+func TestProcessorSourceRejectReasonPerBranch(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "book.pdf")
+	if err := os.WriteFile(file, []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+
+	cases := []struct {
+		name    string
+		secret  string
+		repo    *fakeSourceRepo
+		jobID   string
+		exp     int64
+		sig     string
+		wantLog string
+	}{
+		{
+			name: "disabled", secret: "", repo: nil, jobID: "job-1",
+			exp: time.Now().Add(time.Minute).Unix(), wantLog: "reason=disabled_no_secret",
+		},
+		{
+			name: "bad_exp", secret: "topsecret", repo: &fakeSourceRepo{}, jobID: "job-1",
+			wantLog: "reason=bad_exp",
+		}, {
+			name: "bad_signature", secret: "topsecret", repo: &fakeSourceRepo{}, jobID: "job-1",
+			exp: time.Now().Add(time.Minute).Unix(), sig: "deadbeef", wantLog: "reason=bad_signature",
+		},
+		{
+			name: "unknown_job", secret: "topsecret", repo: &fakeSourceRepo{err: pgx.ErrNoRows}, jobID: "job-1",
+			exp: time.Now().Add(time.Minute).Unix(), wantLog: "reason=unknown_job",
+		},
+		{
+			name: "lookup_error", secret: "topsecret", repo: &fakeSourceRepo{err: errors.New("db down")}, jobID: "job-1",
+			exp: time.Now().Add(time.Minute).Unix(), wantLog: "reason=lookup_error",
+		},
+		{
+			name: "empty_path", secret: "topsecret", repo: &fakeSourceRepo{src: repo.ProcessorSource{Status: "processing", LeaseFresh: true}}, jobID: "job-1",
+			exp: time.Now().Add(time.Minute).Unix(), wantLog: "reason=empty_path",
+		},
+		{
+			name: "status", secret: "topsecret", repo: &fakeSourceRepo{src: repo.ProcessorSource{LocalPath: file, Status: "completed", LeaseFresh: true}}, jobID: "job-1",
+			exp: time.Now().Add(time.Minute).Unix(), wantLog: "reason=status_completed",
+		},
+		{
+			name: "lease_expired", secret: "topsecret", repo: &fakeSourceRepo{src: repo.ProcessorSource{LocalPath: file, Status: "processing", LeaseFresh: false}}, jobID: "job-1",
+			exp: time.Now().Add(time.Minute).Unix(), wantLog: "reason=lease_expired",
+		},
+		{
+			name: "open_failed", secret: "topsecret", repo: &fakeSourceRepo{src: repo.ProcessorSource{LocalPath: filepath.Join(dir, "missing.pdf"), Status: "processing", LeaseFresh: true}}, jobID: "job-1",
+			exp: time.Now().Add(time.Minute).Unix(), wantLog: "reason=open_failed",
+		},
+		{
+			name: "not_regular", secret: "topsecret", repo: &fakeSourceRepo{src: repo.ProcessorSource{LocalPath: dir, Status: "processing", LeaseFresh: true}}, jobID: "job-1",
+			exp: time.Now().Add(time.Minute).Unix(), wantLog: "reason=not_regular",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, buf := newLoggingSourceServer(t, tc.secret, tc.repo)
+			rec := httptest.NewRecorder()
+			rawURL := sourceURL(t, tc.secret, tc.jobID, tc.exp, tc.sig)
+			if tc.name == "bad_exp" {
+				rawURL = "/api/processor/source/job-1?exp=notanumber&sig=x"
+			}
+			req := httptest.NewRequest(http.MethodGet, rawURL, nil)
+			s.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("wire status = %d, want 404 (uniform, no oracle)", rec.Code)
+			}
+			if !strings.Contains(buf.String(), tc.wantLog) {
+				t.Fatalf("log = %q, want substring %q", buf.String(), tc.wantLog)
+			}
+		})
 	}
 }

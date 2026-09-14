@@ -946,6 +946,44 @@ func TestGracefulShutdownReleasesLease(t *testing.T) {
 	}
 }
 
+// TestGracefulShutdownAfterAcceptDoesNotTerminalize (#271 P2): a shutdown that
+// lands AFTER the runner answered 202 must not release + terminalize the job
+// while the runner keeps computing. Seed max_attempts=1 so the release path
+// WOULD mark RETRY_EXHAUSTED; post-fix the lease is left to expire for
+// idempotent recovery.
+//
+// Mutation check: reverting releaseLease to always release (or dropping the
+// `accepted` argument) makes this test red — the job becomes failed.
+func TestGracefulShutdownAfterAcceptDoesNotTerminalize(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "S1", 1) // attempt ceiling reached on first claim
+	fp := newFakeProcessor(t)
+	fp.statuses = []string{"running"} // runner accepts, then keeps working
+
+	d := newDispatcher(t, h, fp, Config{Concurrency: 1, LeaseDuration: 5 * time.Minute, RenewalInterval: 100 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { d.Run(ctx); close(done) }()
+
+	h.waitForStatus(t, jobID, "processing", 8*time.Second)
+	cancel() // graceful shutdown mid-processing, after the 202
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("dispatcher did not exit after cancel")
+	}
+
+	if got := h.jobStatus(t, jobID); got == "failed" {
+		code, msg := h.jobError(t, jobID)
+		t.Fatalf("accepted job was terminalized on shutdown (status=failed code=%s msg=%s); "+
+			"the lease must be left for idempotent recovery", code, msg)
+	}
+	if code, _ := h.jobError(t, jobID); code == "RETRY_EXHAUSTED" {
+		t.Fatal("accepted job must not be marked RETRY_EXHAUSTED on shutdown")
+	}
+}
+
 // TestLostLeaseIsNonVacuous asserts the fake's status script actually offers a
 // completed state, so TestLostLeasePreventsPersistenceAndAck is not vacuous.
 func TestLostLeaseIsNonVacuous(t *testing.T) {
