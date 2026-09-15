@@ -47,11 +47,18 @@ def census(root: Path) -> int:
         with tempfile.TemporaryDirectory(prefix="census_") as td:
             td = Path(td)
             out_md, out_img = td / "md.md", td / "img"
-            proc = subprocess.run(
-                [sys.executable, "-m", "axiom_ng_runner.compute_core.epub_worker",
-                 str(epub), str(out_md), str(out_img)],
-                capture_output=True, text=True, check=False, cwd=str(REPO_ROOT),
-            )
+            try:
+                proc = subprocess.run(
+                    [sys.executable, "-m", "axiom_ng_runner.compute_core.epub_worker",
+                     str(epub), str(out_md), str(out_img)],
+                    capture_output=True, text=True, check=False, cwd=str(REPO_ROOT),
+                )
+            except OSError as err:
+                # missing interpreter/artifact-level failures surface as a
+                # clean gate line, not a traceback (review NIT)
+                failed += 1
+                failures.append((epub.name, f"spawn failed: {err}"))
+                continue
             if proc.returncode != 0:
                 failed += 1
                 failures.append((epub.name, proc.stderr.strip().splitlines()[-1][:80]))
