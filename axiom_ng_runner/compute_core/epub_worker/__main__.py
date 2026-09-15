@@ -224,27 +224,87 @@ _FIGCAPTION_RE = re.compile(
 _IMG_TAG_RE = re.compile(rf"<img\b{_ATTRS}>", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
 
-# Code protection (review #274 round 2, P7): pandoc's GFM writer emits
+# Code protection (review #274 rounds 2–4): pandoc's GFM writer emits
 # fenced blocks for ``` sources and 4-SPACE-INDENTED blocks for
-# <pre><code> samples (verified against pandoc 3.7 output — it never
-# indents prose; list continuations sit at 2 spaces, the content column
-# of "- "). Both inlining and ref rewriting must SKIP code verbatim:
-# a literal `<figure><img src=…>` sample would otherwise gain a phantom
-# image marker whose ref has no artifact — a terminal
-# CHUNK_IMAGE_REF_UNRESOLVED persist failure.
-# ponytail: a list item behind marker "10. " aligns its continuation at
-# 4 spaces and would read as code — corpus census found none; revisit
-# only if a corpus book ships figures inside 10th+ list items.
+# <pre><code> samples. BUT pandoc also indents LIST content at 4 spaces
+# — the content column of a nested "  - " item (round-4 corpus finding:
+# 19 figures in 5 books silently unlinked). Indent alone cannot tell
+# code from list content; a small list-context stack can: an indented
+# line is CODE only outside any open list item (marker content columns
+# are tracked; blank lines persist the context — loose lists).
+# ponytail: pandoc-shape heuristic, not full CommonMark list parsing;
+# code blocks nested INSIDE list items would be classified as content.
+# Corpus census: no ```/~~~ and no code-in-list anywhere — revisit only
+# if a corpus book ships one.
 _FENCE_SPLIT_RE = re.compile(
-    r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)[ \t]*$"
+    # tempered content: the scan cannot cross another fence-open LINE
+    # - that bounds unterminated opens to the next candidate instead
+    # of rescanning to EOF per open (measured 15.9 s at 20k
+    # unterminated fence lines before the guard; review #274 r4).
+    r"(?m)^(?P<fence>`{3,}|~{3,})[^\n]*\n"
+    r"(?:(?!^(?:`{3,}|~{3,}))[\s\S])*?"
+    r"^(?P=fence)[ \t]*$"
 )
-_INDENT_RE = re.compile(r"(?m)^(?: {4}|\t)[^\n]*")
+_LIST_MARKER_RE = re.compile(r"(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)")
+
+
+def _indent_cols(line: str) -> int:
+    """Visual column of the first non-whitespace char (tab = 4)."""
+    n = 0
+    for ch in line:
+        if ch == " ":
+            n += 1
+        elif ch == "\t":
+            n += 4 - (n % 4)
+        else:
+            break
+    return n
+
+
+def _indented_code_spans(markdown: str) -> list[tuple[int, int]]:
+    """Character ranges of 4-space-indented lines that are NOT list
+    content (list marker content columns are tracked; blank lines keep
+    the context open — pandoc's loose lists)."""
+    spans: list[tuple[int, int]] = []
+    stack: list[int] = []          # open list-item content columns
+    code_start: int | None = None
+    pos = 0
+    for line in markdown.splitlines(keepends=True):
+        start = pos
+        pos += len(line)
+        body = line.rstrip("\n")
+        if not body.strip():
+            continue               # blank: list context persists
+        indent = _indent_cols(body)
+        rest = body.lstrip(" \t")
+        marker = _LIST_MARKER_RE.match(rest)
+        if marker and (stack or indent < 4):
+            # list item line (top-level <4 or nested inside open list)
+            while stack and indent < stack[-1]:
+                stack.pop()
+            stack.append(indent + len(rest[: marker.end()]))
+            if code_start is not None:
+                spans.append((code_start, start))
+                code_start = None
+            continue
+        while stack and indent < stack[-1]:
+            stack.pop()
+        if stack:
+            if code_start is not None:
+                spans.append((code_start, start))
+                code_start = None
+        elif indent >= 4:
+            if code_start is None:
+                code_start = start
+    if code_start is not None:
+        spans.append((code_start, len(markdown)))
+    return spans
 
 
 def _protected_spans(markdown: str) -> list[tuple[int, int]]:
-    """Character ranges that are code (fenced or 4-space indented)."""
+    """Character ranges that are code (fenced or indented)."""
     spans = [m.span() for m in _FENCE_SPLIT_RE.finditer(markdown)]
-    spans += [m.span() for m in _INDENT_RE.finditer(markdown)]
+    spans += _indented_code_spans(markdown)
     spans.sort()
     merged: list[tuple[int, int]] = []
     for s, e in spans:
@@ -411,28 +471,67 @@ def _save_extracted_images(
 # path emits no titles, a title left in the ref would miss the runner's
 # basename lookup (round 2 minor). Space-carrying paths resolve again
 # (non-greedy stops at ')', not at whitespace).
-_MD_IMG_RE = re.compile(r'(!\[[^\]]*\]\()(.+?)(?:\s+"[^"]*")?(\))')
+_MD_IMG_RE = re.compile(r"!\[[^\]]*\]\(")   # image-ref open; path via scanner
+_MD_TITLE_RE = re.compile(r'\s+"[^"]*"$')
 _SRC_ATTR_RE = re.compile(
     rf'(<img\b{_ATTRS}?\bsrc=")([^"]+)(")', re.IGNORECASE
 )
 
 
+def _md_rewrite(md: str, resolve) -> str:
+    """Rewrite markdown image refs by candidate scanning.
+
+    For each ``![alt](`` opener the path is tried up to EVERY following
+    ')' — the first candidate that resolves in the ref index wins and
+    the remainder (a swallowed ')' plus any quoted title) is dropped.
+    Handles the three real shapes one static regex cannot: link-wrapped
+    badges (``[![a](p)](url)`` — candidate 'p' resolves first), titles
+    (``![a](p "t")`` — the title tail never reaches the lookup), and
+    bracket-carrying paths (``fig(1).png`` — the short candidate fails,
+    the full one resolves). Unresolvable refs stay verbatim (first
+    candidate; the runner's gates handle them downstream).
+    """
+    out: list[str] = []
+    pos = 0
+    for m in _MD_IMG_RE.finditer(md):
+        start = m.end()
+        scan_end = min(len(md), start + 4096)  # ponytail: sane path cap
+        j = start
+        hit = None
+        while j < scan_end:
+            k = md.find(")", j)
+            if k < 0 or k >= scan_end:
+                break
+            cand = md[start:k]
+            path = _MD_TITLE_RE.sub("", cand)
+            saved = resolve(path) if path else None
+            if saved:
+                hit = (k, saved)
+                break
+            j = k + 1
+        if hit is not None:
+            k, saved = hit
+            out.append(md[pos:m.end()])
+            out.append(saved)
+            pos = k  # leave the ')' in place
+    out.append(md[pos:])
+    return "".join(out)
+
+
 def _rewrite_image_refs(markdown: str, ref_index: Dict[str, str]) -> str:
     """Point every image reference at its saved ``image_<N>.<ext>`` name.
 
-    Covers the markdown form (link-wrapped, spaced paths; titles are
-    stripped) and (for anything `_inline_html_images` left as HTML) the
-    ``src`` attribute. Code blocks are skipped verbatim. Unresolvable
-    refs are left untouched — the runner's http/ref gates handle them
-    downstream.
+    Covers the markdown form (link-wrapped, titled, bracket-carrying and
+    spaced paths; titles are stripped) and (for anything
+    `_inline_html_images` left as HTML) the ``src`` attribute. Code
+    blocks are skipped verbatim. Unresolvable refs are left untouched —
+    the runner's http/ref gates handle them downstream.
     """
-    def _lookup(ref: str) -> str:
-        return ref_index.get(ref) or ref_index.get(Path(ref).name) or ref
+    def _lookup(ref: str) -> str | None:
+        return ref_index.get(ref) or ref_index.get(Path(ref).name) or None
 
     def _md_pass(md: str) -> str:
-        return _MD_IMG_RE.sub(
-            lambda m: m.group(1) + _lookup(m.group(2)) + m.group(3), md
-        )
+        return _md_rewrite(md, _lookup)
 
     def _src_pass(md: str) -> str:
         # Defense-in-depth only: in the normal flow no local-src <img>
@@ -440,7 +539,8 @@ def _rewrite_image_refs(markdown: str, ref_index: Dict[str, str]) -> str:
         # leftover remote refs (which the runner's link-ref gate drops
         # downstream anyway).
         return _SRC_ATTR_RE.sub(
-            lambda m: m.group(1) + _lookup(m.group(2)) + m.group(3), md
+            lambda m: m.group(1) + (_lookup(m.group(2)) or m.group(2)) + m.group(3),
+            md,
         )
 
     return _outside_code_blocks(markdown, lambda md: _src_pass(_md_pass(md)))

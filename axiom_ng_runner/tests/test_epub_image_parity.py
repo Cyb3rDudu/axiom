@@ -229,6 +229,26 @@ class TestInlineHtmlImages:
         list_md = "- Punkt\n  <figure><img src=\"../images/fig1.png\"/></figure>"
         assert "![" in _inline_html_images(list_md)
 
+    def test_bracket_carrying_path_rewritten(self):
+        """Round-4 pin: paths with ')' inside (fig(1).png) resolve via
+        candidate scanning — the first-candidate form stops too early."""
+        out = _rewrite_image_refs(
+            "![A](/tmp/epub_media_x/fig(1).png)",
+            {"/tmp/epub_media_x/fig(1).png": "image_0.png"},
+        )
+        assert out == "![A](image_0.png)"
+
+    def test_unbalanced_fences_stay_fast(self):
+        """Perf pin (round 4): 20k unterminated fence-open lines must not
+        rescan to EOF per candidate (measured 15.9 s before the tempered
+        fence pattern)."""
+        import time
+
+        md = "```html\n" * 20_000 + "x" * 1000
+        t0 = time.monotonic()
+        _inline_html_images(md)
+        assert time.monotonic() - t0 < 10.0
+
     def test_unbalanced_figure_opens_stay_fast(self):
         """Perf pin: many unmatched <figure> opens + one closing must not
         go quadratic (measured 35 s at 20k opens before the content
@@ -425,6 +445,43 @@ class TestEpubWorkerEndToEnd:
         assert refd[0]["metadata"]["figure_captions"] == {
             "image-0000": "Abb. 1: Umsatzentwicklung im Zeitverlauf"
         }
+
+    def test_nested_list_figure_inlined_top_code_protected(self, tmp_path):
+        """ROUND-4 MAJOR pin: pandoc indents figures inside NESTED list
+        items at 4 spaces — the same indent as top-level <pre><code>
+        samples. The list-context tracker must keep the figure processed
+        (5 corpus books lost 19 images to the blanket indent guard)
+        while the top-level code sample stays verbatim."""
+        body = (
+            "<h1>Kapitel 1</h1>"
+            "<ul><li>Aeussere Punkt"
+            "<ul><li><p>Innerer Punkt mit Figur:</p>"
+            '<figure id="Fig22" class="Figure">'
+            '<img src="../images/fig1.png" alt="Nested"/>'
+            "<figcaption>Abb. 22</figcaption></figure></li></ul></li></ul>"
+            "<p>Top-Level Code-Beispiel:</p>"
+            '<pre><code>&lt;img src="../images/fig2.png"/&gt;</code></pre>'
+        )
+        epub = build_epub(
+            tmp_path / "book.epub",
+            {"text/c1.xhtml": body},
+            {"images/fig1.png": _PNG, "images/fig2.png": _PNG},
+        )
+        out_md = tmp_path / "md" / "markdown.md"
+        res = _run_worker(epub, out_md, tmp_path / "images")
+        md = out_md.read_text(encoding="utf-8")
+
+        # nested-list figure: inlined despite its 4-space indent
+        assert "![Nested](image_0.png)" in md
+        assert "Abb. 22" in md
+        # top-level code sample: verbatim, no phantom ref
+        assert '    <img src="../images/fig2.png"/>' in md
+        assert md.count("![") == 1
+
+        chunks, artifacts = _linkage(md, tmp_path / "images", res["image_mapping"])
+        assert [a["ref"] for a in artifacts] == ["image-0000"]
+        chunk_refs = [r for c in chunks for r in c["metadata"]["image_refs"]]
+        assert chunk_refs == ["image-0000"]
 
     def test_round3_forms_code_lists_badges_titles(self, tmp_path):
         """Real-pandoc E2E over the round-2/3 corpus forms in ONE book:
