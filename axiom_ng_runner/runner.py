@@ -1752,8 +1752,10 @@ def _real_pipeline(
         detail = (klass + " | ") if klass else ""
         raise RuntimeError(f"{convert} failed: {detail}{err_text[-500:]}")
 
-    # Parse the pdf_worker JSON result for the image_mapping
-    # ({original_marker_filename → saved_filename}).
+    # Parse the worker JSON result for the image_mapping. Per-format
+    # semantics: PDF maps {original Marker filename → saved filename};
+    # EPUB (#274) maps {saved name → saved name} — the worker pre-rewrites
+    # every markdown ref to the saved name.
     image_mapping: dict[str, str] = {}
     for line in reversed((out_text or "").splitlines()):
         line = line.strip()

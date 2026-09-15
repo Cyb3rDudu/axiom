@@ -84,6 +84,11 @@ jobs:
       # (no test module imports them at collection time; live-GPU ITs skip).
       - name: install
         run: pip install -r requirements.txt
+      # #274: pandoc for the EPUB-worker E2E + parity-gate tests (the
+      # epub_worker shells out to the pandoc binary; without it those
+      # tests skip and the DoD gate never runs in CI).
+      - name: install pandoc
+        run: sudo apt-get update && sudo apt-get install -y pandoc
       # Scope: the surface the project has been linting (tests + compute
       # core). The heavy-compute modules carry pre-existing findings outside
       # the enforced set — not this branch's business.

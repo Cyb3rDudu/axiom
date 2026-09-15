@@ -102,3 +102,8 @@ class (pre-fix generations). After the wave no such row may exist.
   report the format the retrieval contract actually serves.
 - EPUB citations stay APA 7 sections only (#245) — page fields never
   return to the client contract, regardless of image parity.
+
+## See also
+
+- [Rebuild Wave Runbook](rebuild-wave-runbook.md) — the firing sequence
+  when the reprocessing wave is scheduled.
