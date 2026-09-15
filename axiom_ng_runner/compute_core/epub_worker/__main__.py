@@ -204,33 +204,68 @@ def _inject_page_markers(markdown: str) -> str:
 # means: an ``![](...)`` marker at the image's text position, the figcaption
 # kept as a plain text line (PDF captions ride as text too — the #268
 # matcher pairs them positionally).
+# Attribute character class: anything except a bare > or quote marks —
+# quoted attribute values may CONTAIN '>' (Databricks Fig15:
+# alt="… path: All catalogs > unitygo > …"), which the old [^>]* form
+# truncated at, silently dropping the image (review #274 round 2).
+_ATTRS = r'(?:[^>"\']|"[^"]*"|\'[^\']*\')*'
 _FIGURE_BLOCK_RE = re.compile(
-    r"<figure\b[^>]*>(.*?)</figure>", re.IGNORECASE | re.DOTALL
+    # Content guarded against a nested <figure> open: lazy content without
+    # the guard rescans to EOF per unmatched start on malformed input
+    # (measured 35 s at 20k opens — review #274 perf finding); the guard
+    # bounds every scan to the next open/close pair. Nested figures do
+    # not match (corpus: none; acceptable ceiling).
+    rf"<figure\b{_ATTRS}>((?:(?!<figure\b)[\s\S])*?)</figure>",
+    re.IGNORECASE,
 )
 _FIGCAPTION_RE = re.compile(
-    r"<figcaption\b[^>]*>(.*?)</figcaption>", re.IGNORECASE | re.DOTALL
+    rf"<figcaption\b{_ATTRS}>(.*?)</figcaption>", re.IGNORECASE | re.DOTALL
 )
-_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_IMG_TAG_RE = re.compile(rf"<img\b{_ATTRS}>", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
 
-# Fenced code blocks (pandoc's GFM writer emits fences, never indented
-# code). Both HTML inlining and ref rewriting must SKIP them: a literal
-# `<figure><img src=…>` code sample would otherwise gain a phantom image
-# marker whose ref has no artifact — a terminal CHUNK_IMAGE_REF_UNRESOLVED
-# persist failure introduced by this very layer (review #274 P7).
-_FENCE_SPLIT_RE = re.compile(r"(?m)^(?:```|~~~)[^\n]*\n(?:.*?\n)?(?:```|~~~)[ \t]*$")
+# Code protection (review #274 round 2, P7): pandoc's GFM writer emits
+# fenced blocks for ``` sources and 4-SPACE-INDENTED blocks for
+# <pre><code> samples (verified against pandoc 3.7 output — it never
+# indents prose; list continuations sit at 2 spaces, the content column
+# of "- "). Both inlining and ref rewriting must SKIP code verbatim:
+# a literal `<figure><img src=…>` sample would otherwise gain a phantom
+# image marker whose ref has no artifact — a terminal
+# CHUNK_IMAGE_REF_UNRESOLVED persist failure.
+# ponytail: a list item behind marker "10. " aligns its continuation at
+# 4 spaces and would read as code — corpus census found none; revisit
+# only if a corpus book ships figures inside 10th+ list items.
+_FENCE_SPLIT_RE = re.compile(
+    r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)[ \t]*$"
+)
+_INDENT_RE = re.compile(r"(?m)^(?: {4}|\t)[^\n]*")
+
+
+def _protected_spans(markdown: str) -> list[tuple[int, int]]:
+    """Character ranges that are code (fenced or 4-space indented)."""
+    spans = [m.span() for m in _FENCE_SPLIT_RE.finditer(markdown)]
+    spans += [m.span() for m in _INDENT_RE.finditer(markdown)]
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for s, e in spans:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return merged
 
 
 def _outside_code_blocks(markdown: str, fn) -> str:
-    """Apply ``fn`` to every segment that is not a fenced code block."""
-    if "```" not in markdown and "~~~" not in markdown:
+    """Apply ``fn`` to every segment that is not a code block."""
+    spans = _protected_spans(markdown)
+    if not spans:
         return fn(markdown)
     out: list[str] = []
     pos = 0
-    for m in _FENCE_SPLIT_RE.finditer(markdown):
-        out.append(fn(markdown[pos:m.start()]))
-        out.append(m.group(0))  # code block: verbatim
-        pos = m.end()
+    for s, e in spans:
+        out.append(fn(markdown[pos:s]))
+        out.append(markdown[s:e])  # code: verbatim
+        pos = e
     out.append(fn(markdown[pos:]))
     return "".join(out)
 
@@ -255,16 +290,26 @@ def _img_tag_to_markdown(tag: str) -> str | None:
     src = _img_attr(tag, "src")
     if not src or src.startswith(("http://", "https://", "data:")):
         return None
-    alt = _img_attr(tag, "alt").replace("]", "")
+    import html as _html
+
+    src = _html.unescape(src)
+    alt = _html.unescape(_img_attr(tag, "alt")).replace("]", "")
     return f"![{alt}]({src})"
 
 
 def _strip_to_text(html_fragment: str) -> str:
-    """HTML fragment → plain text line(s): tags out, entities decoded."""
+    """HTML fragment → plain text line(s): tags out, entities decoded.
+
+    Tag-stripping runs twice — BEFORE and AFTER unescaping: an escaped
+    ``&lt;img src="…"&gt;`` inside a figure description would otherwise
+    materialize as a real tag and the later bare-<img> pass would turn it
+    into a phantom marker (review #274 round 2 finding).
+    """
     import html as _html
 
     text = _TAG_RE.sub("", html_fragment)
     text = _html.unescape(text)
+    text = _TAG_RE.sub("", text)
     return "\n".join(
         line.strip() for line in text.splitlines() if line.strip()
     )
@@ -358,30 +403,35 @@ def _save_extracted_images(
     return mapping, ref_index
 
 
-# Title-aware: pandoc emits `![alt](path "title")` for <img title> — the
-# path is the ref, the optional quoted title must survive untouched
-# (a title swallowed into the ref would miss the lookup and die at the
-# runner's persist gate; review #274 P2).
-_MD_IMG_RE = re.compile(r'(!\[[^\]]*\]\()(\S+)(\s+"[^"]*")?(\))')
-_SRC_ATTR_RE = re.compile(r'(<img\b[^>]*?\bsrc=")([^"]+)(")', re.IGNORECASE)
+# Markdown image ref, non-greedy to the FIRST ')': pandoc's link-wrapped
+# license badges are ``[![alt](path)](url)`` — a greedy/\S+ path swallowed
+# the ``)](url`` suffix, leaving the temp path in place and terminally
+# failing the persist gate on 10 corpus books (review #274 round 2
+# blocker). The optional quoted TITLE is consumed and DROPPED: the PDF
+# path emits no titles, a title left in the ref would miss the runner's
+# basename lookup (round 2 minor). Space-carrying paths resolve again
+# (non-greedy stops at ')', not at whitespace).
+_MD_IMG_RE = re.compile(r'(!\[[^\]]*\]\()(.+?)(?:\s+"[^"]*")?(\))')
+_SRC_ATTR_RE = re.compile(
+    rf'(<img\b{_ATTRS}?\bsrc=")([^"]+)(")', re.IGNORECASE
+)
 
 
 def _rewrite_image_refs(markdown: str, ref_index: Dict[str, str]) -> str:
     """Point every image reference at its saved ``image_<N>.<ext>`` name.
 
-    Covers the markdown form (with or without a title) and (for anything
-    `_inline_html_images` left as HTML) the ``src`` attribute. Fenced code
-    blocks are skipped verbatim. Unresolvable refs are left untouched —
-    the runner's http/ref gates handle them downstream.
+    Covers the markdown form (link-wrapped, spaced paths; titles are
+    stripped) and (for anything `_inline_html_images` left as HTML) the
+    ``src`` attribute. Code blocks are skipped verbatim. Unresolvable
+    refs are left untouched — the runner's http/ref gates handle them
+    downstream.
     """
     def _lookup(ref: str) -> str:
         return ref_index.get(ref) or ref_index.get(Path(ref).name) or ref
 
     def _md_pass(md: str) -> str:
         return _MD_IMG_RE.sub(
-            lambda m: (m.group(1) + _lookup(m.group(2))
-                       + (m.group(3) or "") + m.group(4)),
-            md,
+            lambda m: m.group(1) + _lookup(m.group(2)) + m.group(3), md
         )
 
     def _src_pass(md: str) -> str:
