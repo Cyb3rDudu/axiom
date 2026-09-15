@@ -108,6 +108,21 @@ class TestStoreRekey:
         assert result["job_id"] == "job-b"
         assert _manifest(store, job)["result"]["job_id"] == "job-b"
 
+    def test_set_partial_rewrites_stale_job_id_echo(self, tmp_path):
+        # #273: same rewrite as set_result — a mid-compute rekey followed by
+        # the #225 early-commit must not persist the old id in the partial
+        # snapshot. Removing the rewrite in set_partial turns this red.
+        store = JobStore(tmp_path / "work")
+        job = _store_job(store, "job-b", "key-1")
+        store.get_or_create(job)
+        store.set_status(job, "running", stage="relationships")
+
+        store.set_partial(job, {"status": "completed", "job_id": "job-a", "pages": 3})
+
+        assert job.result["job_id"] == "job-b"
+        assert _manifest(store, job)["result"]["job_id"] == "job-b"
+        assert job.partial is True
+
 
 class TestSchedulerRekey:
     def test_rekey_moves_the_tracked_runtime(self, tmp_path):

@@ -48,6 +48,21 @@ func (s *Server) SetProcessorSourceSecret(secret string) { s.sourceSecret = secr
 // SetProcessorSourceRepo wires the job lookup (nil keeps the route 404ing).
 func (s *Server) SetProcessorSourceRepo(r processorSourceRepo) { s.sourceRepo = r }
 
+// SetProcessorSourceStatFn overrides the file-stat call (test seam for the
+// stat_failed 404 branch, #273; nil = the real (*os.File).Stat).
+func (s *Server) SetProcessorSourceStatFn(f func(*os.File) (os.FileInfo, error)) {
+	s.sourceStatFn = f
+}
+
+// statFile runs the (injectable) stat used for the regular-file check and
+// ServeContent timestamps.
+func (s *Server) statFile(f *os.File) (os.FileInfo, error) {
+	if s.sourceStatFn != nil {
+		return s.sourceStatFn(f)
+	}
+	return f.Stat()
+}
+
 // sourceReject logs the internal 404 branch while keeping the wire response a
 // uniform 404 (no existence oracle). #271 P1: the pre-fix endpoint masked
 // nine distinct causes as one identical 404 — the clock-domain outage was
@@ -113,7 +128,7 @@ func (s *Server) handleProcessorSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	fi, err := f.Stat()
+	fi, err := s.statFile(f)
 	if err != nil {
 		s.sourceReject(w, r, jobID, "stat_failed")
 		return

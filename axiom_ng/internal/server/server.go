@@ -3,11 +3,13 @@
 package server
 
 import (
+	"log"
+	"net/http"
+	"os"
+
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/version"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
-	"log"
-	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -36,8 +38,10 @@ type Server struct {
 	consolidateSvc ConsolidateService
 	// sourceSecret enables /api/processor/source when non-empty (HMAC,
 	// shared with the dispatcher). sourceRepo is the job lookup for it.
+	// sourceStatFn overrides (*os.File).Stat for tests (#273): nil = real stat.
 	sourceSecret string
 	sourceRepo   processorSourceRepo
+	sourceStatFn func(*os.File) (os.FileInfo, error)
 	// #184 fix-service surface (nil = endpoints stay unwired/404).
 	// #168 (B2) live WebSocket surface (nil = /api/ws unwired/404).
 	// #169 (B3) runner live view: the state deriver feeding the runners WS

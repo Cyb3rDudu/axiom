@@ -257,6 +257,7 @@ func TestProcessorSourceRejectReasonPerBranch(t *testing.T) {
 		jobID   string
 		exp     int64
 		sig     string
+		statErr error
 		wantLog string
 	}{
 		{
@@ -295,6 +296,14 @@ func TestProcessorSourceRejectReasonPerBranch(t *testing.T) {
 			exp: time.Now().Add(time.Minute).Unix(), wantLog: "reason=open_failed",
 		},
 		{
+			// #273: the last unpinned branch — stat failure after a successful
+			// open (race: file deleted/replaced between open and stat). Reached
+			// via the injectable stat seam; removing the branch's sourceReject
+			// call turns this red.
+			name: "stat_failed", secret: "topsecret", statErr: errors.New("stat raced"), repo: &fakeSourceRepo{src: repo.ProcessorSource{LocalPath: file, Status: "processing", LeaseFresh: true}}, jobID: "job-1",
+			exp: time.Now().Add(time.Minute).Unix(), wantLog: "reason=stat_failed",
+		},
+		{
 			name: "not_regular", secret: "topsecret", repo: &fakeSourceRepo{src: repo.ProcessorSource{LocalPath: dir, Status: "processing", LeaseFresh: true}}, jobID: "job-1",
 			exp: time.Now().Add(time.Minute).Unix(), wantLog: "reason=not_regular",
 		},
@@ -302,6 +311,9 @@ func TestProcessorSourceRejectReasonPerBranch(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s, buf := newLoggingSourceServer(t, tc.secret, tc.repo)
+			if tc.statErr != nil {
+				s.SetProcessorSourceStatFn(func(*os.File) (os.FileInfo, error) { return nil, tc.statErr })
+			}
 			rec := httptest.NewRecorder()
 			rawURL := sourceURL(t, tc.secret, tc.jobID, tc.exp, tc.sig)
 			if tc.name == "bad_exp" {

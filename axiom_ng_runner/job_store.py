@@ -260,6 +260,10 @@ class JobStore:
         with self._lock:
             if job.status == "cancelled":
                 return
+            # #273: same stale-id rewrite as set_result — a mid-compute rekey
+            # must not persist the old id echo in the partial snapshot.
+            if isinstance(result, dict) and result.get("job_id") != job.job_id:
+                result["job_id"] = job.job_id
             job.result = result
             job.partial = True
             job.save()
