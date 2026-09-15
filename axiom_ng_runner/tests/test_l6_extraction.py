@@ -39,26 +39,13 @@ def _patch_gliner(monkeypatch, spans, model=None):
     mod = types.ModuleType("gliner")
     mod.__dict__.update({"GLiNER": _G})
     monkeypatch.setitem(sys.modules, "gliner", mod)
-    # entity_extractor's import pulls the package __init__ chain →
-    # numpy. Stub it with the constants the code reads.
-    import re as _re
-
+    # Stub the compute_core package so _get_gliner's optional device-detector
+    # import never loads the heavy compute chain.
     pkg = types.ModuleType("axiom_ng_runner")
     core = types.ModuleType("axiom_ng_runner.compute_core")
-    ee = types.ModuleType("axiom_ng_runner.compute_core.entity_extractor")
-    ee.__dict__.update({
-        "GLINER_LABELS": ["person", "organization", "concept"],
-        "_GLINER_TYPE_MAP": {
-            "person": "PERSON", "organization": "ORGANIZATION",
-            "concept": "CONCEPT",
-        },
-        "_NOISE_RE": _re.compile(r"\bet\s+al\.?$", _re.IGNORECASE),
-        "_GENERIC_WORDS": frozenset({"firm", "government"}),
-    })
     pkg.__dict__.update({"core_rag": core})
     monkeypatch.setitem(sys.modules, "axiom_ng_runner", pkg)
     monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core", core)
-    monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core.entity_extractor", ee)
     return fake
 
 

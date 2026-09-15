@@ -44,7 +44,7 @@ per component, not as one "runner":
 | E. Dense query embeddings | `embed_queries_dense` — same model, `max_length=512` | warm singleton | 1024-dim FP32 |
 | F. Sparse embeddings (lexical) | `embed_queries_with_sparse` / `embed_chunks` — BGE-M3 `lexical_weights` | — | `{token_id: float}` (contract §10 dual string/number form) |
 | G. Reranking (cross-encoder) | `compute_core/reranker.py::QueryReranker` — `BAAI/bge-reranker-v2-m3`, `compute_score(normalize=True)`, FP16 on CUDA / FP32 on CPU+MPS | `DEVICE_RERANKER` auto | sigmoid-normalized 0..1 sorted scores |
-| H. Entity extraction | `compute_core/entity_extractor.py` — GLiNER (`gliner_multi-v2.1`), zero-shot; spaCy fallback | `DEVICE_GLINER` **default `cpu`** (L8 lesson) | entities with mentions/confidence |
+| H. Entity extraction | `runner.py::_extract_real_entities` — GLiNER (`gliner_multi-v2.1`), zero-shot | `DEVICE_GLINER` **default `cpu`** (L8 lesson) | entities with mentions/confidence |
 | I. Relation extraction | `compute_core/relation_extractor.py` — mREBEL (`Babelscape/mrebel-large`, Seq2Seq via transformers `AutoModelForSeq2SeqLM`) | `DEVICE_MREBEL` auto | entity relationships + evidence refs |
 
 Note E=F are the *same* BGE-M3 encode pass with `return_sparse` toggled (symmetric
@@ -98,6 +98,6 @@ precondition before ANY of these model-comparison numbers are meaningful.
 ## 4. File map (verified exist on the study branch)
 
 - Contract + cross-check: `axiom_ng/docs/PROCESSOR_CONTRACT.md`, `axiom_ng_runner/app.py`
-- Real models: `axiom_ng_runner/compute_core/{embedder,reranker,entity_extractor,relation_extractor,pdf_processing}.py`, `devices.py`
+- Real models: `axiom_ng_runner/compute_core/{embedder,reranker,relation_extractor,pdf_processing}.py`, `devices.py`; entity extraction lives in `axiom_ng_runner/runner.py`
 - Canonical R7 benchmark + gold: `axiom_ng/docs/RETRIEVAL_BENCHMARK.md`, `axiom_ng/cmd/retrieval-bench/{main.go,gold_suite.json}`
 - Deploy/CUDA path: `axiom_ng/docs/EXTERNAL_RUNNER_DEPLOYMENT.md`

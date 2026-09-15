@@ -956,6 +956,35 @@ def _ref_id(r: Any) -> str:
 
 # ── L6: real entity/relationship extraction (GLiNER + mREBEL) ────────────
 
+# GLiNER entity-extraction config (labels, type map, noise/generic filters).
+# Relocated from compute_core/entity_extractor.py, whose EntityExtractor class
+# was dead since the vendored-stack move; _extract_real_entities below is the
+# only consumer.
+GLINER_LABELS = [
+    "person",
+    "organization",
+    "location",
+    "concept",
+    "book or journal",
+    "research method",
+]
+
+_GLINER_TYPE_MAP = {
+    "person": "PERSON",
+    "organization": "ORGANIZATION",
+    "location": "LOCATION",
+    "concept": "CONCEPT",
+    "book or journal": "WORK",
+    "research method": "METHOD",
+}
+
+_NOISE_RE = re.compile(r"\bet\s+al\.?$", re.IGNORECASE)
+
+_GENERIC_WORDS = frozenset({
+    "firm", "firms", "workers", "government", "governments",
+    "countries", "borrowers", "savers", "lenders", "households",
+})
+
 _GLINER_MODEL: Any = None
 
 
@@ -991,21 +1020,14 @@ def _extract_real_entities(
 
     chunk_items: [(chunk_ref, text)]. Entities are grouped by
     (whitespace-normalized text.lower(), type); every occurrence becomes a
-    mention with chunk-local char offsets. Reuses the established
-    labels/type-map/filters from compute_core.entity_extractor.
+    mention with chunk-local char offsets. Labels/type-map/filters come from
+    the module-level GLINER config above.
 
     #236: on_progress (done, total) is reported per chunk — pure reporting,
     no effect on extraction. GLiNER predicts per chunk anyway, so the
     chunk granularity is the natural batch; the app-level callback
     throttles the store writes exactly like relationships.
     """
-    from axiom_ng_runner.compute_core.entity_extractor import (
-        _GENERIC_WORDS,
-        _GLINER_TYPE_MAP,
-        _NOISE_RE,
-        GLINER_LABELS,
-    )
-
     model = _get_gliner()
     entities: list[dict[str, Any]] = []
     seen: dict[tuple[str, str], int] = {}
