@@ -129,6 +129,10 @@ _LECTURE_BODY = (
     "<p>Zweiter Absatz nach der Abbildung mit weiterem Fliesstext.</p>"
 )
 
+# ponytail: SVG-wrapped figures (<svg><image …>) are not inlined —
+# corpus census found 1 inline SVG (a titlepage cover) across 175 books;
+# revisit only if a corpus book actually ships SVG body figures.
+
 
 # ── worker units ─────────────────────────────────────────────────────────
 
@@ -165,6 +169,73 @@ class TestInlineHtmlImages:
             "<figcaption>Abb. 9: nur online</figcaption></figure>"
         )
         assert "Abb. 9: nur online" in out
+        assert "<figure" not in out and "<img" not in out
+
+    def test_empty_remote_figure_collapses(self):
+        """Remote img, no caption: nothing usable — the wrapper must not
+        leak raw <figure></figure> into chunk text (review #274 NIT)."""
+        out = _inline_html_images(
+            '<figure><img src="https://x.example/a.png" alt="r"/></figure>'
+        )
+        assert "<figure" not in out and "<img" not in out and out.strip() == ""
+
+    def test_figure_residual_text_preserved(self):
+        """BLOCKER pin (review #274, Sonko exemplar): text inside a figure
+        that is neither <img> nor <figcaption> — Springer-style
+        <div class="TextObject"><p>…</p></div> image descriptions — must
+        survive as chunk text, not be discarded by the figure replace."""
+        out = _inline_html_images(
+            '<figure><img src="media/images/f1.png" alt="Venn"/>'
+            '<div class="TextObject"><p>A chart presents a Venn diagram.'
+            "</p></div></figure>"
+        )
+        assert "![Venn](media/images/f1.png)" in out
+        assert "A chart presents a Venn diagram." in out
+        assert "<figure" not in out and "<div" not in out
+
+    def test_caption_entities_decoded(self):
+        """NIT pin: &amp; and friends decode to real characters."""
+        out = _inline_html_images(
+            '<figure><img src="f.png"/>'
+            "<figcaption>R&amp;D Ausgaben</figcaption></figure>"
+        )
+        assert "R&D Ausgaben" in out and "&amp;" not in out
+
+    def test_fenced_code_blocks_untouched(self):
+        """MAJOR pin (review #274 P7): a literal HTML sample inside a
+        fenced code block must NOT gain a phantom image marker — the
+        marker's ref has no artifact and would terminally fail the
+        snapshot persist gate."""
+        md = (
+            "Text davor.\n\n```html\n"
+            '<figure><img src="../images/fig1.png" alt="sample"/></figure>\n'
+            "```\n\nText danach."
+        )
+        out = _inline_html_images(md)
+        assert out == md
+        # and the ref rewrite skips fences too
+        ref_index = {"../images/fig1.png": "image_0.png"}
+        assert _rewrite_image_refs(out, ref_index) == md
+        # sanity: the SAME html outside a fence IS inlined
+        plain = '<figure><img src="../images/fig1.png" alt="sample"/></figure>'
+        assert "![sample](../images/fig1.png)" in _inline_html_images(plain)
+
+    def test_data_src_attribute_not_matched(self):
+        """706ffe boundary pin: data-src/data-alt are different attributes
+        — no marker, no src confusion."""
+        out = _inline_html_images('<img data-src="nope.png" data-alt="x"/>')
+        assert out == ""
+
+    def test_markdown_title_ref_path_only(self):
+        """MINOR pin (review #274 P2): pandoc emits ![alt](path "title")
+        for <img title> — the rewrite must touch the path, keep the title.
+        A title swallowed into the ref would miss the lookup and die at
+        the persist gate."""
+        out = _rewrite_image_refs(
+            '![alt](media/images/fig1.png "Titeltext")',
+            {"media/images/fig1.png": "image_0.png"},
+        )
+        assert out == '![alt](image_0.png "Titeltext")'
         assert "<figure" not in out and "<img" not in out
 
     def test_figure_without_caption_and_multi_image_figure(self):
@@ -281,7 +352,13 @@ class TestEpubWorkerEndToEnd:
         }
 
 
-# ── the parity gate (#274 DoD) ───────────────────────────────────────────
+# ── the parity gate (#274 DoD) ───────────────────────────────────────
+
+# The PDF leg is a PROXY, not the pdf_worker path: marker-style markdown in
+# the post-normalization shape the runner seam sees (pdf_worker's own
+# marker/output mapping is pinned by the existing marker suites; running
+# real Marker/GPU here is out of scope for a dev gate). The gate proves the
+# SHARED seam produces equivalent linkage for equivalent input semantics.────
 
 # The PDF leg: marker-style markdown — the post-normalization shape
 # (marker output after the pdf_worker mapping, as the runner seam sees
@@ -335,6 +412,38 @@ def test_parity_gate_pdf_vs_epub_linkage(tmp_path):
 
     assert _shape(epub_chunks) == _shape(pdf_chunks)
     assert epub_arts == pdf_arts
+
+
+# ── machine-caption composition (#230 × EPUB refs — the DoD evidence) ────
+
+
+def test_machine_captions_reach_epub_chunks(tmp_path, monkeypatch):
+    """MINOR pin (review #274): the #230 caption stage composes with the
+    NEW EPUB image refs — chunk image_captions and the artifact's
+    machine_caption attribute appear when an EPUB chunk references an
+    extracted image. Reuses the #230 fake-captioner harness."""
+    pytest.importorskip("torch")
+    from test_image_captions import FakeCaptioner, _run
+
+    epub = build_epub(
+        tmp_path / "book.epub",
+        {"text/c1.xhtml": _PUBLISHER_BODY},
+        {"images/fig1.png": _PNG},
+    )
+    out_md = tmp_path / "md" / "markdown.md"
+    res = _run_worker(epub, out_md, tmp_path / "images")
+    chunks, artifacts = _linkage(
+        out_md.read_text(encoding="utf-8"),
+        tmp_path / "images", res["image_mapping"],
+    )
+
+    ran, sc = _run(artifacts, chunks, tmp_path, FakeCaptioner())
+    assert ran is True and sc["image_captions"] is True
+    refd = next(c for c in chunks if c["metadata"].get("image_refs"))
+    assert refd["metadata"]["image_captions"] == {
+        "image-0000": artifacts[0]["attributes"]["machine_caption"],
+    }
+    assert artifacts[0]["attributes"]["caption_model"] == "fake-vision-1"
 
 
 if __name__ == "__main__":
