@@ -249,6 +249,41 @@ class TestInlineHtmlImages:
         _inline_html_images(md)
         assert time.monotonic() - t0 < 10.0
 
+    def test_code_span_closes_on_dedent(self):
+        """ROUND-5 BLOCKER pin: an open code span must CLOSE at the first
+        non-blank line indented <4 — round-4 let it run to EOF, eating
+        every later ref (corpus: one book's CC badge went unresolved →
+        terminal persist failure)."""
+        md = ("Text\n\n    code line\n\nNormaler Absatz.\n\n"
+              "![img](f.png)")
+        out = _rewrite_image_refs(md, {"f.png": "image_0.png"})
+        assert "![img](image_0.png)" in out
+        assert "    code line" in out  # the sample itself stays verbatim
+
+    def test_marker_only_line_opens_list_not_code(self):
+        """ROUND-5 MAJOR pin: pandoc loose lists emit marker-only lines
+        like '    1.  ' at 4-space indent with an empty stack — a list,
+        not code (round-4 started a code span there and swallowed the
+        following figure)."""
+        md = "    1.  \n\n<figure><img src='f.png' alt='L'/></figure>"
+        out = _inline_html_images(md)
+        assert "![L](f.png)" in out
+        # and the marker line itself is untouched
+        assert md.splitlines()[0] in out
+
+    def test_thematic_break_is_not_a_list_marker(self):
+        """ROUND-5 NIT pin: '* * *' / '---' are thematic breaks — they
+        must not open list context (an indented code block after one
+        stays code)."""
+        md = "* * *\n\n    <figure><img src='f.png'/></figure>"
+        assert _inline_html_images(md) == md
+
+    def test_marker_inside_code_stays_code(self):
+        """A marker-looking line INSIDE an open code span is code, not a
+        list opener (the code span is checked before marker detection)."""
+        md = "    1. first sample line\n    2. second sample line\n\nText."
+        assert _inline_html_images(md) == md
+
     def test_unbalanced_figure_opens_stay_fast(self):
         """Perf pin: many unmatched <figure> opens + one closing must not
         go quadratic (measured 35 s at 20k opens before the content

@@ -246,6 +246,8 @@ _FENCE_SPLIT_RE = re.compile(
     r"^(?P=fence)[ \t]*$"
 )
 _LIST_MARKER_RE = re.compile(r"(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)")
+# Thematic breaks (* * *, ---, ___) look like marker soup — never lists.
+_THEMATIC_BREAK_RE = re.compile(r"(?:[-*_])(?:[ \t]*(?:[-*_])){2,}[ \t]*$")
 
 
 def _indent_cols(line: str) -> int:
@@ -264,7 +266,19 @@ def _indent_cols(line: str) -> int:
 def _indented_code_spans(markdown: str) -> list[tuple[int, int]]:
     """Character ranges of 4-space-indented lines that are NOT list
     content (list marker content columns are tracked; blank lines keep
-    the context open — pandoc's loose lists)."""
+    the context open — pandoc's loose lists).
+
+    Transitions (review #274 round 5 — the round-4 machine was missing
+    the dedent close and the empty-stack marker):
+    - an open code span CLOSES on the first non-blank line indented < 4
+      (round-4 let it run to EOF, eating refs after the sample);
+    - a list marker line opens list context REGARDLESS of indent
+      (pandoc emits loose-list marker-only lines like '    4.  ' with
+      an empty stack); thematic breaks never count as markers;
+    - inside an open code span, marker-looking lines stay code.
+    ponytail: blockquote-nested code is untracked (corpus census: 0) —
+    quote lines simply close code spans and pop the list stack.
+    """
     spans: list[tuple[int, int]] = []
     stack: list[int] = []          # open list-item content columns
     code_start: int | None = None
@@ -274,28 +288,29 @@ def _indented_code_spans(markdown: str) -> list[tuple[int, int]]:
         pos += len(line)
         body = line.rstrip("\n")
         if not body.strip():
-            continue               # blank: list context persists
+            continue               # blank: code AND list context persist
         indent = _indent_cols(body)
         rest = body.lstrip(" \t")
-        marker = _LIST_MARKER_RE.match(rest)
-        if marker and (stack or indent < 4):
-            # list item line (top-level <4 or nested inside open list)
+        if code_start is not None:
+            if indent >= 4:
+                continue           # still code (blank lines kept it open)
+            spans.append((code_start, start))
+            code_start = None      # dedent closes — never run to EOF
+        is_quote = rest.startswith(">")
+        marker = (
+            _LIST_MARKER_RE.match(rest)
+            if not is_quote and not _THEMATIC_BREAK_RE.fullmatch(rest)
+            else None
+        )
+        if marker:
             while stack and indent < stack[-1]:
                 stack.pop()
             stack.append(indent + len(rest[: marker.end()]))
-            if code_start is not None:
-                spans.append((code_start, start))
-                code_start = None
             continue
         while stack and indent < stack[-1]:
             stack.pop()
-        if stack:
-            if code_start is not None:
-                spans.append((code_start, start))
-                code_start = None
-        elif indent >= 4:
-            if code_start is None:
-                code_start = start
+        if not stack and indent >= 4:
+            code_start = start
     if code_start is not None:
         spans.append((code_start, len(markdown)))
     return spans
