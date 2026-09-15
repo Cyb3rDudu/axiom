@@ -258,7 +258,10 @@ class TestInlineHtmlImages:
               "![img](f.png)")
         out = _rewrite_image_refs(md, {"f.png": "image_0.png"})
         assert "![img](image_0.png)" in out
-        assert "    code line" in out  # the sample itself stays verbatim
+        # a document ENDING in an indented code block keeps it protected
+        # to EOF (the only span shape that legitimately reaches the end)
+        md_end = "Text\n\n    tail <img src='t.png'/>"
+        assert _inline_html_images(md_end) == md_end
 
     def test_marker_only_line_opens_list_not_code(self):
         """ROUND-5 MAJOR pin: pandoc loose lists emit marker-only lines
@@ -268,8 +271,12 @@ class TestInlineHtmlImages:
         md = "    1.  \n\n<figure><img src='f.png' alt='L'/></figure>"
         out = _inline_html_images(md)
         assert "![L](f.png)" in out
-        # and the marker line itself is untouched
-        assert md.splitlines()[0] in out
+        # the isolated rule: a figure at the marker's CONTENT column (8)
+        # is list content and must be inlined — under the round-4
+        # misclassification (span opens at the marker line) it would sit
+        # inside the code span and stay raw
+        md2 = "    1.  \n\n        <figure><img src='g.png' alt='M'/></figure>"
+        assert "![M](g.png)" in _inline_html_images(md2)
 
     def test_thematic_break_is_not_a_list_marker(self):
         """ROUND-5 NIT pin: '* * *' / '---' are thematic breaks — they
@@ -280,8 +287,19 @@ class TestInlineHtmlImages:
 
     def test_marker_inside_code_stays_code(self):
         """A marker-looking line INSIDE an open code span is code, not a
-        list opener (the code span is checked before marker detection)."""
-        md = "    1. first sample line\n    2. second sample line\n\nText."
+        list opener: the span is opened by a NON-marker line ('    code
+        start'), then a marker-with-content line carrying rewritable
+        HTML stays inside it — verified to fail under a steal-mutation
+        (marker detection running before/inside the code span would
+        inline the <img> and produce a phantom ref)."""
+        md = "    code start\n    1. <img src='p.png'/>\n    more\n\nText."
+        assert _inline_html_images(md) == md
+
+    def test_blank_inside_code_keeps_span_open(self):
+        """A blank line inside an indented code block keeps the span
+        open (GFM): the <figure> after the blank is still sample text,
+        not inlineable HTML."""
+        md = "    code one\n\n    <figure><img src='f.png'/></figure>"
         assert _inline_html_images(md) == md
 
     def test_unbalanced_figure_opens_stay_fast(self):

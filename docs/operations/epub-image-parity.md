@@ -76,6 +76,23 @@ PDF regression companion (the PDF path must be untouched by the #274
 change): the same query with `content_type = 'application/pdf'` must
 return the pre-wave numbers — PDF corpus figures may not move.
 
+### Corpus counter-probe (pre-reprocessing, offline)
+
+`axiom_ng_runner/scripts/epub_image_census.py` runs the branch worker
+over every `.epub` in a directory tree (no database involved) and
+gates on the same two invariants per book: zero raw `<figure`/`<img>`
+remains and zero unresolved chunk refs. This is the offline regression
+bar the #274 review rounds used — fixture-only validation missed two
+corpus regressions that this probe caught.
+
+```bash
+.venv/bin/python axiom_ng_runner/scripts/epub_image_census.py <zotero-storage-root>
+```
+
+Recorded baseline (175 Zotero EPUBs, pandoc 3.7, 2026-09-15):
+5,570 markers / 0 raw remains / 0 unresolved refs / 5,367 artifacts.
+Re-run and compare before any pandoc bump.
+
 ## Artifact census (which EPUBs ship images at all)
 
 ```bash
