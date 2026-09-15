@@ -25,7 +25,7 @@ and fix the cause (not the symptom).
 | **A re-run of a document produces different bytes** (nondeterminism) | A temp-path leak wobbles the output (e.g. EPUB extraction tempdir suffix lands in chunk text), or a Marker layout edge case | Compare two independent runs; diff to classify (path leak vs. heading/table-classification flip) | Normalize temp/media paths before chunking; for pure Marker classification variance, decide whether deterministic output is a requirement (it is not for retrieval). |
 | **The search index shows stale or duplicated content after a rebuild** | The index served a superseded generation (no tombstone/obsolete handling), or a force-rebuild double-activated a snapshot | Compare OpenSearch doc count to the active snapshot count; look for orphaned/duplicated chunks | Ensure outbox delete/obsolete operations run in the same persist transaction; rely on latest-persist-wins per attachment. |
 | **Parallel workers clash on a fresh database (one crashes at startup)** | Concurrent schema migration racing (a `pg_type`-style conflict among same-kind objects) | See which instance failed and whether a restart succeeds | On a clean slate, bring up **one** instance to migrate first, then the others (fail-fast + restart is safe; no corruption). |
-| **A processing job resumes but the runner rejects it after a restart** | The runner was acknowledged already (its artifacts are gone); a re-submit hits a wall | Check the job's error for a terminal "artifacts expired" code | Recompute with a fresh idempotency key (`force_rebuild`); do not retry the same key against an acknowledged job. |
+| **A processing job resumes but the runner rejects it after a restart** | The runner was acknowledged already (its artifacts are gone); a re-submit hits a wall | Check the job's error for a terminal "artifacts expired" code | Recompute via the force-rebuild API (below) — a new job with a fresh idempotency key; never retry the same key against an acknowledged job. |
 
 ## The top diagnostic moves
 
@@ -52,6 +52,27 @@ and fix the cause (not the symptom).
   never shows `completed` without being durably committed.
 - **Reprocessing respects the hash gate.** Only changed or invalidated
   documents are redone — a fix, then a re-sync, is the normal recovery path.
+
+### Re-ingest after ARTIFACTS_EXPIRED (single document)
+
+When a job ends terminal `ARTIFACTS_EXPIRED` (runner acknowledged the original
+job; its frozen idempotency key can never be reused by design), re-ingest goes
+through the force-rebuild API — never through job-row surgery:
+
+```sh
+curl -X POST http://<rag>:8011/api/ingest/documents/<document-uuid>/force-rebuild
+```
+
+The call enqueues a NEW pending job with `force_rebuild=true` for the
+document's preferred attachment; the claim freezes a fresh snapshot and a
+fresh `…:force-<jobID>` idempotency key, so the runner processes from scratch.
+Responses: `202` enqueued (job JSON), `409` a job for the attachment is
+already active, `404` no preferred attachment, `422` no content hash.
+
+Plain DB requeue resets (`status='pending'`) on an acknowledged job are
+ineffective — the runner's dedup replays the cached outcome (#267). Bulk
+rebuild waves keep the §2.3 SQL pattern in the
+[rebuild-wave runbook](rebuild-wave-runbook.md).
 
 ## Sizing / performance reference points
 

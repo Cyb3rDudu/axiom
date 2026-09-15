@@ -148,6 +148,7 @@ func main() {
 		srv.SetContextualState(syncSvc.ContextualState)
 		srv.SetSyncAPI(syncSvc)
 		srv.SetJobRepo(rep)
+		srv.SetForceRebuildAPI(rep)
 		// #197 standing entity consolidation: every successful sync hooks a
 		// debounced consolidation run (one run per sync burst).
 		syncSvc.SetConsolidator(rep)

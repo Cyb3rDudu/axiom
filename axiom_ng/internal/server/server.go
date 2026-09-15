@@ -42,6 +42,8 @@ type Server struct {
 	sourceSecret string
 	sourceRepo   processorSourceRepo
 	sourceStatFn func(*os.File) (os.FileInfo, error)
+	// #259 force-rebuild enqueue surface (nil = route unwired/503).
+	forceRebuildRepo ForceRebuildRepo
 	// #184 fix-service surface (nil = endpoints stay unwired/404).
 	// #168 (B2) live WebSocket surface (nil = /api/ws unwired/404).
 	// #169 (B3) runner live view: the state deriver feeding the runners WS
@@ -79,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/api/health", s.handleHealth)
 	r.Post("/api/zotero/sync", s.handleSync)
 	r.Get("/api/ingest/jobs", s.handleJobs)
+	r.Post("/api/ingest/documents/{documentID}/force-rebuild", s.handleForceRebuild)
 	r.Get("/api/zotero/selection", s.handleGetSelection)
 	r.Get("/api/zotero/selection/resolved", s.handleSelectionResolved)
 	r.Put("/api/zotero/selection", s.handlePutSelection)

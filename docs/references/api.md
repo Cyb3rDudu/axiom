@@ -19,6 +19,7 @@ every rejected request.
 | `GET` | `/api/health` | Dependency readiness | Always registered |
 | `POST` | `/api/zotero/sync` | Mirror Zotero and enqueue changed attachments | Requires PostgreSQL wiring |
 | `GET` | `/api/ingest/jobs` | List recent ingest jobs | Requires PostgreSQL wiring |
+| `POST` | `/api/ingest/documents/{documentID}/force-rebuild` | Enqueue a force-rebuild re-ingest for one document | Requires PostgreSQL wiring |
 | `GET` | `/api/zotero/selection` | Read persisted document and collection choices | Requires PostgreSQL wiring |
 | `GET` | `/api/zotero/selection/resolved` | Expand collection choices to document IDs | Requires PostgreSQL wiring |
 | `PUT` | `/api/zotero/selection` | Write document and collection choices atomically | Requires PostgreSQL wiring |
@@ -89,6 +90,27 @@ The response is `{"jobs":[...]}`. Job fields currently retain their Go names:
   ]
 }
 ```
+
+### `POST /api/ingest/documents/{documentID}/force-rebuild`
+
+First-class re-ingest after a terminal `ARTIFACTS_EXPIRED` job (#259): enqueues
+a NEW pending job with `force_rebuild=true` for the document's preferred
+attachment. The claim freezes a fresh snapshot and a fresh
+`…:force-<jobID>` idempotency key, so the runner processes from scratch —
+never mutate the old job's frozen inputs. Concurrent rebuild calls for the
+same attachment are serialized by a database advisory lock; exactly one
+active rebuild job is admitted (the losers see `409`).
+
+The document id is the UUID from `GET /api/zotero/documents`. Responses:
+
+| Status | Meaning |
+| --- | --- |
+| `202` | Job enqueued; the body is the new job (Go field names as above, plus `ForceRebuild:true`) |
+| `400` | Path id is not a UUID |
+| `404` | No preferred, non-deleted attachment for the document (`ErrNoPreferredAttachment`) |
+| `409` | A job for the attachment is already pending/claimed/processing (`code:REBUILD_IN_FLIGHT`) |
+| `422` | No content hash on the attachment or any prior job (`code:NO_CONTENT_HASH`) |
+| `503` | Force-rebuild wiring absent |
 
 ## Zotero sync and selection
 
