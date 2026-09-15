@@ -208,6 +208,20 @@ def get_query_embedder() -> QueryEmbedder:
     return _embedder
 
 
+def drop_query_embedder(reason: str) -> None:
+    """#266: drop the warm embedder singleton after a batch failure so the
+    next request lazy-reloads instead of replaying broken resident model
+    state (meta-device incident 2026-09-12). Load counters keep counting —
+    the reload shows up in stats() as evidence."""
+    global _embedder
+    with _lock:
+        if _embedder is not None:
+            log.warning(
+                "query embedder dropped (%s) — next request lazy-reloads", reason
+            )
+            _embedder = None
+
+
 def get_query_reranker() -> QueryRerankerLike:
     """Return the process-wide warm reranker, loading it on first use."""
     global _reranker, _reranker_loads

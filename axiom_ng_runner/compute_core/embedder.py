@@ -102,11 +102,12 @@ class TextEmbedder:
         try:
             # Initialize the BGE-M3 model
             logger.debug("Attempting to load BGE-M3 model from Hugging Face...")
-            self.model = BGEM3FlagModel(
-                self.model_name,
-                # Force fp32 to avoid dtype issues downstream (e.g., in vector store)
-                use_fp16=False
-            )
+            self.model = self._load_model()
+            # #266: load probe — under memory pressure torch can materialize
+            # the weights on the meta device; the model "loads" fine and only
+            # explodes at the first real batch. One tiny encode makes the
+            # broken state a LOAD failure: reload once, then raise loud.
+            self._verify_model_load()
             logger.debug("BGE-M3 model loaded successfully (forced fp32).")
 
             # Initial memory cleanup
@@ -117,6 +118,68 @@ class TextEmbedder:
             logger.debug(f"Error loading embedding model {self.model_name}: {e}")
             # Potentially raise the error or handle it depending on desired robustness
             raise
+
+    def _load_model(self):
+        """Single construction site for the BGE-M3 model (initial load and
+        the #266 probe reload share it, so load parameters cannot diverge)."""
+        return BGEM3FlagModel(
+            self.model_name,
+            # Force fp32 to avoid dtype issues downstream (e.g., in vector store)
+            use_fp16=False
+        )
+
+    def _verify_model_load(self) -> None:
+        """#266 meta-device guard: probe-encode one token after loading.
+
+        Production incident 2026-09-12: under memory pressure the model
+        initialized on the meta device, "loaded" fine, and only raised
+        `Cannot copy out of meta tensor` at the first inference batch —
+        with every retry replaying the same broken resident state. The
+        probe turns that into a load-time failure: one reload attempt,
+        then a loud error that a restart/heaped memory can actually fix.
+        """
+        last_err: Exception | None = None
+        for attempt in (1, 2):
+            if self.model is None:
+                # Reload from scratch (previous attempt dropped the suspect
+                # instance) — inside the loop so a failing reload lands in
+                # the SAME loud error path instead of escaping the probe.
+                try:
+                    self.model = self._load_model()
+                except Exception as err:  # reload is part of the probe path
+                    raise RuntimeError(
+                        "embedding model reload failed during load probe: "
+                        f"{err} (previous probe error: {last_err})"
+                    ) from err
+            try:
+                self.model.encode(
+                    ["load probe"],
+                    batch_size=1,
+                    max_length=8,
+                    return_dense=True,
+                    return_sparse=False,
+                    return_colbert_vecs=False,
+                )
+                if attempt == 2:
+                    logger.warning("embedding model healthy after reload (load probe ok)")
+                return
+            except Exception as err:  # noqa: BLE001 — any probe failure = broken load
+                last_err = err
+                logger.warning(
+                    "embedding model load probe failed (attempt %d/2): %s", attempt, err
+                )
+                if attempt == 1:
+                    # Drop the suspect instance; the next loop iteration
+                    # reloads from scratch — a transient meta-device init
+                    # gets exactly one free retry.
+                    self.model = None
+                    gc.collect()
+                    with contextlib.suppress(Exception):
+                        hardware_detector.empty_cache()
+        raise RuntimeError(
+            "embedding model failed the load probe after one reload — "
+            f"broken in-process model state (meta device?): {last_err}"
+        ) from last_err
 
     def _get_gpu_memory_usage(self) -> float:
         """Get current GPU memory usage as a percentage."""

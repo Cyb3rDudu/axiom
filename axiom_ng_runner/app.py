@@ -966,11 +966,20 @@ def embed_queries(body: EmbedRequest) -> EmbedResponse:
         )
 
     sparse_maps = None
-    if body.include_sparse:
-        vectors, sparse_maps = query_service.get_query_embedder().embed_queries_with_sparse(
-            body.texts
-        )
-        if len(sparse_maps) != len(body.texts):
+    embedder = query_service.get_query_embedder()
+    try:
+        if body.include_sparse:
+            vectors, sparse_maps = embedder.embed_queries_with_sparse(body.texts)
+        else:
+            vectors = embedder.embed_queries_dense(body.texts)
+    except Exception:
+        # #266: a failing warm singleton (e.g. broken model state) must not
+        # stay resident — drop it so the NEXT request lazy-reloads fresh
+        # instead of replaying the same broken state. This request still
+        # fails loudly (re-raise).
+        query_service.drop_query_embedder("embed batch failure")
+        raise
+    if sparse_maps is not None and len(sparse_maps) != len(body.texts):
             raise HTTPException(
                 status_code=500,
                 detail={
@@ -978,8 +987,6 @@ def embed_queries(body: EmbedRequest) -> EmbedResponse:
                     "message": "sparse count disagrees with the input text count",
                 },
             )
-    else:
-        vectors = query_service.get_query_embedder().embed_queries_dense(body.texts)
     # Model output must agree with the declared capability (contract §6):
     # drift surfaces loudly here instead of poisoning the vector space the
     # OS index lives in (silent zeros would break cosine search subtly).

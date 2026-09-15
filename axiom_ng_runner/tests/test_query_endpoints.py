@@ -221,6 +221,39 @@ def test_embed_count_mismatch_surfaces_as_500(client, monkeypatch):
     assert r.json()["detail"]["code"] == "EMBEDDING_SHAPE_MISMATCH"
 
 
+def test_embed_batch_failure_drops_warm_singleton(client, monkeypatch):
+    """#266: an embed-batch failure (e.g. meta-device model state) must drop
+    the warm singleton so the NEXT request lazy-reloads instead of replaying
+    the broken resident state. Mutation probe: remove the drop in the
+    /v1/embed handler -> the second request raises again (no reload)."""
+    import axiom_ng_runner.query_service as qs
+
+    class _Explodes:
+        def embed_queries_dense(self, texts):
+            raise RuntimeError("Cannot copy out of meta tensor; no data!")
+
+    class _Fixed:
+        def embed_queries_dense(self, texts):
+            return [[0.0] * DENSE_EMBEDDING_DIM for _ in texts]
+
+    fixed = _Fixed()
+    monkeypatch.setattr(qs, "_build_embedder", lambda: fixed)
+    with qs._lock:
+        qs._embedder = _Explodes()  # simulate the broken resident model
+        qs._embedder_loads += 1
+
+    # First request: fails loudly ... (TestClient propagates the raw error)
+    with pytest.raises(RuntimeError, match="meta tensor"):
+        client.post("/v1/embed", json=_embed_payload(["x"]))
+    st = qs.stats()
+    assert st["embedder_warm"] is False  # ... and the broken singleton is gone
+
+    # Second request: served by the fresh lazy-load, not the broken one.
+    r2 = client.post("/v1/embed", json=_embed_payload(["x"]))
+    assert r2.status_code == 200, r2.text
+    assert qs.stats()["embedder_loads"] == 2  # reload happened (pinned)
+
+
 # ---------------------------------------------------------------------------
 # 4. Capabilities extension (R4 dependency)
 # ---------------------------------------------------------------------------
