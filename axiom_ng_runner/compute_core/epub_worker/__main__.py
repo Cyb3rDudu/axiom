@@ -7,9 +7,10 @@ Writes:
     - markdown to ``out_markdown_path``
     - each extracted image to ``out_images_dir/image_<N>.<ext>``
     - a final JSON line to stdout:
-        {"ok": true, "image_mapping": {original_basename: saved_filename, ...}}
-      where ``image_mapping`` lets the caller rewrite image references in
-      the markdown from pandoc's extracted filenames to our on-disk ones.
+        {"ok": true, "image_mapping": {saved_filename: saved_filename, ...}}
+      The worker itself rewrites every image reference in the markdown to
+      the saved ``image_<N>.<ext>`` name (#274) — the mapping keys are the
+      saved names, so the caller's basename lookup resolves directly.
 
 Exits non-zero on any failure (with JSON error on stderr).
 
@@ -192,31 +193,134 @@ def _inject_page_markers(markdown: str) -> str:
     return result
 
 
-def _save_extracted_images(media_dir: Path, out_dir: Path) -> Dict[str, str]:
-    """Move every image pandoc extracted into ``out_dir`` under a stable name.
+# --- #274: HTML-image inlining ------------------------------------------
+#
+# Root cause of the systematic EPUB image loss (#274 corpus evidence: 0
+# image-marker chunks while artifacts exist): publisher EPUBs wrap figures
+# in <figure>/<figcaption>, and pandoc's GFM writer keeps those blocks as
+# RAW HTML instead of markdown images. The chunker only recognizes
+# ``![alt](path)`` — every figure-wrapped image vanished from the text
+# flow, so no chunk ever carried an image ref. Parity with the PDF path
+# means: an ``![](...)`` marker at the image's text position, the figcaption
+# kept as a plain text line (PDF captions ride as text too — the #268
+# matcher pairs them positionally).
+_FIGURE_BLOCK_RE = re.compile(
+    r"<figure\b[^>]*>(.*?)</figure>", re.IGNORECASE | re.DOTALL
+)
+_FIGCAPTION_RE = re.compile(
+    r"<figcaption\b[^>]*>(.*?)</figcaption>", re.IGNORECASE | re.DOTALL
+)
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_TAG_RE = re.compile(r"<[^>]+>")
 
-    Walks ``media_dir`` recursively (pandoc nests under ``media/``), copies
-    each image to ``out_dir/image_<N>.<ext>``, and returns a mapping
-    ``{extracted_basename: new_filename}``.
 
-    Keys are basenames because the caller's rewriter
-    (``DocumentProcessor._update_markdown_image_paths``) matches markdown
-    references by ``Path(ref).name`` — so whatever path pandoc wrote into
-    the markdown (e.g. ``media/image1.png``), only the basename matters.
+def _img_attr(tag: str, name: str) -> str:
+    """Value of attribute ``name`` in an HTML tag ('' when absent)."""
+    m = re.search(
+        rf'\b{name}\s*=\s*("([^"]*)"|\'([^\']*)\')', tag, re.IGNORECASE
+    )
+    if not m:
+        return ""
+    return m.group(2) if m.group(2) is not None else (m.group(3) or "")
+
+
+def _img_tag_to_markdown(tag: str) -> str | None:
+    """One ``<img>`` tag → ``![alt](src)``; None when it must NOT inline.
+
+    Remote/data-URI sources return None (no artifact exists for them — a
+    marker would die at the runner's CHUNK_IMAGE_REF_UNRESOLVED gate).
+    """
+    src = _img_attr(tag, "src")
+    if not src or src.startswith(("http://", "https://", "data:")):
+        return None
+    alt = _img_attr(tag, "alt").replace("]", "")
+    return f"![{alt}]({src})"
+
+
+def _inline_html_images(markdown: str) -> str:
+    """Rewrite every raw-HTML image into a markdown ``![](src)`` marker.
+
+    ``<figure><img …/><figcaption>C</figcaption></figure>`` becomes the
+    image marker followed by the caption as its own paragraph; a bare
+    ``<img>`` becomes the marker in place. Only HTML tags are touched —
+    markdown images pandoc already emitted pass through unchanged.
+    """
+    def _figure_repl(m: re.Match) -> str:
+        inner = m.group(1)
+        markers = [md for md in (_img_tag_to_markdown(t)
+                                 for t in _IMG_TAG_RE.findall(inner)) if md]
+        if not markers:
+            return m.group(0)
+        cap_m = _FIGCAPTION_RE.search(inner)
+        cap = _TAG_RE.sub("", cap_m.group(1)).strip() if cap_m else ""
+        parts = markers + ([cap] if cap else [])
+        return "\n\n" + "\n\n".join(parts) + "\n\n"
+
+    markdown = _FIGURE_BLOCK_RE.sub(_figure_repl, markdown)
+    return _IMG_TAG_RE.sub(
+        lambda m: _img_tag_to_markdown(m.group(0)) or "", markdown
+    )
+
+
+def _save_extracted_images(
+    media_dir: Path, out_dir: Path
+) -> tuple[Dict[str, str], Dict[str, str]]:
+    """Copy every image pandoc extracted into ``out_dir`` under a stable
+    name; return ``(mapping, ref_index)``.
+
+    ``mapping`` is ``{saved_name: saved_name}`` — since #274 the worker
+    itself rewrites every markdown image reference to the saved name, so
+    the runner's basename lookup resolves directly (and duplicate
+    basenames across EPUB subdirs can no longer mis-pair, because the
+    rewrite matches the full extracted path first).
+
+    ``ref_index`` maps every reference form pandoc may have written —
+    the path relative to ``media_dir``, the absolute path, and (last
+    resort, first wins) the bare basename — to the saved name.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     mapping: Dict[str, str] = {}
+    ref_index: Dict[str, str] = {}
 
-    extracted = [
-        p for p in media_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
-    ]
+    extracted = sorted(
+        (p for p in media_dir.rglob("*")
+         if p.is_file() and p.suffix.lower() in _IMAGE_EXTS),
+        key=lambda p: p.relative_to(media_dir).as_posix(),
+    )
     for idx, src in enumerate(extracted):
         ext = src.suffix.lower() or ".png"
         new_name = f"image_{idx}{ext}"
         shutil.copy2(src, out_dir / new_name)
-        mapping[src.name] = new_name
-    return mapping
+        mapping[new_name] = new_name
+        for key in (
+            src.relative_to(media_dir).as_posix(),
+            str(src.resolve()),
+            src.name,
+        ):
+            ref_index.setdefault(key, new_name)  # first wins on collisions
+    return mapping, ref_index
+
+
+_MD_IMG_RE = re.compile(r"(!\[[^\]]*\]\()([^)]+)(\))")
+_SRC_ATTR_RE = re.compile(r'(<img\b[^>]*?\bsrc=")([^"]+)(")', re.IGNORECASE)
+
+
+def _rewrite_image_refs(markdown: str, ref_index: Dict[str, str]) -> str:
+    """Point every image reference at its saved ``image_<N>.<ext>`` name.
+
+    Covers the markdown form and (for anything `_inline_html_images`
+    left as HTML) the ``src`` attribute. Unresolvable refs are left
+    untouched — the runner's http/ref gates handle them downstream.
+    """
+    def _lookup(ref: str) -> str:
+        return ref_index.get(ref) or ref_index.get(Path(ref).name) or ref
+
+    markdown = _MD_IMG_RE.sub(
+        lambda m: m.group(1) + _lookup(m.group(2)) + m.group(3), markdown
+    )
+    return _SRC_ATTR_RE.sub(
+        lambda m: m.group(1) + _lookup(m.group(2)) + m.group(3), markdown
+    )
 
 
 # #220 Stage 2 promotion: the Z3 normalization lives in the shared repair
@@ -309,17 +413,23 @@ def main() -> int:
         # Convert EPUB pagebreak landmarks -> {N} markers FIRST (the landmarks
         # live in <span> tags that _strip_styling_html would otherwise delete).
         markdown = _inject_page_markers(markdown)
+        # #274: figures/bare imgs pandoc keeps as raw HTML -> markdown
+        # markers at their text position (figcaption becomes a text line).
+        markdown = _inline_html_images(markdown)
         # pandoc leaves stylistic <span>/<div> wrappers in GFM output; strip
         # them and persist the cleaned markdown so the caller reads a clean
         # file from out_md (it consumes markdown_path, not the in-memory text).
         markdown = _strip_styling_html(markdown)
-        out_md.write_text(markdown, encoding="utf-8")
         if not markdown.strip():
             _stderr_err({"ok": False, "error": "pandoc returned empty markdown"})
             return 1
-        logger.info(f"Wrote markdown ({len(markdown)} chars) to {out_md}")
 
-        mapping = _save_extracted_images(media_tmp, out_images_dir)
+        mapping, ref_index = _save_extracted_images(media_tmp, out_images_dir)
+        # #274: rewrite refs to the saved names BEFORE persisting — the
+        # markdown the runner reads carries stable names, no temp paths.
+        markdown = _rewrite_image_refs(markdown, ref_index)
+        out_md.write_text(markdown, encoding="utf-8")
+        logger.info(f"Wrote markdown ({len(markdown)} chars) to {out_md}")
         logger.info(f"Wrote {len(mapping)} images to {out_images_dir}")
 
         _result(
