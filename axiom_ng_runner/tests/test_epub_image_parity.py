@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 from axiom_ng_runner.compute_core.chunker import Chunker
 from axiom_ng_runner.compute_core.epub_worker.__main__ import (
+    _img_attr,
     _inline_html_images,
     _rewrite_image_refs,
     _save_extracted_images,
@@ -201,24 +202,43 @@ class TestInlineHtmlImages:
         )
         assert "R&D Ausgaben" in out and "&amp;" not in out
 
-    def test_fenced_code_blocks_untouched(self):
-        """MAJOR pin (review #274 P7): a literal HTML sample inside a
-        fenced code block must NOT gain a phantom image marker — the
+    def test_fenced_and_indented_code_untouched(self):
+        """MAJOR pin (review round 2, P7): a literal HTML sample inside a
+        fenced block (any body length) OR a pandoc <pre><code> block
+        (4-space indented) must NOT gain a phantom image marker — the
         marker's ref has no artifact and would terminally fail the
         snapshot persist gate."""
-        md = (
+        fence_md = (
             "Text davor.\n\n```html\n"
             '<figure><img src="../images/fig1.png" alt="sample"/></figure>\n'
+            "second line\nthird line\n"
             "```\n\nText danach."
         )
-        out = _inline_html_images(md)
-        assert out == md
-        # and the ref rewrite skips fences too
+        assert _inline_html_images(fence_md) == fence_md
         ref_index = {"../images/fig1.png": "image_0.png"}
-        assert _rewrite_image_refs(out, ref_index) == md
-        # sanity: the SAME html outside a fence IS inlined
-        plain = '<figure><img src="../images/fig1.png" alt="sample"/></figure>'
-        assert "![sample](../images/fig1.png)" in _inline_html_images(plain)
+        assert _rewrite_image_refs(fence_md, ref_index) == fence_md
+        indented_md = (
+            "Ein Code-Beispiel:\n\n"
+            "    <figure><img src=\"../images/fig1.png\"/></figure>\n"
+            "    more code\n\nText danach."
+        )
+        assert _inline_html_images(indented_md) == indented_md
+        assert _rewrite_image_refs(indented_md, ref_index) == indented_md
+        # sanity: the SAME html outside code IS inlined (a 2-space list
+        # continuation is NOT code — pandoc's list content column)
+        list_md = "- Punkt\n  <figure><img src=\"../images/fig1.png\"/></figure>"
+        assert "![" in _inline_html_images(list_md)
+
+    def test_unbalanced_figure_opens_stay_fast(self):
+        """Perf pin: many unmatched <figure> opens + one closing must not
+        go quadratic (measured 35 s at 20k opens before the content
+        guard). Generous wall-clock bound to stay CI-stable."""
+        import time
+
+        md = "<figure><img src='a.png'>" * 20_000 + "x</figure>" + "y" * 1000
+        t0 = time.monotonic()
+        _inline_html_images(md)
+        assert time.monotonic() - t0 < 10.0
 
     def test_data_src_attribute_not_matched(self):
         """706ffe boundary pin: data-src/data-alt are different attributes
@@ -227,15 +247,70 @@ class TestInlineHtmlImages:
         assert out == ""
 
     def test_markdown_title_ref_path_only(self):
-        """MINOR pin (review #274 P2): pandoc emits ![alt](path "title")
-        for <img title> — the rewrite must touch the path, keep the title.
-        A title swallowed into the ref would miss the lookup and die at
-        the persist gate."""
+        """Round-3 pin: pandoc emits ![alt](path "title") for <img title>.
+        The rewrite takes the path and DROPS the title — the PDF path
+        emits no titles, and a title left in the ref would miss the
+        runner's basename lookup and terminally fail the persist gate."""
         out = _rewrite_image_refs(
             '![alt](media/images/fig1.png "Titeltext")',
             {"media/images/fig1.png": "image_0.png"},
         )
-        assert out == '![alt](image_0.png "Titeltext")'
+        assert out == "![alt](image_0.png)"
+
+    def test_link_wrapped_badge_rewritten_link_intact(self):
+        """BLOCKER pin (review round 2, corpus: 10 books / 202 refs):
+        Springer license badges are [![alt](path)](url) — the path must
+        rewrite and the link wrapper must survive; the old \\S+ form
+        swallowed ')](url' into the ref and left the temp path in place
+        (terminal CHUNK_IMAGE_REF_UNRESOLVED)."""
+        md = (
+            "Lizenz: [![CC BY-NC-ND](media/images/cc.png)]"
+            "(https://creativecommons.org/licenses/by-nc-nd/4.0/) Ende"
+        )
+        out = _rewrite_image_refs(md, {"media/images/cc.png": "image_0.png"})
+        assert (
+            "Lizenz: [![CC BY-NC-ND](image_0.png)]"
+            "(https://creativecommons.org/licenses/by-nc-nd/4.0/) Ende" == out
+        )
+        # with a title inside the badge image, the title is dropped too
+        out = _rewrite_image_refs(
+            "[![CC](media/images/cc.png \"badge\")](https://x.example)",
+            {"media/images/cc.png": "image_0.png"},
+        )
+        assert out == "[![CC](image_0.png)](https://x.example)"
+
+    def test_space_carrying_path_rewritten(self):
+        """Round-3 pin: paths with spaces resolve (non-greedy stops at
+        ')', not at whitespace)."""
+        out = _rewrite_image_refs(
+            "![A](/tmp/epub_media_x/my fig.png)",
+            {"/tmp/epub_media_x/my fig.png": "image_0.png"},
+        )
+        assert out == "![A](image_0.png)"
+
+    def test_quoted_gt_in_attributes_keeps_image(self):
+        """MAJOR pin (review round 2, Databricks Fig15): alt texts contain
+        '>' ("path: All catalogs > unitygo > …") — quote-aware tag matching
+        must find the src instead of truncating the tag at the inner >
+        (which silently dropped the image while the artifact existed)."""
+        tag = '<img src="media/images/f15.jpg" alt="path: All catalogs > unitygo > tools"/>'
+        assert _img_attr(tag, "src") == "media/images/f15.jpg"
+        out = _inline_html_images(
+            '<figure>' + tag + "<figcaption>Abb. 15</figcaption></figure>"
+        )
+        assert "![path: All catalogs > unitygo > tools](media/images/f15.jpg)" in out
+        assert "Abb. 15" in out
+
+    def test_escaped_img_in_residual_makes_no_phantom_marker(self):
+        """MINOR pin: &lt;img …&gt; escaped inside a figure description must
+        not materialize into a phantom marker via the unescape."""
+        out = _inline_html_images(
+            '<figure><img src="media/images/f1.png"/>'
+            '<div class="TextObject"><p>Beispiel: &lt;img src="nope.png"&gt;</p></div>'
+            "</figure>"
+        )
+        assert "nope.png" not in out
+        assert out.count("![") == 1
         assert "<figure" not in out and "<img" not in out
 
     def test_figure_without_caption_and_multi_image_figure(self):
@@ -351,20 +426,74 @@ class TestEpubWorkerEndToEnd:
             "image-0000": "Abb. 1: Umsatzentwicklung im Zeitverlauf"
         }
 
+    def test_round3_forms_code_lists_badges_titles(self, tmp_path):
+        """Real-pandoc E2E over the round-2/3 corpus forms in ONE book:
+        a <pre><code> HTML sample (indented output), a list-embedded
+        figure (2-space continuation), a link-wrapped license badge, a
+        title-carrying <img>, and a figure img with '>' inside a quoted
+        alt. Every real image must end as a resolvable marker; the code
+        sample must stay verbatim (no phantom ref)."""
+        body = (
+            "<h1>Kapitel 1</h1>"
+            "<p>Ein Code-Beispiel:</p>"
+            '<pre><code>&lt;figure&gt;&lt;img src="../images/fig1.png"/&gt;&lt;/figure&gt;</code></pre>'
+            "<p>Eine Liste:</p><ul><li>Erster Punkt.</li>"
+            "<li><p>Zweiter Punkt mit Bild:</p>"
+            '<figure><img src="../images/fig2.png" alt="Liste"/><figcaption>Abb. L</figcaption></figure>'
+            "</li><li><p>Dritter Punkt.</p></li></ul>"
+            '<p>Lizenz: <a href="https://creativecommons.org/licenses/by-nc-nd/4.0/">'
+            '<img src="../images/cc.png" alt="CC BY-NC-ND"/></a></p>'
+            '<p>Mit Titel: <img src="../images/fig3.png" title="Der Titel" alt="Titelbild"/></p>'
+            '<figure><img src="../images/fig4.png" alt="path: All &gt; catalogs"/>'
+            "<figcaption>Abb. 4</figcaption></figure>"
+        )
+        epub = build_epub(
+            tmp_path / "book.epub",
+            {"text/c1.xhtml": body},
+            {
+                "images/fig1.png": _PNG,
+                "images/fig2.png": _PNG,
+                "images/cc.png": _PNG,
+                "images/fig3.png": _PNG,
+                "images/fig4.png": _PNG,
+            },
+        )
+        out_md = tmp_path / "md" / "markdown.md"
+        res = _run_worker(epub, out_md, tmp_path / "images")
+        md = out_md.read_text(encoding="utf-8")
+
+        # the <pre><code> sample rides as an indented block, verbatim —
+        # no marker, no rewrite, no phantom ref
+        assert '    <figure><img src="../images/fig1.png"/></figure>' in md
+
+        # every real image is a marker on a SAVED name (badges inside the
+        # link wrapper, list figure indented, title dropped, '>' alt kept)
+        assert "![Liste](image_1.png)" in md
+        assert "[![CC BY-NC-ND](image_0.png)](https://creativecommons.org/licenses/by-nc-nd/4.0/)" in md
+        assert "![Titelbild](image_2.png)" in md
+        assert '"Der Titel"' not in md
+        assert "![path: All > catalogs](image_3.png)" in md
+        assert "Abb. 4" in md and "Abb. L" in md
+
+        # end-to-end: every chunk ref resolves to a declared artifact
+        chunks, artifacts = _linkage(md, tmp_path / "images", res["image_mapping"])
+        art_refs = {a["ref"] for a in artifacts}
+        chunk_refs = [r for c in chunks
+                      for r in c["metadata"]["image_refs"]]
+        assert chunk_refs, "no image refs survived"
+        assert set(chunk_refs) <= art_refs, \
+            f"unresolved chunk refs: {set(chunk_refs) - art_refs}"
+        assert len(artifacts) == 4  # fig1 lives only inside the code sample
+
 
 # ── the parity gate (#274 DoD) ───────────────────────────────────────
 
-# The PDF leg is a PROXY, not the pdf_worker path: marker-style markdown in
-# the post-normalization shape the runner seam sees (pdf_worker's own
-# marker/output mapping is pinned by the existing marker suites; running
-# real Marker/GPU here is out of scope for a dev gate). The gate proves the
-# SHARED seam produces equivalent linkage for equivalent input semantics.────
-
-# The PDF leg: marker-style markdown — the post-normalization shape
-# (marker output after the pdf_worker mapping, as the runner seam sees
-# it): page markers + ![alt](saved_name) + caption as text; pinned by
-# the existing marker suites. Same document semantics as the EPUB
-# fixture.
+# The PDF leg is a PROXY, not the pdf_worker path: marker-style markdown
+# in the post-normalization shape the runner seam sees — page markers +
+# ![alt](saved_name) + caption as text (pdf_worker's own output mapping
+# is pinned by the existing marker suites; running real Marker/GPU here
+# is out of scope for a dev gate). The gate proves the SHARED seam
+# produces equivalent linkage for equivalent input semantics.
 _PDF_LEG_MD = """{0}------------------------------------------------
 
 # Kapitel 1
