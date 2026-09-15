@@ -217,7 +217,8 @@ _TAG_RE = re.compile(r"<[^>]+>")
 def _img_attr(tag: str, name: str) -> str:
     """Value of attribute ``name`` in an HTML tag ('' when absent)."""
     m = re.search(
-        rf'\b{name}\s*=\s*("([^"]*)"|\'([^\']*)\')', tag, re.IGNORECASE
+        rf'(?<![\w-]){name}\s*=\s*("([^"]*)"|\'([^\']*)\')', tag,
+        re.IGNORECASE,
     )
     if not m:
         return ""
@@ -249,10 +250,14 @@ def _inline_html_images(markdown: str) -> str:
         inner = m.group(1)
         markers = [md for md in (_img_tag_to_markdown(t)
                                  for t in _IMG_TAG_RE.findall(inner)) if md]
-        if not markers:
-            return m.group(0)
         cap_m = _FIGCAPTION_RE.search(inner)
         cap = _TAG_RE.sub("", cap_m.group(1)).strip() if cap_m else ""
+        if not markers:
+            # W4: remote-only images inline to nothing below — a verbatim
+            # return would leave raw <figure><figcaption> HTML in the text
+            # after the bare-<img> pass deletes the tags. Keep the caption
+            # as text; nothing usable at all → leave the block alone.
+            return "\n\n" + cap + "\n\n" if cap else m.group(0)
         parts = markers + ([cap] if cap else [])
         return "\n\n" + "\n\n".join(parts) + "\n\n"
 
@@ -275,8 +280,11 @@ def _save_extracted_images(
     rewrite matches the full extracted path first).
 
     ``ref_index`` maps every reference form pandoc may have written —
-    the path relative to ``media_dir``, the absolute path, and (last
-    resort, first wins) the bare basename — to the saved name.
+    the path relative to ``media_dir``, the absolute path in both its
+    unresolved form (what pandoc writes with an absolute
+    ``--extract-media`` dir — ``resolve()`` would follow macOS
+    ``/tmp``/``/var`` symlinks and never match) and its resolved form,
+    and (last resort, first wins) the bare basename — to the saved name.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     mapping: Dict[str, str] = {}
@@ -294,6 +302,7 @@ def _save_extracted_images(
         mapping[new_name] = new_name
         for key in (
             src.relative_to(media_dir).as_posix(),
+            str(src),          # unresolved absolute — pandoc's literal form
             str(src.resolve()),
             src.name,
         ):
@@ -318,6 +327,9 @@ def _rewrite_image_refs(markdown: str, ref_index: Dict[str, str]) -> str:
     markdown = _MD_IMG_RE.sub(
         lambda m: m.group(1) + _lookup(m.group(2)) + m.group(3), markdown
     )
+    # Defense-in-depth only: in the normal flow no local-src <img> survives
+    # `_inline_html_images`, so this pass rewrites at most leftover remote
+    # refs (which the runner's link-ref gate drops downstream anyway).
     return _SRC_ATTR_RE.sub(
         lambda m: m.group(1) + _lookup(m.group(2)) + m.group(3), markdown
     )

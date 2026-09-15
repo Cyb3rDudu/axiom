@@ -22,6 +22,7 @@ Run: .venv/bin/python -m pytest tests/test_epub_image_parity.py
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -157,6 +158,15 @@ class TestInlineHtmlImages:
         md = "![alt](media/f.png) text"
         assert _inline_html_images(md) == md
 
+    def test_remote_img_figure_keeps_caption_drops_html(self):
+        """W4: remote-only figure — caption survives as text, no raw HTML."""
+        out = _inline_html_images(
+            '<figure><img src="https://x.example/a.png" alt="r"/>'
+            "<figcaption>Abb. 9: nur online</figcaption></figure>"
+        )
+        assert "Abb. 9: nur online" in out
+        assert "<figure" not in out and "<img" not in out
+
     def test_figure_without_caption_and_multi_image_figure(self):
         out = _inline_html_images("<figure><img src='f.png'/></figure>")
         assert "![](f.png)" in out
@@ -184,10 +194,16 @@ class TestSaveAndRewrite:
         assert ref_index["ch1/fig.png"] == "image_0.png"
         assert ref_index["ch2/fig.png"] == "image_1.png"
 
-        md = "![a](ch2/fig.png) und ![b](media/ch2/fig.png) und ![c](unique.jpg)"
+        md = f"![a](ch2/fig.png) und ![b]({media}/ch2/fig.png) und ![c](unique.jpg)"
         out = _rewrite_image_refs(md, ref_index)
         assert "![a](image_1.png)" in out   # relative form resolved exactly
-        assert "image_0.png" not in out or "![a](image_0.png)" not in out
+        # the unresolved-absolute form is what pandoc writes with
+        # --extract-media=<abs dir> (macOS symlinked temp dirs make
+        # resolve()-derived keys miss — W2)
+        assert "![b](image_1.png)" in out
+        # basename fallback is first-wins: an unindexed ch2-shaped ref must
+        # never resolve to the ch1 duplicate
+        assert "![a](image_0.png)" not in out
         assert "![c](image_2.jpg)" in out
 
     def test_unresolvable_ref_left_untouched(self, tmp_path):
@@ -208,7 +224,7 @@ def _run_worker(epub: Path, out_md: Path, out_img: Path) -> dict:
         cwd=str(Path(__file__).resolve().parents[2]),
     )
     assert proc.returncode == 0, proc.stderr[-500:]
-    return __import__("json").loads(proc.stdout.strip().splitlines()[-1])
+    return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
 def _linkage(markdown: str, images_dir: Path, image_mapping: dict):
@@ -267,9 +283,11 @@ class TestEpubWorkerEndToEnd:
 
 # ── the parity gate (#274 DoD) ───────────────────────────────────────────
 
-# The PDF leg: marker-style markdown — the exact shape pdf_worker emits
-# (page markers + ![alt](saved_name) + caption as text; pinned by the
-# existing marker suites). Same document semantics as the EPUB fixture.
+# The PDF leg: marker-style markdown — the post-normalization shape
+# (marker output after the pdf_worker mapping, as the runner seam sees
+# it): page markers + ![alt](saved_name) + caption as text; pinned by
+# the existing marker suites. Same document semantics as the EPUB
+# fixture.
 _PDF_LEG_MD = """{0}------------------------------------------------
 
 # Kapitel 1
