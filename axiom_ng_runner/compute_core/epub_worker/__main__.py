@@ -224,17 +224,16 @@ _FIGCAPTION_RE = re.compile(
 _IMG_TAG_RE = re.compile(rf"<img\b{_ATTRS}>", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
 
-# Code protection (review #274 rounds 2–4): pandoc's GFM writer emits
-# fenced blocks for ``` sources and 4-SPACE-INDENTED blocks for
-# <pre><code> samples. BUT pandoc also indents LIST content at 4 spaces
-# — the content column of a nested "  - " item (round-4 corpus finding:
-# 19 figures in 5 books silently unlinked). Indent alone cannot tell
-# code from list content; a small list-context stack can: an indented
-# line is CODE only outside any open list item (marker content columns
-# are tracked; blank lines persist the context — loose lists).
+# Code protection: pandoc's GFM writer emits fenced blocks for ```
+# sources and 4-SPACE-INDENTED blocks for <pre><code> samples, but it
+# also indents LIST content at 4 spaces (a nested item's content
+# column) — indent alone cannot tell code from list content. The
+# fence guard below splits fenced regions out; _indented_code_spans()
+# classifies indented lines via a small list-context stack. The
+# transition rules live in ITS docstring — the source of truth for
+# what opens/closes a span, updated with every review finding.
 # ponytail: pandoc-shape heuristic, not full CommonMark list parsing;
-# code blocks nested INSIDE list items would be classified as content.
-# Corpus census: no ```/~~~ and no code-in-list anywhere — revisit only
+# corpus census: no ```/~~~ and no code-in-list anywhere — revisit only
 # if a corpus book ships one.
 _FENCE_SPLIT_RE = re.compile(
     # tempered content: the scan cannot cross another fence-open LINE
@@ -272,9 +271,12 @@ def _indented_code_spans(markdown: str) -> list[tuple[int, int]]:
     the dedent close and the empty-stack marker):
     - an open code span CLOSES on the first non-blank line indented < 4
       (round-4 let it run to EOF, eating refs after the sample);
-    - a list marker line opens list context REGARDLESS of indent
-      (pandoc emits loose-list marker-only lines like '    4.  ' with
-      an empty stack); thematic breaks never count as markers;
+    - a list marker line opens list context REGARDLESS of indent when
+      the stack is open or the marker has no content (pandoc emits
+      loose-list marker-only lines like '    4.  ' with an empty
+      stack); a marker-WITH-content line at >=4 with an empty stack is
+      an indented code sample line (phantom-marker guard), not a list;
+      thematic breaks never count as markers;
     - inside an open code span, marker-looking lines stay code.
     ponytail: blockquote-nested code is untracked (corpus census: 0) —
     quote lines simply close code spans and pop the list stack.
@@ -302,10 +304,10 @@ def _indented_code_spans(markdown: str) -> list[tuple[int, int]]:
             if not is_quote and not _THEMATIC_BREAK_RE.fullmatch(rest)
             else None
         )
-        if marker:
+        if marker and (stack or indent < 4 or not rest[marker.end():].strip()):
             while stack and indent < stack[-1]:
                 stack.pop()
-            stack.append(indent + len(rest[: marker.end()]))
+            stack.append(indent + marker.end())
             continue
         while stack and indent < stack[-1]:
             stack.pop()
