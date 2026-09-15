@@ -213,6 +213,27 @@ _FIGCAPTION_RE = re.compile(
 _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
 
+# Fenced code blocks (pandoc's GFM writer emits fences, never indented
+# code). Both HTML inlining and ref rewriting must SKIP them: a literal
+# `<figure><img src=…>` code sample would otherwise gain a phantom image
+# marker whose ref has no artifact — a terminal CHUNK_IMAGE_REF_UNRESOLVED
+# persist failure introduced by this very layer (review #274 P7).
+_FENCE_SPLIT_RE = re.compile(r"(?m)^(?:```|~~~)[^\n]*\n(?:.*?\n)?(?:```|~~~)[ \t]*$")
+
+
+def _outside_code_blocks(markdown: str, fn) -> str:
+    """Apply ``fn`` to every segment that is not a fenced code block."""
+    if "```" not in markdown and "~~~" not in markdown:
+        return fn(markdown)
+    out: list[str] = []
+    pos = 0
+    for m in _FENCE_SPLIT_RE.finditer(markdown):
+        out.append(fn(markdown[pos:m.start()]))
+        out.append(m.group(0))  # code block: verbatim
+        pos = m.end()
+    out.append(fn(markdown[pos:]))
+    return "".join(out)
+
 
 def _img_attr(tag: str, name: str) -> str:
     """Value of attribute ``name`` in an HTML tag ('' when absent)."""
@@ -238,33 +259,60 @@ def _img_tag_to_markdown(tag: str) -> str | None:
     return f"![{alt}]({src})"
 
 
+def _strip_to_text(html_fragment: str) -> str:
+    """HTML fragment → plain text line(s): tags out, entities decoded."""
+    import html as _html
+
+    text = _TAG_RE.sub("", html_fragment)
+    text = _html.unescape(text)
+    return "\n".join(
+        line.strip() for line in text.splitlines() if line.strip()
+    )
+
+
 def _inline_html_images(markdown: str) -> str:
     """Rewrite every raw-HTML image into a markdown ``![](src)`` marker.
 
     ``<figure><img …/><figcaption>C</figcaption></figure>`` becomes the
     image marker followed by the caption as its own paragraph; a bare
-    ``<img>`` becomes the marker in place. Only HTML tags are touched —
-    markdown images pandoc already emitted pass through unchanged.
+    ``<img>`` becomes the marker in place. Any OTHER text inside the
+    figure (Springer-style ``<div class="TextObject"><p>…`` image
+    descriptions) is kept as text too — discarding it was a silent
+    content regression (review #274 blocker, Sonko exemplar). Only HTML
+    tags are touched — markdown images pandoc already emitted pass
+    through unchanged. Fenced code blocks are skipped verbatim.
     """
     def _figure_repl(m: re.Match) -> str:
         inner = m.group(1)
         markers = [md for md in (_img_tag_to_markdown(t)
                                  for t in _IMG_TAG_RE.findall(inner)) if md]
         cap_m = _FIGCAPTION_RE.search(inner)
-        cap = _TAG_RE.sub("", cap_m.group(1)).strip() if cap_m else ""
+        cap = _strip_to_text(cap_m.group(1)) if cap_m else ""
+        # residual content: everything except the imgs and the figcaption
+        residual = _FIGCAPTION_RE.sub("", inner)
+        residual = _IMG_TAG_RE.sub("", residual)
+        residual = _strip_to_text(residual)
         if not markers:
-            # W4: remote-only images inline to nothing below — a verbatim
-            # return would leave raw <figure><figcaption> HTML in the text
-            # after the bare-<img> pass deletes the tags. Keep the caption
-            # as text; nothing usable at all → leave the block alone.
-            return "\n\n" + cap + "\n\n" if cap else m.group(0)
-        parts = markers + ([cap] if cap else [])
+            # Remote-only images inline to nothing below — returning the
+            # block verbatim would leave raw <figure> HTML in the text
+            # after the bare-<img> pass deletes the tags. Keep whatever
+            # text exists; an entirely empty figure collapses to nothing.
+            text = "\n\n".join(p for p in (cap, residual) if p)
+            return "\n\n" + text + "\n\n" if text else ""
+        parts = markers + [p for p in (cap, residual) if p]
         return "\n\n" + "\n\n".join(parts) + "\n\n"
 
-    markdown = _FIGURE_BLOCK_RE.sub(_figure_repl, markdown)
-    return _IMG_TAG_RE.sub(
-        lambda m: _img_tag_to_markdown(m.group(0)) or "", markdown
-    )
+    def _inline_pass(md: str) -> str:
+        # Cheap guard against the quadratic worst case: without any
+        # closing tag the DOTALL pattern rescans to EOF per unmatched
+        # <figure> start (review #274 perf finding).
+        if "</figure>" in md.lower():
+            md = _FIGURE_BLOCK_RE.sub(_figure_repl, md)
+        return _IMG_TAG_RE.sub(
+            lambda m: _img_tag_to_markdown(m.group(0)) or "", md
+        )
+
+    return _outside_code_blocks(markdown, _inline_pass)
 
 
 def _save_extracted_images(
@@ -310,29 +358,42 @@ def _save_extracted_images(
     return mapping, ref_index
 
 
-_MD_IMG_RE = re.compile(r"(!\[[^\]]*\]\()([^)]+)(\))")
+# Title-aware: pandoc emits `![alt](path "title")` for <img title> — the
+# path is the ref, the optional quoted title must survive untouched
+# (a title swallowed into the ref would miss the lookup and die at the
+# runner's persist gate; review #274 P2).
+_MD_IMG_RE = re.compile(r'(!\[[^\]]*\]\()(\S+)(\s+"[^"]*")?(\))')
 _SRC_ATTR_RE = re.compile(r'(<img\b[^>]*?\bsrc=")([^"]+)(")', re.IGNORECASE)
 
 
 def _rewrite_image_refs(markdown: str, ref_index: Dict[str, str]) -> str:
     """Point every image reference at its saved ``image_<N>.<ext>`` name.
 
-    Covers the markdown form and (for anything `_inline_html_images`
-    left as HTML) the ``src`` attribute. Unresolvable refs are left
-    untouched — the runner's http/ref gates handle them downstream.
+    Covers the markdown form (with or without a title) and (for anything
+    `_inline_html_images` left as HTML) the ``src`` attribute. Fenced code
+    blocks are skipped verbatim. Unresolvable refs are left untouched —
+    the runner's http/ref gates handle them downstream.
     """
     def _lookup(ref: str) -> str:
         return ref_index.get(ref) or ref_index.get(Path(ref).name) or ref
 
-    markdown = _MD_IMG_RE.sub(
-        lambda m: m.group(1) + _lookup(m.group(2)) + m.group(3), markdown
-    )
-    # Defense-in-depth only: in the normal flow no local-src <img> survives
-    # `_inline_html_images`, so this pass rewrites at most leftover remote
-    # refs (which the runner's link-ref gate drops downstream anyway).
-    return _SRC_ATTR_RE.sub(
-        lambda m: m.group(1) + _lookup(m.group(2)) + m.group(3), markdown
-    )
+    def _md_pass(md: str) -> str:
+        return _MD_IMG_RE.sub(
+            lambda m: (m.group(1) + _lookup(m.group(2))
+                       + (m.group(3) or "") + m.group(4)),
+            md,
+        )
+
+    def _src_pass(md: str) -> str:
+        # Defense-in-depth only: in the normal flow no local-src <img>
+        # survives `_inline_html_images`, so this pass rewrites at most
+        # leftover remote refs (which the runner's link-ref gate drops
+        # downstream anyway).
+        return _SRC_ATTR_RE.sub(
+            lambda m: m.group(1) + _lookup(m.group(2)) + m.group(3), md
+        )
+
+    return _outside_code_blocks(markdown, lambda md: _src_pass(_md_pass(md)))
 
 
 # #220 Stage 2 promotion: the Z3 normalization lives in the shared repair

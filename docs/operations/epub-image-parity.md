@@ -34,14 +34,18 @@ SELECT d.title,
                                                     AS chunks_with_figcaps
   FROM zotero_documents d
   JOIN LATERAL (
-        SELECT s.id FROM processing_snapshots s
+        -- snapshot AND its attachment from ONE lateral, so the chunk
+        -- set and the content_type filter always describe the same
+        -- snapshot (the unique index is per (document, attachment,
+        -- profile), not per document — twin attachments could otherwise
+        -- desynchronize the two subselects).
+        SELECT s.id AS snap_id, s.attachment_id
+          FROM processing_snapshots s
          WHERE s.document_id = d.id AND s.active
          ORDER BY s.created_at DESC LIMIT 1
        ) snap ON true
-  JOIN processing_chunks c ON c.snapshot_id = snap.id
-  JOIN zotero_attachments a ON a.id = (
-        SELECT s.attachment_id FROM processing_snapshots s
-         WHERE s.document_id = d.id AND s.active LIMIT 1)
+  JOIN processing_chunks c ON c.snapshot_id = snap.snap_id
+  JOIN zotero_attachments a ON a.id = snap.attachment_id
  WHERE a.content_type = 'application/epub+zip'
    AND NOT d.deleted
  GROUP BY d.id, d.title
