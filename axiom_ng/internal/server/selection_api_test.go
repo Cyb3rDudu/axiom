@@ -208,13 +208,20 @@ func TestDocumentsListing(t *testing.T) {
 	s := New(":0", nil)
 	stub := &stubSelection{mode: map[string]string{}, docs: []repo.ZoteroDocumentState{
 		{DocumentID: "d1", Title: "Synced", SyncState: "synced", UpdatedAt: time.Now()},
-		{DocumentID: "d2", Title: "Held", SyncState: "held", UpdatedAt: time.Now()},
+		{DocumentID: "d2", Title: "Held", SyncState: "held", UpdatedAt: time.Now(),
+			Outcome: "needs_ocr", OutcomeReason: "unpaginiert: text-less scan, OCR rebuild required"},
 	}}
 	s.SetSelectionRepo(stub)
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/zotero/documents?sync_state=held", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"sync_state":"held"`) {
 		t.Fatalf("listing: %d %s", rec.Code, rec.Body.String())
+	}
+	// #252 outcome fields ride the same route: the derived per-doc terminal
+	// state must survive JSON serialization, not just the repo layer.
+	if !strings.Contains(rec.Body.String(), `"outcome":"needs_ocr"`) ||
+		!strings.Contains(rec.Body.String(), `"outcome_reason":"unpaginiert: text-less scan, OCR rebuild required"`) {
+		t.Fatalf("outcome fields not serialized: %s", rec.Body.String())
 	}
 	// the filter is honored server-side: the synced doc must NOT be in it
 	if strings.Contains(rec.Body.String(), "Synced") {

@@ -78,14 +78,58 @@ type AttachmentState struct {
 // ZoteroDocumentState is one row of the client's sync-state listing (#166
 // Ziel 4): Zotero bestand + ingest status + preferred attachment info.
 type ZoteroDocumentState struct {
-	DocumentID string           `json:"document_id"`
-	ZoteroKey  string           `json:"zotero_key"`
-	Title      string           `json:"title"`
-	ItemType   string           `json:"item_type"`
-	SyncState  string           `json:"sync_state"` // synced | held | processing | pending
-	JobStatus  string           `json:"job_status,omitempty"`
-	Attachment *AttachmentState `json:"attachment,omitempty"`
-	UpdatedAt  time.Time        `json:"updated_at"`
+	DocumentID    string           `json:"document_id"`
+	ZoteroKey     string           `json:"zotero_key"`
+	Title         string           `json:"title"`
+	ItemType      string           `json:"item_type"`
+	SyncState     string           `json:"sync_state"` // synced | held | processing | pending
+	JobStatus     string           `json:"job_status,omitempty"`
+	Attachment    *AttachmentState `json:"attachment,omitempty"`
+	RepairStatus  string           `json:"repair_status,omitempty"` // newest repair_cases.status, live
+	Outcome       string           `json:"outcome"`                 // completed | in_repair | needs_ocr | failed | processing | pending | excluded
+	OutcomeReason string           `json:"outcome_reason,omitempty"`
+	UpdatedAt     time.Time        `json:"updated_at"`
+}
+
+// DeriveOutcome projects job/repair/selection truth into the human answer
+// for "what happened to my document?" (#252). No new truth — precedence:
+// excluded → running → needs_ocr (unpaginiert dead end, from the job's
+// quality_state pagination_state, set by the #254 preflight) → live repair
+// track → completed → failed+reason excerpt → never enqueued.
+func DeriveOutcome(selMode, jobStatus, errCode, errMsg, paginationState, repairStatus string) (outcome, reason string) {
+	switch {
+	case selMode == "excluded":
+		return "excluded", "selection-excluded"
+	case jobStatus == "claimed" || jobStatus == "processing":
+		return "processing", ""
+	case jobStatus == "pending":
+		return "pending", ""
+	case paginationState == "needs_ocr":
+		return "needs_ocr", "unpaginiert: text-less scan, OCR rebuild required"
+	case repairStatus == "rejected" || repairStatus == "queued" ||
+		repairStatus == "in_repair" || repairStatus == "blocked_for_dudu":
+		return "in_repair", "repair case: " + repairStatus
+	case jobStatus == "completed":
+		return "completed", ""
+	case jobStatus == "failed" || jobStatus == "skipped" || jobStatus == "cancelled":
+		r := errCode
+		if errMsg != "" {
+			// rune-safe cap: byte slicing could split a multi-byte rune mid-sequence
+			if r := []rune(errMsg); len(r) > 160 {
+				errMsg = string(r[:160]) + "…"
+			}
+			if r != "" {
+				r += ": "
+			}
+			r += errMsg
+		}
+		if r == "" {
+			r = jobStatus
+		}
+		return "failed", r
+	default:
+		return "pending", "never enqueued"
+	}
 }
 
 // ListZoteroDocuments returns the full non-deleted Zotero projection with
@@ -97,14 +141,22 @@ func (r *Repo) ListZoteroDocuments(ctx context.Context, syncState string) ([]Zot
 		SELECT d.id::text, d.zotero_key, COALESCE(d.title,''), COALESCE(d.item_type,''), d.updated_at,
 		       COALESCE(a.zotero_key,''), COALESCE(a.filename,''), COALESCE(a.content_type,''), COALESCE(a.content_hash,''),
 		       COALESCE(j.status::text,''),
+		       COALESCE(j.error_code,''), COALESCE(j.error_message,''),
+		       COALESCE(j.pagination_state,''),
+		       COALESCE(rc.status,''),
 		       COALESCE(s.mode,'')
-		FROM zotero_documents d
-		LEFT JOIN zotero_attachments a ON a.document_id=d.id AND a.preferred AND NOT a.deleted
-		LEFT JOIN LATERAL (
-			SELECT status FROM ingest_jobs j WHERE j.attachment_id=a.id
-			ORDER BY j.updated_at DESC, j.id DESC LIMIT 1
-		) j ON true
-		LEFT JOIN zotero_selections s ON s.document_id=d.id
+	FROM zotero_documents d
+	LEFT JOIN zotero_attachments a ON a.document_id=d.id AND a.preferred AND NOT a.deleted
+	LEFT JOIN LATERAL (
+		SELECT status, error_code, error_message, quality_state->>'pagination_state' AS pagination_state
+		FROM ingest_jobs j WHERE j.attachment_id=a.id
+		ORDER BY j.updated_at DESC, j.id DESC LIMIT 1
+	) j ON true
+	LEFT JOIN LATERAL (
+		SELECT status::text FROM repair_cases rc WHERE rc.attachment_id=a.id
+		ORDER BY rc.updated_at DESC, rc.id DESC LIMIT 1
+	) rc ON true
+	LEFT JOIN zotero_selections s ON s.document_id=d.id
 		WHERE NOT d.deleted
 		ORDER BY COALESCE(d.title,'')`)
 	if err != nil {
@@ -115,8 +167,10 @@ func (r *Repo) ListZoteroDocuments(ctx context.Context, syncState string) ([]Zot
 	for rows.Next() {
 		var z ZoteroDocumentState
 		var attKey, attName, attType, attHash, jobStatus, selMode string
+		var errCode, errMsg, pagination, repairStatus string
 		if err := rows.Scan(&z.DocumentID, &z.ZoteroKey, &z.Title, &z.ItemType, &z.UpdatedAt,
-			&attKey, &attName, &attType, &attHash, &jobStatus, &selMode); err != nil {
+			&attKey, &attName, &attType, &attHash, &jobStatus,
+			&errCode, &errMsg, &pagination, &repairStatus, &selMode); err != nil {
 			return nil, err
 		}
 		switch {
@@ -134,6 +188,8 @@ func (r *Repo) ListZoteroDocuments(ctx context.Context, syncState string) ([]Zot
 			z.SyncState = "held"
 		}
 		z.JobStatus = jobStatus
+		z.RepairStatus = repairStatus
+		z.Outcome, z.OutcomeReason = DeriveOutcome(selMode, jobStatus, errCode, errMsg, pagination, repairStatus)
 		if attKey != "" {
 			z.Attachment = &AttachmentState{ZoteroKey: attKey, Filename: attName, ContentType: attType, ContentHash: attHash}
 		}

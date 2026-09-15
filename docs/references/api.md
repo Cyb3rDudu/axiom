@@ -215,6 +215,21 @@ The response is `{"documents":[...]}`. Each row contains `document_id`,
 preferred `attachment`, and `updated_at`. `held` means the document is excluded
 or has no job; `synced` means the preferred attachment has a completed job.
 
+Each row also carries the derived per-document outcome (#252) — the human
+answer to "what happened to this doc?", projected from job/repair-case/selection
+state, no DB forensics needed:
+
+| Field | Meaning |
+| --- | --- |
+| `outcome` | `completed` (processed, searchable) \| `in_repair` (repair track active) \| `needs_ocr` (unpaginiert scan — not text-searchable without OCR rebuild) \| `failed` \| `processing` \| `pending` \| `excluded` (held by selection) |
+| `outcome_reason` | Short reason excerpt: repair-case status, `error_code: message` (capped at 160 runes), `selection-excluded`, or `never enqueued` |
+| `repair_status` | Newest `repair_cases` status for the preferred attachment, live (`rejected`, `queued`, `in_repair`, `healed`, `failed`, `blocked_for_dudu`); omitted when no case exists |
+
+Derivation precedence: `excluded` → running → `needs_ocr` → live repair
+track → `completed` → `failed`+reason → `never enqueued`. Closed repair
+cases (`healed`/`failed`) defer to the job status as truth until
+reprocessing re-runs the document.
+
 ## Search and passages
 
 ### `POST /api/search`
