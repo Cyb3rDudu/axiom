@@ -289,7 +289,7 @@ func (r *Repo) RequeueRepairCase(ctx context.Context, caseID, reason string) err
 		return fmt.Errorf("case %s: attachment nicht gefunden", caseID)
 	}
 	tag, err = tx.Exec(ctx, `
-		UPDATE repair_cases SET status='queued', blocked_reason=NULL, updated_at=now()
+		UPDATE repair_cases SET status='queued', blocked_reason='', updated_at=now()
 		WHERE id=$1 AND status IN ('failed','blocked_for_dudu')`, caseID)
 	if err != nil {
 		return err
