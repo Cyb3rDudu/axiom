@@ -16,9 +16,9 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -83,6 +83,7 @@ type custWriteZotero struct {
 	versions   map[string]int64
 	deletes    []string
 	uploaded   string
+	failUpload bool // phase 2 (bytes) 500s → orphan-cleanup path (review MAJOR)
 }
 
 func (f *custWriteZotero) server(t *testing.T) *httptest.Server {
@@ -124,6 +125,10 @@ func (f *custWriteZotero) server(t *testing.T) *httptest.Server {
 			}
 			w.Write([]byte(`{"url":"` + srv.URL + `/upload", "uploadKey":"uk"}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/upload"):
+			if f.failUpload {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 			b, _ := io.ReadAll(r.Body)
 			f.uploaded = string(b)
 			w.WriteHeader(http.StatusCreated)
@@ -165,9 +170,9 @@ func custITEnv(t *testing.T) (*Server, *repo.Repo, *custWriteZotero, *custSource
 	src := &custSource{baseURL: "http://cust-it.local"}
 	src.set([]zotero.CanonicalItem{
 		custItem("BOOK1", "book", "", map[string]any{
-			"title": "Nachhaltiges Personalmanagement",
+			"title":    "Nachhaltiges Personalmanagement",
 			"creators": []map[string]string{{"firstName": "Adrian", "lastName": "Geursen", "creatorType": "author"}},
-			"date":   "2022",
+			"date":     "2022",
 		}, ""),
 		custItem("ATT1", "attachment", "BOOK1", map[string]any{
 			"contentType": "application/pdf", "filename": "broken.pdf",
@@ -259,9 +264,9 @@ func TestIT_CustodyFullProtocolHealedPreferredAfterSync(t *testing.T) {
 	// attachment is the ONLY active one and PREFERRED
 	src.set([]zotero.CanonicalItem{
 		custItem("BOOK1", "book", "", map[string]any{
-			"title": "Nachhaltiges Personalmanagement",
+			"title":    "Nachhaltiges Personalmanagement",
 			"creators": []map[string]string{{"firstName": "Adrian", "lastName": "Geursen", "creatorType": "author"}},
-			"date":   "2022",
+			"date":     "2022",
 		}, ""),
 		custItem("HEALED1", "attachment", "BOOK1", map[string]any{
 			"contentType": "application/pdf", "filename": "Geursen - 2022 - Nachhaltiges Personalmanagement.pdf",
@@ -390,33 +395,55 @@ func TestIT_CustodyGuards(t *testing.T) {
 	}
 }
 
-// TestIT_CustodyAmbiguousCreateRefused — a record with a create key but no
-// terminal status is the ambiguous-resume state (the upload may have
-// succeeded server-side): the endpoint refuses with 409 and a DIFFERENT
-// error than the healed case, before any mutation (review W1).
+// TestIT_CustodyAmbiguousCreateRefused — the review-MAJOR pin at the
+// endpoint level, driven through the REAL flow (no hand-crafted record):
+// run 1's create mints the item but the upload dies and the best-effort
+// cleanup delete fails too — the WriteClient returns (key, err), the
+// endpoint 502s, and the ORPHAN KEY must be on the record durably.
+// The re-run (exactly what the runbook prescribes after a 502) is then
+// refused with 409 naming the key, BEFORE any mutation — a blind re-run
+// would mint a second sibling.
 func TestIT_CustodyAmbiguousCreateRefused(t *testing.T) {
 	s, _, fw, _, _, healed, qroot := custITEnv(t)
 
-	stale := map[string]any{
-		"attachment_key": "ATT1", "status": "failed", "new_attachment_key": "HEALED1",
-		"steps": []map[string]any{{"action": "quarantine"}, {"action": "delete_attachment"}, {"action": "failed"}},
+	fw.mu.Lock()
+	fw.failUpload = true // create OK, upload 500, cleanup-delete of HEALED1 404s → (key, err)
+	fw.mu.Unlock()
+	rec := postCustody(s, "ATT1", "Orphan-Fall", healed)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("run 1 must fail at the upload (502), got %d: %s", rec.Code, rec.Body.String())
 	}
-	raw, _ := json.Marshal(stale)
-	os.MkdirAll(filepath.Join(qroot, "manual"), 0o755)
-	os.WriteFile(filepath.Join(qroot, "manual", "ATT1.json"), raw, 0o644)
 
-	rec := postCustody(s, "ATT1", "re-run nach Create-Abbruch", healed)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("ambiguous create must 409, got %d: %s", rec.Code, rec.Body.String())
+	// the orphan key reached the record durably — the guard's basis
+	recPath := filepath.Join(qroot, "manual", "ATT1.json")
+	recd := struct {
+		Status           string `json:"status"`
+		NewAttachmentKey string `json:"new_attachment_key"`
+	}{}
+	raw, err := os.ReadFile(recPath)
+	if err != nil {
+		t.Fatalf("record must exist after the failed run: %v", err)
 	}
-	if !strings.Contains(rec.Body.String(), "HEALED1") {
-		t.Fatalf("refusal must name the recorded create key: %s", rec.Body.String())
+	if err := json.Unmarshal(raw, &recd); err != nil {
+		t.Fatal(err)
+	}
+	if recd.Status != "failed" || recd.NewAttachmentKey != "HEALED1" {
+		t.Fatalf("orphan key must be on the record (status=%q new_key=%q): %s", recd.Status, recd.NewAttachmentKey, raw)
+	}
+
+	// the re-run is refused with 409 naming the key, before any mutation
+	rec2 := postCustody(s, "ATT1", "re-run nach Orphan-Abbruch", healed)
+	if rec2.Code != http.StatusConflict {
+		t.Fatalf("ambiguous create must 409, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+	if !strings.Contains(rec2.Body.String(), "HEALED1") {
+		t.Fatalf("refusal must name the recorded create key: %s", rec2.Body.String())
 	}
 	fw.mu.Lock()
 	deletes := len(fw.deletes)
 	uploaded := fw.uploaded
 	fw.mu.Unlock()
-	if deletes != 0 || uploaded != "" {
-		t.Fatalf("ambiguous-create refusal must fire before any mutation: %d deletes, uploaded %q", deletes, uploaded)
+	if deletes != 1 || uploaded != "" {
+		t.Fatalf("refusal must fire before any further mutation: %d deletes, uploaded %q", deletes, uploaded)
 	}
 }

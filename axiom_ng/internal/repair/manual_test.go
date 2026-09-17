@@ -29,6 +29,7 @@ type fakeWriteZotero struct {
 	createdFile  []byte           // uploaded bytes
 	createdName  string           // uploaded filename
 	failCreate   bool
+	failUpload   bool // phase 2 (bytes) 500s → orphan-cleanup path
 }
 
 func newFakeWrite(brokenKey string) *fakeWriteZotero {
@@ -105,6 +106,13 @@ func (f *fakeWriteZotero) server(t *testing.T) *httptest.Server {
 			w.Write([]byte(`{"url":"` + srv.URL + `/upload", "uploadKey":"uk-1"}`))
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/upload"):
 			// phase 2: the bytes (multipart — capture raw, assert contains)
+			f.mu.Lock()
+			fail := f.failUpload
+			f.mu.Unlock()
+			if fail {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 			buf := make([]byte, 1<<20)
 			n, _ := r.Body.Read(buf)
 			f.mu.Lock()
@@ -355,5 +363,64 @@ func TestManualCustodyAbortAtCreateThenRerunCompletes(t *testing.T) {
 	}
 	if quarantines != 2 {
 		t.Fatalf("both runs must have quarantined, got %d", quarantines)
+	}
+}
+
+// TestManualCustodyOrphanKeyReachesRecord — the review-MAJOR pin: when the
+// write gateway mints the item but the upload fails AND the best-effort
+// cleanup delete fails too, CreateAttachmentWithFile returns (key, err).
+// Apply discards the key on its error path — ManualDeps must lift it onto
+// the record (step + NewAttachmentKey, durable before the failure return),
+// because the endpoint's ambiguous-create guard refuses re-runs on exactly
+// that field. Without the lift, the runbook's "nach 502 erneut aufrufen"
+// mints a second sibling.
+func TestManualCustodyOrphanKeyReachesRecord(t *testing.T) {
+	root := t.TempDir()
+	orig := filepath.Join(root, "orig.pdf")
+	os.WriteFile(orig, []byte("original"), 0o644)
+	fw := newFakeWrite("BROKEN1")
+	fw.failUpload = true // item minted, upload dies
+	// NEW1 stays absent from versions on purpose: the orphan-cleanup GET
+	// 404s → cleanup delete fails → the client returns (NEW1, err)
+	srv := fw.server(t)
+	wc := zotero.NewWriteClient(srv.URL, "srv", "key")
+
+	rec := &ManualRecord{AttachmentKey: "BROKEN1", DocumentKey: "P1",
+		Reason: "orphan test", OriginalPath: orig, ContentType: "application/pdf", CreatedAt: ManualNow()}
+	deps := &ManualDeps{Write: wc, Root: root, Record: rec, RunID: ManualRunID("BROKEN1")}
+	_, err := Apply(context.Background(), deps, root, ApplyCase{
+		CaseID: "manual-BROKEN1", AttachmentKey: "BROKEN1", DocumentKey: "P1",
+		Title: "T", Year: 2020, SrcPath: orig, ContentType: "application/pdf",
+	}, []byte("healed"))
+	if err == nil {
+		t.Fatal("run must fail at the upload")
+	}
+
+	persisted, perr := LoadManualRecord(root, "BROKEN1")
+	if perr != nil || persisted == nil {
+		t.Fatalf("record must persist: %v %v", persisted, perr)
+	}
+	if persisted.Status != "failed" {
+		t.Fatalf("status must be failed: %+v", persisted)
+	}
+	if persisted.NewAttachmentKey != "NEW1" {
+		t.Fatalf("the orphan key must reach the record durably (guard basis), got %q", persisted.NewAttachmentKey)
+	}
+	found := false
+	for _, s := range persisted.Steps {
+		if s.Action == "create_attachment_orphan" {
+			found = true
+			if s.Detail["new_zotero_key"] != "NEW1" {
+				t.Fatalf("orphan step must name the key: %+v", s.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("record must carry a create_attachment_orphan step: %+v", persisted.Steps)
+	}
+	// the failure step is named after the orphan step (audit order)
+	last := persisted.Steps[len(persisted.Steps)-1].Action
+	if last != "failed" {
+		t.Fatalf("last step must be the failure record, got %s", last)
 	}
 }

@@ -71,6 +71,11 @@ The response is `{"jobs":[...]}`. Job fields currently retain their Go names:
 `Attempt`, `MaxAttempts`, `ErrorCode`, `ErrorMessage`, `ResolvedAt`, and
 `EnqueuedAt`. Nullable database values appear as `null`.
 
+`ResolvedAt` is the failure-supersession marker, not a completion time: it
+is written only when a new pending job resolves a prior FAILED job of the
+same attachment. A completed job was never failed, so `ResolvedAt: null` on
+completed jobs is correct semantics.
+
 ```json
 {
   "jobs": [
@@ -664,9 +669,13 @@ under the parent with a schema filename. Success returns `record`,
 `new_attachment_key`, `filename`, `quarantine_path`, and a `next_step` sync
 reminder. Failures: `400` guard violations (before any mutation), `404`
 unknown key, `409` already healed (idempotent refusal — a re-run would
-upload a duplicate healed sibling; the completed record rides the body),
-`502` Zotero write gateway failure mid-protocol (re-run continues: the
-record shows the completed steps, quarantine re-runs custody-conservatively).
+upload a duplicate healed sibling; the completed record rides the body)
+or an aborted create run whose orphan key is on the record (refusal names
+the key; runbook covers the recovery), `500` quarantine or custody-record
+write failure, `502` Zotero write gateway failure mid-protocol (re-run
+continues: the record shows the completed steps, quarantine re-runs
+custody-conservatively), `503` the Zotero write client is not wired
+(`SetRepairAPI` without a write key).
 
 ### `GET /api/repair/docs/{documentKey}/locator-stats`
 

@@ -61,6 +61,12 @@ EPUB-Reparaturen: `application/epub+zip`). Antwort: Schrittreport
   prüfen. Geschwister vorhanden → Reparatur ist faktisch fertig (Satz auf
   `healed` setzen, Sync); nicht vorhanden → `new_attachment_key` aus dem
   Satz löschen und erneut aufrufen.
+- **Orphan-Fall** (Schritt `create_attachment_orphan` im Satz): das Item
+  wurde erzeugt, aber der Upload schlug fehl UND das
+  Aufräum-Delete ebenfalls — der Key steht dann im Satz (Schritt +
+  `new_attachment_key`, zusätzlich im Fehlertext der 502). Das Item ist
+  LEER (keine Datei): es kann kein Geschwister sein — in Zotero löschen,
+  `new_attachment_key` aus dem Satz löschen, erneut aufrufen.
 - **Nie zwei Aufrufe parallel starten** — die Verweigerungs-Guards sind
   check-then-act; Doppelklick/Retry immer nacheinander ausführen.
 - **Lief nach einem fehlgeschlagenen Lauf (Item bereits gelöscht) ein Sync**, verweigert
@@ -75,7 +81,8 @@ EPUB-Reparaturen: `application/epub+zip`). Antwort: Schrittreport
 | `400` | `attachment_key`/`reason` fehlt, Datei leer/unlesbar, content_type unbekannt |
 | `404` | Attachment-Key der Bibliothek unbekannt oder gelöscht |
 | `409` | Key wurde bereits erfolgreich geheilt **oder** ein Create-Lauf wurde protokolliert ohne abzuschließen (Report im Body; erst Zotero prüfen — doppelt geheiltes Geschwister vermeiden) |
-| `502` | Zotero-Write-Gateway-Fehler mittendrin — Satz zeigt den Stand, erneuter Aufruf setzt fort |
+| `502` | Zotero-Write-Gateway-Fehler mittendrin — Satz zeigt den Stand, erneuter Aufruf setzt fort (Ausnahme Orphan-Fall → 409, siehe unten) |
+| `500` | Quarantäne- oder Protokoll-Schreibfehler (custody fail-closed vor der Mutation) |
 | `503` | Zotero-Write-Client nicht verdrahtet — `SetRepairAPI`/Write-Key fehlt |
 
 ## Manuelle Wiederherstellung (kein Un-Quarantine-Automatismus)

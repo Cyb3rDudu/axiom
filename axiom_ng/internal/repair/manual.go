@@ -163,8 +163,23 @@ func (d *ManualDeps) DeleteAttachment(key string) error {
 	return err
 }
 
+// CreateAttachmentWithFile uploads the healed artifact. On the write
+// gateway's AMBIGUOUS failure — item minted, upload failed, best-effort
+// cleanup ALSO failed — the WriteClient returns the orphan key WITH the
+// error. repair.Apply discards that key on its error path; custody cannot
+// afford to (review MAJOR): the orphan key is lifted onto the record HERE,
+// durably before the failure return, so the endpoint's ambiguous-create
+// guard refuses a blind re-run (which would mint a second sibling). A failed
+// record write must not swallow the key either — it rides the error text.
 func (d *ManualDeps) CreateAttachmentWithFile(parentKey, filename, contentType string, pdf []byte) (string, error) {
-	return d.Write.CreateAttachmentWithFile(parentKey, filename, contentType, pdf)
+	key, err := d.Write.CreateAttachmentWithFile(parentKey, filename, contentType, pdf)
+	if err != nil && key != "" {
+		d.Record.NewAttachmentKey = key
+		if perr := d.persist("create_attachment_orphan", map[string]any{"new_zotero_key": key, "filename": filename}); perr != nil {
+			return key, fmt.Errorf("%w (Orphan-Anhang %s konnte nicht protokolliert werden: %v — Key notieren!)", err, key, perr)
+		}
+	}
+	return key, err
 }
 
 // MarkRepairFailed records the failing step (caseID is ignored — the manual
