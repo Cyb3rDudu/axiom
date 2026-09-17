@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
@@ -159,6 +161,49 @@ var cliModes = []cliMode{
 				modeFail(logger, modeSingleTx, "repoint: %v", err)
 			}
 			logger.Printf("alias-variant edges re-pointed to survivors; intra-family self-loops deleted")
+		},
+	},
+	{
+		flag:   "-maintenance-retention",
+		prefix: "retention: ",
+		apply:  true,
+		// #281: retention/GC maintenance run. Dry-run by default (exact
+		// removal counts); --apply removes superseded snapshots (chunks/
+		// embeddings/relationships cascade) and stale terminal job attempts
+		// beyond the retention age. Never deletes: the latest job per
+		// document, repair-linked jobs, active-snapshot producers, pending
+		// work. Idempotent — a second run reports zero.
+		run: func(logger *log.Logger, apply bool, rp *repo.Repo) {
+			age := repo.RetentionJobMinAgeDefault
+			if v := os.Getenv("AXIOM_RETENTION_JOB_DAYS"); v != "" {
+				if d, err := strconv.Atoi(v); err == nil && d > 0 {
+					age = time.Duration(d) * 24 * time.Hour
+				} else {
+					logger.Fatalf("AXIOM_RETENTION_JOB_DAYS must be a positive integer, got %q", v)
+				}
+			}
+			if !apply {
+				rep, err := rp.RetentionPlan(context.Background(), age)
+				if err != nil {
+					modeFail(logger, modeSingleTx, "dry-run: %v", err)
+				}
+				out, _ := json.MarshalIndent(rep, "", "  ")
+				logger.Printf("dry-run (use --apply to execute): snapshots to remove=%d (chunks=%d, dense=%d, sparse=%d, entities=%d, relationships=%d/%d, artifacts=%d); stale job attempts to remove=%d; never-delete: latest-per-document=%d repair-linked=%d active-snapshot=%d non-terminal=%d; superseded kept for pending outbox=%d",
+					rep.Snapshots.Remove, rep.Snapshots.Chunks, rep.Snapshots.DenseEmbeddings, rep.Snapshots.SparseEmbeddings,
+					rep.Snapshots.Entities, rep.Snapshots.ChunkRelationships, rep.Snapshots.EntityRelationships, rep.Snapshots.Artifacts,
+					rep.Jobs.Remove, rep.Jobs.KeepLatest, rep.Jobs.KeepRepairLinked, rep.Jobs.KeepActiveSnap, rep.Jobs.KeepNonTerminal,
+					rep.Snapshots.KeepPendingOutbox)
+				fmt.Println(string(out))
+				return
+			}
+			rem, plan, err := rp.ApplyRetention(context.Background(), age)
+			if err != nil {
+				modeFail(logger, modeSingleTx, "apply: %v", err)
+			}
+			logger.Printf("retention APPLIED: %d superseded snapshot(s) + %d stale job attempt(s) removed (plan had %d/%d)",
+				rem.Snapshots, rem.Jobs, plan.Snapshots.Remove, plan.Jobs.Remove)
+			out, _ := json.MarshalIndent(rem, "", "  ")
+			fmt.Println(string(out))
 		},
 	},
 	{
