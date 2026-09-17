@@ -386,8 +386,12 @@ func haltTerminalReason(out string) (string, bool) {
 			// unmeasurability is always a Stelle-1 statement: stelle2/3 are
 			// corroborating witnesses that never gate the diagnosis (truth
 			// ordering) — the prefix attributes the ground honestly.
+			// "kein messbares folio" (not the broader "kein messbar") so a
+			// STOP report echoing the system prompt's stop guidance („wenn
+			// kein messbares Heilungspotenzial vorliegt, schließe mit stop")
+			// does NOT classify as a stelle1 evidence gap.
 			if strings.Contains(lg, "nicht messbar") ||
-				strings.Contains(lg, "kein messbar") ||
+				strings.Contains(lg, "kein messbares folio") ||
 				strings.Contains(lg, "unmessbar") ||
 				strings.Contains(lg, "unmeasurable") {
 				return "needs-evidence: stelle1_druckseite — " + ground, true

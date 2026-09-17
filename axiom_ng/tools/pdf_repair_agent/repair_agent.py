@@ -100,6 +100,9 @@ def h_probe(step: dict, ctx: dict) -> dict:
         "Upgrade-Pfad #278: Annotation via Zotero-API holen, Zitat an "
         "Position validieren)"
     )
+    _ANNOTATION_LABEL_NOT_IMPLEMENTED = (
+        "annotation-label: NOT IMPLEMENTED (kein Annotations-Lesepfad)"
+    )
     # Wahrheits-Ordnung (Owner-Ruling 23.08.): fehlende Stellen 2/3 sind
     # OFFEN, kein Misserfolg — „unvollständige Sonde" ist KEIN Eskalations-
     # grund; nur UNMESSBARES Signal (Stelle 1) eskaliert. Der Lauf kann
@@ -121,7 +124,7 @@ def h_probe(step: dict, ctx: dict) -> dict:
                 _STELLE3_NOT_IMPLEMENTED,
             ],
             "unproven": [
-                "annotation-label: NOT IMPLEMENTED (kein Annotations-Lesepfad)",
+                _ANNOTATION_LABEL_NOT_IMPLEMENTED,
                 "chunk-page-exakt",
             ],
         }
@@ -136,7 +139,7 @@ def h_probe(step: dict, ctx: dict) -> dict:
                 _STELLE3_NOT_IMPLEMENTED,
             ],
             "unproven": [
-                "annotation-label: NOT IMPLEMENTED (kein Annotations-Lesepfad)",
+                _ANNOTATION_LABEL_NOT_IMPLEMENTED,
                 "chunk-page-exakt",
             ],
         }
@@ -148,7 +151,7 @@ def h_probe(step: dict, ctx: dict) -> dict:
         "measured": ["rag-reachability"],
         "offen": [_STELLE3_NOT_IMPLEMENTED],
         "unproven": [
-            "annotation-label: NOT IMPLEMENTED (kein Annotations-Lesepfad)",
+            _ANNOTATION_LABEL_NOT_IMPLEMENTED,
             "chunk-page-exakt (benötigt Zotero-"
             "Annotationen + chunk-id; nur mit Produktiv-Config)",
         ],

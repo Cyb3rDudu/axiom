@@ -161,10 +161,10 @@ Kein Prosa davor oder danach; nur das Objekt. Beispiele:
     Bericht innerhalb des Budgets liegen.
   · Abbruch nach 2 Fehlversuchen derselben Schadensklasse.
   · Eskalations-Gründe für UNMESSBARE Signale (Stelle 1) müssen die
-    Formulierung „nicht messbar“ oder „kein messbares“ tragen — der
-    Dispatcher klassifiziert den Park-Grund danach (needs-evidence:
-    stelle1_druckseite); andere Formulierungen werden als no-healable
-    geführt.
+    Formulierung „nicht messbar“ oder „kein messbares Folio-Signal“
+    tragen — der Dispatcher klassifiziert den Park-Grund danach
+    (needs-evidence: stelle1_druckseite); andere Formulierungen werden
+    als no-healable geführt.
   · Kein Endlosversuch: Eskalation an den Owner statt weiterprobieren.
   · „Nichts tun, weil <Grund>" ist eine gültige Entscheidung: wenn kein
     messbares Heilungspotenzial vorliegt, schließe mit `stop` und einem

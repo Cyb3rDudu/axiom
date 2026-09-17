@@ -1,5 +1,7 @@
 # Eigene Venv + Caches — NIEMALS committen (Isolation: eigenes Venv pro
-# System, siehe bootstrap.sh).
+# System, siehe bootstrap.sh). Achtung: `.venv/` (mit Slash) matcht
+# KEINE Symlinks — die bare `.venv`-Zeile fängt auch die Worktree-
+# Symlinks (venv im Haupt-Checkout, hier nur verlinkt).
 .venv
 .venv/
 __pycache__/

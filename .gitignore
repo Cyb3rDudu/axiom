@@ -1,6 +1,9 @@
 # Python
 __pycache__/
 *.pyc
+# Bare `.venv` (no trailing slash) also catches symlinks — worktrees link
+# a shared venv via `.venv` -> ../.venv and must never commit the link.
+.venv
 .venv/
 .venv-docs/
 .pytest_cache/

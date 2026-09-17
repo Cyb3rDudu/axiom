@@ -196,10 +196,21 @@ func TestHaltReasonNamesTheActualGround(t *testing.T) {
 
 	// production phrasing drift (#278 review): the plan_class prose said
 	// „kein messbares Folio-Signal" — the marker set must catch the
-	// „kein messbar" negation form too, not only „nicht messbar".
+	// „kein messbares folio" negation form too, not only „nicht messbar".
 	out5 := `{"verdict": "halt", "final_step": {"reason": "plan_class unclassifiable — kein messbares Folio-Signal, Diagnose nicht tragfähig"}, "unproven": ["stelle3_zitat: NOT IMPLEMENTED"]}`
 	got5, _ := haltTerminalReason(out5)
 	if !strings.HasPrefix(got5, "needs-evidence: stelle1_druckseite — ") {
-		t.Fatalf("kein-messbar ground must classify unmeasurability, got %q", got5)
+		t.Fatalf("kein-messbares-folio ground must classify unmeasurability, got %q", got5)
+	}
+
+	// marker collision (follow-up review): a STOP report echoing the
+	// system prompt's own stop guidance („wenn kein messbares
+	// Heilungspotenzial vorliegt, schließe mit stop") must NOT classify
+	// as a stelle1 evidence gap — only the folio-specific negation form
+	// does. Otherwise every honest stop echoes itself into needs-evidence.
+	out6 := `{"verdict": "halt", "final_step": {"action": "stop", "reason": "kein messbares Heilungspotenzial — stop gemäß Kodex"}, "unproven": []}`
+	got6, _ := haltTerminalReason(out6)
+	if !strings.HasPrefix(got6, "no-healable-defect-evidenced: kein messbares Heilungspotenzial") {
+		t.Fatalf("stop-guidance echo must classify no-healable, got %q", got6)
 	}
 }
