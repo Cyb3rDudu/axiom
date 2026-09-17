@@ -225,20 +225,32 @@ def _scan_ocr_rebuild_rule(
         labels_applied = bool(surg.get("applied"))
         folio_evidence["surgery"] = surg
     proof = _heal_readback_proof(work)
+    # #258-Disziplin auch für den 2-in-1-Pfad: ein ANGEWENDETER Label-Write
+    # OHNE Readback-Beweis darf nicht im Upload landen (Exit 0 + work.pdf =
+    # Upload-Pfad des Invokers). Rollback auf den Backup-Stand — die
+    # verifizierte TEXT-Schicht-Heilung bleibt, die Labels fallen ehrlich
+    # weg (physical_only).
+    labels_rolled_back = False
+    if labels_applied and proof is None:
+        backup = run_dir / "backup.pdf"
+        if backup.exists():
+            _shutil.copy2(backup, work)
+            labels_applied = False
+            labels_rolled_back = True
     folio_evidence["readback"] = proof
     folio_evidence["labels_applied"] = labels_applied
+    folio_evidence["labels_rolled_back"] = labels_rolled_back
 
     # healed gilt, sobald die TEXT-Schicht verifiziert ist (Verifikat im
     # Werkzeug: Seitenzahl/Geometrie unverändert, Schicht vorhanden); die
     # Label-Heilung ist der 2-in-1-Bonus — ihr Ausbleiben (Mapping nicht
     # darstellbar) macht die Textschicht-Heilung nicht ungeschehen.
-    healed = bool(res.get("applied"))
     report = {
         "key": key,
-        "verdict": "healed" if healed else "halt",
+        "verdict": "healed",
         "catalog_rule": "scan_ocr_rebuild",
         "final_step": {
-            "action": "heal" if healed else "rollback",
+            "action": "heal",
             "plan_class": "scan_ocr_rebuild",
             "reason": (
                 f"OCR-Rebuild ({'force' if mode_force else 'plain'}, {ocr_lang}): "
@@ -246,7 +258,12 @@ def _scan_ocr_rebuild_rule(
                 + (
                     "geheilt (Readback bestätigt)"
                     if proof
-                    else "nicht darstellbar — Textschicht-Heilung allein"
+                    else (
+                        "Label-Write zurückgerollt — KEIN Readback-Beweis "
+                        "(#258-Pforte), Textschicht-Heilung allein (physical_only)"
+                        if labels_rolled_back
+                        else "nicht darstellbar — Textschicht-Heilung allein"
+                    )
                 )
             ),
         },
@@ -254,8 +271,6 @@ def _scan_ocr_rebuild_rule(
         "heal_readback": proof,
         "apply": True,
     }
-    if not healed:
-        work.unlink(missing_ok=True)
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=1, default=str)

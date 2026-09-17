@@ -18,6 +18,8 @@ import (
 // the window precisely; the detector only reads pg_locks.
 func (h *dispatchHarness) takeKGLock(t *testing.T) (release func()) {
 	t.Helper()
+	// the literal must equal repo.kgMaintenanceLockKey (0x4158494f4d4b4701)
+	// — drift fails loudly at the KGMaintenanceActive sanity assert below
 	conn, err := h.pool.Acquire(context.Background())
 	if err != nil {
 		t.Fatalf("acquire conn: %v", err)

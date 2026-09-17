@@ -8,7 +8,6 @@ package dispatcher
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 )
@@ -171,9 +170,6 @@ func TestPreflightAutoQueueDocLevelLoopGuard(t *testing.T) {
 	h := openDispatchDB(t)
 	h.truncateFixtures(t)
 	jobID := h.seedJob(t, "W7", 3)
-	if err := os.WriteFile("/tmp/x.pdf", []byte(testMinimalPDF), 0o600); err != nil {
-		t.Fatalf("write source pdf: %v", err)
-	}
 
 	// two prior HEALED cases on the document (attachment generations 1+2),
 	// OUTSIDE the stranded-heal window so the wave gate itself stays open —

@@ -244,3 +244,92 @@ func TestCollectionSelectionGatesSyncIT(t *testing.T) {
 		t.Fatalf("collection selection must gate through Service.Run: enqueued=%d jobs=%v (want exactly CB1)", res.Enqueued, jobs)
 	}
 }
+
+// TestSyncIncludeOverrideEnqueuesJob (#282 review fix): the post-heal
+// auto-sync relies on Service.Run with a one-run INCLUDE actually
+// enqueueing the included document's attachment — the seam between the
+// invoker's targeted sync call and the wave gate's release. No collection
+// selections are present here (the documented #166 boundary: with
+// collection selections active, an include never resurrects a document
+// outside the collection base — that case stays bounded by the wave
+// gate's 1h strand window and is documented, not silently enqueued).
+func TestSyncIncludeOverrideEnqueuesJob(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping integration test")
+	}
+	d, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	pdfPath := t.TempDir() + "/healed.pdf"
+	os.WriteFile(pdfPath, []byte("healed-bytes"), 0o600)
+
+	src := &canonicalFake{serverID: "healsync", baseURL: newScriptedBase(), version: 2}
+	src.items = []zotero.CanonicalItem{
+		mkItemJSON("HB1", "book", "", "Healed Book", map[string]any{
+			"creators": []map[string]string{{"firstName": "Grace", "lastName": "Hopper", "creatorType": "author"}},
+		}),
+		mkItemJSON("HA1", "attachment", "HB1", "healed.pdf", map[string]any{
+			"contentType": "application/pdf", "filename": "healed.pdf",
+		}),
+	}
+	env, _ := json.Marshal(map[string]any{
+		"key": "HA1", "version": 2,
+		"links": map[string]any{"enclosure": map[string]any{"href": "file://" + pdfPath}},
+		"data":  map[string]any{"key": "HA1", "version": 2, "itemType": "attachment", "parentItem": "HB1", "contentType": "application/pdf", "filename": "healed.pdf"},
+	})
+	src.items[1].Envelope = env
+
+	repoObj := repo.New(d.Pool())
+	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+
+	// first sync projects + enqueues (the document enters the world)
+	res, err := svc.Run(ctx, nil)
+	if err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	var docID string
+	if err := d.Pool().QueryRow(ctx,
+		`SELECT id::text FROM zotero_documents WHERE zotero_key='HB1' AND source_id=$1`, res.SourceID).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+	// simulate the healed state: job consumed, NEW attachment version in
+	// Zotero (the heal uploaded a new file) → next sync sees a change
+	if _, err := d.Pool().Exec(ctx, `DELETE FROM ingest_jobs`); err != nil {
+		t.Fatal(err)
+	}
+	src.version = 3
+	src.items[1].Version = 3
+	env2, _ := json.Marshal(map[string]any{
+		"key": "HA1", "version": 3,
+		"links": map[string]any{"enclosure": map[string]any{"href": "file://" + pdfPath}},
+		"data":  map[string]any{"key": "HA1", "version": 3, "itemType": "attachment", "parentItem": "HB1", "contentType": "application/pdf", "filename": "healed.pdf"},
+	})
+	src.items[1].Envelope = env2
+
+	// the #282 call shape: targeted include of exactly the healed document
+	res2, err := svc.Run(ctx, &SyncOverride{Include: []string{docID}})
+	if err != nil {
+		t.Fatalf("include run: %v", err)
+	}
+	if res2.Enqueued < 1 {
+		t.Fatalf("include sync must enqueue the healed document's job, got %d", res2.Enqueued)
+	}
+	var pending int
+	if err := d.Pool().QueryRow(ctx, `
+		SELECT count(*) FROM ingest_jobs j
+		JOIN zotero_attachments a ON a.id=j.attachment_id
+		WHERE a.source_id=$1 AND j.status='pending'`, res2.SourceID).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending < 1 {
+		t.Fatal("the enqueued healed job must be pending in the queue — the wave gate releases on exactly this")
+	}
+}

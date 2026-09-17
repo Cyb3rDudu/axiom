@@ -55,8 +55,13 @@ output; the original stays untouched.
 
 ## Flow through the system
 
-1. Preflight rejects the scan (textless or broken) → repair case
-   (`pagination_state: needs_ocr` in the analysis).
+1. Preflight rejects the scan → repair case (`pagination_state:
+   needs_ocr` in the analysis). **Automated path today = textless scans**:
+   the preflight does not yet detect broken word segmentation, so a
+   broken-text-layer case carries no marker until an operator seeds the
+   per-case `analysis.ocr` override (`{"ocr": {"mode": "force"}}`, set on
+   the repair case's analysis before queueing — the follow-up is teaching
+   the preflight the segmentation heuristic).
 2. The case **auto-queues** (#284 lifted the historical never-queue
    refusal) — the pilot books already sitting rejected in the DB can be
    queued manually via the repair API.

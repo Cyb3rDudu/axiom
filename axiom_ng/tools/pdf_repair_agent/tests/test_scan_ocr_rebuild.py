@@ -254,3 +254,27 @@ def test_katalogregel_scan_ohne_folios_heilt_textlayer_allein():
         "missing",
         "empty",
     )
+
+
+@needs_ocr
+def test_katalogregel_auto_diagnose_force_ohne_override():
+    """Mutationsonde (Review #284): die AUTO-Diagnose muss den force-Modus
+    selbst wählen — der Produktionsfall (Reder-Klasse) kommt OHNE
+    Aufruf-Override an. `mode_force = force or diag.get("mode") == "force"`
+    ohne die diag-Hälfte liefe dieser Test rot."""
+    _ensure()
+    cfg = _cfg_sandbox()
+    key = "EEEE5555"  # kaputte_textschicht — diagnose muss force erkennen
+    _fresh_run_dir(cfg, key)
+
+    rep = run_agent(key, apply=True, cfg=cfg)  # KEIN ocr_force
+
+    assert rep["verdict"] == "healed", rep["final_step"]["reason"]
+    assert rep["catalog_rule"] == "scan_ocr_rebuild"
+    assert "(force," in rep["final_step"]["reason"] or "force" in rep["final_step"]["reason"]
+    import pymupdf  # type: ignore[import-not-found]
+
+    d = pymupdf.open(cfg.work_root / key / "work.pdf")
+    t = str(d[0].get_text())
+    d.close()
+    assert " " in t and len(t.split()) > 10  # Leerzeichen zurück

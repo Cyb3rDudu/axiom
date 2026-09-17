@@ -702,7 +702,7 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 	// when the report carries them (review W5): a PDF report must not
 	// grow literal null entries.
 	// #254: pagination_state — "physical_only" (🟡 no_print_pagination,
-	// processed with PDF-S. N locators) vs "needs_ocr" (🔴 unpaginiert,
+	// processed with PDF-S. N locators) vs "needs_ocr" (🔴 scan-ohne-textlayer,
 	// textless scan) — the #252 outcome derivation reads exactly this
 	// instead of parsing finding strings. Absent for print-paginated books.
 	for _, k := range []string{"format", "drm", "opf_spine", "epubcheck", "pagination_state"} {

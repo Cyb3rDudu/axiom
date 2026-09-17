@@ -39,9 +39,10 @@ The run is **idempotent**: a second run reports zero removals.
 - every job whose attachment has **any repair case** (heal forensics);
 - every job that **produced an active snapshot**;
 - every **non-terminal** job (`pending`/`claimed`/`processing`);
-- superseded snapshots with **pending outbox rows** — their OpenSearch
-   delete operation must still drain (the outbox is the only path that
-   removes the stale index docs); they become removable once drained;
+- superseded snapshots with **still-relevant outbox rows** (pending, or
+   terminal-but-recoverable failed) — their OpenSearch delete is the only
+   path that removes the stale index docs; they become removable once the
+   row is gone or marked done;
 - the **active snapshot** and everything under it.
 
 Because the latest job per document is untouchable, the outcome-truth

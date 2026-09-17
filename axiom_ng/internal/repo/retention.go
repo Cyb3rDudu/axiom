@@ -40,7 +40,7 @@ type RetentionReport struct {
 	Snapshots struct {
 		Remove              int `json:"remove"`
 		KeepActive          int `json:"keep_active"`
-		KeepPendingOutbox   int `json:"keep_pending_outbox"`
+		KeepOutboxHeld      int `json:"keep_outbox_held"`
 		Chunks              int `json:"chunks_remove"`
 		DenseEmbeddings     int `json:"dense_embeddings_remove"`
 		SparseEmbeddings    int `json:"sparse_embeddings_remove"`
@@ -66,13 +66,18 @@ type RetentionReport struct {
 	} `json:"attachments"`
 }
 
-// supersededSnapshotSQL is the candidate set: NOT active and no pending
-// outbox row (the pending delete-op must survive to drain OpenSearch).
-const supersededSnapshotSQL = `
-	FROM processing_snapshots s
-	WHERE NOT s.active
+// supersededSnapshotGuard is THE one definition of "superseded and safe to
+// delete": not active, and no still-relevant outbox row. PENDING delete-ops
+// must survive to drain OpenSearch; terminal FAILED delete-ops are
+// operator-recoverable (outbox.go's recovery contract) — deleting their
+// snapshot would make the stale index docs permanent. Every plan step and
+// the ApplyRetention DELETE build on this fragment so they cannot drift.
+const supersededSnapshotGuard = `NOT s.active
 	  AND NOT EXISTS (SELECT 1 FROM opensearch_outbox o
-	                  WHERE o.snapshot_id = s.id AND o.status = 'pending')`
+	                  WHERE o.snapshot_id = s.id AND o.status IN ('pending','failed'))`
+
+// supersededSnapshotSQL is the candidate set FROM/WHERE for counting.
+const supersededSnapshotSQL = "\n\tFROM processing_snapshots s\n\tWHERE " + supersededSnapshotGuard
 
 // prunableJobSQL is the candidate set: terminal, older than the retention
 // age, NOT the document's latest job (a strictly NEWER sibling exists),
@@ -116,57 +121,41 @@ func (r *Repo) RetentionPlan(ctx context.Context, jobMinAge time.Duration) (*Ret
 	}{
 		{&rep.Snapshots.Remove, false, supersededSnapshotSQL},
 		{&rep.Snapshots.KeepActive, false, " FROM processing_snapshots s WHERE s.active"},
-		{&rep.Snapshots.KeepPendingOutbox, false, `
+		{&rep.Snapshots.KeepOutboxHeld, false, `
 	FROM processing_snapshots s
 	WHERE NOT s.active
 	  AND EXISTS (SELECT 1 FROM opensearch_outbox o
-	              WHERE o.snapshot_id = s.id AND o.status = 'pending')`},
+	              WHERE o.snapshot_id = s.id AND o.status IN ('pending','failed'))`},
 		{&rep.Snapshots.Chunks, false, `
 	FROM processing_chunks c JOIN processing_snapshots s ON s.id = c.snapshot_id
-	WHERE NOT s.active
-	  AND NOT EXISTS (SELECT 1 FROM opensearch_outbox o
-	                  WHERE o.snapshot_id = s.id AND o.status = 'pending')`},
+	WHERE ` + supersededSnapshotGuard},
 		{&rep.Snapshots.DenseEmbeddings, false, `
 	FROM processing_chunk_dense_embeddings e
 	JOIN processing_chunks c ON c.id = e.chunk_id
 	JOIN processing_snapshots s ON s.id = c.snapshot_id
-	WHERE NOT s.active
-	  AND NOT EXISTS (SELECT 1 FROM opensearch_outbox o
-	                  WHERE o.snapshot_id = s.id AND o.status = 'pending')`},
+	WHERE ` + supersededSnapshotGuard},
 		{&rep.Snapshots.SparseEmbeddings, false, `
 	FROM processing_chunk_sparse_embeddings e
 	JOIN processing_chunks c ON c.id = e.chunk_id
 	JOIN processing_snapshots s ON s.id = c.snapshot_id
-	WHERE NOT s.active
-	  AND NOT EXISTS (SELECT 1 FROM opensearch_outbox o
-	                  WHERE o.snapshot_id = s.id AND o.status = 'pending')`},
+	WHERE ` + supersededSnapshotGuard},
 		{&rep.Snapshots.Entities, false, `
 	FROM processing_entities e JOIN processing_snapshots s ON s.id = e.snapshot_id
-	WHERE NOT s.active
-	  AND NOT EXISTS (SELECT 1 FROM opensearch_outbox o
-	                  WHERE o.snapshot_id = s.id AND o.status = 'pending')`},
+	WHERE ` + supersededSnapshotGuard},
 		{&rep.Snapshots.EntityMentions, false, `
 	FROM processing_entity_mentions m
 	JOIN processing_entities e ON e.id = m.entity_id
 	JOIN processing_snapshots s ON s.id = e.snapshot_id
-	WHERE NOT s.active
-	  AND NOT EXISTS (SELECT 1 FROM opensearch_outbox o
-	                  WHERE o.snapshot_id = s.id AND o.status = 'pending')`},
+	WHERE ` + supersededSnapshotGuard},
 		{&rep.Snapshots.ChunkRelationships, false, `
 	FROM processing_chunk_relationships cr JOIN processing_snapshots s ON s.id = cr.snapshot_id
-	WHERE NOT s.active
-	  AND NOT EXISTS (SELECT 1 FROM opensearch_outbox o
-	                  WHERE o.snapshot_id = s.id AND o.status = 'pending')`},
+	WHERE ` + supersededSnapshotGuard},
 		{&rep.Snapshots.EntityRelationships, false, `
 	FROM processing_entity_relationships er JOIN processing_snapshots s ON s.id = er.snapshot_id
-	WHERE NOT s.active
-	  AND NOT EXISTS (SELECT 1 FROM opensearch_outbox o
-	                  WHERE o.snapshot_id = s.id AND o.status = 'pending')`},
+	WHERE ` + supersededSnapshotGuard},
 		{&rep.Snapshots.Artifacts, false, `
 	FROM processing_artifacts ar JOIN processing_snapshots s ON s.id = ar.snapshot_id
-	WHERE NOT s.active
-	  AND NOT EXISTS (SELECT 1 FROM opensearch_outbox o
-	                  WHERE o.snapshot_id = s.id AND o.status = 'pending')`},
+	WHERE ` + supersededSnapshotGuard},
 		{&rep.Jobs.Remove, true, prunableJobSQL},
 		{&rep.Jobs.KeepNonTerminal, false, " FROM ingest_jobs WHERE status IN ('pending','claimed','processing')"},
 		{&rep.Jobs.KeepLatest, true, `
@@ -229,9 +218,7 @@ func (r *Repo) ApplyRetention(ctx context.Context, jobMinAge time.Duration) (*Re
 	var snapN, jobN int
 	tag, err := tx.Exec(ctx, `
 		DELETE FROM processing_snapshots s
-		WHERE NOT s.active
-		  AND NOT EXISTS (SELECT 1 FROM opensearch_outbox o
-		                  WHERE o.snapshot_id = s.id AND o.status = 'pending')`)
+		WHERE `+supersededSnapshotGuard)
 	if err != nil {
 		return nil, nil, fmt.Errorf("delete superseded snapshots: %w", err)
 	}

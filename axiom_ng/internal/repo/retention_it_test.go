@@ -114,6 +114,26 @@ func TestRetentionIT(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// independent document whose ONLY job is OLD and terminal (no newer
+	// sibling): it IS that document's latest job — never prunable (review
+	// fix: the keep-latest leg needs an age-eligible probe; a young latest
+	// job is masked by the age filter alone)
+	var oldLatest string
+	if err := e.pool.QueryRow(ctx, `
+		WITH s AS (INSERT INTO zotero_sources (base_url, library_id, server_id)
+			VALUES ('https://zotero.ret2', 'lib-ret2', 'srv2') RETURNING id),
+		d AS (INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title, creators, publication_year)
+			SELECT id, 'RETDOC2', 1, 'book', 'Retention Old Latest', '[{"first":"A","last":"Autor"}]', 2024 FROM s RETURNING id),
+		a AS (INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+			parent_zotero_key, link_mode, content_type, filename, local_path)
+			SELECT s.id, d.id, 'RETATT3', 1, 'RETDOC2', 'imported_file', 'application/pdf', 'x.pdf', '/tmp/x.pdf'
+			FROM s, d RETURNING id)
+		INSERT INTO ingest_jobs (status, attachment_id, content_hash, enqueued_at)
+		SELECT 'completed', a.id, 'old-latest-hash', now() - interval '20 days' FROM a
+		RETURNING id::text`).Scan(&oldLatest); err != nil {
+		t.Fatal(err)
+	}
+
 	// pending job (never pruned) + active-snapshot producer (never pruned)
 	pendingJob := e.seedJobForAttachment(t, "pending", 20*24*time.Hour)
 	producerJob := e.seedJobForAttachment(t, "completed", 20*24*time.Hour)
@@ -124,6 +144,13 @@ func TestRetentionIT(t *testing.T) {
 	_ = activeSnap
 	supSnap := e.seedSnapshot(t, false, nil, 3, false)
 	pendSnap := e.seedSnapshot(t, false, nil, 2, true)
+	// drained (done) outbox row on the DELETABLE snapshot — the cascade
+	// claim ("plus their drained outbox rows") gets its pin here
+	if _, err := e.pool.Exec(ctx, `
+		INSERT INTO opensearch_outbox (snapshot_id, operation, payload, status)
+		VALUES ($1::uuid, 'index', '{}', 'done')`, supSnap); err != nil {
+		t.Fatal(err)
+	}
 
 	age := 14 * 24 * time.Hour
 
@@ -135,8 +162,8 @@ func TestRetentionIT(t *testing.T) {
 	if plan.Snapshots.Remove != 1 {
 		t.Fatalf("snapshots to remove = %d, want 1 (only the pending-outbox-free superseded one)", plan.Snapshots.Remove)
 	}
-	if plan.Snapshots.KeepPendingOutbox != 1 {
-		t.Fatalf("pending-outbox keeps = %d, want 1", plan.Snapshots.KeepPendingOutbox)
+	if plan.Snapshots.KeepOutboxHeld != 1 {
+		t.Fatalf("outbox-held keeps = %d, want 1", plan.Snapshots.KeepOutboxHeld)
 	}
 	if plan.Snapshots.Chunks != 3 || plan.Snapshots.DenseEmbeddings != 3 {
 		t.Fatalf("derived removal counts = chunks %d / dense %d, want 3/3", plan.Snapshots.Chunks, plan.Snapshots.DenseEmbeddings)
@@ -144,8 +171,11 @@ func TestRetentionIT(t *testing.T) {
 	if plan.Jobs.Remove != 1 {
 		t.Fatalf("jobs to remove = %d, want 1 (only the stale non-latest unlinked attempt)", plan.Jobs.Remove)
 	}
-	if n := e.count(t, `SELECT count(*) FROM ingest_jobs`); n != 6 {
-		t.Fatalf("dry-run must not delete: jobs = %d, want 6", n)
+	if plan.Jobs.KeepLatest != 1 {
+		t.Fatalf("keep-latest count = %d, want 1 (the old document-latest job)", plan.Jobs.KeepLatest)
+	}
+	if n := e.count(t, `SELECT count(*) FROM ingest_jobs`); n != 7 {
+		t.Fatalf("dry-run must not delete: jobs = %d, want 7", n)
 	}
 
 	// ── apply ────────────────────────────────────────────────────────────
@@ -167,13 +197,17 @@ func TestRetentionIT(t *testing.T) {
 		JOIN processing_snapshots s ON s.id = c.snapshot_id WHERE s.id = $1::uuid`, pendSnap); n != 2 {
 		t.Fatalf("pending-outbox snapshot keeps its chunks, got %d", n)
 	}
-	if n := e.count(t, `SELECT count(*) FROM ingest_jobs`); n != 5 {
-		t.Fatalf("jobs left = %d, want 5 (seed-job, latest, repair-linked, pending, producer)", n)
+	if n := e.count(t, `SELECT count(*) FROM ingest_jobs`); n != 6 {
+		t.Fatalf("jobs left = %d, want 6 (seed-job, latest, repair-linked, pending, producer, old-latest)", n)
 	}
-	for _, keep := range []string{latestJob, repairJob, pendingJob, producerJob} {
+	for _, keep := range []string{latestJob, repairJob, pendingJob, producerJob, oldLatest} {
 		if n := e.count(t, `SELECT count(*) FROM ingest_jobs WHERE id=$1::uuid`, keep); n != 1 {
 			t.Fatalf("never-delete job %s was pruned", keep)
 		}
+	}
+	// done outbox rows of the deleted snapshot cascade away with it
+	if n := e.count(t, `SELECT count(*) FROM opensearch_outbox WHERE snapshot_id=$1::uuid`, supSnap); n != 0 {
+		t.Fatalf("done outbox rows must cascade with the deleted snapshot, got %d", n)
 	}
 
 	// ── outcome truth: latest job per document is untouched (no flip) ────

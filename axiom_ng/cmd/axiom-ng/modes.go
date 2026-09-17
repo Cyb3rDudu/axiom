@@ -188,11 +188,11 @@ var cliModes = []cliMode{
 					modeFail(logger, modeSingleTx, "dry-run: %v", err)
 				}
 				out, _ := json.MarshalIndent(rep, "", "  ")
-				logger.Printf("dry-run (use --apply to execute): snapshots to remove=%d (chunks=%d, dense=%d, sparse=%d, entities=%d, relationships=%d/%d, artifacts=%d); stale job attempts to remove=%d; never-delete: latest-per-document=%d repair-linked=%d active-snapshot=%d non-terminal=%d; superseded kept for pending outbox=%d",
+				logger.Printf("dry-run (use --apply to execute): snapshots to remove=%d (chunks=%d, dense=%d, sparse=%d, entities=%d, relationships=%d/%d, artifacts=%d); stale job attempts to remove=%d; never-delete: latest-per-document=%d repair-linked=%d active-snapshot=%d non-terminal=%d; superseded kept for outbox rows=%d",
 					rep.Snapshots.Remove, rep.Snapshots.Chunks, rep.Snapshots.DenseEmbeddings, rep.Snapshots.SparseEmbeddings,
 					rep.Snapshots.Entities, rep.Snapshots.ChunkRelationships, rep.Snapshots.EntityRelationships, rep.Snapshots.Artifacts,
 					rep.Jobs.Remove, rep.Jobs.KeepLatest, rep.Jobs.KeepRepairLinked, rep.Jobs.KeepActiveSnap, rep.Jobs.KeepNonTerminal,
-					rep.Snapshots.KeepPendingOutbox)
+					rep.Snapshots.KeepOutboxHeld)
 				fmt.Println(string(out))
 				return
 			}

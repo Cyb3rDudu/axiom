@@ -263,7 +263,11 @@ env file of an axiom instance that also carries the Zotero write key
   claim — the one-shot `--key` contract is untouched.
 - **Timeout:** fix.sh's own 30-min kill (lockdir + timeout binary) does the
   primary work; the invoker runs a 35-min context backstop above it, so a
-  wedged wrapper can never hang the invoker.
+  wedged wrapper can never hang the invoker. OCR-class repairs
+  (`scan_ocr_rebuild`) run under their own budget — `AXIOM_FIXER_OCR_TIMEOUT`
+  (default 90m) for the backstop, the wrapper budget passed via
+  `AXIOM_FIX_SH_TIMEOUT`; see the
+  [OCR-Rebuild Repair runbook](ocr-rebuild-repair.md).
 - **Concurrency:** `AXIOM_FIXER_CONCURRENCY` (default 1, clamped to 1–2)
   parallel fixer runs per host — the per-key lockdir additionally
   serializes against manual operator runs (exit 3 is treated as an
@@ -272,8 +276,10 @@ env file of an axiom instance that also carries the Zotero write key
   `~/.local/state/axiom/runs/<key>/` — exit 0 alone is NOT success (a
   green exit without the artifact fails). The healed pdf runs through the
   audited custody sequence (quarantine original → delete → create/upload
-  schema filename → `healed`) and the next sync/preflight GREEN re-ingests
-  it — the normal ingest path, no side door.
+  schema filename → `healed`) and the invoker itself runs the post-heal
+  sync (targeted include of the healed document, #282) so the healed
+  attachment re-ingests without operator action — the normal ingest path,
+  no side door. See [Repair-Included Waves](repair-included-waves.md).
 - **Failure & retry:** non-zero exit, timeout, or missing healed pdf → the
   case goes back to `queued` while attempts remain (max 2 per attachment,
   the `repair_attempts` loop guard), then parks as `failed` with the

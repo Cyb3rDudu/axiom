@@ -93,7 +93,7 @@ func (r *Repo) KGMaintenanceActive(ctx context.Context) (bool, error) {
 	if err := r.pool.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM pg_locks
-			WHERE locktype = 'advisory' AND objsubid = 1
+			WHERE locktype = 'advisory' AND objsubid = 1 AND granted = true
 				AND classid::bigint = $1::bigint >> 32
 				AND objid::bigint = ($1::bigint & 4294967295))`,
 		kgMaintenanceLockKey).Scan(&active); err != nil {

@@ -311,3 +311,41 @@ func TestOCRTimeoutBudgetIndependent(t *testing.T) {
 		t.Fatalf("OCR stale %v must sit ABOVE the OCR timeout %v (live-but-slow never requeued)", cfg.OCRStaleAfter, cfg.OCRTimeout)
 	}
 }
+
+// TestRunFixerOCRBudgetEnv (#284 review fix): the OCR-class budget
+// selection is OBSERVED, not just configured — the wrapper receives
+// AXIOM_FIX_SH_TIMEOUT = OCRTimeout−5m for OCR-class items and no value
+// for normal items (mutation probe: delete the ocrCase branch in runFixer
+// and the FIXSH=[5100] assertion goes red).
+func TestRunFixerOCRBudgetEnv(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "echo-env.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"FIXSH=[$AXIOM_FIX_SH_TIMEOUT]\"\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// keep the ambient env from faking either direction
+	t.Setenv("AXIOM_FIX_SH_TIMEOUT", "")
+	inv := New(Config{
+		Command:     script,
+		WorkRoot:    dir,
+		Timeout:     time.Minute,
+		OCRTimeout:  90 * time.Minute,
+		Concurrency: 1,
+	}, Deps{}, nil)
+
+	_, out, err := inv.runFixer(context.Background(), mkItem(`{"pagination_state": "needs_ocr"}`, "de"))
+	if err != nil {
+		t.Fatalf("ocr run: %v", err)
+	}
+	if !strings.Contains(out, "FIXSH=[5100]") {
+		t.Fatalf("OCR-class item must receive AXIOM_FIX_SH_TIMEOUT=5100 (90m-5m), got %q", strings.TrimSpace(out))
+	}
+
+	_, out, err = inv.runFixer(context.Background(), mkItem(`{}`, "de"))
+	if err != nil {
+		t.Fatalf("plain run: %v", err)
+	}
+	if !strings.Contains(out, "FIXSH=[]") {
+		t.Fatalf("non-OCR item must NOT carry the OCR budget, got %q", strings.TrimSpace(out))
+	}
+}

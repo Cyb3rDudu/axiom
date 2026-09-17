@@ -21,6 +21,18 @@ One document at a time, per the owner specification:
    loop guard, exhausted retries) is documented in the repair case —
    never silent.
 
+## Precondition: the fixer invoker runs
+
+The repair-included wave assumes the fixer invoker is enabled wherever
+repairs are expected (`AXIOM_FIXER_INVOKER_ENABLED=1` on the RAG process).
+The queued/in_repair arm of the gate has no time bound by design — the
+wave waits for its repairs — and the stale-claim reaper that eventually
+unsticks a dead claim lives inside the invoker. With the invoker down,
+every claim defers (`wave gate: claim deferred (N repair case(s)
+queued/in_repair)` in the dispatcher log) until the invoker returns or an
+operator blocks/requeues the case via the repair API. The healed arm is
+bounded (1 h) either way.
+
 ## What holds the claim gate (`WaveRepairGate`)
 
 Every dispatcher worker checks the gate before claiming; it defers
