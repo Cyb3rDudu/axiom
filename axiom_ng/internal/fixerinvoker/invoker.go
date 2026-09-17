@@ -367,8 +367,8 @@ func haltTerminalReason(out string) (string, bool) {
 	// whose suffix parses (logs precede it)
 	for i := strings.LastIndex(out, "{"); i >= 0; i = strings.LastIndex(out[:i], "{") {
 		var report struct {
-			Verdict  string `json:"verdict"`
-			Unproven []string `json:"unproven"`
+			Verdict   string   `json:"verdict"`
+			Unproven  []string `json:"unproven"`
 			FinalStep struct {
 				Action string `json:"action"`
 				Reason string `json:"reason"`

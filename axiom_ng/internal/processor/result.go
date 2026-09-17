@@ -105,7 +105,7 @@ const (
 	// derivable (not read), honest about its origin, citable as a printed
 	// page. Longer gaps and disagreeing neighbors stay blind.
 	PageSourceFolioInterpolated = "folio_interpolated"
-	PageSourceNone  = "none"
+	PageSourceNone              = "none"
 	// #223/#226: EPUB print-page anchors. print_verified = proven book-
 	// internally (printed TOC matches chapter-start markers). derived_from_
 	// sibling = page map derived from the PDF sibling and INJECTED by the
