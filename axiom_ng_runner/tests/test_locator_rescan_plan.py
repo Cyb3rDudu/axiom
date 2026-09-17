@@ -194,12 +194,18 @@ class InterpolatedRescanTests(unittest.TestCase):
         self.assertEqual(dict(held), {})
 
     def test_interpolated_end_page_label_healed_in_same_print_run(self):
-        rows = [("c1", {"type": "page_span", "physical_page_start": 1,
-                        "physical_page_end": 2, "page_label_start": "x",
+        # DISCRIMINATING shape (review follow-up): START verified (p0), END
+        # interpolated (p1). With the end-condition reverted to
+        # verified-only, page_label_end would be DROPPED (mutant → red);
+        # the fix heals it from label_map like any print-run member.
+        rows = [("c1", {"type": "page_span", "physical_page_start": 0,
+                        "physical_page_end": 1, "page_label_start": "x",
                         "page_label_end": "y", "source": "marker_paginate"},
                  "/books/Scan Buch.pdf")]
         updates, _s, _d, _h, _heals, _bd, _ = rescan.plan_updates(
             rows, {"/books/Scan Buch.pdf": TRUST_INTERPOLATED},
             heal_books={"Scan Buch.pdf"}, skip_books=set())
         loc = updates[0][1]
-        self.assertEqual(loc["page_label_end"], "6")  # verified end heals too
+        self.assertEqual(loc["page_label_start"], "4")  # verified start
+        self.assertEqual(loc["page_label_end"], "5")    # INTERPOLATED end heals
+        self.assertIn("page_label_end", loc)

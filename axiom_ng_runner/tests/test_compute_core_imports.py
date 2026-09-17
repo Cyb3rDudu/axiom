@@ -83,5 +83,17 @@ def test_mps_fallback_env_precedes_torch_import():
         "package init imported torch — the fallback env would race the "
         "torch import and be dead code"
     )
-    # setdefault semantics: an explicit operator override stays authoritative
-    assert os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "0") in ("1", "0")
+    # setdefault semantics (review NIT): an operator override set BEFORE
+    # the import stays authoritative — checked in a subprocess, the only
+    # place where "before the package import" is still arrangeable.
+    out2 = subprocess.run(
+        [sys.executable, "-c",
+         "import os; import axiom_ng_runner; "
+         "print(os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK'))"],
+        capture_output=True, text=True, check=True,
+        cwd=str(Path(__file__).resolve().parents[2]),
+        env={**os.environ, "PYTORCH_ENABLE_MPS_FALLBACK": "0"},
+    ).stdout.strip()
+    assert out2 == "0", (
+        f"explicit operator override must survive the package init (got {out2!r})"
+    )

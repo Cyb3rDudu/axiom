@@ -651,8 +651,12 @@ def test_gliner_mps_placement_uses_detector_device(monkeypatch):
 
 
 def test_gliner_cpu_placement_leaves_fallback_env_alone(monkeypatch):
-    """#277 counterpart: the mps-only fallback insurance must not touch the
-    env on other devices (cpu stays the explicit default)."""
+    """#277 counterpart: _get_gliner itself must not mutate the env on ANY
+    device — the fallback insurance lives at package init (process-wide,
+    by necessity), and the placement path has no business touching env
+    vars. The delenv simulates a bare process state (impossible in a real
+    runner — package init has run — but it isolates the placement code
+    from any ambient env)."""
     import os
 
     placed = []
