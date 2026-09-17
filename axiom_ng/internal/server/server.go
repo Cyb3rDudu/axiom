@@ -111,6 +111,7 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/api/repair/queue", s.handleRepairQueue)
 		r.Get("/api/repair/cases", s.handleRepairCases)
 		r.Post("/api/repair/cases/{id}/claim", s.handleRepairClaim)
+		r.Post("/api/repair/cases/{id}/requeue", s.handleRepairRequeue)
 		r.Post("/api/repair/cases/{id}/verdict", s.handleRepairVerdict)
 		r.Get("/api/repair/docs/{documentKey}/locator-stats", s.handleLocatorStats)
 	}

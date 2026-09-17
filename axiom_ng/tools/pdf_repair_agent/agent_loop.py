@@ -370,9 +370,25 @@ def run_loop(
             history.append(step)
         if results is not None:
             results.append(result)
-        evidence = json.dumps(result, ensure_ascii=False, default=str)
-        if len(evidence) > 4000:
-            evidence = evidence[:4000] + "…(gekürzt)"
+        # #278 Render-Konvention: ein Handler-Ergebnis darf eine `render`
+        # (String)-Sicht mitbringen — dann bekommt der Agent DIESE statt des
+        # JSON-Dumps (Forensik-Fenster; die volle Karte bleibt in der
+        # Berichts-Evidenz). Sonst gilt der JSON-Pfad wie bisher mit seiner
+        # Kanalgrenze. Die 60k-Kappung über der Render-Sicht ist reine
+        # Sicherheit (Fenster sind budgetiert, nicht zufällig groß).
+        render = (
+            result.get("render")
+            if isinstance(result, dict) and isinstance(result.get("render"), str)
+            else None
+        )
+        if render:
+            evidence = render
+            if len(evidence) > 60000:
+                evidence = evidence[:60000] + "…(gekürzt)"
+        else:
+            evidence = json.dumps(result, ensure_ascii=False, default=str)
+            if len(evidence) > 4000:
+                evidence = evidence[:4000] + "…(gekürzt)"
         cls = step.get("plan_class") or action
         unhandled = (
             isinstance(result, dict) and "handled" in result and not result["handled"]

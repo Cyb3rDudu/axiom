@@ -212,3 +212,70 @@ func TestRepairCaseItemNullYearIT(t *testing.T) {
 	}
 	_ = attID
 }
+
+// TestRepairRequeueIT pins the #278 loop-guard reset route: a parked case
+// (blocked_for_dudu/loop-guard or failed) is re-armed WITHOUT DB surgery —
+// repair_attempts → 0, case → queued, reason audited. The requeue refuses
+// empty reasons (the changed evidence conditions must be documented) and
+// refuses non-parked states (mid-flight/healed are never touched).
+func TestRepairRequeueIT(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	// Guard-parked case (the production shape: attempts exhausted).
+	caseID := seedRepairCase(t, lr, "ATT-RQ", RepairMaxAttempts, false)
+	if _, err := lr.rep.ClaimRepairCase(ctx, caseID); err == nil {
+		t.Fatal("claim must hit the loop guard first")
+	}
+
+	// Empty reason is refused — changed evidence conditions are documented.
+	if err := lr.rep.RequeueRepairCase(ctx, caseID, "  "); err == nil {
+		t.Fatal("requeue without reason must be refused")
+	}
+
+	// Requeue re-arms: guard counter 0, case queued.
+	if err := lr.rep.RequeueRepairCase(ctx, caseID,
+		"#278 forensics fix — Karte vollständig, retry lohnt"); err != nil {
+		t.Fatalf("requeue: %v", err)
+	}
+	var status, reason string
+	var attAttempts int
+	if err := lr.pool.QueryRow(ctx,
+		`SELECT status::text, COALESCE(blocked_reason,'') FROM repair_cases WHERE id=$1`, caseID).
+		Scan(&status, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" || reason != "" {
+		t.Fatalf("requeue must clear the park: got %s/%q, want queued/\"\"", status, reason)
+	}
+	if err := lr.pool.QueryRow(ctx,
+		`SELECT repair_attempts FROM zotero_attachments WHERE id=(SELECT attachment_id FROM repair_cases WHERE id=$1)`,
+		caseID).Scan(&attAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if attAttempts != 0 {
+		t.Fatalf("requeue must reset the loop guard, repair_attempts=%d", attAttempts)
+	}
+	// The previously impossible claim now works and burns exactly one attempt.
+	got, err := lr.rep.ClaimRepairCase(ctx, caseID)
+	if err != nil || got.Status != RepairInRepair {
+		t.Fatalf("claim after requeue: err=%v status=%s", err, got.Status)
+	}
+
+	// Audit trail carries the requeue with its reason.
+	var n int
+	if err := lr.pool.QueryRow(ctx,
+		`SELECT count(*) FROM zotero_write_audit WHERE case_id=$1 AND action='repair-requeue'`,
+		caseID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("requeue must write exactly one audit row, got %d", n)
+	}
+
+	// in_repair (mid-flight) refuses — the same nail as BlockRepairCase.
+	if err := lr.rep.RequeueRepairCase(ctx, caseID, "nochmal"); err == nil {
+		t.Fatal("requeue must refuse in_repair")
+	}
+}

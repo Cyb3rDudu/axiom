@@ -260,6 +260,57 @@ func (r *Repo) SubmitRepairVerdict(ctx context.Context, caseID string, plan json
 	return effective, nil
 }
 
+// RequeueRepairCase is the loop-guard reset route (#278): re-arms a
+// PARKED case (failed/blocked_for_dudu) for a fresh attempt without DB
+// surgery. Evidence conditions can change under a parked case — new fixer
+// tooling (the #278 forensics completeness fix), a manual repair, or newly
+// available evidence. The operator decides and documents WHY (reason is
+// mandatory, lands in the audit trail); the route makes the decision
+// cheap and reversible: zotero_attachments.repair_attempts → 0, case →
+// queued, blocked_reason cleared. in_repair REFUSES (mid-flight cases are
+// never touched from outside — same nail as BlockRepairCase); healed
+// refuses too (nothing to redo — a new suspicion opens a new case).
+func (r *Repo) RequeueRepairCase(ctx context.Context, caseID, reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("requeue braucht einen Grund (geänderte Beweislage dokumentieren)")
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `
+		UPDATE zotero_attachments SET repair_attempts = 0, updated_at=now()
+		WHERE id = (SELECT attachment_id FROM repair_cases WHERE id=$1)`, caseID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("case %s: attachment nicht gefunden", caseID)
+	}
+	tag, err = tx.Exec(ctx, `
+		UPDATE repair_cases SET status='queued', blocked_reason=NULL, updated_at=now()
+		WHERE id=$1 AND status IN ('failed','blocked_for_dudu')`, caseID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("case %s nicht geparkt (failed/blocked_for_dudu)", caseID)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO zotero_write_audit (case_id, attachment_id, action, detail)
+		SELECT $1::uuid, attachment_id, 'repair-requeue', $2::jsonb
+		FROM repair_cases WHERE id=$1`, caseID, mustMarshal(map[string]any{"reason": reason})); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func mustMarshal(v any) []byte {
+	d, _ := json.Marshal(v)
+	return d
+}
+
 // MarkRepairHealed / MarkRepairFailed close the case after the writes
 // (healed is confirmed by the NEXT preflight GREEN — the loop checks itself;
 // healed here means "applied, awaiting proof").

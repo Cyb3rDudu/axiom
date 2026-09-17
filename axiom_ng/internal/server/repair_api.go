@@ -164,6 +164,28 @@ func (s *Server) handleRepairClaim(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
+// handleRepairRequeue is the loop-guard reset route (#278): POST with a
+// JSON body {"reason": "…"} re-arms a parked case (failed/
+// blocked_for_dudu) — repair_attempts reset, case back to queued, reason
+// audited. For evidence conditions that changed under a parked case (new
+// fixer tooling, manual repair, newly supplied evidence) this replaces
+// DB surgery with one documented operator call. State conflicts (not
+// parked) answer 409 like claim.
+func (s *Server) handleRepairRequeue(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "body muss JSON {\"reason\": \"…\"} sein", http.StatusBadRequest)
+		return
+	}
+	if err := s.repairRepo.RequeueRepairCase(r.Context(), r.PathValue("id"), body.Reason); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"requeued": true})
+}
+
 // handleRepairVerdict receives the judge result (multipart):
 //
 //	verdict=auto_apply|blocked|failed, score, contradictions, plan (JSON),

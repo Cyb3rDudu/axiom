@@ -139,7 +139,11 @@ def test_truth_source_nur_gemessene_stellen():
         ]
     )
     assert ts["stelle1_druckseite"].startswith("forensics_tool")
-    assert ts["stelle2_chunk"] is None and ts["stelle3_zitat"] is None
+    assert ts["stelle2_chunk"] is None
+    # #278: Stelle 3 ist ehrlich NOT IMPLEMENTED (kein Annotations-Lesepfad)
+    # — ein deklarierter, aber unimplementierter Slot darf nicht wie ein
+    # messbarer Behandlungspunkt aussehen.
+    assert "NOT IMPLEMENTED" in ts["stelle3_zitat"]
     assert ts["offene_stellen"] == ["stelle2_chunk", "stelle3_zitat"]
     assert any("rag_erreichbar" in n for n in ts.get("notizen", []))
     # Ohne forensische Evidenz wird auch Stelle 1 als ungemessen benannt:

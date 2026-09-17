@@ -104,6 +104,40 @@ def _looks_toc(t: str) -> bool:
     return n >= 2
 
 
+# #278: Kompakt-Digest — die Agenten-Sicht auf die Karte. Die volle Karte
+# (JSON) bleibt unverändert in der Berichts-Evidenz; der Chat-Kanal bekommt
+# diese zeilenkompakte Form, damit der KÖRPER großer Bücher nicht mehr an
+# der Zeichengrenze stirbt (Produktionsfall DAM2Q443: 547 Seiten, sichtbar
+# nur p1–24). Pro Seite EINE Zeile, alle strukturrelevanten Felder — ohne
+# Body-Verlust im Sinne der Evidenzpflicht: Folio, Zone, Label, Zeichenzahl,
+# Flags. Beleg-Schnipsel (folio_beleg) bleiben der Berichts-Evidenz
+# vorbehalten.
+def compact_page_lines(m: dict, start: int, end: int) -> list[str]:
+    """Kompakte Seitenzeilen für ein 1-basiertes Fenster [start..end]
+    (inklusive, an page_count geklemmt). Mutationssonde: fällt eine Seite
+    aus dem Fenster, fehlt ihre Zeile — der Vollständigkeits-Test wird rot."""
+    pages = m["pages"]
+    n = len(pages)
+    s = max(1, min(start, n))
+    e = min(end, n)
+    out: list[str] = []
+    for i in range(s - 1, e):
+        p = pages[i]
+        flags = []
+        if p["is_toc"]:
+            flags.append("iv")
+        if p["is_titelei"]:
+            flags.append("titelei")
+        if not p["text_layer"]:
+            flags.append("blind")
+        out.append(
+            f"p{i + 1} folio={p['folio'] or '—'} z={p['folio_zone'] or '—'} "
+            f"lbl={p['tier1_label'] or '—'} zeichen={p['textchars']}"
+            + (" " + "+".join(flags) if flags else "")
+        )
+    return out
+
+
 def build_map(pdf: str | Path) -> dict:
     doc = pymupdf.open(str(pdf))  # EIN Öffnen für Karte + IV-Zeilen
     labels = pdf_kernel.read_page_labels(str(pdf))  # IndexError-sicher

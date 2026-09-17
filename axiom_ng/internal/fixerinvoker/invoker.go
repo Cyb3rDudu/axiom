@@ -344,9 +344,22 @@ func (inv *Invoker) handleFailure(ctx context.Context, caseID string, rc int, ru
 // stdout) and classifies a HALT terminally (#253):
 //
 //   - verdict != "halt" (or no parsable report)  → not terminal ("", false)
-//   - halt with missing evidence markers on a
-//     principally repairable class               → needs-evidence: …
-//   - every other halt                           → no-healable-defect-evidenced: …
+//   - halt with an unmeasurability ground         → needs-evidence:
+//     stelle1_druckseite — … (the M-source was unmeasurable; worth a
+//     retry once evidence/tooling changes — #278)
+//   - halt with another runtime evidence gap      → needs-evidence: …
+//   - every other halt                            → no-healable-defect-evidenced: …
+//
+// #278: the reason LEADS with final_step.reason — the model's
+// evidence-bound escalation ground. The old first-match scan over
+// `unproven` surfaced the STATIC stelle3 declaration ("nicht prüfbare"
+// prose of a slot nothing reads) while the actual ground was Stelle 1
+// (unmeasurable folio signal) — three production parks sent the operator
+// down a false trail, including an owner-supplied annotation the code
+// could not consume. The unproven scan survives only as the fallback when
+// the model gave no reason, and only over RUNTIME findings (stelle3 is
+// honestly NOT IMPLEMENTED in probe output since #278 and no longer
+// matches).
 //
 // The reason is surfaced verbatim for the outcome API (#252).
 func haltTerminalReason(out string) (string, bool) {
@@ -354,8 +367,12 @@ func haltTerminalReason(out string) (string, bool) {
 	// whose suffix parses (logs precede it)
 	for i := strings.LastIndex(out, "{"); i >= 0; i = strings.LastIndex(out[:i], "{") {
 		var report struct {
-			Verdict  string   `json:"verdict"`
+			Verdict  string `json:"verdict"`
 			Unproven []string `json:"unproven"`
+			FinalStep struct {
+				Action string `json:"action"`
+				Reason string `json:"reason"`
+			} `json:"final_step"`
 		}
 		if err := json.Unmarshal([]byte(out[i:]), &report); err != nil {
 			continue
@@ -363,6 +380,26 @@ func haltTerminalReason(out string) (string, bool) {
 		if report.Verdict != "halt" {
 			return "", false
 		}
+		ground := firstLine(strings.TrimSpace(report.FinalStep.Reason))
+		lg := strings.ToLower(ground)
+		if ground != "" {
+			// unmeasurability is always a Stelle-1 statement: stelle2/3 are
+			// corroborating witnesses that never gate the diagnosis (truth
+			// ordering) — the prefix attributes the ground honestly.
+			if strings.Contains(lg, "nicht messbar") ||
+				strings.Contains(lg, "unmessbar") ||
+				strings.Contains(lg, "unmeasurable") {
+				return "needs-evidence: stelle1_druckseite — " + ground, true
+			}
+			if strings.Contains(lg, "nicht erreichbar") ||
+				strings.Contains(lg, "nicht prüfbar") ||
+				strings.Contains(lg, "offene stelle") {
+				return "needs-evidence: " + ground, true
+			}
+			return "no-healable-defect-evidenced: " + ground, true
+		}
+		// fallback (model gave no reason): first RUNTIME evidence gap in
+		// unproven leads — the pre-#278 behavior
 		for _, u := range report.Unproven {
 			lu := strings.ToLower(u)
 			if strings.Contains(lu, "nicht erreichbar") ||

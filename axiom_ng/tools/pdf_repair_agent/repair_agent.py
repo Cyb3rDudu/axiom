@@ -85,11 +85,21 @@ def _heal_readback_proof(work: Path) -> dict | None:
 def h_probe(step: dict, ctx: dict) -> dict:
     """Stellen-Sonde (3-Stellen-Beweis): misst hier die RAG-Erreichbarkeit
     (Vorbedingung von Stelle 2). Was NICHT gemessen wurde, steht unter
-    `unproven`; fehlende Stellen unter `offen` — nie still behauptet."""
+    `unproven`; fehlende Stellen unter `offen` — nie still behauptet.
+    #278: Stelle 3 (Zitat-Beweis über Zotero-Annotation) ist in diesem Build
+    NOT IMPLEMENTED — kein Codepfad liest Annotationen. Die Sonde führt das
+    explizit (nicht als runtime-Befund „nicht prüfbar"), damit Operatoren
+    aufhören, Annotationen für einen Slot zu liefern, den nichts liest."""
     import httpx  # type: ignore[reportMissingImports]
 
     cfg = ctx["cfg"]
     base = cfg.rag_api_base
+    _STELLE3_NOT_IMPLEMENTED = (
+        "stelle3_zitat: NOT IMPLEMENTED — kein Codepfad liest "
+        "Zotero-Annotationen in diesem Build (nicht liefern; "
+        "Upgrade-Pfad #278: Annotation via Zotero-API holen, Zitat an "
+        "Position validieren)"
+    )
     # Wahrheits-Ordnung (Owner-Ruling 23.08.): fehlende Stellen 2/3 sind
     # OFFEN, kein Misserfolg — „unvollständige Sonde" ist KEIN Eskalations-
     # grund; nur UNMESSBARES Signal (Stelle 1) eskaliert. Der Lauf kann
@@ -108,10 +118,12 @@ def h_probe(step: dict, ctx: dict) -> dict:
                 "stelle2_chunk: RAG nicht erreichbar "
                 f"({type(exc).__name__}) — offene Stelle, heilbar über "
                 "Stelle 1 (Druckseite)",
-                "stelle3_zitat: ohne Zotero-Annotation nicht prüfbar "
-                "(nachgelagerter Produktiv-Beweis)",
+                _STELLE3_NOT_IMPLEMENTED,
             ],
-            "unproven": ["annotation-label", "chunk-page-exakt"],
+            "unproven": [
+                "annotation-label: not implemented (kein Annotations-Lesepfad)",
+                "chunk-page-exakt",
+            ],
         }
     if not reachable:
         return {
@@ -121,9 +133,12 @@ def h_probe(step: dict, ctx: dict) -> dict:
             "measured": [],
             "offen": [
                 f"stelle2_chunk: RAG antwortet nicht 200 ({detail})",
-                "stelle3_zitat: ohne Zotero-Annotation nicht prüfbar",
+                _STELLE3_NOT_IMPLEMENTED,
             ],
-            "unproven": ["annotation-label", "chunk-page-exakt"],
+            "unproven": [
+                "annotation-label: not implemented (kein Annotations-Lesepfad)",
+                "chunk-page-exakt",
+            ],
         }
     return {
         "action": "probe",
@@ -131,16 +146,19 @@ def h_probe(step: dict, ctx: dict) -> dict:
         "base": base,
         "detail": detail,
         "measured": ["rag-reachability"],
-        "offen": [
-            "stelle3_zitat: ohne Zotero-Annotation nicht prüfbar "
-            "(nachgelagerter Produktiv-Beweis)"
-        ],
+        "offen": [_STELLE3_NOT_IMPLEMENTED],
         "unproven": [
-            "annotation-label",
+            "annotation-label: not implemented (kein Annotations-Lesepfad)",
             "chunk-page-exakt (benötigt Zotero-"
             "Annotationen + chunk-id; nur mit Produktiv-Config)",
         ],
     }
+
+
+# #278: Chat-Budget pro forensics-Fenster (Zeichen). Ein Fenster trägt
+# ~350 Seiten Kompakt-Digest; 547-Seiten-Bücher brauchen 2 Aufrufe statt
+# unendlich vieler Raten aus einem gekürzten Ein-Blick.
+FORENSICS_RENDER_BUDGET = 15000
 
 
 def h_forensics(step: dict, ctx: dict) -> dict:
@@ -155,15 +173,71 @@ def h_forensics(step: dict, ctx: dict) -> dict:
         }
     work, reused = wc
     m = forensics_tool.build_map(work)
+    anchors = forensics_tool.anchor_folio_run(m)
+    # #278 Fensterung: `page_start` (1-basiert) im step wählt das Fenster;
+    # ohne Angabe startet die Karte bei p1. Das Fenster endet am Budget
+    # (oder am expliziten `page_end`/Dokumentende) — `next_page_start`
+    # führt zum nächsten Fenster, null/fehlt = Karte vollständig beim
+    # Agenten. Der KÖRPER wird nie wieder an einer Zeichengrenze beerdigt.
+    n = m["page_count"]
+    try:
+        page_start = int(step.get("page_start") or 1)
+    except (TypeError, ValueError):
+        page_start = 1
+    page_start = max(1, min(page_start, n))
+    try:
+        page_end = int(step.get("page_end") or 0)
+    except (TypeError, ValueError):
+        page_end = 0
+    lines: list[str] = []
+    budget = 0
+    end = page_start - 1
+    for i in range(page_start, n + 1):
+        if page_end and i > page_end:
+            break
+        ln = forensics_tool.compact_page_lines(m, i, i)[0]
+        if lines and budget + len(ln) + 1 > FORENSICS_RENDER_BUDGET:
+            break
+        lines.append(ln)
+        budget += len(ln) + 1
+        end = i
+    next_page_start = end + 1 if end < n else None
+    anchor_desc = (
+        f"p{anchors[0]['page'] + 1}..p{anchors[-1]['page'] + 1} "
+        f"(folio {anchors[0]['folio']}..{anchors[-1]['folio']})"
+        if anchors
+        else "kein Lauf über dem Qualitäts-Tor"
+    )
+    render = "\n".join(
+        [
+            "forensics T3 · Druck-Struktur-Karte (Kompaktansicht, #278)",
+            f"seiten: {n} · folio_monoton: {m['folio_sequence_monotonic']} · "
+            f"anker_lauf: {anchor_desc}",
+            f"folio_spruenge: {len(m['folio_anomalies'])} · "
+            f"titelei: {m['titelei_pages']} · iv: {m['toc_pages']}",
+            f"fenster: p{page_start}..p{end}"
+            + (
+                f" · next_page_start: {next_page_start} "
+                "(weiter mit page_start im nächsten forensics-step)"
+                if next_page_start
+                else " · KARTE VOLLSTÄNDIG (letztes Fenster)"
+            ),
+            *lines,
+        ]
+    )
     return {
         "action": "forensics",
         "ok": True,
         "pdf": str(work),
         "work_reused": reused,
+        # Volle Karte — unverändert die Berichts-Evidenz (Audit-Spur).
         "map": m,
         # Qualitäts-Tor als CODE-Evidenz (nicht nur Prompt-Regel): die
         # rauschgefilterten Stelle-1-Anker stehen direkt im Bericht.
-        "anchors": forensics_tool.anchor_folio_run(m),
+        "anchors": anchors,
+        "page_window": {"start": page_start, "end": end, "pages_total": n},
+        "next_page_start": next_page_start,
+        "render": render,
     }
 
 
@@ -446,7 +520,10 @@ def _truth_source(results: list) -> dict:
     Chunk-Seiten-Vergleich bzw. Annotation-Check in der Evidenz liegt —
     beides existiert (noch) auf keinem Codepfad, beide bleiben daher
     offen; RAG-Erreichbarkeit ist eine Notiz, kein Beweis. Offene Stellen
-    werden benannt — Information, keine Warnung."""
+    werden benannt — Information, keine Warnung.
+    #278: Stelle 3 wird als NOT IMPLEMENTED geführt — ein deklarierter,
+    aber unimplementierter Slot ist stille Falsheit, wenn Ausgaben ihn
+    wie einen prüfbaren Behelf behandeln."""
     used: dict[str, str | list[str] | None] = {
         "stelle1_druckseite": None,
         "stelle2_chunk": None,
@@ -472,6 +549,8 @@ def _truth_source(results: list) -> dict:
     used["offene_stellen"] = offene
     if notizen:
         used["notizen"] = notizen
+    if used["stelle3_zitat"] is None:
+        used["stelle3_zitat"] = "NOT IMPLEMENTED (kein Annotations-Lesepfad)"
     return used
 
 

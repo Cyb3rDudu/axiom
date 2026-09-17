@@ -280,6 +280,24 @@ env file of an axiom instance that also carries the Zotero write key
   fixer's exit reason; the third claim of a still-broken attachment is
   `blocked_for_dudu` (loop-guard escalation). A case whose attachment
   vanished at the source parks `blocked_for_dudu('attachment-gone')`.
+- **Loop-guard reset without DB surgery (#278):** a parked case
+  (`failed` / `blocked_for_dudu`) can be re-armed when the EVIDENCE
+  CONDITIONS under it changed — new fixer tooling landed, the book was
+  repaired manually, or new evidence is available:
+
+  ```bash
+  curl -X POST http://<dispatcher>/api/repair/cases/<case-id>/requeue \
+    -H 'content-type: application/json' \
+    -d '{"reason": "#278 forensics fix — structure map now complete"}'
+  ```
+
+  The route resets `repair_attempts` to 0, flips the case back to
+  `queued`, clears `blocked_reason`, and writes a `repair-requeue` audit
+  row carrying the reason (a reason is mandatory — the changed conditions
+  are part of the repair history). Mid-flight (`in_repair`) and `healed`
+  cases refuse. This is the documented way to re-run e.g. the Geursen
+  547-page case after its manual repair instead of hand-editing
+  `zotero_attachments.repair_attempts`.
 - **Crash safety:** the invoker never dies on a case (per-case recover,
   per-case timeout, process-group kill on the backstop) and a dead invoker
   loses no case: stale `in_repair` claims older than 40 min are requeued by

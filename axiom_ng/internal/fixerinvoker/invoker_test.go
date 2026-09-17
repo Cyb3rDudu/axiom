@@ -146,3 +146,51 @@ func TestHaltTerminalReasonClassification(t *testing.T) {
 		}
 	}
 }
+
+// #278: the park reason names the slot that ACTUALLY caused the escalation
+// (final_step.reason), not a static declaration some evidence slot happens
+// to carry. Production shape (DAM2Q443): Stelle-1 folio signal unmeasurable,
+// while unproven carries the (now honestly not-implemented) stelle3 slot —
+// the old first-match scan led with stelle3 and sent the operator down a
+// false trail three times.
+func TestHaltReasonNamesTheActualGround(t *testing.T) {
+	out := `{"verdict": "halt", "final_step": {"action": "escalate", "reason": "unclassifiable / nicht messbar — Verweigerung statt Ratens (Wahrheits-Ordnung: nicht messbar → verweigern)."}, "unproven": ["stelle3_zitat: NOT IMPLEMENTED — kein Codepfad liest Zotero-Annotationen in diesem Build", "annotation-label: not implemented (kein Annotations-Lesepfad)"]}`
+	got, ok := haltTerminalReason(out)
+	if !ok {
+		t.Fatalf("halt must be terminal")
+	}
+	if !strings.HasPrefix(got, "needs-evidence: stelle1_druckseite — ") {
+		t.Fatalf("unmeasurable ground must be attributed to Stelle 1, got %q", got)
+	}
+	if !strings.Contains(got, "nicht messbar") {
+		t.Fatalf("the ground text must be carried verbatim, got %q", got)
+	}
+	if strings.Contains(got, "stelle3") {
+		t.Fatalf("the static stelle3 declaration must not lead or appear as the ground, got %q", got)
+	}
+
+	// ground names a runtime evidence gap (not unmeasurability): classified
+	// needs-evidence, still LED by the ground — not by an unproven entry.
+	out2 := `{"verdict": "halt", "final_step": {"reason": "Stelle 2 nicht erreichbar nach Retry"}, "unproven": ["stelle3_zitat: NOT IMPLEMENTED"]}`
+	got2, _ := haltTerminalReason(out2)
+	if !strings.HasPrefix(got2, "needs-evidence: Stelle 2 nicht erreichbar") {
+		t.Fatalf("runtime-gap ground must lead, got %q", got2)
+	}
+
+	// ground without any evidence-gap markers: honest no-healable verdict,
+	// ground verbatim.
+	out3 := `{"verdict": "halt", "final_step": {"reason": "chaotische Evidenz, Klasse unclassifiable"}, "unproven": []}`
+	got3, _ := haltTerminalReason(out3)
+	if !strings.HasPrefix(got3, "no-healable-defect-evidenced: chaotische Evidenz") {
+		t.Fatalf("plain ground must classify no-healable with the ground, got %q", got3)
+	}
+
+	// not-implemented declarations alone do NOT classify needs-evidence
+	// (fallback path, no model reason): they are build facts, not gaps a
+	// retry could close.
+	out4 := `{"verdict": "halt", "unproven": ["stelle3_zitat: NOT IMPLEMENTED — kein Codepfad"]}`
+	got4, _ := haltTerminalReason(out4)
+	if !strings.HasPrefix(got4, "no-healable-defect-evidenced") {
+		t.Fatalf("not-implemented alone must not be needs-evidence, got %q", got4)
+	}
+}

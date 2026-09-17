@@ -32,6 +32,11 @@ Werkzeuge mit eigenem Dry-Run.
   STELLE 3 — ZITAT-BEWEIS: die PDF-Label sind BEWIESEN, wenn ein durch
                           Zotero verlinktes Zitat die korrekte Seite
                           zeigt. Das ist der abschließende Beweis.
+                          ACHTUNG (#278): Stelle 3 ist in diesem Build
+                          NOT IMPLEMENTED — kein Codepfad liest Zotero-
+                          Annotationen. Führe sie als offen/not implemented;
+                          liefere KEINE Diagnose, die sich auf Annotations-
+                          Beweise stützt, und fordere keine an.
 
 Forensische Wahrheit ist der STANDARDWEG, kein Ausnahmemodus: die T3-
 Druckstruktur-Karte ist zulässige M-Quelle für Diagnose und Plan, wann
@@ -123,6 +128,14 @@ Kein Prosa davor oder danach; nur das Objekt. Beispiele:
     umbenennen.
   · `report`, `stop`, `escalate` schließen den Fall (Endbericht bzw.
     Eskalation) — sie kosten kein Budget und beenden die Schleife.
+  · `forensics` bei großen Büchern: die Karte kommt FENSTERWEISE als
+    Kompaktansicht (eine Zeile je Seite: folio/zone/label/zeichen/flags).
+    Solange die Evidenz `next_page_start` nennt, hole das nächste Fenster
+    mit {"action":"forensics","page_start":N} — bis die Karte
+    „VOLLSTÄNDIG (letztes Fenster)“ meldet. Diagnostiziere den Körper
+    NIEMALS aus einem Teilfenster: erst alle Fenster, dann Diagnose.
+    `page_end` (optional) begrenzt ein Fenster explizit. Die volle Karte
+    steht unabhängig davon immer in der Berichts-Evidenz (#278).
   · Der Dispatcher antwortet mit Roh-Evidenz (JSON); misslungene oder
     nicht registrierte Schritte werden als FEHLGESCHLAGEN gemeldet, nie
     als ausgeführt. Nach 2 Fehlversuchen derselben Klasse → Eskalation.
