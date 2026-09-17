@@ -9,6 +9,7 @@ package fixerinvoker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -618,4 +619,64 @@ func TestPostHealSyncFailureDoesNotFailHeal(t *testing.T) {
 	if !held {
 		t.Fatal("wave gate must hold on a healed-not-yet-enqueued case (sync failed)")
 	}
+}
+
+// TestRequeueStaleRespectsOCRClassBudget (#284): an OCR-class case (the
+// stable pagination_state marker) runs under the LARGER stale bound — a
+// live, merely slow 90-minute rebuild must not be requeued under a second
+// claim at the normal 40-minute mark, but IS recovered once its own
+// window passes (dead invoker).
+func TestRequeueStaleRespectsOCRClassBudget(t *testing.T) {
+	e := openDB(t)
+	e.truncate(t)
+	inv, _ := newTestInvoker(t, e, "exit 0\n", time.Minute)
+	// OCR-class analysis (pagination_state marker, #219 English key)
+	c, _, err := e.rep.CreateRepairCase(context.Background(), mustAttID(t, e, "ATT-OCRR1"), "", "reparierbar",
+		json.RawMessage(`{"pagination_state": "needs_ocr"}`))
+	if err != nil || c == nil {
+		t.Fatalf("CreateRepairCase: %v %v", err, c)
+	}
+	if err := e.rep.QueueRepairCase(context.Background(), c.ID, "reparierbar",
+		json.RawMessage(`{"pagination_state": "needs_ocr"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.rep.ClaimRepairCase(context.Background(), c.ID); err != nil {
+		t.Fatal(err)
+	}
+	// age the claim past the NORMAL window but inside the OCR window
+	if _, err := e.pool.Exec(context.Background(),
+		`UPDATE repair_cases SET updated_at = now() - interval '50 minutes' WHERE id=$1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	inv.reapStale(context.Background())
+	if s, _, _ := e.caseStatus(t, c.ID); s != "in_repair" {
+		t.Fatalf("OCR-class claim aged 50m must survive the normal-bound reaper, got %s", s)
+	}
+	// past the OCR window: recovered like any dead invoker
+	if _, err := e.pool.Exec(context.Background(),
+		`UPDATE repair_cases SET updated_at = now() - interval '3 hours' WHERE id=$1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	inv.reapStale(context.Background())
+	if s, _, _ := e.caseStatus(t, c.ID); s != "queued" {
+		t.Fatalf("OCR-class claim aged 3h must requeue (dead invoker), got %s", s)
+	}
+}
+
+// mustAttID seeds source/document/attachment and returns the attachment id.
+func mustAttID(t *testing.T, e *itEnv, key string) string {
+	t.Helper()
+	var attID string
+	if err := e.pool.QueryRow(context.Background(), `
+		WITH s AS (INSERT INTO zotero_sources (base_url, library_id, server_id)
+			VALUES ('https://zotero.ocr-test', 'lib-`+key+`', 'srv') RETURNING id),
+		d AS (INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title, creators, publication_year)
+			SELECT id, 'DOC-`+key+`', 1, 'book', 'OCR IT', '[{"first":"A","last":"Autor"}]', 2024 FROM s RETURNING id)
+		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+			parent_zotero_key, link_mode, content_type, filename, local_path)
+		SELECT s.id, d.id, '`+key+`', 1, 'DOC-`+key+`', 'imported_file', 'application/pdf', 'x.pdf', '/tmp/ocr-it.pdf'
+		FROM s, d RETURNING id::text`).Scan(&attID); err != nil {
+		t.Fatal(err)
+	}
+	return attID
 }

@@ -1574,10 +1574,13 @@ func TestPreflightRepairableAutoQueues(t *testing.T) {
 	}
 }
 
-// TestPreflightUnpaginatedStaysRejected (#238 counter-test): the design
-// nail — unpaginierte Originale gehen NIE in die Reparatur-Schleife. The
-// auto-queue must not touch them.
-func TestPreflightUnpaginatedStaysRejected(t *testing.T) {
+// TestPreflightScanClassAutoQueues (#284): the scan class (historically
+// "unpaginiert" — textless scan) is REPAIRABLE now: scan_ocr_rebuild
+// heals it in the fixer, so the preflight reject auto-queues the case
+// like 🔴 reparierbar. The pre-#284 nail (never enters the loop) is
+// obsolete with the OCR arm; loop safety is the claim guard + the #282
+// document-level healed-count guard.
+func TestPreflightScanClassAutoQueues(t *testing.T) {
 	h := openDispatchDB(t)
 	h.truncateFixtures(t)
 	jobID := h.seedJob(t, "Q238b", 3)
@@ -1602,8 +1605,8 @@ func TestPreflightUnpaginatedStaysRejected(t *testing.T) {
 	if got := h.jobStatus(t, jobID); got != "skipped" {
 		t.Fatalf("status = %q, want skipped (preflight-red)", got)
 	}
-	if got := h.repairCaseStatus(t, jobID); got != "rejected" {
-		t.Fatalf("repair case status = %q, want rejected (unpaginiert NEVER enters the loop)", got)
+	if got := h.repairCaseStatus(t, jobID); got != "queued" {
+		t.Fatalf("repair case status = %q, want queued (scan class auto-queues since #284 — OCR rebuild heals it)", got)
 	}
 }
 
@@ -1635,12 +1638,12 @@ func TestUnreadableSourceAutoQueues(t *testing.T) {
 }
 
 // TestStaleRepairableCaseNotRecycledIntoQueue (#238 review fix): a stale
-// OPEN case of an auto-queueable class must never be queued by a NEWER
-// verdict of a different class. A rejected 🔴 reparierbar case predating
-// the auto-queue (manual-world leftover) + a current 🔴 unpaginiert
-// preflight for the same attachment: the case must stay rejected — the
-// current evidence says unpaginiert, and unpaginiert NEVER enters the
-// loop. Auto-queue is strictly queue-AT-CREATION (created flag).
+// OPEN case must never be queued by a NEWER verdict of a different class.
+// A rejected 🔴 reparierbar case predating the auto-queue (manual-world
+// leftover) + a current 🔴 unpaginiert preflight for the same attachment:
+// the case must stay rejected — the current evidence belongs to a FRESH
+// case (the recycled open case is old evidence). Auto-queue is strictly
+// queue-AT-CREATION (created flag).
 func TestStaleRepairableCaseNotRecycledIntoQueue(t *testing.T) {
 	h := openDispatchDB(t)
 	h.truncateFixtures(t)
@@ -1662,8 +1665,8 @@ func TestStaleRepairableCaseNotRecycledIntoQueue(t *testing.T) {
 		t.Fatalf("seed stale case: %v", err)
 	}
 
-	// Current preflight verdict: unpaginiert — must NOT queue the stale
-	// reparierbar case.
+	// Current preflight verdict: scan class — must NOT queue the stale
+	// reparierbar case (recycled, not fresh).
 	fp := newFakeProcessor(t)
 	fp.preflightReport = &map[string]any{
 		"contract_version": "1.0",
@@ -1680,7 +1683,7 @@ func TestStaleRepairableCaseNotRecycledIntoQueue(t *testing.T) {
 	runFor(t, d, context.Background(), 6*time.Second)
 
 	if got := h.repairCaseStatus(t, jobID); got != "rejected" {
-		t.Fatalf("stale repair case status = %q, want rejected (a newer unpaginiert verdict must never recycle it into the queue)", got)
+		t.Fatalf("stale repair case status = %q, want rejected (a newer verdict must never recycle an old open case into the queue)", got)
 	}
 	// And the stale analysis is untouched (no class laundering either).
 	rc := h.repairCaseFor(t, jobID)

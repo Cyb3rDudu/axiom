@@ -100,6 +100,80 @@ def main() -> None:
     d.save(here / "ohne_textschicht.pdf")
     d.close()
 
+    # 3b) scan_mit_folios.pdf — #284: reiner Bildscan MIT gedruckten
+    #     Foliozahlen im Laufkopf (Titelei 2 Seiten unnummeriert, dann
+    #     Folio 5, 6, 7, …). Der OCR-Rebuild muss die Schicht BAUEN und die
+    #     2-in-1-Folio-Heilung Labels aus der NEUEN Schicht schreiben
+    #     können (phys 3 → Label 5, +1 je Seite).
+    #     Die Ziffer steht INLINE neben dem Kapitelwort (wie echte
+    #     Laufköpfe): tesseratures Seitenlayout verwirft isolierte
+    #     Einzelziffern, inline Nummern überleben die Segmentierung.
+    d = _new_doc()
+    for i in range(7):
+        src = _new_doc()
+        sp = src.new_page(width=W, height=H)
+        folio = i - 1  # phys 1,2: Titelei (keine Zahl); phys 3 → 5
+        if folio > 0:
+            sp.insert_text((40, 60), f"{folio + 4} | Scankapitel", fontsize=13)
+        sp.insert_text((60, 130), f"Scankapitel {i + 1}", fontsize=24)
+        sp.insert_textbox(
+            (60, 170, W - 60, H - 80),
+            "Ein synthetischer Scan mit gedruckten Seitenzahlen im Laufkopf, "
+            "damit die optische Zeichenerkennung nach dem Rebuild einen "
+            "messbaren Folio-Lauf vorfindet und die Label-Heilung aus der "
+            "neuen Textschicht planen kann. Auch diese Seite trägt mehrere "
+            "Zeilen gut lesbarer Schrift für das Verifikat. ",
+            fontsize=14,
+        )
+        pix = sp.get_pixmap(dpi=150)
+        src.close()
+        page = d.new_page(width=W, height=H)
+        page.insert_image(page.rect, stream=pix.tobytes("jpg"))
+    d.save(here / "scan_mit_folios.pdf")
+    d.close()
+
+    # 3c) kaputte_textschicht.pdf — #284: digital geboren, defekte
+    #     Worttrennung (Reder/SSOAR-Klasse): die Seite RENDERT sauber
+    #     gesetzte, leerzeichen-getrennte Prosa (als Rasterbild), trägt
+    #     aber eine UNSICHTBARE (render_mode 3) Textschicht, deren
+    #     Extraktion konkatenierte Wörter liefert. --mode force
+    #     rasterisiert die kaputte Schicht weg; die OCR-Schicht der
+    #     sauberen Pixel liefert Leerzeichen.
+    d = _new_doc()
+    for i in range(4):
+        src = _new_doc()
+        sp = src.new_page(width=W, height=H)
+        sp.insert_text((60, 100), f"Belegkapitel {i + 1}", fontsize=22)
+        sp.insert_textbox(
+            (60, 140, W - 60, H - 80),
+            "Diese Seite ist sauber gesetzte Prosa mit ordentlichen "
+            "Leerzeichen zwischen allen Woertern, damit die optische "
+            "Zeichenerkennung nach dem erzwungenen Rastern ein sauberes "
+            "Ergebnis liefern kann. Auch diese Zeile traegt mehrere "
+            "Woerter und einen Satz zum Schluss der Seite mit.",
+            fontsize=13,
+        )
+        pix = sp.get_pixmap(dpi=150)
+        src.close()
+        page = d.new_page(width=W, height=H)
+        page.insert_image(page.rect, stream=pix.tobytes("jpg"))
+        # unsichtbare, konkatenierte Textschicht darüber (der Defekt)
+        page.insert_text(
+            (60, 100),
+            "Belegkapitel" + str(i + 1) + "mitkaputterWorttrennungohneLeerzeichen",
+            fontsize=22,
+            render_mode=3,
+        )
+        page.insert_textbox(
+            (60, 140, W - 60, H - 80),
+            "DieseSeitehatleiderkaputteWorttrennunginderunsichtbarenTextschicht "
+            "dieExtraktionliefertWörterohnejeglicheTrennungdieRederKlasse",
+            fontsize=13,
+            render_mode=3,
+        )
+    d.save(here / "kaputte_textschicht.pdf")
+    d.close()
+
     # 4) doppelseiten.pdf — 5 Landschafts-Spreads (je 2 "Buchseiten"), 0 Labels.
     d = _new_doc()
     leaf = 1
@@ -164,6 +238,8 @@ def main() -> None:
     save_copy("AAAA1111", "gesund.pdf", "gesund.pdf")
     save_copy("BBBB2222", "falsch.pdf", "falsche_labels.pdf")
     save_copy("CCCC3333", "scan.pdf", "ohne_textschicht.pdf")
+    save_copy("DDDD4444", "scan_folios.pdf", "scan_mit_folios.pdf")
+    save_copy("EEEE5555", "kaputt.pdf", "kaputte_textschicht.pdf")
     print("fixtures generiert nach", here)
 
 

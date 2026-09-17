@@ -8,7 +8,9 @@ import (
 )
 
 // TestRepairStateMachineIT pins the #184 state machine invariants:
-//   - unpaginiert never queues (design nail 1)
+//   - the scan class queues like any repairable class (#284 lifted the
+//     historical "unpaginiert never queues" refusal — scan_ocr_rebuild
+//     heals it; loop safety is the claim guard, not class refusal)
 //   - auto-apply gate blocks below threshold / with contradictions
 //     (RAG-side, never trusted from the service)
 //   - the blocked transition actually lands in blocked_for_dudu (the
@@ -25,16 +27,24 @@ func TestRepairStateMachineIT(t *testing.T) {
 	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: "lib-1",
 		docKey: "SMDOC", attKey: "SMATT", contentHash: &ch}, "completed", 1)
 
-	// open case + unpaginiert gate
+	// open case + scan-class queue admission (#284: the refusal is gone —
+	// the pilot books carry exactly this class and must reach the fixer)
 	c, _, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", json.RawMessage(`{"x":1}`))
 	if err != nil || c == nil {
 		t.Fatalf("CreateRepairCase: %v %v", c, err)
 	}
-	if err := lr.rep.QueueRepairCase(ctx, c.ID, "🔴 unpaginiert", json.RawMessage(`{}`)); err == nil {
-		t.Fatal("unpaginiert muss QueueRepairCase verweigern")
+	if err := lr.rep.QueueRepairCase(ctx, c.ID, "🔴 unpaginiert", json.RawMessage(`{"pagination_state":"needs_ocr"}`)); err != nil {
+		t.Fatalf("scan class muss queue-bar sein (#284): %v", err)
 	}
-	if err := lr.rep.QueueRepairCase(ctx, c.ID, "🔴 Unpaginiert (Mixed-Case)", json.RawMessage(`{}`)); err == nil {
-		t.Fatal("unpaginiert (mixed case) muss QueueRepairCase verweigern — ToLower-Guard")
+	// back to rejected for the flow below (the admission probe consumed the state)
+	if _, err := lr.rep.Pool().Exec(ctx, `UPDATE repair_cases SET status='rejected' WHERE id=$1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.rep.QueueRepairCase(ctx, c.ID, "🔴 Unpaginiert (Mixed-Case)", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("mixed-case class string muss ebenfalls queue-bar sein (#284): %v", err)
+	}
+	if _, err := lr.rep.Pool().Exec(ctx, `UPDATE repair_cases SET status='rejected' WHERE id=$1`, c.ID); err != nil {
+		t.Fatal(err)
 	}
 	if err := lr.rep.QueueRepairCase(ctx, c.ID, "🔴 reparierbar", json.RawMessage(`{"folio":true}`)); err != nil {
 		t.Fatalf("queue: %v", err)

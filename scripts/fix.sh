@@ -13,10 +13,16 @@
 #     the runner env (normalize/spine/corpses, red→green proof)
 #   --source passes the attachment's local path to the EPUB arm (the
 #     invoker knows it; the PDF agent resolves its own sources).
+#   --lang / --ocr-mode route through to the PDF agent (#284 OCR rebuild:
+#     language default from document metadata, force mode for broken
+#     text layers — the invoker appends them per case).
 #
 # Lock: lockdir under ~/.local/state/axiom/runs (mkdir is atomic).
-# Timeout: 30 min hard cap per invocation (timeout binary on PATH, e.g.
+# Timeout: hard cap per invocation (timeout binary on PATH, e.g.
 #   nix coreutils; without it the run is unbounded — logged).
+#   AXIOM_FIX_SH_TIMEOUT (seconds) overrides the 1800s default (#284:
+#   OCR-class rebuilds get their own budget — a 658-page rebuild does
+#   not fit 30 minutes; the invoker sets this per invocation class).
 set -eu
 
 KEY="${1:?usage: fix.sh <zotero-key> [--apply] [--format pdf|epub] [--source PATH]}"
@@ -27,9 +33,18 @@ SOURCE=""
 EXTRA=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --format) FORMAT="${2:?--format needs a value}"; shift 2 ;;
-        --source) SOURCE="${2:?--source needs a value}"; shift 2 ;;
-        *) EXTRA="$EXTRA $1"; shift ;;
+    --format)
+        FORMAT="${2:?--format needs a value}"
+        shift 2
+        ;;
+    --source)
+        SOURCE="${2:?--source needs a value}"
+        shift 2
+        ;;
+    *)
+        EXTRA="$EXTRA $1"
+        shift
+        ;;
     esac
 done
 [ -n "$EXTRA" ] && set -- $EXTRA
@@ -74,7 +89,10 @@ if [ "$FORMAT" = "epub" ]; then
         echo "fix: runner python not installed at $RUNNER_PY (EPUB arm)" >&2
         exit 1
     }
-    [ -n "$SOURCE" ] || { echo "fix: --format epub needs --source PATH" >&2; exit 1; }
+    [ -n "$SOURCE" ] || {
+        echo "fix: --format epub needs --source PATH" >&2
+        exit 1
+    }
     if command -v timeout >/dev/null 2>&1; then
         timeout 1800 "$RUNNER_PY" -m axiom_ng_runner.compute_core.epub_repair_cli \
             --key "$KEY" --source "$SOURCE" --work-root "$RUNS" "$@" || rc=$?
@@ -85,8 +103,11 @@ if [ "$FORMAT" = "epub" ]; then
     exit "$rc"
 fi
 
+# #284: per-class time budget — OCR rebuilds default to their own,
+# larger cap (the invoker passes it explicitly; manual runs may set it).
+FIX_TIMEOUT="${AXIOM_FIX_SH_TIMEOUT:-1800}"
 if command -v timeout >/dev/null 2>&1; then
-    timeout 1800 "$FIXER" "$APP" --key "$KEY" "$@" || rc=$?
+    timeout "$FIX_TIMEOUT" "$FIXER" "$APP" --key "$KEY" "$@" || rc=$?
 else
     echo "fix: WARNING no timeout binary on PATH — running unbounded" >&2
     "$FIXER" "$APP" --key "$KEY" "$@" || rc=$?

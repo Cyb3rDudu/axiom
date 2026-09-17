@@ -40,6 +40,8 @@ type RepairItem struct {
 	Creators      []zotero.Creator
 	Year          int
 	Publisher     string
+	Language      string          // #284: OCR language default from document metadata
+	Analysis      json.RawMessage // #284: per-case OCR overrides (analysis.ocr.mode/lang)
 	LocalPath     string
 	ContentType   string
 }
@@ -51,6 +53,7 @@ func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, 
 	row := r.pool.QueryRow(ctx, `
 		SELECT c.id::text, a.id::text, a.zotero_key, d.zotero_key, d.id::text,
 		       d.title, d.creators, COALESCE(d.publication_year, 0), COALESCE(d.publisher, ''),
+		       COALESCE(d.language, ''), c.analysis,
 		       a.local_path, COALESCE(a.content_type, '')
 		FROM repair_cases c
 		JOIN zotero_attachments a ON a.id = c.attachment_id AND a.deleted = false
@@ -59,22 +62,33 @@ func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, 
 	var it RepairItem
 	var creators []byte
 	if err := row.Scan(&it.CaseID, &it.AttachmentID, &it.AttachmentKey, &it.DocumentKey, &it.DocumentID,
-		&it.Title, &creators, &it.Year, &it.Publisher, &it.LocalPath,
-		&it.ContentType); err != nil {
+		&it.Title, &creators, &it.Year, &it.Publisher, &it.Language, &it.Analysis,
+		&it.LocalPath, &it.ContentType); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal(creators, &it.Creators)
 	return &it, nil
 }
 
-// RequeueStaleRepairCases flips in_repair cases older than stale back to
-// queued (invoker crash recovery). Returns the number of requeued cases.
-// Attempts were already counted at claim time — the loop guard still caps
-// the total, so a crash-looping invoker cannot mint infinite attempts.
-func (r *Repo) RequeueStaleRepairCases(ctx context.Context, stale time.Duration) (int64, error) {
+// RequeueStaleRepairCases flips in_repair cases older than their class's
+// stale bound back to queued (invoker crash recovery). Returns the number
+// of requeued cases. Attempts were already counted at claim time — the
+// loop guard still caps the total, so a crash-looping invoker cannot mint
+// infinite attempts.
+// #284: OCR-class cases run under a LARGER budget (658-page rebuilds);
+// reaping them at the normal bound would requeue a live, merely slow OCR
+// run under a second claim (the per-key lockdir then burns an attempt).
+// Class predicate = the stable analysis fields (pagination_state marker
+// or the per-case ocr override), not the operator-facing finding string.
+func (r *Repo) RequeueStaleRepairCases(ctx context.Context, stale, ocrStale time.Duration) (int64, error) {
+	if ocrStale < stale {
+		ocrStale = stale
+	}
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE repair_cases SET status='queued', updated_at=now()
-		WHERE status='in_repair' AND updated_at < now() - make_interval(secs => $1)`, stale.Seconds())
+		WHERE status='in_repair' AND updated_at < now() - make_interval(secs => 
+			CASE WHEN analysis->>'pagination_state' = 'needs_ocr' OR analysis ? 'ocr'
+			     THEN $2::float8 ELSE $1::float8 END)`, stale.Seconds(), ocrStale.Seconds())
 	if err != nil {
 		return 0, err
 	}

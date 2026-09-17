@@ -139,6 +139,10 @@ type Config struct {
 	FixerCommand string
 	// FixerConcurrency caps parallel fixer runs per host (owner nail: 1-2).
 	FixerConcurrency int
+	// FixerOCRTimeout (#284) is the per-invocation budget for OCR-class
+	// repairs (scan_ocr_rebuild): a 658-page rebuild does not fit the
+	// normal fixer timeout. 0 lets the invoker default (90m) apply.
+	FixerOCRTimeout time.Duration
 
 	// ArtifactRoot is the durable derived-artifact root (AXIOM_ARTIFACT_ROOT).
 	ArtifactRoot string
@@ -227,6 +231,7 @@ func Load() Config {
 		FixerInvokerEnabled:        envBool("AXIOM_FIXER_INVOKER_ENABLED"),
 		FixerCommand:               env("AXIOM_FIXER_CMD", "/opt/axiom/bin/axiom-fixer"),
 		FixerConcurrency:           envInt("AXIOM_FIXER_CONCURRENCY", 1),
+		FixerOCRTimeout:            envDur("AXIOM_FIXER_OCR_TIMEOUT", 0),
 		ArtifactRoot:               env("AXIOM_ARTIFACT_ROOT", ""),
 		ZoteroWriteKeyFile:         env("AXIOM_ZOTERO_WRITE_KEY_FILE", os.Getenv("HOME")+"/.axiom-ng/write-api-key"),
 		QuarantineRoot:             env("AXIOM_QUARANTINE_ROOT", quarantineDefault),

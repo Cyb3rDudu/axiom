@@ -82,6 +82,187 @@ def _heal_readback_proof(work: Path) -> dict | None:
     return labeltree_heal.readback_proof(work)
 
 
+# #284: Sprache des OCR-Rebuilds — Aufrufer (Invoker) übergibt den
+# Metadaten-Default; hier gilt der Owner-Default (deu schlug deu+eng im
+# Pilot: „Universitit"-Fehler im Kombimodus).
+def _ocr_lang_default() -> str:
+    import os
+
+    return os.environ.get("AXIOM_OCR_LANG", "deu")
+
+
+def _scan_ocr_rebuild_rule(
+    cfg, key: str, apply: bool, lang: str = "", force: bool = False
+) -> dict | None:
+    """#284 Katalog-Regel scan_ocr_rebuild — deterministisch, kein Modell.
+
+    Trigger (Diagnose-Schwellen im Werkzeug selbst):
+      - reiner Bildscan (keine Textschicht) → plain-Modus, ODER
+      - kaputte Textschicht (defekte Worttrennung, Reder-Klasse: Wörter
+        ohne Leerzeichen konkateniert) → force-Modus (--force-ocr
+        rasterisiert die kaputte Vektorschicht weg), ODER
+      - expliziter force-Modus am Aufruf (Case-Override).
+
+    Heilung (2-in-1, Owner-Ruling): OCRmyPDF-Rebuild (ungedrosselt,
+    Kommandoform aus dem Pilot) BAUT die neue Textschicht; DANACH läuft
+    die Folio-Verifikation auf der NEUEN Schicht (labeltree_heal —
+    Scan + Labels in EINER Heilung). Ist das Folio-Mapping nicht
+    darstellbar, heilt die Textschicht allein (physical_only-verarbeitbar);
+    die Folio-Frage fällt dann an die normale Klassifikation zurück.
+
+    Rückgabe None = nicht die Klasse (Aufrufer fällt weiter durch).
+    """
+    import shutil as _shutil
+
+    from tools import (
+        labeltree_heal,  # type: ignore[reportAttributeAccessIssue]
+        scan_ocr_rebuild,  # type: ignore[reportAttributeAccessIssue]
+        surgery_exec,  # type: ignore[reportAttributeAccessIssue]
+    )
+
+    wc = ensure_work_copy(cfg, key)
+    if wc is None:
+        return None
+    work, _reused = wc
+    diag = scan_ocr_rebuild.diagnose(work)
+    mode_force = force or diag.get("mode") == "force"
+    # nicht die Klasse: intakte Textschicht ohne force-Override, oder ein
+    # degenerates text-/bildfreies Vektor-PDF (kein Scan — OCR könnte
+    # nichts liefern) — beides fällt an Label-Regel/Agent zurück.
+    if diag.get("mode") is None and not mode_force:
+        return None
+
+    run_dir = cfg.work_root / key
+    ocr_lang = lang or _ocr_lang_default()
+    if not apply:
+        report = {
+            "key": key,
+            "verdict": "report",
+            "catalog_rule": "scan_ocr_rebuild",
+            "final_step": {
+                "action": "report",
+                "plan_class": "scan_ocr_rebuild",
+                "reason": (
+                    f"Diagnose: {diag['class']} · Modus {'force' if mode_force else 'plain'} · "
+                    f"Sprache {ocr_lang} — Schreibfreigabe nicht erteilt (Dry-Run)."
+                ),
+            },
+            "evidence": [diag],
+            "apply": False,
+        }
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=1, default=str)
+        )
+        return report
+
+    # Ein HALT ohne verifizierte Heilung ENTFERNT die Workcopy (#258-
+    # Pforte, physisch): der Invoker lädt bei Exit 0 ALLES hoch, was unter
+    # work.pdf liegt — ein unverändertes Original dort wäre eine
+    # Schein-Heilung mit Upload des kaputten Bytes.
+    def _halt(reason: str, evidence: list) -> dict:
+        work.unlink(missing_ok=True)
+        report = {
+            "key": key,
+            "verdict": "halt",
+            "catalog_rule": "scan_ocr_rebuild",
+            "final_step": {
+                "action": "rollback",
+                "plan_class": "scan_ocr_rebuild",
+                "reason": reason,
+            },
+            "evidence": evidence,
+            "apply": True,
+        }
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=1, default=str)
+        )
+        return report
+
+    if not diag.get("ocr_available"):
+        return _halt(
+            "OCR-Werkzeuge fehlen (tesseract/gs/ocrmypdf) — Textschicht "
+            "nicht baubar, keine stille Lüge: needs-evidence, nichts "
+            "geschrieben.",
+            [diag],
+        )
+
+    rebuilt = run_dir / "ocr_rebuild.pdf"
+    res = scan_ocr_rebuild.run_rebuild(work, rebuilt, lang=ocr_lang, force=mode_force)
+    if not res.get("applied"):
+        return _halt(
+            f"OCR-Rebuild abgelehnt/fehlgeschlagen: {res.get('cause', '?')}",
+            [diag, res],
+        )
+
+    # Neue Schicht wird die Workcopy (das Storage-Original bleibt unberührt;
+    # der Invoker lädt genau work.pdf nach Exit 0 hoch).
+    _shutil.copy2(rebuilt, work)
+
+    # 2-in-1: Folio-Verifikation auf der NEUEN Textschicht — Labels
+    # aus den jetzt messbaren Folios (dieselbe #258-Ernte-Diziplin wie
+    # die Preflight-Klassifikation). Nicht darstellbar → Textschicht-
+    # Alleinheilung (physical_only), Folio-Frage fällt an die
+    # Normalverarbeitung zurück.
+    folio_evidence: dict = {"plan_class": "scan_ocr_rebuild+labeltree"}
+    labels = labeltree_heal.heal_labels(work)
+    labels_applied = False
+    if labels is not None:
+        plan = {
+            "class": "scan_ocr_rebuild",
+            "operations": [
+                {
+                    "op": "write_labels",
+                    "source": str(work),
+                    "backup": str(run_dir / "backup.pdf"),
+                    "labels": labels,
+                    "expected_after": labels,
+                }
+            ],
+        }
+        surg = surgery_exec.run_plan(plan, apply=True)
+        labels_applied = bool(surg.get("applied"))
+        folio_evidence["surgery"] = surg
+    proof = _heal_readback_proof(work)
+    folio_evidence["readback"] = proof
+    folio_evidence["labels_applied"] = labels_applied
+
+    # healed gilt, sobald die TEXT-Schicht verifiziert ist (Verifikat im
+    # Werkzeug: Seitenzahl/Geometrie unverändert, Schicht vorhanden); die
+    # Label-Heilung ist der 2-in-1-Bonus — ihr Ausbleiben (Mapping nicht
+    # darstellbar) macht die Textschicht-Heilung nicht ungeschehen.
+    healed = bool(res.get("applied"))
+    report = {
+        "key": key,
+        "verdict": "healed" if healed else "halt",
+        "catalog_rule": "scan_ocr_rebuild",
+        "final_step": {
+            "action": "heal" if healed else "rollback",
+            "plan_class": "scan_ocr_rebuild",
+            "reason": (
+                f"OCR-Rebuild ({'force' if mode_force else 'plain'}, {ocr_lang}): "
+                f"{res['quality']} · Labels: "
+                + (
+                    "geheilt (Readback bestätigt)"
+                    if proof
+                    else "nicht darstellbar — Textschicht-Heilung allein"
+                )
+            ),
+        },
+        "evidence": [diag, res, folio_evidence],
+        "heal_readback": proof,
+        "apply": True,
+    }
+    if not healed:
+        work.unlink(missing_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=1, default=str)
+    )
+    return report
+
+
 def h_probe(step: dict, ctx: dict) -> dict:
     """Stellen-Sonde (3-Stellen-Beweis): misst hier die RAG-Erreichbarkeit
     (Vorbedingung von Stelle 2). Was NICHT gemessen wurde, steht unter
@@ -346,7 +527,14 @@ def make_client(cfg):
 
 
 def run_agent(
-    key: str, *, apply: bool = False, client=None, cfg=None, task_extra: str = ""
+    key: str,
+    *,
+    apply: bool = False,
+    client=None,
+    cfg=None,
+    task_extra: str = "",
+    ocr_lang: str = "",
+    ocr_force: bool = False,
 ) -> dict:
     """Vollständiger Agenten-Lauf für einen Key. Liefert den Endbericht als
     dict (identisch zur Audit-Spur unter WORK_ROOT/<key>/report.json)."""
@@ -356,6 +544,16 @@ def run_agent(
     cfg = cfg or load_config_envfile(None)
     cfg.ensure_dirs()
     status = config_status(cfg)
+
+    # #284: Katalog-Regel scan_ocr_rebuild VOR der Label-Regel — ein
+    # kaputter Textlayer (force-Modus) muss wegrastert werden, BEVOR die
+    # Label-Heilung auf der (kaputten) Schicht Folios lesen würde; ein
+    # reiner Scan hat keine Schicht und fällt hier wie dort durch.
+    scan_report = _scan_ocr_rebuild_rule(
+        cfg, key, apply, lang=ocr_lang, force=ocr_force
+    )
+    if scan_report is not None:
+        return scan_report
 
     # #253: deterministische Stelle-1-Katalog-Regel VOR dem Agentenlauf —
     # "Label-Tree fehlt/leerer Strunk + Textschicht vorhanden" ist
@@ -393,9 +591,9 @@ def run_agent(
                         "action": "report",
                         "plan_class": "labeltree-missing",
                         "reason": "Katalog-Regel (#253): Tree fehlt/leerer "
-                                  "Strunk + Textschicht vorhanden — "
-                                  "beweisbar-sichere write_labels-Operation, "
-                                  "Schreibfreigabe nicht erteilt (Dry-Run).",
+                        "Strunk + Textschicht vorhanden — "
+                        "beweisbar-sichere write_labels-Operation, "
+                        "Schreibfreigabe nicht erteilt (Dry-Run).",
                     },
                     "evidence": [verdict],
                     "config": status,
@@ -427,12 +625,18 @@ def run_agent(
                 "final_step": {
                     "action": "heal" if applied and proof else "rollback",
                     "plan_class": "labeltree-missing",
-                    "reason": ("Katalog-Regel (#253): write_labels ausgeführt, "
-                               "Read-Back bestätigt." if applied and proof else
-                               (f"write_labels abgelehnt: {op_cause}" if not applied
-                                else "write_labels angewendet, aber KEIN Readback-"
-                                     "Beweis (Tree/Labels) — ehrliches FAIL, kein "
-                                     "Upload (#258)")),
+                    "reason": (
+                        "Katalog-Regel (#253): write_labels ausgeführt, "
+                        "Read-Back bestätigt."
+                        if applied and proof
+                        else (
+                            f"write_labels abgelehnt: {op_cause}"
+                            if not applied
+                            else "write_labels angewendet, aber KEIN Readback-"
+                            "Beweis (Tree/Labels) — ehrliches FAIL, kein "
+                            "Upload (#258)"
+                        )
+                    ),
                 },
                 "evidence": [verdict, res],
                 "config": status,
@@ -469,7 +673,9 @@ def run_agent(
 
     system_prompt = (HERE / "prompts" / "system.txt").read_text() + system_header()
     freigabe = "erteilt (--apply)" if apply else "NICHT erteilt (nur Dry-Run)"
-    zeit_budget = f"{cfg.budget_max_seconds}s" if cfg.budget_max_seconds > 0 else "keines"
+    zeit_budget = (
+        f"{cfg.budget_max_seconds}s" if cfg.budget_max_seconds > 0 else "keines"
+    )
     task = (
         f"Repariere das PDF des Zotero-Keys '{key}'.\n"
         f"Konfigurationslage: {json.dumps(status, ensure_ascii=False)}\n"
@@ -540,13 +746,11 @@ def _truth_source(results: list) -> dict:
             continue
         if r.get("action") == "forensics" and r.get("ok"):
             used["stelle1_druckseite"] = "forensics_tool (Druckstruktur-Karte)"
-        if (
-            r.get("action") == "probe"
-            and "rag-reachability" in (r.get("measured") or [])
+        if r.get("action") == "probe" and "rag-reachability" in (
+            r.get("measured") or []
         ):
             notizen.append(
-                "rag_erreichbar (reachability gemessen, kein "
-                "Chunk-Seiten-Vergleich)"
+                "rag_erreichbar (reachability gemessen, kein Chunk-Seiten-Vergleich)"
             )
     if used["stelle1_druckseite"] is None:
         used["stelle1_druckseite"] = "nicht gemessen"
@@ -590,9 +794,29 @@ def main(argv: list[str] | None = None) -> int:
         "DEFAULT ist Sandbox/Env-Betrieb, ein fehlender EXPLIZITER Pfad "
         "stirbt laut)",
     )
+    p.add_argument(
+        "--lang",
+        default="",
+        help="OCR-Sprache (#284; Default: Metadaten-Default des Aufrufers "
+        "bzw. deu — deu schlug deu+eng im Pilot)",
+    )
+    p.add_argument(
+        "--ocr-mode",
+        choices=["auto", "force"],
+        default="auto",
+        help="OCR-Modus (#284): auto = Diagnose entscheidet (reiner Scan "
+        "plain, kaputte Worttrennung force); force = Textschicht immer "
+        "wegrastern (--force-ocr, Reder-Klasse)",
+    )
     a = p.parse_args(argv)
     cfg = load_config_envfile(a.config)
-    report = run_agent(a.key, apply=a.apply, cfg=cfg)
+    report = run_agent(
+        a.key,
+        apply=a.apply,
+        cfg=cfg,
+        ocr_lang=a.lang,
+        ocr_force=(a.ocr_mode == "force"),
+    )
     print(json.dumps(report, ensure_ascii=False, indent=1, default=str))
     return 0 if report.get("verdict") not in ("NO-MODEL",) else 1
 

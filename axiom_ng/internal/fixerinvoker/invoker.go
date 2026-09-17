@@ -60,6 +60,12 @@ type Config struct {
 	// the primary killing; this context only catches a wedged wrapper.
 	// Default 35m.
 	Timeout time.Duration
+	// OCRTimeout (#284) is the per-invocation backstop for OCR-class
+	// repairs (scan_ocr_rebuild): a 658-page rebuild does not fit the
+	// normal fixer timeout. The wrapper gets this budget minus slack via
+	// AXIOM_FIX_SH_TIMEOUT so fix.sh's timeout binary stays the primary
+	// killer (same layering as Timeout). Default 90m.
+	OCRTimeout time.Duration
 	// Concurrency caps parallel fixer invocations per host (owner nail 3:
 	// max 1-2). Values below 1 clamp to 1, above 2 clamp to 2.
 	Concurrency int
@@ -68,6 +74,10 @@ type Config struct {
 	// plus slack so a live, merely slow invocation is never requeued
 	// under a second invoker).
 	StaleAfter time.Duration
+	// OCRStaleAfter (#284) is the same bound for OCR-class cases — derived
+	// from OCRTimeout so a live 90-minute rebuild is never requeued under
+	// a second claim mid-run. Default OCRTimeout + 5m.
+	OCRStaleAfter time.Duration
 }
 
 func (c *Config) fillDefaults() {
@@ -87,6 +97,9 @@ func (c *Config) fillDefaults() {
 	if c.Timeout <= 0 {
 		c.Timeout = 35 * time.Minute
 	}
+	if c.OCRTimeout <= 0 {
+		c.OCRTimeout = 90 * time.Minute
+	}
 	if c.Concurrency < 1 {
 		c.Concurrency = 1
 	}
@@ -97,6 +110,9 @@ func (c *Config) fillDefaults() {
 		// structural invariant: a live-but-slow invocation must never be
 		// requeued under a second claim while it is still running
 		c.StaleAfter = c.Timeout + 5*time.Minute
+	}
+	if c.OCRStaleAfter <= c.OCRTimeout {
+		c.OCRStaleAfter = c.OCRTimeout + 5*time.Minute
 	}
 }
 
@@ -164,7 +180,7 @@ func (inv *Invoker) Run(ctx context.Context) error {
 }
 
 func (inv *Invoker) reapStale(ctx context.Context) {
-	n, err := inv.deps.Rep.RequeueStaleRepairCases(ctx, inv.cfg.StaleAfter)
+	n, err := inv.deps.Rep.RequeueStaleRepairCases(ctx, inv.cfg.StaleAfter, inv.cfg.OCRStaleAfter)
 	if err != nil {
 		inv.logger.Printf("requeue-stale: %v", err)
 		return
@@ -238,13 +254,95 @@ func (inv *Invoker) processCase(ctx context.Context, caseID string) {
 // fixerArgs builds the wrapper arguments for one repair item (#220: EPUB
 // cases route through fix.sh's --format epub arm with the local source
 // path; PDF cases stay byte-identical to the pre-#205 shape).
+// #284: OCR-class PDF cases append the language (metadata default, mapped
+// to tesseract codes) and the per-case force mode (analysis override —
+// broken text layers rasterize away their defective vector text).
 func fixerArgs(item *repo.RepairItem) []string {
 	args := []string{item.AttachmentKey, "--apply"}
 	if strings.Contains(item.ContentType, "epub") {
 		args = append(args, "--format", "epub",
 			"--source", strings.TrimPrefix(item.LocalPath, "file://"))
+		return args
+	}
+	if lang := ocrLanguage(item); lang != "" {
+		args = append(args, "--lang", lang)
+	}
+	if ocrForceMode(item) {
+		args = append(args, "--ocr-mode", "force")
 	}
 	return args
+}
+
+// ocrAnalysis is the OCR-relevant slice of a repair case's analysis JSON.
+type ocrAnalysis struct {
+	OCR struct {
+		Mode string `json:"mode"`
+		Lang string `json:"lang"`
+	} `json:"ocr"`
+	PaginationState string `json:"pagination_state"`
+}
+
+func parseOCRAnalysis(item *repo.RepairItem) ocrAnalysis {
+	var a ocrAnalysis
+	_ = json.Unmarshal(item.Analysis, &a)
+	return a
+}
+
+// ocrCase reports whether this repair item is an OCR-class case (#284):
+// the analysis carries the #254/#219 pagination_state marker (needs_ocr —
+// the dispatcher's preflight writes it) or a per-case ocr override.
+// Renaming the finding string (#283) cannot break this predicate: it keys
+// on the stable English analysis field, not the operator-facing label.
+func ocrCase(item *repo.RepairItem) bool {
+	a := parseOCRAnalysis(item)
+	return a.PaginationState == "needs_ocr" || a.OCR.Mode != "" || a.OCR.Lang != ""
+}
+
+// ocrForceMode reports the per-case force override (#284): a broken text
+// layer (Reder-class word segmentation) must be rasterized away even
+// though a text layer exists. Carried as analysis.ocr.mode = "force".
+func ocrForceMode(item *repo.RepairItem) bool {
+	return parseOCRAnalysis(item).OCR.Mode == "force"
+}
+
+// tesseractLang maps the Zotero document language (ISO 639-1/-2 as stored)
+// onto tesseract codes. Unknown/empty falls back to the owner default
+// (deu — beat deu+eng in the pilot); a stored 3-letter code passes
+// through (operators may store tesseract codes directly).
+func tesseractLang(docLanguage string) string {
+	l := strings.ToLower(strings.TrimSpace(docLanguage))
+	switch l {
+	case "", "de", "ger", "deu", "de-de":
+		return "deu"
+	case "en", "eng", "en-us", "en-gb":
+		return "eng"
+	case "fr", "fra", "fre":
+		return "fra"
+	case "it", "ita":
+		return "ita"
+	case "es", "spa":
+		return "spa"
+	case "nl", "nld", "dut":
+		return "nld"
+	}
+	if len(l) == 3 {
+		return l
+	}
+	return "deu"
+}
+
+// ocrLanguage resolves the OCR language for a case (#284): per-case
+// override (analysis.ocr.lang) beats the document metadata default; both
+// beat the fixer's internal owner default (deu).
+func ocrLanguage(item *repo.RepairItem) string {
+	if !ocrCase(item) {
+		return ""
+	}
+	a := parseOCRAnalysis(item)
+	if a.OCR.Lang != "" {
+		return a.OCR.Lang
+	}
+	return tesseractLang(item.Language)
 }
 
 // repairArtifactName is the healed file the wrapper must leave under
@@ -264,9 +362,39 @@ func repairArtifactName(item *repo.RepairItem) string {
 // the same key (fix.sh's stale-lock recovery would let the immediate retry
 // spawn a SECOND agent on the same working directory).
 func (inv *Invoker) runFixer(ctx context.Context, item *repo.RepairItem) (int, string, error) {
-	cctx, cancel := context.WithTimeout(ctx, inv.cfg.Timeout)
+	// #284: OCR-class repairs run under their OWN budget (a 658-page
+	// rebuild does not fit 35 minutes). fix.sh's timeout binary stays the
+	// primary killer — the Go backstop sits ABOVE it with slack (same
+	// layering as the normal Timeout over fix.sh's 30m default).
+	budget := inv.cfg.Timeout
+	if ocrCase(item) {
+		budget = inv.cfg.OCRTimeout
+		fixShBudget := budget - 5*time.Minute
+		if fixShBudget <= 0 {
+			fixShBudget = budget
+		}
+		inv.logger.Printf("case: key %s: OCR-class budget %s (fix.sh kills at %s)", item.AttachmentKey, budget, fixShBudget)
+		cmdEnv := append(os.Environ(), fmt.Sprintf("AXIOM_FIX_SH_TIMEOUT=%d", int(fixShBudget.Seconds())))
+		return inv.runFixerCmd(ctx, item, budget, cmdEnv)
+	}
+	return inv.runFixerCmd(ctx, item, budget, nil)
+}
+
+// runFixerCmd executes Command <key> --apply under the given backstop
+// timeout (and optional extra environment). It returns (exit code,
+// captured output tail, error) — the output feeds the HALT-terminal
+// classification in handleSuccess (#253).
+// The fixer runs in its OWN process group and the backstop kills the whole
+// group: a wedged wrapper's python child must not survive as an orphan on
+// the same key (fix.sh's stale-lock recovery would let the immediate retry
+// spawn a SECOND agent on the same working directory).
+func (inv *Invoker) runFixerCmd(ctx context.Context, item *repo.RepairItem, budget time.Duration, extraEnv []string) (int, string, error) {
+	cctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, inv.cfg.Command, fixerArgs(item)...)
+	if extraEnv != nil {
+		cmd.Env = extraEnv
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = 10 * time.Second // insurance: if a child ever double-forked, don't hang cmd.Run past the group kill
 	cmd.Cancel = func() error {
@@ -283,8 +411,8 @@ func (inv *Invoker) runFixer(ctx context.Context, item *repo.RepairItem) (int, s
 	err := cmd.Run()
 	out := buf.String()
 	if cctx.Err() == context.DeadlineExceeded {
-		return -1, out, fmt.Errorf("timeout nach %s (backstop; fix.sh hätte bei 30m töten müssen): %s",
-			inv.cfg.Timeout, lastLines([]byte(out)))
+		return -1, out, fmt.Errorf("timeout nach %s (backstop): %s",
+			budget, lastLines([]byte(out)))
 	}
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {

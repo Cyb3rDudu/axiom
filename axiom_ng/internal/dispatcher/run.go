@@ -295,16 +295,18 @@ var repairTrackFailureCodes = map[string]bool{
 
 // autoQueueRepairClasses (#238): suspicion classes whose repair case
 // queues ITSELF at creation — strictly the clearly-repairable, per the
-// design decision on the issue: preflight 🔴 reparierbar and the #237
-// SOURCE_UNREADABLE track. Unpaginiert NEVER auto-queues (the design nail
-// — it is not in this set, and repo.QueueRepairCase refuses it again on
-// its own). EPUB red (defekt/DRM) stays on the manual repair API until
-// the EPUB fixer arm has queue-proven efficacy; extending automation is
-// a one-line addition here. Exact string match — the findings are runner
-// contract values, not prefixes to guess from.
+// design decision on the issue: preflight 🔴 reparierbar, the #237
+// SOURCE_UNREADABLE track, and — since #284 made the class repairable —
+// the scan class (textless scans heal via the fixer's scan_ocr_rebuild;
+// the historical "never auto-queue" nail is obsolete with the OCR arm).
+// EPUB red (defekt/DRM) stays on the manual repair API until the EPUB
+// fixer arm has queue-proven efficacy; extending automation is a one-line
+// addition here. Exact string match — the findings are runner contract
+// values, not prefixes to guess from.
 var autoQueueRepairClasses = map[string]bool{
 	"🔴 reparierbar":     true,
 	"SOURCE_UNREADABLE": true,
+	"🔴 unpaginiert":     true, // #284: scan class, heals via scan_ocr_rebuild
 }
 
 // autoQueueRepair (#238/#282) queues a FRESH repair case whose class is

@@ -2,12 +2,15 @@ package fixerinvoker
 
 import (
 	"context"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
 
 // The unit tier (no DB): config clamping, output bounding, and the
@@ -212,5 +215,99 @@ func TestHaltReasonNamesTheActualGround(t *testing.T) {
 	got6, _ := haltTerminalReason(out6)
 	if !strings.HasPrefix(got6, "no-healable-defect-evidenced: kein messbares Heilungspotenzial") {
 		t.Fatalf("stop-guidance echo must classify no-healable, got %q", got6)
+	}
+}
+
+// --- #284: OCR-class routing, budgets, language, mode separation ---------
+
+func mkItem(analysis string, lang string) *repo.RepairItem {
+	return &repo.RepairItem{
+		AttachmentKey: "KEY1",
+		ContentType:   "application/pdf",
+		Language:      lang,
+		Analysis:      json.RawMessage(analysis),
+	}
+}
+
+// TestOCRCaseDetection (#284): the OCR-class predicate keys on the STABLE
+// analysis fields (pagination_state marker / ocr override), never on the
+// operator-facing finding string — the #283 rename cannot break routing.
+func TestOCRCaseDetection(t *testing.T) {
+	cases := []struct {
+		analysis string
+		want     bool
+	}{
+		{`{"pagination_state": "needs_ocr"}`, true},
+		{`{"finding": "🔴 unpaginiert"}`, false},          // string alone routes nothing
+		{`{"ocr": {"mode": "force"}}`, true},             // per-case override
+		{`{"pagination_state": "physical_only"}`, false}, // text-bearing, not OCR
+		{`{}`, false},
+	}
+	for _, c := range cases {
+		if got := ocrCase(mkItem(c.analysis, "")); got != c.want {
+			t.Fatalf("ocrCase(%s) = %v, want %v", c.analysis, got, c.want)
+		}
+	}
+}
+
+// TestOCRLanguagePrecedence (#284 DoD): per-case override beats document
+// metadata; metadata maps onto tesseract codes; unknown falls back to the
+// owner default deu (deu beat deu+eng in the pilot).
+func TestOCRLanguagePrecedence(t *testing.T) {
+	// override beats metadata
+	if got := ocrLanguage(mkItem(`{"ocr": {"lang": "eng"}, "pagination_state": "needs_ocr"}`, "de")); got != "eng" {
+		t.Fatalf("override lang = %q, want eng", got)
+	}
+	// metadata default (ISO 639-1 → tesseract)
+	if got := ocrLanguage(mkItem(`{"pagination_state": "needs_ocr"}`, "de")); got != "deu" {
+		t.Fatalf("de → %q, want deu", got)
+	}
+	if got := ocrLanguage(mkItem(`{"pagination_state": "needs_ocr"}`, "en")); got != "eng" {
+		t.Fatalf("en → %q, want eng", got)
+	}
+	// empty metadata → owner default
+	if got := ocrLanguage(mkItem(`{"pagination_state": "needs_ocr"}`, "")); got != "deu" {
+		t.Fatalf("empty → %q, want deu", got)
+	}
+	// non-OCR case: no lang arg at all (the fixer's own default applies)
+	if got := ocrLanguage(mkItem(`{"pagination_state": "physical_only"}`, "de")); got != "" {
+		t.Fatalf("non-OCR case lang = %q, want none", got)
+	}
+}
+
+// TestFixerArgsOCR (#284 DoD): OCR-class cases carry --lang and, only for
+// the force override, --ocr-mode force — the mode separation between pure
+// scans (plain OCR) and broken text layers (rasterize away).
+func TestFixerArgsOCR(t *testing.T) {
+	// pure scan: language only, NO force
+	args := fixerArgs(mkItem(`{"pagination_state": "needs_ocr"}`, "de"))
+	if !slices.Contains(args, "--lang") || !slices.Contains(args, "deu") {
+		t.Fatalf("pure scan args missing --lang deu: %v", args)
+	}
+	if slices.Contains(args, "force") {
+		t.Fatalf("pure scan must NOT force: %v", args)
+	}
+	// broken text layer: force
+	args = fixerArgs(mkItem(`{"ocr": {"mode": "force"}}`, "de"))
+	if !slices.Contains(args, "--ocr-mode") || !slices.Contains(args, "force") {
+		t.Fatalf("force case args missing --ocr-mode force: %v", args)
+	}
+}
+
+// TestOCRTimeoutBudgetIndependent (#284 DoD): OCR-class repairs run under
+// their OWN time budget — the general fixer timeout (35m) does not fit a
+// 658-page rebuild. Config defaults pin the separation; the selection is
+// observable through the env the wrapper receives.
+func TestOCRTimeoutBudgetIndependent(t *testing.T) {
+	cfg := Config{}
+	cfg.fillDefaults()
+	if cfg.Timeout != 35*time.Minute {
+		t.Fatalf("normal timeout = %v, want 35m", cfg.Timeout)
+	}
+	if cfg.OCRTimeout <= cfg.Timeout {
+		t.Fatalf("OCR timeout %v must sit ABOVE the normal %v", cfg.OCRTimeout, cfg.Timeout)
+	}
+	if cfg.OCRStaleAfter <= cfg.OCRTimeout {
+		t.Fatalf("OCR stale %v must sit ABOVE the OCR timeout %v (live-but-slow never requeued)", cfg.OCRStaleAfter, cfg.OCRTimeout)
 	}
 }

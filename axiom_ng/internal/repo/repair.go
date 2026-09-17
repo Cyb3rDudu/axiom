@@ -5,8 +5,10 @@
 // Loop guard (design nail 1): zotero_attachments.repair_attempts counts
 // EVERY claim per attachment; the third attempt is impossible by check —
 // the case goes blocked_for_dudu('loop-guard') and never enters the loop.
-// 'unpaginiert' originals never enter the loop: QueueRepairCase refuses
-// them (their rejected case stays as a dudu-visible tombstone).
+// #284: scan-class cases (historically "unpaginiert", now repairable via
+// scan_ocr_rebuild) queue like any repairable class — the old refusal is
+// gone; loop safety is the claim guard + the document-level healed-count
+// guard on the dispatcher's auto-queue path (#282).
 //
 // Foundation limitation (B3): in_repair has NO reaper/timeout yet — a
 // fix-service crash mid-case burns that attempt and leaves the case stuck
@@ -124,13 +126,13 @@ func (r *Repo) OpenRepairCase(ctx context.Context, attachmentID string) (*Repair
 }
 
 // QueueRepairCase attaches the fix-service input (analysis) and flips
-// rejected → queued. Unpaginiert originals NEVER queue (design nail 1:
-// "Klasse unreparierbar → nie in der Schleife") — enforced here, not in
-// comments.
+// rejected → queued. The historical "unpaginiert never queues" refusal is
+// GONE (#284): the scan class became repairable — scan_ocr_rebuild heals
+// textless scans AND broken text layers, so their cases now enter the
+// loop like any repairable class. Loop safety is owned by the claim guard
+// (per attachment) and the dispatcher's document-level healed-count guard
+// (#282) — not by refusing the class.
 func (r *Repo) QueueRepairCase(ctx context.Context, caseID, suspicionClass string, analysis json.RawMessage) error {
-	if strings.Contains(strings.ToLower(suspicionClass), "unpaginiert") {
-		return fmt.Errorf("unpaginierte Originale gehen nie in die Reparatur-Schleife (case %s)", caseID)
-	}
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE repair_cases SET status='queued', suspicion_class=$2, analysis=$3, updated_at=now()
 		WHERE id=$1 AND status='rejected'`, caseID, suspicionClass, analysis)
