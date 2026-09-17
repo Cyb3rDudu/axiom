@@ -133,7 +133,9 @@ func (s *Server) repairItemFor(r *http.Request, c *repo.RepairCase) (*repairQueu
 // from an aborted earlier run counts as done) → upload the healed file
 // under the parent with a SCHEMA filename → step report. Idempotent
 // re-run: a record with terminal status "healed" is refused (409) — a
-// re-run would upload a duplicate healed sibling.
+// re-run would upload a duplicate healed sibling. A record with a recorded
+// create key but no terminal status is ALSO refused (409, different text):
+// the create may have succeeded server-side, so Zotero is checked first.
 func (s *Server) handleRepairCustody(w http.ResponseWriter, r *http.Request) {
 	if s.zoteroWrite == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "custody needs the zotero write client (SetRepairAPI)"})
@@ -170,9 +172,23 @@ func (s *Server) handleRepairCustody(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, rerr.Error(), http.StatusInternalServerError)
 		return
 	}
-	if rec != nil && rec.Status == "healed" {
+	if rec != nil && rec.Status == repair.StatusHealed {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":  "attachment " + key + " wurde bereits manuell geheilt — erneut reparieren nur über den Runbook-Weg (Quarantäne-Rückholung)",
+			"record": rec,
+		})
+		return
+	}
+	// Ambiguous-create guard (review W1): a create phase already ran once
+	// (its new key is on the record) but the protocol never reached healed —
+	// the upload may have succeeded server-side while the run errored (the
+	// orphan cleanup is best-effort). A blind re-run would upload a SECOND
+	// healed sibling — the exact state this tool exists to prevent. Check
+	// Zotero first (Runbook: Present → repair done, set record healed;
+	// absent → clear new_attachment_key, re-run).
+	if rec != nil && rec.NewAttachmentKey != "" && rec.Status != repair.StatusHealed {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":  "attachment " + key + " hat einen abgebrochenen Create-Lauf (NewAttachmentKey " + rec.NewAttachmentKey + " im Protokoll) — erst Zotero auf ein vorhandenes geheiltes Geschwister prüfen; ein blinder Re-Run würde ein doppelt geheiltes Geschwister hochladen (Runbook: Abbruch & Nachlauf)",
 			"record": rec,
 		})
 		return
@@ -187,12 +203,16 @@ func (s *Server) handleRepairCustody(w http.ResponseWriter, r *http.Request) {
 	if rec == nil {
 		rec = &repair.ManualRecord{
 			AttachmentKey: key, DocumentKey: item.DocumentKey,
-			Reason: reason, OriginalPath: item.LocalPath, ContentType: contentType,
+			Reason: reason, OriginalPath: strings.TrimPrefix(item.LocalPath, "file://"), ContentType: contentType,
 			CreatedAt: repair.ManualNow(),
 		}
 	} else {
 		// resume of an aborted run: the record keeps its history; a NEW
-		// reason only set when the operator sent one differing text
+		// reason only set when the operator sent one differing text. The
+		// path/content-type refresh to the FRESH lookup/request values — a
+		// stale record must not misreport them (review W3).
+		rec.OriginalPath = strings.TrimPrefix(item.LocalPath, "file://")
+		rec.ContentType = contentType
 		if reason != "" && reason != rec.Reason {
 			rec.Reason = rec.Reason + " | re-run: " + reason
 		}

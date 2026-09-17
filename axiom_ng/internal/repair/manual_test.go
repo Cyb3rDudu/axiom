@@ -24,19 +24,17 @@ type fakeWriteZotero struct {
 	brokenKey    string
 	newKey       string
 	deleteStatus int
-	deletes      []string          // keys that got a SUCCESSFUL delete
-	versions     map[string]int64  // key -> current version (deleted keys absent)
-	deleted      map[string]bool   // keys whose delete returned 204
-	createdParent string
-	createdFile  []byte            // uploaded bytes
-	createdName  string            // uploaded filename
+	deletes      []string         // keys that got a SUCCESSFUL delete
+	versions     map[string]int64 // key -> current version (deleted keys absent)
+	createdFile  []byte           // uploaded bytes
+	createdName  string           // uploaded filename
 	failCreate   bool
 }
 
 func newFakeWrite(brokenKey string) *fakeWriteZotero {
 	return &fakeWriteZotero{
 		brokenKey: brokenKey, newKey: "NEW1",
-		deleteStatus: 0, versions: map[string]int64{brokenKey: 3}, deleted: map[string]bool{},
+		deleteStatus: 0, versions: map[string]int64{brokenKey: 3},
 	}
 }
 
@@ -80,7 +78,6 @@ func (f *fakeWriteZotero) server(t *testing.T) *httptest.Server {
 				f.mu.Lock()
 				f.deletes = append(f.deletes, key)
 				delete(f.versions, key)
-				f.deleted[key] = true
 				f.mu.Unlock()
 			}
 			w.WriteHeader(st)
@@ -95,9 +92,6 @@ func (f *fakeWriteZotero) server(t *testing.T) *httptest.Server {
 			w.Write([]byte(`{"successful":{"0":{"key":"` + f.newKey + `"}}}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/file"):
 			// authorize: {url, uploadKey}; register: upload=<key> -> 204
-			if strings.Contains(r.URL.RawQuery, "") && r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" {
-				// discriminate by body below — read it
-			}
 			buf := make([]byte, 4096)
 			n, _ := r.Body.Read(buf)
 			body := string(buf[:n])
@@ -294,5 +288,72 @@ func TestManualDelete404ToleranceNotBlanket(t *testing.T) {
 		if !tc.ok && err == nil {
 			t.Fatalf("status %d must NOT be swallowed", tc.status)
 		}
+	}
+}
+
+// TestManualCustodyAbortAtCreateThenRerunCompletes — the create-phase
+// abort matrix (complement to the delete-phase abort above): run 1 dies
+// AT the create (gateway 500 on the item POST) with quarantine + delete
+// already done; the record holds NO new key yet. Run 2: create recovered
+// → the protocol completes and heals. (The variant where the create
+// PARTIALLY succeeded server-side is what the endpoint's
+// ambiguous-create 409 guard exists for — that key-on-record refusal is
+// pinned at the endpoint level in the custody IT.)
+func TestManualCustodyAbortAtCreateThenRerunCompletes(t *testing.T) {
+	root := t.TempDir()
+	orig := filepath.Join(root, "orig.pdf")
+	os.WriteFile(orig, []byte("original"), 0o644)
+	fw := newFakeWrite("BROKEN1")
+	fw.failCreate = true // run 1: the item POST dies
+	srv := fw.server(t)
+	wc := zotero.NewWriteClient(srv.URL, "srv", "key")
+
+	caseArgs := ApplyCase{
+		CaseID: "manual-BROKEN1", AttachmentKey: "BROKEN1", DocumentKey: "P1",
+		Title: "T", Year: 2020, SrcPath: orig, ContentType: "application/pdf",
+	}
+	rec := &ManualRecord{AttachmentKey: "BROKEN1", DocumentKey: "P1",
+		Reason: "create-abort test", OriginalPath: orig, ContentType: "application/pdf", CreatedAt: ManualNow()}
+	deps := &ManualDeps{Write: wc, Root: root, Record: rec, RunID: ManualRunID("BROKEN1")}
+	if _, err := Apply(context.Background(), deps, root, caseArgs, []byte("healed")); err == nil {
+		t.Fatal("run 1 must fail at the create")
+	}
+	rec1, err := LoadManualRecord(root, "BROKEN1")
+	if err != nil || rec1.Status != "failed" {
+		t.Fatalf("aborted run must record status failed: %+v %v", rec1, err)
+	}
+	if rec1.NewAttachmentKey != "" {
+		t.Fatalf("a failed item POST must not record a new key: %+v", rec1)
+	}
+	// quarantine AND delete completed before the create died
+	actions := []string{}
+	for _, s := range rec1.Steps {
+		actions = append(actions, s.Action)
+	}
+	if len(actions) < 2 || actions[0] != "quarantine" || actions[1] != "delete_attachment" {
+		t.Fatalf("steps before the create failure: %v", actions)
+	}
+
+	// run 2: create recovered; the old item is already gone (deleted in
+	// run 1) — the delete 404s and that is resume-success
+	fw.mu.Lock()
+	fw.failCreate = false
+	fw.mu.Unlock()
+	deps2 := &ManualDeps{Write: wc, Root: root, Record: rec1, RunID: ManualRunID("BROKEN1")}
+	if _, err := Apply(context.Background(), deps2, root, caseArgs, []byte("healed")); err != nil {
+		t.Fatalf("re-run must complete: %v", err)
+	}
+	rec2, _ := LoadManualRecord(root, "BROKEN1")
+	if rec2.Status != "healed" || rec2.NewAttachmentKey != "NEW1" {
+		t.Fatalf("re-run must heal with the new key: %+v", rec2)
+	}
+	quarantines := 0
+	for _, s := range rec2.Steps {
+		if s.Action == "quarantine" {
+			quarantines++
+		}
+	}
+	if quarantines != 2 {
+		t.Fatalf("both runs must have quarantined, got %d", quarantines)
 	}
 }

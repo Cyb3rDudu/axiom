@@ -162,7 +162,9 @@ type Hit struct {
 	CaptionText string `json:"caption_text,omitempty"`
 	// Images (#276): the chunk's images in text/marker order with their
 	// captions (machine + figure separately, ref + marker for resolution).
-	// Omitted when the chunk carries no captioned image.
+	// Omitted only when the chunk carries no images at all or no resolvable
+	// entry; an entry without any caption still serves ref+marker (the
+	// linkage stays observable even when no captioner ran).
 	Images []ImageView `json:"images,omitempty"`
 	// CollapsedNearDuplicates counts same-document near-duplicate chunks
 	// folded into this hit by #160 hygiene (0 = none; the collapse hint).

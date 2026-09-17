@@ -20,7 +20,7 @@ EPUB-Reparaturen: `application/epub+zip`). Antwort: Schrittreport
 ## Wann einsetzen
 
 - Nach einem **Fixer-HALT** (#278-Klasse): der Bibliothekar hat die Datei von
-  Hand geheilt ( externes Werkzeug, PDF-Editor) und die Bibliothek soll die
+  Hand geheilt (externes Werkzeug, PDF-Editor) und die Bibliothek soll die
   geheilte Fassung als einzige verarbeitbare nehmen.
 - Nach jedem Fall, in dem früher "Geschwister hochladen + altes Attachment in
   den Papierkorb" improvisiert wurde (Geursen-Vorfall 2026-09-17: die
@@ -55,6 +55,18 @@ EPUB-Reparaturen: `application/epub+zip`). Antwort: Schrittreport
   zweiter Upload würde ein zweites geheiltes Geschwister erzeugen — genau der
   Zustand, den das Werkzeug verhindert. Erneut reparieren (auch die geheilte
   Fassung ist kaputt) nur über den manuellen Weg unten.
+- **Abgebrochener Create-Lauf** (Satz trägt `new_attachment_key`, Status
+  ≠ `healed`) wird ebenfalls mit 409 verweigert: der Upload kann
+  serverseitig durchgegangen sein, während der Lauf fehlschlug — erst Zotero
+  prüfen. Geschwister vorhanden → Reparatur ist faktisch fertig (Satz auf
+  `healed` setzen, Sync); nicht vorhanden → `new_attachment_key` aus dem
+  Satz löschen und erneut aufrufen.
+- **Nie zwei Aufrufe parallel starten** — die Verweigerungs-Guards sind
+  check-then-act; Doppelklick/Retry immer nacheinander ausführen.
+- **Lief nach einem fehlgeschlagenen Lauf (Item bereits gelöscht) ein Sync**, verweigert
+  der Endpoint danach mit 404 (die Projektion markiert das Attachment als
+  gelöscht) — dann den Protokoll-Satz prüfen und ggf. den Create-Schritt
+  manuell vollenden.
 
 ## Guards (vor jeder Mutation)
 
@@ -62,8 +74,9 @@ EPUB-Reparaturen: `application/epub+zip`). Antwort: Schrittreport
 | --- | --- |
 | `400` | `attachment_key`/`reason` fehlt, Datei leer/unlesbar, content_type unbekannt |
 | `404` | Attachment-Key der Bibliothek unbekannt oder gelöscht |
-| `409` | Key wurde bereits erfolgreich geheilt (Report im Body) |
+| `409` | Key wurde bereits erfolgreich geheilt **oder** ein Create-Lauf wurde protokolliert ohne abzuschließen (Report im Body; erst Zotero prüfen — doppelt geheiltes Geschwister vermeiden) |
 | `502` | Zotero-Write-Gateway-Fehler mittendrin — Satz zeigt den Stand, erneuter Aufruf setzt fort |
+| `503` | Zotero-Write-Client nicht verdrahtet — `SetRepairAPI`/Write-Key fehlt |
 
 ## Manuelle Wiederherstellung (kein Un-Quarantine-Automatismus)
 

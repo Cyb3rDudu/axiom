@@ -295,7 +295,7 @@ expose two #276 observability fields (omitted when the chunk has none):
 | Field | Meaning |
 | --- | --- |
 | `caption_text` | The chunk's captions as one source-labeled string — `"[machine image caption: …] [document figure caption: …]"` — exactly the field the BM25 arm ranks on; a client can see WHY an image-bearing chunk matched. Machine captions are model claims, never citable prose |
-| `images` | The chunk's images in text/marker order, aligned with the `![…](image_N.jpg)` markers in `text` — `[{"ref": "image-0001", "marker": "image_0.jpg", "machine_caption": "…", "figure_caption": "…"}]`. `ref` is the durable contract ref (artifacts table key); `marker` is the filename exactly as the text marker carries it, resolved positionally (i-th marker ↔ i-th ref) and omitted when the text's marker count disagrees with the refs (an unsafe positional guess is dropped, never guessed); `machine_caption` is a model claim, `figure_caption` is document text (#257) — clients must never blend the two |
+| `images` | The chunk's images in text/marker order, aligned with the `![…](image_N.jpg)` markers in `text` — `[{"ref": "image-0001", "marker": "image_0.jpg", "machine_caption": "…", "figure_caption": "…"}]`. `ref` is the durable contract ref (artifacts table key); `marker` is the filename exactly as the text marker carries it, resolved positionally (i-th marker ↔ i-th ref) and omitted when the text's marker count disagrees with the refs (an unsafe positional guess is dropped, never guessed); `machine_caption` is a model claim, `figure_caption` is document text (#257) — clients must never blend the two. The block appears whenever the chunk carries resolvable images, captioned or not; an entry without any caption serves `ref`+`marker` only (both caption fields omitted) |
 
 Caption hydration comes from the durable store, so it serves the whole corpus
 without reindexing; on hydration failure the fields degrade to absent (captions
@@ -348,9 +348,10 @@ absent in `arms`; total recall failure returns `503`.
 `id` is a chunk UUID. The response returns the active chunk, document/snapshot/
 attachment IDs, chunk index, text, section path, locator, bibliographic source,
 and adjacent chunks at indexes −1 and +1 within the same attachment. New
-generations also include the raw `paragraph_pages` map. Captioned chunks expose
-the same #276 fields as search hits (`caption_text` and the marker-aligned
-`images` block, see the field table above; neighbors stay caption-free).
+generations also include the raw `paragraph_pages` map. Image-bearing chunks
+expose the same #276 fields as search hits (`images` whenever a resolvable
+entry exists; `caption_text` only when the chunk carries captions; see the
+field table above; neighbors stay caption-free).
 Selected fields from a
 live response are shown below; long text and neighbors are omitted:
 

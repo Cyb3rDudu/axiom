@@ -28,7 +28,7 @@ func TestChunkCaptionsByIDsIT(t *testing.T) {
 	insChunk := `INSERT INTO processing_chunks
 		(snapshot_id, chunk_index, text, image_refs, image_captions, figure_captions)
 		VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb) RETURNING id::text`
-	var capChunk, plainChunk string
+	var capChunk, plainChunk, badChunk string
 	if err := lr.pool.QueryRow(ctx, insChunk, snap, 0,
 		"Text ![Folie 3](image_0.jpg) mehr ![Folie 4](image_1.jpg)",
 		`["image-0000","image-0001"]`,
@@ -39,8 +39,15 @@ func TestChunkCaptionsByIDsIT(t *testing.T) {
 	if err := lr.pool.QueryRow(ctx, insChunk, snap, 1, "nur Text", `[]`, `{}`, `{}`).Scan(&plainChunk); err != nil {
 		t.Fatal(err)
 	}
+	// malformed SHAPES (valid jsonb, wrong type): refs as an object, machine
+	// captions as a bare JSON string — must degrade to empty, never error
+	// (the documented contract: captions are an enhancement, never a gate).
+	if err := lr.pool.QueryRow(ctx, insChunk, snap, 2, "kaputt",
+		`{"image-0000":"obj"}`, `"{not json"`, `{}`).Scan(&badChunk); err != nil {
+		t.Fatal(err)
+	}
 
-	got, err := lr.rep.ChunkCaptionsByIDs(ctx, []string{capChunk, plainChunk})
+	got, err := lr.rep.ChunkCaptionsByIDs(ctx, []string{capChunk, plainChunk, badChunk})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +64,9 @@ func TestChunkCaptionsByIDsIT(t *testing.T) {
 	if plain := got[plainChunk]; len(plain.ImageRefs) != 0 || len(plain.Machine) != 0 || len(plain.Figures) != 0 {
 		t.Fatalf("uncaptioned chunk must hydrate empty: %+v", plain)
 	}
+	if bad := got[badChunk]; len(bad.ImageRefs) != 0 || len(bad.Machine) != 0 || len(bad.Figures) != 0 {
+		t.Fatalf("malformed-shape chunk must degrade to empty (no error): %+v", bad)
+	}
 
 	// empty batch + unknown ids: empty map, no error
 	if m, err := lr.rep.ChunkCaptionsByIDs(ctx, nil); err != nil || len(m) != 0 {
@@ -65,5 +75,4 @@ func TestChunkCaptionsByIDsIT(t *testing.T) {
 	if m, err := lr.rep.ChunkCaptionsByIDs(ctx, []string{"12345678-1234-4123-8123-123456789012"}); err != nil || len(m) != 0 {
 		t.Fatalf("unknown id must be (empty, nil): %v %v", m, err)
 	}
-	_ = ch
 }

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -52,14 +53,17 @@ type ManualRecord struct {
 // manualDir is the record location inside the quarantine root.
 func manualDir(root string) string { return filepath.Join(root, "manual") }
 
-// ManualRecordPath is where a key's record lives.
-func ManualRecordPath(root, zoteroKey string) string {
+// manualRecordPath is where a key's record lives.
+func manualRecordPath(root, zoteroKey string) string {
 	return filepath.Join(manualDir(root), zoteroKey+".json")
 }
 
+// StatusHealed is the terminal record status — the endpoint's 409 guard.
+const StatusHealed = "healed"
+
 // LoadManualRecord reads a key's record (nil, nil = no record yet).
 func LoadManualRecord(root, zoteroKey string) (*ManualRecord, error) {
-	raw, err := os.ReadFile(ManualRecordPath(root, zoteroKey))
+	raw, err := os.ReadFile(manualRecordPath(root, zoteroKey))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -78,7 +82,7 @@ func ManualNow() string { return now() }
 
 // ManualRunID identifies one custody run within a key's record.
 func ManualRunID(zoteroKey string) string {
-	return zoteroKey + "-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	return zoteroKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
 // recordMu serializes record writes WITHIN the process. Cross-process
@@ -98,11 +102,11 @@ func saveManualRecord(root string, rec *ManualRecord) error {
 		return err
 	}
 	// Write-then-rename: a reader never sees a half-written record.
-	tmp := ManualRecordPath(root, rec.AttachmentKey) + ".tmp"
+	tmp := manualRecordPath(root, rec.AttachmentKey) + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, ManualRecordPath(root, rec.AttachmentKey))
+	return os.Rename(tmp, manualRecordPath(root, rec.AttachmentKey))
 }
 
 // ManualDeps implements ApplyDeps for the manual custody path: real
@@ -172,10 +176,13 @@ func (d *ManualDeps) MarkRepairFailed(ctx context.Context, caseID, reason string
 	return nil
 }
 
+// MarkRepairHealed is the TERMINAL write: the persist error propagates
+// (review W2) — a lost terminal record would silently disarm the 409
+// idempotence guard, so Apply fails the run loudly instead (500 with the
+// record; the upload itself already succeeded, the operator checks Zotero).
 func (d *ManualDeps) MarkRepairHealed(ctx context.Context, caseID string) error {
-	d.Record.Status = "healed"
-	_ = d.persist("healed", nil)
-	return nil
+	d.Record.Status = StatusHealed
+	return d.persist("healed", nil)
 }
 
 // AuditWrite appends the custody action to the record — the step report.

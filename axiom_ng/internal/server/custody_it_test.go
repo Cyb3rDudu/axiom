@@ -349,14 +349,20 @@ func TestIT_CustodyAbortAfterQuarantineRerunCompletes(t *testing.T) {
 }
 
 // TestIT_CustodyGuards — the trust-boundary guards fire BEFORE any
-// mutation: unknown key 404, missing reason 400, empty healed file 400.
+// mutation: unknown key 404, missing reason 400, empty healed file 400,
+// unwired write client 503.
 func TestIT_CustodyGuards(t *testing.T) {
-	s, _, fw, _, _, healed, qroot := custITEnv(t)
+	s, rep, fw, _, _, healed, qroot := custITEnv(t)
 
 	// unknown key
 	rec := postCustody(s, "NOPE1", "grund", healed)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown key must 404, got %d", rec.Code)
+	}
+	// missing reason (empty string)
+	rec = postCustody(s, "ATT1", "", healed)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing reason must 400, got %d", rec.Code)
 	}
 	// empty healed file
 	empty := filepath.Join(t.TempDir(), "leer.pdf")
@@ -364,6 +370,13 @@ func TestIT_CustodyGuards(t *testing.T) {
 	rec = postCustody(s, "ATT1", "grund", empty)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("empty healed file must 400, got %d", rec.Code)
+	}
+	// unwired write client: 503 before anything else
+	s2 := New(":0", nil)
+	s2.SetRepairAPI(rep, nil, qroot)
+	rec = postCustody(s2, "ATT1", "grund", healed)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unwired write client must 503, got %d: %s", rec.Code, rec.Body.String())
 	}
 	// nothing mutated by the guard failures
 	fw.mu.Lock()
@@ -374,5 +387,36 @@ func TestIT_CustodyGuards(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(qroot, "manual", "ATT1.json")); !os.IsNotExist(err) {
 		t.Fatalf("no record must exist after guard-only calls")
+	}
+}
+
+// TestIT_CustodyAmbiguousCreateRefused — a record with a create key but no
+// terminal status is the ambiguous-resume state (the upload may have
+// succeeded server-side): the endpoint refuses with 409 and a DIFFERENT
+// error than the healed case, before any mutation (review W1).
+func TestIT_CustodyAmbiguousCreateRefused(t *testing.T) {
+	s, _, fw, _, _, healed, qroot := custITEnv(t)
+
+	stale := map[string]any{
+		"attachment_key": "ATT1", "status": "failed", "new_attachment_key": "HEALED1",
+		"steps": []map[string]any{{"action": "quarantine"}, {"action": "delete_attachment"}, {"action": "failed"}},
+	}
+	raw, _ := json.Marshal(stale)
+	os.MkdirAll(filepath.Join(qroot, "manual"), 0o755)
+	os.WriteFile(filepath.Join(qroot, "manual", "ATT1.json"), raw, 0o644)
+
+	rec := postCustody(s, "ATT1", "re-run nach Create-Abbruch", healed)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("ambiguous create must 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "HEALED1") {
+		t.Fatalf("refusal must name the recorded create key: %s", rec.Body.String())
+	}
+	fw.mu.Lock()
+	deletes := len(fw.deletes)
+	uploaded := fw.uploaded
+	fw.mu.Unlock()
+	if deletes != 0 || uploaded != "" {
+		t.Fatalf("ambiguous-create refusal must fire before any mutation: %d deletes, uploaded %q", deletes, uploaded)
 	}
 }
