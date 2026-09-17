@@ -272,3 +272,27 @@ func TestBuildQueueParksGoneAttachments(t *testing.T) {
 		t.Fatalf("nur der lesbare case wird geliefert, got %+v", out)
 	}
 }
+
+// #278 review W5: a blank requeue reason is a CLIENT error — 400 before
+// any repo interaction (zero Server, nil repairRepo: a missing guard
+// would nil-panic instead of answering). Genuine state conflicts keep 409.
+func TestRepairRequeueBlankReasonRejected(t *testing.T) {
+	s := &Server{} // zero value: nothing may be touched before the 400
+	r := chi.NewRouter()
+	r.Post("/api/repair/cases/{id}/requeue", s.handleRepairRequeue)
+
+	for _, body := range []string{
+		`{"reason": ""}`,
+		`{"reason": "   "}`,
+		`{}`,
+		`not-json`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/repair/cases/x/requeue", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %q: expected 400, got %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+}

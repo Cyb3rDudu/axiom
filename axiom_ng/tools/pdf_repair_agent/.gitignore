@@ -1,5 +1,6 @@
 # Eigene Venv + Caches — NIEMALS committen (Isolation: eigenes Venv pro
 # System, siehe bootstrap.sh).
+.venv
 .venv/
 __pycache__/
 *.pyc

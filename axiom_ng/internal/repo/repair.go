@@ -358,7 +358,7 @@ func (r *Repo) MarkRepairFailed(ctx context.Context, caseID, reason string) erro
 
 // AuditWrite records every Zotero mutation (Was/Wann/Warum).
 func (r *Repo) AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error {
-	d, _ := json.Marshal(detail)
+	d := mustMarshal(detail)
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO zotero_write_audit (case_id, attachment_id, action, detail)
 		VALUES (NULLIF($1,'')::uuid, NULLIF($2,'')::uuid, $3, $4)`,

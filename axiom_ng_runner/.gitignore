@@ -1,0 +1,13 @@
+# Eigene Venv + Caches — NIEMALS committen. Achtung: `.venv/` (mit
+# Slash) matcht KEINE Symlinks — die bare `.venv`-Zeile fängt auch
+# Worktree-lokale Symlinks auf anderen Rechner ab.
+.venv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Laufzeit-Artefakte (Logs, Backups, scratch).
+runs/
+*.log

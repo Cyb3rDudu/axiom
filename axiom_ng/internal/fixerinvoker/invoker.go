@@ -387,6 +387,7 @@ func haltTerminalReason(out string) (string, bool) {
 			// corroborating witnesses that never gate the diagnosis (truth
 			// ordering) — the prefix attributes the ground honestly.
 			if strings.Contains(lg, "nicht messbar") ||
+				strings.Contains(lg, "kein messbar") ||
 				strings.Contains(lg, "unmessbar") ||
 				strings.Contains(lg, "unmeasurable") {
 				return "needs-evidence: stelle1_druckseite — " + ground, true

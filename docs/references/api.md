@@ -305,7 +305,7 @@ Locator fields are:
 | `chapter` | Deepest section heading, when known |
 | `cfi` | EPUB CFI, when applicable |
 | `chapter_number` | Chapter ordinal for chapter-relative pagination |
-| `page_source` | `folio_verified`, `pdf_label_sane`, `physical_only`, `none`, or the EPUB trust set `print_verified` / `derived_from_sibling` / `print_unverified` (#223/#226) |
+| `page_source` | `folio_verified`, `pdf_label_sane`, `physical_only`, `none`, or the EPUB trust set `print_verified` / `derived_from_sibling` / `print_unverified` (#223/#226); PDF-side gap states: `blind` (no text layer / no folio signal, not citable as print page) and `folio_interpolated` (#280: blind gap ≤ 2 bridged between agreeing verified neighbors — citable, origin kept honest) |
 | `page_start` / `page_end` | Print-page span on enriched EPUB locators (#229) — present only when the EPUB carried a trusted anchor map; absent means absent, never fabricated |
 | `paragraph_pages` | Char-exact page boundaries `[[offset, page], …]` on enriched EPUB locators (#194 shape, #229 passthrough) — resolve a hit position to its exact print page |
 

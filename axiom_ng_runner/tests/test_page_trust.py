@@ -547,13 +547,50 @@ class FolioInterpolationTests(unittest.TestCase):
     def test_interpolation_distinguishable_in_log(self):
         # DoD: the new source class must be countable in the page_trust log
         # line (ops/projection visibility), not just present in the map.
-        import logging
         with self.assertLogs("axiom_ng_runner.compute_core.page_trust",
                              level="INFO") as cm:
             pt.build_page_trust(self._pdf(
                 ["9", "10", "11", None, "13", "14", "15"], blind_pages=(3,)))
         self.assertTrue(any("1 folio-interpolated" in line for line in cm.output),
                         f"log line must count interpolated pages: {cm.output}")
+
+    def test_chapter_mode_gap_inside_chapter_interpolates(self):
+        # W12 × #280: chapter-relative book (arabic restarts corroborated
+        # by the folio runs) — a blind gap INSIDE one chapter sits between
+        # neighbors with the same PHYSICAL offset → interpolates, and the
+        # page keeps its chapter ordinal (citation stays chapter-relative).
+        # Chapter 1 (idx 2-9, folio 1-8), chapter 2 restarts at idx 10.
+        sections = [
+            {"startpage": 0, "prefix": "C", "style": "D", "firstpagenum": 1},
+            {"startpage": 2, "prefix": "", "style": "D", "firstpagenum": 1},
+            {"startpage": 10, "prefix": "", "style": "D", "firstpagenum": 1},
+        ]
+        labels, sources, chapters = pt.build_page_trust(self._pdf(
+            [None, None, "1", "2", "3", "4", None, "6", "7", "8", "1", "2", "3", "4"],
+            sections_spec=sections, blind_pages=(6,)))
+        self.assertEqual(sources[6], pt.FOLIO_INTERPOLATED)
+        self.assertEqual(labels[6], "5")  # chapter-1 offset −1 continues
+        self.assertEqual(chapters[6], 1)
+        for i in (5, 7):
+            self.assertEqual(sources[i], pt.FOLIO_VERIFIED, f"page {i}")
+
+    def test_chapter_mode_gap_at_restart_stays_blind(self):
+        # The same book with the gap exactly ON the chapter restart: the
+        # left neighbor carries chapter 1's offset, the right one the
+        # restarted chapter 2 offset — a real discontinuity, no derivation
+        # (both neighbors verified, offsets disagree).
+        sections = [
+            {"startpage": 0, "prefix": "C", "style": "D", "firstpagenum": 1},
+            {"startpage": 2, "prefix": "", "style": "D", "firstpagenum": 1},
+            {"startpage": 10, "prefix": "", "style": "D", "firstpagenum": 1},
+        ]
+        labels, sources, _ch = pt.build_page_trust(self._pdf(
+            [None, None, "1", "2", "3", "4", "5", "6", "7", "8", None, "2", "3", "4"],
+            sections_spec=sections, blind_pages=(10,)))
+        self.assertEqual(sources[10], pt.BLIND)
+        self.assertEqual(labels[10], "11")  # raw sheet number, honest
+        self.assertEqual(sources[9], pt.FOLIO_VERIFIED)
+        self.assertEqual(sources[11], pt.FOLIO_VERIFIED)
 
     def test_interpolated_is_not_a_backfill_target(self):
         # DoD downstream distinguishability: locator backfill only touches

@@ -121,7 +121,7 @@ def h_probe(step: dict, ctx: dict) -> dict:
                 _STELLE3_NOT_IMPLEMENTED,
             ],
             "unproven": [
-                "annotation-label: not implemented (kein Annotations-Lesepfad)",
+                "annotation-label: NOT IMPLEMENTED (kein Annotations-Lesepfad)",
                 "chunk-page-exakt",
             ],
         }
@@ -136,7 +136,7 @@ def h_probe(step: dict, ctx: dict) -> dict:
                 _STELLE3_NOT_IMPLEMENTED,
             ],
             "unproven": [
-                "annotation-label: not implemented (kein Annotations-Lesepfad)",
+                "annotation-label: NOT IMPLEMENTED (kein Annotations-Lesepfad)",
                 "chunk-page-exakt",
             ],
         }
@@ -148,7 +148,7 @@ def h_probe(step: dict, ctx: dict) -> dict:
         "measured": ["rag-reachability"],
         "offen": [_STELLE3_NOT_IMPLEMENTED],
         "unproven": [
-            "annotation-label: not implemented (kein Annotations-Lesepfad)",
+            "annotation-label: NOT IMPLEMENTED (kein Annotations-Lesepfad)",
             "chunk-page-exakt (benötigt Zotero-"
             "Annotationen + chunk-id; nur mit Produktiv-Config)",
         ],
@@ -189,18 +189,21 @@ def h_forensics(step: dict, ctx: dict) -> dict:
         page_end = int(step.get("page_end") or 0)
     except (TypeError, ValueError):
         page_end = 0
+    # Zero-Progress-Guard: page_end < page_start wäre ein leeres Fenster
+    # mit next_page_start == page_start — der Agent drehte sich bis zum
+    # Ops-Budget. Unsinniges page_end wird ignoriert (Fenster bis n).
+    if page_end and page_end < page_start:
+        page_end = 0
+    cand = forensics_tool.compact_page_lines(m, page_start, page_end or n)
     lines: list[str] = []
     budget = 0
     end = page_start - 1
-    for i in range(page_start, n + 1):
-        if page_end and i > page_end:
-            break
-        ln = forensics_tool.compact_page_lines(m, i, i)[0]
+    for ln in cand:
         if lines and budget + len(ln) + 1 > FORENSICS_RENDER_BUDGET:
             break
         lines.append(ln)
         budget += len(ln) + 1
-        end = i
+        end += 1
     next_page_start = end + 1 if end < n else None
     anchor_desc = (
         f"p{anchors[0]['page'] + 1}..p{anchors[-1]['page'] + 1} "
@@ -235,7 +238,6 @@ def h_forensics(step: dict, ctx: dict) -> dict:
         # Qualitäts-Tor als CODE-Evidenz (nicht nur Prompt-Regel): die
         # rauschgefilterten Stelle-1-Anker stehen direkt im Bericht.
         "anchors": anchors,
-        "page_window": {"start": page_start, "end": end, "pages_total": n},
         "next_page_start": next_page_start,
         "render": render,
     }

@@ -193,4 +193,13 @@ func TestHaltReasonNamesTheActualGround(t *testing.T) {
 	if !strings.HasPrefix(got4, "no-healable-defect-evidenced") {
 		t.Fatalf("not-implemented alone must not be needs-evidence, got %q", got4)
 	}
+
+	// production phrasing drift (#278 review): the plan_class prose said
+	// „kein messbares Folio-Signal" — the marker set must catch the
+	// „kein messbar" negation form too, not only „nicht messbar".
+	out5 := `{"verdict": "halt", "final_step": {"reason": "plan_class unclassifiable — kein messbares Folio-Signal, Diagnose nicht tragfähig"}, "unproven": ["stelle3_zitat: NOT IMPLEMENTED"]}`
+	got5, _ := haltTerminalReason(out5)
+	if !strings.HasPrefix(got5, "needs-evidence: stelle1_druckseite — ") {
+		t.Fatalf("kein-messbar ground must classify unmeasurability, got %q", got5)
+	}
 }

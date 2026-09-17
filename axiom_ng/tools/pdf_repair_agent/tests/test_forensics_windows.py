@@ -151,6 +151,50 @@ def test_loop_render_convention(monkeypatch):
     assert "gekürzt" in calls[1]  # JSON-Pfad unverändert begrenzt
 
 
+def test_inverted_window_does_not_spin(tmp_path):
+    """#278 Guard: page_end < page_start (Agenten-Irrtum) darf KEIN leeres
+    Fenster mit next_page_start == page_start liefern — der Agent drehte
+    sich sonst bis zum Ops-Budget. Sonde: Guard entfernen → der zweite
+    Assert wird rot (next_page_start == page_start)."""
+    pdf = _big_pdf(tmp_path, 120)
+    ctx = _ctx_for(tmp_path, pdf)
+    res = repair_agent.h_forensics(
+        {"action": "forensics", "page_start": 10, "page_end": 3}, ctx
+    )
+    assert res["ok"]
+    assert res["next_page_start"] is None or res["next_page_start"] > 10
+    assert "p10 folio=9" in res["render"]  # Fenster startet bei page_start
+
+
+def test_page_start_beyond_page_count_clamps_to_last_page(tmp_path):
+    """page_start > page_count klemmt auf die letzte Seite und meldet die
+    Karte als vollständig — kein Fenster jenseits des Dokuments."""
+    pdf = _big_pdf(tmp_path, 120)
+    ctx = _ctx_for(tmp_path, pdf)
+    res = repair_agent.h_forensics(
+        {"action": "forensics", "page_start": 9999}, ctx
+    )
+    assert res["ok"]
+    assert res["next_page_start"] is None
+    assert "KARTE VOLLSTÄNDIG" in res["render"]
+    assert "p120 folio=119" in res["render"]
+
+
+def test_explicit_page_end_is_hard_window_end(tmp_path):
+    """Explizites page_end wird als hartes Fensterende respektiert: keine
+    Zeile dahinter im render, next_page_start führt direkt dahinter fort,
+    und die Berichts-Evidenz (map) bleibt vollständig."""
+    pdf = _big_pdf(tmp_path, 120)
+    ctx = _ctx_for(tmp_path, pdf)
+    res = repair_agent.h_forensics(
+        {"action": "forensics", "page_start": 5, "page_end": 9}, ctx
+    )
+    assert res["next_page_start"] == 10
+    body = [ln for ln in res["render"].splitlines() if ln.startswith("p")]
+    assert [int(ln[1:].split()[0]) for ln in body] == [5, 6, 7, 8, 9]
+    assert res["map"]["page_count"] == 120  # Evidenz bleibt komplett
+
+
 def test_probe_stelle3_not_implemented(tmp_path, monkeypatch):
     """stelle3 ehrlich als NOT IMPLEMENTED — Operatoren sollen aufhören,
     Annotationen für einen Slot zu liefern, den nichts liest."""

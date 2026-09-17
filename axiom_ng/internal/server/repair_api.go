@@ -179,6 +179,12 @@ func (s *Server) handleRepairRequeue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "body muss JSON {\"reason\": \"…\"} sein", http.StatusBadRequest)
 		return
 	}
+	// blank reason is a client error, not a state conflict — check before
+	// the repo so genuine 409s (not parked) stay meaningful
+	if strings.TrimSpace(body.Reason) == "" {
+		http.Error(w, "reason fehlt: geänderte Beweislage dokumentieren", http.StatusBadRequest)
+		return
+	}
 	if err := s.repairRepo.RequeueRepairCase(r.Context(), r.PathValue("id"), body.Reason); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
