@@ -100,6 +100,7 @@ type chunkFixture struct {
 	AttachmentID string          `json:"attachment_id"`
 	ChunkIndex   int             `json:"chunk_index"`
 	Text         string          `json:"text"`
+	CaptionText  string          `json:"caption_text,omitempty"` // #276 stub: the index field
 	Sections     []string        `json:"section_titles"`
 	Locator      json.RawMessage `json:"locator"`
 }

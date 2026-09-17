@@ -154,6 +154,16 @@ type Hit struct {
 	Source  repo.SourceView `json:"source"`
 	Locator LocatorView     `json:"locator"`
 	Section []string        `json:"section"`
+	// CaptionText (#276): the chunk's captions as one source-labeled string
+	// ("[machine image caption: …] [document figure caption: …]") — the
+	// same field the BM25 arm ranks on, exposed verbatim so a client can
+	// see WHY an image-bearing chunk matched. Omitted when the chunk has
+	// no captions.
+	CaptionText string `json:"caption_text,omitempty"`
+	// Images (#276): the chunk's images in text/marker order with their
+	// captions (machine + figure separately, ref + marker for resolution).
+	// Omitted when the chunk carries no captioned image.
+	Images []ImageView `json:"images,omitempty"`
 	// CollapsedNearDuplicates counts same-document near-duplicate chunks
 	// folded into this hit by #160 hygiene (0 = none; the collapse hint).
 	CollapsedNearDuplicates int `json:"collapsed_near_duplicates,omitempty"`
@@ -433,16 +443,26 @@ func (s *Service) Search(ctx context.Context, req Request) (*Response, error) {
 		candidates = candidates[:req.TopN]
 	}
 
+	// #276 caption observability: batch-hydrate per-image captions for the
+	// final hits (degrades to no images on failure — never a gate).
+	finalIDs := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		finalIDs = append(finalIDs, c.ID)
+	}
+	caps := s.hydrateCaptions(ctx, finalIDs)
+
 	resp.Hits = make([]Hit, len(candidates))
 	for i, c := range candidates {
 		m := meta[c.DocumentID]
 		h := Hit{
-			ChunkID: c.ID,
-			Text:    c.Text,
-			Score:   c.RRFScore,
-			Source:  sourceFor(m, c.DocumentID),
-			Locator: renderLocator(c.Locator, c.SectionTitles, m.CitationClass == "contextual"),
-			Section: c.SectionTitles,
+			ChunkID:     c.ID,
+			Text:        c.Text,
+			Score:       c.RRFScore,
+			Source:      sourceFor(m, c.DocumentID),
+			Locator:     renderLocator(c.Locator, c.SectionTitles, m.CitationClass == "contextual"),
+			Section:     c.SectionTitles,
+			CaptionText: c.CaptionText,
+			Images:      imagesFor(c.Text, caps, c.ID),
 		}
 		if n := folded[c.ID]; n > 0 {
 			h.CollapsedNearDuplicates = n

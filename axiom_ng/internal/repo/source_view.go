@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -64,6 +65,52 @@ func (m DocumentMeta) View(docID string) SourceView {
 		v.Tags = []string{}
 	}
 	return v
+}
+
+// ChunkCaptions is the per-chunk image surface (#276): refs in text/marker
+// order plus the two caption maps keyed by ref. Machine captions are model
+// claims (never citable prose); figure captions are document text (#257).
+type ChunkCaptions struct {
+	ImageRefs []string
+	Machine   map[string]string // ref → machine image caption (#230)
+	Figures   map[string]string // ref → document figure caption (#257)
+}
+
+// ChunkCaptionSource is the optional DocSource capability the retrieval
+// surfaces use to expose per-image captions on hits and passages (#276;
+// implemented by Repo). Failure degrades to no images — never a gate.
+type ChunkCaptionSource interface {
+	ChunkCaptionsByIDs(ctx context.Context, chunkIDs []string) (map[string]ChunkCaptions, error)
+}
+
+// ChunkCaptionsByIDs loads image refs + caption maps for chunks (batch,
+// one round-trip). Malformed JSONB rows degrade to empty (captions are an
+// enhancement, never a gate — same rule as LabeledCaptionText).
+func (r *Repo) ChunkCaptionsByIDs(ctx context.Context, chunkIDs []string) (map[string]ChunkCaptions, error) {
+	out := make(map[string]ChunkCaptions, len(chunkIDs))
+	if len(chunkIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id::text, image_refs::text, image_captions::text, figure_captions::text
+		FROM processing_chunks
+		WHERE id = ANY($1::uuid[])`, chunkIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, refsRaw, capsRaw, figsRaw string
+		if err := rows.Scan(&id, &refsRaw, &capsRaw, &figsRaw); err != nil {
+			return nil, err
+		}
+		cc := ChunkCaptions{}
+		_ = json.Unmarshal([]byte(refsRaw), &cc.ImageRefs)
+		_ = json.Unmarshal([]byte(capsRaw), &cc.Machine)
+		_ = json.Unmarshal([]byte(figsRaw), &cc.Figures)
+		out[id] = cc
+	}
+	return out, rows.Err()
 }
 
 // ChunkLiveness resolves a chunk id against the DB when OpenSearch does not

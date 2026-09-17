@@ -60,6 +60,12 @@ type Passage struct {
 	// ParagraphPages: raw per-paragraph page map [[charOffset, label], ...]
 	// (#194) — derived from the locator; nil on pre-#194 generations.
 	ParagraphPages [][]string `json:"paragraph_pages,omitempty"`
+	// CaptionText (#276): the chunk's captions as one source-labeled string
+	// (mirrors the Hit field; omitted when the chunk has no captions).
+	CaptionText string `json:"caption_text,omitempty"`
+	// Images (#276): the chunk's images in text/marker order with their
+	// captions (mirrors the Hit field; omitted when none is captioned).
+	Images []ImageView `json:"images,omitempty"`
 }
 
 // osPost is the shared request path for passage queries (house style of
@@ -143,6 +149,7 @@ func (s *Service) GetPassage(ctx context.Context, chunkID string) (*Passage, err
 			AttachmentID string          `json:"attachment_id"`
 			ChunkIndex   int             `json:"chunk_index"`
 			Text         string          `json:"text"`
+			CaptionText  string          `json:"caption_text"`
 			Locator      json.RawMessage `json:"locator"`
 			Sections     []string        `json:"section_titles"`
 		} `json:"_source"`
@@ -193,6 +200,8 @@ func (s *Service) GetPassage(ctx context.Context, chunkID string) (*Passage, err
 		Neighbors: neighbors,
 
 		ParagraphPages: pp,
+		CaptionText:    c.CaptionText,
+		Images:         imagesFor(c.Text, s.hydrateCaptions(ctx, []string{c.ChunkID}), c.ChunkID),
 	}, nil
 }
 

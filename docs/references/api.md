@@ -288,7 +288,19 @@ milliseconds:
 ```
 
 The example is a live response with the long passage text abbreviated. A hit may
-also contain `collapsed_near_duplicates`. The `source` block always carries
+also contain `collapsed_near_duplicates`. Chunks carrying image captions also
+expose two #276 observability fields (omitted when the chunk has none):
+
+| Field | Meaning |
+| --- | --- |
+| `caption_text` | The chunk's captions as one source-labeled string — `"[machine image caption: …] [document figure caption: …]"` — exactly the field the BM25 arm ranks on; a client can see WHY an image-bearing chunk matched. Machine captions are model claims, never citable prose |
+| `images` | The chunk's images in text/marker order, aligned with the `![…](image_N.jpg)` markers in `text` — `[{"ref": "image-0001", "marker": "image_0.jpg", "machine_caption": "…", "figure_caption": "…"}]`. `ref` is the durable contract ref (artifacts table key); `marker` is the filename exactly as the text marker carries it, resolved positionally (i-th marker ↔ i-th ref) and omitted when the text's marker count disagrees with the refs (an unsafe positional guess is dropped, never guessed); `machine_caption` is a model claim, `figure_caption` is document text (#257) — clients must never blend the two |
+
+Caption hydration comes from the durable store, so it serves the whole corpus
+without reindexing; on hydration failure the fields degrade to absent (captions
+are an enhancement, never a gate).
+
+The `source` block always carries
 `content_type` (format factor) and `citation_class` (#255):
 
 | `citation_class` | Meaning |
@@ -335,7 +347,10 @@ absent in `arms`; total recall failure returns `503`.
 `id` is a chunk UUID. The response returns the active chunk, document/snapshot/
 attachment IDs, chunk index, text, section path, locator, bibliographic source,
 and adjacent chunks at indexes −1 and +1 within the same attachment. New
-generations also include the raw `paragraph_pages` map. Selected fields from a
+generations also include the raw `paragraph_pages` map. Captioned chunks expose
+the same #276 fields as search hits (`caption_text` and the marker-aligned
+`images` block, see the field table above; neighbors stay caption-free).
+Selected fields from a
 live response are shown below; long text and neighbors are omitted:
 
 ```json
