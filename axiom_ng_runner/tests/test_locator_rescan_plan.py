@@ -145,3 +145,61 @@ class PlanUpdatesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── #280 review follow-up: folio_interpolated in the rescan consumer ──────
+
+TRUST_INTERPOLATED = (
+    {0: "4", 1: "5", 2: "6", 3: "7"},
+    {0: pt.FOLIO_VERIFIED, 1: pt.FOLIO_INTERPOLATED,
+     2: pt.FOLIO_VERIFIED, 3: pt.PHYSICAL_ONLY},  # p1 = blind gap, bridged
+)
+
+
+class InterpolatedRescanTests(unittest.TestCase):
+    """The rescan CLI must treat folio_interpolated as the print-page claim
+    it is: evidence-gated like folio_verified, labels healed from
+    label_map (a stale legacy label under a print-claiming source is the
+    off-by-N fault class #280 fixed at ingest — the rescan must not
+    re-introduce it), and visible in the distribution."""
+
+    def _rows(self, label="12"):
+        return [("c1", {"type": "page_span", "physical_page_start": 1,
+                        "page_label_start": label, "source": "marker_paginate"},
+                 "/books/Scan Buch.pdf")]
+
+    def test_interpolated_without_evidence_holds_legacy(self):
+        # Mutation probe: drop FOLIO_INTERPOLATED from the gate tuple → red
+        # (the chunk would get a print claim without counter-check evidence).
+        updates, _stamps, dist, held, _heals, _bd, _ = rescan.plan_updates(
+            self._rows(), {"/books/Scan Buch.pdf": TRUST_INTERPOLATED},
+            heal_books=set(), skip_books=set())
+        self.assertEqual(updates, [])
+        self.assertEqual(held["no_evidence_folio"], 1)
+        self.assertEqual(dist.get(pt.FOLIO_INTERPOLATED, 0), 0)
+
+    def test_interpolated_with_evidence_heals_label(self):
+        # Mutation probe: keep the label heal FOLIO_VERIFIED-only → red
+        # (page_label_start stays the stale legacy label under a
+        # print-claiming page_source).
+        updates, _stamps, dist, held, heals, _bd, _ = rescan.plan_updates(
+            self._rows(label="999"), {"/books/Scan Buch.pdf": TRUST_INTERPOLATED},
+            heal_books={"Scan Buch.pdf"}, skip_books=set())
+        self.assertEqual(len(updates), 1)
+        loc = updates[0][1]
+        self.assertEqual(loc["page_source"], pt.FOLIO_INTERPOLATED)
+        self.assertEqual(loc["page_label_start"], "5")  # healed from label_map
+        self.assertEqual(heals, 1)
+        self.assertEqual(dist[pt.FOLIO_INTERPOLATED], 1)
+        self.assertEqual(dict(held), {})
+
+    def test_interpolated_end_page_label_healed_in_same_print_run(self):
+        rows = [("c1", {"type": "page_span", "physical_page_start": 1,
+                        "physical_page_end": 2, "page_label_start": "x",
+                        "page_label_end": "y", "source": "marker_paginate"},
+                 "/books/Scan Buch.pdf")]
+        updates, _s, _d, _h, _heals, _bd, _ = rescan.plan_updates(
+            rows, {"/books/Scan Buch.pdf": TRUST_INTERPOLATED},
+            heal_books={"Scan Buch.pdf"}, skip_books=set())
+        loc = updates[0][1]
+        self.assertEqual(loc["page_label_end"], "6")  # verified end heals too

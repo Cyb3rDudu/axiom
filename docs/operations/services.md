@@ -295,9 +295,13 @@ env file of an axiom instance that also carries the Zotero write key
   `queued`, clears `blocked_reason`, and writes a `repair-requeue` audit
   row carrying the reason (a reason is mandatory — the changed conditions
   are part of the repair history). Mid-flight (`in_repair`) and `healed`
-  cases refuse. This is the documented way to re-run e.g. the Geursen
-  547-page case after its manual repair instead of hand-editing
-  `zotero_attachments.repair_attempts`.
+  cases refuse. Canonical use: NEW EVIDENCE CONDITIONS under a parked
+  case — e.g. re-running a halt that was caused by truncated forensics
+  evidence now that the #278 completeness fix landed — instead of
+  hand-editing `zotero_attachments.repair_attempts`. Note: after a
+  custody repair (manual heal) the OLD attachment is gone; requeuing its
+  case re-parks as `attachment-gone` — a manually repaired book needs no
+  fixer re-run at all (the new attachment preflights fresh).
 - **Crash safety:** the invoker never dies on a case (per-case recover,
   per-case timeout, process-group kill on the backstop) and a dead invoker
   loses no case: stale `in_repair` claims older than 40 min are requeued by

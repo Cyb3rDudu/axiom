@@ -6,8 +6,9 @@
      Expected env vars (runner.env): AXIOM_PROCESSOR_COMPUTE=real,
      AXIOM_PROCESSOR_PORT=8012, plus any AXIOM_PROCESSOR_* auth settings.
      On the Apple MPS host also: DEVICE_GLINER=mps (#277) and
-     PYTORCH_ENABLE_MPS_FALLBACK=1 (code sets the latter defensively at
-     GLiNER placement; the env line keeps it true process-wide).
+     PYTORCH_ENABLE_MPS_FALLBACK=1 (the code sets the latter at package
+     init, before torch loads — the only working placement; the env line
+     keeps it explicit and overridable).
      NOTE: exec via `env/bin/python -m axiom_ng_runner`, NOT the
      env/bin/axiom-runner console script — conda-unpack does not rewrite pip
      console-script shebangs (#!/usr/bin/env python), and launchd's PATH has

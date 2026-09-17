@@ -1004,13 +1004,13 @@ def _get_gliner() -> Any:
     try:
         from axiom_ng_runner.compute_core.devices import hardware_detector
 
-        device = hardware_detector.get_model_device("gliner")
-        # #277: GLiNER on MPS needs the CPU-fallback insurance — not every
-        # op has an MPS kernel. Mirrors reranker.py's module-top pattern; set
-        # before placement so the first predict dispatch already sees it.
-        if "mps" in device:
-            os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-        _GLINER_MODEL = _GLINER_MODEL.to(device)
+        # #277: PYTORCH_ENABLE_MPS_FALLBACK is set at PACKAGE INIT
+        # (axiom_ng_runner/__init__.py), before torch can load — setting it
+        # here would be dead code (torch reads it at import time; the
+        # embedder stage loads torch long before the entity stage).
+        _GLINER_MODEL = _GLINER_MODEL.to(
+            hardware_detector.get_model_device("gliner")
+        )
     except Exception as err:  # noqa: BLE001 — detector is optional here
         log.warning("GLiNER device placement skipped: %s", err)
     return _GLINER_MODEL

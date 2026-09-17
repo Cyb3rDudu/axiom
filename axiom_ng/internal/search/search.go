@@ -189,7 +189,10 @@ type LocatorView struct {
 	// value — see locatorView). Additive.
 	ChapterNumber *int `json:"chapter_number,omitempty"`
 	// PageSource (#173 trust level): folio_verified is the ONLY level a
-	// client may cite as a printed page; physical_only renders as "PDF-S.";
+	// client may cite as a printed page — except folio_interpolated (#280:
+	// a blind gap bridged by agreeing verified neighbors, derivable with
+	// the neighbors' confidence class and citable, honest about its
+	// interpolated origin); physical_only renders as "PDF-S.";
 	// none means no stable pages at all. PDF arms only — on the EPUB arm
 	// the field is omitted (stored, dormant; consumer cut #245: EPUBs cite
 	// APA sections, never pages).

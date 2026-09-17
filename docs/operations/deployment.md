@@ -163,7 +163,7 @@ for interpreting memory-pressure incidents:
 | BGE-M3 embedder | `mps` (auto) | Log-confirmed working; device now handed to FlagEmbedding explicitly (`devices=[...]`, #277) to remove the multi-device trap. |
 | Reranker | `mps`, forced fp32 | Half-op coverage on MPS is spotty; fp32 + `PYTORCH_ENABLE_MPS_FALLBACK=1` set at module import. |
 | mREBEL | `mps` (auto) | Log-confirmed working. |
-| GLiNER | `mps` via `DEVICE_GLINER=mps` (#277; was CPU) | ~5 min instead of ~1 h per book; fallback env set in code at placement. |
+| GLiNER | `mps` via `DEVICE_GLINER=mps` (#277; was CPU) | ~5 min instead of ~1 h per book; fallback env set at package init, before torch loads (torch reads it at import time — a later setdefault is dead code). |
 | Marker / Surya OCR | `mps` (auto) | Log-confirmed working. |
 | Surya table recognition | CPU (intentional fallback) | `TableRecEncoderDecoderModel` is MPS-incompatible — never override this one to MPS. |
 | Image captioning | Cloud (no local load) | — |

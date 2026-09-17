@@ -6,6 +6,19 @@ computation and temporary job output; all durable state lives in axiom-ng.
 
 import os
 
+# #277: MPS fallback insurance MUST precede the first torch import —
+# torch reads PYTORCH_ENABLE_MPS_FALLBACK at import time; once torch is
+# loaded, changing the env is dead code (empirically pinned on this
+# machine: lstsq on MPS warns and falls back when the env is set before
+# `import torch`, raises NotImplementedError when set after — same lesson
+# as reranker.py's module-top placement, but one level earlier because the
+# runner loads torch long before any model module: the embedder stage runs
+# before the entity stage). Package init is the earliest point every
+# runner entry (`python -m axiom_ng_runner`, app import) shares; harmless
+# on non-MPS hosts — it only affects MPS op dispatch. setdefault keeps an
+# explicit runner.env override authoritative.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 __version__ = "0.1.0"
 CONTRACT_VERSION = "1.0"
 

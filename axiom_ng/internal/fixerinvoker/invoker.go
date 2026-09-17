@@ -367,10 +367,12 @@ func haltTerminalReason(out string) (string, bool) {
 	// whose suffix parses (logs precede it)
 	for i := strings.LastIndex(out, "{"); i >= 0; i = strings.LastIndex(out[:i], "{") {
 		var report struct {
-			Verdict   string   `json:"verdict"`
-			Unproven  []string `json:"unproven"`
+			Verdict  string   `json:"verdict"`
+			Unproven []string `json:"unproven"`
+			// final_step.reason is the model's evidence-bound escalation
+			// ground — the ONLY final_step field the classification reads
+			// (the action is stop/escalate/report, all halts here).
 			FinalStep struct {
-				Action string `json:"action"`
 				Reason string `json:"reason"`
 			} `json:"final_step"`
 		}

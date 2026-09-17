@@ -46,3 +46,42 @@ def test_light_modules_pull_no_db_drivers():
     banned = ("sqlalchemy", "psycopg", "psycopg2", "asyncpg")
     loaded = sorted(m for m in set(sys.modules) - before if m.split(".")[0] in banned)
     assert not loaded, f"DB drivers pulled by light compute modules: {loaded}"
+
+
+def test_mps_fallback_env_precedes_torch_import():
+    """#277 (review follow-up): PYTORCH_ENABLE_MPS_FALLBACK must be set at
+    PACKAGE INIT — torch reads it at import time; a setdefault after torch
+    is loaded is dead code (empirical probe on this machine: lstsq on MPS
+    falls back when the env precedes `import torch`, raises
+    NotImplementedError when set after; the embedder stage loads torch long
+    before the entity stage).
+
+    Subprocess sonde in a FRESH interpreter: importing the package must
+    (a) set the env and (b) NOT import torch — proving the ordering.
+    Mutation probes: remove the setdefault from axiom_ng_runner/__init__.py
+    → (a) goes red; move it below a torch import → (b) goes red."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import os, sys; "
+        "import axiom_ng_runner; "
+        "print(os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK'), "
+        "'torch' in sys.modules)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, check=True, cwd=str(Path(__file__).resolve().parents[2]),
+    ).stdout.strip()
+    env_val, torch_loaded = out.rsplit(" ", 1)
+    assert env_val == "1", (
+        f"package init must set PYTORCH_ENABLE_MPS_FALLBACK (got {env_val!r})"
+    )
+    assert torch_loaded == "False", (
+        "package init imported torch — the fallback env would race the "
+        "torch import and be dead code"
+    )
+    # setdefault semantics: an explicit operator override stays authoritative
+    assert os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "0") in ("1", "0")

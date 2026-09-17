@@ -115,14 +115,21 @@ def plan_updates(
             if trust and phys is not None:
                 label_map, source_map = trust
                 lvl = source_map.get(int(phys), pt.PHYSICAL_ONLY)
-                if lvl == pt.FOLIO_VERIFIED and not evidenced:
+                # #280: folio_interpolated is a PRINT-page claim like
+                # folio_verified (derived from agreeing verified neighbors)
+                # — the evidence gate applies to both: without counter-check
+                # evidence for the book, make no print claim at all.
+                if lvl in (pt.FOLIO_VERIFIED, pt.FOLIO_INTERPOLATED) and not evidenced:
                     # no counter-check evidence for this book: make no
                     # print-verified claim — leave legacy (renders sane)
                     held["no_evidence_folio"] += 1
                     continue
                 new_loc["page_source"] = lvl
-                if lvl == pt.FOLIO_VERIFIED:
-                    # heal the labels to the printed folios
+                if lvl in (pt.FOLIO_VERIFIED, pt.FOLIO_INTERPOLATED):
+                    # heal the labels to the printed folios (verified read or
+                    # interpolated derivation — both are print claims; a
+                    # stale legacy label under a print-claiming source is
+                    # exactly the off-by-N fault class this heals)
                     old = loc.get("page_label_start", "")
                     folio = label_map.get(int(phys), old)
                     if folio != old:
@@ -133,7 +140,7 @@ def plan_updates(
                     new_loc["page_label_start"] = str(folio)
                     pe = loc.get("physical_page_end")
                     if pe is not None:
-                        if source_map.get(int(pe)) == pt.FOLIO_VERIFIED:
+                        if source_map.get(int(pe)) in (pt.FOLIO_VERIFIED, pt.FOLIO_INTERPOLATED):
                             new_loc["page_label_end"] = str(label_map.get(int(pe), folio))
                         else:
                             # #173: end page outside the verified run — its
@@ -202,7 +209,8 @@ def main() -> int:
 
     total = sum(dist.values())
     print("\nStufenverteilung (nach Re-Trust):")
-    for lvl in (pt.FOLIO_VERIFIED, pt.PDF_LABEL_SANE, pt.PHYSICAL_ONLY, pt.NONE):
+    for lvl in (pt.FOLIO_VERIFIED, pt.FOLIO_INTERPOLATED, pt.PDF_LABEL_SANE,
+                pt.PHYSICAL_ONLY, pt.BLIND, pt.NONE):
         n = dist.get(lvl, 0)
         print(f"  {lvl:16s} {n:6d}  ({(n / total * 100 if total else 0):5.1f} %)")
     print(f"\nLabel-Heilungen (Label != Folio): {label_heals}")

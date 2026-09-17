@@ -287,7 +287,7 @@ func validateLocatorsAndRelationships(res *processor.Result, frozen *FrozenInput
 				// #173: every page reference carries its trust level — a blank
 				// page_source is an unversioned runner; reject loudly so the
 				// corpus never fills with unattributed page claims.
-				return verrf("LOCATOR_PAGE_SOURCE_MISSING", "chunk %d page_span locator has no page_source (#173 trust level: folio_verified|pdf_label_sane|physical_only)", c.Index)
+				return verrf("LOCATOR_PAGE_SOURCE_MISSING", "chunk %d page_span locator has no page_source (#173 trust level: folio_verified|pdf_label_sane|physical_only|blind|folio_interpolated)", c.Index)
 			default:
 				return verrf("LOCATOR_PAGE_SOURCE_UNKNOWN", "chunk %d page_source %q is not a trust level", c.Index, loc.PageSource)
 			}

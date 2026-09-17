@@ -607,16 +607,11 @@ class TestPipelineWiring:
         assert result["entity_relationships"] == []
 
 
-def test_gliner_mps_placement_sets_fallback_env(monkeypatch):
-    """#277: GLiNER placed on MPS must set PYTORCH_ENABLE_MPS_FALLBACK=1
-    before placement (not every op has an MPS kernel — same insurance as
-    reranker.py's module-top pattern).
-
-    Mutation probes: drop the setdefault in _get_gliner → red; drop the
-    .to(device) placement → red; place on a non-mps device → fallback env
-    must NOT be forced (cpu path stays untouched)."""
-    import os
-
+def test_gliner_mps_placement_uses_detector_device(monkeypatch):
+    """#277: GLiNER is placed on the detector's device (the MPS fallback
+    insurance itself lives at PACKAGE INIT — see
+    test_mps_fallback_env_precedes_torch_import in test_compute_core_imports).
+    Mutation probe: drop the .to(device) placement in _get_gliner → red."""
     placed = []
 
     class _M:
@@ -653,7 +648,6 @@ def test_gliner_mps_placement_sets_fallback_env(monkeypatch):
 
     runner._get_gliner()
     assert placed == ["mps"], "GLiNER must be placed on the detector device"
-    assert os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == "1"
 
 
 def test_gliner_cpu_placement_leaves_fallback_env_alone(monkeypatch):
