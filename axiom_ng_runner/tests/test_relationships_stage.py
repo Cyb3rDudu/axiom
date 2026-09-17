@@ -198,12 +198,15 @@ def test_early_commit_survives_relationships_abort(client, monkeypatch):
     jid = r.json()["job_id"]
 
     # while running: progress visible, partial flagged (poll until the
-    # compute thread reaches the relationships window)
+    # compute thread reaches the relationships window — #275: poll on the
+    # asserted condition, not on partial_result_available alone; commit()
+    # flips that flag before set_progress lands, so under load the assert
+    # below could race ahead of the progress write)
     st = None
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         st = client.get(f"/v1/jobs/{jid}").json()
-        if st.get("partial_result_available"):
+        if st.get("partial_result_available") and st["progress"]["completed_units"] == 20:
             break
         time.sleep(0.02)
     assert st["progress"]["completed_units"] == 20
