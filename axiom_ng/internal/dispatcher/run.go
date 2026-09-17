@@ -307,6 +307,32 @@ var autoQueueRepairClasses = map[string]bool{
 	"SOURCE_UNREADABLE": true,
 }
 
+// autoQueueRepair (#238/#282) queues a FRESH repair case whose class is
+// auto-queueable. #282 loop binding: every heal REPLACES the attachment
+// (fresh per-attachment repair_attempts counter), so the per-attachment
+// guard cannot bound the heal → sync → re-reject → heal cycle across
+// generations — the document-level healed count is the bound. Beyond
+// RepairMaxAttempts healed cases the new case stays rejected for the
+// operator; the manual queue path remains operator-governed.
+func (d *Dispatcher) autoQueueRepair(ctx context.Context, fields []any, documentID string, c *repo.RepairCase, created bool) {
+	if !created || c == nil || !autoQueueRepairClasses[c.SuspicionClass] {
+		return
+	}
+	if documentID != "" {
+		if n, err := d.rep.DocumentHealedCases(ctx, documentID); err == nil && n >= repo.RepairMaxAttempts {
+			d.logger.Printf("%v: repair loop guard (#282): document already healed %d× — case stays rejected, operator decides", fields, n)
+			return
+		} else if err != nil {
+			d.logger.Printf("%v: healed-case count failed (queueing anyway, per-attachment guard still bounds): %v", fields, err)
+		}
+	}
+	if err := d.rep.QueueRepairCase(ctx, c.ID, c.SuspicionClass, c.Analysis); err != nil && !isLost(err) {
+		d.logger.Printf("%v: auto-queue repair case: %v (stays rejected; manual queue remains)", fields, err)
+	} else if err == nil {
+		d.logger.Printf("%v: repair case auto-queued (%s)", fields, c.SuspicionClass)
+	}
+}
+
 func (d *Dispatcher) onFailed(ctx context.Context, claimed *repo.ClaimedJob, jobErr *processor.JobError, ph *jobPhases) {
 	ref := claimed.LeaseRef
 	d.logPhases(ph, jobErr.Code)
@@ -327,16 +353,12 @@ func (d *Dispatcher) onFailed(ctx context.Context, claimed *repo.ClaimedJob, job
 		})
 		if c, created, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, jobErr.Code, analysis); err != nil && !isLost(err) {
 			d.logger.Printf("repair-case for %s: %v", ref.JobID, err)
-		} else if created && c != nil && autoQueueRepairClasses[c.SuspicionClass] {
+		} else {
 			// #238: only a FRESH case auto-queues (created == false means a
 			// recycled open case — old evidence, never queued by a newer
-			// verdict). Queue failure is logged, not fatal: the case stays
-			// rejected, the manual path remains.
-			if err := d.rep.QueueRepairCase(ctx, c.ID, c.SuspicionClass, c.Analysis); err != nil && !isLost(err) {
-				d.logger.Printf("auto-queue repair case for %s: %v (stays rejected)", ref.JobID, err)
-			} else if err == nil {
-				d.logger.Printf("repair case auto-queued for %s (%s)", ref.JobID, c.SuspicionClass)
-			}
+			// verdict). #282: the document-level healed-count guard lives
+			// inside autoQueueRepair.
+			d.autoQueueRepair(ctx, []any{ref.JobID}, claimed.DocumentID, c, created)
 		}
 	}
 	d.markTerminal(ctx, ref, jobErr.Code, jobErr.Message)

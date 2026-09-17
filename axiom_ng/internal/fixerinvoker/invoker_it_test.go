@@ -9,6 +9,7 @@ package fixerinvoker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	axiomsync "github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 )
 
 type itEnv struct {
@@ -460,5 +462,160 @@ func TestInvokerHaltParksTerminallyNoRequeue(t *testing.T) {
 	status2, reason2, attempts2 := e.caseStatus(t, caseID)
 	if status2 != "failed" || attempts2 != attempts || reason2 != reason {
 		t.Fatalf("parked HALT case must stay put: %s/%d vs %s/%d", status2, attempts2, status, attempts)
+	}
+}
+
+// --- #282: post-heal auto-sync + wave semantics --------------------------
+
+// fakeSyncer records post-heal sync calls (#282 IT seam). includeDoc feeds
+// the assertion that the sync targets the healed document.
+type fakeSyncer struct {
+	mu      sync.Mutex
+	calls   []string
+	fail    bool
+	include string
+}
+
+func (f *fakeSyncer) Run(ctx context.Context, ov *axiomsync.SyncOverride) (axiomsync.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if ov != nil && len(ov.Include) == 1 {
+		f.calls = append(f.calls, "include:"+ov.Include[0])
+		f.include = ov.Include[0]
+	} else {
+		f.calls = append(f.calls, "full")
+	}
+	if f.fail {
+		return axiomsync.Result{}, errors.New("sync down (IT)")
+	}
+	return axiomsync.Result{Enqueued: 1}, nil
+}
+
+func (f *fakeSyncer) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+// newTestInvokerSynced builds the invoker with a fake syncer attached.
+func newTestInvokerSynced(t *testing.T, e *itEnv, scriptBody string, fs *fakeSyncer) (*Invoker, *fakeApply) {
+	t.Helper()
+	inv, fa := newTestInvoker(t, e, scriptBody, time.Minute)
+	inv.deps.Sync = fs
+	return inv, fa
+}
+
+// successScript writes a healed artifact for the case's key.
+func successScript(out string) string {
+	return fmt.Sprintf(`mkdir -p "%s/$1"; printf '%%s' '%%PDF-healed' > "%s/$1/work.pdf"; exit 0`, out, out)
+}
+
+// TestPostHealSyncAfterSuccessfulHeal — the #282 core defect pin: after a
+// fixer heal the invoker runs EXACTLY ONE targeted sync (include = the
+// healed document) without operator action. Pre-#282 the chain ended at
+// "healed, awaiting preflight GREEN" and the attachment stranded until a
+// manual sync (production evidence: 2026-09-15/17).
+func TestPostHealSyncAfterSuccessfulHeal(t *testing.T) {
+	e := openDB(t)
+	e.truncate(t)
+	out := t.TempDir()
+	fs := &fakeSyncer{}
+	inv, _ := newTestInvokerSynced(t, e, successScript(out), fs)
+	inv.cfg.WorkRoot = out
+	caseID := e.seedCase(t, "ATT-SYNC1")
+	inv.processCase(context.Background(), caseID)
+
+	status, _, _ := e.caseStatus(t, caseID)
+	if status != "healed" {
+		t.Fatalf("status = %s, want healed", status)
+	}
+	if fs.count() != 1 {
+		t.Fatalf("post-heal syncs = %d, want exactly 1 per heal (#282 bounded)", fs.count())
+	}
+	// targeted: the sync must carry the healed DOCUMENT id as include
+	var docID string
+	if err := e.pool.QueryRow(context.Background(), `
+		SELECT d.id::text FROM zotero_documents d
+		JOIN zotero_attachments a ON a.document_id = d.id
+		JOIN repair_cases c ON c.attachment_id = a.id WHERE c.id=$1`, caseID).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+	if fs.include != docID {
+		t.Fatalf("sync include = %q, want the healed document %q", fs.include, docID)
+	}
+}
+
+// TestPostHealSyncBoundedPerHeal — no sync storms: two heals produce two
+// syncs (one each), a repeated processCase on the closed case adds none.
+func TestPostHealSyncBoundedPerHeal(t *testing.T) {
+	e := openDB(t)
+	e.truncate(t)
+	out := t.TempDir()
+	fs := &fakeSyncer{}
+	inv, _ := newTestInvokerSynced(t, e, successScript(out), fs)
+	inv.cfg.WorkRoot = out
+	c1 := e.seedCase(t, "ATT-SYNC2")
+	c2 := e.seedCase(t, "ATT-SYNC3")
+	inv.processCase(context.Background(), c1)
+	inv.processCase(context.Background(), c2)
+	// parked/closed cases are not re-served — no third sync
+	inv.processCase(context.Background(), c1)
+	if got := fs.count(); got != 2 {
+		t.Fatalf("post-heal syncs = %d, want 2 (one per heal, none extra)", got)
+	}
+}
+
+// TestPostHealSyncSkippedOnTerminalPark — unrepairable (HALT) and failed
+// cases never trigger the sync loop-back; only a successful heal does.
+func TestPostHealSyncSkippedOnTerminalPark(t *testing.T) {
+	e := openDB(t)
+	e.truncate(t)
+	out := t.TempDir()
+	fs := &fakeSyncer{}
+	// HALT verdict: exit 0, no artifact
+	inv, _ := newTestInvokerSynced(t, e, `echo '{"verdict":"halt","unproven":[]}'; exit 0`, fs)
+	inv.cfg.WorkRoot = out
+	halt := e.seedCase(t, "ATT-SYNC4")
+	inv.processCase(context.Background(), halt)
+	if s, _, _ := e.caseStatus(t, halt); s != "failed" {
+		t.Fatalf("HALT case = %s, want failed (terminal)", s)
+	}
+	inv2, _ := newTestInvokerSynced(t, e, "exit 7\n", fs)
+	fail := e.seedCase(t, "ATT-SYNC5")
+	inv2.processCase(context.Background(), fail)
+	if s, _, _ := e.caseStatus(t, fail); s != "queued" {
+		t.Fatalf("failed case = %s, want queued (retry)", s)
+	}
+	if fs.count() != 0 {
+		t.Fatalf("terminal/failed cases must not sync, got %d calls", fs.count())
+	}
+}
+
+// TestPostHealSyncFailureDoesNotFailHeal — a broken sync surface (Zotero
+// unreachable) leaves the case healed: the heal itself succeeded and the
+// custody protocol is complete. The wave gate (repo.WaveRepairGate) holds
+// claims until the enqueue lands, so the gap is visible, not silent.
+func TestPostHealSyncFailureDoesNotFailHeal(t *testing.T) {
+	e := openDB(t)
+	e.truncate(t)
+	out := t.TempDir()
+	fs := &fakeSyncer{fail: true}
+	inv, _ := newTestInvokerSynced(t, e, successScript(out), fs)
+	inv.cfg.WorkRoot = out
+	caseID := e.seedCase(t, "ATT-SYNC6")
+	inv.processCase(context.Background(), caseID)
+	if s, _, _ := e.caseStatus(t, caseID); s != "healed" {
+		t.Fatalf("case = %s, want healed despite sync failure", s)
+	}
+	if fs.count() != 1 {
+		t.Fatalf("sync attempted once, got %d", fs.count())
+	}
+	// the wave gate must hold: healed case, no job enqueued since
+	held, _, err := e.rep.WaveRepairGate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !held {
+		t.Fatal("wave gate must hold on a healed-not-yet-enqueued case (sync failed)")
 	}
 }

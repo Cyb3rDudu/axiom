@@ -356,6 +356,64 @@ func (r *Repo) MarkRepairFailed(ctx context.Context, caseID, reason string) erro
 	return nil
 }
 
+// DocumentHealedCases counts HEALED repair cases of a document (#282 loop
+// binding): every heal replaces the attachment (fresh repair_attempts
+// counter), so the per-attachment guard cannot bound the
+// heal→sync→re-reject→heal cycle across generations. The document-level
+// count can. Auto-queueing (dispatcher) refuses beyond RepairMaxAttempts
+// healed cases on the same document — the manual queue path stays
+// operator-governed.
+func (r *Repo) DocumentHealedCases(ctx context.Context, documentID string) (int, error) {
+	if documentID == "" {
+		return 0, nil
+	}
+	var n int
+	if err := r.pool.QueryRow(ctx, `
+		SELECT count(*) FROM repair_cases WHERE document_id=$1::uuid AND status='healed'`, documentID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// WaveRepairGate reports whether the repair-included wave holds the claim
+// gate (#282 owner semantics: dry-run → repair if needed → sync → next
+// document; skip only when unrepairable). The gate closes while a repair
+// loop-back is still draining:
+//
+//   - queued / in_repair: a fixer heal is pending or running (the invoker
+//     runs the post-heal sync before releasing the loop — see #282);
+//   - healed within the last hour with NO ingest job enqueued for the
+//     document since the heal: the post-heal sync has not landed yet (in
+//     flight, failed, or the invoker died between Apply and sync). The
+//     window is bounded so historical healed cases never gate; a stranded
+//     heal OLDER than the window stops gating (operator-visible in the
+//     invoker log instead of a silent wave stall).
+//
+// Terminal parks (failed / blocked_for_dudu) and manual-track rejected
+// cases NEVER gate — an unrepairable document must not block the wave.
+// Observer-only: this never marks jobs, it only defers claiming.
+func (r *Repo) WaveRepairGate(ctx context.Context) (bool, string, error) {
+	var open, stranded int
+	if err := r.pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE status IN ('queued','in_repair')),
+		       count(*) FILTER (WHERE status='healed' AND updated_at > now() - interval '1 hour'
+		         AND NOT EXISTS (
+		           SELECT 1 FROM ingest_jobs j
+		           JOIN zotero_attachments a ON a.id = j.attachment_id
+		           WHERE a.document_id = repair_cases.document_id
+		             AND j.enqueued_at >= repair_cases.updated_at))
+		FROM repair_cases`).Scan(&open, &stranded); err != nil {
+		return false, "", err
+	}
+	if open > 0 {
+		return true, fmt.Sprintf("%d repair case(s) queued/in_repair", open), nil
+	}
+	if stranded > 0 {
+		return true, fmt.Sprintf("%d healed case(s) not yet enqueued (post-heal sync pending)", stranded), nil
+	}
+	return false, "", nil
+}
+
 // AuditWrite records every Zotero mutation (Was/Wann/Warum).
 func (r *Repo) AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error {
 	d := mustMarshal(detail)

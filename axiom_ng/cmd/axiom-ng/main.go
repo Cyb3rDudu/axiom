@@ -179,6 +179,10 @@ func main() {
 					Rep:            rep,
 					Apply:          fixerinvoker.LiveApplyDeps(rep, zoteroWrite),
 					QuarantineRoot: cfg.QuarantineRoot,
+					// #282 post-heal auto-sync: every successful heal runs a
+					// targeted sync (include = healed document) so the healed
+					// attachment enqueues without operator action.
+					Sync: syncSvc,
 				}, logger)
 				go func() {
 					if err := inv.Run(sigCtx); err != nil {

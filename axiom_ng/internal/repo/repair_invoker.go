@@ -35,6 +35,7 @@ type RepairItem struct {
 	AttachmentID  string
 	AttachmentKey string
 	DocumentKey   string
+	DocumentID    string // #282: targets the post-heal sync's include override
 	Title         string
 	Creators      []zotero.Creator
 	Year          int
@@ -48,7 +49,7 @@ type RepairItem struct {
 // source — the caller parks such a case (mirror of the W3a queue rule).
 func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT c.id::text, a.id::text, a.zotero_key, d.zotero_key,
+		SELECT c.id::text, a.id::text, a.zotero_key, d.zotero_key, d.id::text,
 		       d.title, d.creators, COALESCE(d.publication_year, 0), COALESCE(d.publisher, ''),
 		       a.local_path, COALESCE(a.content_type, '')
 		FROM repair_cases c
@@ -57,7 +58,7 @@ func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, 
 		WHERE c.id = $1`, caseID)
 	var it RepairItem
 	var creators []byte
-	if err := row.Scan(&it.CaseID, &it.AttachmentID, &it.AttachmentKey, &it.DocumentKey,
+	if err := row.Scan(&it.CaseID, &it.AttachmentID, &it.AttachmentKey, &it.DocumentKey, &it.DocumentID,
 		&it.Title, &creators, &it.Year, &it.Publisher, &it.LocalPath,
 		&it.ContentType); err != nil {
 		return nil, err

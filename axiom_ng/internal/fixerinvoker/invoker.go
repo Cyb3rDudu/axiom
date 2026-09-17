@@ -40,6 +40,7 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -100,11 +101,23 @@ func (c *Config) fillDefaults() {
 }
 
 // Deps are the invoker's outward effects. Apply is the shared custody
-// sequence (repair.ApplyDeps) so tests can fake the Zotero writes.
+// sequence (repair.ApplyDeps) so tests can fake the Zotero writes. Sync is
+// the #282 post-heal auto-sync: after a successful heal the invoker runs a
+// targeted sync (include = the healed document) so the healed attachment
+// enqueues and processes without operator action. nil disables the hook
+// (log-only — the wave gate surfaces the stranded heal, see WaveRepairGate).
 type Deps struct {
 	Rep            *repo.Repo
 	Apply          repair.ApplyDeps
 	QuarantineRoot string
+	Sync           HealSyncer
+}
+
+// HealSyncer is the post-heal sync surface (#282). *sync.Service satisfies
+// it — Run with a one-run include override enqueues exactly the healed
+// document (selection rules still apply on top).
+type HealSyncer interface {
+	Run(ctx context.Context, override *sync.SyncOverride) (sync.Result, error)
 }
 
 // Invoker drives the repair queue.
@@ -332,7 +345,39 @@ func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *repo
 		inv.logger.Printf("case %s: apply: %v", caseID, err)
 		return
 	}
-	inv.logger.Printf("case %s: healed (new attachment uploaded, awaiting preflight GREEN)", caseID)
+	inv.logger.Printf("case %s: healed (new attachment uploaded, post-heal sync follows)", caseID)
+	inv.postHealSync(ctx, item)
+}
+
+// postHealSync runs the #282 auto-sync after a successful heal: a targeted
+// sync (include = the healed document) enqueues the healed attachment so it
+// flows into processing without operator action — the wave semantics'
+// "sync → next document" step. Exactly ONE sync per heal (bounded by
+// construction: one call site, called once per healed case); the sync itself
+// is idempotent (content-hash dedup). A failed sync does NOT fail the heal
+// — the case is already healed; the wave gate (repo.WaveRepairGate) holds
+// claims until the enqueue lands and the log names the document, so the
+// gap is operator-visible instead of a silent strand.
+func (inv *Invoker) postHealSync(ctx context.Context, item *repo.RepairItem) {
+	if inv.deps.Sync == nil {
+		inv.logger.Printf("case %s: post-heal sync disabled (no syncer wired) — healed attachment %s waits for the next sync",
+			item.CaseID, item.AttachmentKey)
+		return
+	}
+	if item.DocumentID == "" {
+		inv.logger.Printf("case %s: post-heal sync skipped — no document id resolvable", item.CaseID)
+		return
+	}
+	sctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	res, err := inv.deps.Sync.Run(sctx, &sync.SyncOverride{Include: []string{item.DocumentID}})
+	if err != nil {
+		inv.logger.Printf("case %s: post-heal sync FAILED (document %s) — healed attachment not enqueued; wave gate holds: %v",
+			item.CaseID, item.DocumentID, err)
+		return
+	}
+	inv.logger.Printf("case %s: post-heal sync ok — document %s enqueued %d job(s) (#282)",
+		item.CaseID, item.DocumentID, res.Enqueued)
 }
 
 func (inv *Invoker) handleFailure(ctx context.Context, caseID string, rc int, runErr error) {
