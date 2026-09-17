@@ -115,6 +115,135 @@ func (s *Server) repairItemFor(r *http.Request, c *repo.RepairCase) (*repairQueu
 	return &it, nil
 }
 
+// handleRepairCustody is the #279 manual-repair tool: ONE call runs the
+// quarantine-first custody protocol for a librarian-repaired file — the
+// same ordering as the fixer's auto-apply (repair.Apply), so the repaired
+// attachment lands PREFERRED without library surgery (no stranded
+// siblings). Replaces the improvised "upload sibling + trash old" route
+// from the Geursen incident.
+//
+//	POST /api/repair/custody
+//	  attachment_key  — the broken attachment's Zotero key (required)
+//	  healed_file     — the repaired file, multipart (required, non-empty)
+//	  reason          — free text for the custody record (required)
+//	  content_type    — application/pdf (default) | application/epub+zip
+//
+// Steps (each audited into <quarantine-root>/manual/<KEY>.json):
+// quarantine the original → delete the old item (version-guarded; a 404
+// from an aborted earlier run counts as done) → upload the healed file
+// under the parent with a SCHEMA filename → step report. Idempotent
+// re-run: a record with terminal status "healed" is refused (409) — a
+// re-run would upload a duplicate healed sibling.
+func (s *Server) handleRepairCustody(w http.ResponseWriter, r *http.Request) {
+	if s.zoteroWrite == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "custody needs the zotero write client (SetRepairAPI)"})
+		return
+	}
+	key := strings.TrimSpace(r.FormValue("attachment_key"))
+	if key == "" {
+		http.Error(w, "attachment_key fehlt", http.StatusBadRequest)
+		return
+	}
+	reason := strings.TrimSpace(r.FormValue("reason"))
+	if reason == "" {
+		http.Error(w, "reason fehlt (Kontext für das Quarantäne-Protokoll)", http.StatusBadRequest)
+		return
+	}
+
+	// Attachment lookup by Zotero key: original local path (quarantine
+	// source), parent key + metadata (schema filename), content type.
+	item, err := s.custodyItemFor(r, key)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "attachment "+key+" unbekannt oder gelöscht", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Idempotence guard: a completed repair refuses a second run — the
+	// old item is gone, the healed sibling exists; another upload would
+	// recreate the stranded-sibling state this tool exists to prevent.
+	rec, rerr := repair.LoadManualRecord(s.quarantineRoot, key)
+	if rerr != nil {
+		http.Error(w, rerr.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rec != nil && rec.Status == "healed" {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":  "attachment " + key + " wurde bereits manuell geheilt — erneut reparieren nur über den Runbook-Weg (Quarantäne-Rückholung)",
+			"record": rec,
+		})
+		return
+	}
+
+	artifact, contentType, aerr := readHealedFile(r)
+	if aerr != nil {
+		http.Error(w, aerr.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if rec == nil {
+		rec = &repair.ManualRecord{
+			AttachmentKey: key, DocumentKey: item.DocumentKey,
+			Reason: reason, OriginalPath: item.LocalPath, ContentType: contentType,
+			CreatedAt: repair.ManualNow(),
+		}
+	} else {
+		// resume of an aborted run: the record keeps its history; a NEW
+		// reason only set when the operator sent one differing text
+		if reason != "" && reason != rec.Reason {
+			rec.Reason = rec.Reason + " | re-run: " + reason
+		}
+	}
+	deps := &repair.ManualDeps{Write: s.zoteroWrite, Root: s.quarantineRoot, Record: rec, RunID: repair.ManualRunID(key)}
+
+	res, err := repair.Apply(r.Context(), deps, s.quarantineRoot, repair.ApplyCase{
+		CaseID:        "manual-" + key,
+		AttachmentKey: key,
+		DocumentKey:   item.DocumentKey,
+		Title:         item.Title,
+		Creators:      item.Creators,
+		Year:          item.Year,
+		Publisher:     item.Publisher,
+		SrcPath:       strings.TrimPrefix(item.LocalPath, "file://"),
+		ContentType:   contentType,
+	}, artifact)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, repair.ErrZoteroWrite) {
+			status = http.StatusBadGateway
+		}
+		writeJSON(w, status, map[string]any{"error": err.Error(), "record": rec})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"record":             rec,
+		"new_attachment_key": res.NewAttachmentKey,
+		"filename":           res.Filename,
+		"quarantine_path":    res.Quarantine,
+		"next_step":          "sync auslösen — die geheilte Datei wird preferred und processing legt den Job an",
+	})
+}
+
+// custodyItemFor loads attachment + document metadata by Zotero key (the
+// manual tool addresses the item by its library key, not a repair case).
+func (s *Server) custodyItemFor(r *http.Request, zoteroKey string) (*repairQueueItem, error) {
+	row := s.repairRepo.Pool().QueryRow(r.Context(), `
+		SELECT d.title, d.creators, COALESCE(d.publication_year, 0), d.zotero_key, COALESCE(d.publisher, ''),
+		       a.zotero_key, a.local_path, COALESCE(a.content_type, 'application/pdf')
+		FROM zotero_attachments a JOIN zotero_documents d ON d.id = a.document_id
+		WHERE a.zotero_key = $1 AND a.deleted = false`, zoteroKey)
+	var it repairQueueItem
+	var creators []byte
+	if err := row.Scan(&it.Title, &creators, &it.Year, &it.DocumentKey, &it.Publisher, &it.AttachmentKey, &it.LocalPath, &it.ContentType); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(creators, &it.Creators)
+	return &it, nil
+}
+
 func (s *Server) handleRepairCases(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.repairRepo.Pool().Query(r.Context(), `
 		SELECT c.id::text, c.status::text, c.attempts, c.suspicion_class,

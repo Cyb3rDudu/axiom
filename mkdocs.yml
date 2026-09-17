@@ -97,6 +97,7 @@ nav:
           - KG Maintenance: operations/kg-maintenance.md
           - KG Relations Consolidation Runbook: operations/kg-relations-consolidation-runbook.md
           - Rebuild Wave Runbook: operations/rebuild-wave-runbook.md
+          - Custody Repair Runbook: operations/custody-repair-runbook.md
           - EPUB Image Parity Harness: operations/epub-image-parity.md
           - PDF Label Surgery: operations/pdf-label-surgery.md
           - Monitoring: operations/monitoring.md

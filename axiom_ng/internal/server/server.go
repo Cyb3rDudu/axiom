@@ -113,6 +113,7 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/api/repair/cases/{id}/claim", s.handleRepairClaim)
 		r.Post("/api/repair/cases/{id}/requeue", s.handleRepairRequeue)
 		r.Post("/api/repair/cases/{id}/verdict", s.handleRepairVerdict)
+		r.Post("/api/repair/custody", s.handleRepairCustody)
 		r.Get("/api/repair/docs/{documentKey}/locator-stats", s.handleLocatorStats)
 	}
 

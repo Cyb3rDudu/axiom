@@ -48,6 +48,12 @@ Veröffentlichungs-Gate: docs/ darf keine privaten Infra-Angaben enthalten
 die einzige Ausnahme und hält die konkreten Produktionswerte fest, auf die
 publizierte Seiten per Platzhalter verweisen.
 
+### Custody-Runbook (`docs/operations/custody-repair-runbook.md`)
+
+| Platzhalter im Runbook | Konkreter Wert |
+| --- | --- |
+| `<axiom-host>:<port>` (axiom API) | `192.168.1.47:8011` |
+
 ### W9-Rebuild-Wave (`docs/operations/rebuild-wave-runbook.md`)
 
 | Platzhalter im Runbook | Konkreter Wert (Survey 2026-08-18) |

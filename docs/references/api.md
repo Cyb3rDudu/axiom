@@ -36,6 +36,7 @@ every rejected request.
 | `GET` | `/api/repair/cases` | List the 100 most recently updated repair cases | Registered only when the repair API is wired |
 | `POST` | `/api/repair/cases/{id}/claim` | Claim a repair case | Registered only when the repair API is wired |
 | `POST` | `/api/repair/cases/{id}/verdict` | Submit and optionally apply a repair verdict | Registered only when the repair API is wired |
+| `POST` | `/api/repair/custody` | Manual repair: quarantine-first custody protocol for a librarian-repaired file (#279) | Registered only when the repair API is wired (Zotero write client required) |
 | `GET` | `/api/repair/docs/{documentKey}/locator-stats` | Inspect active locator trust levels | Registered only when the repair API is wired |
 
 ## Health and jobs
@@ -638,6 +639,33 @@ create the healed attachment under the schema filename, write mutation audit
 rows, and mark the case healed. The pre-delete audit is fail-closed. Success
 returns `effective`; an applied repair also returns `applied`,
 `new_attachment_key`, `filename`, and `quarantine`.
+
+### `POST /api/repair/custody` (#279)
+
+The manual-repair tool — the SAME quarantine-first custody sequence as the
+fixer's auto-apply, for librarian-repaired files with no repair case. Takes
+the broken attachment's Zotero key plus the healed file and leaves the
+healed attachment as the only processable candidate (preferred after the
+next sync). Replaces the improvised "upload sibling + trash old" route;
+see `docs/operations/custody-repair-runbook.md`.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `attachment_key` | yes | Broken attachment's Zotero key |
+| `reason` | yes | Free text for the custody record (original path, key, reason, date) |
+| `healed_file` | yes | Non-empty multipart file (the repaired artifact) |
+| `content_type` | no | `application/pdf` (default) or `application/epub+zip` |
+
+Steps (each recorded into `<quarantine-root>/manual/<KEY>.json`, append-only
+across runs): quarantine the original → delete the old item (version-guarded;
+a `404` from an earlier aborted run counts as done) → upload the healed file
+under the parent with a schema filename. Success returns `record`,
+`new_attachment_key`, `filename`, `quarantine_path`, and a `next_step` sync
+reminder. Failures: `400` guard violations (before any mutation), `404`
+unknown key, `409` already healed (idempotent refusal — a re-run would
+upload a duplicate healed sibling; the completed record rides the body),
+`502` Zotero write gateway failure mid-protocol (re-run continues: the
+record shows the completed steps, quarantine re-runs custody-conservatively).
 
 ### `GET /api/repair/docs/{documentKey}/locator-stats`
 
