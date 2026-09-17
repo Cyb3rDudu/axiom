@@ -6,6 +6,10 @@ reference carries its trust level visibly:
   folio_verified   printed folio read from the text layer AND verified as a
                    consistent ascending sequence — the ONLY level that may be
                    cited as a printed page
+  folio_interpolated  #280 a blind gap of <= 2 pages bridged by folio-
+                   verified neighbors that agree on the label offset —
+                   derivable with the neighbors' confidence class, honest
+                   about its interpolated origin; citable as a printed page
   pdf_label_sane   PDF label, sanity-checked (unique, monotone, plausible) —
                    presentable only WITH a marker
   print_verified   #223 EPUB print folios PROVEN book-internally: the
@@ -42,6 +46,8 @@ logger = logging.getLogger(__name__)
 # Trust levels (wire values — contract, Epic C clients switch on these).
 FOLIO_VERIFIED = "folio_verified"
 BLIND = "blind"  # v2.1: no text layer at all — a scan needing OCR rebuild
+FOLIO_INTERPOLATED = "folio_interpolated"  # #280: blind gap bridged by
+# agreeing verified neighbors — derivable, honest about its origin
 PDF_LABEL_SANE = "pdf_label_sane"
 PRINT_VERIFIED = "print_verified"      # #223: TOC-proven print folios
 DERIVED_FROM_SIBLING = "derived_from_sibling"  # #222: injected sibling map
@@ -552,9 +558,6 @@ def build_page_trust(pdf_path: str) -> tuple[dict[int, str], dict[int, str], dic
                 ch = chapter_of(i, chapters)
                 if ch:
                     page_chapter_map[i] = ch
-        if folio:
-            logger.info("page_trust: %d/%d pages folio-verified (labels: %s — %s; chapters: %s)",
-                        len(folio), n, trust, reason, len(chapters or []))
         # v2.1 BLIND: a page with NO text layer at all is a scan — it is
         # not "evidence-free physical", it needs an OCR rebuild. Pure
         # classification (the runner never executes OCR); feeds the honest
@@ -563,9 +566,53 @@ def build_page_trust(pdf_path: str) -> tuple[dict[int, str], dict[int, str], dic
             i for i in range(n)
             if i not in folio and not doc[i].get_text("text").strip()
         }
+        # #280: interpolate isolated blind gaps. A blind page (no text
+        # layer — a full-page scan/figure) sandwiched between folio-
+        # verified neighbors that AGREE on the label offset sits at a
+        # known position in a verified run: its folio is derivable with
+        # the neighbors' confidence class, it only lacks a text layer to
+        # read it from. Production case: "Personalmanagement" — printed
+        # page 26 on PDF sheet 27 (the book's systematic offset), the
+        # figure page degraded to the raw sheet number, off by one.
+        # Boundaries (never guess): gaps longer than 2 consecutive blind
+        # pages stay blind (too much can hide in a long gap); neighbors
+        # disagreeing on the offset (a real discontinuity at the gap)
+        # stay blind; a gap at either document edge has only one verified
+        # neighbor and stays blind. Distinct source class — honest about
+        # the origin, correct for citations.
+        interpolated: dict[int, str] = {}
+        gap: list[int] = []
+
+        def _flush_gap() -> None:
+            if not (1 <= len(gap) <= 2):
+                return
+            left, right = gap[0] - 1, gap[-1] + 1
+            if left < 0 or right >= n:
+                return
+            lv, rv = _arabic(folio.get(left)), _arabic(folio.get(right))
+            if lv is None or rv is None:
+                return
+            if lv - left == rv - right:  # both neighbors carry the same offset
+                for i in gap:
+                    interpolated[i] = str(lv - left + i)
+
+        for i in range(n):
+            if i in blind:
+                gap.append(i)
+            elif gap:
+                _flush_gap()
+                gap = []
+        _flush_gap()
+        if folio:
+            logger.info("page_trust: %d/%d pages folio-verified, %d blind, %d folio-interpolated (labels: %s — %s; chapters: %s)",
+                        len(folio), n, len(blind) - len(interpolated), len(interpolated), trust, reason, len(chapters or []))
         page_label_map: dict[int, str] = {}
         page_source_map: dict[int, str] = {}
         for i in range(n):
+            if i in interpolated:
+                page_label_map[i] = interpolated[i]
+                page_source_map[i] = FOLIO_INTERPOLATED
+                continue
             if i in blind:
                 page_label_map[i] = str(i + 1)
                 page_source_map[i] = BLIND

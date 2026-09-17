@@ -28,11 +28,15 @@ func trustResult(pageSource string) *processor.Result {
 }
 
 func TestValidatePageSourceGate(t *testing.T) {
-	// positive: all three page levels pass
+	// positive: all page levels pass (incl. v2.1 blind and #280
+	// folio_interpolated — an isolated blind gap bridged by agreeing
+	// verified neighbors is a citable page claim)
 	for _, lvl := range []string{
 		processor.PageSourceFolioVerified,
 		processor.PageSourcePDFLabelSane,
 		processor.PageSourcePhysicalOnly,
+		processor.PageSourceBlind,
+		processor.PageSourceFolioInterpolated,
 	} {
 		if err := validateLocatorsAndRelationships(trustResult(lvl), trustFrozen()); err != nil {
 			t.Errorf("level %q must pass, got %v", lvl, err)

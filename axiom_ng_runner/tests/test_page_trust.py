@@ -445,13 +445,16 @@ class ExtractorV21Tests(unittest.TestCase):
     def test_blind_pages_classify_as_blind(self):
         # Pages with NO text layer are scans needing OCR — not evidence-free
         # physical: the honest classification is BLIND, and it must not leak
-        # onto text-bearing pages.
-        pdf = make_pdf(["1", "2", "3", None, None, "6", "7", "8"], blind_pages=(3, 4))
+        # onto text-bearing pages. #280: this 3-page gap exceeds the
+        # interpolation window and stays blind (the old 2-page fixture now
+        # interpolates — see FolioInterpolationTests).
+        pdf = make_pdf(["1", "2", "3", None, None, None, "7", "8", "9"], blind_pages=(3, 4, 5))
         _labels, sources, _ch = pt.build_page_trust(pdf)
         self.assertEqual(sources[3], pt.BLIND)
         self.assertEqual(sources[4], pt.BLIND)
+        self.assertEqual(sources[5], pt.BLIND)
         self.assertEqual(sources[0], pt.FOLIO_VERIFIED)  # text pages unaffected
-        self.assertEqual(sources[7], pt.FOLIO_VERIFIED)
+        self.assertEqual(sources[8], pt.FOLIO_VERIFIED)
 
     def test_blind_page_not_counted_as_folio_evidence(self):
         # A blind page contributes no candidate (no text -> no line), so it
@@ -460,3 +463,104 @@ class ExtractorV21Tests(unittest.TestCase):
             make_pdf(["1", "2", None, "4", "5", None] * 2, blind_pages=(2, 5, 8, 11)))
         for i in (2, 5, 8, 11):
             self.assertEqual(sources[i], pt.BLIND)
+
+
+# ── #280: folio interpolation across isolated blind gaps ─────────────────
+
+class FolioInterpolationTests(unittest.TestCase):
+    """An isolated blind gap (no text layer — a full-page scan/figure)
+    between folio-verified neighbors that AGREE on the label offset gets
+    the interpolated folio with its own source class (folio_interpolated).
+    Boundaries exactly per issue DoD — mutation probes:
+
+      - neighbor-offset check weakened/removed → disagreement test red
+      - window bound >2 loosened → three-page-gap test red
+      - interpolated assignment dropped → interpolation test red
+      - log count dropped → distinguishability test red
+
+    Production reference: Schulbuch "Personalmanagement" — printed page 26
+    on PDF sheet 27 (systematic offset -1); the Ganzseiten-Scan was blind
+    and the citation degraded to the sheet number, off by one.
+    """
+
+    def setUp(self):
+        self._files = []
+
+    def tearDown(self):
+        for f in self._files:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+
+    def _pdf(self, *args, **kw):
+        f = make_pdf(*args, **kw)
+        self._files.append(f)
+        return f
+
+    def test_isolated_blind_gap_interpolates(self):
+        # Offset -1 book (folio = sheet - 1), blind page 3 between verified
+        # runs 9,10,11 and 13,14,15 — both neighbors carry offset 9.
+        labels, sources, _ch = pt.build_page_trust(self._pdf(
+            ["9", "10", "11", None, "13", "14", "15"], blind_pages=(3,)))
+        self.assertEqual(labels[3], "12")  # sheet 4, offset -1 → print 12
+        self.assertEqual(sources[3], pt.FOLIO_INTERPOLATED)
+        for i in (0, 1, 2, 4, 5, 6):
+            self.assertEqual(sources[i], pt.FOLIO_VERIFIED, f"page {i}")
+
+    def test_disagreeing_neighbors_stay_blind(self):
+        # Offset changes exactly at the gap (folio jumps 11 → 14): a real
+        # discontinuity, not a derivable position.
+        labels, sources, _ch = pt.build_page_trust(self._pdf(
+            ["9", "10", "11", None, "14", "15", "16"], blind_pages=(3,)))
+        self.assertEqual(sources[3], pt.BLIND)
+        self.assertEqual(labels[3], "4")  # raw sheet number, honest
+
+    def test_two_page_gap_interpolates(self):
+        # The window boundary: 2 consecutive blind pages still interpolate.
+        labels, sources, _ch = pt.build_page_trust(self._pdf(
+            ["9", "10", "11", None, None, "14", "15", "16"], blind_pages=(3, 4)))
+        self.assertEqual(sources[3], pt.FOLIO_INTERPOLATED)
+        self.assertEqual(sources[4], pt.FOLIO_INTERPOLATED)
+        self.assertEqual(labels[3], "12")
+        self.assertEqual(labels[4], "13")
+
+    def test_three_page_gap_stays_blind(self):
+        # > 2 consecutive blind pages: too much can hide in a long gap.
+        labels, sources, _ch = pt.build_page_trust(self._pdf(
+            ["9", "10", "11", None, None, None, "15", "16", "17"],
+            blind_pages=(3, 4, 5)))
+        for i in (3, 4, 5):
+            self.assertEqual(sources[i], pt.BLIND, f"page {i}")
+            self.assertEqual(labels[i], str(i + 1), f"page {i}")
+
+    def test_document_edge_gap_stays_blind(self):
+        # A gap at either document edge has only ONE verified neighbor —
+        # no agreement to check, no interpolation.
+        _labels, sources, _ch = pt.build_page_trust(self._pdf(
+            [None, "10", "11", "12"], blind_pages=(0,)))
+        self.assertEqual(sources[0], pt.BLIND)
+        _labels, sources, _ch = pt.build_page_trust(self._pdf(
+            ["9", "10", "11", None], blind_pages=(3,)))
+        self.assertEqual(sources[3], pt.BLIND)
+
+    def test_interpolation_distinguishable_in_log(self):
+        # DoD: the new source class must be countable in the page_trust log
+        # line (ops/projection visibility), not just present in the map.
+        import logging
+        with self.assertLogs("axiom_ng_runner.compute_core.page_trust",
+                             level="INFO") as cm:
+            pt.build_page_trust(self._pdf(
+                ["9", "10", "11", None, "13", "14", "15"], blind_pages=(3,)))
+        self.assertTrue(any("1 folio-interpolated" in line for line in cm.output),
+                        f"log line must count interpolated pages: {cm.output}")
+
+    def test_interpolated_is_not_a_backfill_target(self):
+        # DoD downstream distinguishability: locator backfill only touches
+        # chunks WITHOUT print-page trust — an interpolated folio already
+        # carries the citation truth and must not be re-stamped.
+        from axiom_ng_runner.compute_core.locator_backfill import is_aligned_chunk
+        self.assertFalse(is_aligned_chunk(
+            {"locator": {"page_source": "folio_interpolated"}}))
+        self.assertTrue(is_aligned_chunk(
+            {"locator": {"page_source": "blind"}}))

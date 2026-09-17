@@ -739,6 +739,21 @@ func TestLocatorViewPageSpan(t *testing.T) {
 	}
 }
 
+// #280: folio_interpolated is citable as a printed page — the label is
+// derivable (blind gap bridged by agreeing verified neighbors), so it
+// renders "S. 26", never the physical_only "PDF-S." form. Production
+// case: Schulbuch, Druckseite 26 on PDF sheet 27.
+func TestLocatorViewFolioInterpolatedCitesPrintPage(t *testing.T) {
+	p := 26
+	v := locatorView(json.RawMessage(fmt.Sprintf(`{"type":"page_span","physical_page_start":%d,"page_label_start":"26","page_source":"folio_interpolated"}`, p)), nil)
+	if v.Kind != "page" || v.Label != "S. 26" {
+		t.Fatalf("folio_interpolated must cite the printed page: %+v", v)
+	}
+	if v.PageSource != "folio_interpolated" {
+		t.Fatalf("page_source must pass through for clients: %+v", v)
+	}
+}
+
 func TestLocatorViewPhysicalFallbackAndRange(t *testing.T) {
 	p := 46
 	v := locatorView(json.RawMessage(fmt.Sprintf(`{"type":"page_span","physical_page_start":%d,"page_label_end":"48"}`, p)), nil)

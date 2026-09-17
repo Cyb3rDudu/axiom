@@ -100,6 +100,11 @@ const (
 	// needing an OCR rebuild. Not a print-page claim of any kind; the
 	// runner classifies, it never executes OCR.
 	PageSourceBlind = "blind"
+	// PageSourceFolioInterpolated (#280): a blind gap of <= 2 pages whose
+	// folio-verified neighbors agree on the label offset — the folio is
+	// derivable (not read), honest about its origin, citable as a printed
+	// page. Longer gaps and disagreeing neighbors stay blind.
+	PageSourceFolioInterpolated = "folio_interpolated"
 	PageSourceNone  = "none"
 	// #223/#226: EPUB print-page anchors. print_verified = proven book-
 	// internally (printed TOC matches chapter-start markers). derived_from_
