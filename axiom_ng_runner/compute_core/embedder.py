@@ -121,11 +121,18 @@ class TextEmbedder:
 
     def _load_model(self):
         """Single construction site for the BGE-M3 model (initial load and
-        the #266 probe reload share it, so load parameters cannot diverge)."""
+        the #266 probe reload share it, so load parameters cannot diverge).
+
+        #277: the resolved device is handed to FlagEmbedding explicitly
+        (`devices=[...]`). On a single-device machine FlagEmbedding's own
+        auto-pick lands on the same accelerator anyway, but the implicit
+        path is a latent multi-device trap — the argument pins what the
+        hardware detector already decided."""
         return BGEM3FlagModel(
             self.model_name,
             # Force fp32 to avoid dtype issues downstream (e.g., in vector store)
-            use_fp16=False
+            use_fp16=False,
+            devices=[self.device],
         )
 
     def _verify_model_load(self) -> None:

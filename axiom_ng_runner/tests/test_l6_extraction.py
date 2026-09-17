@@ -605,3 +605,96 @@ class TestPipelineWiring:
         # Empty real extraction stays empty (no silent stub fill)
         assert result["entities"] == []
         assert result["entity_relationships"] == []
+
+
+def test_gliner_mps_placement_sets_fallback_env(monkeypatch):
+    """#277: GLiNER placed on MPS must set PYTORCH_ENABLE_MPS_FALLBACK=1
+    before placement (not every op has an MPS kernel — same insurance as
+    reranker.py's module-top pattern).
+
+    Mutation probes: drop the setdefault in _get_gliner → red; drop the
+    .to(device) placement → red; place on a non-mps device → fallback env
+    must NOT be forced (cpu path stays untouched)."""
+    import os
+
+    placed = []
+
+    class _M:
+        def to(self, device):
+            placed.append(device)
+            return self
+
+        def predict_entities(self, *_a, **_k):
+            return []
+
+    class _G:
+        @staticmethod
+        def from_pretrained(_name):
+            return _M()
+
+    monkeypatch.setattr(runner, "_GLINER_MODEL", None)
+    mod = types.ModuleType("gliner")
+    mod.__dict__.update({"GLiNER": _G})
+    monkeypatch.setitem(sys.modules, "gliner", mod)
+
+    devices_mod = types.ModuleType("axiom_ng_runner.compute_core.devices")
+    devices_mod.hardware_detector = types.SimpleNamespace(
+        get_model_device=lambda name: "mps"
+    )
+    core = types.ModuleType("axiom_ng_runner.compute_core")
+    core.devices = devices_mod
+    pkg = types.ModuleType("axiom_ng_runner")
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner", pkg)
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core", core)
+    monkeypatch.setitem(
+        sys.modules, "axiom_ng_runner.compute_core.devices", devices_mod
+    )
+    monkeypatch.delenv("PYTORCH_ENABLE_MPS_FALLBACK", raising=False)
+
+    runner._get_gliner()
+    assert placed == ["mps"], "GLiNER must be placed on the detector device"
+    assert os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == "1"
+
+
+def test_gliner_cpu_placement_leaves_fallback_env_alone(monkeypatch):
+    """#277 counterpart: the mps-only fallback insurance must not touch the
+    env on other devices (cpu stays the explicit default)."""
+    import os
+
+    placed = []
+
+    class _M:
+        def to(self, device):
+            placed.append(device)
+            return self
+
+        def predict_entities(self, *_a, **_k):
+            return []
+
+    class _G:
+        @staticmethod
+        def from_pretrained(_name):
+            return _M()
+
+    monkeypatch.setattr(runner, "_GLINER_MODEL", None)
+    mod = types.ModuleType("gliner")
+    mod.__dict__.update({"GLiNER": _G})
+    monkeypatch.setitem(sys.modules, "gliner", mod)
+
+    devices_mod = types.ModuleType("axiom_ng_runner.compute_core.devices")
+    devices_mod.hardware_detector = types.SimpleNamespace(
+        get_model_device=lambda name: "cpu"
+    )
+    core = types.ModuleType("axiom_ng_runner.compute_core")
+    core.devices = devices_mod
+    pkg = types.ModuleType("axiom_ng_runner")
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner", pkg)
+    monkeypatch.setitem(sys.modules, "axiom_ng_runner.compute_core", core)
+    monkeypatch.setitem(
+        sys.modules, "axiom_ng_runner.compute_core.devices", devices_mod
+    )
+    monkeypatch.delenv("PYTORCH_ENABLE_MPS_FALLBACK", raising=False)
+
+    runner._get_gliner()
+    assert placed == ["cpu"]
+    assert "PYTORCH_ENABLE_MPS_FALLBACK" not in os.environ

@@ -41,13 +41,29 @@ def _patch_models(monkeypatch, fails: list[int]):
     """Patch BGEM3FlagModel so instance #i fails its first fails[i] encodes."""
     made = []
 
-    def _factory(_name, use_fp16=False):
+    def _factory(_name, use_fp16=False, devices=None):
         m = _MetaBrokenModel(fails[len(made)] if len(made) < len(fails) else 0)
+        m.devices = devices
         made.append(m)
         return m
 
     monkeypatch.setattr(emb, "BGEM3FlagModel", _factory)
     return made
+
+
+def test_flagembedding_receives_device_explicitly(monkeypatch):
+    """#277: the resolved device must be handed to FlagEmbedding explicitly
+    (BGEM3FlagModel devices=[...]) — explicit over implicit; on multi-device
+    hosts the implicit auto-pick is a latent trap.
+
+    Mutation probe: remove `devices=[self.device]` from
+    TextEmbedder._load_model and this test goes red."""
+    made = _patch_models(monkeypatch, [0])
+    emb.TextEmbedder(device="cpu", enable_memory_management=False)
+    assert all(m.devices == ["cpu"] for m in made), (
+        f"BGEM3FlagModel constructed without the explicit device: "
+        f"{[m.devices for m in made]}"
+    )
 
 
 def test_probe_reloads_once_and_recovers(monkeypatch):
@@ -71,7 +87,7 @@ def test_probe_reload_construction_failure_is_loud(monkeypatch):
     Exactly one reload attempt."""
     calls = []
 
-    def _factory(_name, use_fp16=False):
+    def _factory(_name, use_fp16=False, devices=None):
         calls.append(1)
         if len(calls) == 1:
             return _MetaBrokenModel(1)  # probe fails once, triggers reload
