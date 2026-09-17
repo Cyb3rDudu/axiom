@@ -91,5 +91,18 @@ in `kg_superseded_entities` before deleting loser rows. Read tables are
 rebuildable projections; a refresh can delete and repopulate `kg_entity_roots`,
 `kg_relation_triples`, and `kg_relation_evidence_docs` from active raw KG rows.
 
+## Ingest claim coordination (#270)
+
+While any KG maintenance/consolidation pass holds the advisory lock, the
+dispatchers **defer claiming ingest jobs** (log line: `kg gate: claim
+deferred — KG consolidation active`). The lock is the cross-process signal —
+it lives in the database, so dispatcher processes see a consolidation running
+in the RAG process. The deferral is claim-time only (jobs are never marked),
+bounded by the pass's own timeout, and opens itself the moment the pass
+commits — no operator action, nothing to clean up. This is the structural
+lane coordination from the 2026-09-14 incident class (the clock-drift root
+cause itself was fixed separately); ingest waves after a sync survive an
+active KG run.
+
 Continue: [Monitoring](monitoring.md) · [Troubleshooting](troubleshooting.md) ·
 [Data Model](../references/data-model.md)

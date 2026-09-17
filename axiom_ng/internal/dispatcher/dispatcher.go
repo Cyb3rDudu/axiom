@@ -386,6 +386,25 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 			}
 			continue
 		}
+		// #270-Rest: defer claiming while a KG consolidation/maintenance pass
+		// is mid-flight. The pass is DB-bound and holds the KG advisory lock
+		// plus DB bandwidth the claim path shares; the 2026-09-14 incident
+		// showed what a saturated lane does to ingest windows (the clock-drift
+		// root cause is fixed by #271 — this gate is the structural
+		// coordination on top, chosen over a separate compute lane because
+		// that is #218 carrier planning, a different problem). The advisory
+		// lock is transaction-scoped: the gate opens itself the moment the
+		// pass commits — no recency state, no stale-flag class. Observer-only,
+		// same shape as the #264 readiness gate.
+		if busy, err := d.rep.KGMaintenanceActive(ctx); err == nil && busy {
+			d.logger.Printf("slot %d: kg gate: claim deferred — KG consolidation active (#270)", slot)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(jitter(d.cfg.PollInterval)):
+			}
+			continue
+		}
 		claimed, err := d.rep.ClaimNextJob(ctx, repo.ClaimOptions{
 			WorkerID:        d.cfg.WorkerID,
 			RunnerName:      d.cfg.RunnerName,

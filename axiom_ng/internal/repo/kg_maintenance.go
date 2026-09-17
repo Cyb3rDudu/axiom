@@ -76,6 +76,32 @@ func (h *kgHeartbeat) beat(done int, current string) {
 		h.unit, done, h.total, now.Sub(h.started).Round(time.Second), current)
 }
 
+// KGMaintenanceActive (#270-Rest) reports whether ANY session currently
+// holds the KG maintenance advisory lock — i.e. a KG consolidation or
+// maintenance pass is mid-flight somewhere (the post-sync consolidation
+// hook runs in the RAG process; dispatchers live in their own processes,
+// so the lock is the one cross-process signal they can see).
+// The lock is transaction-scoped: the signal is naturally transient — it
+// disappears the moment the pass commits, no recency bookkeeping, no
+// stale-state class. The dispatcher uses this to defer claims while a
+// consolidation drains (claim-time gate, observer-only — jobs are never
+// marked), the same shape as the #264 readiness gate.
+// pg_locks shape for a BIGINT advisory lock: (classid = key>>32,
+// objid = key & 0xFFFFFFFF, objsubid = 1).
+func (r *Repo) KGMaintenanceActive(ctx context.Context) (bool, error) {
+	var active bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM pg_locks
+			WHERE locktype = 'advisory' AND objsubid = 1
+				AND classid::bigint = $1::bigint >> 32
+				AND objid::bigint = ($1::bigint & 4294967295))`,
+		kgMaintenanceLockKey).Scan(&active); err != nil {
+		return false, err
+	}
+	return active, nil
+}
+
 func (r *Repo) withKGMaintenanceTx(ctx context.Context, label string, fn func(pgx.Tx) error) error {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
