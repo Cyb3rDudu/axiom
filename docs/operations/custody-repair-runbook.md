@@ -81,7 +81,7 @@ EPUB-Reparaturen: `application/epub+zip`). Antwort: Schrittreport
 | `400` | `attachment_key`/`reason` fehlt, Datei leer/unlesbar, content_type unbekannt |
 | `404` | Attachment-Key der Bibliothek unbekannt oder gelöscht |
 | `409` | Key wurde bereits erfolgreich geheilt **oder** ein Create-Lauf wurde protokolliert ohne abzuschließen (Report im Body; erst Zotero prüfen — doppelt geheiltes Geschwister vermeiden) |
-| `502` | Zotero-Write-Gateway-Fehler mittendrin — Satz zeigt den Stand, erneuter Aufruf setzt fort (Ausnahme Orphan-Fall → 409, siehe unten) |
+| `502` | Zotero-Write-Gateway-Fehler mittendrin — Satz zeigt den Stand, erneuter Aufruf setzt fort (Ausnahme Orphan-Fall → 409, siehe oben) |
 | `500` | Quarantäne- oder Protokoll-Schreibfehler (custody fail-closed vor der Mutation) |
 | `503` | Zotero-Write-Client nicht verdrahtet — `SetRepairAPI`/Write-Key fehlt |
 

@@ -674,8 +674,10 @@ or an aborted create run whose orphan key is on the record (refusal names
 the key; runbook covers the recovery), `500` quarantine or custody-record
 write failure, `502` Zotero write gateway failure mid-protocol (re-run
 continues: the record shows the completed steps, quarantine re-runs
-custody-conservatively), `503` the Zotero write client is not wired
-(`SetRepairAPI` without a write key).
+custody-conservatively — except when the create minted an item whose
+cleanup also failed: the orphan key is on the record and the re-run is
+refused with 409, recovery per the custody runbook), `503` the Zotero
+write client is not wired (`SetRepairAPI` without a write key).
 
 ### `GET /api/repair/docs/{documentKey}/locator-stats`
 

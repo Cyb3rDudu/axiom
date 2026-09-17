@@ -424,3 +424,40 @@ func TestManualCustodyOrphanKeyReachesRecord(t *testing.T) {
 		t.Fatalf("last step must be the failure record, got %s", last)
 	}
 }
+
+// TestManualCustodyOrphanKeyRidesErrorWhenPersistFails — pins the wrap
+// branch (review follow-up W1): even when the custody record write ITSELF
+// fails, the orphan key must not be lost — the field is already set on the
+// in-memory record AND the key rides the returned error text, so the 502
+// body names it. Fault injection: Root points at a regular FILE, so
+// saveManualRecord's MkdirAll dies with ENOTDIR inside persist. The unit
+// under test is CreateAttachmentWithFile directly — via Apply the run would
+// already fail at quarantine and never reach the create.
+func TestManualCustodyOrphanKeyRidesErrorWhenPersistFails(t *testing.T) {
+	root := t.TempDir()
+	notADir := filepath.Join(root, "notadir")
+	os.WriteFile(notADir, []byte("file, not a dir"), 0o644)
+
+	fw := newFakeWrite("BROKEN1")
+	fw.failUpload = true // mint NEW1, upload dies, cleanup-delete 404s → (NEW1, err)
+	srv := fw.server(t)
+	wc := zotero.NewWriteClient(srv.URL, "srv", "key")
+
+	rec := &ManualRecord{AttachmentKey: "BROKEN1", DocumentKey: "P1",
+		Reason: "persist-fail test", ContentType: "application/pdf", CreatedAt: ManualNow()}
+	deps := &ManualDeps{Write: wc, Root: notADir, Record: rec, RunID: ManualRunID("BROKEN1")}
+
+	key, err := deps.CreateAttachmentWithFile("P1", "T.pdf", "application/pdf", []byte("healed"))
+	if err == nil {
+		t.Fatal("the upload failure must surface")
+	}
+	if key != "NEW1" {
+		t.Fatalf("the orphan key must still be returned, got %q", key)
+	}
+	if !strings.Contains(err.Error(), "NEW1") || !strings.Contains(err.Error(), "konnte nicht protokolliert werden") {
+		t.Fatalf("the orphan key must ride the error text when the record write fails: %v", err)
+	}
+	if rec.NewAttachmentKey != "NEW1" {
+		t.Fatalf("the in-memory record must carry the key even when persist failed: %q", rec.NewAttachmentKey)
+	}
+}
