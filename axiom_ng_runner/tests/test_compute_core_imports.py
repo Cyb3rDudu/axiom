@@ -88,8 +88,8 @@ def test_mps_fallback_env_precedes_torch_import():
     # place where "before the package import" is still arrangeable.
     out2 = subprocess.run(
         [sys.executable, "-c",
-         "import os; import axiom_ng_runner; "
-         "print(os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK'))"],
+         ("import os; import axiom_ng_runner; "
+          "print(os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK'))")],
         capture_output=True, text=True, check=True,
         cwd=str(Path(__file__).resolve().parents[2]),
         env={**os.environ, "PYTORCH_ENABLE_MPS_FALLBACK": "0"},
