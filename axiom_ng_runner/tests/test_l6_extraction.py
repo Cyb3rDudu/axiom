@@ -611,7 +611,11 @@ def test_gliner_mps_placement_uses_detector_device(monkeypatch):
     """#277: GLiNER is placed on the detector's device (the MPS fallback
     insurance itself lives at PACKAGE INIT — see
     test_mps_fallback_env_precedes_torch_import in test_compute_core_imports).
+    The placement path must not (re)introduce the env on any device —
+    the cpu counterpart asserts the same mirror.
     Mutation probe: drop the .to(device) placement in _get_gliner → red."""
+    import os
+
     placed = []
 
     class _M:
@@ -648,6 +652,9 @@ def test_gliner_mps_placement_uses_detector_device(monkeypatch):
 
     runner._get_gliner()
     assert placed == ["mps"], "GLiNER must be placed on the detector device"
+    assert "PYTORCH_ENABLE_MPS_FALLBACK" not in os.environ, (
+        "the placement path must not set the fallback env (package init owns it)"
+    )
 
 
 def test_gliner_cpu_placement_leaves_fallback_env_alone(monkeypatch):

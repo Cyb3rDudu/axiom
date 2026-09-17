@@ -74,6 +74,10 @@ def test_mps_fallback_env_precedes_torch_import():
     out = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True, text=True, check=True, cwd=str(Path(__file__).resolve().parents[2]),
+        # Scrub the var so the sonde observes only what the package init
+        # does — an ambient export (e.g. runner.env) would let the
+        # remove-setdefault mutant survive.
+        env={k: v for k, v in os.environ.items() if k != "PYTORCH_ENABLE_MPS_FALLBACK"},
     ).stdout.strip()
     env_val, torch_loaded = out.rsplit(" ", 1)
     assert env_val == "1", (

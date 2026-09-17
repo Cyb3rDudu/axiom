@@ -208,4 +208,3 @@ class InterpolatedRescanTests(unittest.TestCase):
         loc = updates[0][1]
         self.assertEqual(loc["page_label_start"], "4")  # verified start
         self.assertEqual(loc["page_label_end"], "5")    # INTERPOLATED end heals
-        self.assertIn("page_label_end", loc)
