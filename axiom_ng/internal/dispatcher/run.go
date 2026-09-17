@@ -298,7 +298,8 @@ var repairTrackFailureCodes = map[string]bool{
 // design decision on the issue: preflight 🔴 reparierbar, the #237
 // SOURCE_UNREADABLE track, and — since #284 made the class repairable —
 // the scan class (textless scans heal via the fixer's scan_ocr_rebuild;
-// the historical "never auto-queue" nail is obsolete with the OCR arm).
+// the historical "never auto-queue" nail is obsolete with the OCR arm;
+// #283 renamed the finding — both spellings admitted for compatibility).
 // EPUB red (defekt/DRM) stays on the manual repair API until the EPUB
 // fixer arm has queue-proven efficacy; extending automation is a one-line
 // addition here. Exact string match — the findings are runner contract
@@ -306,7 +307,11 @@ var repairTrackFailureCodes = map[string]bool{
 var autoQueueRepairClasses = map[string]bool{
 	"🔴 reparierbar":     true,
 	"SOURCE_UNREADABLE": true,
-	"🔴 unpaginiert":     true, // #284: scan class, heals via scan_ocr_rebuild
+	// #284: the scan class heals via scan_ocr_rebuild. #283 renamed the
+	// operator-facing finding; the LEGACY key stays admitted so stored
+	// cases and mixed-binary runners (old finding strings) keep queueing.
+	"🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)": true,
+	"🔴 unpaginiert": true,
 }
 
 // autoQueueRepair (#238/#282) queues a FRESH repair case whose class is

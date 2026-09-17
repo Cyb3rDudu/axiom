@@ -1,4 +1,7 @@
-"""#254: the unpaginiert verdict splits by TEXT LAYER.
+"""#254: the unpaginiert verdict splits by TEXT LAYER (#283 renamed the
+class: scan-ohne-textlayer — "unpaginiert" misled operators into arguing
+with the verdict instead of planning the OCR rebuild; the print pagination
+EXISTS as pixels).
 
 The old 🔴 unpaginiert skip conflated two very different cases:
   - born-digital PDFs without print pagination (text present) — the skip
@@ -58,13 +61,26 @@ def test_born_digital_no_folio_processes_with_physical_only(tmp_path):
 
 def test_true_scan_stays_skipped_as_needs_ocr(tmp_path):
     """Gegen-Sonde: a textless scan still rejects — the skip was right for
-    THIS class; the surface says needs_ocr (#252)."""
+    THIS class; the surface says needs_ocr (#252). #283: the finding names
+    the actual cause + remedy (scan without text layer, OCR rebuild), the
+    old wording must be GONE from the operator surface."""
     pdf = _true_scan(tmp_path / "scan.pdf")
     r = preflight(str(pdf))
     assert r.ok is False, "a textless scan must NOT process"
-    assert r.finding == "🔴 unpaginiert"
+    assert r.finding == "🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)"
+    assert "unpaginiert" not in r.finding
     assert r.details["pagination_state"] == "needs_ocr"
     assert r.details["text_layer"] is False
+
+
+def test_legacy_unpaginiert_key_still_parses():
+    """#283 DoD: internal keys stay backward compatible — historical
+    reports/quality_states carrying the legacy finding still resolve their
+    pagination_state (old values parse, no migration needed)."""
+    from axiom_ng_runner.compute_core.pdf_health import _PAGINATION_STATE
+
+    assert _PAGINATION_STATE["🔴 unpaginiert"] == "needs_ocr"
+    assert _PAGINATION_STATE["🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)"] == "needs_ocr"
 
 
 def test_plantin_fixture_is_repairable_not_unpaginiert():

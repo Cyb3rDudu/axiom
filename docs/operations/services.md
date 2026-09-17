@@ -134,7 +134,7 @@ pymupdf metrics, no ML; no repair, no upstream mutation). The verdict lands
 in `ingest_jobs.quality_state` and is readable on the job listing.
 
 Policy: green/yellow (`ok=true`) proceeds to full processing. A red verdict
-(e.g. a textless scan, `🔴 unpaginiert`) is **not** sent into the pipeline —
+(e.g. a textless scan, `🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)`) is **not** sent into the pipeline —
 the job is archived with a clear status (`skipped`, reason
 `preflight:<finding>`) and the attachment is registered as a **repair-case
 candidate**, so the fixer (#206/#203) can later heal it rather than letting

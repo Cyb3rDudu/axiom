@@ -13,7 +13,9 @@ sweep                : analyze every active preferred PDF, join chunk counts,
 Verdachtsklassen:
   🔴 reparierbar   Labels nachweislich kaputt (Wiederholung/nicht-monoton)
                   UND ein Folio-Lauf als Reparaturquelle vorhanden
-  🔴 unpaginiert  weder Labels noch Folio-Lauf — Relabel kann nicht helfen
+  🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)
+                  reiner Bildscan: die Paginierung existiert als Pixel,
+                  aber ohne Textschicht — der #284-OCR-Rebuild heilt
   🟡 Versatz-Verdacht  Labels sanity-ok, aber Folio widerspricht (Offset-Klasse)
   🟢 gesund       Labels sanity-ok, kein Folio-Widerspruch
 """
@@ -121,7 +123,10 @@ def cmd_sweep(out_path: str, kandidaten_path: str | None) -> None:
         reports.append(r)
         print(f"  {r['finding']:>22s}  {chunks:5d}  {title[:52]}", flush=True)
 
-    order = {"🔴 reparierbar": 0, "🔴 unpaginiert": 1, "⚠️ PDF fehlt": 2, "⚠️ Analysefehler": 2,
+    order = {"🔴 reparierbar": 0,
+             "🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)": 1,
+             "🔴 unpaginiert": 1,  # #283 legacy: alte Reports sortieren weiter
+             "⚠️ PDF fehlt": 2, "⚠️ Analysefehler": 2,
              "🟡 Versatz-Verdacht": 3, "🟡 unklar (Label↔Folio uneinheitlich)": 3, "🟢 gesund": 4}
     reports.sort(key=lambda r: (order.get(r["finding"], 9), -r.get("chunks", 0)))
 

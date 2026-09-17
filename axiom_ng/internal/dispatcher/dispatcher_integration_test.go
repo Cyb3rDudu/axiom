@@ -1276,7 +1276,7 @@ func TestPreflightFailSkipsJobAndCreatesRepairCase(t *testing.T) {
 		"contract_version": "1.0",
 		"source_name":      "inline",
 		"ok":               false,
-		"finding":          "🔴 unpaginiert",
+		"finding":          "🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)",
 		"reason":           "kein Tier-1",
 		"details": map[string]any{
 			"pages": 1, "text_layer": false,
@@ -1308,7 +1308,7 @@ func TestPreflightFailSkipsJobAndCreatesRepairCase(t *testing.T) {
 		`SELECT quality_state FROM ingest_jobs WHERE id=$1`, jobID).Scan(&qs); err != nil {
 		t.Fatalf("read quality_state: %v", err)
 	}
-	if string(qs) == "" || !strings.Contains(string(qs), "unpaginiert") {
+	if string(qs) == "" || !strings.Contains(string(qs), "scan-ohne-textlayer") {
 		t.Fatalf("quality_state not recorded: %q", string(qs))
 	}
 	// W5: absent EPUB detail keys must not become literal null entries;
@@ -1574,8 +1574,8 @@ func TestPreflightRepairableAutoQueues(t *testing.T) {
 	}
 }
 
-// TestPreflightScanClassAutoQueues (#284): the scan class (historically
-// "unpaginiert" — textless scan) is REPAIRABLE now: scan_ocr_rebuild
+// TestPreflightScanClassAutoQueues (#284): the scan class (textless scan,
+// 🔴 scan-ohne-textlayer since the #283 rename) is REPAIRABLE now: scan_ocr_rebuild
 // heals it in the fixer, so the preflight reject auto-queues the case
 // like 🔴 reparierbar. The pre-#284 nail (never enters the loop) is
 // obsolete with the OCR arm; loop safety is the claim guard + the #282
@@ -1592,7 +1592,7 @@ func TestPreflightScanClassAutoQueues(t *testing.T) {
 		"contract_version": "1.0",
 		"source_name":      "inline",
 		"ok":               false,
-		"finding":          "🔴 unpaginiert",
+		"finding":          "🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)",
 		"reason":           "kein Tier-1",
 		"details": map[string]any{
 			"pages": 1, "text_layer": false,
@@ -1672,7 +1672,7 @@ func TestStaleRepairableCaseNotRecycledIntoQueue(t *testing.T) {
 		"contract_version": "1.0",
 		"source_name":      "inline",
 		"ok":               false,
-		"finding":          "🔴 unpaginiert",
+		"finding":          "🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)",
 		"reason":           "kein Tier-1",
 		"details": map[string]any{
 			"pages": 1, "text_layer": false,

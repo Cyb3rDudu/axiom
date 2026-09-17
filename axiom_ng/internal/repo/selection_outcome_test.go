@@ -33,8 +33,8 @@ func TestDeriveOutcome(t *testing.T) {
 		// needs_ocr: unpaginiert dead end from the #254 pagination_state —
 		// explicitly BEFORE the repair track (unpaginiert cases sit rejected
 		// forever; they must read needs_ocr, not in_repair).
-		{"needs_ocr from pagination_state", "", "skipped", "SKIPPED", "preflight:unpaginiert", "needs_ocr", "", "needs_ocr", "unpaginiert: text-less scan, OCR rebuild required"},
-		{"needs_ocr beats rejected repair case", "", "skipped", "", "", "needs_ocr", "rejected", "needs_ocr", "unpaginiert: text-less scan, OCR rebuild required"},
+		{"needs_ocr from pagination_state", "", "skipped", "SKIPPED", "preflight:unpaginiert", "needs_ocr", "", "needs_ocr", "scan-ohne-textlayer: text-less scan — OCR rebuild heals it (scan_ocr_rebuild, #284)"},
+		{"needs_ocr beats rejected repair case", "", "skipped", "", "", "needs_ocr", "rejected", "needs_ocr", "scan-ohne-textlayer: text-less scan — OCR rebuild heals it (scan_ocr_rebuild, #284)"},
 		{"physical_only is NOT needs_ocr", "", "completed", "", "", "physical_only", "", "completed", ""},
 
 		// in_repair: live from the repair case status

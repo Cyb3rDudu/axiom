@@ -93,7 +93,7 @@ type ZoteroDocumentState struct {
 
 // DeriveOutcome projects job/repair/selection truth into the human answer
 // for "what happened to my document?" (#252). No new truth — precedence:
-// excluded → running → needs_ocr (unpaginiert dead end, from the job's
+// excluded → running → needs_ocr (textless scan, from the job's
 // quality_state pagination_state, set by the #254 preflight) → live repair
 // track → completed → failed+reason excerpt → never enqueued.
 func DeriveOutcome(selMode, jobStatus, errCode, errMsg, paginationState, repairStatus string) (outcome, reason string) {
@@ -105,7 +105,7 @@ func DeriveOutcome(selMode, jobStatus, errCode, errMsg, paginationState, repairS
 	case jobStatus == "pending":
 		return "pending", ""
 	case paginationState == "needs_ocr":
-		return "needs_ocr", "unpaginiert: text-less scan, OCR rebuild required"
+		return "needs_ocr", "scan-ohne-textlayer: text-less scan — OCR rebuild heals it (scan_ocr_rebuild, #284)"
 	case repairStatus == "rejected" || repairStatus == "queued" ||
 		repairStatus == "in_repair" || repairStatus == "blocked_for_dudu":
 		return "in_repair", "repair case: " + repairStatus

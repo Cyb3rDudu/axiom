@@ -227,7 +227,7 @@ state, no DB forensics needed:
 
 | Field | Meaning |
 | --- | --- |
-| `outcome` | `completed` (processed, searchable) \| `in_repair` (repair track active) \| `needs_ocr` (unpaginiert scan — not text-searchable without OCR rebuild) \| `failed` \| `processing` \| `pending` \| `excluded` (held by selection) |
+| `outcome` | `completed` (processed, searchable) \| `in_repair` (repair track active) \| `needs_ocr` (scan without a text layer — not text-searchable until the OCR rebuild heals it) \| `failed` \| `processing` \| `pending` \| `excluded` (held by selection) |
 | `outcome_reason` | Short reason excerpt: repair-case status, `error_code: message` (capped at 160 runes), `selection-excluded`, or `never enqueued` |
 | `repair_status` | Newest `repair_cases` status for the preferred attachment, live (`rejected`, `queued`, `in_repair`, `healed`, `failed`, `blocked_for_dudu`); omitted when no case exists |
 

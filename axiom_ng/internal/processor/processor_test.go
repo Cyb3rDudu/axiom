@@ -172,7 +172,7 @@ func TestPreflightDecodesAndSendsBytes(t *testing.T) {
 			"contract_version": "1.0",
 			"source_name":      "inline",
 			"ok":               false,
-			"finding":          "🔴 unpaginiert",
+			"finding":          "🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)",
 			"reason":           "kein Tier-1",
 			"details": map[string]any{
 				"pages": 8, "text_layer": false,
@@ -187,7 +187,7 @@ func TestPreflightDecodesAndSendsBytes(t *testing.T) {
 	if !strings.HasPrefix(string(sentBody), "%PDF-test-bytes") {
 		t.Fatalf("body sent = %q, want the raw pdf bytes", string(sentBody))
 	}
-	if rep.Ok || rep.Finding != "🔴 unpaginiert" {
+	if rep.Ok || rep.Finding != "🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)" {
 		t.Fatalf("report decode wrong: %+v", rep)
 	}
 	if d := rep.Details["pages"]; d == nil || d.(float64) != 8 {

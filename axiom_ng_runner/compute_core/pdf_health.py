@@ -35,9 +35,16 @@ class PreflightResult:
 
 # #254: outcome-facing pagination state per finding — the #252 derivation
 # reads this instead of parsing the German finding strings.
+# #283: the operator-facing finding was renamed (unpaginiert misled —
+# "the book has no pages" — while the pagination exists as pixels); the
+# OLD key stays mapped so historical reports/quality_states still parse
+# (internal keys backward compatible per the #283 DoD).
+SCAN_FINDING = "🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)"
+SCAN_FINDING_LEGACY = "🔴 unpaginiert"
 _PAGINATION_STATE = {
     "🟡 no_print_pagination": "physical_only",
-    "🔴 unpaginiert": "needs_ocr",
+    SCAN_FINDING: "needs_ocr",
+    SCAN_FINDING_LEGACY: "needs_ocr",
 }
 
 
@@ -154,7 +161,7 @@ def analyze_pdf(pdf_path: str) -> dict:
             if tm["text_layer"]:
                 suspicion = "🟡 no_print_pagination"
             else:
-                suspicion = "🔴 unpaginiert"
+                suspicion = SCAN_FINDING
         elif offset_consistent and offset not in (0, None):
             suspicion = "🟡 Versatz-Verdacht"
         elif offs and not offset_consistent:
@@ -198,8 +205,9 @@ def preflight(pdf_path: str) -> PreflightResult:
     """Verdict for one PDF. GREEN = 🟢 gesund or 🟡 (labels sane or #254
     no_print_pagination — text-bearing without print pagination PROCESSES
     with physical_only locators); everything 🔴 rejects (kaputt-reparierbar
-    goes to the repair queue, unpaginiert — now only the textless scan —
-    never enters the loop)."""
+    goes to the repair queue; the scan class (scan-ohne-textlayer, #283
+    renamed from "unpaginiert" — the pagination exists as pixels, the
+    remedy is the #284 OCR rebuild) likewise)."""
     d = analyze_pdf(pdf_path)
     v = d["finding"]
     if v.startswith("🟢"):
@@ -212,6 +220,6 @@ def preflight(pdf_path: str) -> PreflightResult:
         return PreflightResult(True, v, "text-tragend ohne Druckpaginierung — Verarbeitung mit physical_only-Locators (PDF-S. N)", d)
     if v.startswith("🟡"):
         return PreflightResult(True, v, "sanity-ok (Versatz/unklar, kein Reparatur-Fall)", d)
-    # 🔴 Klassen: reject — reparierbar geht in die Queue, unpaginiert (nur
-    # noch der echte Scan) nie
+    # 🔴 Klassen: reject — reparierbar UND der Scan (scan-ohne-textlayer,
+    # #284: OCR-Rebuild heilbar) gehen in die Reparatur-Queue
     return PreflightResult(False, v, d.get("label_befund", ""), d)
