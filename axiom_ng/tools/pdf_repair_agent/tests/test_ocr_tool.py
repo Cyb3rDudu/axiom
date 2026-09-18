@@ -186,16 +186,20 @@ def test_ocr_child_env_setzt_tessdata_und_path(tmp_path, monkeypatch):
     assert child["PATH"].startswith(str(fake / "bin") + _os.pathsep), child["PATH"]
 
 
-def test_dev_venv_ohne_buendel_bleibt_noop(monkeypatch):
+def test_dev_venv_ohne_buendel_bleibt_noop(tmp_path, monkeypatch):
     """Dev-Venv ohne gebündelte Binaries: keine PATH-Verfälschung, kein
-    TESSDATA_PREFIX — transparenter Host-PATH-Fallback."""
+    TESSDATA_PREFIX — transparenter Host-PATH-Fallback. Deterministisch
+    gegen jeden Runner: leeres Prefix (kein bin, keine Modelle) PLUS
+    fixer Basis-PATH — auf GitHub beginnt PATH ohnehin mit sys.prefix/bin
+    (setup-python), das alte startswith-Assert war dort grundlos rot."""
     from tools import bundled_env as be
 
     monkeypatch.setattr(be, "tessdata_dir", lambda: None)
-    monkeypatch.setattr(be.os.path, "exists", lambda p: False)
+    monkeypatch.setattr(be.sys, "prefix", str(tmp_path))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
     child = ocr_tool.ocr_child_env()
+    assert child["PATH"] == "/usr/bin:/bin"
     assert "TESSDATA_PREFIX" not in child
-    assert not child["PATH"].startswith(str(be.Path(be.sys.prefix) / "bin"))
 
 
 def test_rebuild_reicht_kind_env_durch(tmp_path, monkeypatch):
