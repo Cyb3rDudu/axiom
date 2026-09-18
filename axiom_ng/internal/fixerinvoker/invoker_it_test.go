@@ -474,6 +474,7 @@ type fakeSyncer struct {
 	mu      sync.Mutex
 	calls   []string
 	fail    bool
+	failN   int // transient: the first failN calls fail, then succeed
 	include string
 }
 
@@ -489,6 +490,10 @@ func (f *fakeSyncer) Run(ctx context.Context, ov *axiomsync.SyncOverride) (axiom
 	if f.fail {
 		return axiomsync.Result{}, errors.New("sync down (IT)")
 	}
+	if f.failN > 0 {
+		f.failN--
+		return axiomsync.Result{}, errors.New("transient sync blip (IT)")
+	}
 	return axiomsync.Result{Enqueued: 1}, nil
 }
 
@@ -499,7 +504,7 @@ func (f *fakeSyncer) count() int {
 }
 
 // newTestInvokerSynced builds the invoker with a fake syncer attached.
-func newTestInvokerSynced(t *testing.T, e *itEnv, scriptBody string, fs *fakeSyncer) (*Invoker, *fakeApply) {
+func newTestInvokerSynced(t *testing.T, e *itEnv, scriptBody string, fs HealSyncer) (*Invoker, *fakeApply) {
 	t.Helper()
 	inv, fa := newTestInvoker(t, e, scriptBody, time.Minute)
 	inv.deps.Sync = fs
@@ -566,6 +571,58 @@ func TestPostHealSyncBoundedPerHeal(t *testing.T) {
 	}
 }
 
+// TestPostHealSyncTransientFailureRetries — a blip recovers within the
+// bounded attempts; the heal still lands its enqueue (review #270 major:
+// one transient error used to reproduce the original stranding).
+func TestPostHealSyncTransientFailureRetries(t *testing.T) {
+	e := openDB(t)
+	e.truncate(t)
+	out := t.TempDir()
+	fs := &fakeSyncer{failN: 1} // first call fails, second succeeds
+	inv, _ := newTestInvokerSynced(t, e, successScript(out), fs)
+	inv.cfg.WorkRoot = out
+	caseID := e.seedCase(t, "ATT-SYNC7")
+	inv.processCase(context.Background(), caseID)
+	if s, _, _ := e.caseStatus(t, caseID); s != "healed" {
+		t.Fatalf("case = %s, want healed", s)
+	}
+	if fs.count() != 2 {
+		t.Fatalf("transient failure must retry to success (2 calls), got %d", fs.count())
+	}
+}
+
+// TestPostHealSyncZeroEnqueuedIsLoud — Enqueued == 0 is NOT success for
+// the post-heal call; the log names the document (selection boundary /
+// unchanged hash) and the wave gate keeps the case visible.
+func TestPostHealSyncZeroEnqueuedIsLoud(t *testing.T) {
+	e := openDB(t)
+	e.truncate(t)
+	out := t.TempDir()
+	fs := &zeroSyncer{}
+	inv, _ := newTestInvokerSynced(t, e, successScript(out), fs)
+	inv.cfg.WorkRoot = out
+	caseID := e.seedCase(t, "ATT-SYNC8")
+	inv.processCase(context.Background(), caseID)
+	if s, _, _ := e.caseStatus(t, caseID); s != "healed" {
+		t.Fatalf("case = %s, want healed (the heal itself succeeded)", s)
+	}
+	held, _, err := e.rep.WaveRepairGate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !held {
+		t.Fatal("wave gate must hold when the post-heal sync enqueued nothing")
+	}
+}
+
+// zeroSyncer succeeds but enqueues nothing (the selection-boundary shape).
+type zeroSyncer struct{ inner fakeSyncer }
+
+func (z *zeroSyncer) Run(ctx context.Context, ov *axiomsync.SyncOverride) (axiomsync.Result, error) {
+	_, _ = z.inner.Run(ctx, ov)
+	return axiomsync.Result{Enqueued: 0}, nil
+}
+
 // TestPostHealSyncSkippedOnTerminalPark — unrepairable (HALT) and failed
 // cases never trigger the sync loop-back; only a successful heal does.
 func TestPostHealSyncSkippedOnTerminalPark(t *testing.T) {
@@ -608,8 +665,8 @@ func TestPostHealSyncFailureDoesNotFailHeal(t *testing.T) {
 	if s, _, _ := e.caseStatus(t, caseID); s != "healed" {
 		t.Fatalf("case = %s, want healed despite sync failure", s)
 	}
-	if fs.count() != 1 {
-		t.Fatalf("sync attempted once, got %d", fs.count())
+	if fs.count() != 3 {
+		t.Fatalf("persistent failure must exhaust exactly 3 attempts, got %d", fs.count())
 	}
 	// the wave gate must hold: healed case, no job enqueued since
 	held, _, err := e.rep.WaveRepairGate(context.Background())

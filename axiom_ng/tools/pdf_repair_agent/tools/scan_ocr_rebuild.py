@@ -105,13 +105,35 @@ def _page_dims(pdf: str | Path) -> list[tuple[float, float]]:
         doc.close()
 
 
+def _is_spaceless_script_text(text: str) -> bool:
+    """Anteil space-loser Schriften (CJK u. a.): Diese Schriften trennen
+    Wörter NOTORISCH ohne Leerzeichen — space_ratio ~0 ist dort INTAKT,
+    nicht kaputt. Schwellen: >30% CJK/Bopomofo/Hangul/Kana-Zeichen."""
+    if not text:
+        return False
+    spaceless = 0
+    for ch in text:
+        o = ord(ch)
+        if (
+            0x4E00 <= o <= 0x9FFF      # CJK Unified
+            or 0x3400 <= o <= 0x4DBF   # CJK Ext A
+            or 0x3040 <= o <= 0x30FF   # Hiragana/Katakana
+            or 0xAC00 <= o <= 0xD7AF   # Hangul syllables
+            or 0x31F0 <= o <= 0x31FF   # Katakana phonetic ext
+        ):
+            spaceless += 1
+    return spaceless / len(text) > 0.30
+
+
 def diagnose(pdf: str | Path) -> dict:
     """Dry-Run-Befund: Textschicht da? Kaputt (Worttrennung)? Werkzeuge da?
 
     Die defekte Worttrennung (Reder-Klasse) ist deterministisch messbar:
     Leerzeichen-Dichte und mittlere Wortlänge. Deutsche Prosa liegt bei
     ~0.15 Leerzeichen/Zeichen und ~6 Zeichen/Wort; konkatenierter Text
-    bricht beide Schwellen deutlich.
+    bricht beide Schwellen deutlich. Space-lose Schriften (CJK) treffen
+    dieselben Schwellen INTAKT — sie werden explizit erkannt und NIEMALS
+    als kaputt klassifiziert (force-ocr --lang deu würde sie zerstören).
     """
     bins = _bins_available()
     import pymupdf  # type: ignore[import-not-found]
@@ -132,11 +154,15 @@ def diagnose(pdf: str | Path) -> dict:
         space_ratio = (total_spaces / total_chars) if total_chars else 0.0
         words = [w for page in doc for w in page.get_text("words")]
         mean_word_len = sum(len(w[4]) for w in words) / len(words) if words else 0.0
+        sample = "".join(str(p.get_text("text"))[:2000] for p in doc)
+        spaceless_script = _is_spaceless_script_text(sample)
     finally:
         doc.close()
     # Schwellen (dokumentiert, konservativ): normale Prosa kommt nie in
     # die Nähe; konkatenierter Text (Reder-Pilot) bricht beide.
-    broken_segmentation = text_layer and space_ratio < 0.06 and mean_word_len > 12
+    broken_segmentation = (
+        text_layer and space_ratio < 0.06 and mean_word_len > 12 and not spaceless_script
+    )
     # Reiner Scan braucht Raster-Evidenz (wie das Preflight-Muster „viele
     # reine Bildseiten“): ein text- UND bildfreies Vektor-PDF ist kein
     # Scan — OCR könnte nichts liefern, die Datei fällt an die normale
@@ -159,6 +185,7 @@ def diagnose(pdf: str | Path) -> dict:
         "raster_scan": raster_scan,
         "space_ratio": round(space_ratio, 4),
         "mean_word_len": round(mean_word_len, 2),
+        "spaceless_script": spaceless_script,
         "broken_segmentation": broken_segmentation,
         "mode": mode,
         "class": verdict,

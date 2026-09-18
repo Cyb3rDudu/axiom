@@ -333,3 +333,97 @@ func TestSyncIncludeOverrideEnqueuesJob(t *testing.T) {
 		t.Fatal("the enqueued healed job must be pending in the queue — the wave gate releases on exactly this")
 	}
 }
+
+// TestSyncIncludeUnderCollectionSelectionInBase (#282 review follow-up):
+// with collection selections ACTIVE, a healed document that is IN the
+// collection base re-enqueues on its content-hash change — the enqueue is
+// driven by the change, not by the include override (which the collection
+// cascade deliberately ignores per #166). This pins that the post-heal
+// auto-sync keeps working under collection expansion for every document
+// still inside the base; only out-of-base heals strand (documented,
+// 1h-bounded). The OUT-of-base counter-shape is covered by the selection
+// cascade tests themselves.
+func TestSyncIncludeUnderCollectionSelectionInBase(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping integration test")
+	}
+	d, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	pdf := t.TempDir() + "/healed-in-base.pdf"
+	os.WriteFile(pdf, []byte("v1"), 0o600)
+
+	src := &canonicalFake{serverID: "healsynccoll", baseURL: newScriptedBase(), version: 2}
+	src.items = []zotero.CanonicalItem{
+		mkItemJSON("HCB1", "book", "", "Healed In Collection", map[string]any{
+			"creators":    []map[string]string{{"firstName": "Ada", "lastName": "Lovelace", "creatorType": "author"}},
+			"collections": []string{"HCOLL1"},
+		}),
+		mkItemJSON("HCA1", "attachment", "HCB1", "h.pdf", map[string]any{
+			"contentType": "application/pdf", "filename": "h.pdf",
+		}),
+	}
+	env := func(ver int) []byte {
+		b, _ := json.Marshal(map[string]any{
+			"key": "HCA1", "version": ver,
+			"links": map[string]any{"enclosure": map[string]any{"href": "file://" + pdf}},
+			"data":  map[string]any{"key": "HCA1", "version": ver, "itemType": "attachment", "parentItem": "HCB1", "contentType": "application/pdf", "filename": "h.pdf"},
+		})
+		return b
+	}
+	src.items[1].Envelope = env(2)
+	src.collections = []zotero.CanonicalCollection{
+		{Key: "HCOLL1", Name: "HColl", Envelope: json.RawMessage(`{"key":"HCOLL1","data":{"key":"HCOLL1","name":"HColl","parentCollection":false}}`)},
+	}
+
+	repoObj := repo.New(d.Pool())
+	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+
+	// collection-include selection on the healed doc's collection —
+	// CLEANUP: the sync ITs share the DSN database; a leftover selection
+	// row suppresses every other test's documents (out-of-base).
+	res, err := svc.Run(ctx, nil)
+	if err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	if _, err := d.Pool().Exec(ctx, `
+		INSERT INTO zotero_collection_selections (collection_key, mode)
+		VALUES ('HCOLL1', 'included')`); err != nil {
+		t.Fatal(err)
+	}
+	// DEFER (not t.Cleanup): cleanup callbacks run AFTER the deferred
+	// pool close — the delete would hit a closed pool and silently no-op.
+	defer func() {
+		_, _ = d.Pool().Exec(ctx, `DELETE FROM zotero_collection_selections WHERE collection_key='HCOLL1'`)
+	}()
+	var docID string
+	if err := d.Pool().QueryRow(ctx,
+		`SELECT id::text FROM zotero_documents WHERE zotero_key='HCB1' AND source_id=$1`, res.SourceID).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+	// consume the job + change the content (the heal's effect)
+	if _, err := d.Pool().Exec(ctx, `DELETE FROM ingest_jobs`); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(pdf, []byte("healed-v2"), 0o600)
+	src.version = 3
+	src.items[1].Version = 3
+	src.items[1].Envelope = env(3)
+
+	// the #282 call shape under an ACTIVE collection selection
+	res2, err := svc.Run(ctx, &SyncOverride{Include: []string{docID}})
+	if err != nil {
+		t.Fatalf("include run under collection selection: %v", err)
+	}
+	if res2.Enqueued < 1 {
+		t.Fatalf("in-base healed document must re-enqueue under collection selection (hash change drives it), got %d", res2.Enqueued)
+	}
+}

@@ -11,7 +11,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"strconv"
@@ -200,8 +202,20 @@ var cliModes = []cliMode{
 			if err != nil {
 				modeFail(logger, modeSingleTx, "apply: %v", err)
 			}
-			logger.Printf("retention APPLIED: %d superseded snapshot(s) + %d stale job attempt(s) removed (plan had %d/%d)",
-				rem.Snapshots, rem.Jobs, plan.Snapshots.Remove, plan.Jobs.Remove)
+			// artifact BYTES after the commit: rows are already gone; a
+			// failed unlink leaves an orphaned file (reported), never a
+			// dangling row (#270 review: "deleted means gone" includes the
+			// storage under AXIOM_ARTIFACT_ROOT)
+			unlinked := 0
+			for _, p := range rem.ArtifactPaths {
+				if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					logger.Printf("artifact unlink failed (orphaned file remains): %s: %v", p, err)
+					continue
+				}
+				unlinked++
+			}
+			logger.Printf("retention APPLIED: %d superseded snapshot(s) + %d stale job attempt(s) removed, %d/%d artifact file(s) unlinked (plan had %d/%d)",
+				rem.Snapshots, rem.Jobs, unlinked, len(rem.ArtifactPaths), plan.Snapshots.Remove, plan.Jobs.Remove)
 			out, _ := json.MarshalIndent(rem, "", "  ")
 			fmt.Println(string(out))
 		},

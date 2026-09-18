@@ -33,6 +33,15 @@ queued/in_repair)` in the dispatcher log) until the invoker returns or an
 operator blocks/requeues the case via the repair API. The healed arm is
 bounded (1 h) either way.
 
+**Blast radius (intended, know it):** the gate is instance-wide, not
+per-document — one repair in flight serializes the whole ingest queue for
+its duration. A 658-page OCR rebuild holds every claim for up to its
+90-minute class budget. That is the owner-specified wave semantics (dry-run
+→ repair → sync → NEXT document); if you need ingest throughput during a
+long repair, stop the dispatcher for that lane deliberately instead of
+wondering why claims defer — the log names the holding reason on every
+poll.
+
 ## What holds the claim gate (`WaveRepairGate`)
 
 Every dispatcher worker checks the gate before claiming; it defers
@@ -70,7 +79,7 @@ documented, it does not block the wave.
 ```text
 fixer-invoker ... case …: healed (new attachment uploaded, post-heal sync follows)
 fixer-invoker ... case …: post-heal sync ok — document … enqueued 1 job(s) (#282)
-axiom-ng: dispatcher: slot 0: wave gate: claim deferred (1 repair case(s) queued/in_repair) — repair loop-back drains first (#282)
+rag-dispatch log: slot 0: wave gate: claim deferred (1 repair case(s) queued/in_repair) — repair loop-back drains first (#282)
 ```
 
 If the gate holds for longer than a heal should take, check for a stuck
@@ -84,5 +93,13 @@ gap).
 Production evidence (twice): a heal completed and the document sat in
 "awaiting preflight GREEN" until a manual sync hours later ("Wertorientierte
 Unternehmensführung" 2026-09-15, "Nachhaltiges Personalmanagement"
-2026-09-17). #282 closed the gap; the acceptance ITs pin heal → sync →
-enqueue end-to-end.
+2026-09-17). #282 closed the gap; the ITs pin both halves and the seam —
+the invoker's targeted sync call (include = document, one per heal) and,
+separately, the real sync service honoring a one-run include with an
+enqueue. **Selection boundary:** a healed document outside the effective
+selection (collection base or document exclusion) does not re-enqueue —
+that is the documented sync semantics; the invoker logs
+`enqueued 0 jobs` naming the document and the gate bounds the strand to
+its 1 h window. A stranded heal shows up in the dispatcher log (the gate
+names the case) and the invoker log (the failed/empty sync names the
+document).

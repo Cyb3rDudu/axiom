@@ -57,11 +57,14 @@ output; the original stays untouched.
 
 1. Preflight rejects the scan → repair case (`pagination_state:
    needs_ocr` in the analysis). **Automated path today = textless scans**:
-   the preflight does not yet detect broken word segmentation, so a
-   broken-text-layer case carries no marker until an operator seeds the
-   per-case `analysis.ocr` override (`{"ocr": {"mode": "force"}}`, set on
-   the repair case's analysis before queueing — the follow-up is teaching
-   the preflight the segmentation heuristic).
+   the preflight does not yet detect broken word segmentation (follow-up),
+   so a broken-text-layer case reaches the force mode through the operator
+   surface: `POST /api/repair/cases/{id}/requeue` with
+   `{"reason": "...", "analysis_patch": {"ocr": {"mode": "force",
+   "lang": "eng"}}}` — the requeue route merges the override into the case
+   analysis, which routes the invoker onto the OCR budget and `--ocr-mode
+   force`. (Space-less scripts — CJK and kin — are explicitly recognized
+   as INTACT and never force-classified.)
 2. The case **auto-queues** (#284 lifted the historical never-queue
    refusal) — the pilot books already sitting rejected in the DB can be
    queued manually via the repair API.
@@ -75,8 +78,11 @@ output; the original stays untouched.
 ## Host prerequisite
 
 `tesseract` (with `deu` + `eng` traineddata) and `ghostscript` on PATH,
-plus `ocrmypdf` in the fixer venv (bundled). The mothership nix config
-carries the OCR stack (`nix-conf/hosts/mothership/home.nix`).
+plus `ocrmypdf` in the fixer venv (bundled). The nix host config carries
+the OCR stack. **Ceiling note:** the tool's internal per-run bound is
+120 s + 6 s/page — beyond roughly 830 pages it trips before the outer
+class budget; such books need a higher `AXIOM_OCR_TIMEOUT_S` on the fixer
+env (and patience).
 
 ## Acceptance reference
 

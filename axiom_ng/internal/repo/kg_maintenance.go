@@ -94,6 +94,11 @@ func (r *Repo) KGMaintenanceActive(ctx context.Context) (bool, error) {
 		SELECT EXISTS(
 			SELECT 1 FROM pg_locks
 			WHERE locktype = 'advisory' AND objsubid = 1 AND granted = true
+				-- instance-wide view: scope to THIS database — a KG pass in a
+				-- scratch/test DB must never freeze production ingest claiming
+				-- (review #270: the detector matched advisory locks in ANY db)
+				AND database = (SELECT oid FROM pg_database
+				                WHERE datname = current_database())
 				AND classid::bigint = $1::bigint >> 32
 				AND objid::bigint = ($1::bigint & 4294967295))`,
 		kgMaintenanceLockKey).Scan(&active); err != nil {

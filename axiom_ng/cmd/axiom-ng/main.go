@@ -367,6 +367,9 @@ Modes (each runs ONCE and exits; never falls through to the server boot):
                                   intra-family self-loops (always applies)
   -consolidate-entities           merge same-form active entities; dry-run
                                   default, --apply mutates
+  -maintenance-retention          remove superseded snapshots + stale job
+                                  attempts (never the outcome truth); dry-run
+                                  default, --apply mutates (#281)
   (no mode flag)                  start the API server + optional dispatcher
 
 Exit codes:

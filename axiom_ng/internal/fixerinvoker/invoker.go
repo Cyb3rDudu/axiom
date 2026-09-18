@@ -288,7 +288,11 @@ func parseOCRAnalysis(item *repo.RepairItem) ocrAnalysis {
 	return a
 }
 
-// ocrCase reports whether this repair item is an OCR-class case (#284):
+// ocrCase reports whether this repair item is an OCR-class case (#284).
+// NOTE: a second, SQL-side predicate exists in RequeueStaleRepairCases
+// (analysis ? 'ocr' — deliberately a SUPERSET so the reaper is never
+// stricter than the budget selection; keep both in mind when touching
+// either):
 // the analysis carries the #254/#219 pagination_state marker (needs_ocr —
 // the dispatcher's preflight writes it) or a per-case ocr override.
 // Renaming the finding string (#283) cannot break this predicate: it keys
@@ -316,14 +320,30 @@ func tesseractLang(docLanguage string) string {
 		return "deu"
 	case "en", "eng", "en-us", "en-gb":
 		return "eng"
-	case "fr", "fra", "fre":
-		return "fra"
 	case "it", "ita":
 		return "ita"
 	case "es", "spa":
 		return "spa"
 	case "nl", "nld", "dut":
 		return "nld"
+	case "ru", "rus":
+		return "rus"
+	case "pl", "pol":
+		return "pol"
+	case "pt", "por":
+		return "por"
+	case "cs", "cze", "ces":
+		return "ces"
+	case "sv", "swe":
+		return "swe"
+	case "da", "dan":
+		return "dan"
+	case "fi", "fin":
+		return "fin"
+	case "no", "nor", "nob", "nno":
+		return "nor"
+	case "fr", "fra", "fre":
+		return "fra"
 	}
 	if len(l) == 3 {
 		return l
@@ -498,10 +518,39 @@ func (inv *Invoker) postHealSync(ctx context.Context, item *repo.RepairItem) {
 	}
 	sctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	res, err := inv.deps.Sync.Run(sctx, &sync.SyncOverride{Include: []string{item.DocumentID}})
+	// Bounded retry (#270 review: a transient Zotero outage or lock wait
+	// reproduced the original stranding). Three attempts, short backoff —
+	// the sync is idempotent, and the wave gate keeps the healed case
+	// visible until an enqueue lands (or the 1h window passes).
+	var res sync.Result
+	var err error
+	const attempts = 3
+	for i := 1; i <= attempts; i++ {
+		res, err = inv.deps.Sync.Run(sctx, &sync.SyncOverride{Include: []string{item.DocumentID}})
+		if err == nil {
+			break
+		}
+		inv.logger.Printf("case %s: post-heal sync attempt %d/%d FAILED (document %s): %v",
+			item.CaseID, i, attempts, item.DocumentID, err)
+		if i < attempts {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(15 * time.Second):
+			}
+		}
+	}
 	if err != nil {
-		inv.logger.Printf("case %s: post-heal sync FAILED (document %s) — healed attachment not enqueued; wave gate holds: %v",
-			item.CaseID, item.DocumentID, err)
+		inv.logger.Printf("case %s: post-heal sync FAILED after %d attempts (document %s) — healed attachment %s not enqueued; wave gate holds: %v",
+			item.CaseID, attempts, item.DocumentID, item.AttachmentKey, err)
+		return
+	}
+	if res.Enqueued == 0 {
+		// 0 is NOT success for this call: the entire point is the healed
+		// document's re-enqueue (selection boundaries can suppress it —
+		// loud, named, and the gate bounds the strand to its 1h window).
+		inv.logger.Printf("case %s: post-heal sync enqueued 0 jobs for document %s (selection boundary or unchanged hash) — healed attachment %s waits for the next sync; wave gate holds ≤1h",
+			item.CaseID, item.DocumentID, item.AttachmentKey)
 		return
 	}
 	inv.logger.Printf("case %s: post-heal sync ok — document %s enqueued %d job(s) (#282)",
@@ -558,6 +607,13 @@ func haltTerminalReason(out string) (string, bool) {
 		ground := firstLine(strings.TrimSpace(report.FinalStep.Reason))
 		lg := strings.ToLower(ground)
 		if ground != "" {
+			// #284 review: a TIMEOUT is transient (long rebuild under a
+			// short budget, slow OCR) — the case requeues while attempts
+			// remain instead of parking terminally. Not-terminal ("", false)
+			// routes into failOrRequeue.
+			if strings.Contains(lg, "timeout") {
+				return "", false
+			}
 			// unmeasurability is always a Stelle-1 statement: stelle2/3 are
 			// corroborating witnesses that never gate the diagnosis (truth
 			// ordering) — the prefix attributes the ground honestly.
@@ -570,6 +626,14 @@ func haltTerminalReason(out string) (string, bool) {
 				strings.Contains(lg, "unmessbar") ||
 				strings.Contains(lg, "unmeasurable") {
 				return "needs-evidence: stelle1_druckseite — " + ground, true
+			}
+			// #284: the scan_ocr_rebuild rule names missing OCR tooling
+			// explicitly as an evidence gap — park as recoverable, not as
+			// an unrepairable defect (installing the toolchain changes the
+			// evidence; the requeue route re-arms).
+			if strings.Contains(lg, "needs-evidence") ||
+				strings.Contains(lg, "ocr-werkzeuge fehlen") {
+				return "needs-evidence: " + ground, true
 			}
 			if strings.Contains(lg, "nicht erreichbar") ||
 				strings.Contains(lg, "nicht prüfbar") ||

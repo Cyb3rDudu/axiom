@@ -7,6 +7,7 @@
 # the agent's working directory, so this wrapper serializes per key.
 #
 # Usage: scripts/fix.sh <zotero-key> [--apply] [--format pdf|epub] [--source PATH]
+#                      [--lang <tesseract-code>] [--ocr-mode auto|force]
 #   without --apply the agent runs its forensic dry-run (default)
 #   --format routes the repair arm (#220): pdf (default, unchanged
 #     pdf_repair_agent path) or epub — the mechanical EPUB toolbelt in

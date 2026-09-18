@@ -1640,7 +1640,7 @@ func TestUnreadableSourceAutoQueues(t *testing.T) {
 // TestStaleRepairableCaseNotRecycledIntoQueue (#238 review fix): a stale
 // OPEN case must never be queued by a NEWER verdict of a different class.
 // A rejected 🔴 reparierbar case predating the auto-queue (manual-world
-// leftover) + a current 🔴 unpaginiert preflight for the same attachment:
+// leftover) + a current scan-class preflight for the same attachment:
 // the case must stay rejected — the current evidence belongs to a FRESH
 // case (the recycled open case is old evidence). Auto-queue is strictly
 // queue-AT-CREATION (created flag).
@@ -1665,8 +1665,9 @@ func TestStaleRepairableCaseNotRecycledIntoQueue(t *testing.T) {
 		t.Fatalf("seed stale case: %v", err)
 	}
 
-	// Current preflight verdict: scan class — must NOT queue the stale
-	// reparierbar case (recycled, not fresh).
+	// Current preflight verdict: scan class (legacy spelling exercises the
+	// compat admission) — must NOT queue the stale reparierbar case
+	// (recycled, not fresh).
 	fp := newFakeProcessor(t)
 	fp.preflightReport = &map[string]any{
 		"contract_version": "1.0",

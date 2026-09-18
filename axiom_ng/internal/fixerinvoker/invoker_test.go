@@ -349,3 +349,27 @@ func TestRunFixerOCRBudgetEnv(t *testing.T) {
 		t.Fatalf("non-OCR item must NOT carry the OCR budget, got %q", strings.TrimSpace(out))
 	}
 }
+
+// TestHaltTimeoutIsRetryable (#284 review): a timeout ground is TRANSIENT —
+// the case requeues instead of parking terminally (a long rebuild under a
+// short budget must not burn the terminal park).
+func TestHaltTimeoutIsRetryable(t *testing.T) {
+	out := `{"verdict": "halt", "final_step": {"reason": "OCR-Rebuild abgelehnt/fehlgeschlagen: ocrmypdf timeout nach 5100s (Budget überschritten)"}}`
+	if reason, terminal := haltTerminalReason(out); terminal {
+		t.Fatalf("timeout halt must be retryable, got terminal %q", reason)
+	}
+}
+
+// TestHaltMissingOCRToolingParksAsNeedsEvidence (#284 review): the rule's
+// missing-tooling ground parks recoverably — installing the toolchain
+// changes the evidence (requeue route re-arms).
+func TestHaltMissingOCRToolingParksAsNeedsEvidence(t *testing.T) {
+	out := `{"verdict": "halt", "final_step": {"reason": "OCR-Werkzeuge fehlen (tesseract/gs/ocrmypdf) — Textschicht nicht baubar, keine stille Lüge: needs-evidence, nichts geschrieben."}}`
+	reason, terminal := haltTerminalReason(out)
+	if !terminal {
+		t.Fatal("missing tooling must park (terminal), not requeue-endlessly")
+	}
+	if !strings.HasPrefix(reason, "needs-evidence:") {
+		t.Fatalf("missing tooling parks as needs-evidence, got %q", reason)
+	}
+}

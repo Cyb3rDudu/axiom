@@ -98,8 +98,9 @@ dispatchers **defer claiming ingest jobs** (log line: `kg gate: claim
 deferred — KG consolidation active`). The lock is the cross-process signal —
 it lives in the database, so dispatcher processes see a consolidation running
 in the RAG process. The deferral is claim-time only (jobs are never marked),
-bounded by the pass's own timeout, and opens itself the moment the pass
-commits — no operator action, nothing to clean up. This is the structural
+bounded by the standing consolidation hook's own timeout (operator CLI
+passes have no such bound — they run until done), and opens itself the
+moment the pass commits — no operator action, nothing to clean up. This is the structural
 lane coordination from the 2026-09-14 incident class (the clock-drift root
 cause itself was fixed separately); ingest waves after a sync survive an
 active KG run.

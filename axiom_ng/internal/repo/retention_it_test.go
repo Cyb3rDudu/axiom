@@ -9,6 +9,7 @@ package repo
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -54,6 +55,29 @@ func (e *retEnv) seedSnapshot(t *testing.T, active bool, jobID *string, chunks i
 			VALUES ($1::uuid, 'm', 3, '[1,2,3]')`, chunkID); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := e.pool.Exec(ctx, `
+			INSERT INTO processing_chunk_sparse_embeddings (chunk_id, model, values)
+			VALUES ($1::uuid, 'm', '{"k": 1.0}')`, chunkID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// entity + mention + one chunk relationship per snapshot (derived-count probes)
+	var entID string
+	if err := e.pool.QueryRow(ctx, `
+			INSERT INTO processing_entities (snapshot_id, ref, text, canonical_form, type)
+			VALUES ($1::uuid, 'e1', 'Testentität', 'Testentität', 'CONCEPT') RETURNING id::text`, id).Scan(&entID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx, `
+			INSERT INTO processing_entity_mentions (entity_id, chunk_id, start_char, end_char)
+			SELECT $1::uuid, c.id, 0, 4 FROM processing_chunks c WHERE c.snapshot_id=$2::uuid LIMIT 1`, entID, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx, `
+			INSERT INTO processing_chunk_relationships (snapshot_id, source_chunk_id, target_chunk_id, type)
+			SELECT $1::uuid, c1.id, c2.id, 'sequential' FROM processing_chunks c1, processing_chunks c2
+			WHERE c1.snapshot_id=$1::uuid AND c2.snapshot_id=$1::uuid AND c1.chunk_index=0 AND c2.chunk_index=1`, id); err != nil {
+		t.Fatal(err)
 	}
 	if pendingOutbox {
 		if _, err := e.pool.Exec(ctx, `
@@ -65,14 +89,20 @@ func (e *retEnv) seedSnapshot(t *testing.T, active bool, jobID *string, chunks i
 	return id
 }
 
-// seedJobForAttachment inserts a job row with a fixed age; returns its id.
-func (e *retEnv) seedJobForAttachment(t *testing.T, status string, age time.Duration) string {
+// seedJobForAttachment inserts a job row with a fixed age on the named
+// attachment (deterministic — LIMIT 1 made the fixture non-reproducible);
+// returns its id. updAge optionally pins updated_at (the outcome key).
+func (e *retEnv) seedJobForAttachment(t *testing.T, attKey, status string, age, updAge time.Duration) string {
 	t.Helper()
 	var id string
+	upd := "now()"
+	if updAge > 0 {
+		upd = "now() - make_interval(secs => " + fmt.Sprintf("%.0f", updAge.Seconds()) + ")"
+	}
 	if err := e.pool.QueryRow(context.Background(), `
-		INSERT INTO ingest_jobs (status, attachment_id, content_hash, enqueued_at, error_code, error_message)
-		SELECT $1, a.id, 'h-' || gen_random_uuid()::text, now() - make_interval(secs => $2), 'X', 'old attempt'
-		FROM zotero_attachments a LIMIT 1 RETURNING id::text`, status, age.Seconds()).Scan(&id); err != nil {
+		INSERT INTO ingest_jobs (status, attachment_id, content_hash, enqueued_at, updated_at, error_code, error_message)
+		SELECT $1, a.id, 'h-' || gen_random_uuid()::text, now() - make_interval(secs => $2), `+upd+`, 'X', 'old attempt'
+		FROM zotero_attachments a WHERE a.zotero_key = $3 RETURNING id::text`, status, age.Seconds(), attKey).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -93,21 +123,31 @@ func TestRetentionIT(t *testing.T) {
 
 	// ── fixture: one document + two attachments (generations) ──────────
 	docID, _ := e.seed(t, seedSpec{sourceBaseURL: "https://zotero.ret", libraryID: "lib-ret",
-		docKey: "RETDOC", attKey: "RETATT1", contentHash: nil}, "completed", 1)
+		docKey: "RETDOC", attKey: "RETATT1", contentHash: nil, preferred: true}, "completed", 1)
 	_ = docID
 
-	// latest job (recent) + a STALE attempt on the same document: the
-	// stale one is prunable (older than age, not latest, no repair link)
-	latestJob := e.seedJobForAttachment(t, "completed", time.Hour)
-	e.seedJobForAttachment(t, "failed", 20*24*time.Hour)
+	// deterministic layout on RETATT1 (preferred):
+	//   latest  — completed, 1h young (age filter keeps it anyway)
+	//   stale   — failed, 20d: THE prunable row (newer sibling exists, not
+	//             the preferred-newest, no repair link, no active snapshot)
+	//   pending — non-terminal, never pruned
+	//   producer— produced the active snapshot, never pruned (old updated_at
+	//             so it is NOT the preferred-newest — proves the guards are
+	//             independent)
+	//   repA    — reviewer repro A (below)
+	latestJob := e.seedJobForAttachment(t, "RETATT1", "completed", time.Hour, 0)
+	staleJob := e.seedJobForAttachment(t, "RETATT1", "failed", 20*24*time.Hour, 20*24*time.Hour)
+	_ = staleJob // asserted via the total prunable count + survival list
+	pendingJob := e.seedJobForAttachment(t, "RETATT1", "pending", 20*24*time.Hour, 0)
+	producerJob := e.seedJobForAttachment(t, "RETATT1", "completed", 20*24*time.Hour, 25*24*time.Hour)
 
 	// repair-linked stale job (different attachment of the same doc): NEVER
 	att2 := e.seedAttachmentIfAbsent(t, "RETATT2")
-	repairJob := e.seedJobForAttachment(t, "skipped", 20*24*time.Hour)
-	if _, err := e.pool.Exec(ctx, `
-		UPDATE ingest_jobs SET attachment_id = $1::uuid WHERE id = $2`, att2, repairJob); err != nil {
-		t.Fatal(err)
-	}
+	repairJob := e.seedJobForAttachment(t, "RETATT2", "skipped", 20*24*time.Hour, 0)
+	// newer-enqueued sibling on the NON-preferred attachment (drives the
+	// sibling axis for repro A without touching RETATT1's outcome key)
+	sib := e.seedJobForAttachment(t, "RETATT2", "completed", time.Hour, 0)
+	_ = sib // young sibling; covered by total counts
 	if _, err := e.pool.Exec(ctx, `
 		INSERT INTO repair_cases (attachment_id, document_id, status, suspicion_class, analysis)
 		VALUES ($1::uuid, NULL, 'healed', '🔴 reparierbar', '{}')`, att2); err != nil {
@@ -125,8 +165,8 @@ func TestRetentionIT(t *testing.T) {
 		d AS (INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title, creators, publication_year)
 			SELECT id, 'RETDOC2', 1, 'book', 'Retention Old Latest', '[{"first":"A","last":"Autor"}]', 2024 FROM s RETURNING id),
 		a AS (INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
-			parent_zotero_key, link_mode, content_type, filename, local_path)
-			SELECT s.id, d.id, 'RETATT3', 1, 'RETDOC2', 'imported_file', 'application/pdf', 'x.pdf', '/tmp/x.pdf'
+			parent_zotero_key, link_mode, content_type, filename, local_path, preferred)
+			SELECT s.id, d.id, 'RETATT3', 1, 'RETDOC2', 'imported_file', 'application/pdf', 'x.pdf', '/tmp/x.pdf', true
 			FROM s, d RETURNING id)
 		INSERT INTO ingest_jobs (status, attachment_id, content_hash, enqueued_at)
 		SELECT 'completed', a.id, 'old-latest-hash', now() - interval '20 days' FROM a
@@ -134,21 +174,55 @@ func TestRetentionIT(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// pending job (never pruned) + active-snapshot producer (never pruned)
-	pendingJob := e.seedJobForAttachment(t, "pending", 20*24*time.Hour)
-	producerJob := e.seedJobForAttachment(t, "completed", 20*24*time.Hour)
+	// ── reviewer repro A (own document RETDOC5/RETATT5 preferred +
+	// RETATT6 non-preferred): the preferred attachment's OLD completed job
+	// (updated 5h — its newest by updated_at) with a newer-enqueued sibling
+	// on the NON-preferred attachment. The old keep rule (enqueued_at
+	// across all attachments) pruned exactly this row → the document's
+	// outcome flipped completed → pending/never-enqueued. The outcome-key
+	// guard must keep it. (Own document: young jobs on a shared attachment
+	// would outrank the repro row on the outcome key.)
+	_ = e.seedDocWithAttachment(t, "RETDOC5", "RETATT5")
+	_ = e.seedAttachmentForDoc(t, "RETDOC5", "RETATT6", false)
+	repA := e.seedJobForAttachment(t, "RETATT5", "completed", 20*24*time.Hour, 5*time.Hour)
+	_ = e.seedJobForAttachment(t, "RETATT6", "completed", time.Hour, 0) // the newer-enqueued sibling
+
+	// ── reviewer repro B (own document RETDOC3/RETATT4, preferred):
+	// updated_at/enqueued_at inversion — invOLD completed (enq 20d, upd 1h)
+	// vs invNEW failed (enq 19d, upd 2h). Outcome reads invOLD (updated_at
+	// newest); it must survive even though invNEW is the newer-enqueued
+	// sibling.
+	_ = e.seedDocWithAttachment(t, "RETDOC3", "RETATT4")
+	repB := e.seedJobForAttachment(t, "RETATT4", "completed", 20*24*time.Hour, time.Hour)
+	invNew := e.seedJobForAttachment(t, "RETATT4", "failed", 19*24*time.Hour, 2*time.Hour)
+	_ = invNew
 
 	// snapshots: active (kept), superseded with done outbox (removed),
-	// superseded with PENDING outbox (kept — the OS delete must drain)
+	// superseded with PENDING outbox (kept — the OS delete must drain),
+	// superseded with FAILED outbox (kept — recoverable delete-op; review
+	// mutation pin: IN ('pending','failed') -> IN ('pending') must go red)
 	activeSnap := e.seedSnapshot(t, true, &producerJob, 2, false)
 	_ = activeSnap
 	supSnap := e.seedSnapshot(t, false, nil, 3, false)
 	pendSnap := e.seedSnapshot(t, false, nil, 2, true)
+	failSnap := e.seedSnapshot(t, false, nil, 1, false)
+	if _, err := e.pool.Exec(ctx, `
+		INSERT INTO opensearch_outbox (snapshot_id, operation, payload, status, last_error)
+		VALUES ($1::uuid, 'delete', '{}', 'failed', 'os down (IT)')`, failSnap); err != nil {
+		t.Fatal(err)
+	}
 	// drained (done) outbox row on the DELETABLE snapshot — the cascade
 	// claim ("plus their drained outbox rows") gets its pin here
 	if _, err := e.pool.Exec(ctx, `
 		INSERT INTO opensearch_outbox (snapshot_id, operation, payload, status)
 		VALUES ($1::uuid, 'index', '{}', 'done')`, supSnap); err != nil {
+		t.Fatal(err)
+	}
+	// artifact ROW with a durable storage_path — ApplyRetention must hand
+	// the path to the caller for the post-commit byte unlink (#270 review)
+	if _, err := e.pool.Exec(ctx, `
+		INSERT INTO processing_artifacts (snapshot_id, ref, kind, media_type, sha256, size_bytes, storage_path)
+		VALUES ($1::uuid, 'fig1', 'image', 'image/png', 'x', 1, '/tmp/retention-artifact-probe.png')`, supSnap); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,22 +234,33 @@ func TestRetentionIT(t *testing.T) {
 		t.Fatal(err)
 	}
 	if plan.Snapshots.Remove != 1 {
-		t.Fatalf("snapshots to remove = %d, want 1 (only the pending-outbox-free superseded one)", plan.Snapshots.Remove)
+		t.Fatalf("snapshots to remove = %d, want 1 (only the outbox-free superseded one)", plan.Snapshots.Remove)
 	}
-	if plan.Snapshots.KeepOutboxHeld != 1 {
-		t.Fatalf("outbox-held keeps = %d, want 1", plan.Snapshots.KeepOutboxHeld)
+	if plan.Snapshots.KeepOutboxHeld != 2 {
+		t.Fatalf("outbox-held keeps = %d, want 2 (pending + failed)", plan.Snapshots.KeepOutboxHeld)
 	}
 	if plan.Snapshots.Chunks != 3 || plan.Snapshots.DenseEmbeddings != 3 {
 		t.Fatalf("derived removal counts = chunks %d / dense %d, want 3/3", plan.Snapshots.Chunks, plan.Snapshots.DenseEmbeddings)
 	}
+	if plan.Snapshots.Artifacts != 1 {
+		t.Fatalf("plan must count the artifact row for removal, got %d", plan.Snapshots.Artifacts)
+	}
+	if plan.Snapshots.SparseEmbeddings != 3 || plan.Snapshots.Entities != 1 ||
+		plan.Snapshots.EntityMentions != 1 || plan.Snapshots.ChunkRelationships != 1 {
+		t.Fatalf("derived removal counts: sparse=%d entities=%d mentions=%d chunkrels=%d, want 3/1/1/1",
+			plan.Snapshots.SparseEmbeddings, plan.Snapshots.Entities, plan.Snapshots.EntityMentions, plan.Snapshots.ChunkRelationships)
+	}
 	if plan.Jobs.Remove != 1 {
-		t.Fatalf("jobs to remove = %d, want 1 (only the stale non-latest unlinked attempt)", plan.Jobs.Remove)
+		t.Fatalf("jobs to remove = %d, want 1 (only the stale row)", plan.Jobs.Remove)
 	}
-	if plan.Jobs.KeepLatest != 1 {
-		t.Fatalf("keep-latest count = %d, want 1 (the old document-latest job)", plan.Jobs.KeepLatest)
+	// outcome-truth keeps: oldLatest, repA, repB (the preferred attachments'
+	// newest-by-updated_at jobs); latestJob/producerJob are age-young and
+	// not counted here
+	if plan.Jobs.KeepLatest != 3 {
+		t.Fatalf("outcome-truth keep count = %d, want 3 (oldLatest, repA, repB)", plan.Jobs.KeepLatest)
 	}
-	if n := e.count(t, `SELECT count(*) FROM ingest_jobs`); n != 7 {
-		t.Fatalf("dry-run must not delete: jobs = %d, want 7", n)
+	if n := e.count(t, `SELECT count(*) FROM ingest_jobs`); n != 12 {
+		t.Fatalf("dry-run must not delete: jobs = %d, want 12", n)
 	}
 
 	// ── apply ────────────────────────────────────────────────────────────
@@ -186,8 +271,14 @@ func TestRetentionIT(t *testing.T) {
 	if rem.Snapshots != 1 || rem.Jobs != 1 {
 		t.Fatalf("removals = %d/%d, want 1/1", rem.Snapshots, rem.Jobs)
 	}
-	if n := e.count(t, `SELECT count(*) FROM processing_snapshots`); n != 2 {
-		t.Fatalf("snapshots left = %d, want 2 (active + pending-outbox)", n)
+	if len(rem.ArtifactPaths) != 1 || rem.ArtifactPaths[0] != "/tmp/retention-artifact-probe.png" {
+		t.Fatalf("ApplyRetention must return artifact paths for the post-commit unlink, got %v", rem.ArtifactPaths)
+	}
+	if n := e.count(t, `SELECT count(*) FROM processing_snapshots`); n != 3 {
+		t.Fatalf("snapshots left = %d, want 3 (active + pending-outbox + failed-outbox)", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM processing_snapshots WHERE id=$1::uuid`, failSnap); n != 1 {
+		t.Fatalf("failed-outbox snapshot must survive (recoverable delete-op), got %d", n)
 	}
 	if n := e.count(t, `SELECT count(*) FROM processing_chunks c
 		JOIN processing_snapshots s ON s.id = c.snapshot_id WHERE s.id = $1::uuid`, supSnap); n != 0 {
@@ -197,10 +288,10 @@ func TestRetentionIT(t *testing.T) {
 		JOIN processing_snapshots s ON s.id = c.snapshot_id WHERE s.id = $1::uuid`, pendSnap); n != 2 {
 		t.Fatalf("pending-outbox snapshot keeps its chunks, got %d", n)
 	}
-	if n := e.count(t, `SELECT count(*) FROM ingest_jobs`); n != 6 {
-		t.Fatalf("jobs left = %d, want 6 (seed-job, latest, repair-linked, pending, producer, old-latest)", n)
+	if n := e.count(t, `SELECT count(*) FROM ingest_jobs`); n != 11 {
+		t.Fatalf("jobs left = %d, want 11 (all but the stale row)", n)
 	}
-	for _, keep := range []string{latestJob, repairJob, pendingJob, producerJob, oldLatest} {
+	for _, keep := range []string{latestJob, repairJob, pendingJob, producerJob, oldLatest, repA, repB} {
 		if n := e.count(t, `SELECT count(*) FROM ingest_jobs WHERE id=$1::uuid`, keep); n != 1 {
 			t.Fatalf("never-delete job %s was pruned", keep)
 		}
@@ -209,19 +300,6 @@ func TestRetentionIT(t *testing.T) {
 	if n := e.count(t, `SELECT count(*) FROM opensearch_outbox WHERE snapshot_id=$1::uuid`, supSnap); n != 0 {
 		t.Fatalf("done outbox rows must cascade with the deleted snapshot, got %d", n)
 	}
-
-	// ── outcome truth: latest job per document is untouched (no flip) ────
-	var latestStatus string
-	if err := e.pool.QueryRow(ctx, `
-		SELECT j.status FROM ingest_jobs j
-		JOIN zotero_attachments a ON a.id = j.attachment_id
-		WHERE j.id = $1::uuid`, latestJob).Scan(&latestStatus); err != nil {
-		t.Fatal(err)
-	}
-	if latestStatus != "completed" {
-		t.Fatalf("latest job flipped to %q — outcome truth must be stable", latestStatus)
-	}
-
 	// ── idempotence: second run reports zero removals ───────────────────
 	plan2, err := e.rep.RetentionPlan(ctx, age)
 	if err != nil {
@@ -249,6 +327,40 @@ func (e *retEnv) seedAttachmentIfAbsent(t *testing.T, key string) string {
 		SELECT source_id, document_id, $1, 1, 'RETDOC', 'imported_file', 'application/pdf', 'x.pdf', '/tmp/x.pdf'
 		FROM zotero_attachments WHERE zotero_key = 'RETATT1'
 		RETURNING id::text`, key).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// seedDocWithAttachment creates a minimal source/document/preferred-attachment
+// fixture and returns the attachment id.
+func (e *retEnv) seedDocWithAttachment(t *testing.T, docKey, attKey string) string {
+	t.Helper()
+	var attID string
+	if err := e.pool.QueryRow(context.Background(), `
+		WITH s AS (INSERT INTO zotero_sources (base_url, library_id, server_id)
+			VALUES ('https://zotero.' || $1, 'lib-' || $1, 'srv-' || $1) RETURNING id),
+		d AS (INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
+			SELECT id, $1, 1, 'book', 'Retention ' || $1 FROM s RETURNING id)
+		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+			parent_zotero_key, link_mode, content_type, filename, local_path, preferred)
+		SELECT s.id, d.id, $2, 1, $1, 'imported_file', 'application/pdf', 'x.pdf', '/tmp/x.pdf', true
+		FROM s, d RETURNING id::text`, docKey, attKey).Scan(&attID); err != nil {
+		t.Fatal(err)
+	}
+	return attID
+}
+
+// seedAttachmentForDoc adds another attachment under an existing document
+// (by document zotero_key), preferred flag optional.
+func (e *retEnv) seedAttachmentForDoc(t *testing.T, docKey, attKey string, preferred bool) string {
+	t.Helper()
+	var id string
+	if err := e.pool.QueryRow(context.Background(), `
+		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+			parent_zotero_key, link_mode, content_type, filename, local_path, preferred)
+		SELECT source_id, id, $2, 1, $1, 'imported_file', 'application/pdf', 'x.pdf', '/tmp/x.pdf', $3
+		FROM zotero_documents WHERE zotero_key = $1 RETURNING id::text`, docKey, attKey, preferred).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id

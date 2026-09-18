@@ -15,7 +15,10 @@ package repo
 //  3. derived outcome numbers alarm over stale attachment states.
 //
 // Never-delete list (pinned by IT):
-//   - the LATEST job per document (it IS the outcome truth);
+//   - the OUTCOME-TRUTH job: the newest job row (updated_at DESC, id DESC
+//     — the selection read model's exact key) of the PREFERRED,
+//     non-deleted attachment, plus every document's newest job as defense
+//     in depth — a prune can never flip a document's derived outcome;
 //   - every job whose attachment has ANY repair case (heal forensics);
 //   - every job that produced an ACTIVE snapshot;
 //   - every non-terminal job (pending/claimed/processing);
@@ -80,13 +83,22 @@ const supersededSnapshotGuard = `NOT s.active
 const supersededSnapshotSQL = "\n\tFROM processing_snapshots s\n\tWHERE " + supersededSnapshotGuard
 
 // prunableJobSQL is the candidate set: terminal, older than the retention
-// age, NOT the document's latest job (a strictly NEWER sibling exists),
-// NOT repair-linked, NOT producing an active snapshot.
+// age, and NOT the outcome truth. The outcome truth is the NEWEST job row
+// (updated_at DESC, id DESC — exactly the selection read model's lateral
+// join) of the PREFERRED, non-deleted attachment; pruning any other row
+// cannot flip a document's derived outcome. A document-level newest-
+// sibling guard (strictly newer job on any attachment of the document)
+// stays as defense in depth.
 const prunableJobSQL = `
 	FROM ingest_jobs j
 	JOIN zotero_attachments a ON a.id = j.attachment_id
 	WHERE j.status IN ('completed','failed','cancelled','skipped')
 	  AND j.enqueued_at < now() - make_interval(secs => $1)
+	  AND NOT (
+			a.preferred AND NOT a.deleted
+			AND NOT EXISTS (SELECT 1 FROM ingest_jobs j2
+			                WHERE j2.attachment_id = a.id
+			                  AND (j2.updated_at, j2.id) > (j.updated_at, j.id)))
 	  AND EXISTS (SELECT 1 FROM ingest_jobs j2
 	              JOIN zotero_attachments a2 ON a2.id = j2.attachment_id
 	              WHERE a2.document_id = a.document_id
@@ -163,10 +175,10 @@ func (r *Repo) RetentionPlan(ctx context.Context, jobMinAge time.Duration) (*Ret
 	JOIN zotero_attachments a ON a.id = j.attachment_id
 	WHERE j.status IN ('completed','failed','cancelled','skipped')
 	  AND j.enqueued_at < now() - make_interval(secs => $1)
+	  AND a.preferred AND NOT a.deleted
 	  AND NOT EXISTS (SELECT 1 FROM ingest_jobs j2
-	                  JOIN zotero_attachments a2 ON a2.id = j2.attachment_id
-	                  WHERE a2.document_id = a.document_id
-	                    AND j2.enqueued_at > j.enqueued_at)
+	                  WHERE j2.attachment_id = a.id
+	                    AND (j2.updated_at, j2.id) > (j.updated_at, j.id))
 	  AND NOT EXISTS (SELECT 1 FROM repair_cases rc WHERE rc.attachment_id = j.attachment_id)
 	  AND NOT EXISTS (SELECT 1 FROM processing_snapshots s
 	                  WHERE s.ingest_job_id = j.id AND s.active)`},
@@ -196,6 +208,14 @@ func (r *Repo) RetentionPlan(ctx context.Context, jobMinAge time.Duration) (*Ret
 type RetentionRemovals struct {
 	Snapshots int `json:"snapshots_removed"`
 	Jobs      int `json:"jobs_removed"`
+	// ArtifactPaths are the durable-artifact files of the deleted
+	// snapshots (#270 review: rows cascade but the BYTES under
+	// AXIOM_ARTIFACT_ROOT would stay forever). Collected INSIDE the
+	// transaction; the caller unlinks them AFTER the commit — a missing
+	// file must never roll back row deletion (orphaned rows are the worse
+	// evil), and a failed unlink leaves an orphaned file, which the next
+	// run re-reports as gone-with-its-snapshot.
+	ArtifactPaths []string `json:"artifact_paths"`
 }
 
 // ApplyRetention executes the plan in ONE transaction: superseded snapshots
@@ -216,6 +236,27 @@ func (r *Repo) ApplyRetention(ctx context.Context, jobMinAge time.Duration) (*Re
 	}
 	defer tx.Rollback(ctx)
 	var snapN, jobN int
+	// collect artifact paths before the rows cascade away
+	var artifactPaths []string
+	rows, err := tx.Query(ctx, `
+		SELECT ar.storage_path FROM processing_artifacts ar
+		JOIN processing_snapshots s ON s.id = ar.snapshot_id
+		WHERE `+supersededSnapshotGuard)
+	if err != nil {
+		return nil, nil, fmt.Errorf("collect artifact paths: %w", err)
+	}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		artifactPaths = append(artifactPaths, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
 	tag, err := tx.Exec(ctx, `
 		DELETE FROM processing_snapshots s
 		WHERE `+supersededSnapshotGuard)
@@ -233,5 +274,5 @@ func (r *Repo) ApplyRetention(ctx context.Context, jobMinAge time.Duration) (*Re
 	if err := tx.Commit(ctx); err != nil {
 		return nil, nil, err
 	}
-	return &RetentionRemovals{Snapshots: snapN, Jobs: jobN}, plan, nil
+	return &RetentionRemovals{Snapshots: snapN, Jobs: jobN, ArtifactPaths: artifactPaths}, plan, nil
 }

@@ -95,7 +95,7 @@ nav:
               - Services & Releases: operations/services.md
               - Deployment: operations/deployment.md
               - KG Maintenance: operations/kg-maintenance.md
-          - Retention / GC Maintenance Run: operations/retention-maintenance.md
+              - Retention / GC Maintenance Run: operations/retention-maintenance.md
               - KG Relations Consolidation Runbook: operations/kg-relations-consolidation-runbook.md
               - Rebuild Wave Runbook: operations/rebuild-wave-runbook.md
               - Repair-Included Waves: operations/repair-included-waves.md

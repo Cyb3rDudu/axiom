@@ -243,5 +243,26 @@ def main() -> None:
     print("fixtures generiert nach", here)
 
 
+def ensure_storage() -> None:
+    """Nur die (ignorierten) Sandbox-Storage-Kopien auffrischen — die
+    Fixture-PDFs sind KOMMITTET und dürfen aus Testläufen heraus nie
+    regeneriert werden (sonst wird jeder Fresh-Checkout-Testlauf schmutzig;
+    Review #284)."""
+    here = HERE
+    (here / "storage").mkdir(parents=True, exist_ok=True)
+    for att, filename, src in (
+        ("AAAA1111", "gesund.pdf", "gesund.pdf"),
+        ("BBBB2222", "falsch.pdf", "falsche_labels.pdf"),
+        ("CCCC3333", "scan.pdf", "ohne_textschicht.pdf"),
+        ("DDDD4444", "scan_folios.pdf", "scan_mit_folios.pdf"),
+        ("EEEE5555", "kaputt.pdf", "kaputte_textschicht.pdf"),
+    ):
+        if not (here / src).exists():
+            raise SystemExit(f"committete Fixture fehlt: {here / src} (checkout unvollständig?)")
+        att_dir = here / "storage" / att
+        att_dir.mkdir(parents=True, exist_ok=True)
+        (att_dir / filename).write_bytes((here / src).read_bytes())
+
+
 if __name__ == "__main__":
     main()

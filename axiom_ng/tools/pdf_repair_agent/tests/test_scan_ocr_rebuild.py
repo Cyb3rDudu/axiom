@@ -32,13 +32,14 @@ needs_ocr = pytest.mark.skipif(not HAS_OCR_BINS, reason="ocrmypdf/tesseract/gs f
 
 
 def _ensure():
-    # Storage-Kopien als Regenerations-Kriterium: die Fixture-PDFs sind
-    # committet, fixtures/storage/ aber absichtlich ignoriert (regenerierbar
-    # per .gitignore) — ein frischer Checkout hat die PDFs OHNE Storage.
+    # Storage-Kopien (ignoriert, regenerierbar) auffrischen — die Fixture-
+    # PDFs selbst sind KOMMITTET und werden aus Tests NIE regeneriert
+    # (Review #284: Fresh-Checkout-Testläufe dürfen den Baum nicht schmutzig
+    # machen).
     if not (FIX / "storage" / "DDDD4444" / "scan_folios.pdf").exists():
         from fixtures import generate_fixtures
 
-        generate_fixtures.main()
+        generate_fixtures.ensure_storage()
 
 
 def _fresh_run_dir(cfg, key):
@@ -278,3 +279,50 @@ def test_katalogregel_auto_diagnose_force_ohne_override():
     t = str(d[0].get_text())
     d.close()
     assert " " in t and len(t.split()) > 10  # Leerzeichen zurück
+
+
+def _cjk_font() -> str | None:
+    """Eine CJK-Font für die Sonde (fixe Kandidaten-Pfade); fehlt → Skip."""
+    for cand in (
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK.ttc",
+    ):
+        if Path(cand).exists():
+            return cand
+    return None
+
+
+def test_diagnose_verweigert_force_fuer_space_lose_schriften(tmp_path):
+    """Review-Major (Mutationssonde): intakter CJK-Textlayer trifft dieselben
+    Schwellen (space_ratio ~0, lange Wörter) wie die Reder-Klasse — die
+    Diagnose muss ihn ALS INTAKT erkennen (spaceless_script), sonst würde
+    --force-ocr --lang deu eine intakte fremde Schrift zerstören."""
+    font = _cjk_font()
+    if font is None:
+        pytest.skip("keine CJK-Font auf diesem System")
+    import pymupdf  # type: ignore[import-not-found]
+
+    W, H = pymupdf.paper_size("a4")
+    d = pymupdf.open()
+    p = d.new_page(width=W, height=H)
+    p.insert_font(fontname="cjk", fontfile=font)
+    p.insert_text((60, 120), "教育測定評価研究は重要である" * 3, fontsize=12, fontname="cjk")
+    p.insert_textbox(
+        (60, 160, W - 60, H - 80),
+        "日本語のテキスト層は正常である。教育測定評価研究。" * 4,
+        fontsize=11,
+        fontname="cjk",
+    )
+    d.save(tmp_path / "cjk.pdf")
+    d.close()
+
+    r = scan_ocr_rebuild.diagnose(tmp_path / "cjk.pdf")
+    assert r["text_layer"] is True
+    assert r["spaceless_script"] is True
+    assert r["broken_segmentation"] is False
+    assert r["mode"] is None  # intakt → fällt an die normale Klassifikation
+    # Gegenprobe: die Reder-Fixture (Latin, konkateniert) bleibt force
+    r2 = scan_ocr_rebuild.diagnose(FIX / "kaputte_textschicht.pdf")
+    assert r2["broken_segmentation"] is True and r2["mode"] == "force"

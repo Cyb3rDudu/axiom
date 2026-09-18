@@ -314,18 +314,23 @@ func (s *Server) handleRepairClaim(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRepairRequeue is the loop-guard reset route (#278): POST with a
-// JSON body {"reason": "…"} re-arms a parked case (failed/
-// blocked_for_dudu) — repair_attempts reset, case back to queued, reason
-// audited. For evidence conditions that changed under a parked case (new
-// fixer tooling, manual repair, newly supplied evidence) this replaces
-// DB surgery with one documented operator call. State conflicts (not
-// parked) answer 409 like claim.
+// JSON body {"reason": "…", "analysis_patch": {…}} re-arms a parked case
+// (failed/blocked_for_dudu — and a rejected manual-track case since #284)
+// — repair_attempts reset, case back to queued, reason audited. For
+// evidence conditions that changed under a parked case (new fixer
+// tooling, manual repair, newly supplied evidence) this replaces DB
+// surgery with one documented operator call. analysis_patch (#284) is
+// the per-case OCR override surface: {"ocr": {"mode": "force",
+// "lang": "eng"}} routes the broken-text-layer class onto the force
+// rebuild with its own time budget. State conflicts answer 409 like
+// claim.
 func (s *Server) handleRepairRequeue(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Reason string `json:"reason"`
+		Reason        string          `json:"reason"`
+		AnalysisPatch json.RawMessage `json:"analysis_patch"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "body muss JSON {\"reason\": \"…\"} sein", http.StatusBadRequest)
+		http.Error(w, "body muss JSON {\"reason\": \"…\", \"analysis_patch\": {…}} sein", http.StatusBadRequest)
 		return
 	}
 	// blank reason is a client error, not a state conflict — check before
@@ -334,7 +339,11 @@ func (s *Server) handleRepairRequeue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "reason fehlt: geänderte Beweislage dokumentieren", http.StatusBadRequest)
 		return
 	}
-	if err := s.repairRepo.RequeueRepairCase(r.Context(), r.PathValue("id"), body.Reason); err != nil {
+	if len(body.AnalysisPatch) > 0 && (body.AnalysisPatch[0] != '{') {
+		http.Error(w, "analysis_patch muss ein JSON-Objekt sein", http.StatusBadRequest)
+		return
+	}
+	if err := s.repairRepo.RequeueRepairCase(r.Context(), r.PathValue("id"), body.Reason, body.AnalysisPatch); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

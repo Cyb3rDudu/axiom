@@ -239,6 +239,7 @@ func TestIT_ModeFlagsExitWithoutServerBoot(t *testing.T) {
 		"-bind-flexion-aliases",
 		"-repoint-alias-edges",
 		"-consolidate-entities",
+		"-maintenance-retention", // #281: same once-and-exit discipline
 	}
 	for _, mode := range modes {
 		// Both invocation shapes: the dry-run path and the --apply path each

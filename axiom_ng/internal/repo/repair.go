@@ -263,18 +263,28 @@ func (r *Repo) SubmitRepairVerdict(ctx context.Context, caseID string, plan json
 }
 
 // RequeueRepairCase is the loop-guard reset route (#278): re-arms a
-// PARKED case (failed/blocked_for_dudu) for a fresh attempt without DB
-// surgery. Evidence conditions can change under a parked case — new fixer
-// tooling (the #278 forensics completeness fix), a manual repair, or newly
-// available evidence. The operator decides and documents WHY (reason is
-// mandatory, lands in the audit trail); the route makes the decision
-// cheap and reversible: zotero_attachments.repair_attempts → 0, case →
-// queued, blocked_reason cleared. in_repair REFUSES (mid-flight cases are
-// never touched from outside — same nail as BlockRepairCase); healed
-// refuses too (nothing to redo — a new suspicion opens a new case).
-func (r *Repo) RequeueRepairCase(ctx context.Context, caseID, reason string) error {
+// PARKED case (failed/blocked_for_dudu) — and since #284 also a rejected
+// manual-track case — for a fresh attempt without DB surgery. Evidence
+// conditions can change under a parked case — new fixer tooling (the
+// #278 forensics completeness fix, the #284 OCR force mode), a manual
+// repair, or newly available evidence. The operator decides and
+// documents WHY (reason is mandatory, lands in the audit trail); the
+// route makes the decision cheap and reversible: zotero_attachments.
+// repair_attempts → 0, case → queued, blocked_reason cleared. in_repair
+// REFUSES (mid-flight cases are never touched from outside — same nail
+// as BlockRepairCase); healed refuses too (nothing to redo — a new
+// suspicion opens a new case).
+// analysisPatch (#284 review): an optional JSON object MERGED into the
+// case's analysis (jsonb ||) — the per-case override surface for OCR
+// routing (e.g. {"ocr": {"mode": "force", "lang": "eng"}} for the
+// broken-text-layer class: the invoker keys its budget and --ocr-mode
+// on exactly these fields). The patch is audited with the reason.
+func (r *Repo) RequeueRepairCase(ctx context.Context, caseID, reason string, analysisPatch json.RawMessage) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("requeue braucht einen Grund (geänderte Beweislage dokumentieren)")
+	}
+	if len(analysisPatch) == 0 {
+		analysisPatch = json.RawMessage(`{}`)
 	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -291,18 +301,20 @@ func (r *Repo) RequeueRepairCase(ctx context.Context, caseID, reason string) err
 		return fmt.Errorf("case %s: attachment nicht gefunden", caseID)
 	}
 	tag, err = tx.Exec(ctx, `
-		UPDATE repair_cases SET status='queued', blocked_reason='', updated_at=now()
-		WHERE id=$1 AND status IN ('failed','blocked_for_dudu')`, caseID)
+		UPDATE repair_cases SET status='queued', blocked_reason='',
+		    analysis = COALESCE(analysis, '{}'::jsonb) || $2::jsonb,
+		    updated_at=now()
+		WHERE id=$1 AND status IN ('failed','blocked_for_dudu','rejected')`, caseID, analysisPatch)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("case %s nicht geparkt (failed/blocked_for_dudu)", caseID)
+		return fmt.Errorf("case %s nicht geparkt (failed/blocked_for_dudu/rejected)", caseID)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO zotero_write_audit (case_id, attachment_id, action, detail)
 		SELECT $1::uuid, attachment_id, 'repair-requeue', $2::jsonb
-		FROM repair_cases WHERE id=$1`, caseID, mustMarshal(map[string]any{"reason": reason})); err != nil {
+		FROM repair_cases WHERE id=$1`, caseID, mustMarshal(map[string]any{"reason": reason, "analysis_patch": json.RawMessage(analysisPatch)})); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

@@ -60,6 +60,11 @@ func TestWaveGateDefersClaimWhileRepairOpen(t *testing.T) {
 	h := openDispatchDB(t)
 	h.truncateFixtures(t)
 	jobID := h.seedJob(t, "W1", 3)
+	// a job on a SECOND, unrelated document: the gate is INSTANCE-wide by
+	// design (the owner-specified wave semantics serialize the whole
+	// queue, not per document) — pinning the scope so a per-document
+	// narrowing cannot pass silently.
+	otherJob := h.seedJob(t, "W1B", 3)
 
 	// an OPEN repair case (queued heal) holds the gate
 	h.seedRepairCaseForJob(t, jobID, "queued")
@@ -72,6 +77,9 @@ func TestWaveGateDefersClaimWhileRepairOpen(t *testing.T) {
 
 	if got := h.jobStatus(t, jobID); got != "pending" {
 		t.Fatalf("status = %q, want pending — the wave gate must defer the claim while a heal is queued (#282)", got)
+	}
+	if got := h.jobStatus(t, otherJob); got != "pending" {
+		t.Fatalf("second document's status = %q, want pending — the gate scope is instance-wide (owner semantics)", got)
 	}
 	held, reason, err := h.rep.WaveRepairGate(context.Background())
 	if err != nil || !held {

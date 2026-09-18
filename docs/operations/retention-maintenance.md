@@ -28,7 +28,10 @@ The run is **idempotent**: a second run reports zero removals.
 
 1. **Superseded snapshots** (not the active one) — their chunks, dense +
    sparse embeddings, entities, mentions, relationships and artifacts
-   cascade with them, plus their drained (`done`) outbox rows.
+   cascade with them, plus their drained (`done`) outbox rows. The
+   durable artifact FILES under `AXIOM_ARTIFACT_ROOT` are unlinked after
+   the commit (a failed unlink leaves an orphaned file, reported — never a
+   dangling row).
 2. **Stale terminal job attempts** (`completed`/`failed`/`cancelled`/
    `skipped`) older than the retention age (default 14 d) that are not the
    document's latest job.

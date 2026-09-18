@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -230,13 +231,13 @@ func TestRepairRequeueIT(t *testing.T) {
 	}
 
 	// Empty reason is refused — changed evidence conditions are documented.
-	if err := lr.rep.RequeueRepairCase(ctx, caseID, "  "); err == nil {
+	if err := lr.rep.RequeueRepairCase(ctx, caseID, "  ", nil); err == nil {
 		t.Fatal("requeue without reason must be refused")
 	}
 
 	// Requeue re-arms: guard counter 0, case queued.
 	if err := lr.rep.RequeueRepairCase(ctx, caseID,
-		"#278 forensics fix — Karte vollständig, retry lohnt"); err != nil {
+		"#278 forensics fix — Karte vollständig, retry lohnt", nil); err != nil {
 		t.Fatalf("requeue: %v", err)
 	}
 	var status, reason string
@@ -275,7 +276,40 @@ func TestRepairRequeueIT(t *testing.T) {
 	}
 
 	// in_repair (mid-flight) refuses — the same nail as BlockRepairCase.
-	if err := lr.rep.RequeueRepairCase(ctx, caseID, "nochmal"); err == nil {
+	if err := lr.rep.RequeueRepairCase(ctx, caseID, "nochmal", nil); err == nil {
 		t.Fatal("requeue must refuse in_repair")
+	}
+
+	// #284 review: the analysis_patch surface — a parked case re-armed with
+	// the OCR override carries it in analysis (the invoker keys budget and
+	// --ocr-mode on exactly these fields), and the patch is audited.
+	caseID2 := seedRepairCase(t, lr, "ATT-RQ2", 0, false)
+	if _, err := lr.pool.Exec(ctx,
+		`UPDATE repair_cases SET status='failed', blocked_reason='no-healable-defect-evidenced: IT' WHERE id=$1`, caseID2); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.rep.RequeueRepairCase(ctx, caseID2, "force-Modus für kaputte Textschicht (#284)",
+		json.RawMessage(`{"ocr": {"mode": "force", "lang": "eng"}}`)); err != nil {
+		t.Fatalf("requeue with patch: %v", err)
+	}
+	var analysis string
+	if err := lr.pool.QueryRow(ctx, `SELECT analysis::text FROM repair_cases WHERE id=$1`, caseID2).Scan(&analysis); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(analysis, `"mode"`) || !strings.Contains(analysis, `"force"`) {
+		t.Fatalf("analysis_patch must merge into the case analysis, got %s", analysis)
+	}
+
+	// #284: a REJECTED manual-track case is re-armable too (the operator
+	// path for a broken-text-layer case that never auto-queued).
+	caseID3 := seedRepairCase(t, lr, "ATT-RQ3", 0, false)
+	if _, err := lr.pool.Exec(ctx, `UPDATE repair_cases SET status='rejected' WHERE id=$1`, caseID3); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.rep.RequeueRepairCase(ctx, caseID3, "manuell gereiht", json.RawMessage(`{"ocr":{"mode":"force"}}`)); err != nil {
+		t.Fatalf("requeue from rejected must work since #284: %v", err)
+	}
+	if err := lr.rep.RequeueRepairCase(ctx, caseID3, "nochmal", nil); err == nil {
+		t.Fatal("requeue from queued (not parked) must refuse")
 	}
 }
