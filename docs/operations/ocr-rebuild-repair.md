@@ -94,6 +94,26 @@ output; the original stays untouched.
 5. The #282 post-heal auto-sync enqueues the healed attachment — the
    document processes end-to-end without operator action.
 
+### Abgebrochener Create-Lauf (Orphan-Guard, #285)
+
+Wenn der Upload nach dem Löschen des alten Items scheitert UND das
+Best-Effort-Cleanup ebenfalls (Zotero-Mint des Items ✓, Upload ✗), auditiert
+`repair.Apply` den Orphan-Key maschinenlesbar als `create_attachment_orphan`
+— für ALLE Pfade (Auto-Verdict, Fixer-Invoker, manuelles Custody). Die
+Requeue-Route verweigert dann den blinden Re-Run (409, nennt den Key): erst
+ das LEERE Anhang-Item in Zotero löschen, dann mit Ack erneut requeued:
+
+```bash
+curl -sS -X POST http://<host>:<port>/api/repair/cases/<id>/requeue \
+  -H 'content-type: application/json' \
+  -d '{"reason": "orphan gelöscht", "orphan_resolved": "<KEY>"}'
+```
+
+Die Bestätigung landet als `create_attachment_orphan_resolved` in derselben
+Audit-Tabelle — ein Re-Run mintet damit nie ein zweites leeres Geschwister.
+Das manuelle Custody-Werkzeug trägt den Key stattdessen im Protokoll-Satz
+(409-Guard, siehe Custody-Runbook).
+
 ## Prerequisites — bundled (#286)
 
 The fixer artifact ships the entire OCR toolchain: `ocrmypdf` (venv),

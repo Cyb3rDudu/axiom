@@ -5,6 +5,7 @@ package repair
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -425,18 +426,32 @@ func TestManualCustodyOrphanKeyReachesRecord(t *testing.T) {
 	}
 }
 
-// TestManualCustodyOrphanKeyRidesErrorWhenPersistFails — pins the wrap
-// branch (review follow-up W1): even when the custody record write ITSELF
-// fails, the orphan key must not be lost — the field is already set on the
-// in-memory record AND the key rides the returned error text, so the 502
-// body names it. Fault injection: Root points at a regular FILE, so
-// saveManualRecord's MkdirAll dies with ENOTDIR inside persist. The unit
-// under test is CreateAttachmentWithFile directly — via Apply the run would
-// already fail at quarantine and never reach the create.
-func TestManualCustodyOrphanKeyRidesErrorWhenPersistFails(t *testing.T) {
+// failOrphanAuditDeps fails AuditWrite ONLY for the orphan action — the
+// surgical fault injection for the wrap branch (a fully-broken record
+// root would fail-close at the quarantine audit before the create).
+type failOrphanAuditDeps struct{ *ManualDeps }
+
+func (f failOrphanAuditDeps) AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error {
+	if action == "create_attachment_orphan" {
+		return errors.New("ENOSPC: audit write failed")
+	}
+	return f.ManualDeps.AuditWrite(ctx, caseID, attachmentID, action, detail)
+}
+
+// TestApplyOrphanKeyRidesErrorWhenAuditFails — the wrap branch, lifted
+// to the shared seam (#285): even when the ORPHAN AUDIT WRITE ITSELF
+// fails, the orphan key must not be lost — it rides the returned error
+// text, so the operator (and the 502 body on the HTTP surfaces) sees it.
+// The successful-audit variant (key machine-readably on the record/audit)
+// is pinned by TestApplyOrphanKeyReachesAudit; this is the degraded path.
+// Fault injection: a ManualDeps whose Root points at a regular FILE, so
+// persist's MkdirAll dies with ENOTDIR inside AuditWrite. This is also
+// the auto-path seam pin: the lift lives in repair.Apply, so the verdict
+// auto-apply (liveRepairDeps) and the fixer invoker (liveDeps) share it.
+func TestApplyOrphanKeyRidesErrorWhenAuditFails(t *testing.T) {
 	root := t.TempDir()
-	notADir := filepath.Join(root, "notadir")
-	os.WriteFile(notADir, []byte("file, not a dir"), 0o644)
+	orig := filepath.Join(root, "orig.pdf")
+	os.WriteFile(orig, []byte("original"), 0o644)
 
 	fw := newFakeWrite("BROKEN1")
 	fw.failUpload = true // mint NEW1, upload dies, cleanup-delete 404s → (NEW1, err)
@@ -445,19 +460,65 @@ func TestManualCustodyOrphanKeyRidesErrorWhenPersistFails(t *testing.T) {
 
 	rec := &ManualRecord{AttachmentKey: "BROKEN1", DocumentKey: "P1",
 		Reason: "persist-fail test", ContentType: "application/pdf", CreatedAt: ManualNow()}
-	deps := &ManualDeps{Write: wc, Root: notADir, Record: rec, RunID: ManualRunID("BROKEN1")}
+	md := &ManualDeps{Write: wc, Root: root, Record: rec, RunID: ManualRunID("BROKEN1")}
 
-	key, err := deps.CreateAttachmentWithFile("P1", "T.pdf", "application/pdf", []byte("healed"))
+	_, err := Apply(context.Background(), failOrphanAuditDeps{md}, root, ApplyCase{
+		CaseID: "manual-BROKEN1", AttachmentKey: "BROKEN1", DocumentKey: "P1",
+		Title: "T", Year: 2020, SrcPath: orig, ContentType: "application/pdf",
+	}, []byte("healed"))
 	if err == nil {
 		t.Fatal("the upload failure must surface")
 	}
-	if key != "NEW1" {
-		t.Fatalf("the orphan key must still be returned, got %q", key)
+	if !strings.Contains(err.Error(), "NEW1") || !strings.Contains(err.Error(), "konnte nicht auditiert werden") {
+		t.Fatalf("the orphan key must ride the error text when the audit write fails: %v", err)
 	}
-	if !strings.Contains(err.Error(), "NEW1") || !strings.Contains(err.Error(), "konnte nicht protokolliert werden") {
-		t.Fatalf("the orphan key must ride the error text when the record write fails: %v", err)
+	if rec.Status != "failed" {
+		t.Fatalf("the run must still be marked failed, got %q", rec.Status)
 	}
-	if rec.NewAttachmentKey != "NEW1" {
-		t.Fatalf("the in-memory record must carry the key even when persist failed: %q", rec.NewAttachmentKey)
+}
+
+// TestApplyOrphanKeyReachesAudit — the #285 auto-path pin: the ambiguous
+// create (key, err) produces a machine-readable create_attachment_orphan
+// audit BEFORE the failure return. A recording ApplyDeps stands in for the
+// two auto surfaces (liveRepairDeps / fixerinvoker liveDeps — both are
+// pass-throughs onto the repo audit table, so what they forward is exactly
+// this call). ManualDeps runs the same seam so its record is covered by
+// TestManualCustodyOrphanKeyReachesRecord above.
+func TestApplyOrphanKeyReachesAudit(t *testing.T) {
+	root := t.TempDir()
+	orig := filepath.Join(root, "orig.pdf")
+	os.WriteFile(orig, []byte("original"), 0o644)
+
+	fw := newFakeWrite("BROKEN1")
+	fw.failUpload = true // mint NEW1, upload dies, cleanup-delete 404s → (NEW1, err)
+	srv := fw.server(t)
+	wc := zotero.NewWriteClient(srv.URL, "srv", "key")
+
+	rec := &ManualRecord{AttachmentKey: "BROKEN1", DocumentKey: "P1",
+		Reason: "orphan audit test", ContentType: "application/pdf", CreatedAt: ManualNow()}
+	deps := &ManualDeps{Write: wc, Root: root, Record: rec, RunID: ManualRunID("BROKEN1")}
+	_, err := Apply(context.Background(), deps, root, ApplyCase{
+		CaseID: "manual-BROKEN1", AttachmentKey: "BROKEN1", DocumentKey: "P1",
+		Title: "T", Year: 2020, SrcPath: orig, ContentType: "application/pdf",
+	}, []byte("healed"))
+	if err == nil {
+		t.Fatal("run must fail at the upload")
+	}
+	var orphanStep *ManualStep
+	for i := range rec.Steps {
+		if rec.Steps[i].Action == "create_attachment_orphan" {
+			orphanStep = &rec.Steps[i]
+		}
+	}
+	if orphanStep == nil {
+		t.Fatalf("the orphan audit must reach AuditWrite (the auto paths forward exactly this): %+v", rec.Steps)
+	}
+	if orphanStep.Detail["new_zotero_key"] != "NEW1" || orphanStep.Detail["filename"] == "" {
+		t.Fatalf("the orphan audit must carry key AND filename machine-readably: %+v", orphanStep.Detail)
+	}
+	// audit order: the orphan step precedes the failure record (the guard
+	// basis exists durably before the case is parked)
+	if last := rec.Steps[len(rec.Steps)-1].Action; last != "failed" {
+		t.Fatalf("last step must be the failure record, got %s", last)
 	}
 }

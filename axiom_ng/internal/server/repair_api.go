@@ -327,6 +327,7 @@ func (s *Server) handleRepairRequeue(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Reason        string          `json:"reason"`
 		AnalysisPatch json.RawMessage `json:"analysis_patch"`
+		OrphanAck     string          `json:"orphan_resolved"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "body muss JSON {\"reason\": \"…\", \"analysis_patch\": {…}} sein", http.StatusBadRequest)
@@ -342,7 +343,10 @@ func (s *Server) handleRepairRequeue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "analysis_patch muss ein JSON-Objekt sein", http.StatusBadRequest)
 		return
 	}
-	if err := s.repairRepo.RequeueRepairCase(r.Context(), r.PathValue("id"), body.Reason, body.AnalysisPatch); err != nil {
+	// #285: the ambiguous-create ack — orphan_resolved names the orphan key
+	// the operator deleted in Zotero (the refusal text carries it). Empty is
+	// fine for every case without an unresolved orphan.
+	if err := s.repairRepo.RequeueRepairCaseWithOrphanAck(r.Context(), r.PathValue("id"), body.Reason, body.AnalysisPatch, strings.TrimSpace(body.OrphanAck)); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

@@ -131,7 +131,10 @@ func (d *ManualDeps) persist(action string, detail map[string]any) error {
 			d.Record.QuarantinePath = p
 			d.Record.Status = "in_progress"
 		}
-	case "create_attachment":
+	case "create_attachment", "create_attachment_orphan":
+		// #285: the orphan lift happens in repair.Apply on the shared
+		// ApplyDeps seam — this persist is how the manual record receives
+		// it (the auto paths audit into zotero_write_audit instead).
 		if k, ok := detail["new_zotero_key"].(string); ok {
 			d.Record.NewAttachmentKey = k
 		}
@@ -163,23 +166,16 @@ func (d *ManualDeps) DeleteAttachment(key string) error {
 	return err
 }
 
-// CreateAttachmentWithFile uploads the healed artifact. On the write
-// gateway's AMBIGUOUS failure — item minted, upload failed, best-effort
-// cleanup ALSO failed — the WriteClient returns the orphan key WITH the
-// error. repair.Apply discards that key on its error path; custody cannot
-// afford to (review MAJOR): the orphan key is lifted onto the record HERE,
-// durably before the failure return, so the endpoint's ambiguous-create
-// guard refuses a blind re-run (which would mint a second sibling). A failed
-// record write must not swallow the key either — it rides the error text.
+// CreateAttachmentWithFile uploads the healed artifact. The ambiguous-
+// create orphan lift (#285) happens in repair.Apply on the shared
+// ApplyDeps seam: when the write gateway returns (key, err) — item minted,
+// upload failed, best-effort cleanup ALSO failed — Apply audits
+// create_attachment_orphan, which this deps' AuditWrite persists onto the
+// custody record (NewAttachmentKey — the endpoint guard's basis, durably
+// before the failure return). No interception here: one lift site for the
+// manual AND both auto paths.
 func (d *ManualDeps) CreateAttachmentWithFile(parentKey, filename, contentType string, pdf []byte) (string, error) {
-	key, err := d.Write.CreateAttachmentWithFile(parentKey, filename, contentType, pdf)
-	if err != nil && key != "" {
-		d.Record.NewAttachmentKey = key
-		if perr := d.persist("create_attachment_orphan", map[string]any{"new_zotero_key": key, "filename": filename}); perr != nil {
-			return key, fmt.Errorf("%w (Orphan-Anhang %s konnte nicht protokolliert werden: %v — Key notieren!)", err, key, perr)
-		}
-	}
-	return key, err
+	return d.Write.CreateAttachmentWithFile(parentKey, filename, contentType, pdf)
 }
 
 // MarkRepairFailed records the failing step (caseID is ignored — the manual

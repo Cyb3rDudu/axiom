@@ -283,6 +283,23 @@ func (r *Repo) SubmitRepairVerdict(ctx context.Context, caseID string, plan json
 // existing one, so patches must carry the complete override object
 // (mode AND lang together), not single keys.
 func (r *Repo) RequeueRepairCase(ctx context.Context, caseID, reason string, analysisPatch json.RawMessage) error {
+	return r.requeueRepairCase(ctx, caseID, reason, analysisPatch, "")
+}
+
+// RequeueRepairCaseWithOrphanAck is the #285-guarded requeue: a case with
+// an UNRESOLVED ambiguous-create orphan (repair.Apply audited
+// create_attachment_orphan — item minted in Zotero, upload failed, cleanup
+// delete failed too) refuses the requeue until the operator names the
+// orphan key in orphanAck, confirming the EMPTY item was deleted in Zotero.
+// A blind re-run would mint a second sibling attachment while the orphan
+// survives only in human-readable reason text — the same hazard class the
+// manual custody endpoint guards with its 409. Resolution is audited as
+// create_attachment_orphan_resolved (machine-readable on the same table).
+func (r *Repo) RequeueRepairCaseWithOrphanAck(ctx context.Context, caseID, reason string, analysisPatch json.RawMessage, orphanAck string) error {
+	return r.requeueRepairCase(ctx, caseID, reason, analysisPatch, orphanAck)
+}
+
+func (r *Repo) requeueRepairCase(ctx context.Context, caseID, reason string, analysisPatch json.RawMessage, orphanAck string) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("requeue braucht einen Grund (geänderte Beweislage dokumentieren)")
 	}
@@ -294,6 +311,46 @@ func (r *Repo) RequeueRepairCase(ctx context.Context, caseID, reason string, ana
 		return err
 	}
 	defer tx.Rollback(ctx)
+	// #285 ambiguous-create guard: refuse while an unresolved orphan item
+	// exists — the operator must delete the EMPTY item in Zotero and ack
+	// its key (the audit row names it; the refusal text repeats it).
+	orphan, resolved, err := func() (string, bool, error) {
+		row := tx.QueryRow(ctx, `
+			WITH latest AS (
+				SELECT detail->>'new_zotero_key' AS k, created_at, id
+				FROM zotero_write_audit
+				WHERE case_id=$1::uuid AND action='create_attachment_orphan'
+				ORDER BY created_at DESC, id DESC LIMIT 1)
+			SELECT l.k, EXISTS (
+					SELECT 1 FROM zotero_write_audit a
+					WHERE a.case_id=$1::uuid AND a.action='create_attachment_orphan_resolved'
+					  AND a.detail->>'new_zotero_key'=l.k
+					  AND (a.created_at, a.id) > (l.created_at, l.id))
+			FROM latest l`, caseID)
+		var k string
+		var res bool
+		if err := row.Scan(&k, &res); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return "", false, nil
+			}
+			return "", false, err
+		}
+		return k, res, nil
+	}()
+	if err != nil {
+		return err
+	}
+	if orphan != "" && !resolved {
+		if orphanAck != orphan {
+			return fmt.Errorf("case %s hat einen abgebrochenen Create-Lauf: leeres Anhang-Item %s in Zotero löschen und mit orphan_resolved='%s' bestätigen — ein blinder Re-Run würde ein zweites leeres Geschwister erzeugen", caseID, orphan, orphan)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO zotero_write_audit (case_id, attachment_id, action, detail)
+			SELECT $1::uuid, attachment_id, 'create_attachment_orphan_resolved', $2::jsonb
+			FROM repair_cases WHERE id=$1`, caseID, mustMarshal(map[string]any{"new_zotero_key": orphan, "acked_by": reason})); err != nil {
+			return err
+		}
+	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE zotero_attachments SET repair_attempts = 0, updated_at=now()
 		WHERE id = (SELECT attachment_id FROM repair_cases WHERE id=$1)`, caseID)

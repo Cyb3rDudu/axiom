@@ -185,3 +185,62 @@ func TestBlockRepairCaseIT(t *testing.T) {
 		}
 	}
 }
+
+// TestRequeueOrphanGuardIT — #285: after an ambiguous create (Apply audited
+// create_attachment_orphan — item minted in Zotero, upload failed, cleanup
+// delete failed too), the requeue refuses until the operator names the
+// orphan key in the ack, confirming the EMPTY item was deleted in Zotero.
+// A blind re-apply would mint a second sibling attachment — the same hazard
+// class the manual custody endpoint guards with its 409.
+func TestRequeueOrphanGuardIT(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	ch := "repair-orphan-hash"
+	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: "lib-o",
+		docKey: "ODOC", attKey: "OATT", contentHash: &ch}, "completed", 1)
+	c, _, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", json.RawMessage(`{}`))
+	if err != nil || c == nil {
+		t.Fatalf("CreateRepairCase: %v %v", c, err)
+	}
+	if err := lr.rep.QueueRepairCase(ctx, c.ID, "reparierbar", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lr.rep.ClaimRepairCase(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	// the ambiguous create: case fails with the orphan audited
+	if err := lr.rep.AuditWrite(ctx, c.ID, attID, "create_attachment_orphan",
+		map[string]any{"new_zotero_key": "ORPHAN1", "filename": "Autor - 2020 - Titel.pdf"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.rep.MarkRepairFailed(ctx, c.ID, "zotero create: upload 502"); err != nil {
+		t.Fatal(err)
+	}
+
+	// blind requeue → refused, naming the key (no second sibling mint)
+	err = lr.rep.RequeueRepairCase(ctx, c.ID, "erneut versuchen", json.RawMessage(`{}`))
+	if err == nil || !strings.Contains(err.Error(), "ORPHAN1") {
+		t.Fatalf("blind requeue must refuse naming the orphan key, got %v", err)
+	}
+	// wrong ack → refused
+	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, c.ID, "falscher Ack", json.RawMessage(`{}`), "WRONG"); err == nil {
+		t.Fatal("wrong ack must refuse")
+	}
+	// correct ack → queued (operator confirmed the Zotero deletion)
+	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, c.ID, "orphan gelöscht", json.RawMessage(`{}`), "ORPHAN1"); err != nil {
+		t.Fatalf("correct ack must requeue: %v", err)
+	}
+	got, _ := lr.rep.getRepairCase(ctx, c.ID)
+	if got.Status != RepairQueued {
+		t.Fatalf("status must be queued, got %s", got.Status)
+	}
+	// resolved: a later requeue (case parked again) needs no ack
+	if _, err := lr.rep.Pool().Exec(ctx, `UPDATE repair_cases SET status='failed' WHERE id=$1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.rep.RequeueRepairCase(ctx, c.ID, "nach resolve", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("resolved orphan must not block further requeues: %v", err)
+	}
+}

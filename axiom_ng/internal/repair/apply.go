@@ -97,6 +97,21 @@ func Apply(ctx context.Context, d ApplyDeps, quarantineRoot string, c ApplyCase,
 	filename := SchemaFilenameForFormat(creators, c.Year, c.Title, c.ContentType)
 	newKey, err := d.CreateAttachmentWithFile(c.DocumentKey, filename, c.ContentType, pdf)
 	if err != nil {
+		// #285 ambiguous create: the write gateway minted the item but the
+		// upload failed AND the best-effort cleanup delete failed too — it
+		// returns the orphan key WITH the error. The lift happens HERE, on
+		// the shared ApplyDeps seam, so EVERY path (auto verdict,
+		// fixer-invoker, manual custody) records the key machine-readably
+		// before the failure return: the audit row is the guard basis the
+		// requeue route checks — a blind re-run would mint a second sibling
+		// while the orphan item still exists. A failed audit write must not
+		// lose the key either: it rides the error text.
+		if newKey != "" {
+			orphanDetail := map[string]any{"new_zotero_key": newKey, "filename": filename}
+			if aerr := d.AuditWrite(ctx, c.CaseID, c.AttachmentID, "create_attachment_orphan", orphanDetail); aerr != nil {
+				err = fmt.Errorf("%v (Orphan-Anhang %s konnte nicht auditiert werden: %v — Key notieren!)", err, newKey, aerr)
+			}
+		}
 		_ = d.MarkRepairFailed(ctx, c.CaseID, "zotero create: "+err.Error())
 		return ApplyResult{}, fmt.Errorf("%w: zotero create: %w", ErrZoteroWrite, err)
 	}
