@@ -114,6 +114,13 @@ Audit-Tabelle — ein Re-Run mintet damit nie ein zweites leeres Geschwister.
 Das manuelle Custody-Werkzeug trägt den Key stattdessen im Protokoll-Satz
 (409-Guard, siehe Custody-Runbook).
 
+**Residuum (bekannt):** stürzt der Lauf ZWISCHEN Orphan-Audit und
+Failure-Mark ab, bleibt der Case `in_repair` und der Stale-Claim-Reaper
+kann ihn ohne Ack-Guard zurück in `queued` setzen. Ein solcher Re-Run
+stirbt aber am version-guarded DELETE (404 — das alte Item ist weg),
+BEVOR es zu einem Create kommt: kein zweites Geschwister; der Case
+landet `failed` und der Requeue-Guard übernimmt.
+
 ## Prerequisites — bundled (#286)
 
 The fixer artifact ships the entire OCR toolchain: `ocrmypdf` (venv),

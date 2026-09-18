@@ -20,14 +20,18 @@
 # env -- everything the pipeline shells out to travels with the artifact.
 # The OCR tools resolve them env-relatively (tools/ocr_tool.py:
 # bundled_bin/ocr_child_env -- relocatable through conda-unpack); a host
-# PATH is NOT required (GPU-carrier scenario). eng ships with the conda
-# package; deu comes from the pinned tessdata release below. The OCR
-# staged check below answers from the packed env (tesseract --list-langs
-# must show deu+eng) -- the import_audit guard pattern applied to bins.
+# PATH is NOT required (GPU-carrier scenario). deu+eng both ship with the
+# conda tesseract package (no separate tessdata download since 2a0823f).
+# The OCR staged check below answers from the packed env (tesseract
+# --list-langs must show deu+eng) -- the import_audit guard pattern
+# applied to bins.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
+# macOS-only build: the explicit conda lock (osx-arm64 URLs) and the
+# stat -f%z size witness below are Darwin-shaped; refuse anything else.
+[ "$(uname -s)" = "Darwin" ] || { echo "fixer-artifact: macos-arm64 build only (lock + stat are Darwin-specific); uname says $(uname -s)" >&2; exit 1; }
 BUILD="$DIST/build/fixer"
 # shared plumbing (micromamba bootstrap, conda-pack staging, drift guard):
 . "$ROOT/scripts/lib/artifact_common.sh"
@@ -44,10 +48,10 @@ mkdir -p "$STAGE"
 # #286 pinning: fixtures/storage and fixtures/difficult are GITIGNORED,
 # GENERATED test data (sandbox storage + difficult books, ~0.5 GB after a
 # test round on the build host). Shipping them made the artifact size
-# depend on build-host residue — the 3× swing (720 MB vs 220 MB).
-# The artifact needs the small COMMITTED fixtures only (OCR smoke evidence
-# + operator reproduction); the staged pytest gate regenerates what it
-# needs itself (session-scoped ensure_storage).
+# depend on build-host residue — the 3× swing (720 MB vs 220 MB). Neither
+# is needed at runtime: the artifact ships the small COMMITTED fixtures
+# only (OCR smoke evidence + operator reproduction). The staged gate
+# (tests/test_import_guard.py) does not touch them.
 rsync -a \
     --exclude '.venv' --exclude '__pycache__' --exclude 'runs' \
     --exclude 'fixtures/storage' --exclude 'fixtures/difficult' \
@@ -70,22 +74,23 @@ artifact_assert_bundled_env_identical
 # so cache-hardlinked package files are never silently overwritten.
 # #286: tesseract + ghostscript aus conda-forge INS Env (bundled-binaries
 # Standard; deu/eng-tessdata bringt das conda-Paket mit).
-# #286 pinning: the EXPLICIT LOCK wins when present (same rule as the pip
-# requirements.lock.txt) — the exact package URLs of the rc3-proven solve,
-# so conda-forge drift cannot swing the env size or ship an unverified
-# binary combination. Regeneration recipe: rm -rf dist/build/fixer/env,
-# recreate from the spec line below, run the staged gates, then
-#   micromamba list --explicit -p dist/build/fixer/env
-#  > scripts/lib/fixer-conda-osx-arm64.lock
+# #286 pinning: the EXPLICIT LOCK is the ONLY solve path — the exact
+# package URLs of the rc3-proven solve, so conda-forge drift cannot swing
+# the env size or ship an unverified binary combination. A missing lock
+# is FATAL: determinism is this build's whole point, there is no silent
+# fresh-solve fallback.
 FIXER_LOCK="$ROOT/scripts/lib/fixer-conda-osx-arm64.lock"
 if [ ! -x "$PREFIX/bin/python" ]; then
-    if [ -f "$FIXER_LOCK" ]; then
-        echo "fixer-artifact: conda solve from explicit lock ($FIXER_LOCK)"
-        "$MM" create -y -p "$PREFIX" -f "$FIXER_LOCK"
-    else
-        echo "fixer-artifact: WARNING — no explicit lock, fresh solve (conda-forge drift unbounded)" >&2
-        "$MM" create -y -p "$PREFIX" -c conda-forge 'python=3.11' 'tesseract=5.*' 'ghostscript' pip
-    fi
+    [ -f "$FIXER_LOCK" ] || {
+        echo "fixer-artifact: explicit lock missing: $FIXER_LOCK" >&2
+        echo "  regeneration recipe: rm -rf dist/build/fixer/env &&" >&2
+        echo "  micromamba create -y -p dist/build/fixer/env -c conda-forge 'python=3.11' 'tesseract=5.*' 'ghostscript' pip" >&2
+        echo "  (run the staged gates on it) && micromamba list --explicit -p dist/build/fixer/env" >&2
+        echo "  > scripts/lib/fixer-conda-osx-arm64.lock" >&2
+        exit 1
+    }
+    echo "fixer-artifact: conda solve from explicit lock ($FIXER_LOCK)"
+    "$MM" create -y -p "$PREFIX" -f "$FIXER_LOCK"
 fi
 PY="$PREFIX/bin/python"
 
@@ -206,6 +211,23 @@ SMOKE
 # evidence + operator reproduction material).
 rm -rf "$STAGE/app/tests"
 artifact_strip_pycache "$STAGE"
+
+# The staged pytest gate loads tests/conftest.py, whose session-scoped
+# autouse fixture REGENERATES fixtures/storage in the staged tree — delete
+# both generated dirs after the gate (the rsync excludes cannot see what
+# the gate itself creates; the leak check below stays fail-closed).
+rm -rf "$STAGE/app/fixtures/storage" "$STAGE/app/fixtures/difficult"
+
+# #286 pinning fail-closed: the staged gates above must never leave the
+# gitignored generated test data behind — any regenerator (rsync residue,
+# conftest, a future staged test) fails the build instead of silently
+# shipping build-host residue (the original 3× size swing).
+for _leak in fixtures/storage fixtures/difficult; do
+    if [ -e "$STAGE/app/$_leak" ]; then
+        echo "fixer-artifact: staging leak — $STAGE/app/$_leak exists (generated test data must not ship)" >&2
+        exit 1
+    fi
+done
 
 tar --zstd -C "$BUILD" -cf "$ARTIFACT" "fixer-$VERSION"
 (cd "$DIST" && shasum -a 256 "${ARTIFACT##*/}" >"${ARTIFACT##*/}.sha256")

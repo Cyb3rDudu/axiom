@@ -104,8 +104,10 @@ korrigierbar über die Zotero-Metadaten.
 **Bereits fehlbenannte Dateien** (vor #287 hochgeladen): es gibt per
 Design KEINE Rename-Mutation. Manuelle Remediation: Dateinamen im
 Zotero-Client von der Parent-Metadaten-Seite aus umbenennen — oder, falls
-das Attachment ohnehin erneut repariert wird, den Custody-Lauf wiederholen
-(er erzeugt den korrekten Schema-Namen neu).
+das Attachment in einem NEUEN Reparaturfall (neuer Attachment-Key) erneut
+geheilt wird, den Custody-Lauf dieses neuen Falls (der 409-Guard verweigert
+einen Re-Run auf dem bereits geheilten Key; der neue Lauf erzeugt den
+korrekten Schema-Namen).
 
 ## Warum kein CLI eigener Bauart
 

@@ -314,10 +314,15 @@ func (r *Repo) requeueRepairCase(ctx context.Context, caseID, reason string, ana
 	// #285 ambiguous-create guard: refuse while an unresolved orphan item
 	// exists — the operator must delete the EMPTY item in Zotero and ack
 	// its key (the audit row names it; the refusal text repeats it).
+	// Note on the row comparison below: zotero_write_audit.id is
+	// gen_random_uuid() — it is NOT a sequence, it only breaks exact
+	// created_at ties. Resolution rows are always written strictly later
+	// in every reachable flow, so a tie can at worst re-arm the guard
+	// (fail-safe direction: refusal, not sibling minting).
 	orphan, resolved, err := func() (string, bool, error) {
 		row := tx.QueryRow(ctx, `
 			WITH latest AS (
-				SELECT detail->>'new_zotero_key' AS k, created_at, id
+				SELECT COALESCE(detail->>'new_zotero_key','') AS k, created_at, id
 				FROM zotero_write_audit
 				WHERE case_id=$1::uuid AND action='create_attachment_orphan'
 				ORDER BY created_at DESC, id DESC LIMIT 1)

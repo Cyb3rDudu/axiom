@@ -39,7 +39,6 @@ type RepairItem struct {
 	Title         string
 	Creators      []zotero.Creator
 	Year          int
-	Publisher     string
 	Language      string          // #284: OCR language default from document metadata
 	Analysis      json.RawMessage // #284: per-case OCR overrides (analysis.ocr.mode/lang)
 	LocalPath     string
@@ -52,7 +51,7 @@ type RepairItem struct {
 func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT c.id::text, a.id::text, a.zotero_key, d.zotero_key, d.id::text,
-		       d.title, d.creators, COALESCE(d.publication_year, 0), COALESCE(d.publisher, ''),
+		       d.title, d.creators, COALESCE(d.publication_year, 0),
 		       COALESCE(d.language, ''), c.analysis,
 		       a.local_path, COALESCE(a.content_type, '')
 		FROM repair_cases c
@@ -62,7 +61,7 @@ func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, 
 	var it RepairItem
 	var creators []byte
 	if err := row.Scan(&it.CaseID, &it.AttachmentID, &it.AttachmentKey, &it.DocumentKey, &it.DocumentID,
-		&it.Title, &creators, &it.Year, &it.Publisher, &it.Language, &it.Analysis,
+		&it.Title, &creators, &it.Year, &it.Language, &it.Analysis,
 		&it.LocalPath, &it.ContentType); err != nil {
 		return nil, err
 	}

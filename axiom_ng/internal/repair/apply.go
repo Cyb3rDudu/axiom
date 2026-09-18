@@ -109,7 +109,7 @@ func Apply(ctx context.Context, d ApplyDeps, quarantineRoot string, c ApplyCase,
 		if newKey != "" {
 			orphanDetail := map[string]any{"new_zotero_key": newKey, "filename": filename}
 			if aerr := d.AuditWrite(ctx, c.CaseID, c.AttachmentID, "create_attachment_orphan", orphanDetail); aerr != nil {
-				err = fmt.Errorf("%v (Orphan-Anhang %s konnte nicht auditiert werden: %v — Key notieren!)", err, newKey, aerr)
+				err = fmt.Errorf("%w (Orphan-Anhang %s konnte nicht auditiert werden: %v — Key notieren!)", err, newKey, aerr)
 			}
 		}
 		_ = d.MarkRepairFailed(ctx, c.CaseID, "zotero create: "+err.Error())
