@@ -41,8 +41,16 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE"
 
 # --- app/: sources without runtime residue -----------------------------------
+# #286 pinning: fixtures/storage and fixtures/difficult are GITIGNORED,
+# GENERATED test data (sandbox storage + difficult books, ~0.5 GB after a
+# test round on the build host). Shipping them made the artifact size
+# depend on build-host residue — the 3× swing (720 MB vs 220 MB).
+# The artifact needs the small COMMITTED fixtures only (OCR smoke evidence
+# + operator reproduction); the staged pytest gate regenerates what it
+# needs itself (session-scoped ensure_storage).
 rsync -a \
     --exclude '.venv' --exclude '__pycache__' --exclude 'runs' \
+    --exclude 'fixtures/storage' --exclude 'fixtures/difficult' \
     axiom_ng/tools/pdf_repair_agent/ "$STAGE/app/"
 
 # fix.sh ships INTO the artifact (#206): the installed /opt/axiom/bin/axiom-fixer
@@ -62,8 +70,22 @@ artifact_assert_bundled_env_identical
 # so cache-hardlinked package files are never silently overwritten.
 # #286: tesseract + ghostscript aus conda-forge INS Env (bundled-binaries
 # Standard; deu/eng-tessdata bringt das conda-Paket mit).
+# #286 pinning: the EXPLICIT LOCK wins when present (same rule as the pip
+# requirements.lock.txt) — the exact package URLs of the rc3-proven solve,
+# so conda-forge drift cannot swing the env size or ship an unverified
+# binary combination. Regeneration recipe: rm -rf dist/build/fixer/env,
+# recreate from the spec line below, run the staged gates, then
+#   micromamba list --explicit -p dist/build/fixer/env
+#  > scripts/lib/fixer-conda-osx-arm64.lock
+FIXER_LOCK="$ROOT/scripts/lib/fixer-conda-osx-arm64.lock"
 if [ ! -x "$PREFIX/bin/python" ]; then
-    "$MM" create -y -p "$PREFIX" -c conda-forge 'python=3.11' 'tesseract=5.*' 'ghostscript' pip
+    if [ -f "$FIXER_LOCK" ]; then
+        echo "fixer-artifact: conda solve from explicit lock ($FIXER_LOCK)"
+        "$MM" create -y -p "$PREFIX" -f "$FIXER_LOCK"
+    else
+        echo "fixer-artifact: WARNING — no explicit lock, fresh solve (conda-forge drift unbounded)" >&2
+        "$MM" create -y -p "$PREFIX" -c conda-forge 'python=3.11' 'tesseract=5.*' 'ghostscript' pip
+    fi
 fi
 PY="$PREFIX/bin/python"
 
@@ -188,6 +210,18 @@ artifact_strip_pycache "$STAGE"
 tar --zstd -C "$BUILD" -cf "$ARTIFACT" "fixer-$VERSION"
 (cd "$DIST" && shasum -a 256 "${ARTIFACT##*/}" >"${ARTIFACT##*/}.sha256")
 echo "fixer-artifact: $ARTIFACT"
+# #286 pinning size witness: the artifact must stay DETERMINISTICALLY
+# slim — the lock bounds the env, the rsync excludes bound the app side.
+# A stray directory (or an unpinned solve explosion) fails the build
+# instead of silently shipping 3× the transfer size.
+# ponytail: fixed 450 MB ceiling — revisit only when a DELIBERATE bundling
+# decision (new toolchain in the env) outgrows it.
+ART_SIZE=$(stat -f%z "$ARTIFACT")
+if [ "$ART_SIZE" -gt 471859200 ]; then
+    echo "fixer-artifact: $((ART_SIZE / 1048576)) MB exceeds the 450 MB ceiling — check for stray staging residue or solve drift" >&2
+    exit 1
+fi
+echo "fixer-artifact: size ok — $((ART_SIZE / 1048576)) MB (ceiling 450 MB)"
 # DoD witness (#286): the listing contains the bundled OCR pieces.
 for member in env/bin/tesseract env/bin/gs env/share/tessdata/deu.traineddata env/share/tessdata/eng.traineddata; do
     tar --zstd -tf "$ARTIFACT" "fixer-$VERSION/$member" >/dev/null || {
