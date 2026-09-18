@@ -39,10 +39,10 @@ OS_INDEX = "axiom-ng-chunks-v1"
 
 # Hermetic-suite compatibility: the app module must exist, but singletons
 # reset per test keeps the warm-keep accounting honest.
-from axiom_ng_runner import query_service
-from axiom_ng_runner.app import app
-from axiom_ng_runner.config import Settings, settings
-from fastapi.testclient import TestClient
+from axiom_ng_runner import query_service  # noqa: E402
+from axiom_ng_runner.app import app  # noqa: E402
+from axiom_ng_runner.config import Settings, settings  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
 
 @pytest.fixture(scope="module")

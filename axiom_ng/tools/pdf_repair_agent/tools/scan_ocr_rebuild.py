@@ -225,6 +225,27 @@ def run_rebuild(
             f"nicht baubar; nichts geschrieben (keine stille Lüge)",
             "ocr_binaries": bins,
         }
+    # #286 review: ehrliche Sprach-Vorabprüfung gegen das GEBÜNDELTE
+    # Modell-Set — ocrmypdfs "install the appropriate language data"
+    # widerspräche dem Bundled-Standard; wir benennen die verfügbaren
+    # Modelle, bevor irgendetwas läuft.
+    td = ocr_tool.tessdata_dir()
+    if td:
+        available = sorted(
+            p.name[: -len(".traineddata")] for p in Path(td).glob("*.traineddata")
+        )
+        if lang not in available:
+            return {
+                "applied": False,
+                "cause": (
+                    f"Sprache '{lang}' ist im gebündelten tessdata nicht "
+                    f"enthalten (verfügbar: {', '.join(available)}) — Modell "
+                    "in die Build-Allowlist (scripts/lib/ocr_languages.txt) "
+                    "aufnehmen oder den Case-Override anpassen"
+                ),
+                "bundled_languages": available,
+            }
+
     src = Path(pdf)
     pages = len(pdf_kernel.page_char_count(src))
     dst = Path(dst)

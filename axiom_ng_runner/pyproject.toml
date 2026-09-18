@@ -31,3 +31,9 @@ packages = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+# ruff gate (CI runner-pytest job): the ENFORCED set is pinned so a newer
+# ruff's expanded defaults cannot change the gate retroactively — same
+# rule as the fixer pyproject (#286 unification).
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

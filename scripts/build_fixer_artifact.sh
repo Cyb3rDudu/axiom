@@ -90,13 +90,23 @@ artifact_pack_env "$PREFIX" "$STAGE"
 # Language PRUNE (size lever, #286 review: 353 MB tessdata) — AFTER
 # packing: conda-pack verifies package completeness in $PREFIX, so the
 # prune runs on the STAGED copy only (packed prefix + package cache stay
-# intact). The artifact keeps what the pipeline speaks (deu+eng) plus osd
-# (orientation detection).
+# intact). The allowlist is scripts/lib/ocr_languages.txt — ONE source
+# shared with tesseractLang() in the invoker (pinned by a Go test reading
+# the same file); osd (orientation detection) is always kept on top.
+# Guarded: with tesseract entirely absent (the mutation probe), the prune
+# must not kill the build here — the staged assert below names the cause.
 STAGE_TESSDATA="$STAGE/env/share/tessdata"
-find "$STAGE_TESSDATA" -name '*.traineddata' \
-    ! -name 'eng.traineddata' ! -name 'deu.traineddata' ! -name 'osd.traineddata' \
-    -delete
-echo "fixer-artifact: tessdata pruned to deu+eng+osd ($(ls "$STAGE_TESSDATA"/*.traineddata | wc -l | tr -d ' ') models left)"
+if [ -d "$STAGE_TESSDATA" ]; then
+    OCR_LANGS="$(grep -v '^#' "$ROOT/scripts/lib/ocr_languages.txt" | tr '\n' ' ' | tr -s ' ')"
+    find "$STAGE_TESSDATA" -name '*.traineddata' | while read -r m; do
+        base="$(basename "$m" .traineddata)"
+        case " $OCR_LANGS osd " in
+            *" $base "*) ;;          # keep: mapped language or osd
+            *) rm -f "$m" ;;
+        esac
+    done
+    echo "fixer-artifact: tessdata pruned to:$OCR_LANGS osd ($(find "$STAGE_TESSDATA" -name '*.traineddata' | wc -l | tr -d ' ') models left)"
+fi
 
 # --- interpreter autarky proof (#208): NO symlink may leave the artifact ----
 if find "$STAGE/env/bin" -name 'python*' -type l | while read -r l; do
@@ -173,6 +183,8 @@ SMOKE
 # tests are stripped before tarring (fixtures stay: the OCR smoke's
 # evidence + operator reproduction material).
 rm -rf "$STAGE/app/tests"
+artifact_strip_pycache "$STAGE"
+
 tar --zstd -C "$BUILD" -cf "$ARTIFACT" "fixer-$VERSION"
 (cd "$DIST" && shasum -a 256 "${ARTIFACT##*/}" >"${ARTIFACT##*/}.sha256")
 echo "fixer-artifact: $ARTIFACT"

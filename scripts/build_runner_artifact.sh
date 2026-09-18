@@ -128,6 +128,8 @@ PDOC
 )
 
 # --- artifact -----------------------------------------------------------------
+artifact_strip_pycache "$STAGE"
+
 tar --zstd -C "$BUILD" -cf "$ARTIFACT" "runner-$VERSION"
 (cd "$DIST" && shasum -a 256 "${ARTIFACT##*/}" >"${ARTIFACT##*/}.sha256")
 echo "runner-artifact: $ARTIFACT"

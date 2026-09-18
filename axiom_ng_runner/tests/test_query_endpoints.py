@@ -273,7 +273,7 @@ def test_capabilities_report_query_embedding(client):
 # 5. R2 (#132): rerank endpoint — shape, ordering, guards, warm-keep
 # ---------------------------------------------------------------------------
 
-from axiom_ng_runner import RERANKER_MODEL
+from axiom_ng_runner import RERANKER_MODEL  # noqa: E402
 
 
 def _rerank_payload(query, texts, top_n=10, **over):

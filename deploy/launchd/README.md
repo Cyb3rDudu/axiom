@@ -39,7 +39,7 @@ G3's install script copies these and substitutes placeholders.
   `#!/usr/bin/env python`), and launchd's default PATH has no `python` —
   a console-script entry would crash-loop. The `/opt/axiom/bin/axiom-runner`
   shim uses the same `python -m` form.
-- **Fixer host deps (NOT bundled in the artifact):** `tesseract5` (with
-  `deu` traineddata) and `ghostscript` ship INSIDE the fixer artifact
-  (#286 — env-relative resolution, no host PATH) —
-  see `docs/operations/services.md`.
+- **Fixer OCR toolchain — bundled (#286):** `tesseract5`, `ghostscript`
+  and tessdata (deu+eng + the mapped language set) ship INSIDE the fixer
+  artifact; the tools resolve them env-relatively, no host PATH needed.
+  See `docs/operations/ocr-rebuild-repair.md`.

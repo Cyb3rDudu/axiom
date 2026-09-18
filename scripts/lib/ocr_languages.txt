@@ -1,0 +1,8 @@
+# OCR languages the fixer artifact bundles (#286 review: the tessdata
+# prune must keep EXACTLY the set tesseractLang() in
+# axiom_ng/internal/fixerinvoker/invoker.go can produce — one source for
+# build (prune allowlist) and code (map codomain), pinned by
+# TestOCRLanguageAllowlistMatchesMap reading THIS file. osd (orientation
+# detection) is always kept in addition and lives in the build, not here.
+# Lines starting with # are comments; the plain whitespace-separated line is the list.
+deu eng fra ita spa nld rus pol por ces swe dan fin nor

@@ -373,3 +373,50 @@ func TestHaltMissingOCRToolingParksAsNeedsEvidence(t *testing.T) {
 		t.Fatalf("missing tooling parks as needs-evidence, got %q", reason)
 	}
 }
+
+// TestOCRLanguageAllowlistMatchesMap (#286 review): the fixer artifact
+// prunes tessdata to scripts/lib/ocr_languages.txt — tesseractLang's
+// codomain must stay within exactly that set, or a mapped document
+// language would ship broken (ocrmypdf: "does not have language data").
+// The file is the SINGLE source: the build reads it for the prune, this
+// test reads it for the map. Any new language must be added THERE.
+func TestOCRLanguageAllowlistMatchesMap(t *testing.T) {
+	raw, err := os.ReadFile("../../../scripts/lib/ocr_languages.txt")
+	if err != nil {
+		t.Fatalf("allowlist file unreadable: %v", err)
+	}
+	allow := map[string]bool{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") || strings.TrimSpace(line) == "" {
+			continue
+		}
+		for _, f := range strings.Fields(line) {
+			allow[f] = true
+		}
+	}
+	if len(allow) < 10 {
+		t.Fatalf("allowlist looks wrong (%d entries): %q", len(allow), string(raw))
+	}
+	// every ISO input the map handles + unknown fallback
+	inputs := []string{
+		"", "de", "ger", "deu", "de-de", "en", "eng", "en-us", "en-gb",
+		"fr", "fra", "fre", "it", "ita", "es", "spa", "nl", "nld", "dut",
+		"ru", "rus", "pl", "pol", "pt", "por", "cs", "cze", "ces",
+		"sv", "swe", "da", "dan", "fi", "fin", "no", "nor", "nob", "nno",
+		"zh", "ja", "ko", "xx", "unknown", "DEU",
+	}
+	seen := map[string]bool{}
+	for _, in := range inputs {
+		got := tesseractLang(in)
+		seen[got] = true
+		if !allow[got] {
+			t.Fatalf("tesseractLang(%q) = %q — not in the bundled allowlist (scripts/lib/ocr_languages.txt); add it there or map to deu", in, got)
+		}
+	}
+	// the allowlist must not carry dead weight either: every entry reachable
+	for lang := range allow {
+		if !seen[lang] {
+			t.Fatalf("allowlist entry %q is never produced by tesseractLang — remove it (dead artifact weight)", lang)
+		}
+	}
+}

@@ -57,3 +57,11 @@ artifact_assert_bundled_env_identical() {
         exit 1
     }
 }
+
+# artifact_strip_pycache <stage-dir> — the staged build gates (pytest,
+# import probes, smokes) compile bytecode into app/__pycache__; the
+# SHIPPED artifact must not carry build-host bytecode (#286 review nit).
+artifact_strip_pycache() {
+    find "$1" -type d -name '__pycache__' -prune -exec rm -rf {} +
+    find "$1" -type d -name '.pytest_cache' -prune -exec rm -rf {} +
+}

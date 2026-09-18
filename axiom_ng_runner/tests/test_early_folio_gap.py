@@ -130,7 +130,8 @@ def _chunks():
     # production chunks always carry non-empty metadata (token_count,
     # section_titles) — the enrich path's `meta or {}` guard would swap an
     # EMPTY dict for a fresh one and silently drop the enrichment
-    md = lambda: {"token_count": 8, "section_titles": []}
+    def md():
+        return {"token_count": 8, "section_titles": []}
     return [
         {"text": "Unpaginated front matter with no print anchors",
          "metadata": md()},

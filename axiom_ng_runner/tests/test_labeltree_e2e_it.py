@@ -23,7 +23,7 @@ FIXER_ROOT = REPO_ROOT / "axiom_ng" / "tools" / "pdf_repair_agent"
 AXIOM_NG = REPO_ROOT / "axiom_ng"
 sys.path.insert(0, str(FIXER_ROOT))  # fixer tools (pymupdf-only imports)
 
-from tools import labeltree_heal
+from tools import labeltree_heal  # noqa: E402
 
 
 def _synthetic_missing_tree(path: Path, n=8):

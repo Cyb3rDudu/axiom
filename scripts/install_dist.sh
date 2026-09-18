@@ -127,7 +127,7 @@ fixer)
         "current:  $ROOT/fixer/current -> $version" \
         "shim:     $ROOT/bin/axiom-fixer" \
         "post-install fixup: env/bin/conda-unpack (once, bundled interpreter)" \
-        "host deps (NOT bundled): tesseract5 +deu, ghostscript on PATH"
+        "OCR toolchain bundled (#286): tesseract+gs+tessdata(deu+eng) in env/ — no host PATH"
     mkdir -p "$ROOT/fixer" "$ROOT/bin"
     rm -rf "$target"
     mkdir -p "$target"

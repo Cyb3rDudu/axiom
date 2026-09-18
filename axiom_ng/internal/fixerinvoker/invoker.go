@@ -345,9 +345,11 @@ func tesseractLang(docLanguage string) string {
 	case "fr", "fra", "fre":
 		return "fra"
 	}
-	if len(l) == 3 {
-		return l
-	}
+	// NO 3-letter passthrough (#286 review): the artifact bundles exactly
+	// the mapped set (scripts/lib/ocr_languages.txt is the single source —
+	// the build prunes tessdata to it, TestOCRLanguageAllowlistMatchesMap
+	// pins the map against that file). A passthrough would promise models
+	// the artifact may not carry; unknown metadata falls back to deu.
 	return "deu"
 }
 
