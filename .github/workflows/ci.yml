@@ -89,9 +89,9 @@ jobs:
       # tests skip and the DoD gate never runs in CI).
       - name: install pandoc
         run: sudo apt-get update && sudo apt-get install -y pandoc
-      # Scope: the surface the project has been linting (tests + compute
-      # core). The heavy-compute modules carry pre-existing findings outside
-      # the enforced set — not this branch's business.
+      # Scope: tests/ is the enforced surface (the step below). The
+      # heavy-compute modules carry pre-existing findings outside the
+      # enforced set — not this branch's business.
       - name: ruff
         run: ruff check tests/
       - name: pytest
@@ -117,7 +117,10 @@ jobs:
       # ruff is NOT a fixer runtime dep (it would ship in the artifact) —
       # the runner job gets it via its requirements.txt; here it is an
       # explicit tool install for the gate (review Runde 3: the job ran
-      # red with 'ruff: command not found' since introduction).
+      # red with 'ruff: command not found' since introduction). BOTH jobs
+      # float latest ruff by design (the runner's requirements entry is
+      # unpinned too); the pinned [tool.ruff.lint] select sets are the
+      # actual gate.
       - name: install ruff
         run: pip install ruff
       # Scope mirrors the runner job's enforced set (tests/).

@@ -194,6 +194,10 @@ def test_dev_venv_ohne_buendel_bleibt_noop(tmp_path, monkeypatch):
     (setup-python), das alte startswith-Assert war dort grundlos rot."""
     from tools import bundled_env as be
 
+    # child_env kopiert os.environ — ein am Host exportiertes
+    # TESSDATA_PREFIX darf die Abwesenheits-Assertion nicht falsch rot
+    # machen (Review: Determinismus-Lücke, nicht Code-Defekt).
+    monkeypatch.delenv("TESSDATA_PREFIX", raising=False)
     monkeypatch.setattr(be, "tessdata_dir", lambda: None)
     monkeypatch.setattr(be.sys, "prefix", str(tmp_path))
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
