@@ -73,6 +73,27 @@ def test_true_scan_stays_skipped_as_needs_ocr(tmp_path):
     assert r.details["text_layer"] is False
 
 
+def test_true_scan_with_embedded_labels_is_needs_ocr(tmp_path):
+    """#288 (Bartscher production case): textless pages WITH healthy
+    embedded PDF page labels classify by the TEXT LAYER, not by labels —
+    the scan/OCR-repair class, never green-lit internal processing. The
+    stored object must stay annotatable: internal OCR is transient, so the
+    textification (fixer scan_ocr_rebuild, or manual custody with a
+    pre-OCR'd file #279) REPLACES the stored file before normal processing.
+    Labels only steer the #284 2-in-1 label heal, never the verdict."""
+    doc = pymupdf.open()
+    for i in range(8):
+        doc.new_page()  # no extractable text — scan pages
+    doc.set_page_labels([{"startpage": 0, "prefix": "", "style": "D", "firstpagenum": 1}])
+    doc.save(tmp_path / "scan_labeled.pdf")
+    doc.close()
+    r = preflight(str(tmp_path / "scan_labeled.pdf"))
+    assert r.ok is False, "a textless scan with healthy labels must NOT process"
+    assert r.finding == "🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)", r.finding
+    assert r.details["pagination_state"] == "needs_ocr"
+    assert r.details["text_layer"] is False
+
+
 def test_legacy_unpaginiert_key_still_parses():
     """#283 DoD: internal keys stay backward compatible — historical
     reports/quality_states carrying the legacy finding still resolve their

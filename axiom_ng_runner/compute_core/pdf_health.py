@@ -150,18 +150,25 @@ def analyze_pdf(pdf_path: str) -> dict:
 
         labels_broken = label_verdict.startswith(("KAPUTT", "kein Tier-1")) and chapters is None
         folio_found = len(verified) >= 3
-        if labels_broken and folio_found:
+        # #288 owner ruling: classify by TEXT LAYER first — a textless scan
+        # is ALWAYS the scan/OCR-repair class, regardless of embedded page
+        # labels. Labels decide how the textification preserves them (the
+        # #284 2-in-1 folio heal), never WHETHER it is needed: internal OCR
+        # is transient, the stored object stays unannotatable (Bartscher:
+        # 658 pages, 0 text chars, healthy labels — was green-lit into a
+        # 10–16 h internal-OCR run). Textless scans have no folio
+        # candidates (the harvester reads text), so this check precedes
+        # the reparierbar branch without shadowing it.
+        if not tm["text_layer"]:
+            suspicion = SCAN_FINDING
+        elif labels_broken and folio_found:
             suspicion = "🔴 reparierbar"
         elif labels_broken:
-            # #254: the skip conflated two different cases. The real gate
-            # is the TEXT LAYER, not pagination: a born-digital PDF without
-            # print pagination still processes honestly with physical_only
-            # locators ("PDF-S. N", #173 rendering); a textless scan cannot
-            # (needs OCR — out of scope, surfaced as needs_ocr for #252).
-            if tm["text_layer"]:
-                suspicion = "🟡 no_print_pagination"
-            else:
-                suspicion = SCAN_FINDING
+            # #254: born-digital without print pagination is NOT broken — it
+            # processes honestly with physical_only locators ("PDF-S. N",
+            # #173 rendering). The textless variant is caught by the #288
+            # text-layer gate above before this branch.
+            suspicion = "🟡 no_print_pagination"
         elif offset_consistent and offset not in (0, None):
             suspicion = "🟡 Versatz-Verdacht"
         elif offs and not offset_consistent:

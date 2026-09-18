@@ -19,6 +19,24 @@ broken text layer is rasterized before any folio harvest reads it.
 
 ## Owner rulings, pinned in code
 
+- **The text layer decides, never the labels (#288)**: preflight
+  classifies by TEXT LAYER first — a document whose pages carry no
+  extractable text is a scan needing textification, **regardless of
+  embedded PDF page labels** (production case Bartscher 2026-09-18: 658
+  pages, 0 text chars, healthy labels — was green-lit into a projected
+  10–16 h internal Marker/Surya OCR run while the stored object stayed
+  textless and unannotatable). Labels only steer how the textification
+  preserves them (the 2-in-1 folio heal above), never whether it is
+  needed. **Internal OCR of scans is no longer a supported route**: the
+  stored Zotero object must carry the text layer (highlights and quotes
+  need text), internal OCR is transient — and the heal path is faster on
+  top (bundled ocrmypdf, CPU, < 1 h for 658 pages in the pilot vs 10–16 h
+  internal).
+- **Manual escape hatch**: when the fixer is not applicable (no bundled
+  OCR language, damaged original the rebuild chokes on, operator-curated
+  OCR preferred), the operator route is the #279 custody tool with a
+  pre-OCR'd file — same quarantine-first protocol, replaces the stored
+  file (see `custody-repair-runbook.md`).
 - **Unthrottled**: no `--jobs`/OMP limits in normal processing (the pilot's
   throttling was wave-coexistence, not a product requirement).
 - **Language**: default `deu` (deu beat `deu+eng` in the pilot — combined
