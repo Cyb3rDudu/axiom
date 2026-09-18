@@ -80,21 +80,23 @@ REQS="axiom_ng/tools/pdf_repair_agent/requirements.txt"
 # … incorrect size), and a raw/main URL pin was a moving target. Model
 # provenance now rides the conda solve (tesseract=5.* package pin) — the
 # staged --list-langs gate below still fails closed when deu/eng go
-# missing. Language PRUNE (size lever): the artifact keeps only what the
-# pipeline speaks (deu+eng) plus osd (orientation detection); rm in
-# $PREFIX unlinks the prefix copy only — the package cache stays intact.
-TESSDIR="$PREFIX/share/tessdata"
-if [ -d "$TESSDIR" ]; then
-    find "$TESSDIR" -name '*.traineddata' \
-        ! -name 'eng.traineddata' ! -name 'deu.traineddata' ! -name 'osd.traineddata' \
-        -delete
-    echo "fixer-artifact: tessdata pruned to deu+eng+osd"
-fi
+# missing.
 
 "$PY" -m pip install -q --disable-pip-version-check conda-pack
 
 # --- pack env (relocatable; conda-unpack fixes prefixes at install) ---------
 artifact_pack_env "$PREFIX" "$STAGE"
+
+# Language PRUNE (size lever, #286 review: 353 MB tessdata) — AFTER
+# packing: conda-pack verifies package completeness in $PREFIX, so the
+# prune runs on the STAGED copy only (packed prefix + package cache stay
+# intact). The artifact keeps what the pipeline speaks (deu+eng) plus osd
+# (orientation detection).
+STAGE_TESSDATA="$STAGE/env/share/tessdata"
+find "$STAGE_TESSDATA" -name '*.traineddata' \
+    ! -name 'eng.traineddata' ! -name 'deu.traineddata' ! -name 'osd.traineddata' \
+    -delete
+echo "fixer-artifact: tessdata pruned to deu+eng+osd ($(ls "$STAGE_TESSDATA"/*.traineddata | wc -l | tr -d ' ') models left)"
 
 # --- interpreter autarky proof (#208): NO symlink may leave the artifact ----
 if find "$STAGE/env/bin" -name 'python*' -type l | while read -r l; do
@@ -133,9 +135,8 @@ EOF
 
 # --- #286: OCR staged check against the PACKED env (import_audit pattern) ----
 # Mutation probe: remove tesseract/ghostscript from the conda create line
-# (or the deu download) -> THESE asserts fail the build. No host PATH:
-# TESSDATA_PREFIX points at the env, PATH is minimal.
-STAGE_TESSDATA="$STAGE/env/share/tessdata"
+# -> THESE asserts fail the build. No host PATH: TESSDATA_PREFIX points
+# at the env, PATH is minimal.
 [ -x "$STAGE/env/bin/tesseract" ] || { echo "fixer-artifact: env/bin/tesseract missing" >&2; exit 1; }
 [ -x "$STAGE/env/bin/gs" ] || { echo "fixer-artifact: env/bin/gs missing" >&2; exit 1; }
 [ -f "$STAGE_TESSDATA/deu.traineddata" ] || { echo "fixer-artifact: tessdata deu missing" >&2; exit 1; }

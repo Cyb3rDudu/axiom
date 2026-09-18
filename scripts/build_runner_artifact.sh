@@ -105,7 +105,13 @@ with zipfile.ZipFile(epub, "w") as z:
                '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
                '<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
     z.writestr("OEBPS/content.opf",
-               '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0">'
+               '<?xml version="1.0"?>'
+               '<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">'
+               '<metadata>'
+               '<dc:title>Carrier Smoke</dc:title>'
+               '<dc:identifier id="id">urn:uuid:0286smoke</dc:identifier>'
+               '<dc:language>en</dc:language>'
+               '</metadata>'
                '<manifest><item id="c" href="content.xhtml" media-type="application/xhtml+xml"/></manifest>'
                '<spine><itemref idref="c"/></spine></package>')
 out = tmp / "probe.md"
