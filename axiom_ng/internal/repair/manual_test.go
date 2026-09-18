@@ -155,7 +155,7 @@ func TestManualCustodyFullProtocol(t *testing.T) {
 	deps := &ManualDeps{Write: wc, Root: root, Record: rec, RunID: ManualRunID("BROKEN1")}
 	res, err := Apply(context.Background(), deps, root, ApplyCase{
 		CaseID: "manual-BROKEN1", AttachmentKey: "BROKEN1", DocumentKey: "PARENT1",
-		Title: "Nachhaltiges Personalmanagement", Year: 2022, Publisher: "Springer",
+		Title: "Nachhaltiges Personalmanagement", Year: 2022,
 		SrcPath: orig, ContentType: "application/pdf",
 	}, []byte("healed bytes"))
 	if err != nil {

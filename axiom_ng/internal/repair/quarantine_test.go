@@ -12,28 +12,57 @@ import (
 
 func TestSchemaFilenameAuthor(t *testing.T) {
 	got := SchemaFilename([]zotero.Creator{{LastName: "Horváth", FirstName: "Péter", CreatorType: "author"},
-		{LastName: "Gleich", CreatorType: "author"}}, 2025, "Controlling", "")
+		{LastName: "Gleich", CreatorType: "author"}}, 2025, "Controlling")
 	if got != "Horváth - 2025 - Controlling.pdf" {
 		t.Fatalf("got %q", got)
 	}
 }
-
 func TestSchemaFilenameInstitutional(t *testing.T) {
 	got := SchemaFilename([]zotero.Creator{{Name: "World Bank", CreatorType: "author"}}, 2026,
-		"Global Economic Prospects, January 2026: Expand, Invest, Protect", "")
+		"Global Economic Prospects, January 2026: Expand, Invest, Protect")
 	if got != "World Bank - 2026 - Global Economic Prospects, January 2026: Expand, Invest, Protect.pdf" {
 		t.Fatalf("got %q", got)
 	}
 	long := SchemaFilename([]zotero.Creator{{LastName: "Müller", CreatorType: "author"}}, 2020,
-		strings.Repeat("Sehr langer Buchtitel ", 8), "")
+		strings.Repeat("Sehr langer Buchtitel ", 8))
 	if !filepath.IsLocal(long) || !strings.HasSuffix(long, "….pdf") {
 		t.Fatalf("Kürzung: %q", long)
 	}
 }
 
+func TestSchemaFilenameEditorOnlyUsesFirstEditor(t *testing.T) {
+	// #287 (production case Learning Analytics, transcript): editors-only
+	// volumes (Herausgeberwerke — the standard shape of German academic
+	// Sammelbände) take the FIRST EDITOR's last name, consistent with
+	// citation practice (Queckenberg et al. (Hg.)). The publisher is
+	// never a name component.
+	got := SchemaFilename([]zotero.Creator{
+		{LastName: "Queckenberg", FirstName: "Lea", CreatorType: "editor"},
+		{LastName: "Leschke", FirstName: "Robin", CreatorType: "editor"},
+		{LastName: "Persike", FirstName: "Norman", CreatorType: "editor"},
+	}, 2025, "Learning Analytics, Artificial Intelligence und Data Mining in der Hochschulbildung")
+	if !strings.HasPrefix(got, "Queckenberg - 2025 - ") {
+		t.Fatalf("got %q", got)
+	}
+	if strings.Contains(got, "transcript") {
+		t.Fatalf("publisher must never appear: %q", got)
+	}
+}
+
+func TestSchemaFilenameAuthorBeatsEditor(t *testing.T) {
+	// cascade order: an author wins over editors (mixed creator lists).
+	got := SchemaFilename([]zotero.Creator{
+		{LastName: "Editor", CreatorType: "editor"},
+		{LastName: "Autor", CreatorType: "author"},
+	}, 2024, "Titel")
+	if got != "Autor - 2024 - Titel.pdf" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestSchemaFilenameSanitizesSeparators(t *testing.T) {
 	got := SchemaFilename([]zotero.Creator{{LastName: "Müller & Höfe 100%", CreatorType: "author"}}, 2020,
-		"Der Frühling +Mehr: Ein/Fall", "")
+		"Der Frühling +Mehr: Ein/Fall")
 	if filepath.IsLocal(got) == false {
 		t.Fatalf("not local: %q", got)
 	}
@@ -112,9 +141,12 @@ func TestQuarantineExtensionFollowsSource(t *testing.T) {
 	}
 }
 
-func TestSchemaFilenamePublisherFallback(t *testing.T) {
-	got := SchemaFilename(nil, 2026, "Global Economic Prospects, January 2026", "World Bank")
-	if got != "World Bank - 2026 - Global Economic Prospects, January 2026.pdf" {
+func TestSchemaFilenamePublisherNeverName(t *testing.T) {
+	// #287 negative: a document with NO creators must not inherit the
+	// publisher as its name component (the "transcript - 2025 - …" defect).
+	// Honest "Unbekannt" instead — fixable via Zotero metadata.
+	got := SchemaFilename(nil, 2026, "Global Economic Prospects, January 2026")
+	if got != "Unbekannt - 2026 - Global Economic Prospects, January 2026.pdf" {
 		t.Fatalf("got %q", got)
 	}
 }

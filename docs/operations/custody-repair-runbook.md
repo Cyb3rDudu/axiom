@@ -92,6 +92,21 @@ Wiederherstellung = Datei zurückkopieren, manuell als Attachment unter das
 Parent-Item laden (Zotero UI), Sync. Der Protokoll-Satz
 (`<quarantine-root>/manual/<KEY>.json`) dokumentiert Grund und Verlauf.
 
+## Schema-Dateiname — Namenskaskade (#287)
+
+Der Upload-Dateiname folgt `{Autor|Herausgeber|Institution} - {Jahr} -
+{Titel}.ext`: **Autor → erster Herausgeber → Institution** — der Verlag
+erscheint NIEMALS als Namensbestandteil (Produktionsfall: „transcript -
+2025 - Learning Analytics…“ statt „Leschke - 2025 - …“ für ein
+Herausgeberwerk). Ohne Creatoren heißt der Kopf ehrlich `Unbekannt` —
+korrigierbar über die Zotero-Metadaten.
+
+**Bereits fehlbenannte Dateien** (vor #287 hochgeladen): es gibt per
+Design KEINE Rename-Mutation. Manuelle Remediation: Dateinamen im
+Zotero-Client von der Parent-Metadaten-Seite aus umbenennen — oder, falls
+das Attachment ohnehin erneut repariert wird, den Custody-Lauf wiederholen
+(er erzeugt den korrekten Schema-Namen neu).
+
 ## Warum kein CLI eigener Bauart
 
 Der RAG ist das einzige Zotero-Gateway (Design-Nagel #184): Credentials und

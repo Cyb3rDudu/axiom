@@ -84,43 +84,55 @@ func Quarantine(root, zoteroKey, sourcePath string) (string, error) {
 
 // SchemaFilename builds the dudu schema name:
 //
-//	{Autor|Institution} - {Jahr} - {Titel}.pdf
+//	{Autor|Herausgeber|Institution} - {Jahr} - {Titel}.pdf
 //
-// First author's lastName (or institutional name), publication year, short
-// title. There is NO filename patch mutation anywhere — this builder is the
-// ONLY source of attachment filenames for repairs. Creators reuse the
-// zotero projection shape (single definition, review W6).
-func SchemaFilename(creators []zotero.Creator, year int, title, publisher string) string {
-	return schemaFilename(creators, year, title, publisher, ".pdf")
+// First author's lastName, else the first editor's (editors-only
+// Sammelbände, #287), else the institutional single-field name — each
+// stage reads the creators list; institutional authors carry fieldMode 1
+// and surface in the author stage. There is NO filename patch mutation
+// anywhere — this builder is the ONLY source of attachment filenames for
+// repairs. Creators reuse the zotero projection shape (single definition,
+// review W6). The publisher is NEVER a name component (#287: the custody
+// upload of an editors-only volume produced "transcript - 2025 - …").
+func SchemaFilename(creators []zotero.Creator, year int, title string) string {
+	return schemaFilename(creators, year, title, ".pdf")
 }
 
 // SchemaFilenameForFormat picks the extension from the attachment's
 // content type (#220: EPUB repairs upload .epub, not .pdf).
-func SchemaFilenameForFormat(creators []zotero.Creator, year int, title, publisher, contentType string) string {
+func SchemaFilenameForFormat(creators []zotero.Creator, year int, title, contentType string) string {
 	ext := ".pdf"
 	if strings.Contains(contentType, "epub") {
 		ext = ".epub"
 	}
-	return schemaFilename(creators, year, title, publisher, ext)
+	return schemaFilename(creators, year, title, ext)
 }
 
-func schemaFilename(creators []zotero.Creator, year int, title, publisher, ext string) string {
-	head := ""
+// pickCreatorName returns the first lastName (or the institutional
+// single-field name, fieldMode 1) among creators of the given type — ""
+// when none exists.
+func pickCreatorName(creators []zotero.Creator, creatorType string) string {
 	for _, c := range creators {
-		if c.CreatorType != "author" {
+		if c.CreatorType != creatorType {
 			continue
 		}
-		if c.Name != "" { // institutional author (fieldMode 1)
-			head = c.Name
-		} else if c.LastName != "" {
-			head = c.LastName
+		if c.Name != "" { // institutional creator (fieldMode 1)
+			return c.Name
 		}
-		if head != "" {
-			break
+		if c.LastName != "" {
+			return c.LastName
 		}
 	}
-	if head == "" && publisher != "" {
-		head = publisher // institutional reports (Weltbank GEP: creators NULL in projection)
+	return ""
+}
+
+func schemaFilename(creators []zotero.Creator, year int, title, ext string) string {
+	// #287 cascade: author → first editor → institution. Documents with
+	// no creators at all are honest as "Unbekannt" (fixable in Zotero
+	// metadata) — the publisher must not masquerade as a person.
+	head := pickCreatorName(creators, "author")
+	if head == "" {
+		head = pickCreatorName(creators, "editor")
 	}
 	if head == "" {
 		head = "Unbekannt"

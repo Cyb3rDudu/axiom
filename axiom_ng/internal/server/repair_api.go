@@ -226,7 +226,6 @@ func (s *Server) handleRepairCustody(w http.ResponseWriter, r *http.Request) {
 		Title:         item.Title,
 		Creators:      item.Creators,
 		Year:          item.Year,
-		Publisher:     item.Publisher,
 		SrcPath:       strings.TrimPrefix(item.LocalPath, "file://"),
 		ContentType:   contentType,
 	}, artifact)
@@ -537,7 +536,6 @@ func (s *Server) applyRepair(ctx context.Context, d repairApplyDeps, caseID stri
 		Title:         item.Title,
 		Creators:      item.Creators,
 		Year:          item.Year,
-		Publisher:     item.Publisher,
 		SrcPath:       srcPath,
 		ContentType:   contentType,
 		PlanVersion:   planVersion,
