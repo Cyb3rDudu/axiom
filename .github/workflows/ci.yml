@@ -114,6 +114,12 @@ jobs:
       # full gated verification including the sanitized-PATH smoke.
       - name: install
         run: pip install -r requirements.txt
+      # ruff is NOT a fixer runtime dep (it would ship in the artifact) —
+      # the runner job gets it via its requirements.txt; here it is an
+      # explicit tool install for the gate (review Runde 3: the job ran
+      # red with 'ruff: command not found' since introduction).
+      - name: install ruff
+        run: pip install ruff
       # Scope mirrors the runner job's enforced set (tests/).
       - name: ruff
         run: ruff check tests/
