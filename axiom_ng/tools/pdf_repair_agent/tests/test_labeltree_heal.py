@@ -14,7 +14,7 @@ import pymupdf
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
-from tools import labeltree_heal
+from tools import labeltree_heal  # noqa: E402
 
 
 def _missing_tree_pdf(path: Path, n=6, folio_from=1):

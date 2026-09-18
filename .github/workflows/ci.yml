@@ -96,3 +96,26 @@ jobs:
         run: ruff check tests/
       - name: pytest
         run: python -m pytest tests/
+
+  fixer-pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: axiom_ng/tools/pdf_repair_agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # CI symmetry (#286 review): the runner suite has a job, the fixer
+      # suite did not — same shape both sides. requirements.txt is the
+      # light stack (pymupdf, pytest); the OCR-binaries tests skip without
+      # tesseract/ocrmypdf (needs_ocr marker), the artifact build runs the
+      # full gated verification including the sanitized-PATH smoke.
+      - name: install
+        run: pip install -r requirements.txt
+      # Scope mirrors the runner job's enforced set (tests/).
+      - name: ruff
+        run: ruff check tests/
+      - name: pytest
+        run: python -m pytest tests/

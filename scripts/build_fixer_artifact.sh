@@ -29,6 +29,8 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
 BUILD="$DIST/build/fixer"
+# shared plumbing (micromamba bootstrap, conda-pack staging, drift guard):
+. "$ROOT/scripts/lib/artifact_common.sh"
 VERSION="${1:?usage: build_fixer_artifact.sh <version>}"
 ARTIFACT="$DIST/axiom-fixer-$VERSION-macos-arm64.tar.zst"
 STAGE="$BUILD/fixer-$VERSION"
@@ -50,24 +52,19 @@ rsync -a \
 # layout via the `current` symlink.
 install -m 0755 scripts/fix.sh "$STAGE/fix.sh"
 
-# --- micromamba (single static binary, cached under dist/tooling) -----------
-# Shared cache with build_runner_artifact.sh — second build reuses the binary.
-MM="$DIST/tooling/bin/micromamba"
-if [ ! -x "$MM" ]; then
-    mkdir -p "$DIST/tooling"
-    echo "fixer-artifact: downloading micromamba"
-    curl -Ls https://micro.mamba.pm/api/micromamba/darwin-arm64/latest -o "$DIST/tooling/mm.tar.bz2"
-    tar -xjf "$DIST/tooling/mm.tar.bz2" -C "$DIST/tooling" bin/micromamba
-    rm -f "$DIST/tooling/mm.tar.bz2"
-fi
-MAMBA_ROOT_PREFIX="$DIST/tooling/mamba-root"
-export MAMBA_ROOT_PREFIX
+artifact_mm_bootstrap
+artifact_assert_bundled_env_identical
 
 # --- conda env with python 3.11 (lockfile was frozen on 3.11) ----------------
-rm -rf "$PREFIX"
+# ENV REUSE (unified policy, runner semantics): create only when missing.
+# Changing a conda spec line requires ONE manual
+#   rm -rf dist/build/fixer/env
+# so cache-hardlinked package files are never silently overwritten.
 # #286: tesseract + ghostscript aus conda-forge INS Env (bundled-binaries
-# Standard; eng-tessdata bringt das conda-Paket mit).
-"$MM" create -y -p "$PREFIX" -c conda-forge 'python=3.11' 'tesseract=5.*' 'ghostscript' pip
+# Standard; deu/eng-tessdata bringt das conda-Paket mit).
+if [ ! -x "$PREFIX/bin/python" ]; then
+    "$MM" create -y -p "$PREFIX" -c conda-forge 'python=3.11' 'tesseract=5.*' 'ghostscript' pip
+fi
 PY="$PREFIX/bin/python"
 
 # --- pinned deps (lock wins when present — same rule as bootstrap.sh) -------
@@ -90,11 +87,7 @@ echo "$TESSDATA_SHA  $TESSDIR/deu.traineddata" | shasum -a 256 -c - || {
 "$PY" -m pip install -q --disable-pip-version-check conda-pack
 
 # --- pack env (relocatable; conda-unpack fixes prefixes at install) ---------
-rm -rf "$STAGE/env"
-"$PREFIX/bin/conda-pack" -p "$PREFIX" --n-threads -1 -o "$BUILD/env.tar.gz"
-mkdir -p "$STAGE/env"
-tar -xzf "$BUILD/env.tar.gz" -C "$STAGE/env"
-rm -f "$BUILD/env.tar.gz"
+artifact_pack_env "$PREFIX" "$STAGE"
 
 # --- interpreter autarky proof (#208): NO symlink may leave the artifact ----
 if find "$STAGE/env/bin" -name 'python*' -type l | while read -r l; do
@@ -167,6 +160,11 @@ SMOKE
 ) || { echo "fixer-artifact: sanitized-PATH rebuild smoke FAILED" >&2; exit 1; }
 
 # --- artifact --------------------------------------------------------------------
+# unified staging policy (runner semantics): tests ship NOT in the
+# artifact — the pytest gate above ran against the staged tree, now the
+# tests are stripped before tarring (fixtures stay: the OCR smoke's
+# evidence + operator reproduction material).
+rm -rf "$STAGE/app/tests"
 tar --zstd -C "$BUILD" -cf "$ARTIFACT" "fixer-$VERSION"
 (cd "$DIST" && shasum -a 256 "${ARTIFACT##*/}" >"${ARTIFACT##*/}.sha256")
 echo "fixer-artifact: $ARTIFACT"

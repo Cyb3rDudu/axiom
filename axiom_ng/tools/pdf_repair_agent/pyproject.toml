@@ -10,3 +10,10 @@ pythonVersion = "3.11"
 pythonPlatform = "Darwin"
 venvPath = "."
 venv = ".venv"
+
+# ruff gate (CI fixer-pytest job mirrors the runner job's shape; #286):
+# pin the ENFORCED set explicitly so a newer ruff's expanded defaults
+# cannot change the gate retroactively. The E402 noqas in tests/ cover the
+# sys.path-insert harness pattern and are correct under this set.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

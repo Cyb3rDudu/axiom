@@ -27,10 +27,10 @@ HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
 sys.path.insert(0, str(PKG))
 
-from config import load_config
-from deepseek_client import MockClient
-from repair_agent import run_agent
-from tools import surgery_exec  # type: ignore[reportAttributeAccessIssue]
+from config import load_config  # noqa: E402
+from deepseek_client import MockClient  # noqa: E402
+from repair_agent import run_agent  # noqa: E402
+from tools import surgery_exec  # type: ignore[reportAttributeAccessIssue]  # noqa: E402
 
 
 def _missing_tree_pdf(path: Path, n=6, folio_from=1):
