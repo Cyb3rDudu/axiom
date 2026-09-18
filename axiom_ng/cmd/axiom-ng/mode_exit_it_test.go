@@ -24,7 +24,9 @@ package main
 //   go test ./cmd/axiom-ng/ -run TestIT_ModeFlags -v
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -355,5 +357,66 @@ func TestIT_HelpDocumentsExitCodes(t *testing.T) {
 		if !strings.Contains(string(out), want) {
 			t.Fatalf("-help output missing %q\n%s", want, out)
 		}
+	}
+}
+
+// TestIT_MaintenanceRetentionUnlinksArtifactFiles (#281 review nit): the
+// retention mode's --apply run must not only cascade the artifact ROW but
+// delete the durable artifact FILE — the "deleted means gone" promise has
+// an untested os.Remove leg otherwise. Seeds a superseded snapshot with a
+// real file on disk, runs the actual binary, asserts file AND row gone.
+func TestIT_MaintenanceRetentionUnlinksArtifactFiles(t *testing.T) {
+	dsn := openModeTestDB(t)
+
+	// fixture: source/document/attachment + a superseded snapshot with a
+	// real artifact file on disk
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	artFile := filepath.Join(t.TempDir(), "durable-artifact.png")
+	if err := os.WriteFile(artFile, []byte("artifact-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var snapID string
+	if err := pool.QueryRow(ctx, `
+		WITH s AS (INSERT INTO zotero_sources (base_url, library_id, server_id)
+			VALUES ('https://zotero.retmode', 'lib-retmode', 'srv') RETURNING id),
+		d AS (INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
+			SELECT id, 'RMDOC', 1, 'book', 'Retention Mode' FROM s RETURNING id),
+		a AS (INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+			parent_zotero_key, link_mode, content_type, filename, local_path)
+			SELECT s.id, d.id, 'RMATT', 1, 'RMDOC', 'imported_file', 'application/pdf', 'x.pdf', '/tmp/x.pdf'
+			FROM s, d RETURNING id, document_id),
+		snap AS (INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name,
+			processor_version, profile_hash, document_id, profile, active)
+			SELECT a.id, 'rm-hash', 'p', 'v1', 'ph', a.document_id, '{}', false FROM a RETURNING id)
+		INSERT INTO processing_artifacts (snapshot_id, ref, kind, media_type, sha256, size_bytes, storage_path)
+		SELECT snap.id, 'fig1', 'image', 'image/png', 'rm-sha', 14, $1 FROM snap
+		RETURNING snapshot_id::text`, artFile).Scan(&snapID); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	bin := filepath.Join(t.TempDir(), "axiom-ng")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build binary: %v\n%s", err, out)
+	}
+	out := runMode(t, bin, dsn, "-maintenance-retention", "--apply")
+	if !strings.Contains(out, "retention APPLIED") {
+		t.Fatalf("mode output missing APPLIED line: %s", out)
+	}
+	if _, err := os.Stat(artFile); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("artifact file must be unlinked by the --apply run, stat err=%v", err)
+	}
+	var rows int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM processing_artifacts WHERE snapshot_id=$1::uuid`, snapID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("artifact row must cascade with the snapshot, got %d", rows)
 	}
 }

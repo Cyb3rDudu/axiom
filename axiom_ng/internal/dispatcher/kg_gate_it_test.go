@@ -9,8 +9,12 @@ package dispatcher
 
 import (
 	"context"
+	"net/url"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // takeKGLock opens the KG maintenance advisory lock on its own connection
@@ -71,4 +75,72 @@ func TestKGGateDefersClaimWhileConsolidationActive(t *testing.T) {
 	if active, err := h.rep.KGMaintenanceActive(context.Background()); err != nil || active {
 		t.Fatalf("KGMaintenanceActive = %v/%v, want false after release", active, err)
 	}
+}
+
+// TestKGMaintenanceActiveScopedToOwnDatabase — the review mutation pin for
+// the database filter: a KG pass holding the advisory lock in a DIFFERENT
+// database (a scratch/test DB on the same instance) must NOT read as
+// active here. Removing the `database = current_database()` filter turns
+// this red (the cross-db lock would freeze production claiming — the
+// original finding, and the source of the wave-IT flakes).
+func TestKGMaintenanceActiveScopedToOwnDatabase(t *testing.T) {
+	h := openDispatchDB(t)
+
+	// a SECOND database on the same instance
+	other := "axiom_ng_dispatch_kgscope_test"
+	maint, err := pgxpool.New(context.Background(), cloneDSN(mustParseDSN(t), "postgres"))
+	if err != nil {
+		t.Fatalf("maint pool: %v", err)
+	}
+	var exists bool
+	if err := maint.QueryRow(context.Background(),
+		`SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname=$1)`, other).Scan(&exists); err != nil {
+		t.Fatalf("check db: %v", err)
+	}
+	if !exists {
+		if _, err := maint.Exec(context.Background(), `CREATE DATABASE `+other); err != nil {
+			t.Fatalf("create db: %v", err)
+		}
+	}
+	maint.Close()
+	otherPool, err := pgxpool.New(context.Background(), cloneDSN(mustParseDSN(t), other))
+	if err != nil {
+		t.Fatalf("other pool: %v", err)
+	}
+	defer otherPool.Close()
+
+	// hold the KG advisory lock IN THE OTHER DATABASE
+	conn, err := otherPool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(context.Background(), `SELECT pg_advisory_lock(4708594015363876609)`); err != nil {
+		t.Fatalf("lock in other db: %v", err)
+	}
+
+	// the detector on OUR database must NOT see it
+	if active, err := h.rep.KGMaintenanceActive(context.Background()); err != nil {
+		t.Fatalf("detector: %v", err)
+	} else if active {
+		t.Fatal("KG lock held in ANOTHER database must not read as active — the detector lost its database scope")
+	}
+
+	// sanity: the same lock in OUR database still reads as active
+	release := h.takeKGLock(t)
+	defer release()
+	if active, err := h.rep.KGMaintenanceActive(context.Background()); err != nil || !active {
+		t.Fatalf("own-db lock must read as active: %v/%v", active, err)
+	}
+}
+
+// mustParseDSN re-parses the harness DSN for cloneDSN use.
+func mustParseDSN(t *testing.T) *url.URL {
+	t.Helper()
+	base := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	u, err := url.Parse(base)
+	if err != nil {
+		t.Fatalf("parse dsn: %v", err)
+	}
+	return u
 }

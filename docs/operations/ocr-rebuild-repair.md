@@ -62,8 +62,9 @@ output; the original stays untouched.
    surface: `POST /api/repair/cases/{id}/requeue` with
    `{"reason": "...", "analysis_patch": {"ocr": {"mode": "force",
    "lang": "eng"}}}` — the requeue route merges the override into the case
-   analysis, which routes the invoker onto the OCR budget and `--ocr-mode
-   force`. (Space-less scripts — CJK and kin — are explicitly recognized
+   analysis (shallow jsonb merge: a patched `ocr` object replaces any
+   previous one — carry `mode` and `lang` together), which routes the
+   invoker onto the OCR budget and `--ocr-mode force`. (Space-less scripts — CJK and kin — are explicitly recognized
    as INTACT and never force-classified.)
 2. The case **auto-queues** (#284 lifted the historical never-queue
    refusal) — the pilot books already sitting rejected in the DB can be

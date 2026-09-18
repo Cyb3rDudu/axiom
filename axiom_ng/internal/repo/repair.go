@@ -274,11 +274,14 @@ func (r *Repo) SubmitRepairVerdict(ctx context.Context, caseID string, plan json
 // REFUSES (mid-flight cases are never touched from outside — same nail
 // as BlockRepairCase); healed refuses too (nothing to redo — a new
 // suspicion opens a new case).
-// analysisPatch (#284 review): an optional JSON object MERGED into the
+// analysisPatch (#284 review): an optional JSON object merged into the
 // case's analysis (jsonb ||) — the per-case override surface for OCR
 // routing (e.g. {"ocr": {"mode": "force", "lang": "eng"}} for the
-// broken-text-layer class: the invoker keys its budget and --ocr-mode
-// on exactly these fields). The patch is audited with the reason.
+// broken-text-layer class: the invoker keys its budget and --ocr-mode on
+// exactly these fields). The patch is audited with the reason. NOTE:
+// jsonb || is a SHALLOW merge — a patched "ocr" object REPLACES any
+// existing one, so patches must carry the complete override object
+// (mode AND lang together), not single keys.
 func (r *Repo) RequeueRepairCase(ctx context.Context, caseID, reason string, analysisPatch json.RawMessage) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("requeue braucht einen Grund (geänderte Beweislage dokumentieren)")

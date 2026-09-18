@@ -108,7 +108,8 @@ def _page_dims(pdf: str | Path) -> list[tuple[float, float]]:
 def _is_spaceless_script_text(text: str) -> bool:
     """Anteil space-loser Schriften (CJK u. a.): Diese Schriften trennen
     Wörter NOTORISCH ohne Leerzeichen — space_ratio ~0 ist dort INTAKT,
-    nicht kaputt. Schwellen: >30% CJK/Bopomofo/Hangul/Kana-Zeichen."""
+    nicht kaputt. Schwellen: >30% CJK/Hangul/Kana-Zeichen (reine
+    Bopomofo-Texte fängt der Han-Anteil realer Dokumente mit auf)."""
     if not text:
         return False
     spaceless = 0
