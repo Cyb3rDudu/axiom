@@ -110,3 +110,132 @@ def test_ocr_live_lauf_und_qualitaetstor():
     counts = pdf_kernel.page_char_count(dst)
     assert all(c >= ocr_tool.MIN_TEXT_CHARS for c in counts), counts
     dst.unlink(missing_ok=True)
+
+
+# ── #286: env-relative bundled OCR binaries (artifact standard) ──────────
+# Der Fixer verschiebt tesseract/gs/tessdata ins Artifact-Env; die Auflöse-
+# Logik muss ohne Host-PATH funktionieren (Carrier-Szenario). Die Sonde baut
+# ein FAKES gebündeltes Env-Layout auf und fährt PATH-sanitiert.
+
+
+def _fake_bundled_env(tmp_path, echo_mode: bool):
+    """Baut bin/tesseract + bin/gs + share/tessdata/{deu,eng}.traineddata
+    als Schein-Env; die Skripte protokollieren argv0 + TESSDATA_PREFIX, um
+    die Übergabe an den Kindprozess beweisbar zu machen."""
+    env = tmp_path / "fakeenv"
+    (env / "bin").mkdir(parents=True)
+    tdir = env / "share" / "tessdata"
+    tdir.mkdir(parents=True)
+    for lang in ("deu", "eng"):
+        (tdir / f"{lang}.traineddata").write_bytes(b"fake-model")
+    for name in ("tesseract", "gs"):
+        script = env / "bin" / name
+        if echo_mode:
+            script.write_text(
+                "#!/bin/sh\n"
+                'echo "BIN=$0 TESSDATA=[$TESSDATA_PREFIX]"\n'
+                "exit 0\n"
+            )
+        else:
+            script.write_text("#!/bin/sh\nexit 0\n")
+        script.chmod(0o755)
+    return env
+
+
+def test_bundled_bin_gewinnt_ueber_path(tmp_path, monkeypatch):
+    """Env-relativ schlägt PATH: selbst wenn ein ANDERER tesseract auf dem
+    PATH liegt, gewinnt sys.prefix/bin/tesseract (Mutationssonde: die
+    sys.prefix-Zeile entfernt -> PATH-Fake gewinnt -> rot)."""
+    import os as _os
+
+    fake = _fake_bundled_env(tmp_path, echo_mode=False)
+    other = tmp_path / "otherbin"
+    other.mkdir()
+    (other / "tesseract").write_text("#!/bin/sh\nexit 0\n")
+    (other / "tesseract").chmod(0o755)
+    monkeypatch.setattr(ocr_tool.sys, "prefix", str(fake))
+    monkeypatch.setattr(ocr_tool.shutil, "which", lambda n: str(other / n))
+    got = ocr_tool.bundled_bin("tesseract")
+    assert got == str(fake / "bin" / "tesseract"), got
+
+
+def test_bundled_aufloesung_ohne_host_path(tmp_path, monkeypatch):
+    """Carrier-Szenario: PATH SANITIERT (kein Host-tesseract/gs) — die
+    Binär-Bilanz bleibt grün, weil das Env bündelt."""
+    fake = _fake_bundled_env(tmp_path, echo_mode=False)
+    monkeypatch.setattr(ocr_tool.sys, "prefix", str(fake))
+    monkeypatch.setattr(ocr_tool.shutil, "which", lambda n: None)  # kein Host
+    bins = ocr_tool._bins_available()
+    assert bins["tesseract"] and bins["gs"], bins
+
+
+def test_ocr_child_env_setzt_tessdata_und_path(tmp_path, monkeypatch):
+    """Die Kind-Umgebung trägt TESSDATA_PREFIX (gebündelte Modelle) und
+    stellt env/bin VORAN — ocrmypdf findet tesseract/gs auch ohne Host."""
+    import os as _os
+
+    fake = _fake_bundled_env(tmp_path, echo_mode=False)
+    monkeypatch.setattr(ocr_tool.sys, "prefix", str(fake))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    child = ocr_tool.ocr_child_env()
+    assert child["TESSDATA_PREFIX"] == str(fake / "share" / "tessdata")
+    assert child["PATH"].startswith(str(fake / "bin") + _os.pathsep), child["PATH"]
+
+
+def test_dev_venv_ohne_buendel_bleibt_noop(monkeypatch):
+    """Dev-Venv ohne gebündelte Binaries: keine PATH-Verfälschung, kein
+    TESSDATA_PREFIX — transparenter Host-PATH-Fallback."""
+    monkeypatch.setattr(
+        ocr_tool, "tessdata_dir", lambda: None
+    )
+    monkeypatch.setattr(ocr_tool.os.path, "exists", lambda p: False)
+    child = ocr_tool.ocr_child_env()
+    assert "TESSDATA_PREFIX" not in child
+    assert not child["PATH"].startswith(str(ocr_tool.Path(ocr_tool.sys.prefix) / "bin"))
+
+
+def test_rebuild_reicht_kind_env_durch(tmp_path, monkeypatch):
+    """Prozessgrenzen-Sonde (#286): run_rebuild übergibt die gebündelte
+    Kind-Umgebung (TESSDATA_PREFIX + env-bin-PATH) tatsächlich an den
+    ocrmypdf-Kindprozess — nicht nur die pure Funktionslogik."""
+    import tools.scan_ocr_rebuild as t
+
+    fake = _fake_bundled_env(tmp_path, echo_mode=True)
+    monkeypatch.setattr(ocr_tool.sys, "prefix", str(fake))
+    monkeypatch.setattr(t, "ocrmypdf_bin", lambda: "/usr/bin/false")
+
+    captured = {}
+
+    class _FakeProc:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    def _fake_run(cmd, capture_output, text, timeout, env):
+        captured["env"] = env
+        return _FakeProc()
+
+    import pymupdf
+
+    monkeypatch.setattr(t.subprocess, "run", _fake_run)
+    src = tmp_path / "s.pdf"
+    d = pymupdf.open()
+    p = d.new_page()
+    p.insert_text((50, 50), "x" * 200)
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 40, 40))
+    pix.clear_with(120)
+    p.insert_image(p.rect, pixmap=pix)
+    d.save(src)
+    d.close()
+
+    # run_rebuild aufrufen; die Verifikation wird weggestubbt (die Sonde
+    # misst die Prozessübergabe, nicht die OCR-Qualität)
+    monkeypatch.setattr(t, "_page_dims", lambda pdf: [(100.0, 100.0)])
+    monkeypatch.setattr(
+        t, "_text_layer_metrics", lambda pdf: {"pages": 1, "total_chars": 99, "mean_chars_per_page": 99.0}
+    )
+    res = t.run_rebuild(src, tmp_path / "out.pdf", lang="deu", timeout_s=30)
+    assert res.get("applied"), res
+    child = captured["env"]
+    assert child["TESSDATA_PREFIX"] == str(fake / "share" / "tessdata")
+    assert child["PATH"].startswith(str(fake / "bin") + ":"), child["PATH"]

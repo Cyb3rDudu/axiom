@@ -443,12 +443,16 @@ non-secret settings, and `--key` stays a per-event argument.
   incident — an instrumented debug build serving production for hours —
   is now machine-enforced, not convention.
 
-## Host dependencies (NOT bundled in artifacts)
+## Host dependencies
 
-The fixer's OCR lane shells out to **tesseract5** (with `deu` traineddata)
-and **ghostscript** — they must be on PATH. Probes:
-`tesseract --list-langs | grep deu` and `gs --version`. Without them the
-OCR lane reports unavailability (everything else runs).
+**None for the OCR lane (#286):** tesseract5 (with `deu`+`eng` traineddata)
+and ghostscript ship INSIDE the fixer artifact (`env/bin/tesseract`,
+`env/bin/gs`, `env/share/tessdata/`) — the bundled-binaries standard
+(#224/#211). The tools resolve them env-relatively (`tools/ocr_tool.py`:
+`bundled_bin`/`ocr_child_env`, relocatable through conda-unpack); the
+build verifies them against the packed env (`tesseract --list-langs` must
+answer `deu`+`eng`) and runs a sanitized-PATH rebuild smoke. Older fixer
+builds (pre-#286) still need them on PATH.
 
 zstd is needed to build/install the tar.zst artifacts (macOS: `brew install
 zstd`, or the nix store path the Makefile picks up automatically).
@@ -466,10 +470,10 @@ Standard path = launchctl + `/opt` + release artifacts (above). On the
 nix-darwin host the same services map to home-manager
 `launchd.agents.<name>` (pattern: `launchd.agents.llama-swap` in the owner's
 nix-conf): stable config under `~/.config/axiom/`, state under
-`~/.local/state/axiom`. Host deps via nix: `pkgs.tesseract5`
-(`enableLanguages = ["eng" "deu"]`) + `pkgs.ghostscript` in the system
-profile. Nix is a wrapper, not a requirement — axiom itself has no flake
-(#205 non-goal).
+`~/.local/state/axiom`. The OCR stack is bundled in the fixer artifact
+(#286) — the nix profile copies are a convenience for ad-hoc operator
+runs, not a pipeline requirement. Nix is a wrapper, not a requirement —
+axiom itself has no flake (#205 non-goal).
 
 ## CI / Releases
 

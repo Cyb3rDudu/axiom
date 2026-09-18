@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -57,12 +58,55 @@ def ocrmypdf_bin() -> str | None:
     return shutil.which("ocrmypdf")
 
 
+# --- #286: gebündelte OCR-Binaries (Artifact-Standard #224/#211) ----------
+# Der Fixer verschiebt tesseract + ghostscript + tessdata IN sein Env
+# (build_fixer_artifact.sh, conda-forge) — ein Host-PATH ist keine
+# Voraussetzung mehr (Carrier-Szenario). Alles hier ist ENV-RELATIV über
+# sys.prefix und damit nach conda-unpack relocatable; ein reines
+# Dev-Venv (ohne gebündelte Binaries) fällt transparent auf PATH zurück.
+
+
+def bundled_bin(name: str) -> str | None:
+    """Env-relative Binär-Auflösung (#286): sys.prefix/bin/<name> zuerst
+    (das gepackte Artifact-Env), dann PATH-Fallback (Dev-Maschine)."""
+    cand = Path(sys.prefix) / "bin" / name
+    if cand.is_file() and os.access(cand, os.X_OK):
+        return str(cand)
+    return shutil.which(name)
+
+
+def tessdata_dir() -> str | None:
+    """Env-relative tessdata-Lage (#286): sys.prefix/share/tessdata, wenn
+    sie Sprachpakete enthält (das Artifact schafft deu+eng dorthin).
+    None im Dev-Venv — dann gilt, was der Host-Tesseract selbst findet."""
+    d = Path(sys.prefix) / "share" / "tessdata"
+    if d.is_dir() and any(d.glob("*.traineddata")):
+        return str(d)
+    return None
+
+
+def ocr_child_env() -> dict[str, str]:
+    """Umgebung für OCR-Kindprozesse (#286): ocrmypdf findet tesseract/gs
+    über PATH — also env/bin VORAN — und TESSDATA_PREFIX zeigt auf die
+    gebündelten Modelle. Beides no-op im Dev-Venv ohne Bündel."""
+    env = dict(os.environ)
+    if tessdata_dir():
+        env["TESSDATA_PREFIX"] = tessdata_dir() or ""
+    env_bin = Path(sys.prefix) / "bin"
+    # nur voransetzen, wenn dort überhaupt OCR-Binaries liegen (sonst
+    # verschieben wir zufällige Venv-Scripts unnötig nach vorn)
+    if (env_bin / "tesseract").exists():
+        env["PATH"] = str(env_bin) + os.pathsep + env.get("PATH", "")
+    return env
+
+
 def _bins_available() -> dict:
     """Ehrliche Binär-Bilanz: ALLE drei nötigen Werkzeuge, kein Raten.
-    ocrmypdf wird venv-bewusst aufgelöst (siehe ocrmypdf_bin)."""
+    ocrmypdf wird venv-bewusst aufgelöst (siehe ocrmypdf_bin); tesseract
+    und gs env-relativ aus dem gebündelten Artifact-Env (#286)."""
     return {
-        "tesseract": shutil.which("tesseract") is not None,
-        "gs": shutil.which("gs") is not None,
+        "tesseract": bundled_bin("tesseract") is not None,
+        "gs": bundled_bin("gs") is not None,
         "ocrmypdf": ocrmypdf_bin() is not None,
     }
 
@@ -133,6 +177,7 @@ def run_ocr(pdf: str | Path, dst: Path, lang: str = OCR_LANG_DEFAULT) -> dict:
         capture_output=True,
         text=True,
         timeout=OCRMYPDF_TIMEOUT,
+        env=ocr_child_env(),  # #286: gebündelte Binaries/tessdata, kein Host-PATH nötig
     )
     if r.returncode != 0:
         return {

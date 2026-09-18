@@ -76,10 +76,12 @@ def _timeout_s(pages: int) -> int:
 
 
 def _bins_available() -> dict:
-    """Ehrliche Binär-Bilanz (venv-bewusst für ocrmypdf, wie ocr_tool)."""
+    """Ehrliche Binär-Bilanz: env-relativ gebündelte Binaries zuerst
+    (#286, Artifact-Standard — Carrier ohne Host-tesseract/gs), dann
+    PATH-Fallback (Dev-Maschine)."""
     return {
-        "tesseract": shutil.which("tesseract") is not None,
-        "gs": shutil.which("gs") is not None,
+        "tesseract": ocr_tool.bundled_bin("tesseract") is not None,
+        "gs": ocr_tool.bundled_bin("gs") is not None,
         "ocrmypdf": ocrmypdf_bin() is not None,
     }
 
@@ -246,7 +248,9 @@ def run_rebuild(
     cmd += ["-q", str(src), str(dst)]
     budget = timeout_s or _timeout_s(pages)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=budget)
+        # #286: Kind-Umgebung aus dem gebündelten Env (PATH + TESSDATA_PREFIX)
+        # — der Rebuild läuft ohne Host-tesseract/gs (Carrier-Szenario).
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=budget, env=ocr_tool.ocr_child_env())
     except subprocess.TimeoutExpired:
         return {
             "applied": False,

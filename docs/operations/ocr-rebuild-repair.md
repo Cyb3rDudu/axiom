@@ -76,11 +76,14 @@ output; the original stays untouched.
 5. The #282 post-heal auto-sync enqueues the healed attachment — the
    document processes end-to-end without operator action.
 
-## Host prerequisite
+## Prerequisites — bundled (#286)
 
-`tesseract` (with `deu` + `eng` traineddata) and `ghostscript` on PATH,
-plus `ocrmypdf` in the fixer venv (bundled). The nix host config carries
-the OCR stack. **Ceiling note:** the tool's internal per-run bound is
+The fixer artifact ships the entire OCR toolchain: `ocrmypdf` (venv),
+`tesseract` + `ghostscript` and the `deu`/`eng` traineddata in `env/`.
+The tools resolve everything env-relatively (no host PATH contribution);
+the build proves it with a staged `--list-langs` check and a
+sanitized-PATH rebuild smoke. Only pre-#286 fixer builds rely on host
+binaries. **Ceiling note:** the tool's internal per-run bound is
 120 s + 6 s/page — beyond roughly 830 pages it trips before the outer
 class budget; such books need a higher `AXIOM_OCR_TIMEOUT_S` on the fixer
 env (and patience).
