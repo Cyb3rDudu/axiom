@@ -146,15 +146,15 @@ def test_bundled_bin_gewinnt_ueber_path(tmp_path, monkeypatch):
     """Env-relativ schlägt PATH: selbst wenn ein ANDERER tesseract auf dem
     PATH liegt, gewinnt sys.prefix/bin/tesseract (Mutationssonde: die
     sys.prefix-Zeile entfernt -> PATH-Fake gewinnt -> rot)."""
-    import os as _os
+    from tools import bundled_env as be
 
     fake = _fake_bundled_env(tmp_path, echo_mode=False)
     other = tmp_path / "otherbin"
     other.mkdir()
     (other / "tesseract").write_text("#!/bin/sh\nexit 0\n")
     (other / "tesseract").chmod(0o755)
-    monkeypatch.setattr(ocr_tool.sys, "prefix", str(fake))
-    monkeypatch.setattr(ocr_tool.shutil, "which", lambda n: str(other / n))
+    monkeypatch.setattr(be.sys, "prefix", str(fake))
+    monkeypatch.setattr(be.shutil, "which", lambda n: str(other / n))
     got = ocr_tool.bundled_bin("tesseract")
     assert got == str(fake / "bin" / "tesseract"), got
 
@@ -162,9 +162,11 @@ def test_bundled_bin_gewinnt_ueber_path(tmp_path, monkeypatch):
 def test_bundled_aufloesung_ohne_host_path(tmp_path, monkeypatch):
     """Carrier-Szenario: PATH SANITIERT (kein Host-tesseract/gs) — die
     Binär-Bilanz bleibt grün, weil das Env bündelt."""
+    from tools import bundled_env as be
+
     fake = _fake_bundled_env(tmp_path, echo_mode=False)
-    monkeypatch.setattr(ocr_tool.sys, "prefix", str(fake))
-    monkeypatch.setattr(ocr_tool.shutil, "which", lambda n: None)  # kein Host
+    monkeypatch.setattr(be.sys, "prefix", str(fake))
+    monkeypatch.setattr(be.shutil, "which", lambda n: None)  # kein Host
     bins = ocr_tool._bins_available()
     assert bins["tesseract"] and bins["gs"], bins
 
@@ -174,8 +176,10 @@ def test_ocr_child_env_setzt_tessdata_und_path(tmp_path, monkeypatch):
     stellt env/bin VORAN — ocrmypdf findet tesseract/gs auch ohne Host."""
     import os as _os
 
+    from tools import bundled_env as be
+
     fake = _fake_bundled_env(tmp_path, echo_mode=False)
-    monkeypatch.setattr(ocr_tool.sys, "prefix", str(fake))
+    monkeypatch.setattr(be.sys, "prefix", str(fake))
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     child = ocr_tool.ocr_child_env()
     assert child["TESSDATA_PREFIX"] == str(fake / "share" / "tessdata")
@@ -185,13 +189,13 @@ def test_ocr_child_env_setzt_tessdata_und_path(tmp_path, monkeypatch):
 def test_dev_venv_ohne_buendel_bleibt_noop(monkeypatch):
     """Dev-Venv ohne gebündelte Binaries: keine PATH-Verfälschung, kein
     TESSDATA_PREFIX — transparenter Host-PATH-Fallback."""
-    monkeypatch.setattr(
-        ocr_tool, "tessdata_dir", lambda: None
-    )
-    monkeypatch.setattr(ocr_tool.os.path, "exists", lambda p: False)
+    from tools import bundled_env as be
+
+    monkeypatch.setattr(be, "tessdata_dir", lambda: None)
+    monkeypatch.setattr(be.os.path, "exists", lambda p: False)
     child = ocr_tool.ocr_child_env()
     assert "TESSDATA_PREFIX" not in child
-    assert not child["PATH"].startswith(str(ocr_tool.Path(ocr_tool.sys.prefix) / "bin"))
+    assert not child["PATH"].startswith(str(be.Path(be.sys.prefix) / "bin"))
 
 
 def test_rebuild_reicht_kind_env_durch(tmp_path, monkeypatch):
@@ -200,8 +204,10 @@ def test_rebuild_reicht_kind_env_durch(tmp_path, monkeypatch):
     ocrmypdf-Kindprozess — nicht nur die pure Funktionslogik."""
     import tools.scan_ocr_rebuild as t
 
+    from tools import bundled_env as be
+
     fake = _fake_bundled_env(tmp_path, echo_mode=True)
-    monkeypatch.setattr(ocr_tool.sys, "prefix", str(fake))
+    monkeypatch.setattr(be.sys, "prefix", str(fake))
     monkeypatch.setattr(t, "ocrmypdf_bin", lambda: "/usr/bin/false")
 
     captured = {}
@@ -239,3 +245,20 @@ def test_rebuild_reicht_kind_env_durch(tmp_path, monkeypatch):
     child = captured["env"]
     assert child["TESSDATA_PREFIX"] == str(fake / "share" / "tessdata")
     assert child["PATH"].startswith(str(fake / "bin") + ":"), child["PATH"]
+
+
+def test_bundled_env_drift_zwischen_den_baeumen():
+    """#286: bundled_env existiert CODE-IDENTISCH in beiden Paketbäumen
+    (Fixer = vendored Mirror des Runner-kanonikats — folio_harvest-Muster).
+    Drift hier = Drift-Test im Runner ROT und umgekehrt; beide Builds cmp
+    zusätzlich vor dem Staging."""
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[4]
+    canonical = repo / "axiom_ng_runner" / "compute_core" / "bundled_env.py"
+    mirror = repo / "axiom_ng" / "tools" / "pdf_repair_agent" / "tools" / "bundled_env.py"
+    assert canonical.exists() and mirror.exists(), "beide Bäume müssen die Datei tragen"
+    assert canonical.read_text() == mirror.read_text(), (
+        "bundled_env drift: Runner-Kanonikat und Fixer-Mirror sind nicht "
+        "mehr identisch — synchronisieren (beide Builds cmp-en das auch)"
+    )

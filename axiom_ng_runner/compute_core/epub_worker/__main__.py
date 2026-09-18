@@ -17,7 +17,8 @@ Exits non-zero on any failure (with JSON error on stderr).
 This is the EPUB counterpart of ``axiom_ng_runner.compute_core.pdf_worker`` — same CLI
 contract, same stdout/stderr JSON protocol, same image-naming scheme.
 The only difference is the engine: pandoc (CPU) instead of Marker (GPU).
-Requires the ``pandoc`` binary on PATH (installed in the Dockerfile).
+The ``pandoc`` binary ships in the artifact env (bundled-binaries
+standard #224/#286: env-relative resolution, PATH only as dev fallback).
 
 Deliberately minimal imports at module-load time so startup is fast.
 """
@@ -573,15 +574,21 @@ from axiom_ng_runner.compute_core.epub_repair import (
 def _convert_via_pandoc(epub_path: Path, out_md: Path, media_dir: Path) -> None:
     """Shell out to the ``pandoc`` binary: EPUB -> GFM, images into media_dir.
 
-    Raises FileNotFoundError if pandoc isn't on PATH, or RuntimeError on a
-    non-zero pandoc exit. ``--wrap=none`` keeps paragraphs on one line so
-    the chunker sees coherent text; ``--extract-media`` pulls images out
-    so we can rename + serve them like PDF figures.
+    #286: pandoc resolves ENV-RELATIVELY first (bundled_bin: the artifact
+    env ships pandoc since #224 — launchd/container PATHs never include
+    env/bin, so a PATH-only lookup made the bundled copy unreachable);
+    PATH remains the dev-machine fallback. Raises FileNotFoundError when
+    pandoc is nowhere, or RuntimeError on a non-zero pandoc exit.
+    ``--wrap=none`` keeps paragraphs on one line so the chunker sees
+    coherent text; ``--extract-media`` pulls images out so we can rename
+    + serve them like PDF figures.
     """
-    pandoc = shutil.which("pandoc")
+    from axiom_ng_runner.compute_core import bundled_env
+
+    pandoc = bundled_env.bundled_bin("pandoc")
     if not pandoc:
         raise FileNotFoundError(
-            "pandoc binary not found on PATH — install pandoc to convert EPUB"
+            "pandoc binary not found (bundled env or PATH) — install pandoc to convert EPUB"
         )
 
     media_dir.mkdir(parents=True, exist_ok=True)
@@ -595,7 +602,9 @@ def _convert_via_pandoc(epub_path: Path, out_md: Path, media_dir: Path) -> None:
         str(epub_path),
     ]
     proc = subprocess.run(
-        cmd, capture_output=True, text=True, env=os.environ.copy()
+        # #286: child env carries env/bin first on PATH (bundled-tool
+        # standard — same resolution discipline for the child as here)
+        cmd, capture_output=True, text=True, env=bundled_env.child_env(with_tessdata=False)
     )
     if proc.returncode != 0:
         detail = (proc.stderr or "").strip().splitlines()

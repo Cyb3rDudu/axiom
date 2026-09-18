@@ -61,43 +61,21 @@ def ocrmypdf_bin() -> str | None:
 # --- #286: gebündelte OCR-Binaries (Artifact-Standard #224/#211) ----------
 # Der Fixer verschiebt tesseract + ghostscript + tessdata IN sein Env
 # (build_fixer_artifact.sh, conda-forge) — ein Host-PATH ist keine
-# Voraussetzung mehr (Carrier-Szenario). Alles hier ist ENV-RELATIV über
-# sys.prefix und damit nach conda-unpack relocatable; ein reines
-# Dev-Venv (ohne gebündelte Binaries) fällt transparent auf PATH zurück.
+# Voraussetzung mehr (Carrier-Szenario). Die Implementierung lebt EINMAL
+# in tools/bundled_env.py (vendored mirror von
+# axiom_ng_runner/compute_core/bundled_env.py, code-identisch — Drift
+# fällt in den Drift-Tests und beiden Builds); hier nur die Delegation.
 
+from . import bundled_env  # noqa: E402
 
-def bundled_bin(name: str) -> str | None:
-    """Env-relative Binär-Auflösung (#286): sys.prefix/bin/<name> zuerst
-    (das gepackte Artifact-Env), dann PATH-Fallback (Dev-Maschine)."""
-    cand = Path(sys.prefix) / "bin" / name
-    if cand.is_file() and os.access(cand, os.X_OK):
-        return str(cand)
-    return shutil.which(name)
-
-
-def tessdata_dir() -> str | None:
-    """Env-relative tessdata-Lage (#286): sys.prefix/share/tessdata, wenn
-    sie Sprachpakete enthält (das Artifact schafft deu+eng dorthin).
-    None im Dev-Venv — dann gilt, was der Host-Tesseract selbst findet."""
-    d = Path(sys.prefix) / "share" / "tessdata"
-    if d.is_dir() and any(d.glob("*.traineddata")):
-        return str(d)
-    return None
+bundled_bin = bundled_env.bundled_bin
+tessdata_dir = bundled_env.tessdata_dir
 
 
 def ocr_child_env() -> dict[str, str]:
-    """Umgebung für OCR-Kindprozesse (#286): ocrmypdf findet tesseract/gs
-    über PATH — also env/bin VORAN — und TESSDATA_PREFIX zeigt auf die
-    gebündelten Modelle. Beides no-op im Dev-Venv ohne Bündel."""
-    env = dict(os.environ)
-    if tessdata_dir():
-        env["TESSDATA_PREFIX"] = tessdata_dir() or ""
-    env_bin = Path(sys.prefix) / "bin"
-    # nur voransetzen, wenn dort überhaupt OCR-Binaries liegen (sonst
-    # verschieben wir zufällige Venv-Scripts unnötig nach vorn)
-    if (env_bin / "tesseract").exists():
-        env["PATH"] = str(env_bin) + os.pathsep + env.get("PATH", "")
-    return env
+    """Kind-Umgebung für OCR-Prozesse (delegiert): env/bin vor PATH,
+    TESSDATA_PREFIX auf die gebündelten Modelle."""
+    return bundled_env.child_env(with_tessdata=True)
 
 
 def _bins_available() -> dict:
