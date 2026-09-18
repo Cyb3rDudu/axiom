@@ -40,5 +40,6 @@ G3's install script copies these and substitutes placeholders.
   a console-script entry would crash-loop. The `/opt/axiom/bin/axiom-runner`
   shim uses the same `python -m` form.
 - **Fixer host deps (NOT bundled in the artifact):** `tesseract5` (with
-  `deu` traineddata) and `ghostscript` must be on PATH for the OCR lane —
+  `deu` traineddata) and `ghostscript` ship INSIDE the fixer artifact
+  (#286 — env-relative resolution, no host PATH) —
   see `docs/operations/services.md`.

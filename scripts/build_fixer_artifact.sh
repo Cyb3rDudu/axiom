@@ -72,17 +72,24 @@ REQS="axiom_ng/tools/pdf_repair_agent/requirements.txt"
 [ -f axiom_ng/tools/pdf_repair_agent/requirements.lock.txt ] && \
     REQS="axiom_ng/tools/pdf_repair_agent/requirements.lock.txt"
 "$PY" -m pip install -q --disable-pip-version-check -r "$REQS"
-# #286: deu-Modell aus dem gepinnten tessdata-Release (eng liefert das
-# conda-Paket). Pin + sha256: nichts Unverifiziertes wandert ins Artifact.
-TESSDATA_URL="https://github.com/tesseract-ocr/tessdata/raw/main/deu.traineddata"
-TESSDATA_SHA="896b3b4956503ab9daa10285db330881b2d74b70d889b79262cc534b9ec699a4"
+
+# #286 review: NO separate deu download. The conda tesseract package ships
+# deu+eng itself (plus ~120 other languages); overwriting its
+# deu.traineddata in $PREFIX previously wrote THROUGH a conda cache
+# hardlink and corrupted the shared package cache (Invalid package cache
+# … incorrect size), and a raw/main URL pin was a moving target. Model
+# provenance now rides the conda solve (tesseract=5.* package pin) — the
+# staged --list-langs gate below still fails closed when deu/eng go
+# missing. Language PRUNE (size lever): the artifact keeps only what the
+# pipeline speaks (deu+eng) plus osd (orientation detection); rm in
+# $PREFIX unlinks the prefix copy only — the package cache stays intact.
 TESSDIR="$PREFIX/share/tessdata"
-mkdir -p "$TESSDIR"
-curl -sL -o "$TESSDIR/deu.traineddata" "$TESSDATA_URL"
-echo "$TESSDATA_SHA  $TESSDIR/deu.traineddata" | shasum -a 256 -c - || {
-    echo "fixer-artifact: deu.traineddata sha256 mismatch — refusing to ship" >&2
-    exit 1
-}
+if [ -d "$TESSDIR" ]; then
+    find "$TESSDIR" -name '*.traineddata' \
+        ! -name 'eng.traineddata' ! -name 'deu.traineddata' ! -name 'osd.traineddata' \
+        -delete
+    echo "fixer-artifact: tessdata pruned to deu+eng+osd"
+fi
 
 "$PY" -m pip install -q --disable-pip-version-check conda-pack
 
