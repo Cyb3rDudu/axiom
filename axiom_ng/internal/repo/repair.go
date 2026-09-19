@@ -262,7 +262,8 @@ func (r *Repo) SubmitRepairVerdict(ctx context.Context, caseID string, plan json
 	return effective, nil
 }
 
-// RequeueRepairCase is the loop-guard reset route (#278): re-arms a
+// RequeueRepairCaseWithOrphanAck is the loop-guard reset route (#278,
+// the #285 ack guard documented above): re-arms a
 // PARKED case (failed/blocked_for_dudu) — and since #284 also a rejected
 // manual-track case — for a fresh attempt without DB surgery. Evidence
 // conditions can change under a parked case — new fixer tooling (the

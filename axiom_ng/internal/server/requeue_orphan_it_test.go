@@ -22,10 +22,31 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// dsnDatabaseName extracts the database segment of a DSN (repo-package
+// convention, mirrored here for the guard below).
+func dsnDatabaseName(dsn string) string {
+	if i := strings.Index(dsn, "://"); i >= 0 {
+		rest := dsn[i+3:]
+		if j := strings.Index(rest, "/"); j >= 0 {
+			rest = rest[j+1:]
+			if q := strings.IndexAny(rest, "?#"); q >= 0 {
+				rest = rest[:q]
+			}
+			return rest
+		}
+	}
+	return dsn
+}
+
 func TestIT_RequeueOrphanAckSurface(t *testing.T) {
 	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping requeue orphan surface IT")
+	}
+	// DSN guard (repo-package convention): a misconfigured DSN must NEVER
+	// run these INSERTs against a non-test database.
+	if !strings.HasSuffix(dsnDatabaseName(dsn), "_test") {
+		t.Fatalf("refusing to run against non-test database %q (must end in _test)", dsnDatabaseName(dsn))
 	}
 	ctx := context.Background()
 	d, err := db.Open(ctx, dsn)

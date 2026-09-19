@@ -54,6 +54,7 @@ mkdir -p "$STAGE"
 # (tests/test_import_guard.py) does not touch them.
 rsync -a \
     --exclude '.venv' --exclude '__pycache__' --exclude 'runs' \
+    --exclude '.ruff_cache' --exclude '.pytest_cache' --exclude '.mypy_cache' \
     --exclude 'fixtures/storage' --exclude 'fixtures/difficult' \
     axiom_ng/tools/pdf_repair_agent/ "$STAGE/app/"
 
@@ -235,7 +236,7 @@ artifact_strip_pycache "$STAGE"
 # fail-closed: any appearance (rsync residue, conftest, a future staged
 # test) fails the build instead of silently shipping host residue (the
 # original 3× size swing).
-for _leak in fixtures/storage fixtures/difficult; do
+for _leak in fixtures/storage fixtures/difficult .ruff_cache .pytest_cache .mypy_cache; do
     if [ -e "$STAGE/app/$_leak" ]; then
         echo "fixer-artifact: staging leak — $STAGE/app/$_leak exists (generated test data must not ship)" >&2
         exit 1
