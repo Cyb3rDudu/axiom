@@ -22,10 +22,9 @@ import (
 )
 
 // waitForLockWaiter polls until some OTHER backend is blocked on a row
-// lock with a query matching ANY of the patterns — the retention tranche
-// blocked either in its locking SELECT (current shape) or in its DELETE
-// (a mutant without FOR UPDATE) — bounded by maxWait.
-func (e *retEnv) waitForLockWaiter(t *testing.T, maxWait time.Duration, patterns ...string) bool {
+// lock with a query matching the pattern — the retention tranche blocked
+// in its locking SELECT — bounded by maxWait.
+func (e *retEnv) waitForLockWaiter(t *testing.T, pattern string, maxWait time.Duration) bool {
 	t.Helper()
 	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
@@ -34,12 +33,142 @@ func (e *retEnv) waitForLockWaiter(t *testing.T, maxWait time.Duration, patterns
 			SELECT count(*) FROM pg_stat_activity
 			WHERE wait_event_type = 'Lock'
 			  AND datname = current_database()
-			  AND (query LIKE $1 OR query LIKE $2)`, patterns[0], patterns[len(patterns)-1]).Scan(&n); err == nil && n > 0 {
+			  AND query LIKE $1`, pattern).Scan(&n); err == nil && n > 0 {
 			return true
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	return false
+}
+
+// TestRetentionLayer2GuardIT (#290 review round 2): the SECOND guard
+// layer — other-table guard inputs committed while the apply WAITS on a
+// candidate's row lock — must protect the row. GuardRecheckIT covers
+// same-row flips (active/status columns); this pins the other-table
+// cases: a PENDING outbox row inserted for the locked snapshot (its OS
+// delete must still drain), and a repair_cases row inserted for the
+// locked job's attachment (heal forensics). Choreography per leg: hold
+// FOR UPDATE on the victim, start the apply, wait for its locking SELECT
+// to block, commit the guard-flipping INSERT from the lock-holding
+// transaction (releasing the lock), then assert the victim survives, the
+// still-qualified other candidate is removed in the same run, and the
+// survivor's artifact paths never reach the caller. Red probe: guards
+// removed from the tranche SELECT/DELETE → the victim is deleted.
+func TestRetentionLayer2GuardIT(t *testing.T) {
+	e := openRetDB(t)
+	ctx := context.Background()
+	age := 14 * 24 * time.Hour
+	type res struct {
+		rem *RetentionRemovals
+		err error
+	}
+
+	// ── outbox leg: pending outbox row saves the locked snapshot ─────
+	e.seedTrancheFixture(t, 0, 0)
+	victim := e.seedSnapshot(t, false, nil, 1, false) // older: first pick
+	// survivor artifact path must never be reported for unlink
+	if _, err := e.pool.Exec(ctx, `
+		INSERT INTO processing_artifacts (snapshot_id, ref, kind, media_type, sha256, size_bytes, storage_path)
+		VALUES ($1::uuid, 'fig1', 'image', 'image/png', 'x', 1, '/tmp/retention-layer2-survivor.png')`, victim); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)                // strict created_at order
+	other := e.seedSnapshot(t, false, nil, 1, false) // younger: second pick
+	_ = other
+
+	lockTx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockTx.Rollback(ctx)
+	if _, err := lockTx.Exec(ctx, `SELECT id FROM processing_snapshots WHERE id=$1::uuid FOR UPDATE`, victim); err != nil {
+		t.Fatal(err)
+	}
+	snapDone := make(chan res, 1)
+	go func() {
+		rem, _, err := e.rep.ApplyRetention(ctx, age, 1, nil)
+		snapDone <- res{rem, err}
+	}()
+	if !e.waitForLockWaiter(t, "%processing_snapshots%FOR UPDATE%", 5*time.Second) {
+		t.Fatal("snapshot tranche never blocked on the victim row lock — choreography broken")
+	}
+	// flip the guard input from ANOTHER table while the apply waits, then
+	// release the lock in the same commit
+	if _, err := lockTx.Exec(ctx, `
+		INSERT INTO opensearch_outbox (snapshot_id, operation, payload)
+		VALUES ($1::uuid, 'delete', '{}')`, victim); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sr := <-snapDone
+	if sr.err != nil {
+		t.Fatalf("apply with a concurrently outbox-held candidate must succeed, got %v", sr.err)
+	}
+	if n := e.count(t, `SELECT count(*) FROM processing_snapshots WHERE id=$1::uuid`, victim); n != 1 {
+		t.Fatalf("outbox-held snapshot was deleted while the apply waited on its lock — other-table guard flip ignored")
+	}
+	if n := e.count(t, `SELECT count(*) FROM opensearch_outbox WHERE snapshot_id=$1::uuid AND status='pending'`, victim); n != 1 {
+		t.Fatalf("the saving outbox row itself must survive, got %d", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM processing_snapshots WHERE id=$1::uuid`, other); n != 0 {
+		t.Fatalf("still-qualified candidate must be removed in the same run, got %d", n)
+	}
+	if sr.rem == nil || sr.rem.Snapshots != 1 {
+		t.Fatalf("run must report exactly the one removal, got %+v", sr.rem)
+	}
+	if len(sr.rem.ArtifactPaths) != 0 {
+		t.Fatalf("survivor's artifact path must never be reported for unlink, got %v", sr.rem.ArtifactPaths)
+	}
+
+	// ── repair leg: repair_cases row saves the locked job ────────────
+	// victim on the preferred attachment (repair flip targets it); other on
+	// a second, non-preferred attachment of the same document (keeps its
+	// doc-level newer sibling, stays prunable despite the repair case)
+	victimJob := e.seedJobForAttachment(t, "TRTATT", "failed", 20*24*time.Hour, 20*24*time.Hour)
+	e.seedAttachmentForDoc(t, "TRTDOC", "TRTATT2", false)
+	otherJob := e.seedJobForAttachment(t, "TRTATT2", "failed", 19*24*time.Hour, 19*24*time.Hour)
+	_ = otherJob
+
+	jlockTx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer jlockTx.Rollback(ctx)
+	if _, err := jlockTx.Exec(ctx, `SELECT id FROM ingest_jobs WHERE id=$1::uuid FOR UPDATE`, victimJob); err != nil {
+		t.Fatal(err)
+	}
+	jobDone := make(chan res, 1)
+	go func() {
+		rem, _, err := e.rep.ApplyRetention(ctx, age, 1, nil)
+		jobDone <- res{rem, err}
+	}()
+	if !e.waitForLockWaiter(t, "%FROM ingest_jobs%FOR UPDATE%", 5*time.Second) {
+		t.Fatal("job tranche never blocked on the victim row lock — choreography broken")
+	}
+	if _, err := jlockTx.Exec(ctx, `
+		INSERT INTO repair_cases (attachment_id, document_id, status, suspicion_class, analysis)
+		SELECT a.id, a.document_id, 'healed', '🔴 reparierbar', '{}'
+		FROM zotero_attachments a WHERE a.zotero_key = 'TRTATT'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := jlockTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	jr := <-jobDone
+	if jr.err != nil {
+		t.Fatalf("apply with a concurrently repair-linked candidate must succeed, got %v", jr.err)
+	}
+	if n := e.count(t, `SELECT count(*) FROM ingest_jobs WHERE id=$1::uuid`, victimJob); n != 1 {
+		t.Fatalf("repair-linked job was deleted while the apply waited on its lock — other-table guard flip ignored")
+	}
+	if n := e.count(t, `SELECT count(*) FROM ingest_jobs WHERE id=$1::uuid`, otherJob); n != 0 {
+		t.Fatalf("still-qualified job (other attachment, no repair case) must be removed, got %d", n)
+	}
+	if jr.rem == nil || jr.rem.Jobs != 1 {
+		t.Fatalf("run must report exactly the one job removal, got %+v", jr.rem)
+	}
 }
 
 // TestRetentionGuardRecheckIT (#290 review blocker pin): the keep-guards
@@ -81,7 +210,7 @@ func TestRetentionGuardRecheckIT(t *testing.T) {
 		_, _, err := e.rep.ApplyRetention(ctx, age, 1, nil)
 		done <- res{err}
 	}()
-	if !e.waitForLockWaiter(t, 5*time.Second, "%processing_snapshots%FOR UPDATE%", "%DELETE FROM processing_snapshots%") {
+	if !e.waitForLockWaiter(t, "%processing_snapshots%FOR UPDATE%", 5*time.Second) {
 		t.Fatal("tranche never blocked on the victim row lock — choreography broken")
 	}
 	// flip the guard input WHILE the DELETE waits, then release the lock
@@ -122,7 +251,7 @@ func TestRetentionGuardRecheckIT(t *testing.T) {
 		_, _, err := e.rep.ApplyRetention(ctx, age, 1, nil)
 		jdone <- res{err}
 	}()
-	if !e.waitForLockWaiter(t, 5*time.Second, "%FROM ingest_jobs%FOR UPDATE%", "%DELETE FROM ingest_jobs%") {
+	if !e.waitForLockWaiter(t, "%FROM ingest_jobs%FOR UPDATE%", 5*time.Second) {
 		t.Fatal("job tranche never blocked on the victim row lock — choreography broken")
 	}
 	if _, err := jlockTx.Exec(ctx, `UPDATE ingest_jobs SET status='pending' WHERE id=$1::uuid`, victimJob); err != nil {
