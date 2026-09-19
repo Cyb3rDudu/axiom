@@ -392,18 +392,33 @@ func TestIT_MaintenanceRetentionTrancheProgressAndDeadline(t *testing.T) {
 		}
 	}
 
-	// re-seed for the deadline leg (the progress leg consumed the snapshots)
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name,
-			processor_version, profile_hash, document_id, profile, active)
-		SELECT a.id, 'r290-d' || g, 'p', 'v1', 'ph-d' || g, a.document_id, '{}', false
-		FROM zotero_attachments a CROSS JOIN generate_series(1,2) g
-		WHERE a.zotero_key = 'R2ATT'`); err != nil {
-		t.Fatalf("re-seed: %v", err)
+	// re-seed for the deadline legs (the progress leg consumed the snapshots):
+	// two snapshots, each with a REAL artifact file on disk
+	artDir := t.TempDir()
+	var artFiles []string
+	for g := 1; g <= 2; g++ {
+		p := filepath.Join(artDir, fmt.Sprintf("ret290-d%d.png", g))
+		if err := os.WriteFile(p, []byte("artifact-bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		artFiles = append(artFiles, p)
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name,
+				processor_version, profile_hash, document_id, profile, active)
+			SELECT a.id, 'r290-d' || $1::int::text, 'p', 'v1', 'ph-d' || $1::int::text, a.document_id, '{}', false
+			FROM zotero_attachments a WHERE a.zotero_key = 'R2ATT'`, g); err != nil {
+			t.Fatalf("re-seed: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO processing_artifacts (snapshot_id, ref, kind, media_type, sha256, size_bytes, storage_path)
+			SELECT s.id, 'fig1', 'image', 'image/png', 'sha', 14, $1
+			FROM processing_snapshots s WHERE s.content_hash = 'r290-d' || $2::int::text`, p, g); err != nil {
+			t.Fatalf("seed artifact: %v", err)
+		}
 	}
 
-	// 2) expired deadline: exit 1 with the MODE FAILED contract and a
-	//    deadline-specific message — never a silent success or a hang
+	// 2) expired deadline BEFORE any work: exit 1 with the MODE FAILED
+	//    contract and a deadline-specific message — never a silent success
 	c := exec.Command(bin, "-maintenance-retention", "--apply", "--timeout=1ns")
 	c.Env = append(os.Environ(), "AXIOM_DATABASE_URL="+dsn, "AXIOM_ALLOW_DEBUG_BIND=1")
 	dlOut, err := c.CombinedOutput()
@@ -426,6 +441,61 @@ func TestIT_MaintenanceRetentionTrancheProgressAndDeadline(t *testing.T) {
 	}
 	if n != 2 {
 		t.Fatalf("expired-deadline run must leave its work un-done (2 snapshots), got %d", n)
+	}
+
+	// 3) deadline hit MID-RUN on a blocked connection (the incident's shape:
+	//    the tranche DELETE waits on a row lock held by another session).
+	//    The run must abort with exit 1 + deadline message — and the FIRST
+	//    tranche's artifact BYTES must already be unlinked (#290 review:
+	//    end-of-run unlink leaks every committed tranche on abort).
+	lockTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("lock tx: %v", err)
+	}
+	defer lockTx.Rollback(ctx)
+	// hold the YOUNGER snapshot (second tranche's pick); the first tranche
+	// commits + unlinks before the run dies on the lock
+	if _, err := lockTx.Exec(ctx,
+		`SELECT id FROM processing_snapshots WHERE content_hash = 'r290-d2' FOR UPDATE`); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	// bound the exec itself: a mutant that drops the query deadline must
+	// fail THIS test by hanging to the kill, not hang the suite forever
+	killCtx, kill := context.WithTimeout(context.Background(), 60*time.Second)
+	defer kill()
+	c2 := exec.CommandContext(killCtx, bin, "-maintenance-retention", "--apply", "--batch=1", "--timeout=5s")
+	c2.Env = append(os.Environ(), "AXIOM_DATABASE_URL="+dsn, "AXIOM_ALLOW_DEBUG_BIND=1")
+	blockOut, err := c2.CombinedOutput()
+	if killCtx.Err() == context.DeadlineExceeded {
+		t.Fatalf("blocked run did not terminate within 60s — the run deadline no longer bounds in-flight queries\n%s", blockOut)
+	}
+	if err == nil {
+		t.Fatalf("deadline-hit-mid-run must fail (exit != 0), got success:\n%s", blockOut)
+	}
+	if !strings.Contains(string(blockOut), "MODE FAILED (exit 1)") || !strings.Contains(string(blockOut), "deadline") {
+		t.Fatalf("blocked-run output missing the deadline failure contract\n%s", blockOut)
+	}
+	// first tranche committed → its snapshot row is gone, its file is UNLINKED
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM processing_snapshots WHERE content_hash = 'r290-d1'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("first tranche must be committed before the abort, got %d rows", n)
+	}
+	if _, err := os.Stat(artFiles[0]); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("committed tranche's artifact file must be unlinked despite the abort (stat err=%v)", err)
+	}
+	// second tranche rolled back: row alive, file alive
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM processing_snapshots WHERE content_hash = 'r290-d2'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("locked snapshot must survive the aborted run, got %d rows", n)
+	}
+	if _, err := os.Stat(artFiles[1]); err != nil {
+		t.Fatalf("surviving snapshot's artifact file must still exist: %v", err)
 	}
 }
 

@@ -49,8 +49,13 @@ const RetentionBatchDefault = 25
 // observable from the outside (#290: WAL-delta forensics must never again
 // be the only way to tell a healthy apply from a hung one). phase is
 // "snapshots" or "jobs"; done is the phase total so far, total the
-// phase's planned removal count from the initial plan.
-type RetentionProgress func(phase string, done, total int)
+// phase's planned removal count from the initial plan (never smaller
+// than done). artifactPaths carries the durable-artifact files of the
+// tranche's DELETED rows — the caller unlinks them right after the
+// commit, so an aborted run cannot leak the bytes of tranches it
+// already committed (#290 review: end-of-run unlink loses them on every
+// abort path).
+type RetentionProgress func(phase string, done, total int, artifactPaths []string)
 
 // RetentionReport is the dry-run result: exact counts of what a real run
 // WOULD remove (and what it never touches).
@@ -239,10 +244,13 @@ type RetentionRemovals struct {
 // embeddings/relationships/artifacts and done outbox rows), commit, then
 // the next tranche; stale job attempts afterwards under the same
 // discipline. No single transaction runs longer than one tranche's worth
-// of cascade. Idempotent by construction — every candidate re-qualifies
-// through the same guards on the next run, so an interruption at any
-// tranche boundary leaves committed partial progress that a re-run
-// resumes naturally. batchSize <= 0 means RetentionBatchDefault.
+// of cascade, and every DELETE re-evaluates the keep-guards itself — a
+// row that de-qualifies between a tranche's SELECT and its DELETE
+// survives, preserving the #281 protection level. Idempotent by
+// construction — every candidate re-qualifies through the same guards on
+// the next run, so an interruption at any tranche boundary leaves
+// committed partial progress that a re-run resumes naturally. batchSize
+// <= 0 means RetentionBatchDefault.
 func (r *Repo) ApplyRetention(ctx context.Context, jobMinAge time.Duration, batchSize int, progress RetentionProgress) (*RetentionRemovals, *RetentionReport, error) {
 	if jobMinAge <= 0 {
 		jobMinAge = RetentionJobMinAgeDefault
@@ -257,150 +265,213 @@ func (r *Repo) ApplyRetention(ctx context.Context, jobMinAge time.Duration, batc
 	rem := &RetentionRemovals{}
 	// Tranche loop: re-select the candidate set every iteration — deleted
 	// rows are gone, so each tranche picks the next batch without OFFSET
-	// bookkeeping. A zero-row tranche ends the phase. ctx is checked at the
-	// boundary so a deadline/cancel aborts BETWEEN transactions: everything
+	// bookkeeping. The DELETE re-checks the keep-guards itself (#290
+	// review: a row that flips between SELECT and DELETE — reactivated
+	// snapshot, new outbox/repair link — must survive, exactly as it did
+	// pre-#290 when the guard lived inside the one DELETE). A tranche that
+	// SELECTED candidates but deleted none therefore does NOT end the
+	// phase: the picks were raced away or de-qualified — re-select. Only a
+	// candidate-free SELECT ends the phase, and ctx is checked at every
+	// boundary so an abort lands BETWEEN transactions: everything
 	// committed stays committed (the resume contract), nothing half-open.
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, fmt.Errorf("retention apply interrupted after %d snapshot(s) — committed tranches are safe, re-run resumes: %w", rem.Snapshots, err)
 		}
-		n, paths, err := r.deleteSnapshotTranche(ctx, batchSize)
+		picked, deleted, paths, err := r.deleteSnapshotTranche(ctx, batchSize)
 		if err != nil {
 			return nil, nil, err
 		}
-		if n == 0 {
+		if picked == 0 {
 			break
 		}
-		rem.Snapshots += n
-		rem.ArtifactPaths = append(rem.ArtifactPaths, paths...)
-		if progress != nil {
-			progress("snapshots", rem.Snapshots, plan.Snapshots.Remove)
+		if deleted > 0 {
+			rem.Snapshots += deleted
+			rem.ArtifactPaths = append(rem.ArtifactPaths, paths...)
+			total := plan.Snapshots.Remove
+			if rem.Snapshots > total {
+				total = rem.Snapshots // concurrent drift must never print X>Y
+			}
+			if progress != nil {
+				progress("snapshots", rem.Snapshots, total, paths)
+			}
 		}
 	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, fmt.Errorf("retention apply interrupted after %d job attempt(s) — committed tranches are safe, re-run resumes: %w", rem.Jobs, err)
 		}
-		n, err := r.deleteJobTranche(ctx, batchSize, jobMinAge)
+		picked, deleted, err := r.deleteJobTranche(ctx, batchSize, jobMinAge)
 		if err != nil {
 			return nil, nil, err
 		}
-		if n == 0 {
+		if picked == 0 {
 			break
 		}
-		rem.Jobs += n
-		if progress != nil {
-			progress("jobs", rem.Jobs, plan.Jobs.Remove)
+		if deleted > 0 {
+			rem.Jobs += deleted
+			total := plan.Jobs.Remove
+			if rem.Jobs > total {
+				total = rem.Jobs
+			}
+			if progress != nil {
+				progress("jobs", rem.Jobs, total, nil)
+			}
 		}
 	}
 	return rem, plan, nil
 }
 
 // deleteSnapshotTranche deletes up to limit superseded snapshots in ONE
-// short transaction and commits it. Artifact paths are collected inside
-// the same transaction, before the rows cascade away.
-func (r *Repo) deleteSnapshotTranche(ctx context.Context, limit int) (int, []string, error) {
+// short transaction and commits it. Returns picked (candidates the SELECT
+// saw — 0 ends the phase), deleted (rows the DELETE actually removed —
+// the keep-guards are re-checked INSIDE the DELETE, so a row that
+// qualified at SELECT time but flipped before the DELETE survives, and
+// its artifact paths are then excluded) and the artifact paths of exactly
+// the DELETED rows, collected inside the same transaction before the
+// rows cascade away.
+func (r *Repo) deleteSnapshotTranche(ctx context.Context, limit int) (picked, deleted int, artifactPaths []string, err error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return 0, nil, err
+		return 0, 0, nil, err
 	}
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `
 		SELECT s.id FROM processing_snapshots s
 		WHERE `+supersededSnapshotGuard+`
 		ORDER BY s.created_at, s.id
-		LIMIT $1`, limit)
+		LIMIT $1
+		FOR UPDATE`, limit)
 	if err != nil {
-		return 0, nil, fmt.Errorf("select snapshot tranche: %w", err)
+		return 0, 0, nil, fmt.Errorf("select snapshot tranche: %w", err)
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return 0, nil, err
+			return 0, 0, nil, err
 		}
 		ids = append(ids, id)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, nil, err
+		return 0, 0, nil, err
 	}
-	if len(ids) == 0 {
-		return 0, nil, nil
+	picked = len(ids)
+	if picked == 0 {
+		return 0, 0, nil, nil
 	}
-	var paths []string
+	// artifact paths per candidate snapshot, BEFORE the cascade
+	pathsBySnap := make(map[string][]string)
 	rows, err = tx.Query(ctx, `
-		SELECT ar.storage_path FROM processing_artifacts ar
+		SELECT ar.snapshot_id::text, ar.storage_path FROM processing_artifacts ar
 		WHERE ar.snapshot_id = ANY($1::uuid[])`, ids)
 	if err != nil {
-		return 0, nil, fmt.Errorf("collect artifact paths: %w", err)
+		return 0, 0, nil, fmt.Errorf("collect artifact paths: %w", err)
 	}
 	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
+		var snap, p string
+		if err := rows.Scan(&snap, &p); err != nil {
 			rows.Close()
-			return 0, nil, err
+			return 0, 0, nil, err
 		}
-		paths = append(paths, p)
+		pathsBySnap[snap] = append(pathsBySnap[snap], p)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, nil, err
+		return 0, 0, nil, err
 	}
-	tag, err := tx.Exec(ctx, `
+	// The candidates are locked FOR UPDATE above: a writer flipping a
+	// guard input on one of these rows blocks until this transaction ends,
+	// so the row cannot de-qualify between selection and DELETE — and a
+	// flip committed while we WAITED for the lock is visible to this
+	// statement's fresh snapshot (the re-checked qual drops the row from
+	// the candidate set entirely). The guard STAYS in the DELETE as well
+	// (#290 review blocker): other-table guard inputs — a new outbox or
+	// repair row committed after the selection — are caught here, where a
+	// blind id-only DELETE would destroy them. RETURNING says WHICH rows
+	// went, so survivor artifact paths never reach the caller.
+	rows, err = tx.Query(ctx, `
 		DELETE FROM processing_snapshots s
-		WHERE s.id = ANY($1::uuid[])`, ids)
+		WHERE s.id = ANY($1::uuid[]) AND `+supersededSnapshotGuard+`
+		RETURNING s.id::text`, ids)
 	if err != nil {
-		return 0, nil, fmt.Errorf("delete superseded snapshots: %w", err)
+		return 0, 0, nil, fmt.Errorf("delete superseded snapshots: %w", err)
+	}
+	var deletedIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, 0, nil, err
+		}
+		deletedIDs = append(deletedIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, 0, nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, nil, err
+		return 0, 0, nil, err
 	}
-	return int(tag.RowsAffected()), paths, nil
+	for _, id := range deletedIDs {
+		artifactPaths = append(artifactPaths, pathsBySnap[id]...)
+	}
+	return picked, len(deletedIDs), artifactPaths, nil
 }
 
 // deleteJobTranche deletes up to limit stale job attempts in ONE short
-// transaction and commits it. Deleting a prunable job never un-prunes a
-// remaining one: every candidate's "newer sibling" guard is anchored on
-// its document's newest job, which by definition has no newer sibling and
-// is therefore never in the prunable set.
-func (r *Repo) deleteJobTranche(ctx context.Context, limit int, jobMinAge time.Duration) (int, error) {
+// transaction and commits it. Same guard-in-DELETE discipline as the
+// snapshot tranche: a job that flipped since the SELECT (e.g. status
+// pending) survives. Deleting a prunable job never un-prunes a remaining
+// one: every candidate's "newer sibling" guard is anchored on its
+// document's newest job, which by definition has no newer sibling and is
+// therefore never in the prunable set.
+func (r *Repo) deleteJobTranche(ctx context.Context, limit int, jobMinAge time.Duration) (picked, deleted int, err error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	defer tx.Rollback(ctx)
 	// prunableJobSQL binds the age as $1 (its own numbering); the tranche
-	// LIMIT follows it as $2.
-	rows, err := tx.Query(ctx, `SELECT j.id`+prunableJobSQL+` LIMIT $2`,
+	// LIMIT follows it as $2. FOR UPDATE locks the candidates so a guard
+	// input cannot flip between selection and DELETE.
+	rows, err := tx.Query(ctx, `SELECT j.id`+prunableJobSQL+` ORDER BY j.enqueued_at, j.id LIMIT $2 FOR UPDATE`,
 		jobMinAge.Seconds(), limit)
 	if err != nil {
-		return 0, fmt.Errorf("select job tranche: %w", err)
+		return 0, 0, fmt.Errorf("select job tranche: %w", err)
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return 0, err
+			return 0, 0, err
 		}
 		ids = append(ids, id)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	if len(ids) == 0 {
-		return 0, nil
+	picked = len(ids)
+	if picked == 0 {
+		return 0, 0, nil
 	}
+	// the age placeholder inside prunableJobSQL is the FIRST $n in this
+	// statement's text, so the id array becomes $2; the guard re-check in
+	// the DELETE catches other-table flips (e.g. a repair case) committed
+	// after the locked selection
 	tag, err := tx.Exec(ctx, `
-		DELETE FROM ingest_jobs WHERE id = ANY($1::uuid[])`, ids)
+		DELETE FROM ingest_jobs j
+		WHERE j.id IN (SELECT j.id`+prunableJobSQL+`)
+		  AND j.id = ANY($2::uuid[])`, jobMinAge.Seconds(), ids)
 	if err != nil {
-		return 0, fmt.Errorf("delete stale job attempts: %w", err)
+		return 0, 0, fmt.Errorf("delete stale job attempts: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return int(tag.RowsAffected()), nil
+	return picked, int(tag.RowsAffected()), nil
 }

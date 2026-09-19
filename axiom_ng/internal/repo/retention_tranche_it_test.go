@@ -21,6 +21,128 @@ import (
 	"time"
 )
 
+// waitForLockWaiter polls until some OTHER backend is blocked on a row
+// lock with a query matching ANY of the patterns — the retention tranche
+// blocked either in its locking SELECT (current shape) or in its DELETE
+// (a mutant without FOR UPDATE) — bounded by maxWait.
+func (e *retEnv) waitForLockWaiter(t *testing.T, maxWait time.Duration, patterns ...string) bool {
+	t.Helper()
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := e.pool.QueryRow(context.Background(), `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock'
+			  AND datname = current_database()
+			  AND (query LIKE $1 OR query LIKE $2)`, patterns[0], patterns[len(patterns)-1]).Scan(&n); err == nil && n > 0 {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
+}
+
+// TestRetentionGuardRecheckIT (#290 review blocker pin): the keep-guards
+// must live INSIDE the tranche DELETE, not only in the SELECT. Choreography:
+// the test holds a row lock on the OLDER of two candidates; the apply's
+// tranche SELECT still sees it as a candidate (plain reads don't block),
+// its DELETE blocks on the lock; the test then flips the row's guard
+// input (active=true, the snapshot-persist replay path) and commits; the
+// DELETE wakes and Postgres re-checks the qual against the updated row
+// (EvalPlanQual) — the reactivated snapshot must SURVIVE, the run must
+// continue with the still-qualified candidate. Red probe: drop the guard
+// from the DELETE (id = ANY(...) only) → the reactivated snapshot is
+// deleted → "must survive" fails. Same for the job leg via status flip.
+func TestRetentionGuardRecheckIT(t *testing.T) {
+	e := openRetDB(t)
+	ctx := context.Background()
+	age := 14 * 24 * time.Hour
+
+	// ── snapshot leg: reactivated snapshot survives ──────────────────
+	e.seedTrancheFixture(t, 0, 0)                     // fixture doc/attachment + outcome job
+	victim := e.seedSnapshot(t, false, nil, 1, false) // older: first pick
+	time.Sleep(10 * time.Millisecond)                 // strict created_at order
+	other := e.seedSnapshot(t, false, nil, 1, false)  // younger: second pick
+	_ = other
+
+	lockTx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockTx.Rollback(ctx)
+	if _, err := lockTx.Exec(ctx, `SELECT id FROM processing_snapshots WHERE id=$1::uuid FOR UPDATE`, victim); err != nil {
+		t.Fatal(err)
+	}
+	type res struct {
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		_, _, err := e.rep.ApplyRetention(ctx, age, 1, nil)
+		done <- res{err}
+	}()
+	if !e.waitForLockWaiter(t, 5*time.Second, "%processing_snapshots%FOR UPDATE%", "%DELETE FROM processing_snapshots%") {
+		t.Fatal("tranche never blocked on the victim row lock — choreography broken")
+	}
+	// flip the guard input WHILE the DELETE waits, then release the lock
+	if _, err := lockTx.Exec(ctx, `UPDATE processing_snapshots SET active=true WHERE id=$1::uuid`, victim); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("apply with a concurrently reactivated candidate must succeed, got %v", r.err)
+	}
+	if n := e.count(t, `SELECT count(*) FROM processing_snapshots WHERE id=$1::uuid AND active`, victim); n != 1 {
+		t.Fatalf("reactivated snapshot was deleted by the tranche — the keep-guard left the DELETE (TOCTOU)")
+	}
+	if n := e.count(t, `SELECT count(*) FROM processing_snapshots WHERE id=$1::uuid`, other); n != 0 {
+		t.Fatalf("still-qualified candidate must be removed in the same run, got %d", n)
+	}
+
+	// ── job leg: pending-flipped job survives ─────────────────────
+	e.seedJobForAttachment(t, "TRTATT", "completed", time.Hour, 0) // outcome truth + sibling
+	victimJob := e.seedJobForAttachment(t, "TRTATT", "failed", 20*24*time.Hour, 20*24*time.Hour)
+	time.Sleep(10 * time.Millisecond)
+	otherJob := e.seedJobForAttachment(t, "TRTATT", "failed", 20*24*time.Hour, 20*24*time.Hour)
+	_ = otherJob
+
+	jlockTx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer jlockTx.Rollback(ctx)
+	if _, err := jlockTx.Exec(ctx, `SELECT id FROM ingest_jobs WHERE id=$1::uuid FOR UPDATE`, victimJob); err != nil {
+		t.Fatal(err)
+	}
+	jdone := make(chan res, 1)
+	go func() {
+		_, _, err := e.rep.ApplyRetention(ctx, age, 1, nil)
+		jdone <- res{err}
+	}()
+	if !e.waitForLockWaiter(t, 5*time.Second, "%FROM ingest_jobs%FOR UPDATE%", "%DELETE FROM ingest_jobs%") {
+		t.Fatal("job tranche never blocked on the victim row lock — choreography broken")
+	}
+	if _, err := jlockTx.Exec(ctx, `UPDATE ingest_jobs SET status='pending' WHERE id=$1::uuid`, victimJob); err != nil {
+		t.Fatal(err)
+	}
+	if err := jlockTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	jr := <-jdone
+	if jr.err != nil {
+		t.Fatalf("apply with a concurrently re-queued candidate must succeed, got %v", jr.err)
+	}
+	if n := e.count(t, `SELECT count(*) FROM ingest_jobs WHERE id=$1::uuid`, victimJob); n != 1 {
+		t.Fatalf("pending-flipped job was deleted by the tranche — the keep-guard left the DELETE (TOCTOU)")
+	}
+	if n := e.count(t, `SELECT count(*) FROM ingest_jobs WHERE id=$1::uuid`, otherJob); n != 0 {
+		t.Fatalf("still-qualified job must be removed in the same run, got %d", n)
+	}
+}
+
 // seedTrancheFixture seeds one preferred attachment with a young completed
 // outcome-truth job plus nStale prunable terminal attempts (newer sibling
 // exists, not the preferred-newest, no repair link, no snapshot), and
@@ -58,7 +180,7 @@ func TestRetentionTrancheIT(t *testing.T) {
 	}
 
 	var calls []string
-	rem, _, err := e.rep.ApplyRetention(ctx, age, 1, func(phase string, done, total int) {
+	rem, _, err := e.rep.ApplyRetention(ctx, age, 1, func(phase string, done, total int, _ []string) {
 		calls = append(calls, fmt.Sprintf("%s %d/%d", phase, done, total))
 	})
 	if err != nil {
@@ -100,7 +222,7 @@ func TestRetentionInterruptIT(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	tranches := 0
-	_, _, err := e.rep.ApplyRetention(ctx, age, 1, func(phase string, done, total int) {
+	_, _, err := e.rep.ApplyRetention(ctx, age, 1, func(phase string, done, total int, _ []string) {
 		tranches++
 		cancel() // kill the run exactly at the first tranche boundary
 	})
