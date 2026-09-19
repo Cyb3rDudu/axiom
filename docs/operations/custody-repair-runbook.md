@@ -37,7 +37,7 @@ EPUB-Reparaturen: `application/epub+zip`). Antwort: Schrittreport
 3. **Altes Attachment-Item löschen** — version-guarded über die
    Zotero-Write-API (Mutation 1, `DeleteAttachmentItem`).
 4. **Geheilte Datei hochladen** — unter dem Parent-Item mit Schema-Dateiname
-   (`{Autor|Institution} - {Jahr} - {Titel}.ext`, Mutation 2,
+   (`{Autor|Herausgeber|Institution} - {Jahr} - {Titel}.ext`, Mutation 2,
    `CreateAttachmentWithFile`).
 5. **Sync auslösen** (`POST /api/zotero/sync`) — das geheilte Attachment ist
    jetzt der einzige verarbeitbare Kandidat → preferred → Preflight →
@@ -92,7 +92,7 @@ Wiederherstellung = Datei zurückkopieren, manuell als Attachment unter das
 Parent-Item laden (Zotero UI), Sync. Der Protokoll-Satz
 (`<quarantine-root>/manual/<KEY>.json`) dokumentiert Grund und Verlauf.
 
-## Schema-Dateiname — Namenskaskade (#287)
+## Schema-Dateiname — Namenskaskade (#287, #291)
 
 Der Upload-Dateiname folgt `{Autor|Herausgeber|Institution} - {Jahr} -
 {Titel}.ext`: **Autor → erster Herausgeber → Institution** — der Verlag
@@ -101,7 +101,21 @@ erscheint NIEMALS als Namensbestandteil (Produktionsfall: „transcript -
 Herausgeberwerk). Ohne Creatoren heißt der Kopf ehrlich `Unbekannt` —
 korrigierbar über die Zotero-Metadaten.
 
-**Bereits fehlbenannte Dateien** (vor #287 hochgeladen): es gibt per
+**Titel-Bereinigung (#291):** `:` und `/` im Titel lesen sich als ` - `;
+der Untertitel (Text nach dem ersten `:`) bleibt nur, wenn der ganze
+Titel ins 80-Zeichen-Budget passt (Länge entscheidet: Bradford ja, Flew
+nein); ein überlanger Haupttitel kürzt an der Wortgrenze.
+
+**Grown-Pattern-Ausnahme (#291):** Hat das Dokument bereits Anhänge,
+übernimmt der Upload deren gewachsenes Muster — Springer-`+`-Kodierung
+(`Dubs,+R.+-+2004+-+…` → neuer Name mit `+` statt Leerzeichen) und
+`(EPUB)`/`(PDF)`-Format-Marker werden weitergeführt. Lokale Konsistenz
+schlägt globale Einheitlichkeit.
+
+**NFC (#291):** Der Name wird immer NFC-normalisiert — API-Filename und
+Name auf Platte sind byte-identisch (macOS-Umlaut-Falle NFD).
+
+**Bereits fehlbenannte Dateien** (vor #287/#291 hochgeladen): es gibt per
 Design KEINE Rename-Mutation. Manuelle Remediation: Dateinamen im
 Zotero-Client von der Parent-Metadaten-Seite aus umbenennen — oder, falls
 das Attachment in einem NEUEN Reparaturfall (neuer Attachment-Key) erneut

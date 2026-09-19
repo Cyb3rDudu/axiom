@@ -12,6 +12,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
@@ -94,18 +97,24 @@ func Quarantine(root, zoteroKey, sourcePath string) (string, error) {
 // repairs. Creators reuse the zotero projection shape (single definition,
 // review W6). The publisher is NEVER a name component (#287: the custody
 // upload of an editors-only volume produced "transcript - 2025 - …").
+// #291: the title follows the cleanup rules (cleanTitle), a document
+// with existing attachments keeps its grown naming pattern
+// (adoptGrownPattern), and the result is NFC-normalized (byte-identical
+// API filename and on-disk name — the macOS umlaut trap).
 func SchemaFilename(creators []zotero.Creator, year int, title string) string {
-	return schemaFilename(creators, year, title, ".pdf")
+	return schemaFilename(creators, year, title, ".pdf", nil)
 }
 
 // SchemaFilenameForFormat picks the extension from the attachment's
-// content type (#220: EPUB repairs upload .epub, not .pdf).
-func SchemaFilenameForFormat(creators []zotero.Creator, year int, title, contentType string) string {
+// content type (#220: EPUB repairs upload .epub, not .pdf) and carries
+// the document's existing attachment filenames for the #291 grown-pattern
+// exception (empty/nil = no existing attachments → global schema).
+func SchemaFilenameForFormat(creators []zotero.Creator, year int, title, contentType string, existing []string) string {
 	ext := ".pdf"
 	if strings.Contains(contentType, "epub") {
 		ext = ".epub"
 	}
-	return schemaFilename(creators, year, title, ext)
+	return schemaFilename(creators, year, title, ext, existing)
 }
 
 // pickCreatorName returns the first lastName (or the institutional
@@ -126,7 +135,7 @@ func pickCreatorName(creators []zotero.Creator, creatorType string) string {
 	return ""
 }
 
-func schemaFilename(creators []zotero.Creator, year int, title, ext string) string {
+func schemaFilename(creators []zotero.Creator, year int, title, ext string, existing []string) string {
 	// #287 cascade: author → first editor → institution. Documents with
 	// no creators at all are honest as "Unbekannt" (fixable in Zotero
 	// metadata) — the publisher must not masquerade as a person.
@@ -141,7 +150,68 @@ func schemaFilename(creators []zotero.Creator, year int, title, ext string) stri
 	if year > 0 {
 		y = fmt.Sprintf("%d", year)
 	}
-	return sanitize(head+" - "+y+" - "+shorten(title, 80)) + ext
+	stem := sanitize(head + " - " + y + " - " + cleanTitle(title))
+	stem = adoptGrownPattern(stem, existing, ext)
+	// #291 NFC: the on-disk name must be byte-identical to the API
+	// filename — macOS decomposes umlauts (NFD); ONE canonical form end
+	// to end makes the bytes match everywhere.
+	return norm.NFC.String(stem) + ext
+}
+
+// cleanTitle applies the #291 title rules: ':' and '/' read as ' - '
+// separators, and the SUBTITLE (text after the first ':') ships only
+// when the joined title fits the 80-rune budget — length decides
+// (Bradford keeps its subtitle, Flew loses it). An over-budget main
+// title alone still truncates at a word boundary (shorten).
+func cleanTitle(title string) string {
+	main, sub, hasSub := strings.Cut(title, ":")
+	main = sepToDash(strings.TrimSpace(main))
+	if !hasSub {
+		return shorten(main, 80)
+	}
+	sub = sepToDash(strings.TrimSpace(sub))
+	if joined := main + " - " + sub; utf8.RuneCountInString(joined) <= 80 {
+		return joined
+	}
+	return shorten(main, 80) // subtitle misses the budget — dropped
+}
+
+func sepToDash(s string) string {
+	s = strings.ReplaceAll(s, ":", " - ")
+	return strings.ReplaceAll(s, "/", " - ")
+}
+
+// markerRe matches a grown ' (EPUB)'-style suffix marker (uppercase or
+// digits — provenance words like '(Kopie)' deliberately do NOT match:
+// provenance suffixes are forbidden by the convention).
+var markerRe = regexp.MustCompile(` \([A-Z0-9]+\)$`)
+
+// adoptGrownPattern implements the #291 grown-pattern exception: a
+// document that already has attachments keeps ITS established naming —
+// local consistency beats global uniformity. The FIRST existing name is
+// the reference (callers order preferred-first — usually the attachment
+// being replaced, whose name IS the document's pattern): a '+'-encoded
+// stem (Springer style, 'Dubs,+R.+-+2004+-+…') re-encodes the schema stem
+// with '+' for every space; a trailing ' (FORMAT)' marker is carried over
+// with the NEW upload's own format tag. Name-component depth (e.g. the
+// 'R.' initial of the reference) stays what the schema cascade produces —
+// the pattern is the encoding, the content is current metadata.
+func adoptGrownPattern(stem string, existing []string, ext string) string {
+	if len(existing) == 0 || existing[0] == "" {
+		return stem
+	}
+	ref := strings.TrimSuffix(existing[0], path.Ext(existing[0]))
+	switch {
+	case strings.Contains(ref, "+"):
+		return strings.ReplaceAll(stem, " ", "+")
+	case markerRe.MatchString(ref):
+		tag := "PDF"
+		if ext == ".epub" {
+			tag = "EPUB"
+		}
+		return stem + " (" + tag + ")"
+	}
+	return stem
 }
 
 // shorten trims to n runes at a word boundary.

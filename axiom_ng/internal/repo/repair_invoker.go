@@ -39,6 +39,7 @@ type RepairItem struct {
 	Title         string
 	Creators      []zotero.Creator
 	Year          int
+	ExistingNames []string        // #291: the document's current attachment filenames (grown-pattern reference)
 	Language      string          // #284: OCR language default from document metadata
 	Analysis      json.RawMessage // #284: per-case OCR overrides (analysis.ocr.mode/lang)
 	LocalPath     string
@@ -53,7 +54,11 @@ func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, 
 		SELECT c.id::text, a.id::text, a.zotero_key, d.zotero_key, d.id::text,
 		       d.title, d.creators, COALESCE(d.publication_year, 0),
 		       COALESCE(d.language, ''), c.analysis,
-		       a.local_path, COALESCE(a.content_type, '')
+		       a.local_path, COALESCE(a.content_type, ''),
+		       (SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.id)
+		        FROM zotero_attachments a2
+		        WHERE a2.document_id = d.id AND a2.deleted = false
+		          AND COALESCE(a2.filename, '') <> '')
 		FROM repair_cases c
 		JOIN zotero_attachments a ON a.id = c.attachment_id AND a.deleted = false
 		JOIN zotero_documents d ON d.id = a.document_id
@@ -62,7 +67,7 @@ func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, 
 	var creators []byte
 	if err := row.Scan(&it.CaseID, &it.AttachmentID, &it.AttachmentKey, &it.DocumentKey, &it.DocumentID,
 		&it.Title, &creators, &it.Year, &it.Language, &it.Analysis,
-		&it.LocalPath, &it.ContentType); err != nil {
+		&it.LocalPath, &it.ContentType, &it.ExistingNames); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal(creators, &it.Creators)

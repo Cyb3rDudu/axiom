@@ -44,8 +44,9 @@ type ApplyCase struct {
 	Title         string
 	Creators      any // []zotero.Creator — typed loosely to keep repo decoupled
 	Year          int
-	SrcPath       string // original pdf path (quarantine source)
-	ContentType   string // #220: epub repairs upload .epub artifacts
+	ExistingNames []string // #291: the document's current attachment filenames (grown-pattern reference)
+	SrcPath       string   // original pdf path (quarantine source)
+	ContentType   string   // #220: epub repairs upload .epub artifacts
 	PlanVersion   int
 }
 
@@ -94,7 +95,7 @@ func Apply(ctx context.Context, d ApplyDeps, quarantineRoot string, c ApplyCase,
 
 	// 3. create the healed attachment under a SCHEMA filename (no patch)
 	creators, _ := c.Creators.([]zotero.Creator)
-	filename := SchemaFilenameForFormat(creators, c.Year, c.Title, c.ContentType)
+	filename := SchemaFilenameForFormat(creators, c.Year, c.Title, c.ContentType, c.ExistingNames)
 	newKey, err := d.CreateAttachmentWithFile(c.DocumentKey, filename, c.ContentType, pdf)
 	if err != nil {
 		// #285 ambiguous create: the write gateway minted the item but the

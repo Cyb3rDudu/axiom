@@ -39,6 +39,7 @@ type repairQueueItem struct {
 	repo.RepairCase
 	Title         string           `json:"title"`
 	Creators      []zotero.Creator `json:"creators"`
+	ExistingNames []string         `json:"existing_attachment_names,omitempty"` // #291 grown-pattern refs
 	Year          int              `json:"publication_year"`
 	AttachmentKey string           `json:"attachment_zotero_key"`
 	DocumentKey   string           `json:"document_zotero_key"`
@@ -97,14 +98,18 @@ func (s *Server) repairItemFor(r *http.Request, c *repo.RepairCase) (*repairQueu
 		       (SELECT a2.local_path FROM zotero_attachments a2
 		        WHERE a2.document_id = d.id AND a2.deleted = false
 		          AND a2.content_type = 'application/epub+zip'
-		        ORDER BY a2.preferred DESC LIMIT 1)
+		        ORDER BY a2.preferred DESC LIMIT 1),
+		       (SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.id)
+		        FROM zotero_attachments a2
+		        WHERE a2.document_id = d.id AND a2.deleted = false
+		          AND COALESCE(a2.filename, '') <> '')
 		FROM zotero_attachments a JOIN zotero_documents d ON d.id = a.document_id
 		WHERE a.id = $1 AND a.deleted = false`, c.AttachmentID)
 	var it repairQueueItem
 	it.RepairCase = *c
 	var creators []byte
 	var epub *string
-	if err := row.Scan(&it.Title, &creators, &it.Year, &it.DocumentKey, &it.AttachmentKey, &it.LocalPath, &epub, &it.ContentType); err != nil {
+	if err := row.Scan(&it.Title, &creators, &it.Year, &it.DocumentKey, &it.AttachmentKey, &it.LocalPath, &epub, &it.ContentType, &it.ExistingNames); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal(creators, &it.Creators)
@@ -225,6 +230,7 @@ func (s *Server) handleRepairCustody(w http.ResponseWriter, r *http.Request) {
 		Title:         item.Title,
 		Creators:      item.Creators,
 		Year:          item.Year,
+		ExistingNames: item.ExistingNames,
 		SrcPath:       strings.TrimPrefix(item.LocalPath, "file://"),
 		ContentType:   contentType,
 	}, artifact)
@@ -250,12 +256,16 @@ func (s *Server) handleRepairCustody(w http.ResponseWriter, r *http.Request) {
 func (s *Server) custodyItemFor(r *http.Request, zoteroKey string) (*repairQueueItem, error) {
 	row := s.repairRepo.Pool().QueryRow(r.Context(), `
 		SELECT d.title, d.creators, COALESCE(d.publication_year, 0), d.zotero_key,
-		       a.zotero_key, a.local_path, COALESCE(a.content_type, 'application/pdf')
+		       a.zotero_key, a.local_path, COALESCE(a.content_type, 'application/pdf'),
+		       (SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.id)
+		        FROM zotero_attachments a2
+		        WHERE a2.document_id = d.id AND a2.deleted = false
+		          AND COALESCE(a2.filename, '') <> '')
 		FROM zotero_attachments a JOIN zotero_documents d ON d.id = a.document_id
 		WHERE a.zotero_key = $1 AND a.deleted = false`, zoteroKey)
 	var it repairQueueItem
 	var creators []byte
-	if err := row.Scan(&it.Title, &creators, &it.Year, &it.DocumentKey, &it.AttachmentKey, &it.LocalPath, &it.ContentType); err != nil {
+	if err := row.Scan(&it.Title, &creators, &it.Year, &it.DocumentKey, &it.AttachmentKey, &it.LocalPath, &it.ContentType, &it.ExistingNames); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal(creators, &it.Creators)
@@ -539,6 +549,7 @@ func (s *Server) applyRepair(ctx context.Context, d repairApplyDeps, caseID stri
 		Title:         item.Title,
 		Creators:      item.Creators,
 		Year:          item.Year,
+		ExistingNames: item.ExistingNames,
 		SrcPath:       srcPath,
 		ContentType:   contentType,
 		PlanVersion:   planVersion,

@@ -487,6 +487,7 @@ func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *repo
 		Title:         item.Title,
 		Creators:      item.Creators,
 		Year:          item.Year,
+		ExistingNames: item.ExistingNames,
 		SrcPath:       strings.TrimPrefix(item.LocalPath, "file://"),
 		ContentType:   item.ContentType,
 	}, pdf); err != nil {
