@@ -36,6 +36,22 @@ import (
 // attempts become prunable (the issue's example: 14 days).
 const RetentionJobMinAgeDefault = 14 * 24 * time.Hour
 
+// RetentionBatchDefault is the default tranche size for ApplyRetention:
+// snapshots (and job attempts) deleted per transaction, with a commit
+// between tranches (#290: the first production apply's single 40-minute
+// DELETE was black-holed by the host<->VM port-forward and rolled back
+// silently). Sized from that evidence — ~13 s per snapshot cascade → 25
+// ≈ 5 min per transaction, the "no transaction longer than a few
+// minutes" bound; override per run via --batch / AXIOM_RETENTION_BATCH.
+const RetentionBatchDefault = 25
+
+// RetentionProgress is called once per committed tranche so long runs are
+// observable from the outside (#290: WAL-delta forensics must never again
+// be the only way to tell a healthy apply from a hung one). phase is
+// "snapshots" or "jobs"; done is the phase total so far, total the
+// phase's planned removal count from the initial plan.
+type RetentionProgress func(phase string, done, total int)
+
 // RetentionReport is the dry-run result: exact counts of what a real run
 // WOULD remove (and what it never touches).
 type RetentionReport struct {
@@ -218,61 +234,173 @@ type RetentionRemovals struct {
 	ArtifactPaths []string `json:"artifact_paths"`
 }
 
-// ApplyRetention executes the plan in ONE transaction: superseded snapshots
-// first (their cascade frees chunks/embeddings/relationships/artifacts and
-// done outbox rows), then the stale job attempts. Idempotent by
-// construction — a second run finds nothing left in the candidate sets.
-func (r *Repo) ApplyRetention(ctx context.Context, jobMinAge time.Duration) (*RetentionRemovals, *RetentionReport, error) {
+// ApplyRetention executes the plan in TRANCHES (#290): up to batchSize
+// superseded snapshots per transaction (their cascade frees chunks/
+// embeddings/relationships/artifacts and done outbox rows), commit, then
+// the next tranche; stale job attempts afterwards under the same
+// discipline. No single transaction runs longer than one tranche's worth
+// of cascade. Idempotent by construction — every candidate re-qualifies
+// through the same guards on the next run, so an interruption at any
+// tranche boundary leaves committed partial progress that a re-run
+// resumes naturally. batchSize <= 0 means RetentionBatchDefault.
+func (r *Repo) ApplyRetention(ctx context.Context, jobMinAge time.Duration, batchSize int, progress RetentionProgress) (*RetentionRemovals, *RetentionReport, error) {
 	if jobMinAge <= 0 {
 		jobMinAge = RetentionJobMinAgeDefault
+	}
+	if batchSize <= 0 {
+		batchSize = RetentionBatchDefault
 	}
 	plan, err := r.RetentionPlan(ctx, jobMinAge)
 	if err != nil {
 		return nil, nil, err
 	}
+	rem := &RetentionRemovals{}
+	// Tranche loop: re-select the candidate set every iteration — deleted
+	// rows are gone, so each tranche picks the next batch without OFFSET
+	// bookkeeping. A zero-row tranche ends the phase. ctx is checked at the
+	// boundary so a deadline/cancel aborts BETWEEN transactions: everything
+	// committed stays committed (the resume contract), nothing half-open.
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, fmt.Errorf("retention apply interrupted after %d snapshot(s) — committed tranches are safe, re-run resumes: %w", rem.Snapshots, err)
+		}
+		n, paths, err := r.deleteSnapshotTranche(ctx, batchSize)
+		if err != nil {
+			return nil, nil, err
+		}
+		if n == 0 {
+			break
+		}
+		rem.Snapshots += n
+		rem.ArtifactPaths = append(rem.ArtifactPaths, paths...)
+		if progress != nil {
+			progress("snapshots", rem.Snapshots, plan.Snapshots.Remove)
+		}
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, fmt.Errorf("retention apply interrupted after %d job attempt(s) — committed tranches are safe, re-run resumes: %w", rem.Jobs, err)
+		}
+		n, err := r.deleteJobTranche(ctx, batchSize, jobMinAge)
+		if err != nil {
+			return nil, nil, err
+		}
+		if n == 0 {
+			break
+		}
+		rem.Jobs += n
+		if progress != nil {
+			progress("jobs", rem.Jobs, plan.Jobs.Remove)
+		}
+	}
+	return rem, plan, nil
+}
+
+// deleteSnapshotTranche deletes up to limit superseded snapshots in ONE
+// short transaction and commits it. Artifact paths are collected inside
+// the same transaction, before the rows cascade away.
+func (r *Repo) deleteSnapshotTranche(ctx context.Context, limit int) (int, []string, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return nil, nil, err
+		return 0, nil, err
 	}
 	defer tx.Rollback(ctx)
-	var snapN, jobN int
-	// collect artifact paths before the rows cascade away
-	var artifactPaths []string
 	rows, err := tx.Query(ctx, `
-		SELECT ar.storage_path FROM processing_artifacts ar
-		JOIN processing_snapshots s ON s.id = ar.snapshot_id
-		WHERE `+supersededSnapshotGuard)
+		SELECT s.id FROM processing_snapshots s
+		WHERE `+supersededSnapshotGuard+`
+		ORDER BY s.created_at, s.id
+		LIMIT $1`, limit)
 	if err != nil {
-		return nil, nil, fmt.Errorf("collect artifact paths: %w", err)
+		return 0, nil, fmt.Errorf("select snapshot tranche: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, nil, err
+	}
+	if len(ids) == 0 {
+		return 0, nil, nil
+	}
+	var paths []string
+	rows, err = tx.Query(ctx, `
+		SELECT ar.storage_path FROM processing_artifacts ar
+		WHERE ar.snapshot_id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return 0, nil, fmt.Errorf("collect artifact paths: %w", err)
 	}
 	for rows.Next() {
 		var p string
 		if err := rows.Scan(&p); err != nil {
 			rows.Close()
-			return nil, nil, err
+			return 0, nil, err
 		}
-		artifactPaths = append(artifactPaths, p)
+		paths = append(paths, p)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, nil, err
+		return 0, nil, err
 	}
 	tag, err := tx.Exec(ctx, `
 		DELETE FROM processing_snapshots s
-		WHERE `+supersededSnapshotGuard)
+		WHERE s.id = ANY($1::uuid[])`, ids)
 	if err != nil {
-		return nil, nil, fmt.Errorf("delete superseded snapshots: %w", err)
+		return 0, nil, fmt.Errorf("delete superseded snapshots: %w", err)
 	}
-	snapN = int(tag.RowsAffected())
-	tag, err = tx.Exec(ctx, `
-		DELETE FROM ingest_jobs j
-		WHERE j.id IN (SELECT j.id`+prunableJobSQL+`)`, jobMinAge.Seconds())
-	if err != nil {
-		return nil, nil, fmt.Errorf("delete stale job attempts: %w", err)
-	}
-	jobN = int(tag.RowsAffected())
 	if err := tx.Commit(ctx); err != nil {
-		return nil, nil, err
+		return 0, nil, err
 	}
-	return &RetentionRemovals{Snapshots: snapN, Jobs: jobN, ArtifactPaths: artifactPaths}, plan, nil
+	return int(tag.RowsAffected()), paths, nil
+}
+
+// deleteJobTranche deletes up to limit stale job attempts in ONE short
+// transaction and commits it. Deleting a prunable job never un-prunes a
+// remaining one: every candidate's "newer sibling" guard is anchored on
+// its document's newest job, which by definition has no newer sibling and
+// is therefore never in the prunable set.
+func (r *Repo) deleteJobTranche(ctx context.Context, limit int, jobMinAge time.Duration) (int, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	// prunableJobSQL binds the age as $1 (its own numbering); the tranche
+	// LIMIT follows it as $2.
+	rows, err := tx.Query(ctx, `SELECT j.id`+prunableJobSQL+` LIMIT $2`,
+		jobMinAge.Seconds(), limit)
+	if err != nil {
+		return 0, fmt.Errorf("select job tranche: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	tag, err := tx.Exec(ctx, `
+		DELETE FROM ingest_jobs WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return 0, fmt.Errorf("delete stale job attempts: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
 }
