@@ -369,7 +369,14 @@ Modes (each runs ONCE and exits; never falls through to the server boot):
                                   default, --apply mutates
   -maintenance-retention          remove superseded snapshots + stale job
                                   attempts (never the outcome truth); dry-run
-                                  default, --apply mutates (#281)
+                                  default, --apply mutates (#281). The apply
+                                  deletes in committed tranches under a run
+                                  deadline (#290): --timeout=2h (default,
+                                  or AXIOM_RETENTION_TIMEOUT) and --batch=N
+                                  (snapshots per transaction, or
+                                  AXIOM_RETENTION_BATCH); one progress line
+                                  per tranche; an interrupted run is resumed
+                                  by simply re-running it
   (no mode flag)                  start the API server + optional dispatcher
 
 Exit codes:

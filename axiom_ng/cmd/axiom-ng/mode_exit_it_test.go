@@ -341,6 +341,94 @@ func TestIT_ModeFailExitCodeAndConsistencyStatement(t *testing.T) {
 	}
 }
 
+// TestIT_MaintenanceRetentionTrancheProgressAndDeadline (#290): the
+// retention apply must be observable and bounded on the REAL binary —
+// one progress line per committed tranche (parsing --batch), and an
+// expired --timeout fails the run loudly with exit 1 instead of hanging
+// on a dead connection. Red probes: dropping the tranche loop loses the
+// per-tranche progress lines; dropping the context.WithTimeout makes the
+// expired-deadline run succeed (exit 0) instead of failing.
+func TestIT_MaintenanceRetentionTrancheProgressAndDeadline(t *testing.T) {
+	dsn := openModeTestDB(t)
+
+	// fixture: one doc/attachment with TWO superseded outbox-free snapshots
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `
+		WITH s AS (INSERT INTO zotero_sources (base_url, library_id, server_id)
+			VALUES ('https://zotero.ret290', 'lib-ret290', 'srv') RETURNING id),
+		d AS (INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
+			SELECT id, 'R2DOC', 1, 'book', 'Retention 290' FROM s RETURNING id),
+		a AS (INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+			parent_zotero_key, link_mode, content_type, filename, local_path)
+			SELECT s.id, d.id, 'R2ATT', 1, 'R2DOC', 'imported_file', 'application/pdf', 'x.pdf', '/tmp/x.pdf'
+			FROM s, d RETURNING id, document_id)
+		INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name,
+			processor_version, profile_hash, document_id, profile, active)
+		SELECT a.id, 'r290-' || g, 'p', 'v1', 'ph-' || g, a.document_id, '{}', false
+		FROM a CROSS JOIN generate_series(1,2) g`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	bin := filepath.Join(t.TempDir(), "axiom-ng")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build binary: %v\n%s", err, out)
+	}
+
+	// 1) tranche progress: --batch=1 over two snapshots → one line per
+	//    committed tranche, in the run output
+	out := runMode(t, bin, dsn, "-maintenance-retention", "--apply", "--batch=1")
+	for _, want := range []string{
+		"apply progress: snapshots removed 1/2",
+		"apply progress: snapshots removed 2/2",
+		"retention APPLIED: 2 superseded snapshot",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("apply output missing %q\n%s", want, out)
+		}
+	}
+
+	// re-seed for the deadline leg (the progress leg consumed the snapshots)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name,
+			processor_version, profile_hash, document_id, profile, active)
+		SELECT a.id, 'r290-d' || g, 'p', 'v1', 'ph-d' || g, a.document_id, '{}', false
+		FROM zotero_attachments a CROSS JOIN generate_series(1,2) g
+		WHERE a.zotero_key = 'R2ATT'`); err != nil {
+		t.Fatalf("re-seed: %v", err)
+	}
+
+	// 2) expired deadline: exit 1 with the MODE FAILED contract and a
+	//    deadline-specific message — never a silent success or a hang
+	c := exec.Command(bin, "-maintenance-retention", "--apply", "--timeout=1ns")
+	c.Env = append(os.Environ(), "AXIOM_DATABASE_URL="+dsn, "AXIOM_ALLOW_DEBUG_BIND=1")
+	dlOut, err := c.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expired --timeout must fail the run (exit != 0), got success:\n%s", dlOut)
+	}
+	if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 1 {
+		t.Fatalf("exit code = %v, want 1\n%s", err, dlOut)
+	}
+	for _, want := range []string{"MODE FAILED (exit 1)", "deadline"} {
+		if !strings.Contains(string(dlOut), want) {
+			t.Fatalf("deadline-failure output missing %q\n%s", want, dlOut)
+		}
+	}
+	// the expired run must not have silently completed the work either
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM processing_snapshots WHERE content_hash LIKE 'r290-d%'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("expired-deadline run must leave its work un-done (2 snapshots), got %d", n)
+	}
+}
+
 // TestIT_HelpDocumentsExitCodes (#202): -help exits 0 and documents the
 // mode/exit-code contract. No DB work — pure arg handling.
 func TestIT_HelpDocumentsExitCodes(t *testing.T) {

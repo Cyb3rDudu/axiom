@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
@@ -26,12 +27,14 @@ import (
 
 // cliMode is one operator mode. apply controls whether the shared runner
 // parses --apply from the remaining args (repoint always applies, so it
-// declares apply=false and its body ignores the flag).
+// declares apply=false and its body ignores the flag). args is the raw
+// remaining argv so a mode can parse its own flags (#290: retention's
+// --timeout / --batch).
 type cliMode struct {
 	flag   string
 	prefix string
 	apply  bool
-	run    func(logger *log.Logger, apply bool, rp *repo.Repo)
+	run    func(logger *log.Logger, apply bool, rp *repo.Repo, args []string)
 }
 
 var cliModes = []cliMode{
@@ -43,7 +46,7 @@ var cliModes = []cliMode{
 		// whose evidence sits in gated frontmatter sections (TOC / author
 		// lists / preface / bibliography / index / title lines) leave the
 		// active graph. Dry-run by default; --apply executes the drop.
-		run: func(logger *log.Logger, apply bool, rp *repo.Repo) {
+		run: func(logger *log.Logger, apply bool, rp *repo.Repo, args []string) {
 			rep, err := rp.CleanupFrontmatterKG(context.Background(), apply)
 			if err != nil {
 				modeFail(logger, modeSingleTx, "cleanup: %v", err)
@@ -66,7 +69,7 @@ var cliModes = []cliMode{
 		// runbook calls it after the drain (peer of the OS==PG parity
 		// check). #198-2: one aggregated edge per (source,target) pair
 		// among active snapshots. Dry-run by default; --apply mutates.
-		run: func(logger *log.Logger, apply bool, rp *repo.Repo) {
+		run: func(logger *log.Logger, apply bool, rp *repo.Repo, args []string) {
 			if !apply {
 				_, pairs, err := rp.RelationsConsolidationDryRun(context.Background())
 				if err != nil {
@@ -88,7 +91,7 @@ var cliModes = []cliMode{
 		apply:  true,
 		// #198-3: deterministic typing rules over active entities.
 		// Dry-run by default; --apply mutates.
-		run: func(logger *log.Logger, apply bool, rp *repo.Repo) {
+		run: func(logger *log.Logger, apply bool, rp *repo.Repo, args []string) {
 			if !apply {
 				c, err := rp.EntityTypingCounts(context.Background())
 				if err != nil {
@@ -109,7 +112,7 @@ var cliModes = []cliMode{
 		prefix: "aliases: ",
 		apply:  true,
 		// #199 W6: guarded exact+flexion binding in one pass (W3 guards).
-		run: func(logger *log.Logger, apply bool, rp *repo.Repo) {
+		run: func(logger *log.Logger, apply bool, rp *repo.Repo, args []string) {
 			if !apply {
 				c, err := rp.BindExactFormAliasesDryRun(context.Background())
 				if err != nil {
@@ -136,7 +139,7 @@ var cliModes = []cliMode{
 		prefix: "aliases: ",
 		apply:  true,
 		// #198-3: flexion family alias links.
-		run: func(logger *log.Logger, apply bool, rp *repo.Repo) {
+		run: func(logger *log.Logger, apply bool, rp *repo.Repo, args []string) {
 			if !apply {
 				c, err := rp.EntityAliasCounts(context.Background())
 				if err != nil {
@@ -158,7 +161,7 @@ var cliModes = []cliMode{
 		apply:  false,
 		// #198-3 Nachzug: re-point variant edges to family survivors,
 		// delete intra-family self-loops, then run -consolidate-relations.
-		run: func(logger *log.Logger, apply bool, rp *repo.Repo) {
+		run: func(logger *log.Logger, apply bool, rp *repo.Repo, args []string) {
 			if err := rp.RepointAliasEdges(context.Background()); err != nil {
 				modeFail(logger, modeSingleTx, "repoint: %v", err)
 			}
@@ -175,7 +178,15 @@ var cliModes = []cliMode{
 		// beyond the retention age. Never deletes: the latest job per
 		// document, repair-linked jobs, active-snapshot producers, pending
 		// work. Idempotent — a second run reports zero.
-		run: func(logger *log.Logger, apply bool, rp *repo.Repo) {
+		//
+		// #290 execution form: the apply deletes in TRANCHES (one commit per
+		// tranche, progress line each) and the whole run is deadline-bounded —
+		// the first production apply died to a 40-min monolithic DELETE whose
+		// connection the host<->VM port-forward silently dropped, and the
+		// client then hung 9h with no deadline. An expired deadline (or any
+		// dead connection) fails the run loudly; committed tranches stay and
+		// a re-run resumes — hence modeMultiPass on failure.
+		run: func(logger *log.Logger, apply bool, rp *repo.Repo, args []string) {
 			age := repo.RetentionJobMinAgeDefault
 			if v := os.Getenv("AXIOM_RETENTION_JOB_DAYS"); v != "" {
 				if d, err := strconv.Atoi(v); err == nil && d > 0 {
@@ -184,8 +195,26 @@ var cliModes = []cliMode{
 					logger.Fatalf("AXIOM_RETENTION_JOB_DAYS must be a positive integer, got %q", v)
 				}
 			}
+			timeout := retentionTimeoutDefault
+			if v := envOrFlag(args, "AXIOM_RETENTION_TIMEOUT", "--timeout"); v != "" {
+				if d, err := time.ParseDuration(v); err == nil && d > 0 {
+					timeout = d
+				} else {
+					logger.Fatalf("retention timeout must be a positive Go duration (e.g. 2h, 90m), got %q", v)
+				}
+			}
+			batch := 0 // 0 -> repo.RetentionBatchDefault
+			if v := envOrFlag(args, "AXIOM_RETENTION_BATCH", "--batch"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					batch = n
+				} else {
+					logger.Fatalf("retention batch must be a positive integer, got %q", v)
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
 			if !apply {
-				rep, err := rp.RetentionPlan(context.Background(), age)
+				rep, err := rp.RetentionPlan(ctx, age)
 				if err != nil {
 					modeFail(logger, modeSingleTx, "dry-run: %v", err)
 				}
@@ -198,9 +227,15 @@ var cliModes = []cliMode{
 				fmt.Println(string(out))
 				return
 			}
-			rem, plan, err := rp.ApplyRetention(context.Background(), age)
+			progress := func(phase string, done, total int) {
+				logger.Printf("apply progress: %s removed %d/%d", phase, done, total)
+			}
+			rem, plan, err := rp.ApplyRetention(ctx, age, batch, progress)
 			if err != nil {
-				modeFail(logger, modeSingleTx, "apply: %v", err)
+				if errors.Is(err, context.DeadlineExceeded) {
+					modeFail(logger, modeMultiPass, "apply ABORTED: run deadline (%s) exceeded — committed tranches are persisted and safe, a re-run resumes where this one stopped: %v", timeout, err)
+				}
+				modeFail(logger, modeMultiPass, "apply: %v", err)
 			}
 			// artifact BYTES after the commit: rows are already gone; a
 			// failed unlink leaves an orphaned file (reported), never a
@@ -227,7 +262,7 @@ var cliModes = []cliMode{
 		// #199 W6 hardening: dry-run by default; --apply mutates. This flag
 		// shares the same operator discipline as relation consolidation,
 		// typing normalization, and alias binding.
-		run: func(logger *log.Logger, apply bool, rp *repo.Repo) {
+		run: func(logger *log.Logger, apply bool, rp *repo.Repo, args []string) {
 			if !apply {
 				report, err := rp.EntityConsolidationDryRun(context.Background())
 				if err != nil {
@@ -245,6 +280,33 @@ var cliModes = []cliMode{
 				report.Merged, report.DuplicateFormsBefore, report.DuplicateFormsAfter)
 		},
 	},
+}
+
+// retentionTimeoutDefault bounds a retention run (#290): generous default
+// 2h (the 182-snapshot backlog applied in ~40 min of pure DELETE; the
+// bound exists so a DEAD connection ends the run loudly instead of the
+// 9-hour hang the incident produced), overridable via AXIOM_RETENTION_TIMEOUT
+// or --timeout=.
+const retentionTimeoutDefault = 2 * time.Hour
+
+// flagValue returns the value of the first --name=value arg in args, or "".
+func flagValue(args []string, name string) string {
+	prefix := name + "="
+	for _, a := range args {
+		if strings.HasPrefix(a, prefix) {
+			return strings.TrimPrefix(a, prefix)
+		}
+	}
+	return ""
+}
+
+// envOrFlag resolves a mode setting: env var if set, else --name=value
+// flag. Empty means unset (caller keeps its default).
+func envOrFlag(args []string, env, flag string) string {
+	if v := os.Getenv(env); v != "" {
+		return v
+	}
+	return flagValue(args, flag)
 }
 
 // runCLIMode dispatches args[1] to a registered mode and reports whether
@@ -269,7 +331,7 @@ func runCLIMode(args []string) bool {
 			logger.Fatalf("postgres: %v", err)
 		}
 		defer d.Close()
-		m.run(logger, apply, repo.New(d.Pool()))
+		m.run(logger, apply, repo.New(d.Pool()), args[2:])
 		return true
 	}
 	return false
