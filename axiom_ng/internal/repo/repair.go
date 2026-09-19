@@ -282,19 +282,18 @@ func (r *Repo) SubmitRepairVerdict(ctx context.Context, caseID string, plan json
 // jsonb || is a SHALLOW merge — a patched "ocr" object REPLACES any
 // existing one, so patches must carry the complete override object
 // (mode AND lang together), not single keys.
-func (r *Repo) RequeueRepairCase(ctx context.Context, caseID, reason string, analysisPatch json.RawMessage) error {
-	return r.requeueRepairCase(ctx, caseID, reason, analysisPatch, "")
-}
-
-// RequeueRepairCaseWithOrphanAck is the #285-guarded requeue: a case with
-// an UNRESOLVED ambiguous-create orphan (repair.Apply audited
-// create_attachment_orphan — item minted in Zotero, upload failed, cleanup
-// delete failed too) refuses the requeue until the operator names the
-// orphan key in orphanAck, confirming the EMPTY item was deleted in Zotero.
-// A blind re-run would mint a second sibling attachment while the orphan
-// survives only in human-readable reason text — the same hazard class the
-// manual custody endpoint guards with its 409. Resolution is audited as
-// create_attachment_orphan_resolved (machine-readable on the same table).
+// RequeueRepairCaseWithOrphanAck is the ONLY requeue entrypoint (#285:
+// the unguarded variant was removed — a caller bypassing the ack would
+// reopen exactly the second-sibling hazard this route closes; empty ack
+// = allowed when no orphan is outstanding). A case with an UNRESOLVED
+// ambiguous-create orphan (repair.Apply audited create_attachment_orphan
+// — item minted in Zotero, upload failed, cleanup delete failed too)
+// refuses the requeue until the operator names the orphan key in
+// orphanAck, confirming the EMPTY item was deleted in Zotero. A blind
+// re-run would mint a second sibling attachment while the orphan
+// survives only in human-readable reason text — the same hazard class
+// the manual custody endpoint guards with its 409. Resolution is audited
+// as create_attachment_orphan_resolved (machine-readable, same table).
 func (r *Repo) RequeueRepairCaseWithOrphanAck(ctx context.Context, caseID, reason string, analysisPatch json.RawMessage, orphanAck string) error {
 	return r.requeueRepairCase(ctx, caseID, reason, analysisPatch, orphanAck)
 }

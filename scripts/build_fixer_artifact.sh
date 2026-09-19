@@ -86,12 +86,27 @@ if [ ! -x "$PREFIX/bin/python" ]; then
         echo "  regeneration recipe: rm -rf dist/build/fixer/env &&" >&2
         echo "  micromamba create -y -p dist/build/fixer/env -c conda-forge 'python=3.11' 'tesseract=5.*' 'ghostscript' pip" >&2
         echo "  (run the staged gates on it) && micromamba list --explicit -p dist/build/fixer/env" >&2
-        echo "  > scripts/lib/fixer-conda-osx-arm64.lock" >&2
+        echo "  | grep '^https://' > scripts/lib/fixer-conda-osx-arm64.lock" >&2
+        echo "  — then re-add the header + @EXPLICIT marker line (see the lock's own header)" >&2
         exit 1
     }
-    echo "fixer-artifact: conda solve from explicit lock ($FIXER_LOCK)"
+    echo "fixer-artifact: conda install from explicit lock ($FIXER_LOCK)"
     "$MM" create -y -p "$PREFIX" -f "$FIXER_LOCK"
 fi
+# #286 review: a CACHED env bypasses the lock above entirely — verify the
+# prefix against the lock on EVERY build so artifact determinism never
+# hangs on build-host cache state (the env-reuse hole). URL sets must
+# match exactly; a drift is a hard error naming the reset.
+"$MM" list --explicit -p "$PREFIX" 2>/dev/null | grep '^https://' | sort > "$BUILD/env-actual.txt"
+grep '^https://' "$FIXER_LOCK" | sort > "$BUILD/env-lock.txt"
+if ! cmp -s "$BUILD/env-actual.txt" "$BUILD/env-lock.txt"; then
+    echo "fixer-artifact: cached env does not match the explicit lock — reset required:" >&2
+    echo "  rm -rf dist/build/fixer/env && rebuild (lock-diff: $(diff "$BUILD/env-lock.txt" "$BUILD/env-actual.txt" | head -4 | tr '\n' ' '))" >&2
+    exit 1
+fi
+LOCK_N=$(wc -l < "$BUILD/env-lock.txt" | tr -d ' ')
+rm -f "$BUILD/env-actual.txt" "$BUILD/env-lock.txt"
+echo "fixer-artifact: env matches the explicit lock ($LOCK_N packages)"
 PY="$PREFIX/bin/python"
 
 # --- pinned deps (lock wins when present — same rule as bootstrap.sh) -------
@@ -168,7 +183,7 @@ EOF
 (
     cd / && "$STAGE/env/bin/python" -c 'import pymupdf; print("fixer-artifact: staged pymupdf", pymupdf.__version__)'
 )
-(cd "$STAGE/app" && "$STAGE/env/bin/python" -m pytest tests/test_import_guard.py -q)
+(cd "$STAGE/app" && "$STAGE/env/bin/python" -m pytest tests/test_import_guard.py --noconftest -q)
 
 # --- #286: OCR staged check against the PACKED env (import_audit pattern) ----
 # Mutation probe: remove tesseract/ghostscript from the conda create line
@@ -212,16 +227,14 @@ SMOKE
 rm -rf "$STAGE/app/tests"
 artifact_strip_pycache "$STAGE"
 
-# The staged pytest gate loads tests/conftest.py, whose session-scoped
-# autouse fixture REGENERATES fixtures/storage in the staged tree — delete
-# both generated dirs after the gate (the rsync excludes cannot see what
-# the gate itself creates; the leak check below stays fail-closed).
-rm -rf "$STAGE/app/fixtures/storage" "$STAGE/app/fixtures/difficult"
-
-# #286 pinning fail-closed: the staged gates above must never leave the
-# gitignored generated test data behind — any regenerator (rsync residue,
-# conftest, a future staged test) fails the build instead of silently
-# shipping build-host residue (the original 3× size swing).
+# The staged pytest gate runs with --noconftest: the conftest's autouse
+# fixture would REGENERATE fixtures/storage in the staged tree (sandbox
+# storage for the full suite — irrelevant to the import guard, which sets
+# up its own sys.path). With conftest off, NOTHING legitimate creates the
+# generated dirs during staging — the leak check below is therefore REAL
+# fail-closed: any appearance (rsync residue, conftest, a future staged
+# test) fails the build instead of silently shipping host residue (the
+# original 3× size swing).
 for _leak in fixtures/storage fixtures/difficult; do
     if [ -e "$STAGE/app/$_leak" ]; then
         echo "fixer-artifact: staging leak — $STAGE/app/$_leak exists (generated test data must not ship)" >&2
@@ -230,20 +243,23 @@ for _leak in fixtures/storage fixtures/difficult; do
 done
 
 tar --zstd -C "$BUILD" -cf "$ARTIFACT" "fixer-$VERSION"
-(cd "$DIST" && shasum -a 256 "${ARTIFACT##*/}" >"${ARTIFACT##*/}.sha256")
-echo "fixer-artifact: $ARTIFACT"
 # #286 pinning size witness: the artifact must stay DETERMINISTICALLY
 # slim — the lock bounds the env, the rsync excludes bound the app side.
 # A stray directory (or an unpinned solve explosion) fails the build
-# instead of silently shipping 3× the transfer size.
+# instead of silently shipping 3× the transfer size — BEFORE the sha256
+# sidecar is written, and removing the artifact on failure so dist/ never
+# carries an over-ceiling pair.
 # ponytail: fixed 450 MB ceiling — revisit only when a DELIBERATE bundling
 # decision (new toolchain in the env) outgrows it.
 ART_SIZE=$(stat -f%z "$ARTIFACT")
 if [ "$ART_SIZE" -gt 471859200 ]; then
     echo "fixer-artifact: $((ART_SIZE / 1048576)) MB exceeds the 450 MB ceiling — check for stray staging residue or solve drift" >&2
+    rm -f "$ARTIFACT"
     exit 1
 fi
 echo "fixer-artifact: size ok — $((ART_SIZE / 1048576)) MB (ceiling 450 MB)"
+(cd "$DIST" && shasum -a 256 "${ARTIFACT##*/}" >"${ARTIFACT##*/}.sha256")
+echo "fixer-artifact: $ARTIFACT"
 # DoD witness (#286): the listing contains the bundled OCR pieces.
 for member in env/bin/tesseract env/bin/gs env/share/tessdata/deu.traineddata env/share/tessdata/eng.traineddata; do
     tar --zstd -tf "$ARTIFACT" "fixer-$VERSION/$member" >/dev/null || {

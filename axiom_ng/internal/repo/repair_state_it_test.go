@@ -220,7 +220,7 @@ func TestRequeueOrphanGuardIT(t *testing.T) {
 	}
 
 	// blind requeue → refused, naming the key (no second sibling mint)
-	err = lr.rep.RequeueRepairCase(ctx, c.ID, "erneut versuchen", json.RawMessage(`{}`))
+	err = lr.rep.RequeueRepairCaseWithOrphanAck(ctx, c.ID, "erneut versuchen", json.RawMessage(`{}`), "")
 	if err == nil || !strings.Contains(err.Error(), "ORPHAN1") {
 		t.Fatalf("blind requeue must refuse naming the orphan key, got %v", err)
 	}
@@ -240,7 +240,7 @@ func TestRequeueOrphanGuardIT(t *testing.T) {
 	if _, err := lr.rep.Pool().Exec(ctx, `UPDATE repair_cases SET status='failed' WHERE id=$1`, c.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := lr.rep.RequeueRepairCase(ctx, c.ID, "nach resolve", json.RawMessage(`{}`)); err != nil {
+	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, c.ID, "nach resolve", json.RawMessage(`{}`), ""); err != nil {
 		t.Fatalf("resolved orphan must not block further requeues: %v", err)
 	}
 }

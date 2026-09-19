@@ -231,13 +231,13 @@ func TestRepairRequeueIT(t *testing.T) {
 	}
 
 	// Empty reason is refused — changed evidence conditions are documented.
-	if err := lr.rep.RequeueRepairCase(ctx, caseID, "  ", nil); err == nil {
+	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, caseID, "  ", nil, ""); err == nil {
 		t.Fatal("requeue without reason must be refused")
 	}
 
 	// Requeue re-arms: guard counter 0, case queued.
-	if err := lr.rep.RequeueRepairCase(ctx, caseID,
-		"#278 forensics fix — Karte vollständig, retry lohnt", nil); err != nil {
+	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, caseID,
+		"#278 forensics fix — Karte vollständig, retry lohnt", nil, ""); err != nil {
 		t.Fatalf("requeue: %v", err)
 	}
 	var status, reason string
@@ -276,7 +276,7 @@ func TestRepairRequeueIT(t *testing.T) {
 	}
 
 	// in_repair (mid-flight) refuses — the same nail as BlockRepairCase.
-	if err := lr.rep.RequeueRepairCase(ctx, caseID, "nochmal", nil); err == nil {
+	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, caseID, "nochmal", nil, ""); err == nil {
 		t.Fatal("requeue must refuse in_repair")
 	}
 
@@ -288,8 +288,8 @@ func TestRepairRequeueIT(t *testing.T) {
 		`UPDATE repair_cases SET status='failed', blocked_reason='no-healable-defect-evidenced: IT' WHERE id=$1`, caseID2); err != nil {
 		t.Fatal(err)
 	}
-	if err := lr.rep.RequeueRepairCase(ctx, caseID2, "force-Modus für kaputte Textschicht (#284)",
-		json.RawMessage(`{"ocr": {"mode": "force", "lang": "eng"}}`)); err != nil {
+	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, caseID2, "force-Modus für kaputte Textschicht (#284)",
+		json.RawMessage(`{"ocr": {"mode": "force", "lang": "eng"}}`), ""); err != nil {
 		t.Fatalf("requeue with patch: %v", err)
 	}
 	var analysis string
@@ -306,10 +306,10 @@ func TestRepairRequeueIT(t *testing.T) {
 	if _, err := lr.pool.Exec(ctx, `UPDATE repair_cases SET status='rejected' WHERE id=$1`, caseID3); err != nil {
 		t.Fatal(err)
 	}
-	if err := lr.rep.RequeueRepairCase(ctx, caseID3, "manuell gereiht", json.RawMessage(`{"ocr":{"mode":"force"}}`)); err != nil {
+	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, caseID3, "manuell gereiht", json.RawMessage(`{"ocr":{"mode":"force"}}`), ""); err != nil {
 		t.Fatalf("requeue from rejected must work since #284: %v", err)
 	}
-	if err := lr.rep.RequeueRepairCase(ctx, caseID3, "nochmal", nil); err == nil {
+	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, caseID3, "nochmal", nil, ""); err == nil {
 		t.Fatal("requeue from queued (not parked) must refuse")
 	}
 }

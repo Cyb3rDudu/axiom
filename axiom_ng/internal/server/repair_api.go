@@ -329,7 +329,7 @@ func (s *Server) handleRepairRequeue(w http.ResponseWriter, r *http.Request) {
 		OrphanAck     string          `json:"orphan_resolved"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "body muss JSON {\"reason\": \"…\", \"analysis_patch\": {…}} sein", http.StatusBadRequest)
+		http.Error(w, "body muss JSON {\"reason\": \"…\", \"analysis_patch\": {…}, \"orphan_resolved\": \"<KEY>\"} sein", http.StatusBadRequest)
 		return
 	}
 	// blank reason is a client error, not a state conflict — check before
