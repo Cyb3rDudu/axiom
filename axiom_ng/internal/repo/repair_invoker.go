@@ -55,7 +55,7 @@ func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, 
 		       d.title, d.creators, COALESCE(d.publication_year, 0),
 		       COALESCE(d.language, ''), c.analysis,
 		       a.local_path, COALESCE(a.content_type, ''),
-		       (SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.id)
+		       (SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.filename ASC)
 		        FROM zotero_attachments a2
 		        WHERE a2.document_id = d.id AND a2.deleted = false
 		          AND COALESCE(a2.filename, '') <> '')

@@ -108,9 +108,14 @@ nein); ein überlanger Haupttitel kürzt an der Wortgrenze.
 
 **Grown-Pattern-Ausnahme (#291):** Hat das Dokument bereits Anhänge,
 übernimmt der Upload deren gewachsenes Muster — Springer-`+`-Kodierung
-(`Dubs,+R.+-+2004+-+…` → neuer Name mit `+` statt Leerzeichen) und
-`(EPUB)`/`(PDF)`-Format-Marker werden weitergeführt. Lokale Konsistenz
-schlägt globale Einheitlichkeit.
+(erkannt am kodierten Separator `+-+`; ein bloßes `+` aus dem Titel wie
+bei C++ triggert nichts) und `(EPUB)`/`(PDF)`-Format-Marker (nur diese
+beiden Tags; eine Jahresklammer wie `(2024)` ist keiner) werden
+weitergeführt. Referenz ist der preferred-Anhang, Tie-Break alphabetisch.
+Lokale Konsistenz schlägt globale Einheitlichkeit. Bewusst NICHT
+reproduziert: die Namens-Tiefe der Referenz (z. B. `Dubs,+R.` mit
+Initial) — das Muster ist die Kodierung, der Inhalt kommt aus den
+aktuellen Metadaten (Kaskade oben).
 
 **NFC (#291):** Der Name wird immer NFC-normalisiert — API-Filename und
 Name auf Platte sind byte-identisch (macOS-Umlaut-Falle NFD).

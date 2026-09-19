@@ -170,6 +170,9 @@ func cleanTitle(title string) string {
 		return shorten(main, 80)
 	}
 	sub = sepToDash(strings.TrimSpace(sub))
+	if sub == "" { // 'Titel:' — empty subtitle must not leave a dangling ' - '
+		return shorten(main, 80)
+	}
 	if joined := main + " - " + sub; utf8.RuneCountInString(joined) <= 80 {
 		return joined
 	}
@@ -181,10 +184,11 @@ func sepToDash(s string) string {
 	return strings.ReplaceAll(s, "/", " - ")
 }
 
-// markerRe matches a grown ' (EPUB)'-style suffix marker (uppercase or
-// digits — provenance words like '(Kopie)' deliberately do NOT match:
-// provenance suffixes are forbidden by the convention).
-var markerRe = regexp.MustCompile(` \([A-Z0-9]+\)$`)
+// markerRe matches a grown format-marker suffix — KNOWN TAGS only
+// (#291 review: a year like ' (2024)' is not a format tag; provenance
+// words like '(Kopie)' never matched by design — provenance suffixes are
+// forbidden by the convention).
+var markerRe = regexp.MustCompile(` \((PDF|EPUB)\)$`)
 
 // adoptGrownPattern implements the #291 grown-pattern exception: a
 // document that already has attachments keeps ITS established naming —
@@ -202,7 +206,11 @@ func adoptGrownPattern(stem string, existing []string, ext string) string {
 	}
 	ref := strings.TrimSuffix(existing[0], path.Ext(existing[0]))
 	switch {
-	case strings.Contains(ref, "+"):
+	case strings.Contains(ref, "+-+"):
+		// The ENCODED SEPARATOR '+-+' is the Springer signature — a bare '+'
+		// from a title (C++, C#) is not: a space-separated reference name
+		// carrying 'C++' in its title must NOT flip the new name into
+		// +-encoding (#291 review false positive).
 		return strings.ReplaceAll(stem, " ", "+")
 	case markerRe.MatchString(ref):
 		tag := "PDF"

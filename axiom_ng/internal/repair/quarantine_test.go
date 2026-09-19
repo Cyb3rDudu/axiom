@@ -90,6 +90,33 @@ func TestSchemaFilenameGrownPatternFormatMarker(t *testing.T) {
 	}
 }
 
+func TestSchemaFilenameGrownPatternNoFalsePositives(t *testing.T) {
+	// #291 review: a '+' from the TITLE (C++/C#) or a parenthesized YEAR
+	// in a space-separated reference name is NOT a grown pattern — the
+	// global schema applies unchanged.
+	cpp := SchemaFilenameForFormat([]zotero.Creator{{LastName: "Stroustrup", CreatorType: "author"}}, 2020,
+		"C++ Programmierung: Grundlagen", "application/pdf",
+		[]string{"Stroustrup - 2020 - C++ Programmierung - Grundlagen.pdf"})
+	if cpp != "Stroustrup - 2020 - C++ Programmierung - Grundlagen.pdf" {
+		t.Fatalf("C++ im Referenz-Titel darf kein +-Muster triggern: %q", cpp)
+	}
+	year := SchemaFilenameForFormat([]zotero.Creator{{LastName: "Autor", CreatorType: "author"}}, 2024,
+		"Jahresbericht", "application/pdf",
+		[]string{"Autor - 2024 - Jahresbericht (2024).pdf"})
+	if year != "Autor - 2024 - Jahresbericht.pdf" {
+		t.Fatalf("(2024) ist kein Format-Marker — kein Doppel-Suffix: %q", year)
+	}
+}
+
+func TestSchemaFilenameEmptySubtitleNoDanglingDash(t *testing.T) {
+	// #291 review: 'Titel:' (empty subtitle) must not leave a dangling
+	// ' - ' in the filename.
+	got := SchemaFilename([]zotero.Creator{{LastName: "Autor", CreatorType: "author"}}, 2024, "Titel:")
+	if got != "Autor - 2024 - Titel.pdf" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestSchemaFilenameNFCByteIdentity(t *testing.T) {
 	// #291 DoD: macOS umlaut trap — NFD input (decomposed, as the platform
 	// hands it over) must come out NFC, so the API filename and the on-disk

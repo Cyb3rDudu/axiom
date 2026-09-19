@@ -99,7 +99,7 @@ func (s *Server) repairItemFor(r *http.Request, c *repo.RepairCase) (*repairQueu
 		        WHERE a2.document_id = d.id AND a2.deleted = false
 		          AND a2.content_type = 'application/epub+zip'
 		        ORDER BY a2.preferred DESC LIMIT 1),
-		       (SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.id)
+		       (SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.filename ASC)
 		        FROM zotero_attachments a2
 		        WHERE a2.document_id = d.id AND a2.deleted = false
 		          AND COALESCE(a2.filename, '') <> '')
@@ -257,7 +257,7 @@ func (s *Server) custodyItemFor(r *http.Request, zoteroKey string) (*repairQueue
 	row := s.repairRepo.Pool().QueryRow(r.Context(), `
 		SELECT d.title, d.creators, COALESCE(d.publication_year, 0), d.zotero_key,
 		       a.zotero_key, a.local_path, COALESCE(a.content_type, 'application/pdf'),
-		       (SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.id)
+		       (SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.filename ASC)
 		        FROM zotero_attachments a2
 		        WHERE a2.document_id = d.id AND a2.deleted = false
 		          AND COALESCE(a2.filename, '') <> '')
