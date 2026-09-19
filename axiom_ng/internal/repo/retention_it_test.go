@@ -264,7 +264,7 @@ func TestRetentionIT(t *testing.T) {
 	}
 
 	// ── apply ────────────────────────────────────────────────────────────
-	rem, _, err := e.rep.ApplyRetention(ctx, age)
+	rem, _, err := e.rep.ApplyRetention(ctx, age, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestRetentionIT(t *testing.T) {
 	if plan2.Snapshots.Remove != 0 || plan2.Jobs.Remove != 0 {
 		t.Fatalf("second run must report zero: got snapshots=%d jobs=%d", plan2.Snapshots.Remove, plan2.Jobs.Remove)
 	}
-	rem2, _, err := e.rep.ApplyRetention(ctx, age)
+	rem2, _, err := e.rep.ApplyRetention(ctx, age, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
