@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -212,6 +213,51 @@ func TestRepairCaseItemNullYearIT(t *testing.T) {
 		t.Fatalf("item key = %q", item.AttachmentKey)
 	}
 	_ = attID
+}
+
+// TestRepairCaseItemExistingNamesDeterministic pins the #291 reference
+// order: preferred first, tie-break filename ASC — NOT id order. Seeded
+// with two equally preferred attachments whose EXPLICIT ids contradict
+// their filename order (ZZZ carries the lowest id, AAA the highest): an
+// ORDER BY revert to a2.id flips [0] and fails here. The case's own
+// attachment carries an empty filename — it must never appear in the
+// aggregate (COALESCE <> ”).
+func TestRepairCaseItemExistingNamesDeterministic(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	caseID := seedRepairCase(t, lr, "ATT-EN", 0, true)
+	var srcID, docID, attID string
+	if err := lr.pool.QueryRow(ctx, `
+		SELECT a.source_id, a.document_id, a.id FROM repair_cases c
+		JOIN zotero_attachments a ON a.id = c.attachment_id
+		WHERE c.id = $1`, caseID).Scan(&srcID, &docID, &attID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_attachments SET filename='' WHERE id=$1`, attID); err != nil {
+		t.Fatalf("blank case attachment filename: %v", err)
+	}
+	for _, a := range []struct{ id, key, name string }{
+		{"00000000-0000-0000-0000-000000000000", "ATT-EN-ZZZ", "ZZZ-b.pdf"},
+		{"ffffffff-ffff-ffff-ffff-ffffffffffff", "ATT-EN-AAA", "AAA-a.pdf"},
+	} {
+		if _, err := lr.pool.Exec(ctx, `
+			INSERT INTO zotero_attachments (id, source_id, document_id, zotero_key, zotero_version,
+				parent_zotero_key, link_mode, content_type, filename, local_path, preferred, deleted)
+			VALUES ($1, $2, $3, $4, 1, 'DOC-ATT-EN', 'imported_file', 'application/pdf', $5, '/tmp/x.pdf', true, false)`,
+			a.id, srcID, docID, a.key, a.name); err != nil {
+			t.Fatalf("insert %s: %v", a.name, err)
+		}
+	}
+	item, err := lr.rep.RepairCaseItem(ctx, caseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"AAA-a.pdf", "ZZZ-b.pdf"}
+	if !reflect.DeepEqual(item.ExistingNames, want) {
+		t.Fatalf("ExistingNames = %v, want %v (filename ASC must beat id order)", item.ExistingNames, want)
+	}
 }
 
 // TestRepairRequeueIT pins the #278 loop-guard reset route: a parked case

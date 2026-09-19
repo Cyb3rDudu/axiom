@@ -151,6 +151,11 @@ func schemaFilename(creators []zotero.Creator, year int, title, ext string, exis
 		y = fmt.Sprintf("%d", year)
 	}
 	stem := sanitize(head + " - " + y + " - " + cleanTitle(title))
+	// Degenerate titles ("", ":", "  ") leave the tail separator
+	// dangling ("Autor - 2024 -"); a real title ending in '-' can never
+	// produce " -" here — sanitize collapses whitespace, so this suffix
+	// is always the empty-title artifact.
+	stem = strings.TrimSuffix(stem, " -")
 	stem = adoptGrownPattern(stem, existing, ext)
 	// #291 NFC: the on-disk name must be byte-identical to the API
 	// filename — macOS decomposes umlauts (NFD); ONE canonical form end

@@ -98,11 +98,8 @@ func (s *Server) repairItemFor(r *http.Request, c *repo.RepairCase) (*repairQueu
 		       (SELECT a2.local_path FROM zotero_attachments a2
 		        WHERE a2.document_id = d.id AND a2.deleted = false
 		          AND a2.content_type = 'application/epub+zip'
-		        ORDER BY a2.preferred DESC LIMIT 1),
-		       (SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.filename ASC)
-		        FROM zotero_attachments a2
-		        WHERE a2.document_id = d.id AND a2.deleted = false
-		          AND COALESCE(a2.filename, '') <> '')
+		        ORDER BY a2.preferred DESC, a2.filename ASC LIMIT 1),
+		       `+repo.ExistingNamesSubquery+`
 		FROM zotero_attachments a JOIN zotero_documents d ON d.id = a.document_id
 		WHERE a.id = $1 AND a.deleted = false`, c.AttachmentID)
 	var it repairQueueItem
@@ -257,10 +254,7 @@ func (s *Server) custodyItemFor(r *http.Request, zoteroKey string) (*repairQueue
 	row := s.repairRepo.Pool().QueryRow(r.Context(), `
 		SELECT d.title, d.creators, COALESCE(d.publication_year, 0), d.zotero_key,
 		       a.zotero_key, a.local_path, COALESCE(a.content_type, 'application/pdf'),
-		       (SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.filename ASC)
-		        FROM zotero_attachments a2
-		        WHERE a2.document_id = d.id AND a2.deleted = false
-		          AND COALESCE(a2.filename, '') <> '')
+		       `+repo.ExistingNamesSubquery+`
 		FROM zotero_attachments a JOIN zotero_documents d ON d.id = a.document_id
 		WHERE a.zotero_key = $1 AND a.deleted = false`, zoteroKey)
 	var it repairQueueItem

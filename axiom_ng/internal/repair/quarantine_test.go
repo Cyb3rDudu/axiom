@@ -106,14 +106,25 @@ func TestSchemaFilenameGrownPatternNoFalsePositives(t *testing.T) {
 	if year != "Autor - 2024 - Jahresbericht.pdf" {
 		t.Fatalf("(2024) ist kein Format-Marker — kein Doppel-Suffix: %q", year)
 	}
+	mobi := SchemaFilenameForFormat([]zotero.Creator{{LastName: "Autor", CreatorType: "author"}}, 2020,
+		"Titel", "application/pdf",
+		[]string{"Autor - 2020 - Titel (MOBI).pdf"})
+	if mobi != "Autor - 2020 - Titel.pdf" {
+		t.Fatalf("(MOBI) ist kein bekannter Tag — kein Marker-Carry-Over: %q", mobi)
+	}
 }
 
 func TestSchemaFilenameEmptySubtitleNoDanglingDash(t *testing.T) {
 	// #291 review: 'Titel:' (empty subtitle) must not leave a dangling
-	// ' - ' in the filename.
+	// ' - ' in the filename; ':' (empty main AND subtitle — the outer
+	// join dangles entirely) must not leave 'Autor - 2024 -.pdf'.
 	got := SchemaFilename([]zotero.Creator{{LastName: "Autor", CreatorType: "author"}}, 2024, "Titel:")
 	if got != "Autor - 2024 - Titel.pdf" {
 		t.Fatalf("got %q", got)
+	}
+	degenerate := SchemaFilename([]zotero.Creator{{LastName: "Autor", CreatorType: "author"}}, 2024, ":")
+	if degenerate != "Autor - 2024.pdf" {
+		t.Fatalf("degenerate title: got %q", degenerate)
 	}
 }
 

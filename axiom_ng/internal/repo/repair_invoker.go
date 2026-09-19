@@ -46,6 +46,16 @@ type RepairItem struct {
 	ContentType   string
 }
 
+// ExistingNamesSubquery aggregates the document's current attachment
+// filenames for the #291 grown-pattern reference (preferred first, then
+// filename ASC — deterministic and explainable instead of UUID order;
+// the single source so the fixer-invoker, verdict-apply and custody
+// paths can never drift).
+const ExistingNamesSubquery = `(SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.filename ASC)
+		        FROM zotero_attachments a2
+		        WHERE a2.document_id = d.id AND a2.deleted = false
+		          AND COALESCE(a2.filename, '') <> '')`
+
 // RepairCaseItem resolves a repair case to its attachment coordinates.
 // Returns pgx.ErrNoRows when the attachment or document row is gone at the
 // source — the caller parks such a case (mirror of the W3a queue rule).
@@ -55,10 +65,7 @@ func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, 
 		       d.title, d.creators, COALESCE(d.publication_year, 0),
 		       COALESCE(d.language, ''), c.analysis,
 		       a.local_path, COALESCE(a.content_type, ''),
-		       (SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.filename ASC)
-		        FROM zotero_attachments a2
-		        WHERE a2.document_id = d.id AND a2.deleted = false
-		          AND COALESCE(a2.filename, '') <> '')
+		       `+ExistingNamesSubquery+`
 		FROM repair_cases c
 		JOIN zotero_attachments a ON a.id = c.attachment_id AND a.deleted = false
 		JOIN zotero_documents d ON d.id = a.document_id
