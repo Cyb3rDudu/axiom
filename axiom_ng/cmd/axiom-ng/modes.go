@@ -227,8 +227,23 @@ var cliModes = []cliMode{
 				fmt.Println(string(out))
 				return
 			}
-			progress := func(phase string, done, total int) {
+			// artifact unlink accounting: the progress callback unlinks per
+			// COMMITTED tranche (#290 review: end-of-run unlink loses the bytes
+			// of every committed tranche on ANY abort — deadline, error, kill —
+			// leaving them unfindable: no DB row, no sweeper). Rows are already
+			// gone; a failed unlink leaves an orphaned file (reported), never a
+			// dangling row (#270 review: "deleted means gone" includes the
+			// storage under AXIOM_ARTIFACT_ROOT)
+			unlinked := 0
+			progress := func(phase string, done, total int, artifactPaths []string) {
 				logger.Printf("apply progress: %s removed %d/%d", phase, done, total)
+				for _, p := range artifactPaths {
+					if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+						logger.Printf("artifact unlink failed (orphaned file remains): %s: %v", p, err)
+						continue
+					}
+					unlinked++
+				}
 			}
 			rem, plan, err := rp.ApplyRetention(ctx, age, batch, progress)
 			if err != nil {
@@ -236,18 +251,6 @@ var cliModes = []cliMode{
 					modeFail(logger, modeMultiPass, "apply ABORTED: run deadline (%s) exceeded — committed tranches are persisted and safe, a re-run resumes where this one stopped: %v", timeout, err)
 				}
 				modeFail(logger, modeMultiPass, "apply: %v", err)
-			}
-			// artifact BYTES after the commit: rows are already gone; a
-			// failed unlink leaves an orphaned file (reported), never a
-			// dangling row (#270 review: "deleted means gone" includes the
-			// storage under AXIOM_ARTIFACT_ROOT)
-			unlinked := 0
-			for _, p := range rem.ArtifactPaths {
-				if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-					logger.Printf("artifact unlink failed (orphaned file remains): %s: %v", p, err)
-					continue
-				}
-				unlinked++
 			}
 			logger.Printf("retention APPLIED: %d superseded snapshot(s) + %d stale job attempt(s) removed, %d/%d artifact file(s) unlinked (plan had %d/%d)",
 				rem.Snapshots, rem.Jobs, unlinked, len(rem.ArtifactPaths), plan.Snapshots.Remove, plan.Jobs.Remove)
@@ -289,24 +292,29 @@ var cliModes = []cliMode{
 // or --timeout=.
 const retentionTimeoutDefault = 2 * time.Hour
 
-// flagValue returns the value of the first --name=value arg in args, or "".
+// flagValue returns the value of the first --name=value arg in args (the
+// space-separated two-token form --name value is also accepted), or "".
 func flagValue(args []string, name string) string {
 	prefix := name + "="
-	for _, a := range args {
+	for i, a := range args {
 		if strings.HasPrefix(a, prefix) {
 			return strings.TrimPrefix(a, prefix)
+		}
+		if a == name && i+1 < len(args) {
+			return args[i+1]
 		}
 	}
 	return ""
 }
 
-// envOrFlag resolves a mode setting: env var if set, else --name=value
-// flag. Empty means unset (caller keeps its default).
+// envOrFlag resolves a mode setting: an explicit --name= flag WINS over
+// the ambient env var (explicit beats ambient; #290 review nit); the env
+// var is the fallback. Empty means unset (caller keeps its default).
 func envOrFlag(args []string, env, flag string) string {
-	if v := os.Getenv(env); v != "" {
+	if v := flagValue(args, flag); v != "" {
 		return v
 	}
-	return flagValue(args, flag)
+	return os.Getenv(env)
 }
 
 // runCLIMode dispatches args[1] to a registered mode and reports whether
@@ -326,7 +334,12 @@ func runCLIMode(args []string) bool {
 		logger := log.New(os.Stderr, m.prefix, log.LstdFlags)
 		repo.SetKGProgressLogger(logger.Printf)
 		apply := m.apply && hasApplyFlag(args[2:])
-		d, err := db.Open(context.Background(), cfg.DatabaseURL)
+		// bounded connect (#290 review: a black-holed port-forward must fail
+		// the invocation at OS-TCP scale, not hang past every deadline — the
+		// mode-level run deadline starts inside the mode body)
+		openCtx, cancelOpen := context.WithTimeout(context.Background(), time.Minute)
+		defer cancelOpen()
+		d, err := db.Open(openCtx, cfg.DatabaseURL)
 		if err != nil {
 			logger.Fatalf("postgres: %v", err)
 		}
