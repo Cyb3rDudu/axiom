@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -254,5 +255,53 @@ func TestSubmitProcessAcceptsDedupWithRequestedId(t *testing.T) {
 	}
 	if acc.JobID != "job-requeue" || !acc.Deduplicated || acc.DeduplicatedJobID != "job-orphan" {
 		t.Fatalf("unexpected acceptance: %+v", acc)
+	}
+}
+
+// pagesObj builds raw PDF-ish bytes carrying n "/Type /Page" objects (plus
+// one "/Type /Pages" root that must NOT count).
+func pagesObj(n int) []byte {
+	var b strings.Builder
+	b.WriteString("%PDF-1.4\n<</Type/Pages/Count ")
+	b.WriteString(strconv.Itoa(n))
+	b.WriteString(">>\n")
+	for i := 0; i < n; i++ {
+		b.WriteString("<</Type/Page/Parent 2 0 R>>\n")
+	}
+	return []byte(b.String())
+}
+
+// #292: the preflight request budget scales with the page count — the fixed
+// 15s starved exactly the biggest books (Bartscher: 658 p, measurement died
+// at the deadline, the advisory gate routed the giant scan into internal
+// OCR). Removing the scaling turns this red: every doc would get budgetSmall.
+func TestPreflightBudgetScalesWithPageEstimate(t *testing.T) {
+	// Bartscher shape: 658 pages → 15s + 65.8s = 80.8s (> old fixed budget).
+	if got, want := preflightBudget(pagesObj(658)), 15*time.Second+658*preflightPerPage; got != want {
+		t.Fatalf("budget(658p) = %v, want %v", got, want)
+	}
+	if got := preflightBudget(pagesObj(658)); got <= budgetSmall {
+		t.Fatalf("budget(658p) = %v must exceed the old fixed %v", got, budgetSmall)
+	}
+	// Pathological estimates cap at the default result budget.
+	if got, want := preflightBudget(pagesObj(10_000)), defaultRequest; got != want {
+		t.Fatalf("budget(10000p) = %v, want cap %v", got, want)
+	}
+	// Object-stream-packed docs estimate ~0 pages → base budget (old
+	// behavior, never worse) — not zero, not negative.
+	if got, want := preflightBudget([]byte("%PDF-1.5 binary objstm blob")), budgetSmall; got != want {
+		t.Fatalf("budget(no visible pages) = %v, want base %v", got, want)
+	}
+}
+
+// The page estimator counts "/Type /Page" (any spacing, incl. none) and
+// ignores the "/Type /Pages" tree root — the estimate the budget feeds on.
+func TestPreflightPageEstimateCountsPagesNotTreeNodes(t *testing.T) {
+	if got := preflightPageRe.FindAllIndex(pagesObj(7), -1); len(got) != 7 {
+		t.Fatalf("estimate = %d, want 7 (tree root must not count)", len(got))
+	}
+	one := []byte("<< /Type\n /Page /Parent 2 0 R >>")
+	if got := preflightPageRe.FindAllIndex(one, -1); len(got) != 1 {
+		t.Fatalf("estimate = %d, want 1 (whitespace-tolerant)", len(got))
 	}
 }

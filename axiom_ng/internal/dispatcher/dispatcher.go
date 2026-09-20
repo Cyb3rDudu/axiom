@@ -662,6 +662,11 @@ func (d *Dispatcher) markNotProcessable(ctx context.Context, ref repo.LeaseRef, 
 // handled (skipped + repair-cased) and must NOT proceed to SubmitProcess;
 // false means proceed normally. The gate is advisory: it never blocks a job it
 // cannot assess (unreadable local source, runner preflight error).
+// #292 narrows the advisory principle: "cannot measure" may skip QUALITY
+// gates, but never the scan/textless classification — the runner answers
+// that in milliseconds via its sampled pre-check, and the preflight budget
+// scales with page count (processor.Preflight), so a textless giant cannot
+// slip into internal OCR on a timed-out measurement.
 func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob, req *processor.ProcessRequest) bool {
 	ref := claimed.LeaseRef
 	fields := []any{ref.JobID, claimed.AttachmentID, claimed.DocumentID, claimed.Attempt}

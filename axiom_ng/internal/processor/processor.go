@@ -18,6 +18,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -173,6 +174,12 @@ const (
 	budgetSmall      = 15 * time.Second // Health/Capabilities/Cancel/Ack
 	budgetSubmit     = 30 * time.Second // POST /v1/process (small request)
 	budgetArtifact   = 30 * time.Second // single artifact (~100KB images)
+
+	// #292 preflight budget shape: 15s base + 100ms per estimated page.
+	// The fixed budgetSmall starved exactly the biggest books (Bartscher:
+	// 658 p → measurement + upload could not finish in 15s; the advisory
+	// gate then skip-proceeded the giant scan into internal OCR).
+	preflightPerPage = 100 * time.Millisecond
 )
 
 // New returns a processor Client. BaseURL defaults to the loopback processor.
@@ -453,17 +460,40 @@ type PreflightReport struct {
 	Details         map[string]any `json:"details"`
 }
 
+// preflightPageRe counts page objects in raw PDF bytes: "/Type /Page"
+// (any whitespace) NOT followed by 's' (excludes /Type/Pages). One cheap
+// regex pass, no parse, no image decode. PDFs that pack page objects into
+// compressed object streams estimate ~0 pages and keep the base budget —
+// the old fixed behavior, not worse.
+var preflightPageRe = regexp.MustCompile(`/Type\s*/Page([^s]|$)`)
+
+// preflightBudget (#292) scales the preflight request budget with the page
+// count so large-but-texty PDFs complete the full measurement (the runner
+// answers textless giants in milliseconds via its scan pre-check, so the
+// scaled budget only ever guards the honest full pass). Capped at the
+// default result budget to bound pathological estimates.
+func preflightBudget(doc []byte) time.Duration {
+	b := budgetSmall + time.Duration(len(preflightPageRe.FindAllIndex(doc, -1)))*preflightPerPage
+	if b > defaultRequest {
+		return defaultRequest
+	}
+	return b
+}
+
 // Preflight POSTs raw document bytes to /v1/pdf/preflight and decodes the
 // quality report (#175). The runner routes by Content-Type (#220 EPUB
 // branch); empty contentType defaults to application/pdf (the #175 shape).
 // The runner treats a broken document as a 500 (PREFLIGHT_PARSE); that
 // surfaces as a *StatusError here so a caller can decide (advisory vs
 // blocking) rather than have preflight silently swallow an un-assessable doc.
+// #292: the budget scales with the estimated page count (15s + 100ms/page),
+// not the fixed budgetSmall — the Bartscher 658-page scan died at 15s and
+// the advisory gate routed it into internal OCR.
 func (c *Client) Preflight(ctx context.Context, doc []byte, contentType string) (*PreflightReport, error) {
 	if contentType == "" {
 		contentType = "application/pdf"
 	}
-	pctx, cancel := context.WithTimeout(ctx, budgetSmall)
+	pctx, cancel := context.WithTimeout(ctx, preflightBudget(doc))
 	defer cancel()
 	req, err := http.NewRequestWithContext(
 		pctx, http.MethodPost, c.baseURL+"/v1/pdf/preflight", bytes.NewReader(doc))
