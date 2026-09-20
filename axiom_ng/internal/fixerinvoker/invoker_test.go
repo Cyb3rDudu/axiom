@@ -294,15 +294,19 @@ func TestFixerArgsOCR(t *testing.T) {
 	}
 }
 
-// TestOCRTimeoutBudgetIndependent (#284 DoD): OCR-class repairs run under
-// their OWN time budget — the general fixer timeout (35m) does not fit a
-// 658-page rebuild. Config defaults pin the separation; the selection is
+// TestOCRTimeoutBudgetIndependent (#284 DoD, #293 re-pinned): OCR-class
+// repairs run under their OWN wedge-guard budget — 24h by default, NOT a
+// tempo limit (the rebuild runs as long as it runs; the backstop only
+// prevents orphans). Config defaults pin the separation; the selection is
 // observable through the env the wrapper receives.
 func TestOCRTimeoutBudgetIndependent(t *testing.T) {
 	cfg := Config{}
 	cfg.fillDefaults()
 	if cfg.Timeout != 35*time.Minute {
 		t.Fatalf("normal timeout = %v, want 35m", cfg.Timeout)
+	}
+	if cfg.OCRTimeout != 24*time.Hour {
+		t.Fatalf("OCR wedge-guard = %v, want 24h (#293: generous orphan prevention, never tempo)", cfg.OCRTimeout)
 	}
 	if cfg.OCRTimeout <= cfg.Timeout {
 		t.Fatalf("OCR timeout %v must sit ABOVE the normal %v", cfg.OCRTimeout, cfg.Timeout)

@@ -115,13 +115,13 @@ const supersededSnapshotSQL = "\n\tFROM processing_snapshots s\n\tWHERE " + supe
 // prunableJobSQL is the candidate set: terminal, older than the retention
 // age, and NOT the outcome truth. The outcome truth is layered:
 //
-//   1. the NEWEST job row (updated_at DESC, id DESC — exactly the
-//      selection read model's lateral join) of the PREFERRED, non-deleted
-//      attachment;
-//   2. (#294) the newest job row BY THAT SAME KEY of the DOCUMENT,
-//      across ALL its attachments, REGARDLESS of age, preferred/deleted
-//      state or snapshot linkage — "latest job" IS the outcome-truth
-//      record (#252 semantics); age only prunes OLDER attempts.
+//  1. the NEWEST job row (updated_at DESC, id DESC — exactly the
+//     selection read model's lateral join) of the PREFERRED, non-deleted
+//     attachment;
+//  2. (#294) the newest job row BY THAT SAME KEY of the DOCUMENT,
+//     across ALL its attachments, REGARDLESS of age, preferred/deleted
+//     state or snapshot linkage — "latest job" IS the outcome-truth
+//     record (#252 semantics); age only prunes OLDER attempts.
 //
 // #294 production evidence: the previous sibling guard keyed on
 // enqueued_at ("prune only when a newer-enqueued attempt exists"), which
@@ -411,7 +411,7 @@ func (r *Repo) checkSnapshotDocInvariant(ctx context.Context, beforeDocs []strin
 	var lost []string
 	for rows.Next() {
 		var d string
-			if err := rows.Scan(&d); err != nil {
+		if err := rows.Scan(&d); err != nil {
 			return err
 		}
 		lost = append(lost, d)

@@ -60,11 +60,14 @@ type Config struct {
 	// the primary killing; this context only catches a wedged wrapper.
 	// Default 35m.
 	Timeout time.Duration
-	// OCRTimeout (#284) is the per-invocation backstop for OCR-class
-	// repairs (scan_ocr_rebuild): a 658-page rebuild does not fit the
-	// normal fixer timeout. The wrapper gets this budget minus slack via
-	// AXIOM_FIX_SH_TIMEOUT so fix.sh's timeout binary stays the primary
-	// killer (same layering as Timeout). Default 90m.
+	// OCRTimeout (#284/#293) is the WEDGE-GUARD backstop for OCR-class
+	// repairs (scan_ocr_rebuild): the OCR process runs as long as it runs
+	// — NOBODY computes a budget up front, and the tool itself carries no
+	// internal kill. This backstop exists ONLY to prevent orphans (a
+	// wedged process that stopped working), NEVER to limit tempo; it is
+	// therefore configured generously. Default 24h. fix.sh's timeout
+	// binary stays the primary killer (budget minus 5m slack via
+	// AXIOM_FIX_SH_TIMEOUT) — same layering as Timeout.
 	OCRTimeout time.Duration
 	// Concurrency caps parallel fixer invocations per host (owner nail 3:
 	// max 1-2). Values below 1 clamp to 1, above 2 clamp to 2.
@@ -75,8 +78,9 @@ type Config struct {
 	// under a second invoker).
 	StaleAfter time.Duration
 	// OCRStaleAfter (#284) is the same bound for OCR-class cases — derived
-	// from OCRTimeout so a live 90-minute rebuild is never requeued under
-	// a second claim mid-run. Default OCRTimeout + 5m.
+	// from OCRTimeout so a live, merely slow rebuild is never requeued under
+	// a second claim mid-run. Default OCRTimeout + 5m (24h5m with the #293
+	// wedge-guard default).
 	OCRStaleAfter time.Duration
 }
 
@@ -98,7 +102,8 @@ func (c *Config) fillDefaults() {
 		c.Timeout = 35 * time.Minute
 	}
 	if c.OCRTimeout <= 0 {
-		c.OCRTimeout = 90 * time.Minute
+		// #293: 24h wedge-guard, not a tempo budget — orphan prevention only
+		c.OCRTimeout = 24 * time.Hour
 	}
 	if c.Concurrency < 1 {
 		c.Concurrency = 1
@@ -384,8 +389,9 @@ func repairArtifactName(item *repo.RepairItem) string {
 // the same key (fix.sh's stale-lock recovery would let the immediate retry
 // spawn a SECOND agent on the same working directory).
 func (inv *Invoker) runFixer(ctx context.Context, item *repo.RepairItem) (int, string, error) {
-	// #284: OCR-class repairs run under their OWN budget (a 658-page
-	// rebuild does not fit 35 minutes). fix.sh's timeout binary stays the
+	// #284/#293: OCR-class repairs run under their OWN wedge-guard budget
+	// (the rebuild takes as long as it takes — 10m or 10h; the backstop
+	// only catches a WEDGED process). fix.sh's timeout binary stays the
 	// primary killer — the Go backstop sits ABOVE it with slack (same
 	// layering as the normal Timeout over fix.sh's 30m default).
 	budget := inv.cfg.Timeout
@@ -395,7 +401,7 @@ func (inv *Invoker) runFixer(ctx context.Context, item *repo.RepairItem) (int, s
 		if fixShBudget <= 0 {
 			fixShBudget = budget
 		}
-		inv.logger.Printf("case: key %s: OCR-class budget %s (fix.sh kills at %s)", item.AttachmentKey, budget, fixShBudget)
+		inv.logger.Printf("case: key %s: OCR-class wedge-guard %s (fix.sh kills at %s) — no tempo limit, orphan prevention only", item.AttachmentKey, budget, fixShBudget)
 		cmdEnv := append(os.Environ(), fmt.Sprintf("AXIOM_FIX_SH_TIMEOUT=%d", int(fixShBudget.Seconds())))
 		return inv.runFixerCmd(ctx, item, budget, cmdEnv)
 	}

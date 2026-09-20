@@ -20,11 +20,13 @@
 # env -- everything the pipeline shells out to travels with the artifact.
 # The OCR tools resolve them env-relatively (tools/ocr_tool.py:
 # bundled_bin/ocr_child_env -- relocatable through conda-unpack); a host
-# PATH is NOT required (GPU-carrier scenario). deu+eng both ship with the
-# conda tesseract package (no separate tessdata download since 2a0823f).
-# The OCR staged check below answers from the packed env (tesseract
-# --list-langs must show deu+eng) -- the import_audit guard pattern
-# applied to bins.
+# PATH is NOT required (GPU-carrier scenario).
+# #293: the conda package ships FAST models (deu 1.5MB) — the owner's
+# reference runs (Queckenberg/Bartscher pilots) used tessdata_BEST, and
+# FAST shows the „Universität→Universitit“ error class on German text.
+# The build therefore OVERLAYS deu+eng with the pinned BEST models after
+# the prune (sha256-pinned, download→tmp→mv — the #286 hardlink
+# discipline: never curl onto a (potentially hardlinked) staged path).
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -136,6 +138,9 @@ artifact_pack_env "$PREFIX" "$STAGE"
 # intact). The allowlist is scripts/lib/ocr_languages.txt — ONE source
 # shared with tesseractLang() in the invoker (pinned by a Go test reading
 # the same file); osd (orientation detection) is always kept on top.
+# #293 then OVERLAYS deu+eng with the pinned BEST models (quality parity
+# with the owner reference runs; FAST stays only for the other allowlist
+# languages until someone needs them at BEST quality).
 # Guarded: with tesseract entirely absent (the mutation probe), the prune
 # must not kill the build here — the staged assert below names the cause.
 STAGE_TESSDATA="$STAGE/env/share/tessdata"
@@ -149,6 +154,33 @@ if [ -d "$STAGE_TESSDATA" ]; then
         esac
     done
     echo "fixer-artifact: tessdata pruned to:$OCR_LANGS osd ($(find "$STAGE_TESSDATA" -name '*.traineddata' | wc -l | tr -d ' ') models left)"
+fi
+
+# --- #293: tessdata_BEST overlay for deu+eng (sha256-pinned) ------------
+# Owner ruling: BEST models bundled (quality parity with the reference
+# pilots; FAST deu shows the „Universitit" error class). Pins are the
+# sha256 of tessdata_best@main (sizes verified against the repo tree:
+# deu 8,628,461 B / eng 15,400,601 B — both far above the FAST sizes,
+# which the floor asserts below catch if a pin is ever updated wrongly).
+# Hardlink discipline (#286): download to a BUILD tmp, verify, then mv —
+# an atomic replace that never writes through a hardlinked path.
+tessdata_best_fetch() {
+    lang="$1"; want_sha="$2"; min_bytes="$3"
+    dst="$STAGE_TESSDATA/$lang.traineddata"
+    tmp="$BUILD/tessdata_best_$lang.tmp"
+    curl -fsSL -o "$tmp" "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/$lang.traineddata" || {
+        echo "fixer-artifact: tessdata_best $lang download failed" >&2; exit 1; }
+    got_sha="$(shasum -a 256 "$tmp" | cut -d' ' -f1)"
+    [ "$got_sha" = "$want_sha" ] || {
+        echo "fixer-artifact: tessdata_best $lang sha256 mismatch: got $got_sha want $want_sha (upstream moved? re-pin deliberately)" >&2; exit 1; }
+    [ "$(stat -f%z "$tmp")" -ge "$min_bytes" ] || {
+        echo "fixer-artifact: tessdata_best $lang suspiciously small ($(stat -f%z "$tmp") B < $min_bytes) — FAST model in disguise?" >&2; exit 1; }
+    mv -f "$tmp" "$dst"
+    echo "fixer-artifact: tessdata_best $lang overlaid ($got_sha, $(stat -f%z "$dst") B)"
+}
+if [ -d "$STAGE_TESSDATA" ]; then
+    tessdata_best_fetch deu 8407331d6aa0229dc927685c01a7938fc5a641d1a9524f74838cdac599f0d06e 8000000
+    tessdata_best_fetch eng 8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba 15000000
 fi
 
 # --- interpreter autarky proof (#208): NO symlink may leave the artifact ----
@@ -194,29 +226,42 @@ EOF
 [ -x "$STAGE/env/bin/gs" ] || { echo "fixer-artifact: env/bin/gs missing" >&2; exit 1; }
 [ -f "$STAGE_TESSDATA/deu.traineddata" ] || { echo "fixer-artifact: tessdata deu missing" >&2; exit 1; }
 [ -f "$STAGE_TESSDATA/eng.traineddata" ] || { echo "fixer-artifact: tessdata eng missing (conda package changed?)" >&2; exit 1; }
+# #293: BEST gate — the overlay must actually be in place (FAST deu is
+# 1.5MB, BEST is 8.6MB; a skipped/mutated overlay fails here, not in
+# production OCR quality)
+[ "$(stat -f%z "$STAGE_TESSDATA/deu.traineddata")" -ge 8000000 ] || { echo "fixer-artifact: deu.traineddata is not the BEST model ($(stat -f%z "$STAGE_TESSDATA/deu.traineddata") B < 8MB)" >&2; exit 1; }
+[ "$(stat -f%z "$STAGE_TESSDATA/eng.traineddata")" -ge 15000000 ] || { echo "fixer-artifact: eng.traineddata is not the BEST model ($(stat -f%z "$STAGE_TESSDATA/eng.traineddata") B < 15MB)" >&2; exit 1; }
 STAGE_LANGS=$(TESSDATA_PREFIX="$STAGE_TESSDATA" "$STAGE/env/bin/tesseract" --list-langs 2>/dev/null || true)
 echo "$STAGE_LANGS" | grep -qx 'deu' || { echo "fixer-artifact: staged tesseract lacks deu: $STAGE_LANGS" >&2; exit 1; }
 echo "$STAGE_LANGS" | grep -qx 'eng' || { echo "fixer-artifact: staged tesseract lacks eng: $STAGE_LANGS" >&2; exit 1; }
 TESSDATA_PREFIX="$STAGE_TESSDATA" "$STAGE/env/bin/tesseract" --version >/dev/null
 TESSDATA_PREFIX="$STAGE_TESSDATA" "$STAGE/env/bin/gs" --version >/dev/null
-echo "fixer-artifact: staged OCR ok — tesseract+gs+deu/eng from the packed env"
+echo "fixer-artifact: staged OCR ok — tesseract+gs+deu/eng(BEST) from the packed env"
 
 # #286 DoD: sanitized-PATH rebuild smoke — the carrier scenario. Kein Host-
 # tesseract/gs im PATH; der Rebuild muss ALLEIN aus dem Env laufen.
+# #293: der Rebuild trägt KEIN internes Timeout mehr — der Smoke-Kill
+# (falls nötig) lebt HIER in der Shell (timeout-Binary), nicht im Werkzeug.
+# Absoluter Pfad: der Smoke setzt PATH=/usr/bin:/bin als Kommando-Präfix,
+# und macOS liefert KEIN /usr/bin/timeout — die Auflösung muss im vollen
+# Bau-PATH geschehen (nix coreutils), sonst stirbt der Guard am Lookup.
+SMOKE_GUARD=""
+TIMEOUT_BIN="$(command -v timeout 2>/dev/null || true)"
+[ -n "$TIMEOUT_BIN" ] && SMOKE_GUARD="$TIMEOUT_BIN 900"
 (
     cd "$STAGE/app"
     PATH="/usr/bin:/bin" TESSDATA_PREFIX="$STAGE_TESSDATA" \
-        "$STAGE/env/bin/python" - <<'SMOKE'
+        $SMOKE_GUARD "$STAGE/env/bin/python" - <<'SMOKE'
 import sys, tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(".").resolve()))
 from tools import scan_ocr_rebuild
 src = Path("fixtures/scan_mit_folios.pdf")
 out = Path(tempfile.mkdtemp()) / "rebuilt.pdf"
-res = scan_ocr_rebuild.run_rebuild(src, out, lang="deu", timeout_s=600)
+res = scan_ocr_rebuild.run_rebuild(src, out, lang="deu")
 assert res.get("applied"), f"sanitized-PATH rebuild failed: {res.get('cause')}"
 print("fixer-artifact: sanitized-PATH OCR rebuild ok "
-      f"({res['quality']['total_chars']} chars, {res['pages']} pages)")
+      f"({res['quality']['total_chars']} chars, {res['pages']} pages, jobs={res['jobs']})")
 SMOKE
 ) || { echo "fixer-artifact: sanitized-PATH rebuild smoke FAILED" >&2; exit 1; }
 

@@ -139,9 +139,10 @@ type Config struct {
 	FixerCommand string
 	// FixerConcurrency caps parallel fixer runs per host (owner nail: 1-2).
 	FixerConcurrency int
-	// FixerOCRTimeout (#284) is the per-invocation budget for OCR-class
-	// repairs (scan_ocr_rebuild): a 658-page rebuild does not fit the
-	// normal fixer timeout. 0 lets the invoker default (90m) apply.
+	// FixerOCRTimeout (#284/#293) is the wedge-guard backstop for OCR-class
+	// repairs (scan_ocr_rebuild): the rebuild runs as long as it runs —
+	// this backstop only prevents orphans (wedged process), never limits
+	// tempo. 0 lets the invoker default (24h) apply.
 	FixerOCRTimeout time.Duration
 
 	// ArtifactRoot is the durable derived-artifact root (AXIOM_ARTIFACT_ROOT).

@@ -37,18 +37,35 @@ broken text layer is rasterized before any folio harvest reads it.
   OCR preferred), the operator route is the #279 custody tool with a
   pre-OCR'd file — same quarantine-first protocol, replaces the stored
   file (see `custody-repair-runbook.md`).
-- **Unthrottled**: no `--jobs`/OMP limits in normal processing (the pilot's
-  throttling was wave-coexistence, not a product requirement).
+- **Full throttle (#293)**: the rebuild passes `--jobs` = all available
+  cores, always, with no per-case tuning. Production reference: 658 pages
+  in 10m14s with 12 workers on the host pilot. (The old "no --jobs"
+  wording died with the Bartscher E2E: ocrmypdf's default ran ~3 workers.)
 - **Language**: default `deu` (deu beat `deu+eng` in the pilot — combined
   mode produced errors like "Universitit"). Resolution order:
   per-case override (`analysis.ocr.lang`) → document metadata language
   (ISO 639-1/2 mapped to tesseract codes) → `deu`.
-- **Own time budget**: OCR-class repairs do not share the 35-minute fixer
-  timeout (a 658-page rebuild does not fit). `AXIOM_FIXER_OCR_TIMEOUT`
-  (default 90m) bounds the invoker's backstop; fix.sh receives the budget
-  minus slack via `AXIOM_FIX_SH_TIMEOUT` so its `timeout` binary stays the
-  primary killer. The stale-claim reaper honors the class bound — a live,
-  merely slow rebuild is never requeued under a second claim.
+- **BEST models bundled (#293)**: deu+eng ship as the pinned
+  `tessdata_best` variants (sha256-pinned in `build_fixer_artifact.sh`,
+  download→tmp→mv per the #286 hardlink discipline) — quality parity with
+  the owner reference runs; the FAST models of the conda package showed
+  the „Universität→Universitit" error class on German text.
+- **Dynamic duration (#293)**: the OCR process runs as long as it runs —
+  nobody computes a budget up front, and the tool carries NO internal
+  timeout kill. `AXIOM_FIXER_OCR_TIMEOUT` (default **24h**) bounds the
+  invoker's backstop as a pure **wedge-guard** (a wedged process vs. a
+  working one — orphan prevention, never tempo limitation); fix.sh
+  receives the budget minus slack via `AXIOM_FIX_SH_TIMEOUT` so its
+  `timeout` binary stays the primary killer. The stale-claim reaper
+  honors the class bound — a live, merely slow rebuild is never requeued
+  under a second claim.
+- **Known toolchain penalty (accepted, #293)**: the bundled conda
+  toolchain measures ~1.7× CPU-per-page against the nix host build
+  (ghostscript rasterization is the prime suspect). Accepted for now —
+  bundling buys autarky (no host tesseract/gs dependency); even with the
+  penalty, 658 pages land well inside the wedge-guard window at full
+  throttle. Upgrade path if it ever matters: a faster ghostscript via a
+  conda-forge pin, re-measured against the documented baseline.
 - **No deskew by default** (pilot pages were straight; unnecessary image
   processing costs quality). Available as a per-case option.
 - **Post-OCR chaining (2-in-1)**: after the rebuild, the folio harvest runs
@@ -121,17 +138,18 @@ stirbt aber am version-guarded DELETE (404 — das alte Item ist weg),
 BEVOR es zu einem Create kommt: kein zweites Geschwister; der Case
 landet `failed` und der Requeue-Guard übernimmt.
 
-## Prerequisites — bundled (#286)
+## Prerequisites — bundled (#286, #293)
 
 The fixer artifact ships the entire OCR toolchain: `ocrmypdf` (venv),
-`tesseract` + `ghostscript` and the `deu`/`eng` traineddata in `env/`.
-The tools resolve everything env-relatively (no host PATH contribution);
-the build proves it with a staged `--list-langs` check and a
-sanitized-PATH rebuild smoke. Only pre-#286 fixer builds rely on host
-binaries. **Ceiling note:** the tool's internal per-run bound is
-120 s + 6 s/page — beyond roughly 830 pages it trips before the outer
-class budget; such books need a higher `AXIOM_OCR_TIMEOUT_S` on the fixer
-env (and patience).
+`tesseract` + `ghostscript` and the `deu`/`eng` traineddata in `env/`
+(as the pinned `tessdata_best` variants — quality parity with the owner
+reference runs). The tools resolve everything env-relatively (no host
+PATH contribution); the build proves it with a staged `--list-langs`
+check and a sanitized-PATH rebuild smoke. Only pre-#286 fixer builds
+rely on host binaries. **#293:** there is NO internal per-run bound
+anymore — the rebuild runs as long as it runs; the only ceilings are the
+outer wedge-guards (fix.sh's `AXIOM_FIX_SH_TIMEOUT`, the invoker's
+`AXIOM_FIXER_OCR_TIMEOUT`, default 24h).
 
 ## Acceptance reference
 

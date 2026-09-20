@@ -175,7 +175,7 @@ func main() {
 				inv := fixerinvoker.New(fixerinvoker.Config{
 					Command:     cfg.FixerCommand,
 					Concurrency: cfg.FixerConcurrency,
-					OCRTimeout:  cfg.FixerOCRTimeout, // #284: OCR-class budget (0 = invoker default 90m)
+					OCRTimeout:  cfg.FixerOCRTimeout, // #293: OCR wedge-guard (0 = invoker default 24h)
 				}, fixerinvoker.Deps{
 					Rep:            rep,
 					Apply:          fixerinvoker.LiveApplyDeps(rep, zoteroWrite),

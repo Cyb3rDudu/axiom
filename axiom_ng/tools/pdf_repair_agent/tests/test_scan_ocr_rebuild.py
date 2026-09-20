@@ -149,17 +149,44 @@ def test_rebuild_force_heilt_worttrennung():
 
 
 @needs_ocr
-def test_rebuild_zeitschraenkt_und_uebersteuerbar(monkeypatch):
-    """Budget-Deckelung: ein lächerlich kleines timeout_s lehnt ab, statt
-    zu hängen — die Aufrufer-Seite (Invoker) setzt das Klassen-Budget."""
+def test_rebuild_vollgas_und_ohne_internen_kill(monkeypatch):
+    """#293: VOLLGAS-Default — der ocrmypdf-Aufruf trägt --jobs = alle
+    verfügbaren Kerne, und es gibt KEIN internes Timeout-Kill mehr (der
+    Rebuild dauert, so lange er dauert; Wedge-Guards leben außen bei
+    fix.sh/Invoker). Gepingt per Cmd-Abgriff: das timeout-Kwarg muss
+    ABWESEND sein, --jobs muss die Kernzahl tragen."""
+    import os
+
+    captured: dict = {}
+
+    class _FakeRc0:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return _FakeRc0()
+
+    monkeypatch.setattr(scan_ocr_rebuild.subprocess, "run", fake_run)
     _ensure()
-    dst = _fresh_run_dir(_cfg_sandbox(), "OCRTOOL3") / "probe.pdf"
-    res = scan_ocr_rebuild.run_rebuild(
-        FIX / "scan_mit_folios.pdf", dst, lang="deu", timeout_s=1
+    dst = _fresh_run_dir(_cfg_sandbox(), "OCRJOBS") / "probe.pdf"
+    # Verifikate wegstubben — die Sonde misst die Prozessübergabe
+    monkeypatch.setattr(scan_ocr_rebuild.pdf_kernel, "page_char_count", lambda pdf: [0])
+    monkeypatch.setattr(scan_ocr_rebuild, "_page_dims", lambda pdf: [(100.0, 100.0)])
+    monkeypatch.setattr(
+        scan_ocr_rebuild,
+        "_text_layer_metrics",
+        lambda pdf: {"pages": 1, "total_chars": 99, "mean_chars_per_page": 99.0},
     )
-    assert res["applied"] is False
-    assert "timeout" in res.get("cause", "").lower() or res.get("cause", "").startswith(
-        "ocrmypdf"
+    res = scan_ocr_rebuild.run_rebuild(FIX / "scan_mit_folios.pdf", dst, lang="deu")
+    assert res["applied"] is True, res
+    cmd = captured["cmd"]
+    jobs = cmd[cmd.index("--jobs") + 1]
+    assert jobs == str(os.cpu_count() or 1)
+    assert res.get("jobs") == jobs
+    assert "timeout" not in captured["kwargs"], (
+        "#293: kein internes Timeout-Kill mehr — der Invoker-Backstop ist reiner Wedge-Guard"
     )
 
 

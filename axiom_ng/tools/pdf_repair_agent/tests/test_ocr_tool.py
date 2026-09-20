@@ -225,7 +225,10 @@ def test_rebuild_reicht_kind_env_durch(tmp_path, monkeypatch):
         stderr = ""
         stdout = ""
 
-    def _fake_run(cmd, capture_output, text, timeout, env):
+    def _fake_run(cmd, capture_output, text, env, **_kwargs):
+        # #293: timeout-Kwarg ist ENTFERNT — **_kwargs hält die Sonde
+        # gegen künftige Prozess-Parameter robust, der Env-Durchgriff
+        # bleibt der Messgegenstand.
         captured["env"] = env
         return _FakeProc()
 
@@ -248,7 +251,7 @@ def test_rebuild_reicht_kind_env_durch(tmp_path, monkeypatch):
     monkeypatch.setattr(
         t, "_text_layer_metrics", lambda pdf: {"pages": 1, "total_chars": 99, "mean_chars_per_page": 99.0}
     )
-    res = t.run_rebuild(src, tmp_path / "out.pdf", lang="deu", timeout_s=30)
+    res = t.run_rebuild(src, tmp_path / "out.pdf", lang="deu")
     assert res.get("applied"), res
     child = captured["env"]
     assert child["TESSDATA_PREFIX"] == str(fake / "share" / "tessdata")

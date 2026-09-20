@@ -10,10 +10,16 @@ und Bartscher 658 S. — Kommandoform end-to-end bewiesen):
      SSOAR): zusätzlich --force-ocr, rasterisiert die kaputte Vektor-
      Textschicht weg und ersetzt sie durch die OCR-Schicht.
 
-Owner-Rulings, festgenagelt:
-  - ungedrosselt: keine --jobs/OMP-Drossel in der Normalverarbeitung
-    (Pilot-Drossel war Wellen-Koexistenz, kein Produktbedarf);
-  - Sprachdefault `deu` (deu schlug deu+eng im Pilot: „Universitit"-Klasse
+Owner-Rulings, festgenagelt (#293, Bartscher-E2E Take 3):
+  - VOLLGAS als Default: --jobs = alle verfügbaren Kerne, immer, ohne
+    pro-Fall-Tuning (Produktionsreferenz: 658 S. in 10m14s mit 12
+    Workern; der Fixer starb mit ~3 Workern am internen 67,8-min-Limit);
+  - DYNAMISCHE DAUER: der OCR-Prozess dauert, so lange er dauert —
+    niemand berechnet vorab ein Budget. KEIN internes Timeout-Kill hier;
+    der Invoker-Backstop (AXIOM_FIXER_OCR_TIMEOUT, Default 24h) ist ein
+    reiner Wedge-Guard (Process hängt vs. arbeitet) zur Waisen-
+    Verhinderung, niemals Tempobegrenzung;
+  - Sprachdefault `deu` (deu schlug deu+eng im Pilot: „Universitit“-Klasse
     Fehler im Kombimodus), übersteuerbar je Case (--lang / Metadaten);
   - kein Deskew per Default (Pilot: Seiten waren gerade; unnötige Bild-
     Verarbeitung kostet Qualität) — als Option da.
@@ -55,23 +61,12 @@ OCR_LANG_DEFAULT = "deu"
 # Je-Seite-Tor von ocr_tool (MIN_TEXT_CHARS) passt nicht auf echte Bücher).
 MIN_MEAN_CHARS_PER_PAGE = 50
 
-# Zeitbudget: Basis + je Seite. 658-Seiten-Rebuilds passen nicht in den
-# 35-min-Fixer-Timeout des Normalfalls — der Invoker setzt das Klassen-
-# Budget (Config.OCRTimeout); diese Deckelung ist die letzte Instanz im
-# Werkzeug selbst (Aufrufer kann sie per Parameter/an Env anheben).
-OCR_TIMEOUT_BASE_S = 120
-OCR_TIMEOUT_PER_PAGE_S = 6
 
-
-def _timeout_s(pages: int) -> int:
+def _jobs() -> str:
+    """#293 Vollgas-Default: --jobs = alle verfügbaren Kerne, immer."""
     import os
 
-    if v := os.environ.get("AXIOM_OCR_TIMEOUT_S"):
-        try:
-            return int(v)
-        except ValueError:
-            pass
-    return OCR_TIMEOUT_BASE_S + pages * OCR_TIMEOUT_PER_PAGE_S
+    return str(os.cpu_count() or 1)
 
 
 def _bins_available() -> dict:
@@ -209,12 +204,15 @@ def run_rebuild(
     lang: str = OCR_LANG_DEFAULT,
     force: bool = False,
     deskew: bool = False,
-    timeout_s: int | None = None,
 ) -> dict:
     """--apply: OCRmyPDF-Rebuild; Original bleibt (dst ist Kopie).
 
     Kommandoform = Owner-Pilot (wörtlich): oversample 300, output-type
     pdf, optimize 1; force-Modus rasterisiert die kaputte Vektorschicht.
+    #293: --jobs = alle Kerne (Vollgas-Default); KEIN internes Timeout —
+    die äußeren Schichten (fix.sh-Timeout-Binary, Invoker-Backstop)
+    sind der Wedge-Guard, dieses Werkzeug arbeitet einfach so lange,
+    wie der Rebuild dauert.
     """
     bins = _bins_available()
     if not all(bins.values()):
@@ -254,6 +252,10 @@ def run_rebuild(
         ocrmypdf_bin() or "ocrmypdf",
         "--language",
         lang,
+        # #293 Vollgas-Default: alle verfügbaren Kerne, immer (Owner-
+        # Ruling — Referenz: 658 S. in 10m14s mit 12 Workern).
+        "--jobs",
+        _jobs(),
         "--oversample",
         "300",
         "--output-type",
@@ -266,24 +268,16 @@ def run_rebuild(
     if deskew:
         cmd.append("--deskew")
     cmd += ["-q", str(src), str(dst)]
-    budget = timeout_s or _timeout_s(pages)
-    try:
-        # #286: Kind-Umgebung aus dem gebündelten Env (PATH + TESSDATA_PREFIX)
-        # — der Rebuild läuft ohne Host-tesseract/gs (Carrier-Szenario).
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=budget, env=ocr_tool.ocr_child_env())
-    except subprocess.TimeoutExpired:
-        return {
-            "applied": False,
-            "cause": f"ocrmypdf timeout nach {budget}s (Budget überschritten — Aufrufer-Klassen-Budget prüfen)",
-            "cmd": cmd[:-2],
-            "timeout_s": budget,
-        }
+    # #286: Kind-Umgebung aus dem gebündelten Env (PATH + TESSDATA_PREFIX)
+    # — der Rebuild läuft ohne Host-tesseract/gs (Carrier-Szenario).
+    # #293: KEIN timeout-Kill — der Rebuild dauert, so lange er dauert;
+    # Wedge-Guards leben außen (fix.sh-Timeout-Binary, Invoker-Backstop).
+    r = subprocess.run(cmd, capture_output=True, text=True, env=ocr_tool.ocr_child_env())
     if r.returncode != 0:
         return {
             "applied": False,
             "cause": f"ocrmypdf rc={r.returncode}: {r.stderr.strip()[:300]}",
             "cmd": cmd[:-2],
-            "timeout_s": budget,
         }
     # Ergebnis-Verifikat (ehrlich, aggregate):
     m = _text_layer_metrics(dst)
@@ -299,7 +293,6 @@ def run_rebuild(
                 f"dims_ok={dims_ok} text_ok={text_ok} ({m})"
             ),
             "quality": m,
-            "timeout_s": budget,
         }
     return {
         "applied": True,
@@ -308,7 +301,7 @@ def run_rebuild(
         "language": lang,
         "quality": m,
         "pages": pages,
-        "timeout_s": budget,
+        "jobs": _jobs(),
     }
 
 

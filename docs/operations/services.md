@@ -264,9 +264,11 @@ env file of an axiom instance that also carries the Zotero write key
 - **Timeout:** fix.sh's own 30-min kill (lockdir + timeout binary) does the
   primary work; the invoker runs a 35-min context backstop above it, so a
   wedged wrapper can never hang the invoker. OCR-class repairs
-  (`scan_ocr_rebuild`) run under their own budget — `AXIOM_FIXER_OCR_TIMEOUT`
-  (default 90m) for the backstop, the wrapper budget passed via
-  `AXIOM_FIX_SH_TIMEOUT`; see the
+  (`scan_ocr_rebuild`) run under their own wedge-guard —
+  `AXIOM_FIXER_OCR_TIMEOUT` (default **24h**, #293: pure orphan prevention,
+  never tempo — the rebuild takes as long as it takes and the tool itself
+  carries no internal kill) for the backstop, the wrapper budget passed
+  via `AXIOM_FIX_SH_TIMEOUT`; see the
   [OCR-Rebuild Repair runbook](ocr-rebuild-repair.md).
 - **Concurrency:** `AXIOM_FIXER_CONCURRENCY` (default 1, clamped to 1–2)
   parallel fixer runs per host — the per-key lockdir additionally
