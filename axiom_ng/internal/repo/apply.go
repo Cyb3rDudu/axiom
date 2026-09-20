@@ -299,12 +299,24 @@ func (r *Repo) applyCanonicalDeleteEvents(ctx context.Context, tx pgx.Tx, source
 // writeJobsTx writes pending and failed ingest jobs within the given
 // transaction (ON CONFLICT DO NOTHING dedup for pending; failed jobs are
 // inserted). Returns (enqueued new jobs, failed jobs written).
+// #294 defense in depth: a pending insert is suppressed when the
+// attachment already has an ACTIVE snapshot for the SAME content hash —
+// the snapshot is the proof of processing (served chunks/index), so a
+// document whose job rows were pruned (retention) or lost any other way
+// is NOT re-enqueued as "never processed" while its content is unchanged.
+// A changed hash matches no active snapshot → the job enqueues normally;
+// explicit force rebuilds take a different path (force_rebuild=true) and
+// are never suppressed here.
 func (r *Repo) writeJobsTx(ctx context.Context, tx pgx.Tx, sourceID string, pending []PendingJob, failed []FailedJob) (int, int, error) {
 	inserted := 0
 	for _, p := range pending {
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-			VALUES ($1,$2,$3,$4,'pending',false)
+			SELECT $1,$2,$3,$4,'pending',false
+			WHERE NOT EXISTS (
+				-- #294: active snapshot for the SAME content = processed & served
+				SELECT 1 FROM processing_snapshots s
+				WHERE s.attachment_id = $3 AND s.content_hash = $4 AND s.active)
 			ON CONFLICT (attachment_id, content_hash) WHERE force_rebuild=false DO NOTHING
 		`, p.SourceID, p.DocumentID, p.AttachmentID, p.ContentHash)
 		if err != nil {

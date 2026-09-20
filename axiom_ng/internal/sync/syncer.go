@@ -244,7 +244,9 @@ type Result struct {
 // the normalized document/attachment projections, and enqueues ingest jobs for
 // preferred processable attachments (never for notes/annotations or
 // non-bibliographic parents). A metadata-only change with an identical
-// attachment hash does not create a new job.
+// attachment hash does not create a new job; neither does a document whose
+// job rows are gone entirely while its attachment holds an ACTIVE snapshot
+// for the same content hash (#294 — the snapshot is the proof of processing).
 // SyncOverride is the one-run selection override from the sync request body
 // (#166): include/exclude document-id lists applied ON TOP of the persisted
 // selection for THIS run only (never persisted).
