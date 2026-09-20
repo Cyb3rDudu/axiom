@@ -678,11 +678,12 @@ func TestPostHealSyncFailureDoesNotFailHeal(t *testing.T) {
 	}
 }
 
-// TestRequeueStaleRespectsOCRClassBudget (#284): an OCR-class case (the
-// stable pagination_state marker) runs under the LARGER stale bound — a
-// live, merely slow 90-minute rebuild must not be requeued under a second
-// claim at the normal 40-minute mark, but IS recovered once its own
-// window passes (dead invoker).
+// TestRequeueStaleRespectsOCRClassBudget (#284, re-pinned #293): an
+// OCR-class case (the stable pagination_state marker) runs under the
+// LARGER stale bound — the 24h wedge-guard window. A live, merely slow
+// rebuild (hours are legitimate at full throttle) must not be requeued
+// under a second claim; a claim past the OCR window IS recovered like
+// any dead invoker.
 func TestRequeueStaleRespectsOCRClassBudget(t *testing.T) {
 	e := openDB(t)
 	e.truncate(t)
@@ -709,14 +710,24 @@ func TestRequeueStaleRespectsOCRClassBudget(t *testing.T) {
 	if s, _, _ := e.caseStatus(t, c.ID); s != "in_repair" {
 		t.Fatalf("OCR-class claim aged 50m must survive the normal-bound reaper, got %s", s)
 	}
-	// past the OCR window: recovered like any dead invoker
+	// #293: hours-deep claims are LIVE now (24h wedge-guard, never tempo)
+	// — a 3h rebuild is a working rebuild, not a dead invoker
 	if _, err := e.pool.Exec(context.Background(),
 		`UPDATE repair_cases SET updated_at = now() - interval '3 hours' WHERE id=$1`, c.ID); err != nil {
 		t.Fatal(err)
 	}
 	inv.reapStale(context.Background())
+	if s, _, _ := e.caseStatus(t, c.ID); s != "in_repair" {
+		t.Fatalf("OCR-class claim aged 3h must survive the 24h wedge-guard (live rebuild), got %s", s)
+	}
+	// past the OCR window: recovered like any dead invoker
+	if _, err := e.pool.Exec(context.Background(),
+		`UPDATE repair_cases SET updated_at = now() - interval '25 hours' WHERE id=$1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	inv.reapStale(context.Background())
 	if s, _, _ := e.caseStatus(t, c.ID); s != "queued" {
-		t.Fatalf("OCR-class claim aged 3h must requeue (dead invoker), got %s", s)
+		t.Fatalf("OCR-class claim aged 25h must requeue (dead invoker past the wedge-guard window), got %s", s)
 	}
 }
 
