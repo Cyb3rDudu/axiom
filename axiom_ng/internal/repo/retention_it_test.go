@@ -191,7 +191,9 @@ func TestRetentionIT(t *testing.T) {
 	// updated_at/enqueued_at inversion — invOLD completed (enq 20d, upd 1h)
 	// vs invNEW failed (enq 19d, upd 2h). Outcome reads invOLD (updated_at
 	// newest); it must survive even though invNEW is the newer-enqueued
-	// sibling.
+	// sibling. #294 sharpens the sibling guard to the same key: invNEW is
+	// now an OLDER attempt by the read-model key → prunable (the apply
+	// count below includes it).
 	_ = e.seedDocWithAttachment(t, "RETDOC3", "RETATT4")
 	repB := e.seedJobForAttachment(t, "RETATT4", "completed", 20*24*time.Hour, time.Hour)
 	invNew := e.seedJobForAttachment(t, "RETATT4", "failed", 19*24*time.Hour, 2*time.Hour)
@@ -250,8 +252,8 @@ func TestRetentionIT(t *testing.T) {
 		t.Fatalf("derived removal counts: sparse=%d entities=%d mentions=%d chunkrels=%d, want 3/1/1/1",
 			plan.Snapshots.SparseEmbeddings, plan.Snapshots.Entities, plan.Snapshots.EntityMentions, plan.Snapshots.ChunkRelationships)
 	}
-	if plan.Jobs.Remove != 1 {
-		t.Fatalf("jobs to remove = %d, want 1 (only the stale row)", plan.Jobs.Remove)
+	if plan.Jobs.Remove != 2 {
+		t.Fatalf("jobs to remove = %d, want 2 (the stale row + repro B's older-by-key invNEW)", plan.Jobs.Remove)
 	}
 	// outcome-truth keeps: oldLatest, repA, repB (the preferred attachments'
 	// newest-by-updated_at jobs); latestJob/producerJob are age-young and
@@ -268,8 +270,8 @@ func TestRetentionIT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rem.Snapshots != 1 || rem.Jobs != 1 {
-		t.Fatalf("removals = %d/%d, want 1/1", rem.Snapshots, rem.Jobs)
+	if rem.Snapshots != 1 || rem.Jobs != 2 {
+		t.Fatalf("removals = %d/%d, want 1/2", rem.Snapshots, rem.Jobs)
 	}
 	if len(rem.ArtifactPaths) != 1 || rem.ArtifactPaths[0] != "/tmp/retention-artifact-probe.png" {
 		t.Fatalf("ApplyRetention must return artifact paths for the post-commit unlink, got %v", rem.ArtifactPaths)
@@ -288,8 +290,8 @@ func TestRetentionIT(t *testing.T) {
 		JOIN processing_snapshots s ON s.id = c.snapshot_id WHERE s.id = $1::uuid`, pendSnap); n != 2 {
 		t.Fatalf("pending-outbox snapshot keeps its chunks, got %d", n)
 	}
-	if n := e.count(t, `SELECT count(*) FROM ingest_jobs`); n != 11 {
-		t.Fatalf("jobs left = %d, want 11 (all but the stale row)", n)
+	if n := e.count(t, `SELECT count(*) FROM ingest_jobs`); n != 10 {
+		t.Fatalf("jobs left = %d, want 10 (all but the stale row and invNEW)", n)
 	}
 	for _, keep := range []string{latestJob, repairJob, pendingJob, producerJob, oldLatest, repA, repB} {
 		if n := e.count(t, `SELECT count(*) FROM ingest_jobs WHERE id=$1::uuid`, keep); n != 1 {
@@ -364,4 +366,115 @@ func (e *retEnv) seedAttachmentForDoc(t *testing.T, docKey, attKey string, prefe
 		t.Fatal(err)
 	}
 	return id
+}
+
+// TestRetention294IT pins the #294 invariants: the retention keep-rule
+// keys on the selection read model's outcome key (updated_at DESC, id
+// DESC) PER DOCUMENT, so the row the outcome API reads structurally
+// survives regardless of age, attachment liveness or snapshot linkage;
+// the plan reports documents with an active snapshot but no job row; and
+// the post-apply invariant fires when a snapshot document loses its last
+// job row.
+//
+// Red probe (pre-#294 SQL): the production shape — a NON-preferred
+// attachment (preferred moved to a healed replacement) whose doc-latest
+// completed job J_A has a later-enqueued, fast-failed sibling J_B and an
+// UNLINKED active snapshot (ingest_job_id NULL). The old sibling guard
+// (enqueued_at) pruned exactly J_A; the doc flipped to never-processed
+// and the sync's (attachment_id, content_hash) dedup found nothing to
+// conflict against (J_B, a failed row, carries no hash) → mass requeue.
+func TestRetention294IT(t *testing.T) {
+	e := openRetDB(t)
+	ctx := context.Background()
+	age := 14 * 24 * time.Hour
+
+	// ── repro C: the production shape ────────────────────────────────
+	// RETDOC7: RETATT7 non-preferred (job history + active snapshot),
+	// RETATT8 preferred + jobless (the healed replacement).
+	att7 := e.seedDocWithAttachment(t, "RETDOC7", "RETATT7")
+	_ = e.seedAttachmentForDoc(t, "RETDOC7", "RETATT8", true)
+	var doc7 string
+	if err := e.pool.QueryRow(ctx,
+		`SELECT id::text FROM zotero_documents WHERE zotero_key='RETDOC7'`).Scan(&doc7); err != nil {
+		t.Fatal(err)
+	}
+	// J_A: completed, enqueued 480h ago, updated 456h ago (long run —
+	// the doc's latest by the read-model key). J_B: failed fast,
+	// enqueued 457h ago (LATER enqueue), updated 457h ago (EARLIER
+	// update) — the newer-enqueued older-attempt sibling.
+	jA := e.seedJobForAttachment(t, "RETATT7", "completed", 480*time.Hour, 456*time.Hour)
+	jB := e.seedJobForAttachment(t, "RETATT7", "failed", 457*time.Hour, 457*time.Hour)
+	// active snapshot on RETATT7, UNLINKED (ingest_job_id NULL) — the
+	// prod rows whose producer link never existed
+	if _, err := e.pool.Exec(ctx, `
+		INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name, processor_version,
+			profile_hash, document_id, profile, active)
+		VALUES ($1::uuid, 'h-prod', 'p', 'v1', 'ph', $2::uuid, '{}', true)`, att7, doc7); err != nil {
+		t.Fatal(err)
+	}
+	// informational line probe: a SECOND document with an active snapshot
+	// and NO job rows at all — the production damage shape (90 docs)
+	att9 := e.seedDocWithAttachment(t, "RETDOC9", "RETATT9")
+	var doc9 string
+	if err := e.pool.QueryRow(ctx,
+		`SELECT id::text FROM zotero_documents WHERE zotero_key='RETDOC9'`).Scan(&doc9); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx, `
+		INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name, processor_version,
+			profile_hash, document_id, profile, active)
+		VALUES ($1::uuid, 'h-9', 'p', 'v1', 'ph', $2::uuid, '{}', true)`, att9, doc9); err != nil {
+		t.Fatal(err)
+	}
+
+	// pre-state of the invariant: both snapshot docs carry jobs (RETDOC9
+	// does NOT — it must never be reported as a violation by the apply;
+	// it lost nothing)
+	before, err := e.rep.snapshotDocsWithJobs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("invariant pre-state = %v, want exactly RETDOC7 (RETDOC9 has no job row to lose)", before)
+	}
+
+	// dry-run: exactly J_B is prunable; J_A (doc-latest by the outcome
+	// key, on a non-preferred attachment, aged, snapshot unlinked) is
+	// NOT; the informational line counts RETDOC9.
+	plan, err := e.rep.RetentionPlan(ctx, age)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Jobs.Remove != 1 {
+		t.Fatalf("jobs to remove = %d, want 1 (only J_B, the older attempt by the outcome key)", plan.Jobs.Remove)
+	}
+	if plan.Jobs.SnapshotDocsNoJobRow != 1 {
+		t.Fatalf("snapshot docs without job row = %d, want 1 (RETDOC9)", plan.Jobs.SnapshotDocsNoJobRow)
+	}
+
+	// apply: J_B goes, J_A survives — the doc with a snapshot keeps its
+	// latest job row; the invariant check passes inside the apply.
+	rem, _, err := e.rep.ApplyRetention(ctx, age, 0, nil)
+	if err != nil {
+		t.Fatalf("apply must hold the invariant (J_A survives): %v", err)
+	}
+	if rem.Jobs != 1 {
+		t.Fatalf("removals = %d, want 1", rem.Jobs)
+	}
+	if n := e.count(t, `SELECT count(*) FROM ingest_jobs WHERE id=$1::uuid`, jA); n != 1 {
+		t.Fatalf("doc-latest job J_A was pruned — outcome truth lost")
+	}
+	if n := e.count(t, `SELECT count(*) FROM ingest_jobs WHERE id=$1::uuid`, jB); n != 0 {
+		t.Fatalf("older attempt J_B must be pruned")
+	}
+
+	// ── firing path: hand-built violation ───────────────────────────
+	// the pre-state said RETDOC7 has a job row; remove it out-of-band
+	// and the checker must fire loudly.
+	if _, err := e.pool.Exec(ctx, `DELETE FROM ingest_jobs WHERE id=$1::uuid`, jA); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.rep.checkSnapshotDocInvariant(ctx, before); err == nil {
+		t.Fatal("invariant check must fire when a snapshot document lost its last job row")
+	}
 }
