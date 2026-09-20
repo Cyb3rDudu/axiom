@@ -480,6 +480,13 @@ func preflightBudget(doc []byte) time.Duration {
 	return b
 }
 
+// preflightBudgetFor is the in-package seam that pins the #292 call-site
+// wiring: production always resolves to preflightBudget, tests may swap
+// it to observe that Preflight derives its deadline from the page-scaled
+// budget (a call site reverted to the fixed budgetSmall fails the wiring
+// test instead of silently starving big books again).
+var preflightBudgetFor = preflightBudget
+
 // Preflight POSTs raw document bytes to /v1/pdf/preflight and decodes the
 // quality report (#175). The runner routes by Content-Type (#220 EPUB
 // branch); empty contentType defaults to application/pdf (the #175 shape).
@@ -493,7 +500,7 @@ func (c *Client) Preflight(ctx context.Context, doc []byte, contentType string) 
 	if contentType == "" {
 		contentType = "application/pdf"
 	}
-	pctx, cancel := context.WithTimeout(ctx, preflightBudget(doc))
+	pctx, cancel := context.WithTimeout(ctx, preflightBudgetFor(doc))
 	defer cancel()
 	req, err := http.NewRequestWithContext(
 		pctx, http.MethodPost, c.baseURL+"/v1/pdf/preflight", bytes.NewReader(doc))

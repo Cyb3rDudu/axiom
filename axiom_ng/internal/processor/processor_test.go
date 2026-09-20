@@ -304,4 +304,38 @@ func TestPreflightPageEstimateCountsPagesNotTreeNodes(t *testing.T) {
 	if got := preflightPageRe.FindAllIndex(one, -1); len(got) != 1 {
 		t.Fatalf("estimate = %d, want 1 (whitespace-tolerant)", len(got))
 	}
+	// End-of-input "/Type/Page" (no trailing byte) still counts via the
+	// ([^s]|$) alternation — a truncated-but-valid last page object.
+	if got := preflightPageRe.FindAllIndex([]byte("<</Type/Page"), -1); len(got) != 1 {
+		t.Fatalf("estimate = %d, want 1 (end-of-input page)", len(got))
+	}
+}
+
+// #292 review — pins the CALL SITE, not just the budget function: the
+// deadline-echo idea does not survive plain HTTP (client deadlines do not
+// cross the wire), so the in-package seam records whether Preflight
+// consults the scaled budget WITH the actual request bytes. A call site
+// reverted to the fixed budgetSmall never invokes the seam → red.
+func TestPreflightUsesScaledBudgetAtCallSite(t *testing.T) {
+	orig := preflightBudgetFor
+	t.Cleanup(func() { preflightBudgetFor = orig })
+	var gotPrefix string
+	preflightBudgetFor = func(doc []byte) time.Duration {
+		gotPrefix = string(doc[:min(16, len(doc))])
+		return orig(doc)
+	}
+	c := clientFor(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mustJSON(w, 200, map[string]any{
+			"contract_version": "1.0", "source_name": "inline",
+			"ok": true, "finding": "🟢 gesund", "reason": "",
+			"details": map[string]any{"text_layer": true},
+		})
+	}))
+	body := pagesObj(658) // Bartscher shape → 15s + 65.8s budget
+	if _, err := c.Preflight(context.Background(), body, "application/pdf"); err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	if gotPrefix != string(body[:16]) {
+		t.Fatalf("scaled budget consulted with %q, want the request's own bytes %q", gotPrefix, string(body[:16]))
+	}
 }

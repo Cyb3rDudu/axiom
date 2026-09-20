@@ -20,7 +20,8 @@ Synthetic fixtures are generated in-test (rasterizing one page once, then
 sharing the image xref — a 300-page scan builds in <1s). Mutation safety:
 removing _scan_precheck turns test 1/3 red (scan_precheck marker absent,
 sampled details gone); making it greedy turns test 2 red (per_page_density
-truncated to the sample).
+truncated to the sample); dropping only the `any(chars)` text bail turns
+the texty-with-images test red (both scan-ish arms fire, text must save it).
 
 Run: PYTHONPATH=<repo-root> .venv/bin/python -m pytest tests/test_preflight_scan_budget.py
 """
@@ -81,6 +82,25 @@ def _texty_bytes(n: int) -> bytes:
         page.insert_textbox(
             (40, 130, W - 40, H - 60),
             f"Seite {i + 1} trägt gesetzten Fließtext ohne Foliozahl im Kopf. " * 6,
+            fontsize=11,
+        )
+    b = d.tobytes(deflate=True)
+    d.close()
+    return b
+
+
+def _texty_with_images_bytes(n: int, jpg: bytes) -> bytes:
+    """Texty doc that ALSO looks scan-ish: every page carries body text AND
+    an embedded image — pins the `any(chars)` text bail (review F1): with
+    the text check removed, both scan-ish arms fire and this doc would be
+    wrongly short-circuited into the repair class."""
+    d = pymupdf.open()
+    for i in range(n):
+        page = d.new_page(width=W, height=H)
+        page.insert_image(page.rect, stream=jpg)
+        page.insert_textbox(
+            (40, 130, W - 40, H - 60),
+            f"Seite {i + 1} trägt gesetzten Fließtext neben einer Abbildung. " * 6,
             fontsize=11,
         )
     b = d.tobytes(deflate=True)
@@ -149,6 +169,26 @@ def test_texty_large_pdf_gets_full_measurement(tmp_path):
     assert len(body["details"]["per_page_density"]) == N_TEXTY
 
 
+def test_texty_with_images_keeps_full_measurement(tmp_path):
+    """Review F1 — pins the `any(chars)` text bail: a texty doc that is
+    scan-ish by BOTH arms (images on every page, size forced over the
+    ratio) must still take the full measurement, because the sampled pages
+    carry text. Removing only the text check turns this red."""
+    path = tmp_path / "texty_images.pdf"
+    path.write_bytes(_texty_with_images_bytes(80, _raster_page_jpg()))
+    doc = pymupdf.open(path)
+    try:
+        v = ph._scan_precheck(doc, doc.page_count, ph.PRECHECK_BYTES_PER_PAGE * 80)
+        assert v is None  # text bail — despite images AND forced size
+    finally:
+        doc.close()
+    # End-to-end through preflight(): full pass, honest green/yellow path.
+    r = ph.preflight(str(path))
+    assert "scan_precheck" not in r.details
+    assert r.details["text_layer"] is True
+    assert len(r.details["per_page_density"]) == 80
+
+
 def test_precheck_bounded_time_oversized_scan(tmp_path):
     """DoD 3: the pre-check answers in bounded time independent of file
     size — a fatter raster per page (4× dpi) multiplies bytes, not latency."""
@@ -201,6 +241,11 @@ def test_precheck_unit_arms(tmp_path):
     doc = pymupdf.open(blank)
     try:
         assert ph._scan_precheck(doc, doc.page_count, blank.stat().st_size) is None
+        # Review F2 — bytes arm pinned INDEPENDENTLY of the image arm: the
+        # blank-vector doc has no images at all, so ONLY the ≥100KB/page
+        # ratio can fire → scan verdict.
+        v = ph._scan_precheck(doc, doc.page_count, ph.PRECHECK_BYTES_PER_PAGE * 80)
+        assert v is not None and v["finding"] == ph.SCAN_FINDING
     finally:
         doc.close()
 
@@ -230,3 +275,28 @@ def test_small_scan_fixture_still_fully_measured(tmp_path):
     assert r.finding == ph.SCAN_FINDING
     assert "scan_precheck" not in r.details
     assert len(r.details["per_page_density"]) == r.details["pages"]
+
+
+def test_precheck_dict_key_parity_with_full_analyze(tmp_path):
+    """Review F5 — the thin pre-check dict carries EXACTLY the full
+    analyze_pdf key set (plus its scan_precheck marker). A future full-pass
+    key the pre-check forgets fails here, instead of surprising a consumer
+    that reads a now-missing key from a sampled report."""
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "axiom_ng"
+        / "tools"
+        / "pdf_repair_agent"
+        / "fixtures"
+        / "ohne_textschicht.pdf"
+    )
+    full = ph.analyze_pdf(str(fixture))
+    scan = tmp_path / "scan.pdf"
+    scan.write_bytes(_scan_bytes(80))
+    doc = pymupdf.open(scan)
+    try:
+        thin = ph._scan_precheck(doc, doc.page_count, ph.PRECHECK_BYTES_PER_PAGE * 80)
+    finally:
+        doc.close()
+    assert thin is not None
+    assert set(thin) - {"scan_precheck"} == set(full)

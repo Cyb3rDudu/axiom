@@ -75,8 +75,12 @@ def _scan_precheck(doc, n: int, size_bytes: int) -> dict | None:
 
     Deliberately conservative: EVERY sampled page must be textless AND the
     doc must look scan-ish (images on ≥half the sample OR ≥100KB/page).
-    A texty book whose 5 spread sample pages all happen to be blank does
-    not exist in practice; if it did, the full pass still measures it.
+    Accepted trade-off (#292, fail-closed): an image-heavy book whose 5
+    spread sample pages are ALL textless full-page plates routes to the
+    scan/repair class without a full pass — operator-visible and
+    recoverable (the repair case re-preflights and resolves a false
+    positive), because exactly this shape is the Riesenscan the pre-check
+    exists for.
     """
     if n <= PRECHECK_MIN_PAGES:
         return None
@@ -108,6 +112,8 @@ def _scan_precheck(doc, n: int, size_bytes: int) -> dict | None:
         "luecken_zwischen_laeufen": [],
         "versatz": None,
         "text_layer": False,
+        # Sample-proven values (the 5 sampled pages), NOT whole-doc
+        # measurements — blank_pages/image_only_pages are not exhaustive.
         "mean_chars_per_page": 0,
         "per_page_density": per_page,
         "blank_pages": [i + 1 for i in idx],
