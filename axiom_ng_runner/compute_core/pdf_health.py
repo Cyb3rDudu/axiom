@@ -13,10 +13,16 @@ imported UPWARD from here — an inversion with a latent cycle. It moved
 into compute_core where its deps (page_trust, pdf_processing) already
 live; heavy imports stay function-local so this module stays importable
 without the PDF stack for pure logic tests.
+
+#292: analyze_pdf starts with a fail-closed scan pre-check (5-page sample,
+milliseconds, size-independent) — the scan/textless classification is
+always cheaply answerable, so an expired measurement budget can never
+advisory-skip a giant scan into internal processing.
 """
 from __future__ import annotations
 
 import itertools
+import os
 import re
 from dataclasses import dataclass
 
@@ -41,6 +47,80 @@ class PreflightResult:
 # (internal keys backward compatible per the #283 DoD).
 SCAN_FINDING = "🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)"
 SCAN_FINDING_LEGACY = "🔴 unpaginiert"
+
+
+# --- #292: fail-closed scan pre-check -------------------------------------
+#
+# The Bartscher E2E (658 p, 192 MB, textless) exposed the advisory gap: the
+# preflight REQUEST exceeded its fixed ~15s budget, the timeout was treated
+# as skip-and-proceed, and the giant scan re-entered internal OCR — exactly
+# the books #288 classifies are the ones whose measurement dies first.
+# Answer: the scan/textless classification must be answerable in milliseconds
+# regardless of file size, BEFORE the full measurement. A 5-page evenly
+# spread sample plus a bytes-per-page ratio decides the obvious scans; a
+# scan verdict from the pre-check routes to the repair class even when the
+# full preflight cannot run (advisory may skip QUALITY gates, never the
+# scan class). Below PRECHECK_MIN_PAGES the full pass is trivially fast and
+# the pre-check stays out of the way (fixture taxonomy behavior unchanged).
+PRECHECK_MIN_PAGES = 50
+PRECHECK_SAMPLE = 5
+PRECHECK_BYTES_PER_PAGE = 100_000  # ~100KB/page ⇒ image-heavy (Bartscher: 292KB; born-digital texty: <50KB)
+
+
+def _scan_precheck(doc, n: int, size_bytes: int) -> dict | None:
+    """#292 cheap scan sniff before the full measurement (milliseconds,
+    independent of file size: opens the xref, reads 5 sampled pages —
+    never decodes image streams). Returns the scan-shaped analyze dict
+    when the sample proves a huge textless scan, else None (full pass).
+
+    Deliberately conservative: EVERY sampled page must be textless AND the
+    doc must look scan-ish (images on ≥half the sample OR ≥100KB/page).
+    A texty book whose 5 spread sample pages all happen to be blank does
+    not exist in practice; if it did, the full pass still measures it.
+    """
+    if n <= PRECHECK_MIN_PAGES:
+        return None
+    step = (n - 1) / (PRECHECK_SAMPLE - 1)
+    idx = sorted({round(i * step) for i in range(PRECHECK_SAMPLE)})
+    chars = []
+    has_image = []
+    per_page = []
+    for i in idx:
+        page = doc[i]
+        c = len(page.get_text("text").strip())
+        img = bool(page.get_images(full=True))
+        chars.append(c)
+        has_image.append(img)
+        per_page.append({
+            "page": i + 1,
+            "chars": c,
+            "density": round(c / max(1, page.rect.width * page.rect.height), 5),
+        })
+    if any(chars) or (has_image.count(True) < len(idx) / 2 and size_bytes < PRECHECK_BYTES_PER_PAGE * n):
+        return None  # sample carries text or looks neither image- nor size-like → full pass
+    return {
+        "pages": n,
+        "label_befund": f"#292 Vorab-Scan-Erkennung: Stichprobe {len(idx)}/{len(idx)} textlos — Vollmessung übersprungen",
+        "label_reason": "pre-check (billige Stichprobe, #292)",
+        "tier1_anteil": 0,
+        "folio_laeufe": [],
+        "folio_verifiziert": 0,
+        "luecken_zwischen_laeufen": [],
+        "versatz": None,
+        "text_layer": False,
+        "mean_chars_per_page": 0,
+        "per_page_density": per_page,
+        "blank_pages": [i + 1 for i in idx],
+        "image_only_pages": [idx[k] + 1 for k in range(len(idx)) if has_image[k]],
+        "blank_series": [],
+        "suspicious_patterns": [
+            f"riesenscan-vorab: {len(idx)}/{len(idx)} textlose Stichprobenseiten bei {n} Seiten (#292)"
+        ],
+        "finding": SCAN_FINDING,
+        "pagination_state": _PAGINATION_STATE[SCAN_FINDING],
+        "scan_precheck": True,
+    }
+
 _PAGINATION_STATE = {
     "🟡 no_print_pagination": "physical_only",
     SCAN_FINDING: "needs_ocr",
@@ -118,6 +198,13 @@ def analyze_pdf(pdf_path: str) -> dict:
     doc = pymupdf.open(pdf_path)
     try:
         n = doc.page_count
+        # #292: fail-closed scan classification FIRST — the sampled pre-check
+        # answers the scan question in milliseconds so no client budget can
+        # expire before it (huge textless scan → repair class, never a
+        # timeout-advised skip into internal OCR). None → measure fully.
+        quick = _scan_precheck(doc, n, os.path.getsize(pdf_path))
+        if quick is not None:
+            return quick
         labels = extract_page_labels(pdf_path)
         tm = _text_metrics(doc)
         from axiom_ng_runner.chunking import safe_page_label

@@ -1074,6 +1074,13 @@ async def pdf_preflight(request: Request):
     anomalies) and returns the structured report. NO repair, no upstream
     mutation — diagnosis only. `ok=false` flags a job for the repair/skip
     policy. Body = the PDF bytes (raw), not a wrapper/envelope.
+
+    #292: analyze_pdf opens with the fail-closed scan pre-check — a huge
+    textless scan (Bartscher class: 658 p, 192 MB) is classified in
+    milliseconds from a 5-page sample, before any client budget can
+    expire; "cannot measure" may advisory-skip QUALITY gates, never the
+    scan classification. Large-but-texty PDFs run the full measurement
+    (the dispatcher's preflight budget scales with page count).
     """
     data = await request.body()
     if not data:
