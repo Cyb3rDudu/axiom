@@ -247,7 +247,11 @@ echo "fixer-artifact: staged OCR ok — tesseract+gs+deu/eng(BEST) from the pack
 # Bau-PATH geschehen (nix coreutils), sonst stirbt der Guard am Lookup.
 SMOKE_GUARD=""
 TIMEOUT_BIN="$(command -v timeout 2>/dev/null || true)"
-[ -n "$TIMEOUT_BIN" ] && SMOKE_GUARD="$TIMEOUT_BIN 900"
+if [ -n "$TIMEOUT_BIN" ]; then
+    SMOKE_GUARD="$TIMEOUT_BIN 900"
+else
+    echo "fixer-artifact: WARNING no timeout binary on PATH — sanitized-PATH smoke runs unbounded" >&2
+fi
 (
     cd "$STAGE/app"
     PATH="/usr/bin:/bin" TESSDATA_PREFIX="$STAGE_TESSDATA" \

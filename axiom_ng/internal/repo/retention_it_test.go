@@ -401,9 +401,11 @@ func TestRetention294IT(t *testing.T) {
 	// J_A: completed, enqueued 480h ago, updated 456h ago (long run —
 	// the doc's latest by the read-model key). J_B: failed fast,
 	// enqueued 457h ago (LATER enqueue), updated 457h ago (EARLIER
-	// update) — the newer-enqueued older-attempt sibling.
+	// update) — the newer-enqueued older-attempt sibling, content_hash
+	// NULL (failed rows carry no hash — the production shape that left
+	// the sync's dedup with nothing to conflict against).
 	jA := e.seedJobForAttachment(t, "RETATT7", "completed", 480*time.Hour, 456*time.Hour)
-	jB := e.seedJobForAttachment(t, "RETATT7", "failed", 457*time.Hour, 457*time.Hour)
+	jB := e.seedFailedJobNullHash(t, "RETATT7", 457*time.Hour)
 	// active snapshot on RETATT7, UNLINKED (ingest_job_id NULL) — the
 	// prod rows whose producer link never existed
 	if _, err := e.pool.Exec(ctx, `
@@ -477,4 +479,20 @@ func TestRetention294IT(t *testing.T) {
 	if err := e.rep.checkSnapshotDocInvariant(ctx, before); err == nil {
 		t.Fatal("invariant check must fire when a snapshot document lost its last job row")
 	}
+}
+
+// seedFailedJobNullHash inserts a terminal failed job row with content_hash
+// NULL — the writeJobsTx failed-path shape (failed rows carry no hash), the
+// reason the sync's (attachment_id, content_hash) dedup found nothing to
+// conflict against in the #294 production storm.
+func (e *retEnv) seedFailedJobNullHash(t *testing.T, attKey string, age time.Duration) string {
+	t.Helper()
+	var id string
+	if err := e.pool.QueryRow(context.Background(), `
+		INSERT INTO ingest_jobs (status, attachment_id, content_hash, enqueued_at, updated_at, error_code, error_message)
+		SELECT 'failed', a.id, NULL, now() - make_interval(secs => $1), now() - make_interval(secs => $1), 'X', 'failed fast'
+		FROM zotero_attachments a WHERE a.zotero_key = $2 RETURNING id::text`, age.Seconds(), attKey).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

@@ -37,6 +37,11 @@ broken text layer is rasterized before any folio harvest reads it.
   OCR preferred), the operator route is the #279 custody tool with a
   pre-OCR'd file — same quarantine-first protocol, replaces the stored
   file (see `custody-repair-runbook.md`).
+- **Manual full rebuilds of large books** (outside the invoker): fix.sh
+  defaults to its own 30-min cap — for a hand-run Bartscher-class
+  rebuild raise it explicitly:
+  `AXIOM_FIX_SH_TIMEOUT=85500 scripts/fix.sh <KEY> --apply` (23h55m,
+  matching the invoker's wedge-guard minus slack).
 - **Full throttle (#293)**: the rebuild passes `--jobs` = all available
   cores, always, with no per-case tuning. Production reference: 658 pages
   in 10m14s with 12 workers on the host pilot. (The old "no --jobs"
