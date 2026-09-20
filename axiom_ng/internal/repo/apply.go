@@ -333,6 +333,10 @@ func (r *Repo) writeJobsTx(ctx context.Context, tx pgx.Tx, sourceID string, pend
 		// re-rank the outcome row (the old bump let a stale failed row outrank
 		// the completed anchor → retention pruned the anchor while the sync
 		// defense kept the doc served at outcome=failed forever).
+		// Accepted residual (#294 review): the ON CONFLICT path (a pending
+		// row already exists for this attachment_id+content_hash) also skips
+		// resolution — that only leaves a stale error message on the failed
+		// row and never re-ranks the outcome key.
 		if tag.RowsAffected() > 0 {
 			if _, err := tx.Exec(ctx, `UPDATE ingest_jobs
 				SET resolved_at=now()
