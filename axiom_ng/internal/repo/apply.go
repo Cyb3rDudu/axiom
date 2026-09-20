@@ -326,10 +326,19 @@ func (r *Repo) writeJobsTx(ctx context.Context, tx pgx.Tx, sourceID string, pend
 		// A pending job means the file is processable again: any prior failed job
 		// for this attachment is now resolved, so a later real failure can create
 		// a fresh failed job instead of being masked by a stale one.
-		if _, err := tx.Exec(ctx, `UPDATE ingest_jobs
-			SET resolved_at=now(), updated_at=now()
-			WHERE attachment_id=$1 AND status='failed' AND resolved_at IS NULL`, p.AttachmentID); err != nil {
-			return 0, 0, err
+		// #294 review (MAJOR 2): ONLY on an ACTUAL enqueue — a suppressed insert
+		// (snapshot served) processes nothing, so it resolves nothing. And the
+		// resolution sets resolved_at WITHOUT touching updated_at: the outcome
+		// read model orders by (updated_at, id), and bookkeeping must never
+		// re-rank the outcome row (the old bump let a stale failed row outrank
+		// the completed anchor → retention pruned the anchor while the sync
+		// defense kept the doc served at outcome=failed forever).
+		if tag.RowsAffected() > 0 {
+			if _, err := tx.Exec(ctx, `UPDATE ingest_jobs
+				SET resolved_at=now()
+				WHERE attachment_id=$1 AND status='failed' AND resolved_at IS NULL`, p.AttachmentID); err != nil {
+				return 0, 0, err
+			}
 		}
 	}
 	failedWritten := 0

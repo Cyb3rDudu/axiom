@@ -40,8 +40,13 @@ broken text layer is rasterized before any folio harvest reads it.
 - **Manual full rebuilds of large books** (outside the invoker): fix.sh
   defaults to its own 30-min cap — for a hand-run Bartscher-class
   rebuild raise it explicitly:
-  `AXIOM_FIX_SH_TIMEOUT=85500 scripts/fix.sh <KEY> --apply` (23h55m,
+  `AXIOM_FIX_SH_TIMEOUT=86100 scripts/fix.sh <KEY> --apply` (23h55m,
   matching the invoker's wedge-guard minus slack).
+- **Concurrency note**: `--jobs` uses ALL cores per rebuild and
+  `AXIOM_FIXER_CONCURRENCY` allows up to 2 parallel fixer runs per host —
+  two concurrent OCR-class cases oversubscribe the machine. Default is 1;
+  if 2 is ever set, expect the rebuilds to share cores rather than finish
+  faster.
 - **Full throttle (#293)**: the rebuild passes `--jobs` = all available
   cores, always, with no per-case tuning. Production reference: 658 pages
   in 10m14s with 12 workers on the host pilot. (The old "no --jobs"

@@ -390,9 +390,19 @@ func TestRetention294IT(t *testing.T) {
 
 	// ── repro C: the production shape ────────────────────────────────
 	// RETDOC7: RETATT7 non-preferred (job history + active snapshot),
-	// RETATT8 preferred + jobless (the healed replacement).
+	// RETATT8 preferred + jobless (the healed replacement). NOTE: the
+	// demote is load-bearing — seedDocWithAttachment creates RETATT7
+	// preferred; with TWO preferred attachments the pre-#294 layer-1
+	// guard (already keyed on (updated_at,id) per attachment since #282)
+	// protects J_A on its own and the doc-scope guard goes unpinned
+	// (review MAJOR 1: mutation M1 — deleting the doc-scope guard —
+	// passed the whole suite on the two-preferred fixture).
 	att7 := e.seedDocWithAttachment(t, "RETDOC7", "RETATT7")
 	_ = e.seedAttachmentForDoc(t, "RETDOC7", "RETATT8", true)
+	if _, err := e.pool.Exec(ctx,
+		`UPDATE zotero_attachments SET preferred=false WHERE zotero_key='RETATT7'`); err != nil {
+		t.Fatal(err)
+	}
 	var doc7 string
 	if err := e.pool.QueryRow(ctx,
 		`SELECT id::text FROM zotero_documents WHERE zotero_key='RETDOC7'`).Scan(&doc7); err != nil {

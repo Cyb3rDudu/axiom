@@ -57,6 +57,7 @@ rsync -a --delete \
     --exclude '.venv' --exclude '__pycache__' --exclude 'tests' \
     --exclude 'scripts' --exclude 'shell.nix' \
     --exclude 'build' --exclude '*.egg-info' \
+    --exclude '.ruff_cache' --exclude '.pytest_cache' --exclude '.mypy_cache' \
     axiom_ng_runner/ "$STAGE/app/"
 
 # --- pack env (relocatable; conda-unpack fixes prefixes at install) ---------

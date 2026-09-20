@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
@@ -126,5 +127,129 @@ func TestSnapshotServedNoRequeueIT(t *testing.T) {
 	}
 	if res3.Enqueued != 1 {
 		t.Fatalf("run 3 enqueued = %d, want 1 — changed content must enqueue despite the active old-hash snapshot", res3.Enqueued)
+	}
+}
+
+// TestSuppressedEnqueueDoesNotResolveFailuresIT (#294 review MAJOR 2): a
+// SUPPRESSED pending insert (snapshot served) must not fire the
+// failed-row resolution — and the resolution must never bump updated_at.
+// Pre-fix hole (reviewer-reproduced on HEAD): the unconditional UPDATE
+// set resolved_at=now(), updated_at=now() on the stale failed row even
+// when nothing was enqueued, re-ranking it above the completed outcome
+// anchor on the (updated_at, id) key; retention then pruned the anchor
+// while the sync defense kept the document served at outcome=failed
+// forever (the post-apply invariant stayed silent — a row survived).
+func TestSuppressedEnqueueDoesNotResolveFailuresIT(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping integration test")
+	}
+	d, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	pdfPath := t.TempDir() + "/r.pdf"
+	os.WriteFile(pdfPath, []byte("anchor-book"), 0o600)
+
+	src := &canonicalFake{serverID: "snapanchor", baseURL: newScriptedBase(), version: 2}
+	src.items = []zotero.CanonicalItem{
+		mkItemJSON("RB1", "book", "", "Anchor Book", map[string]any{
+			"creators": []map[string]string{{"firstName": "Ada", "lastName": "Lovelace", "creatorType": "author"}},
+		}),
+		mkItemJSON("RA1", "attachment", "RB1", "r.pdf", map[string]any{
+			"contentType": "application/pdf", "filename": "r.pdf",
+		}),
+	}
+	env, _ := json.Marshal(map[string]any{
+		"key": "RA1", "version": 1,
+		"links": map[string]any{"enclosure": map[string]any{"href": "file://" + pdfPath}},
+		"data":  map[string]any{"key": "RA1", "version": 1, "itemType": "attachment", "parentItem": "RB1", "contentType": "application/pdf", "filename": "r.pdf"},
+	})
+	src.items[1].Envelope = env
+
+	repoObj := repo.New(d.Pool())
+	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+
+	res, err := svc.Run(ctx, nil)
+	if err != nil || res.Enqueued != 1 {
+		t.Fatalf("run 1: err=%v enqueued=%d, want 1", err, res.Enqueued)
+	}
+	var attID, docID string
+	if err := d.Pool().QueryRow(ctx, `
+		SELECT a.id::text, a.document_id::text FROM zotero_attachments a
+		WHERE a.source_id=$1 AND a.zotero_key='RA1'`, res.SourceID).Scan(&attID, &docID); err != nil {
+		t.Fatal(err)
+	}
+	// the processed footprint: ACTIVE snapshot for the current hash; the
+	// run-1 job row stands in for the completed anchor, aged + resolved.
+	var anchor string
+	if err := d.Pool().QueryRow(ctx, `
+		UPDATE ingest_jobs SET status='completed', updated_at = now() - interval '20 days'
+		WHERE attachment_id=$1::uuid RETURNING id::text`, attID).Scan(&anchor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Pool().Exec(ctx, `
+		INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name, processor_version,
+			profile_hash, document_id, profile, active)
+		SELECT a.id, a.content_hash, 'p', 'v1', 'ph', a.document_id, '{}', true
+		FROM zotero_attachments a WHERE a.id=$1::uuid`, attID); err != nil {
+		t.Fatal(err)
+	}
+	// the stale failed sibling: unresolved, NULL hash, older than the anchor
+	if _, err := d.Pool().Exec(ctx, `
+		INSERT INTO ingest_jobs (status, attachment_id, document_id, content_hash, enqueued_at, updated_at, error_code, error_message)
+		VALUES ('failed', $1::uuid, $2::uuid, NULL, now() - interval '21 days', now() - interval '21 days', 'X', 'stale failure')`,
+		attID, docID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run 2: unchanged file + active snapshot → suppressed insert; the
+	// resolution must NOT fire (nothing was enqueued) and must NOT bump
+	// updated_at (bookkeeping never re-ranks the outcome key).
+	var updBefore string
+	if err := d.Pool().QueryRow(ctx, `
+		SELECT updated_at::text FROM ingest_jobs
+		WHERE attachment_id=$1::uuid AND status='failed'`, attID).Scan(&updBefore); err != nil {
+		t.Fatal(err)
+	}
+	res2, err := svc.Run(ctx, nil)
+	if err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+	if res2.Enqueued != 0 {
+		t.Fatalf("run 2 enqueued = %d, want 0", res2.Enqueued)
+	}
+	var resolved *string
+	var updAfter string
+	if err := d.Pool().QueryRow(ctx, `
+		SELECT resolved_at::text, updated_at::text FROM ingest_jobs
+		WHERE attachment_id=$1::uuid AND status='failed'`, attID).Scan(&resolved, &updAfter); err != nil {
+		t.Fatal(err)
+	}
+	if resolved != nil {
+		t.Fatal("suppressed enqueue resolved the stale failed row — resolution must only fire on an actual enqueue")
+	}
+	if updAfter != updBefore {
+		t.Fatalf("suppressed enqueue bumped updated_at on the failed row (%s -> %s) — bookkeeping must not re-rank the outcome key", updBefore, updAfter)
+	}
+
+	// The anchor survives retention: the failed row never outranked it.
+	rem, _, err := repoObj.ApplyRetention(ctx, 14*24*time.Hour, 0, nil)
+	if err != nil {
+		t.Fatalf("apply retention: %v", err)
+	}
+	var anchorLeft int
+	if err := d.Pool().QueryRow(ctx,
+		`SELECT count(*) FROM ingest_jobs WHERE id=$1::uuid`, anchor).Scan(&anchorLeft); err != nil {
+		t.Fatal(err)
+	}
+	if anchorLeft != 1 {
+		t.Fatalf("completed outcome anchor was pruned (removals=%d) — the doc would read outcome=failed while served", rem.Jobs)
 	}
 }

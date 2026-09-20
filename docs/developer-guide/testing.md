@@ -38,8 +38,12 @@ environment variable:
 go test ./...
 
 # Run the full Go suite including DB integration (point at a THROWAWAY db —
-# the db/sync/search integration tests write to the DSN database directly)
-AXIOM_TEST_DATABASE_URL=postgresql://axiom_user@127.0.0.1:5444/axiom_ng_scratch_test?sslmode=disable go test ./...
+# the db/sync/search integration tests write to the DSN database directly).
+# -p 1 is REQUIRED for the green claim: several packages share the DSN
+# database, and parallel package binaries interfere (post-heal-sync and
+# contextual-boot ITs are the usual victims — flaky FAILs whose loser
+# changes per run; identical interference reproduces on older mains).
+AXIOM_TEST_DATABASE_URL=postgresql://axiom_user@127.0.0.1:5444/axiom_ng_scratch_test?sslmode=disable go test -p 1 ./...
 ```
 
 The isolation split, honestly: the **dispatcher/lease/persistence/failover**
