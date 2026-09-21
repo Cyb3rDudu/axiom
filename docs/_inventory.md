@@ -65,4 +65,4 @@ publizierte Seiten per Platzhalter verweisen.
 | Surveyed Buchzahl | `121` aktiv (Firing-SELECT ist autoritativ; Planungsfigur war 126) |
 | Runner-Host-Disk (Preflight 4.10) | ≥ 898 GiB frei auf `/` |
 | GPU-Layout | GPU0/GPU1 RTX 3090, GPU2 RTX A3000 (Straggler-Kritischer Pfad) |
-| OpenSearch-Index (technische Konstante, `dispatcher/outbox.go`) | `axiom-ng-chunks-v1` |
+| OpenSearch-Index (Default; über `AXIOM_OS_INDEX` übersteuerbar, Owner `search.IndexName`, Drainer/Backfills folgen) | `axiom-ng-chunks-v1` |

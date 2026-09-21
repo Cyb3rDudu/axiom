@@ -25,10 +25,14 @@ RUNNER_ENV="${AXIOM_DEV_RUNNER_ENV:-/run/agenix/axiom-runner.env}"
 
 RAG_PORT=8111
 RUNNER_PORT=8112
+DEV_DB=axiom_dev
 DEV_INDEX="axiom-dev-chunks-v1"
 PROD_INDEX="axiom-ng-chunks-v1"
 
-die() { echo "dev-up: $*" >&2; exit 1; }
+die() {
+    echo "dev-up: $*" >&2
+    exit 1
+}
 note() { echo "dev-up: $*"; }
 
 # --- preflight -------------------------------------------------------------
@@ -51,29 +55,31 @@ mkdir -p "$STATE"/{logs,artifacts,runner,quarantine,bin,cache/captions}
 # --- build RAG from the working tree ---------------------------------------
 
 note "building axiom-ng (debug build, working tree)…"
-( cd "$REPO/axiom_ng" && go build -o "$STATE/bin/axiom-ng-dev" ./cmd/axiom-ng )
+(cd "$REPO/axiom_ng" && go build -o "$STATE/bin/axiom-ng-dev" ./cmd/axiom-ng)
 
 # --- bootstrap the dev OpenSearch index (idempotent) ------------------------
 # Same instance as prod; own namespace. Created from the prod index's
 # mappings+settings (cluster metadata stripped) and filled via _reindex, so
 # dev search is immediately fully functional. Prod stays writable throughout.
 
+set -a
 # shellcheck disable=SC1090
-set -a; . "$RAG_ENV"; set +a
+. "$RAG_ENV"
+set +a
 OS_URL="${AXIOM_OPENSEARCH_URL:-http://127.0.0.1:9200}"
 
 if curl -fsS -o /dev/null "$OS_URL/$DEV_INDEX"; then
     note "dev index $DEV_INDEX present ($(curl -fsS "$OS_URL/$DEV_INDEX/_count" | jq -r .count) docs)"
 else
     note "bootstrapping $DEV_INDEX from $PROD_INDEX (mappings+settings+_reindex)…"
-    curl -fsS "$OS_URL/$PROD_INDEX" \
-        | jq --arg prod "$PROD_INDEX" \
-              '{settings: (.[$prod].settings.index | del(.uuid,.version,.creation_date,.provided_name)), mappings: .[$prod].mappings}' \
-        | curl -fsS -XPUT "$OS_URL/$DEV_INDEX" -H 'Content-Type: application/json' -d @- >/dev/null \
-        || die "index create failed"
+    curl -fsS "$OS_URL/$PROD_INDEX" |
+        jq --arg prod "$PROD_INDEX" \
+            '{settings: (.[$prod].settings.index | del(.uuid,.version,.creation_date,.provided_name)), mappings: .[$prod].mappings}' |
+        curl -fsS -XPUT "$OS_URL/$DEV_INDEX" -H 'Content-Type: application/json' -d @- >/dev/null ||
+        die "index create failed"
     curl -fsS -XPOST "$OS_URL/_reindex?wait_for_completion=true" -H 'Content-Type: application/json' \
-        -d "{\"source\":{\"index\":\"$PROD_INDEX\"},\"dest\":{\"index\":\"$DEV_INDEX\"}}" >/dev/null \
-        || die "_reindex failed"
+        -d "{\"source\":{\"index\":\"$PROD_INDEX\"},\"dest\":{\"index\":\"$DEV_INDEX\"}}" >/dev/null ||
+        die "_reindex failed"
     note "dev index ready: $(curl -fsS "$OS_URL/$DEV_INDEX/_count" | jq -r .count) docs"
 fi
 
@@ -83,8 +89,14 @@ fi
 
 note "starting dev runner on :$RUNNER_PORT …"
 (
+    set -a
     # shellcheck disable=SC1090
-    set -a; . "$RUNNER_ENV"; set +a
+    . "$RUNNER_ENV"
+    set +a
+    # the bootstrap section above sourced the PROD rag env (set -a) into this
+    # shell — the runner service never reads a DSN, but the inherited prod
+    # value is a latent trap for anything ever run inside this environment
+    unset AXIOM_DATABASE_URL
     AXIOM_PROCESSOR_PORT="$RUNNER_PORT"
     AXIOM_PROCESSOR_BIND_ADDR=127.0.0.1
     AXIOM_PROCESSOR_WORK_ROOT="$STATE/runner"
@@ -95,16 +107,26 @@ note "starting dev runner on :$RUNNER_PORT …"
     cd "$REPO/axiom_ng_runner"
     exec /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
         "$REPO/axiom_ng_runner/.venv/bin/python" -m axiom_ng_runner \
-        >> "$STATE/logs/runner.log" 2>&1
+        >>"$STATE/logs/runner.log" 2>&1
 ) &
 RUNNER_PID=$!
+# orphan guard: if anything below fails before dev.pid is written, dev-down
+# refuses to run (no pid file) — so this script must not leave the runner
+# behind. Re-armed below to cover the RAG group too; cleared on success.
+trap 'kill -TERM -- "-$RUNNER_PID" 2>/dev/null || true' EXIT
 
 note "waiting for runner warmup (MPS model load, up to 4 min)…"
 for i in $(seq 1 240); do
     curl -fsS -o /dev/null "http://127.0.0.1:$RUNNER_PORT/v1/health" 2>/dev/null && break
-    kill -0 "$RUNNER_PID" 2>/dev/null || { tail -5 "$STATE/logs/runner.log" >&2; die "runner died during warmup"; }
+    kill -0 "$RUNNER_PID" 2>/dev/null || {
+        tail -5 "$STATE/logs/runner.log" >&2
+        die "runner died during warmup"
+    }
     sleep 1
-    [ "$i" = 240 ] && { tail -5 "$STATE/logs/runner.log" >&2; die "runner warmup timeout"; }
+    [ "$i" = 240 ] && {
+        tail -5 "$STATE/logs/runner.log" >&2
+        die "runner warmup timeout"
+    }
 done
 note "runner warm (pid $RUNNER_PID)"
 
@@ -112,10 +134,14 @@ note "runner warm (pid $RUNNER_PID)"
 
 note "starting dev RAG on :$RAG_PORT …"
 (
+    set -a
     # shellcheck disable=SC1090
-    set -a; . "$RAG_ENV"; . "$RAG_API_ENV"; set +a
+    . "$RAG_ENV"
+    # shellcheck disable=SC1090
+    . "$RAG_API_ENV"
+    set +a
     # isolation overrides (every boundary prod shares with dev gets its own)
-    AXIOM_DATABASE_URL="$(printf '%s' "$AXIOM_DATABASE_URL" | sed -E 's#/axiom_db([?]|$)#/axiom_dev\1#')"
+    AXIOM_DATABASE_URL="$(printf '%s' "$AXIOM_DATABASE_URL" | sed -E 's#/axiom_db([?]|$)#/'"$DEV_DB"'\1#')"
     AXIOM_API_PORT="$RAG_PORT"
     AXIOM_BIND_ADDR=127.0.0.1
     AXIOM_OS_INDEX="$DEV_INDEX"
@@ -142,26 +168,55 @@ note "starting dev RAG on :$RAG_PORT …"
         AXIOM_DISPATCHER_ENABLED AXIOM_DISPATCHER_WORKER_ID
 
     # hard asserts: an override that silently did not stick would aim dev at prod
-    case "$AXIOM_DATABASE_URL" in *"/axiom_dev"*) ;; *) echo "dev-up: DATABASE_URL override failed" >&2; exit 1;; esac
-    [ "$AXIOM_OS_INDEX" = "$DEV_INDEX" ] || { echo "dev-up: OS_INDEX override failed" >&2; exit 1; }
-    [ "$AXIOM_API_PORT" = "$RAG_PORT" ] || { echo "dev-up: API_PORT override failed" >&2; exit 1; }
-    [ ! -e "$AXIOM_ZOTERO_WRITE_KEY_FILE" ] || { echo "dev-up: write-key path exists" >&2; exit 1; }
+    case "$AXIOM_DATABASE_URL" in
+    *"/$DEV_DB"*) ;;
+    *"/axiom_db"*)
+        echo "dev-up: DATABASE_URL still points at prod (axiom_db) — sed rewrite failed" >&2
+        exit 1
+        ;;
+    *)
+        echo "dev-up: DATABASE_URL override failed" >&2
+        exit 1
+        ;;
+    esac
+    [ "$AXIOM_OS_INDEX" = "$DEV_INDEX" ] || {
+        echo "dev-up: OS_INDEX override failed" >&2
+        exit 1
+    }
+    [ "$AXIOM_API_PORT" = "$RAG_PORT" ] || {
+        echo "dev-up: API_PORT override failed" >&2
+        exit 1
+    }
+    [ ! -e "$AXIOM_ZOTERO_WRITE_KEY_FILE" ] || {
+        echo "dev-up: write-key path exists" >&2
+        exit 1
+    }
 
     exec /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
         "$STATE/bin/axiom-ng-dev" \
-        >> "$STATE/logs/rag.log" 2>&1
+        >>"$STATE/logs/rag.log" 2>&1
 ) &
 RAG_PID=$!
+# orphan guard now covers both groups (the RAG-health-timeout die path leaves
+# a LIVE RAG behind — the runner-only trap above would not catch it)
+trap 'kill -TERM -- "-$RUNNER_PID" "-$RAG_PID" 2>/dev/null || true' EXIT
 
 note "waiting for RAG health on :$RAG_PORT …"
 for i in $(seq 1 90); do
     if curl -fsS "http://127.0.0.1:$RAG_PORT/api/health" 2>/dev/null | grep -q '"ok":true'; then break; fi
-    kill -0 "$RAG_PID" 2>/dev/null || { tail -5 "$STATE/logs/rag.log" >&2; die "RAG died during startup"; }
+    kill -0 "$RAG_PID" 2>/dev/null || {
+        tail -5 "$STATE/logs/rag.log" >&2
+        die "RAG died during startup"
+    }
     sleep 1
-    [ "$i" = 90 ] && { tail -5 "$STATE/logs/rag.log" >&2; die "RAG health timeout (Zotero running?)"; }
+    [ "$i" = 90 ] && {
+        tail -5 "$STATE/logs/rag.log" >&2
+        die "RAG health timeout (Zotero running?)"
+    }
 done
 
-printf 'rag %s\nrunner %s\n' "$RAG_PID" "$RUNNER_PID" > "$STATE/dev.pid"
+printf 'rag %s\nrunner %s\n' "$RAG_PID" "$RUNNER_PID" >"$STATE/dev.pid"
+trap - EXIT # success: both services stay up, dev-down.sh owns them from here
 
 note "dev environment up:"
 note "  RAG     :$RAG_PORT  (pid $RAG_PID,  log $STATE/logs/rag.log)"

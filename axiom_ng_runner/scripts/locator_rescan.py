@@ -47,7 +47,7 @@ import requests
 from axiom_ng_runner.compute_core import page_trust as pt
 
 OS_URL = os.environ.get("AXIOM_OPENSEARCH_URL", "http://127.0.0.1:9200")
-OS_INDEX = "axiom-ng-chunks-v1"
+OS_INDEX = os.environ.get("AXIOM_OS_INDEX", "axiom-ng-chunks-v1")
 DSN = os.environ.get(
     "AXIOM_DATABASE_URL",
     "postgresql://axiom_user:axiom_password@127.0.0.1:5432/axiom_db?sslmode=disable",

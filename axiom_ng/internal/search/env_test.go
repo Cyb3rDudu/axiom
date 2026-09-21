@@ -26,6 +26,9 @@ func TestIndexNameFromEnv(t *testing.T) {
 	}
 	// The package-level var must equal the default when the environment of
 	// THIS test process carries no override (guard against init-order rot).
+	// NOTE: `go test` is not hermetic w.r.t. this var — an AXIOM_OS_INDEX
+	// exported by the invoking shell fires this guard too (by design: the
+	// var resolves once at process start, like the code it mirrors).
 	if IndexName != "axiom-ng-chunks-v1" {
 		t.Errorf("IndexName = %q, want prod default in an unoverridden process", IndexName)
 	}

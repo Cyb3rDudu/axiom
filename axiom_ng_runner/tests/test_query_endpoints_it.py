@@ -35,7 +35,7 @@ if DENSE_EMBEDDING_DIM != 1024:
     )
 
 OS_URL = os.getenv("AXIOM_OPENSEARCH_URL", "http://127.0.0.1:9200").rstrip("/")
-OS_INDEX = "axiom-ng-chunks-v1"
+OS_INDEX = os.getenv("AXIOM_OS_INDEX", "axiom-ng-chunks-v1")
 
 # Hermetic-suite compatibility: the app module must exist, but singletons
 # reset per test keeps the warm-keep accounting honest.

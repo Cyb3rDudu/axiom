@@ -11,7 +11,10 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 RAG_PORT=8111
 RUNNER_PORT=8112
 
-die() { echo "dev-down: $*" >&2; exit 1; }
+die() {
+    echo "dev-down: $*" >&2
+    exit 1
+}
 note() { echo "dev-down: $*"; }
 
 [ -f "$STATE/dev.pid" ] || die "no dev environment running ($STATE/dev.pid missing)"
@@ -26,7 +29,10 @@ stop_group() { # $1 = label, $2 = pid (== pgid, setsid makes pid the group leade
     fi
     kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
     for _ in $(seq 1 20); do
-        kill -0 "$pid" 2>/dev/null || { note "$label (pid $pid) stopped"; return; }
+        kill -0 "$pid" 2>/dev/null || {
+            note "$label (pid $pid) stopped"
+            return
+        }
         sleep 1
     done
     kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
@@ -36,7 +42,7 @@ stop_group() { # $1 = label, $2 = pid (== pgid, setsid makes pid the group leade
 
 while read -r label pid; do
     [ -n "${label:-}" ] && [ -n "${pid:-}" ] && stop_group "$label" "$pid"
-done < "$STATE/dev.pid"
+done <"$STATE/dev.pid"
 
 rm -f "$STATE/dev.pid"
 
@@ -50,7 +56,13 @@ for p in "$RAG_PORT" "$RUNNER_PORT"; do
         left=1
     fi
 done
-pgrep -f "$STATE/bin/axiom-ng-dev" >/dev/null 2>&1 && { echo "dev-down: WARNING dev RAG process still alive" >&2; left=1; }
-pgrep -f "$REPO/axiom_ng_runner/.venv" >/dev/null 2>&1 && { echo "dev-down: WARNING dev runner process still alive" >&2; left=1; }
+pgrep -f "$STATE/bin/axiom-ng-dev" >/dev/null 2>&1 && {
+    echo "dev-down: WARNING dev RAG process still alive" >&2
+    left=1
+}
+pgrep -f "$REPO/axiom_ng_runner/.venv" >/dev/null 2>&1 && {
+    echo "dev-down: WARNING dev runner process still alive" >&2
+    left=1
+}
 
 [ "$left" = 0 ] && note "clean — no dev processes left (ports $RAG_PORT/$RUNNER_PORT free)" || exit 1
