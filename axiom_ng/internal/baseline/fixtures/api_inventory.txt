@@ -1,0 +1,38 @@
+GET    /api/health                                      json healthResponse
+GET    /api/ingest/jobs                                 json []repo.Job
+GET    /api/kg/entities                                 json []entity
+GET    /api/kg/entities/{id}/neighbors                  json neighbors
+GET    /api/kg/relations                                json relations
+GET    /api/passage/{id}                                json passage
+GET    /api/passage/{id}/page                           image/png
+GET    /api/processor/source/{jobID}                    binary source artifact
+GET    /api/repair/cases                                json repair cases listing
+GET    /api/repair/docs/{documentKey}/locator-stats     json locator stats
+GET    /api/repair/queue                                json repair queue items
+GET    /api/runners/live                                json runner live view
+GET    /api/ws                                          websocket (events/runners topics)
+GET    /api/zotero/documents                            json document listing
+GET    /api/zotero/selection                            json selection (GET/PUT)
+GET    /api/zotero/selection/resolved                   json resolved selection
+POST   /api/ingest/documents/{documentID}/force-rebuild json repo.Job (202)
+POST   /api/kg/consolidate                              json consolidation report
+POST   /api/repair/cases/{id}/claim                     json repair case
+POST   /api/repair/cases/{id}/requeue                   json ack
+POST   /api/repair/cases/{id}/verdict                   json verdict result
+POST   /api/repair/custody                              json custody record
+POST   /api/search                                      json search.Response
+POST   /api/zotero/sync                                 json sync.Result
+PUT    /api/zotero/selection                            json selection (GET/PUT)
+
+# runner (axiom_ng_runner FastAPI, :8112) — same freeze generation
+GET    /v1/health                                        json health
+GET    /v1/capabilities                                  json Capabilities
+POST   /v1/process                                       202 json job accepted
+GET    /v1/jobs/{job_id}                                 json JobStatus
+GET    /v1/jobs/{job_id}/result                          json processing result
+GET    /v1/jobs/{job_id}/artifacts/{artifact_ref}        binary artifact
+POST   /v1/jobs/{job_id}/cancel                          json ack
+POST   /v1/jobs/{job_id}/ack                             json ack
+POST   /v1/embed                                         json embeddings
+POST   /v1/rerank                                        json rerank result
+POST   /v1/pdf/preflight                                 json PreflightReport

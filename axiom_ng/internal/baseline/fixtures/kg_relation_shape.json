@@ -1,0 +1,13 @@
+{
+  "confidence": "number",
+  "corroborating_documents": "number",
+  "documents": "number",
+  "evidence_chunks": "[]string",
+  "id": "string",
+  "source_form": "string",
+  "source_id": "string",
+  "strength": "number",
+  "target_form": "string",
+  "target_id": "string",
+  "type": "string"
+}

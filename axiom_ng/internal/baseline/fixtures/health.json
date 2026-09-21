@@ -1,0 +1,11 @@
+{
+  "build": "axiom-ng v0.1.17-59-gbf77410 (commit bf77410, release build)",
+  "checks": {
+    "ingest-runner": "ok",
+    "postgres": "ok",
+    "query-runner": "ok",
+    "zotero": "ok"
+  },
+  "contextual": "active",
+  "ok": true
+}

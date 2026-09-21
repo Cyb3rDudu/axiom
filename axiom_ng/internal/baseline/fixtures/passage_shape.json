@@ -1,0 +1,30 @@
+{
+  "attachment_id": "string",
+  "chunk_id": "string",
+  "chunk_index": "number",
+  "document_id": "string",
+  "locator": {
+    "cfi": "string",
+    "chapter": "string",
+    "chapter_number": "number",
+    "kind": "string",
+    "label": "string",
+    "paragraph_in_chapter": "number",
+    "section_title": "string"
+  },
+  "neighbors": "[]object",
+  "section": "[]string",
+  "snapshot_id": "string",
+  "source": {
+    "authors": "[]string",
+    "citation_class": "string",
+    "content_type": "string",
+    "doc_id": "string",
+    "language": "string",
+    "publisher": "string",
+    "tags": "[]string",
+    "title": "string",
+    "year": "number"
+  },
+  "text": "string"
+}

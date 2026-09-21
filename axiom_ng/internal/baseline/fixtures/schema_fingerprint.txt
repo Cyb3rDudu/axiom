@@ -1,0 +1,500 @@
+# axiom schema fingerprint — frozen compatibility baseline (#295)
+# tag v0.1.18 (commit 4704656), deployed RAG generation bf77410
+# canonical source: fresh db.Migrate of the freeze migrations (reproducible);
+# live axiom_db/axiom_dev delta: documented in devStructureAllowlist (baseline tests)
+# postgres major 17; structure only (row counts live in the separate live inventory)
+# sha256 structure: ca3ca6037939016b09f4d2bdf0fb1515402d5a583b46dd83a1e93aa4c8b62843
+## extensions (2)
+plpgsql | 1.0
+vector | 0.8.6
+## migrations ledger (23)
+schema/0001_ingest_jobs.sql
+schema/0002_zotero.sql
+schema/0003_zotero_canonical.sql
+schema/0004_zotero_canonical_integrity.sql
+schema/0005_ingest_jobs_resolved.sql
+schema/0006_ingest_jobs_lease.sql
+schema/0007_ingest_jobs_ack_pending.sql
+schema/0008_processing_snapshots.sql
+schema/0009_processing_chunks_outbox.sql
+schema/0010_ingest_jobs_runner_name.sql
+schema/0011_snapshots_one_active_per_attachment.sql
+schema/0012_zotero_selections.sql
+schema/0013_zotero_collection_selections.sql
+schema/0014_repair_cases.sql
+schema/0015_entity_aliases.sql
+schema/0016_superseded_entities.sql
+schema/0017_kg_read_model.sql
+schema/0018_ingest_jobs_quality.sql
+schema/0019_snapshots_one_active_per_document.sql
+schema/0020_quality_state_english.sql
+schema/0021_image_captions.sql
+schema/0022_figure_captions.sql
+schema/0023_contextual_citation_class.sql
+## enum types (2)
+ingest_job_status | pending,claimed,processing,completed,failed,cancelled,skipped
+repair_status | rejected,queued,in_repair,healed,failed,blocked_for_dudu
+## relations (26)
+ingest_jobs | 114
+kg_entity_roots | 114
+kg_relation_evidence_docs | 114
+kg_relation_triples | 114
+kg_superseded_entities | 114
+opensearch_outbox | 114
+processing_artifacts | 114
+processing_chunk_dense_embeddings | 114
+processing_chunk_relationships | 114
+processing_chunk_sparse_embeddings | 114
+processing_chunks | 114
+processing_entities | 114
+processing_entity_mentions | 114
+processing_entity_relationships | 114
+processing_snapshots | 114
+repair_cases | 114
+schema_migrations | 114
+zotero_attachments | 114
+zotero_collection_selections | 114
+zotero_collections | 114
+zotero_documents | 114
+zotero_item_collections | 114
+zotero_items | 114
+zotero_selections | 114
+zotero_sources | 114
+zotero_write_audit | 114
+## columns (278)
+ingest_jobs | ack_pending_at | timestamptz | YES | 
+ingest_jobs | attachment_id | uuid | YES | 
+ingest_jobs | attempt | int4 | NO | 0
+ingest_jobs | cancel_requested_at | timestamptz | YES | 
+ingest_jobs | claimed_by | text | YES | 
+ingest_jobs | completed_at | timestamptz | YES | 
+ingest_jobs | content_hash | text | YES | 
+ingest_jobs | document_id | uuid | YES | 
+ingest_jobs | enqueued_at | timestamptz | NO | now()
+ingest_jobs | error_code | text | YES | 
+ingest_jobs | error_message | text | YES | 
+ingest_jobs | force_rebuild | bool | NO | false
+ingest_jobs | id | uuid | NO | gen_random_uuid()
+ingest_jobs | idempotency_key | text | YES | 
+ingest_jobs | input_snapshot | jsonb | YES | 
+ingest_jobs | last_heartbeat_at | timestamptz | YES | 
+ingest_jobs | lease_token | uuid | YES | 
+ingest_jobs | lease_until | timestamptz | YES | 
+ingest_jobs | max_attempts | int4 | NO | 3
+ingest_jobs | next_attempt_at | timestamptz | YES | 
+ingest_jobs | processing_profile | jsonb | YES | 
+ingest_jobs | processor_name | text | YES | 
+ingest_jobs | processor_version | text | YES | 
+ingest_jobs | profile_hash | text | YES | 
+ingest_jobs | quality_state | jsonb | YES | 
+ingest_jobs | resolved_at | timestamptz | YES | 
+ingest_jobs | result | jsonb | NO | '{}'::jsonb
+ingest_jobs | runner_name | text | YES | 
+ingest_jobs | source_id | uuid | YES | 
+ingest_jobs | started_at | timestamptz | YES | 
+ingest_jobs | status | ingest_job_status | NO | 'pending'::ingest_job_status
+ingest_jobs | updated_at | timestamptz | NO | now()
+kg_entity_roots | forms | jsonb | NO | '[]'::jsonb
+kg_entity_roots | member_count | int4 | NO | 0
+kg_entity_roots | mention_count | int4 | NO | 0
+kg_entity_roots | normalized_form | text | NO | 
+kg_entity_roots | normalized_form_nofam | text | NO | 
+kg_entity_roots | primary_form | text | NO | 
+kg_entity_roots | primary_text | text | NO | 
+kg_entity_roots | primary_type | text | YES | 
+kg_entity_roots | root_entity_id | uuid | NO | 
+kg_entity_roots | type_votes | jsonb | NO | '{}'::jsonb
+kg_entity_roots | updated_at | timestamptz | NO | now()
+kg_relation_evidence_docs | document_id | uuid | NO | 
+kg_relation_evidence_docs | evidence_count | int4 | NO | 0
+kg_relation_evidence_docs | triple_id | uuid | NO | 
+kg_relation_triples | confidence | float4 | NO | 0
+kg_relation_triples | corroborating_documents | int4 | NO | 1
+kg_relation_triples | evidence_chunk_ids | jsonb | NO | '[]'::jsonb
+kg_relation_triples | evidence_count | int4 | NO | 0
+kg_relation_triples | id | uuid | NO | gen_random_uuid()
+kg_relation_triples | section_quality | float4 | NO | 1
+kg_relation_triples | source_form | text | NO | 
+kg_relation_triples | source_mentions | int4 | NO | 0
+kg_relation_triples | source_root_id | uuid | NO | 
+kg_relation_triples | source_type | text | YES | 
+kg_relation_triples | strength | float4 | YES | 
+kg_relation_triples | target_form | text | NO | 
+kg_relation_triples | target_mentions | int4 | NO | 0
+kg_relation_triples | target_root_id | uuid | NO | 
+kg_relation_triples | target_type | text | YES | 
+kg_relation_triples | triple_row_count | int4 | NO | 0
+kg_relation_triples | type | text | NO | 
+kg_relation_triples | updated_at | timestamptz | NO | now()
+kg_superseded_entities | archived_at | timestamptz | NO | now()
+kg_superseded_entities | id | uuid | NO | gen_random_uuid()
+kg_superseded_entities | loser_canonical_form | text | YES | 
+kg_superseded_entities | loser_description | text | YES | 
+kg_superseded_entities | loser_document_id | uuid | NO | 
+kg_superseded_entities | loser_entity_id | uuid | NO | 
+kg_superseded_entities | loser_ref | text | NO | 
+kg_superseded_entities | loser_snapshot_id | uuid | NO | 
+kg_superseded_entities | loser_text | text | NO | 
+kg_superseded_entities | loser_type | text | YES | 
+kg_superseded_entities | mention_count | int4 | NO | 0
+kg_superseded_entities | operation | text | NO | 'entity_consolidation'::text
+kg_superseded_entities | survivor_entity_id | uuid | YES | 
+opensearch_outbox | attempts | int4 | NO | 0
+opensearch_outbox | created_at | timestamptz | NO | now()
+opensearch_outbox | id | uuid | NO | gen_random_uuid()
+opensearch_outbox | last_error | text | YES | 
+opensearch_outbox | next_attempt_at | timestamptz | NO | now()
+opensearch_outbox | operation | text | NO | 
+opensearch_outbox | payload | jsonb | NO | '{}'::jsonb
+opensearch_outbox | snapshot_id | uuid | NO | 
+opensearch_outbox | status | text | NO | 'pending'::text
+processing_artifacts | attributes | jsonb | NO | '{}'::jsonb
+processing_artifacts | created_at | timestamptz | NO | now()
+processing_artifacts | id | uuid | NO | gen_random_uuid()
+processing_artifacts | kind | text | NO | 
+processing_artifacts | media_type | text | NO | 
+processing_artifacts | ref | text | NO | 
+processing_artifacts | retention | text | NO | 'durable'::text
+processing_artifacts | sha256 | text | NO | 
+processing_artifacts | size_bytes | int8 | NO | 
+processing_artifacts | snapshot_id | uuid | NO | 
+processing_artifacts | storage_path | text | NO | 
+processing_chunk_dense_embeddings | chunk_id | uuid | NO | 
+processing_chunk_dense_embeddings | created_at | timestamptz | NO | now()
+processing_chunk_dense_embeddings | dimensions | int4 | NO | 
+processing_chunk_dense_embeddings | id | uuid | NO | gen_random_uuid()
+processing_chunk_dense_embeddings | model | text | NO | 
+processing_chunk_dense_embeddings | vector | vector | NO | 
+processing_chunk_relationships | created_at | timestamptz | NO | now()
+processing_chunk_relationships | evidence_chunk_ids | jsonb | NO | '[]'::jsonb
+processing_chunk_relationships | id | uuid | NO | gen_random_uuid()
+processing_chunk_relationships | metadata | jsonb | NO | '{}'::jsonb
+processing_chunk_relationships | snapshot_id | uuid | NO | 
+processing_chunk_relationships | source_chunk_id | uuid | NO | 
+processing_chunk_relationships | strength | float4 | YES | 
+processing_chunk_relationships | target_chunk_id | uuid | NO | 
+processing_chunk_relationships | type | text | NO | 
+processing_chunk_sparse_embeddings | chunk_id | uuid | NO | 
+processing_chunk_sparse_embeddings | created_at | timestamptz | NO | now()
+processing_chunk_sparse_embeddings | id | uuid | NO | gen_random_uuid()
+processing_chunk_sparse_embeddings | model | text | NO | 
+processing_chunk_sparse_embeddings | values | jsonb | NO | '{}'::jsonb
+processing_chunks | chunk_index | int4 | NO | 
+processing_chunks | created_at | timestamptz | NO | now()
+processing_chunks | end_paragraph_index | int4 | YES | 
+processing_chunks | figure_captions | jsonb | NO | '{}'::jsonb
+processing_chunks | id | uuid | NO | gen_random_uuid()
+processing_chunks | image_captions | jsonb | NO | '{}'::jsonb
+processing_chunks | image_refs | jsonb | NO | '[]'::jsonb
+processing_chunks | locator | jsonb | NO | '{}'::jsonb
+processing_chunks | section_titles | jsonb | NO | '[]'::jsonb
+processing_chunks | snapshot_id | uuid | NO | 
+processing_chunks | start_paragraph_index | int4 | YES | 
+processing_chunks | text | text | NO | 
+processing_chunks | token_count | int4 | NO | 0
+processing_entities | alias_of | uuid | YES | 
+processing_entities | canonical_form | text | YES | 
+processing_entities | created_at | timestamptz | NO | now()
+processing_entities | description | text | YES | 
+processing_entities | id | uuid | NO | gen_random_uuid()
+processing_entities | ref | text | NO | 
+processing_entities | snapshot_id | uuid | NO | 
+processing_entities | text | text | NO | 
+processing_entities | type | text | YES | 
+processing_entity_mentions | chunk_id | uuid | NO | 
+processing_entity_mentions | confidence | float4 | YES | 
+processing_entity_mentions | end_char | int4 | NO | 
+processing_entity_mentions | entity_id | uuid | NO | 
+processing_entity_mentions | id | uuid | NO | gen_random_uuid()
+processing_entity_mentions | start_char | int4 | NO | 
+processing_entity_relationships | created_at | timestamptz | NO | now()
+processing_entity_relationships | evidence_chunk_ids | jsonb | NO | '[]'::jsonb
+processing_entity_relationships | extractor | text | YES | 
+processing_entity_relationships | id | uuid | NO | gen_random_uuid()
+processing_entity_relationships | metadata | jsonb | NO | '{}'::jsonb
+processing_entity_relationships | snapshot_id | uuid | NO | 
+processing_entity_relationships | source_entity_id | uuid | NO | 
+processing_entity_relationships | strength | float4 | YES | 
+processing_entity_relationships | target_entity_id | uuid | NO | 
+processing_entity_relationships | type | text | NO | 
+processing_snapshots | active | bool | NO | false
+processing_snapshots | attachment_id | uuid | NO | 
+processing_snapshots | content_hash | text | NO | 
+processing_snapshots | created_at | timestamptz | NO | now()
+processing_snapshots | document_id | uuid | NO | 
+processing_snapshots | generation | int4 | NO | 1
+processing_snapshots | id | uuid | NO | gen_random_uuid()
+processing_snapshots | ingest_job_id | uuid | YES | 
+processing_snapshots | manifest | jsonb | NO | '{}'::jsonb
+processing_snapshots | models | jsonb | NO | '{}'::jsonb
+processing_snapshots | processor_name | text | NO | 
+processing_snapshots | processor_version | text | NO | 
+processing_snapshots | profile | text | NO | 
+processing_snapshots | profile_hash | text | NO | 
+processing_snapshots | source_verified | bool | NO | false
+processing_snapshots | updated_at | timestamptz | NO | now()
+processing_snapshots | warnings | jsonb | NO | '[]'::jsonb
+repair_cases | analysis | jsonb | NO | '{}'::jsonb
+repair_cases | attachment_id | uuid | YES | 
+repair_cases | attempts | int4 | NO | 0
+repair_cases | blocked_reason | text | NO | ''::text
+repair_cases | created_at | timestamptz | NO | now()
+repair_cases | document_id | uuid | YES | 
+repair_cases | id | uuid | NO | gen_random_uuid()
+repair_cases | plan | jsonb | NO | '{}'::jsonb
+repair_cases | plan_version | int4 | NO | 0
+repair_cases | status | repair_status | NO | 'rejected'::repair_status
+repair_cases | suspicion_class | text | NO | ''::text
+repair_cases | updated_at | timestamptz | NO | now()
+repair_cases | verdict | text | NO | ''::text
+repair_cases | verify_contradictions | int4 | NO | 0
+repair_cases | verify_score | numeric | NO | 0
+schema_migrations | applied_at | timestamptz | NO | now()
+schema_migrations | version | text | NO | 
+zotero_attachments | canonical_item_id | uuid | YES | 
+zotero_attachments | content_hash | text | YES | 
+zotero_attachments | content_type | text | NO | 
+zotero_attachments | created_at | timestamptz | NO | now()
+zotero_attachments | deleted | bool | NO | false
+zotero_attachments | document_id | uuid | NO | 
+zotero_attachments | file_size | int8 | YES | 
+zotero_attachments | file_uri | text | YES | 
+zotero_attachments | filename | text | NO | 
+zotero_attachments | id | uuid | NO | gen_random_uuid()
+zotero_attachments | link_mode | text | NO | 
+zotero_attachments | local_path | text | YES | 
+zotero_attachments | mtime_ms | int8 | YES | 
+zotero_attachments | parent_zotero_key | text | NO | 
+zotero_attachments | preferred | bool | NO | false
+zotero_attachments | repair_attempts | int4 | NO | 0
+zotero_attachments | source_id | uuid | NO | 
+zotero_attachments | updated_at | timestamptz | NO | now()
+zotero_attachments | zotero_key | text | NO | 
+zotero_attachments | zotero_version | int8 | NO | 
+zotero_collection_selections | collection_key | text | NO | 
+zotero_collection_selections | mode | text | NO | 
+zotero_collection_selections | updated_at | timestamptz | NO | now()
+zotero_collections | created_at | timestamptz | NO | now()
+zotero_collections | deleted | bool | NO | false
+zotero_collections | id | uuid | NO | gen_random_uuid()
+zotero_collections | name | text | NO | 
+zotero_collections | parent_key | text | YES | 
+zotero_collections | raw_envelope | jsonb | NO | 
+zotero_collections | source_id | uuid | NO | 
+zotero_collections | synced_at | timestamptz | NO | now()
+zotero_collections | updated_at | timestamptz | NO | now()
+zotero_collections | zotero_key | text | NO | 
+zotero_documents | abstract_note | text | YES | 
+zotero_documents | canonical_item_id | uuid | YES | 
+zotero_documents | citation_class | text | NO | 'citable'::text
+zotero_documents | collections | jsonb | NO | '[]'::jsonb
+zotero_documents | created_at | timestamptz | NO | now()
+zotero_documents | creators | jsonb | NO | '[]'::jsonb
+zotero_documents | deleted | bool | NO | false
+zotero_documents | doi | text | YES | 
+zotero_documents | id | uuid | NO | gen_random_uuid()
+zotero_documents | isbn | text | YES | 
+zotero_documents | item_type | text | NO | 
+zotero_documents | language | text | YES | 
+zotero_documents | metadata | jsonb | NO | '{}'::jsonb
+zotero_documents | publication_date | text | YES | 
+zotero_documents | publication_year | int4 | YES | 
+zotero_documents | publisher | text | YES | 
+zotero_documents | source_id | uuid | NO | 
+zotero_documents | tags | jsonb | NO | '[]'::jsonb
+zotero_documents | title | text | NO | 
+zotero_documents | updated_at | timestamptz | NO | now()
+zotero_documents | url | text | YES | 
+zotero_documents | zotero_key | text | NO | 
+zotero_documents | zotero_version | int8 | NO | 
+zotero_item_collections | collection_id | uuid | NO | 
+zotero_item_collections | item_id | uuid | NO | 
+zotero_items | created_at | timestamptz | NO | now()
+zotero_items | deleted | bool | NO | false
+zotero_items | id | uuid | NO | gen_random_uuid()
+zotero_items | item_type | text | NO | 
+zotero_items | parent_key | text | YES | 
+zotero_items | raw_data | jsonb | NO | 
+zotero_items | raw_envelope | jsonb | NO | 
+zotero_items | source_id | uuid | NO | 
+zotero_items | synced_at | timestamptz | NO | now()
+zotero_items | updated_at | timestamptz | NO | now()
+zotero_items | zotero_key | text | NO | 
+zotero_items | zotero_version | int8 | NO | 
+zotero_selections | document_id | uuid | NO | 
+zotero_selections | mode | text | NO | 
+zotero_selections | updated_at | timestamptz | NO | now()
+zotero_sources | base_url | text | NO | 
+zotero_sources | canonical_last_modified_version | int8 | NO | 0
+zotero_sources | created_at | timestamptz | NO | now()
+zotero_sources | id | uuid | NO | gen_random_uuid()
+zotero_sources | last_modified_version | int8 | NO | 0
+zotero_sources | last_sync_at | timestamptz | YES | 
+zotero_sources | library_id | text | NO | 'users/0'::text
+zotero_sources | schema_version | int4 | YES | 
+zotero_sources | server_id | text | YES | 
+zotero_sources | updated_at | timestamptz | NO | now()
+zotero_write_audit | action | text | NO | 
+zotero_write_audit | attachment_id | uuid | YES | 
+zotero_write_audit | case_id | uuid | YES | 
+zotero_write_audit | created_at | timestamptz | NO | now()
+zotero_write_audit | detail | jsonb | NO | '{}'::jsonb
+zotero_write_audit | id | uuid | NO | gen_random_uuid()
+## constraints (82)
+ingest_jobs | fk_ingest_jobs_attachment | f | FOREIGN KEY (attachment_id) REFERENCES zotero_attachments(id) ON DELETE CASCADE
+ingest_jobs | fk_ingest_jobs_document | f | FOREIGN KEY (document_id) REFERENCES zotero_documents(id) ON DELETE CASCADE
+ingest_jobs | fk_ingest_jobs_source | f | FOREIGN KEY (source_id) REFERENCES zotero_sources(id) ON DELETE CASCADE
+ingest_jobs | ingest_jobs_pkey | p | PRIMARY KEY (id)
+kg_entity_roots | kg_entity_roots_pkey | p | PRIMARY KEY (root_entity_id)
+kg_entity_roots | kg_entity_roots_root_entity_id_fkey | f | FOREIGN KEY (root_entity_id) REFERENCES processing_entities(id) ON DELETE CASCADE
+kg_relation_evidence_docs | kg_relation_evidence_docs_pkey | p | PRIMARY KEY (triple_id, document_id)
+kg_relation_evidence_docs | kg_relation_evidence_docs_triple_id_fkey | f | FOREIGN KEY (triple_id) REFERENCES kg_relation_triples(id) ON DELETE CASCADE
+kg_relation_triples | kg_relation_triples_check | c | CHECK ((source_root_id <> target_root_id))
+kg_relation_triples | kg_relation_triples_pkey | p | PRIMARY KEY (id)
+kg_relation_triples | kg_relation_triples_source_root_id_fkey | f | FOREIGN KEY (source_root_id) REFERENCES kg_entity_roots(root_entity_id) ON DELETE CASCADE
+kg_relation_triples | kg_relation_triples_source_root_id_target_root_id_type_key | u | UNIQUE (source_root_id, target_root_id, type)
+kg_relation_triples | kg_relation_triples_target_root_id_fkey | f | FOREIGN KEY (target_root_id) REFERENCES kg_entity_roots(root_entity_id) ON DELETE CASCADE
+kg_superseded_entities | kg_superseded_entities_pkey | p | PRIMARY KEY (id)
+kg_superseded_entities | kg_superseded_entities_survivor_entity_id_fkey | f | FOREIGN KEY (survivor_entity_id) REFERENCES processing_entities(id) ON DELETE SET NULL
+opensearch_outbox | opensearch_outbox_pkey | p | PRIMARY KEY (id)
+opensearch_outbox | opensearch_outbox_snapshot_id_fkey | f | FOREIGN KEY (snapshot_id) REFERENCES processing_snapshots(id) ON DELETE CASCADE
+processing_artifacts | processing_artifacts_pkey | p | PRIMARY KEY (id)
+processing_artifacts | processing_artifacts_snapshot_id_fkey | f | FOREIGN KEY (snapshot_id) REFERENCES processing_snapshots(id) ON DELETE CASCADE
+processing_artifacts | processing_artifacts_snapshot_id_ref_key | u | UNIQUE (snapshot_id, ref)
+processing_chunk_dense_embeddings | processing_chunk_dense_embeddings_chunk_id_fkey | f | FOREIGN KEY (chunk_id) REFERENCES processing_chunks(id) ON DELETE CASCADE
+processing_chunk_dense_embeddings | processing_chunk_dense_embeddings_chunk_id_key | u | UNIQUE (chunk_id)
+processing_chunk_dense_embeddings | processing_chunk_dense_embeddings_pkey | p | PRIMARY KEY (id)
+processing_chunk_relationships | processing_chunk_relationships_pkey | p | PRIMARY KEY (id)
+processing_chunk_relationships | processing_chunk_relationships_snapshot_id_fkey | f | FOREIGN KEY (snapshot_id) REFERENCES processing_snapshots(id) ON DELETE CASCADE
+processing_chunk_relationships | processing_chunk_relationships_source_chunk_id_fkey | f | FOREIGN KEY (source_chunk_id) REFERENCES processing_chunks(id) ON DELETE CASCADE
+processing_chunk_relationships | processing_chunk_relationships_target_chunk_id_fkey | f | FOREIGN KEY (target_chunk_id) REFERENCES processing_chunks(id) ON DELETE CASCADE
+processing_chunk_sparse_embeddings | processing_chunk_sparse_embeddings_chunk_id_fkey | f | FOREIGN KEY (chunk_id) REFERENCES processing_chunks(id) ON DELETE CASCADE
+processing_chunk_sparse_embeddings | processing_chunk_sparse_embeddings_chunk_id_key | u | UNIQUE (chunk_id)
+processing_chunk_sparse_embeddings | processing_chunk_sparse_embeddings_pkey | p | PRIMARY KEY (id)
+processing_chunks | processing_chunks_pkey | p | PRIMARY KEY (id)
+processing_chunks | processing_chunks_snapshot_id_chunk_index_key | u | UNIQUE (snapshot_id, chunk_index)
+processing_chunks | processing_chunks_snapshot_id_fkey | f | FOREIGN KEY (snapshot_id) REFERENCES processing_snapshots(id) ON DELETE CASCADE
+processing_entities | processing_entities_alias_of_fkey | f | FOREIGN KEY (alias_of) REFERENCES processing_entities(id) ON DELETE SET NULL
+processing_entities | processing_entities_pkey | p | PRIMARY KEY (id)
+processing_entities | processing_entities_snapshot_id_fkey | f | FOREIGN KEY (snapshot_id) REFERENCES processing_snapshots(id) ON DELETE CASCADE
+processing_entities | processing_entities_snapshot_id_ref_key | u | UNIQUE (snapshot_id, ref)
+processing_entity_mentions | processing_entity_mentions_chunk_id_fkey | f | FOREIGN KEY (chunk_id) REFERENCES processing_chunks(id) ON DELETE CASCADE
+processing_entity_mentions | processing_entity_mentions_entity_id_chunk_id_start_char_en_key | u | UNIQUE (entity_id, chunk_id, start_char, end_char)
+processing_entity_mentions | processing_entity_mentions_entity_id_fkey | f | FOREIGN KEY (entity_id) REFERENCES processing_entities(id) ON DELETE CASCADE
+processing_entity_mentions | processing_entity_mentions_pkey | p | PRIMARY KEY (id)
+processing_entity_relationships | processing_entity_relationships_pkey | p | PRIMARY KEY (id)
+processing_entity_relationships | processing_entity_relationships_snapshot_id_fkey | f | FOREIGN KEY (snapshot_id) REFERENCES processing_snapshots(id) ON DELETE CASCADE
+processing_entity_relationships | processing_entity_relationships_source_entity_id_fkey | f | FOREIGN KEY (source_entity_id) REFERENCES processing_entities(id) ON DELETE CASCADE
+processing_entity_relationships | processing_entity_relationships_target_entity_id_fkey | f | FOREIGN KEY (target_entity_id) REFERENCES processing_entities(id) ON DELETE CASCADE
+processing_snapshots | processing_snapshots_attachment_id_fkey | f | FOREIGN KEY (attachment_id) REFERENCES zotero_attachments(id) ON DELETE CASCADE
+processing_snapshots | processing_snapshots_document_id_fkey | f | FOREIGN KEY (document_id) REFERENCES zotero_documents(id) ON DELETE CASCADE
+processing_snapshots | processing_snapshots_pkey | p | PRIMARY KEY (id)
+repair_cases | repair_cases_attachment_id_fkey | f | FOREIGN KEY (attachment_id) REFERENCES zotero_attachments(id)
+repair_cases | repair_cases_document_id_fkey | f | FOREIGN KEY (document_id) REFERENCES zotero_documents(id)
+repair_cases | repair_cases_pkey | p | PRIMARY KEY (id)
+schema_migrations | schema_migrations_pkey | p | PRIMARY KEY (version)
+zotero_attachments | fk_zotero_attachments_canonical_item | f | FOREIGN KEY (canonical_item_id) REFERENCES zotero_items(id) ON DELETE CASCADE
+zotero_attachments | zotero_attachments_document_id_fkey | f | FOREIGN KEY (document_id) REFERENCES zotero_documents(id) ON DELETE CASCADE
+zotero_attachments | zotero_attachments_pkey | p | PRIMARY KEY (id)
+zotero_attachments | zotero_attachments_source_id_fkey | f | FOREIGN KEY (source_id) REFERENCES zotero_sources(id) ON DELETE CASCADE
+zotero_attachments | zotero_attachments_source_id_zotero_key_key | u | UNIQUE (source_id, zotero_key)
+zotero_collection_selections | zotero_collection_selections_mode_check | c | CHECK ((mode = ANY (ARRAY['included'::text, 'excluded'::text])))
+zotero_collection_selections | zotero_collection_selections_pkey | p | PRIMARY KEY (collection_key)
+zotero_collections | zotero_collections_pkey | p | PRIMARY KEY (id)
+zotero_collections | zotero_collections_source_id_fkey | f | FOREIGN KEY (source_id) REFERENCES zotero_sources(id) ON DELETE CASCADE
+zotero_collections | zotero_collections_source_id_zotero_key_key | u | UNIQUE (source_id, zotero_key)
+zotero_documents | fk_zotero_documents_canonical_item | f | FOREIGN KEY (canonical_item_id) REFERENCES zotero_items(id) ON DELETE CASCADE
+zotero_documents | zotero_documents_citation_class_chk | c | CHECK ((citation_class = ANY (ARRAY['citable'::text, 'contextual'::text])))
+zotero_documents | zotero_documents_pkey | p | PRIMARY KEY (id)
+zotero_documents | zotero_documents_source_id_fkey | f | FOREIGN KEY (source_id) REFERENCES zotero_sources(id) ON DELETE CASCADE
+zotero_documents | zotero_documents_source_id_zotero_key_key | u | UNIQUE (source_id, zotero_key)
+zotero_item_collections | fk_item_collections_collection | f | FOREIGN KEY (collection_id) REFERENCES zotero_collections(id) ON DELETE CASCADE
+zotero_item_collections | zotero_item_collections_collection_id_fkey | f | FOREIGN KEY (collection_id) REFERENCES zotero_collections(id) ON DELETE CASCADE
+zotero_item_collections | zotero_item_collections_item_id_fkey | f | FOREIGN KEY (item_id) REFERENCES zotero_items(id) ON DELETE CASCADE
+zotero_item_collections | zotero_item_collections_pkey | p | PRIMARY KEY (item_id, collection_id)
+zotero_items | zotero_items_pkey | p | PRIMARY KEY (id)
+zotero_items | zotero_items_source_id_fkey | f | FOREIGN KEY (source_id) REFERENCES zotero_sources(id) ON DELETE CASCADE
+zotero_items | zotero_items_source_id_zotero_key_key | u | UNIQUE (source_id, zotero_key)
+zotero_selections | zotero_selections_document_id_fkey | f | FOREIGN KEY (document_id) REFERENCES zotero_documents(id) ON DELETE CASCADE
+zotero_selections | zotero_selections_mode_check | c | CHECK ((mode = ANY (ARRAY['included'::text, 'excluded'::text])))
+zotero_selections | zotero_selections_pkey | p | PRIMARY KEY (document_id)
+zotero_sources | zotero_sources_base_url_library_id_key | u | UNIQUE (base_url, library_id)
+zotero_sources | zotero_sources_pkey | p | PRIMARY KEY (id)
+zotero_write_audit | zotero_write_audit_attachment_id_fkey | f | FOREIGN KEY (attachment_id) REFERENCES zotero_attachments(id)
+zotero_write_audit | zotero_write_audit_case_id_fkey | f | FOREIGN KEY (case_id) REFERENCES repair_cases(id)
+zotero_write_audit | zotero_write_audit_pkey | p | PRIMARY KEY (id)
+## indexes (73)
+ingest_jobs | ingest_jobs_claim_expired_idx | CREATE INDEX ingest_jobs_claim_expired_idx ON public.ingest_jobs USING btree (lease_until) WHERE (status = ANY (ARRAY['claimed'::ingest_job_status, 'processing'::ingest_job_status]))
+ingest_jobs | ingest_jobs_claim_pending_idx | CREATE INDEX ingest_jobs_claim_pending_idx ON public.ingest_jobs USING btree (next_attempt_at, enqueued_at) WHERE (status = 'pending'::ingest_job_status)
+ingest_jobs | ingest_jobs_failed_unresolved_idx | CREATE INDEX ingest_jobs_failed_unresolved_idx ON public.ingest_jobs USING btree (attachment_id, error_code) WHERE ((status = 'failed'::ingest_job_status) AND (resolved_at IS NULL))
+ingest_jobs | ingest_jobs_idempotency_idx | CREATE UNIQUE INDEX ingest_jobs_idempotency_idx ON public.ingest_jobs USING btree (attachment_id, content_hash) WHERE (force_rebuild = false)
+ingest_jobs | ingest_jobs_pkey | CREATE UNIQUE INDEX ingest_jobs_pkey ON public.ingest_jobs USING btree (id)
+ingest_jobs | ingest_jobs_status_idx | CREATE INDEX ingest_jobs_status_idx ON public.ingest_jobs USING btree (status, enqueued_at)
+kg_entity_roots | kg_entity_roots_mentions_idx | CREATE INDEX kg_entity_roots_mentions_idx ON public.kg_entity_roots USING btree (mention_count DESC, root_entity_id)
+kg_entity_roots | kg_entity_roots_norm_idx | CREATE INDEX kg_entity_roots_norm_idx ON public.kg_entity_roots USING btree (normalized_form)
+kg_entity_roots | kg_entity_roots_norm_nofam_idx | CREATE INDEX kg_entity_roots_norm_nofam_idx ON public.kg_entity_roots USING btree (normalized_form_nofam)
+kg_entity_roots | kg_entity_roots_pkey | CREATE UNIQUE INDEX kg_entity_roots_pkey ON public.kg_entity_roots USING btree (root_entity_id)
+kg_relation_evidence_docs | kg_relation_evidence_docs_doc_idx | CREATE INDEX kg_relation_evidence_docs_doc_idx ON public.kg_relation_evidence_docs USING btree (document_id, triple_id)
+kg_relation_evidence_docs | kg_relation_evidence_docs_pkey | CREATE UNIQUE INDEX kg_relation_evidence_docs_pkey ON public.kg_relation_evidence_docs USING btree (triple_id, document_id)
+kg_relation_triples | kg_relation_triples_pkey | CREATE UNIQUE INDEX kg_relation_triples_pkey ON public.kg_relation_triples USING btree (id)
+kg_relation_triples | kg_relation_triples_rank_idx | CREATE INDEX kg_relation_triples_rank_idx ON public.kg_relation_triples USING btree (corroborating_documents DESC, confidence DESC)
+kg_relation_triples | kg_relation_triples_source_idx | CREATE INDEX kg_relation_triples_source_idx ON public.kg_relation_triples USING btree (source_root_id, corroborating_documents DESC, confidence DESC)
+kg_relation_triples | kg_relation_triples_source_root_id_target_root_id_type_key | CREATE UNIQUE INDEX kg_relation_triples_source_root_id_target_root_id_type_key ON public.kg_relation_triples USING btree (source_root_id, target_root_id, type)
+kg_relation_triples | kg_relation_triples_target_idx | CREATE INDEX kg_relation_triples_target_idx ON public.kg_relation_triples USING btree (target_root_id, corroborating_documents DESC, confidence DESC)
+kg_relation_triples | kg_relation_triples_type_rank_idx | CREATE INDEX kg_relation_triples_type_rank_idx ON public.kg_relation_triples USING btree (type, corroborating_documents DESC, confidence DESC)
+kg_superseded_entities | kg_superseded_entities_form_idx | CREATE INDEX kg_superseded_entities_form_idx ON public.kg_superseded_entities USING btree (COALESCE(loser_canonical_form, loser_text))
+kg_superseded_entities | kg_superseded_entities_loser_idx | CREATE INDEX kg_superseded_entities_loser_idx ON public.kg_superseded_entities USING btree (loser_entity_id)
+kg_superseded_entities | kg_superseded_entities_pkey | CREATE UNIQUE INDEX kg_superseded_entities_pkey ON public.kg_superseded_entities USING btree (id)
+kg_superseded_entities | kg_superseded_entities_survivor_idx | CREATE INDEX kg_superseded_entities_survivor_idx ON public.kg_superseded_entities USING btree (survivor_entity_id, archived_at)
+kg_superseded_entities | kg_superseded_entities_survivor_loser_uq | CREATE UNIQUE INDEX kg_superseded_entities_survivor_loser_uq ON public.kg_superseded_entities USING btree (survivor_entity_id, loser_entity_id, operation)
+opensearch_outbox | opensearch_outbox_drain_idx | CREATE INDEX opensearch_outbox_drain_idx ON public.opensearch_outbox USING btree (status, next_attempt_at) WHERE (status = 'pending'::text)
+opensearch_outbox | opensearch_outbox_pkey | CREATE UNIQUE INDEX opensearch_outbox_pkey ON public.opensearch_outbox USING btree (id)
+processing_artifacts | processing_artifacts_pkey | CREATE UNIQUE INDEX processing_artifacts_pkey ON public.processing_artifacts USING btree (id)
+processing_artifacts | processing_artifacts_snapshot_id_ref_key | CREATE UNIQUE INDEX processing_artifacts_snapshot_id_ref_key ON public.processing_artifacts USING btree (snapshot_id, ref)
+processing_artifacts | processing_artifacts_snapshot_idx | CREATE INDEX processing_artifacts_snapshot_idx ON public.processing_artifacts USING btree (snapshot_id)
+processing_chunk_dense_embeddings | processing_chunk_dense_embeddings_chunk_id_key | CREATE UNIQUE INDEX processing_chunk_dense_embeddings_chunk_id_key ON public.processing_chunk_dense_embeddings USING btree (chunk_id)
+processing_chunk_dense_embeddings | processing_chunk_dense_embeddings_pkey | CREATE UNIQUE INDEX processing_chunk_dense_embeddings_pkey ON public.processing_chunk_dense_embeddings USING btree (id)
+processing_chunk_relationships | processing_chunk_relationships_pkey | CREATE UNIQUE INDEX processing_chunk_relationships_pkey ON public.processing_chunk_relationships USING btree (id)
+processing_chunk_relationships | processing_chunk_relationships_snapshot_idx | CREATE INDEX processing_chunk_relationships_snapshot_idx ON public.processing_chunk_relationships USING btree (snapshot_id)
+processing_chunk_sparse_embeddings | processing_chunk_sparse_embeddings_chunk_id_key | CREATE UNIQUE INDEX processing_chunk_sparse_embeddings_chunk_id_key ON public.processing_chunk_sparse_embeddings USING btree (chunk_id)
+processing_chunk_sparse_embeddings | processing_chunk_sparse_embeddings_pkey | CREATE UNIQUE INDEX processing_chunk_sparse_embeddings_pkey ON public.processing_chunk_sparse_embeddings USING btree (id)
+processing_chunks | processing_chunks_pkey | CREATE UNIQUE INDEX processing_chunks_pkey ON public.processing_chunks USING btree (id)
+processing_chunks | processing_chunks_snapshot_id_chunk_index_key | CREATE UNIQUE INDEX processing_chunks_snapshot_id_chunk_index_key ON public.processing_chunks USING btree (snapshot_id, chunk_index)
+processing_chunks | processing_chunks_snapshot_idx | CREATE INDEX processing_chunks_snapshot_idx ON public.processing_chunks USING btree (snapshot_id, chunk_index)
+processing_entities | processing_entities_alias_of_idx | CREATE INDEX processing_entities_alias_of_idx ON public.processing_entities USING btree (alias_of) WHERE (alias_of IS NOT NULL)
+processing_entities | processing_entities_pkey | CREATE UNIQUE INDEX processing_entities_pkey ON public.processing_entities USING btree (id)
+processing_entities | processing_entities_snapshot_id_ref_key | CREATE UNIQUE INDEX processing_entities_snapshot_id_ref_key ON public.processing_entities USING btree (snapshot_id, ref)
+processing_entity_mentions | processing_entity_mentions_chunk_idx | CREATE INDEX processing_entity_mentions_chunk_idx ON public.processing_entity_mentions USING btree (chunk_id)
+processing_entity_mentions | processing_entity_mentions_entity_id_chunk_id_start_char_en_key | CREATE UNIQUE INDEX processing_entity_mentions_entity_id_chunk_id_start_char_en_key ON public.processing_entity_mentions USING btree (entity_id, chunk_id, start_char, end_char)
+processing_entity_mentions | processing_entity_mentions_pkey | CREATE UNIQUE INDEX processing_entity_mentions_pkey ON public.processing_entity_mentions USING btree (id)
+processing_entity_relationships | processing_entity_relationships_pkey | CREATE UNIQUE INDEX processing_entity_relationships_pkey ON public.processing_entity_relationships USING btree (id)
+processing_entity_relationships | processing_entity_relationships_snapshot_idx | CREATE INDEX processing_entity_relationships_snapshot_idx ON public.processing_entity_relationships USING btree (snapshot_id)
+processing_snapshots | processing_snapshots_active_scope_uq | CREATE UNIQUE INDEX processing_snapshots_active_scope_uq ON public.processing_snapshots USING btree (document_id, attachment_id, profile_hash) WHERE (active = true)
+processing_snapshots | processing_snapshots_identity_uq | CREATE UNIQUE INDEX processing_snapshots_identity_uq ON public.processing_snapshots USING btree (attachment_id, content_hash, processor_name, processor_version, profile_hash)
+processing_snapshots | processing_snapshots_one_active_per_attachment_uq | CREATE UNIQUE INDEX processing_snapshots_one_active_per_attachment_uq ON public.processing_snapshots USING btree (attachment_id) WHERE (active = true)
+processing_snapshots | processing_snapshots_one_active_per_document_uq | CREATE UNIQUE INDEX processing_snapshots_one_active_per_document_uq ON public.processing_snapshots USING btree (document_id) WHERE (active = true)
+processing_snapshots | processing_snapshots_pkey | CREATE UNIQUE INDEX processing_snapshots_pkey ON public.processing_snapshots USING btree (id)
+processing_snapshots | processing_snapshots_scope_idx | CREATE INDEX processing_snapshots_scope_idx ON public.processing_snapshots USING btree (document_id, attachment_id, profile_hash, active)
+repair_cases | repair_cases_one_open_per_attachment | CREATE UNIQUE INDEX repair_cases_one_open_per_attachment ON public.repair_cases USING btree (attachment_id) WHERE (status = ANY (ARRAY['rejected'::repair_status, 'queued'::repair_status, 'in_repair'::repair_status]))
+repair_cases | repair_cases_pkey | CREATE UNIQUE INDEX repair_cases_pkey ON public.repair_cases USING btree (id)
+repair_cases | repair_cases_status_idx | CREATE INDEX repair_cases_status_idx ON public.repair_cases USING btree (status, created_at)
+schema_migrations | schema_migrations_pkey | CREATE UNIQUE INDEX schema_migrations_pkey ON public.schema_migrations USING btree (version)
+zotero_attachments | zotero_attachments_key_idx | CREATE INDEX zotero_attachments_key_idx ON public.zotero_attachments USING btree (source_id, zotero_key)
+zotero_attachments | zotero_attachments_pkey | CREATE UNIQUE INDEX zotero_attachments_pkey ON public.zotero_attachments USING btree (id)
+zotero_attachments | zotero_attachments_source_id_zotero_key_key | CREATE UNIQUE INDEX zotero_attachments_source_id_zotero_key_key ON public.zotero_attachments USING btree (source_id, zotero_key)
+zotero_collection_selections | zotero_collection_selections_pkey | CREATE UNIQUE INDEX zotero_collection_selections_pkey ON public.zotero_collection_selections USING btree (collection_key)
+zotero_collections | zotero_collections_parent_idx | CREATE INDEX zotero_collections_parent_idx ON public.zotero_collections USING btree (source_id, parent_key)
+zotero_collections | zotero_collections_pkey | CREATE UNIQUE INDEX zotero_collections_pkey ON public.zotero_collections USING btree (id)
+zotero_collections | zotero_collections_source_id_zotero_key_key | CREATE UNIQUE INDEX zotero_collections_source_id_zotero_key_key ON public.zotero_collections USING btree (source_id, zotero_key)
+zotero_documents | zotero_documents_pkey | CREATE UNIQUE INDEX zotero_documents_pkey ON public.zotero_documents USING btree (id)
+zotero_documents | zotero_documents_source_id_zotero_key_key | CREATE UNIQUE INDEX zotero_documents_source_id_zotero_key_key ON public.zotero_documents USING btree (source_id, zotero_key)
+zotero_item_collections | zotero_item_collections_pkey | CREATE UNIQUE INDEX zotero_item_collections_pkey ON public.zotero_item_collections USING btree (item_id, collection_id)
+zotero_items | zotero_items_itemtype_idx | CREATE INDEX zotero_items_itemtype_idx ON public.zotero_items USING btree (source_id, item_type)
+zotero_items | zotero_items_parent_idx | CREATE INDEX zotero_items_parent_idx ON public.zotero_items USING btree (source_id, parent_key)
+zotero_items | zotero_items_pkey | CREATE UNIQUE INDEX zotero_items_pkey ON public.zotero_items USING btree (id)
+zotero_items | zotero_items_source_id_zotero_key_key | CREATE UNIQUE INDEX zotero_items_source_id_zotero_key_key ON public.zotero_items USING btree (source_id, zotero_key)
+zotero_selections | zotero_selections_pkey | CREATE UNIQUE INDEX zotero_selections_pkey ON public.zotero_selections USING btree (document_id)
+zotero_sources | zotero_sources_base_url_library_id_key | CREATE UNIQUE INDEX zotero_sources_base_url_library_id_key ON public.zotero_sources USING btree (base_url, library_id)
+zotero_sources | zotero_sources_pkey | CREATE UNIQUE INDEX zotero_sources_pkey ON public.zotero_sources USING btree (id)
+zotero_write_audit | zotero_write_audit_pkey | CREATE UNIQUE INDEX zotero_write_audit_pkey ON public.zotero_write_audit USING btree (id)
+## triggers (0)

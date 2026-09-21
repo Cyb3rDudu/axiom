@@ -1,0 +1,8 @@
+{
+  "canonical_form": "string",
+  "forms": "[]string",
+  "id": "string",
+  "mentions": "number",
+  "text": "string",
+  "type": "string"
+}

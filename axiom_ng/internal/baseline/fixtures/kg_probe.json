@@ -1,0 +1,10 @@
+{
+  "entity_query": "Personalmanagement",
+  "expect": {
+    "top_canonical_form": "personal-management",
+    "top_type": "CONCEPT",
+    "min_mentions": 40,
+    "neighbors_min": 10,
+    "relations_min": 1
+  }
+}

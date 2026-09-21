@@ -4,6 +4,12 @@
 #   RAG    : go-built from the working tree,   127.0.0.1:8111
 #   Runner : source venv axiom_ng_runner/.venv, 127.0.0.1:8112
 #
+#   --release (#295): start RAG+Runner from the frozen v0.1.18 release
+#   assets (GitHub release, the same bits production runs) instead of
+#   working-tree builds. Required for the golden baseline suite — the
+#   baseline must witness the freeze bits, not debug builds. Dev DB,
+#   dev index, ports and all isolation boundaries stay exactly the same.
+#
 # Isolation boundaries against production (v0.1.18, :8011/:8012, axiom_db,
 # axiom-ng-chunks-v1): own DB (axiom_dev), own OpenSearch index
 # (AXIOM_OS_INDEX=axiom-dev-chunks-v1), own state dirs, own logs, no Zotero
@@ -17,8 +23,27 @@
 
 set -euo pipefail
 
+MODE=source
+[ "${1:-}" = "--release" ] && MODE=release
+[ $# -le 1 ] || { echo "usage: dev-up.sh [--release]" >&2; exit 2; }
+
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 STATE="$HOME/.local/state/axiom-dev"
+
+# --- freeze-bit identity (v0.1.18 release, #295) ---------------------------
+# The tag is v0.1.18 (commit 4704656); the DEPLOYED RAG binary inside that
+# release is the bf77410-generation asset (verified byte-identical with
+# /opt/axiom/bin/axiom-ng when present). bf77410..v0.1.18 touches no
+# axiom_ng/axiom_ng_runner runtime code (4 commits: fixer/docs/ci only),
+# so the bf77410-generation pair IS the freeze state in every observable
+# behavior. Runner: same-generation tarball; note the runner generation is
+# not hash-pinnable against prod (prod runs a local nix build — #295 debt).
+RELEASE_TAG="v0.1.18"
+RELEASE_REPO="${AXIOM_RELEASE_REPO:-Cyb3rDudu/axiom}"
+RELEASE_GEN="v0.1.17-59-gbf77410"
+RAG_ASSET="axiom-ng-$RELEASE_GEN-darwin-arm64"   # prod asset name (darwin, not uname)
+RUNNER_ASSET="axiom-runner-$RELEASE_GEN-macos-arm64.tar.zst"
+
 RAG_ENV="${AXIOM_DEV_RAG_ENV:-/run/agenix/axiom-rag.env}"
 RAG_API_ENV="${AXIOM_DEV_RAG_API_ENV:-/run/agenix/axiom-rag-api.env}"
 RUNNER_ENV="${AXIOM_DEV_RUNNER_ENV:-/run/agenix/axiom-runner.env}"
@@ -40,8 +65,16 @@ note() { echo "dev-up: $*"; }
 for f in "$RAG_ENV" "$RAG_API_ENV" "$RUNNER_ENV"; do
     [ -r "$f" ] || die "env file not readable: $f"
 done
-[ -x "$REPO/axiom_ng_runner/.venv/bin/python" ] || die "runner venv missing: $REPO/axiom_ng_runner/.venv"
 command -v jq >/dev/null || die "jq required"
+if [ "$MODE" = source ]; then
+    [ -x "$REPO/axiom_ng_runner/.venv/bin/python" ] || die "runner venv missing: $REPO/axiom_ng_runner/.venv"
+else
+    command -v gh >/dev/null || die "gh required for --release"
+    # same preflight as scripts/install_dist.sh (#211): the runner tarball is
+    # unpacked via `tar --zstd`; macOS bsdtar resolves the zstd filter from
+    # PATH (not from --help text, which does not advertise it)
+    command -v zstd >/dev/null || die "zstd required for --release (see scripts/install_dist.sh)"
+fi
 
 if [ -f "$STATE/dev.pid" ] && kill -0 "$(awk '$1=="rag"{print $2}' "$STATE/dev.pid")" 2>/dev/null; then
     die "dev environment already running ($STATE/dev.pid) — run dev-down.sh first"
@@ -51,11 +84,63 @@ for p in "$RAG_PORT" "$RUNNER_PORT"; do
 done
 
 mkdir -p "$STATE"/{logs,artifacts,runner,quarantine,bin,cache/captions}
+echo "$MODE" >"$STATE/mode"
 
-# --- build RAG from the working tree ---------------------------------------
+# --- provide the RAG binary (and, in release mode, the runner env) ---------
 
-note "building axiom-ng (debug build, working tree)…"
-(cd "$REPO/axiom_ng" && go build -o "$STATE/bin/axiom-ng-dev" ./cmd/axiom-ng)
+RAG_BIN="$STATE/bin/axiom-ng-dev"   # source mode default: working-tree build
+RUNNER_PY="$REPO/axiom_ng_runner/.venv/bin/python"
+RUNNER_PYTHONPATH="$REPO/axiom_ng_runner" # source venv needs the package on sys.path
+
+if [ "$MODE" = release ]; then
+    REL="$STATE/release"
+    mkdir -p "$REL"
+
+    fetch_asset() { # $1 = asset filename (expects <name>.sha256 sidecar too)
+        local name="$1" have=""
+        [ -f "$REL/$name" ] && have="yes"
+        if [ -z "$have" ] || ! (cd "$REL" && shasum -a 256 -c "$name.sha256" >/dev/null 2>&1); then
+            note "release: fetching $name from $RELEASE_REPO ${RELEASE_TAG}…"
+            gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" \
+                --pattern "$name" --pattern "$name.sha256" --clobber --dir "$REL"
+        fi
+        (cd "$REL" && shasum -a 256 -c "$name.sha256") || die "release asset checksum FAILED: $name"
+    }
+
+    fetch_asset "$RAG_ASSET"
+    RAG_BIN="$REL/$RAG_ASSET"
+    chmod +x "$RAG_BIN"
+    # freeze-bit proof: dev must run the SAME bytes as prod. /opt/axiom is
+    # the prod install; absence (non-prod host) downgrades to a note.
+    if [ -x /opt/axiom/bin/axiom-ng ]; then
+        cmp -s "$RAG_BIN" /opt/axiom/bin/axiom-ng \
+            || die "release RAG asset is NOT byte-identical with /opt/axiom/bin/axiom-ng — freeze bits diverged, refusing to start"
+        note "release RAG verified byte-identical with /opt/axiom/bin/axiom-ng"
+    else
+        note "release RAG verified against checksum (no /opt/axiom to compare — non-prod host?)"
+    fi
+
+    fetch_asset "$RUNNER_ASSET"
+    # unpack once per tarball content (marker = verified sha); conda-unpack
+    # is part of the one-time relocation fixup
+    RUNNER_SHA="$(awk '{print $1}' "$REL/$RUNNER_ASSET.sha256")"
+    RUNNER_REL="$REL/runner"
+    if [ "$(cat "$RUNNER_REL/.unpacked_sha" 2>/dev/null || true)" != "$RUNNER_SHA" ]; then
+        note "release: unpacking runner artifact…"
+        rm -rf "$RUNNER_REL"
+        mkdir -p "$RUNNER_REL"
+        tar --zstd -xf "$REL/$RUNNER_ASSET" -C "$RUNNER_REL" --strip-components 1
+        "$RUNNER_REL/env/bin/python" "$RUNNER_REL/env/bin/conda-unpack" \
+            || die "conda-unpack failed for the release runner env"
+        echo "$RUNNER_SHA" >"$RUNNER_REL/.unpacked_sha"
+    fi
+    RUNNER_PY="$RUNNER_REL/env/bin/python"
+    RUNNER_PYTHONPATH="" # release env is self-contained; a PYTHONPATH would
+                         # let working-tree code shadow the freeze bits
+else
+    note "building axiom-ng (debug build, working tree)…"
+    (cd "$REPO/axiom_ng" && go build -o "$RAG_BIN" ./cmd/axiom-ng)
+fi
 
 # --- bootstrap the dev OpenSearch index -------------------------------------
 # Same instance as prod; own namespace. Created from the prod index's
@@ -115,12 +200,12 @@ note "starting dev runner on :$RUNNER_PORT …"
     AXIOM_PROCESSOR_BIND_ADDR=127.0.0.1
     AXIOM_PROCESSOR_WORK_ROOT="$STATE/runner"
     AXIOM_CAPTION_CACHE_DIR="$STATE/cache/captions"
-    PYTHONPATH="$REPO/axiom_ng_runner"
+    PYTHONPATH="$RUNNER_PYTHONPATH" # empty in release mode: no working-tree leakage
     export AXIOM_PROCESSOR_PORT AXIOM_PROCESSOR_BIND_ADDR AXIOM_PROCESSOR_WORK_ROOT \
         AXIOM_CAPTION_CACHE_DIR PYTHONPATH
-    cd "$REPO/axiom_ng_runner"
+    cd "$STATE"
     exec /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-        "$REPO/axiom_ng_runner/.venv/bin/python" -m axiom_ng_runner \
+        "$RUNNER_PY" -m axiom_ng_runner \
         >>"$STATE/logs/runner.log" 2>&1
 ) &
 RUNNER_PID=$!
@@ -207,7 +292,7 @@ note "starting dev RAG on :$RAG_PORT …"
     }
 
     exec /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-        "$STATE/bin/axiom-ng-dev" \
+        "$RAG_BIN" \
         >>"$STATE/logs/rag.log" 2>&1
 ) &
 RAG_PID=$!
@@ -231,6 +316,18 @@ done
 
 printf 'rag %s\nrunner %s\n' "$RAG_PID" "$RUNNER_PID" >"$STATE/dev.pid"
 trap - EXIT # success: both services stay up, dev-down.sh owns them from here
+
+# release mode must prove the freeze bits are what serves: the build banner
+# is the observable identity of the binary (see health_version_test.go).
+if [ "$MODE" = release ]; then
+    health="$(curl -fsS "http://127.0.0.1:$RAG_PORT/api/health")"
+    echo "$health" | jq -e '.build' >/dev/null \
+        || { echo "$health" >&2; die "release mode: health has no build banner"; }
+    echo "$health" | jq -r '.build' | grep -q 'commit bf77410, release build' \
+        || die "release mode: health build is NOT the freeze banner (got: $(echo "$health" | jq -r .build))"
+    note "release freeze bits confirmed: $(echo "$health" | jq -r .build)"
+fi
+
 
 note "dev environment up:"
 note "  RAG     :$RAG_PORT  (pid $RAG_PID,  log $STATE/logs/rag.log)"

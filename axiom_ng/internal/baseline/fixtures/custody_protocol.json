@@ -1,0 +1,11 @@
+{
+  "filename": "Unbekannt - - Golden Baseline Custody Probe — dev fixture.pdf",
+  "new_attachment_key": "FAKENEWATT1",
+  "record_status": "healed",
+  "steps": [
+    "quarantine",
+    "delete_attachment",
+    "create_attachment",
+    "healed"
+  ]
+}

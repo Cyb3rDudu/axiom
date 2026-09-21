@@ -10,6 +10,45 @@ defaults:
     working-directory: axiom_ng
 
 jobs:
+  # --- #295: frozen v0.1.18 compatibility baseline -----------------------
+  # The environment-independent half of the golden gate: router-derived
+  # API inventory (red on any route surface change), comparator mutation
+  # probes, and the schema fingerprint — regenerated from a FRESH
+  # db.Migrate of the current migration files on a pgvector service pinned
+  # to the freeze extension version (0.8.6 is part of the fingerprint). A
+  # red job means the PR changed the frozen surface/schema and must
+  # deliberately update internal/baseline/fixtures in the same PR.
+  # The live half (health/search/ingest/repair against the release bits)
+  # runs on the dev host via `make golden-baseline`.
+  golden-baseline:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg17
+        env:
+          POSTGRES_USER: axiom_user
+          POSTGRES_PASSWORD: axiom_password
+          POSTGRES_DB: axiom_ng_ci_baseline
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U axiom_user"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AXIOM_BASELINE_DSN:
+        "postgresql://axiom_user:axiom_password@localhost:5432/axiom_ng_ci_baseline?sslmode=\
+        disable"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: axiom_ng/go.mod
+      - name: baseline suite (inventory + fingerprint + probes)
+        working-directory: axiom_ng
+        run: go test ./internal/baseline -count=1 -v
+
   go-lint:
     runs-on: ubuntu-latest
     steps:

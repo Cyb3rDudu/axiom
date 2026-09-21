@@ -1,0 +1,10 @@
+{
+  "chunk_id": "14d31042-1adc-4d06-a622-b8d56067ef59",
+  "expect": {
+    "document_id_set": true,
+    "locator_kind": "epub_cfi",
+    "locator_fields": ["label", "chapter", "cfi", "section_title"],
+    "has_text": true,
+    "has_source": true
+  }
+}

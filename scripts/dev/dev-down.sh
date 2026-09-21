@@ -60,6 +60,11 @@ pgrep -f "$STATE/bin/axiom-ng-dev" >/dev/null 2>&1 && {
     echo "dev-down: WARNING dev RAG process still alive" >&2
     left=1
 }
+# release mode (#295): freeze-bit binaries live under $STATE/release instead
+pgrep -f "$STATE/release" >/dev/null 2>&1 && {
+    echo "dev-down: WARNING release-mode dev process still alive" >&2
+    left=1
+}
 pgrep -f "$REPO/axiom_ng_runner/.venv" >/dev/null 2>&1 && {
     echo "dev-down: WARNING dev runner process still alive" >&2
     left=1

@@ -1,0 +1,38 @@
+{
+  "Einstiegsvorlesung Künstliche Intelligenz Machine Learning Transkript": [
+    "contextual+KIIN_VL",
+    "contextual+KIIN_VL",
+    "contextual+KIIN_VL",
+    "contextual+KIIN_VL",
+    "contextual+KIIN_VL",
+    "contextual+KIIN_VL",
+    "contextual+KIIN_VL",
+    "contextual+KIIN_VL",
+    "",
+    ""
+  ],
+  "Personalmanagement": [
+    "contextual+PER_VL",
+    "neutral+secondary source",
+    "contextual+PER_VL",
+    "contextual+PER_VL",
+    "contextual+PER_VL",
+    "neutral+secondary source",
+    "contextual+ORG_VL",
+    "neutral+secondary source",
+    "neutral+secondary source",
+    "neutral+secondary source"
+  ],
+  "Wesen und Ziele des Finanzmanagements Kapitalbeschaffung": [
+    "contextual+FIN_VL",
+    "contextual+FIN_VL",
+    "neutral+secondary source",
+    "neutral+secondary source",
+    "neutral+secondary source",
+    "neutral+secondary source",
+    "contextual+FIN_VL",
+    "neutral+secondary source",
+    "neutral+ORG_HA+secondary source",
+    "neutral+secondary source"
+  ]
+}

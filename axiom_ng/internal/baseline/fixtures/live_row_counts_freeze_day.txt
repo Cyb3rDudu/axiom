@@ -1,0 +1,27 @@
+# axiom_dev row counts on freeze day (2026-09-21, tag v0.1.18 / 4704656)
+# NON-GATING live inventory — dev may drift; deltas get documented in #295.
+kg_entity_roots                            142175
+kg_relation_evidence_docs                  78367
+kg_relation_triples                        75262
+kg_superseded_entities                     48025
+opensearch_outbox                          747
+processing_artifacts                       16597
+processing_chunk_dense_embeddings          57910
+processing_chunk_relationships             0
+processing_chunk_sparse_embeddings         57910
+processing_chunks                          57912
+processing_entities                        148484
+processing_entity_mentions                 448826
+processing_entity_relationships            78992
+processing_snapshots                       362
+repair_cases                               48
+schema_migrations                          23
+zotero_attachments                         442
+zotero_collection_selections               0
+zotero_collections                         57
+zotero_documents                           369
+zotero_item_collections                    569
+zotero_items                               980
+zotero_selections                          1
+zotero_sources                             12
+zotero_write_audit                         112

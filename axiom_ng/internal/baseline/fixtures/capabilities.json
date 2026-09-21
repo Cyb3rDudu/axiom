@@ -1,0 +1,54 @@
+{
+  "contract_versions": [
+    "1.0"
+  ],
+  "features": {
+    "dense_embeddings": true,
+    "entities": true,
+    "entity_relationships": true,
+    "image_captions": true,
+    "images": false,
+    "markdown": true,
+    "page_locators": true,
+    "pdf_preflight": true,
+    "query_embedding": true,
+    "reranking": true,
+    "section_hierarchy": true,
+    "sparse_embeddings": true
+  },
+  "formats": [
+    "application/pdf",
+    "application/epub+zip"
+  ],
+  "limits": {
+    "max_concurrent_jobs": 1,
+    "max_query_texts": 16,
+    "max_source_bytes": 2147483648,
+    "rerank_max_texts": 64
+  },
+  "models": {
+    "dense_embedding": {
+      "dimensions": 1024,
+      "name": "BAAI/bge-m3"
+    },
+    "entity_extraction": {
+      "name": "reference-gliner"
+    },
+    "query_embedding": {
+      "dimensions": 1024,
+      "name": "BAAI/bge-m3"
+    },
+    "relationship_extraction": {
+      "name": "reference-mrebel"
+    },
+    "reranking": {
+      "name": "BAAI/bge-reranker-v2-m3"
+    }
+  },
+  "models_warmed": true,
+  "processor": {
+    "name": "axiom-python-marker",
+    "version": "0.1.0"
+  },
+  "warmup_enabled": true
+}

@@ -1,0 +1,9 @@
+{
+  "document_id": "56b92190-7705-4da9-8f29-b82a6401e615",
+  "expect": {
+    "chunks": 3,
+    "tags_contain": ["contextual", "KIIN_VL"],
+    "citation_class": "contextual",
+    "poll_timeout_sec": 600
+  }
+}

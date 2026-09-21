@@ -1,0 +1,63 @@
+{
+  "queries": [
+    {
+      "query": "Personalmanagement",
+      "rules": [
+        {
+          "kind": "tag_top",
+          "tag": "PER_VL",
+          "max_rank": 1
+        },
+        {
+          "kind": "title_top",
+          "title_prefix": "Personalmanagement: Grundlagen",
+          "max_rank": 3
+        },
+        {
+          "kind": "min_class_top",
+          "tag": "contextual",
+          "top": 5,
+          "min": 3
+        }
+      ]
+    },
+    {
+      "query": "Wesen und Ziele des Finanzmanagements Kapitalbeschaffung",
+      "rules": [
+        {
+          "kind": "tag_top",
+          "tag": "FIN_VL",
+          "max_rank": 2
+        },
+        {
+          "kind": "min_class_top",
+          "tag": "FIN_VL",
+          "top": 5,
+          "min": 2
+        },
+        {
+          "kind": "min_class_top",
+          "tag": "contextual",
+          "top": 2,
+          "min": 2
+        }
+      ]
+    },
+    {
+      "query": "Einstiegsvorlesung Künstliche Intelligenz Machine Learning Transkript",
+      "rules": [
+        {
+          "kind": "tag_top",
+          "tag": "KIIN_VL",
+          "max_rank": 1
+        },
+        {
+          "kind": "min_class_top",
+          "tag": "KIIN_VL",
+          "top": 3,
+          "min": 3
+        }
+      ]
+    }
+  ]
+}

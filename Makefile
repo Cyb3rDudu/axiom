@@ -14,7 +14,7 @@ LDFLAGS := -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.Version=$(VER
 
 GO_SOURCES := $(wildcard axiom_ng/cmd/axiom-ng/*.go) $(wildcard axiom_ng/internal/*/*.go) $(wildcard axiom_ng/internal/db/schema/*.sql) axiom_ng/go.mod axiom_ng/go.sum
 
-.PHONY: all build rag runner fixer clean install test checksums
+.PHONY: all build rag runner fixer clean install test checksums golden-baseline
 
 all build: rag ## G1: only rag; runner/fixer land in G2
 
@@ -47,3 +47,8 @@ test: ## All suites: fix-convention, Go (vet+test), runner, fixer isolation+
 	cd axiom_ng_runner && .venv/bin/python -m pytest -q
 	@[ -x axiom_ng/tools/pdf_repair_agent/.venv/bin/python ] || { echo "fixer: venv missing — bootstrap first (axiom_ng/tools/pdf_repair_agent: ./bootstrap.sh)"; exit 1; }
 	cd axiom_ng/tools/pdf_repair_agent && .venv/bin/python -m pytest -q
+
+# --- 0.1.18 frozen compatibility baseline (#295) --------------------------
+
+golden-baseline: ## Freeze-bit golden suite: needs the dev env in --release mode
+	@bash scripts/dev/golden_baseline.sh
