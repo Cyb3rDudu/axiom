@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func ragBase() string {
@@ -101,6 +103,18 @@ func assertFreezeBits(t *testing.T) {
 	}
 }
 
+// requireReleaseMode fails unless the dev env state dir records release
+// mode — golden probes must witness the freeze bits, never working-tree
+// builds. The RAG-side guard is assertFreezeBits (build banner); this is
+// the env-side guard (mode file), needed where the probe talks to the
+// runner or spawns a second RAG instance.
+func requireReleaseMode(t *testing.T) {
+	t.Helper()
+	if strings.TrimSpace(string(mustReadFile(t, filepath.Join(stateDir(), "mode")))) != "release" {
+		t.Fatalf("dev env mode file is not 'release' — run scripts/dev/dev-up.sh --release first")
+	}
+}
+
 // TestLiveGoldenHealth — /api/health snapshot (Ziel 2): every check name
 // and value, the build banner, the contextual state. Canonicalized (the
 // checks map iterates randomly at the source) so two runs are
@@ -108,6 +122,23 @@ func assertFreezeBits(t *testing.T) {
 func TestLiveGoldenHealth(t *testing.T) {
 	liveEnabled(t)
 	assertFreezeBits(t) // also proves the banner, the hard freeze-bits guard
+
+	// quiescence gate: right after dev-up the boot contextual sync may
+	// still be settling — snapshotting a transiently degraded health would
+	// false-red the gate. Wait (bounded) for the steady state instead.
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		var probe struct {
+			Contextual string `json:"contextual"`
+		}
+		if code := httpJSON(t, "GET", ragBase()+"/api/health", nil, &probe); code == 200 && probe.Contextual == "active" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("dev RAG health never reached contextual=active within 60s — env still settling or genuinely degraded")
+		}
+		time.Sleep(2 * time.Second)
+	}
 
 	var health map[string]any
 	if code := httpJSON(t, "GET", ragBase()+"/api/health", nil, &health); code != 200 {
@@ -122,6 +153,7 @@ func TestLiveGoldenHealth(t *testing.T) {
 // answer — guaranteed by dev-up --release + the warm check below.
 func TestLiveGoldenCapabilities(t *testing.T) {
 	liveEnabled(t)
+	requireReleaseMode(t) // the release runner env must answer, not the source venv
 
 	var warm struct {
 		Status       string `json:"status"`

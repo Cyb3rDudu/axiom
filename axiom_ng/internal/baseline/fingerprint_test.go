@@ -43,14 +43,15 @@ func fingerprintDSN() string {
 
 // withScratchDB rewrites the DSN to <db>_baseline_scratch, recreates that
 // database empty (drops a leftover first), and runs fn against it.
+// ponytail: the FIXED scratch name fails loudly on concurrent suite runs
+// (DROP+CREATE under a running migrate errors out instead of silently
+// cross-talking) — accepted ceiling: single-operator dev host and CI.
 func withScratchDB(ctx context.Context, t *testing.T, dsn string, fn func(dsn string)) {
 	t.Helper()
 	u, err := url.Parse(dsn)
 	if err != nil || u.Scheme == "" || u.Path == "" {
 		t.Fatalf("cannot rewrite non-URL DSN (need postgres://…/dbname form): %v", err)
 	}
-	orig := strings.TrimPrefix(u.Path, "/")
-	_ = orig // (diagnostics only; the scratch DB is cluster-local)
 
 	admin, err := db.Open(ctx, dsn)
 	if err != nil {
@@ -76,11 +77,17 @@ func withScratchDB(ctx context.Context, t *testing.T, dsn string, fn func(dsn st
 
 	u.Path = "/" + scratchDBName
 	defer func() {
-		cleanup, _ := db.Open(ctx, dsn)
-		if cleanup != nil {
-			_, _ = cleanup.Pool().Exec(ctx, fmt.Sprintf(
+		// cleanup on its own context: a timeout-expired request ctx would
+		// leave the scratch DB behind (poisoning the next run) — dropping
+		// must work even then. (Same non-bindable DDL pattern as above:
+		// interpolates ONLY the package-const scratchDBName — no request data.)
+		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cleanup, err := db.Open(cctx, dsn)
+		if err == nil {
+			_, _ = cleanup.Pool().Exec(cctx, fmt.Sprintf(
 				"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='%s' AND pid<>pg_backend_pid()", scratchDBName))
-			_, _ = cleanup.Pool().Exec(ctx, "DROP DATABASE IF EXISTS "+scratchDBName)
+			_, _ = cleanup.Pool().Exec(cctx, "DROP DATABASE IF EXISTS "+scratchDBName)
 			cleanup.Close()
 		}
 	}()
@@ -194,7 +201,7 @@ func fingerprintArtifact(block, major string) string {
 			"# live axiom_db/axiom_dev delta: documented in devStructureAllowlist (baseline tests)\n"+
 			"# postgres major %s; structure only (row counts live in the separate live inventory)\n"+
 			"# sha256 structure: %s\n%s",
-		FreezeTag, FreezeCommit, FreezeGen, major, hashLines([]byte(block)), block)
+		FreezeTag, FreezeCommit, FreezeGen, major, sha256Hex([]byte(block)), block)
 }
 
 func TestSchemaFingerprintFrozen(t *testing.T) {

@@ -18,7 +18,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -130,40 +129,6 @@ func generateInventoryFrom(h http.Handler) string {
 	}
 	return b.String()
 }
-
-func writeActualOrFixture(t *testing.T, name string, content []byte, update bool) (updated bool) {
-	t.Helper()
-	if actualDir != "" {
-		if err := os.MkdirAll(actualDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(actualDir, name), content, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if update {
-		if err := os.MkdirAll("fixtures", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join("fixtures", name), content, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("fixture UPDATED: fixtures/%s", name)
-		return true
-	}
-	return false
-}
-
-func readFixture(t *testing.T, name string) []byte {
-	t.Helper()
-	want, err := os.ReadFile(filepath.Join("fixtures", name))
-	if err != nil {
-		t.Fatalf("fixture %s missing (BASELINE_UPDATE=1 to freeze): %v", name, err)
-	}
-	return want
-}
-
-func fixtureUpdate() bool { return os.Getenv("BASELINE_UPDATE") == "1" || *flagUpdate }
 
 func TestInventoryFrozen(t *testing.T) {
 	got := generateInventory(buildFullServer())

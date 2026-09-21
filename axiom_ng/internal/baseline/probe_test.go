@@ -9,6 +9,7 @@ package baseline
 import (
 	"encoding/json"
 	"os"
+	"sort"
 	"testing"
 )
 
@@ -17,7 +18,6 @@ import (
 type passageFixture struct {
 	ChunkID string `json:"chunk_id"`
 	Expect  struct {
-		DocumentIDSet bool     `json:"document_id_set"`
 		LocatorKind   string   `json:"locator_kind"`
 		LocatorFields []string `json:"locator_fields"`
 		HasText       bool     `json:"has_text"`
@@ -73,13 +73,36 @@ func TestLivePassageGolden(t *testing.T) {
 // value KINDS (string/number/bool/object/array/null), recursively for
 // objects. This snapshots the response CONTRACT (field surface) without
 // pinning volatile values.
+//
+// UUID-keyed map entries (data identity, e.g. the neighbors `sources`
+// map) collapse to ONE "(uuid)" representative — the sorted-first key —
+// so a changed document set cannot flip the golden red spuriously.
+// Contract keys (locator kind/label/cfi, source fields, …) stay explicit.
+//
+// ponytail: the representative is sorted-first; shape differences
+// BETWEEN data entries are not pinned (pin per-entry explicitly if a
+// 0.2.0 step needs that). Array ELEMENT fields are likewise not pinned —
+// arrays collapse to "[]<kind>" of their first element.
 func shapeOf(v any) map[string]any {
 	out := map[string]any{}
 	m, ok := v.(map[string]any)
 	if !ok {
 		return map[string]any{"(kind)": kindOf(v)}
 	}
+	var uuidKeys []string
+	for k := range m {
+		if isUUIDKey(k) {
+			uuidKeys = append(uuidKeys, k)
+		}
+	}
+	if len(uuidKeys) > 0 {
+		sort.Strings(uuidKeys)
+		out["(uuid)"] = shapeOf(m[uuidKeys[0]])
+	}
 	for k, val := range m {
+		if isUUIDKey(k) {
+			continue
+		}
 		if sub, isObj := val.(map[string]any); isObj {
 			out[k] = shapeOf(sub)
 			continue
@@ -95,6 +118,60 @@ func shapeOf(v any) map[string]any {
 		out[k] = kindOf(val)
 	}
 	return out
+}
+
+// isUUIDKey reports whether k is a data-identity key (UUID shape:
+// 8-4-4-4-12 hex, dashes at the fixed positions) rather than a contract
+// key ("kind", "label", …).
+func isUUIDKey(k string) bool {
+	if len(k) != 36 {
+		return false
+	}
+	for i, r := range k {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			if !isHexRune(r) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isHexRune(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+}
+
+// TestShapeOfUUIDKeyCollapse — unit teeth for the collapse rule: UUID
+// keys vanish into "(uuid)", contract keys survive, mixed maps keep both.
+func TestShapeOfUUIDKeyCollapse(t *testing.T) {
+	in := map[string]any{
+		"kind": "epub_cfi",
+		"sources": map[string]any{
+			"b215b8c2-0000-4000-8000-000000000002": map[string]any{"title": "x"},
+			"a215b8c2-0000-4000-8000-000000000001": map[string]any{"title": "y"},
+		},
+	}
+	got := shapeOf(in)
+	src, ok := got["sources"].(map[string]any)
+	if !ok {
+		t.Fatalf("sources shape missing: %v", got)
+	}
+	if _, ok := src["(uuid)"]; !ok {
+		t.Fatalf("UUID keys not collapsed: %v", src)
+	}
+	for k := range src {
+		if isUUIDKey(k) {
+			t.Fatalf("raw UUID key %q leaked into the shape", k)
+		}
+	}
+	if k, _ := got["kind"]; k != "string" {
+		t.Fatalf("contract key degraded: %v", got["kind"])
+	}
 }
 
 func kindOf(v any) string {
@@ -156,7 +233,11 @@ func TestLiveKGGolden(t *testing.T) {
 	if ty, _ := top["type"].(string); ty != f.Expect.TopType {
 		t.Errorf("kg top type = %q, want %q", ty, f.Expect.TopType)
 	}
-	if m := top["mentions"].(float64); int(m) < f.Expect.MinMentions {
+	m, ok := top["mentions"].(float64)
+	if !ok {
+		t.Fatalf("kg top mentions is not a number: %v", top["mentions"])
+	}
+	if int(m) < f.Expect.MinMentions {
 		t.Errorf("kg top mentions = %d, want >= %d", int(m), f.Expect.MinMentions)
 	}
 	goldenCompare(t, "kg_entities_shape.json", shapeOf(top))

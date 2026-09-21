@@ -84,7 +84,7 @@ func evaluateSearchRules(hits []searchHit, rules []searchRule) []string {
 			}
 			if !ok {
 				violations = append(violations,
-					"tag_top: no hit with tag "+r.Tag+" within rank "+itoa(r.MaxRank))
+					"tag_top: no hit with tag "+r.Tag+" within rank "+strconv.Itoa(r.MaxRank))
 			}
 		case "title_top":
 			ok := false
@@ -97,7 +97,7 @@ func evaluateSearchRules(hits []searchHit, rules []searchRule) []string {
 			}
 			if !ok {
 				violations = append(violations,
-					"title_top: no hit with prefix "+r.TitlePrefix+" within rank "+itoa(r.MaxRank))
+					"title_top: no hit with prefix "+r.TitlePrefix+" within rank "+strconv.Itoa(r.MaxRank))
 			}
 		case "min_class_top":
 			n := 0
@@ -108,7 +108,7 @@ func evaluateSearchRules(hits []searchHit, rules []searchRule) []string {
 			}
 			if n < r.Min {
 				violations = append(violations,
-					"min_class_top: only "+itoa(n)+" hits with tag "+r.Tag+" in top "+itoa(r.Top)+", want >= "+itoa(r.Min))
+					"min_class_top: only "+strconv.Itoa(n)+" hits with tag "+r.Tag+" in top "+strconv.Itoa(r.Top)+", want >= "+strconv.Itoa(r.Min))
 			}
 		default:
 			violations = append(violations, "unknown rule kind: "+r.Kind)
@@ -116,8 +116,6 @@ func evaluateSearchRules(hits []searchHit, rules []searchRule) []string {
 	}
 	return violations
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }
 
 // TestSearchGoldenLive — every fixture query against the freeze bits.
 // Also snapshots the observed class composition per query (actual dir)
@@ -194,21 +192,25 @@ func bartscherHits(swapped bool) []searchHit {
 	return base
 }
 
-func personalmanagementRules() []searchRule {
-	return []searchRule{
-		{Kind: "tag_top", Tag: "PER_VL", MaxRank: 1},
-		{Kind: "title_top", TitlePrefix: "Personalmanagement: Grundlagen", MaxRank: 3},
-		{Kind: "min_class_top", Tag: "contextual", Top: 5, Min: 3},
+// personalmanagementRules is gone: the mutation probes consume the REAL
+// fixture rules (probeRules) so a weakened search_golden.json weakens the
+// probes too — the fixture cannot rot independently of its teeth.
+func probeRules(t *testing.T) []searchRule {
+	t.Helper()
+	f := loadSearchGolden(t)
+	if len(f.Queries) == 0 || len(f.Queries[0].Rules) == 0 {
+		t.Fatal("fixture search_golden.json has no rules for the first query — mutation probes would assert nothing")
 	}
+	return f.Queries[0].Rules
 }
 
 // TestSearchProbeSwappedRank — Mutations-Sonde (DoD): a deliberately
 // worsened query ranking must turn the class asserts red.
 func TestSearchProbeSwappedRank(t *testing.T) {
-	if v := evaluateSearchRules(bartscherHits(false), personalmanagementRules()); len(v) != 0 {
+	if v := evaluateSearchRules(bartscherHits(false), probeRules(t)); len(v) != 0 {
 		t.Fatalf("calibrated ranking must be green, got: %v", v)
 	}
-	v := evaluateSearchRules(bartscherHits(true), personalmanagementRules())
+	v := evaluateSearchRules(bartscherHits(true), probeRules(t))
 	if len(v) == 0 {
 		t.Fatal("swapped ranking (non-PER_VL at rank 1) did NOT violate the golden rules — asserts have no teeth")
 	}
@@ -224,7 +226,7 @@ func TestSearchProbeHollowedClass(t *testing.T) {
 			hits[i].CitationClass = "citable"
 		}
 	}
-	v := evaluateSearchRules(hits, personalmanagementRules())
+	v := evaluateSearchRules(hits, probeRules(t))
 	if len(v) == 0 {
 		t.Fatal("hollowed-out contextual class did NOT violate min_class_top — no teeth")
 	}

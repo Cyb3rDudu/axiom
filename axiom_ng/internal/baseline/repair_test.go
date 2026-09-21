@@ -27,7 +27,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -43,12 +45,24 @@ const (
 	probePort = 8113
 )
 
+// mintCleanupSQL removes every minted row (audit → case → attachments →
+// document; child tables first). Shared by mintRepairCase (pre-clean of a
+// previous run) and cleanupMint (post-run leave-no-trace).
+const mintCleanupSQL = `
+		DELETE FROM zotero_write_audit WHERE case_id IN
+		  (SELECT id FROM repair_cases WHERE suspicion_class='` + glCaseKey + `');
+		DELETE FROM repair_cases WHERE suspicion_class='` + glCaseKey + `';
+		DELETE FROM zotero_attachments WHERE zotero_key IN ('` + glAttKey + `','GLDNBASEEPUB1');
+		DELETE FROM zotero_documents WHERE zotero_key='` + glDocKey + `';`
+
 // fakeZotero implements exactly the local-API surface the frozen RAG's
 // write client and health check touch: ServerID probe, item version GET,
 // item DELETE, item create POST, file authorize (answers exists:1 — a
 // legitimate protocol path that ends the upload after item creation).
 type fakeZotero struct {
-	srv     *httptest.Server
+	srv *httptest.Server
+	mu  sync.Mutex // handler goroutine appends, test goroutine reads
+
 	deleted []string
 	created []string
 }
@@ -60,10 +74,14 @@ func newFakeZotero() *fakeZotero {
 		w.Header().Set("Zotero-Server-ID", "fake-zotero-baseline")
 		switch {
 		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/items/"):
+			f.mu.Lock()
 			f.deleted = append(f.deleted, filepath.Base(r.URL.Path))
+			f.mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/items"):
+			f.mu.Lock()
 			f.created = append(f.created, "item")
+			f.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprintf(w, `{"successful":{"0":{"key":"FAKENEWATT1"}},"unchanged":{},"failed":{}}`)
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/file"):
@@ -78,15 +96,16 @@ func newFakeZotero() *fakeZotero {
 	return f
 }
 
-func (f *fakeZotero) sawDelete(key string) bool { return contains(f.deleted, key) }
-func (f *fakeZotero) sawCreate() bool           { return len(f.created) > 0 }
-func contains(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
+func (f *fakeZotero) sawDelete(key string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.deleted, key)
+}
+
+func (f *fakeZotero) sawCreate() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.created) > 0
 }
 
 // startRepairRAG spawns the frozen release RAG with the repair surface
@@ -94,13 +113,26 @@ func contains(ss []string, s string) bool {
 func startRepairRAG(t *testing.T, fakeURL string) (base string, stop func()) {
 	t.Helper()
 	state := stateDir()
-	if strings.TrimSpace(string(mustReadFile(t, filepath.Join(state, "mode")))) != "release" {
-		t.Fatalf("dev env mode file is not 'release' — run scripts/dev/dev-up.sh --release first")
+	requireReleaseMode(t)
+	// locate the frozen RAG by glob, not by hardcoded filename — a
+	// re-freeze (new release generation) must not have to touch this file
+	cands, err := filepath.Glob(filepath.Join(state, "release", "axiom-ng-*"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	bin := filepath.Join(state, "release", "axiom-ng-v0.1.17-59-gbf77410-darwin-arm64")
-	if _, err := os.Stat(bin); err != nil {
-		t.Fatalf("release RAG binary missing: %v", err)
+	var bins []string
+	for _, c := range cands {
+		if strings.HasSuffix(c, ".sha256") {
+			continue
+		}
+		if fi, err := os.Stat(c); err == nil && fi.Mode().IsRegular() {
+			bins = append(bins, c)
+		}
 	}
+	if len(bins) != 1 {
+		t.Fatalf("expected exactly one release RAG binary under %s/release (axiom-ng-*, got %v) — run scripts/dev/dev-up.sh --release", state, bins)
+	}
+	bin := bins[0]
 
 	keyFile := filepath.Join(state, "baseline", "write-key")
 	if err := os.MkdirAll(filepath.Dir(keyFile), 0o755); err != nil {
@@ -123,6 +155,23 @@ func startRepairRAG(t *testing.T, fakeURL string) (base string, stop func()) {
 		unset AXIOM_DATABASE_URL
 		AXIOM_DATABASE_URL="$(printf '%%s' "$_PROD_DSN" | sed -E 's#/axiom_db([?]|$)#/axiom_dev\1#')"
 		[ -n "$AXIOM_DATABASE_URL" ] || exit 3
+		# hard assert (same convention as dev-up.sh): a rewrite that silently
+		# did not stick would point this second RAG at axiom_db — fail LOUDLY
+		# before exec, never serve from prod
+		case "$AXIOM_DATABASE_URL" in
+		*"/axiom_dev" | *"/axiom_dev"[?]*) ;;
+		*"/axiom_db"*)
+			echo "repair probe: DATABASE_URL still points at axiom_db — rewrite failed" >&2
+			exit 4
+			;;
+		*)
+			echo "repair probe: DATABASE_URL rewrite failed" >&2
+			exit 4
+			;;
+		esac
+		# the smuggled prod DSN has done its job — the long-running probe
+		# process must not carry it in its environment
+		unset _PROD_DSN
 		AXIOM_API_PORT=%[3]d
 		AXIOM_BIND_ADDR=127.0.0.1
 		AXIOM_OS_INDEX=axiom-dev-chunks-v1
@@ -151,7 +200,8 @@ func startRepairRAG(t *testing.T, fakeURL string) (base string, stop func()) {
 		probePort, state, repoRoot(), fakeURL, keyFile, bin)
 
 	// _PROD_DSN smuggles the env-file DSN through: sourcing happens in the
-	// child, the parent never sees secrets.
+	// child, the parent never sees secrets. Exit code 4 = DSN guard tripped
+	// (see script); 3 = empty rewrite result.
 	cmd := exec.Command("/bin/bash", "-c", script)
 	cmd.Env = append(os.Environ(), "_PROD_DSN="+prodDSN(t))
 	cmd.Stdout = logFile
@@ -247,12 +297,7 @@ func mintRepairCase(t *testing.T, dsn, srcPDF string) string {
 	}
 	defer d.Close()
 
-	cleanup := `
-		DELETE FROM zotero_write_audit WHERE case_id IN
-		  (SELECT id FROM repair_cases WHERE suspicion_class='` + glCaseKey + `');
-		DELETE FROM repair_cases WHERE suspicion_class='` + glCaseKey + `';
-		DELETE FROM zotero_attachments WHERE zotero_key IN ('` + glAttKey + `','GLDNBASEEPUB1');
-		DELETE FROM zotero_documents WHERE zotero_key='` + glDocKey + `';`
+	cleanup := mintCleanupSQL
 	if _, err := d.Pool().Exec(ctx, cleanup); err != nil {
 		t.Fatalf("cleanup previous mint: %v", err)
 	}
@@ -313,12 +358,7 @@ func cleanupMint(t *testing.T, dsn string) {
 		return
 	}
 	defer d.Close()
-	if _, err := d.Pool().Exec(ctx, `
-		DELETE FROM zotero_write_audit WHERE case_id IN
-		  (SELECT id FROM repair_cases WHERE suspicion_class='`+glCaseKey+`');
-		DELETE FROM repair_cases WHERE suspicion_class='`+glCaseKey+`';
-		DELETE FROM zotero_attachments WHERE zotero_key IN ('`+glAttKey+`','GLDNBASEEPUB1');
-		DELETE FROM zotero_documents WHERE zotero_key='`+glDocKey+`';`); err != nil {
+	if _, err := d.Pool().Exec(ctx, mintCleanupSQL); err != nil {
 		t.Logf("cleanup mint: %v", err)
 	}
 	_ = os.Remove(filepath.Join(stateDir(), "quarantine", "manual", glAttKey+".json"))
@@ -542,25 +582,11 @@ func stepNames(steps []struct {
 	return out
 }
 
+// postForm sends a multipart/form-data request without a file part
+// (thin wrapper over postMultipart — one code path owns the transport).
 func postForm(t *testing.T, url string, form map[string]string, out any) int {
 	t.Helper()
-	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
-	for k, v := range form {
-		_ = mw.WriteField(k, v)
-	}
-	if err := mw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	resp, err := http.Post(url, mw.FormDataContentType(), &buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if out != nil {
-		_ = json.NewDecoder(resp.Body).Decode(out)
-	}
-	return resp.StatusCode
+	return postMultipart(t, url, form, "", "", nil, out)
 }
 
 func postMultipart(t *testing.T, url string, fields map[string]string, fileField, filename string, file []byte, out any) int {
@@ -570,8 +596,15 @@ func postMultipart(t *testing.T, url string, fields map[string]string, fileField
 	for k, v := range fields {
 		_ = mw.WriteField(k, v)
 	}
-	fw, _ := mw.CreateFormFile(fileField, filename)
-	_, _ = fw.Write(file)
+	if fileField != "" {
+		fw, err := mw.CreateFormFile(fileField, filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fw.Write(file); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := mw.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -583,7 +616,10 @@ func postMultipart(t *testing.T, url string, fields map[string]string, fileField
 	raw := new(bytes.Buffer)
 	_, _ = raw.ReadFrom(resp.Body)
 	if out != nil {
-		_ = json.Unmarshal(raw.Bytes(), out)
+		if err := json.Unmarshal(raw.Bytes(), out); err != nil {
+			t.Logf("%s: response is not decodable JSON (status %d, %d bytes): %s",
+				url, resp.StatusCode, raw.Len(), raw.Bytes()[:min(raw.Len(), 200)])
+		}
 	}
 	return resp.StatusCode
 }

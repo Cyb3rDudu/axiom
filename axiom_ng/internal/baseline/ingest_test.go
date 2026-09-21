@@ -258,6 +258,15 @@ func healthyIngestOutcome() ingestOutcome {
 	}
 }
 
+// TestIngestProbeHealthyControl — green control for the red probes:
+// the calibrated healthy outcome must pass the checker with ZERO
+// violations (otherwise the red probes prove nothing about the checker).
+func TestIngestProbeHealthyControl(t *testing.T) {
+	if v := checkIngestOutcome(healthyIngestOutcome(), ingestFixtureForProbes()); len(v) != 0 {
+		t.Fatalf("healthy outcome must be green, got violations: %v", v)
+	}
+}
+
 // TestIngestProbeTruncatedOSCommit — DoD: a run whose OS commit never
 // landed (OS count 0 while chunks exist) must fail.
 func TestIngestProbeTruncatedOSCommit(t *testing.T) {

@@ -24,8 +24,18 @@
 set -euo pipefail
 
 MODE=source
-[ "${1:-}" = "--release" ] && MODE=release
-[ $# -le 1 ] || { echo "usage: dev-up.sh [--release]" >&2; exit 2; }
+case "${1:-}" in
+"") ;;
+"--release") MODE=release ;;
+*)
+    echo "usage: dev-up.sh [--release]" >&2
+    exit 2
+    ;;
+esac
+[ $# -le 1 ] || {
+    echo "usage: dev-up.sh [--release]" >&2
+    exit 2
+}
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 STATE="$HOME/.local/state/axiom-dev"
@@ -41,7 +51,7 @@ STATE="$HOME/.local/state/axiom-dev"
 RELEASE_TAG="v0.1.18"
 RELEASE_REPO="${AXIOM_RELEASE_REPO:-Cyb3rDudu/axiom}"
 RELEASE_GEN="v0.1.17-59-gbf77410"
-RAG_ASSET="axiom-ng-$RELEASE_GEN-darwin-arm64"   # prod asset name (darwin, not uname)
+RAG_ASSET="axiom-ng-$RELEASE_GEN-darwin-arm64" # prod asset name (darwin, not uname)
 RUNNER_ASSET="axiom-runner-$RELEASE_GEN-macos-arm64.tar.zst"
 
 RAG_ENV="${AXIOM_DEV_RAG_ENV:-/run/agenix/axiom-rag.env}"
@@ -88,7 +98,7 @@ echo "$MODE" >"$STATE/mode"
 
 # --- provide the RAG binary (and, in release mode, the runner env) ---------
 
-RAG_BIN="$STATE/bin/axiom-ng-dev"   # source mode default: working-tree build
+RAG_BIN="$STATE/bin/axiom-ng-dev" # source mode default: working-tree build
 RUNNER_PY="$REPO/axiom_ng_runner/.venv/bin/python"
 RUNNER_PYTHONPATH="$REPO/axiom_ng_runner" # source venv needs the package on sys.path
 
@@ -113,8 +123,8 @@ if [ "$MODE" = release ]; then
     # freeze-bit proof: dev must run the SAME bytes as prod. /opt/axiom is
     # the prod install; absence (non-prod host) downgrades to a note.
     if [ -x /opt/axiom/bin/axiom-ng ]; then
-        cmp -s "$RAG_BIN" /opt/axiom/bin/axiom-ng \
-            || die "release RAG asset is NOT byte-identical with /opt/axiom/bin/axiom-ng — freeze bits diverged, refusing to start"
+        cmp -s "$RAG_BIN" /opt/axiom/bin/axiom-ng ||
+            die "release RAG asset is NOT byte-identical with /opt/axiom/bin/axiom-ng — freeze bits diverged, refusing to start"
         note "release RAG verified byte-identical with /opt/axiom/bin/axiom-ng"
     else
         note "release RAG verified against checksum (no /opt/axiom to compare — non-prod host?)"
@@ -130,13 +140,13 @@ if [ "$MODE" = release ]; then
         rm -rf "$RUNNER_REL"
         mkdir -p "$RUNNER_REL"
         tar --zstd -xf "$REL/$RUNNER_ASSET" -C "$RUNNER_REL" --strip-components 1
-        "$RUNNER_REL/env/bin/python" "$RUNNER_REL/env/bin/conda-unpack" \
-            || die "conda-unpack failed for the release runner env"
+        "$RUNNER_REL/env/bin/python" "$RUNNER_REL/env/bin/conda-unpack" ||
+            die "conda-unpack failed for the release runner env"
         echo "$RUNNER_SHA" >"$RUNNER_REL/.unpacked_sha"
     fi
     RUNNER_PY="$RUNNER_REL/env/bin/python"
     RUNNER_PYTHONPATH="" # release env is self-contained; a PYTHONPATH would
-                         # let working-tree code shadow the freeze bits
+    # let working-tree code shadow the freeze bits
 else
     note "building axiom-ng (debug build, working tree)…"
     (cd "$REPO/axiom_ng" && go build -o "$RAG_BIN" ./cmd/axiom-ng)
@@ -203,6 +213,8 @@ note "starting dev runner on :$RUNNER_PORT …"
     PYTHONPATH="$RUNNER_PYTHONPATH" # empty in release mode: no working-tree leakage
     export AXIOM_PROCESSOR_PORT AXIOM_PROCESSOR_BIND_ADDR AXIOM_PROCESSOR_WORK_ROOT \
         AXIOM_CAPTION_CACHE_DIR PYTHONPATH
+    # cwd: $STATE (historically $REPO/axiom_ng_runner). The release env is
+    # self-contained; the source venv finds the package via PYTHONPATH above.
     cd "$STATE"
     exec /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
         "$RUNNER_PY" -m axiom_ng_runner \
@@ -321,13 +333,15 @@ trap - EXIT # success: both services stay up, dev-down.sh owns them from here
 # is the observable identity of the binary (see health_version_test.go).
 if [ "$MODE" = release ]; then
     health="$(curl -fsS "http://127.0.0.1:$RAG_PORT/api/health")"
-    echo "$health" | jq -e '.build' >/dev/null \
-        || { echo "$health" >&2; die "release mode: health has no build banner"; }
-    echo "$health" | jq -r '.build' | grep -q 'commit bf77410, release build' \
-        || die "release mode: health build is NOT the freeze banner (got: $(echo "$health" | jq -r .build))"
+    echo "$health" | jq -e '.build' >/dev/null ||
+        {
+            echo "$health" >&2
+            die "release mode: health has no build banner"
+        }
+    echo "$health" | jq -r '.build' | grep -q 'commit bf77410, release build' ||
+        die "release mode: health build is NOT the freeze banner (got: $(echo "$health" | jq -r .build))"
     note "release freeze bits confirmed: $(echo "$health" | jq -r .build)"
 fi
-
 
 note "dev environment up:"
 note "  RAG     :$RAG_PORT  (pid $RAG_PID,  log $STATE/logs/rag.log)"

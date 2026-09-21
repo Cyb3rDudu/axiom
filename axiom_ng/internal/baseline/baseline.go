@@ -57,9 +57,12 @@ func liveEnabled(t *testing.T) {
 }
 
 // canonicalJSON re-serializes v so that equal values always produce equal
-// bytes: map keys sorted, no HTML escaping, stable indentation. Health's
-// checks map iterates in random order at the source — canonicalization is
-// what makes the snapshot byte-comparable across runs.
+// bytes: json.Marshal sorts map keys and escapes deterministically (it DOES
+// HTML-escape <, >, & — deterministic is what matters, not the specific
+// escaping; fixtures are generated through this same function); Indent adds
+// stable two-space formatting. Health's checks map iterates in random order
+// at the source — canonicalization is what makes the snapshot
+// byte-comparable across runs.
 func canonicalJSON(v any) ([]byte, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {
@@ -74,35 +77,19 @@ func canonicalJSON(v any) ([]byte, error) {
 }
 
 // goldenCompare asserts that got equals the committed fixture name, after
-// canonicalization. With -update (or BASELINE_UPDATE=1) it (re)writes the
-// fixture instead — the deliberate, review-visible baseline change.
+// canonicalization. Actual-dir writes and BASELINE_UPDATE/-update fixture
+// rewrites delegate to writeActualOrFixture — one code path owns those
+// semantics (inventory_test.go).
 func goldenCompare(t *testing.T, name string, got any) {
 	t.Helper()
-	wantPath := filepath.Join("fixtures", name)
 	gotBytes, err := canonicalJSON(got)
 	if err != nil {
 		t.Fatalf("canonicalize %s: %v", name, err)
 	}
-	if actualDir != "" {
-		if err := os.MkdirAll(actualDir, 0o755); err != nil {
-			t.Fatalf("actual dir: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(actualDir, name), gotBytes, 0o644); err != nil {
-			t.Fatalf("write actual %s: %v", name, err)
-		}
-	}
-	if update := os.Getenv("BASELINE_UPDATE") == "1" || *flagUpdate; update {
-		if err := os.WriteFile(wantPath, gotBytes, 0o644); err != nil {
-			t.Fatalf("update fixture %s: %v", name, err)
-		}
-		t.Logf("fixture UPDATED: %s", wantPath)
+	if writeActualOrFixture(t, name, gotBytes, fixtureUpdate()) {
 		return
 	}
-	want, err := os.ReadFile(wantPath)
-	if err != nil {
-		t.Fatalf("fixture %s missing (run with BASELINE_UPDATE=1 to freeze): %v", name, err)
-	}
-	if !bytes.Equal(want, gotBytes) {
+	if want := readFixture(t, name); !bytes.Equal(want, gotBytes) {
 		t.Fatalf("baseline drift in %s:\n--- frozen ---\n%s\n+++ actual +++\n%s",
 			name, want, gotBytes)
 	}
@@ -110,7 +97,47 @@ func goldenCompare(t *testing.T, name string, got any) {
 
 var flagUpdate = flag.Bool("update", false, "update golden fixtures instead of comparing")
 
-// hashLines returns the sha256 over the given canonical bytes, hex-encoded.
-func hashLines(b []byte) string {
+// fixtureUpdate is the deliberate-update switch: BASELINE_UPDATE=1 in the
+// environment or -update on the go test command line.
+func fixtureUpdate() bool { return os.Getenv("BASELINE_UPDATE") == "1" || *flagUpdate }
+
+// writeActualOrFixture mirrors got into the actual dir (when set by `make
+// golden-baseline`) and — under fixtureUpdate — rewrites the committed
+// fixture. One code path owns these semantics for every golden compare.
+func writeActualOrFixture(t *testing.T, name string, content []byte, update bool) (updated bool) {
+	t.Helper()
+	if actualDir != "" {
+		if err := os.MkdirAll(actualDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(actualDir, name), content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if update {
+		if err := os.MkdirAll("fixtures", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join("fixtures", name), content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("fixture UPDATED: fixtures/%s", name)
+		return true
+	}
+	return false
+}
+
+func readFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	want, err := os.ReadFile(filepath.Join("fixtures", name))
+	if err != nil {
+		t.Fatalf("fixture %s missing (BASELINE_UPDATE=1 to freeze): %v", name, err)
+	}
+	return want
+}
+
+// sha256Hex returns the sha256 over the given canonical bytes,
+// hex-encoded.
+func sha256Hex(b []byte) string {
 	return fmt.Sprintf("%x", sha256.Sum256(b))
 }
