@@ -53,9 +53,12 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/backfill"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 )
 
-const indexName = "axiom-ng-chunks-v1"
+// follows search.IndexName so AXIOM_OS_INDEX moves tooling with the
+// deployment it belongs to (dev namespaces).
+var indexName = search.IndexName
 
 func main() {
 	ctx := context.Background()

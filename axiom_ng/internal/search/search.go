@@ -18,6 +18,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -27,9 +28,24 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
 
-// IndexName must match the outbox worker's index (dispatcher.outboxIndexName);
-// duplicated here because the search side only consumes, never manages, it.
-const IndexName = "axiom-ng-chunks-v1"
+// IndexName is the chunks index this process reads (and, through the
+// dispatcher's outbox drainer, writes). It must match the outbox worker's
+// index (dispatcher follows this value); duplicated ownership stayed because
+// the search side only consumes, never manages, it.
+//
+// AXIOM_OS_INDEX overrides the name (dev environments run side-by-side with
+// frozen production on the same OpenSearch — the index namespace is the main
+// isolation boundary). Unset keeps the production default bit-identical.
+const defaultIndexName = "axiom-ng-chunks-v1"
+
+var IndexName = indexNameFromEnv(os.Getenv)
+
+func indexNameFromEnv(getenv func(string) string) string {
+	if n := strings.TrimSpace(getenv("AXIOM_OS_INDEX")); n != "" {
+		return n
+	}
+	return defaultIndexName
+}
 
 // RRF k constant (standard 60; the old system tuned dense/sparse weights
 // before fusion — R7 territory, start plain).

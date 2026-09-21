@@ -19,11 +19,16 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 	"github.com/jackc/pgx/v5"
 )
 
+// outboxIndexName follows search.IndexName (single source of truth) so the
+// AXIOM_OS_INDEX dev override moves read and write sides together — the
+// drainer can never index into an index the search side does not read.
+var outboxIndexName = search.IndexName
+
 const (
-	outboxIndexName    = "axiom-ng-chunks-v1"
 	outboxBatchSize    = 64
 	outboxPollInterval = 2 * time.Second
 	outboxMaxAttempts  = 10
