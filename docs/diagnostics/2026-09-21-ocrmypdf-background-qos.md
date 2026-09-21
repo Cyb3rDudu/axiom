@@ -35,7 +35,7 @@ page PNG, `OMP_THREAD_LIMIT=1`, and exactly 12 concurrent processes were run as
 temporary launchd jobs. The only changed field was `ProcessType`.
 
 | ProcessType | Wall time | User CPU | Mean user cores | Relative wall time |
-|---|---:|---:|---:|---:|
+| --- | ---: | ---: | ---: | ---: |
 | Background | 82.56 s | 202.52 s | 2.45 | 11.08x |
 | Standard | 8.81 s | 80.81 s | 9.17 | 1.18x |
 | Interactive | 7.45 s | 78.03 s | 10.47 | 1.00x |
@@ -48,7 +48,7 @@ not necessary for this workload.
 This is also consistent with the end-to-end measurements:
 
 | Run | Start/end evidence | Wall time | Ratio |
-|---|---|---:|---:|
+| --- | --- | ---: | ---: |
 | Owner foreground reference | reported `real 10m14.288s`; output mtime 23:38 | 614.3 s | 1.00x |
 | Production Background run | log start 12:11:34; OCR output mtime 14:00:18 | 6,524 s | 10.62x |
 
@@ -210,4 +210,3 @@ expectation near 10-12 minutes on this machine, not 1 hour 49 minutes.
 - Apple, [Tuning your code's performance for Apple silicon](https://developer.apple.com/documentation/apple-silicon/tuning-your-code-s-performance-for-apple-silicon/)
 - Apple, [Optimize for Apple Silicon with performance and efficiency cores](https://developer.apple.com/news/?id=vk3m204o)
 - Apple launchd.plist manual, [ProcessType resource classifications](https://keith.github.io/xcode-man-pages/launchd.plist.5.html)
-
