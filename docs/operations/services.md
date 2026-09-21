@@ -81,7 +81,7 @@ runner first, then the rag, then the dispatchers is the clean sequence.
 ### Claim-lane topology (#248 — one agent, lanes follow runner reality)
 
 The carrier-era topology ran THREE dispatcher agents (gpu0/1/2), one per GPU
-box. On the single-box mothership that meant three independent claim streams
+box. On a single-box host that meant three independent claim streams
 against ONE local runner of capacity 1 — aging source URLs, multiplied
 retries, a box hotter than its real capacity. Retired:
 
