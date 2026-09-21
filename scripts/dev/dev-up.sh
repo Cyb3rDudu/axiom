@@ -57,10 +57,14 @@ mkdir -p "$STATE"/{logs,artifacts,runner,quarantine,bin,cache/captions}
 note "building axiom-ng (debug build, working tree)…"
 (cd "$REPO/axiom_ng" && go build -o "$STATE/bin/axiom-ng-dev" ./cmd/axiom-ng)
 
-# --- bootstrap the dev OpenSearch index (idempotent) ------------------------
+# --- bootstrap the dev OpenSearch index -------------------------------------
 # Same instance as prod; own namespace. Created from the prod index's
 # mappings+settings (cluster metadata stripped) and filled via _reindex, so
 # dev search is immediately fully functional. Prod stays writable throughout.
+# A MISSING index is bootstrapped with an exact count check; an EXISTING one
+# is adopted as-is (it lives its own life — counts drift legitimately once
+# dev ingests, so no re-verification on skip). A failed/partial bootstrap
+# deletes the index again instead of leaving a silent stub for the next run.
 
 set -a
 # shellcheck disable=SC1090
@@ -69,7 +73,7 @@ set +a
 OS_URL="${AXIOM_OPENSEARCH_URL:-http://127.0.0.1:9200}"
 
 if curl -fsS -o /dev/null "$OS_URL/$DEV_INDEX"; then
-    note "dev index $DEV_INDEX present ($(curl -fsS "$OS_URL/$DEV_INDEX/_count" | jq -r .count) docs)"
+    note "dev index $DEV_INDEX present ($(curl -fsS "$OS_URL/$DEV_INDEX/_count" | jq -r .count) docs) — adopted as-is"
 else
     note "bootstrapping $DEV_INDEX from $PROD_INDEX (mappings+settings+_reindex)…"
     curl -fsS "$OS_URL/$PROD_INDEX" |
@@ -77,10 +81,20 @@ else
             '{settings: (.[$prod].settings.index | del(.uuid,.version,.creation_date,.provided_name)), mappings: .[$prod].mappings}' |
         curl -fsS -XPUT "$OS_URL/$DEV_INDEX" -H 'Content-Type: application/json' -d @- >/dev/null ||
         die "index create failed"
-    curl -fsS -XPOST "$OS_URL/_reindex?wait_for_completion=true" -H 'Content-Type: application/json' \
-        -d "{\"source\":{\"index\":\"$PROD_INDEX\"},\"dest\":{\"index\":\"$DEV_INDEX\"}}" >/dev/null ||
-        die "_reindex failed"
-    note "dev index ready: $(curl -fsS "$OS_URL/$DEV_INDEX/_count" | jq -r .count) docs"
+    if ! curl -fsS -XPOST "$OS_URL/_reindex?wait_for_completion=true" -H 'Content-Type: application/json' \
+        -d "{\"source\":{\"index\":\"$PROD_INDEX\"},\"dest\":{\"index\":\"$DEV_INDEX\"}}" >/dev/null; then
+        curl -fsS -XDELETE "$OS_URL/$DEV_INDEX" >/dev/null || true
+        die "_reindex failed (partial index deleted — retry dev-up)"
+    fi
+    # HTTP 200 can still carry per-doc failures; at bootstrap time the copy
+    # must be exact (prod is frozen — no concurrent ingest expected)
+    prod_n="$(curl -fsS "$OS_URL/$PROD_INDEX/_count" | jq -r .count)"
+    dev_n="$(curl -fsS "$OS_URL/$DEV_INDEX/_count" | jq -r .count)"
+    if [ "$dev_n" != "$prod_n" ]; then
+        curl -fsS -XDELETE "$OS_URL/$DEV_INDEX" >/dev/null || true
+        die "bootstrap incomplete: $dev_n/$prod_n docs (partial index deleted — retry dev-up)"
+    fi
+    note "dev index ready: $dev_n docs (count-verified against $PROD_INDEX)"
 fi
 
 # --- start the runner (source venv, :8112) ----------------------------------
@@ -169,7 +183,7 @@ note "starting dev RAG on :$RAG_PORT …"
 
     # hard asserts: an override that silently did not stick would aim dev at prod
     case "$AXIOM_DATABASE_URL" in
-    *"/$DEV_DB"*) ;;
+    *"/$DEV_DB" | *"/$DEV_DB"[?]*) ;;
     *"/axiom_db"*)
         echo "dev-up: DATABASE_URL still points at prod (axiom_db) — sed rewrite failed" >&2
         exit 1
