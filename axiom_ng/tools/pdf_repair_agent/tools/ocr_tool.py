@@ -86,8 +86,21 @@ tessdata_dir = bundled_env.tessdata_dir
 
 def ocr_child_env() -> dict[str, str]:
     """Kind-Umgebung für OCR-Prozesse (delegiert): env/bin vor PATH,
-    TESSDATA_PREFIX auf die gebündelten Modelle."""
-    return bundled_env.child_env(with_tessdata=True)
+    TESSDATA_PREFIX auf die gebündelten Modelle — und
+    OMP_THREAD_LIMIT=1 (#293-Finalisierung, Take-4-Live-Beweis):
+    JEDER tesseract-Kind spawnt sonst OpenMP-Threads, die im Spin-Wait
+    CPU verbrennen (__kmp_get_global_thread_id-Last) — bei --jobs=12
+    kollabiert die Maschine in ~1 Kern Nutzarbeit (Take 4 ohne Limit:
+    heißer 2-Min-Start, dann Load 15 bei ~1 Kern; mit Limit: 8,1×
+    Parallelität, 5,3 CPU-s/Seite). Das Owner-Pilotrezept trug das
+    Limit von Anfang an — die Vollgas-Runde hat es zu Unrecht als
+    Drossel entsorgt: Vollgas heißt PROZESS-Parallelität (--jobs),
+    nie OpenMP-Threads je Kind. Operator-Override bleibt möglich
+    (setdefault — eine gesetzte Ambient-Env gewinnt, analog
+    TESSDATA_PREFIX-Umgang)."""
+    env = bundled_env.child_env(with_tessdata=True)
+    env.setdefault("OMP_THREAD_LIMIT", "1")
+    return env
 
 
 def _bins_available() -> dict:

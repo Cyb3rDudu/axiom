@@ -186,6 +186,20 @@ def test_ocr_child_env_setzt_tessdata_und_path(tmp_path, monkeypatch):
     assert child["PATH"].startswith(str(fake / "bin") + _os.pathsep), child["PATH"]
 
 
+def test_ocr_child_env_omp_thread_limit(monkeypatch):
+    """#293-Finalisierung: die OCR-Kind-Umgebung setzt OMP_THREAD_LIMIT=1
+    (OpenMP-Spin-Kollaps bei --jobs-Parallelität, Take-4-Live-Beweis) —
+    und eine EXPLIZITE Operator-Env gewinnt (Override wie versprochen)."""
+    monkeypatch.delenv("OMP_THREAD_LIMIT", raising=False)
+    child = ocr_tool.ocr_child_env()
+    assert child["OMP_THREAD_LIMIT"] == "1"
+    monkeypatch.setenv("OMP_THREAD_LIMIT", "4")
+    child = ocr_tool.ocr_child_env()
+    assert child["OMP_THREAD_LIMIT"] == "4", (
+        "Operator-Override muss gewinnen (setdefault-Semantik)"
+    )
+
+
 def test_dev_venv_ohne_buendel_bleibt_noop(tmp_path, monkeypatch):
     """Dev-Venv ohne gebündelte Binaries: keine PATH-Verfälschung, kein
     TESSDATA_PREFIX — transparenter Host-PATH-Fallback. Deterministisch
