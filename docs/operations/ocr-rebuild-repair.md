@@ -69,13 +69,23 @@ broken text layer is rasterized before any folio harvest reads it.
   `timeout` binary stays the primary killer. The stale-claim reaper
   honors the class bound — a live, merely slow rebuild is never requeued
   under a second claim.
-- **Known toolchain penalty (accepted, #293)**: the bundled conda
-  toolchain measures ~1.7× CPU-per-page against the nix host build
-  (ghostscript rasterization is the prime suspect). Accepted for now —
-  bundling buys autarky (no host tesseract/gs dependency); even with the
-  penalty, 658 pages land well inside the wedge-guard window at full
-  throttle. Upgrade path if it ever matters: a faster ghostscript via a
-  conda-forge pin, re-measured against the documented baseline.
+- **Toolchain parity, pinned (#293 reopening)**: the earlier ~2.4×
+  CPU-per-page gap (11.3 vs ~5 CPU-s/page) was NOT conda, ghostscript,
+  tesseract, or the BEST models — four isolation experiments pinned it
+  on the ocrmypdf version (17.10 bundled vs 17.11 on the host).
+  `ocrmypdf==17.11.0` is pinned in the fixer requirements (dragging
+  pillow 12); measured parity: ~4.7 CPU-s/page vs 4.9–5.2 nix-host
+  reference. Ghostscript itself measures 0.86 CPU-s/page rasterizing.
+  A Bartscher-class 658-page rebuild is expected at 5–8 min.
+- **Bundled tesseract and symlinked temp roots (#293 side finding)**:
+  the conda tesseract's Leptonica `fopenReadStream` fails on paths
+  under symlinked temp roots (`/tmp` → `/private/tmp`); real paths
+  (`/private/tmp`, `$HOME`, launchd-style `/var/folders` TMPDIR) work.
+  ocrmypdf's working dir follows `TMPDIR` — a run with a `/tmp`-class
+  TMPDIR dies with rc=7. Production services inherit a real TMPDIR;
+  for manual benchmarking/harness runs, export `TMPDIR` to a real
+  path. Any future direct tesseract call must pipe via stdin/stdout
+  or use a real-path file (see the warning at `ocr_tool.ocrmypdf_bin`).
 - **No deskew by default** (pilot pages were straight; unnecessary image
   processing costs quality). Available as a per-case option.
 - **Post-OCR chaining (2-in-1)**: after the rebuild, the folio harvest runs

@@ -50,7 +50,20 @@ def ocrmypdf_bin() -> str | None:
     """ocrmypdf-Auflösung: ZUERST im eigenen Venv (sys.prefix/bin — die
     Venv-bin liegt NICHT im PATH, wenn man `.venv/bin/python` direkt
     aufruft; sys.executable.resolve() wäre FALSCH, denn es folgt dem
-    Interpreter-Symlink in den nix-Store), dann PATH-Fallback."""
+    Interpreter-Symlink in den nix-Store), dann PATH-Fallback.
+
+    #293-Nebelfund, scharfe Kante des gebündelten Builds: der Conda-
+    tesseract kann Dateien unter SYMLINK-TEMP-WURZELN nicht öffnen —
+    Leptonica fopenReadStream schlägt fehl (reproduzierbar:
+    `env/bin/tesseract /tmp/p1.png out -l deu` → "Error in
+    fopenReadStream"; dieselbe Datei unter /private/tmp, $HOME oder
+    einer /var/folders-TMPDIR LÄUFT). ocrmypdf legt sein Arbeitsverz.
+    unter TMPDIR an — ein Lauf mit TMPDIR auf einer /tmp-Klasse-Wurzel
+    stirbt mit rc=7. Produktionsdienste erben eine echte TMPDIR von
+    launchd. Jeder zukünftige direkte tesseract-Aufruf HIER:
+    stdin/stdout-Piping ODER realer Pfad — ein /tmp-Pfad-Argument
+    produziert einen reproduzierbar toten Lauf, nie einen lautbaren
+    Fehler."""
     cand = Path(sys.prefix) / "bin" / "ocrmypdf"
     if cand.is_file():
         return str(cand)

@@ -9,7 +9,7 @@ pymupdf==1.28.2
 pikepdf==10.12.0
 Pillow==10.4.0
 psycopg2-binary==2.9.12
-ocrmypdf==17.10.0
+ocrmypdf==17.11.0
 
 # Test-/Werkzeug-Laufzeit (eigene Tests, Mock-Läufe).
 pytest==9.1.1
