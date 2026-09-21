@@ -25,7 +25,7 @@ RUNNER_ENV="${AXIOM_DEV_RUNNER_ENV:-/run/agenix/axiom-runner.env}"
 
 RAG_PORT=8111
 RUNNER_PORT=8112
-DEV_DB=axiom_dev
+DEV_DB="axiom_dev"
 DEV_INDEX="axiom-dev-chunks-v1"
 PROD_INDEX="axiom-ng-chunks-v1"
 
