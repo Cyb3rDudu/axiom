@@ -17,7 +17,7 @@ The installed service is:
 ProcessType = Background
 ```
 
-`launchctl print pid/55812` placed the running `axiom-ng` process in the
+`launchctl print pid/55812` placed the running `axiom` process in the
 `org.nix-community.home.axiom-rag` resource and jetsam coalitions. The fixer,
 OCRmyPDF, and all Tesseract children descend from that process. On Apple
 silicon, background QoS influences placement on efficiency rather than
