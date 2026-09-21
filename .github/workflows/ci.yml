@@ -67,7 +67,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      AXIOM_TEST_DATABASE_URL: "postgresql://axiom_user:axiom_password@localhost:5432/axiom_ng_ci_test?sslmode=\
+      AXIOM_TEST_DATABASE_URL:
+        "postgresql://axiom_user:axiom_password@localhost:5432/axiom_ng_ci_test?sslmode=\
         disable"
     steps:
       - uses: actions/checkout@v4
