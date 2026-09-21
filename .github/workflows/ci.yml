@@ -32,6 +32,11 @@ jobs:
         run: |
           bash -n scripts/dev/*.sh
           shellcheck --severity=warning scripts/dev/*.sh
+          # env.sh and dev-up.sh must define the same dev identity — drift would
+          # point manual tool runs at a stale (or prod) namespace
+          a="$(grep -hE '^DEV_(INDEX|DB)=' scripts/dev/env.sh | sort)"
+          b="$(grep -hE '^DEV_(INDEX|DB)=' scripts/dev/dev-up.sh | sort)"
+          test "$a" = "$b"
 
   go-unit:
     runs-on: ubuntu-latest
