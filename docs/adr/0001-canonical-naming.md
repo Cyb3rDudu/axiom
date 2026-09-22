@@ -2,13 +2,15 @@
 
 - Status: Accepted (F02, #296; part of the 0.2.0 epic #342)
 - Date: 2026-09-22
-- Baseline reference: F01 freeze e7425f0 (#295), tag v0.1.18
+- Baseline reference: F01 suite e7425f0 (#295); frozen tag v0.1.18,
+  deployed binary generation bf77410 (suite ≠ deployed generation)
 
 ## Context
 
-The 0.2.0 epic decomposes the monolith (`axiom-ng` + `axiom_ng_runner` +
-the fixer) into components and workers with new public names. F01 froze
-the v0.1.18 compatibility baseline as an unbiased witness. Without one
+The 0.2.0 epic decomposes the current monolith (the RAG binary, the
+Python runner and the fixer) into components and workers with new
+public names. F01 froze the v0.1.18 compatibility baseline as an
+unbiased witness. Without one
 binding naming decision, every follow-up step (F05 CLI/runtime, F08
 repair rename, F10 compute rename) would drift into its own vocabulary —
 names that appear nowhere in the runtime are an intention, not a
@@ -49,9 +51,9 @@ The public binary is **`axiom`** with role startup:
 axiom serve all|api|library|store
 ```
 
-`axiom-ng` remains a functional **compatibility alias** through 0.2.x
-(wired with F05; it delegates to `axiom` and reports through the
-deprecation witness below).
+The previous binary name becomes a functional **compatibility alias**
+through 0.2.x (wired with F05; it delegates to `axiom` and reports
+through the deprecation witness below — mapping table row 1).
 
 ### 4. Mapping table (old → canonical → alias → removal horizon)
 

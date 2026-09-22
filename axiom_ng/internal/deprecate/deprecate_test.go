@@ -7,12 +7,15 @@ import (
 	"testing"
 )
 
-// captureLog redirects the standard logger for one fn call.
+// captureLog redirects the standard logger for one fn call (restores
+// the PREVIOUS writer — SetOutput(nil) leaves a nil writer behind and
+// the next log.Printf in the process panics, review M1 #296).
 func captureLog(t *testing.T, fn func()) string {
 	t.Helper()
 	var buf bytes.Buffer
+	prev := log.Writer()
 	log.SetOutput(&buf)
-	defer log.SetOutput(nil)
+	defer log.SetOutput(prev)
 	fn()
 	return buf.String()
 }
@@ -24,13 +27,14 @@ func TestWarnsExactlyOncePerProcessPerName(t *testing.T) {
 	reset()
 	var lines int64
 	var mu sync.Mutex
+	prev := log.Writer()
 	log.SetOutput(writerFunc(func(p []byte) (int, error) {
 		mu.Lock()
 		lines++
 		mu.Unlock()
 		return len(p), nil
 	}))
-	defer log.SetOutput(nil)
+	defer log.SetOutput(prev)
 	for i := 0; i < 100; i++ {
 		Use("axiom-ng")
 	}
