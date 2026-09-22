@@ -14,6 +14,7 @@ package revision
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"regexp"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
@@ -47,11 +48,18 @@ type Bibliography struct {
 	Language  string `json:"language,omitempty"`
 	// Tags: absent (nil) = none; never an empty non-nil slice on the wire.
 	Tags []string `json:"tags,omitempty"`
-	// CitationClass: "citable" | "contextual" — whether the record may be
-	// a citation target at all. Always present (no omitempty): absent
-	// must be indistinguishable from nothing; default "citable".
+	// CitationClass: one of the CitationClass* constants — whether the
+	// record may be a citation target at all. Always present (no
+	// omitempty): absent must be indistinguishable from nothing;
+	// default "citable".
 	CitationClass string `json:"citation_class"`
 }
+
+// Citation class vocabulary (the frozen SourceView citation_class).
+const (
+	CitationClassCitable    = "citable"
+	CitationClassContextual = "contextual"
+)
 
 // Page-trust levels of the citation ladder (0.1.x page_source vocabulary;
 // #173/#280): folio_verified is the only level a client may cite as a
@@ -94,9 +102,11 @@ var hashHex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // to (a) validate content identity, (b) hydrate bibliographic context,
 // (c) fetch the bytes via the Library seam.
 //
-// Optionalität: all scalar fields are required non-empty (Validate);
-// there is deliberately no optional field on this DTO — an intake
-// artifact must be complete or it is invalid, never half-present.
+// Optionalität: all scalar fields are required non-empty, and the
+// Bibliography members RecordID and CitationClass are required values
+// too (Validate) — an intake artifact must be complete or it is
+// invalid, never half-present. Bibliography's other members keep
+// their own optionalität (see there).
 type SourceRevision struct {
 	// SourceID identifies the Library source (opaque to Store).
 	SourceID string `json:"source_id"`
@@ -137,6 +147,10 @@ func (r SourceRevision) Validate() error {
 		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "source revision: media_type is empty")
 	case r.ContentTicket == "":
 		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "source revision: content_ticket is empty")
+	case r.Bibliography.RecordID == "":
+		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "source revision: bibliography.record_id is empty")
+	case r.Bibliography.CitationClass != CitationClassCitable && r.Bibliography.CitationClass != CitationClassContextual:
+		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, fmt.Sprintf("source revision: bibliography.citation_class must be %q or %q, got %q", CitationClassCitable, CitationClassContextual, r.Bibliography.CitationClass))
 	}
 	return nil
 }

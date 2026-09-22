@@ -18,14 +18,15 @@ import (
 
 // µs — the DM03-compatible time form (UTC RFC3339 microsecond).
 var (
-	at     = time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC)
-	year   = 2019
-	yes    = true
-	no     = false
-	acc    = time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
-	pg     = 47
-	para   = 12
-	chapNo = 3
+	at         = time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC)
+	year       = 2019
+	yes        = true
+	no         = false
+	acc        = time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	capturedAt = time.Date(2026, 1, 1, 8, 30, 0, 0, time.UTC)
+	pg         = 47
+	para       = 12
+	chapNo     = 3
 )
 
 var (
@@ -36,9 +37,16 @@ var (
 		IdempotencyKey: "import-42",
 		RecordType:     "book",
 		Target:         ImportTarget{LibraryID: "users/0", CollectionPath: []string{"Semester 3", "VWL"}, CreateMissing: false},
-		Source:         &ImportSourceInfo{OriginalURL: "https://example.org/paper", AccessedAt: &acc},
+		Source:         &ImportSourceInfo{OriginalURL: "https://example.org/paper", AccessedAt: &acc, CapturedAt: &capturedAt},
 		MetadataHints:  MetadataHints{DOI: "10.1000/xyz", ISBN: "978-3-16-148410-0", Title: "The Title"},
 		Enrichment:     EnrichmentFlags{Crossref: &yes, OpenLibrary: &no},
+	}
+	// minimal form: unfiled target addressed by CollectionID — the XOR
+	// twin of the CollectionPath fixture, so both stay witnessed.
+	goldenImportRequestCollectionID = ImportRequest{
+		IdempotencyKey: "import-43",
+		RecordType:     "book",
+		Target:         ImportTarget{LibraryID: "users/0", CollectionID: "COLL_8XQ2"},
 	}
 	goldenImportOperation = ImportOperation{
 		ImportID: "imp-1",
@@ -60,12 +68,43 @@ var (
 		},
 		UpdatedAt: at,
 	}
+	// awaiting_confirmation shape — witnesses Decisions/Candidates.
+	goldenImportAwaiting = ImportOperation{
+		ImportID: "imp-2",
+		Status:   ImportAwaitingConfirm,
+		Decisions: []ImportDecision{{
+			DecisionID: "dec-1",
+			Subject:    "bibliography",
+			Candidates: []ImportCandidate{
+				{CandidateID: "cand-1", Origin: "document", Summary: "Title from the document itself"},
+				{CandidateID: "cand-2", Origin: "crossref", Summary: "DOI hit: The Title (Fixture Press, 2019)"},
+				{CandidateID: "cand-3", Origin: "open_library", Summary: "ISBN hit: The Title, 2nd ed."},
+			},
+		}},
+		UpdatedAt: at,
+	}
+	// terminal-failure shape — witnesses ImportFailure.
+	goldenImportFailed = ImportOperation{
+		ImportID:  "imp-3",
+		Status:    ImportTerminalFailed,
+		Failure:   &ImportFailure{Code: "SOURCE_NOT_FOUND", Message: "attachment path outside the allowed roots"},
+		UpdatedAt: at,
+	}
 	goldenCitationRequest = CitationRequest{
 		RecordID: "rec-1",
 		Locator: CitationLocator{
 			Kind: "page", PageStart: &pg, PageEnd: &pg, Chapter: "Markets",
-			ChapterNumber: &chapNo, ParagraphInChapter: &para, PageSource: revision.TrustFolioVerified,
+			ChapterNumber: &chapNo, ParagraphInChapter: &para, SectionTitle: "Market design",
+			PageSource: revision.TrustFolioVerified,
 		},
+	}
+	// epub_cfi locator — the field-set twin of the page fixture above:
+	// CFI is only applicable to this kind, page fields only to that one;
+	// two fixtures keep BOTH field sets witnessed.
+	goldenCitationLocatorCFI = CitationLocator{
+		Kind: "epub_cfi", CFI: "epubcfi(/6/4[chap03ref]!/4[body01]/10/2/1:0)",
+		Chapter: "Markets", ChapterNumber: &chapNo, SectionTitle: "Market design",
+		ParagraphInChapter: &para,
 	}
 	goldenCitationProjection = CitationProjection{
 		RecordID:  "rec-1",
@@ -108,13 +147,17 @@ func TestGoldenFreeze(t *testing.T) {
 	}
 	goldenCompare(t, "source.json", goldenSource)
 	goldenCompare(t, "import_request.json", goldenImportRequest)
+	goldenCompare(t, "import_request_collection_id.json", goldenImportRequestCollectionID)
 	goldenCompare(t, "import_operation.json", goldenImportOperation)
+	goldenCompare(t, "import_operation_awaiting.json", goldenImportAwaiting)
+	goldenCompare(t, "import_operation_failed.json", goldenImportFailed)
 	goldenCompare(t, "citation_request.json", goldenCitationRequest)
+	goldenCompare(t, "citation_locator_epub_cfi.json", goldenCitationLocatorCFI)
 	goldenCompare(t, "citation_projection.json", goldenCitationProjection)
 }
 
 func TestRoundtripStability(t *testing.T) {
-	values := []any{goldenSource, goldenImportRequest, goldenImportOperation, goldenCitationRequest, goldenCitationProjection}
+	values := []any{goldenSource, goldenImportRequest, goldenImportRequestCollectionID, goldenImportOperation, goldenImportAwaiting, goldenImportFailed, goldenCitationRequest, goldenCitationLocatorCFI, goldenCitationProjection}
 	for _, v := range values {
 		b1, err := json.Marshal(v)
 		if err != nil {
@@ -143,6 +186,8 @@ func newAny(v any) any {
 		return &ImportRequest{}
 	case ImportOperation:
 		return &ImportOperation{}
+	case CitationLocator:
+		return &CitationLocator{}
 	case CitationRequest:
 		return &CitationRequest{}
 	case CitationProjection:

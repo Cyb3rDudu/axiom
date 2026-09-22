@@ -50,8 +50,10 @@ type Library interface {
 
 	// OpenRendition redeems a ContentTicket from a SourceRevision and
 	// returns the rendition bytes. Callers MUST verify the stream
-	// against the revision's ContentHash and close the stream. Unknown,
-	// expired, or already-redeemed tickets are NotFound.
+	// against the revision's ContentHash and close the stream. Unknown
+	// or expired tickets are NotFound. Tickets stay redeemable across
+	// ingest retries — single-purpose means rendition-scoped, not
+	// one-shot.
 	OpenRendition(ctx context.Context, ticket ContentTicket) (io.ReadCloser, error)
 
 	// ProjectCitation composes the citation projection (in-text +
@@ -102,7 +104,7 @@ type ImportRequest struct {
 	RecordType     string            `json:"record_type"`
 	Target         ImportTarget      `json:"target"`
 	Source         *ImportSourceInfo `json:"source,omitempty"`
-	MetadataHints  MetadataHints     `json:"metadata_hints,omitempty"`
+	MetadataHints  MetadataHints     `json:"metadata_hints"` // always present (structs ignore omitempty)
 	Enrichment     EnrichmentFlags   `json:"enrichment"`
 }
 

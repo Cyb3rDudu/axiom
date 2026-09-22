@@ -1,0 +1,28 @@
+{
+  "import_id": "imp-2",
+  "status": "awaiting_confirmation",
+  "decisions": [
+    {
+      "decision_id": "dec-1",
+      "subject": "bibliography",
+      "candidates": [
+        {
+          "candidate_id": "cand-1",
+          "origin": "document",
+          "summary": "Title from the document itself"
+        },
+        {
+          "candidate_id": "cand-2",
+          "origin": "crossref",
+          "summary": "DOI hit: The Title (Fixture Press, 2019)"
+        },
+        {
+          "candidate_id": "cand-3",
+          "origin": "open_library",
+          "summary": "ISBN hit: The Title, 2nd ed."
+        }
+      ]
+    }
+  ],
+  "updated_at": "2026-01-02T03:04:05.123456Z"
+}

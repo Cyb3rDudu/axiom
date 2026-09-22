@@ -25,7 +25,9 @@ import (
 	"fmt"
 )
 
-// Component names the seam an error crossed (ADR-0001 terminology).
+// Component names the component that minted the error (ADR-0001
+// terminology). Shared foundation errors (e.g. revision validation)
+// carry their origin even when surfaced by the other component.
 type Component string
 
 const (
@@ -53,9 +55,10 @@ const (
 // terminal for the caller's purpose.
 func (c Class) Retryable() bool { return c == ClassUnavailable }
 
-// Error is the typed seam error. Component says which seam it crossed,
-// Class drives retry/status decisions, Message is human context (never
-// parsed), Cause optionally carries the implementation's original error.
+// Error is the typed seam error. Component says which component minted
+// it, Class drives retry/status decisions, Message is human context
+// (never parsed), Cause optionally carries the implementation's
+// original error.
 type Error struct {
 	Component Component
 	Class     Class
