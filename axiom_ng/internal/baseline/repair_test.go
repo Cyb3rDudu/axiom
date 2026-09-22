@@ -24,6 +24,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -180,12 +181,12 @@ func startRepairRAG(t *testing.T, fakeURL string) (base string, stop func()) {
 		AXIOM_QUERY_RUNNER_URL=http://127.0.0.1:8112
 		AXIOM_PROCESSOR_SOURCE_BASE_URL=http://127.0.0.1:%[3]d
 		AXIOM_PROCESSOR_RUNNER_NAME=axiom-dev-repair-probe
-		AXIOM_ARTIFACT_ROOT=%[4]s/artifacts
-		AXIOM_QUARANTINE_ROOT=%[4]s/quarantine
-		AXIOM_RUNNER_DIR=%[5]s/axiom_ng_runner
+		AXIOM_ARTIFACT_ROOT="%[4]s"/artifacts
+		AXIOM_QUARANTINE_ROOT="%[4]s"/quarantine
+		AXIOM_RUNNER_DIR="%[5]s"/axiom_ng_runner
 		AXIOM_FIXER_INVOKER_ENABLED=0
-		AXIOM_ZOTERO_BASE=%[6]s
-		AXIOM_ZOTERO_WRITE_KEY_FILE=%[7]s
+		AXIOM_ZOTERO_BASE="%[6]s"
+		AXIOM_ZOTERO_WRITE_KEY_FILE="%[7]s"
 		AXIOM_DISPATCHER_ENABLED=0
 		AXIOM_DISPATCHER_WORKER_ID=axiom-dev-repair-probe
 		export AXIOM_DATABASE_URL AXIOM_API_PORT AXIOM_BIND_ADDR AXIOM_OS_INDEX \
@@ -194,7 +195,7 @@ func startRepairRAG(t *testing.T, fakeURL string) (base string, stop func()) {
 			AXIOM_ARTIFACT_ROOT AXIOM_QUARANTINE_ROOT AXIOM_RUNNER_DIR \
 			AXIOM_FIXER_INVOKER_ENABLED AXIOM_ZOTERO_BASE AXIOM_ZOTERO_WRITE_KEY_FILE \
 			AXIOM_DISPATCHER_ENABLED AXIOM_DISPATCHER_WORKER_ID
-		exec %[8]s
+		exec "%[8]s"
 	`, envFile("AXIOM_DEV_RAG_ENV", "/run/agenix/axiom-rag.env"),
 		envFile("AXIOM_DEV_RAG_API_ENV", "/run/agenix/axiom-rag-api.env"),
 		probePort, state, repoRoot(), fakeURL, keyFile, bin)
@@ -365,6 +366,56 @@ func cleanupMint(t *testing.T, dsn string) {
 	_ = os.Remove(filepath.Join(stateDir(), "baseline", "write-key"))
 }
 
+// devDSNDB returns the database name of a URL DSN ("" for non-URLs).
+func devDSNDB(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil || u.Scheme == "" || u.Path == "" {
+		return ""
+	}
+	return strings.TrimPrefix(u.Path, "/")
+}
+
+// TestRequireDevDSNGuard — M1 regression: the repair probe's write path
+// refuses every DSN whose database is not axiom_dev, BEFORE any
+// connection/write (pure URL parse).
+func TestRequireDevDSNGuard(t *testing.T) {
+	for _, dsn := range []string{
+		"postgresql://u:p@127.0.0.1:5432/axiom_dev?sslmode=disable",
+		"postgresql://u:p@127.0.0.1:5432/axiom_dev",
+	} {
+		if db := devDSNDB(dsn); db != "axiom_dev" {
+			t.Errorf("devDSNDB(%q) = %q, want axiom_dev", dsn, db)
+		}
+	}
+	for _, dsn := range []string{
+		"postgresql://u:p@127.0.0.1:5432/axiom_db?sslmode=disable", // prod
+		"postgresql://u:p@127.0.0.1:5432/axiom_db/",                // trailing slash (rewrite no-op case)
+		"postgresql://u:p@127.0.0.1:5432/other_db",
+		"not-a-url",
+		"",
+	} {
+		if db := devDSNDB(dsn); db == "axiom_dev" {
+			t.Errorf("devDSNDB(%q) accepted as axiom_dev — guard would pass", dsn)
+		}
+	}
+}
+
+// requireDevDSN validates that the DSN points at the dev database BEFORE
+// any write reaches it (mintRepairCase inserts, cleanupMint deletes). The
+// same name-assert convention as env.sh/dev-up.sh/the probe child script —
+// the sanctioned caller (make golden-baseline → env.sh) already guarantees
+// it; this guard closes the tool itself, so an out-of-band invocation like
+// `AXIOM_DATABASE_URL=<prod> go test -run TestLiveRepair…` fails BEFORE the
+// first INSERT, not after (hivemind review M1). Pure URL parse — no
+// connection is opened on the failure path.
+func requireDevDSN(t *testing.T, dsn string) string {
+	t.Helper()
+	if db := devDSNDB(dsn); db != "axiom_dev" {
+		t.Fatalf("live DSN targets %q — the repair probe writes (mint/cleanup) and may ONLY run against axiom_dev (source scripts/dev/env.sh)", db)
+	}
+	return dsn
+}
+
 // TestLiveRepairAndCustodyGolden — the full fake-worker walk against the
 // frozen repair surface: queue readback → claim → verdict → readback →
 // requeue, then the manual custody protocol (quarantine → delete →
@@ -373,7 +424,7 @@ func TestLiveRepairAndCustodyGolden(t *testing.T) {
 	liveEnabled(t)
 	assertFreezeBits(t)
 
-	dsn := fingerprintDSN()
+	dsn := requireDevDSN(t, fingerprintDSN())
 	if dsn == "" {
 		t.Fatal("live mode without AXIOM_DATABASE_URL")
 	}
