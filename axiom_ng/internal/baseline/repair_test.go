@@ -150,8 +150,8 @@ func startRepairRAG(t *testing.T, fakeURL string) (base string, stop func()) {
 
 	script := fmt.Sprintf(`
 		set -a
-		. %[1]s
-		. %[2]s
+		. "%[1]s"
+		. "%[2]s"
 		set +a
 		unset AXIOM_DATABASE_URL
 		AXIOM_DATABASE_URL="$(printf '%%s' "$_PROD_DSN" | sed -E 's#/axiom_db([?]|$)#/axiom_dev\1#')"
@@ -387,6 +387,12 @@ func TestRequireDevDSNGuard(t *testing.T) {
 			t.Errorf("devDSNDB(%q) = %q, want axiom_dev", dsn, db)
 		}
 	}
+	// accept path through the wrapper itself: pins the call-site contract
+	// (returning the DSN unchanged for axiom_dev) — removing the
+	// requireDevDSN call site must have at least one red anchor
+	if got := requireDevDSN(t, "postgresql://u:p@127.0.0.1:5432/axiom_dev?sslmode=disable"); got == "" {
+		t.Error("requireDevDSN must return the DSN unchanged for axiom_dev")
+	}
 	for _, dsn := range []string{
 		"postgresql://u:p@127.0.0.1:5432/axiom_db?sslmode=disable", // prod
 		"postgresql://u:p@127.0.0.1:5432/axiom_db/",                // trailing slash (rewrite no-op case)
@@ -398,6 +404,53 @@ func TestRequireDevDSNGuard(t *testing.T) {
 			t.Errorf("devDSNDB(%q) accepted as axiom_dev — guard would pass", dsn)
 		}
 	}
+}
+
+// TestScratchableDSNGuard — the fingerprint path's cluster-level scratch
+// create/drop only ever runs on the dev/CI allowlist; anything else (prod,
+// unknown names, non-URLs) must be refused before any connection.
+func TestScratchableDSNGuard(t *testing.T) {
+	for _, dsn := range []string{
+		"postgresql://u:p@127.0.0.1:5432/axiom_dev?sslmode=disable",
+		"postgresql://u:p@127.0.0.1:5432/axiom_ng_ci_baseline",
+		"postgresql://u:p@127.0.0.1:5432/axiom_ng_ci_test?sslmode=disable",
+	} {
+		if got := requireScratchableDSN(t, dsn); got != dsn {
+			t.Errorf("requireScratchableDSN(%q) = %q, want the DSN unchanged", dsn, got)
+		}
+	}
+	for _, dsn := range []string{
+		"postgresql://u:p@127.0.0.1:5432/axiom_db?sslmode=disable", // prod
+		"postgresql://u:p@127.0.0.1:5432/other_db",
+		"postgresql://u:p@127.0.0.1:5432/axiom_ng_ci_baseline_evil", // prefix, not the name
+		"not-a-url", // devDSNDB → "", not on the allowlist
+		"",          // devDSNDB → "", not on the allowlist
+	} {
+		if scratchableDSNs[devDSNDB(dsn)] {
+			t.Errorf("devDSNDB(%q) is on the scratch allowlist — guard would pass", dsn)
+		}
+	}
+}
+
+// scratchableDSNs is a deliberate allowlist: withScratchDB issues
+// cluster-level pg_terminate_backend + DROP/CREATE DATABASE, which must
+// stay confined to dev/CI clusters — new CI databases get added here
+// consciously, never by wildcard.
+var scratchableDSNs = map[string]bool{
+	"axiom_dev":            true, // dev host (scripts/dev/env.sh)
+	"axiom_ng_ci_baseline": true, // golden-baseline CI job
+	"axiom_ng_ci_test":     true, // db-it CI job
+}
+
+// requireScratchableDSN guards every withScratchDB caller: the DSN's
+// database must be on the scratch allowlist (scratchableDSNs). Same
+// convention as requireDevDSN — pure URL parse, BEFORE any connection.
+func requireScratchableDSN(t *testing.T, dsn string) string {
+	t.Helper()
+	if !scratchableDSNs[devDSNDB(dsn)] {
+		t.Fatalf("fingerprint DSN targets %q — withScratchDB drops/creates the scratch database at cluster level and may only run on dev/CI databases (allowlist: scratchableDSNs)", devDSNDB(dsn))
+	}
+	return dsn
 }
 
 // requireDevDSN validates that the DSN points at the dev database BEFORE
@@ -424,10 +477,8 @@ func TestLiveRepairAndCustodyGolden(t *testing.T) {
 	liveEnabled(t)
 	assertFreezeBits(t)
 
+	// the guard fatals on empty/non-URL DSNs, so no separate empty check here
 	dsn := requireDevDSN(t, fingerprintDSN())
-	if dsn == "" {
-		t.Fatal("live mode without AXIOM_DATABASE_URL")
-	}
 
 	// suite-owned "broken original" — never a real Zotero storage file
 	work := t.TempDir()

@@ -48,6 +48,9 @@ func fingerprintDSN() string {
 // cross-talking) — accepted ceiling: single-operator dev host and CI.
 func withScratchDB(ctx context.Context, t *testing.T, dsn string, fn func(dsn string)) {
 	t.Helper()
+	// guard FIRST, before any connection: cluster-level DROP/CREATE only
+	// ever happens on dev/CI clusters (see scratchableDSNs)
+	requireScratchableDSN(t, dsn)
 	u, err := url.Parse(dsn)
 	if err != nil || u.Scheme == "" || u.Path == "" {
 		t.Fatalf("cannot rewrite non-URL DSN (need postgres://…/dbname form): %v", err)
