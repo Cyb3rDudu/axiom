@@ -47,7 +47,7 @@ var (
 	}
 	goldenSearchResult = SearchResult{
 		Query: "market design", TopN: 5, Reranked: false,
-		Arms: SearchArms{Dense: true, BM25: true},
+		Arms: SearchArms{Dense: true, BM25: true, Sparse: true},
 		Hits: []SearchHit{{
 			ChunkID: "chk-1", Text: "The passage text.", Score: 0.87,
 			Source:                  goldenSource,
@@ -88,10 +88,12 @@ var (
 		Source:  goldenSource,
 		Neighbors: []PassageNeighbor{{
 			ChunkID: "chk-0", ChunkIndex: 3, Text: "Previous paragraph.",
-			Section: []string{"Markets"}, Locator: Locator{Kind: "page", Label: "S. 46"},
+			Section: []string{"Markets"},
+			Locator: Locator{Kind: "epub_cfi", Label: "Kap. 3", CFI: "epubcfi(/6/4!/4/10/2/1:0)", Chapter: "Markets"},
 		}},
 		ParagraphPages: goldenLocator.ParagraphPages,
 		CaptionText:    "[machine image caption: a chart]",
+		Images:         []Image{{Ref: "image-0002", Marker: "image_1.png", FigureCaption: "Figure 2: the table"}},
 	}
 )
 

@@ -4,7 +4,8 @@
   "reranked": false,
   "arms": {
     "dense": true,
-    "bm25": true
+    "bm25": true,
+    "sparse": true
   },
   "hits": [
     {

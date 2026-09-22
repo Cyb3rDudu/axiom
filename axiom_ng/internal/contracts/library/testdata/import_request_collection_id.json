@@ -1,0 +1,11 @@
+{
+  "idempotency_key": "import-43",
+  "record_type": "book",
+  "target": {
+    "library_id": "users/0",
+    "collection_id": "COLL_8XQ2",
+    "create_missing": false
+  },
+  "metadata_hints": {},
+  "enrichment": {}
+}

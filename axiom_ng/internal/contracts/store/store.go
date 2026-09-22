@@ -8,11 +8,14 @@
 // Library sibling: DTOs + typed errors only, nothing from internal/db,
 // HTTP, or provider code (lint-enforced).
 //
-// The Search/Passage DTOs mirror the frozen v0.1.18 public API shapes
-// field-for-field (F01 goldens): the HTTP adapter (F11) serializes
-// exactly these DTOs, so field names and optionalität here are already
-// witness-locked — additive changes only, with a golden update in the
-// same PR.
+// The Search/Passage DTOs mirror the frozen v0.1.18 public API field
+// names (F01 goldens) so the F11 HTTP adapter can serialize these DTOs
+// without breaking the baseline — with exactly two deliberate ADR-0001
+// renames: doc_id → record_id (revision.Bibliography.RecordID) and
+// attachment_id → rendition_id (Passage.RenditionID). The public-facing
+// adapter layer owns that field-name translation; these DTOs are the
+// component-internal wire. Optionalität here is witness-locked —
+// additive changes only, with a golden update in the same PR.
 package store
 
 import (
@@ -38,14 +41,17 @@ type Store interface {
 	// revision's ContentTicket is how the implementation fetches bytes
 	// (via the Library seam) — fetching is an implementation concern,
 	// not part of this signature. Returns the initial IngestJob; the job
-	// runs asynchronously — poll via the returned ids until terminal
-	// (committed or failed). A Store MAY choose to return jobs already
-	// committed for small synchronous implementations.
+	// runs asynchronously — eventual visibility through Search is the
+	// terminal observable (v1 deliberately has no job-status poll
+	// method). A Store MAY choose to return jobs already committed for
+	// small synchronous implementations.
 	//
 	// Idempotency: same key + identical revision (canonical JSON of the
 	// DTO) → the SAME IngestJob (replay, no side effects). Same key +
 	// different revision → *contracterr.IdempotencyMismatch. An invalid
-	// revision (revision.Validate) → InvalidArgument.
+	// revision (revision.Validate) → InvalidArgument. Content fetched
+	// via the ticket that does not hash to the revision's ContentHash →
+	// Conflict (the revision describes bytes the Library cannot serve).
 	IngestRevision(ctx context.Context, req IngestRevisionRequest) (IngestJob, error)
 
 	// Search runs hybrid retrieval. Blank query or top_n above the
@@ -113,6 +119,8 @@ type SearchRequest struct {
 
 // SearchFilters narrows all recall arms (nil DocumentIDs = no filter).
 type SearchFilters struct {
+	// DocumentIDs filters by the record identity — Source.RecordID /
+	// Passage.DocumentID, the same id under both names.
 	DocumentIDs []string `json:"document_ids,omitempty"`
 }
 

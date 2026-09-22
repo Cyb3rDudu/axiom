@@ -150,7 +150,16 @@ func (f *FakeLibrary) StartImport(ctx context.Context, req library.ImportRequest
 	if len(b) == 0 {
 		return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "import content is empty")
 	}
-	payload := revision.HashContent(append(b, []byte(req.IdempotencyKey+req.RecordType)...))
+	// Payload identity = canonical JSON of the FULL request DTO + the
+	// content bytes — the documented "metadata JSON and content"
+	// (FakeStore hashes the canonical JSON of the revision the same
+	// way). Any difference — content, hints, target, enrichment —
+	// diverges the key.
+	meta, err := json.Marshal(req)
+	if err != nil {
+		return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "canonicalizing import request")
+	}
+	payload := revision.HashContent(append(append([]byte{}, meta...), b...))
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -348,21 +357,39 @@ func (f *FakeStore) IngestRevision(ctx context.Context, req store.IngestRevision
 		return store.IngestJob{}, contracterr.Wrap(contracterr.ComponentStore, contracterr.ClassInternal, err, "canonicalizing revision")
 	}
 
+	// First idempotency pass: cheap map lookups under the lock; replays
+	// never reach the ticket resolver.
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if priorID, seen := f.byKey[req.IdempotencyKey]; seen {
+		defer f.mu.Unlock()
 		if f.keyPayload[req.IdempotencyKey] != string(payload) {
 			return store.IngestJob{}, &contracterr.IdempotencyMismatch{Component: contracterr.ComponentStore, Key: req.IdempotencyKey}
 		}
 		return f.jobs[priorID], nil // replay
 	}
+	f.mu.Unlock()
 
+	// Resolve the ticket WITHOUT holding the lock — the resolver is an
+	// external callback (the Library binding); calling it under the
+	// mutex would serialize every intake behind the slowest fetch.
 	content, err := f.resolve(req.Revision.ContentTicket)
 	if err != nil {
 		return store.IngestJob{}, contracterr.Wrap(contracterr.ComponentStore, contracterr.ClassUnavailable, err, "resolving content ticket")
 	}
 	if revision.HashContent(content) != req.Revision.ContentHash {
 		return store.IngestJob{}, contracterr.New(contracterr.ComponentStore, contracterr.ClassConflict, "content does not match the revision hash")
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Second pass: a concurrent intake with the same key may have won
+	// the race while this one was resolving — replay its job instead of
+	// double-indexing.
+	if priorID, seen := f.byKey[req.IdempotencyKey]; seen {
+		if f.keyPayload[req.IdempotencyKey] != string(payload) {
+			return store.IngestJob{}, &contracterr.IdempotencyMismatch{Component: contracterr.ComponentStore, Key: req.IdempotencyKey}
+		}
+		return f.jobs[priorID], nil
 	}
 
 	jobID := fmt.Sprintf("job-%d", f.seq+1)

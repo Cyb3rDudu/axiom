@@ -53,8 +53,10 @@
         "Markets"
       ],
       "locator": {
-        "kind": "page",
-        "label": "S. 46"
+        "kind": "epub_cfi",
+        "label": "Kap. 3",
+        "chapter": "Markets",
+        "cfi": "epubcfi(/6/4!/4/10/2/1:0)"
       }
     }
   ],
@@ -68,5 +70,12 @@
       "48"
     ]
   ],
-  "caption_text": "[machine image caption: a chart]"
+  "caption_text": "[machine image caption: a chart]",
+  "images": [
+    {
+      "ref": "image-0002",
+      "marker": "image_1.png",
+      "figure_caption": "Figure 2: the table"
+    }
+  ]
 }

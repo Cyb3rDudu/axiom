@@ -1,0 +1,9 @@
+{
+  "import_id": "imp-3",
+  "status": "terminal_failed",
+  "failure": {
+    "code": "SOURCE_NOT_FOUND",
+    "message": "attachment path outside the allowed roots"
+  },
+  "updated_at": "2026-01-02T03:04:05.123456Z"
+}

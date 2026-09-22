@@ -7,6 +7,7 @@
 package revision
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ func TestValidateAcceptsAndRejects(t *testing.T) {
 		SourceID: "src-1", RevisionID: "7",
 		ContentHash: HashContent([]byte("x")),
 		MediaType:   MediaTypePDF, ContentTicket: "ticket-1",
+		Bibliography: Bibliography{RecordID: "rec-1", CitationClass: CitationClassCitable},
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid revision rejected: %v", err)
@@ -33,6 +35,8 @@ func TestValidateAcceptsAndRejects(t *testing.T) {
 		{"uppercase hash", func(r *SourceRevision) { r.ContentHash = strings.ToUpper(r.ContentHash) }},
 		{"empty media_type", func(r *SourceRevision) { r.MediaType = "" }},
 		{"empty ticket", func(r *SourceRevision) { r.ContentTicket = "" }},
+		{"empty bibliography.record_id", func(r *SourceRevision) { r.Bibliography.RecordID = "" }},
+		{"unknown citation_class", func(r *SourceRevision) { r.Bibliography.CitationClass = "maybe" }},
 	}
 	for _, c := range bad {
 		r := valid
@@ -40,6 +44,12 @@ func TestValidateAcceptsAndRejects(t *testing.T) {
 		if err := r.Validate(); err == nil {
 			t.Errorf("%s: invalid revision accepted", c.name)
 		}
+	}
+	// the closed vocabulary accepts both members explicitly
+	contextual := valid
+	contextual.Bibliography.CitationClass = CitationClassContextual
+	if err := contextual.Validate(); err != nil {
+		t.Fatalf("contextual citation class rejected: %v", err)
 	}
 }
 
@@ -89,7 +99,7 @@ func goldenCompare(t *testing.T, name string, v any) {
 	if err != nil {
 		t.Fatalf("golden missing (%s) — run BASELINE_UPDATE=1 go test ./internal/contracts/revision: %v", name, err)
 	}
-	if string(want) != string(got) {
+	if !bytes.Equal(want, got) {
 		t.Fatalf("DTO golden %s drifted — field set/names are frozen (v1); deliberate change = update golden in the same PR:\n--- golden ---\n%s--- actual ---\n%s", name, want, got)
 	}
 }

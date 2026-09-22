@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"testing"
 	"time"
 
@@ -168,8 +169,9 @@ func LibrarySuite(t *testing.T, impl library.Library) {
 	}, impl)
 }
 
-// libraryProbes is the probe table — exported shape for the mutation
-// sonde tests (single probes run against deliberately broken fakes).
+// libraryProbes is the probe table — consumed by LibrarySuite and by
+// the mutation sonde tests (single probes run against deliberately
+// broken fakes in this package).
 func libraryProbes(impl library.Library) []probe {
 	ctx := context.Background()
 	seedReq := seedImportRequest("lib-idem-ok")
@@ -232,6 +234,28 @@ func libraryProbes(impl library.Library) []probe {
 			}
 			if first.ImportID != second.ImportID {
 				return fmt.Errorf("idempotent replay returned %s, want the original %s", second.ImportID, first.ImportID)
+			}
+			if !reflect.DeepEqual(first, second) {
+				return fmt.Errorf("idempotent replay must return the SAME operation, got %+v after %+v", second, first)
+			}
+			return nil
+		}},
+		{"StartImport: same key with different metadata is a Conflict mismatch", func() error {
+			if _, err := impl.StartImport(ctx, seedReq, bytes.NewReader(SeedContent)); err != nil {
+				return err
+			}
+			metaDiv := seedImportRequest("lib-idem-ok")
+			metaDiv.MetadataHints.Title = "A Different Title"
+			_, err := impl.StartImport(ctx, metaDiv, bytes.NewReader(SeedContent))
+			if err == nil {
+				return errors.New("metadata divergence under a reused idempotency key must fail, got success (silent divergence)")
+			}
+			if err := classIs(err, contracterr.ClassConflict, "idempotency metadata mismatch"); err != nil {
+				return err
+			}
+			var mm *contracterr.IdempotencyMismatch
+			if !errors.As(err, &mm) || mm.Key != seedReq.IdempotencyKey {
+				return fmt.Errorf("error is not *IdempotencyMismatch with key %q: %v", seedReq.IdempotencyKey, err)
 			}
 			return nil
 		}},
@@ -468,6 +492,9 @@ func storeProbes(impl store.Store) []probe {
 			if first.JobID != second.JobID {
 				return fmt.Errorf("idempotent replay returned %s, want the original %s", second.JobID, first.JobID)
 			}
+			if !reflect.DeepEqual(first, second) {
+				return fmt.Errorf("idempotent replay must return the SAME job, got %+v after %+v", second, first)
+			}
 			return nil
 		}},
 		{"IngestRevision: same key with different revision is a Conflict mismatch", func() error {
@@ -511,6 +538,9 @@ func storeProbes(impl store.Store) []probe {
 			res, err := impl.Search(ctx, store.SearchRequest{Query: SeedToken})
 			if err != nil {
 				return err
+			}
+			if res.Hits == nil {
+				return errors.New("hits must be a present (possibly empty) slice — nil would marshal as null and break the frozen array shape")
 			}
 			var hit *store.SearchHit
 			for i := range res.Hits {

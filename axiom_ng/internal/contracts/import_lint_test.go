@@ -1,6 +1,7 @@
 // import_lint_test.go — the F03 transport-neutrality gate (#297).
 //
-// Contract packages may import ONLY the standard library and their
+// Contract packages may import ONLY the standard library — net/http
+// excluded, the one stdlib tree that IS transport state — and their
 // sibling packages under internal/contracts. That rule bans, by
 // construction, everything the seam must never see: internal/db and
 // internal/repo (SQL/pgx/repo models), net/http and chi (transport),
@@ -9,9 +10,10 @@
 // against — the persistence split (F12/DM) would be undone through the
 // back door.
 //
-// Red-proof: the probe commit on a worktree copy (an internal/db import
-// injected into a contract file) turns this test red; see the issue
-// comment for the transcript.
+// Red-proofs: the probe commit on a worktree copy (an internal/db import
+// injected into a contract file) turns this test red; the same dance
+// with a net/http import after the explicit stdlib denylist was added.
+// See the issue comment for the transcripts.
 package contracts
 
 import (
@@ -23,10 +25,17 @@ import (
 	"testing"
 )
 
-// contractsRoot is this package's directory — the root of everything
-// the lint covers (all subpackages, production and test files alike:
-// test files are examples, and leaky examples breed leaky code).
+// contractsImportPrefix is the import-path prefix of every contract
+// package (this package's tree) — the allowlist anchor. The lint covers
+// all subpackages, production and test files alike: test files are
+// examples, and leaky examples breed leaky code.
 const contractsImportPrefix = "github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts"
+
+// stdlibDenied is the explicit standard-library denylist: paths that
+// are dot-free stdlib by shape but carry transport semantics across
+// the seam. Covers net/http and its subpackages (httptrace, httputil,
+// httptest…).
+const stdlibDenied = "net/http"
 
 func TestContractPackagesAreTransportNeutral(t *testing.T) {
 	var violations []string
@@ -61,13 +70,14 @@ func TestContractPackagesAreTransportNeutral(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(violations) > 0 {
-		t.Fatalf("contract packages must stay transport-neutral (stdlib + sibling contract packages only; no internal/db, no internal/repo, no net/http, no chi, no zotero, no pgx):\n\t%s",
+		t.Fatalf("contract packages must stay transport-neutral (stdlib except net/http + sibling contract packages only; no internal/db, no internal/repo, no net/http, no chi, no zotero, no pgx):\n\t%s",
 			strings.Join(violations, "\n\t"))
 	}
 }
 
 // allowedImport: sibling contract packages and the standard library
-// (identified by a dot-free first path segment).
+// (identified by a dot-free first path segment), EXCEPT the denied
+// stdlib transport tree.
 func allowedImport(p string) bool {
 	if p == contractsImportPrefix || strings.HasPrefix(p, contractsImportPrefix+"/") {
 		return true
@@ -76,5 +86,11 @@ func allowedImport(p string) bool {
 	if i := strings.Index(first, "/"); i > 0 {
 		first = first[:i]
 	}
-	return !strings.Contains(first, ".")
+	if strings.Contains(first, ".") {
+		return false // external module
+	}
+	if p == stdlibDenied || strings.HasPrefix(p, stdlibDenied+"/") {
+		return false // stdlib by shape, transport by nature
+	}
+	return true
 }
