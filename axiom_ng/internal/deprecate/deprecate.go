@@ -54,10 +54,13 @@ func Counts() map[string]int {
 	return out
 }
 
-// reset clears all state (test isolation only).
+// reset clears all state (test isolation only) — including silent, so
+// a test that silenced the witness cannot leak into the next one
+// (reproducible under go test -shuffle=on).
 func reset() {
 	mu.Lock()
 	defer mu.Unlock()
 	warned = map[string]bool{}
 	counts = map[string]int{}
+	silent = false
 }

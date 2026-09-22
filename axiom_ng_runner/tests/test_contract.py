@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from axiom_ng_runner import CONTRACT_VERSION, PIPELINE_STAGES
+from axiom_ng_runner import CONTRACT_VERSION, PIPELINE_STAGES, deprecations
 from axiom_ng_runner.app import app
 from axiom_ng_runner.config import Settings, settings
 from axiom_ng_runner.job_store import Job, JobStore
@@ -114,6 +114,11 @@ def test_health_and_capabilities(client):
 # fixtures/canonical_identity.json.
 # ---------------------------------------------------------------------------
 def test_capabilities_canonical_identity(client):
+    # Order-independence: the witness is module-global process state; other
+    # test modules may have counted legacy uses. The export must mirror the
+    # live witness exactly, and a request-path legacy use (none exists yet —
+    # first with F05/F10) would move it between snapshot and response.
+    before = deprecations.counts()
     caps = client.get("/v1/capabilities", timeout=10).json()
     assert caps["canonical_name"] == "axiom-compute-worker"
     assert caps["service_class"] == "compute-worker"
@@ -121,8 +126,8 @@ def test_capabilities_canonical_identity(client):
     assert caps["roles"] == ["document-processing", "query-embedding", "reranking"]
     # instance names the serving host — presence/type only (host-dependent)
     assert isinstance(caps["instance"], str) and caps["instance"]
-    # no legacy entrypoint exists yet (F05/F10) — counters start empty
-    assert caps["deprecations"] == {}
+    # deprecations export mirrors the witness (see above)
+    assert caps["deprecations"] == before
     # legacy fields untouched by the identity extension
     assert caps["processor"]["name"] == "axiom-python-marker"
     assert CONTRACT_VERSION in caps["contract_versions"]

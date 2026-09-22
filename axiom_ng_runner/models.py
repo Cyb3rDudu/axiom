@@ -257,4 +257,4 @@ class Capabilities(BaseModel):
     implementation: str
     roles: list[str]
     instance: str
-    deprecations: dict[str, int] = {}
+    deprecations: dict[str, int] = Field(default_factory=dict)

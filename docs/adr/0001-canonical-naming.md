@@ -19,7 +19,7 @@ decision. This ADR is the repository's first ADR (numbering starts at
 
 ### 1. Domain components
 
-The fachliche components of axiom are:
+The domain components of axiom are:
 
 | Component | Responsibility | 0.2.0 status |
 |---|---|---|

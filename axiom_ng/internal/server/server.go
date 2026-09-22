@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/deprecate"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
@@ -165,13 +166,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		checks[name] = "ok"
 	}
 
+	// ADR 0001 §5: all component roles are compiled in today; the
+	// compact service_class is derived from the roles so F04/F05 narrow
+	// them at one point (JSON stays byte-identical: "api+library+store").
+	roles := []string{"api", "library", "store"}
 	hr := healthResponse{
 		OK:             ok,
 		Build:          version.Banner(),
 		Checks:         checks,
 		CanonicalName:  "axiom",
-		ServiceClass:   "api+library+store",
-		ComponentRoles: []string{"api", "library", "store"},
+		ServiceClass:   strings.Join(roles, "+"),
+		ComponentRoles: roles,
 		Deprecations:   deprecate.Counts(),
 	}
 	if s.contextualState != nil {

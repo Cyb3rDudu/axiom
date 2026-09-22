@@ -54,8 +54,9 @@ def counts() -> dict[str, int]:
 
 
 def _reset() -> None:
-    """Clear all state (test isolation only)."""
-    global _warned, _counts
+    """Clear all state (test isolation only) — including silence."""
+    global _warned, _counts, _silent
     with _lock:
         _warned = set()
         _counts = {}
+        _silent = False
