@@ -1,0 +1,72 @@
+{
+  "chunk_id": "chk-1",
+  "document_id": "rec-1",
+  "snapshot_id": "snap-1",
+  "rendition_id": "ren-1",
+  "chunk_index": 4,
+  "text": "The passage text.",
+  "section": [
+    "Markets"
+  ],
+  "locator": {
+    "kind": "page",
+    "label": "S. 47",
+    "chapter": "Markets",
+    "chapter_number": 3,
+    "page_source": "folio_verified",
+    "page_start": 47,
+    "page_end": 48,
+    "paragraph_pages": [
+      [
+        "120",
+        "47"
+      ],
+      [
+        "480",
+        "48"
+      ]
+    ],
+    "paragraph_in_chapter": 12,
+    "section_title": "Market design"
+  },
+  "source": {
+    "record_id": "rec-1",
+    "title": "The Title",
+    "authors": [
+      "Ada Example"
+    ],
+    "year": 2019,
+    "publisher": "Fixture Press",
+    "language": "de",
+    "tags": [
+      "tag"
+    ],
+    "citation_class": "citable",
+    "content_type": "application/pdf"
+  },
+  "neighbors": [
+    {
+      "chunk_id": "chk-0",
+      "chunk_index": 3,
+      "text": "Previous paragraph.",
+      "section": [
+        "Markets"
+      ],
+      "locator": {
+        "kind": "page",
+        "label": "S. 46"
+      }
+    }
+  ],
+  "paragraph_pages": [
+    [
+      "120",
+      "47"
+    ],
+    [
+      "480",
+      "48"
+    ]
+  ],
+  "caption_text": "[machine image caption: a chart]"
+}

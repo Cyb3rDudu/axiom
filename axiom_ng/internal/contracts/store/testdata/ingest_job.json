@@ -1,0 +1,13 @@
+{
+  "job_id": "job-1",
+  "status": "retryable_failed",
+  "revision_id": "3",
+  "content_hash": "97c4e9b574beba21bf7e8919b89ead14aceddb6f8b082df609ac4ee6246b288e",
+  "attempt": 2,
+  "max_attempts": 3,
+  "failure": {
+    "code": "RUNNER_UNAVAILABLE",
+    "message": "compute worker unreachable"
+  },
+  "updated_at": "2026-01-02T03:04:05.123456Z"
+}

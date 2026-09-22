@@ -1,0 +1,25 @@
+{
+  "idempotency_key": "import-42",
+  "record_type": "book",
+  "target": {
+    "library_id": "users/0",
+    "collection_path": [
+      "Semester 3",
+      "VWL"
+    ],
+    "create_missing": false
+  },
+  "source": {
+    "original_url": "https://example.org/paper",
+    "accessed_at": "2026-01-01T09:00:00Z"
+  },
+  "metadata_hints": {
+    "doi": "10.1000/xyz",
+    "isbn": "978-3-16-148410-0",
+    "title": "The Title"
+  },
+  "enrichment": {
+    "crossref": true,
+    "open_library": false
+  }
+}

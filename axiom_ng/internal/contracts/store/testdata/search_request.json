@@ -1,0 +1,9 @@
+{
+  "query": "market design",
+  "top_n": 5,
+  "filters": {
+    "document_ids": [
+      "rec-1"
+    ]
+  }
+}
