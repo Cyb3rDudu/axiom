@@ -74,9 +74,13 @@ jobs:
         #    /api/health examples; the banner string is a technical fact
         #    (version.go), not product prose.
         # 8) ADR 0001 (canonical naming) — the binding mapping decision
-        #    MUST name the legacy identifiers it maps; its own §7 language
-        #    rule confines them to the §4 mapping table. Scoped to this
-        #    one ADR file; future ADRs re-justify themselves.
+        #    MUST name the legacy identifiers it maps. Scoped to TABLE
+        #    ROWS of that one ADR file only: the exemption anchors to the
+        #    grep output prefix (file origin) AND a leading `|` (table
+        #    row), so the §7 confinement — legacy literal only in the
+        #    mapping tables — is CI-enforced; legacy prose inside the
+        #    ADR and lines quoting the ADR path from elsewhere go red.
+        #    Future ADRs re-justify themselves.
         # mkdocs.yml is checked as well, so a `site_name: axiom-ng`
         # regression fails CI. docs/_inventory.md is internal meta and exempt.
         run: |
@@ -91,7 +95,7 @@ jobs:
             | grep -vF 'axiom-ng, axiom-runner' \
             | grep -vE 'axiom-ng v[0-9]' \
             | grep -vE '\| `axiom-ng` \|' \
-            | grep -vF 'adr/0001-canonical-naming.md'; then
+            | grep -vE '^docs/adr/0001-canonical-naming\.md:\|'; then
             echo "legacy product name 'axiom-ng' found in site content"
             exit 1
           fi

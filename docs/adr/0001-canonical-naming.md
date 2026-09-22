@@ -104,8 +104,9 @@ after the exported counters justify it.
 ### 7. Language rule
 
 Logs, documentation and capabilities use canonical names exclusively.
-Legacy names appear only inside alias deprecation warnings (and in this
-ADR's mapping table). Code-path names (`axiom_ng/`, `axiom_ng_runner/`,
+Legacy names appear only inside alias deprecation warnings (and,
+within this ADR, in the §2 and §4 mapping tables). Code-path names
+(`axiom_ng/`, `axiom_ng_runner/`,
 `AXIOM_*` env vars) are technical facts of the 0.1.x tree and move with
 their own steps (F05/F08/F10).
 
