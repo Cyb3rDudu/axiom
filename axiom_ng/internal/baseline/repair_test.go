@@ -24,7 +24,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +35,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -290,6 +290,7 @@ func prodDSN(t *testing.T) string {
 // (cleaning any previous run first) and returns the case id.
 func mintRepairCase(t *testing.T, dsn, srcPDF string) string {
 	t.Helper()
+	dsn = requireDevDSN(t, dsn) // write path guards itself (by construction)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	d, err := db.Open(ctx, dsn)
@@ -351,6 +352,7 @@ func mintRepairCase(t *testing.T, dsn, srcPDF string) string {
 // cleanupMint removes every minted row and the quarantine record.
 func cleanupMint(t *testing.T, dsn string) {
 	t.Helper()
+	requireDevDSN(t, dsn) // write path guards itself (by construction)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	d, err := db.Open(ctx, dsn)
@@ -366,30 +368,38 @@ func cleanupMint(t *testing.T, dsn string) {
 	_ = os.Remove(filepath.Join(stateDir(), "baseline", "write-key"))
 }
 
-// devDSNDB returns the database name of a URL DSN ("" for non-URLs).
-func devDSNDB(dsn string) string {
-	u, err := url.Parse(dsn)
-	if err != nil || u.Scheme == "" || u.Path == "" {
+// dsnDatabase returns the database name a pgx connection WOULD use —
+// parsed with pgconn.ParseConfig, the SAME parser the driver runs, so the
+// guard can never diverge from the connection target (hivemind re-check:
+// net/url ignored ?dbname=/?database= overrides, which pgconn APPLIES on
+// top of the path — a crafted DSN could pass the guard and still connect
+// to axiom_db). Unparseable/empty DSNs return "" (fail closed).
+func dsnDatabase(dsn string) string {
+	cfg, err := pgconn.ParseConfig(dsn)
+	if err != nil {
 		return ""
 	}
-	return strings.TrimPrefix(u.Path, "/")
+	return cfg.Database
 }
 
 // TestRequireDevDSNGuard — M1 regression: the repair probe's write path
 // refuses every DSN whose database is not axiom_dev, BEFORE any
-// connection/write (pure URL parse).
+// connection/write. Rows include the crafted ?dbname=/?database=
+// overrides that pgconn applies on top of the path (the parser-
+// differential case) and the keyword form (same parser as the driver,
+// accepted consistently).
 func TestRequireDevDSNGuard(t *testing.T) {
 	for _, dsn := range []string{
 		"postgresql://u:p@127.0.0.1:5432/axiom_dev?sslmode=disable",
 		"postgresql://u:p@127.0.0.1:5432/axiom_dev",
+		"host=127.0.0.1 port=5432 dbname=axiom_dev",
 	} {
-		if db := devDSNDB(dsn); db != "axiom_dev" {
-			t.Errorf("devDSNDB(%q) = %q, want axiom_dev", dsn, db)
+		if db := dsnDatabase(dsn); db != "axiom_dev" {
+			t.Errorf("dsnDatabase(%q) = %q, want axiom_dev", dsn, db)
 		}
 	}
 	// accept path through the wrapper itself: pins the call-site contract
-	// (returning the DSN unchanged for axiom_dev) — removing the
-	// requireDevDSN call site must have at least one red anchor
+	// (returning the DSN unchanged for axiom_dev)
 	if got := requireDevDSN(t, "postgresql://u:p@127.0.0.1:5432/axiom_dev?sslmode=disable"); got == "" {
 		t.Error("requireDevDSN must return the DSN unchanged for axiom_dev")
 	}
@@ -397,11 +407,15 @@ func TestRequireDevDSNGuard(t *testing.T) {
 		"postgresql://u:p@127.0.0.1:5432/axiom_db?sslmode=disable", // prod
 		"postgresql://u:p@127.0.0.1:5432/axiom_db/",                // trailing slash (rewrite no-op case)
 		"postgresql://u:p@127.0.0.1:5432/other_db",
+		// parser differential (closed): path says dev, query redirects
+		"postgresql://u:p@127.0.0.1:5432/axiom_dev?dbname=axiom_db",
+		"postgresql://u:p@127.0.0.1:5432/axiom_dev?database=axiom_db",
+		"postgresql://u:p@127.0.0.1:5432/axiom_dev?dbname=axiom_db&sslmode=disable",
 		"not-a-url",
 		"",
 	} {
-		if db := devDSNDB(dsn); db == "axiom_dev" {
-			t.Errorf("devDSNDB(%q) accepted as axiom_dev — guard would pass", dsn)
+		if db := dsnDatabase(dsn); db == "axiom_dev" {
+			t.Errorf("dsnDatabase(%q) resolved to axiom_dev — guard would pass a redirected/non-axiom_dev target", dsn)
 		}
 	}
 }
@@ -423,11 +437,11 @@ func TestScratchableDSNGuard(t *testing.T) {
 		"postgresql://u:p@127.0.0.1:5432/axiom_db?sslmode=disable", // prod
 		"postgresql://u:p@127.0.0.1:5432/other_db",
 		"postgresql://u:p@127.0.0.1:5432/axiom_ng_ci_baseline_evil", // prefix, not the name
-		"not-a-url", // devDSNDB → "", not on the allowlist
-		"",          // devDSNDB → "", not on the allowlist
+		"not-a-url", // dsnDatabase → "", not on the allowlist
+		"",          // dsnDatabase → "", not on the allowlist
 	} {
-		if scratchableDSNs[devDSNDB(dsn)] {
-			t.Errorf("devDSNDB(%q) is on the scratch allowlist — guard would pass", dsn)
+		if scratchableDSNs[dsnDatabase(dsn)] {
+			t.Errorf("dsnDatabase(%q) is on the scratch allowlist — guard would pass", dsn)
 		}
 	}
 }
@@ -444,27 +458,27 @@ var scratchableDSNs = map[string]bool{
 
 // requireScratchableDSN guards every withScratchDB caller: the DSN's
 // database must be on the scratch allowlist (scratchableDSNs). Same
-// convention as requireDevDSN — pure URL parse, BEFORE any connection.
+// convention as requireDevDSN — pgconn-parsed (see dsnDatabase), BEFORE
+// any connection.
 func requireScratchableDSN(t *testing.T, dsn string) string {
 	t.Helper()
-	if !scratchableDSNs[devDSNDB(dsn)] {
-		t.Fatalf("fingerprint DSN targets %q — withScratchDB drops/creates the scratch database at cluster level and may only run on dev/CI databases (allowlist: scratchableDSNs)", devDSNDB(dsn))
+	if !scratchableDSNs[dsnDatabase(dsn)] {
+		t.Fatalf("fingerprint DSN resolves to database %q — withScratchDB drops/creates the scratch database at cluster level and may only run on dev/CI databases (allowlist: scratchableDSNs)", dsnDatabase(dsn))
 	}
 	return dsn
 }
 
 // requireDevDSN validates that the DSN points at the dev database BEFORE
-// any write reaches it (mintRepairCase inserts, cleanupMint deletes). The
-// same name-assert convention as env.sh/dev-up.sh/the probe child script —
-// the sanctioned caller (make golden-baseline → env.sh) already guarantees
-// it; this guard closes the tool itself, so an out-of-band invocation like
-// `AXIOM_DATABASE_URL=<prod> go test -run TestLiveRepair…` fails BEFORE the
-// first INSERT, not after (hivemind review M1). Pure URL parse — no
-// connection is opened on the failure path.
+// any write reaches it. Called by the WRITE functions themselves
+// (mintRepairCase, cleanupMint) — not only at the test call site — so every
+// current and future caller is guarded by construction (same pattern as
+// withScratchDB). Same name-assert convention as env.sh/dev-up.sh/the
+// probe child script; pgconn-parsed (see dsnDatabase), no connection is
+// opened on the failure path.
 func requireDevDSN(t *testing.T, dsn string) string {
 	t.Helper()
-	if db := devDSNDB(dsn); db != "axiom_dev" {
-		t.Fatalf("live DSN targets %q — the repair probe writes (mint/cleanup) and may ONLY run against axiom_dev (source scripts/dev/env.sh)", db)
+	if db := dsnDatabase(dsn); db != "axiom_dev" {
+		t.Fatalf("live DSN resolves to database %q — the repair probe writes (mint/cleanup) and may ONLY run against axiom_dev (source scripts/dev/env.sh)", db)
 	}
 	return dsn
 }
