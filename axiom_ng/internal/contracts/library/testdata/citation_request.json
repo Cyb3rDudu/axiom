@@ -1,0 +1,12 @@
+{
+  "record_id": "rec-1",
+  "locator": {
+    "kind": "page",
+    "page_start": 47,
+    "page_end": 47,
+    "chapter": "Markets",
+    "chapter_number": 3,
+    "paragraph_in_chapter": 12,
+    "page_source": "folio_verified"
+  }
+}

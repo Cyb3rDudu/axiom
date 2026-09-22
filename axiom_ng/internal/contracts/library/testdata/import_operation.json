@@ -1,0 +1,32 @@
+{
+  "import_id": "imp-1",
+  "status": "committed",
+  "result": {
+    "record_id": "rec-1",
+    "rendition_id": "ren-1",
+    "revision": {
+      "source_id": "src-1",
+      "revision_id": "1",
+      "content_hash": "199beac3d3fe3102c09ffad688b8e21b9b32084f986cfc21d44f4cebceb3ff02",
+      "media_type": "application/pdf",
+      "bibliography": {
+        "record_id": "rec-1",
+        "title": "The Title",
+        "authors": [
+          "Ada Example"
+        ],
+        "year": 2019,
+        "publisher": "Fixture Press",
+        "citation_class": "citable"
+      },
+      "locator_capabilities": {
+        "page": {
+          "trust": "folio_verified"
+        },
+        "epub_cfi": false
+      },
+      "content_ticket": "ticket-1"
+    }
+  },
+  "updated_at": "2026-01-02T03:04:05.123456Z"
+}

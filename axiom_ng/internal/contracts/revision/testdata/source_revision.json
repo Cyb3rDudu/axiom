@@ -1,0 +1,29 @@
+{
+  "source_id": "src-seed-1",
+  "revision_id": "12",
+  "content_hash": "d249b8beb7a58794c75abe3498bcc32d56040fafa42d79d570c13d1628ecc051",
+  "media_type": "application/epub+zip",
+  "bibliography": {
+    "record_id": "rec-seed-1",
+    "title": "The Golden Fixture",
+    "authors": [
+      "Ada Example",
+      "Bob Sample"
+    ],
+    "year": 1984,
+    "publisher": "Fixture Press",
+    "language": "de",
+    "tags": [
+      "contract",
+      "golden"
+    ],
+    "citation_class": "citable"
+  },
+  "locator_capabilities": {
+    "page": {
+      "trust": "folio_interpolated"
+    },
+    "epub_cfi": true
+  },
+  "content_ticket": "ticket-seed-1"
+}

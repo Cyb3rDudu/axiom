@@ -1,0 +1,67 @@
+{
+  "query": "market design",
+  "top_n": 5,
+  "reranked": false,
+  "arms": {
+    "dense": true,
+    "bm25": true
+  },
+  "hits": [
+    {
+      "chunk_id": "chk-1",
+      "text": "The passage text.",
+      "score": 0.87,
+      "source": {
+        "record_id": "rec-1",
+        "title": "The Title",
+        "authors": [
+          "Ada Example"
+        ],
+        "year": 2019,
+        "publisher": "Fixture Press",
+        "language": "de",
+        "tags": [
+          "tag"
+        ],
+        "citation_class": "citable",
+        "content_type": "application/pdf"
+      },
+      "locator": {
+        "kind": "page",
+        "label": "S. 47",
+        "chapter": "Markets",
+        "chapter_number": 3,
+        "page_source": "folio_verified",
+        "page_start": 47,
+        "page_end": 48,
+        "paragraph_pages": [
+          [
+            "120",
+            "47"
+          ],
+          [
+            "480",
+            "48"
+          ]
+        ],
+        "paragraph_in_chapter": 12,
+        "section_title": "Market design"
+      },
+      "section": [
+        "Part I",
+        "Markets"
+      ],
+      "caption_text": "[machine image caption: a chart]",
+      "images": [
+        {
+          "ref": "image-0001",
+          "marker": "image_0.jpg",
+          "machine_caption": "a chart",
+          "figure_caption": "Figure 1: the chart"
+        }
+      ],
+      "collapsed_near_duplicates": 2
+    }
+  ],
+  "took_ms": 41
+}
