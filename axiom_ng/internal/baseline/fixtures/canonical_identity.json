@@ -1,0 +1,10 @@
+{
+  "canonical_name": "axiom",
+  "service_class": "api+library+store",
+  "component_roles": [
+    "api",
+    "library",
+    "store"
+  ],
+  "deprecations": {}
+}
