@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/deprecate"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/version"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
@@ -132,6 +133,18 @@ type healthResponse struct {
 	// #262: "active" | "degraded_no_sync" (omitted when no contextual
 	// rules are configured).
 	Contextual string `json:"contextual,omitempty"`
+	// Canonical identity (ADR 0001 §5, #296) — additive fields naming the
+	// target identity of this process. All three component roles are
+	// compiled in today; real role resolution per process arrives with
+	// F04/F05 (`axiom serve all|api|library|store`). Froze in the baseline
+	// via fixtures/canonical_identity.json.
+	CanonicalName  string   `json:"canonical_name"`  // "axiom"
+	ServiceClass   string   `json:"service_class"`   // compact role identity; narrows with F04/F05
+	ComponentRoles []string `json:"component_roles"` // ADR 0001 component roles served
+	// Legacy-alias usage counters (ADR 0001 §6, #296): warn-once/count-
+	// always witness, empty map until a legacy name is used. Data basis
+	// for the 0.3.x+ removal decision.
+	Deprecations map[string]int `json:"deprecations"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +165,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		checks[name] = "ok"
 	}
 
-	hr := healthResponse{OK: ok, Build: version.Banner(), Checks: checks}
+	hr := healthResponse{
+		OK:             ok,
+		Build:          version.Banner(),
+		Checks:         checks,
+		CanonicalName:  "axiom",
+		ServiceClass:   "api+library+store",
+		ComponentRoles: []string{"api", "library", "store"},
+		Deprecations:   deprecate.Counts(),
+	}
 	if s.contextualState != nil {
 		hr.Contextual = s.contextualState()
 	}

@@ -248,3 +248,13 @@ class Capabilities(BaseModel):
     # consumers ignore them.
     warmup_enabled: bool = False
     models_warmed: bool = False
+    # Canonical identity (ADR 0001 §5, #296) — additive, alongside every
+    # existing field. ``instance`` is the serving host's hostname;
+    # ``deprecations`` exports the legacy-name usage counters (empty until
+    # a legacy entrypoint fires, which happens first with F05/F10).
+    canonical_name: str
+    service_class: str
+    implementation: str
+    roles: list[str]
+    instance: str
+    deprecations: dict[str, int] = {}

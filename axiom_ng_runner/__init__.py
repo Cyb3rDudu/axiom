@@ -22,6 +22,14 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 __version__ = "0.1.0"
 CONTRACT_VERSION = "1.0"
 
+# Canonical identity (ADR 0001 §2/§5, #296) — the 0.2.0 naming world this
+# runner reports in /v1/capabilities. Single source of truth: the
+# capability, the identity test and the ADR agree on these values.
+CANONICAL_NAME = "axiom-compute-worker"
+SERVICE_CLASS = "compute-worker"
+IMPLEMENTATION = "python-marker"
+WORKER_ROLES = ("document-processing", "query-embedding", "reranking")
+
 # Contract §9 stage vocabulary, in progression order. app.py owns
 # validate_source (before compute starts); compute() advances the rest.
 # Single source of truth: runner.py stages, the contract doc and the stage

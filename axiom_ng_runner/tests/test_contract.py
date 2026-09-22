@@ -108,6 +108,27 @@ def test_health_and_capabilities(client):
 
 
 # ---------------------------------------------------------------------------
+# 1b. Canonical identity fields (ADR 0001 §5, #296) — additive alongside
+# every legacy field; exact values frozen by this test. Mutating any of
+# them (or dropping one) must go red here, mirroring the RAG-side golden
+# fixtures/canonical_identity.json.
+# ---------------------------------------------------------------------------
+def test_capabilities_canonical_identity(client):
+    caps = client.get("/v1/capabilities", timeout=10).json()
+    assert caps["canonical_name"] == "axiom-compute-worker"
+    assert caps["service_class"] == "compute-worker"
+    assert caps["implementation"] == "python-marker"
+    assert caps["roles"] == ["document-processing", "query-embedding", "reranking"]
+    # instance names the serving host — presence/type only (host-dependent)
+    assert isinstance(caps["instance"], str) and caps["instance"]
+    # no legacy entrypoint exists yet (F05/F10) — counters start empty
+    assert caps["deprecations"] == {}
+    # legacy fields untouched by the identity extension
+    assert caps["processor"]["name"] == "axiom-python-marker"
+    assert CONTRACT_VERSION in caps["contract_versions"]
+
+
+# ---------------------------------------------------------------------------
 # 2. Repeated idempotency keys do not start duplicate processing
 # ---------------------------------------------------------------------------
 def test_idempotency_dedup(client, fixture_dirs):

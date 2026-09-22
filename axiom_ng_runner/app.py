@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import socket
 import threading
 import time
 import urllib.error
@@ -24,11 +25,16 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Request, Response
 
 from . import (
+    CANONICAL_NAME,
     CONTRACT_VERSION,
     DENSE_EMBEDDING_DIM,
     DENSE_EMBEDDING_MODEL,
+    IMPLEMENTATION,
     RERANKER_MODEL,
+    SERVICE_CLASS,
+    WORKER_ROLES,
     __version__,
+    deprecations,
     query_service,
 )
 from .compute_core import pdf_health  # type: ignore[reportMissingImports]
@@ -191,6 +197,15 @@ def _capabilities() -> Capabilities:
         # distinguish a genuinely-warm runner from one still preloading.
         warmup_enabled=warm["warmup_enabled"],
         models_warmed=warm["models_warmed"],
+        # Canonical identity (ADR 0001 §5, #296) — additive; ``instance``
+        # names the serving host so a fleet of compute workers is
+        # distinguishable in capability snapshots.
+        canonical_name=CANONICAL_NAME,
+        service_class=SERVICE_CLASS,
+        implementation=IMPLEMENTATION,
+        roles=list(WORKER_ROLES),
+        instance=socket.gethostname(),
+        deprecations=deprecations.counts(),
     )
 
 
