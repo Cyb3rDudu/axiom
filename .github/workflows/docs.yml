@@ -81,10 +81,15 @@ jobs:
         #    mapping tables — is CI-enforced; legacy prose inside the
         #    ADR and lines quoting the ADR path from elsewhere go red.
         #    Future ADRs re-justify themselves.
+        # Both source greps run with -H so output lines ALWAYS carry the
+        # filename prefix — the anchor stage can then only ever match
+        # lines that genuinely originate from the docs/ scan. Without
+        # -H, a crafted mkdocs.yml line starting with the ADR path+
+        # colon+pipe would spoof the anchor and pass the gate.
         # mkdocs.yml is checked as well, so a `site_name: axiom-ng`
         # regression fails CI. docs/_inventory.md is internal meta and exempt.
         run: |
-          if { grep -ri 'axiom-ng' docs/ --include='*.md'; grep -i 'axiom-ng' mkdocs.yml; } \
+          if { grep -riH 'axiom-ng' docs/ --include='*.md'; grep -iH 'axiom-ng' mkdocs.yml; } \
             | grep -v '_inventory.md' \
             | grep -vF 'was known as *axiom-ng*' \
             | grep -vE '(go run|go build).*(cmd/axiom-ng|axiom_ng/cmd/axiom-ng)' \
