@@ -115,9 +115,12 @@ def test_health_and_capabilities(client):
 # ---------------------------------------------------------------------------
 def test_capabilities_canonical_identity(client):
     # Order-independence: the witness is module-global process state; other
-    # test modules may have counted legacy uses. The export must mirror the
-    # live witness exactly, and a request-path legacy use (none exists yet —
+    # test modules may have counted legacy uses. The seed makes the mirror
+    # assert non-vacuous in EVERY collection order (in a contract-first run
+    # the snapshot would be {} and a hardcoded `deprecations: {}` regression
+    # would still pass); a request-path legacy use (none exists yet —
     # first with F05/F10) would move it between snapshot and response.
+    deprecations.use("selftest-probe")
     before = deprecations.counts()
     caps = client.get("/v1/capabilities", timeout=10).json()
     assert caps["canonical_name"] == "axiom-compute-worker"
