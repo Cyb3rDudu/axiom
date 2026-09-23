@@ -139,6 +139,11 @@ type Config struct {
 	FixerCommand string
 	// FixerConcurrency caps parallel fixer runs per host (owner nail: 1-2).
 	FixerConcurrency int
+	// FixerInterval is the repair-queue poll interval — surfaced on the
+	// config surface in F05 (the F04 deferral "fixer-interval test seam"):
+	// visible via `axiom config get --effective --json`, wired through to
+	// the invoker. Default 30s (the invoker's own default, now explicit).
+	FixerInterval time.Duration
 	// FixerOCRTimeout (#284/#293) is the wedge-guard backstop for OCR-class
 	// repairs (scan_ocr_rebuild): the rebuild runs as long as it runs —
 	// this backstop only prevents orphans (wedged process), never limits
@@ -232,6 +237,7 @@ func Load() Config {
 		FixerInvokerEnabled:        envBool("AXIOM_FIXER_INVOKER_ENABLED"),
 		FixerCommand:               env("AXIOM_FIXER_CMD", "/opt/axiom/bin/axiom-fixer"),
 		FixerConcurrency:           envInt("AXIOM_FIXER_CONCURRENCY", 1),
+		FixerInterval:              envDur("AXIOM_FIXER_INTERVAL", 30*time.Second),
 		FixerOCRTimeout:            envDur("AXIOM_FIXER_OCR_TIMEOUT", 0),
 		ArtifactRoot:               env("AXIOM_ARTIFACT_ROOT", ""),
 		ZoteroWriteKeyFile:         env("AXIOM_ZOTERO_WRITE_KEY_FILE", os.Getenv("HOME")+"/.axiom-ng/write-api-key"),

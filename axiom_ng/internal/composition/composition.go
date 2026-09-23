@@ -575,6 +575,7 @@ func (r *Root) componentsFor() []Component {
 			r.inv = fixerinvoker.New(fixerinvoker.Config{
 				Command:     r.cfg.FixerCommand,
 				Concurrency: r.cfg.FixerConcurrency,
+				Interval:    r.cfg.FixerInterval,   // F05: the F04 test-seam deferral — visible via config get --effective
 				OCRTimeout:  r.cfg.FixerOCRTimeout, // #293: OCR wedge-guard (0 = invoker default 24h)
 			}, fixerinvoker.Deps{
 				Rep:            r.rep,
