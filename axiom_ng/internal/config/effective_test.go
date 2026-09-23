@@ -94,6 +94,10 @@ func TestEffectiveCarriesFixerInterval(t *testing.T) {
 			if e.Source != "env" {
 				t.Fatalf("source %s, want env", e.Source)
 			}
+			// Durations render as their Go spelling, not raw nanoseconds.
+			if e.Value != "45s" {
+				t.Fatalf("AXIOM_FIXER_INTERVAL value = %v (%T), want the string \"45s\"", e.Value, e.Value)
+			}
 		}
 	}
 	if !found {
@@ -118,6 +122,11 @@ func TestValidateEnvFlagsSilentFallbacks(t *testing.T) {
 		"AXIOM_DISPATCHER_LEASE":  "5 minutes",
 		"AXIOM_SEARCH_RERANK":     "maybe",
 		"AXIOM_FIXER_CONCURRENCY": "1.5",
+		// strconv-only spellings ("t", "y") are NOT loader grammar —
+		// validate must flag them instead of blessing a silent fallback
+		// to the default.
+		"AXIOM_SEARCH_SPARSE_ARM":         "t",
+		"AXIOM_SEARCH_FRONTMATTER_FILTER": "y",
 	} {
 		t.Setenv(env, val)
 		problems := ValidateEnv()
@@ -126,9 +135,12 @@ func TestValidateEnvFlagsSilentFallbacks(t *testing.T) {
 		}
 		os.Unsetenv(env)
 	}
-	// yes/no are recognized boolean spellings (the loader's own extension).
-	t.Setenv("AXIOM_SEARCH_RERANK", "no")
-	if problems := ValidateEnv(); len(problems) != 0 {
-		t.Fatalf("no must be accepted as false, got %v", problems)
+	// Only the loader's own boolean spellings are recognized: 1/true/yes
+	// (true) and 0/false/no (false), case-insensitive.
+	for _, val := range []string{"no", "false", "0", "TRUE", "Yes"} {
+		t.Setenv("AXIOM_SEARCH_RERANK", val)
+		if problems := ValidateEnv(); len(problems) != 0 {
+			t.Fatalf("%q must be accepted as a recognized boolean, got %v", val, problems)
+		}
 	}
 }

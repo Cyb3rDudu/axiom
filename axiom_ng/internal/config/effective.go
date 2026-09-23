@@ -106,6 +106,10 @@ func Effective(cfg Config) []Entry {
 			value = sanitizeDSN(f.String())
 		case row.secret:
 			value = RedactedValue
+		case f.Type() == durationType:
+			// durations render as their Go spelling ("30s"), not raw
+			// nanoseconds — operator-facing output must stay readable.
+			value = f.Interface().(time.Duration).String()
 		default:
 			value = f.Interface()
 		}
@@ -115,8 +119,9 @@ func Effective(cfg Config) []Entry {
 }
 
 // sanitizeDSN strips the credential from a Postgres DSN, keeping scheme,
-// user, host, port, database and params. Unparseable values fall back to
-// the redaction placeholder (never echo an unknown credential shape).
+// host, port, database and params — the whole userinfo is dropped.
+// Unparseable values fall back to the redaction placeholder (never echo
+// an unknown credential shape).
 func sanitizeDSN(dsn string) string {
 	if dsn == "" {
 		return ""
@@ -153,8 +158,8 @@ func ValidateEnv() []string {
 				_, err = strconv.Atoi(raw)
 			}
 		case reflect.Bool:
-			if !parseBoolLoose(raw) {
-				err = fmt.Errorf("not a boolean")
+			if !boolRecognized(raw) {
+				err = fmt.Errorf("not a boolean (the loader reads only 1/true/yes and 0/false/no)")
 			}
 		case reflect.String, reflect.Slice:
 			// free-form; nothing to re-parse
@@ -166,17 +171,19 @@ func ValidateEnv() []string {
 	return problems
 }
 
-// parseBoolLoose accepts the union of strconv.ParseBool and the loader's
-// yes/no extension (envBoolDefault).
-func parseBoolLoose(s string) bool {
-	if s == "" {
-		return false
-	}
+// boolRecognized mirrors envBoolDefault's grammar EXACTLY: "1", "true"
+// and "yes" (any case) are true; "0", "false" and "no" are false.
+// Anything else ("t", "y", …) is a spelling the loader ignores — the
+// exact silent-fallback class ValidateEnv exists to flag, so it is NOT
+// recognized here either.
+func boolRecognized(s string) bool {
 	switch strings.ToLower(s) {
-	case "1", "t", "true", "yes", "y":
+	case "1", "true", "yes", "0", "false", "no":
 		return true
-	case "0", "f", "false", "no", "n":
-		return true // recognized — NOT a problem
 	}
 	return false
 }
+
+// durationType identifies time.Duration-typed Config fields (rendered as
+// their Go spelling in Effective instead of raw nanoseconds).
+var durationType = reflect.TypeOf(time.Duration(0))
