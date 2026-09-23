@@ -6,7 +6,7 @@
 // exactly the sequence every hand-written block repeated. The mode body
 // is behavior-identical to the former inline blocks; the mode ITs
 // (mode_exit_it_test.go) are the passenger proof.
-package main
+package cli
 
 import (
 	"context"
@@ -357,4 +357,70 @@ func hasApplyFlag(args []string) bool {
 		}
 	}
 	return false
+}
+
+// modeHelp documents the CLI mode surface and the exit-code contract (#202).
+const modeHelp = `axiom-ng — modes and exit codes (#202)
+
+Usage: axiom-ng [mode] [--apply]
+
+Modes (each runs ONCE and exits; never falls through to the server boot):
+  --version                       print the version banner
+  -help                           this help
+  -cleanup-frontmatter-kg         drop/strip KG evidence from gated frontmatter
+                                  sections; dry-run default, --apply mutates
+  -consolidate-relations          one aggregated edge per (source,target) pair;
+                                  dry-run default, --apply mutates
+  -normalize-entity-types         deterministic typing rules; --apply mutates
+  -bind-all-aliases               guarded exact+flexion alias binding; dry-run
+                                  default, --apply mutates
+  -bind-flexion-aliases           flexion family alias links; --apply mutates
+  -repoint-alias-edges            re-point variant edges to survivors, delete
+                                  intra-family self-loops (always applies)
+  -consolidate-entities           merge same-form active entities; dry-run
+                                  default, --apply mutates
+  -maintenance-retention          remove superseded snapshots + stale job
+                                  attempts (never the outcome truth); dry-run
+                                  default, --apply mutates (#281). The apply
+                                  deletes in committed tranches under a run
+                                  deadline (#290): --timeout=2h (default,
+                                  or AXIOM_RETENTION_TIMEOUT) and --batch=N
+                                  (snapshots per transaction, or
+                                  AXIOM_RETENTION_BATCH); one progress line
+                                  per tranche; an interrupted run is resumed
+                                  by simply re-running it
+  (no mode flag)                  start the API server + optional dispatcher
+
+Exit codes:
+  0   done — either applied or nothing to do; the final log line carries
+      the counts (zeros mean nothing to do), dry runs end with "use --apply"
+  1   failure — the log states whether the KG is consistent:
+      "state consistent (transaction rolled back)" for single-transaction
+      modes, "state partial ... re-run the mode" for multi-pass modes
+      (all passes are idempotent). A DB/connect failure exits 1 before any
+      state is touched.
+
+Long mutating passes emit a heartbeat log line every 30s (elapsed, items
+done/total, current item) so a supervised run can tell working from hung.
+`
+
+// modeFail terminates a mutating CLI mode with the documented non-zero exit
+// (#202). consistent=modeSingleTx: the mode is single-transaction — the failure
+// rolled it back, the KG is in its pre-run state. consistent=modeMultiPass: the
+// mode runs multiple sequential passes and earlier passes already committed;
+// every pass is idempotent, so re-running the mode is the documented recovery.
+const (
+	modeSingleTx  = true
+	modeMultiPass = false
+)
+
+func modeFail(logger *log.Logger, consistent bool, format string, args ...any) {
+	state := "state consistent (transaction rolled back, nothing applied)"
+	if !consistent {
+		state = "state partial: earlier passes already committed; all passes are idempotent — re-run the mode"
+	}
+	// Copy args before appending — the caller's variadic slice may be exactly
+	// sized (append would otherwise share/overwrite backing arrays).
+	logger.Printf("MODE FAILED (exit 1): "+format+" — %s", append(append([]any{}, args...), state)...)
+	os.Exit(1)
 }

@@ -36,6 +36,8 @@ import (
 //	internal/config       env ∞   the sanctioned config reader (by design)
 //	internal/composition  env ∞   the sanctioned composition root (#298)
 //	internal/baseline     env ∞   F01 scaffolding knobs (test-only package)
+//	internal/cli          env ∞   the operator command surface (F05 #299;
+//	                              abatement F13 — config store reader)
 //	internal/search/search.go env 1  AXIOM_OS_INDEX dev override — F06 moves
 //	                              it behind config
 //	internal/fixerinvoker exec ∞  the FixerExec port's LOCAL binding
@@ -47,6 +49,11 @@ var packageEnvAllowance = map[string]int{
 	"internal/config/":      math.MaxInt,
 	"internal/composition/": math.MaxInt,
 	"internal/baseline/":    math.MaxInt,
+	// internal/cli is the operator command surface (F05 #299): the
+	// debug-bind opt-out read and the config/doctor entry points live
+	// here, next to their arg parsing. Abatement: F13 moves the config
+	// surface into its store-backed reader.
+	"internal/cli/": math.MaxInt,
 }
 
 var packageExecAllowance = map[string]int{
