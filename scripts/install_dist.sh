@@ -72,17 +72,27 @@ rag)
         echo "no rag artifact for $version in $DIST/ — run: make rag"
         exit 1
     }
+    # F05 (#299): the canonical binary ships alongside the alias — same
+    # build generation, both installed under /opt/axiom/bin.
+    cbin=$(find_artifact "axiom-$version-*") || {
+        echo "no axiom artifact for $version in $DIST/ — run: make rag"
+        exit 1
+    }
     target="$ROOT/rag/$version"
     confirm_install rag "$bin" \
         "target:   $target/axiom-ng" \
+        "target:   $target/axiom (canonical, F05)" \
         "current:  $ROOT/rag/current -> $version" \
-        "shim:     $ROOT/bin/axiom-ng"
+        "shim:     $ROOT/bin/axiom-ng" \
+        "shim:     $ROOT/bin/axiom"
     mkdir -p "$target" "$ROOT/bin"
     cp "$bin" "$target/axiom-ng"
-    chmod 0755 "$target/axiom-ng"
+    cp "$cbin" "$target/axiom"
+    chmod 0755 "$target/axiom-ng" "$target/axiom"
     ln -sfn "$version" "$ROOT/rag/current"
     ln -sfn "$ROOT/rag/current/axiom-ng" "$ROOT/bin/axiom-ng"
-    echo "installed: $ROOT/bin/axiom-ng ($version)"
+    ln -sfn "$ROOT/rag/current/axiom" "$ROOT/bin/axiom"
+    echo "installed: $ROOT/bin/axiom + $ROOT/bin/axiom-ng ($version)"
     ;;
 runner)
     art=$(find_artifact "axiom-runner-$version-*.tar.zst") || {

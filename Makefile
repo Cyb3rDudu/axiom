@@ -7,18 +7,27 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD)
 DIST    := dist
 OS_ARCH := $(shell uname -s | tr '[:upper:]' '[:lower:]')-$(shell uname -m)
+# F05 (#299): the canonical binary is `axiom`; `axiom-ng` stays a
+# liefervorderfähig alias of the same build generation (same logic via
+# internal/cli; the alias adds exactly the deprecation witness call).
+AXIOM_BIN := $(DIST)/axiom-$(VERSION)-$(OS_ARCH)
 RAG_BIN := $(DIST)/axiom-ng-$(VERSION)-$(OS_ARCH)
 ZSTD_BIN := $(dir $(firstword $(wildcard /nix/store/*-zstd-*-bin/bin/zstd)))
 
 LDFLAGS := -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.Version=$(VERSION) -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.Commit=$(COMMIT) -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.BuildType=release
 
-GO_SOURCES := $(wildcard axiom_ng/cmd/axiom-ng/*.go) $(wildcard axiom_ng/internal/*/*.go) $(wildcard axiom_ng/internal/db/schema/*.sql) axiom_ng/go.mod axiom_ng/go.sum
+GO_SOURCES := $(wildcard axiom_ng/cmd/axiom/*.go) $(wildcard axiom_ng/cmd/axiom-ng/*.go) $(wildcard axiom_ng/internal/*/*.go) $(wildcard axiom_ng/internal/db/schema/*.sql) axiom_ng/go.mod axiom_ng/go.sum
 
 .PHONY: all build rag runner fixer clean install test checksums golden-baseline
 
 all build: rag ## G1: only rag; runner/fixer land in G2
 
-rag: $(RAG_BIN) ## Release build of the Go binary with version stamp
+rag: $(AXIOM_BIN) $(RAG_BIN) ## Release builds (axiom + axiom-ng alias) with version stamp
+
+$(AXIOM_BIN): $(GO_SOURCES)
+	@mkdir -p "$(DIST)"
+	cd axiom_ng && CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o '../$(AXIOM_BIN)' ./cmd/axiom
+	(cd "$(DIST)" && shasum -a 256 '$(notdir $(AXIOM_BIN))' > '$(notdir $(AXIOM_BIN)).sha256')
 
 $(RAG_BIN): $(GO_SOURCES)
 	@mkdir -p "$(DIST)"

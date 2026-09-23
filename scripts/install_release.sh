@@ -20,9 +20,12 @@ cd "$HERE" # install_dist.sh works relative to the repo root — run from any cw
 REPO="${AXIOM_RELEASE_REPO:-Cyb3rDudu/axiom}"
 
 case "$component" in
-rag) pattern="axiom-ng-$version-*" ;;
-runner) pattern="axiom-runner-$version-*.tar.zst" ;;
-fixer) pattern="axiom-fixer-$version-*.tar.zst" ;;
+rag)
+    # F05 (#299): alias + canonical binary, same release generation.
+    patterns="axiom-ng-$version-* axiom-$version-*"
+    ;;
+runner) patterns="axiom-runner-$version-*.tar.zst" ;;
+fixer) patterns="axiom-fixer-$version-*.tar.zst" ;;
 *)
     echo "unknown component '$component' (rag|runner|fixer)"
     exit 2
@@ -31,13 +34,20 @@ esac
 
 if [ "${3:-}" != "--skip-pull" ]; then
     mkdir -p "$DIST"
-    echo "release: fetching $pattern from $REPO release $version"
-    gh release download "$version" --repo "$REPO" --pattern "$pattern" --pattern "$pattern.sha256" --clobber --dir "$DIST"
+    # shellcheck disable=SC2086 # patterns are word-split by design
+    echo "release: fetching$patterns from $REPO release $version"
+    dl_args=""
+    for p in $patterns; do
+        dl_args="$dl_args --pattern $p --pattern $p.sha256"
+    done
+    # shellcheck disable=SC2086
+    gh release download "$version" --repo "$REPO" $dl_args --clobber --dir "$DIST"
 fi
 
 # checksum verify BEFORE handing off to the gated installer
 found=""
-for f in "$DIST"/$pattern; do
+# shellcheck disable=SC2086
+for f in $DIST/$patterns; do
     [ -f "$f" ] || continue
     case "$f" in *.sha256) continue ;; esac
     found="$f"
@@ -47,7 +57,7 @@ for f in "$DIST"/$pattern; do
     }
 done
 [ -n "$found" ] || {
-    echo "no artifact matching $pattern in $DIST/"
+    echo "no artifact matching$patterns in $DIST/"
     exit 1
 }
 

@@ -60,8 +60,11 @@ jobs:
           } > /tmp/release-notes.md
           args=(--verify-tag --notes-file /tmp/release-notes.md)
           # dist/axiom-ng-* would double-list the .sha256 sidecars already
-          # covered by dist/*.sha256 — gh rejects duplicate asset names (422)
+          # covered by dist/*.sha256 — gh rejects duplicate asset names (422).
+          # Same for the F05 canonical dist/axiom-v* artifacts (the v after
+          # the dash keeps them distinct from axiom-ng-* in the glob).
           assets=(dist/*.tar.zst dist/*.sha256)
           for f in dist/axiom-ng-*; do [[ "$f" == *.sha256 ]] || assets+=("$f"); done
+          for f in dist/axiom-v*; do [[ "$f" == *.sha256 ]] || assets+=("$f"); done
           gh release create "$GITHUB_REF_NAME" "${args[@]}" "${assets[@]}" || \
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
