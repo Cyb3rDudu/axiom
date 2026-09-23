@@ -350,10 +350,10 @@ func (r *Root) readinessSnapshot() map[string]string {
 // process) or an HTTP serve error. A graceful Stop never sends here.
 func (r *Root) Fatal() <-chan error { return r.fatal }
 
-// Stop performs the shutdown within the stop budget (today's 15s
-// window, F05: per-join sub-budgets derived from the CALLER's ctx —
-// cancellation propagates into every join, the total window stays
-// bounded by the caller's deadline). Order and rationale:
+// Stop performs the shutdown within the stop budget: the CALLER's
+// deadline is authoritative (its cancellation propagates into every
+// join); the 15s window is only the fallback for a caller without a
+// deadline. Order and rationale:
 //
 //  1. stop accepting — the listener closes IMMEDIATELY (before the
 //     cancel, so no new request can race into a half-drained process);
@@ -393,7 +393,8 @@ func (r *Root) Stop(ctx context.Context) {
 	//    cancellation propagates into every join, and each join may use the
 	//    whole remaining window — concurrency (not unequal division) is the
 	//    fix: none of them blocks another.
-	budget := 15 * time.Second
+	const stopBudgetFallback = 15 * time.Second
+	budget := stopBudgetFallback
 	if dl, ok := ctx.Deadline(); ok {
 		if rem := time.Until(dl); rem > 0 {
 			budget = rem
@@ -417,12 +418,14 @@ func (r *Root) Stop(ctx context.Context) {
 	// 4. The store pool closes LAST — after every join settled or expired
 	//    its budget. Its sub-budget is RE-DERIVED from the caller's
 	//    remaining deadline (the joins may have consumed part of the
-	//    window; an already spent caller budget yields an
-	//    immediately-expired sub-context — the pool close itself is not
-	//    deadline-bound work).
-	storeBudget := 15 * time.Second
+	//    window; an already-spent caller deadline still yields an
+	//    immediately-expired sub-context through the parent — the pool
+	//    close itself is not deadline-bound work).
+	storeBudget := stopBudgetFallback
 	if dl, ok := ctx.Deadline(); ok {
-		storeBudget = max(time.Until(dl), 0)
+		if rem := time.Until(dl); rem > 0 {
+			storeBudget = rem
+		}
 	}
 	for i := len(r.components) - 1; i >= 0; i-- {
 		c := r.components[i]

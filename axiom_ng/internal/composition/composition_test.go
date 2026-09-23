@@ -466,3 +466,69 @@ func TestStopParallelSubBudgets(t *testing.T) {
 		t.Fatalf("total stop %v far above the slowest join — a join overran its own budget", total)
 	}
 }
+
+// TestStopBudgetsDeriveFromCaller — the ctx-propagation half of the F05
+// stop budget (#299): the per-join sub-contexts DERIVE from the caller's
+// context, so a caller that already cancelled stops every join
+// immediately — the drains must never run on a fresh Background window.
+// The slow join's select on its sub-ctx Done is the probe: re-parenting
+// the sub-contexts on context.Background() makes it sleep its full 5s
+// and blow the bound below. The store stop still runs unconditionally
+// and LAST (the pool close is not deadline-bound work).
+func TestStopBudgetsDeriveFromCaller(t *testing.T) {
+	root, err := Full(apiOnlyCfg(freePort(t)), testLogger(), Ports{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const slowDrain = 5 * time.Second
+	var fastAt, storeAt time.Duration
+	storeRan := false
+	var mu sync.Mutex
+	t0 := time.Now()
+
+	root.components = []Component{
+		funcComponent{name: "store", role: RoleStore, stop: func(ctx context.Context) error {
+			mu.Lock()
+			storeAt, storeRan = time.Since(t0), true
+			mu.Unlock()
+			return nil
+		}},
+		funcComponent{name: "fast-join", role: RoleRepair, stop: func(ctx context.Context) error {
+			mu.Lock()
+			fastAt = time.Since(t0)
+			mu.Unlock()
+			return nil
+		}},
+		funcComponent{name: "slow-drain", role: RoleDispatcher, stop: func(ctx context.Context) error {
+			select {
+			case <-time.After(slowDrain): // only reached when the sub-ctx is NOT caller-derived
+			case <-ctx.Done():
+			}
+			return nil
+		}},
+		funcComponent{name: "api", role: RoleAPI, stop: func(ctx context.Context) error { return nil }},
+	}
+	root.roles = map[Role]bool{RoleAPI: true, RoleStore: true, RoleDispatcher: true, RoleRepair: true}
+	root.started.Store(true)
+	root.cancel = func() {} // Start never ran; Stop's cancel is a no-op here
+
+	// The stop budget is already spent BEFORE Stop begins: a pre-cancelled
+	// caller context must propagate into every join sub-context.
+	stopCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	root.Stop(stopCtx)
+	total := time.Since(t0)
+
+	mu.Lock()
+	fast, store, ran := fastAt, storeAt, storeRan
+	mu.Unlock()
+	if total > 2*time.Second {
+		t.Fatalf("stop took %v on a pre-cancelled caller — the joins ran on their own budget instead of the caller's (sub-budgets must derive from the caller ctx)", total)
+	}
+	if !ran {
+		t.Fatal("the store stop must run even on a spent caller budget — the pool close is not deadline-bound work")
+	}
+	if store < fast {
+		t.Fatalf("store stop must land after the joins (pool closes last): store %v, fast join %v", store, fast)
+	}
+}
