@@ -267,19 +267,33 @@ func TestTimeFormOkWireSemantics(t *testing.T) {
 	if err := timeFormOk(offsetZero); err != nil {
 		t.Fatalf("offset-0 fixed zone rejected though wire-identical to UTC: %v", err)
 	}
-	b, err := json.Marshal(struct {
-		At time.Time `json:"at"`
-	}{offsetZero})
-	if err != nil || !strings.HasSuffix(string(b), `123456Z"}`) {
-		t.Fatalf("offset-0 zone does not marshal as Z-suffixed µs form: %s (err %v)", b, err)
+	marshal := func(ts time.Time) []byte {
+		b, err := json.Marshal(struct {
+			At time.Time `json:"at"`
+		}{ts})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return b
 	}
-	for name, bad := range map[string]time.Time{
-		"offset +02:00":   utc.In(time.FixedZone("PROBE", 2*3600)),
-		"sub-microsecond": utc.Add(500 * time.Nanosecond),
-		"zero value":      time.Time{},
+	wireZero := marshal(offsetZero)
+	if !strings.HasSuffix(string(wireZero), `123456Z"}`) {
+		t.Fatalf("offset-0 zone does not marshal as Z-suffixed µs form: %s", wireZero)
+	}
+	if !bytes.Equal(marshal(utc), wireZero) {
+		t.Fatalf("UTC and offset-0 marshal differently: %s vs %s — the acceptance rationale is byte-identity, verify it", marshal(utc), wireZero)
+	}
+	for _, bad := range []struct {
+		name string
+		ts   time.Time
+	}{
+		{"offset +02:00", utc.In(time.FixedZone("PROBE", 2*3600))},
+		{"offset -05:00", utc.In(time.FixedZone("MST0", -5*3600))},
+		{"sub-microsecond", utc.Add(500 * time.Nanosecond)},
+		{"zero value", time.Time{}},
 	} {
-		if err := timeFormOk(bad); err == nil {
-			t.Errorf("%s accepted", name)
+		if err := timeFormOk(bad.ts); err == nil {
+			t.Errorf("%s accepted", bad.name)
 		}
 	}
 }
