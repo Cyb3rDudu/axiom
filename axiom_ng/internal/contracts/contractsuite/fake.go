@@ -186,11 +186,16 @@ func (f *FakeLibrary) StartImport(ctx context.Context, req library.ImportRequest
 	f.records[recordID] = bib
 	f.tickets[ticket] = append([]byte{}, b...)
 
+	media, err := mediaTypeFromMagic(b)
+	if err != nil {
+		return library.ImportOperation{}, err // unreachable for suite fixtures; kept honest for direct fake users
+	}
+
 	rev := revision.SourceRevision{
 		SourceID:            sourceID,
 		RevisionID:          fmt.Sprintf("%d", n),
 		ContentHash:         revision.HashContent(b),
-		MediaType:           revision.MediaTypePDF,
+		MediaType:           media,
 		Bibliography:        bib,
 		LocatorCapabilities: revision.LocatorCapabilities{Page: &revision.PageCapability{Trust: revision.TrustFolioVerified}},
 		ContentTicket:       ticket,
@@ -502,6 +507,7 @@ func (f *FakeStore) GetPassage(ctx context.Context, ref store.PassageRef) (store
 					ChunkIndex: d.index,
 					Text:       d.text,
 					Section:    d.sections,
+					Locator:    pageLocator(),
 				})
 			}
 		}
@@ -513,18 +519,39 @@ func (f *FakeStore) GetPassage(ctx context.Context, ref store.PassageRef) (store
 			ChunkIndex:  c.index,
 			Text:        c.text,
 			Section:     c.sections,
-			Locator: store.Locator{
-				Kind:       "page",
-				Label:      "S. 47",
-				PageSource: revision.TrustFolioVerified,
-				PageStart:  intPtr(47),
-				PageEnd:    intPtr(47),
-			},
-			Source:    c.source,
-			Neighbors: neighbors,
+			Locator:     pageLocator(),
+			Source:      c.source,
+			Neighbors:   neighbors,
 		}, nil
 	}
 	return store.Passage{}, contracterr.New(contracterr.ComponentStore, contracterr.ClassNotFound, "passage "+ref.ChunkID)
+}
+
+// pageLocator is the fake's uniform page locator (neighbors carry it
+// too — zero-value locators would diverge from real passage delivery).
+func pageLocator() store.Locator {
+	return store.Locator{
+		Kind:       "page",
+		Label:      "S. 47",
+		PageSource: revision.TrustFolioVerified,
+		PageStart:  intPtr(47),
+		PageEnd:    intPtr(47),
+	}
+}
+
+// mediaTypeFromMagic derives the rendition format from magic bytes
+// ONLY — the F06 intake rule (declared extensions and client MIME
+// types are never sufficient). Suite fixtures are PDF-shaped for this
+// reason; direct fake users feeding foreign bytes get the same
+// InvalidArgument a real intake reports.
+func mediaTypeFromMagic(b []byte) (string, error) {
+	switch {
+	case bytes.HasPrefix(b, []byte("%PDF-")):
+		return revision.MediaTypePDF, nil
+	case bytes.HasPrefix(b, []byte("PK\x03\x04")):
+		return revision.MediaTypeEPUB, nil
+	}
+	return "", contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "content magic bytes match neither PDF nor EPUB")
 }
 
 func contains(xs []string, s string) bool {

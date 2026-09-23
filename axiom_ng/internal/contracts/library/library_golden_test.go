@@ -216,23 +216,44 @@ func TestTimeFormIsUTCRFC3339Microsecond(t *testing.T) {
 }
 
 // TestGoldenDetectsFieldRename — in-suite mutation sonde (external
-// twin: rename the tag in library.go, run the suite → red).
+// twin: rename the tag in library.go, run the suite → red). The mirror
+// carries the FULL field set of ImportOperation: only then does a byte
+// difference prove the RENAME moved the bytes — a subset mirror differs
+// trivially and proves nothing. The control (identical tags) must equal
+// the frozen bytes, proving the mirror is faithful.
 func TestGoldenDetectsFieldRename(t *testing.T) {
 	frozen, err := json.MarshalIndent(goldenImportOperation, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	mirror := goldenImportOperation
-	mirrorJSON := struct {
-		ImportID  string       `json:"import_identifier"` // RENAMED on purpose
-		Status    ImportStatus `json:"status"`
-		UpdatedAt time.Time    `json:"updated_at"`
-	}{mirror.ImportID, mirror.Status, mirror.UpdatedAt}
-	renamed, err := json.MarshalIndent(mirrorJSON, "", "  ")
+	control := struct {
+		ImportID  string           `json:"import_id"`
+		Status    ImportStatus     `json:"status"`
+		Decisions []ImportDecision `json:"decisions,omitempty"`
+		Result    *ImportResult    `json:"result,omitempty"`
+		Failure   *ImportFailure   `json:"failure,omitempty"`
+		UpdatedAt time.Time        `json:"updated_at"`
+	}{goldenImportOperation.ImportID, goldenImportOperation.Status, goldenImportOperation.Decisions, goldenImportOperation.Result, goldenImportOperation.Failure, goldenImportOperation.UpdatedAt}
+	controlBytes, err := json.MarshalIndent(control, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Equal(renamed, frozen) {
+	if !bytes.Equal(controlBytes, frozen) {
+		t.Fatalf("full-field mirror is not faithful — fix the mirror before trusting the sonde:\n%s\n%s", controlBytes, frozen)
+	}
+	renamed := struct {
+		ImportID  string           `json:"import_identifier"` // RENAMED on purpose
+		Status    ImportStatus     `json:"status"`
+		Decisions []ImportDecision `json:"decisions,omitempty"`
+		Result    *ImportResult    `json:"result,omitempty"`
+		Failure   *ImportFailure   `json:"failure,omitempty"`
+		UpdatedAt time.Time        `json:"updated_at"`
+	}{goldenImportOperation.ImportID, goldenImportOperation.Status, goldenImportOperation.Decisions, goldenImportOperation.Result, goldenImportOperation.Failure, goldenImportOperation.UpdatedAt}
+	renamedBytes, err := json.MarshalIndent(renamed, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(renamedBytes, frozen) {
 		t.Fatal("renaming import_id did not change the marshaled form — the golden freeze has no teeth")
 	}
 }

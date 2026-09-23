@@ -49,9 +49,10 @@ type Bibliography struct {
 	// Tags: absent (nil) = none; never an empty non-nil slice on the wire.
 	Tags []string `json:"tags,omitempty"`
 	// CitationClass: one of the CitationClass* constants — whether the
-	// record may be a citation target at all. Always present (no
-	// omitempty): absent must be indistinguishable from nothing;
-	// default "citable".
+	// record may be a citation target at all. ALWAYS present and
+	// required: producers must materialize it explicitly (Validate
+	// rejects empty); "citable" is the ordinary value for citable
+	// records, not a zero-value default that omission would produce.
 	CitationClass string `json:"citation_class"`
 }
 

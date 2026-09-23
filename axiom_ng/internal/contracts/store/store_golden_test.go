@@ -188,21 +188,60 @@ func TestTimeFormIsUTCRFC3339Microsecond(t *testing.T) {
 }
 
 // TestGoldenDetectsFieldRename — in-suite mutation sonde (external
-// twin: rename a tag in store.go, run the suite → red).
+// twin: rename a tag in store.go, run the suite → red). Full-field
+// mirror plus faithful-control check: only the rename may move bytes.
 func TestGoldenDetectsFieldRename(t *testing.T) {
 	frozen, err := json.MarshalIndent(goldenPassage, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	mirror := struct {
-		ChunkID    string `json:"chunk_identifier"` // RENAMED on purpose
-		DocumentID string `json:"document_id"`
-	}{goldenPassage.ChunkID, goldenPassage.DocumentID}
-	renamed, err := json.MarshalIndent(mirror, "", "  ")
+	type fullPassage struct {
+		ChunkID        string            `json:"chunk_id"`
+		DocumentID     string            `json:"document_id"`
+		SnapshotID     string            `json:"snapshot_id"`
+		RenditionID    string            `json:"rendition_id"`
+		ChunkIndex     int               `json:"chunk_index"`
+		Text           string            `json:"text"`
+		Section        []string          `json:"section"`
+		Locator        Locator           `json:"locator"`
+		Source         Source            `json:"source"`
+		Neighbors      []PassageNeighbor `json:"neighbors"`
+		ParagraphPages [][]string        `json:"paragraph_pages,omitempty"`
+		CaptionText    string            `json:"caption_text,omitempty"`
+		Images         []Image           `json:"images,omitempty"`
+	}
+	control := fullPassage{goldenPassage.ChunkID, goldenPassage.DocumentID, goldenPassage.SnapshotID, goldenPassage.RenditionID,
+		goldenPassage.ChunkIndex, goldenPassage.Text, goldenPassage.Section, goldenPassage.Locator, goldenPassage.Source,
+		goldenPassage.Neighbors, goldenPassage.ParagraphPages, goldenPassage.CaptionText, goldenPassage.Images}
+	controlBytes, err := json.MarshalIndent(control, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Equal(renamed, frozen) {
+	if !bytes.Equal(controlBytes, frozen) {
+		t.Fatalf("full-field mirror is not faithful — fix the mirror before trusting the sonde:\n%s\n%s", controlBytes, frozen)
+	}
+	renamed := struct {
+		ChunkID        string            `json:"chunk_identifier"` // RENAMED on purpose
+		DocumentID     string            `json:"document_id"`
+		SnapshotID     string            `json:"snapshot_id"`
+		RenditionID    string            `json:"rendition_id"`
+		ChunkIndex     int               `json:"chunk_index"`
+		Text           string            `json:"text"`
+		Section        []string          `json:"section"`
+		Locator        Locator           `json:"locator"`
+		Source         Source            `json:"source"`
+		Neighbors      []PassageNeighbor `json:"neighbors"`
+		ParagraphPages [][]string        `json:"paragraph_pages,omitempty"`
+		CaptionText    string            `json:"caption_text,omitempty"`
+		Images         []Image           `json:"images,omitempty"`
+	}{goldenPassage.ChunkID, goldenPassage.DocumentID, goldenPassage.SnapshotID, goldenPassage.RenditionID,
+		goldenPassage.ChunkIndex, goldenPassage.Text, goldenPassage.Section, goldenPassage.Locator, goldenPassage.Source,
+		goldenPassage.Neighbors, goldenPassage.ParagraphPages, goldenPassage.CaptionText, goldenPassage.Images}
+	renamedBytes, err := json.MarshalIndent(renamed, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(renamedBytes, frozen) {
 		t.Fatal("renaming chunk_id did not change the marshaled form — the golden freeze has no teeth")
 	}
 }
