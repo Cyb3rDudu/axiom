@@ -183,7 +183,9 @@ func (inv *Invoker) Stopped() <-chan struct{} { return inv.stopped }
 
 // Run polls the queue until ctx is done. It only returns on ctx
 // cancellation — every per-case failure is handled, never propagated
-// (owner nail 5: no crash-loop class).
+// (owner nail 5: no crash-loop class). Run is SINGLE-SHOT like
+// Dispatcher.Run: Stopped closes exactly once, a second Run call panics
+// (no production path does; tests construct a fresh Invoker per run).
 func (inv *Invoker) Run(ctx context.Context) error {
 	defer close(inv.stopped)
 	inv.logger.Printf("fixer invoker starting: cmd=%s interval=%s timeout=%s concurrency=%d workroot=%s",

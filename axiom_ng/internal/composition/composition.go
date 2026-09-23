@@ -216,6 +216,18 @@ func Select(cfg config.Config, logger *log.Logger, ports Ports, roles ...Role) (
 			return nil, fmt.Errorf("composition: AXIOM_FIXER_INVOKER_ENABLED is set but the store port is not startable (AXIOM_DATABASE_URL empty) — refusing to start half-wired: set the DSN or disable the worker")
 		}
 	}
+	// Precedence (documented for F05's role CLI): an EXPLICIT role selection
+	// wins over worker opt-in envs — but never silently. Full derives its
+	// roles from the config, so this can only fire for explicit Select calls
+	// that drop an env-enabled worker while keeping the store it needs.
+	if set[RoleStore] {
+		if cfg.DispatcherEnabled && !set[RoleDispatcher] {
+			logger.Printf("note: AXIOM_DISPATCHER_ENABLED=1 but the dispatcher role is not selected — explicit role selection wins (no claim loop in this process)")
+		}
+		if cfg.FixerInvokerEnabled && !set[RoleRepair] {
+			logger.Printf("note: AXIOM_FIXER_INVOKER_ENABLED=1 but the repair role is not selected — explicit role selection wins (no fixer loop in this process)")
+		}
+	}
 
 	r := &Root{
 		cfg:    cfg,
@@ -681,7 +693,10 @@ func (r *Root) componentsFor() []Component {
 				return fmt.Errorf("http server: %w", err)
 			}
 			r.ln = ln
-			r.logger.Printf("listening on %s", ln.Addr().String())
+			// Pre-F04 identity: the CONFIGURED address is logged (BindAddr:port),
+			// not the resolved listener address — identical for the deployed
+			// 127.0.0.1, and log-identical for localhost/IPv6 shapes too.
+			r.logger.Printf("listening on %s", r.httpSrv.Addr)
 			go func() {
 				if err := r.httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
 					select {

@@ -780,3 +780,52 @@ func TestWSRebindingAliasRejected(t *testing.T) {
 		t.Fatalf("foreign origin + valid token = %d, want 200", got)
 	}
 }
+
+// TestWSDrainClosesLiveAndRejectsNewUpgrades — the #298 ordered-shutdown
+// contract for the WS surface: CloseLiveWebSockets closes every live
+// connection (including one still in its pre-subscribe window, which has no
+// writer pump yet) and rejects new upgrades with 503 — no connection can
+// outlive the sweep, not even one racing it.
+func TestWSDrainClosesLiveAndRejectsNewUpgrades(t *testing.T) {
+	broker := events.NewBroker()
+	s := New(":0", log.Default())
+	s.SetWSAPI(broker, fakeSnapshot{}, "")
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	// Live, fully-subscribed connection.
+	subscribed := dialWS(t, urlFor(ts))
+	sendSubscribe(t, subscribed, "jobs", "")
+	if ack := readFrame(t, subscribed); ack.Type != frameSubscribed {
+		t.Fatalf("first frame = %+v, want subscribed ack", ack)
+	}
+	// Connection that upgraded but has NOT sent its subscribe frame yet
+	// (still inside the 10s pre-subscribe window).
+	preSubscribe := dialWS(t, urlFor(ts))
+
+	// Drain.
+	s.CloseLiveWebSockets()
+
+	// Both peers see the socket close, not a timeout.
+	for name, c := range map[string]*websocket.Conn{
+		"subscribed":    subscribed,
+		"pre-subscribe": preSubscribe,
+	} {
+		c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if _, _, err := c.ReadMessage(); err == nil {
+			t.Fatalf("%s connection still readable after CloseLiveWebSockets", name)
+		}
+	}
+
+	// A NEW upgrade after the sweep is rejected before the 101 switch —
+	// the dial fails. Gorilla reports a generic "bad handshake"; the
+	// concrete status rides on the returned response when one is provided.
+	c, hsResp, err := websocket.DefaultDialer.Dial(urlFor(ts), nil)
+	if err == nil {
+		_ = c.Close()
+		t.Fatal("dial after CloseLiveWebSockets must fail (draining rejects upgrades)")
+	}
+	if hsResp != nil && hsResp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("dial after drain: unexpected status %d, want 503", hsResp.StatusCode)
+	}
+}

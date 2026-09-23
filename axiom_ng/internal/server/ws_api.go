@@ -156,10 +156,21 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// #298: upgrade-time admission. A slot is reserved under the draining
+	// lock BEFORE the upgrade; a shutdown sweep between reserve and register
+	// closes the fresh conn inside register. After CloseLiveWebSockets no
+	// new WS connection can outlive the ordered stop.
+	wsSlot, ok := s.wsLive.reserve()
+	if !ok {
+		http.Error(w, "websocket shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return // upgrade already wrote the HTTP response
 	}
+	s.wsLive.register(wsSlot, conn)
+	defer s.wsLive.remove(wsSlot)
 
 	// The connection wants exactly one subscribe frame as its first message.
 	conn.SetReadLimit(4096)
@@ -176,28 +187,49 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.serveSubscribed(ws, conn, sub)
 }
 
-// wsLiveConns tracks the cancel funcs of live /api/ws connection contexts
-// so CloseLiveWebSockets can tear every connection down during an ordered
-// process shutdown (#298 composition root). cancel() is sufficient: the
-// writer pump exits on ctx.Done and owns conn.Close on every exit path, the
-// read pump then unblocks and the live loop returns, releasing the bus
-// subscription (#168 r3 teardown chain).
+// wsLiveConns tracks the upgraded /api/ws connections and a draining
+// flag, mutex-serialized against the shutdown sweep (#298 composition
+// root). Connections are tracked AT UPGRADE TIME — before the subscribe
+// frame — so CloseLiveWebSockets cannot miss a socket that upgraded while
+// the sweep ran (hijacked connections are invisible to http.Server.Shutdown,
+// and pre-subscribe sockets have no writer pump yet, so the sweep closes
+// the CONN: the blocked subscribe read errors, the handler returns, its
+// deferred cleanup runs).
 type wsLiveConns struct {
-	mu   sync.Mutex
-	next int64
-	live map[int64]context.CancelFunc
+	mu       sync.Mutex
+	next     int64
+	live     map[int64]*websocket.Conn
+	draining bool
 }
 
 func newWSLiveConns() *wsLiveConns {
-	return &wsLiveConns{live: make(map[int64]context.CancelFunc)}
+	return &wsLiveConns{live: make(map[int64]*websocket.Conn)}
 }
 
-func (w *wsLiveConns) add(cancel context.CancelFunc) int64 {
+// reserve allocates a tracking slot under the lock and reports whether
+// upgrades are still allowed. A slot reserved but not yet filled is
+// re-checked by register.
+func (w *wsLiveConns) reserve() (int64, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.draining {
+		return 0, false
+	}
 	w.next++
-	w.live[w.next] = cancel
-	return w.next
+	return w.next, true
+}
+
+// register fills a reserved slot with the upgraded conn. If draining began
+// between reserve and register (the upgrade raced the sweep), the conn is
+// closed immediately — no connection can slip past a completed sweep.
+func (w *wsLiveConns) register(id int64, conn *websocket.Conn) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.draining {
+		_ = conn.Close()
+		return
+	}
+	w.live[id] = conn
 }
 
 func (w *wsLiveConns) remove(id int64) {
@@ -206,21 +238,20 @@ func (w *wsLiveConns) remove(id int64) {
 	w.mu.Unlock()
 }
 
-// CloseLiveWebSockets cancels every live /api/ws connection context. Part
-// of the composition root's ordered shutdown: hijacked WS connections are
-// NOT waited on by http.Server.Shutdown, so they must be closed explicitly
-// before it — in-flight frames finish within the write deadline and the
-// handlers release their bus subscriptions.
+// CloseLiveWebSockets drains the WS surface for an ordered process shutdown:
+// new upgrades are rejected (503) and every live connection is closed. The
+// per-connection teardown chain (blocked or active read → error → ctx
+// cancel → live loop return → Unsubscribe) runs from conn.Close; hijacked
+// connections are NOT waited on by http.Server.Shutdown, which is why this
+// must be explicit.
 func (s *Server) CloseLiveWebSockets() {
 	s.wsLive.mu.Lock()
-	for _, cancel := range s.wsLive.live {
-		cancel()
+	s.wsLive.draining = true
+	for id, conn := range s.wsLive.live {
+		_ = conn.Close()
+		delete(s.wsLive.live, id)
 	}
 	s.wsLive.mu.Unlock()
-}
-
-func (s *Server) trackWSConn(cancel context.CancelFunc) int64 {
-	return s.wsLive.add(cancel)
 }
 
 // serveSubscribed runs the snapshot-then-live stream for one authenticated,
@@ -240,8 +271,6 @@ func (s *Server) serveSubscribed(ws *wsServer, conn *websocket.Conn, sub clientF
 	// returns and the deferred Unsubscribe runs.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	wsConnID := s.trackWSConn(cancel)
-	defer s.wsLive.remove(wsConnID)
 
 	// ReadPump: keeps gorilla processing ping/pong/close control frames and
 	// cancels ctx the moment the peer is gone (a read error on a closed or
