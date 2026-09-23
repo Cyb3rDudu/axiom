@@ -13,8 +13,11 @@
 package contractsuite
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -247,5 +250,66 @@ func TestMediaTypeFromMagic(t *testing.T) {
 				t.Fatalf("foreign bytes: error class = %v (typed=%v), want InvalidArgument (err: %v)", class, ok, err)
 			}
 		})
+	}
+}
+
+// TestTimeFormOkWireSemantics — teeth witness for the relaxed time gate:
+// offset-0 zones are wire-identical to UTC (RFC3339 renders "Z") and
+// MUST pass; real offsets, sub-µs precision, and the zero value must
+// fail. Guards against a regression back to pointer-identity checking,
+// which would falsely red a wire-compliant producer (TZ=UTC container).
+func TestTimeFormOkWireSemantics(t *testing.T) {
+	utc := time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC)
+	offsetZero := utc.In(time.FixedZone("UTC0", 0))
+	if err := timeFormOk(utc); err != nil {
+		t.Fatalf("UTC µs rejected: %v", err)
+	}
+	if err := timeFormOk(offsetZero); err != nil {
+		t.Fatalf("offset-0 fixed zone rejected though wire-identical to UTC: %v", err)
+	}
+	b, err := json.Marshal(struct {
+		At time.Time `json:"at"`
+	}{offsetZero})
+	if err != nil || !strings.HasSuffix(string(b), `123456Z"}`) {
+		t.Fatalf("offset-0 zone does not marshal as Z-suffixed µs form: %s (err %v)", b, err)
+	}
+	for name, bad := range map[string]time.Time{
+		"offset +02:00":   utc.In(time.FixedZone("PROBE", 2*3600)),
+		"sub-microsecond": utc.Add(500 * time.Nanosecond),
+		"zero value":      time.Time{},
+	} {
+		if err := timeFormOk(bad); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
+// TestFakeLibraryMagicWiringWitness — teeth witness for the magic-derived
+// intake and its validate-before-mutation placement: foreign bytes are
+// rejected as InvalidArgument BEFORE any state exists (no orphan source,
+// no orphan ticket, no burned sequence id). Mutating the fake back to a
+// hardcoded media type turns the first assertion red.
+func TestFakeLibraryMagicWiringWitness(t *testing.T) {
+	ctx := context.Background()
+	fl := NewFakeLibrary()
+	_, err := fl.StartImport(ctx, seedImportRequest("magic-witness"), bytes.NewReader([]byte("<html>not a rendition</html>")))
+	if err == nil {
+		t.Fatal("foreign magic bytes accepted — the magic derivation is not wired")
+	}
+	if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassInvalidArgument {
+		t.Fatalf("foreign bytes: class = %v (typed=%v), want InvalidArgument (err: %v)", class, ok, err)
+	}
+	if _, err := fl.OpenRendition(ctx, library.ContentTicket("ticket-1")); err == nil {
+		t.Fatal("rejected import left a redeemable ticket-1 behind — validation ran after state mutation")
+	}
+	if _, err := fl.GetSource(ctx, library.SourceRef{SourceID: "src-1"}); err == nil {
+		t.Fatal("rejected import left a resolvable src-1 behind — validation ran after state mutation")
+	}
+	op, err := fl.StartImport(ctx, seedImportRequest("magic-witness-ok"), bytes.NewReader(SeedContent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.ImportID != "imp-1" {
+		t.Fatalf("rejected import burned the sequence: next import id = %s, want imp-1", op.ImportID)
 	}
 }

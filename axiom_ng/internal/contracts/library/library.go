@@ -42,6 +42,9 @@ type Library interface {
 	// Idempotency: same key + byte-identical request (metadata JSON and
 	// content) → the SAME ImportOperation (replay, no side effects).
 	// Same key + different payload → *contracterr.IdempotencyMismatch.
+	// Precedence: request validation (including the content/magic-byte
+	// checks) precedes idempotency evaluation — a reused key with
+	// invalid input reports InvalidArgument, never IdempotencyMismatch.
 	StartImport(ctx context.Context, req ImportRequest, content io.Reader) (ImportOperation, error)
 
 	// GetImport reports the current ImportOperation state. Unknown ids
