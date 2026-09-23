@@ -66,9 +66,13 @@ func TestKGGateDefersClaimWhileConsolidationActive(t *testing.T) {
 		t.Fatalf("status = %q, want pending — the kg gate must defer the claim while a consolidation is active (#270)", got)
 	}
 
-	// pass commits → lock releases → the claim proceeds
+	// pass commits → lock releases → the claim proceeds. #298: Run is
+	// single-shot (ready/stopped close exactly once), so the post-release
+	// claim runs on a FRESH dispatcher — same harness and fake processor,
+	// same claim+completion proof.
 	release()
-	runFor(t, d, context.Background(), 4*time.Second)
+	d2 := newDispatcher(t, h, fp, Config{})
+	runFor(t, d2, context.Background(), 4*time.Second)
 	if got := h.jobStatus(t, jobID); got != "completed" {
 		t.Fatalf("status = %q, want completed after the KG run finished", got)
 	}

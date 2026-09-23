@@ -132,6 +132,15 @@ type Dispatcher struct {
 	// events is the observer-only event bus (#167). Nil (the zero value)
 	// disables all emissions: no dispatcher behavior depends on it.
 	events *events.Broker
+	// #298 composition root: ready closes once, right after capability
+	// negotiation and lane setup succeeded and before workers start — the
+	// INTERNAL readiness signal the composition aggregates (never a health
+	// field). stopped closes when Run (and every background pass it started:
+	// outbox drainer, skew watch, ack retries, workers) has returned; runErr
+	// is written before stopped closes (happens-before via the close).
+	ready   chan struct{}
+	stopped chan struct{}
+	runErr  error
 }
 
 // SetEventBroker attaches the observer-only event bus. Nil (the zero value)
@@ -186,7 +195,8 @@ func NewWithPersister(rep *repo.Repo, client processorClient, persist ResultPers
 	if logger == nil {
 		logger = log.New(log.Writer(), "axiom-ng: dispatcher: ", log.LstdFlags)
 	}
-	return &Dispatcher{cfg: cfg, rep: rep, client: client, logger: logger, persist: persist}
+	return &Dispatcher{cfg: cfg, rep: rep, client: client, logger: logger, persist: persist,
+		ready: make(chan struct{}), stopped: make(chan struct{})}
 }
 
 // Run processes jobs until ctx is cancelled. It returns when all workers have
@@ -196,7 +206,20 @@ func NewWithPersister(rep *repo.Repo, client processorClient, persist ResultPers
 // by one, while a merely unreachable processor is retried with backoff up to
 // MaxStartupWait before turning fatal (#214). It clamps the configured
 // concurrency to the processor's declared maximum.
-func (d *Dispatcher) Run(ctx context.Context) error {
+func (d *Dispatcher) Run(ctx context.Context) (err error) {
+	// #298: close stopped exactly once when Run AND its background passes
+	// have fully returned, recording the run error for WaitReady/Stopped
+	// observers (runErr first — it is read after stopped closes).
+	// bgCtx is ctx narrowed to Run's lifetime: cancelling it at Run return
+	// lets bg.Wait join background passes (skew watch, outbox drainer, ack
+	// retries) EVEN WHEN THE CALLER NEVER CANCELS — a Run that returns on a
+	// negotiation error must not hang on its own children.
+	var bg sync.WaitGroup
+	defer func() { d.runErr = err }()
+	defer close(d.stopped)
+	defer bg.Wait()
+	bgCtx, bgCancel := context.WithCancel(ctx)
+	defer bgCancel()
 	// L5: OpenSearch outbox drainer — own goroutine, own path; an OpenSearch
 	// outage never touches snapshots or jobs (work order §10.3). Starts BEFORE
 	// capability negotiation: draining has no processor dependency, and a
@@ -204,14 +227,16 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	// disables it (rows just stay pending).
 	if d.cfg.OpenSearchURL != "" {
 		osc := newOpenSearchClient(d.cfg.OpenSearchURL, d.cfg.OpenSearchUsername, d.cfg.OpenSearchPassword, d.logger)
-		go outboxWorker(ctx, d, osc)
+		bg.Add(1)
+		go func() { defer bg.Done(); outboxWorker(bgCtx, d, osc) }()
 		d.logger.Printf("outbox drainer enabled: index=%s url=%s", outboxIndexName, d.cfg.OpenSearchURL)
 	} else {
 		d.logger.Printf("outbox drainer disabled (AXIOM_OPENSEARCH_URL empty); outbox rows stay pending")
 	}
 	// #271 P0 hardening: make host/DB clock divergence observable before it
 	// becomes an outage. Observer-only, own goroutine.
-	go d.skewWatch(ctx)
+	bg.Add(1)
+	go func() { defer bg.Done(); d.skewWatch(bgCtx) }()
 	// #214: capability negotiation MUST NOT be fatal while the processor is
 	// simply not up yet — a rolling restart starts the Dispatcher before the
 	// runner finishes booting, and a one-shot fail left the process alive
@@ -266,6 +291,7 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	}
 	d.laneBudget = lanes
 	d.caps = caps
+
 	// Solo-loopback guard (production finding 2026-09-05): when EVERY
 	// ingest candidate is loopback-co-located with this process, source
 	// URLs must be minted against loopback — a configured LAN base
@@ -280,7 +306,11 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	}
 	// Separate ack-retry pass: re-acknowledges completed jobs whose ack failed,
 	// never reprocessing them (F3). Runs until ctx is cancelled.
-	go retryAcks(ctx, d)
+	bg.Add(1)
+	go func() { defer bg.Done(); retryAcks(bgCtx, d) }()
+	// #298: INTERNAL readiness — negotiation + lane setup succeeded, the
+	// worker fan starts now. Closed exactly once (Run is single-shot).
+	close(d.ready)
 	var wg sync.WaitGroup
 	for i := 0; i < d.cfg.Concurrency; i++ {
 		wg.Add(1)
@@ -289,6 +319,30 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	wg.Wait()
 	return nil
 }
+
+// WaitReady blocks until the dispatcher negotiated capabilities and its
+// claim loop is live (#298 internal readiness; never surfaced as a health
+// field — public aggregation is F05 scope by decision). It returns the run
+// error when Run stopped before becoming ready, so a #214 fatal surfaces
+// here too.
+func (d *Dispatcher) WaitReady(ctx context.Context) error {
+	select {
+	case <-d.ready:
+		return nil
+	case <-d.stopped:
+		if d.runErr != nil {
+			return fmt.Errorf("dispatcher stopped before ready: %w", d.runErr)
+		}
+		return errors.New("dispatcher stopped before ready")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Stopped closes when Run and every background pass it started (outbox
+// drainer, skew watch, ack retries, workers) have returned — the drain
+// signal the composition root waits on during an ordered shutdown.
+func (d *Dispatcher) Stopped() <-chan struct{} { return d.stopped }
 
 // negotiateCapabilities retries capability negotiation with backoff until a
 // candidate is reachable, the context is cancelled, or MaxStartupWait elapses

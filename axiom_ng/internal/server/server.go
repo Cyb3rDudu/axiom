@@ -58,12 +58,15 @@ type Server struct {
 	// #262 contextual health state: returns "active",
 	// "degraded_no_sync" or "" (no rules configured). nil = omitted.
 	contextualState func() string
+	// #298: live /api/ws connection contexts, for CloseLiveWebSockets
+	// during the composition root's ordered shutdown.
+	wsLive *wsLiveConns
 }
 
 // New builds a Server with no backing-dependency checkers yet. Register them
 // via RegisterCheck so /api/health reports their reachability.
 func New(addr string, log *log.Logger) *Server {
-	return &Server{addr: addr, checkers: map[string]Checker{}, log: log}
+	return &Server{addr: addr, checkers: map[string]Checker{}, log: log, wsLive: newWSLiveConns()}
 }
 
 // RegisterCheck adds a named dependency checker reported by /api/health.

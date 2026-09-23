@@ -1917,8 +1917,12 @@ func TestReadinessGateSkipsWarmingRunner(t *testing.T) {
 	}
 
 	// Phase 2: runner reports warm — the same job flows to completion.
+	// #298: Dispatcher.Run is single-shot (ready/stopped close exactly
+	// once), so phase 2 runs on a FRESH dispatcher instance — same harness,
+	// same fake processor; the claim+completion it proves is unchanged.
 	fp.warming.Store(false)
-	runFor(t, d, context.Background(), 6*time.Second)
+	d2 := newDispatcher(t, h, fp, Config{})
+	runFor(t, d2, context.Background(), 6*time.Second)
 	if got := h.jobStatus(t, jobID); got != "completed" {
 		t.Fatalf("status after warmup = %q, want completed", got)
 	}

@@ -36,6 +36,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -175,6 +176,53 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.serveSubscribed(ws, conn, sub)
 }
 
+// wsLiveConns tracks the cancel funcs of live /api/ws connection contexts
+// so CloseLiveWebSockets can tear every connection down during an ordered
+// process shutdown (#298 composition root). cancel() is sufficient: the
+// writer pump exits on ctx.Done and owns conn.Close on every exit path, the
+// read pump then unblocks and the live loop returns, releasing the bus
+// subscription (#168 r3 teardown chain).
+type wsLiveConns struct {
+	mu   sync.Mutex
+	next int64
+	live map[int64]context.CancelFunc
+}
+
+func newWSLiveConns() *wsLiveConns {
+	return &wsLiveConns{live: make(map[int64]context.CancelFunc)}
+}
+
+func (w *wsLiveConns) add(cancel context.CancelFunc) int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.next++
+	w.live[w.next] = cancel
+	return w.next
+}
+
+func (w *wsLiveConns) remove(id int64) {
+	w.mu.Lock()
+	delete(w.live, id)
+	w.mu.Unlock()
+}
+
+// CloseLiveWebSockets cancels every live /api/ws connection context. Part
+// of the composition root's ordered shutdown: hijacked WS connections are
+// NOT waited on by http.Server.Shutdown, so they must be closed explicitly
+// before it — in-flight frames finish within the write deadline and the
+// handlers release their bus subscriptions.
+func (s *Server) CloseLiveWebSockets() {
+	s.wsLive.mu.Lock()
+	for _, cancel := range s.wsLive.live {
+		cancel()
+	}
+	s.wsLive.mu.Unlock()
+}
+
+func (s *Server) trackWSConn(cancel context.CancelFunc) int64 {
+	return s.wsLive.add(cancel)
+}
+
 // serveSubscribed runs the snapshot-then-live stream for one authenticated,
 // subscribed connection for the connection's lifetime. A client that
 // disconnects (silently or not) cancels the loop via a read-pump, releasing the
@@ -192,6 +240,8 @@ func (s *Server) serveSubscribed(ws *wsServer, conn *websocket.Conn, sub clientF
 	// returns and the deferred Unsubscribe runs.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	wsConnID := s.trackWSConn(cancel)
+	defer s.wsLive.remove(wsConnID)
 
 	// ReadPump: keeps gorilla processing ping/pong/close control frames and
 	// cancels ctx the moment the peer is gone (a read error on a closed or

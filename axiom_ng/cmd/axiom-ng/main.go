@@ -5,31 +5,23 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/composition"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/dispatcher"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/fixerinvoker"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/version"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
 
+// main is a thin caller (#298 composition root): CLI mode handling, the
+// debug-bind guard and the process-level signal/exit policy stay HERE;
+// which components exist, their start order and their ordered shutdown
+// live in internal/composition.
 func main() {
 	// #205 §5: version stamp. Release builds inject Version/Commit/BuildType
 	// via -ldflags; a bare `go build` reports the debug default.
@@ -48,7 +40,6 @@ func main() {
 	if runCLIMode(os.Args) {
 		return
 	}
-	ctx := context.Background()
 	cfg := config.Load()
 	logger := log.New(os.Stderr, "axiom-ng: ", log.LstdFlags)
 	logger.Printf("starting %s", version.Banner())
@@ -65,286 +56,43 @@ func main() {
 			cfg.APIPort, version.Banner())
 	}
 
-	src := zotero.NewLocalAPI(cfg.ZoteroBaseURL, cfg.ZoteroLibraryID)
-	if id := src.ServerID(); id == "" {
-		logger.Printf("WARNING: Zotero local API not reachable at %s (is Zotero running and the local API enabled?)", cfg.ZoteroBaseURL)
-	} else {
-		logger.Printf("Zotero local API reachable: server-id=%s", id)
+	// Build the composition: same components, same order, same log lines as
+	// the pre-F04 inline wiring (F01 goldens witness the behavior identity).
+	// A Select/Start error is a loud non-zero exit — a selective start with a
+	// missing port refuses to boot half-wired instead of degrading silently.
+	root, err := composition.Full(cfg, logger, composition.Ports{})
+	if err != nil {
+		logger.Fatalf("startup: %v", err)
 	}
 
-	var database *db.DB
-	var syncSvc *sync.Service
-	if cfg.DatabaseURL == "" {
-		logger.Printf("WARNING: AXIOM_DATABASE_URL not set; running without Postgres")
-	} else {
-		var err error
-		database, err = db.Open(ctx, cfg.DatabaseURL)
-		if err != nil {
-			logger.Fatalf("postgres: %v", err)
-		}
-		defer database.Close()
-		if err := database.Migrate(ctx); err != nil {
-			logger.Fatalf("postgres migrate: %v", err)
-		}
-		logger.Printf("postgres ready and migrated")
-	}
-
-	addr := cfg.BindAddr + ":" + strconv.Itoa(cfg.APIPort)
-	srv := server.New(addr, logger)
-	srv.RegisterCheck("zotero", server.CheckZotero(src))
-
-	// One signal context drives graceful shutdown of BOTH the dispatcher and the
-	// HTTP server, so SIGINT/SIGTERM cannot be held off by one half the process.
+	// One signal context drives graceful shutdown of BOTH the dispatcher and
+	// the HTTP server, so SIGINT/SIGTERM cannot be held off by one half the
+	// process.
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// #214: carries a fatal dispatcher error (startup capability negotiation
-	// still failing after the retry window) to the main select, which must exit
-	// non-zero so launchd/KeepAlive restarts the process instead of leaving a
-	// living process with a dead claim loop. Buffered: the dispatcher goroutine
-	// never blocks on it.
-	dispErrCh := make(chan error, 1)
-
-	if database != nil {
-		srv.RegisterCheck("postgres", server.CheckDB(database.Pool()))
-		// Wire the sync service and ingest-job listing into the API.
-		rep := repo.New(database.Pool())
-		// #168 (B2): the live event broker. One instance shared by the
-		// dispatcher (emitter) and the /api/ws endpoint (subscriber). The WS
-		// route stays 404 when there is no database (no snapshot source).
-		wsBroker := events.NewBroker()
-		srv.SetWSAPI(wsBroker, rep, cfg.WSSecret)
-		// #169 (B3): the runner live view. The deriver folds the bus's job
-		// events into per-runner state and re-publishes RunnerStateChanged on
-		// the same bus (through the #168 WS machinery, topic "runners"); the
-		// REST snapshot /api/runners/live serves the same struct.
-		runnerView := server.NewRunnerLive(wsBroker, logger)
-		srv.SetRunnerLive(runnerView)
-		if !cfg.DispatcherEnabled {
-			// #249: the event bus is process-local. Without a dispatcher in
-			// THIS process, /api/runners/live and the ws job topics see no
-			// claims at all — the empty-list shape of the 2026-09-04
-			// incident. The complete view lives on the dispatcher agent's
-			// port (#248 single-agent topology: dispatcher + API in one
-			// process).
-			logger.Printf("#249: no dispatcher in this process — /api/runners/live sees no claims (the bus is process-local); serve the dispatcher here or query the agent's port")
-		}
-		go runnerView.Start(sigCtx.Done())
-		// #169 review: close the startup race in production too — wait until
-		// the deriver's bus subscription is live BEFORE the dispatcher below
-		// can publish its first event (otherwise the very first claim can be
-		// missed and the view starts wrong).
-		runnerView.WaitReady()
-		syncSvc = sync.New(src, rep, cfg.ZoteroBaseURL, cfg.ZoteroLibraryID, logger)
-		// #255/#262 contextual source class: resolve + validate the configured
-		// rule inputs against the SYNCED canonical state. Boot ALWAYS succeeds
-		// (#262 owner ruling): a never-synced DB degrades (rules inactive until
-		// the first sync converges them, health shows degraded_no_sync); with
-		// sync state present an unknown path/tag stays a loud start error —
-		// the genuine misconfiguration keeps its sharpness.
-		if err := syncSvc.InitContextual(ctx, cfg.ContextualCollectionPaths, cfg.ContextualTags); err != nil {
-			logger.Fatalf("contextual rules: %v", err)
-		}
-		srv.SetContextualState(syncSvc.ContextualState)
-		srv.SetSyncAPI(syncSvc)
-		srv.SetJobRepo(rep)
-		srv.SetForceRebuildAPI(rep)
-		// #197 standing entity consolidation: every successful sync hooks a
-		// debounced consolidation run (one run per sync burst).
-		syncSvc.SetConsolidator(rep)
-		// Remote source delivery: same secret on both sides (endpoint verify,
-		// dispatcher sign). Empty secret disables the endpoint (404 on all).
-		srv.SetProcessorSourceSecret(cfg.ProcessorSourceSecret)
-		srv.SetProcessorSourceRepo(rep)
-
-		// #184 fix-service surface: the RAG is the ONLY Zotero write
-		// gateway. The write key lives outside the repo
-		// (AXIOM_ZOTERO_WRITE_KEY_FILE, default ~/.axiom-ng/write-api-key);
-		// the DeepSeek key NEVER enters this process — it is fix-service
-		// env by design.
-		if keyBytes, kerr := os.ReadFile(cfg.ZoteroWriteKeyFile); kerr == nil && len(keyBytes) > 8 {
-			writeBase := strings.TrimSuffix(strings.TrimSuffix(cfg.ZoteroBaseURL, "/api"), "/")
-			zoteroWrite := zotero.NewWriteClient(writeBase, src.ServerID(), strings.TrimSpace(string(keyBytes)))
-			srv.SetRepairAPI(rep, zoteroWrite, cfg.QuarantineRoot)
-			logger.Printf("repair API enabled (zotero write gateway, quarantine under %s)", cfg.QuarantineRoot)
-			// #206 fixer invoker: the mail-ingest side of the repair queue —
-			// polls queued cases, invokes the fixer wrapper once per key,
-			// drives the case through the #184 state machine (healed via the
-			// custody sequence above). Opt-in, same pattern as the dispatcher.
-			if cfg.FixerInvokerEnabled {
-				inv := fixerinvoker.New(fixerinvoker.Config{
-					Command:     cfg.FixerCommand,
-					Concurrency: cfg.FixerConcurrency,
-					OCRTimeout:  cfg.FixerOCRTimeout, // #293: OCR wedge-guard (0 = invoker default 24h)
-				}, fixerinvoker.Deps{
-					Rep:            rep,
-					Apply:          fixerinvoker.LiveApplyDeps(rep, zoteroWrite),
-					QuarantineRoot: cfg.QuarantineRoot,
-					// #282 post-heal auto-sync: every successful heal runs a
-					// targeted sync (include = healed document) so the healed
-					// attachment enqueues without operator action.
-					Sync: syncSvc,
-				}, logger)
-				go func() {
-					if err := inv.Run(sigCtx); err != nil {
-						logger.Printf("fixer invoker stopped: %v", err)
-					}
-				}()
-			}
-		} else {
-			logger.Printf("repair API disabled (kein zotero write key unter %s)", cfg.ZoteroWriteKeyFile)
-		}
-
-		// R3 (#133) + R4 (#134): retrieval API. Hybrid recall + rerank over the
-		// QUERY runner's endpoints (R1/R2) — its own client, defaulting to the
-		// local always-on runner (AXIOM_QUERY_RUNNER_URL overrides). Query
-		// failure degrades search per R3 (BM25-only/unreranked), never fails
-		// over to another runner.
-		queryClient, qerr := processor.New(processor.Options{
-			BaseURL: cfg.QueryRunnerURL,
-		})
-		if qerr != nil {
-			logger.Fatalf("processor client (search): %v", qerr)
-		}
-		searchSvc := search.New(cfg.OpenSearchURL, cfg.OpenSearchUsername, cfg.OpenSearchPassword, queryClient, rep, logger)
-		searchSvc.SparseArm = cfg.SearchSparseArm
-		searchSvc.Rerank = cfg.SearchRerank
-		searchSvc.FrontmatterFilter = cfg.SearchFrontmatterFilter
-		searchSvc.MaxPerBook = cfg.SearchMaxPerBook
-		if cfg.SearchGraphArm {
-			searchSvc.GraphArm = true
-			searchSvc.SetGraphSource(rep)
-		}
-		srv.SetSearchService(searchSvc)
-		srv.SetPassageService(searchSvc) // A1 #165: same service, passage surface
-		// R6 (#136): knowledge-graph read API over the L6 data.
-		srv.SetKGService(rep)
-		// #197: standing consolidation write route (POST /api/kg/consolidate).
-		srv.SetConsolidateService(rep)
-		srv.SetSelectionRepo(rep) // A2 #166: selection + documents listing
-		// Role probe (R4 Ziel 1/3): capability check of the query runner at
-		// start — verifies query_embedding/reranking and logs the role map.
-		// Best-effort: an unreachable query runner keeps search degraded-but-
-		// up (R3 fallback), it must not kill the sidecar.
-		go probeQueryRunnerRole(sigCtx, queryClient, cfg.QueryRunnerURL, logger)
-		srv.RegisterCheck("query-runner", runnerCheck(queryClient))
-
-		// Ingest chain (#207 generalizes R4 #134): an ORDERED candidate list
-		// from AXIOM_PROCESSOR_URLS (plural wins) or the legacy singular pair
-		// (AXIOM_PROCESSOR_URL + AXIOM_INGEST_FALLBACK_URL). A periodic health
-		// probe keeps dead candidates out of the submit path; submit-time
-		// failover stays as the safety net.
-		newIngestClient := func() (*processor.FailoverClient, error) {
-			var clients []*processor.Client
-			for _, url := range cfg.IngestCandidates() {
-				c, err := processor.New(processor.Options{
-					BaseURL:       url,
-					ResultTimeout: cfg.ProcessorRequestTimeout,
-				})
-				if err != nil {
-					return nil, err
-				}
-				clients = append(clients, c)
-			}
-			return processor.NewFailoverChain(clients, logger), nil
-		}
-		ingestClient, ierr := newIngestClient()
-		if ierr != nil {
-			logger.Fatalf("ingest client: %v", ierr)
-		}
-		srv.RegisterCheck("ingest-runner", runnerCheck(ingestClient))
-		// Health-based candidate selection (#207): periodic probe keeps dead
-		// candidates out of the submit path front - a briefly dead Carrier is
-		// not asked first, so the per-submit connect timeout disappears.
-		ingestClient.StartHealthMonitor(sigCtx, cfg.RunnerHealthInterval)
-		logger.Printf("runner roles: query=%s ingest=%v (health probe every %s)",
-			cfg.QueryRunnerURL, cfg.IngestCandidates(), cfg.RunnerHealthInterval)
-
-		// The dispatcher is opt-in and runs only when explicitly enabled. It
-		// claims jobs, drives them through the processor and back to a terminal
-		// state; a broken processor is surfaced on start via capability
-		// negotiation, not silently stalling claims.
-		if cfg.DispatcherEnabled {
-			// Gate 4: wire the REAL persistence boundary (repo.PersistResult
-			// fence-completes the job atomically in its single TX). The
-			// errPersister default would fail every completion.
-			// Runner identity comes pre-derived from config (#122: explicit
-			// name, else the processor URL host).
-			disp := dispatcher.NewWithPersister(rep, ingestClient, rep, dispatcher.Config{
-				WorkerID:               cfg.DispatcherWorkerID,
-				RunnerName:             cfg.ProcessorRunnerName,
-				Concurrency:            cfg.DispatcherConcurrency,
-				APIPort:                cfg.APIPort,
-				Profile:                json.RawMessage(cfg.DispatcherProfile),
-				LeaseDuration:          cfg.DispatcherLeaseDuration,
-				ArtifactRoot:           cfg.ArtifactRoot,
-				OpenSearchURL:          cfg.OpenSearchURL,
-				OpenSearchUsername:     cfg.OpenSearchUsername,
-				OpenSearchPassword:     cfg.OpenSearchPassword,
-				ProcessorSourceBaseURL: cfg.ProcessorSourceBaseURL,
-				ProcessorSourceSecret:  cfg.ProcessorSourceSecret,
-				PreflightEnabled:       cfg.DispatcherPreflightEnabled, // #175
-			}, logger)
-			// #168 (B2): let the dispatcher EMIT lifecycle events onto the
-			// shared broker (observer-only passenger — no dispatcher behavior
-			// changes; the /api/ws endpoint subscribes to the same broker).
-			disp.SetEventBroker(wsBroker)
-			// #214: a fatal dispatcher error (capability negotiation still failing
-			// after the startup retry window) must exit the process non-zero so
-			// launchd/KeepAlive restarts it. Before the fix the loop died while
-			// the process stayed "running" (exit 0) — jobs pending forever with
-			// no crash. A graceful shutdown (sigCtx cancelled) returns nil and
-			// never lands here, so the select below treats it as a restorable
-			// process exit.
-			go func() {
-				if err := disp.Run(sigCtx); err != nil {
-					logger.Printf("dispatcher stopped: %v", err)
-					dispErrCh <- err
-				}
-			}()
-		}
+	if err := root.Start(sigCtx); err != nil {
+		// Start already stopped the partial composition — no zombie survives
+		// the non-zero exit.
+		logger.Fatalf("startup: %v", err)
 	}
-
-	logger.Printf("listening on %s", addr)
-	httpServer := &http.Server{
-		Addr:              addr,
-		Handler:           srv,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- httpServer.ListenAndServe()
-	}()
 
 	select {
 	case <-sigCtx.Done():
 		logger.Printf("signal received; shutting down")
 		stop() // idempotent; release the signal handler
-	case err := <-errCh:
-		if err != nil && err != http.ErrServerClosed {
-			logger.Fatalf("http server: %v", err)
-		}
-	case err := <-dispErrCh:
-		// #214: the runner stayed unreachable through MaxStartupWait. Exit
-		// non-zero (FATAL) so the supervisor restarts the process cleanly when
-		// the runner finally boots — before the fix the process survived with a
-		// dead claim loop and enqueued jobs stayed pending forever.
-		logger.Fatalf("dispatcher fatal: process must restart when the runner is available: %v", err)
+	case err := <-root.Fatal():
+		// #214 (dispatcher) or a serve error (http): both carry their full
+		// diagnosis prefix from the composition; exit non-zero so the
+		// supervisor restarts the process cleanly.
+		logger.Fatalf("%v", err)
 	}
 
-	// Cancel a still-debounced consolidation hook BEFORE the drain — the
-	// pool closes with the process, a late hook run would only log an error.
-	if syncSvc != nil {
-		syncSvc.StopConsolidation() // #197
-	}
-	// Gracefully stop the HTTP server within a bounded window; the dispatcher's
-	// own context is the same sigCtx, so it drains and releases its leases in
-	// parallel.
+	// Graceful stop within the standing 15s window; the ordered shutdown
+	// joins the dispatcher/fixer drains before the pool closes.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		logger.Printf("http shutdown: %v", err)
-	}
+	root.Stop(shutdownCtx)
 }
 
 // modeHelp documents the CLI mode surface and the exit-code contract (#202).
@@ -411,54 +159,4 @@ func modeFail(logger *log.Logger, consistent bool, format string, args ...any) {
 	// sized (append would otherwise share/overwrite backing arrays).
 	logger.Printf("MODE FAILED (exit 1): "+format+" — %s", append(append([]any{}, args...), state)...)
 	os.Exit(1)
-}
-
-// runnerCheck adapts a runner health surface (primary or failover client)
-// to the server's Checker interface for /api/health.
-type runnerCheckFn struct {
-	health func(ctx context.Context) error
-}
-
-func (r runnerCheckFn) Ready() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return r.health(ctx)
-}
-
-func runnerCheck(h interface {
-	Health(ctx context.Context) error
-}) server.Checker {
-	return runnerCheckFn{health: h.Health}
-}
-
-// probeQueryRunnerRole verifies at startup that the configured query runner
-// actually serves the query roles (R4 Ziel 3): capabilities must advertise
-// query_embedding and reranking. A capable-but-different runner (e.g. a
-// Carrier runner with §7a endpoints) is a valid query runner; a runner
-// without them gets a WARNING — search stays up and degrades per R3.
-// #216: the roles line also distinguishes warm from cold, reading the
-// runner's own models_warmed readiness so "capable" never silently covers
-// a runner still preloading its models.
-func probeQueryRunnerRole(ctx context.Context, c *processor.Client, url string, logger *log.Logger) {
-	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	caps, err := c.Capabilities(probeCtx)
-	if err != nil {
-		logger.Printf("runner roles: query runner %s not reachable at start (search degrades per R3 until it is): %v", url, err)
-		return
-	}
-	feats := caps.Features
-	qe, rk := feats != nil && feats["query_embedding"], feats != nil && feats["reranking"]
-	state := "warm"
-	if !caps.ModelsWarmed {
-		state = "cold (models warmup pending or disabled)"
-	}
-	switch {
-	case qe && rk:
-		logger.Printf("runner roles: query runner %s capable (%s, query_embedding=%v reranking=%v, model=%s, models_warmed=%v)", url, state, qe, rk, caps.Processor.Name, caps.ModelsWarmed)
-	case !qe && !rk:
-		logger.Printf("WARNING: runner roles: query runner %s has NEITHER query role (query_embedding/reranking) — retrieval will run degraded (BM25-only, unreranked); point AXIOM_QUERY_RUNNER_URL at a §7a-capable runner", url)
-	default:
-		logger.Printf("WARNING: runner roles: query runner %s only partially query-capable (query_embedding=%v reranking=%v) — partial R3 degradation expected", url, qe, rk)
-	}
 }

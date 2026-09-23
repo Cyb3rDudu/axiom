@@ -86,12 +86,16 @@ func TestWaveGateDefersClaimWhileRepairOpen(t *testing.T) {
 		t.Fatalf("WaveRepairGate = %v/%q err=%v, want held", held, reason, err)
 	}
 
-	// terminal park (unrepairable): gate opens, the wave moves on
+	// terminal park (unrepairable): gate opens, the wave moves on.
+	// #298: Run is single-shot (ready/stopped close exactly once), so the
+	// post-release claim runs on a FRESH dispatcher — same harness and fake
+	// processor, same claim+completion proof.
 	if _, err := h.pool.Exec(context.Background(),
 		`UPDATE repair_cases SET status='failed', blocked_reason='no-healable-defect-evidenced: IT' WHERE status='queued'`); err != nil {
 		t.Fatal(err)
 	}
-	runFor(t, d, context.Background(), 3*time.Second)
+	d2 := newDispatcher(t, h, fp, Config{})
+	runFor(t, d2, context.Background(), 3*time.Second)
 	if got := h.jobStatus(t, jobID); got != "completed" {
 		t.Fatalf("status = %q, want completed after the terminal park released the gate", got)
 	}

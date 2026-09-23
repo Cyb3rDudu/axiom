@@ -35,12 +35,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	stdsync "sync"
 	"syscall"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
+	sync "github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -127,12 +128,24 @@ func (c *Config) fillDefaults() {
 // targeted sync (include = the healed document) so the healed attachment
 // enqueues and processes without operator action. nil disables the hook
 // (log-only — the wave gate surfaces the stranded heal, see WaveRepairGate).
+//
+// Exec (#298 composition root) is the fixer-executor PORT: nil binds the
+// local binding (runFixerCmd's process-group-hardened exec); the
+// composition root's fake-binding proof and any future transport inject
+// here without touching the state machine.
 type Deps struct {
 	Rep            *repo.Repo
 	Apply          repair.ApplyDeps
 	QuarantineRoot string
 	Sync           HealSyncer
+	Exec           FixerExec
 }
+
+// FixerExec runs ONE fixer-wrapper invocation (command + args, budget,
+// optional extra env) and reports (exit code, captured output tail, error).
+// The local binding is Invoker.runFixerCmd — keep its process-group kill and
+// output-tail semantics when adding new bindings.
+type FixerExec func(ctx context.Context, command string, args []string, budget time.Duration, extraEnv []string) (int, string, error)
 
 // HealSyncer is the post-heal sync surface (#282). *sync.Service satisfies
 // it — Run with a one-run include override enqueues exactly the healed
@@ -147,6 +160,12 @@ type Invoker struct {
 	deps   Deps
 	logger *log.Logger
 	sem    chan struct{}
+	// inFlight joins the per-case goroutines so Run can drain them before
+	// returning (#298 ordered shutdown: a claimed case's fate is decided
+	// under the run context, never orphaned mid-write).
+	inFlight stdsync.WaitGroup
+	// stopped closes when Run (including its in-flight drain) returned.
+	stopped chan struct{}
 }
 
 // New builds an invoker (cfg defaults are filled here).
@@ -155,13 +174,18 @@ func New(cfg Config, deps Deps, logger *log.Logger) *Invoker {
 	if logger == nil {
 		logger = log.New(os.Stderr, "fixer-invoker ", log.LstdFlags)
 	}
-	return &Invoker{cfg: cfg, deps: deps, logger: logger, sem: make(chan struct{}, cfg.Concurrency)}
+	return &Invoker{cfg: cfg, deps: deps, logger: logger, sem: make(chan struct{}, cfg.Concurrency), stopped: make(chan struct{})}
 }
+
+// Stopped closes when Run and every in-flight case goroutine have returned —
+// the drain signal the composition root waits on during an ordered shutdown.
+func (inv *Invoker) Stopped() <-chan struct{} { return inv.stopped }
 
 // Run polls the queue until ctx is done. It only returns on ctx
 // cancellation — every per-case failure is handled, never propagated
 // (owner nail 5: no crash-loop class).
 func (inv *Invoker) Run(ctx context.Context) error {
+	defer close(inv.stopped)
 	inv.logger.Printf("fixer invoker starting: cmd=%s interval=%s timeout=%s concurrency=%d workroot=%s",
 		inv.cfg.Command, inv.cfg.Interval, inv.cfg.Timeout, inv.cfg.Concurrency, inv.cfg.WorkRoot)
 	// Lease recovery FIRST (a previous invoker may have died mid-case).
@@ -177,6 +201,12 @@ func (inv *Invoker) Run(ctx context.Context) error {
 		inv.pollOnce(ctx)
 		select {
 		case <-ctx.Done():
+			// Ordered shutdown (#298): cancel first, then join the in-flight
+			// case goroutines. Their execs are killed by the shared ctx; the
+			// status writes under a cancelled ctx fail loudly-but-harmlessly
+			// and the case stays in_repair for the stale-reaper (dead-invoker
+			// recovery) — claims are handed back, never lost.
+			inv.inFlight.Wait()
 			inv.logger.Printf("fixer invoker stopped")
 			return nil
 		case <-t.C:
@@ -208,7 +238,9 @@ func (inv *Invoker) pollOnce(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		}
+		inv.inFlight.Add(1)
 		go func() {
+			defer inv.inFlight.Done()
 			defer func() { <-inv.sem }()
 			defer func() {
 				if r := recover(); r != nil {
@@ -403,9 +435,18 @@ func (inv *Invoker) runFixer(ctx context.Context, item *repo.RepairItem) (int, s
 		}
 		inv.logger.Printf("case: key %s: OCR-class wedge-guard %s (fix.sh kills at %s) — no tempo limit, orphan prevention only", item.AttachmentKey, budget, fixShBudget)
 		cmdEnv := append(os.Environ(), fmt.Sprintf("AXIOM_FIX_SH_TIMEOUT=%d", int(fixShBudget.Seconds())))
-		return inv.runFixerCmd(ctx, item, budget, cmdEnv)
+		return inv.exec(ctx, item, budget, cmdEnv)
 	}
-	return inv.runFixerCmd(ctx, item, budget, nil)
+	return inv.exec(ctx, item, budget, nil)
+}
+
+// exec routes one invocation through the FixerExec port: the injected
+// binding (#298 composition root) or the local runFixerCmd.
+func (inv *Invoker) exec(ctx context.Context, item *repo.RepairItem, budget time.Duration, extraEnv []string) (int, string, error) {
+	if inv.deps.Exec != nil {
+		return inv.deps.Exec(ctx, inv.cfg.Command, fixerArgs(item), budget, extraEnv)
+	}
+	return inv.runFixerCmd(ctx, item, budget, extraEnv)
 }
 
 // runFixerCmd executes Command <key> --apply under the given backstop
