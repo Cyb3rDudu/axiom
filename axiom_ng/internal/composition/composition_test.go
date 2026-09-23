@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -394,5 +395,74 @@ func TestReadinessPublicInHealth(t *testing.T) {
 	root.Stop(context.Background())
 	if got := root.readinessSnapshot()["api"]; got != "stopping" {
 		t.Fatalf("post-stop snapshot must read stopping, got %q", got)
+	}
+}
+
+// TestStopParallelSubBudgets — the F04 deferral landed in F05 (#299): the
+// stop joins (api drain, dispatcher, fixer, sync) run IN PARALLEL with
+// per-join budgets. A deliberately slow drain must NOT block the other
+// joins: under the pre-F05 serialized stop the fast join could only run
+// AFTER the slow drain (reverse component order puts the dispatcher
+// first); in parallel it completes while the slow one is still draining.
+// The store join still lands LAST (the pool closes after every other
+// join settled or expired its budget).
+func TestStopParallelSubBudgets(t *testing.T) {
+	root, err := Full(apiOnlyCfg(freePort(t)), testLogger(), Ports{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const slowDrain = 400 * time.Millisecond
+	var fastAt, storeAt time.Duration
+	var mu sync.Mutex
+	t0 := time.Now()
+
+	// Component order matters for the serialization probe: reverse
+	// iteration must hit the slow dispatcher drain BEFORE the fast join,
+	// so only parallelism (not list order) can let the fast join through.
+	root.components = []Component{
+		funcComponent{name: "store", role: RoleStore, stop: func(ctx context.Context) error {
+			mu.Lock()
+			storeAt = time.Since(t0)
+			mu.Unlock()
+			return nil
+		}},
+		funcComponent{name: "fast-join", role: RoleRepair, stop: func(ctx context.Context) error {
+			mu.Lock()
+			fastAt = time.Since(t0)
+			mu.Unlock()
+			return nil
+		}},
+		funcComponent{name: "slow-drain", role: RoleDispatcher, stop: func(ctx context.Context) error {
+			select {
+			case <-time.After(slowDrain): // a drain that uses its whole budget
+			case <-ctx.Done():
+			}
+			return nil
+		}},
+		funcComponent{name: "api", role: RoleAPI, stop: func(ctx context.Context) error { return nil }},
+	}
+	root.roles = map[Role]bool{RoleAPI: true, RoleStore: true, RoleDispatcher: true, RoleRepair: true}
+	root.started.Store(true)
+	root.cancel = func() {} // Start never ran; Stop's cancel is a no-op here
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	root.Stop(stopCtx)
+	total := time.Since(t0)
+
+	mu.Lock()
+	fast, store := fastAt, storeAt
+	mu.Unlock()
+	if fast >= slowDrain-100*time.Millisecond {
+		t.Fatalf("fast join blocked by the slow drain: finished at %v (slow drain %v) — joins are not parallel", fast, slowDrain)
+	}
+	if store < slowDrain-100*time.Millisecond {
+		t.Fatalf("store join must land after the slow drain (pool closes last), finished at %v", store)
+	}
+	if total < slowDrain-100*time.Millisecond {
+		t.Fatalf("total stop %v cannot be below the slowest join %v", total, slowDrain)
+	}
+	if total > 5*time.Second {
+		t.Fatalf("total stop %v far above the slowest join — a join overran its own budget", total)
 	}
 }

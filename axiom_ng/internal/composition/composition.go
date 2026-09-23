@@ -35,6 +35,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -46,7 +47,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
+	axsync "github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
 
@@ -147,7 +148,7 @@ type Root struct {
 	database     *db.DB
 	rep          *repo.Repo
 	broker       *events.Broker
-	syncSvc      *sync.Service
+	syncSvc      *axsync.Service
 	httpSrv      *http.Server
 	ln           net.Listener
 	srv          *server.Server
@@ -349,47 +350,76 @@ func (r *Root) readinessSnapshot() map[string]string {
 // process) or an HTTP serve error. A graceful Stop never sends here.
 func (r *Root) Fatal() <-chan error { return r.fatal }
 
-// Stop performs the ordered shutdown within the stop budget (today's 15s
-// window). Order and rationale (reverse of start):
+// Stop performs the shutdown within the stop budget (today's 15s
+// window, F05: per-join sub-budgets). Order and rationale:
 //
-//  1. api — stop accepting: close live WS connections (hijacked sockets are
-//     invisible to http.Server.Shutdown), then drain in-flight HTTP requests.
+//  1. stop accepting — the listener closes IMMEDIATELY (before the
+//     cancel, so no new request can race into a half-drained process);
+//     a Serve error after this point is expected, never fatal.
 //  2. cancel the root context — dispatcher workers, outbox drainer, fixer
 //     invoker, health monitors begin draining their in-flight work.
-//  3. dispatcher / repair — JOIN the drains: Run returns only when every
-//     lease-holding goroutine has stopped. A drain outrunning the budget is
-//     abandoned to the lease-expiry recovery (#271/#264 guard semantics).
-//  4. sync — cancel a still-debounced consolidation hook before the pool
-//     can vanish under it.
-//  5. store — close the database pool, last.
+//  3. JOIN the drains IN PARALLEL, each with its OWN sub-budget (the F04
+//     deferral, landed in F05): API/WS drain, dispatcher, fixer invoker
+//     and sync stops run concurrently — a slow drain bounded by its own
+//     budget can no longer starve the others. A drain outrunning its
+//     budget is abandoned the way the #271/#264 shutdown guard semantics
+//     prescribe: leases expire and the claim scans' expired-recovery
+//     owns the rows — never lost, never terminalized by the shutdown
+//     itself.
+//  4. store LAST — the database pool closes only after every other join
+//     settled or expired its budget (the reverse-start-order invariant:
+//     every component may touch the pool during its drain).
 func (r *Root) Stop(ctx context.Context) {
 	if !r.started.Load() || r.stopped.Load() {
 		return
 	}
 	r.stopped.Store(true)
-	// 1. The edge stops accepting FIRST — before the cancel, so no new
-	// request races into a half-drained process (WS connections close
-	// explicitly; hijacked sockets are invisible to http.Server.Shutdown).
-	for i := len(r.components) - 1; i >= 0; i-- {
-		c := r.components[i]
-		if c.Role() == RoleAPI && r.roles[RoleAPI] {
-			_ = c.Stop(ctx)
-		}
+	// 1. The edge stops accepting FIRST — before the cancel. Closing the
+	//    listener outright (instead of waiting for Shutdown inside the
+	//    api component) makes "no new connections" immediate; in-flight
+	//    requests and late WS upgrades are drained by the api component's
+	//    stop (CloseLiveWebSockets sweeps pre-subscribe connections too).
+	if r.ln != nil {
+		_ = r.ln.Close()
 	}
 	// 2. Cancel: every ctx-bound goroutine (dispatcher workers, outbox
-	// drainer, fixer invoker, health monitors, runner view) begins
-	// draining its in-flight work — leases are honored, never
-	// terminalized (#271/#264 guard semantics).
+	//    drainer, fixer invoker, health monitors, runner view) begins
+	//    draining its in-flight work — leases are honored, never
+	//    terminalized (#271/#264 guard semantics).
 	r.cancel()
-	// 3. JOIN the drains (reverse start order): dispatcher and fixer
-	// returns mean every lease-holding goroutine settled; sync cancels the
-	// consolidation debounce; the store pool closes LAST.
+	// 3. Parallel joins with per-join sub-budgets. Equal shares of the
+	//    remaining window: concurrency (not unequal division) is the fix —
+	//    each join may use the whole window, none of them blocks another.
+	budget := 15 * time.Second
+	if dl, ok := ctx.Deadline(); ok {
+		if rem := time.Until(dl); rem > 0 {
+			budget = rem
+		}
+	}
+	var wg sync.WaitGroup
 	for i := len(r.components) - 1; i >= 0; i-- {
 		c := r.components[i]
-		if c.Role() == RoleAPI || !r.roles[c.Role()] {
+		if !r.roles[c.Role()] || c.Role() == RoleStore {
 			continue
 		}
-		_ = c.Stop(ctx)
+		wg.Add(1)
+		go func(c Component) {
+			defer wg.Done()
+			subCtx, cancel := context.WithTimeout(context.Background(), budget)
+			defer cancel()
+			_ = c.Stop(subCtx)
+		}(c)
+	}
+	wg.Wait()
+	// 4. The store pool closes LAST — after every join settled or expired.
+	for i := len(r.components) - 1; i >= 0; i-- {
+		c := r.components[i]
+		if !r.roles[c.Role()] || c.Role() != RoleStore {
+			continue
+		}
+		subCtx, cancel := context.WithTimeout(context.Background(), budget)
+		_ = c.Stop(subCtx)
+		cancel()
 	}
 }
 
@@ -524,7 +554,7 @@ func (r *Root) componentsFor() []Component {
 		name: "sync",
 		role: RoleSync,
 		start: func(ctx context.Context) error {
-			r.syncSvc = sync.New(r.src, r.rep, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, r.logger)
+			r.syncSvc = axsync.New(r.src, r.rep, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, r.logger)
 			// #255/#262 contextual source class: resolve + validate the
 			// configured rule inputs against the SYNCED canonical state. Boot
 			// ALWAYS succeeds (#262 owner ruling): a never-synced DB degrades
@@ -749,7 +779,10 @@ func (r *Root) componentsFor() []Component {
 			// 127.0.0.1, and log-identical for localhost/IPv6 shapes too.
 			r.logger.Printf("listening on %s", r.httpSrv.Addr)
 			go func() {
-				if err := r.httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
+				if err := r.httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed && !r.stopped.Load() {
+					// A serve error is fatal ONLY while running: Stop closes
+					// the listener deliberately (phase 1 of the shutdown) —
+					// that close-error is the expected path, never fatal.
 					select {
 					case r.fatal <- fmt.Errorf("http server: %w", err):
 					default:
