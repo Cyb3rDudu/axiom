@@ -104,3 +104,33 @@ func TestWarnSetIndependentOfCounts(t *testing.T) {
 		t.Fatalf("warned=%v counts=%v, want 1 warned name, 2 uses", warned, counts)
 	}
 }
+
+// N2 (#299, carried from #296): the empty-name guard — a call site that
+// passes "" must fail loudly (log line and counter key would both become
+// ""), never silently record a "" entry.
+func TestUseEmptyNamePanics(t *testing.T) {
+	reset()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("Use(\"\") must panic, not record an empty name")
+		}
+	}()
+	Use("")
+}
+
+// N1 (#299, carried from #296) — decision witness: the {} pin stays valid
+// because the working-tree golden derives from a handler invocation in a
+// process that never ran an alias entrypoint. The alias calls Use from its
+// main (cmd/axiom-ng), never from library code the golden drives — so an
+// in-suite Use here (mirroring any future library-side caller shape) is
+// observable in Counts, and the baseline projection in another package
+// still sees its own clean process. This test pins that library code CAN
+// observe alias usage the moment it happens in-process (health visibility).
+func TestCountsVisibleInProcess(t *testing.T) {
+	reset()
+	SetSilent(true)
+	Use("axiom-ng")
+	if c := Counts()["axiom-ng"]; c != 1 {
+		t.Fatalf("alias use must count in-process (health deprecations field), got %d", c)
+	}
+}

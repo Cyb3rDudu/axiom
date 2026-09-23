@@ -30,7 +30,14 @@ func SetSilent(v bool) {
 // Use records one use of legacy identifier name: one warning line per
 // process and name (once-semantics, not per call), counter increments
 // on every call.
+//
+// N2 (#299, carried from #296): an empty name is a programming error at
+// the call site (log line AND counter key would become "") — guarded
+// loudly since the first real callers (the F05 alias wiring) landed.
 func Use(name string) {
+	if name == "" {
+		panic("deprecate.Use: empty legacy name — fix the call site")
+	}
 	mu.Lock()
 	first := !warned[name]
 	warned[name] = true
