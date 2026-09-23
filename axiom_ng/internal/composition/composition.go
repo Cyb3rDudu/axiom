@@ -159,9 +159,13 @@ func RolesFromConfig(cfg config.Config) []Role {
 		return []Role{RoleAPI}
 	}
 	roles := []Role{RoleAPI, RoleStore, RoleEvents, RoleSync, RoleSearch, RoleIngest}
-	if cfg.FixerInvokerEnabled {
-		roles = append(roles, RoleRepair)
-	}
+	// Repair rides along whenever the store does (pre-F04 main wired
+	// SetRepairAPI on DB + readable write key, independent of the invoker
+	// env): the component no-ops without a key, and its inner
+	// FixerInvokerEnabled gate keeps the invoker loop opt-in. Gating the
+	// ROLE on the env would silently drop the /api/repair/* surface for the
+	// key-present-invoker-off shape the F01 repair probe exercises.
+	roles = append(roles, RoleRepair)
 	if cfg.DispatcherEnabled {
 		roles = append(roles, RoleDispatcher)
 	}
@@ -182,9 +186,7 @@ func Select(cfg config.Config, logger *log.Logger, ports Ports, roles ...Role) (
 	if logger == nil {
 		logger = log.Default()
 	}
-	if err := ports.fillLocal(); err != nil {
-		return nil, err
-	}
+	ports.fillLocal()
 	set := make(map[Role]bool, len(roles))
 	for _, r := range roles {
 		if _, known := roleDeps[r]; !known {
@@ -351,8 +353,18 @@ type funcComponent struct {
 func (f funcComponent) Name() string                    { return f.name }
 func (f funcComponent) Role() Role                      { return f.role }
 func (f funcComponent) Start(ctx context.Context) error { return f.start(ctx) }
-func (f funcComponent) Ready(ctx context.Context) error { return f.ready(ctx) }
-func (f funcComponent) Stop(ctx context.Context) error  { return f.stop(ctx) }
+
+// Ready treats a nil ready closure as ready: components whose Start is
+// synchronous have no separate readiness phase (only the dispatcher's
+// negotiation-bounded WaitReady is a real closure).
+func (f funcComponent) Ready(ctx context.Context) error {
+	if f.ready == nil {
+		return nil
+	}
+	return f.ready(ctx)
+}
+
+func (f funcComponent) Stop(ctx context.Context) error { return f.stop(ctx) }
 
 func (r *Root) buildComponents() {
 	// Construction shared by every component: the Zotero source and the
@@ -403,9 +415,15 @@ func (r *Root) componentsFor() []Component {
 			r.srv.SetKGService(r.rep)
 			r.srv.SetConsolidateService(r.rep)
 			r.srv.SetSelectionRepo(r.rep)
+			// Remote source delivery (endpoint verify, dispatcher sign): wired
+			// on the STORE component, not sync — the dispatcher's source fetch
+			// reads it, so Select(api, store, ingest, dispatcher) must boot a
+			// dispatcher whose source can fetch work (role-table honesty).
+			// Same secret on both sides; empty secret disables the endpoint.
+			r.srv.SetProcessorSourceSecret(r.cfg.ProcessorSourceSecret)
+			r.srv.SetProcessorSourceRepo(r.rep)
 			return nil
 		},
-		ready: func(ctx context.Context) error { return nil },
 		stop: func(ctx context.Context) error {
 			if r.database != nil {
 				r.database.Close()
@@ -436,8 +454,7 @@ func (r *Root) componentsFor() []Component {
 			runnerView.WaitReady()
 			return nil
 		},
-		ready: func(ctx context.Context) error { return nil },
-		stop:  func(ctx context.Context) error { return nil },
+		stop: func(ctx context.Context) error { return nil },
 	})
 
 	// sync: contextual rules at start, consolidation debounce at stop.
@@ -460,12 +477,8 @@ func (r *Root) componentsFor() []Component {
 			// #197 standing entity consolidation: every successful sync hooks
 			// a debounced consolidation run (one run per sync burst).
 			r.syncSvc.SetConsolidator(r.rep)
-			// Remote source delivery: same secret on both sides.
-			r.srv.SetProcessorSourceSecret(r.cfg.ProcessorSourceSecret)
-			r.srv.SetProcessorSourceRepo(r.rep)
 			return nil
 		},
-		ready: func(ctx context.Context) error { return nil },
 		stop: func(ctx context.Context) error {
 			if r.syncSvc != nil {
 				// Cancel a still-debounced consolidation hook BEFORE the pool
@@ -518,7 +531,6 @@ func (r *Root) componentsFor() []Component {
 			}()
 			return nil
 		},
-		ready: func(ctx context.Context) error { return nil },
 		stop: func(ctx context.Context) error {
 			if r.inv == nil {
 				return nil
@@ -563,8 +575,7 @@ func (r *Root) componentsFor() []Component {
 			r.srv.RegisterCheck("query-runner", runnerCheck(queryClient))
 			return nil
 		},
-		ready: func(ctx context.Context) error { return nil },
-		stop:  func(ctx context.Context) error { return nil },
+		stop: func(ctx context.Context) error { return nil },
 	})
 
 	// ingest: ordered failover chain + health monitor.
@@ -591,8 +602,7 @@ func (r *Root) componentsFor() []Component {
 			r.ingestClient = ingestClient
 			return nil
 		},
-		ready: func(ctx context.Context) error { return nil },
-		stop:  func(ctx context.Context) error { return nil },
+		stop: func(ctx context.Context) error { return nil },
 	})
 
 	// dispatcher: the claim loop + outbox drainer. Ready is the post-
@@ -682,7 +692,6 @@ func (r *Root) componentsFor() []Component {
 			}()
 			return nil
 		},
-		ready: func(ctx context.Context) error { return nil },
 		stop: func(ctx context.Context) error {
 			if r.httpSrv == nil {
 				return nil

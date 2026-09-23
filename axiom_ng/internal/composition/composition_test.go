@@ -214,11 +214,13 @@ func TestStartAbortsLoudlyOnBindConflict(t *testing.T) {
 	}
 	defer hold.Close()
 
-	base := goroutineBaseline(t)
 	root, err := Full(apiOnlyCfg(port), testLogger(), Ports{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Baseline AFTER Full: its construction (zotero ServerID probe) must
+	// not leak into the settle delta.
+	base := goroutineBaseline(t)
 	sigCtx, stop := context.WithCancel(context.Background())
 	defer stop()
 	startErr := root.Start(sigCtx)
@@ -236,6 +238,9 @@ func TestStartAbortsLoudlyOnBindConflict(t *testing.T) {
 // selective-start DoD: exit ≠ 0, a diagnosis line naming the env var, and
 // the process actually terminated (no zombie).
 func TestBinaryExitsNonZeroOnHalfWiring(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binary build skipped in -short mode")
+	}
 	bin := filepath.Join(t.TempDir(), "axiom-ng")
 	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/axiom-ng").CombinedOutput(); err != nil {
 		t.Fatalf("build binary: %v\n%s", err, out)
@@ -268,4 +273,32 @@ func asExitError(err error, target **exec.ExitError) bool {
 		*target = e
 	}
 	return ok
+}
+
+// TestRolesFromConfigKeepsRepairWithoutInvoker — baseline-protection
+// witness for the repair surface: the repair ROLE is selected whenever the
+// store is (the write-key gate and the invoker opt-in live INSIDE the
+// component). Pre-F04, /api/repair/* was served whenever DB + write key
+// existed, with AXIOM_FIXER_INVOKER_ENABLED=0; gating the role on the env
+// would silently drop that surface. Select opens nothing — a fake DSN is
+// enough.
+func TestRolesFromConfigKeepsRepairWithoutInvoker(t *testing.T) {
+	cfg := apiOnlyCfg(0)
+	cfg.DatabaseURL = "postgres://roles-probe.invalid/roles_test"
+	cfg.FixerInvokerEnabled = false
+	cfg.DispatcherEnabled = false
+	root, err := Full(cfg, testLogger(), Ports{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"store", "events", "sync", "repair", "search", "ingest", "api"}
+	got := root.Roles()
+	if len(got) != len(want) {
+		t.Fatalf("roles with invoker off must still include repair, got %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("roles with invoker off must still include repair, got %v want %v", got, want)
+		}
+	}
 }

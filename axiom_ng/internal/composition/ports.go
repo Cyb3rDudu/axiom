@@ -56,7 +56,7 @@ type Ports struct {
 }
 
 // fillLocal installs the local bindings for every unset seam.
-func (p *Ports) fillLocal() error {
+func (p *Ports) fillLocal() {
 	if p.IngestRunner == nil {
 		p.IngestRunner = localIngestRunner
 	}
@@ -65,7 +65,6 @@ func (p *Ports) fillLocal() error {
 			return processor.New(processor.Options{BaseURL: cfg.QueryRunnerURL})
 		}
 	}
-	return nil
 }
 
 // localIngestRunner is the local binding for the dispatcher→runner port:

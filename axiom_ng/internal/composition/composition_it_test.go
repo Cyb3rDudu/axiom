@@ -408,11 +408,13 @@ func TestIT_FakeBindingFullRegistry(t *testing.T) {
 	querySrv := fakeQueryRunnerSrv(t)
 	cfg := fullStackCfg(t, h, querySrv.URL)
 
-	base := goroutineBaseline(t)
 	root, err := Full(cfg, testLogger(), fakePorts(t, runner, querySrv))
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Baseline AFTER Full: its construction (zotero ServerID probe) must
+	// not leak into the settle delta.
+	base := goroutineBaseline(t)
 	sigCtx, stop := context.WithCancel(context.Background())
 	defer stop()
 	if err := root.Start(sigCtx); err != nil {
@@ -490,11 +492,13 @@ func TestIT_OrderedShutdownHonorsInFlight(t *testing.T) {
 	// Fast, deterministic dispatcher cadence for the IT.
 	cfg.DispatcherLeaseDuration = 2 * time.Minute
 
-	base := goroutineBaseline(t)
 	root, err := Full(cfg, testLogger(), fakePorts(t, runner, querySrv))
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Baseline AFTER Full: its construction (zotero ServerID probe) must
+	// not leak into the settle delta.
+	base := goroutineBaseline(t)
 	sigCtx, stop := context.WithCancel(context.Background())
 	defer stop()
 	if err := root.Start(sigCtx); err != nil {
@@ -557,10 +561,11 @@ func TestIT_OrderedShutdownHonorsInFlight(t *testing.T) {
 	}
 
 	// In-flight artifacts are PRESERVED for their recovery owners: the
-	// dispatcher released the un-attempt-ceiling lease back to pending
-	// (#271 P2 semantics — reclaimable, never terminalized by the shutdown).
-	if st := h.jobStatus(t, jobID); st != "pending" && st != "processing" {
-		t.Fatalf("in-flight job must stay pending/processing for recovery, got %q", st)
+	// dispatcher RELEASED the un-attempt-ceiling lease back to pending
+	// (#271 P2 — immediately reclaimable, never terminalized by the
+	// shutdown; deterministic here: attempt 1 of max 3, 202 observed).
+	if st := h.jobStatus(t, jobID); st != "pending" {
+		t.Fatalf("in-flight job's lease must be released back to 'pending' for immediate reclaim, got %q", st)
 	}
 	if st := h.repairStatus(t, caseID); st != "in_repair" {
 		t.Fatalf("in-flight repair case must stay 'in_repair' for the stale-reaper, got %q", st)
@@ -598,11 +603,13 @@ func TestIT_StoppedStartLeavesNoGoroutines(t *testing.T) {
 	}
 	defer hold.Close()
 
-	base := goroutineBaseline(t)
 	root, err := Full(cfg, testLogger(), fakePorts(t, runner, querySrv))
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Baseline AFTER Full: its construction (zotero ServerID probe) must
+	// not leak into the settle delta.
+	base := goroutineBaseline(t)
 	sigCtx, stop := context.WithCancel(context.Background())
 	defer stop()
 	startErr := root.Start(sigCtx)

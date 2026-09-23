@@ -105,6 +105,12 @@ func findUsageViolations(moduleRoot string) []usageViolation {
 
 		envSeen := 0
 		execSeen := 0
+		// Known blind spot (honest debt-gate limit): the match below is a
+		// selector call on an identifier literally named `os`/`exec` — an
+		// aliased import (`import o "os"`) or an indirect assignment
+		// (`fn := os.Getenv`) escapes it. New code reviews + F06's move of
+		// the remaining reads behind config shrink the surface this gate
+		// has to be perfect on.
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {

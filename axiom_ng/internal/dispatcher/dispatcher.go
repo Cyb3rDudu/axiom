@@ -207,16 +207,16 @@ func NewWithPersister(rep *repo.Repo, client processorClient, persist ResultPers
 // MaxStartupWait before turning fatal (#214). It clamps the configured
 // concurrency to the processor's declared maximum.
 func (d *Dispatcher) Run(ctx context.Context) (err error) {
-	// #298: close stopped exactly once when Run AND its background passes
-	// have fully returned, recording the run error for WaitReady/Stopped
-	// observers (runErr first — it is read after stopped closes).
+	// #298: Run and its background passes fully returned → set runErr, then
+	// close stopped (ONE defer, runErr write BEFORE the close — WaitReady/
+	// Stopped observers read runErr only after stopped closes; separate
+	// defers would close first under LIFO and race the read).
 	// bgCtx is ctx narrowed to Run's lifetime: cancelling it at Run return
 	// lets bg.Wait join background passes (skew watch, outbox drainer, ack
 	// retries) EVEN WHEN THE CALLER NEVER CANCELS — a Run that returns on a
 	// negotiation error must not hang on its own children.
 	var bg sync.WaitGroup
-	defer func() { d.runErr = err }()
-	defer close(d.stopped)
+	defer func() { d.runErr = err; close(d.stopped) }()
 	defer bg.Wait()
 	bgCtx, bgCancel := context.WithCancel(ctx)
 	defer bgCancel()
@@ -330,6 +330,14 @@ func (d *Dispatcher) WaitReady(ctx context.Context) error {
 	case <-d.ready:
 		return nil
 	case <-d.stopped:
+		// Run closed ready before stopped, so this check is race-free: a
+		// late WaitReady on a dispatcher that WAS ready (ran, then drained)
+		// reports ready, not "stopped before ready".
+		select {
+		case <-d.ready:
+			return nil
+		default:
+		}
 		if d.runErr != nil {
 			return fmt.Errorf("dispatcher stopped before ready: %w", d.runErr)
 		}
