@@ -351,7 +351,9 @@ func (r *Root) readinessSnapshot() map[string]string {
 func (r *Root) Fatal() <-chan error { return r.fatal }
 
 // Stop performs the shutdown within the stop budget (today's 15s
-// window, F05: per-join sub-budgets). Order and rationale:
+// window, F05: per-join sub-budgets derived from the CALLER's ctx —
+// cancellation propagates into every join, the total window stays
+// bounded by the caller's deadline). Order and rationale:
 //
 //  1. stop accepting — the listener closes IMMEDIATELY (before the
 //     cancel, so no new request can race into a half-drained process);
@@ -387,9 +389,10 @@ func (r *Root) Stop(ctx context.Context) {
 	//    draining its in-flight work — leases are honored, never
 	//    terminalized (#271/#264 guard semantics).
 	r.cancel()
-	// 3. Parallel joins with per-join sub-budgets. Equal shares of the
-	//    remaining window: concurrency (not unequal division) is the fix —
-	//    each join may use the whole window, none of them blocks another.
+	// 3. Parallel joins with per-join sub-budgets DERIVED FROM THE CALLER:
+	//    cancellation propagates into every join, and each join may use the
+	//    whole remaining window — concurrency (not unequal division) is the
+	//    fix: none of them blocks another.
 	budget := 15 * time.Second
 	if dl, ok := ctx.Deadline(); ok {
 		if rem := time.Until(dl); rem > 0 {
@@ -405,19 +408,28 @@ func (r *Root) Stop(ctx context.Context) {
 		wg.Add(1)
 		go func(c Component) {
 			defer wg.Done()
-			subCtx, cancel := context.WithTimeout(context.Background(), budget)
+			subCtx, cancel := context.WithTimeout(ctx, budget)
 			defer cancel()
 			_ = c.Stop(subCtx)
 		}(c)
 	}
 	wg.Wait()
-	// 4. The store pool closes LAST — after every join settled or expired.
+	// 4. The store pool closes LAST — after every join settled or expired
+	//    its budget. Its sub-budget is RE-DERIVED from the caller's
+	//    remaining deadline (the joins may have consumed part of the
+	//    window; an already spent caller budget yields an
+	//    immediately-expired sub-context — the pool close itself is not
+	//    deadline-bound work).
+	storeBudget := 15 * time.Second
+	if dl, ok := ctx.Deadline(); ok {
+		storeBudget = max(time.Until(dl), 0)
+	}
 	for i := len(r.components) - 1; i >= 0; i-- {
 		c := r.components[i]
 		if !r.roles[c.Role()] || c.Role() != RoleStore {
 			continue
 		}
-		subCtx, cancel := context.WithTimeout(context.Background(), budget)
+		subCtx, cancel := context.WithTimeout(ctx, storeBudget)
 		_ = c.Stop(subCtx)
 		cancel()
 	}
