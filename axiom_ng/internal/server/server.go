@@ -58,6 +58,11 @@ type Server struct {
 	// #262 contextual health state: returns "active",
 	// "degraded_no_sync" or "" (no rules configured). nil = omitted.
 	contextualState func() string
+	// F05 #299 aggregated component readiness: role → "ready" | "starting"
+	// | "stopping". Wired by the composition root (the one place that
+	// knows the selected role set); nil = omitted (bare-server shapes,
+	// the F01 baseline scaffolding wires its own).
+	readinessState func() map[string]string
 	// #298: the live /api/ws CONNECTIONS plus the one-way draining flag,
 	// for CloseLiveWebSockets during the composition root's ordered shutdown.
 	wsLive *wsLiveConns
@@ -76,6 +81,11 @@ func (s *Server) RegisterCheck(name string, c Checker) { s.checkers[name] = c }
 // or "degraded_no_sync" while rules are configured (omitted otherwise) — a
 // permanently degraded deployment must be observable, not silent.
 func (s *Server) SetContextualState(f func() string) { s.contextualState = f }
+
+// SetReadinessState wires the F05 /api/health readiness field: the
+// aggregated per-role component readiness of THIS process (composition
+// root is the caller; values "ready" | "starting" | "stopping").
+func (s *Server) SetReadinessState(f func() map[string]string) { s.readinessState = f }
 
 // Handler returns the chi router.
 func (s *Server) Handler() http.Handler {
@@ -158,6 +168,11 @@ type healthResponse struct {
 	// always witness, empty map until a legacy name is used. Data basis
 	// for the 0.3.x+ removal decision.
 	Deprecations map[string]int `json:"deprecations"`
+	// F05 #299: aggregated component readiness (role → "ready" |
+	// "starting" | "stopping"), wired by the composition root. Omitted
+	// when no provider is wired (bare server shapes). Taken up in the
+	// working-tree identity fixture via BASELINE_UPDATE (F05).
+	Readiness map[string]string `json:"readiness,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +208,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.contextualState != nil {
 		hr.Contextual = s.contextualState()
+	}
+	if s.readinessState != nil {
+		hr.Readiness = s.readinessState()
 	}
 	writeJSON(w, http.StatusOK, hr)
 }

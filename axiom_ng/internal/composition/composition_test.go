@@ -332,3 +332,67 @@ func TestSelectWorkerEnvPrecedenceNote(t *testing.T) {
 		t.Fatalf("Full derives roles from config, must not log the precedence note, got log: %q", out)
 	}
 }
+
+// TestReadinessPublicInHealth — F05 #299: the aggregated internal readiness
+// is publicly visible in /api/health ("ready" once the component's internal
+// signal fired) and flips to "stopping" when the shutdown begins (witnessed
+// on the snapshot directly — the listener is gone by then).
+func TestReadinessPublicInHealth(t *testing.T) {
+	port := freePort(t)
+	root, err := Full(apiOnlyCfg(port), testLogger(), Ports{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sigCtx, stop := context.WithCancel(context.Background())
+	defer stop()
+	if err := root.Start(sigCtx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer root.Stop(context.Background())
+
+	// The api component's Ready is synchronous — the flag flips via the
+	// post-Start goroutine; poll briefly for it.
+	deadline := time.Now().Add(3 * time.Second)
+	var readiness map[string]string
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/health", port))
+		if err == nil {
+			var health struct {
+				Readiness map[string]string `json:"readiness"`
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if json.Unmarshal(body, &health) == nil {
+				readiness = health.Readiness
+				if readiness["api"] == "ready" {
+					break
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if readiness["api"] != "ready" {
+		t.Fatalf("health readiness must show api ready, got %v", readiness)
+	}
+	if len(readiness) != 1 {
+		t.Fatalf("api-only composition must report exactly one readiness role, got %v", readiness)
+	}
+	// The v1 mirror serves the same aggregated field (parity by construction).
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", port))
+	if err != nil {
+		t.Fatalf("v1 health: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var v1 struct {
+		Readiness map[string]string `json:"readiness"`
+	}
+	if err := json.Unmarshal(body, &v1); err != nil || v1.Readiness["api"] != "ready" {
+		t.Fatalf("v1 health readiness diverged: %s", body)
+	}
+
+	root.Stop(context.Background())
+	if got := root.readinessSnapshot()["api"]; got != "stopping" {
+		t.Fatalf("post-stop snapshot must read stopping, got %q", got)
+	}
+}

@@ -35,6 +35,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
@@ -133,8 +134,13 @@ type Root struct {
 	rootCtx context.Context
 	cancel  context.CancelFunc
 	fatal   chan error
-	started bool
-	stopped bool
+	started atomic.Bool
+	stopped atomic.Bool
+
+	// readiness: per selected role, flips true when the component's
+	// INTERNAL Ready signal fired (tracked by post-Start goroutines; read
+	// by readinessSnapshot from HTTP handlers — atomic by necessity).
+	ready map[Role]*atomic.Bool
 
 	// wiring state, built progressively during Start (nil until then —
 	// exactly like the pre-F04 main.go locals).
@@ -234,7 +240,11 @@ func Select(cfg config.Config, logger *log.Logger, ports Ports, roles ...Role) (
 		logger: logger,
 		ports:  ports,
 		roles:  set,
+		ready:  make(map[Role]*atomic.Bool, len(set)),
 		fatal:  make(chan error, 1),
+	}
+	for role := range set {
+		r.ready[role] = &atomic.Bool{}
 	}
 	r.buildComponents()
 	return r, nil
@@ -256,7 +266,7 @@ func (r *Root) Roles() []string {
 // (bounded) and the error is returned — the caller exits non-zero on it, and
 // no half-started goroutine survives in-process.
 func (r *Root) Start(ctx context.Context) error {
-	if r.started {
+	if r.started.Load() {
 		return fmt.Errorf("composition: Start called twice")
 	}
 	r.rootCtx, r.cancel = context.WithCancel(ctx)
@@ -279,7 +289,21 @@ func (r *Root) Start(ctx context.Context) error {
 		}
 		started = append(started, c)
 	}
-	r.started = true
+	r.started.Store(true)
+	// F05 #299: track every component's INTERNAL readiness signal in the
+	// background so /api/health can serve a non-blocking snapshot
+	// (Root.Ready stays the blocking aggregation for callers/tests).
+	for _, c := range r.components {
+		if !r.roles[c.Role()] {
+			continue
+		}
+		comp := c
+		go func() {
+			if err := comp.Ready(r.rootCtx); err == nil {
+				r.ready[comp.Role()].Store(true)
+			}
+		}()
+	}
 	return nil
 }
 
@@ -296,6 +320,28 @@ func (r *Root) Ready(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// readinessSnapshot is the /api/health readiness provider: role →
+// "ready" (internal signal fired) | "starting" (selected, signal pending)
+// | "stopping" (shutdown begun). Wired into the server in buildComponents.
+func (r *Root) readinessSnapshot() map[string]string {
+	out := make(map[string]string, len(r.roles))
+	stopping := r.stopped.Load()
+	for _, role := range startOrder {
+		if !r.roles[role] {
+			continue
+		}
+		switch {
+		case stopping:
+			out[string(role)] = "stopping"
+		case r.ready[role].Load():
+			out[string(role)] = "ready"
+		default:
+			out[string(role)] = "starting"
+		}
+	}
+	return out
 }
 
 // Fatal delivers at most one process-fatal error: the #214 dispatcher fatality
@@ -317,10 +363,10 @@ func (r *Root) Fatal() <-chan error { return r.fatal }
 //     can vanish under it.
 //  5. store — close the database pool, last.
 func (r *Root) Stop(ctx context.Context) {
-	if !r.started || r.stopped {
+	if !r.started.Load() || r.stopped.Load() {
 		return
 	}
-	r.stopped = true
+	r.stopped.Store(true)
 	// 1. The edge stops accepting FIRST — before the cancel, so no new
 	// request races into a half-drained process (WS connections close
 	// explicitly; hijacked sockets are invisible to http.Server.Shutdown).
@@ -393,6 +439,10 @@ func (r *Root) buildComponents() {
 	}
 	r.srv = server.New(net.JoinHostPort(r.cfg.BindAddr, strconv.Itoa(r.cfg.APIPort)), r.logger)
 	r.srv.RegisterCheck("zotero", server.CheckZotero(r.src))
+	// F05 #299: the aggregated internal readiness (per selected role)
+	// becomes publicly visible in /api/health — the composition root is
+	// the only place that knows the role set, so it owns the provider.
+	r.srv.SetReadinessState(r.readinessSnapshot)
 
 	for _, c := range r.componentsFor() {
 		r.components = append(r.components, c)

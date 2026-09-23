@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"sort"
@@ -71,6 +72,19 @@ func buildFullServer() *server.Server {
 	srv.SetRepairAPI(repo.New(nil),
 		zotero.NewWriteClient("http://127.0.0.1:1", "", "baseline-inventory"), "")
 	srv.SetConsolidateService(noopConsolidator{})
+	// F05 #299: the readiness field is part of the frozen identity — the
+	// scaffolding wires the composition-root provider with the full-stack
+	// shape (every role in startOrder ready), the same shape a
+	// dispatcher-enabled `axiom serve all` serves once its signals fired.
+	full := map[string]string{}
+	for _, role := range []string{"store", "events", "sync", "repair", "search", "ingest", "dispatcher", "api"} {
+		full[role] = "ready"
+	}
+	srv.SetReadinessState(func() map[string]string {
+		out := make(map[string]string, len(full))
+		maps.Copy(out, full)
+		return out
+	})
 	return srv
 }
 

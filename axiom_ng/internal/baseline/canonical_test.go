@@ -7,8 +7,19 @@
 //
 // Fields taken up by this baseline extension (exactly these, no general
 // "allow additional fields" relaxation anywhere): canonical_name,
-// service_class, component_roles (RAG side) — the deprecations counter
-// map is pinned as empty until F05/F08/F10 wire legacy entrypoints.
+// service_class, component_roles (RAG side), readiness (F05 #299 — the
+// aggregated per-role readiness, wired by the composition root; the
+// baseline scaffolding wires the full-stack shape) — the deprecations
+// counter map is pinned as EMPTY.
+//
+// N1 decision (#299, resolving the #296 carry-over): the `deprecations: {}`
+// pin STAYS. The golden derives the identity block from the real health
+// handler in a process that never ran an alias entrypoint — the F05
+// axiom-ng alias calls deprecate.Use from its main (cmd/axiom-ng), never
+// from library code this projection drives, so the pin cannot drift. No
+// test-only reset hook is added (it would exist solely to serve the
+// golden); a future LIBRARY-side Use call would surface here as a red
+// fixture and force a conscious re-decision.
 // The runner-side identity (axiom-compute-worker block in
 // /v1/capabilities) is witnessed by the runner's own suite
 // (tests/test_contract.py::test_capabilities_canonical_identity) — the
@@ -31,10 +42,11 @@ import (
 // response into this struct means a dropped or renamed handler field
 // shows up as a zero value and goes red.
 type canonicalIdentity struct {
-	CanonicalName  string         `json:"canonical_name"`
-	ServiceClass   string         `json:"service_class"`
-	ComponentRoles []string       `json:"component_roles"`
-	Deprecations   map[string]int `json:"deprecations"`
+	CanonicalName  string            `json:"canonical_name"`
+	ServiceClass   string            `json:"service_class"`
+	ComponentRoles []string          `json:"component_roles"`
+	Deprecations   map[string]int    `json:"deprecations"`
+	Readiness      map[string]string `json:"readiness"`
 }
 
 // identityOf derives the identity block from the REAL working-tree

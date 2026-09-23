@@ -6,5 +6,15 @@
     "library",
     "store"
   ],
-  "deprecations": {}
+  "deprecations": {},
+  "readiness": {
+    "api": "ready",
+    "dispatcher": "ready",
+    "events": "ready",
+    "ingest": "ready",
+    "repair": "ready",
+    "search": "ready",
+    "store": "ready",
+    "sync": "ready"
+  }
 }
