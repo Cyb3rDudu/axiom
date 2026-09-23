@@ -33,9 +33,12 @@ import (
 // field. An unknown pattern renders as UNANNOTATED and fails the frozen
 // compare loudly (the fixture would carry the marker).
 var responseClass = map[string]string{
-	"/api/health":      "json healthResponse",
-	"/api/zotero/sync": "json sync.Result",
-	"/api/ingest/jobs": "json []repo.Job",
+	"/api/health":          "json healthResponse",
+	"/api/v1/health":       "json healthResponse (v1 mirror)",
+	"/api/v1/search":       "json search.Response (v1 mirror)",
+	"/api/v1/passage/{id}": "json passage (v1 mirror)",
+	"/api/zotero/sync":     "json sync.Result",
+	"/api/ingest/jobs":     "json []repo.Job",
 	"/api/ingest/documents/{documentID}/force-rebuild": "json repo.Job (202)",
 	"/api/zotero/selection":                            "json selection (GET/PUT)",
 	"/api/zotero/selection/resolved":                   "json resolved selection",

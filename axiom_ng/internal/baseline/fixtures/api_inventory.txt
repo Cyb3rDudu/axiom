@@ -10,6 +10,8 @@ GET    /api/repair/cases                                json repair cases listin
 GET    /api/repair/docs/{documentKey}/locator-stats     json locator stats
 GET    /api/repair/queue                                json repair queue items
 GET    /api/runners/live                                json runner live view
+GET    /api/v1/health                                   json healthResponse (v1 mirror)
+GET    /api/v1/passage/{id}                             json passage (v1 mirror)
 GET    /api/ws                                          websocket (events/runners topics)
 GET    /api/zotero/documents                            json document listing
 GET    /api/zotero/selection                            json selection (GET/PUT)
@@ -21,6 +23,7 @@ POST   /api/repair/cases/{id}/requeue                   json ack
 POST   /api/repair/cases/{id}/verdict                   json verdict result
 POST   /api/repair/custody                              json custody record
 POST   /api/search                                      json search.Response
+POST   /api/v1/search                                   json search.Response (v1 mirror)
 POST   /api/zotero/sync                                 json sync.Result
 PUT    /api/zotero/selection                            json selection (GET/PUT)
 

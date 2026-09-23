@@ -84,6 +84,13 @@ func (s *Server) Handler() http.Handler {
 	r.Use(middleware.Recoverer)
 
 	r.Get("/api/health", s.handleHealth)
+	// Canonical /api/v1 namespace (F05, #299): the same handlers as the
+	// compat routes — byte-identical responses by construction (one
+	// handler, two registrations; the parity test witnesses it). Start
+	// set: health, search, passage; further routes arrive with the
+	// component extraction (F06–F10). The unversioned routes above stay
+	// untouched through 0.2.x (F01 baseline guards them byte-for-byte).
+	r.Get("/api/v1/health", s.handleHealth)
 	r.Post("/api/zotero/sync", s.handleSync)
 	r.Get("/api/ingest/jobs", s.handleJobs)
 	r.Post("/api/ingest/documents/{documentID}/force-rebuild", s.handleForceRebuild)
@@ -92,7 +99,9 @@ func (s *Server) Handler() http.Handler {
 	r.Put("/api/zotero/selection", s.handlePutSelection)
 	r.Get("/api/zotero/documents", s.handleZoteroDocuments)
 	r.Post("/api/search", s.handleSearch)
+	r.Post("/api/v1/search", s.handleSearch)
 	r.Get("/api/passage/{id}", s.handlePassage)
+	r.Get("/api/v1/passage/{id}", s.handlePassage)
 	r.Get("/api/passage/{id}/page", s.handlePassageAt)
 	r.Get("/api/kg/entities", s.handleKGEntities)
 	r.Get("/api/kg/entities/{id}/neighbors", s.handleKGNeighbors)
