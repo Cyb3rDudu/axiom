@@ -233,6 +233,8 @@ func (w *wsLiveConns) register(id int64, conn *websocket.Conn) {
 }
 
 func (w *wsLiveConns) remove(id int64) {
+	// Tolerates never-registered ids: handleWS's deferred remove also runs
+	// on the draining-register path, where the insertion was skipped.
 	w.mu.Lock()
 	delete(w.live, id)
 	w.mu.Unlock()
@@ -243,7 +245,8 @@ func (w *wsLiveConns) remove(id int64) {
 // per-connection teardown chain (blocked or active read → error → ctx
 // cancel → live loop return → Unsubscribe) runs from conn.Close; hijacked
 // connections are NOT waited on by http.Server.Shutdown, which is why this
-// must be explicit.
+// must be explicit. Draining is ONE-WAY — the flag is never cleared; this
+// is a shutdown-only API, not a pause/resume mechanism.
 func (s *Server) CloseLiveWebSockets() {
 	s.wsLive.mu.Lock()
 	s.wsLive.draining = true

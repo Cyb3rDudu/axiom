@@ -806,14 +806,19 @@ func TestWSDrainClosesLiveAndRejectsNewUpgrades(t *testing.T) {
 	// Drain.
 	s.CloseLiveWebSockets()
 
-	// Both peers see the socket close, not a timeout.
+	// Both peers see the socket close, not a timeout: the assertion must
+	// FAIL on a deadline error, otherwise the 5s read deadline masquerades
+	// as close and a deleted sweep keeps the test green (mutation-proven).
 	for name, c := range map[string]*websocket.Conn{
 		"subscribed":    subscribed,
 		"pre-subscribe": preSubscribe,
 	} {
 		c.SetReadDeadline(time.Now().Add(5 * time.Second))
-		if _, _, err := c.ReadMessage(); err == nil {
+		_, _, err := c.ReadMessage()
+		if err == nil {
 			t.Fatalf("%s connection still readable after CloseLiveWebSockets", name)
+		} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			t.Fatalf("%s: read timed out — the connection was NOT closed by the sweep (deadline masked it)", name)
 		}
 	}
 
@@ -827,5 +832,69 @@ func TestWSDrainClosesLiveAndRejectsNewUpgrades(t *testing.T) {
 	}
 	if hsResp != nil && hsResp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("dial after drain: unexpected status %d, want 503", hsResp.StatusCode)
+	}
+}
+
+// TestWSRegisterAfterDrainClosesConn — the register-side half of the upgrade
+// race (#298): a slot reserved BEFORE the sweep, whose conn arrives AFTER
+// CloseLiveWebSockets, must be closed on the spot and never inserted. This is
+// the exact mutation that survives a naive witness (deleting register's
+// draining re-check kept the whole tree green), so the assertions here are
+// white-box against the registry.
+func TestWSRegisterAfterDrainClosesConn(t *testing.T) {
+	// Stand up a raw upgraded pair so the test owns the server-side conn.
+	srvConnCh := make(chan *websocket.Conn, 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		srvConnCh <- conn
+	}))
+	defer ts.Close()
+
+	client, _, err := websocket.DefaultDialer.Dial(urlFor(ts), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	srv := <-srvConnCh
+	defer srv.Close()
+
+	s := New(":0", log.Default())
+	w := s.wsLive
+
+	// Slot reserved while upgrades are still allowed...
+	id, ok := w.reserve()
+	if !ok {
+		t.Fatal("reserve before drain must succeed")
+	}
+	// ...then the sweep runs between reserve and register.
+	s.CloseLiveWebSockets()
+	w.register(id, srv)
+
+	// White-box: the conn was closed, not inserted into the registry.
+	w.mu.Lock()
+	live := len(w.live)
+	draining := w.draining
+	w.mu.Unlock()
+	if live != 0 {
+		t.Fatalf("registry holds %d conns after draining-register, want 0", live)
+	}
+	if !draining {
+		t.Fatal("draining flag must stay set after the sweep")
+	}
+	// And the drained registry admits nothing further.
+	if _, ok := w.reserve(); ok {
+		t.Fatal("reserve after drain must be refused")
+	}
+	// The peer observes an actual close, not a deadline (same close-class
+	// assertion as the drain test).
+	client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _, err = client.ReadMessage()
+	if err == nil {
+		t.Fatal("peer still readable after draining-register")
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		t.Fatal("peer read timed out — the conn was NOT closed by register's draining re-check")
 	}
 }

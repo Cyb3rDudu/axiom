@@ -3,6 +3,7 @@
 package composition
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -300,5 +301,34 @@ func TestRolesFromConfigKeepsRepairWithoutInvoker(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("roles with invoker off must still include repair, got %v want %v", got, want)
 		}
+	}
+}
+
+// TestSelectWorkerEnvPrecedenceNote — explicit role selection wins over
+// worker opt-in envs, but never silently (#298): Select logs the drop,
+// Full (which derives its roles from the config) does not. No Start —
+// construction is enough for the log assertions; Select never opens the DB.
+func TestSelectWorkerEnvPrecedenceNote(t *testing.T) {
+	cfg := apiOnlyCfg(0)
+	cfg.DatabaseURL = "postgres://invalid" // store startable, never opened
+	cfg.DispatcherEnabled = true
+
+	// Explicit Select keeps the store but drops the dispatcher role.
+	var buf bytes.Buffer
+	logger := log.New(&buf, "", 0)
+	if _, err := Select(cfg, logger, Ports{}, RoleAPI, RoleStore); err != nil {
+		t.Fatalf("select api+store must succeed, got: %v", err)
+	}
+	if out := buf.String(); !strings.Contains(out, "AXIOM_DISPATCHER_ENABLED") {
+		t.Fatalf("Select must log the dropped env-enabled worker, got log: %q", out)
+	}
+
+	// Full derives the dispatcher role from the same env — no note.
+	buf.Reset()
+	if _, err := Full(cfg, log.New(&buf, "", 0), Ports{}); err != nil {
+		t.Fatalf("Full must succeed, got: %v", err)
+	}
+	if out := buf.String(); strings.Contains(out, "AXIOM_DISPATCHER_ENABLED=1 but") {
+		t.Fatalf("Full derives roles from config, must not log the precedence note, got log: %q", out)
 	}
 }

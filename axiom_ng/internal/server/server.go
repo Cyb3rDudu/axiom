@@ -58,8 +58,8 @@ type Server struct {
 	// #262 contextual health state: returns "active",
 	// "degraded_no_sync" or "" (no rules configured). nil = omitted.
 	contextualState func() string
-	// #298: live /api/ws connection contexts, for CloseLiveWebSockets
-	// during the composition root's ordered shutdown.
+	// #298: the live /api/ws CONNECTIONS plus the one-way draining flag,
+	// for CloseLiveWebSockets during the composition root's ordered shutdown.
 	wsLive *wsLiveConns
 }
 
