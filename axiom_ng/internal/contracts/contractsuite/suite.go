@@ -112,16 +112,22 @@ func classIs(err error, want contracterr.Class, context string) error {
 }
 
 // timeFormOk enforces the producer side of the UTC RFC3339 µs rule
-// (DM03-compatible): implementation-produced timestamps must be UTC and
-// microsecond-aligned. The wire-format mechanism (custom marshaler vs
-// adapter-side normalization) is DM03's decision; the suite pins the
-// producer discipline so F06/F09 emit compliant times from day one.
+// (DM03-compatible): implementation-produced timestamps must be
+// offset-0 ("Z" on the wire — pointer identity deliberately not
+// required) and microsecond-aligned. The wire-format mechanism (custom
+// marshaler vs adapter-side normalization) is DM03's decision; the
+// suite pins the producer discipline so F06/F09 emit compliant times
+// from day one.
 func timeFormOk(ts time.Time) error {
 	if ts.IsZero() {
 		return errors.New("timestamp is the zero value — every operation must carry a real stamp")
 	}
-	if ts.Location() != time.UTC {
-		return fmt.Errorf("timestamp %v is not UTC", ts)
+	// Wire-form semantics, not pointer identity: RFC3339 renders any
+	// offset-0 zone as "Z", so a TZ=UTC Local or an offset-0 FixedZone
+	// emits byte-identical UTC JSON. Rejecting the pointer would falsely
+	// red a wire-compliant producer (the container-Regelfall).
+	if _, off := ts.Zone(); off != 0 {
+		return fmt.Errorf("timestamp %v has zone offset %ds, want 0 (UTC on the wire)", ts, off)
 	}
 	if ts.Nanosecond()%1000 != 0 {
 		return fmt.Errorf("timestamp %v carries sub-microsecond precision", ts)

@@ -52,6 +52,11 @@ type Store interface {
 	// revision (revision.Validate) → InvalidArgument. Content fetched
 	// via the ticket that does not hash to the revision's ContentHash →
 	// Conflict (the revision describes bytes the Library cannot serve).
+	// Precedence: revision validation precedes idempotency evaluation,
+	// which precedes content verification — a reused key with an
+	// invalid revision reports InvalidArgument; a reused key with a
+	// diverged-but-valid revision reports IdempotencyMismatch, never
+	// the hash Conflict.
 	IngestRevision(ctx context.Context, req IngestRevisionRequest) (IngestJob, error)
 
 	// Search runs hybrid retrieval. Blank query or top_n above the
