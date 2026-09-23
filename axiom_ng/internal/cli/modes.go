@@ -333,7 +333,7 @@ func runCLIMode(args []string) bool {
 		cfg := config.Load()
 		logger := log.New(os.Stderr, m.prefix, log.LstdFlags)
 		repo.SetKGProgressLogger(logger.Printf)
-		apply := m.apply && hasApplyFlag(args[2:])
+		apply := m.apply && hasFlag(args[2:], "--apply")
 		// bounded connect (#290 review: a black-holed port-forward must fail
 		// the invocation at OS-TCP scale, not hang past every deadline — the
 		// mode-level run deadline starts inside the mode body)
@@ -346,15 +346,6 @@ func runCLIMode(args []string) bool {
 		defer d.Close()
 		m.run(logger, apply, repo.New(d.Pool()), args[2:])
 		return true
-	}
-	return false
-}
-
-func hasApplyFlag(args []string) bool {
-	for _, a := range args {
-		if a == "--apply" {
-			return true
-		}
 	}
 	return false
 }

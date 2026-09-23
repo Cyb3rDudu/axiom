@@ -33,8 +33,13 @@ import (
 
 // Run dispatches argv (including argv[0]) and returns the process exit
 // code. name is the invocation identity ("axiom" canonical, "axiom-ng"
-// alias) — it prefixes log lines and keeps the alias's output
-// byte-identical to the pre-F05 binary.
+// alias): it prefixes serve log lines and error messages. Alias-output
+// contract: the legacy serve log lines (prefix "axiom-ng: ") and the KG
+// mode flag surface behave as pre-F05. Deliberate deltas on the alias:
+// exactly one deprecation warning line per process (emitted once in
+// cmd/axiom-ng), -help gained the canonical command block ahead of the
+// legacy mode text, and unknown argv is now a usage error (exit 2)
+// instead of falling through to a server boot.
 func Run(name string, args []string) int {
 	if len(args) < 2 {
 		return serve(name, nil) // no-arg: the compat boot = serve all
@@ -47,13 +52,14 @@ func Run(name string, args []string) int {
 	case "doctor":
 		return cmdDoctor(hasFlag(args[2:], "--json"))
 	case "config":
-		return cmdConfig(args[2:])
+		return cmdConfig(name, args[2:])
 	case "--version":
 		return cmdVersion(false)
 	case "-help", "--help", "help":
 		// The new surface docs plus the legacy mode block (#202 contract
 		// text stays the operator reference for the mode flags).
 		fmt.Print(help(name))
+		fmt.Println("--- legacy mode block (documented under the alias name, #202) ---")
 		fmt.Print(modeHelp)
 		return 0
 	default:
@@ -61,7 +67,7 @@ func Run(name string, args []string) int {
 		if runCLIMode(args) {
 			return 0
 		}
-		fmt.Fprintf(os.Stderr, "axiom: unknown command %q\n\n%s", args[1], help(name))
+		fmt.Fprintf(os.Stderr, "%s: unknown command %q\n\n%s", name, args[1], help(name))
 		return 2
 	}
 }

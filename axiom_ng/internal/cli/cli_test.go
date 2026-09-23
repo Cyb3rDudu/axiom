@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/composition"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
 )
 
@@ -55,10 +57,84 @@ func serveTo(buf *strings.Builder, args []string) int {
 }
 
 func TestVersionJSON(t *testing.T) {
-	exit := Run("axiom", []string{"axiom", "version", "--json"})
+	var buf strings.Builder
+	exit, out := runTo(&buf, []string{"version", "--json"})
 	if exit != exitOK {
 		t.Fatalf("version --json exit %d", exit)
 	}
+	var v struct {
+		Banner    string `json:"banner"`
+		Version   string `json:"version"`
+		Commit    string `json:"commit"`
+		BuildType string `json:"build_type"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &v); err != nil {
+		t.Fatalf("version --json must emit a JSON object, got %q: %v", out, err)
+	}
+	for _, f := range map[string]string{"banner": v.Banner, "version": v.Version, "build_type": v.BuildType} {
+		if f == "" {
+			t.Fatalf("version --json field empty: %+v", v)
+		}
+	}
+}
+
+// runTo runs Run with BOTH streams captured (version writes to stdout).
+func runTo(errBuf *strings.Builder, args []string) (int, string) {
+	prevStdout, prevStderr := os.Stdout, os.Stderr
+	ro, wo, _ := os.Pipe()
+	re, we, _ := os.Pipe()
+	os.Stdout, os.Stderr = wo, we
+	exit := Run("axiom", append([]string{"axiom"}, args...))
+	wo.Close()
+	we.Close()
+	os.Stdout, os.Stderr = prevStdout, prevStderr
+	ob, _ := io.ReadAll(ro)
+	eb, _ := io.ReadAll(re)
+	errBuf.Write(eb)
+	return exit, string(ob)
+}
+
+// TestAPIRolesSelection — `serve api` vocabulary has execution coverage:
+// the db-wired shape selects every API-serving role and WIRES through
+// composition.Select (no server boots here — Select only builds); a
+// db-less config degrades to api-only (the documented degraded shape).
+func TestAPIRolesSelection(t *testing.T) {
+	want := []composition.Role{
+		composition.RoleAPI, composition.RoleStore, composition.RoleEvents,
+		composition.RoleSync, composition.RoleRepair, composition.RoleSearch,
+		composition.RoleIngest,
+	}
+
+	t.Run("db wiring selects every api-serving role", func(t *testing.T) {
+		t.Setenv("AXIOM_DATABASE_URL", "postgresql://u:pw@127.0.0.1:5432/db?sslmode=disable")
+		cfg := config.Load()
+		if got := apiRoles(cfg); !reflect.DeepEqual(got, want) {
+			t.Fatalf("apiRoles = %v, want %v", got, want)
+		}
+		root, err := composition.Select(cfg, discardLogger(), composition.Ports{}, apiRoles(cfg)...)
+		if err != nil {
+			t.Fatalf("the api role set must wire through Select: %v", err)
+		}
+		// Roles() reports in startOrder — compare as a set, not a sequence.
+		got := map[string]bool{}
+		for _, r := range root.Roles() {
+			got[r] = true
+		}
+		wantSet := map[string]bool{}
+		for _, r := range want {
+			wantSet[string(r)] = true
+		}
+		if !reflect.DeepEqual(got, wantSet) {
+			t.Fatalf("root.Roles() = %v, want the api set %v", got, wantSet)
+		}
+	})
+
+	t.Run("db-less degrades to api-only", func(t *testing.T) {
+		t.Setenv("AXIOM_DATABASE_URL", "")
+		if got := apiRoles(config.Load()); !reflect.DeepEqual(got, []composition.Role{composition.RoleAPI}) {
+			t.Fatalf("db-less apiRoles = %v, want [api]", got)
+		}
+	})
 }
 
 func TestUnknownCommandIsUsageError(t *testing.T) {

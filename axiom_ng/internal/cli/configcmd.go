@@ -15,21 +15,21 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
 )
 
-func cmdConfig(args []string) int {
+func cmdConfig(name string, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: axiom config get --effective [--json] | validate | set (F13)")
+		fmt.Fprintf(os.Stderr, "usage: %s config get --effective [--json] | validate | set (F13)\n", name)
 		return exitUsage
 	}
 	switch args[0] {
 	case "get":
-		return cmdConfigGet(args[1:])
+		return cmdConfigGet(name, args[1:])
 	case "validate":
 		return cmdConfigValidate()
 	case "set":
-		fmt.Fprintln(os.Stderr, "axiom config set: arrives with F13 (persistent runtime configuration store) — no pseudo-store before that")
+		fmt.Fprintf(os.Stderr, "%s config set: arrives with F13 (persistent runtime configuration store) — no pseudo-store before that\n", name)
 		return exitUsage
 	default:
-		fmt.Fprintf(os.Stderr, "axiom config: unknown subcommand %q\n", args[0])
+		fmt.Fprintf(os.Stderr, "%s config: unknown subcommand %q\n", name, args[0])
 		return exitUsage
 	}
 }
@@ -37,7 +37,7 @@ func cmdConfig(args []string) int {
 // cmdConfigGet — only the --effective view exists (the raw store IS the
 // environment today). One row per key: effective value (secrets
 // redacted), source env|default. Flags join the precedence with F13.
-func cmdConfigGet(args []string) int {
+func cmdConfigGet(name string, args []string) int {
 	effective, jsonOut := false, false
 	for _, a := range args {
 		switch a {
@@ -46,12 +46,12 @@ func cmdConfigGet(args []string) int {
 		case "--json":
 			jsonOut = true
 		default:
-			fmt.Fprintf(os.Stderr, "axiom config get: unknown flag %q (known: --effective --json)\n", a)
+			fmt.Fprintf(os.Stderr, "%s config get: unknown flag %q (known: --effective --json)\n", name, a)
 			return exitUsage
 		}
 	}
 	if !effective {
-		fmt.Fprintln(os.Stderr, "axiom config get: only --effective exists today — the configuration source is the environment (flags/store arrive with F13)")
+		fmt.Fprintf(os.Stderr, "%s config get: only --effective exists today — the configuration source is the environment (flags/store arrive with F13)\n", name)
 		return exitUsage
 	}
 	entries := config.Effective(config.Load())
