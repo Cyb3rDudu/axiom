@@ -60,9 +60,11 @@ const (
 
 var seedYear = 2019
 
-// SeedContent is the canonical rendition content: three paragraphs, the
-// retrieval token only in the second.
-var SeedContent = []byte("Paragraph one introduces the contract fixture.\n\n" +
+// SeedContent is the canonical rendition content: PDF-shaped (magic
+// bytes, as the F06 intake rule demands — the fake derives the format
+// from them and rejects anything else), three paragraphs, the retrieval
+// token only in the second.
+var SeedContent = []byte("%PDF-1.4 Paragraph one introduces the contract fixture.\n\n" +
 	"Paragraph two carries the distinctive token " + SeedToken + " for retrieval.\n\n" +
 	"Paragraph three closes the fixture.")
 
@@ -109,9 +111,17 @@ func classIs(err error, want contracterr.Class, context string) error {
 	return nil
 }
 
-func mustNoErr(err error, context string) error {
-	if err != nil {
-		return fmt.Errorf("%s: unexpected error: %v", context, err)
+// timeFormOk enforces the producer side of the UTC RFC3339 µs rule
+// (DM03-compatible): implementation-produced timestamps must be UTC and
+// microsecond-aligned. The wire-format mechanism (custom marshaler vs
+// adapter-side normalization) is DM03's decision; the suite pins the
+// producer discipline so F06/F09 emit compliant times from day one.
+func timeFormOk(ts time.Time) error {
+	if ts.Location() != time.UTC {
+		return fmt.Errorf("timestamp %v is not UTC", ts)
+	}
+	if ts.Nanosecond()%1000 != 0 {
+		return fmt.Errorf("timestamp %v carries sub-microsecond precision", ts)
 	}
 	return nil
 }
@@ -201,6 +211,9 @@ func libraryProbes(impl library.Library) []probe {
 		}
 		if final.Result == nil {
 			return library.ImportOperation{}, errors.New("committed import has no Result")
+		}
+		if err := timeFormOk(final.UpdatedAt); err != nil {
+			return library.ImportOperation{}, fmt.Errorf("producer time discipline: %w", err)
 		}
 		return final, nil
 	}
@@ -300,9 +313,13 @@ func libraryProbes(impl library.Library) []probe {
 			_, err = impl.StartImport(ctx, both, bytes.NewReader(SeedContent))
 			return classIs(err, contracterr.ClassInvalidArgument, "collection_id XOR collection_path")
 		}},
-		{"GetImport: unknown id is NotFound", func() error {
+		{"GetImport: unknown is NotFound, blank is InvalidArgument", func() error {
 			_, err := impl.GetImport(ctx, library.ImportRef{ImportID: "imp-void"})
-			return classIs(err, contracterr.ClassNotFound, "unknown import")
+			if err := classIs(err, contracterr.ClassNotFound, "unknown import"); err != nil {
+				return err
+			}
+			_, err = impl.GetImport(ctx, library.ImportRef{})
+			return classIs(err, contracterr.ClassInvalidArgument, "blank import ref")
 		}},
 		{"GetSource: resolves the source of a committed import", func() error {
 			op, err := committed()
@@ -448,6 +465,9 @@ func storeProbes(impl store.Store) []probe {
 		job, err := impl.IngestRevision(ctx, store.IngestRevisionRequest{IdempotencyKey: "store-idem-ok", Revision: SeedRevision})
 		if err != nil {
 			return store.IngestJob{}, err
+		}
+		if err := timeFormOk(job.UpdatedAt); err != nil {
+			return store.IngestJob{}, fmt.Errorf("producer time discipline: %w", err)
 		}
 		if err := waitFor("ingested revision to become searchable", func() error {
 			res, err := impl.Search(ctx, store.SearchRequest{Query: SeedToken})
@@ -608,6 +628,35 @@ func storeProbes(impl store.Store) []probe {
 			}
 			if p.Neighbors == nil {
 				return errors.New("neighbors must be a present (possibly empty) slice — nil breaks the frozen wire shape")
+			}
+			// Neighbor semantics (the DTO promise: chunk_index ±1, same
+			// rendition, boundary respected, adjacency symmetric). Exact
+			// index SETS are deliberately not pinned — chunk granularity is
+			// implementation territory; the promise is which chunks may
+			// appear, not how many the chunker produced.
+			for _, n := range p.Neighbors {
+				if n.ChunkIndex != p.ChunkIndex-1 && n.ChunkIndex != p.ChunkIndex+1 {
+					return fmt.Errorf("neighbor %s index %d is not adjacent to passage index %d", n.ChunkID, n.ChunkIndex, p.ChunkIndex)
+				}
+				if n.ChunkID == p.ChunkID {
+					return errors.New("passage lists itself as a neighbor")
+				}
+				np, err := impl.GetPassage(ctx, store.PassageRef{ChunkID: n.ChunkID})
+				if err != nil {
+					return fmt.Errorf("neighbor chunk %s unresolvable: %w", n.ChunkID, err)
+				}
+				if np.DocumentID != p.DocumentID || np.RenditionID != p.RenditionID {
+					return fmt.Errorf("neighbor %s crosses the rendition boundary (doc %q rend %q)", n.ChunkID, np.DocumentID, np.RenditionID)
+				}
+				symmetric := false
+				for _, nn := range np.Neighbors {
+					if nn.ChunkID == p.ChunkID {
+						symmetric = true
+					}
+				}
+				if !symmetric {
+					return fmt.Errorf("adjacency is one-sided: %s does not list %s back", n.ChunkID, p.ChunkID)
+				}
 			}
 			return nil
 		}},
