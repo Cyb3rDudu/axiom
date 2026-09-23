@@ -152,7 +152,7 @@ func ValidateEnv() []string {
 		var err error
 		switch kind {
 		case reflect.Int, reflect.Int64:
-			if reflect.ValueOf(cfg).FieldByName(row.field).Type() == reflect.TypeOf(time.Duration(0)) {
+			if reflect.ValueOf(cfg).FieldByName(row.field).Type() == durationType {
 				_, err = time.ParseDuration(raw)
 			} else {
 				_, err = strconv.Atoi(raw)
@@ -173,9 +173,10 @@ func ValidateEnv() []string {
 
 // boolRecognized mirrors envBoolDefault's grammar EXACTLY: "1", "true"
 // and "yes" (any case) are true; "0", "false" and "no" are false.
-// Anything else ("t", "y", …) is a spelling the loader ignores — the
-// exact silent-fallback class ValidateEnv exists to flag, so it is NOT
-// recognized here either.
+// Anything else ("t", "y", …) is an unrecognized spelling — the loader
+// reads those as FALSE, so a default-TRUE flag silently drops its
+// default instead of keeping it — the exact silent-fallback class
+// ValidateEnv exists to flag, so it is NOT recognized here either.
 func boolRecognized(s string) bool {
 	switch strings.ToLower(s) {
 	case "1", "true", "yes", "0", "false", "no":

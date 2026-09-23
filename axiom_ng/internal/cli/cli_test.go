@@ -43,16 +43,10 @@ func TestServeRefusesUnextractedRoles(t *testing.T) {
 	}
 }
 
-// serveTo runs Run with stderr captured (the refusals write to stderr).
+// serveTo runs Run with stderr captured (the refusals write to
+// stderr) — a thin wrapper over runTo; the stdout half is discarded.
 func serveTo(buf *strings.Builder, args []string) int {
-	prev := os.Stderr
-	r, w, _ := os.Pipe()
-	os.Stderr = w
-	exit := Run("axiom", append([]string{"axiom"}, args...))
-	w.Close()
-	os.Stderr = prev
-	b, _ := io.ReadAll(r)
-	buf.Write(b)
+	exit, _ := runTo(buf, args)
 	return exit
 }
 
@@ -62,18 +56,20 @@ func TestVersionJSON(t *testing.T) {
 	if exit != exitOK {
 		t.Fatalf("version --json exit %d", exit)
 	}
-	var v struct {
-		Banner    string `json:"banner"`
-		Version   string `json:"version"`
-		Commit    string `json:"commit"`
-		BuildType string `json:"build_type"`
-	}
+	var v map[string]string
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &v); err != nil {
 		t.Fatalf("version --json must emit a JSON object, got %q: %v", out, err)
 	}
-	for _, f := range map[string]string{"banner": v.Banner, "version": v.Version, "build_type": v.BuildType} {
-		if f == "" {
-			t.Fatalf("version --json field empty: %+v", v)
+	// All four keys must be present; commit may be empty in dev builds,
+	// so only its PRESENCE is pinned here.
+	for _, key := range []string{"banner", "version", "commit", "build_type"} {
+		if _, ok := v[key]; !ok {
+			t.Fatalf("version --json must carry %q, got %v", key, v)
+		}
+	}
+	for _, key := range []string{"banner", "version", "build_type"} {
+		if v[key] == "" {
+			t.Fatalf("version --json field %q empty: %v", key, v)
 		}
 	}
 }
@@ -98,6 +94,9 @@ func runTo(errBuf *strings.Builder, args []string) (int, string) {
 // the db-wired shape selects every API-serving role and WIRES through
 // composition.Select (no server boots here — Select only builds); a
 // db-less config degrades to api-only (the documented degraded shape).
+// Caveat on "only builds": Select runs buildComponents' Zotero local-API
+// probe, which fast-fails on the default localhost when nothing listens
+// — do not point AXIOM_ZOTERO_BASE_URL at a black hole for this test.
 func TestAPIRolesSelection(t *testing.T) {
 	want := []composition.Role{
 		composition.RoleAPI, composition.RoleStore, composition.RoleEvents,
@@ -108,10 +107,11 @@ func TestAPIRolesSelection(t *testing.T) {
 	t.Run("db wiring selects every api-serving role", func(t *testing.T) {
 		t.Setenv("AXIOM_DATABASE_URL", "postgresql://u:pw@127.0.0.1:5432/db?sslmode=disable")
 		cfg := config.Load()
-		if got := apiRoles(cfg); !reflect.DeepEqual(got, want) {
-			t.Fatalf("apiRoles = %v, want %v", got, want)
+		roles := apiRoles(cfg)
+		if !reflect.DeepEqual(roles, want) {
+			t.Fatalf("apiRoles = %v, want %v", roles, want)
 		}
-		root, err := composition.Select(cfg, discardLogger(), composition.Ports{}, apiRoles(cfg)...)
+		root, err := composition.Select(cfg, discardLogger(), composition.Ports{}, roles...)
 		if err != nil {
 			t.Fatalf("the api role set must wire through Select: %v", err)
 		}
