@@ -322,6 +322,26 @@ func libraryProbes(impl library.Library) []probe {
 			_, err = impl.StartImport(ctx, both, bytes.NewReader(SeedContent))
 			return classIs(err, contracterr.ClassInvalidArgument, "collection_id XOR collection_path")
 		}},
+		{"StartImport: foreign magic bytes are InvalidArgument", func() error {
+			foreign := seedImportRequest("lib-magic-fresh")
+			_, err := impl.StartImport(ctx, foreign, bytes.NewReader([]byte("<html>not a rendition</html>")))
+			return classIs(err, contracterr.ClassInvalidArgument, "foreign magic bytes")
+		}},
+		{"StartImport: reused key with invalid input is InvalidArgument, never a mismatch", func() error {
+			reuse := seedImportRequest("lib-magic-reuse")
+			if _, err := impl.StartImport(ctx, reuse, bytes.NewReader(SeedContent)); err != nil {
+				return err
+			}
+			_, err := impl.StartImport(ctx, reuse, bytes.NewReader([]byte("<html>not a rendition</html>")))
+			if err := classIs(err, contracterr.ClassInvalidArgument, "foreign magic bytes under a reused key"); err != nil {
+				return err
+			}
+			var mm *contracterr.IdempotencyMismatch
+			if errors.As(err, &mm) {
+				return fmt.Errorf("idempotency replay answered before input validation: %v — validation precedes idempotency per the StartImport contract", err)
+			}
+			return nil
+		}},
 		{"GetImport: unknown is NotFound, blank is InvalidArgument", func() error {
 			_, err := impl.GetImport(ctx, library.ImportRef{ImportID: "imp-void"})
 			if err := classIs(err, contracterr.ClassNotFound, "unknown import"); err != nil {
@@ -559,6 +579,20 @@ func storeProbes(impl store.Store) []probe {
 			}
 			_, err = impl.IngestRevision(ctx, store.IngestRevisionRequest{IdempotencyKey: "", Revision: SeedRevision})
 			return classIs(err, contracterr.ClassInvalidArgument, "blank idempotency key")
+		}},
+		{"IngestRevision: reused key with invalid revision is InvalidArgument, never a mismatch", func() error {
+			if _, err := impl.IngestRevision(ctx, store.IngestRevisionRequest{IdempotencyKey: "store-invalid-reuse", Revision: SeedRevision}); err != nil {
+				return err
+			}
+			_, err := impl.IngestRevision(ctx, store.IngestRevisionRequest{IdempotencyKey: "store-invalid-reuse", Revision: revision.SourceRevision{}})
+			if err := classIs(err, contracterr.ClassInvalidArgument, "invalid revision under a reused key"); err != nil {
+				return err
+			}
+			var mm *contracterr.IdempotencyMismatch
+			if errors.As(err, &mm) {
+				return fmt.Errorf("idempotency replay answered before revision validation: %v — validation precedes idempotency per the IngestRevision contract", err)
+			}
+			return nil
 		}},
 		{"Search: finds the seeded record with its bibliography", func() error {
 			if _, err := ingest(); err != nil {
