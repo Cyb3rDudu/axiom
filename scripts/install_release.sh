@@ -35,7 +35,7 @@ esac
 if [ "${3:-}" != "--skip-pull" ]; then
     mkdir -p "$DIST"
     # shellcheck disable=SC2086 # patterns are word-split by design
-    echo "release: fetching$patterns from $REPO release $version"
+    echo "release: fetching $patterns from $REPO release $version"
     dl_args=""
     for p in $patterns; do
         dl_args="$dl_args --pattern $p --pattern $p.sha256"
@@ -57,7 +57,7 @@ for f in $DIST/$patterns; do
     }
 done
 [ -n "$found" ] || {
-    echo "no artifact matching$patterns in $DIST/"
+    echo "no artifact matching $patterns in $DIST/"
     exit 1
 }
 
