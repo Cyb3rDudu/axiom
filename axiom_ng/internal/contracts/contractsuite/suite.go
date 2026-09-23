@@ -117,6 +117,9 @@ func classIs(err error, want contracterr.Class, context string) error {
 // adapter-side normalization) is DM03's decision; the suite pins the
 // producer discipline so F06/F09 emit compliant times from day one.
 func timeFormOk(ts time.Time) error {
+	if ts.IsZero() {
+		return errors.New("timestamp is the zero value — every operation must carry a real stamp")
+	}
 	if ts.Location() != time.UTC {
 		return fmt.Errorf("timestamp %v is not UTC", ts)
 	}
@@ -634,7 +637,12 @@ func storeProbes(impl store.Store) []probe {
 			// index SETS are deliberately not pinned — chunk granularity is
 			// implementation territory; the promise is which chunks may
 			// appear, not how many the chunker produced.
+			seen := map[string]bool{}
 			for _, n := range p.Neighbors {
+				if seen[n.ChunkID] {
+					return fmt.Errorf("neighbor %s listed twice", n.ChunkID)
+				}
+				seen[n.ChunkID] = true
 				if n.ChunkIndex != p.ChunkIndex-1 && n.ChunkIndex != p.ChunkIndex+1 {
 					return fmt.Errorf("neighbor %s index %d is not adjacent to passage index %d", n.ChunkID, n.ChunkIndex, p.ChunkIndex)
 				}
@@ -645,13 +653,19 @@ func storeProbes(impl store.Store) []probe {
 				if err != nil {
 					return fmt.Errorf("neighbor chunk %s unresolvable: %w", n.ChunkID, err)
 				}
-				if np.DocumentID != p.DocumentID || np.RenditionID != p.RenditionID {
-					return fmt.Errorf("neighbor %s crosses the rendition boundary (doc %q rend %q)", n.ChunkID, np.DocumentID, np.RenditionID)
+				if np.DocumentID != p.DocumentID || np.RenditionID != p.RenditionID || np.SnapshotID != p.SnapshotID {
+					return fmt.Errorf("neighbor %s crosses the rendition boundary (doc %q rend %q snap %q)", n.ChunkID, np.DocumentID, np.RenditionID, np.SnapshotID)
+				}
+				if n.ChunkIndex != np.ChunkIndex {
+					return fmt.Errorf("neighbor %s claims index %d but resolves to %d — index metadata is inconsistent", n.ChunkID, n.ChunkIndex, np.ChunkIndex)
 				}
 				symmetric := false
 				for _, nn := range np.Neighbors {
 					if nn.ChunkID == p.ChunkID {
 						symmetric = true
+					}
+					if nn.ChunkIndex != np.ChunkIndex-1 && nn.ChunkIndex != np.ChunkIndex+1 {
+						return fmt.Errorf("neighbor-of-neighbor %s index %d is not adjacent to %s index %d — adjacency must hold on both sides", nn.ChunkID, nn.ChunkIndex, n.ChunkID, np.ChunkIndex)
 					}
 				}
 				if !symmetric {

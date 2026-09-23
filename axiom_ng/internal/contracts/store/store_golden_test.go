@@ -195,7 +195,7 @@ func TestGoldenDetectsFieldRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	type fullPassage struct {
+	type mirrorPassage struct {
 		ChunkID        string            `json:"chunk_id"`
 		DocumentID     string            `json:"document_id"`
 		SnapshotID     string            `json:"snapshot_id"`
@@ -210,9 +210,9 @@ func TestGoldenDetectsFieldRename(t *testing.T) {
 		CaptionText    string            `json:"caption_text,omitempty"`
 		Images         []Image           `json:"images,omitempty"`
 	}
-	control := fullPassage{goldenPassage.ChunkID, goldenPassage.DocumentID, goldenPassage.SnapshotID, goldenPassage.RenditionID,
-		goldenPassage.ChunkIndex, goldenPassage.Text, goldenPassage.Section, goldenPassage.Locator, goldenPassage.Source,
-		goldenPassage.Neighbors, goldenPassage.ParagraphPages, goldenPassage.CaptionText, goldenPassage.Images}
+	// Struct conversion ignores tags and copies fields wholesale — the
+	// mirror can never drift from the real value list.
+	control := mirrorPassage(goldenPassage)
 	controlBytes, err := json.MarshalIndent(control, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +220,7 @@ func TestGoldenDetectsFieldRename(t *testing.T) {
 	if !bytes.Equal(controlBytes, frozen) {
 		t.Fatalf("full-field mirror is not faithful — fix the mirror before trusting the sonde:\n%s\n%s", controlBytes, frozen)
 	}
-	renamed := struct {
+	type renamedPassage struct {
 		ChunkID        string            `json:"chunk_identifier"` // RENAMED on purpose
 		DocumentID     string            `json:"document_id"`
 		SnapshotID     string            `json:"snapshot_id"`
@@ -234,9 +234,8 @@ func TestGoldenDetectsFieldRename(t *testing.T) {
 		ParagraphPages [][]string        `json:"paragraph_pages,omitempty"`
 		CaptionText    string            `json:"caption_text,omitempty"`
 		Images         []Image           `json:"images,omitempty"`
-	}{goldenPassage.ChunkID, goldenPassage.DocumentID, goldenPassage.SnapshotID, goldenPassage.RenditionID,
-		goldenPassage.ChunkIndex, goldenPassage.Text, goldenPassage.Section, goldenPassage.Locator, goldenPassage.Source,
-		goldenPassage.Neighbors, goldenPassage.ParagraphPages, goldenPassage.CaptionText, goldenPassage.Images}
+	}
+	renamed := renamedPassage(control) // conversion is valid: only the tag differs
 	renamedBytes, err := json.MarshalIndent(renamed, "", "  ")
 	if err != nil {
 		t.Fatal(err)

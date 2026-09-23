@@ -150,6 +150,13 @@ func (f *FakeLibrary) StartImport(ctx context.Context, req library.ImportRequest
 	if len(b) == 0 {
 		return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "import content is empty")
 	}
+	// Format derives from magic bytes ONLY — the F06 intake rule — and
+	// BEFORE any state is written: a rejected import leaves no trace (no
+	// orphaned source/record/ticket, no consumed sequence number).
+	media, err := mediaTypeFromMagic(b)
+	if err != nil {
+		return library.ImportOperation{}, err
+	}
 	// Payload identity = canonical JSON of the FULL request DTO + the
 	// content bytes — the documented "metadata JSON and content"
 	// (FakeStore hashes the canonical JSON of the revision the same
@@ -185,11 +192,6 @@ func (f *FakeLibrary) StartImport(ctx context.Context, req library.ImportRequest
 	}
 	f.records[recordID] = bib
 	f.tickets[ticket] = append([]byte{}, b...)
-
-	media, err := mediaTypeFromMagic(b)
-	if err != nil {
-		return library.ImportOperation{}, err // unreachable for suite fixtures; kept honest for direct fake users
-	}
 
 	rev := revision.SourceRevision{
 		SourceID:            sourceID,
@@ -448,7 +450,6 @@ func (f *FakeStore) Search(ctx context.Context, req store.SearchRequest) (store.
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	page := 47
 	hits := []store.SearchHit{} // non-nil: the frozen wire shape is an array
 	for _, c := range f.chunks {
 		if req.Filters != nil && len(req.Filters.DocumentIDs) > 0 && !contains(req.Filters.DocumentIDs, c.docID) {
@@ -462,13 +463,7 @@ func (f *FakeStore) Search(ctx context.Context, req store.SearchRequest) (store.
 			Text:    c.text,
 			Score:   1.0,
 			Source:  c.source,
-			Locator: store.Locator{
-				Kind:       "page",
-				Label:      fmt.Sprintf("S. %d", page),
-				PageSource: revision.TrustFolioVerified,
-				PageStart:  &page,
-				PageEnd:    &page,
-			},
+			Locator: pageLocator(),
 			Section: c.sections,
 		})
 		if len(hits) == req.TopN {
