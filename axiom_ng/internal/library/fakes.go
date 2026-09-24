@@ -70,11 +70,10 @@ type FakeProvider struct {
 	PageSize int
 
 	// Counters (Zähl-Asserts): provider-side write counts and catalog
-	// reads.
+	// page reads.
 	RecordsCreated   int
 	RenditionsAdded  int
 	MembershipsAdded int
-	CollectionsReads int
 	PagesServed      int
 }
 
@@ -181,7 +180,6 @@ func (f *FakeProvider) ResolvePath(_ context.Context, segments []string, createM
 func (f *FakeProvider) ListRecords(_ context.Context, pageToken string) (CatalogPage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.CollectionsReads++
 	f.PagesServed++
 	size := f.PageSize
 	if size <= 0 {

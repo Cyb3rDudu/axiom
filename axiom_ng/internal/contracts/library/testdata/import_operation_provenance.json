@@ -30,21 +30,27 @@
       "field": "title",
       "source": "document",
       "confidence": 1,
-      "applied": true
+      "applied": true,
+      "value": "The Title",
+      "at": "2026-01-02T03:04:05.123456Z"
     },
     {
       "field": "title",
       "source": "crossref",
       "resolver_version": "fake-v1",
       "confidence": 0.5,
-      "applied": false
+      "applied": false,
+      "value": "A Weaker Title",
+      "at": "2026-01-02T03:04:05.123456Z"
     },
     {
       "field": "publisher",
       "source": "identifier",
       "resolver_version": "fake-v1",
       "confidence": 0.9,
-      "applied": true
+      "applied": true,
+      "value": "Fixture Press",
+      "at": "2026-01-02T03:04:05.123456Z"
     }
   ],
   "updated_at": "2026-01-02T03:04:05.123456Z"

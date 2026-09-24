@@ -102,9 +102,9 @@ var (
 			},
 		},
 		Fields: []FieldProvenance{
-			{Field: "title", Source: "document", Confidence: 1.0, Applied: true},
-			{Field: "title", Source: "crossref", ResolverVersion: "fake-v1", Confidence: 0.5, Applied: false},
-			{Field: "publisher", Source: "identifier", ResolverVersion: "fake-v1", Confidence: 0.9, Applied: true},
+			{Field: "title", Source: "document", Confidence: 1.0, Applied: true, Value: "The Title", At: &at},
+			{Field: "title", Source: "crossref", ResolverVersion: "fake-v1", Confidence: 0.5, Applied: false, Value: "A Weaker Title", At: &at},
+			{Field: "publisher", Source: "identifier", ResolverVersion: "fake-v1", Confidence: 0.9, Applied: true, Value: "Fixture Press", At: &at},
 		},
 		UpdatedAt: at,
 	}

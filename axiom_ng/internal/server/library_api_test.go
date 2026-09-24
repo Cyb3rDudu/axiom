@@ -148,13 +148,6 @@ func postImport(t *testing.T, base string, reqJSON string, filename string, cont
 }
 
 func importReqJSON(key, title, doi string) string {
-	hints := map[string]string{}
-	if title != "" {
-		hints["title"] = title
-	}
-	if doi != "" {
-		hints["doi"] = doi
-	}
 	b, _ := json.Marshal(library.ImportRequest{
 		IdempotencyKey: key,
 		RecordType:     "book",

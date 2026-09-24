@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -709,6 +711,260 @@ func provHas(rows []ProvenanceRow, field, source string, applied bool) bool {
 		}
 	}
 	return false
+}
+
+// TestConfirmOverlaysInsteadOfReplacing — Major-1 regression: a
+// document-verified field the chosen candidate does NOT carry survives
+// the confirm (its document/applied provenance row stays truthful).
+func TestConfirmOverlaysInsteadOfReplacing(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, _, _, _ := newFakeService(t, st)
+
+	// Document: title differs from the candidate's, language=en (the
+	// crossref fixture carries title/authors/year/publisher — no
+	// language). Confirming the candidate must REPLACE title (deliberate
+	// choice) but KEEP language.
+	content := []byte("%PDF-1.4\nNetwork Effects intro.\n%AXIOM-LANG: en\n\nBody.")
+	req := seedReq("ovl-1")
+	req.MetadataHints.Title = StandardLadderFixtures.AmbiguousTitle
+	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != library.ImportAwaitingConfirm {
+		t.Fatalf("status = %s, want awaiting_confirmation", op.Status)
+	}
+	confirmed, err := svc.ConfirmImport(context.Background(), op.ImportID,
+		op.Decisions[0].DecisionID, op.Decisions[0].Candidates[0].CandidateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmed.Status != library.ImportCommitted {
+		t.Fatalf("confirm: %s (%+v)", confirmed.Status, confirmed.Failure)
+	}
+	bib := confirmed.Result.Revision.Bibliography
+	if bib.Title != "Network Effects in Platforms" {
+		t.Fatalf("chosen title did not win: %q", bib.Title)
+	}
+	if bib.Language != "en" {
+		t.Fatalf("document-verified language lost on confirm: %q", bib.Language)
+	}
+}
+
+// TestConfirmRerouteWritesUserProvenance — Major-2 regression: the
+// bibliography→duplicate reroute path commits the chosen fields WITH
+// applied user provenance rows (the effective value must never lack its
+// applied audit row).
+func TestConfirmRerouteWritesUserProvenance(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, prov, _, _ := newFakeService(t, st)
+
+	// Two same-DOI twins make the confirmed bibliography dedup-ambiguous.
+	y := 2021
+	for i, t2 := range []string{"Reroute Twin A", "Reroute Twin B"} {
+		_, _ = prov.EnsureRecord(context.Background(), RecordDraft{
+			ExternalKey: fmt.Sprintf("seed-rr-%d", i),
+			RecordType:  "journalArticle", Title: t2,
+			Authors: []Creator{{LastName: "Twin", CreatorType: "author"}},
+			Year:    &y,
+			DOI:     "10.5555/reroute-doi",
+		})
+	}
+
+	req := seedReq("rr-1")
+	req.RecordType = "journalArticle"
+	req.MetadataHints = library.MetadataHints{Title: StandardLadderFixtures.AmbiguousTitle, DOI: "10.5555/reroute-doi"}
+	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Network Effects intro")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != library.ImportAwaitingConfirm {
+		t.Fatalf("bibliography decision missing: %s", op.Status)
+	}
+	// Confirm the bibliography → the same-DOI twins make dedup ambiguous
+	// → the import REROUTES to dec-duplicate (not a conflict dead-end).
+	rerouted, err := svc.ConfirmImport(context.Background(), op.ImportID,
+		op.Decisions[0].DecisionID, op.Decisions[0].Candidates[0].CandidateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rerouted.Status != library.ImportAwaitingConfirm || len(rerouted.Decisions) != 1 {
+		t.Fatalf("reroute: status %s decisions %+v", rerouted.Status, rerouted.Decisions)
+	}
+	// The chosen fields already carry their applied user provenance —
+	// BEFORE the duplicate decision resolves.
+	prov2 := provenanceOf(t, st, op.ImportID)
+	if !provHas(prov2, "title", "user", true) {
+		t.Fatalf("reroute left the chosen fields without applied user provenance: %+v", prov2)
+	}
+	// Resolve the duplicate → commits; the applied user row persists.
+	final, err := svc.ConfirmImport(context.Background(), op.ImportID,
+		rerouted.Decisions[0].DecisionID, rerouted.Decisions[0].Candidates[0].CandidateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != library.ImportCommitted {
+		t.Fatalf("duplicate confirm: %s (%+v)", final.Status, final.Failure)
+	}
+	prov3 := provenanceOf(t, st, op.ImportID)
+	if !provHas(prov3, "title", "user", true) || !provHas(prov3, "title", "document", true) {
+		t.Fatalf("committed fields lack applied provenance: %+v", prov3)
+	}
+	if final.Result.Revision.Bibliography.Title != "Network Effects in Platforms" {
+		t.Fatalf("committed title = %q, want the chosen candidate's", final.Result.Revision.Bibliography.Title)
+	}
+}
+
+// failingRenditions wraps a RenditionWriter and fails the first N
+// EnsureRendition calls with an Unavailable-class error (retry injection).
+type failingRenditions struct {
+	inner RenditionWriter
+	mu    sync.Mutex
+	fail  int
+}
+
+func (f *failingRenditions) EnsureRendition(ctx context.Context, d RenditionDraft) (string, error) {
+	f.mu.Lock()
+	if f.fail > 0 {
+		f.fail--
+		f.mu.Unlock()
+		return "", contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable, "probe: rendition writer unavailable")
+	}
+	f.mu.Unlock()
+	return f.inner.EnsureRendition(ctx, d)
+}
+
+func (f *failingRenditions) EnsureMembership(ctx context.Context, rec, col string) error {
+	return f.inner.EnsureMembership(ctx, rec, col)
+}
+
+// siblingConflictCollections rejects one configured path segment with the
+// provider-conflict sentinel (the same-named-sibling state the Zotero
+// provider can really produce; the fake's name-keyed tree cannot).
+type siblingConflictCollections struct {
+	segment string
+}
+
+func (w siblingConflictCollections) ResolvePath(_ context.Context, segments []string, _ bool) (string, error) {
+	for _, seg := range segments {
+		if seg == w.segment {
+			return "", ErrProviderConflict
+		}
+	}
+	return "FAKECOLCONFLICT", nil
+}
+
+// TestSiblingConflictIsTerminalConflict — the DoD nail "Gleichnamige
+// Geschwister = Konflikt (Fehler, kein Raten)": Conflict class, terminal,
+// no record created, no pick.
+func TestSiblingConflictIsTerminalConflict(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, prov, _, _ := newFakeService(t, st)
+	svc.ports.Collections = siblingConflictCollections{segment: "Zwillinge"}
+
+	req := seedReq("sibl-1")
+	req.Target = library.ImportTarget{LibraryID: "users/0", CollectionPath: []string{"Eins", "Zwillinge"}, CreateMissing: true}
+	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(contractsuite.SeedContent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != library.ImportTerminalFailed {
+		t.Fatalf("status = %s, want terminal_failed", op.Status)
+	}
+	if op.Failure == nil || op.Failure.Code != "CONFLICT" {
+		t.Fatalf("failure = %+v, want CONFLICT", op.Failure)
+	}
+	if recs, _, _, _ := prov.Snapshot(); recs != 0 {
+		t.Fatalf("sibling conflict created %d record(s) — no pick, no create", recs)
+	}
+}
+
+// TestRetryResumesAndCommits — the retry SUCCESS path: an injected
+// Unavailable rendition write fails the saga retryably; RetryImport
+// continues from the failed state and commits. The route's poll
+// semantics: a STILL-failing retry returns the failed operation, not an
+// error.
+func TestRetryResumesAndCommits(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, prov, _, _ := newFakeService(t, st)
+	svc.ports.Renditions = &failingRenditions{inner: prov, fail: 1}
+
+	op, err := svc.StartImport(context.Background(), seedReq("retry-ok"), bytes.NewReader(contractsuite.SeedContent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != library.ImportRetryableFailed {
+		t.Fatalf("injected failure: status = %s (%+v)", op.Status, op.Failure)
+	}
+
+	// Retry drives the saga to committed (the second write succeeds).
+	final, err := svc.RetryImport(context.Background(), op.ImportID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != library.ImportCommitted {
+		t.Fatalf("retry: status = %s (%+v)", final.Status, final.Failure)
+	}
+	if recs, atts, _, _ := prov.Snapshot(); recs != 1 || atts != 1 {
+		t.Fatalf("retry provider counts %d/%d, want 1/1", recs, atts)
+	}
+}
+
+// TestConcurrentRetryNoSpuriousInternal — the event-seq race witness:
+// parallel retries on one retryable-failed import never surface a
+// non-conflict error (the seq allocation is advisory-locked; the loser
+// of the guarded transition gets a Conflict). Exactly one winner drives.
+func TestConcurrentRetryNoSpuriousInternal(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, _, _, _ := newFakeService(t, st)
+	// Permanent failure: every retry stays retryable_failed (pollable).
+	svc.ports.Renditions = &failingRenditions{inner: NewFakeProvider(), fail: 1 << 30}
+
+	op, err := svc.StartImport(context.Background(), seedReq("retry-race"), bytes.NewReader(contractsuite.SeedContent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != library.ImportRetryableFailed {
+		t.Fatalf("setup: status = %s", op.Status)
+	}
+
+	const rounds = 15
+	var conflicts, oks, others int32
+	var wg sync.WaitGroup
+	for i := 0; i < rounds; i++ {
+		wg.Add(2)
+		for g := 0; g < 2; g++ {
+			go func() {
+				defer wg.Done()
+				op, err := svc.RetryImport(context.Background(), op.ImportID)
+				switch {
+				case err == nil && op.Status == library.ImportRetryableFailed:
+					atomic.AddInt32(&oks, 1) // winner of the transition, saga failed again → pollable op
+				case err != nil && contracterrClassIs(err, contracterr.ClassConflict):
+					atomic.AddInt32(&conflicts, 1) // guard loser
+				default:
+					atomic.AddInt32(&others, 1) // spurious — must stay 0
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	if others != 0 {
+		t.Fatalf("spurious non-conflict errors under concurrent retry: %d (oks=%d conflicts=%d)", others, oks, conflicts)
+	}
+	if oks == 0 || conflicts == 0 {
+		t.Fatalf("expected both outcome classes (oks=%d conflicts=%d)", oks, conflicts)
+	}
+}
+
+func contracterrClassIs(err error, want contracterr.Class) bool {
+	class, ok := contracterr.ClassOf(err)
+	return ok && class == want
 }
 
 // ClaimIdentifiers sonde: the unique rule is loud across records.

@@ -185,17 +185,31 @@ func (s *Store) UpdateImportStatus(ctx context.Context, importID string, status 
 	return nil
 }
 
-// AppendEvent appends one event with the next seq.
+// AppendEvent appends one event with the next seq. The seq allocation
+// runs under a per-import advisory lock inside one transaction — a
+// concurrent double-drive (double-clicked confirm/retry, boot-resume vs
+// user retry) can no longer collide on the (import_id, seq) PK and
+// surface a 23505 as a spurious Internal.
 func (s *Store) AppendEvent(ctx context.Context, importID, kind string, detail any) error {
 	d, err := json.Marshal(detail)
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('libevt:' || $1))`, importID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO library_import_events (import_id, seq, kind, detail, at)
 		VALUES ($1::uuid, (SELECT COALESCE(MAX(seq),0)+1 FROM library_import_events WHERE import_id = $1::uuid), $2, $3, $4)`,
-		importID, kind, d, now(time.Now()))
-	return err
+		importID, kind, d, now(time.Now())); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // ListEvents returns the event log in seq order.

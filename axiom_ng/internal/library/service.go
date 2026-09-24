@@ -157,26 +157,35 @@ func (s *Service) StartImportDetailed(ctx context.Context, req library.ImportReq
 		return library.ImportOperation{}, false, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "webpage imports require source.original_url")
 	}
 
-	// 2. Content validation — magic bytes ONLY, before any state exists.
-	b, err := io.ReadAll(io.LimitReader(content, s.cfg.MaxImportBytes+1))
+	// 2. Content staging — STREAMED into the staging temp (bounded by the
+	// configured limit; digest and size incrementally), then validated by
+	// magic bytes ONLY, before any durable state exists. Nothing is
+	// buffered in memory: full buffering peaked at 2× the limit (an OOM
+	// configured via the 2 GiB hard cap). The deferred Discard is a
+	// no-op once Commit renamed the temp away.
+	tmpPath, sha, size, head, err := s.staging.Stage(content, s.cfg.MaxImportBytes)
 	if err != nil {
+		if class, ok := contracterr.ClassOf(err); ok && class == contracterr.ClassInvalidArgument {
+			return library.ImportOperation{}, false, err // size overflow
+		}
 		return library.ImportOperation{}, false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, err, "reading import content")
 	}
-	if int64(len(b)) > s.cfg.MaxImportBytes {
-		return library.ImportOperation{}, false, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument,
-			fmt.Sprintf("import content exceeds the configured limit (%d bytes)", s.cfg.MaxImportBytes))
-	}
-	media, err := mediaTypeFromMagic(b)
+	defer s.staging.Discard(tmpPath)
+	media, err := mediaTypeFromMagic(head)
 	if err != nil {
 		return library.ImportOperation{}, false, err
 	}
 
-	// 3. Payload identity: canonical request JSON + content bytes.
+	// 3. Payload identity: canonical request JSON + content bytes —
+	// streamed from the staged temp, never re-buffered.
 	meta, err := json.Marshal(req)
 	if err != nil {
 		return library.ImportOperation{}, false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "canonicalizing import request")
 	}
-	payload := revision.HashContent(append(append([]byte{}, meta...), b...))
+	payload, err := s.staging.DigestWith(tmpPath, meta)
+	if err != nil {
+		return library.ImportOperation{}, false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "payload digest")
+	}
 
 	// 4. Idempotency (AFTER validation — the contract precedence).
 	if prior, err := s.store.GetByIdempotencyKey(ctx, req.IdempotencyKey); err == nil && prior.ImportID != "" {
@@ -189,9 +198,9 @@ func (s *Service) StartImportDetailed(ctx context.Context, req library.ImportReq
 		return library.ImportOperation{}, false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "idempotency lookup")
 	}
 
-	// 5. Staging (hashed file; descriptor rides the import row).
-	sha, err := s.staging.StoreImport(b)
-	if err != nil {
+	// 5. Commit the staged content under its digest (hashed file; the
+	// descriptor rides the import row).
+	if err := s.staging.Commit(tmpPath, sha); err != nil {
 		return library.ImportOperation{}, false, err
 	}
 
@@ -203,7 +212,7 @@ func (s *Service) StartImportDetailed(ctx context.Context, req library.ImportReq
 		RequestJSON:    meta,
 		Status:         library.ImportReceived,
 		StagingSHA256:  sha,
-		StagingSize:    int64(len(b)),
+		StagingSize:    size,
 		MediaType:      media,
 	}); err != nil {
 		if isUniqueViolation(err, "library_imports_idempotency_key") {
@@ -454,12 +463,28 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 	switch decisionID {
 	case "dec-bibliography":
 		// The user-confirmed candidate's carried fields win (deliberate
-		// choice — the automatic-rung lock does not apply). The dedup
-		// re-check runs BEFORE the choice is finalized: an ambiguous
-		// outcome must surface as the NEXT decision (dec-duplicate),
-		// never strand the import in awaiting_confirmation forever.
-		det.Merged = chosen.Fields
+		// choice — the automatic-rung lock does not apply) — but as an
+		// OVERLAY, never a replacement: a document-verified field the
+		// candidate does not carry survives (its document/applied
+		// provenance row stays truthful).
+		overlayFields(&det.Merged, chosen.Fields)
 		det.RecordType = firstNonEmpty(chosen.Fields.RecordType, det.RecordType)
+		// The chosen fields become applied provenance AT CHOICE TIME —
+		// also on the reroute path below (a duplicate question that
+		// follows concerns the RECORD, not the fields; AppendProvenance
+		// is idempotent per tuple, so the later dec-duplicate confirm
+		// cannot double-write). Source "user" is the contract vocabulary
+		// for a deliberate choice; the rung the candidate was offered
+		// from rides ResolverVersion.
+		for _, f := range ladderFields {
+			if v, ok := fieldOf(chosen.Fields, f); ok {
+				if err := s.store.AppendProvenance(ctx, row.ImportID, ProvenanceRow{
+					Field: f, Source: "user", ResolverVersion: chosen.Origin, Confidence: 1.0, Applied: true, Value: v,
+				}); err != nil {
+					return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "provenance append")
+				}
+			}
+		}
 		if s.ports.Catalog == nil {
 			return library.ImportOperation{}, s.ports.unavailable("CatalogReader")
 		}
@@ -470,37 +495,24 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 		if dupDec != nil {
 			// The confirmed fields match MULTIPLE existing records: the
 			// folded choice stays persisted (Pending = the duplicate
-			// question) and the caller resolves dec-duplicate next.
+			// question) and the caller resolves dec-duplicate next —
+			// never a dead-end conflict.
 			det.Plan = plan
 			det.Pending = dupDec
 			if err := s.persistResolveDetail(ctx, row, det, "in_progress"); err != nil {
 				return library.ImportOperation{}, err
 			}
-			if err := s.store.AppendEvent(ctx, row.ImportID, "decision_resolved", map[string]any{
-				"decision_id": decisionID, "candidate_id": candidateID,
-			}); err != nil {
-				return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "event append")
-			}
 			if err := s.offerDecision(ctx, row.ImportID, dupDec); err != nil {
 				return library.ImportOperation{}, err
+			}
+			if err := s.store.AppendEvent(ctx, row.ImportID, "decision_resolved", map[string]any{
+				"decision_id": decisionID, "candidate_id": candidateID, "rerouted_to": dupDec.DecisionID,
+			}); err != nil {
+				return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "event append")
 			}
 			return s.GetImport(ctx, library.ImportRef{ImportID: importID})
 		}
 		det.Plan = plan
-		// The chosen candidate's fields become applied provenance — only
-		// now that the outcome is known (the scan above could have
-		// rerouted to a duplicate decision). Source "user" is the
-		// contract vocabulary for a deliberate choice; the rung the
-		// candidate was offered from rides ResolverVersion.
-		for _, f := range ladderFields {
-			if v, ok := fieldOf(chosen.Fields, f); ok {
-				if err := s.store.AppendProvenance(ctx, row.ImportID, ProvenanceRow{
-					Field: f, Source: "user", ResolverVersion: chosen.Origin, Confidence: 1.0, Applied: true, Value: v,
-				}); err != nil {
-					return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "provenance append")
-				}
-			}
-		}
 	default: // dec-duplicate: the chosen record is the link target
 		det.Plan.LinkProviderRecordID = chosen.CandidateID
 		det.Plan.AddRendition = true
@@ -523,9 +535,9 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 	if err := s.enterFrom(ctx, row.ImportID, library.ImportAwaitingConfirm, library.ImportEnsuringCollections); err != nil {
 		return library.ImportOperation{}, err
 	}
-	if err := s.advance(ctx, row.ImportID); err != nil && !errors.Is(err, ErrHaltSimulated) {
-		return library.ImportOperation{}, err
-	}
+	// Poll semantics like StartImport: a failing continuation shows in
+	// the returned operation, not as a route error.
+	_ = s.advance(ctx, row.ImportID)
 	return s.GetImport(ctx, library.ImportRef{ImportID: importID})
 }
 
@@ -549,15 +561,18 @@ func (s *Service) RetryImport(ctx context.Context, importID string) (library.Imp
 	if err != nil {
 		return library.ImportOperation{}, err
 	}
-	if err := s.store.AppendEvent(ctx, importID, "retry", map[string]any{"from": from}); err != nil {
-		return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "event append")
-	}
+	// The guarded transition FIRST (a concurrent retry loses here and
+	// surfaces Conflict, never a half-written event trail); the retry
+	// event rides only on the winner.
 	if err := s.enterFrom(ctx, importID, library.ImportRetryableFailed, library.ImportStatus(from)); err != nil {
 		return library.ImportOperation{}, err
 	}
-	if err := s.advance(ctx, importID); err != nil && !errors.Is(err, ErrHaltSimulated) {
-		return library.ImportOperation{}, err
+	if err := s.store.AppendEvent(ctx, importID, "retry", map[string]any{"from": from}); err != nil {
+		return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "event append")
 	}
+	// A failing saga is a POLLED outcome (StartImport semantics): the
+	// operation carries the failure; only the halt sentinel propagates.
+	_ = s.advance(ctx, importID)
 	return s.GetImport(ctx, library.ImportRef{ImportID: importID})
 }
 
@@ -1254,6 +1269,7 @@ func (s *Service) openDecision(ctx context.Context, row ImportRow) (*Decision, e
 		return nil, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "event read")
 	}
 	var open *Decision
+	resolved := map[string]bool{} // decision ids already resolved
 	for _, e := range events {
 		switch e.Kind {
 		case "decision_offered":
@@ -1273,9 +1289,22 @@ func (s *Service) openDecision(ctx context.Context, row ImportRow) (*Decision, e
 			for _, c := range d.Candidates {
 				dec.Candidates = append(dec.Candidates, DecisionCandidate{CandidateID: c.CandidateID, Origin: c.Origin, Summary: c.Summary})
 			}
-			open = dec
+			if !resolved[dec.DecisionID] {
+				open = dec
+			}
 		case "decision_resolved":
-			open = nil
+			// Per-DECISION resolution: the bibliography confirm may reroute
+			// to a duplicate decision — its decision_resolved(bibliography)
+			// must not clear the JUST-offered dec-duplicate.
+			var d struct {
+				DecisionID string `json:"decision_id"`
+			}
+			if json.Unmarshal(e.Detail, &d) == nil && d.DecisionID != "" {
+				resolved[d.DecisionID] = true
+			}
+			if open != nil && resolved[open.DecisionID] {
+				open = nil
+			}
 		}
 	}
 	return open, nil
@@ -1323,9 +1352,11 @@ func (s *Service) operation(ctx context.Context, row ImportRow) (library.ImportO
 		return op, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "provenance load")
 	}
 	for _, p := range prov {
+		at := now(p.At)
 		op.Fields = append(op.Fields, library.FieldProvenance{
 			Field: p.Field, Source: p.Source, ResolverVersion: p.ResolverVersion,
 			Confidence: p.Confidence, Applied: p.Applied,
+			Value: p.Value, At: &at,
 		})
 	}
 	return op, nil
@@ -1384,6 +1415,18 @@ func catalogIncoming(recordType string, f ResolvedFields, hintDOI, hintISBN stri
 
 func catalogRecordFrom(det resolveDetail) CatalogRecord {
 	return catalogIncoming(det.RecordType, det.Merged, det.HintDOI, det.HintISBN)
+}
+
+// overlayFields sets every field the source CARRIES onto dst (field-wise
+// chosen-candidate semantics); fields the source lacks stay untouched —
+// a replace would drop document-verified fields weaker candidates do not
+// know (F06 review: language survived the ladder, vanished on confirm).
+func overlayFields(dst *ResolvedFields, src ResolvedFields) {
+	for _, f := range ladderFields {
+		if v, ok := fieldOf(src, f); ok {
+			setField(dst, f, v)
+		}
+	}
 }
 
 func authorsFromMerged(f ResolvedFields) []Creator {

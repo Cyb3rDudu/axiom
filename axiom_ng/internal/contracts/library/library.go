@@ -225,13 +225,18 @@ type ImportOperation struct {
 // FieldProvenance is one rung contribution for one normalized field —
 // the verify-ladder audit trail (F06). Applied rows carry the effective
 // value's source; rejected rows (Applied=false) document the attempt a
-// weaker rung made on an already-verified field.
+// weaker rung made on an already-verified field, INCLUDING the value it
+// proposed (F06 review: an audit row without the attempted value is
+// contentless for API consumers). Optionalität: At is a pointer — rows
+// without a timestamp marshal it absent.
 type FieldProvenance struct {
-	Field           string  `json:"field"`
-	Source          string  `json:"source"` // document | identifier | crossref | open_library | provider_existing | user
-	ResolverVersion string  `json:"resolver_version,omitempty"`
-	Confidence      float64 `json:"confidence"`
-	Applied         bool    `json:"applied"`
+	Field           string     `json:"field"`
+	Source          string     `json:"source"` // document | identifier | crossref | open_library | provider_existing | user
+	ResolverVersion string     `json:"resolver_version,omitempty"`
+	Confidence      float64    `json:"confidence"`
+	Applied         bool       `json:"applied"`
+	Value           string     `json:"value,omitempty"`
+	At              *time.Time `json:"at,omitempty"`
 }
 
 // CitationRequest asks for a citation projection.

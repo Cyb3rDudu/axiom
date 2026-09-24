@@ -40,6 +40,10 @@ type libraryAPI interface {
 // SetLibraryAPI wires the Library import surface (nil = routes answer
 // 404; the composition root decides — fake providers until F07).
 func (s *Server) SetLibraryAPI(svc libraryAPI) {
+	if svc == nil {
+		s.librarySvc = nil
+		return
+	}
 	s.librarySvc = svc
 	s.libraryImportMaxBytes = svc.MaxImportBytes()
 }
