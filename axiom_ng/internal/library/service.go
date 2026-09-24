@@ -165,10 +165,14 @@ func (s *Service) StartImportDetailed(ctx context.Context, req library.ImportReq
 	// no-op once Commit renamed the temp away.
 	tmpPath, sha, size, head, err := s.staging.Stage(content, s.cfg.MaxImportBytes)
 	if err != nil {
-		if class, ok := contracterr.ClassOf(err); ok && class == contracterr.ClassInvalidArgument {
-			return library.ImportOperation{}, false, err // size overflow
+		if _, ok := contracterr.ClassOf(err); ok {
+			// Classed staging errors pass through unmapped: the
+			// InvalidArgument size limit and the Unavailable unconfigured
+			// root keep their contract class.
+			return library.ImportOperation{}, false, err
 		}
-		return library.ImportOperation{}, false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, err, "reading import content")
+		// Untyped I/O failure while reading the stream — ours to map.
+		return library.ImportOperation{}, false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "staging content")
 	}
 	defer s.staging.Discard(tmpPath)
 	media, err := mediaTypeFromMagic(head)
@@ -426,9 +430,34 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 		return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassConflict,
 			"import is "+string(row.Status)+", not awaiting_confirmation")
 	}
+	// Crash-window heal FIRST: the resolve step already reached done but
+	// the decision_resolved event (and the confirm tail) never happened —
+	// a process death between persist(done) and the event append. Such
+	// an orphan confirm recovers FORWARD instead of dead-ending on the
+	// missing decision detail.
+	det, err := s.loadResolveDetail(ctx, row.ImportID)
+	if err != nil {
+		return library.ImportOperation{}, err
+	}
+	resolveStep, serr := s.store.GetStep(ctx, row.ImportID, stepResolve)
+	if serr != nil && !errors.Is(serr, pgx.ErrNoRows) {
+		return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, serr, "resolve step read")
+	}
 	dec, err := s.openDecision(ctx, row)
 	if err != nil {
 		return library.ImportOperation{}, err
+	}
+	if (dec == nil || det.Pending == nil) && resolveStep.State == "done" {
+		if err := s.store.AppendEvent(ctx, row.ImportID, "decision_resolved", map[string]any{"recovered": true}); err != nil {
+			return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "event append")
+		}
+		if err := s.enterFrom(ctx, row.ImportID, library.ImportAwaitingConfirm, library.ImportEnsuringCollections); err != nil {
+			return library.ImportOperation{}, err
+		}
+		// Poll semantics like the confirm tail: a failing continuation
+		// shows in the returned operation, not as a route error.
+		_ = s.advance(ctx, row.ImportID)
+		return s.GetImport(ctx, library.ImportRef{ImportID: importID})
 	}
 	if dec == nil {
 		return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInternal, "awaiting_confirmation without an open decision")
@@ -441,10 +470,6 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 	// Fold the choice into the persisted resolve state — the persisted
 	// step detail carries the candidates WITH fields (the event log is
 	// the audit view).
-	det, err := s.loadResolveDetail(ctx, row.ImportID)
-	if err != nil {
-		return library.ImportOperation{}, err
-	}
 	if det.Pending == nil || det.Pending.DecisionID != decisionID {
 		return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInternal,
 			"awaiting_confirmation without the persisted decision detail")
@@ -468,7 +493,6 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 		// candidate does not carry survives (its document/applied
 		// provenance row stays truthful).
 		overlayFields(&det.Merged, chosen.Fields)
-		det.RecordType = firstNonEmpty(chosen.Fields.RecordType, det.RecordType)
 		// The chosen fields become applied provenance AT CHOICE TIME —
 		// also on the reroute path below (a duplicate question that
 		// follows concerns the RECORD, not the fields; AppendProvenance
@@ -476,14 +500,16 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 		// cannot double-write). Source "user" is the contract vocabulary
 		// for a deliberate choice; the rung the candidate was offered
 		// from rides ResolverVersion.
+		var userRows []ProvenanceRow
 		for _, f := range ladderFields {
 			if v, ok := fieldOf(chosen.Fields, f); ok {
-				if err := s.store.AppendProvenance(ctx, row.ImportID, ProvenanceRow{
+				userRows = append(userRows, ProvenanceRow{
 					Field: f, Source: "user", ResolverVersion: chosen.Origin, Confidence: 1.0, Applied: true, Value: v,
-				}); err != nil {
-					return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "provenance append")
-				}
+				})
 			}
+		}
+		if err := s.persistProvenance(ctx, row.ImportID, userRows); err != nil {
+			return library.ImportOperation{}, err
 		}
 		if s.ports.Catalog == nil {
 			return library.ImportOperation{}, s.ports.unavailable("CatalogReader")
@@ -513,7 +539,7 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 			return s.GetImport(ctx, library.ImportRef{ImportID: importID})
 		}
 		det.Plan = plan
-	default: // dec-duplicate: the chosen record is the link target
+	case "dec-duplicate": // the chosen record is the link target
 		det.Plan.LinkProviderRecordID = chosen.CandidateID
 		det.Plan.AddRendition = true
 		if existing, cerr := s.catalogRecord(ctx, chosen.CandidateID); cerr == nil && existing != nil {
@@ -522,6 +548,9 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 				det.Plan.ExistingAttachmentID = id
 			}
 		}
+	default:
+		return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument,
+			"unknown decision kind "+decisionID)
 	}
 	det.Pending = nil
 	if err := s.persistResolveDetail(ctx, row, det, "done"); err != nil {
@@ -1269,6 +1298,8 @@ func (s *Service) openDecision(ctx context.Context, row ImportRow) (*Decision, e
 		return nil, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "event read")
 	}
 	var open *Decision
+	// A resolved decision id is never re-opened by a later offered event
+	// with the same id — resolution is monotone per decision.
 	resolved := map[string]bool{} // decision ids already resolved
 	for _, e := range events {
 		switch e.Kind {

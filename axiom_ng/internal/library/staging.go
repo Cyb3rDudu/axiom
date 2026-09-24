@@ -22,8 +22,8 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
 )
 
-// errSizeLimit is the staged-content overflow (InvalidArgument class).
-func errSizeLimit(max int64) error {
+// sizeLimitError is the staged-content overflow (InvalidArgument class).
+func sizeLimitError(max int64) error {
 	return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument,
 		fmt.Sprintf("import content exceeds the configured limit (%d bytes)", max))
 }
@@ -34,7 +34,7 @@ type Staging struct {
 }
 
 // NewStaging builds the staging store under the artifact root. An empty
-// root yields an unusable staging (StoreImport reports Unavailable) — the
+// root yields an unusable staging (Stage reports Unavailable) — the
 // honest state until the operator configures AXIOM_ARTIFACT_ROOT.
 func NewStaging(artifactRoot string) *Staging {
 	if artifactRoot == "" {
@@ -78,7 +78,7 @@ func (s *Staging) Stage(r io.Reader, max int64) (tmpPath, sha string, size int64
 		return "", "", 0, nil, cerr
 	}
 	if n > max {
-		return "", "", 0, nil, errSizeLimit(max)
+		return "", "", 0, nil, sizeLimitError(max)
 	}
 	return tmp.Name(), hex.EncodeToString(h.Sum(nil)), n, headw.head, nil
 }
@@ -139,7 +139,8 @@ func (w *headWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// StoreImport is the []byte convenience over Stage+Commit.
+// StoreImport is the []byte convenience over Stage+Commit for tests
+// and small callers.
 func (s *Staging) StoreImport(content []byte) (string, error) {
 	tmp, sha, _, _, err := s.Stage(bytes.NewReader(content), int64(len(content)))
 	if err != nil {
@@ -176,6 +177,10 @@ func (s *Staging) Path(sha string) string { return filepath.Join(s.root, sha) }
 
 // CleanupStaging is the retention hook: it removes staging files whose
 // mtime predates cutoff AND that no library_imports row references.
+// Dot-prefixed entries are in-flight temps (not content-addressed, so
+// the reference check cannot apply): one older than the cutoff is a
+// crashed writer's leftover and goes; only younger temps — possibly
+// still being written — stay protected.
 // ponytail: full-table scan of referenced hashes per run — fine for the
 // import volumes of a personal library; index-driven retention if that
 // ever changes. Never follows symlinks, never leaves the staging root.
@@ -208,11 +213,22 @@ func (s *Store) CleanupStaging(ctx context.Context, st *Staging, cutoff time.Tim
 	}
 	removed := 0
 	for _, e := range entries {
-		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+		if e.IsDir() {
 			continue
 		}
 		fi, err := e.Info()
-		if err != nil || !fi.ModTime().Before(cutoff) || referenced[e.Name()] {
+		if err != nil || !fi.ModTime().Before(cutoff) {
+			continue
+		}
+		if strings.HasPrefix(e.Name(), ".") {
+			// Stale crashed temp (older than the cutoff): remove. A dot
+			// entry younger than the cutoff may belong to a live writer.
+			if err := os.Remove(filepath.Join(st.root, e.Name())); err == nil {
+				removed++
+			}
+			continue
+		}
+		if referenced[e.Name()] {
 			continue
 		}
 		if err := os.Remove(filepath.Join(st.root, e.Name())); err == nil {

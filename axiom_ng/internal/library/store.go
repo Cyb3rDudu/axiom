@@ -271,6 +271,9 @@ func (s *Store) GetStep(ctx context.Context, importID, step string) (StepRow, er
 // (import, field, source, resolver_version, applied): a resumed resolve
 // step re-runs the ladder, and the audit trail must not inflate.
 func (s *Store) AppendProvenance(ctx context.Context, importID string, p ProvenanceRow) error {
+	if p.At.IsZero() {
+		p.At = time.Now() // rows and wire timestamps must be real, never 0001-01-01
+	}
 	var exists bool
 	if err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS (SELECT 1 FROM library_metadata_provenance
@@ -374,13 +377,14 @@ func (s *Store) PublishRevision(ctx context.Context, r SourceRevisionDomain) (su
 		return 0, false, err
 	}
 	// Idempotence: same (source, record, rendition, content, origin) →
-	// keep the existing revision row, report its id.
+	// keep the existing revision row, report its id. created_at stays
+	// the original mint's — an idempotent re-publish must not rewrite
+	// history timestamps.
 	err = tx.QueryRow(ctx, `
-		UPDATE library_source_revisions SET created_at = $1
-		WHERE source_id = $2 AND record_id = $3 AND rendition_id = $4
-		  AND content_hash = $5 AND origin = $6
-		RETURNING revision_id`,
-		now(r.CreatedAt), r.SourceID, r.RecordID, r.RenditionID, r.ContentHash, r.Origin).Scan(&survivingID)
+		SELECT revision_id FROM library_source_revisions
+		WHERE source_id = $1 AND record_id = $2 AND rendition_id = $3
+		  AND content_hash = $4 AND origin = $5`,
+		r.SourceID, r.RecordID, r.RenditionID, r.ContentHash, r.Origin).Scan(&survivingID)
 	if err == nil {
 		return survivingID, false, tx.Commit(ctx)
 	}

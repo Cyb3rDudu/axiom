@@ -8,6 +8,7 @@ package library
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -40,6 +41,14 @@ func testStore(t *testing.T) (*Store, func()) {
 		t.Fatalf("refusing to run against non-_test database %q", base)
 	}
 	dbName := strings.TrimSuffix(base, "_test") + fmt.Sprintf("_lib%d_test", os.Getpid())
+	// DDL and database identifiers cannot take bind parameters — the
+	// scratch name is ALLOWLISTED ([A-Za-z0-9_] only, nothing else may
+	// appear) before any interpolation below.
+	for _, r := range dbName {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_') {
+			t.Fatalf("scratch db name %q is not a safe identifier", dbName)
+		}
+	}
 	ctx := context.Background()
 
 	admin, err := pgxpool.New(ctx, dsn)
@@ -683,6 +692,19 @@ func TestIdempotencyReplayAndPayloadMismatch(t *testing.T) {
 	if first.ImportID != second.ImportID || first.Status != second.Status {
 		t.Fatalf("replay diverged: %s/%s", first.ImportID, second.ImportID)
 	}
+	// Pin the payload identity formula: sha256(canonical request JSON ||
+	// content) — the frozen DigestWith shape.
+	stored, err := st.GetByIdempotencyKey(ctx, req.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.PayloadHash != revision.HashContent(append(meta, contractsuite.SeedContent...)) {
+		t.Fatalf("payload hash %s drifted from sha256(canonical request || content)", stored.PayloadHash)
+	}
 	diverge := seedReq("idem-1")
 	diverge.MetadataHints.Title = "A Different Title"
 	_, err = svc.StartImport(ctx, diverge, bytes.NewReader(contractsuite.SeedContent))
@@ -712,6 +734,9 @@ func provHas(rows []ProvenanceRow, field, source string, applied bool) bool {
 	}
 	return false
 }
+
+// ---------------------------------------------------------------------------
+// 6. Confirm/retry semantics (review rounds).
 
 // TestConfirmOverlaysInsteadOfReplacing — Major-1 regression: a
 // document-verified field the chosen candidate does NOT carry survives
@@ -814,6 +839,53 @@ func TestConfirmRerouteWritesUserProvenance(t *testing.T) {
 	}
 	if final.Result.Revision.Bibliography.Title != "Network Effects in Platforms" {
 		t.Fatalf("committed title = %q, want the chosen candidate's", final.Result.Revision.Bibliography.Title)
+	}
+}
+
+// TestConfirmCrashWindowHeals — the confirm crash window (resolve step
+// reached done, but the decision_resolved event / state transition
+// never happened) must HEAL on the next confirm instead of dead-ending
+// on the missing decision detail: recover forward, commit.
+func TestConfirmCrashWindowHeals(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, _, _, _ := newFakeService(t, st)
+
+	req := seedReq("confirm-crash-window")
+	req.MetadataHints.Title = StandardLadderFixtures.AmbiguousTitle
+	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Network Effects intro text")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != library.ImportAwaitingConfirm {
+		t.Fatalf("setup: status = %s", op.Status)
+	}
+
+	// Craft the orphan directly: resolve detail persisted done with NO
+	// pending decision (and the post-scan plan a real confirm had
+	// already folded), status still awaiting, no decision_resolved event.
+	row, err := st.GetImport(context.Background(), op.ImportID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	det, err := svc.loadResolveDetail(context.Background(), op.ImportID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	det.Pending = nil
+	det.Plan = PlacementPlan{AddRendition: true}
+	if err := svc.persistResolveDetail(context.Background(), row, det, "done"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The decision/candidate ids are deliberately arbitrary — the heal
+	// short-circuits before decision validation.
+	final, err := svc.ConfirmImport(context.Background(), op.ImportID, "dec-bibliography", "whatever")
+	if err != nil {
+		t.Fatalf("confirm must heal the crash window, got %v", err)
+	}
+	if final.Status != library.ImportCommitted {
+		t.Fatalf("healed confirm: status %s (%+v)", final.Status, final.Failure)
 	}
 }
 
@@ -960,6 +1032,78 @@ func TestConcurrentRetryNoSpuriousInternal(t *testing.T) {
 	if oks == 0 || conflicts == 0 {
 		t.Fatalf("expected both outcome classes (oks=%d conflicts=%d)", oks, conflicts)
 	}
+	// Exactly one retry event per won transition — the guard loser
+	// writes no event.
+	events, err := svc.store.ListEvents(context.Background(), op.ImportID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryEvents := 0
+	for _, e := range events {
+		if e.Kind == "retry" {
+			retryEvents++
+		}
+	}
+	if retryEvents != int(oks) {
+		t.Fatalf("retry events = %d, want %d (one per won transition)", retryEvents, oks)
+	}
+}
+
+// TestResumeVsRetryRaceNoSpuriousInternal — boot-resume vs user-retry:
+// racing ResumeInflight against two RetryImports never surfaces a
+// spurious error from the double-drive (the seq allocation is
+// advisory-locked; the guarded transition serializes the retries).
+// The resume may honestly report the injected Unavailable fault; a
+// Conflict comes from the retries' guard; anything else is spurious.
+func TestResumeVsRetryRaceNoSpuriousInternal(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, _, _, _ := newFakeService(t, st)
+	// Permanent failure: every retry stays retryable_failed (pollable).
+	svc.ports.Renditions = &failingRenditions{inner: NewFakeProvider(), fail: 1 << 30}
+
+	op, err := svc.StartImport(context.Background(), seedReq("resume-retry-race"), bytes.NewReader(contractsuite.SeedContent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != library.ImportRetryableFailed {
+		t.Fatalf("setup: status = %s", op.Status)
+	}
+
+	const rounds = 15
+	var conflicts, oks, others int32
+	var wg sync.WaitGroup
+	for i := 0; i < rounds; i++ {
+		wg.Add(3)
+		go func() { // boot-resume racer
+			defer wg.Done()
+			if _, rerr := svc.ResumeInflight(context.Background()); rerr != nil &&
+				!contracterrClassIs(rerr, contracterr.ClassUnavailable) {
+				atomic.AddInt32(&others, 1) // resuming the injected fault is the honest outcome; anything else is spurious
+			}
+		}()
+		for g := 0; g < 2; g++ {
+			go func() {
+				defer wg.Done()
+				rop, rerr := svc.RetryImport(context.Background(), op.ImportID)
+				switch {
+				case rerr == nil && rop.Status == library.ImportRetryableFailed:
+					atomic.AddInt32(&oks, 1) // winner of the transition, saga failed again → pollable op
+				case rerr != nil && contracterrClassIs(rerr, contracterr.ClassConflict):
+					atomic.AddInt32(&conflicts, 1) // guard loser
+				default:
+					atomic.AddInt32(&others, 1) // spurious — must stay 0
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	if others != 0 {
+		t.Fatalf("spurious outcomes under resume/retry race: %d (oks=%d conflicts=%d)", others, oks, conflicts)
+	}
+	if oks == 0 || conflicts == 0 {
+		t.Fatalf("expected both outcome classes (oks=%d conflicts=%d)", oks, conflicts)
+	}
 }
 
 func contracterrClassIs(err error, want contracterr.Class) bool {
@@ -1058,6 +1202,51 @@ func TestStagingHashedAndRetention(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "library_staging", sha)); err != nil {
 		t.Fatalf("referenced staging file was deleted: %v", err)
+	}
+}
+
+// TestStagingSizeLimitBoundary — the streamed limit is exact: exactly N
+// bytes stage and commit at limit N; N+1 fails InvalidArgument with NO
+// temp trace; a rejected (invalid-magic) intake leaves no temp either.
+func TestStagingSizeLimitBoundary(t *testing.T) {
+	stg := NewStaging(t.TempDir())
+	const n = 100
+	tmp, sha, size, _, err := stg.Stage(bytes.NewReader(make([]byte, n)), n)
+	if err != nil {
+		t.Fatalf("stage at exactly the limit: %v", err)
+	}
+	if size != n {
+		t.Fatalf("size = %d, want %d", size, n)
+	}
+	if err := stg.Commit(tmp, sha); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if _, err := os.Stat(stg.Path(sha)); err != nil {
+		t.Fatalf("committed staging file missing: %v", err)
+	}
+
+	// One byte over the limit: InvalidArgument, and the temp is gone.
+	_, _, _, _, err = stg.Stage(bytes.NewReader(make([]byte, n+1)), n)
+	if !contracterrClassIs(err, contracterr.ClassInvalidArgument) {
+		t.Fatalf("over-limit stage: %v, want invalid_argument", err)
+	}
+	temps, _ := filepath.Glob(filepath.Join(stg.root, ".stage-*"))
+	if len(temps) != 0 {
+		t.Fatalf("overflow left staging temps behind: %v", temps)
+	}
+
+	// A rejected intake (magic bytes) leaves no temp in the service's
+	// staging root either — the deferred Discard ran.
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, _, _, _ := newFakeService(t, st)
+	_, err = svc.StartImport(context.Background(), seedReq("magic-reject-no-temp"), bytes.NewReader([]byte("<html>not a document</html>")))
+	if !contracterrClassIs(err, contracterr.ClassInvalidArgument) {
+		t.Fatalf("html intake: %v, want invalid_argument", err)
+	}
+	temps, _ = filepath.Glob(filepath.Join(svc.staging.root, ".stage-*"))
+	if len(temps) != 0 {
+		t.Fatalf("rejected intake left staging temps behind: %v", temps)
 	}
 }
 
