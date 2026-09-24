@@ -309,8 +309,10 @@ func (r *Root) Start(ctx context.Context) error {
 }
 
 // Ready waits (bounded by ctx) for every selected component's INTERNAL
-// readiness signal. Aggregation stays inside the composition — this is not
-// a health endpoint and never feeds one (F05 changes that, deliberately).
+// readiness signal. Since F05 the same signals feed the public
+// readinessSnapshot (the /api/health readiness map) — this method stays
+// the BLOCKING aggregation for callers and tests; the snapshot is the
+// non-blocking projection of the same per-role flags.
 func (r *Root) Ready(ctx context.Context) error {
 	for _, c := range r.components {
 		if !r.roles[c.Role()] {
@@ -376,6 +378,9 @@ func (r *Root) Stop(ctx context.Context) {
 		return
 	}
 	r.stopped.Store(true)
+	// Test-and-set, not CAS: Stop is single-caller by contract today
+	// (main stops exactly once; a concurrent second Stop would at worst
+	// double-run a component stop — no caller exists).
 	// 1. The edge stops accepting FIRST — before the cancel. Closing the
 	//    listener outright (instead of waiting for Shutdown inside the
 	//    api component) makes "no new connections" immediate; in-flight
@@ -416,23 +421,15 @@ func (r *Root) Stop(ctx context.Context) {
 	}
 	wg.Wait()
 	// 4. The store pool closes LAST — after every join settled or expired
-	//    its budget. Its sub-budget is RE-DERIVED from the caller's
-	//    remaining deadline (the joins may have consumed part of the
-	//    window; an already-spent caller deadline still yields an
-	//    immediately-expired sub-context through the parent — the pool
-	//    close itself is not deadline-bound work).
-	storeBudget := stopBudgetFallback
-	if dl, ok := ctx.Deadline(); ok {
-		if rem := time.Until(dl); rem > 0 {
-			storeBudget = rem
-		}
-	}
+	//    its budget. The store's stop is not deadline-bound work today
+	//    (the pool close runs unconditionally); the sub-context keeps the
+	//    uniform shape for a future ctx-bound store drain.
 	for i := len(r.components) - 1; i >= 0; i-- {
 		c := r.components[i]
 		if !r.roles[c.Role()] || c.Role() != RoleStore {
 			continue
 		}
-		subCtx, cancel := context.WithTimeout(ctx, storeBudget)
+		subCtx, cancel := context.WithTimeout(ctx, budget)
 		_ = c.Stop(subCtx)
 		cancel()
 	}

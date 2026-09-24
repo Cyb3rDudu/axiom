@@ -183,6 +183,15 @@ func TestAPIOnlyLifecycleAndQuietStop(t *testing.T) {
 	if _, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 500*time.Millisecond); err == nil {
 		t.Fatal("listener still open after Stop")
 	}
+	// The deliberate listener close must never read as fatal: the Serve
+	// goroutine has returned with the closed-connection error by now — an
+	// unguarded fatal send would surface here (review round 3 witness for
+	// the !r.stopped.Load() suppression).
+	select {
+	case err := <-root.Fatal():
+		t.Fatalf("deliberate listener close leaked into Fatal: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
 	assertGoroutinesSettled(t, base, 5*time.Second)
 }
 

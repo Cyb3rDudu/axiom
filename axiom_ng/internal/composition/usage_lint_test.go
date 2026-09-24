@@ -36,7 +36,8 @@ import (
 //	internal/config       env ∞   the sanctioned config reader (by design)
 //	internal/composition  env ∞   the sanctioned composition root (#298)
 //	internal/baseline     env ∞   F01 scaffolding knobs (test-only package)
-//	internal/cli          env ∞   the operator command surface (F05 #299;
+//	internal/cli/cli.go   env 1   debug-bind opt-out (#205 §5; F05 #299)
+//	internal/cli/modes.go env 2   retention-mode env fallbacks (#290;
 //	                              abatement F13 — config store reader)
 //	internal/search/search.go env 1  AXIOM_OS_INDEX dev override — F06 moves
 //	                              it behind config
@@ -49,11 +50,6 @@ var packageEnvAllowance = map[string]int{
 	"internal/config/":      math.MaxInt,
 	"internal/composition/": math.MaxInt,
 	"internal/baseline/":    math.MaxInt,
-	// internal/cli is the operator command surface (F05 #299): the
-	// debug-bind opt-out read and the config/doctor entry points live
-	// here, next to their arg parsing. Abatement: F13 moves the config
-	// surface into its store-backed reader.
-	"internal/cli/": math.MaxInt,
 }
 
 var packageExecAllowance = map[string]int{
@@ -63,6 +59,13 @@ var packageExecAllowance = map[string]int{
 
 var fileEnvAllowance = map[string]int{
 	"internal/search/search.go": 1, // AXIOM_OS_INDEX override; F06 target
+	// internal/cli is the operator command surface (F05 #299) — counted
+	// per file, not package-wide: the debug-bind opt-out (cli.go) and the
+	// retention mode's env fallbacks (modes.go, pre-F05 surface). A NEW
+	// env read anywhere else in cli goes red. Abatement: F13 moves the
+	// config surface into its store-backed reader.
+	"internal/cli/cli.go":   1,
+	"internal/cli/modes.go": 2,
 }
 
 // discoveryImports: import paths that ARE service discovery (a domain
