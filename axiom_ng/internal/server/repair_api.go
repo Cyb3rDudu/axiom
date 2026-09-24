@@ -230,6 +230,7 @@ func (s *Server) handleRepairCustody(w http.ResponseWriter, r *http.Request) {
 		ExistingNames: item.ExistingNames,
 		SrcPath:       strings.TrimPrefix(item.LocalPath, "file://"),
 		ContentType:   contentType,
+		RevisionHook:  s.libraryRevisionHook(item.DocumentKey, contentType),
 	}, artifact)
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -246,6 +247,30 @@ func (s *Server) handleRepairCustody(w http.ResponseWriter, r *http.Request) {
 		"quarantine_path":    res.Quarantine,
 		"next_step":          "sync auslösen — die geheilte Datei wird preferred und processing legt den Job an",
 	})
+}
+
+// libraryRevisionHook builds the F06 (#300) source-revision Mits-Schrieb
+// closure for a healing document: after a successful custody sequence it
+// publishes the healed rendition's revision. nil when no publisher is
+// wired (bare-server shapes). Failures log loudly, never fail the heal.
+func (s *Server) libraryRevisionHook(documentKey, contentType string) func(attKey, hash string) {
+	if s.revisionPublisher == nil || s.repairRepo == nil {
+		return nil
+	}
+	return func(attKey, hash string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var sourceID string
+		if err := s.repairRepo.Pool().QueryRow(ctx,
+			`SELECT source_id::text FROM zotero_documents WHERE zotero_key = $1 AND deleted = false`,
+			documentKey).Scan(&sourceID); err != nil {
+			log.Printf("revision mitschrieb: source lookup for document %s failed: %v", documentKey, err)
+			return
+		}
+		if err := s.revisionPublisher.RecordAttachmentRevision(ctx, sourceID, documentKey, attKey, hash, contentType); err != nil {
+			log.Printf("revision mitschrieb: publishing healed attachment %s failed: %v", attKey, err)
+		}
+	}
 }
 
 // custodyItemFor loads attachment + document metadata by Zotero key (the
@@ -547,6 +572,7 @@ func (s *Server) applyRepair(ctx context.Context, d repairApplyDeps, caseID stri
 		SrcPath:       srcPath,
 		ContentType:   contentType,
 		PlanVersion:   planVersion,
+		RevisionHook:  s.libraryRevisionHook(item.DocumentKey, contentType),
 	}, artifact)
 	if err != nil {
 		status := http.StatusInternalServerError

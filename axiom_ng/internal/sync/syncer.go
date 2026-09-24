@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 )
@@ -46,6 +47,10 @@ type Service struct {
 	consolidateDebounce time.Duration // <=0 falls back to the default
 	consMu              sync.Mutex
 	consTimer           *time.Timer
+	// F06 #300 source-revision Mits-Schrieb: nil until SetRevisionSink
+	// wires it — every successful sync publishes the changed renditions'
+	// revisions (additive; the Store consumes them from F09 on).
+	revisionSink library.RevisionPublisher
 }
 
 // Consolidator is the post-sync consolidation surface (#197) — satisfied
@@ -53,6 +58,12 @@ type Service struct {
 type Consolidator interface {
 	ConsolidateEntitiesReport(ctx context.Context) (repo.ConsolidationReport, error)
 }
+
+// SetRevisionSink wires the F06 (#300) source-revision Mits-Schrieb: a
+// successful sync publishes one revision per changed rendition. A failed
+// Mits-Schrieb is LOUD (logged) but never fails the sync — the next sync
+// republishes idempotently.
+func (s *Service) SetRevisionSink(p library.RevisionPublisher) { s.revisionSink = p }
 
 // consolidateDebounceDefault is the window in which consecutive sync
 // completions collapse into ONE consolidation run.
@@ -327,6 +338,20 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Result{}, err
+	}
+
+	// F06 #300: sync completion is a Zotero state-change observation
+	// point — publish the source revisions of the changed renditions
+	// (Mits-Schrieb, additive; Store intake follows in F09). Idempotent:
+	// unchanged renditions republish nothing.
+	if s.revisionSink != nil {
+		mctx, mcancel := context.WithTimeout(ctx, 5*time.Minute)
+		if n, merr := s.revisionSink.RecordSyncRevisions(mctx, sourceID); merr != nil {
+			s.log.Printf("WARNING: source revision mitschrieb after sync failed (next sync republishes): %v", merr)
+		} else if n > 0 {
+			s.log.Printf("source revisions published for %d rendition(s)", n)
+		}
+		mcancel()
 	}
 
 	// #197: the sync itself is complete (canonical rows + projections +

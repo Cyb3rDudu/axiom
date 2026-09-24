@@ -251,8 +251,18 @@ func TestSchemaFingerprintFrozen(t *testing.T) {
 // (processing_snapshots_one_active_per_attachment_uq) but never dropped
 // the manual original; both live DBs still carry it. Documented as
 // baseline debt in #295; harmless duplicate of the 0011 invariant.
+//
+// Delta 2: the `library_` namespace — the Library component's OWN
+// migration set (F06 #300): own ledger (library_schema_migrations),
+// additive tables on the same physical dev DB. The frozen fingerprint
+// stays derived from the CORE migration set alone (TestSchemaFingerprint
+// green without a fixture update); axiom_dev legitimately carries the
+// library tables because the 0.2.x dev env applies them. One prefix
+// covers the whole component-owned namespace — anything outside it
+// still gates.
 var devStructureAllowlist = []string{
 	"processing_snapshots | snapshots_one_active_per_attachment |",
+	"library_",
 }
 
 // TestSchemaFingerprintDevLive — axiom_dev must be exactly the canonical

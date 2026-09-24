@@ -13,6 +13,8 @@ package repair
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -48,6 +50,11 @@ type ApplyCase struct {
 	SrcPath       string   // original pdf path (quarantine source)
 	ContentType   string   // #220: epub repairs upload .epub artifacts
 	PlanVersion   int
+	// RevisionHook (F06 #300): called AFTER a successful heal with the new
+	// attachment key and the healed artifact's content hash — the
+	// source-revision Mits-Schrieb point for BOTH the auto-apply and the
+	// manual custody route (they share this sequence). nil = unwired.
+	RevisionHook func(newAttachmentKey, contentHash string)
 }
 
 // ApplyResult reports what the custody sequence did.
@@ -124,6 +131,14 @@ func Apply(ctx context.Context, d ApplyDeps, quarantineRoot string, c ApplyCase,
 
 	if err := d.MarkRepairHealed(ctx, c.CaseID); err != nil {
 		return ApplyResult{}, err
+	}
+	// F06 #300: the heal is a Zotero state change — publish the source
+	// revision of the healed rendition (Mits-Schrieb). Errors are logged,
+	// never failed: the audit trail holds the key, the next sync
+	// republishes idempotently.
+	if c.RevisionHook != nil {
+		sum := sha256.Sum256(pdf)
+		c.RevisionHook(newKey, hex.EncodeToString(sum[:]))
 	}
 	return ApplyResult{NewAttachmentKey: newKey, Filename: filename, Quarantine: qpath}, nil
 }
