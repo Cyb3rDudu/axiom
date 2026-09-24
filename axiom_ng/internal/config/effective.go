@@ -134,11 +134,29 @@ func Effective(cfg Config) []Entry {
 // credentialQueryKeys are the query parameters pgx honors as credentials
 // (pgconn.ParseConfig): a password smuggled as ?password=… is a REAL
 // credential, not a dead string — it must never survive redaction.
-var credentialQueryRe = regexp.MustCompile(`(?i)(password|sslpassword|passfile)=[^&\s]*`)
+// pgconn DECODES percent-escapes before matching key names (verified:
+// ?pass%77ord=x sets cfg.Password), so the pattern matches each key
+// letter as literal OR percent-encoded — `pass%77ord=` is a credential
+// key exactly like `password=`.
+var credentialQueryRe = regexp.MustCompile(
+	"(?i)(" + encodableKey("password") + "|" + encodableKey("sslpassword") + "|" + encodableKey("passfile") + ")=[^&\\s]*")
+
+// encodableKey renders key as a regex fragment matching every character
+// as its literal form or its percent-escape (upper- or lowercase hex).
+func encodableKey(key string) string {
+	var b strings.Builder
+	for _, c := range []byte(key) {
+		lo := c | 0x20  // 'p'
+		hi := c &^ 0x20 // 'P' — %50 and %70 are DIFFERENT escapes
+		fmt.Fprintf(&b, "(?:%s|%s|%%%x|%%%x)", string(lo), string(hi), lo, hi)
+	}
+	return b.String()
+}
 
 // RedactQueryCredentials removes credential query-parameter VALUES from
-// an arbitrary string (error messages, raw DSNs). One mechanism backs
-// both the structured sanitizer and the free-text error paths (doctor).
+// an arbitrary string (error messages, raw DSNs), matching literal AND
+// percent-encoded key spellings. One mechanism backs both the structured
+// sanitizer and the free-text error paths (doctor).
 func RedactQueryCredentials(s string) string {
 	return credentialQueryRe.ReplaceAllString(s, "$1="+RedactedValue)
 }

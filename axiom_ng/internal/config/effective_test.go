@@ -187,3 +187,26 @@ func TestURLRowsDropUserinfo(t *testing.T) {
 		}
 	}
 }
+
+// Percent-encoded credential keys (review round 3 minor): pgconn decodes
+// escapes before matching query names (?pass%77ord= sets cfg.Password),
+// so the redaction must catch encoded spellings too — the contract is
+// absolute ("secret values never appear in any output").
+func TestEncodedCredentialKeysRedacted(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://u@h/db?pass%77ord=ENCODEDKEY&sslmode=disable",
+		"postgres://u@h/db?%50assword=MIXED&x=1",
+		"postgres://u@h/db?sslpass%77ord=S&passfile=/f",
+	} {
+		if got := sanitizeDSN(dsn); strings.Contains(got, "ENCODEDKEY") || strings.Contains(got, "MIXED") {
+			t.Fatalf("encoded credential key survived: %s -> %s", dsn, got)
+		}
+	}
+	if got := RedactQueryCredentials("parse `postgres://u@h/db?pass%77ord=ENC`"); strings.Contains(got, "ENC") {
+		t.Fatalf("free-text encoded key leaked: %s", got)
+	}
+	// Structured redaction keeps the rest of the query intact.
+	if got := sanitizeDSN("postgres://u@h/db?pass%77ord=ENC&sslmode=disable"); !strings.Contains(got, "sslmode=disable") {
+		t.Fatalf("non-credential params must survive, got %s", got)
+	}
+}

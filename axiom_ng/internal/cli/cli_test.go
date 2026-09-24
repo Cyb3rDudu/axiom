@@ -7,17 +7,22 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/composition"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 )
 
 func TestServeRefusesUnextractedRoles(t *testing.T) {
@@ -284,8 +289,11 @@ func TestDoctorChecksLogic(t *testing.T) {
 }
 
 // Doctor exit-code mapping (review round 3): unhealthy exits 1; a fully
-// healthy environment exits 0 — the DB-backed leg needs a test database,
-// the no-DB leg is deterministic.
+// healthy environment exits 0. The healthy leg provisions its OWN
+// migrated throwaway DB — the shared CI database starts unmigrated and
+// internal/cli runs first under `go test -p 1 ./...`, so an ambient DSN
+// would find no schema_migrations and turn the suite red (the round-3 CI
+// failure: go-db-it, run 35941862473).
 func TestDoctorExitCodes(t *testing.T) {
 	t.Setenv("AXIOM_DATABASE_URL", "")
 	t.Setenv("AXIOM_ARTIFACT_ROOT", "")
@@ -293,10 +301,7 @@ func TestDoctorExitCodes(t *testing.T) {
 		t.Fatalf("unhealthy doctor must exit 1, got %d", code)
 	}
 
-	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping healthy-doctor exit test")
-	}
+	dsn := doctorHealthyDSN(t)
 	osSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -306,5 +311,85 @@ func TestDoctorExitCodes(t *testing.T) {
 	t.Setenv("AXIOM_ARTIFACT_ROOT", t.TempDir())
 	if code, _ := runTo(&strings.Builder{}, []string{"doctor"}); code != exitOK {
 		t.Fatalf("healthy doctor must exit 0, got %d", code)
+	}
+}
+
+// doctorTestDBName is the session-unique throwaway database behind the
+// healthy doctor leg (#215 pattern: package-private name, _test suffix).
+var doctorTestDBName = fmt.Sprintf("axiom_ng_clidoctor_%d_test", os.Getpid())
+
+// doctorHealthyDSN provisions doctorTestDBName (recreated empty, migrated
+// by db.Migrate, dropped in cleanup) and returns its DSN. Refuses to run
+// against a base DSN whose database does not end in _test.
+func doctorHealthyDSN(t *testing.T) string {
+	t.Helper()
+	base := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if base == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping healthy-doctor exit test")
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme == "" || u.Path == "" {
+		t.Skipf("cannot rewrite non-URL DSN (need postgres://…/dbname form): %v", err)
+	}
+	if name := strings.TrimPrefix(u.Path, "/"); name != "" && !strings.HasSuffix(name, "_test") {
+		t.Skipf("refusing to derive a scratch DB from non-test database %q", name)
+	}
+	ctx := context.Background()
+	admin, err := db.Open(ctx, base)
+	if err != nil {
+		t.Fatalf("open admin: %v", err)
+	}
+	// DDL interpolates ONLY the package-const doctorTestDBName.
+	if _, err := admin.Pool().Exec(ctx, "DROP DATABASE IF EXISTS "+doctorTestDBName); err != nil {
+		admin.Close()
+		t.Fatalf("drop old scratch: %v", err)
+	}
+	if _, err := admin.Pool().Exec(ctx, "CREATE DATABASE "+doctorTestDBName); err != nil {
+		admin.Close()
+		t.Fatalf("create scratch (needs CREATEDB privilege): %v", err)
+	}
+	admin.Close()
+
+	nu := *u
+	nu.Path = "/" + doctorTestDBName
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cleanup, err := db.Open(cctx, base)
+		if err == nil {
+			_, _ = cleanup.Pool().Exec(cctx, "DROP DATABASE IF EXISTS "+doctorTestDBName)
+			cleanup.Close()
+		}
+	})
+
+	migrated, err := db.Open(ctx, nu.String())
+	if err != nil {
+		t.Fatalf("open scratch: %v", err)
+	}
+	if err := migrated.Migrate(ctx); err != nil {
+		migrated.Close()
+		t.Fatalf("migrate scratch: %v", err)
+	}
+	migrated.Close()
+	return nu.String()
+}
+
+// serve api must not run the fixer invoker loop (review round 3, MAJOR):
+// the repair ROLE stays (the /api/repair/* surface is API), but the
+// env-gated loop is suppressed — loudly, never silently.
+func TestAPIServeSuppressesFixerLoop(t *testing.T) {
+	t.Setenv("AXIOM_FIXER_INVOKER_ENABLED", "1")
+	var notes []string
+	cfg := apiServeConfig(config.Load(), func(note string) { notes = append(notes, note) })
+	if cfg.FixerInvokerEnabled {
+		t.Fatal("serve api must not run the fixer invoker loop (help: \"no claim/fixer loops\")")
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "AXIOM_FIXER_INVOKER_ENABLED") {
+		t.Fatalf("suppression must be loud, got notes %v", notes)
+	}
+	// Without the env: nothing to suppress, no noise.
+	notes = nil
+	if cfg := apiServeConfig(config.Load(), func(string) {}); cfg.FixerInvokerEnabled || len(notes) != 0 {
+		t.Fatal("no env, no note")
 	}
 }
