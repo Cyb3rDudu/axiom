@@ -75,6 +75,9 @@ var envRows = []envRow{
 	{"AXIOM_FIXER_INTERVAL", "FixerInterval", false},
 	{"AXIOM_FIXER_OCR_TIMEOUT", "FixerOCRTimeout", false},
 	{"AXIOM_ARTIFACT_ROOT", "ArtifactRoot", false},
+	// F06 #300: Library import surface knobs.
+	{"AXIOM_LIBRARY_IMPORT_MAX_BYTES", "LibraryImportMaxBytes", false},
+	{"AXIOM_LIBRARY_IMPORT_PROVIDERS", "LibraryImportProviders", false},
 	{"AXIOM_ZOTERO_WRITE_KEY_FILE", "ZoteroWriteKeyFile", false},
 	{"AXIOM_QUARANTINE_ROOT", "QuarantineRoot", false},
 	{"AXIOM_API_PORT", "APIPort", false},

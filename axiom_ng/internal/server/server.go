@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/deprecate"
+	axlibrary "github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/version"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
@@ -66,7 +67,19 @@ type Server struct {
 	// #298: the live /api/ws CONNECTIONS plus the one-way draining flag,
 	// for CloseLiveWebSockets during the composition root's ordered shutdown.
 	wsLive *wsLiveConns
+	// F06 #300: the Library import surface (nil = routes answer 404 —
+	// the sourceSecret pattern; the composition root wires the service,
+	// fake providers until F07 ports Zotero).
+	librarySvc            libraryAPI
+	libraryImportMaxBytes int64
+	// F06 #300: the source-revision Mits-Schrieb publisher for the heal/
+	// custody points (nil = hooks skip).
+	revisionPublisher axlibrary.RevisionPublisher
 }
+
+// SetRevisionPublisher wires the F06 (#300) revision Mits-Schrieb for the
+// repair/custody points (the syncer gets its own SetRevisionSink).
+func (s *Server) SetRevisionPublisher(p axlibrary.RevisionPublisher) { s.revisionPublisher = p }
 
 // New builds a Server with no backing-dependency checkers yet. Register them
 // via RegisterCheck so /api/health reports their reachability.
@@ -123,6 +136,12 @@ func (s *Server) Handler() http.Handler {
 	// #169 (B3): the runner live-view REST snapshot. Registered always;
 	// 404s when no deriver is wired (same pattern).
 	r.Get("/api/runners/live", s.handleRunnersLive)
+	// F06 #300: the public import contract (normative in issue #300).
+	// Registered always; unwired answers 404 (sourceSecret pattern).
+	r.Post("/api/v1/library/imports", s.handleLibraryImport)
+	r.Get("/api/v1/library/imports/{id}", s.handleLibraryImportStatus)
+	r.Post("/api/v1/library/imports/{id}/confirm", s.handleLibraryImportConfirm)
+	r.Post("/api/v1/library/imports/{id}/retry", s.handleLibraryImportRetry)
 	// #197: consolidation write route exists only when wired (repair-API
 	// pattern — unwired answers 404, the admin gate alongside loopback bind).
 	if s.consolidateSvc != nil {

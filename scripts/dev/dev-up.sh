@@ -263,6 +263,10 @@ note "starting dev RAG on :$RAG_PORT …"
     AXIOM_PROCESSOR_RUNNER_NAME=axiom-dev-local
     AXIOM_ARTIFACT_ROOT="$STATE/artifacts"
     AXIOM_QUARANTINE_ROOT="$STATE/quarantine"
+    # F06 #300: the Library import contract runs on FAKE providers in dev
+    # (deterministic fixtures; F07 replaces them with the Zotero ports).
+    # Staging lives under the dev artifact root, isolated from prod.
+    AXIOM_LIBRARY_IMPORT_PROVIDERS=fake
     # runner-checkout discovery for the *-backfill cmd tools when run against dev
     AXIOM_RUNNER_DIR="$REPO/axiom_ng_runner"
     AXIOM_FIXER_INVOKER_ENABLED=0
@@ -276,7 +280,8 @@ note "starting dev RAG on :$RAG_PORT …"
         AXIOM_PROCESSOR_SOURCE_BASE_URL AXIOM_PROCESSOR_RUNNER_NAME \
         AXIOM_ARTIFACT_ROOT AXIOM_QUARANTINE_ROOT AXIOM_RUNNER_DIR \
         AXIOM_FIXER_INVOKER_ENABLED AXIOM_ZOTERO_WRITE_KEY_FILE \
-        AXIOM_DISPATCHER_ENABLED AXIOM_DISPATCHER_WORKER_ID
+        AXIOM_DISPATCHER_ENABLED AXIOM_DISPATCHER_WORKER_ID \
+        AXIOM_LIBRARY_IMPORT_PROVIDERS
 
     # hard asserts: an override that silently did not stick would aim dev at prod
     case "$AXIOM_DATABASE_URL" in

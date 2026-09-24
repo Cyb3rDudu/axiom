@@ -44,6 +44,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/dispatcher"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/fixerinvoker"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
@@ -145,8 +146,11 @@ type Root struct {
 
 	// wiring state, built progressively during Start (nil until then —
 	// exactly like the pre-F04 main.go locals).
-	database     *db.DB
-	rep          *repo.Repo
+	database *db.DB
+	rep      *repo.Repo
+	// libStore is the F06 Library persistence (nil without the store
+	// role) — the revision Mits-Schrieb + import service sit on it.
+	libStore     *library.Store
 	broker       *events.Broker
 	syncSvc      *axsync.Service
 	httpSrv      *http.Server
@@ -519,6 +523,50 @@ func (r *Root) componentsFor() []Component {
 			r.srv.SetKGService(r.rep)
 			r.srv.SetConsolidateService(r.rep)
 			r.srv.SetSelectionRepo(r.rep)
+			// F06 #300: the Library component's own migration set (own
+			// ledger, same physical DB — additive; the F01 fingerprint
+			// derives from the core set alone).
+			if err := library.Migrate(ctx, database.Pool()); err != nil {
+				return fmt.Errorf("library migrate: %w", err)
+			}
+			r.libStore = library.NewStore(database.Pool())
+			// Source-revision Mits-Schrieb: sync completion and heal/
+			// custody publish through the same store (F09 turns the Store
+			// onto these rows).
+			r.srv.SetRevisionPublisher(r.libStore)
+			// The import contract: fake providers until F07 ports Zotero
+			// behind the ports (capability-honest — unwired stays 404).
+			switch r.cfg.LibraryImportProviders {
+			case "fake":
+				prov := library.NewFakeProvider()
+				libSvc := library.NewService(library.Config{
+					SourceID:       "src-library-fake",
+					Provider:       "fake",
+					LibraryID:      r.cfg.ZoteroLibraryID,
+					MaxImportBytes: r.cfg.LibraryImportMaxBytes,
+				}, r.libStore, library.NewStaging(r.cfg.ArtifactRoot), library.Ports{
+					Catalog:     prov,
+					Records:     prov,
+					Renditions:  prov,
+					Collections: prov,
+					Resolvers: []library.BibliographicResolver{
+						library.NewFakeResolver("crossref", "fake-v1", library.StandardCrossrefFixtures()),
+						library.NewFakeResolver("open_library", "fake-v1", library.StandardOpenLibraryFixtures()),
+					},
+					Documents: library.FakeDocumentInspector{},
+				})
+				if ids, err := libSvc.ResumeInflight(ctx); err != nil {
+					r.logger.Printf("WARNING: library inflight resume: %v", err)
+				} else if len(ids) > 0 {
+					r.logger.Printf("library: resumed %d inflight import(s) after restart", len(ids))
+				}
+				r.srv.SetLibraryAPI(libSvc)
+				r.logger.Printf("library: import routes wired with FAKE providers (deterministic fixtures; F07 replaces them with Zotero)")
+			case "":
+				r.logger.Printf("library: import providers not configured (AXIOM_LIBRARY_IMPORT_PROVIDERS) — /api/v1/library/imports answers 404 until F07 wires Zotero")
+			default:
+				return fmt.Errorf("library: unknown AXIOM_LIBRARY_IMPORT_PROVIDERS %q (known: fake)", r.cfg.LibraryImportProviders)
+			}
 			// Remote source delivery (endpoint verify, dispatcher sign): wired
 			// on the STORE component, not sync — the dispatcher's source fetch
 			// reads it, so Select(api, store, ingest, dispatcher) must boot a
@@ -581,6 +629,10 @@ func (r *Root) componentsFor() []Component {
 			// #197 standing entity consolidation: every successful sync hooks
 			// a debounced consolidation run (one run per sync burst).
 			r.syncSvc.SetConsolidator(r.rep)
+			// F06 #300: sync completion publishes source revisions.
+			if r.libStore != nil {
+				r.syncSvc.SetRevisionSink(r.libStore)
+			}
 			return nil
 		},
 		stop: func(ctx context.Context) error {

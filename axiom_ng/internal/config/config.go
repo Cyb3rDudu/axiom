@@ -153,6 +153,16 @@ type Config struct {
 	// ArtifactRoot is the durable derived-artifact root (AXIOM_ARTIFACT_ROOT).
 	ArtifactRoot string
 
+	// LibraryImportMaxBytes caps one import's content (F06 #300,
+	// AXIOM_LIBRARY_IMPORT_MAX_BYTES; 0 = the service default, hard cap
+	// 2 GiB in code).
+	LibraryImportMaxBytes int64
+	// LibraryImportProviders selects the Library write-side provider set
+	// (F06 #300, AXIOM_LIBRARY_IMPORT_PROVIDERS). "fake" wires the
+	// deterministic fakes (dev-env proof until F07 ports Zotero); ""
+	// leaves the import routes unwired (404 — the honest no-provider state).
+	LibraryImportProviders string
+
 	// ZoteroWriteKeyFile holds the local-API write key (#184). The key NEVER
 	// lives in the repo; missing file = repair API disabled.
 	ZoteroWriteKeyFile string
@@ -240,6 +250,8 @@ func Load() Config {
 		FixerInterval:              envDur("AXIOM_FIXER_INTERVAL", 30*time.Second),
 		FixerOCRTimeout:            envDur("AXIOM_FIXER_OCR_TIMEOUT", 0),
 		ArtifactRoot:               env("AXIOM_ARTIFACT_ROOT", ""),
+		LibraryImportMaxBytes:      envInt64("AXIOM_LIBRARY_IMPORT_MAX_BYTES", 0),
+		LibraryImportProviders:     env("AXIOM_LIBRARY_IMPORT_PROVIDERS", ""),
 		ZoteroWriteKeyFile:         env("AXIOM_ZOTERO_WRITE_KEY_FILE", os.Getenv("HOME")+"/.axiom-ng/write-api-key"),
 		QuarantineRoot:             env("AXIOM_QUARANTINE_ROOT", quarantineDefault),
 		APIPort:                    envInt("AXIOM_API_PORT", defaultAPIPort),
@@ -341,6 +353,15 @@ func envBool(key string) bool { return envBoolDefault(key, false) }
 func envInt(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func envInt64(key string, fallback int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			return n
 		}
 	}

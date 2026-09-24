@@ -68,6 +68,10 @@ var responseClass = map[string]string{
 	"/api/repair/cases/{id}/verdict":                   "json verdict result",
 	"/api/repair/custody":                              "json custody record",
 	"/api/repair/docs/{documentKey}/locator-stats":     "json locator stats",
+	"/api/v1/library/imports":                          "202 json importAccepted (F06)",
+	"/api/v1/library/imports/{id}":                     "json library ImportOperation (F06)",
+	"/api/v1/library/imports/{id}/confirm":             "json ImportOperation (F06)",
+	"/api/v1/library/imports/{id}/retry":               "json ImportOperation (F06)",
 }
 
 // buildFullServer wires every conditionally-registered route group so the
