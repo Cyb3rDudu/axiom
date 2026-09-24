@@ -209,14 +209,29 @@ type ImportFailure struct {
 
 // ImportOperation is the state of one intake at a point in time.
 // Optionalität: exactly one of Result (committed) / Failure (*_failed) is
-// set; Decisions is non-empty iff awaiting_confirmation.
+// set; Decisions is non-empty iff awaiting_confirmation. Fields is the
+// per-field provenance trail (F06, additive v1: absent on operations
+// that carry no provenance — existing wire forms stay byte-identical).
 type ImportOperation struct {
-	ImportID  string           `json:"import_id"`
-	Status    ImportStatus     `json:"status"`
-	Decisions []ImportDecision `json:"decisions,omitempty"`
-	Result    *ImportResult    `json:"result,omitempty"`
-	Failure   *ImportFailure   `json:"failure,omitempty"`
-	UpdatedAt time.Time        `json:"updated_at"` // UTC, RFC3339 µs (DM03-compatible)
+	ImportID  string            `json:"import_id"`
+	Status    ImportStatus      `json:"status"`
+	Decisions []ImportDecision  `json:"decisions,omitempty"`
+	Result    *ImportResult     `json:"result,omitempty"`
+	Failure   *ImportFailure    `json:"failure,omitempty"`
+	Fields    []FieldProvenance `json:"fields,omitempty"`
+	UpdatedAt time.Time         `json:"updated_at"` // UTC, RFC3339 µs (DM03-compatible)
+}
+
+// FieldProvenance is one rung contribution for one normalized field —
+// the verify-ladder audit trail (F06). Applied rows carry the effective
+// value's source; rejected rows (Applied=false) document the attempt a
+// weaker rung made on an already-verified field.
+type FieldProvenance struct {
+	Field           string  `json:"field"`
+	Source          string  `json:"source"` // document | identifier | crossref | open_library | provider_existing | user
+	ResolverVersion string  `json:"resolver_version,omitempty"`
+	Confidence      float64 `json:"confidence"`
+	Applied         bool    `json:"applied"`
 }
 
 // CitationRequest asks for a citation projection.

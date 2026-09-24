@@ -83,6 +83,31 @@ var (
 		}},
 		UpdatedAt: at,
 	}
+	// committed shape WITH the F06 per-field provenance trail — witnesses
+	// the additive Fields form (v1: absent on provenance-free operations).
+	goldenImportProvenance = ImportOperation{
+		ImportID: "imp-4",
+		Status:   ImportCommitted,
+		Result: &ImportResult{
+			RecordID: "rec-4", RenditionID: "ren-4",
+			Revision: revision.SourceRevision{
+				SourceID: "src-1", RevisionID: "1",
+				ContentHash: revision.HashContent([]byte("library golden provenance")),
+				MediaType:   revision.MediaTypePDF,
+				Bibliography: revision.Bibliography{
+					RecordID: "rec-4", Title: "The Title", CitationClass: "citable",
+				},
+				LocatorCapabilities: revision.LocatorCapabilities{Page: &revision.PageCapability{Trust: revision.TrustFolioVerified}},
+				ContentTicket:       "ticket-4",
+			},
+		},
+		Fields: []FieldProvenance{
+			{Field: "title", Source: "document", Confidence: 1.0, Applied: true},
+			{Field: "title", Source: "crossref", ResolverVersion: "fake-v1", Confidence: 0.5, Applied: false},
+			{Field: "publisher", Source: "identifier", ResolverVersion: "fake-v1", Confidence: 0.9, Applied: true},
+		},
+		UpdatedAt: at,
+	}
 	// terminal-failure shape — witnesses ImportFailure.
 	goldenImportFailed = ImportOperation{
 		ImportID:  "imp-3",
@@ -151,13 +176,14 @@ func TestGoldenFreeze(t *testing.T) {
 	goldenCompare(t, "import_operation.json", goldenImportOperation)
 	goldenCompare(t, "import_operation_awaiting.json", goldenImportAwaiting)
 	goldenCompare(t, "import_operation_failed.json", goldenImportFailed)
+	goldenCompare(t, "import_operation_provenance.json", goldenImportProvenance)
 	goldenCompare(t, "citation_request.json", goldenCitationRequest)
 	goldenCompare(t, "citation_locator_epub_cfi.json", goldenCitationLocatorCFI)
 	goldenCompare(t, "citation_projection.json", goldenCitationProjection)
 }
 
 func TestRoundtripStability(t *testing.T) {
-	values := []any{goldenSource, goldenImportRequest, goldenImportRequestCollectionID, goldenImportOperation, goldenImportAwaiting, goldenImportFailed, goldenCitationRequest, goldenCitationLocatorCFI, goldenCitationProjection}
+	values := []any{goldenSource, goldenImportRequest, goldenImportRequestCollectionID, goldenImportOperation, goldenImportAwaiting, goldenImportFailed, goldenImportProvenance, goldenCitationRequest, goldenCitationLocatorCFI, goldenCitationProjection}
 	for _, v := range values {
 		b1, err := json.Marshal(v)
 		if err != nil {

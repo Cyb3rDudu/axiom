@@ -1,0 +1,51 @@
+{
+  "import_id": "imp-4",
+  "status": "committed",
+  "result": {
+    "record_id": "rec-4",
+    "rendition_id": "ren-4",
+    "revision": {
+      "source_id": "src-1",
+      "revision_id": "1",
+      "content_hash": "a28b330fa42d771b6ae972359c63fc056ba903032b71ae769ac7bbddbcb340e9",
+      "media_type": "application/pdf",
+      "bibliography": {
+        "record_id": "rec-4",
+        "title": "The Title",
+        "authors": null,
+        "publisher": "",
+        "citation_class": "citable"
+      },
+      "locator_capabilities": {
+        "page": {
+          "trust": "folio_verified"
+        },
+        "epub_cfi": false
+      },
+      "content_ticket": "ticket-4"
+    }
+  },
+  "fields": [
+    {
+      "field": "title",
+      "source": "document",
+      "confidence": 1,
+      "applied": true
+    },
+    {
+      "field": "title",
+      "source": "crossref",
+      "resolver_version": "fake-v1",
+      "confidence": 0.5,
+      "applied": false
+    },
+    {
+      "field": "publisher",
+      "source": "identifier",
+      "resolver_version": "fake-v1",
+      "confidence": 0.9,
+      "applied": true
+    }
+  ],
+  "updated_at": "2026-01-02T03:04:05.123456Z"
+}
