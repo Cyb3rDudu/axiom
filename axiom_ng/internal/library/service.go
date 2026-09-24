@@ -447,6 +447,7 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 	if err != nil {
 		return library.ImportOperation{}, err
 	}
+	// Precondition: the resolve step is today the ONLY decision offerer (both kinds) — "done + awaiting" can only be a torn confirm; a future decision kind offered elsewhere would need its own guard.
 	if (dec == nil || det.Pending == nil) && resolveStep.State == "done" {
 		healDetail := map[string]any{"recovered": true}
 		if id := s.lastOfferedDecisionID(ctx, row.ImportID); id != "" {
@@ -463,6 +464,18 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 		// Poll semantics like the confirm tail: a failing continuation
 		// shows in the returned operation, not as a route error.
 		_ = s.advance(ctx, row.ImportID)
+		return s.GetImport(ctx, library.ImportRef{ImportID: importID})
+	}
+	// Reroute tear: a crash between the reroute's persistResolveDetail
+	// and its offerDecision — the event log still shows the OLD decision
+	// open while the detail already carries the new one. Heal by
+	// re-offering the PERSISTED decision, guarded against a double offer
+	// (only when no decision_offered event for it exists yet).
+	if resolveStep.State == "in_progress" && det.Pending != nil && dec != nil &&
+		det.Pending.DecisionID != dec.DecisionID && !s.hasOfferedDecision(ctx, row.ImportID, det.Pending.DecisionID) {
+		if err := s.offerDecision(ctx, importID, det.Pending); err != nil {
+			return library.ImportOperation{}, err
+		}
 		return s.GetImport(ctx, library.ImportRef{ImportID: importID})
 	}
 	if dec == nil {
@@ -1308,6 +1321,7 @@ func (s *Service) offerDecision(ctx context.Context, importID string, d *Decisio
 func (s *Service) lastOfferedDecisionID(ctx context.Context, importID string) string {
 	events, err := s.store.ListEvents(ctx, importID)
 	if err != nil {
+		// Benign: the error degrades to an id-less heal event — openDecision ignores empty ids.
 		return ""
 	}
 	for i := len(events) - 1; i >= 0; i-- {
@@ -1322,6 +1336,27 @@ func (s *Service) lastOfferedDecisionID(ctx context.Context, importID string) st
 		}
 	}
 	return ""
+}
+
+// hasOfferedDecision reports whether a decision_offered event for the
+// given decision id exists yet (the reroute-tear heal's double-offer guard).
+func (s *Service) hasOfferedDecision(ctx context.Context, importID, decisionID string) bool {
+	events, err := s.store.ListEvents(ctx, importID)
+	if err != nil {
+		return true // unreadable log: fail closed, never risk a double offer
+	}
+	for _, e := range events {
+		if e.Kind != "decision_offered" {
+			continue
+		}
+		var d struct {
+			DecisionID string `json:"decision_id"`
+		}
+		if json.Unmarshal(e.Detail, &d) == nil && d.DecisionID == decisionID {
+			return true
+		}
+	}
+	return false
 }
 
 // openDecision reconstructs the open decision from the event log.

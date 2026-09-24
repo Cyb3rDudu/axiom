@@ -335,6 +335,7 @@ func TestProvenanceSondeWeakerHitNeverOverwrites(t *testing.T) {
 
 	// Document says "Document Title From Content"; DOI hit proposes a
 	// DIFFERENT title — rejected, documented.
+	start := time.Now()
 	op, err := svc.StartImport(context.Background(), withDOI(seedReq("prov-sonde"), StandardLadderFixtures.UniqueDOI), bytes.NewReader(ladderPDF("Document Title From Content")))
 	if err != nil {
 		t.Fatal(err)
@@ -348,6 +349,13 @@ func TestProvenanceSondeWeakerHitNeverOverwrites(t *testing.T) {
 	prov := provenanceOf(t, st, op.ImportID)
 	if !provHas(prov, "title", "identifier", false) {
 		t.Fatalf("the rejected overwrite attempt is not documented: %+v", prov)
+	}
+	// Timestamps: every provenance row the operation exposes carries a
+	// REAL At (stamped at write time, never zero or pre-start).
+	for i := range op.Fields {
+		if op.Fields[i].At == nil || op.Fields[i].At.IsZero() || op.Fields[i].At.Before(start.Truncate(time.Second)) {
+			t.Fatalf("provenance row %s carries no real timestamp: %+v", op.Fields[i].Field, op.Fields[i].At)
+		}
 	}
 }
 
@@ -888,6 +896,103 @@ func TestConfirmCrashWindowHeals(t *testing.T) {
 	if final.Status != library.ImportCommitted {
 		t.Fatalf("healed confirm: status %s (%+v)", final.Status, final.Failure)
 	}
+	// The heal left exactly ONE decision_resolved event naming the
+	// offered decision, marked recovered.
+	events, err := st.ListEvents(context.Background(), op.ImportID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	healEvents := 0
+	for _, e := range events {
+		if e.Kind != "decision_resolved" {
+			continue
+		}
+		var d struct {
+			DecisionID string `json:"decision_id"`
+			Recovered  bool   `json:"recovered"`
+		}
+		if json.Unmarshal(e.Detail, &d) == nil && d.DecisionID == "dec-bibliography" && d.Recovered {
+			healEvents++
+		}
+	}
+	if healEvents != 1 {
+		t.Fatalf("heal decision_resolved(dec-bibliography, recovered) events = %d, want 1", healEvents)
+	}
+}
+
+// TestConfirmRerouteTearHeals — the reroute crash window (detail
+// already carries the duplicate decision, but the offer never
+// happened): the next confirm of the OLD decision heals forward by
+// re-offering the PERSISTED decision instead of dead-ending.
+func TestConfirmRerouteTearHeals(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, prov, _, _ := newFakeService(t, st)
+
+	// A real provider record as the duplicate link target — the final
+	// confirm must actually commit onto it.
+	linkID, err := prov.EnsureRecord(context.Background(), RecordDraft{
+		ExternalKey: "seed-reroute-tear", RecordType: "journalArticle", Title: "Network Effects in Platforms",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := seedReq("confirm-reroute-tear")
+	req.MetadataHints.Title = StandardLadderFixtures.AmbiguousTitle
+	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Network Effects intro text")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != library.ImportAwaitingConfirm {
+		t.Fatalf("setup: status = %s", op.Status)
+	}
+
+	// Craft the reroute tear directly: the detail carries dec-duplicate
+	// and the step is back in_progress, but offerDecision never ran —
+	// the event log still shows dec-bibliography as the open decision.
+	row, err := st.GetImport(context.Background(), op.ImportID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	det, err := svc.loadResolveDetail(context.Background(), op.ImportID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	det.Pending = &Decision{
+		DecisionID: "dec-duplicate", Subject: "duplicate",
+		Candidates: []DecisionCandidate{{CandidateID: linkID, Origin: "provider_existing"}},
+	}
+	if err := svc.persistResolveDetail(context.Background(), row, det, "in_progress"); err != nil {
+		t.Fatal(err)
+	}
+	cur, err := svc.GetImport(context.Background(), library.ImportRef{ImportID: op.ImportID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cur.Decisions) != 1 || cur.Decisions[0].DecisionID != "dec-bibliography" {
+		t.Fatalf("setup: open decision = %+v, want dec-bibliography (the tear hides dec-duplicate)", cur.Decisions)
+	}
+
+	// Confirming the OLD decision must heal: re-offer the persisted
+	// dec-duplicate, not a dead-end.
+	healed, err := svc.ConfirmImport(context.Background(), op.ImportID, "dec-bibliography", op.Decisions[0].Candidates[0].CandidateID)
+	if err != nil {
+		t.Fatalf("confirm must heal the reroute tear, got %v", err)
+	}
+	if healed.Status != library.ImportAwaitingConfirm || len(healed.Decisions) != 1 || healed.Decisions[0].DecisionID != "dec-duplicate" {
+		t.Fatalf("healed tear: status %s decisions %+v", healed.Status, healed.Decisions)
+	}
+	final, err := svc.ConfirmImport(context.Background(), op.ImportID, "dec-duplicate", healed.Decisions[0].Candidates[0].CandidateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != library.ImportCommitted {
+		t.Fatalf("duplicate confirm after heal: %s (%+v)", final.Status, final.Failure)
+	}
+	if final.Result.RecordID != linkID {
+		t.Fatalf("committed onto %q, want the offered duplicate %q", final.Result.RecordID, linkID)
+	}
 }
 
 // TestConfirmTypeConflictCommitsChosenType — round-2 review regression:
@@ -1111,6 +1216,8 @@ func TestConcurrentRetryNoSpuriousInternal(t *testing.T) {
 				switch {
 				case err == nil && op.Status == library.ImportRetryableFailed:
 					atomic.AddInt32(&oks, 1) // winner of the transition, saga failed again → pollable op
+				case err == nil && !op.Status.Terminal() && op.Status != library.ImportAwaitingConfirm:
+					atomic.AddInt32(&oks, 1) // benign: a sibling re-acquired the running window between the winner's fail-persist and this read
 				case err != nil && contracterrClassIs(err, contracterr.ClassConflict):
 					atomic.AddInt32(&conflicts, 1) // guard loser
 				default:
@@ -1183,6 +1290,8 @@ func TestResumeVsRetryRaceNoSpuriousInternal(t *testing.T) {
 				switch {
 				case rerr == nil && rop.Status == library.ImportRetryableFailed:
 					atomic.AddInt32(&oks, 1) // winner of the transition, saga failed again → pollable op
+				case rerr == nil && !rop.Status.Terminal() && rop.Status != library.ImportAwaitingConfirm:
+					atomic.AddInt32(&oks, 1) // benign: a sibling re-acquired the running window between the winner's fail-persist and this read
 				case rerr != nil && contracterrClassIs(rerr, contracterr.ClassConflict):
 					atomic.AddInt32(&conflicts, 1) // guard loser
 				default:
@@ -1287,15 +1396,94 @@ func TestStagingHashedAndRetention(t *testing.T) {
 	}
 	old := time.Now().Add(-time.Hour)
 	os.Chtimes(stale, old, old)
-	removed, err := st.CleanupStaging(context.Background(), stg, time.Now())
-	if err != nil || removed != 1 {
-		t.Fatalf("cleanup removed=%d err=%v, want 1", removed, err)
+	// Dot-temps: a crashed writer's old leftover goes; a young one —
+	// possibly still being written — stays protected. "Young" is
+	// relative to the retention SNAPSHOT: an in-flight writer's mtime
+	// lands after the scan began, so the cutoff must be captured BEFORE
+	// the young temp exists.
+	oldTemp := filepath.Join(root, "library_staging", ".stage-old")
+	if err := os.WriteFile(oldTemp, []byte("old temp"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(oldTemp, old, old)
+	cutoff := time.Now()
+	if err := os.WriteFile(filepath.Join(root, "library_staging", ".stage-young"), []byte("young temp"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := st.CleanupStaging(context.Background(), stg, cutoff)
+	if err != nil || removed != 2 {
+		t.Fatalf("cleanup removed=%d err=%v, want 2 (stale file + old temp)", removed, err)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatal("stale staging file survived retention")
 	}
+	if _, err := os.Stat(oldTemp); !os.IsNotExist(err) {
+		t.Fatal("stale dot-temp survived retention")
+	}
+	if _, err := os.Stat(filepath.Join(root, "library_staging", ".stage-young")); err != nil {
+		t.Fatalf("young dot-temp was removed (live writers must stay protected): %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(root, "library_staging", sha)); err != nil {
 		t.Fatalf("referenced staging file was deleted: %v", err)
+	}
+}
+
+// TestStartImportSizeLimitThroughService — the staging size limit
+// surfaces at the SERVICE seam with its contract class (InvalidArgument),
+// not only from the staging store directly.
+func TestStartImportSizeLimitThroughService(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	prov := NewFakeProvider()
+	svc := NewService(Config{
+		SourceID:       "src-library-test",
+		Provider:       "fake",
+		LibraryID:      "users/0",
+		MaxImportBytes: 16,
+	}, st, NewStaging(t.TempDir()), Ports{
+		Catalog:     prov,
+		Records:     prov,
+		Renditions:  prov,
+		Collections: prov,
+		Resolvers: []BibliographicResolver{
+			NewFakeResolver("crossref", "fake-v1", StandardCrossrefFixtures()),
+			NewFakeResolver("open_library", "fake-v1", StandardOpenLibraryFixtures()),
+		},
+		Documents: FakeDocumentInspector{},
+	})
+
+	_, err := svc.StartImport(context.Background(), seedReq("svc-size-limit"), bytes.NewReader(ladderPDF("Over The Limit")))
+	if !contracterrClassIs(err, contracterr.ClassInvalidArgument) {
+		t.Fatalf("over-limit through the service: %v, want invalid_argument", err)
+	}
+}
+
+// TestStartImportUnconfiguredRootThroughService — the unconfigured
+// staging root surfaces at the SERVICE seam as Unavailable (the honest
+// state until AXIOM_ARTIFACT_ROOT is configured).
+func TestStartImportUnconfiguredRootThroughService(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	prov := NewFakeProvider()
+	svc := NewService(Config{
+		SourceID:  "src-library-test",
+		Provider:  "fake",
+		LibraryID: "users/0",
+	}, st, NewStaging(""), Ports{
+		Catalog:     prov,
+		Records:     prov,
+		Renditions:  prov,
+		Collections: prov,
+		Resolvers: []BibliographicResolver{
+			NewFakeResolver("crossref", "fake-v1", StandardCrossrefFixtures()),
+			NewFakeResolver("open_library", "fake-v1", StandardOpenLibraryFixtures()),
+		},
+		Documents: FakeDocumentInspector{},
+	})
+
+	_, err := svc.StartImport(context.Background(), seedReq("svc-unconfigured-root"), bytes.NewReader(ladderPDF("Any Valid Document")))
+	if !contracterrClassIs(err, contracterr.ClassUnavailable) {
+		t.Fatalf("unconfigured root through the service: %v, want unavailable", err)
 	}
 }
 

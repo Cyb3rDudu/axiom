@@ -69,8 +69,13 @@ func TestRevisionMitschriebSyncCompletion(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("re-sync minted %d, want 0 (unchanged content republishes nothing)", n)
 	}
-	if rev2 := latestRevision(t, st, sourceID, docKey, "ATT"+src); rev2.RevisionID != rev1.RevisionID {
+	rev2 := latestRevision(t, st, sourceID, docKey, "ATT"+src)
+	if rev2.RevisionID != rev1.RevisionID {
 		t.Fatalf("revision bumped without a content change: %d → %d", rev1.RevisionID, rev2.RevisionID)
+	}
+	// The surviving row's publication timestamp must not move either.
+	if !rev2.CreatedAt.Equal(rev1.CreatedAt) {
+		t.Fatalf("idempotent re-sync moved created_at: %v → %v", rev1.CreatedAt, rev2.CreatedAt)
 	}
 
 	// Heal point: a changed content hash mints the NEXT revision.
