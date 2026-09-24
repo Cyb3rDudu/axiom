@@ -163,8 +163,13 @@ func writeContractError(w http.ResponseWriter, err error) {
 	case contracterr.ClassDeadline:
 		status = http.StatusGatewayTimeout
 	}
+	component := contracterr.ComponentLibrary
+	var ce *contracterr.Error
+	if errors.As(err, &ce) && ce.Component != "" {
+		component = ce.Component // the error knows its origin — trust it
+	}
 	errBody := map[string]any{
-		"component": string(contracterr.ComponentLibrary),
+		"component": string(component),
 		"class":     string(class),
 		"message":   err.Error(),
 	}

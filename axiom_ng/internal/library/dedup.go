@@ -68,25 +68,26 @@ func DedupScan(ctx context.Context, cat CatalogReader, incoming CatalogRecord, c
 		token = page.NextPageToken
 	}
 
-	distinct := distinctRecords(recordHits)
+	// recordHits is already distinct — appendUniqueRecord keeps one
+	// entry per provider id across every page.
 	switch {
-	case len(distinct) == 0:
+	case len(recordHits) == 0:
 		return plan, nil, nil // fresh record + rendition
-	case rendHit != nil && len(distinct) == 1:
+	case rendHit != nil && len(recordHits) == 1:
 		// Same record + same PDF → membership only.
 		plan.LinkProviderRecordID = rendHit.ProviderRecordID
 		plan.AddRendition = false
 		plan.ExistingAttachmentID = findRendition(*rendHit, contentHash)
 		return plan, nil, nil
-	case len(distinct) == 1:
+	case len(recordHits) == 1:
 		// Same record, no such rendition → rendition am Parent ergänzen.
-		plan.LinkProviderRecordID = distinct[0].ProviderRecordID
+		plan.LinkProviderRecordID = recordHits[0].ProviderRecordID
 		return plan, nil, nil
 	}
 
 	// Mehrdeutig: never merge automatically — offer the records.
 	d := &Decision{DecisionID: "dec-duplicate", Subject: "duplicate"}
-	for _, r := range distinct {
+	for _, r := range recordHits {
 		d.Candidates = append(d.Candidates, DecisionCandidate{
 			CandidateID: r.ProviderRecordID,
 			Origin:      "provider_existing",
@@ -174,19 +175,6 @@ func appendUniqueRecord(xs []CatalogRecord, r CatalogRecord) []CatalogRecord {
 		}
 	}
 	return append(xs, r)
-}
-
-func distinctRecords(xs []CatalogRecord) []CatalogRecord {
-	seen := map[string]bool{}
-	var out []CatalogRecord
-	for _, x := range xs {
-		if seen[x.ProviderRecordID] {
-			continue
-		}
-		seen[x.ProviderRecordID] = true
-		out = append(out, x)
-	}
-	return out
 }
 
 // resolveAmbiguityConflict maps a provider collection conflict (same-named

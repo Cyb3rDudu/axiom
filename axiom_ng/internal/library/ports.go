@@ -130,7 +130,10 @@ type ResolveQuery struct {
 
 // Candidate is one resolver hit. Fields carry ONLY what the resolver can
 // actually vouch for — empty string = the resolver does not know (never
-// invented). Confidence ranks candidates within one resolver.
+// invented). Confidence ranks candidates within one resolver;
+// implementations MUST return candidates in DESCENDING confidence order
+// — ambiguous() compares neighbors and the merge takes the head, so an
+// unsorted list silently degrades both.
 type Candidate struct {
 	CandidateID string
 	Fields      ResolvedFields

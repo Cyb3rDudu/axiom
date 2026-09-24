@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -75,12 +76,16 @@ func (s *Staging) StoreImport(content []byte) (sha string, err error) {
 	return sha, nil
 }
 
+// stagingHashRe is the exact shape of a staging name: 64 lowercase hex
+// chars — rejects "..", short names and directory components outright.
+var stagingHashRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
 // Open returns a reader over the staged content.
 func (s *Staging) Open(sha string) (io.ReadCloser, error) {
 	if sha == "" {
 		return nil, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "staging hash is blank")
 	}
-	if strings.ContainsRune(sha, '/') || strings.ContainsRune(sha, os.PathSeparator) {
+	if !stagingHashRe.MatchString(sha) {
 		return nil, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "staging hash malformed")
 	}
 	f, err := os.Open(s.Path(sha))

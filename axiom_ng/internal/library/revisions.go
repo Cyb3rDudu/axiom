@@ -33,7 +33,9 @@ type RevisionPublisher interface {
 }
 
 // RecordSyncRevisions walks the active attachments of the source and
-// upserts a revision per rendition whose state changed.
+// publishes a revision per rendition whose state changed. The count is
+// MINTED revisions only — an idempotent re-sync that changes nothing
+// walks its attachments but mints (and reports) zero.
 func (s *Store) RecordSyncRevisions(ctx context.Context, sourceID string) (int, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT d.zotero_key, a.zotero_key, COALESCE(a.content_hash,''), COALESCE(a.content_type,''),
@@ -62,10 +64,13 @@ func (s *Store) RecordSyncRevisions(ctx context.Context, sourceID string) (int, 
 	}
 	published := 0
 	for _, a := range atts {
-		if err := s.recordMirrorRevision(ctx, sourceID, a.docKey, a.attKey, a.hash, mediaTypeFromContent(a.ct), "sync"); err != nil {
+		minted, err := s.recordMirrorRevision(ctx, sourceID, a.docKey, a.attKey, a.hash, mediaTypeFromContent(a.ct), "sync")
+		if err != nil {
 			return published, err
 		}
-		published++
+		if minted {
+			published++
+		}
 	}
 	return published, nil
 }
@@ -75,14 +80,16 @@ func (s *Store) RecordAttachmentRevision(ctx context.Context, sourceID, document
 	if mediaType == "" {
 		mediaType = revision.MediaTypePDF
 	}
-	return s.recordMirrorRevision(ctx, sourceID, documentKey, attachmentKey, contentHash, mediaType, "heal")
+	_, err := s.recordMirrorRevision(ctx, sourceID, documentKey, attachmentKey, contentHash, mediaType, "heal")
+	return err
 }
 
 // recordMirrorRevision derives the bibliography from the Zotero mirror
-// and upserts the revision (idempotent on unchanged content).
-func (s *Store) recordMirrorRevision(ctx context.Context, sourceID, documentKey, attachmentKey, contentHash, mediaType, origin string) error {
+// and publishes the revision (idempotent on unchanged content); it
+// reports whether a NEW revision was minted.
+func (s *Store) recordMirrorRevision(ctx context.Context, sourceID, documentKey, attachmentKey, contentHash, mediaType, origin string) (bool, error) {
 	if contentHash == "" {
-		return nil // nothing verifiable to publish — skip honestly
+		return false, nil // nothing verifiable to publish — skip honestly
 	}
 	var (
 		title, publisher, language, class string
@@ -96,7 +103,7 @@ func (s *Store) recordMirrorRevision(ctx context.Context, sourceID, documentKey,
 		WHERE d.source_id::text = $1 AND d.zotero_key = $2 AND d.deleted = false`,
 		sourceID, documentKey).Scan(&title, &publisher, &language, &creators, &year, &class)
 	if err != nil {
-		return fmt.Errorf("revision mitschrieb document %s: %w", documentKey, err)
+		return false, fmt.Errorf("revision mitschrieb document %s: %w", documentKey, err)
 	}
 	bib := revision.Bibliography{
 		RecordID: documentKey, Title: title, Publisher: publisher, Language: language,
@@ -116,15 +123,10 @@ func (s *Store) recordMirrorRevision(ctx context.Context, sourceID, documentKey,
 			}
 		}
 	}
-	revID, err := s.NextRevisionID(ctx, sourceID, documentKey)
-	if err != nil {
-		return err
-	}
-	return s.UpsertRevision(ctx, SourceRevisionDomain{
+	_, minted, err := s.PublishRevision(ctx, SourceRevisionDomain{
 		SourceID:     sourceID,
 		RecordID:     documentKey,
 		RenditionID:  attachmentKey,
-		RevisionID:   revID,
 		ContentHash:  contentHash,
 		MediaType:    mediaType,
 		Bibliography: bib,
@@ -135,6 +137,7 @@ func (s *Store) recordMirrorRevision(ctx context.Context, sourceID, documentKey,
 		Origin:        origin,
 		CreatedAt:     time.Now(),
 	})
+	return minted, err
 }
 
 // mediaTypeFromContent maps the mirror's content_type onto the revision

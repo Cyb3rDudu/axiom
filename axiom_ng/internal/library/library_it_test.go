@@ -267,6 +267,54 @@ func TestLadderTypeConflictAwaitsConfirmation(t *testing.T) {
 	}
 }
 
+// Ambiguous IDENTIFIER lookup (two DOI hits): decision via the
+// identifier rung — the fuzzy pass never runs (DOI vor unscharfer
+// Suche, and ambiguity is decided at the rung that found it).
+func TestLadderAmbiguousDOIAwaitsConfirmationViaIdentifierRung(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, _, crossref, _ := newFakeService(t, st)
+
+	req := seedReq("ladder-doi-amb")
+	req.MetadataHints.DOI = StandardLadderFixtures.AmbiguousDOI
+	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Ambiguous DOI document text")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != library.ImportAwaitingConfirm {
+		t.Fatalf("ambiguous identifier hit auto-took a candidate: %s", op.Status)
+	}
+	if len(op.Decisions) != 1 || len(op.Decisions[0].Candidates) != 2 {
+		t.Fatalf("want the identifier-rung decision with BOTH candidates, got %+v", op.Decisions)
+	}
+	for _, c := range crossref.Calls() {
+		if c.DOI == "" {
+			t.Fatalf("fuzzy search ran although the identifier lookup was ambiguous: %+v", c)
+		}
+	}
+	// Confirming the SECOND candidate commits ITS bibliography, with
+	// user provenance for the chosen fields (rung on ResolverVersion).
+	confirmed, err := svc.ConfirmImport(context.Background(), op.ImportID, op.Decisions[0].DecisionID, op.Decisions[0].Candidates[1].CandidateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmed.Status != library.ImportCommitted {
+		t.Fatalf("confirm did not commit the chosen candidate: %s %+v", confirmed.Status, confirmed.Failure)
+	}
+	if confirmed.Result.Revision.Bibliography.Title != "Ambiguous DOI Work B" {
+		t.Fatalf("committed bibliography is not the chosen candidate: %+v", confirmed.Result)
+	}
+	userProv := false
+	for _, p := range provenanceOf(t, st, confirmed.ImportID) {
+		if p.Field == "title" && p.Source == "user" && p.ResolverVersion == "identifier" && p.Applied {
+			userProv = true
+		}
+	}
+	if !userProv {
+		t.Fatalf("confirmed fields must carry source=user with the rung on ResolverVersion")
+	}
+}
+
 // Provenance sonde (DoD): a weaker hit after a verified document field
 // leaves the field unchanged, and the attempt is documented.
 func TestProvenanceSondeWeakerHitNeverOverwrites(t *testing.T) {
@@ -427,6 +475,51 @@ func TestDedupAmbiguousNeverAutoMerges(t *testing.T) {
 	}
 }
 
+// Pagination sonde (DoD): the dedup scan walks EVERY catalog page — a
+// DOI match on the LAST page must link there (no 6th record), and the
+// provider must have served multiple pages during the import's scans.
+func TestDedupScanFollowsEveryPage(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, prov, _, _ := newFakeService(t, st)
+
+	// 5 seeded records (page size 2 → 3 pages); the DOI target is the
+	// LAST one — a first-page-only scan would miss it and create a 6th.
+	y := 2019
+	for i := 0; i < 4; i++ {
+		_, _ = prov.EnsureRecord(context.Background(), RecordDraft{
+			ExternalKey: fmt.Sprintf("page-filler-%d", i),
+			RecordType:  "book", Title: fmt.Sprintf("Filler Work %d", i),
+			Authors: []Creator{{LastName: "Filler", CreatorType: "author"}},
+			Year:    &y,
+		})
+	}
+	_, _ = prov.EnsureRecord(context.Background(), RecordDraft{
+		ExternalKey: "page-target", RecordType: "book", Title: "Paged Target",
+		Authors: []Creator{{LastName: "Pager", CreatorType: "author"}}, Year: &y,
+		DOI: "10.5555/paged-doi",
+	})
+
+	pagesBefore := prov.PagesServed
+	op, err := svc.StartImport(context.Background(), withDOI(seedReq("dedup-pages"), "10.5555/paged-doi"), bytes.NewReader(ladderPDF("Paged incoming title")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != library.ImportCommitted {
+		t.Fatalf("status = %s (%+v)", op.Status, op.Failure)
+	}
+	if op.Result.RecordID != "FAKEREC5" {
+		t.Fatalf("last-page match did not link the target record: %s, want FAKEREC5", op.Result.RecordID)
+	}
+	records, renditions, _, _ := prov.Snapshot()
+	if records != 5 || renditions != 1 {
+		t.Fatalf("provider counts: records=%d renditions=%d, want 5/1", records, renditions)
+	}
+	if served := prov.PagesServed - pagesBefore; served < 3 {
+		t.Fatalf("the scans served %d page(s) — pagination broken (5 records at page size 2)", served)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 4. Kill/Resume between EVERY step (DoD table): crash after state entry
 // and crash after provider write, for every saga state — resume produces
@@ -468,8 +561,20 @@ func TestKillResumeBetweenEveryStep(t *testing.T) {
 			req.MetadataHints.Title = StandardLadderFixtures.AmbiguousTitle
 		}
 		op, err := svc.StartImport(context.Background(), req, bytes.NewReader(contractsuite.SeedContent))
-		if err != nil && !errors.Is(err, ErrHaltSimulated) {
-			t.Fatalf("kill at %s/%s: unexpected error %v", state, provider, err)
+		// Self-check: the armed halt MUST have tripped — any other
+		// outcome (nil error, real failure) means the crash mechanism
+		// itself broke, and this table would pass as a no-op.
+		if !errors.Is(err, ErrHaltSimulated) {
+			t.Fatalf("kill at %s/%s: StartImport err=%v, want the simulated-crash sentinel", state, provider, err)
+		}
+		if op.ImportID == "" {
+			// The crash fired before the operation DTO was built (every
+			// halt seam returns no op) — the durable row is the identity.
+			r0, rerr := st.GetByIdempotencyKey(context.Background(), req.IdempotencyKey)
+			if rerr != nil {
+				t.Fatalf("kill at %s/%s: import row missing after the crash: %v", state, provider, rerr)
+			}
+			op.ImportID = r0.ImportID
 		}
 
 		// "Process restart": a FRESH service over the same store, provider
@@ -497,6 +602,23 @@ func TestKillResumeBetweenEveryStep(t *testing.T) {
 		}
 		if final.Result.Revision.ContentHash != revision.HashContent(contractsuite.SeedContent) {
 			t.Fatalf("committed revision hash drifted: %+v", final.Result)
+		}
+		// Exactly-once sonde (DB side): the committed row's revision_id
+		// must resolve to a real library_source_revisions row — a
+		// stamp-then-short-circuit seam would dangle here.
+		crow, cerr := fresh.store.GetImport(context.Background(), op.ImportID)
+		if cerr != nil {
+			t.Fatalf("kill at %s/%s: final row load: %v", state, provider, cerr)
+		}
+		var revOK bool
+		if serr := st.pool.QueryRow(context.Background(),
+			`SELECT EXISTS (SELECT 1 FROM library_source_revisions
+			   WHERE source_id = $1 AND record_id = $2 AND rendition_id = $3 AND revision_id = $4)`,
+			fresh.cfg.SourceID, crow.RecordID, crow.RenditionID, crow.RevisionID).Scan(&revOK); serr != nil {
+			t.Fatalf("kill at %s/%s: revision sonde: %v", state, provider, serr)
+		}
+		if !revOK {
+			t.Fatalf("kill at %s/%s: revision_id %d does not resolve to a revision row (dangling stamp)", state, provider, crow.RevisionID)
 		}
 		records, renditions, memberships, _ := prov.Snapshot()
 		if records != 1 || renditions != 1 || memberships != 0 {
@@ -712,5 +834,3 @@ func TestNamingConventionFromImport(t *testing.T) {
 		t.Fatalf("filename %q, want the schema name from verified metadata %q", filename, want)
 	}
 }
-
-var _ = fmt.Sprintf

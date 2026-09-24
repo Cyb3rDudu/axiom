@@ -79,7 +79,8 @@ type ProvenanceRow struct {
 	At              time.Time
 }
 
-// ErrDuplicateKey reports a pg unique-violation on the named constraint.
+// isUniqueViolation reports a pg unique-violation (23505), optionally
+// narrowed to the named constraint.
 func isUniqueViolation(err error, constraint string) bool {
 	var pgErr interface{ SQLState() string }
 	if errors.As(err, &pgErr) && pgErr.SQLState() == "23505" {
@@ -141,7 +142,15 @@ func (s *Store) scanImport(row pgx.Row) (ImportRow, error) {
 
 // UpdateImportStatus advances the state machine and stamps updated_at.
 // The optional fields update only their non-zero values (NULL-aware COALESCE).
+// expect guards against concurrent drivers ("" = unguarded, used by the
+// saga's own single driver): a non-empty expect makes the update apply
+// ONLY while the row is still in that status — zero rows affected
+// surfaces as pgx.ErrNoRows, which the guarded callers map to Conflict.
+// Failure columns are cleared on every transition INTO a non-failed
+// status (a retried-then-committed import must not keep its stale
+// failure_code in the row).
 func (s *Store) UpdateImportStatus(ctx context.Context, importID string, status library.ImportStatus,
+	expect library.ImportStatus,
 	failure *library.ImportFailure, rec, rend, coll, recID, rendID string, revID int64) error {
 	var fcode, fmsg any
 	if failure != nil {
@@ -154,8 +163,10 @@ func (s *Store) UpdateImportStatus(ctx context.Context, importID string, status 
 	ct, err := s.pool.Exec(ctx, `
 		UPDATE library_imports SET
 			status = $2,
-			failure_code = COALESCE($3, failure_code),
-			failure_message = COALESCE($4, failure_message),
+			failure_code = CASE WHEN $2 IN ('retryable_failed','terminal_failed')
+				THEN COALESCE($3, failure_code) END,
+			failure_message = CASE WHEN $2 IN ('retryable_failed','terminal_failed')
+				THEN COALESCE($4, failure_message) END,
 			record_provider_id = COALESCE(NULLIF($5,''), record_provider_id),
 			rendition_provider_id = COALESCE(NULLIF($6,''), rendition_provider_id),
 			collection_provider_id = COALESCE(NULLIF($7,''), collection_provider_id),
@@ -163,8 +174,8 @@ func (s *Store) UpdateImportStatus(ctx context.Context, importID string, status 
 			rendition_id = COALESCE(NULLIF($9,''), rendition_id),
 			revision_id = COALESCE($10, revision_id),
 			updated_at = $11
-		WHERE import_id = $1`,
-		importID, string(status), fcode, fmsg, rec, rend, coll, recID, rendID, rev, now(time.Now()))
+		WHERE import_id = $1 AND ($12 = '' OR status = $12)`,
+		importID, string(status), fcode, fmsg, rec, rend, coll, recID, rendID, rev, now(time.Now()), string(expect))
 	if err != nil {
 		return err
 	}
@@ -240,26 +251,6 @@ func (s *Store) GetStep(ctx context.Context, importID, step string) (StepRow, er
 		return StepRow{}, err
 	}
 	return r, nil
-}
-
-// ListSteps returns all step rows of an import.
-func (s *Store) ListSteps(ctx context.Context, importID string) ([]StepRow, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT step, state, COALESCE(provider_ref,''), detail, attempts, updated_at
-		 FROM library_import_steps WHERE import_id = $1 ORDER BY step`, importID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []StepRow
-	for rows.Next() {
-		var r StepRow
-		if err := rows.Scan(&r.Step, &r.State, &r.ProviderRef, &r.Detail, &r.Attempts, &r.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
 }
 
 // AppendProvenance writes one provenance row. Idempotent per
@@ -338,60 +329,69 @@ func (s *Store) ClaimIdentifiers(ctx context.Context, recordID, doi, isbn string
 	return nil
 }
 
-// NextRevisionID allocates the next monotonic revision id for
-// (source, record) under an advisory lock (concurrent publishers serialize).
-func (s *Store) NextRevisionID(ctx context.Context, sourceID, recordID string) (int64, error) {
+// PublishRevision allocates the revision id and persists the revision in
+// ONE transaction under the advisory lock, returning the SURVIVING
+// revision id plus whether THIS call minted it:
+//   - same (source, record, rendition, content, origin) → the idempotent
+//     Mits-Schrieb short-circuit: the existing row's revision_id is
+//     returned, minted=false (no history inflation on every sync);
+//   - changed content → the next monotonic id, minted=true.
+//
+// Because allocation and insert commit atomically, the returned id
+// ALWAYS references an existing row (a crash-resume re-run returns the
+// surviving id instead of stamping a dangling one), and concurrent
+// publishers of the same record serialize on the lock instead of racing
+// an INSERT … DO NOTHING that could silently drop the loser.
+func (s *Store) PublishRevision(ctx context.Context, r SourceRevisionDomain) (survivingID int64, minted bool, err error) {
+	bib, err := json.Marshal(r.Bibliography)
+	if err != nil {
+		return 0, false, err
+	}
+	loc, err := json.Marshal(r.LocatorCapabilities)
+	if err != nil {
+		return 0, false, err
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1 || ':' || $2))`, sourceID, recordID); err != nil {
-		return 0, err
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1 || ':' || $2))`, r.SourceID, r.RecordID); err != nil {
+		return 0, false, err
+	}
+	// Idempotence: same (source, record, rendition, content, origin) →
+	// keep the existing revision row, report its id.
+	err = tx.QueryRow(ctx, `
+		UPDATE library_source_revisions SET created_at = $1
+		WHERE source_id = $2 AND record_id = $3 AND rendition_id = $4
+		  AND content_hash = $5 AND origin = $6
+		RETURNING revision_id`,
+		now(r.CreatedAt), r.SourceID, r.RecordID, r.RenditionID, r.ContentHash, r.Origin).Scan(&survivingID)
+	if err == nil {
+		return survivingID, false, tx.Commit(ctx)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, err
 	}
 	var max int64
 	if err := tx.QueryRow(ctx,
 		`SELECT COALESCE(MAX(revision_id),0) FROM library_source_revisions WHERE source_id = $1 AND record_id = $2`,
-		sourceID, recordID).Scan(&max); err != nil {
-		return 0, err
+		r.SourceID, r.RecordID).Scan(&max); err != nil {
+		return 0, false, err
 	}
-	return max + 1, tx.Commit(ctx)
-}
-
-// UpsertRevision persists a published revision (the Library→Store bridge
-// artifact). Content-hash-stable for sync/heal origins: re-recording the
-// same rendition state does not mint a new revision (idempotent
-// Mits-Schrieb); a changed hash bumps the revision.
-func (s *Store) UpsertRevision(ctx context.Context, r SourceRevisionDomain) error {
-	bib, err := json.Marshal(r.Bibliography)
-	if err != nil {
-		return err
-	}
-	loc, err := json.Marshal(r.LocatorCapabilities)
-	if err != nil {
-		return err
-	}
-	// Idempotence: same (source, record, rendition, content, origin) →
-	// keep the existing revision row (no history inflation on every sync).
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE library_source_revisions SET created_at = $1
-		WHERE source_id = $2 AND record_id = $3 AND rendition_id = $4
-		  AND content_hash = $5 AND origin = $6`,
-		now(r.CreatedAt), r.SourceID, r.RecordID, r.RenditionID, r.ContentHash, r.Origin)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() > 0 {
-		return nil
-	}
-	_, err = s.pool.Exec(ctx, `
+	revID := max + 1
+	// Under the advisory xact lock no concurrent insert for (source,
+	// record) can interleave — a plain INSERT (conflicts here would mean
+	// a bug, not a race to swallow).
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO library_source_revisions (source_id, record_id, rendition_id, revision_id,
 			content_hash, media_type, bibliography, locator_capabilities, content_ticket, origin, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-		ON CONFLICT (source_id, record_id, rendition_id, revision_id) DO NOTHING`,
-		r.SourceID, r.RecordID, r.RenditionID, r.RevisionID, r.ContentHash, r.MediaType,
-		bib, loc, r.ContentTicket, r.Origin, now(r.CreatedAt))
-	return err
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		r.SourceID, r.RecordID, r.RenditionID, revID, r.ContentHash, r.MediaType,
+		bib, loc, r.ContentTicket, r.Origin, now(r.CreatedAt)); err != nil {
+		return 0, false, err
+	}
+	return revID, true, tx.Commit(ctx)
 }
 
 // LatestRevision loads the newest revision of a rendition (for ticket

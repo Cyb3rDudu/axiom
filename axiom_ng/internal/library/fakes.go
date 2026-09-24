@@ -9,8 +9,11 @@
 package library
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -317,11 +320,13 @@ func (f *FakeResolver) Calls() []ResolveQuery {
 
 // StandardLadderFixtures — the binding scenarios (DoD): unambiguous DOI
 // (direct resolution beats fuzzy search), ambiguous Crossref (two similar
-// hits), no-hit, and a type-conflict candidate.
+// hits), an ambiguous IDENTIFIER lookup (two DOI hits — decision via the
+// identifier rung), no-hit, and a type-conflict candidate.
 var StandardLadderFixtures = struct {
-	UniqueDOI, AmbiguousTitle, NoHitTitle, TypeConflictTitle string
+	UniqueDOI, AmbiguousDOI, AmbiguousTitle, NoHitTitle, TypeConflictTitle string
 }{
 	UniqueDOI:         "10.5555/unique-doi",
+	AmbiguousDOI:      "10.5555/ambiguous-doi",
 	AmbiguousTitle:    "Network Effects",
 	NoHitTitle:        "Totally Unknown Work",
 	TypeConflictTitle: "Typed Work",
@@ -342,6 +347,21 @@ func StandardCrossrefFixtures() []ResolverFixture {
 					RecordType: "book", DOI: StandardLadderFixtures.UniqueDOI,
 				},
 			}},
+		},
+		{
+			// Two IDENTIFIER hits — ambiguous, decision via the identifier
+			// rung (DOI lookup, no fuzzy pass needed).
+			MatchDOI: StandardLadderFixtures.AmbiguousDOI,
+			Candidates: []Candidate{
+				{
+					CandidateID: "crossref-doi-amb-1", Confidence: 0.9,
+					Fields: ResolvedFields{Title: "Ambiguous DOI Work A", Authors: []string{"F. Fifth"}, Year: &y1, RecordType: "book", DOI: StandardLadderFixtures.AmbiguousDOI},
+				},
+				{
+					CandidateID: "crossref-doi-amb-2", Confidence: 0.88,
+					Fields: ResolvedFields{Title: "Ambiguous DOI Work B", Authors: []string{"G. Sixth"}, Year: &y2, RecordType: "book", DOI: StandardLadderFixtures.AmbiguousDOI},
+				},
+			},
 		},
 		{
 			// Two similar fuzzy hits — ambiguous, must surface BOTH.
@@ -422,4 +442,19 @@ func (FakeDocumentInspector) Inspect(_ context.Context, mediaType, stagingPath s
 		break
 	}
 	return fields, nil
+}
+
+// readFileLimited reads at most limit bytes (the fake inspector's input
+// bound — a real F07 extractor gets the same discipline at the port).
+func readFileLimited(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, io.LimitReader(f, limit)); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

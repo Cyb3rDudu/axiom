@@ -341,15 +341,15 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	}
 
 	// F06 #300: sync completion is a Zotero state-change observation
-	// point — publish the source revisions of the changed renditions
+	// point — publish the source revisions of CHANGED renditions
 	// (Mits-Schrieb, additive; Store intake follows in F09). Idempotent:
-	// unchanged renditions republish nothing.
+	// unchanged renditions mint nothing (the count reports mints).
 	if s.revisionSink != nil {
 		mctx, mcancel := context.WithTimeout(ctx, 5*time.Minute)
 		if n, merr := s.revisionSink.RecordSyncRevisions(mctx, sourceID); merr != nil {
 			s.log.Printf("WARNING: source revision mitschrieb after sync failed (next sync republishes): %v", merr)
 		} else if n > 0 {
-			s.log.Printf("source revisions published for %d rendition(s)", n)
+			s.log.Printf("published %d new source revision(s) for %s", n, sourceID)
 		}
 		mcancel()
 	}

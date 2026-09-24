@@ -60,13 +60,14 @@ func TestRevisionMitschriebSyncCompletion(t *testing.T) {
 		t.Fatalf("revision derived wrong: %+v", rev1)
 	}
 
-	// Idempotent Mits-Schrieb: unchanged content republishes NOTHING.
+	// Idempotent Mits-Schrieb: unchanged content mints NOTHING — the
+	// count reports mints, not walked attachments.
 	n, err = st.RecordSyncRevisions(ctx, sourceID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("re-sync published %d, want 1 (no new revision rows)", n)
+	if n != 0 {
+		t.Fatalf("re-sync minted %d, want 0 (unchanged content republishes nothing)", n)
 	}
 	if rev2 := latestRevision(t, st, sourceID, docKey, "ATT"+src); rev2.RevisionID != rev1.RevisionID {
 		t.Fatalf("revision bumped without a content change: %d → %d", rev1.RevisionID, rev2.RevisionID)

@@ -60,9 +60,11 @@ func runLadder(ctx context.Context, ports Ports, recordType string, docFields Re
 
 	out := LadderOutcome{Merged: docFields}
 
-	// Rung 1 bookkeeping: document fields are applied + locked.
+	// Rung 1 bookkeeping: document fields are applied + locked. EVERY
+	// field the inspector actually vouches for gets its document row —
+	// no whitelist to forget when the real F07 inspector emits more.
 	for _, f := range ladderFields {
-		if v, ok := docFieldValue(docFields, f); ok {
+		if v, ok := fieldOf(docFields, f); ok {
 			out.Provenance = append(out.Provenance, ProvenanceRow{
 				Field: f, Source: "document", Confidence: 1.0, Applied: true, Value: v,
 			})
@@ -155,7 +157,7 @@ func (o *LadderOutcome) merge(fields ResolvedFields, source string, res Bibliogr
 		if !ok {
 			continue
 		}
-		cur, held := anyFieldValue(o.Merged, f)
+		cur, held := fieldOf(o.Merged, f)
 		if held && differing(cur, v, f) {
 			// Locked field: the attempt is documented, the value unchanged.
 			*prov = append(*prov, ProvenanceRow{
@@ -205,27 +207,26 @@ func ambiguityDecision(subject string, cands []Candidate, origin string, res Bib
 			Origin:      origin,
 			Summary: fmt.Sprintf("%s (%s%s)", firstNonEmpty(c.Fields.Title, "untitled"),
 				strings.Join(c.Fields.Authors, ", "),
-				suffixNonEmpty(version, " via "+origin)),
+				originVersionSuffix(origin, version)),
 			Fields: c.Fields,
 		})
 	}
 	return d
 }
 
-// docFieldValue reports the DOCUMENT-run-verified value of a field (the
-// locked set is the inspector's own output — tracked by provenance
-// source "document" applied rows).
-func docFieldValue(f ResolvedFields, name string) (string, bool) {
-	if name != "title" && name != "language" {
-		// The document rung vouches for content-derived fields only.
-		return "", false
+// originVersionSuffix renders the provenance tail of a candidate
+// summary (" · crossref fake-v1") — both parts separated, empty parts
+// dropped (the old suffix glue could render " via crossreffake-v1").
+func originVersionSuffix(origin, version string) string {
+	switch {
+	case origin == "" && version == "":
+		return ""
+	case origin == "":
+		return " · " + version
+	case version == "":
+		return " · " + origin
 	}
-	return fieldOf(f, name)
-}
-
-// anyFieldValue reports any present value.
-func anyFieldValue(f ResolvedFields, name string) (string, bool) {
-	return fieldOf(f, name)
+	return " · " + origin + " " + version
 }
 
 func fieldOf(f ResolvedFields, name string) (string, bool) {

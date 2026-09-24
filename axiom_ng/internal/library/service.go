@@ -7,7 +7,6 @@
 package library
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -227,11 +226,23 @@ func (s *Service) StartImportDetailed(ctx context.Context, req library.ImportReq
 	if err := s.store.AppendEvent(ctx, row.ImportID, "state_entered", map[string]any{"status": string(library.ImportReceived)}); err != nil {
 		return library.ImportOperation{}, false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "event append")
 	}
+	if s.tripAfterState(string(library.ImportReceived)) {
+		// Simulated crash right after the durable row exists (the
+		// kill/resume "received" seam) — the row IS the state; boot
+		// recovery resumes it.
+		return library.ImportOperation{}, false, ErrHaltSimulated
+	}
 
 	// 7. Run the saga to its first stopping point. A failed saga is a
 	// POLLED outcome (the operation carries the failure), not a
-	// StartImport error — errors are for request-level refusals.
-	_ = s.advance(ctx, row.ImportID)
+	// StartImport error — errors are for request-level refusals. Only
+	// the crash sentinel propagates (tests assert it).
+	if err := s.advance(ctx, row.ImportID); err != nil {
+		if errors.Is(err, ErrHaltSimulated) {
+			return library.ImportOperation{}, false, err
+		}
+		// Real saga failure stays a polled outcome.
+	}
 	final, err := s.store.GetImport(ctx, row.ImportID)
 	if err != nil {
 		return library.ImportOperation{}, false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "loading final import")
@@ -443,19 +454,12 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 	switch decisionID {
 	case "dec-bibliography":
 		// The user-confirmed candidate's carried fields win (deliberate
-		// choice — the automatic-rung lock does not apply).
+		// choice — the automatic-rung lock does not apply). The dedup
+		// re-check runs BEFORE the choice is finalized: an ambiguous
+		// outcome must surface as the NEXT decision (dec-duplicate),
+		// never strand the import in awaiting_confirmation forever.
 		det.Merged = chosen.Fields
 		det.RecordType = firstNonEmpty(chosen.Fields.RecordType, det.RecordType)
-		for _, f := range ladderFields {
-			if v, ok := fieldOf(chosen.Fields, f); ok {
-				if err := s.store.AppendProvenance(ctx, row.ImportID, ProvenanceRow{
-					Field: f, Source: chosen.Origin, Confidence: 1.0, Applied: true, Value: v,
-				}); err != nil {
-					return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "provenance append")
-				}
-			}
-		}
-		// Re-run dedup against the confirmed field set.
 		if s.ports.Catalog == nil {
 			return library.ImportOperation{}, s.ports.unavailable("CatalogReader")
 		}
@@ -464,10 +468,39 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 			return library.ImportOperation{}, err
 		}
 		if dupDec != nil {
-			return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassConflict,
-				"confirmed bibliography is ambiguous against existing records — needs the duplicate decision")
+			// The confirmed fields match MULTIPLE existing records: the
+			// folded choice stays persisted (Pending = the duplicate
+			// question) and the caller resolves dec-duplicate next.
+			det.Plan = plan
+			det.Pending = dupDec
+			if err := s.persistResolveDetail(ctx, row, det, "in_progress"); err != nil {
+				return library.ImportOperation{}, err
+			}
+			if err := s.store.AppendEvent(ctx, row.ImportID, "decision_resolved", map[string]any{
+				"decision_id": decisionID, "candidate_id": candidateID,
+			}); err != nil {
+				return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "event append")
+			}
+			if err := s.offerDecision(ctx, row.ImportID, dupDec); err != nil {
+				return library.ImportOperation{}, err
+			}
+			return s.GetImport(ctx, library.ImportRef{ImportID: importID})
 		}
 		det.Plan = plan
+		// The chosen candidate's fields become applied provenance — only
+		// now that the outcome is known (the scan above could have
+		// rerouted to a duplicate decision). Source "user" is the
+		// contract vocabulary for a deliberate choice; the rung the
+		// candidate was offered from rides ResolverVersion.
+		for _, f := range ladderFields {
+			if v, ok := fieldOf(chosen.Fields, f); ok {
+				if err := s.store.AppendProvenance(ctx, row.ImportID, ProvenanceRow{
+					Field: f, Source: "user", ResolverVersion: chosen.Origin, Confidence: 1.0, Applied: true, Value: v,
+				}); err != nil {
+					return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "provenance append")
+				}
+			}
+		}
 	default: // dec-duplicate: the chosen record is the link target
 		det.Plan.LinkProviderRecordID = chosen.CandidateID
 		det.Plan.AddRendition = true
@@ -487,7 +520,7 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 	}); err != nil {
 		return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "event append")
 	}
-	if err := s.enter(ctx, row.ImportID, library.ImportEnsuringCollections); err != nil {
+	if err := s.enterFrom(ctx, row.ImportID, library.ImportAwaitingConfirm, library.ImportEnsuringCollections); err != nil {
 		return library.ImportOperation{}, err
 	}
 	if err := s.advance(ctx, row.ImportID); err != nil && !errors.Is(err, ErrHaltSimulated) {
@@ -519,7 +552,7 @@ func (s *Service) RetryImport(ctx context.Context, importID string) (library.Imp
 	if err := s.store.AppendEvent(ctx, importID, "retry", map[string]any{"from": from}); err != nil {
 		return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "event append")
 	}
-	if err := s.enter(ctx, importID, library.ImportStatus(from)); err != nil {
+	if err := s.enterFrom(ctx, importID, library.ImportRetryableFailed, library.ImportStatus(from)); err != nil {
 		return library.ImportOperation{}, err
 	}
 	if err := s.advance(ctx, importID); err != nil && !errors.Is(err, ErrHaltSimulated) {
@@ -548,12 +581,15 @@ func (s *Service) ResumeInflight(ctx context.Context) ([]string, error) {
 		}
 		ids = append(ids, id)
 	}
+	var errs []error
 	for _, id := range ids {
 		if err := s.advance(ctx, id); err != nil && !errors.Is(err, ErrHaltSimulated) {
-			return ids, err
+			// One broken import must not starve the others of their
+			// resume — collect and keep walking (the caller logs the join).
+			errs = append(errs, fmt.Errorf("resume %s: %w", id, err))
 		}
 	}
-	return ids, nil
+	return ids, errors.Join(errs...)
 }
 
 // failedFromState reads the terminal event's from_state (where the saga
@@ -627,9 +663,22 @@ func (s *Service) persistResolveDetail(ctx context.Context, row ImportRow, det r
 	return s.store.UpsertStep(ctx, row.ImportID, stepResolve, state, step.ProviderRef, det)
 }
 
-// enter transitions the state machine and logs the event.
+// enter transitions the state machine and logs the event (unguarded —
+// the saga's own single driver uses this).
 func (s *Service) enter(ctx context.Context, importID string, status library.ImportStatus) error {
-	if err := s.store.UpdateImportStatus(ctx, importID, status, nil, "", "", "", "", "", 0); err != nil {
+	return s.enterFrom(ctx, importID, "", status)
+}
+
+// enterFrom is enter with a concurrency guard: the transition applies
+// only while the row is still in `from` ("" = unguarded). The second of
+// two racing confirms/retries loses with Conflict instead of
+// double-driving the saga.
+func (s *Service) enterFrom(ctx context.Context, importID string, from, status library.ImportStatus) error {
+	if err := s.store.UpdateImportStatus(ctx, importID, status, from, nil, "", "", "", "", "", 0); err != nil {
+		if from != "" && errors.Is(err, pgx.ErrNoRows) {
+			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassConflict,
+				"import state changed concurrently (expected "+string(from)+")")
+		}
 		return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "state transition")
 	}
 	if err := s.store.AppendEvent(ctx, importID, "state_entered", map[string]any{"status": string(status)}); err != nil {
@@ -652,7 +701,7 @@ func (s *Service) fail(ctx context.Context, importID string, from library.Import
 		status = library.ImportRetryableFailed
 	}
 	f := &library.ImportFailure{Code: strings.ToUpper(string(class)), Message: err.Error()}
-	if cerr := s.store.UpdateImportStatus(ctx, importID, status, f, "", "", "", "", "", 0); cerr != nil {
+	if cerr := s.store.UpdateImportStatus(ctx, importID, status, "", f, "", "", "", "", "", 0); cerr != nil {
 		return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, cerr, "fail transition")
 	}
 	_ = s.store.AppendEvent(ctx, importID, "terminal", map[string]any{
@@ -924,7 +973,7 @@ func (s *Service) runCollections(ctx context.Context, row ImportRow) (bool, erro
 		return false, err
 	}
 	if collID != "" {
-		if err := s.store.UpdateImportStatus(ctx, row.ImportID, row.Status, nil, "", "", collID, "", "", 0); err != nil {
+		if err := s.store.UpdateImportStatus(ctx, row.ImportID, row.Status, "", nil, "", "", collID, "", "", 0); err != nil {
 			return false, err
 		}
 	}
@@ -1110,6 +1159,8 @@ func (s *Service) runVerify(ctx context.Context, row ImportRow) (bool, error) {
 	}
 
 	// Publish the source revision (the Library→Store bridge artifact).
+	// PublishRevision allocates AND persists atomically — the returned id
+	// always resolves to a row (the import stamp can never dangle).
 	bib := revision.Bibliography{
 		RecordID:      recStep.ProviderRef,
 		Title:         det.Merged.Title,
@@ -1119,15 +1170,10 @@ func (s *Service) runVerify(ctx context.Context, row ImportRow) (bool, error) {
 		Language:      det.Merged.Language,
 		CitationClass: revision.CitationClassCitable,
 	}
-	revID, err := s.store.NextRevisionID(ctx, s.cfg.SourceID, recStep.ProviderRef)
-	if err != nil {
-		return false, err
-	}
-	dom := SourceRevisionDomain{
+	revID, _, err := s.store.PublishRevision(ctx, SourceRevisionDomain{
 		SourceID:     s.cfg.SourceID,
 		RecordID:     recStep.ProviderRef,
 		RenditionID:  upStep.ProviderRef,
-		RevisionID:   revID,
 		ContentHash:  row.StagingSHA256,
 		MediaType:    row.MediaType,
 		Bibliography: bib,
@@ -1137,8 +1183,8 @@ func (s *Service) runVerify(ctx context.Context, row ImportRow) (bool, error) {
 		ContentTicket: "lst:" + row.StagingSHA256,
 		Origin:        "import",
 		CreatedAt:     time.Now(),
-	}
-	if err := s.store.UpsertRevision(ctx, dom); err != nil {
+	})
+	if err != nil {
 		return false, err
 	}
 	if s.tripAfterProviderWrite(stepVerify) {
@@ -1147,7 +1193,7 @@ func (s *Service) runVerify(ctx context.Context, row ImportRow) (bool, error) {
 	if err := s.store.UpsertStep(ctx, row.ImportID, stepVerify, "done", fmt.Sprintf("%d", revID), nil); err != nil {
 		return false, err
 	}
-	if err := s.store.UpdateImportStatus(ctx, row.ImportID, row.Status, nil,
+	if err := s.store.UpdateImportStatus(ctx, row.ImportID, row.Status, "", nil,
 		recStep.ProviderRef, upStep.ProviderRef, row.CollectionProviderID,
 		recStep.ProviderRef, upStep.ProviderRef, revID); err != nil {
 		return false, err
@@ -1192,7 +1238,13 @@ func (s *Service) offerDecision(ctx context.Context, importID string, d *Decisio
 	}); err != nil {
 		return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "decision event")
 	}
-	return s.store.UpdateImportStatus(ctx, importID, library.ImportAwaitingConfirm, nil, "", "", "", "", "", 0)
+	if err := s.store.UpdateImportStatus(ctx, importID, library.ImportAwaitingConfirm, "", nil, "", "", "", "", "", 0); err != nil {
+		return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "state transition")
+	}
+	if s.tripAfterState(string(library.ImportAwaitingConfirm)) {
+		return ErrHaltSimulated
+	}
+	return nil
 }
 
 // openDecision reconstructs the open decision from the event log.
@@ -1375,18 +1427,4 @@ func isMissingRelation(err error) bool {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
-}
-
-// readFileLimited reads at most limit bytes (fake inspector helper).
-func readFileLimited(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, io.LimitReader(f, limit)); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
