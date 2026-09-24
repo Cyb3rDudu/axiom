@@ -42,7 +42,7 @@ import (
 // instead of falling through to a server boot.
 func Run(name string, args []string) int {
 	if len(args) < 2 {
-		return serve(name, nil) // no-arg: the compat boot = serve all
+		return serve(name, config.Load(), nil) // no-arg: the compat boot = serve all
 	}
 	switch args[1] {
 	case "serve":
@@ -89,12 +89,17 @@ func cmdServe(name string, args []string) int {
 		return exitUsage
 	}
 	var roles []composition.Role
+	var cfg config.Config
 	switch args[0] {
 	case "all":
 		// nil = Full: the config-derived full stack, byte-identical to the
 		// pre-F05 boot (RolesFromConfig inside).
+		cfg = config.Load()
 	case "api":
-		roles = apiRoles(config.Load())
+		cfg = apiServeConfig(config.Load(), func(note string) {
+			fmt.Fprintln(os.Stderr, name+": note: "+note)
+		})
+		roles = apiRoles(cfg)
 		if len(roles) == 1 {
 			fmt.Fprintln(os.Stderr, name+": WARNING: AXIOM_DATABASE_URL not set; serving api-only (degraded)")
 		}
@@ -108,7 +113,22 @@ func cmdServe(name string, args []string) int {
 		fmt.Fprintf(os.Stderr, "%s serve: unknown role %q (known: all api library store)\n", name, args[0])
 		return exitUsage
 	}
-	return serve(name, roles)
+	return serve(name, cfg, roles)
+}
+
+// apiServeConfig enforces the documented serve-api contract ("no
+// claim/fixer loops") on the env-derived config: the repair ROLE stays
+// selected (the /api/repair/* write surface is API), but the env-gated
+// fixer invoker LOOP is suppressed — explicitly, with the same
+// never-silently note Select uses for the dispatcher. The claim loop
+// needs no adjustment: the dispatcher role is simply not in the api set,
+// so Select's own precedence note fires when its env is on.
+func apiServeConfig(cfg config.Config, note func(string)) config.Config {
+	if cfg.FixerInvokerEnabled {
+		note("AXIOM_FIXER_INVOKER_ENABLED=1 but serve api runs no fixer loop — explicit role selection wins (no invoker in this process)")
+		cfg.FixerInvokerEnabled = false
+	}
+	return cfg
 }
 
 // apiRoles is the API-relevant selection out of the F04 registry: every
@@ -130,8 +150,7 @@ func apiRoles(cfg config.Config) []composition.Role {
 // serve is the shared boot: debug-bind guard, composition build, signal
 // context, ordered start, fatal/signal select, budgeted stop. The body is
 // the pre-F05 main.go sequence — one place, two entry names.
-func serve(name string, roles []composition.Role) int {
-	cfg := config.Load()
+func serve(name string, cfg config.Config, roles []composition.Role) int {
 	logger := log.New(os.Stderr, name+": ", log.LstdFlags)
 	logger.Printf("starting %s", version.Banner())
 	// #202: heartbeat sink for long mutating KG passes.

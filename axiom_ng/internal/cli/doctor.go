@@ -80,6 +80,8 @@ func runDoctor(cfg config.Config) doctorReport {
 	default:
 		if code, err := probeHTTP(cfg.OpenSearchURL + "/_cluster/health"); err != nil {
 			rep.Checks["opensearch"] = checkStatus{Status: "fail", Detail: err.Error()}
+		} else if code < 200 || code > 299 {
+			rep.Checks["opensearch"] = checkStatus{Status: "fail", Detail: fmt.Sprintf("unhealthy (HTTP %d)", code)}
 		} else {
 			rep.Checks["opensearch"] = checkStatus{Status: "ok", Detail: fmt.Sprintf("reachable (HTTP %d)", code)}
 		}
@@ -139,19 +141,21 @@ func cmdDoctor(asJSON bool) int {
 }
 
 // probeDatabase opens a bounded connection and reads the migration
-// ledger. The error path carries the DSN only through config's
-// sanitizer (pgx errors quote host/user, never the password).
+// ledger. Error strings pass through config.RedactQueryCredentials:
+// pgx redacts userinfo itself, but a password smuggled as a DSN QUERY
+// parameter (?password=…) appears verbatim in its parse errors — the
+// doctor detail lines must never carry it.
 func probeDatabase(dsn string) (*schemaInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("connect: %v", err)
+		return nil, fmt.Errorf("connect: %s", config.RedactQueryCredentials(err.Error()))
 	}
 	defer conn.Close(context.Background())
 	info := &schemaInfo{}
 	if err := conn.QueryRow(ctx, `SELECT count(*), max(version) FROM schema_migrations`).Scan(&info.Migrations, &info.Latest); err != nil {
-		return nil, fmt.Errorf("schema_migrations unreadable (migrated?): %v", err)
+		return nil, fmt.Errorf("schema_migrations unreadable (migrated?): %s", config.RedactQueryCredentials(err.Error()))
 	}
 	return info, nil
 }

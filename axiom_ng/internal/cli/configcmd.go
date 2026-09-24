@@ -82,6 +82,12 @@ func cmdConfigValidate() int {
 		}
 	}
 	cfg := config.Load()
+	// Network-free by design: Select's build wiring probes the Zotero
+	// local API for its start log — validate points that probe at a
+	// refused loopback address so the check stays an env/consistency
+	// pass, not a reachability one (the probe degrades to the documented
+	// "not reachable" warning in the discard logger).
+	cfg.ZoteroBaseURL = "http://127.0.0.1:1"
 	if _, err := composition.Select(cfg, discardLogger(), composition.Ports{}, composition.RolesFromConfig(cfg)...); err != nil {
 		failed = true
 		fmt.Println("inconsistent:", err)

@@ -282,3 +282,29 @@ func TestDoctorChecksLogic(t *testing.T) {
 		}
 	})
 }
+
+// Doctor exit-code mapping (review round 3): unhealthy exits 1; a fully
+// healthy environment exits 0 — the DB-backed leg needs a test database,
+// the no-DB leg is deterministic.
+func TestDoctorExitCodes(t *testing.T) {
+	t.Setenv("AXIOM_DATABASE_URL", "")
+	t.Setenv("AXIOM_ARTIFACT_ROOT", "")
+	if code, _ := runTo(&strings.Builder{}, []string{"doctor"}); code != exitFailure {
+		t.Fatalf("unhealthy doctor must exit 1, got %d", code)
+	}
+
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping healthy-doctor exit test")
+	}
+	osSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer osSrv.Close()
+	t.Setenv("AXIOM_DATABASE_URL", dsn)
+	t.Setenv("AXIOM_OPENSEARCH_URL", osSrv.URL)
+	t.Setenv("AXIOM_ARTIFACT_ROOT", t.TempDir())
+	if code, _ := runTo(&strings.Builder{}, []string{"doctor"}); code != exitOK {
+		t.Fatalf("healthy doctor must exit 0, got %d", code)
+	}
+}

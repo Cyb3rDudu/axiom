@@ -4,7 +4,7 @@
 // pattern): the deprecation count sonde (exactly one warning line per
 // process), the health deprecations counter (the F02 mechanism made
 // visible by the first real in-process caller), the readiness field
-// through the real serve path, and the graceful SIGTERM exit.
+// through the real serve path, and the graceful SIGTERM exit (real SIGTERM, and a cleanup that actually kills a never-exited child).
 package main
 
 import (
@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -101,14 +102,34 @@ func TestIT_AliasHealthCounterAndReadiness(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	// Track the real exit: ProcessState is nil until Wait, so a deferred
+	// ProcessState guard can never see a RUNNING process — kill on
+	// "Wait never happened" instead (review round 3: the inverted guard
+	// leaked live test children).
+	exited := make(chan struct{})
 	defer func() {
-		if cmd.ProcessState == nil || cmd.ProcessState.Exited() {
-			return
+		select {
+		case <-exited:
+		default:
+			_ = cmd.Process.Kill()
 		}
-		_ = cmd.Process.Kill()
 	}()
 
-	health := pollHealth(t, port, 20*time.Second)
+	// Poll for readiness, not just the first 200: the per-role Ready
+	// goroutines run after the start loop, so a first-response assert
+	// races "starting" (composition_test.go polls for the same reason).
+	deadline := time.Now().Add(20 * time.Second)
+	var health healthShape
+	for time.Now().Before(deadline) {
+		health = pollHealthOnce(t, port)
+		if health.Readiness["api"] == "ready" && health.Deprecations["axiom-ng"] == 1 {
+			break
+		}
+		if !isProcAlive(cmd.Process) {
+			t.Fatalf("alias exited early (log:\n%s)", buf.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	if health.Deprecations["axiom-ng"] != 1 {
 		t.Fatalf("alias health must count axiom-ng:1, got %v (log:\n%s)", health.Deprecations, buf.String())
 	}
@@ -126,14 +147,16 @@ func TestIT_AliasHealthCounterAndReadiness(t *testing.T) {
 		t.Fatalf("v1 health through the alias: %d %s", resp.StatusCode, raw)
 	}
 
-	// Graceful SIGTERM: exit 0, exactly one warning line in the whole run.
-	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+	// Graceful SIGTERM (the documented signal; SIGINT shares the same
+	// NotifyContext wiring): exit 0, exactly one warning line overall.
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
+		close(exited)
 		if err != nil {
 			t.Fatalf("graceful shutdown must exit 0, got %v (log:\n%s)", err, buf.String())
 		}
@@ -151,26 +174,30 @@ type healthShape struct {
 	Readiness    map[string]string `json:"readiness"`
 }
 
-func pollHealth(t *testing.T, port int, budget time.Duration) healthShape {
+// pollHealthOnce reads /api/health; a transport error returns the zero
+// shape (the caller retries).
+func pollHealthOnce(t *testing.T, port int) healthShape {
 	t.Helper()
-	deadline := time.Now().Add(budget)
 	client := &http.Client{Timeout: 2 * time.Second}
-	for time.Now().Before(deadline) {
-		resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/health", port))
-		if err == nil {
-			raw, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				var h healthShape
-				if json.Unmarshal(raw, &h) == nil {
-					return h
-				}
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/health", port))
+	if err != nil {
+		return healthShape{}
 	}
-	t.Fatal("health endpoint did not answer within budget")
-	return healthShape{}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return healthShape{}
+	}
+	var h healthShape
+	if json.Unmarshal(raw, &h) != nil {
+		return healthShape{}
+	}
+	return h
+}
+
+// isProcAlive reports whether the process has not exited yet.
+func isProcAlive(p *os.Process) bool {
+	return p.Signal(syscall.Signal(0)) == nil
 }
 
 // safeBuffer is a mutex-guarded buffer (the process writes from several
