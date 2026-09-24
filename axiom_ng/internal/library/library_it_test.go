@@ -786,12 +786,13 @@ func TestConfirmRerouteWritesUserProvenance(t *testing.T) {
 	defer cleanup()
 	svc, prov, _, _ := newFakeService(t, st)
 
-	// Two same-DOI twins make the confirmed bibliography dedup-ambiguous.
+	// Two same-DOI twins make the confirmed bibliography dedup-ambiguous
+	// (the identifier matrix matches regardless of the twin titles).
 	y := 2021
-	for i, t2 := range []string{"Reroute Twin A", "Reroute Twin B"} {
+	for i := range 2 {
 		_, _ = prov.EnsureRecord(context.Background(), RecordDraft{
 			ExternalKey: fmt.Sprintf("seed-rr-%d", i),
-			RecordType:  "journalArticle", Title: t2,
+			RecordType:  "journalArticle", Title: "Network Effects in Platforms",
 			Authors: []Creator{{LastName: "Twin", CreatorType: "author"}},
 			Year:    &y,
 			DOI:     "10.5555/reroute-doi",
@@ -886,6 +887,99 @@ func TestConfirmCrashWindowHeals(t *testing.T) {
 	}
 	if final.Status != library.ImportCommitted {
 		t.Fatalf("healed confirm: status %s (%+v)", final.Status, final.Failure)
+	}
+}
+
+// TestConfirmTypeConflictCommitsChosenType — round-2 review regression:
+// a confirmed type-conflict candidate must commit the CHOSEN record type
+// (the provider record AND the post-confirm dedup scan both read
+// det.RecordType, which the overlay alone no longer updated).
+func TestConfirmTypeConflictCommitsChosenType(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, _, _, _ := newFakeService(t, st)
+
+	req := seedReq("type-1")
+	req.RecordType = "report"
+	req.MetadataHints.Title = StandardLadderFixtures.TypeConflictTitle
+	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Typed Work intro")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != library.ImportAwaitingConfirm {
+		t.Fatalf("status = %s, want awaiting_confirmation", op.Status)
+	}
+	confirmed, err := svc.ConfirmImport(context.Background(), op.ImportID,
+		op.Decisions[0].DecisionID, op.Decisions[0].Candidates[0].CandidateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmed.Status != library.ImportCommitted {
+		t.Fatalf("confirm: %s (%+v)", confirmed.Status, confirmed.Failure)
+	}
+	// The provider record carries the CHOSEN type, not the request type.
+	rec, err := svc.catalogRecord(context.Background(), confirmed.Result.RecordID)
+	if err != nil || rec == nil {
+		t.Fatalf("catalog lookup of %s: %v", confirmed.Result.RecordID, err)
+	}
+	if rec.RecordType != "conferencePaper" {
+		t.Fatalf("provider record type = %q, want the chosen candidate's conferencePaper", rec.RecordType)
+	}
+}
+
+// TestConfirmDedupUsesChosenType — the post-confirm dedup scan matches
+// with the CHOSEN type: twins of the candidate's type are recognized
+// (decision, no third record) instead of silently committed beside them.
+func TestConfirmDedupUsesChosenType(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, prov, _, _ := newFakeService(t, st)
+
+	// Two twins typed like the candidate (journalArticle, matching
+	// title/author/year — no DOI, so only the type+metadata matrix hits).
+	y := 2019
+	for i := range 2 {
+		_, _ = prov.EnsureRecord(context.Background(), RecordDraft{
+			ExternalKey: fmt.Sprintf("seed-tt-%d", i),
+			RecordType:  "journalArticle", Title: "Network Effects in Platforms",
+			Authors: []Creator{{LastName: "First", CreatorType: "author"}},
+			Year:    &y,
+		})
+	}
+
+	req := seedReq("type-2")
+	req.RecordType = "book"
+	req.MetadataHints.Title = StandardLadderFixtures.AmbiguousTitle
+	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Network Effects intro")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Status != library.ImportAwaitingConfirm {
+		t.Fatalf("status = %s, want awaiting_confirmation", op.Status)
+	}
+	confirmed, err := svc.ConfirmImport(context.Background(), op.ImportID,
+		op.Decisions[0].DecisionID, op.Decisions[0].Candidates[0].CandidateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The chosen type (journalArticle) now matches the twins → the
+	// duplicate decision (NOT a silent third record).
+	if confirmed.Status != library.ImportAwaitingConfirm || len(confirmed.Decisions) != 1 {
+		t.Fatalf("post-confirm dedup missed the chosen-type twins: %s %+v", confirmed.Status, confirmed.Decisions)
+	}
+	if recs, _, _, _ := prov.Snapshot(); recs != 2 {
+		t.Fatalf("records = %d, want exactly the 2 twins (no silent third)", recs)
+	}
+	final, err := svc.ConfirmImport(context.Background(), op.ImportID,
+		confirmed.Decisions[0].DecisionID, confirmed.Decisions[0].Candidates[0].CandidateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != library.ImportCommitted {
+		t.Fatalf("duplicate confirm: %s (%+v)", final.Status, final.Failure)
+	}
+	if recs, atts, _, _ := prov.Snapshot(); recs != 2 || atts != 1 {
+		t.Fatalf("final counts %d/%d, want 2 records (linked) / 1 rendition added", recs, atts)
 	}
 }
 

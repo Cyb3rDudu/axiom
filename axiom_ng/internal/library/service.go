@@ -448,7 +448,13 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 		return library.ImportOperation{}, err
 	}
 	if (dec == nil || det.Pending == nil) && resolveStep.State == "done" {
-		if err := s.store.AppendEvent(ctx, row.ImportID, "decision_resolved", map[string]any{"recovered": true}); err != nil {
+		healDetail := map[string]any{"recovered": true}
+		if id := s.lastOfferedDecisionID(ctx, row.ImportID); id != "" {
+			// The per-decision reconciliation in openDecision keys on
+			// decision_id — the recovered resolution must name it.
+			healDetail["decision_id"] = id
+		}
+		if err := s.store.AppendEvent(ctx, row.ImportID, "decision_resolved", healDetail); err != nil {
 			return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "event append")
 		}
 		if err := s.enterFrom(ctx, row.ImportID, library.ImportAwaitingConfirm, library.ImportEnsuringCollections); err != nil {
@@ -493,6 +499,12 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 		// candidate does not carry survives (its document/applied
 		// provenance row stays truthful).
 		overlayFields(&det.Merged, chosen.Fields)
+		// The chosen type reaches the DETAIL level too: runCreateRecord and
+		// the dedup re-check read det.RecordType, not the merged field set
+		// (two separate persisted shapes — the F06 round-2 review caught the
+		// lost propagation: a confirmed type conflict committed the REQUEST
+		// type and the post-confirm scan matched against it).
+		det.RecordType = firstNonEmpty(det.Merged.RecordType, det.RecordType)
 		// The chosen fields become applied provenance AT CHOICE TIME —
 		// also on the reroute path below (a duplicate question that
 		// follows concerns the RECORD, not the fields; AppendProvenance
@@ -1289,6 +1301,27 @@ func (s *Service) offerDecision(ctx context.Context, importID string, d *Decisio
 		return ErrHaltSimulated
 	}
 	return nil
+}
+
+// lastOfferedDecisionID returns the most recent decision_offered id (for
+// the crash-window heal's reconciliation event).
+func (s *Service) lastOfferedDecisionID(ctx context.Context, importID string) string {
+	events, err := s.store.ListEvents(ctx, importID)
+	if err != nil {
+		return ""
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Kind != "decision_offered" {
+			continue
+		}
+		var d struct {
+			DecisionID string `json:"decision_id"`
+		}
+		if json.Unmarshal(events[i].Detail, &d) == nil {
+			return d.DecisionID
+		}
+	}
+	return ""
 }
 
 // openDecision reconstructs the open decision from the event log.
