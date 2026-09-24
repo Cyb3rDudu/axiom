@@ -144,3 +144,46 @@ func TestValidateEnvFlagsSilentFallbacks(t *testing.T) {
 		}
 	}
 }
+
+// Credential-query sonde (review round 3): pgx honors ?password= (and
+// sslpassword/passfile) as REAL credentials — they must never survive any
+// redaction surface, structured (sanitizeDSN) or free-text
+// (RedactQueryCredentials, the doctor error paths).
+func TestQueryCredentialsRedacted(t *testing.T) {
+	dsn := "postgres://u@127.0.0.1:1/db?password=SUPERSECRET_XYZ_42&sslmode=disable"
+	got := sanitizeDSN(dsn)
+	if strings.Contains(got, "SUPERSECRET_XYZ_42") {
+		t.Fatalf("query password survived sanitizeDSN: %s", got)
+	}
+	if !strings.Contains(got, "sslmode=disable") || !strings.Contains(got, "127.0.0.1:1/db") {
+		t.Fatalf("sanitizer removed non-credential parts: %s", got)
+	}
+	if g := RedactQueryCredentials("failed to parse `postgres://u:p@h/db?password=QUERY&x=1`"); strings.Contains(g, "QUERY") {
+		t.Fatalf("free-text redaction leaked: %s", g)
+	}
+	// sslpassword and passfile are credentials too.
+	if g := RedactQueryCredentials("?sslpassword=abc&passfile=/p&other=v"); strings.Contains(g, "abc") || strings.Contains(g, "/p&") {
+		t.Fatalf("sibling credential keys leaked: %s", g)
+	}
+}
+
+// URL-valued rows never carry an inline userinfo (review round 3): a
+// user:pass@ typed into a non-secret URL row is still a credential.
+func TestURLRowsDropUserinfo(t *testing.T) {
+	t.Setenv("AXIOM_OPENSEARCH_URL", "http://admin:osPW@127.0.0.1:9200")
+	t.Setenv("AXIOM_QUERY_RUNNER_URL", "http://k:qpw@127.0.0.1:8112")
+	for _, e := range Effective(Load()) {
+		switch v := e.Value.(type) {
+		case string:
+			if strings.Contains(v, ":ospw@") || strings.Contains(v, "osPW@") || strings.Contains(v, "qpw@") {
+				t.Fatalf("userinfo survived in %s: %v", e.Env, e.Value)
+			}
+		case []string:
+			for _, u := range v {
+				if strings.Contains(strings.ToLower(u), "qpw@") {
+					t.Fatalf("userinfo survived in %s: %v", e.Env, e.Value)
+				}
+			}
+		}
+	}
+}

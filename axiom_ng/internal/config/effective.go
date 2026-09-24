@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -110,6 +111,18 @@ func Effective(cfg Config) []Entry {
 			// durations render as their Go spelling ("30s"), not raw
 			// nanoseconds — operator-facing output must stay readable.
 			value = f.Interface().(time.Duration).String()
+		case f.Kind() == reflect.String:
+			// URL-valued rows are non-secret by table decision, but an inline
+			// userinfo (scheme://user:pass@host) is a credential the operator
+			// typed — values never leave with one attached.
+			value = stripURLUserinfo(f.String())
+		case f.Kind() == reflect.Slice && f.Type().Elem().Kind() == reflect.String:
+			urls, _ := f.Interface().([]string)
+			redacted := make([]string, len(urls))
+			for i, u := range urls {
+				redacted[i] = stripURLUserinfo(u)
+			}
+			value = redacted
 		default:
 			value = f.Interface()
 		}
@@ -118,10 +131,23 @@ func Effective(cfg Config) []Entry {
 	return out
 }
 
+// credentialQueryKeys are the query parameters pgx honors as credentials
+// (pgconn.ParseConfig): a password smuggled as ?password=… is a REAL
+// credential, not a dead string — it must never survive redaction.
+var credentialQueryRe = regexp.MustCompile(`(?i)(password|sslpassword|passfile)=[^&\s]*`)
+
+// RedactQueryCredentials removes credential query-parameter VALUES from
+// an arbitrary string (error messages, raw DSNs). One mechanism backs
+// both the structured sanitizer and the free-text error paths (doctor).
+func RedactQueryCredentials(s string) string {
+	return credentialQueryRe.ReplaceAllString(s, "$1="+RedactedValue)
+}
+
 // sanitizeDSN strips the credential from a Postgres DSN, keeping scheme,
-// host, port, database and params — the whole userinfo is dropped.
-// Unparseable values fall back to the redaction placeholder (never echo
-// an unknown credential shape).
+// host, port, database and params — the whole userinfo is dropped AND
+// credential query values (password, sslpassword, passfile — pgx honors
+// all three) are redacted. Unparseable values fall back to the redaction
+// placeholder (never echo an unknown credential shape).
 func sanitizeDSN(dsn string) string {
 	if dsn == "" {
 		return ""
@@ -129,6 +155,22 @@ func sanitizeDSN(dsn string) string {
 	u, err := url.Parse(dsn)
 	if err != nil || u.Scheme == "" {
 		return RedactedValue
+	}
+	u.User = nil
+	u.RawQuery = RedactQueryCredentials(u.RawQuery)
+	return u.String()
+}
+
+// stripURLUserinfo removes an inline userinfo (scheme://user:pass@…) from
+// a URL-valued config row. Non-URL strings parse without scheme or fail
+// outright and pass through unchanged.
+func stripURLUserinfo(s string) string {
+	if s == "" {
+		return s
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme == "" || u.User == nil {
+		return s
 	}
 	u.User = nil
 	return u.String()
