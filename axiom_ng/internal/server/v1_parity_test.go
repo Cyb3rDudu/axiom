@@ -1,15 +1,22 @@
 // v1_parity_test.go — F05 #299 parity witness: every canonical /api/v1
 // route and its unversioned compat sister deliver IDENTICAL responses for
-// identical requests (status, content type, body bytes). The handlers are
-// literally the same closures registered twice; this test guards against a
-// future edit that diverges them (a separate handler, a route-scoped
-// middleware, a rewrite of one side) — the strangler zug's core promise is
-// that the versioned edge NEVER drifts from the compat edge.
+// identical requests. Compared dimensions: status, Content-Type, body
+// bytes (per-request headers like X-Request-Id are deliberately NOT
+// compared — the middleware stack is shared process-wide, not a route
+// property). The handlers are literally the same closures registered
+// twice; this test guards against a future edit that diverges them (a
+// separate handler, a route-scoped middleware, a rewrite of one side) —
+// the strangler zug's core promise is that the versioned edge NEVER
+// drifts from the compat edge. Note on case coverage: against the FAKE
+// services, "blank query" is a 200-shape comparison (validation lives in
+// the real search service); the service-error → 503 class gets its own
+// dedicated pair below.
 package server
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -93,6 +100,9 @@ func parityOnce(h http.Handler, method, v1Path, compatPath string, body []byte) 
 
 const uuidOK = "0b8f6c6e-6d4a-4a1f-9c6d-1e2f3a4b5c6d"
 
+// errOops is the fake's plain service error (drives the 503 default path).
+var errOops = errors.New("fake service failure")
+
 func TestV1Parity(t *testing.T) {
 	h := newParityServer(paritySearch{}, parityPassage{}).Handler()
 	searchBody := []byte(`{"query":"test","top_n":5}`)
@@ -107,7 +117,13 @@ func TestV1Parity(t *testing.T) {
 	check("health", h, http.MethodGet, "/api/v1/health", "/api/health", nil)
 	check("search 200", h, http.MethodPost, "/api/v1/search", "/api/search", searchBody)
 	check("search 400 bad body", h, http.MethodPost, "/api/v1/search", "/api/search", []byte(`{nope`))
-	check("search 400 blank query", h, http.MethodPost, "/api/v1/search", "/api/search", []byte(`{"query":"  "}`))
+	check("search 200 blank-query shape (fake does not validate)", h, http.MethodPost, "/api/v1/search", "/api/search", []byte(`{"query":"  "}`))
+
+	// Service-error class: a failing search service must degrade on BOTH
+	// edges alike (the fake returns a plain error → the handler's 503
+	// default branch).
+	h503svc := newParityServer(paritySearch{err: errOops}, parityPassage{}).Handler()
+	check("search 503 service error", h503svc, http.MethodPost, "/api/v1/search", "/api/search", []byte(`{"query":"x"}`))
 	check("passage 200", h, http.MethodGet, "/api/v1/passage/"+uuidOK, "/api/passage/"+uuidOK, nil)
 	check("passage 400 non-uuid", h, http.MethodGet, "/api/v1/passage/not-a-uuid", "/api/passage/not-a-uuid", nil)
 

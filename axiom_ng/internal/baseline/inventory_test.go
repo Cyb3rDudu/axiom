@@ -23,11 +23,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/composition"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
 	"github.com/go-chi/chi/v5"
 )
+
+// compositionRoleProbeCfg derives the full role set for the baseline
+// scaffolding: a db-wired config with the dispatcher opt-in selects every
+// composition role — the serve-all shape without hand-copying the list.
+var compositionRoleProbeCfg = config.Config{DatabaseURL: "baseline-roles-probe", DispatcherEnabled: true}
 
 // responseClass annotates a route pattern with its response shape. Routes
 // are derived from the router; this map carries the one human-authored
@@ -74,11 +81,13 @@ func buildFullServer() *server.Server {
 	srv.SetConsolidateService(noopConsolidator{})
 	// F05 #299: the readiness field is part of the frozen identity — the
 	// scaffolding wires the composition-root provider with the full-stack
-	// shape (every role in startOrder ready), the same shape a
-	// dispatcher-enabled `axiom serve all` serves once its signals fired.
+	// shape, the same shape a dispatcher-enabled `axiom serve all` serves
+	// once its signals fired. The role set is DERIVED from
+	// composition.RolesFromConfig (not hand-copied) so a new role turns
+	// canonical_identity.json red instead of silently missing here.
 	full := map[string]string{}
-	for _, role := range []string{"store", "events", "sync", "repair", "search", "ingest", "dispatcher", "api"} {
-		full[role] = "ready"
+	for _, role := range composition.RolesFromConfig(compositionRoleProbeCfg) {
+		full[string(role)] = "ready"
 	}
 	srv.SetReadinessState(func() map[string]string {
 		out := make(map[string]string, len(full))
