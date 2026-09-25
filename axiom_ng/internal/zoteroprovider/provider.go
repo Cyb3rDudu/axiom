@@ -770,18 +770,55 @@ func (p *Provider) readbackRendition(ctx context.Context, key string, d library.
 			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 				"rendition readback: contentType "+it.ContentType+" != "+d.MediaType)
 		}
-		// File retrievable + digest/size prove (bytes must round-trip).
-		got, ferr := p.write.GetFile(key)
+		// File retrievable + digest/size prove. The local API redirects the
+		// /file GET to the local storage path — the envelope's enclosure
+		// link IS that path (same host as Zotero, the established premise);
+		// read the bytes locally and compare OUR digest (stronger than the
+		// stored md5).
+		eraw, _, eerr := p.write.GetItemEnvelope(key)
+		if eerr != nil {
+			return mapWriteErr(eerr, key, "rendition file readback")
+		}
+		local := enclosurePath(eraw)
+		if local == "" {
+			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
+				"rendition readback: attachment "+key+" carries no local enclosure path")
+		}
+		got, ferr := os.ReadFile(local)
 		if ferr != nil {
-			return mapWriteErr(ferr, key, "rendition file readback")
+			return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassUnavailable, ferr, "rendition readback file "+local)
 		}
 		sum := sha256.Sum256(got)
 		if hex.EncodeToString(sum[:]) != d.ContentHash {
 			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
-				"rendition readback: served file digest mismatch for "+key)
+				"rendition readback: stored file digest mismatch for "+key+" ("+local+")")
 		}
 	}
 	return nil
+}
+
+// enclosurePath extracts links.enclosure.href from a raw item envelope,
+// maps file:/// URLs onto the local path, and percent-DECODES it (the
+// href arrives URL-encoded; spaces are %20). "" when absent.
+func enclosurePath(raw []byte) string {
+	var env struct {
+		Links struct {
+			Enclosure struct {
+				Href string `json:"href"`
+			} `json:"enclosure"`
+		} `json:"links"`
+	}
+	if json.Unmarshal(raw, &env) != nil {
+		return ""
+	}
+	href := env.Links.Enclosure.Href
+	if strings.HasPrefix(href, "file://") {
+		href = strings.TrimPrefix(href, "file://")
+	}
+	if dec, err := url.PathUnescape(href); err == nil {
+		return dec
+	}
+	return href
 }
 
 func (p *Provider) findTaggedAttachment(ctx context.Context, tag, parentKey string) (string, error) {

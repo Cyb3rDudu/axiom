@@ -122,6 +122,7 @@ type fakeLibrary struct {
 	mu          sync.Mutex
 	t           *testing.T
 	srv         *httptest.Server
+	storageDir  string
 	items       map[string]*zotItem
 	itemOrder   []string
 	collections map[string]*zotCollection
@@ -139,6 +140,7 @@ func newFakeLibrary(t *testing.T) *fakeLibrary {
 	t.Helper()
 	f := &fakeLibrary{
 		t:           t,
+		storageDir:  t.TempDir(),
 		items:       map[string]*zotItem{},
 		collections: map[string]*zotCollection{},
 		files:       map[string][]byte{},
@@ -198,7 +200,7 @@ func (f *fakeLibrary) route(w http.ResponseWriter, r *http.Request) {
 				start--
 				continue
 			}
-			out = append(out, envelope(it))
+			out = append(out, f.envelope(it))
 			if len(out) >= limit {
 				break
 			}
@@ -214,7 +216,7 @@ func (f *fakeLibrary) route(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Last-Modified-Version", strconv.FormatInt(it.Version, 10))
-		writeJSON(w, envelope(it))
+		writeJSON(w, f.envelope(it))
 
 	// --- item update (versioned)
 	case strings.HasPrefix(path, "/api/users/0/items/") && r.Method == http.MethodPut:
@@ -282,6 +284,7 @@ func (f *fakeLibrary) route(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(body, "upload=") {
 			upKey := strings.TrimPrefix(body, "upload=")
 			f.files[k] = f.pending[upKey]
+			_ = os.WriteFile(filepath.Join(f.storageDir, k), f.pending[upKey], 0o644)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -395,8 +398,17 @@ func itemHasTag(it *zotItem, tag string) bool {
 	return false
 }
 
-func envelope(it *zotItem) map[string]any {
-	return map[string]any{"key": it.Key, "version": it.Version, "data": it}
+// envelope renders the full item envelope. Attachments carry the local-API
+// enclosure shape: an href pointing at the fake's REAL storage file (the
+// file readback dereferences it — the /file GET redirects there in the
+// local API).
+func (f *fakeLibrary) envelope(it *zotItem) map[string]any {
+	href := ""
+	if it.ItemType == "attachment" {
+		href = "file://" + filepath.Join(f.storageDir, it.Key)
+	}
+	return map[string]any{"key": it.Key, "version": it.Version, "data": it,
+		"links": map[string]any{"enclosure": map[string]any{"href": href}}}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

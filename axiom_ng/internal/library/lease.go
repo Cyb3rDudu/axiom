@@ -115,7 +115,13 @@ type WriteAuditRow struct {
 }
 
 // AppendWriteAudit records one mutation AFTER its readback verified.
+// A nil readback detail persists as '{}' (the column is NOT NULL — a
+// mutation without readback evidence would violate the audit contract
+// anyway, so the empty object is the honest floor).
 func (s *Store) AppendWriteAudit(ctx context.Context, r WriteAuditRow) error {
+	if r.Readback == nil {
+		r.Readback = map[string]any{}
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO library_write_audit (scope, operation, anchor, provider_ref, outcome, readback, at)
 		VALUES ($1,$2,$3,$4,$5,$6,now())`,

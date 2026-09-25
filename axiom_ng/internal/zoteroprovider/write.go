@@ -180,6 +180,31 @@ func (w *WriteClient) PostCollections(body []byte) ([]byte, error) {
 	return raw, err
 }
 
+// DeleteCollection removes a collection under the version guard (the
+// IT cleanup path; version-guarded like every mutation).
+func (w *WriteClient) DeleteCollection(key string) error {
+	_, hdr, err := w.do(http.MethodGet, "/api/users/0/collections/"+key, nil, nil)
+	if err != nil {
+		return err
+	}
+	ver := hdr.Get("Last-Modified-Version")
+	if ver == "" {
+		return fmt.Errorf("collection %s: keine Last-Modified-Version", key)
+	}
+	_, _, err = w.do(http.MethodDelete, "/api/users/0/collections/"+key,
+		map[string]string{"If-Unmodified-Since-Version": ver}, nil)
+	return err
+}
+
+// GetItemEnvelope fetches the FULL item envelope (data + links — the
+// enclosure link carries the local storage path, the file readback's
+// source: the local API answers GET /items/<key>/file with a redirect to
+// a file:// URL, not with bytes).
+func (w *WriteClient) GetItemEnvelope(key string) (raw []byte, version string, err error) {
+	raw, hdr, err := w.do(http.MethodGet, "/api/users/0/items/"+key, nil, nil)
+	return raw, hdr.Get("Last-Modified-Version"), err
+}
+
 // GetFile downloads an attachment's stored bytes (readback: the file must
 // be retrievable and match the uploaded digest/size).
 func (w *WriteClient) GetFile(key string) ([]byte, error) {
@@ -265,20 +290,21 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename, contentType 
 	// Phase 1 — authorize the upload (form-urlencoded; mtime in MILLISECONDS).
 	// md5 is PLAIN HEX here AND nowhere else is a digest sent — one encoding,
 	// no base64 variant.
-	// TODO(#184): live-probe digest acceptance (hex vs base64) once more on a
-	// Zotero 10.0-beta point release; contentType is NOT in the probed fact
-	// list above and may be ignored or rejected by the local API.
+	// urlSearchParamsEncode — NOT url.Values.Encode(): the Zotero local API
+	// parses the form JavaScript-style (URLSearchParams), where '+' stays a
+	// literal '+' and only %XX sequences decode. Schema filenames carry
+	// spaces (umlauts, &, % too) — the classic '+' encoding stored them
+	// verbatim ("Habermas+-+2021", the Springer-style stems #291 documented)
+	// until the F07 readback caught it. %20-for-space is correct under BOTH
+	// form parsers.
 	md5hex := fmt.Sprintf("%x", md5.Sum(pdf))
-	// url.Values.Encode() — schema filenames carry spaces, umlauts, &, %, +
-	// ({Autor} - {Jahr} - {Titel}); hand-joined forms silently truncate at
-	// '&' and corrupt at '+'/'%' (review C3, empirically demonstrated).
-	form := strings.NewReader((url.Values{
+	form := strings.NewReader(urlSearchParamsEncode(url.Values{
 		"md5":         {md5hex},
 		"filename":    {filename},
 		"filesize":    {strconv.Itoa(len(pdf))},
 		"mtime":       {strconv.FormatInt(time.Now().UnixMilli(), 10)},
 		"contentType": {contentType},
-	}).Encode())
+	}))
 	raw, _, err = w.do(http.MethodPost, "/api/users/0/items/"+attKey+"/file",
 		map[string]string{
 			"Content-Type":  "application/x-www-form-urlencoded",
@@ -361,6 +387,14 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename, contentType 
 		return cleanup(fmt.Errorf("register upload: %w", err))
 	}
 	return attKey, nil
+}
+
+// urlSearchParamsEncode encodes a form the JavaScript-URLSearchParams
+// way: percent-escape everything QueryEscape would, then repair the
+// space handling ('+' → '%20' — URLSearchParams never decodes '+' as a
+// space, classic form parsing decodes both; %20 is safe under both).
+func urlSearchParamsEncode(v url.Values) string {
+	return strings.ReplaceAll(v.Encode(), "+", "%20")
 }
 
 // sameHost reports whether two URL strings share scheme-insensitive host:port.
