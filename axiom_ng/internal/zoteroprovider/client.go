@@ -1,12 +1,14 @@
 package zoteroprovider
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -92,6 +94,44 @@ func (a *LocalAPI) ServerID() string {
 	id := resp.Header.Get("Zotero-Server-ID")
 	a.serverID = id
 	return id
+}
+
+// getItems is the context-aware single-pass variant the adapter's tag
+// searches use: one page set, every page followed, raw envelopes back.
+func (a *LocalAPI) getItems(ctx context.Context, query url.Values) ([]json.RawMessage, error) {
+	if query == nil {
+		query = url.Values{}
+	}
+	query.Set("format", "json")
+	query.Set("limit", "100")
+	var all []json.RawMessage
+	start := 0
+	for {
+		q := cloneValues(query)
+		q.Set("start", strconv.Itoa(start))
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, a.url(a.libraryID+"/items", q), nil)
+		req.Header.Set("Zotero-API-Version", "3")
+		resp, err := a.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("zotero request %s: %w", a.libraryID+"/items", err)
+		}
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			resp.Body.Close()
+			return nil, &StatusError{Status: resp.StatusCode, Body: string(body)}
+		}
+		var batch []json.RawMessage
+		decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&batch)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return nil, fmt.Errorf("zotero items decode: %w", decodeErr)
+		}
+		all = append(all, batch...)
+		if len(batch) < 100 {
+			return all, nil
+		}
+		start += len(batch)
+	}
 }
 
 // getItemsRaw paginates over /items and returns each item as its full raw JSON

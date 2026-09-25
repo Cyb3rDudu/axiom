@@ -67,7 +67,9 @@ type CatalogReader interface {
 // RecordDraft is the record to ensure at the provider. ExternalKey is the
 // dedup anchor: the provider must return the SAME provider id for the
 // same external key (crash between provider write and step bookkeeping
-// must not double-create — the #293 lesson).
+// must not double-create — the #293 lesson). URL/AccessDate carry the
+// web-intake provenance (webpage records keep their original URL and
+// access date — F07 #301; empty for non-web intake).
 type RecordDraft struct {
 	ExternalKey string // import-stable (derived from idempotency key + payload hash)
 	RecordType  string
@@ -78,6 +80,8 @@ type RecordDraft struct {
 	Language    string
 	DOI         string
 	ISBN        string
+	URL         string
+	AccessDate  string // ISO date or "" — the webpage's access/capture time
 }
 
 // RenditionDraft is the rendition file to ensure under a parent record.

@@ -136,6 +136,57 @@ func (w *WriteClient) ItemVersion(key string) (string, error) {
 	return v, nil
 }
 
+// GetItem fetches one item's data JSON plus its current version (the
+// adapter's readback primitive; absent items surface as *StatusError 404).
+func (w *WriteClient) GetItem(key string) (data []byte, version string, err error) {
+	raw, hdr, err := w.do(http.MethodGet, "/api/users/0/items/"+key, nil, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var env struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil || len(env.Data) == 0 {
+		return nil, "", fmt.Errorf("item %s: undecodable envelope %.200s", key, raw)
+	}
+	return env.Data, hdr.Get("Last-Modified-Version"), nil
+}
+
+// PutItem replaces an item's data under the optimistic-concurrency guard
+// (If-Unmodified-Since-Version): a 412 means a concurrent writer won —
+// IsVersionConflict detects it, the adapter maps it to a typed retryable
+// error.
+func (w *WriteClient) PutItem(key string, itemJSON []byte, version string) error {
+	_, _, err := w.do(http.MethodPut, "/api/users/0/items/"+key,
+		map[string]string{
+			"Content-Type":                "application/json",
+			"If-Unmodified-Since-Version": version,
+		}, bytes.NewReader(itemJSON))
+	return err
+}
+
+// GetCollection fetches one collection's data (readback of a created
+// collection segment).
+func (w *WriteClient) GetCollection(key string) ([]byte, error) {
+	raw, _, err := w.do(http.MethodGet, "/api/users/0/collections/"+key, nil, nil)
+	return raw, err
+}
+
+// PostCollections creates collections (parent-first — the caller resolves
+// each segment's parent before creating the child).
+func (w *WriteClient) PostCollections(body []byte) ([]byte, error) {
+	raw, _, err := w.do(http.MethodPost, "/api/users/0/collections",
+		map[string]string{"Content-Type": "application/json"}, bytes.NewReader(body))
+	return raw, err
+}
+
+// GetFile downloads an attachment's stored bytes (readback: the file must
+// be retrievable and match the uploaded digest/size).
+func (w *WriteClient) GetFile(key string) ([]byte, error) {
+	raw, _, err := w.do(http.MethodGet, "/api/users/0/items/"+key+"/file", nil, nil)
+	return raw, err
+}
+
 // Mutation 1: delete an attachment item (the original was quarantined by
 // the caller BEFORE this call — quarantine-first is a design nail).
 func (w *WriteClient) DeleteAttachmentItem(key string) error {
@@ -154,8 +205,10 @@ func (w *WriteClient) DeleteAttachmentItem(key string) error {
 // such mutation exists. contentType (#220) is the attachment's MIME type —
 // "" defaults to application/pdf (the pre-#220 shape); EPUB repairs pass
 // application/epub+zip so the item metadata matches the uploaded artifact.
+// extraTags ride on the item (the Library adapter stamps its idempotency
+// anchors there, e.g. axiom-sha256:<hash> — F07 #301).
 // Returns the new attachment item key.
-func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename, contentType string, pdf []byte) (string, error) {
+func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename, contentType string, pdf []byte, extraTags ...string) (string, error) {
 	if contentType == "" {
 		contentType = "application/pdf"
 	}
@@ -172,10 +225,14 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename, contentType 
 		Filename    string              `json:"filename"`
 		Tags        []map[string]string `json:"tags"`
 	}
+	tags := []map[string]string{{"tag": "axiom-repair"}}
+	for _, t := range extraTags {
+		tags = append(tags, map[string]string{"tag": t})
+	}
 	item := attachmentItem{
 		ItemType: "attachment", LinkMode: "imported_file", ParentItem: parentKey,
 		Title: filename, ContentType: contentType, Filename: filename,
-		Tags: []map[string]string{{"tag": "axiom-repair"}},
+		Tags: tags,
 	}
 	itemJSON, _ := json.Marshal([]attachmentItem{item})
 	raw, _, err := w.do(http.MethodPost, "/api/users/0/items",

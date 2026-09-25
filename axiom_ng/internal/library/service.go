@@ -1072,19 +1072,7 @@ func (s *Service) runCreateRecord(ctx context.Context, row ImportRow) (bool, err
 		if s.ports.Records == nil {
 			return false, s.ports.unavailable("RecordWriter")
 		}
-		id, err := s.ports.Records.EnsureRecord(ctx, RecordDraft{
-			// Import-stable external key: same key+payload can never
-			// create a second record even across a lost-ACK crash.
-			ExternalKey: "imp-" + row.IdempotencyKey + "-" + row.PayloadHash[:12],
-			RecordType:  det.RecordType,
-			Title:       det.Merged.Title,
-			Authors:     authorsFromMerged(det.Merged),
-			Year:        det.Merged.Year,
-			Publisher:   det.Merged.Publisher,
-			Language:    det.Merged.Language,
-			DOI:         det.Merged.DOI,
-			ISBN:        det.Merged.ISBN,
-		})
+		id, err := s.ports.Records.EnsureRecord(ctx, s.recordDraft(row, det))
 		if err != nil {
 			return false, err
 		}
@@ -1272,6 +1260,35 @@ func (s *Service) runVerify(ctx context.Context, row ImportRow) (bool, error) {
 
 // ---------------------------------------------------------------------------
 // helpers
+
+// recordDraft builds the provider draft from the merged fields. The
+// external key is import-stable (same key+payload can never create a
+// second record even across a lost-ACK crash — the #293 lesson). Web
+// provenance rides along: a webpage record keeps its original URL and
+// access time (#301 — never retyped to book/article).
+func (s *Service) recordDraft(row ImportRow, det resolveDetail) RecordDraft {
+	draft := RecordDraft{
+		ExternalKey: "imp-" + row.IdempotencyKey + "-" + row.PayloadHash[:12],
+		RecordType:  det.RecordType,
+		Title:       det.Merged.Title,
+		Authors:     authorsFromMerged(det.Merged),
+		Year:        det.Merged.Year,
+		Publisher:   det.Merged.Publisher,
+		Language:    det.Merged.Language,
+		DOI:         det.Merged.DOI,
+		ISBN:        det.Merged.ISBN,
+	}
+	var req library.ImportRequest
+	if json.Unmarshal(row.RequestJSON, &req) == nil && req.Source != nil {
+		draft.URL = req.Source.OriginalURL
+		if req.Source.AccessedAt != nil {
+			draft.AccessDate = req.Source.AccessedAt.UTC().Format(time.RFC3339)
+		} else if req.Source.CapturedAt != nil {
+			draft.AccessDate = req.Source.CapturedAt.UTC().Format(time.RFC3339)
+		}
+	}
+	return draft
+}
 
 func (s *Service) loadDocFields(ctx context.Context, importID string) (ResolvedFields, error) {
 	step, err := s.store.GetStep(ctx, importID, stepInspect)
