@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // ManualStep is one completed custody action of one run (audit-equivalent).
@@ -113,7 +113,7 @@ func saveManualRecord(root string, rec *ManualRecord) error {
 // quarantine and real Zotero mutations (the server's authorized write
 // client), file-based record instead of repair_cases bookkeeping.
 type ManualDeps struct {
-	Write  *zotero.WriteClient // nil in tests -> mutations must be injected differently; production always wires it
+	Write  *zoteroprovider.WriteClient // nil in tests -> mutations must be injected differently; production always wires it
 	Root   string              // quarantine root
 	Record *ManualRecord
 	RunID  string
@@ -159,7 +159,7 @@ func (d *ManualDeps) Quarantine(root, zoteroKey, sourcePath string) (string, err
 // re-run completes): an aborted first run may already have deleted the item.
 func (d *ManualDeps) DeleteAttachment(key string) error {
 	err := d.Write.DeleteAttachmentItem(key)
-	var se *zotero.StatusError
+	var se *zoteroprovider.StatusError
 	if errors.As(err, &se) && se.Status == http.StatusNotFound {
 		return nil
 	}

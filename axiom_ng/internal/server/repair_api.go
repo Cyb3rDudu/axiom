@@ -21,12 +21,12 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // SetRepairAPI wires the fix-service surface. writeBaseURL is the Zotero
 // LOCAL server root (http://localhost:23119 — no /api suffix).
-func (s *Server) SetRepairAPI(r *repo.Repo, write *zotero.WriteClient, quarantineRoot string) {
+func (s *Server) SetRepairAPI(r *repo.Repo, write *zoteroprovider.WriteClient, quarantineRoot string) {
 	s.repairRepo = r
 	s.zoteroWrite = write
 	s.quarantineRoot = quarantineRoot
@@ -38,7 +38,7 @@ func (s *Server) SetRepairAPI(r *repo.Repo, write *zotero.WriteClient, quarantin
 type repairQueueItem struct {
 	repo.RepairCase
 	Title         string           `json:"title"`
-	Creators      []zotero.Creator `json:"creators"`
+	Creators      []zoteroprovider.Creator `json:"creators"`
 	ExistingNames []string         `json:"existing_attachment_names,omitempty"` // #291 grown-pattern refs
 	Year          int              `json:"publication_year"`
 	AttachmentKey string           `json:"attachment_zotero_key"`
@@ -528,10 +528,10 @@ type repairApplyDeps interface {
 	AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error
 }
 
-// liveRepairDeps adapts *repo.Repo + *zotero.WriteClient to repairApplyDeps.
+// liveRepairDeps adapts *repo.Repo + *zoteroprovider.WriteClient to repairApplyDeps.
 type liveRepairDeps struct {
 	rep   *repo.Repo
-	write *zotero.WriteClient
+	write *zoteroprovider.WriteClient
 }
 
 func (d liveRepairDeps) Quarantine(root, key, src string) (string, error) {

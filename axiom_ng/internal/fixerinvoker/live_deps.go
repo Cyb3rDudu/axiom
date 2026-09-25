@@ -1,4 +1,4 @@
-// live_deps.go — the production ApplyDeps: *repo.Repo + *zotero.WriteClient
+// live_deps.go — the production ApplyDeps: *repo.Repo + *zoteroprovider.WriteClient
 // adapted to the custody-sequence interface. Mirror of the server's
 // liveRepairDeps; kept here so main.go can wire the invoker without
 // reaching into the server package.
@@ -9,16 +9,16 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 type liveDeps struct {
 	rep   *repo.Repo
-	write *zotero.WriteClient
+	write *zoteroprovider.WriteClient
 }
 
 // LiveApplyDeps wires the real implementations for repair.Apply.
-func LiveApplyDeps(rep *repo.Repo, write *zotero.WriteClient) repair.ApplyDeps {
+func LiveApplyDeps(rep *repo.Repo, write *zoteroprovider.WriteClient) repair.ApplyDeps {
 	return liveDeps{rep: rep, write: write}
 }
 

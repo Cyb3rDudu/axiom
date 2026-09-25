@@ -1,6 +1,6 @@
 // Retroactive metadata backfill (#159): re-derives title/year/publisher for
 // statute and report documents from the canonical raw_data using the SAME
-// zotero.Normalize mapping the sync projection uses. Delta syncs never pick
+// zoteroprovider.Normalize mapping the sync projection uses. Delta syncs never pick
 // these up (zotero_version unchanged), so this heals the 4 title-less statutes
 // (nameOfAct) and the phantom publisher-less reports (institution).
 //
@@ -16,7 +16,7 @@ import (
 	"os"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 func nullIfEmpty(s string) any {
@@ -76,7 +76,7 @@ func main() {
 
 	changed := 0
 	for _, it := range items {
-		nm := zotero.Normalize([]byte(it.raw))
+		nm := zoteroprovider.Normalize([]byte(it.raw))
 		if nm.ItemType != "statute" && nm.ItemType != "report" {
 			continue
 		}

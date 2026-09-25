@@ -10,20 +10,20 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 func containsStr(s, sub string) bool { return strings.Contains(s, sub) }
 
-// canonicalFake implements the zotero.Source canonical contract
+// canonicalFake implements the zoteroprovider.Source canonical contract
 // (ServerID, ListCanonicalItems, ListCanonicalCollections) for sync tests.
 // Returns a fixed set of items and collections for the canonical sync path.
 type canonicalFake struct {
 	serverID     string
 	baseURL      string
-	items        []zotero.CanonicalItem
-	deleteEvents []zotero.DeleteEvent
-	collections  []zotero.CanonicalCollection
+	items        []zoteroprovider.CanonicalItem
+	deleteEvents []zoteroprovider.DeleteEvent
+	collections  []zoteroprovider.CanonicalCollection
 	version      int64
 	// forceFull forces FullSnapshot=true regardless of the cursor, simulating
 	// the reconcile-by-absence fallback when a deletion feed (trash or
@@ -32,20 +32,20 @@ type canonicalFake struct {
 }
 
 func (c *canonicalFake) ServerID() string { return c.serverID }
-func (c *canonicalFake) ListCanonicalItems(since int64) (zotero.CanonicalBatch, error) {
+func (c *canonicalFake) ListCanonicalItems(since int64) (zoteroprovider.CanonicalBatch, error) {
 	full := since == 0 || c.forceFull
-	return zotero.CanonicalBatch{
+	return zoteroprovider.CanonicalBatch{
 		FullSnapshot: full,
 		Items:        c.items,
 		DeleteEvents: c.deleteEvents,
 		NewVersion:   c.version,
 	}, nil
 }
-func (c *canonicalFake) ListCanonicalCollections() ([]zotero.CanonicalCollection, error) {
+func (c *canonicalFake) ListCanonicalCollections() ([]zoteroprovider.CanonicalCollection, error) {
 	return c.collections, nil
 }
 
-func mkItemJSON(key, itemType, parent, title string, extra map[string]any) zotero.CanonicalItem {
+func mkItemJSON(key, itemType, parent, title string, extra map[string]any) zoteroprovider.CanonicalItem {
 	data := map[string]any{"key": key, "version": 1, "itemType": itemType}
 	if title != "" {
 		data["title"] = title
@@ -59,7 +59,7 @@ func mkItemJSON(key, itemType, parent, title string, extra map[string]any) zoter
 	env := map[string]any{"key": key, "version": 1, "data": data}
 	envB, _ := jsonMarshal(env)
 	dataB, _ := jsonMarshal(data)
-	it := zotero.CanonicalItem{Key: key, Version: 1, ItemType: itemType, ParentKey: parent, Envelope: envB, Data: dataB}
+	it := zoteroprovider.CanonicalItem{Key: key, Version: 1, ItemType: itemType, ParentKey: parent, Envelope: envB, Data: dataB}
 	return it
 }
 
@@ -92,7 +92,7 @@ func TestRunCanonicalLosslessAndNoAnnotateEnqueue(t *testing.T) {
 		baseURL:  newScriptedBase(),
 		version:  7,
 	}
-	src.items = []zotero.CanonicalItem{
+	src.items = []zoteroprovider.CanonicalItem{
 		mkItemJSON("B1", "book", "", "A Book", map[string]any{
 			"creators": []map[string]string{{"firstName": "Ada", "lastName": "Lovelace", "creatorType": "author"}},
 			"date":     "2020",
@@ -110,7 +110,7 @@ func TestRunCanonicalLosslessAndNoAnnotateEnqueue(t *testing.T) {
 		"data":  map[string]any{"key": "A1", "version": 1, "itemType": "attachment", "parentItem": "B1", "contentType": "application/pdf", "filename": "a.pdf"},
 	})
 	src.items[1].Envelope = envForA1
-	src.collections = []zotero.CanonicalCollection{
+	src.collections = []zoteroprovider.CanonicalCollection{
 		{Key: "C1", Name: "Top", ParentKey: "", Envelope: json.RawMessage(`{"key":"C1","data":{"key":"C1","name":"Top","parentCollection":false}}`)},
 	}
 
@@ -193,7 +193,7 @@ func TestCanonicalVersionGuard(t *testing.T) {
 		"data":  map[string]any{"key": "A1", "version": 1, "itemType": "attachment", "parentItem": "B1", "contentType": "application/pdf", "filename": "a.pdf"},
 	})
 	att.Envelope = attEnv
-	src.items = []zotero.CanonicalItem{itemV2, att}
+	src.items = []zoteroprovider.CanonicalItem{itemV2, att}
 
 	svc := New(src, repo.New(d.Pool()), src.baseURL, "users/0", log.Default())
 	res1, err := svc.Run(ctx, nil)
@@ -205,7 +205,7 @@ func TestCanonicalVersionGuard(t *testing.T) {
 	// Now an OLDER version (1) of B1 must NOT overwrite the stored raw_data (v2).
 	itemV1 := mkItemJSON("B1", "book", "", "Title V1", map[string]any{"date": "2010", "DOI": "10.1/v1"})
 	itemV1.Version = 1
-	src.items = []zotero.CanonicalItem{itemV1, att}
+	src.items = []zoteroprovider.CanonicalItem{itemV1, att}
 	src.version = 2
 	if _, err := svc.Run(ctx, nil); err != nil {
 		t.Fatalf("second canonical: %v", err)
@@ -252,7 +252,7 @@ func TestCanonicalBootstrapOldCursor(t *testing.T) {
 	att := mkItemJSON("A1", "attachment", "B1", "a.pdf", map[string]any{"contentType": "application/pdf", "filename": "a.pdf"})
 	attEnv, _ := json.Marshal(map[string]any{"key": "A1", "version": 1, "links": map[string]any{"enclosure": map[string]any{"href": "file://" + pdfPath}}, "data": map[string]any{"key": "A1", "version": 1, "itemType": "attachment", "parentItem": "B1", "contentType": "application/pdf", "filename": "a.pdf"}})
 	att.Envelope = attEnv
-	src.items = []zotero.CanonicalItem{mkItemJSON("B1", "book", "", "A Book", nil), att}
+	src.items = []zoteroprovider.CanonicalItem{mkItemJSON("B1", "book", "", "A Book", nil), att}
 
 	repoObj := repo.New(d.Pool())
 	// The legacy document cursor is irrelevant: the canonical cursor is separate

@@ -1,4 +1,5 @@
-// Package zotero — write client for the #184 fix-service loop.
+// write.go — write client for the #184 fix-service loop, part of the
+// Zotero adapter package since F07 (#301).
 //
 // The RAG is the ONLY gateway to Zotero: the fix-service never sees
 // credentials. Writes go through the Zotero local API write surface
@@ -21,7 +22,7 @@
 //     register (form: upload=<key>, If-None-Match: *, 204)
 //   - local API keys are SINGLE-USE unless the operator picked
 //     "Always Allow" in the authorize dialog (remember:true)
-package zotero
+package zoteroprovider
 
 import (
 	"bytes"

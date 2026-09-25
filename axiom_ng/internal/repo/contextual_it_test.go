@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // ctxSeed seeds the canonical chain for one document like a real sync had:
@@ -73,7 +73,7 @@ func ctxApply(t *testing.T, lr *leaseRepo, srcID string, rules ContextualRules) 
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	colls := []zotero.CanonicalCollection{
+	colls := []zoteroprovider.CanonicalCollection{
 		{Key: "VWLKEY", Name: "VWL", Envelope: []byte(`{"key":"VWLKEY"}`)},
 		{Key: "LECTKEY", Name: "Lectures", ParentKey: "VWLKEY", Envelope: []byte(`{"key":"LECTKEY"}`)},
 		{Key: "OTHERKEY", Name: "HA", Envelope: []byte(`{"key":"OTHERKEY"}`)},
@@ -83,7 +83,7 @@ func ctxApply(t *testing.T, lr *leaseRepo, srcID string, rules ContextualRules) 
 		"CTXDOC2ATT": {LocalPath: "/tmp/x.pdf", Exists: true, Hash: "sha256:ctx2"},
 		"CTXDOC3ATT": {LocalPath: "/tmp/x.pdf", Exists: true, Hash: "sha256:ctx3"},
 	}
-	if _, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zotero.CanonicalBatch{NewVersion: 2}, colls, files, nil, rules); err != nil {
+	if _, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zoteroprovider.CanonicalBatch{NewVersion: 2}, colls, files, nil, rules); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -109,7 +109,7 @@ func TestContextualProjectionIT(t *testing.T) {
 	var srcID string
 	if err := lr.pool.QueryRow(ctx, `
 		INSERT INTO zotero_sources (base_url, library_id, server_id)
-		VALUES ('https://zotero.ctx', 'lib-1', 'srv') RETURNING id::text`).Scan(&srcID); err != nil {
+		VALUES ('https://zoteroprovider.ctx', 'lib-1', 'srv') RETURNING id::text`).Scan(&srcID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -189,7 +189,7 @@ func TestResolveContextualRulesIT(t *testing.T) {
 	var srcID string
 	if err := lr.pool.QueryRow(ctx, `
 		INSERT INTO zotero_sources (base_url, library_id, server_id)
-		VALUES ('https://zotero.res', 'lib-1', 'srv') RETURNING id::text`).Scan(&srcID); err != nil {
+		VALUES ('https://zoteroprovider.res', 'lib-1', 'srv') RETURNING id::text`).Scan(&srcID); err != nil {
 		t.Fatal(err)
 	}
 	seedColl := func(key, name, parent string, deleted bool) {

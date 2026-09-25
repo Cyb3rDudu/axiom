@@ -12,7 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 func TestSelectiveSyncAcceptanceIT(t *testing.T) {
@@ -21,7 +21,7 @@ func TestSelectiveSyncAcceptanceIT(t *testing.T) {
 	ctx := context.Background()
 
 	ch := "hash-a2"
-	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.a2", libraryID: "lib-1",
+	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zoteroprovider.a2", libraryID: "lib-1",
 		docKey: "SELD1", attKey: "SELATT1", contentHash: &ch}, "completed", 1)
 	var docID, srcID string
 	if err := lr.pool.QueryRow(ctx, `SELECT a.document_id::text, a.source_id::text FROM zotero_attachments a
@@ -36,7 +36,7 @@ func TestSelectiveSyncAcceptanceIT(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer tx.Rollback(ctx)
-		res, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zotero.CanonicalBatch{NewVersion: 2},
+		res, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zoteroprovider.CanonicalBatch{NewVersion: 2},
 			nil, map[string]AttachmentFileInfo{"SELATT1": {Exists: true, Hash: ch}}, selection, ContextualRules{})
 		if err != nil {
 			t.Fatalf("apply: %v", err)
@@ -222,7 +222,7 @@ func TestSetSelectionBatchAtomicityIT(t *testing.T) {
 	ctx := context.Background()
 
 	ch := "hash-atomic"
-	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.atomic", libraryID: "lib-1",
+	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zoteroprovider.atomic", libraryID: "lib-1",
 		docKey: "ATOM1", attKey: "ATOMATT1", contentHash: &ch}, "completed", 1)
 	var docID string
 	if err := lr.pool.QueryRow(ctx, `SELECT document_id::text FROM zotero_attachments WHERE id=$1`, attID).Scan(&docID); err != nil {

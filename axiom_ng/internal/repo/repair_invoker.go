@@ -24,7 +24,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // RepairItem is everything the fixer invoker needs to know about a case's
@@ -37,7 +37,7 @@ type RepairItem struct {
 	DocumentKey   string
 	DocumentID    string // #282: targets the post-heal sync's include override
 	Title         string
-	Creators      []zotero.Creator
+	Creators      []zoteroprovider.Creator
 	Year          int
 	ExistingNames []string        // #291: the document's current attachment filenames (grown-pattern reference)
 	Language      string          // #284: OCR language default from document metadata

@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -47,7 +47,7 @@ type CanonicalApplyResult struct {
 // is selected — today's behavior). Projections stay a FULL mirror regardless.
 // contextual (#255) is the boot-resolved rule set; citation_class is
 // recomputed from memberships + tags inside this same transaction.
-func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID string, batch zotero.CanonicalBatch, collections []zotero.CanonicalCollection, files map[string]AttachmentFileInfo, selection map[string]string, contextual ContextualRules) (CanonicalApplyResult, error) {
+func (r *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID string, batch zoteroprovider.CanonicalBatch, collections []zoteroprovider.CanonicalCollection, files map[string]AttachmentFileInfo, selection map[string]string, contextual ContextualRules) (CanonicalApplyResult, error) {
 	var res CanonicalApplyResult
 
 	// 1. Upsert canonical items (version guarded).
@@ -270,7 +270,7 @@ func reactivateRestoredAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
 // applyCanonicalDeleteEvents resolves each deleted key against documents or
 // attachments: a document deletion removes the parent + attachments; a single
 // attachment deletion removes only that file.
-func (r *Repo) applyCanonicalDeleteEvents(ctx context.Context, tx pgx.Tx, sourceID string, events []zotero.DeleteEvent) error {
+func (r *Repo) applyCanonicalDeleteEvents(ctx context.Context, tx pgx.Tx, sourceID string, events []zoteroprovider.DeleteEvent) error {
 	for _, ev := range events {
 		if ev.Key == "" {
 			continue

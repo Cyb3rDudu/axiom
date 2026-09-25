@@ -1,4 +1,4 @@
-package zotero
+package zoteroprovider
 
 import (
 	"encoding/json"

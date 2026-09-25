@@ -9,10 +9,10 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
-func runCanon(t *testing.T, src zotero.Source, d *db.DB) (Result, error) {
+func runCanon(t *testing.T, src zoteroprovider.Source, d *db.DB) (Result, error) {
 	t.Helper()
 	ctx := context.Background()
 	repoObj := repo.New(d.Pool())
@@ -34,7 +34,7 @@ func runCanon(t *testing.T, src zotero.Source, d *db.DB) (Result, error) {
 	return res, err
 }
 
-func baseOf(src zotero.Source) string {
+func baseOf(src zoteroprovider.Source) string {
 	if cf, ok := src.(*canonicalFake); ok {
 		return cf.baseURL
 	}
@@ -53,7 +53,7 @@ func countActiveFor(t *testing.T, d *db.DB, table, sourceID string) int {
 }
 
 // itemEnv builds the raw envelope from data for a canonical item.
-func itemEnv(key, itemType, parent string, data map[string]any) zotero.CanonicalItem {
+func itemEnv(key, itemType, parent string, data map[string]any) zoteroprovider.CanonicalItem {
 	dd := map[string]any{"key": key, "version": 1, "itemType": itemType}
 	if parent != "" {
 		dd["parentItem"] = parent
@@ -63,10 +63,10 @@ func itemEnv(key, itemType, parent string, data map[string]any) zotero.Canonical
 	}
 	envB, _ := json.Marshal(map[string]any{"key": key, "version": 1, "data": dd})
 	dataB, _ := json.Marshal(dd)
-	return zotero.CanonicalItem{Key: key, Version: 1, ItemType: itemType, ParentKey: parent, Envelope: envB, Data: dataB}
+	return zoteroprovider.CanonicalItem{Key: key, Version: 1, ItemType: itemType, ParentKey: parent, Envelope: envB, Data: dataB}
 }
 
-func bookEnv(key, title string, extra map[string]any) zotero.CanonicalItem {
+func bookEnv(key, title string, extra map[string]any) zoteroprovider.CanonicalItem {
 	m := map[string]any{"title": title, "date": "2020", "DOI": "10.1/" + key}
 	for k, v := range extra {
 		m[k] = v
@@ -74,14 +74,14 @@ func bookEnv(key, title string, extra map[string]any) zotero.CanonicalItem {
 	return itemEnv(key, "book", "", m)
 }
 
-func pdfAttEnv(key, parent, path string) zotero.CanonicalItem {
+func pdfAttEnv(key, parent, path string) zoteroprovider.CanonicalItem {
 	envB, _ := json.Marshal(map[string]any{
 		"key": key, "version": 1,
 		"links": map[string]any{"enclosure": map[string]any{"href": "file://" + path}},
 		"data":  map[string]any{"key": key, "version": 1, "itemType": "attachment", "parentItem": parent, "contentType": "application/pdf", "filename": "a.pdf"},
 	})
 	dataB, _ := json.Marshal(map[string]any{"key": key, "version": 1, "itemType": "attachment", "parentItem": parent, "contentType": "application/pdf", "filename": "a.pdf"})
-	return zotero.CanonicalItem{Key: key, Version: 1, ItemType: "attachment", ParentKey: parent, Envelope: envB, Data: dataB}
+	return zoteroprovider.CanonicalItem{Key: key, Version: 1, ItemType: "attachment", ParentKey: parent, Envelope: envB, Data: dataB}
 }
 
 // TestCanonicalFullThenEmptyDeltaKeepsItems: a full sync populates; a subsequent
@@ -91,7 +91,7 @@ func TestCanonicalFullThenEmptyDeltaKeepsItems(t *testing.T) {
 	d := openTestDB(t, ctx)
 	pdf := makePdf(t, "a")
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 10}
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
 	res1, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
@@ -100,7 +100,7 @@ func TestCanonicalFullThenEmptyDeltaKeepsItems(t *testing.T) {
 		t.Fatalf("after full sync: %d active items, want 2", n)
 	}
 	// Empty delta: no items at all, no deletes. Must keep items active.
-	src.deleteEvents = []zotero.DeleteEvent{}
+	src.deleteEvents = []zoteroprovider.DeleteEvent{}
 	src.items = nil
 	res2, err := runCanon(t, src, d)
 	if err != nil {
@@ -118,7 +118,7 @@ func TestCanonicalMetadataDeltaNoNewJob(t *testing.T) {
 	d := openTestDB(t, ctx)
 	pdf := makePdf(t, "a")
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 10}
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Old Title", nil), pdfAttEnv("A1", "B1", pdf)}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Old Title", nil), pdfAttEnv("A1", "B1", pdf)}
 	res1, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("first: %v", err)
@@ -130,7 +130,7 @@ func TestCanonicalMetadataDeltaNoNewJob(t *testing.T) {
 	// Metadata-only change: send ONLY the parent in the delta (no attachment),
 	// new title/DOI; the attachment hash is unchanged.
 	src.version = 11
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "New Title", map[string]any{"DOI": "10.1/new"})}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "New Title", map[string]any{"DOI": "10.1/new"})}
 	res2, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("second: %v", err)
@@ -163,7 +163,7 @@ func TestCanonicalMissingFilePersistsFailedJob(t *testing.T) {
 	d := openTestDB(t, ctx)
 	missing := t.TempDir() + "/missing.pdf" // does not exist
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 5}
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", missing)}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", missing)}
 	res, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("canonical: %v", err)
@@ -195,8 +195,8 @@ func TestCanonicalMalformedEnvelopeAbortsNoCursor(t *testing.T) {
 	pdf := makePdf(t, "a")
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 9}
 	// A book + attachment + a malformed envelope.
-	bad := zotero.CanonicalItem{Key: "X1", Version: 1, ItemType: "", Envelope: json.RawMessage(`{broken`)}
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf), bad}
+	bad := zoteroprovider.CanonicalItem{Key: "X1", Version: 1, ItemType: "", Envelope: json.RawMessage(`{broken`)}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf), bad}
 	if _, err := runCanon(t, src, d); err == nil {
 		t.Fatal("expected error on malformed envelope; cursor must not advance")
 	}
@@ -215,7 +215,7 @@ func TestCanonicalFreshDBPreferredWithStats(t *testing.T) {
 	os.WriteFile(epubC, []byte("c"), 0o600)
 
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 3}
-	src.items = []zotero.CanonicalItem{
+	src.items = []zoteroprovider.CanonicalItem{
 		bookEnv("B1", "Book One", nil), pdfAttEnv("A1", "B1", pdfA),
 		bookEnv("B2", "Book Two", nil), pdfAttEnv("A2", "B2", pdfB), pdfAttEnv("A2b", "B2", pdfB),
 		// a third doc whose only attachment is an EPUB (preferred rule).
@@ -269,14 +269,14 @@ func TestCanonicalAttachmentDeleteUpdatesProjection(t *testing.T) {
 	epubItem.Envelope = epubEnv
 
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 10}
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfItem, epubItem}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Book", nil), pdfItem, epubItem}
 	res1, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	// Delete A-PDF (preferred) via delete event; the EPUB sibling is reassessed.
 	src.version = 11
-	src.deleteEvents = []zotero.DeleteEvent{{Key: "A-PDF", ItemType: "attachment", ParentKey: "B1"}}
+	src.deleteEvents = []zoteroprovider.DeleteEvent{{Key: "A-PDF", ItemType: "attachment", ParentKey: "B1"}}
 	src.items = nil // only the delete event is the delta
 	res2, err := runCanon(t, src, d)
 	if err != nil {
@@ -305,14 +305,14 @@ func TestCanonicalRestoreAfterDelete(t *testing.T) {
 	d := openTestDB(t, ctx)
 	pdf := makePdf(t, "a")
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 10}
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
 	res1, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	// Delete the parent.
 	src.version = 11
-	src.deleteEvents = []zotero.DeleteEvent{{Key: "B1", ItemType: "book"}}
+	src.deleteEvents = []zoteroprovider.DeleteEvent{{Key: "B1", ItemType: "book"}}
 	src.items = nil
 	if _, err := runCanon(t, src, d); err != nil {
 		t.Fatalf("delete sync: %v", err)
@@ -327,7 +327,7 @@ func TestCanonicalRestoreAfterDelete(t *testing.T) {
 	// Restore: full snapshot re-sends B1+A1 (deleteEvents cleared).
 	src.version = 12
 	src.deleteEvents = nil
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
 	if _, err := runCanon(t, src, d); err != nil {
 		t.Fatalf("restore sync: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestCanonicalRepeatedMissingFileNoDuplicateFailedJob(t *testing.T) {
 	d := openTestDB(t, ctx)
 	missing := t.TempDir() + "/missing.pdf"
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 5}
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", missing)}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", missing)}
 	res1, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("first: %v", err)
@@ -383,7 +383,7 @@ func TestCanonicalSQLNullSemantics(t *testing.T) {
 	pdf := makePdf(t, "a")
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 1}
 	// Book with no date, no DOI, no publisher -> year NULL, no empty strings.
-	src.items = []zotero.CanonicalItem{itemEnv("B1", "book", "", map[string]any{"title": "No meta"}), pdfAttEnv("A1", "B1", pdf)}
+	src.items = []zoteroprovider.CanonicalItem{itemEnv("B1", "book", "", map[string]any{"title": "No meta"}), pdfAttEnv("A1", "B1", pdf)}
 	res, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("canonical: %v", err)
@@ -416,7 +416,7 @@ func TestCanonicalProjectedNonWhitelistedDocumentType(t *testing.T) {
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 2}
 	ds := itemEnv("D1", "dataset", "", map[string]any{"title": "A Dataset"})
 	att := pdfAttEnv("DA1", "D1", pdf)
-	src.items = []zotero.CanonicalItem{ds, att}
+	src.items = []zoteroprovider.CanonicalItem{ds, att}
 	res, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("canonical: %v", err)
@@ -443,7 +443,7 @@ func TestCanonicalTypeChangeDeactivates(t *testing.T) {
 	d := openTestDB(t, ctx)
 	pdf := makePdf(t, "a")
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 10}
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "A Book", nil), pdfAttEnv("A1", "B1", pdf)}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "A Book", nil), pdfAttEnv("A1", "B1", pdf)}
 	res1, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("first: %v", err)
@@ -453,7 +453,7 @@ func TestCanonicalTypeChangeDeactivates(t *testing.T) {
 	}
 	// Change B1 to a top-level note (still has the child attachment).
 	src.version = 11
-	src.items = []zotero.CanonicalItem{itemEnv("B1", "note", "", map[string]any{"note": "turned into a note"})}
+	src.items = []zoteroprovider.CanonicalItem{itemEnv("B1", "note", "", map[string]any{"note": "turned into a note"})}
 	if _, err := runCanon(t, src, d); err != nil {
 		t.Fatalf("type-change sync: %v", err)
 	}
@@ -488,7 +488,7 @@ func TestCanonicalEPUBByMIMEOnly(t *testing.T) {
 		"links": map[string]any{"enclosure": map[string]any{"href": "file://" + epub}},
 		"data":  map[string]any{"key": "E1", "version": 1, "itemType": "attachment", "parentItem": "B1", "contentType": "application/epub+zip", "filename": "book.dat"},
 	})
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), it}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Book", nil), it}
 	res, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("canonical: %v", err)
@@ -539,7 +539,7 @@ func TestCanonicalMissingRestoredMissingNewFailedJob(t *testing.T) {
 
 	// 1. Missing file.
 	missing := t.TempDir() + "/gone.pdf"
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", missing)}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", missing)}
 	res1, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("missing sync: %v", err)
@@ -550,7 +550,7 @@ func TestCanonicalMissingRestoredMissingNewFailedJob(t *testing.T) {
 
 	// 2. File returns -> pending job, prior failure resolved.
 	src.version = 2
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
 	res2, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("restored sync: %v", err)
@@ -567,7 +567,7 @@ func TestCanonicalMissingRestoredMissingNewFailedJob(t *testing.T) {
 
 	// 3. Missing again -> a NEW failed job must be created.
 	src.version = 3
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", missing)}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", missing)}
 	res3, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("missing-again sync: %v", err)
@@ -601,7 +601,7 @@ func TestCanonicalDeletedItemOnFallbackFullSnapshot(t *testing.T) {
 	d := openTestDB(t, ctx)
 	pdf := makePdf(t, "a")
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 5}
-	src.items = []zotero.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
+	src.items = []zoteroprovider.CanonicalItem{bookEnv("B1", "Book", nil), pdfAttEnv("A1", "B1", pdf)}
 	res1, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("full sync: %v", err)
@@ -619,7 +619,7 @@ func TestCanonicalDeletedItemOnFallbackFullSnapshot(t *testing.T) {
 	// where the parent (and its attachment) no longer exist.
 	src.forceFull = true
 	src.version = 6
-	src.items = []zotero.CanonicalItem{} // item gone
+	src.items = []zoteroprovider.CanonicalItem{} // item gone
 	res2, err := runCanon(t, src, d)
 	if err != nil {
 		t.Fatalf("fallback full snapshot: %v", err)

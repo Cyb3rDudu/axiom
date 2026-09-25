@@ -1,7 +1,7 @@
 // Deterministic, LLM-free normalization of a Zotero item's raw data object into
 // the fields projected onto zotero_documents. Raw JSON stays authoritative; the
 // projection is a best-effort map used for querying.
-package zotero
+package zoteroprovider
 
 import "encoding/json"
 

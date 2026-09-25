@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 func TestApplyFiresRevisionHookAfterHeal(t *testing.T) {
@@ -26,7 +26,7 @@ func TestApplyFiresRevisionHookAfterHeal(t *testing.T) {
 	}
 	fw := newFakeWrite("BROKEN1")
 	srv := fw.server(t)
-	wc := zotero.NewWriteClient(srv.URL, "srv", "key")
+	wc := zoteroprovider.NewWriteClient(srv.URL, "srv", "key")
 
 	var calls [][2]string
 	healed := []byte("healed bytes")

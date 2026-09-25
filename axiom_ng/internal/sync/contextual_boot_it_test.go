@@ -27,7 +27,7 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // ctxBootTruncate wipes the canonical tables so the DB is "never synced"
@@ -51,7 +51,7 @@ func ctxBootTruncate(t *testing.T, d *db.DB) {
 // ctxBootSvc builds a Service over the fake source and returns a log buffer
 // so the degraded/transition banners are assertable (degraded must never be
 // silent — the incident was invisible until the crash loop).
-func ctxBootSvc(t *testing.T, src zotero.Source) (*Service, *bytes.Buffer) {
+func ctxBootSvc(t *testing.T, src zoteroprovider.Source) (*Service, *bytes.Buffer) {
 	t.Helper()
 	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -76,11 +76,11 @@ func ctxDocClass(t *testing.T, d *db.DB, sourceID, docKey string) string {
 // ctxBootWorld is the fake Zotero world: a ruled doc (in VWL/Lectures,
 // tagged Vorlesung) and a passenger doc outside every rule.
 func ctxBootWorld(serverID string, ruled bool) *canonicalFake {
-	colls := []zotero.CanonicalCollection{
+	colls := []zoteroprovider.CanonicalCollection{
 		{Key: "CVWL", Name: "VWL", Envelope: []byte(`{"key":"CVWL"}`)},
 		{Key: "CLECT", Name: "Lectures", ParentKey: "CVWL", Envelope: []byte(`{"key":"CLECT"}`)},
 	}
-	items := []zotero.CanonicalItem{
+	items := []zoteroprovider.CanonicalItem{
 		mkItemJSON("PAX1", "book", "", "Passenger Book", nil),
 		mkItemJSON("PAX1ATT", "attachment", "PAX1", "pax.pdf", map[string]any{
 			"contentType": "application/pdf", "filename": "pax.pdf",
@@ -299,7 +299,7 @@ func TestContextualBootActiveSurvivesCollectionDeletionIT(t *testing.T) {
 
 	// Sync 2: the collection is GONE from Zotero (reconcile-by-absence
 	// marks it deleted). The rules stay active; the doc recomputes citable.
-	src.collections = []zotero.CanonicalCollection{{Key: "CVWL", Name: "VWL", Envelope: []byte(`{"key":"CVWL"}`)}}
+	src.collections = []zoteroprovider.CanonicalCollection{{Key: "CVWL", Name: "VWL", Envelope: []byte(`{"key":"CVWL"}`)}}
 	src.version = 3
 	if _, err := svc.Run(ctx, nil); err != nil {
 		t.Fatalf("sync 2 (collection deleted): %v", err)

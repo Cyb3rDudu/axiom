@@ -1,8 +1,12 @@
-// Package zotero defines the source contract between axiom-ng and a Zotero
-// library. Zotero stays the source of truth for documents, metadata, tags and
+// Package zoteroprovider is the Zotero adapter: every Zotero HTTP
+// interaction of axiom-ng lives here (F07, #301). The package was moved
+// verbatim from internal/zotero — the read client (LocalAPI), the write
+// client (WriteClient) and the mirror types (Source, CanonicalItem) are
+// the substance; the Library port implementations (provider.go) sit on
+// top. Zotero stays the source of truth for documents, metadata, tags and
 // collections; axiom-ng is the only component that talks to it. Document
 // processors never interact with Zotero directly.
-package zotero
+package zoteroprovider
 
 import "encoding/json"
 

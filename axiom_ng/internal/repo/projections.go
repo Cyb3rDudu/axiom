@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -60,11 +60,11 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 		key     string
 		version int64
 		deleted bool
-		nm      zotero.NormalizedMetadata
+		nm      zoteroprovider.NormalizedMetadata
 	}
 	parents := map[string]parent{}
 	var parentOrder []string
-	atts := map[string][]zotero.Attachment{}
+	atts := map[string][]zoteroprovider.Attachment{}
 	allAtts := map[string]attMeta{}
 
 	for rows.Next() {
@@ -78,7 +78,7 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 			// top-level: parent items (including deleted ones so their existing
 			// document/attachment projections can be deactivated).
 			parentOrder = append(parentOrder, key)
-			parents[key] = parent{key: key, version: ver, deleted: deleted, nm: zotero.Normalize(json.RawMessage(rawData))}
+			parents[key] = parent{key: key, version: ver, deleted: deleted, nm: zoteroprovider.Normalize(json.RawMessage(rawData))}
 			continue
 		}
 		// Children. Only item_type='attachment' may become an attachment
@@ -98,7 +98,7 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 		if itype != "attachment" {
 			continue // note / annotation / etc.: never projected into zotero_attachments
 		}
-		atts[pkey] = append(atts[pkey], zotero.Attachment{
+		atts[pkey] = append(atts[pkey], zoteroprovider.Attachment{
 			Key: key, Version: ver, ParentKey: pkey,
 			ContentType: am.contentType, Filename: am.fileName, LocalPath: am.localPath,
 		})
@@ -185,10 +185,10 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 // preferredActive picks the preferred attachment from ACTIVE (not deleted)
 // attachment items. It filters out deleted attachments, sorts the remaining by
 // key for a deterministic order, then reuses the central
-// zotero.PreferredAttachment selection (PDF over EPUB; detects
+// zoteroprovider.PreferredAttachment selection (PDF over EPUB; detects
 // application/epub, application/epub+zip, vendor MIME, and .epub filename).
-func preferredActive(atts []zotero.Attachment, deleted map[string]attMeta) *zotero.Attachment {
-	var active []zotero.Attachment
+func preferredActive(atts []zoteroprovider.Attachment, deleted map[string]attMeta) *zoteroprovider.Attachment {
+	var active []zoteroprovider.Attachment
 	for _, a := range atts {
 		if meta, ok := deleted[a.Key]; ok && meta.deleted {
 			continue // deleted attachments are never preferred
@@ -197,7 +197,7 @@ func preferredActive(atts []zotero.Attachment, deleted map[string]attMeta) *zote
 	}
 	// Deterministic order: the central selector takes the first processable match.
 	sort.SliceStable(active, func(i, j int) bool { return active[i].Key < active[j].Key })
-	return zotero.PreferredAttachment(active)
+	return zoteroprovider.PreferredAttachment(active)
 }
 
 // deactivateDocumentAttachments marks all attachment projections of a document
@@ -216,7 +216,7 @@ func (r *Repo) deactivateDocumentAttachments(ctx context.Context, tx pgx.Tx, sou
 
 // ensureDocumentProjection writes a normalized, version-guarded zotero_documents
 // projection (missing optional values as SQL NULL, never 0/”).
-func (r *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID, parentKey string, version int64, nm zotero.NormalizedMetadata) (string, error) {
+func (r *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID, parentKey string, version int64, nm zoteroprovider.NormalizedMetadata) (string, error) {
 	creators, _ := json.Marshal(nm.Creators)
 	tags, _ := json.Marshal(nm.Tags)
 	cols, _ := json.Marshal(nm.Collections)
@@ -290,8 +290,8 @@ func (r *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID
 // upsertAttachmentProjection writes a version-guarded attachment projection and
 // returns its id. linkMode comes from the Zotero raw data (imported_file,
 // linked_file, imported_url, ...).
-func (r *Repo) upsertAttachmentProjection(ctx context.Context, tx pgx.Tx, sourceID, docID, parentKey string, att zotero.Attachment, deleted bool, linkMode string) (string, error) {
-	native := zotero.LocalFilePath(att.LocalPath)
+func (r *Repo) upsertAttachmentProjection(ctx context.Context, tx pgx.Tx, sourceID, docID, parentKey string, att zoteroprovider.Attachment, deleted bool, linkMode string) (string, error) {
+	native := zoteroprovider.LocalFilePath(att.LocalPath)
 	var id string
 	err := tx.QueryRow(ctx, `
 		INSERT INTO zotero_attachments (
@@ -326,7 +326,7 @@ func (r *Repo) upsertAttachmentProjection(ctx context.Context, tx pgx.Tx, source
 // setPreferredWithStats marks one attachment as the document's preferred file
 // and writes its hash/size/mtime (version-guarded is implicit via the preferred
 // flag being idempotent).
-func (r *Repo) setPreferredWithStats(ctx context.Context, tx pgx.Tx, sourceID, docID string, att *zotero.Attachment, fin AttachmentFileInfo) error {
+func (r *Repo) setPreferredWithStats(ctx context.Context, tx pgx.Tx, sourceID, docID string, att *zoteroprovider.Attachment, fin AttachmentFileInfo) error {
 	var sz, mtm *int64
 	var hash *string
 	if fin.Exists {

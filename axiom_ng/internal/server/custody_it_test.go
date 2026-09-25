@@ -26,7 +26,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	axiomsync "github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // custSource is a mutable canonical source: the IT mutates the item set
@@ -36,27 +36,27 @@ import (
 type custSource struct {
 	mu      sync.Mutex
 	baseURL string
-	items   []zotero.CanonicalItem
+	items   []zoteroprovider.CanonicalItem
 	version int64
 }
 
 func (c *custSource) ServerID() string { return "cust-it" }
-func (c *custSource) ListCanonicalItems(since int64) (zotero.CanonicalBatch, error) {
+func (c *custSource) ListCanonicalItems(since int64) (zoteroprovider.CanonicalBatch, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return zotero.CanonicalBatch{FullSnapshot: true, Items: c.items, NewVersion: c.version}, nil
+	return zoteroprovider.CanonicalBatch{FullSnapshot: true, Items: c.items, NewVersion: c.version}, nil
 }
-func (c *custSource) ListCanonicalCollections() ([]zotero.CanonicalCollection, error) {
+func (c *custSource) ListCanonicalCollections() ([]zoteroprovider.CanonicalCollection, error) {
 	return nil, nil
 }
-func (c *custSource) set(items []zotero.CanonicalItem, version int64) {
+func (c *custSource) set(items []zoteroprovider.CanonicalItem, version int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.items, c.version = items, version
 }
 
 // custItem builds a canonical item envelope (book or attachment).
-func custItem(key, itemType, parent string, data map[string]any, enclosure string) zotero.CanonicalItem {
+func custItem(key, itemType, parent string, data map[string]any, enclosure string) zoteroprovider.CanonicalItem {
 	m := map[string]any{"key": key, "version": 1, "itemType": itemType}
 	if parent != "" {
 		m["parentItem"] = parent
@@ -70,7 +70,7 @@ func custItem(key, itemType, parent string, data map[string]any, enclosure strin
 	}
 	envB, _ := json.Marshal(env)
 	dataB, _ := json.Marshal(m)
-	return zotero.CanonicalItem{Key: key, Version: 1, ItemType: itemType, ParentKey: parent, Envelope: envB, Data: dataB}
+	return zoteroprovider.CanonicalItem{Key: key, Version: 1, ItemType: itemType, ParentKey: parent, Envelope: envB, Data: dataB}
 }
 
 // custWriteZotero: the fake local Zotero WRITE surface for the custody
@@ -168,7 +168,7 @@ func custITEnv(t *testing.T) (*Server, *repo.Repo, *custWriteZotero, *custSource
 	qroot := filepath.Join(dir, "quarantine")
 
 	src := &custSource{baseURL: "http://cust-it.local"}
-	src.set([]zotero.CanonicalItem{
+	src.set([]zoteroprovider.CanonicalItem{
 		custItem("BOOK1", "book", "", map[string]any{
 			"title":    "Nachhaltiges Personalmanagement",
 			"creators": []map[string]string{{"firstName": "Adrian", "lastName": "Geursen", "creatorType": "author"}},
@@ -189,7 +189,7 @@ func custITEnv(t *testing.T) (*Server, *repo.Repo, *custWriteZotero, *custSource
 
 	fw := &custWriteZotero{newKey: "HEALED1", versions: map[string]int64{"ATT1": 2}}
 	s := New(":0", nil)
-	s.SetRepairAPI(rep, zotero.NewWriteClient(fw.server(t).URL, "srv", "key"), qroot)
+	s.SetRepairAPI(rep, zoteroprovider.NewWriteClient(fw.server(t).URL, "srv", "key"), qroot)
 	return s, rep, fw, src, broken, healed, qroot
 }
 
@@ -262,7 +262,7 @@ func TestIT_CustodyFullProtocolHealedPreferredAfterSync(t *testing.T) {
 
 	// the improvised Geursen state cannot recur: after sync, the healed
 	// attachment is the ONLY active one and PREFERRED
-	src.set([]zotero.CanonicalItem{
+	src.set([]zoteroprovider.CanonicalItem{
 		custItem("BOOK1", "book", "", map[string]any{
 			"title":    "Nachhaltiges Personalmanagement",
 			"creators": []map[string]string{{"firstName": "Adrian", "lastName": "Geursen", "creatorType": "author"}},

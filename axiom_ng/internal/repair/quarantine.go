@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // closeQuarantine closes the quarantine destination file. It is a seam so
@@ -86,7 +86,7 @@ func Quarantine(root, zoteroKey, sourcePath string) (string, error) {
 // the Library component in F06 (#300 — filenames are part of the import
 // contract); these wrappers keep the repair-side signatures (creators in
 // the zotero projection shape) so review-hardened tests stay pinned.
-func SchemaFilename(creators []zotero.Creator, year int, title string) string {
+func SchemaFilename(creators []zoteroprovider.Creator, year int, title string) string {
 	return library.SchemaFilename(toLibraryCreators(creators), year, title)
 }
 
@@ -94,13 +94,13 @@ func SchemaFilename(creators []zotero.Creator, year int, title string) string {
 // content type (#220: EPUB repairs upload .epub, not .pdf) and carries
 // the document's existing attachment filenames for the #291 grown-pattern
 // exception (empty/nil = no existing attachments → global schema).
-func SchemaFilenameForFormat(creators []zotero.Creator, year int, title, contentType string, existing []string) string {
+func SchemaFilenameForFormat(creators []zoteroprovider.Creator, year int, title, contentType string, existing []string) string {
 	return library.SchemaFilenameForFormat(toLibraryCreators(creators), year, title, contentType, existing)
 }
 
 // toLibraryCreators adapts the zotero projection shape onto the Library
 // domain creator (single definition of the convention, review W6).
-func toLibraryCreators(cs []zotero.Creator) []library.Creator {
+func toLibraryCreators(cs []zoteroprovider.Creator) []library.Creator {
 	if len(cs) == 0 {
 		return nil
 	}

@@ -18,7 +18,7 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 func TestSnapshotServedNoRequeueIT(t *testing.T) {
@@ -40,7 +40,7 @@ func TestSnapshotServedNoRequeueIT(t *testing.T) {
 	os.WriteFile(pdfPath, []byte("snapshot-served"), 0o600)
 
 	src := &canonicalFake{serverID: "snapserved", baseURL: newScriptedBase(), version: 2}
-	src.items = []zotero.CanonicalItem{
+	src.items = []zoteroprovider.CanonicalItem{
 		mkItemJSON("SB1", "book", "", "Snapshot Served Book", map[string]any{
 			"creators": []map[string]string{{"firstName": "Ada", "lastName": "Lovelace", "creatorType": "author"}},
 		}),
@@ -158,7 +158,7 @@ func TestSuppressedEnqueueDoesNotResolveFailuresIT(t *testing.T) {
 	os.WriteFile(pdfPath, []byte("anchor-book"), 0o600)
 
 	src := &canonicalFake{serverID: "snapanchor", baseURL: newScriptedBase(), version: 2}
-	src.items = []zotero.CanonicalItem{
+	src.items = []zoteroprovider.CanonicalItem{
 		mkItemJSON("RB1", "book", "", "Anchor Book", map[string]any{
 			"creators": []map[string]string{{"firstName": "Ada", "lastName": "Lovelace", "creatorType": "author"}},
 		}),
@@ -302,7 +302,7 @@ func TestActualEnqueueResolvesFailuresWithoutBumpIT(t *testing.T) {
 	os.WriteFile(pdfPath, []byte("anchor-book"), 0o600)
 
 	src := &canonicalFake{serverID: "snapresolve", baseURL: newScriptedBase(), version: 2}
-	src.items = []zotero.CanonicalItem{
+	src.items = []zoteroprovider.CanonicalItem{
 		mkItemJSON("RB1", "book", "", "Anchor Book", map[string]any{
 			"creators": []map[string]string{{"firstName": "Ada", "lastName": "Lovelace", "creatorType": "author"}},
 		}),

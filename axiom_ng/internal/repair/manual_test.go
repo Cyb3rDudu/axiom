@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // fakeWriteZotero implements the write surface: version-guarded DELETE of
@@ -146,7 +146,7 @@ func TestManualCustodyFullProtocol(t *testing.T) {
 	}
 	fw := newFakeWrite("BROKEN1")
 	srv := fw.server(t)
-	wc := zotero.NewWriteClient(srv.URL, "srv", "key")
+	wc := zoteroprovider.NewWriteClient(srv.URL, "srv", "key")
 
 	rec := &ManualRecord{
 		AttachmentKey: "BROKEN1", DocumentKey: "PARENT1",
@@ -215,7 +215,7 @@ func TestManualCustodyAbortAfterQuarantineThenRerunCompletes(t *testing.T) {
 	fw := newFakeWrite("BROKEN1")
 	fw.deleteStatus = http.StatusInternalServerError // run 1: gateway dies
 	srv := fw.server(t)
-	wc := zotero.NewWriteClient(srv.URL, "srv", "key")
+	wc := zoteroprovider.NewWriteClient(srv.URL, "srv", "key")
 
 	caseArgs := ApplyCase{
 		CaseID: "manual-BROKEN1", AttachmentKey: "BROKEN1", DocumentKey: "P1",
@@ -287,7 +287,7 @@ func TestManualDelete404ToleranceNotBlanket(t *testing.T) {
 		fw := newFakeWrite("K1")
 		fw.deleteStatus = tc.status
 		srv := fw.server(t)
-		wc := zotero.NewWriteClient(srv.URL, "srv", "key")
+		wc := zoteroprovider.NewWriteClient(srv.URL, "srv", "key")
 		deps := &ManualDeps{Write: wc, Root: root,
 			Record: &ManualRecord{AttachmentKey: "K1"}, RunID: "r"}
 		err := deps.DeleteAttachment("K1")
@@ -315,7 +315,7 @@ func TestManualCustodyAbortAtCreateThenRerunCompletes(t *testing.T) {
 	fw := newFakeWrite("BROKEN1")
 	fw.failCreate = true // run 1: the item POST dies
 	srv := fw.server(t)
-	wc := zotero.NewWriteClient(srv.URL, "srv", "key")
+	wc := zoteroprovider.NewWriteClient(srv.URL, "srv", "key")
 
 	caseArgs := ApplyCase{
 		CaseID: "manual-BROKEN1", AttachmentKey: "BROKEN1", DocumentKey: "P1",
@@ -384,7 +384,7 @@ func TestManualCustodyOrphanKeyReachesRecord(t *testing.T) {
 	// NEW1 stays absent from versions on purpose: the orphan-cleanup GET
 	// 404s → cleanup delete fails → the client returns (NEW1, err)
 	srv := fw.server(t)
-	wc := zotero.NewWriteClient(srv.URL, "srv", "key")
+	wc := zoteroprovider.NewWriteClient(srv.URL, "srv", "key")
 
 	rec := &ManualRecord{AttachmentKey: "BROKEN1", DocumentKey: "P1",
 		Reason: "orphan test", OriginalPath: orig, ContentType: "application/pdf", CreatedAt: ManualNow()}
@@ -456,7 +456,7 @@ func TestApplyOrphanKeyRidesErrorWhenAuditFails(t *testing.T) {
 	fw := newFakeWrite("BROKEN1")
 	fw.failUpload = true // mint NEW1, upload dies, cleanup-delete 404s → (NEW1, err)
 	srv := fw.server(t)
-	wc := zotero.NewWriteClient(srv.URL, "srv", "key")
+	wc := zoteroprovider.NewWriteClient(srv.URL, "srv", "key")
 
 	rec := &ManualRecord{AttachmentKey: "BROKEN1", DocumentKey: "P1",
 		Reason: "persist-fail test", ContentType: "application/pdf", CreatedAt: ManualNow()}
@@ -492,7 +492,7 @@ func TestApplyOrphanKeyReachesAudit(t *testing.T) {
 	fw := newFakeWrite("BROKEN1")
 	fw.failUpload = true // mint NEW1, upload dies, cleanup-delete 404s → (NEW1, err)
 	srv := fw.server(t)
-	wc := zotero.NewWriteClient(srv.URL, "srv", "key")
+	wc := zoteroprovider.NewWriteClient(srv.URL, "srv", "key")
 
 	rec := &ManualRecord{AttachmentKey: "BROKEN1", DocumentKey: "P1",
 		Reason: "orphan audit test", ContentType: "application/pdf", CreatedAt: ManualNow()}

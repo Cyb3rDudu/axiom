@@ -15,12 +15,12 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // Service coordinates a Zotero source with the ingest queue.
 type Service struct {
-	src     zotero.Source
+	src     zoteroprovider.Source
 	repo    *repo.Repo
 	baseURL string
 	libID   string
@@ -236,7 +236,7 @@ func (s *Service) StopConsolidation() {
 }
 
 // New builds a sync service for one Zotero source and the ingest queue.
-func New(src zotero.Source, r *repo.Repo, baseURL, libID string, log *log.Logger) *Service {
+func New(src zoteroprovider.Source, r *repo.Repo, baseURL, libID string, log *log.Logger) *Service {
 	return &Service{src: src, repo: r, baseURL: baseURL, libID: libID, log: log}
 }
 
@@ -378,7 +378,7 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 // batch items that are absent from the store or strictly newer. An older,
 // rejected delta attachment can therefore never override a newer projection's
 // path, hash or job. Runs before the apply transaction.
-func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, batch []zotero.CanonicalItem) (map[string]repo.AttachmentFileInfo, error) {
+func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, batch []zoteroprovider.CanonicalItem) (map[string]repo.AttachmentFileInfo, error) {
 	out := map[string]repo.AttachmentFileInfo{}
 
 	// 1. Committed store state: attachment key -> version + envelope path.
@@ -397,7 +397,7 @@ func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, b
 			return nil, err
 		}
 		storeVer[key] = ver
-		path := zotero.LocalFilePath(itemLocalPathFromEnv([]byte(env)))
+		path := zoteroprovider.LocalFilePath(itemLocalPathFromEnv([]byte(env)))
 		out[key] = repo.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
 	}
 	rows.Close()
@@ -407,14 +407,14 @@ func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, b
 
 	// 2. Batch items: use their path only if absent in store or newer version.
 	for _, it := range batch {
-		dims := zotero.ItemDims(it.Data)
+		dims := zoteroprovider.ItemDims(it.Data)
 		if dims.ParentKey == "" || dims.ItemType != "attachment" {
 			continue
 		}
 		if sv, ok := storeVer[dims.Key]; ok && sv > it.Version {
 			continue // rejected older delta: keep committed path/hash
 		}
-		path := zotero.LocalFilePath(itemLocalPathFor(it))
+		path := zoteroprovider.LocalFilePath(itemLocalPathFor(it))
 		out[dims.Key] = repo.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
 	}
 
@@ -440,7 +440,7 @@ func (s *Service) statAndHash(fi repo.AttachmentFileInfo) repo.AttachmentFileInf
 		return repo.AttachmentFileInfo{LocalPath: fi.LocalPath, Exists: false,
 			ErrCode: "FILE_NOT_FOUND", ErrMsg: "not a regular file", Retryable: false}
 	}
-	hash, herr := zotero.ContentHash(fi.LocalPath)
+	hash, herr := zoteroprovider.ContentHash(fi.LocalPath)
 	if herr != nil {
 		return classifyFileError(fi.LocalPath, herr, info)
 	}
@@ -478,7 +478,7 @@ func itemLocalPathFromEnv(env []byte) string {
 	return e.Links.Enclosure.Href
 }
 
-func itemLocalPathFor(it zotero.CanonicalItem) string {
+func itemLocalPathFor(it zoteroprovider.CanonicalItem) string {
 	var e struct {
 		Links struct {
 			Enclosure struct {

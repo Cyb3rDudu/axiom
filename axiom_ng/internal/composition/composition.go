@@ -49,7 +49,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
 	axsync "github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // Role names one lifecycle unit the composition can activate. The names are
@@ -156,7 +156,7 @@ type Root struct {
 	httpSrv      *http.Server
 	ln           net.Listener
 	srv          *server.Server
-	src          *zotero.LocalAPI
+	src          *zoteroprovider.LocalAPI
 	disp         *dispatcher.Dispatcher
 	inv          *fixerinvoker.Invoker
 	ingestClient RunnerClient
@@ -474,7 +474,7 @@ func (r *Root) buildComponents() {
 	// Construction shared by every component: the Zotero source and the
 	// server object (route registration is wiring, not lifecycle — the
 	// listener starts last as the api component).
-	r.src = zotero.NewLocalAPI(r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID)
+	r.src = zoteroprovider.NewLocalAPI(r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID)
 	if id := r.src.ServerID(); id == "" {
 		r.logger.Printf("WARNING: Zotero local API not reachable at %s (is Zotero running and the local API enabled?)", r.cfg.ZoteroBaseURL)
 	} else {
@@ -659,7 +659,7 @@ func (r *Root) componentsFor() []Component {
 				return nil
 			}
 			writeBase := strings.TrimSuffix(strings.TrimSuffix(r.cfg.ZoteroBaseURL, "/api"), "/")
-			zoteroWrite := zotero.NewWriteClient(writeBase, r.src.ServerID(), strings.TrimSpace(string(keyBytes)))
+			zoteroWrite := zoteroprovider.NewWriteClient(writeBase, r.src.ServerID(), strings.TrimSpace(string(keyBytes)))
 			r.srv.SetRepairAPI(r.rep, zoteroWrite, r.cfg.QuarantineRoot)
 			r.logger.Printf("repair API enabled (zotero write gateway, quarantine under %s)", r.cfg.QuarantineRoot)
 			// #206 fixer invoker: the mail-ingest side of the repair queue.

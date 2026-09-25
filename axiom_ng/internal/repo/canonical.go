@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -38,7 +38,7 @@ func (r *Repo) SetCanonicalCursorTx(ctx context.Context, tx pgx.Tx, sourceID str
 	return nil
 }
 
-func (r *Repo) upsertCanonicalItem(ctx context.Context, tx pgx.Tx, sourceID string, it zotero.CanonicalItem) error {
+func (r *Repo) upsertCanonicalItem(ctx context.Context, tx pgx.Tx, sourceID string, it zoteroprovider.CanonicalItem) error {
 	// A parent item has no parent: store NULL (not an empty string) so
 	// parent_key IS NULL predicates select parents correctly.
 	var parentKey any
@@ -81,7 +81,7 @@ func (r *Repo) markCanonicalItemsMissing(ctx context.Context, tx pgx.Tx, sourceI
 	return nil
 }
 
-func (r *Repo) upsertCanonicalCollection(ctx context.Context, tx pgx.Tx, sourceID string, c zotero.CanonicalCollection) error {
+func (r *Repo) upsertCanonicalCollection(ctx context.Context, tx pgx.Tx, sourceID string, c zoteroprovider.CanonicalCollection) error {
 	var parentKey any
 	if c.ParentKey != "" {
 		parentKey = c.ParentKey

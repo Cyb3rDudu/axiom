@@ -3,16 +3,16 @@ package server
 import (
 	"errors"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
-// ZoteroChecker adapts a zotero.Source to the server Checker interface.
+// ZoteroChecker adapts a zoteroprovider.Source to the server Checker interface.
 type ZoteroChecker struct {
-	src zotero.Source
+	src zoteroprovider.Source
 }
 
 // CheckZotero wraps a zotero source as a health checker.
-func CheckZotero(src zotero.Source) *ZoteroChecker {
+func CheckZotero(src zoteroprovider.Source) *ZoteroChecker {
 	return &ZoteroChecker{src: src}
 }
 

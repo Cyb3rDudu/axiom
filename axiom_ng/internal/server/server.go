@@ -12,7 +12,7 @@ import (
 	axlibrary "github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/version"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -54,7 +54,7 @@ type Server struct {
 	runnerLive     *RunnerLive
 	ws             *wsServer
 	repairRepo     *repo.Repo
-	zoteroWrite    *zotero.WriteClient
+	zoteroWrite    *zoteroprovider.WriteClient
 	quarantineRoot string
 	// #262 contextual health state: returns "active",
 	// "degraded_no_sync" or "" (no rules configured). nil = omitted.

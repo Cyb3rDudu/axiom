@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // TestSyncRetiresDeletedAttachmentSameTxIT is the #184 Durchpfad witness for
@@ -21,7 +21,7 @@ func TestSyncRetiresDeletedAttachmentSameTxIT(t *testing.T) {
 	ctx := context.Background()
 
 	ch := "zombiewitness-hash"
-	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: "lib-zombie",
+	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zoteroprovider.live", libraryID: "lib-zombie",
 		docKey: "ZOMBIEDOC", attKey: "ZOMBIEATT", contentHash: &ch}, "completed", 1)
 
 	var snapID string
@@ -40,7 +40,7 @@ func TestSyncRetiresDeletedAttachmentSameTxIT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lr.rep.ApplyCanonicalBatch(ctx, tx, sourceIDFor(t, lr), zotero.CanonicalBatch{
+	if _, err := lr.rep.ApplyCanonicalBatch(ctx, tx, sourceIDFor(t, lr), zoteroprovider.CanonicalBatch{
 		FullSnapshot: true, NewVersion: 2,
 	}, nil, map[string]AttachmentFileInfo{}, nil, ContextualRules{}); err != nil {
 		t.Fatalf("apply: %v", err)

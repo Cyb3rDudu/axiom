@@ -27,7 +27,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -81,7 +81,7 @@ var responseClass = map[string]string{
 func buildFullServer() *server.Server {
 	srv := server.New("127.0.0.1:0", log.New(os.Stderr, "", 0))
 	srv.SetRepairAPI(repo.New(nil),
-		zotero.NewWriteClient("http://127.0.0.1:1", "", "baseline-inventory"), "")
+		zoteroprovider.NewWriteClient("http://127.0.0.1:1", "", "baseline-inventory"), "")
 	srv.SetConsolidateService(noopConsolidator{})
 	// F05 #299: the readiness field is part of the frozen identity — the
 	// scaffolding wires the composition-root provider with the full-stack

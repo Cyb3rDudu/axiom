@@ -14,7 +14,7 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 func TestOverrideOnceAndPersistedSelectionIT(t *testing.T) {
@@ -36,7 +36,7 @@ func TestOverrideOnceAndPersistedSelectionIT(t *testing.T) {
 	os.WriteFile(pdfPath, []byte("override-once"), 0o600)
 
 	src := &canonicalFake{serverID: "selonce", baseURL: newScriptedBase(), version: 3}
-	src.items = []zotero.CanonicalItem{
+	src.items = []zoteroprovider.CanonicalItem{
 		mkItemJSON("OB1", "book", "", "Override Book", map[string]any{
 			"creators": []map[string]string{{"firstName": "Ada", "lastName": "Lovelace", "creatorType": "author"}},
 		}),
@@ -147,7 +147,7 @@ func TestCollectionSelectionGatesSyncIT(t *testing.T) {
 	os.WriteFile(pdfOut, []byte("coll-out"), 0o600)
 
 	src := &canonicalFake{serverID: "selcoll", baseURL: newScriptedBase(), version: 3}
-	src.items = []zotero.CanonicalItem{
+	src.items = []zoteroprovider.CanonicalItem{
 		// The parent's raw_data carries its collection — rebuildMemberships
 		// derives the membership (and thus the collection expansion) from it.
 		mkItemJSON("CB1", "book", "", "In Collection", map[string]any{
@@ -174,7 +174,7 @@ func TestCollectionSelectionGatesSyncIT(t *testing.T) {
 	}
 	src.items[1].Envelope = envFor("CA1", "CB1", "in.pdf", pdfIn)
 	src.items[3].Envelope = envFor("CA2", "CB2", "out.pdf", pdfOut)
-	src.collections = []zotero.CanonicalCollection{
+	src.collections = []zoteroprovider.CanonicalCollection{
 		{Key: "COLL0001", Name: "Coll", Envelope: json.RawMessage(`{"key":"COLL0001","data":{"key":"COLL0001","name":"Coll","parentCollection":false}}`)},
 	}
 
@@ -272,7 +272,7 @@ func TestSyncIncludeOverrideEnqueuesJob(t *testing.T) {
 	os.WriteFile(pdfPath, []byte("healed-bytes"), 0o600)
 
 	src := &canonicalFake{serverID: "healsync", baseURL: newScriptedBase(), version: 2}
-	src.items = []zotero.CanonicalItem{
+	src.items = []zoteroprovider.CanonicalItem{
 		mkItemJSON("HB1", "book", "", "Healed Book", map[string]any{
 			"creators": []map[string]string{{"firstName": "Grace", "lastName": "Hopper", "creatorType": "author"}},
 		}),
@@ -362,7 +362,7 @@ func TestSyncIncludeUnderCollectionSelectionInBase(t *testing.T) {
 	os.WriteFile(pdf, []byte("v1"), 0o600)
 
 	src := &canonicalFake{serverID: "healsynccoll", baseURL: newScriptedBase(), version: 2}
-	src.items = []zotero.CanonicalItem{
+	src.items = []zoteroprovider.CanonicalItem{
 		mkItemJSON("HCB1", "book", "", "Healed In Collection", map[string]any{
 			"creators":    []map[string]string{{"firstName": "Ada", "lastName": "Lovelace", "creatorType": "author"}},
 			"collections": []string{"HCOLL1"},
@@ -380,7 +380,7 @@ func TestSyncIncludeUnderCollectionSelectionInBase(t *testing.T) {
 		return b
 	}
 	src.items[1].Envelope = env(2)
-	src.collections = []zotero.CanonicalCollection{
+	src.collections = []zoteroprovider.CanonicalCollection{
 		{Key: "HCOLL1", Name: "HColl", Envelope: json.RawMessage(`{"key":"HCOLL1","data":{"key":"HCOLL1","name":"HColl","parentCollection":false}}`)},
 	}
 

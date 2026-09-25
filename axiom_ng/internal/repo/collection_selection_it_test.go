@@ -16,7 +16,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // seedSelDoc seeds a document + attachment (canonical rows like a real sync)
@@ -54,11 +54,11 @@ func applySel(t *testing.T, lr *leaseRepo, srcID string, files map[string]Attach
 	// marked deleted — passing nil would delete them all and empty the
 	// collection expansion), so pass the fixture collections every time,
 	// exactly like the real syncer does.
-	colls := []zotero.CanonicalCollection{
+	colls := []zoteroprovider.CanonicalCollection{
 		{Key: "VWLPRAXY", Name: "VWLPRAXY", Envelope: json.RawMessage(`{"key":"VWLPRAXY"}`)},
 		{Key: "SECOND88", Name: "SECOND88", Envelope: json.RawMessage(`{"key":"SECOND88"}`)},
 	}
-	res, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zotero.CanonicalBatch{NewVersion: 2}, colls, files, selection, ContextualRules{})
+	res, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zoteroprovider.CanonicalBatch{NewVersion: 2}, colls, files, selection, ContextualRules{})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestCollectionSelectionCascadeIT(t *testing.T) {
 	var srcID string
 	if err := lr.pool.QueryRow(ctx, `
 		INSERT INTO zotero_sources (base_url, library_id, server_id)
-		VALUES ('https://zotero.a2c', 'lib-1', 'srv') RETURNING id::text`).Scan(&srcID); err != nil {
+		VALUES ('https://zoteroprovider.a2c', 'lib-1', 'srv') RETURNING id::text`).Scan(&srcID); err != nil {
 		t.Fatal(err)
 	}
 	// canonical parent + attachment items (like a real sync). The parent
