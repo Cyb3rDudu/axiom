@@ -17,24 +17,41 @@ import (
 // buildPDF assembles a minimal VALID one-page PDF (uncompressed content
 // stream, proper xref) carrying the given text lines.
 func buildPDF(lines ...string) []byte {
+	return buildPDFPages(lines...)
+}
+
+// buildPDFPages assembles a minimal VALID multi-page PDF — one page per
+// argument (each argument is that page's text block).
+func buildPDFPages(pages ...string) []byte {
 	esc := func(s string) string {
 		s = strings.ReplaceAll(s, "\\", "\\\\")
 		s = strings.ReplaceAll(s, "(", "\\(")
 		s = strings.ReplaceAll(s, ")", "\\)")
 		return s
 	}
-	var content strings.Builder
-	content.WriteString("BT /F1 12 Tf 72 720 Td 14 TL\n")
-	for _, l := range lines {
-		content.WriteString("(" + esc(l) + ") Tj T*\n")
-	}
-	content.WriteString("ET\n")
-
 	var objs []string
 	objs = append(objs, "<< /Type /Catalog /Pages 2 0 R >>")
-	objs = append(objs, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
-	objs = append(objs, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>")
-	objs = append(objs, fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", content.Len(), content.String()))
+	kids := make([]string, len(pages))
+	for i := range pages {
+		kids[i] = fmt.Sprintf("%d 0 R", 3+i*2)
+	}
+	objs = append(objs, fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>",
+		strings.Join(kids, " "), len(pages)))
+	fontObj := 3 + len(pages)*2
+	for _, page := range pages {
+		var content strings.Builder
+		content.WriteString("BT /F1 12 Tf 72 720 Td 14 TL\n")
+		for _, l := range strings.Split(page, "\n") {
+			if l != "" {
+				content.WriteString("(" + esc(l) + ") Tj T*\n")
+			}
+		}
+		content.WriteString("ET\n")
+		objs = append(objs, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents "+
+			fmt.Sprintf("%d 0 R", len(objs)+2)+" /Resources << /Font << /F1 "+
+			fmt.Sprintf("%d 0 R", fontObj)+" >> >> >>")
+		objs = append(objs, fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", content.Len(), content.String()))
+	}
 	objs = append(objs, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
 
 	var b strings.Builder
@@ -112,6 +129,36 @@ func TestPDFInspectorHonestEmpty(t *testing.T) {
 	got, err = insp.Inspect(ctx, "application/pdf", stagePDF(t, buildPDF("Nur ein Titel ohne Impressum")))
 	if err != nil || !isEmpty(got) {
 		t.Fatalf("plain page inspect = %+v %v, want empty", got, err)
+	}
+}
+
+// The page bound (inspectPages=5) is DELIBERATE: title page + imprint
+// live up front. A DOI first appearing on page 6 stays invisible — the
+// bound is pinned so a regression to "scan everything" (slow, and
+// hostile-PDF bait) fails here.
+func TestPDFInspectorPageBoundIsFive(t *testing.T) {
+	pages := make([]string, 6)
+	for i := range pages {
+		pages[i] = fmt.Sprintf("plain filler page %d", i+1)
+	}
+	pages[5] = "DOI: 10.5555/hidden.on.page.six"
+	insp := NewPDFInspector()
+	got, err := insp.Inspect(context.Background(), "application/pdf", stagePDF(t, buildPDFPages(pages...)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DOI != "" {
+		t.Fatalf("page 6 must be outside the inspectPages bound, got DOI %q", got.DOI)
+	}
+	// The same DOI on page 5 (inside the bound) is found — the test
+	// pins the BOUND, not blindness.
+	pages[4], pages[5] = "DOI: 10.5555/on.page.five", "filler"
+	got, err = insp.Inspect(context.Background(), "application/pdf", stagePDF(t, buildPDFPages(pages...)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DOI != "10.5555/on.page.five" {
+		t.Fatalf("page 5 must be inside the bound, got DOI %q", got.DOI)
 	}
 }
 

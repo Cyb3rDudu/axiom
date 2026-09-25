@@ -1,16 +1,21 @@
-// write.go — write client for the #184 fix-service loop, part of the
-// Zotero adapter package since F07 (#301).
-//
+// write.go — the Zotero local API write client: born as the #184
+// fix-service write surface (delete broken attachment, upload healed
+// PDF), compiled into the F07 adapter package (#301) which layers the
+// versioned item primitives (GetItem/PutItem, collections) on top.
 // The RAG is the ONLY gateway to Zotero: the fix-service never sees
 // credentials. Writes go through the Zotero local API write surface
 // (verified live against Zotero 10.0-beta: server_localAPI.js semantics).
 //
-// Exactly TWO mutations exist (#184 design nail 3):
+// Mutations (each under the If-Unmodified-Since-Version guard):
 //
-//	DeleteAttachmentItem — remove a (quarantined-before) broken attachment
-//	CreateAttachmentWithFile — 3-phase upload of the healed PDF under a
-//	  SCHEMA filename ({Autor|Institution} - {Jahr} - {Titel}); there is
-//	  deliberately NO filename patch.
+//	DeleteAttachmentItem — remove any item (the fix-service quarantines a
+//	  broken attachment BEFORE deleting it)
+//	CreateAttachmentWithFile — 3-phase upload of a file under a parent,
+//	  filename as given (the fix-service passes the SCHEMA filename
+//	  {Autor|Institution} - {Jahr} - {Titel}; there is deliberately NO
+//	  filename patch)
+//	PutItem / PostCollections / DeleteCollection — the F07 adapter's
+//	  versioned item and collection surface
 //
 // Live-probed protocol facts (do not "fix" without re-probing):
 //   - writes need Zotero-Server-ID (428 without) + local API key
@@ -28,6 +33,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -37,7 +43,7 @@ import (
 	"strings"
 	"time"
 
-	"errors"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
 )
 
 // WriteClient talks to the Zotero local API with write authorization.
@@ -138,6 +144,8 @@ func (w *WriteClient) ItemVersion(key string) (string, error) {
 
 // GetItem fetches one item's data JSON plus its current version (the
 // adapter's readback primitive; absent items surface as *StatusError 404).
+// A missing Last-Modified-Version header is an ERROR, not "": the caller
+// would PUT with an empty guard — an unguarded write.
 func (w *WriteClient) GetItem(key string) (data []byte, version string, err error) {
 	raw, hdr, err := w.do(http.MethodGet, "/api/users/0/items/"+key, nil, nil)
 	if err != nil {
@@ -149,7 +157,12 @@ func (w *WriteClient) GetItem(key string) (data []byte, version string, err erro
 	if err := json.Unmarshal(raw, &env); err != nil || len(env.Data) == 0 {
 		return nil, "", fmt.Errorf("item %s: undecodable envelope %.200s", key, raw)
 	}
-	return env.Data, hdr.Get("Last-Modified-Version"), nil
+	v := hdr.Get("Last-Modified-Version")
+	if v == "" {
+		return nil, "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
+			fmt.Errorf("item %s: no Last-Modified-Version header", key), "item read")
+	}
+	return env.Data, v, nil
 }
 
 // PutItem replaces an item's data under the optimistic-concurrency guard
@@ -199,21 +212,25 @@ func (w *WriteClient) DeleteCollection(key string) error {
 // GetItemEnvelope fetches the FULL item envelope (data + links — the
 // enclosure link carries the local storage path, the file readback's
 // source: the local API answers GET /items/<key>/file with a redirect to
-// a file:// URL, not with bytes).
+// a file:// URL, not with bytes). The version guard applies as in GetItem.
 func (w *WriteClient) GetItemEnvelope(key string) (raw []byte, version string, err error) {
 	raw, hdr, err := w.do(http.MethodGet, "/api/users/0/items/"+key, nil, nil)
-	return raw, hdr.Get("Last-Modified-Version"), err
+	if err != nil {
+		return nil, "", err
+	}
+	if v := hdr.Get("Last-Modified-Version"); v == "" {
+		return nil, "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
+			fmt.Errorf("item %s: no Last-Modified-Version header", key), "envelope read")
+	} else {
+		version = v
+	}
+	return raw, version, nil
 }
 
-// GetFile downloads an attachment's stored bytes (readback: the file must
-// be retrievable and match the uploaded digest/size).
-func (w *WriteClient) GetFile(key string) ([]byte, error) {
-	raw, _, err := w.do(http.MethodGet, "/api/users/0/items/"+key+"/file", nil, nil)
-	return raw, err
-}
-
-// Mutation 1: delete an attachment item (the original was quarantined by
-// the caller BEFORE this call — quarantine-first is a design nail).
+// DeleteAttachmentItem removes ANY item under the version guard (the
+// name predates the adapter: the fix-service loop deletes quarantined
+// broken attachments; the adapter's upload crash-recovery cleanup deletes
+// a just-created empty attachment through it too).
 func (w *WriteClient) DeleteAttachmentItem(key string) error {
 	ver, err := w.ItemVersion(key)
 	if err != nil {

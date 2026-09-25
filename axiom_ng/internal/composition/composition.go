@@ -581,6 +581,9 @@ func (r *Root) componentsFor() []Component {
 				// Write key optional: without it the provider is read-only and
 				// the write ports report Unavailable (capability-honest).
 				apiKey := ""
+				// len > 8: a real Zotero local-API key is far longer; shorter
+				// file content is a placeholder/absent — same heuristic the
+				// repair component applies to its key file.
 				if b, kerr := os.ReadFile(r.cfg.ZoteroWriteKeyFile); kerr == nil && len(b) > 8 {
 					apiKey = strings.TrimSpace(string(b))
 				} else {

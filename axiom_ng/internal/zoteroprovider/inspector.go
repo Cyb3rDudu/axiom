@@ -15,8 +15,8 @@ import (
 	"strconv"
 	"strings"
 
-	pdflib "github.com/ledongthuc/pdf"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
+	pdflib "github.com/ledongthuc/pdf"
 )
 
 // PDFInspector extracts rung-1 fields from PDF content.
@@ -70,7 +70,7 @@ var (
 	// ("ISBN: 978-…" matched as a short keyworded form).
 	isbn13Re = regexp.MustCompile(`\b97[89](?:[-\x{2010}\x{2011} ]?\d){10}`)
 	isbn10Re = regexp.MustCompile(`ISBN[-\x{2010}\x{2011} :]+\d{1,5}[-\x{2010}\x{2011} ]?\d{1,7}[-\x{2010}\x{2011} ]?\d{1,7}[-\x{2010}\x{2011} ]?[\dX]`)
-	yearRe = regexp.MustCompile(`©\s*(\d{4})|(?:copyright|Copyright)\s*(?:©)?\s*(\d{4})`)
+	yearRe   = regexp.MustCompile(`©\s*(\d{4})|(?:copyright|Copyright)\s*(?:©)?\s*(\d{4})`)
 )
 
 // extractImprintFields is pure (unit-testable without a PDF): DOI, ISBN

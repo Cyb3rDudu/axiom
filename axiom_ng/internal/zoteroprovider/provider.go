@@ -8,13 +8,17 @@
 //
 //	CatalogReader      full pagination internally (every Zotero page
 //	                   followed, no first-page shortcut); serves one
-//	                   CONSISTENT snapshot per catalog walk — own
-//	                   mutations invalidate it, a TTL bounds staleness
-//	                   from external edits (Zotero UI). Records carry
-//	                   their attachments and COLLECTION KEYS as
-//	                   memberships; ContentHash is the axiom-sha256 tag
-//	                   of imported files, "" for foreign attachments
-//	                   (honest: Zotero exposes md5, not our sha256).
+//	                   CONSISTENT snapshot per catalog walk — page tokens
+//	                   carry the snapshot GENERATION, so an invalidation
+//	                   (own mutation) or TTL rebuild (external edits)
+//	                   mid-walk fails the NEXT page loudly (Conflict —
+//	                   restart the scan) instead of silently mixing
+//	                   generations; a dedup scan can never skip records
+//	                   that way. Records carry their attachments and
+//	                   COLLECTION KEYS as memberships; ContentHash is the
+//	                   axiom-sha256 tag of imported files, "" for foreign
+//	                   attachments (honest: Zotero exposes md5, not our
+//	                   sha256).
 //	RecordWriter      EnsureRecord via anchor ledger + axiom-imp tag;
 //	               diverging fields on an anchored record are a
 //	                   versioned update (PUT + If-Unmodified-Since-Version).
@@ -40,8 +44,10 @@
 // Single-writer: constructing a WRITE-capable provider ACQUIRES the
 // provider-scoped writer lease (library.WriterLeaseConflict refuses a
 // second instance at start, cross-process via the shared Library
-// persistence) and renews it until Close. Read-only providers may
-// coexist (no lease).
+// persistence) and renews it until Close. A LOST lease (renewal failed —
+// taken over after silence) stops the writer for good: the write ports
+// refuse with Conflict until Close (no logging exists in the provider —
+// the refusal is the signal). Read-only providers may coexist (no lease).
 package zoteroprovider
 
 import (
@@ -59,6 +65,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
@@ -75,6 +82,9 @@ type ProviderStore interface {
 	AppendWriteAudit(ctx context.Context, r library.WriteAuditRow) error
 	LookupProviderAnchor(ctx context.Context, scope, kind, anchor string) (string, int64, error)
 	PutProviderAnchor(ctx context.Context, scope, kind, anchor, providerID string, version int64) (string, error)
+	// EvictProviderAnchor drops a row whose provider id proved DEAD (the
+	// item vanished from Zotero) so the next ensure can re-anchor fresh.
+	EvictProviderAnchor(ctx context.Context, scope, kind, anchor, providerID string) error
 }
 
 // VersionConflictError reports a Zotero 412 (If-Unmodified-Since-Version
@@ -144,8 +154,11 @@ type Provider struct {
 	ttl    time.Duration
 	cancel context.CancelFunc
 
-	mu  sync.Mutex
-	cat *catalogSnapshot
+	mu     sync.Mutex
+	cat    *catalogSnapshot
+	catGen uint64 // last-assigned snapshot generation (bumped per rebuild)
+
+	lostLease atomic.Bool // set when a renewal failed: writes refuse (Conflict)
 }
 
 // catalogTTL bounds snapshot staleness from EXTERNAL edits (Zotero UI
@@ -156,6 +169,7 @@ const catalogTTL = 30 * time.Second
 const catalogPageSize = 100
 
 type catalogSnapshot struct {
+	gen     uint64
 	built   time.Time
 	records []library.CatalogRecord
 }
@@ -172,10 +186,11 @@ func New(ctx context.Context, o Options) (*Provider, error) {
 	if libID == "" {
 		libID = "users/0"
 	}
-	read := NewLocalAPI(o.BaseURL, libID)
+	var readOpts []LocalAPIOption
 	if o.HTTPClient != nil {
-		read = NewLocalAPI(o.BaseURL, libID, WithHTTPClient(o.HTTPClient))
+		readOpts = append(readOpts, WithHTTPClient(o.HTTPClient))
 	}
+	read := NewLocalAPI(o.BaseURL, libID, readOpts...)
 	p := &Provider{
 		scope: LeaseScope(o.BaseURL, libID),
 		read:  read,
@@ -192,7 +207,7 @@ func New(ctx context.Context, o Options) (*Provider, error) {
 	if o.APIKey == "" {
 		return p, nil // read-only: no lease, write ports report Unavailable
 	}
-	writeBase := strings.TrimSuffix(strings.TrimSuffix(o.BaseURL, "/api"), "/")
+	writeBase := strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(o.BaseURL, "/"), "/api"), "/")
 	p.write = NewWriteClient(writeBase, read.ServerID(), o.APIKey)
 	if o.HTTPClient != nil {
 		p.write.HTTP = o.HTTPClient
@@ -219,9 +234,11 @@ func (p *Provider) Close() error {
 	return p.store.ReleaseWriterLease(ctx, p.scope, p.owner)
 }
 
-// heartbeat renews the lease at TTL/3 until the provider closes. A lost
-// lease (takeover after silence) is logged and stops renewing — the
-// optimistic-versioning last line takes over from there.
+// heartbeat renews the lease at TTL/3 until the provider closes. A
+// failed renewal (lease taken over after silence) latches the lost-lease
+// flag and STOPS renewing — the write ports refuse everything from there
+// (writeable), and Zotero's optimistic versioning is the last line for
+// any write already in flight.
 func (p *Provider) heartbeat(ctx context.Context) {
 	t := time.NewTicker(p.ttl / 3)
 	defer t.Stop()
@@ -231,15 +248,21 @@ func (p *Provider) heartbeat(ctx context.Context) {
 			return
 		case <-t.C:
 			rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			_ = p.store.RenewWriterLease(rctx, p.scope, p.owner)
+			err := p.store.RenewWriterLease(rctx, p.scope, p.owner)
 			cancel()
+			if err != nil {
+				p.lostLease.Store(true)
+				return
+			}
 		}
 	}
 }
 
-// LeaseScope is the provider-scoped writer-lease identity.
+// LeaseScope is the provider-scoped writer-lease identity. Trailing
+// slashes normalize FIRST so base, base/ and base/api/ share one scope.
 func LeaseScope(baseURL, libraryID string) string {
-	return "zotero|" + strings.TrimSuffix(strings.TrimSuffix(baseURL, "/api"), "/") + "|" + libraryID
+	base := strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/api"), "/")
+	return "zotero|" + base + "|" + libraryID
 }
 
 func defaultOwner() string {
@@ -277,7 +300,7 @@ type zotItem struct {
 	URL         string       `json:"url,omitempty"`
 	AccessDate  string       `json:"accessDate,omitempty"`
 	Collections []string     `json:"collections,omitempty"`
-	Tags        []zotTag    `json:"tags,omitempty"`
+	Tags        []zotTag     `json:"tags,omitempty"`
 	// attachment-only fields
 	LinkMode    string `json:"linkMode,omitempty"`
 	ContentType string `json:"contentType,omitempty"`
@@ -335,8 +358,11 @@ func hasTag(tags []zotTag, prefix string) (string, bool) {
 
 // ListRecords implements library.CatalogReader. The snapshot is rebuilt
 // on the first page of a walk when invalidated (own mutations) or stale
-// (TTL — external edits); subsequent pages of the SAME walk are served
-// from that snapshot, so a dedup scan sees one consistent catalog state.
+// (TTL — external edits); every page token of a walk carries the snapshot
+// GENERATION, so pages are pinned to the state the walk started from. A
+// rebuild in between (own mutation elsewhere, TTL expiry) makes the next
+// page of the OLD walk fail loudly — Conflict, restart the scan — never a
+// silent mix of two generations (a dedup scan must not skip records).
 func (p *Provider) ListRecords(ctx context.Context, pageToken string) (library.CatalogPage, error) {
 	snap, err := p.snapshot(ctx)
 	if err != nil {
@@ -344,11 +370,15 @@ func (p *Provider) ListRecords(ctx context.Context, pageToken string) (library.C
 	}
 	start := 0
 	if pageToken != "" {
-		v, perr := strconv.Atoi(pageToken)
-		if perr != nil || v < 0 {
+		gen, off, ok := parseCatalogToken(pageToken)
+		if !ok || off < 0 {
 			return library.CatalogPage{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "bad catalog page token "+pageToken)
 		}
-		start = v
+		if gen != snap.gen {
+			return library.CatalogPage{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassConflict,
+				fmt.Sprintf("catalog snapshot changed during walk (token gen %d, current gen %d) — restart the scan", gen, snap.gen))
+		}
+		start = off
 	}
 	end := start + catalogPageSize
 	if end > len(snap.records) {
@@ -359,9 +389,26 @@ func (p *Provider) ListRecords(ctx context.Context, pageToken string) (library.C
 	}
 	page := library.CatalogPage{Records: append([]library.CatalogRecord(nil), snap.records[start:end]...)}
 	if end < len(snap.records) {
-		page.NextPageToken = strconv.Itoa(end)
+		page.NextPageToken = strconv.FormatUint(snap.gen, 10) + ":" + strconv.Itoa(end)
 	}
 	return page, nil
+}
+
+// parseCatalogToken splits "<generation>:<offset>" (the walk pin).
+func parseCatalogToken(tok string) (uint64, int, bool) {
+	genS, offS, ok := strings.Cut(tok, ":")
+	if !ok {
+		return 0, 0, false
+	}
+	gen, err := strconv.ParseUint(genS, 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	off, err := strconv.Atoi(offS)
+	if err != nil {
+		return 0, 0, false
+	}
+	return gen, off, true
 }
 
 func (p *Provider) snapshot(ctx context.Context) (*catalogSnapshot, error) {
@@ -377,8 +424,10 @@ func (p *Provider) snapshot(ctx context.Context) (*catalogSnapshot, error) {
 	docs := map[string]*library.CatalogRecord{}
 	var order []string
 	for _, it := range batch.Items {
-		if it.ItemType == "attachment" || it.ItemType == "note" {
-			continue // attachments fold into parents below
+		// Attachments fold into parents below; notes and annotations are
+		// not documents (annotations multiply per PDF read — never records).
+		if it.ItemType == "attachment" || it.ItemType == "note" || it.ItemType == "annotation" {
+			continue
 		}
 		var d zotItem
 		if err := json.Unmarshal(it.Data, &d); err != nil {
@@ -431,7 +480,8 @@ func (p *Provider) snapshot(ctx context.Context) (*catalogSnapshot, error) {
 		})
 		records = append(records, *docs[k])
 	}
-	p.cat = &catalogSnapshot{built: time.Now(), records: records}
+	p.catGen++
+	p.cat = &catalogSnapshot{gen: p.catGen, built: time.Now(), records: records}
 	return p.cat, nil
 }
 
@@ -445,8 +495,14 @@ func (p *Provider) invalidate() {
 // ---------------------------------------------------------------------------
 // RecordWriter
 
-// writeable guards the write ports of a read-only construction.
+// writeable guards the write ports of a read-only construction and of a
+// writer whose lease was lost (latched by the heartbeat — a taken-over
+// lease must not write on, not even once).
 func (p *Provider) writeable(what string) error {
+	if p.lostLease.Load() {
+		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassConflict,
+			"writer lease lost (renewal failed; scope "+p.scope+") — refusing "+what)
+	}
 	if p.write == nil {
 		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 			"zotero provider is read-only (no write key): "+what+" unsupported")
@@ -475,7 +531,8 @@ func (p *Provider) EnsureRecord(ctx context.Context, d library.RecordDraft) (str
 		if rerr != nil {
 			return "", rerr
 		}
-		if ok {			if err := p.audit(ctx, "ensure_record", anchor, id, "reused", map[string]any{"title": d.Title}); err != nil {
+		if ok {
+			if err := p.audit(ctx, "ensure_record", anchor, id, "reused", map[string]any{"title": d.Title}); err != nil {
 				return "", err
 			}
 			return id, nil
@@ -558,8 +615,10 @@ func (p *Provider) EnsureRecord(ctx context.Context, d library.RecordDraft) (str
 	return key, nil
 }
 
-// findTaggedRecord searches items by the anchor tag (client-side tag
-// verification — an instance that ignores the tag filter cannot fool us).
+// findTaggedRecord searches items by the anchor tag. Verification is
+// EXACT (t.Tag == tag): an instance that ignores the tag filter and
+// returns a decoy carrying some OTHER axiom-imp:<…> tag must not be
+// adopted — the anchor is the identity, a prefix is not.
 func (p *Provider) findTaggedRecord(ctx context.Context, tag string) (string, error) {
 	raw, err := p.read.getItems(ctx, url.Values{"tag": {tag}})
 	if err != nil {
@@ -570,8 +629,13 @@ func (p *Provider) findTaggedRecord(ctx context.Context, tag string) (string, er
 		if !ok || it.ItemType == "attachment" || it.ItemType == "note" {
 			continue
 		}
-		if _, tagged := hasTag(it.Tags, "axiom-imp:"); tagged && it.Key != "" {
-			return it.Key, nil
+		if it.Key == "" {
+			continue
+		}
+		for _, t := range it.Tags {
+			if t.Tag == tag {
+				return it.Key, nil
+			}
 		}
 	}
 	return "", nil
@@ -621,28 +685,32 @@ func (p *Provider) readbackRecord(ctx context.Context, key string, d library.Rec
 }
 
 // updateRecord applies diverged fields under the optimistic-versioning
-// guard (PUT + If-Unmodified-Since-Version), then readbacks.
+// guard (PUT + If-Unmodified-Since-Version), then readbacks. The PUT
+// body is the item's RAW data with ONLY the draft's fields overlaid —
+// unmodeled fields (abstractNote, pages, volume, extra, …) survive; a
+// typed struct round-trip would strip them.
 func (p *Provider) updateRecord(ctx context.Context, key string, d library.RecordDraft, anchor string) (string, error) {
 	data, version, err := p.write.GetItem(key)
 	if err != nil {
 		return "", mapWriteErr(err, key, "ensure_record update read")
 	}
-	var it zotItem
-	if err := json.Unmarshal(data, &it); err != nil {
-		return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "update decode "+key)
+	changes := map[string]any{
+		"title":      d.Title,
+		"creators":   jsonValue(creatorsFromDraft(d.Authors)),
+		"publisher":  d.Publisher,
+		"language":   d.Language,
+		"DOI":        library.NormalizeDOI(d.DOI),
+		"ISBN":       library.NormalizeISBN(d.ISBN),
+		"url":        d.URL,
+		"accessDate": d.AccessDate,
 	}
-	it.Title = d.Title
-	it.Creators = creatorsFromDraft(d.Authors)
-	it.Publisher = d.Publisher
-	it.Language = d.Language
-	it.DOI = library.NormalizeDOI(d.DOI)
-	it.ISBN = library.NormalizeISBN(d.ISBN)
-	it.URL = d.URL
-	it.AccessDate = d.AccessDate
 	if y := yearPtrValue(d.Year); y > 0 {
-		it.Date = strconv.Itoa(y)
+		changes["date"] = strconv.Itoa(y)
 	}
-	body, _ := json.Marshal(it)
+	body, merr := mergeItemJSON(data, changes)
+	if merr != nil {
+		return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, merr, "update merge "+key)
+	}
 	if err := p.write.PutItem(key, body, version); err != nil {
 		return "", mapWriteErr(err, key, "ensure_record update")
 	}
@@ -673,20 +741,25 @@ func (p *Provider) EnsureRendition(ctx context.Context, d library.RenditionDraft
 	}
 	anchor := d.ParentProviderID + "|" + d.ContentHash
 
-	// 1. Anchor ledger (fast path) with live verification.
+	// 1. Anchor ledger (fast path) with live verification. A readback
+	// failure means the anchored attachment VANISHED (deleted externally,
+	// or diverged): evict the stale row (guarded — only this exact row) so
+	// the re-upload below re-anchors fresh instead of returning a dead id.
 	if id, _, err := p.store.LookupProviderAnchor(ctx, p.scope, "rendition", anchor); err == nil && id != "" {
 		if rerr := p.readbackRendition(ctx, id, d, false); rerr == nil {
 			if aerr := p.audit(ctx, "ensure_rendition", anchor, id, "reused", nil); aerr != nil {
 				return "", aerr
 			}
 			return id, nil
+		} else {
+			_ = p.store.EvictProviderAnchor(ctx, p.scope, "rendition", anchor, id) // best effort; the fresh insert wins either way
 		}
 	} else if err != nil && !errors.Is(err, errAnchorAbsent) {
 		return "", err
 	}
 
 	// 2. Tag search (crash window between upload and ledger insert).
-	if found, err := p.findTaggedAttachment(ctx, "axiom-sha256:"+d.ContentHash, d.ParentProviderID); err != nil {
+	if found, err := p.findTaggedAttachment(ctx, d.ContentHash, d.ParentProviderID); err != nil {
 		return "", err
 	} else if found != "" {
 		if _, err := p.store.PutProviderAnchor(ctx, p.scope, "rendition", anchor, found, 0); err != nil {
@@ -821,8 +894,8 @@ func enclosurePath(raw []byte) string {
 	return href
 }
 
-func (p *Provider) findTaggedAttachment(ctx context.Context, tag, parentKey string) (string, error) {
-	raw, err := p.read.getItems(ctx, url.Values{"tag": {tag}})
+func (p *Provider) findTaggedAttachment(ctx context.Context, contentHash, parentKey string) (string, error) {
+	raw, err := p.read.getItems(ctx, url.Values{"tag": {"axiom-sha256:" + contentHash}})
 	if err != nil {
 		return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassUnavailable, err, "rendition tag search")
 	}
@@ -831,8 +904,13 @@ func (p *Provider) findTaggedAttachment(ctx context.Context, tag, parentKey stri
 		if !ok || it.ItemType != "attachment" || it.Key == "" {
 			continue
 		}
-		if sha, tagged := hasTag(it.Tags, "axiom-sha256:"); tagged && it.ParentItem == parentKey && sha != "" {
-			return it.Key, nil
+		// EXACT hash + parent: a decoy under the same parent carrying a
+		// different axiom-sha256 tag (server ignored the filter) must not
+		// be adopted — the digest is the identity.
+		if it.ParentItem == parentKey {
+			if sha, tagged := hasTag(it.Tags, "axiom-sha256:"); tagged && sha == contentHash {
+				return it.Key, nil
+			}
 		}
 	}
 	return "", nil
@@ -840,7 +918,8 @@ func (p *Provider) findTaggedAttachment(ctx context.Context, tag, parentKey stri
 
 // EnsureMembership implements library.RenditionWriter: idempotently files
 // a record under a collection — a VERSIONED item update (memberships live
-// on the item), guarded and readbacked.
+// on the item), guarded and readbacked. The PUT overlays ONLY the
+// collections key onto the item's raw data: unmodeled fields survive.
 func (p *Provider) EnsureMembership(ctx context.Context, providerRecordID, providerCollectionID string) error {
 	if err := p.writeable("ensure_membership"); err != nil {
 		return err
@@ -849,17 +928,18 @@ func (p *Provider) EnsureMembership(ctx context.Context, providerRecordID, provi
 	if err != nil {
 		return mapWriteErr(err, providerRecordID, "ensure_membership read")
 	}
-	var it zotItem
-	if err := json.Unmarshal(data, &it); err != nil {
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
 		return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "membership decode "+providerRecordID)
 	}
-	for _, c := range it.Collections {
-		if c == providerCollectionID {
+	cols, _ := m["collections"].([]any)
+	for _, c := range cols {
+		if s, ok := c.(string); ok && s == providerCollectionID {
 			return p.audit(ctx, "ensure_membership", providerRecordID+"|"+providerCollectionID, providerRecordID, "reused", nil)
 		}
 	}
-	it.Collections = append(it.Collections, providerCollectionID)
-	body, _ := json.Marshal(it)
+	m["collections"] = append(cols, providerCollectionID)
+	body, _ := json.Marshal(m)
 	if err := p.write.PutItem(providerRecordID, body, version); err != nil {
 		return mapWriteErr(err, providerRecordID, "ensure_membership update")
 	}
@@ -1043,6 +1123,35 @@ func firstNonEmptyStr(xs ...string) string {
 		}
 	}
 	return ""
+}
+
+// mergeItemJSON overlays ONLY the changed keys onto the item's raw data
+// JSON and re-marshals: unmodeled fields (abstractNote, pages, extra, …)
+// survive a replace-semantics PUT. key/version stay exactly as Zotero
+// sent them (never invented — the guard travels in the header).
+func mergeItemJSON(raw []byte, changes map[string]any) ([]byte, error) {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	for k, v := range changes {
+		m[k] = v
+	}
+	return json.Marshal(m)
+}
+
+// jsonValue round-trips a typed value into a JSON-generic one (map/slice/
+// string/…) so it can overlay into a raw item map.
+func jsonValue(v any) any {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var out any
+	if json.Unmarshal(b, &out) != nil {
+		return nil
+	}
+	return out
 }
 
 // errAnchorAbsent is the sentinel LookupProviderAnchor surfaces for an

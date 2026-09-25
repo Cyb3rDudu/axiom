@@ -69,10 +69,13 @@ func TestCrossrefExactDOIBeatsFuzzyAndIsConfident(t *testing.T) {
 
 func TestCrossrefFuzzyRanksDescendingAndPenalizesYear(t *testing.T) {
 	hits := 0
+	// Two otherwise-equally-overlapping hits: 10.1/a carries the queried
+	// year 2020, 10.1/b a mismatching one (1999) — the −0.1 penalty must
+	// push b below its raw overlap (2/3).
 	cr := crossrefStub(t, `{}`, `{"message":{"items":[
-		{"title":["Network Effects Elsewhere"],"DOI":"10.1/b","type":"journal-article","score":3},
-		{"title":["Network Effects in Platforms"],"DOI":"10.1/a","type":"journal-article","score":99},
-		{"title":["Totally Different"],"DOI":"10.1/c","type":"journal-article","score":1}
+		{"title":["Network Effects Elsewhere"],"DOI":"10.1/b","type":"journal-article","issued":{"date-parts":[[1999]]}},
+		{"title":["Network Effects in Platforms"],"DOI":"10.1/a","type":"journal-article","issued":{"date-parts":[[2020]]}},
+		{"title":["Totally Different"],"DOI":"10.1/c","type":"journal-article"}
 	]}}`, &hits)
 	y := 2020
 	cands, err := cr.Resolve(context.Background(), library.ResolveQuery{
@@ -85,7 +88,10 @@ func TestCrossrefFuzzyRanksDescendingAndPenalizesYear(t *testing.T) {
 		t.Fatalf("off-topic hit must be filtered (overlap<=0), got %d: %+v", len(cands), cands)
 	}
 	if cands[0].Fields.DOI != "10.1/a" || cands[1].Fields.DOI != "10.1/b" {
-		t.Fatalf("candidates must rank by overlap: %+v", cands)
+		t.Fatalf("year-matching hit must outrank the mismatching one: %+v", cands)
+	}
+	if cands[1].Confidence >= 2.0/3.0 {
+		t.Fatalf("year mismatch must cost 0.1 below raw overlap 2/3, got %v", cands[1].Confidence)
 	}
 	for i := 1; i < len(cands); i++ {
 		if cands[i].Confidence > cands[i-1].Confidence {
@@ -200,6 +206,11 @@ func TestResolverJSONShape(t *testing.T) {
 	_, _ = cr.Resolve(context.Background(), library.ResolveQuery{Title: "T"})
 	if seenPath != "/works" || seenQuery != "query.bibliographic=T&rows=3" {
 		t.Fatalf("crossref fuzzy request shape: %s?%s", seenPath, seenQuery)
+	}
+	y := 2020
+	_, _ = cr.Resolve(context.Background(), library.ResolveQuery{Title: "T", Year: &y})
+	if seenQuery != "filter=from-pub-date%3A2020%2Cuntil-pub-date%3A2020&query.bibliographic=T&rows=3" {
+		t.Fatalf("year-filtered request shape: %s", seenQuery)
 	}
 	_ = json.Marshal // shape guard compiles
 }

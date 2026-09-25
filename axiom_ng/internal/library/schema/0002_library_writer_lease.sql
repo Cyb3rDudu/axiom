@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS library_writer_leases (
 CREATE TABLE IF NOT EXISTS library_write_audit (
   id BIGSERIAL PRIMARY KEY,
   scope TEXT NOT NULL,
-  operation TEXT NOT NULL,            -- ensure_record | ensure_rendition | ensure_membership | create_collection | update_item | delete_item
+  operation TEXT NOT NULL,            -- ensure_record | ensure_rendition | ensure_membership | create_collection (future ops land with their emitters)
   anchor TEXT NOT NULL,               -- the idempotency anchor the mutation keyed on
   provider_ref TEXT NOT NULL DEFAULT '',
   outcome TEXT NOT NULL,              -- created | reused | changed | removed

@@ -81,6 +81,14 @@ func itScratchDB(t *testing.T) (*library.Store, func()) {
 		t.Fatalf("refusing to run against non-_test database %q", base)
 	}
 	dbName := strings.TrimSuffix(base, "_test") + fmt.Sprintf("_zf07%d_test", os.Getpid())
+	// DDL and database identifiers cannot take bind parameters — the
+	// scratch name is ALLOWLISTED ([A-Za-z0-9_] only) before any
+	// interpolation below (same convention as the library IT suite).
+	for _, r := range dbName {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_') {
+			t.Fatalf("scratch db name %q is not a safe identifier", dbName)
+		}
+	}
 	ctx := context.Background()
 	admin, err := pgxpool.New(ctx, dsn)
 	if err != nil {

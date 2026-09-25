@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -82,13 +83,13 @@ func NewCrossref(baseURL string, client *http.Client) *CrossrefAPI {
 }
 
 type crWork struct {
-	Title    []string `json:"title"`
-	DOI      string   `json:"DOI"`
-	Type     string   `json:"type"`
-	Publisher string  `json:"publisher"`
-	Language string   `json:"language"`
-	ISSN     []string `json:"ISSN"`
-	Author   []struct {
+	Title     []string `json:"title"`
+	DOI       string   `json:"DOI"`
+	Type      string   `json:"type"`
+	Publisher string   `json:"publisher"`
+	Language  string   `json:"language"`
+	ISSN      []string `json:"ISSN"`
+	Author    []struct {
 		Given  string `json:"given"`
 		Family string `json:"family"`
 		Name   string `json:"name"`
@@ -101,10 +102,10 @@ type crWork struct {
 
 func crCandidate(w crWork, confidence float64) library.Candidate {
 	fields := library.ResolvedFields{
-		Title:     firstNonEmptyStrings(w.Title...),
-		Publisher: w.Publisher,
-		Language:  w.Language,
-		DOI:       library.NormalizeDOI(w.DOI),
+		Title:      firstNonEmptyStr(w.Title...),
+		Publisher:  w.Publisher,
+		Language:   w.Language,
+		DOI:        library.NormalizeDOI(w.DOI),
 		RecordType: crossrefTypeToRecord(w.Type),
 	}
 	for _, a := range w.Author {
@@ -120,7 +121,7 @@ func crCandidate(w crWork, confidence float64) library.Candidate {
 	}
 	id := "crossref:" + w.DOI
 	if id == "crossref:" {
-		id = "crossref:" + firstNonEmptyStrings(w.Title...)
+		id = "crossref:" + firstNonEmptyStr(w.Title...)
 	}
 	return library.Candidate{CandidateID: id, Fields: fields, Confidence: confidence}
 }
@@ -168,9 +169,7 @@ func (c *CrossrefAPI) Resolve(ctx context.Context, q library.ResolveQuery) ([]li
 		return nil, nil
 	}
 	query := url.Values{"rows": {"3"}}
-	if q.Title != "" {
-		query.Set("query.bibliographic", strings.TrimSpace(q.Title+" "+strings.Join(q.Authors, " ")))
-	}
+	query.Set("query.bibliographic", strings.TrimSpace(q.Title+" "+strings.Join(q.Authors, " ")))
 	if q.Year != nil {
 		query.Set("filter", "from-pub-date:"+strconv.Itoa(*q.Year)+",until-pub-date:"+strconv.Itoa(*q.Year))
 	}
@@ -186,7 +185,7 @@ func (c *CrossrefAPI) Resolve(ctx context.Context, q library.ResolveQuery) ([]li
 	for _, w := range out.Message.Items {
 		// Title-token overlap ranks the hit — Crossref's own score is not
 		// comparable across queries, our overlap is stable and honest.
-		conf := titleSimilarity(q.Title, firstNonEmptyStrings(w.Title...))
+		conf := titleSimilarity(q.Title, firstNonEmptyStr(w.Title...))
 		if y := q.Year; y != nil && crYear(w) > 0 && crYear(w) != *y {
 			conf -= 0.1
 		}
@@ -221,14 +220,14 @@ type olAuthor struct {
 }
 
 type olEdition struct {
-	Title    string   `json:"title"`
-	Subtitle *string  `json:"subtitle"`
-	Publishers []string `json:"publishers"`
-	PublishDate string `json:"publish_date"`
-	Language  []string `json:"languages"` // keys: /languages/ger
-	Authors  []olAuthor `json:"authors"`
-	Key   string `json:"key"` // /books/ISBN...
-	Type  struct {
+	Title       string     `json:"title"`
+	Subtitle    *string    `json:"subtitle"`
+	Publishers  []string   `json:"publishers"`
+	PublishDate string     `json:"publish_date"`
+	Language    []string   `json:"languages"` // keys: /languages/ger
+	Authors     []olAuthor `json:"authors"`
+	Key         string     `json:"key"` // /books/ISBN...
+	Type        struct {
 		Key string `json:"key"`
 	} `json:"type"`
 }
@@ -405,20 +404,7 @@ func clamp01(v float64) float64 {
 
 // sortCandidatesDesc enforces the port contract (descending confidence).
 func sortCandidatesDesc(c []library.Candidate) {
-	for i := 1; i < len(c); i++ {
-		for j := i; j > 0 && c[j].Confidence > c[j-1].Confidence; j-- {
-			c[j], c[j-1] = c[j-1], c[j]
-		}
-	}
-}
-
-func firstNonEmptyStrings(xs ...string) string {
-	for _, x := range xs {
-		if x != "" {
-			return x
-		}
-	}
-	return ""
+	sort.Slice(c, func(i, j int) bool { return c[i].Confidence > c[j].Confidence })
 }
 
 // compile-time port assertions.

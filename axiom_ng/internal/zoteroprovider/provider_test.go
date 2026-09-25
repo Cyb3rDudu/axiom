@@ -101,6 +101,15 @@ func (s *stubStore) PutProviderAnchor(_ context.Context, _, kind, anchor, provid
 	return providerID, nil
 }
 
+func (s *stubStore) EvictProviderAnchor(_ context.Context, _, kind, anchor, providerID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cur, ok := s.anchors[kind+"|"+anchor]; ok && cur == providerID {
+		delete(s.anchors, kind+"|"+anchor)
+	}
+	return nil
+}
+
 func (s *stubStore) audits() []library.WriteAuditRow {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -119,21 +128,23 @@ type zotCollection struct {
 }
 
 type fakeLibrary struct {
-	mu          sync.Mutex
-	t           *testing.T
-	srv         *httptest.Server
-	storageDir  string
-	items       map[string]*zotItem
-	itemOrder   []string
-	collections map[string]*zotCollection
-	files       map[string][]byte
-	pending     map[string][]byte // uploadKey -> bytes
-	nextKey     int
-	puts        int
-	putVersions []string // If-Unmodified-Since-Version values seen
-	force412    bool     // one-shot: the next versioned PUT gets a 412
-	nUploads    int
-	deleted     []string
+	mu              sync.Mutex
+	t               *testing.T
+	srv             *httptest.Server
+	storageDir      string
+	items           map[string]*zotItem
+	rawItems        map[string]json.RawMessage // wire view: unknown fields preserved across PUTs
+	itemOrder       []string
+	collections     map[string]*zotCollection
+	files           map[string][]byte
+	pending         map[string][]byte // uploadKey -> bytes
+	nextKey         int
+	puts            int
+	putVersions     []string // If-Unmodified-Since-Version values seen
+	force412        bool     // one-shot: the next versioned PUT gets a 412
+	ignoreTagFilter bool     // the ?tag= filter is ignored (server misbehavior sonde)
+	nUploads        int
+	deleted         []string
 }
 
 func newFakeLibrary(t *testing.T) *fakeLibrary {
@@ -142,6 +153,7 @@ func newFakeLibrary(t *testing.T) *fakeLibrary {
 		t:           t,
 		storageDir:  t.TempDir(),
 		items:       map[string]*zotItem{},
+		rawItems:    map[string]json.RawMessage{},
 		collections: map[string]*zotCollection{},
 		files:       map[string][]byte{},
 		pending:     map[string][]byte{},
@@ -172,6 +184,7 @@ func (f *fakeLibrary) addItem(it zotItem) string {
 	it.Version = 1
 	cp := it
 	f.items[k] = &cp
+	f.rawItems[k] = mustJSON(cp)
 	f.itemOrder = append(f.itemOrder, k)
 	return k
 }
@@ -193,7 +206,7 @@ func (f *fakeLibrary) route(w http.ResponseWriter, r *http.Request) {
 		var out []map[string]any
 		for _, k := range f.itemOrder {
 			it := f.items[k]
-			if tag != "" && !itemHasTag(it, tag) {
+			if tag != "" && !f.ignoreTagFilter && !itemHasTag(it, tag) {
 				continue
 			}
 			if start > 0 {
@@ -235,13 +248,21 @@ func (f *fakeLibrary) route(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"failed":{}}`))
 			return
 		}
+		body, berr := io.ReadAll(r.Body)
+		if berr != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
 		var next zotItem
-		if err := json.NewDecoder(r.Body).Decode(&next); err != nil {
+		if err := json.Unmarshal(body, &next); err != nil {
 			http.Error(w, "bad item", http.StatusBadRequest)
 			return
 		}
 		next.Key, next.Version = k, it.Version+1
 		f.items[k] = &next
+		// The wire view keeps UNKNOWN fields the server never modeled —
+		// the PUT body is stored verbatim (replace semantics on both views).
+		f.rawItems[k] = json.RawMessage(body)
 		w.Header().Set("Last-Modified-Version", strconv.FormatInt(next.Version, 10))
 		w.WriteHeader(http.StatusNoContent)
 
@@ -269,6 +290,8 @@ func (f *fakeLibrary) route(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		delete(f.items, k)
+		delete(f.rawItems, k)
+		f.removeFromOrder(k)
 		f.deleted = append(f.deleted, k)
 		w.WriteHeader(http.StatusNoContent)
 
@@ -372,12 +395,31 @@ func (f *fakeLibrary) route(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// deleteItem simulates an EXTERNAL deletion (item gone from every view).
+func (f *fakeLibrary) deleteItem(k string) {
+	delete(f.items, k)
+	delete(f.rawItems, k)
+	delete(f.files, k)
+	f.removeFromOrder(k)
+	f.deleted = append(f.deleted, k)
+}
+
+func (f *fakeLibrary) removeFromOrder(k string) {
+	for i, cur := range f.itemOrder {
+		if cur == k {
+			f.itemOrder = append(f.itemOrder[:i], f.itemOrder[i+1:]...)
+			return
+		}
+	}
+}
+
 func (f *fakeLibrary) addItemRaw(it zotItem) string {
 	k := f.key()
 	it.Key = k
 	it.Version = 1
 	cp := it
 	f.items[k] = &cp
+	f.rawItems[k] = mustJSON(cp)
 	f.itemOrder = append(f.itemOrder, k)
 	return k
 }
@@ -407,7 +449,11 @@ func (f *fakeLibrary) envelope(it *zotItem) map[string]any {
 	if it.ItemType == "attachment" {
 		href = "file://" + filepath.Join(f.storageDir, it.Key)
 	}
-	return map[string]any{"key": it.Key, "version": it.Version, "data": it,
+	data := any(it)
+	if raw, ok := f.rawItems[it.Key]; ok && len(raw) > 0 {
+		data = json.RawMessage(raw) // verbatim: unknown fields included
+	}
+	return map[string]any{"key": it.Key, "version": it.Version, "data": data,
 		"links": map[string]any{"enclosure": map[string]any{"href": href}}}
 }
 
@@ -614,7 +660,8 @@ func TestMembershipVersionConflictIsTypedRetryable(t *testing.T) {
 	if !errors.As(err, &vc) {
 		t.Fatalf("412 must surface as *VersionConflictError, got %v", err)
 	}
-	if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassUnavailable || !vc.RetryableOf(err) {
+	class, ok := contracterr.ClassOf(err)
+	if !ok || class != contracterr.ClassUnavailable || !class.Retryable() {
 		t.Fatalf("version conflict must be retryable (unavailable class), got class=%v retryable=%v", class, err)
 	}
 	// Readback proof: the concurrent writer's value stands untouched —
@@ -804,15 +851,231 @@ func TestReadOnlyProviderAndLeaseRefusal(t *testing.T) {
 	}
 }
 
-// RetryableOf reports the typed retryability (contract surface mirror).
-func (*VersionConflictError) RetryableOf(err error) bool {
-	class, ok := contracterr.ClassOf(err)
-	return ok && class.Retryable()
-}
-
 func contractClassIs(err error, class contracterr.Class) bool {
 	got, ok := contracterr.ClassOf(err)
 	return ok && got == class
+}
+
+// --- auto-review regression battery (#301 review pass) ---
+
+// C1: a page token carries the snapshot generation — an invalidation
+// (own mutation) between pages must fail the walk LOUDLY, never silently
+// serve page 2 from a different snapshot (a dedup scan would skip records).
+func TestCatalogWalkFailsLoudlyWhenSnapshotChanges(t *testing.T) {
+	h := newHarness(t)
+	for i := 0; i < 120; i++ { // > one catalog page
+		h.fake.addItem(zotItem{ItemType: "book", Title: fmt.Sprintf("B%d", i)})
+	}
+	ctx := context.Background()
+	p1, err := h.prov.ListRecords(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p1.NextPageToken == "" {
+		t.Fatal("fixture must produce a second page")
+	}
+	h.prov.invalidate() // an own mutation lands between the pages
+	_, err = h.prov.ListRecords(ctx, p1.NextPageToken)
+	if !contractClassIs(err, contracterr.ClassConflict) {
+		t.Fatalf("stale-generation token must fail loudly (conflict), got %v", err)
+	}
+	if !strings.Contains(fmt.Sprint(err), "restart the scan") {
+		t.Fatalf("diagnosis must tell the caller to restart: %v", err)
+	}
+	// A garbage token stays an InvalidArgument, not a conflict.
+	if _, err := h.prov.ListRecords(ctx, "nonsense"); !contractClassIs(err, contracterr.ClassInvalidArgument) {
+		t.Fatalf("bad token shape = %v, want invalid_argument", err)
+	}
+	// Restarting the walk from scratch works against the fresh snapshot.
+	p2, err := h.prov.ListRecords(ctx, "")
+	if err != nil || len(p2.Records) != 100 {
+		t.Fatalf("restart: %d records, %v", len(p2.Records), err)
+	}
+}
+
+// W1: a lost lease (renewal failed) must STOP the writer — write ports
+// refuse with Conflict, not just stop renewing.
+func TestLostLeaseRefusesWrites(t *testing.T) {
+	fake := newFakeLibrary(t)
+	store := newStubStore()
+	prov, err := New(context.Background(), Options{
+		BaseURL: fake.srv.URL + "/api", APIKey: "k", Store: store, Owner: "w",
+		LeaseTTL: 120 * time.Millisecond, // heartbeat ticker fires at ttl/3
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prov.Close()
+	store.mu.Lock()
+	store.renewFails = true
+	store.mu.Unlock()
+	ctx := context.Background()
+	draft := library.RecordDraft{ExternalKey: "ll-1", RecordType: "book", Title: "T"}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, err = prov.EnsureRecord(ctx, draft)
+		if contractClassIs(err, contracterr.ClassConflict) {
+			break // refusal observed
+		}
+		if err != nil {
+			t.Fatalf("pre-loss ensure must succeed (anchor reuse), got %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("lease-lost refusal never fired within 2s")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !strings.Contains(fmt.Sprint(err), "lease lost") {
+		t.Fatalf("refusal must name the lost lease: %v", err)
+	}
+}
+
+// W2: a rendition anchor whose attachment VANISHED (deleted externally)
+// must heal — evict the stale row, re-upload fresh, return the LIVE id;
+// never return the dead anchor id with an orphaned fresh upload.
+func TestEnsureRenditionHealsVanishedAnchor(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	rec := h.fake.addItem(zotItem{ItemType: "book", Title: "Carrier"})
+	content := []byte("%PDF-1.4 heal me")
+	path, sha := staged(t, content)
+	draft := library.RenditionDraft{
+		ParentProviderID: rec, ContentHash: sha, MediaType: "application/pdf",
+		Filename: "Heal - 2021 - Me.pdf", StagingPath: path,
+	}
+	a1, err := h.prov.EnsureRendition(ctx, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// External deletion: the attachment item is gone, the ledger row stays.
+	h.fake.mu.Lock()
+	h.fake.deleteItem(a1)
+	h.fake.mu.Unlock()
+
+	nUp := h.fake.nUploads
+	a2, err := h.prov.EnsureRendition(ctx, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a2 == a1 {
+		t.Fatal("must return the fresh live id, not the dead anchor id")
+	}
+	if h.fake.nUploads != nUp+1 {
+		t.Fatalf("healing must re-upload exactly once (%d → %d)", nUp, h.fake.nUploads)
+	}
+	if got := h.fake.files[a2]; string(got) != string(content) {
+		t.Fatalf("fresh attachment must carry the staged bytes: %q", got)
+	}
+	if id, _ := h.store.anchors["rendition|"+rec+"|"+sha]; id != a2 {
+		t.Fatalf("anchor must be healed to the fresh id: %q vs %q", id, a2)
+	}
+	rows := h.store.audits()
+	last := rows[len(rows)-1]
+	if last.Operation != "ensure_rendition" || last.Outcome != "created" {
+		t.Fatalf("healed ensure must audit as created, got %+v", last)
+	}
+	// And the healed anchor is the fast path again.
+	nUp = h.fake.nUploads
+	a3, err := h.prov.EnsureRendition(ctx, draft)
+	if err != nil || a3 != a2 || h.fake.nUploads != nUp {
+		t.Fatalf("post-heal idempotency broken: %q %v", a3, err)
+	}
+}
+
+// W3: tag verification is EXACT. A server that ignores the ?tag= filter
+// and returns a decoy carrying a DIFFERENT axiom-imp tag must not be
+// adopted — the anchor tag is the identity, a prefix is not.
+func TestTagVerificationRejectsForeignAnchorTags(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	decoy := h.fake.addItem(zotItem{
+		ItemType: "book", Title: "Someone Else's Import",
+		Tags: []zotTag{{Tag: "axiom-imp:someone-elses-key"}},
+	})
+	h.fake.mu.Lock()
+	h.fake.ignoreTagFilter = true // the server ignores the tag filter
+	h.fake.mu.Unlock()
+
+	k, err := h.prov.EnsureRecord(ctx, library.RecordDraft{
+		ExternalKey: "imp-mine", RecordType: "book", Title: "Mine",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k == decoy {
+		t.Fatal("must not adopt a decoy whose axiom-imp tag names a different anchor")
+	}
+	if !itemHasTag(h.fake.items[k], "axiom-imp:imp-mine") {
+		t.Fatalf("fresh item must carry OUR anchor tag: %+v", h.fake.items[k].Tags)
+	}
+	if n := len(h.fake.items); n != 2 {
+		t.Fatalf("fixture drift: %d items", n)
+	}
+}
+
+// W5: versioned PUTs overlay the RAW item data — unmodeled fields
+// (abstractNote, extra, …) survive both the membership update and the
+// diverged-record update. A typed struct round-trip would strip them.
+func TestVersionedWritesPreserveUnmodeledFields(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.fake.collections["COLL1"] = &zotCollection{Key: "COLL1", Name: "Shelf", Version: 1}
+
+	// Membership path.
+	rec := h.fake.addItem(zotItem{ItemType: "book", Title: "Keep Fields"})
+	injectExtra(t, h.fake, rec, "membership")
+	if err := h.prov.EnsureMembership(ctx, rec, "COLL1"); err != nil {
+		t.Fatal(err)
+	}
+	if v := extraOf(t, h.fake, rec); v != "membership" {
+		t.Fatalf("membership PUT stripped the unmodeled field: %q", v)
+	}
+	if len(h.fake.items[rec].Collections) != 1 || h.fake.items[rec].Collections[0] != "COLL1" {
+		t.Fatalf("membership not applied: %+v", h.fake.items[rec].Collections)
+	}
+
+	// Diverged-record update path (anchor hit + versioned update).
+	k2, err := h.prov.EnsureRecord(ctx, library.RecordDraft{
+		ExternalKey: "imp-keep", RecordType: "book", Title: "Keep Fields",
+	})
+	if err != nil || k2 == "" {
+		t.Fatal(err)
+	}
+	injectExtra(t, h.fake, k2, "record-update")
+	if _, err := h.prov.EnsureRecord(ctx, library.RecordDraft{
+		ExternalKey: "imp-keep", RecordType: "book", Title: "Keep Fields (3rd)",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if v := extraOf(t, h.fake, k2); v != "record-update" {
+		t.Fatalf("record update PUT stripped the unmodeled field: %q", v)
+	}
+}
+
+// injectExtra adds an unmodeled field to an item's wire view (what a
+// richer Zotero item would carry and the adapter does not model).
+func injectExtra(t *testing.T, f *fakeLibrary, key, val string) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var m map[string]any
+	if err := json.Unmarshal(f.rawItems[key], &m); err != nil {
+		t.Fatalf("raw view undecodable: %v", err)
+	}
+	m["abstractNote"] = val
+	f.rawItems[key] = mustJSON(m)
+}
+
+func extraOf(t *testing.T, f *fakeLibrary, key string) string {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var m map[string]any
+	if err := json.Unmarshal(f.rawItems[key], &m); err != nil {
+		t.Fatalf("raw view undecodable: %v", err)
+	}
+	s, _ := m["abstractNote"].(string)
+	return s
 }
 
 func sha256hex(b []byte) string {

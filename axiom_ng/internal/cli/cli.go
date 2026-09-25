@@ -258,13 +258,11 @@ Commands:
   serve all                     full stack through the composition root
                                 (config-derived: dispatcher/fixer opt-in envs)
   serve api                     the API-serving roles (no claim/fixer loops)
-  serve all                    the full stack (compat boot)
-  serve api                    API surface, no claim/fixer loops
-  serve library                Library slice: Zotero provider + import
-                               ladder + sync mirror (F07 #301; no
-                               store-processing, no repair)
-  serve store                  NOT YET: the store role arrives with F09 (#303)
-                                and F09 (#303) — refuses loudly until then
+  serve library                 Library slice: Zotero provider + import
+                                ladder + sync mirror (F07 #301; no
+                                store-processing, no repair)
+  serve store                   NOT YET: the store role arrives with F09
+                                (#303) — refuses loudly until then
   version [--json]              version banner (agrees with /api/health)
   doctor [--json]               config/DB/OpenSearch/artifact-root health;
                                 exit 0 only when fully healthy; never prints

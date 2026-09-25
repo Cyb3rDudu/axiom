@@ -132,6 +132,21 @@ func (s *Store) AppendWriteAudit(ctx context.Context, r WriteAuditRow) error {
 	return nil
 }
 
+// EvictProviderAnchor drops an anchor row whose provider id proved DEAD
+// (the item vanished from the provider) so the next ensure re-anchors a
+// fresh one. Guarded by provider_id: a row someone else replaced in the
+// meantime is not ours to evict.
+func (s *Store) EvictProviderAnchor(ctx context.Context, scope, kind, anchor, providerID string) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM library_provider_anchors
+		WHERE scope = $1 AND kind = $2 AND anchor = $3 AND provider_id = $4`,
+		scope, kind, anchor, providerID)
+	if err != nil {
+		return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "provider anchor evict")
+	}
+	return nil
+}
+
 // CountWriteAudit counts audit rows for a scope (the 1:1 mutation sonde).
 func (s *Store) CountWriteAudit(ctx context.Context, scope string) (int, error) {
 	var n int
