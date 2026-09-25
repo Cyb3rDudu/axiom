@@ -1390,29 +1390,38 @@ func TestStagingHashedAndRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Retention: referenced staging survives, foreign stale files go.
+	// All fixture mtimes are set EXPLICITLY (one clock domain — the
+	// process itself) with HOUR-scale distances around the cutoff: no
+	// filesystem guarantees sub-second mtime ordering between a
+	// freshly-written file and a just-captured cutoff (coarse granularity
+	// or rounding flips the youngest file to "stale" — the CI flake this
+	// setup replaced). Freshness here is a property of the distances,
+	// never of write timing.
+	fresh := time.Now().Add(time.Hour) // young/live: unambiguously after the cutoff
+	aged := fresh.Add(-3 * time.Hour)  // crashed leftovers: unambiguously before
+	cutoff := fresh.Add(-time.Hour)    // the retention snapshot between them
+
 	stale := filepath.Join(root, "library_staging", strings.Repeat("a", 64))
 	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	old := time.Now().Add(-time.Hour)
-	os.Chtimes(stale, old, old)
-	// Dot-temps: a crashed writer's old leftover goes; a young one —
-	// possibly still being written — stays protected. "Young" is
-	// relative to the retention SNAPSHOT: an in-flight writer's mtime
-	// lands after the scan began, so the cutoff must be captured BEFORE
-	// the young temp exists.
+	os.Chtimes(stale, aged, aged)
+	// Dot-temps: a crashed writer's aged leftover goes; a live one stays
+	// protected (its mtime sits after the retention snapshot).
 	oldTemp := filepath.Join(root, "library_staging", ".stage-old")
 	if err := os.WriteFile(oldTemp, []byte("old temp"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	os.Chtimes(oldTemp, old, old)
-	cutoff := time.Now()
-	if err := os.WriteFile(filepath.Join(root, "library_staging", ".stage-young"), []byte("young temp"), 0o644); err != nil {
+	os.Chtimes(oldTemp, aged, aged)
+	youngTemp := filepath.Join(root, "library_staging", ".stage-young")
+	if err := os.WriteFile(youngTemp, []byte("young temp"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	os.Chtimes(youngTemp, fresh, fresh)
+
 	removed, err := st.CleanupStaging(context.Background(), stg, cutoff)
 	if err != nil || removed != 2 {
-		t.Fatalf("cleanup removed=%d err=%v, want 2 (stale file + old temp)", removed, err)
+		t.Fatalf("cleanup removed=%d err=%v, want 2 (stale file + aged temp)", removed, err)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatal("stale staging file survived retention")
@@ -1420,7 +1429,7 @@ func TestStagingHashedAndRetention(t *testing.T) {
 	if _, err := os.Stat(oldTemp); !os.IsNotExist(err) {
 		t.Fatal("stale dot-temp survived retention")
 	}
-	if _, err := os.Stat(filepath.Join(root, "library_staging", ".stage-young")); err != nil {
+	if _, err := os.Stat(youngTemp); err != nil {
 		t.Fatalf("young dot-temp was removed (live writers must stay protected): %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "library_staging", sha)); err != nil {
