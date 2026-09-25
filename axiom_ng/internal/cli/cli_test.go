@@ -26,9 +26,10 @@ import (
 )
 
 func TestServeRefusesUnextractedRoles(t *testing.T) {
+	// store stays vocabulary-only until F09; bogus/missing roles are
+	// usage errors (exit 2).
 	for role, want := range map[string]string{
-		"library": "F06 (#300)",
-		"store":   "F09 (#303)",
+		"store": "F09 (#303)",
 	} {
 		var buf strings.Builder
 		exit := serveTo(&buf, []string{"serve", role})
@@ -45,6 +46,24 @@ func TestServeRefusesUnextractedRoles(t *testing.T) {
 	}
 	if exit := serveTo(&buf, []string{"serve"}); exit != exitUsage {
 		t.Fatalf("missing role exit = %d, want %d", exit, exitUsage)
+	}
+}
+
+// TestServeLibraryBootsTheLibrarySlice — F07 (#301) unlocked the role:
+// serve library is no longer vocabulary-only. In a db-less env the
+// selection proceeds past the CLI into the composition, which refuses
+// loudly on the unstartable store port (exit 1, a diagnosis — never the
+// F05 "not yet extracted" usage refusal).
+func TestServeLibraryBootsTheLibrarySlice(t *testing.T) {
+	t.Setenv("AXIOM_DATABASE_URL", "")
+	t.Setenv("AXIOM_ALLOW_DEBUG_BIND", "1") // the test env's port pin must not hit the #205 debug-bind guard first
+	var buf strings.Builder
+	exit := serveTo(&buf, []string{"serve", "library"})
+	if exit == exitUsage {
+		t.Fatalf("serve library must not be a usage refusal anymore: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "AXIOM_DATABASE_URL") {
+		t.Fatalf("serve library without a store port must fail with the store diagnosis, got exit=%d: %s", exit, buf.String())
 	}
 }
 

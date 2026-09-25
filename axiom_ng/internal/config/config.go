@@ -159,8 +159,10 @@ type Config struct {
 	LibraryImportMaxBytes int64
 	// LibraryImportProviders selects the Library write-side provider set
 	// (F06 #300, AXIOM_LIBRARY_IMPORT_PROVIDERS). "fake" wires the
-	// deterministic fakes (dev-env proof until F07 ports Zotero); ""
-	// leaves the import routes unwired (404 — the honest no-provider state).
+	// deterministic fakes (tests/dev); "zotero" wires the real Zotero
+	// adapter (F07 #301 — write key from AXIOM_ZOTERO_WRITE_KEY_FILE,
+	// read-only without it); "" leaves the import routes unwired (404 —
+	// the honest no-provider state).
 	LibraryImportProviders string
 
 	// ZoteroWriteKeyFile holds the local-API write key (#184). The key NEVER

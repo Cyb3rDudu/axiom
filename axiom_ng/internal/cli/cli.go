@@ -104,8 +104,14 @@ func cmdServe(name string, args []string) int {
 			fmt.Fprintln(os.Stderr, name+": WARNING: AXIOM_DATABASE_URL not set; serving api-only (degraded)")
 		}
 	case "library":
-		fmt.Fprintf(os.Stderr, "%s serve library: component not yet extracted — the library role arrives with F06 (#300); until then `serve all` serves the compiled-in library\n", name)
-		return exitUsage
+		// F07 #301: the Library slice is real now — the Zotero provider
+		// (AXIOM_LIBRARY_IMPORT_PROVIDERS=zotero wires the import ladder
+		// behind the single-writer lease) + the sync mirror, without the
+		// store-processing roles (F09) or the repair track (F08).
+		cfg = apiServeConfig(config.Load(), func(note string) {
+			fmt.Fprintln(os.Stderr, name+": note: "+note)
+		})
+		roles = libraryRoles()
 	case "store":
 		fmt.Fprintf(os.Stderr, "%s serve store: component not yet extracted — the store role arrives with F09 (#303); until then `serve all` serves the compiled-in store\n", name)
 		return exitUsage
@@ -144,6 +150,21 @@ func apiRoles(cfg config.Config) []composition.Role {
 		composition.RoleAPI, composition.RoleStore, composition.RoleEvents,
 		composition.RoleSync, composition.RoleRepair, composition.RoleSearch,
 		composition.RoleIngest,
+	}
+}
+
+// libraryRoles is the Library-slice selection of the F04 registry (F07
+// #301 unlocked it): the Zotero provider + import ladder + the sync
+// mirror — api (the HTTP surface), store (the Postgres substrate: the
+// Library's OWN tables live there; the store-PROCESSING roles are F09's
+// slice), events (the live-view bus), sync (the Zotero mirror read path
+// + revision Mits-Schrieb). NOT included, by design: search/ingest/
+// dispatcher (the F09 Store slice) and repair (the F08 repair track —
+// its Zotero writes move onto the Library single-writer then).
+func libraryRoles() []composition.Role {
+	return []composition.Role{
+		composition.RoleAPI, composition.RoleStore, composition.RoleEvents,
+		composition.RoleSync,
 	}
 }
 
@@ -237,7 +258,12 @@ Commands:
   serve all                     full stack through the composition root
                                 (config-derived: dispatcher/fixer opt-in envs)
   serve api                     the API-serving roles (no claim/fixer loops)
-  serve library|store           NOT YET: components arrive with F06 (#300)
+  serve all                    the full stack (compat boot)
+  serve api                    API surface, no claim/fixer loops
+  serve library                Library slice: Zotero provider + import
+                               ladder + sync mirror (F07 #301; no
+                               store-processing, no repair)
+  serve store                  NOT YET: the store role arrives with F09 (#303)
                                 and F09 (#303) — refuses loudly until then
   version [--json]              version banner (agrees with /api/health)
   doctor [--json]               config/DB/OpenSearch/artifact-root health;

@@ -1021,3 +1021,6 @@ var (
 	_ library.RenditionWriter  = (*Provider)(nil)
 	_ library.CollectionWriter = (*Provider)(nil)
 )
+
+// LeaseScopeLabel reports the provider's writer-lease scope (diagnostics).
+func (p *Provider) LeaseScopeLabel() string { return p.scope }

@@ -150,7 +150,10 @@ type Root struct {
 	rep      *repo.Repo
 	// libStore is the F06 Library persistence (nil without the store
 	// role) — the revision Mits-Schrieb + import service sit on it.
-	libStore     *library.Store
+	libStore *library.Store
+	// libProvider is the F07 Zotero adapter (nil without the zotero
+	// provider wiring); its Close releases the writer lease.
+	libProvider  *zoteroprovider.Provider
 	broker       *events.Broker
 	syncSvc      *axsync.Service
 	httpSrv      *http.Server
@@ -563,9 +566,64 @@ func (r *Root) componentsFor() []Component {
 				r.srv.SetLibraryAPI(libSvc)
 				r.logger.Printf("library: import routes wired with FAKE providers (deterministic fixtures; F07 replaces them with Zotero)")
 			case "":
-				r.logger.Printf("library: import providers not configured (AXIOM_LIBRARY_IMPORT_PROVIDERS) — /api/v1/library/imports answers 404 until F07 wires Zotero")
+				r.logger.Printf("library: import providers not configured (AXIOM_LIBRARY_IMPORT_PROVIDERS) — /api/v1/library/imports answers 404")
+			case "zotero":
+				// The REAL provider (F07 #301): everything Zotero flows through
+				// the adapter package; this wiring is the only place the Library
+				// meets it. The mirror source identity is ensured on demand (the
+				// first sync would create it too) so revisions/GetSource bind to
+				// the same source id the sync mirror uses.
+				serverID := r.src.ServerID()
+				sourceID, serr := r.rep.EnsureSource(ctx, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, serverID)
+				if serr != nil {
+					return fmt.Errorf("library zotero source: %w", serr)
+				}
+				// Write key optional: without it the provider is read-only and
+				// the write ports report Unavailable (capability-honest).
+				apiKey := ""
+				if b, kerr := os.ReadFile(r.cfg.ZoteroWriteKeyFile); kerr == nil && len(b) > 8 {
+					apiKey = strings.TrimSpace(string(b))
+				} else {
+					r.logger.Printf("library: no zotero write key under %s — zotero provider is READ-ONLY (imports report unavailable at the first write step)", r.cfg.ZoteroWriteKeyFile)
+				}
+				// New ACQUIRES the provider-scoped writer lease: a second
+				// write-capable Library instance against the same Zotero scope
+				// aborts THIS start (single-writer declaration, #301).
+				prov, perr := zoteroprovider.New(ctx, zoteroprovider.Options{
+					BaseURL:   r.cfg.ZoteroBaseURL,
+					LibraryID: r.cfg.ZoteroLibraryID,
+					APIKey:    apiKey,
+					Store:     r.libStore,
+				})
+				if perr != nil {
+					return fmt.Errorf("library zotero provider: %w", perr)
+				}
+				r.libProvider = prov
+				libSvc := library.NewService(library.Config{
+					SourceID:       sourceID,
+					Provider:       "zotero",
+					LibraryID:      r.cfg.ZoteroLibraryID,
+					MaxImportBytes: r.cfg.LibraryImportMaxBytes,
+				}, r.libStore, library.NewStaging(r.cfg.ArtifactRoot), library.Ports{
+					Catalog:     prov,
+					Records:     prov,
+					Renditions:  prov,
+					Collections: prov,
+					Resolvers: []library.BibliographicResolver{
+						zoteroprovider.NewCrossref("", nil),
+						zoteroprovider.NewOpenLibrary("", nil),
+					},
+					Documents: zoteroprovider.NewPDFInspector(),
+				})
+				if ids, err := libSvc.ResumeInflight(ctx); err != nil {
+					r.logger.Printf("WARNING: library inflight resume: %v", err)
+				} else if len(ids) > 0 {
+					r.logger.Printf("library: resumed %d inflight import(s) after restart", len(ids))
+				}
+				r.srv.SetLibraryAPI(libSvc)
+				r.logger.Printf("library: import routes wired with the ZOTERO provider (single-writer lease %s)", prov.LeaseScopeLabel())
 			default:
-				return fmt.Errorf("library: unknown AXIOM_LIBRARY_IMPORT_PROVIDERS %q (known: fake)", r.cfg.LibraryImportProviders)
+				return fmt.Errorf("library: unknown AXIOM_LIBRARY_IMPORT_PROVIDERS %q (known: fake, zotero)", r.cfg.LibraryImportProviders)
 			}
 			// Remote source delivery (endpoint verify, dispatcher sign): wired
 			// on the STORE component, not sync — the dispatcher's source fetch
@@ -577,6 +635,11 @@ func (r *Root) componentsFor() []Component {
 			return nil
 		},
 		stop: func(ctx context.Context) error {
+			if r.libProvider != nil {
+				// Release the writer lease BEFORE the pool closes (graceful;
+				// the lease TTL covers the ungraceful exits).
+				_ = r.libProvider.Close()
+			}
 			if r.database != nil {
 				r.database.Close()
 			}
