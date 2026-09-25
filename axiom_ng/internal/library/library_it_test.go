@@ -1397,27 +1397,44 @@ func TestStagingHashedAndRetention(t *testing.T) {
 	// or rounding flips the youngest file to "stale" — the CI flake this
 	// setup replaced). Freshness here is a property of the distances,
 	// never of write timing.
-	fresh := time.Now().Add(time.Hour) // young/live: unambiguously after the cutoff
-	aged := fresh.Add(-3 * time.Hour)  // crashed leftovers: unambiguously before
-	cutoff := fresh.Add(-time.Hour)    // the retention snapshot between them
+	live := time.Now().Add(time.Hour) // young/live: unambiguously after the cutoff
+	aged := live.Add(-3 * time.Hour)  // crashed leftovers: unambiguously before
+	cutoff := live.Add(-time.Hour)    // the retention snapshot between them
+	setAge := func(path string, at time.Time) {
+		t.Helper()
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatalf("set mtime %s: %v", path, err)
+		}
+	}
 
 	stale := filepath.Join(root, "library_staging", strings.Repeat("a", 64))
 	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	os.Chtimes(stale, aged, aged)
+	setAge(stale, aged)
 	// Dot-temps: a crashed writer's aged leftover goes; a live one stays
 	// protected (its mtime sits after the retention snapshot).
 	oldTemp := filepath.Join(root, "library_staging", ".stage-old")
 	if err := os.WriteFile(oldTemp, []byte("old temp"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	os.Chtimes(oldTemp, aged, aged)
-	youngTemp := filepath.Join(root, "library_staging", ".stage-young")
-	if err := os.WriteFile(youngTemp, []byte("young temp"), 0o644); err != nil {
+	setAge(oldTemp, aged)
+	liveTemp := filepath.Join(root, "library_staging", ".stage-live")
+	if err := os.WriteFile(liveTemp, []byte("live temp"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	os.Chtimes(youngTemp, fresh, fresh)
+	setAge(liveTemp, live)
+	// Fourth branch: a young UNREFERENCED non-dot file — age alone must
+	// never make the sweep remove it (only stale + unreferenced does).
+	liveForeign := filepath.Join(root, "library_staging", strings.Repeat("b", 64))
+	if err := os.WriteFile(liveForeign, []byte("live foreign"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setAge(liveForeign, live)
+	// The referenced sha file is set EXPLICITLY to aged: it survives by
+	// REFERENCE, not by freshness — a green assert here would prove
+	// nothing if the file were young anyway.
+	setAge(filepath.Join(root, "library_staging", sha), aged)
 
 	removed, err := st.CleanupStaging(context.Background(), stg, cutoff)
 	if err != nil || removed != 2 {
@@ -1429,8 +1446,11 @@ func TestStagingHashedAndRetention(t *testing.T) {
 	if _, err := os.Stat(oldTemp); !os.IsNotExist(err) {
 		t.Fatal("stale dot-temp survived retention")
 	}
-	if _, err := os.Stat(youngTemp); err != nil {
-		t.Fatalf("young dot-temp was removed (live writers must stay protected): %v", err)
+	if _, err := os.Stat(liveTemp); err != nil {
+		t.Fatalf("live dot-temp was removed (live writers must stay protected): %v", err)
+	}
+	if _, err := os.Stat(liveForeign); err != nil {
+		t.Fatalf("live unreferenced file was removed (age alone must never delete): %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "library_staging", sha)); err != nil {
 		t.Fatalf("referenced staging file was deleted: %v", err)
