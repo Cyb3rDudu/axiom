@@ -85,6 +85,7 @@ var SeedBibliography = revision.Bibliography{
 var SeedRevision = revision.SourceRevision{
 	SourceID:     "src-seed-1",
 	RevisionID:   "1",
+	RenditionID:  "rend-seed-1",
 	ContentHash:  revision.HashContent(SeedContent),
 	MediaType:    revision.MediaTypePDF,
 	Bibliography: SeedBibliography,

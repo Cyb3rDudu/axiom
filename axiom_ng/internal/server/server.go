@@ -72,6 +72,7 @@ type Server struct {
 	// the sourceSecret pattern; the composition root wires the service,
 	// fake providers until F07 ports Zotero).
 	librarySvc            libraryAPI
+	storeAPI              StoreAPI
 	libraryImportMaxBytes int64
 	// F06 #300: the source-revision Mits-Schrieb publisher for the heal/
 	// custody points (nil = hooks skip).
@@ -140,6 +141,7 @@ func (s *Server) Handler() http.Handler {
 	// F06 #300: the public import contract (normative in issue #300).
 	// Registered always; unwired answers 404 (sourceSecret pattern).
 	r.Post("/api/v1/library/imports", s.handleLibraryImport)
+	r.Post("/api/v1/store/ingest", s.handleStoreIngest)
 	r.Get("/api/v1/library/imports/{id}", s.handleLibraryImportStatus)
 	r.Post("/api/v1/library/imports/{id}/confirm", s.handleLibraryImportConfirm)
 	r.Post("/api/v1/library/imports/{id}/retry", s.handleLibraryImportRetry)

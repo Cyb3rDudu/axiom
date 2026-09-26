@@ -17,7 +17,7 @@ import (
 
 func TestValidateAcceptsAndRejects(t *testing.T) {
 	valid := SourceRevision{
-		SourceID: "src-1", RevisionID: "7",
+		SourceID: "src-1", RevisionID: "7", RenditionID: "rend-1",
 		ContentHash: HashContent([]byte("x")),
 		MediaType:   MediaTypePDF, ContentTicket: "ticket-1",
 		Bibliography: Bibliography{RecordID: "rec-1", CitationClass: CitationClassCitable},
@@ -58,6 +58,7 @@ var (
 	goldenRevision = SourceRevision{
 		SourceID:    "src-seed-1",
 		RevisionID:  "12",
+		RenditionID: "rend-seed-1",
 		ContentHash: HashContent([]byte("golden bytes")),
 		MediaType:   MediaTypeEPUB,
 		Bibliography: Bibliography{

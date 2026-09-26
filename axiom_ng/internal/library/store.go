@@ -508,6 +508,7 @@ func RevisionFromDomain(r SourceRevisionDomain) revision.SourceRevision {
 	return revision.SourceRevision{
 		SourceID:            r.SourceID,
 		RevisionID:          fmt.Sprintf("%d", r.RevisionID),
+		RenditionID:         r.RenditionID,
 		ContentHash:         r.ContentHash,
 		MediaType:           r.MediaType,
 		Bibliography:        r.Bibliography,

@@ -45,6 +45,7 @@ var responseClass = map[string]string{
 	"/api/v1/health":       "json healthResponse (v1 mirror)",
 	"/api/v1/search":       "json search.Response (v1 mirror)",
 	"/api/v1/passage/{id}": "json passage (v1 mirror)",
+	"/api/v1/store/ingest": "json store.IngestJob (202, F09)",
 	"/api/zotero/sync":     "json sync.Result",
 	"/api/ingest/jobs":     "json []repo.Job",
 	"/api/ingest/documents/{documentID}/force-rebuild": "json repo.Job (202)",

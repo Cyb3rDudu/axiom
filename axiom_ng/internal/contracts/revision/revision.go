@@ -116,6 +116,11 @@ type SourceRevision struct {
 	// version (how — version counter, timestamp, hash — is a Library
 	// implementation detail).
 	RevisionID string `json:"revision_id"`
+	// RenditionID identifies the rendition (the concrete file/form) this
+	// revision describes — the opaque sibling of Bibliography.RecordID.
+	// Additive F09 (#303): Store dedups intake per rendition+content; the
+	// id is Library-assigned and opaque here (never a Zotero semantic).
+	RenditionID string `json:"rendition_id"`
 	// ContentHash is sha256 (lowercase hex) over the rendition bytes the
 	// ContentTicket grants. Consumers MUST verify fetched content
 	// against it.
