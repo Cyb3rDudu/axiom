@@ -174,6 +174,7 @@ func TestExtractImprintFieldsPure(t *testing.T) {
 		{"copyright word year", "Copyright 2019 by the authors", "", "", 2019},
 		{"copyright symbol year", "© 2022 Springer", "", "", 2022},
 		{"noise year ignored", "First printing, 1043 items sold in 2020", "", "", 0},
+		{"isbn13 unicode hyphens", "ISBN\u2010978\u20113\u201116\u2011148410\u20110", "", "9783161484100", 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -80,7 +80,7 @@ func findZoteroImportViolations(moduleRoot string) ([]zoteroImportViolation, err
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case "vendor", "testdata", ".git", "dist":
+			case "vendor", "testdata", ".git", "dist", ".worktree":
 				return filepath.SkipDir
 			}
 			return nil

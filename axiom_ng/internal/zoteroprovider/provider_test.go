@@ -31,14 +31,16 @@ import (
 // the library package's ITs against real Postgres)
 
 type stubStore struct {
-	mu         sync.Mutex
-	anchors    map[string]string // kind|anchor -> provider id
-	audit      []library.WriteAuditRow
-	leaseOwner string
-	refuseNew  bool // refuse a second acquirer
-	renewFails bool
-	released   bool
-	evictFails bool // evictions error (the M5 propagation probe)
+	mu             sync.Mutex
+	anchors        map[string]string // kind|anchor -> provider id
+	audit          []library.WriteAuditRow
+	leaseOwner     string
+	refuseNew      bool // refuse a second acquirer
+	renewFails     bool
+	released       bool
+	evictFails     bool   // evictions error (the M5 propagation probe)
+	renewTransient bool   // renewals fail with a PLAIN (unclassed) error
+	anchorRaceWith string // PutProviderAnchor returns this id when set (race probe)
 }
 
 func newStubStore() *stubStore { return &stubStore{anchors: map[string]string{}} }
@@ -61,6 +63,9 @@ func (s *stubStore) AcquireWriterLease(_ context.Context, scope, owner string, _
 func (s *stubStore) RenewWriterLease(_ context.Context, _, owner string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.renewTransient {
+		return errors.New("transient network blip") // UNCLASSED on purpose
+	}
 	if s.renewFails || s.leaseOwner != owner {
 		// faithful to the real store: a lost lease refuses with Conflict
 		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassConflict, "lease lost (stub)")
@@ -96,6 +101,9 @@ func (s *stubStore) LookupProviderAnchor(_ context.Context, _, kind, anchor stri
 func (s *stubStore) PutProviderAnchor(_ context.Context, _, kind, anchor, providerID string, _ int64) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.anchorRaceWith != "" {
+		return s.anchorRaceWith, nil // simulate a losing anchor race
+	}
 	if cur, ok := s.anchors[kind+"|"+anchor]; ok {
 		return cur, nil
 	}
@@ -1196,9 +1204,7 @@ func TestEvictionFailurePropagates(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The anchored attachment dies; the eviction store goes down with it.
-	h.fake.mu.Lock()
-	delete(h.fake.items, a1)
-	h.fake.mu.Unlock()
+	h.fake.deleteItem(a1)
 	h.store.mu.Lock()
 	h.store.evictFails = true
 	h.store.mu.Unlock()
@@ -1301,5 +1307,126 @@ func TestCollectionAnchorAdoptionRecoversTornCreate(t *testing.T) {
 	}
 	if rows = h.store.audits(); len(rows) != 1 {
 		t.Fatalf("re-resolve must not inflate the audit trail, got %+v", rows)
+	}
+}
+
+func TestHeartbeatTransientRenewalDoesNotLatch(t *testing.T) {
+	fake := newFakeLibrary(t)
+	store := newStubStore()
+	prov, err := New(context.Background(), Options{
+		BaseURL: fake.srv.URL + "/api", APIKey: "k", Store: store, Owner: "w",
+		LeaseTTL: 120 * time.Millisecond, // heartbeat ticks at 40ms
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prov.Close()
+	store.mu.Lock()
+	store.renewTransient = true
+	store.mu.Unlock()
+	ctx := context.Background()
+	draft := library.RecordDraft{ExternalKey: "hb-tr-1", RecordType: "book", Title: "T"}
+	// Keep writing past several heartbeat ticks: transient (unclassed)
+	// renewal failures must NOT latch the lost-lease refusal.
+	deadline := time.Now().Add(700 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, err := prov.EnsureRecord(ctx, draft); err != nil {
+			t.Fatalf("transient renewal blips must not stop writes: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestDeletedWireIntegerDecodesAsTrashed(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	draft := library.RecordDraft{ExternalKey: "imp-delint-1", RecordType: "book", Title: "Int Deleted"}
+	k1, err := h.prov.EnsureRecord(ctx, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wire-level trash with the INTEGER truthiness shape: the tolerant
+	// rawDeleted decode must read it, not fail the whole unmarshal.
+	h.fake.mu.Lock()
+	raw := map[string]any{}
+	_ = json.Unmarshal(h.fake.rawItems[k1], &raw)
+	raw["deleted"] = 1
+	h.fake.rawItems[k1] = mustJSON(raw)
+	h.fake.items[k1].Deleted = true // keep the typed view consistent
+	h.fake.mu.Unlock()
+	k2, err := h.prov.EnsureRecord(ctx, draft)
+	if err != nil {
+		t.Fatalf("integer deleted flag must be treated as trashed (heal), got %v", err)
+	}
+	if k2 == k1 {
+		t.Fatal("trashed record must not be reused")
+	}
+}
+
+func TestRecordEvictionFailurePropagates(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	draft := library.RecordDraft{ExternalKey: "imp-evictrec-1", RecordType: "book", Title: "Evict Rec"}
+	k, err := h.prov.EnsureRecord(ctx, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.fake.deleteItem(k) // the anchored record is purged (404 readback)
+	h.store.mu.Lock()
+	h.store.evictFails = true
+	h.store.mu.Unlock()
+	_, err = h.prov.EnsureRecord(ctx, draft)
+	if !contractClassIs(err, contracterr.ClassInternal) || !strings.Contains(err.Error(), "dead anchor") {
+		t.Fatalf("record eviction failure must propagate loudly, got %v", err)
+	}
+}
+
+func TestRenditionAnchorRaceIsLoud(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	rec := h.fake.addItem(zotItem{ItemType: "book", Title: "Carrier"})
+	content := []byte("%PDF-1.4 race probe")
+	path, sha := staged(t, content)
+	h.store.mu.Lock()
+	h.store.anchorRaceWith = "SOMEOTHERID" // the ledger "wins" with a foreign id
+	h.store.mu.Unlock()
+	_, err := h.prov.EnsureRendition(ctx, library.RenditionDraft{
+		ParentProviderID: rec, ContentHash: sha, MediaType: "application/pdf",
+		Filename: "X - 2020 - Race.pdf", StagingPath: path,
+	})
+	if !contractClassIs(err, contracterr.ClassConflict) || !strings.Contains(err.Error(), "raced") {
+		t.Fatalf("a losing rendition anchor race must fail loudly, got %v", err)
+	}
+}
+
+func TestUploadRefusesCrossHostRedirect(t *testing.T) {
+	// Authorize points at a server that redirects OFF-HOST mid-upload
+	// flow; the write client must refuse to follow (custom auth headers
+	// survive Go's redirect sanitization — the key must not travel).
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the foreign host must never receive a request (headers: %v)", r.Header)
+	}))
+	defer foreign.Close()
+	redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, foreign.URL+"/leak", http.StatusMovedPermanently)
+	}))
+	defer redir.Close()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Zotero-Server-ID", "sid")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/users/0/items":
+			w.Write([]byte(`{"successful":{"0":{"key":"ATT1"}}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/users/0/items/ATT1/file":
+			w.Write([]byte(fmt.Sprintf(`{"exists":0,"url":%q,"uploadKey":"U1"}`, redir.URL+"/hop")))
+		default:
+			http.Error(w, "unsupported", http.StatusNotImplemented)
+		}
+	}))
+	defer api.Close()
+
+	wc := NewWriteClient(api.URL, "sid", "key")
+	_, err := wc.CreateAttachmentWithFile("", "f.pdf", "application/pdf", []byte("x"))
+	if err == nil || !strings.Contains(err.Error(), "cross-host") {
+		t.Fatalf("cross-host redirect must be refused, got %v", err)
 	}
 }

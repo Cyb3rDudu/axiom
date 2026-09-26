@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS library_write_audit (
   operation TEXT NOT NULL,            -- ensure_record | ensure_rendition | ensure_membership | create_collection (future ops land with their emitters)
   anchor TEXT NOT NULL,               -- the idempotency anchor the mutation keyed on
   provider_ref TEXT NOT NULL DEFAULT '',
-  outcome TEXT NOT NULL,              -- created | reused | changed | removed
+  outcome TEXT NOT NULL,              -- created | reused | changed | adopted | removed
   readback JSONB NOT NULL DEFAULT '{}', -- what the readback observed
   at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

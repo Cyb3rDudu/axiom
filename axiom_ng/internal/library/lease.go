@@ -70,7 +70,7 @@ func (s *Store) AcquireWriterLease(ctx context.Context, scope, owner string, ttl
 		if errors.Is(err, pgx.ErrNoRows) {
 			// The holder released between the failed upsert and this read —
 			// the scope is free NOW. Conflict-with-retry, not Internal: the
-			// caller's next acquisition wins.
+			// a retry would win the race.
 			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassConflict,
 				"writer lease "+scope+" was released during acquisition — retry")
 		}
@@ -117,7 +117,7 @@ type WriteAuditRow struct {
 	Operation   string
 	Anchor      string
 	ProviderRef string
-	Outcome     string // created | reused | changed | removed
+	Outcome     string // created | reused | changed | adopted | removed
 	Readback    any    // what the readback observed (JSONB)
 }
 
@@ -183,12 +183,16 @@ func (s *Store) LookupProviderAnchor(ctx context.Context, scope, kind, anchor st
 
 // PutProviderAnchor records the anchor; a concurrent duplicate returns
 // the SURVIVING provider id (the anchor is the dedup winner — the loser
-// must return the winner's id so the saga never books two).
+// must return the winner's id so the saga never books two). The
+// surviving row's provider_version REFRESHES on every put (the id never
+// changes; the version is the latest readback evidence, so a re-put of
+// the same id after a versioned update persists the new version — a DO
+// NOTHING upsert would silently discard it).
 func (s *Store) PutProviderAnchor(ctx context.Context, scope, kind, anchor, providerID string, version int64) (string, error) {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO library_provider_anchors (scope, kind, anchor, provider_id, provider_version)
 		VALUES ($1,$2,$3,$4,$5)
-		ON CONFLICT (scope, kind, anchor) DO NOTHING`,
+		ON CONFLICT (scope, kind, anchor) DO UPDATE SET provider_version = EXCLUDED.provider_version`,
 		scope, kind, anchor, providerID, version)
 	if err != nil {
 		return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "provider anchor put")

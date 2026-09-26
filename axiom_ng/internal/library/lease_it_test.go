@@ -111,4 +111,23 @@ func TestProviderAnchorsAndWriteAudit(t *testing.T) {
 	if n, err := st.CountWriteAudit(ctx, scope); err != nil || n != 3 {
 		t.Fatalf("audit count after 3 mutations: %d %v, want 3", n, err)
 	}
+
+	// Version refresh on a surviving anchor: the id is the FIRST
+	// writer's, the version is the LATEST readback's (a DO NOTHING
+	// upsert would silently discard it).
+	if id, err := st.PutProviderAnchor(ctx, scope, "record", "imp-key-1-hash", "KEYAAA", 7); err != nil || id != "KEYAAA" {
+		t.Fatalf("version refresh put: %q %v", id, err)
+	}
+	if id, ver, err := st.LookupProviderAnchor(ctx, scope, "record", "imp-key-1-hash"); err != nil || id != "KEYAAA" || ver != 7 {
+		t.Fatalf("surviving anchor must keep id, refresh version: %q %d %v", id, ver, err)
+	}
+
+	// The collection anchor kind is live against the REAL Postgres CHECK
+	// (migration 0003 widened it — this pins it beyond the stub level).
+	if id, err := st.PutProviderAnchor(ctx, scope, "collection", "c|Seg", "COLLX", 1); err != nil || id != "COLLX" {
+		t.Fatalf("collection anchor put: %q %v", id, err)
+	}
+	if id, _, err := st.LookupProviderAnchor(ctx, scope, "collection", "c|Seg"); err != nil || id != "COLLX" {
+		t.Fatalf("collection anchor lookup: %q %v", id, err)
+	}
 }

@@ -315,14 +315,54 @@ type zotItem struct {
 	Collections []string     `json:"collections,omitempty"`
 	Tags        []zotTag     `json:"tags,omitempty"`
 	// Deleted: Zotero answers a trashed item's GET with 200 + data.deleted
-	// (live-probed) — the item LIST excludes trash, but single-item reads
-	// do not. Every aliveness readback must treat deleted=true as absent.
-	Deleted bool `json:"deleted,omitempty"`
+	// (live-probed as a JSON true; the item LIST excludes trash, but
+	// single-item reads do not). Decoded TOLERANTLY: some Zotero shapes
+	// send integer truthiness — a strict bool decode would fail the whole
+	// unmarshal and turn every trashed-item readback into an Internal
+	// error instead of the heal path. Every aliveness readback must treat
+	// deleted=true as absent.
+	Deleted rawDeleted `json:"deleted,omitempty"`
 	// attachment-only fields
 	LinkMode    string `json:"linkMode,omitempty"`
 	ContentType string `json:"contentType,omitempty"`
 	Filename    string `json:"filename,omitempty"`
 	MD5         string `json:"md5,omitempty"`
+}
+
+// rawDeleted is the tolerant wire form of a Zotero deletion flag:
+// JSON true/false and any JSON number (nonzero = true) decode; anything
+// else decodes false instead of failing the enclosing unmarshal.
+type rawDeleted bool
+
+func (r *rawDeleted) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	switch {
+	case s == "true":
+		*r = true
+	case s == "false", s == "null", s == "":
+		*r = false
+	default:
+		if n, err := strconv.ParseFloat(s, 64); err == nil {
+			*r = n != 0
+		} else {
+			*r = false
+		}
+	}
+	return nil
+}
+
+// renditionBrokenError marks a readback failure caused by the
+// ATTACHMENT ITSELF being unusable (file-less leftover, wrong parent,
+// filename/content-type divergence, digest mismatch) — as opposed to a
+// transient transport failure. Callers treat it like NotFound: evict
+// (anchored path) or skip adoption (tag-search path) and heal forward.
+type renditionBrokenError struct{ msg string }
+
+func (e *renditionBrokenError) Error() string { return e.msg }
+
+func renditionBroken(format string, args ...any) error {
+	return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
+		&renditionBrokenError{msg: fmt.Sprintf(format, args...)}, "rendition readback")
 }
 
 func creatorsFromDraft(authors []library.Creator) []zotCreator {
@@ -631,12 +671,12 @@ func (p *Provider) EnsureRecord(ctx context.Context, d library.RecordDraft) (str
 			return "", err
 		}
 		if surviving != key {
-			// A concurrent writer won the anchor race (should not happen under
-			// the single-writer lease) — the winner's id is the truth.
-			if err := p.audit(ctx, "ensure_record", anchor, surviving, "reused", map[string]any{"lost_race_to": surviving}); err != nil {
-				return "", err
-			}
-			return surviving, nil
+			// The anchor row points elsewhere while OUR fresh create is
+			// verified — a ledger race the single-writer lease should make
+			// impossible. Loud (mirroring the rendition race), never a
+			// silent reused with an unverified id.
+			return "", contracterr.New(contracterr.ComponentLibrary, contracterr.ClassConflict,
+				fmt.Sprintf("record anchor %s raced: ledger holds %s while %s was freshly verified — manual reconcile", anchor, surviving, key))
 		}
 	}
 	p.invalidate()
@@ -718,7 +758,7 @@ func (p *Provider) readbackRecord(ctx context.Context, key string, d library.Rec
 			"anchored record "+key+" sits in the Zotero trash — treat as vanished")
 	}
 	if _, tagged := hasTag(it.Tags, "axiom-imp:"); !tagged {
-		return false, versionOf(verStr), nil // no anchor marker: diverged (the update re-stamps it)
+		return false, versionOf(verStr), nil // ANY axiom-imp marker passes; the update re-stamps the exact one
 	}
 	same := it.ItemType == firstNonEmptyStr(d.RecordType, "document") &&
 		it.Title == d.Title &&
@@ -827,11 +867,13 @@ func (p *Provider) EnsureRendition(ctx context.Context, d library.RenditionDraft
 	}
 	anchor := d.ParentProviderID + "|" + d.ContentHash
 
-	// 1. Anchor ledger (fast path) with live verification. A readback
-	// failure means the anchored attachment VANISHED (deleted externally —
-	// purged OR trashed — or diverged): evict the stale row (guarded —
-	// only this exact row) so the re-upload below re-anchors fresh
-	// instead of returning a dead id. Eviction errors PROPAGATE: with the
+	// 1. Anchor ledger (fast path) with live verification. Heal-worthy
+	// readback failures (the anchored attachment VANISHED — purged,
+	// trashed — or is BROKEN per *renditionBrokenError) evict the stale
+	// row (guarded — only this exact row) so the re-upload below
+	// re-anchors fresh instead of returning a dead id; a TRANSIENT error
+	// (transport, store) propagates — evicting a healthy anchor over a
+	// blip would duplicate uploads. Eviction errors PROPAGATE: with the
 	// stale row still in place the fresh insert would silently lose to it
 	// (ON CONFLICT DO NOTHING) and hand back the dead id — exactly the
 	// state this healing exists to prevent.
@@ -841,11 +883,13 @@ func (p *Provider) EnsureRendition(ctx context.Context, d library.RenditionDraft
 				return "", aerr
 			}
 			return id, nil
-		} else {
+		} else if healWorthy(rerr) {
 			if eerr := p.store.EvictProviderAnchor(ctx, p.scope, "rendition", anchor, id); eerr != nil {
 				return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, eerr,
 					"evicting stale rendition anchor "+anchor+" — refusing to continue with a dead anchor in place")
 			}
+		} else {
+			return "", rerr
 		}
 	} else if err != nil && !errors.Is(err, errAnchorAbsent) {
 		return "", err
@@ -856,8 +900,10 @@ func (p *Provider) EnsureRendition(ctx context.Context, d library.RenditionDraft
 	// a kill in between leaves a TAGGED BUT FILE-LESS attachment behind.
 	// Such a leftover is adopted only when the FULL readback proves it
 	// (parent, filename, retrievable file with matching digest); a
-	// file-less leftover is skipped and a complete fresh attachment is
-	// created below (the empty item stays for the repair track).
+	// heal-worthy failure (absent or *renditionBrokenError) SKIPS the
+	// adoption and a complete fresh attachment is created below (the
+	// empty item stays for the repair track); a transient error
+	// propagates instead of silently forking into a duplicate upload.
 	if found, err := p.findTaggedAttachment(ctx, d.ContentHash, d.ParentProviderID); err != nil {
 		return "", err
 	} else if found != "" {
@@ -869,6 +915,8 @@ func (p *Provider) EnsureRendition(ctx context.Context, d library.RenditionDraft
 				return "", err
 			}
 			return found, nil
+		} else if !healWorthy(rerr) {
+			return "", rerr
 		}
 	}
 
@@ -914,27 +962,28 @@ func (p *Provider) EnsureRendition(ctx context.Context, d library.RenditionDraft
 // an attachment itself, not trashed), filename/content type, retrievable
 // file with matching sha256 (Zotero stores md5; we verify OUR digest of
 // the stored bytes — stronger). Trashed attachments count as ABSENT
-// (the caller heals). Returns the OBSERVED stored size (the audit's
-// evidence) and the persisted version (the anchor ledger's
-// provider_version).
-func (p *Provider) readbackRendition(ctx context.Context, key string, d library.RenditionDraft, fresh bool) (int64, int64, error) {
-	data, verStr, err := p.write.GetItem(key)
-	if err != nil {
-		if isStatus(err, http.StatusNotFound) {
+// (the caller heals); a broken attachment (wrong parent, diverged
+// metadata, missing/mismatched file) surfaces as *renditionBrokenError —
+// heal-worthy like NotFound, unlike a transient transport failure.
+// Returns the OBSERVED stored size (the audit's evidence) and the
+// persisted version (the anchor ledger's provider_version).
+func (p *Provider) readbackRendition(ctx context.Context, key string, d library.RenditionDraft, fresh bool) (observed, version int64, err error) {
+	data, verStr, gerr := p.write.GetItem(key)
+	if gerr != nil {
+		if isStatus(gerr, http.StatusNotFound) {
 			return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "rendition "+key+" vanished from Zotero")
 		}
-		return 0, 0, mapWriteErr(err, key, "ensure_rendition readback")
+		return 0, 0, mapWriteErr(gerr, key, "ensure_rendition readback")
 	}
 	var it zotItem
-	if err := json.Unmarshal(data, &it); err != nil {
-		return 0, 0, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "rendition readback decode "+key)
+	if jerr := json.Unmarshal(data, &it); jerr != nil {
+		return 0, 0, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, jerr, "rendition readback decode "+key)
 	}
 	if it.Deleted {
 		return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "rendition "+key+" sits in the Zotero trash")
 	}
 	if it.ParentItem != d.ParentProviderID {
-		return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
-			"rendition readback: attachment "+key+" sits under parent "+it.ParentItem+", want "+d.ParentProviderID)
+		return 0, 0, renditionBroken("attachment %s sits under parent %s, want %s", key, it.ParentItem, d.ParentProviderID)
 	}
 	if fresh {
 		// The parent must be alive (a real, un-trashed document item).
@@ -944,16 +993,13 @@ func (p *Provider) readbackRendition(ctx context.Context, key string, d library.
 		}
 		var parent zotItem
 		if json.Unmarshal(pdata, &parent) != nil || parent.Deleted || parent.ItemType == "attachment" || parent.ItemType == "note" {
-			return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
-				"rendition readback: parent "+d.ParentProviderID+" is not a live document item")
+			return 0, 0, renditionBroken("parent %s is not a live document item", d.ParentProviderID)
 		}
 		if it.Filename != d.Filename {
-			return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
-				"rendition readback: filename "+it.Filename+" != "+d.Filename)
+			return 0, 0, renditionBroken("filename %s != %s", it.Filename, d.Filename)
 		}
 		if d.MediaType != "" && it.ContentType != "" && it.ContentType != d.MediaType {
-			return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
-				"rendition readback: contentType "+it.ContentType+" != "+d.MediaType)
+			return 0, 0, renditionBroken("contentType %s != %s", it.ContentType, d.MediaType)
 		}
 		// File retrievable + digest/size prove. The local API redirects the
 		// /file GET to the local storage path — the envelope's enclosure
@@ -966,17 +1012,15 @@ func (p *Provider) readbackRendition(ctx context.Context, key string, d library.
 		}
 		local := enclosurePath(eraw)
 		if local == "" {
-			return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
-				"rendition readback: attachment "+key+" carries no local enclosure path")
+			return 0, 0, renditionBroken("attachment %s carries no local enclosure path (file-less leftover?)", key)
 		}
 		got, ferr := os.ReadFile(local)
 		if ferr != nil {
-			return 0, 0, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassUnavailable, ferr, "rendition readback file "+local)
+			return 0, 0, renditionBroken("stored file unreadable: %s (%v)", local, ferr)
 		}
 		sum := sha256.Sum256(got)
 		if hex.EncodeToString(sum[:]) != d.ContentHash {
-			return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
-				"rendition readback: stored file digest mismatch for "+key+" ("+local+")")
+			return 0, 0, renditionBroken("stored file digest mismatch for %s (%s)", key, local)
 		}
 		return int64(len(got)), versionOf(verStr), nil
 	}
@@ -1151,12 +1195,20 @@ func (p *Provider) ResolvePath(ctx context.Context, segments []string, createMis
 	return parent, nil
 }
 
+// collectionAnchor is the ledger anchor of a collection segment:
+// "<parentKey>|<name>". Zotero collection KEYS are separator-free
+// 8-char ids, so the leading key makes the pair injective even when a
+// collection NAME contains '|' (an empty parent is the root). The
+// reverse split never happens — lookups build the key, they never parse
+// it.
+func collectionAnchor(parent, name string) string { return parent + "|" + name }
+
 // adoptCollectionAnchor anchors an existing collection segment when the
 // ledger lacks it, appending the adoption audit row (outcome "adopted"
 // — truthful whether the segment is a torn create of ours or was always
 // there: the row records the LEDGER mutation, not a Zotero write).
 func (p *Provider) adoptCollectionAnchor(ctx context.Context, name, parentKey, key string) error {
-	anchor := parentKey + "|" + name
+	anchor := collectionAnchor(parentKey, name)
 	if id, _, err := p.store.LookupProviderAnchor(ctx, p.scope, "collection", anchor); err == nil && id != "" {
 		return nil
 	} else if err != nil && !errors.Is(err, errAnchorAbsent) {
@@ -1209,10 +1261,10 @@ func (p *Provider) createCollection(ctx context.Context, name, parentKey string)
 		return "", contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 			fmt.Sprintf("create_collection readback: parent %q != %q", gotParent, parentKey))
 	}
-	if _, err := p.store.PutProviderAnchor(ctx, p.scope, "collection", parentKey+"|"+name, key, 0); err != nil {
+	if _, err := p.store.PutProviderAnchor(ctx, p.scope, "collection", collectionAnchor(parentKey, name), key, 0); err != nil {
 		return "", err
 	}
-	if err := p.audit(ctx, "create_collection", parentKey+"|"+name, key, "created", map[string]any{"parent": parentKey}); err != nil {
+	if err := p.audit(ctx, "create_collection", collectionAnchor(parentKey, name), key, "created", map[string]any{"parent": parentKey}); err != nil {
 		return "", err
 	}
 	return key, nil
@@ -1255,6 +1307,17 @@ func createdKey(raw []byte) (string, error) {
 func contractClassIs(err error, class contracterr.Class) bool {
 	got, ok := contracterr.ClassOf(err)
 	return ok && got == class
+}
+
+// healWorthy reports whether a rendition readback error justifies
+// healing (absent/trashed item or a broken attachment) — as opposed to
+// a transient transport failure, which must propagate.
+func healWorthy(err error) bool {
+	if contractClassIs(err, contracterr.ClassNotFound) {
+		return true
+	}
+	var broken *renditionBrokenError
+	return errors.As(err, &broken)
 }
 
 func isStatus(err error, code int) bool {

@@ -168,6 +168,24 @@ func TestOpenLibraryISBNExact(t *testing.T) {
 	}
 }
 
+func TestOpenLibraryISBNMissFallsThroughToTitle(t *testing.T) {
+	ol := openLibraryStub(t, `{}`, `{"docs":[
+		{"key":"/works/9","title":"Open Wired","publish_date":"2001","author_name":["A"]}
+	]}`)
+	cands, err := ol.Resolve(context.Background(), library.ResolveQuery{
+		ISBN: "9790000000000", Title: "Open Wired",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 1 || cands[0].Fields.Title != "Open Wired" {
+		t.Fatalf("an ISBN unknown to Open Library must not end the rung: %+v", cands)
+	}
+	if cands[0].Fields.ISBN != "" {
+		t.Fatalf("the fallthrough hit is a title hit, not an identifier echo: %+v", cands[0])
+	}
+}
+
 func TestOpenLibraryFuzzyTitles(t *testing.T) {
 	ol := openLibraryStub(t, `{}`, `{"docs":[
 		{"key":"/works/1","title":"Open Wired","publish_date":"2001","author_name":["A"]},

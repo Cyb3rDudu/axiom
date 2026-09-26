@@ -145,7 +145,6 @@ func precleanZotero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pre-clean catalog read: %v", err)
 	}
-	_ = env // used by deleteITCollections below
 	for _, raw := range env {
 		it, ok := itemFromEnvelope(raw)
 		if !ok {
@@ -182,7 +181,7 @@ func deleteITCollections(ctx context.Context, read *LocalAPI, write *WriteClient
 	used := map[string]bool{}
 	for _, raw := range env {
 		it, ok := itemFromEnvelope(raw)
-		if !ok || it.Deleted {
+		if !ok || bool(it.Deleted) {
 			continue
 		}
 		for _, c := range it.Collections {
@@ -501,7 +500,7 @@ func TestRealZoteroFullLadderIT(t *testing.T) {
 			data, _, gerr := prov.write.GetItem(key)
 			if gerr == nil {
 				var it zotItem
-				if json.Unmarshal(data, &it) == nil && !it.Deleted {
+				if json.Unmarshal(data, &it) == nil && !bool(it.Deleted) {
 					t.Fatalf("cleanup witness: item %s still live", key)
 				}
 			} else if !isStatus(gerr, http.StatusNotFound) {
