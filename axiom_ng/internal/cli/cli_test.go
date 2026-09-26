@@ -55,6 +55,47 @@ func TestServeLibraryBootsTheLibrarySlice(t *testing.T) {
 	}
 }
 
+// TestServeStoreBootsTheStoreSlice — F09 (#303) unlocked the role: serve
+// store is no longer vocabulary-only. In a db-less env the selection
+// proceeds past the CLI into the composition, which refuses loudly on the
+// unstartable store port (exit 1, a diagnosis — never a usage refusal).
+// This is the CI-runnable half of the independence witness (the dev E2E
+// proves the full topology against real runner/OpenSearch).
+func TestServeStoreBootsTheStoreSlice(t *testing.T) {
+	t.Setenv("AXIOM_DATABASE_URL", "")
+	t.Setenv("AXIOM_ALLOW_DEBUG_BIND", "1") // the test env's port pin must not hit the #205 debug-bind guard first
+	var buf strings.Builder
+	exit := serveTo(&buf, []string{"serve", "store"})
+	if exit == exitUsage {
+		t.Fatalf("serve store must not be a usage refusal anymore: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "AXIOM_DATABASE_URL") {
+		t.Fatalf("serve store without a store port must fail with the store diagnosis, got exit=%d: %s", exit, buf.String())
+	}
+}
+
+// TestStoreRolesAreLibraryFree — the store slice selects NO Library
+// runtime role and NO repair track: the independence topology's shape is
+// pinned where a stray role would regress it silently.
+func TestStoreRolesAreLibraryFree(t *testing.T) {
+	roles := storeRoles()
+	set := map[string]bool{}
+	for _, r := range roles {
+		set[string(r)] = true
+	}
+	if set["sync"] {
+		t.Fatalf("store slice must not select the sync (Library) role: %v", roles)
+	}
+	if set["repair"] {
+		t.Fatalf("store slice must not select the repair track: %v", roles)
+	}
+	for _, want := range []string{"api", "store", "search", "ingest", "dispatcher"} {
+		if !set[want] {
+			t.Fatalf("store slice must select %s: %v", want, roles)
+		}
+	}
+}
+
 // serveTo runs Run with stderr captured (the refusals write to
 // stderr) — a thin wrapper over runTo; the stdout half is discarded.
 func serveTo(buf *strings.Builder, args []string) int {

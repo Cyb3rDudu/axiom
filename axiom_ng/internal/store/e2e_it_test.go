@@ -4,16 +4,16 @@
 // AXIOM_F09_RUNNER_URL (a live processor) AND AXIOM_F09_OS_URL (a live
 // OpenSearch). What it proves, against a WORKTREE-BUILT binary:
 //
-//   1. E2E over the new seam: POST /api/v1/store/ingest (a SourceRevision
-//      whose content is a real PDF) → dispatcher claim → runner compute →
-//      atomic snapshot+chunks commit → outbox drain → SEARCHABLE
-//      (/api/v1/search finds the document, /api/v1/passage resolves).
-//   2. Independence: the process is `axiom serve store` — NO sync role,
-//      NO Library providers, and the health JSON carries NO zotero field
-//      (the store slice never even probes Zotero). The Library is
-//      completely stopped; the only Library-side artifact the store
-//      touches is the shared database's mirror rows (the documented
-//      dual-read).
+//  1. E2E over the new seam: POST /api/v1/store/ingest (a SourceRevision
+//     whose content is a real PDF) → dispatcher claim → runner compute →
+//     atomic snapshot+chunks commit → outbox drain → SEARCHABLE
+//     (/api/v1/search finds the document, /api/v1/passage resolves).
+//  2. Independence: the process is `axiom serve store` — NO sync role,
+//     NO Library providers, and the health JSON carries NO zotero field
+//     (the store slice never even probes Zotero). The Library is
+//     completely stopped; the only Library-side artifact the store
+//     touches is the shared database's mirror rows (the documented
+//     dual-read).
 package store
 
 import (
@@ -37,20 +37,20 @@ import (
 )
 
 type e2eEnv struct {
-	dsn      string // scratch DB DSN (owned; dropped in cleanup)
-	dbName   string
-	baseDSN  string
-	runner   string
-	osURL    string
-	osIndex  string
-	bin      string
-	work     string
-	apiPort  int
-	apiURL   string
-	pdfPath  string
-	pdfHash  string
-	srcID    string
-	docUUID  string
+	dsn     string // scratch DB DSN (owned; dropped in cleanup)
+	dbName  string
+	baseDSN string
+	runner  string
+	osURL   string
+	osIndex string
+	bin     string
+	work    string
+	apiPort int
+	apiURL  string
+	pdfPath string
+	pdfHash string
+	srcID   string
+	docUUID string
 }
 
 func freePort(t *testing.T) int {
@@ -140,16 +140,16 @@ func TestF09StoreIndependenceE2E(t *testing.T) {
 	env := []string{
 		"HOME=" + os.Getenv("HOME"),
 		"PATH=" + os.Getenv("PATH"),
-		"AXIOM_DATABASE_URL="+e.dsn,
+		"AXIOM_DATABASE_URL=" + e.dsn,
 		fmt.Sprintf("AXIOM_API_PORT=%d", e.apiPort),
 		"AXIOM_BIND_ADDR=127.0.0.1",
-		"AXIOM_OS_URL="+osURL,
-		"AXIOM_OS_INDEX="+e.osIndex,
-		"AXIOM_PROCESSOR_URLS="+runner,
-		"AXIOM_PROCESSOR_URL="+runner,
-		"AXIOM_QUERY_RUNNER_URL="+runner,
-		"AXIOM_PROCESSOR_SOURCE_BASE_URL="+e.apiURL,
-		"AXIOM_ARTIFACT_ROOT="+filepath.Join(e.work, "artifacts"),
+		"AXIOM_OS_URL=" + osURL,
+		"AXIOM_OS_INDEX=" + e.osIndex,
+		"AXIOM_PROCESSOR_URLS=" + runner,
+		"AXIOM_PROCESSOR_URL=" + runner,
+		"AXIOM_QUERY_RUNNER_URL=" + runner,
+		"AXIOM_PROCESSOR_SOURCE_BASE_URL=" + e.apiURL,
+		"AXIOM_ARTIFACT_ROOT=" + filepath.Join(e.work, "artifacts"),
 		"AXIOM_DISPATCHER_ENABLED=1",
 		"AXIOM_DISPATCHER_WORKER_ID=f09-e2e",
 		"AXIOM_FIXER_INVOKER_ENABLED=0",
@@ -158,7 +158,7 @@ func TestF09StoreIndependenceE2E(t *testing.T) {
 		// arbitrary local paths — the signed source URL over THIS api is
 		// the sanctioned delivery path (and exercises the revision job's
 		// ProcessorSource serving end to end).
-		"AXIOM_PROCESSOR_SOURCE_BASE_URL="+e.apiURL,
+		"AXIOM_PROCESSOR_SOURCE_BASE_URL=" + e.apiURL,
 		"AXIOM_PROCESSOR_SOURCE_SECRET=f09-e2e-secret",
 		"TMPDIR=" + os.Getenv("TMPDIR"),
 	}
@@ -230,7 +230,6 @@ func TestF09StoreIndependenceE2E(t *testing.T) {
 			"citation_class": "citable",
 		},
 	}
-	revJSON, _ := json.Marshal(rev)
 	resp := postJSON(t, e.apiURL+"/api/v1/store/ingest", map[string]any{
 		"idempotency_key": "f09-e2e-1", "revision": rev,
 	})
@@ -238,7 +237,6 @@ func TestF09StoreIndependenceE2E(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("intake status %d: %s", resp.StatusCode, body)
 	}
-	_ = revJSON
 
 	// Job-state observability between intake and search: fail FAST with
 	// the DB's own diagnosis instead of burning the 8-minute poll.
@@ -332,36 +330,6 @@ func seedE2EMirror(t *testing.T, pool *pgxpool.Pool, hash, pdfPath string) (srcI
 		t.Fatal(err)
 	}
 	return srcID, docUUID
-}
-
-func applySQLFile(t *testing.T, pool *pgxpool.Pool, dir string) {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".sql") {
-			names = append(names, e.Name())
-		}
-	}
-	for i := range names {
-		for j := i + 1; j < len(names); j++ {
-			if names[j] < names[i] {
-				names[i], names[j] = names[j], names[i]
-			}
-		}
-	}
-	for _, n := range names {
-		sql, err := os.ReadFile(filepath.Join(dir, n))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(contextBg(), string(sql)); err != nil {
-			t.Fatalf("apply %s: %v", n, err)
-		}
-	}
 }
 
 func postJSON(t *testing.T, url string, body any) *http.Response {

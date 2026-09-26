@@ -60,21 +60,6 @@ func (m *Repo) EnsureSource(ctx context.Context, baseURL, libraryID, serverID st
 	return id, nil
 }
 
-// lockKey derives a stable bigint advisory-lock key from a source UUID. The same
-// key coordinates both the canonical sync (session-level pg_advisory_lock) and
-// the claim (transaction-level pg_advisory_xact_lock); session and transaction
-// advisory locks on the same key share one lock namespace and therefore exclude
-// each other, serializing claim vs sync for a source.
-func lockKey(sourceID string) int64 {
-	// Use the last 8 bytes of the UUID string's hash-like value; good enough
-	// for a per-source lock and avoids any collision-sensitive hashing lib.
-	var acc int64
-	for i := 0; i < len(sourceID); i++ {
-		acc = acc*31 + int64(sourceID[i])
-	}
-	return acc & 0x7FFFFFFFFFFFFFFF
-}
-
 // AcquireSourceLock acquires a session-level advisory lock for a source on a
 // dedicated connection and returns a release function. The lock serialises a
 // whole sync (cursor read, reconciliation, cursor commit) per source_id across
@@ -90,7 +75,7 @@ func (m *Repo) AcquireSourceLock(ctx context.Context, sourceID string) (func(), 
 	if err != nil {
 		return nil, fmt.Errorf("acquire lock conn: %w", err)
 	}
-	key := lockKey(sourceID)
+	key := repo.LockKey(sourceID)
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, key); err != nil {
 		conn.Release()
 		return nil, fmt.Errorf("lock source: %w", err)

@@ -10,6 +10,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"encoding/json"
 	"io"
 	"log"
@@ -126,6 +127,13 @@ func seedLiveJob(t *testing.T, d *db.DB, key string) {
 func TestRunnerLiveEndToEndSingleAgent(t *testing.T) {
 	d := openLiveTopologyDB(t)
 	ctxSeed := context.Background()
+	var dbName string
+	if err := d.Pool().QueryRow(ctxSeed, `SELECT current_database()`).Scan(&dbName); err != nil {
+		t.Fatalf("read current_database: %v", err)
+	}
+	if !strings.HasSuffix(dbName, "_test") {
+		t.Fatalf("REFUSING to truncate: current_database %q does not end in _test", dbName)
+	}
 	if _, err := d.Pool().Exec(ctxSeed, `TRUNCATE ingest_jobs, zotero_attachments, zotero_documents,
 		zotero_items, zotero_sources CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)

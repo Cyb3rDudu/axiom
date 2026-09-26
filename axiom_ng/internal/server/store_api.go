@@ -2,8 +2,10 @@
 // ingest is revision intake's public door — the ONLY entry into the
 // Store's processing pipeline (the legacy sync lane stays as the internal
 // transition dual-write). Request body is the contract's
-// IngestRevisionRequest; answers 202 + IngestJob (200 on idempotent
-// replay), contract errors map onto HTTP classes via writeContractError.
+// IngestRevisionRequest; every accepted intake answers 202 + IngestJob
+// (replay included — the job echo is advisory, search visibility is the
+// terminal observable), contract errors map onto HTTP classes via
+// writeContractError.
 package server
 
 import (

@@ -196,6 +196,7 @@ func (f *FakeLibrary) StartImport(ctx context.Context, req library.ImportRequest
 	rev := revision.SourceRevision{
 		SourceID:            sourceID,
 		RevisionID:          fmt.Sprintf("%d", n),
+		RenditionID:         fmt.Sprintf("rend-%d", n),
 		ContentHash:         revision.HashContent(b),
 		MediaType:           media,
 		Bibliography:        bib,

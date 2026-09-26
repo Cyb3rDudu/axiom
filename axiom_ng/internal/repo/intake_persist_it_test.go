@@ -164,6 +164,75 @@ func TestRevisionIntakePersistsSnapshotChunksOutboxIT(t *testing.T) {
 	if status != "completed" {
 		t.Fatalf("job status %q, want completed", status)
 	}
+
+	// 5. The REVISION promise (review F2.4): a second revision of the same
+	// rendition (new content) atomically retires the old snapshot — old
+	// active=false, new active=true, tombstone for the old in the SAME
+	// commit.
+	hash2 := revision.HashContent([]byte("revision persist bytes v2"))
+	if _, err := lr.pool.Exec(ctx,
+		`UPDATE zotero_attachments SET content_hash=$1 WHERE zotero_key='ATTREV1'`, hash2); err != nil {
+		t.Fatal(err)
+	}
+	rev2 := revision.SourceRevision{
+		SourceID: srcID, RevisionID: "2", RenditionID: "ATTREV1",
+		ContentHash: hash2, MediaType: revision.MediaTypePDF,
+		Bibliography:  revision.Bibliography{RecordID: "DOCREV1", Title: "Revision Persist v2", CitationClass: "citable"},
+		ContentTicket: "zat:" + srcID + ":ATTREV1",
+	}
+	rev2JSON, _ := json.Marshal(rev2)
+	job2, minted2, err := lr.rep.EnqueueRevisionIntake(ctx, IntakeRequest{
+		IdempotencyKey: "revpersist-2", RevisionSourceID: srcID, RevisionRecordID: "DOCREV1",
+		RevisionRenditionID: "ATTREV1", RevisionNo: "2", ContentHash: hash2, RevisionJSON: rev2JSON,
+	})
+	if err != nil || !minted2 {
+		t.Fatalf("mint v2: %v %v", job2, err)
+	}
+	claimed2, err := lr.rep.ClaimNextJob(ctx, ClaimOptions{
+		WorkerID: "revpersist2", LeaseDuration: 30 * time.Second,
+		Profile: json.RawMessage(`{"profile":"full-rag-v1"}`),
+	})
+	if err != nil || claimed2 == nil || claimed2.JobID != job2.ID {
+		t.Fatalf("claim v2: %v %v", claimed2, err)
+	}
+	if err := lr.rep.MarkProcessing(ctx, claimed2.LeaseRef); err != nil {
+		t.Fatal(err)
+	}
+	res2Bytes, _ := json.Marshal(revisionResult(claimed2.JobID, claimed2.AttachmentID, hash2, derefPStr(claimed2.ProfileHash), 3))
+	snap2ID, err := lr.rep.PersistResult(ctx, claimed2.JobID, res2Bytes, PersistOptions{
+		CapDim: 3,
+		Artifacts: []ArtifactRecord{{
+			Ref: "markdown", Kind: "markdown", MediaType: "text/markdown; charset=utf-8",
+			SHA256: "d23412f5", SizeBytes: 100, Retention: "durable", StoragePath: "/tmp/md2.md",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("persist v2: %v", err)
+	}
+	var oldActive, newActive bool
+	if err := lr.pool.QueryRow(ctx, `SELECT active FROM processing_snapshots WHERE id=$1`, snapID).Scan(&oldActive); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `SELECT active FROM processing_snapshots WHERE id=$1`, snap2ID).Scan(&newActive); err != nil {
+		t.Fatal(err)
+	}
+	if oldActive || !newActive {
+		t.Fatalf("revision replacement: old snapshot active=%v new active=%v — want false/true (one commit)", oldActive, newActive)
+	}
+	var ops2 []string
+	rows2, err := lr.pool.Query(ctx, `SELECT operation FROM opensearch_outbox WHERE snapshot_id=$1`, snapID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows2.Next() {
+		var op string
+		_ = rows2.Scan(&op)
+		ops2 = append(ops2, op)
+	}
+	rows2.Close()
+	if len(ops2) < 2 || ops2[len(ops2)-1] != "delete" {
+		t.Fatalf("replacement must tombstone the old snapshot (delete op last), got %v", ops2)
+	}
 }
 
 func derefPStr(p *string) string {

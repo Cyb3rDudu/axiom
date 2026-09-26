@@ -153,13 +153,28 @@ func storeBoundaryViolations(g importGraph) []string {
 	var out []string
 	for _, sp := range storePackages {
 		for p := range reachable(g, sp) {
-			if banned[p] {
+			if bannedPkg(banned, p) {
 				out = append(out, fmt.Sprintf("%s reaches %s", sp, p))
 			}
 		}
 	}
 	sort.Strings(out)
 	return out
+}
+
+// bannedPkg: exact match or any subpackage of a banned root — a NEW
+// package under internal/library or internal/sync is Library-side by
+// construction and must not sneak past an exact-name list (review F2.7).
+func bannedPkg(banned map[string]bool, p string) bool {
+	if banned[p] {
+		return true
+	}
+	for b := range banned {
+		if strings.HasPrefix(p, b+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // TestStorePackagesNeverReachZoteroOrCredentials — the standing gate.

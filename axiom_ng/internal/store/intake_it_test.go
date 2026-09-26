@@ -8,7 +8,6 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -19,14 +18,6 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	storemigrations "github.com/Cyb3rDudu/axiom/axiom_ng/internal/store/migrations"
 )
-
-// intakeEnv is the scratch harness: migrated DB, seeded mirror rows
-// (source/document/item/attachment — the transition dual-read targets).
-type intakeEnv struct {
-	pool  interface{ Exec(ctx context.Context, sql string, args ...any) (interface{ RowsAffected() int64 }, error) }
-	rep   *repo.Repo
-	srcID string
-}
 
 func openIntakeDB(t *testing.T) *db.DB {
 	t.Helper()
@@ -261,4 +252,200 @@ func derefP(p *string) string {
 	return *p
 }
 
-var _ = fmt.Sprintf
+// TestRevisionIntakeClaimObsoletesOnStaleHash — the staleness invariant:
+// the mirror moved on (a newer revision exists) → the job must be
+// obsoleted, never claimed with stale content (review F2.3: the
+// load-bearing CONTENT_HASH_CHANGED branch had no witness).
+func TestRevisionIntakeClaimObsoletesOnStaleHash(t *testing.T) {
+	d := openIntakeDB(t)
+	hash := revision.HashContent([]byte("original bytes"))
+	srcID := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	rep := repo.New(d.Pool())
+	ctx := context.Background()
+	job, minted, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
+		IdempotencyKey: "stale-key-1", RevisionSourceID: srcID, RevisionRecordID: "DOCIT1",
+		RevisionRenditionID: "ATTIT1", RevisionNo: "1", ContentHash: hash,
+		RevisionJSON: mustCanonical(t, seedRevision(srcID, hash)),
+	})
+	if err != nil || !minted {
+		t.Fatalf("mint: %v %v", job, err)
+	}
+	// The mirror advances under the revision (a newer content hash).
+	if _, err := d.Pool().Exec(ctx,
+		`UPDATE zotero_attachments SET content_hash='newer-hash' WHERE zotero_key='ATTIT1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{
+		WorkerID: "stale-it", LeaseDuration: 30 * time.Second,
+		Profile: json.RawMessage(`{"profile":"full-rag-v1"}`),
+	}); err != nil {
+		t.Fatalf("claim (must obsolete, not error): %v", err)
+	}
+	var status, msg string
+	if err := d.Pool().QueryRow(ctx,
+		`SELECT status::text, COALESCE(error_message,'') FROM ingest_jobs WHERE id=$1`, job.ID).Scan(&status, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if status != "skipped" || !strings.Contains(msg, "CONTENT_HASH_CHANGED") {
+		t.Fatalf("stale revision must be obsoleted with CONTENT_HASH_CHANGED, got %s / %q", status, msg)
+	}
+}
+
+// TestRevisionIntakeClaimObsoletesWhenSyncLaneHoldsThePair — the
+// transition-collision guard (review F1.1): a legacy job already holds the
+// resolved (attachment, content_hash); the revision claim must NOT enter
+// the legacy idempotency partial index (unique violation would poison the
+// FIFO head forever) — it obsoletes with a readable reason instead.
+func TestRevisionIntakeClaimObsoletesWhenSyncLaneHoldsThePair(t *testing.T) {
+	d := openIntakeDB(t)
+	hash := revision.HashContent([]byte("collision bytes"))
+	srcID, docID, attID := seedMirrorIDs(t, d, "DOCIT1", "ATTIT1", hash)
+	rep := repo.New(d.Pool())
+	ctx := context.Background()
+	// The legacy lane's job (completed — idempotency-index rows keep the
+	// (attachment, hash) pair regardless of status).
+	if _, err := d.Pool().Exec(ctx,
+		`INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, max_attempts)
+		 VALUES ($1,$2,$3,$4,'completed',3)`, srcID, docID, attID, hash); err != nil {
+		t.Fatal(err)
+	}
+	job, minted, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
+		IdempotencyKey: "coll-key-1", RevisionSourceID: srcID, RevisionRecordID: "DOCIT1",
+		RevisionRenditionID: "ATTIT1", RevisionNo: "1", ContentHash: hash,
+		RevisionJSON: mustCanonical(t, seedRevision(srcID, hash)),
+	})
+	if err != nil || !minted {
+		t.Fatalf("mint: %v %v", job, err)
+	}
+	if _, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{
+		WorkerID: "coll-it", LeaseDuration: 30 * time.Second,
+		Profile: json.RawMessage(`{"profile":"full-rag-v1"}`),
+	}); err != nil {
+		t.Fatalf("claim must not hit the legacy unique index: %v", err)
+	}
+	var status, msg string
+	if err := d.Pool().QueryRow(ctx,
+		`SELECT status::text, COALESCE(error_message,'') FROM ingest_jobs WHERE id=$1`, job.ID).Scan(&status, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if status != "skipped" || !strings.Contains(msg, "REVISION_SUPERSEDED_BY_SYNC_LANE") {
+		t.Fatalf("collision must be obsoleted with REVISION_SUPERSEDED_BY_SYNC_LANE, got %s / %q", status, msg)
+	}
+}
+
+// TestRevisionIntakeClaimObsoletesNonPreferred — preferred parity with the
+// legacy lane (review F1.3): a live but non-preferred rendition must skip
+// at claim (completion would refuse it anyway), not burn processing runs.
+func TestRevisionIntakeClaimObsoletesNonPreferred(t *testing.T) {
+	d := openIntakeDB(t)
+	hash := revision.HashContent([]byte("non preferred bytes"))
+	srcID, docID, _ := seedMirrorIDs(t, d, "DOCIT1", "ATTIT1", hash)
+	rep := repo.New(d.Pool())
+	ctx := context.Background()
+	// Demote the seeded attachment; add a preferred sibling.
+	if _, err := d.Pool().Exec(ctx,
+		`UPDATE zotero_attachments SET preferred=false WHERE zotero_key='ATTIT1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Pool().Exec(ctx, `
+		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+		   parent_zotero_key, link_mode, content_type, filename, local_path, content_hash, preferred, deleted)
+		VALUES ($1,$2,'ATTPREF',1,'DOCIT1','imported_file','application/pdf','p.pdf','/tmp/p.pdf','pref-hash',true,false)`,
+		srcID, docID); err != nil {
+		t.Fatal(err)
+	}
+	job, minted, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
+		IdempotencyKey: "pref-key-1", RevisionSourceID: srcID, RevisionRecordID: "DOCIT1",
+		RevisionRenditionID: "ATTIT1", RevisionNo: "1", ContentHash: hash,
+		RevisionJSON: mustCanonical(t, seedRevision(srcID, hash)),
+	})
+	if err != nil || !minted {
+		t.Fatalf("mint: %v %v", job, err)
+	}
+	if _, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{
+		WorkerID: "pref-it", LeaseDuration: 30 * time.Second,
+		Profile: json.RawMessage(`{"profile":"full-rag-v1"}`),
+	}); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	var status, msg string
+	if err := d.Pool().QueryRow(ctx,
+		`SELECT status::text, COALESCE(error_message,'') FROM ingest_jobs WHERE id=$1`, job.ID).Scan(&status, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if status != "skipped" || !strings.Contains(msg, "ATTACHMENT_NOT_PREFERRED") {
+		t.Fatalf("non-preferred rendition must skip with ATTACHMENT_NOT_PREFERRED, got %s / %q", status, msg)
+	}
+}
+
+// TestRevisionIntakeReplayAcrossKeyOrdering — pins the JSONB semantic
+// comparison (review F2.5): a replay whose JSON text differs only in key
+// order still resolves to the SAME job (a byte/text comparison regression
+// goes red here).
+func TestRevisionIntakeReplayAcrossKeyOrdering(t *testing.T) {
+	d := openIntakeDB(t)
+	hash := revision.HashContent([]byte("key order bytes"))
+	srcID := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	rep := repo.New(d.Pool())
+	ctx := context.Background()
+	req := repo.IntakeRequest{
+		IdempotencyKey: "order-key-1", RevisionSourceID: srcID, RevisionRecordID: "DOCIT1",
+		RevisionRenditionID: "ATTIT1", RevisionNo: "1", ContentHash: hash,
+		RevisionJSON: mustCanonical(t, seedRevision(srcID, hash)),
+	}
+	first, minted, err := rep.EnqueueRevisionIntake(ctx, req)
+	if err != nil || !minted {
+		t.Fatalf("mint: %v %v", first, err)
+	}
+	// Same revision, semantically identical, textually reordered: the
+	// canonical JSON round-tripped through a generic map (Go marshals map
+	// keys sorted — a DIFFERENT textual order, the SAME JSONB value).
+	var generic any
+	if err := json.Unmarshal(mustCanonical(t, seedRevision(srcID, hash)), &generic); err != nil {
+		t.Fatal(err)
+	}
+	reordered, err := json.Marshal(generic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(reordered) == string(mustCanonical(t, seedRevision(srcID, hash))) {
+		t.Fatal("test bug: round-trip must actually reorder the text")
+	}
+	req.RevisionJSON = reordered
+	again, minted2, err := rep.EnqueueRevisionIntake(ctx, req)
+	if err != nil || minted2 || again == nil || again.ID != first.ID {
+		t.Fatalf("reordered replay must be the SAME job: %+v minted=%v err=%v", again, minted2, err)
+	}
+}
+
+// seedMirrorIDs seeds like seedMirror but returns all three ids.
+func seedMirrorIDs(t *testing.T, d *db.DB, docKey, attKey, contentHash string) (srcID, docID, attID string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := d.Pool().QueryRow(ctx,
+		`INSERT INTO zotero_sources (base_url, library_id, server_id) VALUES ('https://intake-it-2.local','users/0','srv-1') RETURNING id::text`).Scan(&srcID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Pool().QueryRow(ctx,
+		`INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
+		 VALUES ($1,$2,1,'book','Intake IT Book') RETURNING id::text`, srcID, docKey).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+	var itemID string
+	if err := d.Pool().QueryRow(ctx,
+		`INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data)
+		 VALUES ($1,$2,1,'book',NULL,'{}','{}') RETURNING id::text`, srcID, docKey).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Pool().Exec(ctx, `UPDATE zotero_documents SET canonical_item_id=$2 WHERE id=$1`, docID, itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Pool().QueryRow(ctx,
+		`INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+		   parent_zotero_key, link_mode, content_type, filename, local_path, content_hash, preferred, deleted)
+		 VALUES ($1,$2,$3,1,$4,'imported_file','application/pdf','it.pdf','/tmp/it.pdf',$5,true,false) RETURNING id::text`,
+		srcID, docID, attKey, docKey, contentHash).Scan(&attID); err != nil {
+		t.Fatal(err)
+	}
+	return srcID, docID, attID
+}
