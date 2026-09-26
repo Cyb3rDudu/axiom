@@ -45,6 +45,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/fixerinvoker"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
@@ -525,7 +526,7 @@ func (r *Root) componentsFor() []Component {
 			r.srv.SetForceRebuildAPI(r.rep)
 			r.srv.SetKGService(r.rep)
 			r.srv.SetConsolidateService(r.rep)
-			r.srv.SetSelectionRepo(r.rep)
+			r.srv.SetSelectionRepo(mirror.New(r.rep))
 			// F06 #300: the Library component's own migration set (own
 			// ledger, same physical DB — additive; the F01 fingerprint
 			// derives from the core set alone).
@@ -574,7 +575,7 @@ func (r *Root) componentsFor() []Component {
 				// first sync would create it too) so revisions/GetSource bind to
 				// the same source id the sync mirror uses.
 				serverID := r.src.ServerID()
-				sourceID, serr := r.rep.EnsureSource(ctx, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, serverID)
+				sourceID, serr := mirror.New(r.rep).EnsureSource(ctx, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, serverID)
 				if serr != nil {
 					return fmt.Errorf("library zotero source: %w", serr)
 				}

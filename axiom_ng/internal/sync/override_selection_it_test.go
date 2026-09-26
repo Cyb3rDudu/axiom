@@ -6,6 +6,7 @@
 package sync
 
 import (
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"context"
 	"encoding/json"
 	"log"
@@ -52,6 +53,7 @@ func TestOverrideOnceAndPersistedSelectionIT(t *testing.T) {
 	src.items[1].Envelope = env
 
 	repoObj := repo.New(d.Pool())
+	mir := mirror.New(repoObj)
 	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
 
 	jobCount := func(sourceID string) int {
@@ -108,7 +110,7 @@ func TestOverrideOnceAndPersistedSelectionIT(t *testing.T) {
 	}
 
 	// Run 4: PERSISTED selection excluded, no override -> the gate holds.
-	if err := repoObj.SetSelections(ctx, []repo.SelectionInput{{DocumentID: docID, Mode: "excluded"}}); err != nil {
+	if err := mir.SetSelections(ctx, []mirror.SelectionInput{{DocumentID: docID, Mode: "excluded"}}); err != nil {
 		t.Fatal(err)
 	}
 	delJobs(res.SourceID)
@@ -179,6 +181,7 @@ func TestCollectionSelectionGatesSyncIT(t *testing.T) {
 	}
 
 	repoObj := repo.New(d.Pool())
+	mir := mirror.New(repoObj)
 	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
 
 	delJobs := func(sourceID string) {
@@ -221,13 +224,13 @@ func TestCollectionSelectionGatesSyncIT(t *testing.T) {
 
 	// Persist the collection selection (the PRIMARY layer). Reset via defer:
 	// the gate is GLOBAL — a leaked row would gate every later test's docs.
-	if err := repoObj.SetSelectionBatch(ctx, nil,
-		[]repo.CollectionSelectionInput{{CollectionKey: "COLL0001", Mode: "included"}}); err != nil {
+	if err := mir.SetSelectionBatch(ctx, nil,
+		[]mirror.CollectionSelectionInput{{CollectionKey: "COLL0001", Mode: "included"}}); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := repoObj.SetSelectionBatch(ctx, nil,
-			[]repo.CollectionSelectionInput{{CollectionKey: "COLL0001", Mode: "default"}}); err != nil {
+		if err := mir.SetSelectionBatch(ctx, nil,
+			[]mirror.CollectionSelectionInput{{CollectionKey: "COLL0001", Mode: "default"}}); err != nil {
 			t.Fatal(err)
 		}
 	}()

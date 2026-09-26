@@ -8,7 +8,7 @@
 //
 // The VWL_PRÄ acceptance: one collection include, one apply, jobs exactly for
 // the collection's documents (with the #159 job-existence semantics).
-package repo
+package mirror
 
 import (
 	"context"
@@ -21,7 +21,7 @@ import (
 
 // seedSelDoc seeds a document + attachment (canonical rows like a real sync)
 // under one source and returns (docID, attKey, srcID).
-func seedSelDoc(t *testing.T, lr *leaseRepo, srcID, docKey, attKey, hash string) (string, string) {
+func seedSelDoc(t *testing.T, lr *mirrorRepo, srcID, docKey, attKey, hash string) (string, string) {
 	t.Helper()
 	ctx := context.Background()
 	var docID string
@@ -42,7 +42,7 @@ func seedSelDoc(t *testing.T, lr *leaseRepo, srcID, docKey, attKey, hash string)
 	return docID, attKey
 }
 
-func applySel(t *testing.T, lr *leaseRepo, srcID string, files map[string]AttachmentFileInfo, selection map[string]string) int {
+func applySel(t *testing.T, lr *mirrorRepo, srcID string, files map[string]AttachmentFileInfo, selection map[string]string) int {
 	t.Helper()
 	ctx := context.Background()
 	tx, err := lr.pool.Begin(ctx)
@@ -68,7 +68,7 @@ func applySel(t *testing.T, lr *leaseRepo, srcID string, files map[string]Attach
 	return res.Enqueued
 }
 
-func docJobCount(t *testing.T, lr *leaseRepo, docID string) int {
+func docJobCount(t *testing.T, lr *mirrorRepo, docID string) int {
 	t.Helper()
 	var n int
 	if err := lr.pool.QueryRow(context.Background(),
@@ -79,7 +79,7 @@ func docJobCount(t *testing.T, lr *leaseRepo, docID string) int {
 }
 
 func TestCollectionSelectionCascadeIT(t *testing.T) {
-	lr := openLeaseDB(t)
+	lr := openMirrorDB(t)
 	lr.truncateFixtures(t)
 	ctx := context.Background()
 

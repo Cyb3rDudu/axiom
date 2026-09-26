@@ -1,6 +1,6 @@
 // Canonical mirror persistence: writes lossless zotero_items/collections and
 // derives the normalized document/attachment projections in one atomic apply.
-package repo
+package mirror
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 )
 
 // CanonicalCursor returns the separate canonical sync cursor for a source.
-func (r *Repo) CanonicalCursor(ctx context.Context, sourceID string) (int64, error) {
+func (m *Repo) CanonicalCursor(ctx context.Context, sourceID string) (int64, error) {
 	var v int64
-	err := r.pool.QueryRow(ctx,
+	err := m.pool.QueryRow(ctx,
 		`SELECT canonical_last_modified_version FROM zotero_sources WHERE id = $1`, sourceID).Scan(&v)
 	if err == pgx.ErrNoRows {
 		return 0, nil
@@ -26,7 +26,7 @@ func (r *Repo) CanonicalCursor(ctx context.Context, sourceID string) (int64, err
 
 // SetCanonicalCursorTx advances the canonical cursor within the caller's
 // transaction so the apply + cursor commit is atomic.
-func (r *Repo) SetCanonicalCursorTx(ctx context.Context, tx pgx.Tx, sourceID string, version int64) error {
+func (m *Repo) SetCanonicalCursorTx(ctx context.Context, tx pgx.Tx, sourceID string, version int64) error {
 	_, err := tx.Exec(ctx, `
 		UPDATE zotero_sources
 		SET canonical_last_modified_version = GREATEST(canonical_last_modified_version, $2)
@@ -38,7 +38,7 @@ func (r *Repo) SetCanonicalCursorTx(ctx context.Context, tx pgx.Tx, sourceID str
 	return nil
 }
 
-func (r *Repo) upsertCanonicalItem(ctx context.Context, tx pgx.Tx, sourceID string, it zoteroprovider.CanonicalItem) error {
+func (m *Repo) upsertCanonicalItem(ctx context.Context, tx pgx.Tx, sourceID string, it zoteroprovider.CanonicalItem) error {
 	// A parent item has no parent: store NULL (not an empty string) so
 	// parent_key IS NULL predicates select parents correctly.
 	var parentKey any
@@ -66,7 +66,7 @@ func (r *Repo) upsertCanonicalItem(ctx context.Context, tx pgx.Tx, sourceID stri
 	return nil
 }
 
-func (r *Repo) markCanonicalItemsMissing(ctx context.Context, tx pgx.Tx, sourceID string, presentKeys []string) error {
+func (m *Repo) markCanonicalItemsMissing(ctx context.Context, tx pgx.Tx, sourceID string, presentKeys []string) error {
 	if presentKeys == nil {
 		presentKeys = []string{}
 	}
@@ -81,7 +81,7 @@ func (r *Repo) markCanonicalItemsMissing(ctx context.Context, tx pgx.Tx, sourceI
 	return nil
 }
 
-func (r *Repo) upsertCanonicalCollection(ctx context.Context, tx pgx.Tx, sourceID string, c zoteroprovider.CanonicalCollection) error {
+func (m *Repo) upsertCanonicalCollection(ctx context.Context, tx pgx.Tx, sourceID string, c zoteroprovider.CanonicalCollection) error {
 	var parentKey any
 	if c.ParentKey != "" {
 		parentKey = c.ParentKey
@@ -104,7 +104,7 @@ func (r *Repo) upsertCanonicalCollection(ctx context.Context, tx pgx.Tx, sourceI
 	return nil
 }
 
-func (r *Repo) markCanonicalCollectionsMissing(ctx context.Context, tx pgx.Tx, sourceID string, presentKeys []string) error {
+func (m *Repo) markCanonicalCollectionsMissing(ctx context.Context, tx pgx.Tx, sourceID string, presentKeys []string) error {
 	if presentKeys == nil {
 		presentKeys = []string{}
 	}

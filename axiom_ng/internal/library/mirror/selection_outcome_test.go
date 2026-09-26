@@ -1,7 +1,7 @@
 // #252 outcome-truth derivation pins. Each subtest pins ONE branch of
 // DeriveOutcome — mutation: flip or reorder any branch and its subtest(s)
 // go red (that is the issue's mutation criterion, kept as plain asserts).
-package repo
+package mirror
 
 import (
 	"strings"

@@ -4,6 +4,7 @@
 package sync
 
 import (
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,7 +32,7 @@ type Service struct {
 	// are the configured env INPUTS kept for the post-sync re-resolve;
 	// ctxDegraded is the #262 boot-order state: DB never synced → rules
 	// inactive until the first sync converges (boot always succeeds).
-	contextual  repo.ContextualRules
+	contextual  mirror.ContextualRules
 	ctxPaths    []string
 	ctxTags     []string
 	ctxDegraded bool
@@ -80,8 +81,8 @@ func (s *Service) SetConsolidator(c Consolidator) { s.consolidator = c }
 // seam so ITs can inject a failing recompute without touching the sync
 // transaction or any product-global trick.
 type contextualAPI interface {
-	ResolveContextualRules(ctx context.Context, paths, tags []string) (repo.ContextualRules, error)
-	RecomputeCitationClass(ctx context.Context, sourceID string, rules repo.ContextualRules) error
+	ResolveContextualRules(ctx context.Context, paths, tags []string) (mirror.ContextualRules, error)
+	RecomputeCitationClass(ctx context.Context, sourceID string, rules mirror.ContextualRules) error
 }
 
 // SetContextualResolver overrides the contextual repo seam (#262 IT hook —
@@ -106,9 +107,9 @@ func (s *Service) InitContextual(ctx context.Context, paths, tags []string) erro
 	if len(paths) == 0 && len(tags) == 0 {
 		return nil
 	}
-	rules, err := s.repo.ResolveContextualRules(ctx, paths, tags)
+	rules, err := s.mir().ResolveContextualRules(ctx, paths, tags)
 	if err != nil {
-		synced, serr := s.repo.HasSyncState(ctx)
+		synced, serr := s.mir().HasSyncState(ctx)
 		if serr == nil && !synced {
 			s.ctxMu.Lock()
 			s.ctxDegraded = true
@@ -158,7 +159,7 @@ func (s *Service) maybeActivateContextual(sourceID string) {
 	api := s.ctxResolve
 	s.ctxMu.Unlock()
 	if api == nil {
-		api = contextualAPI(s.repo)
+		api = s.mir()
 	}
 	if !degraded {
 		return
@@ -236,6 +237,11 @@ func (s *Service) StopConsolidation() {
 }
 
 // New builds a sync service for one Zotero source and the ingest queue.
+// mir derives the mirror repo from the CURRENT store repo (cheap: two
+// pointers). Derived per call — not cached at construction — because ITs
+// (and the degraded boot path) legitimately swap s.repo after New.
+func (s *Service) mir() *mirror.Repo { return mirror.New(s.repo) }
+
 func New(src zoteroprovider.Source, r *repo.Repo, baseURL, libID string, log *log.Logger) *Service {
 	return &Service{src: src, repo: r, baseURL: baseURL, libID: libID, log: log}
 }
@@ -271,17 +277,17 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	if serverID == "" {
 		return Result{}, errors.New("zotero source unreachable")
 	}
-	sourceID, err := s.repo.EnsureSource(ctx, s.baseURL, s.libID, serverID)
+	sourceID, err := s.mir().EnsureSource(ctx, s.baseURL, s.libID, serverID)
 	if err != nil {
 		return Result{}, err
 	}
-	release, err := s.repo.AcquireSourceLock(ctx, sourceID)
+	release, err := s.mir().AcquireSourceLock(ctx, sourceID)
 	if err != nil {
 		return Result{}, err
 	}
 	defer release()
 
-	since, err := s.repo.CanonicalCursor(ctx, sourceID)
+	since, err := s.mir().CanonicalCursor(ctx, sourceID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -311,7 +317,7 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	if override != nil {
 		ovInclude, ovExclude = override.Include, override.Exclude
 	}
-	selection, err := s.repo.ResolveEffectiveSelection(ctx, ovInclude, ovExclude)
+	selection, err := s.mir().ResolveEffectiveSelection(ctx, ovInclude, ovExclude)
 	if err != nil {
 		return Result{}, fmt.Errorf("loading selections: %w", err)
 	}
@@ -324,16 +330,16 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	}
 	defer tx.Rollback(ctx)
 
-	applyRules := func() repo.ContextualRules {
+	applyRules := func() mirror.ContextualRules {
 		s.ctxMu.Lock()
 		defer s.ctxMu.Unlock()
 		return s.contextual
 	}()
-	applyRes, err := s.repo.ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files, selection, applyRules)
+	applyRes, err := s.mir().ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files, selection, applyRules)
 	if err != nil {
 		return Result{}, err
 	}
-	if err := s.repo.SetCanonicalCursorTx(ctx, tx, sourceID, batch.NewVersion); err != nil {
+	if err := s.mir().SetCanonicalCursorTx(ctx, tx, sourceID, batch.NewVersion); err != nil {
 		return Result{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -378,8 +384,8 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 // batch items that are absent from the store or strictly newer. An older,
 // rejected delta attachment can therefore never override a newer projection's
 // path, hash or job. Runs before the apply transaction.
-func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, batch []zoteroprovider.CanonicalItem) (map[string]repo.AttachmentFileInfo, error) {
-	out := map[string]repo.AttachmentFileInfo{}
+func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, batch []zoteroprovider.CanonicalItem) (map[string]mirror.AttachmentFileInfo, error) {
+	out := map[string]mirror.AttachmentFileInfo{}
 
 	// 1. Committed store state: attachment key -> version + envelope path.
 	storeVer := map[string]int64{}
@@ -398,7 +404,7 @@ func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, b
 		}
 		storeVer[key] = ver
 		path := zoteroprovider.LocalFilePath(itemLocalPathFromEnv([]byte(env)))
-		out[key] = repo.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
+		out[key] = mirror.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -415,11 +421,11 @@ func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, b
 			continue // rejected older delta: keep committed path/hash
 		}
 		path := zoteroprovider.LocalFilePath(itemLocalPathFor(it))
-		out[dims.Key] = repo.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
+		out[dims.Key] = mirror.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
 	}
 
 	// 3. Hash/stat every attachment file.
-	res := map[string]repo.AttachmentFileInfo{}
+	res := map[string]mirror.AttachmentFileInfo{}
 	for key, fi := range out {
 		res[key] = s.statAndHash(fi)
 	}
@@ -431,20 +437,20 @@ func statFile(path string) bool {
 	return err == nil && i.Mode().IsRegular()
 }
 
-func (s *Service) statAndHash(fi repo.AttachmentFileInfo) repo.AttachmentFileInfo {
+func (s *Service) statAndHash(fi mirror.AttachmentFileInfo) mirror.AttachmentFileInfo {
 	info, err := os.Stat(fi.LocalPath)
 	if err != nil {
 		return classifyFileError(fi.LocalPath, err, nil)
 	}
 	if !info.Mode().IsRegular() {
-		return repo.AttachmentFileInfo{LocalPath: fi.LocalPath, Exists: false,
+		return mirror.AttachmentFileInfo{LocalPath: fi.LocalPath, Exists: false,
 			ErrCode: "FILE_NOT_FOUND", ErrMsg: "not a regular file", Retryable: false}
 	}
 	hash, herr := zoteroprovider.ContentHash(fi.LocalPath)
 	if herr != nil {
 		return classifyFileError(fi.LocalPath, herr, info)
 	}
-	return repo.AttachmentFileInfo{
+	return mirror.AttachmentFileInfo{
 		LocalPath: fi.LocalPath, Exists: true, Hash: hash,
 		FileSize: info.Size(), MtimeMS: info.ModTime().UnixMilli(),
 	}
@@ -453,16 +459,16 @@ func (s *Service) statAndHash(fi repo.AttachmentFileInfo) repo.AttachmentFileInf
 // classifyFileError maps a concrete os.Stat/read error onto FILE_NOT_FOUND
 // (absent, non-retryable) or IO_ERROR (permission / transient I/O, retryable)
 // so a temporary failure is not permanently dropped from the job queue.
-func classifyFileError(path string, err error, info os.FileInfo) repo.AttachmentFileInfo {
-	base := repo.AttachmentFileInfo{LocalPath: path, Exists: false}
+func classifyFileError(path string, err error, info os.FileInfo) mirror.AttachmentFileInfo {
+	base := mirror.AttachmentFileInfo{LocalPath: path, Exists: false}
 	if info != nil {
 		base.FileSize = info.Size()
 	}
 	if os.IsNotExist(err) {
-		return repo.AttachmentFileInfo{LocalPath: path, Exists: false,
+		return mirror.AttachmentFileInfo{LocalPath: path, Exists: false,
 			ErrCode: "FILE_NOT_FOUND", ErrMsg: fmt.Sprintf("file missing: %s", path), Retryable: false}
 	}
-	return repo.AttachmentFileInfo{LocalPath: path, Exists: false,
+	return mirror.AttachmentFileInfo{LocalPath: path, Exists: false,
 		ErrCode: "IO_ERROR", ErrMsg: fmt.Sprintf("read file %s: %v", path, err), Retryable: true}
 }
 

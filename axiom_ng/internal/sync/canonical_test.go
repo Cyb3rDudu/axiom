@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"context"
 	"encoding/json"
 	"log"
@@ -255,9 +256,10 @@ func TestCanonicalBootstrapOldCursor(t *testing.T) {
 	src.items = []zoteroprovider.CanonicalItem{mkItemJSON("B1", "book", "", "A Book", nil), att}
 
 	repoObj := repo.New(d.Pool())
+	mir := mirror.New(repoObj)
 	// The legacy document cursor is irrelevant: the canonical cursor is separate
 	// and starts at 0, so the first canonical sync is a full snapshot.
-	if _, err := repoObj.EnsureSource(ctx, src.baseURL, "users/0", src.serverID); err != nil {
+	if _, err := mir.EnsureSource(ctx, src.baseURL, "users/0", src.serverID); err != nil {
 		t.Fatal(err)
 	}
 	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())

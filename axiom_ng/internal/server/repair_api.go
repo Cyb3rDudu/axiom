@@ -38,7 +38,7 @@ func (s *Server) SetRepairAPI(r *repo.Repo, write *zoteroprovider.WriteClient, q
 type repairQueueItem struct {
 	repo.RepairCase
 	Title         string                   `json:"title"`
-	Creators      []zoteroprovider.Creator `json:"creators"`
+	Creators      []repo.Creator          `json:"creators"`
 	ExistingNames []string                 `json:"existing_attachment_names,omitempty"` // #291 grown-pattern refs
 	Year          int                      `json:"publication_year"`
 	AttachmentKey string                   `json:"attachment_zotero_key"`

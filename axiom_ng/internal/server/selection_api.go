@@ -11,16 +11,16 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 )
 
 // SelectionRepo is what the selection + documents routes need (repo.Repo).
 type SelectionRepo interface {
-	SetSelectionBatch(ctx context.Context, docs []repo.SelectionInput, colls []repo.CollectionSelectionInput) error
+	SetSelectionBatch(ctx context.Context, docs []mirror.SelectionInput, colls []mirror.CollectionSelectionInput) error
 	SelectionModes(ctx context.Context) (map[string]string, error)
 	CollectionSelectionModes(ctx context.Context) (map[string]string, error)
-	ResolveSelectionView(ctx context.Context) (*repo.ResolvedSelection, error)
-	ListZoteroDocuments(ctx context.Context, syncState string) ([]repo.ZoteroDocumentState, error)
+	ResolveSelectionView(ctx context.Context) (*mirror.ResolvedSelection, error)
+	ListZoteroDocuments(ctx context.Context, syncState string) ([]mirror.ZoteroDocumentState, error)
 }
 
 // collectionKeyPattern: Zotero collection keys are 8-char alphanumerics.
@@ -60,8 +60,8 @@ func (s *Server) handlePutSelection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Selection   []repo.SelectionInput           `json:"selection"`
-		Collections []repo.CollectionSelectionInput `json:"collections"`
+		Selection   []mirror.SelectionInput           `json:"selection"`
+		Collections []mirror.CollectionSelectionInput `json:"collections"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid selection body"})

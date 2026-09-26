@@ -17,6 +17,7 @@ package sync
 // Runs only against a dedicated *_test database (AXIOM_TEST_DATABASE_URL);
 // the fixture truncates the canonical tables to simulate a fresh DB.
 import (
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"bytes"
 	"context"
 	"errors"
@@ -320,11 +321,11 @@ func TestContextualBootActiveSurvivesCollectionDeletionIT(t *testing.T) {
 // transaction — the injected-failure seam the DoD demands (no
 // product-global tricks). Everything else delegates 1:1.
 type failingCtxAPI struct {
-	*repo.Repo
+	*mirror.Repo
 	failRecompute bool
 }
 
-func (f *failingCtxAPI) RecomputeCitationClass(ctx context.Context, sourceID string, rules repo.ContextualRules) error {
+func (f *failingCtxAPI) RecomputeCitationClass(ctx context.Context, sourceID string, rules mirror.ContextualRules) error {
 	if f.failRecompute {
 		return errors.New("injected recompute failure")
 	}
@@ -364,7 +365,7 @@ func TestContextualActivationFailClosedIT(t *testing.T) {
 	}
 
 	// Arm the injected recompute failure for the FIRST sync's activation.
-	seam := &failingCtxAPI{Repo: rep, failRecompute: true}
+	seam := &failingCtxAPI{Repo: mirror.New(rep), failRecompute: true}
 	svc.SetContextualResolver(seam)
 
 	res, err := svc.Run(ctx, nil)

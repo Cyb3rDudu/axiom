@@ -24,8 +24,18 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
+
+// Creator is one bibliographic creator as the Zotero mirror stores it
+// (JSON wire shape of zotero_documents.creators). A local twin of the
+// provider type so this package carries no adapter import (store boundary,
+// F09 #303); repair/quarantine converts into library.Creator.
+type Creator struct {
+	FirstName   string `json:"firstName"`
+	LastName    string `json:"lastName"`
+	Name        string `json:"name,omitempty"`
+	CreatorType string `json:"creatorType,omitempty"`
+}
 
 // RepairItem is everything the fixer invoker needs to know about a case's
 // attachment: the Zotero keys (invocation key + apply target), the source
@@ -37,7 +47,7 @@ type RepairItem struct {
 	DocumentKey   string
 	DocumentID    string // #282: targets the post-heal sync's include override
 	Title         string
-	Creators      []zoteroprovider.Creator
+	Creators      []Creator
 	Year          int
 	ExistingNames []string        // #291: the document's current attachment filenames (grown-pattern reference)
 	Language      string          // #284: OCR language default from document metadata

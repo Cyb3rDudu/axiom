@@ -12,6 +12,7 @@
 package repair
 
 import (
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,7 +21,6 @@ import (
 	"log"
 	"path"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
 // ApplyDeps bundles every mutation of the custody sequence behind one
@@ -44,7 +44,7 @@ type ApplyCase struct {
 	AttachmentKey string
 	DocumentKey   string
 	Title         string
-	Creators      any // []zoteroprovider.Creator — typed loosely to keep repo decoupled
+	Creators      any // []repo.Creator — typed loosely to keep repo decoupled
 	Year          int
 	ExistingNames []string // #291: the document's current attachment filenames (grown-pattern reference)
 	SrcPath       string   // original pdf path (quarantine source)
@@ -101,7 +101,7 @@ func Apply(ctx context.Context, d ApplyDeps, quarantineRoot string, c ApplyCase,
 	}
 
 	// 3. create the healed attachment under a SCHEMA filename (no patch)
-	creators, _ := c.Creators.([]zoteroprovider.Creator)
+	creators, _ := c.Creators.([]repo.Creator)
 	filename := SchemaFilenameForFormat(creators, c.Year, c.Title, c.ContentType, c.ExistingNames)
 	newKey, err := d.CreateAttachmentWithFile(c.DocumentKey, filename, c.ContentType, pdf)
 	if err != nil {

@@ -1,6 +1,6 @@
 // Client-controlled ingest selection (#166): the projection stays a full
 // mirror, only job creation is gated. No row = default (everything selected).
-package repo
+package mirror
 
 import (
 	"context"
@@ -19,13 +19,13 @@ type SelectionInput struct {
 // Unknown document ids error (FK) — a client naming a nonexistent document
 // should hear about it. Delegates to SetSelectionBatch: one code path, one
 // transaction, no SQL drift between the singles and the combined write.
-func (r *Repo) SetSelections(ctx context.Context, in []SelectionInput) error {
-	return r.SetSelectionBatch(ctx, in, nil)
+func (m *Repo) SetSelections(ctx context.Context, in []SelectionInput) error {
+	return m.SetSelectionBatch(ctx, in, nil)
 }
 
 // SelectionModes returns the persisted selection map (absent = default).
-func (r *Repo) SelectionModes(ctx context.Context) (map[string]string, error) {
-	rows, err := r.pool.Query(ctx, `SELECT document_id::text, mode FROM zotero_selections`)
+func (m *Repo) SelectionModes(ctx context.Context) (map[string]string, error) {
+	rows, err := m.pool.Query(ctx, `SELECT document_id::text, mode FROM zotero_selections`)
 	if err != nil {
 		return nil, err
 	}
@@ -136,8 +136,8 @@ func DeriveOutcome(selMode, jobStatus, errCode, errMsg, paginationState, repairS
 // per-document sync state: synced = a completed job exists for the preferred
 // attachment; held = selection-excluded or no job ever; processing/pending
 // from the newest job's status. syncState filter ("") returns everything.
-func (r *Repo) ListZoteroDocuments(ctx context.Context, syncState string) ([]ZoteroDocumentState, error) {
-	rows, err := r.pool.Query(ctx, `
+func (m *Repo) ListZoteroDocuments(ctx context.Context, syncState string) ([]ZoteroDocumentState, error) {
+	rows, err := m.pool.Query(ctx, `
 		SELECT d.id::text, d.zotero_key, COALESCE(d.title,''), COALESCE(d.item_type,''), d.updated_at,
 		       COALESCE(a.zotero_key,''), COALESCE(a.filename,''), COALESCE(a.content_type,''), COALESCE(a.content_hash,''),
 		       COALESCE(j.status::text,''),
@@ -203,8 +203,8 @@ func (r *Repo) ListZoteroDocuments(ctx context.Context, syncState string) ([]Zot
 // SetSelectionBatch writes document AND collection selections in ONE
 // transaction (#166): a failure mid-batch rolls both back — a half-applied
 // selection would silently flip sync semantics for the other layer.
-func (r *Repo) SetSelectionBatch(ctx context.Context, docs []SelectionInput, colls []CollectionSelectionInput) error {
-	tx, err := r.pool.Begin(ctx)
+func (m *Repo) SetSelectionBatch(ctx context.Context, docs []SelectionInput, colls []CollectionSelectionInput) error {
+	tx, err := m.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}

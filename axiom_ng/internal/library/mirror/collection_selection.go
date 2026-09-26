@@ -13,7 +13,7 @@
 //  4. The one-run document override INCLUDE is a no-op whenever collection
 //     selections exist (it must not resurrect outside the base); the
 //     override EXCLUDE always applies.
-package repo
+package mirror
 
 import (
 	"context"
@@ -31,13 +31,13 @@ type CollectionSelectionInput struct {
 // SetCollectionSelections applies a collection-selection batch (same
 // semantics as the document selection). Delegates to SetSelectionBatch —
 // one transaction, one code path.
-func (r *Repo) SetCollectionSelections(ctx context.Context, in []CollectionSelectionInput) error {
-	return r.SetSelectionBatch(ctx, nil, in)
+func (m *Repo) SetCollectionSelections(ctx context.Context, in []CollectionSelectionInput) error {
+	return m.SetSelectionBatch(ctx, nil, in)
 }
 
 // CollectionSelectionModes returns the persisted collection selection map.
-func (r *Repo) CollectionSelectionModes(ctx context.Context) (map[string]string, error) {
-	rows, err := r.pool.Query(ctx, `SELECT collection_key, mode FROM zotero_collection_selections`)
+func (m *Repo) CollectionSelectionModes(ctx context.Context) (map[string]string, error) {
+	rows, err := m.pool.Query(ctx, `SELECT collection_key, mode FROM zotero_collection_selections`)
 	if err != nil {
 		return nil, err
 	}
@@ -57,12 +57,12 @@ func (r *Repo) CollectionSelectionModes(ctx context.Context) (map[string]string,
 // canonical membership chain (collections → items → documents). Direct
 // memberships only — a doc in a sub-collection is a member of both, which
 // Zotero models explicitly, so no recursive walk is needed.
-func (r *Repo) collectionDocuments(ctx context.Context, keys []string) (map[string]struct{}, error) {
+func (m *Repo) collectionDocuments(ctx context.Context, keys []string) (map[string]struct{}, error) {
 	out := map[string]struct{}{}
 	if len(keys) == 0 {
 		return out, nil
 	}
-	rows, err := r.pool.Query(ctx, `
+	rows, err := m.pool.Query(ctx, `
 		SELECT DISTINCT d.id::text
 		FROM zotero_collections c
 		JOIN zotero_item_collections ic ON ic.collection_id = c.id
@@ -86,12 +86,12 @@ func (r *Repo) collectionDocuments(ctx context.Context, keys []string) (map[stri
 // ResolveEffectiveSelection computes the gate map for the sync: the cascade
 // above over persisted document + collection selections, then the one-run
 // document override on top. nil return = no gate (everything selected).
-func (r *Repo) ResolveEffectiveSelection(ctx context.Context, overrideInclude, overrideExclude []string) (map[string]string, error) {
-	docModes, err := r.SelectionModes(ctx)
+func (m *Repo) ResolveEffectiveSelection(ctx context.Context, overrideInclude, overrideExclude []string) (map[string]string, error) {
+	docModes, err := m.SelectionModes(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading selections: %w", err)
 	}
-	collModes, err := r.CollectionSelectionModes(ctx)
+	collModes, err := m.CollectionSelectionModes(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading collection selections: %w", err)
 	}
@@ -110,17 +110,17 @@ func (r *Repo) ResolveEffectiveSelection(ctx context.Context, overrideInclude, o
 	}
 	var allow map[string]struct{}
 	if len(incKeys) > 0 {
-		allow, err = r.collectionDocuments(ctx, incKeys)
+		allow, err = m.collectionDocuments(ctx, incKeys)
 		if err != nil {
 			return nil, fmt.Errorf("expanding included collections: %w", err)
 		}
 	} else {
 		// only excluded collections: base = everything minus their docs
-		all, err := r.allDocumentIDs(ctx)
+		all, err := m.allDocumentIDs(ctx)
 		if err != nil {
 			return nil, err
 		}
-		excDocs, err := r.collectionDocuments(ctx, excKeys)
+		excDocs, err := m.collectionDocuments(ctx, excKeys)
 		if err != nil {
 			return nil, fmt.Errorf("expanding excluded collections: %w", err)
 		}
@@ -148,7 +148,7 @@ func (r *Repo) ResolveEffectiveSelection(ctx context.Context, overrideInclude, o
 	// (doc-exclude beats collection-include). A doc-include NEVER adds back
 	// (collection-exclude beats doc-include).
 	final := map[string]string{}
-	all, err := r.allDocumentIDs(ctx)
+	all, err := m.allDocumentIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -162,8 +162,8 @@ func (r *Repo) ResolveEffectiveSelection(ctx context.Context, overrideInclude, o
 	return final, nil
 }
 
-func (r *Repo) allDocumentIDs(ctx context.Context) (map[string]struct{}, error) {
-	rows, err := r.pool.Query(ctx, `SELECT id::text FROM zotero_documents WHERE NOT deleted`)
+func (m *Repo) allDocumentIDs(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := m.pool.Query(ctx, `SELECT id::text FROM zotero_documents WHERE NOT deleted`)
 	if err != nil {
 		return nil, err
 	}
@@ -197,18 +197,18 @@ type ResolvedCollection struct {
 }
 
 // ResolveSelectionView builds the resolved view for the client.
-func (r *Repo) ResolveSelectionView(ctx context.Context) (*ResolvedSelection, error) {
-	collModes, err := r.CollectionSelectionModes(ctx)
+func (m *Repo) ResolveSelectionView(ctx context.Context) (*ResolvedSelection, error) {
+	collModes, err := m.CollectionSelectionModes(ctx)
 	if err != nil {
 		return nil, err
 	}
-	docModes, err := r.SelectionModes(ctx)
+	docModes, err := m.SelectionModes(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := &ResolvedSelection{Documents: docModes, Collections: []ResolvedCollection{}}
-	for k, m := range collModes {
-		docs, err := r.collectionDocuments(ctx, []string{k})
+	for k, mode := range collModes {
+		docs, err := m.collectionDocuments(ctx, []string{k})
 		if err != nil {
 			return nil, err
 		}
@@ -216,12 +216,12 @@ func (r *Repo) ResolveSelectionView(ctx context.Context) (*ResolvedSelection, er
 		for id := range docs {
 			ids = append(ids, id)
 		}
-		out.Collections = append(out.Collections, ResolvedCollection{CollectionKey: k, Mode: m, DocumentIDs: ids})
+		out.Collections = append(out.Collections, ResolvedCollection{CollectionKey: k, Mode: mode, DocumentIDs: ids})
 	}
 	sort.Slice(out.Collections, func(i, j int) bool {
 		return out.Collections[i].CollectionKey < out.Collections[j].CollectionKey
 	})
-	gate, err := r.ResolveEffectiveSelection(ctx, nil, nil)
+	gate, err := m.ResolveEffectiveSelection(ctx, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("resolving effective selection: %w", err)
 	}

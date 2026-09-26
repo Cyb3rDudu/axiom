@@ -16,7 +16,7 @@
 // is the zotero_documents.citation_class projection, recomputed on every
 // canonical sync: contextual = member of a ruled collection OR carrying a
 // ruled tag (a tag only ever forces contextual — nothing forces citable).
-package repo
+package mirror
 
 import (
 	"context"
@@ -37,8 +37,8 @@ type ContextualRules struct {
 }
 
 // Empty reports whether no rule can mark anything contextual.
-func (r ContextualRules) Empty() bool {
-	return len(r.CollectionKeys) == 0 && len(r.Tags) == 0
+func (c ContextualRules) Empty() bool {
+	return len(c.CollectionKeys) == 0 && len(c.Tags) == 0
 }
 
 // HasSyncState reports whether any canonical sync has ever landed (#262):
@@ -50,9 +50,9 @@ func (r ContextualRules) Empty() bool {
 // real misconfiguration (fatal, exactly as before) — a synced library
 // with zero collections must count as synced or a typo'd path would
 // degrade forever instead of fataling.
-func (r *Repo) HasSyncState(ctx context.Context) (bool, error) {
+func (m *Repo) HasSyncState(ctx context.Context) (bool, error) {
 	var has bool
-	err := r.pool.QueryRow(ctx, `
+	err := m.pool.QueryRow(ctx, `
 		SELECT EXISTS(SELECT 1 FROM zotero_collections)
 		    OR EXISTS(SELECT 1 FROM zotero_sources
 		              WHERE canonical_last_modified_version > 0
@@ -70,7 +70,7 @@ func (r *Repo) HasSyncState(ctx context.Context) (bool, error) {
 // silent). A matching-but-deleted collection resolves (the rule rides the
 // stable key; a deleted collection simply has no members and the projection
 // recomputes citable — reversible by design).
-func (r *Repo) ResolveContextualRules(ctx context.Context, paths, tags []string) (ContextualRules, error) {
+func (m *Repo) ResolveContextualRules(ctx context.Context, paths, tags []string) (ContextualRules, error) {
 	var out ContextualRules
 
 	if len(paths) > 0 {
@@ -79,7 +79,7 @@ func (r *Repo) ResolveContextualRules(ctx context.Context, paths, tags []string)
 			deleted           bool
 		}
 		byKey := map[string]coll{}
-		rows, err := r.pool.Query(ctx, `
+		rows, err := m.pool.Query(ctx, `
 			SELECT zotero_key, name, COALESCE(parent_key,''), deleted
 			FROM zotero_collections`)
 		if err != nil {
@@ -152,7 +152,7 @@ func (r *Repo) ResolveContextualRules(ctx context.Context, paths, tags []string)
 
 	for _, tag := range tags {
 		var exists bool
-		if err := r.pool.QueryRow(ctx, `
+		if err := m.pool.QueryRow(ctx, `
 			SELECT EXISTS (
 				SELECT 1 FROM zotero_documents
 				WHERE NOT deleted
@@ -174,8 +174,8 @@ func (r *Repo) ResolveContextualRules(ctx context.Context, paths, tags []string)
 // sync transaction (#262): called when a degraded rule set ACTIVATES after a
 // sync, so convergence completes on the activating sync itself instead of
 // waiting for the next one.
-func (r *Repo) RecomputeCitationClass(ctx context.Context, sourceID string, rules ContextualRules) error {
-	tx, err := r.pool.Begin(ctx)
+func (m *Repo) RecomputeCitationClass(ctx context.Context, sourceID string, rules ContextualRules) error {
+	tx, err := m.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
