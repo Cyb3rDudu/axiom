@@ -48,8 +48,8 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/store"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/store"
 	axsync "github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
@@ -476,25 +476,43 @@ func (f funcComponent) Ready(ctx context.Context) error {
 
 func (f funcComponent) Stop(ctx context.Context) error { return f.stop(ctx) }
 
-func (r *Root) buildComponents() {
-	// Construction shared by every component: the Zotero source and the
-	// server object (route registration is wiring, not lifecycle — the
-	// listener starts last as the api component).
-	r.src = zoteroprovider.NewLocalAPI(r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID)
-	if id := r.src.ServerID(); id == "" {
-		r.logger.Printf("WARNING: Zotero local API not reachable at %s (is Zotero running and the local API enabled?)", r.cfg.ZoteroBaseURL)
-	} else {
-		r.logger.Printf("Zotero local API reachable: server-id=%s", id)
+// roleList renders the selected roles in startOrder (the health
+// surface's component_roles).
+func (r *Root) roleList() []string {
+	out := make([]string, 0, len(startOrder))
+	for _, role := range startOrder {
+		if r.roles[role] {
+			out = append(out, string(role))
+		}
 	}
+	return out
+}
+
+func (r *Root) buildComponents() {
+	// Construction shared by every component: the server object (route
+	// registration is wiring, not lifecycle — the listener starts last as
+	// the api component). F09 #303: the Zotero probe + health check are
+	// LIBRARY-side dependencies — they only exist in compositions that
+	// selected the sync role (a store-slice process never even probes
+	// Zotero; its health has no zotero field to degrade).
 	if r.cfg.DatabaseURL == "" {
 		r.logger.Printf("WARNING: AXIOM_DATABASE_URL not set; running without Postgres")
 	}
 	r.srv = server.New(net.JoinHostPort(r.cfg.BindAddr, strconv.Itoa(r.cfg.APIPort)), r.logger)
-	r.srv.RegisterCheck("zotero", server.CheckZotero(r.src))
+	if r.roles[RoleSync] {
+		r.src = zoteroprovider.NewLocalAPI(r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID)
+		if id := r.src.ServerID(); id == "" {
+			r.logger.Printf("WARNING: Zotero local API not reachable at %s (is Zotero running and the local API enabled?)", r.cfg.ZoteroBaseURL)
+		} else {
+			r.logger.Printf("Zotero local API reachable: server-id=%s", id)
+		}
+		r.srv.RegisterCheck("zotero", server.CheckZotero(r.src))
+	}
 	// F05 #299: the aggregated internal readiness (per selected role)
 	// becomes publicly visible in /api/health — the composition root is
 	// the only place that knows the role set, so it owns the provider.
 	r.srv.SetReadinessState(r.readinessSnapshot)
+	r.srv.SetComponentRoles(r.roleList())
 
 	for _, c := range r.componentsFor() {
 		r.components = append(r.components, c)

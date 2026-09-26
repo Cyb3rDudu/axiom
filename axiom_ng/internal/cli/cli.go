@@ -114,8 +114,20 @@ func cmdServe(name string, args []string) int {
 		})
 		roles = libraryRoles()
 	case "store":
-		fmt.Fprintf(os.Stderr, "%s serve store: component not yet extracted — the store role arrives with F09 (#303); until then `serve all` serves the compiled-in store\n", name)
-		return exitUsage
+		// F09 #303: the Store slice is real — the processing/retrieval
+		// half WITHOUT any Library runtime: no Zotero sync, no provider,
+		// no Zotero probe (the composition skips the zotero health check
+		// entirely for this role set). Intake is revision-only (POST
+		// /api/v1/store/ingest); the legacy sync lane simply has no
+		// driver in this process.
+		cfg = apiServeConfig(config.Load(), func(note string) {
+			fmt.Fprintln(os.Stderr, name+": note: "+note)
+		})
+		if cfg.LibraryImportProviders != "" {
+			fmt.Fprintf(os.Stderr, "%s: note: AXIOM_LIBRARY_IMPORT_PROVIDERS=%q set but serve store runs no Library — the import routes stay unwired in this process\n", name, cfg.LibraryImportProviders)
+			cfg.LibraryImportProviders = ""
+		}
+		roles = storeRoles()
 	default:
 		fmt.Fprintf(os.Stderr, "%s serve: unknown role %q (known: all api library store)\n", name, args[0])
 		return exitUsage
@@ -151,6 +163,21 @@ func apiRoles(cfg config.Config) []composition.Role {
 		composition.RoleAPI, composition.RoleStore, composition.RoleEvents,
 		composition.RoleSync, composition.RoleRepair, composition.RoleSearch,
 		composition.RoleIngest,
+	}
+}
+
+// storeRoles is the Store-slice selection of the F04 registry (F09 #303):
+// api (the HTTP surface), store (Postgres + repo + both component
+// ledgers), events (the live-view bus), search, ingest (the runner
+// failover chain) and the dispatcher (the claim loop + outbox drainer).
+// NOT included, by design: sync (the Zotero mirror read path — Library's)
+// and repair (F08's track). This is the independence topology: the store
+// works against explicit source revisions with the Library completely
+// stopped.
+func storeRoles() []composition.Role {
+	return []composition.Role{
+		composition.RoleAPI, composition.RoleStore, composition.RoleEvents,
+		composition.RoleSearch, composition.RoleIngest, composition.RoleDispatcher,
 	}
 }
 

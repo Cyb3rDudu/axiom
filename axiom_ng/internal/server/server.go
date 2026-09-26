@@ -65,6 +65,9 @@ type Server struct {
 	// knows the selected role set); nil = omitted (bare-server shapes,
 	// the F01 baseline scaffolding wires its own).
 	readinessState func() map[string]string
+	// componentRoles: the composition's selected role set (empty keeps the
+	// legacy full-stack vocabulary - pre-F04 callers).
+	componentRoles []string
 	// #298: the live /api/ws CONNECTIONS plus the one-way draining flag,
 	// for CloseLiveWebSockets during the composition root's ordered shutdown.
 	wsLive *wsLiveConns
@@ -96,6 +99,46 @@ func (s *Server) RegisterCheck(name string, c Checker) { s.checkers[name] = c }
 // or "degraded_no_sync" while rules are configured (omitted otherwise) — a
 // permanently degraded deployment must be observable, not silent.
 func (s *Server) SetContextualState(f func() string) { s.contextualState = f }
+
+// serviceClassOf maps selected composition roles onto the ADR-0001
+// component vocabulary: api (always), library (sync = the Zotero/Library
+// runtime), store (any Store-owned role). The full stack therefore stays
+// "api+library+store"; a store slice reports "api+store".
+func serviceClassOf(roles []string) string {
+	if len(roles) == 0 {
+		return "api+library+store" // legacy full-stack default (pre-F04 callers)
+	}
+	has := func(sub string) bool {
+		for _, r := range roles {
+			if strings.Contains(string(r), sub) {
+				return true
+			}
+		}
+		return false
+	}
+	out := []string{"api"}
+	if has("sync") {
+		out = append(out, "library")
+	}
+	if has("store") || has("search") || has("ingest") || has("dispatcher") || has("events") {
+		out = append(out, "store")
+	}
+	return strings.Join(out, "+")
+}
+
+// componentRolesOrDefault keeps the frozen legacy shape when no
+// composition wired a role set.
+func componentRolesOrDefault(roles []string) []string {
+	if len(roles) == 0 {
+		return []string{"api", "library", "store"}
+	}
+	return roles
+}
+
+// SetComponentRoles wires the composition's selected role set (the
+// health surface derives service_class from it; empty keeps the legacy
+// full-stack vocabulary).
+func (s *Server) SetComponentRoles(roles []string) { s.componentRoles = roles }
 
 // SetReadinessState wires the F05 /api/health readiness field: the
 // aggregated per-role component readiness of THIS process (composition
@@ -215,17 +258,19 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		checks[name] = "ok"
 	}
 
-	// ADR 0001 §5: all component roles are compiled in today; the
-	// compact service_class is derived from the roles so F04/F05 narrow
-	// them at one point (JSON stays byte-identical: "api+library+store").
-	roles := []string{"api", "library", "store"}
+	// ADR 0001 §5: the compact service_class derives from the SELECTED
+	// roles (F09 #303 made the store slice real — a store-only process
+	// must not claim the library). The full stack maps to exactly the
+	// frozen "api+library+store" (F01 goldens stay byte-identical);
+	// componentRoles carries the raw role names.
+	class := serviceClassOf(s.componentRoles)
 	hr := healthResponse{
 		OK:             ok,
 		Build:          version.Banner(),
 		Checks:         checks,
 		CanonicalName:  "axiom",
-		ServiceClass:   strings.Join(roles, "+"),
-		ComponentRoles: roles,
+		ServiceClass:   class,
+		ComponentRoles: componentRolesOrDefault(s.componentRoles),
 		Deprecations:   deprecate.Counts(),
 	}
 	if s.contextualState != nil {
