@@ -758,7 +758,7 @@ func (r *Root) componentsFor() []Component {
 			}, r.logger)
 			go func() {
 				if err := r.inv.Run(ctx); err != nil {
-					r.logger.Printf("fixer invoker stopped: %v", err)
+					r.logger.Printf("repair orchestrator stopped: %v", err)
 				}
 			}()
 			return nil
@@ -772,7 +772,7 @@ func (r *Root) componentsFor() []Component {
 			select {
 			case <-r.inv.Stopped():
 			case <-ctx.Done():
-				r.logger.Printf("repair: fixer invoker drain exceeded the stop budget — in_repair cases go to the stale-reaper")
+				r.logger.Printf("repair: orchestrator drain exceeded the stop budget — in_repair cases go to the stale-reaper")
 			}
 			return nil
 		},
