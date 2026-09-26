@@ -8,6 +8,7 @@ package server
 // these events); these tests prove the derivation and the machinery latency.
 
 import (
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -16,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 )
 
 // startRunnerView wires a server with a broker + deriver (as main does) and
@@ -25,7 +25,7 @@ func startRunnerView(t *testing.T) (*Server, *events.Broker, *httptest.Server) {
 	t.Helper()
 	broker := events.NewBroker()
 	s := New(":0", log.Default())
-	view := NewRunnerLive(broker, log.Default())
+	view := events.NewRunnerLive(broker, log.Default())
 	s.SetWSAPI(broker, fakeSnapshot{}, "")
 	s.SetRunnerLive(view)
 	done := make(chan struct{})
@@ -119,7 +119,7 @@ func nextRunnerState(t *testing.T, sub *events.Subscription) events.RunnerStateC
 	for {
 		e, _, ok := sub.Next(deadline)
 		if !ok {
-			t.Fatal("timed out waiting for a RunnerStateChanged event")
+			t.Fatal("timed out waiting for a events.RunnerStateChanged event")
 		}
 		if st, is := e.(events.RunnerStateChanged); is {
 			return st
@@ -193,7 +193,7 @@ func TestRunnerLiveRESTAndWSIdentity(t *testing.T) {
 	if b, err := json.Marshal(wsFrame.Payload); err != nil {
 		t.Fatalf("re-marshal ws payload: %v", err)
 	} else if err := json.Unmarshal(b, &fromWS); err != nil {
-		t.Fatalf("unmarshal ws payload into RunnerStateChanged: %v", err)
+		t.Fatalf("unmarshal ws payload into events.RunnerStateChanged: %v", err)
 	}
 
 	// REST: the same struct.
@@ -327,8 +327,8 @@ func TestGPULabel(t *testing.T) {
 		"gpu":            "", // too short to be a stamp
 	}
 	for name, want := range cases {
-		if got := GPULabel(name); got != want {
-			t.Errorf("GPULabel(%q) = %q, want %q", name, got, want)
+		if got := events.GPULabel(name); got != want {
+			t.Errorf("events.GPULabel(%q) = %q, want %q", name, got, want)
 		}
 	}
 }
@@ -438,7 +438,7 @@ func TestRunnerLiveJobFilterSeesIdleTransition(t *testing.T) {
 func TestRunnerLiveWiringOrderInverted(t *testing.T) {
 	broker := events.NewBroker()
 	s := New(":0", log.Default())
-	view := NewRunnerLive(broker, log.Default())
+	view := events.NewRunnerLive(broker, log.Default())
 	// INVERTED order: deriver first, WS second.
 	s.SetRunnerLive(view)
 	s.SetWSAPI(broker, fakeSnapshot{}, "")

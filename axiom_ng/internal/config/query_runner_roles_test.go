@@ -1,4 +1,4 @@
-package search
+package config
 
 // R4 (#134) query-runner role switching: AXIOM_QUERY_RUNNER_URL selects
 // which runner serves embed+rerank. What this pins: env -> config.Load() ->
@@ -17,9 +17,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 )
+
+// Re-homed from internal/search (F09 #303): the store-boundary lint keeps
+// credential-carrier config out of Store packages — tests included — and
+// this probe is config behavior (env → Load → processor client), not
+// retrieval behavior. The search-service construction asserts it used to
+// carry were smoke; the §7a role checks below are the substance.
 
 func fakeQueryRunner(t *testing.T, identity string) *httptest.Server {
 	t.Helper()
@@ -53,17 +58,20 @@ func TestQueryRunnerSwitchByEnv(t *testing.T) {
 
 	// Role: LOCAL (the default role model — always-on runner).
 	t.Setenv("AXIOM_QUERY_RUNNER_URL", local.URL)
-	if got := config.Load().QueryRunnerURL; got != local.URL {
+	if got := Load().QueryRunnerURL; got != local.URL {
 		t.Fatalf("config must follow the env, got %q", got)
 	}
-	svcLocal := newService(local.URL, queryClientFor(t, local.URL), fakeDocs{})
+	if queryClientFor(t, local.URL) == nil {
+		t.Fatal("local role must construct a query client")
+	}
 
 	// Role: EXTERNAL (dedicated query runner) — same wiring, new URL.
 	t.Setenv("AXIOM_QUERY_RUNNER_URL", external.URL)
-	svcExternal := newService(external.URL, queryClientFor(t, external.URL), fakeDocs{})
-
-	if svcLocal == nil || svcExternal == nil {
-		t.Fatal("both roles must construct a search service")
+	if got := Load().QueryRunnerURL; got != external.URL {
+		t.Fatalf("config must follow the env, got %q", got)
+	}
+	if queryClientFor(t, external.URL) == nil {
+		t.Fatal("external role must construct a query client")
 	}
 
 	// The §7a runner behind each configured role answers correctly.

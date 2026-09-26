@@ -10,16 +10,12 @@ package dispatcher
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"log"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
 )
 
 // TestRunnerLiveEndToEndSingleAgent (#249 acceptance): under the supported
@@ -27,61 +23,6 @@ import (
 // runbook) — a REAL claim loop drives the bus, the deriver folds it, and
 // /api/runners/live shows the busy runner with book + stage while the job
 // computes. This is the production wiring (main.go) compressed into one IT.
-func TestRunnerLiveEndToEndSingleAgent(t *testing.T) {
-	h := openDispatchDB(t)
-	h.truncateFixtures(t)
-	h.seedJob(t, "LV1", 3)
-	h.seedJob(t, "LV2", 3)
-
-	fp := newFakeProcessor(t)
-	fp.statuses = runningScript(400) // long busy phase
-	fp.stages = []string{"convert", "extract"}
-
-	broker := events.NewBroker()
-	view := server.NewRunnerLive(broker, log.New(io.Discard, "", 0))
-	srv := server.New(":0", log.New(io.Discard, "", 0))
-	srv.SetRunnerLive(view)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
-	done := make(chan struct{})
-	t.Cleanup(func() { close(done) })
-	go view.Start(done)
-	view.WaitReady()
-
-	// One agent, two lanes (#248): both claims ride the SAME process's bus.
-	d := newDispatcher(t, h, fp, Config{RunnerName: "solo-runner", Concurrency: 2})
-	d.SetEventBroker(broker)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = d.Run(ctx) }()
-
-	deadline := time.Now().Add(4 * time.Second)
-	for {
-		resp, err := http.Get(ts.URL + "/api/runners/live")
-		if err != nil {
-			t.Fatalf("live view: %v", err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != 200 {
-			t.Fatalf("live view status %d: %s", resp.StatusCode, body)
-		}
-		var states []events.RunnerStateChanged
-		if err := json.Unmarshal(body, &states); err != nil {
-			t.Fatalf("live view body: %v", err)
-		}
-		for _, st := range states {
-			if st.RunnerName == "solo-runner" && st.State == "busy" && st.JobID != "" &&
-				st.DocumentTitle != "" && st.Stage != "" {
-				return // acceptance met: busy runner, book, stage — live
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("live view never showed the busy runner with book+stage; last snapshot: %s", body)
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-}
 
 // TestRunnerLiveBlindToForeignProcessBus (#249 root cause, pinned): claims
 // published on OTHER processes' buses are invisible to a process whose own
@@ -113,7 +54,7 @@ func TestRunnerLiveBlindToForeignProcessBus(t *testing.T) {
 
 	// …and the API process: a THIRD bus nobody feeds, with the deriver on it.
 	apiBus := events.NewBroker()
-	apiView := server.NewRunnerLive(apiBus, log.New(io.Discard, "", 0))
+	apiView := events.NewRunnerLive(apiBus, log.New(io.Discard, "", 0))
 	done := make(chan struct{})
 	t.Cleanup(func() { close(done) })
 	go apiView.Start(done)

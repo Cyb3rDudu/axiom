@@ -7,13 +7,15 @@ package server
 
 import (
 	"net/http"
+
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 )
 
 // SetRunnerLive wires the live-view deriver: it feeds the runners-topic WS
 // snapshot and the /api/runners/live REST snapshot. Safe to call before or
 // after SetWSAPI (it patches the wsServer when one exists); the REST route
 // stays 404 until this is called.
-func (s *Server) SetRunnerLive(v *RunnerLive) {
+func (s *Server) SetRunnerLive(v *events.RunnerLive) {
 	s.runnerLive = v
 	if s.ws != nil && v != nil {
 		s.ws.runnerSnap = v
