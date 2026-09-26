@@ -1,4 +1,7 @@
-// #184 — repair queue: state machine + loop guard.
+// store.go — #184 repair queue: state machine + loop guard, Library-owned
+// since F08 (#302). The SQL is the frozen #184/#282 semantics, moved
+// verbatim from internal/repo — wave-gate and loop-guard behavior stay
+// byte-exact; the F01 goldens and the dispatcher wave-gate ITs witness it.
 //
 // rejected → queued → in_repair → healed | failed | blocked_for_dudu
 //
@@ -9,12 +12,7 @@
 // scan_ocr_rebuild) queue like any repairable class — the old refusal is
 // gone; loop safety is the claim guard + the document-level healed-count
 // guard on the dispatcher's auto-queue path (#282).
-//
-// Foundation limitation (B3): in_repair has NO reaper/timeout yet — a
-// fix-service crash mid-case burns that attempt and leaves the case stuck
-// in in_repair until wiring adds a reaper; the status-guarded transitions
-// below already refuse double-closing, so nothing corrupts, it just waits.
-package repo
+package repair
 
 import (
 	"context"
@@ -25,7 +23,25 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// Store is the Library-owned repair persistence over the shared pool.
+// The state machine methods are the single authority for repair_cases
+// transitions (claim/lease/retry/timeout policy) — moved from *repo.Repo
+// (F08 #302); behavior is byte-identical, the pool is shared with the
+// RAG-side repo by construction (same database, own transactions).
+type Store struct {
+	pool *pgxpool.Pool
+}
+
+// NewStore builds a repair Store over a pool (the library-package
+// naming convention; the orchestrator constructor keeps New).
+func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+
+// Pool exposes the underlying pool (read-side JOINs that resolve repair
+// metadata, e.g. the server's queue-item listing).
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 
 const RepairMaxAttempts = 2
 
@@ -91,8 +107,8 @@ func scanRepairCase(sc interface{ Scan(dest ...any) error }) (*RepairCase, error
 // distinguishes a FRESH case from a recycled open one; #238 auto-queue
 // relies on it so a stale open case of an auto-queueable class can never
 // be queued by a NEWER verdict of a different class.
-func (r *Repo) CreateRepairCase(ctx context.Context, attachmentID, documentID, suspicionClass string, analysis json.RawMessage) (*RepairCase, bool, error) {
-	row := r.pool.QueryRow(ctx, `
+func (s *Store) CreateRepairCase(ctx context.Context, attachmentID, documentID, suspicionClass string, analysis json.RawMessage) (*RepairCase, bool, error) {
+	row := s.pool.QueryRow(ctx, `
 		INSERT INTO repair_cases (attachment_id, document_id, suspicion_class, analysis, status)
 		VALUES ($1::uuid, NULLIF($2,'')::uuid, $3, $4, 'rejected')
 		ON CONFLICT (attachment_id) WHERE status IN ('rejected','queued','in_repair') DO NOTHING
@@ -103,15 +119,15 @@ func (r *Repo) CreateRepairCase(ctx context.Context, attachmentID, documentID, s
 		return c, true, nil
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		c, err := r.OpenRepairCase(ctx, attachmentID)
+		c, err := s.OpenRepairCase(ctx, attachmentID)
 		return c, false, err
 	}
 	return nil, false, err
 }
 
 // OpenRepairCase fetches the open case of an attachment (nil if none).
-func (r *Repo) OpenRepairCase(ctx context.Context, attachmentID string) (*RepairCase, error) {
-	row := r.pool.QueryRow(ctx, `
+func (s *Store) OpenRepairCase(ctx context.Context, attachmentID string) (*RepairCase, error) {
+	row := s.pool.QueryRow(ctx, `
 		SELECT `+repairCaseCols+`
 		FROM repair_cases WHERE attachment_id=$1 AND status IN ('rejected','queued','in_repair')`,
 		attachmentID)
@@ -132,8 +148,8 @@ func (r *Repo) OpenRepairCase(ctx context.Context, attachmentID string) (*Repair
 // loop like any repairable class. Loop safety is owned by the claim guard
 // (per attachment) and the dispatcher's document-level healed-count guard
 // (#282) — not by refusing the class.
-func (r *Repo) QueueRepairCase(ctx context.Context, caseID, suspicionClass string, analysis json.RawMessage) error {
-	tag, err := r.pool.Exec(ctx, `
+func (s *Store) QueueRepairCase(ctx context.Context, caseID, suspicionClass string, analysis json.RawMessage) error {
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE repair_cases SET status='queued', suspicion_class=$2, analysis=$3, updated_at=now()
 		WHERE id=$1 AND status='rejected'`, caseID, suspicionClass, analysis)
 	if err != nil {
@@ -146,8 +162,8 @@ func (r *Repo) QueueRepairCase(ctx context.Context, caseID, suspicionClass strin
 }
 
 // ListRepairQueue returns queued cases for the fix-service poll.
-func (r *Repo) ListRepairQueue(ctx context.Context) ([]RepairCase, error) {
-	rows, err := r.pool.Query(ctx, `
+func (s *Store) ListRepairQueue(ctx context.Context) ([]RepairCase, error) {
+	rows, err := s.pool.Query(ctx, `
 		SELECT `+repairCaseCols+`
 		FROM repair_cases WHERE status='queued' ORDER BY created_at`)
 	if err != nil {
@@ -167,8 +183,8 @@ func (r *Repo) ListRepairQueue(ctx context.Context) ([]RepairCase, error) {
 
 // ClaimRepairCase moves queued → in_repair and enforces the loop guard:
 // attempts (per attachment, across cases) may not exceed RepairMaxAttempts.
-func (r *Repo) ClaimRepairCase(ctx context.Context, caseID string) (*RepairCase, error) {
-	tx, err := r.pool.Begin(ctx)
+func (s *Store) ClaimRepairCase(ctx context.Context, caseID string) (*RepairCase, error) {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -208,11 +224,11 @@ func (r *Repo) ClaimRepairCase(ctx context.Context, caseID string) (*RepairCase,
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return r.getRepairCase(ctx, caseID)
+	return s.getRepairCase(ctx, caseID)
 }
 
-func (r *Repo) getRepairCase(ctx context.Context, caseID string) (*RepairCase, error) {
-	row := r.pool.QueryRow(ctx, `
+func (s *Store) getRepairCase(ctx context.Context, caseID string) (*RepairCase, error) {
+	row := s.pool.QueryRow(ctx, `
 		SELECT `+repairCaseCols+`
 		FROM repair_cases WHERE id=$1`, caseID)
 	return scanRepairCase(row)
@@ -229,7 +245,7 @@ func (r *Repo) getRepairCase(ctx context.Context, caseID string) (*RepairCase, e
 // bounded: loop guard (max 2), quarantine keeps the original, healed needs
 // the next preflight GREEN, every mutation audited. Re-verification RAG-side
 // is a possible later hardening, not part of the nail.
-func (r *Repo) SubmitRepairVerdict(ctx context.Context, caseID string, plan json.RawMessage, planVersion int, score float64, contradictions int, verdict, blockedReason string) (RepairStatus, error) {
+func (s *Store) SubmitRepairVerdict(ctx context.Context, caseID string, plan json.RawMessage, planVersion int, score float64, contradictions int, verdict, blockedReason string) (RepairStatus, error) {
 	effective := RepairBlocked
 	if verdict == "auto_apply" && score >= RepairAutoApplyMinScore && contradictions == 0 {
 		effective = RepairInRepair // stays in_repair; the caller now applies writes, then MarkHealed
@@ -246,7 +262,7 @@ func (r *Repo) SubmitRepairVerdict(ctx context.Context, caseID string, plan json
 			reason = fmt.Sprintf("verdict %q unterhalb des auto-apply-gates: score=%.3f widersprüche=%d", verdict, score, contradictions)
 		}
 	}
-	tag, err := r.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE repair_cases SET plan=$2, plan_version=$3, verify_score=$4, verify_contradictions=$5,
 			verdict=$6, blocked_reason=$7,
 			status = $8::repair_status,
@@ -295,18 +311,18 @@ func (r *Repo) SubmitRepairVerdict(ctx context.Context, caseID string, plan json
 // survives only in human-readable reason text — the same hazard class
 // the manual custody endpoint guards with its 409. Resolution is audited
 // as create_attachment_orphan_resolved (machine-readable, same table).
-func (r *Repo) RequeueRepairCaseWithOrphanAck(ctx context.Context, caseID, reason string, analysisPatch json.RawMessage, orphanAck string) error {
-	return r.requeueRepairCase(ctx, caseID, reason, analysisPatch, orphanAck)
+func (s *Store) RequeueRepairCaseWithOrphanAck(ctx context.Context, caseID, reason string, analysisPatch json.RawMessage, orphanAck string) error {
+	return s.requeueRepairCase(ctx, caseID, reason, analysisPatch, orphanAck)
 }
 
-func (r *Repo) requeueRepairCase(ctx context.Context, caseID, reason string, analysisPatch json.RawMessage, orphanAck string) error {
+func (s *Store) requeueRepairCase(ctx context.Context, caseID, reason string, analysisPatch json.RawMessage, orphanAck string) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("requeue braucht einen Grund (geänderte Beweislage dokumentieren)")
 	}
 	if len(analysisPatch) == 0 {
 		analysisPatch = json.RawMessage(`{}`)
 	}
-	tx, err := r.pool.Begin(ctx)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -393,8 +409,8 @@ func mustMarshal(v any) []byte {
 // MarkRepairHealed / MarkRepairFailed close the case after the writes
 // (healed is confirmed by the NEXT preflight GREEN — the loop checks itself;
 // healed here means "applied, awaiting proof").
-func (r *Repo) MarkRepairHealed(ctx context.Context, caseID string) error {
-	tag, err := r.pool.Exec(ctx, `UPDATE repair_cases SET status='healed', updated_at=now() WHERE id=$1 AND status='in_repair'`, caseID)
+func (s *Store) MarkRepairHealed(ctx context.Context, caseID string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE repair_cases SET status='healed', updated_at=now() WHERE id=$1 AND status='in_repair'`, caseID)
 	if err != nil || tag.RowsAffected() == 0 {
 		if err == nil {
 			err = fmt.Errorf("case %s nicht in in_repair", caseID)
@@ -411,8 +427,8 @@ func (r *Repo) MarkRepairHealed(ctx context.Context, caseID string) error {
 // case is never touched from outside) — callers must resolve the item
 // BEFORE claiming.
 // Mirrors the loop-guard UPDATE shape.
-func (r *Repo) BlockRepairCase(ctx context.Context, caseID, reason string) error {
-	tag, err := r.pool.Exec(ctx, `
+func (s *Store) BlockRepairCase(ctx context.Context, caseID, reason string) error {
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE repair_cases SET status='blocked_for_dudu', blocked_reason=$2, updated_at=now()
 		WHERE id=$1 AND status IN ('queued','rejected')`, caseID, reason)
 	if err != nil || tag.RowsAffected() == 0 {
@@ -424,8 +440,8 @@ func (r *Repo) BlockRepairCase(ctx context.Context, caseID, reason string) error
 	return nil
 }
 
-func (r *Repo) MarkRepairFailed(ctx context.Context, caseID, reason string) error {
-	tag, err := r.pool.Exec(ctx, `UPDATE repair_cases SET status='failed', blocked_reason=$2, updated_at=now() WHERE id=$1 AND status='in_repair'`, caseID, reason)
+func (s *Store) MarkRepairFailed(ctx context.Context, caseID, reason string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE repair_cases SET status='failed', blocked_reason=$2, updated_at=now() WHERE id=$1 AND status='in_repair'`, caseID, reason)
 	if err != nil || tag.RowsAffected() == 0 {
 		if err == nil {
 			err = fmt.Errorf("case %s nicht in in_repair", caseID)
@@ -442,12 +458,12 @@ func (r *Repo) MarkRepairFailed(ctx context.Context, caseID, reason string) erro
 // count can. Auto-queueing (dispatcher) refuses beyond RepairMaxAttempts
 // healed cases on the same document — the manual queue path stays
 // operator-governed.
-func (r *Repo) DocumentHealedCases(ctx context.Context, documentID string) (int, error) {
+func (s *Store) DocumentHealedCases(ctx context.Context, documentID string) (int, error) {
 	if documentID == "" {
 		return 0, nil
 	}
 	var n int
-	if err := r.pool.QueryRow(ctx, `
+	if err := s.pool.QueryRow(ctx, `
 		SELECT count(*) FROM repair_cases WHERE document_id=$1::uuid AND status='healed'`, documentID).Scan(&n); err != nil {
 		return 0, err
 	}
@@ -471,9 +487,9 @@ func (r *Repo) DocumentHealedCases(ctx context.Context, documentID string) (int,
 // Terminal parks (failed / blocked_for_dudu) and manual-track rejected
 // cases NEVER gate — an unrepairable document must not block the wave.
 // Observer-only: this never marks jobs, it only defers claiming.
-func (r *Repo) WaveRepairGate(ctx context.Context) (bool, string, error) {
+func (s *Store) WaveRepairGate(ctx context.Context) (bool, string, error) {
 	var open, stranded int
-	if err := r.pool.QueryRow(ctx, `
+	if err := s.pool.QueryRow(ctx, `
 		SELECT count(*) FILTER (WHERE status IN ('queued','in_repair')),
 		       count(*) FILTER (WHERE status='healed' AND updated_at > now() - interval '1 hour'
 		         AND NOT EXISTS (
@@ -494,9 +510,9 @@ func (r *Repo) WaveRepairGate(ctx context.Context) (bool, string, error) {
 }
 
 // AuditWrite records every Zotero mutation (Was/Wann/Warum).
-func (r *Repo) AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error {
+func (s *Store) AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error {
 	d := mustMarshal(detail)
-	_, err := r.pool.Exec(ctx, `
+	_, err := s.pool.Exec(ctx, `
 		INSERT INTO zotero_write_audit (case_id, attachment_id, action, detail)
 		VALUES (NULLIF($1,'')::uuid, NULLIF($2,'')::uuid, $3, $4)`,
 		caseID, attachmentID, action, d)

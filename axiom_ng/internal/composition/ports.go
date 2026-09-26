@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/fixerinvoker"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 )
 
@@ -50,9 +50,10 @@ type Ports struct {
 	// QueryRunner builds the search-side processor client. Local binding:
 	// processor.New over cfg.QueryRunnerURL.
 	QueryRunner func(cfg config.Config) (*processor.Client, error)
-	// FixerExec executes one fixer-wrapper invocation. Local binding: nil
-	// (fixerinvoker's process-group-hardened exec). See fixerinvoker.FixerExec.
-	FixerExec fixerinvoker.FixerExec
+	// RepairExecutor executes one axiom-repair-worker invocation (F08
+	// #302). Local binding: nil (library/repair's process-group-hardened
+	// LocalExecutor). See repair.RepairExecutor.
+	RepairExecutor repair.RepairExecutor
 }
 
 // fillLocal installs the local bindings for every unset seam.

@@ -1,5 +1,5 @@
 // revision_hook_test.go — F06 (#300) witness for the heal-point
-// source-revision Mits-Schrieb: repair.Apply fires RevisionHook exactly
+// source-revision Mits-Schrieb: Apply fires RevisionHook exactly
 // once after a successful heal, with the NEW attachment key and the
 // sha256 of the healed artifact. The hook lives on the shared ApplyCase
 // seam, so this one witness covers BOTH routes (verdict auto-apply and

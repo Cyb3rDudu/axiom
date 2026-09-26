@@ -1,4 +1,4 @@
-// #279 manual custody tests: the full protocol via repair.Apply +
+// #279 manual custody tests: the full protocol via Apply +
 // ManualDeps against a fake Zotero write server (hermetic — no DB, no live
 // Zotero), the abort→re-run resume path, and the 404-tolerant delete.
 package repair
@@ -446,7 +446,7 @@ func (f failOrphanAuditDeps) AuditWrite(ctx context.Context, caseID, attachmentI
 // is pinned by TestApplyOrphanKeyReachesAudit; this is the degraded path.
 // Fault injection: a ManualDeps whose Root points at a regular FILE, so
 // persist's MkdirAll dies with ENOTDIR inside AuditWrite. This is also
-// the auto-path seam pin: the lift lives in repair.Apply, so the verdict
+// the auto-path seam pin: the lift lives in Apply, so the verdict
 // auto-apply (liveRepairDeps) and the fixer invoker (liveDeps) share it.
 func TestApplyOrphanKeyRidesErrorWhenAuditFails(t *testing.T) {
 	root := t.TempDir()

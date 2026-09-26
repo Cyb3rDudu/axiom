@@ -41,9 +41,9 @@ import (
 //	                              abatement F13 — config store reader)
 //	internal/search/search.go env 1  AXIOM_OS_INDEX dev override — F06 moves
 //	                              it behind config
-//	internal/fixerinvoker exec ∞  the FixerExec port's LOCAL binding
-//	                              (process-group exec) — F06 review decides
-//	                              its final home
+//	internal/library/repair exec ∞ the RepairExecutor port's LOCAL binding
+//	                              (process-group exec) — F08 (#302) moved it
+//	                              to its final home under the Library
 //	internal/backfill     exec ∞  legacy CLI python bridge — F06–F10
 //	                              abatement
 var packageEnvAllowance = map[string]int{
@@ -53,8 +53,8 @@ var packageEnvAllowance = map[string]int{
 }
 
 var packageExecAllowance = map[string]int{
-	"internal/fixerinvoker/": math.MaxInt,
-	"internal/backfill/":     math.MaxInt,
+	"internal/library/repair/": math.MaxInt,
+	"internal/backfill/":       math.MaxInt,
 }
 
 var fileEnvAllowance = map[string]int{
@@ -189,7 +189,7 @@ func prefixAllowance(table map[string]int, rel string) int {
 func TestDomainPackagesStayEnvAndExecFree(t *testing.T) {
 	violations := findUsageViolations("../..")
 	if len(violations) > 0 {
-		t.Fatalf("domain packages carry banned env/exec/discovery usage beyond the #298 allowlist (env Erlaubnisraum: internal/config, internal/composition, internal/baseline + 1 counted search read; exec: fixerinvoker/backfill local bindings):\n\t%s",
+		t.Fatalf("domain packages carry banned env/exec/discovery usage beyond the #298 allowlist (env Erlaubnisraum: internal/config, internal/composition, internal/baseline + 1 counted search read; exec: library/repair local worker binding + backfill):\n\t%s",
 			strings.Join(violationStrings(violations), "\n\t"))
 	}
 }

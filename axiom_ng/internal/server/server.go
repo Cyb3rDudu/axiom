@@ -10,7 +10,7 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/deprecate"
 	axlibrary "github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/version"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 
@@ -37,7 +37,7 @@ type Server struct {
 	kgSvc         KGService
 	selectionRepo SelectionRepo
 	// #197 standing consolidation write surface (nil = route unregistered,
-	// the write-route gate like repairRepo).
+	// the write-route gate like repairStore).
 	consolidateSvc ConsolidateService
 	// sourceSecret enables /api/processor/source when non-empty (HMAC,
 	// shared with the dispatcher). sourceRepo is the job lookup for it.
@@ -53,7 +53,7 @@ type Server struct {
 	// topic snapshot and /api/runners/live (nil = REST route unwired/404).
 	runnerLive     *RunnerLive
 	ws             *wsServer
-	repairRepo     *repo.Repo
+	repairStore    *repair.Store
 	zoteroWrite    *zoteroprovider.WriteClient
 	quarantineRoot string
 	// #262 contextual health state: returns "active",
@@ -150,7 +150,7 @@ func (s *Server) Handler() http.Handler {
 	// Disabled (404 on everything) until SetProcessorSourceSecret wires it.
 	r.Get("/api/processor/source/{jobID}", s.handleProcessorSource)
 	// #184: repair surface only exists when SetRepairAPI wired it.
-	if s.repairRepo != nil {
+	if s.repairStore != nil {
 		r.Get("/api/repair/queue", s.handleRepairQueue)
 		r.Get("/api/repair/cases", s.handleRepairCases)
 		r.Post("/api/repair/cases/{id}/claim", s.handleRepairClaim)

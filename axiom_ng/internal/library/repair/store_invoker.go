@@ -14,7 +14,7 @@
 //     requeues while case attempts remain, else parks the case failed
 //     with a clear reason (dudu reads it) — escalation is the loop
 //     guard's blocked_for_dudu on the NEXT claim of a retried case.
-package repo
+package repair
 
 import (
 	"context"
@@ -59,8 +59,8 @@ const ExistingNamesSubquery = `(SELECT array_agg(a2.filename ORDER BY a2.preferr
 // RepairCaseItem resolves a repair case to its attachment coordinates.
 // Returns pgx.ErrNoRows when the attachment or document row is gone at the
 // source — the caller parks such a case (mirror of the W3a queue rule).
-func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, error) {
-	row := r.pool.QueryRow(ctx, `
+func (s *Store) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, error) {
+	row := s.pool.QueryRow(ctx, `
 		SELECT c.id::text, a.id::text, a.zotero_key, d.zotero_key, d.id::text,
 		       d.title, d.creators, COALESCE(d.publication_year, 0),
 		       COALESCE(d.language, ''), c.analysis,
@@ -91,11 +91,11 @@ func (r *Repo) RepairCaseItem(ctx context.Context, caseID string) (*RepairItem, 
 // run under a second claim (the per-key lockdir then burns an attempt).
 // Class predicate = the stable analysis fields (pagination_state marker
 // or the per-case ocr override), not the operator-facing finding string.
-func (r *Repo) RequeueStaleRepairCases(ctx context.Context, stale, ocrStale time.Duration) (int64, error) {
+func (s *Store) RequeueStaleRepairCases(ctx context.Context, stale, ocrStale time.Duration) (int64, error) {
 	if ocrStale < stale {
 		ocrStale = stale
 	}
-	tag, err := r.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE repair_cases SET status='queued', updated_at=now()
 		WHERE status='in_repair' AND updated_at < now() - make_interval(secs => 
 			CASE WHEN analysis->>'pagination_state' = 'needs_ocr' OR analysis ? 'ocr'
@@ -112,12 +112,12 @@ func (r *Repo) RequeueStaleRepairCases(ctx context.Context, stale, ocrStale time
 // otherwise it is parked failed with the reason. Returns the effective
 // status so callers can log the transition. The 0-rows case (case no
 // longer in_repair — closed elsewhere) is NOT an error.
-func (r *Repo) FailOrRequeueRepairCase(ctx context.Context, caseID, reason string, maxAttempts int) (RepairStatus, error) {
+func (s *Store) FailOrRequeueRepairCase(ctx context.Context, caseID, reason string, maxAttempts int) (RepairStatus, error) {
 	if maxAttempts <= 0 {
 		maxAttempts = RepairMaxAttempts
 	}
 	var status string
-	err := r.pool.QueryRow(ctx, `
+	err := s.pool.QueryRow(ctx, `
 		UPDATE repair_cases
 		SET status = CASE WHEN attempts < $2 THEN 'queued' ELSE 'failed' END::repair_status,
 		    blocked_reason = $3, updated_at = now()

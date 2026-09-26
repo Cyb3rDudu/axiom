@@ -24,7 +24,8 @@ not the reference path. `make` is a dev surface only.
 
 ```text
 /opt/axiom/<component>/<version>/    + current -> <version> (atomic symlink)
-/opt/axiom/bin/                      stable shims: axiom-ng, axiom-runner, axiom-fixer
+/opt/axiom/bin/                      stable shims: axiom-ng, axiom-runner, axiom-repair-worker
+                                     (+ axiom-fixer compat alias, ADR 0001 §4)
 ~/.config/axiom/*.env                env files, 0700, SECRETS ONLY HERE
 ~/.local/state/axiom/{logs,runs,models}/   state OUT of /opt and OUT of the repo
 ```
@@ -247,20 +248,28 @@ a dead pid — the wrapper detects that and recovers automatically. Manual
 recovery (only if the pid file is unreadable):
 `rmdir ~/.local/state/axiom/runs/fix-<key>.lock`.
 
-### Fixer caller — the mail-ingest invoker (#206)
+### Repair caller — the Library-owned orchestrator (#206, F08 #302)
 
-The systematic caller of `fix.sh` is the **fixer invoker**, a loop inside
-the axiom binary (NOT a launchd service, NOT KeepAlive — the event-runner
-owner decision stands). Enabled with `AXIOM_FIXER_INVOKER_ENABLED=1` in the
-env file of an axiom instance that also carries the Zotero write key
-(the repair API must be wired — the invoker uploads through it).
+The systematic caller of the worker wrapper is the **repair orchestrator**,
+a loop inside the axiom binary (NOT a launchd service, NOT KeepAlive — the
+event-runner owner decision stands). Since F08 (#302) the whole repair
+orchestration — queue, claim/lease, retry/timeout policy, custody, wave
+gate — is owned by the Library (`internal/library/repair`); the worker
+execution sits behind the `RepairExecutor` seam (v1: local process
+adapter). Enabled with `AXIOM_FIXER_INVOKER_ENABLED=1` in the env file of
+an axiom instance that also carries the Zotero write key (the repair API
+must be wired — the orchestrator uploads through it).
 
 - **Who/when:** polls the `repair_cases` queue (status `queued`) every
   30 s, resolves each case to its attachment key, claims it
-  (`queued → in_repair`, loop guard included), and invokes
-  `AXIOM_FIXER_CMD <key> --apply` (default `/opt/axiom/bin/axiom-fixer`, the
-  same wrapper contract as `scripts/fix.sh`). One invocation per key per
-  claim — the one-shot `--key` contract is untouched.
+  (`queued → in_repair`, loop guard included), and executes the isolated
+  worker `AXIOM_REPAIR_WORKER_CMD <key> --apply` (default
+  `/opt/axiom/bin/axiom-repair-worker`, the canonical name since F08; the
+  legacy `AXIOM_FIXER_CMD` keeps working through the deprecation witness,
+  and an install without the canonical shim falls back to the legacy
+  `axiom-fixer` wrapper until re-installed — operators change nothing
+  during 0.2.x). One invocation per key per claim — the one-shot `--key`
+  contract is untouched.
 - **Timeout:** fix.sh's own 30-min kill (lockdir + timeout binary) does the
   primary work; the invoker runs a 35-min context backstop above it, so a
   wedged wrapper can never hang the invoker. OCR-class repairs
@@ -310,13 +319,15 @@ env file of an axiom instance that also carries the Zotero write key
   custody repair (manual heal) the OLD attachment is gone; requeuing its
   case re-parks as `attachment-gone` — a manually repaired book needs no
   fixer re-run at all (the new attachment preflights fresh).
-- **Crash safety:** the invoker never dies on a case (per-case recover,
-  per-case timeout, process-group kill on the backstop) and a dead invoker
-  loses no case: stale `in_repair` claims older than 40 min are requeued by
-  the per-tick reaper — the dispatcher lease-recovery pattern; the loop
-  guard still caps attempts. The installed `/opt/axiom/bin/axiom-fixer`
-  shim execs the fix.sh shipped INSIDE the artifact, so invoker and manual
-  operator runs share the same per-key lock. Narrow residual: if the
+- **Crash safety:** the orchestrator never dies on a case (per-case
+  recover, per-case timeout, process-group kill on the backstop) and a
+  dead orchestrator loses no case: stale `in_repair` claims older than
+  40 min are requeued by the per-tick reaper — the dispatcher
+  lease-recovery pattern; the loop guard still caps attempts. The
+  installed `/opt/axiom/bin/axiom-repair-worker` shim execs the fix.sh
+  shipped INSIDE the artifact, so orchestrator and manual operator runs
+  share the same per-key lock; `/opt/axiom/bin/axiom-fixer` stays as the
+  warning compat alias (ADR 0001 §4). Narrow residual: if the
   attachment disappears between item resolution and claim, the case ends
   `failed` with a Zotero-404-flavored reason instead of
   `blocked_for_dudu('attachment-gone')` — bounded and visible.

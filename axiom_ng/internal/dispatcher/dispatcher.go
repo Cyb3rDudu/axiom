@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
@@ -114,10 +115,11 @@ type processorClient interface {
 
 // Dispatcher owns the worker pool and the lease/processor plumbing.
 type Dispatcher struct {
-	cfg    Config
-	rep    *repo.Repo
-	client processorClient
-	logger *log.Logger
+	cfg     Config
+	rep     *repo.Repo
+	repairs *repair.Store
+	client  processorClient
+	logger  *log.Logger
 	// persist is the durability boundary for completed results; nil means jobs
 	// that reach completion FAIL rather than being completed+acked without a
 	// durable snapshot (Gate 2 F1). Tests inject a recording fake.
@@ -164,7 +166,14 @@ func New(rep *repo.Repo, client processorClient, cfg Config, logger *log.Logger)
 
 // NewWithPersister builds a Dispatcher with an explicit result-persistence
 // boundary (tests supply a recording fake; Gate 4 will supply the real one).
+// The Library-owned repair store (F08 #302) is derived from the shared
+// pool — the wave-gate and auto-queue policy live under
+// internal/library/repair now, byte-identical semantics.
 func NewWithPersister(rep *repo.Repo, client processorClient, persist ResultPersister, cfg Config, logger *log.Logger) *Dispatcher {
+	var repairs *repair.Store
+	if rep != nil { // unit shapes construct New(nil, …) — the store wires lazily by use
+		repairs = repair.NewStore(rep.Pool())
+	}
 	if cfg.WorkerID == "" {
 		cfg.WorkerID = "axiom-ng"
 	}
@@ -195,7 +204,7 @@ func NewWithPersister(rep *repo.Repo, client processorClient, persist ResultPers
 	if logger == nil {
 		logger = log.New(log.Writer(), "axiom-ng: dispatcher: ", log.LstdFlags)
 	}
-	return &Dispatcher{cfg: cfg, rep: rep, client: client, logger: logger, persist: persist,
+	return &Dispatcher{cfg: cfg, rep: rep, repairs: repairs, client: client, logger: logger, persist: persist,
 		ready: make(chan struct{}), stopped: make(chan struct{})}
 }
 
@@ -435,7 +444,7 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 		// is claimed. Terminal parks never gate (unrepairable docs are
 		// skipped, documented in their repair case). Observer-only: jobs
 		// are never marked here, claiming is merely deferred.
-		if held, reason, err := d.rep.WaveRepairGate(ctx); err != nil {
+		if held, reason, err := d.repairs.WaveRepairGate(ctx); err != nil {
 			if ctx.Err() == nil {
 				d.logger.Printf("slot %d: wave gate check failed: %v", slot, err)
 			}
@@ -791,7 +800,7 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 	// reason and mark the attachment as a repair-case candidate (#206/#203).
 	reason := "preflight:" + report.Finding
 	d.logger.Printf("%v: preflight FAIL (%s) — skipping job, marking repair candidate", fields, reason)
-	if c, created, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Finding, qsJSON); err != nil && !isLost(err) {
+	if c, created, err := d.repairs.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Finding, qsJSON); err != nil && !isLost(err) {
 		d.logger.Printf("%v: repair-case: %v", fields, err)
 	} else {
 		// #238: only a FRESH case auto-queues (created == false means a

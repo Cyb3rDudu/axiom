@@ -38,6 +38,7 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/gorilla/websocket"
@@ -51,7 +52,9 @@ var compositionTestDBName = fmt.Sprintf("axiom_ng_composition_%d_test", os.Getpi
 type compositionHarness struct {
 	pool *pgxpool.Pool
 	rep  *repo.Repo
-	dsn  string
+	// repairs is the Library-owned repair state machine (F08 #302).
+	repairs *repair.Store
+	dsn     string
 }
 
 var (
@@ -110,6 +113,7 @@ func createCompositionDB(t *testing.T, base string) *compositionHarness {
 	}
 	h.pool = database.Pool()
 	h.rep = repo.New(h.pool)
+	h.repairs = repair.NewStore(h.pool)
 	return h
 }
 
@@ -206,11 +210,11 @@ func (h *compositionHarness) seedQueuedRepairCase(t *testing.T, key string) stri
 		 RETURNING id::text`, srcID, docID, key, "DOC-"+key, "/tmp/does-not-matter.pdf").Scan(&attID); err != nil {
 		t.Fatal(err)
 	}
-	c, _, err := h.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
+	c, _, err := h.repairs.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
 	if err != nil || c == nil {
 		t.Fatalf("CreateRepairCase: %v %v", err, c)
 	}
-	if err := h.rep.QueueRepairCase(ctx, c.ID, "reparierbar", []byte(`{}`)); err != nil {
+	if err := h.repairs.QueueRepairCase(ctx, c.ID, "reparierbar", []byte(`{}`)); err != nil {
 		t.Fatal(err)
 	}
 	return c.ID
@@ -392,10 +396,10 @@ func fakePorts(t *testing.T, runner *fakeRunner, querySrv *httptest.Server) Port
 		QueryRunner: func(cfg config.Config) (*processor.Client, error) {
 			return processor.New(processor.Options{BaseURL: querySrv.URL})
 		},
-		FixerExec: func(ctx context.Context, command string, args []string, budget time.Duration, extraEnv []string) (int, string, error) {
+		RepairExecutor: executorFunc(func(ctx context.Context, req repair.RepairRequest) (repair.RepairResult, error) {
 			<-ctx.Done() // hold the claimed case in-flight until shutdown cancels
-			return -1, "cancelled by shutdown", ctx.Err()
-		},
+			return repair.RepairResult{ExitCode: -1, Output: "cancelled by shutdown"}, ctx.Err()
+		}),
 	}
 }
 

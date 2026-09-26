@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
@@ -321,19 +322,19 @@ var autoQueueRepairClasses = map[string]bool{
 // generations — the document-level healed count is the bound. Beyond
 // RepairMaxAttempts healed cases the new case stays rejected for the
 // operator; the manual queue path remains operator-governed.
-func (d *Dispatcher) autoQueueRepair(ctx context.Context, fields []any, documentID string, c *repo.RepairCase, created bool) {
+func (d *Dispatcher) autoQueueRepair(ctx context.Context, fields []any, documentID string, c *repair.RepairCase, created bool) {
 	if !created || c == nil || !autoQueueRepairClasses[c.SuspicionClass] {
 		return
 	}
 	if documentID != "" {
-		if n, err := d.rep.DocumentHealedCases(ctx, documentID); err == nil && n >= repo.RepairMaxAttempts {
+		if n, err := d.repairs.DocumentHealedCases(ctx, documentID); err == nil && n >= repair.RepairMaxAttempts {
 			d.logger.Printf("%v: repair loop guard (#282): document already healed %d× — case stays rejected, operator decides", fields, n)
 			return
 		} else if err != nil {
 			d.logger.Printf("%v: healed-case count failed (queueing anyway, per-attachment guard still bounds): %v", fields, err)
 		}
 	}
-	if err := d.rep.QueueRepairCase(ctx, c.ID, c.SuspicionClass, c.Analysis); err != nil && !isLost(err) {
+	if err := d.repairs.QueueRepairCase(ctx, c.ID, c.SuspicionClass, c.Analysis); err != nil && !isLost(err) {
 		d.logger.Printf("%v: auto-queue repair case: %v (stays rejected; manual queue remains)", fields, err)
 	} else if err == nil {
 		d.logger.Printf("%v: repair case auto-queued (%s)", fields, c.SuspicionClass)
@@ -358,7 +359,7 @@ func (d *Dispatcher) onFailed(ctx context.Context, claimed *repo.ClaimedJob, job
 			"retryable":   false,
 			"message":     jobErr.Message,
 		})
-		if c, created, err := d.rep.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, jobErr.Code, analysis); err != nil && !isLost(err) {
+		if c, created, err := d.repairs.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, jobErr.Code, analysis); err != nil && !isLost(err) {
 			d.logger.Printf("repair-case for %s: %v", ref.JobID, err)
 		} else {
 			// #238: only a FRESH case auto-queues (created == false means a

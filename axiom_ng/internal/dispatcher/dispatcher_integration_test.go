@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,7 +38,10 @@ var dispatchTestDatabaseName = func() string {
 type dispatchHarness struct {
 	pool *pgxpool.Pool
 	rep  *repo.Repo
-	dsn  string
+	// repairs is the Library-owned repair state machine (F08 #302) —
+	// same pool, same DB, separate ownership path under test.
+	repairs *repair.Store
+	dsn     string
 }
 
 func openDispatchDB(t *testing.T) *dispatchHarness {
@@ -77,7 +81,7 @@ func openDispatchDB(t *testing.T) *dispatchHarness {
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(d.Close)
-	return &dispatchHarness{pool: d.Pool(), rep: repo.New(d.Pool()), dsn: dispatchDSN}
+	return &dispatchHarness{pool: d.Pool(), rep: repo.New(d.Pool()), repairs: repair.NewStore(d.Pool()), dsn: dispatchDSN}
 }
 
 func cloneDSN(u *url.URL, dbname string) string {

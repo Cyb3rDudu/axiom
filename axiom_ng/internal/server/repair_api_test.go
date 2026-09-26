@@ -19,7 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 )
 
 // fakeApply records every custody call in order; each step can be failed.
@@ -77,7 +77,7 @@ func applyFixture() (*Server, *fakeApply, *repairQueueItem) {
 	s := &Server{quarantineRoot: "/tmp/axiom_quarantine_test"}
 	f := &fakeApply{}
 	item := &repairQueueItem{
-		RepairCase:    repo.RepairCase{AttachmentID: "att-1"},
+		RepairCase:    repair.RepairCase{AttachmentID: "att-1"},
 		AttachmentKey: "ATTKEY", DocumentKey: "DOCKEY",
 		Title: "Buch", Year: 2026,
 	}
@@ -149,7 +149,7 @@ func TestApplyRepairDeleteFailureStopsCreate(t *testing.T) {
 }
 
 // (ii) boundary validation: a malformed score must 400 BEFORE any repo
-// interaction — the handler runs on a zero Server (nil repairRepo); if the
+// interaction — the handler runs on a zero Server (nil repairStore); if the
 // guard were missing this would nil-panic or reach the DB. Follow-up W3:
 // STRICT ParseFloat — trailing junk ("0.9abc"), comma decimals ("0,9") and
 // non-finite values ("NaN", "Inf") all 400 instead of silently degrading
@@ -244,12 +244,12 @@ func TestReadHealedFileGuards(t *testing.T) {
 // blocking (the case stays queued for the next poll); readable cases are
 // served. This is the anti-infinite-reserve policy of review W3a.
 func TestBuildQueueParksGoneAttachments(t *testing.T) {
-	gone := repo.RepairCase{ID: "gone-1"}
-	transient := repo.RepairCase{ID: "db-1"}
-	ok := repo.RepairCase{ID: "ok-1"}
+	gone := repair.RepairCase{ID: "gone-1"}
+	transient := repair.RepairCase{ID: "db-1"}
+	ok := repair.RepairCase{ID: "ok-1"}
 	var blocked []string
-	out := buildQueue([]repo.RepairCase{gone, transient, ok},
-		func(c *repo.RepairCase) (*repairQueueItem, error) {
+	out := buildQueue([]repair.RepairCase{gone, transient, ok},
+		func(c *repair.RepairCase) (*repairQueueItem, error) {
 			switch c.ID {
 			case "gone-1":
 				return nil, pgx.ErrNoRows
@@ -274,7 +274,7 @@ func TestBuildQueueParksGoneAttachments(t *testing.T) {
 }
 
 // #278 review W5: a blank requeue reason is a CLIENT error — 400 before
-// any repo interaction (zero Server, nil repairRepo: a missing guard
+// any repo interaction (zero Server, nil repairStore: a missing guard
 // would nil-panic instead of answering). Genuine state conflicts keep 409.
 func TestRepairRequeueBlankReasonRejected(t *testing.T) {
 	s := &Server{} // zero value: nothing may be touched before the 400
