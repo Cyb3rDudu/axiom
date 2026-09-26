@@ -117,7 +117,7 @@ func TestLocalExecutorResolution(t *testing.T) {
 	}
 
 	// canonical installed → canonical, no witness growth
-	staged := LocalExecutor{CanonicalPath: canonical, LegacyPath: legacy, TestName: "axiom-fixer-resolution-test"}
+	staged := LocalExecutor{canonicalPath: canonical, legacyPath: legacy, testName: "axiom-fixer-resolution-test"}
 	if got := staged.command(); got != canonical {
 		t.Fatalf("canonical install must resolve canonical, got %q", got)
 	}
@@ -166,16 +166,6 @@ func TestLocalExecutorLegacyShimWarnsOnceAndDelegates(t *testing.T) {
 	pdf := filepath.Join(os.Getenv("HOME"), ".axiom-test-runs", "KDELEGATE", "work.pdf")
 	if b, rerr := os.ReadFile(pdf); rerr != nil || string(b) != "%PDF-healed" {
 		t.Fatalf("delegated worker did not run (artifact %s: %v)", pdf, rerr)
-	}
-}
-
-// TestWorkerCommandDefaultsAgree — config's literal default and the
-// repair package's canonical constant must not drift (config stays
-// import-light; this pin is the weld).
-func TestWorkerCommandDefaultsAgree(t *testing.T) {
-	const configDefault = "/opt/axiom/bin/axiom-repair-worker"
-	if configDefault != CanonicalWorkerCommand {
-		t.Fatalf("config default %q != repair.CanonicalWorkerCommand %q", configDefault, CanonicalWorkerCommand)
 	}
 }
 

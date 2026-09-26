@@ -70,10 +70,13 @@ var envRows = []envRow{
 	{"AXIOM_DISPATCHER_LEASE", "DispatcherLeaseDuration", false},
 	{"AXIOM_DISPATCHER_PREFLIGHT", "DispatcherPreflightEnabled", false},
 	{"AXIOM_FIXER_INVOKER_ENABLED", "FixerInvokerEnabled", false},
-	// F08 #302: canonical worker command; the legacy AXIOM_FIXER_CMD keeps
-	// working through the deprecation witness (config.Load records its use).
+	// F08 #302: canonical worker command; the legacy AXIOM_FIXER_CMD
+	// keeps working through the deprecation witness (config.Load records
+	// its use via deprecate.Use). The third field is the secret/redaction
+	// flag — a command PATH is operator-debuggable state, not a credential,
+	// so neither row redacts.
 	{"AXIOM_REPAIR_WORKER_CMD", "FixerCommand", false},
-	{"AXIOM_FIXER_CMD", "FixerCommand", true},
+	{"AXIOM_FIXER_CMD", "FixerCommand", false},
 	{"AXIOM_FIXER_CONCURRENCY", "FixerConcurrency", false},
 	{"AXIOM_FIXER_INTERVAL", "FixerInterval", false},
 	{"AXIOM_FIXER_OCR_TIMEOUT", "FixerOCRTimeout", false},

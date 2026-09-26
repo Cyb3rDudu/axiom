@@ -83,13 +83,13 @@ type LocalExecutor struct {
 	// resolves: canonical axiom-repair-worker if installed, else the
 	// legacy axiom-fixer shim (witnessed), else the canonical path.
 	Command string
-	// CanonicalPath/LegacyPath override the resolution targets (the /opt
+	// canonicalPath/legacyPath override the resolution targets (the /opt
 	// constants by default; tests stage temp dirs).
-	CanonicalPath string
-	LegacyPath    string
-	// TestName overrides the deprecation-witness label for the legacy
+	canonicalPath string
+	legacyPath    string
+	// testName overrides the deprecation-witness label for the legacy
 	// fallback (tests isolate the witness). Empty = "axiom-fixer".
-	TestName string
+	testName string
 }
 
 // Execute runs Command <key> --apply … under req.Budget.
@@ -136,7 +136,7 @@ func (e LocalExecutor) Execute(ctx context.Context, req RepairRequest) (RepairRe
 // by the deprecation witness (ADR 0001 §6; the 0.3.x removal decision
 // reads these counters, not gut feeling).
 func (e LocalExecutor) command() string {
-	canonical, legacy := e.CanonicalPath, e.LegacyPath
+	canonical, legacy := e.canonicalPath, e.legacyPath
 	if canonical == "" {
 		canonical = CanonicalWorkerCommand
 	}
@@ -150,7 +150,7 @@ func (e LocalExecutor) command() string {
 		return canonical
 	}
 	if _, err := os.Stat(legacy); err == nil {
-		name := e.TestName
+		name := e.testName
 		if name == "" {
 			name = "axiom-fixer"
 		}
