@@ -167,8 +167,10 @@ func TestAPIOnlyLifecycleAndQuietStop(t *testing.T) {
 		t.Fatalf("health json: %v\n%s", err, body)
 	}
 	// Baseline protection: the frozen identity fields and the health shape
-	// are byte-stable; only the zotero check exists db-less.
-	if health.CanonicalName != "axiom" || health.ServiceClass != "api+library+store" {
+	// are byte-stable; only the zotero check exists db-less. F09 (#303)
+	// narrowed service_class honestly per role set: this api-only slice
+	// reports "api" (the vocabulary is the frozen ADR-0001 one).
+	if health.CanonicalName != "axiom" || health.ServiceClass != "api" {
 		t.Fatalf("health identity fields changed: %s", body)
 	}
 	if _, hasPG := health.Checks["postgres"]; hasPG {

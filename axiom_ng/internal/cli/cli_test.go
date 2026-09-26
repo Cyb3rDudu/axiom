@@ -26,20 +26,8 @@ import (
 )
 
 func TestServeRefusesUnextractedRoles(t *testing.T) {
-	// store stays vocabulary-only until F09; bogus/missing roles are
+	// F09 (#303) made the store slice real; bogus/missing roles stay
 	// usage errors (exit 2).
-	for role, want := range map[string]string{
-		"store": "F09 (#303)",
-	} {
-		var buf strings.Builder
-		exit := serveTo(&buf, []string{"serve", role})
-		if exit != exitUsage {
-			t.Fatalf("serve %s exit = %d, want %d", role, exit, exitUsage)
-		}
-		if !strings.Contains(buf.String(), "component not yet extracted") || !strings.Contains(buf.String(), want) {
-			t.Fatalf("serve %s must refuse loudly naming %s, got: %s", role, want, buf.String())
-		}
-	}
 	var buf strings.Builder
 	if exit := serveTo(&buf, []string{"serve", "bogus"}); exit != exitUsage {
 		t.Fatalf("unknown role exit = %d, want %d", exit, exitUsage)
