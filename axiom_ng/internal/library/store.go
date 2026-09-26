@@ -485,13 +485,16 @@ func NormalizeDOI(doi string) string {
 }
 
 // NormalizeISBN canonicalizes an ISBN: strip separators, uppercase (X
-// check digit). No checksum invention — malformed input stays as-is and
-// simply never matches.
+// check digit). Separators include the Unicode hyphens printers use
+// (U+2010 HYPHEN, U+2011 NON-BREAKING HYPHEN — the inspector matches
+// them, so the normalizer must strip them or the identifier carries the
+// typo into the ledger). No checksum invention — malformed input stays
+// as-is and simply never matches.
 func NormalizeISBN(isbn string) string {
 	s := strings.ToUpper(strings.TrimSpace(isbn))
 	var b strings.Builder
 	for _, r := range s {
-		if r == '-' || r == ' ' {
+		if r == '-' || r == ' ' || r == '\u2010' || r == '\u2011' {
 			continue
 		}
 		b.WriteRune(r)

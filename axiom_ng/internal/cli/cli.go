@@ -81,8 +81,9 @@ const (
 
 // cmdServe is the role CLI: which slice of the composition this process
 // runs. `all` is the compat full stack; `api` the API-serving selection;
-// `library`/`store` exist as vocabulary only until their components are
-// extracted (F06/F09) — they refuse loudly instead of fake-splitting.
+// `library` the Library slice (Zotero provider + import ladder + sync
+// mirror, F07); `store` stays vocabulary-only until F09 — it refuses
+// loudly instead of fake-splitting.
 func cmdServe(name string, args []string) int {
 	if len(args) != 1 {
 		fmt.Fprintf(os.Stderr, "usage: %s serve all|api|library|store\n", name)

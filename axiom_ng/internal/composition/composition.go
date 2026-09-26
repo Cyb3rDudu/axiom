@@ -624,7 +624,11 @@ func (r *Root) componentsFor() []Component {
 					r.logger.Printf("library: resumed %d inflight import(s) after restart", len(ids))
 				}
 				r.srv.SetLibraryAPI(libSvc)
-				r.logger.Printf("library: import routes wired with the ZOTERO provider (single-writer lease %s)", prov.LeaseScopeLabel())
+				if apiKey != "" {
+					r.logger.Printf("library: import routes wired with the ZOTERO provider (single-writer lease %s)", prov.LeaseScopeLabel())
+				} else {
+					r.logger.Printf("library: import routes wired with the ZOTERO provider (READ-ONLY — no write key)")
+				}
 			default:
 				return fmt.Errorf("library: unknown AXIOM_LIBRARY_IMPORT_PROVIDERS %q (known: fake, zotero)", r.cfg.LibraryImportProviders)
 			}

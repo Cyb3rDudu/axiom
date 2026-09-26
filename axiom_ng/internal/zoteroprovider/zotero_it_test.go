@@ -145,6 +145,7 @@ func precleanZotero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pre-clean catalog read: %v", err)
 	}
+	_ = env // used by deleteITCollections below
 	for _, raw := range env {
 		it, ok := itemFromEnvelope(raw)
 		if !ok {
@@ -168,12 +169,37 @@ func precleanZotero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pre-clean collections read: %v", err)
 	}
-	for _, c := range cols {
-		if c.Name == "Axiom IT" || c.Name == "F07 Zotero IT" {
-			_ = write.DeleteCollection(c.Key)
-			_ = write.DeleteCollection(c.Key)
+	if err := deleteITCollections(ctx, read, write, env, cols); err != nil {
+		t.Fatalf("pre-clean collections: %v", err)
+	}
+}
+
+// deleteITCollections removes the IT-named collections ONLY when EMPTY:
+// a user collection that happens to share the name carries items and
+// must survive (the API DELETE is permanent). Emptiness = no live item
+// references the collection key.
+func deleteITCollections(ctx context.Context, read *LocalAPI, write *WriteClient, env []json.RawMessage, cols []CanonicalCollection) error {
+	used := map[string]bool{}
+	for _, raw := range env {
+		it, ok := itemFromEnvelope(raw)
+		if !ok || it.Deleted {
+			continue
+		}
+		for _, c := range it.Collections {
+			used[c] = true
 		}
 	}
+	for _, c := range cols {
+		if c.Name != "Axiom IT" && c.Name != "F07 Zotero IT" {
+			continue
+		}
+		if used[c.Key] {
+			continue // non-empty (foreign?) collection: never delete
+		}
+		_ = write.DeleteCollection(c.Key)
+		_ = write.DeleteCollection(c.Key) // purge if the instance allows
+	}
+	return nil
 }
 
 // itBookPDF/itWebPDF — the deterministic IT fixtures (stable bytes →
@@ -291,6 +317,7 @@ func TestRealZoteroFullLadderIT(t *testing.T) {
 	}
 
 	var createdItems []string
+	var bookRecordID string
 	track := func(op libcontracts.ImportOperation) {
 		if op.Result != nil {
 			createdItems = append(createdItems, op.Result.RecordID, op.Result.RenditionID)
@@ -313,6 +340,7 @@ func TestRealZoteroFullLadderIT(t *testing.T) {
 			t.Fatalf("book import status = %s\n%s", op.Status, b)
 		}
 		track(op)
+		bookRecordID = op.Result.RecordID
 
 		// Typisiert: a BOOK item — and the document rung's identifiers
 		// survived as provenance (real PDF extraction).
@@ -370,6 +398,9 @@ func TestRealZoteroFullLadderIT(t *testing.T) {
 		}
 		if op.Status != libcontracts.ImportCommitted {
 			t.Fatalf("replay status = %s: %+v", op.Status, op.Failure)
+		}
+		if op.Result.RecordID != bookRecordID {
+			t.Fatalf("replay must link the SAME record: %s != %s", op.Result.RecordID, bookRecordID)
 		}
 		rec, err := catalogFind(prov, ctx, op.Result.RecordID)
 		if err != nil || rec == nil {
@@ -442,28 +473,42 @@ func TestRealZoteroFullLadderIT(t *testing.T) {
 				t.Fatalf("cleanup item %s: %v", key, err)
 			}
 		}
-		if err := prov.write.DeleteCollection(collID); err != nil && !isStatus(err, http.StatusNotFound) {
-			t.Fatalf("cleanup collection: %v", err)
+		// The IT-created collections go — through the SAME empty-guard as
+		// the pre-clean (a foreign same-named collection with items
+		// survives; ours are empty once the items are gone).
+		cols, cerr := prov.read.ListCanonicalCollections()
+		if cerr != nil {
+			t.Fatalf("cleanup collections read: %v", cerr)
 		}
-		// The parent collection ("Axiom IT") too.
-		parentID, err := prov.ResolvePath(ctx, itPath[:1], false)
-		if err == nil {
-			if err := prov.write.DeleteCollection(parentID); err != nil && !isStatus(err, http.StatusNotFound) {
-				t.Fatalf("cleanup parent collection: %v", err)
-			}
+		env2, eerr := prov.read.getItems(ctx, nil)
+		if eerr != nil {
+			t.Fatalf("cleanup items read: %v", eerr)
+		}
+		if err := deleteITCollections(ctx, prov.read, prov.write, env2, cols); err != nil {
+			t.Fatalf("cleanup collections: %v", err)
 		}
 		prov.invalidate()
 
 		for _, key := range createdItems {
-			rec, cerr := catalogFind(prov, ctx, key)
-			if cerr != nil {
+			// Records: the catalog walk proves absence (it lists
+			// documents). Renditions: the catalog skips attachments, so
+			// the witness is the item GET itself — gone or trashed.
+			if rec, cerr := catalogFind(prov, ctx, key); cerr != nil {
 				t.Fatalf("catalog walk after cleanup: %v", cerr)
+			} else if rec != nil {
+				t.Fatalf("cleanup witness: record %s still observable", key)
 			}
-			if rec != nil {
-				t.Fatalf("cleanup witness: item %s still observable", key)
+			data, _, gerr := prov.write.GetItem(key)
+			if gerr == nil {
+				var it zotItem
+				if json.Unmarshal(data, &it) == nil && !it.Deleted {
+					t.Fatalf("cleanup witness: item %s still live", key)
+				}
+			} else if !isStatus(gerr, http.StatusNotFound) {
+				t.Fatalf("cleanup witness read %s: %v", key, gerr)
 			}
 		}
-		cols, err := prov.read.ListCanonicalCollections()
+		cols, err = prov.read.ListCanonicalCollections()
 		if err != nil {
 			t.Fatal(err)
 		}

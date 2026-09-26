@@ -29,15 +29,27 @@ func NewPDFInspector() PDFInspector { return PDFInspector{} }
 const inspectPages = 5
 
 // Inspect implements library.DocumentInspector.
-func (PDFInspector) Inspect(_ context.Context, mediaType, stagingPath string) (library.ResolvedFields, error) {
+func (PDFInspector) Inspect(_ context.Context, mediaType, stagingPath string) (fields library.ResolvedFields, err error) {
 	if !strings.Contains(mediaType, "pdf") {
 		// Capability honesty: only PDF content inspection exists.
 		return library.ResolvedFields{}, nil
 	}
+	// The pinned pdf lib resolves pages lazily OUTSIDE its own recover
+	// points (a malformed object graph can panic in Page/GetPlainText).
+	// Rung 1 degrades honestly: a panicking parse is an unreadable
+	// document — empty fields, the ladder continues with hints/resolvers.
+	defer func() {
+		if r := recover(); r != nil {
+			fields, err = library.ResolvedFields{}, nil
+		}
+	}()
+	return inspectPDF(stagingPath)
+}
+
+func inspectPDF(stagingPath string) (library.ResolvedFields, error) {
 	f, r, err := pdflib.Open(stagingPath)
 	if err != nil {
-		// An undecodable PDF is honest-empty, not failed: rung 1 simply
-		// cannot read it and the ladder continues with hints/resolvers.
+		// An undecodable PDF is honest-empty, not failed.
 		return library.ResolvedFields{}, nil
 	}
 	defer f.Close()

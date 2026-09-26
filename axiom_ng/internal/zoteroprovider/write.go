@@ -55,8 +55,22 @@ type WriteClient struct {
 }
 
 func NewWriteClient(baseURL, serverID, apiKey string) *WriteClient {
-	return &WriteClient{BaseURL: strings.TrimRight(baseURL, "/"), ServerID: serverID, APIKey: apiKey,
-		HTTP: &http.Client{Timeout: 120 * time.Second}}
+	base := strings.TrimRight(baseURL, "/")
+	return &WriteClient{BaseURL: base, ServerID: serverID, APIKey: apiKey,
+		HTTP: &http.Client{Timeout: 120 * time.Second,
+			// Credentials (the Zotero-API-Key custom header) must never
+			// follow a redirect off the local API host: Go strips only
+			// Authorization/Cookie on cross-host redirects, custom headers
+			// travel. A redirecting authorize response is refused instead.
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) == 0 {
+					return nil
+				}
+				if sameHost(base, req.URL.String()) {
+					return nil
+				}
+				return fmt.Errorf("refusing cross-host redirect to %s (credentials stay on the local API host)", req.URL.Host)
+			}}}
 }
 
 // Authorize performs the local Key-Flow once: Zotero shows a dialog with
@@ -393,8 +407,10 @@ func (w *WriteClient) CreateAttachmentWithFile(parentKey, filename, contentType 
 		return cleanup(fmt.Errorf("upload bytes: %d %s", upResp.StatusCode, string(upBody)))
 	}
 
-	// Phase 3 — register the upload against the item (204).
-	reg := strings.NewReader(url.Values{"upload": {auth.UploadKey}}.Encode())
+	// Phase 3 — register the upload against the item (204). Same
+	// URLSearchParams-safe encoding as the authorize form (the hex key is
+	// ASCII-safe either way — consistency is the point).
+	reg := strings.NewReader(urlSearchParamsEncode(url.Values{"upload": {auth.UploadKey}}))
 	_, _, err = w.do(http.MethodPost, "/api/users/0/items/"+attKey+"/file",
 		map[string]string{
 			"Content-Type":  "application/x-www-form-urlencoded",

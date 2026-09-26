@@ -300,11 +300,22 @@ func (o *OpenLibraryAPI) Resolve(ctx context.Context, q library.ResolveQuery) ([
 		}, &out); err != nil {
 			return nil, err
 		}
-		var cands []library.Candidate
-		for _, e := range out {
-			cands = append(cands, olCandidate(e, 1.0))
+		if len(out) > 0 {
+			// Deterministic order: map iteration is random, the ladder's
+			// neighbor-comparison demands stable candidate order.
+			keys := make([]string, 0, len(out))
+			for k := range out {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			var cands []library.Candidate
+			for _, k := range keys {
+				cands = append(cands, olCandidate(out[k], 1.0))
+			}
+			return cands, nil
 		}
-		return cands, nil
+		// ISBN unknown to Open Library: fall through to title search —
+		// an unknown identifier must not end the rung early.
 	}
 	if q.Title == "" {
 		return nil, nil

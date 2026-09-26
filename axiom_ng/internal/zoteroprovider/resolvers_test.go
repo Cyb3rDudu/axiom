@@ -6,7 +6,6 @@ package zoteroprovider
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -212,5 +211,4 @@ func TestResolverJSONShape(t *testing.T) {
 	if seenQuery != "filter=from-pub-date%3A2020%2Cuntil-pub-date%3A2020&query.bibliographic=T&rows=3" {
 		t.Fatalf("year-filtered request shape: %s", seenQuery)
 	}
-	_ = json.Marshal // shape guard compiles
 }
