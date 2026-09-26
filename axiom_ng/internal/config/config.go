@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/deprecate"
 )
 
 // Config holds the addresses and knobs the orchestration layer needs.
@@ -135,7 +137,9 @@ type Config struct {
 	// the repair queue and invokes the fixer wrapper once per attachment
 	// key. Opt-in like the dispatcher — never runs unless explicitly on.
 	FixerInvokerEnabled bool
-	// FixerCommand is the fixer wrapper (Command <key> --apply).
+	// FixerCommand is the repair-worker wrapper (Command <key> --apply);
+	// resolved by repairWorkerCmd (canonical env, legacy alias, canonical
+	// default — F08 #302).
 	FixerCommand string
 	// FixerConcurrency caps parallel fixer runs per host (owner nail: 1-2).
 	FixerConcurrency int
@@ -247,7 +251,7 @@ func Load() Config {
 		DispatcherLeaseDuration:    envDur("AXIOM_DISPATCHER_LEASE", 5*time.Minute),
 		DispatcherPreflightEnabled: envBool("AXIOM_DISPATCHER_PREFLIGHT"),
 		FixerInvokerEnabled:        envBool("AXIOM_FIXER_INVOKER_ENABLED"),
-		FixerCommand:               env("AXIOM_FIXER_CMD", "/opt/axiom/bin/axiom-fixer"),
+		FixerCommand:               repairWorkerCmd(),
 		FixerConcurrency:           envInt("AXIOM_FIXER_CONCURRENCY", 1),
 		FixerInterval:              envDur("AXIOM_FIXER_INTERVAL", 30*time.Second),
 		FixerOCRTimeout:            envDur("AXIOM_FIXER_OCR_TIMEOUT", 0),
@@ -275,6 +279,25 @@ func Load() Config {
 		}
 	}
 	return cfg
+}
+
+// repairWorkerCmd resolves the axiom-repair-worker command (F08 #302,
+// ADR 0001 §4): the canonical AXIOM_REPAIR_WORKER_CMD wins; the legacy
+// AXIOM_FIXER_CMD keeps the 0.1.x contract working through the
+// deprecation witness; the default is the canonical binary path (the
+// local executor falls back to the legacy shim while an install has not
+// re-run install_dist.sh — operators change nothing during 0.2.x).
+// The literal mirrors repair.CanonicalWorkerCommand (config stays
+// import-light; TestWorkerCommandDefaultsAgree pins the equality).
+func repairWorkerCmd() string {
+	if v := os.Getenv("AXIOM_REPAIR_WORKER_CMD"); v != "" {
+		return v
+	}
+	if v := os.Getenv("AXIOM_FIXER_CMD"); v != "" {
+		deprecate.Use("AXIOM_FIXER_CMD")
+		return v
+	}
+	return "/opt/axiom/bin/axiom-repair-worker"
 }
 
 func env(key, fallback string) string {

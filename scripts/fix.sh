@@ -1,10 +1,13 @@
 #!/bin/sh
 # fix.sh — invocation convention for the pdf_repair_agent (#205 G3).
+# Ships as /opt/axiom/bin/axiom-repair-worker (F08 #302, ADR 0001 §4;
+# bin/axiom-fixer is the warning compat alias).
 #
-# The fixer is an EVENT RUNNER (owner decision): one process per Zotero
-# attachment key, invoked by the operator / ingest path — NEVER a KeepAlive
-# launchd service. Two concurrent instances on the same key would corrupt
-# the agent's working directory, so this wrapper serializes per key.
+# The repair worker is an EVENT RUNNER (owner decision): one process per
+# Zotero attachment key, invoked by the operator / repair orchestrator —
+# NEVER a KeepAlive launchd service. Two concurrent instances on the same
+# key would corrupt the agent's working directory, so this wrapper
+# serializes per key.
 #
 # Usage: scripts/fix.sh <zotero-key> [--apply] [--format pdf|epub] [--source PATH]
 #                      [--lang <tesseract-code>] [--ocr-mode auto|force]

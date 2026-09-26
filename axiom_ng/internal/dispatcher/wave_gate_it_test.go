@@ -81,7 +81,7 @@ func TestWaveGateDefersClaimWhileRepairOpen(t *testing.T) {
 	if got := h.jobStatus(t, otherJob); got != "pending" {
 		t.Fatalf("second document's status = %q, want pending — the gate scope is instance-wide (owner semantics)", got)
 	}
-	held, reason, err := h.rep.WaveRepairGate(context.Background())
+	held, reason, err := h.repairs.WaveRepairGate(context.Background())
 	if err != nil || !held {
 		t.Fatalf("WaveRepairGate = %v/%q err=%v, want held", held, reason, err)
 	}
@@ -110,7 +110,7 @@ func TestWaveGateHoldsUntilHealedEnqueued(t *testing.T) {
 	jobID := h.seedJob(t, "W2", 3)
 	caseID := h.seedRepairCaseForJob(t, jobID, "healed")
 
-	held, reason, err := h.rep.WaveRepairGate(context.Background())
+	held, reason, err := h.repairs.WaveRepairGate(context.Background())
 	if err != nil || !held {
 		t.Fatalf("WaveRepairGate = %v/%q err=%v, want held for healed-not-enqueued", held, reason, err)
 	}
@@ -118,7 +118,7 @@ func TestWaveGateHoldsUntilHealedEnqueued(t *testing.T) {
 	// the post-heal sync's effect: a job enqueued for the document after
 	// the heal timestamp releases the gate
 	h.enqueueJobForDocument(t, caseID)
-	held, _, err = h.rep.WaveRepairGate(context.Background())
+	held, _, err = h.repairs.WaveRepairGate(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestWaveGateStrandedHealWindowExpires(t *testing.T) {
 		`UPDATE repair_cases SET updated_at = now() - interval '2 hours' WHERE status='healed'`); err != nil {
 		t.Fatal(err)
 	}
-	held, _, err := h.rep.WaveRepairGate(context.Background())
+	held, _, err := h.repairs.WaveRepairGate(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestWaveGateTerminalParksNeverHold(t *testing.T) {
 	jobID3 := h.seedJob(t, "W6", 3)
 	h.seedRepairCaseForJob(t, jobID3, "rejected")
 
-	held, reason, err := h.rep.WaveRepairGate(context.Background())
+	held, reason, err := h.repairs.WaveRepairGate(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

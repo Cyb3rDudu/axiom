@@ -40,13 +40,14 @@ const zoteroAdapterImport = "github.com/Cyb3rDudu/axiom/axiom_ng/internal/zotero
 //	                         construction is exactly the root's job)
 //	internal/sync            the Zotero mirror read path; F09 (#303) moves
 //	                         sync behind Library-owned ports
-//	internal/repair          the repair write track; F08 moves repair
-//	                         ownership onto the Library single-writer
+//	internal/library/repair  the repair write track (F08 #302 moved repair
+//	                         ownership under the Library); the remaining
+//	                         zoteroprovider types (Creator, write-client
+//	                         deps) leave with F09/F11 retyping
 //	internal/repo            mirror persistence (CanonicalItem types);
 //	                         F09's revision-typed intake removes the types
 //	internal/server          the Zotero health check + repair write
-//	                         gateway surface; leaves with F08/F11
-//	internal/fixerinvoker    the fixer apply deps (repair track, F08)
+//	                         gateway surface; leaves with F11
 //	internal/baseline        F01 scaffolding probes the frozen surface
 //	                         (test-only package)
 //	cmd/meta-backfill        the legacy CLI bridge; leaves with the
@@ -55,10 +56,9 @@ var zoteroImportAllowance = []string{
 	"internal/zoteroprovider/",
 	"internal/composition/",
 	"internal/sync/",
-	"internal/repair/",
+	"internal/library/repair/",
 	"internal/repo/",
 	"internal/server/",
-	"internal/fixerinvoker/",
 	"internal/baseline/",
 	"cmd/meta-backfill/",
 }

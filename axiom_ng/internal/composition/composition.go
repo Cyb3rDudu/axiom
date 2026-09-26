@@ -15,7 +15,8 @@
 //   - Ordered shutdown honors in-flight leases: HTTP stops accepting first
 //     (WS connections closed explicitly — hijacked sockets are invisible to
 //     http.Server.Shutdown), then the root context cancels and the
-//     dispatcher / fixer-invoker drains are JOINED before the database
+//     dispatcher / repair-orchestrator drains are JOINED before the
+//     database
 //     pool closes. A drain that outruns the stop budget is abandoned the
 //     way the #271/#264 shutdown guard semantics prescribe: leases expire
 //     and the claim scans' expired-recovery owns the rows — never lost,
@@ -43,8 +44,8 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/dispatcher"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/fixerinvoker"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
@@ -161,7 +162,7 @@ type Root struct {
 	srv          *server.Server
 	src          *zoteroprovider.LocalAPI
 	disp         *dispatcher.Dispatcher
-	inv          *fixerinvoker.Invoker
+	inv          *repair.Invoker
 	ingestClient RunnerClient
 }
 
@@ -715,7 +716,8 @@ func (r *Root) componentsFor() []Component {
 		},
 	})
 
-	// repair: write gateway + fixer invoker (the repair loop).
+	// repair: write gateway + repair orchestrator (the Library-owned
+	// repair loop, F08 #302).
 	comps = append(comps, funcComponent{
 		name: "repair",
 		role: RoleRepair,
@@ -730,26 +732,29 @@ func (r *Root) componentsFor() []Component {
 			}
 			writeBase := strings.TrimSuffix(strings.TrimSuffix(r.cfg.ZoteroBaseURL, "/api"), "/")
 			zoteroWrite := zoteroprovider.NewWriteClient(writeBase, r.src.ServerID(), strings.TrimSpace(string(keyBytes)))
+			repairStore := repair.NewStore(r.rep.Pool())
 			r.srv.SetRepairAPI(r.rep, zoteroWrite, r.cfg.QuarantineRoot)
 			r.logger.Printf("repair API enabled (zotero write gateway, quarantine under %s)", r.cfg.QuarantineRoot)
-			// #206 fixer invoker: the mail-ingest side of the repair queue.
+			// #206 repair orchestrator: the mail-ingest side of the repair
+			// queue, Library-owned since F08 (#302).
 			if !r.cfg.FixerInvokerEnabled {
 				return nil
 			}
-			r.inv = fixerinvoker.New(fixerinvoker.Config{
+			r.inv = repair.New(repair.Config{
 				Command:     r.cfg.FixerCommand,
 				Concurrency: r.cfg.FixerConcurrency,
 				Interval:    r.cfg.FixerInterval,   // F05: the F04 test-seam deferral — visible via config get --effective
 				OCRTimeout:  r.cfg.FixerOCRTimeout, // #293: OCR wedge-guard (0 = invoker default 24h)
-			}, fixerinvoker.Deps{
-				Rep:            r.rep,
-				Apply:          fixerinvoker.LiveApplyDeps(r.rep, zoteroWrite),
+			}, repair.Deps{
+				Store:          repairStore,
+				Apply:          liveApplyDeps(repairStore, zoteroWrite),
 				QuarantineRoot: r.cfg.QuarantineRoot,
 				// #282 post-heal auto-sync: every successful heal runs a
 				// targeted sync (include = healed document).
 				Sync: r.syncSvc,
-				// #298 FixerExec port: nil = local (process-group exec).
-				Exec: r.ports.FixerExec,
+				// F08 #302 RepairExecutor port: nil = local (the
+				// process-group-hardened axiom-repair-worker exec).
+				Executor: r.ports.RepairExecutor,
 			}, r.logger)
 			go func() {
 				if err := r.inv.Run(ctx); err != nil {

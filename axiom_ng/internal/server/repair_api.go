@@ -19,24 +19,26 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repair"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
-// SetRepairAPI wires the fix-service surface. writeBaseURL is the Zotero
-// LOCAL server root (http://localhost:23119 — no /api suffix).
+// SetRepairAPI wires the repair surface (Library-owned state machine,
+// F08 #302): the repair Store is built over the shared pool. writeBaseURL
+// is the Zotero LOCAL server root (http://localhost:23119 — no /api
+// suffix).
 func (s *Server) SetRepairAPI(r *repo.Repo, write *zoteroprovider.WriteClient, quarantineRoot string) {
-	s.repairRepo = r
+	s.repairStore = repair.NewStore(r.Pool())
 	s.zoteroWrite = write
 	s.quarantineRoot = quarantineRoot
-	// routes are registered in Handler() (only when repairRepo != nil)
+	// routes are registered in Handler() (only when repairStore != nil)
 }
 
 // repairQueueItem is one case plus everything the fix-service needs —
 // analysis, the pdf path, and the document metadata for context.
 type repairQueueItem struct {
-	repo.RepairCase
+	repair.RepairCase
 	Title         string                   `json:"title"`
 	Creators      []zoteroprovider.Creator `json:"creators"`
 	ExistingNames []string                 `json:"existing_attachment_names,omitempty"` // #291 grown-pattern refs
@@ -49,14 +51,14 @@ type repairQueueItem struct {
 }
 
 func (s *Server) handleRepairQueue(w http.ResponseWriter, r *http.Request) {
-	cases, err := s.repairRepo.ListRepairQueue(r.Context())
+	cases, err := s.repairStore.ListRepairQueue(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	out := buildQueue(cases,
-		func(c *repo.RepairCase) (*repairQueueItem, error) { return s.repairItemFor(r, c) },
-		func(id, reason string) error { return s.repairRepo.BlockRepairCase(r.Context(), id, reason) })
+		func(c *repair.RepairCase) (*repairQueueItem, error) { return s.repairItemFor(r, c) },
+		func(id, reason string) error { return s.repairStore.BlockRepairCase(r.Context(), id, reason) })
 	writeJSON(w, http.StatusOK, map[string]any{"cases": out})
 }
 
@@ -68,8 +70,8 @@ func (s *Server) handleRepairQueue(w http.ResponseWriter, r *http.Request) {
 // blocked_for_dudu('attachment-gone'); other read errors (transient DB)
 // keep the skip but log loudly. The DB reason string stays the stable
 // 'attachment-gone' prefix.
-func buildQueue(cases []repo.RepairCase,
-	itemFor func(*repo.RepairCase) (*repairQueueItem, error),
+func buildQueue(cases []repair.RepairCase,
+	itemFor func(*repair.RepairCase) (*repairQueueItem, error),
 	block func(id, reason string) error) []repairQueueItem {
 	out := make([]repairQueueItem, 0, len(cases))
 	for _, c := range cases {
@@ -91,15 +93,15 @@ func buildQueue(cases []repo.RepairCase,
 	return out
 }
 
-func (s *Server) repairItemFor(r *http.Request, c *repo.RepairCase) (*repairQueueItem, error) {
-	row := s.repairRepo.Pool().QueryRow(r.Context(), `
+func (s *Server) repairItemFor(r *http.Request, c *repair.RepairCase) (*repairQueueItem, error) {
+	row := s.repairStore.Pool().QueryRow(r.Context(), `
 		SELECT d.title, d.creators, COALESCE(d.publication_year, 0), d.zotero_key,
 		       a.zotero_key, a.local_path, COALESCE(a.content_type, 'application/pdf'),
 		       (SELECT a2.local_path FROM zotero_attachments a2
 		        WHERE a2.document_id = d.id AND a2.deleted = false
 		          AND a2.content_type = 'application/epub+zip'
 		        ORDER BY a2.preferred DESC, a2.filename ASC LIMIT 1),
-		       `+repo.ExistingNamesSubquery+`
+		       `+repair.ExistingNamesSubquery+`
 		FROM zotero_attachments a JOIN zotero_documents d ON d.id = a.document_id
 		WHERE a.id = $1 AND a.deleted = false`, c.AttachmentID)
 	var it repairQueueItem
@@ -254,14 +256,14 @@ func (s *Server) handleRepairCustody(w http.ResponseWriter, r *http.Request) {
 // publishes the healed rendition's revision. nil when no publisher is
 // wired (bare-server shapes). Failures log loudly, never fail the heal.
 func (s *Server) libraryRevisionHook(documentKey, contentType string) func(attKey, hash string) {
-	if s.revisionPublisher == nil || s.repairRepo == nil {
+	if s.revisionPublisher == nil || s.repairStore == nil {
 		return nil
 	}
 	return func(attKey, hash string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		var sourceID string
-		if err := s.repairRepo.Pool().QueryRow(ctx,
+		if err := s.repairStore.Pool().QueryRow(ctx,
 			`SELECT source_id::text FROM zotero_documents WHERE zotero_key = $1 AND deleted = false`,
 			documentKey).Scan(&sourceID); err != nil {
 			log.Printf("revision mitschrieb: source lookup for document %s failed: %v", documentKey, err)
@@ -276,10 +278,10 @@ func (s *Server) libraryRevisionHook(documentKey, contentType string) func(attKe
 // custodyItemFor loads attachment + document metadata by Zotero key (the
 // manual tool addresses the item by its library key, not a repair case).
 func (s *Server) custodyItemFor(r *http.Request, zoteroKey string) (*repairQueueItem, error) {
-	row := s.repairRepo.Pool().QueryRow(r.Context(), `
+	row := s.repairStore.Pool().QueryRow(r.Context(), `
 		SELECT d.title, d.creators, COALESCE(d.publication_year, 0), d.zotero_key,
 		       a.zotero_key, a.local_path, COALESCE(a.content_type, 'application/pdf'),
-		       `+repo.ExistingNamesSubquery+`
+		       `+repair.ExistingNamesSubquery+`
 		FROM zotero_attachments a JOIN zotero_documents d ON d.id = a.document_id
 		WHERE a.zotero_key = $1 AND a.deleted = false`, zoteroKey)
 	var it repairQueueItem
@@ -292,7 +294,7 @@ func (s *Server) custodyItemFor(r *http.Request, zoteroKey string) (*repairQueue
 }
 
 func (s *Server) handleRepairCases(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.repairRepo.Pool().Query(r.Context(), `
+	rows, err := s.repairStore.Pool().Query(r.Context(), `
 		SELECT c.id::text, c.status::text, c.attempts, c.suspicion_class,
 		       COALESCE(c.verify_score, 0), COALESCE(c.verify_contradictions, 0),
 		       COALESCE(c.verdict, ''), COALESCE(c.blocked_reason, ''),
@@ -332,7 +334,7 @@ func (s *Server) handleRepairCases(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRepairClaim(w http.ResponseWriter, r *http.Request) {
-	c, err := s.repairRepo.ClaimRepairCase(r.Context(), r.PathValue("id"))
+	c, err := s.repairStore.ClaimRepairCase(r.Context(), r.PathValue("id"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -374,7 +376,7 @@ func (s *Server) handleRepairRequeue(w http.ResponseWriter, r *http.Request) {
 	// #285: the ambiguous-create ack — orphan_resolved names the orphan key
 	// the operator deleted in Zotero (the refusal text carries it). Empty is
 	// fine for every case without an unresolved orphan.
-	if err := s.repairRepo.RequeueRepairCaseWithOrphanAck(r.Context(), r.PathValue("id"), body.Reason, body.AnalysisPatch, strings.TrimSpace(body.OrphanAck)); err != nil {
+	if err := s.repairStore.RequeueRepairCaseWithOrphanAck(r.Context(), r.PathValue("id"), body.Reason, body.AnalysisPatch, strings.TrimSpace(body.OrphanAck)); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -433,12 +435,12 @@ func (s *Server) handleRepairVerdict(w http.ResponseWriter, r *http.Request) {
 	fmt.Sscanf(r.FormValue("contradictions"), "%d", &contradictions)
 	fmt.Sscanf(r.FormValue("plan_version"), "%d", &planVersion)
 
-	eff, err := s.repairRepo.SubmitRepairVerdict(r.Context(), caseID, plan, planVersion, score, contradictions, verdict, blockedReason)
+	eff, err := s.repairStore.SubmitRepairVerdict(r.Context(), caseID, plan, planVersion, score, contradictions, verdict, blockedReason)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if eff != repo.RepairInRepair {
+	if eff != repair.RepairInRepair {
 		writeJSON(w, http.StatusOK, map[string]any{"effective": eff})
 		return
 	}
@@ -447,26 +449,26 @@ func (s *Server) handleRepairVerdict(w http.ResponseWriter, r *http.Request) {
 	// healed_file+content_type, legacy healed_pdf = application/pdf).
 	artifact, contentType, artErr := readHealedFile(r)
 	if artErr != nil {
-		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, artErr.Error())
+		_ = s.repairStore.MarkRepairFailed(r.Context(), caseID, artErr.Error())
 		http.Error(w, artErr.Error(), http.StatusBadRequest)
 		return
 	}
 
 	attID, attErr := attachmentIDForCase(r, s, caseID)
 	if attErr != nil {
-		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, "case-attachment unlesbar: "+attErr.Error())
+		_ = s.repairStore.MarkRepairFailed(r.Context(), caseID, "case-attachment unlesbar: "+attErr.Error())
 		http.Error(w, attErr.Error(), http.StatusInternalServerError)
 		return
 	}
-	item, err := s.repairItemFor(r, &repo.RepairCase{AttachmentID: attID})
+	item, err := s.repairItemFor(r, &repair.RepairCase{AttachmentID: attID})
 	if err != nil {
-		_ = s.repairRepo.MarkRepairFailed(r.Context(), caseID, "attachment weg: "+err.Error())
+		_ = s.repairStore.MarkRepairFailed(r.Context(), caseID, "attachment weg: "+err.Error())
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	srcPath := strings.TrimPrefix(item.LocalPath, "file://")
 
-	body, status, err := s.applyRepair(r.Context(), liveRepairDeps{rep: s.repairRepo, write: s.zoteroWrite},
+	body, status, err := s.applyRepair(r.Context(), liveRepairDeps{store: s.repairStore, write: s.zoteroWrite},
 		caseID, planVersion, item, srcPath, artifact, contentType)
 	if err != nil {
 		http.Error(w, err.Error(), status)
@@ -528,9 +530,10 @@ type repairApplyDeps interface {
 	AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error
 }
 
-// liveRepairDeps adapts *repo.Repo + *zoteroprovider.WriteClient to repairApplyDeps.
+// liveRepairDeps adapts the Library-owned repair Store +
+// *zoteroprovider.WriteClient to repairApplyDeps.
 type liveRepairDeps struct {
-	rep   *repo.Repo
+	store *repair.Store
 	write *zoteroprovider.WriteClient
 }
 
@@ -544,17 +547,18 @@ func (d liveRepairDeps) CreateAttachmentWithFile(parent, filename, contentType s
 	return d.write.CreateAttachmentWithFile(parent, filename, contentType, pdf)
 }
 func (d liveRepairDeps) MarkRepairFailed(ctx context.Context, caseID, reason string) error {
-	return d.rep.MarkRepairFailed(ctx, caseID, reason)
+	return d.store.MarkRepairFailed(ctx, caseID, reason)
 }
 func (d liveRepairDeps) MarkRepairHealed(ctx context.Context, caseID string) error {
-	return d.rep.MarkRepairHealed(ctx, caseID)
+	return d.store.MarkRepairHealed(ctx, caseID)
 }
 func (d liveRepairDeps) AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error {
-	return d.rep.AuditWrite(ctx, caseID, attachmentID, action, detail)
+	return d.store.AuditWrite(ctx, caseID, attachmentID, action, detail)
 }
 
 // applyRepair delegates to repair.Apply (#206: the custody sequence moved
-// to internal/repair so the HTTP surface and the fixer invoker run the
+// into the Library repair package so the HTTP surface and the repair
+// orchestrator run the
 // IDENTICAL ordering — it must never drift between duplicates). Kept as a
 // method so the existing ordering tests (repair_api_test.go, review W4)
 // keep pinning this call path unchanged.
@@ -588,7 +592,7 @@ func (s *Server) applyRepair(ctx context.Context, d repairApplyDeps, caseID stri
 }
 func attachmentIDForCase(r *http.Request, s *Server, caseID string) (string, error) {
 	var attID string
-	if err := s.repairRepo.Pool().QueryRow(r.Context(),
+	if err := s.repairStore.Pool().QueryRow(r.Context(),
 		`SELECT attachment_id::text FROM repair_cases WHERE id=$1`, caseID).Scan(&attID); err != nil {
 		return "", err
 	}
@@ -600,7 +604,7 @@ func attachmentIDForCase(r *http.Request, s *Server, caseID string) (string, err
 // plus samples — the folio_verified evidence dudu watches for.
 func (s *Server) handleLocatorStats(w http.ResponseWriter, r *http.Request) {
 	docKey := r.PathValue("documentKey")
-	rows, err := s.repairRepo.Pool().Query(r.Context(), `
+	rows, err := s.repairStore.Pool().Query(r.Context(), `
 		SELECT COALESCE(c.locator->>'page_source', 'legacy'), count(*),
 		       (array_agg(c.id::text ORDER BY c.chunk_index))[1:3],
 		       (array_agg(COALESCE(c.locator->>'page_label_start','') ORDER BY c.chunk_index))[1:3]

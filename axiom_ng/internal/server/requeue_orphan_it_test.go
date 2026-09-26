@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -57,7 +57,7 @@ func TestIT_RequeueOrphanAckSurface(t *testing.T) {
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	rep := repo.New(d.Pool())
+	rstore := repair.NewStore(d.Pool())
 
 	// minimal seed: source → document → attachment, then a case walked to
 	// failed WITH an unresolved orphan audit (the ambiguous-create residue)
@@ -84,25 +84,25 @@ func TestIT_RequeueOrphanAckSurface(t *testing.T) {
 		RETURNING id::text`, srcID, docID, "RQATT"+time.Now().Format("150405"), &ch).Scan(&attID); err != nil {
 		t.Fatal(err)
 	}
-	c, _, err := rep.CreateRepairCase(ctx, attID, docID, "reparierbar", []byte(`{}`))
+	c, _, err := rstore.CreateRepairCase(ctx, attID, docID, "reparierbar", []byte(`{}`))
 	if err != nil || c == nil {
 		t.Fatalf("CreateRepairCase: %v %v", c, err)
 	}
-	if err := rep.QueueRepairCase(ctx, c.ID, "reparierbar", []byte(`{}`)); err != nil {
+	if err := rstore.QueueRepairCase(ctx, c.ID, "reparierbar", []byte(`{}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rep.ClaimRepairCase(ctx, c.ID); err != nil {
+	if _, err := rstore.ClaimRepairCase(ctx, c.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := rep.AuditWrite(ctx, c.ID, attID, "create_attachment_orphan",
+	if err := rstore.AuditWrite(ctx, c.ID, attID, "create_attachment_orphan",
 		map[string]any{"new_zotero_key": orphanKey, "filename": "Autor - 2020 - Titel.pdf"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rep.MarkRepairFailed(ctx, c.ID, "zotero create: upload 502"); err != nil {
+	if err := rstore.MarkRepairFailed(ctx, c.ID, "zotero create: upload 502"); err != nil {
 		t.Fatal(err)
 	}
 
-	s := &Server{repairRepo: rep} // requeue touches nothing else
+	s := &Server{repairStore: rstore} // requeue touches nothing else
 	r := chi.NewRouter()
 	r.Post("/api/repair/cases/{id}/requeue", s.handleRepairRequeue)
 	post := func(body string) *httptest.ResponseRecorder {
@@ -128,8 +128,8 @@ func TestIT_RequeueOrphanAckSurface(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("correct ack must requeue (200), got %d: %s", rec.Code, rec.Body.String())
 	}
-	got, err := rep.OpenRepairCase(ctx, attID)
-	if err != nil || got == nil || got.Status != repo.RepairQueued {
+	got, err := rstore.OpenRepairCase(ctx, attID)
+	if err != nil || got == nil || got.Status != repair.RepairQueued {
 		t.Fatalf("case must be queued after the ack, got %+v %v", got, err)
 	}
 }

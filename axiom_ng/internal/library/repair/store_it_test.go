@@ -1,4 +1,4 @@
-package repo
+package repair
 
 import (
 	"context"
@@ -11,31 +11,31 @@ import (
 // seedRepairCase drives one attachment through create→queue→claim and
 // returns the case id. attempts pre-sets the attachment's loop-guard counter
 // (zotero_attachments.repair_attempts); claim=false leaves the case queued.
-func seedRepairCase(t *testing.T, lr *leaseRepo, attKey string, attempts int, claim bool) string {
+func seedRepairCase(t *testing.T, e *storeEnv, attKey string, attempts int, claim bool) string {
 	t.Helper()
 	ctx := context.Background()
 	// unique (base_url, library_id) per fixture — the sources table has a
 	// unique constraint and seed() plain-INSERTs (review B1)
 	lib := "lib-" + attKey
-	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: lib,
+	attID, _ := e.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: lib,
 		docKey: "DOC-" + attKey, attKey: attKey}, "completed", 1)
-	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_attachments SET repair_attempts=$2 WHERE id=$1`, attID, attempts); err != nil {
+	if _, err := e.pool.Exec(ctx, `UPDATE zotero_attachments SET repair_attempts=$2 WHERE id=$1`, attID, attempts); err != nil {
 		t.Fatalf("set repair_attempts: %v", err)
 	}
-	c, _, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
+	c, _, err := e.store.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
 	if err != nil || c == nil {
 		t.Fatalf("CreateRepairCase: %v %+v", err, c)
 	}
 	if c.Status != RepairRejected {
 		t.Fatalf("fresh case status = %s, want rejected", c.Status)
 	}
-	if err := lr.rep.QueueRepairCase(ctx, c.ID, "reparierbar", []byte(`{"folio":[1]}`)); err != nil {
+	if err := e.store.QueueRepairCase(ctx, c.ID, "reparierbar", []byte(`{"folio":[1]}`)); err != nil {
 		t.Fatalf("QueueRepairCase: %v", err)
 	}
 	if !claim {
 		return c.ID
 	}
-	got, err := lr.rep.ClaimRepairCase(ctx, c.ID)
+	got, err := e.store.ClaimRepairCase(ctx, c.ID)
 	if err != nil {
 		t.Fatalf("ClaimRepairCase: %v", err)
 	}
@@ -51,19 +51,19 @@ func seedRepairCase(t *testing.T, lr *leaseRepo, attKey string, attempts int, cl
 // claim burns no attempt). Below the limit the claim succeeds and
 // increments the attachment counter.
 func TestRepairLoopGuardIT(t *testing.T) {
-	lr := openLeaseDB(t)
-	lr.truncateFixtures(t)
+	e := openStoreDB(t)
+	e.truncateFixtures(t)
 	ctx := context.Background()
 
 	// attempts=2 (RepairMaxAttempts) → claim must refuse.
-	caseID := seedRepairCase(t, lr, "ATT-LG", RepairMaxAttempts, false)
-	_, err := lr.rep.ClaimRepairCase(ctx, caseID)
+	caseID := seedRepairCase(t, e, "ATT-LG", RepairMaxAttempts, false)
+	_, err := e.store.ClaimRepairCase(ctx, caseID)
 	if err == nil || !strings.Contains(err.Error(), "loop-guard") {
 		t.Fatalf("third claim must hit the loop guard, got err=%v", err)
 	}
 	var status, reason string
 	var attAttempts int
-	if err := lr.pool.QueryRow(ctx,
+	if err := e.pool.QueryRow(ctx,
 		`SELECT status::text, blocked_reason FROM repair_cases WHERE id=$1`, caseID).
 		Scan(&status, &reason); err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestRepairLoopGuardIT(t *testing.T) {
 	if status != "blocked_for_dudu" || reason != "loop-guard" {
 		t.Fatalf("guard must block: got %s/%s, want blocked_for_dudu/loop-guard", status, reason)
 	}
-	if err := lr.pool.QueryRow(ctx,
+	if err := e.pool.QueryRow(ctx,
 		`SELECT repair_attempts FROM zotero_attachments WHERE id=(SELECT attachment_id FROM repair_cases WHERE id=$1)`,
 		caseID).Scan(&attAttempts); err != nil {
 		t.Fatal(err)
@@ -81,8 +81,8 @@ func TestRepairLoopGuardIT(t *testing.T) {
 	}
 
 	// attempts=1 → claim succeeds and increments to 2.
-	caseID2 := seedRepairCase(t, lr, "ATT-OK", 1, true)
-	if err := lr.pool.QueryRow(ctx,
+	caseID2 := seedRepairCase(t, e, "ATT-OK", 1, true)
+	if err := e.pool.QueryRow(ctx,
 		`SELECT repair_attempts FROM zotero_attachments WHERE id=(SELECT attachment_id FROM repair_cases WHERE id=$1)`,
 		caseID2).Scan(&attAttempts); err != nil {
 		t.Fatal(err)
@@ -97,8 +97,8 @@ func TestRepairLoopGuardIT(t *testing.T) {
 // contradictions; anything else — including unknown verdict strings —
 // blocks the case for dudu.
 func TestRepairAutoApplyGateIT(t *testing.T) {
-	lr := openLeaseDB(t)
-	lr.truncateFixtures(t)
+	e := openStoreDB(t)
+	e.truncateFixtures(t)
 	ctx := context.Background()
 
 	cases := []struct {
@@ -114,8 +114,8 @@ func TestRepairAutoApplyGateIT(t *testing.T) {
 		{"unbekanntes verdict", 1.0, 0, "vielleicht", RepairBlocked},
 	}
 	for i, tc := range cases {
-		caseID := seedRepairCase(t, lr, "ATT-GATE-"+strings.Repeat("G", i+1), 0, true)
-		eff, err := lr.rep.SubmitRepairVerdict(ctx, caseID, []byte(`{"p":1}`), 1, tc.score, tc.contradicts, tc.verdict, "")
+		caseID := seedRepairCase(t, e, "ATT-GATE-"+strings.Repeat("G", i+1), 0, true)
+		eff, err := e.store.SubmitRepairVerdict(ctx, caseID, []byte(`{"p":1}`), 1, tc.score, tc.contradicts, tc.verdict, "")
 		if err != nil {
 			t.Fatalf("%s: SubmitRepairVerdict: %v", tc.name, err)
 		}
@@ -124,7 +124,7 @@ func TestRepairAutoApplyGateIT(t *testing.T) {
 		}
 		if tc.wantEffective == RepairBlocked {
 			var reason string
-			if err := lr.pool.QueryRow(ctx, `SELECT blocked_reason FROM repair_cases WHERE id=$1`, caseID).Scan(&reason); err != nil {
+			if err := e.pool.QueryRow(ctx, `SELECT blocked_reason FROM repair_cases WHERE id=$1`, caseID).Scan(&reason); err != nil {
 				t.Fatal(err)
 			}
 			if reason == "" {
@@ -138,17 +138,17 @@ func TestRepairAutoApplyGateIT(t *testing.T) {
 // CreateRepairCase for an attachment with an OPEN case returns the EXISTING
 // case instead of inserting a row.
 func TestRepairOneOpenCaseIT(t *testing.T) {
-	lr := openLeaseDB(t)
-	lr.truncateFixtures(t)
+	e := openStoreDB(t)
+	e.truncateFixtures(t)
 	ctx := context.Background()
 
-	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: "lib-guardcheck",
+	attID, _ := e.seed(t, seedSpec{sourceBaseURL: "https://zotero.live", libraryID: "lib-guardcheck",
 		docKey: "DOCREP", attKey: "ATT-ONE"}, "completed", 1)
-	first, _, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
+	first, _, err := e.store.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
 	if err != nil || first == nil {
 		t.Fatalf("first CreateRepairCase: %v %+v", err, first)
 	}
-	second, _, err := lr.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
+	second, _, err := e.store.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
 	if err != nil {
 		t.Fatalf("second CreateRepairCase: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestRepairOneOpenCaseIT(t *testing.T) {
 		t.Fatalf("second create must return the same case: %s vs %s", second.ID, first.ID)
 	}
 	var n int
-	if err := lr.pool.QueryRow(ctx,
+	if err := e.pool.QueryRow(ctx,
 		`SELECT count(*) FROM repair_cases WHERE attachment_id=$1`, attID).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
@@ -171,15 +171,15 @@ func TestRepairOneOpenCaseIT(t *testing.T) {
 // TestRepairVerdictRequiresInRepairIT: SubmitRepairVerdict on a case that is
 // NOT in_repair must error instead of silently mutating a queued case.
 func TestRepairVerdictRequiresInRepairIT(t *testing.T) {
-	lr := openLeaseDB(t)
-	lr.truncateFixtures(t)
+	e := openStoreDB(t)
+	e.truncateFixtures(t)
 	ctx := context.Background()
 
-	caseID := seedRepairCase(t, lr, "ATT-GUARD", 0, false) // stays queued
-	if _, err := lr.rep.SubmitRepairVerdict(ctx, caseID, []byte(`{}`), 1, 0.99, 0, "auto_apply", ""); err == nil {
+	caseID := seedRepairCase(t, e, "ATT-GUARD", 0, false) // stays queued
+	if _, err := e.store.SubmitRepairVerdict(ctx, caseID, []byte(`{}`), 1, 0.99, 0, "auto_apply", ""); err == nil {
 		t.Fatal("verdict on a queued (not in_repair) case must error")
 	}
-	if err := lr.rep.MarkRepairHealed(ctx, caseID); err == nil {
+	if err := e.store.MarkRepairHealed(ctx, caseID); err == nil {
 		t.Fatal("MarkRepairHealed on a queued case must error")
 	}
 }
@@ -189,20 +189,20 @@ func TestRepairVerdictRequiresInRepairIT(t *testing.T) {
 // and the item is served (a NULL year used to crash the queue listing and
 // the invoker's RepairCaseItem).
 func TestRepairCaseItemNullYearIT(t *testing.T) {
-	lr := openLeaseDB(t)
-	lr.truncateFixtures(t)
+	e := openStoreDB(t)
+	e.truncateFixtures(t)
 	ctx := context.Background()
 
-	caseID := seedRepairCase(t, lr, "ATT-NY", 0, true)
+	caseID := seedRepairCase(t, e, "ATT-NY", 0, true)
 	var attID string
-	if err := lr.pool.QueryRow(ctx,
+	if err := e.pool.QueryRow(ctx,
 		`SELECT attachment_id::text FROM repair_cases WHERE id=$1`, caseID).Scan(&attID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_documents SET publication_year = NULL`); err != nil {
+	if _, err := e.pool.Exec(ctx, `UPDATE zotero_documents SET publication_year = NULL`); err != nil {
 		t.Fatalf("null year: %v", err)
 	}
-	item, err := lr.rep.RepairCaseItem(ctx, caseID)
+	item, err := e.store.RepairCaseItem(ctx, caseID)
 	if err != nil {
 		t.Fatalf("NULL publication_year must degrade to 0, not fail: %v", err)
 	}
@@ -223,26 +223,26 @@ func TestRepairCaseItemNullYearIT(t *testing.T) {
 // attachment carries an empty filename — it must never appear in the
 // aggregate (COALESCE <> ”).
 func TestRepairCaseItemExistingNamesDeterministic(t *testing.T) {
-	lr := openLeaseDB(t)
-	lr.truncateFixtures(t)
+	e := openStoreDB(t)
+	e.truncateFixtures(t)
 	ctx := context.Background()
 
-	caseID := seedRepairCase(t, lr, "ATT-EN", 0, true)
+	caseID := seedRepairCase(t, e, "ATT-EN", 0, true)
 	var srcID, docID, attID string
-	if err := lr.pool.QueryRow(ctx, `
+	if err := e.pool.QueryRow(ctx, `
 		SELECT a.source_id, a.document_id, a.id FROM repair_cases c
 		JOIN zotero_attachments a ON a.id = c.attachment_id
 		WHERE c.id = $1`, caseID).Scan(&srcID, &docID, &attID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_attachments SET filename='' WHERE id=$1`, attID); err != nil {
+	if _, err := e.pool.Exec(ctx, `UPDATE zotero_attachments SET filename='' WHERE id=$1`, attID); err != nil {
 		t.Fatalf("blank case attachment filename: %v", err)
 	}
 	for _, a := range []struct{ id, key, name string }{
 		{"00000000-0000-0000-0000-000000000000", "ATT-EN-ZZZ", "ZZZ-b.pdf"},
 		{"ffffffff-ffff-ffff-ffff-ffffffffffff", "ATT-EN-AAA", "AAA-a.pdf"},
 	} {
-		if _, err := lr.pool.Exec(ctx, `
+		if _, err := e.pool.Exec(ctx, `
 			INSERT INTO zotero_attachments (id, source_id, document_id, zotero_key, zotero_version,
 				parent_zotero_key, link_mode, content_type, filename, local_path, preferred, deleted)
 			VALUES ($1, $2, $3, $4, 1, 'DOC-ATT-EN', 'imported_file', 'application/pdf', $5, '/tmp/x.pdf', true, false)`,
@@ -250,7 +250,7 @@ func TestRepairCaseItemExistingNamesDeterministic(t *testing.T) {
 			t.Fatalf("insert %s: %v", a.name, err)
 		}
 	}
-	item, err := lr.rep.RepairCaseItem(ctx, caseID)
+	item, err := e.store.RepairCaseItem(ctx, caseID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,29 +266,29 @@ func TestRepairCaseItemExistingNamesDeterministic(t *testing.T) {
 // empty reasons (the changed evidence conditions must be documented) and
 // refuses non-parked states (mid-flight/healed are never touched).
 func TestRepairRequeueIT(t *testing.T) {
-	lr := openLeaseDB(t)
-	lr.truncateFixtures(t)
+	e := openStoreDB(t)
+	e.truncateFixtures(t)
 	ctx := context.Background()
 
 	// Guard-parked case (the production shape: attempts exhausted).
-	caseID := seedRepairCase(t, lr, "ATT-RQ", RepairMaxAttempts, false)
-	if _, err := lr.rep.ClaimRepairCase(ctx, caseID); err == nil {
+	caseID := seedRepairCase(t, e, "ATT-RQ", RepairMaxAttempts, false)
+	if _, err := e.store.ClaimRepairCase(ctx, caseID); err == nil {
 		t.Fatal("claim must hit the loop guard first")
 	}
 
 	// Empty reason is refused — changed evidence conditions are documented.
-	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, caseID, "  ", nil, ""); err == nil {
+	if err := e.store.RequeueRepairCaseWithOrphanAck(ctx, caseID, "  ", nil, ""); err == nil {
 		t.Fatal("requeue without reason must be refused")
 	}
 
 	// Requeue re-arms: guard counter 0, case queued.
-	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, caseID,
+	if err := e.store.RequeueRepairCaseWithOrphanAck(ctx, caseID,
 		"#278 forensics fix — Karte vollständig, retry lohnt", nil, ""); err != nil {
 		t.Fatalf("requeue: %v", err)
 	}
 	var status, reason string
 	var attAttempts int
-	if err := lr.pool.QueryRow(ctx,
+	if err := e.pool.QueryRow(ctx,
 		`SELECT status::text, COALESCE(blocked_reason,'') FROM repair_cases WHERE id=$1`, caseID).
 		Scan(&status, &reason); err != nil {
 		t.Fatal(err)
@@ -296,7 +296,7 @@ func TestRepairRequeueIT(t *testing.T) {
 	if status != "queued" || reason != "" {
 		t.Fatalf("requeue must clear the park: got %s/%q, want queued/\"\"", status, reason)
 	}
-	if err := lr.pool.QueryRow(ctx,
+	if err := e.pool.QueryRow(ctx,
 		`SELECT repair_attempts FROM zotero_attachments WHERE id=(SELECT attachment_id FROM repair_cases WHERE id=$1)`,
 		caseID).Scan(&attAttempts); err != nil {
 		t.Fatal(err)
@@ -305,14 +305,14 @@ func TestRepairRequeueIT(t *testing.T) {
 		t.Fatalf("requeue must reset the loop guard, repair_attempts=%d", attAttempts)
 	}
 	// The previously impossible claim now works and burns exactly one attempt.
-	got, err := lr.rep.ClaimRepairCase(ctx, caseID)
+	got, err := e.store.ClaimRepairCase(ctx, caseID)
 	if err != nil || got.Status != RepairInRepair {
 		t.Fatalf("claim after requeue: err=%v status=%s", err, got.Status)
 	}
 
 	// Audit trail carries the requeue with its reason.
 	var n int
-	if err := lr.pool.QueryRow(ctx,
+	if err := e.pool.QueryRow(ctx,
 		`SELECT count(*) FROM zotero_write_audit WHERE case_id=$1 AND action='repair-requeue'`,
 		caseID).Scan(&n); err != nil {
 		t.Fatal(err)
@@ -322,24 +322,24 @@ func TestRepairRequeueIT(t *testing.T) {
 	}
 
 	// in_repair (mid-flight) refuses — the same nail as BlockRepairCase.
-	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, caseID, "nochmal", nil, ""); err == nil {
+	if err := e.store.RequeueRepairCaseWithOrphanAck(ctx, caseID, "nochmal", nil, ""); err == nil {
 		t.Fatal("requeue must refuse in_repair")
 	}
 
 	// #284 review: the analysis_patch surface — a parked case re-armed with
 	// the OCR override carries it in analysis (the invoker keys budget and
 	// --ocr-mode on exactly these fields), and the patch is audited.
-	caseID2 := seedRepairCase(t, lr, "ATT-RQ2", 0, false)
-	if _, err := lr.pool.Exec(ctx,
+	caseID2 := seedRepairCase(t, e, "ATT-RQ2", 0, false)
+	if _, err := e.pool.Exec(ctx,
 		`UPDATE repair_cases SET status='failed', blocked_reason='no-healable-defect-evidenced: IT' WHERE id=$1`, caseID2); err != nil {
 		t.Fatal(err)
 	}
-	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, caseID2, "force-Modus für kaputte Textschicht (#284)",
+	if err := e.store.RequeueRepairCaseWithOrphanAck(ctx, caseID2, "force-Modus für kaputte Textschicht (#284)",
 		json.RawMessage(`{"ocr": {"mode": "force", "lang": "eng"}}`), ""); err != nil {
 		t.Fatalf("requeue with patch: %v", err)
 	}
 	var analysis string
-	if err := lr.pool.QueryRow(ctx, `SELECT analysis::text FROM repair_cases WHERE id=$1`, caseID2).Scan(&analysis); err != nil {
+	if err := e.pool.QueryRow(ctx, `SELECT analysis::text FROM repair_cases WHERE id=$1`, caseID2).Scan(&analysis); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(analysis, `"mode"`) || !strings.Contains(analysis, `"force"`) {
@@ -348,14 +348,14 @@ func TestRepairRequeueIT(t *testing.T) {
 
 	// #284: a REJECTED manual-track case is re-armable too (the operator
 	// path for a broken-text-layer case that never auto-queued).
-	caseID3 := seedRepairCase(t, lr, "ATT-RQ3", 0, false)
-	if _, err := lr.pool.Exec(ctx, `UPDATE repair_cases SET status='rejected' WHERE id=$1`, caseID3); err != nil {
+	caseID3 := seedRepairCase(t, e, "ATT-RQ3", 0, false)
+	if _, err := e.pool.Exec(ctx, `UPDATE repair_cases SET status='rejected' WHERE id=$1`, caseID3); err != nil {
 		t.Fatal(err)
 	}
-	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, caseID3, "manuell gereiht", json.RawMessage(`{"ocr":{"mode":"force"}}`), ""); err != nil {
+	if err := e.store.RequeueRepairCaseWithOrphanAck(ctx, caseID3, "manuell gereiht", json.RawMessage(`{"ocr":{"mode":"force"}}`), ""); err != nil {
 		t.Fatalf("requeue from rejected must work since #284: %v", err)
 	}
-	if err := lr.rep.RequeueRepairCaseWithOrphanAck(ctx, caseID3, "nochmal", nil, ""); err == nil {
+	if err := e.store.RequeueRepairCaseWithOrphanAck(ctx, caseID3, "nochmal", nil, ""); err == nil {
 		t.Fatal("requeue from queued (not parked) must refuse")
 	}
 }

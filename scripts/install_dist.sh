@@ -135,7 +135,8 @@ fixer)
     confirm_install fixer "$art" \
         "target:   $target/{env,app}" \
         "current:  $ROOT/fixer/current -> $version" \
-        "shim:     $ROOT/bin/axiom-fixer" \
+        "shim:     $ROOT/bin/axiom-repair-worker (F08 #302 canonical name)" \
+        "alias:    $ROOT/bin/axiom-fixer (compat wrapper, ADR 0001 §4)" \
         "post-install fixup: env/bin/conda-unpack (once, bundled interpreter)" \
         "OCR toolchain bundled (#286): tesseract+gs+tessdata(deu+eng) in env/ — no host PATH"
     mkdir -p "$ROOT/fixer" "$ROOT/bin"
@@ -148,17 +149,29 @@ fixer)
     "$target/env/bin/python" "$target/env/bin/conda-unpack"
     # smoke from a NEUTRAL cwd (tests the env, not a source tree — #209 lesson)
     (cd / && "$target/env/bin/python" -c 'import pymupdf; print("pymupdf", __import__("pymupdf").__version__)')
+    # F08 (#302, ADR 0001 §4): the canonical worker name is
+    # axiom-repair-worker; the legacy axiom-fixer stays as a compat
+    # wrapper (warns once, delegates). Both are locking wrappers, not
+    # bare execs (#206): the invoker and manual operator runs must
+    # serialize per key — the shipped fix.sh carries the per-key lockdir
+    # + 30-min timeout; a bare python exec would bypass both.
+    cat >"$ROOT/bin/axiom-repair-worker" <<EOF
+#!/bin/sh
+exec "$ROOT/fixer/current/fix.sh" "\$@"
+EOF
+    chmod +x "$ROOT/bin/axiom-repair-worker"
     cat >"$ROOT/bin/axiom-fixer" <<EOF
 #!/bin/sh
-# Locking wrapper, not a bare exec (#206): the invoker and manual operator
-# runs must serialize per key — the shipped fix.sh carries the per-key
-# lockdir + 30-min timeout; a bare python exec would bypass both.
-exec "$ROOT/fixer/current/fix.sh" "\$@"
+# Compat alias (ADR 0001 §4, functional through 0.2.x): delegates to the
+# canonical axiom-repair-worker. Warns exactly once per invocation.
+echo "axiom: axiom-fixer is deprecated — use axiom-repair-worker (ADR 0001: docs/adr/0001-canonical-naming.md)" >&2
+exec "$ROOT/bin/axiom-repair-worker" "\$@"
 EOF
     chmod +x "$ROOT/bin/axiom-fixer"
     ln -sfn "$version" "$ROOT/fixer/current"
-    echo "installed: $ROOT/bin/axiom-fixer ($version)"
-    echo "rollback:  ln -sfn <prev-version> $ROOT/fixer/current (fixer is event-driven: scripts/fix.sh picks up current on next invocation)"
+    echo "installed: $ROOT/bin/axiom-repair-worker ($version)"
+    echo "alias:     $ROOT/bin/axiom-fixer warns + delegates (removal earliest in an announced major)"
+    echo "rollback:  ln -sfn <prev-version> $ROOT/fixer/current (repair worker is event-driven: fix.sh picks up current on next invocation)"
     ;;
 *)
     echo "unknown component '$component' (rag|runner|fixer)"

@@ -1,4 +1,4 @@
-package fixerinvoker
+package repair
 
 import (
 	"context"
@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
 
 // The unit tier (no DB): config clamping, output bounding, and the
@@ -37,7 +35,7 @@ func writeScript(t *testing.T, body string) string {
 func TestConfigClamps(t *testing.T) {
 	cfg := Config{Concurrency: 0}
 	cfg.fillDefaults()
-	if cfg.Concurrency != 1 || cfg.Command != "/opt/axiom/bin/axiom-fixer" ||
+	if cfg.Concurrency != 1 || cfg.Command != CanonicalWorkerCommand ||
 		cfg.Timeout != 35*time.Minute || cfg.StaleAfter != 40*time.Minute || cfg.Interval != 30*time.Second {
 		t.Fatalf("defaults wrong: %+v", cfg)
 	}
@@ -57,8 +55,8 @@ func TestConfigClamps(t *testing.T) {
 
 func TestRunFixerExitCodeMapping(t *testing.T) {
 	inv := &Invoker{cfg: unitCfg(t, writeScript(t, "echo boom; exit 7\n"), time.Minute)}
-	rc, _, err := inv.runFixer(context.Background(), &repo.RepairItem{AttachmentKey: "K1"})
-	if rc != 7 || !strings.Contains(err.Error(), "fixer exit 7") || !strings.Contains(err.Error(), "boom") {
+	rc, _, err := inv.runWorker(context.Background(), &RepairItem{AttachmentKey: "K1"})
+	if rc != 7 || !strings.Contains(err.Error(), "exit 7") || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("exit mapping: rc=%d err=%v", rc, err)
 	}
 }
@@ -66,7 +64,7 @@ func TestRunFixerExitCodeMapping(t *testing.T) {
 func TestRunFixerTimeoutKills(t *testing.T) {
 	inv := &Invoker{cfg: unitCfg(t, writeScript(t, "sleep 30\n"), 150*time.Millisecond)}
 	start := time.Now()
-	rc, _, err := inv.runFixer(context.Background(), &repo.RepairItem{AttachmentKey: "K1"})
+	rc, _, err := inv.runWorker(context.Background(), &RepairItem{AttachmentKey: "K1"})
 	if rc != -1 || err == nil || !strings.Contains(err.Error(), "timeout") {
 		t.Fatalf("timeout must map to rc=-1 + timeout reason, got rc=%d err=%v", rc, err)
 	}
@@ -77,7 +75,7 @@ func TestRunFixerTimeoutKills(t *testing.T) {
 
 func TestRunFixerSpawnError(t *testing.T) {
 	inv := &Invoker{cfg: unitCfg(t, "/nonexistent/fixer-xyz", time.Minute)}
-	rc, _, err := inv.runFixer(context.Background(), &repo.RepairItem{AttachmentKey: "K1"})
+	rc, _, err := inv.runWorker(context.Background(), &RepairItem{AttachmentKey: "K1"})
 	if rc != -1 || err == nil || !strings.Contains(err.Error(), "spawn") {
 		t.Fatalf("spawn error: rc=%d err=%v", rc, err)
 	}
@@ -94,15 +92,15 @@ func TestLastLinesBoundsOutput(t *testing.T) {
 
 func TestFixerArgsRouteEPUB(t *testing.T) {
 	// PDF case: byte-identical to the pre-#205 shape.
-	pdf := fixerArgs(&repo.RepairItem{AttachmentKey: "K1", ContentType: "application/pdf"})
+	pdf := workerArgs(buildRequest(&RepairItem{AttachmentKey: "K1", ContentType: "application/pdf"}))
 	if len(pdf) != 2 || pdf[0] != "K1" || pdf[1] != "--apply" {
 		t.Fatalf("pdf args must stay [key --apply], got %v", pdf)
 	}
 	// EPUB case: format arm + local source (file:// stripped).
-	epub := fixerArgs(&repo.RepairItem{
+	epub := workerArgs(buildRequest(&RepairItem{
 		AttachmentKey: "K2", ContentType: "application/epub+zip",
 		LocalPath: "file:///opt/data/x.epub",
-	})
+	}))
 	want := []string{"K2", "--apply", "--format", "epub", "--source", "/opt/data/x.epub"}
 	if len(epub) != len(want) {
 		t.Fatalf("epub args = %v, want %v", epub, want)
@@ -112,10 +110,10 @@ func TestFixerArgsRouteEPUB(t *testing.T) {
 			t.Fatalf("epub args = %v, want %v", epub, want)
 		}
 	}
-	if n := repairArtifactName(&repo.RepairItem{ContentType: "application/epub+zip"}); n != "work.epub" {
+	if n := repairArtifactName(&RepairItem{ContentType: "application/epub+zip"}); n != "work.epub" {
 		t.Fatalf("epub artifact = %q, want work.epub", n)
 	}
-	if n := repairArtifactName(&repo.RepairItem{ContentType: "application/pdf"}); n != "work.pdf" {
+	if n := repairArtifactName(&RepairItem{ContentType: "application/pdf"}); n != "work.pdf" {
 		t.Fatalf("pdf artifact = %q, want work.pdf", n)
 	}
 }
@@ -220,8 +218,8 @@ func TestHaltReasonNamesTheActualGround(t *testing.T) {
 
 // --- #284: OCR-class routing, budgets, language, mode separation ---------
 
-func mkItem(analysis string, lang string) *repo.RepairItem {
-	return &repo.RepairItem{
+func mkItem(analysis string, lang string) *RepairItem {
+	return &RepairItem{
 		AttachmentKey: "KEY1",
 		ContentType:   "application/pdf",
 		Language:      lang,
@@ -280,7 +278,7 @@ func TestOCRLanguagePrecedence(t *testing.T) {
 // scans (plain OCR) and broken text layers (rasterize away).
 func TestFixerArgsOCR(t *testing.T) {
 	// pure scan: language only, NO force
-	args := fixerArgs(mkItem(`{"pagination_state": "needs_ocr"}`, "de"))
+	args := workerArgs(buildRequest(mkItem(`{"pagination_state": "needs_ocr"}`, "de")))
 	if !slices.Contains(args, "--lang") || !slices.Contains(args, "deu") {
 		t.Fatalf("pure scan args missing --lang deu: %v", args)
 	}
@@ -288,7 +286,7 @@ func TestFixerArgsOCR(t *testing.T) {
 		t.Fatalf("pure scan must NOT force: %v", args)
 	}
 	// broken text layer: force
-	args = fixerArgs(mkItem(`{"ocr": {"mode": "force"}}`, "de"))
+	args = workerArgs(buildRequest(mkItem(`{"ocr": {"mode": "force"}}`, "de")))
 	if !slices.Contains(args, "--ocr-mode") || !slices.Contains(args, "force") {
 		t.Fatalf("force case args missing --ocr-mode force: %v", args)
 	}
@@ -337,7 +335,7 @@ func TestRunFixerOCRBudgetEnv(t *testing.T) {
 		Concurrency: 1,
 	}, Deps{}, nil)
 
-	_, out, err := inv.runFixer(context.Background(), mkItem(`{"pagination_state": "needs_ocr"}`, "de"))
+	_, out, err := inv.runWorker(context.Background(), mkItem(`{"pagination_state": "needs_ocr"}`, "de"))
 	if err != nil {
 		t.Fatalf("ocr run: %v", err)
 	}
@@ -345,7 +343,7 @@ func TestRunFixerOCRBudgetEnv(t *testing.T) {
 		t.Fatalf("OCR-class item must receive AXIOM_FIX_SH_TIMEOUT=5100 (90m-5m), got %q", strings.TrimSpace(out))
 	}
 
-	_, out, err = inv.runFixer(context.Background(), mkItem(`{}`, "de"))
+	_, out, err = inv.runWorker(context.Background(), mkItem(`{}`, "de"))
 	if err != nil {
 		t.Fatalf("plain run: %v", err)
 	}
@@ -385,7 +383,7 @@ func TestHaltMissingOCRToolingParksAsNeedsEvidence(t *testing.T) {
 // The file is the SINGLE source: the build reads it for the prune, this
 // test reads it for the map. Any new language must be added THERE.
 func TestOCRLanguageAllowlistMatchesMap(t *testing.T) {
-	raw, err := os.ReadFile("../../../scripts/lib/ocr_languages.txt")
+	raw, err := os.ReadFile("../../../../scripts/lib/ocr_languages.txt")
 	if err != nil {
 		t.Fatalf("allowlist file unreadable: %v", err)
 	}

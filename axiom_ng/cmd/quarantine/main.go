@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repair"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 )
 
 func main() {

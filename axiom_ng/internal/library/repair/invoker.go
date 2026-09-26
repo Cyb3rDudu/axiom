@@ -1,29 +1,31 @@
-// Package fixerinvoker — #206: the mail-ingest-side fixer caller.
+// invoker.go — the Library-owned repair orchestrator (F08 #302, born as
+// the #206 mail-ingest-side fixer caller in internal/fixerinvoker).
 //
-// Owner contract: the fixer is an EVENT RUNNER (no launchd, no KeepAlive);
-// this invoker is its only systematic caller. It polls the repair_cases
-// queue (status queued), claims one case at a time (bounded concurrency),
-// invokes the fixer wrapper (scripts/fix.sh / /opt/axiom/bin/axiom-fixer)
-// ONCE per attachment key, and drives the case through the existing #184
-// state machine:
+// Owner contract: the repair worker is an EVENT RUNNER (no launchd, no
+// KeepAlive); this orchestrator is its only systematic caller. It polls
+// the repair_cases queue (status queued), claims one case at a time
+// (bounded concurrency), executes the isolated axiom-repair-worker ONCE
+// per attachment key — strictly behind the RepairExecutor seam — and
+// drives the case through the #184 state machine this package owns:
 //
-//	queued →(claim)→ in_repair →(fix.sh exit 0 + healed pdf)→ healed
+//	queued →(claim)→ in_repair →(worker exit 0 + healed pdf)→ healed
 //	                              →(non-zero/timeout)→ queued (retry) | failed
 //
 // Crash-safety (no new crash-loop class, owner nail 5):
-//   - the invoker NEVER dies on a hung fixer: every invocation runs under
-//     its own context timeout (a backstop ABOVE fix.sh's built-in 30-min
+//   - the orchestrator NEVER dies on a hung worker: every execution runs
+//     under its own budget (a backstop ABOVE the wrapper's built-in 30-min
 //     kill, so the lockdir normally does the reaping) and a failing or
 //     panicking case is logged and failed/requeued, never propagated;
-//   - a dead invoker loses no case: the queue lives in the DB; stale
+//   - a dead orchestrator loses no case: the queue lives in the DB; stale
 //     in_repair cases (claim older than the runtime window) are requeued
 //     on the next start — the dispatcher lease-recovery pattern. The
 //     per-attachment loop guard still caps total attempts.
 //
-// The per-key lockdir inside fix.sh additionally serializes against
-// NON-invoker concurrency (an operator running a manual repair): such an
-// invocation exits 3 and is treated as an ordinary retryable failure.
-package fixerinvoker
+// The per-key lockdir inside the worker wrapper additionally serializes
+// against NON-orchestrator concurrency (an operator running a manual
+// repair): such an invocation exits 3 and is treated as an ordinary
+// retryable failure.
+package repair
 
 import (
 	"context"
@@ -32,27 +34,24 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	stdsync "sync"
-	"syscall"
 	"time"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repair"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
-	sync "github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 	"github.com/jackc/pgx/v5"
 )
 
-// Config bounds one invoker run.
+// Config bounds one orchestrator run.
 type Config struct {
-	// Command is the fixer wrapper invoked as: Command <key> --apply.
-	// Default "/opt/axiom/bin/axiom-fixer" (same wrapper as scripts/fix.sh).
+	// Command is the worker wrapper executed as: Command <key> --apply.
+	// Default CanonicalWorkerCommand (axiom-repair-worker; legacy
+	// axiom-fixer fallback in LocalExecutor).
 	Command string
-	// WorkRoot is the fixer's WORK_ROOT: the healed pdf of a key is read
-	// from WorkRoot/<key>/work.pdf after a successful invocation.
-	// Default ~/.local/state/axiom/runs (fixer default).
+	// WorkRoot is the worker's WORK_ROOT: the healed pdf of a key is read
+	// from WorkRoot/<key>/work.pdf after a successful execution.
+	// Default ~/.local/state/axiom/runs (worker default).
 	WorkRoot string
 	// Interval is the queue poll interval. Default 30s.
 	Interval time.Duration
@@ -87,7 +86,10 @@ type Config struct {
 
 func (c *Config) fillDefaults() {
 	if c.Command == "" {
-		c.Command = "/opt/axiom/bin/axiom-fixer"
+		// F08 (#302, ADR 0001 §4): the canonical worker name; the local
+		// executor falls back to the legacy axiom-fixer shim on installs
+		// that have not re-run install_dist.sh yet (0.2.x: swap optional).
+		c.Command = CanonicalWorkerCommand
 	}
 	if c.WorkRoot == "" {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -122,30 +124,25 @@ func (c *Config) fillDefaults() {
 	}
 }
 
-// Deps are the invoker's outward effects. Apply is the shared custody
-// sequence (repair.ApplyDeps) so tests can fake the Zotero writes. Sync is
-// the #282 post-heal auto-sync: after a successful heal the invoker runs a
-// targeted sync (include = the healed document) so the healed attachment
-// enqueues and processes without operator action. nil disables the hook
-// (log-only — the wave gate surfaces the stranded heal, see WaveRepairGate).
+// Deps are the orchestrator's outward effects. Apply is the shared custody
+// sequence (ApplyDeps in this package) so tests can fake the Zotero writes.
+// Sync is the #282 post-heal auto-sync: after a successful heal the
+// orchestrator runs a targeted sync (include = the healed document) so the
+// healed attachment enqueues and processes without operator action. nil
+// disables the hook (log-only — the wave gate surfaces the stranded heal,
+// see Store.WaveRepairGate).
 //
-// Exec (#298 composition root) is the fixer-executor PORT: nil binds the
-// local binding (runFixerCmd's process-group-hardened exec); the
-// composition root's fake-binding proof and any future transport inject
-// here without touching the state machine.
+// Executor (F08 #302) is the worker-execution PORT: nil binds the local
+// binding (LocalExecutor over the configured worker command — the
+// process-group-hardened exec); the composition root's fake-binding proof
+// and any future transport inject here without touching the state machine.
 type Deps struct {
-	Rep            *repo.Repo
-	Apply          repair.ApplyDeps
+	Store          *Store
+	Apply          ApplyDeps
 	QuarantineRoot string
 	Sync           HealSyncer
-	Exec           FixerExec
+	Executor       RepairExecutor
 }
-
-// FixerExec runs ONE fixer-wrapper invocation (command + args, budget,
-// optional extra env) and reports (exit code, captured output tail, error).
-// The local binding is Invoker.runFixerCmd — keep its process-group kill and
-// output-tail semantics when adding new bindings.
-type FixerExec func(ctx context.Context, command string, args []string, budget time.Duration, extraEnv []string) (int, string, error)
 
 // HealSyncer is the post-heal sync surface (#282). *sync.Service satisfies
 // it — Run with a one-run include override enqueues exactly the healed
@@ -168,11 +165,11 @@ type Invoker struct {
 	stopped chan struct{}
 }
 
-// New builds an invoker (cfg defaults are filled here).
+// New builds an orchestrator (cfg defaults are filled here).
 func New(cfg Config, deps Deps, logger *log.Logger) *Invoker {
 	cfg.fillDefaults()
 	if logger == nil {
-		logger = log.New(os.Stderr, "fixer-invoker ", log.LstdFlags)
+		logger = log.New(os.Stderr, "repair-invoker ", log.LstdFlags)
 	}
 	return &Invoker{cfg: cfg, deps: deps, logger: logger, sem: make(chan struct{}, cfg.Concurrency), stopped: make(chan struct{})}
 }
@@ -217,7 +214,7 @@ func (inv *Invoker) Run(ctx context.Context) error {
 }
 
 func (inv *Invoker) reapStale(ctx context.Context) {
-	n, err := inv.deps.Rep.RequeueStaleRepairCases(ctx, inv.cfg.StaleAfter, inv.cfg.OCRStaleAfter)
+	n, err := inv.deps.Store.RequeueStaleRepairCases(ctx, inv.cfg.StaleAfter, inv.cfg.OCRStaleAfter)
 	if err != nil {
 		inv.logger.Printf("requeue-stale: %v", err)
 		return
@@ -228,7 +225,7 @@ func (inv *Invoker) reapStale(ctx context.Context) {
 }
 
 func (inv *Invoker) pollOnce(ctx context.Context) {
-	cases, err := inv.deps.Rep.ListRepairQueue(ctx)
+	cases, err := inv.deps.Store.ListRepairQueue(ctx)
 	if err != nil {
 		inv.logger.Printf("queue: %v", err)
 		return
@@ -259,12 +256,12 @@ func (inv *Invoker) pollOnce(ctx context.Context) {
 // it is still queued (BlockRepairCase refuses in_repair by design nail —
 // a mid-flight case is never touched from outside).
 func (inv *Invoker) processCase(ctx context.Context, caseID string) {
-	item, err := inv.deps.Rep.RepairCaseItem(ctx, caseID)
+	item, err := inv.deps.Store.RepairCaseItem(ctx, caseID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// attachment/document gone at the source — park, don't re-serve
 			// forever (W3a rule mirrored from the queue listing)
-			if berr := inv.deps.Rep.BlockRepairCase(ctx, caseID, "attachment-gone"); berr != nil {
+			if berr := inv.deps.Store.BlockRepairCase(ctx, caseID, "attachment-gone"); berr != nil {
 				inv.logger.Printf("case %s: attachment-gone block: %v", caseID, berr)
 			}
 			return
@@ -275,13 +272,13 @@ func (inv *Invoker) processCase(ctx context.Context, caseID string) {
 
 	// claim: queued → in_repair (loop guard escalation included — a case
 	// past max attempts is blocked_for_dudu by the claim itself)
-	if _, err := inv.deps.Rep.ClaimRepairCase(ctx, caseID); err != nil {
+	if _, err := inv.deps.Store.ClaimRepairCase(ctx, caseID); err != nil {
 		inv.logger.Printf("case %s: claim: %v", caseID, err)
 		return
 	}
 
 	inv.logger.Printf("case %s: invoking fixer for key %s", caseID, item.AttachmentKey)
-	rc, out, runErr := inv.runFixer(ctx, item)
+	rc, out, runErr := inv.runWorker(ctx, item)
 
 	if rc == 0 && runErr == nil {
 		inv.handleSuccess(ctx, caseID, item, out)
@@ -290,26 +287,20 @@ func (inv *Invoker) processCase(ctx context.Context, caseID string) {
 	inv.handleFailure(ctx, caseID, rc, runErr)
 }
 
-// fixerArgs builds the wrapper arguments for one repair item (#220: EPUB
-// cases route through fix.sh's --format epub arm with the local source
-// path; PDF cases stay byte-identical to the pre-#205 shape).
-// #284: OCR-class PDF cases append the language (metadata default, mapped
-// to tesseract codes) and the per-case force mode (analysis override —
-// broken text layers rasterize away their defective vector text).
-func fixerArgs(item *repo.RepairItem) []string {
-	args := []string{item.AttachmentKey, "--apply"}
+// buildRequest assembles the worker execution for one item: format,
+// source, OCR routing (#284: metadata default mapped to tesseract codes,
+// per-case override beats it) — the invocation contract fix.sh established
+// (#205/#220), now carried by RepairRequest instead of CLI args.
+func buildRequest(item *RepairItem) RepairRequest {
+	req := RepairRequest{AttachmentKey: item.AttachmentKey}
 	if strings.Contains(item.ContentType, "epub") {
-		args = append(args, "--format", "epub",
-			"--source", strings.TrimPrefix(item.LocalPath, "file://"))
-		return args
+		req.Format = "epub"
+		req.SourcePath = strings.TrimPrefix(item.LocalPath, "file://")
+		return req
 	}
-	if lang := ocrLanguage(item); lang != "" {
-		args = append(args, "--lang", lang)
-	}
-	if ocrForceMode(item) {
-		args = append(args, "--ocr-mode", "force")
-	}
-	return args
+	req.Language = ocrLanguage(item)
+	req.OCRForce = ocrForceMode(item)
+	return req
 }
 
 // ocrAnalysis is the OCR-relevant slice of a repair case's analysis JSON.
@@ -321,7 +312,7 @@ type ocrAnalysis struct {
 	PaginationState string `json:"pagination_state"`
 }
 
-func parseOCRAnalysis(item *repo.RepairItem) ocrAnalysis {
+func parseOCRAnalysis(item *RepairItem) ocrAnalysis {
 	var a ocrAnalysis
 	_ = json.Unmarshal(item.Analysis, &a)
 	return a
@@ -336,7 +327,7 @@ func parseOCRAnalysis(item *repo.RepairItem) ocrAnalysis {
 // the dispatcher's preflight writes it) or a per-case ocr override.
 // Renaming the finding string (#283) cannot break this predicate: it keys
 // on the stable English analysis field, not the operator-facing label.
-func ocrCase(item *repo.RepairItem) bool {
+func ocrCase(item *RepairItem) bool {
 	a := parseOCRAnalysis(item)
 	return a.PaginationState == "needs_ocr" || a.OCR.Mode != "" || a.OCR.Lang != ""
 }
@@ -344,7 +335,7 @@ func ocrCase(item *repo.RepairItem) bool {
 // ocrForceMode reports the per-case force override (#284): a broken text
 // layer (Reder-class word segmentation) must be rasterized away even
 // though a text layer exists. Carried as analysis.ocr.mode = "force".
-func ocrForceMode(item *repo.RepairItem) bool {
+func ocrForceMode(item *RepairItem) bool {
 	return parseOCRAnalysis(item).OCR.Mode == "force"
 }
 
@@ -395,7 +386,7 @@ func tesseractLang(docLanguage string) string {
 // ocrLanguage resolves the OCR language for a case (#284): per-case
 // override (analysis.ocr.lang) beats the document metadata default; both
 // beat the fixer's internal owner default (deu).
-func ocrLanguage(item *repo.RepairItem) string {
+func ocrLanguage(item *RepairItem) string {
 	if !ocrCase(item) {
 		return ""
 	}
@@ -408,109 +399,63 @@ func ocrLanguage(item *repo.RepairItem) string {
 
 // repairArtifactName is the healed file the wrapper must leave under
 // WorkRoot/<key>/ after a successful run — work.epub for EPUB cases.
-func repairArtifactName(item *repo.RepairItem) string {
+func repairArtifactName(item *RepairItem) string {
 	if strings.Contains(item.ContentType, "epub") {
 		return "work.epub"
 	}
 	return "work.pdf"
 }
 
-// runFixer executes Command <key> --apply under the backstop timeout.
-// It returns (exit code, captured output tail, error) — the output feeds
+// runWorker executes one case through the RepairExecutor seam. It
+// returns (exit code, captured output tail, error) — the output feeds
 // the HALT-terminal classification in handleSuccess (#253).
-// The fixer runs in its OWN process group and the backstop kills the whole
-// group: a wedged wrapper's python child must not survive as an orphan on
-// the same key (fix.sh's stale-lock recovery would let the immediate retry
-// spawn a SECOND agent on the same working directory).
-func (inv *Invoker) runFixer(ctx context.Context, item *repo.RepairItem) (int, string, error) {
-	// #284/#293: OCR-class repairs run under their OWN wedge-guard budget
-	// (the rebuild takes as long as it takes — 10m or 10h; the backstop
-	// only catches a WEDGED process). fix.sh's timeout binary stays the
-	// primary killer — the Go backstop sits ABOVE it with slack (same
-	// layering as the normal Timeout over fix.sh's 30m default).
-	budget := inv.cfg.Timeout
+// #284/#293: OCR-class repairs run under their OWN wedge-guard budget
+// (the rebuild takes as long as it takes — 10m or 10h; the backstop
+// only catches a WEDGED process). The worker wrapper's own timeout
+// binary stays the primary killer — the Go backstop sits ABOVE it with
+// slack (AXIOM_FIX_SH_TIMEOUT, set by the local executor; same layering
+// as the normal Timeout over the wrapper's 30m default).
+func (inv *Invoker) runWorker(ctx context.Context, item *RepairItem) (int, string, error) {
+	req := buildRequest(item)
+	req.Budget = inv.cfg.Timeout
 	if ocrCase(item) {
-		budget = inv.cfg.OCRTimeout
-		fixShBudget := budget - 5*time.Minute
-		if fixShBudget <= 0 {
-			fixShBudget = budget
-		}
-		inv.logger.Printf("case: key %s: OCR-class wedge-guard %s (fix.sh kills at %s) — no tempo limit, orphan prevention only", item.AttachmentKey, budget, fixShBudget)
-		cmdEnv := append(os.Environ(), fmt.Sprintf("AXIOM_FIX_SH_TIMEOUT=%d", int(fixShBudget.Seconds())))
-		return inv.exec(ctx, item, budget, cmdEnv)
+		// #293: OCR-class repairs run under their OWN wedge-guard budget
+		// (the rebuild takes as long as it takes — 10m or 10h; the
+		// backstop only catches a WEDGED process). The wrapper's timeout
+		// binary stays the primary killer — the Go backstop sits ABOVE it
+		// with 5m slack, handed down via AXIOM_FIX_SH_TIMEOUT (the
+		// class-coupled env: normal-class runs pass NOTHING and the
+		// wrapper's internal default applies — the pre-F08 layering
+		// contract, pinned by TestRunFixerOCRBudgetEnv).
+		req.Budget = inv.cfg.OCRTimeout
+		inv.logger.Printf("case: key %s: OCR-class wedge-guard %s (wrapper kills at %s) — no tempo limit, orphan prevention only", item.AttachmentKey, req.Budget, fixShBudget(req.Budget))
+		req.Env = append(os.Environ(), fmt.Sprintf("AXIOM_FIX_SH_TIMEOUT=%d", int(fixShBudget(req.Budget).Seconds())))
 	}
-	return inv.exec(ctx, item, budget, nil)
+	res, err := inv.executor().Execute(ctx, req)
+	return res.ExitCode, res.Output, err
 }
 
-// exec routes one invocation through the FixerExec port: the injected
-// binding (#298 composition root) or the local runFixerCmd.
-func (inv *Invoker) exec(ctx context.Context, item *repo.RepairItem, budget time.Duration, extraEnv []string) (int, string, error) {
-	if inv.deps.Exec != nil {
-		return inv.deps.Exec(ctx, inv.cfg.Command, fixerArgs(item), budget, extraEnv)
+// fixShBudget is the slack-layered budget handed to the worker's own
+// timeout binary (#293: the Go backstop sits ABOVE it).
+func fixShBudget(budget time.Duration) time.Duration {
+	fb := budget - 5*time.Minute
+	if fb <= 0 {
+		return budget
 	}
-	return inv.runFixerCmd(ctx, item, budget, extraEnv)
+	return fb
 }
 
-// runFixerCmd executes Command <key> --apply under the given backstop
-// timeout (and optional extra environment). It returns (exit code,
-// captured output tail, error) — the output feeds the HALT-terminal
-// classification in handleSuccess (#253).
-// The fixer runs in its OWN process group and the backstop kills the whole
-// group: a wedged wrapper's python child must not survive as an orphan on
-// the same key (fix.sh's stale-lock recovery would let the immediate retry
-// spawn a SECOND agent on the same working directory).
-func (inv *Invoker) runFixerCmd(ctx context.Context, item *repo.RepairItem, budget time.Duration, extraEnv []string) (int, string, error) {
-	cctx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
-	cmd := exec.CommandContext(cctx, inv.cfg.Command, fixerArgs(item)...)
-	if extraEnv != nil {
-		cmd.Env = extraEnv
+// executor resolves the execution binding: the injected RepairExecutor
+// (F08 #302 — composition fake/transport bindings) or the local v1
+// adapter over the configured worker command.
+func (inv *Invoker) executor() RepairExecutor {
+	if inv.deps.Executor != nil {
+		return inv.deps.Executor
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.WaitDelay = 10 * time.Second // insurance: if a child ever double-forked, don't hang cmd.Run past the group kill
-	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			// negative pid = the whole process group
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-		return cmd.Process.Kill()
-	}
-	// bound the captured output: a chatty 30-min run must not balloon RSS —
-	// keep the LAST bytes (tail), errors point at the end of the log anyway
-	buf := &tailBuffer{max: 1 << 20}
-	cmd.Stdout, cmd.Stderr = buf, buf
-	err := cmd.Run()
-	out := buf.String()
-	if cctx.Err() == context.DeadlineExceeded {
-		return -1, out, fmt.Errorf("timeout nach %s (backstop): %s",
-			budget, lastLines([]byte(out)))
-	}
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return ee.ExitCode(), out, fmt.Errorf("fixer exit %d: %s", ee.ExitCode(), lastLines([]byte(out)))
-		}
-		return -1, out, fmt.Errorf("fixer spawn: %v: %s", err, lastLines([]byte(out)))
-	}
-	return 0, out, nil
+	return LocalExecutor{Command: inv.cfg.Command}
 }
 
-// tailBuffer keeps at most the last max bytes written to it.
-type tailBuffer struct {
-	max int
-	buf []byte
-}
-
-func (b *tailBuffer) Write(p []byte) (int, error) {
-	b.buf = append(b.buf, p...)
-	if len(b.buf) > b.max {
-		b.buf = b.buf[len(b.buf)-b.max:]
-	}
-	return len(p), nil
-}
-
-func (b *tailBuffer) String() string { return string(b.buf) }
-
-func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *repo.RepairItem, out string) {
+func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *RepairItem, out string) {
 	artifact := filepath.Join(inv.cfg.WorkRoot, item.AttachmentKey, repairArtifactName(item))
 	pdf, err := os.ReadFile(artifact)
 	if err != nil || len(pdf) == 0 {
@@ -519,7 +464,7 @@ func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *repo
 		// no-healable-defect-evidenced / needs-evidence) — never the old
 		// endless requeue. Anything unparsable keeps the retry policy.
 		if reason, ok := haltTerminalReason(out); ok {
-			if terr := inv.deps.Rep.MarkRepairFailed(ctx, caseID, reason); terr != nil {
+			if terr := inv.deps.Store.MarkRepairFailed(ctx, caseID, reason); terr != nil {
 				inv.logger.Printf("case %s: halt-terminal: %v", caseID, terr)
 			}
 			inv.logger.Printf("case %s: HALT terminally parked (%s)", caseID, reason)
@@ -528,7 +473,7 @@ func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *repo
 		inv.failOrRequeue(ctx, caseID, fmt.Sprintf("fixer exit 0 aber kein geheiltes Artefakt unter %s", artifact))
 		return
 	}
-	if _, err := repair.Apply(ctx, inv.deps.Apply, inv.deps.QuarantineRoot, repair.ApplyCase{
+	if _, err := Apply(ctx, inv.deps.Apply, inv.deps.QuarantineRoot, ApplyCase{
 		CaseID:        caseID,
 		AttachmentID:  item.AttachmentID,
 		AttachmentKey: item.AttachmentKey,
@@ -554,10 +499,10 @@ func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *repo
 // "sync → next document" step. Exactly ONE sync per heal (bounded by
 // construction: one call site, called once per healed case); the sync itself
 // is idempotent (content-hash dedup). A failed sync does NOT fail the heal
-// — the case is already healed; the wave gate (repo.WaveRepairGate) holds
+// — the case is already healed; the wave gate (Store.WaveRepairGate) holds
 // claims until the enqueue lands and the log names the document, so the
 // gap is operator-visible instead of a silent strand.
-func (inv *Invoker) postHealSync(ctx context.Context, item *repo.RepairItem) {
+func (inv *Invoker) postHealSync(ctx context.Context, item *RepairItem) {
 	if inv.deps.Sync == nil {
 		inv.logger.Printf("case %s: post-heal sync disabled (no syncer wired) — healed attachment %s waits for the next sync",
 			item.CaseID, item.AttachmentKey)
@@ -716,25 +661,15 @@ func firstLine(s string) string {
 }
 
 func (inv *Invoker) failOrRequeue(ctx context.Context, caseID, reason string) {
-	status, err := inv.deps.Rep.FailOrRequeueRepairCase(ctx, caseID, reason, 0)
+	status, err := inv.deps.Store.FailOrRequeueRepairCase(ctx, caseID, reason, 0)
 	if err != nil {
 		inv.logger.Printf("case %s: fail-or-requeue: %v", caseID, err)
 		return
 	}
 	switch status {
-	case repo.RepairQueued:
+	case RepairQueued:
 		inv.logger.Printf("case %s: failed → requeued for retry (%s)", caseID, reason)
-	case repo.RepairFailed:
+	case RepairFailed:
 		inv.logger.Printf("case %s: failed terminally, parked for dudu (%s)", caseID, reason)
 	}
-}
-
-// lastLines bounds fixer output in log/error lines.
-func lastLines(out []byte) string {
-	const max = 400
-	s := string(out)
-	if len(s) > max {
-		s = "…" + s[len(s)-max:]
-	}
-	return s
 }

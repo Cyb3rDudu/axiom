@@ -1,4 +1,4 @@
-package fixerinvoker
+package repair
 
 // The integration tier (AXIOM_TEST_DATABASE_URL gated, same proviso as the
 // repo/lease suites): drives one attachment event end-to-end through the
@@ -22,14 +22,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repair"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	axiomsync "github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 )
 
 type itEnv struct {
-	pool *pgxpool.Pool
-	rep  *repo.Repo
+	pool  *pgxpool.Pool
+	store *Store
 }
 
 func openDB(t *testing.T) *itEnv {
@@ -55,7 +53,7 @@ func openDB(t *testing.T) *itEnv {
 	if !containsTest(cur) {
 		t.Fatalf("refusing to run against non-test database %q", cur)
 	}
-	return &itEnv{pool: d.Pool(), rep: repo.New(d.Pool())}
+	return &itEnv{pool: d.Pool(), store: NewStore(d.Pool())}
 }
 
 func containsTest(name string) bool {
@@ -80,7 +78,7 @@ func (e *itEnv) seedCase(t *testing.T, attKey string) string {
 		srcID, "DOC-"+attKey).Scan(&docID); err != nil {
 		t.Fatal(err)
 	}
-	// a REAL source pdf: repair.Quarantine reads it during the custody run
+	// a REAL source pdf: Quarantine reads it during the custody run
 	srcPDF := filepath.Join(t.TempDir(), "src.pdf")
 	if err := os.WriteFile(srcPDF, []byte("%PDF-original"), 0o600); err != nil {
 		t.Fatal(err)
@@ -92,11 +90,11 @@ func (e *itEnv) seedCase(t *testing.T, attKey string) string {
 		RETURNING id::text`, srcID, docID, attKey, "DOC-"+attKey, srcPDF).Scan(&attID); err != nil {
 		t.Fatal(err)
 	}
-	c, _, err := e.rep.CreateRepairCase(ctx, attID, "", "reparierbar", []byte(`{}`))
+	c, _, err := e.store.CreateRepairCase(ctx, attID, docID, "reparierbar", []byte(`{}`))
 	if err != nil || c == nil {
 		t.Fatalf("CreateRepairCase: %v %v", err, c)
 	}
-	if err := e.rep.QueueRepairCase(ctx, c.ID, "reparierbar", []byte(`{}`)); err != nil {
+	if err := e.store.QueueRepairCase(ctx, c.ID, "reparierbar", []byte(`{}`)); err != nil {
 		t.Fatal(err)
 	}
 	return c.ID
@@ -125,7 +123,7 @@ func (e *itEnv) truncate(t *testing.T) {
 // quarantine runs for real against a temp root and the case-state/audit
 // methods go to the REAL repo — the DB transitions under test are real.
 type fakeApply struct {
-	rep *repo.Repo
+	store *Store
 
 	mu       sync.Mutex
 	calls    []string
@@ -135,7 +133,7 @@ type fakeApply struct {
 
 func (f *fakeApply) Quarantine(root, key, src string) (string, error) {
 	f.record("quarantine")
-	return repair.Quarantine(root, key, src)
+	return Quarantine(root, key, src)
 }
 func (f *fakeApply) DeleteAttachment(key string) error {
 	f.record("delete")
@@ -150,15 +148,15 @@ func (f *fakeApply) CreateAttachmentWithFile(parent, filename, contentType strin
 }
 func (f *fakeApply) MarkRepairFailed(ctx context.Context, caseID, reason string) error {
 	f.record("failed")
-	return f.rep.MarkRepairFailed(ctx, caseID, reason)
+	return f.store.MarkRepairFailed(ctx, caseID, reason)
 }
 func (f *fakeApply) MarkRepairHealed(ctx context.Context, caseID string) error {
 	f.record("healed")
-	return f.rep.MarkRepairHealed(ctx, caseID)
+	return f.store.MarkRepairHealed(ctx, caseID)
 }
 func (f *fakeApply) AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error {
 	f.record("audit:" + action)
-	return f.rep.AuditWrite(ctx, caseID, attachmentID, action, detail)
+	return f.store.AuditWrite(ctx, caseID, attachmentID, action, detail)
 }
 func (f *fakeApply) record(c string) {
 	f.mu.Lock()
@@ -181,14 +179,14 @@ func newTestInvoker(t *testing.T, e *itEnv, scriptBody string, timeout time.Dura
 	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+scriptBody), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fa := &fakeApply{rep: e.rep, qroot: t.TempDir()}
+	fa := &fakeApply{store: e.store, qroot: t.TempDir()}
 	inv := New(Config{
 		Command:     script,
 		WorkRoot:    out,
 		Interval:    10 * time.Millisecond,
 		Timeout:     timeout,
 		Concurrency: 1,
-	}, Deps{Rep: e.rep, Apply: fa, QuarantineRoot: fa.qroot}, nil)
+	}, Deps{Store: e.store, Apply: fa, QuarantineRoot: fa.qroot}, nil)
 	return inv, fa
 }
 
@@ -340,7 +338,7 @@ func TestRequeueStaleRepairCasesRecoversDeadInvoker(t *testing.T) {
 	inv, _ := newTestInvoker(t, e, "exit 0\n", time.Minute)
 	caseID := e.seedCase(t, "ATT-STALE1")
 	// simulate a dead invoker: claim, then age the claim beyond the window
-	if _, err := e.rep.ClaimRepairCase(context.Background(), caseID); err != nil {
+	if _, err := e.store.ClaimRepairCase(context.Background(), caseID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.pool.Exec(context.Background(),
@@ -353,7 +351,7 @@ func TestRequeueStaleRepairCasesRecoversDeadInvoker(t *testing.T) {
 		t.Fatalf("after reap: status=%s attempts=%d, want queued/1", status, attempts)
 	}
 	// fresh claims are NOT reaped (updated_at recent)
-	if _, err := e.rep.ClaimRepairCase(context.Background(), caseID); err != nil {
+	if _, err := e.store.ClaimRepairCase(context.Background(), caseID); err != nil {
 		t.Fatal(err)
 	}
 	inv.cfg.StaleAfter = time.Hour
@@ -405,7 +403,7 @@ func count(hay []string, needle string) int {
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
 
-var _ = repair.ApplyDeps(nil) // interface pin
+var _ = ApplyDeps(nil) // interface pin
 
 // TestInvokerLoopGuardEscalation — the escalation step of the contract:
 // with one attempt pre-spent on the attachment, the first failure requeues
@@ -425,7 +423,7 @@ func TestInvokerLoopGuardEscalation(t *testing.T) {
 
 	inv.processCase(context.Background(), caseID)
 	status, reason, _ := e.caseStatus(t, caseID)
-	if status != "queued" || !contains(reason, "fixer exit 9") {
+	if status != "queued" || !contains(reason, "exit 9") {
 		t.Fatalf("after 1st failure: status=%s reason=%q, want queued/requeued", status, reason)
 	}
 
@@ -606,7 +604,7 @@ func TestPostHealSyncZeroEnqueuedIsLoud(t *testing.T) {
 	if s, _, _ := e.caseStatus(t, caseID); s != "healed" {
 		t.Fatalf("case = %s, want healed (the heal itself succeeded)", s)
 	}
-	held, _, err := e.rep.WaveRepairGate(context.Background())
+	held, _, err := e.store.WaveRepairGate(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -669,7 +667,7 @@ func TestPostHealSyncFailureDoesNotFailHeal(t *testing.T) {
 		t.Fatalf("persistent failure must exhaust exactly 3 attempts, got %d", fs.count())
 	}
 	// the wave gate must hold: healed case, no job enqueued since
-	held, _, err := e.rep.WaveRepairGate(context.Background())
+	held, _, err := e.store.WaveRepairGate(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -689,16 +687,16 @@ func TestRequeueStaleRespectsOCRClassBudget(t *testing.T) {
 	e.truncate(t)
 	inv, _ := newTestInvoker(t, e, "exit 0\n", time.Minute)
 	// OCR-class analysis (pagination_state marker, #219 English key)
-	c, _, err := e.rep.CreateRepairCase(context.Background(), mustAttID(t, e, "ATT-OCRR1"), "", "reparierbar",
+	c, _, err := e.store.CreateRepairCase(context.Background(), mustAttID(t, e, "ATT-OCRR1"), "", "reparierbar",
 		json.RawMessage(`{"pagination_state": "needs_ocr"}`))
 	if err != nil || c == nil {
 		t.Fatalf("CreateRepairCase: %v %v", err, c)
 	}
-	if err := e.rep.QueueRepairCase(context.Background(), c.ID, "reparierbar",
+	if err := e.store.QueueRepairCase(context.Background(), c.ID, "reparierbar",
 		json.RawMessage(`{"pagination_state": "needs_ocr"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.rep.ClaimRepairCase(context.Background(), c.ID); err != nil {
+	if _, err := e.store.ClaimRepairCase(context.Background(), c.ID); err != nil {
 		t.Fatal(err)
 	}
 	// age the claim past the NORMAL window but inside the OCR window
