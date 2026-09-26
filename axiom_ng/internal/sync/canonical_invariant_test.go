@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"context"
 	"encoding/json"
 	"log"
@@ -16,11 +17,12 @@ func runCanon(t *testing.T, src zoteroprovider.Source, d *db.DB) (Result, error)
 	t.Helper()
 	ctx := context.Background()
 	repoObj := repo.New(d.Pool())
+	mir := mirror.New(repoObj)
 	svc := New(src, repoObj, baseOf(src), "users/0", log.Default())
 	// Ensure the source up front and register cleanup BEFORE the sync runs, so a
 	// failed run (e.g. a malformed-envelope abort) still removes its source and
 	// does not leak persistent rows into the shared test DB.
-	sourceID, err := repoObj.EnsureSource(ctx, baseOf(src), "users/0", src.ServerID())
+	sourceID, err := mir.EnsureSource(ctx, baseOf(src), "users/0", src.ServerID())
 	if err != nil {
 		t.Fatalf("ensure source: %v", err)
 	}
@@ -654,7 +656,7 @@ func TestCanonicalDeletedItemOnFallbackFullSnapshot(t *testing.T) {
 	if jobsAfter != jobsBefore {
 		t.Fatalf("deleting an item must not enqueue new jobs: before=%d after=%d", jobsBefore, jobsAfter)
 	}
-	cur, err := repo.New(d.Pool()).CanonicalCursor(ctx, srcID)
+	cur, err := mirror.New(repo.New(d.Pool())).CanonicalCursor(ctx, srcID)
 	if err != nil {
 		t.Fatal(err)
 	}

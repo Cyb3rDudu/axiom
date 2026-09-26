@@ -3,6 +3,7 @@
 package server
 
 import (
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,19 +15,18 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
 
 type stubSelection struct {
-	put      []repo.SelectionInput
-	collsPut []repo.CollectionSelectionInput
+	put      []mirror.SelectionInput
+	collsPut []mirror.CollectionSelectionInput
 	colls    map[string]string
 	mode     map[string]string
-	docs     []repo.ZoteroDocumentState
+	docs     []mirror.ZoteroDocumentState
 	err      error
 }
 
-func (s *stubSelection) SetSelectionBatch(ctx context.Context, docs []repo.SelectionInput, colls []repo.CollectionSelectionInput) error {
+func (s *stubSelection) SetSelectionBatch(ctx context.Context, docs []mirror.SelectionInput, colls []mirror.CollectionSelectionInput) error {
 	s.put = docs
 	s.collsPut = colls
 	for _, e := range docs {
@@ -54,22 +54,22 @@ func (s *stubSelection) CollectionSelectionModes(ctx context.Context) (map[strin
 	return s.colls, s.err
 }
 
-func (s *stubSelection) ResolveSelectionView(ctx context.Context) (*repo.ResolvedSelection, error) {
+func (s *stubSelection) ResolveSelectionView(ctx context.Context) (*mirror.ResolvedSelection, error) {
 	// Mirrors the real repo: the resolved view EXPANDS the stub's own
 	// collection state — a hardcoded empty list once hollowed out the
 	// witness's resolved leg (the exact wiring-gap class this feature ships).
-	out := &repo.ResolvedSelection{Documents: s.mode, Collections: []repo.ResolvedCollection{}}
+	out := &mirror.ResolvedSelection{Documents: s.mode, Collections: []mirror.ResolvedCollection{}}
 	for k, m := range s.colls {
-		out.Collections = append(out.Collections, repo.ResolvedCollection{CollectionKey: k, Mode: m, DocumentIDs: []string{}})
+		out.Collections = append(out.Collections, mirror.ResolvedCollection{CollectionKey: k, Mode: m, DocumentIDs: []string{}})
 	}
 	return out, s.err
 }
 
-func (s *stubSelection) ListZoteroDocuments(ctx context.Context, syncState string) ([]repo.ZoteroDocumentState, error) {
+func (s *stubSelection) ListZoteroDocuments(ctx context.Context, syncState string) ([]mirror.ZoteroDocumentState, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-	out := []repo.ZoteroDocumentState{}
+	out := []mirror.ZoteroDocumentState{}
 	for _, d := range s.docs {
 		if syncState == "" || syncState == d.SyncState {
 			out = append(out, d)
@@ -206,7 +206,7 @@ func TestSelectionFKMaps422(t *testing.T) {
 
 func TestDocumentsListing(t *testing.T) {
 	s := New(":0", nil)
-	stub := &stubSelection{mode: map[string]string{}, docs: []repo.ZoteroDocumentState{
+	stub := &stubSelection{mode: map[string]string{}, docs: []mirror.ZoteroDocumentState{
 		{DocumentID: "d1", Title: "Synced", SyncState: "synced", UpdatedAt: time.Now()},
 		{DocumentID: "d2", Title: "Held", SyncState: "held", UpdatedAt: time.Now(),
 			Outcome: "needs_ocr", OutcomeReason: "scan-ohne-textlayer: text-less scan — OCR rebuild heals it (scan_ocr_rebuild, #284)"},

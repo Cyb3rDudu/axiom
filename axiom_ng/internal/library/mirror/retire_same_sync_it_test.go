@@ -1,4 +1,4 @@
-package repo
+package mirror
 
 import (
 	"context"
@@ -16,12 +16,12 @@ import (
 // FOLLOW-UP syncs, and the Mullins run had exactly one). Move or remove the
 // reconcile step and this goes red.
 func TestSyncRetiresDeletedAttachmentSameTxIT(t *testing.T) {
-	lr := openLeaseDB(t)
+	lr := openMirrorDB(t)
 	lr.truncateFixtures(t)
 	ctx := context.Background()
 
 	ch := "zombiewitness-hash"
-	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zoteroprovider.live", libraryID: "lib-zombie",
+	attID, _ := lr.seed(t, mirrorSeedSpec{sourceBaseURL: "https://zoteroprovider.live", libraryID: "lib-zombie",
 		docKey: "ZOMBIEDOC", attKey: "ZOMBIEATT", contentHash: &ch}, "completed", 1)
 
 	var snapID string
@@ -69,14 +69,14 @@ func TestSyncRetiresDeletedAttachmentSameTxIT(t *testing.T) {
 		ops = append(ops, op)
 	}
 	rows.Close()
-	if len(ops) == 0 || ops[len(ops)-1] != OutboxOpDelete {
+	if len(ops) == 0 || ops[len(ops)-1] != "delete" {
 		t.Fatalf("retire muss OS-Tombstone planen, got %v", ops)
 	}
 }
 
 // sourceIDFor returns the seeded source id of the ONE source in the fixture
 // (seed() created exactly this one).
-func sourceIDFor(t *testing.T, lr *leaseRepo) string {
+func sourceIDFor(t *testing.T, lr *mirrorRepo) string {
 	t.Helper()
 	var id string
 	if err := lr.pool.QueryRow(context.Background(),

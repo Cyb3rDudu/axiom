@@ -1,7 +1,7 @@
 // Normalized document/attachment projections derived from the FULL active
 // state of zotero_items, with version guards, preferred/hash/stat writing and
 // SQL-NULL semantics.
-package repo
+package mirror
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -25,8 +26,8 @@ type CanonicalDocFlag struct {
 // fullProjections is the outcome of deriving projections from zotero_items.
 type fullProjections struct {
 	flags   []CanonicalDocFlag
-	pending []PendingJob
-	failed  []FailedJob
+	pending []repo.PendingJob
+	failed  []repo.FailedJob
 }
 
 // attMeta holds canonical attachment-item dimensions used for projection.
@@ -47,7 +48,7 @@ type attMeta struct {
 // guarded, preferred/hash/stats), marks documents that lost their preferred
 // processable attachment and removed attachments as deleted, and builds the
 // pending (or failed, for missing files) ingest jobs.
-func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID string, files map[string]AttachmentFileInfo) (fullProjections, error) {
+func (m *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID string, files map[string]AttachmentFileInfo) (fullProjections, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT zotero_key, COALESCE(parent_key,''), COALESCE(item_type,''), raw_data::text, raw_envelope::text, zotero_version, deleted
 		FROM zotero_items WHERE source_id=$1`, sourceID)
@@ -113,10 +114,10 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 			// deactivate any stale document + attachment projections so a former
 			// book does not keep an active, preferred projection after becoming
 			// a note. No-ops when no projection existed.
-			if err := r.deactivateDocument(ctx, tx, sourceID, parentKey); err != nil {
+			if err := m.deactivateDocument(ctx, tx, sourceID, parentKey); err != nil {
 				return fullProjections{}, err
 			}
-			if err := r.deactivateDocumentAttachments(ctx, tx, sourceID, parentKey); err != nil {
+			if err := m.deactivateDocumentAttachments(ctx, tx, sourceID, parentKey); err != nil {
 				return fullProjections{}, err
 			}
 			continue
@@ -127,15 +128,15 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 		if pref == nil {
 			// No active processable attachment remains: mark the doc projection
 			// deleted (along with any attachment projections).
-			if err := r.deactivateDocument(ctx, tx, sourceID, parentKey); err != nil {
+			if err := m.deactivateDocument(ctx, tx, sourceID, parentKey); err != nil {
 				return fullProjections{}, err
 			}
-			if err := r.deactivateDocumentAttachments(ctx, tx, sourceID, parentKey); err != nil {
+			if err := m.deactivateDocumentAttachments(ctx, tx, sourceID, parentKey); err != nil {
 				return fullProjections{}, err
 			}
 			continue
 		}
-		docID, err := r.ensureDocumentProjection(ctx, tx, sourceID, parentKey, p.version, p.nm)
+		docID, err := m.ensureDocumentProjection(ctx, tx, sourceID, parentKey, p.version, p.nm)
 		if err != nil {
 			return fullProjections{}, err
 		}
@@ -148,7 +149,7 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 			if lm == "" {
 				lm = "imported_file"
 			}
-			aid, err := r.upsertAttachmentProjection(ctx, tx, sourceID, docID, parentKey, att, deleted, lm)
+			aid, err := m.upsertAttachmentProjection(ctx, tx, sourceID, docID, parentKey, att, deleted, lm)
 			if err != nil {
 				return fullProjections{}, err
 			}
@@ -156,14 +157,14 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 		}
 		// Exactly one preferred per document.
 		fin := files[pref.Key]
-		if err := r.setPreferredWithStats(ctx, tx, sourceID, docID, pref, fin); err != nil {
+		if err := m.setPreferredWithStats(ctx, tx, sourceID, docID, pref, fin); err != nil {
 			return fullProjections{}, err
 		}
-		if err := r.clearSiblingPreferred(ctx, tx, sourceID, docID, pref.Key); err != nil {
+		if err := m.clearSiblingPreferred(ctx, tx, sourceID, docID, pref.Key); err != nil {
 			return fullProjections{}, err
 		}
 		if fin.Exists && fin.Hash != "" {
-			out.pending = append(out.pending, PendingJob{
+			out.pending = append(out.pending, repo.PendingJob{
 				SourceID: sourceID, DocumentID: docID, AttachmentID: attIDs[pref.Key], ContentHash: fin.Hash,
 			})
 		} else {
@@ -172,7 +173,7 @@ func (r *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 				code, msg = fin.ErrCode, fin.ErrMsg
 				retryable = fin.Retryable
 			}
-			out.failed = append(out.failed, FailedJob{
+			out.failed = append(out.failed, repo.FailedJob{
 				SourceID: sourceID, DocumentID: docID, AttachmentID: attIDs[pref.Key],
 				ErrorCode: code, ErrorMessage: msg, Retryable: retryable,
 			})
@@ -202,7 +203,7 @@ func preferredActive(atts []zoteroprovider.Attachment, deleted map[string]attMet
 
 // deactivateDocumentAttachments marks all attachment projections of a document
 // as deleted (used when a parent is deleted or loses its processable file).
-func (r *Repo) deactivateDocumentAttachments(ctx context.Context, tx pgx.Tx, sourceID, parentKey string) error {
+func (m *Repo) deactivateDocumentAttachments(ctx context.Context, tx pgx.Tx, sourceID, parentKey string) error {
 	_, err := tx.Exec(ctx, `
 		UPDATE zotero_attachments
 		SET deleted=true, preferred=false, updated_at=now()
@@ -216,7 +217,7 @@ func (r *Repo) deactivateDocumentAttachments(ctx context.Context, tx pgx.Tx, sou
 
 // ensureDocumentProjection writes a normalized, version-guarded zotero_documents
 // projection (missing optional values as SQL NULL, never 0/”).
-func (r *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID, parentKey string, version int64, nm zoteroprovider.NormalizedMetadata) (string, error) {
+func (m *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID, parentKey string, version int64, nm zoteroprovider.NormalizedMetadata) (string, error) {
 	creators, _ := json.Marshal(nm.Creators)
 	tags, _ := json.Marshal(nm.Tags)
 	cols, _ := json.Marshal(nm.Collections)
@@ -290,7 +291,7 @@ func (r *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID
 // upsertAttachmentProjection writes a version-guarded attachment projection and
 // returns its id. linkMode comes from the Zotero raw data (imported_file,
 // linked_file, imported_url, ...).
-func (r *Repo) upsertAttachmentProjection(ctx context.Context, tx pgx.Tx, sourceID, docID, parentKey string, att zoteroprovider.Attachment, deleted bool, linkMode string) (string, error) {
+func (m *Repo) upsertAttachmentProjection(ctx context.Context, tx pgx.Tx, sourceID, docID, parentKey string, att zoteroprovider.Attachment, deleted bool, linkMode string) (string, error) {
 	native := zoteroprovider.LocalFilePath(att.LocalPath)
 	var id string
 	err := tx.QueryRow(ctx, `
@@ -326,7 +327,7 @@ func (r *Repo) upsertAttachmentProjection(ctx context.Context, tx pgx.Tx, source
 // setPreferredWithStats marks one attachment as the document's preferred file
 // and writes its hash/size/mtime (version-guarded is implicit via the preferred
 // flag being idempotent).
-func (r *Repo) setPreferredWithStats(ctx context.Context, tx pgx.Tx, sourceID, docID string, att *zoteroprovider.Attachment, fin AttachmentFileInfo) error {
+func (m *Repo) setPreferredWithStats(ctx context.Context, tx pgx.Tx, sourceID, docID string, att *zoteroprovider.Attachment, fin AttachmentFileInfo) error {
 	var sz, mtm *int64
 	var hash *string
 	if fin.Exists {
@@ -346,7 +347,7 @@ func (r *Repo) setPreferredWithStats(ctx context.Context, tx pgx.Tx, sourceID, d
 }
 
 // clearSiblingPreferred sets all other attachments of a document to preferred=false.
-func (r *Repo) clearSiblingPreferred(ctx context.Context, tx pgx.Tx, sourceID, docID, keepKey string) error {
+func (m *Repo) clearSiblingPreferred(ctx context.Context, tx pgx.Tx, sourceID, docID, keepKey string) error {
 	_, err := tx.Exec(ctx, `
 		UPDATE zotero_attachments SET preferred=false, updated_at=now()
 		WHERE source_id=$1 AND document_id=$2 AND preferred=true AND zotero_key <> $3
@@ -359,7 +360,7 @@ func (r *Repo) clearSiblingPreferred(ctx context.Context, tx pgx.Tx, sourceID, d
 
 // deactivateDocument marks an active document projection deleted when it has no
 // remaining processable attachment.
-func (r *Repo) deactivateDocument(ctx context.Context, tx pgx.Tx, sourceID, parentKey string) error {
+func (m *Repo) deactivateDocument(ctx context.Context, tx pgx.Tx, sourceID, parentKey string) error {
 	_, err := tx.Exec(ctx, `
 		UPDATE zotero_documents SET deleted=true, updated_at=now()
 		WHERE source_id=$1 AND zotero_key=$2 AND deleted=false

@@ -3,7 +3,7 @@
 // re-selection WITHOUT any Zotero-side change — the full derivation offers
 // every document on every sync; only the selection gate held it back, and the
 // ON CONFLICT (attachment_id, content_hash) dedup keeps re-runs clean.
-package repo
+package mirror
 
 import (
 	"context"
@@ -16,12 +16,12 @@ import (
 )
 
 func TestSelectiveSyncAcceptanceIT(t *testing.T) {
-	lr := openLeaseDB(t)
+	lr := openMirrorDB(t)
 	lr.truncateFixtures(t)
 	ctx := context.Background()
 
 	ch := "hash-a2"
-	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zoteroprovider.a2", libraryID: "lib-1",
+	attID, _ := lr.seed(t, mirrorSeedSpec{sourceBaseURL: "https://zoteroprovider.a2", libraryID: "lib-1",
 		docKey: "SELD1", attKey: "SELATT1", contentHash: &ch}, "completed", 1)
 	var docID, srcID string
 	if err := lr.pool.QueryRow(ctx, `SELECT a.document_id::text, a.source_id::text FROM zotero_attachments a
@@ -217,12 +217,12 @@ func TestEffectiveSelection(t *testing.T) {
 // semantics. The valid-batch control first proves the empty end state is
 // not vacuous.
 func TestSetSelectionBatchAtomicityIT(t *testing.T) {
-	lr := openLeaseDB(t)
+	lr := openMirrorDB(t)
 	lr.truncateFixtures(t)
 	ctx := context.Background()
 
 	ch := "hash-atomic"
-	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://zoteroprovider.atomic", libraryID: "lib-1",
+	attID, _ := lr.seed(t, mirrorSeedSpec{sourceBaseURL: "https://zoteroprovider.atomic", libraryID: "lib-1",
 		docKey: "ATOM1", attKey: "ATOMATT1", contentHash: &ch}, "completed", 1)
 	var docID string
 	if err := lr.pool.QueryRow(ctx, `SELECT document_id::text FROM zotero_attachments WHERE id=$1`, attID).Scan(&docID); err != nil {

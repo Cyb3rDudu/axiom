@@ -3,7 +3,7 @@
 // and the selection gate all flow through ListZoteroDocuments into the derived
 // per-document outcome. (The DeriveOutcome switch itself is unit-pinned in
 // selection_outcome_test.go.)
-package repo
+package mirror
 
 import (
 	"context"
@@ -11,12 +11,12 @@ import (
 )
 
 func TestOutcomeProjectionIT(t *testing.T) {
-	lr := openLeaseDB(t)
+	lr := openMirrorDB(t)
 	lr.truncateFixtures(t)
 	ctx := context.Background()
 
 	ch := "hash-252"
-	attID, jobID := lr.seed(t, seedSpec{sourceBaseURL: "https://zotero.252", libraryID: "lib-1",
+	attID, jobID := lr.seed(t, mirrorSeedSpec{sourceBaseURL: "https://zotero.252", libraryID: "lib-1",
 		docKey: "OUTC1", attKey: "OUTATT1", contentHash: &ch, preferred: true}, "skipped", 3)
 
 	// The unpaginiert dead end: job skipped with the #254 pagination_state in

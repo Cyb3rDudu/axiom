@@ -1,4 +1,4 @@
-package repo
+package mirror
 
 // #255 contextual source class — integration proofs through the REAL chain:
 //
@@ -14,6 +14,7 @@ package repo
 // Runs only against a dedicated *_test database (AXIOM_TEST_DATABASE_URL).
 
 import (
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"context"
 	"encoding/json"
 	"strings"
@@ -26,7 +27,7 @@ import (
 // ctxSeed seeds the canonical chain for one document like a real sync had:
 // parent item (with collections + tags in raw_data) + attachment item +
 // document/attachment projections. Returns the document id.
-func ctxSeed(t *testing.T, lr *leaseRepo, srcID, docKey string, collections, tagsJSON string) string {
+func ctxSeed(t *testing.T, lr *mirrorRepo, srcID, docKey string, collections, tagsJSON string) string {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := lr.pool.Exec(ctx, `
@@ -65,7 +66,7 @@ func ctxSeed(t *testing.T, lr *leaseRepo, srcID, docKey string, collections, tag
 
 // ctxApply runs one canonical apply (projections + memberships + citation
 // class) for the seeded world under the given rules.
-func ctxApply(t *testing.T, lr *leaseRepo, srcID string, rules ContextualRules) {
+func ctxApply(t *testing.T, lr *mirrorRepo, srcID string, rules ContextualRules) {
 	t.Helper()
 	ctx := context.Background()
 	tx, err := lr.pool.Begin(ctx)
@@ -91,7 +92,7 @@ func ctxApply(t *testing.T, lr *leaseRepo, srcID string, rules ContextualRules) 
 	}
 }
 
-func ctxClass(t *testing.T, lr *leaseRepo, docID string) string {
+func ctxClass(t *testing.T, lr *mirrorRepo, docID string) string {
 	t.Helper()
 	var cls string
 	if err := lr.pool.QueryRow(context.Background(),
@@ -102,7 +103,7 @@ func ctxClass(t *testing.T, lr *leaseRepo, docID string) string {
 }
 
 func TestContextualProjectionIT(t *testing.T) {
-	lr := openLeaseDB(t)
+	lr := openMirrorDB(t)
 	lr.truncateFixtures(t)
 	ctx := context.Background()
 
@@ -144,7 +145,7 @@ func TestContextualProjectionIT(t *testing.T) {
 	}
 	// Hit hydration: the search/passage source block query carries the
 	// class — a contextual hit reports contextual, the passenger citable.
-	meta, err := lr.rep.DocumentMetaByIDs(ctx, []string{lect, passenger})
+	meta, err := lr.store.DocumentMetaByIDs(ctx, []string{lect, passenger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +183,7 @@ func TestContextualProjectionIT(t *testing.T) {
 }
 
 func TestResolveContextualRulesIT(t *testing.T) {
-	lr := openLeaseDB(t)
+	lr := openMirrorDB(t)
 	lr.truncateFixtures(t)
 	ctx := context.Background()
 
@@ -245,16 +246,16 @@ func fullProfile() []byte {
 }
 
 func TestClaimContextualKGGateIT(t *testing.T) {
-	lr := openLeaseDB(t)
+	lr := openMirrorDB(t)
 	lr.truncateFixtures(t)
 	ctx := context.Background()
 
 	hash := "sha256:claimctx"
-	_, jobCitable := lr.seed(t, seedSpec{
+	_, jobCitable := lr.seed(t, mirrorSeedSpec{
 		sourceBaseURL: "http://localhost/ctx1", libraryID: "users/0",
 		docKey: "CITDOC", attKey: "CITDOC", contentHash: &hash, preferred: true,
 	}, "pending", 3)
-	_, jobContextual := lr.seed(t, seedSpec{
+	_, jobContextual := lr.seed(t, mirrorSeedSpec{
 		sourceBaseURL: "http://localhost/ctx2", libraryID: "users/0",
 		docKey: "CTXDOC", attKey: "CTXDOC", contentHash: &hash, preferred: true,
 	}, "pending", 3)
@@ -264,10 +265,10 @@ func TestClaimContextualKGGateIT(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opts := ClaimOptions{WorkerID: "w-ctx", LeaseDuration: 120 * time.Second, Profile: fullProfile()}
-	claimed := map[string]*ClaimedJob{}
+	opts := repo.ClaimOptions{WorkerID: "w-ctx", LeaseDuration: 120 * time.Second, Profile: fullProfile()}
+	claimed := map[string]*repo.ClaimedJob{}
 	for range 2 {
-		cj, err := lr.rep.ClaimNextJob(ctx, opts)
+		cj, err := lr.store.ClaimNextJob(ctx, opts)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -304,7 +305,7 @@ func TestClaimContextualKGGateIT(t *testing.T) {
 		t.Fatalf("contextual claim must clear extraction flags, got %+v", p)
 	}
 	if claimed[jobContextual] != nil {
-		var fp FrozenProcessing
+		var fp repo.FrozenProcessing
 		if err := json.Unmarshal(claimed[jobContextual].Profile, &fp); err != nil {
 			t.Fatal(err)
 		}
@@ -317,76 +318,3 @@ func TestClaimContextualKGGateIT(t *testing.T) {
 	}
 }
 
-func TestPersistContextualKGGuardIT(t *testing.T) {
-	h := newPersistHarness(t, "ctxguard")
-	ctx := context.Background()
-	const dims = 3
-
-	// The harness document is a LECTURE: contextual. Even a result that
-	// (wrongly) carries entities must persist ZERO of them — the graph stays
-	// book-truth — while chunks + embeddings persist untouched (equal rank).
-	if _, err := h.pool.Exec(ctx,
-		`UPDATE zotero_documents SET citation_class='contextual' WHERE zotero_key='DOCctxguard'`); err != nil {
-		t.Fatal(err)
-	}
-	raw := h.validResultRaw(dims)
-	if len(raw.Entities) == 0 || len(raw.EntityRelationships) == 0 {
-		t.Fatal("fixture must carry entities/relationships to prove the guard")
-	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapID, err := h.persist(t, b, dims, markdownArtifact())
-	if err != nil {
-		t.Fatalf("persist: %v", err)
-	}
-
-	var n int
-	if err := h.pool.QueryRow(ctx,
-		`SELECT count(*) FROM processing_entities WHERE snapshot_id=$1`, snapID).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Fatalf("contextual document must contribute ZERO entities, got %d", n)
-	}
-	if err := h.pool.QueryRow(ctx,
-		`SELECT count(*) FROM processing_entity_relationships WHERE snapshot_id=$1`, snapID).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Fatalf("contextual document must contribute ZERO relationships, got %d", n)
-	}
-	// Equal-rank substrate: chunks + dense embeddings persist like any book.
-	if err := h.pool.QueryRow(ctx,
-		`SELECT count(*) FROM processing_chunks WHERE snapshot_id=$1`, snapID).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != len(raw.Chunks) {
-		t.Fatalf("contextual chunks must persist, got %d want %d", n, len(raw.Chunks))
-	}
-	if err := h.pool.QueryRow(ctx, `
-		SELECT count(*) FROM processing_chunk_dense_embeddings e
-		JOIN processing_chunks c ON c.id=e.chunk_id
-		WHERE c.snapshot_id=$1 AND model='reference-bge-m3'`, snapID).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != len(raw.Chunks) {
-		t.Fatalf("contextual dense embeddings must persist, got %d want %d", n, len(raw.Chunks))
-	}
-
-	// Passenger: a citable document keeps its entities.
-	h2 := newPersistHarness(t, "ctxpass")
-	b2 := h2.validResultBytes(t, dims)
-	snapID2, err := h2.persist(t, b2, dims, markdownArtifact())
-	if err != nil {
-		t.Fatalf("persist passenger: %v", err)
-	}
-	if err := h2.pool.QueryRow(ctx,
-		`SELECT count(*) FROM processing_entities WHERE snapshot_id=$1`, snapID2).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatalf("citable passenger must keep entities, got %d", n)
-	}
-}
