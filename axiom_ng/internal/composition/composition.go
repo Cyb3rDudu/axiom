@@ -547,16 +547,32 @@ func (r *Root) componentsFor() []Component {
 			r.srv.SetKGService(r.rep)
 			r.srv.SetConsolidateService(r.rep)
 			r.srv.SetSelectionRepo(mirror.New(r.rep))
+			// F09 #303: the Store component's ledger — the revision-intake
+			// columns on ingest_jobs (additive; same fingerprint rule as
+			// the library ledger below).
+			if err := store.Migrate(ctx, database.Pool()); err != nil {
+				return fmt.Errorf("store migrate: %w", err)
+			}
+			// The Library runtime (own migration set + Mits-Schrieb + the
+			// import-provider wiring) exists only where the sync role does:
+			// a store-slice process runs NO Library (review F3.5 — inert
+			// Library wiring would blur the independence topology this
+			// split sells).
+			// Remote source delivery (endpoint verify, dispatcher sign):
+			// store-owned wiring, BEFORE any Library gating — the store
+			// slice (no sync role) must still serve processor sources (the
+			// F09 independence run's delivery path).
+			r.srv.SetProcessorSourceSecret(r.cfg.ProcessorSourceSecret)
+			r.srv.SetProcessorSourceRepo(r.rep)
+			if !r.roles[RoleSync] {
+				r.logger.Printf("library: not selected in this role set — no Library runtime (F09 store slice)")
+				return nil
+			}
 			// F06 #300: the Library component's own migration set (own
 			// ledger, same physical DB — additive; the F01 fingerprint
 			// derives from the core set alone).
 			if err := library.Migrate(ctx, database.Pool()); err != nil {
 				return fmt.Errorf("library migrate: %w", err)
-			}
-			// F09 #303: the Store component's ledger — the revision-intake
-			// columns on ingest_jobs (additive; same fingerprint rule).
-			if err := store.Migrate(ctx, database.Pool()); err != nil {
-				return fmt.Errorf("store migrate: %w", err)
 			}
 			r.libStore = library.NewStore(database.Pool())
 			// Source-revision Mits-Schrieb: sync completion and heal/
@@ -658,13 +674,6 @@ func (r *Root) componentsFor() []Component {
 			default:
 				return fmt.Errorf("library: unknown AXIOM_LIBRARY_IMPORT_PROVIDERS %q (known: fake, zotero)", r.cfg.LibraryImportProviders)
 			}
-			// Remote source delivery (endpoint verify, dispatcher sign): wired
-			// on the STORE component, not sync — the dispatcher's source fetch
-			// reads it, so Select(api, store, ingest, dispatcher) must boot a
-			// dispatcher whose source can fetch work (role-table honesty).
-			// Same secret on both sides; empty secret disables the endpoint.
-			r.srv.SetProcessorSourceSecret(r.cfg.ProcessorSourceSecret)
-			r.srv.SetProcessorSourceRepo(r.rep)
 			return nil
 		},
 		stop: func(ctx context.Context) error {

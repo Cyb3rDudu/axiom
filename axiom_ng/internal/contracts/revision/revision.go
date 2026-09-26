@@ -147,6 +147,8 @@ func (r SourceRevision) Validate() error {
 		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "source revision: source_id is empty")
 	case r.RevisionID == "":
 		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "source revision: revision_id is empty")
+	case r.RenditionID == "":
+		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "source revision: rendition_id is empty")
 	case !hashHex.MatchString(r.ContentHash):
 		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "source revision: content_hash must be lowercase sha256 hex (64 chars)")
 	case r.MediaType == "":

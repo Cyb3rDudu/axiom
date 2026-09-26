@@ -511,7 +511,7 @@ type zoteroAttachRow struct {
 //
 // Deadlock avoidance: BEFORE locking any dependency row the claim takes the same
 // per-source advisory lock the canonical sync holds for its whole run
-// (pg_advisory_xact_lock on lockKey(sourceID); session and transaction advisory
+// (pg_advisory_xact_lock on LockKey(sourceID); session and transaction advisory
 // locks on the same key share one namespace and exclude each other). Only one of
 // a claim or a sync for that source is then active at a time, so the claim can
 // never deadlock against the sync's item->document write order; it simply waits.
@@ -530,7 +530,7 @@ func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*
 	}
 	// Serialize against the canonical sync for this source before locking any
 	// dependency rows.
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey(c.sourceID)); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, LockKey(c.sourceID)); err != nil {
 		return nil, "", fmt.Errorf("acquire source lock: %w", err)
 	}
 
@@ -885,7 +885,7 @@ func (r *Repo) MarkCompletedTx(ctx context.Context, tx pgx.Tx, ref LeaseRef, pro
 		// No source reference => cannot validate the chain; lost/obsolete.
 		return fmt.Errorf("mark completed: %w", ErrLostLease)
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey(srcID)); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, LockKey(srcID)); err != nil {
 		return fmt.Errorf("mark completed: acquire source lock: %w", err)
 	}
 

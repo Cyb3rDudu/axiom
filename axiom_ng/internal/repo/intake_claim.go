@@ -43,7 +43,7 @@ func (r *Repo) loadAndLockRevisionState(ctx context.Context, tx pgx.Tx, c *candi
 	}
 
 	// Same serialization against the canonical sync as the legacy lane.
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey(c.revSourceID)); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, LockKey(c.revSourceID)); err != nil {
 		return nil, "", fmt.Errorf("acquire source lock: %w", err)
 	}
 
@@ -95,6 +95,14 @@ func (r *Repo) loadAndLockRevisionState(ctx context.Context, tx pgx.Tx, c *candi
 	if s.attachment.documentID != s.document.id || docParentKey == nil || *docParentKey != s.document.zoteroKey {
 		return nil, "REVISION_REF_UNRESOLVED", nil
 	}
+	// Preferred parity with the legacy lane: completion (MarkCompletedTx)
+	// requires the preferred attachment, so a non-preferred rendition must
+	// be obsoleted HERE — otherwise it burns full processing runs and ends
+	// LEASE_EXHAUSTED (the review finding: claim allows what completion
+	// forbids — the worst mix).
+	if !s.attachment.preferred {
+		return nil, "ATTACHMENT_NOT_PREFERRED", nil
+	}
 
 	// Hash currency: the revision's ContentHash is the intake truth. The
 	// mirror's current hash must agree (non-forced) — a moved-on mirror
@@ -106,6 +114,29 @@ func (r *Repo) loadAndLockRevisionState(ctx context.Context, tx pgx.Tx, c *candi
 	if !c.forceRebuild && fr.ContentHash != "" && fr.ContentHash != *hash {
 		return nil, "CONTENT_HASH_CHANGED", nil
 	}
+	// Legacy-lane collision guard (review F1): the claim UPDATE persists
+	// the resolved attachment_id, which would ENTER the legacy idempotency
+	// partial index (attachment_id, content_hash) WHERE force_rebuild=false
+	// — a legacy job already holding that pair means the revision is a
+	// duplicate of tracked sync work; a raw unique violation here would
+	// poison the FIFO head forever. Obsolete with a readable reason
+	// instead (the transition's honest answer while both lanes coexist).
+	if !c.forceRebuild {
+		var legacyHolds bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM ingest_jobs x
+				WHERE x.intake_kind = 'zotero'
+				  AND x.attachment_id = $1::uuid AND x.content_hash = $2
+				  AND x.force_rebuild = false)`,
+			s.attachment.id, *hash).Scan(&legacyHolds); err != nil {
+			return nil, "", fmt.Errorf("legacy-lane collision check: %w", err)
+		}
+		if legacyHolds {
+			return nil, "REVISION_SUPERSEDED_BY_SYNC_LANE", nil
+		}
+	}
+
 	s.document.parentKey, s.document.linkMode = docParentKey, docLinkMode
 	// The revision's own citation class rules the KG gate (contract truth;
 	// F07 derives the ledger class from the mirror so both agree — reading

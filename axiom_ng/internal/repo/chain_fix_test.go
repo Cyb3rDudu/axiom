@@ -44,7 +44,7 @@ func TestMarkCompletedSerializesAgainstSync(t *testing.T) {
 	if err := lr.pool.QueryRow(ctx, `SELECT source_id::text FROM ingest_jobs WHERE id=$1`, jobID).Scan(&srcID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := syncTx.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockKey(srcID)); err != nil {
+	if _, err := syncTx.Exec(ctx, `SELECT pg_advisory_lock($1)`, LockKey(srcID)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -72,7 +72,7 @@ func TestMarkCompletedSerializesAgainstSync(t *testing.T) {
 	}
 
 	// Release the advisory lock; completion must then finish.
-	if _, err := syncTx.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockKey(srcID)); err != nil {
+	if _, err := syncTx.Exec(ctx, `SELECT pg_advisory_unlock($1)`, LockKey(srcID)); err != nil {
 		t.Fatal(err)
 	}
 	if err := syncTx.Commit(ctx); err != nil {
@@ -416,7 +416,7 @@ func TestCompletionRevalidatesAfterSyncMutation(t *testing.T) {
 	if err := lr.pool.QueryRow(ctx, `SELECT source_id::text FROM ingest_jobs WHERE id=$1`, jobID).Scan(&srcID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := syncTx.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockKey(srcID)); err != nil {
+	if _, err := syncTx.Exec(ctx, `SELECT pg_advisory_lock($1)`, LockKey(srcID)); err != nil {
 		t.Fatal(err)
 	}
 	// Change the attachment hash while holding the session advisory lock (as a
@@ -424,7 +424,7 @@ func TestCompletionRevalidatesAfterSyncMutation(t *testing.T) {
 	if _, err := syncTx.Exec(ctx, `UPDATE zotero_attachments SET content_hash='sha256:changed' WHERE zotero_key='H1'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := syncTx.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockKey(srcID)); err != nil {
+	if _, err := syncTx.Exec(ctx, `SELECT pg_advisory_unlock($1)`, LockKey(srcID)); err != nil {
 		t.Fatal(err)
 	}
 	if err := syncTx.Commit(ctx); err != nil {

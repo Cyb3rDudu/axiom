@@ -10,6 +10,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ErrIntakeKeyMismatch: the idempotency key was reused with a DIFFERENT
@@ -17,11 +18,33 @@ import (
 // contracterr.IdempotencyMismatch source.
 var ErrIntakeKeyMismatch = errors.New("intake idempotency key reused with a different revision")
 
+// enqueueRevisionIntakeReplay re-runs the intake-key lookup after a
+// concurrent mint won the unique index — the key exists now.
+func (r *Repo) enqueueRevisionIntakeReplay(ctx context.Context, req IntakeRequest) (*Job, bool, error) {
+	var existing Job
+	var identical bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT id::text, status::text, COALESCE(content_hash,''), attempt, max_attempts,
+		       enqueued_at::text, (revision_json = $2::jsonb)
+		FROM ingest_jobs
+		WHERE intake_kind='revision' AND intake_idempotency_key=$1`, req.IdempotencyKey, string(req.RevisionJSON)).
+		Scan(&existing.ID, &existing.Status, &existing.ContentHash, &existing.Attempt,
+			&existing.MaxAttempts, &existing.EnqueuedAt, &identical)
+	if err != nil {
+		return nil, false, err
+	}
+	if identical {
+		existing.IntakeKey = req.IdempotencyKey
+		return &existing, false, nil
+	}
+	return nil, false, ErrIntakeKeyMismatch
+}
+
 // ErrIntakeSuppressed: the revision's content is already processed and
 // served (an ACTIVE snapshot for the same hash on the rendition's current
 // mirror attachment) — the #294 defense: no "never processed" re-enqueue
-// while unchanged. The service maps this onto the existing job if one is
-// observable, else onto a committed-looking answer (see EnqueueRevisionIntake).
+// while unchanged. The service answers a committed-looking IngestJob echo
+// (v1 has no job row to point at — the suppression mints nothing).
 var ErrIntakeSuppressed = errors.New("revision content already served by an active snapshot")
 
 // IntakeRequest is the durable intake input: the caller-chosen idempotency
@@ -98,6 +121,14 @@ func (r *Repo) EnqueueRevisionIntake(ctx context.Context, req IntakeRequest) (*J
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, false, ErrIntakeSuppressed
+		}
+		// Concurrent same-key race (review F1.4): the SELECT saw nothing,
+		// a concurrent mint won the intake-key unique index — the loser's
+		// 23505 is the SAME question the SELECT answers; re-ask it once and
+		// classify honestly instead of surfacing an Internal error.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "ingest_jobs_intake_key_uq" {
+			return r.enqueueRevisionIntakeReplay(ctx, req)
 		}
 		return nil, false, err
 	}

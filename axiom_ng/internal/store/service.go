@@ -18,6 +18,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/store"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // SearchBackend is the retrieval surface the Store wraps (implemented by
@@ -55,6 +56,15 @@ func (s *Service) IngestRevision(ctx context.Context, req store.IngestRevisionRe
 	}
 	if err := req.Revision.Validate(); err != nil {
 		return store.IngestJob{}, err // already a typed contract error (ClassInvalidArgument)
+	}
+	// SourceID is opaque to the CONTRACT but the durable lane resolves it
+	// as a mirror uuid: validate the shape at the trust boundary and
+	// normalize to the canonical lowercase form — a malformed id would
+	// otherwise poison the claim queue (uuid cast error at claim), and a
+	// non-canonical case would silently miss the #294 suppression and take
+	// a different advisory-lock key than the sync's canonical one.
+	if err := normalizeSourceID(&req.Revision); err != nil {
+		return store.IngestJob{}, err
 	}
 	canonical, err := canonicalRevisionJSON(req.Revision)
 	if err != nil {
@@ -95,6 +105,19 @@ func (s *Service) IngestRevision(ctx context.Context, req store.IngestRevisionRe
 	default:
 		return store.IngestJob{}, contracterr.Wrap(contracterr.ComponentStore, contracterr.ClassInternal, err, "intake mint")
 	}
+}
+
+// normalizeSourceID validates the revision's SourceID as a UUID and
+// rewrites it in canonical lowercase form (the mirror's uuid::text shape;
+// pgtype renders exactly that). No new dependency: pgx ships the parser.
+func normalizeSourceID(r *revision.SourceRevision) error {
+	var u pgtype.UUID
+	if err := u.Scan(r.SourceID); err != nil {
+		return contracterr.New(contracterr.ComponentStore, contracterr.ClassInvalidArgument,
+			"revision source_id is not a valid uuid: "+r.SourceID)
+	}
+	r.SourceID = u.String()
+	return nil
 }
 
 // canonicalRevisionJSON renders the DTO deterministically (Go struct field
