@@ -38,6 +38,7 @@ type stubStore struct {
 	refuseNew  bool // refuse a second acquirer
 	renewFails bool
 	released   bool
+	evictFails bool // evictions error (the M5 propagation probe)
 }
 
 func newStubStore() *stubStore { return &stubStore{anchors: map[string]string{}} }
@@ -102,6 +103,9 @@ func (s *stubStore) PutProviderAnchor(_ context.Context, _, kind, anchor, provid
 }
 
 func (s *stubStore) EvictProviderAnchor(_ context.Context, _, kind, anchor, providerID string) error {
+	if s.evictFails {
+		return errors.New("eviction store down")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if cur, ok := s.anchors[kind+"|"+anchor]; ok && cur == providerID {
@@ -206,6 +210,9 @@ func (f *fakeLibrary) route(w http.ResponseWriter, r *http.Request) {
 		var out []map[string]any
 		for _, k := range f.itemOrder {
 			it := f.items[k]
+			if it.Deleted {
+				continue // the real /items feed excludes trash
+			}
 			if tag != "" && !f.ignoreTagFilter && !itemHasTag(it, tag) {
 				continue
 			}
@@ -455,6 +462,21 @@ func (f *fakeLibrary) envelope(it *zotItem) map[string]any {
 	}
 	return map[string]any{"key": it.Key, "version": it.Version, "data": data,
 		"links": map[string]any{"enclosure": map[string]any{"href": href}}}
+}
+
+// mutateItem updates an item through BOTH views (typed + raw wire):
+// the envelope serves the raw view, so direct field writes on the typed
+// item would be invisible to the adapter.
+func (f *fakeLibrary) mutateItem(key string, fn func(*zotItem)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	it, ok := f.items[key]
+	if !ok {
+		return
+	}
+	fn(it)
+	cp := *it
+	f.rawItems[key] = mustJSON(cp)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -851,11 +873,6 @@ func TestReadOnlyProviderAndLeaseRefusal(t *testing.T) {
 	}
 }
 
-func contractClassIs(err error, class contracterr.Class) bool {
-	got, ok := contracterr.ClassOf(err)
-	return ok && got == class
-}
-
 // --- auto-review regression battery (#301 review pass) ---
 
 // C1: a page token carries the snapshot generation — an invalidation
@@ -1081,4 +1098,158 @@ func extraOf(t *testing.T, f *fakeLibrary, key string) string {
 func sha256hex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+func TestTrashedRecordAndAttachmentHealForward(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	draft := library.RecordDraft{ExternalKey: "imp-trash-1", RecordType: "book", Title: "Getrashed"}
+
+	// Create, then trash the record in Zotero (single-item GETs answer
+	// 200 + data.deleted — the live-probed shape).
+	k1, err := h.prov.EnsureRecord(ctx, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.fake.mutateItem(k1, func(it *zotItem) { it.Deleted = true })
+	k2, err := h.prov.EnsureRecord(ctx, draft)
+	if err != nil {
+		t.Fatalf("trashed anchored record must heal, got %v", err)
+	}
+	if k2 == k1 || h.fake.items[k2].Deleted {
+		t.Fatalf("healing must create a LIVE record: old=%s new=%s", k1, k2)
+	}
+	if id, _ := h.store.anchors["record|imp-trash-1"]; id != k2 {
+		t.Fatalf("anchor must point at the healed record, got %q want %q", id, k2)
+	}
+
+	// Same for renditions: a trashed attachment evicts and re-uploads.
+	rec := h.fake.addItem(zotItem{ItemType: "book", Title: "Carrier"})
+	content := []byte("%PDF-1.4 trash heal")
+	path, sha := staged(t, content)
+	rd := library.RenditionDraft{ParentProviderID: rec, ContentHash: sha, MediaType: "application/pdf",
+		Filename: "X - 2020 - Trash Heal.pdf", StagingPath: path}
+	a1, err := h.prov.EnsureRendition(ctx, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.fake.mutateItem(a1, func(it *zotItem) { it.Deleted = true })
+	a2, err := h.prov.EnsureRendition(ctx, rd)
+	if err != nil {
+		t.Fatalf("trashed anchored rendition must heal, got %v", err)
+	}
+	if a2 == a1 || h.fake.items[a2].Deleted {
+		t.Fatalf("healing must create a LIVE attachment: old=%s new=%s", a1, a2)
+	}
+	if id, _ := h.store.anchors["rendition|"+rec+"|"+sha]; id != a2 {
+		t.Fatalf("rendition anchor must point at the healed attachment")
+	}
+}
+
+func TestFilelessTaggedAttachmentIsNotAdopted(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	rec := h.fake.addItem(zotItem{ItemType: "book", Title: "Carrier"})
+	content := []byte("%PDF-1.4 adoption probe")
+	path, sha := staged(t, content)
+
+	// The crash-window leftover: an attachment carrying the sha tag but
+	// NO file (the tag is stamped in phase 0, before the file flow).
+	h.fake.addItem(zotItem{ItemType: "attachment", LinkMode: "imported_file", ParentItem: rec,
+		Filename: "X - 2020 - Probe.pdf", ContentType: "application/pdf",
+		Tags: []zotTag{{Tag: "axiom-sha256:" + sha}}})
+	uploadsBefore := h.fake.nUploads
+
+	rd := library.RenditionDraft{ParentProviderID: rec, ContentHash: sha, MediaType: "application/pdf",
+		Filename: "X - 2020 - Probe.pdf", StagingPath: path}
+	id, err := h.prov.EnsureRendition(ctx, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file-less leftover must NOT be the returned id — the tag
+	// search's full readback (retrievable file with matching digest)
+	// rejected it and a fresh complete upload happened.
+	if h.fake.files[id] == nil || string(h.fake.files[id]) != string(content) {
+		t.Fatalf("returned attachment must carry the file bytes: %q", h.fake.files[id])
+	}
+	if h.fake.nUploads != uploadsBefore+1 {
+		t.Fatalf("a fresh upload must have happened (%d -> %d)", uploadsBefore, h.fake.nUploads)
+	}
+	rows := h.store.audits()
+	if rows[len(rows)-1].Outcome != "created" {
+		t.Fatalf("file-less leftover must not be adopted as reused: %+v", rows[len(rows)-1])
+	}
+}
+
+func TestEvictionFailurePropagates(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	rec := h.fake.addItem(zotItem{ItemType: "book", Title: "Carrier"})
+	content := []byte("%PDF-1.4 eviction failure")
+	path, sha := staged(t, content)
+	rd := library.RenditionDraft{ParentProviderID: rec, ContentHash: sha, MediaType: "application/pdf",
+		Filename: "X - 2020 - Evict.pdf", StagingPath: path}
+
+	a1, err := h.prov.EnsureRendition(ctx, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The anchored attachment dies; the eviction store goes down with it.
+	h.fake.mu.Lock()
+	delete(h.fake.items, a1)
+	h.fake.mu.Unlock()
+	h.store.mu.Lock()
+	h.store.evictFails = true
+	h.store.mu.Unlock()
+
+	_, err = h.prov.EnsureRendition(ctx, rd)
+	if !contractClassIs(err, contracterr.ClassInternal) || !strings.Contains(err.Error(), "dead anchor") {
+		t.Fatalf("eviction failure must propagate loudly (never return a dead id), got %v", err)
+	}
+}
+
+func TestUpdateRecordPreservesEmptyDraftFieldsAndUserTags(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	y := 2019
+	draft := library.RecordDraft{ExternalKey: "imp-merge-1", RecordType: "book", Title: "Merge Guard",
+		Authors: []library.Creator{{FirstName: "A", LastName: "Author"}}, Year: &y,
+		Publisher: "Press", Language: "en"}
+
+	k, err := h.prov.EnsureRecord(ctx, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A user enriches the item in Zotero: publisher + a user tag + an
+	// unmodeled field — none of these may die in a later diverged update.
+	h.fake.mutateItem(k, func(it *zotItem) {
+		it.Publisher = "Besserer Verlag"
+		it.Tags = append(it.Tags, zotTag{Tag: "lieblingsbuch"})
+	})
+
+	// A later import of the SAME anchor with a corrected title but NO
+	// publisher/language: only the title may change.
+	draft2 := draft
+	draft2.Title = "Merge Guard (2nd ed.)"
+	draft2.Publisher = ""
+	draft2.Language = ""
+	if _, err := h.prov.EnsureRecord(ctx, draft2); err != nil {
+		t.Fatal(err)
+	}
+	it := h.fake.items[k]
+	if it.Title != "Merge Guard (2nd ed.)" {
+		t.Fatalf("title update lost: %+v", it)
+	}
+	if it.Publisher != "Besserer Verlag" || it.Language != "en" {
+		t.Fatalf("empty draft fields must not blank provider state: %+v", it)
+	}
+	tagged := false
+	for _, tag := range it.Tags {
+		if tag.Tag == "lieblingsbuch" {
+			tagged = true
+		}
+	}
+	if !tagged {
+		t.Fatalf("user tags must survive the update: %+v", it.Tags)
+	}
 }

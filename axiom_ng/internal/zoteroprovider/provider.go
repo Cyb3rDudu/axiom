@@ -301,6 +301,10 @@ type zotItem struct {
 	AccessDate  string       `json:"accessDate,omitempty"`
 	Collections []string     `json:"collections,omitempty"`
 	Tags        []zotTag     `json:"tags,omitempty"`
+	// Deleted: Zotero answers a trashed item's GET with 200 + data.deleted
+	// (live-probed) — the item LIST excludes trash, but single-item reads
+	// do not. Every aliveness readback must treat deleted=true as absent.
+	Deleted bool `json:"deleted,omitempty"`
 	// attachment-only fields
 	LinkMode    string `json:"linkMode,omitempty"`
 	ContentType string `json:"contentType,omitempty"`
@@ -525,20 +529,32 @@ func (p *Provider) EnsureRecord(ctx context.Context, d library.RecordDraft) (str
 	anchor := d.ExternalKey
 	tag := "axiom-imp:" + anchor
 
-	// 1. Anchor ledger (fast path).
+	// 1. Anchor ledger (fast path). A NotFound-class readback (the
+	// anchored record was deleted externally — purged OR trashed, both
+	// surface the same way) heals forward: evict the stale row and fall
+	// through to tag-search/create. Eviction errors propagate — a failed
+	// eviction would make the create below return the dead row's id.
 	if id, _, err := p.store.LookupProviderAnchor(ctx, p.scope, "record", anchor); err == nil && id != "" {
-		ok, rerr := p.readbackRecord(ctx, id, d)
-		if rerr != nil {
-			return "", rerr
-		}
-		if ok {
+		ok, _, rerr := p.readbackRecord(ctx, id, d)
+		if rerr == nil && ok {
 			if err := p.audit(ctx, "ensure_record", anchor, id, "reused", map[string]any{"title": d.Title}); err != nil {
 				return "", err
 			}
 			return id, nil
 		}
-		// Anchored but diverged/persisted differently: versioned update.
-		return p.updateRecord(ctx, id, d, anchor)
+		if rerr != nil && !contractClassIs(rerr, contracterr.ClassNotFound) {
+			return "", rerr
+		}
+		if rerr != nil {
+			if eerr := p.store.EvictProviderAnchor(ctx, p.scope, "record", anchor, id); eerr != nil {
+				return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, eerr,
+					"evicting stale record anchor "+anchor+" — refusing to continue with a dead anchor in place")
+			}
+		}
+		if rerr == nil && !ok {
+			// Anchored but diverged/persisted differently: versioned update.
+			return p.updateRecord(ctx, id, d, anchor)
+		}
 	} else if err != nil && !errors.Is(err, errAnchorAbsent) {
 		return "", err
 	}
@@ -547,15 +563,15 @@ func (p *Provider) EnsureRecord(ctx context.Context, d library.RecordDraft) (str
 	if found, err := p.findTaggedRecord(ctx, tag); err != nil {
 		return "", err
 	} else if found != "" {
-		if _, err := p.store.PutProviderAnchor(ctx, p.scope, "record", anchor, found, 0); err != nil {
-			return "", err
-		}
-		ok, rerr := p.readbackRecord(ctx, found, d)
+		ok, version, rerr := p.readbackRecord(ctx, found, d)
 		if rerr != nil {
 			return "", rerr
 		}
 		if !ok {
 			return p.updateRecord(ctx, found, d, anchor)
+		}
+		if _, err := p.store.PutProviderAnchor(ctx, p.scope, "record", anchor, found, version); err != nil {
+			return "", err
 		}
 		if err := p.audit(ctx, "ensure_record", anchor, found, "reused", map[string]any{"recovered_by": "tag_search"}); err != nil {
 			return "", err
@@ -589,24 +605,26 @@ func (p *Provider) EnsureRecord(ctx context.Context, d library.RecordDraft) (str
 	if err != nil {
 		return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "ensure_record create response")
 	}
-	// Readback: what Zotero persisted must match the draft (type+title).
-	if ok, rerr := p.readbackRecord(ctx, key, d); rerr != nil {
+	// Readback: what Zotero persisted must match the draft (type+title
+	// + the non-empty draft fields + the anchor tag marker).
+	if ok, version, rerr := p.readbackRecord(ctx, key, d); rerr != nil {
 		return "", rerr
 	} else if !ok {
 		return "", contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 			"ensure_record readback mismatch for "+key+" — Zotero persisted different type/title")
-	}
-	surviving, err := p.store.PutProviderAnchor(ctx, p.scope, "record", anchor, key, 0)
-	if err != nil {
-		return "", err
-	}
-	if surviving != key {
-		// A concurrent writer won the anchor race (should not happen under
-		// the single-writer lease) — the winner's id is the truth.
-		if err := p.audit(ctx, "ensure_record", anchor, surviving, "reused", map[string]any{"lost_race_to": surviving}); err != nil {
+	} else {
+		surviving, err := p.store.PutProviderAnchor(ctx, p.scope, "record", anchor, key, version)
+		if err != nil {
 			return "", err
 		}
-		return surviving, nil
+		if surviving != key {
+			// A concurrent writer won the anchor race (should not happen under
+			// the single-writer lease) — the winner's id is the truth.
+			if err := p.audit(ctx, "ensure_record", anchor, surviving, "reused", map[string]any{"lost_race_to": surviving}); err != nil {
+				return "", err
+			}
+			return surviving, nil
+		}
 	}
 	p.invalidate()
 	if err := p.audit(ctx, "ensure_record", anchor, key, "created", map[string]any{"item_type": item.ItemType, "title": d.Title}); err != nil {
@@ -661,27 +679,42 @@ func itemFromEnvelope(env []byte) (zotItem, bool) {
 	return it, true
 }
 
-// readbackRecord verifies the persisted record against the draft (item
-// type + title + identifiers when the draft carries them). false = the
-// record exists but diverged (caller decides: versioned update).
-func (p *Provider) readbackRecord(ctx context.Context, key string, d library.RecordDraft) (bool, error) {
-	data, _, err := p.write.GetItem(key)
+// readbackRecord verifies the persisted record against the draft: item
+// type, title, the identifiers and every NON-EMPTY draft field the
+// adapter claims to write (publisher/language/url), plus the anchor-tag
+// marker. Trashed records (GET answers 200 + data.deleted) count as
+// ABSENT — the NotFound error tells the caller to heal. false without
+// error = the record exists but diverged (caller: versioned update).
+// The returned version is what Zotero persisted (the anchor ledger's
+// provider_version).
+func (p *Provider) readbackRecord(ctx context.Context, key string, d library.RecordDraft) (bool, int64, error) {
+	data, verStr, err := p.write.GetItem(key)
 	if err != nil {
 		if isStatus(err, http.StatusNotFound) {
-			return false, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound,
+			return false, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound,
 				"anchored record "+key+" vanished from Zotero (deleted externally) — recreate by dropping the anchor")
 		}
-		return false, mapWriteErr(err, key, "ensure_record readback")
+		return false, 0, mapWriteErr(err, key, "ensure_record readback")
 	}
 	var it zotItem
 	if err := json.Unmarshal(data, &it); err != nil {
-		return false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "readback decode "+key)
+		return false, 0, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "readback decode "+key)
+	}
+	if it.Deleted {
+		return false, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound,
+			"anchored record "+key+" sits in the Zotero trash — treat as vanished")
+	}
+	if _, tagged := hasTag(it.Tags, "axiom-imp:"); !tagged {
+		return false, versionOf(verStr), nil // no anchor marker: diverged (the update re-stamps it)
 	}
 	same := it.ItemType == firstNonEmptyStr(d.RecordType, "document") &&
 		it.Title == d.Title &&
 		(d.DOI == "" || library.NormalizeDOI(it.DOI) == library.NormalizeDOI(d.DOI)) &&
-		(d.ISBN == "" || library.NormalizeISBN(it.ISBN) == library.NormalizeISBN(d.ISBN))
-	return same, nil
+		(d.ISBN == "" || library.NormalizeISBN(it.ISBN) == library.NormalizeISBN(d.ISBN)) &&
+		(d.Publisher == "" || it.Publisher == d.Publisher) &&
+		(d.Language == "" || it.Language == d.Language) &&
+		(d.URL == "" || it.URL == d.URL)
+	return same, versionOf(verStr), nil
 }
 
 // updateRecord applies diverged fields under the optimistic-versioning
@@ -694,18 +727,53 @@ func (p *Provider) updateRecord(ctx context.Context, key string, d library.Recor
 	if err != nil {
 		return "", mapWriteErr(err, key, "ensure_record update read")
 	}
-	changes := map[string]any{
-		"title":      d.Title,
-		"creators":   jsonValue(creatorsFromDraft(d.Authors)),
-		"publisher":  d.Publisher,
-		"language":   d.Language,
-		"DOI":        library.NormalizeDOI(d.DOI),
-		"ISBN":       library.NormalizeISBN(d.ISBN),
-		"url":        d.URL,
-		"accessDate": d.AccessDate,
+	// Merge ONLY the draft's non-empty fields onto the raw item — an
+	// empty draft value (non-web intake carries no URL; a book draft may
+	// carry no publisher) must never blank what the provider already
+	// holds. Title is always carried (EnsureRecord requires it).
+	changes := map[string]any{"title": d.Title}
+	if len(d.Authors) > 0 {
+		changes["creators"] = jsonValue(creatorsFromDraft(d.Authors))
+	}
+	if d.Publisher != "" {
+		changes["publisher"] = d.Publisher
+	}
+	if d.Language != "" {
+		changes["language"] = d.Language
+	}
+	if d.DOI != "" {
+		changes["DOI"] = library.NormalizeDOI(d.DOI)
+	}
+	if d.ISBN != "" {
+		changes["ISBN"] = library.NormalizeISBN(d.ISBN)
+	}
+	if d.URL != "" {
+		changes["url"] = d.URL
+	}
+	if d.AccessDate != "" {
+		changes["accessDate"] = d.AccessDate
 	}
 	if y := yearPtrValue(d.Year); y > 0 {
 		changes["date"] = strconv.Itoa(y)
+	}
+	// Anchor marker: re-stamp when missing (user-created items adopted
+	// via tag-less anchors). User tags are PRESERVED — the raw tag list
+	// is decoded losslessly (type field included) and extended, never
+	// replaced.
+	var cur struct {
+		Tags []map[string]any `json:"tags"`
+	}
+	if json.Unmarshal(data, &cur) == nil {
+		tagged := false
+		for _, t := range cur.Tags {
+			if s, _ := t["tag"].(string); strings.HasPrefix(s, "axiom-imp:") {
+				tagged = true
+			}
+		}
+		if !tagged {
+			cur.Tags = append(cur.Tags, map[string]any{"tag": "axiom-imp:" + anchor})
+			changes["tags"] = cur.Tags
+		}
 	}
 	body, merr := mergeItemJSON(data, changes)
 	if merr != nil {
@@ -714,11 +782,16 @@ func (p *Provider) updateRecord(ctx context.Context, key string, d library.Recor
 	if err := p.write.PutItem(key, body, version); err != nil {
 		return "", mapWriteErr(err, key, "ensure_record update")
 	}
-	if ok, rerr := p.readbackRecord(ctx, key, d); rerr != nil {
+	ok, newVersion, rerr := p.readbackRecord(ctx, key, d)
+	if rerr != nil {
 		return "", rerr
-	} else if !ok {
+	}
+	if !ok {
 		return "", contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 			"ensure_record update readback mismatch for "+key)
+	}
+	if _, err := p.store.PutProviderAnchor(ctx, p.scope, "record", anchor, key, newVersion); err != nil {
+		return "", err
 	}
 	p.invalidate()
 	if err := p.audit(ctx, "ensure_record", anchor, key, "changed", map[string]any{"fields": "versioned update"}); err != nil {
@@ -742,33 +815,48 @@ func (p *Provider) EnsureRendition(ctx context.Context, d library.RenditionDraft
 	anchor := d.ParentProviderID + "|" + d.ContentHash
 
 	// 1. Anchor ledger (fast path) with live verification. A readback
-	// failure means the anchored attachment VANISHED (deleted externally,
-	// or diverged): evict the stale row (guarded — only this exact row) so
-	// the re-upload below re-anchors fresh instead of returning a dead id.
+	// failure means the anchored attachment VANISHED (deleted externally —
+	// purged OR trashed — or diverged): evict the stale row (guarded —
+	// only this exact row) so the re-upload below re-anchors fresh
+	// instead of returning a dead id. Eviction errors PROPAGATE: with the
+	// stale row still in place the fresh insert would silently lose to it
+	// (ON CONFLICT DO NOTHING) and hand back the dead id — exactly the
+	// state this healing exists to prevent.
 	if id, _, err := p.store.LookupProviderAnchor(ctx, p.scope, "rendition", anchor); err == nil && id != "" {
-		if rerr := p.readbackRendition(ctx, id, d, false); rerr == nil {
+		if _, _, rerr := p.readbackRendition(ctx, id, d, false); rerr == nil {
 			if aerr := p.audit(ctx, "ensure_rendition", anchor, id, "reused", nil); aerr != nil {
 				return "", aerr
 			}
 			return id, nil
 		} else {
-			_ = p.store.EvictProviderAnchor(ctx, p.scope, "rendition", anchor, id) // best effort; the fresh insert wins either way
+			if eerr := p.store.EvictProviderAnchor(ctx, p.scope, "rendition", anchor, id); eerr != nil {
+				return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, eerr,
+					"evicting stale rendition anchor "+anchor+" — refusing to continue with a dead anchor in place")
+			}
 		}
 	} else if err != nil && !errors.Is(err, errAnchorAbsent) {
 		return "", err
 	}
 
-	// 2. Tag search (crash window between upload and ledger insert).
+	// 2. Tag search (crash window between upload and ledger insert). The
+	// tag is stamped in phase 0 of the upload — BEFORE the file flow — so
+	// a kill in between leaves a TAGGED BUT FILE-LESS attachment behind.
+	// Such a leftover is adopted only when the FULL readback proves it
+	// (parent, filename, retrievable file with matching digest); a
+	// file-less leftover is skipped and a complete fresh attachment is
+	// created below (the empty item stays for the repair track).
 	if found, err := p.findTaggedAttachment(ctx, d.ContentHash, d.ParentProviderID); err != nil {
 		return "", err
 	} else if found != "" {
-		if _, err := p.store.PutProviderAnchor(ctx, p.scope, "rendition", anchor, found, 0); err != nil {
-			return "", err
+		if _, version, rerr := p.readbackRendition(ctx, found, d, true); rerr == nil {
+			if _, err := p.store.PutProviderAnchor(ctx, p.scope, "rendition", anchor, found, version); err != nil {
+				return "", err
+			}
+			if err := p.audit(ctx, "ensure_rendition", anchor, found, "reused", map[string]any{"recovered_by": "tag_search"}); err != nil {
+				return "", err
+			}
+			return found, nil
 		}
-		if err := p.audit(ctx, "ensure_rendition", anchor, found, "reused", map[string]any{"recovered_by": "tag_search"}); err != nil {
-			return "", err
-		}
-		return found, nil
 	}
 
 	// 3. The official 3-phase upload (write.go), carrying the sha anchor tag.
@@ -784,63 +872,74 @@ func (p *Provider) EnsureRendition(ctx context.Context, d library.RenditionDraft
 	if err != nil {
 		return "", mapWriteErr(err, "", "ensure_rendition upload")
 	}
-	if err := p.readbackRendition(ctx, key, d, true); err != nil {
-		return "", err
-	}
-	surviving, err := p.store.PutProviderAnchor(ctx, p.scope, "rendition", anchor, key, 0)
+	observed, version, err := p.readbackRendition(ctx, key, d, true)
 	if err != nil {
 		return "", err
 	}
-	p.invalidate()
-	outcome := "created"
-	if surviving != key {
-		outcome = "reused"
+	surviving, err := p.store.PutProviderAnchor(ctx, p.scope, "rendition", anchor, key, version)
+	if err != nil {
+		return "", err
 	}
-	if err := p.audit(ctx, "ensure_rendition", anchor, surviving, outcome, map[string]any{
-		"filename": d.Filename, "media_type": d.MediaType, "size": len(content), "sha256": d.ContentHash,
+	if surviving != key {
+		// The anchor row points elsewhere while OUR fresh upload is
+		// verified — a ledger race the single-writer lease should make
+		// impossible. Loud, never a silent "reused" with an unverified id.
+		return "", contracterr.New(contracterr.ComponentLibrary, contracterr.ClassConflict,
+			fmt.Sprintf("rendition anchor %s raced: ledger holds %s while %s was freshly verified — manual reconcile", anchor, surviving, key))
+	}
+	p.invalidate()
+	if err := p.audit(ctx, "ensure_rendition", anchor, key, "created", map[string]any{
+		"filename": d.Filename, "media_type": d.MediaType,
+		"size_observed": observed, "sha256": d.ContentHash, // OBSERVED bytes, not the declared staging size
 	}); err != nil {
 		return "", err
 	}
-	return surviving, nil
+	return key, nil
 }
 
-// readbackRendition proves the attachment: correct parent (alive, not an
-// attachment itself), filename/content type, retrievable file with
-// matching sha256 (Zotero stores md5; we verify OUR digest of the served
-// bytes — stronger).
-func (p *Provider) readbackRendition(ctx context.Context, key string, d library.RenditionDraft, fresh bool) error {
-	data, _, err := p.write.GetItem(key)
+// readbackRendition proves the attachment: correct parent (alive, not
+// an attachment itself, not trashed), filename/content type, retrievable
+// file with matching sha256 (Zotero stores md5; we verify OUR digest of
+// the stored bytes — stronger). Trashed attachments count as ABSENT
+// (the caller heals). Returns the OBSERVED stored size (the audit's
+// evidence) and the persisted version (the anchor ledger's
+// provider_version).
+func (p *Provider) readbackRendition(ctx context.Context, key string, d library.RenditionDraft, fresh bool) (int64, int64, error) {
+	data, verStr, err := p.write.GetItem(key)
 	if err != nil {
 		if isStatus(err, http.StatusNotFound) {
-			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "rendition "+key+" vanished from Zotero")
+			return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "rendition "+key+" vanished from Zotero")
 		}
-		return mapWriteErr(err, key, "ensure_rendition readback")
+		return 0, 0, mapWriteErr(err, key, "ensure_rendition readback")
 	}
 	var it zotItem
 	if err := json.Unmarshal(data, &it); err != nil {
-		return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "rendition readback decode "+key)
+		return 0, 0, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "rendition readback decode "+key)
+	}
+	if it.Deleted {
+		return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "rendition "+key+" sits in the Zotero trash")
 	}
 	if it.ParentItem != d.ParentProviderID {
-		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
+		return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 			"rendition readback: attachment "+key+" sits under parent "+it.ParentItem+", want "+d.ParentProviderID)
 	}
 	if fresh {
-		// The parent must be alive (not deleted, a real document item).
+		// The parent must be alive (a real, un-trashed document item).
 		pdata, _, perr := p.write.GetItem(d.ParentProviderID)
 		if perr != nil {
-			return mapWriteErr(perr, d.ParentProviderID, "rendition parent readback")
+			return 0, 0, mapWriteErr(perr, d.ParentProviderID, "rendition parent readback")
 		}
 		var parent zotItem
-		if json.Unmarshal(pdata, &parent) != nil || parent.ItemType == "attachment" || parent.ItemType == "note" {
-			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
-				"rendition readback: parent "+d.ParentProviderID+" is not a document item")
+		if json.Unmarshal(pdata, &parent) != nil || parent.Deleted || parent.ItemType == "attachment" || parent.ItemType == "note" {
+			return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
+				"rendition readback: parent "+d.ParentProviderID+" is not a live document item")
 		}
 		if it.Filename != d.Filename {
-			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
+			return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 				"rendition readback: filename "+it.Filename+" != "+d.Filename)
 		}
 		if d.MediaType != "" && it.ContentType != "" && it.ContentType != d.MediaType {
-			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
+			return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 				"rendition readback: contentType "+it.ContentType+" != "+d.MediaType)
 		}
 		// File retrievable + digest/size prove. The local API redirects the
@@ -850,24 +949,35 @@ func (p *Provider) readbackRendition(ctx context.Context, key string, d library.
 		// stored md5).
 		eraw, _, eerr := p.write.GetItemEnvelope(key)
 		if eerr != nil {
-			return mapWriteErr(eerr, key, "rendition file readback")
+			return 0, 0, mapWriteErr(eerr, key, "rendition file readback")
 		}
 		local := enclosurePath(eraw)
 		if local == "" {
-			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
+			return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 				"rendition readback: attachment "+key+" carries no local enclosure path")
 		}
 		got, ferr := os.ReadFile(local)
 		if ferr != nil {
-			return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassUnavailable, ferr, "rendition readback file "+local)
+			return 0, 0, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassUnavailable, ferr, "rendition readback file "+local)
 		}
 		sum := sha256.Sum256(got)
 		if hex.EncodeToString(sum[:]) != d.ContentHash {
-			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
+			return 0, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 				"rendition readback: stored file digest mismatch for "+key+" ("+local+")")
 		}
+		return int64(len(got)), versionOf(verStr), nil
 	}
-	return nil
+	return 0, versionOf(verStr), nil
+}
+
+// versionOf parses a Last-Modified-Version string (0 when absent or
+// malformed — the ledger column is diagnostic, never a guard).
+func versionOf(v string) int64 {
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // enclosurePath extracts links.enclosure.href from a raw item envelope,
@@ -1093,6 +1203,13 @@ func createdKey(raw []byte) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("write response carries no key %.200s", raw)
+}
+
+// contractClassIs reports whether err is a classed contract error of the
+// given class (test-independent mirror of the assertions).
+func contractClassIs(err error, class contracterr.Class) bool {
+	got, ok := contracterr.ClassOf(err)
+	return ok && got == class
 }
 
 func isStatus(err error, code int) bool {
