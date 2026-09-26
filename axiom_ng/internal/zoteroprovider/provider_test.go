@@ -40,7 +40,10 @@ type stubStore struct {
 	released       bool
 	evictFails     bool   // evictions error (the M5 propagation probe)
 	renewTransient bool   // renewals fail with a PLAIN (unclassed) error
-	anchorRaceWith string // PutProviderAnchor returns this id when set (race probe)
+	anchorRaceWith string // the combined put returns this id when set (race probe)
+	// anchorAndAuditFails: the combined anchor+audit write fails and
+	// persists NOTHING (crash sonde for the 1:1 recovery witness).
+	anchorAndAuditFails bool
 }
 
 func newStubStore() *stubStore { return &stubStore{anchors: map[string]string{}} }
@@ -98,16 +101,24 @@ func (s *stubStore) LookupProviderAnchor(_ context.Context, _, kind, anchor stri
 	return "", 0, errAnchorAbsent
 }
 
-func (s *stubStore) PutProviderAnchor(_ context.Context, _, kind, anchor, providerID string, _ int64) (string, error) {
+func (s *stubStore) PutProviderAnchorWithAudit(_ context.Context, _, kind, anchor, providerID string, _ int64, audit library.WriteAuditRow) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.anchorAndAuditFails {
+		// the crash sonde: NOTHING persists (the real store rolls the
+		// transaction back — an anchor without its audit row is impossible)
+		return "", errors.New("anchor+audit store down")
+	}
 	if s.anchorRaceWith != "" {
+		s.audit = append(s.audit, audit)
 		return s.anchorRaceWith, nil // simulate a losing anchor race
 	}
 	if cur, ok := s.anchors[kind+"|"+anchor]; ok {
+		s.audit = append(s.audit, audit)
 		return cur, nil
 	}
 	s.anchors[kind+"|"+anchor] = providerID
+	s.audit = append(s.audit, audit)
 	return providerID, nil
 }
 
@@ -1428,5 +1439,44 @@ func TestUploadRefusesCrossHostRedirect(t *testing.T) {
 	_, err := wc.CreateAttachmentWithFile("", "f.pdf", "application/pdf", []byte("x"))
 	if err == nil || !strings.Contains(err.Error(), "cross-host") {
 		t.Fatalf("cross-host redirect must be refused, got %v", err)
+	}
+}
+
+func TestAnchorAndAuditAtomicCrashRecovery(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	// The torn create: the Zotero collection EXISTS, the ledger does not.
+	h.fake.collections["COLLTORN"] = &zotCollection{Key: "COLLTORN", Name: "Torn", Parent: "", Version: 1}
+
+	// Crash sonde: the combined anchor+audit write fails and persists
+	// NOTHING (no anchor row, no audit row — the real store's rollback).
+	h.store.mu.Lock()
+	h.store.anchorAndAuditFails = true
+	h.store.mu.Unlock()
+	if _, err := h.prov.ResolvePath(ctx, []string{"Torn"}, true); err == nil {
+		t.Fatal("failing combined write must surface")
+	}
+	if id, ok := h.store.anchors["collection||Torn"]; ok {
+		t.Fatalf("crash must not leave an anchor row, got %q", id)
+	}
+	if rows := h.store.audits(); len(rows) != 0 {
+		t.Fatalf("crash must not leave an audit row, got %+v", rows)
+	}
+
+	// The retry re-runs the SAME combined path: the audit row lands, the
+	// 1:1 end state holds INCLUDING the crash scenario.
+	h.store.mu.Lock()
+	h.store.anchorAndAuditFails = false
+	h.store.mu.Unlock()
+	id, err := h.prov.ResolvePath(ctx, []string{"Torn"}, true)
+	if err != nil || id != "COLLTORN" {
+		t.Fatalf("retry: %q %v", id, err)
+	}
+	rows := h.store.audits()
+	if len(rows) != 1 || rows[0].Outcome != "adopted" || rows[0].ProviderRef != "COLLTORN" {
+		t.Fatalf("retry must emit exactly the recovered audit row, got %+v", rows)
+	}
+	if a, _ := h.store.anchors["collection||Torn"]; a != "COLLTORN" {
+		t.Fatalf("anchor missing after retry: %q", a)
 	}
 }

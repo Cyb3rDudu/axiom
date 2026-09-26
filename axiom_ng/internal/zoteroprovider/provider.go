@@ -81,7 +81,11 @@ type ProviderStore interface {
 	ReleaseWriterLease(ctx context.Context, scope, owner string) error
 	AppendWriteAudit(ctx context.Context, r library.WriteAuditRow) error
 	LookupProviderAnchor(ctx context.Context, scope, kind, anchor string) (string, int64, error)
-	PutProviderAnchor(ctx context.Context, scope, kind, anchor, providerID string, version int64) (string, error)
+	// PutProviderAnchorWithAudit persists the anchor AND its audit row in
+	// ONE transaction — every anchor write rides it, so a crash can never
+	// leave an anchor without its audit row (the retry re-runs the same
+	// combined path).
+	PutProviderAnchorWithAudit(ctx context.Context, scope, kind, anchor, providerID string, version int64, audit library.WriteAuditRow) (string, error)
 	// EvictProviderAnchor drops a row whose provider id proved DEAD (the
 	// item vanished from Zotero) so the next ensure can re-anchor fresh.
 	EvictProviderAnchor(ctx context.Context, scope, kind, anchor, providerID string) error
@@ -401,6 +405,16 @@ func yearOfDate(d string) int {
 	return 0
 }
 
+// hasExactTag reports whether the tag list carries tag EXACTLY.
+func hasExactTag(tags []zotTag, tag string) bool {
+	for _, t := range tags {
+		if t.Tag == tag {
+			return true
+		}
+	}
+	return false
+}
+
 func hasTag(tags []zotTag, prefix string) (string, bool) {
 	for _, t := range tags {
 		if strings.HasPrefix(t.Tag, prefix) {
@@ -588,7 +602,7 @@ func (p *Provider) EnsureRecord(ctx context.Context, d library.RecordDraft) (str
 	// through to tag-search/create. Eviction errors propagate — a failed
 	// eviction would make the create below return the dead row's id.
 	if id, _, err := p.store.LookupProviderAnchor(ctx, p.scope, "record", anchor); err == nil && id != "" {
-		ok, _, rerr := p.readbackRecord(ctx, id, d)
+		ok, _, rerr := p.readbackRecord(ctx, id, d, anchor)
 		if rerr == nil && ok {
 			if err := p.audit(ctx, "ensure_record", anchor, id, "reused", map[string]any{"title": d.Title}); err != nil {
 				return "", err
@@ -616,17 +630,17 @@ func (p *Provider) EnsureRecord(ctx context.Context, d library.RecordDraft) (str
 	if found, err := p.findTaggedRecord(ctx, tag); err != nil {
 		return "", err
 	} else if found != "" {
-		ok, version, rerr := p.readbackRecord(ctx, found, d)
+		ok, version, rerr := p.readbackRecord(ctx, found, d, anchor)
 		if rerr != nil {
 			return "", rerr
 		}
 		if !ok {
 			return p.updateRecord(ctx, found, d, anchor)
 		}
-		if _, err := p.store.PutProviderAnchor(ctx, p.scope, "record", anchor, found, version); err != nil {
-			return "", err
-		}
-		if err := p.audit(ctx, "ensure_record", anchor, found, "reused", map[string]any{"recovered_by": "tag_search"}); err != nil {
+		if _, err := p.store.PutProviderAnchorWithAudit(ctx, p.scope, "record", anchor, found, version, library.WriteAuditRow{
+			Scope: p.scope, Operation: "ensure_record", Anchor: anchor, ProviderRef: found,
+			Outcome: "reused", Readback: map[string]any{"recovered_by": "tag_search"},
+		}); err != nil {
 			return "", err
 		}
 		return found, nil
@@ -660,13 +674,17 @@ func (p *Provider) EnsureRecord(ctx context.Context, d library.RecordDraft) (str
 	}
 	// Readback: what Zotero persisted must match the draft (type+title
 	// + the non-empty draft fields + the anchor tag marker).
-	if ok, version, rerr := p.readbackRecord(ctx, key, d); rerr != nil {
+	if ok, version, rerr := p.readbackRecord(ctx, key, d, anchor); rerr != nil {
 		return "", rerr
 	} else if !ok {
 		return "", contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 			"ensure_record readback mismatch for "+key+" — Zotero persisted different type/title")
 	} else {
-		surviving, err := p.store.PutProviderAnchor(ctx, p.scope, "record", anchor, key, version)
+		// Anchor + audit in ONE transaction (the combined store path).
+		surviving, err := p.store.PutProviderAnchorWithAudit(ctx, p.scope, "record", anchor, key, version, library.WriteAuditRow{
+			Scope: p.scope, Operation: "ensure_record", Anchor: anchor, ProviderRef: key,
+			Outcome: "created", Readback: map[string]any{"item_type": item.ItemType, "title": d.Title},
+		})
 		if err != nil {
 			return "", err
 		}
@@ -680,9 +698,6 @@ func (p *Provider) EnsureRecord(ctx context.Context, d library.RecordDraft) (str
 		}
 	}
 	p.invalidate()
-	if err := p.audit(ctx, "ensure_record", anchor, key, "created", map[string]any{"item_type": item.ItemType, "title": d.Title}); err != nil {
-		return "", err
-	}
 	return key, nil
 }
 
@@ -740,7 +755,7 @@ func itemFromEnvelope(env []byte) (zotItem, bool) {
 // error = the record exists but diverged (caller: versioned update).
 // The returned version is what Zotero persisted (the anchor ledger's
 // provider_version).
-func (p *Provider) readbackRecord(ctx context.Context, key string, d library.RecordDraft) (bool, int64, error) {
+func (p *Provider) readbackRecord(ctx context.Context, key string, d library.RecordDraft, anchor string) (bool, int64, error) {
 	data, verStr, err := p.write.GetItem(key)
 	if err != nil {
 		if isStatus(err, http.StatusNotFound) {
@@ -757,8 +772,10 @@ func (p *Provider) readbackRecord(ctx context.Context, key string, d library.Rec
 		return false, 0, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound,
 			"anchored record "+key+" sits in the Zotero trash — treat as vanished")
 	}
-	if _, tagged := hasTag(it.Tags, "axiom-imp:"); !tagged {
-		return false, versionOf(verStr), nil // ANY axiom-imp marker passes; the update re-stamps the exact one
+	if !hasExactTag(it.Tags, "axiom-imp:"+anchor) {
+		// The EXACT anchor marker is missing (a foreign anchor's marker
+		// does not count): diverged — the update re-stamps this anchor.
+		return false, versionOf(verStr), nil
 	}
 	same := it.ItemType == firstNonEmptyStr(d.RecordType, "document") &&
 		it.Title == d.Title &&
@@ -819,7 +836,7 @@ func (p *Provider) updateRecord(ctx context.Context, key string, d library.Recor
 	if json.Unmarshal(data, &cur) == nil {
 		tagged := false
 		for _, t := range cur.Tags {
-			if s, _ := t["tag"].(string); strings.HasPrefix(s, "axiom-imp:") {
+			if s, _ := t["tag"].(string); s == "axiom-imp:"+anchor {
 				tagged = true
 			}
 		}
@@ -835,7 +852,7 @@ func (p *Provider) updateRecord(ctx context.Context, key string, d library.Recor
 	if err := p.write.PutItem(key, body, version); err != nil {
 		return "", mapWriteErr(err, key, "ensure_record update")
 	}
-	ok, newVersion, rerr := p.readbackRecord(ctx, key, d)
+	ok, newVersion, rerr := p.readbackRecord(ctx, key, d, anchor)
 	if rerr != nil {
 		return "", rerr
 	}
@@ -843,13 +860,13 @@ func (p *Provider) updateRecord(ctx context.Context, key string, d library.Recor
 		return "", contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 			"ensure_record update readback mismatch for "+key)
 	}
-	if _, err := p.store.PutProviderAnchor(ctx, p.scope, "record", anchor, key, newVersion); err != nil {
+	if _, err := p.store.PutProviderAnchorWithAudit(ctx, p.scope, "record", anchor, key, newVersion, library.WriteAuditRow{
+		Scope: p.scope, Operation: "ensure_record", Anchor: anchor, ProviderRef: key,
+		Outcome: "changed", Readback: map[string]any{"fields": "versioned update"},
+	}); err != nil {
 		return "", err
 	}
 	p.invalidate()
-	if err := p.audit(ctx, "ensure_record", anchor, key, "changed", map[string]any{"fields": "versioned update"}); err != nil {
-		return "", err
-	}
 	return key, nil
 }
 
@@ -908,10 +925,10 @@ func (p *Provider) EnsureRendition(ctx context.Context, d library.RenditionDraft
 		return "", err
 	} else if found != "" {
 		if _, version, rerr := p.readbackRendition(ctx, found, d, true); rerr == nil {
-			if _, err := p.store.PutProviderAnchor(ctx, p.scope, "rendition", anchor, found, version); err != nil {
-				return "", err
-			}
-			if err := p.audit(ctx, "ensure_rendition", anchor, found, "reused", map[string]any{"recovered_by": "tag_search"}); err != nil {
+			if _, err := p.store.PutProviderAnchorWithAudit(ctx, p.scope, "rendition", anchor, found, version, library.WriteAuditRow{
+				Scope: p.scope, Operation: "ensure_rendition", Anchor: anchor, ProviderRef: found,
+				Outcome: "reused", Readback: map[string]any{"recovered_by": "tag_search"},
+			}); err != nil {
 				return "", err
 			}
 			return found, nil
@@ -937,7 +954,13 @@ func (p *Provider) EnsureRendition(ctx context.Context, d library.RenditionDraft
 	if err != nil {
 		return "", err
 	}
-	surviving, err := p.store.PutProviderAnchor(ctx, p.scope, "rendition", anchor, key, version)
+	// Anchor + audit in ONE transaction; the audit carries the OBSERVED
+	// stored size, not the declared staging size.
+	surviving, err := p.store.PutProviderAnchorWithAudit(ctx, p.scope, "rendition", anchor, key, version, library.WriteAuditRow{
+		Scope: p.scope, Operation: "ensure_rendition", Anchor: anchor, ProviderRef: key, Outcome: "created",
+		Readback: map[string]any{"filename": d.Filename, "media_type": d.MediaType,
+			"size_observed": observed, "sha256": d.ContentHash},
+	})
 	if err != nil {
 		return "", err
 	}
@@ -949,12 +972,6 @@ func (p *Provider) EnsureRendition(ctx context.Context, d library.RenditionDraft
 			fmt.Sprintf("rendition anchor %s raced: ledger holds %s while %s was freshly verified — manual reconcile", anchor, surviving, key))
 	}
 	p.invalidate()
-	if err := p.audit(ctx, "ensure_rendition", anchor, key, "created", map[string]any{
-		"filename": d.Filename, "media_type": d.MediaType,
-		"size_observed": observed, "sha256": d.ContentHash, // OBSERVED bytes, not the declared staging size
-	}); err != nil {
-		return "", err
-	}
 	return key, nil
 }
 
@@ -1214,10 +1231,15 @@ func (p *Provider) adoptCollectionAnchor(ctx context.Context, name, parentKey, k
 	} else if err != nil && !errors.Is(err, errAnchorAbsent) {
 		return err
 	}
-	if _, err := p.store.PutProviderAnchor(ctx, p.scope, "collection", anchor, key, 0); err != nil {
+	// The SAME combined path as the create: anchor + audit atomically —
+	// a crash mid-adoption rolls both back and the retry re-runs this.
+	if _, err := p.store.PutProviderAnchorWithAudit(ctx, p.scope, "collection", anchor, key, 0, library.WriteAuditRow{
+		Scope: p.scope, Operation: "create_collection", Anchor: anchor, ProviderRef: key,
+		Outcome: "adopted", Readback: map[string]any{"parent": parentKey, "recovered": true},
+	}); err != nil {
 		return err
 	}
-	return p.audit(ctx, "create_collection", anchor, key, "adopted", map[string]any{"parent": parentKey, "recovered": true})
+	return nil
 }
 
 // createCollection posts one segment (parent-first: the parent key is
@@ -1261,10 +1283,11 @@ func (p *Provider) createCollection(ctx context.Context, name, parentKey string)
 		return "", contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 			fmt.Sprintf("create_collection readback: parent %q != %q", gotParent, parentKey))
 	}
-	if _, err := p.store.PutProviderAnchor(ctx, p.scope, "collection", collectionAnchor(parentKey, name), key, 0); err != nil {
-		return "", err
-	}
-	if err := p.audit(ctx, "create_collection", collectionAnchor(parentKey, name), key, "created", map[string]any{"parent": parentKey}); err != nil {
+	ca := collectionAnchor(parentKey, name)
+	if _, err := p.store.PutProviderAnchorWithAudit(ctx, p.scope, "collection", ca, key, 0, library.WriteAuditRow{
+		Scope: p.scope, Operation: "create_collection", Anchor: ca, ProviderRef: key,
+		Outcome: "created", Readback: map[string]any{"parent": parentKey},
+	}); err != nil {
 		return "", err
 	}
 	return key, nil

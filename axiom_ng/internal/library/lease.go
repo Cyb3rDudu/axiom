@@ -203,3 +203,43 @@ func (s *Store) PutProviderAnchor(ctx context.Context, scope, kind, anchor, prov
 	}
 	return surviving, nil
 }
+
+// PutProviderAnchorWithAudit persists the anchor AND its write-audit row
+// in ONE transaction: the mutation↔audit 1:1 contract holds even against
+// a crash between the two writes — both roll back, and the retry re-runs
+// the same combined path (the anchor cannot exist without its audit row
+// and vice versa). Returns the SURVIVING provider id (first writer keeps
+// the id; the version column refreshes on conflict).
+func (s *Store) PutProviderAnchorWithAudit(ctx context.Context, scope, kind, anchor, providerID string, version int64, audit WriteAuditRow) (string, error) {
+	if audit.Readback == nil {
+		audit.Readback = map[string]any{}
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "anchor+audit begin")
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO library_provider_anchors (scope, kind, anchor, provider_id, provider_version)
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (scope, kind, anchor) DO UPDATE SET provider_version = EXCLUDED.provider_version`,
+		scope, kind, anchor, providerID, version); err != nil {
+		return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "provider anchor put")
+	}
+	var surviving string
+	if err := tx.QueryRow(ctx,
+		`SELECT provider_id FROM library_provider_anchors WHERE scope=$1 AND kind=$2 AND anchor=$3`,
+		scope, kind, anchor).Scan(&surviving); err != nil {
+		return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "provider anchor readback")
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO library_write_audit (scope, operation, anchor, provider_ref, outcome, readback, at)
+		VALUES ($1,$2,$3,$4,$5,$6,now())`,
+		audit.Scope, audit.Operation, audit.Anchor, audit.ProviderRef, audit.Outcome, audit.Readback); err != nil {
+		return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "write audit append")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "anchor+audit commit")
+	}
+	return surviving, nil
+}

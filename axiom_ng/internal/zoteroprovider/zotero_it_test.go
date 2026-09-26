@@ -164,41 +164,12 @@ func precleanZotero(t *testing.T) {
 		_ = write.DeleteAttachmentItem(it.Key) // into the trash (version-guarded)
 		_ = write.DeleteAttachmentItem(it.Key) // purge if the instance allows
 	}
-	cols, err := read.ListCanonicalCollections()
-	if err != nil {
-		t.Fatalf("pre-clean collections read: %v", err)
-	}
-	if err := deleteITCollections(ctx, read, write, env, cols); err != nil {
-		t.Fatalf("pre-clean collections: %v", err)
-	}
-}
-
-// deleteITCollections removes the IT-named collections ONLY when EMPTY:
-// a user collection that happens to share the name carries items and
-// must survive (the API DELETE is permanent). Emptiness = no live item
-// references the collection key.
-func deleteITCollections(ctx context.Context, read *LocalAPI, write *WriteClient, env []json.RawMessage, cols []CanonicalCollection) error {
-	used := map[string]bool{}
-	for _, raw := range env {
-		it, ok := itemFromEnvelope(raw)
-		if !ok || bool(it.Deleted) {
-			continue
-		}
-		for _, c := range it.Collections {
-			used[c] = true
-		}
-	}
-	for _, c := range cols {
-		if c.Name != "Axiom IT" && c.Name != "F07 Zotero IT" {
-			continue
-		}
-		if used[c.Key] {
-			continue // non-empty (foreign?) collection: never delete
-		}
-		_ = write.DeleteCollection(c.Key)
-		_ = write.DeleteCollection(c.Key) // purge if the instance allows
-	}
-	return nil
+	// Collections are deliberately KEPT: the torn-create simulation below
+	// needs existing segments with a fresh anchor ledger, and the lease's
+	// single-writer guarantee makes duplicate same-named siblings from
+	// concurrent IT runs impossible (a manual sibling would fail
+	// ResolvePath loudly — operator cleanup, not silent adoption).
+	_ = write
 }
 
 // itBookPDF/itWebPDF — the deterministic IT fixtures (stable bytes →
@@ -310,9 +281,21 @@ func TestRealZoteroFullLadderIT(t *testing.T) {
 
 	// Everything the IT creates lives under this path — the cleanup witness.
 	itPath := []string{"Axiom IT", "F07 Zotero IT"}
+	// Torn-create simulation: the collections EXIST while the scratch
+	// anchor ledger is fresh (the exact crash state) — the pre-resolve
+	// must ADOPT them (audit adopted, anchor healed via the combined
+	// anchor+audit path), never create duplicates.
+	base := strings.TrimSuffix(strings.TrimSuffix(itBaseURL(), "/api"), "/")
+	tRead := NewLocalAPI(itBaseURL(), "users/0")
+	tWrite := NewWriteClient(base, tRead.ServerID(), itWriteKey(t))
+	rootID := ensureTornCollection(t, tRead, tWrite, "Axiom IT", "")
+	leafID := ensureTornCollection(t, tRead, tWrite, "F07 Zotero IT", rootID)
 	collID, err := prov.ResolvePath(ctx, itPath, true)
 	if err != nil {
 		t.Fatalf("test collection path: %v", err)
+	}
+	if collID != leafID {
+		t.Fatalf("pre-resolve must adopt the torn leaf %s, got %s", leafID, collID)
 	}
 
 	var createdItems []string
@@ -457,9 +440,12 @@ func TestRealZoteroFullLadderIT(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The 1:1 witness, exactly: 2 create_collection (ResolvePath) +
-		// book {record, rendition, membership} + replay {membership reused}
-		// + webpage {record, rendition, membership} = 9 mutations = 9 rows.
+		// The 1:1 witness, exactly: 2 create_collection ADOPTED rows (the
+		// torn-create simulation above — the pre-resolve adopts existing
+		// unanchored segments through the same combined anchor+audit path
+		// as a create) + book {record, rendition, membership} + replay
+		// {membership reused} + webpage {record, rendition, membership}
+		// = 9 mutations = 9 rows.
 		if n != 9 {
 			t.Fatalf("write audit rows = %d, want exactly 9 (one per mutation, replay membership reused)", n)
 		}
@@ -472,19 +458,14 @@ func TestRealZoteroFullLadderIT(t *testing.T) {
 				t.Fatalf("cleanup item %s: %v", key, err)
 			}
 		}
-		// The IT-created collections go — through the SAME empty-guard as
-		// the pre-clean (a foreign same-named collection with items
-		// survives; ours are empty once the items are gone).
-		cols, cerr := prov.read.ListCanonicalCollections()
-		if cerr != nil {
-			t.Fatalf("cleanup collections read: %v", cerr)
-		}
-		env2, eerr := prov.read.getItems(ctx, nil)
-		if eerr != nil {
-			t.Fatalf("cleanup items read: %v", eerr)
-		}
-		if err := deleteITCollections(ctx, prov.read, prov.write, env2, cols); err != nil {
-			t.Fatalf("cleanup collections: %v", err)
+		// Cleanup deletes ONLY the self-resolved collection keys (leaf
+		// first, then the root) — ownership by resolution, not by name; a
+		// foreign same-named collection is never touched. Both are empty
+		// now (the items above are gone).
+		for _, key := range []string{collID, rootID} {
+			if err := prov.write.DeleteCollection(key); err != nil && !isStatus(err, http.StatusNotFound) {
+				t.Fatalf("cleanup collection %s: %v", key, err)
+			}
 		}
 		prov.invalidate()
 
@@ -507,16 +488,46 @@ func TestRealZoteroFullLadderIT(t *testing.T) {
 				t.Fatalf("cleanup witness read %s: %v", key, gerr)
 			}
 		}
-		cols, err = prov.read.ListCanonicalCollections()
-		if err != nil {
-			t.Fatal(err)
+		colsAfter, cerr := prov.read.ListCanonicalCollections()
+		if cerr != nil {
+			t.Fatal(cerr)
 		}
-		for _, c := range cols {
+		for _, c := range colsAfter {
 			if c.Name == itPath[0] || c.Name == itPath[1] {
 				t.Fatalf("cleanup witness: collection %q survived", c.Name)
 			}
 		}
 	})
+}
+
+// ensureTornCollection finds an existing (name, parent) collection or
+// creates it directly via the write client — simulating a crash-torn
+// create: the Zotero segment exists, the anchor ledger does not.
+func ensureTornCollection(t *testing.T, read *LocalAPI, write *WriteClient, name, parentKey string) string {
+	t.Helper()
+	cols, err := read.ListCanonicalCollections()
+	if err != nil {
+		t.Fatalf("torn-sim collections read: %v", err)
+	}
+	for _, c := range cols {
+		if c.Name == name && c.ParentKey == parentKey {
+			return c.Key
+		}
+	}
+	pc := any(false)
+	if parentKey != "" {
+		pc = parentKey
+	}
+	body, _ := json.Marshal([]map[string]any{{"name": name, "parentCollection": pc}})
+	raw, err := write.PostCollections(body)
+	if err != nil {
+		t.Fatalf("torn-sim create %s: %v", name, err)
+	}
+	key, err := createdKey(raw)
+	if err != nil {
+		t.Fatalf("torn-sim response %s: %v", name, err)
+	}
+	return key
 }
 
 // catalogFind walks the FULL catalog (real pagination) for a provider id.

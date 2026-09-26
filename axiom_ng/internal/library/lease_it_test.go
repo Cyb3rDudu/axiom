@@ -131,3 +131,50 @@ func TestProviderAnchorsAndWriteAudit(t *testing.T) {
 		t.Fatalf("collection anchor lookup: %q %v", id, err)
 	}
 }
+
+func TestPutProviderAnchorWithAuditAtomic(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	const scope = "zotero|base|users/0"
+
+	// The combined path: anchor + audit land together; the first writer
+	// keeps the id, the version column refreshes.
+	surviving, err := st.PutProviderAnchorWithAudit(ctx, scope, "collection", "c|Seg", "COLLX", 1, WriteAuditRow{
+		Scope: scope, Operation: "create_collection", Anchor: "c|Seg", ProviderRef: "COLLX",
+		Outcome: "created", Readback: map[string]any{"parent": ""},
+	})
+	if err != nil || surviving != "COLLX" {
+		t.Fatalf("combined put: %q %v", surviving, err)
+	}
+	surviving, err = st.PutProviderAnchorWithAudit(ctx, scope, "collection", "c|Seg", "COLLY", 7, WriteAuditRow{
+		Scope: scope, Operation: "create_collection", Anchor: "c|Seg", ProviderRef: "COLLY",
+		Outcome: "changed", Readback: nil, // nil persists as '{}' (NOT NULL floor)
+	})
+	if err != nil || surviving != "COLLX" {
+		t.Fatalf("combined re-put must keep the first id, got %q %v", surviving, err)
+	}
+	if id, ver, lerr := st.LookupProviderAnchor(ctx, scope, "collection", "c|Seg"); lerr != nil || id != "COLLX" || ver != 7 {
+		t.Fatalf("lookup after combined put: %q %d %v (want COLLX 7)", id, ver, lerr)
+	}
+	if n, aerr := st.CountWriteAudit(ctx, scope); aerr != nil || n != 2 {
+		t.Fatalf("combined writes must emit their audit rows: %d %v", n, aerr)
+	}
+
+	// Crash sonde against the REAL transaction: the anchor insert alone
+	// would succeed, the audit insert fails (an unmarshalable readback
+	// detail) — the whole transaction rolls back, leaving NEITHER row.
+	_, err = st.PutProviderAnchorWithAudit(ctx, scope, "record", "crash-probe", "KEYZ", 1, WriteAuditRow{
+		Scope: scope, Operation: "ensure_record", Anchor: "crash-probe", ProviderRef: "KEYZ",
+		Outcome: "created", Readback: make(chan int), // json cannot marshal a channel
+	})
+	if err == nil {
+		t.Fatal("the unmarshalable audit detail must fail the combined write")
+	}
+	if _, _, lerr := st.LookupProviderAnchor(ctx, scope, "record", "crash-probe"); !errors.Is(lerr, pgx.ErrNoRows) {
+		t.Fatalf("crash must roll the ANCHOR back too (its lone insert would have succeeded): %v", lerr)
+	}
+	if n, aerr := st.CountWriteAudit(ctx, scope); aerr != nil || n != 2 {
+		t.Fatalf("crash must leave the audit count untouched: %d %v", n, aerr)
+	}
+}
