@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom_ng/internal/store/migrations"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -75,6 +76,9 @@ func openDispatchDB(t *testing.T) *dispatchHarness {
 	}
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
 	}
 	t.Cleanup(d.Close)
 	return &dispatchHarness{pool: d.Pool(), rep: repo.New(d.Pool()), dsn: dispatchDSN}

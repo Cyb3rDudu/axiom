@@ -17,6 +17,7 @@
 package repo
 
 import (
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/revision"
 	"context"
 	"encoding/json"
 	"errors"
@@ -206,10 +207,19 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 		// Lock and read the job's source/document/attachment/canonical rows, then
 		// validate obsolescence against the LOCKED state so a snapshot is never
 		// built from a row that changed under us or a mixed transaction snapshot.
-		state, reason, err := r.loadAndLockState(ctx, tx, cand)
-		if err != nil {
+		// Revision-lane jobs (F09 #303) resolve their FKs from the mirror here —
+		// the documented dual-read; Zotero identities stay opaque references.
+		var state *frozenState
+		var reason string
+		var err2 error
+		if cand.intakeKind == "revision" {
+			state, reason, err2 = r.loadAndLockRevisionState(ctx, tx, cand)
+		} else {
+			state, reason, err2 = r.loadAndLockState(ctx, tx, cand)
+		}
+		if err2 != nil {
 			tx.Rollback(ctx)
-			return nil, err
+			return nil, err2
 		}
 		if reason != "" {
 			if err := r.markObsolete(ctx, tx, cand.id, reason); err != nil {
@@ -255,12 +265,26 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			return nil, err
 		}
 		idemKey := idempotencyKey(cand.id, state.attachment.id, state.attachment.contentHash, profileHash, cand.forceRebuild)
-		snapshot := buildFrozenInput(cand, state, proc, profileHash, idemKey)
+		var snapshot []byte
+		if cand.intakeKind == "revision" {
+			var fr revision.SourceRevision
+			if err := json.Unmarshal(cand.revJSON, &fr); err != nil {
+				tx.Rollback(ctx)
+				return nil, fmt.Errorf("revision json: %w", err)
+			}
+			snapshot = buildRevisionFrozenInput(cand, state, proc, profileHash, idemKey, fr)
+		} else {
+			snapshot = buildFrozenInput(cand, state, proc, profileHash, idemKey)
+		}
 
 		var newAttempt int
 		var tsToken string
 		var leaseUntil time.Time
-		err = tx.QueryRow(ctx, `
+		// Revision lane: the claim also persists the mirror-resolved FK
+		// uuids (document_id/attachment_id stay NULL until here — the
+		// dual-read point; loadJobForPersist and the persist chain read
+		// them non-NULL afterwards).
+		claimSQL := `
 			UPDATE ingest_jobs SET
 				status            = 'claimed',
 				claimed_by        = $2,
@@ -274,10 +298,19 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 				processing_profile= COALESCE(processing_profile, $6::jsonb),
 				profile_hash      = COALESCE(profile_hash, $7),
 				idempotency_key   = COALESCE(idempotency_key, $8),
-				updated_at        = now()
+				updated_at        = now()`
+		claimArgs := []any{cand.id, opts.WorkerID, opts.RunnerName, leaseSec, snapshot, procCanonical, profileHash, idemKey}
+		if cand.intakeKind == "revision" {
+			claimSQL += `,
+				source_id     = $9::uuid,
+				document_id   = $10::uuid,
+				attachment_id = $11::uuid`
+			claimArgs = append(claimArgs, state.source.id, state.document.id, state.attachment.id)
+		}
+		claimSQL += `
 				WHERE id = $1
-				RETURNING attempt, lease_token::text, lease_until
-		`, cand.id, opts.WorkerID, opts.RunnerName, leaseSec, snapshot, procCanonical, profileHash, idemKey).
+				RETURNING attempt, lease_token::text, lease_until`
+		err = tx.QueryRow(ctx, claimSQL, claimArgs...).
 			Scan(&newAttempt, &tsToken, &leaseUntil)
 		if err != nil {
 			tx.Rollback(ctx)
@@ -370,7 +403,10 @@ func claimCandidate(ctx context.Context, tx pgx.Tx) (*candidate, error) {
 		SELECT j.id::text, j.attempt, j.max_attempts, j.content_hash, j.force_rebuild,
 		       COALESCE(j.source_id::text, '') AS src_id,
 		       COALESCE(j.document_id::text, '') AS doc_id,
-		       COALESCE(j.attachment_id::text, '') AS att_id
+		       COALESCE(j.attachment_id::text, '') AS att_id,
+		       COALESCE(j.intake_kind, 'zotero'),
+		       COALESCE(j.revision_source_id, ''), COALESCE(j.revision_record_id, ''),
+		       COALESCE(j.revision_rendition_id, ''), j.revision_json
 		FROM ingest_jobs j
 		WHERE j.status IN ('pending','claimed','processing')
 		  AND j.cancel_requested_at IS NULL
@@ -394,7 +430,8 @@ func claimCandidate(ctx context.Context, tx pgx.Tx) (*candidate, error) {
 	var c candidate
 	err := tx.QueryRow(ctx, sql).Scan(
 		&c.id, &c.attempt, &c.maxAttempts, &c.contentHash, &c.forceRebuild,
-		&c.sourceID, &c.documentID, &c.attachmentID)
+		&c.sourceID, &c.documentID, &c.attachmentID,
+		&c.intakeKind, &c.revSourceID, &c.revRecordID, &c.revRendition, &c.revJSON)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -413,6 +450,13 @@ type candidate struct {
 	sourceID     string
 	documentID   string
 	attachmentID string
+	// revision lane (F09 #303): intake_kind='revision' jobs carry the
+	// revision identity instead of enqueue-time FKs.
+	intakeKind   string
+	revSourceID  string
+	revRecordID  string
+	revRendition string
+	revJSON      []byte
 }
 
 // frozenState is the locked-and-read source/document/attachment/canonical state

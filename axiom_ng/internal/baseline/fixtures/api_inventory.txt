@@ -28,6 +28,7 @@ POST   /api/v1/library/imports                          202 json importAccepted 
 POST   /api/v1/library/imports/{id}/confirm             json ImportOperation (F06)
 POST   /api/v1/library/imports/{id}/retry               json ImportOperation (F06)
 POST   /api/v1/search                                   json search.Response (v1 mirror)
+POST   /api/v1/store/ingest                             json store.IngestJob (202, F09)
 POST   /api/zotero/sync                                 json sync.Result
 PUT    /api/zotero/selection                            json selection (GET/PUT)
 

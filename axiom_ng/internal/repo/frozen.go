@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/revision"
 	"io"
 )
 
@@ -23,14 +24,19 @@ import (
 // document/attachment/processing blocks directly; ProfileHash is snapshot
 // IDENTITY (also stored in ingest_jobs.profile_hash), not part of the emit block.
 type FrozenInput struct {
-	ContractVersion string           `json:"contract_version"`
-	JobID           string           `json:"job_id"`
-	IdempotencyKey  string           `json:"idempotency_key"`
-	ProfileHash     string           `json:"profile_hash"`
-	Source          FrozenSource     `json:"source"`
-	Document        FrozenDocument   `json:"document"`
-	Attachment      FrozenAttachment `json:"attachment"`
-	Processing      FrozenProcessing `json:"processing"`
+	ContractVersion string `json:"contract_version"`
+	JobID           string `json:"job_id"`
+	IdempotencyKey  string `json:"idempotency_key"`
+	ProfileHash     string `json:"profile_hash"`
+	// Intake marks the lane (F09 #303): "" / "zotero" = the legacy
+	// sync-enqueued snapshot; "revision" = the revision-intake snapshot
+	// (Revision carries the verbatim SourceRevision). Additive wire field.
+	Intake     string                    `json:"intake,omitempty"`
+	Revision   *revision.SourceRevision   `json:"revision,omitempty"`
+	Source     FrozenSource     `json:"source"`
+	Document   FrozenDocument   `json:"document"`
+	Attachment FrozenAttachment `json:"attachment"`
+	Processing FrozenProcessing `json:"processing"`
 }
 
 // FrozenSource identifies the canonical Zotero source.

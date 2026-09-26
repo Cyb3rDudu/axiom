@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom_ng/internal/store/migrations"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/dispatcher"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
@@ -71,6 +72,9 @@ func openLiveTopologyDB(t *testing.T) *db.DB {
 	t.Cleanup(d.Close)
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
 	}
 	return d
 }

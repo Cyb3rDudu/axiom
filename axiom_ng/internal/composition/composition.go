@@ -48,6 +48,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/store"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
 	axsync "github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
@@ -157,6 +158,7 @@ type Root struct {
 	libProvider  *zoteroprovider.Provider
 	broker       *events.Broker
 	syncSvc      *axsync.Service
+	storeSvc     *store.Service
 	httpSrv      *http.Server
 	ln           net.Listener
 	srv          *server.Server
@@ -533,6 +535,11 @@ func (r *Root) componentsFor() []Component {
 			if err := library.Migrate(ctx, database.Pool()); err != nil {
 				return fmt.Errorf("library migrate: %w", err)
 			}
+			// F09 #303: the Store component's ledger — the revision-intake
+			// columns on ingest_jobs (additive; same fingerprint rule).
+			if err := store.Migrate(ctx, database.Pool()); err != nil {
+				return fmt.Errorf("store migrate: %w", err)
+			}
 			r.libStore = library.NewStore(database.Pool())
 			// Source-revision Mits-Schrieb: sync completion and heal/
 			// custody publish through the same store (F09 turns the Store
@@ -796,6 +803,11 @@ func (r *Root) componentsFor() []Component {
 			}
 			r.srv.SetSearchService(searchSvc)
 			r.srv.SetPassageService(searchSvc) // A1 #165: same service, passage surface
+			// F09 #303: the Store component behind the F03 contract —
+			// revision intake is the single processing entry; Search/
+			// GetPassage wrap the retrieval stack just wired.
+			r.storeSvc = store.New(r.rep, searchSvc, r.logger)
+			r.srv.SetStoreAPI(r.storeSvc)
 			// Role probe (R4 Ziel 1/3): capability check of the query runner
 			// at start. Best-effort: an unreachable query runner keeps search
 			// degraded-but-up (R3 fallback).

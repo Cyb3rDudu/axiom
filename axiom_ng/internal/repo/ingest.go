@@ -42,6 +42,9 @@ type Job struct {
 	// QualityState (#175): the preflight report JSONB (verdict/finding/
 	// text_layer/…), nil when not assessed.
 	QualityState json.RawMessage
+	// IntakeKey is the revision-lane idempotency key (F09 #303); empty on
+	// legacy (zotero-lane) jobs.
+	IntakeKey string
 }
 
 // FailedJob describes a file-resolution failure that should be persisted as a

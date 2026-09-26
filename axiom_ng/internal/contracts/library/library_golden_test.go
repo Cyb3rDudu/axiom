@@ -55,7 +55,7 @@ var (
 			RecordID:    "rec-1",
 			RenditionID: "ren-1",
 			Revision: revision.SourceRevision{
-				SourceID: "src-1", RevisionID: "1",
+				SourceID: "src-1", RevisionID: "1", RenditionID: "rend-1",
 				ContentHash: revision.HashContent([]byte("library golden")),
 				MediaType:   revision.MediaTypePDF,
 				Bibliography: revision.Bibliography{
@@ -91,7 +91,7 @@ var (
 		Result: &ImportResult{
 			RecordID: "rec-4", RenditionID: "ren-4",
 			Revision: revision.SourceRevision{
-				SourceID: "src-1", RevisionID: "1",
+				SourceID: "src-1", RevisionID: "1", RenditionID: "rend-1",
 				ContentHash: revision.HashContent([]byte("library golden provenance")),
 				MediaType:   revision.MediaTypePDF,
 				Bibliography: revision.Bibliography{

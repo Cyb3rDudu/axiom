@@ -62,7 +62,7 @@ var (
 	goldenIngestRequest = IngestRevisionRequest{
 		IdempotencyKey: "ingest-42",
 		Revision: revision.SourceRevision{
-			SourceID: "src-1", RevisionID: "3",
+			SourceID: "src-1", RevisionID: "3", RenditionID: "rend-1",
 			ContentHash: revision.HashContent([]byte("store golden")),
 			MediaType:   revision.MediaTypeEPUB,
 			Bibliography: revision.Bibliography{

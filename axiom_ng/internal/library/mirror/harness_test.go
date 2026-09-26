@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom_ng/internal/store/migrations"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -100,6 +101,9 @@ func openMirrorDB(t *testing.T) *mirrorRepo {
 	}
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
 	}
 	t.Cleanup(d.Close)
 	store := repo.New(d.Pool())
