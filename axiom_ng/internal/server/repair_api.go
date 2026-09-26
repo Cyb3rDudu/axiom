@@ -37,15 +37,15 @@ func (s *Server) SetRepairAPI(r *repo.Repo, write *zoteroprovider.WriteClient, q
 // analysis, the pdf path, and the document metadata for context.
 type repairQueueItem struct {
 	repo.RepairCase
-	Title         string           `json:"title"`
+	Title         string                   `json:"title"`
 	Creators      []zoteroprovider.Creator `json:"creators"`
-	ExistingNames []string         `json:"existing_attachment_names,omitempty"` // #291 grown-pattern refs
-	Year          int              `json:"publication_year"`
-	AttachmentKey string           `json:"attachment_zotero_key"`
-	DocumentKey   string           `json:"document_zotero_key"`
-	LocalPath     string           `json:"local_path"`
-	EPUBPath      string           `json:"epub_path,omitempty"`
-	ContentType   string           `json:"content_type"`
+	ExistingNames []string                 `json:"existing_attachment_names,omitempty"` // #291 grown-pattern refs
+	Year          int                      `json:"publication_year"`
+	AttachmentKey string                   `json:"attachment_zotero_key"`
+	DocumentKey   string                   `json:"document_zotero_key"`
+	LocalPath     string                   `json:"local_path"`
+	EPUBPath      string                   `json:"epub_path,omitempty"`
+	ContentType   string                   `json:"content_type"`
 }
 
 func (s *Server) handleRepairQueue(w http.ResponseWriter, r *http.Request) {

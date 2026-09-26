@@ -114,7 +114,7 @@ func saveManualRecord(root string, rec *ManualRecord) error {
 // client), file-based record instead of repair_cases bookkeeping.
 type ManualDeps struct {
 	Write  *zoteroprovider.WriteClient // nil in tests -> mutations must be injected differently; production always wires it
-	Root   string              // quarantine root
+	Root   string                      // quarantine root
 	Record *ManualRecord
 	RunID  string
 }
