@@ -62,7 +62,8 @@ func (s *stubStore) RenewWriterLease(_ context.Context, _, owner string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.renewFails || s.leaseOwner != owner {
-		return errors.New("lease lost")
+		// faithful to the real store: a lost lease refuses with Conflict
+		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassConflict, "lease lost (stub)")
 	}
 	return nil
 }
@@ -1251,5 +1252,54 @@ func TestUpdateRecordPreservesEmptyDraftFieldsAndUserTags(t *testing.T) {
 	}
 	if !tagged {
 		t.Fatalf("user tags must survive the update: %+v", it.Tags)
+	}
+}
+
+func TestWriteCapableProviderRequiresUsersZeroLibrary(t *testing.T) {
+	fake := newFakeLibrary(t)
+	// The write surface targets /api/users/0 exclusively; a write-capable
+	// provider bound to any other read library would lease a scope its
+	// writes never touch (M6).
+	if _, err := New(context.Background(), Options{
+		BaseURL: fake.srv.URL + "/api", LibraryID: "groups/12345",
+		APIKey: "k", Store: newStubStore(),
+	}); !contractClassIs(err, contracterr.ClassInvalidArgument) {
+		t.Fatalf("write-capable non-users/0 construction must be refused, got %v", err)
+	}
+	// Read-only constructions may read any library.
+	ro, err := New(context.Background(), Options{
+		BaseURL: fake.srv.URL + "/api", LibraryID: "groups/12345", Store: newStubStore(),
+	})
+	if err != nil {
+		t.Fatalf("read-only construction against another library: %v", err)
+	}
+	defer ro.Close()
+}
+
+func TestCollectionAnchorAdoptionRecoversTornCreate(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	// A crash-torn create: the Zotero collection EXISTS, the ledger does
+	// not (no anchor, no audit row).
+	h.fake.collections["COLLTORN"] = &zotCollection{Key: "COLLTORN", Name: "Torn", Parent: "", Version: 1}
+
+	id, err := h.prov.ResolvePath(ctx, []string{"Torn"}, true)
+	if err != nil || id != "COLLTORN" {
+		t.Fatalf("resolve over torn segment: %q %v", id, err)
+	}
+	// The adoption row re-emits the lost audit (1:1 beyond crash-freedom).
+	rows := h.store.audits()
+	if len(rows) != 1 || rows[0].Outcome != "adopted" || rows[0].ProviderRef != "COLLTORN" {
+		t.Fatalf("torn create must be adopted with an audit row, got %+v", rows)
+	}
+	if a, _ := h.store.anchors["collection||Torn"]; a != "COLLTORN" {
+		t.Fatalf("adoption must anchor the segment, got %q", a)
+	}
+	// A second resolve does not re-adopt (anchor present, idempotent).
+	if _, err := h.prov.ResolvePath(ctx, []string{"Torn"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if rows = h.store.audits(); len(rows) != 1 {
+		t.Fatalf("re-resolve must not inflate the audit trail, got %+v", rows)
 	}
 }

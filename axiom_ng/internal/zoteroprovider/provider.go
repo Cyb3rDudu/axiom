@@ -207,6 +207,16 @@ func New(ctx context.Context, o Options) (*Provider, error) {
 	if o.APIKey == "" {
 		return p, nil // read-only: no lease, write ports report Unavailable
 	}
+	// The write surface targets the local user library exclusively
+	// (every write path is /api/users/0/...). A write-capable provider
+	// bound to any OTHER read library would hold a lease for a scope its
+	// own writes never touch — the guard must cover the WRITE target, so
+	// such a construction is refused instead of silently split-brained
+	// (two instances, two scopes, one physical library).
+	if libID != "users/0" {
+		return nil, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument,
+			"zotero write surface targets users/0 only (got LibraryID "+libID+") — a write-capable provider cannot be bound to another library")
+	}
 	writeBase := strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(o.BaseURL, "/"), "/api"), "/")
 	p.write = NewWriteClient(writeBase, read.ServerID(), o.APIKey)
 	if o.HTTPClient != nil {
@@ -235,10 +245,13 @@ func (p *Provider) Close() error {
 }
 
 // heartbeat renews the lease at TTL/3 until the provider closes. A
-// failed renewal (lease taken over after silence) latches the lost-lease
-// flag and STOPS renewing — the write ports refuse everything from there
-// (writeable), and Zotero's optimistic versioning is the last line for
-// any write already in flight.
+// renewal refused with Conflict (the lease was taken over after
+// silence) latches the lost-lease flag and STOPS renewing — the write
+// ports refuse everything from there (writeable), and Zotero's
+// optimistic versioning is the last line for any write already in
+// flight. TRANSIENT renewal errors (network, deadline) keep retrying:
+// a single blip must not kill a healthy writer (fail-closed only on
+// the definitive signal).
 func (p *Provider) heartbeat(ctx context.Context) {
 	t := time.NewTicker(p.ttl / 3)
 	defer t.Stop()
@@ -250,7 +263,7 @@ func (p *Provider) heartbeat(ctx context.Context) {
 			rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			err := p.store.RenewWriterLease(rctx, p.scope, p.owner)
 			cancel()
-			if err != nil {
+			if err != nil && contractClassIs(err, contracterr.ClassConflict) {
 				p.lostLease.Store(true)
 				return
 			}
@@ -1122,14 +1135,43 @@ func (p *Provider) ResolvePath(ctx context.Context, segments []string, createMis
 			return "", fmt.Errorf("%w: %d same-named sibling collections %q under one parent",
 				library.ErrProviderConflict, len(keys), seg)
 		default:
+			// Existing segment. In create-intent mode, adopt it into the
+			// anchor ledger when unanchored: a crash between the Zotero POST
+			// and the ledger/audit append left a created-but-unanchored
+			// segment, and this adoption re-emits the recovered audit row
+			// (the 1:1 mutation↔audit contract beyond crash-freedom).
+			if createMissing {
+				if aerr := p.adoptCollectionAnchor(ctx, seg, parent, keys[0]); aerr != nil {
+					return "", aerr
+				}
+			}
 			parent = keys[0]
 		}
 	}
 	return parent, nil
 }
 
+// adoptCollectionAnchor anchors an existing collection segment when the
+// ledger lacks it, appending the adoption audit row (outcome "adopted"
+// — truthful whether the segment is a torn create of ours or was always
+// there: the row records the LEDGER mutation, not a Zotero write).
+func (p *Provider) adoptCollectionAnchor(ctx context.Context, name, parentKey, key string) error {
+	anchor := parentKey + "|" + name
+	if id, _, err := p.store.LookupProviderAnchor(ctx, p.scope, "collection", anchor); err == nil && id != "" {
+		return nil
+	} else if err != nil && !errors.Is(err, errAnchorAbsent) {
+		return err
+	}
+	if _, err := p.store.PutProviderAnchor(ctx, p.scope, "collection", anchor, key, 0); err != nil {
+		return err
+	}
+	return p.audit(ctx, "create_collection", anchor, key, "adopted", map[string]any{"parent": parentKey, "recovered": true})
+}
+
 // createCollection posts one segment (parent-first: the parent key is
-// resolved before the child is created) and readbacks it.
+// resolved before the child is created), readbacks it, and anchors it
+// in the ledger (the crash-torn create is adopted on retry by
+// ResolvePath's existing-segment branch).
 func (p *Provider) createCollection(ctx context.Context, name, parentKey string) (string, error) {
 	pc := any(false)
 	if parentKey != "" {
@@ -1167,7 +1209,10 @@ func (p *Provider) createCollection(ctx context.Context, name, parentKey string)
 		return "", contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 			fmt.Sprintf("create_collection readback: parent %q != %q", gotParent, parentKey))
 	}
-	if err := p.audit(ctx, "create_collection", name, key, "created", map[string]any{"parent": parentKey}); err != nil {
+	if _, err := p.store.PutProviderAnchor(ctx, p.scope, "collection", parentKey+"|"+name, key, 0); err != nil {
+		return "", err
+	}
+	if err := p.audit(ctx, "create_collection", parentKey+"|"+name, key, "created", map[string]any{"parent": parentKey}); err != nil {
 		return "", err
 	}
 	return key, nil

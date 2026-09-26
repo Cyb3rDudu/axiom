@@ -67,6 +67,13 @@ func (s *Store) AcquireWriterLease(ctx context.Context, scope, owner string, ttl
 		err := s.pool.QueryRow(ctx,
 			`SELECT owner, now() - heartbeat_at FROM library_writer_leases WHERE scope = $1`, scope).
 			Scan(&cur.owner, &cur.age)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The holder released between the failed upsert and this read —
+			// the scope is free NOW. Conflict-with-retry, not Internal: the
+			// caller's next acquisition wins.
+			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassConflict,
+				"writer lease "+scope+" was released during acquisition — retry")
+		}
 		if err != nil {
 			return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "writer lease read")
 		}
