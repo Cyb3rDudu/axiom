@@ -1,10 +1,13 @@
 package repair
 
 // harness_test.go — the store IT harness (moved with the state machine
-// from internal/repo, F08 #302). Owns a DEDICATED per-package test
-// database (axiom_ng_repair_test) derived from AXIOM_TEST_DATABASE_URL —
-// same isolation rule as the repo/dispatcher suites: parallel `go test
-// ./...` packages never share a dataset. Every destructive statement is
+// from internal/repo, F08 #302). The STORE tier owns a dedicated
+// per-package test database (axiom_ng_repair_test) derived from
+// AXIOM_TEST_DATABASE_URL — same isolation rule as the repo/dispatcher
+// suites. The INVOKER IT tier (openDB in invoker_it_test.go) instead uses
+// the base AXIOM_TEST_DATABASE_URL database, so this package must not run
+// in parallel with the other DB-backed packages (`go test -p 1`, see
+// docs/developer-guide/testing.md). Every destructive statement is
 // behind the _test-suffix guard.
 
 import (

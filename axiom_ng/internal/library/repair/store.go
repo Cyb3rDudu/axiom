@@ -475,7 +475,7 @@ func (s *Store) DocumentHealedCases(ctx context.Context, documentID string) (int
 // document; skip only when unrepairable). The gate closes while a repair
 // loop-back is still draining:
 //
-//   - queued / in_repair: a fixer heal is pending or running (the invoker
+//   - queued / in_repair: a worker heal is pending or running (the invoker
 //     runs the post-heal sync before releasing the loop — see #282);
 //   - healed within the last hour with NO ingest job enqueued for the
 //     document since the heal: the post-heal sync has not landed yet (in

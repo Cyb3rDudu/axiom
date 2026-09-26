@@ -1,5 +1,7 @@
-// repair_invoker.go — #206 fixer invoker support: the queue-side methods
-// the invoker needs beyond the #184 state machine. Three additions:
+// store_invoker.go — queue-side store methods beyond the #184 state
+// machine. F08 #302: moved verbatim from internal/repo/repair_invoker.go
+// (born as #206 fixer invoker support) into the Library-owned repair
+// package. Three additions:
 //
 //   - RepairCaseItem: the Zotero coordinates + metadata of a case's
 //     attachment (the JOIN the custody sequence and the schema filename
@@ -7,10 +9,10 @@
 //   - RequeueStaleRepairCases: lease recovery. The invoker claims
 //     queued → in_repair and runs fix.sh; if the invoker dies mid-case
 //     the case would sit in in_repair forever (the documented B3
-//     limitation). A case whose updated_at is older than the fixer's
+//     limitation). A case whose updated_at is older than the worker's
 //     hard runtime window is stale — its claim died with the invoker, so
 //     it goes back to queued. The loop guard still caps total attempts.
-//   - FailOrRequeueRepairCase: the retry policy. A failed fixer run
+//   - FailOrRequeueRepairCase: the retry policy. A failed worker run
 //     requeues while case attempts remain, else parks the case failed
 //     with a clear reason (dudu reads it) — escalation is the loop
 //     guard's blocked_for_dudu on the NEXT claim of a retried case.
@@ -27,7 +29,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
 
-// RepairItem is everything the fixer invoker needs to know about a case's
+// RepairItem is everything the orchestrator needs to know about a case's
 // attachment: the Zotero keys (invocation key + apply target), the source
 // pdf path, and the metadata the schema filename is built from.
 type RepairItem struct {
@@ -49,7 +51,7 @@ type RepairItem struct {
 // ExistingNamesSubquery aggregates the document's current attachment
 // filenames for the #291 grown-pattern reference (preferred first, then
 // filename ASC — deterministic and explainable instead of UUID order;
-// the single source so the fixer-invoker, verdict-apply and custody
+// the single source so the repair orchestrator, verdict-apply and custody
 // paths can never drift).
 const ExistingNamesSubquery = `(SELECT array_agg(a2.filename ORDER BY a2.preferred DESC, a2.filename ASC)
 		        FROM zotero_attachments a2
@@ -106,7 +108,7 @@ func (s *Store) RequeueStaleRepairCases(ctx context.Context, stale, ocrStale tim
 	return tag.RowsAffected(), nil
 }
 
-// FailOrRequeueRepairCase closes a failed fixer invocation according to
+// FailOrRequeueRepairCase closes a failed worker execution according to
 // the retry policy: while the case has attempts left (below maxAttempts,
 // default RepairMaxAttempts), it goes back to queued for one more run;
 // otherwise it is parked failed with the reason. Returns the effective

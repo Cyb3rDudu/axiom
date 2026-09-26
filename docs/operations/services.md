@@ -234,7 +234,7 @@ manifest name the committed work). force_rebuild (§19) reruns the whole
 job: the runner holds no corpus state to resume from — the early commit
 protects RETRIEVABILITY of the work, not cross-job resume.
 
-## Fixer: event runner (owner decision)
+## Repair worker: event runner (axiom-repair-worker)
 
 One process per Zotero attachment key, invoked via the tested wrapper
 `scripts/fix.sh <zotero-key> [--apply]` — per-key lock
@@ -271,7 +271,7 @@ must be wired — the orchestrator uploads through it).
   during 0.2.x). One invocation per key per claim — the one-shot `--key`
   contract is untouched.
 - **Timeout:** fix.sh's own 30-min kill (lockdir + timeout binary) does the
-  primary work; the invoker runs a 35-min context backstop above it, so a
+  primary work; the orchestrator runs a 35-min context backstop above it, so a
   wedged wrapper can never hang the invoker. OCR-class repairs
   (`scan_ocr_rebuild`) run under their own wedge-guard —
   `AXIOM_FIXER_OCR_TIMEOUT` (default **24h**, #293: pure orphan prevention,
@@ -280,10 +280,10 @@ must be wired — the orchestrator uploads through it).
   via `AXIOM_FIX_SH_TIMEOUT`; see the
   [OCR-Rebuild Repair runbook](ocr-rebuild-repair.md).
 - **Concurrency:** `AXIOM_FIXER_CONCURRENCY` (default 1, clamped to 1–2)
-  parallel fixer runs per host — the per-key lockdir additionally
+  parallel worker runs per host — the per-key lockdir additionally
   serializes against manual operator runs (exit 3 is treated as an
   ordinary retryable failure).
-- **Success:** fixer exit 0 AND a healed `work.pdf` under
+- **Success:** worker exit 0 AND a healed `work.pdf` under
   `~/.local/state/axiom/runs/<key>/` — exit 0 alone is NOT success (a
   green exit without the artifact fails). The healed pdf runs through the
   audited custody sequence (quarantine original → delete → create/upload
@@ -332,7 +332,7 @@ must be wired — the orchestrator uploads through it).
   `failed` with a Zotero-404-flavored reason instead of
   `blocked_for_dudu('attachment-gone')` — bounded and visible.
 
-The fixer has NO env file in this scheme: its package-local `config.env`
+The worker has NO env file in this scheme: its package-local `config.env`
 (via its own `load_config_envfile`, inside the artifact) carries the
 non-secret settings, and `--key` stays a per-event argument.
 
@@ -342,7 +342,7 @@ Inside that one `fix.sh <key> --apply` invocation, the agent is the
 **Stufe-2 case driver**: it does not only run a single canned repair, it
 *decides* what to do per case within the Stufe-1 toolbelt. Stufe-1 stays
 the machine, Stufe-2 the judgment — there is **no new call path or second
-wrapper**: the fixer invoker's existing wrapper contract is unchanged
+wrapper**: the repair orchestrator's existing wrapper contract is unchanged
 (Key per invocation, per-key lock, 30-min timeout, `--apply`).
 
 **How the agent decides.** Each model turn emits one JSON `step` that the
@@ -442,7 +442,7 @@ production install, 2026-08-23):
    parse as JSON (fail-closed before the confirm prompt, like the #210 DB
    guard and the #211 zstd check).
 
-The fixer has NO env file in this scheme: its package-local `config.env`
+The worker has NO env file in this scheme: its package-local `config.env`
 (via its own `load_config_envfile`, inside the artifact) carries the
 non-secret settings, and `--key` stays a per-event argument.
 

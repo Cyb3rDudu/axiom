@@ -69,7 +69,7 @@ type Config struct {
 	// binary stays the primary killer (budget minus 5m slack via
 	// AXIOM_FIX_SH_TIMEOUT) — same layering as Timeout.
 	OCRTimeout time.Duration
-	// Concurrency caps parallel fixer invocations per host (owner nail 3:
+	// Concurrency caps parallel worker executions per host (owner nail 3:
 	// max 1-2). Values below 1 clamp to 1, above 2 clamp to 2.
 	Concurrency int
 	// StaleAfter bounds how long an in_repair claim may sit before the
@@ -185,7 +185,7 @@ func (inv *Invoker) Stopped() <-chan struct{} { return inv.stopped }
 // (no production path does; tests construct a fresh Invoker per run).
 func (inv *Invoker) Run(ctx context.Context) error {
 	defer close(inv.stopped)
-	inv.logger.Printf("fixer invoker starting: cmd=%s interval=%s timeout=%s concurrency=%d workroot=%s",
+	inv.logger.Printf("repair orchestrator starting: cmd=%s interval=%s timeout=%s concurrency=%d workroot=%s",
 		inv.cfg.Command, inv.cfg.Interval, inv.cfg.Timeout, inv.cfg.Concurrency, inv.cfg.WorkRoot)
 	// Lease recovery FIRST (a previous invoker may have died mid-case).
 	inv.reapStale(ctx)
@@ -206,7 +206,7 @@ func (inv *Invoker) Run(ctx context.Context) error {
 			// and the case stays in_repair for the stale-reaper (dead-invoker
 			// recovery) — claims are handed back, never lost.
 			inv.inFlight.Wait()
-			inv.logger.Printf("fixer invoker stopped")
+			inv.logger.Printf("repair orchestrator stopped")
 			return nil
 		case <-t.C:
 		}
@@ -251,7 +251,7 @@ func (inv *Invoker) pollOnce(ctx context.Context) {
 	}
 }
 
-// processCase takes ONE case item→claim → fixer run → status transition.
+// processCase takes ONE case item→claim → worker run → status transition.
 // The item resolves BEFORE the claim: attachment-gone blocks a case while
 // it is still queued (BlockRepairCase refuses in_repair by design nail —
 // a mid-flight case is never touched from outside).
@@ -277,7 +277,7 @@ func (inv *Invoker) processCase(ctx context.Context, caseID string) {
 		return
 	}
 
-	inv.logger.Printf("case %s: invoking fixer for key %s", caseID, item.AttachmentKey)
+	inv.logger.Printf("case %s: executing repair worker for key %s", caseID, item.AttachmentKey)
 	rc, out, runErr := inv.runWorker(ctx, item)
 
 	if rc == 0 && runErr == nil {
@@ -385,7 +385,7 @@ func tesseractLang(docLanguage string) string {
 
 // ocrLanguage resolves the OCR language for a case (#284): per-case
 // override (analysis.ocr.lang) beats the document metadata default; both
-// beat the fixer's internal owner default (deu).
+// beat the worker's internal default (deu).
 func ocrLanguage(item *RepairItem) string {
 	if !ocrCase(item) {
 		return ""
@@ -459,7 +459,7 @@ func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *Repa
 	artifact := filepath.Join(inv.cfg.WorkRoot, item.AttachmentKey, repairArtifactName(item))
 	pdf, err := os.ReadFile(artifact)
 	if err != nil || len(pdf) == 0 {
-		// #253: exit 0 without an artifact is the fixer's honest verdict
+		// #253: exit 0 without an artifact is the worker's honest verdict
 		// report. A HALT verdict terminally parks the case (reason
 		// no-healable-defect-evidenced / needs-evidence) — never the old
 		// endless requeue. Anything unparsable keeps the retry policy.
@@ -470,7 +470,7 @@ func (inv *Invoker) handleSuccess(ctx context.Context, caseID string, item *Repa
 			inv.logger.Printf("case %s: HALT terminally parked (%s)", caseID, reason)
 			return
 		}
-		inv.failOrRequeue(ctx, caseID, fmt.Sprintf("fixer exit 0 aber kein geheiltes Artefakt unter %s", artifact))
+		inv.failOrRequeue(ctx, caseID, fmt.Sprintf("worker exit 0 aber kein geheiltes Artefakt unter %s", artifact))
 		return
 	}
 	if _, err := Apply(ctx, inv.deps.Apply, inv.deps.QuarantineRoot, ApplyCase{
@@ -554,10 +554,10 @@ func (inv *Invoker) postHealSync(ctx context.Context, item *RepairItem) {
 }
 
 func (inv *Invoker) handleFailure(ctx context.Context, caseID string, rc int, runErr error) {
-	inv.failOrRequeue(ctx, caseID, fmt.Sprintf("fixer: %v", runErr))
+	inv.failOrRequeue(ctx, caseID, fmt.Sprintf("worker: %v", runErr))
 }
 
-// haltTerminalReason extracts the fixer's report verdict from the captured
+// haltTerminalReason extracts the worker's report verdict from the captured
 // output (the repair_agent prints its JSON report as the LAST thing on
 // stdout) and classifies a HALT terminally (#253):
 //

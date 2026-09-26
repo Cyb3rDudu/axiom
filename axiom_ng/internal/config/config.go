@@ -288,7 +288,8 @@ func Load() Config {
 // local executor falls back to the legacy shim while an install has not
 // re-run install_dist.sh — operators change nothing during 0.2.x).
 // The literal mirrors repair.CanonicalWorkerCommand (config stays
-// import-light; TestWorkerCommandDefaultsAgree pins the equality).
+// import-light in production; TestRepairWorkerCommandDefault in this
+// package imports repair test-only and pins the equality).
 func repairWorkerCmd() string {
 	if v := os.Getenv("AXIOM_REPAIR_WORKER_CMD"); v != "" {
 		return v

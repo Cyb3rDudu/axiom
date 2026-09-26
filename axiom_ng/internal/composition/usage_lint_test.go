@@ -53,6 +53,10 @@ var packageEnvAllowance = map[string]int{
 }
 
 var packageExecAllowance = map[string]int{
+	// internal/library/repair also snapshots os.Environ() for the OCR-class
+	// child env (invoker.go) — moved pre-F08 behavior; the Getenv/LookupEnv/
+	// Setenv detector below does not match Environ, and the snapshot's
+	// abatement rides the F10/F13 env-surface work.
 	"internal/library/repair/": math.MaxInt,
 	"internal/backfill/":       math.MaxInt,
 }
