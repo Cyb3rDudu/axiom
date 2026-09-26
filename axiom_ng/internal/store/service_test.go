@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
@@ -35,7 +36,7 @@ func TestIngestRevisionValidationPrecedence(t *testing.T) {
 func TestIngestRevisionMismatchIsTypedConflict(t *testing.T) {
 	d := openIntakeDB(t)
 	hash := revision.HashContent([]byte("service mismatch bytes"))
-	srcID := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
 	svc := New(repo.New(d.Pool()), nil, nil)
 	ctx := context.Background()
 
@@ -78,7 +79,7 @@ func TestIngestRevisionMismatchIsTypedConflict(t *testing.T) {
 func TestIngestRevisionSuppressedEchoesCommitted(t *testing.T) {
 	d := openIntakeDB(t)
 	hash := revision.HashContent([]byte("suppressed bytes"))
-	srcID := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
 	rep := repo.New(d.Pool())
 	ctx := context.Background()
 	// An ACTIVE snapshot for the same content: the #294 suppression fires.
@@ -122,4 +123,66 @@ func asMismatch(err error, out **contracterr.IdempotencyMismatch) bool {
 		err = u.Unwrap()
 	}
 	return false
+}
+
+// TestIngestRevisionSourceIDTrustBoundary — normalizeSourceID's two
+// branches (review R2-2): malformed uuid is InvalidArgument at the door;
+// a non-canonical-case uuid normalizes to the SAME durable job (the #294
+// suppression and LockKey see one canonical form, never two).
+func TestIngestRevisionSourceIDTrustBoundary(t *testing.T) {
+	d := openIntakeDB(t)
+	hash := revision.HashContent([]byte("uuid boundary bytes"))
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	svc := New(repo.New(d.Pool()), nil, nil)
+	ctx := context.Background()
+
+	// Malformed: rejected at the trust boundary, never minted.
+	rev := seedRevision("not-a-uuid", hash)
+	rev.RenditionID = "ATTIT1"
+	if _, err := svc.IngestRevision(ctx, store.IngestRevisionRequest{IdempotencyKey: "uuid-bad", Revision: rev}); err == nil {
+		t.Fatal("malformed source_id must be rejected")
+	} else if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassInvalidArgument {
+		t.Fatalf("malformed source_id must be InvalidArgument, got %v", err)
+	}
+	var minted int
+	if err := d.Pool().QueryRow(ctx,
+		`SELECT count(*) FROM ingest_jobs WHERE intake_kind='revision'`).Scan(&minted); err != nil {
+		t.Fatal(err)
+	}
+	if minted != 0 {
+		t.Fatalf("rejected intake must mint nothing, got %d rows", minted)
+	}
+
+	// Non-canonical case: upper-casing the uuid must land on the SAME job.
+	first, err := svc.IngestRevision(ctx, store.IngestRevisionRequest{IdempotencyKey: "uuid-case", Revision: seedRevision(srcID, hash)})
+	if err != nil {
+		t.Fatalf("canonical intake: %v", err)
+	}
+	// Same revision, only the SourceID SPELLING upper-cased (the ticket
+	// and every other field stay byte-identical — the realistic
+	// case-variant replay).
+	upper := seedRevision(srcID, hash)
+	upper.SourceID = strings.ToUpper(srcID)
+	second, err := svc.IngestRevision(ctx, store.IngestRevisionRequest{IdempotencyKey: "uuid-case", Revision: upper})
+	if err != nil {
+		t.Fatalf("case-variant replay must resolve through normalization: %v", err)
+	}
+	if second.JobID != first.JobID {
+		t.Fatalf("case-variant replay must be the SAME job: %s vs %s", second.JobID, first.JobID)
+	}
+}
+
+// TestIngestRevisionEmptyRenditionIDRejected — the new Validate arm has
+// its own probe (review R2-7).
+func TestIngestRevisionEmptyRenditionIDRejected(t *testing.T) {
+	d := openIntakeDB(t)
+	hash := revision.HashContent([]byte("rendition empty bytes"))
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	svc := New(repo.New(d.Pool()), nil, nil)
+	rev := seedRevision(srcID, hash)
+	rev.RenditionID = ""
+	_, err := svc.IngestRevision(context.Background(), store.IngestRevisionRequest{IdempotencyKey: "rend-empty", Revision: rev})
+	if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassInvalidArgument {
+		t.Fatalf("empty rendition_id must be InvalidArgument, got %v", err)
+	}
 }

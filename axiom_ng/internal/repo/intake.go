@@ -18,9 +18,12 @@ import (
 // contracterr.IdempotencyMismatch source.
 var ErrIntakeKeyMismatch = errors.New("intake idempotency key reused with a different revision")
 
-// enqueueRevisionIntakeReplay re-runs the intake-key lookup after a
-// concurrent mint won the unique index — the key exists now.
-func (r *Repo) enqueueRevisionIntakeReplay(ctx context.Context, req IntakeRequest) (*Job, bool, error) {
+// resolveIntakeKey answers the intake-key question once — the ONE SQL
+// text both the fast path and the 23505 re-ask share (a duplicated copy
+// of the subtle `(revision_json = $2::jsonb)` comparison would drift
+// silently on the effectively-untestable race path). Returns the replay
+// job, ErrIntakeKeyMismatch, or pgx.ErrNoRows (caller decides).
+func (r *Repo) resolveIntakeKey(ctx context.Context, req IntakeRequest) (*Job, error) {
 	var existing Job
 	var identical bool
 	err := r.pool.QueryRow(ctx, `
@@ -31,13 +34,13 @@ func (r *Repo) enqueueRevisionIntakeReplay(ctx context.Context, req IntakeReques
 		Scan(&existing.ID, &existing.Status, &existing.ContentHash, &existing.Attempt,
 			&existing.MaxAttempts, &existing.EnqueuedAt, &identical)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	if identical {
-		existing.IntakeKey = req.IdempotencyKey
-		return &existing, false, nil
+	if !identical {
+		return nil, ErrIntakeKeyMismatch
 	}
-	return nil, false, ErrIntakeKeyMismatch
+	existing.IntakeKey = req.IdempotencyKey
+	return &existing, nil
 }
 
 // ErrIntakeSuppressed: the revision's content is already processed and
@@ -72,25 +75,17 @@ type IntakeRequest struct {
 func (r *Repo) EnqueueRevisionIntake(ctx context.Context, req IntakeRequest) (*Job, bool, error) {
 	// Intake-key idempotency precedes everything (the contract's
 	// precedence rule; validation happened in the service layer already).
-	var existing Job
-	var identical bool
-	err := r.pool.QueryRow(ctx, `
-		SELECT id::text, status::text, COALESCE(content_hash,''), attempt, max_attempts,
-		       enqueued_at::text, (revision_json = $2::jsonb)
-		FROM ingest_jobs
-		WHERE intake_kind='revision' AND intake_idempotency_key=$1`, req.IdempotencyKey, string(req.RevisionJSON)).
-		Scan(&existing.ID, &existing.Status, &existing.ContentHash, &existing.Attempt,
-			&existing.MaxAttempts, &existing.EnqueuedAt, &identical)
+	existing, err := r.resolveIntakeKey(ctx, req)
 	if err == nil {
-		if identical {
-			existing.IntakeKey = req.IdempotencyKey
-			return &existing, false, nil // replay: the SAME job, no side effects
-		}
+		return existing, false, nil // replay: the SAME job, no side effects
+	}
+	if errors.Is(err, ErrIntakeKeyMismatch) {
 		return nil, false, ErrIntakeKeyMismatch
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, err
 	}
+	// pgx.ErrNoRows: the key is free — mint below.
 
 	// Mint (or join) by revision identity, with the #294 suppression in the
 	// same statement (the legacy writeJobsTx shape): an ACTIVE snapshot for
@@ -128,7 +123,13 @@ func (r *Repo) EnqueueRevisionIntake(ctx context.Context, req IntakeRequest) (*J
 		// classify honestly instead of surfacing an Internal error.
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "ingest_jobs_intake_key_uq" {
-			return r.enqueueRevisionIntakeReplay(ctx, req)
+			// The concurrent winner committed (Postgres blocks on
+			// uncommitted index entries): re-ask and classify honestly.
+			replay, rerr := r.resolveIntakeKey(ctx, req)
+			if rerr != nil {
+				return nil, false, rerr
+			}
+			return replay, false, nil
 		}
 		return nil, false, err
 	}

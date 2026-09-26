@@ -109,7 +109,10 @@ var hashHex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // invalid, never half-present. Bibliography's other members keep
 // their own optionalität (see there).
 type SourceRevision struct {
-	// SourceID identifies the Library source (opaque to Store).
+	// SourceID identifies the Library source (opaque to Store). The F09
+	// durable lane resolves it as the mirror source's uuid and normalizes
+	// to canonical lowercase at its trust boundary — producers SHOULD send
+	// the canonical form; non-uuid spellings are InvalidArgument there.
 	SourceID string `json:"source_id"`
 	// RevisionID identifies THIS revision of the source's content;
 	// Library guarantees monotonicity per source within a contract

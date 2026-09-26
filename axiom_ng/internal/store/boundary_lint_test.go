@@ -250,6 +250,26 @@ func TestBoundaryLintCatchesPlantedImports(t *testing.T) {
 		t.Fatalf("the two-hop chain store→sync→zoteroprovider must be caught transitively, got %v", v)
 	}
 
+	// Sonde 5: a NEW subpackage of a banned root is banned too (the
+	// prefix rule) — internal/library/evil must not sneak past an
+	// exact-name list.
+	v = storeBoundaryViolations(probe(func(root string) {
+		write := func(rel string) {
+			p := filepath.Join(root, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte("package evil\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write("internal/library/evil/evil.go")
+		plant(root, "internal/repo/planted.go", "internal/library/evil")
+	}))
+	if !containsStr(v, "internal/repo reaches internal/library/evil") {
+		t.Fatalf("a subpackage of a banned root must be caught by the prefix rule, got %v", v)
+	}
+
 	// Sonde 4: contracts stay legal (the seam packages are the sanctioned
 	// Library surface for the Store).
 	v = storeBoundaryViolations(probe(func(root string) {

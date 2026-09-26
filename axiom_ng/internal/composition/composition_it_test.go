@@ -21,6 +21,7 @@
 package composition
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -626,4 +627,47 @@ func TestIT_StoppedStartLeavesNoGoroutines(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 	}
 	assertGoroutinesSettled(t, base, 10*time.Second)
+}
+
+// TestIT_StoreSliceArmsProcessorSource — the R2-1 witness: with NO sync
+// role selected (the store slice), the processor-source endpoint must
+// still be ARMED — the secret wiring sits BEFORE the Library gate. The
+// wire answer stays a uniform 404 (no existence oracle by design), so the
+// witness reads the logged rejection branch: an armed endpoint answers
+// bad_signature, a regressed wiring answers disabled_no_secret.
+func TestIT_StoreSliceArmsProcessorSource(t *testing.T) {
+	h := openCompositionDB(t)
+	querySrv := fakeQueryRunnerSrv(t)
+	cfg := fullStackCfg(t, h, querySrv.URL)
+	cfg.ProcessorSourceSecret = "it-source-secret"
+	cfg.ProcessorSourceBaseURL = fmt.Sprintf("http://127.0.0.1:%d", cfg.APIPort)
+
+	logs := &bytes.Buffer{}
+	root, err := Select(cfg, log.New(logs, "", 0), fakePorts(t, &fakeRunner{}, querySrv),
+		RoleAPI, RoleStore, RoleEvents, RoleSearch, RoleIngest, RoleDispatcher)
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	sigCtx, stop := context.WithCancel(context.Background())
+	defer stop()
+	if err := root.Start(sigCtx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer root.Stop(context.Background())
+
+	resp, err := noKeepAliveGet(fmt.Sprintf("http://127.0.0.1:%d/api/processor/source/00000000-0000-0000-0000-000000000000?exp=1&sig=bad", cfg.APIPort))
+	if err != nil {
+		t.Fatalf("source endpoint: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("source endpoint must 404 (uniform, no oracle), got %d", resp.StatusCode)
+	}
+	if strings.Contains(logs.String(), "disabled_no_secret") {
+		t.Fatalf("store slice must arm the processor-source endpoint (secret wiring before the Library gate); log: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "bad_signature") && !strings.Contains(logs.String(), "bad_exp") {
+		t.Fatalf("armed endpoint must reject on the signature branch, log: %s", logs.String())
+	}
 }

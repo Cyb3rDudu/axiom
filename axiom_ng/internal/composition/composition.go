@@ -559,11 +559,15 @@ func (r *Root) componentsFor() []Component {
 			// Library wiring would blur the independence topology this
 			// split sells).
 			// Remote source delivery (endpoint verify, dispatcher sign):
-			// store-owned wiring, BEFORE any Library gating — the store
-			// slice (no sync role) must still serve processor sources (the
-			// F09 independence run's delivery path).
+			// STORE-owned wiring — it must run in EVERY role set that
+			// serves processing, so it sits BEFORE the Library gate below
+			// (the store slice's delivery path; witnessed by
+			// TestIT_StoreSliceArmsProcessorSource).
 			r.srv.SetProcessorSourceSecret(r.cfg.ProcessorSourceSecret)
 			r.srv.SetProcessorSourceRepo(r.rep)
+			// Library gate (F09): everything below is Library runtime —
+			// migrations, Mits-Schrieb, import providers. A composition
+			// without the sync role runs NONE of it.
 			if !r.roles[RoleSync] {
 				r.logger.Printf("library: not selected in this role set — no Library runtime (F09 store slice)")
 				return nil

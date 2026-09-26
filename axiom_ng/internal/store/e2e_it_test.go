@@ -158,7 +158,6 @@ func TestF09StoreIndependenceE2E(t *testing.T) {
 		// arbitrary local paths — the signed source URL over THIS api is
 		// the sanctioned delivery path (and exercises the revision job's
 		// ProcessorSource serving end to end).
-		"AXIOM_PROCESSOR_SOURCE_BASE_URL=" + e.apiURL,
 		"AXIOM_PROCESSOR_SOURCE_SECRET=f09-e2e-secret",
 		"TMPDIR=" + os.Getenv("TMPDIR"),
 	}

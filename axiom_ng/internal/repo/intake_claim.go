@@ -133,6 +133,11 @@ func (r *Repo) loadAndLockRevisionState(ctx context.Context, tx pgx.Tx, c *candi
 			return nil, "", fmt.Errorf("legacy-lane collision check: %w", err)
 		}
 		if legacyHolds {
+			// Transition debt (documented): the legacy idempotency index
+			// is status-blind, so a revision whose content matches a
+			// permanently-FAILED legacy job is obsoleted too — the escape
+			// arrives when the index narrows to the zotero lane (DM06) or
+			// a lane-cleanup job lands.
 			return nil, "REVISION_SUPERSEDED_BY_SYNC_LANE", nil
 		}
 	}
