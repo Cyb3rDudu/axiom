@@ -664,7 +664,7 @@ func (r *Root) componentsFor() []Component {
 		start: func(ctx context.Context) error {
 			r.broker = events.NewBroker()
 			r.srv.SetWSAPI(r.broker, r.rep, r.cfg.WSSecret)
-			runnerView := server.NewRunnerLive(r.broker, r.logger)
+			runnerView := events.NewRunnerLive(r.broker, r.logger)
 			r.srv.SetRunnerLive(runnerView)
 			if !r.roles[RoleDispatcher] {
 				// #249: the event bus is process-local. Without a dispatcher

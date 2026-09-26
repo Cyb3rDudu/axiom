@@ -3,6 +3,7 @@
 package server
 
 import (
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"log"
 	"net/http"
 	"os"
@@ -51,7 +52,7 @@ type Server struct {
 	// #168 (B2) live WebSocket surface (nil = /api/ws unwired/404).
 	// #169 (B3) runner live view: the state deriver feeding the runners WS
 	// topic snapshot and /api/runners/live (nil = REST route unwired/404).
-	runnerLive     *RunnerLive
+	runnerLive     *events.RunnerLive
 	ws             *wsServer
 	repairRepo     *repo.Repo
 	zoteroWrite    *zoteroprovider.WriteClient

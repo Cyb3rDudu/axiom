@@ -2,7 +2,7 @@
 // now — and how far along?" A server-side state deriver subscribes to the B1
 // bus, folds the job lifecycle events into per-JOB state and derives the
 // per-runner view from it, re-publishing each change as
-// events.RunnerStateChanged on the same bus — so the view flows through the
+// RunnerStateChanged on the same bus — so the view flows through the
 // EXISTING #168 machinery (WS topic `runners` with the WithMatch pre-filter,
 // backpressure and gap semantics inherited) and the REST snapshot
 // (/api/runners/live) serializes the very same struct.
@@ -28,7 +28,7 @@
 // GPU assignment comes from the runner_name→config stamp (the #5c identity):
 // the operator names runners after their hardware (e.g. "carrier-gpu0"), so
 // the assignment is CONFIGURATION, never live nvidia-smi metrics (non-goal).
-package server
+package events
 
 import (
 	"log"
@@ -36,7 +36,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 )
 
 // runnerJob is one active job on a runner.
@@ -59,7 +58,7 @@ type tailInfo struct {
 
 // RunnerLive derives and serves the per-runner live state.
 type RunnerLive struct {
-	broker *events.Broker
+	broker *Broker
 	log    *log.Logger
 
 	mu        sync.Mutex
@@ -73,7 +72,7 @@ type RunnerLive struct {
 }
 
 // NewRunnerLive builds the deriver. Start subscribes it to the bus.
-func NewRunnerLive(broker *events.Broker, log *log.Logger) *RunnerLive {
+func NewRunnerLive(broker *Broker, log *log.Logger) *RunnerLive {
 	return &RunnerLive{
 		broker:    broker,
 		log:       log,
@@ -97,7 +96,7 @@ func (v *RunnerLive) WaitReady() { <-v.ready }
 // pre-filtered to JOB events only — the derived RunnerStateChanged events it
 // publishes cannot loop back into the deriver.
 func (v *RunnerLive) Start(done <-chan struct{}) {
-	sub := events.NewSubscription().WithMatch(jobEventsOnly)
+	sub := NewSubscription().WithMatch(jobEventsOnly)
 	v.broker.Subscribe(sub, 64)
 	close(v.ready)
 	defer v.broker.Unsubscribe(sub)
@@ -114,9 +113,9 @@ func (v *RunnerLive) Start(done <-chan struct{}) {
 
 // jobEventsOnly is the deriver's bus filter: the job lifecycle it folds. The
 // derived RunnerStateChanged events are excluded — no feedback loop.
-func jobEventsOnly(e events.Event) bool {
+func jobEventsOnly(e Event) bool {
 	switch e.(type) {
-	case events.JobClaimed, events.JobStageChanged, events.JobCompleted, events.JobFailed:
+	case JobClaimed, JobStageChanged, JobCompleted, JobFailed:
 		return true
 	}
 	return false
@@ -124,12 +123,12 @@ func jobEventsOnly(e events.Event) bool {
 
 // derive folds one bus event into the per-job state and returns the derived
 // runner view to publish (nil when nothing visible changed).
-func (v *RunnerLive) derive(e events.Event) *events.RunnerStateChanged {
+func (v *RunnerLive) derive(e Event) *RunnerStateChanged {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
 	switch ev := e.(type) {
-	case events.JobClaimed:
+	case JobClaimed:
 		runner := ev.RunnerName
 		v.known[runner] = true
 		v.gpu[runner] = GPULabel(runner)
@@ -145,7 +144,7 @@ func (v *RunnerLive) derive(e events.Event) *events.RunnerStateChanged {
 		st.AffectedJobID = ev.JobID
 		return &st
 
-	case events.JobStageChanged:
+	case JobStageChanged:
 		runner, ok := v.byJob[ev.JobID]
 		if !ok {
 			return nil
@@ -166,10 +165,10 @@ func (v *RunnerLive) derive(e events.Event) *events.RunnerStateChanged {
 		st.AffectedJobID = ev.JobID
 		return &st
 
-	case events.JobCompleted:
+	case JobCompleted:
 		return v.finish(true, ev.JobID)
 
-	case events.JobFailed:
+	case JobFailed:
 		return v.finish(false, ev.JobID)
 	}
 	return nil
@@ -190,7 +189,7 @@ func (v *RunnerLive) findJob(runner, jobID string) *runnerJob {
 // derived view always changes (counter/tail), so it is always published: if
 // other jobs remain active the runner stays busy (displaying the most recent
 // of them); the last one ending flips it to idle.
-func (v *RunnerLive) finish(completed bool, jobID string) *events.RunnerStateChanged {
+func (v *RunnerLive) finish(completed bool, jobID string) *RunnerStateChanged {
 	runner, ok := v.byJob[jobID]
 	if !ok {
 		return nil
@@ -219,8 +218,8 @@ func (v *RunnerLive) finish(completed bool, jobID string) *events.RunnerStateCha
 // view derives the runner-level state from the per-job model: busy while any
 // job is active (displaying the most recently claimed one), idle otherwise
 // with the last-ended-job tail. Counters and tail persist across states.
-func (v *RunnerLive) view(runner string) events.RunnerStateChanged {
-	st := events.RunnerStateChanged{
+func (v *RunnerLive) view(runner string) RunnerStateChanged {
+	st := RunnerStateChanged{
 		RunnerName:    runner,
 		GPU:           v.gpu[runner],
 		JobsCompleted: v.completed[runner],
@@ -248,10 +247,10 @@ func (v *RunnerLive) view(runner string) events.RunnerStateChanged {
 
 // Snapshot returns the current per-runner states for the REST endpoint and
 // the WS runners-topic snapshot (structurally identical by construction).
-func (v *RunnerLive) Snapshot() []events.RunnerStateChanged {
+func (v *RunnerLive) Snapshot() []RunnerStateChanged {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	out := make([]events.RunnerStateChanged, 0, len(v.known))
+	out := make([]RunnerStateChanged, 0, len(v.known))
 	for runner := range v.known {
 		out = append(out, v.view(runner))
 	}
