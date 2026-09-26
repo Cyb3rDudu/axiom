@@ -48,10 +48,10 @@ func openIntakeDB(t *testing.T) *db.DB {
 }
 
 // seedMirror seeds the mirror rows a ledger revision resolves to.
-func seedMirror(t *testing.T, d *db.DB, docKey, attKey, contentHash string) string {
+func seedMirror(t *testing.T, d *db.DB, docKey, attKey, contentHash string) (srcID, docID, attID string) {
 	t.Helper()
 	ctx := context.Background()
-	var srcID, docID, itemID, attID string
+	var itemID string
 	if err := d.Pool().QueryRow(ctx,
 		`INSERT INTO zotero_sources (base_url, library_id, server_id) VALUES ('https://intake-it.local','users/0','srv-1') RETURNING id::text`).Scan(&srcID); err != nil {
 		t.Fatalf("source: %v", err)
@@ -78,8 +78,7 @@ func seedMirror(t *testing.T, d *db.DB, docKey, attKey, contentHash string) stri
 		srcID, docID, attKey, docKey, contentHash).Scan(&attID); err != nil {
 		t.Fatalf("attachment: %v", err)
 	}
-	_ = attID
-	return srcID
+	return srcID, docID, attID
 }
 
 func seedRevision(srcID, hash string) revision.SourceRevision {
@@ -110,7 +109,7 @@ func mustCanonical(t *testing.T, r revision.SourceRevision) []byte {
 func TestRevisionIntakeMintIdempotency(t *testing.T) {
 	d := openIntakeDB(t)
 	hash := revision.HashContent([]byte("intake it bytes"))
-	srcID := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
 	rep := repo.New(d.Pool())
 	ctx := context.Background()
 
@@ -161,7 +160,7 @@ func TestRevisionIntakeMintIdempotency(t *testing.T) {
 func TestRevisionIntakeClaimFreezesAndResolvesFKs(t *testing.T) {
 	d := openIntakeDB(t)
 	hash := revision.HashContent([]byte("intake claim bytes"))
-	srcID := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
 	rep := repo.New(d.Pool())
 	ctx := context.Background()
 
@@ -215,7 +214,7 @@ func TestRevisionIntakeClaimFreezesAndResolvesFKs(t *testing.T) {
 func TestRevisionIntakeClaimObsoletesOnUnresolvableRef(t *testing.T) {
 	d := openIntakeDB(t)
 	hash := revision.HashContent([]byte("unresolvable bytes"))
-	srcID := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
 	// A revision whose rendition does NOT exist in the mirror.
 	rev := seedRevision(srcID, hash)
 	rev.RenditionID = "GONE1"
@@ -259,7 +258,7 @@ func derefP(p *string) string {
 func TestRevisionIntakeClaimObsoletesOnStaleHash(t *testing.T) {
 	d := openIntakeDB(t)
 	hash := revision.HashContent([]byte("original bytes"))
-	srcID := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
 	rep := repo.New(d.Pool())
 	ctx := context.Background()
 	job, minted, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
@@ -299,7 +298,7 @@ func TestRevisionIntakeClaimObsoletesOnStaleHash(t *testing.T) {
 func TestRevisionIntakeClaimObsoletesWhenSyncLaneHoldsThePair(t *testing.T) {
 	d := openIntakeDB(t)
 	hash := revision.HashContent([]byte("collision bytes"))
-	srcID, docID, attID := seedMirrorIDs(t, d, "DOCIT1", "ATTIT1", hash)
+	srcID, docID, attID := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
 	rep := repo.New(d.Pool())
 	ctx := context.Background()
 	// The legacy lane's job (completed — idempotency-index rows keep the
@@ -339,7 +338,7 @@ func TestRevisionIntakeClaimObsoletesWhenSyncLaneHoldsThePair(t *testing.T) {
 func TestRevisionIntakeClaimObsoletesNonPreferred(t *testing.T) {
 	d := openIntakeDB(t)
 	hash := revision.HashContent([]byte("non preferred bytes"))
-	srcID, docID, _ := seedMirrorIDs(t, d, "DOCIT1", "ATTIT1", hash)
+	srcID, docID, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
 	rep := repo.New(d.Pool())
 	ctx := context.Background()
 	// Demote the seeded attachment; add a preferred sibling.
@@ -385,7 +384,7 @@ func TestRevisionIntakeClaimObsoletesNonPreferred(t *testing.T) {
 func TestRevisionIntakeReplayAcrossKeyOrdering(t *testing.T) {
 	d := openIntakeDB(t)
 	hash := revision.HashContent([]byte("key order bytes"))
-	srcID := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
 	rep := repo.New(d.Pool())
 	ctx := context.Background()
 	req := repo.IntakeRequest{
@@ -416,36 +415,4 @@ func TestRevisionIntakeReplayAcrossKeyOrdering(t *testing.T) {
 	if err != nil || minted2 || again == nil || again.ID != first.ID {
 		t.Fatalf("reordered replay must be the SAME job: %+v minted=%v err=%v", again, minted2, err)
 	}
-}
-
-// seedMirrorIDs seeds like seedMirror but returns all three ids.
-func seedMirrorIDs(t *testing.T, d *db.DB, docKey, attKey, contentHash string) (srcID, docID, attID string) {
-	t.Helper()
-	ctx := context.Background()
-	if err := d.Pool().QueryRow(ctx,
-		`INSERT INTO zotero_sources (base_url, library_id, server_id) VALUES ('https://intake-it-2.local','users/0','srv-1') RETURNING id::text`).Scan(&srcID); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Pool().QueryRow(ctx,
-		`INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
-		 VALUES ($1,$2,1,'book','Intake IT Book') RETURNING id::text`, srcID, docKey).Scan(&docID); err != nil {
-		t.Fatal(err)
-	}
-	var itemID string
-	if err := d.Pool().QueryRow(ctx,
-		`INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data)
-		 VALUES ($1,$2,1,'book',NULL,'{}','{}') RETURNING id::text`, srcID, docKey).Scan(&itemID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Pool().Exec(ctx, `UPDATE zotero_documents SET canonical_item_id=$2 WHERE id=$1`, docID, itemID); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Pool().QueryRow(ctx,
-		`INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
-		   parent_zotero_key, link_mode, content_type, filename, local_path, content_hash, preferred, deleted)
-		 VALUES ($1,$2,$3,1,$4,'imported_file','application/pdf','it.pdf','/tmp/it.pdf',$5,true,false) RETURNING id::text`,
-		srcID, docID, attKey, docKey, contentHash).Scan(&attID); err != nil {
-		t.Fatal(err)
-	}
-	return srcID, docID, attID
 }

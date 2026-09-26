@@ -74,25 +74,20 @@ func TestServeStoreBootsTheStoreSlice(t *testing.T) {
 	}
 }
 
-// TestStoreRolesAreLibraryFree — the store slice selects NO Library
-// runtime role and NO repair track: the independence topology's shape is
-// pinned where a stray role would regress it silently.
+// TestStoreRolesAreLibraryFree — the store slice's EXACT role set: no
+// Library runtime role, no repair track, none of the five store roles
+// missing — exact equality, so a stray addition OR a silent drop both go
+// red (the independence topology's shape is pinned, not sketched).
 func TestStoreRolesAreLibraryFree(t *testing.T) {
 	roles := storeRoles()
 	set := map[string]bool{}
 	for _, r := range roles {
 		set[string(r)] = true
 	}
-	if set["sync"] {
-		t.Fatalf("store slice must not select the sync (Library) role: %v", roles)
-	}
-	if set["repair"] {
-		t.Fatalf("store slice must not select the repair track: %v", roles)
-	}
-	for _, want := range []string{"api", "store", "search", "ingest", "dispatcher"} {
-		if !set[want] {
-			t.Fatalf("store slice must select %s: %v", want, roles)
-		}
+	want := map[string]bool{"api": true, "store": true, "events": true,
+		"search": true, "ingest": true, "dispatcher": true}
+	if !reflect.DeepEqual(set, want) {
+		t.Fatalf("store slice roles = %v, want exactly the store set", roles)
 	}
 }
 

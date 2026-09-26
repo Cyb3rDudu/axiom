@@ -110,6 +110,10 @@ func (s *Service) IngestRevision(ctx context.Context, req store.IngestRevisionRe
 // normalizeSourceID validates the revision's SourceID as a UUID and
 // rewrites it in canonical lowercase form (the mirror's uuid::text shape;
 // pgtype renders exactly that). No new dependency: pgx ships the parser.
+// Known narrowing: pgtype rejects the brace/urn spellings Postgres' uuid
+// cast tolerates — safe direction (everything accepted renders canonical,
+// so the claim's ::uuid can never see a rejected string) and no in-repo
+// producer emits them.
 func normalizeSourceID(r *revision.SourceRevision) error {
 	var u pgtype.UUID
 	if err := u.Scan(r.SourceID); err != nil {

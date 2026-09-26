@@ -45,7 +45,7 @@ CREATE INDEX IF NOT EXISTS ingest_jobs_revision_rendition_idx
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'intake_jobs_intake_kind_chk') THEN
+    SELECT 1 FROM pg_constraint WHERE conname IN ('ingest_jobs_intake_kind_chk','intake_jobs_intake_kind_chk')) THEN
     ALTER TABLE ingest_jobs
       ADD CONSTRAINT ingest_jobs_intake_kind_chk CHECK (intake_kind IN ('zotero','revision'));
   END IF;
