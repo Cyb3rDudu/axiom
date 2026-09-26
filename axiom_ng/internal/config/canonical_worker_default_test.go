@@ -40,6 +40,7 @@ func TestRepairWorkerCommandDefault(t *testing.T) {
 // this binary left behind (config tests run sequentially in-package).
 func TestRepairWorkerCommandPrecedence(t *testing.T) {
 	deprecate.SetSilent(true)
+	t.Cleanup(func() { deprecate.SetSilent(false) })
 
 	// legacy alone: feeds FixerCommand, witnessed
 	t.Setenv("AXIOM_REPAIR_WORKER_CMD", "")

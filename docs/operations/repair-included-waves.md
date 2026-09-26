@@ -11,8 +11,8 @@ operator action sits between "healed" and "processing".
 One document at a time, per the owner specification:
 
 1. **Dry-run** the document (preflight quality gate).
-2. **Repair if needed and repairable**: the fixer invoker claims the
-   repair case and runs the heal (quarantine-first custody protocol).
+2. **Repair if needed and repairable**: the repair orchestrator claims
+   the repair case and runs the heal (quarantine-first custody protocol).
 3. **Auto-sync after a successful heal**: the invoker immediately runs a
    *targeted* sync (include = the healed document), so the healed
    attachment is enqueued and processes like any other job.
@@ -21,9 +21,9 @@ One document at a time, per the owner specification:
    loop guard, exhausted retries) is documented in the repair case —
    never silent.
 
-## Precondition: the fixer invoker runs
+## Precondition: the repair orchestrator runs
 
-The repair-included wave assumes the fixer invoker is enabled wherever
+The repair-included wave assumes the repair orchestrator is enabled wherever
 repairs are expected (`AXIOM_FIXER_INVOKER_ENABLED=1` on the RAG process).
 The queued/in_repair arm of the gate has no time bound by design — the
 wave waits for its repairs — and the stale-claim reaper that eventually

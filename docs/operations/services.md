@@ -59,7 +59,7 @@ Installed by `scripts/install_services.sh` (confirmation prompt; substitutes
 - `com.axiom.carrier-bridge` — TEMPLATE (opt-in `--with-bridge`), the
   Apple-python bridge workaround for TCC-blocked unsigned binaries; may
   retire once binaries are TCC-granted
-- fixer: **NO service** — event runner, see below
+- repair worker (`axiom-repair-worker`): **NO service** — event runner, see below
 
 ```sh
 launchctl print  gui/$(id -u)/com.axiom.rag        # status

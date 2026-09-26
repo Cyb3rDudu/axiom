@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/deprecate"
 )
 
 // TestEffectiveTableCoversAllReadKeys — drift guard between the loader
@@ -186,6 +188,31 @@ func TestURLRowsDropUserinfo(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A command path is not a credential (F08 review round 2): the legacy
+// AXIOM_FIXER_CMD envRow must NOT be flagged secret — flipping its
+// redaction flag back to true turns this test red, so operators keep
+// seeing the actual worker path in `axiom config get --effective`.
+func TestEffectiveWorkerCommandRowNotRedacted(t *testing.T) {
+	deprecate.SetSilent(true)
+	t.Cleanup(func() { deprecate.SetSilent(false) })
+	t.Setenv("AXIOM_REPAIR_WORKER_CMD", "") // neutral: the legacy row is what we assert
+	t.Setenv("AXIOM_FIXER_CMD", "/opt/axiom/bin/some-worker")
+
+	for _, e := range Effective(Load()) {
+		if e.Env != "AXIOM_FIXER_CMD" {
+			continue
+		}
+		if e.Source != "env" {
+			t.Fatalf("AXIOM_FIXER_CMD source = %q, want env", e.Source)
+		}
+		if e.Value != "/opt/axiom/bin/some-worker" {
+			t.Fatalf("worker command path must show its value, got %v (redacted? %v)", e.Value, RedactedValue)
+		}
+		return
+	}
+	t.Fatal("AXIOM_FIXER_CMD missing from effective view")
 }
 
 // Percent-encoded credential keys (review round 3 minor): pgconn decodes
