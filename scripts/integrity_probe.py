@@ -53,13 +53,17 @@ ABBREV_END = re.compile(r"(?:^|\s)[a-zA-ZäöüÄÖÜ]{1,3}\.$")  # "z.", "B.", 
 
 # ---------------------------------------------------------------- helpers ---
 
+
 def zotero_headers():
     key = Path.home().joinpath(".axiom-ng/write-api-key").read_text().strip()
     req = urllib.request.Request(ZOTERO + "/api/")
     with urllib.request.urlopen(req, timeout=10) as r:
         sid = r.headers["Zotero-Server-ID"]
-    return {"Zotero-API-Key": key, "Zotero-Server-ID": sid,
-            "Content-Type": "application/json"}
+    return {
+        "Zotero-API-Key": key,
+        "Zotero-Server-ID": sid,
+        "Content-Type": "application/json",
+    }
 
 
 def zotero_get(path, headers):
@@ -70,8 +74,9 @@ def zotero_get(path, headers):
 
 def zotero_post(path, payload, headers):
     body = json.dumps(payload, ensure_ascii=False).encode()
-    req = urllib.request.Request(ZOTERO + path, data=body, headers=headers,
-                                 method="POST")
+    req = urllib.request.Request(
+        ZOTERO + path, data=body, headers=headers, method="POST"
+    )
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read().decode())
 
@@ -80,10 +85,12 @@ def rag_search(query, doc_id=None, top_n=5):
     body = {"query": query, "top_n": top_n}
     if doc_id:
         body["filters"] = {"document_ids": [doc_id]}
-    req = urllib.request.Request(RAG + "/api/search",
-                                 data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"},
-                                 method="POST")
+    req = urllib.request.Request(
+        RAG + "/api/search",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read().decode())
 
@@ -103,15 +110,20 @@ def doc_map():
     req = urllib.request.Request(RAG + "/api/zotero/documents")
     with urllib.request.urlopen(req, timeout=60) as r:
         docs = json.loads(r.read().decode())["documents"]
-    return {d["attachment"]["zotero_key"]: {
-        "doc_id": d["document_id"],
-        "item_key": d["zotero_key"],
-        "title": d["title"],
-        "filename": d["attachment"].get("filename", ""),
-    } for d in docs if d.get("attachment")}
+    return {
+        d["attachment"]["zotero_key"]: {
+            "doc_id": d["document_id"],
+            "item_key": d["zotero_key"],
+            "title": d["title"],
+            "filename": d["attachment"].get("filename", ""),
+        }
+        for d in docs
+        if d.get("attachment")
+    }
 
 
 # ------------------------------------------------------- PDF text + lines ---
+
 
 class PageText:
     """Reconstructed page text with a char-range -> line-rect map.
@@ -200,7 +212,7 @@ def sentence_candidates(text: str):
     """Sentence spans on . ! ? — terminator must be followed by
     space+uppercase or end (skips abbreviation splits like „z. B.")."""
     for m in re.finditer(r"[^.!?…]{25,600}?[.!?…](?=\s|$)", text):
-        rest = text[m.end():].lstrip()
+        rest = text[m.end() :].lstrip()
         if rest and not re.match(r"[\u201e\u201c\u201d\)\u2016\[A-ZÄÖÜ0-9\*]", rest):
             continue  # continues lowercase -> was an abbreviation split
         s = m.group(0)
@@ -212,6 +224,7 @@ def word_count(s: str) -> int:
 
 
 # ------------------------------------------------------- anchor selection ---
+
 
 def is_prose_page(pt: PageText) -> bool:
     """Diagram pages: many short scattered lines. Prose: long body lines."""
@@ -239,18 +252,19 @@ def strip_running_prefix(s: str, label):
     Returns (stripped, n_stripped_chars)."""
     lab = re.escape(str(label))
     tok = re.compile(
-        rf"^(?:[A-ZÄÖÜ][A-ZÄÖÜ0-9\-/&.]{{7,}}\s*"      # running-head caps word
-        rf"|[A-ZÄÖÜ]\s+"                              # drop-cap letter
-        rf"|{lab}[.\)]?\s*"                           # page-label token
-        rf"|[|·•\u2013\u2014-]\s*"                     # separators
-        rf")+")
+        rf"^(?:[A-ZÄÖÜ][A-ZÄÖÜ0-9\-/&.]{{7,}}\s*"  # running-head caps word
+        rf"|[A-ZÄÖÜ]\s+"  # drop-cap letter
+        rf"|{lab}[.\)]?\s*"  # page-label token
+        rf"|[|·•\u2013\u2014-]\s*"  # separators
+        rf")+"
+    )
     n = 0
     for _ in range(6):
         m = tok.match(s)
         if not m:
             break
         # never strip everything
-        rest = s[m.end():]
+        rest = s[m.end() :]
         if len(rest) < 40:
             break
         n += m.end()
@@ -267,13 +281,18 @@ def pick_anchor_candidates(pdf_path: Path):
     pages = [PageText(doc[i]) for i in range(len(doc))]
     doc.close()
 
-    body = [i for i, pt in enumerate(pages)
-            if len(norm(pt.text)) >= MIN_PAGE_CHARS and is_prose_page(pt)]
+    body = [
+        i
+        for i, pt in enumerate(pages)
+        if len(norm(pt.text)) >= MIN_PAGE_CHARS and is_prose_page(pt)
+    ]
     if len(body) < 4:
         return None, "too few prose body pages"
-    thirds = [body[0: max(1, len(body) // 3)],
-              body[len(body) // 3: 2 * len(body) // 3],
-              body[2 * len(body) // 3:]]
+    thirds = [
+        body[0 : max(1, len(body) // 3)],
+        body[len(body) // 3 : 2 * len(body) // 3],
+        body[2 * len(body) // 3 :],
+    ]
 
     # corpus of full text for uniqueness (+ precomputed per-page norms:
     # the running-head killer consults every page per candidate)
@@ -304,7 +323,11 @@ def pick_anchor_candidates(pdf_path: Path):
                 if re.search(r"\d{3,}", s):
                     continue
                 # boilerplate: license/CC/DOI/URL sentences are not anchors
-                if re.search(r"creativecommons|unrestricted reuse|distribution, and reproduction|doi\.org|https?://|copyright|open access|alle rechte|verlag|impressum|isbn|auflage|gedruckt auf|herstellung", s, re.I):
+                if re.search(
+                    r"creativecommons|unrestricted reuse|distribution, and reproduction|doi\.org|https?://|copyright|open access|alle rechte|verlag|impressum|isbn|auflage|gedruckt auf|herstellung",
+                    s,
+                    re.I,
+                ):
                     continue
                 if ABBREV_END.search(s):
                     continue
@@ -328,13 +351,15 @@ def pick_anchor_candidates(pdf_path: Path):
                 rects = pt.rects_for_norm_range(a, b)
                 if not prose_like_rects(rects):
                     continue
-                page_cands.append({
-                    "page_index": i,
-                    "pdf_label": pt.label,
-                    "quote": s,
-                    "rects": rects,
-                    "words": w,
-                })
+                page_cands.append(
+                    {
+                        "page_index": i,
+                        "pdf_label": pt.label,
+                        "quote": s,
+                        "rects": rects,
+                        "words": w,
+                    }
+                )
             # deterministic rank within page: longest first
             page_cands.sort(key=lambda c: -c["words"])
             cands.extend(page_cands)
@@ -353,7 +378,11 @@ def pick_anchor_candidates(pdf_path: Path):
                     w = word_count(s)
                     if not (6 <= w <= MAX_WORDS):
                         continue
-                    if re.search(r"creativecommons|unrestricted reuse|distribution, and reproduction|doi\.org|https?://|copyright|open access|alle rechte|verlag|impressum|isbn|auflage|gedruckt auf|herstellung", s, re.I):
+                    if re.search(
+                        r"creativecommons|unrestricted reuse|distribution, and reproduction|doi\.org|https?://|copyright|open access|alle rechte|verlag|impressum|isbn|auflage|gedruckt auf|herstellung",
+                        s,
+                        re.I,
+                    ):
                         continue
                     if ABBREV_END.search(s):
                         continue
@@ -373,14 +402,16 @@ def pick_anchor_candidates(pdf_path: Path):
                     rects = pt.rects_for_norm_range(a, b)
                     if not rects:
                         continue
-                    cands.append({
-                        "page_index": i,
-                        "pdf_label": pt.label,
-                        "quote": s,
-                        "rects": rects,
-                        "words": w,
-                        "relaxed": True,
-                    })
+                    cands.append(
+                        {
+                            "page_index": i,
+                            "pdf_label": pt.label,
+                            "quote": s,
+                            "rects": rects,
+                            "words": w,
+                            "relaxed": True,
+                        }
+                    )
             cands.sort(key=lambda c: -c["words"])
         out[pos_name] = cands
         if cands:
@@ -391,6 +422,8 @@ def pick_anchor_candidates(pdf_path: Path):
 # (rects_for_range_raw kept for compatibility — same as rects_for_range)
 def _rects_for_range_raw(self, a, b):
     return self.rects_for_range(a, b)
+
+
 PageText.rects_for_range_raw = _rects_for_range_raw
 
 
@@ -399,6 +432,7 @@ def fmt_rects(rects):
 
 
 # ---------------------------------------------------- Zotero artifact side ---
+
 
 def existing_probe_items(headers):
     """All items tagged integritäts-check (for duplicate protection)."""
@@ -422,9 +456,16 @@ def word_precise_rects(pdf_path, page_index, quote, fallback):
         page = doc[page_index]
         H = page.rect.height
         import unicodedata as _u
+
         def nuk(s):
-            s = _u.normalize("NFKC", s).replace("ß", "ss").replace("ﬁ", "fi").replace("ﬂ", "fl")
+            s = (
+                _u.normalize("NFKC", s)
+                .replace("ß", "ss")
+                .replace("ﬁ", "fi")
+                .replace("ﬂ", "fl")
+            )
             return "".join(ch.lower() for ch in s if ch.isalnum())
+
         qw = [nuk(w) for w in quote.split()][:14]
         words = page.get_text("words")  # x0,y0,x1,y1,word,block,line,no
         out = []
@@ -432,7 +473,11 @@ def word_precise_rects(pdf_path, page_index, quote, fallback):
         for w in words:
             if qi >= len(qw):
                 break
-            if nuk(w[4]) == qw[qi] or nuk(w[4]).startswith(qw[qi]) or qw[qi].startswith(nuk(w[4])[:6]):
+            if (
+                nuk(w[4]) == qw[qi]
+                or nuk(w[4]).startswith(qw[qi])
+                or qw[qi].startswith(nuk(w[4])[:6])
+            ):
                 out.append((w[0], w[1], w[2], w[3]))
                 qi += 1
         doc.close()
@@ -445,10 +490,14 @@ def word_precise_rects(pdf_path, page_index, quote, fallback):
                     lines[key] = [x0, y0, x1, y1]
                 else:
                     L = lines[key]
-                    L[0] = min(L[0], x0); L[1] = min(L[1], y0)
-                    L[2] = max(L[2], x1); L[3] = max(L[3], y1)
-            return [[round(x0, 2), round(H - y1, 2), round(x1, 2), round(H - y0, 2)]
-                    for x0, y0, x1, y1 in sorted(lines.values(), key=lambda L: -L[1])]
+                    L[0] = min(L[0], x0)
+                    L[1] = min(L[1], y0)
+                    L[2] = max(L[2], x1)
+                    L[3] = max(L[3], y1)
+            return [
+                [round(x0, 2), round(H - y1, 2), round(x1, 2), round(H - y0, 2)]
+                for x0, y0, x1, y1 in sorted(lines.values(), key=lambda L: -L[1])
+            ]
     except Exception:
         pass
     return fallback
@@ -456,12 +505,17 @@ def word_precise_rects(pdf_path, page_index, quote, fallback):
 
 def make_annotation_payload(att_key, anchor):
     rects = fmt_rects(anchor["rects"])
-    pos = json.dumps({"pageIndex": anchor["page_index"], "rects": rects},
-                     separators=(",", ":"), ensure_ascii=False)
+    pos = json.dumps(
+        {"pageIndex": anchor["page_index"], "rects": rects},
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
     first = rects[0]
-    sort = "%05d|%06d|%05d" % (anchor["page_index"],
-                               int(round(first[3] * 10)),
-                               int(first[0]))
+    sort = "%05d|%06d|%05d" % (
+        anchor["page_index"],
+        int(round(first[3] * 10)),
+        int(first[0]),
+    )
     return {
         "itemType": "annotation",
         "parentItem": att_key,
@@ -505,8 +559,9 @@ def citation_display(csl, label):
 
 
 def enc(obj):
-    return urllib.parse.quote(json.dumps(obj, separators=(",", ":"),
-                                         ensure_ascii=True), safe="")
+    return urllib.parse.quote(
+        json.dumps(obj, separators=(",", ":"), ensure_ascii=True), safe=""
+    )
 
 
 def short_title(title):
@@ -520,47 +575,103 @@ def make_note_payload(book_key, att_key, anchor, csl, blueprint_html):
     uri_att = URI_PREFIX + att_key
     # v2 two-value design: N = print page (embedded PDF label, may be empty),
     # M = chunk exact page (paragraph_pages). Both visible side by side.
-    label = str(anchor.get("N", ""))          # N — goes into the citation locator
+    label = str(anchor.get("N", ""))  # N — goes into the citation locator
     m_val = str(anchor.get("M", (anchor.get("chunk") or {}).get("page") or ""))
     rects = fmt_rects(anchor["rects"])
-    pos = json.dumps({"pageIndex": anchor["page_index"], "rects": rects},
-                     separators=(",", ":"), ensure_ascii=False)
+    pos = json.dumps(
+        {"pageIndex": anchor["page_index"], "rects": rects},
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
 
     data_citation_items = enc([{"uris": [uri_book], "itemData": csl}])
-    data_annotation = enc({
-        "attachmentURI": uri_att,
-        "pageLabel": label,
-        "position": {"pageIndex": anchor["page_index"], "rects": rects},
-        "citationItem": {"uris": [uri_book], "locator": label},
-    })
-    data_citation = enc({
-        "citationItems": [{"uris": [uri_book], "locator": label}],
-        "properties": {},
-    })
+    data_annotation = enc(
+        {
+            "attachmentURI": uri_att,
+            "pageLabel": label,
+            "position": {"pageIndex": anchor["page_index"], "rects": rects},
+            "citationItem": {"uris": [uri_book], "locator": label},
+        }
+    )
+    data_citation = enc(
+        {
+            "citationItems": [{"uris": [uri_book], "locator": label}],
+            "properties": {},
+        }
+    )
 
     n_disp = label if label else "—"
     h1 = f"Integritätscheck {short_title(csl.get('title', ''))}: Anker {anchor['position'].upper()} — Zitat S. {n_disp} / Chunk S. {m_val}"
-    einsatz = (f"Dreiecksprobe #195, Anker {anchor['position']}: Zitat-Seite {n_disp} ↔ Chunk-Seite {m_val}"
-               + (" — MATCH" if (label and label == m_val) else " — ABWEICHUNG"))
-    werte = (f"Zitat-Seite: {n_disp}" + ("" if label else " (kein eingebettetes Label)")
-             + f" (= Locator in data-citation, Druckseite). "
-             f"Chunk-Seite: {m_val} (= paragraph_pages-Exaktseite).")
-    warum = ("Messung der Zitatkette über alle drei Beine: gelbe Annotation im "
-             "Reader, paragraph_pages-Exaktseite des Chunks, eingebettetes "
-             "PDF-Label. Kein Heilen, keine Re-Chunks — Befundlage für #195.")
+    einsatz = (
+        f"Dreiecksprobe #195, Anker {anchor['position']}: Zitat-Seite {n_disp} ↔ Chunk-Seite {m_val}"
+        + (" — MATCH" if (label and label == m_val) else " — ABWEICHUNG")
+    )
+    werte = (
+        f"Zitat-Seite: {n_disp}"
+        + ("" if label else " (kein eingebettetes Label)")
+        + f" (= Locator in data-citation, Druckseite). "
+        f"Chunk-Seite: {m_val} (= paragraph_pages-Exaktseite)."
+    )
+    warum = (
+        "Messung der Zitatkette über alle drei Beine: gelbe Annotation im "
+        "Reader, paragraph_pages-Exaktseite des Chunks, eingebettetes "
+        "PDF-Label. Kein Heilen, keine Re-Chunks — Befundlage für #195."
+    )
     quote_span = f"„{anchor['quote']}“"
     cite_disp = citation_display(csl, label) if label else citation_display(csl, None)
 
     note = blueprint_html
-    note = re.sub(r'data-citation-items="[^"]*"', f'data-citation-items="{data_citation_items}"', note, count=1)
-    note = re.sub(r"<h1>.*?</h1>", lambda m: "<h1>" + _esc(h1) + "</h1>", note, count=1, flags=re.S)
-    note = re.sub(r'(?s)<p><strong>Einsatz:</strong>.*?</p>', lambda m: "<p><strong>Einsatz:</strong> " + _esc(einsatz) + "</p>\n<p>" + _esc(werte) + "</p>", note, count=1)
-    note = re.sub(r'(?s)<p><strong>Warum relevant</strong></p>\n?<p>.*?</p>',
-                   lambda m: "<p><strong>Warum relevant</strong></p>\n<p>" + _esc(warum) + "</p>", note, count=1)
-    note = re.sub(r'(?s)<span class="highlight" data-annotation="[^"]*">(.*?)</span>',
-                   lambda m: f'<span class="highlight" data-annotation="{data_annotation}">' + _esc(quote_span) + "</span>", note, count=1)
-    note = re.sub(r'(?s)<span class="citation" data-citation="[^"]*">.*?</span>',
-                   lambda m: f'<span class="citation" data-citation="{data_citation}">(<span class="citation-item">' + _esc(cite_disp[1:-1]) + "</span>)</span>", note, count=1)
+    note = re.sub(
+        r'data-citation-items="[^"]*"',
+        f'data-citation-items="{data_citation_items}"',
+        note,
+        count=1,
+    )
+    note = re.sub(
+        r"<h1>.*?</h1>",
+        lambda m: "<h1>" + _esc(h1) + "</h1>",
+        note,
+        count=1,
+        flags=re.S,
+    )
+    note = re.sub(
+        r"(?s)<p><strong>Einsatz:</strong>.*?</p>",
+        lambda m: (
+            "<p><strong>Einsatz:</strong> "
+            + _esc(einsatz)
+            + "</p>\n<p>"
+            + _esc(werte)
+            + "</p>"
+        ),
+        note,
+        count=1,
+    )
+    note = re.sub(
+        r"(?s)<p><strong>Warum relevant</strong></p>\n?<p>.*?</p>",
+        lambda m: "<p><strong>Warum relevant</strong></p>\n<p>" + _esc(warum) + "</p>",
+        note,
+        count=1,
+    )
+    note = re.sub(
+        r'(?s)<span class="highlight" data-annotation="[^"]*">(.*?)</span>',
+        lambda m: (
+            f'<span class="highlight" data-annotation="{data_annotation}">'
+            + _esc(quote_span)
+            + "</span>"
+        ),
+        note,
+        count=1,
+    )
+    note = re.sub(
+        r'(?s)<span class="citation" data-citation="[^"]*">.*?</span>',
+        lambda m: (
+            f'<span class="citation" data-citation="{data_citation}">(<span class="citation-item">'
+            + _esc(cite_disp[1:-1])
+            + "</span>)</span>"
+        ),
+        note,
+        count=1,
+    )
     if data_citation_items not in note or data_annotation not in note:
         raise RuntimeError("slot replacement failed — blueprint structure changed")
     return {
@@ -573,46 +684,101 @@ def make_note_payload(book_key, att_key, anchor, csl, blueprint_html):
 
 
 def _esc(s):
-    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 # --------------------------------------------------------- chunk compare ---
 
+
 def db_find_chunks(frag, doc_id):
     """Direct doc-scoped chunk lookup via psql (fast, exact-ish)."""
     import subprocess
-    sql = ("select c.id::text, c.text, c.locator->>'physical_page_start', c.locator->>'physical_page_end' from processing_chunks c "
-           "join processing_snapshots s on s.id=c.snapshot_id and s.active "
-           "join zotero_documents d on d.id=s.document_id "
-           "where d.id='" + doc_id + "' and replace(replace(c.text, chr(10), ' '), '-', '') ilike '%"
-           + frag.replace("'", "''").replace("-", "") + "%' limit 8")
-    r = subprocess.run(["podman", "exec", "axiom-postgres", "psql", "-U", "axiom_user",
-                        "-d", "axiom_db", "-t", "-A", "-F", "\x01", "-R", "\x02", "-c", sql],
-                       capture_output=True, text=True, timeout=30)
+
+    sql = (
+        "select c.id::text, c.text, c.locator->>'physical_page_start', c.locator->>'physical_page_end' from processing_chunks c "
+        "join processing_snapshots s on s.id=c.snapshot_id and s.active "
+        "join zotero_documents d on d.id=s.document_id "
+        "where d.id='"
+        + doc_id
+        + "' and replace(replace(c.text, chr(10), ' '), '-', '') ilike '%"
+        + frag.replace("'", "''").replace("-", "")
+        + "%' limit 8"
+    )
+    r = subprocess.run(
+        [
+            "podman",
+            "exec",
+            "axiom-postgres",
+            "psql",
+            "-U",
+            "axiom_user",
+            "-d",
+            "axiom_db",
+            "-t",
+            "-A",
+            "-F",
+            "\x01",
+            "-R",
+            "\x02",
+            "-c",
+            sql,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     out = []
     for rec in r.stdout.split("\x02"):
         rec = rec.strip("\n")
         if "\x01" in rec:
             parts = rec.split("\x01")
-            out.append({"chunk_id": parts[0], "text": parts[1],
-                        "phys_start": parts[2] if len(parts) > 2 else None,
-                        "phys_end": parts[3] if len(parts) > 3 else None})
+            out.append(
+                {
+                    "chunk_id": parts[0],
+                    "text": parts[1],
+                    "phys_start": parts[2] if len(parts) > 2 else None,
+                    "phys_end": parts[3] if len(parts) > 3 else None,
+                }
+            )
     return out
 
 
 def db_find_chunks_spacestripped(nuk_frag, doc_id):
     """Stage-5 lookup: compare space-stripped alnum-lowercase forms."""
     import subprocess
+
     safe = nuk_frag.replace("'", "''")
-    sql = ("select c.id::text, c.text from processing_chunks c "
-           "join processing_snapshots s on s.id=c.snapshot_id and s.active "
-           "join zotero_documents d on d.id=s.document_id "
-           "where d.id='" + doc_id + "' and "
-           "regexp_replace(lower(regexp_replace(c.text, '\\s', '', 'g')), '[^a-zäöü0-9]', '', 'g') "
-           "like '%" + safe + "%' limit 5")
-    r = subprocess.run(["podman", "exec", "axiom-postgres", "psql", "-U", "axiom_user",
-                        "-d", "axiom_db", "-t", "-A", "-F", "\x01", "-R", "\x02", "-c", sql],
-                       capture_output=True, text=True, timeout=30)
+    sql = (
+        "select c.id::text, c.text from processing_chunks c "
+        "join processing_snapshots s on s.id=c.snapshot_id and s.active "
+        "join zotero_documents d on d.id=s.document_id "
+        "where d.id='" + doc_id + "' and "
+        "regexp_replace(lower(regexp_replace(c.text, '\\s', '', 'g')), '[^a-zäöü0-9]', '', 'g') "
+        "like '%" + safe + "%' limit 5"
+    )
+    r = subprocess.run(
+        [
+            "podman",
+            "exec",
+            "axiom-postgres",
+            "psql",
+            "-U",
+            "axiom_user",
+            "-d",
+            "axiom_db",
+            "-t",
+            "-A",
+            "-F",
+            "\x01",
+            "-R",
+            "\x02",
+            "-c",
+            sql,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     out = []
     for rec in r.stdout.split("\x02"):
         rec = rec.strip("\n")
@@ -631,18 +797,34 @@ def chunk_leg(quote, doc_id, page_index=None):
     word windows exact -> shifted -> short; offset search across all
     windows; return-verification. No silent give-up."""
     import unicodedata
+
     def nuk(s):
-        s = unicodedata.normalize("NFKC", s).replace("\u00df", "ss").replace("\ufb01", "fi").replace("\ufb02", "fl")
+        s = (
+            unicodedata.normalize("NFKC", s)
+            .replace("\u00df", "ss")
+            .replace("\ufb01", "fi")
+            .replace("\ufb02", "fl")
+        )
         return "".join(ch.lower() for ch in s if ch.isalnum())
+
     def sqlfrag(s):
         import unicodedata as _u
-        s = _u.normalize("NFKC", s).replace("\u00df", "ss").replace("\ufb01", "fi").replace("\ufb02", "fl")
+
+        s = (
+            _u.normalize("NFKC", s)
+            .replace("\u00df", "ss")
+            .replace("\ufb01", "fi")
+            .replace("\ufb02", "fl")
+        )
         return " ".join(s.split())
+
     def fragment_find(text, frag):
         """Match frag (dash-tolerant) in text; return RAW-text offset."""
         import re as _re
+
         def strip_dashes(s):
             return s.replace("-", "").replace("\xad", "")
+
         clean = strip_dashes(text)
         fwords = [strip_dashes(w) for w in frag.split()]
         pat = _re.escape(fwords[0])
@@ -702,9 +884,16 @@ def chunk_leg(quote, doc_id, page_index=None):
         # v2 ESCALATION STAGE 5: space-stripped substring for corrupted
         # text layers (e.g. \x02 word separators) + return-verification
         import unicodedata as _u2
+
         def nukq(s):
-            s = _u2.normalize("NFKC", s).replace("\u00df", "ss").replace("\ufb01", "fi").replace("\ufb02", "fl")
+            s = (
+                _u2.normalize("NFKC", s)
+                .replace("\u00df", "ss")
+                .replace("\ufb01", "fi")
+                .replace("\ufb02", "fl")
+            )
             return "".join(ch.lower() for ch in s if ch.isalnum())
+
         for frag_w in windows:
             nf = nukq(" ".join(frag_w))
             if len(nf) < 14:
@@ -714,7 +903,11 @@ def chunk_leg(quote, doc_id, page_index=None):
                 # return-verification: chunk must contain the anchor words
                 # (nuk-space-stripped containment check)
                 nq_full = nukq(quote)
-                good = [h for h in hits if nukq(h["text"]) and _window_in(nf, nukq(h["text"]))]
+                good = [
+                    h
+                    for h in hits
+                    if nukq(h["text"]) and _window_in(nf, nukq(h["text"]))
+                ]
                 if good:
                     best_hits = good
                     frag_plain = " ".join(frag_w)
@@ -723,10 +916,13 @@ def chunk_leg(quote, doc_id, page_index=None):
     if verified:
         pool = verified
         if len(pool) > 1 and page_index is not None:
-            here = [h for h in pool
-                    if (h.get("phys_start") or "").lstrip("-").isdigit()
-                    and (h.get("phys_end") or "").lstrip("-").isdigit()
-                    and int(h["phys_start"]) <= page_index <= int(h["phys_end"])]
+            here = [
+                h
+                for h in pool
+                if (h.get("phys_start") or "").lstrip("-").isdigit()
+                and (h.get("phys_end") or "").lstrip("-").isdigit()
+                and int(h["phys_start"]) <= page_index <= int(h["phys_end"])
+            ]
             if here:
                 pool = here
         best_hits = pool
@@ -735,10 +931,13 @@ def chunk_leg(quote, doc_id, page_index=None):
         # range contains the anchor's PDF page (duplicate texts live in
         # compilation reprints / TOC repetitions elsewhere)
         if len(best_hits) > 1 and page_index is not None:
-            here = [h for h in best_hits
-                    if (h.get("phys_start") or "").lstrip("-").isdigit()
-                    and (h.get("phys_end") or "").lstrip("-").isdigit()
-                    and int(h["phys_start"]) <= page_index <= int(h["phys_end"])]
+            here = [
+                h
+                for h in best_hits
+                if (h.get("phys_start") or "").lstrip("-").isdigit()
+                and (h.get("phys_end") or "").lstrip("-").isdigit()
+                and int(h["phys_start"]) <= page_index <= int(h["phys_end"])
+            ]
             if here:
                 best_hits = here
         h = max(best_hits, key=lambda x: len(x["text"]))
@@ -751,15 +950,22 @@ def chunk_leg(quote, doc_id, page_index=None):
             # stage-5 offset: nuk-space-stripped mapping (corrupted layers)
             def nuk_index(text):
                 import unicodedata as _u
+
                 idx = []
                 out = []
                 for i, ch in enumerate(text):
-                    e = _u.normalize("NFKC", ch).replace("\u00df", "ss").replace("\ufb01", "fi").replace("\ufb02", "fl")
+                    e = (
+                        _u.normalize("NFKC", ch)
+                        .replace("\u00df", "ss")
+                        .replace("\ufb01", "fi")
+                        .replace("\ufb02", "fl")
+                    )
                     for c2 in e:
                         if c2.isalnum():
                             out.append(c2.lower())
                             idx.append(i)
                 return "".join(out), idx
+
             ns, idxmap = nuk_index(h["text"])
             for frag_w in windows:
                 nf = nuk(" ".join(frag_w))
@@ -773,14 +979,22 @@ def chunk_leg(quote, doc_id, page_index=None):
         if at is not None:
             page = rag_passage_page(h["chunk_id"], at)
             page = page.get("page") if page else None
-        out = {"status": "ok", "chunk_id": h["chunk_id"], "at": at,
-               "page": page, "locator_label": None, "page_source": None}
+        out = {
+            "status": "ok",
+            "chunk_id": h["chunk_id"],
+            "at": at,
+            "page": page,
+            "locator_label": None,
+            "page_source": None,
+        }
         if len(best_hits) > 1:
             out["dup_fragment_chunks"] = len(best_hits)
         if page is None:
             out["page_unresolved"] = True
             cn = nuk(h["text"])
-            out["verify_words_in_chunk"] = sum(1 for w in quote.split()[:10] if nuk(w) in cn)
+            out["verify_words_in_chunk"] = sum(
+                1 for w in quote.split()[:10] if nuk(w) in cn
+            )
         return out
     # semantic-search fallback with ligature-tolerant comparison
     r = rag_search(quote, doc_id=None, top_n=8)
@@ -798,16 +1012,21 @@ def chunk_leg(quote, doc_id, page_index=None):
                 matches.append(h)
         chunk_ids = {h["chunk_id"] for h in matches}
     if not chunk_ids:
-        return {"status": "no_chunk",
-                "cause": "anchor text not contained in any chunk of the doc "
-                         "(extraction gap: table cells stripped, OCR diff, "
-                         "or chunk border); ladder tried %d word windows" % len(windows)}
+        return {
+            "status": "no_chunk",
+            "cause": "anchor text not contained in any chunk of the doc "
+            "(extraction gap: table cells stripped, OCR diff, "
+            "or chunk border); ladder tried %d word windows" % len(windows),
+        }
     if len(chunk_ids) > 1:
         return {"status": "ambiguous", "chunk_ids": sorted(chunk_ids)}
     h = matches[0]
     if h["source"].get("doc_id") != doc_id:
-        return {"status": "ambiguous_crossdoc", "chunk_id": h["chunk_id"],
-                "doc": h["source"].get("doc_id")}
+        return {
+            "status": "ambiguous_crossdoc",
+            "chunk_id": h["chunk_id"],
+            "doc": h["source"].get("doc_id"),
+        }
     raw = h["text"]
     at = norm_find(raw, nq)
     page = rag_passage_page(h["chunk_id"], at) if at is not None else None
@@ -845,6 +1064,7 @@ def norm_find(raw, nq):
 
 # ------------------------------------------------------------------ main ---
 
+
 def load_results():
     if RESULTS.exists():
         return json.loads(RESULTS.read_text())
@@ -875,13 +1095,23 @@ def probe(att_key, write=False):
 
     headers = zotero_headers()
     existing = existing_probe_items(headers) if write else []
-    ex_att = {fingerprint_att(i["data"].get("parentItem"),
-                              i["data"].get("annotationPageLabel"),
-                              i["data"].get("annotationText", ""))
-              for i in existing if i["data"]["itemType"] == "annotation"}
+    ex_att = {
+        fingerprint_att(
+            i["data"].get("parentItem"),
+            i["data"].get("annotationPageLabel"),
+            i["data"].get("annotationText", ""),
+        )
+        for i in existing
+        if i["data"]["itemType"] == "annotation"
+    }
 
-    out = {"attachment": att_key, "title": info["title"], "item_key": info["item_key"],
-           "doc_id": info["doc_id"], "anchors": []}
+    out = {
+        "attachment": att_key,
+        "title": info["title"],
+        "item_key": info["item_key"],
+        "doc_id": info["doc_id"],
+        "anchors": [],
+    }
     used_pages = set()
     verdict = "MATCH"
     for pos_name in ("front", "middle", "back"):
@@ -895,7 +1125,9 @@ def probe(att_key, write=False):
                 if page_exclusive and cand["page_index"] in used_pages:
                     continue
                 tried += 1
-                leg = chunk_leg(cand["quote"], info["doc_id"], page_index=cand["page_index"])
+                leg = chunk_leg(
+                    cand["quote"], info["doc_id"], page_index=cand["page_index"]
+                )
                 if leg["status"] == "ok" and leg.get("page") is not None:
                     chosen = dict(cand)
                     chosen["position"] = pos_name
@@ -909,16 +1141,24 @@ def probe(att_key, write=False):
         if chosen is None:
             # v2: SKIP abolished — unlocatable = BLOCKER with cause
             from collections import Counter as _C
+
             causes = dict(_C(m[0] for m in misses))
             c0 = candmap.get(pos_name, [])[:1]
-            entry = {"position": pos_name, "verdict": "BLOCKER",
-                     "cause": f"no corpus-locatable anchor after {tried} candidates; "
-                              f"leg statuses: {causes}",
-                     "candidates": len(candmap.get(pos_name, []))}
+            entry = {
+                "position": pos_name,
+                "verdict": "BLOCKER",
+                "cause": f"no corpus-locatable anchor after {tried} candidates; "
+                f"leg statuses: {causes}",
+                "candidates": len(candmap.get(pos_name, [])),
+            }
             if c0:
-                entry.update({"page_index": c0[0]["page_index"],
-                              "pdf_label": c0[0]["pdf_label"],
-                              "quote": c0[0]["quote"]})
+                entry.update(
+                    {
+                        "page_index": c0[0]["page_index"],
+                        "pdf_label": c0[0]["pdf_label"],
+                        "quote": c0[0]["quote"],
+                    }
+                )
             out["anchors"].append(entry)
             verdict = "BLOCKER"
             continue
@@ -938,8 +1178,9 @@ def probe(att_key, write=False):
 
     if write:
         csl = csl_item(headers, info["item_key"])
-        blueprint = zotero_get(f"/api/users/0/items/{BLUEPRINT_KEY}?format=json",
-                               headers)["data"]["note"]
+        blueprint = zotero_get(
+            f"/api/users/0/items/{BLUEPRINT_KEY}?format=json", headers
+        )["data"]["note"]
         for a in out["anchors"]:
             if "error" in a or a.get("verdict") == "BLOCKER":
                 continue
@@ -947,34 +1188,57 @@ def probe(att_key, write=False):
                 # sparse docs: the position shares the only corpus-locatable
                 # sentence with another anchor — note with explicit reference,
                 # no duplicate highlight
-                a["annotation"] = {"status": "duplicate_skipped (shared measurement "
-                                      "site — see annotation of the other anchor)"}
-                note_payload = make_note_payload(info["item_key"], att_key, a, csl, blueprint)
+                a["annotation"] = {
+                    "status": "duplicate_skipped (shared measurement "
+                    "site — see annotation of the other anchor)"
+                }
+                note_payload = make_note_payload(
+                    info["item_key"], att_key, a, csl, blueprint
+                )
                 note_payload["note"] = note_payload["note"].replace(
                     "Dreiecksprobe #195, Anker " + a["position"],
-                    "Dreiecksprobe #195, Anker " + a["position"] +
-                    " (teilt die Messstelle mit einem anderen Anker — einziger "
-                    "korpus-lokalisierbarer Satz)", 1)
+                    "Dreiecksprobe #195, Anker "
+                    + a["position"]
+                    + " (teilt die Messstelle mit einem anderen Anker — einziger "
+                    "korpus-lokalisierbarer Satz)",
+                    1,
+                )
                 nresp = zotero_post("/api/users/0/items", [note_payload], headers)
                 nkey = nresp.get("successful", {}).get("0", {}).get("key")
-                a["note"] = {"status": "created" if nkey else "failed",
-                             "key": nkey, "resp": nresp if not nkey else None}
+                a["note"] = {
+                    "status": "created" if nkey else "failed",
+                    "key": nkey,
+                    "resp": nresp if not nkey else None,
+                }
                 continue
             a["rects"] = word_precise_rects(
                 STORAGE / att_key / next((STORAGE / att_key).glob("*.pdf")).name
-                if False else pdf_path, a["page_index"], a["quote"], a["rects"])
+                if False
+                else pdf_path,
+                a["page_index"],
+                a["quote"],
+                a["rects"],
+            )
             payload = make_annotation_payload(att_key, a)
             resp = zotero_post("/api/users/0/items", [payload], headers)
             key = resp.get("successful", {}).get("0", {}).get("key")
-            a["annotation"] = {"status": "created" if key else "failed",
-                               "key": key, "resp": resp if not key else None}
+            a["annotation"] = {
+                "status": "created" if key else "failed",
+                "key": key,
+                "resp": resp if not key else None,
+            }
             if key:
                 ex_att.add(fingerprint_att(att_key, a["pdf_label"], a["quote"]))
-            note_payload = make_note_payload(info["item_key"], att_key, a, csl, blueprint)
+            note_payload = make_note_payload(
+                info["item_key"], att_key, a, csl, blueprint
+            )
             nresp = zotero_post("/api/users/0/items", [note_payload], headers)
             nkey = nresp.get("successful", {}).get("0", {}).get("key")
-            a["note"] = {"status": "created" if nkey else "failed",
-                         "key": nkey, "resp": nresp if not nkey else None}
+            a["note"] = {
+                "status": "created" if nkey else "failed",
+                "key": nkey,
+                "resp": nresp if not nkey else None,
+            }
     out["verdict"] = verdict
     out["took_s"] = round(time.time() - t0, 1)
     return out
@@ -1004,8 +1268,14 @@ def main():
     if args.report:
         rows = []
         for k, r in results.items():
-            rows.append((k, r.get("title", "?")[:50], r.get("verdict", r.get("error", "?")),
-                         [a.get("verdict", "?") for a in r.get("anchors", [])]))
+            rows.append(
+                (
+                    k,
+                    r.get("title", "?")[:50],
+                    r.get("verdict", r.get("error", "?")),
+                    [a.get("verdict", "?") for a in r.get("anchors", [])],
+                )
+            )
         print(f"{'ATT':9} {'VERDICT':10} ANCHORS  TITLE")
         for k, t, v, av in sorted(rows, key=lambda x: x[1]):
             print(f"{k:9} {v:10} {av}  {t}")

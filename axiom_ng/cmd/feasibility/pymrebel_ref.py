@@ -13,6 +13,7 @@ Usage: pymrebel_ref.py <chunks.json> <out.json> [max_chunks]
 Runs on the study GPU container (torch+transformers matching the runner 4.57.6).
 Device policy: auto = CUDA > MPS > CPU (mrebel runs fp32 on every device).
 """
+
 import argparse
 import json
 import os
@@ -25,23 +26,36 @@ from _device import add_device_args, pick_device
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 _MREBEL_TYPE_MAP = {
-    "per": "PERSON", "org": "ORGANIZATION", "loc": "LOCATION",
-    "concept": "CONCEPT", "media": "WORK", "event": "CONCEPT", "misc": "CONCEPT",
+    "per": "PERSON",
+    "org": "ORGANIZATION",
+    "loc": "LOCATION",
+    "concept": "CONCEPT",
+    "media": "WORK",
+    "event": "CONCEPT",
+    "misc": "CONCEPT",
 }
 
 
 def parse_mrebel_output(decoded):
     triples = []
     decoded = decoded.replace("</s>", "").replace("<pad>", "")
-    for m in re.finditer(r'<triplet>\s*(.+?)\s*<(\w+)>\s*(.+?)\s*<(\w+)>\s*([^<]+)', decoded):
+    for m in re.finditer(
+        r"<triplet>\s*(.+?)\s*<(\w+)>\s*(.+?)\s*<(\w+)>\s*([^<]+)", decoded
+    ):
         head, head_type, tail, tail_type, relation = m.groups()
-        head = head.strip(); tail = tail.strip(); relation = relation.strip()
+        head = head.strip()
+        tail = tail.strip()
+        relation = relation.strip()
         if head and tail and relation and len(head) >= 2 and len(tail) >= 2:
-            triples.append({"head": head,
-                            "head_type": _MREBEL_TYPE_MAP.get(head_type.lower(), "CONCEPT"),
-                            "tail": tail,
-                            "tail_type": _MREBEL_TYPE_MAP.get(tail_type.lower(), "CONCEPT"),
-                            "relation": relation})
+            triples.append(
+                {
+                    "head": head,
+                    "head_type": _MREBEL_TYPE_MAP.get(head_type.lower(), "CONCEPT"),
+                    "tail": tail,
+                    "tail_type": _MREBEL_TYPE_MAP.get(tail_type.lower(), "CONCEPT"),
+                    "relation": relation,
+                }
+            )
     return triples
 
 
@@ -53,9 +67,13 @@ def main():
     add_device_args(p)
     args = p.parse_args()
     chunks_path, out_path, maxc = args.chunks_path, args.out_path, args.max_chunks
-    dev, _fp16 = pick_device(args.device, no_fp16=True, label="mrebel")  # mrebel: fp32 everywhere
+    dev, _fp16 = pick_device(
+        args.device, no_fp16=True, label="mrebel"
+    )  # mrebel: fp32 everywhere
     print(f"device={dev}", flush=True)
-    model = AutoModelForSeq2SeqLM.from_pretrained("Babelscape/mrebel-large").to(dev).eval()
+    model = (
+        AutoModelForSeq2SeqLM.from_pretrained("Babelscape/mrebel-large").to(dev).eval()
+    )
     tok = AutoTokenizer.from_pretrained("Babelscape/mrebel-large")
     tp_id = tok.convert_tokens_to_ids("tp_XX")
     chunks = json.load(open(chunks_path))
@@ -70,7 +88,13 @@ def main():
         if processed >= maxc:
             break
         input_text = text[:1500]
-        input_ids = tok(input_text, max_length=512, padding=True, truncation=True, return_tensors="pt").to(dev)
+        input_ids = tok(
+            input_text,
+            max_length=512,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+        ).to(dev)
         with torch.no_grad():
             tokens = model.generate(
                 **input_ids,
@@ -82,7 +106,8 @@ def main():
             )
         seqs_raw = [tok.decode(s, skip_special_tokens=False) for s in tokens]
         # triple set across the 3 beams, dedup first-seen (like the runner)
-        seen = set(); all_triples = []
+        seen = set()
+        all_triples = []
         per_seq = []
         for seqstr in seqs_raw:
             triples = parse_mrebel_output(seqstr)
@@ -90,15 +115,18 @@ def main():
             for t in triples:
                 key = (t["head"].lower(), t["relation"], t["tail"].lower())
                 if key not in seen:
-                    seen.add(key); all_triples.append(t)
-        results.append({
-            "idx": ci,
-            "raw_sequences": seqs_raw,
-            "parsed": [per_seq],
-            "triples": all_triples,
-        })
+                    seen.add(key)
+                    all_triples.append(t)
+        results.append(
+            {
+                "idx": ci,
+                "raw_sequences": seqs_raw,
+                "parsed": [per_seq],
+                "triples": all_triples,
+            }
+        )
         processed += 1
-        if (processed % 10 == 0):
+        if processed % 10 == 0:
             print(f"  ... {processed} chunks done", flush=True)
     json.dump(results, open(out_path, "w"), ensure_ascii=False, indent=1)
     print(f"wrote {processed} chunk results -> {out_path}")

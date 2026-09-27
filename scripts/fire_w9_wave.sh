@@ -9,15 +9,17 @@
 set -euo pipefail
 
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=8"
-CARRIER="dudu@192.168.1.2"     # ssh target
-CARRIER_HOST="192.168.1.2"     # URL host (never user@ in URLs — review W2)
-TRAIN_SHA="78558d5"            # merge-train minimum (ancestry-checked)
-LOG(){ printf '\n=== %s ===\n' "$*"; }
-DIE(){ echo "ABORT: $*" >&2
+CARRIER="dudu@192.168.1.2" # ssh target
+CARRIER_HOST="192.168.1.2" # URL host (never user@ in URLs — review W2)
+TRAIN_SHA="78558d5"        # merge-train minimum (ancestry-checked)
+LOG() { printf '\n=== %s ===\n' "$*"; }
+DIE() {
+  echo "ABORT: $*" >&2
   echo "Abort state: pre-enqueue = untouched or inert (old runner may be stopped," >&2
   echo "new runners up, no dispatchers, queue unchanged). Resume via runbook §1.3/§3.1." >&2
-  exit 1; }
-DB(){ podman exec axiom-postgres psql -U axiom_user -d axiom_db -tAq -v ON_ERROR_STOP=1 -c "$1"; }
+  exit 1
+}
+DB() { podman exec axiom-postgres psql -U axiom_user -d axiom_db -tAq -v ON_ERROR_STOP=1 -c "$1"; }
 
 # ── 4.0/§2.1a: W7 terminal + projection sync (idempotent)
 LOG "4.0 W7 terminal + projection sync"
@@ -25,9 +27,10 @@ OPEN=$(DB "SELECT count(*) FROM repair_cases WHERE status IN ('queued','in_repai
 [ "$OPEN" = "0" ] || DIE "4.5 W7 not terminal ($OPEN open cases incl. rejected) — NO FIRE"
 DB "SELECT status||'='||count(*) FROM repair_cases GROUP BY status ORDER BY 1"
 echo "[MUTATES] POST /api/zotero/sync (idempotent projection; -f: HTTP 500 aborts)"
-SYNC_JSON=$(curl -sf --max-time 300 -X POST http://127.0.0.1:8011/api/zotero/sync) \
-  || DIE "4.0 projection sync FAILED — old attachments would be enqueued instead of healed bytes"
-echo "sync: $SYNC_JSON" | head -c 300; echo
+SYNC_JSON=$(curl -sf --max-time 300 -X POST http://127.0.0.1:8011/api/zotero/sync) ||
+  DIE "4.0 projection sync FAILED — old attachments would be enqueued instead of healed bytes"
+echo "sync: $SYNC_JSON" | head -c 300
+echo
 
 # ── 4.0b stale attachments retired/re-pointed (satellite finding: ghost rows
 #     DUJQJ2RN→DNC73IVL, NU8SS6HG→PC9U5YEX — live-verified pre-fix: old keys
@@ -42,8 +45,8 @@ NEWKEYS=$(DB "SELECT count(*) FROM zotero_attachments WHERE zotero_key IN ('DNC7
 
 # ── 4.1 carrier clone: REAL ancestry check (SHAs do not order lexicographically)
 LOG "4.1 carrier clone ancestry >= $TRAIN_SHA"
-$SSH "$CARRIER" "git -C ~/Code/axiom merge-base --is-ancestor $TRAIN_SHA HEAD" \
-  || DIE "4.1 carrier clone lacks the merge train ($TRAIN_SHA not an ancestor)"
+$SSH "$CARRIER" "git -C ~/Code/axiom merge-base --is-ancestor $TRAIN_SHA HEAD" ||
+  DIE "4.1 carrier clone lacks the merge train ($TRAIN_SHA not an ancestor)"
 
 # ── 4.4 queue: nothing PROCESSING (old-code drain); pendings = known heal set
 LOG "4.4 queue state"
@@ -56,15 +59,15 @@ echo "pending=$PEND (of which current-hash heal-projections: $HEALNEW)"
 [ "$PEND" = "$HEALNEW" ] || DIE "4.4 $PEND pending but only $HEALNEW are heal-projections — unexpected queue content, eyeball first"
 
 # ── 4.7 OS health (bounded)
-curl -sf --max-time 10 localhost:9200/_cluster/health | grep -q '"status":"green"' \
-  || DIE "4.7 OpenSearch not green"
+curl -sf --max-time 10 localhost:9200/_cluster/health | grep -q '"status":"green"' ||
+  DIE "4.7 OpenSearch not green"
 
 # ── 4.9/4.10 disk thresholds
 LOG "4.9/4.10 disk"
 DF_MAC=$(df -k / | awk 'NR==2{print int($4/1024/1024)}')
 [ "$DF_MAC" -ge 50 ] || DIE "4.9 Mac free ${DF_MAC}G < 50G (new generation transiently doubles chunk tables)"
-DF_CARRIER=$($SSH "$CARRIER" "df -k / | awk 'NR==2{print int(\$4/1024/1024)}'") \
-  || DIE "4.10 carrier df failed"
+DF_CARRIER=$($SSH "$CARRIER" "df -k / | awk 'NR==2{print int(\$4/1024/1024)}'") ||
+  DIE "4.10 carrier df failed"
 [ "$DF_CARRIER" -ge 100 ] || DIE "4.10 carrier free ${DF_CARRIER}G < 100G"
 echo "Mac ${DF_MAC}G / carrier ${DF_CARRIER}G free"
 
@@ -75,7 +78,7 @@ DB "SELECT left(d.title,60), a.zotero_key, a.content_hash
     WHERE NOT a.deleted
       AND EXISTS (SELECT 1 FROM processing_snapshots s WHERE s.attachment_id=a.id AND s.active)
     ORDER BY d.title" | tee /tmp/w9_wave_books.txt
-COUNT=$(wc -l < /tmp/w9_wave_books.txt | tr -d ' ')
+COUNT=$(wc -l </tmp/w9_wave_books.txt | tr -d ' ')
 [ "$COUNT" -ge 100 ] || DIE "4.12 suspiciously few active books ($COUNT)"
 echo "active books: $COUNT (list in /tmp/w9_wave_books.txt — VERIFY healed books present)"
 
@@ -135,11 +138,11 @@ DB "INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash
     SELECT a.source_id, a.document_id, a.id, a.content_hash, 'pending', true
     FROM zotero_attachments a
     WHERE NOT a.deleted
-      AND EXISTS (SELECT 1 FROM processing_snapshots s WHERE s.attachment_id=a.id AND s.active)" \
-  || DIE "enqueue INSERT failed — transaction rolled back atomically, nothing fired"
+      AND EXISTS (SELECT 1 FROM processing_snapshots s WHERE s.attachment_id=a.id AND s.active)" ||
+  DIE "enqueue INSERT failed — transaction rolled back atomically, nothing fired"
 INSERTED=$(DB "SELECT count(*) FROM ingest_jobs WHERE force_rebuild AND status='pending'")
 echo "force jobs pending: $INSERTED (expected >= $COUNT from the eyeballed list)"
-case "$INSERTED" in (*[!0-9]*|"") DIE "enqueue count capture corrupted: '$INSERTED'";; esac
+case "$INSERTED" in *[!0-9]* | "") DIE "enqueue count capture corrupted: '$INSERTED'" ;; esac
 [ "$INSERTED" -ge "$COUNT" ] || DIE "enqueue count mismatch ($INSERTED < $COUNT) — jobs ARE live; check state before any re-run (a re-run would double-enqueue: force rows bypass the idempotency index)"
 
 # ── initial telemetry
@@ -152,4 +155,4 @@ DB "SELECT count(*) AS first_claims FROM ingest_jobs
 $SSH "$CARRIER" 'nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader'
 echo "WAVE FIRED — monitor per runbook §2.6; watch query:"
 echo "  SELECT status, coalesce(runner_name,'—'), count(*) FROM ingest_jobs"
-echo "  WHERE force_rebuild OR status='pending' GROUP BY 1,2;"   # single quotes = SQL literal (review W3)
+echo "  WHERE force_rebuild OR status='pending' GROUP BY 1,2;" # single quotes = SQL literal (review W3)

@@ -97,7 +97,9 @@ def judge(buch: str, analyse: dict, candidates: dict[int, str]) -> dict:
     import requests  # lazy: pure-logic tests must not need network deps
 
     if not DEEPSEEK_KEY:
-        raise RuntimeError("DEEPSEEK_API_KEY fehlt (Service-Env)")  # gefangen vom Fall-try in main()
+        raise RuntimeError(
+            "DEEPSEEK_API_KEY fehlt (Service-Env)"
+        )  # gefangen vom Fall-try in main()
     cand = candidates_1based(candidates)
     body = {
         "model": MODEL,
@@ -301,7 +303,12 @@ def run_case(case: dict) -> None:
         # debug dump is OPT-IN (default off): /tmp is world-readable and the
         # healed bytes are proprietary book content (review W5)
         if os.environ.get("AXIOM_FIXSVC_DUMP_HEALED"):
-            with open(os.path.join(tempfile.gettempdir(), f"healed_{case['attachment_zotero_key']}.pdf"), "wb") as f:
+            with open(
+                os.path.join(
+                    tempfile.gettempdir(), f"healed_{case['attachment_zotero_key']}.pdf"
+                ),
+                "wb",
+            ) as f:
                 f.write(pdf_bytes)
         r = requests.post(
             f"{RAG}/api/repair/cases/{cid}/verdict",
@@ -373,7 +380,11 @@ def run_case(case: dict) -> None:
     # runs in the dedicated wave with the fixed chunker — jobs enqueue
     # there, never here).
     if os.environ.get("AXIOM_FIXSVC_NO_SYNC"):
-        log(buch, "SYNC", "übersprungen (AXIOM_FIXSVC_NO_SYNC — Welle heilt nur Quellen)")
+        log(
+            buch,
+            "SYNC",
+            "übersprungen (AXIOM_FIXSVC_NO_SYNC — Welle heilt nur Quellen)",
+        )
         return
     n_jobs = (
         requests.post(f"{RAG}/api/zotero/sync", timeout=300).json().get("enqueued_jobs")

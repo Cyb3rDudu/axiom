@@ -35,17 +35,17 @@ artifact_assert_bundled_env_identical
 # it env-relatively (bundled_env.bundled_bin) — service PATHs never include
 # env/bin, PATH is only the dev fallback.
 if [ ! -x "$PREFIX/bin/python" ]; then
-    "$MM" create -y -p "$PREFIX" -c conda-forge 'python=3.11' 'pandoc' pip
+  "$MM" create -y -p "$PREFIX" -c conda-forge 'python=3.11' 'pandoc' pip
 fi
 PY="$PREFIX/bin/python"
 
 # --- deps + runner package (lockfile preference: unified policy — a lock
 # wins when one exists; the runner has none today, the fixer does) ---------
 RUNNER_REQS="axiom-compute-worker/requirements.txt"
-[ -f axiom-compute-worker/requirements.lock.txt ] && \
-    RUNNER_REQS="axiom-compute-worker/requirements.lock.txt"
+[ -f axiom-compute-worker/requirements.lock.txt ] &&
+  RUNNER_REQS="axiom-compute-worker/requirements.lock.txt"
 "$PY" -m pip install -q --disable-pip-version-check \
-    -r "$RUNNER_REQS" -r axiom-compute-worker/requirements-heavy.txt
+  -r "$RUNNER_REQS" -r axiom-compute-worker/requirements-heavy.txt
 "$PY" -m pip install -q --disable-pip-version-check --no-deps ./axiom-compute-worker
 "$PY" -m pip install -q --disable-pip-version-check conda-pack
 
@@ -54,11 +54,11 @@ STAGE="$BUILD/compute-worker-$VERSION"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 rsync -a --delete \
-    --exclude '.venv' --exclude '__pycache__' --exclude 'tests' \
-    --exclude 'scripts' --exclude 'shell.nix' \
-    --exclude 'build' --exclude '*.egg-info' \
-    --exclude '.ruff_cache' --exclude '.pytest_cache' --exclude '.mypy_cache' \
-    axiom-compute-worker/ "$STAGE/app/"
+  --exclude '.venv' --exclude '__pycache__' --exclude 'tests' \
+  --exclude 'scripts' --exclude 'shell.nix' \
+  --exclude 'build' --exclude '*.egg-info' \
+  --exclude '.ruff_cache' --exclude '.pytest_cache' --exclude '.mypy_cache' \
+  axiom-compute-worker/ "$STAGE/app/"
 
 # --- pack env (relocatable; conda-unpack fixes prefixes at install) ---------
 artifact_pack_env "$PREFIX" "$STAGE"
@@ -67,26 +67,26 @@ artifact_pack_env "$PREFIX" "$STAGE"
 # source-dir cwd masks a missing install — `import axiom_compute_worker` would hit
 # ../axiom-compute-worker on sys.path even when the env shipped 0 module files). ---
 (
-    cd / && "$STAGE/env/bin/python" -c 'import axiom_compute_worker, torch; print("staged import ok (neutral cwd), torch", torch.__version__, "mps", torch.backends.mps.is_available())'
-# marker font (production finding 2026-09-06): marker downloads its GoNoto
-# font into site-packages/static/fonts on FIRST use at runtime — a
-# read-only nix store makes that a PermissionError that kills every PDF
-# conversion. Bake the font into the artifact (#224 pattern): download
-# once at build time, verify presence, and marker's download_font()
-# short-circuits on the existing file.
-FONT_URL="https://models.datalab.to/artifacts/GoNotoCurrent-Regular.ttf"
-FONT_DST="$STAGE/env/lib/python3.11/site-packages/static/fonts/GoNotoCurrent-Regular.ttf"
-mkdir -p "$(dirname "$FONT_DST")"
-curl -fsSL "$FONT_URL" -o "$FONT_DST" || {
+  cd / && "$STAGE/env/bin/python" -c 'import axiom_compute_worker, torch; print("staged import ok (neutral cwd), torch", torch.__version__, "mps", torch.backends.mps.is_available())'
+  # marker font (production finding 2026-09-06): marker downloads its GoNoto
+  # font into site-packages/static/fonts on FIRST use at runtime — a
+  # read-only nix store makes that a PermissionError that kills every PDF
+  # conversion. Bake the font into the artifact (#224 pattern): download
+  # once at build time, verify presence, and marker's download_font()
+  # short-circuits on the existing file.
+  FONT_URL="https://models.datalab.to/artifacts/GoNotoCurrent-Regular.ttf"
+  FONT_DST="$STAGE/env/lib/python3.11/site-packages/static/fonts/GoNotoCurrent-Regular.ttf"
+  mkdir -p "$(dirname "$FONT_DST")"
+  curl -fsSL "$FONT_URL" -o "$FONT_DST" || {
     echo "FATAL: marker font download failed — artifact would crash on first PDF (read-only store)" >&2
     exit 1
-}
-test -s "$FONT_DST" && echo "staged marker font ok ($(wc -c < "$FONT_DST") bytes)"
-# #224/#286: the EPUB path needs a bundled pandoc — staged check from the
-# PACKED env, sanitized PATH (carrier scenario): the runtime resolution
-# (bundled_env) must find it env-relatively AND a real EPUB→GFM conversion
-# must succeed with no host contribution.
-(
+  }
+  test -s "$FONT_DST" && echo "staged marker font ok ($(wc -c <"$FONT_DST") bytes)"
+  # #224/#286: the EPUB path needs a bundled pandoc — staged check from the
+  # PACKED env, sanitized PATH (carrier scenario): the runtime resolution
+  # (bundled_env) must find it env-relatively AND a real EPUB→GFM conversion
+  # must succeed with no host contribution.
+  (
     cd "$STAGE/app" && PATH="/usr/bin:/bin" "$STAGE/env/bin/python" - <<'PDOC'
 import subprocess, sys, tempfile, zipfile
 from pathlib import Path
@@ -125,7 +125,10 @@ assert proc.returncode == 0, proc.stderr
 assert "Pandoc Carrier Smoke" in out.read_text(), out.read_text()
 print("staged pandoc ok — env-relative resolution + EPUB conversion, sanitized PATH")
 PDOC
-) || { echo "runner-artifact: staged pandoc check FAILED" >&2; exit 1; }
+  ) || {
+    echo "runner-artifact: staged pandoc check FAILED" >&2
+    exit 1
+  }
 )
 
 # --- artifact -----------------------------------------------------------------

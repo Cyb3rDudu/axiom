@@ -94,12 +94,12 @@ rag)
     ln -sfn "$ROOT/rag/current/axiom" "$ROOT/bin/axiom"
     echo "installed: $ROOT/bin/axiom + $ROOT/bin/axiom-ng ($version)"
     ;;
-compute-worker|runner)
+compute-worker | runner)
     # canonical component name is compute-worker (F10 #304, ADR 0001
     # §4); the bare "runner" argument stays accepted as the 0.1.x
     # spelling — one deprecation echo, then the identical flow.
     case "$component" in
-        runner) echo "axiom: 'runner' is deprecated — use 'compute-worker' (ADR 0001: docs/adr/0001-canonical-naming.md)" >&2 ;;
+    runner) echo "axiom: 'runner' is deprecated — use 'compute-worker' (ADR 0001: docs/adr/0001-canonical-naming.md)" >&2 ;;
     esac
     art=$(find_artifact "axiom-compute-worker-$version-*.tar.zst") || {
         # pre-F10 artifacts carry the legacy name — installable unchanged

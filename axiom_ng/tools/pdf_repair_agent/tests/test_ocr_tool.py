@@ -132,9 +132,7 @@ def _fake_bundled_env(tmp_path, echo_mode: bool):
         script = env / "bin" / name
         if echo_mode:
             script.write_text(
-                "#!/bin/sh\n"
-                'echo "BIN=$0 TESSDATA=[$TESSDATA_PREFIX]"\n'
-                "exit 0\n"
+                '#!/bin/sh\necho "BIN=$0 TESSDATA=[$TESSDATA_PREFIX]"\nexit 0\n'
             )
         else:
             script.write_text("#!/bin/sh\nexit 0\n")
@@ -225,7 +223,6 @@ def test_rebuild_reicht_kind_env_durch(tmp_path, monkeypatch):
     Kind-Umgebung (TESSDATA_PREFIX + env-bin-PATH) tatsächlich an den
     ocrmypdf-Kindprozess — nicht nur die pure Funktionslogik."""
     import tools.scan_ocr_rebuild as t
-
     from tools import bundled_env as be
 
     fake = _fake_bundled_env(tmp_path, echo_mode=True)
@@ -263,7 +260,9 @@ def test_rebuild_reicht_kind_env_durch(tmp_path, monkeypatch):
     # misst die Prozessübergabe, nicht die OCR-Qualität)
     monkeypatch.setattr(t, "_page_dims", lambda pdf: [(100.0, 100.0)])
     monkeypatch.setattr(
-        t, "_text_layer_metrics", lambda pdf: {"pages": 1, "total_chars": 99, "mean_chars_per_page": 99.0}
+        t,
+        "_text_layer_metrics",
+        lambda pdf: {"pages": 1, "total_chars": 99, "mean_chars_per_page": 99.0},
     )
     res = t.run_rebuild(src, tmp_path / "out.pdf", lang="deu")
     assert res.get("applied"), res
@@ -281,9 +280,15 @@ def test_bundled_env_drift_zwischen_den_baeumen():
 
     repo = Path(__file__).resolve().parents[4]
     canonical = (
-        repo / "axiom-compute-worker" / "axiom_compute_worker" / "compute_core" / "bundled_env.py"
+        repo
+        / "axiom-compute-worker"
+        / "axiom_compute_worker"
+        / "compute_core"
+        / "bundled_env.py"
     )
-    mirror = repo / "axiom_ng" / "tools" / "pdf_repair_agent" / "tools" / "bundled_env.py"
+    mirror = (
+        repo / "axiom_ng" / "tools" / "pdf_repair_agent" / "tools" / "bundled_env.py"
+    )
     assert canonical.exists() and mirror.exists(), "beide Bäume müssen die Datei tragen"
     assert canonical.read_text() == mirror.read_text(), (
         "bundled_env drift: Runner-Kanonikat und Fixer-Mirror sind nicht "

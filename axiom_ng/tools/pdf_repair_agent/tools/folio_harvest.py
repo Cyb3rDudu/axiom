@@ -36,7 +36,9 @@ def _is_year(v: int) -> bool:
     return 1900 <= v <= 2030
 
 
-def harvest_folio_candidates(doc: pymupdf.Document) -> dict[int, list[tuple[str, str, str]]]:
+def harvest_folio_candidates(
+    doc: pymupdf.Document,
+) -> dict[int, list[tuple[str, str, str]]]:
     """Zone-based multi-form folio harvest (#254 discipline; see page_trust)."""
     out: dict[int, list[tuple[str, str, str]]] = {}
     for i in range(doc.page_count):
@@ -104,7 +106,9 @@ def harvest_folio_candidates(doc: pymupdf.Document) -> dict[int, list[tuple[str,
     return out
 
 
-def _drop_constants(harvest: dict[int, list[tuple[str, str, str]]], page_count: int) -> None:
+def _drop_constants(
+    harvest: dict[int, list[tuple[str, str, str]]], page_count: int
+) -> None:
     """Running-head constants drop from medium/weak slots (#254; see page_trust)."""
     if page_count < 4:
         return
@@ -118,7 +122,11 @@ def _drop_constants(harvest: dict[int, list[tuple[str, str, str]]], page_count: 
     if not consts:
         return
     for p in list(harvest):
-        kept = [c for c in harvest[p] if not (c[0] in ("lead", "mid", "trail", "weak") and c[1] in consts)]
+        kept = [
+            c
+            for c in harvest[p]
+            if not (c[0] in ("lead", "mid", "trail", "weak") and c[1] in consts)
+        ]
         if kept:
             harvest[p] = kept
         else:
@@ -127,7 +135,16 @@ def _drop_constants(harvest: dict[int, list[tuple[str, str, str]]], page_count: 
 
 def _pick_candidates(harvest: dict[int, list[tuple[str, str, str]]]) -> dict[int, str]:
     """One candidate per page: strength first, chain continuation second (#254)."""
-    _STRENGTH = {"bare": 0, "eli": 1, "lseries": 1, "lead": 2, "trail": 2, "mid": 3, "roman": 4, "weak": 5}
+    _STRENGTH = {
+        "bare": 0,
+        "eli": 1,
+        "lseries": 1,
+        "lead": 2,
+        "trail": 2,
+        "mid": 3,
+        "roman": 4,
+        "weak": 5,
+    }
     picked: dict[int, str] = {}
     last_strong: tuple[int, int] | None = None
     for p in sorted(harvest):
