@@ -124,7 +124,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: axiom_ng_runner
+        working-directory: axiom-compute-worker
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

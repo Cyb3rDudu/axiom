@@ -19,7 +19,11 @@ G3's install script copies these and substitutes placeholders.
   mode 0700, secrets ONLY there — never in `/tmp`, never inline in the
   plist (reboot survival + no secret in launchd-visible config).
 - **Logs** go to `~/.local/state/axiom/logs/<service>.log`.
-- **KeepAlive policy:** `com.axiom.runner` runs standing (KeepAlive true).
+- **KeepAlive policy:** `com.axiom.compute-worker` runs standing (KeepAlive
+  true; canonical name since F10 #304 / ADR 0001 §4 — the former
+  `com.axiom.runner` label retires with the operator-side switch:
+  `launchctl bootout gui/$(id -u)/com.axiom.runner` once, then bootstrap
+  the new label).
   The fixer has NO plist at all — it is an event runner (owner decision):
   one process per Zotero attachment key, invoked via `scripts/fix.sh <key>`
   (per-key lock + 30-min timeout). Two concurrent runs on the same key
@@ -32,13 +36,16 @@ G3's install script copies these and substitutes placeholders.
   `sh -c` ProgramArguments string (the shell expands it), but NOT in
   `StandardOutPath`/`StandardErrorPath` — the G3 installer substitutes the
   real home directory into those keys at install time.
-- **Runner entry:** exec
-  `/opt/axiom/runner/current/env/bin/python -m axiom_ng_runner`, NOT the
-  `env/bin/axiom-runner` console script. Ceiling of conda-pack: it does not
-  rewrite shebangs of pip-installed console scripts (they keep
-  `#!/usr/bin/env python`), and launchd's default PATH has no `python` —
-  a console-script entry would crash-loop. The `/opt/axiom/bin/axiom-runner`
-  shim uses the same `python -m` form.
+- **Compute-worker entry:** exec
+  `/opt/axiom/compute-worker/current/env/bin/python -m axiom_compute_worker`,
+  NOT the `env/bin/axiom-compute-worker` console script. Ceiling of
+  conda-pack: it does not rewrite shebangs of pip-installed console
+  scripts (they keep `#!/usr/bin/env python`), and launchd's default PATH
+  has no `python` — a console-script entry would crash-loop. The
+  `/opt/axiom/bin/axiom-compute-worker` shim uses the same `python -m`
+  form; the legacy `/opt/axiom/bin/axiom-runner` wrapper warns once and
+  delegates (0.1.x hosts: `python -m axiom_ng_runner` equally keeps
+  working).
 - **Fixer OCR toolchain — bundled (#286):** `tesseract5`, `ghostscript`
   and tessdata (deu+eng + the mapped language set) ship INSIDE the fixer
   artifact; the tools resolve them env-relatively, no host PATH needed.

@@ -2,7 +2,7 @@
 # env.sh — dev-environment identity for MANUAL tool runs. SOURCE it, never execute:
 #
 #   . scripts/dev/env.sh
-#   python3 axiom_ng_runner/scripts/locator_rescan.py …
+#   python3 axiom-compute-worker/scripts/locator_rescan.py …
 #
 # Why this exists: the Python-side OpenSearch writers (locator_rescan.py,
 # test_query_endpoints_it.py) honor AXIOM_OS_INDEX but nothing forces a fresh

@@ -1,10 +1,10 @@
 #!/bin/sh
 # build_runner_artifact.sh — G2 of #205 (supersedes #204 packaging goals).
 # Builds a relocatable macOS arm64 runner artifact with micromamba+conda-pack:
-#   dist/axiom-runner-<version>-macos-arm64.tar.zst
+#   dist/axiom-compute-worker-<version>-macos-arm64.tar.zst
 # Layout inside the tar: runner-<version>/{env/,app/}
 #   env/  conda-forge python 3.11 + requirements(-heavy) + installed runner
-#   app/  runner sources (reference; the executable is env/bin/axiom-runner)
+#   app/  runner sources (reference; the executable is env/bin/axiom-compute-worker)
 # Install-time fixup: run env/bin/conda-unpack ONCE after extracting (#204).
 # No .venv trees are created in the Git workspace — everything stages under
 # dist/ (repo-ignored).
@@ -16,7 +16,7 @@ BUILD="$DIST/build/runner"
 # shared plumbing (micromamba bootstrap, conda-pack staging, drift guard):
 . "$ROOT/scripts/lib/artifact_common.sh"
 VERSION="${1:?usage: build_runner_artifact.sh <version>}"
-ARTIFACT="$DIST/axiom-runner-$VERSION-macos-arm64.tar.zst"
+ARTIFACT="$DIST/axiom-compute-worker-$VERSION-macos-arm64.tar.zst"
 PREFIX="$BUILD/env"
 
 cd "$ROOT"
@@ -41,16 +41,16 @@ PY="$PREFIX/bin/python"
 
 # --- deps + runner package (lockfile preference: unified policy — a lock
 # wins when one exists; the runner has none today, the fixer does) ---------
-RUNNER_REQS="axiom_ng_runner/requirements.txt"
-[ -f axiom_ng_runner/requirements.lock.txt ] && \
-    RUNNER_REQS="axiom_ng_runner/requirements.lock.txt"
+RUNNER_REQS="axiom-compute-worker/requirements.txt"
+[ -f axiom-compute-worker/requirements.lock.txt ] && \
+    RUNNER_REQS="axiom-compute-worker/requirements.lock.txt"
 "$PY" -m pip install -q --disable-pip-version-check \
-    -r "$RUNNER_REQS" -r axiom_ng_runner/requirements-heavy.txt
-"$PY" -m pip install -q --disable-pip-version-check --no-deps ./axiom_ng_runner
+    -r "$RUNNER_REQS" -r axiom-compute-worker/requirements-heavy.txt
+"$PY" -m pip install -q --disable-pip-version-check --no-deps ./axiom-compute-worker
 "$PY" -m pip install -q --disable-pip-version-check conda-pack
 
 # --- app/ sources ------------------------------------------------------------
-STAGE="$BUILD/runner-$VERSION"
+STAGE="$BUILD/compute-worker-$VERSION"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 rsync -a --delete \
@@ -58,16 +58,16 @@ rsync -a --delete \
     --exclude 'scripts' --exclude 'shell.nix' \
     --exclude 'build' --exclude '*.egg-info' \
     --exclude '.ruff_cache' --exclude '.pytest_cache' --exclude '.mypy_cache' \
-    axiom_ng_runner/ "$STAGE/app/"
+    axiom-compute-worker/ "$STAGE/app/"
 
 # --- pack env (relocatable; conda-unpack fixes prefixes at install) ---------
 artifact_pack_env "$PREFIX" "$STAGE"
 
 # --- verify entry point from the STAGED env, from a NEUTRAL cwd (#209: a
-# source-dir cwd masks a missing install — `import axiom_ng_runner` would hit
-# ../axiom_ng_runner on sys.path even when the env shipped 0 module files). ---
+# source-dir cwd masks a missing install — `import axiom_compute_worker` would hit
+# ../axiom-compute-worker on sys.path even when the env shipped 0 module files). ---
 (
-    cd / && "$STAGE/env/bin/python" -c 'import axiom_ng_runner, torch; print("staged import ok (neutral cwd), torch", torch.__version__, "mps", torch.backends.mps.is_available())'
+    cd / && "$STAGE/env/bin/python" -c 'import axiom_compute_worker, torch; print("staged import ok (neutral cwd), torch", torch.__version__, "mps", torch.backends.mps.is_available())'
 # marker font (production finding 2026-09-06): marker downloads its GoNoto
 # font into site-packages/static/fonts on FIRST use at runtime — a
 # read-only nix store makes that a PermissionError that kills every PDF
@@ -91,7 +91,7 @@ test -s "$FONT_DST" && echo "staged marker font ok ($(wc -c < "$FONT_DST") bytes
 import subprocess, sys, tempfile, zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(".").resolve()))
-from axiom_ng_runner.compute_core import bundled_env
+from axiom_compute_worker.compute_core import bundled_env
 
 pandoc = bundled_env.bundled_bin("pandoc")
 assert pandoc and pandoc.startswith(sys.prefix), f"pandoc not env-relative: {pandoc!r}"
@@ -131,7 +131,7 @@ PDOC
 # --- artifact -----------------------------------------------------------------
 artifact_strip_pycache "$STAGE"
 
-tar --zstd -C "$BUILD" -cf "$ARTIFACT" "runner-$VERSION"
+tar --zstd -C "$BUILD" -cf "$ARTIFACT" "compute-worker-$VERSION"
 (cd "$DIST" && shasum -a 256 "${ARTIFACT##*/}" >"${ARTIFACT##*/}.sha256")
 echo "runner-artifact: $ARTIFACT"
 echo "install: extract to /opt/axiom/runner/$VERSION, then run env/bin/conda-unpack once"

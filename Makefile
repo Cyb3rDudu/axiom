@@ -18,9 +18,9 @@ LDFLAGS := -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.Version=$(VER
 
 GO_SOURCES := $(wildcard axiom_ng/cmd/axiom/*.go) $(wildcard axiom_ng/cmd/axiom-ng/*.go) $(wildcard axiom_ng/internal/*/*.go) $(wildcard axiom_ng/internal/db/schema/*.sql) axiom_ng/go.mod axiom_ng/go.sum
 
-.PHONY: all build rag runner fixer clean install test checksums golden-baseline
+.PHONY: all build rag compute-worker runner fixer clean install test checksums golden-baseline
 
-all build: rag ## G1: only rag; runner/fixer land in G2
+all build: rag ## G1: only rag; compute-worker/fixer land in G2
 
 rag: $(AXIOM_BIN) $(RAG_BIN) ## Release builds (axiom + axiom-ng alias) with version stamp
 
@@ -34,7 +34,11 @@ $(RAG_BIN): $(GO_SOURCES)
 	cd axiom_ng && CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o '../$(RAG_BIN)' ./cmd/axiom-ng
 	(cd "$(DIST)" && shasum -a 256 '$(notdir $(RAG_BIN))' > '$(notdir $(RAG_BIN)).sha256')
 
-runner: ## conda-pack style artifact (micromamba env, relocatable) -> dist/
+compute-worker: ## conda-pack style artifact (micromamba env, relocatable) -> dist/
+	PATH="$(ZSTD_BIN):$$PATH" ./scripts/build_runner_artifact.sh $(VERSION)
+
+runner: ## DEPRECATED alias of compute-worker (F10 #304, ADR 0001 §4)
+	@echo "make: 'runner' is deprecated — use 'make compute-worker' (ADR 0001: docs/adr/0001-canonical-naming.md)" >&2
 	PATH="$(ZSTD_BIN):$$PATH" ./scripts/build_runner_artifact.sh $(VERSION)
 
 fixer: ## autarkic env/+app/ artifact (own venv) -> dist/
@@ -52,8 +56,8 @@ install: ## Operator-gated: dist/ artifacts -> /opt/axiom (asks first)
 test: ## All suites: fix-convention, Go (vet+test), runner, fixer isolation+
 	./scripts/test_fix_convention.sh
 	cd axiom_ng && go vet ./... && go test ./...
-	@[ -x axiom_ng_runner/.venv/bin/python ] || { echo "runner: venv missing — bootstrap first (axiom_ng_runner/.venv)"; exit 1; }
-	cd axiom_ng_runner && .venv/bin/python -m pytest -q
+	@[ -x axiom-compute-worker/.venv/bin/python ] || { echo "runner: venv missing — bootstrap first (axiom-compute-worker/.venv)"; exit 1; }
+	cd axiom-compute-worker && .venv/bin/python -m pytest -q
 	@[ -x axiom_ng/tools/pdf_repair_agent/.venv/bin/python ] || { echo "fixer: venv missing — bootstrap first (axiom_ng/tools/pdf_repair_agent: ./bootstrap.sh)"; exit 1; }
 	cd axiom_ng/tools/pdf_repair_agent && .venv/bin/python -m pytest -q
 

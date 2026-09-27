@@ -2,7 +2,7 @@
 # dev-up.sh — start the 0.2.x dev environment next to frozen production.
 #
 #   RAG    : go-built from the working tree,   127.0.0.1:8111
-#   Runner : source venv axiom_ng_runner/.venv, 127.0.0.1:8112
+#   Runner : source venv axiom-compute-worker/.venv, 127.0.0.1:8112
 #
 #   --release (#295): start RAG+Runner from the frozen v0.1.18 release
 #   assets (GitHub release, the same bits production runs) instead of
@@ -44,7 +44,7 @@ STATE="$HOME/.local/state/axiom-dev"
 # The tag is v0.1.18 (commit 4704656); the DEPLOYED RAG binary inside that
 # release is the bf77410-generation asset (verified byte-identical with
 # /opt/axiom/bin/axiom-ng when present). bf77410..v0.1.18 touches no
-# axiom_ng/axiom_ng_runner runtime code (4 commits: fixer/docs/ci only),
+# axiom_ng/axiom_compute_worker runtime code (4 commits: fixer/docs/ci only),
 # so the bf77410-generation pair IS the freeze state in every observable
 # behavior. Runner: same-generation tarball; note the runner generation is
 # not hash-pinnable against prod (prod runs a local nix build — #295 debt).
@@ -52,7 +52,7 @@ RELEASE_TAG="v0.1.18"
 RELEASE_REPO="${AXIOM_RELEASE_REPO:-Cyb3rDudu/axiom}"
 RELEASE_GEN="v0.1.17-59-gbf77410"
 RAG_ASSET="axiom-ng-$RELEASE_GEN-darwin-arm64" # prod asset name (darwin, not uname)
-RUNNER_ASSET="axiom-runner-$RELEASE_GEN-macos-arm64.tar.zst"
+RUNNER_ASSET="axiom-compute-worker-$RELEASE_GEN-macos-arm64.tar.zst"
 
 RAG_ENV="${AXIOM_DEV_RAG_ENV:-/run/agenix/axiom-rag.env}"
 RAG_API_ENV="${AXIOM_DEV_RAG_API_ENV:-/run/agenix/axiom-rag-api.env}"
@@ -77,7 +77,7 @@ for f in "$RAG_ENV" "$RAG_API_ENV" "$RUNNER_ENV"; do
 done
 command -v jq >/dev/null || die "jq required"
 if [ "$MODE" = source ]; then
-    [ -x "$REPO/axiom_ng_runner/.venv/bin/python" ] || die "runner venv missing: $REPO/axiom_ng_runner/.venv"
+    [ -x "$REPO/axiom-compute-worker/.venv/bin/python" ] || die "runner venv missing: $REPO/axiom-compute-worker/.venv"
 else
     command -v gh >/dev/null || die "gh required for --release"
     # same preflight as scripts/install_dist.sh (#211): the runner tarball is
@@ -99,8 +99,8 @@ echo "$MODE" >"$STATE/mode"
 # --- provide the RAG binary (and, in release mode, the runner env) ---------
 
 RAG_BIN="$STATE/bin/axiom-ng-dev" # source mode default: working-tree build
-RUNNER_PY="$REPO/axiom_ng_runner/.venv/bin/python"
-RUNNER_PYTHONPATH="$REPO/axiom_ng_runner" # source venv needs the package on sys.path
+RUNNER_PY="$REPO/axiom-compute-worker/.venv/bin/python"
+RUNNER_PYTHONPATH="$REPO/axiom-compute-worker" # source venv needs the package on sys.path
 
 if [ "$MODE" = release ]; then
     REL="$STATE/release"
@@ -213,11 +213,11 @@ note "starting dev runner on :$RUNNER_PORT …"
     PYTHONPATH="$RUNNER_PYTHONPATH" # empty in release mode: no working-tree leakage
     export AXIOM_PROCESSOR_PORT AXIOM_PROCESSOR_BIND_ADDR AXIOM_PROCESSOR_WORK_ROOT \
         AXIOM_CAPTION_CACHE_DIR PYTHONPATH
-    # cwd: $STATE (historically $REPO/axiom_ng_runner). The release env is
+    # cwd: $STATE (historically $REPO/axiom-compute-worker). The release env is
     # self-contained; the source venv finds the package via PYTHONPATH above.
     cd "$STATE"
     exec /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-        "$RUNNER_PY" -m axiom_ng_runner \
+        "$RUNNER_PY" -m axiom_compute_worker \
         >>"$STATE/logs/runner.log" 2>&1
 ) &
 RUNNER_PID=$!
@@ -268,7 +268,7 @@ note "starting dev RAG on :$RAG_PORT …"
     # Staging lives under the dev artifact root, isolated from prod.
     AXIOM_LIBRARY_IMPORT_PROVIDERS=fake
     # runner-checkout discovery for the *-backfill cmd tools when run against dev
-    AXIOM_RUNNER_DIR="$REPO/axiom_ng_runner"
+    AXIOM_RUNNER_DIR="$REPO/axiom-compute-worker"
     AXIOM_FIXER_INVOKER_ENABLED=0
     # never inherit prod's Zotero write credentials: point the key file at a
     # path that must not exist → repair API stays disabled in dev

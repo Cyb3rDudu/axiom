@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- com.axiom.compute-worker — axiom compute worker, query/ingest role
+     (#205 §3; canonical name since F10 #304 / ADR 0001 §4 — the former
+     com.axiom.runner label retires with the operator-side deployment
+     switch: bootout the old label, bootstrap this one).
+     Template: copy to ~/Library/LaunchAgents/ after install.
+     Secrets/env live in ~/.config/axiom/runner.env (0700) — never in /tmp.
+     Expected env vars (runner.env): AXIOM_PROCESSOR_COMPUTE=real,
+     AXIOM_PROCESSOR_PORT=8012, plus any AXIOM_PROCESSOR_* auth settings
+     (the worker-side env contract is unchanged through 0.2.x).
+     On the Apple MPS host also: DEVICE_GLINER=mps (#277) and
+     PYTORCH_ENABLE_MPS_FALLBACK=1 (the code sets the latter at package
+     init, before torch loads — the only working placement; the env line
+     keeps it explicit and overridable).
+     NOTE: exec via `env/bin/python -m axiom_compute_worker`, NOT the
+     env/bin/axiom-compute-worker console script — conda-unpack does not
+     rewrite pip console-script shebangs (#!/usr/bin/env python), and
+     launchd's PATH has no python. The legacy `python -m axiom_ng_runner`
+     alias keeps working (warns once) for un-migrated hosts. See
+     deploy/launchd/README.md. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.axiom.compute-worker</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>set -a; . "$HOME/.config/axiom/runner.env" || exit 1; set +a; exec /opt/axiom/compute-worker/current/env/bin/python -m axiom_compute_worker</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ProcessType</key><string>Background</string>
+    <key>StandardOutPath</key><string>__HOME__/.local/state/axiom/logs/compute-worker.log</string>
+    <key>StandardErrorPath</key><string>__HOME__/.local/state/axiom/logs/compute-worker.log</string>
+</dict>
+</plist>

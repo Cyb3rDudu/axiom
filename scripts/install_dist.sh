@@ -11,7 +11,7 @@ component="${1:-}"
 version="${2:-}"
 
 usage() {
-    echo "usage: make install   # or: scripts/install_dist.sh <rag|runner|fixer> <version>"
+    echo "usage: make install   # or: scripts/install_dist.sh <rag|compute-worker|runner|fixer> <version>"
     exit 2
 }
 [ -n "$component" ] && [ -n "$version" ] || usage
@@ -94,19 +94,29 @@ rag)
     ln -sfn "$ROOT/rag/current/axiom" "$ROOT/bin/axiom"
     echo "installed: $ROOT/bin/axiom + $ROOT/bin/axiom-ng ($version)"
     ;;
-runner)
-    art=$(find_artifact "axiom-runner-$version-*.tar.zst") || {
-        echo "no runner artifact for $version in $DIST/ — run: make runner"
-        exit 1
+compute-worker|runner)
+    # canonical component name is compute-worker (F10 #304, ADR 0001
+    # §4); the bare "runner" argument stays accepted as the 0.1.x
+    # spelling — one deprecation echo, then the identical flow.
+    case "$component" in
+        runner) echo "axiom: 'runner' is deprecated — use 'compute-worker' (ADR 0001: docs/adr/0001-canonical-naming.md)" >&2 ;;
+    esac
+    art=$(find_artifact "axiom-compute-worker-$version-*.tar.zst") || {
+        # pre-F10 artifacts carry the legacy name — installable unchanged
+        art=$(find_artifact "axiom-runner-$version-*.tar.zst") || {
+            echo "no compute-worker artifact for $version in $DIST/ — run: make compute-worker"
+            exit 1
+        }
     }
     require_zstd
-    target="$ROOT/runner/$version"
-    confirm_install runner "$art" \
+    target="$ROOT/compute-worker/$version"
+    confirm_install compute-worker "$art" \
         "target:   $target/{env,app}" \
-        "current:  $ROOT/runner/current -> $version" \
-        "shim:     $ROOT/bin/axiom-runner" \
+        "current:  $ROOT/compute-worker/current -> $version" \
+        "shim:     $ROOT/bin/axiom-compute-worker" \
+        "alias:    $ROOT/bin/axiom-runner (compat wrapper, ADR 0001 §4)" \
         "post-install fixup: env/bin/conda-unpack (once)"
-    mkdir -p "$ROOT/runner" "$ROOT/bin"
+    mkdir -p "$ROOT/compute-worker" "$ROOT/bin"
     rm -rf "$target"
     mkdir -p "$target"
     tar --zstd -xf "$art" -C "$target" --strip-components 1
@@ -115,15 +125,26 @@ runner)
     # smoke: import surface must resolve in the FINAL location before the
     # current symlink switches over
     # smoke from a NEUTRAL cwd (tests the env, not a source tree — #209 lesson)
-    (cd / && "$target/env/bin/python" -c 'import axiom_ng_runner, torch')
+    (cd / && "$target/env/bin/python" -c 'import axiom_compute_worker, torch')
+    cat >"$ROOT/bin/axiom-compute-worker" <<EOF
+#!/bin/sh
+exec "$ROOT/compute-worker/current/env/bin/python" -m axiom_compute_worker "\$@"
+EOF
+    chmod +x "$ROOT/bin/axiom-compute-worker"
+    # legacy axiom-runner wrapper: warns exactly once per invocation, then
+    # delegates (F08 axiom-fixer pattern; removal earliest in an announced
+    # major). Old launchd platts/scripts keep working through 0.2.x.
     cat >"$ROOT/bin/axiom-runner" <<EOF
 #!/bin/sh
-exec "$ROOT/runner/current/env/bin/python" -m axiom_ng_runner "\$@"
+# Deprecated alias of axiom-compute-worker. Warns exactly once per invocation.
+echo "axiom: axiom-runner is deprecated — use axiom-compute-worker (ADR 0001: docs/adr/0001-canonical-naming.md)" >&2
+exec "$ROOT/bin/axiom-compute-worker" "\$@"
 EOF
     chmod +x "$ROOT/bin/axiom-runner"
-    ln -sfn "$version" "$ROOT/runner/current"
-    echo "installed: $ROOT/bin/axiom-runner ($version)"
-    echo "rollback:  ln -sfn <prev-version> $ROOT/runner/current && launchctl kickstart -k gui/\$(id -u)/com.axiom.runner"
+    ln -sfn "$version" "$ROOT/compute-worker/current"
+    echo "installed: $ROOT/bin/axiom-compute-worker ($version)"
+    echo "alias:     $ROOT/bin/axiom-runner warns + delegates (removal earliest in an announced major)"
+    echo "rollback:  ln -sfn <prev-version> $ROOT/compute-worker/current && launchctl kickstart -k gui/\$(id -u)/com.axiom.compute-worker"
     ;;
 fixer)
     art=$(find_artifact "axiom-fixer-$version-*.tar.zst") || {

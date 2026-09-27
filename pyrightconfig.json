@@ -1,7 +1,7 @@
 {
-  "include": ["axiom_ng_runner"],
+  "include": ["axiom-compute-worker"],
   "exclude": ["**/node_modules", "**/.venv"],
-  "venvPath": "axiom_ng_runner",
+  "venvPath": "axiom-compute-worker",
   "venv": ".venv",
-  "extraPaths": ["."]
+  "extraPaths": [".", "axiom-compute-worker"]
 }
