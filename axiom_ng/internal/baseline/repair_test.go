@@ -183,7 +183,7 @@ func startRepairRAG(t *testing.T, fakeURL string) (base string, stop func()) {
 		AXIOM_PROCESSOR_RUNNER_NAME=axiom-dev-repair-probe
 		AXIOM_ARTIFACT_ROOT="%[4]s"/artifacts
 		AXIOM_QUARANTINE_ROOT="%[4]s"/quarantine
-		AXIOM_RUNNER_DIR="%[5]s"/axiom_ng_runner
+		AXIOM_RUNNER_DIR="%[5]s"/axiom-compute-worker
 		AXIOM_FIXER_INVOKER_ENABLED=0
 		AXIOM_ZOTERO_BASE="%[6]s"
 		AXIOM_ZOTERO_WRITE_KEY_FILE="%[7]s"

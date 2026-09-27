@@ -141,7 +141,14 @@ func generateInventoryFrom(h http.Handler) string {
 		b.WriteString(r)
 		b.WriteByte('\n')
 	}
-	b.WriteString("\n# runner (axiom_ng_runner FastAPI, :8112) — same freeze generation\n")
+	// F10 #304 (F01 remainder redeemed): the compute-worker (:8112) block
+	// stays a freeze-generation PIN (the Go suite cannot import the Python
+	// app), but it no longer carries a legacy name AND it is no longer
+	// hand-pinned without teeth: the Python suite cross-witnesses the
+	// pinned METHOD+PATH set against the REAL FastAPI router
+	// (axiom-compute-worker/tests/test_api_inventory_mirror.py) — a route
+	// drift on either side goes red in the other suite.
+	b.WriteString("\n# compute worker (axiom-compute-worker FastAPI, :8112) — same freeze generation; cross-witnessed by tests/test_api_inventory_mirror.py\n")
 	for _, r := range []string{
 		"GET    /v1/health                                        json health",
 		"GET    /v1/capabilities                                  json Capabilities",

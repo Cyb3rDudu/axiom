@@ -1,14 +1,14 @@
 package processor
 
-// R4 (#134) LIVE ingest-failover proof: a REAL axiom_ng_runner (reference
-// compute) accepts and completes a REAL document while the primary runner is
-// dead — "jobs laufen lokal weiter". Self-contained: spawns the runner,
-// generates a real PDF via the runner venv's pymupdf, drives submit→poll→
-// result→ack through the FailoverClient.
+// R4 (#134) LIVE ingest-failover proof: a REAL axiom-compute-worker
+// (reference compute) accepts and completes a REAL document while the
+// primary runner is dead — "jobs laufen lokal weiter". Self-contained:
+// spawns the worker, generates a real PDF via the worker venv's pymupdf,
+// drives submit→poll→result→ack through the FailoverClient.
 //
 // Run with:
 //   AXIOM_FAILOVER_LIVE=1 \
-//   AXIOM_RUNNER_PYTHON=/Users/dudu/Code/axiom/axiom_ng_runner/.venv/bin/python \
+//   AXIOM_RUNNER_PYTHON=/Users/dudu/Code/axiom/axiom-compute-worker/.venv/bin/python \
 //   go test ./internal/processor/ -run TestIT_LiveFailoverRealRunner -v
 
 import (
@@ -62,7 +62,7 @@ func TestIT_LiveFailoverRealRunner(t *testing.T) {
 	// Fallback = real local runner on a free port.
 	port := freePort(t)
 	fallbackURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	run := exec.Command(py, "-m", "axiom_ng_runner")
+	run := exec.Command(py, "-m", "axiom_compute_worker")
 	run.Dir = mustRepoRoot(t)
 	run.Env = append(os.Environ(),
 		"AXIOM_PROCESSOR_COMPUTE=reference",
@@ -133,7 +133,7 @@ func TestIT_LiveFailoverRealRunner(t *testing.T) {
 		t.Fatalf("ack: %v", err)
 	}
 
-	if !strings.Contains(logBuf.String(), "ingest failover: primary runner") {
+	if !strings.Contains(logBuf.String(), "ingest failover: candidate") {
 		t.Fatalf("failover not documented: %q", logBuf.String())
 	}
 	t.Logf("[IT] live failover: real document completed via local runner (%d bytes result); log: %s",
@@ -157,8 +157,8 @@ func mustRepoRoot(t *testing.T) string {
 	}
 	// internal/processor -> axiom_ng -> repo root
 	root := filepath.Dir(filepath.Dir(filepath.Dir(wd)))
-	if _, err := os.Stat(filepath.Join(root, "axiom_ng_runner", "__main__.py")); err != nil {
-		t.Skipf("axiom_ng_runner not found at %s (run from a full checkout)", root)
+	if _, err := os.Stat(filepath.Join(root, "axiom-compute-worker", "axiom_compute_worker", "__main__.py")); err != nil {
+		t.Skipf("axiom-compute-worker not found at %s (run from a full checkout)", root)
 	}
 	return root
 }

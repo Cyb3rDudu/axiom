@@ -32,7 +32,7 @@ POST   /api/v1/store/ingest                             json store.IngestJob (20
 POST   /api/zotero/sync                                 json sync.Result
 PUT    /api/zotero/selection                            json selection (GET/PUT)
 
-# runner (axiom_ng_runner FastAPI, :8112) — same freeze generation
+# compute worker (axiom-compute-worker FastAPI, :8112) — same freeze generation; cross-witnessed by tests/test_api_inventory_mirror.py
 GET    /v1/health                                        json health
 GET    /v1/capabilities                                  json Capabilities
 POST   /v1/process                                       202 json job accepted
