@@ -25,8 +25,8 @@ func openIntakeDB(t *testing.T) *db.DB {
 	if dsn == "" {
 		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping intake IT")
 	}
-	if !strings.HasSuffix(strings.Split(dsn, "/")[len(strings.Split(dsn, "/"))-1], "_test") {
-		t.Fatalf("refusing to run against non-_test database")
+	if !strings.HasSuffix(strings.Split(dsn, "?")[0], "_test") {
+		t.Fatalf("refusing to run against non-_test database %q", dsn)
 	}
 	ctx := context.Background()
 	d, err := db.Open(ctx, dsn)
@@ -414,5 +414,116 @@ func TestRevisionIntakeReplayAcrossKeyOrdering(t *testing.T) {
 	again, minted2, err := rep.EnqueueRevisionIntake(ctx, req)
 	if err != nil || minted2 || again == nil || again.ID != first.ID {
 		t.Fatalf("reordered replay must be the SAME job: %+v minted=%v err=%v", again, minted2, err)
+	}
+}
+
+// TestRevisionReIntakeAfterObsoletion — the B3 witness: an obsoleted
+// revision job (terminal, FK-less) must never block a re-intake once its
+// transient cause resolved — the identity arbiter is scoped to ACTIVE
+// rows, so the second mint creates a FRESH pending job.
+func TestRevisionReIntakeAfterObsoletion(t *testing.T) {
+	d := openIntakeDB(t)
+	hash := revision.HashContent([]byte("re-intake bytes"))
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	rep := repo.New(d.Pool())
+	ctx := context.Background()
+
+	// Obsolete the only job via the ghost-rendition route: mint against a
+	// rendition that does not exist yet, claim → skipped.
+	ghost := seedRevision(srcID, hash)
+	ghost.RenditionID = "GHOST1"
+	first, minted, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
+		IdempotencyKey: "rearm-1", RevisionSourceID: srcID, RevisionRecordID: "DOCIT1",
+		RevisionRenditionID: "GHOST1", RevisionNo: "1", ContentHash: hash,
+		RevisionJSON: mustCanonical(t, ghost),
+	})
+	if err != nil || !minted {
+		t.Fatalf("ghost mint: %v %v", first, err)
+	}
+	if _, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{WorkerID: "rearm", LeaseDuration: 30 * time.Second, Profile: json.RawMessage(`{"profile":"full-rag-v1"}`)}); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	// The transient cause resolves: the rendition appears in the mirror.
+	if _, err := d.Pool().Exec(ctx, `
+		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+		   parent_zotero_key, link_mode, content_type, filename, local_path, content_hash, preferred, deleted)
+		SELECT $1::uuid, d.id, 'GHOST1', 1, 'DOCIT1', 'imported_file','application/pdf','g.pdf','/tmp/g.pdf',$2,true,false
+		FROM zotero_documents d WHERE d.zotero_key='DOCIT1' AND d.source_id::text=$1::text`, srcID, hash); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-intake with a NEW key: must mint a FRESH pending job (not join
+	// the corpse), claimable immediately.
+	second, minted2, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
+		IdempotencyKey: "rearm-2", RevisionSourceID: srcID, RevisionRecordID: "DOCIT1",
+		RevisionRenditionID: "GHOST1", RevisionNo: "1", ContentHash: hash,
+		RevisionJSON: mustCanonical(t, ghost),
+	})
+	if err != nil || second == nil || !minted2 {
+		t.Fatalf("re-intake must mint a fresh job: %+v minted=%v err=%v", second, minted2, err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("re-intake joined the obsoleted corpse %s", first.ID)
+	}
+	if second.Status != "pending" {
+		t.Fatalf("fresh mint status %q, want pending", second.Status)
+	}
+	claimed, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{WorkerID: "rearm2", LeaseDuration: 30 * time.Second, Profile: json.RawMessage(`{"profile":"full-rag-v1"}`)})
+	if err != nil || claimed == nil || claimed.JobID != second.ID {
+		t.Fatalf("the fresh job must be claimable: %v %v", claimed, err)
+	}
+}
+
+// TestRevisionIntakeCrossSourceNoFalseDedup — the M1 witness: identical
+// rendition key + content under TWO sources are distinct identities; B
+// mints its own job (the old source-less index answered A's job and
+// silently dropped B).
+func TestRevisionIntakeCrossSourceNoFalseDedup(t *testing.T) {
+	d := openIntakeDB(t)
+	hash := revision.HashContent([]byte("cross source bytes"))
+	srcA, _, _ := seedMirror(t, d, "DOCA", "ATTDUP", hash)
+	// Source B with its OWN document + attachment using the SAME keys.
+	var srcB, docB, itemB, attB string
+	ctx := context.Background()
+	if err := d.Pool().QueryRow(ctx, `INSERT INTO zotero_sources (base_url, library_id, server_id) VALUES ('https://b.local','users/0','srv') RETURNING id::text`).Scan(&srcB); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Pool().QueryRow(ctx, `INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title) VALUES ($1,'DOCA',1,'book','B') RETURNING id::text`, srcB).Scan(&docB); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Pool().QueryRow(ctx, `INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data) VALUES ($1,'DOCA',1,'book',NULL,'{}','{}') RETURNING id::text`, srcB).Scan(&itemB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Pool().Exec(ctx, `UPDATE zotero_documents SET canonical_item_id=$2 WHERE id=$1`, docB, itemB); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Pool().QueryRow(ctx, `INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version, parent_zotero_key, link_mode, content_type, filename, local_path, content_hash, preferred, deleted) VALUES ($1,$2,'ATTDUP',1,'DOCA','imported_file','application/pdf','b.pdf','/tmp/b.pdf',$3,true,false) RETURNING id::text`, srcB, docB, hash).Scan(&attB); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := repo.New(d.Pool())
+	revA := seedRevision(srcA, hash)
+	revA.Bibliography.RecordID = "DOCA"
+	jobA, mintedA, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
+		IdempotencyKey: "xsrc-a", RevisionSourceID: srcA, RevisionRecordID: "DOCA",
+		RevisionRenditionID: "ATTDUP", RevisionNo: "1", ContentHash: hash,
+		RevisionJSON: mustCanonical(t, revA),
+	})
+	if err != nil || !mintedA {
+		t.Fatalf("mint A: %v %v", jobA, err)
+	}
+	revB := seedRevision(srcB, hash)
+	revB.Bibliography.RecordID = "DOCA"
+	jobB, mintedB, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
+		IdempotencyKey: "xsrc-b", RevisionSourceID: srcB, RevisionRecordID: "DOCA",
+		RevisionRenditionID: "ATTDUP", RevisionNo: "1", ContentHash: hash,
+		RevisionJSON: mustCanonical(t, revB),
+	})
+	if err != nil || jobB == nil || !mintedB {
+		t.Fatalf("source B must mint its OWN job: %+v minted=%v err=%v", jobB, mintedB, err)
+	}
+	if jobB.ID == jobA.ID {
+		t.Fatalf("cross-source dedup: B joined A's job %s", jobA.ID)
 	}
 }

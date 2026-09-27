@@ -18,6 +18,9 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/store"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
+	"regexp"
+	"strings"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -99,8 +102,8 @@ func (s *Service) IngestRevision(ctx context.Context, req store.IngestRevisionRe
 			Status:      store.IngestCommitted,
 			RevisionID:  req.Revision.RevisionID,
 			ContentHash: req.Revision.ContentHash,
-			Attempt:     1, MaxAttempts: 1,
-			UpdatedAt: time.Now().UTC(),
+			Attempt:     0, MaxAttempts: 3, // the revision lane's mint shape — no fake progress
+			UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
 		}, nil
 	default:
 		return store.IngestJob{}, contracterr.Wrap(contracterr.ComponentStore, contracterr.ClassInternal, err, "intake mint")
@@ -115,6 +118,15 @@ func (s *Service) IngestRevision(ctx context.Context, req store.IngestRevisionRe
 // so the claim's ::uuid can never see a rejected string) and no in-repo
 // producer emits them.
 func normalizeSourceID(r *revision.SourceRevision) error {
+	// Strict shape FIRST: pgx's parser drops whatever sits at the four
+	// dash positions without checking they are dashes — "deadbeefX1234…"
+	// would silently round-trip into a DIFFERENT uuid. The hex-and-dashes
+	// form is the only accepted spelling; pgtype then renders canonical
+	// lowercase.
+	if !canonicalUUIDShape.MatchString(r.SourceID) {
+		return contracterr.New(contracterr.ComponentStore, contracterr.ClassInvalidArgument,
+			"revision source_id is not a valid uuid: "+r.SourceID)
+	}
 	var u pgtype.UUID
 	if err := u.Scan(r.SourceID); err != nil {
 		return contracterr.New(contracterr.ComponentStore, contracterr.ClassInvalidArgument,
@@ -123,6 +135,9 @@ func normalizeSourceID(r *revision.SourceRevision) error {
 	r.SourceID = u.String()
 	return nil
 }
+
+// canonicalUUIDShape: 8-4-4-4-12 hex, case-tolerant (normalized after).
+var canonicalUUIDShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // canonicalRevisionJSON renders the DTO deterministically (Go struct field
 // order is fixed; the marshal IS the canonical form both idempotency sides
@@ -136,28 +151,48 @@ func canonicalRevisionJSON(r revision.SourceRevision) ([]byte, error) {
 }
 
 // ingestJobDTO maps a durable job row onto the contract DTO. Legacy SQL
-// states map onto the intake machine; revision identity echoes the
-// ingested revision.
+// states map onto the intake machine; revision identity echoes the ROW's
+// stored revision (a join may answer a row minted under an earlier
+// revision of the same content — the response tells the durable truth,
+// falling back to the request only for rows that predate revision_no).
+// UpdatedAt is the row's updated_at (replay identity; DM03 µs form).
 func ingestJobDTO(j *repo.Job, rev revision.SourceRevision) store.IngestJob {
+	status := mapJobStatus(j.Status, j.Attempt, j.MaxAttempts)
 	dto := store.IngestJob{
 		JobID:       j.ID,
-		Status:      mapJobStatus(j.Status),
+		Status:      status,
 		RevisionID:  rev.RevisionID,
 		ContentHash: derefStr(j.ContentHash),
 		Attempt:     j.Attempt,
 		MaxAttempts: j.MaxAttempts,
-		UpdatedAt:   time.Now().UTC(),
+		UpdatedAt:   j.UpdatedAt.UTC().Truncate(time.Microsecond),
 	}
-	if j.ErrorCode != nil {
-		dto.Failure = &store.IngestFailure{Code: *j.ErrorCode}
-		if j.ErrorMessage != nil {
-			dto.Failure.Message = *j.ErrorMessage
+	if j.RevisionNo != "" {
+		dto.RevisionID = j.RevisionNo
+	}
+	if status == store.IngestRetryableFailed || status == store.IngestTerminalFailed {
+		if j.ErrorCode != nil || j.ErrorMessage != nil {
+			f := &store.IngestFailure{}
+			if j.ErrorCode != nil {
+				f.Code = *j.ErrorCode
+			}
+			if j.ErrorMessage != nil {
+				f.Message = *j.ErrorMessage
+			}
+			dto.Failure = f
 		}
 	}
 	return dto
 }
 
-func mapJobStatus(sql string) store.IngestStatus {
+// mapJobStatus maps the SQL state machine onto the intake machine.
+// "failed" splits by attempt budget: a failed row at its last attempt is
+// TERMINAL (the claim never re-arms it — telling the caller "retryable"
+// would be a lie); below the budget it is retryable (the scheduler's
+// backoff will re-drive it). "skipped"/"cancelled" are terminal; the
+// pre-enum "obsolete" spelling no longer occurs (markObsolete writes
+// 'skipped').
+func mapJobStatus(sql string, attempt, maxAttempts int) store.IngestStatus {
 	switch sql {
 	case "pending":
 		return store.IngestReceived
@@ -165,10 +200,13 @@ func mapJobStatus(sql string) store.IngestStatus {
 		return store.IngestProcessing
 	case "completed":
 		return store.IngestCommitted
-	case "skipped", "obsolete", "cancelled":
-		return store.IngestTerminalFailed
-	default: // failed
+	case "failed":
+		if attempt >= maxAttempts {
+			return store.IngestTerminalFailed
+		}
 		return store.IngestRetryableFailed
+	default: // skipped, cancelled
+		return store.IngestTerminalFailed
 	}
 }
 
@@ -183,7 +221,7 @@ func derefStr(p *string) string {
 // argument rules are enforced HERE (the frozen v0.1.18 behavior), internal
 // errors are wrapped as contract errors.
 func (s *Service) Search(ctx context.Context, req store.SearchRequest) (store.SearchResult, error) {
-	if req.Query == "" {
+	if strings.TrimSpace(req.Query) == "" {
 		return store.SearchResult{}, contracterr.New(contracterr.ComponentStore, contracterr.ClassInvalidArgument, "search: query is blank")
 	}
 	if req.TopN > store.MaxTopN {
@@ -208,7 +246,10 @@ func (s *Service) GetPassage(ctx context.Context, ref store.PassageRef) (store.P
 	}
 	p, err := s.search.GetPassage(ctx, ref.ChunkID)
 	if err != nil {
-		if errors.Is(err, search.ErrPassageNotFound) {
+		// Inactive-snapshot chunks are the frozen route's 404 class too
+		// (superseded generation, not never-existed).
+		var inactive *search.InactiveSnapshotError
+		if errors.Is(err, search.ErrPassageNotFound) || errors.As(err, &inactive) {
 			return store.Passage{}, contracterr.New(contracterr.ComponentStore, contracterr.ClassNotFound, "passage: "+ref.ChunkID)
 		}
 		return store.Passage{}, contracterr.Wrap(contracterr.ComponentStore, contracterr.ClassInternal, err, "passage")

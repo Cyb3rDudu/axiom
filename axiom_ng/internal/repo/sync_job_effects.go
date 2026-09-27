@@ -133,6 +133,7 @@ func reactivateRestoredAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
 	}
 	return nil
 }
+
 // writeJobsTx writes pending and failed ingest jobs within the given
 // transaction (ON CONFLICT DO NOTHING dedup for pending; failed jobs are
 // inserted). Returns (enqueued new jobs, failed jobs written).

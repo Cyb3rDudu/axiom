@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom_ng/internal/store/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -104,6 +105,12 @@ func openModeTestDB(t *testing.T) string {
 	}
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate mode db: %v", err)
+	}
+	// The store component's ledger (F09 #303): a standing DB was booted by
+	// `serve`, which applies it — the maintenance modes run against that
+	// world (retention's SQL sees the intake columns).
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store-migrate mode db: %v", err)
 	}
 	d.Close()
 

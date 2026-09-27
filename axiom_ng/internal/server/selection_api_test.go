@@ -3,10 +3,10 @@
 package server
 
 import (
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-
 )
 
 type stubSelection struct {

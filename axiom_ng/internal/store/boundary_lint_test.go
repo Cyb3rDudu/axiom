@@ -1,12 +1,22 @@
 // boundary_lint_test.go — the F09 #303 store-boundary gate: the Zotero/
-// credential freedom of the Store packages, proven TRANSITIVELY in the
-// dependency graph.
+// credential freedom of the Store packages' IMPORT GRAPH, proven
+// transitively over PRODUCTION files, with a direct-import tier for test
+// files.
 //
 // Direct-import lints (the F03/F07 gates) catch a leak one hop away; this
 // gate walks the whole module import graph and asserts that NO package of
-// the Store component can REACH a banned package through any chain —
-// store → repo → anything-Zotero is exactly the back door a per-file lint
-// cannot see ("bis in den Dependency-Graph bewiesen").
+// the Store component can REACH a banned package through any PRODUCTION
+// chain — store → repo → anything-Zotero is exactly the back door a
+// per-file lint cannot see ("bis in den Dependency-Graph bewiesen").
+//
+// Scope honesty: this proves IMPORT-graph freedom, not SQL freedom — the
+// documented transition dual-reads (mirror-table SQL from repo, the
+// legacy sync lane's job writes) live in store/doc.go and are abated by
+// F12/DM06. Test files get the WEAKER tier: a store-package test may not
+// DIRECTLY import the banned core (Zotero adapter, sync, Library, the
+// credential carrier, transport, composition), but may use Library-side
+// fixtures like internal/library/repair (F08's harness pattern) — the
+// shipped direction stays proven by the production closure.
 //
 // Store package set (the component's code): this package, dispatcher,
 // processor, search, repo, events, sourceurl, db. Everything else in
@@ -74,6 +84,24 @@ var bannedPackages = []string{
 	"internal/baseline",
 }
 
+// testDirectBanned: packages a Store-package _test.go may not import
+// DIRECTLY. Narrower than bannedPackages by internal/library/repair (the
+// F08 harness-fixture exception above).
+var testDirectBanned = []string{
+	"internal/zoteroprovider",
+	"internal/sync",
+	"internal/library",
+	"internal/library/mirror",
+	"internal/config",
+	"internal/repair",
+	"internal/fixerinvoker",
+	"internal/server",
+	"internal/composition",
+	"internal/cli",
+	"internal/backfill",
+	"internal/baseline",
+}
+
 const modulePath = "github.com/Cyb3rDudu/axiom/axiom_ng"
 
 // importGraph is the parsed module graph: package path → imported package
@@ -83,7 +111,7 @@ type importGraph map[string]map[string]bool
 
 // buildImportGraph parses every .go file under root (vendor/, testdata/,
 // .git, dist skipped) and groups imports by package directory.
-func buildImportGraph(root string) (importGraph, error) {
+func buildImportGraph(root string, includeTests bool) (importGraph, error) {
 	g := importGraph{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -94,6 +122,9 @@ func buildImportGraph(root string) (importGraph, error) {
 			case "vendor", "testdata", ".git", "dist", ".worktree":
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if !includeTests && strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") {
@@ -143,23 +174,69 @@ func reachable(g importGraph, start string) map[string]bool {
 	return seen
 }
 
-// storeBoundaryViolations checks every Store package's transitive closure
-// against the banned set; returns sorted violation strings.
-func storeBoundaryViolations(g importGraph) []string {
+// storeBoundaryViolations checks every Store package's PRODUCTION closure
+// against the banned set (each store package must EXIST in the graph — a
+// moved root turns the walk vacuous otherwise) plus the test-file direct
+// tier; returns sorted violation strings.
+func storeBoundaryViolations(g importGraph, testG importGraph) []string {
 	banned := map[string]bool{}
 	for _, b := range bannedPackages {
 		banned[b] = true
 	}
+	testBanned := map[string]bool{}
+	for _, b := range testDirectBanned {
+		testBanned[b] = true
+	}
+	// Prefix rule for the checked set itself: a NEW subpackage under the
+	// Store's own trees is Store code by construction — it joins the set
+	// automatically instead of waiting for a list edit.
+	set := append([]string{}, storePackages...)
+	for p := range g {
+		if strings.HasPrefix(p, "internal/store/") || strings.HasPrefix(p, "internal/repo/") {
+			set = append(set, p)
+		}
+	}
+	sort.Strings(set)
 	var out []string
-	for _, sp := range storePackages {
+	for _, sp := range set {
+		if g[sp] == nil && !seenAsNode(g, sp) {
+			out = append(out, fmt.Sprintf("%s absent from the parsed graph (moved root? vacuous pass)", sp))
+			continue
+		}
 		for p := range reachable(g, sp) {
 			if bannedPkg(banned, p) {
 				out = append(out, fmt.Sprintf("%s reaches %s", sp, p))
 			}
 		}
+		for p := range testG[sp] {
+			if bannedPkg(testBanned, p) && !testTierAllowed[p] {
+				out = append(out, fmt.Sprintf("%s test file directly imports %s", sp, p))
+			}
+		}
 	}
 	sort.Strings(out)
 	return out
+}
+
+// testTierAllowed: the documented test-fixture carve-outs — Library-side
+// packages store-package TESTS may import directly (F08's harness
+// pattern); production closures remain fully banned.
+var testTierAllowed = map[string]bool{
+	"internal/library/repair": true,
+}
+
+// seenAsNode reports whether p appears as any node (a leaf package has no
+// outgoing edges but is still an import target).
+func seenAsNode(g importGraph, p string) bool {
+	if _, ok := g[p]; ok {
+		return true
+	}
+	for _, imports := range g {
+		if imports[p] {
+			return true
+		}
+	}
+	return false
 }
 
 // bannedPkg: exact match or any subpackage of a banned root — a NEW
@@ -181,11 +258,15 @@ func bannedPkg(banned map[string]bool, p string) bool {
 // A violation means the Store boundary broke: route the dependency through
 // the contracts (a port, a DTO) or through the composition root instead.
 func TestStorePackagesNeverReachZoteroOrCredentials(t *testing.T) {
-	g, err := buildImportGraph("../..")
+	g, err := buildImportGraph("../..", false)
 	if err != nil {
 		t.Fatalf("store boundary lint scan failed (fail closed): %v", err)
 	}
-	if v := storeBoundaryViolations(g); len(v) > 0 {
+	tg, err := buildImportGraph("../..", true)
+	if err != nil {
+		t.Fatalf("store boundary lint scan (tests) failed (fail closed): %v", err)
+	}
+	if v := storeBoundaryViolations(g, tg); len(v) > 0 {
 		t.Fatalf("Store packages reach banned packages (F09 #303 boundary; route through contracts or the composition root):\n\t%s",
 			strings.Join(v, "\n\t"))
 	}
@@ -194,7 +275,7 @@ func TestStorePackagesNeverReachZoteroOrCredentials(t *testing.T) {
 // TestBoundaryLintCatchesPlantedImports — the teeth witnesses, on probe
 // copies of the module graph so the real tree stays untouched.
 func TestBoundaryLintCatchesPlantedImports(t *testing.T) {
-	probe := func(mutate func(root string)) importGraph {
+	probe := func(mutate func(root string)) (importGraph, importGraph) {
 		root := t.TempDir()
 		write := func(rel string) {
 			dst := filepath.Join(root, filepath.FromSlash(rel))
@@ -209,11 +290,15 @@ func TestBoundaryLintCatchesPlantedImports(t *testing.T) {
 			write(p + "/x.go")
 		}
 		mutate(root)
-		g, err := buildImportGraph(root)
+		g, err := buildImportGraph(root, false)
 		if err != nil {
 			t.Fatalf("probe graph: %v", err)
 		}
-		return g
+		tg, err := buildImportGraph(root, true)
+		if err != nil {
+			t.Fatalf("probe test graph: %v", err)
+		}
+		return g, tg
 	}
 	plant := func(root, rel, imp string) {
 		p := filepath.Join(root, filepath.FromSlash(rel))

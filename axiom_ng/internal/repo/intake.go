@@ -13,6 +13,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// intakeKeyConstraint names the intake-key unique index — the 23505
+// arbiter of the concurrent-mint re-ask. A literal, pinned against the
+// migration by TestIntakeKeyConstraintMatchesMigration.
+const intakeKeyConstraint = "ingest_jobs_intake_key_uq"
+
 // ErrIntakeKeyMismatch: the idempotency key was reused with a DIFFERENT
 // revision (canonical JSON differs) — the contract's
 // contracterr.IdempotencyMismatch source.
@@ -28,11 +33,13 @@ func (r *Repo) resolveIntakeKey(ctx context.Context, req IntakeRequest) (*Job, e
 	var identical bool
 	err := r.pool.QueryRow(ctx, `
 		SELECT id::text, status::text, COALESCE(content_hash,''), attempt, max_attempts,
-		       enqueued_at::text, (revision_json = $2::jsonb)
+		       enqueued_at::text, error_code, error_message, COALESCE(revision_no,''), updated_at,
+		       (revision_json = $2::jsonb)
 		FROM ingest_jobs
 		WHERE intake_kind='revision' AND intake_idempotency_key=$1`, req.IdempotencyKey, string(req.RevisionJSON)).
 		Scan(&existing.ID, &existing.Status, &existing.ContentHash, &existing.Attempt,
-			&existing.MaxAttempts, &existing.EnqueuedAt, &identical)
+			&existing.MaxAttempts, &existing.EnqueuedAt, &existing.ErrorCode, &existing.ErrorMessage,
+			&existing.RevisionNo, &existing.UpdatedAt, &identical)
 	if err != nil {
 		return nil, err
 	}
@@ -107,12 +114,16 @@ func (r *Repo) EnqueueRevisionIntake(ctx context.Context, req IntakeRequest) (*J
 			JOIN zotero_attachments a ON a.id = s.attachment_id
 			WHERE a.source_id::text = $3 AND a.zotero_key = $5 AND a.deleted = false
 			  AND s.content_hash = $2 AND s.active)
-		ON CONFLICT (revision_rendition_id, content_hash) WHERE intake_kind='revision' AND force_rebuild=false
+		ON CONFLICT (revision_source_id, revision_rendition_id, content_hash)
+		WHERE intake_kind='revision' AND force_rebuild=false
+		  AND status IN ('pending','claimed','processing')
 		DO UPDATE SET updated_at = ingest_jobs.updated_at
-		RETURNING id::text, status::text, COALESCE(content_hash,''), attempt, max_attempts, enqueued_at::text, (xmax <> 0) AS was_existing`,
+		RETURNING id::text, status::text, COALESCE(content_hash,''), attempt, max_attempts, enqueued_at::text,
+		          error_code, error_message, COALESCE(revision_no,''), updated_at, (xmax <> 0) AS was_existing`,
 		req.IdempotencyKey, req.ContentHash, req.RevisionSourceID, req.RevisionRecordID,
 		req.RevisionRenditionID, req.RevisionNo, string(req.RevisionJSON)).
-		Scan(&job.ID, &job.Status, &job.ContentHash, &job.Attempt, &job.MaxAttempts, &job.EnqueuedAt, &joinedExisting)
+		Scan(&job.ID, &job.Status, &job.ContentHash, &job.Attempt, &job.MaxAttempts, &job.EnqueuedAt,
+			&job.ErrorCode, &job.ErrorMessage, &job.RevisionNo, &job.UpdatedAt, &joinedExisting)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, false, ErrIntakeSuppressed
@@ -122,7 +133,7 @@ func (r *Repo) EnqueueRevisionIntake(ctx context.Context, req IntakeRequest) (*J
 		// 23505 is the SAME question the SELECT answers; re-ask it once and
 		// classify honestly instead of surfacing an Internal error.
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "ingest_jobs_intake_key_uq" {
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == intakeKeyConstraint {
 			// The concurrent winner committed (Postgres blocks on
 			// uncommitted index entries): re-ask and classify honestly.
 			replay, rerr := r.resolveIntakeKey(ctx, req)

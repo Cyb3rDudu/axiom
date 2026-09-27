@@ -35,7 +35,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 )
 
 // runnerJob is one active job on a runner.

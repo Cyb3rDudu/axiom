@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -45,6 +46,12 @@ type Job struct {
 	// IntakeKey is the revision-lane idempotency key (F09 #303); empty on
 	// legacy (zotero-lane) jobs.
 	IntakeKey string
+	// RevisionNo is the STORED revision id of the row (the revision lane's
+	// echo truth — a join may answer a row minted under an earlier
+	// revision of the same content).
+	RevisionNo string
+	// UpdatedAt is the row's updated_at (the DM03-compatible replay time).
+	UpdatedAt time.Time
 }
 
 // FailedJob describes a file-resolution failure that should be persisted as a

@@ -132,23 +132,29 @@ const supersededSnapshotSQL = "\n\tFROM processing_snapshots s\n\tWHERE " + supe
 // with → mass requeue of fully processed documents). The guard now uses
 // the read model's exact key on BOTH layers, so the row the outcome API
 // reads is structurally the row that survives.
-const prunableJobSQL = `
-	FROM ingest_jobs j
-	JOIN zotero_attachments a ON a.id = j.attachment_id
+// Branch notes (kept OUT of the SQL: pg_stat_activity truncates query
+// text at 1024 bytes, and the tranche choreography witnesses match the
+// query tail — "FOR UPDATE" must stay inside the stored text):
+//   - the FK-anchored branch covers both lanes once claimed (the mirror
+//     rules unchanged from the pre-F09 inner join);
+//   - the revision branch catches FK-less terminal rows (obsoleted at
+//     claim, REVISION_REF_UNRESOLVED &c) — the mirror anchor can never
+//     see them; the identity dedup is scoped to ACTIVE rows, so pruning
+//     the corpse cannot strand a re-intake; age is their guard.
+const prunableJobSQL = `	FROM ingest_jobs j
+	LEFT JOIN zotero_attachments a ON a.id = j.attachment_id
 	WHERE j.status IN ('completed','failed','cancelled','skipped')
 	  AND j.enqueued_at < now() - make_interval(secs => $1)
-	  AND NOT (
-			a.preferred AND NOT a.deleted
-			AND NOT EXISTS (SELECT 1 FROM ingest_jobs j2
-			                WHERE j2.attachment_id = a.id
-			                  AND (j2.updated_at, j2.id) > (j.updated_at, j.id)))
-	  AND EXISTS (SELECT 1 FROM ingest_jobs j2
-	              JOIN zotero_attachments a2 ON a2.id = j2.attachment_id
-	              WHERE a2.document_id = a.document_id
-	                AND (j2.updated_at, j2.id) > (j.updated_at, j.id))
+	  AND ((a.id IS NOT NULL
+	      AND NOT (a.preferred AND NOT a.deleted
+	        AND NOT EXISTS (SELECT 1 FROM ingest_jobs j2
+	          WHERE j2.attachment_id = a.id AND (j2.updated_at, j2.id) > (j.updated_at, j.id)))
+	      AND EXISTS (SELECT 1 FROM ingest_jobs j2
+	        JOIN zotero_attachments a2 ON a2.id = j2.attachment_id
+	        WHERE a2.document_id = a.document_id AND (j2.updated_at, j2.id) > (j.updated_at, j.id)))
+	   OR (j.intake_kind = 'revision' AND j.attachment_id IS NULL))
 	  AND NOT EXISTS (SELECT 1 FROM repair_cases rc WHERE rc.attachment_id = j.attachment_id)
-	  AND NOT EXISTS (SELECT 1 FROM processing_snapshots s
-	                  WHERE s.ingest_job_id = j.id AND s.active)`
+	  AND NOT EXISTS (SELECT 1 FROM processing_snapshots s WHERE s.ingest_job_id = j.id AND s.active)`
 
 // RetentionPlan computes the report (dry run). Read-only.
 func (r *Repo) RetentionPlan(ctx context.Context, jobMinAge time.Duration) (*RetentionReport, error) {
@@ -544,7 +550,7 @@ func (r *Repo) deleteJobTranche(ctx context.Context, limit int, jobMinAge time.D
 	// prunableJobSQL binds the age as $1 (its own numbering); the tranche
 	// LIMIT follows it as $2. FOR UPDATE locks the candidates so a guard
 	// input cannot flip between selection and DELETE.
-	rows, err := tx.Query(ctx, `SELECT j.id`+prunableJobSQL+` ORDER BY j.enqueued_at, j.id LIMIT $2 FOR UPDATE`,
+	rows, err := tx.Query(ctx, `SELECT j.id`+prunableJobSQL+` ORDER BY j.enqueued_at, j.id LIMIT $2 FOR UPDATE OF j`,
 		jobMinAge.Seconds(), limit)
 	if err != nil {
 		return 0, 0, fmt.Errorf("select job tranche: %w", err)

@@ -19,9 +19,11 @@ import (
 type fakeStoreAPI struct {
 	job store.IngestJob
 	err error
+	got store.IngestRevisionRequest
 }
 
 func (f *fakeStoreAPI) IngestRevision(ctx context.Context, req store.IngestRevisionRequest) (store.IngestJob, error) {
+	f.got = req
 	return f.job, f.err
 }
 
@@ -41,10 +43,10 @@ func validIntakeBody() map[string]any {
 		"idempotency_key": "route-key-1",
 		"revision": map[string]any{
 			"source_id": "src-1", "revision_id": "1", "rendition_id": "rend-1",
-			"content_hash":  revision.HashContent([]byte("route")),
-			"media_type":    revision.MediaTypePDF,
+			"content_hash":   revision.HashContent([]byte("route")),
+			"media_type":     revision.MediaTypePDF,
 			"content_ticket": "ticket-1",
-			"bibliography": map[string]any{"record_id": "rec-1", "citation_class": "citable"},
+			"bibliography":   map[string]any{"record_id": "rec-1", "citation_class": "citable"},
 		},
 	}
 }
@@ -68,7 +70,8 @@ func TestStoreIntakeRouteUnwired503(t *testing.T) {
 }
 
 func TestStoreIntakeRouteAccepts(t *testing.T) {
-	ts := newStoreAPIServer(t, &fakeStoreAPI{job: store.IngestJob{JobID: "j1", Status: store.IngestReceived}})
+	api := &fakeStoreAPI{job: store.IngestJob{JobID: "j1", Status: store.IngestReceived}}
+	ts := newStoreAPIServer(t, api)
 	resp := postIntake(t, ts, validIntakeBody())
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("fresh intake must 202, got %d", resp.StatusCode)
@@ -76,6 +79,14 @@ func TestStoreIntakeRouteAccepts(t *testing.T) {
 	var job store.IngestJob
 	if err := json.NewDecoder(resp.Body).Decode(&job); err != nil || job.JobID != "j1" {
 		t.Fatalf("response must echo the job, got %+v (%v)", job, err)
+	}
+	// The route must DECODE the body (not swallow it): the revision's
+	// identity fields reach the API verbatim.
+	if api.got.IdempotencyKey != "route-key-1" {
+		t.Fatalf("idempotency key lost in decode: %+v", api.got)
+	}
+	if api.got.Revision.RenditionID != "rend-1" || api.got.Revision.Bibliography.RecordID != "rec-1" {
+		t.Fatalf("revision identity lost in decode: %+v", api.got.Revision)
 	}
 }
 

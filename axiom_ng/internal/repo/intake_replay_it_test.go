@@ -89,3 +89,16 @@ func TestResolveIntakeKeyClassifiesReplayAndMismatch(t *testing.T) {
 		t.Fatalf("unknown key must surface pgx.ErrNoRows, got %v", err)
 	}
 }
+
+// TestIntakeKeyConstraintMatchesMigration — the 23505 re-ask's arbiter
+// literal must equal the migration's index name (a typo there silently
+// turns every true concurrent replay into an Internal error).
+func TestIntakeKeyConstraintMatchesMigration(t *testing.T) {
+	sql, err := os.ReadFile("../store/migrations/schema/0001_revision_intake.sql")
+	if err != nil {
+		t.Skipf("migration file unreadable: %v", err)
+	}
+	if !strings.Contains(string(sql), "CREATE UNIQUE INDEX IF NOT EXISTS "+intakeKeyConstraint) {
+		t.Fatalf("intake key constraint %q not found in the store migration", intakeKeyConstraint)
+	}
+}

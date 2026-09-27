@@ -17,10 +17,10 @@ package sync
 // Runs only against a dedicated *_test database (AXIOM_TEST_DATABASE_URL);
 // the fixture truncates the canonical tables to simulate a fresh DB.
 import (
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"bytes"
 	"context"
 	"errors"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"log"
 	"os"
 	"strings"

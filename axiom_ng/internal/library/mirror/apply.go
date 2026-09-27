@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -147,7 +147,6 @@ func (m *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 
 	return res, nil
 }
-
 
 // applyCanonicalDeleteEvents resolves each deleted key against documents or
 // attachments: a document deletion removes the parent + attachments; a single

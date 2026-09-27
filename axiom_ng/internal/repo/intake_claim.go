@@ -176,9 +176,9 @@ func buildRevisionFrozenInput(c *candidate, s *frozenState, proc FrozenProcessin
 			ServerID: s.source.serverID,
 		},
 		Document: FrozenDocument{
-			DocumentID:       s.document.id,
-			ZoteroKey:        s.document.zoteroKey, // opaque external reference (the record key)
-			ZoteroVersion:    s.document.zoteroVersion,
+			DocumentID:    s.document.id,
+			ZoteroKey:     s.document.zoteroKey, // opaque external reference (the record key)
+			ZoteroVersion: s.document.zoteroVersion,
 			MetadataSnapshot: func() json.RawMessage {
 				b, _ := json.Marshal(fr.Bibliography)
 				return b

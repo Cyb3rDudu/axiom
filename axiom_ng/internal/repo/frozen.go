@@ -31,12 +31,12 @@ type FrozenInput struct {
 	// Intake marks the lane (F09 #303): "" / "zotero" = the legacy
 	// sync-enqueued snapshot; "revision" = the revision-intake snapshot
 	// (Revision carries the verbatim SourceRevision). Additive wire field.
-	Intake     string                    `json:"intake,omitempty"`
-	Revision   *revision.SourceRevision   `json:"revision,omitempty"`
-	Source     FrozenSource     `json:"source"`
-	Document   FrozenDocument   `json:"document"`
-	Attachment FrozenAttachment `json:"attachment"`
-	Processing FrozenProcessing `json:"processing"`
+	Intake     string                   `json:"intake,omitempty"`
+	Revision   *revision.SourceRevision `json:"revision,omitempty"`
+	Source     FrozenSource             `json:"source"`
+	Document   FrozenDocument           `json:"document"`
+	Attachment FrozenAttachment         `json:"attachment"`
+	Processing FrozenProcessing         `json:"processing"`
 }
 
 // FrozenSource identifies the canonical Zotero source.

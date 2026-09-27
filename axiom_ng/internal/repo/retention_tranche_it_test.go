@@ -27,16 +27,24 @@ import (
 func (e *retEnv) waitForLockWaiter(t *testing.T, pattern string, maxWait time.Duration) bool {
 	t.Helper()
 	deadline := time.Now().Add(maxWait)
+	var lastErr error
 	for time.Now().Before(deadline) {
 		var n int
-		if err := e.pool.QueryRow(context.Background(), `
+		err := e.pool.QueryRow(context.Background(), `
 			SELECT count(*) FROM pg_stat_activity
 			WHERE wait_event_type = 'Lock'
 			  AND datname = current_database()
-			  AND query LIKE $1`, pattern).Scan(&n); err == nil && n > 0 {
+			  AND query LIKE $1`, pattern).Scan(&n)
+		if err == nil && n > 0 {
 			return true
 		}
+		if err != nil {
+			lastErr = err
+		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	if lastErr != nil {
+		t.Logf("waitForLockWaiter(%q): polls errored: %v", pattern, lastErr)
 	}
 	return false
 }
@@ -145,7 +153,12 @@ func TestRetentionLayer2GuardIT(t *testing.T) {
 		jobDone <- res{rem, err}
 	}()
 	if !e.waitForLockWaiter(t, "%FROM ingest_jobs%FOR UPDATE%", 5*time.Second) {
-		t.Fatal("job tranche never blocked on the victim row lock — choreography broken")
+		select {
+		case r := <-jobDone:
+			t.Fatalf("job tranche never blocked — ApplyRetention returned early: err=%v", r.err)
+		default:
+			t.Fatal("job tranche never blocked on the victim row lock — choreography broken")
+		}
 	}
 	if _, err := jlockTx.Exec(ctx, `
 		INSERT INTO repair_cases (attachment_id, document_id, status, suspicion_class, analysis)
@@ -252,7 +265,12 @@ func TestRetentionGuardRecheckIT(t *testing.T) {
 		jdone <- res{err}
 	}()
 	if !e.waitForLockWaiter(t, "%FROM ingest_jobs%FOR UPDATE%", 5*time.Second) {
-		t.Fatal("job tranche never blocked on the victim row lock — choreography broken")
+		select {
+		case r := <-jdone:
+			t.Fatalf("job tranche never blocked — ApplyRetention returned early: err=%v", r.err)
+		default:
+			t.Fatal("job tranche never blocked on the victim row lock — choreography broken")
+		}
 	}
 	if _, err := jlockTx.Exec(ctx, `UPDATE ingest_jobs SET status='pending' WHERE id=$1::uuid`, victimJob); err != nil {
 		t.Fatal(err)

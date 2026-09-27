@@ -14,9 +14,9 @@ package mirror
 // Runs only against a dedicated *_test database (AXIOM_TEST_DATABASE_URL).
 
 import (
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"context"
 	"encoding/json"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"strings"
 	"testing"
 	"time"
@@ -317,4 +317,3 @@ func TestClaimContextualKGGateIT(t *testing.T) {
 		}
 	}
 }
-

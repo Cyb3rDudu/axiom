@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 	"github.com/jackc/pgx/v5"
 )
 

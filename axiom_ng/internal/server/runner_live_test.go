@@ -8,15 +8,14 @@ package server
 // these events); these tests prove the derivation and the machinery latency.
 
 import (
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"encoding/json"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
 )
 
 // startRunnerView wires a server with a broker + deriver (as main does) and

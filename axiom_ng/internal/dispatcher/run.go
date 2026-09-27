@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
@@ -322,22 +321,22 @@ var autoQueueRepairClasses = map[string]bool{
 // generations — the document-level healed count is the bound. Beyond
 // RepairMaxAttempts healed cases the new case stays rejected for the
 // operator; the manual queue path remains operator-governed.
-func (d *Dispatcher) autoQueueRepair(ctx context.Context, fields []any, documentID string, c *repair.RepairCase, created bool) {
-	if !created || c == nil || !autoQueueRepairClasses[c.SuspicionClass] {
+func (d *Dispatcher) autoQueueRepair(ctx context.Context, fields []any, documentID, caseID, suspicionClass string, analysis json.RawMessage, created bool) {
+	if !created || caseID == "" || !autoQueueRepairClasses[suspicionClass] {
 		return
 	}
 	if documentID != "" {
-		if n, err := d.repairs.DocumentHealedCases(ctx, documentID); err == nil && n >= repair.RepairMaxAttempts {
+		if n, err := d.repairs.DocumentHealedCases(ctx, documentID); err == nil && n >= repairMaxHealedCases {
 			d.logger.Printf("%v: repair loop guard (#282): document already healed %d× — case stays rejected, operator decides", fields, n)
 			return
 		} else if err != nil {
 			d.logger.Printf("%v: healed-case count failed (queueing anyway, per-attachment guard still bounds): %v", fields, err)
 		}
 	}
-	if err := d.repairs.QueueRepairCase(ctx, c.ID, c.SuspicionClass, c.Analysis); err != nil && !isLost(err) {
+	if err := d.repairs.QueueRepairCase(ctx, caseID, suspicionClass, analysis); err != nil && !isLost(err) {
 		d.logger.Printf("%v: auto-queue repair case: %v (stays rejected; manual queue remains)", fields, err)
 	} else if err == nil {
-		d.logger.Printf("%v: repair case auto-queued (%s)", fields, c.SuspicionClass)
+		d.logger.Printf("%v: repair case auto-queued (%s)", fields, suspicionClass)
 	}
 }
 
@@ -352,21 +351,21 @@ func (d *Dispatcher) onFailed(ctx context.Context, claimed *repo.ClaimedJob, job
 	// structured runner FAIL (error class, stage, retryable=false, message
 	// excerpt) becomes the repair case's analysis so the fixer starts from
 	// the actual corruption evidence.
-	if repairTrackFailureCodes[jobErr.Code] {
+	if repairTrackFailureCodes[jobErr.Code] && d.repairs != nil {
 		analysis, _ := json.Marshal(map[string]any{
 			"error_class": jobErr.Code,
 			"stage":       jobErr.Stage,
 			"retryable":   false,
 			"message":     jobErr.Message,
 		})
-		if c, created, err := d.repairs.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, jobErr.Code, analysis); err != nil && !isLost(err) {
+		if caseID, created, err := d.repairs.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, jobErr.Code, analysis); err != nil && !isLost(err) {
 			d.logger.Printf("repair-case for %s: %v", ref.JobID, err)
 		} else {
 			// #238: only a FRESH case auto-queues (created == false means a
 			// recycled open case — old evidence, never queued by a newer
 			// verdict). #282: the document-level healed-count guard lives
 			// inside autoQueueRepair.
-			d.autoQueueRepair(ctx, []any{ref.JobID}, claimed.DocumentID, c, created)
+			d.autoQueueRepair(ctx, []any{ref.JobID}, claimed.DocumentID, caseID, jobErr.Code, analysis, created)
 		}
 	}
 	d.markTerminal(ctx, ref, jobErr.Code, jobErr.Message)

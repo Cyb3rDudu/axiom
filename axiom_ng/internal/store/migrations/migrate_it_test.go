@@ -36,6 +36,17 @@ func TestStoreMigrateIdempotentAfterLedgerWipe(t *testing.T) {
 	if err := Migrate(ctx, d.Pool()); err != nil {
 		t.Fatalf("first migrate: %v", err)
 	}
+	// The original (typo'd) constraint name must satisfy the guard too:
+	// pre-landing dev DBs carry intake_jobs_intake_kind_chk (and not the
+	// corrected name) — simulate exactly that shape.
+	for _, name := range []string{"ingest_jobs_intake_kind_chk", "intake_jobs_intake_kind_chk"} {
+		if _, err := d.Pool().Exec(ctx, `ALTER TABLE ingest_jobs DROP CONSTRAINT IF EXISTS `+name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := d.Pool().Exec(ctx, `ALTER TABLE ingest_jobs ADD CONSTRAINT intake_jobs_intake_kind_chk CHECK (intake_kind IN ('zotero','revision'))`); err != nil {
+		t.Fatal(err)
+	}
 	// Simulate the bootstrap repair: the ledger forgets, the schema stays.
 	if _, err := d.Pool().Exec(ctx, `DELETE FROM store_schema_migrations`); err != nil {
 		t.Fatal(err)
@@ -45,5 +56,12 @@ func TestStoreMigrateIdempotentAfterLedgerWipe(t *testing.T) {
 	// here with "duplicate constraint").
 	if err := Migrate(ctx, d.Pool()); err != nil {
 		t.Fatalf("re-run after ledger wipe must be idempotent: %v", err)
+	}
+	var n int
+	if err := d.Pool().QueryRow(ctx, `SELECT count(*) FROM pg_constraint WHERE conrelid='ingest_jobs'::regclass AND conname IN ('ingest_jobs_intake_kind_chk','intake_jobs_intake_kind_chk')`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("exactly one intake-kind CHECK expected (typo or corrected), got %d", n)
 	}
 }

@@ -14,8 +14,8 @@ import (
 	"testing"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
-	storemigrations "github.com/Cyb3rDudu/axiom/axiom_ng/internal/store/migrations"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom_ng/internal/store/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

@@ -28,12 +28,16 @@ func searchResponseDTO(res *search.Response) store.SearchResult {
 		Hits:   make([]store.SearchHit, 0, len(res.Hits)),
 		TookMS: res.TookMS,
 	}
+	_ = out
 	for _, h := range res.Hits {
 		out.Hits = append(out.Hits, searchHitDTO(h))
 	}
 	return out
 }
 
+// presentSlices: the contract's frozen optionalität — slices are
+// PRESENT-empty, never null, on the wire (a nil slice would serialize as
+// null and break the frozen shape + the F03 suite's DeepEqual probes).
 func searchHitDTO(h search.Hit) store.SearchHit {
 	hit := store.SearchHit{
 		ChunkID:                 h.ChunkID,
@@ -41,17 +45,28 @@ func searchHitDTO(h search.Hit) store.SearchHit {
 		Score:                   h.Score,
 		Source:                  sourceDTO(h.Source),
 		Locator:                 locatorDTO(h.Locator),
-		Section:                 h.Section,
+		Section:                 presentStrings(h.Section),
 		CaptionText:             h.CaptionText,
 		CollapsedNearDuplicates: h.CollapsedNearDuplicates,
 	}
-	for _, img := range h.Images {
-		hit.Images = append(hit.Images, store.Image{
-			Ref: img.Ref, Marker: img.Marker,
-			MachineCaption: img.MachineCaption, FigureCaption: img.FigureCaption,
-		})
+	if len(h.Images) > 0 {
+		hit.Images = make([]store.Image, 0, len(h.Images))
+		for _, img := range h.Images {
+			hit.Images = append(hit.Images, store.Image{
+				Ref: img.Ref, Marker: img.Marker,
+				MachineCaption: img.MachineCaption, FigureCaption: img.FigureCaption,
+			})
+		}
 	}
 	return hit
+}
+
+// presentStrings guarantees a present (non-nil) slice.
+func presentStrings(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
 }
 
 func sourceDTO(sv repo.SourceView) store.Source {
@@ -59,11 +74,11 @@ func sourceDTO(sv repo.SourceView) store.Source {
 		Bibliography: revision.Bibliography{
 			RecordID:      sv.DocID,
 			Title:         sv.Title,
-			Authors:       sv.Authors,
+			Authors:       presentStrings(sv.Authors),
 			Year:          sv.Year,
 			Publisher:     sv.Publisher,
 			Language:      sv.Language,
-			Tags:          sv.Tags,
+			Tags:          presentStrings(sv.Tags),
 			CitationClass: sv.CitationClass,
 		},
 		ContentType: sv.ContentType,
@@ -97,23 +112,27 @@ func passageDTO(p *search.Passage) store.Passage {
 		RenditionID:    p.AttachmentID, // ADR-0001: attachment_id → rendition_id
 		ChunkIndex:     p.ChunkIndex,
 		Text:           p.Text,
-		Section:        p.Section,
+		Section:        presentStrings(p.Section),
 		Locator:        locatorDTO(p.Locator),
 		Source:         sourceDTO(p.Source),
 		ParagraphPages: p.ParagraphPages,
 		CaptionText:    p.CaptionText,
+		Neighbors:      make([]store.PassageNeighbor, 0, len(p.Neighbors)),
 	}
 	for _, n := range p.Neighbors {
 		out.Neighbors = append(out.Neighbors, store.PassageNeighbor{
 			ChunkID: n.ChunkID, ChunkIndex: n.ChunkIndex, Text: n.Text,
-			Section: n.Section, Locator: locatorDTO(n.Locator),
+			Section: presentStrings(n.Section), Locator: locatorDTO(n.Locator),
 		})
 	}
-	for _, img := range p.Images {
-		out.Images = append(out.Images, store.Image{
-			Ref: img.Ref, Marker: img.Marker,
-			MachineCaption: img.MachineCaption, FigureCaption: img.FigureCaption,
-		})
+	if len(p.Images) > 0 {
+		out.Images = make([]store.Image, 0, len(p.Images))
+		for _, img := range p.Images {
+			out.Images = append(out.Images, store.Image{
+				Ref: img.Ref, Marker: img.Marker,
+				MachineCaption: img.MachineCaption, FigureCaption: img.FigureCaption,
+			})
+		}
 	}
 	return out
 }

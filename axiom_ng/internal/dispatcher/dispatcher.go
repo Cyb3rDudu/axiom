@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 )
@@ -113,11 +112,33 @@ type processorClient interface {
 	Ack(ctx context.Context, jobID string, ack processor.Ack) error
 }
 
+// RepairQueue is the dispatcher's repair-case seam (F09 #303): the wave
+// gate and the auto-queue policy need case writes, but the repair
+// PERSISTENCE is Library-owned since F08 — the boundary keeps the
+// dependency behind this primitive-shaped interface so no Store package
+// imports internal/library/* in production (the boundary lint's
+// transitive Zotero-freedom claim). The composition injects an adapter
+// over library/repair's store.
+type RepairQueue interface {
+	// CreateRepairCase creates (or recycles) a case; caseID empty means
+	// creation failed (err tells why), created distinguishes a fresh case
+	// from a recycled open one (#238).
+	CreateRepairCase(ctx context.Context, attachmentID, documentID, suspicionClass string, analysis json.RawMessage) (caseID string, created bool, err error)
+	QueueRepairCase(ctx context.Context, caseID, suspicionClass string, analysis json.RawMessage) error
+	DocumentHealedCases(ctx context.Context, documentID string) (int, error)
+	WaveRepairGate(ctx context.Context) (blocked bool, reason string, err error)
+}
+
+// repairMaxHealedCases mirrors library/repair.RepairMaxAttempts — the
+// document-level loop bound of the #282 wave guard. A policy integer,
+// owned by the repair track; F11 ports the whole seam.
+const repairMaxHealedCases = 2
+
 // Dispatcher owns the worker pool and the lease/processor plumbing.
 type Dispatcher struct {
 	cfg     Config
 	rep     *repo.Repo
-	repairs *repair.Store
+	repairs RepairQueue
 	client  processorClient
 	logger  *log.Logger
 	// persist is the durability boundary for completed results; nil means jobs
@@ -145,6 +166,12 @@ type Dispatcher struct {
 	runErr  error
 }
 
+// SetRepairQueue wires the repair-case seam (F09 #303). Nil keeps the
+// dispatcher repair-blind: repair-track failures mark the job terminal
+// with their code and log, but no case is created (composition always
+// wires the real adapter; tests inject fakes).
+func (d *Dispatcher) SetRepairQueue(q RepairQueue) { d.repairs = q }
+
 // SetEventBroker attaches the observer-only event bus. Nil (the zero value)
 // disables all emissions (workorder #167: the bus is a passenger — no dispatcher
 // behavior depends on it). Subscribe before Run if you need notifications.
@@ -170,10 +197,11 @@ func New(rep *repo.Repo, client processorClient, cfg Config, logger *log.Logger)
 // pool — the wave-gate and auto-queue policy live under
 // internal/library/repair now, byte-identical semantics.
 func NewWithPersister(rep *repo.Repo, client processorClient, persist ResultPersister, cfg Config, logger *log.Logger) *Dispatcher {
-	var repairs *repair.Store
-	if rep != nil { // unit shapes construct New(nil, …): repairs stays nil and repair paths panic on first use — same failure surface as the pre-F08 nil-rep dispatcher
-		repairs = repair.NewStore(rep.Pool())
-	}
+	// Unit shapes construct New(nil, …): the seam stays nil and the
+	// dispatcher runs repair-BLIND (guarded call sites — no case writes,
+	// no wave gate) instead of panicking; the composition injects the
+	// real adapter.
+	var repairs RepairQueue
 	if cfg.WorkerID == "" {
 		cfg.WorkerID = "axiom-ng"
 	}
@@ -444,11 +472,20 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 		// is claimed. Terminal parks never gate (unrepairable docs are
 		// skipped, documented in their repair case). Observer-only: jobs
 		// are never marked here, claiming is merely deferred.
-		if held, reason, err := d.repairs.WaveRepairGate(ctx); err != nil {
-			if ctx.Err() == nil {
-				d.logger.Printf("slot %d: wave gate check failed: %v", slot, err)
+		held := false
+		reason := ""
+		if d.repairs == nil { // repair-blind shape (no seam wired): no gate
+			// held stays false — claiming proceeds.
+		} else {
+			var err error
+			held, reason, err = d.repairs.WaveRepairGate(ctx)
+			if err != nil {
+				if ctx.Err() == nil {
+					d.logger.Printf("slot %d: wave gate check failed: %v", slot, err)
+				}
 			}
-		} else if held {
+		}
+		if held {
 			d.logger.Printf("slot %d: wave gate: claim deferred (%s) — repair loop-back drains first (#282)", slot, reason)
 			select {
 			case <-ctx.Done():
@@ -800,7 +837,7 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 	// reason and mark the attachment as a repair-case candidate (#206/#203).
 	reason := "preflight:" + report.Finding
 	d.logger.Printf("%v: preflight FAIL (%s) — skipping job, marking repair candidate", fields, reason)
-	if c, created, err := d.repairs.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Finding, qsJSON); err != nil && !isLost(err) {
+	if caseID, created, err := d.repairs.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Finding, qsJSON); err != nil && !isLost(err) {
 		d.logger.Printf("%v: repair-case: %v", fields, err)
 	} else {
 		// #238: only a FRESH case auto-queues (created == false means a
@@ -808,7 +845,7 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 		// verdict). The queue payload is the case's own stored
 		// class/analysis either way. #282: the document-level healed-count
 		// guard lives inside autoQueueRepair.
-		d.autoQueueRepair(ctx, fields, claimed.DocumentID, c, created)
+		d.autoQueueRepair(ctx, fields, claimed.DocumentID, caseID, report.Finding, qsJSON, created)
 	}
 	if err := d.rep.MarkSkipped(ctx, ref, reason); err != nil && !isLost(err) {
 		d.logger.Printf("%v: mark skipped: %v", fields, err)

@@ -4,15 +4,19 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/revision"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/store"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 )
 
 func TestIngestRevisionValidationPrecedence(t *testing.T) {
@@ -26,10 +30,17 @@ func TestIngestRevisionValidationPrecedence(t *testing.T) {
 		t.Fatalf("blank key must be InvalidArgument, got %v", err)
 	}
 	// Invalid revision: InvalidArgument, even on a REUSED key (validation
-	// precedes idempotency — the contract's precedence rule).
-	_, err = svc.IngestRevision(ctx, store.IngestRevisionRequest{IdempotencyKey: "k", Revision: revision.SourceRevision{}})
+	// precedes idempotency — the contract's precedence rule). The key is
+	// one a VALID intake minted first: a lookup-first implementation
+	// staying green here would mean it ignored the stored row's class.
+	hash := revision.HashContent([]byte("precedence bytes"))
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	if _, err := svc.IngestRevision(ctx, store.IngestRevisionRequest{IdempotencyKey: "svc-reused", Revision: seedRevision(srcID, hash)}); err != nil {
+		t.Fatalf("valid mint: %v", err)
+	}
+	_, err = svc.IngestRevision(ctx, store.IngestRevisionRequest{IdempotencyKey: "svc-reused", Revision: revision.SourceRevision{}})
 	if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassInvalidArgument {
-		t.Fatalf("invalid revision must be InvalidArgument, got %v", err)
+		t.Fatalf("invalid revision on a REUSED key must be InvalidArgument, got %v", err)
 	}
 }
 
@@ -184,5 +195,98 @@ func TestIngestRevisionEmptyRenditionIDRejected(t *testing.T) {
 	_, err := svc.IngestRevision(context.Background(), store.IngestRevisionRequest{IdempotencyKey: "rend-empty", Revision: rev})
 	if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassInvalidArgument {
 		t.Fatalf("empty rendition_id must be InvalidArgument, got %v", err)
+	}
+}
+
+// failSearchBackend records the error Search should classify (satisfies
+// SearchBackend with the real search types).
+type failSearchBackend struct {
+	searchErr  error
+	passageErr error
+	lastQuery  string
+}
+
+func (f *failSearchBackend) Search(ctx context.Context, req search.Request) (*search.Response, error) {
+	f.lastQuery = req.Query
+	return nil, f.searchErr
+}
+func (f *failSearchBackend) GetPassage(ctx context.Context, chunkID string) (*search.Passage, error) {
+	return nil, f.passageErr
+}
+
+// TestSearchClassifiesContractErrors — the M2/M3 witnesses at the seam:
+// blank-after-trim queries are InvalidArgument (the wrapped layer's trim
+// rule, mapped HERE — not internal); an inactive-snapshot passage is
+// NotFound (the frozen route's 404 class), not internal.
+func TestSearchClassifiesContractErrors(t *testing.T) {
+	svc := New(nil, &failSearchBackend{}, nil)
+	ctx := context.Background()
+
+	_, err := svc.Search(ctx, store.SearchRequest{Query: "   "})
+	if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassInvalidArgument {
+		t.Fatalf("blank-after-trim query must be InvalidArgument, got %v", err)
+	}
+
+	fb := &failSearchBackend{passageErr: &search.InactiveSnapshotError{ChunkID: "c1"}}
+	svc2 := New(nil, fb, nil)
+	_, err = svc2.GetPassage(ctx, store.PassageRef{ChunkID: "c1"})
+	if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassNotFound {
+		t.Fatalf("inactive-snapshot passage must be NotFound, got %v", err)
+	}
+}
+
+// TestIngestJobDTOPresentSlicesAndFailure — the M4/M5 witnesses at the
+// DTO layer: neighbors/section serialize PRESENT (never null), and a
+// failed job carries its Failure (retryable below budget, terminal at
+// budget).
+func TestIngestJobDTOPresentSlicesAndFailure(t *testing.T) {
+	code, msg := "LEASE_EXHAUSTED", "lease gone"
+	j := &repo.Job{ID: "j1", Status: "failed", Attempt: 3, MaxAttempts: 3,
+		ErrorCode: &code, ErrorMessage: &msg, RevisionNo: "7",
+		UpdatedAt: time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC)}
+	dto := ingestJobDTO(j, revision.SourceRevision{RevisionID: "1"})
+	if dto.Status != store.IngestTerminalFailed || dto.Failure == nil || dto.Failure.Code != code || dto.Failure.Message != msg {
+		t.Fatalf("terminal failed must carry Failure: %+v", dto)
+	}
+	if dto.RevisionID != "7" {
+		t.Fatalf("revision echo must be the ROW's revision, got %q", dto.RevisionID)
+	}
+	j.Attempt = 1
+	dto = ingestJobDTO(j, revision.SourceRevision{RevisionID: "1"})
+	if dto.Status != store.IngestRetryableFailed {
+		t.Fatalf("failed below budget must be retryable, got %q", dto.Status)
+	}
+	b, err := json.Marshal(passageDTO(&search.Passage{ChunkID: "c", Section: nil}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte(`"neighbors":null`)) || bytes.Contains(b, []byte(`"section":null`)) {
+		t.Fatalf("frozen optionalität: slices must be present-empty, got %s", b)
+	}
+}
+
+// TestIngestReplayIdentityDeepEqual — the M6 witness: two service-level
+// replays of the same intake are reflect.DeepEqual (UpdatedAt comes from
+// the row, not the clock).
+func TestIngestReplayIdentityDeepEqual(t *testing.T) {
+	d := openIntakeDB(t)
+	hash := revision.HashContent([]byte("deepequal bytes"))
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	svc := New(repo.New(d.Pool()), nil, nil)
+	ctx := context.Background()
+	req := store.IngestRevisionRequest{IdempotencyKey: "deq", Revision: seedRevision(srcID, hash)}
+	first, err := svc.IngestRevision(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.IngestRevision(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("replay identity broken:\n%+v\n%+v", first, second)
+	}
+	if first.UpdatedAt.Nanosecond()%1000 != 0 {
+		t.Fatalf("UpdatedAt must be µs-aligned (DM03), got %v", first.UpdatedAt)
 	}
 }

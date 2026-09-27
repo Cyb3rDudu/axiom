@@ -19,9 +19,9 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
-	storemigrations "github.com/Cyb3rDudu/axiom/axiom_ng/internal/store/migrations"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom_ng/internal/store/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -427,7 +427,36 @@ func newDispatcher(t *testing.T, h *dispatchHarness, fp *fakeProcessor, cfg Conf
 	if len(c.Profile) == 0 {
 		c.Profile = json.RawMessage(`{"profile":"full-rag-v1"}`)
 	}
-	return NewWithPersister(h.rep, mustClient(t, fp.url()), &recordingPersister{rep: h.rep}, c, log.New(io.Discard, "", 0))
+	d := NewWithPersister(h.rep, mustClient(t, fp.url()), &recordingPersister{rep: h.rep}, c, log.New(io.Discard, "", 0))
+	d.SetRepairQueue(&harnessRepairQueue{store: h.repairs})
+	return d
+}
+
+// harnessRepairQueue adapts the Library-owned repair store onto the
+// dispatcher's primitive seam (test twin of the composition's adapter —
+// same package boundary rule: the harness sees both sides).
+type harnessRepairQueue struct {
+	store *repair.Store
+}
+
+func (a *harnessRepairQueue) CreateRepairCase(ctx context.Context, attachmentID, documentID, suspicionClass string, analysis json.RawMessage) (string, bool, error) {
+	c, created, err := a.store.CreateRepairCase(ctx, attachmentID, documentID, suspicionClass, analysis)
+	if err != nil || c == nil {
+		return "", created, err
+	}
+	return c.ID, created, nil
+}
+
+func (a *harnessRepairQueue) QueueRepairCase(ctx context.Context, caseID, suspicionClass string, analysis json.RawMessage) error {
+	return a.store.QueueRepairCase(ctx, caseID, suspicionClass, analysis)
+}
+
+func (a *harnessRepairQueue) DocumentHealedCases(ctx context.Context, documentID string) (int, error) {
+	return a.store.DocumentHealedCases(ctx, documentID)
+}
+
+func (a *harnessRepairQueue) WaveRepairGate(ctx context.Context) (bool, string, error) {
+	return a.store.WaveRepairGate(ctx)
 }
 
 func mustClient(t *testing.T, base string) *processor.Client {

@@ -6,9 +6,9 @@
 package sync
 
 import (
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"context"
 	"encoding/json"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"log"
 	"os"
 	"testing"

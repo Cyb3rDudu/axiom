@@ -4,11 +4,11 @@
 package sync
 
 import (
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
 	"log"
 	"os"
 	"sync"

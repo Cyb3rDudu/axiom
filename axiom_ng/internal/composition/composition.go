@@ -909,6 +909,10 @@ func (r *Root) componentsFor() []Component {
 			// #168 (B2): let the dispatcher EMIT lifecycle events onto the
 			// shared broker (observer-only passenger).
 			r.disp.SetEventBroker(r.broker)
+			// F09 #303: the repair-case seam — the adapter over the
+			// Library-owned repair store keeps internal/library/* out of
+			// the dispatcher's production imports.
+			r.disp.SetRepairQueue(&repairQueueAdapter{store: repair.NewStore(r.rep.Pool())})
 			// #214: a fatal dispatcher error must exit the process non-zero
 			// so launchd/KeepAlive restarts it. A graceful shutdown
 			// (rootCtx cancelled) returns nil and never lands here.
