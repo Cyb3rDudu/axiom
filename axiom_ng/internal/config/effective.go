@@ -52,20 +52,33 @@ var envRows = []envRow{
 	{"AXIOM_OPENSEARCH_USERNAME", "OpenSearchUsername", false},
 	{"AXIOM_OPENSEARCH_PASSWORD", "OpenSearchPassword", true},
 	{"AXIOM_PROCESSOR_SOURCE_SECRET", "ProcessorSourceSecret", true},
+	// F10 #304: dispatcher-side compute-worker pointing vars. Canonical
+	// AXIOM_COMPUTE_WORKER_* spelling first; the legacy row (mostly
+	// AXIOM_PROCESSOR_*) keeps working through the deprecation witness
+	// (config.Load records its use). Dual-fed fields render their source
+	// from the resolver's truth — see dualFedEnv below. The worker's OWN
+	// env contract (read by the Python service) is unchanged per #304.
+	{"AXIOM_COMPUTE_WORKER_SOURCE_SECRET", "ProcessorSourceSecret", true},
 	{"AXIOM_WS_SECRET", "WSSecret", true},
 	{"AXIOM_PROCESSOR_SOURCE_BASE_URL", "ProcessorSourceBaseURL", false},
+	{"AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL", "ProcessorSourceBaseURL", false},
 	{"AXIOM_PROCESSOR_URL", "ProcessorURL", false},
+	{"AXIOM_COMPUTE_WORKER_URL", "ProcessorURL", false},
 	{"AXIOM_QUERY_RUNNER_URL", "QueryRunnerURL", false},
 	{"AXIOM_INGEST_FALLBACK_URL", "IngestFallbackURL", false},
 	{"AXIOM_PROCESSOR_URLS", "ProcessorURLs", false},
+	{"AXIOM_COMPUTE_WORKER_URLS", "ProcessorURLs", false},
 	{"AXIOM_RUNNER_HEALTH_INTERVAL", "RunnerHealthInterval", false},
+	{"AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL", "RunnerHealthInterval", false},
 	{"AXIOM_SEARCH_SPARSE_ARM", "SearchSparseArm", false},
 	{"AXIOM_SEARCH_GRAPH_ARM", "SearchGraphArm", false},
 	{"AXIOM_SEARCH_RERANK", "SearchRerank", false},
 	{"AXIOM_SEARCH_FRONTMATTER_FILTER", "SearchFrontmatterFilter", false},
 	{"AXIOM_SEARCH_MAX_PER_BOOK", "SearchMaxPerBook", false},
 	{"AXIOM_PROCESSOR_TIMEOUT", "ProcessorRequestTimeout", false},
+	{"AXIOM_COMPUTE_WORKER_TIMEOUT", "ProcessorRequestTimeout", false},
 	{"AXIOM_PROCESSOR_RUNNER_NAME", "ProcessorRunnerName", false},
+	{"AXIOM_COMPUTE_WORKER_NAME", "ProcessorRunnerName", false},
 	{"AXIOM_DISPATCHER_ENABLED", "DispatcherEnabled", false},
 	{"AXIOM_DISPATCHER_WORKER_ID", "DispatcherWorkerID", false},
 	{"AXIOM_DISPATCHER_CONCURRENCY", "DispatcherConcurrency", false},
@@ -98,6 +111,23 @@ var envRows = []envRow{
 // RedactedValue is the placeholder every secret row carries in output.
 const RedactedValue = "<redacted>"
 
+// dualFedEnv maps a dual-fed Config field to its (canonical, legacy) env
+// pair — fields resolved by PRECEDENCE in config.go (F08 FixerCommand,
+// F10 compute-worker pointing vars). The rows tell the resolver's truth:
+// source=env ONLY on the row whose key actually fed the value; a shadowed
+// or empty var renders default (its health-counter witness in
+// /api/health/deprecations is the "is it set?" surface).
+var dualFedEnv = map[string][2]string{
+	"FixerCommand":            {"AXIOM_REPAIR_WORKER_CMD", "AXIOM_FIXER_CMD"},
+	"ProcessorURL":            {"AXIOM_COMPUTE_WORKER_URL", "AXIOM_PROCESSOR_URL"},
+	"ProcessorURLs":           {"AXIOM_COMPUTE_WORKER_URLS", "AXIOM_PROCESSOR_URLS"},
+	"ProcessorRunnerName":     {"AXIOM_COMPUTE_WORKER_NAME", "AXIOM_PROCESSOR_RUNNER_NAME"},
+	"RunnerHealthInterval":    {"AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL", "AXIOM_RUNNER_HEALTH_INTERVAL"},
+	"ProcessorRequestTimeout": {"AXIOM_COMPUTE_WORKER_TIMEOUT", "AXIOM_PROCESSOR_TIMEOUT"},
+	"ProcessorSourceSecret":   {"AXIOM_COMPUTE_WORKER_SOURCE_SECRET", "AXIOM_PROCESSOR_SOURCE_SECRET"},
+	"ProcessorSourceBaseURL":  {"AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL", "AXIOM_PROCESSOR_SOURCE_BASE_URL"},
+}
+
 // Effective renders the resolved view of cfg: one Entry per env row, in
 // table order. Secrets are redacted; the DSN is projected without its
 // credential part so operators can still see WHERE the process points.
@@ -113,22 +143,16 @@ func Effective(cfg Config) []Entry {
 		if _, set := os.LookupEnv(row.env); set {
 			source = "env"
 		}
-		// F08 #302, review round 3: FixerCommand is DUAL-FED (canonical
-		// AXIOM_REPAIR_WORKER_CMD wins over legacy AXIOM_FIXER_CMD in
-		// repairWorkerCmd). The generic per-key LookupEnv lied twice on
-		// this field: with both set, the legacy row rendered the
-		// canonical VALUE under source=env (as if the legacy var produced
-		// it); with only legacy set, the canonical row rendered the
-		// legacy value under source=default. The rows now tell the
-		// resolver's truth: source=env ONLY on the row whose key actually
-		// fed the value (a shadowed or empty var renders default — its
-		// health-counter witness in /api/health/deprecations is the
-		// "is it set?" surface).
-		if row.field == "FixerCommand" {
-			canonicalSet := os.Getenv("AXIOM_REPAIR_WORKER_CMD") != ""
-			legacySet := os.Getenv("AXIOM_FIXER_CMD") != ""
-			fed := (row.env == "AXIOM_REPAIR_WORKER_CMD" && canonicalSet) ||
-				(row.env == "AXIOM_FIXER_CMD" && legacySet && !canonicalSet)
+		// Dual-fed fields (F08 #302, generalized F10 #304): the generic
+		// per-key LookupEnv lied twice on these (with both set, the legacy
+		// row rendered the canonical VALUE under source=env; with only
+		// legacy set, the canonical row rendered the legacy value under
+		// source=default). The pair table above tells the resolver's truth.
+		if pair, dual := dualFedEnv[row.field]; dual {
+			canonicalSet := os.Getenv(pair[0]) != ""
+			legacySet := os.Getenv(pair[1]) != ""
+			fed := (row.env == pair[0] && canonicalSet) ||
+				(row.env == pair[1] && legacySet && !canonicalSet)
 			if fed {
 				source = "env"
 			} else {

@@ -229,21 +229,21 @@ func Load() Config {
 		OpenSearchURL:              envEmptyDisables("AXIOM_OPENSEARCH_URL", "http://127.0.0.1:9200"),
 		OpenSearchUsername:         env("AXIOM_OPENSEARCH_USERNAME", ""),
 		OpenSearchPassword:         env("AXIOM_OPENSEARCH_PASSWORD", ""),
-		ProcessorSourceSecret:      env("AXIOM_PROCESSOR_SOURCE_SECRET", ""),
+		ProcessorSourceSecret:      computeWorkerEnv("AXIOM_COMPUTE_WORKER_SOURCE_SECRET", "AXIOM_PROCESSOR_SOURCE_SECRET", ""),
 		WSSecret:                   env("AXIOM_WS_SECRET", ""),
-		ProcessorSourceBaseURL:     env("AXIOM_PROCESSOR_SOURCE_BASE_URL", ""),
-		ProcessorURL:               env("AXIOM_PROCESSOR_URL", defaultLocalRunner),
+		ProcessorSourceBaseURL:     computeWorkerEnv("AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL", "AXIOM_PROCESSOR_SOURCE_BASE_URL", ""),
+		ProcessorURL:               computeWorkerEnv("AXIOM_COMPUTE_WORKER_URL", "AXIOM_PROCESSOR_URL", defaultLocalRunner),
 		QueryRunnerURL:             env("AXIOM_QUERY_RUNNER_URL", defaultLocalRunner),
 		IngestFallbackURL:          env("AXIOM_INGEST_FALLBACK_URL", defaultLocalRunner),
-		ProcessorURLs:              parseURLList(env("AXIOM_PROCESSOR_URLS", "")),
-		RunnerHealthInterval:       envDur("AXIOM_RUNNER_HEALTH_INTERVAL", 60*time.Second),
+		ProcessorURLs:              parseURLList(computeWorkerEnv("AXIOM_COMPUTE_WORKER_URLS", "AXIOM_PROCESSOR_URLS", "")),
+		RunnerHealthInterval:       computeWorkerDur("AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL", "AXIOM_RUNNER_HEALTH_INTERVAL", 60*time.Second),
 		SearchSparseArm:            envBoolDefault("AXIOM_SEARCH_SPARSE_ARM", false),
 		SearchGraphArm:             envBoolDefault("AXIOM_SEARCH_GRAPH_ARM", false),
 		SearchRerank:               envBoolDefault("AXIOM_SEARCH_RERANK", true),
 		SearchFrontmatterFilter:    envBoolDefault("AXIOM_SEARCH_FRONTMATTER_FILTER", true),
 		SearchMaxPerBook:           envInt("AXIOM_SEARCH_MAX_PER_BOOK", 2),
-		ProcessorRequestTimeout:    envDur("AXIOM_PROCESSOR_TIMEOUT", 300*time.Second),
-		ProcessorRunnerName:        env("AXIOM_PROCESSOR_RUNNER_NAME", ""),
+		ProcessorRequestTimeout:    computeWorkerDur("AXIOM_COMPUTE_WORKER_TIMEOUT", "AXIOM_PROCESSOR_TIMEOUT", 300*time.Second),
+		ProcessorRunnerName:        computeWorkerEnv("AXIOM_COMPUTE_WORKER_NAME", "AXIOM_PROCESSOR_RUNNER_NAME", ""),
 		DispatcherEnabled:          envBool("AXIOM_DISPATCHER_ENABLED"),
 		DispatcherWorkerID:         env("AXIOM_DISPATCHER_WORKER_ID", "axiom-ng"),
 		DispatcherConcurrency:      envInt("AXIOM_DISPATCHER_CONCURRENCY", 0), // 0 = derive from Σ live runner capacities (#248)
@@ -299,6 +299,43 @@ func repairWorkerCmd() string {
 		return v
 	}
 	return "/opt/axiom/bin/axiom-repair-worker"
+}
+
+// computeWorkerEnv resolves a dispatcher-side compute-worker setting
+// (F10 #304, ADR 0001 §4, the F08 repairWorkerCmd schema): the canonical
+// AXIOM_COMPUTE_WORKER_* spelling wins; the legacy spelling (mostly
+// AXIOM_PROCESSOR_*) keeps the 0.1.x contract working through the
+// deprecation witness — remote carrier deployments change nothing during
+// 0.2.x. The worker's OWN env contract (AXIOM_PROCESSOR_* read by the
+// Python service) is deliberately NOT renamed: frozen per #304.
+func computeWorkerEnv(canonical, legacy, fallback string) string {
+	if v := os.Getenv(canonical); v != "" {
+		return v
+	}
+	if v := os.Getenv(legacy); v != "" {
+		deprecate.Use(legacy)
+		return v
+	}
+	return fallback
+}
+
+// computeWorkerDur is computeWorkerEnv for duration-valued settings; an
+// unparseable legacy value falls through to the default (envDur
+// semantics), the canonical value is held to the same tolerance.
+func computeWorkerDur(canonical, legacy string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(canonical); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+		return fallback
+	}
+	if v := os.Getenv(legacy); v != "" {
+		deprecate.Use(legacy)
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return fallback
 }
 
 func env(key, fallback string) string {
