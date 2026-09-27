@@ -130,5 +130,5 @@ You can read the binding, complete contract text in the canonical file:
 - Repo path: `axiom_ng/docs/PROCESSOR_CONTRACT.md`
 - GitHub: [PROCESSOR_CONTRACT.md](https://github.com/Cyb3rDudu/axiom/blob/main/axiom_ng/docs/PROCESSOR_CONTRACT.md)
 
-Continue: [axiom runner](axiom-runner.md) ·
+Continue: [axiom runner](compute-worker.md) ·
 [axiom dispatcher](axiom-go.md) · [Architecture Overview](architecture.md)

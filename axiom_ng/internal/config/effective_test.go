@@ -45,6 +45,66 @@ func TestEffectiveTableCoversAllReadKeys(t *testing.T) {
 	}
 }
 
+// TestDualFedEnvPairsMatchTableAndLoader — drift guard for the dual-fed
+// pair table (F08 #302, F10 #304): every dualFedEnv field must own exactly
+// its two table rows (canonical + legacy spelling), and every
+// computeWorkerEnv/computeWorkerDur call-site pair in config.go must be
+// tabled under the field it feeds — a new or retyped pointing var cannot
+// silently lose its resolver truth.
+func TestDualFedEnvPairsMatchTableAndLoader(t *testing.T) {
+	// part 1: the pair table vs envRows — exactly two rows per field,
+	// and their env keys are exactly the pair.
+	for field, pair := range dualFedEnv {
+		var rows []string
+		for _, row := range envRows {
+			if row.field == field {
+				rows = append(rows, row.env)
+			}
+		}
+		if len(rows) != 2 {
+			t.Fatalf("dualFedEnv field %s has %d envRows rows, want exactly 2 (canonical+legacy)", field, len(rows))
+		}
+		if !(rows[0] == pair[0] && rows[1] == pair[1]) && !(rows[0] == pair[1] && rows[1] == pair[0]) {
+			t.Errorf("dualFedEnv field %s pair {%s,%s} != envRows {%s,%s}", field, pair[0], pair[1], rows[0], rows[1])
+		}
+	}
+
+	// part 2: computeWorkerEnv/computeWorkerDur call sites vs the table.
+	// FixerCommand (F08 repairWorkerCmd) is resolved by a different helper
+	// and stays table-only.
+	src, err := os.ReadFile("config.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	callRe := regexp.MustCompile(`(\w+):\s*(?:parseURLList\()?computeWorker(?:Env|Dur)\("([A-Z0-9_]+)", "([A-Z0-9_]+)"`)
+	calls := map[string][2]string{}
+	for _, m := range callRe.FindAllStringSubmatch(string(src), -1) {
+		field, canon, legacy := m[1], m[2], m[3]
+		if prev, dup := calls[field]; dup {
+			t.Fatalf("field %s has two computeWorker* call sites (%s/%s vs %s/%s)", field, prev[0], prev[1], canon, legacy)
+		}
+		calls[field] = [2]string{canon, legacy}
+	}
+	for field, pair := range dualFedEnv {
+		if field == "FixerCommand" {
+			continue
+		}
+		got, ok := calls[field]
+		if !ok {
+			t.Errorf("dualFedEnv field %s has no computeWorkerEnv/Dur call site in config.go", field)
+			continue
+		}
+		if got != pair {
+			t.Errorf("dualFedEnv field %s pair {%s,%s} != call site {%s,%s}", field, pair[0], pair[1], got[0], got[1])
+		}
+	}
+	for field := range calls {
+		if _, ok := dualFedEnv[field]; !ok {
+			t.Errorf("config.go feeds %s via computeWorker* but dualFedEnv has no entry — add it (Effective source annotation will lie)", field)
+		}
+	}
+}
+
 // TestEffectiveMarksSourcesAndRedacts — source annotation follows
 // LookupEnv (set-but-empty counts as env), secrets never carry values,
 // the DSN is projected credential-free.

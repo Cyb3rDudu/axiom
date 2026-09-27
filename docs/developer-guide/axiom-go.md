@@ -204,5 +204,5 @@ variables at startup (see the [complete table](configuration.md)). The
 changing it affects only newly claimed jobs, not in-flight ones.
 
 Continue: [Processor Contract](processor-contract.md) ·
-[axiom runner](axiom-runner.md) ·
+[axiom runner](compute-worker.md) ·
 [References → Data Model](../references/data-model.md)

@@ -24,7 +24,7 @@ flowchart LR
 Both run on their own host: the **axiom dispatcher** (owns all state, leases,
 durability, and the search index) and the **axiom runner** (pure compute —
 conversion, chunking, embeddings, entity/relation extraction, and query
-embed/rerank). More detail on roles in the [Developer Guide → axiom runner](../developer-guide/axiom-runner.md).
+embed/rerank). More detail on roles in the [Developer Guide → axiom runner](../developer-guide/compute-worker.md).
 
 The runner is **pure compute**: it never touches Postgres, OpenSearch, or
 Zotero. All durable state stays with the dispatcher. Only the HTTP contract

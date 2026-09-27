@@ -28,7 +28,7 @@ axiom dispatcher  ──HTTP contract──▶  axiom runner
 owns state, queue, search index        does conversion, chunking, ML
 ```
 
-1. **Run the axiom runner** (no GPU needed for a first test):
+1. **Run the axiom compute worker** (no GPU needed for a first test):
 
    ```bash
    python3 -m venv .venv

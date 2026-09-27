@@ -51,7 +51,7 @@ from tools import (  # noqa: E402
 FIX = PKG / "fixtures"
 REPO = PKG.parents[2]
 STUFE1 = REPO / "scripts" / "pdf_label_surgery.py"
-RUNNER_PY = REPO / "axiom_ng_runner" / ".venv" / "bin" / "python"
+RUNNER_PY = REPO / "axiom-compute-worker" / ".venv" / "bin" / "python"
 DIFFICULT = FIX / "difficult"
 
 needs_stufe1 = pytest.mark.skipif(

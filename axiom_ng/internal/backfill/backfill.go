@@ -353,14 +353,13 @@ func RunEngine(ctx context.Context, python, runnerDir, epub, sourceKind, pdfPath
 	cmd := exec.CommandContext(cctx, python, args...)
 	// HERMETIC module resolution (#233 review): `python -m axiom_compute_worker.…`
 	// must import the STRAND's package, never whatever checkout the runner
-	// venv happens to have editable-installed. cwd = the repo root (parent of
-	// runnerDir) puts the strand package at sys.path[0], which strictly beats
-	// any site-packages/editable finder; PYTHONPATH is belt-and-braces for
-	// the same root. (cmd.Dir = runnerDir itself is NOT importable — the
-	// package dir lies one level up.)
-	repoRoot := filepath.Dir(runnerDir)
-	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "PYTHONPATH="+repoRoot)
+	// venv happens to have editable-installed. cwd = the runner project dir
+	// puts the nested axiom_compute_worker package at sys.path[0] (cwd wins
+	// over any site-packages/editable finder); PYTHONPATH is belt-and-braces
+	// for the same dir — mirrors the sibling callers in cmd/caption-backfill
+	// and cmd/figcap-backfill.
+	cmd.Dir = runnerDir
+	cmd.Env = append(os.Environ(), "PYTHONPATH="+runnerDir)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -495,9 +494,9 @@ func FindPython(runnerDir string) string {
 func FindRunnerDir() string {
 	for _, c := range []string{
 		"axiom-compute-worker",
-		"../axiom_compute_worker",
-		"../../axiom_compute_worker",
-		"../../../axiom_compute_worker",
+		"../axiom-compute-worker",
+		"../../axiom-compute-worker",
+		"../../../axiom-compute-worker",
 	} {
 		if abs, err := filepath.Abs(c); err == nil {
 			if _, err := os.Stat(filepath.Join(abs, "pyproject.toml")); err == nil {

@@ -579,8 +579,8 @@ pages. An `epub_cfi` locator carries `page_source: "none"` — or, when the
 book ships a monotone publisher page-anchor map (#220: `epub:type="pagebreak"`,
 `class="page"`, `id="page_N"`, Adobe `page-map.xml`), the additive fields
 `page_start`/`page_end` plus the trust level
-(`"print_verified"` / `"derived_from_sibling"` / `"print_unverified"` —
-# 223 TOC proof, #222 sibling-derived injection with explicit OPF
+(`"print_verified"` / `"derived_from_sibling"` / `"print_unverified"`
+— #223 TOC proof, #222 sibling-derived injection with explicit OPF
 provenance, or markers without proof) and a `chapter` ordinal (1-based
 spine position, parity with PDF locators).
 

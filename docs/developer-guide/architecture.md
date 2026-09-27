@@ -2,7 +2,7 @@
 
 > This is the entry chapter for developers. It gives the subsystem map, the
 > transport rule, and the ownership boundary. Deeper chapters cover the two
-> components ([axiom dispatcher](axiom-go.md), [axiom runner](axiom-runner.md)),
+> components ([axiom dispatcher](axiom-go.md), [axiom runner](compute-worker.md)),
 > [configuration](configuration.md), [testing](testing.md), and the
 > [data model](../references/data-model.md).
 
@@ -59,7 +59,7 @@ runner never does.
    chunker, BGE-M3 embedder, GLiNER/mREBEL extractors). It owns only computation
    and temporary job output, never durable application state — and it also
    serves the query endpoints (`/v1/embed`, `/v1/rerank`) for search.
-   [Continue: axiom runner](axiom-runner.md)
+   [Continue: axiom runner](compute-worker.md)
 3. **Transport rule (contract v1)** — dispatcher and runner exchange only the
    HTTP contract. Sources travel via a signed `source_url`; results and
    artifacts are pulled; the ACK is pushed. Bulk flows need direct LAN
@@ -93,7 +93,7 @@ runner (`localhost:8012`): a **query role** (embed/rerank for the search API)
 and an **ingest role** (`POST /v1/process`) with a primary + fallback failover
 chain. The full role model — the env vars, the failover chain, the ~11×
 local-runner trade-off — lives in
-[axiom runner → Roles](axiom-runner.md#roles).
+[axiom runner → Roles](compute-worker.md#roles).
 
 At startup the dispatcher probes capabilities and logs the resolved role wiring
 (which URL plays query vs. ingest) so a misconfigured deployment is visible. A
@@ -303,10 +303,10 @@ carries the numbers.
 
 - Contract in detail: [Processor Contract](processor-contract.md)
 - Dispatcher/leases/persistence: [axiom dispatcher](axiom-go.md)
-- Runner + endpoints + roles: [axiom runner](axiom-runner.md)
+- Runner + endpoints + roles: [axiom runner](compute-worker.md)
 - Full `AXIOM_*` table: [Configuration](configuration.md)
 - Operations: [Operations → Deployment](../operations/deployment.md)
 - Schema and invariants: [Data Model](../references/data-model.md)
 - Client-facing routes and response contracts: [HTTP API](../references/api.md)
 
-Continue: [axiom dispatcher](axiom-go.md) · [axiom runner](axiom-runner.md)
+Continue: [axiom dispatcher](axiom-go.md) · [axiom runner](compute-worker.md)
