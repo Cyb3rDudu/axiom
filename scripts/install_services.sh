@@ -7,7 +7,7 @@
 #   · preflight asserts env files + /opt install BEFORE the prompt
 #   · operator confirmation with the full target list BEFORE anything moves
 #   · existing agents are bootout'd, then bootstrap'd + kickstart'd
-# Services: com.axiom.rag, com.axiom.rag-dispatch-gpu0/1/2, com.axiom.runner
+# Services: com.axiom.rag, com.axiom.rag-dispatch-gpu0/1/2, com.axiom.compute-worker
 #           (+ com.axiom.carrier-bridge as explicit opt-in template)
 # The fixer is NOT a service — event runner via scripts/fix.sh (owner ruling).
 set -eu
@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/deploy/launchd"
 DEST="$HOME/Library/LaunchAgents"
 LOGS="$HOME/.local/state/axiom/logs"
-SERVICES="com.axiom.rag com.axiom.rag-dispatch-gpu0 com.axiom.rag-dispatch-gpu1 com.axiom.rag-dispatch-gpu2 com.axiom.runner"
+SERVICES="com.axiom.rag com.axiom.rag-dispatch-gpu0 com.axiom.rag-dispatch-gpu1 com.axiom.rag-dispatch-gpu2 com.axiom.compute-worker"
 ENV_FILES="rag.env rag-api.env rag-dispatch-gpu0.env rag-dispatch-gpu1.env rag-dispatch-gpu2.env runner.env"
 UID_N="$(id -u)"
 
@@ -26,14 +26,14 @@ with_bridge=0
 # --- preflight: everything the services need must exist BEFORE the prompt ---
 # JSON validation runs on the runner env's python (already a required
 # prereq below) — no new host dependency, no macOS CLT python3 stub trap.
-PY3=/opt/axiom/runner/current/env/bin/python
+PY3=/opt/axiom/compute-worker/current/env/bin/python
 
 missing=""
 for f in $ENV_FILES; do
     [ -f "$HOME/.config/axiom/$f" ] || missing="$missing\n  ~/.config/axiom/$f (0700, secrets here)"
 done
 [ -x /opt/axiom/bin/axiom-ng ] || missing="$missing\n  /opt/axiom/bin/axiom-ng (make install / install_release.sh)"
-[ -x /opt/axiom/runner/current/env/bin/python ] || missing="$missing\n  /opt/axiom/runner/current/env/bin/python"
+[ -x /opt/axiom/compute-worker/current/env/bin/python ] || missing="$missing\n  /opt/axiom/compute-worker/current/env/bin/python"
 if [ "$with_bridge" = 1 ] && grep -q __BRIDGE_CMD__ "$SRC/com.axiom.carrier-bridge.plist" 2>/dev/null; then
     missing="$missing\n  carrier-bridge template still contains __BRIDGE_CMD__ (edit deploy/launchd/com.axiom.carrier-bridge.plist first!)"
 fi
@@ -73,7 +73,7 @@ fi
 echo "services to install into $DEST:"
 for s in $SERVICES; do echo "  $s -> $DEST/$s.plist (logs: $LOGS/)"; done
 [ "$with_bridge" = 1 ] && echo "  com.axiom.carrier-bridge (template — edit __BRIDGE_CMD__ first!)"
-echo "Prereqs: /opt/axiom/bin/axiom-ng + /opt/axiom/runner/current (make install), env files in ~/.config/axiom/*.env (0700)."
+echo "Prereqs: /opt/axiom/bin/axiom-ng + /opt/axiom/compute-worker/current (make install), env files in ~/.config/axiom/*.env (0700)."
 echo "Proceed? [yes/No]"
 read -r answer
 [ "$answer" = "yes" ] || {

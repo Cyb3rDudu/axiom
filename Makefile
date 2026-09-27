@@ -53,10 +53,10 @@ clean:
 install: ## Operator-gated: dist/ artifacts -> /opt/axiom (asks first)
 	./scripts/install_dist.sh rag $(VERSION)
 
-test: ## All suites: fix-convention, Go (vet+test), runner, fixer isolation+
+test: ## All suites: fix-convention, Go (vet+test), compute worker, fixer isolation+
 	./scripts/test_fix_convention.sh
 	cd axiom_ng && go vet ./... && go test ./...
-	@[ -x axiom-compute-worker/.venv/bin/python ] || { echo "runner: venv missing — bootstrap first (axiom-compute-worker/.venv)"; exit 1; }
+	@[ -x axiom-compute-worker/.venv/bin/python ] || { echo "compute-worker: venv missing — bootstrap first (axiom-compute-worker/.venv)"; exit 1; }
 	cd axiom-compute-worker && .venv/bin/python -m pytest -q
 	@[ -x axiom_ng/tools/pdf_repair_agent/.venv/bin/python ] || { echo "fixer: venv missing — bootstrap first (axiom_ng/tools/pdf_repair_agent: ./bootstrap.sh)"; exit 1; }
 	cd axiom_ng/tools/pdf_repair_agent && .venv/bin/python -m pytest -q

@@ -101,12 +101,17 @@ compute-worker | runner)
     case "$component" in
     runner) echo "axiom: 'runner' is deprecated — use 'compute-worker' (ADR 0001: docs/adr/0001-canonical-naming.md)" >&2 ;;
     esac
+    module=axiom_compute_worker
     art=$(find_artifact "axiom-compute-worker-$version-*.tar.zst") || {
-        # pre-F10 artifacts carry the legacy name — installable unchanged
+        # pre-F10 artifacts carry the legacy name — installable unchanged;
+        # they ship the real axiom_ng_runner package (pre-alias era), so
+        # the smoke import and the wrapper exec target must follow the
+        # artifact, not the canonical spelling
         art=$(find_artifact "axiom-runner-$version-*.tar.zst") || {
             echo "no compute-worker artifact for $version in $DIST/ — run: make compute-worker"
             exit 1
         }
+        module=axiom_ng_runner
     }
     require_zstd
     target="$ROOT/compute-worker/$version"
@@ -125,10 +130,11 @@ compute-worker | runner)
     # smoke: import surface must resolve in the FINAL location before the
     # current symlink switches over
     # smoke from a NEUTRAL cwd (tests the env, not a source tree — #209 lesson)
-    (cd / && "$target/env/bin/python" -c 'import axiom_compute_worker, torch')
+    (cd / && "$target/env/bin/python" -c "import $module, torch")
     cat >"$ROOT/bin/axiom-compute-worker" <<EOF
 #!/bin/sh
-exec "$ROOT/compute-worker/current/env/bin/python" -m axiom_compute_worker "\$@"
+# entrypoint module follows the installed artifact era ($module)
+exec "$ROOT/compute-worker/current/env/bin/python" -m $module "\$@"
 EOF
     chmod +x "$ROOT/bin/axiom-compute-worker"
     # legacy axiom-runner wrapper: warns exactly once per invocation, then
@@ -195,7 +201,7 @@ EOF
     echo "rollback:  ln -sfn <prev-version> $ROOT/fixer/current (repair worker is event-driven: fix.sh picks up current on next invocation)"
     ;;
 *)
-    echo "unknown component '$component' (rag|runner|fixer)"
+    echo "unknown component '$component' (rag|compute-worker|runner|fixer)"
     exit 1
     ;;
 esac

@@ -130,6 +130,12 @@ if [ "$MODE" = release ]; then
         note "release RAG verified against checksum (no /opt/axiom to compare — non-prod host?)"
     fi
 
+    # pre-F10 releases ship the worker env under the legacy axiom-runner
+    # asset name; from the first post-F10 release the canonical name wins
+    if ! gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" --json assets --jq '.assets[].name' 2>/dev/null |
+        grep -qx "$RUNNER_ASSET"; then
+        RUNNER_ASSET="axiom-runner-$RELEASE_GEN-macos-arm64.tar.zst"
+    fi
     fetch_asset "$RUNNER_ASSET"
     # unpack once per tarball content (marker = verified sha); conda-unpack
     # is part of the one-time relocation fixup

@@ -88,7 +88,7 @@ APP="${AXIOM_FIXER_APP:-/opt/axiom/fixer/current/app/repair_agent.py}"
 rc=0
 if [ "$FORMAT" = "epub" ]; then
     # #220: mechanical EPUB repair — runner env, no agent, no models.
-    RUNNER_PY="${AXIOM_RUNNER_PYTHON:-/opt/axiom/runner/current/env/bin/python}"
+    RUNNER_PY="${AXIOM_RUNNER_PYTHON:-/opt/axiom/compute-worker/current/env/bin/python}"
     [ -x "$RUNNER_PY" ] || {
         echo "fix: runner python not installed at $RUNNER_PY (EPUB arm)" >&2
         exit 1

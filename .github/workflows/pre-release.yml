@@ -53,7 +53,7 @@ jobs:
             dist/axiom-*-darwin-arm64.sha256
             dist/axiom-fixer-*.tar.zst
             dist/axiom-fixer-*.tar.zst.sha256
-            dist/axiom-runner-*.tar.zst
-            dist/axiom-runner-*.tar.zst.sha256
+            dist/axiom-compute-worker-*.tar.zst
+            dist/axiom-compute-worker-*.tar.zst.sha256
           retention-days: 30
           if-no-files-found: error

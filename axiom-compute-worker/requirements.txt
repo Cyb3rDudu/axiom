@@ -1,4 +1,4 @@
-# axiom_ng_runner — processor contract-v1 service
+# axiom-compute-worker — processor contract-v1 service (formerly axiom_ng_runner, F10 #304)
 # Loopback HTTP document processor. Only computation + temporary job output.
 # Heavy/GPU deps (torch, FlagEmbedding, gliner, mrebel, marker-pdf) are needed
 # ONLY for the "real" compute backend; the default "reference" backend (used by

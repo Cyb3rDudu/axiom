@@ -1,4 +1,5 @@
-# axiom_ng_runner — heavy-compute dependencies for the REAL backend (Gate 5).
+# axiom-compute-worker — heavy-compute dependencies for the REAL backend (Gate 5)
+# (formerly axiom_ng_runner, F10 #304).
 # Install ON TOP of requirements.txt (the reference/lightweight deps) when running
 # AXIOM_PROCESSOR_COMPUTE=real. These pull torch, transformers, and ML models.
 #

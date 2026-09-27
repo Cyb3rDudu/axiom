@@ -137,4 +137,4 @@ artifact_strip_pycache "$STAGE"
 tar --zstd -C "$BUILD" -cf "$ARTIFACT" "compute-worker-$VERSION"
 (cd "$DIST" && shasum -a 256 "${ARTIFACT##*/}" >"${ARTIFACT##*/}.sha256")
 echo "runner-artifact: $ARTIFACT"
-echo "install: extract to /opt/axiom/runner/$VERSION, then run env/bin/conda-unpack once"
+echo "install: extract to /opt/axiom/compute-worker/$VERSION, then run env/bin/conda-unpack once"
