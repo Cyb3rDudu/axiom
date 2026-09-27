@@ -12,7 +12,7 @@
 // re-chunking, no re-conversion, no re-captioning — the fix is a pure
 // extraction pass over text that is already stored. Idempotent: a second run
 // reports 0 changes and writes nothing. The plan is all-or-nothing: the
-// Python engine (axiom_ng_runner compute_core/figcap_backfill_cli.py, real
+// Python engine (axiom_compute_worker compute_core/figcap_backfill_cli.py, real
 // BGE-M3) computes every new caption and vector BEFORE a single write, so a
 // failure leaves the corpus untouched.
 //
@@ -365,17 +365,17 @@ func runEngine(ctx context.Context, input []byte, planOnly bool) ([]engineRow, e
 		runnerDir = backfill.FindRunnerDir()
 	}
 	if runnerDir == "" {
-		return nil, fmt.Errorf("no axiom_ng_runner checkout found (set AXIOM_RUNNER_DIR)")
+		return nil, fmt.Errorf("no axiom_compute_worker checkout found (set AXIOM_RUNNER_DIR)")
 	}
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Minute)
 	defer cancel()
-	args := []string{"-m", "axiom_ng_runner.compute_core.figcap_backfill_cli"}
+	args := []string{"-m", "axiom_compute_worker.compute_core.figcap_backfill_cli"}
 	if planOnly {
 		args = append(args, "--plan-only")
 	}
 	cmd := exec.CommandContext(cctx, python, args...)
 	cmd.Dir = runnerDir
-	// The package is axiom_ng_runner (the runner checkout IS the package
+	// The package is axiom_compute_worker (the runner checkout IS the package
 	// dir), so its PARENT must be importable; prepend it so a worktree
 	// checkout wins over a site-packages install.
 	cmd.Env = append(os.Environ(), "PYTHONPATH="+filepath.Dir(runnerDir)+string(os.PathListSeparator)+runnerDir)

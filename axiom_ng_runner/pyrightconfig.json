@@ -1,7 +1,0 @@
-{
-  "include": ["compute_core", "tests", "*.py"],
-  "exclude": [".venv"],
-  "venvPath": ".",
-  "venv": ".venv",
-  "extraPaths": [".."]
-}

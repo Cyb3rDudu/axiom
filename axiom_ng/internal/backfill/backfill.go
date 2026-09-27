@@ -9,7 +9,7 @@
 //     content_hash (a changed document aborts honestly — the UPDATE is
 //     fenced by the frozen snapshot id inside one transaction).
 //  2. Export the active chunks to JSON and run the Python alignment engine
-//     (axiom_ng_runner compute_core/locator_backfill_cli.py) under a
+//     (axiom_compute_worker compute_core/locator_backfill_cli.py) under a
 //     wall-clock budget. The engine refuses the whole backfill on a
 //     non-monotone candidate page map (#226) and refuses per-chunk below
 //     the confidence threshold (never guess).
@@ -57,7 +57,7 @@ type Options struct {
 	Budget   time.Duration // wall-clock budget for the engine (default 15m)
 
 	Python    string // runner venv python ("" = discover)
-	RunnerDir string // axiom_ng_runner checkout ("" = discover)
+	RunnerDir string // axiom_compute_worker checkout ("" = discover)
 
 	// OpenSearch endpoint; empty OSBaseURL skips the re-index (the DB
 	// write is still committed — the update itself is idempotent).
@@ -339,7 +339,7 @@ func RunEngine(ctx context.Context, python, runnerDir, epub, sourceKind, pdfPath
 	if err := os.WriteFile(chunksFile, chunkJSON, 0o600); err != nil {
 		return nil, err
 	}
-	args := []string{"-m", "axiom_ng_runner.compute_core.locator_backfill_cli",
+	args := []string{"-m", "axiom_compute_worker.compute_core.locator_backfill_cli",
 		"--epub", epub, "--source-kind", sourceKind,
 		"--chunks", chunksFile, "--out", outFile}
 	if sourceKind == "pdf" {
@@ -351,7 +351,7 @@ func RunEngine(ctx context.Context, python, runnerDir, epub, sourceKind, pdfPath
 	cctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, python, args...)
-	// HERMETIC module resolution (#233 review): `python -m axiom_ng_runner.…`
+	// HERMETIC module resolution (#233 review): `python -m axiom_compute_worker.…`
 	// must import the STRAND's package, never whatever checkout the runner
 	// venv happens to have editable-installed. cwd = the repo root (parent of
 	// runnerDir) puts the strand package at sys.path[0], which strictly beats
@@ -476,7 +476,7 @@ func FindPython(runnerDir string) string {
 	}
 	for _, c := range []string{
 		filepath.Join(runnerDir, ".venv", "bin", "python"),
-		"axiom_ng_runner/.venv/bin/python",
+		"axiom-compute-worker/.venv/bin/python",
 	} {
 		if abs, err := filepath.Abs(c); err == nil {
 			if _, err := os.Stat(abs); err == nil {
@@ -487,17 +487,17 @@ func FindPython(runnerDir string) string {
 	return "python3"
 }
 
-// FindRunnerDir locates the axiom_ng_runner checkout relative to the CWD.
+// FindRunnerDir locates the axiom_compute_worker checkout relative to the CWD.
 // Callers may sit THREE levels below the repo root (e.g. a test binary in
 // internal/backfill: backfill -> internal -> axiom_ng -> root), so the
 // candidate list reaches that far; every candidate is existence-checked
 // (pyproject.toml) — a nonexistent dir is never returned.
 func FindRunnerDir() string {
 	for _, c := range []string{
-		"axiom_ng_runner",
-		"../axiom_ng_runner",
-		"../../axiom_ng_runner",
-		"../../../axiom_ng_runner",
+		"axiom-compute-worker",
+		"../axiom_compute_worker",
+		"../../axiom_compute_worker",
+		"../../../axiom_compute_worker",
 	} {
 		if abs, err := filepath.Abs(c); err == nil {
 			if _, err := os.Stat(filepath.Join(abs, "pyproject.toml")); err == nil {

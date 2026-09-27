@@ -19,7 +19,7 @@ Usage:
     python integrity_probe.py --report [FILE.json]   # summarize results JSON
 
 Conventions: Zotero writes ONLY via local API (write key +
-Zotero-Server-ID headers). Run with axiom_ng_runner/.venv/bin/python
+Zotero-Server-ID headers). Run with axiom-compute-worker/.venv/bin/python
 (pymupdf + requests).
 """
 
@@ -29,7 +29,6 @@ import argparse
 import json
 import os
 import re
-import sys
 import time
 import urllib.parse
 import urllib.request
@@ -585,7 +584,7 @@ def db_find_chunks(frag, doc_id):
     sql = ("select c.id::text, c.text, c.locator->>'physical_page_start', c.locator->>'physical_page_end' from processing_chunks c "
            "join processing_snapshots s on s.id=c.snapshot_id and s.active "
            "join zotero_documents d on d.id=s.document_id "
-           "where d.id='" + doc_id + "' and replace(replace(c.text, chr(10), ' '), '-', '') ilike '%" 
+           "where d.id='" + doc_id + "' and replace(replace(c.text, chr(10), ' '), '-', '') ilike '%"
            + frag.replace("'", "''").replace("-", "") + "%' limit 8")
     r = subprocess.run(["podman", "exec", "axiom-postgres", "psql", "-U", "axiom_user",
                         "-d", "axiom_db", "-t", "-A", "-F", "\x01", "-R", "\x02", "-c", sql],

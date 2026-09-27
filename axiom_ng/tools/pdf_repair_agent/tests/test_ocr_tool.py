@@ -280,7 +280,9 @@ def test_bundled_env_drift_zwischen_den_baeumen():
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[4]
-    canonical = repo / "axiom_ng_runner" / "compute_core" / "bundled_env.py"
+    canonical = (
+        repo / "axiom-compute-worker" / "axiom_compute_worker" / "compute_core" / "bundled_env.py"
+    )
     mirror = repo / "axiom_ng" / "tools" / "pdf_repair_agent" / "tools" / "bundled_env.py"
     assert canonical.exists() and mirror.exists(), "beide Bäume müssen die Datei tragen"
     assert canonical.read_text() == mirror.read_text(), (

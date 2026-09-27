@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Restpunkt 6 — Python mREBEL reference (Orakel) for Restpunkt 6 parity.
-Mirrors axiom_ng_runner relation_extractor.extract_relations_from_chunks EXACTLY
+Mirrors axiom_compute_worker relation_extractor.extract_relations_from_chunks EXACTLY
 (num_beams=3, num_return_sequences=3, max_length=256, length_penalty=0,
 decoder_start_token_id=tp_XX), then dumps per chunk:
   - the 3 raw decoded return sequences
@@ -21,9 +21,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-
 from _device import add_device_args, pick_device
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 _MREBEL_TYPE_MAP = {
     "per": "PERSON", "org": "ORGANIZATION", "loc": "LOCATION",

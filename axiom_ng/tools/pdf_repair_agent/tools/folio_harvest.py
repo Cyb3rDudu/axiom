@@ -1,6 +1,6 @@
 """folio_harvest — #258: VENDORED mirror of the #254 preflight harvest.
 
-Source of truth: axiom_ng_runner/compute_core/page_trust.py (harvest_
+Source of truth: axiom-compute-worker/axiom_compute_worker/compute_core/page_trust.py (harvest_
 folio_candidates / _drop_constants / _pick_candidates / extract_folio_
 candidates). The fixer ships as a STANDALONE artifact (own venv, no
 project imports — package discipline), so the harvest is vendored

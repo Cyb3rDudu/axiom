@@ -1,0 +1,7 @@
+{
+  "include": ["axiom_compute_worker", "axiom_ng_runner", "tests", "scripts", "*.py"],
+  "exclude": [".venv"],
+  "venvPath": ".",
+  "venv": ".venv",
+  "extraPaths": [".."]
+}

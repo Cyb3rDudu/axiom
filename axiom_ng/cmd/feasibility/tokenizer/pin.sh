@@ -6,7 +6,7 @@ set -u
 SP=/Users/dudu/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/5617a9f61b028005a4858fdac845db406aefb181/sentencepiece.bpe.model
 DIR="$(cd "$(dirname "$0")" && pwd)"
 TOK="$DIR/build/tokpin"
-PY=/Users/dudu/Code/axiom/axiom_ng_runner/.venv/bin/python
+PY=/Users/dudu/Code/axiom/axiom-compute-worker/.venv/bin/python
 [ -x "$TOK" ] || (cd "$DIR" && go build -o build/tokpin ./tokpin)
 [ -f "$SP" ] || { echo "SP model not found"; exit 2; }
 

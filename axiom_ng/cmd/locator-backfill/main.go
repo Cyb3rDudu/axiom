@@ -12,7 +12,7 @@
 //
 // Env: AXIOM_DATABASE_URL (required), AXIOM_OPENSEARCH_URL (+ optional
 // AXIOM_OPENSEARCH_USERNAME/PASSWORD) required for real runs, AXIOM_RUNNER_
-// PYTHON (runner venv python; default: repo-relative axiom_ng_runner/.venv).
+// PYTHON (runner venv python; default: repo-relative axiom-compute-worker/.venv).
 package main
 
 import (

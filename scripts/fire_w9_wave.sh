@@ -83,8 +83,8 @@ echo "active books: $COUNT (list in /tmp/w9_wave_books.txt — VERIFY healed boo
 #    full assert set incl. page_trust + runner, and before cutover)
 LOG "4.2 pre-cutover symbol proof (w9-gpu0)"
 $SSH "$CARRIER" "podman exec runner-carrier-w9-gpu0 python -c \"
-import inspect, axiom_ng_runner.compute_core.chunker as c
-import axiom_ng_runner.compute_core.page_trust as pt, axiom_ng_runner.runner as r
+import inspect, axiom_compute_worker.compute_core.chunker as c
+import axiom_compute_worker.compute_core.page_trust as pt, axiom_compute_worker.runner as r
 s=inspect.getsource
 assert 'current_chunk_headings' in s(c) and 'page_chapter_map' in s(c)
 assert 'page_chapter_map' in s(pt) and '_stamp_chapter' in s(r)
@@ -117,7 +117,7 @@ echo "3 runners healthy"'
 LOG "cutover: symbol proof gpu1 + a3000"
 for n in w9-gpu1 w9-a3000; do
   $SSH "$CARRIER" "podman exec runner-carrier-$n python -c \"
-import inspect, axiom_ng_runner.compute_core.chunker as c
+import inspect, axiom_compute_worker.compute_core.chunker as c
 assert 'current_chunk_headings' in inspect.getsource(c) and 'page_chapter_map' in inspect.getsource(c)
 print('$n PROOF OK')\"" || DIE "4.2 $n symbol proof failed (post-cutover abort: see state note)"
 done

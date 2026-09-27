@@ -6,7 +6,7 @@
 // Gates (skip, never fail, when the environment lacks the piece):
 //   - AXIOM_TEST_DATABASE_URL unset   -> skip (unit-only environments)
 //   - no runner venv python           -> skip (Go-only CI; the alignment
-//     core has its own Python suite in axiom_ng_runner/tests)
+//     core has its own Python suite in axiom-compute-worker/tests)
 //
 // Direction ruling (corrected #233): the backfill enriches EPUB-active
 // snapshots ONLY. A PDF-active document is refused whole — its sibling page
@@ -211,7 +211,7 @@ func (s *osStub) count() int {
 // resolvePython finds the runner venv python AND the runner checkout dir.
 // The test binary's CWD is the PACKAGE directory (internal/backfill) — THREE
 // levels up to the repo root (backfill -> internal -> axiom_ng -> root),
-// then into axiom_ng_runner. Every candidate is EXISTENCE-CHECKED before it
+// then into the compute worker tree. Every candidate is EXISTENCE-CHECKED before it
 // is returned: a non-existent runner dir must never flow into RunEngine
 // (whose cmd.Dir/PYTHONPATH would then point at a package-less directory
 // and the subprocess would silently fall back to whatever checkout the
@@ -221,7 +221,7 @@ func resolvePython(t *testing.T) (string, string) {
 	repoRoot, _ := filepath.Abs(filepath.Join("..", "..", ".."))
 	candidates := []string{
 		os.Getenv("AXIOM_RUNNER_PYTHON"),
-		filepath.Join(repoRoot, "axiom_ng_runner", ".venv", "bin", "python"),
+		filepath.Join(repoRoot, "axiom-compute-worker", ".venv", "bin", "python"),
 	}
 	for _, c := range candidates {
 		if c == "" {
@@ -234,7 +234,7 @@ func resolvePython(t *testing.T) (string, string) {
 		if _, err := os.Stat(abs); err != nil {
 			continue
 		}
-		rd := filepath.Join(repoRoot, "axiom_ng_runner")
+		rd := filepath.Join(repoRoot, "axiom-compute-worker")
 		if _, err := os.Stat(filepath.Join(rd, "pyproject.toml")); err != nil {
 			continue // not a runner checkout — never pass a bogus dir through
 		}

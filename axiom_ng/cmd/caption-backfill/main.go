@@ -3,7 +3,7 @@
 //
 // One-shot operational tool in the #233 pattern: existing caption data is
 // REUSED (no re-captioning — the hash gate stays closed), the Python engine
-// (axiom_ng_runner compute_core/caption_backfill_cli.py, real BGE-M3)
+// (axiom_compute_worker compute_core/caption_backfill_cli.py, real BGE-M3)
 // recomputes each captioned chunk's dense vector from text + labeled
 // captions, then this tool upserts the vectors into Postgres and bulk-updates
 // the OpenSearch docs (embedding + labeled caption_text). Idempotent:
@@ -220,11 +220,11 @@ func runEngine(ctx context.Context, input []byte) ([]engineVector, error) {
 		runnerDir = backfill.FindRunnerDir()
 	}
 	if runnerDir == "" {
-		return nil, fmt.Errorf("no axiom_ng_runner checkout found (set AXIOM_RUNNER_DIR)")
+		return nil, fmt.Errorf("no axiom_compute_worker checkout found (set AXIOM_RUNNER_DIR)")
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, python, "-m", "axiom_ng_runner.compute_core.caption_backfill_cli")
+	cmd := exec.CommandContext(cctx, python, "-m", "axiom_compute_worker.compute_core.caption_backfill_cli")
 	cmd.Dir = runnerDir
 	cmd.Env = append(os.Environ(), "PYTHONPATH="+runnerDir)
 	cmd.Stdin = bytes.NewReader(input)

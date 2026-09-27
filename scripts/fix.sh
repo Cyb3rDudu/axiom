@@ -98,10 +98,10 @@ if [ "$FORMAT" = "epub" ]; then
         exit 1
     }
     if command -v timeout >/dev/null 2>&1; then
-        timeout 1800 "$RUNNER_PY" -m axiom_ng_runner.compute_core.epub_repair_cli \
+        timeout 1800 "$RUNNER_PY" -m axiom_compute_worker.compute_core.epub_repair_cli \
             --key "$KEY" --source "$SOURCE" --work-root "$RUNS" "$@" || rc=$?
     else
-        "$RUNNER_PY" -m axiom_ng_runner.compute_core.epub_repair_cli \
+        "$RUNNER_PY" -m axiom_compute_worker.compute_core.epub_repair_cli \
             --key "$KEY" --source "$SOURCE" --work-root "$RUNS" "$@" || rc=$?
     fi
     exit "$rc"

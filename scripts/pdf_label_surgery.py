@@ -168,8 +168,7 @@ def folio_evidence(pdf: Path) -> tuple[dict[int, int], list]:
     raw numeric map (for gap pinning) and the proven +1 runs (for body-start
     localization)."""
     import pymupdf  # type: ignore[import-not-found]
-
-    from axiom_ng_runner.compute_core import page_trust as pt
+    from axiom_compute_worker.compute_core import page_trust as pt
 
     doc = pymupdf.open(str(pdf))
     try:

@@ -75,7 +75,8 @@ def ocrmypdf_bin() -> str | None:
 # (build_fixer_artifact.sh, conda-forge) — ein Host-PATH ist keine
 # Voraussetzung mehr (Carrier-Szenario). Die Implementierung lebt EINMAL
 # in tools/bundled_env.py (vendored mirror von
-# axiom_ng_runner/compute_core/bundled_env.py, code-identisch — Drift
+# axiom-compute-worker/axiom_compute_worker/compute_core/bundled_env.py,
+# code-identisch — Drift
 # fällt in den Drift-Tests und beiden Builds); hier nur die Delegation.
 
 from . import bundled_env  # noqa: E402

@@ -49,7 +49,7 @@ artifact_pack_env() {
 # artifact_assert_bundled_env_identical — the shared runtime helper lives
 # in BOTH trees (folio_harvest vendoring pattern); drift must never ship.
 artifact_assert_bundled_env_identical() {
-    _canonical="$ROOT/axiom_ng_runner/compute_core/bundled_env.py"
+    _canonical="$ROOT/axiom-compute-worker/compute_core/bundled_env.py"
     _mirror="$ROOT/axiom_ng/tools/pdf_repair_agent/tools/bundled_env.py"
     cmp -s "$_canonical" "$_mirror" || {
         echo "artifact: bundled_env drift — runner canonical and fixer mirror differ:" >&2
