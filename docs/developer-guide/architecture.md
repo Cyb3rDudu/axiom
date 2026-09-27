@@ -54,7 +54,7 @@ runner never does.
    It also serves the search API, driving query compute on the configured query
    runner.
    [Continue: axiom dispatcher](axiom-go.md)
-2. **Runner (`axiom_ng_runner`)** — a loopback HTTP processor per
+2. **Runner (`axiom_compute_worker`)** — a loopback HTTP processor per
    `PROCESSOR_CONTRACT` v1, with vendored `compute_core` (Marker conversion,
    chunker, BGE-M3 embedder, GLiNER/mREBEL extractors). It owns only computation
    and temporary job output, never durable application state — and it also

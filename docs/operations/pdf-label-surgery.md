@@ -7,8 +7,8 @@ Wahrheitsquelle. Chirurgie (Hand): dieses Tool. **Kein LLM, kein Upload, kein
 Attachment-Tausch** (die alte Bauart ist verworfen, siehe #176).
 
 ```bash
-axiom_ng_runner/.venv/bin/python scripts/pdf_label_surgery.py <KEY>           # Dry-Run (Default)
-axiom_ng_runner/.venv/bin/python scripts/pdf_label_surgery.py <KEY> --apply   # einziger Schreibpfad
+axiom-compute-worker/.venv/bin/python scripts/pdf_label_surgery.py <KEY>           # Dry-Run (Default)
+axiom-compute-worker/.venv/bin/python scripts/pdf_label_surgery.py <KEY> --apply   # einziger Schreibpfad
 ```
 
 ## Wann einsetzen

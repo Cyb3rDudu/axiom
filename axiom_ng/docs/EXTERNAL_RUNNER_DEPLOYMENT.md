@@ -1,6 +1,6 @@
 # External Runner Deployment (GPU Compute Offload)
 
-How to run the `axiom_ng_runner` (Python processor) on a remote GPU host and
+How to run the `axiom_compute_worker` (Python processor) on a remote GPU host and
 point the local axiom-ng dispatcher at it, so heavy document processing
 (Marker conversion, BGE-M3 embeddings, GLiNER entities, mREBEL relationships)
 runs on NVIDIA GPUs instead of the local machine.
@@ -14,7 +14,7 @@ runs in **~30 s warm-cache** on a 3090 (~4–5× faster).
 ```
 Mac (axiom-ng)                        Remote GPU host (runner)
 ┌─────────────────────┐   HTTP/JSON   ┌──────────────────────────┐
-│ Go dispatcher        │ ───────────▶ │ axiom_ng_runner (Python)  │
+│ Go dispatcher        │ ───────────▶ │ axiom compute worker     │
 │ POST /v1/process     │  port 8012   │ Marker + BGE-M3 + GLiNER │
 │ polls status/result  │ ◀─────────── │ + mREBEL (all in-container)│
 │ persists to Postgres │              └──────────────────────────┘
@@ -36,14 +36,14 @@ Zotero. All durable state stays on the axiom-ng side. Only the HTTP contract
 ## 1. Ship the code
 
 The runner is self-contained since the compute_core vendor move (#118):
-`axiom_ng_runner/` carries its own compute cores (chunker, embedder,
+`axiom-compute-worker/` carries its own compute cores (chunker, embedder,
 entity/relation extractors, Marker path, workers) under
-`axiom_ng_runner/compute_core/`. One tree to ship:
+`axiom-compute-worker/axiom_compute_worker/compute_core/`. One tree to ship:
 
 ```bash
-ssh <user>@<gpu-host> "mkdir -p ~/Code/runner-poc/axiom_ng_runner"
+ssh <user>@<gpu-host> "mkdir -p ~/Code/runner-poc/axiom-compute-worker"
 rsync -av --exclude='.venv' --exclude='__pycache__' --exclude='.pytest_cache' \
-  <repo>/axiom_ng_runner/ <user>@<gpu-host>:~/Code/runner-poc/axiom_ng_runner/
+  <repo>/axiom-compute-worker/ <user>@<gpu-host>:~/Code/runner-poc/axiom-compute-worker/
 ```
 
 ## 2. Containerfile
@@ -52,14 +52,14 @@ Key points learned from the POC (all four build iterations, plus the
 vendor-move simplification):
 
 1. **Self-contained runner.** Since #118 the image copies ONLY
-   `axiom_ng_runner/` (compute_core included). No `ai_researcher/`, no
+   `axiom-compute-worker/` (compute_core included). No `ai_researcher/`, no
    `database/` stub, no `psycopg2-binary` — the DB-driver import chain
    stayed behind with the old tree.
 2. **Triton JIT needs gcc + libc6-dev** (`crti.o`). Do not use
    `--no-install-recommends` without adding these explicitly, or the first
    dense-embedding run dies.
 3. **Pin versions identical to the reference venv**
-   (`axiom_ng_runner/requirements-heavy.txt`), above all
+   (`axiom-compute-worker/requirements-heavy.txt`), above all
    `marker-pdf==1.10.2`. Divergent versions produce divergent output.
 4. **`RUN touch /.dockerenv`** — see the trap section below.
 
@@ -69,12 +69,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libc6-dev pandoc libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -r requirements-heavy.txt
-COPY axiom_ng_runner/ /app/axiom_ng_runner/
+COPY axiom-compute-worker/ /app/axiom-compute-worker/
 WORKDIR /app
 ENV PYTHONPATH=/app
 EXPOSE 8012
 RUN touch /.dockerenv
-CMD ["python", "-m", "axiom_ng_runner"]
+CMD ["python", "-m", "axiom_compute_worker"]
 ```
 
 ## 3. Build and run with GPU
@@ -131,12 +131,12 @@ result/artifact fetches (axiom-ng pulls from runner) are both multi-MB bulk
 flows that need real LAN throughput.
 
 **GLiNER device:** `DEVICE_GLINER=cuda` must be set explicitly — the default
-(in `compute_core/devices.py`, preserved from the old config) is `cpu` and a
+(in `axiom_compute_worker/compute_core/devices.py`, preserved from the old config) is `cpu` and a
 CPU GLiNER eats ~1 h per book
 that takes ~5 min on GPU (measured: 12/14 cores saturated, 3 jobs died of
 result-fetch timeouts under the load).
 
-**Per-model device knobs** (source of truth: `compute_core/devices.py`,
+**Per-model device knobs** (source of truth: `axiom_compute_worker/compute_core/devices.py`,
 `_MODEL_DEVICE_ENV`):
 
 | Env var         | Model    | Default |
@@ -164,7 +164,7 @@ Validated on a 302-page PDF: contract-valid outputs (381 chunks, all
 1024-dim dense, entities+relations, image artifacts), 67 min total
 (~13 s/page vs ~0.7-1.2 s/page on a 3090 — complete, not fast).
 Device resolution needs NO env for marker/embedder/mrebel (auto→mps via
-compute_core/devices.py); GLiNER defaults to cpu and wants
+axiom_compute_worker/compute_core/devices.py); GLiNER defaults to cpu and wants
 `DEVICE_GLINER=mps`. Known MPS limitation: surya's table-recognition
 model (`TableRecEncoderDecoderModel`) is not MPS-compatible and falls
 back to CPU with a warning — table-heavy PDFs pay extra. MPS matmul
@@ -215,7 +215,9 @@ On the axiom-ng host (Mac):
 
 ```bash
 export AXIOM_DISPATCHER_ENABLED=true
-export AXIOM_PROCESSOR_URL=http://<gpu-host>:19542   # direct LAN — see transport note
+export AXIOM_COMPUTE_WORKER_URL=http://<gpu-host>:19542   # direct LAN — see transport note
+# (legacy spelling AXIOM_PROCESSOR_URL keeps working through 0.2.x — it
+# warns once per process and counts in /api/health/deprecations)
 ```
 
 The dispatcher performs capability negotiation against the remote runner on
@@ -346,7 +348,7 @@ device injection, verified 2026-08-14. Container `runner-poc`, port 8012.*
 
 ## Runner-Rollen-Topologie (R4, #134)
 
-Drei Rollen, eine Prozessform — jeder `axiom_ng_runner` kann jede Rolle
+Drei Rollen, eine Prozessform — jeder `axiom_compute_worker` kann jede Rolle
 haben; die Rollen verteilen sich allein über axiom-ng-Konfiguration:
 
 | Rolle | Env in axiom-ng | Default | Betriebbild |
@@ -391,6 +393,7 @@ Verhalten:
   `ingest-runner` als Checks (Ingest grün, wenn Primär ODER Fallback lebt).
 - **4xx triggert KEIN Failover** — ein vom Runner abgelehnter Request wäre
   auch beim Fallback falsch; nur Transportfehler und 5xx.
+
 ## Source-URL-Transport: Mac → Carrier-Runner (#157/#153 Runbook)
 
 Ohne Konfiguration schickt der Dispatcher lokale Pfade — ein Runner auf dem
@@ -441,7 +444,7 @@ erwartet, kein Bug; Retrieval-unter-Last bleibt stabil (p95 2,14 s gemessen).
 **SQL-Fußfalle Hold/Restore (Ops-Wissen):** `x NOT LIKE ANY(arr)` heißt
 „matcht MINDESTENS EIN Element nicht" — fast immer wahr, löscht zu viel.
 Korrekt: `NOT (x LIKE ANY(arr))`. Restore der gehaltenen Jobs siehe
-#153-Kommentar (Ausführung nur nach dudus Go).
+# 153-Kommentar (Ausführung nur nach dudus Go).
 
 ## Split-Role Quickstart (#152): Retrieval lokal, Chunking extern
 
@@ -461,12 +464,12 @@ zusätzlich nötig: Zotero Desktop mit lokaler API
 ```bash
 cd <repo>
 AXIOM_PROCESSOR_COMPUTE=real AXIOM_PROCESSOR_PORT=8012 \
-  axiom_ng_runner/.venv/bin/python -m axiom_ng_runner
+  axiom-compute-worker/.venv/bin/python -m axiom_compute_worker
 ```
 
-Aus dem Repo-ROOT starten (`python -m axiom_ng_runner` braucht den
+Aus dem Repo-ROOT starten (`python -m axiom_compute_worker` braucht den
 Parent auf dem Pfad). Kalt lädt BGE-M3 + Reranker (~30 s), danach warm.
-Das venv wird aus `axiom_ng_runner/requirements.txt` +
+Das venv wird aus `axiom-compute-worker/requirements.txt` +
 `requirements-heavy.txt` gebaut (§2).
 
 ### Schritt 3 — externer GPU-Runner (Ingest primär)
@@ -490,7 +493,7 @@ Kapitel „Source-URL-Transport" (Secret + `AXIOM_BIND_ADDR=0.0.0.0` +
 ### Schritt 4 — axiom-ng mit den drei Rollen-Env-Vars
 
 | Env | Default | Wirkung |
-|---|---|---|
+| --- | --- | --- |
 | `AXIOM_QUERY_RUNNER_URL` | `http://localhost:8012` | Query-Runner für `/api/search` (Embed+Rerank). Immer lokal — Retrieval überlebt einen GPU-Ausfall |
 | `AXIOM_PROCESSOR_URL` | `http://localhost:8012` | Ingest-primär (best-available; externer GPU-Runner) |
 | `AXIOM_INGEST_FALLBACK_URL` | `http://localhost:8012` | Notfall-Ingest lokal (#128: komplett, ~11× langsamer) |
@@ -538,7 +541,7 @@ steht dort weiterhin der GPU-Host; erwartbar, kein Bug.
 ### Degradations-Erwartungen
 
 | Ausfall | Verhalten |
-|---|---|
+| --- | --- |
 | Query-Runner | Suche degradiert per R3: BM25-only, `reranked:false` — nie Totalausfall |
 | GPU-Runner | Ingest-Failover auf lokal (Submit-Zeit; langsamer, geloggt `ingest failover: primary … unavailable`) |
 | beide Runner | Suche läuft BM25-only weiter; Ingest wartet bis ein Runner zurück ist |

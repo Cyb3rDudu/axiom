@@ -4,7 +4,9 @@
 #
 # Mandatory rules (dudu, 2026-08-15): English content only; product name
 # "axiom" everywhere in prose/titles/nav. Code path names (axiom_ng/,
-# axiom_ng_runner/) and AXIOM_* env names are technical facts and stay as is.
+# compute-worker pointing vars move with F10 (#304): canonical
+# AXIOM_COMPUTE_WORKER_* with legacy aliases; the worker's own
+# AXIOM_PROCESSOR_* contract stays frozen through 0.2.x (#304).
 
 site_name: axiom
 site_description: A research knowledge engine for your Zotero library — search
@@ -87,7 +89,7 @@ nav:
       - Developer Guide:
               - Architecture Overview: developer-guide/architecture.md
               - "axiom dispatcher": developer-guide/axiom-go.md
-              - "axiom runner": developer-guide/axiom-runner.md
+              - "compute worker": developer-guide/compute-worker.md
               - "Processor Contract": developer-guide/processor-contract.md
               - Configuration: developer-guide/configuration.md
               - Testing: developer-guide/testing.md

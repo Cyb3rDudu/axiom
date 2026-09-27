@@ -20,7 +20,7 @@ SHA, surveyed counts) live in `docs/_inventory.md` (internal, not published).
 | Item | State | W9 consequence |
 | --- | --- | --- |
 | `~/Code/axiom` (carrier clone) | **stale @79913fc** (R3 era, #133) | fetch + checkout the merge-train SHA before anything else |
-| `~/Code/runner-poc/` (deploy dir: `Containerfile` + baked `axiom_ng_runner/` copy) | chunker has **neither** `current_chunk_headings` (W2) **nor** `page_chapter_map` (W12) | refresh the baked copy from the new clone |
+| `~/Code/runner-poc/` (deploy dir: `Containerfile` + baked `axiom-compute-worker/` copy) | chunker has **neither** `current_chunk_headings` (W2) **nor** `page_chapter_map` (W12) | refresh the baked copy from the new clone |
 | image `localhost/runner-poc:latest` | built 18 h ago from the stale copy | rebuild, **tag by SHA** (`runner-poc:<short-sha>`) |
 | `runner-carrier-gpu1` (Up 14 h, GPU1, :19543, 4.3 GB VRAM) | OLD code, serving the Mac dispatcher's ingest URL | keep until cutover; stop at firing time (see 3.3) |
 | `runner-carrier`, `-2`, `-3` (Exited 41 h) | TC2-era trio | remove or ignore; names freed |
@@ -38,7 +38,7 @@ git log --oneline -1          # MUST be >= 78558d5 (merge train: W2+W3+W4+W12)
 
 # refresh the deploy dir's baked source (path-preserving, exactly what the
 # Containerfile COPYs):
-rsync -a --delete ~/Code/axiom/axiom_ng_runner/ ~/Code/runner-poc/axiom_ng_runner/
+rsync -a --delete ~/Code/axiom/axiom-compute-worker/ ~/Code/runner-poc/axiom-compute-worker/
 
 cd ~/Code/runner-poc
 podman build -t runner-poc:78558d5 -t runner-poc:latest .
@@ -78,6 +78,7 @@ done
 ```
 
 Notes:
+
 - The middle runner's port may collide with the OLD standing runner (still
   serving). Either stop the old container first (§3.3 cutover) or give the
   new runner the next free port until cutover — the dispatcher only switches
@@ -113,8 +114,8 @@ curl -s http://127.0.0.1:<port>/v1/capabilities | head -c 400
 # "0.1.0" and proves nothing): probe the baked source for the W2/W12
 # symbols directly inside the container:
 podman exec runner-carrier-w9-gpu0 python - <<'EOF'
-import inspect, axiom_ng_runner.compute_core.chunker as c
-import axiom_ng_runner.compute_core.page_trust as pt
+import inspect, axiom_compute_worker.compute_core.chunker as c
+import axiom_compute_worker.compute_core.page_trust as pt
 src = inspect.getsource(c)
 assert "current_chunk_headings" in src, "W2 section-trail fix missing"
 assert "page_chapter_map" in src, "W12 chapter stamping missing"
@@ -132,7 +133,7 @@ job) or `podman stop` them until firing. If stopped, re-run §1.3 at firing.
 
 ## 2. Wave runbook (the firing sequence)
 
-### 2.1 Preconditions — see §4 checklist, all boxes green.
+### 2.1 Preconditions — see §4 checklist, all boxes green
 
 ### 2.1a MANDATORY post-W7 projection sync **[MUTATES]**
 
@@ -346,6 +347,7 @@ by TestIT_FrontmatterCleanup + TestPersistFrontmatterGateEndToEnd.
 ## 3. Cutover + rollback
 
 ### 3.1 Cutover order at firing time **[MUTATES]**
+
 1. Preflight §4 all green.
 2. Stop the old standing runner (pre-train code; frees its GPU + port):
    `ssh <user>@<runner-host> podman stop <old-runner-container>`.
@@ -354,6 +356,7 @@ by TestIT_FrontmatterCleanup + TestPersistFrontmatterGateEndToEnd.
 5. Enqueue the wave (§2.3) with count assertion.
 
 ### 3.2 Rollback honesty
+
 Snapshots are immutable and the active flag flips per attachment at
 completion — there is no in-place "un-wave". Rollback = another force wave
 from the old image (rollback-of-last-resort, needs an operator decision).
@@ -361,10 +364,11 @@ Cheap safety instead: mid-wave abort (§2.5) leaves completed books better
 and pending books untouched.
 
 ### 3.3 Post-wave carrier hygiene
+
 Stop w9 runners or leave as the new standing ingest fleet (dispatcher
 topology then collapses back to one primary URL + Mac fallback per
 EXTERNAL_RUNNER_DEPLOYMENT §failover). Remove TC2-era exited containers.
-#171 leftovers (study-minirunner, axiom-study, ~/models) ride the #171
+# 171 leftovers (study-minirunner, axiom-study, ~/models) ride the #171
 teardown plan.
 
 ---
@@ -390,7 +394,6 @@ teardown plan.
 | 4.13 | Dispatcher dry config | §2.2 env staged, not started | 3 configs reviewed |
 
 ---
-
 
 ## 5. Sources
 

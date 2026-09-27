@@ -56,7 +56,7 @@ SELECT d.title,
 Read as one row per EPUB:
 
 | Column | Meaning |
-|---|---|
+| --- | --- |
 | `chunks_with_marker` | chunks whose text interleaves an image marker |
 | `chunks_with_refs` | chunks with non-empty `image_refs` (marker → artifact link) |
 | `chunks_with_machine_caps` | chunks carrying machine captions (`#230`) |
@@ -78,7 +78,7 @@ return the pre-wave numbers — PDF corpus figures may not move.
 
 ### Corpus counter-probe (pre-reprocessing, offline)
 
-`axiom_ng_runner/scripts/epub_image_census.py` runs the branch worker
+`axiom-compute-worker/scripts/epub_image_census.py` runs the branch worker
 over every `.epub` in a directory tree (no database involved) and
 gates on the same two invariants per book: zero raw `<figure`/`<img>`
 remains and zero unresolved chunk refs. This is the offline regression
@@ -86,7 +86,7 @@ bar the #274 review rounds used — fixture-only validation missed two
 corpus regressions that this probe caught.
 
 ```bash
-.venv/bin/python axiom_ng_runner/scripts/epub_image_census.py <zotero-storage-root>
+.venv/bin/python axiom-compute-worker/scripts/epub_image_census.py <zotero-storage-root>
 ```
 
 Recorded baseline (175 Zotero EPUBs, pandoc 3.7, 2026-09-15):

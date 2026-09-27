@@ -42,26 +42,26 @@ Zotero. All durable state stays with the dispatcher. Only the HTTP contract
 ## 1. Ship the code to the runner host
 
 The runner is self-contained (the vendored `compute_core` directory is inside
-`axiom_ng_runner/`): a single directory tree has to be transferred to the
+`axiom-compute-worker/`): a single directory tree has to be transferred to the
 runner host:
 
 ```bash
 rsync -av --exclude='.venv' --exclude='__pycache__' --exclude='.pytest_cache' \
-  axiom_ng_runner/ <user>@<runner-host>:<path>/axiom_ng_runner/
+  axiom-compute-worker/ <user>@<runner-host>:<path>/axiom-compute-worker/
 ```
 
 ## 2. Containerfile
 
 Build checks (derived from operating experience, stated as requirements):
 
-1. **Self-contained runner:** The image copies **only** `axiom_ng_runner/`
+1. **Self-contained runner:** The image copies **only** `axiom-compute-worker/`
    (including `compute_core`). No DB adapter, no legacy module — the DB-driver
    import chain is no longer in the runner since the compute-core vendor split.
 2. **Triton JIT needs a compiler + libc:** install `gcc` and `libc6-dev`
    explicitly (otherwise the first dense-embedding run fails on a missing
    `crti.o`). Do not use `--no-install-recommends` without these packages.
 3. **Pin versions identical to the reference venv** (see
-   `axiom_ng_runner/requirements-heavy.txt`), above all
+   `axiom-compute-worker/requirements-heavy.txt`), above all
    `marker-pdf==1.10.2`. Divergent versions produce divergent output.
 4. **`RUN touch /.dockerenv`** — the runner must positively detect it is in a
    container; without this marker file, the tooling treats it as bare metal and
@@ -73,12 +73,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libc6-dev pandoc libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -r requirements-heavy.txt
-COPY axiom_ng_runner/ /app/axiom_ng_runner/
+COPY axiom-compute-worker/ /app/axiom-compute-worker/
 WORKDIR /app
 ENV PYTHONPATH=/app
 EXPOSE <port>
 RUN touch /.dockerenv
-CMD ["python", "-m", "axiom_ng_runner"]
+CMD ["python", "-m", "axiom_compute_worker"]
 ```
 
 ## 3. Build and run with GPU
@@ -140,7 +140,7 @@ A GPU run is not necessarily external. On an Apple Mac with MPS the complete
 
 ```bash
 DEVICE_GLINER=mps PYTORCH_ENABLE_MPS_FALLBACK=1 \
-  AXIOM_PROCESSOR_COMPUTE=real .venv/bin/python -m axiom_ng_runner
+  AXIOM_PROCESSOR_COMPUTE=real .venv/bin/python -m axiom_compute_worker
 ```
 
 - Device resolution needs no env for marker/embedder/mREBEL (`auto` → mps);

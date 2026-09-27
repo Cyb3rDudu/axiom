@@ -388,7 +388,7 @@ Progress is advisory. axiom-ng uses the terminal state and result validation as
 the source of truth.
 
 The `stage` vocabulary (in progression order, single source:
-`axiom_ng_runner.PIPELINE_STAGES`): `validate_source` → `convert` → `chunk` →
+`axiom_compute_worker.PIPELINE_STAGES`): `validate_source` → `convert` → `chunk` →
 `embed` → `entities` → `relationships` → `assemble`.
 
 ## 10. Processor Result
@@ -544,7 +544,7 @@ Required chunk fields:
 - `structure.section_titles`: ordered heading hierarchy. The deepest entry is
   the heading under which the chunk's first content sits — the section-trail
   state at chunk start, never the state after the closing boundary (#186;
-  enforced by `axiom_ng_runner/tests/test_chunker_section_trail.py`). For a
+  enforced by `axiom-compute-worker/tests/test_chunker_section_trail.py`). For a
   chunk that opens with recycled overlap text from the previous chunk, the
   first NON-overlap content decides.
 - `structure.start_paragraph_index` and `end_paragraph_index`.
@@ -580,7 +580,7 @@ book ships a monotone publisher page-anchor map (#220: `epub:type="pagebreak"`,
 `class="page"`, `id="page_N"`, Adobe `page-map.xml`), the additive fields
 `page_start`/`page_end` plus the trust level
 (`"print_verified"` / `"derived_from_sibling"` / `"print_unverified"` —
-#223 TOC proof, #222 sibling-derived injection with explicit OPF
+# 223 TOC proof, #222 sibling-derived injection with explicit OPF
 provenance, or markers without proof) and a `chapter` ordinal (1-based
 spine position, parity with PDF locators).
 

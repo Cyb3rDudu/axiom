@@ -37,10 +37,10 @@ same env file works at home and on the road. Details:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r axiom_ng_runner/requirements.txt
+.venv/bin/pip install -r axiom-compute-worker/requirements.txt
 export AXIOM_PROCESSOR_COMPUTE=reference
 export AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=<path-to-zotero-storage>  # the `storage` folder of your Zotero data dir
-.venv/bin/python -m axiom_ng_runner
+.venv/bin/python -m axiom_compute_worker
 ```
 
 Wait for `Uvicorn running on http://127.0.0.1:8537`.

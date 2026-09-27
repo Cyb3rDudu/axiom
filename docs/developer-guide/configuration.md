@@ -3,20 +3,20 @@
 Every axiom knob is read from an `AXIOM_*` environment variable at startup.
 This page is the **single, machine-maintainable reference** for all of them.
 The two code bases each read their own set — the Go orchestrator
-(`axiom_ng`) and the Python runner (`axiom_ng_runner`) — so the table is
+(`axiom_ng`) and the Python runner (`axiom_compute_worker`) — so the table is
 organized by *where the variable is consumed* (`set by`).
 
 > **Single source:** this table is meant to be regenerated from code. Each
 > variable's name, default, and consumer live in exactly one place in the source
 > (`axiom_ng/internal/config/config.go` for the Go set,
-> `axiom_ng_runner/config.py` for the Python set). A completeness grep against
+> `axiom-compute-worker/config.py` for the Python set). A completeness grep against
 > those two files is the DoD check for this page — nothing here should exist
 > without a code backing, and no code variable should be missing.
 
 ## Conventions
 
 - `set by` says which process reads the variable: **Go** = the dispatcher
-  (`axiom_ng`), **Runner** = the processor (`axiom_ng_runner`).
+  (`axiom_ng`), **Runner** = the processor (`axiom_compute_worker`).
 - `Default` shows the value applied when the variable is *unset* on a local
   sidecar setup.
 - A few pairs look alike but mean different things — those are called out under
@@ -34,9 +34,10 @@ organized by *where the variable is consumed* (`set by`).
 | `AXIOM_OPENSEARCH_PASSWORD` | — | Optional basic-auth password. |
 | `AXIOM_PROCESSOR_SOURCE_SECRET` | — | Shared HMAC secret for remote source delivery (dispatcher signs, `/api/processor/source` verifies). Empty disables the feature on both sides. |
 | `AXIOM_PROCESSOR_SOURCE_BASE_URL` | `http://127.0.0.1:<APIPort>` | Externally reachable base URL remote processors use to pull sources. `<APIPort>` resolves to the configured `AXIOM_API_PORT` (8011 by default); the URL defaults to loopback (co-located runners). |
-| `AXIOM_PROCESSOR_URLS` | — | Ordered ingest-runner candidate list, comma-separated, preference order (#207). When set it defines the COMPLETE chain and wins over both legacy variables. A periodic health probe (`AXIOM_RUNNER_HEALTH_INTERVAL`) keeps dead candidates out of the submit path; submit-time failover (transport/5xx → next candidate, 4xx → error) stays as the safety net. |
+| `AXIOM_COMPUTE_WORKER_URLS` | — | Ordered ingest-runner candidate list, comma-separated, preference order (#207). Canonical spelling (F10 #304); the legacy `AXIOM_PROCESSOR_URLS` below still feeds it — warned once and counted in `/api/health/deprecations`. When set it defines the COMPLETE chain and wins over both legacy variables. A periodic health probe (`AXIOM_RUNNER_HEALTH_INTERVAL`) keeps dead candidates out of the submit path; submit-time failover (transport/5xx → next candidate, 4xx → error) stays as the safety net. |
 | `AXIOM_RUNNER_HEALTH_INTERVAL` | `60s` | Interval of the ingest-candidate health probe (#207). `<=0` disables the background probe (startup remains best-effort) — a candidate demoted by submit-time failover is then only restored by a successful submit on it, so a preferred runner that recovered is not asked first again until restart. |
-| `AXIOM_PROCESSOR_URL` | `http://localhost:8012` | Primary ingest-role processor URL (legacy — still read; see `AXIOM_PROCESSOR_URLS` for the ordered list). |
+| `AXIOM_COMPUTE_WORKER_URL` | `http://localhost:8012` | Primary ingest-role compute-worker URL (canonical, F10 #304). |
+| `AXIOM_PROCESSOR_URL` | (alias) | Legacy spelling of `AXIOM_COMPUTE_WORKER_URL` — still read through 0.2.x (warn-once alias, ADR 0001 §4). |
 | `AXIOM_INGEST_FALLBACK_URL` | `http://localhost:8012` | Emergency ingest runner when `AXIOM_PROCESSOR_URL` is unreachable (legacy failover pair; folded into the candidate list only when `AXIOM_PROCESSOR_URLS` is unset). |
 | `AXIOM_QUERY_RUNNER_URL` | `http://localhost:8012` | Query-role runner for `/v1/embed` + `/v1/rerank` (R4). Defaults to the local runner so retrieval survives a remote outage. |
 | `AXIOM_PROCESSOR_TIMEOUT` | `300s` | Bounds the **result** fetch and (as the submit floor) the synchronous remote source download inside `POST /v1/process`. Remote deployments raise it to cover the runner's download budget. |
@@ -63,7 +64,7 @@ organized by *where the variable is consumed* (`set by`).
 | `AXIOM_CONTEXTUAL_COLLECTIONS` | — | (#255) Comma-separated collection paths (any depth, e.g. `VWL/Lectures,ORG/Lectures`) whose member documents are projected `citation_class: contextual` — searchable at full rank, never citable, KG-excluded. Empty CSV fields are ignored as formatting slack (a trailing comma is fine). Resolved at boot against the synced collections and stabilized on `zotero_key`; an **unknown path is a loud start error** — but only once the DB has sync state; on a never-synced DB the boot degrades instead of fataling (#262): rules stay inactive (everything citable), `/api/health` shows `contextual: degraded_no_sync`, and the first successful sync activates the rules without a restart. |
 | `AXIOM_CONTEXTUAL_TAGS` | — | (#255) Comma-separated literal Zotero tag names that force a document contextual (the outlier lever next to the collection rule; a tag never forces citable). Boot-validated like the paths: a tag no active document carries is a loud start error (with the same #262 never-synced degradation as the paths). |
 
-## Runner — the processor (`axiom_ng_runner`)
+## Runner — the processor (`axiom_compute_worker`)
 
 | Env var | Default | Meaning |
 | --- | --- | --- |
@@ -119,7 +120,7 @@ Confusing them is the most common config error:
 This table is deliberately shaped to be **recomputed from code**: a tool or a
 CI step can diff `config.go`'s `Load()` and the runner package's
 `load_settings()` — across the files that read them, e.g.
-`config.py` **and** `axiom_ng_runner/__init__.py` (where
+`config.py` **and** `axiom-compute-worker/__init__.py` (where
 `AXIOM_PROCESSOR_COMPUTE` is re-read) — against this table and flag (a) a code
 variable missing here, or (b) a table row without a code backing. The grep
 targets the package(s), not a single file.

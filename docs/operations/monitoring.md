@@ -138,10 +138,10 @@ and the embedded PDF label.
 Run it with the runner virtualenv so `pymupdf` and `requests` are available:
 
 ```bash
-axiom_ng_runner/.venv/bin/python scripts/integrity_probe.py --list
-axiom_ng_runner/.venv/bin/python scripts/integrity_probe.py --dry KEY...
-axiom_ng_runner/.venv/bin/python scripts/integrity_probe.py --write KEY
-axiom_ng_runner/.venv/bin/python scripts/integrity_probe.py --report /tmp/integrity_probe_results.json
+axiom-compute-worker/.venv/bin/python scripts/integrity_probe.py --list
+axiom-compute-worker/.venv/bin/python scripts/integrity_probe.py --dry KEY...
+axiom-compute-worker/.venv/bin/python scripts/integrity_probe.py --write KEY
+axiom-compute-worker/.venv/bin/python scripts/integrity_probe.py --report /tmp/integrity_probe_results.json
 ```
 
 It expects local Zotero at `http://localhost:23119`, axiom at

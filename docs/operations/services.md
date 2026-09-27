@@ -8,15 +8,15 @@ not the reference path. `make` is a dev surface only.
 | Name | What | Artifact | Install |
 | --- | --- | --- | --- |
 | `rag` | Go binary (API + dispatcher are modes of one binary) | `axiom-ng-<version>-darwin-arm64` | `/opt/axiom/rag/<version>/` |
-| `runner` | axiom_ng_runner (query embed/rerank + ingest, MPS) | `axiom-runner-<version>-macos-arm64.tar.zst` (conda-pack) | `/opt/axiom/runner/<version>/{env,app}` |
-| `fixer` | pdf_repair_agent (autarkic, event runner) | `axiom-fixer-<version>-macos-arm64.tar.zst` | `/opt/axiom/fixer/<version>/{env,app}` |
+| `compute-worker` | axiom compute worker (query embed/rerank + ingest, MPS; canonical name since F10 #304) | `axiom-compute-worker-<version>-macos-arm64.tar.zst` (conda-pack) | `/opt/axiom/compute-worker/<version>/{env,app}` |
+| `fixer` | pdf_repair_agent (autarkic, event runner; public name axiom-repair-worker since F08 #302) | `axiom-fixer-<version>-macos-arm64.tar.zst` | `/opt/axiom/fixer/<version>/{env,app}` |
 
 ## Port map
 
 | Port | Service |
 | --- | --- |
 | 8011 | `com.axiom.rag` API (bind via `rag-api.env`, LAN needs 0.0.0.0) |
-| 8012 | `com.axiom.runner` processor (`AXIOM_PROCESSOR_COMPUTE=real`) |
+| 8012 | `com.axiom.compute-worker` processor (`AXIOM_PROCESSOR_COMPUTE=real`; the launchd label renamed with F10 — boot out `com.axiom.runner`, bootstrap the canonical label) |
 | 8013 | `com.axiom.rag-dispatch` dispatcher agent (single instance; the gpu0/1/2 trio is retired — #248) |
 | 19542–19544 | Carrier runners (or carrier-bridge on 127.0.0.1) |
 
@@ -24,8 +24,8 @@ not the reference path. `make` is a dev surface only.
 
 ```text
 /opt/axiom/<component>/<version>/    + current -> <version> (atomic symlink)
-/opt/axiom/bin/                      stable shims: axiom-ng, axiom-runner, axiom-repair-worker
-                                     (+ axiom-fixer compat alias, ADR 0001 §4)
+/opt/axiom/bin/                      stable shims: axiom-ng, axiom-compute-worker, axiom-repair-worker
+                                     (+ axiom-runner / axiom-fixer compat aliases, ADR 0001 §4)
 ~/.config/axiom/*.env                env files, 0700, SECRETS ONLY HERE
 ~/.local/state/axiom/{logs,runs,models}/   state OUT of /opt and OUT of the repo
 ```
@@ -55,7 +55,7 @@ Installed by `scripts/install_services.sh` (confirmation prompt; substitutes
 
 - `com.axiom.rag` — RunAtLoad + KeepAlive (reboot survival)
 - `com.axiom.rag-dispatch` — the single dispatcher agent (claim lanes follow runner reality, #248)
-- `com.axiom.runner` — standing service
+- `com.axiom.compute-worker` — standing service (canonical since F10 #304; the former `com.axiom.runner` label retires with the operator-side switch)
 - `com.axiom.carrier-bridge` — TEMPLATE (opt-in `--with-bridge`), the
   Apple-python bridge workaround for TCC-blocked unsigned binaries; may
   retire once binaries are TCC-granted
@@ -68,7 +68,7 @@ launchctl bootout    gui/$(id -u)/com.axiom.rag    # stop
 ```
 
 Conventions in `deploy/launchd/README.md`: env-file sourcing via `sh -c`
-wrapper, runner exec'd as `env/bin/python -m axiom_ng_runner` (conda-pack
+wrapper, runner exec'd as `env/bin/python -m axiom_compute_worker` (conda-pack
 shebang ceiling).
 
 **Restart order is runner → rag → dispatcher.** A rolling restart must bring

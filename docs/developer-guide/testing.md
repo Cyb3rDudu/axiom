@@ -12,7 +12,7 @@ axiom has two independent suites, one per code base:
 | Suite | Command | What it covers |
 | --- | --- | --- |
 | Go (`axiom_ng`) | `go build ./... && go vet ./... && go test ./...` | Unit + integration tests. Integration tests against a real Postgres (see below). |
-| Python (`axiom_ng_runner`) | `pytest tests/ -v` | The contract black-box suite (§19) against the `reference` backend + compute-core import/unit tests. |
+| Python (`axiom_compute_worker`) | `pytest tests/ -v` | The contract black-box suite (§19) against the `reference` backend + compute-core import/unit tests. |
 
 The contract black-box suite (Python, `reference` backend) needs only the
 runtime + pymupdf + fastapi: health/capabilities, idempotency,
@@ -93,7 +93,7 @@ The strongest system invariants each have a test (or a named mutation barrier):
   `structure.section_titles` entry is the heading under which its first
   content sits — first NON-overlap content for chunks that open with
   recycled overlap text (trail state at chunk start, not after the closing
-  boundary); pinned by `axiom_ng_runner/tests/test_chunker_section_trail.py`,
+  boundary); pinned by `axiom-compute-worker/tests/test_chunker_section_trail.py`,
   which is red under the pre-fix chunker.
 - **No durable-side writes:** the Python suite asserts the runner never touches
   Postgres/OpenSearch/graph/Zotero.

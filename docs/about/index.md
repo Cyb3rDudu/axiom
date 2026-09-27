@@ -4,7 +4,7 @@ Welcome to the documentation of **axiom** — the Zotero-powered research
 knowledge system.
 
 > **Product name note:** axiom was known as *axiom-ng* during development. The
-> code module paths (`axiom_ng/`, `axiom_ng_runner/`) and the `AXIOM_*` env
+> code module paths (`axiom_ng/`, `axiom-compute-worker/`) and the `AXIOM_*` env
 > names retain that historical spelling as technical facts.
 
 ## Logo

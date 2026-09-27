@@ -29,14 +29,17 @@ owns state, queue, search index        does conversion, chunking, ML
 ```
 
 1. **Run the axiom runner** (no GPU needed for a first test):
+
    ```bash
    python3 -m venv .venv
-   .venv/bin/pip install -r axiom_ng_runner/requirements.txt
+   .venv/bin/pip install -r axiom-compute-worker/requirements.txt
    export AXIOM_PROCESSOR_COMPUTE=reference
    export AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=<path-to-zotero-storage>  # the `storage` folder of your Zotero data dir
-   .venv/bin/python -m axiom_ng_runner   # listens on :8537
+   .venv/bin/python -m axiom_compute_worker   # listens on :8537
    ```
+
 2. **Run the axiom dispatcher**:
+
    ```bash
    export AXIOM_ZOTERO_BASE=http://localhost:23119/api
    export AXIOM_DATABASE_URL=postgres://<user>:<pass>@localhost:5432/<db>
@@ -45,7 +48,9 @@ owns state, queue, search index        does conversion, chunking, ML
    export AXIOM_DISPATCHER_ENABLED=true
    cd axiom_ng && go run ./cmd/axiom-ng   # API on :8011
    ```
+
 3. **Sync Zotero, then watch the pipeline**:
+
    ```bash
    curl -X POST http://127.0.0.1:8011/api/zotero/sync
    curl     http://127.0.0.1:8011/api/ingest/jobs

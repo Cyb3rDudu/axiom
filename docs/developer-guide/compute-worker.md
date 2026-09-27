@@ -1,6 +1,6 @@
-# axiom runner
+# compute worker (axiom-compute-worker)
 
-The **Python processor runner** is a loopback HTTP service that implements
+The **Python compute worker** (`axiom-compute-worker`, canonical name since F10 #304 / ADR 0001 §4; the legacy `axiom_ng_runner` module and `axiom-runner` entrypoint stay functional as warn-once aliases through 0.2.x) is a loopback HTTP service that implements
 `PROCESSOR_CONTRACT` (transport contract v1) for document processing **and**
 serves the query compute (`embed`, `rerank`) for search. In both roles it owns
 **only computation and temporary job output**; all durable application state
@@ -66,7 +66,7 @@ afterward) so the low-latency budget is met.
 ### Stage progression
 
 Each ingest job moves through a fixed stage vocabulary (single source:
-`axiom_ng_runner.PIPELINE_STAGES`):
+`axiom_compute_worker.PIPELINE_STAGES`):
 
 ```text
 validate_source → convert → chunk → embed → entities → relationships → assemble
@@ -92,7 +92,7 @@ Zotero store.
 
 `compute_core/` is the **vendored compute layer** — the converter workers,
 chunker, embedder, entity/relation extractors, and (from R2) the reranker. It
-is bundled **inside** `axiom_ng_runner/` so that shipping one tree ships all the
+is bundled **inside** the worker tree so that shipping one tree ships all the
 compute it needs; the DB-driver import chain that previously entangled these
 modules stayed behind with the old codebase, which is what makes a self-contained
 runner (and a container) possible. The boundary is strict: `compute_core` performs
@@ -102,9 +102,9 @@ database, OpenSearch, graph, or Zotero store.
 ## Start
 
 ```bash
-.venv/bin/uvicorn axiom_ng_runner.app:app --host 127.0.0.1 --port 8537
+.venv/bin/uvicorn axiom_compute_worker.app:app --host 127.0.0.1 --port 8537
 # or
-.venv/bin/python -m axiom_ng_runner
+.venv/bin/python -m axiom_compute_worker
 ```
 
 Configuration (see `config.py`):
@@ -155,6 +155,39 @@ lost:
   currently inert and acked-job tombstones accumulate. Add a periodic sweep.
 - **No request-queue cap:** every accepted POST starts an unbounded daemon
   thread; the semaphore gates only concurrency, not queue length.
+
+## Rename map — `axiom_ng_runner` → `axiom-compute-worker` (F10, #304)
+
+ADR 0001 §4 row 3 wired with F10. Only the NAME PLATE moved — the HTTP
+contract, the lease/claim protocol and the worker's own env contract are
+frozen (the F01 baseline suite and the contract suite are the witnesses).
+
+| Surface | Canonical (0.2.x) | Legacy alias (through 0.2.x) |
+| --- | --- | --- |
+| Folder | `axiom-compute-worker/` | — (repo-internal move) |
+| Python module | `axiom_compute_worker` | `axiom_ng_runner` (warn-once package) |
+| Entrypoint | `python -m axiom_compute_worker`, console script `axiom-compute-worker` | `python -m axiom_ng_runner`, script `axiom-runner` |
+| Artifact | `axiom-compute-worker-<version>-macos-arm64.tar.zst` | pre-F10 tarballs install unchanged |
+| Install | `/opt/axiom/compute-worker/<version>/`, shim `bin/axiom-compute-worker` | wrapper `bin/axiom-runner` (warns once, delegates) |
+| make target | `make compute-worker` | `make runner` (deprecation echo) |
+| launchd | `com.axiom.compute-worker` | old label retires with the operator switch |
+| Dispatcher env | `AXIOM_COMPUTE_WORKER_{URL,URLS,NAME,TIMEOUT,SOURCE_SECRET,SOURCE_BASE_URL,HEALTH_INTERVAL}` | the `AXIOM_PROCESSOR_*` / `AXIOM_RUNNER_HEALTH_INTERVAL` spellings (witnessed via `/api/health/deprecations`) |
+| Worker env | `AXIOM_PROCESSOR_*` (unchanged) | — (frozen per #304; NOT renamed) |
+
+**Alias runtime:** aliases are functional through all of 0.2.x; removal
+happens earliest in an announced major, never silently, and only after the
+exported deprecation counters justify it (ADR 0001 §6). Importing the alias
+warns exactly once per process and counts on every use
+(`/v1/capabilities` → `deprecations.axiom_ng_runner`).
+
+**Residual risks for remote-carrier operators:** old carrier trees keep
+running untouched (their code never renamed). A carrier that re-syncs the
+repo must rsync `axiom-compute-worker/` instead of `axiom_ng_runner/` and
+update the Containerfile's `COPY` — `CMD ["python", "-m", "axiom_ng_runner"]`
+KEEPS WORKING on the new tree (warn-once alias). Dispatcher-side env may
+stay on the legacy spellings; each process warns once and reports the use.
+Role vocabulary (`AXIOM_QUERY_RUNNER_URL`, `AXIOM_INGEST_FALLBACK_URL`)
+deliberately keeps its spelling — F09 froze the topology semantics.
 
 Continue: [Processor Contract](processor-contract.md) ·
 [Architecture Overview](architecture.md) · [Configuration](configuration.md)
