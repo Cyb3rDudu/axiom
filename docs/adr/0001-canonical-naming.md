@@ -24,7 +24,7 @@ decision. This ADR is the repository's first ADR (numbering starts at
 The domain components of axiom are:
 
 | Component | Responsibility | 0.2.0 status |
-| --- | --- | --- |
+|---|---|---|
 | **Library** | Zotero selection/sync, document intake | compiled into the RAG process |
 | **Store** | durable state: Postgres + OpenSearch | compiled into the RAG process |
 | **Research** | research agents on the corpus | reserved — NOT implemented in 0.2.0 |
@@ -38,7 +38,7 @@ runtime-resolved fact.
 ### 2. Workers
 
 | Canonical worker | Role | Today (0.1.x) |
-| --- | --- | --- |
+|---|---|---|
 | **`axiom-compute-worker`** | document processing, query embedding, reranking | `axiom_ng_runner` (Python, "axiom-runner", processor name `axiom-python-marker`) |
 | **`axiom-repair-worker`** | PDF repair (event runner) | `axiom-fixer` (`pdf_repair_agent`) |
 | **`axiom-research-worker`** | research execution | reserved — NOT implemented in 0.2.0 |
@@ -58,7 +58,7 @@ through the deprecation witness below — mapping table row 1).
 ### 4. Mapping table (old → canonical → alias → removal horizon)
 
 | Old name (0.1.x) | Canonical (0.2.0) | Alias (functional through 0.2.x) | Removal horizon |
-| --- | --- | --- | --- |
+|---|---|---|---|
 | `axiom-ng` binary, `axiom_ng` module | `axiom` (`axiom serve …`) | `axiom-ng` delegates | earliest an announced major; never silently (see §6) |
 | `axiom_ng_runner`, service "axiom-runner" | `axiom-compute-worker` | old module entrypoint | same rule; alias wired with F10 |
 | `axiom-fixer` (`pdf_repair_agent`) | `axiom-repair-worker` | `axiom-fixer` shim | same rule; alias wired with F08 |
@@ -72,7 +72,7 @@ carry additive identity fields alongside every existing field — nothing
 renamed, nothing removed:
 
 | Field | RAG `/api/health` | Runner `/v1/capabilities` |
-| --- | --- | --- |
+|---|---|---|
 | `canonical_name` | `"axiom"` | `"axiom-compute-worker"` |
 | `service_class` | `"api+library+store"` (compact role identity; narrows with F04/F05) | `"compute-worker"` |
 | `component_roles` | `["api", "library", "store"]` | — |
