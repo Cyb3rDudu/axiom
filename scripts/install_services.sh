@@ -49,13 +49,17 @@ for f in $ENV_FILES; do
     # env file must degrade to a NAMED preflight error, not kill the
     # installer silently (bash-3.2 sh-mode propagates -e into the
     # substitution — verified live in review).
-    if (set +e +u
+    if (
+        set +e +u
         # shellcheck disable=SC1090
-        . "$HOME/.config/axiom/$f" >/dev/null 2>&1); then
-        profile=$( (set +e +u
+        . "$HOME/.config/axiom/$f" >/dev/null 2>&1
+    ); then
+        profile=$( (
+            set +e +u
             # shellcheck disable=SC1090
             . "$HOME/.config/axiom/$f" >/dev/null 2>&1
-            printf '%s' "${AXIOM_DISPATCHER_PROFILE:-}"))
+            printf '%s' "${AXIOM_DISPATCHER_PROFILE:-}"
+        ))
     else
         missing="$missing\n  $f: does not source cleanly (syntax/unset-var error)"
         continue
