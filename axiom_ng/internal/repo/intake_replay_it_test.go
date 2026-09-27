@@ -96,7 +96,7 @@ func TestResolveIntakeKeyClassifiesReplayAndMismatch(t *testing.T) {
 func TestIntakeKeyConstraintMatchesMigration(t *testing.T) {
 	sql, err := os.ReadFile("../store/migrations/schema/0001_revision_intake.sql")
 	if err != nil {
-		t.Skipf("migration file unreadable: %v", err)
+		t.Fatalf("migration file unreadable — the pin cannot be verified: %v", err)
 	}
 	if !strings.Contains(string(sql), "CREATE UNIQUE INDEX IF NOT EXISTS "+intakeKeyConstraint) {
 		t.Fatalf("intake key constraint %q not found in the store migration", intakeKeyConstraint)

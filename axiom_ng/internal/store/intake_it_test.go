@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/revision"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/store"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	storemigrations "github.com/Cyb3rDudu/axiom/axiom_ng/internal/store/migrations"
@@ -504,6 +505,7 @@ func TestRevisionIntakeCrossSourceNoFalseDedup(t *testing.T) {
 
 	rep := repo.New(d.Pool())
 	revA := seedRevision(srcA, hash)
+	revA.RenditionID = "ATTDUP"
 	revA.Bibliography.RecordID = "DOCA"
 	jobA, mintedA, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
 		IdempotencyKey: "xsrc-a", RevisionSourceID: srcA, RevisionRecordID: "DOCA",
@@ -514,6 +516,7 @@ func TestRevisionIntakeCrossSourceNoFalseDedup(t *testing.T) {
 		t.Fatalf("mint A: %v %v", jobA, err)
 	}
 	revB := seedRevision(srcB, hash)
+	revB.RenditionID = "ATTDUP"
 	revB.Bibliography.RecordID = "DOCA"
 	jobB, mintedB, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
 		IdempotencyKey: "xsrc-b", RevisionSourceID: srcB, RevisionRecordID: "DOCA",
@@ -525,5 +528,60 @@ func TestRevisionIntakeCrossSourceNoFalseDedup(t *testing.T) {
 	}
 	if jobB.ID == jobA.ID {
 		t.Fatalf("cross-source dedup: B joined A's job %s", jobA.ID)
+	}
+	// Claim independence: both jobs resolve against their OWN mirror rows
+	// (the claim lane is source-scoped) — A claims first, then B.
+	claimedA, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{WorkerID: "xsrc-a", LeaseDuration: 30 * time.Second, Profile: json.RawMessage(`{"profile":"full-rag-v1"}`)})
+	if err != nil || claimedA == nil || claimedA.JobID != jobA.ID {
+		t.Fatalf("A must claim its own job: %v %v", claimedA, err)
+	}
+	claimedB, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{WorkerID: "xsrc-b", LeaseDuration: 30 * time.Second, Profile: json.RawMessage(`{"profile":"full-rag-v1"}`)})
+	if err != nil || claimedB == nil || claimedB.JobID != jobB.ID {
+		t.Fatalf("B must claim its own job: %v %v", claimedB, err)
+	}
+	if claimedA.AttachmentID == claimedB.AttachmentID {
+		t.Fatalf("cross-source claims must resolve DIFFERENT attachments: %s", claimedA.AttachmentID)
+	}
+}
+
+// TestRevisionSameKeyReplayAfterObsoletion — pins the same-key half of
+// the re-intake semantics (review R4-4): the intake-key idempotency
+// answers the terminal job as a REPLAY (same key, same durable answer —
+// the API reports the job's terminal failure honestly), while a NEW key
+// re-mints (the cross-way witness above). The migration header's
+// "never blocks a re-intake" claim is the new-key contract.
+func TestRevisionSameKeyReplayAfterObsoletion(t *testing.T) {
+	d := openIntakeDB(t)
+	hash := revision.HashContent([]byte("same key obsoletion bytes"))
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	rep := repo.New(d.Pool())
+	ctx := context.Background()
+
+	rev := seedRevision(srcID, hash)
+	rev.RenditionID = "GHOSTK"
+	req := repo.IntakeRequest{
+		IdempotencyKey: "samekey-1", RevisionSourceID: srcID, RevisionRecordID: "DOCIT1",
+		RevisionRenditionID: "GHOSTK", RevisionNo: "1", ContentHash: hash,
+		RevisionJSON: mustCanonical(t, rev),
+	}
+	first, minted, err := rep.EnqueueRevisionIntake(ctx, req)
+	if err != nil || !minted {
+		t.Fatalf("mint: %v %v", first, err)
+	}
+	if _, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{WorkerID: "sk", LeaseDuration: 30 * time.Second, Profile: json.RawMessage(`{"profile":"full-rag-v1"}`)}); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	// Same key, identical revision: the terminal corpse answers as replay.
+	again, minted2, err := rep.EnqueueRevisionIntake(ctx, req)
+	if err != nil || minted2 || again == nil || again.ID != first.ID {
+		t.Fatalf("same-key replay must return the terminal job: %+v minted=%v err=%v", again, minted2, err)
+	}
+	if again.Status != "skipped" {
+		t.Fatalf("replay must report the terminal status, got %q", again.Status)
+	}
+	// The DTO carries the Failure (the API-visible truth).
+	dto := ingestJobDTO(again, rev)
+	if dto.Status != store.IngestTerminalFailed || dto.Failure == nil {
+		t.Fatalf("terminal replay must carry Failure: %+v", dto)
 	}
 }

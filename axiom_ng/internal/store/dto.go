@@ -28,7 +28,6 @@ func searchResponseDTO(res *search.Response) store.SearchResult {
 		Hits:   make([]store.SearchHit, 0, len(res.Hits)),
 		TookMS: res.TookMS,
 	}
-	_ = out
 	for _, h := range res.Hits {
 		out.Hits = append(out.Hits, searchHitDTO(h))
 	}

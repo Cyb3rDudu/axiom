@@ -147,8 +147,11 @@ func TestIngestRevisionSourceIDTrustBoundary(t *testing.T) {
 	svc := New(repo.New(d.Pool()), nil, nil)
 	ctx := context.Background()
 
-	// Malformed: rejected at the trust boundary, never minted.
-	rev := seedRevision("not-a-uuid", hash)
+	// Malformed: rejected at the trust boundary, never minted — including
+	// the pgx blindspot shape (non-dash characters at the four separator
+	// positions: pgtype parses it into a DIFFERENT uuid, err=nil; the
+	// shape regex is the only guard).
+	rev := seedRevision("deadbeefX1234Y5678Z9abcWdef012345678", hash)
 	rev.RenditionID = "ATTIT1"
 	if _, err := svc.IngestRevision(ctx, store.IngestRevisionRequest{IdempotencyKey: "uuid-bad", Revision: rev}); err == nil {
 		t.Fatal("malformed source_id must be rejected")
@@ -253,8 +256,8 @@ func TestIngestJobDTOPresentSlicesAndFailure(t *testing.T) {
 	}
 	j.Attempt = 1
 	dto = ingestJobDTO(j, revision.SourceRevision{RevisionID: "1"})
-	if dto.Status != store.IngestRetryableFailed {
-		t.Fatalf("failed below budget must be retryable, got %q", dto.Status)
+	if dto.Status != store.IngestTerminalFailed {
+		t.Fatalf("a rested failed row is terminal regardless of attempt budget (ScheduleRetry keeps retryable rows pending), got %q", dto.Status)
 	}
 	b, err := json.Marshal(passageDTO(&search.Passage{ChunkID: "c", Section: nil}))
 	if err != nil {

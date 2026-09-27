@@ -506,3 +506,59 @@ func (e *retEnv) seedFailedJobNullHash(t *testing.T, attKey string, age time.Dur
 	}
 	return id
 }
+
+// TestRetentionPrunesFKlessRevisionCorpses — the F09 lane's retention
+// branch (review R4-3): a terminal revision job whose FKs never resolved
+// (obsoleted at claim) is prunable by age; an FK-anchored job stays under
+// the mirror rules (not swept by the new branch); and pruning the corpse
+// cannot strand a re-intake (identity arbiter is ACTIVE-scoped).
+func TestRetentionPrunesFKlessRevisionCorpses(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixturesPlus(t)
+	ctx := context.Background()
+
+	old := time.Now().Add(-40 * 24 * time.Hour)
+	// The FK-less corpse (obsoleted at claim, attachment/document NULL).
+	if _, err := lr.pool.Exec(ctx, `
+		INSERT INTO ingest_jobs (intake_kind, status, content_hash, error_code, error_message,
+		                         revision_source_id, revision_record_id, revision_rendition_id,
+		                         revision_no, revision_json, max_attempts, enqueued_at, updated_at)
+		VALUES ('revision','skipped',' corpse-hash-0000000000000000000000000000000000000000 ',
+		        'SKIPPED','REVISION_REF_UNRESOLVED',
+		        '11111111-1111-1111-1111-111111111111','DOCR','ATTTR','1','{}',3,$1,$1)`, old); err != nil {
+		t.Fatal(err)
+	}
+	// The anchored control: same age, mirror-attached, the document's
+	// outcome row (newest job of the preferred attachment) — must stay.
+	hash := "sha256:anchored" + "retention"
+	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://fkless-retention.local", libraryID: "users/0",
+		docKey: "DOCR", attKey: "ATTTR", contentHash: &hash}, "completed", 3)
+
+	rep, err := lr.rep.RetentionPlan(ctx, 30*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Jobs.Remove < 1 {
+		t.Fatalf("the FK-less corpse must be in the prunable plan, got %+v", rep.Jobs)
+	}
+	rems, _, err := lr.rep.ApplyRetention(ctx, 30*24*time.Hour, 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpse int
+	if err := lr.pool.QueryRow(ctx,
+		`SELECT count(*) FROM ingest_jobs WHERE intake_kind='revision' AND attachment_id IS NULL`).Scan(&corpse); err != nil {
+		t.Fatal(err)
+	}
+	if corpse != 0 {
+		t.Fatalf("corpse must be pruned, %d left", corpse)
+	}
+	var anchored int
+	if err := lr.pool.QueryRow(ctx,
+		`SELECT count(*) FROM ingest_jobs WHERE attachment_id=$1`, attID).Scan(&anchored); err != nil {
+		t.Fatal(err)
+	}
+	if anchored != 1 || rems.Jobs < 1 {
+		t.Fatalf("anchored outcome row must survive and the corpse be removed: anchored=%d rems.Jobs=%d", anchored, rems.Jobs)
+	}
+}

@@ -84,23 +84,8 @@ var bannedPackages = []string{
 	"internal/baseline",
 }
 
-// testDirectBanned: packages a Store-package _test.go may not import
-// DIRECTLY. Narrower than bannedPackages by internal/library/repair (the
-// F08 harness-fixture exception above).
-var testDirectBanned = []string{
-	"internal/zoteroprovider",
-	"internal/sync",
-	"internal/library",
-	"internal/library/mirror",
-	"internal/config",
-	"internal/repair",
-	"internal/fixerinvoker",
-	"internal/server",
-	"internal/composition",
-	"internal/cli",
-	"internal/backfill",
-	"internal/baseline",
-}
+// The test tier = the SAME banned set minus testTierAllowed (below): one
+// list, no edit-in-sync hazard.
 
 const modulePath = "github.com/Cyb3rDudu/axiom/axiom_ng"
 
@@ -183,17 +168,21 @@ func storeBoundaryViolations(g importGraph, testG importGraph) []string {
 	for _, b := range bannedPackages {
 		banned[b] = true
 	}
-	testBanned := map[string]bool{}
-	for _, b := range testDirectBanned {
-		testBanned[b] = true
+	// Prefix rule for the checked set itself: a NEW subpackage under any
+	// Store-owned tree is Store code by construction — it joins the set
+	// automatically instead of waiting for a list edit (symmetric across
+	// all eight roots).
+	owned := make([]string, 0, len(storePackages))
+	for _, sp := range storePackages {
+		owned = append(owned, sp+"/")
 	}
-	// Prefix rule for the checked set itself: a NEW subpackage under the
-	// Store's own trees is Store code by construction — it joins the set
-	// automatically instead of waiting for a list edit.
 	set := append([]string{}, storePackages...)
 	for p := range g {
-		if strings.HasPrefix(p, "internal/store/") || strings.HasPrefix(p, "internal/repo/") {
-			set = append(set, p)
+		for _, prefix := range owned {
+			if strings.HasPrefix(p, prefix) {
+				set = append(set, p)
+				break
+			}
 		}
 	}
 	sort.Strings(set)
@@ -209,7 +198,7 @@ func storeBoundaryViolations(g importGraph, testG importGraph) []string {
 			}
 		}
 		for p := range testG[sp] {
-			if bannedPkg(testBanned, p) && !testTierAllowed[p] {
+			if bannedPkg(banned, p) && !testTierAllowed[p] {
 				out = append(out, fmt.Sprintf("%s test file directly imports %s", sp, p))
 			}
 		}

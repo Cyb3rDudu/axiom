@@ -39,10 +39,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS ingest_jobs_intake_key_uq
 
 -- Revision-identity dedup, mirroring the legacy lane's
 -- (attachment_id, content_hash) partial unique WITH the source column and
--- scoped to ACTIVE jobs (see the header note). A re-ingest of the SAME
+-- scoped to ACTIVE jobs (see the header note). A re-ingest under a NEW key of the SAME
 -- rendition content is a no-op while active; a changed hash enqueues
 -- anew; a TERMINAL row never answers the arbiter. The #294
 -- active-snapshot suppression is applied by the mint query itself.
+--
+-- The explicit DROP migrates DBs that already ran an earlier strand
+-- build of this ledger version (the first shape keyed
+-- (revision_rendition_id, content_hash) status-blind): IF NOT EXISTS
+-- alone would silently keep the stale index — every revision intake
+-- would then fail ON CONFLICT inference (42P10) or raise a raw 23505 on
+-- the old name. Safe under the stricter old index: at most one row per
+-- identity existed, so the narrower predicate always builds.
+DROP INDEX IF EXISTS ingest_jobs_revision_identity_uq;
 CREATE UNIQUE INDEX IF NOT EXISTS ingest_jobs_revision_identity_uq
   ON ingest_jobs (revision_source_id, revision_rendition_id, content_hash)
   WHERE intake_kind = 'revision' AND force_rebuild = false

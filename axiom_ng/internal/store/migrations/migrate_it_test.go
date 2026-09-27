@@ -36,6 +36,18 @@ func TestStoreMigrateIdempotentAfterLedgerWipe(t *testing.T) {
 	if err := Migrate(ctx, d.Pool()); err != nil {
 		t.Fatalf("first migrate: %v", err)
 	}
+	// A DB ledgered at the FIRST strand build carries the OLD identity
+	// index shape (rendition+hash, status-blind): the migration must
+	// replace it with the active-scoped three-column shape.
+	if _, err := d.Pool().Exec(ctx, `DROP INDEX IF EXISTS ingest_jobs_revision_identity_uq`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Pool().Exec(ctx, `CREATE UNIQUE INDEX ingest_jobs_revision_identity_uq
+		ON ingest_jobs (revision_rendition_id, content_hash)
+		WHERE intake_kind='revision' AND force_rebuild=false`); err != nil {
+		t.Fatal(err)
+	}
+
 	// The original (typo'd) constraint name must satisfy the guard too:
 	// pre-landing dev DBs carry intake_jobs_intake_kind_chk (and not the
 	// corrected name) — simulate exactly that shape.
@@ -63,5 +75,15 @@ func TestStoreMigrateIdempotentAfterLedgerWipe(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("exactly one intake-kind CHECK expected (typo or corrected), got %d", n)
+	}
+	// The identity index must now carry the ACTIVE-status, source-scoped
+	// predicate (the ON CONFLICT arbiter needs exactly this shape).
+	var idxdef string
+	if err := d.Pool().QueryRow(ctx, `SELECT indexdef FROM pg_indexes WHERE indexname='ingest_jobs_revision_identity_uq'`).Scan(&idxdef); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(idxdef, "revision_source_id, revision_rendition_id, content_hash") ||
+		!strings.Contains(idxdef, "status = ANY") {
+		t.Fatalf("identity index not migrated to the active-scoped source shape: %s", idxdef)
 	}
 }

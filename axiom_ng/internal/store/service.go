@@ -157,7 +157,7 @@ func canonicalRevisionJSON(r revision.SourceRevision) ([]byte, error) {
 // falling back to the request only for rows that predate revision_no).
 // UpdatedAt is the row's updated_at (replay identity; DM03 µs form).
 func ingestJobDTO(j *repo.Job, rev revision.SourceRevision) store.IngestJob {
-	status := mapJobStatus(j.Status, j.Attempt, j.MaxAttempts)
+	status := mapJobStatus(j.Status)
 	dto := store.IngestJob{
 		JobID:       j.ID,
 		Status:      status,
@@ -186,13 +186,13 @@ func ingestJobDTO(j *repo.Job, rev revision.SourceRevision) store.IngestJob {
 }
 
 // mapJobStatus maps the SQL state machine onto the intake machine.
-// "failed" splits by attempt budget: a failed row at its last attempt is
-// TERMINAL (the claim never re-arms it — telling the caller "retryable"
-// would be a lie); below the budget it is retryable (the scheduler's
-// backoff will re-drive it). "skipped"/"cancelled" are terminal; the
-// pre-enum "obsolete" spelling no longer occurs (markObsolete writes
-// 'skipped').
-func mapJobStatus(sql string, attempt, maxAttempts int) store.IngestStatus {
+// "failed" is TERMINAL, unconditionally: a retryable failure never rests
+// in 'failed' — ScheduleRetry returns it to 'pending' with a
+// next_attempt_at (the claim predicate re-drives it); a rested failed row
+// is a MarkFailed verdict (NOT_PROCESSABLE, non-retryable submit errors,
+// repair-track codes). "skipped"/"cancelled" are terminal; the pre-enum
+// "obsolete" spelling no longer occurs (markObsolete writes 'skipped').
+func mapJobStatus(sql string) store.IngestStatus {
 	switch sql {
 	case "pending":
 		return store.IngestReceived
@@ -200,12 +200,7 @@ func mapJobStatus(sql string, attempt, maxAttempts int) store.IngestStatus {
 		return store.IngestProcessing
 	case "completed":
 		return store.IngestCommitted
-	case "failed":
-		if attempt >= maxAttempts {
-			return store.IngestTerminalFailed
-		}
-		return store.IngestRetryableFailed
-	default: // skipped, cancelled
+	default: // failed, skipped, cancelled
 		return store.IngestTerminalFailed
 	}
 }

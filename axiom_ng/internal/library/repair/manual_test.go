@@ -446,8 +446,9 @@ func (f failOrphanAuditDeps) AuditWrite(ctx context.Context, caseID, attachmentI
 // is pinned by TestApplyOrphanKeyReachesAudit; this is the degraded path.
 // Fault injection: a ManualDeps whose Root points at a regular FILE, so
 // persist's MkdirAll dies with ENOTDIR inside AuditWrite. This is also
-// the auto-path seam pin: the lift lives in Apply, so the verdict
-// auto-apply (liveRepairDeps) and the fixer invoker (liveDeps) share it.
+// the auto-path seam pin: the lift lives in Apply, so every caller —
+// verdict auto-apply and worker runs alike, both wired through
+// NewLiveApplyDeps — shares it.
 func TestApplyOrphanKeyRidesErrorWhenAuditFails(t *testing.T) {
 	root := t.TempDir()
 	orig := filepath.Join(root, "orig.pdf")

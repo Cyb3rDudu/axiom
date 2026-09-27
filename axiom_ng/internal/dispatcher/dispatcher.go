@@ -472,17 +472,13 @@ func (d *Dispatcher) worker(ctx context.Context, wg *sync.WaitGroup, slot int) {
 		// is claimed. Terminal parks never gate (unrepairable docs are
 		// skipped, documented in their repair case). Observer-only: jobs
 		// are never marked here, claiming is merely deferred.
+		// Repair-blind shape (nil seam): no gate — claiming proceeds.
 		held := false
 		reason := ""
-		if d.repairs == nil { // repair-blind shape (no seam wired): no gate
-			// held stays false — claiming proceeds.
-		} else {
+		if d.repairs != nil {
 			var err error
-			held, reason, err = d.repairs.WaveRepairGate(ctx)
-			if err != nil {
-				if ctx.Err() == nil {
-					d.logger.Printf("slot %d: wave gate check failed: %v", slot, err)
-				}
+			if held, reason, err = d.repairs.WaveRepairGate(ctx); err != nil && ctx.Err() == nil {
+				d.logger.Printf("slot %d: wave gate check failed: %v", slot, err)
 			}
 		}
 		if held {
@@ -835,17 +831,20 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 
 	// Quality red: do not produce junk chunks. Skip the job with a clear
 	// reason and mark the attachment as a repair-case candidate (#206/#203).
+	// Repair-blind shape (nil seam): the job still skips — no case write.
 	reason := "preflight:" + report.Finding
 	d.logger.Printf("%v: preflight FAIL (%s) — skipping job, marking repair candidate", fields, reason)
-	if caseID, created, err := d.repairs.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Finding, qsJSON); err != nil && !isLost(err) {
-		d.logger.Printf("%v: repair-case: %v", fields, err)
-	} else {
-		// #238: only a FRESH case auto-queues (created == false means a
-		// recycled open case — old evidence, never queued by a newer
-		// verdict). The queue payload is the case's own stored
-		// class/analysis either way. #282: the document-level healed-count
-		// guard lives inside autoQueueRepair.
-		d.autoQueueRepair(ctx, fields, claimed.DocumentID, caseID, report.Finding, qsJSON, created)
+	if d.repairs != nil {
+		if caseID, created, err := d.repairs.CreateRepairCase(ctx, claimed.AttachmentID, claimed.DocumentID, report.Finding, qsJSON); err != nil && !isLost(err) {
+			d.logger.Printf("%v: repair-case: %v", fields, err)
+		} else {
+			// #238: only a FRESH case auto-queues (created == false means a
+			// recycled open case — old evidence, never queued by a newer
+			// verdict). The queue payload is the case's own stored
+			// class/analysis either way. #282: the document-level healed-count
+			// guard lives inside autoQueueRepair.
+			d.autoQueueRepair(ctx, fields, claimed.DocumentID, caseID, report.Finding, qsJSON, created)
+		}
 	}
 	if err := d.rep.MarkSkipped(ctx, ref, reason); err != nil && !isLost(err) {
 		d.logger.Printf("%v: mark skipped: %v", fields, err)

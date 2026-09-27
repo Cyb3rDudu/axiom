@@ -141,6 +141,11 @@ const supersededSnapshotSQL = "\n\tFROM processing_snapshots s\n\tWHERE " + supe
 //     claim, REVISION_REF_UNRESOLVED &c) — the mirror anchor can never
 //     see them; the identity dedup is scoped to ACTIVE rows, so pruning
 //     the corpse cannot strand a re-intake; age is their guard.
+//
+// Byte budget: the composed tranche SELECT is ~950 bytes — pg_stat_activity
+// truncates stored query text at 1024, and the choreography witnesses match
+// the query tail (FOR UPDATE must stay inside it). Re-measure before
+// extending this fragment.
 const prunableJobSQL = `	FROM ingest_jobs j
 	LEFT JOIN zotero_attachments a ON a.id = j.attachment_id
 	WHERE j.status IN ('completed','failed','cancelled','skipped')
@@ -155,6 +160,11 @@ const prunableJobSQL = `	FROM ingest_jobs j
 	   OR (j.intake_kind = 'revision' AND j.attachment_id IS NULL))
 	  AND NOT EXISTS (SELECT 1 FROM repair_cases rc WHERE rc.attachment_id = j.attachment_id)
 	  AND NOT EXISTS (SELECT 1 FROM processing_snapshots s WHERE s.ingest_job_id = j.id AND s.active)`
+
+// Note: the repair-case guard is vacuous for the FK-less revision branch
+// by construction (NULL = NULL is never true) — a corpse was never a
+// repair subject and carries no heal forensics; the ACTIVE-scoped
+// arbiter makes pruning it safe (see the branch note above).
 
 // RetentionPlan computes the report (dry run). Read-only.
 func (r *Repo) RetentionPlan(ctx context.Context, jobMinAge time.Duration) (*RetentionReport, error) {

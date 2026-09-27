@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -430,6 +431,73 @@ func newDispatcher(t *testing.T, h *dispatchHarness, fp *fakeProcessor, cfg Conf
 	d := NewWithPersister(h.rep, mustClient(t, fp.url()), &recordingPersister{rep: h.rep}, c, log.New(io.Discard, "", 0))
 	d.SetRepairQueue(&harnessRepairQueue{store: h.repairs})
 	return d
+}
+
+// TestRepairBlindPreflightSkipsWithoutCase — the nil-seam contract's
+// preflight leg (review R4-1): a repair-blind dispatcher (no
+// SetRepairQueue) through a quality-RED preflight must SKIP the job
+// without a case write and without panicking — the documented
+// repair-blind shape, at the one call site that lacked its guard.
+func TestRepairBlindPreflightSkipsWithoutCase(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	jobID := h.seedJob(t, "RBPF1", 3)
+	var attID string
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT attachment_id::text FROM ingest_jobs WHERE id=$1`, jobID).Scan(&attID); err != nil {
+		t.Fatal(err)
+	}
+
+	// A local file the preflight can read; a scan-shaped PDF body makes
+	// the quality gate RED (no Tier-1 text layer — textless scan class).
+	dir := t.TempDir()
+	pdf := filepath.Join(dir, "scan.pdf")
+	os.WriteFile(pdf, []byte("%PDF-1.4 scanned-no-textlayer-bytes"), 0o644)
+	if _, err := h.pool.Exec(context.Background(),
+		`UPDATE zotero_attachments SET local_path=$2, content_type='application/pdf' WHERE id=$1`, attID, pdf); err != nil {
+		t.Fatal(err)
+	}
+
+	fp := newFakeProcessor(t)
+	fp.preflightReport = &map[string]any{
+		"contract_version": "1.0", "source_name": "inline",
+		"ok":      false,
+		"finding": "🔴 scan-ohne-textlayer (OCR-Wiederaufbau nötig)",
+	}
+	d := NewWithPersister(h.rep, mustClient(t, fp.url()), &recordingPersister{rep: h.rep},
+		Config{RunnerName: "blind", Concurrency: 1, PollInterval: 10 * time.Millisecond,
+			AckRetryInterval: 50 * time.Millisecond, PreflightEnabled: true,
+			Profile: json.RawMessage(`{"profile":"full-rag-v1"}`)},
+		log.New(io.Discard, "", 0))
+	// NOTE: no SetRepairQueue — the repair-blind shape.
+
+	runFor(t, d, context.Background(), 3*time.Second)
+	var status string
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT status::text FROM ingest_jobs WHERE id=$1`, jobID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "skipped" {
+		t.Fatalf("repair-blind preflight must skip the job, got %q", status)
+	}
+	var cases int
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM repair_cases WHERE attachment_id=$1`, attID).Scan(&cases); err != nil {
+		t.Fatal(err)
+	}
+	if cases != 0 {
+		t.Fatalf("repair-blind shape must not write repair cases, got %d", cases)
+	}
+}
+
+// TestRepairMaxHealedCasesPinned — the policy-integer twin across the
+// seam must not drift: the dispatcher's #282 loop guard equals the
+// repair track's RepairMaxAttempts.
+func TestRepairMaxHealedCasesPinned(t *testing.T) {
+	if repairMaxHealedCases != repair.RepairMaxAttempts {
+		t.Fatalf("repairMaxHealedCases=%d drifted from repair.RepairMaxAttempts=%d — the #282 loop guard diverged",
+			repairMaxHealedCases, repair.RepairMaxAttempts)
+	}
 }
 
 // harnessRepairQueue adapts the Library-owned repair store onto the
