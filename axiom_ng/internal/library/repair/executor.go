@@ -39,6 +39,11 @@ type RepairRequest struct {
 	// process group is killed at its expiry (orphan prevention, never a
 	// tempo limit — #293 layering: the ORCHESTRATOR hands the wrapper its
 	// own earlier kill via Env when the class calls for it).
+	// Budget <= 0 means NO backstop: the execution runs under the caller's
+	// context alone. The zero value must not become an instant kill —
+	// RepairExecutor is a public seam and a future binding that forgets
+	// the budget inherits a guard, not a footgun (the only production
+	// caller, the orchestrator, always sets a positive budget).
 	Budget time.Duration
 	// Env is the OPTIONAL full child environment (os.Environ() plus the
 	// class-coupled wrapper vars, e.g. AXIOM_FIX_SH_TIMEOUT for OCR-class
@@ -92,10 +97,15 @@ type LocalExecutor struct {
 	testName string
 }
 
-// Execute runs Command <key> --apply … under req.Budget.
+// Execute runs Command <key> --apply … under req.Budget (<= 0: no
+// backstop — see RepairRequest.Budget).
 func (e LocalExecutor) Execute(ctx context.Context, req RepairRequest) (RepairResult, error) {
 	cmd := e.command()
-	cctx, cancel := context.WithTimeout(ctx, req.Budget)
+	cctx := ctx
+	cancel := context.CancelFunc(func() {})
+	if req.Budget > 0 {
+		cctx, cancel = context.WithTimeout(ctx, req.Budget)
+	}
 	defer cancel()
 	c := exec.CommandContext(cctx, cmd, workerArgs(req)...)
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -116,7 +126,7 @@ func (e LocalExecutor) Execute(ctx context.Context, req RepairRequest) (RepairRe
 	c.Stdout, c.Stderr = buf, buf
 	err := c.Run()
 	out := buf.String()
-	if cctx.Err() == context.DeadlineExceeded {
+	if req.Budget > 0 && cctx.Err() == context.DeadlineExceeded {
 		return RepairResult{ExitCode: -1, Output: out}, fmt.Errorf("timeout nach %s (backstop): %s",
 			req.Budget, lastLines([]byte(out)))
 	}

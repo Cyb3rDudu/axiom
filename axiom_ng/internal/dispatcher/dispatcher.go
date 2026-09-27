@@ -171,7 +171,7 @@ func New(rep *repo.Repo, client processorClient, cfg Config, logger *log.Logger)
 // internal/library/repair now, byte-identical semantics.
 func NewWithPersister(rep *repo.Repo, client processorClient, persist ResultPersister, cfg Config, logger *log.Logger) *Dispatcher {
 	var repairs *repair.Store
-	if rep != nil { // unit shapes construct New(nil, …) — the store wires lazily by use
+	if rep != nil { // unit shapes construct New(nil, …): repairs stays nil and repair paths panic on first use — same failure surface as the pre-F08 nil-rep dispatcher
 		repairs = repair.NewStore(rep.Pool())
 	}
 	if cfg.WorkerID == "" {
@@ -747,7 +747,7 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 		return false // proceed: no bytes to assess
 	}
 	// local_path may carry a file:// prefix (Zotero convention) — strip it
-	// before reading, mirroring the fixer invoker's TrimPrefix pattern.
+	// before reading, mirroring the repair orchestrator's TrimPrefix pattern.
 	local := strings.TrimPrefix(req.Attachment.LocalPath, "file://")
 	pdf, err := os.ReadFile(local)
 	if err != nil {

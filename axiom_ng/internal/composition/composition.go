@@ -747,7 +747,7 @@ func (r *Root) componentsFor() []Component {
 				OCRTimeout:  r.cfg.FixerOCRTimeout, // #293: OCR wedge-guard (0 = invoker default 24h)
 			}, repair.Deps{
 				Store:          repairStore,
-				Apply:          liveApplyDeps(repairStore, zoteroWrite),
+				Apply:          repair.NewLiveApplyDeps(repairStore, zoteroWrite),
 				QuarantineRoot: r.cfg.QuarantineRoot,
 				// #282 post-heal auto-sync: every successful heal runs a
 				// targeted sync (include = healed document).

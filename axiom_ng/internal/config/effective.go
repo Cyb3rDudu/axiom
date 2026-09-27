@@ -27,8 +27,11 @@ type Entry struct {
 	Env string `json:"env"`
 	// Value is the effective value (secrets redacted by RenderValue).
 	Value any `json:"value"`
-	// Source is "env" when the key is set in the environment, "default"
-	// otherwise. ("flag" joins the precedence with F13.)
+	// Source is "env" when this key produced the shown value, "default"
+	// otherwise — for the single-fed keys that is "is the key set"; for a
+	// dual-fed field (FixerCommand, F08 #302) a set-but-shadowed var does
+	// NOT feed the value and renders "default". ("flag" joins the
+	// precedence with F13.)
 	Source string `json:"source"`
 }
 
@@ -109,6 +112,28 @@ func Effective(cfg Config) []Entry {
 		source := "default"
 		if _, set := os.LookupEnv(row.env); set {
 			source = "env"
+		}
+		// F08 #302, review round 3: FixerCommand is DUAL-FED (canonical
+		// AXIOM_REPAIR_WORKER_CMD wins over legacy AXIOM_FIXER_CMD in
+		// repairWorkerCmd). The generic per-key LookupEnv lied twice on
+		// this field: with both set, the legacy row rendered the
+		// canonical VALUE under source=env (as if the legacy var produced
+		// it); with only legacy set, the canonical row rendered the
+		// legacy value under source=default. The rows now tell the
+		// resolver's truth: source=env ONLY on the row whose key actually
+		// fed the value (a shadowed or empty var renders default — its
+		// health-counter witness in /api/health/deprecations is the
+		// "is it set?" surface).
+		if row.field == "FixerCommand" {
+			canonicalSet := os.Getenv("AXIOM_REPAIR_WORKER_CMD") != ""
+			legacySet := os.Getenv("AXIOM_FIXER_CMD") != ""
+			fed := (row.env == "AXIOM_REPAIR_WORKER_CMD" && canonicalSet) ||
+				(row.env == "AXIOM_FIXER_CMD" && legacySet && !canonicalSet)
+			if fed {
+				source = "env"
+			} else {
+				source = "default"
+			}
 		}
 		var value any
 		switch {

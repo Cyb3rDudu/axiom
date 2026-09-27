@@ -215,6 +215,71 @@ func TestEffectiveWorkerCommandRowNotRedacted(t *testing.T) {
 	t.Fatal("AXIOM_FIXER_CMD missing from effective view")
 }
 
+// TestEffectiveWorkerCommandShadowingMatrix — F08 review round 3: the two
+// worker-command rows must tell the resolver's (repairWorkerCmd's) truth
+// about WHO fed the effective value. Pre-round the view lied twice: with
+// both vars set the legacy row rendered the canonical value under
+// source=env; with only legacy set the canonical row rendered the legacy
+// value under source=default.
+func TestEffectiveWorkerCommandShadowingMatrix(t *testing.T) {
+	deprecate.SetSilent(true)
+	t.Cleanup(func() { deprecate.SetSilent(false) })
+	row := func() (canonical, legacy Entry) {
+		for _, e := range Effective(Load()) {
+			switch e.Env {
+			case "AXIOM_REPAIR_WORKER_CMD":
+				canonical = e
+			case "AXIOM_FIXER_CMD":
+				legacy = e
+			}
+		}
+		if canonical.Env == "" || legacy.Env == "" {
+			t.Fatal("worker command rows missing from effective view")
+		}
+		return
+	}
+
+	t.Run("both set: canonical wins, legacy shadowed", func(t *testing.T) {
+		t.Setenv("AXIOM_REPAIR_WORKER_CMD", "/opt/canonical/worker")
+		t.Setenv("AXIOM_FIXER_CMD", "/opt/legacy/fixer")
+		canonical, legacy := row()
+		if canonical.Source != "env" || canonical.Value != "/opt/canonical/worker" {
+			t.Fatalf("canonical row = %v/%v, want env + canonical value", canonical.Source, canonical.Value)
+		}
+		if legacy.Source != "default" {
+			t.Fatalf("shadowed legacy row source = %q, want default (it fed nothing)", legacy.Source)
+		}
+		if legacy.Value != "/opt/canonical/worker" {
+			t.Fatalf("legacy row value = %v, want the effective (canonical) value", legacy.Value)
+		}
+	})
+	t.Run("legacy only: legacy feeds, canonical row stays default", func(t *testing.T) {
+		t.Setenv("AXIOM_REPAIR_WORKER_CMD", "")
+		t.Setenv("AXIOM_FIXER_CMD", "/opt/legacy/fixer")
+		canonical, legacy := row()
+		if legacy.Source != "env" || legacy.Value != "/opt/legacy/fixer" {
+			t.Fatalf("legacy row = %v/%v, want env + legacy value", legacy.Source, legacy.Value)
+		}
+		if canonical.Source != "default" {
+			t.Fatalf("canonical row source = %q, want default (canonical var fed nothing)", canonical.Source)
+		}
+		if canonical.Value != "/opt/legacy/fixer" {
+			t.Fatalf("canonical row value = %v, want the effective (legacy-fed) value", canonical.Value)
+		}
+	})
+	t.Run("nothing set: both default, canonical default value", func(t *testing.T) {
+		t.Setenv("AXIOM_REPAIR_WORKER_CMD", "")
+		t.Setenv("AXIOM_FIXER_CMD", "")
+		canonical, legacy := row()
+		if canonical.Source != "default" || legacy.Source != "default" {
+			t.Fatalf("sources = %v/%v, want default/default", canonical.Source, legacy.Source)
+		}
+		if canonical.Value != "/opt/axiom/bin/axiom-repair-worker" {
+			t.Fatalf("canonical row value = %v, want the canonical default", canonical.Value)
+		}
+	})
+}
+
 // Percent-encoded credential keys (review round 3 minor): pgconn decodes
 // escapes before matching query names (?pass%77ord= sets cfg.Password),
 // so the redaction must catch encoded spellings too — the contract is

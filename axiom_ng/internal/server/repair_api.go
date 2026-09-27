@@ -468,7 +468,7 @@ func (s *Server) handleRepairVerdict(w http.ResponseWriter, r *http.Request) {
 	}
 	srcPath := strings.TrimPrefix(item.LocalPath, "file://")
 
-	body, status, err := s.applyRepair(r.Context(), liveRepairDeps{store: s.repairStore, write: s.zoteroWrite},
+	body, status, err := s.applyRepair(r.Context(), repair.NewLiveApplyDeps(s.repairStore, s.zoteroWrite),
 		caseID, planVersion, item, srcPath, artifact, contentType)
 	if err != nil {
 		http.Error(w, err.Error(), status)
@@ -520,7 +520,9 @@ func readHealedFile(r *http.Request) ([]byte, string, error) {
 
 // repairApplyDeps bundles every mutation of the auto-apply custody sequence
 // behind one interface so the ORDERING is unit-testable without Postgres or
-// a live Zotero (review W4). liveRepairDeps wires the real implementations.
+// a live Zotero (review W4). The live wiring is repair.NewLiveApplyDeps —
+// the shared adapter the composition root uses too (review round 3: the
+// local mirror copy is gone, one authority).
 type repairApplyDeps interface {
 	Quarantine(root, zoteroKey, sourcePath string) (string, error)
 	DeleteAttachment(key string) error
@@ -528,32 +530,6 @@ type repairApplyDeps interface {
 	MarkRepairFailed(ctx context.Context, caseID, reason string) error
 	MarkRepairHealed(ctx context.Context, caseID string) error
 	AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error
-}
-
-// liveRepairDeps adapts the Library-owned repair Store +
-// *zoteroprovider.WriteClient to repairApplyDeps.
-type liveRepairDeps struct {
-	store *repair.Store
-	write *zoteroprovider.WriteClient
-}
-
-func (d liveRepairDeps) Quarantine(root, key, src string) (string, error) {
-	return repair.Quarantine(root, key, src)
-}
-func (d liveRepairDeps) DeleteAttachment(key string) error {
-	return d.write.DeleteAttachmentItem(key)
-}
-func (d liveRepairDeps) CreateAttachmentWithFile(parent, filename, contentType string, pdf []byte) (string, error) {
-	return d.write.CreateAttachmentWithFile(parent, filename, contentType, pdf)
-}
-func (d liveRepairDeps) MarkRepairFailed(ctx context.Context, caseID, reason string) error {
-	return d.store.MarkRepairFailed(ctx, caseID, reason)
-}
-func (d liveRepairDeps) MarkRepairHealed(ctx context.Context, caseID string) error {
-	return d.store.MarkRepairHealed(ctx, caseID)
-}
-func (d liveRepairDeps) AuditWrite(ctx context.Context, caseID, attachmentID, action string, detail map[string]any) error {
-	return d.store.AuditWrite(ctx, caseID, attachmentID, action, detail)
 }
 
 // applyRepair delegates to repair.Apply (#206: the custody sequence moved

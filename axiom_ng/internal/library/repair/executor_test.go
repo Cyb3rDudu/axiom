@@ -74,6 +74,25 @@ func TestLocalExecutorRunsCanonicalWorker(t *testing.T) {
 	}
 }
 
+// TestLocalExecutorZeroBudgetRunsUnbounded — review round 3: Budget <= 0
+// means NO backstop. The zero value must not become an instant kill
+// (context.WithTimeout(ctx, 0) expires immediately) — a future binding
+// that forgets the budget inherits a guard, not a footgun.
+func TestLocalExecutorZeroBudgetRunsUnbounded(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "slowish.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 1\necho survived\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res, err := LocalExecutor{Command: script}.Execute(context.Background(), RepairRequest{AttachmentKey: "KZERO", Budget: 0})
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("zero budget must not kill: res=%+v err=%v", res, err)
+	}
+	if !strings.Contains(res.Output, "survived") {
+		t.Fatalf("worker output missing after zero-budget run: %q", res.Output)
+	}
+}
+
 // TestLocalExecutorArgs — the worker CLI contract through the seam: the
 // request fields arrive as the wrapper's flags (key --apply, epub arm
 // with source, OCR lang + force mode).

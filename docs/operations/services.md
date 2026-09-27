@@ -272,7 +272,7 @@ must be wired — the orchestrator uploads through it).
   contract is untouched.
 - **Timeout:** fix.sh's own 30-min kill (lockdir + timeout binary) does the
   primary work; the orchestrator runs a 35-min context backstop above it, so a
-  wedged wrapper can never hang the invoker. OCR-class repairs
+  wedged wrapper can never hang the orchestrator. OCR-class repairs
   (`scan_ocr_rebuild`) run under their own wedge-guard —
   `AXIOM_FIXER_OCR_TIMEOUT` (default **24h**, #293: pure orphan prevention,
   never tempo — the rebuild takes as long as it takes and the tool itself

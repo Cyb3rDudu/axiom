@@ -385,6 +385,13 @@ func writeKeyFile(t *testing.T) string {
 	return p
 }
 
+// executorFunc adapts a function to repair.RepairExecutor (test bindings).
+type executorFunc func(ctx context.Context, req repair.RepairRequest) (repair.RepairResult, error)
+
+func (f executorFunc) Execute(ctx context.Context, req repair.RepairRequest) (repair.RepairResult, error) {
+	return f(ctx, req)
+}
+
 // fakePorts binds every seam: fake ingest runner, fake query runner, fake
 // fixer exec (blocks until ctx done — the in-flight repair claim witness).
 func fakePorts(t *testing.T, runner *fakeRunner, querySrv *httptest.Server) Ports {

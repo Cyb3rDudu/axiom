@@ -2,7 +2,7 @@
 
 **Werkzeug:** EIN Aufruf fährt das quarantine-first-Protokoll für eine manuell
 geheilte Datei — identische Reihenfolge wie der Fixer-Autoheal-Pfad
-(`internal/repair/apply.go`), dieselben Write-Mutationen, dieselbe
+(`axiom_ng/internal/library/repair/apply.go`, F08 #302), dieselben Write-Mutationen, dieselbe
 Quarantäne. **Kein Geschwister-Upload, kein Papierkorb-Improvisieren mehr.**
 
 ```bash

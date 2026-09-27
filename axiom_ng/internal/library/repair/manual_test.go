@@ -480,9 +480,9 @@ func TestApplyOrphanKeyRidesErrorWhenAuditFails(t *testing.T) {
 // TestApplyOrphanKeyReachesAudit — the #285 auto-path pin: the ambiguous
 // create (key, err) produces a machine-readable create_attachment_orphan
 // audit BEFORE the failure return. A recording ApplyDeps stands in for the
-// two auto surfaces (liveRepairDeps / fixerinvoker liveDeps — both are
-// pass-throughs onto the repo audit table, so what they forward is exactly
-// this call). ManualDeps runs the same seam so its record is covered by
+// two auto surfaces (both wired through repair.NewLiveApplyDeps — the
+// shared live adapter, a pass-through onto the store audit table, so what
+// it forwards is exactly this call). ManualDeps runs the same seam so its record is covered by
 // TestManualCustodyOrphanKeyReachesRecord above.
 func TestApplyOrphanKeyReachesAudit(t *testing.T) {
 	root := t.TempDir()
