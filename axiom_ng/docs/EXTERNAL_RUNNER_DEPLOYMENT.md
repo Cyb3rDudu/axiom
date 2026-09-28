@@ -448,7 +448,8 @@ erwartet, kein Bug; Retrieval-unter-Last bleibt stabil (p95 2,14 s gemessen).
 **SQL-Fußfalle Hold/Restore (Ops-Wissen):** `x NOT LIKE ANY(arr)` heißt
 „matcht MINDESTENS EIN Element nicht" — fast immer wahr, löscht zu viel.
 Korrekt: `NOT (x LIKE ANY(arr))`. Restore der gehaltenen Jobs siehe
-# 153-Kommentar (Ausführung nur nach dudus Go).
+
+# 153-Kommentar (Ausführung nur nach dudus Go)
 
 ## Split-Role Quickstart (#152): Retrieval lokal, Chunking extern
 

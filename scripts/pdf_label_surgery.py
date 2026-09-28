@@ -229,7 +229,9 @@ def classify(anchors: list[dict], spec: list[dict]) -> dict:
     )
     arabic_m = sorted(
         # pi-lens-ignore: unchecked-throwing-call-python
-        (a["page"], int(a["M"])) for a in anchors if _NUM.match(str(a.get("M", "")))
+        (a["page"], int(a["M"]))
+        for a in anchors
+        if _NUM.match(str(a.get("M", "")))
     )
     roman = sorted(
         (a["page"], parse_roman(a["M"]), a["M"])

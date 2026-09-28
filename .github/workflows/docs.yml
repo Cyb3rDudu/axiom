@@ -7,120 +7,120 @@
 name: docs
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'docs/**'
-      - 'mkdocs.yml'
-      - '.github/workflows/docs.yml'
-  pull_request:
-    paths:
-      - 'docs/**'
-      - 'mkdocs.yml'
-      - '.github/workflows/docs.yml'
-  workflow_dispatch:
+    push:
+        branches:
+            - main
+        paths:
+            - "docs/**"
+            - "mkdocs.yml"
+            - ".github/workflows/docs.yml"
+    pull_request:
+        paths:
+            - "docs/**"
+            - "mkdocs.yml"
+            - ".github/workflows/docs.yml"
+    workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+    contents: read
+    pages: write
+    id-token: write
 
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+    group: "pages"
+    cancel-in-progress: false
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+            - name: Setup Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
 
-      - name: Install MkDocs
-        run: pip install -r docs/requirements.txt
+            - name: Install MkDocs
+              run: pip install -r docs/requirements.txt
 
-      - name: Generalizability gate (no private infra in published docs)
-        run: |
-          if grep -rniE '192\.168\.|mothership|\/Users\/|100\.(6[4-9]|7[0-9]|8[0-9]|9[0-9]|1[0-2][0-7])\.' docs/ | grep -v '_inventory.md'; then
-            echo "private infra found in published docs"
-            exit 1
-          fi
+            - name: Generalizability gate (no private infra in published docs)
+              run: |
+                  if grep -rniE '192\.168\.|mothership|\/Users\/|100\.(6[4-9]|7[0-9]|8[0-9]|9[0-9]|1[0-2][0-7])\.' docs/ | grep -v '_inventory.md'; then
+                    echo "private infra found in published docs"
+                    exit 1
+                  fi
 
-      - name: Naming gate (product name 'axiom', not 'axiom-ng')
-        # Product name is 'axiom'. Allowed occurrences:
-        # 1) the single historical note in About ("was known as *axiom-ng*") —
-        #    exempted at phrase level, not whole-file;
-        # 2) go run/go build command lines referencing the axiom-ng binary —
-        #    either via the module path (`axiom_ng/cmd/axiom-ng`) or the
-        #    relative form after cd (`cd axiom_ng && go run ./cmd/axiom-ng`)
-        #    (code paths are technical facts);
-        # 3) the literal config-default cell in the configuration reference —
-        #    AXIOM_DISPATCHER_WORKER_ID ships the default string `axiom-ng`
-        #    (config.go), and the table must quote code defaults verbatim.
-        #    Exempt ONLY the standalone table cell `| `axiom-ng` |`;
-        # 4) CLI invocations of the binary (`./axiom-ng -flag …`,
-        #    `axiom-ng --version`) — the binary's name is a technical fact;
-        # 5) the OpenSearch index constant `axiom-ng-chunks-v1`
-        #    (dispatcher/outbox.go) — quoted verbatim in operational commands;
-        # 6) config default paths under `~/.axiom-ng/` (config.go) and the
-        #    release artifact/shim names (`axiom-ng-<version>…`, shim list);
-        # 7) the version banner (`axiom-ng v<semver>…`) — quoted verbatim in
-        #    /api/health examples; the banner string is a technical fact
-        #    (version.go), not product prose.
-        # 8) ADR 0001 (canonical naming) — the binding mapping decision
-        #    MUST name the legacy identifiers it maps. Scoped to TABLE
-        #    ROWS of that one ADR file only: the exemption anchors to the
-        #    grep output prefix (file origin) AND a leading `|` (table
-        #    row), so the §7 confinement — legacy literal only in the
-        #    mapping tables — is CI-enforced; legacy prose inside the
-        #    ADR and lines quoting the ADR path from elsewhere go red.
-        #    Future ADRs re-justify themselves.
-        # Both source greps run with -H so output lines ALWAYS carry the
-        # filename prefix — the anchor stage can then only ever match
-        # lines that genuinely originate from the docs/ scan. Without
-        # -H, a crafted mkdocs.yml line starting with the ADR path+
-        # colon+pipe would spoof the anchor and pass the gate.
-        # mkdocs.yml is checked as well, so a `site_name: axiom-ng`
-        # regression fails CI. docs/_inventory.md is internal meta and exempt.
-        run: |
-          if { grep -riH 'axiom-ng' docs/ --include='*.md'; grep -iH 'axiom-ng' mkdocs.yml; } \
-            | grep -v '_inventory.md' \
-            | grep -vF 'was known as *axiom-ng*' \
-            | grep -vE '(go run|go build).*(cmd/axiom-ng|axiom_ng/cmd/axiom-ng)' \
-            | grep -vE '(\./)?axiom-ng +-' \
-            | grep -vF 'axiom-ng-chunks-v1' \
-            | grep -vF '~/.axiom-ng/' \
-            | grep -vF 'axiom-ng-<version>' \
-            | grep -vF 'axiom-ng, axiom-compute-worker, axiom-repair-worker' \
-            | grep -vE 'axiom-ng v[0-9]' \
-            | grep -vE '\| `axiom-ng` \|' \
-            | grep -vE '^docs/adr/0001-canonical-naming\.md:\|'; then
-            echo "legacy product name 'axiom-ng' found in site content"
-            exit 1
-          fi
+            - name: Naming gate (product name 'axiom', not 'axiom-ng')
+              # Product name is 'axiom'. Allowed occurrences:
+              # 1) the single historical note in About ("was known as *axiom-ng*") —
+              #    exempted at phrase level, not whole-file;
+              # 2) go run/go build command lines referencing the axiom-ng binary —
+              #    either via the module path (`axiom_ng/cmd/axiom-ng`) or the
+              #    relative form after cd (`cd axiom_ng && go run ./cmd/axiom-ng`)
+              #    (code paths are technical facts);
+              # 3) the literal config-default cell in the configuration reference —
+              #    AXIOM_DISPATCHER_WORKER_ID ships the default string `axiom-ng`
+              #    (config.go), and the table must quote code defaults verbatim.
+              #    Exempt ONLY the standalone table cell `| `axiom-ng` |`;
+              # 4) CLI invocations of the binary (`./axiom-ng -flag …`,
+              #    `axiom-ng --version`) — the binary's name is a technical fact;
+              # 5) the OpenSearch index constant `axiom-ng-chunks-v1`
+              #    (dispatcher/outbox.go) — quoted verbatim in operational commands;
+              # 6) config default paths under `~/.axiom-ng/` (config.go) and the
+              #    release artifact/shim names (`axiom-ng-<version>…`, shim list);
+              # 7) the version banner (`axiom-ng v<semver>…`) — quoted verbatim in
+              #    /api/health examples; the banner string is a technical fact
+              #    (version.go), not product prose.
+              # 8) ADR 0001 (canonical naming) — the binding mapping decision
+              #    MUST name the legacy identifiers it maps. Scoped to TABLE
+              #    ROWS of that one ADR file only: the exemption anchors to the
+              #    grep output prefix (file origin) AND a leading `|` (table
+              #    row), so the §7 confinement — legacy literal only in the
+              #    mapping tables — is CI-enforced; legacy prose inside the
+              #    ADR and lines quoting the ADR path from elsewhere go red.
+              #    Future ADRs re-justify themselves.
+              # Both source greps run with -H so output lines ALWAYS carry the
+              # filename prefix — the anchor stage can then only ever match
+              # lines that genuinely originate from the docs/ scan. Without
+              # -H, a crafted mkdocs.yml line starting with the ADR path+
+              # colon+pipe would spoof the anchor and pass the gate.
+              # mkdocs.yml is checked as well, so a `site_name: axiom-ng`
+              # regression fails CI. docs/_inventory.md is internal meta and exempt.
+              run: |
+                  if { grep -riH 'axiom-ng' docs/ --include='*.md'; grep -iH 'axiom-ng' mkdocs.yml; } \
+                    | grep -v '_inventory.md' \
+                    | grep -vF 'was known as *axiom-ng*' \
+                    | grep -vE '(go run|go build).*(cmd/axiom-ng|axiom_ng/cmd/axiom-ng)' \
+                    | grep -vE '(\./)?axiom-ng +-' \
+                    | grep -vF 'axiom-ng-chunks-v1' \
+                    | grep -vF '~/.axiom-ng/' \
+                    | grep -vF 'axiom-ng-<version>' \
+                    | grep -vF 'axiom-ng, axiom-compute-worker, axiom-repair-worker' \
+                    | grep -vE 'axiom-ng v[0-9]' \
+                    | grep -vE '\| `axiom-ng` \|' \
+                    | grep -vE '^docs/adr/0001-canonical-naming\.md:\|'; then
+                    echo "legacy product name 'axiom-ng' found in site content"
+                    exit 1
+                  fi
 
-      - name: Build documentation
-        run: mkdocs build --clean --strict
+            - name: Build documentation
+              run: mkdocs build --clean --strict
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./site
+            - name: Upload artifact
+              uses: actions/upload-pages-artifact@v3
+              with:
+                  path: ./site
 
-  deploy:
-    if: github.event_name != 'pull_request'
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+    deploy:
+        if: github.event_name != 'pull_request'
+        environment:
+            name: github-pages
+            url: ${{ steps.deployment.outputs.page_url }}
+        runs-on: ubuntu-latest
+        needs: build
+        steps:
+            - name: Deploy to GitHub Pages
+              id: deployment
+              uses: actions/deploy-pages@v4
