@@ -97,7 +97,7 @@ jobs:
             | grep -vF 'axiom-ng-chunks-v1' \
             | grep -vF '~/.axiom-ng/' \
             | grep -vF 'axiom-ng-<version>' \
-            | grep -vF 'axiom-ng, axiom-runner' \
+            | grep -vF 'axiom-ng, axiom-compute-worker, axiom-repair-worker' \
             | grep -vE 'axiom-ng v[0-9]' \
             | grep -vE '\| `axiom-ng` \|' \
             | grep -vE '^docs/adr/0001-canonical-naming\.md:\|'; then

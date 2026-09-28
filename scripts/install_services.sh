@@ -20,6 +20,17 @@ SERVICES="com.axiom.rag com.axiom.rag-dispatch-gpu0 com.axiom.rag-dispatch-gpu1 
 ENV_FILES="rag.env rag-api.env rag-dispatch-gpu0.env rag-dispatch-gpu1.env rag-dispatch-gpu2.env runner.env"
 UID_N="$(id -u)"
 
+# F10 #304: a still-loaded legacy com.axiom.runner label would double-run
+# the worker on :8012 (two KeepAlive processes crash-looping for the port).
+# The label switch is the documented operator step — refuse to install
+# until it happened, naming the exact bootout command.
+if launchctl list 2>/dev/null | grep -q 'com\.axiom\.runner$'; then
+    echo "ERROR: legacy label com.axiom.runner is still loaded." >&2
+    echo "  Boot it out first (one-time, documented in deploy/launchd/README.md):" >&2
+    echo "    launchctl bootout gui/$UID_N/com.axiom.runner" >&2
+    exit 1
+fi
+
 with_bridge=0
 [ "${1:-}" = "--with-bridge" ] && with_bridge=1
 

@@ -11,13 +11,17 @@ to free GPU memory for embedder/reranker.
 
 import logging
 import re
+from typing import Any
 
 import torch
 
 logger = logging.getLogger(__name__)
 
-_mrebel_model = None
-_mrebel_tokenizer = None
+# Module-level caches, None until load_mrebel() — typed Any: the loaded
+# transformers objects are opaque to static analysis and the None-init is
+# load_mrebel's own contract (it assigns both before returning).
+_mrebel_model: Any = None
+_mrebel_tokenizer: Any = None
 
 
 def load_mrebel():

@@ -31,7 +31,13 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+_HERE = Path(__file__).resolve()
+# F10 (#304): axiom_compute_worker lives at <repo>/axiom-compute-worker/
+# axiom_compute_worker — one level below the repo root. Insert the project
+# dir so the lazy compute_core imports resolve in a plain venv without an
+# editable install (CI / fresh checkouts), not just on dev machines.
+sys.path.insert(0, str(_HERE.parents[1] / "axiom-compute-worker"))
+sys.path.insert(0, str(_HERE.parents[1]))
 
 # pymupdf/requests/compute_core stay FUNCTION-LOCAL (lazy): the pure plan
 # logic (validate_plan/label_at/candidates_1based) must be importable and

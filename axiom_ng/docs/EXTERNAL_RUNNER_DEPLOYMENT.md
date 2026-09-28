@@ -71,7 +71,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir -r requirements-heavy.txt
 COPY axiom-compute-worker/ /app/axiom-compute-worker/
 WORKDIR /app
-ENV PYTHONPATH=/app
+# F10 layout: the packages live INSIDE the project dir — PYTHONPATH must
+# point at it, not at /app (the package is one level deeper than pre-F10,
+# where the tree root WAS the package). Both the canonical module and the
+# axiom_ng_runner alias resolve under this path.
+ENV PYTHONPATH=/app/axiom-compute-worker
 EXPOSE 8012
 RUN touch /.dockerenv
 CMD ["python", "-m", "axiom_compute_worker"]

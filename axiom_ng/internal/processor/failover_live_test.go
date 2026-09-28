@@ -63,7 +63,11 @@ func TestIT_LiveFailoverRealRunner(t *testing.T) {
 	port := freePort(t)
 	fallbackURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	run := exec.Command(py, "-m", "axiom_compute_worker")
-	run.Dir = mustRepoRoot(t)
+	// Hermetic module resolution (#233 discipline, F10 layout): cwd = the
+	// worker project dir — the package parent. `python -m` puts cwd on
+	// sys.path, so the spawn works in a requirements-only venv, not just
+	// one carrying an editable install.
+	run.Dir = filepath.Join(mustRepoRoot(t), "axiom-compute-worker")
 	run.Env = append(os.Environ(),
 		"AXIOM_PROCESSOR_COMPUTE=reference",
 		fmt.Sprintf("AXIOM_PROCESSOR_PORT=%d", port),

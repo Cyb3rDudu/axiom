@@ -44,7 +44,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -375,10 +374,10 @@ func runEngine(ctx context.Context, input []byte, planOnly bool) ([]engineRow, e
 	}
 	cmd := exec.CommandContext(cctx, python, args...)
 	cmd.Dir = runnerDir
-	// The package is axiom_compute_worker (the runner checkout IS the package
-	// dir), so its PARENT must be importable; prepend it so a worktree
-	// checkout wins over a site-packages install.
-	cmd.Env = append(os.Environ(), "PYTHONPATH="+filepath.Dir(runnerDir)+string(os.PathListSeparator)+runnerDir)
+	// Hermetic module resolution (#233): cwd is the worker project dir —
+	// the package parent — so `python -m` resolves axiom_compute_worker
+	// from the checkout, not from any site-packages install.
+	cmd.Env = append(os.Environ(), "PYTHONPATH="+runnerDir)
 	cmd.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

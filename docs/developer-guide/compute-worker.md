@@ -183,11 +183,23 @@ warns exactly once per process and counts on every use
 **Residual risks for remote-carrier operators:** old carrier trees keep
 running untouched (their code never renamed). A carrier that re-syncs the
 repo must rsync `axiom-compute-worker/` instead of `axiom_ng_runner/` and
-update the Containerfile's `COPY` — `CMD ["python", "-m", "axiom_ng_runner"]`
-KEEPS WORKING on the new tree (warn-once alias). Dispatcher-side env may
-stay on the legacy spellings; each process warns once and reports the use.
-Role vocabulary (`AXIOM_QUERY_RUNNER_URL`, `AXIOM_INGEST_FALLBACK_URL`)
-deliberately keeps its spelling — F09 froze the topology semantics.
+update the Containerfile: `PYTHONPATH` must point at the PROJECT dir
+(`/app/axiom-compute-worker`), not its parent — pre-F10 the tree root was
+itself the package, now the packages sit one level inside (see the
+Containerfile in `EXTERNAL_RUNNER_DEPLOYMENT.md`). With PYTHONPATH on the
+project dir, `CMD ["python", "-m", "axiom_ng_runner"]` KEEPS WORKING
+(warn-once alias); with PYTHONPATH on `/app` BOTH the canonical and the
+legacy module fail to resolve. Dispatcher-side env may stay on the legacy
+spellings; each process warns once and reports the use. Role vocabulary
+(`AXIOM_QUERY_RUNNER_URL`, `AXIOM_INGEST_FALLBACK_URL`) deliberately keeps
+its spelling — F09 froze the topology semantics.
+
+**Alias scope:** the alias covers the package entrypoint
+(`python -m axiom_ng_runner`, `import axiom_ng_runner`, the console
+script) and re-exports the canonical top-level names. It deliberately does
+NOT register submodules — `import axiom_ng_runner.config` does not resolve;
+migrate such imports to `axiom_compute_worker.config` (ADR 0001 §4
+promises the module ENTRYPOINT, not the full submodule tree).
 
 Continue: [Processor Contract](processor-contract.md) ·
 [Architecture Overview](architecture.md) · [Configuration](configuration.md)

@@ -36,7 +36,7 @@ jobs:
       - name: Build runner + fixer artifacts
         run: |
           brew install zstd
-          make runner fixer
+          make compute-worker fixer
       - name: Checksums
         run: |
           ls -lh dist/

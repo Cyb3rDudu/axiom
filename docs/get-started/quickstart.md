@@ -33,11 +33,14 @@ same env file works at home and on the road. Details:
 [Services → ingest runner selection](../operations/services.md) and the
 [container deployment guide — Operations → Deployment](../operations/deployment.md).
 
-## 1. Run the axiom runner
+## 1. Run the axiom compute worker
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r axiom-compute-worker/requirements.txt
+# installing the project itself ships BOTH packages (canonical +
+# axiom_ng_runner alias) and the console script — requirements alone do
+# not put the module on the path (F10 layout)
+.venv/bin/pip install -r axiom-compute-worker/requirements.txt ./axiom-compute-worker
 export AXIOM_PROCESSOR_COMPUTE=reference
 export AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=<path-to-zotero-storage>  # the `storage` folder of your Zotero data dir
 .venv/bin/python -m axiom_compute_worker

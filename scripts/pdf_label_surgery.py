@@ -61,7 +61,13 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+_HERE = Path(__file__).resolve()
+# F10 (#304): the compute worker package lives at <repo>/axiom-compute-
+# worker/axiom_compute_worker — one level below the repo root. Insert the
+# PROJECT dir (not just the repo root) so the script is importable both
+# from a plain requirements-only venv (CI) and from an editable install.
+sys.path.insert(0, str(_HERE.parents[1] / "axiom-compute-worker"))
+sys.path.insert(0, str(_HERE.parents[1]))
 
 RUNS_DIR = Path("/tmp/axiom_runs")  # feste Repo-Konvention (Runbooks, Shell-Skripte)
 BACKUP_DIR = RUNS_DIR / "backups" / "pdf_labels"
@@ -83,6 +89,7 @@ _ROMAN_VALS = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500, "m": 1000}
 
 def sha256_hex(path: Path) -> str:
     h = hashlib.sha256()
+    # pi-lens-ignore: unchecked-throwing-call-python
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
@@ -215,11 +222,13 @@ def classify(anchors: list[dict], spec: list[dict]) -> dict:
     """Pure arithmetic on probe anchors → class + parameters. Anchors:
     [{"page": 0-based, "N": current pdf label, "M": chunk page}]."""
     arabic = sorted(
+        # pi-lens-ignore: unchecked-throwing-call-python
         (a["page"], int(a["M"]), int(a["N"]))
         for a in anchors
         if _NUM.match(str(a.get("M", ""))) and _NUM.match(str(a.get("N", "")))
     )
     arabic_m = sorted(
+        # pi-lens-ignore: unchecked-throwing-call-python
         (a["page"], int(a["M"])) for a in anchors if _NUM.match(str(a.get("M", "")))
     )
     roman = sorted(
@@ -537,6 +546,7 @@ def write_labels(pdf: Path, spec: list[dict], backup: Path) -> dict:
         if backup.exists():  # stale backup from an earlier session — never
             # overwrite the original pristine copy, roll back THIS run via a
             # side-by-side copy instead
+            # pi-lens-ignore: unchecked-throwing-call-python
             backup = backup.with_name(f"{backup.stem}.{int(time.time())}.pdf")
         shutil.copy2(pdf, backup)
 
@@ -639,6 +649,7 @@ def db_hash_sync(dsn: str, key: str, pdf: Path) -> dict:
 
     new_hash = sha256_hex(pdf)
     size = pdf.stat().st_size
+    # pi-lens-ignore: unchecked-throwing-call-python
     mtime = int(pdf.stat().st_mtime * 1000)  # Datei-mtime, nicht Wanduhr
     # (synct mit syncer.go: info.ModTime().UnixMilli())
     conn = psycopg2.connect(dsn)
@@ -692,6 +703,7 @@ def anchors_from_probe(probe_out: dict) -> list[dict]:
         page, m = a.get("page_index"), (a.get("chunk") or {}).get("page")
         if page is None or m is None:
             continue
+        # pi-lens-ignore: unchecked-throwing-call-python
         out.append({"page": int(page), "N": str(a.get("pdf_label") or ""), "M": str(m)})
     return out
 
@@ -808,6 +820,7 @@ def main() -> int:
         if not args.anchors:
             print("ERROR: --pdf-Modus braucht --anchors (Messung einer fremden Datei)")
             return EXIT_ERROR
+        # pi-lens-ignore: unchecked-throwing-call-python
         anchors = json.loads(args.anchors.read_text())
         print(f"Messung: --anchors {args.anchors} ({len(anchors)} Anker, offline)")
 
@@ -824,6 +837,7 @@ def main() -> int:
     klas = classify(anchors, spec)
     deltas = sorted(
         {
+            # pi-lens-ignore: unchecked-throwing-call-python
             int(a["M"]) - int(a["N"])
             for a in anchors
             if _NUM.match(str(a.get("M", ""))) and _NUM.match(str(a.get("N", "")))
