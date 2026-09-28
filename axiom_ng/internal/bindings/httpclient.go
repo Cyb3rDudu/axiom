@@ -32,7 +32,8 @@ const retryPause = 200 * time.Millisecond
 
 // transportCeiling caps one import's buffered content on the client (the
 // var form exists so the oversize sonde can lower it instead of
-// allocating a gigabyte).
+// allocating a gigabyte; the mutating test requires this package to stay
+// NON-PARALLEL — no t.Parallel in bindings tests).
 var transportCeiling = int64(1 << 30)
 
 // Options configures an HTTP binding client.
@@ -138,11 +139,14 @@ func (c *clientShared) do(ctx context.Context, component contracterr.Component, 
 // the typed error world. A 2xx body that fails to decode (truncated,
 // foreign, cut by the size limit — or the read aborted because the
 // budget expired mid-body) surfaces typed: context errors classify per
-// the mapping table (deadline → Deadline, caller cancel propagated
-// UNWRAPPED); every other decode failure is Internal. A mid-body
+// the mapping table via transportErr (one source of truth for both
+// phases); every other decode failure is Internal. A mid-body
 // connection RESET lands on the Internal branch by design — the
 // budget never expired and the caller never canceled, so there is no
-// honest class but Internal (review round 2, Finding 1).
+// honest class but Internal. Cause-based cancellation
+// (WithCancelCause & friends) is not used anywhere in this codebase;
+// if it ever is, re-check the classification (the transport surfaces
+// the CAUSE, which errors.Is would not match).
 func decodeBody(component contracterr.Component, op string, resp *http.Response, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -152,14 +156,10 @@ func decodeBody(component contracterr.Component, op string, resp *http.Response,
 		return nil
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(out); err != nil {
-		switch {
-		case errors.Is(err, context.Canceled):
-			return err // the caller gave up — unwrapped, per the table
-		case errors.Is(err, context.DeadlineExceeded):
-			return contracterr.New(component, contracterr.ClassDeadline, op+": deadline exceeded (component budget)")
-		default:
-			return contracterr.Wrap(component, contracterr.ClassInternal, err, op+": decoding response body")
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return transportErr(component, op, err) // context errors classify per the table
 		}
+		return contracterr.Wrap(component, contracterr.ClassInternal, err, op+": decoding response body")
 	}
 	return nil
 }

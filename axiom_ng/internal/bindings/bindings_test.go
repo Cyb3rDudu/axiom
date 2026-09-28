@@ -893,3 +893,29 @@ func TestBaseURLTrailingSlashTolerated(t *testing.T) {
 		t.Fatalf("trailing-slash BaseURL: %v", err)
 	}
 }
+
+// TestMidBodyHardResetIsInternal — the third mid-body outcome, pinned:
+// a server that hard-closes mid-JSON (no budget expiry, no cancel)
+// classifies Internal — there is no honest other class for it.
+func TestMidBodyHardResetIsInternal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"query":"x","top_n":10,`))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		panic(http.ErrAbortHandler) // hard close mid-body
+	}))
+	defer srv.Close()
+	sc := NewHTTPStoreClient(Options{BaseURL: srv.URL, Timeout: 5 * time.Second, Logger: quiet()})
+	_, err := sc.Search(context.Background(), store.SearchRequest{Query: "x"})
+	if err == nil {
+		t.Fatal("hard-closed body decoded successfully")
+	}
+	if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassInternal {
+		t.Fatalf("mid-body hard reset: class=%v typed=%v, want internal (err: %v)", class, ok, err)
+	}
+	if contracterr.Retryable(err) {
+		t.Fatalf("mid-body hard reset must not be retryable: %v", err)
+	}
+}

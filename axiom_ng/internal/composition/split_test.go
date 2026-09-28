@@ -275,8 +275,9 @@ func TestInternalEdgeLifecycleGuards(t *testing.T) {
 	r := &Root{logger: logger}
 	var edge internalEdge
 
-	// Bind collision: loud start failure (closeInternalEdge only on the
-	// error path that must not happen — on Fatal the process is done).
+	// Bind collision: loud start failure. The guard runs BEFORE Fatal
+	// (Fatal ends the goroutine — cleanup after it never runs); the
+	// success branch is the one that must not happen.
 	if err := r.serveInternalEdge(occupied.Addr().String(), http.NotFoundHandler(), "probe", &edge); err == nil {
 		closeInternalEdge(&edge, logger)
 		t.Fatal("edge bind over an occupied address succeeded — must be a loud start failure")

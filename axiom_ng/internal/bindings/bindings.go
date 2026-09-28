@@ -44,19 +44,22 @@
 // The wire carries the typed error envelope (component/class/message,
 // idempotency_key on conflicts); the client never string-matches:
 //
-//		wire / transport                    contract class       retryable
-//		──────────────────────────────────  ───────────────────  ────────
-//		envelope class (any typed answer)   that class           per class
-//		409 + idempotency_key               Conflict as          no
-//		                                    *IdempotencyMismatch
-//		connection refused/reset/EOF        Unavailable          yes
-//		request budget expired              Deadline             no (fresh
-//		(incl. mid-body)                                          budget only)
-//		non-envelope body                   status-table         per class
-//		                                    (404→NotFound …);
-//		                                    non-envelope 2xx →   no
-//		                                    Internal
-//		(context.Canceled is propagated unwrapped — the caller gave up,
+//	wire / transport                    contract class       retryable
+//	──────────────────────────────────  ───────────────────  ────────
+//	envelope class (any typed answer)   that class           per class
+//	409 + idempotency_key               Conflict as          no
+//	                                    *IdempotencyMismatch
+//	connection refused/reset/EOF        Unavailable          yes
+//	(killed backend)
+//	mid-body connection reset           Internal             no
+//	(no budget expiry, no cancel)
+//	request budget expired              Deadline             no (fresh
+//	(incl. mid-body)                                          budget only)
+//	non-envelope body                   status-table         per class
+//	                                    (404→NotFound …);
+//	                                    non-envelope 2xx →   no
+//	                                    Internal
+//	(context.Canceled is propagated unwrapped — the caller gave up,
 //	 whether it cancels the request or the body read)
 //
 // Messages of transport-mapped errors are fixed generic strings: no
