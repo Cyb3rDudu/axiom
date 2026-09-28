@@ -54,7 +54,9 @@
 //	mid-body connection reset           Internal             no
 //	(no budget expiry, no cancel)
 //	request budget expired              Deadline             no (fresh
-//	(incl. mid-body)                                          budget only)
+//	(incl. mid-body of a 2xx                                  budget only)
+//	answer; a stalled non-2xx body
+//	classifies by its known status)
 //	non-envelope body                   status-table         per class
 //	                                    (404→NotFound …);
 //	                                    non-envelope 2xx →   no

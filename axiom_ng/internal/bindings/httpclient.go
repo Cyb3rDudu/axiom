@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
@@ -207,7 +208,8 @@ func (c *HTTPLibraryClient) StartImportDetailed(ctx context.Context, req library
 		return library.ImportOperation{}, false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, err, "reading import content")
 	}
 	if int64(len(body)) > transportCeiling {
-		return library.ImportOperation{}, false, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "import content exceeds the internal transport ceiling (1 GiB)")
+		return library.ImportOperation{}, false, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument,
+			fmt.Sprintf("import content exceeds the internal transport ceiling (%d bytes)", transportCeiling))
 	}
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)

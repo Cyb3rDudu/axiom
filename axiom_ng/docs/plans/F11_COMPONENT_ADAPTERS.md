@@ -45,7 +45,7 @@ the public routes). The client never string-matches:
 | envelope class (any typed answer) | that class | per class |
 | 409 + `idempotency_key` | Conflict as `*IdempotencyMismatch` | no |
 | connection refused / reset / EOF (killed backend) | Unavailable | yes |
-| request budget expired (incl. mid-body) | Deadline | no (fresh budget only) |
+| request budget expired (incl. mid-body of a 2xx answer; a stalled non-2xx body classifies by its known status) | Deadline | no (fresh budget only) |
 | non-envelope body | status-table fallback (404→NotFound, 503→Unavailable, …); non-envelope 2xx → Internal | per class |
 | mid-body connection reset (no budget expiry, no cancel) | Internal | no |
 
