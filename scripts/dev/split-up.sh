@@ -54,6 +54,7 @@ for f in "$RAG_ENV" "$RAG_API_ENV" "$RUNNER_ENV"; do
     [ -r "$f" ] || die "env file not readable: $f"
 done
 command -v jq >/dev/null || die "jq required"
+command -v lsof >/dev/null || die "lsof required (port preflight + pid derivation)"
 [ -x "$REPO/axiom-compute-worker/.venv/bin/python" ] || die "runner venv missing: $REPO/axiom-compute-worker/.venv"
 
 if [ -f "$STATE/split.pid" ] && kill -0 "$(awk '$1=="api"{print $2}' "$STATE/split.pid")" 2>/dev/null; then

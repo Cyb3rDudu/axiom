@@ -281,12 +281,21 @@ func mountStoreRoutes(r chi.Router, svc store.Store, broker *events.Broker) {
 	})
 }
 
-// authGuard wraps a mux with the Authenticator hook.
+// authGuard wraps a mux with the Authenticator hook: a denial answers
+// 403 with the typed envelope (the class stays Internal — the client's
+// documented mapping — while the STATUS names what happened: an auth
+// refusal, not a component crash).
 func authGuard(auth Authenticator, component contracterr.Component) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			if err := auth.Authenticate(req); err != nil {
-				writeErr(w, component, contracterr.New(component, contracterr.ClassInternal, "internal edge authentication failed"))
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				body := errorEnvelope{}
+				body.Error.Component = string(component)
+				body.Error.Class = string(contracterr.ClassInternal)
+				body.Error.Message = "internal edge authentication failed"
+				_ = json.NewEncoder(w).Encode(body)
 				return
 			}
 			next.ServeHTTP(w, req)

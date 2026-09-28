@@ -19,8 +19,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -541,4 +543,266 @@ func TestEventRelayBridgesAndSkipsDerived(t *testing.T) {
 		}
 	}
 	close(consumerDone)
+}
+
+// ---------------------------------------------------------------------------
+// review-disposition witnesses (C1/M1/M2 + minors, #305 review round)
+
+// TestLargeFlushedBodySurvivesBudget — C1 regression: the per-request
+// budget's cancel must fire at Body.Close, not when the Do call returns.
+// A flushed body large enough to outrun the transport's buffering would
+// fail mid-read with "context canceled" under the broken lifetime.
+func TestLargeFlushedBodySurvivesBudget(t *testing.T) {
+	big := store.SearchResult{
+		Query: "big", TopN: 64,
+		Hits: make([]store.SearchHit, 0, 64),
+	}
+	pad := strings.Repeat("x", 8<<10) // 8 KiB per hit → ~512 KiB total
+	for i := 0; i < 64; i++ {
+		big.Hits = append(big.Hits, store.SearchHit{
+			ChunkID: fmt.Sprintf("chk-%03d", i), Text: pad, Score: 1,
+			Source:  store.Source{Bibliography: contractsuite.SeedBibliography, ContentType: "application/pdf"},
+			Locator: store.Locator{Kind: "page", Label: "S. 1"},
+			Section: []string{},
+		})
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		raw, _ := json.Marshal(big)
+		// flush in small chunks: nothing is pre-buffered for the client
+		for len(raw) > 0 {
+			n := 4 << 10
+			if n > len(raw) {
+				n = len(raw)
+			}
+			_, _ = w.Write(raw[:n])
+			raw = raw[n:]
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+	sc := NewHTTPStoreClient(Options{BaseURL: srv.URL, Timeout: 5 * time.Second, Logger: quiet()})
+	res, err := sc.Search(context.Background(), store.SearchRequest{Query: "big"})
+	if err != nil {
+		t.Fatalf("large flushed body failed (budget cancel fired before Close?): %v", err)
+	}
+	if len(res.Hits) != 64 || res.Hits[63].ChunkID != "chk-063" {
+		t.Fatalf("body truncated: %d hits, last=%q", len(res.Hits), lastChunk(res))
+	}
+}
+
+func lastChunk(res store.SearchResult) string {
+	if len(res.Hits) == 0 {
+		return ""
+	}
+	return res.Hits[len(res.Hits)-1].ChunkID
+}
+
+// TestTruncatedTwoXXBodyIsTypedInternal — M1 sonde: a 2xx answer whose
+// body is not decodable JSON surfaces as typed Internal, never a bare
+// error out of a contract method.
+func TestTruncatedTwoXXBodyIsTypedInternal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"hits":[`)) // truncated JSON, 200 status
+	}))
+	defer srv.Close()
+	sc := NewHTTPStoreClient(Options{BaseURL: srv.URL, Logger: quiet()})
+	_, err := sc.Search(context.Background(), store.SearchRequest{Query: "x"})
+	if err == nil {
+		t.Fatal("truncated body decoded successfully")
+	}
+	if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassInternal {
+		t.Fatalf("truncated 2xx body: class=%v typed=%v, want internal (err: %v)", class, ok, err)
+	}
+}
+
+// extendedFakeLibrary gives the reference fake the F06 decision surface
+// (replay detection + confirm/retry) so the edge's extended routes and
+// the client's extended methods are exercised as the real service shape.
+type extendedFakeLibrary struct {
+	*contractsuite.FakeLibrary
+	seen map[string]int // idempotency key → StartImport count
+}
+
+func newExtendedFakeLibrary() *extendedFakeLibrary {
+	return &extendedFakeLibrary{FakeLibrary: contractsuite.NewFakeLibrary(), seen: map[string]int{}}
+}
+
+func (e *extendedFakeLibrary) StartImport(ctx context.Context, req library.ImportRequest, content io.Reader) (library.ImportOperation, error) {
+	op, err := e.FakeLibrary.StartImport(ctx, req, content)
+	if err == nil {
+		e.seen[req.IdempotencyKey]++
+	}
+	return op, err
+}
+
+func (e *extendedFakeLibrary) StartImportDetailed(ctx context.Context, req library.ImportRequest, content io.Reader) (library.ImportOperation, bool, error) {
+	op, err := e.StartImport(ctx, req, content)
+	return op, e.seen[req.IdempotencyKey] > 1, err
+}
+
+func (e *extendedFakeLibrary) ConfirmImport(ctx context.Context, importID, decisionID, candidateID string) (library.ImportOperation, error) {
+	op, err := e.FakeLibrary.GetImport(ctx, library.ImportRef{ImportID: importID})
+	if err != nil {
+		return op, err
+	}
+	return op, nil
+}
+
+func (e *extendedFakeLibrary) RetryImport(ctx context.Context, importID string) (library.ImportOperation, error) {
+	return e.FakeLibrary.GetImport(ctx, library.ImportRef{ImportID: importID})
+}
+
+// TestExtendedLibrarySurfaceAcrossEdge — the F06 decision surface over
+// the edge: replay signal (200 vs 201), confirm, retry — plus the
+// capability-honest 404→NotFound for services without the surface.
+func TestExtendedLibrarySurfaceAcrossEdge(t *testing.T) {
+	backend := newExtendedFakeLibrary()
+	srv := httptest.NewServer(LibraryInternalRoutes(backend, nil))
+	defer srv.Close()
+	c := NewHTTPLibraryClient(Options{BaseURL: srv.URL, Logger: quiet()})
+	ctx := context.Background()
+
+	req := contractsuite.SeedBibliography // silence unused warnings path
+	_ = req
+	ireq := library.ImportRequest{
+		IdempotencyKey: "ext-1", RecordType: "book",
+		Target:        library.ImportTarget{LibraryID: "users/0"},
+		MetadataHints: library.MetadataHints{Title: contractsuite.SeedBibliography.Title},
+	}
+	first, replayed, err := c.StartImportDetailed(ctx, ireq, bytes.NewReader(contractsuite.SeedContent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed {
+		t.Fatal("fresh import reported as replay")
+	}
+	second, replayed, err := c.StartImportDetailed(ctx, ireq, bytes.NewReader(contractsuite.SeedContent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replayed {
+		t.Fatal("replayed import not detected (same key, same payload)")
+	}
+	if second.ImportID != first.ImportID {
+		t.Fatalf("replay returned %s, want the original %s", second.ImportID, first.ImportID)
+	}
+	confirmed, err := c.ConfirmImport(ctx, first.ImportID, "dec-1", "cand-1")
+	if err != nil || confirmed.ImportID != first.ImportID {
+		t.Fatalf("confirm across edge: op=%s err=%v", confirmed.ImportID, err)
+	}
+	retried, err := c.RetryImport(ctx, first.ImportID)
+	if err != nil || retried.ImportID != first.ImportID {
+		t.Fatalf("retry across edge: op=%s err=%v", retried.ImportID, err)
+	}
+
+	// Capability-honest: the plain fake has no F06 surface — the routes
+	// answer 404, the client maps to the contract's NotFound.
+	plain := httptest.NewServer(LibraryInternalRoutes(contractsuite.NewFakeLibrary(), nil))
+	defer plain.Close()
+	pc := NewHTTPLibraryClient(Options{BaseURL: plain.URL, Logger: quiet()})
+	if _, err := pc.ConfirmImport(ctx, "imp-void", "dec", "cand"); err == nil {
+		t.Fatal("confirm against a surface-less service answered success")
+	} else if class, _ := contracterr.ClassOf(err); class != contracterr.ClassNotFound {
+		t.Fatalf("confirm against a surface-less service: class=%v, want not_found (err: %v)", class, err)
+	}
+}
+
+// TestCallerCancelPropagatesUnwrapped — the documented table row: caller
+// cancellation propagates as context.Canceled (never wrapped into a
+// contract class), and no retry fires after the caller gave up.
+func TestCallerCancelPropagatesUnwrapped(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		writeJSON(w, http.StatusOK, store.SearchResult{})
+	}))
+	defer srv.Close()
+	defer close(release)
+	attempts := make(chan struct{}, 4)
+	tr := countingTransportWrap(attempts)
+	sc := NewHTTPStoreClient(Options{BaseURL: srv.URL, Logger: quiet(), Client: &http.Client{Transport: tr}})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	_, err := sc.Search(ctx, store.SearchRequest{Query: "x"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("caller cancel: err=%v (%T), want context.Canceled unwrapped", err, err)
+	}
+	if class, ok := contracterr.ClassOf(err); ok {
+		t.Fatalf("caller cancel was wrapped into class %s — cancellation is not a contract error", class)
+	}
+	if n := len(attempts); n > 1 {
+		t.Fatalf("retry fired after caller cancellation (%d attempts)", n)
+	}
+}
+
+// countingTransportWrap records each attempt on a channel.
+func countingTransportWrap(attempts chan<- struct{}) http.RoundTripper {
+	return roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		attempts <- struct{}{}
+		return http.DefaultTransport.RoundTrip(req)
+	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// TestInternalEdgeOversizeMultipartRejected — the edge's multipart bound:
+// an over-limit import body answers InvalidArgument, and the bound honors
+// the service's MaxImportBytes (the importMaxBounder branch).
+func TestInternalEdgeOversizeMultipartRejected(t *testing.T) {
+	bounded := boundedFakeLibrary{FakeLibrary: contractsuite.NewFakeLibrary()}
+	srv := httptest.NewServer(LibraryInternalRoutes(bounded, nil))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("request", `{"idempotency_key":"big-1","record_type":"book","target":{"library_id":"users/0"}}`)
+	fw, _ := mw.CreateFormFile("file", "big.pdf")
+	// The edge bound is the service limit PLUS the request-part headroom
+	// (4 MiB, the public route's convention) — the body must exceed both.
+	_, _ = fw.Write(bytes.Repeat([]byte("%PDF-1.4 padding"), 340*1024)) // ~4.6 MiB > 1 KiB + 4 MiB
+	_ = mw.Close()
+	resp, err := http.Post(srv.URL+"/internal/v1/library/imports", mw.FormDataContentType(), &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversize multipart: status %d, want 400 (body: %s)", resp.StatusCode, body)
+	}
+	if !bytes.Contains(body, []byte(`"invalid_argument"`)) {
+		t.Fatalf("oversize multipart: body is not the typed InvalidArgument envelope: %s", body)
+	}
+}
+
+// boundedFakeLibrary advertises a tiny import bound.
+type boundedFakeLibrary struct {
+	*contractsuite.FakeLibrary
+}
+
+func (boundedFakeLibrary) MaxImportBytes() int64 { return 1024 }
+
+// TestAuthHookDeniesStatus403 — pins the documented denial STATUS (the
+// class is Internal for the client; the status names the cause).
+func TestAuthHookDeniesStatus403(t *testing.T) {
+	srv := httptest.NewServer(StoreInternalRoutes(contractsuite.NewFakeStore(nil), nil, denyingAuth{}))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/internal/v1/store/search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("denied auth status = %d, want 403 (the documented denial status)", resp.StatusCode)
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
@@ -61,7 +62,7 @@ func newShared(component string, o Options) clientShared {
 		o.Logger = log.Default()
 	}
 	return clientShared{
-		base:    o.BaseURL + "/internal/v1/" + component,
+		base:    strings.TrimSuffix(o.BaseURL, "/") + "/internal/v1/" + component,
 		timeout: o.Timeout,
 		hc:      o.Client,
 		log:     o.Logger,
@@ -71,7 +72,13 @@ func newShared(component string, o Options) clientShared {
 // do runs one request; retryable once for GET-shaped calls. body must
 // be re-derivable when retryGET is set (nil or a bytes reader).
 func (c *clientShared) do(ctx context.Context, component contracterr.Component, op, method, path string, body []byte, headers map[string]string, retryGET bool) (*http.Response, error) {
-	attempt := func() (*http.Response, error) {
+	// attempt returns the budget's cancel WITH the response: the ctx
+	// governs the body's ENTIRE lifetime (net/http), so cancel must not
+	// fire before the caller finished reading — the returned body cancels
+	// it at Close (cancelOnClose). Firing it here (a defer inside the
+	// closure) would abort mid-body reads on every response large or
+	// flushed enough to outrun the transport's buffering (review C1).
+	attempt := func() (*http.Response, context.CancelFunc, error) {
 		var rd io.Reader
 		if body != nil {
 			rd = bytes.NewReader(body)
@@ -79,10 +86,10 @@ func (c *clientShared) do(ctx context.Context, component contracterr.Component, 
 		// The per-request budget replaces the caller ctx for this one
 		// flight (never shorter than the caller's own deadline).
 		bctx, cancel := context.WithTimeout(ctx, c.timeout)
-		defer cancel()
 		req, err := http.NewRequestWithContext(bctx, method, c.base+path, rd)
 		if err != nil {
-			return nil, contracterr.New(component, contracterr.ClassInternal, op+": build request failed")
+			cancel()
+			return nil, nil, contracterr.New(component, contracterr.ClassInternal, op+": build request failed")
 		}
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
@@ -92,13 +99,15 @@ func (c *clientShared) do(ctx context.Context, component contracterr.Component, 
 		}
 		resp, err := c.hc.Do(req)
 		if err != nil {
+			cancel()
 			c.log.Printf("bindings: %s %s: transport: %v", op, method, err)
-			return nil, transportErr(component, op, err)
+			return nil, nil, transportErr(component, op, err)
 		}
-		return resp, nil
+		return resp, cancel, nil
 	}
-	resp, err := attempt()
+	resp, cancel, err := attempt()
 	if err == nil {
+		resp.Body = &cancelOnClose{rc: resp.Body, cancel: cancel} // cancel fires at Body.Close, after the read
 		return resp, nil
 	}
 	if !retryGET || !contracterr.Retryable(err) || ctx.Err() != nil {
@@ -111,11 +120,18 @@ func (c *clientShared) do(ctx context.Context, component contracterr.Component, 
 		return nil, ctx.Err()
 	case <-time.After(retryPause):
 	}
-	return attempt()
+	resp, cancel, err = attempt()
+	if err == nil {
+		resp.Body = &cancelOnClose{rc: resp.Body, cancel: cancel}
+		return resp, nil
+	}
+	return nil, err
 }
 
 // decodeBody parses a 2xx JSON body into out; any other status maps to
-// the typed error world.
+// the typed error world. A 2xx body that is not decodable JSON (truncated,
+// foreign, or cut by the size limit) surfaces as Internal — every exit
+// of the client is typed (review M1).
 func decodeBody(component contracterr.Component, op string, resp *http.Response, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -124,7 +140,10 @@ func decodeBody(component contracterr.Component, op string, resp *http.Response,
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(out)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(out); err != nil {
+		return contracterr.Wrap(component, contracterr.ClassInternal, err, op+": decoding response body")
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -162,9 +181,15 @@ func (c *HTTPLibraryClient) StartImport(ctx context.Context, req library.ImportR
 // it. Content is fully buffered — the multipart body must be complete
 // before the first byte flies (and the service bound already caps it).
 func (c *HTTPLibraryClient) StartImportDetailed(ctx context.Context, req library.ImportRequest, content io.Reader) (library.ImportOperation, bool, error) {
-	body, err := io.ReadAll(io.LimitReader(content, 1<<30))
+	// Read one byte PAST the 1 GiB transport ceiling: oversize content
+	// fails loudly as InvalidArgument instead of silently truncating into
+	// a wrong-class hash conflict (review m4).
+	body, err := io.ReadAll(io.LimitReader(content, (1<<30)+1))
 	if err != nil {
 		return library.ImportOperation{}, false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, err, "reading import content")
+	}
+	if len(body) > 1<<30 {
+		return library.ImportOperation{}, false, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "import content exceeds the internal transport ceiling (1 GiB)")
 	}
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -218,11 +243,6 @@ func (c *HTTPLibraryClient) RetryImport(ctx context.Context, importID string) (l
 	var op library.ImportOperation
 	return op, decodeBody(contracterr.ComponentLibrary, "RetryImport", resp, &op)
 }
-
-// MaxImportBytes mirrors the service bound the deployment configures
-// (the public route polices its multipart framing with it; the internal
-// edge bounds by the backing service's own value).
-func (c *HTTPLibraryClient) MaxImportBytes() int64 { return 0 }
 
 func (c *HTTPLibraryClient) GetImport(ctx context.Context, ref library.ImportRef) (library.ImportOperation, error) {
 	if ref.ImportID == "" {

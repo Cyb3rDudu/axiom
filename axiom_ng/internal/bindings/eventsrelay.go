@@ -51,9 +51,7 @@ func BridgeEvents(ctx context.Context, storeURL string, broker *events.Broker, h
 			return
 		case <-time.After(backoff):
 		}
-		if backoff < 30*time.Second {
-			backoff *= 2
-		}
+		backoff = min(backoff*2, 30*time.Second)
 	}
 }
 
@@ -97,10 +95,6 @@ func streamOnce(ctx context.Context, storeURL string, broker *events.Broker, hc 
 	return n, sc.Err()
 }
 
-type statusErr int
-
-func (e statusErr) Error() string {
-	return fmt.Sprintf("event stream answered HTTP %d", int(e))
+func errUnexpectedStatus(code int) error {
+	return fmt.Errorf("event stream answered HTTP %d", code)
 }
-
-func errUnexpectedStatus(code int) error { return statusErr(code) }

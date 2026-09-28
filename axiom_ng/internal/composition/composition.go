@@ -240,6 +240,13 @@ func Select(cfg config.Config, logger *log.Logger, ports Ports, roles ...Role) (
 			return nil, fmt.Errorf("composition: AXIOM_FIXER_INVOKER_ENABLED is set but the store port is not startable (AXIOM_DATABASE_URL empty) — refusing to start half-wired: set the DSN or disable the worker")
 		}
 	}
+	// F11 #305: the internal library edge needs a Library service to
+	// serve; the misconfig (edge addr set, no import provider wired) is
+	// refused HERE — loudly, before anything starts — instead of
+	// mounting routes over a nil service (review m8).
+	if set[RoleSync] && cfg.InternalLibraryAddr != "" && cfg.LibraryImportProviders == "" {
+		return nil, fmt.Errorf("composition: internal library edge requested (AXIOM_INTERNAL_LIBRARY_ADDR=%s) but AXIOM_LIBRARY_IMPORT_PROVIDERS is empty — no Library service to serve it; configure a provider or drop the edge", cfg.InternalLibraryAddr)
+	}
 	// Precedence (documented for F05's role CLI): an EXPLICIT role selection
 	// wins over worker opt-in envs — but never silently. Full derives its
 	// roles from the config, so this can only fire for explicit Select calls
@@ -689,7 +696,8 @@ func (r *Root) componentsFor() []Component {
 			}
 			// F11 #305: the internal Library edge — the split topology's
 			// api process binds its Library contract surface here. Off by
-			// default (the all-in-one topology needs no internal edge).
+			// default (the all-in-one topology needs no internal edge);
+			// Select refuses the edge-without-service misconfig loudly.
 			if err := r.serveInternalEdge(r.cfg.InternalLibraryAddr,
 				bindings.LibraryInternalRoutes(r.libSvc, nil), "library", &r.libEdge); err != nil {
 				return err

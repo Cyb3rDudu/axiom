@@ -10,7 +10,7 @@
 
 | Topology | Library seam | Store seam | Public edge |
 |---|---|---|---|
-| `serve all` | Local — the `*library.Service` behind `LocalLibraryClient` where mediation is injected; the public import surface binds the service directly (its F06 extended methods are the surface) | Local — `*store.Service` behind `LocalStoreClient` (explicit since F11) | one process |
+| `serve all` | Local — the `*library.Service` bound directly (its F06 extended surface IS the public import surface); `LocalLibraryClient` formalizes the same seam for the parity suite | Local — `*store.Service` behind `LocalStoreClient` (explicit since F11) | one process |
 | split (`serve library` + `serve store` + `serve api`) | `HTTPLibraryClient` → `/internal/v1/library/…` on the library process | `HTTPStoreClient` → `/internal/v1/store/…` on the store process | the api process only |
 
 The SAME `contractsuite` (F03 harness, all fixtures, fault probes) runs against
@@ -57,10 +57,12 @@ and a killed Library process surfaces the SAME class as the local crash
 injection (Unavailable → 503 typed envelope on the import surface; the frozen
 legacy degradation shape on search).
 
-Retry policy: GET-shaped calls retry ONCE on retryable transport failure; the
-keyed writes (`StartImport`, `IngestRevision`) fly exactly once — idempotent by
-key, but a replay is the caller's explicit decision, never a hidden second
-flight.
+Retry policy: the small GET-shaped calls (GetSource, GetImport,
+ProjectCitation, Search, GetPassage) retry ONCE on retryable transport
+failure; `OpenRendition` streams — no automatic retry (a transport failure
+surfaces Unavailable, the caller decides). The keyed writes (`StartImport`,
+`IngestRevision`) fly exactly once — idempotent by key, but a replay is the
+caller's explicit decision, never a hidden flight.
 
 ## 4. WS/event edge decision: forwarding
 
@@ -81,9 +83,9 @@ lost on the api side, exactly like a WS gap; the durable truth is the DB).
 
 `bindings.Authenticator` guards every internal route; 0.2.0 ships the Noop
 default (the internal edge is deployment-private by topology — loopback binds).
-A denying authenticator answers 403 with the typed envelope; the client maps
-that to Internal (terminal). Real auth arrives post-0.2.0 through the same
-hook, with no component or binding changes.
+A denying authenticator answers 403 with the error envelope (class Internal —
+terminal for the client). Real auth arrives post-0.2.0 through the same hook,
+with no component or binding changes.
 
 ## 6. Public adapters and the field-name translation
 
@@ -95,11 +97,14 @@ interfaces over the HTTP clients, owning the ADR-0001 reverse translation
 test drives the REAL store forward mapping end to end — local public JSON and
 HTTP-bound public JSON are byte-equal for a field-rich fixture.
 
-Known delta (documented): the passage route's inactive-snapshot HINT degrades
+Known deltas (documented): the passage route's inactive-snapshot HINT degrades
 to the plain 404 in split mode (the contract carries one NotFound class; the
-hint body is 0.1.x legacy sugar). The legacy 0.1.x DB-backed surfaces (zotero
-sync/selection, KG, repair, jobs, processor source) stay process-local in every
-topology — they are not F03 contract surfaces; F12/F14 own their fate.
+hint body is 0.1.x legacy sugar); the search route's 400 message TEXT differs
+by topology (local: the search stack's wording; split: the store contract's
+typed message relayed verbatim — class and status identical, no golden pins
+the message). The legacy 0.1.x DB-backed surfaces (zotero sync/selection, KG,
+repair, jobs, processor source) stay process-local in every topology — they
+are not F03 contract surfaces; F12/F14 own their fate.
 
 ## 7. Dev topology
 
