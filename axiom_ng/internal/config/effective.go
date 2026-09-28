@@ -104,6 +104,13 @@ var envRows = []envRow{
 	{"AXIOM_QUARANTINE_ROOT", "QuarantineRoot", false},
 	{"AXIOM_API_PORT", "APIPort", false},
 	{"AXIOM_BIND_ADDR", "BindAddr", false},
+	// F11 #305: split-topology binding knobs (runtime deployment config;
+	// never part of the public client contract).
+	{"AXIOM_LIBRARY_URL", "LibraryURL", false},
+	{"AXIOM_STORE_URL", "StoreURL", false},
+	{"AXIOM_INTERNAL_LIBRARY_ADDR", "InternalLibraryAddr", false},
+	{"AXIOM_INTERNAL_STORE_ADDR", "InternalStoreAddr", false},
+	{"AXIOM_COMPONENT_TIMEOUT", "ComponentTimeout", false},
 	{"AXIOM_CONTEXTUAL_COLLECTIONS", "ContextualCollectionPaths", false},
 	{"AXIOM_CONTEXTUAL_TAGS", "ContextualTags", false},
 }

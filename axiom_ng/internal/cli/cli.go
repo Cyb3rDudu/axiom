@@ -100,6 +100,15 @@ func cmdServe(name string, args []string) int {
 		cfg = apiServeConfig(config.Load(), func(note string) {
 			fmt.Fprintln(os.Stderr, name+": note: "+note)
 		})
+		// F11 #305: in the split topology (AXIOM_LIBRARY_URL/
+		// AXIOM_STORE_URL set) the Library contract surface is served by
+		// the library PROCESS — a local provider here would race the
+		// single-writer lease and duplicate imports. Suppress it loudly,
+		// the serve-store precedent.
+		if cfg.LibraryURL != "" && cfg.LibraryImportProviders != "" {
+			fmt.Fprintf(os.Stderr, "%s: note: AXIOM_LIBRARY_IMPORT_PROVIDERS=%q set but serve api runs split-mode (AXIOM_LIBRARY_URL set) — the Library surface is served by the library process; local import providers stay off in this process\n", name, cfg.LibraryImportProviders)
+			cfg.LibraryImportProviders = ""
+		}
 		roles = apiRoles(cfg)
 		if len(roles) == 1 {
 			fmt.Fprintln(os.Stderr, name+": WARNING: AXIOM_DATABASE_URL not set; serving api-only (degraded)")
@@ -285,12 +294,20 @@ Usage: %[1]s <command> [args]
 Commands:
   serve all                     full stack through the composition root
                                 (config-derived: dispatcher/fixer opt-in envs)
-  serve api                     the API-serving roles (no claim/fixer loops)
+  serve api                     the API-serving roles (no claim/fixer loops);
+                                split topology when AXIOM_LIBRARY_URL/
+                                AXIOM_STORE_URL are set — the Library/Store
+                                contract surfaces bind to the component
+                                processes' internal edges (F11 #305)
   serve library                 Library slice: Zotero provider + import
                                 ladder + sync mirror (F07 #301; no
-                                store-processing, no repair)
-  serve store                   NOT YET: the store role arrives with F09
-                                (#303) — refuses loudly until then
+                                store-processing, no repair); serves the
+                                internal Library edge on
+                                AXIOM_INTERNAL_LIBRARY_ADDR when set
+  serve store                   the Store slice (F09 #303): revision
+                                intake + retrieval + dispatcher; serves the
+                                internal Store edge on
+                                AXIOM_INTERNAL_STORE_ADDR when set
   version [--json]              version banner (agrees with /api/health)
   doctor [--json]               config/DB/OpenSearch/artifact-root health;
                                 exit 0 only when fully healthy; never prints

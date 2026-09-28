@@ -40,6 +40,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/bindings"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/dispatcher"
@@ -156,7 +157,12 @@ type Root struct {
 	libStore *library.Store
 	// libProvider is the F07 Zotero adapter (nil without the zotero
 	// provider wiring); its Close releases the writer lease.
-	libProvider  *zoteroprovider.Provider
+	libProvider *zoteroprovider.Provider
+	// libSvc is the wired Library service (nil without a provider) — the
+	// internal edge (F11) serves it when configured.
+	libSvc       *library.Service
+	libEdge      internalEdge
+	storeEdge    internalEdge
 	broker       *events.Broker
 	syncSvc      *axsync.Service
 	storeSvc     *store.Service
@@ -611,6 +617,7 @@ func (r *Root) componentsFor() []Component {
 					r.logger.Printf("library: resumed %d inflight import(s) after restart", len(ids))
 				}
 				r.srv.SetLibraryAPI(libSvc)
+				r.libSvc = libSvc
 				r.logger.Printf("library: import routes wired with FAKE providers (deterministic fixtures; F07 replaces them with Zotero)")
 			case "":
 				r.logger.Printf("library: import providers not configured (AXIOM_LIBRARY_IMPORT_PROVIDERS) — /api/v1/library/imports answers 404")
@@ -671,6 +678,7 @@ func (r *Root) componentsFor() []Component {
 					r.logger.Printf("library: resumed %d inflight import(s) after restart", len(ids))
 				}
 				r.srv.SetLibraryAPI(libSvc)
+				r.libSvc = libSvc
 				if apiKey != "" {
 					r.logger.Printf("library: import routes wired with the ZOTERO provider (single-writer lease %s)", prov.LeaseScopeLabel())
 				} else {
@@ -678,6 +686,13 @@ func (r *Root) componentsFor() []Component {
 				}
 			default:
 				return fmt.Errorf("library: unknown AXIOM_LIBRARY_IMPORT_PROVIDERS %q (known: fake, zotero)", r.cfg.LibraryImportProviders)
+			}
+			// F11 #305: the internal Library edge — the split topology's
+			// api process binds its Library contract surface here. Off by
+			// default (the all-in-one topology needs no internal edge).
+			if err := r.serveInternalEdge(r.cfg.InternalLibraryAddr,
+				bindings.LibraryInternalRoutes(r.libSvc, nil), "library", &r.libEdge); err != nil {
+				return err
 			}
 			return nil
 		},
@@ -687,6 +702,7 @@ func (r *Root) componentsFor() []Component {
 				// the lease TTL covers the ungraceful exits).
 				_ = r.libProvider.Close()
 			}
+			closeInternalEdge(&r.libEdge, r.logger)
 			if r.database != nil {
 				r.database.Close()
 			}
@@ -841,9 +857,18 @@ func (r *Root) componentsFor() []Component {
 			r.srv.SetPassageService(searchSvc) // A1 #165: same service, passage surface
 			// F09 #303: the Store component behind the F03 contract —
 			// revision intake is the single processing entry; Search/
-			// GetPassage wrap the retrieval stack just wired.
+			// GetPassage wrap the retrieval stack just wired. F11 #305:
+			// the LOCAL binding is explicit (the binding choice per
+			// topology lives in the api component — same client shape
+			// in every topology).
 			r.storeSvc = store.New(r.rep, searchSvc, r.logger)
-			r.srv.SetStoreAPI(r.storeSvc)
+			r.srv.SetStoreAPI(bindings.NewLocalStoreClient(r.storeSvc))
+			// F11 #305: the internal Store edge (+ the SSE event stream
+			// the api process bridges onto its own broker in split).
+			if err := r.serveInternalEdge(r.cfg.InternalStoreAddr,
+				bindings.StoreInternalRoutes(r.storeSvc, r.broker, nil), "store", &r.storeEdge); err != nil {
+				return err
+			}
 			// Role probe (R4 Ziel 1/3): capability check of the query runner
 			// at start. Best-effort: an unreachable query runner keeps search
 			// degraded-but-up (R3 fallback).
@@ -851,7 +876,10 @@ func (r *Root) componentsFor() []Component {
 			r.srv.RegisterCheck("query-runner", runnerCheck(queryClient))
 			return nil
 		},
-		stop: func(ctx context.Context) error { return nil },
+		stop: func(ctx context.Context) error {
+			closeInternalEdge(&r.storeEdge, r.logger)
+			return nil
+		},
 	})
 
 	// ingest: ordered failover chain + health monitor.
@@ -951,6 +979,11 @@ func (r *Root) componentsFor() []Component {
 		name: "http",
 		role: RoleAPI,
 		start: func(ctx context.Context) error {
+			// F11 #305: the binding choice per topology — the split
+			// shape replaces the local Library/Store contract surfaces
+			// with the HTTP bindings (public routes unchanged; the
+			// legacy 0.1.x DB-backed surfaces stay local).
+			r.injectRemoteBindings(ctx)
 			r.httpSrv = &http.Server{
 				Addr:              r.srvAddr(),
 				Handler:           r.srv,
@@ -1007,4 +1040,82 @@ func (r *Root) Addr() string {
 		return ""
 	}
 	return r.ln.Addr().String()
+}
+
+// internalEdge is one F11 component edge listener (nil server = off).
+type internalEdge struct {
+	srv *http.Server
+}
+
+// serveInternalEdge binds handler on addr when addr != "" (the
+// all-in-one topology configures no internal edge). A bind failure is a
+// loud start failure, like the public listener; serve-loop errors after
+// a successful bind only log (clients degrade to typed 503s — the
+// fault-parity contract).
+func (r *Root) serveInternalEdge(addr string, handler http.Handler, component string, edge *internalEdge) error {
+	if addr == "" {
+		return nil
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("internal %s edge listen %s: %w", component, addr, err)
+	}
+	edge.srv = &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	r.logger.Printf("internal %s edge listening on %s (versioned /internal/v1)", component, addr)
+	go func() {
+		if err := edge.srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			r.logger.Printf("internal %s edge: %v", component, err)
+		}
+	}()
+	return nil
+}
+
+// closeInternalEdge shuts one internal edge down (nil-safe).
+func closeInternalEdge(edge *internalEdge, logger *log.Logger) {
+	if edge.srv == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := edge.srv.Shutdown(ctx); err != nil {
+		logger.Printf("internal edge shutdown: %v", err)
+	}
+	edge.srv = nil
+}
+
+// injectRemoteBindings applies the split topology (F11 #305): with
+// AXIOM_LIBRARY_URL / AXIOM_STORE_URL configured, the public Library
+// and Store contract surfaces bind to the remote component processes
+// through the HTTP bindings instead of the (still running) local
+// services — the public routes, their shapes, and the legacy 0.1.x
+// DB-backed surfaces stay untouched. The store process's event stream
+// is bridged onto this process's broker so /api/ws and
+// /api/runners/live work in every topology (the WS forwarding
+// decision, internal/bindings package doc).
+func (r *Root) injectRemoteBindings(ctx context.Context) {
+	if r.cfg.LibraryURL == "" && r.cfg.StoreURL == "" {
+		return
+	}
+	opts := func(base string) bindings.Options {
+		return bindings.Options{BaseURL: base, Timeout: r.cfg.ComponentTimeout, Logger: r.logger}
+	}
+	if r.cfg.LibraryURL != "" {
+		lib := bindings.NewHTTPLibraryClient(opts(r.cfg.LibraryURL))
+		r.srv.SetLibraryAPI(bindings.NewPublicLibrary(lib, r.cfg.LibraryImportMaxBytes))
+		r.logger.Printf("topology: Library surface bound via HTTP to %s (split mode)", r.cfg.LibraryURL)
+	}
+	if r.cfg.StoreURL != "" {
+		st := bindings.NewHTTPStoreClient(opts(r.cfg.StoreURL))
+		r.srv.SetStoreAPI(st)
+		r.srv.SetSearchService(bindings.PublicSearch{Store: st})
+		r.srv.SetPassageService(bindings.PublicPassage{Store: st})
+		r.logger.Printf("topology: Store surface bound via HTTP to %s (split mode)", r.cfg.StoreURL)
+		// Event forwarding: only when THIS process owns no dispatcher (a
+		// local dispatcher's events already feed the local broker; a
+		// bridge would double-publish).
+		if r.broker != nil && !r.roles[RoleDispatcher] {
+			go bindings.BridgeEvents(ctx, r.cfg.StoreURL, r.broker, nil, r.logger)
+			r.logger.Printf("topology: event bridge active (store bus -> local broker)")
+		}
+	}
 }

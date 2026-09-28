@@ -183,6 +183,26 @@ type Config struct {
 	// explicitly overridden.
 	BindAddr string
 
+	// Split-topology binding config (F11 #305): the public client surface
+	// stays ONE base URL — these addresses are runtime deployment config,
+	// never part of the public contract.
+	//
+	// LibraryURL/StoreURL (AXIOM_LIBRARY_URL / AXIOM_STORE_URL) bind this
+	// process's Library/Store CONTRACT surfaces to the remote component
+	// processes' internal edges instead of the local services (the
+	// `serve api` split shape; "" = local binding, today's default).
+	LibraryURL string
+	StoreURL   string
+	// InternalLibraryAddr/InternalStoreAddr (AXIOM_INTERNAL_LIBRARY_ADDR /
+	// AXIOM_INTERNAL_STORE_ADDR) serve the /internal/v1/… component edges
+	// on their own listeners ("" = off — the all-in-one topology needs
+	// no internal edge).
+	InternalLibraryAddr string
+	InternalStoreAddr   string
+	// ComponentTimeout (AXIOM_COMPONENT_TIMEOUT, Go duration) bounds each
+	// non-streaming internal call (0 = the bindings default, 30s).
+	ComponentTimeout time.Duration
+
 	// ContextualCollectionPaths (#255) are collection paths (any depth,
 	// e.g. "VWL/Lectures,ORG/Lectures") whose member documents are projected
 	// citation_class='contextual': searchable at full rank, never citable,
@@ -262,6 +282,11 @@ func Load() Config {
 		QuarantineRoot:             env("AXIOM_QUARANTINE_ROOT", quarantineDefault),
 		APIPort:                    envInt("AXIOM_API_PORT", defaultAPIPort),
 		BindAddr:                   env("AXIOM_BIND_ADDR", defaultBindAddr),
+		LibraryURL:                 env("AXIOM_LIBRARY_URL", ""),
+		StoreURL:                   env("AXIOM_STORE_URL", ""),
+		InternalLibraryAddr:        env("AXIOM_INTERNAL_LIBRARY_ADDR", ""),
+		InternalStoreAddr:          env("AXIOM_INTERNAL_STORE_ADDR", ""),
+		ComponentTimeout:           envDur("AXIOM_COMPONENT_TIMEOUT", 0),
 		ContextualCollectionPaths:  parseNameList(env("AXIOM_CONTEXTUAL_COLLECTIONS", "")),
 		ContextualTags:             parseNameList(env("AXIOM_CONTEXTUAL_TAGS", "")),
 	}
