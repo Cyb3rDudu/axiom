@@ -47,6 +47,17 @@ type FaultControl interface {
 	ClearFaults()
 }
 
+// ContentCorruptor is the F11 fault knob for the fetch-success/
+// hash-mismatch intake path (registered in F03, redeemed by #305): a
+// one-shot diverging resolver. CorruptNextContent arms the NEXT content
+// ticket resolution to serve bytes that do NOT hash to the revision's
+// ContentHash — fetch succeeds, verification fails. The suite's probe
+// then pins the contract answer: Conflict, visible identically through
+// every binding (local and HTTP).
+type ContentCorruptor interface {
+	CorruptNextContent()
+}
+
 // Canonical fixtures. One content, one bibliography, one revision —
 // shared by both suites so the Library→Store bridge is probed with the
 // exact same artifact both sides will see in production.
@@ -483,6 +494,7 @@ func StoreSuite(t *testing.T, impl store.Store) {
 			return err
 		},
 	}, impl)
+	runCorruptorProbe(t, impl)
 }
 
 func storeProbes(impl store.Store) []probe {
@@ -645,6 +657,27 @@ func storeProbes(impl store.Store) []probe {
 			}
 			return nil
 		}},
+		{"Search: whitespace-padded query still finds (normalization fidelity)", func() error {
+			if _, err := ingest(); err != nil {
+				return err
+			}
+			// The real search normalizes the query before matching (blank
+			// checks trim; tokenization ignores padding). A padded SeedToken
+			// must therefore find the record — a fake that substring-matches
+			// the RAW query diverges from the real normalization and goes red
+			// here (the F03-registered query-trim fidelity nit, redeemed by
+			// F11 #305: fakes mirror the real query normalization).
+			res, err := impl.Search(ctx, store.SearchRequest{Query: "  " + SeedToken + "  "})
+			if err != nil {
+				return err
+			}
+			for _, h := range res.Hits {
+				if h.Source.RecordID == SeedBibliography.RecordID {
+					return nil
+				}
+			}
+			return fmt.Errorf("padded query %q found no hit from record %s — query normalization diverges from the real search", "  "+SeedToken+"  ", SeedBibliography.RecordID)
+		}},
 		{"GetPassage: resolves a hit's chunk consistently", func() error {
 			if _, err := ingest(); err != nil {
 				return err
@@ -777,4 +810,45 @@ func runFaultProbes(t *testing.T, component string, targets faultTargets, impl a
 			}
 		})
 	}
+}
+
+// runCorruptorProbe pins the fetch-success/hash-mismatch intake path —
+// only if the implementation offers the ContentCorruptor knob (F11
+// #305): a FRESH intake whose ticket resolves to diverging bytes must
+// answer Conflict (the revision describes content the Library cannot
+// serve), never a silent accept and never Unavailable. The probe is
+// binding-neutral: local and HTTP bindings surface the identical class
+// because both carry the backend's typed answer.
+func runCorruptorProbe(t *testing.T, impl store.Store) {
+	t.Helper()
+	cc, ok := impl.(ContentCorruptor)
+	if !ok {
+		return
+	}
+	t.Run("Faults: fetch-success hash mismatch is Conflict", func(t *testing.T) {
+		if err := corruptorProbe(impl, cc); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// corruptorProbe is the probe body (error-returning so the sonde test
+// can prove it bites against a knob that lies).
+func corruptorProbe(impl store.Store, cc ContentCorruptor) error {
+	cc.CorruptNextContent()
+	_, err := impl.IngestRevision(context.Background(), store.IngestRevisionRequest{
+		IdempotencyKey: "store-hashmismatch-1",
+		Revision:       SeedRevision,
+	})
+	if err := classIs(err, contracterr.ClassConflict, "hash mismatch after successful fetch"); err != nil {
+		return err
+	}
+	var mm *contracterr.IdempotencyMismatch
+	if errors.As(err, &mm) {
+		return fmt.Errorf("hash mismatch reported as idempotency mismatch (%v) — the key was fresh; divergence is content, not replay", err)
+	}
+	if contracterr.Retryable(err) {
+		return errors.New("hash mismatch classified retryable — the same corrupt bytes would fail forever")
+	}
+	return nil
 }

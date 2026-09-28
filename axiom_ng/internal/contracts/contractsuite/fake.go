@@ -314,11 +314,13 @@ type fakeChunk struct {
 // chunking, substring retrieval. Content arrives through the resolver
 // the constructor receives — exactly how F09's real store pulls via the
 // Library seam (in-process or HTTP), never a byte smuggled in the
-// request.
+// request. The optional ContentCorruptor knob (F11 #305) wraps the
+// resolver one-shot: the next resolution serves diverging bytes.
 type FakeStore struct {
 	mu         sync.Mutex
 	faultBook  faultBook
 	resolve    func(ticket string) ([]byte, error)
+	corruptOne bool // armed by CorruptNextContent, consumed by the next resolve
 	seq        int
 	jobs       map[string]store.IngestJob
 	byKey      map[string]string // idempotency key → job id
@@ -343,6 +345,15 @@ func NewFakeStore(resolve func(ticket string) ([]byte, error)) *FakeStore {
 // InjectFault/ClearFaults satisfy FaultControl.
 func (f *FakeStore) InjectFault(method string, err error) { f.faultBook.InjectFault(method, err) }
 func (f *FakeStore) ClearFaults()                         { f.faultBook.ClearFaults() }
+
+// CorruptNextContent arms the one-shot diverging resolver: the NEXT
+// ticket resolution succeeds but serves bytes that do not hash to the
+// revision's ContentHash (the F11 ContentCorruptor knob).
+func (f *FakeStore) CorruptNextContent() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.corruptOne = true
+}
 
 func (f *FakeStore) next() time.Time {
 	f.seq++
@@ -380,9 +391,20 @@ func (f *FakeStore) IngestRevision(ctx context.Context, req store.IngestRevision
 	// Resolve the ticket WITHOUT holding the lock — the resolver is an
 	// external callback (the Library binding); calling it under the
 	// mutex would serialize every intake behind the slowest fetch.
+	f.mu.Lock()
+	corrupt := f.corruptOne
+	f.corruptOne = false
+	f.mu.Unlock()
 	content, err := f.resolve(req.Revision.ContentTicket)
 	if err != nil {
 		return store.IngestJob{}, contracterr.Wrap(contracterr.ComponentStore, contracterr.ClassUnavailable, err, "resolving content ticket")
+	}
+	if corrupt {
+		// Fetch-success divergence: append bytes the revision does not
+		// describe — the hash check below turns this into the contract's
+		// Conflict (the F03-registered probe path; one-shot by design, the
+		// arm cleared above).
+		content = append(append([]byte{}, content...), ' ', 'c', 'o', 'r', 'r', 'u', 'p', 't', 'e', 'd')
 	}
 	if revision.HashContent(content) != req.Revision.ContentHash {
 		return store.IngestJob{}, contracterr.New(contracterr.ComponentStore, contracterr.ClassConflict, "content does not match the revision hash")
@@ -448,6 +470,12 @@ func (f *FakeStore) Search(ctx context.Context, req store.SearchRequest) (store.
 	if req.TopN <= 0 {
 		req.TopN = 10
 	}
+	// Query-trim fidelity (F03 nit, redeemed by F11 #305): the real
+	// search normalizes before matching — the blank check trims, and the
+	// recall arms tokenize (padding never reaches the matcher). The fake
+	// mirrors that: it matches on the TRIMMED query, so a padded token
+	// finds the same chunks the real search would.
+	q := strings.TrimSpace(req.Query)
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -456,7 +484,7 @@ func (f *FakeStore) Search(ctx context.Context, req store.SearchRequest) (store.
 		if req.Filters != nil && len(req.Filters.DocumentIDs) > 0 && !contains(req.Filters.DocumentIDs, c.docID) {
 			continue
 		}
-		if !strings.Contains(c.text, req.Query) {
+		if !strings.Contains(c.text, q) {
 			continue
 		}
 		hits = append(hits, store.SearchHit{

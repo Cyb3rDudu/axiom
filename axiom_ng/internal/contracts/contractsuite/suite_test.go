@@ -327,3 +327,56 @@ func TestFakeLibraryMagicWiringWitness(t *testing.T) {
 		t.Fatalf("rejected import burned the sequence: next import id = %s, want imp-1", op.ImportID)
 	}
 }
+
+// --- F11 sondes: the corruptor knob and query-trim fidelity --------------
+
+// noopCorruptorStore advertises the ContentCorruptor knob but never
+// corrupts — the sin under test: the probe must not pass against a
+// lying knob (it would be a vacuous gate).
+type noopCorruptorStore struct{ *FakeStore }
+
+func (noopCorruptorStore) CorruptNextContent() {}
+
+func TestSondeNoopCorruptorGoesRed(t *testing.T) {
+	if err := corruptorProbe(noopCorruptorStore{NewFakeStore(nil)}, noopCorruptorStore{}); err == nil {
+		t.Fatal("no-op corruptor passed the probe — the hash-mismatch gate is vacuous")
+	}
+}
+
+// rawQueryStore matches the RAW (untrimmed) query — the pre-F11 fake
+// behavior: the padded-query fidelity probe must go red against it.
+type rawQueryStore struct{ *FakeStore }
+
+func (r rawQueryStore) Search(ctx context.Context, req store.SearchRequest) (store.SearchResult, error) {
+	if strings.TrimSpace(req.Query) != "" && strings.Contains(req.Query, " ") {
+		// the sin under test: a padded query finds nothing (raw substring)
+		req.Query = "definitely-no-chunk-contains-this " + req.Query
+	}
+	return r.FakeStore.Search(ctx, req)
+}
+
+func TestSondeRawQueryMatchGoesRed(t *testing.T) {
+	failed, err := runProbe(storeProbes(rawQueryStore{NewFakeStore(nil)}),
+		"Search: whitespace-padded query still finds (normalization fidelity)")
+	if !failed {
+		t.Fatalf("raw-query-matching fake passed the fidelity probe — the harness has no teeth (err: %v)", err)
+	}
+}
+
+// TestFakeStoreCorruptorIsOneShot — the knob corrupts exactly the next
+// resolution; a second intake with honest resolution must succeed (an
+// armed-forever knob would poison every later probe run).
+func TestFakeStoreCorruptorIsOneShot(t *testing.T) {
+	fs := NewFakeStore(nil)
+	fs.CorruptNextContent()
+	if _, err := fs.IngestRevision(context.Background(), store.IngestRevisionRequest{
+		IdempotencyKey: "oneshot-1", Revision: SeedRevision,
+	}); err == nil {
+		t.Fatal("armed corruption did not fire")
+	}
+	if _, err := fs.IngestRevision(context.Background(), store.IngestRevisionRequest{
+		IdempotencyKey: "oneshot-2", Revision: SeedRevision,
+	}); err != nil {
+		t.Fatalf("corruption stayed armed after the first resolve: %v", err)
+	}
+}
