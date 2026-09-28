@@ -28,8 +28,10 @@
 # Kill probe (fault parity): kill the library process and observe the api's
 # typed unavailable envelope on the public import surface —
 #   kill "$(awk '$1=="library"{print $2}' "$HOME/.local/state/axiom-dev/split.pid")"
-#   curl -s -X POST http://127.0.0.1:8111/api/v1/library/imports -H 'Content-Type: application/json' -d '{}'
+#   curl -s "http://127.0.0.1:8111/api/v1/library/imports/probe-killed"
 #   → 503 {"error":{"component":"library","class":"unavailable",…}} (no port/stack leak)
+# (GET suffices — the status route reaches the binding directly; a bare POST
+# would fail the route's multipart parsing with 400 before probing the edge)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"

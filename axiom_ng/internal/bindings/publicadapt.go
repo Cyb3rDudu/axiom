@@ -31,14 +31,18 @@ type PublicLibrary struct {
 	detailed func(ctx context.Context, req library.ImportRequest, content io.Reader) (library.ImportOperation, bool, error)
 }
 
-// importBoundEnvelope is the transport-framing safety net when no bound
-// is configured (the F06 hard cap, generous by design): the internal
-// edge bounds by the backing service's own limit regardless.
+// importBoundEnvelope is the F06 HARD CAP as a transport-framing safety
+// net — NOT a second default. The one production caller (the composition
+// root) resolves the effective bound: the deployment's
+// AXIOM_LIBRARY_IMPORT_MAX_BYTES or the F06 service default. Only a
+// direct wiring that passes <=0 lands here, and the internal edge bounds
+// by the backing service's own limit regardless.
 const importBoundEnvelope = 2 << 30
 
 // NewPublicLibrary binds the public import surface over lib (an
 // HTTPLibraryClient or any Library). maxImportBytes mirrors the
-// deployment's AXIOM_LIBRARY_IMPORT_MAX_BYTES (<=0 = the envelope).
+// deployment's AXIOM_LIBRARY_IMPORT_MAX_BYTES (the composition resolves
+// the F06 default when unset; <=0 = the hard-cap envelope).
 func NewPublicLibrary(lib library.Library, maxImportBytes int64) *PublicLibrary {
 	if maxImportBytes <= 0 {
 		maxImportBytes = importBoundEnvelope

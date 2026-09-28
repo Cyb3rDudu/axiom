@@ -25,13 +25,6 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contractsuite"
 )
 
-// splitFixture is one fake component edge (backend) the api process
-// binds to.
-type splitFixture struct {
-	srv    *httptest.Server
-	logger *log.Logger
-}
-
 func TestSplitTopologyPublicSurfaceViaHTTPBindings(t *testing.T) {
 	libBackend := contractsuite.NewFakeLibrary()
 	libEdge := httptest.NewServer(bindings.LibraryInternalRoutes(libBackend, nil))
@@ -282,10 +275,11 @@ func TestInternalEdgeLifecycleGuards(t *testing.T) {
 	r := &Root{logger: logger}
 	var edge internalEdge
 
-	// Bind collision: loud start failure.
+	// Bind collision: loud start failure (closeInternalEdge only on the
+	// error path that must not happen — on Fatal the process is done).
 	if err := r.serveInternalEdge(occupied.Addr().String(), http.NotFoundHandler(), "probe", &edge); err == nil {
-		t.Fatal("edge bind over an occupied address succeeded — must be a loud start failure")
 		closeInternalEdge(&edge, logger)
+		t.Fatal("edge bind over an occupied address succeeded — must be a loud start failure")
 	}
 
 	// Nil-service guard: the library edge without a Library service is

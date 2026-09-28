@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"mime/multipart"
@@ -28,6 +29,11 @@ const DefaultComponentTimeout = 30 * time.Second
 
 // retryPause spaces the single read retry.
 const retryPause = 200 * time.Millisecond
+
+// transportCeiling caps one import's buffered content on the client (the
+// var form exists so the oversize sonde can lower it instead of
+// allocating a gigabyte).
+var transportCeiling = int64(1 << 30)
 
 // Options configures an HTTP binding client.
 type Options struct {
@@ -129,9 +135,14 @@ func (c *clientShared) do(ctx context.Context, component contracterr.Component, 
 }
 
 // decodeBody parses a 2xx JSON body into out; any other status maps to
-// the typed error world. A 2xx body that is not decodable JSON (truncated,
-// foreign, or cut by the size limit) surfaces as Internal — every exit
-// of the client is typed (review M1).
+// the typed error world. A 2xx body that fails to decode (truncated,
+// foreign, cut by the size limit — or the read aborted because the
+// budget expired mid-body) surfaces typed: context errors classify per
+// the mapping table (deadline → Deadline, caller cancel propagated
+// UNWRAPPED); every other decode failure is Internal. A mid-body
+// connection RESET lands on the Internal branch by design — the
+// budget never expired and the caller never canceled, so there is no
+// honest class but Internal (review round 2, Finding 1).
 func decodeBody(component contracterr.Component, op string, resp *http.Response, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -141,7 +152,14 @@ func decodeBody(component contracterr.Component, op string, resp *http.Response,
 		return nil
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(out); err != nil {
-		return contracterr.Wrap(component, contracterr.ClassInternal, err, op+": decoding response body")
+		switch {
+		case errors.Is(err, context.Canceled):
+			return err // the caller gave up — unwrapped, per the table
+		case errors.Is(err, context.DeadlineExceeded):
+			return contracterr.New(component, contracterr.ClassDeadline, op+": deadline exceeded (component budget)")
+		default:
+			return contracterr.Wrap(component, contracterr.ClassInternal, err, op+": decoding response body")
+		}
 	}
 	return nil
 }
@@ -181,14 +199,14 @@ func (c *HTTPLibraryClient) StartImport(ctx context.Context, req library.ImportR
 // it. Content is fully buffered — the multipart body must be complete
 // before the first byte flies (and the service bound already caps it).
 func (c *HTTPLibraryClient) StartImportDetailed(ctx context.Context, req library.ImportRequest, content io.Reader) (library.ImportOperation, bool, error) {
-	// Read one byte PAST the 1 GiB transport ceiling: oversize content
+	// Read one byte PAST the transport ceiling: oversize content
 	// fails loudly as InvalidArgument instead of silently truncating into
 	// a wrong-class hash conflict (review m4).
-	body, err := io.ReadAll(io.LimitReader(content, (1<<30)+1))
+	body, err := io.ReadAll(io.LimitReader(content, transportCeiling+1))
 	if err != nil {
 		return library.ImportOperation{}, false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, err, "reading import content")
 	}
-	if len(body) > 1<<30 {
+	if int64(len(body)) > transportCeiling {
 		return library.ImportOperation{}, false, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "import content exceeds the internal transport ceiling (1 GiB)")
 	}
 	var buf bytes.Buffer
@@ -260,10 +278,10 @@ func (c *HTTPLibraryClient) OpenRendition(ctx context.Context, ticket library.Co
 	if ticket == "" {
 		return nil, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "content ticket is blank")
 	}
-	// Streaming: the CALLER's ctx governs the body read; the per-request
-	// budget covers only the response start (no total cap — a rendition
-	// may be large and slow, and the contract has the CALLER verify the
-	// hash and close the stream).
+	// Streaming: the CALLER's ctx governs the ENTIRE exchange — no
+	// total budget on the stream (a rendition may be large and slow; the
+	// contract has the CALLER verify the hash and close the stream). The
+	// per-request budget deliberately does NOT apply here.
 	ctx, cancel := context.WithCancel(ctx)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.sh.base+"/renditions/"+pathEscape(string(ticket)), nil)
 	if err != nil {

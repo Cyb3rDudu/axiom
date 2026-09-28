@@ -667,8 +667,6 @@ func TestExtendedLibrarySurfaceAcrossEdge(t *testing.T) {
 	c := NewHTTPLibraryClient(Options{BaseURL: srv.URL, Logger: quiet()})
 	ctx := context.Background()
 
-	req := contractsuite.SeedBibliography // silence unused warnings path
-	_ = req
 	ireq := library.ImportRequest{
 		IdempotencyKey: "ext-1", RecordType: "book",
 		Target:        library.ImportTarget{LibraryID: "users/0"},
@@ -804,5 +802,94 @@ func TestAuthHookDeniesStatus403(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("denied auth status = %d, want 403 (the documented denial status)", resp.StatusCode)
+	}
+}
+
+// TestMidBodyBudgetExpiryClassifiesDeadline — review round 2, Finding 1:
+// the budget ctx spans the whole body lifetime (C1 fix); expiring
+// MID-BODY must classify Deadline (the mapping table), not Internal —
+// the public surface maps Deadline to 504, not 500.
+func TestMidBodyBudgetExpiryClassifiesDeadline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"query":"x","top_n":10,"reranked":false,`))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done() // stall mid-body until the budget kills us
+	}))
+	defer srv.Close()
+	sc := NewHTTPStoreClient(Options{BaseURL: srv.URL, Timeout: 100 * time.Millisecond, Logger: quiet()})
+	_, err := sc.Search(context.Background(), store.SearchRequest{Query: "x"})
+	if err == nil {
+		t.Fatal("stalled body answered within the budget")
+	}
+	if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassDeadline {
+		t.Fatalf("mid-body budget expiry: class=%v typed=%v, want deadline (err: %v)", class, ok, err)
+	}
+	if contracterr.Retryable(err) {
+		t.Fatalf("deadline must not be auto-retryable: %v", err)
+	}
+}
+
+// TestMidBodyCallerCancelPropagatesUnwrapped — review round 2, Finding 1:
+// a caller cancel during the body read propagates as context.Canceled
+// (never wrapped into a contract class), exactly like the Do phase.
+func TestMidBodyCallerCancelPropagatesUnwrapped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"query":"x","top_n":10,`))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	sc := NewHTTPStoreClient(Options{BaseURL: srv.URL, Timeout: 10 * time.Second, Logger: quiet()})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	_, err := sc.Search(ctx, store.SearchRequest{Query: "x"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("mid-body caller cancel: err=%v, want context.Canceled", err)
+	}
+	if _, typed := contracterr.ClassOf(err); typed {
+		t.Fatalf("mid-body caller cancel was wrapped into a contract class — cancellation is not a contract error: %v", err)
+	}
+}
+
+// TestStartImportTransportCeilingRejectsOversize — the 1-GiB ceiling is
+// a loud InvalidArgument, never a silent truncation into a wrong-class
+// hash conflict (the var is lowered for the probe instead of
+// allocating a gigabyte).
+func TestStartImportTransportCeilingRejectsOversize(t *testing.T) {
+	orig := transportCeiling
+	transportCeiling = 1024
+	defer func() { transportCeiling = orig }()
+
+	srv := httptest.NewServer(LibraryInternalRoutes(contractsuite.NewFakeLibrary(), nil))
+	defer srv.Close()
+	c := NewHTTPLibraryClient(Options{BaseURL: srv.URL, Logger: quiet()})
+	_, err := c.StartImport(context.Background(),
+		library.ImportRequest{IdempotencyKey: "oversize-1", RecordType: "book", Target: library.ImportTarget{LibraryID: "users/0"}},
+		bytes.NewReader(bytes.Repeat([]byte("%PDF-1.4 x"), 300)))
+	if err == nil {
+		t.Fatal("oversize content silently accepted/truncated")
+	}
+	if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassInvalidArgument {
+		t.Fatalf("oversize content: class=%v typed=%v, want invalid_argument (err: %v)", class, ok, err)
+	}
+}
+
+// TestBaseURLTrailingSlashTolerated — a BaseURL with a trailing slash
+// must not double the path (review round minor).
+func TestBaseURLTrailingSlashTolerated(t *testing.T) {
+	srv := httptest.NewServer(StoreInternalRoutes(contractsuite.NewFakeStore(nil), nil, nil))
+	defer srv.Close()
+	sc := NewHTTPStoreClient(Options{BaseURL: srv.URL + "/", Logger: quiet()})
+	if _, err := sc.Search(context.Background(), store.SearchRequest{Query: contractsuite.SeedToken}); err != nil {
+		t.Fatalf("trailing-slash BaseURL: %v", err)
 	}
 }

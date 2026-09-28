@@ -45,10 +45,12 @@ the public routes). The client never string-matches:
 | envelope class (any typed answer) | that class | per class |
 | 409 + `idempotency_key` | Conflict as `*IdempotencyMismatch` | no |
 | connection refused / reset / EOF (killed backend) | Unavailable | yes |
-| request budget expired | Deadline | no (fresh budget only) |
-| non-envelope body | status-table fallback → Internal | no |
+| request budget expired (incl. mid-body) | Deadline | no (fresh budget only) |
+| non-envelope body | status-table fallback (404→NotFound, 503→Unavailable, …); non-envelope 2xx → Internal | per class |
+| mid-body connection reset (no budget expiry, no cancel) | Internal | no |
 
-(`context.Canceled` propagates unwrapped — the caller gave up.)
+(`context.Canceled` propagates unwrapped — the caller gave up, whether it
+cancels the request or the body read.)
 
 Messages of transport-mapped errors are fixed generic strings: no component
 host:port, no dial text. The raw transport error goes to the log. The public
