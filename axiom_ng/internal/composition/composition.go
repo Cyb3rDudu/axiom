@@ -1101,7 +1101,11 @@ func (r *Root) injectRemoteBindings(ctx context.Context) {
 	}
 	if r.cfg.LibraryURL != "" {
 		lib := bindings.NewHTTPLibraryClient(opts(r.cfg.LibraryURL))
-		r.srv.SetLibraryAPI(bindings.NewPublicLibrary(lib, r.cfg.LibraryImportMaxBytes))
+		maxBytes := r.cfg.LibraryImportMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = library.DefaultImportByteLimit // the F06 default, resolved where both packages meet
+		}
+		r.srv.SetLibraryAPI(bindings.NewPublicLibrary(lib, maxBytes))
 		r.logger.Printf("topology: Library surface bound via HTTP to %s (split mode)", r.cfg.LibraryURL)
 	}
 	if r.cfg.StoreURL != "" {

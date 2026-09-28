@@ -16,7 +16,6 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/library"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/store"
-	axlibrary "github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 )
@@ -25,22 +24,26 @@ import (
 // (the F06 libraryAPI shape: the replay signal, the decision surface,
 // the multipart bound).
 type PublicLibrary struct {
-	Lib       library.Library // HTTPLibraryClient in split wiring
-	MaxBytes  int64           // <=0 → the F06 default
-	confirm   func(ctx context.Context, importID, decisionID, candidateID string) (library.ImportOperation, error)
-	retry     func(ctx context.Context, importID string) (library.ImportOperation, error)
-	detailed  func(ctx context.Context, req library.ImportRequest, content io.Reader) (library.ImportOperation, bool, error)
-	maxSource interface{ MaxImportBytes() int64 }
+	Lib      library.Library // HTTPLibraryClient in split wiring
+	MaxBytes int64
+	confirm  func(ctx context.Context, importID, decisionID, candidateID string) (library.ImportOperation, error)
+	retry    func(ctx context.Context, importID string) (library.ImportOperation, error)
+	detailed func(ctx context.Context, req library.ImportRequest, content io.Reader) (library.ImportOperation, bool, error)
 }
+
+// importBoundEnvelope is the transport-framing safety net when no bound
+// is configured (the F06 hard cap, generous by design): the internal
+// edge bounds by the backing service's own limit regardless.
+const importBoundEnvelope = 2 << 30
 
 // NewPublicLibrary binds the public import surface over lib (an
 // HTTPLibraryClient or any Library). maxImportBytes mirrors the
-// deployment's AXIOM_LIBRARY_IMPORT_MAX_BYTES (0 = F06 default).
+// deployment's AXIOM_LIBRARY_IMPORT_MAX_BYTES (<=0 = the envelope).
 func NewPublicLibrary(lib library.Library, maxImportBytes int64) *PublicLibrary {
-	p := &PublicLibrary{Lib: lib, MaxBytes: maxImportBytes}
-	if p.MaxBytes <= 0 {
-		p.MaxBytes = axlibrary.DefaultImportByteLimit
+	if maxImportBytes <= 0 {
+		maxImportBytes = importBoundEnvelope
 	}
+	p := &PublicLibrary{Lib: lib, MaxBytes: maxImportBytes}
 	if ext, ok := lib.(extendedLibrary); ok {
 		p.detailed = ext.StartImportDetailed
 		p.confirm = ext.ConfirmImport

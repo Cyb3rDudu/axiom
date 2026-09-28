@@ -11,6 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/bindings"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contractsuite"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/library"
@@ -166,6 +170,25 @@ func TestContractSuiteAgainstService(t *testing.T) {
 	defer cleanup()
 	svc, _, _, _ := newFakeService(t, st)
 	contractsuite.LibrarySuite(t, svc)
+}
+
+// TestContractSuiteAcrossBindings — F11 #305 parity against the REAL
+// service: the same F03 suite runs through the Local client and through
+// the HTTP client against the internal edge hosting the service — the
+// adapter layer adds zero semantic delta on top of the extraction's own
+// suite-green proof.
+func TestContractSuiteAcrossBindings(t *testing.T) {
+	st, cleanup := testStore(t)
+	defer cleanup()
+	svc, _, _, _ := newFakeService(t, st)
+
+	contractsuite.LibrarySuite(t, bindings.NewLocalLibraryClient(svc))
+
+	edge := httptest.NewServer(bindings.LibraryInternalRoutes(svc, nil))
+	defer edge.Close()
+	contractsuite.LibrarySuite(t, bindings.NewHTTPLibraryClient(bindings.Options{
+		BaseURL: edge.URL, Logger: log.New(io.Discard, "", 0),
+	}))
 }
 
 // ---------------------------------------------------------------------------

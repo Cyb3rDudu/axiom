@@ -86,8 +86,20 @@ func httpMaybeJSON(t *testing.T, method, url string, body any, out any, tolerate
 
 // assertFreezeBits is the FIRST live assertion everywhere: the dev RAG
 // must serve from the frozen release binary, never a working-tree build.
+//
+// BASELINE_UPDATE (F11 #305, documented): AXIOM_BASELINE_EXPECT_BUILD
+// re-targets the banner pin — the epic's release acceptance runs the
+// 0.1.x golden suite THROUGH THE NEW BINARY in all-in-one AND
+// split-process topologies, against the SAME frozen fixtures (the
+// strangler proof: same goldens, new bits, both topologies). Without
+// the env the frozen-const gate is untouched (the freeze instrument
+// `make golden-baseline` never sets it).
 func assertFreezeBits(t *testing.T) {
 	t.Helper()
+	want := FreezeRAGBuild
+	if v := os.Getenv("AXIOM_BASELINE_EXPECT_BUILD"); v != "" {
+		want = v
+	}
 	var health struct {
 		OK         bool           `json:"ok"`
 		Build      string         `json:"build"`
@@ -97,9 +109,9 @@ func assertFreezeBits(t *testing.T) {
 	if code := httpJSON(t, "GET", ragBase()+"/api/health", nil, &health); code != 200 {
 		t.Fatalf("health status %d", code)
 	}
-	if health.Build != FreezeRAGBuild {
-		t.Fatalf("dev RAG is not serving the freeze bits:\n got: %s\nwant: %s\n(start with scripts/dev/dev-up.sh --release)",
-			health.Build, FreezeRAGBuild)
+	if health.Build != want {
+		t.Fatalf("dev RAG is not serving the expected bits:\n got: %s\nwant: %s\n(freeze mode: scripts/dev/dev-up.sh --release; 0.2.0 topology runs: scripts/dev/split-up.sh + AXIOM_BASELINE_EXPECT_BUILD)",
+			health.Build, want)
 	}
 }
 
@@ -143,6 +155,17 @@ func TestLiveGoldenHealth(t *testing.T) {
 	var health map[string]any
 	if code := httpJSON(t, "GET", ragBase()+"/api/health", nil, &health); code != 200 {
 		t.Fatalf("health status %d", code)
+	}
+	// BASELINE_UPDATE (F11): under AXIOM_BASELINE_EXPECT_BUILD the banner
+	// is exactly what the escape re-pins — assertFreezeBits owns that
+	// assertion against the expected banner, so the fixture compare pins
+	// the field to the frozen constant and the SAME fixture passes in
+	// freeze mode and 0.2.0-topology mode. Readiness (F05, additive) is
+	// masked the same way: the frozen fixture predates it; the working
+	// tree witnesses it in fixtures/canonical_identity.json.
+	if os.Getenv("AXIOM_BASELINE_EXPECT_BUILD") != "" {
+		health["build"] = FreezeRAGBuild
+		delete(health, "readiness")
 	}
 	goldenCompare(t, "health.json", health)
 }
