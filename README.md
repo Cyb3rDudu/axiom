@@ -31,7 +31,7 @@ owns state, queue, search index        does conversion, chunking, ML
 1. **Run the axiom compute worker** (no GPU needed for a first test):
 
    ```bash
-   python3 -m venv .venv
+   python3.11 -m venv .venv        # Python 3.11+ required (pyproject floor)
    # installing the project itself ships BOTH packages (canonical +
    # axiom_ng_runner alias) and the axiom-compute-worker console script —
    # requirements alone do not put the module on the path (F10 layout)

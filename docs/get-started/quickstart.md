@@ -36,7 +36,7 @@ same env file works at home and on the road. Details:
 ## 1. Run the axiom compute worker
 
 ```bash
-python3 -m venv .venv
+python3.11 -m venv .venv        # Python 3.11+ required (pyproject floor)
 # installing the project itself ships BOTH packages (canonical +
 # axiom_ng_runner alias) and the console script — requirements alone do
 # not put the module on the path (F10 layout)
