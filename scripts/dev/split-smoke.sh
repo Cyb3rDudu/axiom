@@ -66,7 +66,7 @@ for i in $(seq 1 36); do
     echo "split-smoke: waiting for search readiness (attempt $i)…"
     sleep 5
 done
-[ -n "$sres" ] || die "search never became ready within 3 min (see $STATE/logs/split-{api,store}.log)"
+[ -n "$sres" ] || die "search never became ready after 36 attempts (see $STATE/logs/split-{api,store}.log)"
 echo "$sres" | jq -e '(.hits | type) == "array"' >/dev/null || die "search: hits not an array"
 chunk_id="$(echo "$sres" | jq -r '.hits[0].chunk_id // empty')"
 [ -n "$chunk_id" ] || die "search: no hit for query '$query' (pick another AXIOM_SPLIT_SMOKE_QUERY)"
@@ -104,9 +104,10 @@ ok "kill probe: TERM sent to the library process (pgid $libpid)"
 
 # A slow-draining library keeps answering during shutdown; poll until the
 # typed failure settles (the api's GET-retry rides out one blip by itself).
+# (10 s of poll sleeps, plus per-attempt latency.)
 kbody=""
 kcode=""
-for i in $(seq 1 20); do # up to 10 s
+for i in $(seq 1 20); do
     ktmp="$(mktemp)"
     kcode="$(curl -s -m 60 -o "$ktmp" -w '%{http_code}' \
         "$API/api/v1/library/imports/split-smoke-probe" || true)"
@@ -128,7 +129,8 @@ ok "kill probe: 503 typed library/unavailable envelope, leak-free"
 "$REPO/scripts/dev/split-down.sh" >/dev/null
 # Graceful shutdown is asynchronous (split-down TERMs and returns; the
 # composition's stop budget can be seconds) — poll before declaring the
-# teardown incomplete, never false-green on a slow drain.
+# teardown incomplete: never false-RED on a slow drain. (10 s of poll
+# sleeps, plus per-attempt lsof latency.)
 busy=1
 for i in $(seq 1 20); do # up to 10 s
     busy=0

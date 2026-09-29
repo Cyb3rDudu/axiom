@@ -129,7 +129,7 @@ split acceptance path. The schema side of the acceptance runs
 after a split boot (restore = pg_restore of the #295 freeze dump into the dev
 database — an operator step; the committed in-repo witnesses are
 `TestSchemaFingerprintAllowlistExact`, which derives the allowlist from the
-migration sets alone, and the Dev-Live run against the lived dev DB). The
+migration sets alone, and the Dev-Live run against the live dev DB). The
 devStructureAllowlist (fingerprint_test.go) carries the derived, line-exact
 0.2.0 additions (store ledger, ingest_jobs intake surface, library
 namespace).

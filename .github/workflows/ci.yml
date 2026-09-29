@@ -114,6 +114,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: axiom_ng/go.mod
+      # Schema/fingerprint gates (frozen + allowlist-derivation) run in the
+      # golden-baseline job below via AXIOM_BASELINE_DSN; this job's env
+      # intentionally carries only the IT DSN.
       # No manual schema application: db.Migrate() owns the schema (tracks
       # applied files itself — pre-applying via psql desyncs its ledger and
       # 42710s on CREATE TYPE). The IT harnesses call Migrate on fresh DBs.

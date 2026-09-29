@@ -90,8 +90,8 @@ func TestLocalClientsDoNotAdvertiseAbsentCapabilities(t *testing.T) {
 // suite parity: HTTP bindings against the internal edge
 
 // faultProxiedLibrary carries the SERVER-side fault book next to the
-// HTTP client: behavior flows over the edge, control stays at the
-// backend — exactly how production fault injection works in split.
+// client binding (HTTP or local): control stays at the backend — exactly
+// how production fault injection works in split.
 type faultProxiedLibrary struct {
 	library.Library
 	contractsuite.FaultControl
@@ -105,6 +105,8 @@ func TestLibrarySuiteOverHTTPBinding(t *testing.T) {
 	contractsuite.LibrarySuite(t, faultProxiedLibrary{Library: client, FaultControl: backend})
 }
 
+// faultProxiedStore: the store twin — control at the backend, behavior
+// through the client binding (HTTP or local).
 type faultProxiedStore struct {
 	store.Store
 	contractsuite.FaultControl
