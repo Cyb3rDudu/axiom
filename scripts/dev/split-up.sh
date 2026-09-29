@@ -144,6 +144,11 @@ start_proc() {
 
 RUNNER_PID=""
 if lsof -i ":$RUNNER_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    # Identity probe: adopting means trusting the listener — a foreign or
+    # wedged process on the port must fail loudly here, not as a generic
+    # search-unready symptom in the smoke.
+    curl -fsS -m 5 "http://127.0.0.1:$RUNNER_PORT/v1/health" >/dev/null ||
+        die "listener on :$RUNNER_PORT does not answer /v1/health — not a runner; refusing to adopt"
     note "runner already listening on :$RUNNER_PORT — adopting it"
 else
     note "starting dev runner on :$RUNNER_PORT …"
@@ -162,7 +167,7 @@ else
             AXIOM_CAPTION_CACHE_DIR PYTHONPATH
         cd "$STATE"
         exec /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-            "$REPO/axiom-compute-worker/.venv/bin/python" -m axiom_compute_worker \
+            "$RUNNER_VENV" -m axiom_compute_worker \
             >>"$STATE/logs/runner.log" 2>&1
     ) &
     RUNNER_PID=$!

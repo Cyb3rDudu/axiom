@@ -21,7 +21,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 STATE="$HOME/.local/state/axiom-dev"
-API="http://127.0.0.1:8111"
+API_PORT=8111
+API="http://127.0.0.1:$API_PORT"
 LIB_PORT=8113
 STORE_PORT=8114
 LIB_EDGE=8211
@@ -32,11 +33,12 @@ ok() { echo "split-smoke: ok — $*"; }
 
 command -v jq >/dev/null || die "jq required"
 command -v curl >/dev/null || die "curl required"
+command -v lsof >/dev/null || die "lsof required (teardown completeness check)"
 [ -f "$STATE/split.pid" ] || die "no $STATE/split.pid — start the split topology first (scripts/dev/split-up.sh)"
 
 # --- 1. health ---------------------------------------------------------------
 
-health="$(curl -fsS "$API/api/health")"
+health="$(curl -fsS -m 60 "$API/api/health")"
 echo "$health" | jq -e '.ok == true' >/dev/null || die "health not ok: $health"
 for check in postgres zotero query-runner ingest-runner; do
     echo "$health" | jq -e --arg c "$check" '.checks[$c] == "ok"' >/dev/null ||
@@ -52,11 +54,13 @@ query="${AXIOM_SPLIT_SMOKE_QUERY:-management}"
 # after a split boot can outrun the api's default 30 s component budget
 # while the store process's retrieval pipeline warms (runner model swap,
 # OpenSearch client init). Retry until it answers — the timed assertions
-# below then run against a warm edge.
+# below then run against a warm edge. (3 min of retry sleeps, plus
+# per-attempt latency.)
 sres=""
-for i in $(seq 1 36); do # up to 3 min
+qbody="$(jq -nc --arg q "$query" '{query:$q}')"
+for i in $(seq 1 36); do
     if sres="$(curl -fsS -m 60 -X POST "$API/api/v1/search" -H 'Content-Type: application/json' \
-        -d "{\"query\":\"$query\"}" 2>/dev/null)"; then
+        -d "$qbody" 2>/dev/null)"; then
         break
     fi
     echo "split-smoke: waiting for search readiness (attempt $i)…"
@@ -75,7 +79,7 @@ ok "search: typed hits (chunk_id=$chunk_id, doc_id + locator.kind present, no re
 
 # --- 3. passage (ADR-0001 translation over the binding) ----------------------
 
-pres="$(curl -fsS "$API/api/v1/passage/$chunk_id")"
+pres="$(curl -fsS -m 60 "$API/api/v1/passage/$chunk_id")"
 echo "$pres" | jq -e '.attachment_id != null and (.neighbors | type) == "array"' >/dev/null ||
     die "passage: misses attachment_id / neighbors"
 if echo "$pres" | jq -e '.rendition_id != null' >/dev/null; then
@@ -87,15 +91,30 @@ ok "passage: attachment_id + neighbors present, no rendition_id leak"
 
 libpid="$(awk '$1=="library"{print $2}' "$STATE/split.pid")"
 [ -n "$libpid" ] || die "no library pid in split.pid"
+# The probe's causal witness: the library edge must answer BEFORE the kill
+# (a library that died after boot would pass the envelope check without
+# the kill ever being exercised).
+# Any HTTP answer proves the edge alive (the probe id is unknown → 404 is
+# the expected alive answer; 000/empty means nothing is listening).
+lcode="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$LIB_EDGE/internal/v1/library/sources/probe" || true)"
+[ "$lcode" != "000" ] && [ -n "$lcode" ] ||
+    die "library edge :$LIB_EDGE does not answer before the kill — library already dead?"
 kill -TERM -- "-$libpid" 2>/dev/null || kill -TERM "$libpid" 2>/dev/null || true
-ok "kill probe: library process (pgid $libpid) terminated"
+ok "kill probe: TERM sent to the library process (pgid $libpid)"
 
-# The api's GET-retry rides out one blip; wait for the failure to settle.
-sleep 1
-kcode="$(curl -s -o /tmp/split-smoke-kill.json -w '%{http_code}' \
-    "$API/api/v1/library/imports/split-smoke-probe" || true)"
-kbody="$(cat /tmp/split-smoke-kill.json 2>/dev/null || true)"
-rm -f /tmp/split-smoke-kill.json
+# A slow-draining library keeps answering during shutdown; poll until the
+# typed failure settles (the api's GET-retry rides out one blip by itself).
+kbody=""
+kcode=""
+for i in $(seq 1 20); do # up to 10 s
+    ktmp="$(mktemp)"
+    kcode="$(curl -s -m 60 -o "$ktmp" -w '%{http_code}' \
+        "$API/api/v1/library/imports/split-smoke-probe" || true)"
+    kbody="$(cat "$ktmp" 2>/dev/null || true)"
+    rm -f "$ktmp"
+    [ "$kcode" = "503" ] && break
+    sleep 0.5
+done
 [ "$kcode" = "503" ] || die "kill probe: status $kcode (want 503), body: $kbody"
 echo "$kbody" | jq -e '.error.component == "library" and .error.class == "unavailable"' >/dev/null ||
     die "kill probe: not the typed library/unavailable envelope: $kbody"
@@ -107,11 +126,19 @@ ok "kill probe: 503 typed library/unavailable envelope, leak-free"
 # --- 5. teardown completeness (split-down leaves nothing) ---------------------
 
 "$REPO/scripts/dev/split-down.sh" >/dev/null
-for p in 8111 "$LIB_PORT" "$STORE_PORT" "$LIB_EDGE" "$STORE_EDGE"; do
-    if lsof -i ":$p" -sTCP:LISTEN >/dev/null 2>&1; then
-        die "port $p still listening after split-down — teardown incomplete"
-    fi
+# Graceful shutdown is asynchronous (split-down TERMs and returns; the
+# composition's stop budget can be seconds) — poll before declaring the
+# teardown incomplete, never false-green on a slow drain.
+busy=1
+for i in $(seq 1 20); do # up to 10 s
+    busy=0
+    for p in "$API_PORT" "$LIB_PORT" "$STORE_PORT" "$LIB_EDGE" "$STORE_EDGE"; do
+        lsof -i ":$p" -sTCP:LISTEN >/dev/null 2>&1 && busy=1
+    done
+    [ "$busy" = 0 ] && break
+    sleep 0.5
 done
+[ "$busy" = 0 ] || die "split ports still listening after split-down (10 s) — teardown incomplete"
 [ -f "$STATE/split.pid" ] && die "$STATE/split.pid still present after split-down"
 ok "teardown: all split ports free, no pid file left"
 

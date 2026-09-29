@@ -126,6 +126,10 @@ are compared in split — the freeze witness stays all-in-one + release-only
 in the baseline suite remains as a documented 0.2.0 run mode, out of the
 split acceptance path. The schema side of the acceptance runs
 `TestSchemaFingerprintDevLive` against a freshly restored freeze-state mirror
-after a split boot — the devStructureAllowlist (fingerprint_test.go) carries
-the derived, line-exact 0.2.0 additions (store ledger, ingest_jobs intake
-surface, library namespace).
+after a split boot (restore = pg_restore of the #295 freeze dump into the dev
+database — an operator step; the committed in-repo witnesses are
+`TestSchemaFingerprintAllowlistExact`, which derives the allowlist from the
+migration sets alone, and the Dev-Live run against the lived dev DB). The
+devStructureAllowlist (fingerprint_test.go) carries the derived, line-exact
+0.2.0 additions (store ledger, ingest_jobs intake surface, library
+namespace).

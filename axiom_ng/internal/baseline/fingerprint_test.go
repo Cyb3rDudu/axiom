@@ -30,6 +30,8 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/store"
 )
 
 const scratchDBName = "axiom_baseline_scratch"
@@ -270,10 +272,11 @@ func TestSchemaFingerprintFrozen(t *testing.T) {
 // fixture through the normal BASELINE_UPDATE path instead). The set is
 // derived, not hand-guessed: core+library+store migrations on a fresh
 // scratch DB, fingerprinted, diffed against the frozen fixture — that
-// diff is EXACTLY these lines (132 including the library_ prefix
-// matches; zero missing: 0.2.0 is purely additive). This is what a
-// freshly restored freeze-state mirror looks like after a 0.2.0 split
-// boot (the acceptance recipe for TestSchemaFingerprintDevLive).
+// diff is exactly the `library_` and Delta-3 lines (132 total; zero
+// missing: 0.2.0 is purely additive — the Delta-1 line is a production
+// leftover no migration creates and only appears on restored mirrors).
+// TestSchemaFingerprintAllowlistExact pins this derivation as a standing
+// gate: incomplete AND phantom allowlist entries both go red.
 var devStructureAllowlist = []string{
 	"processing_snapshots | snapshots_one_active_per_attachment |",
 	"library_",
@@ -419,4 +422,93 @@ func liveRowCounts(ctx context.Context, d *db.DB) ([]string, error) {
 		out = append(out, fmt.Sprintf("%-42s %d", name, n))
 	}
 	return out, rows.Err()
+}
+
+// TestSchemaFingerprintAllowlistExact — the standing derivation gate for
+// devStructureAllowlist (Delta 2 + Delta 3): a fresh scratch database in
+// freeze state (core migrations = the frozen fingerprint by definition)
+// plus the library and store migration sets must differ from the frozen
+// fixture by EXACTLY the allowlisted lines. Incomplete entries red on
+// the unexpected extras; phantom entries (a prefix nothing produces) red
+// on the unused check — the "derived, not hand-guessed" property stays
+// provable from committed code alone. The Delta-1 line is exempt: it is
+// a manual production leftover no migration ever creates.
+func TestSchemaFingerprintAllowlistExact(t *testing.T) {
+	dsn := fingerprintDSN()
+	if dsn == "" {
+		t.Skip("no AXIOM_BASELINE_DSN / AXIOM_DATABASE_URL — allowlist derivation needs a database")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	withScratchDB(ctx, t, dsn, func(scratch string) {
+		d, err := db.Open(ctx, scratch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
+		if err := d.Migrate(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := library.Migrate(ctx, d.Pool()); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Migrate(ctx, d.Pool()); err != nil {
+			t.Fatal(err)
+		}
+		live, _, err := schemaFingerprint(ctx, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frozen := string(readFixture(t, "schema_fingerprint.txt"))
+		canonical := frozen[strings.Index(frozen, "## extensions"):]
+		canon := func(s string) map[string]bool {
+			out := map[string]bool{}
+			for _, l := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+				if strings.HasPrefix(l, "## ") {
+					if i := strings.Index(l, " ("); i > 0 {
+						l = l[:i]
+					}
+				}
+				out[l] = true
+			}
+			return out
+		}
+		cs, ls := canon(canonical), canon(live)
+		allow := func(line string) (string, bool) {
+			for _, p := range devStructureAllowlist {
+				if strings.HasPrefix(line, p) {
+					return p, true
+				}
+			}
+			return "", false
+		}
+		used := map[string]bool{"processing_snapshots | snapshots_one_active_per_attachment |": true} // Delta 1: prod leftover, never migration-derived
+		var unexpected []string
+		for l := range ls {
+			if cs[l] {
+				continue
+			}
+			p, ok := allow(l)
+			if !ok {
+				unexpected = append(unexpected, "+ "+l)
+				continue
+			}
+			used[p] = true
+		}
+		for l := range cs {
+			if !ls[l] {
+				unexpected = append(unexpected, "- "+l)
+			}
+		}
+		var phantom []string
+		for _, p := range devStructureAllowlist {
+			if !used[p] {
+				phantom = append(phantom, p)
+			}
+		}
+		if len(unexpected) > 0 || len(phantom) > 0 {
+			t.Fatalf("devStructureAllowlist drifted from the migration-derived truth:\n%s\nphantom entries (match nothing): %v\n(extend or trim the allowlist ONLY with a documented #295 debt entry)",
+				strings.Join(unexpected, "\n"), phantom)
+		}
+	})
 }
