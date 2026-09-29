@@ -108,11 +108,24 @@ the message). The legacy 0.1.x DB-backed surfaces (zotero sync/selection, KG,
 repair, jobs, processor source) stay process-local in every topology — they
 are not F03 contract surfaces; F12/F14 own their fate.
 
-## 7. Dev topology
+## 7. Dev topology and split acceptance
 
 `scripts/dev/split-up.sh` drives the three working-tree processes with real
 ports (api :8111 — the public base URL, library :8113 + edge :8211, store :8114
 + edge :8212, dispatcher in the store process) on the dev substrate.
-`scripts/dev/split-down.sh` stops them. The header documents the split golden
-run (`AXIOM_BASELINE_EXPECT_BUILD` — the documented BASELINE_UPDATE that runs
-the SAME frozen fixtures through the new bits) and the kill probe.
+`scripts/dev/split-down.sh` stops them.
+
+Split acceptance (DoD re-decision 2026-09-28, option b) is the
+**contract-class smoke** (`scripts/dev/split-smoke.sh`): typed public shapes
+(health, search hits with doc_id/locator.kind, passage with the ADR-0001
+translation), the kill probe (library process killed → typed
+library/unavailable envelope on the public import status route, leak-free),
+and teardown completeness (no split port left listening). No frozen fixtures
+are compared in split — the freeze witness stays all-in-one + release-only
+(`make golden-baseline` untouched). The `AXIOM_BASELINE_EXPECT_BUILD` escape
+in the baseline suite remains as a documented 0.2.0 run mode, out of the
+split acceptance path. The schema side of the acceptance runs
+`TestSchemaFingerprintDevLive` against a freshly restored freeze-state mirror
+after a split boot — the devStructureAllowlist (fingerprint_test.go) carries
+the derived, line-exact 0.2.0 additions (store ledger, ingest_jobs intake
+surface, library namespace).

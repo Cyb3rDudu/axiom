@@ -15,23 +15,17 @@
 # The all-in-one dev RAG must NOT run at the same time (port 8111 is the
 # public edge in both topologies — the preflight refuses).
 #
-# Golden suite in this topology (the strangler proof — same frozen fixtures
-# through the new bits, both topologies):
+# Split acceptance (DoD re-decision 2026-09-28, option b): the CONTRACT-CLASS
+# smoke over this topology's public edge — no frozen fixtures here; the freeze
+# witness stays all-in-one + release-only (`make golden-baseline` untouched).
 #
-#   . "$REPO/scripts/dev/env.sh"
-#   cd "$REPO/axiom_ng" && AXIOM_BASELINE_LIVE=1 \
-#     AXIOM_BASELINE_RAG=http://127.0.0.1:8111 \
-#     AXIOM_BASELINE_EXPECT_BUILD="$(curl -fsS http://127.0.0.1:8111/api/health | jq -r .build)" \
-#     AXIOM_BASELINE_DSN="$AXIOM_DATABASE_URL" \
-#     go test ./internal/baseline -count=1 -timeout 30m
+#   scripts/dev/split-smoke.sh
 #
-# Kill probe (fault parity): kill the library process and observe the api's
-# typed unavailable envelope on the public import surface —
-#   kill "$(awk '$1=="library"{print $2}' "$HOME/.local/state/axiom-dev/split.pid")"
-#   curl -s "http://127.0.0.1:8111/api/v1/library/imports/probe-killed"
-#   → 503 {"error":{"component":"library","class":"unavailable",…}} (no port/stack leak)
-# (GET suffices — the status route reaches the binding directly; a bare POST
-# would fail the route's multipart parsing with 400 before probing the edge)
+# It proves the typed public shapes (health, search hits, passage translation),
+# runs the kill probe (library process killed → typed unavailable envelope,
+# leak-free), and verifies split-down.sh leaves nothing behind. The
+# AXIOM_BASELINE_EXPECT_BUILD escape in the baseline suite remains as a
+# documented 0.2.0 run mode but is NOT part of the split acceptance.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -57,7 +51,12 @@ for f in "$RAG_ENV" "$RAG_API_ENV" "$RUNNER_ENV"; do
 done
 command -v jq >/dev/null || die "jq required"
 command -v lsof >/dev/null || die "lsof required (port preflight + pid derivation)"
-[ -x "$REPO/axiom-compute-worker/.venv/bin/python" ] || die "runner venv missing: $REPO/axiom-compute-worker/.venv"
+# The runner venv is only needed when THIS script must start a runner — an
+# already-running dev runner (or one from another worktree) is adopted.
+RUNNER_VENV="$REPO/axiom-compute-worker/.venv/bin/python"
+if ! lsof -i ":$RUNNER_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    [ -x "$RUNNER_VENV" ] || die "runner venv missing: $RUNNER_VENV (and no runner on :$RUNNER_PORT to adopt)"
+fi
 
 if [ -f "$STATE/split.pid" ] && kill -0 "$(awk '$1=="api"{print $2}' "$STATE/split.pid")" 2>/dev/null; then
     die "split topology already running ($STATE/split.pid) — run split-down.sh first"
@@ -212,4 +211,4 @@ note "  library :$LIB_PORT   internal edge :$LIB_EDGE"
 note "  store   :$STORE_PORT internal edge :$STORE_EDGE (dispatcher here)"
 note "  logs      $STATE/logs/split-{api,library,store}.log"
 note "  stop      scripts/dev/split-down.sh"
-note "golden run: see the header of this script"
+note "acceptance: scripts/dev/split-smoke.sh (see the header of this script)"

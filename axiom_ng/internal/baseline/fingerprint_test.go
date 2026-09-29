@@ -260,9 +260,35 @@ func TestSchemaFingerprintFrozen(t *testing.T) {
 // library tables because the 0.2.x dev env applies them. One prefix
 // covers the whole component-owned namespace — anything outside it
 // still gates.
+//
+// Delta 3: the Store component's OWN migration set (F09 #303) — the
+// store_schema_migrations ledger plus the additive revision-intake
+// surface on ingest_jobs (seven columns, the intake-key and
+// revision-identity unique indexes, the intake-kind check). Enumerated
+// LINE-exact, not by table prefix: a future core migration touching
+// ingest_jobs must NOT be silently swallowed here (it updates the frozen
+// fixture through the normal BASELINE_UPDATE path instead). The set is
+// derived, not hand-guessed: core+library+store migrations on a fresh
+// scratch DB, fingerprinted, diffed against the frozen fixture — that
+// diff is EXACTLY these lines (132 including the library_ prefix
+// matches; zero missing: 0.2.0 is purely additive). This is what a
+// freshly restored freeze-state mirror looks like after a 0.2.0 split
+// boot (the acceptance recipe for TestSchemaFingerprintDevLive).
 var devStructureAllowlist = []string{
 	"processing_snapshots | snapshots_one_active_per_attachment |",
 	"library_",
+	// F09 store ledger + ingest_jobs intake surface (Delta 3):
+	"store_schema_migrations |",
+	"ingest_jobs | intake_kind |",
+	"ingest_jobs | intake_idempotency_key |",
+	"ingest_jobs | revision_source_id |",
+	"ingest_jobs | revision_record_id |",
+	"ingest_jobs | revision_rendition_id |",
+	"ingest_jobs | revision_no |",
+	"ingest_jobs | revision_json |",
+	"ingest_jobs | ingest_jobs_intake_key_uq |",
+	"ingest_jobs | ingest_jobs_revision_identity_uq |",
+	"ingest_jobs | ingest_jobs_intake_kind_chk |",
 }
 
 // TestSchemaFingerprintDevLive — axiom_dev must be exactly the canonical
