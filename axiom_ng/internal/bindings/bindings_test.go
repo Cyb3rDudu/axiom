@@ -47,11 +47,43 @@ func quiet() *log.Logger { return log.New(io.Discard, "", 0) }
 // suite parity: local bindings
 
 func TestLibrarySuiteOverLocalBinding(t *testing.T) {
-	contractsuite.LibrarySuite(t, NewLocalLibraryClient(contractsuite.NewFakeLibrary()))
+	// The control surface sits NEXT to the binding (backend-owned), never
+	// ON it — wrappers must not advertise capabilities the backend lacks.
+	backend := contractsuite.NewFakeLibrary()
+	contractsuite.LibrarySuite(t, faultProxiedLibrary{
+		Library:      NewLocalLibraryClient(backend),
+		FaultControl: backend,
+	})
 }
 
 func TestStoreSuiteOverLocalBinding(t *testing.T) {
-	contractsuite.StoreSuite(t, NewLocalStoreClient(contractsuite.NewFakeStore(nil)))
+	backend := contractsuite.NewFakeStore(nil)
+	contractsuite.StoreSuite(t, faultProxiedStore{
+		Store:            NewLocalStoreClient(backend),
+		FaultControl:     backend,
+		ContentCorruptor: backend,
+	})
+}
+
+// TestLocalClientsDoNotAdvertiseAbsentCapabilities — the CI-red lesson,
+// pinned: a binding wrapper must not satisfy FaultControl/ContentCorruptor
+// when the backing service does not. A vacuous advertisement made the
+// suite's fault probes run against a no-op control over the REAL service
+// and misclassify its normal answers (local-green/CI-red, four heads).
+func TestLocalClientsDoNotAdvertiseAbsentCapabilities(t *testing.T) {
+	type plain struct{ library.Library } // implements nothing beyond Library
+	var lib library.Library = NewLocalLibraryClient(plain{})
+	if _, ok := lib.(contractsuite.FaultControl); ok {
+		t.Fatal("LocalLibraryClient advertises FaultControl without a backing capability")
+	}
+	type plainStore struct{ store.Store }
+	var st store.Store = NewLocalStoreClient(plainStore{})
+	if _, ok := st.(contractsuite.FaultControl); ok {
+		t.Fatal("LocalStoreClient advertises FaultControl without a backing capability")
+	}
+	if _, ok := st.(contractsuite.ContentCorruptor); ok {
+		t.Fatal("LocalStoreClient advertises ContentCorruptor without a backing capability")
+	}
 }
 
 // ---------------------------------------------------------------------------
