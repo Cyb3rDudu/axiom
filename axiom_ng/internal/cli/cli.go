@@ -117,10 +117,11 @@ func cmdServe(name string, args []string) int {
 		// F07 #301: the Library slice is real now — the Zotero provider
 		// (AXIOM_LIBRARY_IMPORT_PROVIDERS=zotero wires the import ladder
 		// behind the single-writer lease) + the sync mirror, without the
-		// store-processing roles (F09) or the repair track (F08).
-		cfg = apiServeConfig(config.Load(), func(note string) {
-			fmt.Fprintln(os.Stderr, name+": note: "+note)
-		})
+		// store-processing roles (F09). F14 #308: the repair track rides
+		// this slice in the split topology — AXIOM_FIXER_INVOKER_ENABLED=1
+		// arms the supervised repair-worker loop HERE (the api arm keeps
+		// its documented "no loops" contract and suppresses the env).
+		cfg = config.Load()
 		roles = libraryRoles()
 	case "store":
 		// F09 #303: the Store slice is real — the processing/retrieval
@@ -195,13 +196,15 @@ func storeRoles() []composition.Role {
 // mirror — api (the HTTP surface), store (the Postgres substrate: the
 // Library's OWN tables live there; the store-PROCESSING roles are F09's
 // slice), events (the live-view bus), sync (the Zotero mirror read path
-// + revision Mits-Schrieb). NOT included, by design: search/ingest/
-// dispatcher (the F09 Store slice) and repair (the F08 repair track —
-// its Zotero writes move onto the Library single-writer then).
+// + revision Mitschrieb), and repair (F14 #308: in the split topology
+// the Library process owns the repair track — its supervised child
+// worker and the Zotero write gateway live behind the Library
+// single-writer, exactly where the repair custody chain writes). NOT
+// included, by design: search/ingest/dispatcher (the F09 Store slice).
 func libraryRoles() []composition.Role {
 	return []composition.Role{
 		composition.RoleAPI, composition.RoleStore, composition.RoleEvents,
-		composition.RoleSync,
+		composition.RoleSync, composition.RoleRepair,
 	}
 }
 
