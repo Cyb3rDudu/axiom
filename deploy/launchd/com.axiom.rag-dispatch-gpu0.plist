@@ -16,7 +16,10 @@
     </array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
-    <key>ProcessType</key><string>Background</string>
+    <key>ProcessType</key><string>Standard</string>
+    <!-- QoS fix (diagnostics 2026-09-21): dispatcher instances drive
+         compute lanes and share the role surface with the rag service —
+         Standard everywhere compute can descend. -->
     <key>StandardOutPath</key><string>__HOME__/.local/state/axiom/logs/rag-dispatch-gpu0.log</string>
     <key>StandardErrorPath</key><string>__HOME__/.local/state/axiom/logs/rag-dispatch-gpu0.log</string>
 </dict>

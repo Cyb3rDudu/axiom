@@ -17,7 +17,11 @@
     </array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
-    <key>ProcessType</key><string>Background</string>
+    <key>ProcessType</key><string>Standard</string>
+    <!-- QoS fix (diagnostics 2026-09-21): this process spawns the
+         CPU-bound repair/OCR children — a child cannot escape the
+         Background coalition it inherits (9.4x slowdown evidence), so
+         the service itself must not run Background. -->
     <key>StandardOutPath</key><string>__HOME__/.local/state/axiom/logs/rag.log</string>
     <key>StandardErrorPath</key><string>__HOME__/.local/state/axiom/logs/rag.log</string>
 </dict>

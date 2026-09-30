@@ -69,13 +69,19 @@ jobs:
       - name: dev scripts lint
         working-directory: .
         run: |
-          bash -n scripts/dev/*.sh
-          shellcheck --severity=warning scripts/dev/*.sh
+          bash -n scripts/dev/*.sh deploy/launchd/qos-probe.sh
+          shellcheck --severity=warning scripts/dev/*.sh deploy/launchd/qos-probe.sh
           # env.sh and dev-up.sh must define the same dev identity — drift would
           # point manual tool runs at a stale (or prod) namespace
           a="$(grep -hE '^DEV_(INDEX|DB)=' scripts/dev/env.sh | sort)"
           b="$(grep -hE '^DEV_(INDEX|DB)=' scripts/dev/dev-up.sh | sort)"
           test "$a" = "$b"
+      # F14 #308: the launchd QoS policy gate — CPU-bound services must ship
+      # ProcessType=Standard (diagnostics 2026-09-21); plistlib keeps it
+      # Linux-capable (no plutil dependency in CI).
+      - name: launchd plist QoS gate
+        working-directory: .
+        run: python3 scripts/test_launchd_plists.py
 
   go-unit:
     runs-on: ubuntu-latest

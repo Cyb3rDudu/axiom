@@ -98,6 +98,7 @@ nav:
         - Operations:
                   - Services & Releases: operations/services.md
                   - Deployment: operations/deployment.md
+                  - launchd Scheduling (QoS): operations/launchd-qos.md
                   - KG Maintenance: operations/kg-maintenance.md
                   - Retention / GC Maintenance Run: operations/retention-maintenance.md
                   - KG Relations Consolidation Runbook: operations/kg-relations-consolidation-runbook.md

@@ -7,7 +7,12 @@
      May retire once binaries are TCC-granted — keep as template.
      ProgramArguments is a PLACEHOLDER: point __BRIDGE_CMD__ at the
      concrete bridge invocation; env in ~/.config/axiom/carrier-bridge.env.
-     __HOME__ substituted by scripts/install_services.sh. -->
+     __BRIDGE_CMD__ substituted by scripts/install_services.sh.
+     ProcessType=Background — DELIBERATE (the one documented exception):
+     a pure network forwarder with no CPU-bound children; Background's
+     resource limits are the polite fit for it. Everything that spawns
+     compute (rag, compute-worker, dispatch instances) must stay
+     Standard — see README.md §Scheduling (QoS). -->
 <plist version="1.0">
 <dict>
     <key>Label</key><string>com.axiom.carrier-bridge</string>

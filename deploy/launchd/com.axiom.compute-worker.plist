@@ -18,7 +18,11 @@
      rewrite pip console-script shebangs (#!/usr/bin/env python), and
      launchd's PATH has no python. The legacy `python -m axiom_ng_runner`
      alias keeps working (warns once) for un-migrated hosts. See
-     deploy/launchd/README.md. -->
+     deploy/launchd/README.md.
+     ProcessType=Standard (QoS fix, diagnostics 2026-09-21): ML inference
+     is CPU/GPU-hungry — Background pins work to efficiency cores (9.4x
+     slowdown evidence in the controlled A/B/C run). See README.md
+     §Scheduling (QoS). -->
 <plist version="1.0">
 <dict>
     <key>Label</key><string>com.axiom.compute-worker</string>
@@ -30,7 +34,7 @@
     </array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
-    <key>ProcessType</key><string>Background</string>
+    <key>ProcessType</key><string>Standard</string>
     <key>StandardOutPath</key><string>__HOME__/.local/state/axiom/logs/compute-worker.log</string>
     <key>StandardErrorPath</key><string>__HOME__/.local/state/axiom/logs/compute-worker.log</string>
 </dict>

@@ -50,3 +50,38 @@ G3's install script copies these and substitutes placeholders.
   and tessdata (deu+eng + the mapped language set) ship INSIDE the fixer
   artifact; the tools resolve them env-relatively, no host PATH needed.
   See `docs/operations/ocr-rebuild-repair.md`.
+
+- **Scheduling (QoS) — ProcessType policy (diagnostics 2026-09-21):**
+  every service that spawns CPU-bound work runs
+  `ProcessType=Standard`: `com.axiom.rag` (it spawns the repair/OCR
+  worker children — a child process cannot escape the Background
+  coalition it inherits, so the class must be fixed at the SERVICE
+  level), `com.axiom.compute-worker` (ML inference), and the
+  `com.axiom.rag-dispatch-gpu*` dispatcher instances. The single
+  documented exception is `com.axiom.carrier-bridge`: a pure network
+  forwarder with no CPU-bound children — `Background` is the deliberate,
+  polite fit there. Rationale and controlled A/B/C evidence
+  (Background 82.56 s vs Standard 8.81 s vs Interactive 7.45 s on the
+  identical 12-process workload; production run 10.62× slower than the
+  foreground reference): `docs/diagnostics/2026-09-21-ocrmypdf-background-qos.md`.
+  Operators can reproduce the measurement on their own host with
+  `qos-probe.sh` (below); the operator-side rollout (changing the
+  installed agent and reloading) is a deployment step, not part of this
+  repository.
+- **qos-probe.sh — the scheduling sonde:** a dependency-light CPU-bound
+  probe (12 parallel sha256 children, needs only python3). In-place
+  measurement shows the CURRENT coalition's core occupancy; `--launchd
+  Background|Standard|Interactive` runs the identical workload as a
+  temporary launchd job of that class, so back-to-back legs isolate the
+  scheduling variable exactly like the diagnostics experiment:
+
+  ```bash
+  deploy/launchd/qos-probe.sh --launchd Background
+  deploy/launchd/qos-probe.sh --launchd Standard
+  # compare the mean-cores lines — the gap is the scheduling class
+  ```
+
+  Expected on an 8P+4E Apple-silicon host: Standard ≈ 8-10 mean cores,
+  Background ≈ 2-3 (a ~9× wall-time difference at equal work).
+  Measurement guide and acceptance criteria:
+  `docs/operations/launchd-qos.md`.
