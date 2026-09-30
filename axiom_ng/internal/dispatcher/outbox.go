@@ -20,7 +20,6 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
-	"github.com/jackc/pgx/v5"
 )
 
 // outboxIndexName follows search.IndexName (single source of truth) so the
@@ -435,7 +434,7 @@ func outboxDocument(row repo.OutboxRow, doc repo.OutboxDoc) map[string]any {
 // failOutboxRow records the failure with capped exponential backoff.
 func (d *Dispatcher) failOutboxRow(ctx context.Context, row repo.OutboxRow, cause error) error {
 	err := d.rep.FailOutboxAttempt(ctx, row.ID, cause.Error(), outboxBackoff(row.Attempts+1), outboxMaxAttempts)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, repo.ErrRowAbsent) {
 		// Row already terminal or finished by a faster worker (status='pending'
 		// guard in FailOutboxAttempt) — a stale attempt must not flip it back.
 		return cause

@@ -934,7 +934,7 @@ func (r *Repo) MarkAckFailed(ctx context.Context, jobID string) error {
 }
 
 // ClearAckPending clears the ack-pending mark after a retried acknowledgement
-// succeeds. Returns ErrNoRows if the job is not completed+ack-pending (or
+// succeeds. Returns ErrRowAbsent if the job is not completed+ack-pending (or
 // already cleared), so the retrier can stop.
 func (r *Repo) ClearAckPending(ctx context.Context, jobID string) error {
 	tag, err := r.pool.Exec(ctx, `
@@ -944,7 +944,7 @@ func (r *Repo) ClearAckPending(ctx context.Context, jobID string) error {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return pgx.ErrNoRows
+		return ErrRowAbsent
 	}
 	return nil
 }

@@ -21,6 +21,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -82,6 +83,17 @@ type Service struct {
 	// true). R7's matrix measures what it buys; ops can disable it for a
 	// latency-only profile (AXIOM_SEARCH_RERANK).
 	Rerank bool
+	// runnerRoles carries the STARTUP ROLE PROBE's verdict (query_embedding,
+	// reranking) — set via SetRunnerRoles when the composition's probe
+	// returns, read by Capabilities(). Atomics: the probe writes from its
+	// goroutine while serving is already up; unprobed (the default) means
+	// NOT vouched — runner-backed capabilities report absent until a
+	// probe confirmed them (F12 #306; a wired-but-incapable runner must
+	// never read as capable).
+	runnerRoles struct {
+		queryEmbedding atomic.Bool
+		reranking      atomic.Bool
+	}
 	// FrontmatterFilter drops detected TOC/preface/references chunks from
 	// the candidate pool BEFORE rerank (#160) — retroactive over the whole
 	// index by construction (detection runs on the candidate texts; no
@@ -109,6 +121,17 @@ type GraphSource interface {
 // SetGraphSource wires the graph expansion source (nil keeps the arm off
 // even when GraphArm is set).
 func (s *Service) SetGraphSource(g GraphSource) { s.graph = g }
+
+// SetRunnerRoles records the startup role probe's verdict over the wired
+// runner (query_embedding / reranking features). The capability report
+// requires the roles: a wired client alone vouches for nothing (the
+// runner may be a stub without the query roles — the exact over-report
+// the F12 honesty rule forbids). Call once when the probe returns;
+// capabilities reflect the last completed probe.
+func (s *Service) SetRunnerRoles(queryEmbedding, reranking bool) {
+	s.runnerRoles.queryEmbedding.Store(queryEmbedding)
+	s.runnerRoles.reranking.Store(reranking)
+}
 
 // graphMinMentions is the stability floor for graph expansion (same L8-§6
 // rationale as the KG API default).

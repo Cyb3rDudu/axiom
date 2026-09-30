@@ -20,31 +20,52 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 	"regexp"
 	"strings"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // SearchBackend is the retrieval surface the Store wraps (implemented by
-// *search.Service).
+// *search.Service). CapabilityReporter is optional: a backend that can
+// report its equipment honestly (the search stack does) feeds the
+// Store's capability model (F12 #306); one that cannot leaves the
+// capabilities at their honest zero — never guessed.
 type SearchBackend interface {
 	Search(ctx context.Context, req search.Request) (*search.Response, error)
 	GetPassage(ctx context.Context, chunkID string) (*search.Passage, error)
 }
 
-// Service is the store.Store implementation over the durable repo and the
-// retrieval stack.
+// RevisionIntake is the Store's durable intake seam (F12 #306): the
+// repository behind IngestRevision. Neutral by construction — the
+// request/job types carry no engine types, so the future SQLite-Store
+// engine (follow-up epic) implements the same seam without PG
+// assumptions. Implemented by *repo.Repo.
+type RevisionIntake interface {
+	EnqueueRevisionIntake(ctx context.Context, req repo.IntakeRequest) (*repo.Job, bool, error)
+}
+
+// Service is the store.Store implementation over the durable intake seam
+// and the retrieval stack.
 type Service struct {
-	rep    *repo.Repo
-	search SearchBackend
-	log    *log.Logger
+	rep      RevisionIntake
+	search   SearchBackend
+	log      *log.Logger
+	reporter CapabilityReporter
 }
 
 // New builds the Store service.
-func New(rep *repo.Repo, sb SearchBackend, lg *log.Logger) *Service {
+func New(rep RevisionIntake, sb SearchBackend, lg *log.Logger) *Service {
 	if lg == nil {
 		lg = log.Default()
 	}
-	return &Service{rep: rep, search: sb, log: lg}
+	svc := &Service{rep: rep, search: sb, log: lg}
+	// Honest equipment report, LIVE: keep the reporter and delegate on
+	// every call — a boot-time snapshot would freeze the unprobed state
+	// (the composition's runner-role probe lands AFTER construction and
+	// must be reflected; F12 review caught exactly that trap). A backend
+	// without a capability reporter reports NOTHING — missing is the
+	// default, never guessed present.
+	if cr, ok := sb.(CapabilityReporter); ok {
+		svc.reporter = cr
+	}
+	return svc
 }
 
 var _ store.Store = (*Service)(nil)
@@ -111,28 +132,17 @@ func (s *Service) IngestRevision(ctx context.Context, req store.IngestRevisionRe
 }
 
 // normalizeSourceID validates the revision's SourceID as a UUID and
-// rewrites it in canonical lowercase form (the mirror's uuid::text shape;
-// pgtype renders exactly that). No new dependency: pgx ships the parser.
-// Known narrowing: pgtype rejects the brace/urn spellings Postgres' uuid
-// cast tolerates — safe direction (everything accepted renders canonical,
-// so the claim's ::uuid can never see a rejected string) and no in-repo
-// producer emits them.
+// rewrites it in canonical lowercase form (the mirror's uuid::text
+// shape). Engine-neutral since F12: the strict hex-and-dashes shape is
+// the only accepted spelling (an engine's uuid cast can never see a
+// rejected string), and canonical lowercase rendering is a stdlib
+// strings.ToLower — no driver types in the application layer.
 func normalizeSourceID(r *revision.SourceRevision) error {
-	// Strict shape FIRST: pgx's parser drops whatever sits at the four
-	// dash positions without checking they are dashes — "deadbeefX1234…"
-	// would silently round-trip into a DIFFERENT uuid. The hex-and-dashes
-	// form is the only accepted spelling; pgtype then renders canonical
-	// lowercase.
 	if !canonicalUUIDShape.MatchString(r.SourceID) {
 		return contracterr.New(contracterr.ComponentStore, contracterr.ClassInvalidArgument,
 			"revision source_id is not a valid uuid: "+r.SourceID)
 	}
-	var u pgtype.UUID
-	if err := u.Scan(r.SourceID); err != nil {
-		return contracterr.New(contracterr.ComponentStore, contracterr.ClassInvalidArgument,
-			"revision source_id is not a valid uuid: "+r.SourceID)
-	}
-	r.SourceID = u.String()
+	r.SourceID = strings.ToLower(r.SourceID)
 	return nil
 }
 

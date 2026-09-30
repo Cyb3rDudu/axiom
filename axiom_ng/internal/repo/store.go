@@ -6,7 +6,21 @@
 // the store-boundary lint in internal/store proves it transitively.
 package repo
 
-import "github.com/jackc/pgx/v5/pgxpool"
+import (
+	"errors"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// ErrRowAbsent is the engine-neutral absent-row signal for consumers
+// OUTSIDE the repository implementations (F12 #306): repository methods
+// translate the driver's no-rows error into it, so the application
+// layer never touches pgx types. Deferred: only ClearAckPending and
+// FailOutboxAttempt translate today — the remaining pgx.ErrNoRows
+// returns inside this package are a documented deferral for the
+// SQLite-Store follow-up epic (this package is engine-allowlisted, the
+// internal uses are legal).
+var ErrRowAbsent = errors.New("repo: row absent")
 
 // Repo wraps the pgx pool with the Store persistence methods.
 type Repo struct {

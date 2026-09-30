@@ -234,7 +234,7 @@ func (r *Repo) FailOutboxAttempt(ctx context.Context, id, errMsg string, backoff
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return pgx.ErrNoRows
+		return ErrRowAbsent
 	}
 	return nil
 }

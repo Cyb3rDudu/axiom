@@ -7,7 +7,6 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
-	"github.com/jackc/pgx/v5"
 )
 
 // ResultPersister durably commits a validated processor result for a job and
@@ -64,7 +63,7 @@ func retryAcks(ctx context.Context, d *Dispatcher) {
 					d.logger.Printf("ack retry %s: %v", jobID, err)
 					continue
 				}
-				if err := d.rep.ClearAckPending(ctx, jobID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				if err := d.rep.ClearAckPending(ctx, jobID); err != nil && !errors.Is(err, repo.ErrRowAbsent) {
 					d.logger.Printf("ack retry %s: clear pending: %v", jobID, err)
 				}
 			}
