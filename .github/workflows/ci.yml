@@ -89,6 +89,67 @@ jobs:
       - name: unit suites (DB tests skip)
         run: go test -count=1 ./...
 
+  # --- F12 #306: Library repository contract suite, engine matrix ------
+  # The SAME suite (internal/library/reposuite) against BOTH Library
+  # engines — two separate jobs because the legs need different
+  # environments (a matrix leg cannot drop the shared services block):
+  #
+  #   - library-engine-postgres: pgvector service + AXIOM_TEST_DATABASE_URL;
+  #     runs the reposuite runner (both suite legs, availability-gated —
+  #     the runner's skip guard turns any engine-specific skip INSIDE the
+  #     suite red), the SQLite engine's contract-suite leg (as a control),
+  #     the pglib suite leg, and the skip-guard teeth. The legs carry the
+  #     CONTRACT suites only: the SQLite engine's OPERATING tests
+  #     (pragmas, permissions, lease probes, busy-timeout) are DB-free
+  #     and run in go-unit on every push; the PG engine's operating tests
+  #     are DSN-gated and ride go-db-it instead.
+  #   - library-engine-sqlite: NO service, NO DSN — the SQLite engine's
+  #     contract-suite leg must pass in a PostgreSQL-free environment
+  #     (that is the point of this leg; a skip here is the guard's
+  #     business, never silently green).
+  #
+  # A red leg means an engine lost parity.
+  library-engine-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: axiom_user
+          POSTGRES_PASSWORD: axiom_password
+          POSTGRES_DB: axiom_ng_ci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U axiom_user"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AXIOM_TEST_DATABASE_URL:
+        "postgresql://axiom_user:axiom_password@localhost:5432/axiom_ng_ci_test?sslmode=\
+        disable"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: axiom_ng/go.mod
+      - name: "library repository contract suite (engine: postgres + sqlite)"
+        run: go test -count=1 -v ./internal/library/reposuite ./internal/library/sqlite ./internal/library/pglib -run 'TestRepositoryContractSuite|TestSkipGuardProbes'
+
+  library-engine-sqlite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: axiom_ng/go.mod
+      # No postgres service and no DSN: the SQLite engine and its shared
+      # contract-suite leg must run green with no PostgreSQL anywhere in
+      # the environment.
+      - name: "library repository contract suite (engine: sqlite, PG-free)"
+        run: go test -count=1 -v ./internal/library/reposuite ./internal/library/sqlite -run 'TestRepositoryContractSuite|TestSkipGuardProbes'
+
   go-db-it:
     runs-on: ubuntu-latest
     services:
