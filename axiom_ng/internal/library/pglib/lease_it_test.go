@@ -1,7 +1,7 @@
 // lease_it_test.go — the single-writer declaration against real Postgres
 // (F07, #301): cross-process semantics proven with two owner identities
 // on the same scratch DB — the same rows two dev processes would race on.
-package library
+package pglib
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
-	"github.com/jackc/pgx/v5"
+	lib "github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
 )
 
 func TestWriterLeaseSecondWriterRefused(t *testing.T) {
@@ -19,16 +19,16 @@ func TestWriterLeaseSecondWriterRefused(t *testing.T) {
 	ctx := context.Background()
 	const scope = "zotero|http://localhost:23119|users/0"
 
-	if err := st.AcquireWriterLease(ctx, scope, "host-a:101:nonce", DefaultWriterLeaseTTL); err != nil {
+	if err := st.AcquireWriterLease(ctx, scope, "host-a:101:nonce", lib.DefaultWriterLeaseTTL); err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
 	// The second writer against the SAME scope is refused at start —
 	// typed Conflict carrying the live owner as diagnosis.
-	err := st.AcquireWriterLease(ctx, scope, "host-b:202:nonce", DefaultWriterLeaseTTL)
+	err := st.AcquireWriterLease(ctx, scope, "host-b:202:nonce", lib.DefaultWriterLeaseTTL)
 	if class, ok := contracterr.ClassOf(err); !ok || class != contracterr.ClassConflict {
 		t.Fatalf("second acquire: %v, want conflict", err)
 	}
-	var lc *WriterLeaseConflict
+	var lc *lib.WriterLeaseConflict
 	if !errors.As(err, &lc) || lc.Owner != "host-a:101:nonce" {
 		t.Fatalf("second acquire must diagnose the live owner, got %+v (%v)", lc, err)
 	}
@@ -44,7 +44,7 @@ func TestWriterLeaseSecondWriterRefused(t *testing.T) {
 	if err := st.ReleaseWriterLease(ctx, scope, "host-a:101:nonce"); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if err := st.AcquireWriterLease(ctx, scope, "host-b:202:nonce", DefaultWriterLeaseTTL); err != nil {
+	if err := st.AcquireWriterLease(ctx, scope, "host-b:202:nonce", lib.DefaultWriterLeaseTTL); err != nil {
 		t.Fatalf("acquire after release: %v", err)
 	}
 }
@@ -88,12 +88,12 @@ func TestProviderAnchorsAndWriteAudit(t *testing.T) {
 	if id, _, err := st.LookupProviderAnchor(ctx, scope, "record", "imp-key-1-hash"); err != nil || id != "KEYAAA" {
 		t.Fatalf("lookup: %q %v", id, err)
 	}
-	if _, _, err := st.LookupProviderAnchor(ctx, scope, "rendition", "KEYAAA|sha-x"); !errors.Is(err, pgx.ErrNoRows) {
-		// absent anchor: pgx.ErrNoRows surfaces (the adapter treats it as absent)
+	if _, _, err := st.LookupProviderAnchor(ctx, scope, "rendition", "KEYAAA|sha-x"); !errors.Is(err, lib.ErrRowAbsent) {
+		// absent anchor: ErrRowAbsent surfaces (the adapter treats it as absent)
 		if err == nil {
 			t.Fatal("absent anchor must surface ErrNoRows, got a row")
 		}
-		t.Fatalf("absent anchor: %v, want pgx.ErrNoRows", err)
+		t.Fatalf("absent anchor: %v, want lib.ErrRowAbsent", err)
 	}
 
 	// Audit: one row per mutation — the count is the 1:1 sonde.
@@ -101,7 +101,7 @@ func TestProviderAnchorsAndWriteAudit(t *testing.T) {
 		t.Fatalf("audit count before mutations: %d %v", n, err)
 	}
 	for i, op := range []string{"ensure_record", "ensure_rendition", "ensure_membership"} {
-		if err := st.AppendWriteAudit(ctx, WriteAuditRow{
+		if err := st.AppendWriteAudit(ctx, lib.WriteAuditRow{
 			Scope: scope, Operation: op, Anchor: "anchor", ProviderRef: "KEY", Outcome: "created",
 			Readback: map[string]any{"i": i},
 		}); err != nil {
@@ -140,14 +140,14 @@ func TestPutProviderAnchorWithAuditAtomic(t *testing.T) {
 
 	// The combined path: anchor + audit land together; the first writer
 	// keeps the id, the version column refreshes.
-	surviving, err := st.PutProviderAnchorWithAudit(ctx, scope, "collection", "c|Seg", "COLLX", 1, WriteAuditRow{
+	surviving, err := st.PutProviderAnchorWithAudit(ctx, scope, "collection", "c|Seg", "COLLX", 1, lib.WriteAuditRow{
 		Scope: scope, Operation: "create_collection", Anchor: "c|Seg", ProviderRef: "COLLX",
 		Outcome: "created", Readback: map[string]any{"parent": ""},
 	})
 	if err != nil || surviving != "COLLX" {
 		t.Fatalf("combined put: %q %v", surviving, err)
 	}
-	surviving, err = st.PutProviderAnchorWithAudit(ctx, scope, "collection", "c|Seg", "COLLY", 7, WriteAuditRow{
+	surviving, err = st.PutProviderAnchorWithAudit(ctx, scope, "collection", "c|Seg", "COLLY", 7, lib.WriteAuditRow{
 		Scope: scope, Operation: "create_collection", Anchor: "c|Seg", ProviderRef: "COLLY",
 		Outcome: "changed", Readback: nil, // nil persists as '{}' (NOT NULL floor)
 	})
@@ -164,14 +164,14 @@ func TestPutProviderAnchorWithAuditAtomic(t *testing.T) {
 	// Crash sonde against the REAL transaction: the anchor insert alone
 	// would succeed, the audit insert fails (an unmarshalable readback
 	// detail) — the whole transaction rolls back, leaving NEITHER row.
-	_, err = st.PutProviderAnchorWithAudit(ctx, scope, "record", "crash-probe", "KEYZ", 1, WriteAuditRow{
+	_, err = st.PutProviderAnchorWithAudit(ctx, scope, "record", "crash-probe", "KEYZ", 1, lib.WriteAuditRow{
 		Scope: scope, Operation: "ensure_record", Anchor: "crash-probe", ProviderRef: "KEYZ",
 		Outcome: "created", Readback: make(chan int), // json cannot marshal a channel
 	})
 	if err == nil {
 		t.Fatal("the unmarshalable audit detail must fail the combined write")
 	}
-	if _, _, lerr := st.LookupProviderAnchor(ctx, scope, "record", "crash-probe"); !errors.Is(lerr, pgx.ErrNoRows) {
+	if _, _, lerr := st.LookupProviderAnchor(ctx, scope, "record", "crash-probe"); !errors.Is(lerr, lib.ErrRowAbsent) {
 		t.Fatalf("crash must roll the ANCHOR back too (its lone insert would have succeeded): %v", lerr)
 	}
 	if n, aerr := st.CountWriteAudit(ctx, scope); aerr != nil || n != 2 {

@@ -21,13 +21,14 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/library"
 	axlibrary "github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/pglib"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // libraryTestDB provisions the library-only scratch DB (same convention
 // as internal/library's IT harness, independent copy for the server
 // package).
-func libraryTestDB(t *testing.T) (*axlibrary.Store, func()) {
+func libraryTestDB(t *testing.T) (*pglib.Store, func()) {
 	t.Helper()
 	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -48,7 +49,7 @@ func libraryTestDB(t *testing.T) (*axlibrary.Store, func()) {
 	}
 	admin.Close()
 	pool := mustPool(t, ctx, withDBDSN(dsn, dbName))
-	st := axlibrary.NewStore(pool)
+	st := pglib.NewStore(pool)
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("library migrate: %v", err)
 	}

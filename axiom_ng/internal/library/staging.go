@@ -175,6 +175,9 @@ func (s *Staging) Open(sha string) (io.ReadCloser, error) {
 // Path is the staging file path for a content hash.
 func (s *Staging) Path(sha string) string { return filepath.Join(s.root, sha) }
 
+// Root exposes the staging root path (battery read-back).
+func (st *Staging) Root() string { return st.root }
+
 // CleanupStaging is the retention hook: it removes staging files whose
 // mtime predates cutoff AND that no library_imports row references.
 // Dot-prefixed entries are in-flight temps (not content-addressed, so
@@ -184,24 +187,12 @@ func (s *Staging) Path(sha string) string { return filepath.Join(s.root, sha) }
 // ponytail: full-table scan of referenced hashes per run — fine for the
 // import volumes of a personal library; index-driven retention if that
 // ever changes. Never follows symlinks, never leaves the staging root.
-func (s *Store) CleanupStaging(ctx context.Context, st *Staging, cutoff time.Time) (int, error) {
+func (s *Service) CleanupStaging(ctx context.Context, st *Staging, cutoff time.Time) (int, error) {
 	if st == nil || st.root == "" {
 		return 0, nil
 	}
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT staging_sha256 FROM library_imports`)
+	referenced, err := s.store.ReferencedStagingHashes(ctx)
 	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-	referenced := map[string]bool{}
-	for rows.Next() {
-		var sha string
-		if err := rows.Scan(&sha); err != nil {
-			return 0, err
-		}
-		referenced[sha] = true
-	}
-	if err := rows.Err(); err != nil {
 		return 0, err
 	}
 	entries, err := os.ReadDir(st.root)

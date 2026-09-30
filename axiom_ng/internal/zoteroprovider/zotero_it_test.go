@@ -30,6 +30,7 @@ import (
 
 	libcontracts "github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/library"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/pglib"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -73,7 +74,7 @@ func itWriteKey(t *testing.T) string {
 
 // itScratchDB builds a session-unique scratch database (library
 // migrations only) — the same convention the library IT suite uses.
-func itScratchDB(t *testing.T) (*library.Store, func()) {
+func itScratchDB(t *testing.T) (*pglib.Store, func()) {
 	t.Helper()
 	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	base := dbOf(dsn)
@@ -109,7 +110,7 @@ func itScratchDB(t *testing.T) (*library.Store, func()) {
 	if err != nil {
 		t.Fatalf("open scratch pool: %v", err)
 	}
-	st := library.NewStore(pool)
+	st := pglib.NewStore(pool)
 	if err := st.Migrate(ctx); err != nil {
 		pool.Close()
 		t.Fatalf("library migrate: %v", err)

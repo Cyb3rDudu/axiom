@@ -30,8 +30,8 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/store"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/pglib"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/store/migrations"
 )
 
 const scratchDBName = "axiom_baseline_scratch"
@@ -449,10 +449,10 @@ func TestSchemaFingerprintAllowlistExact(t *testing.T) {
 		if err := d.Migrate(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if err := library.Migrate(ctx, d.Pool()); err != nil {
+		if err := pglib.Migrate(ctx, d.Pool()); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.Migrate(ctx, d.Pool()); err != nil {
+		if err := migrations.Migrate(ctx, d.Pool()); err != nil {
 			t.Fatal(err)
 		}
 		live, _, err := schemaFingerprint(ctx, d)

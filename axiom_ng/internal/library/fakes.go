@@ -242,6 +242,19 @@ func (f *FakeProvider) Snapshot() (records, renditions, memberships, collections
 	return len(f.records), n, len(f.memberships), len(f.collections)
 }
 
+// LastRenditionFilename reports the filename of the LAST rendition
+// filed under the provider record (the naming-convention battery's
+// read-back — F12 moved the batteries out of this package's internals).
+func (f *FakeProvider) LastRenditionFilename(providerID string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.byProvider[providerID]
+	if !ok || len(r.attOrder) == 0 {
+		return ""
+	}
+	return r.renditions[r.attOrder[len(r.attOrder)-1]].filename
+}
+
 // ---------------------------------------------------------------------------
 // FakeResolvers — deterministic ladder fixtures.
 

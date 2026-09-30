@@ -1,4 +1,7 @@
-// revisions.go — the source revision Mits-Schrieb (F06, #300 Ziel 8).
+// revisions.go — the source revision Mits-Schrieb (F06 #300 Ziel 8),
+// PostgreSQL dialect (the legacy Zotero-sync lane is a PostgreSQL-profile
+// feature: it reads the zotero_* mirror on the shared database; the
+// SQLite profile has no mirror and does not wire this lane).
 // Revisions are published at the points where Zotero state changes are
 // observed today: sync completion (RecordSyncRevisions) and heal/custody
 // (RecordAttachmentRevision — both the fixer auto-apply and the manual
@@ -9,7 +12,7 @@
 // Idempotence: a revision row is minted only when the rendition's content
 // hash (or rendition identity) CHANGED — a re-sync that changes nothing
 // rewrites nothing. Revision ids stay monotonic per (source, record).
-package library
+package pglib
 
 import (
 	"context"
@@ -18,19 +21,8 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/revision"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
 )
-
-// RevisionPublisher is the Mits-Schrieb surface the existing state-change
-// points call. nil-safe by convention: callers skip a nil publisher.
-type RevisionPublisher interface {
-	// RecordSyncRevisions re-publishes revisions for every ACTIVE
-	// attachment of the source from the Zotero mirror (sync completion).
-	RecordSyncRevisions(ctx context.Context, sourceID string) (int, error)
-	// RecordAttachmentRevision publishes one rendition's revision (heal /
-	// custody apply): the NEW attachment with its content hash.
-	RecordAttachmentRevision(ctx context.Context, sourceID, documentKey, attachmentKey, contentHash, mediaType string) error
-}
 
 // RecordSyncRevisions walks the active attachments of the source and
 // publishes a revision per rendition whose state changed. The count is
@@ -44,6 +36,11 @@ func (s *Store) RecordSyncRevisions(ctx context.Context, sourceID string) (int, 
 		JOIN zotero_documents d ON d.id = a.document_id
 		WHERE a.source_id::text = $1 AND a.deleted = false AND d.deleted = false
 		  AND a.content_hash IS NOT NULL AND a.content_hash <> ''`, sourceID)
+	if isMissingRelation(err) {
+		// A library-only database (own DSN, F12 split) has no Zotero
+		// mirror — the documented strangler absence, not an error.
+		return 0, nil
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -102,6 +99,9 @@ func (s *Store) recordMirrorRevision(ctx context.Context, sourceID, documentKey,
 		FROM zotero_documents d
 		WHERE d.source_id::text = $1 AND d.zotero_key = $2 AND d.deleted = false`,
 		sourceID, documentKey).Scan(&title, &publisher, &language, &creators, &year, &class)
+	if isMissingRelation(err) {
+		return false, nil // no mirror — absence, not an error (see above)
+	}
 	if err != nil {
 		return false, fmt.Errorf("revision mitschrieb document %s: %w", documentKey, err)
 	}
@@ -110,7 +110,7 @@ func (s *Store) recordMirrorRevision(ctx context.Context, sourceID, documentKey,
 		Year: year, CitationClass: class,
 	}
 	if len(creators) > 0 {
-		var cs []Creator
+		var cs []library.Creator
 		if json.Unmarshal(creators, &cs) == nil {
 			for _, c := range cs {
 				name := c.Name
@@ -123,7 +123,7 @@ func (s *Store) recordMirrorRevision(ctx context.Context, sourceID, documentKey,
 			}
 		}
 	}
-	_, minted, err := s.PublishRevision(ctx, SourceRevisionDomain{
+	_, minted, err := s.PublishRevision(ctx, library.SourceRevisionDomain{
 		SourceID:     sourceID,
 		RecordID:     documentKey,
 		RenditionID:  attachmentKey,
@@ -149,8 +149,5 @@ func mediaTypeFromContent(ct string) string {
 	return ct
 }
 
-// NewRevisionPublisher adapts a pool into the RevisionPublisher surface
-// (the composition root wires this into the sync/heal points).
-func NewRevisionPublisher(pool *pgxpool.Pool) RevisionPublisher {
-	return NewStore(pool)
-}
+// (NewRevisionPublisher was removed with F12: the composition wires the
+// concrete engine directly — the adapter had no callers.)

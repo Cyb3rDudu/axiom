@@ -1,25 +1,27 @@
-// store.go — Library persistence over pgx (F06, #300). The saga's
-// durable state: imports, append-only events, step bookkeeping,
+// store.go — the Library component's PostgreSQL repository (F06 #300,
+// F12 #306). One of the two engine implementations of library.Repository
+// (the SQLite twin lives in internal/library/sqlite); the SQL dialect
+// and PostgreSQL-specific locking (advisory locks) stay in here. The
+// saga's durable state: imports, append-only events, step bookkeeping,
 // provenance, external identifiers, source revisions.
-package library
+package pglib
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/library"
-	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/revision"
+	contracts "github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/library"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Store is the Library DB store.
+// Store is the Library PostgreSQL repository (a library.Repository).
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -27,57 +29,41 @@ type Store struct {
 // NewStore builds a Store over a pool.
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
-// ImportRow is the persisted import (the library_imports row).
-type ImportRow struct {
-	ImportID             string
-	IdempotencyKey       string
-	PayloadHash          string
-	RecordType           string
-	RequestJSON          []byte
-	Status               library.ImportStatus
-	StagingSHA256        string
-	StagingSize          int64
-	MediaType            string
-	FailureCode          string
-	FailureMessage       string
-	RecordProviderID     string
-	RenditionProviderID  string
-	CollectionProviderID string
-	RecordID             string
-	RenditionID          string
-	RevisionID           int64
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+// compile-time interface conformance — the PostgreSQL engine implements
+// the WHOLE neutral contract.
+var _ library.Repository = (*Store)(nil)
+
+// absent translates the driver's no-rows signal into the engine-neutral
+// library.ErrRowAbsent — NO-ROWS ONLY: a missing library_* relation is a
+// schema fault and stays a raw error (Internal), never masked as data
+// absence (F12 review: the widening folded 42P01 here too and turned a
+// schema fault into a 404). Mirror-read folding (no-rows ∪ 42P01) is
+// mirrorAbsent, used only by the strangler reads.
+func absent(err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return library.ErrRowAbsent
+	}
+	return err
 }
 
-// EventRow is one append-only import event.
-type EventRow struct {
-	Seq    int64
-	Kind   string
-	Detail json.RawMessage
-	At     time.Time
+// isMissingRelation reports a 42P01 (relation absent): the Library
+// schema runs standalone (fake providers, no Zotero mirror) — the mirror
+// fallbacks treat that as plain absence, never as an internal error.
+func isMissingRelation(err error) bool {
+	var pgErr interface{ SQLState() string }
+	return errors.As(err, &pgErr) && pgErr.SQLState() == "42P01"
 }
 
-// StepRow is one saga step's bookkeeping.
-type StepRow struct {
-	Step        string
-	State       string // in_progress | done
-	ProviderRef string
-	Detail      json.RawMessage
-	Attempts    int
-	UpdatedAt   time.Time
+// isBadUUID reports a 22P02 against a uuid parameter: an id that cannot
+// even parse is an unknown row, not an internal error.
+func isBadUUID(err error) bool {
+	var pgErr interface{ SQLState() string }
+	return errors.As(err, &pgErr) && pgErr.SQLState() == "22P02"
 }
 
-// ProvenanceRow is one ladder provenance entry (applied or attempted).
-type ProvenanceRow struct {
-	Field           string
-	Source          string
-	ResolverVersion string
-	Confidence      float64
-	Applied         bool
-	Value           string
-	At              time.Time
-}
+// now returns the DM03-compatible time form (UTC, microsecond-aligned) —
+// every produced timestamp goes through here.
+func now(t time.Time) time.Time { return t.UTC().Truncate(time.Microsecond) }
 
 // isUniqueViolation reports a pg unique-violation (23505), optionally
 // narrowed to the named constraint.
@@ -91,24 +77,33 @@ func isUniqueViolation(err error, constraint string) bool {
 
 // CreateImport inserts the import row; a concurrent identical insert
 // surfaces as a unique violation the caller resolves by re-reading.
-func (s *Store) CreateImport(ctx context.Context, r ImportRow) error {
+func (s *Store) CreateImport(ctx context.Context, r library.ImportRow) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO library_imports (idempotency_key, payload_hash, record_type, request_json,
 			status, staging_sha256, staging_size, media_type, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
 		r.IdempotencyKey, r.PayloadHash, r.RecordType, r.RequestJSON, string(r.Status),
 		r.StagingSHA256, r.StagingSize, r.MediaType, now(time.Now()))
+	if err != nil && isUniqueViolation(err, "library_imports_idempotency_key") {
+		return fmt.Errorf("%w: %v", library.ErrDuplicateKey, err)
+	}
 	return err
 }
 
-// GetByIdempotencyKey loads an import row; "" when absent.
-func (s *Store) GetByIdempotencyKey(ctx context.Context, key string) (ImportRow, error) {
+// GetByIdempotencyKey loads an import row; ErrRowAbsent when absent.
+func (s *Store) GetByIdempotencyKey(ctx context.Context, key string) (library.ImportRow, error) {
 	return s.scanImport(s.pool.QueryRow(ctx, s.importSelect()+` WHERE idempotency_key = $1`, key))
 }
 
-// GetImport loads an import row by id; "" when absent.
-func (s *Store) GetImport(ctx context.Context, importID string) (ImportRow, error) {
-	return s.scanImport(s.pool.QueryRow(ctx, s.importSelect()+` WHERE import_id = $1`, importID))
+// GetImport loads an import row by id; absent rows (including a
+// syntactically invalid uuid — an unknown import, not an internal error)
+// surface as library.ErrRowAbsent.
+func (s *Store) GetImport(ctx context.Context, importID string) (library.ImportRow, error) {
+	row, err := s.scanImport(s.pool.QueryRow(ctx, s.importSelect()+` WHERE import_id = $1`, importID))
+	if isBadUUID(err) {
+		return library.ImportRow{}, library.ErrRowAbsent
+	}
+	return row, absent(err)
 }
 
 // importSelect is the NULL-safe import projection (nullable columns
@@ -122,20 +117,17 @@ func (s *Store) importSelect() string {
 			FROM library_imports`
 }
 
-func (s *Store) scanImport(row pgx.Row) (ImportRow, error) {
-	var r ImportRow
+func (s *Store) scanImport(row pgx.Row) (library.ImportRow, error) {
+	var r library.ImportRow
 	var status, req string
 	err := row.Scan(&r.ImportID, &r.IdempotencyKey, &r.PayloadHash, &r.RecordType, &req, &status,
 		&r.StagingSHA256, &r.StagingSize, &r.MediaType, &r.FailureCode, &r.FailureMessage,
 		&r.RecordProviderID, &r.RenditionProviderID, &r.CollectionProviderID,
 		&r.RecordID, &r.RenditionID, &r.RevisionID, &r.CreatedAt, &r.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ImportRow{}, err
-	}
 	if err != nil {
-		return ImportRow{}, err
+		return library.ImportRow{}, absent(err)
 	}
-	r.Status = library.ImportStatus(status)
+	r.Status = contracts.ImportStatus(status)
 	r.RequestJSON = []byte(req)
 	return r, nil
 }
@@ -145,13 +137,13 @@ func (s *Store) scanImport(row pgx.Row) (ImportRow, error) {
 // expect guards against concurrent drivers ("" = unguarded, used by the
 // saga's own single driver): a non-empty expect makes the update apply
 // ONLY while the row is still in that status — zero rows affected
-// surfaces as pgx.ErrNoRows, which the guarded callers map to Conflict.
+// surfaces as library.ErrRowAbsent, which the guarded callers map to Conflict.
 // Failure columns are cleared on every transition INTO a non-failed
 // status (a retried-then-committed import must not keep its stale
 // failure_code in the row).
-func (s *Store) UpdateImportStatus(ctx context.Context, importID string, status library.ImportStatus,
-	expect library.ImportStatus,
-	failure *library.ImportFailure, rec, rend, coll, recID, rendID string, revID int64) error {
+func (s *Store) UpdateImportStatus(ctx context.Context, importID string, status contracts.ImportStatus,
+	expect contracts.ImportStatus,
+	failure *contracts.ImportFailure, rec, rend, coll, recID, rendID string, revID int64) error {
 	var fcode, fmsg any
 	if failure != nil {
 		fcode, fmsg = failure.Code, failure.Message
@@ -177,10 +169,13 @@ func (s *Store) UpdateImportStatus(ctx context.Context, importID string, status 
 		WHERE import_id = $1 AND ($12 = '' OR status = $12)`,
 		importID, string(status), fcode, fmsg, rec, rend, coll, recID, rendID, rev, now(time.Now()), string(expect))
 	if err != nil {
+		if isBadUUID(err) {
+			return library.ErrRowAbsent
+		}
 		return err
 	}
 	if ct.RowsAffected() == 0 {
-		return pgx.ErrNoRows
+		return library.ErrRowAbsent
 	}
 	return nil
 }
@@ -213,16 +208,16 @@ func (s *Store) AppendEvent(ctx context.Context, importID, kind string, detail a
 }
 
 // ListEvents returns the event log in seq order.
-func (s *Store) ListEvents(ctx context.Context, importID string) ([]EventRow, error) {
+func (s *Store) ListEvents(ctx context.Context, importID string) ([]library.EventRow, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT seq, kind, detail, at FROM library_import_events WHERE import_id = $1 ORDER BY seq`, importID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []EventRow
+	var out []library.EventRow
 	for rows.Next() {
-		var e EventRow
+		var e library.EventRow
 		if err := rows.Scan(&e.Seq, &e.Kind, &e.Detail, &e.At); err != nil {
 			return nil, err
 		}
@@ -252,17 +247,14 @@ func (s *Store) UpsertStep(ctx context.Context, importID, step, state, providerR
 }
 
 // GetStep loads one step row ("" step when absent).
-func (s *Store) GetStep(ctx context.Context, importID, step string) (StepRow, error) {
-	var r StepRow
+func (s *Store) GetStep(ctx context.Context, importID, step string) (library.StepRow, error) {
+	var r library.StepRow
 	err := s.pool.QueryRow(ctx,
 		`SELECT step, state, COALESCE(provider_ref,''), detail, attempts, updated_at
 		 FROM library_import_steps WHERE import_id = $1 AND step = $2`, importID, step).
 		Scan(&r.Step, &r.State, &r.ProviderRef, &r.Detail, &r.Attempts, &r.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return StepRow{}, err
-	}
 	if err != nil {
-		return StepRow{}, err
+		return library.StepRow{}, absent(err)
 	}
 	return r, nil
 }
@@ -270,7 +262,7 @@ func (s *Store) GetStep(ctx context.Context, importID, step string) (StepRow, er
 // AppendProvenance writes one provenance row. Idempotent per
 // (import, field, source, resolver_version, applied): a resumed resolve
 // step re-runs the ladder, and the audit trail must not inflate.
-func (s *Store) AppendProvenance(ctx context.Context, importID string, p ProvenanceRow) error {
+func (s *Store) AppendProvenance(ctx context.Context, importID string, p library.ProvenanceRow) error {
 	if p.At.IsZero() {
 		p.At = time.Now() // rows and wire timestamps must be real, never 0001-01-01
 	}
@@ -293,7 +285,7 @@ func (s *Store) AppendProvenance(ctx context.Context, importID string, p Provena
 }
 
 // ListProvenance returns the provenance rows (both applied and attempted).
-func (s *Store) ListProvenance(ctx context.Context, importID string) ([]ProvenanceRow, error) {
+func (s *Store) ListProvenance(ctx context.Context, importID string) ([]library.ProvenanceRow, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT field, source, resolver_version, confidence, applied, value, at
 		 FROM library_metadata_provenance WHERE import_id = $1 ORDER BY id`, importID)
@@ -301,9 +293,9 @@ func (s *Store) ListProvenance(ctx context.Context, importID string) ([]Provenan
 		return nil, err
 	}
 	defer rows.Close()
-	var out []ProvenanceRow
+	var out []library.ProvenanceRow
 	for rows.Next() {
-		var p ProvenanceRow
+		var p library.ProvenanceRow
 		if err := rows.Scan(&p.Field, &p.Source, &p.ResolverVersion, &p.Confidence, &p.Applied, &p.Value, &p.At); err != nil {
 			return nil, err
 		}
@@ -317,8 +309,8 @@ func (s *Store) ListProvenance(ctx context.Context, importID string) ([]Provenan
 // Conflict — the caller decides (this is data state, never auto-merged).
 func (s *Store) ClaimIdentifiers(ctx context.Context, recordID, doi, isbn string) error {
 	for _, id := range []struct{ kind, val string }{
-		{"doi", NormalizeDOI(doi)},
-		{"isbn", NormalizeISBN(isbn)},
+		{"doi", library.NormalizeDOI(doi)},
+		{"isbn", library.NormalizeISBN(isbn)},
 	} {
 		if id.val == "" {
 			continue
@@ -359,7 +351,7 @@ func (s *Store) ClaimIdentifiers(ctx context.Context, recordID, doi, isbn string
 // surviving id instead of stamping a dangling one), and concurrent
 // publishers of the same record serialize on the lock instead of racing
 // an INSERT … DO NOTHING that could silently drop the loser.
-func (s *Store) PublishRevision(ctx context.Context, r SourceRevisionDomain) (survivingID int64, minted bool, err error) {
+func (s *Store) PublishRevision(ctx context.Context, r library.SourceRevisionDomain) (survivingID int64, minted bool, err error) {
 	bib, err := json.Marshal(r.Bibliography)
 	if err != nil {
 		return 0, false, err
@@ -414,7 +406,7 @@ func (s *Store) PublishRevision(ctx context.Context, r SourceRevisionDomain) (su
 
 // LatestRevision loads the newest revision of a rendition (for ticket
 // redemption and citation projection). Empty RecordID when absent.
-func (s *Store) LatestRevision(ctx context.Context, sourceID, recordID, renditionID string) (SourceRevisionDomain, error) {
+func (s *Store) LatestRevision(ctx context.Context, sourceID, recordID, renditionID string) (library.SourceRevisionDomain, error) {
 	r, err := s.scanRevision(s.pool.QueryRow(ctx, `
 		SELECT source_id, record_id, rendition_id, revision_id, content_hash, media_type,
 			bibliography, locator_capabilities, content_ticket, origin, created_at
@@ -422,13 +414,13 @@ func (s *Store) LatestRevision(ctx context.Context, sourceID, recordID, renditio
 		WHERE source_id = $1 AND record_id = $2 AND rendition_id = $3
 		ORDER BY revision_id DESC LIMIT 1`, sourceID, recordID, renditionID))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return SourceRevisionDomain{}, err
+		return library.SourceRevisionDomain{}, library.ErrRowAbsent
 	}
 	return r, err
 }
 
 // LatestRevisionByTicket resolves a revision row by its content ticket.
-func (s *Store) LatestRevisionByTicket(ctx context.Context, ticket string) (SourceRevisionDomain, error) {
+func (s *Store) LatestRevisionByTicket(ctx context.Context, ticket string) (library.SourceRevisionDomain, error) {
 	r, err := s.scanRevision(s.pool.QueryRow(ctx, `
 		SELECT source_id, record_id, rendition_id, revision_id, content_hash, media_type,
 			bibliography, locator_capabilities, content_ticket, origin, created_at
@@ -436,14 +428,14 @@ func (s *Store) LatestRevisionByTicket(ctx context.Context, ticket string) (Sour
 		WHERE content_ticket = $1
 		ORDER BY revision_id DESC LIMIT 1`, ticket))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return SourceRevisionDomain{}, err
+		return library.SourceRevisionDomain{}, library.ErrRowAbsent
 	}
 	return r, err
 }
 
 // LatestRevisionByRecord resolves the newest revision of any rendition of
 // a record (citation projection entry).
-func (s *Store) LatestRevisionByRecord(ctx context.Context, sourceID, recordID string) (SourceRevisionDomain, error) {
+func (s *Store) LatestRevisionByRecord(ctx context.Context, sourceID, recordID string) (library.SourceRevisionDomain, error) {
 	r, err := s.scanRevision(s.pool.QueryRow(ctx, `
 		SELECT source_id, record_id, rendition_id, revision_id, content_hash, media_type,
 			bibliography, locator_capabilities, content_ticket, origin, created_at
@@ -451,68 +443,26 @@ func (s *Store) LatestRevisionByRecord(ctx context.Context, sourceID, recordID s
 		WHERE source_id = $1 AND record_id = $2
 		ORDER BY revision_id DESC LIMIT 1`, sourceID, recordID))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return SourceRevisionDomain{}, err
+		return library.SourceRevisionDomain{}, library.ErrRowAbsent
 	}
 	return r, err
 }
 
-func (s *Store) scanRevision(row pgx.Row) (SourceRevisionDomain, error) {
-	var r SourceRevisionDomain
+func (s *Store) scanRevision(row pgx.Row) (library.SourceRevisionDomain, error) {
+	var r library.SourceRevisionDomain
 	var bib, loc []byte
 	err := row.Scan(&r.SourceID, &r.RecordID, &r.RenditionID, &r.RevisionID, &r.ContentHash,
 		&r.MediaType, &bib, &loc, &r.ContentTicket, &r.Origin, &r.CreatedAt)
 	if err != nil {
-		return SourceRevisionDomain{}, err
+		return library.SourceRevisionDomain{}, err
 	}
 	if err := json.Unmarshal(bib, &r.Bibliography); err != nil {
-		return SourceRevisionDomain{}, fmt.Errorf("revision bibliography: %w", err)
+		return library.SourceRevisionDomain{}, fmt.Errorf("revision bibliography: %w", err)
 	}
 	if err := json.Unmarshal(loc, &r.LocatorCapabilities); err != nil {
-		return SourceRevisionDomain{}, fmt.Errorf("revision locator capabilities: %w", err)
+		return library.SourceRevisionDomain{}, fmt.Errorf("revision locator capabilities: %w", err)
 	}
 	return r, nil
 }
 
 // ---------------------------------------------------------------------------
-// Identifier normalization
-
-var doiPrefixRe = regexp.MustCompile(`^(https?://(dx\.)?doi\.org/|doi:)\s*`)
-
-// NormalizeDOI canonicalizes a DOI: strip resolver prefixes, lowercase.
-func NormalizeDOI(doi string) string {
-	d := strings.TrimSpace(strings.ToLower(doi))
-	return doiPrefixRe.ReplaceAllString(d, "")
-}
-
-// NormalizeISBN canonicalizes an ISBN: strip separators, uppercase (X
-// check digit). Separators include the Unicode hyphens printers use
-// (U+2010 HYPHEN, U+2011 NON-BREAKING HYPHEN — the inspector matches
-// them, so the normalizer must strip them or the identifier carries the
-// typo into the ledger). No checksum invention — malformed input stays
-// as-is and simply never matches.
-func NormalizeISBN(isbn string) string {
-	s := strings.ToUpper(strings.TrimSpace(isbn))
-	var b strings.Builder
-	for _, r := range s {
-		if r == '-' || r == ' ' || r == '\u2010' || r == '\u2011' {
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-// RevisionFromDomain converts a domain revision into its F03 transport
-// form (RevisionID rendered as decimal string — the frozen wire shape).
-func RevisionFromDomain(r SourceRevisionDomain) revision.SourceRevision {
-	return revision.SourceRevision{
-		SourceID:            r.SourceID,
-		RevisionID:          fmt.Sprintf("%d", r.RevisionID),
-		RenditionID:         r.RenditionID,
-		ContentHash:         r.ContentHash,
-		MediaType:           r.MediaType,
-		Bibliography:        r.Bibliography,
-		LocatorCapabilities: r.LocatorCapabilities,
-		ContentTicket:       r.ContentTicket,
-	}
-}

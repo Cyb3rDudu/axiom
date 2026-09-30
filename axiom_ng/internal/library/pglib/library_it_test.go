@@ -3,7 +3,7 @@
 // only). Covers: the F03 contract suite over the real service, the
 // kill/resume table, the dedup scenarios with provider count asserts, the
 // ladder fixtures, and the provenance sonde.
-package library
+package pglib
 
 import (
 	"bytes"
@@ -27,6 +27,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contractsuite"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/library"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/revision"
+	lib "github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -117,30 +118,30 @@ func withDB(dsn, newDB string) string {
 // ---------------------------------------------------------------------------
 // fixture builders
 
-func newFakeService(t *testing.T, st *Store) (*Service, *FakeProvider, *FakeResolver, *FakeResolver) {
+func newFakeService(t *testing.T, st lib.Repository) (*lib.Service, *lib.FakeProvider, *lib.FakeResolver, *lib.FakeResolver) {
 	t.Helper()
-	prov := NewFakeProvider()
+	prov := lib.NewFakeProvider()
 	return newServiceOver(t, st, prov, t.TempDir())
 }
 
 // newServiceOver builds the service over GIVEN provider + staging root —
 // the "process restart" shape: provider and staging are EXTERNAL systems
 // that survive the crash; only the service instance is fresh.
-func newServiceOver(t *testing.T, st *Store, prov *FakeProvider, stagingRoot string) (*Service, *FakeProvider, *FakeResolver, *FakeResolver) {
+func newServiceOver(t *testing.T, st lib.Repository, prov *lib.FakeProvider, stagingRoot string) (*lib.Service, *lib.FakeProvider, *lib.FakeResolver, *lib.FakeResolver) {
 	t.Helper()
-	crossref := NewFakeResolver("crossref", "fake-v1", StandardCrossrefFixtures())
-	openLib := NewFakeResolver("open_library", "fake-v1", StandardOpenLibraryFixtures())
-	svc := NewService(Config{
+	crossref := lib.NewFakeResolver("crossref", "fake-v1", lib.StandardCrossrefFixtures())
+	openLib := lib.NewFakeResolver("open_library", "fake-v1", lib.StandardOpenLibraryFixtures())
+	svc := lib.NewService(lib.Config{
 		SourceID:  "src-library-test",
 		Provider:  "fake",
 		LibraryID: "users/0",
-	}, st, NewStaging(stagingRoot), Ports{
+	}, st, lib.NewStaging(stagingRoot), lib.Ports{
 		Catalog:     prov,
 		Records:     prov,
 		Renditions:  prov,
 		Collections: prov,
-		Resolvers:   []BibliographicResolver{crossref, openLib},
-		Documents:   FakeDocumentInspector{},
+		Resolvers:   []lib.BibliographicResolver{crossref, openLib},
+		Documents:   lib.FakeDocumentInspector{},
 	})
 	return svc, prov, crossref, openLib
 }
@@ -201,7 +202,7 @@ func TestLadderUnambiguousDOIBeatsFuzzy(t *testing.T) {
 
 	content := ladderPDF("Document Title From Content")
 	req := seedReq("ladder-doi")
-	req.MetadataHints.DOI = StandardLadderFixtures.UniqueDOI
+	req.MetadataHints.DOI = lib.StandardLadderFixtures.UniqueDOI
 	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(content))
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +236,7 @@ func TestLadderAmbiguousCrossrefAwaitsConfirmation(t *testing.T) {
 	svc, _, _, _ := newFakeService(t, st)
 
 	req := seedReq("ladder-amb")
-	req.MetadataHints.Title = StandardLadderFixtures.AmbiguousTitle
+	req.MetadataHints.Title = lib.StandardLadderFixtures.AmbiguousTitle
 	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Network Effects intro text")))
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +292,7 @@ func TestLadderTypeConflictAwaitsConfirmation(t *testing.T) {
 
 	req := seedReq("ladder-type")
 	req.RecordType = "report"
-	req.MetadataHints.Title = StandardLadderFixtures.TypeConflictTitle
+	req.MetadataHints.Title = lib.StandardLadderFixtures.TypeConflictTitle
 	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Typed Work intro")))
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +311,7 @@ func TestLadderAmbiguousDOIAwaitsConfirmationViaIdentifierRung(t *testing.T) {
 	svc, _, crossref, _ := newFakeService(t, st)
 
 	req := seedReq("ladder-doi-amb")
-	req.MetadataHints.DOI = StandardLadderFixtures.AmbiguousDOI
+	req.MetadataHints.DOI = lib.StandardLadderFixtures.AmbiguousDOI
 	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Ambiguous DOI document text")))
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +360,7 @@ func TestProvenanceSondeWeakerHitNeverOverwrites(t *testing.T) {
 	// Document says "Document Title From Content"; DOI hit proposes a
 	// DIFFERENT title — rejected, documented.
 	start := time.Now()
-	op, err := svc.StartImport(context.Background(), withDOI(seedReq("prov-sonde"), StandardLadderFixtures.UniqueDOI), bytes.NewReader(ladderPDF("Document Title From Content")))
+	op, err := svc.StartImport(context.Background(), withDOI(seedReq("prov-sonde"), lib.StandardLadderFixtures.UniqueDOI), bytes.NewReader(ladderPDF("Document Title From Content")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,10 +481,10 @@ func TestDedupAmbiguousNeverAutoMerges(t *testing.T) {
 	// mutex-safe itself — an outer lock would deadlock).
 	y := 2019
 	for i, t2 := range []string{"Ambiguous Twin A", "Ambiguous Twin B"} {
-		_, _ = prov.EnsureRecord(context.Background(), RecordDraft{
+		_, _ = prov.EnsureRecord(context.Background(), lib.RecordDraft{
 			ExternalKey: fmt.Sprintf("seed-amb-%d", i),
 			RecordType:  "book", Title: t2,
-			Authors: []Creator{{LastName: "Twin", CreatorType: "author"}},
+			Authors: []lib.Creator{{LastName: "Twin", CreatorType: "author"}},
 			Year:    &y,
 			DOI:     "10.5555/twin-doi",
 		})
@@ -529,16 +530,16 @@ func TestDedupScanFollowsEveryPage(t *testing.T) {
 	// LAST one — a first-page-only scan would miss it and create a 6th.
 	y := 2019
 	for i := 0; i < 4; i++ {
-		_, _ = prov.EnsureRecord(context.Background(), RecordDraft{
+		_, _ = prov.EnsureRecord(context.Background(), lib.RecordDraft{
 			ExternalKey: fmt.Sprintf("page-filler-%d", i),
 			RecordType:  "book", Title: fmt.Sprintf("Filler Work %d", i),
-			Authors: []Creator{{LastName: "Filler", CreatorType: "author"}},
+			Authors: []lib.Creator{{LastName: "Filler", CreatorType: "author"}},
 			Year:    &y,
 		})
 	}
-	_, _ = prov.EnsureRecord(context.Background(), RecordDraft{
+	_, _ = prov.EnsureRecord(context.Background(), lib.RecordDraft{
 		ExternalKey: "page-target", RecordType: "book", Title: "Paged Target",
-		Authors: []Creator{{LastName: "Pager", CreatorType: "author"}}, Year: &y,
+		Authors: []lib.Creator{{LastName: "Pager", CreatorType: "author"}}, Year: &y,
 		DOI: "10.5555/paged-doi",
 	})
 
@@ -589,24 +590,24 @@ func TestKillResumeBetweenEveryStep(t *testing.T) {
 
 	stagingRoot := t.TempDir()
 	run := func(t *testing.T, state, provider string, wantAwaiting bool) {
-		svc, prov, _, _ := newServiceOver(t, st, NewFakeProvider(), stagingRoot)
+		svc, prov, _, _ := newServiceOver(t, st, lib.NewFakeProvider(), stagingRoot)
 		if state != "" {
-			svc.halt.afterState = map[string]int{state: 1}
+			svc.ArmHalt(map[string]int{state: 1}, nil)
 		}
 		if provider != "" {
-			svc.halt.afterProviderWrite = map[string]int{provider: 1}
+			svc.ArmHalt(nil, map[string]int{provider: 1})
 		}
 		req := seedReq("kill-" + state + "-" + provider)
 		if wantAwaiting {
 			// The ambiguous fixture drives the saga INTO
 			// awaiting_confirmation — the kill point under test.
-			req.MetadataHints.Title = StandardLadderFixtures.AmbiguousTitle
+			req.MetadataHints.Title = lib.StandardLadderFixtures.AmbiguousTitle
 		}
 		op, err := svc.StartImport(context.Background(), req, bytes.NewReader(contractsuite.SeedContent))
 		// Self-check: the armed halt MUST have tripped — any other
 		// outcome (nil error, real failure) means the crash mechanism
 		// itself broke, and this table would pass as a no-op.
-		if !errors.Is(err, ErrHaltSimulated) {
+		if !errors.Is(err, lib.ErrHaltSimulated) {
 			t.Fatalf("kill at %s/%s: StartImport err=%v, want the simulated-crash sentinel", state, provider, err)
 		}
 		if op.ImportID == "" {
@@ -626,7 +627,7 @@ func TestKillResumeBetweenEveryStep(t *testing.T) {
 		if _, err := fresh.ResumeInflight(context.Background()); err != nil {
 			t.Fatalf("resume inflight after kill at %s/%s: %v", state, provider, err)
 		}
-		row, err := fresh.store.GetImport(context.Background(), op.ImportID)
+		row, err := fresh.Repo().GetImport(context.Background(), op.ImportID)
 		if err != nil {
 			t.Fatalf("import row lost after kill: %v", err)
 		}
@@ -648,7 +649,7 @@ func TestKillResumeBetweenEveryStep(t *testing.T) {
 		// Exactly-once sonde (DB side): the committed row's revision_id
 		// must resolve to a real library_source_revisions row — a
 		// stamp-then-short-circuit seam would dangle here.
-		crow, cerr := fresh.store.GetImport(context.Background(), op.ImportID)
+		crow, cerr := fresh.Repo().GetImport(context.Background(), op.ImportID)
 		if cerr != nil {
 			t.Fatalf("kill at %s/%s: final row load: %v", state, provider, cerr)
 		}
@@ -656,7 +657,7 @@ func TestKillResumeBetweenEveryStep(t *testing.T) {
 		if serr := st.pool.QueryRow(context.Background(),
 			`SELECT EXISTS (SELECT 1 FROM library_source_revisions
 			   WHERE source_id = $1 AND record_id = $2 AND rendition_id = $3 AND revision_id = $4)`,
-			fresh.cfg.SourceID, crow.RecordID, crow.RenditionID, crow.RevisionID).Scan(&revOK); serr != nil {
+			fresh.SourceID(), crow.RecordID, crow.RenditionID, crow.RevisionID).Scan(&revOK); serr != nil {
 			t.Fatalf("kill at %s/%s: revision sonde: %v", state, provider, serr)
 		}
 		if !revOK {
@@ -692,7 +693,7 @@ func TestKillResumeBetweenEveryStep(t *testing.T) {
 }
 
 // row2op loads the operation DTO for a row (test helper).
-func row2op(t *testing.T, svc *Service, row ImportRow) library.ImportOperation {
+func row2op(t *testing.T, svc *lib.Service, row lib.ImportRow) library.ImportOperation {
 	t.Helper()
 	op, err := svc.GetImport(context.Background(), library.ImportRef{ImportID: row.ImportID})
 	if err != nil {
@@ -748,7 +749,7 @@ func TestIdempotencyReplayAndPayloadMismatch(t *testing.T) {
 // ---------------------------------------------------------------------------
 // helpers
 
-func provenanceOf(t *testing.T, st *Store, importID string) []ProvenanceRow {
+func provenanceOf(t *testing.T, st *Store, importID string) []lib.ProvenanceRow {
 	t.Helper()
 	rows, err := st.ListProvenance(context.Background(), importID)
 	if err != nil {
@@ -757,7 +758,7 @@ func provenanceOf(t *testing.T, st *Store, importID string) []ProvenanceRow {
 	return rows
 }
 
-func provHas(rows []ProvenanceRow, field, source string, applied bool) bool {
+func provHas(rows []lib.ProvenanceRow, field, source string, applied bool) bool {
 	for _, r := range rows {
 		if r.Field == field && r.Source == source && r.Applied == applied {
 			return true
@@ -783,7 +784,7 @@ func TestConfirmOverlaysInsteadOfReplacing(t *testing.T) {
 	// choice) but KEEP language.
 	content := []byte("%PDF-1.4\nNetwork Effects intro.\n%AXIOM-LANG: en\n\nBody.")
 	req := seedReq("ovl-1")
-	req.MetadataHints.Title = StandardLadderFixtures.AmbiguousTitle
+	req.MetadataHints.Title = lib.StandardLadderFixtures.AmbiguousTitle
 	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(content))
 	if err != nil {
 		t.Fatal(err)
@@ -821,10 +822,10 @@ func TestConfirmRerouteWritesUserProvenance(t *testing.T) {
 	// (the identifier matrix matches regardless of the twin titles).
 	y := 2021
 	for i := range 2 {
-		_, _ = prov.EnsureRecord(context.Background(), RecordDraft{
+		_, _ = prov.EnsureRecord(context.Background(), lib.RecordDraft{
 			ExternalKey: fmt.Sprintf("seed-rr-%d", i),
 			RecordType:  "journalArticle", Title: "Network Effects in Platforms",
-			Authors: []Creator{{LastName: "Twin", CreatorType: "author"}},
+			Authors: []lib.Creator{{LastName: "Twin", CreatorType: "author"}},
 			Year:    &y,
 			DOI:     "10.5555/reroute-doi",
 		})
@@ -832,7 +833,7 @@ func TestConfirmRerouteWritesUserProvenance(t *testing.T) {
 
 	req := seedReq("rr-1")
 	req.RecordType = "journalArticle"
-	req.MetadataHints = library.MetadataHints{Title: StandardLadderFixtures.AmbiguousTitle, DOI: "10.5555/reroute-doi"}
+	req.MetadataHints = library.MetadataHints{Title: lib.StandardLadderFixtures.AmbiguousTitle, DOI: "10.5555/reroute-doi"}
 	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Network Effects intro")))
 	if err != nil {
 		t.Fatal(err)
@@ -884,7 +885,7 @@ func TestConfirmCrashWindowHeals(t *testing.T) {
 	svc, _, _, _ := newFakeService(t, st)
 
 	req := seedReq("confirm-crash-window")
-	req.MetadataHints.Title = StandardLadderFixtures.AmbiguousTitle
+	req.MetadataHints.Title = lib.StandardLadderFixtures.AmbiguousTitle
 	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Network Effects intro text")))
 	if err != nil {
 		t.Fatal(err)
@@ -900,13 +901,13 @@ func TestConfirmCrashWindowHeals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	det, err := svc.loadResolveDetail(context.Background(), op.ImportID)
+	det, err := svc.LoadResolveDetail(context.Background(), op.ImportID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	det.Pending = nil
-	det.Plan = PlacementPlan{AddRendition: true}
-	if err := svc.persistResolveDetail(context.Background(), row, det, "done"); err != nil {
+	det.Plan = lib.PlacementPlan{AddRendition: true}
+	if err := svc.PersistResolveDetail(context.Background(), row, det, "done"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -954,7 +955,7 @@ func TestConfirmRerouteTearHeals(t *testing.T) {
 
 	// A real provider record as the duplicate link target — the final
 	// confirm must actually commit onto it.
-	linkID, err := prov.EnsureRecord(context.Background(), RecordDraft{
+	linkID, err := prov.EnsureRecord(context.Background(), lib.RecordDraft{
 		ExternalKey: "seed-reroute-tear", RecordType: "journalArticle", Title: "Network Effects in Platforms",
 	})
 	if err != nil {
@@ -962,7 +963,7 @@ func TestConfirmRerouteTearHeals(t *testing.T) {
 	}
 
 	req := seedReq("confirm-reroute-tear")
-	req.MetadataHints.Title = StandardLadderFixtures.AmbiguousTitle
+	req.MetadataHints.Title = lib.StandardLadderFixtures.AmbiguousTitle
 	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Network Effects intro text")))
 	if err != nil {
 		t.Fatal(err)
@@ -978,15 +979,15 @@ func TestConfirmRerouteTearHeals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	det, err := svc.loadResolveDetail(context.Background(), op.ImportID)
+	det, err := svc.LoadResolveDetail(context.Background(), op.ImportID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	det.Pending = &Decision{
+	det.Pending = &lib.Decision{
 		DecisionID: "dec-duplicate", Subject: "duplicate",
-		Candidates: []DecisionCandidate{{CandidateID: linkID, Origin: "provider_existing"}},
+		Candidates: []lib.DecisionCandidate{{CandidateID: linkID, Origin: "provider_existing"}},
 	}
-	if err := svc.persistResolveDetail(context.Background(), row, det, "in_progress"); err != nil {
+	if err := svc.PersistResolveDetail(context.Background(), row, det, "in_progress"); err != nil {
 		t.Fatal(err)
 	}
 	cur, err := svc.GetImport(context.Background(), library.ImportRef{ImportID: op.ImportID})
@@ -1029,7 +1030,7 @@ func TestConfirmTypeConflictCommitsChosenType(t *testing.T) {
 
 	req := seedReq("type-1")
 	req.RecordType = "report"
-	req.MetadataHints.Title = StandardLadderFixtures.TypeConflictTitle
+	req.MetadataHints.Title = lib.StandardLadderFixtures.TypeConflictTitle
 	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Typed Work intro")))
 	if err != nil {
 		t.Fatal(err)
@@ -1046,7 +1047,7 @@ func TestConfirmTypeConflictCommitsChosenType(t *testing.T) {
 		t.Fatalf("confirm: %s (%+v)", confirmed.Status, confirmed.Failure)
 	}
 	// The provider record carries the CHOSEN type, not the request type.
-	rec, err := svc.catalogRecord(context.Background(), confirmed.Result.RecordID)
+	rec, err := svc.CatalogRecord(context.Background(), confirmed.Result.RecordID)
 	if err != nil || rec == nil {
 		t.Fatalf("catalog lookup of %s: %v", confirmed.Result.RecordID, err)
 	}
@@ -1067,17 +1068,17 @@ func TestConfirmDedupUsesChosenType(t *testing.T) {
 	// title/author/year — no DOI, so only the type+metadata matrix hits).
 	y := 2019
 	for i := range 2 {
-		_, _ = prov.EnsureRecord(context.Background(), RecordDraft{
+		_, _ = prov.EnsureRecord(context.Background(), lib.RecordDraft{
 			ExternalKey: fmt.Sprintf("seed-tt-%d", i),
 			RecordType:  "journalArticle", Title: "Network Effects in Platforms",
-			Authors: []Creator{{LastName: "First", CreatorType: "author"}},
+			Authors: []lib.Creator{{LastName: "First", CreatorType: "author"}},
 			Year:    &y,
 		})
 	}
 
 	req := seedReq("type-2")
 	req.RecordType = "book"
-	req.MetadataHints.Title = StandardLadderFixtures.AmbiguousTitle
+	req.MetadataHints.Title = lib.StandardLadderFixtures.AmbiguousTitle
 	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Network Effects intro")))
 	if err != nil {
 		t.Fatal(err)
@@ -1111,15 +1112,15 @@ func TestConfirmDedupUsesChosenType(t *testing.T) {
 	}
 }
 
-// failingRenditions wraps a RenditionWriter and fails the first N
+// failingRenditions wraps a lib.RenditionWriter and fails the first N
 // EnsureRendition calls with an Unavailable-class error (retry injection).
 type failingRenditions struct {
-	inner RenditionWriter
+	inner lib.RenditionWriter
 	mu    sync.Mutex
 	fail  int
 }
 
-func (f *failingRenditions) EnsureRendition(ctx context.Context, d RenditionDraft) (string, error) {
+func (f *failingRenditions) EnsureRendition(ctx context.Context, d lib.RenditionDraft) (string, error) {
 	f.mu.Lock()
 	if f.fail > 0 {
 		f.fail--
@@ -1144,7 +1145,7 @@ type siblingConflictCollections struct {
 func (w siblingConflictCollections) ResolvePath(_ context.Context, segments []string, _ bool) (string, error) {
 	for _, seg := range segments {
 		if seg == w.segment {
-			return "", ErrProviderConflict
+			return "", lib.ErrProviderConflict
 		}
 	}
 	return "FAKECOLCONFLICT", nil
@@ -1157,7 +1158,7 @@ func TestSiblingConflictIsTerminalConflict(t *testing.T) {
 	st, cleanup := testStore(t)
 	defer cleanup()
 	svc, prov, _, _ := newFakeService(t, st)
-	svc.ports.Collections = siblingConflictCollections{segment: "Zwillinge"}
+	svc.SetPort("collections", siblingConflictCollections{segment: "Zwillinge"})
 
 	req := seedReq("sibl-1")
 	req.Target = library.ImportTarget{LibraryID: "users/0", CollectionPath: []string{"Eins", "Zwillinge"}, CreateMissing: true}
@@ -1185,7 +1186,7 @@ func TestRetryResumesAndCommits(t *testing.T) {
 	st, cleanup := testStore(t)
 	defer cleanup()
 	svc, prov, _, _ := newFakeService(t, st)
-	svc.ports.Renditions = &failingRenditions{inner: prov, fail: 1}
+	svc.SetPort("renditions", &failingRenditions{inner: prov, fail: 1})
 
 	op, err := svc.StartImport(context.Background(), seedReq("retry-ok"), bytes.NewReader(contractsuite.SeedContent))
 	if err != nil {
@@ -1217,7 +1218,7 @@ func TestConcurrentRetryNoSpuriousInternal(t *testing.T) {
 	defer cleanup()
 	svc, _, _, _ := newFakeService(t, st)
 	// Permanent failure: every retry stays retryable_failed (pollable).
-	svc.ports.Renditions = &failingRenditions{inner: NewFakeProvider(), fail: 1 << 30}
+	svc.SetPort("renditions", &failingRenditions{inner: lib.NewFakeProvider(), fail: 1 << 30})
 
 	op, err := svc.StartImport(context.Background(), seedReq("retry-race"), bytes.NewReader(contractsuite.SeedContent))
 	if err != nil {
@@ -1258,7 +1259,7 @@ func TestConcurrentRetryNoSpuriousInternal(t *testing.T) {
 	}
 	// Exactly one retry event per won transition — the guard loser
 	// writes no event.
-	events, err := svc.store.ListEvents(context.Background(), op.ImportID)
+	events, err := svc.Repo().ListEvents(context.Background(), op.ImportID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1284,7 +1285,7 @@ func TestResumeVsRetryRaceNoSpuriousInternal(t *testing.T) {
 	defer cleanup()
 	svc, _, _, _ := newFakeService(t, st)
 	// Permanent failure: every retry stays retryable_failed (pollable).
-	svc.ports.Renditions = &failingRenditions{inner: NewFakeProvider(), fail: 1 << 30}
+	svc.SetPort("renditions", &failingRenditions{inner: lib.NewFakeProvider(), fail: 1 << 30})
 
 	op, err := svc.StartImport(context.Background(), seedReq("resume-retry-race"), bytes.NewReader(contractsuite.SeedContent))
 	if err != nil {
@@ -1395,7 +1396,7 @@ func TestStagingHashedAndRetention(t *testing.T) {
 	st, cleanup := testStore(t)
 	defer cleanup()
 	root := t.TempDir()
-	stg := NewStaging(root)
+	stg := lib.NewStaging(root)
 	content := []byte("%PDF-1.4 staged fixture")
 	sha, err := stg.StoreImport(content)
 	if err != nil {
@@ -1405,7 +1406,7 @@ func TestStagingHashedAndRetention(t *testing.T) {
 		t.Fatalf("staged file missing under its hash: %v", err)
 	}
 	// Descriptor row, not a BLOB.
-	if err := st.CreateImport(context.Background(), ImportRow{
+	if err := st.CreateImport(context.Background(), lib.ImportRow{
 		IdempotencyKey: "staging-1", PayloadHash: "x", RecordType: "book",
 		RequestJSON: []byte("{}"), Status: library.ImportReceived,
 		StagingSHA256: sha, StagingSize: int64(len(content)), MediaType: "application/pdf",
@@ -1459,7 +1460,8 @@ func TestStagingHashedAndRetention(t *testing.T) {
 	// nothing if the file were young anyway.
 	setAge(filepath.Join(root, "library_staging", sha), aged)
 
-	removed, err := st.CleanupStaging(context.Background(), stg, cutoff)
+	svc, _, _, _ := newServiceOver(t, st, lib.NewFakeProvider(), root)
+	removed, err := svc.CleanupStaging(context.Background(), stg, cutoff)
 	if err != nil || removed != 2 {
 		t.Fatalf("cleanup removed=%d err=%v, want 2 (stale file + aged temp)", removed, err)
 	}
@@ -1486,22 +1488,22 @@ func TestStagingHashedAndRetention(t *testing.T) {
 func TestStartImportSizeLimitThroughService(t *testing.T) {
 	st, cleanup := testStore(t)
 	defer cleanup()
-	prov := NewFakeProvider()
-	svc := NewService(Config{
+	prov := lib.NewFakeProvider()
+	svc := lib.NewService(lib.Config{
 		SourceID:       "src-library-test",
 		Provider:       "fake",
 		LibraryID:      "users/0",
 		MaxImportBytes: 16,
-	}, st, NewStaging(t.TempDir()), Ports{
+	}, st, lib.NewStaging(t.TempDir()), lib.Ports{
 		Catalog:     prov,
 		Records:     prov,
 		Renditions:  prov,
 		Collections: prov,
-		Resolvers: []BibliographicResolver{
-			NewFakeResolver("crossref", "fake-v1", StandardCrossrefFixtures()),
-			NewFakeResolver("open_library", "fake-v1", StandardOpenLibraryFixtures()),
+		Resolvers: []lib.BibliographicResolver{
+			lib.NewFakeResolver("crossref", "fake-v1", lib.StandardCrossrefFixtures()),
+			lib.NewFakeResolver("open_library", "fake-v1", lib.StandardOpenLibraryFixtures()),
 		},
-		Documents: FakeDocumentInspector{},
+		Documents: lib.FakeDocumentInspector{},
 	})
 
 	_, err := svc.StartImport(context.Background(), seedReq("svc-size-limit"), bytes.NewReader(ladderPDF("Over The Limit")))
@@ -1516,21 +1518,21 @@ func TestStartImportSizeLimitThroughService(t *testing.T) {
 func TestStartImportUnconfiguredRootThroughService(t *testing.T) {
 	st, cleanup := testStore(t)
 	defer cleanup()
-	prov := NewFakeProvider()
-	svc := NewService(Config{
+	prov := lib.NewFakeProvider()
+	svc := lib.NewService(lib.Config{
 		SourceID:  "src-library-test",
 		Provider:  "fake",
 		LibraryID: "users/0",
-	}, st, NewStaging(""), Ports{
+	}, st, lib.NewStaging(""), lib.Ports{
 		Catalog:     prov,
 		Records:     prov,
 		Renditions:  prov,
 		Collections: prov,
-		Resolvers: []BibliographicResolver{
-			NewFakeResolver("crossref", "fake-v1", StandardCrossrefFixtures()),
-			NewFakeResolver("open_library", "fake-v1", StandardOpenLibraryFixtures()),
+		Resolvers: []lib.BibliographicResolver{
+			lib.NewFakeResolver("crossref", "fake-v1", lib.StandardCrossrefFixtures()),
+			lib.NewFakeResolver("open_library", "fake-v1", lib.StandardOpenLibraryFixtures()),
 		},
-		Documents: FakeDocumentInspector{},
+		Documents: lib.FakeDocumentInspector{},
 	})
 
 	_, err := svc.StartImport(context.Background(), seedReq("svc-unconfigured-root"), bytes.NewReader(ladderPDF("Any Valid Document")))
@@ -1543,7 +1545,7 @@ func TestStartImportUnconfiguredRootThroughService(t *testing.T) {
 // bytes stage and commit at limit N; N+1 fails InvalidArgument with NO
 // temp trace; a rejected (invalid-magic) intake leaves no temp either.
 func TestStagingSizeLimitBoundary(t *testing.T) {
-	stg := NewStaging(t.TempDir())
+	stg := lib.NewStaging(t.TempDir())
 	const n = 100
 	tmp, sha, size, _, err := stg.Stage(bytes.NewReader(make([]byte, n)), n)
 	if err != nil {
@@ -1564,7 +1566,7 @@ func TestStagingSizeLimitBoundary(t *testing.T) {
 	if !contracterrClassIs(err, contracterr.ClassInvalidArgument) {
 		t.Fatalf("over-limit stage: %v, want invalid_argument", err)
 	}
-	temps, _ := filepath.Glob(filepath.Join(stg.root, ".stage-*"))
+	temps, _ := filepath.Glob(filepath.Join(stg.Root(), ".stage-*"))
 	if len(temps) != 0 {
 		t.Fatalf("overflow left staging temps behind: %v", temps)
 	}
@@ -1578,7 +1580,7 @@ func TestStagingSizeLimitBoundary(t *testing.T) {
 	if !contracterrClassIs(err, contracterr.ClassInvalidArgument) {
 		t.Fatalf("html intake: %v, want invalid_argument", err)
 	}
-	temps, _ = filepath.Glob(filepath.Join(svc.staging.root, ".stage-*"))
+	temps, _ = filepath.Glob(filepath.Join(svc.StagingRoot(), ".stage-*"))
 	if len(temps) != 0 {
 		t.Fatalf("rejected intake left staging temps behind: %v", temps)
 	}
@@ -1589,7 +1591,7 @@ func TestNamingConventionFromImport(t *testing.T) {
 	defer cleanup()
 	svc, prov, _, _ := newFakeService(t, st)
 	req := seedReq("naming-1")
-	req.MetadataHints.DOI = StandardLadderFixtures.UniqueDOI
+	req.MetadataHints.DOI = lib.StandardLadderFixtures.UniqueDOI
 	op, err := svc.StartImport(context.Background(), req, bytes.NewReader(ladderPDF("Document Title From Content")))
 	if err != nil {
 		t.Fatal(err)
@@ -1598,17 +1600,8 @@ func TestNamingConventionFromImport(t *testing.T) {
 		t.Fatalf("status %s (%+v)", op.Status, op.Failure)
 	}
 	// Filename from VERIFIED document metadata, not the crossref hit.
-	prov.mu.Lock()
-	var filename string
-	for _, r := range prov.records {
-		if r.providerID == op.Result.RecordID {
-			for _, a := range r.renditions {
-				filename = a.filename
-			}
-		}
-	}
-	prov.mu.Unlock()
-	want := SchemaFilename([]Creator{{LastName: "Example", CreatorType: "author"}}, 2019, "Document Title From Content")
+	filename := prov.LastRenditionFilename(op.Result.RecordID)
+	want := lib.SchemaFilename([]lib.Creator{{LastName: "Example", CreatorType: "author"}}, 2019, "Document Title From Content")
 	if filename != want {
 		t.Fatalf("filename %q, want the schema name from verified metadata %q", filename, want)
 	}

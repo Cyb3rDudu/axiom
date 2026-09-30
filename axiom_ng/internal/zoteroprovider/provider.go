@@ -70,11 +70,10 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
-	"github.com/jackc/pgx/v5"
 )
 
 // ProviderStore is the adapter's persistence surface (implemented by
-// *library.Store; schema/0002). Test doubles capture the audit stream.
+// the Library repository engines (pglib.Store, sqlite.Repo; schema/0002). Test doubles capture the audit stream.
 type ProviderStore interface {
 	AcquireWriterLease(ctx context.Context, scope, owner string, ttl time.Duration) error
 	RenewWriterLease(ctx context.Context, scope, owner string) error
@@ -1403,8 +1402,9 @@ func jsonValue(v any) any {
 }
 
 // errAnchorAbsent is the sentinel LookupProviderAnchor surfaces for an
-// absent row (pgx.ErrNoRows aliased so the adapter reads intent).
-var errAnchorAbsent = pgx.ErrNoRows
+// absent row (the engine-neutral library.ErrRowAbsent, aliased so the
+// adapter reads intent — F12).
+var errAnchorAbsent = library.ErrRowAbsent
 
 // compile-time port assertions — the Provider IS the Library's Zotero
 // binding (capability-honest: read-only constructions fail the write

@@ -1,52 +1,35 @@
-// lease.go — the single-writer declaration's persistence (F07, #301).
-// Library is a single-writer component: a SECOND write-capable instance
-// against the same provider scope is refused at start. The guard is a
-// provider-scoped lease row with a renewed heartbeat — cross-process by
-// construction (the row lives in the shared Library persistence), not a
-// local mutex. Zotero's If-Unmodified-Since-Version stays the last line
-// behind it (a 412 becomes a typed retryable error in the adapter).
+// lease.go — the single-writer declaration's persistence (F07 #301),
+// PostgreSQL dialect. Library is a single-writer component: a SECOND
+// write-capable instance against the same provider scope is refused at
+// start. The guard is a provider-scoped lease row with a renewed
+// heartbeat — cross-process by construction (the row lives in the shared
+// Library persistence), not a local mutex. Zotero's
+// If-Unmodified-Since-Version stays the last line behind it (a 412
+// becomes a typed retryable error in the adapter).
 //
 // Also here: the provider adapter's write-audit rows and its idempotency
 // anchor ledger (see schema/0002).
-package library
+package pglib
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
 	"github.com/jackc/pgx/v5"
 )
 
-// WriterLeaseConflict reports a refused lease acquisition: another live
-// writer holds the scope. The diagnosis names owner and heartbeat age.
-type WriterLeaseConflict struct {
-	Scope        string
-	Owner        string
-	HeartbeatAge time.Duration
-}
-
-func (e *WriterLeaseConflict) Error() string {
-	return fmt.Sprintf("writer lease %s held by %s (heartbeat %s ago) — Library is single-writer: stop the other instance or wait for the lease TTL",
-		e.Scope, e.Owner, e.HeartbeatAge.Truncate(time.Second))
-}
-
-// DefaultWriterLeaseTTL bounds how long a silent writer stays trusted: a
-// writer renews at TTL/3; a crashed writer's lease is takeable after one
-// full TTL. Personal-library scale — a restart waits at most one TTL.
-const DefaultWriterLeaseTTL = 30 * time.Second
-
 // AcquireWriterLease takes the provider-scoped writer lease: fresh insert,
 // or takeover when the current owner's heartbeat is older than ttl. A
-// live owner refuses with *WriterLeaseConflict (typed Conflict).
+// live owner refuses with *library.WriterLeaseConflict (typed Conflict).
 func (s *Store) AcquireWriterLease(ctx context.Context, scope, owner string, ttl time.Duration) error {
 	if scope == "" || owner == "" {
 		return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "writer lease scope and owner are required")
 	}
 	if ttl <= 0 {
-		ttl = DefaultWriterLeaseTTL
+		ttl = library.DefaultWriterLeaseTTL
 	}
 	// One statement, DB clock authoritative: the insert wins only when the
 	// scope is free OR the heartbeat went silent past the TTL.
@@ -77,7 +60,7 @@ func (s *Store) AcquireWriterLease(ctx context.Context, scope, owner string, ttl
 		if err != nil {
 			return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "writer lease read")
 		}
-		c := &WriterLeaseConflict{Scope: scope, Owner: cur.owner, HeartbeatAge: cur.age}
+		c := &library.WriterLeaseConflict{Scope: scope, Owner: cur.owner, HeartbeatAge: cur.age}
 		return contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassConflict, c, "single-writer guard")
 	}
 	return nil
@@ -111,21 +94,11 @@ func (s *Store) ReleaseWriterLease(ctx context.Context, scope, owner string) err
 	return nil
 }
 
-// WriteAuditRow is one provider mutation's audit line.
-type WriteAuditRow struct {
-	Scope       string
-	Operation   string
-	Anchor      string
-	ProviderRef string
-	Outcome     string // created | reused | changed | adopted | removed
-	Readback    any    // what the readback observed (JSONB)
-}
-
 // AppendWriteAudit records one mutation AFTER its readback verified.
 // A nil readback detail persists as '{}' (the column is NOT NULL — a
 // mutation without readback evidence would violate the audit contract
 // anyway, so the empty object is the honest floor).
-func (s *Store) AppendWriteAudit(ctx context.Context, r WriteAuditRow) error {
+func (s *Store) AppendWriteAudit(ctx context.Context, r library.WriteAuditRow) error {
 	if r.Readback == nil {
 		r.Readback = map[string]any{}
 	}
@@ -165,15 +138,15 @@ func (s *Store) CountWriteAudit(ctx context.Context, scope string) (int, error) 
 }
 
 // LookupProviderAnchor resolves the adapter's idempotency anchor to the
-// provider id ("" when absent — pgx.ErrNoRows stays the caller's signal
-// for absent, like the other lookups).
+// provider id ("" when absent — library.ErrRowAbsent is the caller's
+// signal for absent, like the other lookups).
 func (s *Store) LookupProviderAnchor(ctx context.Context, scope, kind, anchor string) (providerID string, version int64, err error) {
 	err = s.pool.QueryRow(ctx,
 		`SELECT provider_id, provider_version FROM library_provider_anchors
 		 WHERE scope = $1 AND kind = $2 AND anchor = $3`, scope, kind, anchor).
 		Scan(&providerID, &version)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", 0, err
+		return "", 0, library.ErrRowAbsent
 	}
 	if err != nil {
 		return "", 0, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "provider anchor lookup")
@@ -210,7 +183,7 @@ func (s *Store) PutProviderAnchor(ctx context.Context, scope, kind, anchor, prov
 // the same combined path (the anchor cannot exist without its audit row
 // and vice versa). Returns the SURVIVING provider id (first writer keeps
 // the id; the version column refreshes on conflict).
-func (s *Store) PutProviderAnchorWithAudit(ctx context.Context, scope, kind, anchor, providerID string, version int64, audit WriteAuditRow) (string, error) {
+func (s *Store) PutProviderAnchorWithAudit(ctx context.Context, scope, kind, anchor, providerID string, version int64, audit library.WriteAuditRow) (string, error) {
 	if audit.Readback == nil {
 		audit.Readback = map[string]any{}
 	}

@@ -20,7 +20,6 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/contracterr"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/library"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/contracts/revision"
-	"github.com/jackc/pgx/v5"
 )
 
 // HardImportByteCap is the hard ceiling for import content — config may
@@ -39,10 +38,12 @@ type Config struct {
 	MaxImportBytes int64 // <=0 → DefaultImportByteLimit; clamped to HardImportByteCap
 }
 
-// Service is the Library application service.
+// Service is the Library application service. It sits ONLY on the
+// engine-neutral Repository (F12 #306): PostgreSQL and SQLite are
+// interchangeable beneath it — the same contract suite proves both.
 type Service struct {
 	cfg     Config
-	store   *Store
+	store   Repository
 	staging *Staging
 	ports   Ports
 	haltMu  sync.Mutex
@@ -58,6 +59,38 @@ type haltBook struct {
 // ErrHaltSimulated is the crash sentinel: the saga stopped exactly where
 // the halt book tripped; NOTHING after that point was written.
 var ErrHaltSimulated = errors.New("halt simulated (process death)")
+
+// Repo exposes the repository the service was constructed over (the
+// engine batteries' read-backs — F12 moved them out of this package's
+// internals).
+func (s *Service) Repo() Repository { return s.store }
+
+// SourceID exposes the configured source identity (battery read-back).
+func (s *Service) SourceID() string { return s.cfg.SourceID }
+
+// StagingRoot exposes the staging root path (battery read-back).
+func (s *Service) StagingRoot() string { return s.staging.root }
+
+// SetPort overrides one wired port AFTER construction (the failure-mode
+// batteries inject broken ports into a running service).
+func (s *Service) SetPort(which string, port any) {
+	switch which {
+	case "collections":
+		s.ports.Collections = port.(CollectionWriter)
+	case "renditions":
+		s.ports.Renditions = port.(RenditionWriter)
+	}
+}
+
+// ArmHalt arms the test-only crash simulation (the kill/resume DoD
+// battery lives in the engine packages — F12 moved it out of this
+// package's internals).
+func (s *Service) ArmHalt(afterState, afterProviderWrite map[string]int) {
+	s.haltMu.Lock()
+	defer s.haltMu.Unlock()
+	s.halt.afterState = afterState
+	s.halt.afterProviderWrite = afterProviderWrite
+}
 
 func (s *Service) tripAfterState(state string) bool {
 	s.haltMu.Lock()
@@ -79,9 +112,10 @@ func (s *Service) tripAfterProviderWrite(step string) bool {
 	return false
 }
 
-// NewService builds the service. Ports may be partially nil — the
-// corresponding operations report Unavailable (capability-honest).
-func NewService(cfg Config, store *Store, staging *Staging, ports Ports) *Service {
+// NewService builds the service over a repository engine. Ports may be
+// partially nil — the corresponding operations report Unavailable
+// (capability-honest).
+func NewService(cfg Config, store Repository, staging *Staging, ports Ports) *Service {
 	if cfg.MaxImportBytes <= 0 {
 		cfg.MaxImportBytes = DefaultImportByteLimit
 	}
@@ -118,13 +152,9 @@ func (s *Service) GetSource(ctx context.Context, ref library.SourceRef) (library
 }
 
 func (s *Service) zoteroSyncedAt(ctx context.Context, sourceID string) (*time.Time, error) {
-	var t *time.Time
-	err := s.store.pool.QueryRow(ctx,
-		`SELECT last_sync_at FROM zotero_sources WHERE id::text = $1`, sourceID).Scan(&t)
-	if errors.Is(err, pgx.ErrNoRows) || isMissingRelation(err) {
-		return nil, nil
-	}
-	return t, err
+	// The engine owns the strangler seam: engines without the Zotero
+	// mirror (SQLite profile, library-only database) report absence.
+	return s.store.LastSyncAt(ctx, sourceID)
 }
 
 // StartImport begins a document intake. Validation (including magic-byte
@@ -198,7 +228,7 @@ func (s *Service) StartImportDetailed(ctx context.Context, req library.ImportReq
 		}
 		op, oerr := s.operation(ctx, prior)
 		return op, true, oerr
-	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	} else if err != nil && !errors.Is(err, ErrRowAbsent) {
 		return library.ImportOperation{}, false, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "idempotency lookup")
 	}
 
@@ -219,7 +249,7 @@ func (s *Service) StartImportDetailed(ctx context.Context, req library.ImportReq
 		StagingSize:    size,
 		MediaType:      media,
 	}); err != nil {
-		if isUniqueViolation(err, "library_imports_idempotency_key") {
+		if errors.Is(err, ErrDuplicateKey) {
 			// Concurrent identical intake won the race — replay it.
 			prior, rerr := s.store.GetByIdempotencyKey(ctx, req.IdempotencyKey)
 			if rerr == nil && prior.ImportID != "" {
@@ -270,7 +300,7 @@ func (s *Service) GetImport(ctx context.Context, ref library.ImportRef) (library
 		return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "import ref is blank")
 	}
 	row, err := s.store.GetImport(ctx, ref.ImportID)
-	if errors.Is(err, pgx.ErrNoRows) || isBadUUID(err) {
+	if errors.Is(err, ErrRowAbsent) {
 		return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "import "+ref.ImportID)
 	}
 	if err != nil {
@@ -295,11 +325,8 @@ func (s *Service) OpenRendition(ctx context.Context, ticket library.ContentTicke
 		if len(parts) != 2 {
 			return nil, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "malformed zotero ticket")
 		}
-		var local string
-		err := s.store.pool.QueryRow(ctx,
-			`SELECT local_path FROM zotero_attachments WHERE source_id::text = $1 AND zotero_key = $2 AND deleted = false`,
-			parts[0], parts[1]).Scan(&local)
-		if errors.Is(err, pgx.ErrNoRows) || isMissingRelation(err) || (err == nil && (local == "" || !fileExists(local))) {
+		local, err := s.store.MirrorRenditionPath(ctx, parts[0], parts[1])
+		if errors.Is(err, ErrRowAbsent) || (err == nil && (local == "" || !fileExists(local))) {
 			return nil, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "rendition unknown or expired")
 		}
 		if err != nil {
@@ -309,7 +336,7 @@ func (s *Service) OpenRendition(ctx context.Context, ticket library.ContentTicke
 	}
 	// Ticket-shaped like a published revision ticket? Resolve by table.
 	rev, err := s.store.LatestRevisionByTicket(ctx, t)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, ErrRowAbsent) {
 		return nil, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "content ticket unknown or expired")
 	}
 	if err != nil {
@@ -373,28 +400,18 @@ func (s *Service) bibliographyFor(ctx context.Context, recordID string) (revisio
 	if err == nil {
 		return rev.Bibliography, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, ErrRowAbsent) {
 		return revision.Bibliography{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "revision lookup")
 	}
 	var bib revision.Bibliography
-	var creators []byte
-	var year *int
-	var title, publisher, language, class string
-	err = s.store.pool.QueryRow(ctx, `
-		SELECT d.title, COALESCE(d.publisher,''), COALESCE(d.language,''), d.creators, d.publication_year,
-			COALESCE(d.citation_class, 'citable')
-		FROM zotero_documents d
-		WHERE d.zotero_key = $1 AND d.source_id::text = $2 AND d.deleted = false`,
-		recordID, s.cfg.SourceID).Scan(&title, &publisher, &language, &creators, &year, &class)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return revision.Bibliography{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "record "+recordID)
-	}
-	if isMissingRelation(err) {
-		return revision.Bibliography{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "record "+recordID)
-	}
+	mc, ok, err := s.store.MirrorCitation(ctx, s.cfg.SourceID, recordID)
 	if err != nil {
-		return revision.Bibliography{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "zotero record lookup")
+		return revision.Bibliography{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "mirror citation")
 	}
+	if !ok {
+		return revision.Bibliography{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "record "+recordID)
+	}
+	creators, year, title, publisher, language, class := mc.Creators, mc.Year, mc.Title, mc.Publisher, mc.Language, mc.CitationClass
 	bib = revision.Bibliography{
 		RecordID: recordID, Title: title, Publisher: publisher, Language: language,
 		Year: year, CitationClass: class,
@@ -420,7 +437,7 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 		return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "import id is blank")
 	}
 	row, err := s.store.GetImport(ctx, importID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, ErrRowAbsent) {
 		return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "import "+importID)
 	}
 	if err != nil {
@@ -435,12 +452,12 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 	// a process death between persist(done) and the event append. Such
 	// an orphan confirm recovers FORWARD instead of dead-ending on the
 	// missing decision detail.
-	det, err := s.loadResolveDetail(ctx, row.ImportID)
+	det, err := s.LoadResolveDetail(ctx, row.ImportID)
 	if err != nil {
 		return library.ImportOperation{}, err
 	}
 	resolveStep, serr := s.store.GetStep(ctx, row.ImportID, stepResolve)
-	if serr != nil && !errors.Is(serr, pgx.ErrNoRows) {
+	if serr != nil && !errors.Is(serr, ErrRowAbsent) {
 		return library.ImportOperation{}, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, serr, "resolve step read")
 	}
 	dec, err := s.openDecision(ctx, row)
@@ -550,7 +567,7 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 			// never a dead-end conflict.
 			det.Plan = plan
 			det.Pending = dupDec
-			if err := s.persistResolveDetail(ctx, row, det, "in_progress"); err != nil {
+			if err := s.PersistResolveDetail(ctx, row, det, "in_progress"); err != nil {
 				return library.ImportOperation{}, err
 			}
 			if err := s.offerDecision(ctx, row.ImportID, dupDec); err != nil {
@@ -567,7 +584,7 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 	case "dec-duplicate": // the chosen record is the link target
 		det.Plan.LinkProviderRecordID = chosen.CandidateID
 		det.Plan.AddRendition = true
-		if existing, cerr := s.catalogRecord(ctx, chosen.CandidateID); cerr == nil && existing != nil {
+		if existing, cerr := s.CatalogRecord(ctx, chosen.CandidateID); cerr == nil && existing != nil {
 			if id := findRendition(*existing, row.StagingSHA256); id != "" {
 				det.Plan.AddRendition = false
 				det.Plan.ExistingAttachmentID = id
@@ -578,7 +595,7 @@ func (s *Service) ConfirmImport(ctx context.Context, importID, decisionID, candi
 			"unknown decision kind "+decisionID)
 	}
 	det.Pending = nil
-	if err := s.persistResolveDetail(ctx, row, det, "done"); err != nil {
+	if err := s.PersistResolveDetail(ctx, row, det, "done"); err != nil {
 		return library.ImportOperation{}, err
 	}
 	if err := s.store.AppendEvent(ctx, row.ImportID, "decision_resolved", map[string]any{
@@ -601,7 +618,7 @@ func (s *Service) RetryImport(ctx context.Context, importID string) (library.Imp
 		return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInvalidArgument, "import id is blank")
 	}
 	row, err := s.store.GetImport(ctx, importID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, ErrRowAbsent) {
 		return library.ImportOperation{}, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassNotFound, "import "+importID)
 	}
 	if err != nil {
@@ -635,20 +652,9 @@ func (s *Service) RetryImport(ctx context.Context, importID string) (library.Imp
 // persisted progress. awaiting_confirmation stays untouched — that stop
 // is a caller decision, not a crash. Returns the resumed import ids.
 func (s *Service) ResumeInflight(ctx context.Context) ([]string, error) {
-	rows, err := s.store.pool.Query(ctx, `
-		SELECT import_id FROM library_imports
-		WHERE status NOT IN ('committed','retryable_failed','terminal_failed','awaiting_confirmation')`)
+	ids, err := s.store.ResumeInflightIDs(ctx)
 	if err != nil {
 		return nil, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "inflight scan")
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return ids, contracterr.Wrap(contracterr.ComponentLibrary, contracterr.ClassInternal, err, "inflight scan")
-		}
-		ids = append(ids, id)
 	}
 	var errs []error
 	for _, id := range ids {
@@ -705,10 +711,11 @@ type resolveDetail struct {
 	Pending    *Decision      `json:"pending,omitempty"`
 }
 
-func (s *Service) loadResolveDetail(ctx context.Context, importID string) (resolveDetail, error) {
+// LoadResolveDetail exposes the resolve-step bookkeeping (battery read-back).
+func (s *Service) LoadResolveDetail(ctx context.Context, importID string) (resolveDetail, error) {
 	var det resolveDetail
 	step, err := s.store.GetStep(ctx, importID, stepResolve)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && len(step.Detail) == 0) {
+	if errors.Is(err, ErrRowAbsent) || (err == nil && len(step.Detail) == 0) {
 		return det, nil
 	}
 	if err != nil {
@@ -720,9 +727,10 @@ func (s *Service) loadResolveDetail(ctx context.Context, importID string) (resol
 	return det, nil
 }
 
-func (s *Service) persistResolveDetail(ctx context.Context, row ImportRow, det resolveDetail, state string) error {
+// PersistResolveDetail writes the resolve-step bookkeeping (battery seam).
+func (s *Service) PersistResolveDetail(ctx context.Context, row ImportRow, det resolveDetail, state string) error {
 	step, err := s.store.GetStep(ctx, row.ImportID, stepResolve)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, ErrRowAbsent) {
 		step = StepRow{}
 		err = nil
 	}
@@ -744,7 +752,7 @@ func (s *Service) enter(ctx context.Context, importID string, status library.Imp
 // double-driving the saga.
 func (s *Service) enterFrom(ctx context.Context, importID string, from, status library.ImportStatus) error {
 	if err := s.store.UpdateImportStatus(ctx, importID, status, from, nil, "", "", "", "", "", 0); err != nil {
-		if from != "" && errors.Is(err, pgx.ErrNoRows) {
+		if from != "" && errors.Is(err, ErrRowAbsent) {
 			return contracterr.New(contracterr.ComponentLibrary, contracterr.ClassConflict,
 				"import state changed concurrently (expected "+string(from)+")")
 		}
@@ -901,7 +909,7 @@ func (s *Service) runInspect(ctx context.Context, row ImportRow) (bool, error) {
 	if err == nil && step.State == "done" {
 		return true, nil
 	}
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, ErrRowAbsent) {
 		return false, err
 	}
 	if s.ports.Documents == nil {
@@ -926,7 +934,7 @@ func (s *Service) runResolve(ctx context.Context, row ImportRow) (bool, error) {
 	if err == nil && step.State == "done" {
 		return true, nil
 	}
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, ErrRowAbsent) {
 		return false, err
 	}
 	var req library.ImportRequest
@@ -959,7 +967,7 @@ func (s *Service) runResolve(ctx context.Context, row ImportRow) (bool, error) {
 		if err := s.persistProvenance(ctx, row.ImportID, out.Provenance); err != nil {
 			return false, err
 		}
-		if err := s.persistResolveDetail(ctx, row, det, "in_progress"); err != nil {
+		if err := s.PersistResolveDetail(ctx, row, det, "in_progress"); err != nil {
 			return false, err
 		}
 		if err := s.offerDecision(ctx, row.ImportID, out.Ambiguous); err != nil {
@@ -982,7 +990,7 @@ func (s *Service) runResolve(ctx context.Context, row ImportRow) (bool, error) {
 		if err := s.persistProvenance(ctx, row.ImportID, out.Provenance); err != nil {
 			return false, err
 		}
-		if err := s.persistResolveDetail(ctx, row, det, "in_progress"); err != nil {
+		if err := s.PersistResolveDetail(ctx, row, det, "in_progress"); err != nil {
 			return false, err
 		}
 		if err := s.offerDecision(ctx, row.ImportID, dup); err != nil {
@@ -996,10 +1004,10 @@ func (s *Service) runResolve(ctx context.Context, row ImportRow) (bool, error) {
 		return false, err
 	}
 	if s.tripAfterProviderWrite(stepResolve) {
-		_ = s.persistResolveDetail(ctx, row, det, "in_progress")
+		_ = s.PersistResolveDetail(ctx, row, det, "in_progress")
 		return false, ErrHaltSimulated
 	}
-	return true, s.persistResolveDetail(ctx, row, det, "done")
+	return true, s.PersistResolveDetail(ctx, row, det, "done")
 }
 
 // runCollections — placement resolution (parent-first, idempotent).
@@ -1008,7 +1016,7 @@ func (s *Service) runCollections(ctx context.Context, row ImportRow) (bool, erro
 	if err == nil && step.State == "done" {
 		return true, nil
 	}
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, ErrRowAbsent) {
 		return false, err
 	}
 	var req library.ImportRequest
@@ -1055,10 +1063,10 @@ func (s *Service) runCreateRecord(ctx context.Context, row ImportRow) (bool, err
 	if err == nil && step.State == "done" && step.ProviderRef != "" {
 		return true, nil
 	}
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, ErrRowAbsent) {
 		return false, err
 	}
-	det, err := s.loadResolveDetail(ctx, row.ImportID)
+	det, err := s.LoadResolveDetail(ctx, row.ImportID)
 	if err != nil {
 		return false, err
 	}
@@ -1105,14 +1113,14 @@ func (s *Service) runUpload(ctx context.Context, row ImportRow) (bool, error) {
 	if err == nil && step.State == "done" {
 		return true, nil
 	}
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, ErrRowAbsent) {
 		return false, err
 	}
 	recStep, err := s.store.GetStep(ctx, row.ImportID, stepCreateRec)
 	if err != nil || recStep.ProviderRef == "" {
 		return false, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassInternal, "creating_record step not done before upload")
 	}
-	det, err := s.loadResolveDetail(ctx, row.ImportID)
+	det, err := s.LoadResolveDetail(ctx, row.ImportID)
 	if err != nil {
 		return false, err
 	}
@@ -1129,7 +1137,7 @@ func (s *Service) runUpload(ctx context.Context, row ImportRow) (bool, error) {
 		// the grown pattern of an existing record's attachments.
 		var existing []string
 		if det.Plan.LinkProviderRecordID != "" {
-			if rec, cerr := s.catalogRecord(ctx, det.Plan.LinkProviderRecordID); cerr == nil && rec != nil {
+			if rec, cerr := s.CatalogRecord(ctx, det.Plan.LinkProviderRecordID); cerr == nil && rec != nil {
 				for _, a := range rec.Renditions {
 					existing = append(existing, a.Filename)
 				}
@@ -1181,7 +1189,7 @@ func (s *Service) runVerify(ctx context.Context, row ImportRow) (bool, error) {
 	if err == nil && step.State == "done" {
 		return true, nil
 	}
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, ErrRowAbsent) {
 		return false, err
 	}
 	recStep, rerr := s.store.GetStep(ctx, row.ImportID, stepCreateRec)
@@ -1198,7 +1206,7 @@ func (s *Service) runVerify(ctx context.Context, row ImportRow) (bool, error) {
 
 	// Verify against the catalog (the truth): record carries the
 	// rendition; membership present when targeted.
-	rec, err := s.catalogRecord(ctx, recStep.ProviderRef)
+	rec, err := s.CatalogRecord(ctx, recStep.ProviderRef)
 	if err != nil {
 		return false, err
 	}
@@ -1206,7 +1214,7 @@ func (s *Service) runVerify(ctx context.Context, row ImportRow) (bool, error) {
 		return false, contracterr.New(contracterr.ComponentLibrary, contracterr.ClassUnavailable,
 			"verify failed: rendition not observable in the provider catalog after upload")
 	}
-	det, err := s.loadResolveDetail(ctx, row.ImportID)
+	det, err := s.LoadResolveDetail(ctx, row.ImportID)
 	if err != nil {
 		return false, err
 	}
@@ -1292,7 +1300,7 @@ func (s *Service) recordDraft(row ImportRow, det resolveDetail) RecordDraft {
 
 func (s *Service) loadDocFields(ctx context.Context, importID string) (ResolvedFields, error) {
 	step, err := s.store.GetStep(ctx, importID, stepInspect)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && len(step.Detail) == 0) {
+	if errors.Is(err, ErrRowAbsent) || (err == nil && len(step.Detail) == 0) {
 		return ResolvedFields{}, nil
 	}
 	if err != nil {
@@ -1480,7 +1488,8 @@ func (s *Service) operation(ctx context.Context, row ImportRow) (library.ImportO
 
 // catalogRecord fetches one catalog record by provider id (full
 // pagination until found — the catalog is the truth).
-func (s *Service) catalogRecord(ctx context.Context, providerID string) (*CatalogRecord, error) {
+// CatalogRecord exposes the provider-catalog read (battery seam).
+func (s *Service) CatalogRecord(ctx context.Context, providerID string) (*CatalogRecord, error) {
 	if s.ports.Catalog == nil {
 		return nil, nil
 	}
@@ -1566,21 +1575,6 @@ func yearValue(y *int) int {
 		return 0
 	}
 	return *y
-}
-
-// isBadUUID reports a 22P02 against the uuid import_id: an id that
-// cannot even parse is an unknown import, not an internal error.
-func isBadUUID(err error) bool {
-	var pgErr interface{ SQLState() string }
-	return errors.As(err, &pgErr) && pgErr.SQLState() == "22P02"
-}
-
-// isMissingRelation reports a 42P01 (relation absent): the Library
-// schema runs standalone (fake providers, no Zotero mirror) — the mirror
-// fallbacks treat that as plain absence, never as an internal error.
-func isMissingRelation(err error) bool {
-	var pgErr interface{ SQLState() string }
-	return errors.As(err, &pgErr) && pgErr.SQLState() == "42P01"
 }
 
 func fileExists(p string) bool {

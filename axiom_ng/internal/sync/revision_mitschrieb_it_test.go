@@ -12,15 +12,16 @@ import (
 	"testing"
 
 	axlibrary "github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/pglib"
 )
 
 func TestRevisionMitschriebSyncCompletion(t *testing.T) {
 	ctx := context.Background()
 	d := openTestDB(t, ctx)
-	if err := axlibrary.Migrate(ctx, d.Pool()); err != nil {
+	if err := pglib.Migrate(ctx, d.Pool()); err != nil {
 		t.Fatalf("library migrate: %v", err)
 	}
-	st := axlibrary.NewStore(d.Pool())
+	st := pglib.NewStore(d.Pool())
 
 	src := fmt.Sprintf("rev-mit-%d", timeNowNanos())
 	var sourceID string
@@ -89,7 +90,7 @@ func TestRevisionMitschriebSyncCompletion(t *testing.T) {
 	}
 }
 
-func latestRevision(t *testing.T, st *axlibrary.Store, sourceID, docKey, attKey string) axlibrary.SourceRevisionDomain {
+func latestRevision(t *testing.T, st *pglib.Store, sourceID, docKey, attKey string) axlibrary.SourceRevisionDomain {
 	t.Helper()
 	rev, err := st.LatestRevision(context.Background(), sourceID, docKey, attKey)
 	if err != nil {
